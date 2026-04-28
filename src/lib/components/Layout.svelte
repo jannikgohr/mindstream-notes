@@ -13,6 +13,7 @@
   import NoteEditor from './NoteEditor.svelte';
   import ResizeHandle from './ResizeHandle.svelte';
   import { openNoteWindow } from '$lib/tauri';
+  import { PopoutHeaderAction } from './dockview-popout-action';
   import {
     notes,
     setActiveNote,
@@ -84,7 +85,10 @@
       // dockview-core 4 enables all of these by default; we just keep the
       // option keys here so future tweaks have an obvious home.
       disableFloatingGroups: false,
-      disableDnd: false
+      disableDnd: false,
+      // Render a pop-out button on the right of every tab strip — clicking
+      // it spawns a Tauri window for the group's active note.
+      createRightHeaderActionComponent: () => new PopoutHeaderAction()
     });
 
     dock = component.api;
