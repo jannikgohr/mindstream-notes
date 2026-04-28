@@ -11,6 +11,7 @@
   import MetadataPanel from './MetadataPanel.svelte';
   import NoteEditor from './NoteEditor.svelte';
   import ResizeHandle from './ResizeHandle.svelte';
+  import { openNoteWindow } from '$lib/tauri';
   import {
     notes,
     setActiveNote,
@@ -176,6 +177,11 @@
   const onOpenNote = (id: string) => openNote(id);
   const onOpenNoteRight = (id: string) => openNote(id, { splitDirection: 'right' });
   const onOpenNoteBelow = (id: string) => openNote(id, { splitDirection: 'below' });
+  const onOpenInNewWindow = (id: string) => {
+    const note = notes.byId[id];
+    if (!note) return;
+    void openNoteWindow(note.id, note.title);
+  };
 </script>
 
 <div class="flex h-full w-full flex-col">
@@ -187,7 +193,7 @@
         class="shrink-0 border-r border-border"
         style="width: {ui.leftSidebarWidth}px;"
       >
-        <FileExplorer {onOpenNote} {onOpenNoteRight} {onOpenNoteBelow} />
+        <FileExplorer {onOpenNote} {onOpenNoteRight} {onOpenNoteBelow} {onOpenInNewWindow} />
       </div>
       <ResizeHandle
         side="left"

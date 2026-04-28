@@ -5,6 +5,7 @@
 //! into a chosen vault directory, or use `tauri-plugin-sql` with SQLite) here.
 
 use serde::{Deserialize, Serialize};
+use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
 /// Payload sent from the frontend when saving a note.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,11 +54,57 @@ fn list_notes() -> Result<Vec<String>, String> {
     Ok(Vec::new())
 }
 
+/// Open a fresh OS-level Tauri window that renders just the requested note.
+///
+/// Each window has its own webview / JS runtime. Until disk persistence is
+/// in place the two windows have independent in-memory state — open a note
+/// in a new window, edit it there, and the main window won't see the
+/// changes (and vice versa). Once `save_note` / `load_note` actually hit
+/// disk, both windows read the same source of truth and stay in sync.
+#[tauri::command]
+fn open_note_window(
+    app: tauri::AppHandle,
+    id: String,
+    title: String,
+) -> Result<(), String> {
+    // Each window needs a unique label. Reuse the existing one if a window
+    // for this note is already open — focus it instead of stacking dupes.
+    let label = format!("note-{}", id);
+    if let Some(existing) = app.get_webview_window(&label) {
+        let _ = existing.set_focus();
+        return Ok(());
+    }
+
+    // The frontend SPA detects ?window=editor&id=<id> on the root route
+    // and renders just the editor. We point the new webview at that URL.
+    let url = format!("index.html?window=editor&id={}", urlencoding::encode(&id));
+
+    WebviewWindowBuilder::new(&app, label, WebviewUrl::App(url.into()))
+        .title(title)
+        .inner_size(900.0, 700.0)
+        .min_inner_size(560.0, 420.0)
+        .decorations(true)
+        .resizable(true)
+        .center()
+        .build()
+        .map_err(|e| {
+            log::error!("open_note_window failed: {e}");
+            e.to_string()
+        })?;
+
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
-        .invoke_handler(tauri::generate_handler![save_note, load_note, list_notes])
+        .invoke_handler(tauri::generate_handler![
+            save_note,
+            load_note,
+            list_notes,
+            open_note_window
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
