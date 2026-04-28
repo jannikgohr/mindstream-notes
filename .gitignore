@@ -1,0 +1,20 @@
+node_modules
+/.svelte-kit
+/build
+/dist
+.DS_Store
+.env
+.env.*
+!.env.example
+
+# Tauri
+/src-tauri/target
+/src-tauri/gen
+/src-tauri/Cargo.lock
+
+# IDE
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea
+*.iml
