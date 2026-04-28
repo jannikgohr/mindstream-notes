@@ -23,13 +23,23 @@
     toggleMaximize: () => Promise<void>;
     close: () => Promise<void>;
     isMaximized: () => Promise<boolean>;
-    onResized?: (cb: () => void) => Promise<() => void>;
   };
 
   let appWindow = $state<WindowApi | null>(null);
   let isMaximized = $state(false);
+  let unlistenResize: (() => void) | null = null;
 
-  onMount(async () => {
+  // Keep `onMount` synchronous so its return value is the cleanup function
+  // (onMount's signature only accepts `() => void | Promise<undefined>`).
+  onMount(() => {
+    void setupTauriWindow();
+    return () => {
+      unlistenResize?.();
+      unlistenResize = null;
+    };
+  });
+
+  async function setupTauriWindow() {
     if (typeof window === 'undefined') return;
     if (!('__TAURI_INTERNALS__' in window)) return;
     try {
@@ -42,21 +52,19 @@
         isMaximized: () => w.isMaximized()
       };
       isMaximized = await w.isMaximized();
-      const unlisten = await w.onResized(async () => {
+      unlistenResize = await w.onResized(async () => {
         isMaximized = await w.isMaximized();
       });
-      return () => unlisten();
     } catch (err) {
       console.warn('[TopBar] Tauri window API unavailable', err);
     }
-  });
+  }
 </script>
 
 <header
   data-tauri-drag-region
   class="flex h-10 shrink-0 select-none items-center gap-1 border-b border-border bg-card px-2"
 >
-  <!-- Left controls: sidebar toggles + brand -->
   <Button
     variant="ghost"
     size="icon"
@@ -71,10 +79,8 @@
     Notes
   </span>
 
-  <!-- Spacer that also acts as a drag region -->
   <div data-tauri-drag-region class="flex-1"></div>
 
-  <!-- Right controls -->
   <ThemeToggle />
   <Button
     variant="ghost"

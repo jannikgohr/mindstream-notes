@@ -5,10 +5,10 @@ import { defineConfig } from 'vite';
 // Tauri expects a fixed port and ignores hidden Vite cache changes.
 const host = process.env.TAURI_DEV_HOST;
 
-export default defineConfig(async () => ({
+export default defineConfig({
   plugins: [tailwindcss(), sveltekit()],
 
-  // Vite options tailored for Tauri development
+  // Vite options tailored for Tauri development.
   clearScreen: false,
   server: {
     port: 1420,
@@ -21,13 +21,13 @@ export default defineConfig(async () => ({
           port: 1421
         }
       : undefined,
+    // Don't watch src-tauri to avoid full-reload loops.
     watch: {
-      // Don't watch src-tauri to avoid full-reload loops
       ignored: ['**/src-tauri/**']
     }
   },
 
-  // Tell Vite to ignore env vars Tauri injects
+  // Make Tauri's env vars visible to the frontend.
   envPrefix: ['VITE_', 'TAURI_ENV_*'],
   build: {
     target:
@@ -35,4 +35,4 @@ export default defineConfig(async () => ({
     minify: !process.env.TAURI_ENV_DEBUG ? 'esbuild' : false,
     sourcemap: !!process.env.TAURI_ENV_DEBUG
   }
-}));
+});
