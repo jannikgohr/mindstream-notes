@@ -6,17 +6,15 @@
     notes,
     createNote,
     deleteNote,
+    moveFolder,
     moveNote,
     renameNote
   } from '$lib/state.svelte';
 
   interface Props {
     onOpenNote: (id: string) => void;
-    /** Optional: open in a split pane to the right of the active editor. */
     onOpenNoteRight?: (id: string) => void;
-    /** Optional: open in a split pane below the active editor. */
     onOpenNoteBelow?: (id: string) => void;
-    /** Optional: open the note in a brand-new OS-level Tauri window. */
     onOpenInNewWindow?: (id: string) => void;
   }
   let {
@@ -120,26 +118,23 @@
           }
         },
         {
+          label: 'Move to root',
+          onSelect: () => moveFolder(name, null)
+        },
+        {
           label: 'Rename folder…',
           disabled: true,
-          onSelect: () => {
-            // Placeholder — folder rename TODO.
-            console.info('[tree] folder rename not implemented');
-          }
+          onSelect: () => console.info('[tree] folder rename not implemented')
         },
         'separator',
         {
           label: 'Delete folder',
           destructive: true,
           disabled: true,
-          onSelect: () => {
-            // Placeholder — folder delete TODO (would need to move children).
-            console.info('[tree] folder delete not implemented');
-          }
+          onSelect: () => console.info('[tree] folder delete not implemented')
         }
       ];
     }
-    // Root context.
     return [
       {
         label: 'New note',
@@ -152,21 +147,58 @@
   }
 
   // ---------- Drag and drop ----------
-  // A note can be dragged onto a folder (drop into) or onto another note
-  // (insert before). Drop on the root drop-zone moves to the top level.
+  // Two payload mime types so drop handlers can disambiguate:
+  //   application/x-note-id    -> moveNote(id, target)
+  //   application/x-folder-name -> moveFolder(name, target)
 
-  let dragOver = $state<string | null>(null); // folder name or 'root' or 'note:<id>'
+  type Drag =
+    | { kind: 'note'; id: string }
+    | { kind: 'folder'; name: string }
+    | null;
 
-  function onDragStart(e: DragEvent, noteId: string) {
+  let drag = $state<Drag>(null); // what's currently being dragged
+  let dragOver = $state<string | null>(null); // target key: 'root' | `f:${name}` | `n:${id}`
+
+  function onNoteDragStart(e: DragEvent, noteId: string) {
     if (!e.dataTransfer) return;
     e.dataTransfer.effectAllowed = 'move';
     e.dataTransfer.setData('application/x-note-id', noteId);
     e.dataTransfer.setData('text/plain', noteId);
+    drag = { kind: 'note', id: noteId };
+  }
+
+  function onFolderDragStart(e: DragEvent, folderName: string) {
+    if (!e.dataTransfer) return;
+    e.stopPropagation();
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('application/x-folder-name', folderName);
+    e.dataTransfer.setData('text/plain', folderName);
+    drag = { kind: 'folder', name: folderName };
+  }
+
+  function onDragEnd() {
+    drag = null;
+    dragOver = null;
+  }
+
+  /**
+   * Decide whether the current drag can be dropped on `targetFolder`.
+   * Notes can land on any folder. Folders can land on any folder that's
+   * not themselves or one of their descendants — but we only know that
+   * deeply at drop time, so we settle for a name check here and let
+   * moveFolder() do the strict validation on drop.
+   */
+  function canDropOnFolder(targetFolder: string | null): boolean {
+    if (!drag) return true;
+    if (drag.kind === 'folder' && targetFolder === drag.name) return false;
+    return true;
   }
 
   function onDragOverFolder(e: DragEvent, folderName: string) {
     if (!e.dataTransfer) return;
+    if (!canDropOnFolder(folderName)) return;
     e.preventDefault();
+    e.stopPropagation();
     e.dataTransfer.dropEffect = 'move';
     dragOver = `f:${folderName}`;
   }
@@ -189,20 +221,40 @@
     dragOver = null;
   }
 
-  function onDropOnFolder(e: DragEvent, folderName: string) {
+  function readPayload(e: DragEvent): Drag {
+    if (!e.dataTransfer) return null;
+    const noteId = e.dataTransfer.getData('application/x-note-id');
+    if (noteId) return { kind: 'note', id: noteId };
+    const folderName = e.dataTransfer.getData('application/x-folder-name');
+    if (folderName) return { kind: 'folder', name: folderName };
+    return null;
+  }
+
+  function onDropOnFolder(e: DragEvent, targetFolder: string) {
     e.preventDefault();
-    const id = e.dataTransfer?.getData('application/x-note-id');
+    e.stopPropagation();
+    const payload = readPayload(e);
     dragOver = null;
-    if (!id) return;
-    moveNote(id, folderName);
+    drag = null;
+    if (!payload) return;
+    if (payload.kind === 'note') {
+      moveNote(payload.id, targetFolder);
+    } else {
+      moveFolder(payload.name, targetFolder);
+    }
   }
 
   function onDropOnRoot(e: DragEvent) {
     e.preventDefault();
-    const id = e.dataTransfer?.getData('application/x-note-id');
+    const payload = readPayload(e);
     dragOver = null;
-    if (!id) return;
-    moveNote(id, null);
+    drag = null;
+    if (!payload) return;
+    if (payload.kind === 'note') {
+      moveNote(payload.id, null);
+    } else {
+      moveFolder(payload.name, null);
+    }
   }
 
   function toggleFolder(name: string) {
@@ -234,7 +286,6 @@
     </Button>
   </div>
 
-  <!-- Drop on this region to move a note to the root. -->
   <div
     role="group"
     aria-label="File tree"
@@ -250,10 +301,14 @@
         {@const isOver = dragOver === `f:${node.name}`}
         <button
           type="button"
+          draggable="true"
           class="flex w-full items-center gap-1 rounded-md px-2 py-1 text-left hover:bg-accent hover:text-accent-foreground"
           class:bg-accent={isOver}
+          class:opacity-60={drag?.kind === 'folder' && drag.name === node.name}
           onclick={() => toggleFolder(node.name)}
           oncontextmenu={(e) => openMenu(e, { kind: 'folder', name: node.name })}
+          ondragstart={(e) => onFolderDragStart(e, node.name)}
+          ondragend={onDragEnd}
           ondragover={(e) => onDragOverFolder(e, node.name)}
           ondragleave={onDragLeave}
           ondrop={(e) => onDropOnFolder(e, node.name)}
@@ -278,13 +333,43 @@
                   draggable="true"
                   class="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left hover:bg-accent hover:text-accent-foreground"
                   class:bg-accent={childOver}
+                  class:opacity-60={drag?.kind === 'note' && drag.id === child.id}
                   onclick={() => onOpenNote(child.id)}
                   oncontextmenu={(e) => openMenu(e, { kind: 'note', id: child.id })}
-                  ondragstart={(e) => onDragStart(e, child.id)}
+                  ondragstart={(e) => onNoteDragStart(e, child.id)}
+                  ondragend={onDragEnd}
                   ondragover={(e) => onDragOverNote(e, child.id)}
                   ondragleave={onDragLeave}
                 >
                   <FileText class="size-3.5 shrink-0 text-muted-foreground" />
+                  <span class="truncate">{child.name}</span>
+                </button>
+              {:else}
+                <!-- Nested folders: render as a smaller folder row that
+                     itself accepts drops + context menu. -->
+                {@const nestedOver = dragOver === `f:${child.name}`}
+                <button
+                  type="button"
+                  draggable="true"
+                  class="flex w-full items-center gap-1 rounded-md px-2 py-1 text-left hover:bg-accent hover:text-accent-foreground"
+                  class:bg-accent={nestedOver}
+                  class:opacity-60={drag?.kind === 'folder' && drag.name === child.name}
+                  onclick={() => toggleFolder(child.name)}
+                  oncontextmenu={(e) => openMenu(e, { kind: 'folder', name: child.name })}
+                  ondragstart={(e) => onFolderDragStart(e, child.name)}
+                  ondragend={onDragEnd}
+                  ondragover={(e) => onDragOverFolder(e, child.name)}
+                  ondragleave={onDragLeave}
+                  ondrop={(e) => onDropOnFolder(e, child.name)}
+                >
+                  <ChevronRight
+                    class={`size-3.5 shrink-0 transition-transform ${expanded[child.name] ? 'rotate-90' : ''}`}
+                  />
+                  {#if expanded[child.name]}
+                    <FolderOpen class="size-3.5 shrink-0 text-muted-foreground" />
+                  {:else}
+                    <Folder class="size-3.5 shrink-0 text-muted-foreground" />
+                  {/if}
                   <span class="truncate">{child.name}</span>
                 </button>
               {/if}
@@ -298,9 +383,11 @@
           draggable="true"
           class="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left hover:bg-accent hover:text-accent-foreground"
           class:bg-accent={isOver}
+          class:opacity-60={drag?.kind === 'note' && drag.id === node.id}
           onclick={() => onOpenNote(node.id)}
           oncontextmenu={(e) => openMenu(e, { kind: 'note', id: node.id })}
-          ondragstart={(e) => onDragStart(e, node.id)}
+          ondragstart={(e) => onNoteDragStart(e, node.id)}
+          ondragend={onDragEnd}
           ondragover={(e) => onDragOverNote(e, node.id)}
           ondragleave={onDragLeave}
         >

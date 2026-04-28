@@ -6,9 +6,6 @@
 import { MOCK_NOTES, MOCK_TREE, type FolderNode, type NoteSummary, type TreeNode } from './mocks';
 import { DEFAULT_PREFERENCES, loadPreferences, savePreferences } from './preferences';
 
-// Hydrate UI state from persisted preferences (or defaults on the server /
-// first run). `loadPreferences` is browser-only and returns defaults on the
-// server, so this is safe under SvelteKit's prerender pass.
 const initialPrefs = loadPreferences();
 
 interface UiState {
@@ -80,7 +77,6 @@ export function updateNoteBody(id: string, body: string) {
 
 // ---------- Tree mutations (placeholders — swap for disk I/O later) ----------
 
-/** Recursively walk the tree and return all matching nodes' parents+indices. */
 type Locator = { parent: TreeNode[]; index: number };
 
 function findNoteLoc(tree: TreeNode[], noteId: string): Locator | null {
@@ -111,6 +107,37 @@ function findFolderLoc(tree: TreeNode[], folderName: string): Locator | null {
   return null;
 }
 
+/**
+ * Returns true if `candidateName` is a (possibly nested) descendant folder
+ * of `ancestorName`. Used to reject drag-drops that would move a folder
+ * into one of its own children.
+ */
+function isFolderDescendant(
+  tree: TreeNode[],
+  ancestorName: string,
+  candidateName: string
+): boolean {
+  function searchInChildren(children: TreeNode[]): boolean {
+    for (const node of children) {
+      if (node.kind !== 'folder') continue;
+      if (node.name === candidateName) return true;
+      if (searchInChildren(node.children)) return true;
+    }
+    return false;
+  }
+  function findAncestor(t: TreeNode[]): boolean {
+    for (const node of t) {
+      if (node.kind !== 'folder') continue;
+      if (node.name === ancestorName) {
+        return searchInChildren(node.children);
+      }
+      if (findAncestor(node.children)) return true;
+    }
+    return false;
+  }
+  return findAncestor(tree);
+}
+
 /** Rename a note. Updates the tree label and the note title. */
 export function renameNote(noteId: string, nextTitle: string) {
   const note = notes.byId[noteId];
@@ -121,7 +148,6 @@ export function renameNote(noteId: string, nextTitle: string) {
     title: nextTitle,
     modified: new Date().toISOString()
   };
-  // Update the tree label.
   const loc = findNoteLoc(notes.tree, noteId);
   if (loc) {
     const node = loc.parent[loc.index];
@@ -141,8 +167,8 @@ export function deleteNote(noteId: string) {
 }
 
 /**
- * Move a note into a folder (by name) at an optional index. If `targetFolder`
- * is null the note moves to the tree root.
+ * Move a note into a folder (by name) at an optional index. If
+ * `targetFolder` is null the note moves to the tree root.
  */
 export function moveNote(
   noteId: string,
@@ -161,7 +187,6 @@ export function moveNote(
   } else {
     const folderLoc = findFolderLoc(notes.tree, targetFolder);
     if (!folderLoc) {
-      // Folder vanished; put the node back where it was.
       src.parent.splice(src.index, 0, node);
       return;
     }
@@ -169,8 +194,50 @@ export function moveNote(
     dest = folder.children;
   }
 
-  const insertAt = targetIndex == null ? dest.length : Math.min(targetIndex, dest.length);
+  const insertAt =
+    targetIndex == null ? dest.length : Math.min(targetIndex, dest.length);
   dest.splice(insertAt, 0, node);
+}
+
+/**
+ * Move a folder into another folder by name. Pass `null` to move it to the
+ * tree root. Refuses to move a folder into itself or one of its descendants.
+ */
+export function moveFolder(folderName: string, targetFolder: string | null) {
+  if (folderName === targetFolder) return;
+  if (
+    targetFolder != null &&
+    isFolderDescendant(notes.tree, folderName, targetFolder)
+  ) {
+    console.warn(
+      '[tree] refused: moving folder',
+      folderName,
+      'into descendant',
+      targetFolder
+    );
+    return;
+  }
+
+  const src = findFolderLoc(notes.tree, folderName);
+  if (!src) return;
+  const [node] = src.parent.splice(src.index, 1);
+  if (!node || node.kind !== 'folder') return;
+
+  let dest: TreeNode[];
+  if (targetFolder == null) {
+    dest = notes.tree;
+  } else {
+    const folderLoc = findFolderLoc(notes.tree, targetFolder);
+    if (!folderLoc) {
+      // Target vanished mid-drag; restore.
+      src.parent.splice(src.index, 0, node);
+      return;
+    }
+    const folder = folderLoc.parent[folderLoc.index] as FolderNode;
+    dest = folder.children;
+  }
+  console.info('[tree] moveFolder', folderName, '->', targetFolder);
+  dest.push(node);
 }
 
 /** Create a fresh empty note, optionally inside a named folder. */
@@ -204,7 +271,6 @@ export function createNote(folderName: string | null = null): string {
 
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 function persistUi() {
-  // Debounced — drag-resize fires many updates per second.
   if (persistTimer) clearTimeout(persistTimer);
   persistTimer = setTimeout(() => {
     savePreferences({
