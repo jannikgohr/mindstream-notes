@@ -137,3 +137,57 @@ body {
 .milkdown {
   padding: 1.25rem 1.75rem;
 }
+
+/*
+ * Crepe dark theme.
+ * Crepe ships frame.css (light) and frame-dark.css (dark) but both target
+ * the same `.milkdown` selector, so importing the dark file globally would
+ * stomp the light one. Instead we re-declare the dark token values under
+ * `.dark .milkdown` — same variables Crepe's components read, just scoped
+ * to our manual dark mode toggle. Values mirror frame-dark.css verbatim
+ * so the whole editor (slash menu, link tooltip, code-block chrome, list
+ * checkboxes, etc.) flips correctly.
+ */
+.dark .milkdown {
+  --crepe-color-background: oklch(0.18 0 0);
+  --crepe-color-on-background: oklch(0.92 0 0);
+  --crepe-color-surface: oklch(0.18 0 0);
+  --crepe-color-surface-low: oklch(0.215 0 0);
+  --crepe-color-on-surface: oklch(0.86 0 0);
+  --crepe-color-on-surface-variant: oklch(0.7 0 0);
+  --crepe-color-outline: oklch(0.45 0 0);
+  --crepe-color-primary: oklch(0.78 0 0);
+  --crepe-color-secondary: oklch(0.32 0 0);
+  --crepe-color-on-secondary: oklch(0.88 0 0);
+  --crepe-color-inverse: oklch(0.93 0 0);
+  --crepe-color-on-inverse: oklch(0.205 0 0);
+  --crepe-color-inline-code: oklch(0.74 0.16 18);
+  --crepe-color-error: oklch(0.74 0.16 18);
+  --crepe-color-hover: oklch(0.27 0 0);
+  --crepe-color-selected: oklch(0.32 0 0);
+  --crepe-color-inline-area: oklch(0.27 0 0);
+
+  --crepe-shadow-1:
+    0px 1px 2px 0px rgba(0, 0, 0, 0.55),
+    0px 1px 3px 1px rgba(0, 0, 0, 0.4);
+  --crepe-shadow-2:
+    0px 1px 2px 0px rgba(0, 0, 0, 0.55),
+    0px 2px 6px 2px rgba(0, 0, 0, 0.4);
+}
+
+/*
+ * Code blocks inside Milkdown use CodeMirror with the oneDark theme by
+ * default (set in Crepe's default-config). That looks great in dark mode
+ * but is jarring in light mode — fix the wrapper colours so the code-block
+ * chrome (header, language picker, search box) blends in either way.
+ */
+.milkdown .cm-editor {
+  background: var(--crepe-color-surface-low);
+  color: var(--crepe-color-on-surface);
+  border-radius: 0.5rem;
+}
+
+.dark .milkdown .cm-editor {
+  /* oneDark already sets a dark background; defer to it. */
+  background: transparent;
+}
