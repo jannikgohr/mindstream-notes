@@ -6,6 +6,7 @@
     Minus,
     Square,
     Copy,
+    Settings as SettingsIcon,
     X
   } from 'lucide-svelte';
   import { Button } from '$lib/components/ui/button';
@@ -16,6 +17,7 @@
     toggleLeftSidebar,
     toggleRightSidebar
   } from '$lib/state.svelte';
+  import { openSettings } from '$lib/settings/store.svelte';
 
   /** Lazy-import the Tauri window API so the SPA still loads in a plain browser. */
   type WindowApi = {
@@ -81,6 +83,15 @@
 
   <div data-tauri-drag-region class="flex-1"></div>
 
+  <Button
+    variant="ghost"
+    size="icon"
+    onclick={openSettings}
+    title="Settings"
+    aria-label="Open settings"
+  >
+    <SettingsIcon class="size-4" />
+  </Button>
   <ThemeToggle />
   <Button
     variant="ghost"

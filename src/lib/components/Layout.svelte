@@ -12,6 +12,7 @@
   import MetadataPanel from './MetadataPanel.svelte';
   import NoteEditor from './NoteEditor.svelte';
   import ResizeHandle from './ResizeHandle.svelte';
+  import SettingsDialog from '$lib/settings/SettingsDialog.svelte';
   import { openNoteWindow } from '$lib/tauri';
   import { PopoutHeaderAction } from './dockview-popout-action';
   import {
@@ -253,3 +254,5 @@
     {/if}
   </div>
 </div>
+
+<SettingsDialog />
