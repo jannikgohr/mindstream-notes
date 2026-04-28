@@ -24,7 +24,7 @@ export interface LoadedNote {
 
 const browserFallbackStore = new Map<string, LoadedNote>();
 
-function isTauri(): boolean {
+export function isTauri(): boolean {
   // Tauri v2 sets `window.__TAURI_INTERNALS__` when the IPC bridge is alive.
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 }
@@ -56,4 +56,25 @@ export async function listNotes(): Promise<string[]> {
     return [...browserFallbackStore.keys()];
   }
   return await tauriInvoke<string[]>('list_notes');
+}
+
+/**
+ * Open a note in a brand-new OS-level Tauri window. Calls the Rust
+ * `open_note_window` command which uses WebviewWindowBuilder under the hood.
+ *
+ * Outside Tauri (`pnpm dev`) we fall back to `window.open(...)` — handy for
+ * browser-only smoke tests; in a real browser this just opens a new tab.
+ */
+export async function openNoteWindow(id: string, title: string): Promise<void> {
+  if (!isTauri()) {
+    if (typeof window !== 'undefined') {
+      window.open(
+        `?window=editor&id=${encodeURIComponent(id)}`,
+        '_blank',
+        'noopener'
+      );
+    }
+    return;
+  }
+  await tauriInvoke<void>('open_note_window', { id, title });
 }

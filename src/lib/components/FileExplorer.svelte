@@ -16,8 +16,15 @@
     onOpenNoteRight?: (id: string) => void;
     /** Optional: open in a split pane below the active editor. */
     onOpenNoteBelow?: (id: string) => void;
+    /** Optional: open the note in a brand-new OS-level Tauri window. */
+    onOpenInNewWindow?: (id: string) => void;
   }
-  let { onOpenNote, onOpenNoteRight, onOpenNoteBelow }: Props = $props();
+  let {
+    onOpenNote,
+    onOpenNoteRight,
+    onOpenNoteBelow,
+    onOpenInNewWindow
+  }: Props = $props();
 
   let expanded = $state<Record<string, boolean>>({ Work: true, Personal: true });
 
@@ -63,6 +70,12 @@
         items.push({
           label: 'Open below',
           onSelect: () => onOpenNoteBelow(id)
+        });
+      }
+      if (onOpenInNewWindow) {
+        items.push({
+          label: 'Open in new window',
+          onSelect: () => onOpenInNewWindow(id)
         });
       }
       items.push(
