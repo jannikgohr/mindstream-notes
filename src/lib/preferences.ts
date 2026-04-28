@@ -8,6 +8,8 @@
  * so the call sites won't change.
  */
 
+import type { SortStrategy } from './sort';
+
 const STORAGE_KEY = 'notes-app:preferences:v1';
 
 export interface Preferences {
@@ -15,20 +17,27 @@ export interface Preferences {
   rightSidebarWidth: number;
   leftSidebarOpen: boolean;
   rightSidebarOpen: boolean;
+  sortStrategy: SortStrategy;
 }
 
 export const DEFAULT_PREFERENCES: Preferences = {
   leftSidebarWidth: 240,
   rightSidebarWidth: 260,
   leftSidebarOpen: true,
-  rightSidebarOpen: true
+  rightSidebarOpen: true,
+  sortStrategy: 'alphabetical'
 };
 
 function isBrowser(): boolean {
   return typeof window !== 'undefined' && typeof localStorage !== 'undefined';
 }
 
-/** Read prefs synchronously. Falls back to defaults if anything goes wrong. */
+const VALID_SORTS = new Set<SortStrategy>([
+  'alphabetical',
+  'modified',
+  'created'
+]);
+
 export function loadPreferences(): Preferences {
   if (!isBrowser()) return { ...DEFAULT_PREFERENCES };
   try {
@@ -38,7 +47,6 @@ export function loadPreferences(): Preferences {
     return {
       ...DEFAULT_PREFERENCES,
       ...parsed,
-      // Sanity-clamp widths so a corrupted value can't lock the user out.
       leftSidebarWidth: clamp(
         parsed.leftSidebarWidth ?? DEFAULT_PREFERENCES.leftSidebarWidth,
         160,
@@ -48,7 +56,11 @@ export function loadPreferences(): Preferences {
         parsed.rightSidebarWidth ?? DEFAULT_PREFERENCES.rightSidebarWidth,
         180,
         600
-      )
+      ),
+      sortStrategy:
+        parsed.sortStrategy && VALID_SORTS.has(parsed.sortStrategy)
+          ? parsed.sortStrategy
+          : DEFAULT_PREFERENCES.sortStrategy
     };
   } catch (err) {
     console.warn('[preferences] load failed, using defaults', err);
@@ -56,7 +68,6 @@ export function loadPreferences(): Preferences {
   }
 }
 
-/** Persist prefs. Errors are logged, never thrown. */
 export function savePreferences(prefs: Preferences): void {
   if (!isBrowser()) return;
   try {

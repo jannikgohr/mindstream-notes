@@ -1,14 +1,17 @@
 <script lang="ts">
-  import { ChevronRight, FileText, Folder, FolderOpen, Plus } from 'lucide-svelte';
+  import { ArrowDownAZ, ChevronRight, FileText, Folder, FolderOpen, Plus } from 'lucide-svelte';
   import { Button } from '$lib/components/ui/button';
   import ContextMenu, { type MenuItem } from './ContextMenu.svelte';
+  import { SORT_STRATEGIES, sortTree, type SortStrategy } from '$lib/sort';
   import {
     notes,
     createNote,
     deleteNote,
     moveFolder,
     moveNote,
-    renameNote
+    renameNote,
+    setSortStrategy,
+    ui
   } from '$lib/state.svelte';
 
   interface Props {
@@ -25,6 +28,37 @@
   }: Props = $props();
 
   let expanded = $state<Record<string, boolean>>({ Work: true, Personal: true });
+
+  // Tree rendered through the active sort strategy. Folders always come
+  // first (alphabetical), notes within each level use ui.sortStrategy.
+  const sortedTree = $derived(
+    sortTree(notes.tree, ui.sortStrategy, { notesById: notes.byId })
+  );
+
+  // ---------- Sort menu ----------
+  let sortMenuOpen = $state(false);
+  let sortMenuX = $state(0);
+  let sortMenuY = $state(0);
+
+  function openSortMenu(e: MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    sortMenuX = r.left;
+    sortMenuY = r.bottom + 4;
+    sortMenuOpen = true;
+  }
+
+  function closeSortMenu() {
+    sortMenuOpen = false;
+  }
+
+  function sortMenuItems(): (MenuItem | 'separator')[] {
+    return SORT_STRATEGIES.map((opt) => ({
+      label: (ui.sortStrategy === opt.id ? '✓  ' : '    ') + opt.label,
+      onSelect: () => setSortStrategy(opt.id as SortStrategy)
+    }));
+  }
 
   // ---------- Context menu state ----------
   type MenuTarget =
@@ -275,15 +309,26 @@
     <span class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
       Explorer
     </span>
-    <Button
-      variant="ghost"
-      size="icon"
-      onclick={newRootNote}
-      title="New note"
-      aria-label="New note"
-    >
-      <Plus class="size-3.5" />
-    </Button>
+    <div class="flex items-center gap-1">
+      <Button
+        variant="ghost"
+        size="icon"
+        onclick={openSortMenu}
+        title="Sort"
+        aria-label="Sort notes"
+      >
+        <ArrowDownAZ class="size-3.5" />
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon"
+        onclick={newRootNote}
+        title="New note"
+        aria-label="New note"
+      >
+        <Plus class="size-3.5" />
+      </Button>
+    </div>
   </div>
 
   <div
@@ -296,7 +341,7 @@
     ondragleave={onDragLeave}
     ondrop={onDropOnRoot}
   >
-    {#each notes.tree as node (node.kind === 'folder' ? `f:${node.name}` : `n:${node.id}`)}
+    {#each sortedTree as node (node.kind === 'folder' ? `f:${node.name}` : `n:${node.id}`)}
       {#if node.kind === 'folder'}
         {@const isOver = dragOver === `f:${node.name}`}
         <button
@@ -407,4 +452,13 @@
 
 {#if menuOpen}
   <ContextMenu x={menuX} y={menuY} items={menuItems()} onClose={closeMenu} />
+{/if}
+
+{#if sortMenuOpen}
+  <ContextMenu
+    x={sortMenuX}
+    y={sortMenuY}
+    items={sortMenuItems()}
+    onClose={closeSortMenu}
+  />
 {/if}

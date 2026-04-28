@@ -5,6 +5,7 @@
 
 import { MOCK_NOTES, MOCK_TREE, type FolderNode, type NoteSummary, type TreeNode } from './mocks';
 import { DEFAULT_PREFERENCES, loadPreferences, savePreferences } from './preferences';
+import type { SortStrategy } from './sort';
 
 const initialPrefs = loadPreferences();
 
@@ -13,6 +14,7 @@ interface UiState {
   rightSidebarOpen: boolean;
   leftSidebarWidth: number;
   rightSidebarWidth: number;
+  sortStrategy: SortStrategy;
   /** Id of the note the metadata panel should describe. */
   activeNoteId: string | null;
 }
@@ -29,6 +31,7 @@ export const ui = $state<UiState>({
   rightSidebarOpen: initialPrefs.rightSidebarOpen,
   leftSidebarWidth: initialPrefs.leftSidebarWidth,
   rightSidebarWidth: initialPrefs.rightSidebarWidth,
+  sortStrategy: initialPrefs.sortStrategy,
   activeNoteId: 'welcome'
 });
 
@@ -60,6 +63,11 @@ export function setLeftSidebarWidth(px: number) {
 
 export function setRightSidebarWidth(px: number) {
   ui.rightSidebarWidth = px;
+  persistUi();
+}
+
+export function setSortStrategy(s: SortStrategy) {
+  ui.sortStrategy = s;
   persistUi();
 }
 
@@ -278,7 +286,8 @@ function persistUi() {
       leftSidebarOpen: ui.leftSidebarOpen,
       rightSidebarOpen: ui.rightSidebarOpen,
       leftSidebarWidth: ui.leftSidebarWidth,
-      rightSidebarWidth: ui.rightSidebarWidth
+      rightSidebarWidth: ui.rightSidebarWidth,
+      sortStrategy: ui.sortStrategy
     });
   }, 150);
 }
