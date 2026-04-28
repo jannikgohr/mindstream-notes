@@ -10,7 +10,14 @@
   import FileExplorer from './FileExplorer.svelte';
   import MetadataPanel from './MetadataPanel.svelte';
   import NoteEditor from './NoteEditor.svelte';
-  import { notes, setActiveNote, ui } from '$lib/state.svelte';
+  import ResizeHandle from './ResizeHandle.svelte';
+  import {
+    notes,
+    setActiveNote,
+    setLeftSidebarWidth,
+    setRightSidebarWidth,
+    ui
+  } from '$lib/state.svelte';
 
   let dockHost: HTMLDivElement | null = $state(null);
   let dock: DockviewApi | null = null;
@@ -119,11 +126,13 @@
     dock?.clear();
   });
 
-  // React to sidebar collapse/expand: dispatch a synthetic resize so dockview
-  // re-measures immediately rather than waiting for the next animation frame.
+  // React to sidebar collapse / resize: dispatch a synthetic resize so
+  // dockview re-measures immediately rather than waiting for the next paint.
   $effect(() => {
     void ui.leftSidebarOpen;
     void ui.rightSidebarOpen;
+    void ui.leftSidebarWidth;
+    void ui.rightSidebarWidth;
     if (!dockHost) return;
     requestAnimationFrame(() => {
       window.dispatchEvent(new Event('resize'));
@@ -137,11 +146,18 @@
   <div class="flex min-h-0 flex-1">
     {#if ui.leftSidebarOpen}
       <div
-        class="w-[240px] shrink-0 border-r border-border"
-        style="min-width: 200px;"
+        class="shrink-0 border-r border-border"
+        style="width: {ui.leftSidebarWidth}px;"
       >
         <FileExplorer onOpenNote={openNote} />
       </div>
+      <ResizeHandle
+        side="left"
+        value={ui.leftSidebarWidth}
+        min={200}
+        max={500}
+        onChange={setLeftSidebarWidth}
+      />
     {/if}
 
     <main class="min-w-0 flex-1">
@@ -149,9 +165,16 @@
     </main>
 
     {#if ui.rightSidebarOpen}
+      <ResizeHandle
+        side="right"
+        value={ui.rightSidebarWidth}
+        min={200}
+        max={500}
+        onChange={setRightSidebarWidth}
+      />
       <div
-        class="w-[260px] shrink-0 border-l border-border"
-        style="min-width: 220px;"
+        class="shrink-0 border-l border-border"
+        style="width: {ui.rightSidebarWidth}px;"
       >
         <MetadataPanel />
       </div>
