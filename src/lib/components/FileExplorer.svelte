@@ -9,12 +9,15 @@
     moveNote,
     renameNote
   } from '$lib/state.svelte';
-  import type { TreeNode } from '$lib/mocks';
 
   interface Props {
     onOpenNote: (id: string) => void;
+    /** Optional: open in a split pane to the right of the active editor. */
+    onOpenNoteRight?: (id: string) => void;
+    /** Optional: open in a split pane below the active editor. */
+    onOpenNoteBelow?: (id: string) => void;
   }
-  let { onOpenNote }: Props = $props();
+  let { onOpenNote, onOpenNoteRight, onOpenNoteBelow }: Props = $props();
 
   let expanded = $state<Record<string, boolean>>({ Work: true, Personal: true });
 
@@ -47,8 +50,22 @@
     if (!menuTarget) return [];
     if (menuTarget.kind === 'note') {
       const id = menuTarget.id;
-      return [
-        { label: 'Open', onSelect: () => onOpenNote(id) },
+      const items: (MenuItem | 'separator')[] = [
+        { label: 'Open', onSelect: () => onOpenNote(id) }
+      ];
+      if (onOpenNoteRight) {
+        items.push({
+          label: 'Open to the right',
+          onSelect: () => onOpenNoteRight(id)
+        });
+      }
+      if (onOpenNoteBelow) {
+        items.push({
+          label: 'Open below',
+          onSelect: () => onOpenNoteBelow(id)
+        });
+      }
+      items.push(
         'separator',
         {
           label: 'Rename…',
@@ -76,7 +93,8 @@
             }
           }
         }
-      ];
+      );
+      return items;
     }
     if (menuTarget.kind === 'folder') {
       const name = menuTarget.name;
@@ -130,7 +148,6 @@
     if (!e.dataTransfer) return;
     e.dataTransfer.effectAllowed = 'move';
     e.dataTransfer.setData('application/x-note-id', noteId);
-    // Setting plain text helps drop targets that read text data first.
     e.dataTransfer.setData('text/plain', noteId);
   }
 
@@ -206,7 +223,9 @@
 
   <!-- Drop on this region to move a note to the root. -->
   <div
-    role="group" aria-label="File tree" class="flex-1 overflow-y-auto px-1 pb-2"
+    role="group"
+    aria-label="File tree"
+    class="flex-1 overflow-y-auto px-1 pb-2"
     class:ring-1={dragOver === 'root'}
     class:ring-ring={dragOver === 'root'}
     ondragover={onDragOverRoot}
