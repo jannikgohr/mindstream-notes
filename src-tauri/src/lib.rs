@@ -69,23 +69,28 @@ fn open_note_window(
 ) -> Result<(), String> {
     // Each window needs a unique label. Reuse the existing one if a window
     // for this note is already open — focus it instead of stacking dupes.
-    let label = format!("note-{}", id);
+    let label = format!("note-{}", sanitize_label(&id));
     if let Some(existing) = app.get_webview_window(&label) {
         let _ = existing.set_focus();
         return Ok(());
     }
 
-    // The frontend SPA detects ?window=editor&id=<id> on the root route
-    // and renders just the editor. We point the new webview at that URL.
-    let url = format!("index.html?window=editor&id={}", urlencoding::encode(&id));
+    // The frontend SPA detects the popout note id via either the query
+    // string or the hash. We use both so whichever Tauri preserves through
+    // the asset resolver wins.
+    let encoded = urlencoding::encode(&id);
+    let url = format!("index.html?window=editor&id={encoded}#popout={encoded}");
 
-    WebviewWindowBuilder::new(&app, label, WebviewUrl::App(url.into()))
+    WebviewWindowBuilder::new(&app, &label, WebviewUrl::App(url.into()))
         .title(title)
         .inner_size(900.0, 700.0)
         .min_inner_size(560.0, 420.0)
         .decorations(true)
         .resizable(true)
         .center()
+        // Keep behaviour consistent with the main window — don't let the
+        // OS drag-drop pipeline swallow HTML5 DnD events inside the editor.
+        .drag_and_drop(false)
         .build()
         .map_err(|e| {
             log::error!("open_note_window failed: {e}");
@@ -93,6 +98,20 @@ fn open_note_window(
         })?;
 
     Ok(())
+}
+
+/// Trim a note id to characters that are safe inside a Tauri window label
+/// (which only allows ASCII alphanumerics, dashes, slashes, underscores).
+fn sanitize_label(raw: &str) -> String {
+    raw.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect()
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

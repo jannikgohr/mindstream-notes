@@ -10,11 +10,22 @@
   let resolved = $state(false);
 
   onMount(() => {
+    // Try the query string first (preferred), fall back to the hash if a
+    // path-based asset resolver stripped query params.
     const params = new URLSearchParams(window.location.search);
     if (params.get('window') === 'editor') {
       const id = params.get('id');
       if (id) popoutNoteId = id;
     }
+
+    if (!popoutNoteId && window.location.hash) {
+      // hash format: '#popout=<id>'
+      const hash = window.location.hash.replace(/^#/, '');
+      const hashParams = new URLSearchParams(hash);
+      const id = hashParams.get('popout');
+      if (id) popoutNoteId = id;
+    }
+
     resolved = true;
   });
 </script>
