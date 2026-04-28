@@ -4,7 +4,8 @@
     DockviewApi,
     IDockviewPanel,
     IContentRenderer,
-    GroupPanelPartInitParameters
+    GroupPanelPartInitParameters,
+    DockviewGroupPanel
   } from 'dockview-core';
   import TopBar from './TopBar.svelte';
   import FileExplorer from './FileExplorer.svelte';
@@ -22,6 +23,12 @@
 
   let dockHost: HTMLDivElement | null = $state(null);
   let dock: DockviewApi | null = null;
+
+  // Last group the user interacted with — new notes opened without an
+  // explicit split direction land here as a fresh tab. dockview's default
+  // 'addPanel' would otherwise pick the first available group, which is
+  // unhelpful in a multi-pane layout.
+  let lastActiveGroup: DockviewGroupPanel | null = null;
 
   // Track which note ids are currently open as panels so we can focus an
   // existing tab instead of creating a duplicate.
@@ -88,6 +95,12 @@
       }
     });
 
+    // Keep `lastActiveGroup` in sync with the dock — new notes will be
+    // tabbed into whichever group the user touched last.
+    dock.onDidActiveGroupChange((group) => {
+      if (group) lastActiveGroup = group;
+    });
+
     // Track tab closures so `openPanels` stays in sync.
     dock.onDidRemovePanel((panel) => {
       const noteId = (panel.params as { noteId?: string } | undefined)?.noteId;
@@ -101,6 +114,8 @@
     openNote('welcome');
     openNote('meeting', { splitDirection: 'right' });
     openNote('ideas', { splitDirection: 'within', referenceNoteId: 'meeting' });
+    // Seed the active-group ref for the very first note opened from the tree.
+    lastActiveGroup = dock.activeGroup ?? lastActiveGroup;
   }
 
   type SplitDirection = 'right' | 'left' | 'above' | 'below' | 'within';
@@ -121,15 +136,24 @@
       return;
     }
 
-    // Only attach `position` when we have a real reference panel — dockview
-    // requires referencePanel to be a string (or IDockviewPanel), not optional.
-    let position: { referencePanel: string; direction: SplitDirection } | undefined;
+    // Decide where the new tab goes.
+    //   - With a splitDirection: position relative to a sibling panel.
+    //   - Without: tab into the last-used group, falling back to dock.activeGroup.
+    let position:
+      | { referencePanel: string; direction: SplitDirection }
+      | { referenceGroup: DockviewGroupPanel }
+      | undefined;
     if (opts.splitDirection) {
       const referencePanel = opts.referenceNoteId
         ? `note:${opts.referenceNoteId}`
         : dock.activePanel?.id;
       if (referencePanel) {
         position = { referencePanel, direction: opts.splitDirection };
+      }
+    } else {
+      const target = lastActiveGroup ?? dock.activeGroup ?? null;
+      if (target) {
+        position = { referenceGroup: target };
       }
     }
 
