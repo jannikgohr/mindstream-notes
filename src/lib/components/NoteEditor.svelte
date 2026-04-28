@@ -58,6 +58,6 @@
   }
 </script>
 
-<div class="h-full w-full overflow-y-auto">
+<div class="themed-scrollbar h-full w-full overflow-y-auto">
   <div bind:this={host} class="mx-auto max-w-3xl"></div>
 </div>

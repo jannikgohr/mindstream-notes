@@ -223,3 +223,43 @@ body {
   outline: 2px solid var(--ring);
   outline-offset: 1px;
 }
+
+/*
+ * Themed scrollbar utility — apply via class on any overflow container so
+ * the scroll thumb adopts our shadcn palette instead of the OS default
+ * (which on Windows is a thick light-grey strip and looks out of place
+ * in dark mode). Works on WebKit / WebView2 via ::-webkit-scrollbar and
+ * on Firefox via the scrollbar-color/scrollbar-width pair.
+ */
+.themed-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: oklch(from var(--foreground) l c h / 0.3) transparent;
+}
+
+.themed-scrollbar::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+.themed-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.themed-scrollbar::-webkit-scrollbar-thumb {
+  /* The visible thumb is inset 3px from each side via background-clip,
+     creating the rounded-pill look while leaving room for hover growth. */
+  background: oklch(from var(--foreground) l c h / 0.22);
+  background-clip: content-box;
+  border: 3px solid transparent;
+  border-radius: 8px;
+  transition: background-color 120ms;
+}
+
+.themed-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: oklch(from var(--foreground) l c h / 0.45);
+  background-clip: content-box;
+}
+
+.themed-scrollbar::-webkit-scrollbar-corner {
+  background: transparent;
+}
