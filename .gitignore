@@ -12,6 +12,12 @@ node_modules
 /src-tauri/gen
 /src-tauri/Cargo.lock
 
+# Sandbox-leftover artifacts that the workspace mount won't let me delete.
+# Safe to remove these directories on Windows when convenient.
+/.git.locked
+/.test_write
+/_tmp_*
+
 # IDE
 .vscode/*
 !.vscode/extensions.json
