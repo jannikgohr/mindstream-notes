@@ -68,7 +68,15 @@
             return new SvelteRenderer();
         }
       },
-      theme: { name: 'bridge', className: 'dockview-theme-bridge' }
+      theme: { name: 'bridge', className: 'dockview-theme-bridge' },
+      // Multi-pane behaviour:
+      //   - Drag a tab to the edge of a group to split that group.
+      //   - Drag a tab into another group's tab strip to move it there.
+      //   - Drag a tab outside the dock to pop it into a floating window.
+      // dockview-core 4 enables all of these by default; we just keep the
+      // option keys here so future tweaks have an obvious home.
+      disableFloatingGroups: false,
+      disableDnd: false
     });
 
     dock = component.api;
@@ -85,11 +93,23 @@
       if (noteId) openPanels.delete(noteId);
     });
 
-    // Open the welcome note as the initial tab.
+    // Demo a multi-pane layout on first load:
+    //   - "Welcome" opens in the main group.
+    //   - "Sprint planning" opens in a split to the right.
+    //   - "Ideas" opens as a second tab in the right-hand group.
     openNote('welcome');
+    openNote('meeting', { splitDirection: 'right' });
+    openNote('ideas', { splitDirection: 'within', referenceNoteId: 'meeting' });
   }
 
-  function openNote(id: string) {
+  type SplitDirection = 'right' | 'left' | 'above' | 'below' | 'within';
+  interface OpenNoteOptions {
+    splitDirection?: SplitDirection;
+    /** Existing note id to position relative to. Defaults to the active panel. */
+    referenceNoteId?: string;
+  }
+
+  export function openNote(id: string, opts: OpenNoteOptions = {}) {
     if (!dock) return;
     const note = notes.byId[id];
     if (!note) return;
@@ -100,11 +120,24 @@
       return;
     }
 
+    // Only attach `position` when we have a real reference panel — dockview
+    // requires referencePanel to be a string (or IDockviewPanel), not optional.
+    let position: { referencePanel: string; direction: SplitDirection } | undefined;
+    if (opts.splitDirection) {
+      const referencePanel = opts.referenceNoteId
+        ? `note:${opts.referenceNoteId}`
+        : dock.activePanel?.id;
+      if (referencePanel) {
+        position = { referencePanel, direction: opts.splitDirection };
+      }
+    }
+
     const panel = dock.addPanel({
       id: `note:${id}`,
       component: 'noteEditor',
       title: note.title,
-      params: { noteId: id }
+      params: { noteId: id },
+      ...(position ? { position } : {})
     });
 
     openPanels.set(id, panel);
@@ -138,6 +171,11 @@
       window.dispatchEvent(new Event('resize'));
     });
   });
+
+  // Adapter functions handed to FileExplorer so it can request specific layouts.
+  const onOpenNote = (id: string) => openNote(id);
+  const onOpenNoteRight = (id: string) => openNote(id, { splitDirection: 'right' });
+  const onOpenNoteBelow = (id: string) => openNote(id, { splitDirection: 'below' });
 </script>
 
 <div class="flex h-full w-full flex-col">
@@ -149,7 +187,7 @@
         class="shrink-0 border-r border-border"
         style="width: {ui.leftSidebarWidth}px;"
       >
-        <FileExplorer onOpenNote={openNote} />
+        <FileExplorer {onOpenNote} {onOpenNoteRight} {onOpenNoteBelow} />
       </div>
       <ResizeHandle
         side="left"
