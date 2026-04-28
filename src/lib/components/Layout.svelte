@@ -72,6 +72,12 @@
       }
     });
 
+    // Track tab closures so `openPanels` stays in sync.
+    dock.onDidRemovePanel((panel) => {
+      const noteId = (panel.params as { noteId?: string } | undefined)?.noteId;
+      if (noteId) openPanels.delete(noteId);
+    });
+
     // Open the welcome note as the initial tab.
     openNote('welcome');
   }
@@ -95,7 +101,6 @@
     });
 
     openPanels.set(id, panel);
-    panel.api.onDidDispose(() => openPanels.delete(id));
     setActiveNote(id);
   }
 
@@ -103,14 +108,9 @@
     // Defer one tick so the host div has a real size before dockview measures.
     void tick().then(setupDockview);
 
-    const onResize = () => {
-      if (!dockHost || !dock) return;
-      // dockview-core auto-resizes via ResizeObserver, but force a layout
-      // call when the sidebars toggle so it picks up the new width quickly.
-      const { width, height } = dockHost.getBoundingClientRect();
-      // @ts-expect-error — `layout` exists on the underlying component
-      dock['component']?.layout?.(width, height);
-    };
+    // dockview-core's internal ResizeObserver picks up size changes
+    // automatically; this listener is a no-op kept for future hooks.
+    const onResize = () => {};
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   });
@@ -119,10 +119,9 @@
     dock?.clear();
   });
 
-  // React to sidebar collapse/expand: dockview measures with ResizeObserver,
-  // but trigger an explicit relayout for snappier behaviour.
+  // React to sidebar collapse/expand: dispatch a synthetic resize so dockview
+  // re-measures immediately rather than waiting for the next animation frame.
   $effect(() => {
-    // Reading these makes the effect track them.
     void ui.leftSidebarOpen;
     void ui.rightSidebarOpen;
     if (!dockHost) return;
