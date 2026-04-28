@@ -191,3 +191,35 @@ body {
   /* oneDark already sets a dark background; defer to it. */
   background: transparent;
 }
+
+/* dockview right-header pop-out button (see PopoutHeaderAction). */
+.dv-popout-host {
+  display: inline-flex;
+  align-items: center;
+  height: 100%;
+  padding: 0 4px;
+}
+
+.dv-popout-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  transition: background-color 120ms, color 120ms;
+}
+
+.dv-popout-button:hover {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+
+.dv-popout-button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
