@@ -1,14 +1,13 @@
 [package]
-name = "tauri-note-taking-app"
+name = "mindstream-notes"
 version = "0.1.0"
 description = "Local-first note-taking app boilerplate built with Tauri v2."
 authors = ["you"]
 edition = "2021"
 rust-version = "1.77"
 
-# The lib name is referenced from main.rs — keep it in sync if you rename it.
 [lib]
-name = "tauri_note_taking_app_lib"
+name = "mindstream_notes_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
@@ -21,6 +20,12 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 log = "0.4"
 urlencoding = "2"
+
+# Persistence
+rusqlite = { version = "0.32", features = ["bundled"] }
+thiserror = "1"
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 [profile.release]
 panic = "abort"

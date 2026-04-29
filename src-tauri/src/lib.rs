@@ -1,128 +1,69 @@
-//! Tauri command surface for the note-taking app.
+//! Mindstream Notes — Tauri entry point.
 //!
-//! Persistence is currently stubbed: `save_note` / `load_note` log the call and
-//! return success / `None`. Wire up real disk I/O (e.g. write Markdown files
-//! into a chosen vault directory, or use `tauri-plugin-sql` with SQLite) here.
+//! Module map:
+//!   error       — AppError + IPC mapping
+//!   db          — SQLite connection + migrations + first-run seed
+//!   notes       — note CRUD commands
+//!   collections — folder CRUD commands
+//!   window      — open_note_window + future window helpers
+//!
+//! All non-window state lives in the SQLite DB at `<app_data>/mindstream.db`.
+//! Frontend talks to Rust through the `@tauri-apps/api`'s `invoke()`; the
+//! TS bridge lives under `src/lib/api/`.
 
-use serde::{Deserialize, Serialize};
-use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+pub mod collections;
+pub mod db;
+pub mod error;
+pub mod notes;
+pub mod window;
 
-/// Payload sent from the frontend when saving a note.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NotePayload {
-    pub id: String,
-    pub title: String,
-    pub body: String,
-}
+use tauri::Manager;
 
-/// Payload returned to the frontend when a note is loaded.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LoadedNote {
-    pub id: String,
-    pub title: String,
-    pub body: String,
-    /// ISO-8601 timestamp of the last modification.
-    pub modified: String,
-}
-
-#[tauri::command]
-fn save_note(note: NotePayload) -> Result<(), String> {
-    // TODO: persist `note` to disk. For example:
-    //   let dir = app_handle.path().app_data_dir()?.join("notes");
-    //   std::fs::create_dir_all(&dir)?;
-    //   std::fs::write(dir.join(format!("{}.md", note.id)), &note.body)?;
-    log::info!(
-        "save_note(stub): id={} title={:?} body_len={}",
-        note.id,
-        note.title,
-        note.body.len()
-    );
-    Ok(())
-}
-
-#[tauri::command]
-fn load_note(id: String) -> Result<Option<LoadedNote>, String> {
-    // TODO: read the corresponding file from the vault directory.
-    log::info!("load_note(stub): id={}", id);
-    Ok(None)
-}
-
-#[tauri::command]
-fn list_notes() -> Result<Vec<String>, String> {
-    // TODO: enumerate notes on disk.
-    log::info!("list_notes(stub)");
-    Ok(Vec::new())
-}
-
-/// Open a fresh OS-level Tauri window that renders just the requested note.
-///
-/// Each window has its own webview / JS runtime. Until disk persistence is
-/// in place the two windows have independent in-memory state — open a note
-/// in a new window, edit it there, and the main window won't see the
-/// changes (and vice versa). Once `save_note` / `load_note` actually hit
-/// disk, both windows read the same source of truth and stay in sync.
-#[tauri::command]
-fn open_note_window(
-    app: tauri::AppHandle,
-    id: String,
-    title: String,
-) -> Result<(), String> {
-    // Each window needs a unique label. Reuse the existing one if a window
-    // for this note is already open — focus it instead of stacking dupes.
-    let label = format!("note-{}", sanitize_label(&id));
-    if let Some(existing) = app.get_webview_window(&label) {
-        let _ = existing.set_focus();
-        return Ok(());
-    }
-
-    // The frontend SPA detects the popout note id via either the query
-    // string or the hash. We use both so whichever Tauri preserves through
-    // the asset resolver wins.
-    let encoded = urlencoding::encode(&id);
-    let url = format!("index.html?window=editor&id={encoded}#popout={encoded}");
-
-    WebviewWindowBuilder::new(&app, &label, WebviewUrl::App(url.into()))
-        .title(title)
-        .inner_size(900.0, 700.0)
-        .min_inner_size(560.0, 420.0)
-        .decorations(true)
-        .resizable(true)
-        .center()
-        // Keep behaviour consistent with the main window — don't let the
-        // OS drag-drop pipeline swallow HTML5 DnD events inside the editor.
-        .drag_and_drop(false)
-        .build()
-        .map_err(|e| {
-            log::error!("open_note_window failed: {e}");
-            e.to_string()
-        })?;
-
-    Ok(())
-}
-
-/// Trim a note id to characters that are safe inside a Tauri window label
-/// (which only allows ASCII alphanumerics, dashes, slashes, underscores).
-fn sanitize_label(raw: &str) -> String {
-    raw.chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '-'
-            }
-        })
-        .collect()
-}
+use crate::db::{Db, migrations};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .setup(|app| {
+            let app_data = app
+                .path()
+                .app_data_dir()
+                .expect("could not resolve app_data_dir");
+            let db_path = app_data.join("mindstream.db");
+            log::info!("[boot] db path = {}", db_path.display());
+
+            let db = Db::open(&db_path).expect("failed to open SQLite database");
+
+            // First-run seed.
+            db.with_conn(|c| {
+                if migrations::was_freshly_created(c)? {
+                    log::info!("[boot] empty database — seeding demo content");
+                    migrations::seed(c)?;
+                }
+                Ok(())
+            })
+            .expect("failed to seed database");
+
+            app.manage(db);
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
-            save_note,
-            load_note,
-            list_notes,
-            open_note_window
+            // Collections
+            collections::list_collections,
+            collections::create_collection,
+            collections::update_collection,
+            collections::delete_collection,
+            // Notes
+            notes::list_notes,
+            notes::load_note,
+            notes::create_note,
+            notes::save_note,
+            notes::trash_note,
+            notes::restore_note,
+            notes::purge_note,
+            // Windows
+            window::open_note_window,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
