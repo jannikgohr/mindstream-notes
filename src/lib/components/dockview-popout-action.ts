@@ -3,15 +3,13 @@ import type {
   IGroupHeaderProps,
   IHeaderActionsRenderer
 } from 'dockview-core';
-import { notes } from '$lib/state.svelte';
-import { openNoteWindow } from '$lib/tauri';
+import { tree } from '$lib/stores/tree.svelte';
+import { openNoteWindow } from '$lib/api';
 
 /**
- * Renderer plugged into dockview's `createRightHeaderActionComponent`. Each
- * tab group gets its own instance; clicking the button pops the active
- * note out into a brand-new Tauri window via the IPC bridge. In `pnpm dev`
- * (no Tauri) the bridge falls back to `window.open()` so this still works
- * for browser-only smoke tests.
+ * Renderer plugged into dockview's `createRightHeaderActionComponent`.
+ * Each tab group gets its own instance; clicking the button pops the
+ * active note out into a brand-new Tauri window via the IPC bridge.
  */
 export class PopoutHeaderAction implements IHeaderActionsRenderer {
   private readonly el: HTMLDivElement;
@@ -27,7 +25,6 @@ export class PopoutHeaderAction implements IHeaderActionsRenderer {
     this.btn.title = 'Open active note in a new window';
     this.btn.setAttribute('aria-label', 'Open active note in a new window');
     this.btn.className = 'dv-popout-button';
-    // Lucide "square-arrow-out-up-right" — the standard pop-out glyph.
     this.btn.innerHTML = `
       <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14"
            viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -54,7 +51,7 @@ export class PopoutHeaderAction implements IHeaderActionsRenderer {
     const panel = this.currentGroup?.activePanel;
     const params = panel?.params as { noteId?: string } | undefined;
     if (!params?.noteId) return;
-    const note = notes.byId[params.noteId];
+    const note = tree.notesById[params.noteId];
     if (!note) return;
     void openNoteWindow(note.id, note.title);
   };

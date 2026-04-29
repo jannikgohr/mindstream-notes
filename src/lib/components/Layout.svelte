@@ -13,28 +13,22 @@
   import NoteEditor from './NoteEditor.svelte';
   import ResizeHandle from './ResizeHandle.svelte';
   import SettingsDialog from '$lib/settings/SettingsDialog.svelte';
-  import { openNoteWindow } from '$lib/tauri';
   import { PopoutHeaderAction } from './dockview-popout-action';
+  import { openNoteWindow } from '$lib/api';
+  import { clearSavedLayout, loadSavedLayout, saveLayout } from '$lib/api';
   import {
-    notes,
     setActiveNote,
     setLeftSidebarWidth,
     setRightSidebarWidth,
     ui
   } from '$lib/state.svelte';
+  import { loadTree, tree } from '$lib/stores/tree.svelte';
 
   let dockHost: HTMLDivElement | null = $state(null);
   let dock: DockviewApi | null = null;
-
-  // Last group the user interacted with — new notes opened without an
-  // explicit split direction land here as a fresh tab. dockview's default
-  // 'addPanel' would otherwise pick the first available group, which is
-  // unhelpful in a multi-pane layout.
   let lastActiveGroup: DockviewGroupPanel | null = null;
-
-  // Track which note ids are currently open as panels so we can focus an
-  // existing tab instead of creating a duplicate.
   const openPanels = new Map<string, IDockviewPanel>();
+  let saveLayoutTimer: ReturnType<typeof setTimeout> | null = null;
 
   /** Renders a Svelte component inside a dockview panel. */
   class SvelteRenderer implements IContentRenderer {
@@ -66,7 +60,6 @@
 
   async function setupDockview() {
     if (!dockHost) return;
-    // dockview-core is browser-only — dynamic import so SSR/prerender is safe.
     const { DockviewComponent } = await import('dockview-core');
 
     const component = new DockviewComponent(dockHost, {
@@ -79,16 +72,8 @@
         }
       },
       theme: { name: 'bridge', className: 'dockview-theme-bridge' },
-      // Multi-pane behaviour:
-      //   - Drag a tab to the edge of a group to split that group.
-      //   - Drag a tab into another group's tab strip to move it there.
-      //   - Drag a tab outside the dock to pop it into a floating window.
-      // dockview-core 4 enables all of these by default; we just keep the
-      // option keys here so future tweaks have an obvious home.
       disableFloatingGroups: false,
       disableDnd: false,
-      // Render a pop-out button on the right of every tab strip — clicking
-      // it spawns a Tauri window for the group's active note.
       createRightHeaderActionComponent: () => new PopoutHeaderAction()
     });
 
@@ -98,41 +83,116 @@
       if (panel?.params && typeof panel.params.noteId === 'string') {
         setActiveNote(panel.params.noteId);
       }
+      schedulePersist();
     });
-
-    // Keep `lastActiveGroup` in sync with the dock — new notes will be
-    // tabbed into whichever group the user touched last.
     dock.onDidActiveGroupChange((group) => {
       if (group) lastActiveGroup = group;
     });
-
-    // Track tab closures so `openPanels` stays in sync.
     dock.onDidRemovePanel((panel) => {
       const noteId = (panel.params as { noteId?: string } | undefined)?.noteId;
       if (noteId) openPanels.delete(noteId);
+      schedulePersist();
     });
+    dock.onDidAddPanel(() => schedulePersist());
+    dock.onDidLayoutChange(() => schedulePersist());
 
-    // Demo a multi-pane layout on first load:
-    //   - "Welcome" opens in the main group.
-    //   - "Sprint planning" opens in a split to the right.
-    //   - "Ideas" opens as a second tab in the right-hand group.
-    openNote('welcome');
-    openNote('meeting', { splitDirection: 'right' });
-    openNote('ideas', { splitDirection: 'within', referenceNoteId: 'meeting' });
-    // Seed the active-group ref for the very first note opened from the tree.
+    // Make sure the tree is populated before we try to restore tabs by id.
+    if (!tree.ready) await loadTree();
+
+    const restored = tryRestoreLayout();
+    if (!restored) {
+      // First run / wiped layout — open the first note we can find.
+      const first = pickInitialNote();
+      if (first) openNote(first);
+    }
+
     lastActiveGroup = dock.activeGroup ?? lastActiveGroup;
+  }
+
+  function pickInitialNote(): string | null {
+    const ids = Object.keys(tree.notesById);
+    return ids[0] ?? null;
+  }
+
+  /** Try to apply the saved dock state. Returns true on success. */
+  function tryRestoreLayout(): boolean {
+    if (!dock) return false;
+    const saved = loadSavedLayout();
+    if (!saved || !saved.dock) return false;
+    try {
+      // dockview can fail to deserialize if the panel ids reference notes
+      // that no longer exist. We pre-filter by checking the saved blob
+      // against the current notesById; if anything's stale, drop it.
+      const sanitized = sanitizeDockBlob(saved.dock);
+      if (!sanitized) {
+        clearSavedLayout();
+        return false;
+      }
+      // dockview's `fromJSON` is on the underlying component, not the api.
+      // Cast through the api object to reach it.
+      const api = dock as unknown as { fromJSON: (s: unknown) => void };
+      api.fromJSON(sanitized);
+      // Repopulate openPanels map from the active layout.
+      for (const panel of dock.panels) {
+        const noteId = (panel.params as { noteId?: string } | undefined)?.noteId;
+        if (noteId) openPanels.set(noteId, panel);
+      }
+      if (saved.activeNoteId) {
+        const p = openPanels.get(saved.activeNoteId);
+        p?.api.setActive();
+      }
+      return openPanels.size > 0;
+    } catch (err) {
+      console.warn('[layout] restore failed, falling back', err);
+      clearSavedLayout();
+      return false;
+    }
+  }
+
+  /**
+   * Walk the saved dock blob and check every panel's noteId still exists.
+   * Returns the original blob if everything resolves, null otherwise.
+   * Cheap to do up-front and avoids dockview throwing mid-restore.
+   */
+  function sanitizeDockBlob(blob: unknown): unknown | null {
+    try {
+      const json = blob as { panels?: Record<string, { params?: { noteId?: string } }> };
+      const panels = json.panels ?? {};
+      for (const p of Object.values(panels)) {
+        const noteId = p?.params?.noteId;
+        if (noteId && !(noteId in tree.notesById)) {
+          return null;
+        }
+      }
+      return blob;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Debounced layout persistence. dockview emits many events per drag. */
+  function schedulePersist() {
+    if (!dock) return;
+    if (saveLayoutTimer) clearTimeout(saveLayoutTimer);
+    saveLayoutTimer = setTimeout(() => {
+      try {
+        const json = (dock as unknown as { toJSON: () => unknown }).toJSON();
+        saveLayout(json, dock?.activePanel?.params?.noteId ?? null);
+      } catch (err) {
+        console.warn('[layout] save failed', err);
+      }
+    }, 250);
   }
 
   type SplitDirection = 'right' | 'left' | 'above' | 'below' | 'within';
   interface OpenNoteOptions {
     splitDirection?: SplitDirection;
-    /** Existing note id to position relative to. Defaults to the active panel. */
     referenceNoteId?: string;
   }
 
   export function openNote(id: string, opts: OpenNoteOptions = {}) {
     if (!dock) return;
-    const note = notes.byId[id];
+    const note = tree.notesById[id];
     if (!note) return;
 
     const existing = openPanels.get(id);
@@ -141,9 +201,6 @@
       return;
     }
 
-    // Decide where the new tab goes.
-    //   - With a splitDirection: position relative to a sibling panel.
-    //   - Without: tab into the last-used group, falling back to dock.activeGroup.
     let position:
       | { referencePanel: string; direction: SplitDirection }
       | { referenceGroup: DockviewGroupPanel }
@@ -157,9 +214,7 @@
       }
     } else {
       const target = lastActiveGroup ?? dock.activeGroup ?? null;
-      if (target) {
-        position = { referenceGroup: target };
-      }
+      if (target) position = { referenceGroup: target };
     }
 
     const panel = dock.addPanel({
@@ -175,22 +230,17 @@
   }
 
   onMount(() => {
-    // Defer one tick so the host div has a real size before dockview measures.
     void tick().then(setupDockview);
-
-    // dockview-core's internal ResizeObserver picks up size changes
-    // automatically; this listener is a no-op kept for future hooks.
     const onResize = () => {};
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   });
 
   onDestroy(() => {
+    if (saveLayoutTimer) clearTimeout(saveLayoutTimer);
     dock?.clear();
   });
 
-  // React to sidebar collapse / resize: dispatch a synthetic resize so
-  // dockview re-measures immediately rather than waiting for the next paint.
   $effect(() => {
     void ui.leftSidebarOpen;
     void ui.rightSidebarOpen;
@@ -202,12 +252,14 @@
     });
   });
 
-  // Adapter functions handed to FileExplorer so it can request specific layouts.
+  // Adapter functions handed to FileExplorer.
   const onOpenNote = (id: string) => openNote(id);
-  const onOpenNoteRight = (id: string) => openNote(id, { splitDirection: 'right' });
-  const onOpenNoteBelow = (id: string) => openNote(id, { splitDirection: 'below' });
+  const onOpenNoteRight = (id: string) =>
+    openNote(id, { splitDirection: 'right' });
+  const onOpenNoteBelow = (id: string) =>
+    openNote(id, { splitDirection: 'below' });
   const onOpenInNewWindow = (id: string) => {
-    const note = notes.byId[id];
+    const note = tree.notesById[id];
     if (!note) return;
     void openNoteWindow(note.id, note.title);
   };
@@ -222,7 +274,12 @@
         class="shrink-0 border-r border-border"
         style="width: {ui.leftSidebarWidth}px;"
       >
-        <FileExplorer {onOpenNote} {onOpenNoteRight} {onOpenNoteBelow} {onOpenInNewWindow} />
+        <FileExplorer
+          {onOpenNote}
+          {onOpenNoteRight}
+          {onOpenNoteBelow}
+          {onOpenInNewWindow}
+        />
       </div>
       <ResizeHandle
         side="left"

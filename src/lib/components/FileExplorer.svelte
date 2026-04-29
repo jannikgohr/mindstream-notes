@@ -4,15 +4,17 @@
   import ContextMenu, { type MenuItem } from './ContextMenu.svelte';
   import { SORT_STRATEGIES, sortTree, type SortStrategy } from '$lib/sort';
   import {
-    notes,
-    createNote,
-    deleteNote,
-    moveFolder,
-    moveNote,
-    renameNote,
-    setSortStrategy,
-    ui
-  } from '$lib/state.svelte';
+    tree,
+    createCollectionIn,
+    createNoteIn,
+    moveCollectionTo,
+    moveNoteTo,
+    renameCollectionById,
+    renameNoteById,
+    trashNoteById
+  } from '$lib/stores/tree.svelte';
+  import { setSortStrategy, ui } from '$lib/state.svelte';
+  import type { TreeNode } from '$lib/api';
 
   interface Props {
     onOpenNote: (id: string) => void;
@@ -27,12 +29,11 @@
     onOpenInNewWindow
   }: Props = $props();
 
-  let expanded = $state<Record<string, boolean>>({ Work: true, Personal: true });
+  let expanded = $state<Record<string, boolean>>({});
 
-  // Tree rendered through the active sort strategy. Folders always come
-  // first (alphabetical), notes within each level use ui.sortStrategy.
+  // Apply the active sort strategy to whatever the tree store currently holds.
   const sortedTree = $derived(
-    sortTree(notes.tree, ui.sortStrategy, { notesById: notes.byId })
+    sortTree(tree.tree, ui.sortStrategy, { notesById: tree.notesById })
   );
 
   // ---------- Sort menu ----------
@@ -48,11 +49,9 @@
     sortMenuY = r.bottom + 4;
     sortMenuOpen = true;
   }
-
   function closeSortMenu() {
     sortMenuOpen = false;
   }
-
   function sortMenuItems(): (MenuItem | 'separator')[] {
     return SORT_STRATEGIES.map((opt) => ({
       label: (ui.sortStrategy === opt.id ? '✓  ' : '    ') + opt.label,
@@ -60,10 +59,10 @@
     }));
   }
 
-  // ---------- Context menu state ----------
+  // ---------- Context menu ----------
   type MenuTarget =
     | { kind: 'note'; id: string }
-    | { kind: 'folder'; name: string }
+    | { kind: 'folder'; id: string }
     | { kind: 'root' };
 
   let menuOpen = $state(false);
@@ -79,7 +78,6 @@
     menuTarget = target;
     menuOpen = true;
   }
-
   function closeMenu() {
     menuOpen = false;
     menuTarget = null;
@@ -89,6 +87,7 @@
     if (!menuTarget) return [];
     if (menuTarget.kind === 'note') {
       const id = menuTarget.id;
+      const note = tree.notesById[id];
       const items: (MenuItem | 'separator')[] = [
         { label: 'Open', onSelect: () => onOpenNote(id) }
       ];
@@ -116,16 +115,13 @@
           label: 'Rename…',
           shortcut: 'F2',
           onSelect: () => {
-            const next = window.prompt(
-              'New name',
-              notes.byId[id]?.title ?? 'Untitled'
-            );
-            if (next && next.trim()) renameNote(id, next.trim());
+            const next = window.prompt('New name', note?.title ?? 'Untitled');
+            if (next && next.trim()) void renameNoteById(id, next.trim());
           }
         },
         {
           label: 'Move to root',
-          onSelect: () => moveNote(id, null)
+          onSelect: () => void moveNoteTo(id, null)
         },
         'separator',
         {
@@ -133,8 +129,8 @@
           shortcut: 'Del',
           destructive: true,
           onSelect: () => {
-            if (window.confirm(`Delete "${notes.byId[id]?.title}"?`)) {
-              deleteNote(id);
+            if (window.confirm(`Delete "${note?.title ?? 'note'}"?`)) {
+              void trashNoteById(id);
             }
           }
         }
@@ -142,56 +138,62 @@
       return items;
     }
     if (menuTarget.kind === 'folder') {
-      const name = menuTarget.name;
+      const id = menuTarget.id;
+      const folder = tree.collectionsById[id];
       return [
         {
           label: 'New note in folder',
-          onSelect: () => {
-            const id = createNote(name);
-            onOpenNote(id);
+          onSelect: async () => {
+            const noteId = await createNoteIn(id);
+            onOpenNote(noteId);
+          }
+        },
+        {
+          label: 'New folder inside',
+          onSelect: async () => {
+            const name = window.prompt('Folder name', 'Untitled folder');
+            if (name && name.trim()) await createCollectionIn(id, name.trim());
           }
         },
         {
           label: 'Move to root',
-          onSelect: () => moveFolder(name, null)
+          onSelect: () => void moveCollectionTo(id, null)
         },
         {
           label: 'Rename folder…',
-          disabled: true,
-          onSelect: () => console.info('[tree] folder rename not implemented')
-        },
-        'separator',
-        {
-          label: 'Delete folder',
-          destructive: true,
-          disabled: true,
-          onSelect: () => console.info('[tree] folder delete not implemented')
+          onSelect: () => {
+            const next = window.prompt('Folder name', folder?.name ?? 'Folder');
+            if (next && next.trim()) void renameCollectionById(id, next.trim());
+          }
         }
       ];
     }
     return [
       {
         label: 'New note',
-        onSelect: () => {
-          const id = createNote(null);
-          onOpenNote(id);
+        onSelect: async () => {
+          const noteId = await createNoteIn(null);
+          onOpenNote(noteId);
+        }
+      },
+      {
+        label: 'New folder',
+        onSelect: async () => {
+          const name = window.prompt('Folder name', 'Untitled folder');
+          if (name && name.trim()) await createCollectionIn(null, name.trim());
         }
       }
     ];
   }
 
   // ---------- Drag and drop ----------
-  // Two payload mime types so drop handlers can disambiguate:
-  //   application/x-note-id    -> moveNote(id, target)
-  //   application/x-folder-name -> moveFolder(name, target)
-
   type Drag =
     | { kind: 'note'; id: string }
-    | { kind: 'folder'; name: string }
+    | { kind: 'folder'; id: string }
     | null;
 
-  let drag = $state<Drag>(null); // what's currently being dragged
-  let dragOver = $state<string | null>(null); // target key: 'root' | `f:${name}` | `n:${id}`
+  let drag = $state<Drag>(null);
+  let dragOver = $state<string | null>(null); // 'root' | `f:${id}` | `n:${id}`
 
   function onNoteDragStart(e: DragEvent, noteId: string) {
     if (!e.dataTransfer) return;
@@ -200,104 +202,85 @@
     e.dataTransfer.setData('text/plain', noteId);
     drag = { kind: 'note', id: noteId };
   }
-
-  function onFolderDragStart(e: DragEvent, folderName: string) {
+  function onFolderDragStart(e: DragEvent, folderId: string) {
     if (!e.dataTransfer) return;
     e.stopPropagation();
     e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('application/x-folder-name', folderName);
-    e.dataTransfer.setData('text/plain', folderName);
-    drag = { kind: 'folder', name: folderName };
+    e.dataTransfer.setData('application/x-folder-id', folderId);
+    e.dataTransfer.setData('text/plain', folderId);
+    drag = { kind: 'folder', id: folderId };
   }
-
   function onDragEnd() {
     drag = null;
     dragOver = null;
   }
-
-  /**
-   * Decide whether the current drag can be dropped on `targetFolder`.
-   * Notes can land on any folder. Folders can land on any folder that's
-   * not themselves or one of their descendants — but we only know that
-   * deeply at drop time, so we settle for a name check here and let
-   * moveFolder() do the strict validation on drop.
-   */
-  function canDropOnFolder(targetFolder: string | null): boolean {
+  function canDropOnFolder(targetFolderId: string | null): boolean {
     if (!drag) return true;
-    if (drag.kind === 'folder' && targetFolder === drag.name) return false;
+    if (drag.kind === 'folder' && targetFolderId === drag.id) return false;
     return true;
   }
-
-  function onDragOverFolder(e: DragEvent, folderName: string) {
+  function onDragOverFolder(e: DragEvent, folderId: string) {
     if (!e.dataTransfer) return;
-    if (!canDropOnFolder(folderName)) return;
+    if (!canDropOnFolder(folderId)) return;
     e.preventDefault();
     e.stopPropagation();
     e.dataTransfer.dropEffect = 'move';
-    dragOver = `f:${folderName}`;
+    dragOver = `f:${folderId}`;
   }
-
   function onDragOverRoot(e: DragEvent) {
     if (!e.dataTransfer) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
     dragOver = 'root';
   }
-
   function onDragOverNote(e: DragEvent, noteId: string) {
     if (!e.dataTransfer) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
     dragOver = `n:${noteId}`;
   }
-
   function onDragLeave() {
     dragOver = null;
   }
-
   function readPayload(e: DragEvent): Drag {
     if (!e.dataTransfer) return null;
     const noteId = e.dataTransfer.getData('application/x-note-id');
     if (noteId) return { kind: 'note', id: noteId };
-    const folderName = e.dataTransfer.getData('application/x-folder-name');
-    if (folderName) return { kind: 'folder', name: folderName };
+    const folderId = e.dataTransfer.getData('application/x-folder-id');
+    if (folderId) return { kind: 'folder', id: folderId };
     return null;
   }
-
-  function onDropOnFolder(e: DragEvent, targetFolder: string) {
+  async function onDropOnFolder(e: DragEvent, targetFolderId: string) {
     e.preventDefault();
     e.stopPropagation();
     const payload = readPayload(e);
     dragOver = null;
     drag = null;
     if (!payload) return;
-    if (payload.kind === 'note') {
-      moveNote(payload.id, targetFolder);
-    } else {
-      moveFolder(payload.name, targetFolder);
-    }
+    if (payload.kind === 'note') await moveNoteTo(payload.id, targetFolderId);
+    else await moveCollectionTo(payload.id, targetFolderId);
   }
-
-  function onDropOnRoot(e: DragEvent) {
+  async function onDropOnRoot(e: DragEvent) {
     e.preventDefault();
     const payload = readPayload(e);
     dragOver = null;
     drag = null;
     if (!payload) return;
-    if (payload.kind === 'note') {
-      moveNote(payload.id, null);
-    } else {
-      moveFolder(payload.name, null);
-    }
+    if (payload.kind === 'note') await moveNoteTo(payload.id, null);
+    else await moveCollectionTo(payload.id, null);
   }
 
-  function toggleFolder(name: string) {
-    expanded[name] = !expanded[name];
+  function toggleFolder(id: string) {
+    expanded[id] = !expanded[id];
   }
-
-  function newRootNote() {
-    const id = createNote(null);
+  async function newRootNote() {
+    const id = await createNoteIn(null);
     onOpenNote(id);
+  }
+
+  // Convenience for the recursive renderer below.
+  function nodeKey(n: TreeNode): string {
+    return n.kind === 'folder' ? `f:${n.id}` : `n:${n.id}`;
   }
 </script>
 
@@ -341,114 +324,78 @@
     ondragleave={onDragLeave}
     ondrop={onDropOnRoot}
   >
-    {#each sortedTree as node (node.kind === 'folder' ? `f:${node.name}` : `n:${node.id}`)}
-      {#if node.kind === 'folder'}
-        {@const isOver = dragOver === `f:${node.name}`}
-        <button
-          type="button"
-          draggable="true"
-          class="flex w-full items-center gap-1 rounded-md px-2 py-1 text-left hover:bg-accent hover:text-accent-foreground"
-          class:bg-accent={isOver}
-          class:opacity-60={drag?.kind === 'folder' && drag.name === node.name}
-          onclick={() => toggleFolder(node.name)}
-          oncontextmenu={(e) => openMenu(e, { kind: 'folder', name: node.name })}
-          ondragstart={(e) => onFolderDragStart(e, node.name)}
-          ondragend={onDragEnd}
-          ondragover={(e) => onDragOverFolder(e, node.name)}
-          ondragleave={onDragLeave}
-          ondrop={(e) => onDropOnFolder(e, node.name)}
-        >
-          <ChevronRight
-            class={`size-3.5 shrink-0 transition-transform ${expanded[node.name] ? 'rotate-90' : ''}`}
-          />
-          {#if expanded[node.name]}
-            <FolderOpen class="size-3.5 shrink-0 text-muted-foreground" />
-          {:else}
-            <Folder class="size-3.5 shrink-0 text-muted-foreground" />
-          {/if}
-          <span class="truncate">{node.name}</span>
-        </button>
-        {#if expanded[node.name]}
-          <div class="ml-3 border-l border-border pl-1">
-            {#each node.children as child (child.kind === 'folder' ? `f:${child.name}` : `n:${child.id}`)}
-              {#if child.kind === 'note'}
-                {@const childOver = dragOver === `n:${child.id}`}
-                <button
-                  type="button"
-                  draggable="true"
-                  class="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left hover:bg-accent hover:text-accent-foreground"
-                  class:bg-accent={childOver}
-                  class:opacity-60={drag?.kind === 'note' && drag.id === child.id}
-                  onclick={() => onOpenNote(child.id)}
-                  oncontextmenu={(e) => openMenu(e, { kind: 'note', id: child.id })}
-                  ondragstart={(e) => onNoteDragStart(e, child.id)}
-                  ondragend={onDragEnd}
-                  ondragover={(e) => onDragOverNote(e, child.id)}
-                  ondragleave={onDragLeave}
-                >
-                  <FileText class="size-3.5 shrink-0 text-muted-foreground" />
-                  <span class="truncate">{child.name}</span>
-                </button>
-              {:else}
-                <!-- Nested folders: render as a smaller folder row that
-                     itself accepts drops + context menu. -->
-                {@const nestedOver = dragOver === `f:${child.name}`}
-                <button
-                  type="button"
-                  draggable="true"
-                  class="flex w-full items-center gap-1 rounded-md px-2 py-1 text-left hover:bg-accent hover:text-accent-foreground"
-                  class:bg-accent={nestedOver}
-                  class:opacity-60={drag?.kind === 'folder' && drag.name === child.name}
-                  onclick={() => toggleFolder(child.name)}
-                  oncontextmenu={(e) => openMenu(e, { kind: 'folder', name: child.name })}
-                  ondragstart={(e) => onFolderDragStart(e, child.name)}
-                  ondragend={onDragEnd}
-                  ondragover={(e) => onDragOverFolder(e, child.name)}
-                  ondragleave={onDragLeave}
-                  ondrop={(e) => onDropOnFolder(e, child.name)}
-                >
-                  <ChevronRight
-                    class={`size-3.5 shrink-0 transition-transform ${expanded[child.name] ? 'rotate-90' : ''}`}
-                  />
-                  {#if expanded[child.name]}
-                    <FolderOpen class="size-3.5 shrink-0 text-muted-foreground" />
-                  {:else}
-                    <Folder class="size-3.5 shrink-0 text-muted-foreground" />
-                  {/if}
-                  <span class="truncate">{child.name}</span>
-                </button>
-              {/if}
-            {/each}
-          </div>
-        {/if}
-      {:else}
-        {@const isOver = dragOver === `n:${node.id}`}
-        <button
-          type="button"
-          draggable="true"
-          class="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left hover:bg-accent hover:text-accent-foreground"
-          class:bg-accent={isOver}
-          class:opacity-60={drag?.kind === 'note' && drag.id === node.id}
-          onclick={() => onOpenNote(node.id)}
-          oncontextmenu={(e) => openMenu(e, { kind: 'note', id: node.id })}
-          ondragstart={(e) => onNoteDragStart(e, node.id)}
-          ondragend={onDragEnd}
-          ondragover={(e) => onDragOverNote(e, node.id)}
-          ondragleave={onDragLeave}
-        >
-          <FileText class="size-3.5 shrink-0 text-muted-foreground" />
-          <span class="truncate">{node.name}</span>
-        </button>
-      {/if}
-    {/each}
-
-    {#if notes.tree.length === 0}
+    {#if !tree.ready}
+      <p class="px-2 py-3 text-xs text-muted-foreground">Loading…</p>
+    {:else if tree.error}
+      <p class="px-2 py-3 text-xs text-destructive">
+        Couldn't load notes: {tree.error}
+      </p>
+    {:else if sortedTree.length === 0}
       <p class="px-2 py-3 text-xs text-muted-foreground">
         No notes yet. Right-click here to create one.
       </p>
     {/if}
+
+    {#each sortedTree as node (nodeKey(node))}
+      {@render renderNode(node)}
+    {/each}
   </div>
 </aside>
+
+{#snippet renderNode(node: TreeNode)}
+  {#if node.kind === 'folder'}
+    {@const isOver = dragOver === `f:${node.id}`}
+    <button
+      type="button"
+      draggable="true"
+      class="flex w-full items-center gap-1 rounded-md px-2 py-1 text-left hover:bg-accent hover:text-accent-foreground"
+      class:bg-accent={isOver}
+      class:opacity-60={drag?.kind === 'folder' && drag.id === node.id}
+      onclick={() => toggleFolder(node.id)}
+      oncontextmenu={(e) => openMenu(e, { kind: 'folder', id: node.id })}
+      ondragstart={(e) => onFolderDragStart(e, node.id)}
+      ondragend={onDragEnd}
+      ondragover={(e) => onDragOverFolder(e, node.id)}
+      ondragleave={onDragLeave}
+      ondrop={(e) => onDropOnFolder(e, node.id)}
+    >
+      <ChevronRight
+        class={`size-3.5 shrink-0 transition-transform ${expanded[node.id] ? 'rotate-90' : ''}`}
+      />
+      {#if expanded[node.id]}
+        <FolderOpen class="size-3.5 shrink-0 text-muted-foreground" />
+      {:else}
+        <Folder class="size-3.5 shrink-0 text-muted-foreground" />
+      {/if}
+      <span class="truncate">{node.name}</span>
+    </button>
+    {#if expanded[node.id]}
+      <div class="ml-3 border-l border-border pl-1">
+        {#each node.children as child (nodeKey(child))}
+          {@render renderNode(child)}
+        {/each}
+      </div>
+    {/if}
+  {:else}
+    {@const isOver = dragOver === `n:${node.id}`}
+    <button
+      type="button"
+      draggable="true"
+      class="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left hover:bg-accent hover:text-accent-foreground"
+      class:bg-accent={isOver}
+      class:opacity-60={drag?.kind === 'note' && drag.id === node.id}
+      onclick={() => onOpenNote(node.id)}
+      oncontextmenu={(e) => openMenu(e, { kind: 'note', id: node.id })}
+      ondragstart={(e) => onNoteDragStart(e, node.id)}
+      ondragend={onDragEnd}
+      ondragover={(e) => onDragOverNote(e, node.id)}
+      ondragleave={onDragLeave}
+    >
+      <FileText class="size-3.5 shrink-0 text-muted-foreground" />
+      <span class="truncate">{node.name}</span>
+    </button>
+  {/if}
+{/snippet}
 
 {#if menuOpen}
   <ContextMenu x={menuX} y={menuY} items={menuItems()} onClose={closeMenu} />
