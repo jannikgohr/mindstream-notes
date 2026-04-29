@@ -1,41 +1,50 @@
 <script lang="ts">
   /**
-   * Layout used by spawned Tauri windows that show a single note. No file
-   * tree, no metadata sidebar, no dock — just the editor and a small title
-   * bar so the window is dismissable.
-   *
-   * The `noteId` is passed in from the route; if the note isn't in the
-   * in-memory store yet we render a friendly placeholder. Once Rust-side
-   * persistence lands the editor will load the real body via load_note.
+   * Standalone Tauri window that just renders one note. The note may not
+   * be in the tree cache yet (the new window has its own JS heap), so we
+   * fetch a quick summary on mount to show the title; the editor itself
+   * loads the body lazily through the same code path as the main window.
    */
+  import { onMount } from 'svelte';
   import NoteEditor from './NoteEditor.svelte';
-  import { notes } from '$lib/state.svelte';
+  import { loadNote } from '$lib/api';
 
   interface Props {
     noteId: string;
   }
   let { noteId }: Props = $props();
 
-  const note = $derived(notes.byId[noteId]);
+  let title = $state('Note');
+  let exists = $state<boolean | null>(null);
+
+  onMount(async () => {
+    try {
+      const note = await loadNote(noteId);
+      title = note.title;
+      exists = true;
+    } catch (err) {
+      console.warn('[popout] note not found', noteId, err);
+      exists = false;
+    }
+  });
 </script>
 
 <div class="flex h-full w-full flex-col bg-background text-foreground">
   <header
     class="flex h-9 shrink-0 items-center border-b border-border bg-card px-3 text-xs font-medium text-muted-foreground"
   >
-    {note?.title ?? 'Note'}
+    {title}
   </header>
 
   <main class="min-h-0 flex-1 overflow-hidden">
-    {#if note}
-      <NoteEditor noteId={note.id} />
+    {#if exists === null}
+      <p class="p-4 text-sm text-muted-foreground">Loading…</p>
+    {:else if exists}
+      <NoteEditor {noteId} />
     {:else}
       <div class="flex h-full items-center justify-center p-6 text-sm text-muted-foreground">
         Note <code class="mx-1 rounded bg-muted px-1.5 py-0.5">{noteId}</code>
-        isn't loaded in this window yet. Once disk persistence is wired up
-        (see <code>save_note</code> / <code>load_note</code> in
-        <code>src-tauri/src/lib.rs</code>) it'll be hydrated from the vault
-        directory automatically.
+        couldn't be found in the database.
       </div>
     {/if}
   </main>
