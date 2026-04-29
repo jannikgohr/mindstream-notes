@@ -12,6 +12,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
 use crate::db::Db;
+use crate::serde_helpers::double_option;
 use crate::error::{AppError, AppResult};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,6 +47,12 @@ pub struct UpdateNote {
     pub title: Option<String>,
     pub body: Option<String>,
     /// Outer Some => change parent. Inner Option is the new value (None = root).
+    /// Outer Some => change parent. Inner Option = the new value
+    /// (`Some(id)` to a specific folder, `None` for root).
+    /// The custom deserializer is needed because plain
+    /// `Option<Option<T>>` collapses `null` into outer `None`,
+    /// which would silently turn a 'move to root' into a no-op.
+    #[serde(default, deserialize_with = "double_option")]
     pub parent_collection_id: Option<Option<String>>,
     pub position: Option<i64>,
     pub tags: Option<Vec<String>>,
@@ -260,4 +267,126 @@ pub fn restore_note(db: tauri::State<'_, Db>, id: String) -> Result<(), String> 
 #[tauri::command]
 pub fn purge_note(db: tauri::State<'_, Db>, id: String) -> Result<(), String> {
     db.with_conn(|c| purge(c, &id)).map_err(Into::into)
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::collections::{create as create_collection, CreateCollection};
+    use crate::db::open_memory_for_tests;
+
+    fn empty_note(db: &Db, parent: Option<String>) -> Note {
+        db.with_conn(|c| create(c, CreateNote {
+            title: Some("Hello".into()),
+            body: Some("# Body".into()),
+            parent_collection_id: parent,
+        })).unwrap()
+    }
+
+    #[test]
+    fn create_then_load_round_trip() {
+        let db = open_memory_for_tests();
+        let n = empty_note(&db, None);
+        let loaded = db.with_conn(|c| load(c, &n.summary.id)).unwrap();
+        assert_eq!(loaded.summary.title, "Hello");
+        assert_eq!(loaded.body, "# Body");
+        assert!(loaded.summary.parent_collection_id.is_none());
+        assert!(!loaded.summary.trashed);
+    }
+
+    #[test]
+    fn save_updates_body_and_modified_changes() {
+        let db = open_memory_for_tests();
+        let n = empty_note(&db, None);
+        let original_modified = n.summary.modified.clone();
+        // sleep one millisecond so the second timestamp differs
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        db.with_conn_mut(|c| update(c, UpdateNote {
+            id: n.summary.id.clone(),
+            title: None,
+            body: Some("# New body".into()),
+            parent_collection_id: None,
+            position: None,
+            tags: None,
+        })).unwrap();
+        let loaded = db.with_conn(|c| load(c, &n.summary.id)).unwrap();
+        assert_eq!(loaded.body, "# New body");
+        assert_ne!(loaded.summary.modified, original_modified);
+    }
+
+    #[test]
+    fn move_note_into_collection_then_back_to_root() {
+        let db = open_memory_for_tests();
+        let coll = db.with_conn(|c| create_collection(c, CreateCollection {
+            name: "Folder".into(),
+            parent_collection_id: None,
+        })).unwrap();
+        let n = empty_note(&db, None);
+
+        // Move into folder.
+        db.with_conn_mut(|c| update(c, UpdateNote {
+            id: n.summary.id.clone(),
+            title: None, body: None, position: None, tags: None,
+            parent_collection_id: Some(Some(coll.id.clone())),
+        })).unwrap();
+        let l = db.with_conn(|c| load(c, &n.summary.id)).unwrap();
+        assert_eq!(l.summary.parent_collection_id.as_deref(), Some(coll.id.as_str()));
+
+        // Move back to root via Some(None).
+        db.with_conn_mut(|c| update(c, UpdateNote {
+            id: n.summary.id.clone(),
+            title: None, body: None, position: None, tags: None,
+            parent_collection_id: Some(None),
+        })).unwrap();
+        let l = db.with_conn(|c| load(c, &n.summary.id)).unwrap();
+        assert!(l.summary.parent_collection_id.is_none(), "move-to-root must clear parent");
+    }
+
+    #[test]
+    fn trash_excludes_from_default_listing() {
+        let db = open_memory_for_tests();
+        let n = empty_note(&db, None);
+        db.with_conn(|c| trash(c, &n.summary.id)).unwrap();
+        let listed = db.with_conn(|c| list(c, false)).unwrap();
+        assert!(listed.iter().all(|x| x.id != n.summary.id));
+        let listed_with = db.with_conn(|c| list(c, true)).unwrap();
+        assert!(listed_with.iter().any(|x| x.id == n.summary.id && x.trashed));
+    }
+
+    #[test]
+    fn restore_then_purge() {
+        let db = open_memory_for_tests();
+        let n = empty_note(&db, None);
+        db.with_conn(|c| trash(c, &n.summary.id)).unwrap();
+        db.with_conn(|c| restore(c, &n.summary.id)).unwrap();
+        let loaded = db.with_conn(|c| load(c, &n.summary.id)).unwrap();
+        assert!(!loaded.summary.trashed);
+        db.with_conn(|c| purge(c, &n.summary.id)).unwrap();
+        let res = db.with_conn(|c| load(c, &n.summary.id));
+        assert!(res.is_err(), "purged note must be gone");
+    }
+
+    #[test]
+    fn save_with_tags_persists_them() {
+        let db = open_memory_for_tests();
+        let n = empty_note(&db, None);
+        db.with_conn_mut(|c| update(c, UpdateNote {
+            id: n.summary.id.clone(),
+            title: None, body: None, position: None,
+            parent_collection_id: None,
+            tags: Some(vec!["work".into(), "urgent".into()]),
+        })).unwrap();
+        let loaded = db.with_conn(|c| load(c, &n.summary.id)).unwrap();
+        assert_eq!(loaded.summary.tags, vec!["urgent".to_string(), "work".to_string()]);
+    }
+
+    /// End-to-end regression: serialize an UpdateNote with parent_collection_id=null
+    /// and confirm Rust accepts it as Some(None) (the "move to root" intent).
+    #[test]
+    fn serde_null_parent_means_move_to_root() {
+        let json = r#"{"id":"x","parent_collection_id":null}"#;
+        let parsed: UpdateNote = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.parent_collection_id, Some(None));
+    }
 }
