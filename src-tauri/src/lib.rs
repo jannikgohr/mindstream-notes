@@ -15,6 +15,7 @@ pub mod collections;
 pub mod db;
 pub mod error;
 pub mod notes;
+pub mod serde_helpers;
 pub mod window;
 
 use tauri::Manager;

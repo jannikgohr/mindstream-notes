@@ -56,3 +56,12 @@ impl Db {
         f(&mut conn)
     }
 }
+
+
+#[cfg(test)]
+pub fn open_memory_for_tests() -> Db {
+    let mut conn = rusqlite::Connection::open_in_memory().expect("in-memory db");
+    conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+    migrations::run(&mut conn).expect("migrations");
+    Db(std::sync::Mutex::new(conn))
+}

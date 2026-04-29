@@ -5,6 +5,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
 use crate::db::Db;
+use crate::serde_helpers::double_option;
 use crate::error::{AppError, AppResult};
 
 /// Public-facing folder shape. Position is the sort index inside the
@@ -29,6 +30,12 @@ pub struct CreateCollection {
 pub struct UpdateCollection {
     pub id: String,
     pub name: Option<String>,
+    /// Outer Some => change parent. Inner Option = the new value
+    /// (`Some(id)` to a specific folder, `None` for root).
+    /// The custom deserializer is needed because plain
+    /// `Option<Option<T>>` collapses `null` into outer `None`,
+    /// which would silently turn a 'move to root' into a no-op.
+    #[serde(default, deserialize_with = "double_option")]
     pub parent_collection_id: Option<Option<String>>,
     pub position: Option<i64>,
 }
@@ -199,4 +206,111 @@ pub fn update_collection(
 #[tauri::command]
 pub fn delete_collection(db: tauri::State<'_, Db>, id: String) -> Result<(), String> {
     db.with_conn(|c| delete(c, &id)).map_err(Into::into)
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::open_memory_for_tests;
+
+    fn create_root(db: &Db, name: &str) -> Collection {
+        db.with_conn(|c| create(c, CreateCollection { name: name.into(), parent_collection_id: None })).unwrap()
+    }
+
+    #[test]
+    fn create_then_list_returns_the_row() {
+        let db = open_memory_for_tests();
+        let c = create_root(&db, "Work");
+        let list_out = db.with_conn(|c| list(c)).unwrap();
+        assert_eq!(list_out.len(), 1);
+        assert_eq!(list_out[0].id, c.id);
+        assert_eq!(list_out[0].name, "Work");
+        assert!(list_out[0].parent_collection_id.is_none());
+    }
+
+    #[test]
+    fn rename_collection() {
+        let db = open_memory_for_tests();
+        let c = create_root(&db, "Old");
+        db.with_conn(|conn| update(conn, UpdateCollection {
+            id: c.id.clone(),
+            name: Some("New".into()),
+            parent_collection_id: None,
+            position: None,
+        })).unwrap();
+        let fetched = db.with_conn(|conn| get(conn, &c.id)).unwrap();
+        assert_eq!(fetched.name, "New");
+    }
+
+    #[test]
+    fn move_collection_into_another_then_back_to_root() {
+        let db = open_memory_for_tests();
+        let parent = create_root(&db, "Parent");
+        let child = create_root(&db, "Child");
+
+        // Move child under parent.
+        db.with_conn(|c| update(c, UpdateCollection {
+            id: child.id.clone(),
+            name: None,
+            parent_collection_id: Some(Some(parent.id.clone())),
+            position: None,
+        })).unwrap();
+        let fetched = db.with_conn(|c| get(c, &child.id)).unwrap();
+        assert_eq!(fetched.parent_collection_id.as_deref(), Some(parent.id.as_str()));
+
+        // Move child back to root via Some(None) (the "move to root" regression).
+        db.with_conn(|c| update(c, UpdateCollection {
+            id: child.id.clone(),
+            name: None,
+            parent_collection_id: Some(None),
+            position: None,
+        })).unwrap();
+        let fetched = db.with_conn(|c| get(c, &child.id)).unwrap();
+        assert!(fetched.parent_collection_id.is_none(), "move-to-root should clear parent");
+    }
+
+    #[test]
+    fn cannot_move_collection_into_self() {
+        let db = open_memory_for_tests();
+        let c = create_root(&db, "X");
+        let res = db.with_conn(|conn| update(conn, UpdateCollection {
+            id: c.id.clone(),
+            name: None,
+            parent_collection_id: Some(Some(c.id.clone())),
+            position: None,
+        }));
+        assert!(res.is_err(), "self-parent must be rejected");
+    }
+
+    #[test]
+    fn cannot_move_collection_into_descendant() {
+        let db = open_memory_for_tests();
+        let a = create_root(&db, "A");
+        // Make B a child of A, then try to move A into B.
+        let b = db.with_conn(|c| create(c, CreateCollection {
+            name: "B".into(),
+            parent_collection_id: Some(a.id.clone()),
+        })).unwrap();
+        let res = db.with_conn(|conn| update(conn, UpdateCollection {
+            id: a.id.clone(),
+            name: None,
+            parent_collection_id: Some(Some(b.id.clone())),
+            position: None,
+        }));
+        assert!(res.is_err(), "moving ancestor into descendant must be rejected");
+    }
+
+    #[test]
+    fn delete_cascades_to_child_collections() {
+        let db = open_memory_for_tests();
+        let parent = create_root(&db, "Parent");
+        let child = db.with_conn(|c| create(c, CreateCollection {
+            name: "Child".into(),
+            parent_collection_id: Some(parent.id.clone()),
+        })).unwrap();
+        db.with_conn(|c| delete(c, &parent.id)).unwrap();
+        let res = db.with_conn(|c| get(c, &child.id));
+        assert!(res.is_err(), "child should have been cascaded");
+    }
 }
