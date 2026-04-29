@@ -105,14 +105,18 @@ body {
 .dockview-theme-bridge {
   --dv-background-color: var(--background);
   --dv-paneview-active-outline-color: var(--ring);
-  --dv-tabs-and-actions-container-background-color: var(--card);
+  /* Tab strip + inactive tabs sit on --muted so they're visibly recessed
+   * from the editor surface (--background). In light mode --card and
+   * --background are both pure white, which made the strip invisible —
+   * --muted is a subtle gray that gives the strip a real boundary. */
+  --dv-tabs-and-actions-container-background-color: var(--muted);
   --dv-tabs-and-actions-container-font-size: 13px;
   --dv-tabs-and-actions-container-height: 34px;
   --dv-tab-divider-color: var(--border);
   --dv-activegroup-visiblepanel-tab-background-color: var(--background);
-  --dv-activegroup-hiddenpanel-tab-background-color: var(--card);
+  --dv-activegroup-hiddenpanel-tab-background-color: var(--muted);
   --dv-inactivegroup-visiblepanel-tab-background-color: var(--background);
-  --dv-inactivegroup-hiddenpanel-tab-background-color: var(--card);
+  --dv-inactivegroup-hiddenpanel-tab-background-color: var(--muted);
   --dv-tab-hover-background-color: var(--accent);
   --dv-activegroup-visiblepanel-tab-color: var(--foreground);
   --dv-activegroup-hiddenpanel-tab-color: var(--muted-foreground);
