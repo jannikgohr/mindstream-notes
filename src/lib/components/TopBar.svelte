@@ -78,7 +78,7 @@
   </Button>
   <Separator orientation="vertical" class="mx-1 h-5" />
   <span data-tauri-drag-region class="text-xs font-medium text-muted-foreground">
-    Notes
+    Mindstream Notes
   </span>
 
   <div data-tauri-drag-region class="flex-1"></div>
