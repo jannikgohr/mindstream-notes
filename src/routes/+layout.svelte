@@ -20,10 +20,15 @@
     window.addEventListener('contextmenu', block);
     return () => window.removeEventListener('contextmenu', block);
   });
+
+  import { ui } from '$lib/state.svelte.js';
 </script>
 
 <ModeWatcher defaultMode="system" />
 
-<div class="flex h-full w-full flex-col overflow-hidden bg-background text-foreground">
+<div class="flex h-full w-full flex-col overflow-hidden bg-background text-foreground"
+     style:--left-sidebar-width="{ui.leftSidebarWidth}px"
+     style:--left-sidebar-enabled={Number(ui.leftSidebarOpen)}
+>
   {@render children()}
 </div>
