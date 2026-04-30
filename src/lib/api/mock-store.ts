@@ -133,14 +133,16 @@ export const mockApi = {
     const idx = collections.findIndex((c) => c.id === id);
     if (idx === -1) throw new Error(`collection ${id} not found`);
     collections.splice(idx, 1);
-    // Cascade-ish: drop child collections, set notes' parent to null.
     for (const c of [...collections]) {
       if (c.parent_collection_id === id) {
         await this.deleteCollection(c.id);
       }
     }
     for (const n of notes.values()) {
-      if (n.parent_collection_id === id) n.parent_collection_id = null;
+      if (n.parent_collection_id === id) {
+        n.trashed = true;
+        n.modified = nowIso();
+      }
     }
   },
 

@@ -12,7 +12,8 @@
     moveNoteTo,
     renameCollection,
     renameNote,
-    trashNote, trashFolder
+    trashNote,
+    trashCollection
   } from '$lib/stores/tree.svelte';
   import { setSortStrategy, ui } from '$lib/state.svelte';
   import type { TreeNode } from '$lib/api';
@@ -39,7 +40,7 @@
   // ---------- Inline draft entry (replaces window.prompt) ----------
 
   /**
-   * The "create a new note/folder" UX renders a single inline input at
+   * The "create/rename note/folder" UX renders a single inline input at
    * the right spot in the tree (root level or inside a specific folder).
    * Enter commits, Escape cancels, blur with empty text cancels too.
    */
@@ -292,7 +293,7 @@
           shortcut: 'Del',
           destructive: true,
           onSelect: () => {
-            void trashFolder(id);
+            void trashCollection(id);
           }
         }
       ];
