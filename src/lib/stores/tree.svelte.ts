@@ -83,6 +83,10 @@ export async function trashNoteById(id: string): Promise<void> {
   if (ui.activeNoteId === id) ui.activeNoteId = null;
 }
 
+export async function trashFolderById(id: string): Promise<void> {
+  // TODO: delete folder api / move to trash
+}
+
 export async function moveNoteTo(
   noteId: string,
   targetCollectionId: string | null

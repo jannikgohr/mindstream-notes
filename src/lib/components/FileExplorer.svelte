@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { ArrowDownAZ, ChevronRight, FileText, Folder, FolderOpen, Plus } from 'lucide-svelte';
+  import { ArrowDownAZ, ChevronRight, FileText, Folder, FolderOpen, FolderPlus, Plus } from 'lucide-svelte';
   import { Button } from '$lib/components/ui/button';
+  import { Input } from '$lib/components/ui/input';
   import ContextMenu, { type MenuItem } from './ContextMenu.svelte';
   import { SORT_STRATEGIES, sortTree, type SortStrategy } from '$lib/sort';
   import {
@@ -11,7 +12,7 @@
     moveNoteTo,
     renameCollectionById,
     renameNoteById,
-    trashNoteById
+    trashNoteById, trashFolderById
   } from '$lib/stores/tree.svelte';
   import { setSortStrategy, ui } from '$lib/state.svelte';
   import type { TreeNode } from '$lib/api';
@@ -31,10 +32,90 @@
 
   let expanded = $state<Record<string, boolean>>({});
 
-  // Apply the active sort strategy to whatever the tree store currently holds.
   const sortedTree = $derived(
     sortTree(tree.tree, ui.sortStrategy, { notesById: tree.notesById })
   );
+
+  // ---------- Inline draft entry (replaces window.prompt) ----------
+
+  /**
+   * The "create a new note/folder" UX renders a single inline input at
+   * the right spot in the tree (root level or inside a specific folder).
+   * Enter commits, Escape cancels, blur with empty text cancels too.
+   */
+  type Draft = {
+    kind: 'note' | 'folder';
+    /** null = root, else the parent collection id. */
+    parentId: string | null;
+    text: string;
+  };
+
+  let draft = $state<Draft | null>(null);
+  let draftInput= $state<HTMLInputElement| null>(null);
+  $effect(() => {
+    if (!draftInput) return;
+    queueMicrotask(() => {
+      draftInput?.focus();
+      draftInput?.select();
+    });
+  });
+
+  function startDraft(kind: 'note' | 'folder', parentId: string | null) {
+    if (parentId) expanded[parentId] = true; // auto-open the target folder
+    draft = {
+      kind,
+      parentId,
+      text: kind === 'note' ? 'Untitled' : 'Untitled folder'
+    };
+  }
+
+  function cancelDraft() {
+    draft = null;
+  }
+
+  async function commitDraft() {
+    if (!draft) return;
+    const text = draft.text.trim();
+    if (!text) {
+      draft = null;
+      return;
+    }
+    const { kind, parentId } = draft;
+    draft = null;
+    if (kind === 'note') {
+      const id = await createNoteIn(parentId, text);
+      onOpenNote(id);
+    } else {
+      await createCollectionIn(parentId, text);
+    }
+  }
+
+  function onDraftKey(e: KeyboardEvent) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      void commitDraft();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      cancelDraft();
+    }
+  }
+
+  function onDraftBlur() {
+    // Defer one tick so a click on a different draft target isn't lost.
+    setTimeout(() => {
+      if (!draft) return;
+      if (!draft.text.trim()) cancelDraft();
+      else void commitDraft();
+    }, 0);
+  }
+
+  // Auto-focus the input as soon as a draft appears.
+  function focusOnMount(node: HTMLInputElement) {
+    queueMicrotask(() => {
+      node.focus();
+      node.select();
+    });
+  }
 
   // ---------- Sort menu ----------
   let sortMenuOpen = $state(false);
@@ -129,9 +210,7 @@
           shortcut: 'Del',
           destructive: true,
           onSelect: () => {
-            if (window.confirm(`Delete "${note?.title ?? 'note'}"?`)) {
-              void trashNoteById(id);
-            }
+            void trashNoteById(id);
           }
         }
       );
@@ -143,46 +222,39 @@
       return [
         {
           label: 'New note in folder',
-          onSelect: async () => {
-            const noteId = await createNoteIn(id);
-            onOpenNote(noteId);
-          }
+          onSelect: () => startDraft('note', id)
         },
         {
           label: 'New folder inside',
-          onSelect: async () => {
-            const name = window.prompt('Folder name', 'Untitled folder');
-            if (name && name.trim()) await createCollectionIn(id, name.trim());
+          onSelect: () => startDraft('folder', id)
+        },
+        'separator',
+        {
+          label: 'Rename folder…',
+          shortcut: 'F2',
+          onSelect: () => {
+            const next = window.prompt('Folder name', folder?.name ?? 'Folder');
+            if (next && next.trim()) void renameCollectionById(id, next.trim());
           }
         },
         {
           label: 'Move to root',
           onSelect: () => void moveCollectionTo(id, null)
         },
+        'separator',
         {
-          label: 'Rename folder…',
+          label: 'Delete',
+          shortcut: 'Del',
+          destructive: true,
           onSelect: () => {
-            const next = window.prompt('Folder name', folder?.name ?? 'Folder');
-            if (next && next.trim()) void renameCollectionById(id, next.trim());
+            void trashFolderById(id);
           }
         }
       ];
     }
     return [
-      {
-        label: 'New note',
-        onSelect: async () => {
-          const noteId = await createNoteIn(null);
-          onOpenNote(noteId);
-        }
-      },
-      {
-        label: 'New folder',
-        onSelect: async () => {
-          const name = window.prompt('Folder name', 'Untitled folder');
-          if (name && name.trim()) await createCollectionIn(null, name.trim());
-        }
-      }
+      { label: 'New note', onSelect: () => startDraft('note', null) },
+      { label: 'New folder', onSelect: () => startDraft('folder', null) }
     ];
   }
 
@@ -273,12 +345,7 @@
   function toggleFolder(id: string) {
     expanded[id] = !expanded[id];
   }
-  async function newRootNote() {
-    const id = await createNoteIn(null);
-    onOpenNote(id);
-  }
 
-  // Convenience for the recursive renderer below.
   function nodeKey(n: TreeNode): string {
     return n.kind === 'folder' ? `f:${n.id}` : `n:${n.id}`;
   }
@@ -305,7 +372,16 @@
       <Button
         variant="ghost"
         size="icon"
-        onclick={newRootNote}
+        onclick={() => startDraft('folder', null)}
+        title="New folder"
+        aria-label="New folder"
+      >
+        <FolderPlus class="size-3.5" />
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon"
+        onclick={() => startDraft('note', null)}
         title="New note"
         aria-label="New note"
       >
@@ -330,7 +406,7 @@
       <p class="px-2 py-3 text-xs text-destructive">
         Couldn't load notes: {tree.error}
       </p>
-    {:else if sortedTree.length === 0}
+    {:else if sortedTree.length === 0 && !draft}
       <p class="px-2 py-3 text-xs text-muted-foreground">
         No notes yet. Right-click here to create one.
       </p>
@@ -339,8 +415,32 @@
     {#each sortedTree as node (nodeKey(node))}
       {@render renderNode(node)}
     {/each}
+
+    {#if draft && draft.parentId === null}
+      {@render renderDraft()}
+    {/if}
   </div>
 </aside>
+
+
+{#snippet renderDraft()}
+  {@const isFolder = draft?.kind === 'folder'}
+  <div class="my-0.5 flex items-center gap-1.5 rounded-md px-2 py-0.5">
+    {#if isFolder}
+      <Folder class="size-3.5 shrink-0 text-muted-foreground" />
+    {:else}
+      <FileText class="size-3.5 shrink-0 text-muted-foreground" />
+    {/if}
+    <Input
+      bind:ref={draftInput}
+      bind:value={draft!.text}
+      placeholder={isFolder ? 'Folder name' : 'Note title'}
+      class="h-7 px-2 text-sm"
+      onkeydown={onDraftKey}
+      onblur={onDraftBlur}
+    />
+  </div>
+{/snippet}
 
 {#snippet renderNode(node: TreeNode)}
   {#if node.kind === 'folder'}
@@ -374,6 +474,9 @@
         {#each node.children as child (nodeKey(child))}
           {@render renderNode(child)}
         {/each}
+        {#if draft && draft.parentId === node.id}
+          {@render renderDraft()}
+        {/if}
       </div>
     {/if}
   {:else}
