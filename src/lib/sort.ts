@@ -6,6 +6,7 @@
 
 import type { NoteSummary } from './api';
 import type { FolderNode, TreeNode } from './api';
+import {getSettingValue} from "$lib/settings/store.svelte";
 
 export type SortStrategy = 'alphabetical' | 'modified' | 'created';
 
@@ -61,18 +62,33 @@ export function sortTree(
   strategy: SortStrategy,
   ctx: SortContext
 ): TreeNode[] {
-  const compare = COMPARATORS[strategy] ?? COMPARATORS.alphabetical;
-  const folders: FolderNode[] = [];
-  const notes: TreeNode[] = [];
-  for (const node of tree) {
-    if (node.kind === 'folder') folders.push(node);
-    else notes.push(node);
-  }
-  folders.sort((a, b) => alphabetical(a, b));
-  notes.sort((a, b) => compare(a, b, ctx));
-  const sortedFolders = folders.map((f) => ({
-    ...f,
-    children: sortTree(f.children, strategy, ctx)
-  }));
-  return [...sortedFolders, ...notes];
+  const strategyCompare = COMPARATORS[strategy] ?? COMPARATORS.alphabetical;
+  const foldersFirst = Boolean(getSettingValue('appearance.foldersFirst'));
+
+  // Define a unified comparator
+  const unifiedCompare = (a: TreeNode, b: TreeNode) => {
+    if (foldersFirst && a.kind !== b.kind) {
+      return a.kind === 'folder' ? -1 : 1;
+    }
+
+    // If both are folders and foldersFirst is on, original code forced alphabetical
+    if (foldersFirst && a.kind === 'folder' && b.kind === 'folder') {
+      return alphabetical(a, b);
+    }
+
+    return strategyCompare(a, b, ctx);
+  };
+
+  // Sort the current level and recursively handle children in one go
+  return [...tree]
+      .sort(unifiedCompare)
+      .map((node) => {
+        if (node.kind === 'folder' && node.children?.length > 0) {
+          return {
+            ...node,
+            children: sortTree(node.children, strategy, ctx),
+          };
+        }
+        return node;
+      });
 }
