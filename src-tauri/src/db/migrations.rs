@@ -48,6 +48,21 @@ const MIGRATIONS: &[Migration] = &[
             );
         "#,
     },
+    Migration {
+        to: 2,
+        // Special "trash" collection that's always present. Notes/folders
+        // moved here are considered soft-deleted from the user's POV. The
+        // huge position sentinel keeps it at the bottom of position-ordered
+        // listings; the file tree also pins it last visually regardless.
+        sql: r#"
+            INSERT OR IGNORE INTO collections(
+                id, parent_collection_id, name, position, created, modified
+            ) VALUES (
+                'trash', NULL, 'Trash', 9999999,
+                '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'
+            );
+        "#,
+    },
 ];
 
 pub fn run(conn: &mut Connection) -> AppResult<()> {

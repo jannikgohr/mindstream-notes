@@ -58,7 +58,15 @@ function maxPosition(arr: { position: number }[]): number {
     created: t,
     modified: t
   };
-  collections.push(work, personal);
+  const trash: Collection = {
+    id: 'trash',
+    parent_collection_id: null,
+    name: 'Trash',
+    position: 9999999,
+    created: t,
+    modified: t
+  };
+  collections.push(work, personal, trash);
 
   const welcome: Note = {
     id: 'note_seed_welcome',
