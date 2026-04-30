@@ -62,7 +62,7 @@ export async function createNoteIn(
   return note.id;
 }
 
-export async function renameNoteById(id: string, title: string): Promise<void> {
+export async function renameNote(id: string, title: string): Promise<void> {
   await api.saveNote({ id, title });
   // Optimistic update so the UI doesn't flash through a refetch.
   const existing = tree.notesById[id];
@@ -76,14 +76,14 @@ export async function renameNoteById(id: string, title: string): Promise<void> {
   patchNodeName(tree.tree, id, title);
 }
 
-export async function trashNoteById(id: string): Promise<void> {
+export async function trashNote(id: string): Promise<void> {
   await api.trashNote(id);
   delete tree.notesById[id];
   removeNoteNode(tree.tree, id);
   if (ui.activeNoteId === id) ui.activeNoteId = null;
 }
 
-export async function trashFolderById(id: string): Promise<void> {
+export async function trashFolder(id: string): Promise<void> {
   // TODO: delete folder api / move to trash
 }
 
@@ -114,7 +114,7 @@ export async function createCollectionIn(
   return c.id;
 }
 
-export async function renameCollectionById(
+export async function renameCollection(
   id: string,
   name: string
 ): Promise<void> {

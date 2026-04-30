@@ -10,9 +10,9 @@
     createNoteIn,
     moveCollectionTo,
     moveNoteTo,
-    renameCollectionById,
-    renameNoteById,
-    trashNoteById, trashFolderById
+    renameCollection,
+    renameNote,
+    trashNote, trashFolder
   } from '$lib/stores/tree.svelte';
   import { setSortStrategy, ui } from '$lib/state.svelte';
   import type { TreeNode } from '$lib/api';
@@ -49,16 +49,72 @@
     parentId: string | null;
     text: string;
   };
+  type Rename = {
+    kind: 'note' | 'folder';
+    id: string;
+    new_name: string;
+  }
 
   let draft = $state<Draft | null>(null);
-  let draftInput= $state<HTMLInputElement| null>(null);
+  let rename = $state<Rename | null>(null);
+  let nameInput= $state<HTMLInputElement| null>(null);
   $effect(() => {
-    if (!draftInput) return;
+    if (!nameInput) return;
     queueMicrotask(() => {
-      draftInput?.focus();
-      draftInput?.select();
+      nameInput?.focus();
+      nameInput?.select();
     });
   });
+
+  function startRename(kind: 'note' | 'folder', id: string, new_name: string) {
+    console.log("Haha start rename")
+    rename = {
+      kind,
+      id,
+      new_name
+    };
+  }
+
+  function cancelRename() {
+    rename = null;
+  }
+
+  async function commitRename() {
+
+    if (!rename) return;
+    const new_name = rename.new_name.trim();
+    if (!new_name) {
+      rename = null;
+      return;
+    }
+    const { kind, id } = rename;
+    rename = null;
+    if (kind === 'note') {
+      await renameNote(id, new_name);
+      onOpenNote(id);
+    } else {
+      await renameCollection(id, new_name);
+    }
+  }
+
+  function onRenameKey(e: KeyboardEvent) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      void commitRename();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      cancelRename();
+    }
+  }
+
+  function onRenameBlur() {
+    // Defer one tick so a click on a different rename target isn't lost.
+    setTimeout(() => {
+      if (!rename) return;
+      if (!rename.new_name.trim()) cancelRename();
+      else void commitRename();
+    }, 0);
+  }
 
   function startDraft(kind: 'note' | 'folder', parentId: string | null) {
     if (parentId) expanded[parentId] = true; // auto-open the target folder
@@ -109,13 +165,6 @@
     }, 0);
   }
 
-  // Auto-focus the input as soon as a draft appears.
-  function focusOnMount(node: HTMLInputElement) {
-    queueMicrotask(() => {
-      node.focus();
-      node.select();
-    });
-  }
 
   // ---------- Sort menu ----------
   let sortMenuOpen = $state(false);
@@ -196,8 +245,7 @@
           label: 'Rename…',
           shortcut: 'F2',
           onSelect: () => {
-            const next = window.prompt('New name', note?.title ?? 'Untitled');
-            if (next && next.trim()) void renameNoteById(id, next.trim());
+            startRename('note', id, note.title)
           }
         },
         {
@@ -210,7 +258,7 @@
           shortcut: 'Del',
           destructive: true,
           onSelect: () => {
-            void trashNoteById(id);
+            void trashNote(id);
           }
         }
       );
@@ -232,10 +280,7 @@
         {
           label: 'Rename folder…',
           shortcut: 'F2',
-          onSelect: () => {
-            const next = window.prompt('Folder name', folder?.name ?? 'Folder');
-            if (next && next.trim()) void renameCollectionById(id, next.trim());
-          }
+          onSelect: () => startRename('folder', id, folder.name)
         },
         {
           label: 'Move to root',
@@ -247,7 +292,7 @@
           shortcut: 'Del',
           destructive: true,
           onSelect: () => {
-            void trashFolderById(id);
+            void trashFolder(id);
           }
         }
       ];
@@ -423,6 +468,25 @@
 </aside>
 
 
+{#snippet renderRename()}
+  {@const isFolder = rename?.kind === 'folder'}
+  <div class="my-0.5 flex items-center gap-1.5 rounded-md px-2 py-0.5">
+    {#if isFolder}
+      <Folder class="size-3.5 shrink-0 text-muted-foreground" />
+    {:else}
+      <FileText class="size-3.5 shrink-0 text-muted-foreground" />
+    {/if}
+    <Input
+      bind:ref={nameInput}
+      bind:value={rename!.new_name}
+      placeholder={isFolder ? 'Folder name' : 'Note title'}
+      class="h-7 px-2 text-sm"
+      onkeydown={onRenameKey}
+      onblur={onRenameBlur}
+    />
+  </div>
+{/snippet}
+
 {#snippet renderDraft()}
   {@const isFolder = draft?.kind === 'folder'}
   <div class="my-0.5 flex items-center gap-1.5 rounded-md px-2 py-0.5">
@@ -432,71 +496,80 @@
       <FileText class="size-3.5 shrink-0 text-muted-foreground" />
     {/if}
     <Input
-      bind:ref={draftInput}
-      bind:value={draft!.text}
-      placeholder={isFolder ? 'Folder name' : 'Note title'}
-      class="h-7 px-2 text-sm"
-      onkeydown={onDraftKey}
-      onblur={onDraftBlur}
+            bind:ref={nameInput}
+            bind:value={draft!.text}
+            placeholder={isFolder ? 'Folder name' : 'Note title'}
+            class="h-7 px-2 text-sm"
+            onkeydown={onDraftKey}
+            onblur={onDraftBlur}
     />
   </div>
 {/snippet}
 
+
 {#snippet renderNode(node: TreeNode)}
   {#if node.kind === 'folder'}
-    {@const isOver = dragOver === `f:${node.id}`}
-    <button
-      type="button"
-      draggable="true"
-      class="flex w-full items-center gap-1 rounded-md px-2 py-1 text-left hover:bg-accent hover:text-accent-foreground"
-      class:bg-accent={isOver}
-      class:opacity-60={drag?.kind === 'folder' && drag.id === node.id}
-      onclick={() => toggleFolder(node.id)}
-      oncontextmenu={(e) => openMenu(e, { kind: 'folder', id: node.id })}
-      ondragstart={(e) => onFolderDragStart(e, node.id)}
-      ondragend={onDragEnd}
-      ondragover={(e) => onDragOverFolder(e, node.id)}
-      ondragleave={onDragLeave}
-      ondrop={(e) => onDropOnFolder(e, node.id)}
-    >
-      <ChevronRight
-        class={`size-3.5 shrink-0 transition-transform ${expanded[node.id] ? 'rotate-90' : ''}`}
-      />
-      {#if expanded[node.id]}
-        <FolderOpen class="size-3.5 shrink-0 text-muted-foreground" />
-      {:else}
-        <Folder class="size-3.5 shrink-0 text-muted-foreground" />
-      {/if}
-      <span class="truncate">{node.name}</span>
-    </button>
-    {#if expanded[node.id]}
-      <div class="ml-3 border-l border-border pl-1">
-        {#each node.children as child (nodeKey(child))}
-          {@render renderNode(child)}
-        {/each}
-        {#if draft && draft.parentId === node.id}
-          {@render renderDraft()}
+    {#if rename && rename.id === node.id}
+      {@render renderRename()}
+    {:else}
+      {@const isOver = dragOver === `f:${node.id}`}
+      <button
+        type="button"
+        draggable="true"
+        class="flex w-full items-center gap-1 rounded-md px-2 py-1 text-left hover:bg-accent hover:text-accent-foreground"
+        class:bg-accent={isOver}
+        class:opacity-60={drag?.kind === 'folder' && drag.id === node.id}
+        onclick={() => toggleFolder(node.id)}
+        oncontextmenu={(e) => openMenu(e, { kind: 'folder', id: node.id })}
+        ondragstart={(e) => onFolderDragStart(e, node.id)}
+        ondragend={onDragEnd}
+        ondragover={(e) => onDragOverFolder(e, node.id)}
+        ondragleave={onDragLeave}
+        ondrop={(e) => onDropOnFolder(e, node.id)}
+      >
+        <ChevronRight
+          class={`size-3.5 shrink-0 transition-transform ${expanded[node.id] ? 'rotate-90' : ''}`}
+        />
+        {#if expanded[node.id]}
+          <FolderOpen class="size-3.5 shrink-0 text-muted-foreground" />
+        {:else}
+          <Folder class="size-3.5 shrink-0 text-muted-foreground" />
         {/if}
-      </div>
+        <span class="truncate">{node.name}</span>
+      </button>
+      {#if expanded[node.id]}
+        <div class="ml-3 border-l border-border pl-1">
+          {#each node.children as child (nodeKey(child))}
+            {@render renderNode(child)}
+          {/each}
+          {#if draft && draft.parentId === node.id}
+            {@render renderDraft()}
+          {/if}
+        </div>
+      {/if}
     {/if}
   {:else}
-    {@const isOver = dragOver === `n:${node.id}`}
-    <button
-      type="button"
-      draggable="true"
-      class="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left hover:bg-accent hover:text-accent-foreground"
-      class:bg-accent={isOver}
-      class:opacity-60={drag?.kind === 'note' && drag.id === node.id}
-      onclick={() => onOpenNote(node.id)}
-      oncontextmenu={(e) => openMenu(e, { kind: 'note', id: node.id })}
-      ondragstart={(e) => onNoteDragStart(e, node.id)}
-      ondragend={onDragEnd}
-      ondragover={(e) => onDragOverNote(e, node.id)}
-      ondragleave={onDragLeave}
-    >
-      <FileText class="size-3.5 shrink-0 text-muted-foreground" />
-      <span class="truncate">{node.name}</span>
-    </button>
+    {#if rename && rename.id === node.id}
+      {@render renderRename()}
+    {:else}
+      {@const isOver = dragOver === `n:${node.id}`}
+      <button
+        type="button"
+        draggable="true"
+        class="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left hover:bg-accent hover:text-accent-foreground"
+        class:bg-accent={isOver}
+        class:opacity-60={drag?.kind === 'note' && drag.id === node.id}
+        onclick={() => onOpenNote(node.id)}
+        oncontextmenu={(e) => openMenu(e, { kind: 'note', id: node.id })}
+        ondragstart={(e) => onNoteDragStart(e, node.id)}
+        ondragend={onDragEnd}
+        ondragover={(e) => onDragOverNote(e, node.id)}
+        ondragleave={onDragLeave}
+      >
+        <FileText class="size-3.5 shrink-0 text-muted-foreground" />
+        <span class="truncate">{node.name}</span>
+      </button>
+    {/if}
   {/if}
 {/snippet}
 
