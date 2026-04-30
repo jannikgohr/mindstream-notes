@@ -1,12 +1,12 @@
 //! Collections (folders) — CRUD + Tauri commands.
 
 use chrono::Utc;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 use crate::db::Db;
-use crate::serde_helpers::double_option;
 use crate::error::{AppError, AppResult};
+use crate::serde_helpers::double_option;
 
 /// Public-facing folder shape. Position is the sort index inside the
 /// parent (or root, if parent is None).
@@ -39,7 +39,6 @@ pub struct UpdateCollection {
     pub parent_collection_id: Option<Option<String>>,
     pub position: Option<i64>,
 }
-
 
 /// Reserved id for the always-present trash collection. Refusing mutations
 /// against it keeps the file tree's special-cased section stable.
@@ -77,13 +76,7 @@ pub fn create(conn: &Connection, input: CreateCollection) -> AppResult<Collectio
     conn.execute(
         "INSERT INTO collections(id, parent_collection_id, name, position, created, modified)
          VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
-        params![
-            id,
-            input.parent_collection_id,
-            input.name,
-            position,
-            now
-        ],
+        params![id, input.parent_collection_id, input.name, position, now],
     )?;
     get(conn, &id)
 }
@@ -101,7 +94,9 @@ pub fn get(conn: &Connection, id: &str) -> AppResult<Collection> {
 
 pub fn update(conn: &Connection, input: UpdateCollection) -> AppResult<Collection> {
     if is_trash(&input.id) {
-        return Err(AppError::InvalidArg("the trash collection cannot be modified".into()));
+        return Err(AppError::InvalidArg(
+            "the trash collection cannot be modified".into(),
+        ));
     }
     let now = Utc::now().to_rfc3339();
     if let Some(name) = &input.name {
@@ -141,7 +136,9 @@ pub fn update(conn: &Connection, input: UpdateCollection) -> AppResult<Collectio
 
 pub fn delete(conn: &Connection, id: &str) -> AppResult<()> {
     if is_trash(id) {
-        return Err(AppError::InvalidArg("the trash collection cannot be deleted".into()));
+        return Err(AppError::InvalidArg(
+            "the trash collection cannot be deleted".into(),
+        ));
     }
     let n = conn.execute("DELETE FROM collections WHERE id = ?1", params![id])?;
     if n == 0 {
@@ -223,14 +220,22 @@ pub fn delete_collection(db: tauri::State<'_, Db>, id: String) -> Result<(), Str
     db.with_conn(|c| delete(c, &id)).map_err(Into::into)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::db::open_memory_for_tests;
 
     fn create_root(db: &Db, name: &str) -> Collection {
-        db.with_conn(|c| create(c, CreateCollection { name: name.into(), parent_collection_id: None })).unwrap()
+        db.with_conn(|c| {
+            create(
+                c,
+                CreateCollection {
+                    name: name.into(),
+                    parent_collection_id: None,
+                },
+            )
+        })
+        .unwrap()
     }
 
     #[test]
@@ -248,12 +253,18 @@ mod tests {
     fn rename_collection() {
         let db = open_memory_for_tests();
         let c = create_root(&db, "Old");
-        db.with_conn(|conn| update(conn, UpdateCollection {
-            id: c.id.clone(),
-            name: Some("New".into()),
-            parent_collection_id: None,
-            position: None,
-        })).unwrap();
+        db.with_conn(|conn| {
+            update(
+                conn,
+                UpdateCollection {
+                    id: c.id.clone(),
+                    name: Some("New".into()),
+                    parent_collection_id: None,
+                    position: None,
+                },
+            )
+        })
+        .unwrap();
         let fetched = db.with_conn(|conn| get(conn, &c.id)).unwrap();
         assert_eq!(fetched.name, "New");
     }
@@ -265,36 +276,59 @@ mod tests {
         let child = create_root(&db, "Child");
 
         // Move child under parent.
-        db.with_conn(|c| update(c, UpdateCollection {
-            id: child.id.clone(),
-            name: None,
-            parent_collection_id: Some(Some(parent.id.clone())),
-            position: None,
-        })).unwrap();
+        db.with_conn(|c| {
+            update(
+                c,
+                UpdateCollection {
+                    id: child.id.clone(),
+                    name: None,
+                    parent_collection_id: Some(Some(parent.id.clone())),
+                    position: None,
+                },
+            )
+        })
+        .unwrap();
         let fetched = db.with_conn(|c| get(c, &child.id)).unwrap();
-        assert_eq!(fetched.parent_collection_id.as_deref(), Some(parent.id.as_str()));
+        assert_eq!(
+            fetched.parent_collection_id.as_deref(),
+            Some(parent.id.as_str())
+        );
 
         // Move child back to root via Some(None) (the "move to root" regression).
-        db.with_conn(|c| update(c, UpdateCollection {
-            id: child.id.clone(),
-            name: None,
-            parent_collection_id: Some(None),
-            position: None,
-        })).unwrap();
+        db.with_conn(|c| {
+            update(
+                c,
+                UpdateCollection {
+                    id: child.id.clone(),
+                    name: None,
+                    parent_collection_id: Some(None),
+                    position: None,
+                },
+            )
+        })
+        .unwrap();
         let fetched = db.with_conn(|c| get(c, &child.id)).unwrap();
-        assert!(fetched.parent_collection_id.is_none(), "move-to-root should clear parent");
+        assert!(
+            fetched.parent_collection_id.is_none(),
+            "move-to-root should clear parent"
+        );
     }
 
     #[test]
     fn cannot_move_collection_into_self() {
         let db = open_memory_for_tests();
         let c = create_root(&db, "X");
-        let res = db.with_conn(|conn| update(conn, UpdateCollection {
-            id: c.id.clone(),
-            name: None,
-            parent_collection_id: Some(Some(c.id.clone())),
-            position: None,
-        }));
+        let res = db.with_conn(|conn| {
+            update(
+                conn,
+                UpdateCollection {
+                    id: c.id.clone(),
+                    name: None,
+                    parent_collection_id: Some(Some(c.id.clone())),
+                    position: None,
+                },
+            )
+        });
         assert!(res.is_err(), "self-parent must be rejected");
     }
 
@@ -303,31 +337,53 @@ mod tests {
         let db = open_memory_for_tests();
         let a = create_root(&db, "A");
         // Make B a child of A, then try to move A into B.
-        let b = db.with_conn(|c| create(c, CreateCollection {
-            name: "B".into(),
-            parent_collection_id: Some(a.id.clone()),
-        })).unwrap();
-        let res = db.with_conn(|conn| update(conn, UpdateCollection {
-            id: a.id.clone(),
-            name: None,
-            parent_collection_id: Some(Some(b.id.clone())),
-            position: None,
-        }));
-        assert!(res.is_err(), "moving ancestor into descendant must be rejected");
+        let b = db
+            .with_conn(|c| {
+                create(
+                    c,
+                    CreateCollection {
+                        name: "B".into(),
+                        parent_collection_id: Some(a.id.clone()),
+                    },
+                )
+            })
+            .unwrap();
+        let res = db.with_conn(|conn| {
+            update(
+                conn,
+                UpdateCollection {
+                    id: a.id.clone(),
+                    name: None,
+                    parent_collection_id: Some(Some(b.id.clone())),
+                    position: None,
+                },
+            )
+        });
+        assert!(
+            res.is_err(),
+            "moving ancestor into descendant must be rejected"
+        );
     }
 
     #[test]
     fn delete_cascades_to_child_collections() {
         let db = open_memory_for_tests();
         let parent = create_root(&db, "Parent");
-        let child = db.with_conn(|c| create(c, CreateCollection {
-            name: "Child".into(),
-            parent_collection_id: Some(parent.id.clone()),
-        })).unwrap();
+        let child = db
+            .with_conn(|c| {
+                create(
+                    c,
+                    CreateCollection {
+                        name: "Child".into(),
+                        parent_collection_id: Some(parent.id.clone()),
+                    },
+                )
+            })
+            .unwrap();
         db.with_conn(|c| delete(c, &parent.id)).unwrap();
         let res = db.with_conn(|c| get(c, &child.id));
         assert!(res.is_err(), "child should have been cascaded");
-    
+    }
 
     #[test]
     fn migration_v2_inserts_the_trash_collection() {
@@ -342,7 +398,10 @@ mod tests {
     fn cannot_delete_the_trash_collection() {
         let db = open_memory_for_tests();
         let res = db.with_conn(|c| delete(c, "trash"));
-        assert!(res.is_err(), "deleting the trash collection must be rejected");
+        assert!(
+            res.is_err(),
+            "deleting the trash collection must be rejected"
+        );
         // Still present afterwards.
         let trash = db.with_conn(|c| get(c, "trash")).unwrap();
         assert_eq!(trash.id, "trash");
@@ -351,26 +410,38 @@ mod tests {
     #[test]
     fn cannot_rename_the_trash_collection() {
         let db = open_memory_for_tests();
-        let res = db.with_conn(|c| update(c, UpdateCollection {
-            id: "trash".into(),
-            name: Some("Rubbish bin".into()),
-            parent_collection_id: None,
-            position: None,
-        }));
-        assert!(res.is_err(), "renaming the trash collection must be rejected");
+        let res = db.with_conn(|c| {
+            update(
+                c,
+                UpdateCollection {
+                    id: "trash".into(),
+                    name: Some("Rubbish bin".into()),
+                    parent_collection_id: None,
+                    position: None,
+                },
+            )
+        });
+        assert!(
+            res.is_err(),
+            "renaming the trash collection must be rejected"
+        );
     }
 
     #[test]
     fn cannot_reparent_the_trash_collection() {
         let db = open_memory_for_tests();
         let other = create_root(&db, "Other");
-        let res = db.with_conn(|c| update(c, UpdateCollection {
-            id: "trash".into(),
-            name: None,
-            parent_collection_id: Some(Some(other.id.clone())),
-            position: None,
-        }));
+        let res = db.with_conn(|c| {
+            update(
+                c,
+                UpdateCollection {
+                    id: "trash".into(),
+                    name: None,
+                    parent_collection_id: Some(Some(other.id.clone())),
+                    position: None,
+                },
+            )
+        });
         assert!(res.is_err(), "moving the trash collection must be rejected");
     }
 }
-
