@@ -13,6 +13,7 @@
 import * as api from '$lib/api';
 import type { Collection, NoteSummary, TreeNode } from '$lib/api';
 import { ui } from '$lib/state.svelte';
+import {getSettingValue} from "$lib/settings/store.svelte";
 
 interface TreeState {
   tree: TreeNode[];
@@ -77,14 +78,14 @@ export async function renameNote(id: string, title: string): Promise<void> {
 }
 
 export async function trashNote(id: string): Promise<void> {
-  await api.trashNote(id);
-  delete tree.notesById[id];
-  removeNoteNode(tree.tree, id);
-  if (ui.activeNoteId === id) ui.activeNoteId = null;
-}
-
-export async function trashFolder(id: string): Promise<void> {
-  // TODO: delete folder api / move to trash
+  if (getSettingValue("data.useTrash")) {
+    await moveNoteTo(id, "trash");
+  } else {
+    await api.trashNote(id);
+    delete tree.notesById[id];
+    removeNoteNode(tree.tree, id);
+    if (ui.activeNoteId === id) ui.activeNoteId = null;
+  }
 }
 
 export async function moveNoteTo(
@@ -133,9 +134,13 @@ export async function moveCollectionTo(
   await loadTree();
 }
 
-export async function deleteCollectionById(id: string): Promise<void> {
-  await api.deleteCollection(id);
-  await loadTree();
+export async function trashCollection(id: string): Promise<void> {
+  if (getSettingValue("data.useTrash")) {
+    await moveCollectionTo(id, "trash");
+  } else {
+    await api.deleteCollection(id);
+    await loadTree();
+  }
 }
 
 // ---------- Internal: in-place tree patches for optimistic updates ----------
