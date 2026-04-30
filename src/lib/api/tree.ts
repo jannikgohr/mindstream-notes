@@ -5,6 +5,7 @@
 
 import type { Collection } from './collections';
 import type { NoteSummary } from './notes';
+import { TRASH_ID } from './index';
 import { listCollections } from './collections';
 import { listNotes } from './notes';
 
@@ -37,7 +38,7 @@ export interface LoadedTree {
 export async function loadTree(): Promise<LoadedTree> {
   const [collections, notes] = await Promise.all([
     listCollections(),
-    listNotes(false)
+    listNotes(true)
   ]);
   return composeTree(collections, notes);
 }
@@ -54,6 +55,19 @@ export function composeTree(
       name: c.name,
       position: c.position,
       parent_collection_id: c.parent_collection_id,
+      children: []
+    });
+  }
+
+  // Ensure the special trash folder exists even if the DB doesn't yet have
+  // it (e.g. before migration v2 has run, or in an outdated mock seed).
+  if (!folderById.has(TRASH_ID)) {
+    folderById.set(TRASH_ID, {
+      kind: 'folder',
+      id: TRASH_ID,
+      name: 'Trash',
+      position: 9999999,
+      parent_collection_id: null,
       children: []
     });
   }

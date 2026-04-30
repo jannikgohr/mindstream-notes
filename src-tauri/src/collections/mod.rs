@@ -40,6 +40,15 @@ pub struct UpdateCollection {
     pub position: Option<i64>,
 }
 
+
+/// Reserved id for the always-present trash collection. Refusing mutations
+/// against it keeps the file tree's special-cased section stable.
+pub const TRASH_ID: &str = "trash";
+
+fn is_trash(id: &str) -> bool {
+    id == TRASH_ID
+}
+
 fn row_to_collection(row: &rusqlite::Row<'_>) -> rusqlite::Result<Collection> {
     Ok(Collection {
         id: row.get("id")?,
@@ -91,6 +100,9 @@ pub fn get(conn: &Connection, id: &str) -> AppResult<Collection> {
 }
 
 pub fn update(conn: &Connection, input: UpdateCollection) -> AppResult<Collection> {
+    if is_trash(&input.id) {
+        return Err(AppError::InvalidArg("the trash collection cannot be modified".into()));
+    }
     let now = Utc::now().to_rfc3339();
     if let Some(name) = &input.name {
         conn.execute(
@@ -128,6 +140,9 @@ pub fn update(conn: &Connection, input: UpdateCollection) -> AppResult<Collectio
 }
 
 pub fn delete(conn: &Connection, id: &str) -> AppResult<()> {
+    if is_trash(id) {
+        return Err(AppError::InvalidArg("the trash collection cannot be deleted".into()));
+    }
     let n = conn.execute("DELETE FROM collections WHERE id = ?1", params![id])?;
     if n == 0 {
         return Err(AppError::NotFound(format!("collection {id}")));
@@ -312,5 +327,50 @@ mod tests {
         db.with_conn(|c| delete(c, &parent.id)).unwrap();
         let res = db.with_conn(|c| get(c, &child.id));
         assert!(res.is_err(), "child should have been cascaded");
+    
+
+    #[test]
+    fn migration_v2_inserts_the_trash_collection() {
+        let db = open_memory_for_tests();
+        let trash = db.with_conn(|c| get(c, "trash")).expect("trash row");
+        assert_eq!(trash.id, "trash");
+        assert_eq!(trash.name, "Trash");
+        assert!(trash.parent_collection_id.is_none());
+    }
+
+    #[test]
+    fn cannot_delete_the_trash_collection() {
+        let db = open_memory_for_tests();
+        let res = db.with_conn(|c| delete(c, "trash"));
+        assert!(res.is_err(), "deleting the trash collection must be rejected");
+        // Still present afterwards.
+        let trash = db.with_conn(|c| get(c, "trash")).unwrap();
+        assert_eq!(trash.id, "trash");
+    }
+
+    #[test]
+    fn cannot_rename_the_trash_collection() {
+        let db = open_memory_for_tests();
+        let res = db.with_conn(|c| update(c, UpdateCollection {
+            id: "trash".into(),
+            name: Some("Rubbish bin".into()),
+            parent_collection_id: None,
+            position: None,
+        }));
+        assert!(res.is_err(), "renaming the trash collection must be rejected");
+    }
+
+    #[test]
+    fn cannot_reparent_the_trash_collection() {
+        let db = open_memory_for_tests();
+        let other = create_root(&db, "Other");
+        let res = db.with_conn(|c| update(c, UpdateCollection {
+            id: "trash".into(),
+            name: None,
+            parent_collection_id: Some(Some(other.id.clone())),
+            position: None,
+        }));
+        assert!(res.is_err(), "moving the trash collection must be rejected");
     }
 }
+

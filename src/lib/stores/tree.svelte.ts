@@ -12,8 +12,9 @@
 
 import * as api from '$lib/api';
 import type { Collection, NoteSummary, TreeNode } from '$lib/api';
+import { TRASH_ID } from '$lib/api';
 import { ui } from '$lib/state.svelte';
-import {getSettingValue} from "$lib/settings/store.svelte";
+import { getSettingValue } from '$lib/settings/store.svelte';
 
 interface TreeState {
   tree: TreeNode[];
@@ -65,7 +66,6 @@ export async function createNoteIn(
 
 export async function renameNote(id: string, title: string): Promise<void> {
   await api.saveNote({ id, title });
-  // Optimistic update so the UI doesn't flash through a refetch.
   const existing = tree.notesById[id];
   if (existing) {
     tree.notesById[id] = {
@@ -77,9 +77,14 @@ export async function renameNote(id: string, title: string): Promise<void> {
   patchNodeName(tree.tree, id, title);
 }
 
+/**
+ * Trash a note. With `data.useTrash` enabled the note moves to the special
+ * trash collection (still in the tree, just under "Trash"). Without it,
+ * the note is soft-deleted via `trashed_at` and disappears from listings.
+ */
 export async function trashNote(id: string): Promise<void> {
-  if (getSettingValue("data.useTrash")) {
-    await moveNoteTo(id, "trash");
+  if (getSettingValue('data.useTrash')) {
+    await moveNoteTo(id, TRASH_ID);
   } else {
     await api.trashNote(id);
     delete tree.notesById[id];
@@ -134,13 +139,60 @@ export async function moveCollectionTo(
   await loadTree();
 }
 
+/**
+ * Trash a folder. Same semantics as trashNote: move to trash when the
+ * setting is enabled, hard-delete otherwise.
+ */
 export async function trashCollection(id: string): Promise<void> {
-  if (getSettingValue("data.useTrash")) {
-    await moveCollectionTo(id, "trash");
+  if (getSettingValue('data.useTrash')) {
+    await moveCollectionTo(id, TRASH_ID);
   } else {
     await api.deleteCollection(id);
     await loadTree();
   }
+}
+
+// ---------- Trash actions (operate on items already inside trash) ----------
+
+/** Move a trashed note back to root. */
+export async function restoreNote(id: string): Promise<void> {
+  await moveNoteTo(id, null);
+}
+
+/** Permanently delete a note from the database. */
+export async function purgeNote(id: string): Promise<void> {
+  await api.purgeNote(id);
+  await loadTree();
+}
+
+/** Move a trashed folder back to root. */
+export async function restoreCollection(id: string): Promise<void> {
+  await moveCollectionTo(id, null);
+}
+
+/** Permanently delete a folder (cascades to its notes via FK). */
+export async function purgeCollection(id: string): Promise<void> {
+  await api.deleteCollection(id);
+  await loadTree();
+}
+
+/**
+ * Permanently delete every direct child of the trash collection.
+ * Done in parallel — for typical note counts the round-trip cost
+ * dominates, not server-side throughput.
+ */
+export async function emptyTrash(): Promise<void> {
+  const trashedNotes = Object.values(tree.notesById).filter(
+    (n) => n.parent_collection_id === TRASH_ID
+  );
+  const trashedColls = Object.values(tree.collectionsById).filter(
+    (c) => c.parent_collection_id === TRASH_ID
+  );
+  await Promise.all([
+    ...trashedNotes.map((n) => api.purgeNote(n.id)),
+    ...trashedColls.map((c) => api.deleteCollection(c.id))
+  ]);
+  await loadTree();
 }
 
 // ---------- Internal: in-place tree patches for optimistic updates ----------
