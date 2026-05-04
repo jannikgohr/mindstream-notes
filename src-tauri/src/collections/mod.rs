@@ -243,10 +243,10 @@ mod tests {
         let db = open_memory_for_tests();
         let c = create_root(&db, "Work");
         let list_out = db.with_conn(|c| list(c)).unwrap();
-        assert_eq!(list_out.len(), 1);
-        assert_eq!(list_out[0].id, c.id);
-        assert_eq!(list_out[0].name, "Work");
-        assert!(list_out[0].parent_collection_id.is_none());
+        assert_eq!(list_out.len(), 2);
+        assert_eq!(list_out[1].id, c.id);
+        assert_eq!(list_out[1].name, "Work");
+        assert!(list_out[1].parent_collection_id.is_none());
     }
 
     #[test]
