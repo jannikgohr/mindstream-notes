@@ -34,7 +34,7 @@
     "active": true,
     "targets": "all",
     "category": "Productivity",
-    "shortDescription": "Local-first note-taking app.",
+    "shortDescription": "Local-first note-taking app",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

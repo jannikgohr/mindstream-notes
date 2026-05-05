@@ -43,5 +43,5 @@ export async function openNoteWindow(id: string, title: string): Promise<void> {
   // of silently producing a half-broken window.
   win.once('tauri://error', (e) => {
     console.error('[openNoteWindow] failed to spawn', id, e);
-  });
+  }).then();
 }

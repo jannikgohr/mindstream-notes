@@ -36,7 +36,7 @@
     {title}
   </header>
 
-  <main class="min-h-0 flex-1 overflow-hidden">
+  <main class="min-h-0 flex-1 overflow-hidden fullscreen-note">
     {#if exists === null}
       <p class="p-4 text-sm text-muted-foreground">Loading…</p>
     {:else if exists}

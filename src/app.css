@@ -140,7 +140,7 @@ body {
   padding: 1.25rem 5px;
 }
 
-.milkdown-drop-indicator {
+main:not(.fullscreen-note) .milkdown-drop-indicator {
   left: calc(var(--left-sidebar-width) * var(--left-sidebar-enabled) * -1) !important;
   top: -40px !important;
 }
