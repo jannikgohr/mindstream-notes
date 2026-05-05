@@ -3,20 +3,13 @@
  * Rust-side responsibility (capabilities, asset URL, drag-drop config).
  */
 
-import { invokeOrFallback } from './index';
+import {WebviewWindow} from "@tauri-apps/api/webviewWindow";
 
 export async function openNoteWindow(id: string, title: string): Promise<void> {
-  return invokeOrFallback<void>(
-    'open_note_window',
-    { id, title },
-    () => {
-      if (typeof window !== 'undefined') {
-        window.open(
-          `?window=editor&id=${encodeURIComponent(id)}`,
-          '_blank',
-          'noopener'
-        );
-      }
-    }
-  );
+    const win = new WebviewWindow(
+        id,
+        {
+            title: title,
+        }
+    )
 }
