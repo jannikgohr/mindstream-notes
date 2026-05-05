@@ -89,7 +89,7 @@ pub fn was_freshly_created(conn: &Connection) -> AppResult<bool> {
         conn.query_row("SELECT COUNT(*) FROM collections", [], |r| r.get(0))?;
     let note_count: i64 =
         conn.query_row("SELECT COUNT(*) FROM notes", [], |r| r.get(0))?;
-    Ok(coll_count == 0 && note_count == 0)
+    Ok(coll_count <= 1 && note_count == 0)
 }
 
 /// Insert demo content so the app isn't empty on first launch.
