@@ -16,7 +16,6 @@ pub mod db;
 pub mod error;
 pub mod notes;
 pub mod serde_helpers;
-pub mod window;
 
 use tauri::Manager;
 
@@ -63,8 +62,6 @@ pub fn run() {
             notes::trash_note,
             notes::restore_note,
             notes::purge_note,
-            // Windows
-            window::open_note_window,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

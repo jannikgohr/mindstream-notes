@@ -2,6 +2,9 @@
   import { onMount } from 'svelte';
   import Layout from '$lib/components/Layout.svelte';
   import SingleNoteWindow from '$lib/components/SingleNoteWindow.svelte';
+  import {listen} from "$lib/api/events";
+  import {getCurrentWebviewWindow} from "@tauri-apps/api/webviewWindow";
+
 
   /**
    * Decide between the full app shell and the single-note popout.
@@ -17,28 +20,18 @@
   let popoutNoteId = $state<string | null>(null);
   let resolved = $state(false);
 
+  listen('fullscreen-note', data => {
+    console.log('Fullscreen-note:', data);
+    (window as unknown as { __POPOUT_NOTE_ID__?: unknown }).__POPOUT_NOTE_ID__ = data.noteId;
+  })
+  console.log('WVLabel:', getCurrentWebviewWindow().label)
+
   onMount(() => {
-    const injected = (window as unknown as { __POPOUT_NOTE_ID__?: unknown })
-      .__POPOUT_NOTE_ID__;
-    if (typeof injected === 'string' && injected) {
-      popoutNoteId = injected;
+    console.log('Mounted')
+    let wv_label = getCurrentWebviewWindow().label
+    if (wv_label.startsWith('note_')) {
+      popoutNoteId = wv_label
     }
-
-    if (!popoutNoteId) {
-      const params = new URLSearchParams(window.location.search);
-      if (params.get('window') === 'editor') {
-        const id = params.get('id');
-        if (id) popoutNoteId = id;
-      }
-    }
-
-    if (!popoutNoteId && window.location.hash) {
-      const hash = window.location.hash.replace(/^#/, '');
-      const hashParams = new URLSearchParams(hash);
-      const id = hashParams.get('popout');
-      if (id) popoutNoteId = id;
-    }
-
     resolved = true;
   });
 </script>
