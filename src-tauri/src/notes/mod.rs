@@ -389,4 +389,50 @@ mod tests {
         let parsed: UpdateNote = serde_json::from_str(json).unwrap();
         assert_eq!(parsed.parent_collection_id, Some(None));
     }
+
+    #[test]
+    fn deleting_a_collection_cascades_to_its_notes() {
+        // Regression: previously notes' parent_collection_id had ON DELETE
+        // SET NULL, so deleting a folder silently relocated its notes to
+        // the root. We now expect them to disappear with the folder.
+        let db = open_memory_for_tests();
+        let coll = db.with_conn(|c| crate::collections::create(c, crate::collections::CreateCollection {
+            name: "Doomed".into(),
+            parent_collection_id: None,
+        })).unwrap();
+        let n1 = empty_note(&db, Some(coll.id.clone()));
+        let n2 = empty_note(&db, Some(coll.id.clone()));
+
+        db.with_conn(|c| crate::collections::delete(c, &coll.id)).unwrap();
+
+        let listed = db.with_conn(|c| list(c, true)).unwrap();
+        assert!(listed.iter().all(|x| x.id != n1.summary.id), "n1 should have been cascaded");
+        assert!(listed.iter().all(|x| x.id != n2.summary.id), "n2 should have been cascaded");
+    }
+
+    #[test]
+    fn moving_a_collection_does_not_delete_its_notes() {
+        // The 'trash a folder' UX path moves the folder by updating its
+        // parent — children should ride along, not get cascade-deleted.
+        let db = open_memory_for_tests();
+        let coll = db.with_conn(|c| crate::collections::create(c, crate::collections::CreateCollection {
+            name: "Will be trashed".into(),
+            parent_collection_id: None,
+        })).unwrap();
+        let note = empty_note(&db, Some(coll.id.clone()));
+
+        db.with_conn(|c| crate::collections::update(c, crate::collections::UpdateCollection {
+            id: coll.id.clone(),
+            name: None,
+            parent_collection_id: Some(Some("trash".into())),
+            position: None,
+        })).unwrap();
+
+        let loaded = db.with_conn(|c| load(c, &note.summary.id)).unwrap();
+        assert_eq!(
+            loaded.summary.parent_collection_id.as_deref(),
+            Some(coll.id.as_str()),
+            "note should still belong to its (now trashed) folder"
+        );
+    }
 }

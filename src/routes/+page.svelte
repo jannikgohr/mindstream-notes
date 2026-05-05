@@ -3,23 +3,36 @@
   import Layout from '$lib/components/Layout.svelte';
   import SingleNoteWindow from '$lib/components/SingleNoteWindow.svelte';
 
-  // Decide between the full app shell and the single-note popout based on
-  // the URL the window was opened with. The query is read once on mount —
-  // popout windows aren't expected to navigate to /.
+  /**
+   * Decide between the full app shell and the single-note popout.
+   *
+   * Three lookup paths, in order:
+   *   1. window.__POPOUT_NOTE_ID__   — set by Tauri's initialization_script
+   *      when open_note_window spawned this window. The most reliable
+   *      mechanism because it bypasses URL / asset-resolver quirks.
+   *   2. ?window=editor&id=X         — browser fallback for `pnpm dev`
+   *      (window.open returns a tab with this query string).
+   *   3. #popout=X                   — legacy hash, kept for back-compat.
+   */
   let popoutNoteId = $state<string | null>(null);
   let resolved = $state(false);
 
   onMount(() => {
-    // Try the query string first (preferred), fall back to the hash if a
-    // path-based asset resolver stripped query params.
-    const params = new URLSearchParams(window.location.search);
-    if (params.get('window') === 'editor') {
-      const id = params.get('id');
-      if (id) popoutNoteId = id;
+    const injected = (window as unknown as { __POPOUT_NOTE_ID__?: unknown })
+      .__POPOUT_NOTE_ID__;
+    if (typeof injected === 'string' && injected) {
+      popoutNoteId = injected;
+    }
+
+    if (!popoutNoteId) {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('window') === 'editor') {
+        const id = params.get('id');
+        if (id) popoutNoteId = id;
+      }
     }
 
     if (!popoutNoteId && window.location.hash) {
-      // hash format: '#popout=<id>'
       const hash = window.location.hash.replace(/^#/, '');
       const hashParams = new URLSearchParams(hash);
       const id = hashParams.get('popout');
@@ -31,8 +44,7 @@
 </script>
 
 {#if !resolved}
-  <!-- One frame of empty before we decide the layout — avoids a flash of
-       the main shell in popout windows. -->
+  <!-- One frame of empty before we decide which shell to render. -->
 {:else if popoutNoteId}
   <SingleNoteWindow noteId={popoutNoteId} />
 {:else}

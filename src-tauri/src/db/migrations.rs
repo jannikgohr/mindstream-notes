@@ -63,12 +63,49 @@ const MIGRATIONS: &[Migration] = &[
             );
         "#,
     },
+    Migration {
+        to: 3,
+        // notes.parent_collection_id was created with ON DELETE SET NULL,
+        // which silently moved notes to the root when their folder was
+        // deleted (the user observed this as a bug — they expected the
+        // notes to go with the folder). SQLite can't ALTER an existing
+        // FK constraint, so we rebuild the table:
+        //   create notes_v2 with the right FK -> copy -> drop old -> rename.
+        // foreign_keys is toggled off around the whole run() loop so
+        // note_tags doesn't refuse the temporary orphan during the swap.
+        sql: r#"
+            CREATE TABLE notes_v2 (
+                id                   TEXT PRIMARY KEY,
+                parent_collection_id TEXT REFERENCES collections(id) ON DELETE CASCADE,
+                title                TEXT NOT NULL DEFAULT 'Untitled',
+                body                 TEXT NOT NULL DEFAULT '',
+                position             INTEGER NOT NULL DEFAULT 0,
+                created              TEXT NOT NULL,
+                modified             TEXT NOT NULL,
+                trashed_at           TEXT
+            );
+            INSERT INTO notes_v2(id, parent_collection_id, title, body,
+                                 position, created, modified, trashed_at)
+                SELECT id, parent_collection_id, title, body,
+                       position, created, modified, trashed_at FROM notes;
+            DROP TABLE notes;
+            ALTER TABLE notes_v2 RENAME TO notes;
+            CREATE INDEX idx_notes_parent  ON notes(parent_collection_id);
+            CREATE INDEX idx_notes_trashed ON notes(trashed_at);
+        "#,
+    },
 ];
 
 pub fn run(conn: &mut Connection) -> AppResult<()> {
     let current: u32 =
         conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
     log::info!("[db] current schema version = {current}");
+
+    // Disable FK enforcement around the migration loop. Some migrations
+    // (e.g. v3) rebuild a referenced table; SQLite would otherwise reject
+    // the intermediate state. PRAGMA can't run inside a transaction, so
+    // we toggle outside the per-migration tx.
+    conn.pragma_update(None, "foreign_keys", "OFF")?;
 
     for m in MIGRATIONS {
         if m.to > current {
@@ -79,6 +116,11 @@ pub fn run(conn: &mut Connection) -> AppResult<()> {
             tx.commit()?;
         }
     }
+
+    conn.pragma_update(None, "foreign_keys", "ON")?;
+    // Surface integrity violations early instead of letting them bite at
+    // the next CRUD call.
+    conn.execute("PRAGMA foreign_key_check", [])?;
 
     Ok(())
 }
