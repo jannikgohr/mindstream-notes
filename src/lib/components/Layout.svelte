@@ -180,10 +180,17 @@
     const note = tree.notesById[id];
     if (!note) return;
 
+    // Stop if note is already open
     const existing = openPanels.get(id);
     if (existing) {
       existing.api.setActive();
       return;
+    }
+
+    // Re-add a group if last panel was closed
+    if (dock.groups.length === 0) {
+      dock.addGroup()
+      lastActiveGroup = dock.groups[0]
     }
 
     let position:
