@@ -74,7 +74,7 @@
       theme: { name: 'bridge', className: 'dockview-theme-bridge' },
       disableFloatingGroups: false,
       disableDnd: false,
-      createRightHeaderActionComponent: () => new PopoutHeaderAction()
+      createRightHeaderActionComponent: () => new PopoutHeaderAction(dock)
     });
 
     dock = component.api;
@@ -261,7 +261,7 @@
   const onOpenInNewWindow = (id: string) => {
     const note = tree.notesById[id];
     if (!note) return;
-    void openNoteWindow(note.id, note.title);
+    void openNoteWindow(note.id, note.title, null, null);
   };
 </script>
 

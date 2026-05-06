@@ -1,4 +1,5 @@
 import type {
+  DockviewApi,
   IDockviewGroupPanel,
   IGroupHeaderProps,
   IHeaderActionsRenderer
@@ -14,9 +15,11 @@ import { openNoteWindow } from '$lib/api';
 export class PopoutHeaderAction implements IHeaderActionsRenderer {
   private readonly el: HTMLDivElement;
   private readonly btn: HTMLButtonElement;
+  private readonly dock: DockviewApi | null;
   private currentGroup: IDockviewGroupPanel | null = null;
 
-  constructor() {
+  constructor(dock: DockviewApi | null) {
+    this.dock = dock
     this.el = document.createElement('div');
     this.el.className = 'dv-popout-host';
 
@@ -48,12 +51,13 @@ export class PopoutHeaderAction implements IHeaderActionsRenderer {
   }
 
   private onClick = () => {
-    const panel = this.currentGroup?.activePanel;
+    const panelGroup = this.currentGroup;
+    const panel = panelGroup?.activePanel;
     const params = panel?.params as { noteId?: string } | undefined;
     if (!params?.noteId) return;
     const note = tree.notesById[params.noteId];
     if (!note) return;
-    void openNoteWindow(note.id, note.title);
+    void openNoteWindow(note.id, note.title, panelGroup, this.dock);
   };
 
   dispose(): void {
