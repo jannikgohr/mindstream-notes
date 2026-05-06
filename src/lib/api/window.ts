@@ -7,10 +7,18 @@
 
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { isTauri } from './index';
+import {DockviewApi, type IDockviewGroupPanel, type IDockviewPanel} from "dockview-core";
 
-export async function openNoteWindow(id: string, title: string): Promise<void> {
-  // Browser fallback (`pnpm dev` outside Tauri): just open a tab with
-  // the id encoded in the URL — keeps the UX clickable in dev.
+export interface MSPanelElement extends IDockviewPanel {
+  component: string,
+}
+
+export async function openNoteWindow(
+    id: string,
+    title: string,
+    panelGroup: IDockviewGroupPanel | null,
+    dock: DockviewApi | null): Promise<void> {
+
   if (!isTauri()) {
     if (typeof window !== 'undefined') {
       window.open(
@@ -31,11 +39,6 @@ export async function openNoteWindow(id: string, title: string): Promise<void> {
     center: true,
     resizable: true,
     decorations: true,
-    // Critical for HTML5 DnD inside the popout: Tauri's file-drop handler
-    // is ON by default, which on Windows (and in some WebKit2 builds) eats
-    // the dragstart events that Milkdown / our file-tree DnD rely on.
-    // The main window has the same flag in tauri.conf.json — popouts must
-    // mirror it explicitly because they don't inherit the parent's config.
     dragDropEnabled: false
   });
 
@@ -44,4 +47,47 @@ export async function openNoteWindow(id: string, title: string): Promise<void> {
   win.once('tauri://error', (e) => {
     console.error('[openNoteWindow] failed to spawn', id, e);
   }).then();
+
+  if (panelGroup) {
+    const activePanel: MSPanelElement | undefined = panelGroup?.activePanel as MSPanelElement;
+
+    if (!activePanel || !dock) {
+      console.error('[openNoteWindow] failed to spawn because activePanel or dockApi was null',
+          id, activePanel, dock);
+      return;
+    }
+
+    // 1. Snapshot the panel state before it vanishes
+    const panelConfig = {
+      id: activePanel.id,
+      component: activePanel.component, // e.g., 'noteEditor'
+      params: { ...activePanel.params },
+      title: activePanel.title
+    };
+
+    const originalGroupId = panelGroup.id;
+
+    // 2. Close the original panel once the window is ready
+    await win.once('tauri://webview-created', () => {
+      dock.removePanel(activePanel)
+    });
+
+    // 3. Re-open the panel when the popout window is closed
+    await win.once('tauri://close-requested', async () => {
+      console.info('[openNoteWindow] close requested');
+      // Check if the group still exists, otherwise it defaults to a sensible location
+      const targetGroup = dock.getGroup(originalGroupId);
+
+      dock.addPanel({
+        id: panelConfig.id,
+        component: panelConfig.component,
+        params: panelConfig.params,
+        title: panelConfig.title,
+        ...(targetGroup ? { position: { referenceGroup: originalGroupId } } : {})
+      });
+
+      // Close the Tauri window
+      await win.close();
+    });
+  }
 }
