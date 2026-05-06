@@ -132,12 +132,12 @@ export async function setNoteTags(id: string, tags: string[]): Promise<void> {
  * tag names are rejected.
  */
 export async function addNoteTag(id: string, tag: string): Promise<void> {
-  const trimmed = tag.trim();
-  if (!trimmed) return;
+  const normalized = normalizeTagPath(tag);
+  if (!normalized) return;
   const existing = tree.notesById[id];
   if (!existing) return;
-  if (existing.tags.includes(trimmed)) return;
-  await setNoteTags(id, [...existing.tags, trimmed]);
+  if (existing.tags.includes(normalized)) return;
+  await setNoteTags(id, [...existing.tags, normalized]);
 }
 
 /** Remove a tag from a note. Silent no-op if it isn't present. */
@@ -165,11 +165,25 @@ export function allTagsInUse(): string[] {
   return [...set].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
 }
 
+/**
+ * Canonical tag form. Nested tags use "/" as the segment separator
+ * (Obsidian convention); each segment is trimmed and empty segments are
+ * dropped, so " work / urgent " collapses to "work/urgent" and "work//foo"
+ * collapses to "work/foo".
+ */
+export function normalizeTagPath(raw: string): string {
+  return raw
+    .split('/')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0)
+    .join('/');
+}
+
 function normalizeTags(tags: string[]): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
   for (const raw of tags) {
-    const t = raw.trim();
+    const t = normalizeTagPath(raw);
     if (!t) continue;
     if (seen.has(t)) continue;
     seen.add(t);
