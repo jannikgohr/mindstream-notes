@@ -109,6 +109,75 @@ export async function setNoteBody(id: string, body: string): Promise<void> {
   }
 }
 
+/**
+ * Replace the tag list on a note. Optimistic — patches the in-memory summary
+ * so the metadata panel updates without a full tree refetch. Tags are
+ * normalized (trimmed + de-duped) before persisting.
+ */
+export async function setNoteTags(id: string, tags: string[]): Promise<void> {
+  const normalized = normalizeTags(tags);
+  await api.saveNote({ id, tags: normalized });
+  const existing = tree.notesById[id];
+  if (existing) {
+    tree.notesById[id] = {
+      ...existing,
+      tags: normalized,
+      modified: new Date().toISOString()
+    };
+  }
+}
+
+/**
+ * Add a tag to a note (no-op if the note already has it). Whitespace-only
+ * tag names are rejected.
+ */
+export async function addNoteTag(id: string, tag: string): Promise<void> {
+  const trimmed = tag.trim();
+  if (!trimmed) return;
+  const existing = tree.notesById[id];
+  if (!existing) return;
+  if (existing.tags.includes(trimmed)) return;
+  await setNoteTags(id, [...existing.tags, trimmed]);
+}
+
+/** Remove a tag from a note. Silent no-op if it isn't present. */
+export async function removeNoteTag(id: string, tag: string): Promise<void> {
+  const existing = tree.notesById[id];
+  if (!existing) return;
+  if (!existing.tags.includes(tag)) return;
+  await setNoteTags(
+    id,
+    existing.tags.filter((t) => t !== tag)
+  );
+}
+
+/**
+ * Every distinct tag currently in use across all (non-trashed) notes,
+ * sorted case-insensitively. Used by the tag picker to surface previously
+ * created tags for re-use.
+ */
+export function allTagsInUse(): string[] {
+  const set = new Set<string>();
+  for (const n of Object.values(tree.notesById)) {
+    if (n.trashed) continue;
+    for (const t of n.tags) set.add(t);
+  }
+  return [...set].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+}
+
+function normalizeTags(tags: string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of tags) {
+    const t = raw.trim();
+    if (!t) continue;
+    if (seen.has(t)) continue;
+    seen.add(t);
+    out.push(t);
+  }
+  return out;
+}
+
 // ---------- Collections ----------
 
 export async function createCollectionIn(
