@@ -10,7 +10,8 @@ import { openNoteWindow } from '$lib/api';
 /**
  * Renderer plugged into dockview's `createRightHeaderActionComponent`.
  * Each tab group gets its own instance; clicking the button pops the
- * active note out into a brand-new Tauri window via the IPC bridge.
+ * active note into a brand-new Tauri window and (if `dock` is provided)
+ * removes the source tab so the note isn't open in two places at once.
  */
 export class PopoutHeaderAction implements IHeaderActionsRenderer {
   private readonly el: HTMLDivElement;
@@ -19,7 +20,7 @@ export class PopoutHeaderAction implements IHeaderActionsRenderer {
   private currentGroup: IDockviewGroupPanel | null = null;
 
   constructor(dock: DockviewApi | null) {
-    this.dock = dock
+    this.dock = dock;
     this.el = document.createElement('div');
     this.el.className = 'dv-popout-host';
 
@@ -28,6 +29,7 @@ export class PopoutHeaderAction implements IHeaderActionsRenderer {
     this.btn.title = 'Open active note in a new window';
     this.btn.setAttribute('aria-label', 'Open active note in a new window');
     this.btn.className = 'dv-popout-button';
+    // Lucide "square-arrow-out-up-right" — the standard pop-out glyph.
     this.btn.innerHTML = `
       <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14"
            viewBox="0 0 24 24" fill="none" stroke="currentColor"

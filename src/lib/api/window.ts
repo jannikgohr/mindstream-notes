@@ -7,18 +7,32 @@
 
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { isTauri } from './index';
-import {DockviewApi, type IDockviewGroupPanel, type IDockviewPanel} from "dockview-core";
+import {
+  type DockviewApi,
+  type IDockviewGroupPanel,
+  type IDockviewPanel
+} from 'dockview-core';
 
 export interface MSPanelElement extends IDockviewPanel {
-  component: string,
+  component: string;
 }
 
+/**
+ * Spawn a Tauri window for a single note.
+ *
+ * `panelGroup` and `dock` are optional context for the "pop out" flow:
+ * when invoked from a dock tab, we remove the source tab so the note
+ * isn't open in two places at once. Pass `null` for both when there's
+ * no source dock (e.g. the "Open in new window" item in the file tree).
+ */
 export async function openNoteWindow(
-    id: string,
-    title: string,
-    panelGroup: IDockviewGroupPanel | null,
-    dock: DockviewApi | null): Promise<void> {
-
+  id: string,
+  title: string,
+  panelGroup: IDockviewGroupPanel | null,
+  dock: DockviewApi | null
+): Promise<void> {
+  // Browser fallback (`pnpm dev` outside Tauri): just open a tab with the
+  // id encoded in the URL — keeps the UX clickable without Tauri.
   if (!isTauri()) {
     if (typeof window !== 'undefined') {
       window.open(
@@ -38,7 +52,7 @@ export async function openNoteWindow(
     minHeight: 420,
     center: true,
     resizable: true,
-    decorations: true,
+    decorations: false,
     dragDropEnabled: false
   });
 
