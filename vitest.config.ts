@@ -9,6 +9,7 @@ import path from 'node:path';
  * automatically when present.
  */
 export default defineConfig({
+  // @ts-ignore
   plugins: [svelte({ hot: false })],
   resolve: {
     alias: {
