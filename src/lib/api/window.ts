@@ -18,6 +18,33 @@ export interface MSPanelElement extends IDockviewPanel {
 }
 
 /**
+ * Pick a WebView background colour matching the saved (or OS-default) theme
+ * so the popout doesn't flash white before app.css loads. Mirrors the logic
+ * in app.html's pre-paint theme script.
+ */
+function themedWindowBackground(): {
+  red: number;
+  green: number;
+  blue: number;
+  alpha: number;
+} {
+  let useDark = false;
+  try {
+    const stored = localStorage.getItem('mode-watcher-mode');
+    const prefersDark =
+      typeof window !== 'undefined' &&
+      window.matchMedia &&
+      window.matchMedia('(prefers-color-scheme: dark)').matches;
+    useDark = stored === 'dark' || (stored !== 'light' && prefersDark);
+  } catch {
+    /* localStorage may be unavailable in some contexts; fall back to light. */
+  }
+  return useDark
+    ? { red: 10, green: 10, blue: 10, alpha: 255 }
+    : { red: 255, green: 255, blue: 255, alpha: 255 };
+}
+
+/**
  * Spawn a Tauri window for a single note.
  *
  * `panelGroup` and `dock` are optional context for the "pop out" flow:
@@ -53,7 +80,9 @@ export async function openNoteWindow(
     center: true,
     resizable: true,
     decorations: false,
-    dragDropEnabled: false
+    dragDropEnabled: false,
+    // Match the active theme so the popout's first paint isn't a white flash.
+    backgroundColor: themedWindowBackground()
   });
 
   // Surface failures so future regressions show up in the console instead

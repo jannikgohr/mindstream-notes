@@ -20,6 +20,24 @@
         }
       })();
     </script>
+    <style>
+      /*
+       * Bootstrap background colours so the very first paint matches the
+       * active theme. app.css, dockview, and Crepe stylesheets all load
+       * after this point; without these rules the WebView shows its default
+       * white between window-create and CSS-ready, which is a "flashbang"
+       * for dark-mode users. Values mirror the --background tokens from
+       * app.css verbatim so the cross-fade is invisible.
+       */
+      :root {
+        background-color: oklch(1 0 0);
+        color: oklch(0.145 0 0);
+      }
+      :root.dark {
+        background-color: oklch(0.145 0 0);
+        color: oklch(0.985 0 0);
+      }
+    </style>
     %sveltekit.head%
   </head>
   <body data-sveltekit-preload-data="hover" class="h-full bg-background text-foreground antialiased">
