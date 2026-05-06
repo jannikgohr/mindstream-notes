@@ -206,7 +206,7 @@
       <span
         class="inline-flex h-6 items-center gap-1 rounded-full border border-border bg-background pl-2 pr-0.5 text-xs leading-none"
       >
-        <span class="font-mono">{tag}</span>
+        {@render path(tag)}
         <button
           type="button"
           class="inline-flex h-5 w-5 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
@@ -233,7 +233,7 @@
         bind:this={pickerEl}
         role="dialog"
         aria-label="Add tag"
-        class="absolute left-0 top-full z-50 mt-2 w-full min-w-[200px] overflow-hidden rounded-md border border-border bg-popover text-popover-foreground shadow-lg"
+        class="absolute left-0 top-full z-50 mt-2 w-full min-w-50 overflow-hidden rounded-md border border-border bg-popover text-popover-foreground shadow-lg"
       >
         <div class="border-b border-border p-2">
           <input
@@ -260,7 +260,7 @@
               onclick={() => handleSubmitInput()}
             >
               <Plus class="h-3 w-3" />
-              <span>Create &ldquo;<span class="font-mono">{trimmedQuery}</span>&rdquo;</span>
+              <span>Create &ldquo;{@render path(trimmedQuery)}&rdquo;</span>
             </button>
           {/if}
 
@@ -329,5 +329,14 @@
       {@render row(child, depth + 1)}
     {/each}
   {/if}
+{/snippet}
+
+{#snippet path(tag: string)}
+  {@const segments = tag.split('/')}
+  <span class="font-mono">
+    {#each segments as seg, i (i)}
+      {#if i > 0}<span class="mx-1 text-muted-foreground/60">/</span>{/if}{seg}
+    {/each}
+  </span>
 {/snippet}
 
