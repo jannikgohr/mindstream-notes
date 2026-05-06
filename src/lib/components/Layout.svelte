@@ -96,12 +96,10 @@
     dock.onDidAddPanel(() => schedulePersist());
     dock.onDidLayoutChange(() => schedulePersist());
 
-    // Make sure the tree is populated before we try to restore tabs by id.
     if (!tree.ready) await loadTree();
 
     const restored = tryRestoreLayout();
     if (!restored) {
-      // First run / wiped layout — open the first note we can find.
       const first = pickInitialNote();
       if (first) openNote(first);
     }
@@ -114,25 +112,18 @@
     return ids[0] ?? null;
   }
 
-  /** Try to apply the saved dock state. Returns true on success. */
   function tryRestoreLayout(): boolean {
     if (!dock) return false;
     const saved = loadSavedLayout();
     if (!saved || !saved.dock) return false;
     try {
-      // dockview can fail to deserialize if the panel ids reference notes
-      // that no longer exist. We pre-filter by checking the saved blob
-      // against the current notesById; if anything's stale, drop it.
       const sanitized = sanitizeDockBlob(saved.dock);
       if (!sanitized) {
         clearSavedLayout();
         return false;
       }
-      // dockview's `fromJSON` is on the underlying component, not the api.
-      // Cast through the api object to reach it.
       const api = dock as unknown as { fromJSON: (s: unknown) => void };
       api.fromJSON(sanitized);
-      // Repopulate openPanels map from the active layout.
       for (const panel of dock.panels) {
         const noteId = (panel.params as { noteId?: string } | undefined)?.noteId;
         if (noteId) openPanels.set(noteId, panel);
@@ -149,11 +140,6 @@
     }
   }
 
-  /**
-   * Walk the saved dock blob and check every panel's noteId still exists.
-   * Returns the original blob if everything resolves, null otherwise.
-   * Cheap to do up-front and avoids dockview throwing mid-restore.
-   */
   function sanitizeDockBlob(blob: unknown): unknown | null {
     try {
       const json = blob as { panels?: Record<string, { params?: { noteId?: string } }> };
@@ -170,7 +156,6 @@
     }
   }
 
-  /** Debounced layout persistence. dockview emits many events per drag. */
   function schedulePersist() {
     if (!dock) return;
     if (saveLayoutTimer) clearTimeout(saveLayoutTimer);

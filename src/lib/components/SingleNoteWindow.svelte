@@ -1,12 +1,13 @@
 <script lang="ts">
   /**
-   * Standalone Tauri window that just renders one note. The note may not
-   * be in the tree cache yet (the new window has its own JS heap), so we
-   * fetch a quick summary on mount to show the title; the editor itself
-   * loads the body lazily through the same code path as the main window.
+   * Standalone Tauri window that renders one note. The popout's window is
+   * spawned with decorations: false (matching the main window), so this
+   * component owns the title bar — drag region in the centre, custom min/
+   * max/close trio on the right.
    */
   import { onMount } from 'svelte';
   import NoteEditor from './NoteEditor.svelte';
+  import WindowControls from './WindowControls.svelte';
   import { loadNote } from '$lib/api';
 
   interface Props {
@@ -30,10 +31,17 @@
 </script>
 
 <div class="flex h-full w-full flex-col bg-background text-foreground">
+  <!-- Frameless title bar. data-tauri-drag-region on the wrapping header
+       lets the user drag the window from any non-button area. -->
   <header
-    class="flex h-9 shrink-0 items-center border-b border-border bg-card px-3 text-xs font-medium text-muted-foreground"
+    data-tauri-drag-region
+    class="flex h-9 shrink-0 select-none items-center gap-1 border-b border-border bg-card px-2"
   >
-    {title}
+    <span data-tauri-drag-region class="ml-2 truncate text-xs font-medium text-muted-foreground">
+      {title}
+    </span>
+    <div data-tauri-drag-region class="flex-1"></div>
+    <WindowControls />
   </header>
 
   <main class="min-h-0 flex-1 overflow-hidden fullscreen-note">
