@@ -14,6 +14,20 @@ export default defineConfig({
     alias: {
       $lib: path.resolve('./src/lib'),
       '$lib/*': path.resolve('./src/lib/*')
+    },
+    // Some Svelte ecosystem packages (e.g. `mode-watcher`) only declare a
+    // `svelte` export condition — no `import`/`default` fallback. Vitest's
+    // resolver doesn't include `svelte` in its defaults, so without this
+    // it errors with "No known conditions for '.' specifier in
+    // <package>". List the standard ones too because supplying this key
+    // replaces vite's defaults rather than extending them.
+    conditions: ['svelte', 'module', 'browser', 'development']
+  },
+  ssr: {
+    // The same packages also need to resolve through the SSR pipeline that
+    // vitest uses for module loading.
+    resolve: {
+      conditions: ['svelte', 'module', 'browser', 'development']
     }
   },
   test: {
