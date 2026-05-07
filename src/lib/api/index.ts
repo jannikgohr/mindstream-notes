@@ -27,6 +27,7 @@ export * from './collections';
 export * from './tree';
 export * from './layout';
 export * from './window';
+export * from './auth';
 
 /** Reserved id for the always-present trash collection (mirrors Rust). */
 export const TRASH_ID = 'trash';
