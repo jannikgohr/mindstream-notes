@@ -57,7 +57,6 @@ impl Db {
     }
 }
 
-
 #[cfg(test)]
 pub fn open_memory_for_tests() -> Db {
     let mut conn = rusqlite::Connection::open_in_memory().expect("in-memory db");

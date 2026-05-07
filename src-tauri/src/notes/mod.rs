@@ -8,12 +8,12 @@
 //! Soft-delete via `trashed_at`; listing skips trashed unless asked.
 
 use chrono::Utc;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 use crate::db::Db;
-use crate::serde_helpers::double_option;
 use crate::error::{AppError, AppResult};
+use crate::serde_helpers::double_option;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NoteSummary {
@@ -163,9 +163,11 @@ pub fn update(conn: &mut Connection, input: UpdateNote) -> AppResult<Note> {
         )?;
     }
     if let Some(tags) = &input.tags {
-        tx.execute("DELETE FROM note_tags WHERE note_id = ?1", params![input.id])?;
-        let mut stmt =
-            tx.prepare("INSERT INTO note_tags(note_id, tag) VALUES (?1, ?2)")?;
+        tx.execute(
+            "DELETE FROM note_tags WHERE note_id = ?1",
+            params![input.id],
+        )?;
+        let mut stmt = tx.prepare("INSERT INTO note_tags(note_id, tag) VALUES (?1, ?2)")?;
         for tag in tags {
             stmt.execute(params![input.id, tag])?;
         }
@@ -269,7 +271,6 @@ pub fn purge_note(db: tauri::State<'_, Db>, id: String) -> Result<(), String> {
     db.with_conn(|c| purge(c, &id)).map_err(Into::into)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -277,11 +278,17 @@ mod tests {
     use crate::db::open_memory_for_tests;
 
     fn empty_note(db: &Db, parent: Option<String>) -> Note {
-        db.with_conn(|c| create(c, CreateNote {
-            title: Some("Hello".into()),
-            body: Some("# Body".into()),
-            parent_collection_id: parent,
-        })).unwrap()
+        db.with_conn(|c| {
+            create(
+                c,
+                CreateNote {
+                    title: Some("Hello".into()),
+                    body: Some("# Body".into()),
+                    parent_collection_id: parent,
+                },
+            )
+        })
+        .unwrap()
     }
 
     #[test]
@@ -302,14 +309,20 @@ mod tests {
         let original_modified = n.summary.modified.clone();
         // sleep one millisecond so the second timestamp differs
         std::thread::sleep(std::time::Duration::from_millis(5));
-        db.with_conn_mut(|c| update(c, UpdateNote {
-            id: n.summary.id.clone(),
-            title: None,
-            body: Some("# New body".into()),
-            parent_collection_id: None,
-            position: None,
-            tags: None,
-        })).unwrap();
+        db.with_conn_mut(|c| {
+            update(
+                c,
+                UpdateNote {
+                    id: n.summary.id.clone(),
+                    title: None,
+                    body: Some("# New body".into()),
+                    parent_collection_id: None,
+                    position: None,
+                    tags: None,
+                },
+            )
+        })
+        .unwrap();
         let loaded = db.with_conn(|c| load(c, &n.summary.id)).unwrap();
         assert_eq!(loaded.body, "# New body");
         assert_ne!(loaded.summary.modified, original_modified);
@@ -318,29 +331,60 @@ mod tests {
     #[test]
     fn move_note_into_collection_then_back_to_root() {
         let db = open_memory_for_tests();
-        let coll = db.with_conn(|c| create_collection(c, CreateCollection {
-            name: "Folder".into(),
-            parent_collection_id: None,
-        })).unwrap();
+        let coll = db
+            .with_conn(|c| {
+                create_collection(
+                    c,
+                    CreateCollection {
+                        name: "Folder".into(),
+                        parent_collection_id: None,
+                    },
+                )
+            })
+            .unwrap();
         let n = empty_note(&db, None);
 
         // Move into folder.
-        db.with_conn_mut(|c| update(c, UpdateNote {
-            id: n.summary.id.clone(),
-            title: None, body: None, position: None, tags: None,
-            parent_collection_id: Some(Some(coll.id.clone())),
-        })).unwrap();
+        db.with_conn_mut(|c| {
+            update(
+                c,
+                UpdateNote {
+                    id: n.summary.id.clone(),
+                    title: None,
+                    body: None,
+                    position: None,
+                    tags: None,
+                    parent_collection_id: Some(Some(coll.id.clone())),
+                },
+            )
+        })
+        .unwrap();
         let l = db.with_conn(|c| load(c, &n.summary.id)).unwrap();
-        assert_eq!(l.summary.parent_collection_id.as_deref(), Some(coll.id.as_str()));
+        assert_eq!(
+            l.summary.parent_collection_id.as_deref(),
+            Some(coll.id.as_str())
+        );
 
         // Move back to root via Some(None).
-        db.with_conn_mut(|c| update(c, UpdateNote {
-            id: n.summary.id.clone(),
-            title: None, body: None, position: None, tags: None,
-            parent_collection_id: Some(None),
-        })).unwrap();
+        db.with_conn_mut(|c| {
+            update(
+                c,
+                UpdateNote {
+                    id: n.summary.id.clone(),
+                    title: None,
+                    body: None,
+                    position: None,
+                    tags: None,
+                    parent_collection_id: Some(None),
+                },
+            )
+        })
+        .unwrap();
         let l = db.with_conn(|c| load(c, &n.summary.id)).unwrap();
-        assert!(l.summary.parent_collection_id.is_none(), "move-to-root must clear parent");
+        assert!(
+            l.summary.parent_collection_id.is_none(),
+            "move-to-root must clear parent"
+        );
     }
 
     #[test]
@@ -351,7 +395,9 @@ mod tests {
         let listed = db.with_conn(|c| list(c, false)).unwrap();
         assert!(listed.iter().all(|x| x.id != n.summary.id));
         let listed_with = db.with_conn(|c| list(c, true)).unwrap();
-        assert!(listed_with.iter().any(|x| x.id == n.summary.id && x.trashed));
+        assert!(listed_with
+            .iter()
+            .any(|x| x.id == n.summary.id && x.trashed));
     }
 
     #[test]
@@ -371,14 +417,25 @@ mod tests {
     fn save_with_tags_persists_them() {
         let db = open_memory_for_tests();
         let n = empty_note(&db, None);
-        db.with_conn_mut(|c| update(c, UpdateNote {
-            id: n.summary.id.clone(),
-            title: None, body: None, position: None,
-            parent_collection_id: None,
-            tags: Some(vec!["work".into(), "urgent".into()]),
-        })).unwrap();
+        db.with_conn_mut(|c| {
+            update(
+                c,
+                UpdateNote {
+                    id: n.summary.id.clone(),
+                    title: None,
+                    body: None,
+                    position: None,
+                    parent_collection_id: None,
+                    tags: Some(vec!["work".into(), "urgent".into()]),
+                },
+            )
+        })
+        .unwrap();
         let loaded = db.with_conn(|c| load(c, &n.summary.id)).unwrap();
-        assert_eq!(loaded.summary.tags, vec!["urgent".to_string(), "work".to_string()]);
+        assert_eq!(
+            loaded.summary.tags,
+            vec!["urgent".to_string(), "work".to_string()]
+        );
     }
 
     /// End-to-end regression: serialize an UpdateNote with parent_collection_id=null
@@ -396,18 +453,32 @@ mod tests {
         // SET NULL, so deleting a folder silently relocated its notes to
         // the root. We now expect them to disappear with the folder.
         let db = open_memory_for_tests();
-        let coll = db.with_conn(|c| crate::collections::create(c, crate::collections::CreateCollection {
-            name: "Doomed".into(),
-            parent_collection_id: None,
-        })).unwrap();
+        let coll = db
+            .with_conn(|c| {
+                crate::collections::create(
+                    c,
+                    crate::collections::CreateCollection {
+                        name: "Doomed".into(),
+                        parent_collection_id: None,
+                    },
+                )
+            })
+            .unwrap();
         let n1 = empty_note(&db, Some(coll.id.clone()));
         let n2 = empty_note(&db, Some(coll.id.clone()));
 
-        db.with_conn(|c| crate::collections::delete(c, &coll.id)).unwrap();
+        db.with_conn(|c| crate::collections::delete(c, &coll.id))
+            .unwrap();
 
         let listed = db.with_conn(|c| list(c, true)).unwrap();
-        assert!(listed.iter().all(|x| x.id != n1.summary.id), "n1 should have been cascaded");
-        assert!(listed.iter().all(|x| x.id != n2.summary.id), "n2 should have been cascaded");
+        assert!(
+            listed.iter().all(|x| x.id != n1.summary.id),
+            "n1 should have been cascaded"
+        );
+        assert!(
+            listed.iter().all(|x| x.id != n2.summary.id),
+            "n2 should have been cascaded"
+        );
     }
 
     #[test]
@@ -415,18 +486,31 @@ mod tests {
         // The 'trash a folder' UX path moves the folder by updating its
         // parent — children should ride along, not get cascade-deleted.
         let db = open_memory_for_tests();
-        let coll = db.with_conn(|c| crate::collections::create(c, crate::collections::CreateCollection {
-            name: "Will be trashed".into(),
-            parent_collection_id: None,
-        })).unwrap();
+        let coll = db
+            .with_conn(|c| {
+                crate::collections::create(
+                    c,
+                    crate::collections::CreateCollection {
+                        name: "Will be trashed".into(),
+                        parent_collection_id: None,
+                    },
+                )
+            })
+            .unwrap();
         let note = empty_note(&db, Some(coll.id.clone()));
 
-        db.with_conn(|c| crate::collections::update(c, crate::collections::UpdateCollection {
-            id: coll.id.clone(),
-            name: None,
-            parent_collection_id: Some(Some("trash".into())),
-            position: None,
-        })).unwrap();
+        db.with_conn(|c| {
+            crate::collections::update(
+                c,
+                crate::collections::UpdateCollection {
+                    id: coll.id.clone(),
+                    name: None,
+                    parent_collection_id: Some(Some("trash".into())),
+                    position: None,
+                },
+            )
+        })
+        .unwrap();
 
         let loaded = db.with_conn(|c| load(c, &note.summary.id)).unwrap();
         assert_eq!(

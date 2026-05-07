@@ -19,11 +19,12 @@ pub mod serde_helpers;
 
 use tauri::Manager;
 
-use crate::db::{Db, migrations};
+use crate::db::{migrations, Db};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_autostart::Builder::new().build())
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             let app_data = app

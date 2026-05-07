@@ -5,7 +5,7 @@
 //! `to` is greater than the current version, inside one transaction each.
 //! Bump the version + add an entry; never edit a shipped migration.
 
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 
 use crate::error::AppResult;
 
@@ -97,8 +97,7 @@ const MIGRATIONS: &[Migration] = &[
 ];
 
 pub fn run(conn: &mut Connection) -> AppResult<()> {
-    let current: u32 =
-        conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    let current: u32 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
     log::info!("[db] current schema version = {current}");
 
     // Disable FK enforcement around the migration loop. Some migrations
@@ -127,10 +126,8 @@ pub fn run(conn: &mut Connection) -> AppResult<()> {
 
 /// Did this DB just get its first schema applied (i.e. was empty before)?
 pub fn was_freshly_created(conn: &Connection) -> AppResult<bool> {
-    let coll_count: i64 =
-        conn.query_row("SELECT COUNT(*) FROM collections", [], |r| r.get(0))?;
-    let note_count: i64 =
-        conn.query_row("SELECT COUNT(*) FROM notes", [], |r| r.get(0))?;
+    let coll_count: i64 = conn.query_row("SELECT COUNT(*) FROM collections", [], |r| r.get(0))?;
+    let note_count: i64 = conn.query_row("SELECT COUNT(*) FROM notes", [], |r| r.get(0))?;
     Ok(coll_count <= 1 && note_count == 0)
 }
 
@@ -150,14 +147,7 @@ pub fn seed(conn: &Connection) -> AppResult<()> {
         params![personal_id, "Personal", now],
     )?;
 
-    insert_note(
-        conn,
-        "Welcome",
-        WELCOME_BODY,
-        None,
-        0,
-        &now,
-    )?;
+    insert_note(conn, "Welcome", WELCOME_BODY, None, 0, &now)?;
     insert_note(
         conn,
         "Sprint planning",
