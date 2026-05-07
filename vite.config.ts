@@ -24,6 +24,9 @@ export default defineConfig({
     // Don't watch src-tauri to avoid full-reload loops.
     watch: {
       ignored: ['**/src-tauri/**']
+    },
+    fs: {
+      allow: ['./public'],
     }
   },
 
