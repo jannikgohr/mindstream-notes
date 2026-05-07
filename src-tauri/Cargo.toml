@@ -1,6 +1,6 @@
 [package]
 name = "mindstream-notes"
-version = "0.1.1"
+version = "0.1.2"
 description = "Local-first modern markdown-based E2EE collaborative note-taking app built with Tauri v2."
 authors = ["you"]
 edition = "2021"
@@ -26,6 +26,9 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 thiserror = "1"
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+openssl-sys = "0.9.111"
+openssl = { version = "*", features = ["vendored"] }
+etebase = "0.6.1"
 
 [profile.release]
 panic = "abort"
