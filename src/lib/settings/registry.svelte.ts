@@ -25,6 +25,10 @@ import {
 import { setLanguage } from './i18n.svelte';
 import type { SortStrategy } from '$lib/sort';
 import SignInForm from './customs/SignInForm.svelte';
+// Vite resolves JSON imports at build time (tsconfig has resolveJsonModule),
+// so the version values below get inlined into the bundle. No runtime cost,
+// no risk of drift between the About panel and what's actually installed.
+import pkg from '../../../package.json';
 
 export interface Binding {
   get: () => Promise<unknown>;
@@ -109,9 +113,29 @@ export const SETTING_ACTIONS: Record<string, () => void | Promise<void>> = {
   }
 };
 
+/**
+ * Strip the semver range marker from a `^x.y.z` / `~x.y.z` style spec so
+ * we display a clean version string in the UI. Falls back to `'unknown'`
+ * if the dependency isn't listed (e.g. a stripped-down build).
+ */
+function depVersion(name: string): string {
+  const deps = (pkg as { dependencies?: Record<string, string> }).dependencies;
+  const devDeps = (pkg as { devDependencies?: Record<string, string> })
+    .devDependencies;
+  const raw = deps?.[name] ?? devDeps?.[name];
+  if (!raw) return 'unknown';
+  return raw.replace(/^[\^~>=<\s]+/, '');
+}
+
 /** Read-only display values for type='info' settings. */
 export const INFO_VALUES: Record<string, () => string> = {
-  'about.appVersion': () => '0.1.0',
+  'about.appVersion': () => pkg.version,
   'about.tauriVersion': () =>
-    'Tauri 2 · SvelteKit 2 · Svelte 5 · Milkdown Crepe · dockview 4'
+    [
+      `Tauri ${depVersion('@tauri-apps/api')}`,
+      `SvelteKit ${depVersion('@sveltejs/kit')}`,
+      `Svelte ${depVersion('svelte')}`,
+      `Milkdown Crepe ${depVersion('@milkdown/crepe')}`,
+      `dockview ${depVersion('dockview-core')}`
+    ].join(' · ')
 };
