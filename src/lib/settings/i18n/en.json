@@ -6,10 +6,12 @@
     "close": "Close",
     "reset": "Reset to default",
     "modified": "Modified",
-    "empty": "No settings match your search."
+    "empty": "No settings match your search.",
+    "saving": "Saving…"
   },
   "categories": {
     "account": { "label": "Account & Sync", "description": "Connect to a managed or self-hosted server, manage devices and sync." },
+    "general": { "label":  "General" },
     "appearance": { "label": "Appearance", "description": "Theme, typography, file-tree look." },
     "editor": { "label": "Editor", "description": "How notes feel to write." },
     "data": { "label": "Data & Backup", "description": "Database location, trash, backup, import/export." },
@@ -20,6 +22,7 @@
   "sections": {
     "account.server": { "label": "Server" },
     "account.sync": { "label": "Sync" },
+    "general.behavior": { "label": "Behaviour" },
     "appearance.theme": { "label": "Theme" },
     "appearance.typography": { "label": "Typography" },
     "appearance.fileTree": { "label": "File tree" },
@@ -40,6 +43,7 @@
     "account.syncEnabled": { "label": "Enable sync" },
     "account.syncInterval": { "label": "Sync frequency" },
     "account.conflict": { "label": "Conflict resolution" },
+    "general.startOnLogin": { "label": "Start on login" },
     "appearance.mode": { "label": "Mode" },
     "appearance.accent": { "label": "Accent colour" },
     "appearance.density": { "label": "UI density" },

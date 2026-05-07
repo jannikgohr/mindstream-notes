@@ -57,6 +57,23 @@
       ]
     },
     {
+      "id": "general",
+      "icon": "settings",
+      "sections": [
+        {
+          "id": "general.behavior",
+          "settings": [
+            {
+              "id": "general.startOnLogin",
+              "scope": "D",
+              "type": "toggle",
+              "default": false
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": "appearance",
       "icon": "palette",
       "sections": [

@@ -5,10 +5,12 @@
    * multiline / custom). Reads/writes through the store so all the
    * binding plumbing happens in one place.
    */
+  import { Loader2 } from 'lucide-svelte';
   import { Button } from '$lib/components/ui/button';
   import {
     getSettingValue,
     isModified,
+    isPending,
     setSettingValue,
     resetSettingValue
   } from './store.svelte';
@@ -25,9 +27,21 @@
   const description = $derived(tDescription('settings', setting.id));
   const value = $derived(getSettingValue(setting.id));
   const modified = $derived(isModified(setting.id));
+  const pending = $derived(isPending(setting.id));
 
+  /**
+   * `commit` is async because some bindings (autostart in particular)
+   * round-trip through Tauri IPC. We don't await at the call site — the
+   * `pending` flag is what surfaces the in-flight state to the user. Errors
+   * are already logged inside the store; we swallow here so an exception
+   * doesn't crash the dialog.
+   */
   function commit(v: unknown) {
-    setSettingValue(setting.id, v);
+    void setSettingValue(setting.id, v).catch(() => {});
+  }
+
+  function reset() {
+    void resetSettingValue(setting.id).catch(() => {});
   }
 
   function fireAction() {
@@ -105,21 +119,26 @@
 
   <!-- Right-side compact controls -->
   <div class="flex items-center gap-2 pt-0.5">
+    {#if pending}
+      <Loader2 class="size-3.5 animate-spin text-muted-foreground" aria-label={tUi('saving')} />
+    {/if}
     {#if setting.type === 'toggle'}
       <button
         type="button"
         role="switch"
         aria-checked={value === true}
+        aria-busy={pending}
         aria-label={label}
+        disabled={pending}
         onclick={() => commit(!value)}
-        class="relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 {value
+        class="relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-wait disabled:opacity-60 {value
           ? 'bg-primary'
           : 'bg-input'}"
       >
         <span
           class="pointer-events-none block size-4 rounded-full bg-background shadow-sm ring-0 transition-transform {value
-            ? 'translate-x-[18px]'
-            : 'translate-x-[2px]'}"
+            ? 'translate-x-4.5'
+            : 'translate-x-0.5'}"
         ></span>
       </button>
     {:else if setting.type === 'text'}
@@ -205,10 +224,11 @@
     {#if modified && setting.type !== 'button' && setting.type !== 'info' && setting.type !== 'custom'}
       <button
         type="button"
-        class="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        class="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-wait disabled:opacity-60"
         title={tUi('reset')}
         aria-label={tUi('reset')}
-        onclick={() => resetSettingValue(setting.id)}
+        disabled={pending}
+        onclick={reset}
       >
         <svg
           xmlns="http://www.w3.org/2000/svg"
