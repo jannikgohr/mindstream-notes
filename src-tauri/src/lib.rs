@@ -11,6 +11,7 @@
 //! Frontend talks to Rust through the `@tauri-apps/api`'s `invoke()`; the
 //! TS bridge lives under `src/lib/api/`.
 
+pub mod auth;
 pub mod collections;
 pub mod db;
 pub mod error;
@@ -63,6 +64,10 @@ pub fn run() {
             notes::trash_note,
             notes::restore_note,
             notes::purge_note,
+            // Auth (Etebase)
+            auth::etebase_login,
+            auth::etebase_logout,
+            auth::etebase_session,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
