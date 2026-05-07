@@ -196,7 +196,7 @@ fn next_position(conn: &Connection, parent: Option<&str>) -> AppResult<i64> {
 
 #[tauri::command]
 pub fn list_collections(db: tauri::State<'_, Db>) -> Result<Vec<Collection>, String> {
-    db.with_conn(|c| list(c)).map_err(Into::into)
+    db.with_conn(list).map_err(Into::into)
 }
 
 #[tauri::command]
