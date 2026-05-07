@@ -17,7 +17,6 @@ where
     Deserialize::deserialize(de).map(Some)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
