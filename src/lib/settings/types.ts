@@ -148,6 +148,7 @@ export interface I18nBundle {
     reset: string;
     modified: string;
     empty: string;
+    saving: string;
   };
   categories: Record<string, { label: string; description?: string }>;
   sections: Record<string, { label: string; description?: string }>;

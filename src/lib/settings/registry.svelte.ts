@@ -12,6 +12,11 @@
 import type { Component } from 'svelte';
 import { setMode } from 'mode-watcher';
 import {
+  enable as enableAutostart,
+  isEnabled as isEnabledAutostart,
+  disable as disableAutostart
+} from '@tauri-apps/plugin-autostart';
+import {
   setLeftSidebarWidth,
   setRightSidebarWidth,
   setSortStrategy,
@@ -22,40 +27,44 @@ import type { SortStrategy } from '$lib/sort';
 import SignInForm from './customs/SignInForm.svelte';
 
 export interface Binding {
-  get: () => unknown;
-  set: (value: unknown) => void;
+  get: () => Promise<unknown>;
+  set: (value: unknown) => Promise<void>;
 }
 
 export const SETTING_BINDINGS: Record<string, Binding> = {
+  'general.startOnLogin': {
+    get: async () => await isEnabledAutostart(),
+    set: async (v) => v ? await enableAutostart() : await disableAutostart()
+  },
   'appearance.mode': {
-    get: () => {
+    get: async () => {
       // mode-watcher writes/reads from localStorage; mirror its key here so
       // the radio reflects whatever the user's last choice was.
       if (typeof localStorage === 'undefined') return 'system';
       return localStorage.getItem('mode-watcher-mode') ?? 'system';
     },
-    set: (v) => setMode(v as 'light' | 'dark' | 'system')
+    set: async (v) => setMode(v as 'light' | 'dark' | 'system')
   },
   'appearance.sortStrategy': {
-    get: () => ui.sortStrategy,
-    set: (v) => setSortStrategy(v as SortStrategy)
+    get: async () => ui.sortStrategy,
+    set: async (v) => setSortStrategy(v as SortStrategy)
   },
   // The width sliders aren't in the schema yet, but the bindings are ready
   // when someone wants to surface them.
   'appearance.leftSidebarWidth': {
-    get: () => ui.leftSidebarWidth,
-    set: (v) => setLeftSidebarWidth(Number(v))
+    get: async () => ui.leftSidebarWidth,
+    set: async (v) => setLeftSidebarWidth(Number(v))
   },
   'appearance.rightSidebarWidth': {
-    get: () => ui.rightSidebarWidth,
-    set: (v) => setRightSidebarWidth(Number(v))
+    get: async () => ui.rightSidebarWidth,
+    set: async (v) => setRightSidebarWidth(Number(v))
   },
   'language.code': {
-    get: () => {
+    get: async () => {
       if (typeof localStorage === 'undefined') return 'en';
       return localStorage.getItem('notes-app:language') ?? 'en';
     },
-    set: (v) => {
+    set: async (v) => {
       const code = String(v);
       if (typeof localStorage !== 'undefined') {
         localStorage.setItem('notes-app:language', code);

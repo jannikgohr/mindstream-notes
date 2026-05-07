@@ -6,10 +6,12 @@
     "close": "Schließen",
     "reset": "Auf Standard zurücksetzen",
     "modified": "Geändert",
-    "empty": "Keine Einstellungen passen zur Suche."
+    "empty": "Keine Einstellungen passen zur Suche.",
+    "saving": "Wird gespeichert…"
   },
   "categories": {
     "account": { "label": "Konto & Synchronisation" },
+    "general": { "label":  "Allgemein" },
     "appearance": { "label": "Darstellung" },
     "editor": { "label": "Editor" },
     "data": { "label": "Daten & Backup" },
@@ -20,6 +22,7 @@
   "sections": {
     "account.server": { "label": "Server" },
     "account.sync": { "label": "Synchronisation" },
+    "general.behavior": { "label": "Verhalten" },
     "appearance.theme": { "label": "Design" },
     "appearance.typography": { "label": "Schrift" },
     "appearance.fileTree": { "label": "Dateibaum" },
@@ -38,6 +41,7 @@
     "account.serverUrl": { "label": "Server-URL" },
     "account.signInForm": { "label": "Anmelden" },
     "account.syncEnabled": { "label": "Synchronisation aktivieren" },
+    "general.startOnLogin": { "label": "Autostart bei Anmeldung" },
     "appearance.mode": { "label": "Modus" },
     "appearance.accent": { "label": "Akzentfarbe" },
     "appearance.density": { "label": "Dichte" },
