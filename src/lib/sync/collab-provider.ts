@@ -247,6 +247,16 @@ export class CollabProvider {
     frame[0] = type;
     frame.set(iv, 1);
     frame.set(ct, 1 + IV_LEN);
+    // Re-check the socket state: encrypt() awaited a microtask, during
+    // which the user may have closed the note (provider.destroy() →
+    // ws.close()). Without this guard, the post-await ws.send throws
+    // "WebSocket is already in CLOSING or CLOSED state" — harmless but
+    // noisy in the console. Both the cached `ws` reference and
+    // `this.ws` matter: destroy() nulls the latter, but the cached one
+    // is the same WebSocket instance, just with readyState now > OPEN.
+    if (this.destroyed || ws.readyState !== WebSocket.OPEN) {
+      return;
+    }
     try {
       ws.send(frame);
       console.debug(
@@ -291,6 +301,10 @@ export class CollabProvider {
       );
       return;
     }
+    // Mirror image of the post-await guard in send(): if the user closed
+    // the note during the decrypt microtask, the doc/awareness may be
+    // destroyed by now and applying updates would crash.
+    if (this.destroyed) return;
     console.debug(
       '[collab] recv %s payload=%dB frame=%dB',
       frameName(type),
