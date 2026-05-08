@@ -1,7 +1,14 @@
 {
   "permissions": {
     "allow": [
-      "WebFetch(domain:docs.etebase.com)"
+      "WebFetch(domain:docs.etebase.com)",
+      "WebFetch(domain:docs.rs)",
+      "Bash(cargo check *)",
+      "Bash(cargo build *)",
+      "Bash(cargo test *)",
+      "Bash(cargo fmt *)",
+      "Bash(cargo clippy *)",
+      "Bash(pnpm check *)"
     ]
   }
 }

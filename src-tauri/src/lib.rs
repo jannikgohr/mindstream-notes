@@ -17,6 +17,7 @@ pub mod db;
 pub mod error;
 pub mod notes;
 pub mod serde_helpers;
+pub mod sync;
 
 use tauri::Manager;
 
@@ -68,6 +69,8 @@ pub fn run() {
             auth::etebase_login,
             auth::etebase_logout,
             auth::etebase_session,
+            // Sync
+            sync::sync_now,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -113,6 +113,22 @@ fn clear_local_state(path: &Path) {
     }
 }
 
+/// Re-hydrate the Etebase `Account` from the on-disk session blob and the
+/// OS-keystore-held encryption key. Cheap (no Argon2id) — sync calls this
+/// on every cycle rather than caching the live Account, which would
+/// require a `Mutex<Option<Account>>` in app state.
+///
+/// `Ok(None)` means "user is signed out"; an `Err` means we *thought* there
+/// was a session but couldn't unlock it (corrupt file, missing keychain
+/// entry, server URL invalid, …).
+pub fn try_restore(app: &AppHandle) -> AppResult<Option<Account>> {
+    let path = session_path(app)?;
+    let Some(stored) = read_stored(&path)? else {
+        return Ok(None);
+    };
+    Ok(Some(restore_account(&stored)?))
+}
+
 #[tauri::command]
 pub async fn etebase_login(args: LoginArgs, app: AppHandle) -> Result<SessionInfo, String> {
     let server_url = resolve_server_url(&args).map_err(String::from)?;

@@ -8,7 +8,7 @@
    * the password anywhere except the etebase server, and never persist it.
    */
   import { Button } from '$lib/components/ui/button';
-  import { LogOut, Loader2 } from 'lucide-svelte';
+  import { LogOut, Loader2, RefreshCw } from 'lucide-svelte';
   import {
     etebaseLogin,
     etebaseLogout,
@@ -16,6 +16,7 @@
     type ServerType,
     type SessionInfo
   } from '$lib/api/auth';
+  import { syncNow, type SyncReport } from '$lib/api/sync';
   import { getSettingValue, settingsDialog } from '../store.svelte';
 
   let session = $state<SessionInfo | null>(null);
@@ -24,6 +25,8 @@
   let busy = $state(false);
   let error = $state<string | null>(null);
   let initialised = $state(false);
+  let syncing = $state(false);
+  let lastReport = $state<SyncReport | null>(null);
 
   const serverType = $derived(
     (getSettingValue('account.serverType') as string | undefined) ?? 'local-only'
@@ -83,11 +86,39 @@
     try {
       await etebaseLogout();
       session = null;
+      lastReport = null;
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
     } finally {
       busy = false;
     }
+  }
+
+  async function runSync() {
+    if (syncing) return;
+    syncing = true;
+    error = null;
+    try {
+      lastReport = await syncNow();
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+    } finally {
+      syncing = false;
+    }
+  }
+
+  function summarise(r: SyncReport): string {
+    const parts: string[] = [];
+    if (r.notes_pulled || r.folders_pulled) {
+      parts.push(`pulled ${r.notes_pulled} note${r.notes_pulled === 1 ? '' : 's'}, ${r.folders_pulled} folder${r.folders_pulled === 1 ? '' : 's'}`);
+    }
+    if (r.notes_pushed || r.folders_pushed) {
+      parts.push(`pushed ${r.notes_pushed} note${r.notes_pushed === 1 ? '' : 's'}, ${r.folders_pushed} folder${r.folders_pushed === 1 ? '' : 's'}`);
+    }
+    if (r.conflicts_resolved) {
+      parts.push(`${r.conflicts_resolved} conflict${r.conflicts_resolved === 1 ? '' : 's'} merged`);
+    }
+    return parts.length > 0 ? parts.join(' · ') : 'Already up to date';
   }
 </script>
 
@@ -108,8 +139,17 @@
           {session.server_url}
         </div>
       </div>
-      <div class="flex items-center gap-3 pt-1">
-        <Button size="sm" variant="destructive" onclick={signOut} disabled={busy}>
+      <div class="flex items-center gap-2 pt-1">
+        <Button size="sm" onclick={runSync} disabled={syncing || busy}>
+          {#if syncing}
+            <Loader2 class="mr-1.5 size-3.5 animate-spin" />
+            Syncing…
+          {:else}
+            <RefreshCw class="mr-1.5 size-3.5" />
+            Sync now
+          {/if}
+        </Button>
+        <Button size="sm" variant="destructive" onclick={signOut} disabled={busy || syncing}>
           {#if busy}
             <Loader2 class="mr-1.5 size-3.5 animate-spin" />
             Logging out…
@@ -118,10 +158,13 @@
             Log out
           {/if}
         </Button>
-        {#if error}
-          <span class="text-xs text-destructive">{error}</span>
-        {/if}
       </div>
+      {#if lastReport && !error}
+        <p class="text-xs text-muted-foreground">{summarise(lastReport)}</p>
+      {/if}
+      {#if error}
+        <p class="text-xs text-destructive">{error}</p>
+      {/if}
     </div>
   {:else}
     <form class="grid gap-2" onsubmit={(e) => { e.preventDefault(); void signIn(); }}>

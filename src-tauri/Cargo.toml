@@ -31,6 +31,14 @@ openssl = { version = "*", features = ["vendored"] }
 etebase = "0.6.1"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 
+# Sync — yrs CRDT for offline-merge-safe documents, similar for diffing
+# the editor's "full body" save back into Y.Text ops, rmp-serde for the
+# msgpack wire format inside Etebase item content.
+yrs = "0.21"
+similar = "2"
+rmp-serde = "1"
+serde_bytes = "0.11"
+
 [profile.release]
 panic = "abort"
 codegen-units = 1

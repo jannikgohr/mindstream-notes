@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::db::Db;
 use crate::error::{AppError, AppResult};
 use crate::serde_helpers::double_option;
+use crate::sync::yrs_doc;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NoteSummary {
@@ -126,10 +127,20 @@ pub fn create(conn: &Connection, input: CreateNote) -> AppResult<Note> {
     let position = next_position(conn, input.parent_collection_id.as_deref())?;
     let title = input.title.unwrap_or_else(|| "Untitled".to_string());
     let body = input.body.unwrap_or_default();
+    let yrs_state = yrs_doc::init_with_markdown(&body);
     conn.execute(
-        "INSERT INTO notes(id, parent_collection_id, title, body, position, created, modified)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
-        params![id, input.parent_collection_id, title, body, position, now],
+        "INSERT INTO notes(id, parent_collection_id, title, body, position,
+                            created, modified, yrs_state, dirty)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7, 1)",
+        params![
+            id,
+            input.parent_collection_id,
+            title,
+            body,
+            position,
+            now,
+            yrs_state,
+        ],
     )?;
     load(conn, &id)
 }
@@ -144,10 +155,24 @@ pub fn update(conn: &mut Connection, input: UpdateNote) -> AppResult<Note> {
             params![title, now, input.id],
         )?;
     }
-    if let Some(body) = &input.body {
+    if let Some(new_body) = &input.body {
+        // The editor saves the entire body each debounce. To preserve CRDT
+        // semantics for offline merge we have to translate that into yrs ops
+        // — diff old → new at byte granularity and replay against the Doc.
+        // See sync/yrs_doc.rs for the rationale.
+        let (old_body, old_state) = tx.query_row(
+            "SELECT body, yrs_state FROM notes WHERE id = ?1",
+            params![input.id],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<Vec<u8>>>(1)?)),
+        )?;
+        let base_state = match old_state {
+            Some(s) if !s.is_empty() => s,
+            _ => yrs_doc::init_with_markdown(&old_body),
+        };
+        let new_state = yrs_doc::apply_local_edit(&base_state, &old_body, new_body);
         tx.execute(
-            "UPDATE notes SET body = ?1, modified = ?2 WHERE id = ?3",
-            params![body, now, input.id],
+            "UPDATE notes SET body = ?1, yrs_state = ?2, modified = ?3 WHERE id = ?4",
+            params![new_body, new_state, now, input.id],
         )?;
     }
     if let Some(parent) = &input.parent_collection_id {
@@ -173,6 +198,14 @@ pub fn update(conn: &mut Connection, input: UpdateNote) -> AppResult<Note> {
         }
     }
 
+    // Any update is a sync candidate. Doing this once at the end keeps the
+    // per-field UPDATEs above unchanged and avoids a half-marked row if one
+    // of them no-ops (e.g. UpdateNote with everything None).
+    tx.execute(
+        "UPDATE notes SET dirty = 1 WHERE id = ?1",
+        params![input.id],
+    )?;
+
     tx.commit()?;
     load(conn, &input.id)
 }
@@ -180,7 +213,7 @@ pub fn update(conn: &mut Connection, input: UpdateNote) -> AppResult<Note> {
 pub fn trash(conn: &Connection, id: &str) -> AppResult<()> {
     let now = Utc::now().to_rfc3339();
     let n = conn.execute(
-        "UPDATE notes SET trashed_at = ?1, modified = ?1 WHERE id = ?2",
+        "UPDATE notes SET trashed_at = ?1, modified = ?1, dirty = 1 WHERE id = ?2",
         params![now, id],
     )?;
     if n == 0 {
@@ -192,7 +225,7 @@ pub fn trash(conn: &Connection, id: &str) -> AppResult<()> {
 pub fn restore(conn: &Connection, id: &str) -> AppResult<()> {
     let now = Utc::now().to_rfc3339();
     let n = conn.execute(
-        "UPDATE notes SET trashed_at = NULL, modified = ?1 WHERE id = ?2",
+        "UPDATE notes SET trashed_at = NULL, modified = ?1, dirty = 1 WHERE id = ?2",
         params![now, id],
     )?;
     if n == 0 {
@@ -202,6 +235,21 @@ pub fn restore(conn: &Connection, id: &str) -> AppResult<()> {
 }
 
 pub fn purge(conn: &Connection, id: &str) -> AppResult<()> {
+    // If the note had been pushed already, queue a server-side delete for
+    // the next sync. We do tombstone-then-delete on a plain &Connection
+    // (no transaction): tombstones is INSERT OR IGNORE and a stray
+    // tombstone for a never-deleted row is harmless.
+    let etebase_uid: Option<String> = conn
+        .query_row(
+            "SELECT etebase_uid FROM notes WHERE id = ?1",
+            params![id],
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten();
+    if let Some(uid) = etebase_uid {
+        crate::sync::queue_tombstone(conn, "note", &uid)?;
+    }
     let n = conn.execute("DELETE FROM notes WHERE id = ?1", params![id])?;
     if n == 0 {
         return Err(AppError::NotFound(format!("note {id}")));
@@ -435,6 +483,73 @@ mod tests {
         assert_eq!(
             loaded.summary.tags,
             vec!["urgent".to_string(), "work".to_string()]
+        );
+    }
+
+    fn dirty_flag(db: &Db, id: &str) -> i64 {
+        db.with_conn(|c| {
+            Ok(
+                c.query_row("SELECT dirty FROM notes WHERE id = ?1", params![id], |r| {
+                    r.get::<_, i64>(0)
+                })?,
+            )
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn create_marks_note_dirty_with_yrs_state() {
+        let db = open_memory_for_tests();
+        let n = empty_note(&db, None);
+        assert_eq!(dirty_flag(&db, &n.summary.id), 1);
+        let state: Vec<u8> = db
+            .with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT yrs_state FROM notes WHERE id = ?1",
+                    params![n.summary.id],
+                    |r| r.get::<_, Option<Vec<u8>>>(0),
+                )?
+                .unwrap_or_default())
+            })
+            .unwrap();
+        assert!(
+            !state.is_empty(),
+            "yrs_state should be initialised on create"
+        );
+    }
+
+    #[test]
+    fn body_edit_re_marks_dirty_and_updates_yrs_state() {
+        let db = open_memory_for_tests();
+        let n = empty_note(&db, None);
+        // Pretend we just synced this row: clear dirty + capture state.
+        db.with_conn(|c| {
+            Ok(c.execute(
+                "UPDATE notes SET dirty = 0 WHERE id = ?1",
+                params![n.summary.id],
+            )?)
+        })
+        .unwrap();
+        assert_eq!(dirty_flag(&db, &n.summary.id), 0);
+
+        db.with_conn_mut(|c| {
+            update(
+                c,
+                UpdateNote {
+                    id: n.summary.id.clone(),
+                    title: None,
+                    body: Some("# Body, edited".into()),
+                    parent_collection_id: None,
+                    position: None,
+                    tags: None,
+                },
+            )
+        })
+        .unwrap();
+        assert_eq!(
+            dirty_flag(&db, &n.summary.id),
+            1,
+            "edit must re-mark the note dirty"
         );
     }
 

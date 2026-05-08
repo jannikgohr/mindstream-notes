@@ -94,6 +94,58 @@ const MIGRATIONS: &[Migration] = &[
             CREATE INDEX idx_notes_trashed ON notes(trashed_at);
         "#,
     },
+    Migration {
+        to: 4,
+        // Etebase sync state. Two parallel Etebase Collections back the
+        // local SQLite (one of `ms-md-folder` items, one of `ms-md-note`
+        // items); see src/sync/mod.rs. Per-row columns:
+        //   etebase_uid   — server-assigned item UID, NULL until first push
+        //   etebase_etag  — last server etag we observed (for transaction
+        //                   optimistic-concurrency checks)
+        //   yrs_state     — encoded yrs Doc state (notes only); the
+        //                   markdown body remains the canonical local
+        //                   read view, but yrs is what crosses the wire
+        //   dirty         — 1 if local row has changes not yet pushed.
+        //                   Defaulting to 1 means existing pre-sync rows
+        //                   get pushed up the first time the user logs in.
+        //
+        // sync_state holds one row per kind ('folders' | 'notes') with
+        // the Etebase Collection UID we created/found and the last
+        // stoken we pulled to. Tombstones queue server-side deletes
+        // for items that were purged locally after they'd already been
+        // synced.
+        sql: r#"
+            ALTER TABLE notes ADD COLUMN etebase_uid  TEXT;
+            ALTER TABLE notes ADD COLUMN etebase_etag TEXT;
+            ALTER TABLE notes ADD COLUMN yrs_state    BLOB;
+            ALTER TABLE notes ADD COLUMN dirty        INTEGER NOT NULL DEFAULT 1;
+
+            ALTER TABLE collections ADD COLUMN etebase_uid  TEXT;
+            ALTER TABLE collections ADD COLUMN etebase_etag TEXT;
+            ALTER TABLE collections ADD COLUMN dirty        INTEGER NOT NULL DEFAULT 1;
+
+            -- Built-in 'trash' folder is a local construct; never push it.
+            UPDATE collections SET dirty = 0 WHERE id = 'trash';
+
+            CREATE TABLE sync_state (
+                kind                   TEXT PRIMARY KEY,
+                etebase_collection_uid TEXT,
+                stoken                 TEXT
+            );
+
+            CREATE TABLE tombstones (
+                kind        TEXT NOT NULL,    -- 'note' | 'folder'
+                etebase_uid TEXT NOT NULL,
+                queued_at   TEXT NOT NULL,
+                PRIMARY KEY (kind, etebase_uid)
+            );
+
+            CREATE INDEX idx_notes_dirty       ON notes(dirty)       WHERE dirty = 1;
+            CREATE INDEX idx_collections_dirty ON collections(dirty) WHERE dirty = 1;
+            CREATE INDEX idx_notes_etebase_uid       ON notes(etebase_uid)       WHERE etebase_uid IS NOT NULL;
+            CREATE INDEX idx_collections_etebase_uid ON collections(etebase_uid) WHERE etebase_uid IS NOT NULL;
+        "#,
+    },
 ];
 
 pub fn run(conn: &mut Connection) -> AppResult<()> {
