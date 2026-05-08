@@ -73,6 +73,7 @@ pub fn create(conn: &Connection, input: CreateCollection) -> AppResult<Collectio
     let id = format!("coll_{}", uuid::Uuid::new_v4());
     let now = Utc::now().to_rfc3339();
     let position = next_position(conn, input.parent_collection_id.as_deref())?;
+    // dirty defaults to 1 in the schema; row will be picked up by the next sync push.
     conn.execute(
         "INSERT INTO collections(id, parent_collection_id, name, position, created, modified)
          VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
@@ -131,6 +132,12 @@ pub fn update(conn: &Connection, input: UpdateCollection) -> AppResult<Collectio
             params![position, now, input.id],
         )?;
     }
+    // Any update is a sync candidate. Trash itself is rejected above so it
+    // never ends up dirty.
+    conn.execute(
+        "UPDATE collections SET dirty = 1 WHERE id = ?1",
+        params![input.id],
+    )?;
     get(conn, &input.id)
 }
 
@@ -139,6 +146,19 @@ pub fn delete(conn: &Connection, id: &str) -> AppResult<()> {
         return Err(AppError::InvalidArg(
             "the trash collection cannot be deleted".into(),
         ));
+    }
+    // Queue a server-side delete if this folder had been synced. See the
+    // matching path in notes::purge for the same rationale.
+    let etebase_uid: Option<String> = conn
+        .query_row(
+            "SELECT etebase_uid FROM collections WHERE id = ?1",
+            params![id],
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten();
+    if let Some(uid) = etebase_uid {
+        crate::sync::queue_tombstone(conn, "folder", &uid)?;
     }
     let n = conn.execute("DELETE FROM collections WHERE id = ?1", params![id])?;
     if n == 0 {
@@ -242,7 +262,7 @@ mod tests {
     fn create_then_list_returns_the_row() {
         let db = open_memory_for_tests();
         let c = create_root(&db, "Work");
-        let list_out = db.with_conn(|c| list(c)).unwrap();
+        let list_out = db.with_conn(list).unwrap();
         assert_eq!(list_out.len(), 2);
         assert_eq!(list_out[1].id, c.id);
         assert_eq!(list_out[1].name, "Work");
