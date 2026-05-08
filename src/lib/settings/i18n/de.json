@@ -40,6 +40,7 @@
     "account.serverType": { "label": "Servertyp", "description": "Wo deine Notizen liegen." },
     "account.serverUrl": { "label": "Server-URL" },
     "account.signInForm": { "label": "Anmelden" },
+    "account.collabServerUrl": { "label": "Live-Collab-Server", "description": "WebSocket-URL des verschlüsselten Relays für Echtzeit-Co-Editing. Leer lassen, um Live-Collab zu deaktivieren; periodische Synchronisation funktioniert weiterhin." },
     "account.syncEnabled": { "label": "Synchronisation aktivieren" },
     "general.startOnLogin": { "label": "Autostart bei Anmeldung" },
     "appearance.mode": { "label": "Modus" },

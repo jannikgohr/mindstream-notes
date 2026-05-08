@@ -2,9 +2,20 @@
   import { onDestroy, onMount } from 'svelte';
   import { Crepe } from '@milkdown/crepe';
   import { listener, listenerCtx } from '@milkdown/kit/plugin/listener';
-  import { Trash2 } from 'lucide-svelte';
-  import { loadNote, saveNote as apiSaveNote, TRASH_ID } from '$lib/api';
+  import { collab, collabServiceCtx } from '@milkdown/plugin-collab';
+  import * as Y from 'yjs';
+  import { Awareness } from 'y-protocols/awareness';
+  import { Trash2, Wifi, WifiOff } from 'lucide-svelte';
+  import {
+    loadNote,
+    saveNote as apiSaveNote,
+    TRASH_ID,
+    noteRoomInfo,
+    etebaseSession
+  } from '$lib/api';
   import { tree } from '$lib/stores/tree.svelte';
+  import { getSettingValue } from '$lib/settings/store.svelte';
+  import { CollabProvider } from '$lib/sync/collab-provider';
 
   interface Props {
     noteId: string;
@@ -21,6 +32,11 @@
   let host: HTMLDivElement | null = $state(null);
   let crepe: Crepe | null = null;
   let crepeReady = $state(false);
+  let yDoc: Y.Doc | null = null;
+  let awareness: Awareness | null = null;
+  let provider: CollabProvider | null = null;
+  let collabOnline = $state(false);
+  let collabConfigured = $state(false);
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
   let loading = $state(true);
   let savingState = $state<'idle' | 'pending' | 'saving' | 'saved' | 'error'>(
@@ -78,16 +94,82 @@
     try {
       const note = await loadNote(noteId);
       if (!host) return; // unmounted while awaiting
-      crepe = new Crepe({
-        root: host,
-        defaultValue: note.body
-      });
+
+      // Build the live Doc + Awareness BEFORE we ask Crepe to materialise
+      // the editor — the collab plugin needs them at bind time.
+      yDoc = new Y.Doc();
+      // Hydrate from disk only if the row is already in the v2
+      // (y-prosemirror) format. Legacy v1 yrs_state is a Y.Text shape
+      // that y-prosemirror can't decode; for those notes we leave the
+      // Doc empty and the collab service's applyTemplate populates it
+      // from `note.body` instead — that's the lazy migration path.
+      if (note.payload_schema === 2 && note.yrs_state.length > 0) {
+        Y.applyUpdate(yDoc, new Uint8Array(note.yrs_state));
+      }
+
+      awareness = new Awareness(yDoc);
+      try {
+        const session = await etebaseSession();
+        const userName = session?.username ?? 'You';
+        awareness.setLocalStateField('user', {
+          name: userName,
+          color: pickColor(userName)
+        });
+      } catch (err) {
+        console.debug('[NoteEditor] no session for awareness', err);
+      }
+
+      // Live collab is opt-in: a relay URL must be configured AND the
+      // note has to have been pushed to etebase at least once (so it
+      // has a UID + key). Either missing → single-device mode, no
+      // websocket, just the local Doc.
+      const collabUrl = (
+        (getSettingValue('account.collabServerUrl') as string | undefined) ??
+        ''
+      ).trim();
+      if (collabUrl) {
+        try {
+          const room = await noteRoomInfo(noteId);
+          if (room && yDoc && awareness) {
+            collabConfigured = true;
+            provider = new CollabProvider({
+              url: collabUrl,
+              roomId: room.room_id,
+              keyBytes: base64ToBytes(room.key_b64),
+              doc: yDoc,
+              awareness,
+              onStatusChange: (online) => {
+                collabOnline = online;
+              }
+            });
+          }
+        } catch (err) {
+          console.debug('[NoteEditor] collab provider init failed', err);
+        }
+      }
+
+      crepe = new Crepe({ root: host, defaultValue: '' });
+      crepe.editor.use(collab);
       crepe.editor.use(listener).config((ctx) => {
         ctx.get(listenerCtx).markdownUpdated((_ctx, markdown) => {
           handleChange(markdown);
         });
       });
       await crepe.create();
+
+      // Bind y-doc + awareness AFTER create. applyTemplate populates the
+      // Doc from `note.body` only if the Doc was empty at bind time; on
+      // subsequent opens the Doc already carries the previous state and
+      // the template is a no-op. This is the seam that lazily migrates
+      // v1 rows to v2 format.
+      crepe.editor.action((ctx) => {
+        const cs = ctx.get(collabServiceCtx);
+        cs.bindDoc(yDoc!);
+        if (awareness) cs.setAwareness(awareness);
+        cs.applyTemplate(note.body);
+        cs.connect();
+      });
+
       crepeReady = true;
       loading = false;
     } catch (err) {
@@ -99,8 +181,16 @@
 
   onDestroy(() => {
     if (saveTimer) clearTimeout(saveTimer);
+    provider?.destroy();
+    provider = null;
+    collabOnline = false;
+    collabConfigured = false;
     crepe?.destroy();
     crepe = null;
+    awareness?.destroy();
+    awareness = null;
+    yDoc?.destroy();
+    yDoc = null;
     crepeReady = false;
   });
 
@@ -124,7 +214,14 @@
     saveTimer = setTimeout(async () => {
       try {
         savingState = 'saving';
-        await apiSaveNote({ id: noteId, body: markdown });
+        // Capture the y-doc state *now*, alongside the markdown the
+        // listener handed us, so Rust skips the markdown-diff path and
+        // accepts the bytes verbatim. Array.from is necessary — Tauri
+        // serialises Uint8Array as an empty object via JSON.stringify.
+        const yrsState = yDoc
+          ? Array.from(Y.encodeStateAsUpdate(yDoc))
+          : undefined;
+        await apiSaveNote({ id: noteId, body: markdown, yrs_state: yrsState });
         // Mirror the new modified timestamp in the local cache so the
         // metadata panel reflects the save without a tree refetch.
         const existing = tree.notesById[noteId];
@@ -140,6 +237,34 @@
         console.error('[NoteEditor] save failed', err);
       }
     }, SAVE_DEBOUNCE_MS);
+  }
+
+  /**
+   * Stable hue from the username so the same user shows the same cursor
+   * colour across sessions and devices. Not security-relevant; just a
+   * tiny readability win.
+   */
+  function pickColor(seed: string): string {
+    let hash = 0;
+    for (let i = 0; i < seed.length; i++) {
+      hash = (hash * 31 + seed.charCodeAt(i)) | 0;
+    }
+    const hue = Math.abs(hash) % 360;
+    return `hsl(${hue}, 70%, 50%)`;
+  }
+
+  /**
+   * Decode standard or URL-safe base64 into bytes. The Rust side emits
+   * standard base64 via etebase::utils::to_base64; URL-safe handling is
+   * defensive in case we ever swap encoders.
+   */
+  function base64ToBytes(b64: string): Uint8Array {
+    const standard = b64.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = standard + '='.repeat((4 - (standard.length % 4)) % 4);
+    const bin = atob(padded);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
   }
 
   const statusLabel = $derived.by(() => {
@@ -161,10 +286,23 @@
 
 <div class="flex h-full w-full flex-col">
   <div
-    class="pointer-events-none flex h-5 shrink-0 items-center justify-end px-3 text-[10px] uppercase tracking-wider text-muted-foreground"
+    class="flex h-5 shrink-0 items-center justify-end gap-2 px-3 text-[10px] uppercase tracking-wider text-muted-foreground"
     aria-live="polite"
   >
-    {statusLabel}
+    {#if collabConfigured}
+      {#if collabOnline}
+        <span class="flex items-center gap-1 text-emerald-600 dark:text-emerald-400" title="Live collab connected">
+          <Wifi class="size-3" aria-hidden="true" />
+          Live
+        </span>
+      {:else}
+        <span class="flex items-center gap-1" title="Live collab disconnected — reconnecting">
+          <WifiOff class="size-3" aria-hidden="true" />
+          Offline
+        </span>
+      {/if}
+    {/if}
+    <span>{statusLabel}</span>
   </div>
   {#if isTrashed}
     <div

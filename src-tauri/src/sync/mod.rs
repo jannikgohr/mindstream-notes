@@ -27,6 +27,7 @@ use std::collections::HashMap;
 use chrono::Utc;
 use etebase::error::Error as EtebaseError;
 use etebase::managers::{CollectionManager, ItemManager};
+use etebase::utils::randombytes;
 use etebase::{Account, Collection, FetchOptions, Item, ItemMetadata};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -44,12 +45,22 @@ const ITEM_TYPE_FOLDER: &str = "ms-md-folder";
 const KIND_NOTES: &str = "notes";
 const KIND_FOLDERS: &str = "folders";
 
-const PAYLOAD_SCHEMA: u32 = 1;
+const PAYLOAD_SCHEMA: u32 = 2;
 
 /// What ends up in `Item::content` for a note. We keep our own `id`
 /// (the local SQLite UUID) inside the payload so we can correlate
 /// pulled items back to existing local rows even if the etebase_uid
 /// hasn't been persisted yet (e.g. created on another device).
+///
+/// Schema versions:
+///   * **1** — legacy. `yrs_state` is a `Y.Text "body"` blob (the old
+///     Rust-side diff path). No `body` snapshot, no `crypto_key`. Read
+///     by `apply_note` for backward compat; never written by this code.
+///   * **2** — current. `yrs_state` is a y-prosemirror `XmlFragment`
+///     update produced by the live editor. `body` is the rendered
+///     markdown snapshot (canonical for fast local reads — Rust doesn't
+///     try to render markdown from prosemirror). `crypto_key` is the
+///     AES-GCM secret used by the live collab provider.
 #[derive(Debug, Serialize, Deserialize)]
 struct NotePayload {
     schema: u32,
@@ -63,6 +74,13 @@ struct NotePayload {
     /// yrs-encoded Doc state — see sync/yrs_doc.rs.
     #[serde(with = "serde_bytes")]
     yrs_state: Vec<u8>,
+    /// v2: rendered markdown snapshot. Default empty for legacy decode.
+    #[serde(default)]
+    body: String,
+    /// v2: 32-byte AES-GCM key for the live collab room. Default empty
+    /// for legacy decode; absence means "no live collab for this note".
+    #[serde(default, with = "serde_bytes")]
+    crypto_key: Vec<u8>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -339,30 +357,53 @@ fn apply_note(db: &Db, item: &Item) -> AppResult<()> {
         let tx = c.transaction()?;
 
         // Existing local state, if any. We need yrs_state to merge into.
-        let existing: Option<(Vec<u8>, i64)> = tx
+        let existing: Option<(Vec<u8>, i64, i64)> = tx
             .query_row(
-                "SELECT yrs_state, dirty FROM notes WHERE id = ?1",
+                "SELECT yrs_state, dirty, payload_schema FROM notes WHERE id = ?1",
                 params![payload.id],
                 |r| {
                     Ok((
                         r.get::<_, Option<Vec<u8>>>(0)?.unwrap_or_default(),
                         r.get(1)?,
+                        r.get(2)?,
                     ))
                 },
             )
             .optional()?;
 
+        let incoming_schema = payload.schema as i64;
         let (merged_state, dirty_after) = match existing {
-            Some((local_state, local_dirty)) if !local_state.is_empty() => {
+            // Same-schema CRDT merge: this is the common case once both
+            // devices are on the same payload version.
+            Some((local_state, local_dirty, local_schema))
+                if !local_state.is_empty() && local_schema == incoming_schema =>
+            {
                 let merged = yrs_doc::merge_remote(&local_state, &payload.yrs_state);
-                // If we had unpushed local edits, the merge contains both sides
-                // — keep dirty=1 so the next push uploads the merged state and
-                // lets the *server* converge with anyone else's offline edits.
+                // If we had unpushed local edits, the merge contains both sides —
+                // keep dirty=1 so the next push uploads the merged state and lets
+                // the *server* converge with anyone else's offline edits.
                 (merged, local_dirty)
             }
+            // Either no local state, or the schema changed under us
+            // (legacy v1 row got a v2 push from another device, or vice
+            // versa). Take the remote bytes wholesale — yrs can't merge
+            // across formats. Local body becomes whatever the new schema
+            // dictates below.
             _ => (payload.yrs_state.clone(), 0),
         };
-        let body = yrs_doc::to_markdown(&merged_state);
+        // For v2 payloads the remote ships the rendered markdown alongside
+        // the prosemirror state — Rust can't render markdown from XmlFragment.
+        // For v1 we still have the Rust-side Y.Text → markdown helper.
+        let body = if payload.schema >= 2 {
+            payload.body.clone()
+        } else {
+            yrs_doc::to_markdown(&merged_state)
+        };
+        let crypto_key: Option<Vec<u8>> = if payload.crypto_key.is_empty() {
+            None
+        } else {
+            Some(payload.crypto_key.clone())
+        };
         let modified = Utc::now().to_rfc3339();
 
         let exists = tx
@@ -378,8 +419,9 @@ fn apply_note(db: &Db, item: &Item) -> AppResult<()> {
                 "UPDATE notes
                  SET parent_collection_id = ?1, title = ?2, body = ?3, position = ?4,
                      modified = ?5, trashed_at = ?6, yrs_state = ?7,
-                     etebase_uid = ?8, etebase_etag = ?9, dirty = ?10
-                 WHERE id = ?11",
+                     etebase_uid = ?8, etebase_etag = ?9, dirty = ?10,
+                     crypto_key = COALESCE(?11, crypto_key), payload_schema = ?12
+                 WHERE id = ?13",
                 params![
                     payload.parent_folder_id,
                     payload.title,
@@ -391,6 +433,8 @@ fn apply_note(db: &Db, item: &Item) -> AppResult<()> {
                     item.uid(),
                     etag,
                     dirty_after,
+                    crypto_key,
+                    incoming_schema,
                     payload.id,
                 ],
             )?;
@@ -398,8 +442,9 @@ fn apply_note(db: &Db, item: &Item) -> AppResult<()> {
             tx.execute(
                 "INSERT INTO notes (id, parent_collection_id, title, body, position,
                                     created, modified, trashed_at, yrs_state,
-                                    etebase_uid, etebase_etag, dirty)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7, ?8, ?9, ?10, 0)",
+                                    etebase_uid, etebase_etag, dirty,
+                                    crypto_key, payload_schema)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7, ?8, ?9, ?10, 0, ?11, ?12)",
                 params![
                     payload.id,
                     payload.parent_folder_id,
@@ -411,6 +456,8 @@ fn apply_note(db: &Db, item: &Item) -> AppResult<()> {
                     merged_state,
                     item.uid(),
                     etag,
+                    crypto_key,
+                    incoming_schema,
                 ],
             )?;
         }
@@ -474,13 +521,16 @@ fn push_folders(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult
         prepared.push((item, row.id.clone()));
     }
 
-    transact_or_resolve(im, &mut prepared, &mut report.conflicts_resolved)
+    let local_ids: Vec<String> = prepared.iter().map(|(_, id)| id.clone()).collect();
+    let mut items: Vec<Item> = prepared.into_iter().map(|(i, _)| i).collect();
+    transact_or_resolve(im, &mut items, &mut report.conflicts_resolved)
         .map_err(|e| AppError::InvalidArg(format!("transaction folders: {e}")))?;
 
+    let pushed = items.len();
     // Persist new uids/etags + clear dirty flag.
     db.with_conn_mut(|c| {
         let tx = c.transaction()?;
-        for (item, local_id) in &prepared {
+        for (item, local_id) in items.iter().zip(local_ids.iter()) {
             tx.execute(
                 "UPDATE collections
                  SET etebase_uid = ?1, etebase_etag = ?2, dirty = 0
@@ -491,7 +541,7 @@ fn push_folders(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult
         tx.commit()?;
         Ok(())
     })?;
-    report.folders_pushed += prepared.len();
+    report.folders_pushed += pushed;
 
     drain_tombstones(db, im, "folder")
 }
@@ -502,8 +552,22 @@ fn push_notes(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult<(
         return drain_tombstones(db, im, "note");
     }
 
-    let mut prepared: Vec<(Item, String)> = Vec::with_capacity(dirty.len());
+    // (Item, local_id, crypto_key_to_persist). The third tuple slot is the
+    // newly-generated key for notes that didn't have one yet — we write it
+    // back to SQLite alongside the etag/uid in the post-transaction step
+    // so the editor can pick it up immediately.
+    let mut prepared: Vec<(Item, String, Option<Vec<u8>>)> = Vec::with_capacity(dirty.len());
     for row in &dirty {
+        // Generate a fresh per-note collab key the first time we push it.
+        // Subsequent pushes ride the same key so peers' editors stay
+        // connected to the same room.
+        let (key_for_payload, key_to_persist) = match &row.crypto_key {
+            Some(k) if !k.is_empty() => (k.clone(), None),
+            _ => {
+                let k = randombytes(32);
+                (k.clone(), Some(k))
+            }
+        };
         let payload = NotePayload {
             schema: PAYLOAD_SCHEMA,
             id: row.id.clone(),
@@ -513,6 +577,8 @@ fn push_notes(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult<(
             tags: row.tags.clone(),
             trashed_at: row.trashed_at.clone(),
             yrs_state: row.yrs_state.clone(),
+            body: row.body.clone(),
+            crypto_key: key_for_payload,
         };
         let bytes = rmp_serde::to_vec_named(&payload)
             .map_err(|e| AppError::InvalidArg(format!("encode note: {e}")))?;
@@ -535,26 +601,41 @@ fn push_notes(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult<(
             im.create(&meta, &bytes)
                 .map_err(|e| AppError::InvalidArg(format!("create note item: {e}")))?
         };
-        prepared.push((item, row.id.clone()));
+        prepared.push((item, row.id.clone(), key_to_persist));
     }
 
-    transact_or_resolve(im, &mut prepared, &mut report.conflicts_resolved)
+    // Split prepared into parallel vecs so transact_or_resolve can mutate
+    // the items in-place (Item isn't Clone) while we keep the local id +
+    // key-to-persist sidecars by index.
+    let local_ids: Vec<String> = prepared.iter().map(|(_, id, _)| id.clone()).collect();
+    let new_keys: Vec<Option<Vec<u8>>> = prepared.iter().map(|(_, _, k)| k.clone()).collect();
+    let mut items: Vec<Item> = prepared.into_iter().map(|(i, _, _)| i).collect();
+    transact_or_resolve(im, &mut items, &mut report.conflicts_resolved)
         .map_err(|e| AppError::InvalidArg(format!("transaction notes: {e}")))?;
 
+    let pushed = items.len();
     db.with_conn_mut(|c| {
         let tx = c.transaction()?;
-        for (item, local_id) in &prepared {
+        for ((item, local_id), new_key) in items.iter().zip(local_ids.iter()).zip(new_keys.iter()) {
             tx.execute(
                 "UPDATE notes
-                 SET etebase_uid = ?1, etebase_etag = ?2, dirty = 0
-                 WHERE id = ?3",
-                params![item.uid(), item.etag(), local_id],
+                 SET etebase_uid = ?1, etebase_etag = ?2, dirty = 0,
+                     crypto_key = COALESCE(?3, crypto_key),
+                     payload_schema = ?4
+                 WHERE id = ?5",
+                params![
+                    item.uid(),
+                    item.etag(),
+                    new_key,
+                    PAYLOAD_SCHEMA as i64,
+                    local_id,
+                ],
             )?;
         }
         tx.commit()?;
         Ok(())
     })?;
-    report.notes_pushed += prepared.len();
+    report.notes_pushed += pushed;
 
     drain_tombstones(db, im, "note")
 }
@@ -564,12 +645,12 @@ fn push_notes(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult<(
 /// pathological case doesn't loop forever.
 fn transact_or_resolve(
     im: &ItemManager,
-    prepared: &mut [(Item, String)],
+    items: &mut [Item],
     conflicts: &mut usize,
 ) -> Result<(), EtebaseError> {
     const MAX_ATTEMPTS: usize = 5;
     for attempt in 0..MAX_ATTEMPTS {
-        let result = im.transaction(prepared.iter().map(|(i, _)| i), None);
+        let result = im.transaction(items.iter(), None);
         match result {
             Ok(()) => return Ok(()),
             Err(EtebaseError::Conflict(msg)) => {
@@ -578,7 +659,7 @@ fn transact_or_resolve(
                     attempt + 1
                 );
                 *conflicts += 1;
-                refetch_and_remerge(im, prepared)?;
+                refetch_and_remerge(im, items)?;
             }
             Err(e) => return Err(e),
         }
@@ -588,15 +669,12 @@ fn transact_or_resolve(
     ))
 }
 
-fn refetch_and_remerge(
-    im: &ItemManager,
-    prepared: &mut [(Item, String)],
-) -> Result<(), EtebaseError> {
+fn refetch_and_remerge(im: &ItemManager, items: &mut [Item]) -> Result<(), EtebaseError> {
     // Fetch the latest server copy of each item we tried to push; if
     // it's a note, merge its yrs state into ours so neither side wins
     // outright. For folders, last-write-wins on the metadata is fine —
     // folders are placeholders, not user-editable content.
-    for (item, _) in prepared.iter_mut() {
+    for item in items.iter_mut() {
         let server = im.fetch(item.uid(), None)?;
         if server.is_deleted() || server.is_missing_content() {
             // Server has nothing newer than what we're pushing, but our
@@ -693,6 +771,11 @@ struct DirtyNote {
     yrs_state: Vec<u8>,
     etebase_uid: Option<String>,
     tags: Vec<String>,
+    /// Rendered markdown snapshot — pushed in v2 payloads so peers don't
+    /// have to render markdown from XmlFragment server-side.
+    body: String,
+    /// Per-note collab key. None on first push; push_notes generates one.
+    crypto_key: Option<Vec<u8>>,
 }
 
 fn load_dirty_folders(db: &Db) -> AppResult<Vec<DirtyFolder>> {
@@ -719,7 +802,7 @@ fn load_dirty_notes(db: &Db) -> AppResult<Vec<DirtyNote>> {
     let rows: Vec<DirtyNote> = db.with_conn(|c| {
         let mut stmt = c.prepare(
             "SELECT id, parent_collection_id, title, position, trashed_at,
-                    yrs_state, etebase_uid
+                    yrs_state, etebase_uid, body, crypto_key
              FROM notes WHERE dirty = 1",
         )?;
         let rows = stmt.query_map([], |r| {
@@ -732,6 +815,8 @@ fn load_dirty_notes(db: &Db) -> AppResult<Vec<DirtyNote>> {
                 yrs_state: r.get::<_, Option<Vec<u8>>>(5)?.unwrap_or_default(),
                 etebase_uid: r.get(6)?,
                 tags: Vec::new(),
+                body: r.get(7)?,
+                crypto_key: r.get::<_, Option<Vec<u8>>>(8)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -784,6 +869,45 @@ fn save_stoken(db: &Db, kind: &str, stoken: Option<&str>) -> AppResult<()> {
 
 fn now_unix_ms() -> i64 {
     Utc::now().timestamp_millis()
+}
+
+/// Room metadata the live-collab editor needs to connect. Returned by
+/// `note_room_info`. `None` for the whole record means "this note can't
+/// join a room yet" — typically because it hasn't been pushed to etebase
+/// (no UID), or no per-note key exists locally (note was created on this
+/// device and never synced).
+#[derive(Debug, Serialize)]
+pub struct RoomInfo {
+    /// The Etebase Item UID — used as the room name across devices.
+    pub room_id: String,
+    /// 32-byte AES-GCM secret, base64 (URL-safe) so it survives JSON IPC
+    /// without ballooning into a number array.
+    pub key_b64: String,
+}
+
+#[tauri::command]
+pub fn note_room_info(db: tauri::State<'_, Db>, id: String) -> Result<Option<RoomInfo>, String> {
+    db.with_conn(|c| {
+        let row: Option<(Option<String>, Option<Vec<u8>>)> = c
+            .query_row(
+                "SELECT etebase_uid, crypto_key FROM notes WHERE id = ?1",
+                params![id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let Some((Some(uid), Some(key))) = row else {
+            return Ok(None);
+        };
+        if key.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(RoomInfo {
+            room_id: uid,
+            key_b64: etebase::utils::to_base64(&key)
+                .map_err(|e| AppError::InvalidArg(format!("encode key: {e}")))?,
+        }))
+    })
+    .map_err(Into::into)
 }
 
 // Public helper used by notes/collections after a purge: queue server-side
