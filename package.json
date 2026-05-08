@@ -22,7 +22,7 @@
     "@sveltejs/kit": "^2.15.0",
     "@sveltejs/vite-plugin-svelte": "^5.0.3",
     "@tailwindcss/vite": "^4.0.0",
-    "@tauri-apps/cli": "^2.1.0",
+    "@tauri-apps/cli": "^2.11.0",
     "@testing-library/svelte": "^5.2.0",
     "@types/node": "^22.10.0",
     "happy-dom": "^15.11.0",
@@ -37,7 +37,7 @@
   "dependencies": {
     "@milkdown/crepe": "^7.5.8",
     "@milkdown/kit": "^7.5.8",
-    "@tauri-apps/api": "^2.1.1",
+    "@tauri-apps/api": "^2.11.0",
     "@tauri-apps/plugin-autostart": "~2",
     "@tauri-apps/plugin-shell": "^2.0.1",
     "bits-ui": "1.0.0-next.78",

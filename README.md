@@ -1,3 +1,8 @@
+## Dependencies
+
+Install OpenSSL libraries or the `perl` build system 
+to build/link openssl crypto dependencies
+
 ## Building
 
 Build command
