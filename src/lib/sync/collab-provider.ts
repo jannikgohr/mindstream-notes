@@ -38,6 +38,30 @@ const IV_LEN = 12;
 const RECONNECT_INITIAL_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
 
+/** First/last few base64 chars of the key — enough to confirm two
+ *  devices imported the same secret without leaking the secret. */
+function keyFingerprint(bytes: Uint8Array): string {
+  let bin = '';
+  for (let i = 0; i < bytes.byteLength; i++) {
+    bin += String.fromCharCode(bytes[i]);
+  }
+  const b64 = btoa(bin);
+  return `${b64.slice(0, 3)}…${b64.slice(-3)}`;
+}
+
+function frameName(type: number): string {
+  switch (type) {
+    case FRAME_SYNC_STEP_1:
+      return 'sync_step_1';
+    case FRAME_SYNC_STEP_2:
+      return 'sync_step_2';
+    case FRAME_AWARENESS:
+      return 'awareness';
+    default:
+      return `unknown(0x${type.toString(16)})`;
+  }
+}
+
 export interface CollabProviderOptions {
   /** wss:// URL of the relay. */
   url: string;
@@ -88,6 +112,12 @@ export class CollabProvider {
     this.opts.doc.on('update', this.docUpdateHandler);
     this.opts.awareness.on('update', this.awarenessUpdateHandler);
 
+    console.info(
+      '[collab] init room=%s key=%s url=%s',
+      this.opts.roomId,
+      keyFingerprint(this.opts.keyBytes),
+      this.opts.url
+    );
     void this.connect();
   }
 
@@ -144,6 +174,7 @@ export class CollabProvider {
     ws.onopen = () => {
       this.reconnectAttempt = 0;
       this.opts.onStatusChange?.(true);
+      console.info('[collab] open room=%s', this.opts.roomId);
       // Initial sync handshake: send our state vector so peers already in
       // the room can compute a diff and ship us their newer ops.
       const sv = Y.encodeStateVector(this.opts.doc);
@@ -157,12 +188,19 @@ export class CollabProvider {
     ws.onmessage = (e) => {
       void this.handleMessage(e.data);
     };
-    ws.onclose = () => {
+    ws.onclose = (e) => {
       this.ws = null;
       this.opts.onStatusChange?.(false);
+      console.info(
+        '[collab] close room=%s code=%d reason=%s',
+        this.opts.roomId,
+        e.code,
+        e.reason || '(none)'
+      );
       this.scheduleReconnect();
     };
-    ws.onerror = () => {
+    ws.onerror = (e) => {
+      console.warn('[collab] error room=%s', this.opts.roomId, e);
       // onclose will fire next; reconnect logic lives there.
     };
   }
@@ -183,7 +221,14 @@ export class CollabProvider {
 
   private async send(type: number, payload: Uint8Array): Promise<void> {
     const ws = this.ws;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      console.debug(
+        '[collab] send dropped (ws not open) %s payload=%dB',
+        frameName(type),
+        payload.byteLength
+      );
+      return;
+    }
     if (!this.cryptoKey) return;
     const iv = crypto.getRandomValues(new Uint8Array(IV_LEN));
     // TS 5.7's lib.dom.d.ts narrowed BufferSource to require
@@ -204,6 +249,12 @@ export class CollabProvider {
     frame.set(ct, 1 + IV_LEN);
     try {
       ws.send(frame);
+      console.debug(
+        '[collab] send %s payload=%dB frame=%dB',
+        frameName(type),
+        payload.byteLength,
+        frame.byteLength
+      );
     } catch (err) {
       console.warn('[collab] send failed:', err);
     }
@@ -228,11 +279,24 @@ export class CollabProvider {
       );
     } catch (err) {
       // Wrong key, malformed ciphertext, or replay from a different
-      // room — drop silently. A genuinely broken peer will keep failing
-      // and the user will notice via the status badge.
-      console.debug('[collab] decrypt failed', err);
+      // room — drop loudly so the user can spot key mismatches when
+      // diagnosing "live editing not working." A genuinely broken peer
+      // will keep failing and the badge will stay offline.
+      console.warn(
+        '[collab] decrypt failed type=%s frame=%dB room=%s — likely a key mismatch between devices',
+        frameName(type),
+        frame.byteLength,
+        this.opts.roomId,
+        err
+      );
       return;
     }
+    console.debug(
+      '[collab] recv %s payload=%dB frame=%dB',
+      frameName(type),
+      pt.byteLength,
+      frame.byteLength
+    );
     switch (type) {
       case FRAME_SYNC_STEP_1: {
         // Peer sent their state vector. Reply with the diff they're missing.
