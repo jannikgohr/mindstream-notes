@@ -244,6 +244,20 @@
     });
   });
 
+  // Keep open editor tab titles in sync with the file tree. This catches
+  // remote renames pulled by `sync_now` (where the title in tree.notesById
+  // changes under the still-open tab) as well as local renames triggered
+  // from the file tree's context menu. Iterating over Object.keys(notesById)
+  // makes the effect track both the key set and each visited title; new
+  // panels opened *after* this runs already see the current title at open
+  // time (see openNote() below) so we don't need to track openPanels.
+  $effect(() => {
+    for (const noteId of Object.keys(tree.notesById)) {
+      const panel = openPanels.get(noteId);
+      if (panel) panel.api.setTitle(tree.notesById[noteId].title);
+    }
+  });
+
   // Adapter functions handed to FileExplorer.
   const onOpenNote = (id: string) => openNote(id);
   const onOpenNoteRight = (id: string) =>
