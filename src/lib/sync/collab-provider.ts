@@ -20,7 +20,7 @@
  *
  * Server contract: receive a frame from client X in room R, broadcast
  * to every other client in R. No state, no peeking. See
- * scripts/collab-server.mjs for a 50-line reference impl.
+ * backend/collab-server.mjs for a 50-line reference impl.
  */
 
 import * as Y from 'yjs';
