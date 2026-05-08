@@ -1,0 +1,19 @@
+# Drop-in replacement for the yjs y-websocket-server container.
+#
+# The Mindstream client speaks a custom encrypted protocol that
+# y-websocket-server cannot decode (it logs `Error: Unknown message type`
+# and disconnects). This compose file builds the matching E2EE relay
+# from backend/collab-server.mjs.
+#
+# Usage from this directory:
+#   docker compose up -d --build
+services:
+  collab:
+    build: ..
+    container_name: mindstream-collab
+    restart: always
+    ports:
+      - "1234:1234"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=1234

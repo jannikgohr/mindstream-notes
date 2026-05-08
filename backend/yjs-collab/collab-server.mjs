@@ -10,7 +10,7 @@
  * Wire format (opaque to this server): [1 byte type][12 byte IV][N bytes ciphertext+tag].
  *
  * Run:
- *   node scripts/collab-server.mjs           # binds 0.0.0.0:1234
+ *   node backend/yjs-collab/collab-server.mjs           # binds 0.0.0.0:1234
  *   PORT=8080 HOST=127.0.0.1 node ...        # override
  *
  * Behind a reverse proxy (recommended), terminate TLS at the proxy and
