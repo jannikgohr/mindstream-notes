@@ -16,7 +16,8 @@
     type ServerType,
     type SessionInfo
   } from '$lib/api/auth';
-  import { syncNow, type SyncReport } from '$lib/api/sync';
+  import { type SyncReport } from '$lib/api/sync';
+  import { runSync } from '$lib/sync/runner';
   import { getSettingValue, settingsDialog } from '../store.svelte';
 
   let session = $state<SessionInfo | null>(null);
@@ -94,12 +95,12 @@
     }
   }
 
-  async function runSync() {
+  async function triggerSync() {
     if (syncing) return;
     syncing = true;
     error = null;
     try {
-      lastReport = await syncNow();
+      lastReport = await runSync();
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
     } finally {
@@ -140,7 +141,7 @@
         </div>
       </div>
       <div class="flex items-center gap-2 pt-1">
-        <Button size="sm" onclick={runSync} disabled={syncing || busy}>
+        <Button size="sm" onclick={triggerSync} disabled={syncing || busy}>
           {#if syncing}
             <Loader2 class="mr-1.5 size-3.5 animate-spin" />
             Syncing…
