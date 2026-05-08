@@ -33,6 +33,18 @@ pub struct Note {
     #[serde(flatten)]
     pub summary: NoteSummary,
     pub body: String,
+    /// Encoded yrs Doc state. Empty for never-edited notes. The editor
+    /// uses this to hydrate the y-prosemirror Doc on open.
+    #[serde(default)]
+    pub yrs_state: Vec<u8>,
+    /// 1 = legacy Y.Text format, 2 = y-prosemirror XmlFragment.
+    /// The editor reads this to decide whether to migrate.
+    #[serde(default = "default_payload_schema")]
+    pub payload_schema: u32,
+}
+
+fn default_payload_schema() -> u32 {
+    1
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -57,6 +69,13 @@ pub struct UpdateNote {
     pub parent_collection_id: Option<Option<String>>,
     pub position: Option<i64>,
     pub tags: Option<Vec<String>>,
+    /// When the live-collab editor is driving the save, it supplies the
+    /// yrs Doc state alongside the rendered markdown body. Presence of
+    /// this field also flips the row's payload_schema to 2, so future
+    /// pushes use the v2 NotePayload format. Absence preserves the
+    /// legacy Rust-side "diff old vs new markdown into Y.Text" path.
+    #[serde(default)]
+    pub yrs_state: Option<Vec<u8>>,
 }
 
 fn row_to_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<NoteSummary> {
@@ -101,21 +120,29 @@ pub fn list(conn: &Connection, include_trashed: bool) -> AppResult<Vec<NoteSumma
 
 pub fn load(conn: &Connection, id: &str) -> AppResult<Note> {
     let mut stmt = conn.prepare(
-        "SELECT id, parent_collection_id, title, position, created, modified, trashed_at, body
+        "SELECT id, parent_collection_id, title, position, created, modified,
+                trashed_at, body, yrs_state, payload_schema
          FROM notes WHERE id = ?1",
     )?;
     let row_data = stmt
         .query_row(params![id], |row| {
             let summary = row_to_summary(row)?;
             let body: String = row.get("body")?;
-            Ok((summary, body))
+            let yrs_state: Option<Vec<u8>> = row.get("yrs_state")?;
+            let payload_schema: i64 = row.get("payload_schema")?;
+            Ok((summary, body, yrs_state, payload_schema))
         })
         .optional()?;
 
     match row_data {
-        Some((mut summary, body)) => {
+        Some((mut summary, body, yrs_state, payload_schema)) => {
             summary.tags = load_tags(conn, id)?;
-            Ok(Note { summary, body })
+            Ok(Note {
+                summary,
+                body,
+                yrs_state: yrs_state.unwrap_or_default(),
+                payload_schema: payload_schema.max(1) as u32,
+            })
         }
         None => Err(AppError::NotFound(format!("note {id}"))),
     }
@@ -127,20 +154,15 @@ pub fn create(conn: &Connection, input: CreateNote) -> AppResult<Note> {
     let position = next_position(conn, input.parent_collection_id.as_deref())?;
     let title = input.title.unwrap_or_else(|| "Untitled".to_string());
     let body = input.body.unwrap_or_default();
-    let yrs_state = yrs_doc::init_with_markdown(&body);
+    // Leave yrs_state empty for new notes — the live editor will hydrate
+    // a fresh y-prosemirror Doc from `body` on first open and write the
+    // resulting v2 state back through `update`. Pre-seeding a v1 Y.Text
+    // here would fight the editor's initialisation.
     conn.execute(
         "INSERT INTO notes(id, parent_collection_id, title, body, position,
-                            created, modified, yrs_state, dirty)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7, 1)",
-        params![
-            id,
-            input.parent_collection_id,
-            title,
-            body,
-            position,
-            now,
-            yrs_state,
-        ],
+                            created, modified, dirty)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, 1)",
+        params![id, input.parent_collection_id, title, body, position, now,],
     )?;
     load(conn, &id)
 }
@@ -156,24 +178,38 @@ pub fn update(conn: &mut Connection, input: UpdateNote) -> AppResult<Note> {
         )?;
     }
     if let Some(new_body) = &input.body {
-        // The editor saves the entire body each debounce. To preserve CRDT
-        // semantics for offline merge we have to translate that into yrs ops
-        // — diff old → new at byte granularity and replay against the Doc.
-        // See sync/yrs_doc.rs for the rationale.
-        let (old_body, old_state) = tx.query_row(
-            "SELECT body, yrs_state FROM notes WHERE id = ?1",
-            params![input.id],
-            |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<Vec<u8>>>(1)?)),
-        )?;
-        let base_state = match old_state {
-            Some(s) if !s.is_empty() => s,
-            _ => yrs_doc::init_with_markdown(&old_body),
-        };
-        let new_state = yrs_doc::apply_local_edit(&base_state, &old_body, new_body);
-        tx.execute(
-            "UPDATE notes SET body = ?1, yrs_state = ?2, modified = ?3 WHERE id = ?4",
-            params![new_body, new_state, now, input.id],
-        )?;
+        // Two paths converge here:
+        //   * The live-collab editor supplies its own yrs_state — it
+        //     already owns the Doc, has applied the user's keystrokes
+        //     through y-prosemirror, and computed the new state directly.
+        //     We trust those bytes and stamp payload_schema=2.
+        //   * Legacy callers (browser fallback, programmatic edits) just
+        //     send the new markdown body. We diff old → new at byte
+        //     granularity and replay against the v1 Y.Text Doc for CRDT
+        //     correctness on offline-edit reconciliation.
+        if let Some(supplied_state) = &input.yrs_state {
+            tx.execute(
+                "UPDATE notes
+                 SET body = ?1, yrs_state = ?2, modified = ?3, payload_schema = 2
+                 WHERE id = ?4",
+                params![new_body, supplied_state, now, input.id],
+            )?;
+        } else {
+            let (old_body, old_state) = tx.query_row(
+                "SELECT body, yrs_state FROM notes WHERE id = ?1",
+                params![input.id],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<Vec<u8>>>(1)?)),
+            )?;
+            let base_state = match old_state {
+                Some(s) if !s.is_empty() => s,
+                _ => yrs_doc::init_with_markdown(&old_body),
+            };
+            let new_state = yrs_doc::apply_local_edit(&base_state, &old_body, new_body);
+            tx.execute(
+                "UPDATE notes SET body = ?1, yrs_state = ?2, modified = ?3 WHERE id = ?4",
+                params![new_body, new_state, now, input.id],
+            )?;
+        }
     }
     if let Some(parent) = &input.parent_collection_id {
         tx.execute(
@@ -367,6 +403,7 @@ mod tests {
                     parent_collection_id: None,
                     position: None,
                     tags: None,
+                    yrs_state: None,
                 },
             )
         })
@@ -403,6 +440,7 @@ mod tests {
                     position: None,
                     tags: None,
                     parent_collection_id: Some(Some(coll.id.clone())),
+                    yrs_state: None,
                 },
             )
         })
@@ -424,6 +462,7 @@ mod tests {
                     position: None,
                     tags: None,
                     parent_collection_id: Some(None),
+                    yrs_state: None,
                 },
             )
         })
@@ -475,6 +514,7 @@ mod tests {
                     position: None,
                     parent_collection_id: None,
                     tags: Some(vec!["work".into(), "urgent".into()]),
+                    yrs_state: None,
                 },
             )
         })
@@ -498,7 +538,11 @@ mod tests {
     }
 
     #[test]
-    fn create_marks_note_dirty_with_yrs_state() {
+    fn create_marks_note_dirty_with_empty_yrs_state() {
+        // Post-collab: notes::create no longer pre-seeds the yrs_state.
+        // The live editor hydrates a fresh y-prosemirror Doc from `body`
+        // on first open and writes back a v2 state through update().
+        // Until then we just want dirty=1 so the periodic push picks it up.
         let db = open_memory_for_tests();
         let n = empty_note(&db, None);
         assert_eq!(dirty_flag(&db, &n.summary.id), 1);
@@ -512,10 +556,42 @@ mod tests {
                 .unwrap_or_default())
             })
             .unwrap();
-        assert!(
-            !state.is_empty(),
-            "yrs_state should be initialised on create"
-        );
+        assert!(state.is_empty(), "yrs_state stays empty until first edit");
+    }
+
+    #[test]
+    fn collab_save_path_writes_state_and_bumps_schema() {
+        // When the live editor supplies yrs_state, update() takes the
+        // bytes verbatim (no markdown diff) and flips payload_schema to 2.
+        let db = open_memory_for_tests();
+        let n = empty_note(&db, None);
+        let supplied = vec![0xCA, 0xFE, 0xBA, 0xBE];
+        db.with_conn_mut(|c| {
+            update(
+                c,
+                UpdateNote {
+                    id: n.summary.id.clone(),
+                    title: None,
+                    body: Some("body via collab".into()),
+                    parent_collection_id: None,
+                    position: None,
+                    tags: None,
+                    yrs_state: Some(supplied.clone()),
+                },
+            )
+        })
+        .unwrap();
+        let (state, schema) = db
+            .with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT yrs_state, payload_schema FROM notes WHERE id = ?1",
+                    params![n.summary.id],
+                    |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, i64>(1)?)),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(state, supplied);
+        assert_eq!(schema, 2);
     }
 
     #[test]
@@ -542,6 +618,7 @@ mod tests {
                     parent_collection_id: None,
                     position: None,
                     tags: None,
+                    yrs_state: None,
                 },
             )
         })

@@ -146,6 +146,26 @@ const MIGRATIONS: &[Migration] = &[
             CREATE INDEX idx_collections_etebase_uid ON collections(etebase_uid) WHERE etebase_uid IS NOT NULL;
         "#,
     },
+    Migration {
+        to: 5,
+        // Live-collab support, two columns:
+        //   crypto_key      — 32-byte AES-GCM secret used when this note's
+        //                     editor connects to the collab relay. Generated
+        //                     on first push and shipped to other devices via
+        //                     the v2 NotePayload (see sync/mod.rs). NULL means
+        //                     "not yet generated" — note hasn't been pushed
+        //                     or predates this migration; live collab is
+        //                     unavailable until the next push fills it in.
+        //   payload_schema  — which NotePayload format the local yrs_state
+        //                     uses. 1 = legacy Y.Text "body" (Rust-side diff
+        //                     path); 2 = y-prosemirror XmlFragment owned by
+        //                     the live editor. The editor reads this on open
+        //                     to decide whether to migrate the doc.
+        sql: r#"
+            ALTER TABLE notes ADD COLUMN crypto_key     BLOB;
+            ALTER TABLE notes ADD COLUMN payload_schema INTEGER NOT NULL DEFAULT 1;
+        "#,
+    },
 ];
 
 pub fn run(conn: &mut Connection) -> AppResult<()> {

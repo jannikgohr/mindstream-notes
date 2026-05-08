@@ -77,7 +77,9 @@ function maxPosition(arr: { position: number }[]): number {
     created: t,
     modified: t,
     tags: [],
-    trashed: false
+    trashed: false,
+    yrs_state: [],
+    payload_schema: 1
   };
   const meeting: Note = {
     id: 'note_seed_meeting',
@@ -88,7 +90,9 @@ function maxPosition(arr: { position: number }[]): number {
     created: t,
     modified: t,
     tags: [],
-    trashed: false
+    trashed: false,
+    yrs_state: [],
+    payload_schema: 1
   };
   const ideas: Note = {
     id: 'note_seed_ideas',
@@ -99,7 +103,9 @@ function maxPosition(arr: { position: number }[]): number {
     created: t,
     modified: t,
     tags: [],
-    trashed: false
+    trashed: false,
+    yrs_state: [],
+    payload_schema: 1
   };
   notes.set(welcome.id, welcome);
   notes.set(meeting.id, meeting);
@@ -178,7 +184,9 @@ export const mockApi = {
       created: t,
       modified: t,
       tags: [],
-      trashed: false
+      trashed: false,
+      yrs_state: [],
+      payload_schema: 1
     };
     notes.set(n.id, n);
     return { ...n };

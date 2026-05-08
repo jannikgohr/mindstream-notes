@@ -21,6 +21,14 @@ export interface NoteSummary {
 
 export interface Note extends NoteSummary {
   body: string;
+  /**
+   * Encoded yjs Doc state. Empty for never-edited notes. The editor
+   * applies this to its y-prosemirror Doc on open. Carried as a JSON
+   * number array — wasteful for large docs but avoids a base64 hop.
+   */
+  yrs_state: number[];
+  /** 1 = legacy Y.Text, 2 = y-prosemirror XmlFragment (current). */
+  payload_schema: number;
 }
 
 export interface CreateNoteInput {
@@ -40,6 +48,13 @@ export interface UpdateNoteInput {
   parent_collection_id?: string | null;
   position?: number;
   tags?: string[];
+  /**
+   * When the live editor is the source of truth, it ships its computed
+   * yjs state alongside the rendered markdown so Rust skips the
+   * markdown-diff path. Presence of this field also flips the row's
+   * payload_schema to 2 (see src-tauri/src/notes/mod.rs::update).
+   */
+  yrs_state?: number[];
 }
 
 export function listNotes(includeTrashed = false): Promise<NoteSummary[]> {

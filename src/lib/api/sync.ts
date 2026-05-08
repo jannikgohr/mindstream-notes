@@ -23,3 +23,20 @@ export async function syncNow(): Promise<SyncReport> {
   }
   return await tauriInvoke<SyncReport>('sync_now');
 }
+
+/**
+ * What the live-collab editor needs to join a note's room. `null` means
+ * the note can't be joined yet — typically because it hasn't been pushed
+ * to etebase (no UID), or no per-note key has been generated locally.
+ * The editor falls back to single-device mode in that case.
+ */
+export interface RoomInfo {
+  room_id: string;
+  /** Standard base64 of the 32-byte AES-GCM key. */
+  key_b64: string;
+}
+
+export async function noteRoomInfo(id: string): Promise<RoomInfo | null> {
+  if (!isTauri()) return null;
+  return await tauriInvoke<RoomInfo | null>('note_room_info', { id });
+}

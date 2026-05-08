@@ -71,6 +71,7 @@ pub fn run() {
             auth::etebase_session,
             // Sync
             sync::sync_now,
+            sync::note_room_info,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
