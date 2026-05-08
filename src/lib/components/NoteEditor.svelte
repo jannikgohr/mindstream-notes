@@ -228,6 +228,28 @@
     }
     yDocUpdateHandler = null;
     getMarkdown = null;
+
+    // Detach y-prosemirror's collab plugins (ySyncPlugin / yCursorPlugin)
+    // *synchronously* before the provider's awareness teardown runs.
+    // provider.destroy() calls awareness.setLocalState(null), which fires
+    // an awareness 'update' event. If yCursorPlugin is still observing,
+    // it dispatches a cursor-decoration tx via view.dispatch — but
+    // crepe.destroy() is async, so by the time that tx applies the
+    // milkdown internal-plugin pipeline has already torn down
+    // editorStateCtx and we get "Context 'editorState' not found".
+    // cs.disconnect() reconfigures the editor's plugin list immediately
+    // (no async, no view.dispatch — just view.updateState), pulling
+    // yCursorPlugin out cleanly.
+    if (crepe) {
+      try {
+        crepe.editor.action((ctx) => {
+          ctx.get(collabServiceCtx).disconnect();
+        });
+      } catch (err) {
+        console.debug('[NoteEditor] collab disconnect failed', err);
+      }
+    }
+
     provider?.destroy();
     provider = null;
     collabOnline = false;
@@ -292,17 +314,26 @@
   }
 
   /**
-   * Stable hue from the username so the same user shows the same cursor
-   * colour across sessions and devices. Not security-relevant; just a
-   * tiny readability win.
+   * Stable colour from the username so the same user shows the same
+   * cursor colour across sessions and devices. Not security-relevant;
+   * just a tiny readability win.
+   *
+   * Must be hex (`#rrggbb`) — y-prosemirror's yCursorPlugin warns
+   * "A user uses an unsupported color format" on `hsl(...)` and similar
+   * CSS functions. We pick from a fixed palette so all peers agree on
+   * the same hex value for the same username without doing colour math.
    */
+  const CURSOR_COLORS = [
+    '#ef4444', '#f97316', '#eab308', '#22c55e', '#10b981',
+    '#06b6d4', '#0ea5e9', '#3b82f6', '#6366f1', '#8b5cf6',
+    '#a855f7', '#d946ef', '#ec4899', '#f43f5e', '#84cc16'
+  ];
   function pickColor(seed: string): string {
     let hash = 0;
     for (let i = 0; i < seed.length; i++) {
       hash = (hash * 31 + seed.charCodeAt(i)) | 0;
     }
-    const hue = Math.abs(hash) % 360;
-    return `hsl(${hue}, 70%, 50%)`;
+    return CURSOR_COLORS[Math.abs(hash) % CURSOR_COLORS.length];
   }
 
   /**
