@@ -3,11 +3,12 @@
 //! never imports `yrs` directly — that keeps the version pin in one place
 //! and the surface small enough to reason about.
 //!
-//! The wire format is the v2 update encoding (`encode_state_as_update_v2`).
-//! It's a single self-contained byte array that both clients can decode
-//! and apply to a fresh Doc, which is exactly what we need for the
-//! "send full state per save, server stores latest" pattern in
-//! `crate::sync`.
+//! The wire format is the v1 update encoding (`encode_state_as_update_v1`).
+//! v1 is what the JS editor produces (`Y.encodeStateAsUpdate` is v1 by
+//! default; the v2 variant is `Y.encodeStateAsUpdateV2`), so Rust has to
+//! match — otherwise `merge_remote` would silently fail to decode bytes
+//! coming from the editor and produce empty docs, which previously
+//! corrupted CRDT state on every sync conflict.
 //!
 //! Local edits arrive as "the editor saved a new full body" (the existing
 //! `save_note` IPC). To turn that into CRDT operations we diff the old
@@ -52,14 +53,14 @@ pub fn apply_local_edit(state: &[u8], old_md: &str, new_md: &str) -> Vec<u8> {
     encode_state(&doc)
 }
 
-/// Merge a remote v2 update into a local state. Y.js / yrs guarantees
+/// Merge a remote v1 update into a local state. Y.js / yrs guarantees
 /// this converges regardless of the order updates are applied in, which
 /// is what makes offline edits across N devices safe.
 pub fn merge_remote(local_state: &[u8], remote_state: &[u8]) -> Vec<u8> {
     let doc = load(local_state);
     {
         let mut txn = doc.transact_mut();
-        if let Ok(update) = Update::decode_v2(remote_state) {
+        if let Ok(update) = Update::decode_v1(remote_state) {
             let _ = txn.apply_update(update);
         }
     }
@@ -81,7 +82,7 @@ fn load(state: &[u8]) -> Doc {
         return doc;
     }
     let mut txn = doc.transact_mut();
-    if let Ok(update) = Update::decode_v2(state) {
+    if let Ok(update) = Update::decode_v1(state) {
         let _ = txn.apply_update(update);
     }
     drop(txn);
@@ -90,7 +91,7 @@ fn load(state: &[u8]) -> Doc {
 
 fn encode_state(doc: &Doc) -> Vec<u8> {
     let txn = doc.transact();
-    txn.encode_state_as_update_v2(&StateVector::default())
+    txn.encode_state_as_update_v1(&StateVector::default())
 }
 
 /// Walk a `similar` diff and emit Y.Text inserts/deletes against the live

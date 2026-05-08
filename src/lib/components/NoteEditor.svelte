@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import { Crepe } from '@milkdown/crepe';
-  import { listener, listenerCtx } from '@milkdown/kit/plugin/listener';
+  import { editorViewCtx, serializerCtx } from '@milkdown/kit/core';
   import { collab, collabServiceCtx } from '@milkdown/plugin-collab';
   import * as Y from 'yjs';
   import { Awareness } from 'y-protocols/awareness';
@@ -43,6 +43,16 @@
     'idle'
   );
   let loadError = $state<string | null>(null);
+
+  // Captured inside the editor's `action` callback so handleChange can
+  // read the live markdown without going through the listener plugin —
+  // see the long comment around the yDoc 'update' hook below.
+  let getMarkdown: (() => string) | null = null;
+  let yDocUpdateHandler: (() => void) | null = null;
+  // Gate yDoc 'update' events from triggering saves until we've finished
+  // hydrating the doc + binding the editor. Otherwise the initial template
+  // population would schedule a phantom save 800ms after open.
+  let saveReady = false;
 
   /**
    * Walks the note's ancestor folder chain to see if any of them is the
@@ -103,8 +113,23 @@
       // that y-prosemirror can't decode; for those notes we leave the
       // Doc empty and the collab service's applyTemplate populates it
       // from `note.body` instead — that's the lazy migration path.
+      //
+      // We also track whether the hydration left us with a real prosemirror
+      // fragment. The default applyTemplate condition is
+      // `yDocNode.textContent.length === 0`, which is true for image-only
+      // paragraphs, empty headings, etc. — letting it run on a populated
+      // fragment with no plain text would `fragment.delete(0, length)` and
+      // wipe the doc, broadcasting the wipe to peers via collab. So we
+      // only fall back to applyTemplate when the fragment is truly empty.
+      let hydratedFragment = false;
       if (note.payload_schema === 2 && note.yrs_state.length > 0) {
-        Y.applyUpdate(yDoc, new Uint8Array(note.yrs_state));
+        try {
+          Y.applyUpdate(yDoc, new Uint8Array(note.yrs_state));
+          hydratedFragment =
+            yDoc.getXmlFragment('prosemirror').length > 0;
+        } catch (err) {
+          console.warn('[NoteEditor] yrs_state hydration failed', err);
+        }
       }
 
       awareness = new Awareness(yDoc);
@@ -119,10 +144,48 @@
         console.debug('[NoteEditor] no session for awareness', err);
       }
 
+      crepe = new Crepe({ root: host, defaultValue: '' });
+      crepe.editor.use(collab);
+      await crepe.create();
+
+      // Bind y-doc + awareness AFTER create, then snapshot the serializer
+      // + view so we can render markdown on demand from any save trigger.
+      crepe.editor.action((ctx) => {
+        const cs = ctx.get(collabServiceCtx);
+        cs.bindDoc(yDoc!);
+        if (awareness) cs.setAwareness(awareness);
+        if (!hydratedFragment) {
+          // Empty doc → seed the fragment from the markdown body.
+          cs.applyTemplate(note.body);
+        }
+        cs.connect();
+
+        const serializer = ctx.get(serializerCtx);
+        const view = ctx.get(editorViewCtx);
+        getMarkdown = () => serializer(view.state.doc);
+      });
+
+      // Hook yDoc updates AFTER bind/applyTemplate/connect so the initial
+      // fragment population doesn't trip a phantom save. From here on, every
+      // doc mutation — whether a local keystroke (via y-prosemirror's
+      // ySyncPlugin) or a remote edit applied by the CollabProvider —
+      // schedules a debounced save. We don't go through the listener
+      // plugin's `markdownUpdated` because it filters out transactions with
+      // `addToHistory === false`, which is exactly what y-prosemirror sets
+      // on remote-applied syncs — i.e. peer edits would update the visible
+      // editor but never reach SQLite until the local user typed.
+      yDocUpdateHandler = () => {
+        if (!saveReady) return;
+        scheduleSave();
+      };
+      yDoc.on('update', yDocUpdateHandler);
+      saveReady = true;
+
       // Live collab is opt-in: a relay URL must be configured AND the
       // note has to have been pushed to etebase at least once (so it
-      // has a UID + key). Either missing → single-device mode, no
-      // websocket, just the local Doc.
+      // has a UID + key). Created AFTER the editor is fully bound so the
+      // provider's doc-update handler doesn't race with applyTemplate
+      // and doesn't attempt to broadcast the initial fragment seed.
       const collabUrl = (
         (getSettingValue('account.collabServerUrl') as string | undefined) ??
         ''
@@ -148,28 +211,6 @@
         }
       }
 
-      crepe = new Crepe({ root: host, defaultValue: '' });
-      crepe.editor.use(collab);
-      crepe.editor.use(listener).config((ctx) => {
-        ctx.get(listenerCtx).markdownUpdated((_ctx, markdown) => {
-          handleChange(markdown);
-        });
-      });
-      await crepe.create();
-
-      // Bind y-doc + awareness AFTER create. applyTemplate populates the
-      // Doc from `note.body` only if the Doc was empty at bind time; on
-      // subsequent opens the Doc already carries the previous state and
-      // the template is a no-op. This is the seam that lazily migrates
-      // v1 rows to v2 format.
-      crepe.editor.action((ctx) => {
-        const cs = ctx.get(collabServiceCtx);
-        cs.bindDoc(yDoc!);
-        if (awareness) cs.setAwareness(awareness);
-        cs.applyTemplate(note.body);
-        cs.connect();
-      });
-
       crepeReady = true;
       loading = false;
     } catch (err) {
@@ -181,6 +222,12 @@
 
   onDestroy(() => {
     if (saveTimer) clearTimeout(saveTimer);
+    saveReady = false;
+    if (yDoc && yDocUpdateHandler) {
+      yDoc.off('update', yDocUpdateHandler);
+    }
+    yDocUpdateHandler = null;
+    getMarkdown = null;
     provider?.destroy();
     provider = null;
     collabOnline = false;
@@ -203,21 +250,26 @@
     crepe.setReadonly(isTrashed);
   });
 
-  function handleChange(markdown: string) {
-    // setReadonly(true) already prevents user input, but the listener can
-    // still fire from programmatic mutations or in-flight changes during
-    // the read-only flip. Drop those silently rather than persisting an
-    // edit to a trashed note.
+  function scheduleSave() {
+    // setReadonly(true) already prevents user input, but yDoc 'update' can
+    // still fire from programmatic mutations or remote edits arriving on
+    // a note that just got trashed elsewhere. Drop those silently rather
+    // than persisting an edit to a trashed note.
     if (isTrashed) return;
     savingState = 'pending';
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(async () => {
       try {
         savingState = 'saving';
-        // Capture the y-doc state *now*, alongside the markdown the
-        // listener handed us, so Rust skips the markdown-diff path and
-        // accepts the bytes verbatim. Array.from is necessary — Tauri
-        // serialises Uint8Array as an empty object via JSON.stringify.
+        // Capture the markdown + y-doc state *now*, after the user has
+        // stopped typing for SAVE_DEBOUNCE_MS. Pulling markdown via the
+        // live serializer (instead of via the listener plugin) means
+        // remote-applied edits — which y-prosemirror dispatches with
+        // `addToHistory: false` and which the listener therefore ignores
+        // — are still reflected in the body we save. Array.from is
+        // necessary because Tauri serialises Uint8Array as an empty
+        // object via JSON.stringify.
+        const markdown = getMarkdown ? getMarkdown() : '';
         const yrsState = yDoc
           ? Array.from(Y.encodeStateAsUpdate(yDoc))
           : undefined;

@@ -205,8 +205,17 @@ pub fn update(conn: &mut Connection, input: UpdateNote) -> AppResult<Note> {
                 _ => yrs_doc::init_with_markdown(&old_body),
             };
             let new_state = yrs_doc::apply_local_edit(&base_state, &old_body, new_body);
+            // The diff path produces a Y.Text "body" doc — the v1 NotePayload
+            // shape — so any row that gets here has to be marked v1, even if
+            // it was previously a v2 (y-prosemirror) row. Otherwise the next
+            // editor open would see payload_schema=2 + a v1-shaped state,
+            // try to hydrate it as XmlFragment, get nothing, and silently
+            // fall back to the body field. Stamping the schema keeps row
+            // metadata in sync with the bytes we actually wrote.
             tx.execute(
-                "UPDATE notes SET body = ?1, yrs_state = ?2, modified = ?3 WHERE id = ?4",
+                "UPDATE notes
+                 SET body = ?1, yrs_state = ?2, modified = ?3, payload_schema = 1
+                 WHERE id = ?4",
                 params![new_body, new_state, now, input.id],
             )?;
         }
