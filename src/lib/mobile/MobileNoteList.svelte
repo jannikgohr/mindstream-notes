@@ -31,6 +31,7 @@
   import { sortTree } from '$lib/sort';
   import ContextMenu, { type MenuItem } from '$lib/components/ContextMenu.svelte';
   import MoveToSheet, { type MoveTarget } from './MoveToSheet.svelte';
+  import NameInputSheet from './NameInputSheet.svelte';
   import {
     isFavourite,
     mobileState,
@@ -178,6 +179,7 @@
   let menuTarget = $state<NodeRef | null>(null);
 
   let moveTarget = $state<MoveTarget | null>(null);
+  let renameTarget = $state<NodeRef | null>(null);
 
   function openContextMenu(e: MouseEvent, target: NodeRef) {
     e.stopPropagation();
@@ -208,14 +210,16 @@
   }
 
   function startRename(t: NodeRef) {
-    const current = nameFor(t);
-    const label = t.kind === 'note' ? 'New title' : 'New folder name';
-    const next = window.prompt(label, current);
-    if (!next) return;
-    const trimmed = next.trim();
-    if (!trimmed || trimmed === current) return;
-    if (t.kind === 'note') void renameNote(t.id, trimmed);
-    else void renameCollection(t.id, trimmed);
+    renameTarget = t;
+  }
+
+  async function commitRename(name: string) {
+    const t = renameTarget;
+    renameTarget = null;
+    if (!t) return;
+    if (name === nameFor(t)) return;
+    if (t.kind === 'note') await renameNote(t.id, name);
+    else await renameCollection(t.id, name);
   }
 
   function startMove(t: NodeRef) {
@@ -399,5 +403,16 @@
     target={moveTarget}
     onPick={(d) => void commitMove(d)}
     onClose={() => (moveTarget = null)}
+  />
+{/if}
+
+{#if renameTarget}
+  <NameInputSheet
+    title={renameTarget.kind === 'note' ? 'Rename note' : 'Rename folder'}
+    placeholder={renameTarget.kind === 'note' ? 'Note title' : 'Folder name'}
+    initialValue={nameFor(renameTarget)}
+    submitLabel="Save"
+    onSubmit={(n) => void commitRename(n)}
+    onClose={() => (renameTarget = null)}
   />
 {/if}
