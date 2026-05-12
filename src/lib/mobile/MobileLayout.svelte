@@ -37,6 +37,7 @@
     tree
   } from '$lib/stores/tree.svelte';
   import { setActiveNote } from '$lib/state.svelte';
+  import { tUi } from '$lib/settings/i18n.svelte';
   import {
     migrateLegacyFavourites,
     mobileState,
@@ -88,12 +89,16 @@
     }
   }
 
-  const primaryAction: FabAction = {
+  // Both actions resolve their labels via tUi() inside $derived so a
+  // language switch refreshes the FAB without forcing a remount. The
+  // primary action is $derived too (rather than a plain const) for the
+  // same reason — its label feeds aria-label / tooltip on the button.
+  const primaryAction = $derived<FabAction>({
     id: 'new-note',
-    label: 'New note',
+    label: tUi('fab.newNote'),
     icon: FilePlus2 as unknown as IconComponent,
     onSelect: createNote
-  };
+  });
 
   // Extend by appending FabAction entries here.
   const secondaryActions = $derived<FabAction[]>(
@@ -102,7 +107,7 @@
       : [
           {
             id: 'new-folder',
-            label: 'New folder',
+            label: tUi('fab.newFolder'),
             icon: FolderPlus as unknown as IconComponent,
             onSelect: createFolder
           }
@@ -146,17 +151,17 @@
 
 {#if createPrompt === 'note'}
   <NameInputSheet
-    title="New note"
-    placeholder="Note title"
-    submitLabel="Create"
+    title={tUi('fab.newNote')}
+    placeholder={tUi('fab.placeholder.noteTitle')}
+    submitLabel={tUi('fab.submit.create')}
     onSubmit={(n) => void commitCreate(n)}
     onClose={() => (createPrompt = null)}
   />
 {:else if createPrompt === 'folder'}
   <NameInputSheet
-    title="New folder"
-    placeholder="Folder name"
-    submitLabel="Create"
+    title={tUi('fab.newFolder')}
+    placeholder={tUi('fab.placeholder.folderName')}
+    submitLabel={tUi('fab.submit.create')}
     onSubmit={(n) => void commitCreate(n)}
     onClose={() => (createPrompt = null)}
   />
