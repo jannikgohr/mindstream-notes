@@ -7,7 +7,7 @@
     GroupPanelPartInitParameters,
     DockviewGroupPanel
   } from 'dockview-core';
-  import TopBar from '$lib/components/TopBar.svelte';
+  import TopBar from './DesktopTopBar.svelte';
   import FileExplorer from '$lib/components/FileExplorer.svelte';
   import MetadataPanel from '$lib/components/MetadataPanel.svelte';
   import NoteEditor from '$lib/components/NoteEditor.svelte';

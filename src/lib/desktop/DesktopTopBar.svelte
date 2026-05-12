@@ -1,23 +1,15 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
   import { PanelLeft, PanelRight, Settings as SettingsIcon } from 'lucide-svelte';
   import { Button } from '$lib/components/ui/button';
   import { Separator } from '$lib/components/ui/separator';
-  import ThemeToggle from './ThemeToggle.svelte';
-  import WindowControls from './WindowControls.svelte';
+  import ThemeToggle from '$lib/components/ThemeToggle.svelte';
+  import WindowControls from '$lib/components/WindowControls.svelte';
   import {
     ui,
     toggleLeftSidebar,
     toggleRightSidebar
   } from '$lib/state.svelte';
   import { openSettings } from '$lib/settings/store.svelte';
-  import { isMobile } from '$lib/platform';
-
-  // Resolve on mount so SSR/prerender doesn't lock in either branch.
-  let mobile = $state(false);
-  onMount(() => {
-    mobile = isMobile();
-  });
 </script>
 
 <header
@@ -60,8 +52,6 @@
     <PanelRight class="size-4" />
   </Button>
 
-  {#if !mobile}
-    <Separator orientation="vertical" class="mx-1 h-5" />
-    <WindowControls />
-  {/if}
+  <Separator orientation="vertical" class="mx-1 h-5" />
+  <WindowControls />
 </header>

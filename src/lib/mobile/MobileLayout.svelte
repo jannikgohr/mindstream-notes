@@ -1,11 +1,21 @@
 <script lang="ts">
   /**
-   * Mobile shell. Mirrors DesktopLayout's dockview-based note workspace
-   * but drops the multi-window affordances that don't make sense on a
-   * phone/tablet: no popout button on dockview tab headers, no
-   * "Open in new window" entry in the file-tree context menu. Anything
-   * that lives in `$lib/desktop/` should stay imported from there only;
-   * see `$lib/platform.ts` for how the platform branch is chosen.
+   * Mobile shell.
+   *
+   * One screen at a time, driven by `ui.leftSidebarOpen`:
+   *   true   → file tree (FileExplorer) fullscreen — the "home" screen.
+   *   false  → editor (dockview) fullscreen.
+   *
+   * Tapping a note flips the flag to false so the editor takes over;
+   * MobileTopBar's back arrow flips it back. `ui.rightSidebarOpen` opens
+   * MobileMetadataOverlay above the editor.
+   *
+   * Multi-window features (popout button on dock tabs, "Open in new
+   * window" context-menu entry) are not wired up here — see DesktopLayout
+   * for those.
+   *
+   * The shell uses `safe-top` / `safe-bottom` so the chrome doesn't paint
+   * under the Android status bar or gesture bar with edge-to-edge enabled.
    */
   import { mount, unmount, onDestroy, onMount, tick } from 'svelte';
   import type {
@@ -15,19 +25,13 @@
     GroupPanelPartInitParameters,
     DockviewGroupPanel
   } from 'dockview-core';
-  import TopBar from '$lib/components/TopBar.svelte';
+  import MobileTopBar from './MobileTopBar.svelte';
+  import MobileMetadataOverlay from './MobileMetadataOverlay.svelte';
   import FileExplorer from '$lib/components/FileExplorer.svelte';
-  import MetadataPanel from '$lib/components/MetadataPanel.svelte';
   import NoteEditor from '$lib/components/NoteEditor.svelte';
-  import ResizeHandle from '$lib/components/ResizeHandle.svelte';
   import SettingsDialog from '$lib/settings/SettingsDialog.svelte';
   import { clearSavedLayout, loadSavedLayout, saveLayout } from '$lib/api';
-  import {
-    setActiveNote,
-    setLeftSidebarWidth,
-    setRightSidebarWidth,
-    ui
-  } from '$lib/state.svelte';
+  import { setActiveNote, ui } from '$lib/state.svelte';
   import { loadTree, tree } from '$lib/stores/tree.svelte';
 
   let dockHost: HTMLDivElement | null = $state(null);
@@ -79,8 +83,8 @@
         }
       },
       theme: { name: 'bridge', className: 'dockview-theme-bridge' },
-      disableFloatingGroups: false,
-      disableDnd: false
+      disableFloatingGroups: true,
+      disableDnd: true
     });
 
     dock = component.api;
@@ -104,18 +108,9 @@
 
     if (!tree.ready) await loadTree();
 
-    const restored = tryRestoreLayout();
-    if (!restored) {
-      const first = pickInitialNote();
-      if (first) openNote(first);
-    }
+    tryRestoreLayout();
 
     lastActiveGroup = dock.activeGroup ?? lastActiveGroup;
-  }
-
-  function pickInitialNote(): string | null {
-    const ids = Object.keys(tree.notesById);
-    return ids[0] ?? null;
   }
 
   function tryRestoreLayout(): boolean {
@@ -175,13 +170,7 @@
     }, 250);
   }
 
-  type SplitDirection = 'right' | 'left' | 'above' | 'below' | 'within';
-  interface OpenNoteOptions {
-    splitDirection?: SplitDirection;
-    referenceNoteId?: string;
-  }
-
-  export function openNote(id: string, opts: OpenNoteOptions = {}) {
+  export function openNote(id: string) {
     if (!dock) return;
     const note = tree.notesById[id];
     if (!note) return;
@@ -189,6 +178,9 @@
     const existing = openPanels.get(id);
     if (existing) {
       existing.api.setActive();
+      // Surface the editor screen so the tap actually feels like
+      // navigation, not a silent state change behind the tree.
+      ui.leftSidebarOpen = false;
       return;
     }
 
@@ -197,32 +189,18 @@
       lastActiveGroup = dock.groups[0];
     }
 
-    let position:
-      | { referencePanel: string; direction: SplitDirection }
-      | { referenceGroup: DockviewGroupPanel }
-      | undefined;
-    if (opts.splitDirection) {
-      const referencePanel = opts.referenceNoteId
-        ? `note:${opts.referenceNoteId}`
-        : dock.activePanel?.id;
-      if (referencePanel) {
-        position = { referencePanel, direction: opts.splitDirection };
-      }
-    } else {
-      const target = lastActiveGroup ?? dock.activeGroup ?? null;
-      if (target) position = { referenceGroup: target };
-    }
-
+    const target = lastActiveGroup ?? dock.activeGroup ?? null;
     const panel = dock.addPanel({
       id: `note:${id}`,
       component: 'noteEditor',
       title: note.title,
       params: { noteId: id },
-      ...(position ? { position } : {})
+      ...(target ? { position: { referenceGroup: target } } : {})
     });
 
     openPanels.set(id, panel);
     setActiveNote(id);
+    ui.leftSidebarOpen = false;
   }
 
   onMount(() => {
@@ -237,11 +215,12 @@
     dock?.clear();
   });
 
+  // Trigger a dockview relayout whenever the editor screen comes back
+  // into view (toggled via the back arrow). Dockview measures during its
+  // own ResizeObserver, but the parent's display flips from `hidden`
+  // before that fires, so we nudge it.
   $effect(() => {
     void ui.leftSidebarOpen;
-    void ui.rightSidebarOpen;
-    void ui.leftSidebarWidth;
-    void ui.rightSidebarWidth;
     if (!dockHost) return;
     requestAnimationFrame(() => {
       window.dispatchEvent(new Event('resize'));
@@ -256,58 +235,36 @@
   });
 
   const onOpenNote = (id: string) => openNote(id);
-  const onOpenNoteRight = (id: string) =>
-    openNote(id, { splitDirection: 'right' });
-  const onOpenNoteBelow = (id: string) =>
-    openNote(id, { splitDirection: 'below' });
-  // onOpenInNewWindow is intentionally omitted — the file-tree context
-  // menu hides the entry when the prop is undefined.
+  // Mobile has no split-pane affordance, so the secondary openers all
+  // route to the same single-pane open. onOpenInNewWindow stays
+  // undefined so the file-tree context menu hides "Open in new window".
+  const onOpenNoteRight = onOpenNote;
+  const onOpenNoteBelow = onOpenNote;
 </script>
 
-<div class="flex h-full w-full flex-col">
-  <TopBar />
+<div class="safe-top safe-bottom safe-x flex h-full w-full flex-col">
+  <MobileTopBar />
 
-  <div class="flex min-h-0 flex-1">
-    {#if ui.leftSidebarOpen}
-      <div
-        class="shrink-0 border-r border-border"
-        style="width: {ui.leftSidebarWidth}px;"
-      >
-        <FileExplorer
-          {onOpenNote}
-          {onOpenNoteRight}
-          {onOpenNoteBelow}
-        />
-      </div>
-      <ResizeHandle
-        side="left"
-        value={ui.leftSidebarWidth}
-        min={200}
-        max={500}
-        onChange={setLeftSidebarWidth}
+  <div class="relative min-h-0 flex-1">
+    <!--
+      Both screens stay mounted; visibility flips via `hidden` so
+      dockview keeps its panel state and the file tree doesn't re-
+      collapse every navigation. Use `display: none`/`block` rather
+      than conditional rendering so neither component remounts.
+    -->
+    <div class="absolute inset-0" class:hidden={!ui.leftSidebarOpen}>
+      <FileExplorer
+        {onOpenNote}
+        {onOpenNoteRight}
+        {onOpenNoteBelow}
       />
-    {/if}
+    </div>
 
-    <main class="min-w-0 flex-1">
+    <div class="absolute inset-0" class:hidden={ui.leftSidebarOpen}>
       <div bind:this={dockHost} class="dockview-theme-bridge h-full w-full"></div>
-    </main>
-
-    {#if ui.rightSidebarOpen}
-      <ResizeHandle
-        side="right"
-        value={ui.rightSidebarWidth}
-        min={200}
-        max={500}
-        onChange={setRightSidebarWidth}
-      />
-      <div
-        class="shrink-0 border-l border-border"
-        style="width: {ui.rightSidebarWidth}px;"
-      >
-        <MetadataPanel />
-      </div>
-    {/if}
+    </div>
   </div>
 </div>
 
+<MobileMetadataOverlay />
 <SettingsDialog />

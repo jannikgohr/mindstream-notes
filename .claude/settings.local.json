@@ -9,7 +9,8 @@
       "Bash(cargo fmt *)",
       "Bash(cargo clippy *)",
       "Bash(pnpm check *)",
-      "WebFetch(domain:milkdown.dev)"
+      "WebFetch(domain:milkdown.dev)",
+      "Bash(pnpm build *)"
     ]
   }
 }
