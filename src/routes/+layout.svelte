@@ -2,7 +2,8 @@
     import '../app.css';
     import {onMount} from 'svelte';
     import {ModeWatcher} from 'mode-watcher';
-    import {getSettingValue} from '$lib/settings/store.svelte';
+    import {getSettingValue, isModified} from '$lib/settings/store.svelte';
+    import {applyAccentColor, clearAccentColor} from '$lib/settings/accent';
     import {runSync} from '$lib/sync/runner';
     import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 
@@ -36,6 +37,21 @@
         '5m': 300_000,
         '15m': 900_000
     };
+
+    // Re-apply the accent colour whenever the user changes it (or on
+    // first mount, since $effect runs once for the initial values). The
+    // helper only overrides --primary / --primary-foreground / --ring
+    // when the setting differs from its schema default — leaving the
+    // existing dark/light theme tokens intact for users who haven't
+    // picked a custom accent.
+    $effect(() => {
+        const value = getSettingValue('appearance.accent') as string | undefined;
+        if (isModified('appearance.accent') && value) {
+            applyAccentColor(value);
+        } else {
+            clearAccentColor();
+        }
+    });
 
     $effect(() => {
         const enabled = getSettingValue('account.syncEnabled') === true;
