@@ -28,6 +28,7 @@
   import MobileFab, { type FabAction } from './MobileFab.svelte';
   import MobileBottomNav from './MobileBottomNav.svelte';
   import MobileEditor from './MobileEditor.svelte';
+  import NameInputSheet from './NameInputSheet.svelte';
   import SettingsDialog from '$lib/settings/SettingsDialog.svelte';
   import {
     createCollectionIn,
@@ -62,26 +63,36 @@
     return mobileState.currentFolderId;
   }
 
-  async function createNote() {
-    const parent = targetParent();
-    const id = await createNoteIn(parent, 'Untitled');
-    openNote(id);
+  // Tracks which create flow has its NameInputSheet open. null = no
+  // sheet showing; commit lives in commitCreate().
+  let createPrompt = $state<'note' | 'folder' | null>(null);
+
+  function createNote() {
+    createPrompt = 'note';
   }
 
-  async function createFolder() {
-    // Inline name entry would be nicer, but the home screen has no draft
-    // affordance yet — prompt is good enough for the first cut. Swap for
-    // a bottom-sheet input later.
-    const name = window.prompt('Folder name', 'New folder');
-    if (!name || !name.trim()) return;
-    await createCollectionIn(targetParent(), name.trim());
+  function createFolder() {
+    createPrompt = 'folder';
+  }
+
+  async function commitCreate(name: string) {
+    const kind = createPrompt;
+    createPrompt = null;
+    if (!kind) return;
+    const parent = targetParent();
+    if (kind === 'note') {
+      const id = await createNoteIn(parent, name);
+      openNote(id);
+    } else {
+      await createCollectionIn(parent, name);
+    }
   }
 
   const primaryAction: FabAction = {
     id: 'new-note',
     label: 'New note',
     icon: FilePlus2 as unknown as IconComponent,
-    onSelect: () => void createNote()
+    onSelect: createNote
   };
 
   // Extend by appending FabAction entries here.
@@ -93,7 +104,7 @@
             id: 'new-folder',
             label: 'New folder',
             icon: FolderPlus as unknown as IconComponent,
-            onSelect: () => void createFolder()
+            onSelect: createFolder
           }
         ]
   );
@@ -132,5 +143,23 @@
     </div>
   {/if}
 </div>
+
+{#if createPrompt === 'note'}
+  <NameInputSheet
+    title="New note"
+    placeholder="Note title"
+    submitLabel="Create"
+    onSubmit={(n) => void commitCreate(n)}
+    onClose={() => (createPrompt = null)}
+  />
+{:else if createPrompt === 'folder'}
+  <NameInputSheet
+    title="New folder"
+    placeholder="Folder name"
+    submitLabel="Create"
+    onSubmit={(n) => void commitCreate(n)}
+    onClose={() => (createPrompt = null)}
+  />
+{/if}
 
 <SettingsDialog />
