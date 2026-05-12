@@ -11,7 +11,8 @@
     saveNote as apiSaveNote,
     TRASH_ID,
     noteRoomInfo,
-    etebaseSession
+    etebaseSession,
+    onSessionChange
   } from '$lib/api';
   import { tree } from '$lib/stores/tree.svelte';
   import { getSettingValue } from '$lib/settings/store.svelte';
@@ -182,34 +183,20 @@
       saveReady = true;
 
       // Live collab is opt-in: a relay URL must be configured AND the
-      // note has to have been pushed to etebase at least once (so it
-      // has a UID + key). Created AFTER the editor is fully bound so the
-      // provider's doc-update handler doesn't race with applyTemplate
-      // and doesn't attempt to broadcast the initial fragment seed.
-      const collabUrl = (
-        (getSettingValue('account.collabServerUrl') as string | undefined) ??
-        ''
-      ).trim();
-      if (collabUrl) {
-        try {
-          const room = await noteRoomInfo(noteId);
-          if (room && yDoc && awareness) {
-            collabConfigured = true;
-            provider = new CollabProvider({
-              url: collabUrl,
-              roomId: room.room_id,
-              keyBytes: base64ToBytes(room.key_b64),
-              doc: yDoc,
-              awareness,
-              onStatusChange: (online) => {
-                collabOnline = online;
-              }
-            });
-          }
-        } catch (err) {
-          console.debug('[NoteEditor] collab provider init failed', err);
-        }
-      }
+      // user has to have a live etebase session AND the note has to
+      // have been pushed at least once (so it has a UID + key). Created
+      // AFTER the editor is fully bound so the provider's doc-update
+      // handler doesn't race with applyTemplate and doesn't attempt to
+      // broadcast the initial fragment seed.
+      await setupCollabProvider();
+
+      // React to login/logout while this note is open. Logout returns
+      // null from noteRoomInfo (the Rust side gates on has_session and
+      // wipes the local key) so the re-init will quietly tear down;
+      // login flips the gate back on and reconnects.
+      unsubSession = onSessionChange(() => {
+        void setupCollabProvider();
+      });
 
       crepeReady = true;
       loading = false;
@@ -220,8 +207,51 @@
     }
   });
 
+  let unsubSession: (() => void) | null = null;
+
+  /**
+   * (Re)create the live-collab provider for the current note. Tears down
+   * any existing one first so logout + relogin doesn't leak a stale
+   * socket. Returns silently when prerequisites aren't met — no relay
+   * URL configured, no session, or the note hasn't been pushed yet.
+   */
+  async function setupCollabProvider() {
+    if (provider) {
+      provider.destroy();
+      provider = null;
+      collabOnline = false;
+    }
+    collabConfigured = false;
+
+    const collabUrl = (
+      (getSettingValue('account.collabServerUrl') as string | undefined) ?? ''
+    ).trim();
+    if (!collabUrl) return;
+    if (!yDoc || !awareness) return;
+
+    try {
+      const room = await noteRoomInfo(noteId);
+      if (!room) return;
+      collabConfigured = true;
+      provider = new CollabProvider({
+        url: collabUrl,
+        roomId: room.room_id,
+        keyBytes: base64ToBytes(room.key_b64),
+        doc: yDoc,
+        awareness,
+        onStatusChange: (online) => {
+          collabOnline = online;
+        }
+      });
+    } catch (err) {
+      console.debug('[NoteEditor] collab provider init failed', err);
+    }
+  }
+
   onDestroy(() => {
     if (saveTimer) clearTimeout(saveTimer);
+    unsubSession?.();
+    unsubSession = null;
     saveReady = false;
     if (yDoc && yDocUpdateHandler) {
       yDoc.off('update', yDocUpdateHandler);

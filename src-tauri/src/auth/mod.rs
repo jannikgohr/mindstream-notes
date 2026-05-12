@@ -20,9 +20,11 @@ use std::path::{Path, PathBuf};
 use etebase::utils::{from_base64, randombytes, to_base64};
 use etebase::{Account, Client};
 use keyring_core::Entry;
+use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
+use crate::db::Db;
 use crate::error::{AppError, AppResult};
 
 const KEYRING_SERVICE: &str = "mindstream-notes";
@@ -129,6 +131,26 @@ pub fn try_restore(app: &AppHandle) -> AppResult<Option<Account>> {
     Ok(Some(restore_account(&stored)?))
 }
 
+/// Cheap presence check: true iff both halves of a session — the on-disk
+/// session blob and the keyring-held wrapper key — exist. Does not
+/// attempt to decrypt the blob (would require a network-capable
+/// `Client::new`, which we want to avoid on hot paths like
+/// `note_room_info`). Both pieces are required to actually unlock the
+/// session, so their joint presence is the right gate for "is a user
+/// signed in?".
+pub fn has_session(app: &AppHandle) -> bool {
+    let Ok(path) = session_path(app) else {
+        return false;
+    };
+    if !path.exists() {
+        return false;
+    }
+    let Ok(entry) = keyring_entry() else {
+        return false;
+    };
+    matches!(entry.get_password(), Ok(_))
+}
+
 #[tauri::command]
 pub async fn etebase_login(args: LoginArgs, app: AppHandle) -> Result<SessionInfo, String> {
     let server_url = resolve_server_url(&args).map_err(String::from)?;
@@ -208,6 +230,25 @@ pub async fn etebase_logout(app: AppHandle) -> Result<(), String> {
             Ok(())
         })
         .await;
+    }
+
+    // Wipe per-note live-collab keys so a logged-out client can't keep
+    // connecting to existing rooms. The Etebase server still holds the
+    // real source-of-truth for these (inside the E2EE NotePayload), so
+    // a fresh login + sync re-populates them. We leave `dirty` alone:
+    // `push_notes` regenerates a key when it sees crypto_key IS NULL,
+    // which is fine — peers pick it up on their next pull. yrs_state /
+    // body / tags are untouched so offline reads still work.
+    if let Some(db) = app.try_state::<Db>() {
+        if let Err(e) = db.with_conn(|c| {
+            c.execute(
+                "UPDATE notes SET crypto_key = NULL WHERE crypto_key IS NOT NULL",
+                params![],
+            )?;
+            Ok(())
+        }) {
+            log::warn!("[auth] wipe collab keys on logout failed: {e}");
+        }
     }
 
     clear_local_state(&path);
