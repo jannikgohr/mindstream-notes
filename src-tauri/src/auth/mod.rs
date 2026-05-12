@@ -138,19 +138,25 @@ pub async fn etebase_login(args: LoginArgs, app: AppHandle) -> Result<SessionInf
     let password = args.password;
     let server_for_login = server_url.clone();
 
-    // Argon2id key derivation runs inside login — keep it off the async runtime.
-    let account = tauri::async_runtime::spawn_blocking(move || {
+    // Argon2id key derivation runs inside login — and reqwest's blocking
+    // HTTP path constructs a private tokio runtime per Account. Keep the
+    // whole etebase dance (login + save + Account drop) inside one
+    // spawn_blocking so the runtime is never dropped on an async worker,
+    // which would panic with "Cannot drop a runtime in a context where
+    // blocking is not allowed".
+    let key = randombytes(32);
+    let key_for_save = key.clone();
+    let blob = tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
         let client = Client::new(CLIENT_NAME, &server_for_login)
             .map_err(|e| format!("etebase client: {e}"))?;
-        Account::login(client, &username, &password).map_err(|e| format!("login: {e}"))
+        let account = Account::login(client, &username, &password)
+            .map_err(|e| format!("login: {e}"))?;
+        account
+            .save(Some(&key_for_save))
+            .map_err(|e| format!("save session: {e}"))
     })
     .await
     .map_err(|e| format!("login task: {e}"))??;
-
-    let key = randombytes(32);
-    let blob = account
-        .save(Some(&key))
-        .map_err(|e| format!("save session: {e}"))?;
     let key_b64 = to_base64(&key).map_err(|e| format!("encode key: {e}"))?;
 
     keyring_entry()
@@ -184,12 +190,24 @@ pub async fn etebase_logout(app: AppHandle) -> Result<(), String> {
     let stored = read_stored(&path).map_err(String::from)?;
 
     if let Some(stored) = stored {
-        // Best effort: notify the server so the auth token is revoked. If
-        // restore or logout fails (offline, key missing, server gone) we
-        // still wipe local state below — that's the user's clear intent.
-        if let Ok(account) = restore_account(&stored) {
-            let _ = tauri::async_runtime::spawn_blocking(move || account.logout()).await;
-        }
+        // Both `restore_account` and `account.logout()` end up
+        // constructing tokio runtimes inside reqwest's blocking client.
+        // Dropping such a runtime from an async context panics — tokio
+        // refuses to block-wait for its worker threads on an async
+        // worker. Doing the whole etebase-side dance inside one
+        // spawn_blocking keeps every runtime construction *and* drop
+        // pinned to the blocking pool, where blocking is allowed.
+        //
+        // Best-effort: if restore or logout fails (offline, key missing,
+        // server gone) we still wipe local state below — that's the
+        // user's clear intent.
+        let _ = tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+            let account = restore_account(&stored)
+                .map_err(|e| format!("restore session: {e}"))?;
+            account.logout().map_err(|e| format!("logout: {e}"))?;
+            Ok(())
+        })
+        .await;
     }
 
     clear_local_state(&path);
