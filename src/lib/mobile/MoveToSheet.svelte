@@ -1,12 +1,18 @@
 <script lang="ts">
   /**
-   * Folder picker rendered as a full-bleed bottom sheet. Walks the
-   * collection tree (skipping trash and any folder that would create a
-   * cycle for the moving folder), indenting children so the hierarchy
-   * stays readable. Tapping a destination invokes onPick and closes
-   * the sheet.
+   * Folder picker rendered as a full-bleed bottom sheet. The collection
+   * tree is rendered recursively from a synthetic "Root" node so the
+   * top-level acts like any other parent. Folders that contain other
+   * folders get a chevron toggle; leaf folders show a fixed-width spacer
+   * so all rows align. Tapping the body of any folder picks it as the
+   * destination — the chevron is the only opt-in for expand/collapse.
+   *
+   * Disabled rules:
+   *   - target.currentParent (already there → no-op move)
+   *   - When moving a folder: the folder itself + all its descendants
+   *     (a folder can't become its own ancestor).
    */
-  import { ChevronRight, FolderClosed, FolderRoot, X } from 'lucide-svelte';
+  import { ChevronRight, FolderClosed, FolderOpen, FolderRoot, X } from 'lucide-svelte';
   import { Button } from '$lib/components/ui/button';
   import { TRASH_ID } from '$lib/api';
   import type { Collection } from '$lib/api';
@@ -15,7 +21,7 @@
   export interface MoveTarget {
     kind: 'note' | 'folder';
     id: string;
-    /** Current parent id of the item being moved — disabled in the list. */
+    /** Current parent id of the item being moved — disabled in the tree. */
     currentParent: string | null;
   }
 
@@ -26,14 +32,10 @@
   }
   let { target, onPick, onClose }: Props = $props();
 
-  interface Row {
+  interface FolderNode {
     id: string;
     name: string;
-    depth: number;
-    /** Folder is invalid as a destination for the target item. */
-    disabled: boolean;
-    /** Why it's disabled — for the title attribute. */
-    reason?: string;
+    children: FolderNode[];
   }
 
   /**
@@ -64,7 +66,12 @@
     return new Set();
   });
 
-  const rows = $derived.by<Row[]>(() => {
+  /**
+   * Build the folder hierarchy as a `FolderNode` tree, sorted by name
+   * at every level. The trash collection is filtered out — it isn't a
+   * legal destination from this dialog.
+   */
+  const forest = $derived.by<FolderNode[]>(() => {
     const byParent = new Map<string | null, Collection[]>();
     for (const c of Object.values(tree.collectionsById)) {
       if (c.id === TRASH_ID) continue;
@@ -77,31 +84,45 @@
         a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
       );
     }
-
-    const out: Row[] = [];
-    function walk(parent: string | null, depth: number) {
-      for (const c of byParent.get(parent) ?? []) {
-        const isForbidden = forbidden.has(c.id);
-        const isCurrent = target.currentParent === c.id;
-        out.push({
-          id: c.id,
-          name: c.name,
-          depth,
-          disabled: isForbidden || isCurrent,
-          reason: isForbidden
-            ? 'Cannot move a folder into itself or one of its children'
-            : isCurrent
-              ? 'Already in this folder'
-              : undefined
-        });
-        walk(c.id, depth + 1);
-      }
+    function build(parent: string | null): FolderNode[] {
+      return (byParent.get(parent) ?? []).map((c) => ({
+        id: c.id,
+        name: c.name,
+        children: build(c.id)
+      }));
     }
-    walk(null, 0);
-    return out;
+    return build(null);
   });
 
-  const rootDisabled = $derived(target.currentParent === null);
+  /**
+   * Per-folder open/closed state. Initialised to expand the chain
+   * leading to the current parent so the user can immediately see
+   * where the item lives now. The synthetic "root" key is always
+   * considered open and isn't stored here.
+   */
+  function initialExpanded(): Record<string, boolean> {
+    const out: Record<string, boolean> = {};
+    let id = target.currentParent;
+    while (id) {
+      out[id] = true;
+      const parent = tree.collectionsById[id]?.parent_collection_id ?? null;
+      id = parent;
+    }
+    return out;
+  }
+  let expanded = $state<Record<string, boolean>>(initialExpanded());
+
+  function toggle(id: string) {
+    expanded[id] = !expanded[id];
+  }
+
+  function disabledReason(id: string | null): string | null {
+    if (target.currentParent === id) return 'Already in this folder';
+    if (id !== null && forbidden.has(id)) {
+      return 'Cannot move a folder into itself or one of its children';
+    }
+    return null;
+  }
 
   function pick(destination: string | null) {
     onPick(destination);
@@ -135,39 +156,92 @@
     </Button>
   </header>
 
-  <div class="flex-1 overflow-y-auto py-2">
-    <button
-      type="button"
-      class="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
-      disabled={rootDisabled}
-      title={rootDisabled ? 'Already at root' : 'Move to root'}
-      onclick={() => pick(null)}
-    >
-      <FolderRoot class="size-4 shrink-0 text-muted-foreground" />
-      <span class="font-medium">Root</span>
-    </button>
+  <div class="flex-1 overflow-y-auto py-2" role="tree" aria-label="Folders">
+    {@render row({
+      id: null,
+      name: 'Root',
+      depth: 0,
+      hasChildren: forest.length > 0,
+      isRoot: true,
+      open: true
+    })}
 
-    {#if rows.length === 0}
-      <p class="px-3 py-4 text-center text-xs text-muted-foreground">
-        No other folders yet — create one from the home screen first.
-      </p>
-    {/if}
-
-    {#each rows as row (row.id)}
-      <button
-        type="button"
-        class="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
-        style="padding-left: calc(0.75rem + {row.depth} * 1rem);"
-        disabled={row.disabled}
-        title={row.reason}
-        onclick={() => pick(row.id)}
-      >
-        {#if row.depth > 0}
-          <ChevronRight class="size-3 shrink-0 text-muted-foreground" />
-        {/if}
-        <FolderClosed class="size-4 shrink-0 text-muted-foreground" />
-        <span class="truncate">{row.name}</span>
-      </button>
+    {#each forest as node (node.id)}
+      {@render folderTree(node, 1)}
     {/each}
   </div>
 </div>
+
+{#snippet folderTree(node: FolderNode, depth: number)}
+  {@const open = expanded[node.id] === true}
+  {@render row({
+    id: node.id,
+    name: node.name,
+    depth,
+    hasChildren: node.children.length > 0,
+    isRoot: false,
+    open
+  })}
+  {#if open && node.children.length > 0}
+    {#each node.children as child (child.id)}
+      {@render folderTree(child, depth + 1)}
+    {/each}
+  {/if}
+{/snippet}
+
+{#snippet row(args: {
+  id: string | null;
+  name: string;
+  depth: number;
+  hasChildren: boolean;
+  isRoot: boolean;
+  open: boolean;
+})}
+  {@const reason = disabledReason(args.id)}
+  {@const isDisabled = reason !== null}
+  <div
+    class="flex w-full items-stretch"
+    style="padding-left: calc({args.depth} * 1rem);"
+    role="treeitem"
+    aria-selected="false"
+    aria-expanded={args.hasChildren ? args.open : undefined}
+    aria-disabled={isDisabled}
+  >
+    {#if args.hasChildren && !args.isRoot}
+      <button
+        type="button"
+        class="flex w-7 shrink-0 items-center justify-center text-muted-foreground hover:text-foreground"
+        onclick={() => toggle(args.id as string)}
+        aria-label={args.open ? 'Collapse folder' : 'Expand folder'}
+        title={args.open ? 'Collapse' : 'Expand'}
+      >
+        <ChevronRight class="size-4 transition-transform {args.open ? 'rotate-90' : ''}" />
+      </button>
+    {:else}
+      <!-- Spacer so leaf rows align with the icon column of expandable
+           siblings. The root node skips the chevron column entirely. -->
+      {#if !args.isRoot}
+        <div class="w-7 shrink-0" aria-hidden="true"></div>
+      {/if}
+    {/if}
+
+    <button
+      type="button"
+      class="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+      disabled={isDisabled}
+      title={reason ?? (args.isRoot ? 'Move to root' : `Move to ${args.name}`)}
+      onclick={() => pick(args.id)}
+    >
+      {#if args.isRoot}
+        <FolderRoot class="size-4 shrink-0 text-muted-foreground" />
+      {:else if args.open && args.hasChildren}
+        <FolderOpen class="size-4 shrink-0 text-muted-foreground" />
+      {:else}
+        <FolderClosed class="size-4 shrink-0 text-muted-foreground" />
+      {/if}
+      <span class="truncate {args.isRoot ? 'font-semibold' : 'font-medium'}">
+        {args.name}
+      </span>
+    </button>
+  </div>
+{/snippet}
