@@ -61,6 +61,25 @@
     return [];
   }
 
+  /**
+   * True when the note lives anywhere under the trash collection — either
+   * directly (`parent_collection_id === TRASH_ID`) or nested inside a
+   * folder that itself was moved to trash. Used to keep trashed notes
+   * out of the Favourites view even when they're still marked as
+   * favourite in the database.
+   */
+  function isUnderTrash(note: NoteSummary): boolean {
+    if (note.trashed) return true;
+    let parent = note.parent_collection_id;
+    const seen = new Set<string>();
+    while (parent && !seen.has(parent)) {
+      if (parent === TRASH_ID) return true;
+      seen.add(parent);
+      parent = tree.collectionsById[parent]?.parent_collection_id ?? null;
+    }
+    return false;
+  }
+
   const sortedTree = $derived(
     sortTree(
       tree.tree,
@@ -86,8 +105,11 @@
 
     if (view === 'favourite') {
       // Flat list, no folder drill-down (favourites span folders).
+      // Notes whose ancestor folder is the trash (or a descendant of it)
+      // are excluded — a favourite you've thrown away shouldn't keep
+      // showing here. Restore from Trash and it comes back.
       return Object.values(tree.notesById)
-        .filter((n) => n.favourite && !n.trashed)
+        .filter((n) => n.favourite && !isUnderTrash(n))
         .map<TreeNode>((n) => ({
           kind: 'note',
           id: n.id,
@@ -126,7 +148,7 @@
       );
     } else if (mobileState.view === 'favourite') {
       pool = Object.values(tree.notesById).filter(
-        (n) => n.favourite && !n.trashed
+        (n) => n.favourite && !isUnderTrash(n)
       );
     } else {
       pool = Object.values(tree.notesById).filter(
