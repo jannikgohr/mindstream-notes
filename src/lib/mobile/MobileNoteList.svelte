@@ -177,24 +177,35 @@
   let menuX = $state(0);
   let menuY = $state(0);
   let menuTarget = $state<NodeRef | null>(null);
+  // Trigger element that opened the menu — passed to ContextMenu as
+  // `ignoreEl` so pointerdown on the same button doesn't close-then-
+  // reopen, and consulted here to make a re-tap collapse the menu.
+  let menuTriggerEl = $state<HTMLElement | null>(null);
 
   let moveTarget = $state<MoveTarget | null>(null);
   let renameTarget = $state<NodeRef | null>(null);
 
   function openContextMenu(e: MouseEvent, target: NodeRef) {
     e.stopPropagation();
-    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const trigger = e.currentTarget as HTMLElement;
+    if (menuOpen && menuTriggerEl === trigger) {
+      closeMenu();
+      return;
+    }
+    const r = trigger.getBoundingClientRect();
     // Anchor the menu under the trigger button, right-aligned-ish via
     // ContextMenu's own clamping logic.
     menuX = r.right - 200;
     menuY = r.bottom + 4;
     menuTarget = target;
+    menuTriggerEl = trigger;
     menuOpen = true;
   }
 
   function closeMenu() {
     menuOpen = false;
     menuTarget = null;
+    menuTriggerEl = null;
   }
 
   function nameFor(t: NodeRef): string {
@@ -394,6 +405,7 @@
     x={menuX}
     y={menuY}
     items={menuItems()}
+    ignoreEl={menuTriggerEl}
     onClose={closeMenu}
   />
 {/if}

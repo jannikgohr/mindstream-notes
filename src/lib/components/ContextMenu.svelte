@@ -24,25 +24,40 @@
     x: number;
     y: number;
     items: (MenuItem | 'separator')[];
+    /**
+     * Element that opened the menu. Clicks inside this element are
+     * ignored by the click-away handler so the trigger button can
+     * implement "tap again to close" — otherwise pointerdown closes
+     * the menu and the subsequent click immediately reopens it.
+     */
+    ignoreEl?: HTMLElement | null;
     onClose: () => void;
   }
 
-  let { x, y, items, onClose }: Props = $props();
+  let { x, y, items, ignoreEl, onClose }: Props = $props();
   let menuEl: HTMLDivElement | null = $state(null);
 
   onMount(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
     };
-    const onClickAway = (e: MouseEvent) => {
-      if (menuEl && !menuEl.contains(e.target as Node)) onClose();
+    // pointerdown unifies mouse + touch — some mobile webviews (notably
+    // iOS Safari and older Android variants) skip synthesized mousedown
+    // events on non-interactive targets, which would otherwise leave
+    // the menu stuck open after a tap on empty space.
+    const onClickAway = (e: PointerEvent) => {
+      const target = e.target as Node;
+      if (!menuEl) return;
+      if (menuEl.contains(target)) return;
+      if (ignoreEl && ignoreEl.contains(target)) return;
+      onClose();
     };
     window.addEventListener('keydown', onKey);
     // Defer one tick so the click that opened us doesn't immediately close us.
-    queueMicrotask(() => window.addEventListener('mousedown', onClickAway));
+    queueMicrotask(() => window.addEventListener('pointerdown', onClickAway));
     return () => {
       window.removeEventListener('keydown', onKey);
-      window.removeEventListener('mousedown', onClickAway);
+      window.removeEventListener('pointerdown', onClickAway);
     };
   });
 
