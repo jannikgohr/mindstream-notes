@@ -6,11 +6,10 @@
    * carries a home icon so the chrome looks identical at the bucket
    * root and deep in a folder.
    *
-   * Wrapped in an outlined pill at h-8 so it visually matches the
-   * sort + display-mode controls in the toolbar below. The outer nav
-   * carries the same px-3 py-2 padding as MobileToolbar so the pill's
-   * left + right edges line up exactly with the sort-button's left
-   * edge and the display-toggle's right edge.
+   * Lives at the top of the note-view section (no bg-card chrome, no
+   * outlined pill) so it reads as inline breadcrumb text floating over
+   * the note background, with the sort + display toolbar immediately
+   * below it.
    */
   import { Home, ChevronRight } from 'lucide-svelte';
   import { tree } from '$lib/stores/tree.svelte';
@@ -46,12 +45,9 @@
 </script>
 
 <nav
-  class="shrink-0 bg-card px-3 pb-1 pt-2"
+  class="flex h-8 shrink-0 items-center gap-1 overflow-x-auto px-3 pt-2 text-xs text-muted-foreground"
   aria-label={tUi('breadcrumb.label')}
 >
-  <div
-    class="flex h-8 items-center gap-1 overflow-x-auto rounded-md border border-border bg-background px-2 text-xs text-muted-foreground"
-  >
   {#each segments as seg, i (i)}
     {@const isLast = i === segments.length - 1}
     {@const isRoot = i === 0}
@@ -89,5 +85,4 @@
       </button>
     {/if}
   {/each}
-  </div>
 </nav>

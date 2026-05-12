@@ -128,11 +128,11 @@
   {#if showHome}
     <div class="safe-top flex shrink-0 flex-col bg-card">
       <MobileTopBar />
-      <MobileBreadcrumb />
-      <MobileToolbar />
     </div>
 
     <div class="relative flex min-h-0 flex-1 flex-col">
+      <MobileBreadcrumb />
+      <MobileToolbar />
       <MobileNoteList onOpenNote={openNote} />
       {#if fabVisible}
         <MobileFab primary={primaryAction} actions={secondaryActions} />

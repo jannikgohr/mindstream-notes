@@ -1,9 +1,11 @@
 <script lang="ts">
   /**
-   * Below-breadcrumb toolbar: split sort control on the left, list/grid
-   * switcher on the right. The sort strategy + direction are read from
-   * the shared UI store so the choice carries across platforms; display
-   * mode is mobile-local.
+   * Note-view toolbar: split sort control on the left, list/grid
+   * switcher on the right. Lives at the top of the note-view area
+   * (not inside the bg-card top-controls group), so it blends with
+   * the note/folder list below rather than reading as a third bar
+   * of chrome. The controls themselves carry their own outlined
+   * pills, so no parent border or background is needed.
    */
   import { LayoutGrid, List } from 'lucide-svelte';
   import SortControl from '$lib/components/SortControl.svelte';
@@ -17,7 +19,7 @@
 </script>
 
 <div
-  class="flex shrink-0 items-center justify-between gap-2 border-b border-border bg-card px-3 pb-2 pt-1"
+  class="flex shrink-0 items-center justify-between gap-2 px-3 pb-2 pt-1"
 >
   <SortControl
     strategy={ui.sortStrategy}
