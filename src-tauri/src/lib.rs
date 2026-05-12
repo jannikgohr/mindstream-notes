@@ -25,8 +25,13 @@ use crate::db::{migrations, Db};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_autostart::Builder::new().build())
+    #[cfg(not(desktop))]
+    let app_handle = tauri::Builder::default();
+    #[cfg(desktop)]
+    let app_handle = tauri::Builder::default()
+        .plugin(tauri_plugin_autostart::Builder::new().build());
+
+    app_handle
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             let app_data = app

@@ -14,6 +14,13 @@ Build command Linux (for AppImage)
 ```shell
 NO_STRIP=true ARCH=x86_64 pnpm tauri build
 ```
+
+Build command Android
+```shell
+pnpm tauri android dev
+```
+(use java 21 sdk)
+
 ## Installation
 If you're on a minimal setup, install and enable some Secret Service
 like `gnome-keyring` or run `KeePassXC` with Secret Service enabled.

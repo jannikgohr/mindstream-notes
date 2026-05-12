@@ -26,7 +26,7 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 thiserror = "1"
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-openssl-sys = "0.9.111"
+openssl-sys = { version = "0.9.111", features = ["vendored"] }
 openssl = { version = "*", features = ["vendored"] }
 etebase = "0.6.1"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }

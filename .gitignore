@@ -9,7 +9,7 @@ node_modules
 
 # Tauri
 /src-tauri/target
-/src-tauri/gen
+/src-tauri/gen/schemas
 /src-tauri/Cargo.lock
 
 # Sandbox-leftover artifacts that the workspace mount won't let me delete.
