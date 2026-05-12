@@ -12,6 +12,7 @@
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import ContextMenu, { type MenuItem } from './ContextMenu.svelte';
+  import { confirm } from './ConfirmDialog.svelte';
   import { SORT_STRATEGIES, sortTree, type SortStrategy } from '$lib/sort';
   import {
     tree,
@@ -226,8 +227,15 @@
           {
             label: 'Delete permanently',
             destructive: true,
-            onSelect: () => {
-              if (window.confirm(`Permanently delete "${note?.title ?? 'note'}"?`)) {
+            onSelect: async () => {
+              if (
+                await confirm({
+                  title: 'Delete permanently',
+                  message: `"${note?.title ?? 'this note'}" will be removed. This cannot be undone.`,
+                  confirmLabel: 'Delete',
+                  destructive: true
+                })
+              ) {
                 void purgeNote(id);
               }
             }
@@ -293,8 +301,15 @@
             label: `Empty trash (${trashedCount})`,
             destructive: true,
             disabled: trashedCount === 0,
-            onSelect: () => {
-              if (window.confirm(`Permanently delete ${trashedCount} item(s)?`)) {
+            onSelect: async () => {
+              if (
+                await confirm({
+                  title: 'Empty trash',
+                  message: `${trashedCount} item(s) will be removed permanently. This cannot be undone.`,
+                  confirmLabel: 'Empty trash',
+                  destructive: true
+                })
+              ) {
                 void emptyTrash();
               }
             }
@@ -309,9 +324,14 @@
           {
             label: 'Delete permanently',
             destructive: true,
-            onSelect: () => {
+            onSelect: async () => {
               if (
-                window.confirm(`Permanently delete folder "${folder.name}" and everything inside?`)
+                await confirm({
+                  title: 'Delete folder permanently',
+                  message: `Folder "${folder.name}" and everything inside will be removed. This cannot be undone.`,
+                  confirmLabel: 'Delete',
+                  destructive: true
+                })
               ) {
                 void purgeCollection(id);
               }
@@ -376,8 +396,8 @@
   }
   function canDropOnFolder(targetFolderId: string | null): boolean {
     if (!drag) return true;
-    if (drag.kind === 'folder' && targetFolderId === drag.id) return false;
-    return true;
+    return !(drag.kind === 'folder' && targetFolderId === drag.id);
+
   }
   function onDragOverFolder(e: DragEvent, folderId: string) {
     if (!e.dataTransfer) return;

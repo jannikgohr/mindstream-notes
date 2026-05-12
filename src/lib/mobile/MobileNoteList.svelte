@@ -23,6 +23,8 @@
     purgeNote,
     renameCollection,
     renameNote,
+    restoreCollection,
+    restoreNote,
     trashCollection,
     trashNote,
     tree
@@ -30,6 +32,7 @@
   import { ui } from '$lib/state.svelte';
   import { sortTree } from '$lib/sort';
   import ContextMenu, { type MenuItem } from '$lib/components/ContextMenu.svelte';
+  import { confirm } from '$lib/components/ConfirmDialog.svelte';
   import MoveToSheet, { type MoveTarget } from './MoveToSheet.svelte';
   import NameInputSheet from './NameInputSheet.svelte';
   import {
@@ -249,38 +252,71 @@
     else await moveCollectionTo(t.id, destination);
   }
 
-  function startDelete(t: NodeRef) {
-    const isPurge = mobileState.view === 'trash';
+  async function startTrash(t: NodeRef) {
     const label = nameFor(t);
-    const prompt = isPurge
-      ? `Permanently delete "${label}"?`
-      : `Move "${label}" to trash?`;
-    if (!window.confirm(prompt)) return;
-    if (isPurge) {
-      if (t.kind === 'note') void purgeNote(t.id);
-      else void purgeCollection(t.id);
-    } else {
-      if (t.kind === 'note') void trashNote(t.id);
-      else void trashCollection(t.id);
+    if (
+      !(await confirm({
+        title: t.kind === 'note' ? 'Move note to trash' : 'Move folder to trash',
+        message: `"${label}" will move to the trash. You can restore it from there later.`,
+        confirmLabel: 'Move to trash',
+        destructive: true
+      }))
+    ) {
+      return;
     }
+    if (t.kind === 'note') void trashNote(t.id);
+    else void trashCollection(t.id);
+  }
+
+  async function startPurge(t: NodeRef) {
+    const label = nameFor(t);
+    if (
+      !(await confirm({
+        title: 'Delete permanently',
+        message:
+          t.kind === 'folder'
+            ? `Folder "${label}" and everything inside will be removed. This cannot be undone.`
+            : `"${label}" will be removed. This cannot be undone.`,
+        confirmLabel: 'Delete',
+        destructive: true
+      }))
+    ) {
+      return;
+    }
+    if (t.kind === 'note') void purgeNote(t.id);
+    else void purgeCollection(t.id);
+  }
+
+  function startRestore(t: NodeRef) {
+    if (t.kind === 'note') void restoreNote(t.id);
+    else void restoreCollection(t.id);
   }
 
   function menuItems(): (MenuItem | 'separator')[] {
     const t = menuTarget;
     if (!t) return [];
-    const isPurge = mobileState.view === 'trash';
+    // Inside the trash bucket the only meaningful actions are
+    // restoring the item or purging it; rename / move-to don't apply
+    // until something is rescued back out of the trash.
+    if (mobileState.view === 'trash') {
+      return [
+        { label: 'Restore', onSelect: () => startRestore(t) },
+        'separator',
+        {
+          label: 'Delete permanently',
+          destructive: true,
+          onSelect: () => void startPurge(t)
+        }
+      ];
+    }
     return [
       { label: 'Rename', onSelect: () => startRename(t) },
-      {
-        label: 'Move to…',
-        disabled: isPurge,
-        onSelect: () => startMove(t)
-      },
+      { label: 'Move to…', onSelect: () => startMove(t) },
       'separator',
       {
-        label: isPurge ? 'Delete permanently' : 'Delete',
+        label: 'Delete',
         destructive: true,
-        onSelect: () => startDelete(t)
+        onSelect: () => void startTrash(t)
       }
     ];
   }

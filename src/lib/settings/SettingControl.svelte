@@ -16,6 +16,7 @@
   } from './store.svelte';
   import { CUSTOM_COMPONENTS, INFO_VALUES, SETTING_ACTIONS } from './registry.svelte';
   import { tDescription, tLabel, tUi, tValue } from './i18n.svelte';
+  import SettingSelect from './SettingSelect.svelte';
   import type { Setting } from './types';
 
   interface Props {
@@ -178,15 +179,13 @@
         </span>
       </div>
     {:else if setting.type === 'select'}
-      <select
+      <SettingSelect
+        settingId={setting.id}
         value={(value as string | undefined) ?? ''}
-        onchange={(e) => commit((e.currentTarget as HTMLSelectElement).value)}
-        class="h-8 w-44 rounded-md border border-input bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      >
-        {#each setting.options as opt (opt)}
-          <option value={opt}>{tValue(setting.id, opt)}</option>
-        {/each}
-      </select>
+        options={setting.options}
+        onChange={commit}
+        ariaLabel={label}
+      />
     {:else if setting.type === 'color'}
       <div class="flex items-center gap-2">
         <input
