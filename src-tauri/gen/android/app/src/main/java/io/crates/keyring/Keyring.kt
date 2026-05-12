@@ -30,7 +30,10 @@ class Keyring {
             System.loadLibrary("mindstream_notes_lib")
         }
 
-        @JvmStatic
+        // No @JvmStatic: JNI lookup must resolve to
+        // Java_io_crates_keyring_Keyring_00024Companion_initializeNdkContext
+        // (the symbol the crate exports). @JvmStatic would strip $Companion
+        // from the lookup and cause UnsatisfiedLinkError at startup.
         external fun initializeNdkContext(context: Context)
     }
 }
