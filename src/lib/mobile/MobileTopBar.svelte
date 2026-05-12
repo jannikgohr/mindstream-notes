@@ -13,7 +13,7 @@
 </script>
 
 <header
-  class="flex h-14 shrink-0 select-none items-center gap-2 border-b border-border bg-card px-3"
+  class="flex shrink-0 select-none items-center gap-2 border-b border-border bg-card px-3 py-2"
 >
   <div class="relative min-w-0 flex-1">
     <Search
@@ -34,8 +34,14 @@
     onclick={openSettings}
     title={tUi('settings.open')}
     aria-label={tUi('settings.open')}
-    class="size-13.5 shrink-0 rounded-full p-0"
+    class="size-12 shrink-0 rounded-full border border-input p-0 [&_svg]:size-8"
   >
-    <SettingsIcon class="size-5" />
+    <!--
+      Default Lucide stroke-width is 2 — at the original size-4 (16px)
+      that rendered as ~1.3px visually. Doubling the icon to size-8
+      (32px) without compensating would double the line thickness too;
+      halving stroke-width keeps the visual weight constant.
+    -->
+    <SettingsIcon strokeWidth={1} />
   </Button>
 </header>
