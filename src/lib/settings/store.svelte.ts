@@ -25,7 +25,8 @@
 import { SvelteSet } from 'svelte/reactivity';
 import schemaData from './schema.json';
 import { SETTING_BINDINGS } from './registry.svelte';
-import type { SettingsSchema, Setting } from './types';
+import { matchesPlatformFilter } from '$lib/platform';
+import type { Category, Section, SettingsSchema, Setting } from './types';
 
 const STORAGE_KEY = 'notes-app:settings:v1';
 
@@ -196,6 +197,7 @@ export function isPending(id: string): boolean {
 
 /** Resolve showIf against the live store. Recursive showIf isn't supported. */
 export function isVisible(setting: Setting): boolean {
+  if (!matchesPlatformFilter(setting.platforms)) return false;
   const cond = setting.showIf;
   if (!cond) return true;
   const v = getSettingValue(cond.id);
@@ -203,6 +205,16 @@ export function isVisible(setting: Setting): boolean {
   if ('notEquals' in cond && cond.notEquals !== undefined) return v !== cond.notEquals;
   if ('in' in cond && Array.isArray(cond.in)) return cond.in.includes(v);
   return true;
+}
+
+/** True if the section's `platforms` filter (if any) matches the current OS. */
+export function isSectionVisible(section: Section): boolean {
+  return matchesPlatformFilter(section.platforms);
+}
+
+/** True if the category's `platforms` filter (if any) matches the current OS. */
+export function isCategoryVisible(category: Category): boolean {
+  return matchesPlatformFilter(category.platforms);
 }
 
 /** Open/close state for the dialog itself. */

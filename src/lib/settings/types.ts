@@ -9,6 +9,8 @@
  * registered component by `customId`; same for action buttons via `actionId`.
  */
 
+import type { PlatformFilter } from '$lib/platform';
+
 /** Where the setting is persisted. G = global, V = per-vault, D = per-device. */
 export type SettingScope = 'G' | 'V' | 'D';
 
@@ -41,6 +43,12 @@ interface SettingBase {
   type: SettingType;
   default?: unknown;
   showIf?: ShowIf;
+  /**
+   * Restrict the setting to the listed platforms. Accepts specific OS
+   * names (`"android"`, `"windows"`, …) and coarse groups (`"desktop"`,
+   * `"mobile"`); mixing both is fine. Omitted/empty ⇒ all platforms.
+   */
+  platforms?: PlatformFilter[];
   /** Lookup key into the custom-component registry (only when type='custom'). */
   customId?: string;
   /** Lookup key into the action registry (only when type='button'). */
@@ -119,6 +127,8 @@ export type Setting =
 
 export interface Section {
   id: string;
+  /** Same semantics as Setting.platforms — hides the entire section. */
+  platforms?: PlatformFilter[];
   settings: Setting[];
 }
 
@@ -126,6 +136,8 @@ export interface Category {
   id: string;
   /** Lucide icon name (kebab-case), resolved through icons.ts. */
   icon?: string;
+  /** Same semantics as Setting.platforms — hides the entire category. */
+  platforms?: PlatformFilter[];
   sections: Section[];
 }
 

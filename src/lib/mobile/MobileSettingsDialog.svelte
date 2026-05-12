@@ -21,6 +21,8 @@
   import {
     SCHEMA,
     closeSettings,
+    isCategoryVisible,
+    isSectionVisible,
     isVisible,
     settingsDialog
   } from '$lib/settings/store.svelte';
@@ -30,10 +32,14 @@
 
   let activeCategoryId = $state<string | null>(null);
 
+  const visibleCategories = $derived(
+    SCHEMA.categories.filter(isCategoryVisible)
+  );
+
   const activeCategory = $derived<Category | null>(
     activeCategoryId === null
       ? null
-      : SCHEMA.categories.find((c) => c.id === activeCategoryId) ?? null
+      : visibleCategories.find((c) => c.id === activeCategoryId) ?? null
   );
 
   /** Reset to the category list whenever the dialog closes. */
@@ -49,6 +55,7 @@
   function visibleSettings(cat: Category): Setting[] {
     const out: Setting[] = [];
     for (const sec of cat.sections) {
+      if (!isSectionVisible(sec)) continue;
       for (const s of sec.settings) {
         if (isVisible(s)) out.push(s);
       }
@@ -83,7 +90,7 @@
         </header>
 
         <nav class="flex-1 overflow-y-auto" aria-label={tUi('title')}>
-          {#each SCHEMA.categories as cat (cat.id)}
+          {#each visibleCategories as cat (cat.id)}
             {@const Icon = categoryIcon(cat.icon)}
             <button
               type="button"
@@ -128,7 +135,9 @@
             </p>
           {/if}
           {#each activeCategory.sections as sec (sec.id)}
-            {@const sectionSettings = sec.settings.filter((s) => isVisible(s))}
+            {@const sectionSettings = isSectionVisible(sec)
+              ? sec.settings.filter((s) => isVisible(s))
+              : []}
             {#if sectionSettings.length > 0}
               <div class="mb-6">
                 <h3 class="mb-2 border-b border-border pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
