@@ -54,9 +54,17 @@
     {#if i > 0}
       <ChevronRight class="size-3 shrink-0 opacity-50" />
     {/if}
+    <!--
+      Last-segment <span> and intermediate <button> use *identical*
+      box chrome so the active segment doesn't jump rightward by
+      ~4px when navigating into a subfolder (the root segment
+      demotes from span to button at that moment). Only `truncate`
+      lives on the inner text-<span> — putting it on the outer flex
+      box clips the home icon's bleed.
+    -->
     {#if isLast}
       <span
-        class="flex min-w-0 items-center gap-1 truncate font-medium text-foreground"
+        class="flex min-w-0 items-center gap-1 rounded px-1 py-0.5 font-medium text-foreground"
         aria-current="page"
       >
         {#if isRoot}
@@ -67,7 +75,7 @@
     {:else}
       <button
         type="button"
-        class="flex min-w-0 items-center gap-1 truncate rounded px-1 py-0.5 hover:bg-accent hover:text-accent-foreground"
+        class="flex min-w-0 items-center gap-1 rounded px-1 py-0.5 hover:bg-accent hover:text-accent-foreground"
         onclick={() => setCurrentFolder(seg.id)}
       >
         {#if isRoot}
