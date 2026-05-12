@@ -117,7 +117,10 @@
   }
 
   function disabledReason(id: string | null): string | null {
-    if (target.currentParent === id) return 'Already in this folder';
+    // Root is always selectable — picking it when already at root is a
+    // harmless no-op and the alternative (greying it out) makes it look
+    // like a section header instead of a destination.
+    if (id !== null && target.currentParent === id) return 'Already in this folder';
     if (id !== null && forbidden.has(id)) {
       return 'Cannot move a folder into itself or one of its children';
     }
