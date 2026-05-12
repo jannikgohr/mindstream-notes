@@ -17,6 +17,7 @@ export interface NoteSummary {
   modified: string;
   tags: string[];
   trashed: boolean;
+  favourite: boolean;
 }
 
 export interface Note extends NoteSummary {
@@ -55,6 +56,7 @@ export interface UpdateNoteInput {
    * payload_schema to 2 (see src-tauri/src/notes/mod.rs::update).
    */
   yrs_state?: number[];
+  favourite?: boolean;
 }
 
 export function listNotes(includeTrashed = false): Promise<NoteSummary[]> {

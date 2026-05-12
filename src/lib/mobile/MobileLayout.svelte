@@ -36,10 +36,18 @@
     tree
   } from '$lib/stores/tree.svelte';
   import { setActiveNote } from '$lib/state.svelte';
-  import { mobileState, setMobileScreen } from './state.svelte';
+  import {
+    migrateLegacyFavourites,
+    mobileState,
+    setMobileScreen
+  } from './state.svelte';
 
   onMount(() => {
-    if (!tree.ready) void loadTree();
+    if (!tree.ready) {
+      void loadTree().then(() => migrateLegacyFavourites());
+    } else {
+      void migrateLegacyFavourites();
+    }
   });
 
   function openNote(id: string) {

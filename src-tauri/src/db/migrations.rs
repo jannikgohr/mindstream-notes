@@ -166,6 +166,17 @@ const MIGRATIONS: &[Migration] = &[
             ALTER TABLE notes ADD COLUMN payload_schema INTEGER NOT NULL DEFAULT 1;
         "#,
     },
+    Migration {
+        to: 6,
+        // Favourite flag, replacing the mobile shell's localStorage Set
+        // that pre-dated this migration. Stored as a 0/1 INTEGER (SQLite
+        // has no real bool) and pushed in the v2 NotePayload as a plain
+        // bool field (serde-defaulted so older payloads decode as false).
+        sql: r#"
+            ALTER TABLE notes ADD COLUMN favourite INTEGER NOT NULL DEFAULT 0;
+            CREATE INDEX idx_notes_favourite ON notes(favourite) WHERE favourite = 1;
+        "#,
+    },
 ];
 
 pub fn run(conn: &mut Connection) -> AppResult<()> {

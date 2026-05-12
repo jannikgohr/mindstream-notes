@@ -110,6 +110,24 @@ export async function setNoteBody(id: string, body: string): Promise<void> {
 }
 
 /**
+ * Persist the favourite bit and patch the in-memory summary so any
+ * mobile star-icon toggle reflects immediately without waiting on a
+ * tree refetch. Backed by the SQLite `notes.favourite` column and
+ * carried across devices via the v2 NotePayload (see sync/mod.rs).
+ */
+export async function setNoteFavourite(id: string, favourite: boolean): Promise<void> {
+  await api.saveNote({ id, favourite });
+  const existing = tree.notesById[id];
+  if (existing) {
+    tree.notesById[id] = {
+      ...existing,
+      favourite,
+      modified: new Date().toISOString()
+    };
+  }
+}
+
+/**
  * Replace the tag list on a note. Optimistic — patches the in-memory summary
  * so the metadata panel updates without a full tree refetch. Tags are
  * normalized (trimmed + de-duped) before persisting.

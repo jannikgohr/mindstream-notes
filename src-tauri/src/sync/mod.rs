@@ -81,6 +81,11 @@ struct NotePayload {
     /// for legacy decode; absence means "no live collab for this note".
     #[serde(default, with = "serde_bytes")]
     crypto_key: Vec<u8>,
+    /// Favourite flag. Added without bumping the schema marker — older
+    /// clients see an unknown field (rmp-serde ignores them) and newer
+    /// clients reading older payloads get the serde default of `false`.
+    #[serde(default)]
+    favourite: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -420,8 +425,9 @@ fn apply_note(db: &Db, item: &Item) -> AppResult<()> {
                  SET parent_collection_id = ?1, title = ?2, body = ?3, position = ?4,
                      modified = ?5, trashed_at = ?6, yrs_state = ?7,
                      etebase_uid = ?8, etebase_etag = ?9, dirty = ?10,
-                     crypto_key = COALESCE(?11, crypto_key), payload_schema = ?12
-                 WHERE id = ?13",
+                     crypto_key = COALESCE(?11, crypto_key), payload_schema = ?12,
+                     favourite = ?13
+                 WHERE id = ?14",
                 params![
                     payload.parent_folder_id,
                     payload.title,
@@ -435,6 +441,7 @@ fn apply_note(db: &Db, item: &Item) -> AppResult<()> {
                     dirty_after,
                     crypto_key,
                     incoming_schema,
+                    payload.favourite as i64,
                     payload.id,
                 ],
             )?;
@@ -443,8 +450,8 @@ fn apply_note(db: &Db, item: &Item) -> AppResult<()> {
                 "INSERT INTO notes (id, parent_collection_id, title, body, position,
                                     created, modified, trashed_at, yrs_state,
                                     etebase_uid, etebase_etag, dirty,
-                                    crypto_key, payload_schema)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7, ?8, ?9, ?10, 0, ?11, ?12)",
+                                    crypto_key, payload_schema, favourite)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7, ?8, ?9, ?10, 0, ?11, ?12, ?13)",
                 params![
                     payload.id,
                     payload.parent_folder_id,
@@ -458,6 +465,7 @@ fn apply_note(db: &Db, item: &Item) -> AppResult<()> {
                     etag,
                     crypto_key,
                     incoming_schema,
+                    payload.favourite as i64,
                 ],
             )?;
         }
@@ -579,6 +587,7 @@ fn push_notes(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult<(
             yrs_state: row.yrs_state.clone(),
             body: row.body.clone(),
             crypto_key: key_for_payload,
+            favourite: row.favourite,
         };
         let bytes = rmp_serde::to_vec_named(&payload)
             .map_err(|e| AppError::InvalidArg(format!("encode note: {e}")))?;
@@ -776,6 +785,7 @@ struct DirtyNote {
     body: String,
     /// Per-note collab key. None on first push; push_notes generates one.
     crypto_key: Option<Vec<u8>>,
+    favourite: bool,
 }
 
 fn load_dirty_folders(db: &Db) -> AppResult<Vec<DirtyFolder>> {
@@ -802,7 +812,7 @@ fn load_dirty_notes(db: &Db) -> AppResult<Vec<DirtyNote>> {
     let rows: Vec<DirtyNote> = db.with_conn(|c| {
         let mut stmt = c.prepare(
             "SELECT id, parent_collection_id, title, position, trashed_at,
-                    yrs_state, etebase_uid, body, crypto_key
+                    yrs_state, etebase_uid, body, crypto_key, favourite
              FROM notes WHERE dirty = 1",
         )?;
         let rows = stmt.query_map([], |r| {
@@ -817,6 +827,7 @@ fn load_dirty_notes(db: &Db) -> AppResult<Vec<DirtyNote>> {
                 tags: Vec::new(),
                 body: r.get(7)?,
                 crypto_key: r.get::<_, Option<Vec<u8>>>(8)?,
+                favourite: r.get::<_, i64>(9)? != 0,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)

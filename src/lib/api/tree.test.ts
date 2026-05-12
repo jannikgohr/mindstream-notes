@@ -26,7 +26,8 @@ const note = (
   created: '2024-01-01T00:00:00Z',
   modified: '2024-01-01T00:00:00Z',
   tags: [],
-  trashed
+  trashed,
+  favourite: false
 });
 
 describe('composeTree', () => {
