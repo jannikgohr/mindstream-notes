@@ -8,7 +8,19 @@
     "reset": "Reset to default",
     "modified": "Modified",
     "empty": "No settings match your search.",
-    "saving": "Saving…"
+    "saving": "Saving…",
+
+    "sort.label": "Sort",
+    "sort.ascending": "Sort ascending",
+    "sort.descending": "Sort descending",
+    "sort.switch": "Choose how to sort",
+    "sort.strategy.alphabetical": "Alphabetical",
+    "sort.strategy.modified": "Recently modified",
+    "sort.strategy.created": "Recently created",
+
+    "display.mode": "Display mode",
+    "display.list": "List view",
+    "display.grid": "Grid view"
   },
   "categories": {
     "account": { "label": "Account & Sync", "description": "Connect to a managed or self-hosted server, manage devices and sync." },

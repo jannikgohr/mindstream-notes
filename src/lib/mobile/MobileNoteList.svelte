@@ -62,7 +62,12 @@
   }
 
   const sortedTree = $derived(
-    sortTree(tree.tree, ui.sortStrategy, { notesById: tree.notesById })
+    sortTree(
+      tree.tree,
+      ui.sortStrategy,
+      { notesById: tree.notesById },
+      ui.sortDirection
+    )
   );
 
   // Pick the source set based on the active bottom-nav bucket. Each

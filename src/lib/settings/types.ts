@@ -153,16 +153,15 @@ export interface SettingsSchema {
  */
 export interface I18nBundle {
   language: string;
-  ui: {
-    title: string;
-    search: string;
-    close: string;
-    back: string;
-    reset: string;
-    modified: string;
-    empty: string;
-    saving: string;
-  };
+  /**
+   * Flat dictionary of UI strings. Keys are namespaced with dots
+   * (e.g. `'sort.ascending'`, `'menu.rename'`) — `tUi()` does a plain
+   * map lookup, no nesting walked. Adding a new string is "drop a
+   * key/value pair into every bundle", and the rule is that every new
+   * user-facing string goes through this rather than hardcoded text in
+   * components.
+   */
+  ui: Record<string, string>;
   categories: Record<string, { label: string; description?: string }>;
   sections: Record<string, { label: string; description?: string }>;
   settings: Record<string, { label: string; description?: string }>;

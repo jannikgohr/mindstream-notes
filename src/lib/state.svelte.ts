@@ -5,7 +5,7 @@
  */
 
 import { DEFAULT_PREFERENCES, loadPreferences, savePreferences } from './preferences';
-import type { SortStrategy } from './sort';
+import type { SortDirection, SortStrategy } from './sort';
 
 const initialPrefs = loadPreferences();
 
@@ -15,6 +15,7 @@ interface UiState {
   leftSidebarWidth: number;
   rightSidebarWidth: number;
   sortStrategy: SortStrategy;
+  sortDirection: SortDirection;
   /** Id of the note the metadata panel should describe. */
   activeNoteId: string | null;
 }
@@ -25,6 +26,7 @@ export const ui = $state<UiState>({
   leftSidebarWidth: initialPrefs.leftSidebarWidth,
   rightSidebarWidth: initialPrefs.rightSidebarWidth,
   sortStrategy: initialPrefs.sortStrategy,
+  sortDirection: initialPrefs.sortDirection,
   activeNoteId: null
 });
 
@@ -57,6 +59,15 @@ export function setSortStrategy(s: SortStrategy) {
   persistUi();
 }
 
+export function setSortDirection(d: SortDirection) {
+  ui.sortDirection = d;
+  persistUi();
+}
+
+export function toggleSortDirection() {
+  setSortDirection(ui.sortDirection === 'asc' ? 'desc' : 'asc');
+}
+
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 function persistUi() {
   if (persistTimer) clearTimeout(persistTimer);
@@ -67,7 +78,8 @@ function persistUi() {
       rightSidebarOpen: ui.rightSidebarOpen,
       leftSidebarWidth: ui.leftSidebarWidth,
       rightSidebarWidth: ui.rightSidebarWidth,
-      sortStrategy: ui.sortStrategy
+      sortStrategy: ui.sortStrategy,
+      sortDirection: ui.sortDirection
     });
   }, 150);
 }

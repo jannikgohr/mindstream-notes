@@ -8,7 +8,7 @@
  * so the call sites won't change.
  */
 
-import type { SortStrategy } from './sort';
+import type { SortDirection, SortStrategy } from './sort';
 
 const STORAGE_KEY = 'notes-app:preferences:v1';
 
@@ -18,6 +18,7 @@ export interface Preferences {
   leftSidebarOpen: boolean;
   rightSidebarOpen: boolean;
   sortStrategy: SortStrategy;
+  sortDirection: SortDirection;
 }
 
 export const DEFAULT_PREFERENCES: Preferences = {
@@ -25,7 +26,11 @@ export const DEFAULT_PREFERENCES: Preferences = {
   rightSidebarWidth: 260,
   leftSidebarOpen: true,
   rightSidebarOpen: true,
-  sortStrategy: 'alphabetical'
+  sortStrategy: 'alphabetical',
+  // 'asc' matches the natural reading order for alphabetical (the
+  // default strategy). Users who switch to recently-modified can flip
+  // the direction with one tap on the split sort button.
+  sortDirection: 'asc'
 };
 
 function isBrowser(): boolean {
@@ -37,6 +42,8 @@ const VALID_SORTS = new Set<SortStrategy>([
   'modified',
   'created'
 ]);
+
+const VALID_DIRECTIONS = new Set<SortDirection>(['asc', 'desc']);
 
 export function loadPreferences(): Preferences {
   if (!isBrowser()) return { ...DEFAULT_PREFERENCES };
@@ -60,7 +67,11 @@ export function loadPreferences(): Preferences {
       sortStrategy:
         parsed.sortStrategy && VALID_SORTS.has(parsed.sortStrategy)
           ? parsed.sortStrategy
-          : DEFAULT_PREFERENCES.sortStrategy
+          : DEFAULT_PREFERENCES.sortStrategy,
+      sortDirection:
+        parsed.sortDirection && VALID_DIRECTIONS.has(parsed.sortDirection)
+          ? parsed.sortDirection
+          : DEFAULT_PREFERENCES.sortDirection
     };
   } catch (err) {
     console.warn('[preferences] load failed, using defaults', err);

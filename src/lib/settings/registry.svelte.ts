@@ -18,7 +18,6 @@ import {
 } from '@tauri-apps/plugin-autostart';
 import { isTauri } from '$lib/api';
 import { isMobile } from '$lib/platform';
-import { confirm } from '$lib/components/ConfirmDialog.svelte';
 import {
   setLeftSidebarWidth,
   setRightSidebarWidth,
@@ -109,6 +108,13 @@ export const SETTING_ACTIONS: Record<string, () => void | Promise<void>> = {
     console.info('[settings] action: open-data-folder (stub)');
   },
   'empty-trash': async () => {
+    // Dynamic import so the bits-ui re-export chain (AlertDialog → the
+    // whole bits-ui index → Select → …) doesn't get pulled into this
+    // module's static graph. Plain Node-level test runners (vitest) trip
+    // over bits-ui's select-viewport.svelte during preprocessing, and
+    // we don't want unrelated test files to fail just because they
+    // happen to import getSettingValue from the same store.
+    const { confirm } = await import('$lib/components/ConfirmDialog.svelte');
     if (
       await confirm({
         title: 'Empty trash',
