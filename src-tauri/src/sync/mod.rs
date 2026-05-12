@@ -897,7 +897,20 @@ pub struct RoomInfo {
 }
 
 #[tauri::command]
-pub fn note_room_info(db: tauri::State<'_, Db>, id: String) -> Result<Option<RoomInfo>, String> {
+pub fn note_room_info(
+    app: AppHandle,
+    db: tauri::State<'_, Db>,
+    id: String,
+) -> Result<Option<RoomInfo>, String> {
+    // Live collab is etebase-gated: no session ⇒ no room. A logged-out
+    // client must not be able to join an existing room with material
+    // that's still cached locally from a previous session. The logout
+    // path additionally wipes `crypto_key` from the row, but this gate
+    // covers the window between "session expired" and "user explicitly
+    // logged out" as well.
+    if !crate::auth::has_session(&app) {
+        return Ok(None);
+    }
     db.with_conn(|c| {
         let row: Option<(Option<String>, Option<Vec<u8>>)> = c
             .query_row(
