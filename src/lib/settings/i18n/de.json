@@ -20,7 +20,13 @@
 
     "display.mode": "Anzeigemodus",
     "display.list": "Listenansicht",
-    "display.grid": "Rasteransicht"
+    "display.grid": "Rasteransicht",
+
+    "breadcrumb.label": "Ordnerpfad",
+    "breadcrumb.root.home": "Notizen",
+    "breadcrumb.root.shared": "Geteilt",
+    "breadcrumb.root.favourite": "Favoriten",
+    "breadcrumb.root.trash": "Papierkorb"
   },
   "categories": {
     "account": { "label": "Konto & Synchronisation" },
