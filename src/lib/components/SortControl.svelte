@@ -12,7 +12,7 @@
    * (`SORT_STRATEGIES` in sort.ts + `sort.strategy.<id>` in every i18n
    * bundle) and the picker picks it up automatically.
    */
-  import { ArrowDown, ArrowUp } from 'lucide-svelte';
+  import { ArrowUpDown } from 'lucide-svelte';
   import ContextMenu, { type MenuItem } from '$lib/components/ContextMenu.svelte';
   import { SORT_STRATEGIES, type SortDirection, type SortStrategy } from '$lib/sort';
   import { tUi } from '$lib/settings/i18n.svelte';
@@ -24,13 +24,29 @@
     onDirectionChange: (d: SortDirection) => void;
     /** Tailwind size class for the icons; defaults to `size-3.5`. */
     iconClass?: string;
+    /**
+     * `outlined` (default) draws the bordered pill used in the mobile
+     * toolbar — sits over the note-list background as a self-contained
+     * unit. `ghost` strips the border + bg so the control reads like a
+     * pair of ghost-icon buttons; used by the desktop file-tree header
+     * where it sits next to the new-note / new-folder ghost icons.
+     */
+    variant?: 'outlined' | 'ghost';
+    /**
+     * `false` (default) renders at h-8 (32px) — matches the mobile
+     * breadcrumb pill. `true` drops to h-7 (28px) for the cramped
+     * desktop file-tree header.
+     */
+    compact?: boolean;
   }
   let {
     strategy,
     direction,
     onStrategyChange,
     onDirectionChange,
-    iconClass = 'size-3.5'
+    iconClass = 'size-3.5',
+    variant = 'outlined',
+    compact = false
   }: Props = $props();
 
   const strategyLabel = $derived.by(() => {
@@ -80,7 +96,9 @@
 </script>
 
 <div
-  class="inline-flex h-8 select-none items-stretch overflow-hidden rounded-md border border-border bg-background text-xs"
+  class="inline-flex select-none items-stretch overflow-hidden rounded-md text-xs {compact
+    ? 'h-7'
+    : 'h-8'} {variant === 'outlined' ? 'border border-border bg-background' : ''}"
   role="group"
   aria-label={tUi('sort.label')}
 >
@@ -91,11 +109,15 @@
     aria-label={directionTooltip}
     title={directionTooltip}
   >
-    {#if direction === 'asc'}
-      <ArrowUp class={iconClass} />
-    {:else}
-      <ArrowDown class={iconClass} />
-    {/if}
+    <!--
+      Single ArrowUpDown icon — shows both arrows side-by-side. On a
+      direction flip we vertically mirror it via -scale-y-100 so the
+      "currently leading" arrow swaps between top and bottom. Smoother
+      than swapping between two distinct icons.
+    -->
+    <ArrowUpDown
+      class="{iconClass} transition-transform {direction === 'desc' ? '-scale-y-100' : ''}"
+    />
   </button>
 
   <span class="w-px shrink-0 self-stretch bg-border" aria-hidden="true"></span>
