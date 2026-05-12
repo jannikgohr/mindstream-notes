@@ -17,24 +17,24 @@
 >
   <div class="relative min-w-0 flex-1">
     <Search
-      class="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+      class="pointer-events-none absolute left-4 top-1/2 size-5 -translate-y-1/2 text-muted-foreground"
     />
     <Input
       type="search"
       placeholder={tUi('search.notes.placeholder')}
       value={mobileState.searchQuery}
       oninput={(e) => setSearchQuery((e.currentTarget as HTMLInputElement).value)}
-      class="h-9 w-full pl-8"
+      class="h-12 w-full rounded-full pl-11 pr-4"
       aria-label={tUi('search.notes.label')}
     />
   </div>
 
   <Button
     variant="ghost"
-    size="icon"
     onclick={openSettings}
     title={tUi('settings.open')}
     aria-label={tUi('settings.open')}
+    class="size-13.5 shrink-0 rounded-full p-0"
   >
     <SettingsIcon class="size-5" />
   </Button>
