@@ -5,18 +5,33 @@
    * a 2-column grid. Folder taps drill in; note taps bubble up via
    * `onOpenNote` so the parent can route to the editor screen.
    *
+   * Each row carries a "…" trigger that opens a ContextMenu with the
+   * standard rename / move / delete trio (delete becomes permanent purge
+   * inside the trash bucket so users can empty things manually).
+   *
    * "Shared" is a placeholder bucket — there's no per-note shared flag
    * yet, so it just shows an explanatory empty state. Wire a real filter
    * in here when collab metadata lands.
    */
-  import { FileText, Folder, Star } from 'lucide-svelte';
+  import { FileText, Folder, MoreVertical, Star } from 'lucide-svelte';
   import type { NoteSummary, TreeNode } from '$lib/api';
   import { TRASH_ID } from '$lib/api';
-  import { tree } from '$lib/stores/tree.svelte';
+  import {
+    moveCollectionTo,
+    moveNoteTo,
+    purgeCollection,
+    purgeNote,
+    renameCollection,
+    renameNote,
+    trashCollection,
+    trashNote,
+    tree
+  } from '$lib/stores/tree.svelte';
   import { ui } from '$lib/state.svelte';
   import { sortTree } from '$lib/sort';
+  import ContextMenu, { type MenuItem } from '$lib/components/ContextMenu.svelte';
+  import MoveToSheet, { type MoveTarget } from './MoveToSheet.svelte';
   import {
-    favourites,
     isFavourite,
     mobileState,
     setCurrentFolder,
@@ -62,10 +77,8 @@
 
     if (view === 'favourite') {
       // Flat list, no folder drill-down (favourites span folders).
-      // Read favourites.ids so Svelte tracks the dependency.
-      const favSet = favourites.ids;
       return Object.values(tree.notesById)
-        .filter((n) => favSet.has(n.id) && !n.trashed)
+        .filter((n) => n.favourite && !n.trashed)
         .map<TreeNode>((n) => ({
           kind: 'note',
           id: n.id,
@@ -103,9 +116,8 @@
         (n) => n.trashed || n.parent_collection_id === TRASH_ID
       );
     } else if (mobileState.view === 'favourite') {
-      const favSet = favourites.ids;
       pool = Object.values(tree.notesById).filter(
-        (n) => favSet.has(n.id) && !n.trashed
+        (n) => n.favourite && !n.trashed
       );
     } else {
       pool = Object.values(tree.notesById).filter(
@@ -155,6 +167,108 @@
           : 'No notes yet. Use the + button to create one.';
     }
   }
+
+  // ---------- Context menu + move sheet ----------
+
+  type NodeRef = { kind: 'note' | 'folder'; id: string };
+
+  let menuOpen = $state(false);
+  let menuX = $state(0);
+  let menuY = $state(0);
+  let menuTarget = $state<NodeRef | null>(null);
+
+  let moveTarget = $state<MoveTarget | null>(null);
+
+  function openContextMenu(e: MouseEvent, target: NodeRef) {
+    e.stopPropagation();
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    // Anchor the menu under the trigger button, right-aligned-ish via
+    // ContextMenu's own clamping logic.
+    menuX = r.right - 200;
+    menuY = r.bottom + 4;
+    menuTarget = target;
+    menuOpen = true;
+  }
+
+  function closeMenu() {
+    menuOpen = false;
+    menuTarget = null;
+  }
+
+  function nameFor(t: NodeRef): string {
+    return t.kind === 'note'
+      ? tree.notesById[t.id]?.title ?? 'note'
+      : tree.collectionsById[t.id]?.name ?? 'folder';
+  }
+
+  function currentParentOf(t: NodeRef): string | null {
+    return t.kind === 'note'
+      ? tree.notesById[t.id]?.parent_collection_id ?? null
+      : tree.collectionsById[t.id]?.parent_collection_id ?? null;
+  }
+
+  function startRename(t: NodeRef) {
+    const current = nameFor(t);
+    const label = t.kind === 'note' ? 'New title' : 'New folder name';
+    const next = window.prompt(label, current);
+    if (!next) return;
+    const trimmed = next.trim();
+    if (!trimmed || trimmed === current) return;
+    if (t.kind === 'note') void renameNote(t.id, trimmed);
+    else void renameCollection(t.id, trimmed);
+  }
+
+  function startMove(t: NodeRef) {
+    moveTarget = {
+      kind: t.kind,
+      id: t.id,
+      currentParent: currentParentOf(t)
+    };
+  }
+
+  async function commitMove(destination: string | null) {
+    const t = moveTarget;
+    moveTarget = null;
+    if (!t) return;
+    if (t.kind === 'note') await moveNoteTo(t.id, destination);
+    else await moveCollectionTo(t.id, destination);
+  }
+
+  function startDelete(t: NodeRef) {
+    const isPurge = mobileState.view === 'trash';
+    const label = nameFor(t);
+    const prompt = isPurge
+      ? `Permanently delete "${label}"?`
+      : `Move "${label}" to trash?`;
+    if (!window.confirm(prompt)) return;
+    if (isPurge) {
+      if (t.kind === 'note') void purgeNote(t.id);
+      else void purgeCollection(t.id);
+    } else {
+      if (t.kind === 'note') void trashNote(t.id);
+      else void trashCollection(t.id);
+    }
+  }
+
+  function menuItems(): (MenuItem | 'separator')[] {
+    const t = menuTarget;
+    if (!t) return [];
+    const isPurge = mobileState.view === 'trash';
+    return [
+      { label: 'Rename', onSelect: () => startRename(t) },
+      {
+        label: 'Move to…',
+        disabled: isPurge,
+        onSelect: () => startMove(t)
+      },
+      'separator',
+      {
+        label: isPurge ? 'Delete permanently' : 'Delete',
+        destructive: true,
+        onSelect: () => startDelete(t)
+      }
+    ];
+  }
 </script>
 
 <div class="flex-1 overflow-y-auto px-3 py-3">
@@ -179,7 +293,7 @@
         >
           <button
             type="button"
-            class="flex h-full w-full flex-col items-start gap-1.5 rounded-lg p-3 text-left hover:bg-accent/50"
+            class="flex h-full w-full flex-col items-start gap-1.5 rounded-lg p-3 pr-9 text-left hover:bg-accent/50"
             onclick={() => handleNodeTap(node)}
           >
             {#if node.kind === 'folder'}
@@ -187,25 +301,36 @@
             {:else}
               <FileText class="size-5 text-muted-foreground" />
             {/if}
-            <span class="line-clamp-2 pr-6 text-sm font-medium">{node.name}</span>
+            <span class="line-clamp-2 text-sm font-medium">{node.name}</span>
             {#if node.kind === 'note'}
               <span class="mt-auto text-[10px] text-muted-foreground">
                 {previewFor(node.id)}
               </span>
             {/if}
           </button>
-          {#if node.kind === 'note'}
+          <div class="absolute right-1 top-1 flex flex-col items-center gap-0.5">
+            {#if node.kind === 'note'}
+              <button
+                type="button"
+                class="rounded p-1 text-muted-foreground hover:text-foreground"
+                onclick={() => toggleFavourite(node.id)}
+                aria-pressed={fav}
+                aria-label={fav ? 'Remove from favourites' : 'Add to favourites'}
+                title={fav ? 'Remove from favourites' : 'Add to favourites'}
+              >
+                <Star class="size-4" fill={fav ? 'currentColor' : 'none'} />
+              </button>
+            {/if}
             <button
               type="button"
-              class="absolute right-2 top-2 rounded p-1 text-muted-foreground hover:text-foreground"
-              onclick={() => toggleFavourite(node.id)}
-              aria-pressed={fav}
-              aria-label={fav ? 'Remove from favourites' : 'Add to favourites'}
-              title={fav ? 'Remove from favourites' : 'Add to favourites'}
+              class="rounded p-1 text-muted-foreground hover:text-foreground"
+              onclick={(e) => openContextMenu(e, { kind: node.kind, id: node.id })}
+              aria-label="More actions"
+              title="More actions"
             >
-              <Star class="size-4" fill={fav ? 'currentColor' : 'none'} />
+              <MoreVertical class="size-4" />
             </button>
-          {/if}
+          </div>
         </div>
       {/each}
     </div>
@@ -245,8 +370,34 @@
               <Star class="size-4" fill={fav ? 'currentColor' : 'none'} />
             </button>
           {/if}
+          <button
+            type="button"
+            class="shrink-0 rounded p-2 text-muted-foreground hover:text-foreground"
+            onclick={(e) => openContextMenu(e, { kind: node.kind, id: node.id })}
+            aria-label="More actions"
+            title="More actions"
+          >
+            <MoreVertical class="size-4" />
+          </button>
         </li>
       {/each}
     </ul>
   {/if}
 </div>
+
+{#if menuOpen}
+  <ContextMenu
+    x={menuX}
+    y={menuY}
+    items={menuItems()}
+    onClose={closeMenu}
+  />
+{/if}
+
+{#if moveTarget}
+  <MoveToSheet
+    target={moveTarget}
+    onPick={(d) => void commitMove(d)}
+    onClose={() => (moveTarget = null)}
+  />
+{/if}

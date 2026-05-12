@@ -26,6 +26,7 @@ pub struct NoteSummary {
     pub modified: String,
     pub tags: Vec<String>,
     pub trashed: bool,
+    pub favourite: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -76,10 +77,14 @@ pub struct UpdateNote {
     /// legacy Rust-side "diff old vs new markdown into Y.Text" path.
     #[serde(default)]
     pub yrs_state: Option<Vec<u8>>,
+    /// Toggle the favourite bit. Some(true)/Some(false) writes; None
+    /// leaves the existing value untouched.
+    pub favourite: Option<bool>,
 }
 
 fn row_to_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<NoteSummary> {
     let trashed_at: Option<String> = row.get("trashed_at")?;
+    let favourite: i64 = row.get("favourite")?;
     Ok(NoteSummary {
         id: row.get("id")?,
         parent_collection_id: row.get("parent_collection_id")?,
@@ -89,6 +94,7 @@ fn row_to_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<NoteSummary> {
         modified: row.get("modified")?,
         tags: Vec::new(),
         trashed: trashed_at.is_some(),
+        favourite: favourite != 0,
     })
 }
 
@@ -100,11 +106,11 @@ fn load_tags(conn: &Connection, note_id: &str) -> AppResult<Vec<String>> {
 
 pub fn list(conn: &Connection, include_trashed: bool) -> AppResult<Vec<NoteSummary>> {
     let sql = if include_trashed {
-        "SELECT id, parent_collection_id, title, position, created, modified, trashed_at
+        "SELECT id, parent_collection_id, title, position, created, modified, trashed_at, favourite
          FROM notes
          ORDER BY parent_collection_id IS NOT NULL, parent_collection_id, position, title"
     } else {
-        "SELECT id, parent_collection_id, title, position, created, modified, trashed_at
+        "SELECT id, parent_collection_id, title, position, created, modified, trashed_at, favourite
          FROM notes
          WHERE trashed_at IS NULL
          ORDER BY parent_collection_id IS NOT NULL, parent_collection_id, position, title"
@@ -121,7 +127,7 @@ pub fn list(conn: &Connection, include_trashed: bool) -> AppResult<Vec<NoteSumma
 pub fn load(conn: &Connection, id: &str) -> AppResult<Note> {
     let mut stmt = conn.prepare(
         "SELECT id, parent_collection_id, title, position, created, modified,
-                trashed_at, body, yrs_state, payload_schema
+                trashed_at, favourite, body, yrs_state, payload_schema
          FROM notes WHERE id = ?1",
     )?;
     let row_data = stmt
@@ -241,6 +247,12 @@ pub fn update(conn: &mut Connection, input: UpdateNote) -> AppResult<Note> {
         for tag in tags {
             stmt.execute(params![input.id, tag])?;
         }
+    }
+    if let Some(fav) = input.favourite {
+        tx.execute(
+            "UPDATE notes SET favourite = ?1, modified = ?2 WHERE id = ?3",
+            params![fav as i64, now, input.id],
+        )?;
     }
 
     // Any update is a sync candidate. Doing this once at the end keeps the
@@ -413,6 +425,7 @@ mod tests {
                     position: None,
                     tags: None,
                     yrs_state: None,
+                    favourite: None,
                 },
             )
         })
@@ -450,6 +463,7 @@ mod tests {
                     tags: None,
                     parent_collection_id: Some(Some(coll.id.clone())),
                     yrs_state: None,
+                    favourite: None,
                 },
             )
         })
@@ -472,6 +486,7 @@ mod tests {
                     tags: None,
                     parent_collection_id: Some(None),
                     yrs_state: None,
+                    favourite: None,
                 },
             )
         })
@@ -524,6 +539,7 @@ mod tests {
                     parent_collection_id: None,
                     tags: Some(vec!["work".into(), "urgent".into()]),
                     yrs_state: None,
+                    favourite: None,
                 },
             )
         })
@@ -586,6 +602,7 @@ mod tests {
                     position: None,
                     tags: None,
                     yrs_state: Some(supplied.clone()),
+                    favourite: None,
                 },
             )
         })
@@ -628,6 +645,7 @@ mod tests {
                     position: None,
                     tags: None,
                     yrs_state: None,
+                    favourite: None,
                 },
             )
         })

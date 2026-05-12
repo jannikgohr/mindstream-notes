@@ -78,6 +78,7 @@ function maxPosition(arr: { position: number }[]): number {
     modified: t,
     tags: [],
     trashed: false,
+    favourite: false,
     yrs_state: [],
     payload_schema: 1
   };
@@ -91,6 +92,7 @@ function maxPosition(arr: { position: number }[]): number {
     modified: t,
     tags: [],
     trashed: false,
+    favourite: false,
     yrs_state: [],
     payload_schema: 1
   };
@@ -104,6 +106,7 @@ function maxPosition(arr: { position: number }[]): number {
     modified: t,
     tags: [],
     trashed: false,
+    favourite: false,
     yrs_state: [],
     payload_schema: 1
   };
@@ -185,6 +188,7 @@ export const mockApi = {
       modified: t,
       tags: [],
       trashed: false,
+      favourite: false,
       yrs_state: [],
       payload_schema: 1
     };
@@ -200,6 +204,7 @@ export const mockApi = {
       n.parent_collection_id = input.parent_collection_id;
     if (input.position !== undefined) n.position = input.position;
     if (input.tags !== undefined) n.tags = [...input.tags];
+    if (input.favourite !== undefined) n.favourite = input.favourite;
     n.modified = nowIso();
     return { ...n };
   },
