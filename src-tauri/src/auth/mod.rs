@@ -20,11 +20,9 @@ use std::path::{Path, PathBuf};
 use etebase::utils::{from_base64, randombytes, to_base64};
 use etebase::{Account, Client};
 use keyring_core::Entry;
-use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
-use crate::db::Db;
 use crate::error::{AppError, AppResult};
 
 const KEYRING_SERVICE: &str = "mindstream-notes";
@@ -232,25 +230,11 @@ pub async fn etebase_logout(app: AppHandle) -> Result<(), String> {
         .await;
     }
 
-    // Wipe per-note live-collab keys so a logged-out client can't keep
-    // connecting to existing rooms. The Etebase server still holds the
-    // real source-of-truth for these (inside the E2EE NotePayload), so
-    // a fresh login + sync re-populates them. We leave `dirty` alone:
-    // `push_notes` regenerates a key when it sees crypto_key IS NULL,
-    // which is fine — peers pick it up on their next pull. yrs_state /
-    // body / tags are untouched so offline reads still work.
-    if let Some(db) = app.try_state::<Db>() {
-        if let Err(e) = db.with_conn(|c| {
-            c.execute(
-                "UPDATE notes SET crypto_key = NULL WHERE crypto_key IS NOT NULL",
-                params![],
-            )?;
-            Ok(())
-        }) {
-            log::warn!("[auth] wipe collab keys on logout failed: {e}");
-        }
-    }
-
+    // Nothing key-shaped needs wiping locally: the crypto_key column
+    // was removed in migration v7. note_room_info now fetches the key
+    // directly from etebase each time a note is opened, so logging out
+    // (which deletes the keyring entry below) makes those fetches fail
+    // immediately and the editor falls back to single-device mode.
     clear_local_state(&path);
     Ok(())
 }
