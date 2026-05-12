@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 
 use etebase::utils::{from_base64, randombytes, to_base64};
 use etebase::{Account, Client};
-use keyring::Entry;
+use keyring_core::Entry;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
