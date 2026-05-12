@@ -18,6 +18,13 @@ export interface NoteSummary {
   tags: string[];
   trashed: boolean;
   favourite: boolean;
+  /**
+   * True once the note has been pushed to the remote at least once
+   * (i.e. it has an etebase Item UID). NoteEditor watches this to
+   * (re-)attach the live-collab provider as soon as a freshly-created
+   * note's first sync completes.
+   */
+  pushed: boolean;
 }
 
 export interface Note extends NoteSummary {

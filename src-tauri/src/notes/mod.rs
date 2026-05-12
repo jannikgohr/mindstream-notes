@@ -27,6 +27,13 @@ pub struct NoteSummary {
     pub tags: Vec<String>,
     pub trashed: bool,
     pub favourite: bool,
+    /// True once the note has been pushed to the remote at least once
+    /// (i.e. `etebase_uid IS NOT NULL`). The frontend watches this to
+    /// know when live collab becomes reachable for a fresh note —
+    /// `note_room_info` resolves the room key off the server payload,
+    /// which only exists post-push. Doesn't track dirty-ness; a synced
+    /// row with unsynced edits still reports `pushed: true`.
+    pub pushed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,6 +92,7 @@ pub struct UpdateNote {
 fn row_to_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<NoteSummary> {
     let trashed_at: Option<String> = row.get("trashed_at")?;
     let favourite: i64 = row.get("favourite")?;
+    let etebase_uid: Option<String> = row.get("etebase_uid")?;
     Ok(NoteSummary {
         id: row.get("id")?,
         parent_collection_id: row.get("parent_collection_id")?,
@@ -95,6 +103,7 @@ fn row_to_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<NoteSummary> {
         tags: Vec::new(),
         trashed: trashed_at.is_some(),
         favourite: favourite != 0,
+        pushed: etebase_uid.is_some(),
     })
 }
 
@@ -106,11 +115,13 @@ fn load_tags(conn: &Connection, note_id: &str) -> AppResult<Vec<String>> {
 
 pub fn list(conn: &Connection, include_trashed: bool) -> AppResult<Vec<NoteSummary>> {
     let sql = if include_trashed {
-        "SELECT id, parent_collection_id, title, position, created, modified, trashed_at, favourite
+        "SELECT id, parent_collection_id, title, position, created, modified,
+                trashed_at, favourite, etebase_uid
          FROM notes
          ORDER BY parent_collection_id IS NOT NULL, parent_collection_id, position, title"
     } else {
-        "SELECT id, parent_collection_id, title, position, created, modified, trashed_at, favourite
+        "SELECT id, parent_collection_id, title, position, created, modified,
+                trashed_at, favourite, etebase_uid
          FROM notes
          WHERE trashed_at IS NULL
          ORDER BY parent_collection_id IS NOT NULL, parent_collection_id, position, title"
@@ -127,7 +138,7 @@ pub fn list(conn: &Connection, include_trashed: bool) -> AppResult<Vec<NoteSumma
 pub fn load(conn: &Connection, id: &str) -> AppResult<Note> {
     let mut stmt = conn.prepare(
         "SELECT id, parent_collection_id, title, position, created, modified,
-                trashed_at, favourite, body, yrs_state, payload_schema
+                trashed_at, favourite, etebase_uid, body, yrs_state, payload_schema
          FROM notes WHERE id = ?1",
     )?;
     let row_data = stmt

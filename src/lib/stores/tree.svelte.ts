@@ -15,6 +15,7 @@ import type { Collection, NoteSummary, TreeNode } from '$lib/api';
 import { TRASH_ID } from '$lib/api';
 import { ui } from '$lib/state.svelte';
 import { getSettingValue } from '$lib/settings/store.svelte';
+import { runSync } from '$lib/sync/runner';
 
 interface TreeState {
   tree: TreeNode[];
@@ -61,6 +62,27 @@ export async function createNoteIn(
 ): Promise<string> {
   const note = await api.createNote({ parent_collection_id: parentId, title });
   await loadTree();
+  // Live collab keys live on the etebase server — the per-note crypto_key
+  // doesn't exist locally until the first push, and the room id is the
+  // etebase Item UID. Kicking off a sync now means the note can join its
+  // live room as soon as the round-trip completes; NoteEditor reactively
+  // (re-)inits its CollabProvider once tree.notesById[id].etebase_uid is
+  // populated by the post-push loadTree.
+  //
+  // Best-effort: silent on offline / not-signed-in failures. If runner
+  // coalesced our call with a periodic sync that started just before the
+  // create, that earlier sync wouldn't have seen the new dirty row — so
+  // we re-run once if the note still hasn't been pushed.
+  void (async () => {
+    try {
+      await runSync();
+      if (!tree.notesById[note.id]?.pushed) {
+        await runSync();
+      }
+    } catch (err) {
+      console.debug('[tree] post-create sync failed', err);
+    }
+  })();
   return note.id;
 }
 
