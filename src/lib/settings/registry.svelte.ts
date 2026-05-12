@@ -18,6 +18,7 @@ import {
 } from '@tauri-apps/plugin-autostart';
 import { isTauri } from '$lib/api';
 import { isMobile } from '$lib/platform';
+import { confirm } from '$lib/components/ConfirmDialog.svelte';
 import {
   setLeftSidebarWidth,
   setRightSidebarWidth,
@@ -107,8 +108,16 @@ export const SETTING_ACTIONS: Record<string, () => void | Promise<void>> = {
   'open-data-folder': () => {
     console.info('[settings] action: open-data-folder (stub)');
   },
-  'empty-trash': () => {
-    if (window.confirm('Empty the trash permanently?')) {
+  'empty-trash': async () => {
+    if (
+      await confirm({
+        title: 'Empty trash',
+        message:
+          'Every item currently in the trash will be removed permanently. This cannot be undone.',
+        confirmLabel: 'Empty trash',
+        destructive: true
+      })
+    ) {
       console.info('[settings] action: empty-trash (stub)');
     }
   },

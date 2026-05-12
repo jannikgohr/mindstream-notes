@@ -4,6 +4,7 @@
     import {ModeWatcher} from 'mode-watcher';
     import {getSettingValue} from '$lib/settings/store.svelte';
     import {runSync} from '$lib/sync/runner';
+    import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 
     let {children} = $props();
 
@@ -75,3 +76,8 @@
 >
     {@render children()}
 </div>
+
+<!-- Singleton confirm-dialog instance: lives at the root so any
+     caller anywhere in the tree can `await confirm(...)` without
+     stashing its own component. -->
+<ConfirmDialog/>
