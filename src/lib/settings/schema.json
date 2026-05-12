@@ -75,7 +75,8 @@
               "id": "general.startOnLogin",
               "scope": "D",
               "type": "toggle",
-              "default": false
+              "default": false,
+              "platforms": ["desktop"]
             }
           ]
         }

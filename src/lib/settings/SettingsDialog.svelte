@@ -5,6 +5,8 @@
   import {
     SCHEMA,
     closeSettings,
+    isCategoryVisible,
+    isSectionVisible,
     isVisible,
     settingsDialog
   } from './store.svelte';
@@ -32,6 +34,7 @@
   function visibleSettingsIn(cat: Category): Setting[] {
     const all: Setting[] = [];
     for (const sec of cat.sections) {
+      if (!isSectionVisible(sec)) continue;
       for (const s of sec.settings) {
         if (isVisible(s) && settingMatches(s)) all.push(s);
       }
@@ -40,8 +43,9 @@
   }
 
   const visibleCategories = $derived.by(() => {
-    if (!lowerQuery) return SCHEMA.categories;
-    return SCHEMA.categories.filter((c) => visibleSettingsIn(c).length > 0);
+    const onPlatform = SCHEMA.categories.filter(isCategoryVisible);
+    if (!lowerQuery) return onPlatform;
+    return onPlatform.filter((c) => visibleSettingsIn(c).length > 0);
   });
 
   const activeCategory = $derived(
@@ -116,9 +120,9 @@
           {#if activeCategory}
             <h2 class="text-base font-semibold">{tLabel('categories', activeCategory.id)}</h2>
             {#each activeCategory.sections as sec (sec.id)}
-              {@const visibleSettings = sec.settings.filter(
-                (s) => isVisible(s) && settingMatches(s)
-              )}
+              {@const visibleSettings = isSectionVisible(sec)
+                ? sec.settings.filter((s) => isVisible(s) && settingMatches(s))
+                : []}
               {#if visibleSettings.length > 0}
                 <div class="mt-5">
                   <h3 class="border-b border-border pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
