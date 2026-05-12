@@ -2,269 +2,127 @@
   /**
    * Mobile shell.
    *
-   * One screen at a time, driven by `ui.leftSidebarOpen`:
-   *   true   → file tree (FileExplorer) fullscreen — the "home" screen.
-   *   false  → editor (dockview) fullscreen.
+   *   Home screen      → top bar (search + settings)
+   *                    → breadcrumb of the current folder path
+   *                    → sort + display-mode toolbar
+   *                    → note list / grid for the active bucket
+   *                    → FAB stack (new note + expandable plus)
+   *                    → bottom nav (Home / Shared / Favourites / Trash)
    *
-   * Tapping a note flips the flag to false so the editor takes over;
-   * MobileTopBar's back arrow flips it back. `ui.rightSidebarOpen` opens
-   * MobileMetadataOverlay above the editor.
+   *   Editor screen    → MobileEditor (its own header, no FAB/nav)
    *
-   * Multi-window features (popout button on dock tabs, "Open in new
-   * window" context-menu entry) are not wired up here — see DesktopLayout
-   * for those.
+   * Screen switching is driven by `mobileState.screen`; tapping a note
+   * flips it to 'editor', the editor's back arrow flips it back. The
+   * shared `ui.activeNoteId` carries which note is open.
    *
-   * The shell uses `safe-top` / `safe-bottom` so the chrome doesn't paint
-   * under the Android status bar or gesture bar with edge-to-edge enabled.
+   * The shell wraps everything in safe-area padding so it doesn't paint
+   * under the Android status bar or gesture bar with edge-to-edge on.
    */
-  import { mount, unmount, onDestroy, onMount, tick } from 'svelte';
-  import type {
-    DockviewApi,
-    IDockviewPanel,
-    IContentRenderer,
-    GroupPanelPartInitParameters,
-    DockviewGroupPanel
-  } from 'dockview-core';
+  import { onMount } from 'svelte';
+  import { FilePlus2, FolderPlus } from 'lucide-svelte';
+  import type { IconComponent } from '$lib/settings/icons';
   import MobileTopBar from './MobileTopBar.svelte';
-  import MobileMetadataOverlay from './MobileMetadataOverlay.svelte';
-  import FileExplorer from '$lib/components/FileExplorer.svelte';
-  import NoteEditor from '$lib/components/NoteEditor.svelte';
+  import MobileBreadcrumb from './MobileBreadcrumb.svelte';
+  import MobileToolbar from './MobileToolbar.svelte';
+  import MobileNoteList from './MobileNoteList.svelte';
+  import MobileFab, { type FabAction } from './MobileFab.svelte';
+  import MobileBottomNav from './MobileBottomNav.svelte';
+  import MobileEditor from './MobileEditor.svelte';
   import SettingsDialog from '$lib/settings/SettingsDialog.svelte';
-  import { clearSavedLayout, loadSavedLayout, saveLayout } from '$lib/api';
-  import { setActiveNote, ui } from '$lib/state.svelte';
-  import { loadTree, tree } from '$lib/stores/tree.svelte';
-
-  let dockHost: HTMLDivElement | null = $state(null);
-  let dock: DockviewApi | null = null;
-  let lastActiveGroup: DockviewGroupPanel | null = null;
-  const openPanels = new Map<string, IDockviewPanel>();
-  let saveLayoutTimer: ReturnType<typeof setTimeout> | null = null;
-
-  /** Renders a Svelte component inside a dockview panel. */
-  class SvelteRenderer implements IContentRenderer {
-    private el: HTMLElement = document.createElement('div');
-    private instance: ReturnType<typeof mount> | null = null;
-
-    get element(): HTMLElement {
-      return this.el;
-    }
-
-    init(parameters: GroupPanelPartInitParameters): void {
-      this.el.style.height = '100%';
-      this.el.style.width = '100%';
-      const noteId = (parameters.params as { noteId?: string })?.noteId;
-      if (!noteId) return;
-      this.instance = mount(NoteEditor, {
-        target: this.el,
-        props: { noteId }
-      });
-    }
-
-    dispose(): void {
-      if (this.instance) {
-        unmount(this.instance);
-        this.instance = null;
-      }
-    }
-  }
-
-  async function setupDockview() {
-    if (!dockHost) return;
-    const { DockviewComponent } = await import('dockview-core');
-
-    // No createRightHeaderActionComponent: the popout button is desktop-only.
-    const component = new DockviewComponent(dockHost, {
-      createComponent: (options) => {
-        switch (options.name) {
-          case 'noteEditor':
-            return new SvelteRenderer();
-          default:
-            return new SvelteRenderer();
-        }
-      },
-      theme: { name: 'bridge', className: 'dockview-theme-bridge' },
-      disableFloatingGroups: true,
-      disableDnd: true
-    });
-
-    dock = component.api;
-
-    dock.onDidActivePanelChange((panel) => {
-      if (panel?.params && typeof panel.params.noteId === 'string') {
-        setActiveNote(panel.params.noteId);
-      }
-      schedulePersist();
-    });
-    dock.onDidActiveGroupChange((group) => {
-      if (group) lastActiveGroup = group;
-    });
-    dock.onDidRemovePanel((panel) => {
-      const noteId = (panel.params as { noteId?: string } | undefined)?.noteId;
-      if (noteId) openPanels.delete(noteId);
-      schedulePersist();
-    });
-    dock.onDidAddPanel(() => schedulePersist());
-    dock.onDidLayoutChange(() => schedulePersist());
-
-    if (!tree.ready) await loadTree();
-
-    tryRestoreLayout();
-
-    lastActiveGroup = dock.activeGroup ?? lastActiveGroup;
-  }
-
-  function tryRestoreLayout(): boolean {
-    if (!dock) return false;
-    const saved = loadSavedLayout();
-    if (!saved || !saved.dock) return false;
-    try {
-      const sanitized = sanitizeDockBlob(saved.dock);
-      if (!sanitized) {
-        clearSavedLayout();
-        return false;
-      }
-      const api = dock as unknown as { fromJSON: (s: unknown) => void };
-      api.fromJSON(sanitized);
-      for (const panel of dock.panels) {
-        const noteId = (panel.params as { noteId?: string } | undefined)?.noteId;
-        if (noteId) openPanels.set(noteId, panel);
-      }
-      if (saved.activeNoteId) {
-        const p = openPanels.get(saved.activeNoteId);
-        p?.api.setActive();
-      }
-      return openPanels.size > 0;
-    } catch (err) {
-      console.warn('[layout] restore failed, falling back', err);
-      clearSavedLayout();
-      return false;
-    }
-  }
-
-  function sanitizeDockBlob(blob: unknown): unknown | null {
-    try {
-      const json = blob as { panels?: Record<string, { params?: { noteId?: string } }> };
-      const panels = json.panels ?? {};
-      for (const p of Object.values(panels)) {
-        const noteId = p?.params?.noteId;
-        if (noteId && !(noteId in tree.notesById)) {
-          return null;
-        }
-      }
-      return blob;
-    } catch {
-      return null;
-    }
-  }
-
-  function schedulePersist() {
-    if (!dock) return;
-    if (saveLayoutTimer) clearTimeout(saveLayoutTimer);
-    saveLayoutTimer = setTimeout(() => {
-      try {
-        const json = (dock as unknown as { toJSON: () => unknown }).toJSON();
-        saveLayout(json, dock?.activePanel?.params?.noteId ?? null);
-      } catch (err) {
-        console.warn('[layout] save failed', err);
-      }
-    }, 250);
-  }
-
-  export function openNote(id: string) {
-    if (!dock) return;
-    const note = tree.notesById[id];
-    if (!note) return;
-
-    const existing = openPanels.get(id);
-    if (existing) {
-      existing.api.setActive();
-      // Surface the editor screen so the tap actually feels like
-      // navigation, not a silent state change behind the tree.
-      ui.leftSidebarOpen = false;
-      return;
-    }
-
-    if (dock.groups.length === 0) {
-      dock.addGroup();
-      lastActiveGroup = dock.groups[0];
-    }
-
-    const target = lastActiveGroup ?? dock.activeGroup ?? null;
-    const panel = dock.addPanel({
-      id: `note:${id}`,
-      component: 'noteEditor',
-      title: note.title,
-      params: { noteId: id },
-      ...(target ? { position: { referenceGroup: target } } : {})
-    });
-
-    openPanels.set(id, panel);
-    setActiveNote(id);
-    ui.leftSidebarOpen = false;
-  }
+  import {
+    createCollectionIn,
+    createNoteIn,
+    loadTree,
+    tree
+  } from '$lib/stores/tree.svelte';
+  import { setActiveNote } from '$lib/state.svelte';
+  import { mobileState, setMobileScreen } from './state.svelte';
 
   onMount(() => {
-    void tick().then(setupDockview);
-    const onResize = () => {};
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
+    if (!tree.ready) void loadTree();
   });
 
-  onDestroy(() => {
-    if (saveLayoutTimer) clearTimeout(saveLayoutTimer);
-    dock?.clear();
-  });
+  function openNote(id: string) {
+    setActiveNote(id);
+    setMobileScreen('editor');
+  }
 
-  // Trigger a dockview relayout whenever the editor screen comes back
-  // into view (toggled via the back arrow). Dockview measures during its
-  // own ResizeObserver, but the parent's display flips from `hidden`
-  // before that fires, so we nudge it.
-  $effect(() => {
-    void ui.leftSidebarOpen;
-    if (!dockHost) return;
-    requestAnimationFrame(() => {
-      window.dispatchEvent(new Event('resize'));
-    });
-  });
+  // Notes/folders created in 'trash', 'shared', or 'favourite' don't have
+  // a sensible parent — fall back to the root of the home view.
+  function targetParent(): string | null {
+    if (mobileState.view !== 'home') return null;
+    return mobileState.currentFolderId;
+  }
 
-  $effect(() => {
-    for (const noteId of Object.keys(tree.notesById)) {
-      const panel = openPanels.get(noteId);
-      if (panel) panel.api.setTitle(tree.notesById[noteId].title);
-    }
-  });
+  async function createNote() {
+    const parent = targetParent();
+    const id = await createNoteIn(parent, 'Untitled');
+    openNote(id);
+  }
 
-  const onOpenNote = (id: string) => openNote(id);
-  // Mobile has no split-pane affordance, so the secondary openers all
-  // route to the same single-pane open. onOpenInNewWindow stays
-  // undefined so the file-tree context menu hides "Open in new window".
-  const onOpenNoteRight = onOpenNote;
-  const onOpenNoteBelow = onOpenNote;
+  async function createFolder() {
+    // Inline name entry would be nicer, but the home screen has no draft
+    // affordance yet — prompt is good enough for the first cut. Swap for
+    // a bottom-sheet input later.
+    const name = window.prompt('Folder name', 'New folder');
+    if (!name || !name.trim()) return;
+    await createCollectionIn(targetParent(), name.trim());
+  }
+
+  const primaryAction: FabAction = {
+    id: 'new-note',
+    label: 'New note',
+    icon: FilePlus2 as unknown as IconComponent,
+    onSelect: () => void createNote()
+  };
+
+  // Extend by appending FabAction entries here.
+  const secondaryActions = $derived<FabAction[]>(
+    mobileState.view === 'trash'
+      ? []
+      : [
+          {
+            id: 'new-folder',
+            label: 'New folder',
+            icon: FolderPlus as unknown as IconComponent,
+            onSelect: () => void createFolder()
+          }
+        ]
+  );
+
+  // Hide create affordances when the active bucket isn't a place where
+  // creating notes makes sense (favourites is a virtual filter, trash
+  // is read-only, shared has no model yet).
+  const fabVisible = $derived(
+    mobileState.view === 'home' && mobileState.screen === 'home'
+  );
+
+  const showHome = $derived(mobileState.screen === 'home');
 </script>
 
-<div class="safe-top safe-bottom safe-x flex h-full w-full flex-col">
-  <MobileTopBar />
-
-  <div class="relative min-h-0 flex-1">
-    <!--
-      Both screens stay mounted; visibility flips via `hidden` so
-      dockview keeps its panel state and the file tree doesn't re-
-      collapse every navigation. Use `display: none`/`block` rather
-      than conditional rendering so neither component remounts.
-    -->
-    <div class="absolute inset-0" class:hidden={!ui.leftSidebarOpen}>
-      <FileExplorer
-        {onOpenNote}
-        {onOpenNoteRight}
-        {onOpenNoteBelow}
-      />
+<div class="safe-x flex h-full w-full flex-col">
+  {#if showHome}
+    <div class="safe-top flex shrink-0 flex-col bg-card">
+      <MobileTopBar />
+      <MobileBreadcrumb />
+      <MobileToolbar />
     </div>
 
-    <div class="absolute inset-0" class:hidden={ui.leftSidebarOpen}>
-      <div bind:this={dockHost} class="dockview-theme-bridge h-full w-full"></div>
+    <div class="relative flex min-h-0 flex-1 flex-col">
+      <MobileNoteList onOpenNote={openNote} />
+      {#if fabVisible}
+        <MobileFab primary={primaryAction} actions={secondaryActions} />
+      {/if}
     </div>
-  </div>
+
+    <div class="safe-bottom shrink-0 bg-card">
+      <MobileBottomNav />
+    </div>
+  {:else}
+    <div class="safe-top safe-bottom flex h-full w-full flex-col">
+      <MobileEditor />
+    </div>
+  {/if}
 </div>
 
-<MobileMetadataOverlay />
 <SettingsDialog />
