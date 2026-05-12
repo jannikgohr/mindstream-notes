@@ -404,11 +404,11 @@ fn apply_note(db: &Db, item: &Item) -> AppResult<()> {
         } else {
             yrs_doc::to_markdown(&merged_state)
         };
-        let crypto_key: Option<Vec<u8>> = if payload.crypto_key.is_empty() {
-            None
-        } else {
-            Some(payload.crypto_key.clone())
-        };
+        // payload.crypto_key is intentionally ignored on pull — the
+        // crypto_key column no longer exists locally. The editor fetches
+        // the current key directly from the etebase Item each time it
+        // opens a note (see note_room_info), so the server stays the
+        // sole authority and nothing sensitive lands on disk.
         let modified = Utc::now().to_rfc3339();
 
         let exists = tx
@@ -425,9 +425,8 @@ fn apply_note(db: &Db, item: &Item) -> AppResult<()> {
                  SET parent_collection_id = ?1, title = ?2, body = ?3, position = ?4,
                      modified = ?5, trashed_at = ?6, yrs_state = ?7,
                      etebase_uid = ?8, etebase_etag = ?9, dirty = ?10,
-                     crypto_key = COALESCE(?11, crypto_key), payload_schema = ?12,
-                     favourite = ?13
-                 WHERE id = ?14",
+                     payload_schema = ?11, favourite = ?12
+                 WHERE id = ?13",
                 params![
                     payload.parent_folder_id,
                     payload.title,
@@ -439,7 +438,6 @@ fn apply_note(db: &Db, item: &Item) -> AppResult<()> {
                     item.uid(),
                     etag,
                     dirty_after,
-                    crypto_key,
                     incoming_schema,
                     payload.favourite as i64,
                     payload.id,
@@ -450,8 +448,8 @@ fn apply_note(db: &Db, item: &Item) -> AppResult<()> {
                 "INSERT INTO notes (id, parent_collection_id, title, body, position,
                                     created, modified, trashed_at, yrs_state,
                                     etebase_uid, etebase_etag, dirty,
-                                    crypto_key, payload_schema, favourite)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7, ?8, ?9, ?10, 0, ?11, ?12, ?13)",
+                                    payload_schema, favourite)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7, ?8, ?9, ?10, 0, ?11, ?12)",
                 params![
                     payload.id,
                     payload.parent_folder_id,
@@ -463,7 +461,6 @@ fn apply_note(db: &Db, item: &Item) -> AppResult<()> {
                     merged_state,
                     item.uid(),
                     etag,
-                    crypto_key,
                     incoming_schema,
                     payload.favourite as i64,
                 ],
@@ -560,22 +557,34 @@ fn push_notes(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult<(
         return drain_tombstones(db, im, "note");
     }
 
-    // (Item, local_id, crypto_key_to_persist). The third tuple slot is the
-    // newly-generated key for notes that didn't have one yet — we write it
-    // back to SQLite alongside the etag/uid in the post-transaction step
-    // so the editor can pick it up immediately.
-    let mut prepared: Vec<(Item, String, Option<Vec<u8>>)> = Vec::with_capacity(dirty.len());
+    let mut prepared: Vec<(Item, String)> = Vec::with_capacity(dirty.len());
     for row in &dirty {
-        // Generate a fresh per-note collab key the first time we push it.
-        // Subsequent pushes ride the same key so peers' editors stay
-        // connected to the same room.
-        let (key_for_payload, key_to_persist) = match &row.crypto_key {
-            Some(k) if !k.is_empty() => (k.clone(), None),
-            _ => {
-                let k = randombytes(32);
-                (k.clone(), Some(k))
+        // For existing items we fetch first so we can extract the live
+        // crypto_key off the server-side payload and re-use it in the
+        // new one. Rotating the key on every push would break peers'
+        // in-progress live sessions. We'd need the fetch anyway to
+        // call set_meta/set_content, so there's no extra round-trip.
+        // For first-time pushes we mint a fresh key.
+        let (existing_item, key_for_payload): (Option<Item>, Vec<u8>) = match &row.etebase_uid {
+            Some(uid) => {
+                let existing = im
+                    .fetch(uid, None)
+                    .map_err(|e| AppError::InvalidArg(format!("fetch note {uid}: {e}")))?;
+                let extracted = if !existing.is_deleted() && !existing.is_missing_content() {
+                    existing
+                        .content()
+                        .ok()
+                        .and_then(|raw| rmp_serde::from_slice::<NotePayload>(&raw).ok())
+                        .map(|p| p.crypto_key)
+                        .filter(|k| !k.is_empty())
+                } else {
+                    None
+                };
+                (Some(existing), extracted.unwrap_or_else(|| randombytes(32)))
             }
+            None => (None, randombytes(32)),
         };
+
         let payload = NotePayload {
             schema: PAYLOAD_SCHEMA,
             id: row.id.clone(),
@@ -595,10 +604,7 @@ fn push_notes(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult<(
         meta.set_item_type(Some(ITEM_TYPE_NOTE))
             .set_name(Some(row.title.clone()))
             .set_mtime(Some(now_unix_ms()));
-        let item = if let Some(uid) = &row.etebase_uid {
-            let mut existing = im
-                .fetch(uid, None)
-                .map_err(|e| AppError::InvalidArg(format!("fetch note {uid}: {e}")))?;
+        let item = if let Some(mut existing) = existing_item {
             existing
                 .set_meta(&meta)
                 .map_err(|e| AppError::InvalidArg(format!("set_meta note: {e}")))?;
@@ -610,32 +616,26 @@ fn push_notes(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult<(
             im.create(&meta, &bytes)
                 .map_err(|e| AppError::InvalidArg(format!("create note item: {e}")))?
         };
-        prepared.push((item, row.id.clone(), key_to_persist));
+        prepared.push((item, row.id.clone()));
     }
 
-    // Split prepared into parallel vecs so transact_or_resolve can mutate
-    // the items in-place (Item isn't Clone) while we keep the local id +
-    // key-to-persist sidecars by index.
-    let local_ids: Vec<String> = prepared.iter().map(|(_, id, _)| id.clone()).collect();
-    let new_keys: Vec<Option<Vec<u8>>> = prepared.iter().map(|(_, _, k)| k.clone()).collect();
-    let mut items: Vec<Item> = prepared.into_iter().map(|(i, _, _)| i).collect();
+    let local_ids: Vec<String> = prepared.iter().map(|(_, id)| id.clone()).collect();
+    let mut items: Vec<Item> = prepared.into_iter().map(|(i, _)| i).collect();
     transact_or_resolve(im, &mut items, &mut report.conflicts_resolved)
         .map_err(|e| AppError::InvalidArg(format!("transaction notes: {e}")))?;
 
     let pushed = items.len();
     db.with_conn_mut(|c| {
         let tx = c.transaction()?;
-        for ((item, local_id), new_key) in items.iter().zip(local_ids.iter()).zip(new_keys.iter()) {
+        for (item, local_id) in items.iter().zip(local_ids.iter()) {
             tx.execute(
                 "UPDATE notes
                  SET etebase_uid = ?1, etebase_etag = ?2, dirty = 0,
-                     crypto_key = COALESCE(?3, crypto_key),
-                     payload_schema = ?4
-                 WHERE id = ?5",
+                     payload_schema = ?3
+                 WHERE id = ?4",
                 params![
                     item.uid(),
                     item.etag(),
-                    new_key,
                     PAYLOAD_SCHEMA as i64,
                     local_id,
                 ],
@@ -783,8 +783,6 @@ struct DirtyNote {
     /// Rendered markdown snapshot — pushed in v2 payloads so peers don't
     /// have to render markdown from XmlFragment server-side.
     body: String,
-    /// Per-note collab key. None on first push; push_notes generates one.
-    crypto_key: Option<Vec<u8>>,
     favourite: bool,
 }
 
@@ -812,7 +810,7 @@ fn load_dirty_notes(db: &Db) -> AppResult<Vec<DirtyNote>> {
     let rows: Vec<DirtyNote> = db.with_conn(|c| {
         let mut stmt = c.prepare(
             "SELECT id, parent_collection_id, title, position, trashed_at,
-                    yrs_state, etebase_uid, body, crypto_key, favourite
+                    yrs_state, etebase_uid, body, favourite
              FROM notes WHERE dirty = 1",
         )?;
         let rows = stmt.query_map([], |r| {
@@ -826,8 +824,7 @@ fn load_dirty_notes(db: &Db) -> AppResult<Vec<DirtyNote>> {
                 etebase_uid: r.get(6)?,
                 tags: Vec::new(),
                 body: r.get(7)?,
-                crypto_key: r.get::<_, Option<Vec<u8>>>(8)?,
-                favourite: r.get::<_, i64>(9)? != 0,
+                favourite: r.get::<_, i64>(8)? != 0,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -897,41 +894,108 @@ pub struct RoomInfo {
 }
 
 #[tauri::command]
-pub fn note_room_info(
+pub async fn note_room_info(
     app: AppHandle,
     db: tauri::State<'_, Db>,
     id: String,
 ) -> Result<Option<RoomInfo>, String> {
-    // Live collab is etebase-gated: no session ⇒ no room. A logged-out
-    // client must not be able to join an existing room with material
-    // that's still cached locally from a previous session. The logout
-    // path additionally wipes `crypto_key` from the row, but this gate
-    // covers the window between "session expired" and "user explicitly
-    // logged out" as well.
+    // Live collab is etebase-gated: no session ⇒ no room.
     if !crate::auth::has_session(&app) {
         return Ok(None);
     }
-    db.with_conn(|c| {
-        let row: Option<(Option<String>, Option<Vec<u8>>)> = c
+
+    // Read just the local breadcrumbs we need: the note's item UID and
+    // the cached notes-collection UID. The actual key lives only on the
+    // etebase server now; we resolve it on demand below.
+    let lookups = db.with_conn(|c| {
+        let note_uid: Option<String> = c
             .query_row(
-                "SELECT etebase_uid, crypto_key FROM notes WHERE id = ?1",
-                params![id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                "SELECT etebase_uid FROM notes WHERE id = ?1",
+                params![&id],
+                |r| r.get::<_, Option<String>>(0),
             )
-            .optional()?;
-        let Some((Some(uid), Some(key))) = row else {
-            return Ok(None);
+            .optional()?
+            .flatten();
+        let col_uid: Option<String> = c
+            .query_row(
+                "SELECT etebase_collection_uid FROM sync_state WHERE kind = ?1",
+                params![KIND_NOTES],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten();
+        Ok::<_, AppError>((note_uid, col_uid))
+    })
+    .map_err(|e| e.to_string())?;
+
+    let Some(note_uid) = lookups.0 else {
+        return Ok(None);
+    };
+    let Some(col_uid) = lookups.1 else {
+        return Ok(None);
+    };
+
+    // Restore the account + fetch the item inside spawn_blocking. The
+    // etebase SDK is sync-over-reqwest::blocking, which constructs a
+    // private tokio runtime per call; dropping that runtime back on the
+    // async worker panics — same trap as etebase_login/_logout. The
+    // closure returns just the encoded key + room id so no etebase-
+    // owned value escapes the blocking pool.
+    let app_for_blocking = app.clone();
+    tauri::async_runtime::spawn_blocking(move || -> Result<Option<RoomInfo>, String> {
+        let account = match crate::auth::try_restore(&app_for_blocking)
+            .map_err(|e| format!("restore session: {e}"))?
+        {
+            Some(a) => a,
+            None => return Ok(None),
         };
-        if key.is_empty() {
+        let cm = account
+            .collection_manager()
+            .map_err(|e| format!("collection_manager: {e}"))?;
+        let col = match cm.fetch(&col_uid, None) {
+            Ok(c) => c,
+            Err(e) => {
+                log::warn!("[room_info] fetch notes collection failed: {e}");
+                return Ok(None);
+            }
+        };
+        let im = cm
+            .item_manager(&col)
+            .map_err(|e| format!("item_manager: {e}"))?;
+        let item = match im.fetch(&note_uid, None) {
+            Ok(it) => it,
+            Err(e) => {
+                log::warn!("[room_info] fetch note item {note_uid} failed: {e}");
+                return Ok(None);
+            }
+        };
+        if item.is_deleted() || item.is_missing_content() {
+            return Ok(None);
+        }
+        let raw = item
+            .content()
+            .map_err(|e| format!("item content: {e}"))?;
+        let payload: NotePayload = match rmp_serde::from_slice(&raw) {
+            Ok(p) => p,
+            Err(e) => {
+                log::warn!("[room_info] payload decode failed: {e}");
+                return Ok(None);
+            }
+        };
+        if payload.crypto_key.is_empty() {
+            // Legacy v1 payload, or a peer pushed before live collab was
+            // wired up. Surface as "no room available" rather than
+            // encoding zero bytes.
             return Ok(None);
         }
         Ok(Some(RoomInfo {
-            room_id: uid,
-            key_b64: etebase::utils::to_base64(&key)
-                .map_err(|e| AppError::InvalidArg(format!("encode key: {e}")))?,
+            room_id: note_uid,
+            key_b64: etebase::utils::to_base64(&payload.crypto_key)
+                .map_err(|e| format!("encode key: {e}"))?,
         }))
     })
-    .map_err(Into::into)
+    .await
+    .map_err(|e| format!("note_room_info task: {e}"))?
 }
 
 // Public helper used by notes/collections after a purge: queue server-side

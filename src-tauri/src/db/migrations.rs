@@ -177,6 +177,18 @@ const MIGRATIONS: &[Migration] = &[
             CREATE INDEX idx_notes_favourite ON notes(favourite) WHERE favourite = 1;
         "#,
     },
+    Migration {
+        to: 7,
+        // Drop the locally-cached per-note collab key. The source of
+        // truth is etebase's NotePayload.crypto_key; the editor fetches
+        // it on demand via note_room_info each time a note is opened.
+        // Keeping it out of SQLite makes "logged out ⇒ can't join the
+        // live room" a property of the data model rather than a guard
+        // we have to remember to apply at every code path.
+        sql: r#"
+            ALTER TABLE notes DROP COLUMN crypto_key;
+        "#,
+    },
 ];
 
 pub fn run(conn: &mut Connection) -> AppResult<()> {
