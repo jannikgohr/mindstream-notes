@@ -6,8 +6,8 @@
    * max/close trio on the right.
    */
   import { onMount } from 'svelte';
-  import NoteEditor from './NoteEditor.svelte';
-  import WindowControls from './WindowControls.svelte';
+  import NoteEditor from '$lib/components/NoteEditor.svelte';
+  import WindowControls from '$lib/components/WindowControls.svelte';
   import { loadNote } from '$lib/api';
 
   interface Props {

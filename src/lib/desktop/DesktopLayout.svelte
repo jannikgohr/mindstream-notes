@@ -7,11 +7,11 @@
     GroupPanelPartInitParameters,
     DockviewGroupPanel
   } from 'dockview-core';
-  import TopBar from './TopBar.svelte';
-  import FileExplorer from './FileExplorer.svelte';
-  import MetadataPanel from './MetadataPanel.svelte';
-  import NoteEditor from './NoteEditor.svelte';
-  import ResizeHandle from './ResizeHandle.svelte';
+  import TopBar from '$lib/components/TopBar.svelte';
+  import FileExplorer from '$lib/components/FileExplorer.svelte';
+  import MetadataPanel from '$lib/components/MetadataPanel.svelte';
+  import NoteEditor from '$lib/components/NoteEditor.svelte';
+  import ResizeHandle from '$lib/components/ResizeHandle.svelte';
   import SettingsDialog from '$lib/settings/SettingsDialog.svelte';
   import { PopoutHeaderAction } from './dockview-popout-action';
   import { openNoteWindow } from '$lib/api';

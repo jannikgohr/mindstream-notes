@@ -1,51 +1,66 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import Layout from '$lib/components/Layout.svelte';
-  import SingleNoteWindow from '$lib/components/SingleNoteWindow.svelte';
-  import {getCurrentWebviewWindow} from "@tauri-apps/api/webviewWindow";
-
+  import DesktopLayout from '$lib/desktop/DesktopLayout.svelte';
+  import MobileLayout from '$lib/mobile/MobileLayout.svelte';
+  import SingleNoteWindow from '$lib/desktop/SingleNoteWindow.svelte';
+  import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
+  import { isMobile } from '$lib/platform';
 
   /**
-   * Decide between the full app shell and the single-note popout.
+   * Three-way render decision, made client-side because both branches
+   * depend on browser-only signals (navigator.userAgent, the Tauri
+   * webview label):
    *
-   * Three lookup paths, in order:
-   *   1. window.__POPOUT_NOTE_ID__   — set by Tauri's initialization_script
-   *      when open_note_window spawned this window. The most reliable
-   *      mechanism because it bypasses URL / asset-resolver quirks.
-   *   2. ?window=editor&id=X         — browser fallback for `pnpm dev`
-   *      (window.open returns a tab with this query string).
-   *   3. #popout=X                   — legacy hash, kept for back-compat.
+   *   1. Mobile (Android/iOS) → MobileLayout. Popout windows can't
+   *      exist there, so we skip the popout-id detection entirely.
+   *   2. Spawned popout window  → SingleNoteWindow. Detected via:
+   *        a. Tauri label starting with `note_` (the canonical signal).
+   *        b. ?window=editor&id=X  — browser fallback for `pnpm dev`.
+   *        c. #popout=X            — legacy hash, kept for back-compat.
+   *   3. Otherwise → DesktopLayout (the full multi-window shell).
    */
+  let mode = $state<'mobile' | 'popout' | 'desktop' | null>(null);
   let popoutNoteId = $state<string | null>(null);
-  let resolved = $state(false);
 
   onMount(() => {
-    let wv_label = getCurrentWebviewWindow().label
-    // Native Tauri
-    if (wv_label.startsWith('note_')) {
-      popoutNoteId = wv_label
+    if (isMobile()) {
+      mode = 'mobile';
+      return;
     }
-    // Browser Fallback
-    if (!popoutNoteId) {
+
+    let id: string | null = null;
+    try {
+      const label = getCurrentWebviewWindow().label;
+      if (label.startsWith('note_')) id = label;
+    } catch {
+      /* Tauri API may be unavailable outside the desktop shell. */
+    }
+    if (!id) {
       const params = new URLSearchParams(window.location.search);
       if (params.get('window') === 'editor') {
-        const id = params.get('id');
-        if (id) popoutNoteId = id;
+        id = params.get('id');
       }
-    } else if (!popoutNoteId && window.location.hash) {
-      const hash = window.location.hash.replace(/^#/, '');
-      const hashParams = new URLSearchParams(hash);
-      const id = hashParams.get('popout');
-      if (id) popoutNoteId = id;
     }
-    resolved = true;
+    if (!id && window.location.hash) {
+      const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+      id = hashParams.get('popout');
+    }
+
+    if (id) {
+      popoutNoteId = id;
+      mode = 'popout';
+    } else {
+      mode = 'desktop';
+    }
   });
 </script>
 
-{#if !resolved}
+{#if mode === null}
   <!-- One frame of empty before we decide which shell to render. -->
-{:else if popoutNoteId}
+{:else if mode === 'mobile'}
+  <MobileLayout />
+{:else if mode === 'popout' && popoutNoteId}
   <SingleNoteWindow noteId={popoutNoteId} />
 {:else}
-  <Layout />
+  <DesktopLayout />
 {/if}
