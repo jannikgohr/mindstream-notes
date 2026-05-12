@@ -16,6 +16,8 @@ import {
   isEnabled as isEnabledAutostart,
   disable as disableAutostart
 } from '@tauri-apps/plugin-autostart';
+import { isTauri } from '$lib/api';
+import { isMobile } from '$lib/platform';
 import {
   setLeftSidebarWidth,
   setRightSidebarWidth,
@@ -35,10 +37,24 @@ export interface Binding {
   set: (value: unknown) => Promise<void>;
 }
 
+/**
+ * Autostart is a desktop-only Tauri plugin (see Cargo.toml's cfg-gated
+ * dep). Outside Tauri — `vite preview` in a plain browser, or the
+ * Android build — the plugin's invoke() crashes because
+ * window.__TAURI_INTERNALS__ doesn't exist (or doesn't carry the
+ * autostart command). Report 'false' / no-op instead of throwing so
+ * the settings dialog hydrates cleanly.
+ */
+const autostartAvailable = () => isTauri() && !isMobile();
+
 export const SETTING_BINDINGS: Record<string, Binding> = {
   'general.startOnLogin': {
-    get: async () => await isEnabledAutostart(),
-    set: async (v) => v ? await enableAutostart() : await disableAutostart()
+    get: async () => (autostartAvailable() ? await isEnabledAutostart() : false),
+    set: async (v) => {
+      if (!autostartAvailable()) return;
+      if (v) await enableAutostart();
+      else await disableAutostart();
+    }
   },
   'appearance.mode': {
     get: async () => {

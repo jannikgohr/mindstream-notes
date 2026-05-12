@@ -369,3 +369,26 @@ main:not(.fullscreen-note) .milkdown-drop-indicator {
 .ProseMirror > .ProseMirror-yjs-cursor:first-child {
   margin-top: 16px;
 }
+
+/* ----------------------------------------------------------------------------
+ * Edge-to-edge safe-area insets for the mobile shell.
+ *
+ * Android (and iOS) render under the status bar / nav bar when the activity
+ * is configured edge-to-edge. `env(safe-area-inset-*)` exposes those
+ * obstructed margins to CSS; the viewport meta tag uses viewport-fit=cover
+ * so the insets are non-zero. Desktop platforms report all zeros, so these
+ * utilities are no-ops outside mobile and don't need a media query gate.
+ * ------------------------------------------------------------------------- */
+
+.safe-top {
+  padding-top: env(safe-area-inset-top);
+}
+
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.safe-x {
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
