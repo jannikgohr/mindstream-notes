@@ -1,19 +1,20 @@
 <script lang="ts">
   import {
-    ArrowDownAZ,
     ChevronRight,
     FileText,
     Folder,
     FolderOpen,
     FolderPlus,
     Plus,
+    Star,
     Trash2
   } from 'lucide-svelte';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import ContextMenu, { type MenuItem } from './ContextMenu.svelte';
   import { confirm } from './ConfirmDialog.svelte';
-  import { SORT_STRATEGIES, sortTree, type SortStrategy } from '$lib/sort';
+  import SortControl from './SortControl.svelte';
+  import { sortTree } from '$lib/sort';
   import {
     tree,
     createCollectionIn,
@@ -27,10 +28,11 @@
     renameNote,
     restoreCollection,
     restoreNote,
+    setNoteFavourite,
     trashCollection,
     trashNote
   } from '$lib/stores/tree.svelte';
-  import { setSortStrategy, ui } from '$lib/state.svelte';
+  import { setSortDirection, setSortStrategy, ui } from '$lib/state.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { TRASH_ID } from '$lib/api';
   import type { TreeNode } from '$lib/api';
@@ -169,29 +171,6 @@
       if (!rename.new_name.trim()) cancelRename();
       else void commitRename();
     }, 0);
-  }
-
-  // ---------- Sort menu ----------
-  let sortMenuOpen = $state(false);
-  let sortMenuX = $state(0);
-  let sortMenuY = $state(0);
-
-  function openSortMenu(e: MouseEvent) {
-    e.preventDefault();
-    e.stopPropagation();
-    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    sortMenuX = r.left;
-    sortMenuY = r.bottom + 4;
-    sortMenuOpen = true;
-  }
-  function closeSortMenu() {
-    sortMenuOpen = false;
-  }
-  function sortMenuItems(): (MenuItem | 'separator')[] {
-    return SORT_STRATEGIES.map((opt) => ({
-      label: (ui.sortStrategy === opt.id ? '✓  ' : '    ') + tUi(opt.labelKey),
-      onSelect: () => setSortStrategy(opt.id as SortStrategy)
-    }));
   }
 
   // ---------- Context menu ----------
@@ -468,20 +447,17 @@
   class="flex h-full w-full flex-col bg-card text-sm"
   oncontextmenu={(e) => openMenu(e, { kind: 'root' })}
 >
-  <div class="flex items-center justify-between px-3 py-2">
+  <div class="flex items-center justify-between gap-2 px-3 py-2">
     <span class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-      Explorer
+      {tUi('fileTree.title')}
     </span>
     <div class="flex items-center gap-1">
-      <Button variant="ghost" size="icon" onclick={openSortMenu} title="Sort" aria-label="Sort notes">
-        <ArrowDownAZ class="size-3.5" />
-      </Button>
       <Button
         variant="ghost"
         size="icon"
         onclick={() => startDraft('folder', null)}
-        title="New folder"
-        aria-label="New folder"
+        title={tUi('fileTree.newFolder')}
+        aria-label={tUi('fileTree.newFolder')}
       >
         <FolderPlus class="size-3.5" />
       </Button>
@@ -489,17 +465,26 @@
         variant="ghost"
         size="icon"
         onclick={() => startDraft('note', null)}
-        title="New note"
-        aria-label="New note"
+        title={tUi('fileTree.newNote')}
+        aria-label={tUi('fileTree.newNote')}
       >
         <Plus class="size-3.5" />
       </Button>
     </div>
   </div>
 
+  <div class="border-y border-border px-3 py-2">
+    <SortControl
+      strategy={ui.sortStrategy}
+      direction={ui.sortDirection}
+      onStrategyChange={setSortStrategy}
+      onDirectionChange={setSortDirection}
+    />
+  </div>
+
   <div
     role="group"
-    aria-label="File tree"
+    aria-label={tUi('fileTree.tree')}
     class="flex-1 overflow-y-auto px-1 pb-2"
     class:ring-1={dragOver === 'root'}
     class:ring-ring={dragOver === 'root'}
@@ -508,14 +493,14 @@
     ondrop={onDropOnRoot}
   >
     {#if !tree.ready}
-      <p class="px-2 py-3 text-xs text-muted-foreground">Loading…</p>
+      <p class="px-2 py-3 text-xs text-muted-foreground">{tUi('fileTree.loading')}</p>
     {:else if tree.error}
       <p class="px-2 py-3 text-xs text-destructive">
-        Couldn't load notes: {tree.error}
+        {tUi('fileTree.error')}: {tree.error}
       </p>
     {:else if mainNodes.length === 0 && !draft}
       <p class="px-2 py-3 text-xs text-muted-foreground">
-        No notes yet. Right-click here to create one.
+        {tUi('fileTree.emptyRoot')}
       </p>
     {/if}
 
@@ -545,7 +530,7 @@
     <Input
       bind:ref={nameInput}
       bind:value={draft!.text}
-      placeholder={isFolder ? 'Folder name' : 'Note title'}
+      placeholder={isFolder ? tUi('fileTree.newFolder') : tUi('fileTree.newNote')}
       class="h-7 px-2 text-sm"
       onkeydown={onDraftKey}
       onblur={onDraftBlur}
@@ -591,7 +576,9 @@
         {@render renderNode(child)}
       {/each}
       {#if childCount === 0}
-        <p class="px-2 py-1 text-[11px] italic text-muted-foreground">Empty</p>
+        <p class="px-2 py-1 text-[11px] italic text-muted-foreground">
+          {tUi('fileTree.emptyFolder')}
+        </p>
       {/if}
     </div>
   {/if}
@@ -642,38 +629,56 @@
   {:else}
     {@const isOver = dragOver === `n:${node.id}`}
     {@const renaming = rename && rename.kind === 'note' && rename.id === node.id}
-    <button
-      type="button"
+    {@const note = tree.notesById[node.id]}
+    {@const fav = note?.favourite === true}
+    {@const inTrash = note?.parent_collection_id === TRASH_ID}
+    <!-- Row uses a flex container so the favourite-toggle button can
+         sit alongside the primary open-note tap target without nesting
+         <button>s. The drag handlers live on the wrapper so users can
+         start a drag from either side; only the main button responds
+         to click + contextmenu. -->
+    <div
+      role="group"
       draggable="true"
-      class="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left hover:bg-accent hover:text-accent-foreground"
+      class="group flex w-full items-center gap-0.5 rounded-md pr-1 hover:bg-accent hover:text-accent-foreground"
       class:bg-accent={isOver}
       class:opacity-60={drag?.kind === 'note' && drag.id === node.id}
-      onclick={() => onOpenNote(node.id)}
-      oncontextmenu={(e) => openMenu(e, { kind: 'note', id: node.id })}
       ondragstart={(e) => onNoteDragStart(e, node.id)}
       ondragend={onDragEnd}
       ondragover={(e) => onDragOverNote(e, node.id)}
       ondragleave={onDragLeave}
     >
-      <FileText class="size-3.5 shrink-0 text-muted-foreground" />
-      {#if renaming}
-        {@render renderRenameInput()}
-      {:else}
-        <span class="truncate">{node.name}</span>
+      <button
+        type="button"
+        class="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1 text-left"
+        onclick={() => onOpenNote(node.id)}
+        oncontextmenu={(e) => openMenu(e, { kind: 'note', id: node.id })}
+      >
+        <FileText class="size-3.5 shrink-0 text-muted-foreground" />
+        {#if renaming}
+          {@render renderRenameInput()}
+        {:else}
+          <span class="truncate">{node.name}</span>
+        {/if}
+      </button>
+      {#if !inTrash}
+        <button
+          type="button"
+          class="shrink-0 rounded p-1 text-muted-foreground transition-opacity hover:text-foreground {fav
+            ? 'opacity-100'
+            : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100'}"
+          onclick={() => void setNoteFavourite(node.id, !fav)}
+          aria-pressed={fav}
+          aria-label={fav ? tUi('favourite.remove') : tUi('favourite.add')}
+          title={fav ? tUi('favourite.remove') : tUi('favourite.add')}
+        >
+          <Star class="size-3.5" fill={fav ? 'currentColor' : 'none'} />
+        </button>
       {/if}
-    </button>
+    </div>
   {/if}
 {/snippet}
 
 {#if menuOpen}
   <ContextMenu x={menuX} y={menuY} items={menuItems()} onClose={closeMenu} />
-{/if}
-
-{#if sortMenuOpen}
-  <ContextMenu
-    x={sortMenuX}
-    y={sortMenuY}
-    items={sortMenuItems()}
-    onClose={closeSortMenu}
-  />
 {/if}

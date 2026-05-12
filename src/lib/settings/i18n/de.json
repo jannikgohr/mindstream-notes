@@ -26,7 +26,19 @@
     "breadcrumb.root.home": "Notizen",
     "breadcrumb.root.shared": "Geteilt",
     "breadcrumb.root.favourite": "Favoriten",
-    "breadcrumb.root.trash": "Papierkorb"
+    "breadcrumb.root.trash": "Papierkorb",
+
+    "fileTree.title": "Explorer",
+    "fileTree.tree": "Dateibaum",
+    "fileTree.newNote": "Neue Notiz",
+    "fileTree.newFolder": "Neuer Ordner",
+    "fileTree.loading": "Wird geladen…",
+    "fileTree.error": "Notizen konnten nicht geladen werden",
+    "fileTree.emptyRoot": "Noch keine Notizen. Rechtsklick zum Anlegen.",
+    "fileTree.emptyFolder": "Leer",
+
+    "favourite.add": "Zu Favoriten hinzufügen",
+    "favourite.remove": "Aus Favoriten entfernen"
   },
   "categories": {
     "account": { "label": "Konto & Synchronisation" },

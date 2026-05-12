@@ -26,7 +26,19 @@
     "breadcrumb.root.home": "Notes",
     "breadcrumb.root.shared": "Shared",
     "breadcrumb.root.favourite": "Favourites",
-    "breadcrumb.root.trash": "Trash"
+    "breadcrumb.root.trash": "Trash",
+
+    "fileTree.title": "Explorer",
+    "fileTree.tree": "File tree",
+    "fileTree.newNote": "New note",
+    "fileTree.newFolder": "New folder",
+    "fileTree.loading": "Loading…",
+    "fileTree.error": "Couldn't load notes",
+    "fileTree.emptyRoot": "No notes yet. Right-click here to create one.",
+    "fileTree.emptyFolder": "Empty",
+
+    "favourite.add": "Add to favourites",
+    "favourite.remove": "Remove from favourites"
   },
   "categories": {
     "account": { "label": "Account & Sync", "description": "Connect to a managed or self-hosted server, manage devices and sync." },
