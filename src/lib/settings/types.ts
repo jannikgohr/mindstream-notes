@@ -145,6 +145,7 @@ export interface I18nBundle {
     title: string;
     search: string;
     close: string;
+    back: string;
     reset: string;
     modified: string;
     empty: string;

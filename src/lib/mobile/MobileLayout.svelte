@@ -28,8 +28,8 @@
   import MobileFab, { type FabAction } from './MobileFab.svelte';
   import MobileBottomNav from './MobileBottomNav.svelte';
   import MobileEditor from './MobileEditor.svelte';
+  import MobileSettingsDialog from './MobileSettingsDialog.svelte';
   import NameInputSheet from './NameInputSheet.svelte';
-  import SettingsDialog from '$lib/settings/SettingsDialog.svelte';
   import {
     createCollectionIn,
     createNoteIn,
@@ -162,4 +162,4 @@
   />
 {/if}
 
-<SettingsDialog />
+<MobileSettingsDialog />
