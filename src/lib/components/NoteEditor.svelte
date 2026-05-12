@@ -188,7 +188,13 @@
       // AFTER the editor is fully bound so the provider's doc-update
       // handler doesn't race with applyTemplate and doesn't attempt to
       // broadcast the initial fragment seed.
+      lastSeenPushed = tree.notesById[noteId]?.pushed ?? false;
       await setupCollabProvider();
+      // Now that the initial pushed-state is captured, let the $effect
+      // react to *changes* (specifically false → true when the
+      // post-create sync lands) without re-firing for the value we just
+      // consumed.
+      collabReady = true;
 
       // React to login/logout while this note is open. Logout returns
       // null from noteRoomInfo (the Rust side gates on has_session and
@@ -208,6 +214,25 @@
   });
 
   let unsubSession: (() => void) | null = null;
+
+  // Track whether the note has been pushed across reactive updates so
+  // we only kick off a collab re-init when that transitions (false →
+  // true means the post-create sync just made the room reachable; true
+  // → false means a wipe / re-create elsewhere). Without this guard the
+  // $effect would fire on every loadTree (which replaces tree.notesById
+  // wholesale) and we'd tear down + recreate the provider on every
+  // save — noteRoomInfo is an etebase HTTP round-trip we don't want to
+  // repeat for no reason.
+  let lastSeenPushed = false;
+  let collabReady = false;
+
+  $effect(() => {
+    const pushed = tree.notesById[noteId]?.pushed ?? false;
+    if (!collabReady) return;
+    if (pushed === lastSeenPushed) return;
+    lastSeenPushed = pushed;
+    void setupCollabProvider();
+  });
 
   /**
    * (Re)create the live-collab provider for the current note. Tears down
