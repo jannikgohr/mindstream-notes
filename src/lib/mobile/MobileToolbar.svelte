@@ -14,16 +14,31 @@
   let sortMenuOpen = $state(false);
   let sortMenuX = $state(0);
   let sortMenuY = $state(0);
+  // Trigger ref so ContextMenu's pointerdown click-away ignores the
+  // button, and tapping it again collapses the menu instead of the
+  // close-then-reopen race.
+  let sortTriggerEl = $state<HTMLElement | null>(null);
 
   const currentSortLabel = $derived(
     SORT_STRATEGIES.find((s) => s.id === ui.sortStrategy)?.label ?? 'Sort'
   );
 
   function openSortMenu(e: MouseEvent) {
-    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const trigger = e.currentTarget as HTMLElement;
+    if (sortMenuOpen && sortTriggerEl === trigger) {
+      closeSortMenu();
+      return;
+    }
+    const r = trigger.getBoundingClientRect();
     sortMenuX = r.left;
     sortMenuY = r.bottom + 4;
+    sortTriggerEl = trigger;
     sortMenuOpen = true;
+  }
+
+  function closeSortMenu() {
+    sortMenuOpen = false;
+    sortTriggerEl = null;
   }
 
   function sortMenuItems(): (MenuItem | 'separator')[] {
@@ -87,6 +102,7 @@
     x={sortMenuX}
     y={sortMenuY}
     items={sortMenuItems()}
-    onClose={() => (sortMenuOpen = false)}
+    ignoreEl={sortTriggerEl}
+    onClose={closeSortMenu}
   />
 {/if}
