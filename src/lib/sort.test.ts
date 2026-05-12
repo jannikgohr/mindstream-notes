@@ -54,7 +54,7 @@ describe('sortTree', () => {
     expect(out.map((n) => n.name)).toEqual(['Apple', 'banana', 'cherry']);
   });
 
-  it('modified: newest first by note timestamp', () => {
+  it('modified asc: oldest first by note timestamp', () => {
     const ctx = {
       notesById: {
         n1: note('n1', 'old', '2020-01-01T00:00:00Z'),
@@ -63,8 +63,31 @@ describe('sortTree', () => {
       }
     };
     const tree: TreeNode[] = [noteNode('n1', 'old'), noteNode('n2', 'new'), noteNode('n3', 'mid')];
-    const out = sortTree(tree, 'modified', ctx);
+    const out = sortTree(tree, 'modified', ctx, 'asc');
+    expect(out.map((n) => n.id)).toEqual(['n1', 'n3', 'n2']);
+  });
+
+  it('modified desc: newest first by note timestamp', () => {
+    const ctx = {
+      notesById: {
+        n1: note('n1', 'old', '2020-01-01T00:00:00Z'),
+        n2: note('n2', 'new', '2024-06-01T00:00:00Z'),
+        n3: note('n3', 'mid', '2022-03-15T00:00:00Z')
+      }
+    };
+    const tree: TreeNode[] = [noteNode('n1', 'old'), noteNode('n2', 'new'), noteNode('n3', 'mid')];
+    const out = sortTree(tree, 'modified', ctx, 'desc');
     expect(out.map((n) => n.id)).toEqual(['n2', 'n3', 'n1']);
+  });
+
+  it('alphabetical desc: reverses A→Z to Z→A', () => {
+    const tree: TreeNode[] = [
+      noteNode('n1', 'banana'),
+      noteNode('n2', 'Apple'),
+      noteNode('n3', 'cherry')
+    ];
+    const out = sortTree(tree, 'alphabetical', { notesById: {} }, 'desc');
+    expect(out.map((n) => n.name)).toEqual(['cherry', 'banana', 'Apple']);
   });
 
   it('recurses into folder children with the same strategy', () => {

@@ -8,7 +8,19 @@
     "reset": "Auf Standard zurücksetzen",
     "modified": "Geändert",
     "empty": "Keine Einstellungen passen zur Suche.",
-    "saving": "Wird gespeichert…"
+    "saving": "Wird gespeichert…",
+
+    "sort.label": "Sortierung",
+    "sort.ascending": "Aufsteigend sortieren",
+    "sort.descending": "Absteigend sortieren",
+    "sort.switch": "Sortierreihenfolge wählen",
+    "sort.strategy.alphabetical": "Alphabetisch",
+    "sort.strategy.modified": "Zuletzt geändert",
+    "sort.strategy.created": "Zuletzt erstellt",
+
+    "display.mode": "Anzeigemodus",
+    "display.list": "Listenansicht",
+    "display.grid": "Rasteransicht"
   },
   "categories": {
     "account": { "label": "Konto & Synchronisation" },

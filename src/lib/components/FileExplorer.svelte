@@ -31,6 +31,7 @@
     trashNote
   } from '$lib/stores/tree.svelte';
   import { setSortStrategy, ui } from '$lib/state.svelte';
+  import { tUi } from '$lib/settings/i18n.svelte';
   import { TRASH_ID } from '$lib/api';
   import type { TreeNode } from '$lib/api';
 
@@ -50,7 +51,12 @@
   let expanded = $state<Record<string, boolean>>({});
 
   const sortedTree = $derived(
-    sortTree(tree.tree, ui.sortStrategy, { notesById: tree.notesById })
+    sortTree(
+      tree.tree,
+      ui.sortStrategy,
+      { notesById: tree.notesById },
+      ui.sortDirection
+    )
   );
 
   // Pull the trash folder out of sortedTree so it can be pinned at the
@@ -183,7 +189,7 @@
   }
   function sortMenuItems(): (MenuItem | 'separator')[] {
     return SORT_STRATEGIES.map((opt) => ({
-      label: (ui.sortStrategy === opt.id ? '✓  ' : '    ') + opt.label,
+      label: (ui.sortStrategy === opt.id ? '✓  ' : '    ') + tUi(opt.labelKey),
       onSelect: () => setSortStrategy(opt.id as SortStrategy)
     }));
   }

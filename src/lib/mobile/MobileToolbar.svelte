@@ -1,72 +1,35 @@
 <script lang="ts">
   /**
-   * Below-breadcrumb toolbar: sort picker on the left, list/grid switcher
-   * on the right. Sort strategy is read from the shared UI store so the
-   * choice carries across platforms; display mode is mobile-local.
+   * Below-breadcrumb toolbar: split sort control on the left, list/grid
+   * switcher on the right. The sort strategy + direction are read from
+   * the shared UI store so the choice carries across platforms; display
+   * mode is mobile-local.
    */
-  import { ArrowDownAZ, LayoutGrid, List } from 'lucide-svelte';
-  import { Button } from '$lib/components/ui/button';
-  import ContextMenu, { type MenuItem } from '$lib/components/ContextMenu.svelte';
-  import { SORT_STRATEGIES, type SortStrategy } from '$lib/sort';
-  import { setSortStrategy, ui } from '$lib/state.svelte';
+  import { LayoutGrid, List } from 'lucide-svelte';
+  import SortControl from '$lib/components/SortControl.svelte';
+  import {
+    setSortDirection,
+    setSortStrategy,
+    ui
+  } from '$lib/state.svelte';
+  import { tUi } from '$lib/settings/i18n.svelte';
   import { mobileState, setDisplayMode } from './state.svelte';
-
-  let sortMenuOpen = $state(false);
-  let sortMenuX = $state(0);
-  let sortMenuY = $state(0);
-  // Trigger ref so ContextMenu's pointerdown click-away ignores the
-  // button, and tapping it again collapses the menu instead of the
-  // close-then-reopen race.
-  let sortTriggerEl = $state<HTMLElement | null>(null);
-
-  const currentSortLabel = $derived(
-    SORT_STRATEGIES.find((s) => s.id === ui.sortStrategy)?.label ?? 'Sort'
-  );
-
-  function openSortMenu(e: MouseEvent) {
-    const trigger = e.currentTarget as HTMLElement;
-    if (sortMenuOpen && sortTriggerEl === trigger) {
-      closeSortMenu();
-      return;
-    }
-    const r = trigger.getBoundingClientRect();
-    sortMenuX = r.left;
-    sortMenuY = r.bottom + 4;
-    sortTriggerEl = trigger;
-    sortMenuOpen = true;
-  }
-
-  function closeSortMenu() {
-    sortMenuOpen = false;
-    sortTriggerEl = null;
-  }
-
-  function sortMenuItems(): (MenuItem | 'separator')[] {
-    return SORT_STRATEGIES.map((opt) => ({
-      label: (ui.sortStrategy === opt.id ? '✓  ' : '    ') + opt.label,
-      onSelect: () => setSortStrategy(opt.id as SortStrategy)
-    }));
-  }
 </script>
 
 <div
   class="flex shrink-0 items-center justify-between gap-2 border-b border-border bg-card px-3 py-2"
 >
-  <Button
-    variant="ghost"
-    size="sm"
-    onclick={openSortMenu}
-    aria-label="Sort"
-    class="h-8 gap-1.5 text-xs"
-  >
-    <ArrowDownAZ class="size-3.5" />
-    <span class="truncate">{currentSortLabel}</span>
-  </Button>
+  <SortControl
+    strategy={ui.sortStrategy}
+    direction={ui.sortDirection}
+    onStrategyChange={setSortStrategy}
+    onDirectionChange={setSortDirection}
+  />
 
   <div
     class="inline-flex items-center rounded-md border border-border bg-background p-0.5"
     role="group"
-    aria-label="Display mode"
+    aria-label={tUi('display.mode')}
   >
     <button
       type="button"
@@ -76,8 +39,8 @@
         : 'text-muted-foreground hover:bg-accent/50'}"
       onclick={() => setDisplayMode('list')}
       aria-pressed={mobileState.displayMode === 'list'}
-      aria-label="List view"
-      title="List view"
+      aria-label={tUi('display.list')}
+      title={tUi('display.list')}
     >
       <List class="size-3.5" />
     </button>
@@ -89,20 +52,10 @@
         : 'text-muted-foreground hover:bg-accent/50'}"
       onclick={() => setDisplayMode('grid')}
       aria-pressed={mobileState.displayMode === 'grid'}
-      aria-label="Grid view"
-      title="Grid view"
+      aria-label={tUi('display.grid')}
+      title={tUi('display.grid')}
     >
       <LayoutGrid class="size-3.5" />
     </button>
   </div>
 </div>
-
-{#if sortMenuOpen}
-  <ContextMenu
-    x={sortMenuX}
-    y={sortMenuY}
-    items={sortMenuItems()}
-    ignoreEl={sortTriggerEl}
-    onClose={closeSortMenu}
-  />
-{/if}
