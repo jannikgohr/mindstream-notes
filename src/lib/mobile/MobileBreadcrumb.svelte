@@ -1,29 +1,33 @@
 <script lang="ts">
   /**
-   * Current-folder breadcrumb. Each segment (including the implicit root)
-   * is tappable to drill back out — last segment is rendered as plain
-   * text since you can't navigate "to where you already are".
+   * Current-folder breadcrumb. Each segment is tappable to drill back
+   * out — the trailing segment is rendered as plain text since you
+   * can't navigate "to where you already are". The root segment always
+   * carries a home icon so the chrome looks identical at the bucket
+   * root and deep in a folder.
+   *
+   * Height is locked to h-8 to line up with the sort control sitting
+   * below it; without an explicit height the breadcrumb would shrink
+   * to its text height and the toolbar layout would jitter as content
+   * changes.
    */
-  import { ChevronRight } from 'lucide-svelte';
+  import { Home, ChevronRight } from 'lucide-svelte';
   import { tree } from '$lib/stores/tree.svelte';
   import type { Collection } from '$lib/api';
-  import { mobileState, setCurrentFolder } from './state.svelte';
+  import { tUi } from '$lib/settings/i18n.svelte';
+  import { mobileState, setCurrentFolder, type MobileView } from './state.svelte';
 
   interface Segment {
     id: string | null;
     label: string;
   }
 
-  const ROOT_LABELS: Record<string, string> = {
-    home: 'Notes',
-    shared: 'Shared',
-    favourite: 'Favourites',
-    trash: 'Trash'
-  };
+  function rootLabel(view: MobileView): string {
+    return tUi(`breadcrumb.root.${view}`);
+  }
 
   const segments = $derived.by<Segment[]>(() => {
-    const rootLabel = ROOT_LABELS[mobileState.view] ?? 'Notes';
-    const out: Segment[] = [{ id: null, label: rootLabel }];
+    const out: Segment[] = [{ id: null, label: rootLabel(mobileState.view) }];
 
     let id = mobileState.currentFolderId;
     const chain: Collection[] = [];
@@ -41,24 +45,35 @@
 </script>
 
 <nav
-  class="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border bg-card px-3 py-2 text-xs text-muted-foreground"
-  aria-label="Folder path"
+  class="flex h-8 shrink-0 items-center gap-1 overflow-x-auto border-b border-border bg-card px-3 text-xs text-muted-foreground"
+  aria-label={tUi('breadcrumb.label')}
 >
   {#each segments as seg, i (i)}
+    {@const isLast = i === segments.length - 1}
+    {@const isRoot = i === 0}
     {#if i > 0}
       <ChevronRight class="size-3 shrink-0 opacity-50" />
     {/if}
-    {#if i === segments.length - 1}
-      <span class="truncate font-medium text-foreground" aria-current="page">
-        {seg.label}
+    {#if isLast}
+      <span
+        class="flex min-w-0 items-center gap-1 truncate font-medium text-foreground"
+        aria-current="page"
+      >
+        {#if isRoot}
+          <Home class="size-3.5 shrink-0" aria-hidden="true" />
+        {/if}
+        <span class="truncate">{seg.label}</span>
       </span>
     {:else}
       <button
         type="button"
-        class="truncate rounded px-1 py-0.5 hover:bg-accent hover:text-accent-foreground"
+        class="flex min-w-0 items-center gap-1 truncate rounded px-1 py-0.5 hover:bg-accent hover:text-accent-foreground"
         onclick={() => setCurrentFolder(seg.id)}
       >
-        {seg.label}
+        {#if isRoot}
+          <Home class="size-3.5 shrink-0" aria-hidden="true" />
+        {/if}
+        <span class="truncate">{seg.label}</span>
       </button>
     {/if}
   {/each}

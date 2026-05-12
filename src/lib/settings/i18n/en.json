@@ -20,7 +20,13 @@
 
     "display.mode": "Display mode",
     "display.list": "List view",
-    "display.grid": "Grid view"
+    "display.grid": "Grid view",
+
+    "breadcrumb.label": "Folder path",
+    "breadcrumb.root.home": "Notes",
+    "breadcrumb.root.shared": "Shared",
+    "breadcrumb.root.favourite": "Favourites",
+    "breadcrumb.root.trash": "Trash"
   },
   "categories": {
     "account": { "label": "Account & Sync", "description": "Connect to a managed or self-hosted server, manage devices and sync." },
