@@ -23,6 +23,64 @@ use tauri::Manager;
 
 use crate::db::{migrations, Db};
 
+/// Pick a platform credential store and register it with keyring-core
+/// so subsequent `Entry::new(...)` calls in `auth::*` know where to
+/// read/write secrets. v4 of the keyring ecosystem split each backend
+/// into its own crate; this function is the only place we name them.
+///
+/// On Android the upstream store also needs `ndk-context` to be
+/// initialised from Java before this runs — see Keyring.kt and
+/// MainActivity.onCreate.
+///
+/// Failures here are logged but non-fatal: the rest of the app still
+/// boots so the user can use local-only features; signin/signout will
+/// surface a clear "no keyring store" error when they're invoked.
+fn init_keyring() {
+    let result: Result<(), String> = (|| {
+        #[cfg(target_os = "macos")]
+        {
+            let store = apple_native_keyring_store::keychain::Store::new()
+                .map_err(|e| format!("apple keychain store: {e}"))?;
+            keyring_core::set_default_store(store);
+        }
+
+        #[cfg(target_os = "ios")]
+        {
+            let store = apple_native_keyring_store::protected::Store::new()
+                .map_err(|e| format!("apple protected store: {e}"))?;
+            keyring_core::set_default_store(store);
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            let store = windows_native_keyring_store::Store::new()
+                .map_err(|e| format!("windows credential store: {e}"))?;
+            keyring_core::set_default_store(store);
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            let store = dbus_secret_service_keyring_store::Store::new()
+                .map_err(|e| format!("linux secret-service store: {e}"))?;
+            keyring_core::set_default_store(store);
+        }
+
+        #[cfg(target_os = "android")]
+        {
+            // Store::new() panics if ndk-context isn't initialised, so we
+            // expect Keyring.initializeNdkContext to have run already.
+            let store = android_native_keyring_store::Store::new()
+                .map_err(|e| format!("android keystore: {e}"))?;
+            keyring_core::set_default_store(store);
+        }
+
+        Ok(())
+    })();
+    if let Err(e) = result {
+        log::warn!("[boot] keyring init failed: {e} — sign-in/out will error");
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(not(desktop))]
@@ -34,6 +92,10 @@ pub fn run() {
     app_handle
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
+            // Register a credential store before any auth code can hit
+            // it — Entry::new() returns Error::NoDefaultStore otherwise.
+            init_keyring();
+
             let app_data = app
                 .path()
                 .app_data_dir()

@@ -14,7 +14,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2.11", features = [] }
 tauri-plugin-shell = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -22,20 +22,27 @@ log = "0.4"
 urlencoding = "2"
 
 # Persistence
-rusqlite = { version = "0.32", features = ["bundled"] }
-thiserror = "1"
+rusqlite = { version = "0.39.0", features = ["bundled"] }
+thiserror = "2.0.18"
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 openssl-sys = { version = "0.9.111", features = ["vendored"] }
 openssl = { version = "*", features = ["vendored"] }
 etebase = "0.6.1"
-keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+
+# Keyring — v4 architecture: the API lives in keyring-core, and each
+# OS backend is its own crate. Pulling them in via target.cfg blocks
+# below keeps mobile builds (which can't link the desktop secret-
+# service / windows-native deps) clean. set_default_store() is wired
+# from run() in this file so the right store is registered before any
+# auth code touches an Entry.
+keyring-core = "1"
 
 # Sync — yrs CRDT for offline-merge-safe documents, similar for diffing
 # the editor's "full body" save back into Y.Text ops, rmp-serde for the
 # msgpack wire format inside Etebase item content.
-yrs = "0.21"
-similar = "2"
+yrs = "0.26"
+similar = "3"
 rmp-serde = "1"
 serde_bytes = "0.11"
 
@@ -49,3 +56,32 @@ strip = true
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-autostart = "2"
+
+# ---- keyring v4 platform backends ----
+# Each crate's Store::new() returns Result<Arc<Self>>, which coerces
+# into the Arc<dyn CredentialStoreApi + Send + Sync> that
+# keyring_core::set_default_store accepts.
+
+[target.'cfg(target_os = "macos")'.dependencies]
+apple-native-keyring-store = { version = "1", features = ["keychain", "protected"] }
+
+[target.'cfg(target_os = "ios")'.dependencies]
+# iOS only exposes the protected-data store. The `keychain` feature is
+# silently ignored there, so don't bother enabling it.
+apple-native-keyring-store = { version = "1", features = ["protected"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-native-keyring-store = "1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Matches the v3 `sync-secret-service` feature we were using before.
+# crypto-rust avoids pulling in OpenSSL on Linux; vendored keeps the
+# dbus link static so the binary doesn't grow a runtime dep on the
+# distro's libdbus.
+dbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust", "vendored"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+# Requires ndk-context to be initialised from Java before any Store
+# is created — see Keyring.kt + MainActivity.onCreate in
+# src-tauri/gen/android/app/...
+android-native-keyring-store = "1"
