@@ -8,6 +8,7 @@
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import { openSettings } from '$lib/settings/store.svelte';
+  import { tUi } from '$lib/settings/i18n.svelte';
   import { mobileState, setSearchQuery } from './state.svelte';
 </script>
 
@@ -20,11 +21,11 @@
     />
     <Input
       type="search"
-      placeholder="Search notes"
+      placeholder={tUi('search.notes.placeholder')}
       value={mobileState.searchQuery}
       oninput={(e) => setSearchQuery((e.currentTarget as HTMLInputElement).value)}
       class="h-9 w-full pl-8"
-      aria-label="Search notes"
+      aria-label={tUi('search.notes.label')}
     />
   </div>
 
@@ -32,8 +33,8 @@
     variant="ghost"
     size="icon"
     onclick={openSettings}
-    title="Settings"
-    aria-label="Open settings"
+    title={tUi('settings.open')}
+    aria-label={tUi('settings.open')}
   >
     <SettingsIcon class="size-5" />
   </Button>

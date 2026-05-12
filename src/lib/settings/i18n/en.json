@@ -38,7 +38,23 @@
     "fileTree.emptyFolder": "Empty",
 
     "favourite.add": "Add to favourites",
-    "favourite.remove": "Remove from favourites"
+    "favourite.remove": "Remove from favourites",
+
+    "search.notes.placeholder": "Search notes",
+    "search.notes.label": "Search notes",
+    "settings.open": "Open settings",
+
+    "nav.primary": "Primary",
+    "nav.home": "Home",
+    "nav.shared": "Shared",
+    "nav.favourite": "Favourites",
+    "nav.trash": "Trash",
+
+    "fab.newNote": "New note",
+    "fab.newFolder": "New folder",
+    "fab.placeholder.noteTitle": "Note title",
+    "fab.placeholder.folderName": "Folder name",
+    "fab.submit.create": "Create"
   },
   "categories": {
     "account": { "label": "Account & Sync", "description": "Connect to a managed or self-hosted server, manage devices and sync." },

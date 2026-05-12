@@ -38,7 +38,23 @@
     "fileTree.emptyFolder": "Leer",
 
     "favourite.add": "Zu Favoriten hinzufügen",
-    "favourite.remove": "Aus Favoriten entfernen"
+    "favourite.remove": "Aus Favoriten entfernen",
+
+    "search.notes.placeholder": "Notizen suchen",
+    "search.notes.label": "Notizen suchen",
+    "settings.open": "Einstellungen öffnen",
+
+    "nav.primary": "Hauptnavigation",
+    "nav.home": "Start",
+    "nav.shared": "Geteilt",
+    "nav.favourite": "Favoriten",
+    "nav.trash": "Papierkorb",
+
+    "fab.newNote": "Neue Notiz",
+    "fab.newFolder": "Neuer Ordner",
+    "fab.placeholder.noteTitle": "Notiztitel",
+    "fab.placeholder.folderName": "Ordnername",
+    "fab.submit.create": "Erstellen"
   },
   "categories": {
     "account": { "label": "Konto & Synchronisation" },
