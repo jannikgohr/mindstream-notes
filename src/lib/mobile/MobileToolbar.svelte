@@ -17,7 +17,7 @@
 </script>
 
 <div
-  class="flex shrink-0 items-center justify-between gap-2 border-b border-border bg-card px-3 py-2"
+  class="flex shrink-0 items-center justify-between gap-2 border-b border-border bg-card px-3 pb-2 pt-1"
 >
   <SortControl
     strategy={ui.sortStrategy}

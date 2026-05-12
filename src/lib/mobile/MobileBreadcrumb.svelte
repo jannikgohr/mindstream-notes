@@ -6,10 +6,11 @@
    * carries a home icon so the chrome looks identical at the bucket
    * root and deep in a folder.
    *
-   * Height is locked to h-8 to line up with the sort control sitting
-   * below it; without an explicit height the breadcrumb would shrink
-   * to its text height and the toolbar layout would jitter as content
-   * changes.
+   * Wrapped in an outlined pill at h-8 so it visually matches the
+   * sort + display-mode controls in the toolbar below. The outer nav
+   * carries the same px-3 py-2 padding as MobileToolbar so the pill's
+   * left + right edges line up exactly with the sort-button's left
+   * edge and the display-toggle's right edge.
    */
   import { Home, ChevronRight } from 'lucide-svelte';
   import { tree } from '$lib/stores/tree.svelte';
@@ -45,9 +46,12 @@
 </script>
 
 <nav
-  class="flex h-8 shrink-0 items-center gap-1 overflow-x-auto border-b border-border bg-card px-3 text-xs text-muted-foreground"
+  class="shrink-0 bg-card px-3 pb-1 pt-2"
   aria-label={tUi('breadcrumb.label')}
 >
+  <div
+    class="flex h-8 items-center gap-1 overflow-x-auto rounded-md border border-border bg-background px-2 text-xs text-muted-foreground"
+  >
   {#each segments as seg, i (i)}
     {@const isLast = i === segments.length - 1}
     {@const isRoot = i === 0}
@@ -85,4 +89,5 @@
       </button>
     {/if}
   {/each}
+  </div>
 </nav>
