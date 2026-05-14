@@ -224,6 +224,12 @@ fn pull_folders(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult
     let stoken = load_stoken(db, KIND_FOLDERS)?;
     let mut new_stoken = stoken.clone();
     let mut iter_token: Option<String> = None;
+    // Buffer of payloads we applied this pull so the repair pass below
+    // can re-link any folder we had to orphan to root because its
+    // parent hadn't been pulled yet. Etebase doesn't guarantee
+    // parent-before-child ordering in the list response, so this is
+    // the common case for nested hierarchies on a fresh install.
+    let mut applied: Vec<FolderPayload> = Vec::new();
     loop {
         let mut opts = FetchOptions::new();
         opts = opts.stoken(new_stoken.as_deref());
@@ -234,7 +240,9 @@ fn pull_folders(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult
             .list(Some(&opts))
             .map_err(|e| AppError::InvalidArg(format!("list folders: {e}")))?;
         for item in resp.data() {
-            apply_folder(db, item)?;
+            if let Some(payload) = apply_folder(db, item)? {
+                applied.push(payload);
+            }
             report.folders_pulled += 1;
         }
         new_stoken = resp.stoken().map(str::to_string).or(new_stoken);
@@ -243,6 +251,7 @@ fn pull_folders(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult
         }
         iter_token = None; // server uses stoken paging via response
     }
+    repair_folder_parents(db, &applied)?;
     if new_stoken != stoken {
         save_stoken(db, KIND_FOLDERS, new_stoken.as_deref())?;
     }
@@ -273,19 +282,25 @@ fn pull_notes(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult<(
     Ok(())
 }
 
-fn apply_folder(db: &Db, item: &Item) -> AppResult<()> {
+/// Apply one pulled folder item to the local DB.
+///
+/// Returns `Some(payload)` if we wrote a row (so `pull_folders` can
+/// queue it for the repair pass), `None` for deletes and missing-
+/// content items where there's nothing to re-link.
+fn apply_folder(db: &Db, item: &Item) -> AppResult<Option<FolderPayload>> {
     if item.is_deleted() {
         // Server-side delete: drop our row if we have one matched by uid.
-        return db.with_conn(|c| {
+        db.with_conn(|c| {
             c.execute(
                 "DELETE FROM collections WHERE etebase_uid = ?1",
                 params![item.uid()],
             )?;
             Ok(())
-        });
+        })?;
+        return Ok(None);
     }
     if item.is_missing_content() {
-        return Ok(());
+        return Ok(None);
     }
     let raw = item
         .content()
@@ -295,6 +310,13 @@ fn apply_folder(db: &Db, item: &Item) -> AppResult<()> {
     let now = Utc::now().to_rfc3339();
     let etag = item.etag().to_string();
     db.with_conn(|c| {
+        // Defensive: if the payload's parent folder isn't in collections
+        // yet (subfolder arrived before its parent in this pull, or the
+        // server orphaned it), store NULL for now. `repair_folder_parents`
+        // re-links us once the parent lands later in the same pull.
+        // Without this, the INSERT would hit a FOREIGN KEY violation and
+        // abort the entire sync.
+        let resolved_parent = resolve_parent_id(c, payload.parent_folder_id.as_deref())?;
         let exists: bool = c
             .query_row(
                 "SELECT 1 FROM collections WHERE id = ?1",
@@ -310,7 +332,7 @@ fn apply_folder(db: &Db, item: &Item) -> AppResult<()> {
                      etebase_uid = ?5, etebase_etag = ?6, dirty = 0
                  WHERE id = ?7",
                 params![
-                    payload.parent_folder_id,
+                    resolved_parent,
                     payload.name,
                     payload.position,
                     now,
@@ -326,7 +348,7 @@ fn apply_folder(db: &Db, item: &Item) -> AppResult<()> {
                  VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6, ?7, 0)",
                 params![
                     payload.id,
-                    payload.parent_folder_id,
+                    resolved_parent,
                     payload.name,
                     payload.position,
                     now,
@@ -335,6 +357,66 @@ fn apply_folder(db: &Db, item: &Item) -> AppResult<()> {
                 ],
             )?;
         }
+        Ok(())
+    })?;
+    Ok(Some(payload))
+}
+
+/// Returns the parent id unchanged if a collection with that id exists
+/// locally, or `None` if it's missing — used by `apply_folder`/`apply_note`
+/// during pull so a dangling `parent_folder_id` on the server doesn't
+/// abort the sync with `FOREIGN KEY constraint failed`. The original
+/// payload value is preserved by `pull_folders` so the repair pass can
+/// reattach folders once the parent arrives.
+fn resolve_parent_id(
+    conn: &Connection,
+    parent: Option<&str>,
+) -> rusqlite::Result<Option<String>> {
+    let Some(p) = parent else {
+        return Ok(None);
+    };
+    let exists: bool = conn
+        .query_row(
+            "SELECT 1 FROM collections WHERE id = ?1",
+            params![p],
+            |_| Ok(true),
+        )
+        .optional()?
+        .unwrap_or(false);
+    if exists {
+        Ok(Some(p.to_string()))
+    } else {
+        log::warn!("[sync] parent collection {p} not present locally; orphaning to root");
+        Ok(None)
+    }
+}
+
+/// After all folders in this pull have been applied, walk the buffered
+/// payloads and reattach any row we had to nullify because its parent
+/// wasn't yet known. We only touch rows whose parent is currently NULL
+/// to avoid clobbering a user-initiated move that ran concurrently —
+/// since folder upserts in this pull set parent to NULL only when the
+/// parent was missing at apply time, NULL here unambiguously means
+/// "we orphaned this one".
+fn repair_folder_parents(db: &Db, applied: &[FolderPayload]) -> AppResult<()> {
+    if applied.is_empty() {
+        return Ok(());
+    }
+    db.with_conn_mut(|c| {
+        let tx = c.transaction()?;
+        for p in applied {
+            let Some(parent) = &p.parent_folder_id else {
+                continue;
+            };
+            tx.execute(
+                "UPDATE collections SET parent_collection_id = ?1
+                 WHERE id = ?2
+                   AND parent_collection_id IS NULL
+                   AND EXISTS (SELECT 1 FROM collections WHERE id = ?1)",
+                params![parent, p.id],
+            )?;
+        }
+        tx.commit()?;
         Ok(())
     })
 }
@@ -411,6 +493,15 @@ fn apply_note(db: &Db, item: &Item) -> AppResult<()> {
         // sole authority and nothing sensitive lands on disk.
         let modified = Utc::now().to_rfc3339();
 
+        // Defensive nullification — see resolve_parent_id. Folders are
+        // pulled before notes, so the common case is that the parent
+        // resolves cleanly; the fallback covers server-side orphans
+        // (note's folder was deleted upstream without reparenting) and
+        // folders that came back is_missing_content. Without this, a
+        // single dangling reference would abort the whole notes pull
+        // with a FOREIGN KEY violation.
+        let resolved_parent = resolve_parent_id(&tx, payload.parent_folder_id.as_deref())?;
+
         let exists = tx
             .query_row(
                 "SELECT 1 FROM notes WHERE id = ?1",
@@ -428,7 +519,7 @@ fn apply_note(db: &Db, item: &Item) -> AppResult<()> {
                      payload_schema = ?11, favourite = ?12
                  WHERE id = ?13",
                 params![
-                    payload.parent_folder_id,
+                    resolved_parent,
                     payload.title,
                     body,
                     payload.position,
@@ -452,7 +543,7 @@ fn apply_note(db: &Db, item: &Item) -> AppResult<()> {
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7, ?8, ?9, ?10, 0, ?11, ?12)",
                 params![
                     payload.id,
-                    payload.parent_folder_id,
+                    resolved_parent,
                     payload.title,
                     body,
                     payload.position,
