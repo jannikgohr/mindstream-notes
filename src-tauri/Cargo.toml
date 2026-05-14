@@ -26,9 +26,7 @@ rusqlite = { version = "0.39.0", features = ["bundled"] }
 thiserror = "2.0.18"
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-openssl-sys = { version = "0.9.111", features = ["vendored"] }
-openssl = { version = "*", features = ["vendored"] }
-etebase = "0.6.1"
+etebase = { git = "https://github.com/jannikgohr/etebase-rs", features = ["networking"] }
 
 # Keyring — v4 architecture: the API lives in keyring-core, and each
 # OS backend is its own crate. Pulling them in via target.cfg blocks
@@ -50,7 +48,6 @@ serde_bytes = "0.11"
 panic = "abort"
 codegen-units = 1
 lto = true
-incremental = false
 opt-level = "s"
 strip = true
 
