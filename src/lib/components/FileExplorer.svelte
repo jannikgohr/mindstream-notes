@@ -11,6 +11,7 @@
   } from 'lucide-svelte';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
+  import { Separator } from '$lib/components/ui/separator';
   import ContextMenu, { type MenuItem } from './ContextMenu.svelte';
   import { confirm } from './ConfirmDialog.svelte';
   import SortControl from './SortControl.svelte';
@@ -447,10 +448,15 @@
   class="flex h-full w-full flex-col bg-card text-sm"
   oncontextmenu={(e) => openMenu(e, { kind: 'root' })}
 >
-  <div class="flex items-center justify-between gap-2 px-3 py-2">
-    <span class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-      {tUi('fileTree.title')}
-    </span>
+  <div class="flex items-center justify-between gap-2 px-3 py-1">
+    <SortControl
+      strategy={ui.sortStrategy}
+      direction={ui.sortDirection}
+      onStrategyChange={setSortStrategy}
+      onDirectionChange={setSortDirection}
+      variant="ghost"
+      compact
+    />
     <div class="flex items-center gap-1">
       <Button
         variant="ghost"
@@ -458,6 +464,7 @@
         onclick={() => startDraft('folder', null)}
         title={tUi('fileTree.newFolder')}
         aria-label={tUi('fileTree.newFolder')}
+        class="size-7"
       >
         <FolderPlus class="size-3.5" />
       </Button>
@@ -467,25 +474,19 @@
         onclick={() => startDraft('note', null)}
         title={tUi('fileTree.newNote')}
         aria-label={tUi('fileTree.newNote')}
+        class="size-7"
       >
         <Plus class="size-3.5" />
       </Button>
     </div>
   </div>
 
-  <div class="border-y border-border px-3 py-2">
-    <SortControl
-      strategy={ui.sortStrategy}
-      direction={ui.sortDirection}
-      onStrategyChange={setSortStrategy}
-      onDirectionChange={setSortDirection}
-    />
-  </div>
+  <Separator />
 
   <div
     role="group"
     aria-label={tUi('fileTree.tree')}
-    class="flex-1 overflow-y-auto px-1 pb-2"
+    class="flex-1 overflow-y-auto px-1 pb-2 pt-3"
     class:ring-1={dragOver === 'root'}
     class:ring-ring={dragOver === 'root'}
     ondragover={onDragOverRoot}
