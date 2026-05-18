@@ -35,6 +35,12 @@
   --radius: 0.5rem;
   --left-sidebar-width: 0px;
   --left-sidebar-enabled: 1;
+  /* Height of the floating mobile formatting toolbar — set live by
+   * MobileEditorToolbar.svelte on mount, cleared on destroy. The 0px
+   * default keeps desktop unaffected and tells CSS resolvers (IDE
+   * linters, dev tools) the property exists so `var(...)` references
+   * don't show "cannot resolve" warnings. */
+  --mobile-toolbar-height: 0px;
 }
 
 .dark {
