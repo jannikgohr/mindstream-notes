@@ -15,10 +15,11 @@
     onSessionChange
   } from '$lib/api';
   import { tree } from '$lib/stores/tree.svelte';
-  import { getSettingValue } from '$lib/settings/store.svelte';
+  import { getSettingValue, settings } from '$lib/settings/store.svelte';
   import { CollabProvider } from '$lib/sync/collab-provider';
   import { isMobile } from '$lib/platform';
-  import MobileEditorToolbar from './MobileEditorToolbar.svelte';
+  import EditorToolbar from './editor-toolbar/EditorToolbar.svelte';
+  import MobileEditorToolbar from './editor-toolbar/MobileEditorToolbar.svelte';
 
   interface Props {
     noteId: string;
@@ -427,6 +428,18 @@
     return out;
   }
 
+  // Desktop toolbar visibility is a per-device toggle (default on). The
+  // settings.values read makes this $derived re-evaluate when the user flips
+  // the toggle live. Trashed notes hide the toolbar too — it'd be misleading
+  // to show formatting buttons over a read-only banner.
+  const desktopToolbarEnabled = $derived(
+    (settings.values['editor.desktopToolbar'] ?? true) as boolean
+  );
+  const showDesktopToolbar = $derived(
+    !mobile && crepeReady && !isTrashed && desktopToolbarEnabled
+  );
+  const showMobileToolbar = $derived(mobile && crepeReady && !isTrashed);
+
   const statusLabel = $derived.by(() => {
     if (isTrashed) return 'Read-only';
     switch (savingState) {
@@ -445,6 +458,9 @@
 </script>
 
 <div class="flex h-full w-full flex-col">
+  {#if showDesktopToolbar}
+    <EditorToolbar {crepe} menuPlacement="bottom" />
+  {/if}
   <div
     class="flex h-5 shrink-0 items-center justify-end gap-2 px-3 text-[10px] uppercase tracking-wider text-muted-foreground"
     aria-live="polite"
@@ -475,9 +491,6 @@
       </span>
     </div>
   {/if}
-  {#if mobile && crepeReady && !isTrashed}
-    <MobileEditorToolbar {crepe} />
-  {/if}
   <div class="themed-scrollbar relative h-full w-full overflow-y-auto">
     {#if loading}
       <p class="px-6 py-4 text-sm text-muted-foreground">Loading note…</p>
@@ -493,3 +506,7 @@
     ></div>
   </div>
 </div>
+
+{#if showMobileToolbar}
+  <MobileEditorToolbar {crepe} />
+{/if}
