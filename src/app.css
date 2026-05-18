@@ -165,6 +165,11 @@ main:not(.fullscreen-note) .milkdown-drop-indicator {
 .mobile-editor .milkdown {
   padding-left: 0;
   padding-right: 0;
+  /* Reserve bottom space for the fixed mobile toolbar so the caret can't
+   * end up hidden behind it on the last line. The variable is set by
+   * MobileEditorToolbar.svelte on mount and cleared on destroy; the
+   * fallback 0px keeps desktop unaffected. */
+  padding-bottom: calc(1.25rem + var(--mobile-toolbar-height, 0px));
 }
 
 .mobile-editor .ProseMirror {

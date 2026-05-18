@@ -180,7 +180,8 @@
               "max": 8
             },
             { "id": "editor.autoPair", "scope": "V", "type": "toggle", "default": true },
-            { "id": "editor.trimTrailing", "scope": "V", "type": "toggle", "default": true }
+            { "id": "editor.trimTrailing", "scope": "V", "type": "toggle", "default": true },
+            { "id": "editor.desktopToolbar", "scope": "D", "type": "toggle", "default": true, "platforms": ["desktop"] }
           ]
         },
         {

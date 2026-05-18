@@ -75,7 +75,8 @@
     "editor.toolbar.advanced.image": "Bild",
     "editor.toolbar.advanced.code": "Codeblock",
     "editor.toolbar.advanced.table": "Tabelle",
-    "editor.toolbar.advanced.math": "Mathematik"
+    "editor.toolbar.advanced.math": "Mathematik",
+    "editor.toolbar.more": "Mehr"
   },
   "categories": {
     "account": { "label": "Konto & Synchronisation" },
@@ -125,6 +126,7 @@
     "editor.tabSize": { "label": "Tab-Breite" },
     "editor.autoPair": { "label": "Klammern automatisch schließen" },
     "editor.trimTrailing": { "label": "Leerzeichen am Zeilenende entfernen" },
+    "editor.desktopToolbar": { "label": "Formatierungsleiste anzeigen", "description": "Blendet eine Symbolleiste über jeder Notiz für schnelles Formatieren ein." },
     "editor.math": { "label": "Mathe (KaTeX)" },
     "editor.mermaid": { "label": "Mermaid-Diagramme" },
     "editor.wikilinks": { "label": "Wikilinks [[...]]" },

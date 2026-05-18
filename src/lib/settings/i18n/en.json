@@ -75,7 +75,8 @@
     "editor.toolbar.advanced.image": "Image",
     "editor.toolbar.advanced.code": "Code block",
     "editor.toolbar.advanced.table": "Table",
-    "editor.toolbar.advanced.math": "Math"
+    "editor.toolbar.advanced.math": "Math",
+    "editor.toolbar.more": "More"
   },
   "categories": {
     "account": { "label": "Account & Sync", "description": "Connect to a managed or self-hosted server, manage devices and sync." },
@@ -127,6 +128,7 @@
     "editor.tabSize": { "label": "Tab size" },
     "editor.autoPair": { "label": "Auto-pair brackets" },
     "editor.trimTrailing": { "label": "Trim trailing whitespace on save" },
+    "editor.desktopToolbar": { "label": "Show formatting toolbar", "description": "Adds an icon toolbar above each note for quick formatting." },
     "editor.math": { "label": "KaTeX math" },
     "editor.mermaid": { "label": "Mermaid diagrams" },
     "editor.wikilinks": { "label": "Wikilinks [[...]]" },
