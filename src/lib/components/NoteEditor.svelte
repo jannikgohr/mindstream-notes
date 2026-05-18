@@ -462,6 +462,7 @@
     <EditorToolbar
       {crepe}
       menuPlacement="bottom"
+      dense
       class="border-b border-border bg-background"
     />
   {/if}
