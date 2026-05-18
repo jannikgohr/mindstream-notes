@@ -1,27 +1,29 @@
 <script lang="ts">
   /**
-   * Icons-only toolbar surface shared by desktop and mobile. The actual
-   * positioning (top of the editor on desktop, fixed-above-keyboard on mobile)
-   * is the caller's job — this component only renders the bar itself plus its
-   * group-dropdowns and the "More" overflow menu.
+   * Icons-only toolbar surface shared by desktop and mobile. Renders only
+   * the buttons row plus its menus — chrome (border, rounded card, shadow)
+   * is the caller's job so the same component drops into a top-anchored
+   * desktop bar and a centered mobile floating pill without forking.
    *
    * Overflow strategy:
-   *   - A hidden, absolutely-positioned "measurer" container holds every
-   *     button at full size at all times. We read offsetWidth from those
-   *     ghost buttons so collapsing the visible bar never breaks our own
-   *     measurements (the classic feedback-loop trap with this pattern).
+   *   - A hidden "measurer" container holds an *exact replica* of every
+   *     button — same shadcn Button, same classes, same icons — so
+   *     offsetWidth reads match the visible bar to the pixel. We never
+   *     measure the visible bar itself, which keeps collapsing items from
+   *     feeding back into the cutoff calculation.
    *   - A ResizeObserver on the visible container drives `visibleCount`.
-   *     Items past the cutoff get swept into a "More" popover, which uses
-   *     section headers to keep groups visually intact.
+   *     Anything past the cutoff is swept into a "More" popover, which
+   *     uses section headers to keep groups visually intact.
    *
-   * `menuPlacement` decides whether the group dropdowns open below the
-   * triggers (desktop, toolbar-at-top) or above (mobile, toolbar-at-bottom).
+   * `menuPlacement` decides whether group dropdowns open below the triggers
+   * (desktop, toolbar at top) or above (mobile, toolbar at bottom).
    */
 
   import { onMount } from 'svelte';
   import type { Crepe } from '@milkdown/crepe';
   import { ChevronDown, MoreHorizontal } from 'lucide-svelte';
   import { Button } from '$lib/components/ui/button';
+  import { cn } from '$lib/utils';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { TOOLBAR_ITEMS, type ToolbarItem, type ToolbarLeaf, type ToolbarGroup } from './commands';
   import ToolbarMenu, { type MenuEntry } from './ToolbarMenu.svelte';
@@ -29,27 +31,25 @@
   interface Props {
     crepe: Crepe | null;
     menuPlacement?: 'top' | 'bottom';
+    /** Extra classes merged onto the outer bar (e.g. the desktop variant
+     *  adds `border-b border-border bg-background`). */
+    class?: string;
   }
-  let { crepe, menuPlacement = 'bottom' }: Props = $props();
+  let { crepe, menuPlacement = 'bottom', class: className = '' }: Props = $props();
 
   let visibleEl: HTMLDivElement | null = $state(null);
   let measureEl: HTMLDivElement | null = $state(null);
-  // Each entry's *measured* outer width in px, including its trailing gap.
   let itemWidths = $state<number[]>([]);
   let containerWidth = $state(0);
-  // Slot for the "More" button when it has to appear (kept independent so we
-  // can measure it once from the measurer and not from a moving target).
-  let moreButtonWidth = $state(48);
+  let moreButtonWidth = $state(40);
 
-  // Which group dropdown is open, if any. Mutually exclusive with `moreOpen`.
   let openGroupId = $state<string | null>(null);
   let moreOpen = $state(false);
-  // Track which button element opens the current menu so ToolbarMenu can
-  // anchor + the click-away handler can ignore re-taps on the trigger.
   let openTriggerEl = $state<HTMLElement | null>(null);
 
   /** Pointer down on toolbar buttons must NOT yank focus away from the
-   * editor — otherwise the soft keyboard collapses between every tap. */
+   * editor — otherwise the soft keyboard collapses between every tap and
+   * the desktop selection vanishes on click. */
   function holdFocus(e: Event) {
     e.preventDefault();
   }
@@ -85,8 +85,6 @@
     openTriggerEl = null;
   }
 
-  // -- Measurement --------------------------------------------------------
-
   function readWidths() {
     if (!measureEl) return;
     const buttons = measureEl.querySelectorAll<HTMLElement>('[data-toolbar-measure]');
@@ -111,29 +109,19 @@
     }
   });
 
-  // Re-read widths if the items array ever changes (it doesn't today, but
-  // keeps us honest if someone makes the catalogue conditional later).
   $effect(() => {
     void TOOLBAR_ITEMS.length;
     readWidths();
   });
 
-  /**
-   * How many leading items fit in the visible bar. If everything fits, returns
-   * `TOOLBAR_ITEMS.length` and no "More" button is shown. Otherwise reserves
-   * room for the "More" button at the trailing edge.
-   *
-   * Conservative when measurements haven't landed yet (assumes "show all") to
-   * avoid a flash of "More" on first paint.
-   */
   const visibleCount = $derived.by(() => {
     if (!itemWidths.length || !containerWidth) return TOOLBAR_ITEMS.length;
-    const gap = 2; // mirrors `gap-0.5` (0.125rem = 2px)
-    const totalAllItems = itemWidths.reduce((a, b) => a + b, 0) + gap * (itemWidths.length - 1);
-    // Padding (px-1 each side = 8px) eats into the container.
-    const usable = containerWidth - 8;
+    const gap = 2; // gap-0.5 = 0.125rem = 2px
+    const padding = 8; // px-1 = 0.25rem each side = 8px total
+    const totalAllItems =
+      itemWidths.reduce((a, b) => a + b, 0) + gap * (itemWidths.length - 1);
+    const usable = containerWidth - padding;
     if (totalAllItems <= usable) return TOOLBAR_ITEMS.length;
-    // We need to show "More" — reserve its width + a gap.
     const budget = usable - moreButtonWidth - gap;
     let used = 0;
     for (let i = 0; i < itemWidths.length; i++) {
@@ -147,7 +135,6 @@
   const overflowedItems = $derived(TOOLBAR_ITEMS.slice(visibleCount));
   const showMoreButton = $derived(visibleCount < TOOLBAR_ITEMS.length);
 
-  // Currently-open group, derived from the open id.
   const openGroup = $derived.by<ToolbarGroup | null>(() => {
     if (!openGroupId) return null;
     const found = TOOLBAR_ITEMS.find((i) => i.id === openGroupId);
@@ -164,12 +151,6 @@
     }));
   }
 
-  /**
-   * Build the "More" menu: leaves appear as direct items; groups appear as a
-   * section header followed by their leaves. Flat (no nested popovers) keeps
-   * the interaction model simple — the cost is vertical space if multiple
-   * groups overflow at once, which is acceptable for a rare edge case.
-   */
   function moreEntries(items: ToolbarItem[]): MenuEntry[] {
     const out: MenuEntry[] = [];
     for (const item of items) {
@@ -200,12 +181,20 @@
     }
     return out;
   }
+
+  // Classes for leaf and group buttons. Kept in `const`s so the visible
+  // bar and the measurer can't drift apart — same string in both places.
+  const LEAF_BTN_CLASS = 'size-9 shrink-0';
+  // Wider than a leaf so the icon + chevron + padding actually breathes.
+  // Base button styles force `[&_svg]:size-4` on every svg, so chevron is
+  // also 16px; total content ≈ 16 + 4 (gap-1) + 16 + 16 (px-2) ≈ 52px.
+  const GROUP_BTN_CLASS = 'h-9 shrink-0 gap-1 px-2';
 </script>
 
-<div class="relative w-full" role="toolbar" aria-label={tUi('editor.toolbar.label')}>
+<div class={cn('relative w-full', className)} role="toolbar" aria-label={tUi('editor.toolbar.label')}>
   <div
     bind:this={visibleEl}
-    class="flex items-center gap-0.5 overflow-hidden border-b border-border bg-background px-1 py-1"
+    class="flex items-center gap-0.5 overflow-hidden px-1 py-1"
   >
     {#each TOOLBAR_ITEMS.slice(0, visibleCount) as item (item.id)}
       {#if item.kind === 'leaf'}
@@ -213,22 +202,22 @@
         <Button
           variant="ghost"
           size="icon"
-          class="size-9 shrink-0"
+          class={LEAF_BTN_CLASS}
           disabled={!crepe}
           onpointerdown={holdFocus}
           onclick={() => invokeLeaf(item)}
           title={tUi(item.labelKey)}
           aria-label={tUi(item.labelKey)}
         >
-          <Icon class="size-4" aria-hidden="true" />
+          <Icon aria-hidden="true" />
         </Button>
       {:else}
         {@const Icon = item.icon}
         {@const open = openGroupId === item.id}
         <Button
           variant={open ? 'secondary' : 'ghost'}
-          size="icon"
-          class="size-9 shrink-0"
+          size="sm"
+          class={GROUP_BTN_CLASS}
           disabled={!crepe}
           onpointerdown={holdFocus}
           onclick={(e) => toggleGroup(item, e.currentTarget as HTMLElement)}
@@ -237,9 +226,9 @@
           title={tUi(item.labelKey)}
           aria-label={tUi(item.labelKey)}
         >
-          <Icon class="size-4" aria-hidden="true" />
+          <Icon aria-hidden="true" />
           <ChevronDown
-            class="size-2.5 -ml-0.5 opacity-60 transition-transform {open ? 'rotate-180' : ''}"
+            class="opacity-60 transition-transform {open ? 'rotate-180' : ''}"
             aria-hidden="true"
           />
         </Button>
@@ -250,7 +239,7 @@
       <Button
         variant={moreOpen ? 'secondary' : 'ghost'}
         size="icon"
-        class="size-9 shrink-0"
+        class={LEAF_BTN_CLASS}
         disabled={!crepe}
         onpointerdown={holdFocus}
         onclick={(e) => toggleMore(e.currentTarget as HTMLElement)}
@@ -259,32 +248,58 @@
         title={tUi('editor.toolbar.more')}
         aria-label={tUi('editor.toolbar.more')}
       >
-        <MoreHorizontal class="size-4" aria-hidden="true" />
+        <MoreHorizontal aria-hidden="true" />
       </Button>
     {/if}
   </div>
 
   <!--
-    Hidden measurer. Always renders every button at its natural width — we
-    poll offsetWidth from here, never from the visible bar, so collapsing
-    the bar can't feed back into our cutoff calculation.
+    Hidden measurer. Renders the *same* shadcn Button + classes the visible
+    bar uses so offsetWidth matches what would render if everything fit.
+    `invisible` keeps layout intact (offsetWidth still works); we tuck it
+    off-screen left and clip the row at 0 height so it never paints
+    anything visible even if a parent forgets overflow-hidden.
   -->
   <div
     bind:this={measureEl}
     aria-hidden="true"
-    class="pointer-events-none invisible absolute left-0 top-0 flex h-0 items-center gap-0.5 overflow-hidden"
+    class="pointer-events-none invisible absolute -left-[9999px] top-0 flex h-0 items-center gap-0.5 overflow-hidden"
   >
     {#each TOOLBAR_ITEMS as item (item.id)}
-      <div data-toolbar-measure class="inline-flex size-9 items-center justify-center px-2">
-        <span class="size-4"></span>
-        {#if item.kind === 'group'}
-          <span class="size-2.5"></span>
-        {/if}
-      </div>
+      {#if item.kind === 'leaf'}
+        {@const Icon = item.icon}
+        <Button
+          variant="ghost"
+          size="icon"
+          class={LEAF_BTN_CLASS}
+          tabindex={-1}
+          data-toolbar-measure
+        >
+          <Icon aria-hidden="true" />
+        </Button>
+      {:else}
+        {@const Icon = item.icon}
+        <Button
+          variant="ghost"
+          size="sm"
+          class={GROUP_BTN_CLASS}
+          tabindex={-1}
+          data-toolbar-measure
+        >
+          <Icon aria-hidden="true" />
+          <ChevronDown aria-hidden="true" />
+        </Button>
+      {/if}
     {/each}
-    <div data-toolbar-more-measure class="inline-flex size-9 items-center justify-center px-2">
-      <span class="size-4"></span>
-    </div>
+    <Button
+      variant="ghost"
+      size="icon"
+      class={LEAF_BTN_CLASS}
+      tabindex={-1}
+      data-toolbar-more-measure
+    >
+      <MoreHorizontal aria-hidden="true" />
+    </Button>
   </div>
 
   {#if openGroup && openTriggerEl}

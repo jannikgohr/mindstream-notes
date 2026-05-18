@@ -13,6 +13,7 @@
 
   import { onMount } from 'svelte';
   import type { ComponentType } from 'svelte';
+  import { Portal } from 'bits-ui';
   import { tUi } from '$lib/settings/i18n.svelte';
 
   export interface MenuItem {
@@ -88,7 +89,11 @@
   });
   // For placement='top', anchor the top edge to rect.top and use translateY(-100%)
   // in CSS so we don't need to know the menu's own height.
-  const top = $derived(placement === 'bottom' ? rect.bottom + 4 : rect.top - 4);
+  // Glue the menu's edge directly to the trigger's edge — no visual gap.
+  // The original 4px buffer made the dropdown feel detached on desktop,
+  // especially when the status row sat between the toolbar and the
+  // dropdown's natural position.
+  const top = $derived(placement === 'bottom' ? rect.bottom : rect.top);
   const translate = $derived(
     placement === 'bottom' ? 'none' : 'translateY(-100%)'
   );
@@ -103,32 +108,41 @@
   }
 </script>
 
-<div
-  bind:this={menuEl}
-  role="menu"
-  class="fixed z-50 min-w-[200px] max-w-[260px] rounded-md border border-border bg-popover py-1 text-sm text-popover-foreground shadow-lg"
-  style="left: {left}px; top: {top}px; transform: {translate};"
->
-  {#each entries as entry (entry.id)}
-    {#if entry.kind === 'section'}
-      <div
-        class="px-3 pt-1.5 pb-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground"
-        role="presentation"
-      >
-        {tUi(entry.labelKey)}
-      </div>
-    {:else}
-      {@const Icon = entry.icon}
-      <button
-        type="button"
-        role="menuitem"
-        class="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-accent hover:text-accent-foreground"
-        onpointerdown={holdFocus}
-        onclick={() => invoke(entry)}
-      >
-        <Icon class="size-4 shrink-0" aria-hidden="true" />
-        <span>{tUi(entry.labelKey)}</span>
-      </button>
-    {/if}
-  {/each}
-</div>
+<!--
+  Portal to <body> so the menu can never be clipped by an ancestor with
+  overflow:hidden, nor pinned beneath a sibling by a parent stacking
+  context. Combined with `position: fixed` + a high z-index this
+  guarantees the menu overlaps whatever is below the toolbar (the SAVED
+  / EDITING status row, on desktop).
+-->
+<Portal to="body">
+  <div
+    bind:this={menuEl}
+    role="menu"
+    class="fixed z-50 min-w-[200px] max-w-[260px] rounded-md border border-border bg-popover py-1 text-sm text-popover-foreground shadow-lg"
+    style="left: {left}px; top: {top}px; transform: {translate};"
+  >
+    {#each entries as entry (entry.id)}
+      {#if entry.kind === 'section'}
+        <div
+          class="px-3 pt-1.5 pb-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground"
+          role="presentation"
+        >
+          {tUi(entry.labelKey)}
+        </div>
+      {:else}
+        {@const Icon = entry.icon}
+        <button
+          type="button"
+          role="menuitem"
+          class="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-accent hover:text-accent-foreground"
+          onpointerdown={holdFocus}
+          onclick={() => invoke(entry)}
+        >
+          <Icon class="size-4 shrink-0" aria-hidden="true" />
+          <span>{tUi(entry.labelKey)}</span>
+        </button>
+      {/if}
+    {/each}
+  </div>
+</Portal>
