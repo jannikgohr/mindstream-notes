@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Network security policy for release builds.
+
+  cleartextTrafficPermitted="true" allows ws:// and http:// connections to
+  the user-configured collab relay and etebase server. Without this,
+  Android release builds (which set android:usesCleartextTraffic="false"
+  in build.gradle.kts) silently drop cleartext traffic — the WebSocket
+  constructor succeeds but the connection is closed immediately, so the
+  "Live" indicator just stays "Offline" with no surfaced error. Debug
+  builds run with usesCleartextTraffic="true" and so this bug only
+  appeared on physical-device release installs.
+
+  This is intentional for a self-hostable note-taking app: users may run
+  their relay on a LAN IP without TLS. The settings placeholder text
+  already nudges toward wss:// for anything not on localhost.
+
+  Trust anchors include user-installed certificates so users running
+  self-signed relays can add their CA via Android settings and have the
+  app accept it without app-side changes. On Android 7+ this overrides
+  the AndroidManifest android:usesCleartextTraffic attribute entirely.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>
