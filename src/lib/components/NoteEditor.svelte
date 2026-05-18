@@ -465,25 +465,30 @@
       class="border-b border-border bg-background"
     />
   {/if}
-  <div
-    class="flex h-5 shrink-0 items-center justify-end gap-2 px-3 text-[10px] uppercase tracking-wider text-muted-foreground"
-    aria-live="polite"
-  >
-    {#if collabConfigured}
-      {#if collabOnline}
-        <span class="flex items-center gap-1 text-emerald-600 dark:text-emerald-400" title="Live collab connected">
-          <Wifi class="size-3" aria-hidden="true" />
-          Live
-        </span>
-      {:else}
-        <span class="flex items-center gap-1" title="Live collab disconnected — reconnecting">
-          <WifiOff class="size-3" aria-hidden="true" />
-          Offline
-        </span>
+  {#if !isTrashed}
+    <!-- Saved/Editing/Live indicator. Hidden on trashed notes — the trash
+         banner below already conveys read-only, and a second indicator
+         above it would just add noise. -->
+    <div
+      class="flex h-5 shrink-0 items-center justify-end gap-2 px-3 text-[10px] uppercase tracking-wider text-muted-foreground"
+      aria-live="polite"
+    >
+      {#if collabConfigured}
+        {#if collabOnline}
+          <span class="flex items-center gap-1 text-emerald-600 dark:text-emerald-400" title="Live collab connected">
+            <Wifi class="size-3" aria-hidden="true" />
+            Live
+          </span>
+        {:else}
+          <span class="flex items-center gap-1" title="Live collab disconnected — reconnecting">
+            <WifiOff class="size-3" aria-hidden="true" />
+            Offline
+          </span>
+        {/if}
       {/if}
-    {/if}
-    <span>{statusLabel}</span>
-  </div>
+      <span>{statusLabel}</span>
+    </div>
+  {/if}
   {#if isTrashed}
     <div
       class="flex shrink-0 items-center gap-2 border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-xs text-destructive"
