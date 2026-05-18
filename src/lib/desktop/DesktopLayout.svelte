@@ -11,6 +11,7 @@
   import FileExplorer from '$lib/components/FileExplorer.svelte';
   import MetadataPanel from '$lib/components/MetadataPanel.svelte';
   import NoteEditor from '$lib/components/NoteEditor.svelte';
+  import FreeformNoteEditor from '$lib/components/FreeformNoteEditor.svelte';
   import ResizeHandle from '$lib/components/ResizeHandle.svelte';
   import SettingsDialog from '$lib/settings/SettingsDialog.svelte';
   import { PopoutHeaderAction } from './dockview-popout-action';
@@ -30,10 +31,25 @@
   const openPanels = new Map<string, IDockviewPanel>();
   let saveLayoutTimer: ReturnType<typeof setTimeout> | null = null;
 
-  /** Renders a Svelte component inside a dockview panel. */
+  /**
+   * Renders a Svelte component inside a dockview panel. Parameterised on
+   * the component so the same renderer class serves both the markdown
+   * NoteEditor and the freeform drawing canvas (and anything we add
+   * later). The dockview `component` name (set in `openNote()` based on
+   * `note.note_kind`) picks which renderer to instantiate via the
+   * `createComponent` switch below.
+   */
   class SvelteRenderer implements IContentRenderer {
+    // Constructor-parameter property syntax (`constructor(private X)`)
+    // isn't recognised by Svelte's <script> TypeScript pipeline, so the
+    // fields are declared explicitly and assigned in the constructor.
     private el: HTMLElement = document.createElement('div');
     private instance: ReturnType<typeof mount> | null = null;
+    private Component: typeof NoteEditor | typeof FreeformNoteEditor;
+
+    constructor(Component: typeof NoteEditor | typeof FreeformNoteEditor) {
+      this.Component = Component;
+    }
 
     get element(): HTMLElement {
       return this.el;
@@ -44,7 +60,7 @@
       this.el.style.width = '100%';
       const noteId = (parameters.params as { noteId?: string })?.noteId;
       if (!noteId) return;
-      this.instance = mount(NoteEditor, {
+      this.instance = mount(this.Component, {
         target: this.el,
         props: { noteId }
       });
@@ -66,9 +82,14 @@
       createComponent: (options) => {
         switch (options.name) {
           case 'noteEditor':
-            return new SvelteRenderer();
+            return new SvelteRenderer(NoteEditor);
+          case 'freeformNote':
+            return new SvelteRenderer(FreeformNoteEditor);
           default:
-            return new SvelteRenderer();
+            // Older saved layouts may reference panel names we no longer
+            // recognise. Defaulting to the markdown editor is safer than
+            // failing the whole dockview restore.
+            return new SvelteRenderer(NoteEditor);
         }
       },
       theme: { name: 'bridge', className: 'dockview-theme-bridge' },
@@ -209,9 +230,16 @@
       if (target) position = { referenceGroup: target };
     }
 
+    // Pick the dockview component by note kind so each note opens in the
+    // editor that knows how to render it. Defaults to markdown — older
+    // rows that pre-date the note_kind column decode as 'markdown' via
+    // serde defaults anyway, but the explicit check keeps an unknown
+    // future kind from blowing up the addPanel call.
+    const componentName =
+      note.note_kind === 'freeform' ? 'freeformNote' : 'noteEditor';
     const panel = dock.addPanel({
       id: `note:${id}`,
-      component: 'noteEditor',
+      component: componentName,
       title: note.title,
       params: { noteId: id },
       ...(position ? { position } : {})

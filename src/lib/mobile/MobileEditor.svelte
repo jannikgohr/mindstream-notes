@@ -8,6 +8,7 @@
   import { ArrowLeft, Star } from 'lucide-svelte';
   import { Button } from '$lib/components/ui/button';
   import NoteEditor from '$lib/components/NoteEditor.svelte';
+  import FreeformNoteEditor from '$lib/components/FreeformNoteEditor.svelte';
   import { tree } from '$lib/stores/tree.svelte';
   import { ui } from '$lib/state.svelte';
   import { isFavourite, setMobileScreen, toggleFavourite } from './state.svelte';
@@ -53,7 +54,14 @@
 
   <main class="min-h-0 flex-1 overflow-hidden fullscreen-note">
     {#if noteId}
-      <NoteEditor {noteId} />
+      <!-- Dispatch on note_kind so freeform drawings open in the
+           drawing canvas. Falls back to the markdown editor for the
+           default kind and for unknown future values. -->
+      {#if note?.note_kind === 'freeform'}
+        <FreeformNoteEditor {noteId} />
+      {:else}
+        <NoteEditor {noteId} />
+      {/if}
     {:else}
       <p class="p-6 text-center text-sm text-muted-foreground">
         No note selected.
