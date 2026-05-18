@@ -1,0 +1,134 @@
+<script lang="ts">
+  /**
+   * Popover menu anchored to a trigger element. Used both for group dropdowns
+   * (Text, List, Advanced) and for the overflow "More" button. Positioning is
+   * fixed-coords relative to the trigger's bounding rect; placement="top"
+   * uses a CSS translateY(-100%) trick so we don't need to measure the menu.
+   *
+   * Click-away handling mirrors ContextMenu.svelte: pointerdown on `window`
+   * outside the menu OR the ignored trigger closes it. The trigger element
+   * is `ignoreEl` so a second tap on the same trigger collapses the menu
+   * instead of immediately re-opening it.
+   */
+
+  import { onMount } from 'svelte';
+  import type { ComponentType } from 'svelte';
+  import { tUi } from '$lib/settings/i18n.svelte';
+
+  export interface MenuItem {
+    kind: 'item';
+    id: string;
+    labelKey: string;
+    icon: ComponentType;
+    onSelect: () => void;
+  }
+  export interface MenuSection {
+    kind: 'section';
+    id: string;
+    labelKey: string;
+  }
+  export type MenuEntry = MenuItem | MenuSection;
+
+  interface Props {
+    trigger: HTMLElement;
+    placement: 'top' | 'bottom';
+    entries: MenuEntry[];
+    onClose: () => void;
+  }
+
+  let { trigger, placement, entries, onClose }: Props = $props();
+
+  let menuEl: HTMLDivElement | null = $state(null);
+  // Re-measure trigger on viewport resize so the menu stays glued to it when
+  // visualViewport shrinks (mobile keyboard) or window is resized.
+  let rectVersion = $state(0);
+
+  onMount(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    const onClickAway = (e: PointerEvent) => {
+      const target = e.target as Node;
+      if (menuEl?.contains(target)) return;
+      if (trigger.contains(target)) return;
+      onClose();
+    };
+    const onResize = () => {
+      rectVersion += 1;
+    };
+
+    window.addEventListener('keydown', onKey);
+    // Defer one tick so the click that opened us doesn't immediately close us.
+    queueMicrotask(() => window.addEventListener('pointerdown', onClickAway));
+    window.addEventListener('resize', onResize);
+    window.visualViewport?.addEventListener('resize', onResize);
+    window.visualViewport?.addEventListener('scroll', onResize);
+
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('pointerdown', onClickAway);
+      window.removeEventListener('resize', onResize);
+      window.visualViewport?.removeEventListener('resize', onResize);
+      window.visualViewport?.removeEventListener('scroll', onResize);
+    };
+  });
+
+  const rect = $derived.by(() => {
+    void rectVersion; // dep
+    return trigger.getBoundingClientRect();
+  });
+
+  const left = $derived.by(() => {
+    if (typeof window === 'undefined') return rect.left;
+    const minWidth = 200;
+    // Right-align if the menu would overflow the right edge.
+    const wouldOverflow = rect.left + minWidth > window.innerWidth - 8;
+    if (wouldOverflow) return Math.max(8, window.innerWidth - minWidth - 8);
+    return rect.left;
+  });
+  // For placement='top', anchor the top edge to rect.top and use translateY(-100%)
+  // in CSS so we don't need to know the menu's own height.
+  const top = $derived(placement === 'bottom' ? rect.bottom + 4 : rect.top - 4);
+  const translate = $derived(
+    placement === 'bottom' ? 'none' : 'translateY(-100%)'
+  );
+
+  function invoke(item: MenuItem) {
+    item.onSelect();
+    onClose();
+  }
+
+  function holdFocus(e: Event) {
+    e.preventDefault();
+  }
+</script>
+
+<div
+  bind:this={menuEl}
+  role="menu"
+  class="fixed z-50 min-w-[200px] max-w-[260px] rounded-md border border-border bg-popover py-1 text-sm text-popover-foreground shadow-lg"
+  style="left: {left}px; top: {top}px; transform: {translate};"
+>
+  {#each entries as entry (entry.id)}
+    {#if entry.kind === 'section'}
+      <div
+        class="px-3 pt-1.5 pb-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground"
+        role="presentation"
+      >
+        {tUi(entry.labelKey)}
+      </div>
+    {:else}
+      {@const Icon = entry.icon}
+      <button
+        type="button"
+        role="menuitem"
+        class="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-accent hover:text-accent-foreground"
+        onpointerdown={holdFocus}
+        onclick={() => invoke(entry)}
+      >
+        <Icon class="size-4 shrink-0" aria-hidden="true" />
+        <span>{tUi(entry.labelKey)}</span>
+      </button>
+    {/if}
+  {/each}
+</div>
