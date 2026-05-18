@@ -17,6 +17,7 @@
   import { tree } from '$lib/stores/tree.svelte';
   import { getSettingValue } from '$lib/settings/store.svelte';
   import { CollabProvider } from '$lib/sync/collab-provider';
+  import { isMobile } from '$lib/platform';
 
   interface Props {
     noteId: string;
@@ -33,6 +34,11 @@
   let host: HTMLDivElement | null = $state(null);
   let crepe: Crepe | null = null;
   let crepeReady = $state(false);
+  // Drives both the Crepe feature config (drop the block-handle + slash
+  // menu) and a wrapper class app.css uses to zero out the editor's
+  // horizontal padding on small screens. Resolved in onMount because
+  // isMobile() reads navigator.userAgent — unavailable during SSR.
+  let mobile = $state(false);
   let yDoc: Y.Doc | null = null;
   let awareness: Awareness | null = null;
   let provider: CollabProvider | null = null;
@@ -103,6 +109,7 @@
   onMount(async () => {
     if (!host) return;
     try {
+      mobile = isMobile();
       const note = await loadNote(noteId);
       if (!host) return; // unmounted while awaiting
 
@@ -145,7 +152,19 @@
         console.debug('[NoteEditor] no session for awareness', err);
       }
 
-      crepe = new Crepe({ root: host, defaultValue: '' });
+      // On mobile we disable Crepe's BlockEdit feature, which is the
+      // single flag that bundles both `@milkdown/kit/plugin/block` (the
+      // drag handle + "+" button that floats next to the active block)
+      // and `@milkdown/kit/plugin/slash` (the typed "/" menu). The
+      // block-handle is a hover/mouse affordance that doesn't make sense
+      // on touch, and the slash menu is awkward on a mobile keyboard.
+      // The 90px ProseMirror side-padding that exists to leave room for
+      // the handle is also zeroed via the .mobile-editor class below.
+      crepe = new Crepe({
+        root: host,
+        defaultValue: '',
+        features: mobile ? { [Crepe.Feature.BlockEdit]: false } : undefined
+      });
       crepe.editor.use(collab);
       await crepe.create();
 
@@ -461,6 +480,10 @@
         Couldn't load note: {loadError}
       </p>
     {/if}
-    <div bind:this={host} class="mx-auto max-w-3xl"></div>
+    <div
+      bind:this={host}
+      class="mx-auto max-w-3xl"
+      class:mobile-editor={mobile}
+    ></div>
   </div>
 </div>
