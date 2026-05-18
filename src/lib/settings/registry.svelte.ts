@@ -27,6 +27,7 @@ import {
 import { setLanguage } from './i18n.svelte';
 import type { SortStrategy } from '$lib/sort';
 import SignInForm from './customs/SignInForm.svelte';
+import { confirm } from '$lib/components/confirm-dialog.svelte';
 // Vite resolves JSON imports at build time (tsconfig has resolveJsonModule),
 // so the version values below get inlined into the bundle. No runtime cost,
 // no risk of drift between the About panel and what's actually installed.
@@ -108,13 +109,10 @@ export const SETTING_ACTIONS: Record<string, () => void | Promise<void>> = {
     console.info('[settings] action: open-data-folder (stub)');
   },
   'empty-trash': async () => {
-    // Dynamic import so the bits-ui re-export chain (AlertDialog → the
-    // whole bits-ui index → Select → …) doesn't get pulled into this
-    // module's static graph. Plain Node-level test runners (vitest) trip
-    // over bits-ui's select-viewport.svelte during preprocessing, and
-    // we don't want unrelated test files to fail just because they
-    // happen to import getSettingValue from the same store.
-    const { confirm } = await import('$lib/components/ConfirmDialog.svelte');
+    // `confirm` is imported statically from confirm-dialog.svelte.ts —
+    // that .ts file doesn't touch bits-ui, so the original dynamic-import
+    // workaround (keeping the bits-ui re-export chain out of this
+    // module's static graph) is no longer needed.
     if (
       await confirm({
         title: 'Empty trash',

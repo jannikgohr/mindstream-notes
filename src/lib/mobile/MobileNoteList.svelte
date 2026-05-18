@@ -32,7 +32,7 @@
   import { ui } from '$lib/state.svelte';
   import { sortTree } from '$lib/sort';
   import ContextMenu, { type MenuItem } from '$lib/components/ContextMenu.svelte';
-  import { confirm } from '$lib/components/ConfirmDialog.svelte';
+  import { confirm } from '$lib/components/confirm-dialog.svelte';
   import MoveToSheet, { type MoveTarget } from './MoveToSheet.svelte';
   import NameInputSheet from './NameInputSheet.svelte';
   import {
