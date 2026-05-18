@@ -16,7 +16,9 @@
       "WebFetch(domain:github.com)",
       "WebFetch(domain:crates.io)",
       "Bash(git add *)",
-      "Bash(git commit -m ' *)"
+      "Bash(git commit -m ' *)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(pnpm exec svelte-check *)"
     ]
   }
 }

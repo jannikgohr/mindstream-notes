@@ -18,6 +18,7 @@
   import { getSettingValue } from '$lib/settings/store.svelte';
   import { CollabProvider } from '$lib/sync/collab-provider';
   import { isMobile } from '$lib/platform';
+  import MobileEditorToolbar from './MobileEditorToolbar.svelte';
 
   interface Props {
     noteId: string;
@@ -32,7 +33,9 @@
   const SAVE_DEBOUNCE_MS = 800;
 
   let host: HTMLDivElement | null = $state(null);
-  let crepe: Crepe | null = null;
+  // $state because we hand the instance to MobileEditorToolbar as a prop;
+  // a plain `let` would make the child see a stale `null` after mount.
+  let crepe: Crepe | null = $state(null);
   let crepeReady = $state(false);
   // Drives both the Crepe feature config (drop the block-handle + slash
   // menu) and a wrapper class app.css uses to zero out the editor's
@@ -471,6 +474,9 @@
         This note is in the trash and is read-only. Restore it to edit.
       </span>
     </div>
+  {/if}
+  {#if mobile && crepeReady && !isTrashed}
+    <MobileEditorToolbar {crepe} />
   {/if}
   <div class="themed-scrollbar relative h-full w-full overflow-y-auto">
     {#if loading}
