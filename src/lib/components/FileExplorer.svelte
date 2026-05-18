@@ -665,6 +665,7 @@
     {@const note = tree.notesById[node.id]}
     {@const fav = note?.favourite === true}
     {@const inTrash = note?.parent_collection_id === TRASH_ID}
+    {@const isFreeform = note?.note_kind === 'freeform'}
     <!-- Row uses a flex container so the favourite-toggle button can
          sit alongside the primary open-note tap target without nesting
          <button>s. The drag handlers live on the wrapper so users can
@@ -687,7 +688,11 @@
         onclick={() => onOpenNote(node.id)}
         oncontextmenu={(e) => openMenu(e, { kind: 'note', id: node.id })}
       >
-        <FileText class="size-3.5 shrink-0 text-muted-foreground" />
+        {#if isFreeform}
+          <Pencil class="size-3.5 shrink-0 text-muted-foreground" />
+        {:else}
+          <FileText class="size-3.5 shrink-0 text-muted-foreground" />
+        {/if}
         {#if renaming}
           {@render renderRenameInput()}
         {:else}
