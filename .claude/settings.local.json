@@ -18,7 +18,9 @@
       "Bash(git add *)",
       "Bash(git commit -m ' *)",
       "WebFetch(domain:raw.githubusercontent.com)",
-      "Bash(pnpm exec svelte-check *)"
+      "Bash(pnpm exec svelte-check *)",
+      "WebFetch(domain:www.npmjs.com)",
+      "WebFetch(domain:registry.npmjs.org)"
     ]
   }
 }
