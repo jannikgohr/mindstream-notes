@@ -151,6 +151,28 @@ main:not(.fullscreen-note) .milkdown-drop-indicator {
 }
 
 /*
+ * Mobile editor: the wrapper gets `.mobile-editor` when NoteEditor decides
+ * the device is touch (see isMobile() in lib/platform.ts). The 90px side
+ * padding above exists purely to leave room for Crepe's block-handle
+ * (the drag handle + "+" button), which we disable on mobile by turning
+ * off the BlockEdit feature — once the handle is gone, the 90px is dead
+ * space. We replace it with a comfortable 20px reading gutter, expanded
+ * via env(safe-area-inset-*) so phones with a notch or rounded corners
+ * (especially in landscape) still keep their text clear of the obstruction.
+ * The outer 5px on `.milkdown` is dropped so the ProseMirror rule is the
+ * single source of horizontal padding.
+ */
+.mobile-editor .milkdown {
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.mobile-editor .ProseMirror {
+  padding-left: max(20px, env(safe-area-inset-left)) !important;
+  padding-right: max(20px, env(safe-area-inset-right)) !important;
+}
+
+/*
  * Crepe dark theme.
  * Crepe ships frame.css (light) and frame-dark.css (dark) but both target
  * the same `.milkdown` selector, so importing the dark file globally would
