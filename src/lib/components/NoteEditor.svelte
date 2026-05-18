@@ -459,7 +459,11 @@
 
 <div class="flex h-full w-full flex-col">
   {#if showDesktopToolbar}
-    <EditorToolbar {crepe} menuPlacement="bottom" />
+    <EditorToolbar
+      {crepe}
+      menuPlacement="bottom"
+      class="border-b border-border bg-background"
+    />
   {/if}
   <div
     class="flex h-5 shrink-0 items-center justify-end gap-2 px-3 text-[10px] uppercase tracking-wider text-muted-foreground"
