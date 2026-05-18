@@ -13,7 +13,7 @@
   import { Input } from '$lib/components/ui/input';
   import { Separator } from '$lib/components/ui/separator';
   import ContextMenu, { type MenuItem } from './ContextMenu.svelte';
-  import { confirm } from './ConfirmDialog.svelte';
+  import { confirm } from './confirm-dialog.svelte';
   import SortControl from './SortControl.svelte';
   import { sortTree } from '$lib/sort';
   import {
