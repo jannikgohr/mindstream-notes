@@ -500,7 +500,16 @@
       </span>
     </div>
   {/if}
-  <div class="themed-scrollbar relative h-full w-full overflow-y-auto">
+  <!--
+    flex-1 + min-h-0 (not h-full) so the scroll area fills the *remaining*
+    height after the desktop toolbar, status row, and trash banner take
+    theirs. h-full was strict-100%-of-parent and overflowed by exactly
+    the status row's height (20px) on every non-trashed note — invisible
+    on desktop (clipped by panel chrome) but on mobile could push the
+    focused caret into the hidden zone and tempt the webview to scroll
+    the document body to "fix" it.
+  -->
+  <div class="themed-scrollbar relative min-h-0 w-full flex-1 overflow-y-auto">
     {#if loading}
       <p class="px-6 py-4 text-sm text-muted-foreground">Loading note…</p>
     {:else if loadError}
