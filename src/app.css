@@ -130,7 +130,7 @@ body {
   --dv-paneview-active-outline-color: var(--ring);
   --dv-tabs-and-actions-container-background-color: var(--muted);
   --dv-tabs-and-actions-container-font-size: 13px;
-  --dv-tabs-and-actions-container-height: 34px;
+  --dv-tabs-and-actions-container-height: 36px;
   --dv-tab-divider-color: var(--background);
   --dv-activegroup-visiblepanel-tab-background-color: var(--background);
   --dv-activegroup-hiddenpanel-tab-background-color: var(--muted);

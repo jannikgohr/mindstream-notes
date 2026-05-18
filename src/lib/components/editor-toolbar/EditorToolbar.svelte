@@ -48,12 +48,21 @@
      * its flex column parent to provide a stable width.
      */
     fitContent?: boolean;
+    /**
+     * Drop the visible bar's vertical padding so total height matches the
+     * button height (36px) instead of button + 2·py-1 (44px). Desktop sets
+     * this so the toolbar lines up with the rest of the 36px UI controls.
+     * Mobile leaves it off so the floating pill keeps a little breathing
+     * room around the buttons.
+     */
+    dense?: boolean;
   }
   let {
     crepe,
     menuPlacement = 'bottom',
     class: className = '',
-    fitContent = false
+    fitContent = false,
+    dense = false
   }: Props = $props();
 
   let visibleEl: HTMLDivElement | null = $state(null);
@@ -293,7 +302,10 @@
 >
   <div
     bind:this={visibleEl}
-    class="flex items-center gap-0.5 overflow-hidden px-1 py-1"
+    class={cn(
+      'flex items-center gap-0.5 overflow-hidden px-1',
+      dense ? 'py-0' : 'py-1'
+    )}
   >
     {#each TOOLBAR_ITEMS.slice(0, visibleCount) as item (item.id)}
       {#if item.kind === 'leaf'}
