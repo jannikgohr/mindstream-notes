@@ -91,11 +91,26 @@
   --radius-xl: calc(var(--radius) + 4px);
 }
 
-/* Make the SvelteKit root fill the window so dockview can size correctly. */
+/* Make the SvelteKit root fill the window so dockview can size correctly.
+ *
+ * `overflow: hidden` on html + body keeps the document itself from
+ * scrolling. Without it, the mobile webview (and iOS Safari especially)
+ * will scroll the whole document to keep a focused contenteditable in
+ * view, which on the note-editing screen slides the back-button header
+ * off the top of the viewport. All real scrolling in the app happens
+ * inside explicit `overflow-y-auto` containers — the file tree, the
+ * editor scroll area, settings panels, etc. — so locking the document
+ * doesn't break anything.
+ *
+ * `overscroll-behavior: none` additionally disables the rubber-band /
+ * pull-to-refresh that some platforms still attach to the document even
+ * when overflow is hidden. */
 html,
 body {
   height: 100%;
   margin: 0;
+  overflow: hidden;
+  overscroll-behavior: none;
 }
 
 #svelte,
