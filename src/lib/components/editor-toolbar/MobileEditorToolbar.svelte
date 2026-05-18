@@ -1,20 +1,22 @@
 <script lang="ts">
   /**
-   * Mobile floating formatting toolbar — a centered pill-shaped control
-   * that hovers above the soft keyboard, or above the safe-area at the
-   * bottom of the page when no keyboard is shown.
+   * Mobile floating formatting toolbar — a centered pill that hovers above
+   * the soft keyboard, or above the safe-area at the bottom of the page
+   * when no keyboard is shown.
    *
-   * Positioning: we read `window.visualViewport.height` and subtract it
-   * from `window.innerHeight` to find the keyboard's height, then offset
-   * the bar by that much from the page bottom. Combined with a small
-   * gap and an env(safe-area-inset-bottom) fallback for devices with a
-   * home indicator, this keeps the control reachable without ever sitting
-   * under the keyboard.
+   * Positioning: read `window.visualViewport.height` and subtract it from
+   * `window.innerHeight` to find the keyboard's height, then offset the
+   * bar by that much from the page bottom. Plus env(safe-area-inset-bottom)
+   * for the home-indicator gap on iOS/Android.
    *
-   * Layout: a full-width centering wrapper with horizontal padding caps
-   * the pill at the viewport width; the EditorToolbar inside it owns
-   * overflow handling, so a too-narrow phone naturally collapses excess
-   * buttons into the "More" popover.
+   * Sizing: the EditorToolbar runs in `fitContent` mode and sets its own
+   * width via inline style to `min(naturalContent, 100%)`. The chrome
+   * (rounded-full border, shadow, bg) lives on the EditorToolbar's outer
+   * element via the class prop so the pill wraps tightly around the
+   * actual button row. A thin `max-w-full` wrapper exists only to (a) be
+   * the bind:this target for height measurement and (b) constrain the
+   * EditorToolbar's `max-width: 100%` percentage to the centering strip's
+   * content area (viewport − horizontal padding).
    *
    * Sets `--mobile-toolbar-height` on documentElement so the editor's
    * bottom padding can reserve room — otherwise the caret could end up
@@ -83,20 +85,21 @@
 </script>
 
 <!--
-  Outer: full-width fixed strip used purely to center the pill and to
-  contribute the safe-area inset so the pill doesn't get pushed under
-  the home indicator on iOS/Android. Pointer-events pass-through so the
-  empty area on either side of the pill stays tappable for the editor
-  underneath; the pill itself opts back in.
+  Outer strip: full-width fixed band purely for centering. Pointer-events
+  pass-through so the empty space on either side of the pill stays tappable
+  for the editor underneath; the pill itself opts back in via the chrome
+  class on EditorToolbar.
 -->
 <div
   class="pointer-events-none fixed inset-x-0 z-30 flex justify-center px-3"
   style="bottom: calc({bottomOffset + FLOAT_GAP_PX}px + env(safe-area-inset-bottom, 0px));"
 >
-  <div
-    bind:this={host}
-    class="pointer-events-auto inline-flex max-w-full rounded-full border border-border bg-popover/95 shadow-lg backdrop-blur"
-  >
-    <EditorToolbar {crepe} menuPlacement="top" />
+  <div bind:this={host} class="max-w-full">
+    <EditorToolbar
+      {crepe}
+      menuPlacement="top"
+      fitContent
+      class="pointer-events-auto overflow-hidden rounded-full border border-border bg-popover/95 shadow-lg backdrop-blur"
+    />
   </div>
 </div>

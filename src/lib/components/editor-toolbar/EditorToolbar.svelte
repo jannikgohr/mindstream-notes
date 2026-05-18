@@ -32,16 +32,53 @@
     crepe: Crepe | null;
     menuPlacement?: 'top' | 'bottom';
     /** Extra classes merged onto the outer bar (e.g. the desktop variant
-     *  adds `border-b border-border bg-background`). */
+     *  adds `border-b border-border bg-background`; the mobile variant
+     *  adds the rounded-full pill chrome). */
     class?: string;
+    /**
+     * When true, the toolbar sizes to its natural content width (capped at
+     * 100% of parent) via an inline `width` style computed from the
+     * measurer. Required when the parent uses shrink-to-fit (e.g. a
+     * centered floating pill on mobile) — without it the pill collapses
+     * to a single button width because of the classic
+     * shrink-to-fit + w-full child circular-sizing trap, and the overflow
+     * logic then enters a feedback loop with itself.
+     *
+     * Desktop leaves this off and relies on `align-items: stretch` from
+     * its flex column parent to provide a stable width.
+     */
+    fitContent?: boolean;
   }
-  let { crepe, menuPlacement = 'bottom', class: className = '' }: Props = $props();
+  let {
+    crepe,
+    menuPlacement = 'bottom',
+    class: className = '',
+    fitContent = false
+  }: Props = $props();
 
   let visibleEl: HTMLDivElement | null = $state(null);
   let measureEl: HTMLDivElement | null = $state(null);
   let itemWidths = $state<number[]>([]);
+  /** Content-box width of the visible bar (excludes its px-1 padding) —
+   *  i.e. the actual horizontal space available for buttons + gaps.
+   *  Kept consistent with `ResizeObserver.contentRect.width`, which is
+   *  also content-box; previously we mixed `clientWidth` (padding-box)
+   *  at init with `contentRect.width` afterwards and that 8px discrepancy
+   *  was enough to push the last button into "More" when everything
+   *  should have fit. */
   let containerWidth = $state(0);
   let moreButtonWidth = $state(40);
+  /** Horizontal chrome the caller wrapped around the toolbar — border +
+   *  padding on the outer element. Read from computed style at mount so
+   *  we don't hard-code "mobile pill has 1px border" into this component.
+   *  Without accounting for this, the last button gets pushed into "More"
+   *  by exactly the border width even when content would fit. */
+  let outerChromeX = $state(0);
+
+  /** Total horizontal padding of the visible bar (Tailwind `px-1` ⇒
+   *  0.25rem each side ⇒ 8px). Used only to translate `clientWidth` into
+   *  content-box width at init time. */
+  const VISIBLE_BAR_PADDING_X = 8;
 
   let openGroupId = $state<string | null>(null);
   let moreOpen = $state(false);
@@ -93,10 +130,24 @@
     if (more) moreButtonWidth = more.offsetWidth;
   }
 
+  function readOuterChrome() {
+    const outer = visibleEl?.parentElement;
+    if (!outer) return;
+    const cs = getComputedStyle(outer);
+    outerChromeX =
+      parseFloat(cs.borderLeftWidth || '0') +
+      parseFloat(cs.borderRightWidth || '0') +
+      parseFloat(cs.paddingLeft || '0') +
+      parseFloat(cs.paddingRight || '0');
+  }
+
   onMount(() => {
     readWidths();
+    readOuterChrome();
     if (visibleEl) {
-      containerWidth = visibleEl.clientWidth;
+      // clientWidth is padding-box; subtract padding to match the
+      // content-box value the ResizeObserver will report below.
+      containerWidth = visibleEl.clientWidth - VISIBLE_BAR_PADDING_X;
       const ro = new ResizeObserver((entries) => {
         for (const entry of entries) {
           if (entry.target === visibleEl) {
@@ -117,12 +168,13 @@
   const visibleCount = $derived.by(() => {
     if (!itemWidths.length || !containerWidth) return TOOLBAR_ITEMS.length;
     const gap = 2; // gap-0.5 = 0.125rem = 2px
-    const padding = 8; // px-1 = 0.25rem each side = 8px total
     const totalAllItems =
       itemWidths.reduce((a, b) => a + b, 0) + gap * (itemWidths.length - 1);
-    const usable = containerWidth - padding;
-    if (totalAllItems <= usable) return TOOLBAR_ITEMS.length;
-    const budget = usable - moreButtonWidth - gap;
+    // containerWidth is already content-box (see VISIBLE_BAR_PADDING_X
+    // comment above). Don't subtract padding again — that double-subtract
+    // was the bug that pushed the last button into "More" prematurely.
+    if (totalAllItems <= containerWidth) return TOOLBAR_ITEMS.length;
+    const budget = containerWidth - moreButtonWidth - gap;
     let used = 0;
     for (let i = 0; i < itemWidths.length; i++) {
       const next = used + itemWidths[i] + (i > 0 ? gap : 0);
@@ -134,6 +186,41 @@
 
   const overflowedItems = $derived(TOOLBAR_ITEMS.slice(visibleCount));
   const showMoreButton = $derived(visibleCount < TOOLBAR_ITEMS.length);
+
+  /**
+   * Width the toolbar *wants* if everything fit — sum of measured button
+   * widths plus gaps and the row's px-1 padding. Calculated from the
+   * measurer (which always renders every button), so it does NOT change
+   * when visibleCount drops. That stability is what breaks the
+   * "fewer buttons → smaller content → smaller pill → fewer buttons …"
+   * feedback loop for `fitContent` parents.
+   */
+  const naturalContentWidth = $derived.by(() => {
+    if (!itemWidths.length) return null;
+    const gap = 2;
+    const padding = 8;
+    const sum = itemWidths.reduce((a, b) => a + b, 0);
+    return sum + gap * Math.max(0, itemWidths.length - 1) + padding;
+  });
+
+  /**
+   * Inline width style applied only in fitContent mode. We set the OUTER
+   * width to `naturalContentWidth + outerChromeX` so that after the
+   * caller's chrome (border/padding) consumes its share, the inner
+   * visible bar's content-box is exactly `naturalContentWidth − padding`
+   * = sum + gaps — i.e. buttons fit. Without the chrome term the
+   * visible bar comes up 2+ px short and overflows by exactly that
+   * little, pushing the last button into "More" even with space.
+   *
+   * Combined with `max-width: 100%`, the browser computes
+   * `min(natural+chrome, 100% of parent)`: content-sized when it fits,
+   * clamped to parent width when it doesn't.
+   */
+  const fitStyle = $derived(
+    fitContent && naturalContentWidth !== null
+      ? `width: ${naturalContentWidth + outerChromeX}px; max-width: 100%;`
+      : null
+  );
 
   const openGroup = $derived.by<ToolbarGroup | null>(() => {
     if (!openGroupId) return null;
@@ -191,7 +278,19 @@
   const GROUP_BTN_CLASS = 'h-9 shrink-0 gap-1 px-2';
 </script>
 
-<div class={cn('relative w-full', className)} role="toolbar" aria-label={tUi('editor.toolbar.label')}>
+<!--
+  No `w-full` here on purpose: desktop relies on `align-items: stretch`
+  from its flex column parent (the default) to fill width, mobile sets
+  an explicit pixel width via `fitStyle` to break the shrink-to-fit
+  feedback loop. Adding `w-full` re-introduces that loop on mobile and
+  causes the pill to collapse to a single button.
+-->
+<div
+  class={cn('relative', className)}
+  style={fitStyle ?? undefined}
+  role="toolbar"
+  aria-label={tUi('editor.toolbar.label')}
+>
   <div
     bind:this={visibleEl}
     class="flex items-center gap-0.5 overflow-hidden px-1 py-1"
