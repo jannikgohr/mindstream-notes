@@ -58,9 +58,14 @@ export async function loadTree(): Promise<void> {
 
 export async function createNoteIn(
   parentId: string | null,
-  title?: string
+  title?: string,
+  noteKind?: 'markdown' | 'freeform'
 ): Promise<string> {
-  const note = await api.createNote({ parent_collection_id: parentId, title });
+  const note = await api.createNote({
+    parent_collection_id: parentId,
+    title,
+    note_kind: noteKind
+  });
   await loadTree();
   // Live collab keys live on the etebase server — the per-note crypto_key
   // doesn't exist locally until the first push, and the room id is the

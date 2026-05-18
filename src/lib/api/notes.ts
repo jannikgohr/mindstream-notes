@@ -8,6 +8,17 @@
 import { invokeOrFallback } from './index';
 import { mockApi } from './mock-store';
 
+/**
+ * Editor-kind discriminator. The frontend uses this to pick which editor
+ * component to render for a given note. Add a new value here AND on the
+ * Rust side (notes::default_note_kind / NotePayload.note_kind) when
+ * introducing a new editor variant.
+ *
+ *   markdown — Crepe / y-prosemirror text editor (the original kind)
+ *   freeform — drawing canvas backed by a Y.Array of strokes
+ */
+export type NoteKind = 'markdown' | 'freeform';
+
 export interface NoteSummary {
   id: string;
   parent_collection_id: string | null;
@@ -25,6 +36,12 @@ export interface NoteSummary {
    * note's first sync completes.
    */
   pushed: boolean;
+  /**
+   * Editor-kind discriminator. Lives on the summary (not just the full
+   * note) so dispatch / file-tree icons can branch without loading the
+   * body. Defaults to 'markdown' for old data that pre-dates the column.
+   */
+  note_kind: NoteKind;
 }
 
 export interface Note extends NoteSummary {
@@ -43,6 +60,8 @@ export interface CreateNoteInput {
   title?: string;
   body?: string;
   parent_collection_id?: string | null;
+  /** Defaults to 'markdown' server-side when omitted. */
+  note_kind?: NoteKind;
 }
 
 export interface UpdateNoteInput {

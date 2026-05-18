@@ -80,6 +80,7 @@ function maxPosition(arr: { position: number }[]): number {
     trashed: false,
     favourite: false,
     pushed: false,
+    note_kind: 'markdown',
     yrs_state: [],
     payload_schema: 1
   };
@@ -95,6 +96,7 @@ function maxPosition(arr: { position: number }[]): number {
     trashed: false,
     favourite: false,
     pushed: false,
+    note_kind: 'markdown',
     yrs_state: [],
     payload_schema: 1
   };
@@ -110,6 +112,7 @@ function maxPosition(arr: { position: number }[]): number {
     trashed: false,
     favourite: false,
     pushed: false,
+    note_kind: 'markdown',
     yrs_state: [],
     payload_schema: 1
   };
@@ -193,6 +196,7 @@ export const mockApi = {
       trashed: false,
       favourite: false,
       pushed: false,
+      note_kind: input.note_kind ?? 'markdown',
       yrs_state: [],
       payload_schema: 1
     };
