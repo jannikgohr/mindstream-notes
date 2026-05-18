@@ -5,6 +5,7 @@
     Folder,
     FolderOpen,
     FolderPlus,
+    Pencil,
     Plus,
     Star,
     Trash2
@@ -72,8 +73,13 @@
   );
 
   // ---------- Inline draft entry (replaces window.prompt) ----------
+  // 'note' = markdown note, 'drawing' = freeform note. They share the
+  // draft / commit code path because the only difference at the data
+  // layer is the note_kind we pass to createNoteIn; the UX (inline
+  // input for the title) is identical.
+  type DraftKind = 'note' | 'folder' | 'drawing';
   type Draft = {
-    kind: 'note' | 'folder';
+    kind: DraftKind;
     parentId: string | null;
     text: string;
   };
@@ -95,13 +101,15 @@
     });
   });
 
-  function startDraft(kind: 'note' | 'folder', parentId: string | null) {
+  function startDraft(kind: DraftKind, parentId: string | null) {
     if (parentId) expanded[parentId] = true;
-    draft = {
-      kind,
-      parentId,
-      text: kind === 'note' ? 'Untitled' : 'Untitled folder'
-    };
+    const defaultText =
+      kind === 'folder'
+        ? 'Untitled folder'
+        : kind === 'drawing'
+          ? 'Untitled drawing'
+          : 'Untitled';
+    draft = { kind, parentId, text: defaultText };
   }
   function cancelDraft() {
     draft = null;
@@ -115,8 +123,12 @@
     }
     const { kind, parentId } = draft;
     draft = null;
-    if (kind === 'note') {
-      const id = await createNoteIn(parentId, text);
+    if (kind === 'note' || kind === 'drawing') {
+      const id = await createNoteIn(
+        parentId,
+        text,
+        kind === 'drawing' ? 'freeform' : 'markdown'
+      );
       onOpenNote(id);
     } else {
       await createCollectionIn(parentId, text);
@@ -328,6 +340,7 @@
 
       return [
         { label: 'New note in folder', onSelect: () => startDraft('note', id) },
+        { label: 'New drawing in folder', onSelect: () => startDraft('drawing', id) },
         { label: 'New folder inside', onSelect: () => startDraft('folder', id) },
         'separator',
         {
@@ -348,6 +361,7 @@
 
     return [
       { label: 'New note', onSelect: () => startDraft('note', null) },
+      { label: 'New drawing', onSelect: () => startDraft('drawing', null) },
       { label: 'New folder', onSelect: () => startDraft('folder', null) }
     ];
   }
@@ -471,6 +485,16 @@
       <Button
         variant="ghost"
         size="icon"
+        onclick={() => startDraft('drawing', null)}
+        title={tUi('fileTree.newDrawing')}
+        aria-label={tUi('fileTree.newDrawing')}
+        class="size-7"
+      >
+        <Pencil class="size-3.5" />
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon"
         onclick={() => startDraft('note', null)}
         title={tUi('fileTree.newNote')}
         aria-label={tUi('fileTree.newNote')}
@@ -521,17 +545,25 @@
 </aside>
 
 {#snippet renderDraft()}
-  {@const isFolder = draft?.kind === 'folder'}
+  {@const kind = draft?.kind ?? 'note'}
+  {@const placeholder =
+    kind === 'folder'
+      ? tUi('fileTree.newFolder')
+      : kind === 'drawing'
+        ? tUi('fileTree.newDrawing')
+        : tUi('fileTree.newNote')}
   <div class="my-0.5 flex items-center gap-1.5 rounded-md px-2 py-0.5">
-    {#if isFolder}
+    {#if kind === 'folder'}
       <Folder class="size-3.5 shrink-0 text-muted-foreground" />
+    {:else if kind === 'drawing'}
+      <Pencil class="size-3.5 shrink-0 text-muted-foreground" />
     {:else}
       <FileText class="size-3.5 shrink-0 text-muted-foreground" />
     {/if}
     <Input
       bind:ref={nameInput}
       bind:value={draft!.text}
-      placeholder={isFolder ? tUi('fileTree.newFolder') : tUi('fileTree.newNote')}
+      {placeholder}
       class="h-7 px-2 text-sm"
       onkeydown={onDraftKey}
       onblur={onDraftBlur}

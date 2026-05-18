@@ -12,7 +12,8 @@ const note = (id: string, title: string, modified = '2024-01-01T00:00:00Z'): Not
   tags: [],
   trashed: false,
   favourite: false,
-  pushed: false
+  pushed: false,
+  note_kind: 'markdown'
 });
 
 const folder = (id: string, name: string, children: TreeNode[] = []): TreeNode => ({
