@@ -1,12 +1,23 @@
 import { sveltekit } from '@sveltejs/kit/vite';
 import tailwindcss from '@tailwindcss/vite';
+import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 
 // Tauri expects a fixed port and ignores hidden Vite cache changes.
 const host = process.env.TAURI_DEV_HOST;
 
 export default defineConfig({
-  plugins: [tailwindcss(), sveltekit()],
+  plugins: [
+    tailwindcss(),
+    sveltekit(),
+    // React JSX transform — scoped to .tsx files so it doesn't touch
+    // .ts / .svelte (which are owned by SvelteKit's pipeline). The only
+    // React in the app today is the tldraw island under src/lib/freeform/
+    // (lazy-loaded when a drawing note is opened); leaving the include
+    // narrow keeps the markdown editor and the rest of the SPA on the
+    // Svelte-only path.
+    react({ include: /\.tsx$/ })
+  ],
 
   // Vite options tailored for Tauri development.
   clearScreen: false,
