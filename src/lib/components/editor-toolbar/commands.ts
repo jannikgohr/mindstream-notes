@@ -29,7 +29,6 @@
 import { commandsCtx, editorStateCtx, editorViewCtx } from '@milkdown/kit/core';
 import {
   setBlockTypeCommand,
-  wrapInBlockTypeCommand,
   addBlockTypeCommand,
   liftListItemCommand,
   paragraphSchema,
@@ -46,10 +45,11 @@ import {
 import { createTable } from '@milkdown/kit/preset/gfm';
 import { imageBlockSchema } from '@milkdown/kit/component/image-block';
 import { undoCommand, redoCommand } from '@milkdown/kit/plugin/history';
+import { wrapInList } from '@milkdown/kit/prose/schema-list';
 import type { Ctx } from '@milkdown/kit/ctx';
 import type { EditorView } from '@milkdown/kit/prose/view';
 import type { EditorState } from '@milkdown/kit/prose/state';
-import type { MarkType } from '@milkdown/kit/prose/model';
+import type { MarkType, ResolvedPos } from '@milkdown/kit/prose/model';
 import {
   Undo2,
   Redo2,
@@ -126,42 +126,97 @@ function isInCodeOrList(view: EditorView): boolean {
   return false;
 }
 
-/** Identify what kind of list (if any) the caret currently lives in. Task
- *  lists are bullet lists whose list_items carry a non-null `checked`
- *  attribute (Crepe's gfm task-list-item extension). */
+/** Identify what kind of list (if any) the textblock at $pos lives in.
+ *  Walks ancestors innermost-first so for nested lists we report the
+ *  immediate enclosing list — that's the one a user-facing toggle
+ *  should reason about. Task lists are bullet lists whose list_items
+ *  carry a non-null `checked` attribute (Crepe's gfm task-list-item
+ *  extension). */
 type ListKind = 'bullet' | 'ordered' | 'task';
-function detectListKind(view: EditorView): ListKind | null {
-  const { $from } = view.state.selection;
+function detectListKindAt($pos: ResolvedPos): ListKind | null {
   let parentList: string | null = null;
-  let listItemChecked: unknown = undefined;
-  for (let d = $from.depth; d >= 0; d--) {
-    const node = $from.node(d);
-    const name = node.type.name;
-    if (name === 'bullet_list' || name === 'ordered_list') {
+  let foundListItem = false;
+  let listItemChecked: unknown = null;
+  for (let d = $pos.depth; d >= 0; d--) {
+    const name = $pos.node(d).type.name;
+    if (parentList === null && (name === 'bullet_list' || name === 'ordered_list')) {
       parentList = name;
-    } else if (name === 'list_item') {
-      listItemChecked = node.attrs.checked;
+    }
+    if (!foundListItem && name === 'list_item') {
+      foundListItem = true;
+      listItemChecked = $pos.node(d).attrs.checked;
     }
   }
   if (!parentList) return null;
   if (parentList === 'ordered_list') return 'ordered';
-  // bullet_list with a checked list_item → task list
   if (listItemChecked !== null && listItemChecked !== undefined) return 'task';
   return 'bullet';
 }
 
-/** Walk out of the current list one level at a time until the caret is no
- *  longer inside any list. Bounded by `maxLifts` so a malformed document
- *  can't trap us in an infinite loop. */
-function liftOutOfList(ctx: Ctx, view: EditorView, maxLifts = 8): void {
+/** Collect the list-kind of every top-level textblock contained in `[from, to]`.
+ *  Returns `null` entries for blocks that aren't in any list. Also flags
+ *  whether the range crosses a code block (lists can't wrap code, so we
+ *  bail out of the list action in that case). */
+function inspectSelectionBlocks(
+  state: EditorState
+): { blocks: (ListKind | null)[]; hasCodeBlock: boolean } {
+  const { from, to } = state.selection;
+  const blocks: (ListKind | null)[] = [];
+  let hasCodeBlock = false;
+  state.doc.nodesBetween(from, to, (node, pos) => {
+    if (node.type.name === 'code_block') {
+      hasCodeBlock = true;
+      return false;
+    }
+    if (node.isTextblock) {
+      blocks.push(detectListKindAt(state.doc.resolve(pos)));
+      // Don't descend into the textblock — its inline children aren't
+      // separate "lines".
+      return false;
+    }
+    return true;
+  });
+  return { blocks, hasCodeBlock };
+}
+
+/** Are any textblocks in the current selection still inside a list? Used
+ *  to drive the multi-call lift loop below — we keep calling
+ *  liftListItemCommand until this returns false. */
+function selectionTouchesAnyList(view: EditorView): boolean {
+  const { state } = view;
+  const { from, to } = state.selection;
+  let touched = false;
+  state.doc.nodesBetween(from, to, (node, pos) => {
+    if (node.isTextblock) {
+      if (detectListKindAt(state.doc.resolve(pos)) !== null) {
+        touched = true;
+        return false;
+      }
+    }
+    return !touched;
+  });
+  return touched;
+}
+
+/** Lift everything in the current selection out of whatever list(s) it
+ *  sits in. `liftListItemCommand` only lifts one level per call, and on
+ *  a multi-line selection it can sometimes only lift part of the range
+ *  in one shot — so we loop, bounded, until no selected block has any
+ *  list ancestor (or the doc stops changing). */
+function liftSelectionOutOfList(
+  ctx: Ctx,
+  view: EditorView,
+  maxAttempts = 16
+): void {
   const commands = ctx.get(commandsCtx);
-  for (let i = 0; i < maxLifts; i++) {
-    if (detectListKind(view) === null) return;
-    const before = view.state.selection.$from.depth;
+  for (let i = 0; i < maxAttempts; i++) {
+    if (!selectionTouchesAnyList(view)) return;
+    const beforeDoc = view.state.doc;
     commands.call(liftListItemCommand.key);
-    const after = view.state.selection.$from.depth;
-    // If the lift didn't reduce depth, we're stuck — bail.
-    if (after >= before) return;
+    // Bail if the command was a no-op — prevents an infinite loop on a
+    // pathological doc where lifting "succeeds" without actually moving
+    // anything.
+    if (view.state.doc === beforeDoc) return;
   }
 }
 
@@ -220,67 +275,105 @@ const turnIntoHeading = (level: number) => (ctx: Ctx) => {
 };
 
 /**
- * Switch the current line into (or out of) the given list kind.
- *   - same kind clicked again → toggle off (lift back to paragraph)
- *   - different list kind     → lift out of the current list, then wrap
- *   - non-paragraph block     → convert to paragraph first, then wrap
- *   - inside a code block     → no-op
+ * Switch every selected line into (or out of) the given list kind.
  *
- * Read state from `view` *after* each command call because each call may
- * mutate it (lift changes depth, setBlockType changes parent type, etc.).
+ * Decision is over the *whole selection*, not just the cursor:
+ *   - Every selected textblock already exactly matches `target`
+ *     → toggle off (lift everything out, like clicking Bullet on an
+ *       all-bullet selection).
+ *   - Otherwise (mix of list kinds, or some-in-some-out, or all-non-list)
+ *     → unify to `target`: lift any list_items out, coerce headings
+ *       back to paragraphs, then wrap the selection in a single list of
+ *       the target type.
+ *   - Selection touches a code block → no-op (CommonMark lists can't
+ *     wrap code blocks; we'd rather skip than corrupt the user's code).
+ *
+ * The single-line case falls out naturally: `nodesBetween(from, to)`
+ * for an empty selection still yields the cursor's textblock, so
+ * blocks.length === 1 and the same logic applies.
+ *
+ * Re-read state from `view` after every command call because each one
+ * may mutate it (lift shrinks depth, setBlockType changes parent type,
+ * wrap moves positions).
  */
 function switchListAction(target: ListKind) {
   return (ctx: Ctx) => {
     const view = ctx.get(editorViewCtx);
     const commands = ctx.get(commandsCtx);
 
-    // Code blocks aren't valid list ancestors — skip silently rather than
-    // mangling the user's code.
-    const { $from } = view.state.selection;
-    for (let d = $from.depth; d >= 0; d--) {
-      if ($from.node(d).type.name === 'code_block') return;
-    }
+    const { blocks, hasCodeBlock } = inspectSelectionBlocks(view.state);
+    if (hasCodeBlock || blocks.length === 0) return;
 
-    const current = detectListKind(view);
+    const allMatchTarget = blocks.every((k) => k === target);
 
-    if (current === target) {
-      // Same kind toggles off.
-      liftOutOfList(ctx, view);
+    if (allMatchTarget) {
+      // Selection is uniformly the target kind — toggle the list off.
+      liftSelectionOutOfList(ctx, view);
       return;
     }
 
-    // Different list (or no list): get the caret out of any current list
-    // first so the wrap below operates on a plain paragraph.
-    if (current !== null) liftOutOfList(ctx, view);
+    // Mixed (or wrong kind, or not in a list): unify to the target.
+    // Step 1: get every selected list_item out of its list. Safe to call
+    // even when nothing is in a list — it short-circuits on the first
+    // check.
+    liftSelectionOutOfList(ctx, view);
 
-    // After lifting we're on whatever block the list_item contained — usually
-    // a paragraph, but headings inside list_items are valid CommonMark.
-    // Lists wrap text content, so coerce non-paragraphs (e.g. heading) into
-    // paragraph form before wrapping.
-    if (view.state.selection.$from.parent.type.name !== 'paragraph') {
-      commands.call(setBlockTypeCommand.key, {
-        nodeType: paragraphSchema.type(ctx)
-      });
-    }
+    // Step 2: coerce any heading/etc. in the selection to a paragraph.
+    // ProseMirror's setBlockType applies across all textblocks in the
+    // selection, and is a no-op on blocks that already match — so a
+    // single call here normalises a mixed selection.
+    commands.call(setBlockTypeCommand.key, {
+      nodeType: paragraphSchema.type(ctx)
+    });
 
-    if (target === 'bullet') {
-      commands.call(wrapInBlockTypeCommand.key, {
-        nodeType: bulletListSchema.type(ctx)
-      });
-    } else if (target === 'ordered') {
-      commands.call(wrapInBlockTypeCommand.key, {
-        nodeType: orderedListSchema.type(ctx)
-      });
-    } else {
-      // Task: wrap in list_item directly with a `checked` attr — ProseMirror's
-      // `findWrapping` auto-inserts the surrounding bullet_list because
-      // list_item can only live there.
-      commands.call(wrapInBlockTypeCommand.key, {
-        nodeType: listItemSchema.type(ctx),
-        attrs: { checked: false }
-      });
-    }
+    // Step 3: wrap each selected paragraph in its own list_item, all
+    // under a single new list. We use `wrapInList` from
+    // prosemirror-schema-list (NOT Milkdown's wrapInBulletListCommand,
+    // which delegates to plain `wrapIn` and so groups all paragraphs
+    // into a single list_item — the bug that produced "* one\ntwo\nthree"
+    // instead of three separate bullets). wrapInList specifically splits
+    // each block via `tr.split` after the initial wrap, giving us one
+    // list_item per paragraph.
+    wrapSelectionInList(ctx, view, target);
   };
+}
+
+/**
+ * Wrap the current selection in a list of the given kind, producing one
+ * list_item per selected block. For task lists the list_items also get
+ * `checked: false` — wrapInList only puts attrs on the outer list, so we
+ * walk the freshly-created list_items in a second transaction and set
+ * the attr there. Re-reads `view.state` after the first dispatch because
+ * the wrap shifts positions.
+ */
+function wrapSelectionInList(ctx: Ctx, view: EditorView, target: ListKind): void {
+  const listType =
+    target === 'ordered'
+      ? orderedListSchema.type(ctx)
+      : bulletListSchema.type(ctx);
+  const ok = wrapInList(listType)(view.state, view.dispatch);
+  if (!ok) return;
+
+  if (target !== 'task') return;
+
+  // Task lists are bullet_list with `checked` on each list_item — set
+  // that now on every list_item the wrap created inside the selection.
+  const state = view.state;
+  const { from, to } = state.selection;
+  const listItemType = listItemSchema.type(ctx);
+  const tr = state.tr;
+  let touched = false;
+  state.doc.nodesBetween(from, to, (node, pos) => {
+    if (node.type === listItemType) {
+      tr.setNodeMarkup(pos, undefined, { ...node.attrs, checked: false });
+      touched = true;
+      // Don't recurse into nested lists — the toggle only applies to
+      // the items at the level we just created.
+      return false;
+    }
+    return true;
+  });
+  if (touched) view.dispatch(tr);
 }
 
 const turnIntoBulletList = switchListAction('bullet');
