@@ -19,7 +19,7 @@
    * under the Android status bar or gesture bar with edge-to-edge on.
    */
   import { onMount } from 'svelte';
-  import { FilePlus2, FolderPlus } from 'lucide-svelte';
+  import { FilePlus2, FolderPlus, Pencil } from 'lucide-svelte';
   import type { IconComponent } from '$lib/settings/icons';
   import MobileTopBar from './MobileTopBar.svelte';
   import MobileBreadcrumb from './MobileBreadcrumb.svelte';
@@ -66,10 +66,15 @@
 
   // Tracks which create flow has its NameInputSheet open. null = no
   // sheet showing; commit lives in commitCreate().
-  let createPrompt = $state<'note' | 'folder' | null>(null);
+  // 'drawing' creates a freeform note via createNoteIn(..., 'freeform').
+  let createPrompt = $state<'note' | 'drawing' | 'folder' | null>(null);
 
   function createNote() {
     createPrompt = 'note';
+  }
+
+  function createDrawing() {
+    createPrompt = 'drawing';
   }
 
   function createFolder() {
@@ -81,8 +86,12 @@
     createPrompt = null;
     if (!kind) return;
     const parent = targetParent();
-    if (kind === 'note') {
-      const id = await createNoteIn(parent, name);
+    if (kind === 'note' || kind === 'drawing') {
+      const id = await createNoteIn(
+        parent,
+        name,
+        kind === 'drawing' ? 'freeform' : 'markdown'
+      );
       openNote(id);
     } else {
       await createCollectionIn(parent, name);
@@ -105,6 +114,12 @@
     mobileState.view === 'trash'
       ? []
       : [
+          {
+            id: 'new-drawing',
+            label: tUi('fab.newDrawing'),
+            icon: Pencil as unknown as IconComponent,
+            onSelect: createDrawing
+          },
           {
             id: 'new-folder',
             label: tUi('fab.newFolder'),
@@ -153,6 +168,14 @@
   <NameInputSheet
     title={tUi('fab.newNote')}
     placeholder={tUi('fab.placeholder.noteTitle')}
+    submitLabel={tUi('fab.submit.create')}
+    onSubmit={(n) => void commitCreate(n)}
+    onClose={() => (createPrompt = null)}
+  />
+{:else if createPrompt === 'drawing'}
+  <NameInputSheet
+    title={tUi('fab.newDrawing')}
+    placeholder={tUi('fab.placeholder.drawingTitle')}
     submitLabel={tUi('fab.submit.create')}
     onSubmit={(n) => void commitCreate(n)}
     onClose={() => (createPrompt = null)}

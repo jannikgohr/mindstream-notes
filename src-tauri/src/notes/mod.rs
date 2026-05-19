@@ -34,6 +34,18 @@ pub struct NoteSummary {
     /// which only exists post-push. Doesn't track dirty-ness; a synced
     /// row with unsynced edits still reports `pushed: true`.
     pub pushed: bool,
+    /// Discriminator that tells the frontend which editor component to
+    /// render. Values in use today: `"markdown"` (Crepe / y-prosemirror)
+    /// and `"freeform"` (drawing canvas backed by a Y.Array of strokes).
+    /// On the summary so the file tree / dispatch can branch without
+    /// loading the full note. Serde-defaulted to "markdown" so legacy
+    /// rows decoded before the column existed still parse cleanly.
+    #[serde(default = "default_note_kind")]
+    pub note_kind: String,
+}
+
+pub fn default_note_kind() -> String {
+    "markdown".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,6 +72,12 @@ pub struct CreateNote {
     pub title: Option<String>,
     pub body: Option<String>,
     pub parent_collection_id: Option<String>,
+    /// Optional discriminator. Omitted ⇒ defaults to "markdown" in
+    /// `create()`, matching existing call sites that don't know about
+    /// kinds. The frontend sets this to "freeform" when the user picks
+    /// "New drawing" from the creation menus.
+    #[serde(default)]
+    pub note_kind: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -104,6 +122,7 @@ fn row_to_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<NoteSummary> {
         trashed: trashed_at.is_some(),
         favourite: favourite != 0,
         pushed: etebase_uid.is_some(),
+        note_kind: row.get("note_kind")?,
     })
 }
 
@@ -116,12 +135,12 @@ fn load_tags(conn: &Connection, note_id: &str) -> AppResult<Vec<String>> {
 pub fn list(conn: &Connection, include_trashed: bool) -> AppResult<Vec<NoteSummary>> {
     let sql = if include_trashed {
         "SELECT id, parent_collection_id, title, position, created, modified,
-                trashed_at, favourite, etebase_uid
+                trashed_at, favourite, etebase_uid, note_kind
          FROM notes
          ORDER BY parent_collection_id IS NOT NULL, parent_collection_id, position, title"
     } else {
         "SELECT id, parent_collection_id, title, position, created, modified,
-                trashed_at, favourite, etebase_uid
+                trashed_at, favourite, etebase_uid, note_kind
          FROM notes
          WHERE trashed_at IS NULL
          ORDER BY parent_collection_id IS NOT NULL, parent_collection_id, position, title"
@@ -138,7 +157,8 @@ pub fn list(conn: &Connection, include_trashed: bool) -> AppResult<Vec<NoteSumma
 pub fn load(conn: &Connection, id: &str) -> AppResult<Note> {
     let mut stmt = conn.prepare(
         "SELECT id, parent_collection_id, title, position, created, modified,
-                trashed_at, favourite, etebase_uid, body, yrs_state, payload_schema
+                trashed_at, favourite, etebase_uid, note_kind,
+                body, yrs_state, payload_schema
          FROM notes WHERE id = ?1",
     )?;
     let row_data = stmt
@@ -171,15 +191,17 @@ pub fn create(conn: &Connection, input: CreateNote) -> AppResult<Note> {
     let position = next_position(conn, input.parent_collection_id.as_deref())?;
     let title = input.title.unwrap_or_else(|| "Untitled".to_string());
     let body = input.body.unwrap_or_default();
-    // Leave yrs_state empty for new notes — the live editor will hydrate
-    // a fresh y-prosemirror Doc from `body` on first open and write the
+    let note_kind = input.note_kind.unwrap_or_else(default_note_kind);
+    // Leave yrs_state empty for new notes — the live editor (markdown OR
+    // freeform) will hydrate a fresh Y.Doc on first open and write the
     // resulting v2 state back through `update`. Pre-seeding a v1 Y.Text
-    // here would fight the editor's initialisation.
+    // here would fight the editor's initialisation, and is meaningless
+    // for freeform notes anyway.
     conn.execute(
         "INSERT INTO notes(id, parent_collection_id, title, body, position,
-                            created, modified, dirty)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, 1)",
-        params![id, input.parent_collection_id, title, body, position, now,],
+                            created, modified, dirty, note_kind)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, 1, ?7)",
+        params![id, input.parent_collection_id, title, body, position, now, note_kind],
     )?;
     load(conn, &id)
 }
@@ -401,6 +423,7 @@ mod tests {
                     title: Some("Hello".into()),
                     body: Some("# Body".into()),
                     parent_collection_id: parent,
+                    note_kind: None,
                 },
             )
         })

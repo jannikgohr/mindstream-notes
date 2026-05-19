@@ -31,6 +31,7 @@
     "fileTree.title": "Explorer",
     "fileTree.tree": "File tree",
     "fileTree.newNote": "New note",
+    "fileTree.newDrawing": "New drawing",
     "fileTree.newFolder": "New folder",
     "fileTree.loading": "Loading…",
     "fileTree.error": "Couldn't load notes",
@@ -51,8 +52,10 @@
     "nav.trash": "Trash",
 
     "fab.newNote": "New note",
+    "fab.newDrawing": "New drawing",
     "fab.newFolder": "New folder",
     "fab.placeholder.noteTitle": "Note title",
+    "fab.placeholder.drawingTitle": "Drawing title",
     "fab.placeholder.folderName": "Folder name",
     "fab.submit.create": "Create",
 
