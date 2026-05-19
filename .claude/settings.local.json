@@ -21,7 +21,8 @@
       "Bash(pnpm exec svelte-check *)",
       "WebFetch(domain:www.npmjs.com)",
       "WebFetch(domain:registry.npmjs.org)",
-      "Bash(pnpm tauri *)"
+      "Bash(pnpm tauri *)",
+      "WebFetch(domain:tldraw.dev)"
     ]
   }
 }
