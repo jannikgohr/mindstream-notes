@@ -28,7 +28,8 @@ const note = (
   tags: [],
   trashed,
   favourite: false,
-  pushed: false
+  pushed: false,
+  note_kind: 'markdown'
 });
 
 describe('composeTree', () => {

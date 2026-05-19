@@ -86,6 +86,14 @@ struct NotePayload {
     /// clients reading older payloads get the serde default of `false`.
     #[serde(default)]
     favourite: bool,
+    /// Editor-kind discriminator: `"markdown"` (Crepe / y-prosemirror) or
+    /// `"freeform"` (drawing canvas). Added without bumping `schema` —
+    /// rmp-serde-named ignores unknown fields, and older clients reading
+    /// newer payloads default to "markdown" (which means they'll try to
+    /// render a freeform note in the markdown editor, but won't lose any
+    /// data — the yrs_state survives untouched).
+    #[serde(default = "crate::notes::default_note_kind")]
+    note_kind: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -516,8 +524,8 @@ fn apply_note(db: &Db, item: &Item) -> AppResult<()> {
                  SET parent_collection_id = ?1, title = ?2, body = ?3, position = ?4,
                      modified = ?5, trashed_at = ?6, yrs_state = ?7,
                      etebase_uid = ?8, etebase_etag = ?9, dirty = ?10,
-                     payload_schema = ?11, favourite = ?12
-                 WHERE id = ?13",
+                     payload_schema = ?11, favourite = ?12, note_kind = ?13
+                 WHERE id = ?14",
                 params![
                     resolved_parent,
                     payload.title,
@@ -531,6 +539,7 @@ fn apply_note(db: &Db, item: &Item) -> AppResult<()> {
                     dirty_after,
                     incoming_schema,
                     payload.favourite as i64,
+                    payload.note_kind,
                     payload.id,
                 ],
             )?;
@@ -539,8 +548,8 @@ fn apply_note(db: &Db, item: &Item) -> AppResult<()> {
                 "INSERT INTO notes (id, parent_collection_id, title, body, position,
                                     created, modified, trashed_at, yrs_state,
                                     etebase_uid, etebase_etag, dirty,
-                                    payload_schema, favourite)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7, ?8, ?9, ?10, 0, ?11, ?12)",
+                                    payload_schema, favourite, note_kind)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7, ?8, ?9, ?10, 0, ?11, ?12, ?13)",
                 params![
                     payload.id,
                     resolved_parent,
@@ -554,6 +563,7 @@ fn apply_note(db: &Db, item: &Item) -> AppResult<()> {
                     etag,
                     incoming_schema,
                     payload.favourite as i64,
+                    payload.note_kind,
                 ],
             )?;
         }
@@ -688,6 +698,7 @@ fn push_notes(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult<(
             body: row.body.clone(),
             crypto_key: key_for_payload,
             favourite: row.favourite,
+            note_kind: row.note_kind.clone(),
         };
         let bytes = rmp_serde::to_vec_named(&payload)
             .map_err(|e| AppError::InvalidArg(format!("encode note: {e}")))?;
@@ -875,6 +886,7 @@ struct DirtyNote {
     /// have to render markdown from XmlFragment server-side.
     body: String,
     favourite: bool,
+    note_kind: String,
 }
 
 fn load_dirty_folders(db: &Db) -> AppResult<Vec<DirtyFolder>> {
@@ -901,7 +913,7 @@ fn load_dirty_notes(db: &Db) -> AppResult<Vec<DirtyNote>> {
     let rows: Vec<DirtyNote> = db.with_conn(|c| {
         let mut stmt = c.prepare(
             "SELECT id, parent_collection_id, title, position, trashed_at,
-                    yrs_state, etebase_uid, body, favourite
+                    yrs_state, etebase_uid, body, favourite, note_kind
              FROM notes WHERE dirty = 1",
         )?;
         let rows = stmt.query_map([], |r| {
@@ -916,6 +928,7 @@ fn load_dirty_notes(db: &Db) -> AppResult<Vec<DirtyNote>> {
                 tags: Vec::new(),
                 body: r.get(7)?,
                 favourite: r.get::<_, i64>(8)? != 0,
+                note_kind: r.get(9)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
