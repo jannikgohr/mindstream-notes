@@ -271,9 +271,41 @@ export function applyListAction(
     // (allMatchTarget && !isList) — plain block, toggle-off leaves alone
   }
 
+  // Coalesce adjacent same-type lists. Without this, three paragraphs
+  // wrapped as bullets via `wrapBlockInNewList` come out as three
+  // separate `ul`s — each an "item 1" of its own — and unifying
+  // ul+ol+ul to bullet leaves three adjacent bullet_lists instead of
+  // one merged list. ProseMirror's `tr.join(pos)` merges the blocks
+  // sharing the boundary at `pos`; we apply joins in reverse so
+  // earlier boundaries stay valid as later ones close up.
+  mergeAdjacentLists(tr, types);
+
   if (tr.steps.length === 0) return false;
   if (dispatch) dispatch(tr);
   return true;
+}
+
+/** Walk the current `tr.doc` and join any two adjacent same-type lists.
+ *  Operates on top-level doc children — nested lists separated by a
+ *  paragraph (the WYSIWYG analogue of a blank line between lists)
+ *  stay separate, which is the right call for both markdown semantics
+ *  and user intent. */
+function mergeAdjacentLists(tr: Transaction, types: ListActionTypes): void {
+  const joinAt: number[] = [];
+  let lastListType: NodeType | null = null;
+  let lastEnd = -1;
+  tr.doc.forEach((child, offset) => {
+    const isList =
+      child.type === types.bulletList || child.type === types.orderedList;
+    if (isList && lastListType === child.type && offset === lastEnd) {
+      joinAt.push(offset);
+    }
+    lastListType = isList ? child.type : null;
+    lastEnd = offset + child.nodeSize;
+  });
+  for (let i = joinAt.length - 1; i >= 0; i--) {
+    tr.join(joinAt[i]);
+  }
 }
 
 /** Replace a list with its inner content for items overlapping `[from, to]`.
