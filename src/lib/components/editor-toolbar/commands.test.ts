@@ -225,17 +225,28 @@ describe('applyListAction — single line', () => {
 // -- Multi-line behaviour ---------------------------------------------------
 
 describe('applyListAction — multi line', () => {
-  it('wraps three plain paragraphs as three separate bullet items', () => {
+  it('wraps three plain paragraphs as one bullet list with three items', () => {
+    // Regression: previously emitted three separate `ul`s, which markdown
+    // serialized as three blank-line-separated lists each starting at "*".
     const s = withSelectionAll(stateOf(makeDoc(p('one'), p('two'), p('three'))));
     expect(structure(run(s, 'bullet'))).toBe(
-      'ul[li(p(one))] ul[li(p(two))] ul[li(p(three))]'
+      'ul[li(p(one)) li(p(two)) li(p(three))]'
     );
   });
 
-  it('wraps three plain paragraphs as three task items', () => {
+  it('wraps three plain paragraphs as one ordered list (1. 2. 3.)', () => {
+    // Regression: previously emitted three separate `ol`s, so the markdown
+    // came out as "1. one / 1. two / 1. three" instead of 1./2./3.
+    const s = withSelectionAll(stateOf(makeDoc(p('one'), p('two'), p('three'))));
+    expect(structure(run(s, 'ordered'))).toBe(
+      'ol[li(p(one)) li(p(two)) li(p(three))]'
+    );
+  });
+
+  it('wraps three plain paragraphs as one task list', () => {
     const s = withSelectionAll(stateOf(makeDoc(p('one'), p('two'), p('three'))));
     expect(structure(run(s, 'task'))).toBe(
-      'ul[li○(p(one))] ul[li○(p(two))] ul[li○(p(three))]'
+      'ul[li○(p(one)) li○(p(two)) li○(p(three))]'
     );
   });
 
@@ -244,54 +255,54 @@ describe('applyListAction — multi line', () => {
     expect(structure(run(s, 'bullet'))).toBe('p(one) p(two) p(three)');
   });
 
-  it('unifies bullet + ordered to bullet (the original bug report)', () => {
+  it('unifies bullet + ordered to bullet — single merged ul (original bug report)', () => {
     // * one
     // * two
     // 1. three
     // 2. four
+    // → click Bullet → all four in ONE bullet list.
     const s = withSelectionAll(
       stateOf(makeDoc(ul(li('one'), li('two')), ol(li('three'), li('four'))))
     );
     expect(structure(run(s, 'bullet'))).toBe(
-      'ul[li(p(one)) li(p(two))] ul[li(p(three)) li(p(four))]'
+      'ul[li(p(one)) li(p(two)) li(p(three)) li(p(four))]'
     );
   });
 
-  it('unifies bullet + ordered to ordered', () => {
+  it('unifies bullet + ordered to ordered — single merged ol', () => {
     const s = withSelectionAll(
       stateOf(makeDoc(ul(li('one'), li('two')), ol(li('three'), li('four'))))
     );
     expect(structure(run(s, 'ordered'))).toBe(
-      'ol[li(p(one)) li(p(two))] ol[li(p(three)) li(p(four))]'
+      'ol[li(p(one)) li(p(two)) li(p(three)) li(p(four))]'
     );
   });
 
-  it('unifies bullet + ordered to task (every list_item gets checked=false)', () => {
+  it('unifies bullet + ordered to task — single merged ul of task items', () => {
     const s = withSelectionAll(
       stateOf(makeDoc(ul(li('one')), ol(li('two'))))
     );
     expect(structure(run(s, 'task'))).toBe(
-      'ul[li○(p(one))] ul[li○(p(two))]'
+      'ul[li○(p(one)) li○(p(two))]'
     );
   });
 
-  it('unifies a mix of task and bullet to bullet (clears checked)', () => {
+  it('unifies a mix of task and bullet to bullet (clears checked, merges)', () => {
     const s = withSelectionAll(
       stateOf(makeDoc(ul(li('one', false), li('two', true)), ul(li('three'))))
     );
     expect(structure(run(s, 'bullet'))).toBe(
-      'ul[li(p(one)) li(p(two))] ul[li(p(three))]'
+      'ul[li(p(one)) li(p(two)) li(p(three))]'
     );
   });
 
   it('does not toggle off when not every block matches target', () => {
-    // Two bullets + one ordered, click Ordered → all become ordered.
-    // (If the toggle-off branch ran here, the ordered item would unlist.)
+    // Two bullets + one ordered, click Ordered → all become ordered in one list.
     const s = withSelectionAll(
       stateOf(makeDoc(ul(li('one'), li('two')), ol(li('three'))))
     );
     expect(structure(run(s, 'ordered'))).toBe(
-      'ol[li(p(one)) li(p(two))] ol[li(p(three))]'
+      'ol[li(p(one)) li(p(two)) li(p(three))]'
     );
   });
 
@@ -304,15 +315,42 @@ describe('applyListAction — multi line', () => {
     expect(structure(run(s, 'task'))).toBe('p(done) p(todo)');
   });
 
-  it('coerces a heading inside a mixed selection to a paragraph before wrapping', () => {
+  it('coerces headings in a mixed selection to paragraphs inside one list', () => {
     const s = withSelectionAll(stateOf(makeDoc(h(1, 'title'), p('body'))));
-    expect(structure(run(s, 'bullet'))).toBe('ul[li(p(title))] ul[li(p(body))]');
+    expect(structure(run(s, 'bullet'))).toBe('ul[li(p(title)) li(p(body))]');
   });
 
   it('no-ops when the selection touches a code block', () => {
     const s = withSelectionAll(stateOf(makeDoc(p('one'), code('x'), p('three'))));
-    // No list was created; the original structure is preserved.
     expect(structure(run(s, 'bullet'))).toBe('p(one) code(x) p(three)');
+  });
+
+  it('merges a new list into an existing same-type list above', () => {
+    // ul above, plain p below, select only p, click Bullet → one ul[3].
+    const doc = makeDoc(ul(li('one'), li('two')), p('three'));
+    const s = doc;
+    const state = stateOf(doc);
+    // Cursor inside "three": doc size up to and including the ul, then
+    // +1 for the start of the trailing paragraph, +1 for the start of
+    // its inline content.
+    const cursor = state.doc.resolve(state.doc.nodeSize - 4); // inside "three"
+    const cursored = state.apply(state.tr.setSelection(TextSelection.near(cursor)));
+    expect(structure(run(cursored, 'bullet'))).toBe(
+      'ul[li(p(one)) li(p(two)) li(p(three))]'
+    );
+  });
+
+  it('keeps lists separate when a non-list block sits between them', () => {
+    // Selecting only the two bullets across a separating paragraph
+    // shouldn't pull the paragraph into the list, nor should the
+    // post-pass join lists that were always supposed to be separate.
+    const doc = makeDoc(ul(li('one')), p('between'), ul(li('two')));
+    const s = withSelectionAll(stateOf(doc));
+    // Selection-all hits the middle paragraph, which is not in a list →
+    // unify path wraps it too, all three end up merged.
+    expect(structure(run(s, 'bullet'))).toBe(
+      'ul[li(p(one)) li(p(between)) li(p(two))]'
+    );
   });
 });
 
