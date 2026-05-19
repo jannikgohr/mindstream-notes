@@ -21,6 +21,7 @@
 
   import { onMount } from 'svelte';
   import type { Crepe } from '@milkdown/crepe';
+  import { listenerCtx } from '@milkdown/kit/plugin/listener';
   import { ChevronDown, MoreHorizontal } from 'lucide-svelte';
   import { Button } from '$lib/components/ui/button';
   import { cn } from '$lib/utils';
@@ -103,7 +104,63 @@
   function invokeLeaf(item: ToolbarLeaf) {
     if (!crepe) return;
     crepe.editor.action(item.action);
+    // Recompute manually as well as via the listener. Mark toggles on an
+    // empty selection only mutate `state.storedMarks` — doc and selection
+    // are unchanged — so neither selectionUpdated nor updated would fire,
+    // and the button visual would stay one click behind without this.
+    recomputeActive();
   }
+
+  /**
+   * Active-state map keyed by item id. Bold/Italic populate this so their
+   * icons render in the "toggled" (secondary) variant whenever the mark is
+   * either present in the selection or queued in storedMarks for the next
+   * typed character. Items without an `isActive` predicate stay absent
+   * from the map and render in their normal state.
+   */
+  let activeMap = $state<Record<string, boolean>>({});
+
+  function recomputeActive() {
+    if (!crepe) return;
+    crepe.editor.action((ctx) => {
+      const next: Record<string, boolean> = {};
+      for (const item of TOOLBAR_ITEMS) {
+        if (item.kind === 'leaf' && item.isActive) {
+          try {
+            next[item.id] = item.isActive(ctx);
+          } catch {
+            // Predicates may throw if the editor is mid-teardown; treat
+            // an error as "inactive" rather than crashing the toolbar.
+            next[item.id] = false;
+          }
+        }
+      }
+      activeMap = next;
+    });
+  }
+
+  // Subscribe to editor lifecycle so the active state refreshes on every
+  // selection move and doc change (cursor navigation, typing, remote
+  // collab edits). The `cancelled` flag per-effect-run lets us neutralise
+  // stale handlers if `crepe` ever swaps; the listener plugin offers no
+  // unregister API, so we leave the handler in place and let it no-op.
+  $effect(() => {
+    if (!crepe) return;
+    let cancelled = false;
+    crepe.editor.action((ctx) => {
+      if (cancelled) return;
+      const manager = ctx.get(listenerCtx);
+      const onChange = () => {
+        if (!cancelled) recomputeActive();
+      };
+      manager.selectionUpdated(onChange);
+      manager.updated(onChange);
+    });
+    recomputeActive();
+    return () => {
+      cancelled = true;
+    };
+  });
 
   function toggleGroup(item: ToolbarGroup, btn: HTMLElement | null) {
     if (!btn) return;
@@ -310,13 +367,15 @@
     {#each TOOLBAR_ITEMS.slice(0, visibleCount) as item (item.id)}
       {#if item.kind === 'leaf'}
         {@const Icon = item.icon}
+        {@const isActive = activeMap[item.id] === true}
         <Button
-          variant="ghost"
+          variant={isActive ? 'secondary' : 'ghost'}
           size="icon"
           class={LEAF_BTN_CLASS}
           disabled={!crepe}
           onpointerdown={holdFocus}
           onclick={() => invokeLeaf(item)}
+          aria-pressed={item.isActive ? isActive : undefined}
           title={tUi(item.labelKey)}
           aria-label={tUi(item.labelKey)}
         >

@@ -26,7 +26,7 @@
  *     line, and the cursor's line is never overwritten.
  */
 
-import { commandsCtx, editorViewCtx } from '@milkdown/kit/core';
+import { commandsCtx, editorStateCtx, editorViewCtx } from '@milkdown/kit/core';
 import {
   setBlockTypeCommand,
   wrapInBlockTypeCommand,
@@ -37,16 +37,24 @@ import {
   bulletListSchema,
   orderedListSchema,
   listItemSchema,
-  codeBlockSchema
+  codeBlockSchema,
+  strongSchema,
+  emphasisSchema,
+  toggleStrongCommand,
+  toggleEmphasisCommand
 } from '@milkdown/kit/preset/commonmark';
 import { createTable } from '@milkdown/kit/preset/gfm';
 import { imageBlockSchema } from '@milkdown/kit/component/image-block';
 import { undoCommand, redoCommand } from '@milkdown/kit/plugin/history';
 import type { Ctx } from '@milkdown/kit/ctx';
 import type { EditorView } from '@milkdown/kit/prose/view';
+import type { EditorState } from '@milkdown/kit/prose/state';
+import type { MarkType } from '@milkdown/kit/prose/model';
 import {
   Undo2,
   Redo2,
+  Bold,
+  Italic,
   Type,
   Pilcrow,
   Heading1,
@@ -72,6 +80,19 @@ export interface ToolbarLeaf {
   labelKey: string;
   icon: ComponentType;
   action: (ctx: Ctx) => void;
+  /**
+   * Optional predicate: true means the button should render in its
+   * "toggled" state. Used for bold/italic so the icon stays highlighted
+   * while the mark is in effect — including the empty-selection case
+   * where the user has just clicked the button and will continue typing
+   * inside the open mark. The toolbar re-evaluates this on every
+   * editor transaction (via the listener plugin) plus immediately
+   * after the toolbar itself dispatches an action, so toggling a mark
+   * with no selection (which only mutates `state.storedMarks` — not
+   * doc, not selection — and therefore won't fire any listener) still
+   * updates the button visual.
+   */
+  isActive?: (ctx: Ctx) => boolean;
 }
 
 export interface ToolbarGroup {
@@ -144,6 +165,24 @@ function liftOutOfList(ctx: Ctx, view: EditorView, maxLifts = 8): void {
   }
 }
 
+/**
+ * "Is this mark active in the current selection?" — the standard
+ * ProseMirror predicate. For a non-empty selection the mark is active
+ * when present across the whole range; for an empty selection it's
+ * active when in `storedMarks` (mark queued for the next typed
+ * character) or among the marks at the cursor position. That second
+ * case is what lets the toolbar Bold/Italic icon stay toggled while
+ * the user is mid-bolded-word OR has just clicked Bold and is about
+ * to start typing inside the open mark.
+ */
+function markIsActive(state: EditorState, type: MarkType): boolean {
+  const { from, to, empty, $from } = state.selection;
+  if (empty) {
+    return !!type.isInSet(state.storedMarks ?? $from.marks());
+  }
+  return state.doc.rangeHasMark(from, to, type);
+}
+
 // -- Action helpers ----------------------------------------------------------
 
 const undo = (ctx: Ctx) => {
@@ -152,6 +191,17 @@ const undo = (ctx: Ctx) => {
 const redo = (ctx: Ctx) => {
   ctx.get(commandsCtx).call(redoCommand.key);
 };
+
+const toggleBold = (ctx: Ctx) => {
+  ctx.get(commandsCtx).call(toggleStrongCommand.key);
+};
+const toggleItalic = (ctx: Ctx) => {
+  ctx.get(commandsCtx).call(toggleEmphasisCommand.key);
+};
+const isBoldActive = (ctx: Ctx) =>
+  markIsActive(ctx.get(editorStateCtx), strongSchema.type(ctx));
+const isItalicActive = (ctx: Ctx) =>
+  markIsActive(ctx.get(editorStateCtx), emphasisSchema.type(ctx));
 
 const turnIntoParagraph = (ctx: Ctx) => {
   const view = ctx.get(editorViewCtx);
@@ -269,8 +319,10 @@ const insertMath = (ctx: Ctx) => {
 // -- Catalogue ---------------------------------------------------------------
 
 export const TOOLBAR_ITEMS: ToolbarItem[] = [
-  { kind: 'leaf',  id: 'undo', labelKey: 'editor.toolbar.undo', icon: Undo2, action: undo },
-  { kind: 'leaf',  id: 'redo', labelKey: 'editor.toolbar.redo', icon: Redo2, action: redo },
+  { kind: 'leaf',  id: 'undo',   labelKey: 'editor.toolbar.undo',   icon: Undo2,  action: undo },
+  { kind: 'leaf',  id: 'redo',   labelKey: 'editor.toolbar.redo',   icon: Redo2,  action: redo },
+  { kind: 'leaf',  id: 'bold',   labelKey: 'editor.toolbar.bold',   icon: Bold,   action: toggleBold,   isActive: isBoldActive },
+  { kind: 'leaf',  id: 'italic', labelKey: 'editor.toolbar.italic', icon: Italic, action: toggleItalic, isActive: isItalicActive },
   {
     kind: 'group',
     id: 'text',
