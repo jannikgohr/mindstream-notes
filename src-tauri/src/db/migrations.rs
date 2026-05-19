@@ -194,7 +194,7 @@ const MIGRATIONS: &[Migration] = &[
         // note_kind discriminates between note variants the editor knows
         // how to render. Values currently in use:
         //   'markdown'  — Crepe / y-prosemirror editor (the existing default)
-        //   'freeform'  — drawing canvas backed by a Y.Array<StrokeRecord>
+        //   'freeform'  — drawing canvas backed by a Y.Doc (tldraw store)
         // Stored as TEXT (instead of an INTEGER enum) so future kinds can
         // be added without renumbering and so a quick `SELECT note_kind`
         // is self-documenting when inspecting the DB by hand.
@@ -202,6 +202,25 @@ const MIGRATIONS: &[Migration] = &[
         // without a backfill pass.
         sql: r#"
             ALTER TABLE notes ADD COLUMN note_kind TEXT NOT NULL DEFAULT 'markdown';
+        "#,
+    },
+    Migration {
+        to: 9,
+        // Freeform notes briefly stored their content as a Y.Array of
+        // hand-rolled StrokeRecord items (the first-cut canvas editor).
+        // The editor now embeds tldraw, whose store has an entirely
+        // different doc shape (a flat keyed map of TLRecord rows). The
+        // old StrokeRecord state can't be decoded by tldraw and would
+        // surface as a corrupted / empty drawing on first open.
+        //
+        // Wipe yrs_state for every freeform row so tldraw initialises a
+        // fresh store on next open. The body column was always empty
+        // for freeform notes (no markdown rendering) so it's untouched.
+        // Markdown notes are unaffected.
+        sql: r#"
+            UPDATE notes
+            SET yrs_state = NULL, payload_schema = 1, dirty = 1
+            WHERE note_kind = 'freeform';
         "#,
     },
 ];

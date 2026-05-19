@@ -10,6 +10,7 @@
     "sourceMap": true,
     "strict": true,
     "moduleResolution": "bundler",
-    "isolatedModules": true
+    "isolatedModules": true,
+    "jsx": "react-jsx"
   }
 }
