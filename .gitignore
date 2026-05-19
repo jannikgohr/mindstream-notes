@@ -11,6 +11,10 @@ node_modules
 /src-tauri/target
 /src-tauri/gen/schemas
 /src-tauri/Cargo.lock
+# Generated at install / before each build by src-tauri/scripts/setup-android-cargo.mjs.
+# It needs absolute paths (cargo doesn't resolve relative paths in build-script overrides),
+# so it can't be committed.
+/src-tauri/.cargo/config.toml
 
 # Sandbox-leftover artifacts that the workspace mount won't let me delete.
 # Safe to remove these directories on Windows when convenient.
@@ -23,3 +27,6 @@ node_modules
 !.vscode/settings.json
 .idea
 *.iml
+
+# Keys
+keystore.jks

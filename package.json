@@ -15,7 +15,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "verify": "pnpm check && pnpm test && pnpm build",
-    "verify:rust": "cd src-tauri && cargo test"
+    "verify:rust": "cd src-tauri && cargo test",
+    "setup-android-cargo": "node src-tauri/scripts/setup-android-cargo.mjs",
+    "postinstall": "node src-tauri/scripts/setup-android-cargo.mjs"
   },
   "devDependencies": {
     "@sveltejs/adapter-static": "^3.0.8",
