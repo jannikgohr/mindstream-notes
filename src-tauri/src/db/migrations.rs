@@ -189,6 +189,21 @@ const MIGRATIONS: &[Migration] = &[
             ALTER TABLE notes DROP COLUMN crypto_key;
         "#,
     },
+    Migration {
+        to: 8,
+        // note_kind discriminates between note variants the editor knows
+        // how to render. Values currently in use:
+        //   'markdown'  — Crepe / y-prosemirror editor (the existing default)
+        //   'freeform'  — drawing canvas backed by a Y.Array<StrokeRecord>
+        // Stored as TEXT (instead of an INTEGER enum) so future kinds can
+        // be added without renumbering and so a quick `SELECT note_kind`
+        // is self-documenting when inspecting the DB by hand.
+        // Defaulted to 'markdown' so every existing row decodes correctly
+        // without a backfill pass.
+        sql: r#"
+            ALTER TABLE notes ADD COLUMN note_kind TEXT NOT NULL DEFAULT 'markdown';
+        "#,
+    },
 ];
 
 pub fn run(conn: &mut Connection) -> AppResult<()> {
