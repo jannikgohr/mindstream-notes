@@ -41,6 +41,13 @@
    * linters, dev tools) the property exists so `var(...)` references
    * don't show "cannot resolve" warnings. */
   --mobile-toolbar-height: 0px;
+  /* Visible viewport height — set live by hooks.client.ts from
+   * window.visualViewport so the root layout shrinks when the Android
+   * soft keyboard opens (see the long comment on html, body below).
+   * The 100% default matches the prior `height: 100%` behaviour on
+   * desktop / SSR / WebViews without visualViewport support, and gives
+   * IDE linters something to resolve `var(--app-h)` against. */
+  --app-h: 100%;
 }
 
 .dark {
@@ -104,10 +111,20 @@
  *
  * `overscroll-behavior: none` additionally disables the rubber-band /
  * pull-to-refresh that some platforms still attach to the document even
- * when overflow is hidden. */
+ * when overflow is hidden.
+ *
+ * --app-h is published by hooks.client.ts from window.visualViewport
+ * so that when the Android soft keyboard opens, the layout viewport
+ * shrinks with it. Without this, edge-to-edge Android keeps the WebView
+ * at full window height, the keyboard floats over the bottom, and
+ * Chromium programmatically scrolls the document body to bring the
+ * focused contenteditable into the visual viewport — which on the note
+ * screen drags the back-button header off the top. With the root sized
+ * to --app-h, the flex chain just reflows shorter and there's nothing
+ * to scroll. Falls back to 100% on non-Tauri / no-visualViewport hosts. */
 html,
 body {
-  height: 100%;
+  height: var(--app-h);
   margin: 0;
   overflow: hidden;
   overscroll-behavior: none;
@@ -115,7 +132,7 @@ body {
 
 #svelte,
 [data-sveltekit] {
-  height: 100%;
+  height: var(--app-h);
 }
 
 /* Native-feel selection */
