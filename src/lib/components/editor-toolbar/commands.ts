@@ -275,14 +275,87 @@ export function applyListAction(
   // wrapped as bullets via `wrapBlockInNewList` come out as three
   // separate `ul`s — each an "item 1" of its own — and unifying
   // ul+ol+ul to bullet leaves three adjacent bullet_lists instead of
-  // one merged list. ProseMirror's `tr.join(pos)` merges the blocks
-  // sharing the boundary at `pos`; we apply joins in reverse so
-  // earlier boundaries stay valid as later ones close up.
+  // one merged list.
   mergeAdjacentLists(tr, types);
+
+  // Crepe's list_item carries its own `label` ("•" / "1." / …) and
+  // `listType` ("bullet" / "ordered") attrs — its NodeView reads them
+  // directly when rendering the marker. A `setNodeMarkup` that flips the
+  // PARENT list's node type alone leaves every child list_item with
+  // stale attrs, so the user keeps seeing numbered bullets after an
+  // ordered→bullet conversion even though the doc structure says
+  // bullet_list. Sync each list's items here against its current node
+  // type, and renumber ordered lists from `attrs.order`. Runs after
+  // the merge step so a list that just absorbed another list gets a
+  // fresh sequential numbering across the combined item set.
+  syncListItemAttrs(tr, types);
 
   if (tr.steps.length === 0) return false;
   if (dispatch) dispatch(tr);
   return true;
+}
+
+/**
+ * Make every list_item's `label` and `listType` attrs match its parent
+ * list's node type. For bullet/task lists every item gets `label: "•"` /
+ * `listType: "bullet"`; for ordered lists items are renumbered starting
+ * from the list's own `order` attr (default 1). `checked` is left
+ * untouched here — task-vs-bullet semantics are decided per-item in
+ * `unifyExistingList` based on selection, and the user's checked state
+ * shouldn't be wiped by a sync pass.
+ *
+ * Two important reasons this exists separately from the type-flip in
+ * `unifyExistingList`:
+ *   - When two lists are merged by `mergeAdjacentLists`, the second
+ *     list's items keep their original sequence numbers ("1.", "2." …).
+ *     Renumbering must happen AFTER the merge so the combined list
+ *     re-emits "1.", "2.", "3.", "4.".
+ *   - A partial toggle-off of an ordered list (e.g. lift the middle
+ *     item out) leaves the kept items with stale labels. The kept
+ *     list_items still report their old "1.", "3." labels until we
+ *     re-sync.
+ */
+function syncListItemAttrs(tr: Transaction, types: ListActionTypes): void {
+  // Snapshot the list positions up front — every list_item change below
+  // is a same-size setNodeMarkup so positions stay valid across calls.
+  const lists: Array<{
+    pos: number;
+    node: ProseNode;
+    isOrdered: boolean;
+    startOrder: number;
+  }> = [];
+  tr.doc.forEach((child, offset) => {
+    const isBullet = child.type === types.bulletList;
+    const isOrdered = child.type === types.orderedList;
+    if (!isBullet && !isOrdered) return;
+    const order =
+      isOrdered && typeof child.attrs.order === 'number'
+        ? (child.attrs.order as number)
+        : 1;
+    lists.push({ pos: offset, node: child, isOrdered, startOrder: order });
+  });
+
+  for (const { pos, node, isOrdered, startOrder } of lists) {
+    let liOffset = 1;
+    let itemIndex = 0;
+    node.forEach((li) => {
+      const liStart = pos + liOffset;
+      const desiredLabel = isOrdered ? `${startOrder + itemIndex}.` : '•';
+      const desiredListType = isOrdered ? 'ordered' : 'bullet';
+      const stale =
+        li.attrs.label !== desiredLabel ||
+        li.attrs.listType !== desiredListType;
+      if (stale) {
+        tr.setNodeMarkup(liStart, undefined, {
+          ...li.attrs,
+          label: desiredLabel,
+          listType: desiredListType
+        });
+      }
+      liOffset += li.nodeSize;
+      itemIndex++;
+    });
+  }
 }
 
 /** Walk the current `tr.doc` and join any two adjacent same-type lists.
@@ -393,7 +466,11 @@ function unifyExistingList(
 /** Replace a single non-list textblock with a one-item list of `target`.
  *  Headings get re-emitted as paragraphs because CommonMark list_items
  *  with heading content render awkwardly and aren't what the user
- *  expects from clicking a list button. */
+ *  expects from clicking a list button.
+ *
+ *  Seeds `label` / `listType` to match the target list. `syncListItemAttrs`
+ *  will renumber once adjacent lists have merged, so the "1." here is
+ *  a placeholder — the right sequence number lands in the post-pass. */
 function wrapBlockInNewList(
   tr: Transaction,
   pos: number,
@@ -406,7 +483,11 @@ function wrapBlockInNewList(
       ? block
       : types.paragraph.create(null, block.content);
 
-  const itemAttrs = target === 'task' ? { checked: false } : null;
+  const itemAttrs: Record<string, unknown> = {
+    label: target === 'ordered' ? '1.' : '•',
+    listType: target === 'ordered' ? 'ordered' : 'bullet',
+    checked: target === 'task' ? false : null
+  };
   const item = types.listItem.create(itemAttrs, inner);
 
   const listType =
