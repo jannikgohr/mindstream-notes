@@ -3,6 +3,10 @@
   import { Crepe } from '@milkdown/crepe';
   import { editorViewCtx, serializerCtx } from '@milkdown/kit/core';
   import { collab, collabServiceCtx } from '@milkdown/plugin-collab';
+  // Imported via the kit subpath rather than `@milkdown/plugin-listener`
+  // directly — keeps us from declaring a transitive dep that's already
+  // bundled through @milkdown/kit.
+  import { listener } from '@milkdown/kit/plugin/listener';
   import * as Y from 'yjs';
   import { Awareness } from 'y-protocols/awareness';
   import { Trash2, Wifi, WifiOff } from 'lucide-svelte';
@@ -170,6 +174,12 @@
         features: mobile ? { [Crepe.Feature.BlockEdit]: false } : undefined
       });
       crepe.editor.use(collab);
+      // The listener plugin gives EditorToolbar a single hook to refresh
+      // its mark-active state (Bold/Italic icons) on every transaction —
+      // selectionUpdated and updated cover cursor moves, typing, remote
+      // collab edits, etc. Without it the toolbar would have to install
+      // its own prose plugin, which Crepe doesn't allow post-create.
+      crepe.editor.use(listener);
       await crepe.create();
 
       // Bind y-doc + awareness AFTER create, then snapshot the serializer
