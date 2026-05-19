@@ -62,6 +62,8 @@
     "editor.toolbar.label": "Formatting",
     "editor.toolbar.undo": "Undo",
     "editor.toolbar.redo": "Redo",
+    "editor.toolbar.bold": "Bold",
+    "editor.toolbar.italic": "Italic",
     "editor.toolbar.text.group": "Text",
     "editor.toolbar.text.normal": "Normal text",
     "editor.toolbar.text.h1": "Heading 1",

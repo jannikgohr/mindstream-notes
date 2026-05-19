@@ -62,6 +62,8 @@
     "editor.toolbar.label": "Formatierung",
     "editor.toolbar.undo": "Rückgängig",
     "editor.toolbar.redo": "Wiederholen",
+    "editor.toolbar.bold": "Fett",
+    "editor.toolbar.italic": "Kursiv",
     "editor.toolbar.text.group": "Text",
     "editor.toolbar.text.normal": "Fließtext",
     "editor.toolbar.text.h1": "Überschrift 1",
