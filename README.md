@@ -17,7 +17,7 @@ NO_STRIP=true ARCH=x86_64 pnpm tauri build
 
 Build command Android
 ```shell
-pnpm tauri android dev
+pnpm tauri android build
 ```
 (use java 21 sdk)
 
