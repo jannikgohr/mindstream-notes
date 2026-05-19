@@ -4,9 +4,9 @@
   "version": "0.1.2",
   "identifier": "com.jannikgohr.mindstream-notes",
   "build": {
-    "beforeDevCommand": "pnpm dev",
+    "beforeDevCommand": "pnpm setup-android-cargo && pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm build",
+    "beforeBuildCommand": "pnpm setup-android-cargo && pnpm build",
     "frontendDist": "../build"
   },
   "app": {
