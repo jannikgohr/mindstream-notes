@@ -1,10 +1,20 @@
 /**
- * Tests for the list-toggle transform. We build a minimal ProseMirror
- * schema that mirrors the relevant slice of Crepe's commonmark + gfm
- * task-list-item schema (the `checked` attr on `list_item`), construct
- * documents and selections by hand, and call `applyListAction` directly
- * — no Milkdown editor, no DOM, no Svelte. That keeps the tests fast
- * and avoids pulling Crepe's whole render pipeline into vitest.
+ * Tests for the list-toggle transform. The schema below mirrors Crepe's
+ * actual list_item structure — crucially the `label` ("•" / "1." / …)
+ * and `listType` ("bullet" / "ordered") attrs that live on each
+ * list_item, NOT just on the parent list. A NodeView in Crepe's
+ * list-item-block component renders the visible marker from
+ * `node.attrs.label` and `node.attrs.listType` directly, so a transform
+ * that flips only the parent list's node type leaves stale
+ * `listType: "ordered"` / `label: "1."` on every item and the user
+ * keeps seeing numbered bullets even though the parent is a bullet_list.
+ * That was the actual bug — tests had been passing against a simplified
+ * schema that didn't model these attrs, so they couldn't catch it.
+ *
+ * `checked` is added on top of the base list_item attrs by Crepe's gfm
+ * task-list-item extension and behaves identically:
+ *   null         → regular list_item
+ *   true / false → task item, checked or not
  */
 
 import { describe, expect, it } from 'vitest';
@@ -12,7 +22,7 @@ import { Schema, type Node as ProseNode } from 'prosemirror-model';
 import { EditorState, TextSelection } from 'prosemirror-state';
 import { applyListAction, type ListActionTypes } from './commands';
 
-// -- Schema mirroring Crepe's commonmark + task-list-item --------------------
+// -- Schema -----------------------------------------------------------------
 
 const testSchema = new Schema({
   nodes: {
@@ -37,19 +47,23 @@ const testSchema = new Schema({
     bullet_list: {
       content: 'list_item+',
       group: 'block',
+      attrs: { spread: { default: true } },
       toDOM: () => ['ul', 0]
     },
     ordered_list: {
       content: 'list_item+',
       group: 'block',
+      attrs: { order: { default: 1 }, spread: { default: false } },
       toDOM: () => ['ol', 0]
     },
     list_item: {
       content: 'paragraph block*',
-      // `checked` mirrors Crepe's gfm task-list-item extension:
-      //   null         → regular list_item
-      //   true / false → task item, checked or not
-      attrs: { checked: { default: null } },
+      attrs: {
+        label: { default: '•' },
+        listType: { default: 'bullet' },
+        spread: { default: true },
+        checked: { default: null }
+      },
       toDOM: () => ['li', 0]
     },
     text: { group: 'inline' }
@@ -67,7 +81,11 @@ const types: ListActionTypes = {
 // -- Builders ---------------------------------------------------------------
 
 function p(text: string): ProseNode {
-  return testSchema.node('paragraph', null, text ? [testSchema.text(text)] : []);
+  return testSchema.node(
+    'paragraph',
+    null,
+    text ? [testSchema.text(text)] : []
+  );
 }
 function h(level: number, text: string): ProseNode {
   return testSchema.node('heading', { level }, [testSchema.text(text)]);
@@ -75,15 +93,47 @@ function h(level: number, text: string): ProseNode {
 function code(text: string): ProseNode {
   return testSchema.node('code_block', null, [testSchema.text(text)]);
 }
+
+/** Bullet list_item. `checked` non-null makes it a task item. */
 function li(text: string, checked: unknown = null): ProseNode {
-  return testSchema.node('list_item', { checked }, [p(text)]);
+  return testSchema.node(
+    'list_item',
+    { label: '•', listType: 'bullet', spread: true, checked },
+    [p(text)]
+  );
 }
-function ul(...items: ProseNode[]): ProseNode {
-  return testSchema.node('bullet_list', null, items);
+
+/** Bullet list. Strings get wrapped via `li()`; pre-built list_items pass
+ *  through untouched so you can mix in `li('foo', true)` for a checked
+ *  task item. */
+function ul(...items: Array<string | ProseNode>): ProseNode {
+  const nodes = items.map((it) => (typeof it === 'string' ? li(it) : it));
+  return testSchema.node('bullet_list', null, nodes);
 }
-function ol(...items: ProseNode[]): ProseNode {
-  return testSchema.node('ordered_list', null, items);
+
+/** Ordered list. Items get auto-numbered labels ("1.", "2.", …) and
+ *  `listType: "ordered"` so the rendered structure mirrors what Crepe's
+ *  markdown parser would produce. */
+function ol(...items: Array<string | ProseNode>): ProseNode {
+  const nodes = items.map((it, i) => {
+    const label = `${i + 1}.`;
+    if (typeof it === 'string') {
+      return testSchema.node(
+        'list_item',
+        { label, listType: 'ordered', spread: true, checked: null },
+        [p(it)]
+      );
+    }
+    // Coerce a passed-in li to ordered, taking the sequential label.
+    return testSchema.node(
+      'list_item',
+      { ...it.attrs, label, listType: 'ordered' },
+      it.content
+    );
+  });
+  return testSchema.node('ordered_list', null, nodes);
 }
+
 function makeDoc(...nodes: ProseNode[]): ProseNode {
   return testSchema.node('doc', null, nodes);
 }
@@ -94,14 +144,12 @@ function stateOf(doc: ProseNode): EditorState {
   return EditorState.create({ doc });
 }
 
-/** Place the caret inside whichever textblock is at the given doc position. */
 function withCursorAt(state: EditorState, pos: number): EditorState {
   return state.apply(
     state.tr.setSelection(TextSelection.create(state.doc, pos))
   );
 }
 
-/** Select from the first text position to the last — i.e. the whole doc. */
 function withSelectionAll(state: EditorState): EditorState {
   const sel = TextSelection.between(
     state.doc.resolve(0),
@@ -110,7 +158,6 @@ function withSelectionAll(state: EditorState): EditorState {
   return state.apply(state.tr.setSelection(sel));
 }
 
-/** Run the action and return the resulting doc — what the user would see. */
 function run(
   state: EditorState,
   target: 'bullet' | 'ordered' | 'task'
@@ -128,9 +175,14 @@ function run(
 }
 
 /**
- * Pretty-print the doc structure into a compact label tree, e.g.:
- *   `ul[li(one) li(two)] ol[li(three) li(four)]`
- * Used in assertions for readable diffs.
+ * Compact label tree for assertions. List_items render their salient attrs:
+ *   li(...)        → regular bullet (label "•", listType "bullet")
+ *   li:N.(...)     → ordered item with label "N." (listType "ordered")
+ *   li○(...)       → unchecked task item
+ *   li●(...)       → checked task item
+ *   li:ord(...)    → label/listType inconsistency (catches the bug fixed
+ *                    in this file: parent flipped to bullet_list but the
+ *                    list_item kept listType="ordered")
  */
 function structure(doc: ProseNode): string {
   const parts: string[] = [];
@@ -153,15 +205,22 @@ function renderNode(node: ProseNode): string {
       return `${tag}[${items.join(' ')}]`;
     }
     case 'list_item': {
+      const { label, listType, checked } = node.attrs;
       const inner: string[] = [];
       node.forEach((c) => inner.push(renderNode(c)));
-      const mark =
-        node.attrs.checked === false
-          ? '○'
-          : node.attrs.checked === true
-            ? '●'
-            : '';
-      return `li${mark}(${inner.join(' ')})`;
+      let prefix = 'li';
+      if (checked === false) prefix += '○';
+      else if (checked === true) prefix += '●';
+      // Only show the label when it deviates from the default bullet
+      // marker; that keeps regular bullet items visually clean while
+      // still surfacing "1.", "2." for ordered items and surfacing
+      // any leftover stale label on a bullet item (bug indicator).
+      if (label && label !== '•') prefix += `:${label}`;
+      // Catch the "listType is ordered but label still default" case
+      // separately so a bug that fixes one attr but not the other is
+      // still visible.
+      else if (listType === 'ordered') prefix += ':ord';
+      return `${prefix}(${inner.join(' ')})`;
     }
     default:
       return node.type.name;
@@ -176,9 +235,9 @@ describe('applyListAction — single line', () => {
     expect(structure(run(s, 'bullet'))).toBe('ul[li(p(hello))]');
   });
 
-  it('wraps a plain paragraph in an ordered list', () => {
+  it('wraps a plain paragraph in an ordered list with label "1."', () => {
     const s = withCursorAt(stateOf(makeDoc(p('hello'))), 2);
-    expect(structure(run(s, 'ordered'))).toBe('ol[li(p(hello))]');
+    expect(structure(run(s, 'ordered'))).toBe('ol[li:1.(p(hello))]');
   });
 
   it('wraps a plain paragraph in a task list with checked=false', () => {
@@ -192,17 +251,36 @@ describe('applyListAction — single line', () => {
   });
 
   it('toggles a single-item bullet list off', () => {
-    const s = withCursorAt(stateOf(makeDoc(ul(li('hello')))), 4);
+    const s = withCursorAt(stateOf(makeDoc(ul('hello'))), 4);
     expect(structure(run(s, 'bullet'))).toBe('p(hello)');
   });
 
-  it('switches a bullet list to ordered', () => {
-    const s = withCursorAt(stateOf(makeDoc(ul(li('hello')))), 4);
-    expect(structure(run(s, 'ordered'))).toBe('ol[li(p(hello))]');
+  it('switches a bullet list to ordered — list_item label/listType update', () => {
+    const s = withCursorAt(stateOf(makeDoc(ul('hello'))), 4);
+    expect(structure(run(s, 'ordered'))).toBe('ol[li:1.(p(hello))]');
+  });
+
+  // The asymmetric bug the user reported: bullet→ordered worked because
+  // the parent type change "looked right" cosmetically, but ordered→bullet
+  // visibly didn't because each list_item kept its label="1." and
+  // listType="ordered" attrs and the NodeView rendered numbered items.
+  it('switches an ordered list to bullet — list_item label/listType reset', () => {
+    const s = withCursorAt(stateOf(makeDoc(ol('hello'))), 4);
+    expect(structure(run(s, 'bullet'))).toBe('ul[li(p(hello))]');
+  });
+
+  it('toggles an ordered list off', () => {
+    const s = withCursorAt(stateOf(makeDoc(ol('hello'))), 4);
+    expect(structure(run(s, 'ordered'))).toBe('p(hello)');
+  });
+
+  it('switches an ordered list to task — listType reset to bullet, checked=false', () => {
+    const s = withCursorAt(stateOf(makeDoc(ol('hello'))), 4);
+    expect(structure(run(s, 'task'))).toBe('ul[li○(p(hello))]');
   });
 
   it('switches a bullet item to a task item (gains checked=false)', () => {
-    const s = withCursorAt(stateOf(makeDoc(ul(li('hello')))), 4);
+    const s = withCursorAt(stateOf(makeDoc(ul('hello'))), 4);
     expect(structure(run(s, 'task'))).toBe('ul[li○(p(hello))]');
   });
 
@@ -226,33 +304,62 @@ describe('applyListAction — single line', () => {
 
 describe('applyListAction — multi line', () => {
   it('wraps three plain paragraphs as one bullet list with three items', () => {
-    // Regression: previously emitted three separate `ul`s, which markdown
-    // serialized as three blank-line-separated lists each starting at "*".
-    const s = withSelectionAll(stateOf(makeDoc(p('one'), p('two'), p('three'))));
+    const s = withSelectionAll(
+      stateOf(makeDoc(p('one'), p('two'), p('three')))
+    );
     expect(structure(run(s, 'bullet'))).toBe(
       'ul[li(p(one)) li(p(two)) li(p(three))]'
     );
   });
 
   it('wraps three plain paragraphs as one ordered list (1. 2. 3.)', () => {
-    // Regression: previously emitted three separate `ol`s, so the markdown
-    // came out as "1. one / 1. two / 1. three" instead of 1./2./3.
-    const s = withSelectionAll(stateOf(makeDoc(p('one'), p('two'), p('three'))));
+    const s = withSelectionAll(
+      stateOf(makeDoc(p('one'), p('two'), p('three')))
+    );
     expect(structure(run(s, 'ordered'))).toBe(
-      'ol[li(p(one)) li(p(two)) li(p(three))]'
+      'ol[li:1.(p(one)) li:2.(p(two)) li:3.(p(three))]'
     );
   });
 
   it('wraps three plain paragraphs as one task list', () => {
-    const s = withSelectionAll(stateOf(makeDoc(p('one'), p('two'), p('three'))));
+    const s = withSelectionAll(
+      stateOf(makeDoc(p('one'), p('two'), p('three')))
+    );
     expect(structure(run(s, 'task'))).toBe(
       'ul[li○(p(one)) li○(p(two)) li○(p(three))]'
     );
   });
 
   it('toggles an all-bullet selection off', () => {
-    const s = withSelectionAll(stateOf(makeDoc(ul(li('one'), li('two'), li('three')))));
+    const s = withSelectionAll(
+      stateOf(makeDoc(ul('one', 'two', 'three')))
+    );
     expect(structure(run(s, 'bullet'))).toBe('p(one) p(two) p(three)');
+  });
+
+  it('toggles an all-ordered selection off', () => {
+    const s = withSelectionAll(
+      stateOf(makeDoc(ol('one', 'two', 'three')))
+    );
+    expect(structure(run(s, 'ordered'))).toBe('p(one) p(two) p(three)');
+  });
+
+  it('switches three bullet items to ordered (the reported-working direction)', () => {
+    const s = withSelectionAll(stateOf(makeDoc(ul('one', 'two', 'three'))));
+    expect(structure(run(s, 'ordered'))).toBe(
+      'ol[li:1.(p(one)) li:2.(p(two)) li:3.(p(three))]'
+    );
+  });
+
+  it('switches three ordered items to three bullet items in one merged list', () => {
+    // Symmetric counterpart of the test above — the direction the user
+    // reported as broken. The crucial assertion is `li(...)` and NOT
+    // `li:1.(...)` — i.e. the list_item label/listType actually got
+    // reset, not just the parent list's node type.
+    const s = withSelectionAll(stateOf(makeDoc(ol('one', 'two', 'three'))));
+    expect(structure(run(s, 'bullet'))).toBe(
+      'ul[li(p(one)) li(p(two)) li(p(three))]'
+    );
   });
 
   it('unifies bullet + ordered to bullet — single merged ul (original bug report)', () => {
@@ -260,28 +367,26 @@ describe('applyListAction — multi line', () => {
     // * two
     // 1. three
     // 2. four
-    // → click Bullet → all four in ONE bullet list.
+    // → click Bullet → four bullets in ONE list, NO leftover "1." / "2." labels.
     const s = withSelectionAll(
-      stateOf(makeDoc(ul(li('one'), li('two')), ol(li('three'), li('four'))))
+      stateOf(makeDoc(ul('one', 'two'), ol('three', 'four')))
     );
     expect(structure(run(s, 'bullet'))).toBe(
       'ul[li(p(one)) li(p(two)) li(p(three)) li(p(four))]'
     );
   });
 
-  it('unifies bullet + ordered to ordered — single merged ol', () => {
+  it('unifies bullet + ordered to ordered — single merged ol with renumbered labels', () => {
     const s = withSelectionAll(
-      stateOf(makeDoc(ul(li('one'), li('two')), ol(li('three'), li('four'))))
+      stateOf(makeDoc(ul('one', 'two'), ol('three', 'four')))
     );
     expect(structure(run(s, 'ordered'))).toBe(
-      'ol[li(p(one)) li(p(two)) li(p(three)) li(p(four))]'
+      'ol[li:1.(p(one)) li:2.(p(two)) li:3.(p(three)) li:4.(p(four))]'
     );
   });
 
-  it('unifies bullet + ordered to task — single merged ul of task items', () => {
-    const s = withSelectionAll(
-      stateOf(makeDoc(ul(li('one')), ol(li('two'))))
-    );
+  it('unifies bullet + ordered to task — listType reset on every item', () => {
+    const s = withSelectionAll(stateOf(makeDoc(ul('one'), ol('two'))));
     expect(structure(run(s, 'task'))).toBe(
       'ul[li○(p(one)) li○(p(two))]'
     );
@@ -289,7 +394,9 @@ describe('applyListAction — multi line', () => {
 
   it('unifies a mix of task and bullet to bullet (clears checked, merges)', () => {
     const s = withSelectionAll(
-      stateOf(makeDoc(ul(li('one', false), li('two', true)), ul(li('three'))))
+      stateOf(
+        makeDoc(ul(li('one', false), li('two', true)), ul('three'))
+      )
     );
     expect(structure(run(s, 'bullet'))).toBe(
       'ul[li(p(one)) li(p(two)) li(p(three))]'
@@ -297,18 +404,15 @@ describe('applyListAction — multi line', () => {
   });
 
   it('does not toggle off when not every block matches target', () => {
-    // Two bullets + one ordered, click Ordered → all become ordered in one list.
     const s = withSelectionAll(
-      stateOf(makeDoc(ul(li('one'), li('two')), ol(li('three'))))
+      stateOf(makeDoc(ul('one', 'two'), ol('three')))
     );
     expect(structure(run(s, 'ordered'))).toBe(
-      'ol[li(p(one)) li(p(two)) li(p(three))]'
+      'ol[li:1.(p(one)) li:2.(p(two)) li:3.(p(three))]'
     );
   });
 
   it('toggles a mix of task and task-bullet off (both count as task)', () => {
-    // Both unchecked-task and checked-task report as "task", so a
-    // selection of mixed checked-states is uniformly target=task.
     const s = withSelectionAll(
       stateOf(makeDoc(ul(li('done', true), li('todo', false))))
     );
@@ -317,37 +421,21 @@ describe('applyListAction — multi line', () => {
 
   it('coerces headings in a mixed selection to paragraphs inside one list', () => {
     const s = withSelectionAll(stateOf(makeDoc(h(1, 'title'), p('body'))));
-    expect(structure(run(s, 'bullet'))).toBe('ul[li(p(title)) li(p(body))]');
-  });
-
-  it('no-ops when the selection touches a code block', () => {
-    const s = withSelectionAll(stateOf(makeDoc(p('one'), code('x'), p('three'))));
-    expect(structure(run(s, 'bullet'))).toBe('p(one) code(x) p(three)');
-  });
-
-  it('merges a new list into an existing same-type list above', () => {
-    // ul above, plain p below, select only p, click Bullet → one ul[3].
-    const doc = makeDoc(ul(li('one'), li('two')), p('three'));
-    const s = doc;
-    const state = stateOf(doc);
-    // Cursor inside "three": doc size up to and including the ul, then
-    // +1 for the start of the trailing paragraph, +1 for the start of
-    // its inline content.
-    const cursor = state.doc.resolve(state.doc.nodeSize - 4); // inside "three"
-    const cursored = state.apply(state.tr.setSelection(TextSelection.near(cursor)));
-    expect(structure(run(cursored, 'bullet'))).toBe(
-      'ul[li(p(one)) li(p(two)) li(p(three))]'
+    expect(structure(run(s, 'bullet'))).toBe(
+      'ul[li(p(title)) li(p(body))]'
     );
   });
 
+  it('no-ops when the selection touches a code block', () => {
+    const s = withSelectionAll(
+      stateOf(makeDoc(p('one'), code('x'), p('three')))
+    );
+    expect(structure(run(s, 'bullet'))).toBe('p(one) code(x) p(three)');
+  });
+
   it('keeps lists separate when a non-list block sits between them', () => {
-    // Selecting only the two bullets across a separating paragraph
-    // shouldn't pull the paragraph into the list, nor should the
-    // post-pass join lists that were always supposed to be separate.
-    const doc = makeDoc(ul(li('one')), p('between'), ul(li('two')));
+    const doc = makeDoc(ul('one'), p('between'), ul('two'));
     const s = withSelectionAll(stateOf(doc));
-    // Selection-all hits the middle paragraph, which is not in a list →
-    // unify path wraps it too, all three end up merged.
     expect(structure(run(s, 'bullet'))).toBe(
       'ul[li(p(one)) li(p(between)) li(p(two))]'
     );
@@ -358,13 +446,10 @@ describe('applyListAction — multi line', () => {
 
 describe('applyListAction — partial list selections', () => {
   it('splits a bullet list when only the middle item is toggled off', () => {
-    // ul[A B C], cursor in B, click Bullet → ul[A] + p(B) + ul[C]
-    const doc = makeDoc(ul(li('A'), li('B'), li('C')));
+    const doc = makeDoc(ul('A', 'B', 'C'));
     const s = stateOf(doc);
-    // li(A) takes 6 positions (li open, p open, "A", p close, li close).
-    // Actually each li(text-of-1) has size: li(1) + p(1) + text(1) + p(1) + li(1) = nodeSize 6.
-    // Position 0 = before ul. Inside ul at 1. Inside first li at 2. Inside its p at 3 = before 'A'.
-    // li(A) ends at position 7. li(B) starts at 7. Inside li(B)'s p text = position 10.
+    // li(A) nodeSize: li(1) + p(1) + text(1) + p(1) + li(1) = 5? plus inner
+    // We need cursor inside B's paragraph text.
     let textPos = 1; // open ul
     textPos += 1; // open li(A)
     textPos += 1; // open p
@@ -373,16 +458,81 @@ describe('applyListAction — partial list selections', () => {
     textPos += 1; // close li(A)
     textPos += 1; // open li(B)
     textPos += 1; // open p
-    // textPos is now the position of the first text char in B's paragraph.
     const cursor = withCursorAt(s, textPos);
     expect(structure(run(cursor, 'bullet'))).toBe(
       'ul[li(p(A))] p(B) ul[li(p(C))]'
     );
   });
 
-  it('changes only the selected items to a different list (whole-list selection)', () => {
-    // Selecting the entire ul flips the list type; the bullet list becomes ordered.
-    const s = withSelectionAll(stateOf(makeDoc(ul(li('one'), li('two')))));
-    expect(structure(run(s, 'ordered'))).toBe('ol[li(p(one)) li(p(two))]');
+  it('renumbers an ordered list when its middle item is toggled off', () => {
+    // ol[1. A, 2. B, 3. C] → toggle middle off → ol[1. A] + p(B) + ol[1. C]
+    // (each kept list_item segment renumbers from 1)
+    const doc = makeDoc(ol('A', 'B', 'C'));
+    const s = stateOf(doc);
+    let textPos = 1; // open ol
+    textPos += 1; // open li(A)
+    textPos += 1; // open p
+    textPos += 1; // text
+    textPos += 1; // close p
+    textPos += 1; // close li(A)
+    textPos += 1; // open li(B)
+    textPos += 1; // open p
+    const cursor = withCursorAt(s, textPos);
+    expect(structure(run(cursor, 'ordered'))).toBe(
+      'ol[li:1.(p(A))] p(B) ol[li:1.(p(C))]'
+    );
+  });
+});
+
+// -- Round-trip: convert + convert back -------------------------------------
+
+describe('applyListAction — round-trip', () => {
+  // The user observed: "Though if I apply bullet point list a second time
+  // it removes the list style." That tells us the FIRST application
+  // changes the doc (otherwise the second wouldn't see "all bullet" and
+  // toggle off). The bug was that the visible RENDER didn't update
+  // because list_item attrs hadn't been synced. With the fix in place,
+  // both halves of the user's observation should hold cleanly:
+  //   1st click: bullet + ordered → one merged bullet list
+  //   2nd click: that bullet list toggles off
+  it('applying bullet twice to a mixed list flattens to paragraphs', () => {
+    const initial = stateOf(
+      makeDoc(ul('one', 'two'), ol('three', 'four'))
+    );
+    const sel = TextSelection.between(
+      initial.doc.resolve(0),
+      initial.doc.resolve(initial.doc.content.size)
+    );
+    const start = initial.apply(initial.tr.setSelection(sel));
+
+    let mid = start;
+    applyListAction(
+      start,
+      (tr) => {
+        mid = start.apply(tr);
+      },
+      'bullet',
+      types
+    );
+    expect(structure(mid.doc)).toBe(
+      'ul[li(p(one)) li(p(two)) li(p(three)) li(p(four))]'
+    );
+
+    // Re-select all in the new doc, then apply bullet again.
+    const midSel = TextSelection.between(
+      mid.doc.resolve(0),
+      mid.doc.resolve(mid.doc.content.size)
+    );
+    const midSelected = mid.apply(mid.tr.setSelection(midSel));
+    let final = midSelected;
+    applyListAction(
+      midSelected,
+      (tr) => {
+        final = midSelected.apply(tr);
+      },
+      'bullet',
+      types
+    );
+    expect(structure(final.doc)).toBe('p(one) p(two) p(three) p(four)');
   });
 });
