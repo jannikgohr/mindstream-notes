@@ -124,18 +124,12 @@ pub fn load(conn: &Connection, id: &str) -> AppResult<Asset> {
 // ---------- Tauri commands ----------
 
 #[tauri::command]
-pub fn upload_drawing_asset(
-    db: tauri::State<'_, Db>,
-    input: UploadAsset,
-) -> Result<Asset, String> {
+pub fn upload_drawing_asset(db: tauri::State<'_, Db>, input: UploadAsset) -> Result<Asset, String> {
     db.with_conn(|c| upload(c, input)).map_err(Into::into)
 }
 
 #[tauri::command]
-pub fn fetch_drawing_asset(
-    db: tauri::State<'_, Db>,
-    id: String,
-) -> Result<Asset, String> {
+pub fn fetch_drawing_asset(db: tauri::State<'_, Db>, id: String) -> Result<Asset, String> {
     db.with_conn(|c| load(c, &id)).map_err(Into::into)
 }
 
@@ -185,9 +179,7 @@ mod tests {
         assert!(!asset.summary.pushed);
         assert_eq!(asset.bytes, bytes);
 
-        let loaded = db
-            .with_conn(|c| load(c, &asset.summary.id))
-            .unwrap();
+        let loaded = db.with_conn(|c| load(c, &asset.summary.id)).unwrap();
         assert_eq!(loaded.bytes, bytes);
     }
 

@@ -141,13 +141,11 @@ async fn tick(app: &AppHandle) -> Result<(), String> {
 // ---------- Tauri commands ----------
 
 #[tauri::command]
-pub fn set_sync_schedule(
-    scheduler: State<'_, SyncScheduler>,
-    enabled: bool,
-    interval_secs: u64,
-) {
+pub fn set_sync_schedule(scheduler: State<'_, SyncScheduler>, enabled: bool, interval_secs: u64) {
     scheduler.enabled.store(enabled, Ordering::Relaxed);
     if interval_secs > 0 {
-        scheduler.interval_secs.store(interval_secs, Ordering::Relaxed);
+        scheduler
+            .interval_secs
+            .store(interval_secs, Ordering::Relaxed);
     }
 }

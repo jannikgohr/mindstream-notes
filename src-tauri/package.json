@@ -1,5 +1,8 @@
 {
-  "name": "src-tauri-dummy",
+  "name": "src-tauri",
   "version": "1.0.0",
-  "private": true
+  "private": true,
+  "dependencies": {
+    "@tauri-apps/plugin-window-state": "~2.4.1"
+  }
 }
