@@ -36,7 +36,11 @@ import { useEffect, useMemo, useRef } from 'react';
 import type * as Y from 'yjs';
 import type { Awareness } from 'y-protocols/awareness';
 import { bindStoreToYDoc, type BindHandle } from './tldraw-yjs';
-import { uploadDrawingAsset, fetchDrawingAsset } from '$lib/api';
+import {
+  createAssetBridge,
+  ASSET_SCHEME,
+  type AssetBridge
+} from '$lib/assets/bridge';
 
 export interface TldrawIslandProps {
   yDoc: Y.Doc;
@@ -53,111 +57,24 @@ export interface TldrawIslandProps {
 }
 
 /**
- * URL we embed in tldraw asset records. Tldraw's source-URL validator
- * (@tldraw/validate/lib/validation.js -> validSrcProtocols) hard-codes
- * an allow-list of `http: https: data: asset:` — our previous custom
- * `mindstream-asset:` scheme failed validation and crashed the store
- * with "Expected a valid url … (invalid protocol)" the moment an upload
- * resolved. The `asset:` scheme exists specifically for app-supplied
- * URLs whose meaning is private to the host's assetStore, which is
- * exactly our case.
- *
- * Path is `mindstream/<client-uuid>` so a future addition of other
- * asset:-flavoured sources (a built-in clipart shape, say) can be
- * routed independently in resolve() without colliding with ours.
+ * Wrap a shared AssetBridge in tldraw's TLAssetStore shape. The actual
+ * upload/resolve/cache logic lives in `$lib/assets/bridge` because the
+ * markdown editor needs the same plumbing — only the call surfaces
+ * differ (tldraw passes TLAsset wrappers; Crepe passes raw strings).
  */
-const ASSET_SCHEME = 'asset:mindstream/';
-
-/**
- * Build an asset store keyed to a specific note. Each freeform editor
- * instance has its own — the `noteId` closure makes uploads carry the
- * right owner without threading it through the tldraw API.
- *
- * Resolve caches blob URLs in a Map that lives as long as this assetStore
- * instance (i.e. as long as the editor is open). Closing the panel drops
- * the cache; we re-fetch from SQLite on the next open. URL.revokeObjectURL
- * runs on dispose so the browser can release the blob ref-counts.
- */
-function createAssetStore(noteId: string): {
-  store: TLAssetStore;
-  dispose(): void;
-} {
-  // url → blob URL. We key by the FULL `asset:mindstream/<id>` URL
-  // (not just `id`) so a future asset:-flavoured source can slot in
-  // without changing the cache shape.
-  const resolved = new Map<string, string>();
-  // Inflight fetches keyed by asset URL so two concurrent `resolve()`
-  // calls for the same asset (e.g. duplicated shape) don't both hit
-  // SQLite. Each resolve sees the same promise; once it lands, both
-  // get the same blob URL.
-  const inflight = new Map<string, Promise<string | null>>();
-
-  /** Fetch the asset, build a blob URL, populate the resolved cache,
-   *  and clear the inflight slot. Returns null on failure so tldraw
-   *  shows its broken-asset placeholder instead of crashing.
-   *
-   *  Extracted to a named function because the equivalent `(async () =>
-   *  …)()` IIFE confuses WebStorm's "void function return value is
-   *  used" inspection — the named form lets the IDE infer the
-   *  Promise<string | null> result cleanly. */
-  async function loadAssetBlob(id: string, src: string): Promise<string | null> {
-    try {
-      const asset = await fetchDrawingAsset(id);
-      const blob = new Blob([new Uint8Array(asset.bytes)], {
-        type: asset.mime_type
-      });
-      const blobUrl = URL.createObjectURL(blob);
-      resolved.set(src, blobUrl);
-      return blobUrl;
-    } catch (err) {
-      console.warn('[tldraw] resolve asset failed', src, err);
-      return null;
-    } finally {
-      inflight.delete(src);
-    }
-  }
-
-  const store: TLAssetStore = {
+function createAssetStore(bridge: AssetBridge): TLAssetStore {
+  return {
     async upload(_asset: TLAsset, file: File): Promise<{ src: string }> {
-      // Tauri IPC doesn't accept a File; we have to drain it to bytes
-      // first. arrayBuffer() reads the file once and resolves with the
-      // raw buffer — same model as fetch().
-      const buf = await file.arrayBuffer();
-      const bytes = Array.from(new Uint8Array(buf));
-      const stored = await uploadDrawingAsset({
-        owning_note_id: noteId,
-        mime_type: file.type || 'application/octet-stream',
-        bytes
-      });
-      return { src: `${ASSET_SCHEME}${stored.id}` };
+      return { src: await bridge.uploadFile(file) };
     },
 
     resolve(asset: TLAsset) {
       const src = (asset.props as { src?: string | null }).src;
       if (!src) return null;
-      // Pass-through for URLs we don't own (e.g. images pasted from the
-      // network). Tldraw will fetch those directly.
+      // Pass-through for URLs we don't own (network images pasted in,
+      // data: URLs). Tldraw fetches those itself.
       if (!src.startsWith(ASSET_SCHEME)) return src;
-
-      const cached = resolved.get(src);
-      if (cached) return cached;
-
-      const pending = inflight.get(src);
-      if (pending) return pending;
-
-      const id = src.slice(ASSET_SCHEME.length);
-      const p = loadAssetBlob(id, src);
-      inflight.set(src, p);
-      return p;
-    }
-  };
-
-  return {
-    store,
-    dispose() {
-      for (const url of resolved.values()) URL.revokeObjectURL(url);
-      resolved.clear();
-      inflight.clear();
+      return bridge.resolveUrl(src);
     }
   };
 }
@@ -168,36 +85,17 @@ export default function TldrawIsland({
   readOnly,
   noteId
 }: TldrawIslandProps) {
-  // Asset store is rebuilt whenever noteId changes (which is "never" in
-  // practice — the React tree unmounts when the user switches notes —
-  // but keeping it keyed makes the swap correct if dockview ever
-  // reuses the panel without unmounting).
-  const assetStoreRef = useRef<ReturnType<typeof createAssetStore> | null>(null);
-  if (
-    assetStoreRef.current === null ||
-    (assetStoreRef.current as unknown as { __noteId?: string }).__noteId !==
-      noteId
-  ) {
-    assetStoreRef.current?.dispose();
-    const built = createAssetStore(noteId);
-    // Tag with noteId so the swap-detection above stays accurate without
-    // a separate ref. Light hack, but the alternative is two refs.
-    (built as unknown as { __noteId: string }).__noteId = noteId;
-    assetStoreRef.current = built;
-  }
+  // One bridge per note: holds the blob-URL cache + dispose. useMemo on
+  // noteId keeps it stable across re-renders and rebuilds (with proper
+  // dispose) only if noteId actually changes.
+  const bridge = useMemo(() => createAssetBridge(noteId), [noteId]);
   useEffect(() => {
-    // Drop the cache on unmount so blob URLs don't leak. Re-running on
-    // every render is fine because dispose() is idempotent — but we
-    // only want it on unmount, so the effect body is empty.
-    return () => {
-      assetStoreRef.current?.dispose();
-      assetStoreRef.current = null;
-    };
-  }, []);
+    return () => bridge.dispose();
+  }, [bridge]);
 
   // The TLStore must live for the lifetime of this React subtree. useMemo
-  // on `yDoc` recreates it if the prop ever swaps; the assetStore is
-  // pinned by ref so the memo doesn't need to depend on it.
+  // on `yDoc` recreates it if the prop ever swaps; the TLAssetStore is a
+  // thin adapter around the bridge.
   const store: TLStore = useMemo(
     () =>
       createTLStore({
@@ -206,9 +104,9 @@ export default function TldrawIsland({
         // Asset upload/resolve is configured at store-construction time
         // (not on the <Tldraw> component) when a pre-made store is being
         // passed in.
-        assets: assetStoreRef.current!.store
+        assets: createAssetStore(bridge)
       }),
-    [yDoc]
+    [yDoc, bridge]
   );
 
   // Bind store ↔ yDoc on mount, tear down on unmount. The bridge is
