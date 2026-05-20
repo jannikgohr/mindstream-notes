@@ -10,7 +10,10 @@ node_modules
 # Tauri
 /src-tauri/target
 /src-tauri/gen/schemas
-/src-tauri/Cargo.lock
+# Cargo.lock is intentionally committed for src-tauri: it's a binary
+# crate (the app), and reproducible builds need a pinned dependency
+# graph. The "don't commit Cargo.lock" guidance applies to libraries
+# only — see https://doc.rust-lang.org/cargo/faq.html#why-do-binaries-have-cargolock-in-version-control-but-not-libraries
 # Generated at install / before each build by src-tauri/scripts/setup-android-cargo.mjs.
 # It needs absolute paths (cargo doesn't resolve relative paths in build-script overrides),
 # so it can't be committed.
