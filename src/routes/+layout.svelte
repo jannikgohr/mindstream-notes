@@ -4,7 +4,7 @@
     import {ModeWatcher} from 'mode-watcher';
     import {getSettingValue, isModified} from '$lib/settings/store.svelte';
     import {applyAccentColor, clearAccentColor} from '$lib/settings/accent';
-    import {runSync} from '$lib/sync/runner';
+    import {invokeOrFallback} from '$lib/api';
     import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 
     let {children} = $props();
@@ -27,15 +27,23 @@
 
     import {ui} from '$lib/state.svelte.js';
 
-    // Periodic sync. Schema options are live | 1m | 5m | 15m | manual.
-    // 'live' has no Etebase server-push channel, so we poll on a short
-    // interval instead — 30s strikes a balance between freshness and
-    // server load. Tune INTERVAL_MS if a longpoll/SSE path lands later.
-    const INTERVAL_MS: Record<string, number> = {
-        live: 30_000,
-        '1m': 60_000,
-        '5m': 300_000,
-        '15m': 900_000
+    // Periodic sync runs in a Rust tokio task — see
+    // src-tauri/src/sync/scheduler.rs. This effect just forwards the
+    // settings UI choice into that task via `set_sync_schedule`.
+    // Schema options are live | 1m | 5m | 15m | manual; we map them
+    // to a tick-cadence in seconds. `manual` flips the scheduler to
+    // disabled.
+    //
+    // The Rust scheduler was previously a JS `setTimeout` self-
+    // rescheduler here, which paused if the event loop got blocked
+    // (long Crepe operation, complex tldraw paint) and was subject
+    // to background-throttling on mobile webviews. Owning the tick
+    // in Rust makes the cadence reliable.
+    const INTERVAL_SECS: Record<string, number> = {
+        live: 30,
+        '1m': 60,
+        '5m': 300,
+        '15m': 900
     };
 
     // Re-apply the accent colour whenever the user changes it (or on
@@ -54,33 +62,23 @@
     });
 
     $effect(() => {
-        const enabled = getSettingValue('account.syncEnabled') === true;
-        const interval = (getSettingValue('account.syncInterval') as string | undefined) ?? 'live';
-        if (!enabled || interval === 'manual') return;
-        const delay = INTERVAL_MS[interval] ?? 60_000;
-
-        let timer: ReturnType<typeof setTimeout> | null = null;
-        let cancelled = false;
-
-        async function tick() {
-            if (cancelled) return;
-            try {
-                await runSync();
-            } catch (err) {
-                // Most common case is "not signed in" while the user is
-                // configuring the app — keep noise low.
-                console.debug('[sync] periodic tick failed:', err);
-            }
-            if (!cancelled) timer = setTimeout(tick, delay);
-        }
-        // Fire immediately so toggling sync on (or shortening the interval)
-        // is felt right away instead of after one full delay.
-        void tick();
-
-        return () => {
-            cancelled = true;
-            if (timer !== null) clearTimeout(timer);
-        };
+        const interval =
+            (getSettingValue('account.syncInterval') as string | undefined) ??
+            'live';
+        // `manual` => scheduler disabled. `account.syncEnabled` false
+        // also disables the loop. Either way we still send the
+        // current interval so flipping enabled back on later picks up
+        // the right cadence immediately.
+        const enabled =
+            getSettingValue('account.syncEnabled') === true && interval !== 'manual';
+        const seconds = INTERVAL_SECS[interval] ?? 60;
+        void invokeOrFallback<void>(
+            'set_sync_schedule',
+            { enabled, intervalSecs: seconds },
+            // No-op fallback when running outside Tauri (browser dev
+            // mode) — there's no Rust scheduler to talk to.
+            async () => undefined
+        );
     });
 </script>
 

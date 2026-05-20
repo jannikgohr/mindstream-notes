@@ -117,6 +117,15 @@ pub fn run() {
             .expect("failed to seed database");
 
             app.manage(db);
+
+            // Periodic sync runs in a tokio task owned by this
+            // process — replaces the JS setTimeout that used to live
+            // in +layout.svelte. Starts disabled; the JS settings
+            // effect calls `set_sync_schedule` once on mount with the
+            // restored preference, which is what actually flips it on.
+            app.manage(sync::scheduler::SyncScheduler::new());
+            sync::scheduler::spawn(app.handle().clone());
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -143,6 +152,7 @@ pub fn run() {
             // Sync
             sync::sync_now,
             sync::note_room_info,
+            sync::scheduler::set_sync_schedule,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
