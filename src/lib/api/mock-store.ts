@@ -18,15 +18,17 @@ import type {
   NoteSummary,
   UpdateNoteInput
 } from './notes';
+import type { Asset, UploadAssetInput } from './assets';
 
 const collections: Collection[] = [];
 const notes = new Map<string, Note>();
+const assets = new Map<string, Asset>();
 
 function nowIso(): string {
   return new Date().toISOString();
 }
 
-function randId(prefix: 'note' | 'coll'): string {
+function randId(prefix: 'note' | 'coll' | 'asset'): string {
   return `${prefix}_${crypto.randomUUID?.() ?? Math.random().toString(36).slice(2)}`;
 }
 
@@ -230,5 +232,35 @@ export const mockApi = {
   },
   async purgeNote(id: string): Promise<void> {
     if (!notes.delete(id)) throw new Error(`note ${id} not found`);
+    // Mimic the Rust ON DELETE CASCADE — clean up any assets owned by
+    // the purged note so dev-mode fallback matches Tauri behaviour.
+    for (const [aid, a] of assets) {
+      if (a.owning_note_id === id) assets.delete(aid);
+    }
+  },
+
+  // ---- Drawing assets ----
+  async uploadDrawingAsset(input: UploadAssetInput): Promise<Asset> {
+    if (!notes.has(input.owning_note_id)) {
+      throw new Error(`note ${input.owning_note_id} not found`);
+    }
+    const t = nowIso();
+    const a: Asset = {
+      id: randId('asset'),
+      owning_note_id: input.owning_note_id,
+      mime_type: input.mime_type,
+      size: input.bytes.length,
+      created: t,
+      modified: t,
+      pushed: false,
+      bytes: input.bytes
+    };
+    assets.set(a.id, a);
+    return { ...a };
+  },
+  async fetchDrawingAsset(id: string): Promise<Asset> {
+    const a = assets.get(id);
+    if (!a) throw new Error(`asset ${id} not found`);
+    return { ...a };
   }
 };
