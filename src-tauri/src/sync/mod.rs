@@ -20,6 +20,7 @@
 //! This is the "stoken + transaction" optimistic-concurrency pattern
 //! Etebase exposes; the CRDT does the actual conflict-free merging.
 
+pub mod scheduler;
 pub mod yrs_doc;
 
 use std::collections::HashMap;
@@ -31,7 +32,7 @@ use etebase::utils::randombytes;
 use etebase::{Account, Collection, FetchOptions, Item, ItemMetadata};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::auth;
 use crate::db::Db;
@@ -139,7 +140,7 @@ struct AssetPayload {
 }
 
 /// Result reported back to the UI after a sync attempt.
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Default, Clone, Serialize)]
 pub struct SyncReport {
     pub folders_pulled: usize,
     pub folders_pushed: usize,
@@ -150,12 +151,35 @@ pub struct SyncReport {
     pub conflicts_resolved: usize,
 }
 
+/// Payload of the `sync-completed` Tauri event. JS listeners use this
+/// to (a) refresh the file tree, (b) merge updated yrs_state into open
+/// note Y.Docs, and (c) invalidate asset blob URLs in open editors so
+/// the canvas / image element re-resolves freshly-pulled bytes without
+/// the user having to close and reopen the note.
+///
+/// Emitted on every successful sync — including no-op syncs with empty
+/// id vectors — so subscribers can clear any "syncing now" indicator
+/// they show.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct SyncCompletedEvent {
+    pub report: SyncReport,
+    pub notes_pulled_ids: Vec<String>,
+    pub assets_pulled_ids: Vec<String>,
+}
+
+pub const SYNC_COMPLETED_EVENT: &str = "sync-completed";
+
 // ---------- Tauri command ----------
 
 #[tauri::command]
 pub async fn sync_now(app: AppHandle) -> Result<SyncReport, String> {
+    // Acquire the scheduler's in-flight lock so manual + scheduled
+    // syncs serialise instead of racing to push the same dirty rows
+    // or compete for the etebase stoken. The user pays at most one
+    // scheduler tick's worth of wait — typically <1s of no-op pulls.
+    let _guard = app.state::<scheduler::SyncScheduler>().in_flight.lock().await;
     let app_for_blocking = app.clone();
-    tauri::async_runtime::spawn_blocking(move || -> Result<SyncReport, String> {
+    let delta = tauri::async_runtime::spawn_blocking(move || -> Result<SyncDelta, String> {
         let account = auth::try_restore(&app_for_blocking)
             .map_err(|e| format!("restore session: {e}"))?
             .ok_or_else(|| "not signed in".to_string())?;
@@ -163,13 +187,46 @@ pub async fn sync_now(app: AppHandle) -> Result<SyncReport, String> {
         run(&db, &account).map_err(|e| e.to_string())
     })
     .await
-    .map_err(|e| format!("sync task: {e}"))?
+    .map_err(|e| format!("sync task: {e}"))??;
+
+    // Best-effort event emission — if no JS listeners are attached the
+    // emit call is a no-op; if serialization fails (shouldn't, given
+    // our derive(Serialize)) we still want the SyncReport to flow back
+    // to the caller as their command result, so we just log.
+    let event = SyncCompletedEvent {
+        report: delta.report.clone(),
+        notes_pulled_ids: delta.notes_pulled_ids,
+        assets_pulled_ids: delta.assets_pulled_ids,
+    };
+    if let Err(err) = app.emit(SYNC_COMPLETED_EVENT, &event) {
+        log::warn!("[sync] failed to emit {SYNC_COMPLETED_EVENT}: {err}");
+    }
+
+    Ok(delta.report)
 }
 
 // ---------- Top-level orchestration ----------
 
-fn run(db: &Db, account: &Account) -> AppResult<SyncReport> {
-    let mut report = SyncReport::default();
+/// Identifies what changed during a `run()` so the caller can emit a
+/// `sync-completed` event that wakes open editors up to the freshness.
+/// Empty vectors are common (nothing changed) and the event payload
+/// callers MUST emit even on empty lists so subscribers can clear any
+/// in-flight "syncing now" state.
+#[derive(Debug, Default)]
+pub struct SyncDelta {
+    pub report: SyncReport,
+    /// Note ids whose `yrs_state` was inserted or updated during pull.
+    /// Open NoteEditor / FreeformNoteEditor instances merge the new
+    /// state into their live Y.Doc via `Y.applyUpdate` (CRDT-safe).
+    pub notes_pulled_ids: Vec<String>,
+    /// Asset ids that were inserted or updated during pull. Open
+    /// editors evict matching blob URLs from their AssetBridge cache
+    /// and kick the corresponding image NodeView so it re-resolves.
+    pub assets_pulled_ids: Vec<String>,
+}
+
+fn run(db: &Db, account: &Account) -> AppResult<SyncDelta> {
+    let mut delta = SyncDelta::default();
     let cm = account
         .collection_manager()
         .map_err(|e| AppError::InvalidArg(format!("collection_manager: {e}")))?;
@@ -179,15 +236,15 @@ fn run(db: &Db, account: &Account) -> AppResult<SyncReport> {
     let folders_im = cm
         .item_manager(&folders_col)
         .map_err(|e| AppError::InvalidArg(format!("item_manager(folders): {e}")))?;
-    pull_folders(db, &folders_im, &mut report)?;
-    push_folders(db, &folders_im, &mut report)?;
+    pull_folders(db, &folders_im, &mut delta.report)?;
+    push_folders(db, &folders_im, &mut delta.report)?;
 
     let notes_col = ensure_collection(db, &cm, KIND_NOTES, COLLECTION_TYPE_NOTES)?;
     let notes_im = cm
         .item_manager(&notes_col)
         .map_err(|e| AppError::InvalidArg(format!("item_manager(notes): {e}")))?;
-    pull_notes(db, &notes_im, &mut report)?;
-    push_notes(db, &notes_im, &mut report)?;
+    pull_notes(db, &notes_im, &mut delta.report, &mut delta.notes_pulled_ids)?;
+    push_notes(db, &notes_im, &mut delta.report)?;
 
     // Assets last so notes — and the FK target rows they need — are
     // already in place when apply_asset tries to upsert. If a brand-new
@@ -201,10 +258,15 @@ fn run(db: &Db, account: &Account) -> AppResult<SyncReport> {
     let assets_im = cm
         .item_manager(&assets_col)
         .map_err(|e| AppError::InvalidArg(format!("item_manager(assets): {e}")))?;
-    pull_assets(db, &assets_im, &mut report)?;
-    push_assets(db, &assets_im, &mut report)?;
+    pull_assets(
+        db,
+        &assets_im,
+        &mut delta.report,
+        &mut delta.assets_pulled_ids,
+    )?;
+    push_assets(db, &assets_im, &mut delta.report)?;
 
-    Ok(report)
+    Ok(delta)
 }
 
 /// Find the Etebase Collection of `collection_type` that we previously
@@ -317,7 +379,12 @@ fn pull_folders(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult
     Ok(())
 }
 
-fn pull_notes(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult<()> {
+fn pull_notes(
+    db: &Db,
+    im: &ItemManager,
+    report: &mut SyncReport,
+    applied_ids: &mut Vec<String>,
+) -> AppResult<()> {
     let stoken = load_stoken(db, KIND_NOTES)?;
     let mut new_stoken = stoken.clone();
     loop {
@@ -327,7 +394,9 @@ fn pull_notes(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult<(
             .list(Some(&opts))
             .map_err(|e| AppError::InvalidArg(format!("list notes: {e}")))?;
         for item in resp.data() {
-            apply_note(db, item)?;
+            if let Some(id) = apply_note(db, item)? {
+                applied_ids.push(id);
+            }
             report.notes_pulled += 1;
         }
         new_stoken = resp.stoken().map(str::to_string).or(new_stoken);
@@ -351,7 +420,12 @@ fn pull_notes(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult<(
 /// advance the stoken. Next sync's notes pull picks up the missing
 /// note, then this re-runs from the same stoken and the previously-
 /// orphaned assets land cleanly.
-fn pull_assets(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult<()> {
+fn pull_assets(
+    db: &Db,
+    im: &ItemManager,
+    report: &mut SyncReport,
+    applied_ids: &mut Vec<String>,
+) -> AppResult<()> {
     let stoken = load_stoken(db, KIND_ASSETS)?;
     let mut new_stoken = stoken.clone();
     let mut had_orphans = false;
@@ -363,8 +437,9 @@ fn pull_assets(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult<
             .map_err(|e| AppError::InvalidArg(format!("list assets: {e}")))?;
         for item in resp.data() {
             match apply_asset(db, item)? {
-                ApplyAssetOutcome::Applied => {
+                ApplyAssetOutcome::Applied(id) => {
                     report.assets_pulled += 1;
+                    applied_ids.push(id);
                 }
                 ApplyAssetOutcome::Orphaned => {
                     had_orphans = true;
@@ -384,8 +459,12 @@ fn pull_assets(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult<
 }
 
 enum ApplyAssetOutcome {
-    /// Row was written (insert or update).
-    Applied,
+    /// Row was written (insert or update). Carries the asset id so the
+    /// caller can emit a `sync-completed` event listing what changed —
+    /// open editors evict their cached blob URL and re-resolve so
+    /// freshly-arrived bytes paint on the open canvas / image instead
+    /// of staying broken until the user reopens the note.
+    Applied(String),
     /// Asset references a note we don't have yet — keep the stoken at
     /// its previous value so the next sync retries.
     Orphaned,
@@ -492,7 +571,7 @@ fn apply_asset(db: &Db, item: &Item) -> AppResult<ApplyAssetOutcome> {
             )?;
         }
         tx.commit()?;
-        Ok(ApplyAssetOutcome::Applied)
+        Ok(ApplyAssetOutcome::Applied(payload.id))
     })
 }
 
@@ -635,18 +714,24 @@ fn repair_folder_parents(db: &Db, applied: &[FolderPayload]) -> AppResult<()> {
     })
 }
 
-fn apply_note(db: &Db, item: &Item) -> AppResult<()> {
+/// Apply one pulled note item. Returns Some(note_id) when a row was
+/// written (insert or update) so the caller can include it in the
+/// `sync-completed` event payload — open editors merge the new
+/// yrs_state into their live Y.Doc instead of going stale. Returns None
+/// for deletes (no live editor to refresh) and missing-content items.
+fn apply_note(db: &Db, item: &Item) -> AppResult<Option<String>> {
     if item.is_deleted() {
-        return db.with_conn(|c| {
+        db.with_conn(|c| {
             c.execute(
                 "DELETE FROM notes WHERE etebase_uid = ?1",
                 params![item.uid()],
             )?;
             Ok(())
-        });
+        })?;
+        return Ok(None);
     }
     if item.is_missing_content() {
-        return Ok(());
+        return Ok(None);
     }
     let raw = item
         .content()
@@ -787,7 +872,7 @@ fn apply_note(db: &Db, item: &Item) -> AppResult<()> {
         }
 
         tx.commit()?;
-        Ok(())
+        Ok(Some(payload.id))
     })
 }
 
