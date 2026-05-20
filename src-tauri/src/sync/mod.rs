@@ -244,7 +244,12 @@ fn run(db: &Db, account: &Account) -> AppResult<SyncDelta> {
     let notes_im = cm
         .item_manager(&notes_col)
         .map_err(|e| AppError::InvalidArg(format!("item_manager(notes): {e}")))?;
-    pull_notes(db, &notes_im, &mut delta.report, &mut delta.notes_pulled_ids)?;
+    pull_notes(
+        db,
+        &notes_im,
+        &mut delta.report,
+        &mut delta.notes_pulled_ids,
+    )?;
     push_notes(db, &notes_im, &mut delta.report)?;
 
     // Assets last so notes — and the FK target rows they need — are
@@ -662,10 +667,7 @@ fn apply_folder(db: &Db, item: &Item) -> AppResult<Option<FolderPayload>> {
 /// abort the sync with `FOREIGN KEY constraint failed`. The original
 /// payload value is preserved by `pull_folders` so the repair pass can
 /// reattach folders once the parent arrives.
-fn resolve_parent_id(
-    conn: &Connection,
-    parent: Option<&str>,
-) -> rusqlite::Result<Option<String>> {
+fn resolve_parent_id(conn: &Connection, parent: Option<&str>) -> rusqlite::Result<Option<String>> {
     let Some(p) = parent else {
         return Ok(None);
     };
@@ -1027,12 +1029,7 @@ fn push_notes(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult<(
                  SET etebase_uid = ?1, etebase_etag = ?2, dirty = 0,
                      payload_schema = ?3
                  WHERE id = ?4",
-                params![
-                    item.uid(),
-                    item.etag(),
-                    PAYLOAD_SCHEMA as i64,
-                    local_id,
-                ],
+                params![item.uid(), item.etag(), PAYLOAD_SCHEMA as i64, local_id,],
             )?;
         }
         tx.commit()?;
@@ -1416,26 +1413,27 @@ pub async fn note_room_info(
     // Read just the local breadcrumbs we need: the note's item UID and
     // the cached notes-collection UID. The actual key lives only on the
     // etebase server now; we resolve it on demand below.
-    let lookups = db.with_conn(|c| {
-        let note_uid: Option<String> = c
-            .query_row(
-                "SELECT etebase_uid FROM notes WHERE id = ?1",
-                params![&id],
-                |r| r.get::<_, Option<String>>(0),
-            )
-            .optional()?
-            .flatten();
-        let col_uid: Option<String> = c
-            .query_row(
-                "SELECT etebase_collection_uid FROM sync_state WHERE kind = ?1",
-                params![KIND_NOTES],
-                |r| r.get::<_, Option<String>>(0),
-            )
-            .optional()?
-            .flatten();
-        Ok::<_, AppError>((note_uid, col_uid))
-    })
-    .map_err(|e| e.to_string())?;
+    let lookups = db
+        .with_conn(|c| {
+            let note_uid: Option<String> = c
+                .query_row(
+                    "SELECT etebase_uid FROM notes WHERE id = ?1",
+                    params![&id],
+                    |r| r.get::<_, Option<String>>(0),
+                )
+                .optional()?
+                .flatten();
+            let col_uid: Option<String> = c
+                .query_row(
+                    "SELECT etebase_collection_uid FROM sync_state WHERE kind = ?1",
+                    params![KIND_NOTES],
+                    |r| r.get::<_, Option<String>>(0),
+                )
+                .optional()?
+                .flatten();
+            Ok::<_, AppError>((note_uid, col_uid))
+        })
+        .map_err(|e| e.to_string())?;
 
     let Some(note_uid) = lookups.0 else {
         return Ok(None);
@@ -1481,9 +1479,7 @@ pub async fn note_room_info(
         if item.is_deleted() || item.is_missing_content() {
             return Ok(None);
         }
-        let raw = item
-            .content()
-            .map_err(|e| format!("item content: {e}"))?;
+        let raw = item.content().map_err(|e| format!("item content: {e}"))?;
         let payload: NotePayload = match rmp_serde::from_slice(&raw) {
             Ok(p) => p,
             Err(e) => {

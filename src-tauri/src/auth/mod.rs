@@ -169,8 +169,8 @@ pub async fn etebase_login(args: LoginArgs, app: AppHandle) -> Result<SessionInf
     let blob = tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
         let client = Client::new(CLIENT_NAME, &server_for_login)
             .map_err(|e| format!("etebase client: {e}"))?;
-        let account = Account::login(client, &username, &password)
-            .map_err(|e| format!("login: {e}"))?;
+        let account =
+            Account::login(client, &username, &password).map_err(|e| format!("login: {e}"))?;
         account
             .save(Some(&key_for_save))
             .map_err(|e| format!("save session: {e}"))
@@ -222,8 +222,7 @@ pub async fn etebase_logout(app: AppHandle) -> Result<(), String> {
         // server gone) we still wipe local state below — that's the
         // user's clear intent.
         let _ = tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
-            let account = restore_account(&stored)
-                .map_err(|e| format!("restore session: {e}"))?;
+            let account = restore_account(&stored).map_err(|e| format!("restore session: {e}"))?;
             account.logout().map_err(|e| format!("logout: {e}"))?;
             Ok(())
         })
