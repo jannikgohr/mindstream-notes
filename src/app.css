@@ -164,7 +164,87 @@ body {
   --dv-floating-box-shadow: 0 4px 14px rgb(0 0 0 / 0.2);
   --dv-drag-over-background-color: oklch(from var(--primary) l c h / 0.15);
   --dv-drag-over-border-color: var(--ring);
+  /*
+   * Drives the z-index of every dockview overlay — the tabs-overflow
+   * dropdown, drop-target zones, drag previews. Default is 999, which
+   * loses to tldraw's `--tl-layer-following-indicator: 1000` and any
+   * other 1000+ z-index that leaks out of a third-party panel's
+   * stacking context (the tldraw `.tl-container` is `position: relative`
+   * with no explicit z-index, so its internal layers don't get
+   * isolated from the page-level stack). 10000 stays clear of every
+   * library layer we host today.
+   */
+  --dv-overlay-z-index: 10000;
   color: var(--foreground);
+}
+
+/*
+ * Tabs-overflow popup — position + styling.
+ *
+ * dockview hardcodes the popup wrapper's `top` / `left` to the click
+ * coordinate via inline styles (see popupService.openPopover). That
+ * lands the menu's top edge inside the chevron and its left/right
+ * wherever the cursor happened to be. We pin it instead to:
+ *   - top:    the tab strip bottom (= dockview tab-chrome height)
+ *   - right:  the dockview's right edge
+ * Inline styles normally win, but `!important` in CSS beats inline —
+ * that's the one case where we can override without JS.
+ *
+ * Limitation: assumes the overflow chevron belongs to a tab strip at
+ * the dockview root (single tab group). With multi-group split panes
+ * the popup would still pin to dockview-root top, not to the
+ * originating sub-group's tab strip. We don't use split panes today;
+ * if that changes, swap this for a JS-based reposition that reads the
+ * chevron's bounding rect.
+ *
+ * Styling matches the rest of the app's popover surface (ContextMenu,
+ * dropdown menus) so the dockview overflow looks native to our chrome
+ * rather than dockview's default flat `border + tabs container
+ * background` look.
+ */
+.dockview-theme-bridge .dv-popover-anchor > div:has(.dv-tabs-overflow-container) {
+  top: var(--dv-tabs-and-actions-container-height) !important;
+  left: auto !important;
+  right: 0 !important;
+}
+
+.dockview-theme-bridge .dv-tabs-overflow-container {
+  background-color: var(--popover);
+  color: var(--popover-foreground);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 0.25rem;
+  min-width: 200px;
+  box-shadow:
+    0 10px 15px -3px rgb(0 0 0 / 0.1),
+    0 4px 6px -4px rgb(0 0 0 / 0.1);
+}
+
+/* Drop the per-tab divider dockview adds by default — we use spacing
+ * + hover treatment to separate items, like a menu. */
+.dockview-theme-bridge .dv-tabs-overflow-container .dv-tab:not(:last-child) {
+  border-bottom: none;
+}
+
+.dockview-theme-bridge .dv-tabs-overflow-container .dv-tab {
+  border-radius: var(--radius-sm);
+  padding: 0.375rem 0.5rem;
+  margin: 1px 0;
+  cursor: pointer;
+  transition: background-color 100ms ease-out;
+}
+
+.dockview-theme-bridge .dv-tabs-overflow-container .dv-tab:hover {
+  background-color: var(--accent);
+  color: var(--accent-foreground);
+}
+
+/* Active tab in the popup = the tab currently focused in dockview.
+ * Keep it visually distinct but consistent with the menu hover. */
+.dockview-theme-bridge .dv-tabs-overflow-container .dv-active-tab {
+  background-color: var(--accent);
+  color: var(--accent-foreground);
+  font-weight: 500;
 }
 
 /* Milkdown / Crepe surface tweaks so the editor feels at home in our chrome. */
