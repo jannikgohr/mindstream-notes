@@ -22,7 +22,8 @@
       "WebFetch(domain:www.npmjs.com)",
       "WebFetch(domain:registry.npmjs.org)",
       "Bash(pnpm tauri *)",
-      "WebFetch(domain:tldraw.dev)"
+      "WebFetch(domain:tldraw.dev)",
+      "Bash(pnpm exec vite *)"
     ]
   }
 }
