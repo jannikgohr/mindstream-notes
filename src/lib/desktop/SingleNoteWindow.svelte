@@ -4,11 +4,18 @@
    * spawned with decorations: false (matching the main window), so this
    * component owns the title bar — drag region in the centre, custom min/
    * max/close trio on the right.
+   *
+   * Dispatch mirrors DesktopLayout.openNote: load the note, then route
+   * to the editor matching its `note_kind`. Unknown kinds (e.g. from a
+   * newer-app-version peer) render `UnknownNoteKindError` instead of
+   * silently mounting `NoteEditor` and corrupting the body on save.
    */
   import { onMount } from 'svelte';
   import NoteEditor from '$lib/components/NoteEditor.svelte';
+  import FreeformNoteEditor from '$lib/components/FreeformNoteEditor.svelte';
+  import UnknownNoteKindError from '$lib/components/UnknownNoteKindError.svelte';
   import WindowControls from '$lib/components/WindowControls.svelte';
-  import { loadNote } from '$lib/api';
+  import { isKnownNoteKind, loadNote, type NoteKind } from '$lib/api';
 
   interface Props {
     noteId: string;
@@ -17,11 +24,17 @@
 
   let title = $state('Note');
   let exists = $state<boolean | null>(null);
+  // Captured at load time so we don't re-derive on every paint and so
+  // a later sync-pulled mutation can't swap the editor out from under
+  // the user (the editor itself merges incoming yrs_state — its kind
+  // is immutable for the panel's lifetime).
+  let noteKind = $state<NoteKind | string | null>(null);
 
   onMount(async () => {
     try {
       const note = await loadNote(noteId);
       title = note.title;
+      noteKind = note.note_kind;
       exists = true;
     } catch (err) {
       console.warn('[popout] note not found', noteId, err);
@@ -47,13 +60,22 @@
   <main class="min-h-0 flex-1 overflow-hidden fullscreen-note">
     {#if exists === null}
       <p class="p-4 text-sm text-muted-foreground">Loading…</p>
-    {:else if exists}
-      <NoteEditor {noteId} />
-    {:else}
+    {:else if !exists}
       <div class="flex h-full items-center justify-center p-6 text-sm text-muted-foreground">
         Note <code class="mx-1 rounded bg-muted px-1.5 py-0.5">{noteId}</code>
         couldn't be found in the database.
       </div>
+    {:else if noteKind === 'freeform'}
+      <FreeformNoteEditor {noteId} />
+    {:else if noteKind === 'markdown'}
+      <NoteEditor {noteId} />
+    {:else if !isKnownNoteKind(noteKind ?? undefined)}
+      <UnknownNoteKindError {noteId} />
+    {:else}
+      <!-- Defensive: a future known kind that we added to the union
+           but haven't wired a dispatch for. Treat as unknown so we
+           never silently render the wrong editor. -->
+      <UnknownNoteKindError {noteId} />
     {/if}
   </main>
 </div>

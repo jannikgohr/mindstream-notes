@@ -15,9 +15,29 @@ import { mockApi } from './mock-store';
  * introducing a new editor variant.
  *
  *   markdown — Crepe / y-prosemirror text editor (the original kind)
- *   freeform — drawing canvas backed by a Y.Array of strokes
+ *   freeform — drawing canvas backed by tldraw + Y.Doc
  */
 export type NoteKind = 'markdown' | 'freeform';
+
+/**
+ * The full set of editor kinds this app version knows how to render.
+ * If a synced note arrives with a kind not in this list — typically
+ * because a newer app version on another device introduced it —
+ * dispatch sites render `UnknownNoteKindError` instead of silently
+ * falling back to the markdown editor, which would corrupt the
+ * note's `body` on the next save.
+ *
+ * Keep this in sync with the `NoteKind` union above and with the
+ * matching `default_note_kind` / supported list in
+ * src-tauri/src/notes/mod.rs.
+ */
+export const KNOWN_NOTE_KINDS = ['markdown', 'freeform'] as const;
+
+/** Narrows an arbitrary string (e.g. from a remote-synced row) into
+ *  the typed `NoteKind` union. */
+export function isKnownNoteKind(kind: string | undefined | null): kind is NoteKind {
+  return typeof kind === 'string' && (KNOWN_NOTE_KINDS as readonly string[]).includes(kind);
+}
 
 export interface NoteSummary {
   id: string;
