@@ -81,7 +81,16 @@
     "editor.toolbar.advanced.code": "Code block",
     "editor.toolbar.advanced.table": "Table",
     "editor.toolbar.advanced.math": "Math",
-    "editor.toolbar.more": "More"
+    "editor.toolbar.more": "More",
+
+    "editor.status.live": "Live collab connected",
+    "editor.status.offline": "Live collab disconnected — reconnecting",
+    "editor.status.editing": "Editing…",
+    "editor.status.saving": "Saving…",
+    "editor.status.saved": "Saved",
+    "editor.status.error": "Save failed",
+    "editor.status.readonly": "Read-only — in trash",
+    "editor.popout": "Open in new window"
   },
   "categories": {
     "account": { "label": "Account & Sync", "description": "Connect to a managed or self-hosted server, manage devices and sync." },
