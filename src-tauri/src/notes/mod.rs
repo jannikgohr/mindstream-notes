@@ -340,6 +340,23 @@ pub fn purge(conn: &Connection, id: &str) -> AppResult<()> {
     if let Some(uid) = etebase_uid {
         crate::sync::queue_tombstone(conn, "note", &uid)?;
     }
+
+    // Tombstone every asset that's been pushed for this note BEFORE the
+    // DELETE — once the FK ON DELETE CASCADE fires, the asset rows are
+    // gone and we can't recover their etebase_uids. Locally-only assets
+    // (never pushed, etebase_uid IS NULL) need no server delete; the
+    // cascade handles them.
+    {
+        let mut stmt = conn.prepare(
+            "SELECT etebase_uid FROM assets
+             WHERE owning_note_id = ?1 AND etebase_uid IS NOT NULL",
+        )?;
+        let rows = stmt.query_map(params![id], |r| r.get::<_, String>(0))?;
+        for uid in rows {
+            crate::sync::queue_tombstone(conn, "asset", &uid?)?;
+        }
+    }
+
     let n = conn.execute("DELETE FROM notes WHERE id = ?1", params![id])?;
     if n == 0 {
         return Err(AppError::NotFound(format!("note {id}")));
@@ -771,5 +788,64 @@ mod tests {
             Some(coll.id.as_str()),
             "note should still belong to its (now trashed) folder"
         );
+    }
+
+    #[test]
+    fn purging_note_with_synced_assets_queues_asset_tombstones() {
+        // When a freeform note is purged, every asset row owned by that
+        // note has been queued as a server-side delete BEFORE the
+        // ON DELETE CASCADE wipes the asset rows. Without this, synced
+        // assets would linger on the Etebase server forever after the
+        // note that owned them is gone.
+        let db = open_memory_for_tests();
+        let note = empty_note(&db, None);
+
+        // Two assets: one previously pushed (has etebase_uid), one local
+        // only. Only the pushed one should produce a tombstone.
+        db.with_conn(|c| {
+            c.execute(
+                "INSERT INTO assets(id, owning_note_id, mime_type, bytes,
+                                    size, created, modified, etebase_uid)
+                 VALUES (?1, ?2, 'image/png', X'89504E47', 4,
+                         '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z',
+                         'eb-uid-synced')",
+                params!["asset_synced", note.summary.id],
+            )?;
+            c.execute(
+                "INSERT INTO assets(id, owning_note_id, mime_type, bytes,
+                                    size, created, modified, etebase_uid)
+                 VALUES (?1, ?2, 'image/png', X'89504E47', 4,
+                         '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z',
+                         NULL)",
+                params!["asset_local_only", note.summary.id],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+        db.with_conn(|c| purge(c, &note.summary.id)).unwrap();
+
+        let tombstones: Vec<String> = db
+            .with_conn(|c| {
+                let mut stmt = c.prepare(
+                    "SELECT etebase_uid FROM tombstones WHERE kind = 'asset' ORDER BY etebase_uid",
+                )?;
+                let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+                Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+            })
+            .unwrap();
+        assert_eq!(
+            tombstones,
+            vec!["eb-uid-synced".to_string()],
+            "only the previously-pushed asset should produce a tombstone"
+        );
+
+        // And the cascade should have happened.
+        let any_assets_left: i64 = db
+            .with_conn(|c| {
+                Ok(c.query_row("SELECT COUNT(*) FROM assets", [], |r| r.get(0))?)
+            })
+            .unwrap();
+        assert_eq!(any_assets_left, 0, "FK cascade should wipe asset rows");
     }
 }

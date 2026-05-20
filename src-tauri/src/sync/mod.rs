@@ -39,11 +39,14 @@ use crate::error::{AppError, AppResult};
 
 const COLLECTION_TYPE_NOTES: &str = "mindstream.notes";
 const COLLECTION_TYPE_FOLDERS: &str = "mindstream.folders";
+const COLLECTION_TYPE_ASSETS: &str = "mindstream.assets";
 const ITEM_TYPE_NOTE: &str = "ms-md-note";
 const ITEM_TYPE_FOLDER: &str = "ms-md-folder";
+const ITEM_TYPE_ASSET: &str = "ms-md-asset";
 
 const KIND_NOTES: &str = "notes";
 const KIND_FOLDERS: &str = "folders";
+const KIND_ASSETS: &str = "assets";
 
 const PAYLOAD_SCHEMA: u32 = 2;
 
@@ -105,6 +108,36 @@ struct FolderPayload {
     position: i64,
 }
 
+/// Wire format for a drawing-asset Etebase Item.
+///
+/// `id` is the same client-generated UUID the SQLite row uses and that
+/// the tldraw store records as `asset:mindstream/<id>` — stable across
+/// devices. `etebase_uid` doesn't appear here because Etebase already
+/// owns it (it's the Item.uid()); we only need it on the local row for
+/// dirty-tracking and tombstone routing.
+///
+/// `owning_note_id` carries the FK back to the note so a fresh device
+/// can stitch pulled assets to their drawings. If the note hasn't been
+/// pulled yet (small race window between notes-pull and assets-pull),
+/// apply_asset skips the row without advancing the stoken — the next
+/// sync retries it once the note exists locally.
+///
+/// `bytes` are the raw file payload. Etebase encrypts the whole item
+/// content end-to-end with the collection key, so the relay only sees
+/// ciphertext — same E2EE story as notes.
+#[derive(Debug, Serialize, Deserialize)]
+struct AssetPayload {
+    schema: u32,
+    id: String,
+    owning_note_id: String,
+    mime_type: String,
+    #[serde(with = "serde_bytes")]
+    bytes: Vec<u8>,
+    size: i64,
+    created: String,
+    modified: String,
+}
+
 /// Result reported back to the UI after a sync attempt.
 #[derive(Debug, Default, Serialize)]
 pub struct SyncReport {
@@ -112,6 +145,8 @@ pub struct SyncReport {
     pub folders_pushed: usize,
     pub notes_pulled: usize,
     pub notes_pushed: usize,
+    pub assets_pulled: usize,
+    pub assets_pushed: usize,
     pub conflicts_resolved: usize,
 }
 
@@ -153,6 +188,21 @@ fn run(db: &Db, account: &Account) -> AppResult<SyncReport> {
         .map_err(|e| AppError::InvalidArg(format!("item_manager(notes): {e}")))?;
     pull_notes(db, &notes_im, &mut report)?;
     push_notes(db, &notes_im, &mut report)?;
+
+    // Assets last so notes — and the FK target rows they need — are
+    // already in place when apply_asset tries to upsert. If a brand-new
+    // remote note + its asset land in the same sync, the pull above
+    // populates the note, then this pulls the asset and the FK resolves
+    // cleanly. The narrow race window where a remote creates a note
+    // *between* our notes pull and our assets pull is handled inside
+    // apply_asset (it skips orphan assets and leaves the stoken
+    // unadvanced so the next sync retries).
+    let assets_col = ensure_collection(db, &cm, KIND_ASSETS, COLLECTION_TYPE_ASSETS)?;
+    let assets_im = cm
+        .item_manager(&assets_col)
+        .map_err(|e| AppError::InvalidArg(format!("item_manager(assets): {e}")))?;
+    pull_assets(db, &assets_im, &mut report)?;
+    push_assets(db, &assets_im, &mut report)?;
 
     Ok(report)
 }
@@ -203,6 +253,7 @@ fn ensure_collection(
     meta.set_name(Some(match kind {
         KIND_NOTES => "Mindstream Notes",
         KIND_FOLDERS => "Mindstream Folders",
+        KIND_ASSETS => "Mindstream Assets",
         _ => "Mindstream",
     }))
     .set_mtime(Some(now_unix_ms()));
@@ -288,6 +339,161 @@ fn pull_notes(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult<(
         save_stoken(db, KIND_NOTES, new_stoken.as_deref())?;
     }
     Ok(())
+}
+
+/// Pull drawing-asset items from the assets collection into local SQLite.
+///
+/// Mirrors pull_notes: stoken-paged iteration, apply_asset per item. The
+/// one extra wrinkle is that an asset row carries a FK to its owning
+/// note — if the note isn't local yet (a race window where the note was
+/// created on the remote between our notes pull and this assets pull),
+/// apply_asset returns "orphaned" and we set `had_orphans` so we don't
+/// advance the stoken. Next sync's notes pull picks up the missing
+/// note, then this re-runs from the same stoken and the previously-
+/// orphaned assets land cleanly.
+fn pull_assets(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult<()> {
+    let stoken = load_stoken(db, KIND_ASSETS)?;
+    let mut new_stoken = stoken.clone();
+    let mut had_orphans = false;
+    loop {
+        let mut opts = FetchOptions::new();
+        opts = opts.stoken(new_stoken.as_deref());
+        let resp = im
+            .list(Some(&opts))
+            .map_err(|e| AppError::InvalidArg(format!("list assets: {e}")))?;
+        for item in resp.data() {
+            match apply_asset(db, item)? {
+                ApplyAssetOutcome::Applied => {
+                    report.assets_pulled += 1;
+                }
+                ApplyAssetOutcome::Orphaned => {
+                    had_orphans = true;
+                }
+                ApplyAssetOutcome::Skipped => {}
+            }
+        }
+        new_stoken = resp.stoken().map(str::to_string).or(new_stoken);
+        if resp.done() {
+            break;
+        }
+    }
+    if !had_orphans && new_stoken != stoken {
+        save_stoken(db, KIND_ASSETS, new_stoken.as_deref())?;
+    }
+    Ok(())
+}
+
+enum ApplyAssetOutcome {
+    /// Row was written (insert or update).
+    Applied,
+    /// Asset references a note we don't have yet — keep the stoken at
+    /// its previous value so the next sync retries.
+    Orphaned,
+    /// Delete tombstone or missing-content item — nothing to do, but no
+    /// reason to pin the stoken.
+    Skipped,
+}
+
+/// Apply one pulled asset item to local SQLite. Returns the outcome so
+/// the caller can decide whether to advance the stoken (orphans pin it).
+fn apply_asset(db: &Db, item: &Item) -> AppResult<ApplyAssetOutcome> {
+    if item.is_deleted() {
+        db.with_conn(|c| {
+            c.execute(
+                "DELETE FROM assets WHERE etebase_uid = ?1",
+                params![item.uid()],
+            )?;
+            Ok(())
+        })?;
+        return Ok(ApplyAssetOutcome::Skipped);
+    }
+    if item.is_missing_content() {
+        return Ok(ApplyAssetOutcome::Skipped);
+    }
+    let raw = item
+        .content()
+        .map_err(|e| AppError::InvalidArg(format!("asset content: {e}")))?;
+    let payload: AssetPayload = rmp_serde::from_slice(&raw)
+        .map_err(|e| AppError::InvalidArg(format!("asset msgpack: {e}")))?;
+    let etag = item.etag().to_string();
+    let uid = item.uid().to_string();
+
+    db.with_conn_mut(|c| {
+        let tx = c.transaction()?;
+
+        // FK gate: skip orphan assets rather than aborting the whole
+        // pull. The orphan flag in pull_assets keeps the stoken pinned
+        // so we retry on the next sync after the missing note arrives.
+        let note_exists: bool = tx
+            .query_row(
+                "SELECT 1 FROM notes WHERE id = ?1",
+                params![payload.owning_note_id],
+                |_| Ok(true),
+            )
+            .optional()?
+            .unwrap_or(false);
+        if !note_exists {
+            log::debug!(
+                "[sync] asset {} references missing note {}; deferring",
+                payload.id,
+                payload.owning_note_id
+            );
+            tx.commit()?;
+            return Ok(ApplyAssetOutcome::Orphaned);
+        }
+
+        let exists = tx
+            .query_row(
+                "SELECT 1 FROM assets WHERE id = ?1",
+                params![payload.id],
+                |_| Ok(true),
+            )
+            .optional()?
+            .is_some();
+
+        if exists {
+            // Asset rows are big blobs, not CRDTs — no merge to do.
+            // Last-write-wins: take the remote bytes verbatim and
+            // clear dirty so we don't immediately re-push.
+            tx.execute(
+                "UPDATE assets
+                 SET owning_note_id = ?1, mime_type = ?2, bytes = ?3,
+                     size = ?4, modified = ?5, etebase_uid = ?6,
+                     etebase_etag = ?7, dirty = 0
+                 WHERE id = ?8",
+                params![
+                    payload.owning_note_id,
+                    payload.mime_type,
+                    payload.bytes,
+                    payload.size,
+                    payload.modified,
+                    uid,
+                    etag,
+                    payload.id,
+                ],
+            )?;
+        } else {
+            tx.execute(
+                "INSERT INTO assets(id, owning_note_id, mime_type, bytes,
+                                    size, created, modified, etebase_uid,
+                                    etebase_etag, dirty)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0)",
+                params![
+                    payload.id,
+                    payload.owning_note_id,
+                    payload.mime_type,
+                    payload.bytes,
+                    payload.size,
+                    payload.created,
+                    payload.modified,
+                    uid,
+                    etag,
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(ApplyAssetOutcome::Applied)
+    })
 }
 
 /// Apply one pulled folder item to the local DB.
@@ -751,6 +957,85 @@ fn push_notes(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult<(
     drain_tombstones(db, im, "note")
 }
 
+/// Upload dirty asset rows to the assets Etebase collection.
+///
+/// Mirrors push_notes but simpler: no key/encryption metadata to roll
+/// over (Etebase's per-collection key handles E2EE itself), and no
+/// schema flip-flop (assets have one payload version for now). After
+/// the batch transaction we clear `dirty` and stamp the assigned
+/// etebase_uid / etag on each local row.
+///
+/// Drains the asset tombstone queue at the end — entries are added by
+/// notes::purge when a freeform note with synced assets gets purged.
+fn push_assets(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult<()> {
+    let dirty = load_dirty_assets(db)?;
+    if dirty.is_empty() {
+        return drain_tombstones(db, im, "asset");
+    }
+
+    let mut prepared: Vec<(Item, String)> = Vec::with_capacity(dirty.len());
+    for row in &dirty {
+        let payload = AssetPayload {
+            schema: 1,
+            id: row.id.clone(),
+            owning_note_id: row.owning_note_id.clone(),
+            mime_type: row.mime_type.clone(),
+            bytes: row.bytes.clone(),
+            size: row.size,
+            created: row.created.clone(),
+            modified: row.modified.clone(),
+        };
+        let bytes = rmp_serde::to_vec_named(&payload)
+            .map_err(|e| AppError::InvalidArg(format!("encode asset: {e}")))?;
+        let mut meta = ItemMetadata::new();
+        meta.set_item_type(Some(ITEM_TYPE_ASSET))
+            // Asset items don't have a human-facing name; use the id
+            // (matches the URL the tldraw record carries) so the
+            // server-side metadata is at least debuggable.
+            .set_name(Some(row.id.clone()))
+            .set_mtime(Some(now_unix_ms()));
+        let item = if let Some(uid) = &row.etebase_uid {
+            let mut existing = im
+                .fetch(uid, None)
+                .map_err(|e| AppError::InvalidArg(format!("fetch asset {uid}: {e}")))?;
+            existing
+                .set_meta(&meta)
+                .map_err(|e| AppError::InvalidArg(format!("set_meta asset: {e}")))?;
+            existing
+                .set_content(&bytes)
+                .map_err(|e| AppError::InvalidArg(format!("set_content asset: {e}")))?;
+            existing
+        } else {
+            im.create(&meta, &bytes)
+                .map_err(|e| AppError::InvalidArg(format!("create asset item: {e}")))?
+        };
+        prepared.push((item, row.id.clone()));
+    }
+
+    let local_ids: Vec<String> = prepared.iter().map(|(_, id)| id.clone()).collect();
+    let mut items: Vec<Item> = prepared.into_iter().map(|(i, _)| i).collect();
+    transact_or_resolve(im, &mut items, &mut report.conflicts_resolved)
+        .map_err(|e| AppError::InvalidArg(format!("transaction assets: {e}")))?;
+
+    let pushed = items.len();
+    db.with_conn_mut(|c| {
+        let tx = c.transaction()?;
+        for (item, local_id) in items.iter().zip(local_ids.iter()) {
+            tx.execute(
+                "UPDATE assets
+                 SET etebase_uid = ?1, etebase_etag = ?2, dirty = 0
+                 WHERE id = ?3",
+                params![item.uid(), item.etag(), local_id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    })?;
+    report.assets_pushed += pushed;
+
+    drain_tombstones(db, im, "asset")
+}
+
 /// Try a transaction; on `Error::Conflict`, refetch the colliding items,
 /// CRDT-merge any note bodies, and retry. Bounded retry count so a
 /// pathological case doesn't loop forever.
@@ -953,6 +1238,40 @@ fn load_dirty_notes(db: &Db) -> AppResult<Vec<DirtyNote>> {
             n
         })
         .collect())
+}
+
+struct DirtyAsset {
+    id: String,
+    owning_note_id: String,
+    mime_type: String,
+    bytes: Vec<u8>,
+    size: i64,
+    created: String,
+    modified: String,
+    etebase_uid: Option<String>,
+}
+
+fn load_dirty_assets(db: &Db) -> AppResult<Vec<DirtyAsset>> {
+    db.with_conn(|c| {
+        let mut stmt = c.prepare(
+            "SELECT id, owning_note_id, mime_type, bytes, size,
+                    created, modified, etebase_uid
+             FROM assets WHERE dirty = 1",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(DirtyAsset {
+                id: r.get(0)?,
+                owning_note_id: r.get(1)?,
+                mime_type: r.get(2)?,
+                bytes: r.get(3)?,
+                size: r.get(4)?,
+                created: r.get(5)?,
+                modified: r.get(6)?,
+                etebase_uid: r.get(7)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    })
 }
 
 // ---------- sync_state helpers ----------

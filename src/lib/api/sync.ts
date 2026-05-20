@@ -14,6 +14,8 @@ export interface SyncReport {
   folders_pushed: number;
   notes_pulled: number;
   notes_pushed: number;
+  assets_pulled: number;
+  assets_pushed: number;
   conflicts_resolved: number;
 }
 
