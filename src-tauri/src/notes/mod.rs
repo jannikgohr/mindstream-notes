@@ -201,7 +201,15 @@ pub fn create(conn: &Connection, input: CreateNote) -> AppResult<Note> {
         "INSERT INTO notes(id, parent_collection_id, title, body, position,
                             created, modified, dirty, note_kind)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, 1, ?7)",
-        params![id, input.parent_collection_id, title, body, position, now, note_kind],
+        params![
+            id,
+            input.parent_collection_id,
+            title,
+            body,
+            position,
+            now,
+            note_kind
+        ],
     )?;
     load(conn, &id)
 }
@@ -842,9 +850,7 @@ mod tests {
 
         // And the cascade should have happened.
         let any_assets_left: i64 = db
-            .with_conn(|c| {
-                Ok(c.query_row("SELECT COUNT(*) FROM assets", [], |r| r.get(0))?)
-            })
+            .with_conn(|c| Ok(c.query_row("SELECT COUNT(*) FROM assets", [], |r| r.get(0))?))
             .unwrap();
         assert_eq!(any_assets_left, 0, "FK cascade should wipe asset rows");
     }
