@@ -42,6 +42,7 @@
   import { tree } from '$lib/stores/tree.svelte';
   import { getSettingValue } from '$lib/settings/store.svelte';
   import { CollabProvider } from '$lib/sync/collab-provider';
+  import { listen } from '$lib/api/events';
 
   interface Props {
     noteId: string;
@@ -110,6 +111,12 @@
   let lastSeenPushed = false;
   let collabReady = false;
   let unsubSession: (() => void) | null = null;
+  /** Tauri sync-completed subscription. Same idea as in NoteEditor:
+   *  when sync pulls a fresh yrs_state for THIS note, we merge it into
+   *  the open Y.Doc via Y.applyUpdate (Yjs CRDT-safe). Asset
+   *  invalidation for tldraw lives inside the React island so it can
+   *  re-put store records directly. */
+  let unsubSync: (() => void) | null = null;
 
   onMount(async () => {
     if (!mountEl) return;
@@ -190,6 +197,25 @@
         void setupCollabProvider();
       });
 
+      // Merge fresh yrs_state into the live Y.Doc whenever sync pulls
+      // this note. Same Yjs CRDT-merge story as NoteEditor — local
+      // edits stay, pulled state converges, re-applying an already-
+      // known update is a no-op. The tldraw store auto-reflects the
+      // resulting Y.Doc changes via the bridge in tldraw-yjs.
+      void listen('sync-completed', async (payload) => {
+        if (!payload.notes_pulled_ids.includes(noteId) || !yDoc) return;
+        try {
+          const fresh = await loadNote(noteId);
+          if (yDoc && fresh.yrs_state.length > 0) {
+            Y.applyUpdate(yDoc, new Uint8Array(fresh.yrs_state));
+          }
+        } catch (err) {
+          console.warn('[FreeformNoteEditor] sync-completed merge failed', err);
+        }
+      }).then((unlisten) => {
+        unsubSync = unlisten;
+      });
+
       loading = false;
     } catch (err) {
       loadError = err instanceof Error ? err.message : String(err);
@@ -260,6 +286,8 @@
   onDestroy(() => {
     if (saveTimer) clearTimeout(saveTimer);
     unsubSession?.();
+    unsubSync?.();
+    unsubSync = null;
     unsubSession = null;
     saveReady = false;
 
