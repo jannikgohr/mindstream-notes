@@ -1,0 +1,99 @@
+# CI for every push / PR. Two parallel job groups:
+#   - js   : svelte-check + vitest + vite build, on all three desktop OSes.
+#   - rust : `cargo test` for the desktop target on all three desktop OSes.
+#
+# Android isn't tested here — its build matrix lives in release.yml because
+# it needs the NDK (~1.5 GB) and a signing keystore. If you want Android
+# smoke-checks on PR, add a `cargo check --target aarch64-linux-android`
+# job that reuses the libsodium prebuilts under src-tauri/prebuilt-binaries.
+
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel superseded runs on the same branch — saves minutes on rapid pushes.
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  js:
+    name: JS check + test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      # `pnpm install` runs the postinstall that generates
+      # src-tauri/.cargo/config.toml. On non-Android hosts it just prints a
+      # warning (the libsodium prebuilts aren't needed), which is fine.
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm check
+      - run: pnpm test
+      - run: pnpm build
+
+  rust:
+    name: Cargo test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # Tauri 2's desktop bundle pulls webkit2gtk-4.1 + libsoup-3.0; the
+      # secret-service keyring backend uses the `vendored` feature so we
+      # don't need libdbus headers, but the other GUI deps are still
+      # required even for `cargo test` because tauri-build runs.
+      - name: Install Linux system deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libsoup-3.0-dev \
+            libgtk-3-dev \
+            librsvg2-dev \
+            libayatana-appindicator3-dev \
+            libssl-dev \
+            build-essential curl wget file
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      # postinstall generates .cargo/config.toml; without it the
+      # [target.*-linux-android.sodium] sections are missing but desktop
+      # targets don't care.
+      - run: pnpm install --frozen-lockfile
+
+      - name: cargo test
+        working-directory: src-tauri
+        run: cargo test --locked

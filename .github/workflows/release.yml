@@ -1,0 +1,393 @@
+# Release pipeline — triggered by pushing a `v*.*.*` tag, or manually from
+# the Actions tab. Produces:
+#
+#   - Desktop bundles for Windows (.msi + .exe), Linux (.deb + .AppImage),
+#     and macOS (universal .dmg + .app), all signed with the Tauri updater
+#     key so the in-app "Check for updates" flow accepts them.
+#   - latest.json (updater manifest), auto-uploaded by tauri-action.
+#   - Android .aab (Play Store) + universal .apk (sideload), signed with
+#     the upload keystore.
+#
+# All artefacts land on a single draft GitHub Release; flip the draft to
+# published once you've smoke-tested the binaries.
+#
+# Required repository secrets (Settings → Secrets and variables → Actions):
+#
+#   TAURI_SIGNING_PRIVATE_KEY           contents of ~/.tauri/mindstream-notes.key
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  passphrase chosen at `tauri signer generate`
+#   ANDROID_KEYSTORE_BASE64             `base64 -w0 keystore.jks`
+#   ANDROID_KEYSTORE_PASSWORD           store password
+#   ANDROID_KEY_ALIAS                   key alias inside the store (e.g. `key2`)
+#   ANDROID_KEY_PASSWORD                key password (often == store password)
+#
+# Recommended: put the four signing secrets in a GitHub Environment named
+# `release` with required reviewers, and add `environment: release` to
+# every job below. That gates the signing keys behind a manual approval.
+
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+
+permissions:
+  contents: write   # needed to create the release + upload assets
+
+jobs:
+  # Single job that creates the draft release so the matrix builds below
+  # can all upload into the same `releaseId`. Without this, parallel
+  # tauri-action runs race each other creating the same release.
+  create-release:
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.create.outputs.result }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          else
+            # Manual dispatch — fall back to package.json's version.
+            v=$(node -p "require('./package.json').version")
+            echo "tag=v$v" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create draft release
+        id: create
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tag = '${{ steps.version.outputs.tag }}';
+            const { data } = await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              tag_name: tag,
+              name: tag,
+              draft: true,
+              prerelease: false,
+              body: `Mindstream Notes ${tag}\n\nSee assets below.`,
+            });
+            return data.id;
+
+  desktop:
+    name: Desktop bundle (${{ matrix.os }})
+    needs: create-release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Universal .dmg covers both Apple Silicon + Intel from one
+          # build, at the cost of ~2x compile time. Both rust targets are
+          # added below for tauri-action to find.
+          - os: macos-latest
+            args: '--target universal-apple-darwin'
+            rust-targets: 'aarch64-apple-darwin,x86_64-apple-darwin'
+          - os: ubuntu-latest
+            args: ''
+            rust-targets: ''
+          - os: windows-latest
+            args: ''
+            rust-targets: ''
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets }}
+
+      - name: Install Linux system deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libsoup-3.0-dev \
+            libgtk-3-dev \
+            librsvg2-dev \
+            libayatana-appindicator3-dev \
+            libssl-dev \
+            build-essential curl wget file
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build, sign, and upload
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN:                       ${{ secrets.GITHUB_TOKEN }}
+          # Updater signing — see Settings → Secrets above. tauri-action
+          # injects these into `tauri build` automatically; the pubkey
+          # in tauri.conf.json must be the matching .pub file.
+          TAURI_SIGNING_PRIVATE_KEY:          ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          releaseId: ${{ needs.create-release.outputs.release_id }}
+          args: ${{ matrix.args }}
+          # Each matrix job's latest.json would only list its own platform
+          # and clobber the others on upload — leaving only the last
+          # finisher's platform discoverable to the updater. The
+          # publish-updater-manifest job below builds one merged manifest
+          # from the .sig assets after all platforms finish.
+          includeUpdaterJson: false
+
+  android:
+    name: Android bundle (AAB + APK)
+    needs: create-release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-36 build-tools;36.0.0'
+
+      - name: Set up NDK
+        id: ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r26d
+          add-to-path: false
+
+      - name: Export NDK env
+        run: |
+          echo "ANDROID_NDK_ROOT=${{ steps.ndk.outputs.ndk-path }}" >> "$GITHUB_ENV"
+          echo "NDK_HOME=${{ steps.ndk.outputs.ndk-path }}"        >> "$GITHUB_ENV"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: pnpm install --frozen-lockfile
+
+      # Decode the keystore + write keystore.properties so gradle's
+      # signingConfigs.release block in app/build.gradle.kts picks it up.
+      # Keystore lives under $RUNNER_TEMP so it's wiped automatically and
+      # doesn't end up in any uploaded artifact.
+      - name: Provision Android signing
+        env:
+          KEYSTORE_B64:       ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD:  ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS:          ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD:       ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYSTORE_PATH="$RUNNER_TEMP/upload-keystore.jks"
+          echo "$KEYSTORE_B64" | base64 -d > "$KEYSTORE_PATH"
+          # NOTE: the gradle script (see app/build.gradle.kts) reads a
+          # single `password=` for both store + key passwords. If your
+          # keystore uses different passwords, split the property into
+          # `storePassword=` / `keyPassword=` here and adjust the gradle
+          # script to match.
+          cat > src-tauri/gen/android/keystore.properties <<EOF
+          password=$KEY_PASSWORD
+          keyAlias=$KEY_ALIAS
+          storeFile=$KEYSTORE_PATH
+          EOF
+
+      - name: Build APK + AAB
+        env:
+          TAURI_SIGNING_PRIVATE_KEY:          ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: pnpm tauri android build --apk --aab
+
+      - name: Upload Android artefacts to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          draft: true
+          fail_on_unmatched_files: true
+          files: |
+            src-tauri/gen/android/app/build/outputs/apk/universal/release/*.apk
+            src-tauri/gen/android/app/build/outputs/bundle/universalRelease/*.aab
+
+  # Build the updater manifest *after* all desktop platforms finish.
+  #
+  # Why a separate job: each desktop matrix run produces its own
+  # latest.json listing only its single platform. They all upload to the
+  # same release-asset filename, so the last finisher overwrites the
+  # others and only one platform ends up update-able. tauri-action's
+  # `includeUpdaterJson: false` (above) suppresses those per-platform
+  # uploads; this job walks the resulting .sig assets and produces one
+  # merged manifest covering all three desktops.
+  #
+  # The end-user URL pinned in tauri.conf.json's `updater.endpoints` is
+  #   https://github.com/<owner>/<repo>/releases/latest/download/latest.json
+  # which only resolves once the release leaves draft. Publish the draft
+  # from the GitHub UI after smoke-testing the bundles. (Auto-publishing
+  # is left off on purpose: a broken bundle in `latest` would silently
+  # push to every installed user.)
+  publish-updater-manifest:
+    name: Build + upload latest.json
+    needs: [create-release, desktop]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          else
+            # Manual dispatch — read version from package.json. Must match
+            # the tag used by create-release above.
+            v=$(curl -fsSL "https://raw.githubusercontent.com/$GITHUB_REPOSITORY/${GITHUB_SHA}/package.json" | jq -r .version)
+            echo "tag=v$v" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Assemble latest.json from release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG:      ${{ steps.tag.outputs.tag }}
+          REPO:     ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          # `gh release view` works against draft releases when authed with
+          # repo write scope (GITHUB_TOKEN has it via `permissions: contents: write`).
+          ASSETS_JSON=$(gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets')
+
+          # Pull the signature blob for a bundle. The .sig is small (~ 1 KB),
+          # ASCII base64 — safe to inline into the manifest.
+          read_sig() {
+            local sig_name="$1"
+            mkdir -p sigs
+            gh release download "$TAG" --repo "$REPO" \
+              --pattern "$sig_name" --dir sigs --clobber >/dev/null
+            cat "sigs/$sig_name"
+          }
+
+          # Pick the first asset matching $1 whose name does *not* end in .sig.
+          # Returns "name" or empty.
+          find_bundle_name() {
+            local pattern="$1"
+            jq -r --arg p "$pattern" \
+              '[.[] | select(.name | test($p; "i")) | select(.name | endswith(".sig") | not)][0].name // empty' \
+              <<<"$ASSETS_JSON"
+          }
+          # Companion: find the .sig that matches the same pattern.
+          find_sig_name() {
+            local pattern="$1"
+            jq -r --arg p "$pattern" \
+              '[.[] | select(.name | test($p; "i")) | select(.name | endswith(".sig"))][0].name // empty' \
+              <<<"$ASSETS_JSON"
+          }
+
+          # GitHub release-asset URLs replace spaces with dots in `name`, so
+          # constructing the public download URL is straightforward.
+          asset_url() {
+            local name="$1"
+            printf 'https://github.com/%s/releases/download/%s/%s' \
+              "$REPO" "$TAG" "$name"
+          }
+
+          # Build the platforms object. Tauri 2 update-target keys:
+          #   darwin-{x86_64,aarch64}  — macOS (universal .app.tar.gz feeds both)
+          #   linux-x86_64             — Linux AppImage
+          #   windows-x86_64           — Windows NSIS .exe (preferred) or .msi
+          PLATFORMS='{}'
+
+          # --- macOS (universal .app.tar.gz) ---
+          MAC_BUNDLE=$(find_bundle_name '\.app\.tar\.gz$')
+          if [[ -n "$MAC_BUNDLE" ]]; then
+            MAC_SIG_NAME=$(find_sig_name '\.app\.tar\.gz\.sig$')
+            MAC_SIG=$(read_sig "$MAC_SIG_NAME")
+            MAC_URL=$(asset_url "$MAC_BUNDLE")
+            PLATFORMS=$(jq \
+              --arg url "$MAC_URL" --arg sig "$MAC_SIG" \
+              '. + {
+                "darwin-x86_64":  {url: $url, signature: $sig},
+                "darwin-aarch64": {url: $url, signature: $sig}
+              }' <<<"$PLATFORMS")
+          else
+            echo "::warning::no .app.tar.gz found — macOS updates will be skipped"
+          fi
+
+          # --- Linux AppImage ---
+          LIN_BUNDLE=$(find_bundle_name '\.AppImage$')
+          if [[ -n "$LIN_BUNDLE" ]]; then
+            LIN_SIG_NAME=$(find_sig_name '\.AppImage\.sig$')
+            LIN_SIG=$(read_sig "$LIN_SIG_NAME")
+            LIN_URL=$(asset_url "$LIN_BUNDLE")
+            PLATFORMS=$(jq \
+              --arg url "$LIN_URL" --arg sig "$LIN_SIG" \
+              '. + {"linux-x86_64": {url: $url, signature: $sig}}' \
+              <<<"$PLATFORMS")
+          else
+            echo "::warning::no .AppImage found — Linux updates will be skipped"
+          fi
+
+          # --- Windows (NSIS .exe preferred, fall back to .msi) ---
+          WIN_BUNDLE=$(find_bundle_name '-setup\.exe$')
+          WIN_SIG_NAME=$(find_sig_name '-setup\.exe\.sig$')
+          if [[ -z "$WIN_BUNDLE" ]]; then
+            WIN_BUNDLE=$(find_bundle_name '\.msi$')
+            WIN_SIG_NAME=$(find_sig_name '\.msi\.sig$')
+          fi
+          if [[ -n "$WIN_BUNDLE" ]]; then
+            WIN_SIG=$(read_sig "$WIN_SIG_NAME")
+            WIN_URL=$(asset_url "$WIN_BUNDLE")
+            PLATFORMS=$(jq \
+              --arg url "$WIN_URL" --arg sig "$WIN_SIG" \
+              '. + {"windows-x86_64": {url: $url, signature: $sig}}' \
+              <<<"$PLATFORMS")
+          else
+            echo "::warning::no .exe / .msi found — Windows updates will be skipped"
+          fi
+
+          if [[ "$(jq 'length' <<<"$PLATFORMS")" == "0" ]]; then
+            echo "::error::no signed bundles found on release $TAG — aborting manifest"
+            exit 1
+          fi
+
+          jq -n \
+            --arg version "$TAG" \
+            --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" \
+            --arg notes "Mindstream Notes $TAG — see release page for changelog." \
+            --argjson platforms "$PLATFORMS" \
+            '{version: $version, notes: $notes, pub_date: $pub_date, platforms: $platforms}' \
+            > latest.json
+
+          echo "--- latest.json ---"
+          cat latest.json
+
+      - name: Upload latest.json to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG:      ${{ steps.tag.outputs.tag }}
+          REPO:     ${{ github.repository }}
+        # --clobber so re-runs of this job (e.g. after a Windows-only
+        # retry) refresh the manifest in place instead of failing on
+        # "asset already exists".
+        run: gh release upload "$TAG" latest.json --repo "$REPO" --clobber
