@@ -9,6 +9,7 @@
   import { Button } from '$lib/components/ui/button';
   import NoteEditor from '$lib/components/NoteEditor.svelte';
   import FreeformNoteEditor from '$lib/components/FreeformNoteEditor.svelte';
+  import UnknownNoteKindError from '$lib/components/UnknownNoteKindError.svelte';
   import { tree } from '$lib/stores/tree.svelte';
   import { ui } from '$lib/state.svelte';
   import { isFavourite, setMobileScreen, toggleFavourite } from './state.svelte';
@@ -39,10 +40,17 @@
       {note?.title ?? 'Note'}
     </span>
     {#if noteId}
+      <!-- Snapshot the (non-null inside this block) noteId so the click
+           closure captures a plain `string` instead of the reactive
+           `string | null` $derived. Two benefits: TypeScript's null-
+           flow analyzer is satisfied without an `!` assertion, and the
+           handler can't accidentally fire against a different note if
+           ui.activeNoteId changes between render and click. -->
+      {@const currentNoteId = noteId}
       <Button
         variant="ghost"
         size="icon"
-        onclick={() => toggleFavourite(noteId)}
+        onclick={() => toggleFavourite(currentNoteId)}
         aria-pressed={fav}
         aria-label={fav ? 'Remove from favourites' : 'Add to favourites'}
         title={fav ? 'Remove from favourites' : 'Add to favourites'}
@@ -53,19 +61,29 @@
   </header>
 
   <main class="min-h-0 flex-1 overflow-hidden fullscreen-note">
-    {#if noteId}
-      <!-- Dispatch on note_kind so freeform drawings open in the
-           drawing canvas. Falls back to the markdown editor for the
-           default kind and for unknown future values. -->
-      {#if note?.note_kind === 'freeform'}
-        <FreeformNoteEditor {noteId} />
-      {:else}
-        <NoteEditor {noteId} />
-      {/if}
-    {:else}
+    {#if !noteId}
       <p class="p-6 text-center text-sm text-muted-foreground">
         No note selected.
       </p>
+    {:else if !note}
+      <!-- Tree hasn't hydrated this note yet — show a placeholder
+           instead of falling through to NoteEditor with the wrong
+           kind. The mobile list calls openNote() which awaits the
+           post-create loadTree, but a deep-link / restore-on-launch
+           could race the initial hydration. -->
+      <p class="p-6 text-center text-sm text-muted-foreground">
+        Loading note…
+      </p>
+    {:else if note.note_kind === 'freeform'}
+      <FreeformNoteEditor {noteId} />
+    {:else if note.note_kind === 'markdown'}
+      <NoteEditor {noteId} />
+    {:else}
+      <!-- Schema we don't recognise (a newer-app-version peer pushed
+           a row with a new kind). Refuse rather than silently
+           rendering NoteEditor — saving would overwrite the body
+           with markdown and lose the original content. -->
+      <UnknownNoteKindError {noteId} />
     {/if}
   </main>
 </div>

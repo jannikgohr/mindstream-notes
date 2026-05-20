@@ -90,7 +90,12 @@
     "editor.status.saved": "Saved",
     "editor.status.error": "Save failed",
     "editor.status.readonly": "Read-only — in trash",
-    "editor.popout": "Open in new window"
+    "editor.popout": "Open in new window",
+
+    "editor.unknownKind.title": "Can't open this note",
+    "editor.unknownKind.message": "This note was created with an editor type this version of the app doesn't support. Update to the latest version to open it. The note's content is safe — it hasn't been changed.",
+    "editor.unknownKind.titleLabel": "Note",
+    "editor.unknownKind.kindLabel": "Editor type"
   },
   "categories": {
     "account": { "label": "Account & Sync", "description": "Connect to a managed or self-hosted server, manage devices and sync." },
