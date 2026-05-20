@@ -35,7 +35,20 @@ export interface AssetBridge {
   /** Translate a URL into one the browser can render. URLs we don't
    *  own (network http(s), data:, blob:) are returned unchanged. */
   resolveUrl(url: string): Promise<string> | string;
-  /** Revoke cached blob URLs. Call on editor unmount. */
+  /**
+   * Drop cached blob URLs for the given asset IDs (without the
+   * `asset:mindstream/` prefix). Used when sync has pulled fresh bytes
+   * for an asset that was previously absent — eviction lets the next
+   * resolveUrl call re-fetch from SQLite instead of returning the
+   * stale pass-through. Keeps the bridge alive; revoke-and-clear only
+   * touches matching entries.
+   *
+   * Returns the list of fully-qualified `asset:mindstream/<id>` URLs
+   * that were actually in the resolved cache, so callers can kick the
+   * matching DOM nodes / store records into re-rendering.
+   */
+  invalidate(ids: string[]): string[];
+  /** Revoke ALL cached blob URLs. Call on editor unmount. */
   dispose(): void;
 }
 
@@ -93,6 +106,23 @@ export function createAssetBridge(noteId: string): AssetBridge {
       const p = loadAssetBlob(id, url);
       inflight.set(url, p);
       return p;
+    },
+
+    invalidate(ids: string[]): string[] {
+      const evicted: string[] = [];
+      for (const id of ids) {
+        const url = `${ASSET_SCHEME}${id}`;
+        const blobUrl = resolved.get(url);
+        if (blobUrl) {
+          URL.revokeObjectURL(blobUrl);
+          resolved.delete(url);
+          evicted.push(url);
+        }
+        // Also clear any in-flight resolves so a stale pass-through
+        // promise can't win the race against a fresh fetch.
+        inflight.delete(url);
+      }
+      return evicted;
     },
 
     dispose() {

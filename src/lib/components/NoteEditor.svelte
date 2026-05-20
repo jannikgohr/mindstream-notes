@@ -22,7 +22,12 @@
   import { getSettingValue, settings } from '$lib/settings/store.svelte';
   import { CollabProvider } from '$lib/sync/collab-provider';
   import { isMobile } from '$lib/platform';
-  import { createAssetBridge, type AssetBridge } from '$lib/assets/bridge';
+  import {
+    createAssetBridge,
+    ASSET_SCHEME,
+    type AssetBridge
+  } from '$lib/assets/bridge';
+  import { listen } from '$lib/api/events';
   import EditorToolbar from './editor-toolbar/EditorToolbar.svelte';
   import MobileEditorToolbar from './editor-toolbar/MobileEditorToolbar.svelte';
 
@@ -266,6 +271,25 @@
         void setupCollabProvider();
       });
 
+      // React to background sync completing. Two jobs:
+      //   1. If this note's yrs_state was updated upstream, merge the
+      //      latest disk state into our live Y.Doc. Y.applyUpdate is a
+      //      CRDT-safe merge — local in-flight edits remain, the
+      //      pulled bytes converge with them. Idempotent if the relay
+      //      already delivered the same update.
+      //   2. If any image in the doc resolves to a freshly-pulled
+      //      asset, evict its blob URL from the bridge cache and
+      //      dispatch a no-op `setNodeMarkup` on the matching image
+      //      nodes so the Crepe NodeView re-fires `proxyDomURL` and
+      //      paints the now-present bytes.
+      // Both are best-effort: if the editor is mid-teardown when the
+      // event fires, the no-op'd refs short-circuit safely.
+      void listen('sync-completed', (payload) => {
+        handleSyncCompleted(payload.notes_pulled_ids, payload.assets_pulled_ids);
+      }).then((unlisten) => {
+        unsubSync = unlisten;
+      });
+
       crepeReady = true;
       loading = false;
     } catch (err) {
@@ -276,6 +300,9 @@
   });
 
   let unsubSession: (() => void) | null = null;
+  /** Tauri `sync-completed` subscription. Unwrapped from a Promise<UnlistenFn>
+   *  in onMount, called on destroy. Null until the listener resolves. */
+  let unsubSync: (() => void) | null = null;
 
   // Track whether the note has been pushed across reactive updates so
   // we only kick off a collab re-init when that transitions (false →
@@ -335,10 +362,99 @@
     }
   }
 
+  /**
+   * Refresh the open editor after a successful sync. Called from the
+   * `sync-completed` Tauri event handler.
+   *
+   * Both halves are best-effort: each guard short-circuits if the
+   * editor is mid-teardown or simply doesn't care about the change.
+   *
+   *   notes_pulled_ids: if our noteId is in here, re-read the note's
+   *     yrs_state from SQLite and `Y.applyUpdate` it into the live
+   *     Y.Doc. Yjs is a CRDT, so this MERGES — it never overwrites
+   *     local in-flight edits. Re-applying an already-known update
+   *     (e.g. the live relay also delivered it) is a no-op.
+   *
+   *   assets_pulled_ids: walk the doc for image nodes whose src
+   *     references one of these assets, evict the bridge's blob URL
+   *     cache for those URLs, then dispatch a no-op `setNodeMarkup`
+   *     on each matching node. The transaction wakes the Crepe image
+   *     NodeView's update, which re-invokes `proxyDomURL`, which now
+   *     hits the freshly-pulled SQLite row and returns a working blob
+   *     URL — the broken-image placeholder repaints as the image.
+   */
+  async function handleSyncCompleted(
+    notesPulledIds: string[],
+    assetsPulledIds: string[]
+  ) {
+    if (notesPulledIds.includes(noteId) && yDoc) {
+      try {
+        const fresh = await loadNote(noteId);
+        if (yDoc && fresh.yrs_state.length > 0) {
+          Y.applyUpdate(yDoc, new Uint8Array(fresh.yrs_state));
+        }
+      } catch (err) {
+        console.warn('[NoteEditor] sync-completed note merge failed', err);
+      }
+    }
+
+    if (assetsPulledIds.length === 0 || !assetBridge || !crepe) return;
+
+    // Build the set of URLs we want to refresh from the pulled ids
+    // directly — NOT from `invalidate`'s return value. The bridge
+    // doesn't cache failed resolves (the live-collab-arrived-image
+    // case where the asset wasn't yet in SQLite), so the cache could
+    // be empty even though the doc still references those URLs. Then
+    // evict from the bridge so the kicked NodeView's proxyDomURL
+    // hits SQLite afresh instead of returning a stale entry.
+    const targetUrls = new Set(
+      assetsPulledIds.map((id) => `${ASSET_SCHEME}${id}`)
+    );
+    assetBridge.invalidate(assetsPulledIds);
+
+    try {
+      crepe.editor.action((ctx) => {
+        const view = ctx.get(editorViewCtx);
+        const { state } = view;
+        const tr = state.tr;
+        let touched = false;
+        state.doc.descendants((node, pos) => {
+          // The Crepe image-block schema uses `image-block`; the inline
+          // variant uses `image`. Both store the URL on the `src` attr.
+          // Treat any node with a src attr in the target set as a hit
+          // rather than enumerating known names — keeps us correct if
+          // Crepe adds new image-shaped node types later.
+          const src = node.attrs?.src;
+          if (typeof src === 'string' && targetUrls.has(src)) {
+            // No-op setNodeMarkup (same attrs) still produces a
+            // transaction step that ProseMirror replays through the
+            // NodeView's update(), which re-runs proxyDomURL. Bumping
+            // a sentinel attr would be cleaner but the schema doesn't
+            // declare one and adding it would invalidate existing
+            // markdown round-trips.
+            tr.setNodeMarkup(pos, undefined, { ...node.attrs });
+            touched = true;
+          }
+        });
+        if (touched) {
+          // setMeta + addToHistory(false) so the kick doesn't pollute
+          // undo history and the live-collab plugin doesn't echo a
+          // semantically-empty change to peers.
+          tr.setMeta('addToHistory', false);
+          view.dispatch(tr);
+        }
+      });
+    } catch (err) {
+      console.warn('[NoteEditor] sync-completed asset kick failed', err);
+    }
+  }
+
   onDestroy(() => {
     if (saveTimer) clearTimeout(saveTimer);
     unsubSession?.();
     unsubSession = null;
+    unsubSync?.();
+    unsubSync = null;
     saveReady = false;
     if (yDoc && yDocUpdateHandler) {
       yDoc.off('update', yDocUpdateHandler);

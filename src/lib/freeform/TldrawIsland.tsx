@@ -41,6 +41,7 @@ import {
   ASSET_SCHEME,
   type AssetBridge
 } from '$lib/assets/bridge';
+import { listen } from '$lib/api/events';
 
 export interface TldrawIslandProps {
   yDoc: Y.Doc;
@@ -128,6 +129,50 @@ export default function TldrawIsland({
   useEffect(() => {
     editorRef.current?.updateInstanceState({ isReadonly: readOnly });
   }, [readOnly]);
+
+  // Refresh tldraw asset shapes after a sync pulls fresh bytes for
+  // assets the canvas already references. The flow:
+  //   1. evict matching blob URLs from our bridge cache, so the next
+  //      resolve hits SQLite (which now has the bytes)
+  //   2. re-put each affected asset record into the store via
+  //      mergeRemoteChanges — that's tldraw's idiomatic way to force
+  //      its internal asset URL cache to re-call assetStore.resolve,
+  //      which then returns the now-correct blob URL
+  // Skipping `editor.store.put` when nothing's open is just an
+  // optimisation; the effect re-subscribes whenever the editor /
+  // bridge swap, so we never lose listener identity.
+  useEffect(() => {
+    const unlistenPromise = listen('sync-completed', (payload) => {
+      const editor = editorRef.current;
+      if (!editor || payload.assets_pulled_ids.length === 0) return;
+      bridge.invalidate(payload.assets_pulled_ids);
+      const targetUrls = new Set(
+        payload.assets_pulled_ids.map((id) => `${ASSET_SCHEME}${id}`)
+      );
+      const affected = editor.store
+        .allRecords()
+        .filter(
+          (r) =>
+            r.typeName === 'asset' &&
+            typeof (r as { props?: { src?: string } }).props?.src ===
+              'string' &&
+            targetUrls.has(
+              (r as { props: { src: string } }).props.src
+            )
+        );
+      if (affected.length === 0) return;
+      editor.store.mergeRemoteChanges(() => {
+        // Same record, same content — re-putting is enough to expire
+        // tldraw's internal asset URL cache for these assetIds. The
+        // image shape's `useImageOrVideoAsset` hook re-runs
+        // resolveAssetUrl, which calls our bridge, which now succeeds.
+        editor.store.put(affected);
+      });
+    });
+    return () => {
+      void unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, [bridge]);
 
   return (
     <div style={{ position: 'absolute', inset: 0 }}>
