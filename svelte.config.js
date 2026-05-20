@@ -21,6 +21,31 @@ const config = {
     alias: {
       $lib: 'src/lib',
       '$lib/*': 'src/lib/*'
+    },
+    typescript: {
+      /*
+       * Pull our .tsx files (the React/tldraw island under
+       * src/lib/freeform/) into SvelteKit's generated
+       * .svelte-kit/tsconfig.json. The default include globs
+       * only `*.js`, `*.ts`, and `*.svelte`, so without this hook
+       * editors (WebStorm, VS Code) report
+       *   "File is not included in any tsconfig.json"
+       * and the `$lib` path alias fails to resolve inside the .tsx —
+       * svelte-check still passes because it walks files directly,
+       * but the IDE relies strictly on `include`.
+       *
+       * Mutating the passed-in config is the supported way to
+       * augment SvelteKit's generated tsconfig — the change survives
+       * regeneration. Mirror existing patterns so we don't drop
+       * .svelte / .ts coverage.
+       */
+      config: (cfg) => {
+        const tsxGlob = '../src/**/*.tsx';
+        if (Array.isArray(cfg.include) && !cfg.include.includes(tsxGlob)) {
+          cfg.include.push(tsxGlob);
+        }
+        return cfg;
+      }
     }
   }
 };
