@@ -43,6 +43,7 @@ yrs = "0.26"
 similar = "3"
 rmp-serde = "1"
 serde_bytes = "0.11"
+tokio = { version = "1.52.3", features = ["time", "sync"] }
 
 [profile.release]
 panic = "abort"
