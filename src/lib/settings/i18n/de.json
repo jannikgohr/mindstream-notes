@@ -81,7 +81,16 @@
     "editor.toolbar.advanced.code": "Codeblock",
     "editor.toolbar.advanced.table": "Tabelle",
     "editor.toolbar.advanced.math": "Mathematik",
-    "editor.toolbar.more": "Mehr"
+    "editor.toolbar.more": "Mehr",
+
+    "editor.status.live": "Live-Collab verbunden",
+    "editor.status.offline": "Live-Collab getrennt — Verbindung wird wiederhergestellt",
+    "editor.status.editing": "Wird bearbeitet…",
+    "editor.status.saving": "Wird gespeichert…",
+    "editor.status.saved": "Gespeichert",
+    "editor.status.error": "Speichern fehlgeschlagen",
+    "editor.status.readonly": "Schreibgeschützt — im Papierkorb",
+    "editor.popout": "In neuem Fenster öffnen"
   },
   "categories": {
     "account": { "label": "Konto & Synchronisation" },

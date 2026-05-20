@@ -19,6 +19,10 @@
     onSessionChange
   } from '$lib/api';
   import { tree } from '$lib/stores/tree.svelte';
+  import {
+    setNoteStatus,
+    clearNoteStatus
+  } from '$lib/stores/note-status.svelte';
   import { getSettingValue, settings } from '$lib/settings/store.svelte';
   import { CollabProvider } from '$lib/sync/collab-provider';
   import { isMobile } from '$lib/platform';
@@ -134,7 +138,16 @@
 
       // Build the live Doc + Awareness BEFORE we ask Crepe to materialise
       // the editor — the collab plugin needs them at bind time.
-      yDoc = new Y.Doc();
+      //
+      // We use a local `const` alongside assigning the top-level `let`
+      // so TypeScript's narrowing survives the `await` boundaries
+      // below — the top-level field could theoretically be reassigned
+      // by an interleaving effect, which is why TS (and WebStorm's
+      // strict analyzer) refuse to assume it stays non-null after an
+      // await. The local can't be reassigned, so call sites stay
+      // type-safe without `!` assertions.
+      const localYDoc = new Y.Doc();
+      yDoc = localYDoc;
       // Hydrate from disk only if the row is already in the v2
       // (y-prosemirror) format. Legacy v1 yrs_state is a Y.Text shape
       // that y-prosemirror can't decode; for those notes we leave the
@@ -151,19 +164,21 @@
       let hydratedFragment = false;
       if (note.payload_schema === 2 && note.yrs_state.length > 0) {
         try {
-          Y.applyUpdate(yDoc, new Uint8Array(note.yrs_state));
+          Y.applyUpdate(localYDoc, new Uint8Array(note.yrs_state));
           hydratedFragment =
-            yDoc.getXmlFragment('prosemirror').length > 0;
+            localYDoc.getXmlFragment('prosemirror').length > 0;
         } catch (err) {
           console.warn('[NoteEditor] yrs_state hydration failed', err);
         }
       }
 
-      awareness = new Awareness(yDoc);
+      // Same narrowing trick as `localYDoc` above.
+      const localAwareness = new Awareness(localYDoc);
+      awareness = localAwareness;
       try {
         const session = await etebaseSession();
         const userName = session?.username ?? 'You';
-        awareness.setLocalStateField('user', {
+        localAwareness.setLocalStateField('user', {
           name: userName,
           color: pickColor(userName)
         });
@@ -246,7 +261,7 @@
         if (!saveReady) return;
         scheduleSave();
       };
-      yDoc.on('update', yDocUpdateHandler);
+      localYDoc.on('update', yDocUpdateHandler);
       saveReady = true;
 
       // Live collab is opt-in: a relay URL must be configured AND the
@@ -455,6 +470,9 @@
     unsubSession = null;
     unsubSync?.();
     unsubSync = null;
+    // Drop our row from the global status store so the dockview
+    // header doesn't keep showing stale icons after the panel closes.
+    clearNoteStatus(noteId);
     saveReady = false;
     if (yDoc && yDocUpdateHandler) {
       yDoc.off('update', yDocUpdateHandler);
@@ -615,6 +633,20 @@
         return '';
     }
   });
+
+  // Mirror our reactive status into the global per-note store so the
+  // dockview right-header (NoteStatusIcons.svelte) can render the
+  // icons next to the popout button. Re-runs whenever any of the
+  // four fields changes; cleared in onDestroy so closing the panel
+  // also removes the row.
+  $effect(() => {
+    setNoteStatus(noteId, {
+      collabConfigured,
+      collabOnline,
+      savingState,
+      isTrashed
+    });
+  });
 </script>
 
 <div class="flex h-full w-full flex-col">
@@ -626,10 +658,13 @@
       class="border-b border-border bg-background"
     />
   {/if}
-  {#if !isTrashed}
-    <!-- Saved/Editing/Live indicator. Hidden on trashed notes — the trash
-         banner below already conveys read-only, and a second indicator
-         above it would just add noise. -->
+  {#if mobile && !isTrashed}
+    <!-- Mobile keeps the inline Saved/Editing/Live indicator because
+         there's no dockview tab header to host the icon equivalent.
+         Desktop pushes the same state into the note-status store and
+         the right-header chips render it next to the popout button.
+         Hidden on trashed notes — the trash banner below already
+         conveys read-only. -->
     <div
       class="flex h-5 shrink-0 items-center justify-end gap-2 px-3 text-[10px] uppercase tracking-wider text-muted-foreground"
       aria-live="polite"
