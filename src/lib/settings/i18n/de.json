@@ -90,7 +90,12 @@
     "editor.status.saved": "Gespeichert",
     "editor.status.error": "Speichern fehlgeschlagen",
     "editor.status.readonly": "Schreibgeschützt — im Papierkorb",
-    "editor.popout": "In neuem Fenster öffnen"
+    "editor.popout": "In neuem Fenster öffnen",
+
+    "editor.unknownKind.title": "Diese Notiz kann nicht geöffnet werden",
+    "editor.unknownKind.message": "Diese Notiz wurde mit einem Editor-Typ erstellt, den diese App-Version nicht unterstützt. Aktualisiere auf die neueste Version, um sie zu öffnen. Der Inhalt der Notiz ist sicher — er wurde nicht verändert.",
+    "editor.unknownKind.titleLabel": "Notiz",
+    "editor.unknownKind.kindLabel": "Editor-Typ"
   },
   "categories": {
     "account": { "label": "Konto & Synchronisation" },

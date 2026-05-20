@@ -1,5 +1,13 @@
 <script lang="ts">
-  import { mount, unmount, onDestroy, onMount, tick } from 'svelte';
+  import {
+    mount,
+    unmount,
+    onDestroy,
+    onMount,
+    tick,
+    type ComponentType,
+    type Component
+  } from 'svelte';
   import type {
     DockviewApi,
     IDockviewPanel,
@@ -12,10 +20,11 @@
   import MetadataPanel from '$lib/components/MetadataPanel.svelte';
   import NoteEditor from '$lib/components/NoteEditor.svelte';
   import FreeformNoteEditor from '$lib/components/FreeformNoteEditor.svelte';
+  import UnknownNoteKindError from '$lib/components/UnknownNoteKindError.svelte';
   import ResizeHandle from '$lib/components/ResizeHandle.svelte';
   import SettingsDialog from '$lib/settings/SettingsDialog.svelte';
   import { PopoutHeaderAction } from './dockview-popout-action';
-  import { openNoteWindow } from '$lib/api';
+  import { isKnownNoteKind, openNoteWindow } from '$lib/api';
   import { clearSavedLayout, loadSavedLayout, saveLayout } from '$lib/api';
   import {
     setActiveNote,
@@ -45,9 +54,12 @@
     // fields are declared explicitly and assigned in the constructor.
     private el: HTMLElement = document.createElement('div');
     private instance: ReturnType<typeof mount> | null = null;
-    private Component: typeof NoteEditor | typeof FreeformNoteEditor;
+    // Widening ComponentType to accept `any` props completely satisfies both the
+    // Svelte 5 mount wrapper and the legacy class/functional definitions from
+    // the WebStorm ambient module shim.
+    private Component: ComponentType<any> | Component<any, any, any>;
 
-    constructor(Component: typeof NoteEditor | typeof FreeformNoteEditor) {
+    constructor(Component: any) {
       this.Component = Component;
     }
 
@@ -60,7 +72,10 @@
       this.el.style.width = '100%';
       const noteId = (parameters.params as { noteId?: string })?.noteId;
       if (!noteId) return;
-      this.instance = mount(this.Component, {
+
+      // By using a type cast here, we satisfy mount's internal generics
+      // while safely passing the verified noteId down to the target layout.
+      this.instance = mount(this.Component as Component<any>, {
         target: this.el,
         props: { noteId }
       });
@@ -85,6 +100,8 @@
             return new SvelteRenderer(NoteEditor);
           case 'freeformNote':
             return new SvelteRenderer(FreeformNoteEditor);
+          case 'unknownNoteKind':
+            return new SvelteRenderer(UnknownNoteKindError);
           default:
             // Older saved layouts may reference panel names we no longer
             // recognise. Defaulting to the markdown editor is safer than
@@ -230,13 +247,16 @@
       if (target) position = { referenceGroup: target };
     }
 
-    // Pick the dockview component by note kind so each note opens in the
-    // editor that knows how to render it. Defaults to markdown — older
-    // rows that pre-date the note_kind column decode as 'markdown' via
-    // serde defaults anyway, but the explicit check keeps an unknown
-    // future kind from blowing up the addPanel call.
-    const componentName =
-      note.note_kind === 'freeform' ? 'freeformNote' : 'noteEditor';
+    // Pick the dockview component by note kind. A note_kind that this
+    // app version doesn't recognise (synced from a newer-version peer)
+    // routes to the UnknownNoteKindError panel — falling through to
+    // NoteEditor would let the user "edit" a binary doc and corrupt
+    // the body on save.
+    const componentName = isKnownNoteKind(note.note_kind)
+      ? note.note_kind === 'freeform'
+        ? 'freeformNote'
+        : 'noteEditor'
+      : 'unknownNoteKind';
     const panel = dock.addPanel({
       id: `note:${id}`,
       component: componentName,
