@@ -141,11 +141,20 @@
       // is pulled in transitively by the island. The markdown editor's
       // bundle stays untouched — drawing notes pay this cost only when
       // opened.
-      const [{ createRoot }, islandModule, reactModule] = await Promise.all([
-        import('react-dom/client'),
-        import('$lib/freeform/TldrawIsland'),
-        import('react')
-      ]);
+      //
+      // We deliberately don't use `Promise.all([...])` here: the IDE's
+      // TypeScript inference (and svelte-check in some configs) widens
+      // heterogeneous import() tuples into a union-of-modules array,
+      // which makes `[a, b, c]` destructuring lose its per-element
+      // types. Issuing the imports as bare expressions starts all three
+      // in parallel; awaiting each ref preserves the specific module
+      // type for narrowing.
+      const reactDomPromise = import('react-dom/client');
+      const islandPromise = import('$lib/freeform/TldrawIsland');
+      const reactPromise = import('react');
+      const { createRoot } = await reactDomPromise;
+      const islandModule = await islandPromise;
+      const reactModule = await reactPromise;
       if (!mountEl) return;
       TldrawIslandComponent = islandModule.default;
       reactCreateElement = reactModule.createElement;
@@ -156,7 +165,8 @@
         reactCreateElement(TldrawIslandComponent, {
           yDoc,
           awareness,
-          readOnly: untrack(() => isTrashed)
+          readOnly: untrack(() => isTrashed),
+          noteId
         })
       );
 
@@ -197,7 +207,12 @@
     if (!reactRoot || !TldrawIslandComponent || !reactCreateElement) return;
     if (!yDoc || !awareness) return;
     reactRoot.render(
-      reactCreateElement(TldrawIslandComponent, { yDoc, awareness, readOnly })
+      reactCreateElement(TldrawIslandComponent, {
+        yDoc,
+        awareness,
+        readOnly,
+        noteId
+      })
     );
   });
 

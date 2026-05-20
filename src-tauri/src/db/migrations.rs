@@ -223,6 +223,58 @@ const MIGRATIONS: &[Migration] = &[
             WHERE note_kind = 'freeform';
         "#,
     },
+    Migration {
+        to: 10,
+        // Assets table for freeform-note attachments (images today, any
+        // file blob the user drops onto the canvas later).
+        //
+        // Schema mirrors the notes table's sync model so the same
+        // dirty / etebase_uid / etebase_etag flow can later push these
+        // through the existing sync engine (slice 2b). For this slice
+        // assets live only on the device that created them — the sync
+        // columns are reserved with `dirty = 1` defaults so when we
+        // wire the push, every existing row gets uploaded automatically.
+        //
+        //   id              client-generated UUID (`asset_<uuid>`). The
+        //                   tldraw record stores this as the asset's src
+        //                   URL via `mindstream-asset://<id>`, so it's
+        //                   the stable cross-device identifier.
+        //
+        //   owning_note_id  FK with ON DELETE CASCADE so purging a
+        //                   freeform note also clears its assets. A
+        //                   tombstone row for each removed asset is
+        //                   created at the sync layer (slice 2b);
+        //                   nothing depends on cascade triggers for now.
+        //
+        //   bytes           raw file content. Stored locally even after
+        //                   Etebase push so we don't refetch over the
+        //                   network on every canvas render.
+        //
+        //   mime_type       carried alongside bytes so resolve() can
+        //                   set the Blob's type and the browser picks
+        //                   the right decoder for image/video/etc.
+        //
+        //   size            cached byte length. Helps future quota
+        //                   logic; redundant with `length(bytes)` but
+        //                   indexable.
+        sql: r#"
+            CREATE TABLE assets (
+                id               TEXT PRIMARY KEY,
+                owning_note_id   TEXT NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+                mime_type        TEXT NOT NULL,
+                bytes            BLOB NOT NULL,
+                size             INTEGER NOT NULL,
+                created          TEXT NOT NULL,
+                modified         TEXT NOT NULL,
+                etebase_uid      TEXT,
+                etebase_etag     TEXT,
+                dirty            INTEGER NOT NULL DEFAULT 1
+            );
+            CREATE INDEX idx_assets_owning_note ON assets(owning_note_id);
+            CREATE INDEX idx_assets_dirty       ON assets(dirty)       WHERE dirty = 1;
+            CREATE INDEX idx_assets_etebase_uid ON assets(etebase_uid) WHERE etebase_uid IS NOT NULL;
+        "#,
+    },
 ];
 
 pub fn run(conn: &mut Connection) -> AppResult<()> {

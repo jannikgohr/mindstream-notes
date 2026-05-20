@@ -11,6 +11,7 @@
 //! Frontend talks to Rust through the `@tauri-apps/api`'s `invoke()`; the
 //! TS bridge lives under `src/lib/api/`.
 
+pub mod assets;
 pub mod auth;
 pub mod collections;
 pub mod db;
@@ -132,6 +133,9 @@ pub fn run() {
             notes::trash_note,
             notes::restore_note,
             notes::purge_note,
+            // Assets (freeform drawing attachments)
+            assets::upload_drawing_asset,
+            assets::fetch_drawing_asset,
             // Auth (Etebase)
             auth::etebase_login,
             auth::etebase_logout,
