@@ -177,7 +177,8 @@ pub async fn sync_now(app: AppHandle) -> Result<SyncReport, String> {
     // syncs serialise instead of racing to push the same dirty rows
     // or compete for the etebase stoken. The user pays at most one
     // scheduler tick's worth of wait — typically <1s of no-op pulls.
-    let _guard = app.state::<scheduler::SyncScheduler>().in_flight.lock().await;
+    let scheduler_state = app.state::<scheduler::SyncScheduler>();
+    let _guard = scheduler_state.acquire_in_flight().await;
     let app_for_blocking = app.clone();
     let delta = tauri::async_runtime::spawn_blocking(move || -> Result<SyncDelta, String> {
         let account = auth::try_restore(&app_for_blocking)
