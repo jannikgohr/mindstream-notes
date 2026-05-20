@@ -22,6 +22,7 @@
   import { getSettingValue, settings } from '$lib/settings/store.svelte';
   import { CollabProvider } from '$lib/sync/collab-provider';
   import { isMobile } from '$lib/platform';
+  import { createAssetBridge, type AssetBridge } from '$lib/assets/bridge';
   import EditorToolbar from './editor-toolbar/EditorToolbar.svelte';
   import MobileEditorToolbar from './editor-toolbar/MobileEditorToolbar.svelte';
 
@@ -50,6 +51,11 @@
   let yDoc: Y.Doc | null = null;
   let awareness: Awareness | null = null;
   let provider: CollabProvider | null = null;
+  // Asset bridge for image upload + render-time URL resolution. One per
+  // open note, disposed in onDestroy so blob URLs don't leak. Same
+  // bridge backs the freeform editor's tldraw assetStore — see
+  // $lib/assets/bridge.
+  let assetBridge: AssetBridge | null = null;
   let collabOnline = $state(false);
   let collabConfigured = $state(false);
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -168,10 +174,33 @@
       // on touch, and the slash menu is awkward on a mobile keyboard.
       // The 90px ProseMirror side-padding that exists to leave room for
       // the handle is also zeroed via the .mobile-editor class below.
+      // Asset hooks let Crepe's ImageBlock feature persist dropped /
+      // pasted images via our encrypted SQLite assets table (sliced
+      // 2a/b — same plumbing tldraw uses on the freeform side) instead
+      // of stashing a session-lived `blob:` URL in the markdown. The
+      // returned `asset:mindstream/<id>` URL is what lands in the
+      // saved markdown body; `proxyDomURL` rehydrates it back into a
+      // blob URL for every render so the editor can paint the image.
+      // Bridge is per-note so uploads carry the right owning_note_id
+      // (FK + sync routing) and the blob-URL cache disposes cleanly
+      // on editor unmount.
+      assetBridge = createAssetBridge(noteId);
+      const imageBlockConfig = {
+        onUpload: assetBridge.uploadFile,
+        // Crepe exposes separate hooks for inline vs block image — both
+        // route through the same upload path so the asset:url ends up
+        // in the markdown either way.
+        inlineOnUpload: assetBridge.uploadFile,
+        blockOnUpload: assetBridge.uploadFile,
+        proxyDomURL: assetBridge.resolveUrl
+      };
       crepe = new Crepe({
         root: host,
         defaultValue: '',
-        features: mobile ? { [Crepe.Feature.BlockEdit]: false } : undefined
+        features: mobile ? { [Crepe.Feature.BlockEdit]: false } : undefined,
+        featureConfigs: {
+          [Crepe.Feature.ImageBlock]: imageBlockConfig
+        }
       });
       crepe.editor.use(collab);
       // The listener plugin gives EditorToolbar a single hook to refresh
@@ -348,6 +377,11 @@
     awareness = null;
     yDoc?.destroy();
     yDoc = null;
+    // Crepe destroy synchronously rips down ProseMirror; image views
+    // are gone by now, so revoking the blob URLs here is safe (and
+    // necessary — they'd otherwise leak for the editor's lifetime).
+    assetBridge?.dispose();
+    assetBridge = null;
     crepeReady = false;
   });
 
