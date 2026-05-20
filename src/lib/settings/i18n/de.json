@@ -95,7 +95,22 @@
     "editor.unknownKind.title": "Diese Notiz kann nicht geöffnet werden",
     "editor.unknownKind.message": "Diese Notiz wurde mit einem Editor-Typ erstellt, den diese App-Version nicht unterstützt. Aktualisiere auf die neueste Version, um sie zu öffnen. Der Inhalt der Notiz ist sicher — er wurde nicht verändert.",
     "editor.unknownKind.titleLabel": "Notiz",
-    "editor.unknownKind.kindLabel": "Editor-Typ"
+    "editor.unknownKind.kindLabel": "Editor-Typ",
+
+    "updater.checkFailed.title": "Update-Prüfung fehlgeschlagen",
+    "updater.checkFailed.message": "Der Update-Server ist nicht erreichbar. Bitte prüfe deine Internetverbindung und versuche es erneut.",
+    "updater.upToDate.title": "Alles aktuell",
+    "updater.upToDate.message": "Mindstream Notes {version} ist die neueste Version.",
+    "updater.available.title": "Update verfügbar",
+    "updater.available.message": "Version {to} ist verfügbar (du nutzt {from}). Das Update wird im Hintergrund geladen und nach deiner Bestätigung installiert.",
+    "updater.install": "Herunterladen und installieren",
+    "updater.later": "Später",
+    "updater.dismiss": "OK",
+    "updater.installFailed.title": "Update fehlgeschlagen",
+    "updater.installFailed.message": "Das Update konnte nicht installiert werden. Die aktuelle Version läuft weiter — du kannst es später erneut versuchen.",
+    "updater.ready.title": "Update bereit",
+    "updater.ready.message": "Mindstream Notes wird neu gestartet, um das Update abzuschließen. Ungespeicherte Änderungen sind bereits gesichert.",
+    "updater.restart": "Jetzt neu starten"
   },
   "categories": {
     "account": { "label": "Konto & Synchronisation" },
