@@ -10,6 +10,8 @@
  */
 
 import type { Component } from 'svelte';
+import { check } from '@tauri-apps/plugin-updater';
+import { relaunch } from '@tauri-apps/plugin-process';
 import { setMode } from 'mode-watcher';
 import {
   enable as enableAutostart,
@@ -137,8 +139,37 @@ export const SETTING_ACTIONS: Record<string, () => void | Promise<void>> = {
   'clear-cache': () => {
     console.info('[settings] action: clear-cache (stub)');
   },
-  'check-updates': () => {
+  'check-updates': async () => {
     console.info('[settings] action: check-updates (stub)');
+    const update = await check();
+    if (update) {
+      console.log(
+          `found update ${update.version} from ${update.date} with notes ${update.body}`
+      );
+      let downloaded = 0;
+      let contentLength = 0;
+      // alternatively we could also call update.download() and update.install() separately
+      await update.downloadAndInstall((event) => {
+        switch (event.event) {
+          case 'Started':
+            contentLength = event.data.contentLength ?? 0;
+            console.log(`started downloading ${event.data.contentLength} bytes`);
+            break;
+          case 'Progress':
+            downloaded += event.data.chunkLength;
+            console.log(`downloaded ${downloaded} from ${contentLength}`);
+            break;
+          case 'Finished':
+            console.log('download finished');
+            break;
+        }
+      });
+    } else {
+      console.log("no update found")
+    }
+
+    console.log('update installed');
+    await relaunch();
   }
 };
 
