@@ -52,10 +52,21 @@ export interface TldrawIslandProps {
   noteId: string;
 }
 
-/** Scheme that identifies asset URLs we own. Stable across devices because
- *  the asset id is a client-generated UUID, not a server-assigned uid —
- *  same pattern `notes.id` uses for its public identifier. */
-const ASSET_SCHEME = 'mindstream-asset://';
+/**
+ * URL we embed in tldraw asset records. Tldraw's source-URL validator
+ * (@tldraw/validate/lib/validation.js -> validSrcProtocols) hard-codes
+ * an allow-list of `http: https: data: asset:` — our previous custom
+ * `mindstream-asset:` scheme failed validation and crashed the store
+ * with "Expected a valid url … (invalid protocol)" the moment an upload
+ * resolved. The `asset:` scheme exists specifically for app-supplied
+ * URLs whose meaning is private to the host's assetStore, which is
+ * exactly our case.
+ *
+ * Path is `mindstream/<client-uuid>` so a future addition of other
+ * asset:-flavoured sources (a built-in clipart shape, say) can be
+ * routed independently in resolve() without colliding with ours.
+ */
+const ASSET_SCHEME = 'asset:mindstream/';
 
 /**
  * Build an asset store keyed to a specific note. Each freeform editor
@@ -71,8 +82,8 @@ function createAssetStore(noteId: string): {
   store: TLAssetStore;
   dispose(): void;
 } {
-  // url → blob URL. We key by the FULL `mindstream-asset://<id>` URL
-  // (not just `id`) so a future `etebase-asset://` scheme can slot in
+  // url → blob URL. We key by the FULL `asset:mindstream/<id>` URL
+  // (not just `id`) so a future asset:-flavoured source can slot in
   // without changing the cache shape.
   const resolved = new Map<string, string>();
   // Inflight fetches keyed by asset URL so two concurrent `resolve()`
@@ -80,6 +91,31 @@ function createAssetStore(noteId: string): {
   // SQLite. Each resolve sees the same promise; once it lands, both
   // get the same blob URL.
   const inflight = new Map<string, Promise<string | null>>();
+
+  /** Fetch the asset, build a blob URL, populate the resolved cache,
+   *  and clear the inflight slot. Returns null on failure so tldraw
+   *  shows its broken-asset placeholder instead of crashing.
+   *
+   *  Extracted to a named function because the equivalent `(async () =>
+   *  …)()` IIFE confuses WebStorm's "void function return value is
+   *  used" inspection — the named form lets the IDE infer the
+   *  Promise<string | null> result cleanly. */
+  async function loadAssetBlob(id: string, src: string): Promise<string | null> {
+    try {
+      const asset = await fetchDrawingAsset(id);
+      const blob = new Blob([new Uint8Array(asset.bytes)], {
+        type: asset.mime_type
+      });
+      const blobUrl = URL.createObjectURL(blob);
+      resolved.set(src, blobUrl);
+      return blobUrl;
+    } catch (err) {
+      console.warn('[tldraw] resolve asset failed', src, err);
+      return null;
+    } finally {
+      inflight.delete(src);
+    }
+  }
 
   const store: TLAssetStore = {
     async upload(_asset: TLAsset, file: File): Promise<{ src: string }> {
@@ -110,22 +146,7 @@ function createAssetStore(noteId: string): {
       if (pending) return pending;
 
       const id = src.slice(ASSET_SCHEME.length);
-      const p = (async (): Promise<string | null> => {
-        try {
-          const asset = await fetchDrawingAsset(id);
-          const blob = new Blob([new Uint8Array(asset.bytes)], {
-            type: asset.mime_type
-          });
-          const blobUrl = URL.createObjectURL(blob);
-          resolved.set(src, blobUrl);
-          return blobUrl;
-        } catch (err) {
-          console.warn('[tldraw] resolve asset failed', src, err);
-          return null;
-        } finally {
-          inflight.delete(src);
-        }
-      })();
+      const p = loadAssetBlob(id, src);
       inflight.set(src, p);
       return p;
     }
