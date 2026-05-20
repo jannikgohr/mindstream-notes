@@ -208,6 +208,35 @@ body {
   right: 0 !important;
 }
 
+/*
+ * Tabs-overflow chevron — interactive states so it reads as a button,
+ * not "just another inactive tab". Three states:
+ *   default  — same muted look as inactive tabs (dockview's default)
+ *   hover    — bg-accent + accent-foreground, matches tab hover
+ *   active   — same surface as hover; covers mouse-down feedback
+ *   open     — sustained "pressed" state while the popup is showing,
+ *              keyed via `:has(.dv-tabs-overflow-container)` on the
+ *              theme root (dockview doesn't add an "is-open" class to
+ *              the chevron itself, so we infer presence from the
+ *              popup being in the DOM — there's only ever one popup
+ *              open at a time, so targeting all chevrons is safe).
+ * Rounded corners + a subtle transition match how the inline tabs
+ * already feel.
+ */
+.dockview-theme-bridge .dv-tabs-overflow-dropdown-default {
+  border-radius: var(--radius-sm);
+  transition:
+    background-color 100ms ease-out,
+    color 100ms ease-out;
+}
+
+.dockview-theme-bridge .dv-tabs-overflow-dropdown-default:hover,
+.dockview-theme-bridge .dv-tabs-overflow-dropdown-default:active,
+.dockview-theme-bridge:has(.dv-tabs-overflow-container) .dv-tabs-overflow-dropdown-default {
+  background-color: var(--accent);
+  color: var(--accent-foreground);
+}
+
 .dockview-theme-bridge .dv-tabs-overflow-container {
   background-color: var(--popover);
   color: var(--popover-foreground);
