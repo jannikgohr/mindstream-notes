@@ -40,8 +40,13 @@
     onSessionChange
   } from '$lib/api';
   import { tree } from '$lib/stores/tree.svelte';
+  import {
+    setNoteStatus,
+    clearNoteStatus
+  } from '$lib/stores/note-status.svelte';
   import { getSettingValue } from '$lib/settings/store.svelte';
   import { CollabProvider } from '$lib/sync/collab-provider';
+  import { isMobile } from '$lib/platform';
   import { listen } from '$lib/api/events';
 
   interface Props {
@@ -55,6 +60,11 @@
   /** Mount point for the React island. dockview gives us the full panel;
    *  the island fills it via `position: absolute; inset: 0`. */
   let mountEl: HTMLDivElement | null = $state(null);
+  // isMobile() reads navigator.userAgent — unavailable during SSR, so
+  // resolve in onMount. Same dance as NoteEditor.svelte. Drives whether
+  // the inline Saved/Editing/Live indicator renders (mobile only) vs
+  // pushes to the global note-status store for the dockview header.
+  let mobile = $state(false);
 
   let yDoc: Y.Doc | null = null;
   let awareness: Awareness | null = null;
@@ -121,23 +131,33 @@
   onMount(async () => {
     if (!mountEl) return;
     try {
+      mobile = isMobile();
       const note = await loadNote(noteId);
       if (!mountEl) return; // unmounted while awaiting
 
-      yDoc = new Y.Doc();
+      // Local consts alongside the top-level `let`s so TypeScript's
+      // narrowing survives the `await` boundaries that follow — the
+      // fields could theoretically be reassigned by an interleaving
+      // effect, which is why TS (and WebStorm's stricter analyzer)
+      // refuse to assume they stay non-null after an await. Locals
+      // can't be reassigned, so call sites stay type-safe without
+      // `!` assertions. Same dance as NoteEditor.svelte.
+      const localYDoc = new Y.Doc();
+      yDoc = localYDoc;
       if (note.yrs_state.length > 0) {
         try {
-          Y.applyUpdate(yDoc, new Uint8Array(note.yrs_state));
+          Y.applyUpdate(localYDoc, new Uint8Array(note.yrs_state));
         } catch (err) {
           console.warn('[FreeformNoteEditor] yrs_state hydration failed', err);
         }
       }
 
-      awareness = new Awareness(yDoc);
+      const localAwareness = new Awareness(localYDoc);
+      awareness = localAwareness;
       try {
         const session = await etebaseSession();
         const userName = session?.username ?? 'You';
-        awareness.setLocalStateField('user', { name: userName });
+        localAwareness.setLocalStateField('user', { name: userName });
       } catch (err) {
         console.debug('[FreeformNoteEditor] no session for awareness', err);
       }
@@ -186,7 +206,7 @@
         if (!saveReady) return;
         scheduleSave();
       };
-      yDoc.on('update', yDocUpdateHandler);
+      localYDoc.on('update', yDocUpdateHandler);
       saveReady = true;
 
       lastSeenPushed = tree.notesById[noteId]?.pushed ?? false;
@@ -289,6 +309,9 @@
     unsubSync?.();
     unsubSync = null;
     unsubSession = null;
+    // Drop our row from the global status store so the dockview
+    // header doesn't keep showing stale icons after the panel closes.
+    clearNoteStatus(noteId);
     saveReady = false;
 
     // React first — its cleanup runs synchronously and lets the bridge
@@ -371,10 +394,27 @@
       default: return '';
     }
   });
+
+  // Mirror our reactive status into the global per-note store so the
+  // dockview right-header (NoteStatusIcons.svelte) renders the icons
+  // next to the popout button. Same plumbing NoteEditor uses; the
+  // store is note_kind-agnostic.
+  $effect(() => {
+    setNoteStatus(noteId, {
+      collabConfigured,
+      collabOnline,
+      savingState,
+      isTrashed
+    });
+  });
 </script>
 
 <div class="flex h-full w-full flex-col">
-  {#if !isTrashed}
+  {#if mobile && !isTrashed}
+    <!-- Mobile keeps the inline indicator since there's no dockview
+         tab header to host the icon chips. Desktop pushes the same
+         state into the note-status store and the right-header renders
+         it next to the popout button. -->
     <div
       class="flex h-5 shrink-0 items-center justify-end gap-2 px-3 text-[10px] uppercase tracking-wider text-muted-foreground"
       aria-live="polite"
