@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "dependencies": {
+    "@tauri-apps/plugin-updater": "~2.10.1",
     "@tauri-apps/plugin-window-state": "~2.4.1"
   }
 }

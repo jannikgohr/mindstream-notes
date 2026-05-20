@@ -33,9 +33,10 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": "all",
     "category": "Productivity",
-    "shortDescription": "Local-first note-taking app",
+    "shortDescription": "Local-first modern markdown-based E2EE collaborative note-taking app",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -43,5 +44,13 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "CONTENT FROM PUBLICKEY.PEM",
+      "endpoints": [
+        "https://github.com/jannikgohr/mindstream-notes/releases/latest/download/latest.json"
+      ]
+    }
   }
 }
