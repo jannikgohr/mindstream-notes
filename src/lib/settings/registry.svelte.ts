@@ -26,10 +26,10 @@ import {
   setSortStrategy,
   ui
 } from '$lib/state.svelte';
-import { setLanguage } from './i18n.svelte';
+import { setLanguage, tUi } from './i18n.svelte';
 import type { SortStrategy } from '$lib/sort';
 import SignInForm from './customs/SignInForm.svelte';
-import { confirm } from '$lib/components/confirm-dialog.svelte';
+import { alert, confirm } from '$lib/components/confirm-dialog.svelte';
 // Vite resolves JSON imports at build time (tsconfig has resolveJsonModule),
 // so the version values below get inlined into the bundle. No runtime cost,
 // no risk of drift between the About panel and what's actually installed.
@@ -140,36 +140,104 @@ export const SETTING_ACTIONS: Record<string, () => void | Promise<void>> = {
     console.info('[settings] action: clear-cache (stub)');
   },
   'check-updates': async () => {
-    console.info('[settings] action: check-updates (stub)');
-    const update = await check();
-    if (update) {
-      console.log(
-          `found update ${update.version} from ${update.date} with notes ${update.body}`
-      );
-      let downloaded = 0;
-      let contentLength = 0;
-      // alternatively we could also call update.download() and update.install() separately
+    // The update flow is three confirm() gates so the user always knows
+    // what's about to happen:
+    //
+    //   1. After check()       — "v0.1.5 available, install now?"
+    //   2. After download      — "Update ready. Restart now?"
+    //
+    // Without #1, the NSIS installer dialog (even in `passive` mode)
+    // appears with no JS-side warning and reads as a scary OS prompt
+    // out of nowhere. Without #2, the app vanishes mid-session because
+    // relaunch() takes effect immediately.
+    //
+    // The Windows installer's "do you want to uninstall this app"
+    // wording (which was what surprised you on the first release) is
+    // suppressed at the system level by `plugins.updater.windows.installMode
+    // = "passive"` in tauri.conf.json. Passive mode shows a small
+    // progress bar but no buttons — the install proceeds without user
+    // interaction. The change here is purely about *our* messaging
+    // around it.
+
+    let update;
+    try {
+      update = await check();
+    } catch (err) {
+      console.error('[updater] check failed', err);
+      await alert({
+        title: tUi('updater.checkFailed.title'),
+        message: tUi('updater.checkFailed.message'),
+        confirmLabel: tUi('updater.dismiss')
+      });
+      return;
+    }
+
+    if (!update) {
+      await alert({
+        title: tUi('updater.upToDate.title'),
+        message: tUi('updater.upToDate.message').replace(
+          '{version}',
+          pkg.version
+        ),
+        confirmLabel: tUi('updater.dismiss')
+      });
+      return;
+    }
+
+    console.info(
+      `[updater] available: ${update.version} (current ${pkg.version})`
+    );
+
+    const installNow = await confirm({
+      title: tUi('updater.available.title'),
+      message: tUi('updater.available.message')
+        .replace('{from}', pkg.version)
+        .replace('{to}', update.version),
+      confirmLabel: tUi('updater.install'),
+      cancelLabel: tUi('updater.later')
+    });
+    if (!installNow) return;
+
+    let contentLength = 0;
+    let downloaded = 0;
+    try {
       await update.downloadAndInstall((event) => {
         switch (event.event) {
           case 'Started':
             contentLength = event.data.contentLength ?? 0;
-            console.log(`started downloading ${event.data.contentLength} bytes`);
+            console.info(`[updater] downloading ${contentLength} bytes`);
             break;
           case 'Progress':
             downloaded += event.data.chunkLength;
-            console.log(`downloaded ${downloaded} from ${contentLength}`);
+            // TODO: surface a progress bar in the settings panel. The
+            // events fire ~hundreds of times per MB so don't bind
+            // straight to $state without throttling.
             break;
           case 'Finished':
-            console.log('download finished');
+            console.info('[updater] download finished, installing');
             break;
         }
       });
-    } else {
-      console.log("no update found")
+    } catch (err) {
+      console.error('[updater] install failed', err);
+      await alert({
+        title: tUi('updater.installFailed.title'),
+        message: tUi('updater.installFailed.message'),
+        confirmLabel: tUi('updater.dismiss')
+      });
+      return;
     }
 
-    console.log('update installed');
-    await relaunch();
+    const restartNow = await confirm({
+      title: tUi('updater.ready.title'),
+      message: tUi('updater.ready.message'),
+      confirmLabel: tUi('updater.restart'),
+      cancelLabel: tUi('updater.later')
+    });
+    if (restartNow) await relaunch();
+    // If the user declined, the new bits are already on disk — the
+    // next launch (manual quit + reopen) picks them up. No further
+    // action needed here.
   }
 };
 

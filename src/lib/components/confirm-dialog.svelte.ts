@@ -19,6 +19,13 @@ export interface ConfirmOptions {
   cancelLabel?: string;
   /** Renders the confirm button with the destructive (red) variant. */
   destructive?: boolean;
+  /**
+   * Info-only dialog: shows a single dismiss button instead of the
+   * confirm/cancel pair. Use `alert()` rather than setting this flag
+   * directly — it returns Promise<void> for caller convenience and
+   * makes the intent obvious at the call site.
+   */
+  infoOnly?: boolean;
 }
 
 export interface PendingConfirm extends ConfirmOptions {
@@ -43,5 +50,26 @@ export const confirmQueue = $state<{ items: PendingConfirm[] }>({
 export function confirm(opts: ConfirmOptions): Promise<boolean> {
   return new Promise((resolve) => {
     confirmQueue.items = [...confirmQueue.items, { ...opts, resolve }];
+  });
+}
+
+/**
+ * Info-only popup with a single dismiss button. Equivalent to
+ * `window.alert` but themed and queued like `confirm()`. Returns when
+ * the user dismisses — the resolve value is ignored.
+ *
+ * Use this for "you're up to date", "something failed, no action you
+ * can take" — anything where the user has no decision to make. Don't
+ * use it to confirm destructive actions; that's `confirm()` with
+ * `destructive: true`.
+ */
+export function alert(
+  opts: Omit<ConfirmOptions, 'cancelLabel' | 'destructive' | 'infoOnly'>
+): Promise<void> {
+  return new Promise((resolve) => {
+    confirmQueue.items = [
+      ...confirmQueue.items,
+      { ...opts, infoOnly: true, resolve: () => resolve() }
+    ];
   });
 }
