@@ -84,14 +84,13 @@ fn init_keyring() {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    #[cfg(not(desktop))]
-    let app_handle =
-        tauri::Builder::default();
     #[cfg(desktop)]
-    let app_handle =
-        tauri::Builder::default()
-            .plugin(tauri_plugin_autostart::Builder::new().build())
-            .plugin(tauri_plugin_window_state::Builder::new().build());
+    let app_handle = tauri::Builder::default()
+        .plugin(tauri_plugin_autostart::Builder::new().build())
+        .plugin(tauri_plugin_window_state::Builder::new().build())
+        .plugin(tauri_plugin_updater::Builder::new().build());
+    #[cfg(not(desktop))]
+    let app_handle = tauri::Builder::default();
 
     app_handle
         .plugin(tauri_plugin_shell::init())
