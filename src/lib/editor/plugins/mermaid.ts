@@ -1,27 +1,35 @@
 /**
- * Mermaid diagram rendering for Crepe code-fences.
+ * Mermaid diagram support for Crepe.
  *
- * Not a Milkdown `$prose` plugin — Crepe doesn't ship Mermaid support
- * directly, but it does let us hook the CodeMirror feature's
- * `renderPreview` callback to swap a `mermaid` fence's raw text for a
- * rendered SVG below the editor. This file owns that callback and the
- * one-time Mermaid initialisation.
+ * Two pieces of plumbing, kept together so adding/removing Mermaid is a
+ * single-file edit:
  *
- * Approach (per Milkdown discussion #1479):
- *   1. Return a placeholder element synchronously so Crepe has a node
- *      to mount immediately.
- *   2. Render the diagram with `mermaid.render(...)`.
- *   3. Hand the rendered SVG to `applyPreview` as a base64 data-URL
- *      `<img>` — NOT as raw innerHTML. Crepe's preview container has
- *      historically failed to render text/foreignObject inside an
- *      injected SVG, but an `<img>` source-of-truth bypasses that
- *      entirely (last working snippet in the thread, March 2026).
+ *   1. `renderMermaidPreview` — passed to Crepe's CodeMirror feature
+ *      config as `renderPreview`. When the user creates a fence whose
+ *      language is `mermaid`, Crepe calls this with the code body; we
+ *      render the diagram below the editable code (per Milkdown
+ *      discussion #1479's final pattern: hand the SVG to `applyPreview`
+ *      as a base64 data-URL `<img>`, which sidesteps the text/foreign-
+ *      object rendering issues that plagued direct innerHTML injection).
  *
- * Mermaid is heavyweight (~1 MB). We dynamic-import it the first time
- * a diagram is requested so the main editor bundle stays slim — notes
- * that don't use Mermaid never pay for it.
+ *   2. `addMermaidMenuItem` — extends Crepe's slash menu with a
+ *      "Mermaid diagram" item under the existing Advanced group, so
+ *      users can discover the feature without knowing the `mermaid`
+ *      language string. Mirrors how Crepe's built-in Math item inserts
+ *      a code block pre-set to `language: 'LaTeX'`.
+ *
+ * Mermaid is ~1 MB. We dynamic-import it on the first render so notes
+ * that never open a diagram pay nothing for it; the import promise is
+ * cached so concurrent renders dedupe.
  */
 
+import type { Ctx } from '@milkdown/kit/ctx';
+import { commandsCtx } from '@milkdown/kit/core';
+import {
+  addBlockTypeCommand,
+  clearTextInCurrentBlockCommand,
+  codeBlockSchema
+} from '@milkdown/kit/preset/commonmark';
 import { systemPrefersMode, userPrefersMode } from 'mode-watcher';
 import { get } from 'svelte/store';
 
@@ -103,6 +111,13 @@ function svgToDataUrl(svg: string): string {
   return 'data:image/svg+xml;charset=utf-8;base64,' + btoa(bin);
 }
 
+function applyMermaidError(applyPreview: ApplyPreview, message: string) {
+  const errEl = document.createElement('div');
+  errEl.className = 'mermaid-preview-error';
+  errEl.textContent = message;
+  applyPreview(errEl);
+}
+
 /**
  * Crepe `renderPreview` hook for Mermaid. Return `null` for any other
  * language so Crepe falls through to its default handling. Drop into
@@ -133,20 +148,74 @@ export function renderMermaidPreview(
         img.className = 'mermaid-preview-img';
         applyPreview(img);
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        const errEl = document.createElement('div');
-        errEl.className = 'mermaid-preview-error';
-        errEl.textContent = message;
-        applyPreview(errEl);
+        applyMermaidError(
+          applyPreview,
+          err instanceof Error ? err.message : String(err)
+        );
       }
     })
     .catch((err) => {
       console.error('[mermaid] dynamic import failed', err);
-      const errEl = document.createElement('div');
-      errEl.className = 'mermaid-preview-error';
-      errEl.textContent = 'Failed to load Mermaid';
-      applyPreview(errEl);
+      applyMermaidError(applyPreview, 'Failed to load Mermaid');
     });
 
   return placeholder;
+}
+
+/* --- Slash-menu integration ------------------------------------------------- */
+
+/**
+ * Subset of Crepe's `GroupBuilder` that we actually use. Typed
+ * structurally rather than imported so we don't reach into Crepe's
+ * private subpaths — the call site in `crepe-setup.ts` passes the
+ * fully-typed builder Crepe hands to `buildMenu`, and TS validates the
+ * shape against this interface.
+ */
+interface MenuItemSpec {
+  label: string;
+  icon: string;
+  onRun: (ctx: Ctx) => void;
+}
+interface MenuGroup {
+  addItem(key: string, item: MenuItemSpec): unknown;
+}
+export interface SlashMenuBuilder {
+  getGroup(key: string): MenuGroup;
+  addGroup(key: string, label: string): MenuGroup;
+}
+
+// Lucide-style "workflow" glyph. Crepe accepts icon strings (innerHTML)
+// so SVG markup drops in directly alongside the rest of its menu items.
+const mermaidIcon = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="8" x="3" y="3" rx="2"/><path d="M7 11v4a2 2 0 0 0 2 2h4"/><rect width="8" height="8" x="13" y="13" rx="2"/></svg>`;
+
+/**
+ * Add a "Mermaid diagram" item to the Advanced group of Crepe's slash
+ * menu. Inserting a code block pre-set to `language: 'mermaid'` is what
+ * routes the fence through `renderMermaidPreview` below the code.
+ *
+ * Crepe's default config always provides an 'advanced' group (alongside
+ * Code, Image, Table, Math), so `getGroup` is the normal path. The
+ * fallback `addGroup` is paranoia for the case where a future config
+ * sets `advancedGroup: null`.
+ */
+export function addMermaidMenuItem(builder: SlashMenuBuilder, label: string) {
+  let group: MenuGroup;
+  try {
+    group = builder.getGroup('advanced');
+  } catch {
+    group = builder.addGroup('advanced', 'Advanced');
+  }
+  group.addItem('mermaid', {
+    label,
+    icon: mermaidIcon,
+    onRun: (ctx) => {
+      const commands = ctx.get(commandsCtx);
+      const codeBlock = codeBlockSchema.type(ctx);
+      commands.call(clearTextInCurrentBlockCommand.key);
+      commands.call(addBlockTypeCommand.key, {
+        nodeType: codeBlock,
+        attrs: { language: 'mermaid' }
+      });
+    }
+  });
 }

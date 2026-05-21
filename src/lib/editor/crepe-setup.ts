@@ -23,7 +23,12 @@ import { collab } from '@milkdown/plugin-collab';
 // bundled through @milkdown/kit.
 import { listener } from '@milkdown/kit/plugin/listener';
 import type { AssetBridge } from '$lib/assets/bridge';
-import { autoPair, renderMermaidPreview } from './plugins';
+import { tUi } from '$lib/settings/i18n.svelte';
+import {
+  addMermaidMenuItem,
+  autoPair,
+  renderMermaidPreview
+} from './plugins';
 
 export interface CrepeSetupOptions {
   /** Mount point; Crepe owns the DOM under it. */
@@ -89,7 +94,21 @@ export function buildCrepe(opts: CrepeSetupOptions): Crepe {
         ? {
             [Crepe.Feature.CodeMirror]: {
               renderPreview: renderMermaidPreview
-            }
+            },
+            // BlockEdit hosts Crepe's "/" slash menu. We extend the
+            // existing Advanced group with a "Mermaid diagram" entry
+            // so the feature is discoverable without users having to
+            // know the `mermaid` language string. Skipped on mobile
+            // because BlockEdit itself is off there.
+            ...(opts.mobile
+              ? {}
+              : {
+                  [Crepe.Feature.BlockEdit]: {
+                    buildMenu: (builder) => {
+                      addMermaidMenuItem(builder, tUi('editor.menu.mermaid'));
+                    }
+                  }
+                })
           }
         : {})
     }

@@ -16,4 +16,4 @@
  */
 
 export { autoPair } from './auto-pair';
-export { renderMermaidPreview } from './mermaid';
+export { addMermaidMenuItem, renderMermaidPreview } from './mermaid';
