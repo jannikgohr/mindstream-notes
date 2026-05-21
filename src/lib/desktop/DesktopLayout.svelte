@@ -308,6 +308,74 @@
     document.body.classList.remove('dv-tab-dragging');
   }
 
+  /**
+   * Reposition the tabs-overflow popup so it appears under whichever
+   * chevron was just clicked, rather than at the top-right of the
+   * dockview root.
+   *
+   * Why: dockview's popover service writes inline `top` / `left` to the
+   * cursor click coordinate, and our CSS in app.css overrides that with
+   * a `top: 40px; right: 0 !important;` fallback that pins to the
+   * dockview root — fine for a single group, broken for split-pane
+   * layouts where each group has its own chevron. This handler reads
+   * the clicked chevron's bounding rect, then writes the popup
+   * wrapper's `top` / `right` (relative to the popover anchor's
+   * containing block) so it sits flush under the originating chevron.
+   *
+   * Inline styles set with `!important` beat CSS `!important` (inline
+   * specificity wins ties at the same importance level), which is what
+   * lets this overwrite the CSS fallback.
+   *
+   * Returns true if the popup was found and repositioned, so the caller
+   * can retry on rAF if dockview hadn't yet committed the popup to the
+   * DOM by the time our bubble-phase listener fired (synchronous path
+   * usually works because dockview's own listener — closer to the
+   * chevron — runs first and creates the popup before we bubble up).
+   */
+  function repositionOverflowPopup(chevron: HTMLElement): boolean {
+    const popup = chevron.ownerDocument.querySelector(
+      '.dv-tabs-overflow-container'
+    );
+    if (!popup) return false;
+    // The popup wrapper is the popup's parent — dockview's popover
+    // service positions THAT element, not the popup container itself.
+    const wrapper = popup.parentElement as HTMLElement | null;
+    if (!wrapper) return false;
+    const anchor = wrapper.parentElement;
+    if (!anchor) return false;
+    const anchorRect = anchor.getBoundingClientRect();
+    const chevronRect = chevron.getBoundingClientRect();
+    wrapper.style.setProperty(
+      'top',
+      `${chevronRect.bottom - anchorRect.top}px`,
+      'important'
+    );
+    wrapper.style.setProperty('left', 'auto', 'important');
+    wrapper.style.setProperty(
+      'right',
+      `${anchorRect.right - chevronRect.right}px`,
+      'important'
+    );
+    return true;
+  }
+
+  function handleChevronClick(e: MouseEvent) {
+    const target = e.target;
+    if (!(target instanceof Element)) return;
+    const chevron = target.closest(
+      '.dv-tabs-overflow-dropdown-default'
+    ) as HTMLElement | null;
+    if (!chevron) return;
+    // dockview's own click handler is registered directly on the
+    // chevron and fires before this bubble-phase listener on the host,
+    // so the popup is usually already in the DOM here. If a future
+    // dockview release defers the popup creation, fall back to next
+    // frame.
+    if (!repositionOverflowPopup(chevron)) {
+      requestAnimationFrame(() => repositionOverflowPopup(chevron));
+    }
+  }
+
   onMount(() => {
     void tick().then(setupDockview);
     const onResize = () => {};
@@ -328,10 +396,19 @@
     window.addEventListener('dragend', clearDragging, true);
     window.addEventListener('drop', clearDragging, true);
 
+    // Reposition the tabs-overflow popup relative to whichever chevron
+    // was clicked — see repositionOverflowPopup() for the long story.
+    // Delegated on the dockview host so it catches chevron clicks
+    // across every group, including ones added later via splits. The
+    // bind:this for dockHost has already resolved by the time onMount
+    // runs, so no need to defer through tick().
+    dockHost?.addEventListener('click', handleChevronClick);
+
     return () => {
       window.removeEventListener('resize', onResize);
       window.removeEventListener('dragend', clearDragging, true);
       window.removeEventListener('drop', clearDragging, true);
+      dockHost?.removeEventListener('click', handleChevronClick);
       // Defensive — if we unmount mid-drag (HMR, route change), don't
       // leave the class stuck on <body>.
       clearDragging();
