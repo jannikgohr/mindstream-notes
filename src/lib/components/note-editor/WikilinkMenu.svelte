@@ -1,30 +1,45 @@
 <script lang="ts">
   /**
-   * Wikilink autocomplete popup. The trigger plugin in
-   * `$lib/editor/plugins/wikilink` opens us via a shared bridge object;
-   * we read its `query` + `anchor` fields reactively and write back to
-   * `highlight` as the user navigates.
+   * Wikilink autocomplete popup. Shares state with the trigger plugin
+   * via `WikilinkBridge` (see `$lib/editor/plugins/wikilink-bridge`).
    *
-   * Note picking flow:
-   *   - User types `[[` in the editor → bridge.state.open flips true.
-   *   - We filter the tree by the live query string.
-   *   - User arrows / hovers → bridge.state.highlight updates.
-   *   - Enter (handled in the plugin) calls bridge.commitFromPopup() →
-   *     we pick the title at our current highlight and call
-   *     bridge.insert(title) — that's the plugin's text-replacement path.
-   *   - Click on a row does the same `bridge.insert(title)`.
+   * Two structural concerns worth knowing about:
    *
-   * Positioning is `position: fixed` at the caret's bottom-left, which
-   * the plugin computes from `view.coordsAtPos`. No floating-ui
-   * dependency for now — viewport-edge clamping is the only thing the
-   * caret-following anchor risks getting wrong, and we handle it with
-   * a small offset + the menu's own max-height.
+   * 1. **Portaled to `document.body`.** Dockview panels apply CSS
+   *    transforms when groups split or resize, which would otherwise
+   *    capture our `position: fixed` and re-root it inside the panel —
+   *    that's why the menu drifted right when the left sidebar opened.
+   *    Moving the element to `body` puts it back at the viewport root.
+   *
+   * 2. **Positioning via `@floating-ui/dom`.** Same approach Crepe's
+   *    `SlashProvider` uses: a virtual reference element exposes the
+   *    caret rect, and `computePosition` + `flip()` + `shift()` +
+   *    `size()` middlewares pick a spot below/above the caret while
+   *    clamping to the viewport and capping the menu's height to fit.
+   *    Without `flip`, the menu would clip off the bottom of the
+   *    window when the user types near the page fold.
+   *
+   * Visual chrome targets the same look-and-feel as Crepe's `/` slash
+   * menu (rounded card, soft shadow, list items at the same
+   * font/padding pattern) so the two surfaces feel like one editor.
    */
 
   import { tick, untrack } from 'svelte';
+  import {
+    computePosition,
+    flip,
+    offset,
+    shift,
+    size,
+    type VirtualElement
+  } from '@floating-ui/dom';
+  import { FileText } from 'lucide-svelte';
   import { tree } from '$lib/stores/tree.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
-  import type { WikilinkBridge } from '$lib/editor/plugins/wikilink-bridge.svelte';
+  import type {
+    CaretRect,
+    WikilinkBridge
+  } from '$lib/editor/plugins/wikilink-bridge.svelte';
 
   interface Props {
     bridge: WikilinkBridge;
@@ -32,6 +47,12 @@
   let { bridge }: Props = $props();
 
   const MAX_RESULTS = 8;
+  /** Offset between the caret and the menu's top edge, in px. */
+  const MENU_OFFSET = 6;
+  /** Hard cap on the menu's height even when there's plenty of room. */
+  const MENU_MAX_HEIGHT = 360;
+  /** Edge padding so the menu doesn't kiss the viewport edge. */
+  const VIEWPORT_PADDING = 8;
 
   interface Suggestion {
     id: string;
@@ -39,11 +60,11 @@
   }
 
   /**
-   * Filtered, ranked list of notes to show. Substring match
-   * case-insensitively; ranked by (1) prefix-match first, (2)
-   * shortest title first so "Notes" beats "Notes about whatever".
-   * Empty query → just the most recently modified notes so the user
-   * can pick by recency without typing.
+   * Filtered list of notes to show. Ranked: prefix matches first,
+   * then by index of substring match, ties broken on title length so
+   * shorter (more specific) titles surface ahead of longer ones with
+   * the query buried further in. Empty query → most recently modified
+   * so the user can pick a recent note without typing.
    */
   const candidates = $derived.by<Suggestion[]>(() => {
     if (!bridge.state.open) return [];
@@ -62,8 +83,6 @@
         const t = n.title.toLowerCase();
         const idx = t.indexOf(q);
         if (idx < 0) continue;
-        // Lower rank wins. Prefix match → 0, otherwise the index;
-        // tie-break on title length so terse matches sort first.
         const rank = idx === 0 ? 0 : idx + t.length / 1000;
         scored.push({ id: n.id, title: n.title, rank });
       }
@@ -87,12 +106,6 @@
     }
   });
 
-  // Wire the Enter handler the plugin calls. Reads the *current*
-  // highlight at call time, not at registration, so the closure
-  // doesn't go stale as the user navigates.
-  // Wrapped in $effect so Svelte's strict $state-reference check is
-  // satisfied; in practice `bridge` is per-mount and never reassigned,
-  // so this runs exactly once on mount.
   $effect(() => {
     bridge.setCommitFromPopup(() => {
       const list = untrack(() => candidates);
@@ -106,14 +119,93 @@
     });
   });
 
+  /* --- portal: keep the menu out from under transformed ancestors -------- */
+
+  // Svelte action that moves its element to document.body on mount and
+  // removes it on destroy. Without this, dockview's transform on the
+  // panel re-roots our position:fixed coords inside the panel, which
+  // is why the menu drifted right when the left sidebar was open.
+  function portal(node: HTMLElement) {
+    document.body.appendChild(node);
+    return {
+      destroy() {
+        node.remove();
+      }
+    };
+  }
+
+  /* --- floating-ui positioning ------------------------------------------- */
+
+  let popupEl = $state<HTMLDivElement | null>(null);
+  let listEl = $state<HTMLDivElement | null>(null);
+
+  /**
+   * `computePosition` is async; we re-call it whenever the menu state
+   * changes (open, query → caretRect updated, viewport resized). The
+   * size middleware bounds maxHeight to the available space so the
+   * list stays scrollable even right next to the viewport bottom.
+   */
+  async function reposition(rect: CaretRect, el: HTMLElement) {
+    const virtualEl: VirtualElement = {
+      getBoundingClientRect: () => ({
+        x: rect.left,
+        y: rect.top,
+        width: rect.width,
+        height: rect.height,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+        left: rect.left,
+        toJSON: () => rect
+      })
+    };
+    const { x, y } = await computePosition(virtualEl, el, {
+      placement: 'bottom-start',
+      middleware: [
+        offset(MENU_OFFSET),
+        flip({ padding: VIEWPORT_PADDING }),
+        shift({ padding: VIEWPORT_PADDING }),
+        size({
+          padding: VIEWPORT_PADDING,
+          apply({ availableHeight, elements }) {
+            Object.assign(elements.floating.style, {
+              maxHeight: `${Math.min(availableHeight, MENU_MAX_HEIGHT)}px`
+            });
+          }
+        })
+      ]
+    });
+    el.style.left = `${x}px`;
+    el.style.top = `${y}px`;
+  }
+
+  $effect(() => {
+    const open = bridge.state.open;
+    const rect = bridge.state.caretRect;
+    // Re-run on query change because the caret moves as the user types.
+    void bridge.state.query;
+    if (!open || !rect || !popupEl) return;
+    void reposition(rect, popupEl);
+  });
+
+  // Recompute on viewport resize / scroll — the caret rect we stored is
+  // viewport-relative, so a scroll of the editor's pane invalidates it.
+  // We don't subscribe to the editor's own scroll here (would need the
+  // host element); the trigger plugin re-runs on every editor update
+  // and refreshes the rect from there, which covers the most common
+  // case of typing-while-scrolled. This handler covers window resize.
+  $effect(() => {
+    if (!bridge.state.open) return;
+    const onResize = () => {
+      const rect = bridge.state.caretRect;
+      if (rect && popupEl) void reposition(rect, popupEl);
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  });
+
   // Scroll the highlighted row into view when the user navigates with
-  // arrow keys. Two-step (tick) so the DOM has rendered the new
-  // highlight class before we measure.
-  let listEl: HTMLDivElement | null = $state(null);
-  // `as const` because some IDEs widen the literal 'nearest' to string,
-  // which doesn't satisfy ScrollIntoViewOptions['block'] (the
-  // ScrollLogicalPosition union). TS itself accepts either; the cast is
-  // for tooling parity, not for runtime.
+  // arrow keys. tick() so the new highlight class has rendered.
   const SCROLL_OPTS: ScrollIntoViewOptions = { block: 'nearest' as const };
   $effect(() => {
     const idx = bridge.state.highlight;
@@ -123,41 +215,31 @@
       el?.scrollIntoView(SCROLL_OPTS);
     });
   });
-
-  // Reserve room above for menu when caret is near the bottom of the
-  // viewport. We always anchor to the caret's *bottom*; flipping above
-  // is a future improvement once we start measuring our own height.
-  const POPUP_WIDTH = 280;
-  const POPUP_MAX_HEIGHT = 280;
-  const Y_OFFSET = 4;
-
-  const style = $derived.by(() => {
-    const a = bridge.state.anchor;
-    if (!a) return 'display: none;';
-    const vw = typeof window === 'undefined' ? 1024 : window.innerWidth;
-    const left = Math.min(a.x, vw - POPUP_WIDTH - 8);
-    return `left: ${Math.max(8, left)}px; top: ${a.y + Y_OFFSET}px; width: ${POPUP_WIDTH}px; max-height: ${POPUP_MAX_HEIGHT}px;`;
-  });
 </script>
 
 {#if bridge.state.open}
-  <!-- role=listbox: same a11y contract as a typeahead. The editor keeps
-       focus; we just visually highlight the candidate the user would
-       commit on Enter. -->
+  <!--
+    Portaled to <body> so dockview's panel transforms can't capture our
+    position:fixed (which is why the menu was drifting). role=listbox:
+    same a11y contract as a typeahead — the editor keeps keyboard focus,
+    we render the highlight visually.
+  -->
   <div
-    class="wikilink-menu fixed z-50 overflow-hidden rounded-md border border-border bg-popover text-popover-foreground shadow-md"
-    style={style}
+    use:portal
+    bind:this={popupEl}
+    class="wikilink-menu fixed z-50 flex flex-col overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-lg"
+    style="width: 280px;"
     role="listbox"
     aria-label={tUi('editor.wikilink.menu.label')}
   >
     {#if candidates.length === 0}
-      <p class="px-3 py-2 text-xs text-muted-foreground">
+      <p class="px-3 py-3 text-sm text-muted-foreground">
         {tUi('editor.wikilink.menu.empty')}
       </p>
     {:else}
       <div
         bind:this={listEl}
-        class="themed-scrollbar max-h-[280px] overflow-y-auto py-1"
+        class="themed-scrollbar flex flex-col gap-0.5 overflow-y-auto p-2"
       >
         {#each candidates as note, i (note.id)}
           {@const active = i === bridge.state.highlight}
@@ -165,7 +247,7 @@
             type="button"
             role="option"
             aria-selected={active}
-            class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors {active
+            class="flex w-full items-center gap-3 rounded-md px-3 py-2 text-left text-sm font-medium transition-colors {active
               ? 'bg-accent text-accent-foreground'
               : 'hover:bg-accent/60'}"
             onpointerdown={(e) => {
@@ -176,6 +258,7 @@
             }}
             onmouseenter={() => (bridge.state.highlight = i)}
           >
+            <FileText class="size-4 shrink-0 opacity-60" aria-hidden="true" />
             <span class="truncate">{note.title}</span>
           </button>
         {/each}
