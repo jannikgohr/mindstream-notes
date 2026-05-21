@@ -81,6 +81,7 @@
     "editor.toolbar.advanced.code": "Codeblock",
     "editor.toolbar.advanced.table": "Tabelle",
     "editor.toolbar.advanced.math": "Mathematik",
+    "editor.toolbar.advanced.mermaid": "Mermaid-Diagramm",
     "editor.toolbar.more": "Mehr",
 
     "editor.status.live": "Live-Collab verbunden",
