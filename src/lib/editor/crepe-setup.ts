@@ -28,7 +28,9 @@ import {
   addMermaidMenuItem,
   autoPair,
   mermaidLanguageDescription,
-  renderMermaidPreview
+  renderMermaidPreview,
+  wikilinkPlugins,
+  type WikilinkBridge
 } from './plugins';
 
 export interface CrepeSetupOptions {
@@ -55,6 +57,15 @@ export interface CrepeSetupOptions {
    * `mermaid` module never loads.
    */
   mermaidEnabled: boolean;
+  /**
+   * Wikilinks: `[[Note Title]]` autocomplete + click-to-open. When
+   * enabled, the caller MUST pass a freshly-created `WikilinkBridge`
+   * — it carries the per-editor menu state that the popup component
+   * also reads. Without the bridge there's no way for the popup to
+   * receive open/close/highlight signals.
+   */
+  wikilinksEnabled: boolean;
+  wikilinkBridge: WikilinkBridge | null;
   /**
    * Drives Crepe's ImageBlock feature. The bridge persists dropped /
    * pasted images into the encrypted SQLite assets table and resolves
@@ -135,6 +146,15 @@ export function buildCrepe(opts: CrepeSetupOptions): Crepe {
   // setting. Skipped entirely (not just no-op'd) when off so we don't
   // run their handlers on every keystroke.
   if (opts.autoPairEnabled) crepe.editor.use(autoPair);
+  if (opts.wikilinksEnabled && opts.wikilinkBridge) {
+    // wikilinkPlugins returns [trigger, decoration] — the trigger
+    // closes over the bridge so the popup can receive open/query/
+    // highlight events; the decoration runs independently to style
+    // existing links as clickable.
+    for (const p of wikilinkPlugins(opts.wikilinkBridge)) {
+      crepe.editor.use(p);
+    }
+  }
 
   return crepe;
 }

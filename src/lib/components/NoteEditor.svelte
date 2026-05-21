@@ -30,10 +30,12 @@
   import { buildCrepe } from '$lib/editor/crepe-setup';
   import { pickCursorColor } from '$lib/editor/cursor-color';
   import { base64ToBytes } from '$lib/editor/base64';
+  import { createWikilinkBridge } from '$lib/editor/plugins';
   import EditorToolbar from './editor-toolbar/EditorToolbar.svelte';
   import MobileEditorToolbar from './editor-toolbar/MobileEditorToolbar.svelte';
   import TrashBanner from './note-editor/TrashBanner.svelte';
   import StatusRow from './note-editor/StatusRow.svelte';
+  import WikilinkMenu from './note-editor/WikilinkMenu.svelte';
 
   interface Props {
     noteId: string;
@@ -68,6 +70,15 @@
   const mermaidEnabled = $derived(
     (getSettingValue('editor.mermaid') as boolean | undefined) ?? true
   );
+  const wikilinksEnabled = $derived(
+    (getSettingValue('editor.wikilinks') as boolean | undefined) ?? true
+  );
+
+  // Per-editor bridge between the wikilink trigger plugin and the
+  // WikilinkMenu popup. Created up-front (cheap; just a $state object)
+  // so the popup template never has to defend against `bridge == null`
+  // — if wikilinks are off, the plugin simply never opens it.
+  const wikilinkBridge = createWikilinkBridge();
 
   let host: HTMLDivElement | null = $state(null);
   // $state because we hand the instance to MobileEditorToolbar as a prop;
@@ -219,6 +230,8 @@
         mathEnabled,
         autoPairEnabled,
         mermaidEnabled,
+        wikilinksEnabled,
+        wikilinkBridge,
         assetBridge
       });
       await crepe.create();
@@ -651,3 +664,13 @@
 {#if showMobileToolbar}
   <MobileEditorToolbar {crepe} />
 {/if}
+
+<!--
+  Wikilink popup: portal'd out of the editor's overflow container via
+  position:fixed (see WikilinkMenu's `style` derivation). Rendered
+  here at the root of the component template so it isn't clipped by
+  the scroll wrapper.  Closed and gated by `bridge.state.open`, which
+  the plugin only flips when wikilinks are enabled, so leaving this
+  in the tree unconditionally costs ~0 when the setting is off.
+-->
+<WikilinkMenu bridge={wikilinkBridge} />
