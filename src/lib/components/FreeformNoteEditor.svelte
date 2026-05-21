@@ -421,7 +421,7 @@
     >
       {#if collabConfigured}
         {#if collabOnline}
-          <span class="flex items-center gap-1 text-emerald-600 dark:text-emerald-400" title="Live collab connected">
+          <span class="flex items-center gap-1" title="Live collab connected">
             <Wifi class="size-3" aria-hidden="true" />
             Live
           </span>
