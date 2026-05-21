@@ -30,6 +30,12 @@ import { setLanguage, tUi } from './i18n.svelte';
 import type { SortStrategy } from '$lib/sort';
 import SignInForm from './customs/SignInForm.svelte';
 import { alert, confirm } from '$lib/components/confirm-dialog.svelte';
+import {
+  beginDownload,
+  endProgress,
+  finishDownload,
+  recordChunk
+} from './updater-progress.svelte';
 // Vite resolves JSON imports at build time (tsconfig has resolveJsonModule),
 // so the version values below get inlined into the bundle. No runtime cost,
 // no risk of drift between the About panel and what's actually installed.
@@ -198,22 +204,24 @@ export const SETTING_ACTIONS: Record<string, () => void | Promise<void>> = {
     });
     if (!installNow) return;
 
-    let contentLength = 0;
-    let downloaded = 0;
+    // Push events into the shared progress state (throttling lives in
+    // recordChunk so callbacks here stay one-liners). `endProgress()`
+    // runs in `finally` so the blocking progress dialog can't get
+    // stuck open if downloadAndInstall throws mid-download.
     try {
       await update.downloadAndInstall((event) => {
         switch (event.event) {
           case 'Started':
-            contentLength = event.data.contentLength ?? 0;
-            console.info(`[updater] downloading ${contentLength} bytes`);
+            beginDownload(event.data.contentLength ?? 0);
+            console.info(
+              `[updater] downloading ${event.data.contentLength ?? '?'} bytes`
+            );
             break;
           case 'Progress':
-            downloaded += event.data.chunkLength;
-            // TODO: surface a progress bar in the settings panel. The
-            // events fire ~hundreds of times per MB so don't bind
-            // straight to $state without throttling.
+            recordChunk(event.data.chunkLength);
             break;
           case 'Finished':
+            finishDownload();
             console.info('[updater] download finished, installing');
             break;
         }
@@ -226,6 +234,8 @@ export const SETTING_ACTIONS: Record<string, () => void | Promise<void>> = {
         confirmLabel: tUi('updater.dismiss')
       });
       return;
+    } finally {
+      endProgress();
     }
 
     const restartNow = await confirm({
