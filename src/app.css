@@ -165,7 +165,9 @@ body {
   --dv-activegroup-hiddenpanel-tab-background-color: transparent;
   --dv-inactivegroup-visiblepanel-tab-background-color: var(--background);
   --dv-inactivegroup-hiddenpanel-tab-background-color: transparent;
-  --dv-tab-hover-background-color: var(--accent);
+  /* (No `--dv-tab-hover-background-color` var here — dockview-core's CSS
+   * doesn't reference such a var, so setting it would be a no-op. The
+   * hover pill is applied directly on `.dv-tab:hover` below.) */
   --dv-activegroup-visiblepanel-tab-color: var(--foreground);
   --dv-activegroup-hiddenpanel-tab-color: var(--muted-foreground);
   --dv-inactivegroup-visiblepanel-tab-color: var(--foreground);
@@ -233,12 +235,44 @@ body {
   box-shadow: 0 1px 2px rgb(0 0 0 / 0.18);
 }
 
-/* Hairline separator between two adjacent inactive (and unhovered) tabs.
+/* Hover pill — most of the way toward the active tab's --background but
+ * mixed with the strip so it reads as a slighter version of the selected
+ * pill rather than identical to it. Solid OKLCH mix (not an alpha
+ * overlay) because the strip→background lightness range in this palette
+ * is narrow — a translucent overlay would leave hover almost
+ * indistinguishable from the strip behind it. The missing box-shadow
+ * (active has one) carries the rest of the "this isn't the selected
+ * tab" cue.
+ *
+ * Specificity note: dockview-core sets the inactive-tab bg via
+ *   .dv-groupview.{dv-active,dv-inactive}-group > .dv-tabs-and-actions-container
+ *   .dv-tabs-container > .dv-tab.dv-inactive-tab { background-color: … }
+ * a `0,6,0` selector. A plain `.dockview-theme-bridge .dv-tabs-container
+ * > .dv-tab:not(.dv-active-tab):hover` is only `0,5,0` and loses the
+ * cascade — which is why earlier hover-bg tweaks looked like no-ops.
+ * Adding `.dv-groupview` and using `.dv-inactive-tab` as a compound on
+ * the tab brings us back to `0,6,0`, tied with dockview; source order
+ * (this file imports dockview.css first) decides the tie in our favour.
+ * Covers both `dv-active-group` and `dv-inactive-group` since
+ * `.dv-groupview` matches either. */
+.dockview-theme-bridge
+  .dv-groupview
+  .dv-tabs-container
+  > .dv-tab.dv-inactive-tab:hover {
+  background-color: color-mix(
+    in oklch,
+    var(--dock-strip),
+    var(--background) 80%
+  );
+}
+
+/* Hairline separator between two adjacent inactive-and-unhovered tabs.
  * The `prev:not(:hover) + next:not(:hover)::before` chain renders the
- * line on the LATER of two siblings, anchored to its left edge so it
- * sits in the gap between them. The selector evaluates fresh on every
- * pointer move, so the line hides as soon as either neighbour is
- * hovered or becomes active. */
+ * line on the LATER of two siblings, anchored at `left: -1px` so it
+ * sits in the gap between them. Hides the moment either neighbour is
+ * hovered or becomes active, which matches Chrome — the slighter hover
+ * pill replaces the separator as the visual cue, so showing both at
+ * once would feel busy. */
 .dockview-theme-bridge .dv-tabs-container > .dv-tab:not(.dv-active-tab):not(:hover)
   + .dv-tab:not(.dv-active-tab):not(:hover)::before {
   content: '';
