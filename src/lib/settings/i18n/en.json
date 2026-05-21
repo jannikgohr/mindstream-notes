@@ -163,7 +163,6 @@
     "appearance.sortStrategy": { "label": "File tree sort" },
     "appearance.foldersFirst": { "label": "Folders first" },
     "editor.defaultMode": { "label": "Default mode" },
-    "editor.vimMode": { "label": "Vim mode" },
     "editor.tabSize": { "label": "Tab size" },
     "editor.autoPair": { "label": "Auto-pair brackets" },
     "editor.trimTrailing": { "label": "Trim trailing whitespace on save" },

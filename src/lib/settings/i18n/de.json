@@ -161,7 +161,6 @@
     "appearance.sortStrategy": { "label": "Dateibaum-Sortierung" },
     "appearance.foldersFirst": { "label": "Ordner zuerst" },
     "editor.defaultMode": { "label": "Standard-Editor" },
-    "editor.vimMode": { "label": "Vim-Modus" },
     "editor.tabSize": { "label": "Tab-Breite" },
     "editor.autoPair": { "label": "Klammern automatisch schließen" },
     "editor.trimTrailing": { "label": "Leerzeichen am Zeilenende entfernen" },
