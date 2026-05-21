@@ -37,6 +37,7 @@
     tree
   } from '$lib/stores/tree.svelte';
   import { setActiveNote } from '$lib/state.svelte';
+  import { subscribeOpenNoteRequest } from '$lib/stores/open-note-intent.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
   import {
     migrateLegacyFavourites,
@@ -50,6 +51,11 @@
     } else {
       void migrateLegacyFavourites();
     }
+    // Same intent-bus subscription as DesktopLayout — a wikilink click
+    // in the open editor needs a way to ask the shell to surface a
+    // different note. Mobile's "open" is just a screen switch + active
+    // note swap; the editor's $effect tears down and re-mounts.
+    return subscribeOpenNoteRequest((id) => openNote(id));
   });
 
   function openNote(id: string) {

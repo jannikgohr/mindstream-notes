@@ -19,6 +19,7 @@ pub mod error;
 pub mod notes;
 pub mod serde_helpers;
 pub mod sync;
+pub mod system;
 
 use tauri::Manager;
 
@@ -155,6 +156,8 @@ pub fn run() {
             sync::sync_now,
             sync::note_room_info,
             sync::scheduler::set_sync_schedule,
+            // System introspection
+            system::is_appimage_install,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

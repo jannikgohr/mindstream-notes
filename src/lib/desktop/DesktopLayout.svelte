@@ -33,6 +33,7 @@
     ui
   } from '$lib/state.svelte';
   import { loadTree, tree } from '$lib/stores/tree.svelte';
+  import { subscribeOpenNoteRequest } from '$lib/stores/open-note-intent.svelte';
 
   let dockHost: HTMLDivElement | null = $state(null);
   let dock: DockviewApi | null = null;
@@ -273,7 +274,15 @@
     void tick().then(setupDockview);
     const onResize = () => {};
     window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
+    // Wikilink clicks (inside an editor) and any other intent source
+    // dispatch through the open-note bus rather than prop-drilling up
+    // here. Unsubscribed on unmount so a stale handler from a
+    // re-mounted layout doesn't double-open a note.
+    const unsub = subscribeOpenNoteRequest((id) => openNote(id));
+    return () => {
+      window.removeEventListener('resize', onResize);
+      unsub();
+    };
   });
 
   onDestroy(() => {

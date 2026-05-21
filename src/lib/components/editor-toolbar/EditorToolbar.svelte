@@ -26,6 +26,7 @@
   import { Button } from '$lib/components/ui/button';
   import { cn } from '$lib/utils';
   import { tUi } from '$lib/settings/i18n.svelte';
+  import { getSettingValue } from '$lib/settings/store.svelte';
   import { TOOLBAR_ITEMS, type ToolbarItem, type ToolbarLeaf, type ToolbarGroup } from './commands';
   import ToolbarMenu, { type MenuEntry } from './ToolbarMenu.svelte';
 
@@ -65,6 +66,36 @@
     fitContent = false,
     dense = false
   }: Props = $props();
+
+  /**
+   * Toolbar catalogue filtered by per-item `gate` settings. A leaf with
+   * `gate: 'editor.math'` only renders when that setting is truthy; a
+   * group whose every item is gated off (or whose own `gate` is off)
+   * disappears entirely.
+   *
+   * Read inside `$derived` so flipping a gate in the settings dialog
+   * adds/removes the button live — no editor remount needed (which the
+   * slash-menu items DO need, since Crepe bakes those at construct
+   * time). Everything else in this component (measurer, overflow,
+   * "More" popover) reads from `visibleItems` instead of TOOLBAR_ITEMS
+   * so widths and the visible row stay in lockstep.
+   */
+  const visibleItems = $derived.by<ToolbarItem[]>(() => {
+    const result: ToolbarItem[] = [];
+    for (const item of TOOLBAR_ITEMS) {
+      if (item.gate && !getSettingValue(item.gate)) continue;
+      if (item.kind === 'group') {
+        const items = item.items.filter(
+          (leaf) => !leaf.gate || getSettingValue(leaf.gate)
+        );
+        if (items.length === 0) continue;
+        result.push({ ...item, items });
+      } else {
+        result.push(item);
+      }
+    }
+    return result;
+  });
 
   let visibleEl: HTMLDivElement | null = $state(null);
   let measureEl: HTMLDivElement | null = $state(null);
@@ -124,7 +155,11 @@
     if (!crepe) return;
     crepe.editor.action((ctx) => {
       const next: Record<string, boolean> = {};
-      for (const item of TOOLBAR_ITEMS) {
+      // Compute predicates only for items we'll actually render — no
+      // point asking ProseMirror about a hidden Math button. Reads the
+      // current value of the derived (not subscribed) since this runs
+      // from editor event callbacks, not inside an $effect.
+      for (const item of visibleItems) {
         if (item.kind === 'leaf' && item.isActive) {
           try {
             next[item.id] = item.isActive(ctx);
@@ -227,19 +262,22 @@
   });
 
   $effect(() => {
-    void TOOLBAR_ITEMS.length;
+    // Re-measure whenever the filtered list changes length — flipping a
+    // gate adds or removes a measurer button and we need offsetWidth
+    // values for the new set before visibleCount can decide what fits.
+    void visibleItems.length;
     readWidths();
   });
 
   const visibleCount = $derived.by(() => {
-    if (!itemWidths.length || !containerWidth) return TOOLBAR_ITEMS.length;
+    if (!itemWidths.length || !containerWidth) return visibleItems.length;
     const gap = 2; // gap-0.5 = 0.125rem = 2px
     const totalAllItems =
       itemWidths.reduce((a, b) => a + b, 0) + gap * (itemWidths.length - 1);
     // containerWidth is already content-box (see VISIBLE_BAR_PADDING_X
     // comment above). Don't subtract padding again — that double-subtract
     // was the bug that pushed the last button into "More" prematurely.
-    if (totalAllItems <= containerWidth) return TOOLBAR_ITEMS.length;
+    if (totalAllItems <= containerWidth) return visibleItems.length;
     const budget = containerWidth - moreButtonWidth - gap;
     let used = 0;
     for (let i = 0; i < itemWidths.length; i++) {
@@ -250,8 +288,8 @@
     return itemWidths.length;
   });
 
-  const overflowedItems = $derived(TOOLBAR_ITEMS.slice(visibleCount));
-  const showMoreButton = $derived(visibleCount < TOOLBAR_ITEMS.length);
+  const overflowedItems = $derived(visibleItems.slice(visibleCount));
+  const showMoreButton = $derived(visibleCount < visibleItems.length);
 
   /**
    * Width the toolbar *wants* if everything fit — sum of measured button
@@ -290,7 +328,11 @@
 
   const openGroup = $derived.by<ToolbarGroup | null>(() => {
     if (!openGroupId) return null;
-    const found = TOOLBAR_ITEMS.find((i) => i.id === openGroupId);
+    // Look up in the *visible* list so that a gate flipping off while
+    // the group's dropdown is open also tears the menu down — without
+    // this the user could keep clicking items in a popover whose
+    // trigger has just disappeared from the toolbar.
+    const found = visibleItems.find((i) => i.id === openGroupId);
     return found?.kind === 'group' ? found : null;
   });
 
@@ -364,7 +406,7 @@
       dense ? 'py-0' : 'py-1'
     )}
   >
-    {#each TOOLBAR_ITEMS.slice(0, visibleCount) as item (item.id)}
+    {#each visibleItems.slice(0, visibleCount) as item (item.id)}
       {#if item.kind === 'leaf'}
         {@const Icon = item.icon}
         {@const isActive = activeMap[item.id] === true}
@@ -435,7 +477,7 @@
     aria-hidden="true"
     class="pointer-events-none invisible absolute -left-[9999px] top-0 flex h-0 items-center gap-0.5 overflow-hidden"
   >
-    {#each TOOLBAR_ITEMS as item (item.id)}
+    {#each visibleItems as item (item.id)}
       {#if item.kind === 'leaf'}
         {@const Icon = item.icon}
         <Button
