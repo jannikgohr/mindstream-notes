@@ -23,6 +23,11 @@
  * cached so concurrent renders dedupe.
  */
 
+import {
+  LanguageDescription,
+  LanguageSupport,
+  StreamLanguage
+} from '@codemirror/language';
 import type { Ctx } from '@milkdown/kit/ctx';
 import { commandsCtx } from '@milkdown/kit/core';
 import {
@@ -32,6 +37,14 @@ import {
 } from '@milkdown/kit/preset/commonmark';
 import { systemPrefersMode, userPrefersMode } from 'mode-watcher';
 import { get } from 'svelte/store';
+
+/** Canonical language string we recognise in the code-fence `language`
+ *  attr. Used for both the slash-menu insertion and the renderPreview
+ *  guard; centralised so a rename can't drift between the two. The
+ *  guard itself compares case-insensitively because Crepe's picker
+ *  passes the LanguageDescription's `name` field literally — see the
+ *  case-insensitive `.toLowerCase()` compare in `renderMermaidPreview`. */
+const MERMAID_LANG = 'mermaid';
 
 /** Crepe's renderPreview applyPreview callback. */
 type ApplyPreview = (value: null | string | HTMLElement) => void;
@@ -129,7 +142,13 @@ export function renderMermaidPreview(
   content: string,
   applyPreview: ApplyPreview
 ): null | HTMLElement {
-  if (language !== 'mermaid') return null;
+  // Case-insensitive because the language attr can come in three ways:
+  //   1. Slash-menu insertion → "mermaid" (lowercase, our choice)
+  //   2. Language-picker selection → "Mermaid" (Crepe passes the
+  //      LanguageDescription's `name` field verbatim — see
+  //      LanguagePicker.setLanguage in @milkdown/components)
+  //   3. User typing the language manually → any casing
+  if (language.toLowerCase() !== MERMAID_LANG) return null;
   // Empty fence → no point bothering Mermaid (and avoids the "No
   // diagram type detected" error every keystroke while the user is
   // still typing the first line).
@@ -214,8 +233,38 @@ export function addMermaidMenuItem(builder: SlashMenuBuilder, label: string) {
       commands.call(clearTextInCurrentBlockCommand.key);
       commands.call(addBlockTypeCommand.key, {
         nodeType: codeBlock,
-        attrs: { language: 'mermaid' }
+        attrs: { language: MERMAID_LANG }
       });
     }
   });
 }
+
+/* --- Code-block language-picker integration -------------------------------- */
+
+/**
+ * A no-op CodeMirror language for Mermaid: no syntax highlighting (none
+ * exists upstream — see Milkdown discussion #1479), but a real `Language`
+ * instance is required because Crepe's LanguageLoader calls `.load()` on
+ * the descriptor when the user picks it from the dropdown and crashes if
+ * `support` is missing.
+ *
+ * `token: () => null` is the minimal StreamParser — every character is
+ * emitted as a plain text token. That's all we need: the diagram is
+ * rendered below the code via `renderMermaidPreview`, so highlighting
+ * the source itself adds nothing.
+ *
+ * Display name is `Mermaid` (capitalised) so it reads well in the
+ * picker; alias `mmd` covers the conventional file extension. The
+ * lowercased `mermaid` form is added automatically by LanguageDescription.
+ */
+const mermaidStreamLanguage = StreamLanguage.define({
+  name: MERMAID_LANG,
+  token: () => null
+});
+
+export const mermaidLanguageDescription = LanguageDescription.of({
+  name: 'Mermaid',
+  alias: ['mmd'],
+  extensions: ['mmd'],
+  support: new LanguageSupport(mermaidStreamLanguage)
+});

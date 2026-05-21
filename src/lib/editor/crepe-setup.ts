@@ -27,6 +27,7 @@ import { tUi } from '$lib/settings/i18n.svelte';
 import {
   addMermaidMenuItem,
   autoPair,
+  mermaidLanguageDescription,
   renderMermaidPreview
 } from './plugins';
 
@@ -93,7 +94,13 @@ export function buildCrepe(opts: CrepeSetupOptions): Crepe {
       ...(opts.mermaidEnabled
         ? {
             [Crepe.Feature.CodeMirror]: {
-              renderPreview: renderMermaidPreview
+              renderPreview: renderMermaidPreview,
+              // Surface Mermaid in the code-block language dropdown.
+              // Without an entry here the picker shows "No result" for
+              // any search — the user can still type `mermaid` into the
+              // input field (or use the slash menu / toolbar), but the
+              // entry-in-the-list path goes through this array.
+              languages: [mermaidLanguageDescription]
             },
             // BlockEdit hosts Crepe's "/" slash menu. We extend the
             // existing Advanced group with a "Mermaid diagram" entry

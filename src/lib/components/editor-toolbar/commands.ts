@@ -74,7 +74,8 @@ import {
   Image as ImageIcon,
   Code,
   Table as TableIcon,
-  Sigma
+  Sigma,
+  Workflow
 } from 'lucide-svelte';
 import type { ComponentType } from 'svelte';
 
@@ -600,6 +601,18 @@ const insertMath = (ctx: Ctx) => {
     attrs: { language: 'LaTeX' }
   });
 };
+const insertMermaid = (ctx: Ctx) => {
+  // Same recipe as `insertMath` but with `language: 'mermaid'`, which
+  // the renderPreview hook in `$lib/editor/plugins/mermaid.ts` picks up
+  // to render the diagram below the source. Always present in the
+  // toolbar (matching the math convention) regardless of the
+  // `editor.mermaid` setting — clicking it with the renderer off still
+  // gives you a code block, just no preview.
+  ctx.get(commandsCtx).call(addBlockTypeCommand.key, {
+    nodeType: codeBlockSchema.type(ctx),
+    attrs: { language: 'mermaid' }
+  });
+};
 
 // -- Catalogue ---------------------------------------------------------------
 
@@ -640,10 +653,11 @@ export const TOOLBAR_ITEMS: ToolbarItem[] = [
     labelKey: 'editor.toolbar.advanced.group',
     icon: Sparkles,
     items: [
-      { kind: 'leaf', id: 'image', labelKey: 'editor.toolbar.advanced.image', icon: ImageIcon, action: insertImageBlock },
-      { kind: 'leaf', id: 'code',  labelKey: 'editor.toolbar.advanced.code',  icon: Code,      action: insertCodeBlock },
-      { kind: 'leaf', id: 'table', labelKey: 'editor.toolbar.advanced.table', icon: TableIcon, action: insertTable },
-      { kind: 'leaf', id: 'math',  labelKey: 'editor.toolbar.advanced.math',  icon: Sigma,     action: insertMath }
+      { kind: 'leaf', id: 'image',   labelKey: 'editor.toolbar.advanced.image',   icon: ImageIcon, action: insertImageBlock },
+      { kind: 'leaf', id: 'code',    labelKey: 'editor.toolbar.advanced.code',    icon: Code,      action: insertCodeBlock },
+      { kind: 'leaf', id: 'table',   labelKey: 'editor.toolbar.advanced.table',   icon: TableIcon, action: insertTable },
+      { kind: 'leaf', id: 'math',    labelKey: 'editor.toolbar.advanced.math',    icon: Sigma,     action: insertMath },
+      { kind: 'leaf', id: 'mermaid', labelKey: 'editor.toolbar.advanced.mermaid', icon: Workflow,  action: insertMermaid }
     ]
   }
 ];
