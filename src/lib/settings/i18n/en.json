@@ -90,6 +90,10 @@
     "editor.status.saved": "Saved",
     "editor.status.error": "Save failed",
     "editor.status.readonly": "Read-only — in trash",
+    "editor.status.short.live": "Live",
+    "editor.status.short.offline": "Offline",
+    "editor.status.short.readonly": "Read-only",
+    "editor.trash.banner": "This note is in the trash and is read-only. Restore it to edit.",
     "editor.popout": "Open in new window",
 
     "editor.unknownKind.title": "Can't open this note",
