@@ -65,6 +65,9 @@
   const autoPairEnabled = $derived(
     (getSettingValue('editor.autoPair') as boolean | undefined) ?? true
   );
+  const mermaidEnabled = $derived(
+    (getSettingValue('editor.mermaid') as boolean | undefined) ?? true
+  );
 
   let host: HTMLDivElement | null = $state(null);
   // $state because we hand the instance to MobileEditorToolbar as a prop;
@@ -215,6 +218,7 @@
         mobile,
         mathEnabled,
         autoPairEnabled,
+        mermaidEnabled,
         assetBridge
       });
       await crepe.create();
