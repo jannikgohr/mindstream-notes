@@ -94,6 +94,7 @@
     "editor.status.short.offline": "Offline",
     "editor.status.short.readonly": "Schreibgeschützt",
     "editor.trash.banner": "Diese Notiz liegt im Papierkorb und ist schreibgeschützt. Stelle sie wieder her, um sie zu bearbeiten.",
+    "editor.menu.mermaid": "Mermaid-Diagramm",
     "editor.popout": "In neuem Fenster öffnen",
 
     "editor.unknownKind.title": "Diese Notiz kann nicht geöffnet werden",
