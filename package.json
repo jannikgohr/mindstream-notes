@@ -40,6 +40,7 @@
     "vitest": "^2.1.0"
   },
   "dependencies": {
+    "@floating-ui/dom": "^1.7.6",
     "@milkdown/crepe": "^7.5.8",
     "@milkdown/kit": "^7.5.8",
     "@milkdown/plugin-collab": "^7.20.0",
@@ -52,6 +53,7 @@
     "clsx": "^2.1.1",
     "dockview-core": "^4.0.0",
     "lucide-svelte": "^0.469.0",
+    "mermaid": "^11.15.0",
     "mode-watcher": "^0.5.1",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",

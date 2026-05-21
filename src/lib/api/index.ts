@@ -30,6 +30,7 @@ export * from './layout';
 export * from './window';
 export * from './auth';
 export * from './sync';
+export * from './system';
 
 /** Reserved id for the always-present trash collection (mirrors Rust). */
 export const TRASH_ID = 'trash';

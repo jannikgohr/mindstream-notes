@@ -15,7 +15,9 @@
   import FreeformNoteEditor from '$lib/components/FreeformNoteEditor.svelte';
   import UnknownNoteKindError from '$lib/components/UnknownNoteKindError.svelte';
   import WindowControls from '$lib/components/WindowControls.svelte';
-  import { isKnownNoteKind, loadNote, type NoteKind } from '$lib/api';
+  import { isKnownNoteKind, loadNote, openNoteWindow, type NoteKind } from '$lib/api';
+  import { tree } from '$lib/stores/tree.svelte';
+  import { subscribeOpenNoteRequest } from '$lib/stores/open-note-intent.svelte';
 
   interface Props {
     noteId: string;
@@ -40,6 +42,19 @@
       console.warn('[popout] note not found', noteId, err);
       exists = false;
     }
+  });
+
+  // A wikilink click inside this popout dispatches through the
+  // open-note bus. This window only renders one note, so we can't
+  // "switch" — same-note requests are a no-op, other-note requests
+  // spawn another popout window. Subscribers in different windows
+  // don't see each other (each Tauri window is its own JS context).
+  onMount(() => {
+    return subscribeOpenNoteRequest((id) => {
+      if (id === noteId) return;
+      const target = tree.notesById[id];
+      void openNoteWindow(id, target?.title ?? 'Note', null, null);
+    });
   });
 </script>
 

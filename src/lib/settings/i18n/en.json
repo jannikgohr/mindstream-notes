@@ -81,6 +81,7 @@
     "editor.toolbar.advanced.code": "Code block",
     "editor.toolbar.advanced.table": "Table",
     "editor.toolbar.advanced.math": "Math",
+    "editor.toolbar.advanced.mermaid": "Mermaid diagram",
     "editor.toolbar.more": "More",
 
     "editor.status.live": "Live collab connected",
@@ -90,6 +91,13 @@
     "editor.status.saved": "Saved",
     "editor.status.error": "Save failed",
     "editor.status.readonly": "Read-only — in trash",
+    "editor.status.short.live": "Live",
+    "editor.status.short.offline": "Offline",
+    "editor.status.short.readonly": "Read-only",
+    "editor.trash.banner": "This note is in the trash and is read-only. Restore it to edit.",
+    "editor.menu.mermaid": "Mermaid diagram",
+    "editor.wikilink.menu.label": "Link to note",
+    "editor.wikilink.menu.empty": "No notes match — keep typing to insert a new link",
     "editor.popout": "Open in new window",
 
     "editor.unknownKind.title": "Can't open this note",
@@ -113,7 +121,9 @@
     "updater.restart": "Restart now",
     "updater.progress.title": "Updating Mindstream Notes",
     "updater.progress.downloading": "Downloading update…",
-    "updater.progress.installing": "Installing…"
+    "updater.progress.installing": "Installing…",
+    "updater.unsupportedLinux.title": "In-app update not available",
+    "updater.unsupportedLinux.message": "Mindstream Notes was installed from a system package (rpm / deb), which can only be updated through your distribution. Download the latest version from https://github.com/jannikgohr/mindstream-notes/releases/latest and reinstall, or use the AppImage build for in-app updates."
   },
   "categories": {
     "account": { "label": "Account & Sync", "description": "Connect to a managed or self-hosted server, manage devices and sync." },
@@ -161,7 +171,6 @@
     "appearance.sortStrategy": { "label": "File tree sort" },
     "appearance.foldersFirst": { "label": "Folders first" },
     "editor.defaultMode": { "label": "Default mode" },
-    "editor.vimMode": { "label": "Vim mode" },
     "editor.tabSize": { "label": "Tab size" },
     "editor.autoPair": { "label": "Auto-pair brackets" },
     "editor.trimTrailing": { "label": "Trim trailing whitespace on save" },

@@ -18,8 +18,8 @@ import {
   isEnabled as isEnabledAutostart,
   disable as disableAutostart
 } from '@tauri-apps/plugin-autostart';
-import { isTauri } from '$lib/api';
-import { isMobile } from '$lib/platform';
+import { isAppImageInstall, isTauri } from '$lib/api';
+import { getPlatform, isMobile } from '$lib/platform';
 import {
   setLeftSidebarWidth,
   setRightSidebarWidth,
@@ -164,6 +164,22 @@ export const SETTING_ACTIONS: Record<string, () => void | Promise<void>> = {
     // progress bar but no buttons — the install proceeds without user
     // interaction. The change here is purely about *our* messaging
     // around it.
+
+    // Linux gate: the Tauri updater plugin's only Linux install path is
+    // "overwrite $APPIMAGE", so rpm / deb installations have no working
+    // install step. Symptom without this gate: the download completes
+    // (bar reaches 100%, flips to indeterminate install phase) and then
+    // downloadAndInstall() hangs forever because there's no AppImage to
+    // replace. Catch it before calling check() and point the user at a
+    // manual download instead.
+    if (getPlatform() === 'linux' && !(await isAppImageInstall())) {
+      await alert({
+        title: tUi('updater.unsupportedLinux.title'),
+        message: tUi('updater.unsupportedLinux.message'),
+        confirmLabel: tUi('updater.dismiss')
+      });
+      return;
+    }
 
     let update;
     try {
