@@ -132,8 +132,6 @@ export function buildCrepe(opts: CrepeSetupOptions): Crepe {
     }
   });
 
-  // Order matters for nothing here, but keep it grouped: built-in
-  // capabilities first, our own plugins below so it's easy to scan.
   crepe.editor.use(collab);
   // The listener plugin gives EditorToolbar a single hook to refresh
   // its mark-active state (Bold/Italic icons) on every transaction —
@@ -145,16 +143,19 @@ export function buildCrepe(opts: CrepeSetupOptions): Crepe {
   // Local plugins from $lib/editor/plugins, each gated by its own
   // setting. Skipped entirely (not just no-op'd) when off so we don't
   // run their handlers on every keystroke.
-  if (opts.autoPairEnabled) crepe.editor.use(autoPair);
+  //
+  // Order between these two doesn't matter: wikilink detects opens in
+  // `apply()` based on cursor position rather than intercepting input,
+  // so auto-pair's handleTextInput return-true doesn't shadow it.
   if (opts.wikilinksEnabled && opts.wikilinkBridge) {
     // wikilinkPlugins returns [trigger, decoration] — the trigger
-    // closes over the bridge so the popup can receive open/query/
-    // highlight events; the decoration runs independently to style
-    // existing links as clickable.
+    // owns the menu open/close state and key handling; the decoration
+    // runs independently to style existing links as clickable.
     for (const p of wikilinkPlugins(opts.wikilinkBridge)) {
       crepe.editor.use(p);
     }
   }
+  if (opts.autoPairEnabled) crepe.editor.use(autoPair);
 
   return crepe;
 }
