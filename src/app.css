@@ -472,7 +472,7 @@ body {
 
 /* Horizontal hairline between two adjacent inactive-and-unhovered rows
  * — vertical-axis analogue of the inline tab strip's separator. Sits
- * at `top: -2px` in the 2px margin gap above the row, 25%/25% inset
+ * at `top: -2px` in the 2px margin gap above the row, 8%/8% inset
  * from the sides so it doesn't run edge-to-edge. Vanishes the moment
  * either neighbour is hovered or active, same as the strip. */
 .dockview-theme-bridge .dv-tabs-overflow-container .dv-tab:not(.dv-active-tab):not(:hover)
@@ -480,8 +480,8 @@ body {
   content: '';
   position: absolute;
   top: -2px;
-  left: 25%;
-  right: 25%;
+  left: 8%;
+  right: 8%;
   height: 1px;
   background-color: oklch(from var(--foreground) l c h / 0.15);
   pointer-events: none;

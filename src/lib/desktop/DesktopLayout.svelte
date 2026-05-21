@@ -359,6 +359,32 @@
     return true;
   }
 
+  /**
+   * Was the overflow popup already in the DOM at the moment a chevron
+   * pointerdown fired? Set by `handleChevronPointerDown` and read by
+   * `handleChevronClick` to decide between "first click → open" and
+   * "second click on the same chevron → toggle close".
+   *
+   * We have to sample at pointerdown rather than at click because
+   * dockview's popupService installs a window-level pointerdown listener
+   * that auto-closes the popup on outside clicks (the chevron is
+   * outside the popup's DOM subtree, so it counts as "outside"). By
+   * click time the popup is usually already gone, making it impossible
+   * to tell apart "user is opening for the first time" from "user just
+   * closed via the auto-close and we should NOT reopen".
+   */
+  let popupOpenAtChevronPointerdown = false;
+
+  function handleChevronPointerDown(e: PointerEvent) {
+    const target = e.target;
+    if (!(target instanceof Element)) return;
+    const chevron = target.closest('.dv-tabs-overflow-dropdown-default');
+    if (!chevron) return;
+    popupOpenAtChevronPointerdown = !!chevron.ownerDocument.querySelector(
+      '.dv-tabs-overflow-container'
+    );
+  }
+
   function handleChevronClick(e: MouseEvent) {
     const target = e.target;
     if (!(target instanceof Element)) return;
@@ -366,14 +392,36 @@
       '.dv-tabs-overflow-dropdown-default'
     ) as HTMLElement | null;
     if (!chevron) return;
-    // dockview's own click handler is registered directly on the
-    // chevron and fires before this bubble-phase listener on the host,
-    // so the popup is usually already in the DOM here. If a future
-    // dockview release defers the popup creation, fall back to next
-    // frame.
-    if (!repositionOverflowPopup(chevron)) {
-      requestAnimationFrame(() => repositionOverflowPopup(chevron));
+
+    if (popupOpenAtChevronPointerdown) {
+      // Toggle-close path. Two cases land here:
+      //   - Normal: popupService's outside-pointerdown handler already
+      //     removed the popup when the chevron was pressed. We just
+      //     need to stop dockview's click handler (registered in bubble
+      //     phase on the dropdown root) from reopening it. We listen in
+      //     CAPTURE phase on dockHost so this stopImmediatePropagation
+      //     fires before dockview's listener can run.
+      //   - Within the 200ms grace window after open: popupService
+      //     suppresses its own pointerdown close, so the popup is still
+      //     in the DOM. Force-remove the wrapper ourselves; dockview's
+      //     bookkeeping (_active + its window-level listeners) get
+      //     reconciled on the next chevron click via close()'s
+      //     null-safe early return path.
+      e.stopImmediatePropagation();
+      const stillOpen = chevron.ownerDocument.querySelector(
+        '.dv-tabs-overflow-container'
+      );
+      stillOpen?.parentElement?.remove();
+      popupOpenAtChevronPointerdown = false;
+      return;
     }
+
+    // Open path. We're in capture phase, so dockview's click handler
+    // (target/bubble) hasn't fired yet — the popup isn't in the DOM
+    // and a synchronous reposition would no-op. Defer to rAF so the
+    // reposition reads the just-created wrapper after dockview's
+    // listener runs.
+    requestAnimationFrame(() => repositionOverflowPopup(chevron));
   }
 
   onMount(() => {
@@ -397,18 +445,33 @@
     window.addEventListener('drop', clearDragging, true);
 
     // Reposition the tabs-overflow popup relative to whichever chevron
-    // was clicked — see repositionOverflowPopup() for the long story.
-    // Delegated on the dockview host so it catches chevron clicks
-    // across every group, including ones added later via splits. The
-    // bind:this for dockHost has already resolved by the time onMount
-    // runs, so no need to defer through tick().
-    dockHost?.addEventListener('click', handleChevronClick);
+    // was clicked, AND give the chevron click toggle-close semantics —
+    // see handleChevronClick() / repositionOverflowPopup() for the full
+    // explanation.
+    //
+    // Both listeners are delegated on dockHost so they catch every
+    // chevron, including ones added later via splits. The bind:this for
+    // dockHost has already resolved by the time onMount runs, so no
+    // need to defer through tick().
+    //
+    // Capture phase on both is what lets us:
+    //   - sample popup state at pointerdown BEFORE popupService's own
+    //     window-level pointerdown listener (bubble phase) removes it.
+    //   - stop dockview's click handler (bubble phase on the dropdown
+    //     root) with stopImmediatePropagation on the toggle-close path.
+    dockHost?.addEventListener('pointerdown', handleChevronPointerDown, true);
+    dockHost?.addEventListener('click', handleChevronClick, true);
 
     return () => {
       window.removeEventListener('resize', onResize);
       window.removeEventListener('dragend', clearDragging, true);
       window.removeEventListener('drop', clearDragging, true);
-      dockHost?.removeEventListener('click', handleChevronClick);
+      dockHost?.removeEventListener(
+        'pointerdown',
+        handleChevronPointerDown,
+        true
+      );
+      dockHost?.removeEventListener('click', handleChevronClick, true);
       // Defensive — if we unmount mid-drag (HMR, route change), don't
       // leave the class stuck on <body>.
       clearDragging();
