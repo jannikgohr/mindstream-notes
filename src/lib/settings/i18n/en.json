@@ -113,7 +113,9 @@
     "updater.restart": "Restart now",
     "updater.progress.title": "Updating Mindstream Notes",
     "updater.progress.downloading": "Downloading update…",
-    "updater.progress.installing": "Installing…"
+    "updater.progress.installing": "Installing…",
+    "updater.unsupportedLinux.title": "In-app update not available",
+    "updater.unsupportedLinux.message": "Mindstream Notes was installed from a system package (rpm / deb), which can only be updated through your distribution. Download the latest version from https://github.com/jannikgohr/mindstream-notes/releases/latest and reinstall, or use the AppImage build for in-app updates."
   },
   "categories": {
     "account": { "label": "Account & Sync", "description": "Connect to a managed or self-hosted server, manage devices and sync." },
