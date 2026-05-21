@@ -17,7 +17,16 @@
   import { CUSTOM_COMPONENTS, INFO_VALUES, SETTING_ACTIONS } from './registry.svelte';
   import { tDescription, tLabel, tUi, tValue } from './i18n.svelte';
   import SettingSelect from './SettingSelect.svelte';
-  import type { Setting } from './types';
+  import type {
+    ButtonSetting,
+    CustomSetting,
+    MultiSelectSetting,
+    NumericSetting,
+    PathSetting,
+    SelectSetting,
+    Setting,
+    TextSetting
+  } from './types';
 
   interface Props {
     setting: Setting;
@@ -79,9 +88,19 @@
       <p class="mt-0.5 text-xs text-muted-foreground">{description}</p>
     {/if}
 
+    <!--
+      The discriminated-union narrowing inside these `{:else if}` branches
+      is correct as far as the Svelte/TS compiler is concerned, but the
+      WebStorm Svelte plugin doesn't follow it and flags every type-specific
+      property access as "unresolved". Aliasing `setting` to its concrete
+      type via `{@const}` gives the IDE a single type to look at — the cast
+      is a no-op at runtime because the `setting.type === 'X'` guard above
+      already proved it.
+    -->
     {#if setting.type === 'radio'}
+      {@const s = setting as SelectSetting}
       <div class="mt-2 flex flex-wrap gap-1.5">
-        {#each setting.options as opt (opt)}
+        {#each s.options as opt (opt)}
           <button
             type="button"
             class="rounded-md border border-border px-3 py-1 text-xs transition-colors hover:bg-accent {value === opt
@@ -89,13 +108,14 @@
               : 'bg-background text-foreground'}"
             onclick={() => commit(opt)}
           >
-            {tValue(setting.id, opt)}
+            {tValue(s.id, opt)}
           </button>
         {/each}
       </div>
     {:else if setting.type === 'multi-select'}
+      {@const s = setting as MultiSelectSetting}
       <div class="mt-2 flex flex-wrap gap-1.5">
-        {#each setting.options as opt (opt)}
+        {#each s.options as opt (opt)}
           {@const arr = (Array.isArray(value) ? (value as string[]) : []) as string[]}
           {@const selected = arr.includes(opt)}
           <button
@@ -105,18 +125,19 @@
               : 'bg-background text-foreground'}"
             onclick={() => commit(selected ? arr.filter((x) => x !== opt) : [...arr, opt])}
           >
-            {tValue(setting.id, opt)}
+            {tValue(s.id, opt)}
           </button>
         {/each}
       </div>
     {:else if setting.type === 'custom'}
-      {@const C = CUSTOM_COMPONENTS[setting.customId ?? '']}
+      {@const s = setting as CustomSetting}
+      {@const C = CUSTOM_COMPONENTS[s.customId ?? '']}
       <div class="mt-2">
         {#if C}
           <C />
         {:else}
           <p class="text-xs text-destructive">
-            Missing custom component: {setting.customId}
+            Missing custom component: {s.customId}
           </p>
         {/if}
       </div>
@@ -151,28 +172,31 @@
         ></span>
       </button>
     {:else if setting.type === 'text'}
+      {@const s = setting as TextSetting}
       <input
         type="text"
         value={(value as string | undefined) ?? ''}
         oninput={(e) => commit((e.currentTarget as HTMLInputElement).value)}
-        placeholder={setting.placeholder ?? ''}
-        minlength={setting.minLength}
-        maxlength={setting.maxLength}
-        pattern={setting.pattern}
+        placeholder={s.placeholder ?? ''}
+        minlength={s.minLength}
+        maxlength={s.maxLength}
+        pattern={s.pattern}
         class="h-8 w-56 rounded-md border border-input bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       />
     {:else if setting.type === 'number'}
+      {@const s = setting as NumericSetting}
       <input
         type="number"
         value={(value as number | undefined) ?? ''}
         oninput={(e) => commit(Number((e.currentTarget as HTMLInputElement).value))}
-        min={setting.min}
-        max={setting.max}
-        step={setting.step}
+        min={s.min}
+        max={s.max}
+        step={s.step}
         class="h-8 w-24 rounded-md border border-input bg-background px-2 text-sm tabular-nums focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       />
     {:else if setting.type === 'slider'}
-      {@const storeVal = (value as number | undefined) ?? setting.min ?? 0}
+      {@const s = setting as NumericSetting}
+      {@const storeVal = (value as number | undefined) ?? s.min ?? 0}
       {@const display = sliderDrag ?? storeVal}
       <div class="flex items-center gap-2">
         <!--
@@ -182,9 +206,9 @@
         -->
         <input
           type="range"
-          min={setting.min}
-          max={setting.max}
-          step={setting.step}
+          min={s.min}
+          max={s.max}
+          step={s.step}
           value={display}
           oninput={(e) => (sliderDrag = Number((e.currentTarget as HTMLInputElement).value))}
           onchange={(e) => {
@@ -195,14 +219,15 @@
           class="h-1.5 w-44 cursor-pointer appearance-none rounded-full bg-input accent-primary"
         />
         <span class="w-12 text-right text-xs tabular-nums text-muted-foreground">
-          {display}{setting.unit ?? ''}
+          {display}{s.unit ?? ''}
         </span>
       </div>
     {:else if setting.type === 'select'}
+      {@const s = setting as SelectSetting}
       <SettingSelect
-        settingId={setting.id}
+        settingId={s.id}
         value={(value as string | undefined) ?? ''}
-        options={setting.options}
+        options={s.options}
         onChange={commit}
         ariaLabel={label}
       />
@@ -219,11 +244,12 @@
         </span>
       </div>
     {:else if setting.type === 'path'}
+      {@const s = setting as PathSetting}
       <input
         type="text"
         value={(value as string | undefined) ?? ''}
         oninput={(e) => commit((e.currentTarget as HTMLInputElement).value)}
-        placeholder={setting.mode === 'directory' ? '/path/to/folder' : '/path/to/file'}
+        placeholder={s.mode === 'directory' ? '/path/to/folder' : '/path/to/file'}
         class="h-8 w-56 rounded-md border border-input bg-background px-2 font-mono text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       />
     {:else if setting.type === 'keybinding'}
@@ -235,7 +261,8 @@
         class="h-8 w-32 rounded-md border border-input bg-background px-2 text-center font-mono text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       />
     {:else if setting.type === 'button'}
-      <Button variant={setting.variant ?? 'default'} size="sm" onclick={fireAction}>
+      {@const s = setting as ButtonSetting}
+      <Button variant={s.variant ?? 'default'} size="sm" onclick={fireAction}>
         {label}
       </Button>
     {/if}
