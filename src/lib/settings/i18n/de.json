@@ -90,6 +90,10 @@
     "editor.status.saved": "Gespeichert",
     "editor.status.error": "Speichern fehlgeschlagen",
     "editor.status.readonly": "Schreibgeschützt — im Papierkorb",
+    "editor.status.short.live": "Live",
+    "editor.status.short.offline": "Offline",
+    "editor.status.short.readonly": "Schreibgeschützt",
+    "editor.trash.banner": "Diese Notiz liegt im Papierkorb und ist schreibgeschützt. Stelle sie wieder her, um sie zu bearbeiten.",
     "editor.popout": "In neuem Fenster öffnen",
 
     "editor.unknownKind.title": "Diese Notiz kann nicht geöffnet werden",
