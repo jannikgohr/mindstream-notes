@@ -291,18 +291,19 @@ body {
  * dockview hardcodes the popup wrapper's `top` / `left` to the click
  * coordinate via inline styles (see popupService.openPopover). That
  * lands the menu's top edge inside the chevron and its left/right
- * wherever the cursor happened to be. We pin it instead to:
- *   - top:    the tab strip bottom (= dockview tab-chrome height)
- *   - right:  the dockview's right edge
- * Inline styles normally win, but `!important` in CSS beats inline —
- * that's the one case where we can override without JS.
+ * wherever the cursor happened to be.
  *
- * Limitation: assumes the overflow chevron belongs to a tab strip at
- * the dockview root (single tab group). With multi-group split panes
- * the popup would still pin to dockview-root top, not to the
- * originating sub-group's tab strip. We don't use split panes today;
- * if that changes, swap this for a JS-based reposition that reads the
- * chevron's bounding rect.
+ * The real per-chevron positioning is done in
+ * DesktopLayout.svelte → repositionOverflowPopup(), which reads the
+ * clicked chevron's bounding rect and writes `top` / `left` / `right`
+ * with !important onto the popup wrapper. Inline !important beats CSS
+ * !important, so the JS always wins when it runs.
+ *
+ * This CSS rule stays as a fallback for the single-group case in case
+ * the JS click handler doesn't run (e.g. popup opened programmatically
+ * via the dockview API rather than a user click). It pins the popup
+ * to the top-right of the dockview root — the same place the user
+ * would've expected before split-group support landed.
  *
  * Styling matches the rest of the app's popover surface (ContextMenu,
  * dropdown menus) so the dockview overflow looks native to our chrome
