@@ -451,6 +451,35 @@ main:not(.fullscreen-note) .milkdown-drop-indicator {
   background: transparent;
 }
 
+/*
+ * Freeform-panel drop fix.
+ *
+ * tldraw (mounted in freeform note panels) installs `dragover` and `drop`
+ * listeners on `.tl-container` in @tldraw/editor's useDocumentEvents.js
+ * that call `e.stopPropagation()` and re-dispatch the event onto
+ * `.tl-canvas`. dockview's `dragover` listener uses `useCapture: true` so
+ * it still fires — which is why the drop indicator appears correctly over
+ * freeform panels — but its `drop` listener is bubble-phase only. tldraw
+ * kills the bubble before dockview's drop handler runs, so dropping a tab
+ * onto a freeform panel never actually moves the panel.
+ *
+ * Workaround: while a dockview tab/group drag is in flight,
+ * DesktopLayout.svelte tags `<body>` with `dv-tab-dragging`. Disabling
+ * pointer events on the entire tldraw subtree for that brief window
+ * routes the drop straight to dockview's overlay (which sits above tldraw
+ * at z-index 1000) where its handlers are wired normally. The `*`
+ * selector reaches descendants that declare their own `pointer-events:
+ * auto` (e.g. `.tl-note__attribution`), which would otherwise still
+ * receive the drop and bubble up through `.tl-container` into tldraw's
+ * stopPropagation. External file drops (image → tldraw asset import) are
+ * unaffected — they don't come through dockview's drag pipeline so the
+ * body class never gets set.
+ */
+body.dv-tab-dragging .tl-container,
+body.dv-tab-dragging .tl-container * {
+  pointer-events: none !important;
+}
+
 /* dockview right-header pop-out button (see PopoutHeaderAction). */
 .dv-popout-host {
   display: inline-flex;
