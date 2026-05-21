@@ -404,43 +404,87 @@ body {
   pointer-events: none;
 }
 
+/*
+ * The overflow popup is the strip's "more tabs" menu, so we style it as
+ * a vertical mirror of the inline tab chrome — same surface colour,
+ * same pill shape, same hover/active treatments, same hairline
+ * separators between unselected siblings. Only difference is the
+ * orientation flip (separators become horizontal, sit in the inter-row
+ * margin instead of the inter-tab gap).
+ *
+ * Container uses --dock-strip rather than --popover so the popup reads
+ * as a continuation of the tab strip rather than a generic popover
+ * surface. The box-shadow + border give it the elevation that the
+ * strip itself doesn't need (the strip is flush with the panel chrome
+ * below it; this popup floats over content).
+ */
 .dockview-theme-bridge .dv-tabs-overflow-container {
-  background-color: var(--popover);
-  color: var(--popover-foreground);
+  background-color: var(--dock-strip);
+  color: var(--foreground);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  padding: 0.25rem;
+  padding: 4px;
   min-width: 200px;
   box-shadow:
-    0 10px 15px -3px rgb(0 0 0 / 0.1),
-    0 4px 6px -4px rgb(0 0 0 / 0.1);
+    0 10px 15px -3px rgb(0 0 0 / 0.2),
+    0 4px 6px -4px rgb(0 0 0 / 0.15);
 }
 
-/* Drop the per-tab divider dockview adds by default — we use spacing
- * + hover treatment to separate items, like a menu. */
+/* Drop dockview's full-width per-row divider — replaced by the pseudo
+ * separator further down (kept consistent with the inline tab strip,
+ * where the same swap happens). */
 .dockview-theme-bridge .dv-tabs-overflow-container .dv-tab:not(:last-child) {
   border-bottom: none;
 }
 
+/* Each overflow row is a pill — same 8px radius and transition timing
+ * as the inline tabs. Transparent until hovered so the strip colour
+ * shows through, and position: relative anchors the ::before hairline
+ * separator added below. */
 .dockview-theme-bridge .dv-tabs-overflow-container .dv-tab {
-  border-radius: var(--radius-sm);
-  padding: 0.375rem 0.5rem;
-  margin: 1px 0;
+  position: relative;
+  border-radius: 8px;
+  padding: 6px 10px;
+  margin: 2px 0;
   cursor: pointer;
-  transition: background-color 100ms ease-out;
+  background-color: transparent;
+  transition: background-color 120ms ease-out;
 }
 
+/* Hover pill — same color-mix bias toward --background as the inline
+ * tabs, so a pointer move across the popup reads identically to a
+ * pointer move across the strip. */
 .dockview-theme-bridge .dv-tabs-overflow-container .dv-tab:hover {
-  background-color: var(--accent);
-  color: var(--accent-foreground);
+  background-color: color-mix(
+    in oklch,
+    var(--dock-strip),
+    var(--background) 80%
+  );
 }
 
-/* Active tab in the popup = the tab currently focused in dockview.
- * Keep it visually distinct but consistent with the menu hover. */
+/* Active row — full --background pill + same drop shadow as the inline
+ * active tab, so the "selected" cue is consistent across both views. */
 .dockview-theme-bridge .dv-tabs-overflow-container .dv-active-tab {
-  background-color: var(--accent);
-  color: var(--accent-foreground);
+  background-color: var(--background);
   font-weight: 500;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.18);
+}
+
+/* Horizontal hairline between two adjacent inactive-and-unhovered rows
+ * — vertical-axis analogue of the inline tab strip's separator. Sits
+ * at `top: -2px` in the 2px margin gap above the row, 25%/25% inset
+ * from the sides so it doesn't run edge-to-edge. Vanishes the moment
+ * either neighbour is hovered or active, same as the strip. */
+.dockview-theme-bridge .dv-tabs-overflow-container .dv-tab:not(.dv-active-tab):not(:hover)
+  + .dv-tab:not(.dv-active-tab):not(:hover)::before {
+  content: '';
+  position: absolute;
+  top: -2px;
+  left: 25%;
+  right: 25%;
+  height: 1px;
+  background-color: oklch(from var(--foreground) l c h / 0.15);
+  pointer-events: none;
 }
 
 /* Milkdown / Crepe surface tweaks so the editor feels at home in our chrome. */
