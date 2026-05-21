@@ -170,7 +170,6 @@
               "default": "wysiwyg",
               "options": ["wysiwyg", "source", "split"]
             },
-            { "id": "editor.vimMode", "scope": "V", "type": "toggle", "default": false },
             {
               "id": "editor.tabSize",
               "scope": "V",

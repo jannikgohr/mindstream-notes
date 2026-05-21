@@ -7,6 +7,7 @@
   // directly — keeps us from declaring a transitive dep that's already
   // bundled through @milkdown/kit.
   import { listener } from '@milkdown/kit/plugin/listener';
+  import { autoPair } from '$lib/editor/auto-pair';
   import * as Y from 'yjs';
   import { Awareness } from 'y-protocols/awareness';
   import { Trash2, Wifi, WifiOff } from 'lucide-svelte';
@@ -61,6 +62,9 @@
   );
   const mathEnabled = $derived(
     (getSettingValue('editor.math') as boolean | undefined) ?? true
+  );
+  const autoPairEnabled = $derived(
+    (getSettingValue('editor.autoPair') as boolean | undefined) ?? true
   );
 
   let host: HTMLDivElement | null = $state(null);
@@ -253,6 +257,11 @@
       // collab edits, etc. Without it the toolbar would have to install
       // its own prose plugin, which Crepe doesn't allow post-create.
       crepe.editor.use(listener);
+      // Auto-pair brackets: same construct-time gating as the math/feature
+      // toggles — toggling it in settings applies to notes opened after
+      // the change. Skipped entirely (not just no-op'd) when off so we
+      // don't run the handleTextInput hook on every keystroke.
+      if (autoPairEnabled) crepe.editor.use(autoPair);
       await crepe.create();
 
       // Bind y-doc + awareness AFTER create, then snapshot the serializer
