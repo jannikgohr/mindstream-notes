@@ -13,7 +13,7 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 :root {
-  --background: oklch(1 0 0);
+  --background: oklch(0.9846 0.002 247.84);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
   --card-foreground: oklch(0.145 0 0);
@@ -36,7 +36,7 @@
   /* Dockview chrome elevation — sits between --background and --muted so
    * the tab strip reads as a distinct band from both the content panel
    * below it and the inactive tabs above it. */
-  --dock-strip: oklch(0.95 0 0);
+  --dock-strip: oklch(0.9542 0.003 247.86);
   --left-sidebar-width: 0px;
   --left-sidebar-enabled: 1;
   /* Height of the floating mobile formatting toolbar — set live by
