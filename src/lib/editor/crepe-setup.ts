@@ -23,7 +23,7 @@ import { collab } from '@milkdown/plugin-collab';
 // bundled through @milkdown/kit.
 import { listener } from '@milkdown/kit/plugin/listener';
 import type { AssetBridge } from '$lib/assets/bridge';
-import { autoPair } from './plugins';
+import { autoPair, renderMermaidPreview } from './plugins';
 
 export interface CrepeSetupOptions {
   /** Mount point; Crepe owns the DOM under it. */
@@ -41,6 +41,14 @@ export interface CrepeSetupOptions {
   mathEnabled: boolean;
   /** When false, the auto-pair plugin isn't even registered. */
   autoPairEnabled: boolean;
+  /**
+   * Render ```` ```mermaid ```` fences as SVG diagrams below the code.
+   * Implemented via Crepe's CodeMirror `renderPreview` hook (Mermaid
+   * isn't a Crepe feature flag — see `plugins/mermaid.ts`). When off
+   * we don't register the callback at all so the heavyweight
+   * `mermaid` module never loads.
+   */
+  mermaidEnabled: boolean;
   /**
    * Drives Crepe's ImageBlock feature. The bridge persists dropped /
    * pasted images into the encrypted SQLite assets table and resolves
@@ -76,7 +84,14 @@ export function buildCrepe(opts: CrepeSetupOptions): Crepe {
     defaultValue: '',
     features: Object.keys(features).length > 0 ? features : undefined,
     featureConfigs: {
-      [Crepe.Feature.ImageBlock]: imageBlockConfig
+      [Crepe.Feature.ImageBlock]: imageBlockConfig,
+      ...(opts.mermaidEnabled
+        ? {
+            [Crepe.Feature.CodeMirror]: {
+              renderPreview: renderMermaidPreview
+            }
+          }
+        : {})
     }
   });
 
