@@ -110,7 +110,10 @@
     "updater.installFailed.message": "Das Update konnte nicht installiert werden. Die aktuelle Version läuft weiter — du kannst es später erneut versuchen.",
     "updater.ready.title": "Update bereit",
     "updater.ready.message": "Mindstream Notes wird neu gestartet, um das Update abzuschließen. Ungespeicherte Änderungen sind bereits gesichert.",
-    "updater.restart": "Jetzt neu starten"
+    "updater.restart": "Jetzt neu starten",
+    "updater.progress.title": "Mindstream Notes wird aktualisiert",
+    "updater.progress.downloading": "Update wird heruntergeladen…",
+    "updater.progress.installing": "Wird installiert…"
   },
   "categories": {
     "account": { "label": "Konto & Synchronisation" },
