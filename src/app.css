@@ -344,12 +344,19 @@ body {
    * top of the shadow. Promoting the chevron to z-index 1 puts it (and
    * its shadow) above every tab, regardless of hover/active state.
    *
-   * Negative x-offset biases the cast toward the tabs and the negative
-   * spread (-2px) trims the vertical bleed so the shadow stays inside
-   * the 40px strip instead of leaking into the panel below. */
+   * `clip-path: inset(0 0 0 -100px)` constrains the shadow to the
+   * strip's vertical bounds. The chevron is `height: 100%` so its top
+   * and bottom edges line up with the strip's, meaning a `top: 0` /
+   * `bottom: 0` inset clips exactly at the strip edges — without this
+   * the blurred shadow leaks ~10px above (into the title bar) and ~10px
+   * below (into the panel toolbar / content). The `-100px` left inset
+   * lets the leftward portion extend freely over the tabs; `right: 0`
+   * keeps the shadow off the right-actions cluster sitting next to the
+   * chevron on the right. */
   position: relative;
   z-index: 1;
-  box-shadow: -6px 0 10px -2px rgb(0 0 0 / 0.25);
+  clip-path: inset(0 0 0 -100px);
+  box-shadow: -1px 0 2px -1px rgb(0 0 0 / 0.25);
 }
 
 .dockview-theme-bridge .dv-tabs-overflow-dropdown-default:hover,
