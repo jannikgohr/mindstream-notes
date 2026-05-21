@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
-  import { Crepe } from '@milkdown/crepe';
+  import { Crepe, CrepeFeature } from '@milkdown/crepe';
   import { editorViewCtx, serializerCtx } from '@milkdown/kit/core';
   import { collab, collabServiceCtx } from '@milkdown/plugin-collab';
   // Imported via the kit subpath rather than `@milkdown/plugin-listener`
@@ -41,11 +41,27 @@
   let { noteId }: Props = $props();
 
   /**
-   * Debounce the auto-save: wait this long after the last keystroke before
-   * hitting Rust. The user said "save after inactivity" — 800ms feels
-   * unhurried but doesn't risk losing typing in a crash.
+   * Auto-save settings — both reactive so a live change in the settings
+   * dialog takes effect on the next keystroke without remounting the
+   * editor. The debounce read is bounded defensively because a corrupt
+   * localStorage entry could otherwise put the editor into an infinite-
+   * scheduled state (0 or negative) or fire too rarely to be useful.
    */
-  const SAVE_DEBOUNCE_MS = 800;
+  const autoSaveEnabled = $derived(
+    (getSettingValue('editor.autoSave') as boolean | undefined) ?? true
+  );
+  const saveDebounceMs = $derived.by(() => {
+    const raw = getSettingValue('editor.autoSaveDebounce');
+    const n = typeof raw === 'number' ? raw : Number(raw);
+    if (!Number.isFinite(n)) return 800;
+    return Math.min(5000, Math.max(100, n));
+  });
+  const trimTrailingOnSave = $derived(
+    (getSettingValue('editor.trimTrailing') as boolean | undefined) ?? true
+  );
+  const mathEnabled = $derived(
+    (getSettingValue('editor.math') as boolean | undefined) ?? true
+  );
 
   let host: HTMLDivElement | null = $state(null);
   // $state because we hand the instance to MobileEditorToolbar as a prop;
@@ -214,10 +230,18 @@
         blockOnUpload: assetBridge.uploadFile,
         proxyDomURL: assetBridge.resolveUrl
       };
+      // Feature toggles read from settings at construct time only — Crepe
+      // doesn't expose a way to flip features after .create() short of
+      // rebuilding the editor, and a rebuild mid-session would discard the
+      // live collab state and any unsaved drag in flight. So changes to
+      // `editor.math` apply on the next note open.
+      const features: Partial<Record<CrepeFeature, boolean>> = {};
+      if (mobile) features[Crepe.Feature.BlockEdit] = false;
+      if (!mathEnabled) features[Crepe.Feature.Latex] = false;
       crepe = new Crepe({
         root: host,
         defaultValue: '',
-        features: mobile ? { [Crepe.Feature.BlockEdit]: false } : undefined,
+        features: Object.keys(features).length > 0 ? features : undefined,
         featureConfigs: {
           [Crepe.Feature.ImageBlock]: imageBlockConfig
         }
@@ -534,20 +558,40 @@
     // a note that just got trashed elsewhere. Drop those silently rather
     // than persisting an edit to a trashed note.
     if (isTrashed) return;
+    // Honour the user's auto-save toggle. We still cancel any in-flight
+    // debounce so a setting flip mid-debounce doesn't fire one last save
+    // after the user turned it off. yrs_state continues to mutate locally
+    // either way — the next manual save (or re-enabling auto-save with a
+    // fresh keystroke) will flush.
+    if (!autoSaveEnabled) {
+      if (saveTimer) {
+        clearTimeout(saveTimer);
+        saveTimer = null;
+      }
+      savingState = 'idle';
+      return;
+    }
     savingState = 'pending';
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(async () => {
       try {
         savingState = 'saving';
         // Capture the markdown + y-doc state *now*, after the user has
-        // stopped typing for SAVE_DEBOUNCE_MS. Pulling markdown via the
+        // stopped typing for saveDebounceMs. Pulling markdown via the
         // live serializer (instead of via the listener plugin) means
         // remote-applied edits — which y-prosemirror dispatches with
         // `addToHistory: false` and which the listener therefore ignores
         // — are still reflected in the body we save. Array.from is
         // necessary because Tauri serialises Uint8Array as an empty
         // object via JSON.stringify.
-        const markdown = getMarkdown ? getMarkdown() : '';
+        const rawMarkdown = getMarkdown ? getMarkdown() : '';
+        // Trim trailing whitespace per-line on the way to disk. We don't
+        // mutate the live editor doc — that would jump the caret and
+        // broadcast a no-op edit to peers; we only sanitise the snapshot
+        // we hand to Rust.
+        const markdown = trimTrailingOnSave
+          ? rawMarkdown.replace(/[ \t]+$/gm, '')
+          : rawMarkdown;
         const yrsState = yDoc
           ? Array.from(Y.encodeStateAsUpdate(yDoc))
           : undefined;
@@ -566,7 +610,7 @@
         savingState = 'error';
         console.error('[NoteEditor] save failed', err);
       }
-    }, SAVE_DEBOUNCE_MS);
+    }, saveDebounceMs);
   }
 
   /**
