@@ -95,7 +95,7 @@ function wikilinkTriggerPlugin(bridge: WikilinkBridge): Plugin<TriggerState> {
   function close() {
     bridge.state.open = false;
     bridge.state.query = '';
-    bridge.state.anchor = null;
+    bridge.state.caretRect = null;
     bridge.state.highlight = 0;
     if (viewRef) {
       viewRef.dispatch(viewRef.state.tr.setMeta(triggerPluginKey, { close: true }));
@@ -177,7 +177,7 @@ function wikilinkTriggerPlugin(bridge: WikilinkBridge): Plugin<TriggerState> {
             if (wasOpen) {
               bridge.state.open = false;
               bridge.state.query = '';
-              bridge.state.anchor = null;
+              bridge.state.caretRect = null;
               bridge.state.highlight = 0;
             }
             return;
@@ -188,8 +188,19 @@ function wikilinkTriggerPlugin(bridge: WikilinkBridge): Plugin<TriggerState> {
             cursor,
             '\n'
           );
-          const coords = view.coordsAtPos(cursor);
-          const anchor = { x: coords.left, y: coords.bottom };
+          // Caret rect in viewport coords. The popup hands this to
+          // floating-ui's virtual element so positioning survives
+          // ancestors with CSS transforms (dockview panels) and the
+          // sidebar opening/closing without us re-deriving coords.
+          const c = view.coordsAtPos(cursor);
+          const caretRect = {
+            top: c.top,
+            bottom: c.bottom,
+            left: c.left,
+            right: c.left,
+            width: 0,
+            height: c.bottom - c.top
+          };
           // Only reset highlight when the query string actually changes
           // (so arrow-key nav isn't clobbered by a tick of reactivity).
           if (!wasOpen || bridge.state.query !== query) {
@@ -197,7 +208,7 @@ function wikilinkTriggerPlugin(bridge: WikilinkBridge): Plugin<TriggerState> {
           }
           bridge.state.open = true;
           bridge.state.query = query;
-          bridge.state.anchor = anchor;
+          bridge.state.caretRect = caretRect;
           // (intentionally don't touch newState/prevState beyond what
           // ProseMirror already gives us)
           void prevState;

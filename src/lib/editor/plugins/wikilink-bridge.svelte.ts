@@ -20,13 +20,29 @@
  *   - Popup calls:     setCommitFromPopup (once on mount)
  */
 
+/**
+ * Caret rectangle in viewport coordinates — what ProseMirror's
+ * `view.coordsAtPos` returns, repackaged as a DOMRect-shaped struct so
+ * floating-ui can consume it via a virtual element's
+ * `getBoundingClientRect()`. We keep it deliberately plain (not a real
+ * `DOMRect` instance) so the bridge stays serialisable / debuggable.
+ */
+export interface CaretRect {
+  top: number;
+  left: number;
+  right: number;
+  bottom: number;
+  width: number;
+  height: number;
+}
+
 export interface WikilinkBridge {
   state: {
     open: boolean;
     /** Text between the `[[` and the cursor — popup filter input. */
     query: string;
-    /** Viewport coords for the popup anchor — top-left of caret rect. */
-    anchor: { x: number; y: number } | null;
+    /** Caret rect for floating-ui positioning; null when menu is closed. */
+    caretRect: CaretRect | null;
     /** Index in the popup's filtered list currently highlighted. */
     highlight: number;
   };
@@ -55,7 +71,7 @@ export function createWikilinkBridge(): WikilinkBridge {
   const state = $state({
     open: false,
     query: '',
-    anchor: null as { x: number; y: number } | null,
+    caretRect: null as CaretRect | null,
     highlight: 0
   });
 
