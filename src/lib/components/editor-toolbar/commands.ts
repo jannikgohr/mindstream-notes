@@ -74,7 +74,8 @@ import {
   Image as ImageIcon,
   Code,
   Table as TableIcon,
-  Sigma
+  Sigma,
+  Workflow
 } from 'lucide-svelte';
 import type { ComponentType } from 'svelte';
 
@@ -97,6 +98,15 @@ export interface ToolbarLeaf {
    * updates the button visual.
    */
   isActive?: (ctx: Ctx) => boolean;
+  /**
+   * Optional setting id that gates whether this item is shown at all.
+   * Read via `getSettingValue(gate)`; a falsy value (false / null /
+   * undefined) drops the leaf from the rendered toolbar. The check is
+   * reactive — flipping the setting in the dialog adds/removes the
+   * button without remounting the editor (unlike the slash menu, which
+   * is baked into Crepe at construct time).
+   */
+  gate?: string;
 }
 
 export interface ToolbarGroup {
@@ -105,6 +115,13 @@ export interface ToolbarGroup {
   labelKey: string;
   icon: ComponentType;
   items: ToolbarLeaf[];
+  /**
+   * Same semantics as `ToolbarLeaf.gate` but for the whole group. A
+   * group with all its items gated off is hidden automatically — this
+   * is only for explicitly hiding a group while keeping its items'
+   * gates independent.
+   */
+  gate?: string;
 }
 
 export type ToolbarItem = ToolbarLeaf | ToolbarGroup;
@@ -600,6 +617,18 @@ const insertMath = (ctx: Ctx) => {
     attrs: { language: 'LaTeX' }
   });
 };
+const insertMermaid = (ctx: Ctx) => {
+  // Same recipe as `insertMath` but with `language: 'mermaid'`, which
+  // the renderPreview hook in `$lib/editor/plugins/mermaid.ts` picks up
+  // to render the diagram below the source. Always present in the
+  // toolbar (matching the math convention) regardless of the
+  // `editor.mermaid` setting — clicking it with the renderer off still
+  // gives you a code block, just no preview.
+  ctx.get(commandsCtx).call(addBlockTypeCommand.key, {
+    nodeType: codeBlockSchema.type(ctx),
+    attrs: { language: 'mermaid' }
+  });
+};
 
 // -- Catalogue ---------------------------------------------------------------
 
@@ -640,10 +669,11 @@ export const TOOLBAR_ITEMS: ToolbarItem[] = [
     labelKey: 'editor.toolbar.advanced.group',
     icon: Sparkles,
     items: [
-      { kind: 'leaf', id: 'image', labelKey: 'editor.toolbar.advanced.image', icon: ImageIcon, action: insertImageBlock },
-      { kind: 'leaf', id: 'code',  labelKey: 'editor.toolbar.advanced.code',  icon: Code,      action: insertCodeBlock },
-      { kind: 'leaf', id: 'table', labelKey: 'editor.toolbar.advanced.table', icon: TableIcon, action: insertTable },
-      { kind: 'leaf', id: 'math',  labelKey: 'editor.toolbar.advanced.math',  icon: Sigma,     action: insertMath }
+      { kind: 'leaf', id: 'image',   labelKey: 'editor.toolbar.advanced.image',   icon: ImageIcon, action: insertImageBlock },
+      { kind: 'leaf', id: 'code',    labelKey: 'editor.toolbar.advanced.code',    icon: Code,      action: insertCodeBlock },
+      { kind: 'leaf', id: 'table',   labelKey: 'editor.toolbar.advanced.table',   icon: TableIcon, action: insertTable },
+      { kind: 'leaf', id: 'math',    labelKey: 'editor.toolbar.advanced.math',    icon: Sigma,     action: insertMath,     gate: 'editor.math' },
+      { kind: 'leaf', id: 'mermaid', labelKey: 'editor.toolbar.advanced.mermaid', icon: Workflow,  action: insertMermaid,  gate: 'editor.mermaid' }
     ]
   }
 ];

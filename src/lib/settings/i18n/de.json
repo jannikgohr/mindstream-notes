@@ -81,6 +81,7 @@
     "editor.toolbar.advanced.code": "Codeblock",
     "editor.toolbar.advanced.table": "Tabelle",
     "editor.toolbar.advanced.math": "Mathematik",
+    "editor.toolbar.advanced.mermaid": "Mermaid-Diagramm",
     "editor.toolbar.more": "Mehr",
 
     "editor.status.live": "Live-Collab verbunden",
@@ -90,6 +91,13 @@
     "editor.status.saved": "Gespeichert",
     "editor.status.error": "Speichern fehlgeschlagen",
     "editor.status.readonly": "Schreibgeschützt — im Papierkorb",
+    "editor.status.short.live": "Live",
+    "editor.status.short.offline": "Offline",
+    "editor.status.short.readonly": "Schreibgeschützt",
+    "editor.trash.banner": "Diese Notiz liegt im Papierkorb und ist schreibgeschützt. Stelle sie wieder her, um sie zu bearbeiten.",
+    "editor.menu.mermaid": "Mermaid-Diagramm",
+    "editor.wikilink.menu.label": "Notiz verlinken",
+    "editor.wikilink.menu.empty": "Keine Treffer — weiter tippen, um einen neuen Link einzufügen",
     "editor.popout": "In neuem Fenster öffnen",
 
     "editor.unknownKind.title": "Diese Notiz kann nicht geöffnet werden",
@@ -113,7 +121,9 @@
     "updater.restart": "Jetzt neu starten",
     "updater.progress.title": "Mindstream Notes wird aktualisiert",
     "updater.progress.downloading": "Update wird heruntergeladen…",
-    "updater.progress.installing": "Wird installiert…"
+    "updater.progress.installing": "Wird installiert…",
+    "updater.unsupportedLinux.title": "In-App-Update nicht verfügbar",
+    "updater.unsupportedLinux.message": "Mindstream Notes wurde aus einem Systempaket (rpm / deb) installiert und kann nur über deine Distribution aktualisiert werden. Lade die neueste Version unter https://github.com/jannikgohr/mindstream-notes/releases/latest herunter und installiere sie neu, oder nutze die AppImage-Variante für In-App-Updates."
   },
   "categories": {
     "account": { "label": "Konto & Synchronisation" },
@@ -159,7 +169,6 @@
     "appearance.sortStrategy": { "label": "Dateibaum-Sortierung" },
     "appearance.foldersFirst": { "label": "Ordner zuerst" },
     "editor.defaultMode": { "label": "Standard-Editor" },
-    "editor.vimMode": { "label": "Vim-Modus" },
     "editor.tabSize": { "label": "Tab-Breite" },
     "editor.autoPair": { "label": "Klammern automatisch schließen" },
     "editor.trimTrailing": { "label": "Leerzeichen am Zeilenende entfernen" },

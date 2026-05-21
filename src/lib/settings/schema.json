@@ -170,7 +170,6 @@
               "default": "wysiwyg",
               "options": ["wysiwyg", "source", "split"]
             },
-            { "id": "editor.vimMode", "scope": "V", "type": "toggle", "default": false },
             {
               "id": "editor.tabSize",
               "scope": "V",
@@ -201,7 +200,7 @@
               "id": "editor.autoSaveDebounce",
               "scope": "V",
               "type": "slider",
-              "default": 500,
+              "default": 800,
               "min": 100,
               "max": 5000,
               "step": 100,

@@ -2,14 +2,9 @@
   import { onDestroy, onMount } from 'svelte';
   import { Crepe } from '@milkdown/crepe';
   import { editorViewCtx, serializerCtx } from '@milkdown/kit/core';
-  import { collab, collabServiceCtx } from '@milkdown/plugin-collab';
-  // Imported via the kit subpath rather than `@milkdown/plugin-listener`
-  // directly — keeps us from declaring a transitive dep that's already
-  // bundled through @milkdown/kit.
-  import { listener } from '@milkdown/kit/plugin/listener';
+  import { collabServiceCtx } from '@milkdown/plugin-collab';
   import * as Y from 'yjs';
   import { Awareness } from 'y-protocols/awareness';
-  import { Trash2, Wifi, WifiOff } from 'lucide-svelte';
   import {
     loadNote,
     saveNote as apiSaveNote,
@@ -32,8 +27,15 @@
     type AssetBridge
   } from '$lib/assets/bridge';
   import { listen } from '$lib/api/events';
+  import { buildCrepe } from '$lib/editor/crepe-setup';
+  import { pickCursorColor } from '$lib/editor/cursor-color';
+  import { base64ToBytes } from '$lib/editor/base64';
+  import { createWikilinkBridge } from '$lib/editor/plugins';
   import EditorToolbar from './editor-toolbar/EditorToolbar.svelte';
   import MobileEditorToolbar from './editor-toolbar/MobileEditorToolbar.svelte';
+  import TrashBanner from './note-editor/TrashBanner.svelte';
+  import StatusRow from './note-editor/StatusRow.svelte';
+  import WikilinkMenu from './note-editor/WikilinkMenu.svelte';
 
   interface Props {
     noteId: string;
@@ -41,11 +43,42 @@
   let { noteId }: Props = $props();
 
   /**
-   * Debounce the auto-save: wait this long after the last keystroke before
-   * hitting Rust. The user said "save after inactivity" — 800ms feels
-   * unhurried but doesn't risk losing typing in a crash.
+   * Auto-save settings — both reactive so a live change in the settings
+   * dialog takes effect on the next keystroke without remounting the
+   * editor. The debounce read is bounded defensively because a corrupt
+   * localStorage entry could otherwise put the editor into an infinite-
+   * scheduled state (0 or negative) or fire too rarely to be useful.
    */
-  const SAVE_DEBOUNCE_MS = 800;
+  const autoSaveEnabled = $derived(
+    (getSettingValue('editor.autoSave') as boolean | undefined) ?? true
+  );
+  const saveDebounceMs = $derived.by(() => {
+    const raw = getSettingValue('editor.autoSaveDebounce');
+    const n = typeof raw === 'number' ? raw : Number(raw);
+    if (!Number.isFinite(n)) return 800;
+    return Math.min(5000, Math.max(100, n));
+  });
+  const trimTrailingOnSave = $derived(
+    (getSettingValue('editor.trimTrailing') as boolean | undefined) ?? true
+  );
+  const mathEnabled = $derived(
+    (getSettingValue('editor.math') as boolean | undefined) ?? true
+  );
+  const autoPairEnabled = $derived(
+    (getSettingValue('editor.autoPair') as boolean | undefined) ?? true
+  );
+  const mermaidEnabled = $derived(
+    (getSettingValue('editor.mermaid') as boolean | undefined) ?? true
+  );
+  const wikilinksEnabled = $derived(
+    (getSettingValue('editor.wikilinks') as boolean | undefined) ?? true
+  );
+
+  // Per-editor bridge between the wikilink trigger plugin and the
+  // WikilinkMenu popup. Created up-front (cheap; just a $state object)
+  // so the popup template never has to defend against `bridge == null`
+  // — if wikilinks are off, the plugin simply never opens it.
+  const wikilinkBridge = createWikilinkBridge();
 
   let host: HTMLDivElement | null = $state(null);
   // $state because we hand the instance to MobileEditorToolbar as a prop;
@@ -180,55 +213,27 @@
         const userName = session?.username ?? 'You';
         localAwareness.setLocalStateField('user', {
           name: userName,
-          color: pickColor(userName)
+          color: pickCursorColor(userName)
         });
       } catch (err) {
         console.debug('[NoteEditor] no session for awareness', err);
       }
 
-      // On mobile we disable Crepe's BlockEdit feature, which is the
-      // single flag that bundles both `@milkdown/kit/plugin/block` (the
-      // drag handle + "+" button that floats next to the active block)
-      // and `@milkdown/kit/plugin/slash` (the typed "/" menu). The
-      // block-handle is a hover/mouse affordance that doesn't make sense
-      // on touch, and the slash menu is awkward on a mobile keyboard.
-      // The 90px ProseMirror side-padding that exists to leave room for
-      // the handle is also zeroed via the .mobile-editor class below.
-      // Asset hooks let Crepe's ImageBlock feature persist dropped /
-      // pasted images via our encrypted SQLite assets table (sliced
-      // 2a/b — same plumbing tldraw uses on the freeform side) instead
-      // of stashing a session-lived `blob:` URL in the markdown. The
-      // returned `asset:mindstream/<id>` URL is what lands in the
-      // saved markdown body; `proxyDomURL` rehydrates it back into a
-      // blob URL for every render so the editor can paint the image.
       // Bridge is per-note so uploads carry the right owning_note_id
-      // (FK + sync routing) and the blob-URL cache disposes cleanly
-      // on editor unmount.
+      // (FK + sync routing) and the blob-URL cache disposes cleanly on
+      // editor unmount. Everything else about Crepe construction (feature
+      // flags, plugin stack, image hooks) lives in $lib/editor/crepe-setup.
       assetBridge = createAssetBridge(noteId);
-      const imageBlockConfig = {
-        onUpload: assetBridge.uploadFile,
-        // Crepe exposes separate hooks for inline vs block image — both
-        // route through the same upload path so the asset:url ends up
-        // in the markdown either way.
-        inlineOnUpload: assetBridge.uploadFile,
-        blockOnUpload: assetBridge.uploadFile,
-        proxyDomURL: assetBridge.resolveUrl
-      };
-      crepe = new Crepe({
-        root: host,
-        defaultValue: '',
-        features: mobile ? { [Crepe.Feature.BlockEdit]: false } : undefined,
-        featureConfigs: {
-          [Crepe.Feature.ImageBlock]: imageBlockConfig
-        }
+      crepe = buildCrepe({
+        host,
+        mobile,
+        mathEnabled,
+        autoPairEnabled,
+        mermaidEnabled,
+        wikilinksEnabled,
+        wikilinkBridge,
+        assetBridge
       });
-      crepe.editor.use(collab);
-      // The listener plugin gives EditorToolbar a single hook to refresh
-      // its mark-active state (Bold/Italic icons) on every transaction —
-      // selectionUpdated and updated cover cursor moves, typing, remote
-      // collab edits, etc. Without it the toolbar would have to install
-      // its own prose plugin, which Crepe doesn't allow post-create.
-      crepe.editor.use(listener);
       await crepe.create();
 
       // Bind y-doc + awareness AFTER create, then snapshot the serializer
@@ -534,20 +539,40 @@
     // a note that just got trashed elsewhere. Drop those silently rather
     // than persisting an edit to a trashed note.
     if (isTrashed) return;
+    // Honour the user's auto-save toggle. We still cancel any in-flight
+    // debounce so a setting flip mid-debounce doesn't fire one last save
+    // after the user turned it off. yrs_state continues to mutate locally
+    // either way — the next manual save (or re-enabling auto-save with a
+    // fresh keystroke) will flush.
+    if (!autoSaveEnabled) {
+      if (saveTimer) {
+        clearTimeout(saveTimer);
+        saveTimer = null;
+      }
+      savingState = 'idle';
+      return;
+    }
     savingState = 'pending';
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(async () => {
       try {
         savingState = 'saving';
         // Capture the markdown + y-doc state *now*, after the user has
-        // stopped typing for SAVE_DEBOUNCE_MS. Pulling markdown via the
+        // stopped typing for saveDebounceMs. Pulling markdown via the
         // live serializer (instead of via the listener plugin) means
         // remote-applied edits — which y-prosemirror dispatches with
         // `addToHistory: false` and which the listener therefore ignores
         // — are still reflected in the body we save. Array.from is
         // necessary because Tauri serialises Uint8Array as an empty
         // object via JSON.stringify.
-        const markdown = getMarkdown ? getMarkdown() : '';
+        const rawMarkdown = getMarkdown ? getMarkdown() : '';
+        // Trim trailing whitespace per-line on the way to disk. We don't
+        // mutate the live editor doc — that would jump the caret and
+        // broadcast a no-op edit to peers; we only sanitise the snapshot
+        // we hand to Rust.
+        const markdown = trimTrailingOnSave
+          ? rawMarkdown.replace(/[ \t]+$/gm, '')
+          : rawMarkdown;
         const yrsState = yDoc
           ? Array.from(Y.encodeStateAsUpdate(yDoc))
           : undefined;
@@ -566,44 +591,7 @@
         savingState = 'error';
         console.error('[NoteEditor] save failed', err);
       }
-    }, SAVE_DEBOUNCE_MS);
-  }
-
-  /**
-   * Stable colour from the username so the same user shows the same
-   * cursor colour across sessions and devices. Not security-relevant;
-   * just a tiny readability win.
-   *
-   * Must be hex (`#rrggbb`) — y-prosemirror's yCursorPlugin warns
-   * "A user uses an unsupported color format" on `hsl(...)` and similar
-   * CSS functions. We pick from a fixed palette so all peers agree on
-   * the same hex value for the same username without doing colour math.
-   */
-  const CURSOR_COLORS = [
-    '#ef4444', '#f97316', '#eab308', '#22c55e', '#10b981',
-    '#06b6d4', '#0ea5e9', '#3b82f6', '#6366f1', '#8b5cf6',
-    '#a855f7', '#d946ef', '#ec4899', '#f43f5e', '#84cc16'
-  ];
-  function pickColor(seed: string): string {
-    let hash = 0;
-    for (let i = 0; i < seed.length; i++) {
-      hash = (hash * 31 + seed.charCodeAt(i)) | 0;
-    }
-    return CURSOR_COLORS[Math.abs(hash) % CURSOR_COLORS.length];
-  }
-
-  /**
-   * Decode standard or URL-safe base64 into bytes. The Rust side emits
-   * standard base64 via etebase::utils::to_base64; URL-safe handling is
-   * defensive in case we ever swap encoders.
-   */
-  function base64ToBytes(b64: string): Uint8Array {
-    const standard = b64.replace(/-/g, '+').replace(/_/g, '/');
-    const padded = standard + '='.repeat((4 - (standard.length % 4)) % 4);
-    const bin = atob(padded);
-    const out = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-    return out;
+    }, saveDebounceMs);
   }
 
   // Desktop toolbar visibility is a per-device toggle (default on). The
@@ -617,22 +605,6 @@
     !mobile && crepeReady && !isTrashed && desktopToolbarEnabled
   );
   const showMobileToolbar = $derived(mobile && crepeReady && !isTrashed);
-
-  const statusLabel = $derived.by(() => {
-    if (isTrashed) return 'Read-only';
-    switch (savingState) {
-      case 'pending':
-        return 'Editing…';
-      case 'saving':
-        return 'Saving…';
-      case 'saved':
-        return 'Saved';
-      case 'error':
-        return 'Save failed';
-      default:
-        return '';
-    }
-  });
 
   // Mirror our reactive status into the global per-note store so the
   // dockview right-header (NoteStatusIcons.svelte) can render the
@@ -659,42 +631,10 @@
     />
   {/if}
   {#if mobile && !isTrashed}
-    <!-- Mobile keeps the inline Saved/Editing/Live indicator because
-         there's no dockview tab header to host the icon equivalent.
-         Desktop pushes the same state into the note-status store and
-         the right-header chips render it next to the popout button.
-         Hidden on trashed notes — the trash banner below already
-         conveys read-only. -->
-    <div
-      class="flex h-5 shrink-0 items-center justify-end gap-2 px-3 text-[10px] uppercase tracking-wider text-muted-foreground"
-      aria-live="polite"
-    >
-      {#if collabConfigured}
-        {#if collabOnline}
-          <span class="flex items-center gap-1 text-emerald-600 dark:text-emerald-400" title="Live collab connected">
-            <Wifi class="size-3" aria-hidden="true" />
-            Live
-          </span>
-        {:else}
-          <span class="flex items-center gap-1" title="Live collab disconnected — reconnecting">
-            <WifiOff class="size-3" aria-hidden="true" />
-            Offline
-          </span>
-        {/if}
-      {/if}
-      <span>{statusLabel}</span>
-    </div>
+    <StatusRow {collabConfigured} {collabOnline} {savingState} {isTrashed} />
   {/if}
   {#if isTrashed}
-    <div
-      class="flex shrink-0 items-center gap-2 border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-xs text-destructive"
-      role="status"
-    >
-      <Trash2 class="size-3.5 shrink-0" aria-hidden="true" />
-      <span>
-        This note is in the trash and is read-only. Restore it to edit.
-      </span>
-    </div>
+    <TrashBanner />
   {/if}
   <!--
     flex-1 + min-h-0 (not h-full) so the scroll area fills the *remaining*
@@ -724,3 +664,13 @@
 {#if showMobileToolbar}
   <MobileEditorToolbar {crepe} />
 {/if}
+
+<!--
+  Wikilink popup: portal'd out of the editor's overflow container via
+  position:fixed (see WikilinkMenu's `style` derivation). Rendered
+  here at the root of the component template so it isn't clipped by
+  the scroll wrapper.  Closed and gated by `bridge.state.open`, which
+  the plugin only flips when wikilinks are enabled, so leaving this
+  in the tree unconditionally costs ~0 when the setting is off.
+-->
+<WikilinkMenu bridge={wikilinkBridge} />
