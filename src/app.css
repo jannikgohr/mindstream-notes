@@ -33,6 +33,10 @@
   --input: oklch(0.922 0 0);
   --ring: oklch(0.708 0 0);
   --radius: 0.5rem;
+  /* Dockview chrome elevation — sits between --background and --muted so
+   * the tab strip reads as a distinct band from both the content panel
+   * below it and the inactive tabs above it. */
+  --dock-strip: oklch(0.95 0 0);
   --left-sidebar-width: 0px;
   --left-sidebar-enabled: 1;
   /* Height of the floating mobile formatting toolbar — set live by
@@ -51,7 +55,8 @@
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
+  --background: oklch(0.1735 0.002 286.18);
+  --dock-strip: oklch(0.219 0.004 286.076);
   --foreground: oklch(0.985 0 0);
   --card: oklch(0.18 0 0);
   --card-foreground: oklch(0.985 0 0);
@@ -145,14 +150,21 @@ body {
 .dockview-theme-bridge {
   --dv-background-color: var(--background);
   --dv-paneview-active-outline-color: var(--ring);
-  --dv-tabs-and-actions-container-background-color: var(--muted);
+  /* Strip — mid-tone so the floating tab pills (--background) read
+   * cleanly against it. */
+  --dv-tabs-and-actions-container-background-color: var(--dock-strip);
   --dv-tabs-and-actions-container-font-size: 13px;
-  --dv-tabs-and-actions-container-height: 36px;
-  --dv-tab-divider-color: var(--background);
+  --dv-tabs-and-actions-container-height: 40px;
+  /* Chrome uses its own hairline-via-pseudo-element separator (see
+   * .dv-tab::before rule below) — dockview's full-height divider isn't
+   * the right look. */
+  --dv-tab-divider-color: transparent;
+  /* Chrome-style: only the active tab carries a background, inactive
+   * tabs are transparent against the strip until hovered. */
   --dv-activegroup-visiblepanel-tab-background-color: var(--background);
-  --dv-activegroup-hiddenpanel-tab-background-color: var(--muted);
+  --dv-activegroup-hiddenpanel-tab-background-color: transparent;
   --dv-inactivegroup-visiblepanel-tab-background-color: var(--background);
-  --dv-inactivegroup-hiddenpanel-tab-background-color: var(--muted);
+  --dv-inactivegroup-hiddenpanel-tab-background-color: transparent;
   --dv-tab-hover-background-color: var(--accent);
   --dv-activegroup-visiblepanel-tab-color: var(--foreground);
   --dv-activegroup-hiddenpanel-tab-color: var(--muted-foreground);
@@ -176,6 +188,67 @@ body {
    */
   --dv-overlay-z-index: 10000;
   color: var(--foreground);
+}
+
+/*
+ * Chrome-style inline tabs.
+ *
+ * Each tab is a pill that floats inside the strip — all four corners
+ * rounded, with a small vertical margin above and below so the strip
+ * colour is visible on both sides. The active tab carries a
+ * panel-coloured background plus a subtle drop shadow to read as the
+ * foreground card; inactive tabs are transparent until hovered, when a
+ * matching pill appears.
+ *
+ * Hairline separators sit between adjacent inactive-and-unhovered tabs,
+ * and vanish the moment either neighbour becomes active or hovered —
+ * the same pattern Chrome uses to keep the strip clean when the user is
+ * pointing at a tab.
+ *
+ * Scoped to `.dv-tabs-container > .dv-tab` so the rule doesn't leak
+ * into the overflow popup, which renders its own list of `.dv-tab`
+ * elements with their own (all-corners rounded) styling.
+ */
+.dockview-theme-bridge .dv-tabs-container > .dv-tab {
+  position: relative;
+  align-self: center;
+  height: calc(var(--dv-tabs-and-actions-container-height) - 8px);
+  border-radius: 8px;
+  margin: 0 1px;
+  padding: 0 12px;
+  transition: background-color 120ms ease-out;
+}
+
+.dockview-theme-bridge .dv-tabs-container > .dv-tab:first-child {
+  margin-left: 4px;
+}
+
+.dockview-theme-bridge .dv-tabs-container > .dv-tab:last-child {
+  margin-right: 4px;
+}
+
+/* Subtle elevation so the active tab reads as the foreground card sitting
+ * on the strip, the way Chrome's selected tab does. */
+.dockview-theme-bridge .dv-tabs-container > .dv-tab.dv-active-tab {
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.18);
+}
+
+/* Hairline separator between two adjacent inactive (and unhovered) tabs.
+ * The `prev:not(:hover) + next:not(:hover)::before` chain renders the
+ * line on the LATER of two siblings, anchored to its left edge so it
+ * sits in the gap between them. The selector evaluates fresh on every
+ * pointer move, so the line hides as soon as either neighbour is
+ * hovered or becomes active. */
+.dockview-theme-bridge .dv-tabs-container > .dv-tab:not(.dv-active-tab):not(:hover)
+  + .dv-tab:not(.dv-active-tab):not(:hover)::before {
+  content: '';
+  position: absolute;
+  left: -1px;
+  top: 25%;
+  bottom: 25%;
+  width: 1px;
+  background-color: oklch(from var(--foreground) l c h / 0.15);
+  pointer-events: none;
 }
 
 /*
@@ -338,7 +411,7 @@ main:not(.fullscreen-note) .milkdown-drop-indicator {
   --crepe-color-background: oklch(0.18 0 0);
   --crepe-color-on-background: oklch(0.92 0 0);
   --crepe-color-surface: oklch(0.18 0 0);
-  --crepe-color-surface-low: oklch(0.215 0 0);
+  --crepe-color-surface-low: oklch(0.219 0.004 286.076);
   --crepe-color-on-surface: oklch(0.86 0 0);
   --crepe-color-on-surface-variant: oklch(0.7 0 0);
   --crepe-color-outline: oklch(0.45 0 0);
