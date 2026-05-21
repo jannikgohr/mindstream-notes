@@ -135,6 +135,31 @@
     dock.onDidAddPanel(() => schedulePersist());
     dock.onDidLayoutChange(() => schedulePersist());
 
+    /*
+     * Tab/group drag → flag the <body> so freeform panels can opt out of
+     * pointer events for the duration of the drag.
+     *
+     * Why: tldraw (mounted inside freeform panels) installs `dragover` /
+     * `drop` listeners on `.tl-container` in @tldraw/editor's
+     * useDocumentEvents.js that call `e.stopPropagation()` and re-dispatch
+     * onto `.tl-canvas`. dockview's own `dragover` listener uses
+     * `useCapture: true` so it still fires (which is why the drop indicator
+     * shows up correctly), but its `drop` listener is bubble-phase only —
+     * tldraw's stopPropagation kills the bubble before dockview ever sees
+     * the drop, so the layout change never happens and the freeform panel
+     * looks like it can't be dropped onto.
+     *
+     * Fix: while a dockview drag is in progress, hide tldraw from pointer
+     * routing entirely (see `body.dv-tab-dragging .tl-container` in
+     * app.css). dockview's drop overlay sits above tldraw at z-index 1000,
+     * so the drop fires on the overlay where its handlers are wired
+     * normally. External file drops (image → tldraw asset import) still
+     * work because they don't go through onWillDragPanel/Group — they
+     * originate outside the window.
+     */
+    dock.onWillDragPanel(markDragging);
+    dock.onWillDragGroup(markDragging);
+
     if (!tree.ready) await loadTree();
 
     const restored = tryRestoreLayout();
@@ -270,6 +295,19 @@
     setActiveNote(id);
   }
 
+  /**
+   * Tag the document body for the duration of a dockview tab/group drag,
+   * so CSS in app.css can disable pointer events on tldraw subtrees.
+   * Idempotent — `add`/`remove` on a classList is safe to call repeatedly.
+   * See the long comment in setupDockview() above for why this exists.
+   */
+  function markDragging() {
+    document.body.classList.add('dv-tab-dragging');
+  }
+  function clearDragging() {
+    document.body.classList.remove('dv-tab-dragging');
+  }
+
   onMount(() => {
     void tick().then(setupDockview);
     const onResize = () => {};
@@ -279,8 +317,24 @@
     // here. Unsubscribed on unmount so a stale handler from a
     // re-mounted layout doesn't double-open a note.
     const unsub = subscribeOpenNoteRequest((id) => openNote(id));
+
+    // Cleanup the dv-tab-dragging body class on every drag termination:
+    //   - `dragend` fires on the source element after a successful drop
+    //     OR a cancellation (Esc, drop outside any target). useCapture
+    //     ensures we run before any inner listener can stopPropagation.
+    //   - `drop` is a belt-and-braces fallback — some browsers fire drop
+    //     just before dragend, and if anything ever did stopPropagation on
+    //     dragend we still want the class gone.
+    window.addEventListener('dragend', clearDragging, true);
+    window.addEventListener('drop', clearDragging, true);
+
     return () => {
       window.removeEventListener('resize', onResize);
+      window.removeEventListener('dragend', clearDragging, true);
+      window.removeEventListener('drop', clearDragging, true);
+      // Defensive — if we unmount mid-drag (HMR, route change), don't
+      // leave the class stuck on <body>.
+      clearDragging();
       unsub();
     };
   });
