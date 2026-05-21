@@ -110,7 +110,10 @@
     "updater.installFailed.message": "The update couldn't be installed. The current version is still running — you can try again later.",
     "updater.ready.title": "Update ready",
     "updater.ready.message": "Mindstream Notes will restart to finish updating. Any unsaved changes are already on disk.",
-    "updater.restart": "Restart now"
+    "updater.restart": "Restart now",
+    "updater.progress.title": "Updating Mindstream Notes",
+    "updater.progress.downloading": "Downloading update…",
+    "updater.progress.installing": "Installing…"
   },
   "categories": {
     "account": { "label": "Account & Sync", "description": "Connect to a managed or self-hosted server, manage devices and sync." },
