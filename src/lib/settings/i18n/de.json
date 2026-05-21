@@ -113,7 +113,9 @@
     "updater.restart": "Jetzt neu starten",
     "updater.progress.title": "Mindstream Notes wird aktualisiert",
     "updater.progress.downloading": "Update wird heruntergeladen…",
-    "updater.progress.installing": "Wird installiert…"
+    "updater.progress.installing": "Wird installiert…",
+    "updater.unsupportedLinux.title": "In-App-Update nicht verfügbar",
+    "updater.unsupportedLinux.message": "Mindstream Notes wurde aus einem Systempaket (rpm / deb) installiert und kann nur über deine Distribution aktualisiert werden. Lade die neueste Version unter https://github.com/jannikgohr/mindstream-notes/releases/latest herunter und installiere sie neu, oder nutze die AppImage-Variante für In-App-Updates."
   },
   "categories": {
     "account": { "label": "Konto & Synchronisation" },
