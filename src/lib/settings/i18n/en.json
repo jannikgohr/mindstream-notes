@@ -96,6 +96,8 @@
     "editor.status.short.readonly": "Read-only",
     "editor.trash.banner": "This note is in the trash and is read-only. Restore it to edit.",
     "editor.menu.mermaid": "Mermaid diagram",
+    "editor.wikilink.menu.label": "Link to note",
+    "editor.wikilink.menu.empty": "No notes match — keep typing to insert a new link",
     "editor.popout": "Open in new window",
 
     "editor.unknownKind.title": "Can't open this note",

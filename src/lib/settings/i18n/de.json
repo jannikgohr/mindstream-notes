@@ -96,6 +96,8 @@
     "editor.status.short.readonly": "Schreibgeschützt",
     "editor.trash.banner": "Diese Notiz liegt im Papierkorb und ist schreibgeschützt. Stelle sie wieder her, um sie zu bearbeiten.",
     "editor.menu.mermaid": "Mermaid-Diagramm",
+    "editor.wikilink.menu.label": "Notiz verlinken",
+    "editor.wikilink.menu.empty": "Keine Treffer — weiter tippen, um einen neuen Link einzufügen",
     "editor.popout": "In neuem Fenster öffnen",
 
     "editor.unknownKind.title": "Diese Notiz kann nicht geöffnet werden",

@@ -21,3 +21,9 @@ export {
   mermaidLanguageDescription,
   renderMermaidPreview
 } from './mermaid';
+export {
+  createWikilinkBridge,
+  resolveNoteIdByTitle,
+  wikilinkPlugins,
+  type WikilinkBridge
+} from './wikilink';

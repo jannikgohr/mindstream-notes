@@ -566,3 +566,33 @@ main:not(.fullscreen-note) .milkdown-drop-indicator {
   padding-left: env(safe-area-inset-left);
   padding-right: env(safe-area-inset-right);
 }
+
+/* -------------------------------------------------------------------------
+ * Wikilinks
+ *
+ * Decoration-only styling (no schema change). The `$lib/editor/plugins/
+ * wikilink` decoration plugin wraps every `[[Title]]` span with a
+ * `.wikilink` class so it reads as a hyperlink in the editor view. The
+ * markdown source itself is still plain text — the syntax round-trips
+ * through commonmark unchanged.
+ *
+ * Cmd/Ctrl+click opens; plain click places the caret (so typos in the
+ * title are still editable). The cursor swap on the modifier press
+ * gives the visual cue.
+ * ------------------------------------------------------------------------- */
+
+.wikilink {
+  color: hsl(var(--primary));
+  text-decoration: underline;
+  text-decoration-color: hsl(var(--primary) / 0.4);
+  text-underline-offset: 2px;
+  cursor: text;
+}
+.wikilink:hover {
+  text-decoration-color: hsl(var(--primary) / 0.8);
+}
+/* Modifier held → switch to pointer to signal "this is now a link". */
+.ProseMirror:has(.wikilink:hover):where([data-meta-pressed]) .wikilink:hover,
+.ProseMirror .wikilink:hover[data-link-active='true'] {
+  cursor: pointer;
+}
