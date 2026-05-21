@@ -201,7 +201,7 @@
               "id": "editor.autoSaveDebounce",
               "scope": "V",
               "type": "slider",
-              "default": 500,
+              "default": 800,
               "min": 100,
               "max": 5000,
               "step": 100,

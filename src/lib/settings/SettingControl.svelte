@@ -50,6 +50,14 @@
     const fn = SETTING_ACTIONS[setting.actionId];
     if (fn) void fn();
   }
+
+  // Slider-only: while the user drags, mirror the live position locally so
+  // the thumb and number label follow without re-deriving `modified` on
+  // every input — otherwise the reset button would appear/disappear as the
+  // user crosses the default value, causing a layout shift mid-drag.
+  // Reset on `change` (pointerup / keyboard step commit) so the store and
+  // the visible label converge on the same value.
+  let sliderDrag = $state<number | null>(null);
 </script>
 
 <div class="grid grid-cols-[1fr_auto] items-start gap-x-4 gap-y-2 py-3">
@@ -164,18 +172,30 @@
         class="h-8 w-24 rounded-md border border-input bg-background px-2 text-sm tabular-nums focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       />
     {:else if setting.type === 'slider'}
+      {@const storeVal = (value as number | undefined) ?? setting.min ?? 0}
+      {@const display = sliderDrag ?? storeVal}
       <div class="flex items-center gap-2">
+        <!--
+          min/max/step come BEFORE value so the browser doesn't clamp the
+          initial value against the default 0..100 range (which would pin
+          any value > 100 to the left end of the track on first paint).
+        -->
         <input
           type="range"
-          value={(value as number | undefined) ?? setting.min ?? 0}
-          oninput={(e) => commit(Number((e.currentTarget as HTMLInputElement).value))}
           min={setting.min}
           max={setting.max}
           step={setting.step}
+          value={display}
+          oninput={(e) => (sliderDrag = Number((e.currentTarget as HTMLInputElement).value))}
+          onchange={(e) => {
+            const v = Number((e.currentTarget as HTMLInputElement).value);
+            sliderDrag = null;
+            commit(v);
+          }}
           class="h-1.5 w-44 cursor-pointer appearance-none rounded-full bg-input accent-primary"
         />
         <span class="w-12 text-right text-xs tabular-nums text-muted-foreground">
-          {(value as number | undefined) ?? '—'}{setting.unit ?? ''}
+          {display}{setting.unit ?? ''}
         </span>
       </div>
     {:else if setting.type === 'select'}
