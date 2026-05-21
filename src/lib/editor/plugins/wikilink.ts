@@ -31,7 +31,7 @@
  * fight over a single popup.
  */
 
-import { Plugin, PluginKey } from '@milkdown/kit/prose/state';
+import { Plugin, PluginKey, type EditorState } from '@milkdown/kit/prose/state';
 import { Decoration, DecorationSet } from '@milkdown/kit/prose/view';
 import type { EditorView } from '@milkdown/kit/prose/view';
 import { $prose } from '@milkdown/kit/utils';
@@ -89,6 +89,92 @@ const triggerPluginKey = new PluginKey<TriggerState>('mindstream-wikilink-trigge
  */
 const MAX_QUERY_LEN = 80;
 
+/**
+ * How far back from the cursor we'll scan looking for the opening
+ * `[[`. Wikilink titles aren't long, and this also caps the per-
+ * transaction cost of the auto-open scan that runs in `apply()`.
+ */
+const AUTO_OPEN_LOOKBACK = 200;
+
+/** Parent node types where we never want the wikilink menu to open —
+ *  brackets inside these are literal, not link syntax. */
+const NON_WIKILINK_PARENTS = new Set(['code_block', 'fence', 'html_block']);
+
+/**
+ * If the cursor is positioned inside or right after an unclosed `[[`
+ * in the current text block, return the doc position of the `[[`'s
+ * first `[`; otherwise `null`. This is what powers the auto-open
+ * behaviour — clicking into an existing `[[Title]]` opens the menu
+ * just like typing `[[` does, so the user can change which note the
+ * link points to without retyping the brackets.
+ *
+ * The scan is intentionally one-directional: we walk backwards from
+ * the cursor looking for `[[`, aborting on `\n`, `]`, or a window
+ * limit. We don't require a closing `]]` ahead — typing `[[` with no
+ * close yet should still open the menu (that's the original typing
+ * trigger). The existing `validateOpen` bounds check will close the
+ * menu once the user moves past `]]`.
+ */
+function findEnclosingWikilinkStart(state: EditorState): number | null {
+  const sel = state.selection;
+  if (!sel.empty) return null;
+  const $from = sel.$from;
+  if (!$from.parent.isTextblock) return null;
+  if (NON_WIKILINK_PARENTS.has($from.parent.type.name)) return null;
+  const codeMark = state.schema.marks.code;
+  if (codeMark && codeMark.isInSet($from.marks())) return null;
+
+  const offset = $from.parentOffset;
+  if (offset < 2) return null;
+
+  const parentText = $from.parent.textBetween(
+    0,
+    $from.parent.content.size,
+    '\n',
+    '\n'
+  );
+  const searchStart = Math.max(1, offset - AUTO_OPEN_LOOKBACK);
+  for (let i = offset - 1; i >= searchStart; i--) {
+    const c = parentText[i];
+    // `\n` shouldn't appear inside a text block; defensive against
+    // any leaf-text inclusion in `textBetween`. `]` aborts because a
+    // valid wikilink's interior forbids brackets — finding one going
+    // backward means we've stepped past a closed link.
+    if (c === '\n' || c === ']') return null;
+    if (c === '[' && parentText[i - 1] === '[') {
+      // openIdx is the parent-offset of the FIRST `[`. Convert to a
+      // doc position by adding the parent's start position.
+      return $from.start() + (i - 1);
+    }
+  }
+  return null;
+}
+
+/**
+ * Same bounds check `apply` already used to decide whether to keep an
+ * existing open menu open through a transaction, lifted into a helper
+ * so the cursor-based auto-open can reuse it.
+ */
+function validateOpen(startPos: number, state: EditorState): boolean {
+  const cursor = state.selection.from;
+  if (cursor < startPos + 2) return false;
+  if (
+    state.doc.resolve(startPos).parent !==
+    state.doc.resolve(cursor).parent
+  ) {
+    return false;
+  }
+  const queryRaw = state.doc.textBetween(startPos + 2, cursor, '\n');
+  if (
+    queryRaw.includes('\n') ||
+    queryRaw.includes(']]') ||
+    queryRaw.includes('[[')
+  ) {
+    return false;
+  }
+  return queryRaw.length <= MAX_QUERY_LEN;
+}
+
 function wikilinkTriggerPlugin(bridge: WikilinkBridge): Plugin<TriggerState> {
   let viewRef: EditorView | null = null;
 
@@ -132,38 +218,37 @@ function wikilinkTriggerPlugin(bridge: WikilinkBridge): Plugin<TriggerState> {
     state: {
       init: () => ({ startPos: null }),
       apply(tr, prev, _oldState, newState) {
-        // Explicit open/close metas trump everything.
+        // Explicit close meta wins outright (Esc, the insert path).
         const meta = tr.getMeta(triggerPluginKey) as
-          | { open?: number; close?: true }
+          | { close?: true }
           | undefined;
         if (meta?.close) return { startPos: null };
-        if (meta?.open !== undefined) return { startPos: meta.open };
 
-        if (prev.startPos === null) return prev;
+        // 1. If a menu was already open, try to keep it open by
+        //    re-validating against the new state. The mapping step
+        //    moves the start position through doc edits so a typo
+        //    earlier in the doc doesn't desync the anchor.
+        if (prev.startPos !== null) {
+          const mappedStart = tr.mapping.map(prev.startPos);
+          if (validateOpen(mappedStart, newState)) {
+            return { startPos: mappedStart };
+          }
+          // Fall through: the old open is no longer valid (cursor
+          // moved out, `]]` typed, etc.) — but maybe the cursor has
+          // landed inside a DIFFERENT wikilink, in which case we
+          // should reopen at the new location rather than blink
+          // closed for a tick.
+        }
 
-        // Map the start position forward through the transaction so
-        // unrelated edits earlier in the doc don't break our anchor.
-        const mappedStart = tr.mapping.map(prev.startPos);
-        const cursor = newState.selection.from;
-
-        // Selection out of range (above the [[ or far past it) → close.
-        if (cursor < mappedStart + 2) {
-          return { startPos: null };
-        }
-        // Caret must remain in the same parent text-block as the [[.
-        if (newState.doc.resolve(mappedStart).parent !== newState.doc.resolve(cursor).parent) {
-          return { startPos: null };
-        }
-        const queryRaw = newState.doc.textBetween(mappedStart + 2, cursor, '\n');
-        // Newline or closing brackets in the query → user committed
-        // their own ending; close and let the doc text stand.
-        if (queryRaw.includes('\n') || queryRaw.includes(']]') || queryRaw.includes('[[')) {
-          return { startPos: null };
-        }
-        if (queryRaw.length > MAX_QUERY_LEN) {
-          return { startPos: null };
-        }
-        return { startPos: mappedStart };
+        // 2. Auto-open: if the cursor is inside (or right after) a
+        //    `[[…` in the current text block, open the menu anchored
+        //    to that `[[`. This covers both the original "user typed
+        //    `[[`" case (no `]]` ahead yet) AND clicking / arrow-
+        //    keying into an existing `[[Title]]`, which is what lets
+        //    the user change the link target without retyping the
+        //    brackets.
+        const start = findEnclosingWikilinkStart(newState);
+        return { startPos: start };
       }
     },
 
@@ -220,34 +305,12 @@ function wikilinkTriggerPlugin(bridge: WikilinkBridge): Plugin<TriggerState> {
     },
 
     props: {
-      handleTextInput(view, from, to, text) {
-        // Detect `[[`: a single `[` typed when the char immediately
-        // before the insertion is already `[`. Two consecutive paths
-        // matter:
-        //   - Auto-pair off: doc grows `[ → [[`, both chars typed
-        //     normally; second `[` arrives here with prev char `[`.
-        //   - Auto-pair on: the first `[` triggered auto-pair, which
-        //     dispatches its own transaction. The user's second
-        //     keystroke arrives here with the doc now `[|]` — same
-        //     prev-char test passes.
-        if (text !== '[') return false;
-        if (from === 0) return false;
-        const prev = view.state.doc.textBetween(from - 1, from);
-        if (prev !== '[') return false;
-        // The `[[` start position is one char before the just-typed `[`.
-        // Schedule open on a microtask so the typed text lands first
-        // and the position arithmetic still works whether or not
-        // auto-pair fired in between.
-        const start = from - 1;
-        queueMicrotask(() => {
-          const view2 = viewRef;
-          if (!view2) return;
-          view2.dispatch(
-            view2.state.tr.setMeta(triggerPluginKey, { open: start })
-          );
-        });
-        return false;
-      },
+      // No `handleTextInput` — auto-open lives in apply() now, so the
+      // menu reacts to the doc + cursor state regardless of how the
+      // brackets got there (typed, pasted, clicked-into, etc.). This
+      // also drops a previous microtask-dispatch dance that was only
+      // needed because handleTextInput ran before auto-pair's
+      // transaction had landed.
 
       handleKeyDown(view, event) {
         const trigger = triggerPluginKey.getState(view.state);
