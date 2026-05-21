@@ -335,6 +335,21 @@ body {
   transition:
     background-color 100ms ease-out,
     color 100ms ease-out;
+  /* Subtle leftward shadow so the chevron reads as elevated above the
+   * tabs scrolling under it. `position: relative; z-index: 1` is doing
+   * the actual layering work — without it the chevron paints as a
+   * static element while the tabs are `position: relative`, so within
+   * the strip's stacking context the positioned tabs paint AFTER the
+   * chevron and the hovered/active tab background ends up drawing on
+   * top of the shadow. Promoting the chevron to z-index 1 puts it (and
+   * its shadow) above every tab, regardless of hover/active state.
+   *
+   * Negative x-offset biases the cast toward the tabs and the negative
+   * spread (-2px) trims the vertical bleed so the shadow stays inside
+   * the 40px strip instead of leaking into the panel below. */
+  position: relative;
+  z-index: 1;
+  box-shadow: -6px 0 10px -2px rgb(0 0 0 / 0.25);
 }
 
 .dockview-theme-bridge .dv-tabs-overflow-dropdown-default:hover,
@@ -342,6 +357,43 @@ body {
 .dockview-theme-bridge:has(.dv-tabs-overflow-container) .dv-tabs-overflow-dropdown-default {
   background-color: var(--accent);
   color: var(--accent-foreground);
+}
+
+/*
+ * Breathing room between the overflow chevron and the right-actions
+ * cluster (status icons + popout button). Without this, the chevron
+ * sits flush against the popout button so they read as a single
+ * interactive blob — the gap + hairline divider clearly demarcate
+ * "this opens the tab overflow" from "these act on the active panel".
+ *
+ * Scoped via `:has(> .dv-tabs-overflow-dropdown-default)` so the gap
+ * only appears when the chevron is actually present — when no overflow
+ * is happening, the right actions stay tucked next to the rightmost
+ * tab and we don't waste strip width.
+ *
+ * The divider matches the inter-tab separators (same colour + ~50%
+ * height, vertically centred) so the dockview chrome reads as a single
+ * coherent design language.
+ */
+.dockview-theme-bridge
+  .dv-tabs-and-actions-container:has(> .dv-tabs-overflow-dropdown-default)
+  .dv-right-actions-container {
+  position: relative;
+  margin-left: 8px;
+  padding-left: 12px;
+}
+
+.dockview-theme-bridge
+  .dv-tabs-and-actions-container:has(> .dv-tabs-overflow-dropdown-default)
+  .dv-right-actions-container::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 25%;
+  bottom: 25%;
+  width: 1px;
+  background-color: oklch(from var(--foreground) l c h / 0.15);
+  pointer-events: none;
 }
 
 .dockview-theme-bridge .dv-tabs-overflow-container {
