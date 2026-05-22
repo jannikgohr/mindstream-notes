@@ -54,6 +54,10 @@
     releaseFullscreen
   } from '$lib/window/fullscreen';
   import { isTauri } from '$lib/api';
+  import {
+    attachToolbarLayout,
+    type ToolbarLayoutHandle
+  } from '$lib/freeform/toolbar-layout';
 
   interface Props {
     noteId: string;
@@ -90,6 +94,10 @@
   // onDestroy knows whether it needs to release the ref count. Desktop
   // has no fullscreen UI for freeform notes; the OS chrome stays.
   let fullscreenAcquired = false;
+  // toolbar-layout module handle. Attached in onMount once mountEl is
+  // bound and detached in onDestroy. The module gates itself by viewport
+  // width internally, so no platform/mobile branching is needed here.
+  let toolbarLayout: ToolbarLayoutHandle | null = null;
   let loadError = $state<string | null>(null);
 
   let yDocUpdateHandler: (() => void) | null = null;
@@ -173,6 +181,12 @@
         void acquireFullscreen();
         fullscreenAcquired = true;
       }
+      // Toolbar-layout watches for tldraw's UI to mount under us, then
+      // pins __inner / __extras to the top-right of the menu zone when
+      // the viewport is wide enough. The handle's MutationObserver
+      // covers the React island's async mount, so attaching now (before
+      // the island renders) is fine.
+      toolbarLayout = attachToolbarLayout(mountEl);
       const note = await loadNote(noteId);
       if (!mountEl) return; // unmounted while awaiting
 
@@ -372,6 +386,10 @@
       void releaseFullscreen();
       fullscreenAcquired = false;
     }
+    // Tear down the toolbar layout observers + clear CSS vars / class
+    // so a future re-mount starts clean.
+    toolbarLayout?.destroy();
+    toolbarLayout = null;
     // Drop our row from the global status store so the dockview
     // header doesn't keep showing stale icons after the panel closes.
     clearNoteStatus(noteId);
@@ -525,17 +543,15 @@
       </p>
     {/if}
     <!--
-      `freeform-canvas-host` scopes the tldraw UI tweaks in app.css
-      (toolbar moved below the menu/helper zone) to this mount only —
-      and only on mobile, where the bottom edge is hardest to reach
-      with a stylus. Desktop keeps tldraw's stock layout. tldraw mounts
-      its .tlui-layout grid as a descendant of this div, so the
-      2-class selectors in the stylesheet attach without !important.
+      `freeform-canvas-host` scopes the tldraw UI tweaks in app.css to
+      this mount only. The matching rules in app.css further gate on a
+      `toolbar-top-active` class that toolbar-layout.ts toggles based on
+      `window.innerWidth >= 800` — narrow phones fall back to tldraw's
+      stock bottom layout where the top corner can't host the toolbar
+      next to the menu chip anyway. tldraw mounts its .tlui-layout grid
+      as a descendant of this div, so the 2-class selectors in the
+      stylesheet attach without !important.
     -->
-    <div
-      bind:this={mountEl}
-      class="absolute inset-0"
-      class:freeform-canvas-host={mobile}
-    ></div>
+    <div bind:this={mountEl} class="freeform-canvas-host absolute inset-0"></div>
   </div>
 </div>
