@@ -127,6 +127,17 @@
     return 'auto';
   });
 
+  /** Whether to cut tldraw's animation cost. We honour the existing
+   *  app-wide `appearance.reduceMotion` toggle AND default to true on
+   *  mobile, where the Android WebView's compositor is the bottleneck
+   *  during stroke rendering and incidental motion costs frame budget.
+   *  `mobile` is set in onMount, so this reads false on initial render
+   *  even on Android — that's fine, the [reduceMotion] effect re-runs
+   *  once `mobile` flips. */
+  const reduceMotion = $derived(
+    Boolean(getSettingValue('appearance.reduceMotion')) || mobile
+  );
+
   // ---- Mount ----
 
   let lastSeenPushed = false;
@@ -210,7 +221,8 @@
           readOnly: untrack(() => isTrashed),
           noteId,
           colorScheme: untrack(() => $userPrefersMode) ?? 'system',
-          penMode: untrack(() => penMode)
+          penMode: untrack(() => penMode),
+          reduceMotion: untrack(() => reduceMotion)
         })
       );
 
@@ -271,6 +283,7 @@
     const readOnly = isTrashed;
     const colorScheme = $userPrefersMode ?? 'system';
     const currentPenMode = penMode;
+    const currentReduceMotion = reduceMotion;
     if (!reactRoot || !TldrawIslandComponent || !reactCreateElement) return;
     if (!yDoc || !awareness) return;
     reactRoot.render(
@@ -280,7 +293,8 @@
         readOnly,
         noteId,
         colorScheme,
-        penMode: currentPenMode
+        penMode: currentPenMode,
+        reduceMotion: currentReduceMotion
       })
     );
   });
