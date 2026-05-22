@@ -193,6 +193,18 @@
           ]
         },
         {
+          "id": "editor.freeform",
+          "settings": [
+            {
+              "id": "editor.freeform.penMode",
+              "scope": "V",
+              "type": "select",
+              "default": "auto",
+              "options": ["auto", "always", "off"]
+            }
+          ]
+        },
+        {
           "id": "editor.autosave",
           "settings": [
             { "id": "editor.autoSave", "scope": "V", "type": "toggle", "default": true },

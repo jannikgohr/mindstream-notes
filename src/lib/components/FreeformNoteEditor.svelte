@@ -117,6 +117,16 @@
     return ancestorIsTrash(n.parent_collection_id);
   });
 
+  /** Stylus / pen-mode preference, sourced from settings and re-evaluated
+   *  reactively so toggling the setting from the dialog flows into the
+   *  open canvas without a remount. Narrowed to the union the island
+   *  expects; falls back to 'auto' if the cache hasn't hydrated yet. */
+  const penMode = $derived.by<'auto' | 'always' | 'off'>(() => {
+    const v = getSettingValue('editor.freeform.penMode');
+    if (v === 'always' || v === 'off') return v;
+    return 'auto';
+  });
+
   // ---- Mount ----
 
   let lastSeenPushed = false;
@@ -199,7 +209,8 @@
           awareness,
           readOnly: untrack(() => isTrashed),
           noteId,
-          colorScheme: untrack(() => $userPrefersMode) ?? 'system'
+          colorScheme: untrack(() => $userPrefersMode) ?? 'system',
+          penMode: untrack(() => penMode)
         })
       );
 
@@ -259,6 +270,7 @@
   $effect(() => {
     const readOnly = isTrashed;
     const colorScheme = $userPrefersMode ?? 'system';
+    const currentPenMode = penMode;
     if (!reactRoot || !TldrawIslandComponent || !reactCreateElement) return;
     if (!yDoc || !awareness) return;
     reactRoot.render(
@@ -267,7 +279,8 @@
         awareness,
         readOnly,
         noteId,
-        colorScheme
+        colorScheme,
+        penMode: currentPenMode
       })
     );
   });
