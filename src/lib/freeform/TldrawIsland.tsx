@@ -70,6 +70,12 @@ export interface TldrawIslandProps {
    *                once enabled. The setting itself is persistent across
    *                sessions (re-evaluated on every fresh mount). */
   penMode: PenModeSetting;
+  /** Trim tldraw's transition animations (camera moves, shape selects, …)
+   *  by setting `animationSpeed: 0`. The user-visible win is fewer frames
+   *  spent on incidental motion during stroke rendering, which matters on
+   *  mid-range Android tablets where the WebView's compositor is the
+   *  bottleneck. Fed by `appearance.reduceMotion` OR the mobile flag. */
+  reduceMotion: boolean;
 }
 
 /**
@@ -101,7 +107,8 @@ export default function TldrawIsland({
   readOnly,
   noteId,
   colorScheme,
-  penMode
+  penMode,
+  reduceMotion
 }: TldrawIslandProps) {
   // One bridge per note: holds the blob-URL cache + dispose. useMemo on
   // noteId keeps it stable across re-renders and rebuilds (with proper
@@ -201,6 +208,17 @@ export default function TldrawIsland({
     editorRef.current?.user.updateUserPreferences({ colorScheme });
   }, [colorScheme]);
 
+  // Animation cost reduction. tldraw stores user prefs in localStorage
+  // (TLDRAW_USER_DATA_v3), so we always set the value explicitly rather
+  // than only when reduceMotion is true — otherwise the inverse flip
+  // wouldn't restore animations after a previous session pinned them to
+  // zero. Hard-coded back to 1 (tldraw's default) when motion is allowed.
+  useEffect(() => {
+    editorRef.current?.user.updateUserPreferences({
+      animationSpeed: reduceMotion ? 0 : 1
+    });
+  }, [reduceMotion]);
+
   // Refresh tldraw asset shapes after a sync pulls fresh bytes for
   // assets the canvas already references. The flow:
   //   1. evict matching blob URLs from our bridge cache, so the next
@@ -260,12 +278,16 @@ export default function TldrawIsland({
           } else if (penMode === 'off') {
             editor.updateInstanceState({ isPenMode: false });
           }
-          // Set the colour scheme synchronously on mount so the canvas
-          // doesn't render one frame with tldraw's default before the
-          // [colorScheme] effect runs. tldraw stores this in localStorage
-          // (TLDRAW_USER_DATA_v3), so if the user previously set a value
-          // there we'd otherwise inherit it instead of our app preference.
-          editor.user.updateUserPreferences({ colorScheme });
+          // Set the colour scheme and animation speed synchronously on
+          // mount so the canvas doesn't render one frame with tldraw's
+          // defaults before the matching effects run. tldraw stores
+          // these in localStorage (TLDRAW_USER_DATA_v3), so if the user
+          // previously set values there we'd otherwise inherit them
+          // instead of our app preferences.
+          editor.user.updateUserPreferences({
+            colorScheme,
+            animationSpeed: reduceMotion ? 0 : 1
+          });
           // Unblock effects that depend on the editor existing.
           setEditorReady(true);
         }}
