@@ -55,6 +55,11 @@ export interface TldrawIslandProps {
    *  the right freeform note. Needed by the SQLite FK constraint and by
    *  the eventual sync layer (assets travel with their note). */
   noteId: string;
+  /** App-wide colour scheme preference (mode-watcher's `userPrefersMode`).
+   *  Synced into tldraw via `editor.user.updateUserPreferences` so the
+   *  canvas tracks the app's light/dark/system toggle instead of keeping
+   *  its own per-tldraw default. */
+  colorScheme: 'light' | 'dark' | 'system';
 }
 
 /**
@@ -84,7 +89,8 @@ export default function TldrawIsland({
   yDoc,
   awareness: _awareness,
   readOnly,
-  noteId
+  noteId,
+  colorScheme
 }: TldrawIslandProps) {
   // One bridge per note: holds the blob-URL cache + dispose. useMemo on
   // noteId keeps it stable across re-renders and rebuilds (with proper
@@ -129,6 +135,17 @@ export default function TldrawIsland({
   useEffect(() => {
     editorRef.current?.updateInstanceState({ isReadonly: readOnly });
   }, [readOnly]);
+
+  // Mirror the app's light/dark/system preference into tldraw. tldraw
+  // routes the actual rendering decision (with 'system' it consults
+  // `prefers-color-scheme`) so we just forward the user's intent here.
+  // The Svelte shell re-renders this island with a fresh `colorScheme`
+  // prop whenever `userPrefersMode` from mode-watcher changes, which
+  // fires this effect — keeps the canvas in lock-step with the rest of
+  // the app's theme.
+  useEffect(() => {
+    editorRef.current?.user.updateUserPreferences({ colorScheme });
+  }, [colorScheme]);
 
   // Refresh tldraw asset shapes after a sync pulls fresh bytes for
   // assets the canvas already references. The flow:
@@ -181,6 +198,12 @@ export default function TldrawIsland({
         onMount={(editor) => {
           editorRef.current = editor;
           editor.updateInstanceState({ isReadonly: readOnly });
+          // Set the colour scheme synchronously on mount so the canvas
+          // doesn't render one frame with tldraw's default before the
+          // [colorScheme] effect runs. tldraw stores this in localStorage
+          // (TLDRAW_USER_DATA_v3), so if the user previously set a value
+          // there we'd otherwise inherit it instead of our app preference.
+          editor.user.updateUserPreferences({ colorScheme });
         }}
       />
     </div>
