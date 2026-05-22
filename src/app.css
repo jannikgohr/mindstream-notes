@@ -619,37 +619,45 @@ body.dv-tab-dragging .tl-container * {
 }
 
 /*
- * Tldraw toolbar on top.
+ * Tldraw layout — original top zone, then main toolbar, then canvas.
  *
- * Tldraw's UI is a CSS grid (.tlui-layout) with two rows:
- *   row 1 (minmax(0, 1fr)) holds `.tlui-layout__top` (menu zone left,
- *                            helper buttons right — both flex-overlays
- *                            on top of the canvas)
- *   row 2 (auto)            holds `.tlui-layout__bottom` (main drawing
- *                            toolbar; intrinsic height)
+ * Tldraw's default grid is two rows:
+ *   row 1 (1fr)  `.tlui-layout__top`    menu zone (left) + helper
+ *                                       buttons (right), overlaying the
+ *                                       full canvas height.
+ *   row 2 (auto) `.tlui-layout__bottom` main drawing toolbar (and the
+ *                                       absolute-positioned navigation
+ *                                       panel + help button, both of
+ *                                       which resolve their bottom: to
+ *                                       the outer .tlui-layout — not to
+ *                                       __bottom — so they stay pinned
+ *                                       to the canvas bottom no matter
+ *                                       which row we put __bottom in).
  *
- * For the freeform notes shell we flip the rows so the toolbar sits at
- * the top, while keeping the menu/helper overlay anchored to the top of
- * the *canvas* area underneath it. Scoped to a wrapper class so we never
- * affect a stray tldraw embed elsewhere in the app.
+ * For freeform notes we split into three rows: the original top zone
+ * stays at the top with its menu/helper buttons in their natural
+ * height, the main toolbar slots in just below it, and the remaining
+ * 1fr is the canvas area. Scoped to a wrapper class so we don't affect
+ * any other tldraw embeds.
  *
- * The cell selectors are 2-class specificity (.freeform-canvas-host
- * .tlui-layout__*) which beats tldraw's 1-class rules, so no !important
- * is needed. `align-items: flex-start` on `__bottom__main` is what
- * actually moves the toolbar visually to the top edge — without it the
- * toolbar sticks to the bottom of its (now narrow) row 1 cell.
+ * `align-items: flex-start` on `__bottom__main` is what visually pulls
+ * the toolbar to the top edge of its (now small auto) row — without it
+ * the flex layout's default `flex-end` would leave the toolbar pinned
+ * to the bottom of an essentially zero-height row, which then collapses
+ * the visual offset. 2-class selectors beat tldraw's 1-class rules so
+ * no !important is needed.
  */
 .freeform-canvas-host .tlui-layout {
-  grid-template-rows: auto minmax(0px, 1fr);
+  grid-template-rows: auto auto minmax(0px, 1fr);
+}
+.freeform-canvas-host .tlui-layout__top {
+  grid-row: 1;
 }
 .freeform-canvas-host .tlui-layout__bottom {
-  grid-row: 1;
+  grid-row: 2;
 }
 .freeform-canvas-host .tlui-layout__bottom__main {
   align-items: flex-start;
-}
-.freeform-canvas-host .tlui-layout__top {
-  grid-row: 2;
 }
 
 /* dockview right-header pop-out button (see PopoutHeaderAction). */
