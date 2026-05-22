@@ -46,7 +46,7 @@
   {#if collabConfigured}
     {#if collabOnline}
       <span
-        class="flex items-center gap-1 text-emerald-600 dark:text-emerald-400"
+        class="flex items-center gap-1"
         title={tUi('editor.status.live')}
       >
         <Wifi class="size-3" aria-hidden="true" />
