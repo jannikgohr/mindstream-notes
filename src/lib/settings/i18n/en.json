@@ -144,6 +144,7 @@
     "appearance.fileTree": { "label": "File tree" },
     "editor.input": { "label": "Input" },
     "editor.markdown": { "label": "Markdown features" },
+    "editor.freeform": { "label": "Drawing canvas" },
     "editor.autosave": { "label": "Auto-save" },
     "data.database": { "label": "Database" },
     "data.trash": { "label": "Trash" },
@@ -179,6 +180,10 @@
     "editor.mermaid": { "label": "Mermaid diagrams" },
     "editor.wikilinks": { "label": "Wikilinks [[...]]" },
     "editor.footnotes": { "label": "Footnotes" },
+    "editor.freeform.penMode": {
+      "label": "Stylus / pen mode",
+      "description": "When on, only stylus input draws — finger touches pan and zoom. Helps prevent stray marks from your palm on tablets."
+    },
     "editor.autoSave": { "label": "Auto-save" },
     "editor.autoSaveDebounce": { "label": "Auto-save debounce" },
     "data.databasePath": { "label": "Database location", "description": "The SQLite/DB file your notes live in." },
@@ -224,6 +229,9 @@
     "editor.defaultMode.wysiwyg": "WYSIWYG",
     "editor.defaultMode.source": "Source",
     "editor.defaultMode.split": "Split",
+    "editor.freeform.penMode.auto": "Auto-detect (recommended)",
+    "editor.freeform.penMode.always": "Always on",
+    "editor.freeform.penMode.off": "Off",
     "data.trashRetentionDays.7": "7 days",
     "data.trashRetentionDays.30": "30 days",
     "data.trashRetentionDays.90": "90 days",

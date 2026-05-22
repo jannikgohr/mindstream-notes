@@ -32,7 +32,7 @@ import {
   type TLStore
 } from 'tldraw';
 import 'tldraw/tldraw.css';
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type * as Y from 'yjs';
 import type { Awareness } from 'y-protocols/awareness';
 import { bindStoreToYDoc, type BindHandle } from './tldraw-yjs';
@@ -42,6 +42,8 @@ import {
   type AssetBridge
 } from '$lib/assets/bridge';
 import { listen } from '$lib/api/events';
+
+export type PenModeSetting = 'auto' | 'always' | 'off';
 
 export interface TldrawIslandProps {
   yDoc: Y.Doc;
@@ -60,6 +62,14 @@ export interface TldrawIslandProps {
    *  canvas tracks the app's light/dark/system toggle instead of keeping
    *  its own per-tldraw default. */
   colorScheme: 'light' | 'dark' | 'system';
+  /** Stylus / pen-mode behaviour for palm rejection on touch devices:
+   *   - 'always' — isPenMode pinned on; only pointerType==='pen' draws.
+   *   - 'off'    — isPenMode pinned off; touch and pen both draw.
+   *   - 'auto'   — start off, but flip on for the rest of this session as
+   *                soon as a pen pointer is detected. Doesn't downgrade
+   *                once enabled. The setting itself is persistent across
+   *                sessions (re-evaluated on every fresh mount). */
+  penMode: PenModeSetting;
 }
 
 /**
@@ -90,7 +100,8 @@ export default function TldrawIsland({
   awareness: _awareness,
   readOnly,
   noteId,
-  colorScheme
+  colorScheme,
+  penMode
 }: TldrawIslandProps) {
   // One bridge per note: holds the blob-URL cache + dispose. useMemo on
   // noteId keeps it stable across re-renders and rebuilds (with proper
@@ -130,11 +141,54 @@ export default function TldrawIsland({
 
   // Track the editor instance so we can toggle read-only when the note
   // gets trashed mid-session. tldraw exposes this via the Tldraw
-  // component's `onMount` callback rather than as a render prop.
+  // component's `onMount` callback rather than as a render prop. The
+  // editorReady flag lets useEffects re-run once the editor is mounted —
+  // refs don't trigger renders, so without it the pen-mode effect would
+  // see a null editor on its first pass and never re-run.
   const editorRef = useRef<Editor | null>(null);
+  const [editorReady, setEditorReady] = useState(false);
   useEffect(() => {
     editorRef.current?.updateInstanceState({ isReadonly: readOnly });
   }, [readOnly]);
+
+  // Pen mode (palm rejection on touch devices):
+  //   - 'always' / 'off' pin tldraw's isPenMode flag directly.
+  //   - 'auto' attaches a capture-phase pointerdown listener that flips
+  //     isPenMode on the first time a `pointerType === 'pen'` event is
+  //     seen. We don't downgrade once enabled — once you've shown you
+  //     have a stylus, finger touches should keep panning rather than
+  //     drawing for the rest of the session.
+  //
+  // The listener sits on the tldraw container (not window) so it doesn't
+  // observe events outside the canvas. Capture phase is important because
+  // tldraw stops propagation of pointerdown inside its own handler chain
+  // for some shapes.
+  useEffect(() => {
+    if (!editorReady) return;
+    const editor = editorRef.current;
+    if (!editor) return;
+    if (penMode === 'always') {
+      editor.updateInstanceState({ isPenMode: true });
+      return;
+    }
+    if (penMode === 'off') {
+      editor.updateInstanceState({ isPenMode: false });
+      return;
+    }
+    const container = editor.getContainer();
+    const onPointerDown = (e: PointerEvent) => {
+      if (
+        e.pointerType === 'pen' &&
+        !editor.getInstanceState().isPenMode
+      ) {
+        editor.updateInstanceState({ isPenMode: true });
+      }
+    };
+    container.addEventListener('pointerdown', onPointerDown, true);
+    return () => {
+      container.removeEventListener('pointerdown', onPointerDown, true);
+    };
+  }, [editorReady, penMode]);
 
   // Mirror the app's light/dark/system preference into tldraw. tldraw
   // routes the actual rendering decision (with 'system' it consults
@@ -198,12 +252,22 @@ export default function TldrawIsland({
         onMount={(editor) => {
           editorRef.current = editor;
           editor.updateInstanceState({ isReadonly: readOnly });
+          // Apply the pen-mode setting synchronously on mount so the first
+          // input is already governed by it (in 'always' mode a finger
+          // tap shouldn't draw even on the very first stroke).
+          if (penMode === 'always') {
+            editor.updateInstanceState({ isPenMode: true });
+          } else if (penMode === 'off') {
+            editor.updateInstanceState({ isPenMode: false });
+          }
           // Set the colour scheme synchronously on mount so the canvas
           // doesn't render one frame with tldraw's default before the
           // [colorScheme] effect runs. tldraw stores this in localStorage
           // (TLDRAW_USER_DATA_v3), so if the user previously set a value
           // there we'd otherwise inherit it instead of our app preference.
           editor.user.updateUserPreferences({ colorScheme });
+          // Unblock effects that depend on the editor existing.
+          setEditorReady(true);
         }}
       />
     </div>
