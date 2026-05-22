@@ -99,6 +99,8 @@
     "editor.wikilink.menu.label": "Link to note",
     "editor.wikilink.menu.empty": "No notes match — keep typing to insert a new link",
     "editor.popout": "Open in new window",
+    "editor.fullscreen.enter": "Enter fullscreen",
+    "editor.fullscreen.exit": "Exit fullscreen",
 
     "editor.unknownKind.title": "Can't open this note",
     "editor.unknownKind.message": "This note was created with an editor type this version of the app doesn't support. Update to the latest version to open it. The note's content is safe — it hasn't been changed.",
