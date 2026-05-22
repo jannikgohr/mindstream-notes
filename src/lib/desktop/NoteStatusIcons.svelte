@@ -36,7 +36,7 @@
   {#if status.collabConfigured}
     {#if status.collabOnline}
       <span
-        class="inline-flex text-emerald-600 dark:text-emerald-400"
+        class="inline-flex"
         title={tUi('editor.status.live')}
         aria-label={tUi('editor.status.live')}
       >

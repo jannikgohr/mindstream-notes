@@ -42,8 +42,8 @@ importers:
         specifier: ^2.1.1
         version: 2.1.1
       dockview-core:
-        specifier: ^4.0.0
-        version: 4.13.1
+        specifier: ^6.4.0
+        version: 6.4.0
       lucide-svelte:
         specifier: ^0.469.0
         version: 0.469.0(svelte@5.55.5)
@@ -2604,8 +2604,8 @@ packages:
   devlop@1.1.0:
     resolution: {integrity: sha512-RWmIqhcFf1lRYBvNmr7qTNuyCt/7/ns2jbpp1+PalgE/rDQcBT0fioSMUpJ93irlUhC5hrg4cYqe6U+0ImW0rA==}
 
-  dockview-core@4.13.1:
-    resolution: {integrity: sha512-+7vR0ZEoL8CNck6NqDVUMqBT22niwBu5CMMI137dZ3c8NDc7c5Si+3dGEqQgM4lNtHBLAtvypo1C4p21J2wkiQ==}
+  dockview-core@6.4.0:
+    resolution: {integrity: sha512-udnPMt6azzYQSG2yTIDBD+2+IT5XMlSCSLoXvj5DrdnlYatvkBIBRdAsfHuZZR9UeucYmt8d+12zZdsN0+gCSQ==}
 
   dom-accessibility-api@0.5.16:
     resolution: {integrity: sha512-X7BJ2yElsnOJ30pZF4uIIDfBEVgF4XEBxL9Bxhy6dnrm5hkzqmsWHGTiHqRiITNhMyFLyAiWndIJP7Z1NTteDg==}
@@ -6488,7 +6488,7 @@ snapshots:
     dependencies:
       dequal: 2.0.3
 
-  dockview-core@4.13.1: {}
+  dockview-core@6.4.0: {}
 
   dom-accessibility-api@0.5.16: {}
 
