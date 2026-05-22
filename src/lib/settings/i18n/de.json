@@ -99,8 +99,6 @@
     "editor.wikilink.menu.label": "Notiz verlinken",
     "editor.wikilink.menu.empty": "Keine Treffer — weiter tippen, um einen neuen Link einzufügen",
     "editor.popout": "In neuem Fenster öffnen",
-    "editor.fullscreen.enter": "Vollbild aktivieren",
-    "editor.fullscreen.exit": "Vollbild verlassen",
 
     "editor.unknownKind.title": "Diese Notiz kann nicht geöffnet werden",
     "editor.unknownKind.message": "Diese Notiz wurde mit einem Editor-Typ erstellt, den diese App-Version nicht unterstützt. Aktualisiere auf die neueste Version, um sie zu öffnen. Der Inhalt der Notiz ist sicher — er wurde nicht verändert.",

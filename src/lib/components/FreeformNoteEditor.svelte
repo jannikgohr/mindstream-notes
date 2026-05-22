@@ -30,7 +30,7 @@
   import { onDestroy, onMount, untrack } from 'svelte';
   import * as Y from 'yjs';
   import { Awareness } from 'y-protocols/awareness';
-  import { Maximize2, Minimize2, Trash2, Wifi, WifiOff } from 'lucide-svelte';
+  import { Trash2, Wifi, WifiOff } from 'lucide-svelte';
   import { userPrefersMode } from 'mode-watcher';
   import {
     loadNote,
@@ -51,12 +51,8 @@
   import { listen } from '$lib/api/events';
   import {
     acquireFullscreen,
-    onWindowResized,
-    readFullscreen,
-    releaseFullscreen,
-    toggleFullscreen
+    releaseFullscreen
   } from '$lib/window/fullscreen';
-  import { tUi } from '$lib/settings/i18n.svelte';
   import { isTauri } from '$lib/api';
 
   interface Props {
@@ -89,18 +85,11 @@
   );
   let loading = $state(true);
 
-  // Fullscreen wiring. The reactive `isFullscreen` powers the desktop
-  // toggle button's icon and aria-label; `fullscreenAcquired` records
-  // whether *this* component pushed the window into fullscreen (mobile
-  // auto-mode), so onDestroy knows whether to release. `unlistenResize`
-  // tears down the Tauri resize subscription that updates `isFullscreen`
-  // when the user uses F11 / the title-bar Restore button to exit.
-  let isFullscreen = $state(false);
+  // Mobile auto-fullscreen tracking. `fullscreenAcquired` records
+  // whether *this* component pushed the window into fullscreen so
+  // onDestroy knows whether it needs to release the ref count. Desktop
+  // has no fullscreen UI for freeform notes; the OS chrome stays.
   let fullscreenAcquired = false;
-  let unlistenResize: (() => void) | null = null;
-  // True only on a desktop Tauri build — that's where the manual toggle
-  // belongs (mobile auto-enters; a plain dev browser has no setFullscreen).
-  let showFullscreenButton = $state(false);
   let loadError = $state<string | null>(null);
 
   let yDocUpdateHandler: (() => void) | null = null;
@@ -176,26 +165,13 @@
     if (!mountEl) return;
     try {
       mobile = isMobile();
-      // Fullscreen wiring runs independent of the note load — we want it
-      // best-effort and non-blocking. On mobile we acquire immediately so
-      // the system bars are gone before the first stroke. On desktop
-      // (Tauri only) we expose a toggle button and subscribe to resize
-      // events so the button reflects out-of-band changes (F11, OS
-      // gestures). The dev-browser path falls through both branches.
-      if (isTauri()) {
-        if (mobile) {
-          void acquireFullscreen();
-          fullscreenAcquired = true;
-        } else {
-          showFullscreenButton = true;
-        }
-        isFullscreen = await readFullscreen();
-        const unlisten = await onWindowResized(() => {
-          void (async () => {
-            isFullscreen = await readFullscreen();
-          })();
-        });
-        if (unlisten) unlistenResize = unlisten;
+      // Mobile-only auto-fullscreen. Tauri-only because the API is a
+      // no-op in a plain dev browser; we don't gate desktop here at all
+      // since there's no UI for it. Fire-and-forget — the system-bar
+      // hide isn't on the critical path for the first stroke.
+      if (isTauri() && mobile) {
+        void acquireFullscreen();
+        fullscreenAcquired = true;
       }
       const note = await loadNote(noteId);
       if (!mountEl) return; // unmounted while awaiting
@@ -389,13 +365,9 @@
     unsubSync?.();
     unsubSync = null;
     unsubSession = null;
-    // Tear down the fullscreen wiring. We only release the ref count we
-    // ourselves acquired (mobile auto-mode). Desktop tabs that just
-    // opened the toggle button don't touch the counter so there's
-    // nothing to release on that path — the user's manual choice
-    // persists across closing the note, which matches how F11 behaves.
-    unlistenResize?.();
-    unlistenResize = null;
+    // Release our fullscreen ref if mobile auto-mode acquired one.
+    // Ref-counted in the helper, so multiple freeform notes only flip
+    // back out of fullscreen once the last one closes.
     if (fullscreenAcquired) {
       void releaseFullscreen();
       fullscreenAcquired = false;
@@ -432,17 +404,6 @@
   });
 
   // ---- Save (debounced) ----
-
-  /** Desktop fullscreen toggle. The Tauri call is asynchronous but a
-   *  resize event fires from the OS side once the transition completes
-   *  — that's what the `onWindowResized` subscription in onMount picks
-   *  up to keep `isFullscreen` honest. The return value from toggle is
-   *  used as an optimistic update for the common case, with the resize
-   *  callback as the source of truth. */
-  async function handleFullscreenToggle() {
-    const next = await toggleFullscreen();
-    if (next !== null) isFullscreen = next;
-  }
 
   function scheduleSave() {
     if (isTrashed) return;
@@ -565,38 +526,16 @@
     {/if}
     <!--
       `freeform-canvas-host` scopes the tldraw UI tweaks in app.css
-      (toolbar at top) to this mount only. tldraw mounts its .tlui-layout
-      grid as a descendant of this div, so the 2-class selectors in the
-      stylesheet attach without !important.
+      (toolbar moved below the menu/helper zone) to this mount only —
+      and only on mobile, where the bottom edge is hardest to reach
+      with a stylus. Desktop keeps tldraw's stock layout. tldraw mounts
+      its .tlui-layout grid as a descendant of this div, so the
+      2-class selectors in the stylesheet attach without !important.
     -->
-    <div bind:this={mountEl} class="freeform-canvas-host absolute inset-0"></div>
-    {#if showFullscreenButton && !isTrashed}
-      <!--
-        Desktop-only fullscreen toggle. Sits in the top-right corner
-        above tldraw's UI layer (.tl-layer-panels = 300) so the user can
-        always reach it. The corner is empty after the toolbar flip
-        (toolbar is centred in row 1; the helper buttons that normally
-        live top-right are pushed into row 2). Mobile auto-enters
-        fullscreen on mount instead — no button needed there.
-      -->
-      <button
-        type="button"
-        class="absolute right-2 top-2 z-[400] inline-flex size-8 items-center justify-center rounded-md border border-border bg-background/80 text-muted-foreground shadow-sm backdrop-blur transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        title={isFullscreen
-          ? tUi('editor.fullscreen.exit')
-          : tUi('editor.fullscreen.enter')}
-        aria-label={isFullscreen
-          ? tUi('editor.fullscreen.exit')
-          : tUi('editor.fullscreen.enter')}
-        aria-pressed={isFullscreen}
-        onclick={handleFullscreenToggle}
-      >
-        {#if isFullscreen}
-          <Minimize2 class="size-4" aria-hidden="true" />
-        {:else}
-          <Maximize2 class="size-4" aria-hidden="true" />
-        {/if}
-      </button>
-    {/if}
+    <div
+      bind:this={mountEl}
+      class="absolute inset-0"
+      class:freeform-canvas-host={mobile}
+    ></div>
   </div>
 </div>
