@@ -31,6 +31,7 @@
   import * as Y from 'yjs';
   import { Awareness } from 'y-protocols/awareness';
   import { Trash2, Wifi, WifiOff } from 'lucide-svelte';
+  import { userPrefersMode } from 'mode-watcher';
   import {
     loadNote,
     saveNote as apiSaveNote,
@@ -186,14 +187,19 @@
       TldrawIslandComponent = islandModule.default;
       reactCreateElement = reactModule.createElement;
       reactRoot = createRoot(mountEl);
-      // First render: pass yDoc + awareness + current readonly. Re-render
-      // happens reactively via the $effect below whenever isTrashed flips.
+      // First render: pass yDoc + awareness + current readonly + the
+      // current colour-scheme preference. Re-render happens reactively
+      // via the $effect below whenever isTrashed or the app theme flips.
+      // Both reads use untrack() because this initial render runs inside
+      // onMount, not inside a tracking scope — the $effect below is
+      // what wires the reactivity for subsequent updates.
       reactRoot.render(
         reactCreateElement(TldrawIslandComponent, {
           yDoc,
           awareness,
           readOnly: untrack(() => isTrashed),
-          noteId
+          noteId,
+          colorScheme: untrack(() => $userPrefersMode) ?? 'system'
         })
       );
 
@@ -244,12 +250,15 @@
     }
   });
 
-  // Re-render the island when trashed flips so tldraw goes read-only
-  // mid-session (e.g. another window trashes the note while this one is
-  // open). The island itself derives `instanceState.isReadonly` from
-  // this prop in its own useEffect.
+  // Re-render the island whenever any prop tldraw cares about flips —
+  // currently trashed state (toggles the canvas to read-only mid-session)
+  // and the app-wide colour scheme (mode-watcher → tldraw user
+  // preferences). The island maps each prop into the matching tldraw API
+  // inside its own useEffect; React reconciliation between renders keeps
+  // tldraw's internal state intact.
   $effect(() => {
     const readOnly = isTrashed;
+    const colorScheme = $userPrefersMode ?? 'system';
     if (!reactRoot || !TldrawIslandComponent || !reactCreateElement) return;
     if (!yDoc || !awareness) return;
     reactRoot.render(
@@ -257,7 +266,8 @@
         yDoc,
         awareness,
         readOnly,
-        noteId
+        noteId,
+        colorScheme
       })
     );
   });
@@ -421,7 +431,7 @@
     >
       {#if collabConfigured}
         {#if collabOnline}
-          <span class="flex items-center gap-1 text-emerald-600 dark:text-emerald-400" title="Live collab connected">
+          <span class="flex items-center gap-1" title="Live collab connected">
             <Wifi class="size-3" aria-hidden="true" />
             Live
           </span>
