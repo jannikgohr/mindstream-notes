@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Context
 import android.graphics.Color
 import android.graphics.PixelFormat
+import android.util.Log
 import android.view.MotionEvent
 import android.view.Surface
 import android.view.SurfaceHolder
@@ -176,6 +177,14 @@ private class DrawingSurfaceView(context: Context) :
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         val action = event.actionMasked
+        // Diagnostic during POC bring-up: confirms touches actually
+        // reach the SurfaceView even if nothing visible appears. The
+        // matching Rust-side log lives in render.rs::push_sample.
+        // Drop these once the pipeline is verified end-to-end.
+        Log.d(
+            "MindstreamDrawing",
+            "onTouchEvent action=$action history=${event.historySize} x=${event.x} y=${event.y}"
+        )
         // Historical samples are the buffered digitizer reads between
         // the previous frame and this MotionEvent batch — replaying
         // them is what gets us the full pen sample rate instead of the
