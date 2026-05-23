@@ -16,8 +16,11 @@ import { mockApi } from './mock-store';
  *
  *   markdown — Crepe / y-prosemirror text editor (the original kind)
  *   freeform — drawing canvas backed by tldraw + Y.Doc
+ *   ink      — native egui+wgpu drawing surface (Android-only POC; see
+ *              docs/native-egui-layer/01-audit.md). Desktop dispatch
+ *              shows a placeholder until Phase 2 lands.
  */
-export type NoteKind = 'markdown' | 'freeform';
+export type NoteKind = 'markdown' | 'freeform' | 'ink';
 
 /**
  * The full set of editor kinds this app version knows how to render.
@@ -31,7 +34,7 @@ export type NoteKind = 'markdown' | 'freeform';
  * matching `default_note_kind` / supported list in
  * src-tauri/src/notes/mod.rs.
  */
-export const KNOWN_NOTE_KINDS = ['markdown', 'freeform'] as const;
+export const KNOWN_NOTE_KINDS = ['markdown', 'freeform', 'ink'] as const;
 
 /** Narrows an arbitrary string (e.g. from a remote-synced row) into
  *  the typed `NoteKind` union. */

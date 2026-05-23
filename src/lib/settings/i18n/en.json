@@ -53,9 +53,11 @@
 
     "fab.newNote": "New note",
     "fab.newDrawing": "New drawing",
+    "fab.newInk": "New ink note",
     "fab.newFolder": "New folder",
     "fab.placeholder.noteTitle": "Note title",
     "fab.placeholder.drawingTitle": "Drawing title",
+    "fab.placeholder.inkTitle": "Ink note title",
     "fab.placeholder.folderName": "Folder name",
     "fab.submit.create": "Create",
 
@@ -104,6 +106,9 @@
     "editor.unknownKind.message": "This note was created with an editor type this version of the app doesn't support. Update to the latest version to open it. The note's content is safe — it hasn't been changed.",
     "editor.unknownKind.titleLabel": "Note",
     "editor.unknownKind.kindLabel": "Editor type",
+
+    "editor.ink.desktopPlaceholderTitle": "Ink notes are Android-only for now",
+    "editor.ink.desktopPlaceholderMessage": "The native drawing layer is still being ported to desktop. Open this note on your phone to draw — the stack lives in docs/native-egui-layer.",
 
     "updater.checkFailed.title": "Couldn't check for updates",
     "updater.checkFailed.message": "We weren't able to reach the update server. Check your internet connection and try again.",

@@ -85,3 +85,28 @@ dbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust", 
 # is created — see Keyring.kt + MainActivity.onCreate in
 # src-tauri/gen/android/app/...
 android-native-keyring-store = "1"
+
+# ---- Native "ink" drawing layer (POC) ----
+# Android-only for now: wgpu draws into a SurfaceView injected as a
+# sibling of the Tauri WebView. See src/drawing/* + Drawing.kt.
+# Keep these under cfg(target_os="android") so desktop builds stay
+# lean — desktop dispatch shows a placeholder until Phase 2.
+wgpu = "25"
+raw-window-handle = "0.6"
+# ndk gives us ANativeWindow_fromSurface(env, jsurface) — the bridge
+# between the Java Surface and the raw pointer wgpu's create_surface
+# needs. ndk-sys is the raw FFI; ndk is the higher-level wrapper —
+# we hold the pointer ourselves but use the ndk crate's symbol
+# definitions for type compatibility with raw-window-handle.
+ndk = "0.9"
+ndk-sys = "0.6"
+# ndk-context is already initialised process-wide by Keyring.initializeNdkContext
+# in MainActivity.onCreate (see Keyring.kt). We pull it in explicitly
+# so the drawing JNI code can fetch the JavaVM for callbacks back into
+# Kotlin (show/hide) without having to also depend on the keyring crate.
+ndk-context = "0.1"
+jni = "0.21"
+bytemuck = { version = "1", features = ["derive"] }
+# pollster::block_on is the minimal way to drive wgpu's async init from
+# the render thread — we don't want a full tokio runtime here.
+pollster = "0.4"

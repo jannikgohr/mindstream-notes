@@ -13,6 +13,7 @@
   import { onMount } from 'svelte';
   import NoteEditor from '$lib/components/NoteEditor.svelte';
   import FreeformNoteEditor from '$lib/components/FreeformNoteEditor.svelte';
+  import DrawingNoteEditor from '$lib/components/DrawingNoteEditor.svelte';
   import UnknownNoteKindError from '$lib/components/UnknownNoteKindError.svelte';
   import WindowControls from '$lib/components/WindowControls.svelte';
   import { isKnownNoteKind, loadNote, openNoteWindow, type NoteKind } from '$lib/api';
@@ -82,6 +83,8 @@
       </div>
     {:else if noteKind === 'freeform'}
       <FreeformNoteEditor {noteId} />
+    {:else if noteKind === 'ink'}
+      <DrawingNoteEditor {noteId} />
     {:else if noteKind === 'markdown'}
       <NoteEditor {noteId} />
     {:else if !isKnownNoteKind(noteKind ?? undefined)}
