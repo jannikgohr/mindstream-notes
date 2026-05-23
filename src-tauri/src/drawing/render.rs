@@ -30,6 +30,7 @@
 //! window event the Svelte side listens for (Back).
 
 use std::ptr::NonNull;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{self, Sender, SyncSender, TryRecvError};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
@@ -49,16 +50,23 @@ const ACTION_UP: i32 = 1;
 const ACTION_MOVE: i32 = 2;
 const ACTION_CANCEL: i32 = 3;
 
-/// Pixels at the top of the surface that the system status bar
-/// composites on top of (MainActivity calls `enableEdgeToEdge`, so our
-/// SurfaceView extends under it). Anything we paint in y < this is
-/// hidden behind the status bar text/icons. Conservative hardcode for
-/// the POC — covers the Samsung S23+ (74px) plus mandatory system-
-/// gesture inset (108px) with margin, plus an emulator's typically
-/// taller status bar. Proper fix is task #19: read
-/// `WindowInsetsCompat.systemBars().top` from Kotlin and pass it via
-/// JNI so this can be device-specific.
-const STATUS_BAR_INSET_PX: f32 = 144.0;
+/// Initial fallback for the top safe-area inset, in pixels. Used
+/// before the first `setInsets` JNI call arrives from Kotlin's
+/// `OnApplyWindowInsetsListener`. Chosen large enough to keep the
+/// toolbar visible on most devices even if the listener never fires
+/// (e.g. attach races). Once the listener runs, the actual
+/// per-device value from `WindowInsetsCompat.systemBars().top`
+/// overrides this via `TOP_INSET_PX`.
+const FALLBACK_TOP_INSET_PX: u32 = 144;
+
+/// Dynamic top safe-area inset in pixels, updated by Kotlin via
+/// `setInsets`. Read each frame by both the toolbar layout and the
+/// touch-routing region check.
+static TOP_INSET_PX: AtomicU32 = AtomicU32::new(FALLBACK_TOP_INSET_PX);
+
+fn top_inset_px() -> f32 {
+    TOP_INSET_PX.load(Ordering::Relaxed) as f32
+}
 
 /// Visible portion of the toolbar — what's actually tap-target sized
 /// below the status bar inset. Total panel painted = inset + this.
@@ -69,7 +77,9 @@ const TOOLBAR_HEIGHT_PX: f32 = 120.0;
 /// in the status bar (the system bar grabs those gestures), but if a
 /// MOVE drifts up there we don't want it secretly drawing under the
 /// toolbar background either.
-const TOOLBAR_TOTAL_PX: f32 = STATUS_BAR_INSET_PX + TOOLBAR_HEIGHT_PX;
+fn toolbar_total_px() -> f32 {
+    top_inset_px() + TOOLBAR_HEIGHT_PX
+}
 
 /// Fixed scale factor we tell egui. We could query
 /// `DisplayMetrics.density` from Kotlin and plumb it through, but
@@ -139,6 +149,10 @@ enum Msg {
     Sample { x: f32, y: f32, action: i32 },
     /// Wipe all accumulated geometry.
     Clear,
+    /// Window inset changed — re-render so the toolbar repositions.
+    /// The actual value lives in the `TOP_INSET_PX` atomic; this msg
+    /// is just a "wake up and repaint" signal.
+    InsetChanged,
 }
 
 unsafe impl Send for Msg {}
@@ -294,6 +308,18 @@ pub fn clear_strokes() {
     send(Msg::Clear);
 }
 
+/// Update the top safe-area inset and request a re-render. Called
+/// from the JNI `setInsets` export, which Kotlin triggers via the
+/// SurfaceView's `OnApplyWindowInsetsListener`. Atomically stored;
+/// touch routing + the render loop read it on the next frame.
+pub fn set_top_inset(top_px: u32) {
+    let old = TOP_INSET_PX.swap(top_px, Ordering::Relaxed);
+    if old != top_px {
+        log::info!("[drawing] top inset updated: {old} -> {top_px}");
+        send(Msg::InsetChanged);
+    }
+}
+
 /// Translate a pixel coordinate (origin top-left) into the egui
 /// "point" space we tell the Context lives in. egui internally works
 /// in points; ScreenDescriptor handles the points→pixels mapping for
@@ -400,7 +426,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                 pressed: true,
                                 modifiers: egui::Modifiers::NONE,
                             });
-                            if y < TOOLBAR_TOTAL_PX {
+                            if y < toolbar_total_px() {
                                 stroke_suppressed = true;
                             } else {
                                 stroke_suppressed = false;
@@ -442,6 +468,11 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                 Msg::Clear => {
                     segments.clear();
                     last_point = None;
+                    dirty = true;
+                }
+                Msg::InsetChanged => {
+                    // No state to update — render() reads the atomic
+                    // each frame. Just request a paint.
                     dirty = true;
                 }
             }
@@ -717,21 +748,25 @@ impl GpuState {
         // result that easily. The bools live on the outer stack
         // and outlive the closure call.
         let mut actions = RenderActions::default();
-        // top inner-margin in points = status-bar inset in points. The
-        // panel's BACKGROUND still paints from y=0 (under the status
-        // bar text/icons; cosmetic, the system bar overlays it), but
-        // the BUTTONS sit below the inset so they're tappable.
-        let top_margin_pts = (STATUS_BAR_INSET_PX / PIXELS_PER_POINT).round() as i8;
-        let panel_height_pts = TOOLBAR_TOTAL_PX / PIXELS_PER_POINT;
+        // Top inner-margin in points = status-bar inset in points.
+        // The panel's BACKGROUND still paints from y=0 (under the
+        // status bar text/icons; cosmetic, the system bar overlays
+        // it), but the BUTTONS sit below the inset so they're
+        // tappable. Read the inset fresh each frame — Kotlin updates
+        // the atomic via setInsets when WindowInsets change (e.g.
+        // rotation), and the InsetChanged msg woke us up to repaint.
+        let top_inset = top_inset_px();
+        let top_margin_pts = (top_inset / PIXELS_PER_POINT).round().clamp(0.0, 127.0) as i8;
+        let panel_height_pts = (top_inset + TOOLBAR_HEIGHT_PX) / PIXELS_PER_POINT;
         let full_output = self.egui_ctx.run(egui_input, |ctx| {
             egui::TopBottomPanel::top("drawing-toolbar")
                 .exact_height(panel_height_pts)
                 .frame(
                     egui::Frame::default()
-                        // Deliberately loud — once we confirm the
-                        // toolbar is reaching the surface we'll tone
-                        // it down to the audit-spec dark grey.
-                        .fill(egui::Color32::from_rgb(180, 30, 30))
+                        // Audit-spec dark grey. Confirmed the toolbar
+                        // reaches the surface (the loud red debug
+                        // marker did its job and is gone).
+                        .fill(egui::Color32::from_rgb(32, 32, 36))
                         .inner_margin(egui::Margin {
                             left: 12,
                             right: 12,
