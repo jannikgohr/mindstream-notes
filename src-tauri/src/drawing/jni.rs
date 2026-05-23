@@ -23,14 +23,55 @@
 //!     hits a plain static method on `Drawing` directly.
 
 use std::ptr::NonNull;
+use std::sync::OnceLock;
 
-use jni::objects::{JClass, JObject};
+use jni::objects::{GlobalRef, JClass, JObject};
 use jni::sys::{jfloat, jint};
 use jni::JNIEnv;
 
 use crate::drawing::render;
 
+/// Global ref to the Kotlin `io.crates.drawing.Drawing` class,
+/// populated by `cacheJniClass` from the companion's static `init`
+/// block. We need this because `JavaVM::attach_current_thread` on a
+/// Rust-spawned thread (our render thread) returns a `JNIEnv` whose
+/// `find_class` only sees the *system* class loader — app classes
+/// like ours throw `ClassNotFoundException`. Stashing a GlobalRef
+/// made during Java-originating class loading sidesteps that
+/// entirely.
+static DRAWING_CLASS: OnceLock<GlobalRef> = OnceLock::new();
+
 // ---------- Kotlin → Rust ----------
+
+/// `Drawing.Companion.cacheJniClass(Drawing.class)`.
+///
+/// Called once from the companion's static `init` block. The class
+/// object is captured here as a `GlobalRef` so the Rust render
+/// thread can invoke static methods on `Drawing` without doing its
+/// own `find_class` (which fails for app classes — see DRAWING_CLASS
+/// docstring above).
+///
+/// Safe to call multiple times: the second `set` silently no-ops
+/// because OnceLock won't overwrite, and we log a warning so we
+/// notice if some teardown / re-init cycle is hitting it unexpectedly.
+#[no_mangle]
+pub extern "system" fn Java_io_crates_drawing_Drawing_00024Companion_cacheJniClass(
+    env: JNIEnv,
+    _companion: JClass,
+    klass: JObject,
+) {
+    match env.new_global_ref(klass) {
+        Ok(global_ref) => {
+            if DRAWING_CLASS.set(global_ref).is_err() {
+                log::warn!("[drawing] cacheJniClass called more than once — ignoring");
+            } else {
+                log::info!("[drawing] cached Drawing class ref for render-thread callbacks");
+            }
+        }
+        Err(e) => log::error!("[drawing] new_global_ref(Drawing.class) failed: {e}"),
+    }
+}
+
 
 /// `Drawing.Companion.setSurface(surface, width, height)`.
 ///
@@ -106,7 +147,7 @@ pub extern "system" fn Java_io_crates_drawing_Drawing_00024Companion_pushPoint(
 // ---------- Rust → Kotlin (UI thread callbacks) ----------
 
 pub mod ui {
-    use jni::objects::JValue;
+    use jni::objects::{JClass, JValue};
     use jni::JavaVM;
 
     /// Call `Drawing.showFromNative()` from Rust. Triggered by the
@@ -128,15 +169,20 @@ pub mod ui {
         invoke_static_void("backFromNative")
     }
 
-    /// Common path: look up `io.crates.drawing.Drawing` and call a
-    /// no-arg `void` static method on it. Both show/hide go through
+    /// Common path: invoke a no-arg `void` static method on the
+    /// cached `Drawing` class. All three of show/hide/back go through
     /// here; this also makes the error message uniform.
     ///
     /// Threading: ndk_context's JavaVM is process-global once
-    /// initialised; `attach_current_thread` is safe to call from
-    /// whichever Tokio worker thread happens to be running the Tauri
-    /// command. The Kotlin side dispatches the actual UI work to
-    /// `runOnUiThread` so we don't have to do that here.
+    /// initialised; `attach_current_thread` is safe to call from any
+    /// thread. We deliberately do NOT use `env.find_class` — the
+    /// attached `JNIEnv` on a Rust-spawned thread (the render thread
+    /// in particular) carries the *system* class loader, which can't
+    /// see `io.crates.drawing.Drawing` and throws
+    /// `ClassNotFoundException`. The cached `GlobalRef` was created
+    /// in `cacheJniClass` from the companion's static init, which
+    /// runs on a Java-originating thread that has the app class
+    /// loader.
     fn invoke_static_void(method: &str) -> Result<(), String> {
         let ctx = ndk_context::android_context();
         let vm_ptr = ctx.vm();
@@ -155,10 +201,18 @@ pub mod ui {
             .attach_current_thread()
             .map_err(|e| format!("attach_current_thread: {e}"))?;
 
-        let class = env
-            .find_class("io/crates/drawing/Drawing")
-            .map_err(|e| format!("find_class Drawing: {e}"))?;
-        env.call_static_method(class, method, "()V", &[] as &[JValue])
+        let global_ref = super::DRAWING_CLASS.get().ok_or_else(|| {
+            "Drawing class not yet cached — Drawing companion static init must have run"
+                .to_string()
+        })?;
+        // SAFETY: GlobalRef holds the same jobject we received as a
+        // jclass from Kotlin's `Drawing::class.java`; JClass is a
+        // transparent wrapper over JObject in the jni crate. Treating
+        // the raw pointer as a borrowed JClass for the duration of
+        // this call is sound because the GlobalRef keeps the
+        // underlying class alive for the rest of the process.
+        let class = unsafe { JClass::from_raw(global_ref.as_raw()) };
+        env.call_static_method(&class, method, "()V", &[] as &[JValue])
             .map_err(|e| format!("call_static_method {method}: {e}"))?;
         Ok(())
     }

@@ -53,9 +53,12 @@ const ACTION_CANCEL: i32 = 3;
 /// composites on top of (MainActivity calls `enableEdgeToEdge`, so our
 /// SurfaceView extends under it). Anything we paint in y < this is
 /// hidden behind the status bar text/icons. Conservative hardcode for
-/// the POC — proper fix is to read `WindowInsets.systemBars.top` from
-/// Kotlin and plumb it through `setSurface`.
-const STATUS_BAR_INSET_PX: f32 = 96.0;
+/// the POC — covers the Samsung S23+ (74px) plus mandatory system-
+/// gesture inset (108px) with margin, plus an emulator's typically
+/// taller status bar. Proper fix is task #19: read
+/// `WindowInsetsCompat.systemBars().top` from Kotlin and pass it via
+/// JNI so this can be device-specific.
+const STATUS_BAR_INSET_PX: f32 = 144.0;
 
 /// Visible portion of the toolbar — what's actually tap-target sized
 /// below the status bar inset. Total panel painted = inset + this.
