@@ -24,9 +24,10 @@
 //! / pressure-tapered strokes wait for the lyon pass in a follow-up.
 
 use std::ptr::NonNull;
-use std::sync::mpsc::{self, Sender, TryRecvError};
+use std::sync::mpsc::{self, Sender, SyncSender, TryRecvError};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
+use std::time::Duration;
 
 use bytemuck::{Pod, Zeroable};
 use raw_window_handle::{
@@ -79,7 +80,16 @@ enum Msg {
     /// surface immediately so a stray render call doesn't touch a
     /// dangling handle. The render thread keeps running so the next
     /// `SurfaceReady` can rebuild without a thread restart.
-    SurfaceLost,
+    ///
+    /// The optional reply slot is what makes `clear_surface()` block:
+    /// the JNI thread holds the SurfaceHolder callback open for as
+    /// long as it doesn't return, and Android only invalidates the
+    /// ANativeWindow after we return. By acking once the GpuState
+    /// is dropped we keep the wgpu Surface destruction inside the
+    /// window where the underlying handle is still valid — the
+    /// alternative produces FORTIFY mutex-after-destroy crashes when
+    /// wgpu's swap-chain teardown chases a dangling EGL context.
+    SurfaceLost { reply: Option<SyncSender<()>> },
     /// Forwarded stylus / touch sample. `x`/`y` are in surface pixel
     /// coordinates with the origin top-left.
     Sample { x: f32, y: f32, action: i32 },
@@ -200,11 +210,27 @@ pub fn resize_surface(width: u32, height: u32) {
     send(Msg::Resize { width, height });
 }
 
+/// Synchronously drop the wgpu surface — blocks the JNI caller until
+/// the render thread acks. This must run before the JNI thread
+/// returns from `SurfaceHolder.Callback.surfaceDestroyed`, otherwise
+/// Android invalidates the ANativeWindow under wgpu's feet and the
+/// swap-chain teardown races into a destroyed EGL context (FORTIFY
+/// pthread_mutex_lock-on-destroyed-mutex SIGABRT).
+///
+/// Bounded wait: a stuck render thread shouldn't hang Android's
+/// surface lifecycle indefinitely. 500ms is generous for "drop a
+/// device + queue" and matches the order of magnitude Android
+/// gives lifecycle callbacks before ANR.
 pub fn clear_surface() {
-    send(Msg::SurfaceLost);
+    let (tx, rx) = mpsc::sync_channel::<()>(1);
+    send(Msg::SurfaceLost { reply: Some(tx) });
+    if rx.recv_timeout(Duration::from_millis(500)).is_err() {
+        log::warn!("[drawing] surface drop ack timed out — proceeding anyway");
+    }
 }
 
 pub fn push_sample(x: f32, y: f32, action: i32) {
+    log::trace!("[drawing] push_sample x={x:.1} y={y:.1} action={action}");
     send(Msg::Sample { x, y, action });
 }
 
@@ -272,8 +298,19 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                         dirty = true;
                     }
                 }
-                Msg::SurfaceLost => {
+                Msg::SurfaceLost { reply } => {
+                    // The lifecycle ordering — drop GpuState (which
+                    // drops Surface, Device, Queue) BEFORE the JNI
+                    // thread returns from surfaceDestroyed — is what
+                    // keeps the EGL context alive long enough for
+                    // wgpu's swap-chain teardown. The reply ack
+                    // below is the synchronisation primitive that
+                    // enforces it; wgpu's own Drop drains in-flight
+                    // submissions, so no explicit poll is needed.
                     gpu = None;
+                    if let Some(tx) = reply {
+                        let _ = tx.send(());
+                    }
                 }
                 Msg::Sample { x, y, action } => {
                     match action {
@@ -564,7 +601,17 @@ impl GpuState {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        // POC: white background, black strokes (see
+                        // shader). The Android Surface is opaque under
+                        // the GL backend on most devices regardless of
+                        // PixelFormat.TRANSLUCENT, so clearing to
+                        // Color::TRANSPARENT actually renders opaque
+                        // black — invisible against our black ink. White
+                        // gets us visible feedback today; transparent
+                        // composition over the WebView waits for the
+                        // egui-toolbar pass, where we'll need a
+                        // proper alpha-bearing EGL config anyway.
+                        load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
