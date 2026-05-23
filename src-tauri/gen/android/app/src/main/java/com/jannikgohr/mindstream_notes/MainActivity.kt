@@ -34,4 +34,21 @@ class MainActivity : TauriActivity() {
     super.onWebViewCreate(webView)
     Drawing.attach(this, webView)
   }
+
+  /**
+   * Tear down the native drawing surface here, while EGL is still
+   * valid. Letting it survive to Activity.onStop / onDestroy means
+   * Android's GL teardown invalidates the EGL display under wgpu's
+   * feet, and wgpu's swap-chain Drop hits a destroyed pthread mutex
+   * (FORTIFY SIGABRT, two threads racing on the same mutex addr).
+   *
+   * Detach is a no-op when nothing is attached — safe to call on every
+   * pause regardless of whether an ink note is open. The next show()
+   * (e.g. coming back from background while in the same note) will
+   * rebuild from scratch via DrawingNoteEditor's onMount.
+   */
+  override fun onPause() {
+    Drawing.detach()
+    super.onPause()
+  }
 }

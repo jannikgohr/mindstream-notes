@@ -72,9 +72,32 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
     fun hide() {
         activity.runOnUiThread {
             val v = view ?: return@runOnUiThread
+            Log.i("MindstreamDrawing", "Drawing.hide: detaching SurfaceView")
             (v.parent as? ViewGroup)?.removeView(v)
             view = null
         }
+    }
+
+    /**
+     * UI-thread-only synchronous tear-down. Used from MainActivity
+     * lifecycle hooks (onPause, onDestroy) — those callbacks run on
+     * the UI thread, so we skip the runOnUiThread bounce and the
+     * SurfaceView detach happens immediately. Inside the detach,
+     * `SurfaceView.onDetachedFromWindow` fires `surfaceDestroyed`
+     * synchronously, which calls into Rust's `clear_surface`, which
+     * blocks until the render thread has dropped wgpu's GpuState.
+     * By the time this method returns, the EGL handles wgpu held
+     * are gone — safe for the Activity to continue tearing down its
+     * own GL context.
+     */
+    fun hideSync() {
+        check(android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+            "hideSync must be called on the UI thread"
+        }
+        val v = view ?: return
+        Log.i("MindstreamDrawing", "Drawing.hideSync: detaching SurfaceView (UI thread)")
+        (v.parent as? ViewGroup)?.removeView(v)
+        view = null
     }
 
     companion object {
@@ -98,6 +121,17 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
         /** Called from MainActivity.onWebViewCreate. */
         fun attach(activity: Activity, webView: WebView) {
             instance = Drawing(activity, webView)
+        }
+
+        /**
+         * Called from MainActivity.onPause. Tears down our SurfaceView +
+         * wgpu state while EGL is still valid — leaving cleanup to
+         * Activity.onStop / onDestroy runs it after the system has
+         * already invalidated the EGL display, which triggers wgpu's
+         * Drop into a destroyed mutex (FORTIFY SIGABRT).
+         */
+        fun detach() {
+            instance?.hideSync()
         }
 
         // ---- Called from Rust via JNI (jni::ui::invoke_static_void) ----
@@ -157,6 +191,7 @@ private class DrawingSurfaceView(context: Context) :
     }
 
     override fun surfaceCreated(holder: SurfaceHolder) {
+        Log.i("MindstreamDrawing", "surfaceCreated w=$width h=$height")
         // width/height may still be 0 at this point on some devices —
         // surfaceChanged fires immediately after with the real size, at
         // which point the Rust side calls resize and reconfigures wgpu.
@@ -164,15 +199,20 @@ private class DrawingSurfaceView(context: Context) :
     }
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+        Log.i("MindstreamDrawing", "surfaceChanged w=$width h=$height format=$format")
         Drawing.resizeSurface(width, height)
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
+        Log.i("MindstreamDrawing", "surfaceDestroyed — entering sync wait")
         // Drop the wgpu surface before the underlying ANativeWindow
         // becomes invalid; the Rust side keeps its render thread and
         // accumulated geometry around so a return-from-background just
-        // rebuilds the surface.
+        // rebuilds the surface. clearSurface blocks until the render
+        // thread acks — that's the lifecycle ordering that prevents
+        // wgpu's swap-chain teardown from racing past EGL invalidation.
         Drawing.clearSurface()
+        Log.i("MindstreamDrawing", "surfaceDestroyed — sync wait complete")
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {

@@ -222,15 +222,27 @@ pub fn resize_surface(width: u32, height: u32) {
 /// device + queue" and matches the order of magnitude Android
 /// gives lifecycle callbacks before ANR.
 pub fn clear_surface() {
+    let render_thread_present = sender_slot()
+        .lock()
+        .map(|g| g.is_some())
+        .unwrap_or(false);
+    log::info!(
+        "[drawing] clear_surface: entering sync wait (render thread alive = {render_thread_present})"
+    );
     let (tx, rx) = mpsc::sync_channel::<()>(1);
     send(Msg::SurfaceLost { reply: Some(tx) });
-    if rx.recv_timeout(Duration::from_millis(500)).is_err() {
-        log::warn!("[drawing] surface drop ack timed out — proceeding anyway");
+    match rx.recv_timeout(Duration::from_millis(500)) {
+        Ok(()) => log::info!("[drawing] clear_surface: render thread acked drop"),
+        Err(_) => log::warn!("[drawing] clear_surface: ack timed out — proceeding anyway"),
     }
 }
 
 pub fn push_sample(x: f32, y: f32, action: i32) {
-    log::trace!("[drawing] push_sample x={x:.1} y={y:.1} action={action}");
+    // debug! rather than trace! so the per-sample stream is visible
+    // under default logcat filters during POC bring-up. Drop back to
+    // trace! once the input pipeline is fully verified — at ~240Hz
+    // this will spam under any real drawing.
+    log::debug!("[drawing] push_sample x={x:.1} y={y:.1} action={action}");
     send(Msg::Sample { x, y, action });
 }
 
