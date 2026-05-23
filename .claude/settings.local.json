@@ -24,7 +24,8 @@
       "Bash(pnpm tauri *)",
       "WebFetch(domain:tldraw.dev)",
       "Bash(pnpm exec vite *)",
-      "Bash(pnpm exec svelte-kit *)"
+      "Bash(pnpm exec svelte-kit *)",
+      "Bash(gh api *)"
     ]
   }
 }
