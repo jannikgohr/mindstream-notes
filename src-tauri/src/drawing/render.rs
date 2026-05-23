@@ -164,7 +164,26 @@ pub fn set_surface(native_window: NonNull<ndk_sys::ANativeWindow>, width: u32, h
         let (tx, rx) = mpsc::channel();
         thread::Builder::new()
             .name("mindstream-drawing".into())
-            .spawn(move || render_thread(rx))
+            .spawn(move || {
+                // catch_unwind so a panic inside wgpu (or our own
+                // code) surfaces in logcat with a backtrace instead
+                // of disappearing into a bare SIGSEGV in libc. The
+                // hook fires before catch_unwind unwinds, so the
+                // payload itself is just for the "thread X panicked"
+                // line in logs.
+                if let Err(payload) =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| render_thread(rx)))
+                {
+                    let msg = if let Some(s) = payload.downcast_ref::<&str>() {
+                        (*s).to_string()
+                    } else if let Some(s) = payload.downcast_ref::<String>() {
+                        s.clone()
+                    } else {
+                        "unknown panic payload".to_string()
+                    };
+                    log::error!("[drawing] render thread panicked: {msg}");
+                }
+            })
             .expect("spawn drawing render thread");
         *slot = Some(tx);
     }
@@ -328,8 +347,20 @@ impl GpuState {
             inner: native_window,
         });
 
+        // Backend choice: GL only.
+        //
+        // The first device we tested this on (an emulator with Mesa's
+        // host-passthrough Vulkan) crashed with a null-pointer deref
+        // inside wgpu's Vulkan path the moment we hit it — Mesa's
+        // logs show "Failed to open rendernode" and then wgpu
+        // dereferences a handle Mesa returned without setting an
+        // error. Forcing GLES sidesteps that entire stack and works
+        // on emulator + real devices alike at a perf cost we don't
+        // care about for thin POC lines. When the egui toolbar pass
+        // lands we can re-enable Vulkan with a runtime fallback
+        // (try Vulkan, on adapter-init failure rebuild on GL).
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::VULKAN | wgpu::Backends::GL,
+            backends: wgpu::Backends::GL,
             ..Default::default()
         });
 
@@ -354,6 +385,14 @@ impl GpuState {
             })
             .await
             .map_err(|e| format!("request_adapter: {e:?}"))?;
+        let info = adapter.get_info();
+        log::info!(
+            "[drawing] wgpu adapter: name={} backend={:?} type={:?} driver={}",
+            info.name,
+            info.backend,
+            info.device_type,
+            info.driver
+        );
 
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
