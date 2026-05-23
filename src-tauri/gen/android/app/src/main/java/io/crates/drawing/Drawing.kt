@@ -11,8 +11,23 @@ import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.ViewGroup
 import android.webkit.WebView
+import android.widget.FrameLayout
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+
+/**
+ * Logical height of the Svelte mobile-editor header, in dp. Mirrors
+ * Tailwind `h-12` (= 3rem = 48dp) used by MobileEditor.svelte. We
+ * inset the SurfaceView by this (plus the system-bar inset) so the
+ * Svelte header — and specifically its back arrow / title /
+ * favourite star — stays visible and tappable above the canvas.
+ *
+ * Brittle in the sense that a future Svelte redesign would need this
+ * constant updated. A cleaner approach is to have JS measure the
+ * header element and report the height via a Tauri command on each
+ * resize; left as a follow-up.
+ */
+private const val MOBILE_HEADER_HEIGHT_DP = 48
 
 /**
  * Native "ink" drawing surface — POC.
@@ -50,15 +65,21 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
             if (view != null) return@runOnUiThread
             val v = DrawingSurfaceView(activity)
             val parent = webView.parent as ViewGroup
-            // Match the WebView's bounds so the canvas covers exactly the
-            // editor area. The simplest match for now is full-parent — the
-            // WebView itself fills the activity content view, so the
-            // SurfaceView ends up at the same size implicitly via
-            // MATCH_PARENT layout params.
-            v.layoutParams = ViewGroup.LayoutParams(
+            // topMargin = system-bar inset + Svelte header height so
+            // the SurfaceView sits below MobileEditor's header rather
+            // than covering it. The header's back arrow / title /
+            // favourite star stay reachable because touches in y <
+            // topMargin fall through to the WebView underneath
+            // (SurfaceView only receives touches inside its own
+            // bounds). The WindowInsets listener inside
+            // DrawingSurfaceView reapplies topMargin on rotation /
+            // IME show-hide so the offset adapts.
+            val params = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
+            params.topMargin = computeTopInsetPx(parent, activity)
+            v.layoutParams = params
             parent.addView(v)
             // Make the WebView transparent so any UI rendered by the
             // Svelte DrawingNoteEditor (even just a background colour)
@@ -218,6 +239,25 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
 }
 
 /**
+ * Compute the top inset that the drawing SurfaceView's layoutParams
+ * should use: system status bar inset (e.g. 74px on Samsung S23+)
+ * plus the Svelte header height (48dp × density). Falls back to 0
+ * for the system bar if the root window insets aren't available
+ * yet (rare; the OnApplyWindowInsetsListener will re-run with the
+ * real value soon after attach).
+ */
+private fun computeTopInsetPx(parent: ViewGroup, activity: Activity): Int {
+    val rootInsets = ViewCompat.getRootWindowInsets(parent)
+    val systemBarTop = rootInsets
+        ?.getInsets(WindowInsetsCompat.Type.systemBars())
+        ?.top
+        ?: 0
+    val density = activity.resources.displayMetrics.density
+    val headerHeightPx = (MOBILE_HEADER_HEIGHT_DP * density).toInt()
+    return systemBarTop + headerHeightPx
+}
+
+/**
  * The actual hardware-accelerated surface we draw into.
  *
  *   - `setZOrderOnTop(true)` puts the surface above the activity's main
@@ -244,21 +284,34 @@ private class DrawingSurfaceView(context: Context) :
         isFocusable = true
         isClickable = true
 
-        // Subscribe to system-bar insets so the egui toolbar can sit
-        // below the status bar at the right per-device offset (the
-        // 144px hardcode in render.rs is just an initial fallback).
-        // The listener fires on attach with the real values, then on
-        // any inset-changing event (rotation, IME open/close, edge-
-        // to-edge mode toggles). We always return the original insets
-        // so we don't consume them — other views (the WebView in
-        // particular) still need to see them.
-        ViewCompat.setOnApplyWindowInsetsListener(this) { _, insets ->
-            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            Log.i(
-                "MindstreamDrawing",
-                "WindowInsets: top=${bars.top} bottom=${bars.bottom}"
-            )
-            Drawing.setInsets(bars.top, bars.bottom)
+        // Reapply the SurfaceView's topMargin on every inset change
+        // so rotations / IME show-hide don't leave the canvas
+        // overlapping the system bar + Svelte header. The actual
+        // topMargin is computed by `computeTopInsetPx` (defined at
+        // module level); we re-fetch it here because the activity's
+        // density doesn't change but the system-bar inset does. We
+        // always return the original insets unconsumed — other views
+        // (the WebView in particular) still need to see them.
+        //
+        // No JNI hop to Rust: the SurfaceView's own layoutParams
+        // shift handles the offset, so the egui toolbar (which paints
+        // at y=0 in surface-local coords) ends up below the Svelte
+        // header without needing render.rs to know about insets.
+        ViewCompat.setOnApplyWindowInsetsListener(this) { view, insets ->
+            val parent = view.parent as? ViewGroup
+            val ctx = view.context as? Activity
+            if (parent != null && ctx != null) {
+                val newTop = computeTopInsetPx(parent, ctx)
+                val params = view.layoutParams
+                if (params is ViewGroup.MarginLayoutParams && params.topMargin != newTop) {
+                    Log.i(
+                        "MindstreamDrawing",
+                        "WindowInsets changed → topMargin ${params.topMargin} -> $newTop"
+                    )
+                    params.topMargin = newTop
+                    view.layoutParams = params
+                }
+            }
             insets
         }
     }
