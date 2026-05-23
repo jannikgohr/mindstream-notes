@@ -15,6 +15,7 @@ pub mod assets;
 pub mod auth;
 pub mod collections;
 pub mod db;
+pub mod drawing;
 pub mod error;
 pub mod notes;
 pub mod serde_helpers;
@@ -158,6 +159,10 @@ pub fn run() {
             sync::scheduler::set_sync_schedule,
             // System introspection
             system::is_appimage_install,
+            // Native drawing surface (Android only; no-op stubs on desktop)
+            drawing::drawing_show,
+            drawing::drawing_hide,
+            drawing::drawing_clear,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
