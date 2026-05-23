@@ -286,17 +286,14 @@ private class DrawingSurfaceView(context: Context) :
 
         // Reapply the SurfaceView's topMargin on every inset change
         // so rotations / IME show-hide don't leave the canvas
-        // overlapping the system bar + Svelte header. The actual
-        // topMargin is computed by `computeTopInsetPx` (defined at
-        // module level); we re-fetch it here because the activity's
-        // density doesn't change but the system-bar inset does. We
-        // always return the original insets unconsumed — other views
-        // (the WebView in particular) still need to see them.
-        //
-        // No JNI hop to Rust: the SurfaceView's own layoutParams
-        // shift handles the offset, so the egui toolbar (which paints
-        // at y=0 in surface-local coords) ends up below the Svelte
-        // header without needing render.rs to know about insets.
+        // overlapping the system bar + Svelte header. On many
+        // devices (Samsung S23+ FE included) the system-bar inset
+        // doesn't actually change between portrait/landscape, so
+        // this listener may never fire — that's fine, the initial
+        // `computeTopInsetPx` call in `Drawing.show()` already set
+        // the right value. We always return the original insets
+        // unconsumed — other views (the WebView in particular) still
+        // need to see them.
         ViewCompat.setOnApplyWindowInsetsListener(this) { view, insets ->
             val parent = view.parent as? ViewGroup
             val ctx = view.context as? Activity
@@ -313,6 +310,29 @@ private class DrawingSurfaceView(context: Context) :
                 }
             }
             insets
+        }
+
+        // Belt-and-braces resize trigger. SurfaceHolder.surfaceChanged
+        // is supposed to fire on rotation, but on some devices /
+        // Android versions it either doesn't or fires with stale
+        // dimensions — symptom: egui toolbar keeps the old portrait
+        // width after rotating to landscape until the next touch
+        // wakes the render thread. addOnLayoutChangeListener fires
+        // reliably whenever the SurfaceView's bounds change, which
+        // includes every rotation, so we push a resize message that
+        // wakes the (otherwise blocked-on-recv) render thread and
+        // updates surface_state's width/height.
+        addOnLayoutChangeListener { _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
+            val newWidth = right - left
+            val newHeight = bottom - top
+            val oldWidth = oldRight - oldLeft
+            val oldHeight = oldBottom - oldTop
+            if (newWidth == oldWidth && newHeight == oldHeight) return@addOnLayoutChangeListener
+            Log.i(
+                "MindstreamDrawing",
+                "layout changed: ${oldWidth}x${oldHeight} -> ${newWidth}x${newHeight}"
+            )
+            Drawing.resizeSurface(newWidth, newHeight)
         }
     }
 
