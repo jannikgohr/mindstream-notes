@@ -65,10 +65,16 @@ const ACTION_UP: i32 = 1;
 const ACTION_MOVE: i32 = 2;
 const ACTION_CANCEL: i32 = 3;
 
-/// Initial fallback for the top safe-area inset, in pixels. Used
-/// before the first `setInsets` JNI call arrives from Kotlin's
-/// `OnApplyWindowInsetsListener`.
-const FALLBACK_TOP_INSET_PX: u32 = 144;
+/// Initial fallback for the top safe-area inset, in pixels.
+///
+/// Currently always 0 because the Kotlin side insets the SurfaceView
+/// via `layoutParams.topMargin` so it sits below the system bar +
+/// Svelte header. The atomic + `setInsets` infrastructure stays
+/// in place for the future case where we want the egui toolbar to
+/// reserve its own pixels for safe areas (e.g. if we drop the
+/// SurfaceView inset to switch to a transparent-WebView layering
+/// approach later).
+const FALLBACK_TOP_INSET_PX: u32 = 0;
 
 /// Dynamic top safe-area inset in pixels, updated by Kotlin via
 /// `setInsets`. Read each frame by both the toolbar layout and the
