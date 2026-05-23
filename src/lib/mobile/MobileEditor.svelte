@@ -13,14 +13,19 @@
   import UnknownNoteKindError from '$lib/components/UnknownNoteKindError.svelte';
   import { tree } from '$lib/stores/tree.svelte';
   import { ui } from '$lib/state.svelte';
-  import { isFavourite, setMobileScreen, toggleFavourite } from './state.svelte';
+  import { isFavourite, navigateBack, toggleFavourite } from './state.svelte';
 
   const noteId = $derived(ui.activeNoteId);
   const note = $derived(noteId ? tree.notesById[noteId] : null);
   const fav = $derived(noteId ? isFavourite(noteId) : false);
 
   function back() {
-    setMobileScreen('home');
+    // navigateBack pops the browser history entry pushed by openNote,
+    // which fires popstate → setMobileScreen('home'). Going through
+    // history (rather than calling setMobileScreen directly) keeps the
+    // browser-history stack in sync with the UI screen stack so the
+    // next Android back press also Just Works.
+    navigateBack();
   }
 </script>
 

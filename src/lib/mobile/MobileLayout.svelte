@@ -36,13 +36,13 @@
     loadTree,
     tree
   } from '$lib/stores/tree.svelte';
-  import { setActiveNote } from '$lib/state.svelte';
   import { subscribeOpenNoteRequest } from '$lib/stores/open-note-intent.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
   import {
+    installMobileHistoryNav,
     migrateLegacyFavourites,
     mobileState,
-    setMobileScreen
+    navigateToEditor
   } from './state.svelte';
 
   onMount(() => {
@@ -51,16 +51,26 @@
     } else {
       void migrateLegacyFavourites();
     }
+    // Install the browser-history shim so the Android system back
+    // button pops into our `setMobileScreen('home')` path instead of
+    // falling through WryActivity's `super.onBackPressed()` (which
+    // would finish the activity and close the app). Returns the
+    // unsubscribe — combined with the intent-bus unsubscribe via the
+    // wrapper below so both cleanups run on unmount.
+    const unsubHistory = installMobileHistoryNav();
     // Same intent-bus subscription as DesktopLayout — a wikilink click
     // in the open editor needs a way to ask the shell to surface a
     // different note. Mobile's "open" is just a screen switch + active
     // note swap; the editor's $effect tears down and re-mounts.
-    return subscribeOpenNoteRequest((id) => openNote(id));
+    const unsubIntent = subscribeOpenNoteRequest((id) => openNote(id));
+    return () => {
+      unsubHistory();
+      unsubIntent();
+    };
   });
 
   function openNote(id: string) {
-    setActiveNote(id);
-    setMobileScreen('editor');
+    navigateToEditor(id);
   }
 
   // Notes/folders created in 'trash', 'shared', or 'favourite' don't have
