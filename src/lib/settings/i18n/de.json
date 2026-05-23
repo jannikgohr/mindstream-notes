@@ -53,9 +53,11 @@
 
     "fab.newNote": "Neue Notiz",
     "fab.newDrawing": "Neue Zeichnung",
+    "fab.newInk": "Neue Tintennotiz",
     "fab.newFolder": "Neuer Ordner",
     "fab.placeholder.noteTitle": "Notiztitel",
     "fab.placeholder.drawingTitle": "Titel der Zeichnung",
+    "fab.placeholder.inkTitle": "Titel der Tintennotiz",
     "fab.placeholder.folderName": "Ordnername",
     "fab.submit.create": "Erstellen",
 
@@ -104,6 +106,9 @@
     "editor.unknownKind.message": "Diese Notiz wurde mit einem Editor-Typ erstellt, den diese App-Version nicht unterstützt. Aktualisiere auf die neueste Version, um sie zu öffnen. Der Inhalt der Notiz ist sicher — er wurde nicht verändert.",
     "editor.unknownKind.titleLabel": "Notiz",
     "editor.unknownKind.kindLabel": "Editor-Typ",
+
+    "editor.ink.desktopPlaceholderTitle": "Tintennotizen funktionieren vorerst nur unter Android",
+    "editor.ink.desktopPlaceholderMessage": "Die native Zeichenebene wird noch auf den Desktop portiert. Öffne diese Notiz auf deinem Smartphone, um zu zeichnen — der Stack ist in docs/native-egui-layer dokumentiert.",
 
     "updater.checkFailed.title": "Update-Prüfung fehlgeschlagen",
     "updater.checkFailed.message": "Der Update-Server ist nicht erreichbar. Bitte prüfe deine Internetverbindung und versuche es erneut.",

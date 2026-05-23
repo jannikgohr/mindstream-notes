@@ -9,6 +9,7 @@
   import { Button } from '$lib/components/ui/button';
   import NoteEditor from '$lib/components/NoteEditor.svelte';
   import FreeformNoteEditor from '$lib/components/FreeformNoteEditor.svelte';
+  import DrawingNoteEditor from '$lib/components/DrawingNoteEditor.svelte';
   import UnknownNoteKindError from '$lib/components/UnknownNoteKindError.svelte';
   import { tree } from '$lib/stores/tree.svelte';
   import { ui } from '$lib/state.svelte';
@@ -76,6 +77,8 @@
       </p>
     {:else if note.note_kind === 'freeform'}
       <FreeformNoteEditor {noteId} />
+    {:else if note.note_kind === 'ink'}
+      <DrawingNoteEditor {noteId} />
     {:else if note.note_kind === 'markdown'}
       <NoteEditor {noteId} />
     {:else}
