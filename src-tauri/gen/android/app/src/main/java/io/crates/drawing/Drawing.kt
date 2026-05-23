@@ -107,6 +107,15 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
             // alongside the rest of the app. System.loadLibrary is
             // idempotent so it's fine that Keyring also loaded it.
             System.loadLibrary("mindstream_notes_lib")
+            // Hand Rust a GlobalRef to this class so it can call our
+            // @JvmStatic methods from the render thread without doing
+            // its own env.find_class(). That find_class fails for app
+            // classes on a Rust-spawned thread (the JVM hands those
+            // threads the system class loader, which only sees core
+            // Android classes) — see jni.rs::DRAWING_CLASS. This must
+            // run AFTER loadLibrary because the JNI symbol it dispatches
+            // to lives in libmindstream_notes_lib.so.
+            cacheJniClass(Drawing::class.java)
         }
 
         /**
@@ -181,6 +190,15 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
         external fun resizeSurface(width: Int, height: Int)
         external fun clearSurface()
         external fun pushPoint(x: Float, y: Float, action: Int)
+
+        /**
+         * Hands Rust a GlobalRef to the Drawing class so render-thread
+         * callbacks (showFromNative/hideFromNative/backFromNative) can
+         * dispatch without going through `env.find_class`, which fails
+         * for app classes on a Rust-spawned JVM-attached thread. Called
+         * exactly once from the companion's static init.
+         */
+        external fun cacheJniClass(klass: Class<*>)
     }
 }
 
