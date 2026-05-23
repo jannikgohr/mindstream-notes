@@ -20,6 +20,7 @@
   import { PenTool } from 'lucide-svelte';
   import { drawingHide, drawingShow } from '$lib/api';
   import { isAndroid } from '$lib/platform';
+  import { setMobileScreen } from '$lib/mobile/state.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
 
   interface Props {
@@ -32,14 +33,29 @@
   let { noteId: _noteId }: Props = $props();
 
   let mountedAndroid = false;
+  let backCleanup: (() => void) | null = null;
 
   onMount(() => {
     if (!isAndroid()) return;
+    // The native egui toolbar's Back button bounces through Rust →
+    // Kotlin → webView.evaluateJavascript, which dispatches this
+    // CustomEvent on the WebView's window. We respond by flipping
+    // the mobile shell back to its home screen, which unmounts this
+    // component, which onDestroy below calls drawingHide on. That's
+    // the path that actually detaches the SurfaceView + drops the
+    // wgpu state cleanly — going through JS keeps the back path
+    // symmetric whether the user taps the in-egui Back button, an
+    // in-app back arrow we add later, or anything else.
+    const onBack = () => setMobileScreen('home');
+    window.addEventListener('drawing-back', onBack);
+    backCleanup = () => window.removeEventListener('drawing-back', onBack);
     void drawingShow();
     mountedAndroid = true;
   });
 
   onDestroy(() => {
+    backCleanup?.();
+    backCleanup = null;
     // Use the at-mount platform check rather than re-querying — a
     // hide call that never had a matching show is a backend no-op,
     // but skipping it keeps the trace clean.

@@ -92,6 +92,12 @@ android-native-keyring-store = "1"
 # Keep these under cfg(target_os="android") so desktop builds stay
 # lean — desktop dispatch shows a placeholder until Phase 2.
 wgpu = "25"
+# egui as the in-canvas toolbar (back, clear). egui-wgpu drives
+# its tessellation through the same wgpu device our line pipeline
+# uses, so adding it is dep weight without architectural conflict.
+# Pins match tauri-plugin-egui's audit-validated trio.
+egui = "0.32"
+egui-wgpu = "0.32"
 raw-window-handle = "0.6"
 # ndk gives us ANativeWindow_fromSurface(env, jsurface) — the bridge
 # between the Java Surface and the raw pointer wgpu's create_surface
