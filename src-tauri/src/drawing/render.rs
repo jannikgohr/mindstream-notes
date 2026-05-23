@@ -1,4 +1,4 @@
-//! wgpu line-rendering pipeline for the POC.
+//! wgpu line-rendering pipeline + egui toolbar for the POC.
 //!
 //! Architecture (per `mod.rs` header):
 //!
@@ -7,21 +7,27 @@
 //!   │  pushPoint                     │
 //!   │           ▼                    │
 //!   │     mpsc::Sender ──────────────┼──► render thread
-//!   └────────────────────────────────┘    (owns wgpu state)
+//!   └────────────────────────────────┘    (owns wgpu + egui state)
 //!
-//! All wgpu state lives on the render thread. JNI callers only push
-//! `Msg`s onto a sender stored in a global Mutex. The render thread is
-//! spawned the first time `set_surface` runs and torn down when the
-//! surface is dropped — for the POC we don't try to preserve strokes
-//! across an app backgrounding cycle.
+//! All wgpu / egui state lives on the render thread. JNI callers only
+//! push `Msg`s onto a sender stored in a global Mutex. The render
+//! thread is spawned the first time `set_surface` runs and torn down
+//! when the surface is dropped — for the POC we don't try to preserve
+//! strokes across an app backgrounding cycle.
 //!
-//! Geometry: one flat vertex buffer in `PrimitiveTopology::LineList`.
-//! Each `MotionEvent.ACTION_MOVE` emits two vertices (prev, current).
-//! `ACTION_DOWN` just records the starting point; `ACTION_UP` /
-//! `ACTION_CANCEL` clear it. This keeps the entire scene as one draw
-//! call regardless of stroke count and avoids per-stroke buffer
-//! bookkeeping. Lines are 1-pixel — Vulkan's portable guarantee. Wider
-//! / pressure-tapered strokes wait for the lyon pass in a follow-up.
+//! Two rendering layers in one render pass:
+//!   1. Black ink as PrimitiveTopology::LineList. Each ACTION_MOVE
+//!      sample emits two vertices (prev, current).
+//!   2. An egui top-bar drawn through egui_wgpu::Renderer with the
+//!      back + clear buttons. The bar's pixel-height region is
+//!      reserved at touch-routing time (see `stroke_suppressed`
+//!      handling in `render_thread`) so a tap on a button doesn't
+//!      also lay down an ink dot.
+//!
+//! Button clicks bubble out of `render()` as `RenderActions`; the
+//! render thread responds by either clearing the segment buffer
+//! (Clear) or calling back into Kotlin via JNI to dispatch a
+//! window event the Svelte side listens for (Back).
 
 use std::ptr::NonNull;
 use std::sync::mpsc::{self, Sender, SyncSender, TryRecvError};
@@ -43,6 +49,32 @@ const ACTION_UP: i32 = 1;
 const ACTION_MOVE: i32 = 2;
 const ACTION_CANCEL: i32 = 3;
 
+/// Pixels at the top of the surface that the system status bar
+/// composites on top of (MainActivity calls `enableEdgeToEdge`, so our
+/// SurfaceView extends under it). Anything we paint in y < this is
+/// hidden behind the status bar text/icons. Conservative hardcode for
+/// the POC — proper fix is to read `WindowInsets.systemBars.top` from
+/// Kotlin and plumb it through `setSurface`.
+const STATUS_BAR_INSET_PX: f32 = 96.0;
+
+/// Visible portion of the toolbar — what's actually tap-target sized
+/// below the status bar inset. Total panel painted = inset + this.
+const TOOLBAR_HEIGHT_PX: f32 = 120.0;
+
+/// Combined "egui owns this gesture, don't start a stroke" region —
+/// status bar area plus the actual toolbar. A user can't really tap
+/// in the status bar (the system bar grabs those gestures), but if a
+/// MOVE drifts up there we don't want it secretly drawing under the
+/// toolbar background either.
+const TOOLBAR_TOTAL_PX: f32 = STATUS_BAR_INSET_PX + TOOLBAR_HEIGHT_PX;
+
+/// Fixed scale factor we tell egui. We could query
+/// `DisplayMetrics.density` from Kotlin and plumb it through, but
+/// 2.5 is close enough to the typical phone density that egui's
+/// default font sizes render at usable point sizes. Wire dynamic
+/// scaling in when we add a settings hook for it.
+const PIXELS_PER_POINT: f32 = 2.5;
+
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
 struct Vertex {
@@ -59,6 +91,15 @@ impl Vertex {
             attributes: &Self::ATTRIBS,
         }
     }
+}
+
+/// What the egui UI decided this frame. Bubbled out of `render()`
+/// so the render thread can react (clear segments / call back into
+/// Kotlin) outside of the immediate-mode closure.
+#[derive(Default, Debug, Clone, Copy)]
+struct RenderActions {
+    back: bool,
+    clear: bool,
 }
 
 /// Messages the render thread accepts.
@@ -250,6 +291,14 @@ pub fn clear_strokes() {
     send(Msg::Clear);
 }
 
+/// Translate a pixel coordinate (origin top-left) into the egui
+/// "point" space we tell the Context lives in. egui internally works
+/// in points; ScreenDescriptor handles the points→pixels mapping for
+/// the GPU side at tessellate / render time.
+fn px_to_egui(x: f32, y: f32) -> egui::Pos2 {
+    egui::Pos2::new(x / PIXELS_PER_POINT, y / PIXELS_PER_POINT)
+}
+
 /// Long-running render thread. Maintains an `Option<GpuState>` so a
 /// SurfaceLost / SurfaceReady cycle can rebuild without a thread
 /// restart, and keeps the accumulated `segments` vector alive across
@@ -263,6 +312,13 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
     // The most-recent sample's surface coordinates, used to anchor the
     // *next* MOVE sample's starting vertex. None between strokes.
     let mut last_point: Option<(f32, f32)> = None;
+    // True while the in-progress gesture started inside the toolbar
+    // region — we mirror the gesture to egui (so its button hover /
+    // press states drive correctly) but skip the line pipeline.
+    let mut stroke_suppressed = false;
+    // Per-frame input batch handed to egui. Drained on each render
+    // via std::mem::take so we don't double-process.
+    let mut egui_input = egui::RawInput::default();
 
     loop {
         // Block until at least one message arrives, then drain any
@@ -325,24 +381,57 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                     }
                 }
                 Msg::Sample { x, y, action } => {
+                    let pos = px_to_egui(x, y);
                     match action {
                         ACTION_DOWN => {
-                            last_point = Some((x, y));
+                            // egui needs a PointerMoved *before* the
+                            // button press so hit-testing knows where
+                            // the press happened. Mirror both whether
+                            // or not the gesture ends up suppressed —
+                            // suppressed gestures still drive egui
+                            // (the toolbar buttons rely on this).
+                            egui_input.events.push(egui::Event::PointerMoved(pos));
+                            egui_input.events.push(egui::Event::PointerButton {
+                                pos,
+                                button: egui::PointerButton::Primary,
+                                pressed: true,
+                                modifiers: egui::Modifiers::NONE,
+                            });
+                            if y < TOOLBAR_TOTAL_PX {
+                                stroke_suppressed = true;
+                            } else {
+                                stroke_suppressed = false;
+                                last_point = Some((x, y));
+                            }
+                            dirty = true;
                         }
                         ACTION_MOVE => {
-                            if let (Some((px, py)), Some(state)) = (last_point, gpu.as_ref()) {
-                                segments.push(Vertex {
-                                    position: state.to_ndc(px, py),
-                                });
-                                segments.push(Vertex {
-                                    position: state.to_ndc(x, y),
-                                });
-                                dirty = true;
+                            egui_input.events.push(egui::Event::PointerMoved(pos));
+                            if !stroke_suppressed {
+                                if let (Some((px, py)), Some(state)) =
+                                    (last_point, gpu.as_ref())
+                                {
+                                    segments.push(Vertex {
+                                        position: state.to_ndc(px, py),
+                                    });
+                                    segments.push(Vertex {
+                                        position: state.to_ndc(x, y),
+                                    });
+                                    dirty = true;
+                                }
+                                last_point = Some((x, y));
                             }
-                            last_point = Some((x, y));
                         }
                         ACTION_UP | ACTION_CANCEL => {
+                            egui_input.events.push(egui::Event::PointerButton {
+                                pos,
+                                button: egui::PointerButton::Primary,
+                                pressed: false,
+                                modifiers: egui::Modifiers::NONE,
+                            });
                             last_point = None;
+                            stroke_suppressed = false;
+                            dirty = true;
                         }
                         _ => {}
                     }
@@ -357,8 +446,30 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
 
         if let Some(state) = gpu.as_mut() {
             if needs_rebuild || dirty {
-                if let Err(e) = state.render(&segments) {
-                    log::warn!("[drawing] render failed: {e:?}");
+                let input = std::mem::take(&mut egui_input);
+                match state.render(&segments, input) {
+                    Ok(actions) => {
+                        if actions.clear {
+                            segments.clear();
+                            last_point = None;
+                            // Re-render so the user sees the cleared
+                            // canvas without waiting for the next
+                            // input sample. Pass a fresh RawInput
+                            // because we've already drained the
+                            // batch above.
+                            let _ = state.render(&segments, egui::RawInput::default());
+                        }
+                        if actions.back {
+                            // Bounce to Kotlin → JS → Svelte to
+                            // unmount the editor. The unmount path
+                            // calls drawingHide which eventually
+                            // hits SurfaceLost here.
+                            if let Err(e) = crate::drawing::jni::ui::call_back() {
+                                log::warn!("[drawing] call_back failed: {e}");
+                            }
+                        }
+                    }
+                    Err(e) => log::warn!("[drawing] render failed: {e:?}"),
                 }
             }
         }
@@ -381,6 +492,12 @@ struct GpuState {
     vertex_capacity: u64,
     width: u32,
     height: u32,
+    /// Immediate-mode UI context. Persists across frames; egui
+    /// remembers hover / press state internally.
+    egui_ctx: egui::Context,
+    /// Tessellates egui shape output into wgpu draw calls. Tied to
+    /// the device + surface format; recreated on SurfaceReady.
+    egui_renderer: egui_wgpu::Renderer,
 }
 
 impl GpuState {
@@ -405,9 +522,7 @@ impl GpuState {
         // dereferences a handle Mesa returned without setting an
         // error. Forcing GLES sidesteps that entire stack and works
         // on emulator + real devices alike at a perf cost we don't
-        // care about for thin POC lines. When the egui toolbar pass
-        // lands we can re-enable Vulkan with a runtime fallback
-        // (try Vulkan, on adapter-init failure rebuild on GL).
+        // care about for thin POC lines.
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::GL,
             ..Default::default()
@@ -456,13 +571,18 @@ impl GpuState {
             .map_err(|e| format!("request_device: {e:?}"))?;
 
         let caps = surface.get_capabilities(&adapter);
-        // Pick any sRGB-or-not format the surface offers; egui isn't
-        // in the loop yet so we don't need the non-sRGB constraint
-        // tauri-plugin-egui applies.
-        let surface_format = caps.formats[0];
-        // Prefer a non-opaque composite mode so the WebView shows
-        // through where we haven't drawn. Falls back to whatever the
-        // device gives us if nothing transparent is offered.
+        // Prefer a non-sRGB format: egui_wgpu does its own colour
+        // conversion in the shader and assumes a linear render
+        // target. Picking an sRGB format makes egui's colours look
+        // washed out. Fall back to whatever the surface offers if
+        // nothing linear is available.
+        let surface_format = caps
+            .formats
+            .iter()
+            .copied()
+            .find(|f| !f.is_srgb())
+            .unwrap_or(caps.formats[0]);
+        log::info!("[drawing] surface format: {surface_format:?}");
         let alpha_mode = caps
             .alpha_modes
             .iter()
@@ -527,6 +647,13 @@ impl GpuState {
             cache: None,
         });
 
+        let egui_ctx = egui::Context::default();
+        egui_ctx.set_pixels_per_point(PIXELS_PER_POINT);
+        // 5-arg constructor matches egui-wgpu 0.32 (tauri-plugin-egui
+        // pattern): device, output color format, optional depth
+        // format, msaa samples, dithering enabled.
+        let egui_renderer = egui_wgpu::Renderer::new(&device, surface_format, None, 1, false);
+
         Ok(Self {
             surface,
             _window: window,
@@ -538,6 +665,8 @@ impl GpuState {
             vertex_capacity: 0,
             width,
             height,
+            egui_ctx,
+            egui_renderer,
         })
     }
 
@@ -557,16 +686,91 @@ impl GpuState {
     fn to_ndc(&self, x: f32, y: f32) -> [f32; 2] {
         let w = self.width.max(1) as f32;
         let h = self.height.max(1) as f32;
-        [
-            (x / w) * 2.0 - 1.0,
-            1.0 - (y / h) * 2.0,
-        ]
+        [(x / w) * 2.0 - 1.0, 1.0 - (y / h) * 2.0]
     }
 
-    fn render(&mut self, segments: &[Vertex]) -> Result<(), wgpu::SurfaceError> {
-        // Make sure the vertex buffer is big enough. Geometric growth
-        // (1.5×) keeps reallocs amortised even as the user keeps
-        // drawing without lifting the pen.
+    /// Run one frame: drive egui with the accumulated input, then
+    /// emit two draw layers (strokes + egui toolbar) into a single
+    /// render pass.
+    fn render(
+        &mut self,
+        segments: &[Vertex],
+        mut egui_input: egui::RawInput,
+    ) -> Result<RenderActions, wgpu::SurfaceError> {
+        // Tell egui the screen size every frame — egui doesn't track
+        // it across frames itself, and the user can resize at any
+        // point (rotation, IME show/hide).
+        egui_input.screen_rect = Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::Vec2::new(
+                self.width as f32 / PIXELS_PER_POINT,
+                self.height as f32 / PIXELS_PER_POINT,
+            ),
+        ));
+
+        // Capture button clicks via mutable booleans the closure
+        // writes; we can't return them directly because ctx.run is
+        // FnMut and Rust closure lifetimes don't let us push out a
+        // result that easily. The bools live on the outer stack
+        // and outlive the closure call.
+        let mut actions = RenderActions::default();
+        // top inner-margin in points = status-bar inset in points. The
+        // panel's BACKGROUND still paints from y=0 (under the status
+        // bar text/icons; cosmetic, the system bar overlays it), but
+        // the BUTTONS sit below the inset so they're tappable.
+        let top_margin_pts = (STATUS_BAR_INSET_PX / PIXELS_PER_POINT).round() as i8;
+        let panel_height_pts = TOOLBAR_TOTAL_PX / PIXELS_PER_POINT;
+        let full_output = self.egui_ctx.run(egui_input, |ctx| {
+            egui::TopBottomPanel::top("drawing-toolbar")
+                .exact_height(panel_height_pts)
+                .frame(
+                    egui::Frame::default()
+                        // Deliberately loud — once we confirm the
+                        // toolbar is reaching the surface we'll tone
+                        // it down to the audit-spec dark grey.
+                        .fill(egui::Color32::from_rgb(180, 30, 30))
+                        .inner_margin(egui::Margin {
+                            left: 12,
+                            right: 12,
+                            top: top_margin_pts,
+                            bottom: 8,
+                        }),
+                )
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        if ui.button("← Back").clicked() {
+                            actions.back = true;
+                        }
+                        if ui.button("Clear").clicked() {
+                            actions.clear = true;
+                        }
+                    });
+                });
+        });
+
+        let paint_jobs = self
+            .egui_ctx
+            .tessellate(full_output.shapes, PIXELS_PER_POINT);
+        log::info!(
+            "[drawing] egui frame: paint_jobs={} tex_set={} tex_free={}",
+            paint_jobs.len(),
+            full_output.textures_delta.set.len(),
+            full_output.textures_delta.free.len(),
+        );
+
+        // Push texture updates before any rendering — egui ships
+        // its font atlas this way. Free on the same frame is OK
+        // because the GPU work hasn't been submitted yet.
+        for (id, image_delta) in &full_output.textures_delta.set {
+            self.egui_renderer
+                .update_texture(&self.device, &self.queue, *id, image_delta);
+        }
+        for id in &full_output.textures_delta.free {
+            self.egui_renderer.free_texture(id);
+        }
+
+        // Stroke vertex buffer — grow geometrically so reallocs stay
+        // amortised even when the user keeps drawing without lifting.
         let needed = (segments.len() as u64) * std::mem::size_of::<Vertex>() as u64;
         if needed > self.vertex_capacity {
             let new_capacity = needed.max(self.vertex_capacity * 3 / 2).max(1024);
@@ -579,19 +783,16 @@ impl GpuState {
             self.vertex_capacity = new_capacity;
         }
         if !segments.is_empty() {
-            // The unwrap is sound: the `needed > capacity` branch above
-            // guarantees `vertex_buffer` is `Some` whenever we have any
-            // segments to draw. With zero segments we skip the write
-            // entirely and just clear the surface below.
-            self.queue
-                .write_buffer(self.vertex_buffer.as_ref().unwrap(), 0, bytemuck::cast_slice(segments));
+            self.queue.write_buffer(
+                self.vertex_buffer.as_ref().unwrap(),
+                0,
+                bytemuck::cast_slice(segments),
+            );
         }
 
         let frame = match self.surface.get_current_texture() {
             Ok(f) => f,
             Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                // Reconfigure and try once more — Android backgrounds
-                // the app and the surface comes back stale.
                 self.surface.configure(&self.device, &self.config);
                 self.surface.get_current_texture()?
             }
@@ -606,6 +807,22 @@ impl GpuState {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("drawing-encoder"),
             });
+
+        let screen_descriptor = egui_wgpu::ScreenDescriptor {
+            size_in_pixels: [self.width.max(1), self.height.max(1)],
+            pixels_per_point: PIXELS_PER_POINT,
+        };
+        // update_buffers writes into the encoder *before* the render
+        // pass begins, so the data is live by the time egui's render
+        // call samples it.
+        self.egui_renderer.update_buffers(
+            &self.device,
+            &self.queue,
+            &mut encoder,
+            &paint_jobs,
+            &screen_descriptor,
+        );
+
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("drawing-pass"),
@@ -613,16 +830,6 @@ impl GpuState {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        // POC: white background, black strokes (see
-                        // shader). The Android Surface is opaque under
-                        // the GL backend on most devices regardless of
-                        // PixelFormat.TRANSLUCENT, so clearing to
-                        // Color::TRANSPARENT actually renders opaque
-                        // black — invisible against our black ink. White
-                        // gets us visible feedback today; transparent
-                        // composition over the WebView waits for the
-                        // egui-toolbar pass, where we'll need a
-                        // proper alpha-bearing EGL config anyway.
                         load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
                         store: wgpu::StoreOp::Store,
                     },
@@ -632,6 +839,9 @@ impl GpuState {
                 occlusion_query_set: None,
             });
 
+            // Strokes underneath the toolbar — egui paints its panel
+            // background on top, so any stroke vertices that happen
+            // to fall inside the toolbar region are covered visually.
             if let Some(vbuf) = self.vertex_buffer.as_ref() {
                 if !segments.is_empty() {
                     pass.set_pipeline(&self.pipeline);
@@ -639,10 +849,26 @@ impl GpuState {
                     pass.draw(0..segments.len() as u32, 0..1);
                 }
             }
+
+            // egui's render expects a 'static-lifetime RenderPass;
+            // forget_lifetime is the documented escape hatch (same
+            // pattern tauri-plugin-egui uses). The original `pass`
+            // binding is shadowed by the consumed self — the new
+            // static-lifetime pass drops at the end of this block.
+            self.egui_renderer.render(
+                &mut pass.forget_lifetime(),
+                &paint_jobs,
+                &screen_descriptor,
+            );
         }
         self.queue.submit(std::iter::once(encoder.finish()));
         frame.present();
-        Ok(())
+
+        // Drop egui's per-frame closures + commands ourselves to
+        // avoid carrying them across frames in `full_output`.
+        let _ = full_output.platform_output;
+        let _ = full_output.viewport_output;
+
+        Ok(actions)
     }
 }
-

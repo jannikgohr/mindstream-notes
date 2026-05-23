@@ -152,6 +152,28 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
             instance?.hide()
         }
 
+        /**
+         * Called from Rust when the in-egui Back button is tapped.
+         * We don't tear down the SurfaceView ourselves here — that
+         * happens via the JS side: dispatching a `drawing-back`
+         * CustomEvent on `window` triggers the Svelte mobile shell
+         * to navigate away, which unmounts DrawingNoteEditor, which
+         * calls drawingHide, which lands back here via hideFromNative.
+         * Going through JS keeps the back behaviour symmetric with
+         * any future in-app back affordance the Svelte side adds.
+         */
+        @JvmStatic
+        fun backFromNative() {
+            val inst = instance ?: return
+            inst.activity.runOnUiThread {
+                Log.i("MindstreamDrawing", "backFromNative: dispatching drawing-back JS event")
+                inst.webView.evaluateJavascript(
+                    "window.dispatchEvent(new CustomEvent('drawing-back'))",
+                    null
+                )
+            }
+        }
+
         // ---- Rust JNI exports (called from DrawingSurfaceView below) ----
         // No @JvmStatic on these: their symbol must mangle to
         // Java_io_crates_drawing_Drawing_00024Companion_<name>.

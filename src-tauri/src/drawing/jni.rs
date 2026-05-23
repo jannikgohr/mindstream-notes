@@ -120,6 +120,14 @@ pub mod ui {
         invoke_static_void("hideFromNative")
     }
 
+    /// Call `Drawing.backFromNative()` — dispatches a `drawing-back`
+    /// CustomEvent on the WebView's window so the Svelte mobile
+    /// shell can navigate back to its home view. Triggered when the
+    /// user taps the in-egui Back button.
+    pub fn call_back() -> Result<(), String> {
+        invoke_static_void("backFromNative")
+    }
+
     /// Common path: look up `io.crates.drawing.Drawing` and call a
     /// no-arg `void` static method on it. Both show/hide go through
     /// here; this also makes the error message uniform.
