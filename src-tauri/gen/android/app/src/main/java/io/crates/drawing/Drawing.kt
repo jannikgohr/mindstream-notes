@@ -11,6 +11,8 @@ import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.ViewGroup
 import android.webkit.WebView
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 
 /**
  * Native "ink" drawing surface — POC.
@@ -192,6 +194,19 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
         external fun pushPoint(x: Float, y: Float, action: Int)
 
         /**
+         * Push the current top / bottom system-bar inset (in pixels)
+         * to the render thread. Triggered by the SurfaceView's
+         * `OnApplyWindowInsetsListener` — first fires on attach with
+         * the device's real values, then again on rotation / IME /
+         * any other inset-changing system event.
+         *
+         * Bottom isn't used yet on the Rust side but exposed in the
+         * signature so a future bottom-bar (eraser palette, color
+         * picker, …) doesn't need a second JNI export.
+         */
+        external fun setInsets(top: Int, bottom: Int)
+
+        /**
          * Hands Rust a GlobalRef to the Drawing class so render-thread
          * callbacks (showFromNative/hideFromNative/backFromNative) can
          * dispatch without going through `env.find_class`, which fails
@@ -228,6 +243,24 @@ private class DrawingSurfaceView(context: Context) :
         holder.addCallback(this)
         isFocusable = true
         isClickable = true
+
+        // Subscribe to system-bar insets so the egui toolbar can sit
+        // below the status bar at the right per-device offset (the
+        // 144px hardcode in render.rs is just an initial fallback).
+        // The listener fires on attach with the real values, then on
+        // any inset-changing event (rotation, IME open/close, edge-
+        // to-edge mode toggles). We always return the original insets
+        // so we don't consume them — other views (the WebView in
+        // particular) still need to see them.
+        ViewCompat.setOnApplyWindowInsetsListener(this) { _, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            Log.i(
+                "MindstreamDrawing",
+                "WindowInsets: top=${bars.top} bottom=${bars.bottom}"
+            )
+            Drawing.setInsets(bars.top, bars.bottom)
+            insets
+        }
     }
 
     override fun surfaceCreated(holder: SurfaceHolder) {
