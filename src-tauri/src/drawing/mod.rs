@@ -8,7 +8,11 @@
 //!
 //! Module layout:
 //!   - `mod.rs`     — this file: Tauri commands + module declarations
-//!   - `jni.rs`     — JNI exports (Kotlin ↔ Rust bridge)
+//!   - `input.rs`   — platform-neutral input types (`Sample`,
+//!                    `ToolKind`, `SampleAction`). Host-buildable;
+//!                    half of the R4 input abstraction.
+//!   - `jni.rs`     — JNI exports (Kotlin ↔ Rust bridge); translates
+//!                    raw `MotionEvent.*` ints into `input::Sample`.
 //!   - `surface.rs` — `AndroidWindow` raw-window-handle wrapper
 //!                    (cross-platform `SurfaceSource` trait pending,
 //!                    see R3 in the roadmap)
@@ -38,9 +42,11 @@
 //!   `[ stroke canvas (atop above)  ]`    its toolbar at the top of the
 //!                                       surface (which is below header)
 
-// page.rs is pure document-coord math with no platform deps —
-// keep it compiled everywhere so cargo test catches regressions on
-// the host without needing the Android target.
+// page.rs + input.rs + strokes_doc.rs are pure cross-platform code
+// (no wgpu / no JNI / no NDK) — keep them compiled everywhere so
+// cargo test catches regressions on the host without needing the
+// Android target.
+pub mod input;
 pub mod page;
 pub mod strokes_doc;
 

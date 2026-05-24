@@ -25,33 +25,30 @@ use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
 
+use super::input::{Sample, SampleAction, ToolKind};
 use super::page::segment_quad_positions;
 use super::pipeline::{self, PersistentGpu, SurfaceBoundState, Vertex};
 use super::strokes_doc::{StrokesDoc, DEFAULT_COLOR};
 use super::ui::{self, CanvasUi};
 
-// MotionEvent.TOOL_TYPE_* constants, mirrored from Kotlin so we can
-// match on the raw int the JNI bridge forwards. Keep these in sync
-// with android.view.MotionEvent.
-const TOOL_TYPE_STYLUS: i32 = 2;
-const TOOL_TYPE_ERASER: i32 = 4;
-
-/// Debug palette for "is this stroke from the pen?" — pen strokes
-/// (TOOL_TYPE_STYLUS / TOOL_TYPE_ERASER, both of which the S Pen
+/// Debug palette for "is this stroke from the pen?" — pen-family
+/// strokes (`ToolKind::Stylus` / `Eraser`, both of which the S Pen
 /// reports) render in this packed 0xAARRGGBB blue; anything else
 /// (finger, mouse, unknown) renders in [`DEFAULT_COLOR`] (black).
 /// D5 replaces this with a real user-chosen palette; until then it's
 /// a visual confirmation that pen detection works end-to-end.
 const PEN_DEBUG_COLOR: u32 = 0xFF00_66FF;
+const PEN_DEBUG_COLOR_2: u32 = 0xFF00_66FF;
 
 /// Decide what colour a stroke should use, given the tool that
 /// started it. Pen-family tools get the debug blue; everything else
 /// gets the default black so finger doodles look the same as they
 /// always did.
-fn color_for_tool(tool_type: i32) -> u32 {
-    match tool_type {
-        TOOL_TYPE_STYLUS | TOOL_TYPE_ERASER => PEN_DEBUG_COLOR,
-        _ => DEFAULT_COLOR,
+fn color_for_tool(tool: ToolKind) -> u32 {
+    match tool {
+        ToolKind::Stylus => PEN_DEBUG_COLOR,
+        ToolKind::Eraser => PEN_DEBUG_COLOR_2,
+        ToolKind::Finger | ToolKind::Mouse | ToolKind::Unknown => DEFAULT_COLOR,
     }
 }
 
@@ -110,14 +107,6 @@ fn tessellate_segment(
     positions.map(|position| Vertex { position, color })
 }
 
-/// Android MotionEvent action constants we care about. Mirrors
-/// `android.view.MotionEvent.ACTION_*` so the Kotlin side can
-/// forward the raw int without translation.
-const ACTION_DOWN: i32 = 0;
-const ACTION_UP: i32 = 1;
-const ACTION_MOVE: i32 = 2;
-const ACTION_CANCEL: i32 = 3;
-
 /// Messages the render thread accepts.
 enum Msg {
     SurfaceReady {
@@ -137,23 +126,11 @@ enum Msg {
     SurfaceLost {
         reply: Option<SyncSender<()>>,
     },
-    Sample {
-        x: f32,
-        y: f32,
-        /// Raw input-device pressure in 0..1. 1.0 means "full
-        /// pressure" or "device doesn't report pressure" (finger
-        /// touch on a non-pressure-sensing screen, Android's
-        /// default for events without AXIS_PRESSURE). Stored as-is
-        /// on each point; the renderer applies width modulation via
-        /// [`width_for_pressure`].
-        pressure: f32,
-        /// MotionEvent.TOOL_TYPE_* — used at ACTION_DOWN to decide
-        /// the stroke colour (see [`color_for_tool`]). MOVE/UP
-        /// samples carry the same value but the stroke's colour
-        /// was already fixed at DOWN time, so they're a no-op here.
-        tool_type: i32,
-        action: i32,
-    },
+    /// One platform-neutral pointer sample. The platform layer
+    /// (today: `crate::drawing::jni`) converts native event shapes
+    /// into [`Sample`] before sending. See `crate::drawing::input`
+    /// for the type definitions.
+    Sample(Sample),
     Clear,
     /// Switch which note's stroke document the renderer is editing.
     /// `None` parks the renderer with no active document (no
@@ -344,20 +321,19 @@ pub fn clear_surface() {
     }
 }
 
-pub fn push_sample(x: f32, y: f32, pressure: f32, tool_type: i32, action: i32) {
+pub fn push_sample(sample: Sample) {
     // debug! rather than trace! so the per-sample stream is visible
     // under default logcat filters during POC bring-up. Drop back
     // to trace! once the input pipeline is fully verified.
     log::debug!(
-        "[drawing] push_sample x={x:.1} y={y:.1} p={pressure:.2} tool={tool_type} action={action}"
+        "[drawing] push_sample x={x:.1} y={y:.1} p={p:.2} tool={tool:?} action={action:?}",
+        x = sample.x,
+        y = sample.y,
+        p = sample.pressure,
+        tool = sample.tool,
+        action = sample.action,
     );
-    send(Msg::Sample {
-        x,
-        y,
-        pressure,
-        tool_type,
-        action,
-    });
+    send(Msg::Sample(sample));
 }
 
 pub fn clear_strokes() {
@@ -516,16 +492,17 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                         let _ = tx.send(());
                     }
                 }
-                Msg::Sample {
-                    x,
-                    y,
-                    pressure,
-                    tool_type,
-                    action,
-                } => {
+                Msg::Sample(sample) => {
+                    let Sample {
+                        x,
+                        y,
+                        pressure,
+                        tool,
+                        action,
+                    } = sample;
                     let pos = px_to_egui(x, y);
                     match action {
-                        ACTION_DOWN => {
+                        SampleAction::Down => {
                             egui_input.events.push(egui::Event::PointerMoved(pos));
                             egui_input.events.push(egui::Event::PointerButton {
                                 pos,
@@ -548,7 +525,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                 // current_stroke_color (so MOVE
                                 // handlers don't re-unpack per
                                 // sample).
-                                let packed = color_for_tool(tool_type);
+                                let packed = color_for_tool(tool);
                                 current_stroke_color = Some(unpack_color(packed));
                                 // Open a fresh stroke in the active
                                 // doc and seed its points array with
@@ -569,7 +546,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             }
                             dirty = true;
                         }
-                        ACTION_MOVE => {
+                        SampleAction::Move => {
                             egui_input.events.push(egui::Event::PointerMoved(pos));
                             if !stroke_suppressed {
                                 if let (
@@ -623,7 +600,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                 last_pressure = Some(pressure);
                             }
                         }
-                        ACTION_UP | ACTION_CANCEL => {
+                        SampleAction::Up | SampleAction::Cancel => {
                             egui_input.events.push(egui::Event::PointerButton {
                                 pos,
                                 button: egui::PointerButton::Primary,
@@ -641,7 +618,6 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             stroke_suppressed = false;
                             dirty = true;
                         }
-                        _ => {}
                     }
                 }
                 Msg::Clear => {
