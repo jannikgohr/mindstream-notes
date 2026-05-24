@@ -288,11 +288,17 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                 if let (Some((px, py)), Some(s)) =
                                     (last_point, surface_state.as_ref())
                                 {
+                                    // Convert surface-pixel touch
+                                    // coords into page coords so
+                                    // stored vertices stay stable
+                                    // across rotation / re-attach.
+                                    // The shader applies the view
+                                    // transform per frame.
                                     segments.push(Vertex {
-                                        position: s.to_ndc(px, py),
+                                        position: s.surface_to_page(px, py),
                                     });
                                     segments.push(Vertex {
-                                        position: s.to_ndc(x, y),
+                                        position: s.surface_to_page(x, y),
                                     });
                                     dirty = true;
                                 }

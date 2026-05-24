@@ -38,6 +38,11 @@
 //!   `[ stroke canvas (atop above)  ]`    its toolbar at the top of the
 //!                                       surface (which is below header)
 
+// page.rs is pure document-coord math with no platform deps —
+// keep it compiled everywhere so cargo test catches regressions on
+// the host without needing the Android target.
+pub mod page;
+
 #[cfg(target_os = "android")]
 pub mod jni;
 #[cfg(target_os = "android")]
