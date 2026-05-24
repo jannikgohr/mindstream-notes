@@ -30,19 +30,23 @@ Samsung devices).
 Since the POC landed, the foundational data-model work is in:
 page coordinates with A4 portrait default (C0), per-note canvas
 state (C1), yrs-backed persistence + live-CRDT stroke document
-(C2), end-to-end pressure capture (C3), and variable-width
+(C2), end-to-end pressure capture (C3 — also threads
+`MotionEvent.getToolType` so the render thread knows whether a
+sample came from finger / stylus / eraser), and variable-width
 pressure-tapered strokes (C4 — per-segment CPU tessellation into
-TriangleList quads; no `lyon` dep yet, joints aren't mitered).
+TriangleList quads; per-vertex colour means S Pen strokes render in
+debug-blue while finger strokes stay black; no `lyon` dep yet,
+joints aren't mitered).
 The code has been split out of single-file `render.rs` into
 `surface.rs` / `pipeline.rs` / `ui/{mod, toolbar}.rs` / `jni.rs`
 (R1, R2 partial); `render.rs` retains the render-thread loop +
 JNI-facing public API.
 
 **Deliberately NOT yet implemented** — see roadmap below: stroke
-smoothing; live collab; cross-platform `SurfaceSource` /
-`InputSource` traits; desktop port. Rounded caps + mitered joints
-(via `lyon`) deferred until thick-stroke joints actually look
-notchy in practice.
+smoothing; stylus button capture; live collab; cross-platform
+`SurfaceSource` / `InputSource` traits; desktop port. Rounded caps
++ mitered joints (via `lyon`) deferred until thick-stroke joints
+actually look notchy in practice.
 
 ## Roadmap
 
@@ -79,7 +83,7 @@ session) saves migration pain later.
 | R1 | Split `drawing/render.rs` into a directory | Suggested layout: `drawing/{mod, surface, input, render/{pipeline, frame}, ui/{toolbar}, thread, jni}.rs`. | **Done** (85896e3) — landed as `surface.rs` / `pipeline.rs` / `ui/{mod, toolbar}.rs` / `jni.rs`; render-thread loop + JNI-facing public API kept in `render.rs` as the orchestrator. Further fragmentation (separate `thread.rs` / `frame.rs`) deferred until it pays off. |
 | R2 | `canvas_ui` submodule for egui UI | Top-level `ui/mod.rs` exposes a `CanvasUi` struct with `fn run(&mut self, ctx: &egui::Context) -> RenderActions`. | **Done** (85896e3) — `CanvasUi` + `RenderActions` + `UiOutput` live in `drawing/ui/mod.rs`; toolbar widget in `ui/toolbar.rs`. Slot files (`ui/color_picker.rs`, `ui/eraser.rs`, …) referenced in the module doc, to be filled in during D. |
 | R3 | `SurfaceSource` trait for cross-platform | Abstract "give me a raw-window-handle + width/height" behind a trait. Android impl wraps `ANativeWindow` (current code, moved to `platform/android.rs`); desktop impl wraps winit/wry handle (E1). Render core takes `&dyn SurfaceSource` and stops knowing about Android. | Pending |
-| R4 | `InputSource` abstraction | Same idea for the touch/stylus event stream. Android impl is JNI `pushPoint`; desktop impl is winit `WindowEvent`; iOS is UIKit pen events. Common output: `Sample { pos, pressure, tilt, action, time }`. | Pending |
+| R4 | `InputSource` abstraction | Same idea for the touch/stylus event stream. Android impl is JNI `pushPoint`; desktop impl is winit `WindowEvent`; iOS is UIKit pen events. Two message shapes, because stylus input is really two different concepts: **(a)** continuous per-sample state — `Sample { pos, pressure, tilt, azimuth, tool_type, buttons, action, time }`, where `buttons` is a bitflags type (`BARREL_PRIMARY`, `BARREL_SECONDARY`, …) so we can carry multi-button pens without re-widening; **(b)** discrete gestures — `StylusGesture { kind: DoubleTap \| Squeeze \| … }`, fired between strokes, no associated position. Apple Pencil 2's double-tap + Pencil Pro's squeeze live in (b) because they come via `UIPencilInteraction` separately from `UITouch`; held barrel buttons (S Pen, Surface Pen, Wacom) live in (a). Pieces of this are already in `Msg::Sample` today (`pressure` + `tool_type`); the abstraction is mostly carving the existing struct + buttons into a platform-neutral home. | Pending |
 | R5 | `platform/` module split | `drawing/platform/{android, desktop, ios}.rs`, gated by `cfg(target_os)`. Each file owns its `SurfaceSource` + `InputSource` impls and lifecycle hooks. Cross-cutting concerns (NDK context init, JNI class caching) live in the Android-specific file. | Pending |
 | R6 | Cargo workspace consideration | When the drawing crate grows past `src-tauri/src/drawing/`, consider extracting it to a workspace member (`crates/mindstream-canvas/`) so the cross-platform render core has a clean dependency boundary from the Tauri app. Not urgent; flag if compile times get painful. | Pending (low priority) |
 
@@ -94,9 +98,10 @@ that order. R3–R5 still gate E.)
 | C0 | Page-coordinate model (stop-stretch + A4) | Strokes stored in page coordinates (document units), not NDC. View transform (`{scale, pan}`) computed each frame to fit page → surface preserving aspect. Default page: A4 portrait at 144 DPI (1190 × 1684 page-units). Constants live in `drawing/page.rs` so future page sizes (Letter, custom, infinite scroll) are a config swap. Rotation no longer stretches. | **Done** (e555652) |
 | C1 | Per-note canvas state | One `StrokesDoc` per note, swapped on `drawing_show(note_id)`. | **Done** (f912c85) |
 | C2 | Persistence via yrs (`yjs-rs`) | `yrs::Doc` like markdown / freeform notes — strokes as a `Y.Array<Y.Map>`, each map carrying `{id, color, width, points: Y.Array<Point>}`. Persisted into `note.yrs_state`, synced via Etebase. Pen-down opens a fresh `Stroke`, samples append to its `points` Y.Array, pen-up commits. Eraser sets a tombstone field (don't delete; offline-merge convergence). Format versioned via a `schema` field on the doc root. | **Done** (645dff6; persistence bugfix 36e74b5) |
-| C3 | Pressure capture | Kotlin reads `MotionEvent.AXIS_PRESSURE` (+ historical samples), sanitises NaN/0/over-1 to 1.0, and passes through `pushPoint(x, y, pressure, action)`. Stored as a parallel `pressures: Y.Array<f64>` on each stroke map (additive — no schema bump; legacy strokes default to 1.0 on read). The renderer threads pressure to `StrokesDoc::push_point` but currently ignores it on the GPU side (uniform-width `LineList` until C4). Unblocks C4 + D1 + D2. | **Done** |
-| C4 | Variable-width strokes | Per-segment CPU tessellation (2-triangle quad with potentially different widths at each endpoint) — no `lyon` dep yet. Each stroke segment uses `width = MIN_WIDTH + (BASE_WIDTH - MIN_WIDTH) * pressure` (MIN=1.0, BASE=4.0 page-units = ~0.18–0.7 mm). Topology flipped to `TriangleList`; vertex format unchanged. Pure-math `segment_quad_positions` lives in `page.rs` with host-side unit tests. Joints aren't mitered yet — fine for the current thin-stroke regime; revisit (probably with `lyon`'s stroke tessellator) if thick-stroke joints look notchy. Per-stroke `width` field in the schema is still ignored — wires up with D5. | **Done** (deferred lyon + rounded caps) |
+| C3 | Pressure + tool-type capture | Kotlin reads `MotionEvent.AXIS_PRESSURE` (+ historical samples), sanitises NaN/0/over-1 to 1.0, and reads `event.getToolType(0)`, then passes through `pushPoint(x, y, pressure, toolType, action)`. Pressure stored as a parallel `pressures: Y.Array<f64>` on each stroke map (additive — no schema bump; legacy strokes default to 1.0 on read). Tool type isn't persisted directly; instead the renderer uses it at `begin_stroke` time to pick a colour (see C4) which is what survives into the doc. Unblocks C4 + D1 + D2 + C6. | **Done** |
+| C4 | Variable-width strokes + per-stroke colour | Per-segment CPU tessellation (2-triangle quad with potentially different widths at each endpoint) — no `lyon` dep yet. Each stroke segment uses `width = MIN_WIDTH + (BASE_WIDTH - MIN_WIDTH) * pressure` (MIN=1.0, BASE=4.0 page-units = ~0.18–0.7 mm). Topology flipped to `TriangleList`; vertex format grew to `{position, color}` so each stroke can be rendered in its own colour. `begin_stroke` now takes a packed 0xAARRGGBB colour — currently chosen from tool type (stylus / eraser → debug blue, else → black) as a "did pen detection actually work" visualisation; D5 swaps that mapping for a user-picked palette. Pure-math `segment_quad_positions` lives in `page.rs` with host-side unit tests. Joints aren't mitered — fine for the current thin-stroke regime; revisit (probably with `lyon`'s stroke tessellator) if thick-stroke joints look notchy. Per-stroke `width` field in the schema is still ignored — wires up with D5. | **Done** (deferred lyon + rounded caps) |
 | C5 | Live collab on the canvas | Each open ink note's `yrs::Doc` plugs into the existing `CollabProvider` infrastructure (same path markdown notes use for live editing). Yrs broadcasts pen samples to peers as they arrive; remote samples merge into the doc and trigger a re-render. Local-first by construction: offline writes append to the local Y.Array and sync on next reconnect with CRDT-correct merge. Depends on C2. | Pending |
+| C6 | Stylus button capture (data plumbing) | Mirrors C3: Kotlin reads `event.buttonState`, JNI signature grows to `pushPoint(x, y, pressure, toolType, buttons, action)`, `Msg::Sample` carries `buttons: u32` (raw bitmask while there's one consumer; promote to a `StylusButtons` bitflags type when R4 lands). No persistence — buttons are an input-time concept; their *consequences* (e.g. eraser stroke) get persisted, not the buttons themselves. No UX policy yet — render thread just exposes the bits; D8 decides what they do. Apple Pencil's discrete gestures (double-tap, Pro squeeze) get a separate `Msg::StylusGesture` shape because they fire between strokes, not as a per-sample state. Unblocks D8. | Pending |
 
 ### D. Quality / feel — depends on C
 
@@ -109,6 +114,7 @@ that order. R3–R5 still gate E.)
 | D5 | Color picker + brush size | Toolbar additions in `ui/color_picker.rs` / `ui/brush.rs`. Trivial after D3 lands the tool/state plumbing. |
 | D6 | Pan + pinch-zoom on the page | Two-finger gesture handling: Kotlin `GestureDetector` + `ScaleGestureDetector` push `Msg::ViewTransform { pan_delta, scale_delta }` to Rust; render reads current view transform from a uniform buffer (already added in C0). Clamp to keep page on-screen; momentum on fling. |
 | D7 | Multi-page / infinite scroll | Once C0 + D6 are in, multi-page is "more pages along Y in document space". Page break renders as a thin gap + page number badge. |
+| D8 | Stylus button + gesture → action mapping | UX-policy layer over C6 + the discrete-gesture path. Maps `StylusButtons` bitmask states (held during a stroke) and discrete `StylusGesture` events (between strokes) onto canvas actions: switch to eraser, cycle colour, undo, open quick-picker, etc. Lives in `ui/` (above the render thread) because the policy needs to see the current tool mode + the user's settings — render thread stays a dumb carrier of the input bits. Default mapping is open (see F7); the mechanism is what matters here. Apple Pencil 2 double-tap respects the system pref (`UIPencilInteraction.preferredTapAction`) when running on iOS so the gesture does the same thing in our app as in others; Android side has no equivalent system pref, so we expose our own setting. Depends on C6. |
 
 ### E. Platform expansion — unblocked by R
 
@@ -125,3 +131,4 @@ that order. R3–R5 still gate E.)
 - **F4.** Prediction window in ms — open, deferred to D2.
 - **F5.** Pen-vs-finger mode setting — open. `freeform` notes have an existing `editor.freeform.penMode` setting (auto / always / off); ink notes should mirror so the same gesture is consistent across both editor kinds.
 - **F6.** Page size as a user-facing setting? — open. C0 hardcodes A4 portrait; eventually probably needs to be a per-note property (some users want letter, some want square, some want infinite scroll). Not blocking; revisit when multi-page lands (D7).
+- **F7.** Default stylus-button + gesture binding? — open. Candidates for the held barrel button (S Pen / Surface / Wacom): (a) temporary eraser mode while held — matches most competing apps' default, makes the button feel like a "modifier key"; (b) cycle to next colour — useful for quick highlight runs; (c) open a radial quick-picker. Candidates for Apple Pencil double-tap: cycle current/previous tool (default in Apple Notes), open colour picker, undo. On iOS we should likely defer to `UIPencilInteraction.preferredTapAction` rather than ship our own default. On Android there's no system pref to defer to, so we ship a setting (`editor.ink.barrelButton` with the same enum as freeform's pen-mode setting per F5). Not blocking — C6 captures the bits regardless; D8 picks the mapping; this question just chooses the *default* the setting starts at.
