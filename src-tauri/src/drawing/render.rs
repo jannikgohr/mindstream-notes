@@ -1,12 +1,15 @@
-//! Render-thread orchestration and the JNI-facing public API.
+//! Render-thread orchestration and the Tauri-facing public API.
 //!
-//! This file is the entry point the rest of the crate (`jni.rs`,
-//! `mod.rs`) and Kotlin (via JNI exports) reach into to drive the
-//! drawing engine. The actual work is delegated:
+//! This file is the entry point the rest of the crate (the
+//! `platform/` glue, `mod.rs`) and Kotlin (via JNI exports in
+//! `platform::android`) reach into to drive the drawing engine.
+//! The actual work is delegated:
 //!
-//!   * `crate::drawing::pipeline` — wgpu state + per-frame GPU pass
-//!   * `crate::drawing::ui`       — egui Context + UI widgets
-//!   * `crate::drawing::surface`  — ANativeWindow ownership
+//!   * `crate::drawing::pipeline`         — wgpu state + per-frame GPU pass
+//!   * `crate::drawing::ui`               — egui Context + UI widgets
+//!   * `crate::drawing::surface_source`   — `SurfaceSource` trait;
+//!                                          platform impls own the
+//!                                          native window handle.
 //!
 //! Threading: every public function here just packages a `Msg` and
 //! drops it on the render thread's mpsc channel. The render thread
@@ -19,7 +22,6 @@
 //! See the function comment for why.
 
 use std::collections::HashMap;
-use std::ptr::NonNull;
 use std::sync::mpsc::{self, Sender, SyncSender, TryRecvError};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
@@ -29,6 +31,7 @@ use super::input::{Sample, SampleAction, ToolKind};
 use super::page::segment_quad_positions;
 use super::pipeline::{self, PersistentGpu, SurfaceBoundState, Vertex};
 use super::strokes_doc::{StrokesDoc, DEFAULT_COLOR};
+use super::surface_source::SurfaceSource;
 use super::ui::{self, CanvasUi};
 
 /// Debug palette — visual confirmation that input-device detection
@@ -126,7 +129,7 @@ fn tessellate_segment(
 /// Messages the render thread accepts.
 enum Msg {
     SurfaceReady {
-        native_window: NonNull<ndk_sys::ANativeWindow>,
+        window: Box<dyn SurfaceSource>,
         width: u32,
         height: u32,
     },
@@ -143,7 +146,7 @@ enum Msg {
         reply: Option<SyncSender<()>>,
     },
     /// One platform-neutral pointer sample. The platform layer
-    /// (today: `crate::drawing::jni`) converts native event shapes
+    /// (today: `crate::drawing::platform::android`) converts native event shapes
     /// into [`Sample`] before sending. See `crate::drawing::input`
     /// for the type definitions.
     Sample(Sample),
@@ -237,10 +240,12 @@ impl CanvasDocument {
     }
 }
 
-// SAFETY: NonNull<ANativeWindow> is the only non-Send field; the
-// pointer is owned (acquired via ANativeWindow_fromSurface) and we
-// transfer ownership across threads via the channel.
-unsafe impl Send for Msg {}
+// `unsafe impl Send for Msg` is no longer required: post-R3 every
+// `Msg` variant is built from `Send` fields (`Box<dyn SurfaceSource>`
+// includes `Send` in the trait bounds, so the dyn object is `Send`
+// too). The compiler now derives Send automatically. Kept this
+// note rather than deleting silently because the previous unsafe
+// impl was load-bearing on the old `NonNull<ANativeWindow>` design.
 
 // ---------- channel plumbing ----------
 
@@ -295,11 +300,14 @@ fn send(msg: Msg) {
 
 // ---------- public API (called from JNI exports in jni.rs) ----------
 
-/// JNI entrypoint: hand a freshly-acquired ANativeWindow over to
-/// the render thread.
-pub fn set_surface(native_window: NonNull<ndk_sys::ANativeWindow>, width: u32, height: u32) {
+/// Platform-bridge entrypoint: hand a freshly-acquired
+/// `SurfaceSource` to the render thread. The caller (today: the
+/// `setSurface` JNI export in `platform::android`) constructs the
+/// platform-specific window wrapper and boxes it as `dyn SurfaceSource`
+/// so the render thread never has to name the concrete type.
+pub fn set_surface(window: Box<dyn SurfaceSource>, width: u32, height: u32) {
     send(Msg::SurfaceReady {
-        native_window,
+        window,
         width,
         height,
     });
@@ -416,9 +424,9 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
     // live for the render thread's lifetime (= process lifetime,
     // ephemeral until C2 lands yrs persistence).
     let mut documents: HashMap<String, CanvasDocument> = HashMap::new();
-    /// Which document samples accumulate into and which renders
-    /// pull segments from. `None` means "no note open" — the
-    /// renderer still draws background + toolbar but skips strokes.
+    // Which document samples accumulate into and which renders
+    // pull segments from. `None` means "no note open" — the
+    // renderer still draws background + toolbar but skips strokes.
     let mut active_note_id: Option<String> = None;
     // The most-recent sample's surface coordinates + pressure, used
     // to anchor the next MOVE sample's starting vertex (position) and
@@ -461,16 +469,14 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
         for msg in messages {
             match msg {
                 Msg::SurfaceReady {
-                    native_window,
+                    window,
                     width,
                     height,
                 } => {
                     surface_state = None;
                     if persistent.is_none() {
                         match pollster::block_on(pipeline::build_first_time(
-                            native_window,
-                            width,
-                            height,
+                            window, width, height,
                         )) {
                             Ok((p, s)) => {
                                 persistent = Some(p);
@@ -482,10 +488,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                     } else {
                         let p = persistent.as_ref().unwrap();
                         match pollster::block_on(pipeline::build_surface_only(
-                            p,
-                            native_window,
-                            width,
-                            height,
+                            p, window, width, height,
                         )) {
                             Ok(s) => {
                                 surface_state = Some(s);
@@ -730,7 +733,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             let _ = pipeline::render_frame(p, s, fresh_segs, fresh_ui);
                         }
                         if actions.back {
-                            if let Err(e) = crate::drawing::jni::ui::call_back() {
+                            if let Err(e) = crate::drawing::platform::android::ui::call_back() {
                                 log::warn!("[drawing] call_back failed: {e}");
                             }
                         }

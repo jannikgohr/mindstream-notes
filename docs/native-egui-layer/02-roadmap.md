@@ -39,19 +39,22 @@ debug-blue while finger strokes stay black; no `lyon` dep yet,
 joints aren't mitered), and stylus-button capture (C6 — Kotlin
 forwards `event.buttonState` so the renderer can debug-colour
 "side button held" in orange).
-The code has been split out of single-file `render.rs` into
-`surface.rs` / `pipeline.rs` / `ui/{mod, toolbar}.rs` / `jni.rs`
-(R1, R2 partial), and the platform-neutral input shape lives in
-`drawing/input.rs` (R4 initial scope); `render.rs` retains the
-render-thread loop + JNI-facing public API and now consumes
-`input::Sample` rather than raw `MotionEvent.*` ints.
+Module layout has settled into a clear cross-platform / platform
+split: `drawing/{input, page, strokes_doc, surface_source}.rs` are
+host-buildable and have no platform deps; `drawing/pipeline.rs` +
+`drawing/render.rs` + `drawing/ui/` are cfg-android (will go
+cross-platform when E1 lands) but talk only to abstractions —
+`Box<dyn SurfaceSource>` rather than `ANativeWindow*`, `input::Sample`
+rather than raw `MotionEvent` ints; `drawing/platform/android.rs`
+owns the Android-specific glue (the `AndroidWindow` SurfaceSource
+impl + all JNI exports). R1, R2, R3, R4 initial scope, and R5
+(Android side) are all in.
 
 **Deliberately NOT yet implemented** — see roadmap below: stroke
 smoothing; stylus-button → action mapping (the bits flow but
-nothing acts on them yet); live collab; cross-platform
-`SurfaceSource` trait; desktop port. Rounded caps + mitered joints
-(via `lyon`) deferred until thick-stroke joints actually look
-notchy in practice.
+nothing acts on them yet); live collab; desktop / iOS ports.
+Rounded caps + mitered joints (via `lyon`) deferred until
+thick-stroke joints actually look notchy in practice.
 
 ## Roadmap
 
@@ -87,9 +90,9 @@ session) saves migration pain later.
 |---|------|-------|--------|
 | R1 | Split `drawing/render.rs` into a directory | Suggested layout: `drawing/{mod, surface, input, render/{pipeline, frame}, ui/{toolbar}, thread, jni}.rs`. | **Done** (85896e3) — landed as `surface.rs` / `pipeline.rs` / `ui/{mod, toolbar}.rs` / `jni.rs`; render-thread loop + JNI-facing public API kept in `render.rs` as the orchestrator. Further fragmentation (separate `thread.rs` / `frame.rs`) deferred until it pays off. |
 | R2 | `canvas_ui` submodule for egui UI | Top-level `ui/mod.rs` exposes a `CanvasUi` struct with `fn run(&mut self, ctx: &egui::Context) -> RenderActions`. | **Done** (85896e3) — `CanvasUi` + `RenderActions` + `UiOutput` live in `drawing/ui/mod.rs`; toolbar widget in `ui/toolbar.rs`. Slot files (`ui/color_picker.rs`, `ui/eraser.rs`, …) referenced in the module doc, to be filled in during D. |
-| R3 | `SurfaceSource` trait for cross-platform | Abstract "give me a raw-window-handle + width/height" behind a trait. Android impl wraps `ANativeWindow` (current code, moved to `platform/android.rs`); desktop impl wraps winit/wry handle (E1). Render core takes `&dyn SurfaceSource` and stops knowing about Android. | Pending |
+| R3 | `SurfaceSource` trait for cross-platform | Abstract "give me a raw-window-handle + width/height" behind a trait. Render core takes the trait instead of any platform-specific window type; per-platform impls own the native handle. | **Done** — `drawing/surface_source.rs` defines `trait SurfaceSource: HasWindowHandle + HasDisplayHandle + Send {}` with a blanket impl over any matching type. `pipeline::build_first_time` / `build_surface_only` take `Box<dyn SurfaceSource>`; `Msg::SurfaceReady` carries it across the channel (which let us drop the old `unsafe impl Send for Msg`); `render::set_surface` accepts the box. `raw-window-handle` promoted from the android-only dep block to top-level so the trait compiles on host. |
 | R4 | `InputSource` abstraction | Same idea for the touch/stylus event stream. Android impl is JNI `pushPoint`; desktop impl is winit `WindowEvent`; iOS is UIKit pen events. Two message shapes, because stylus input is really two different concepts: **(a)** continuous per-sample state — `Sample { x, y, pressure, tool, action, … }`, with `buttons` (bitflags), `tilt`, `azimuth`, `time` added as consumers materialise; **(b)** discrete gestures — `StylusGesture { kind: DoubleTap \| Squeeze \| … }`, fired between strokes, no associated position. Apple Pencil 2's double-tap + Pencil Pro's squeeze live in (b) because they come via `UIPencilInteraction` separately from `UITouch`; held barrel buttons (S Pen, Surface Pen, Wacom) live in (a). | **Done** (initial scope) — `drawing/input.rs` ships `Sample` / `ToolKind` / `SampleAction` as the platform-neutral types the render thread now consumes; JNI translates raw `MotionEvent.*` ints into them at the boundary. Deferred (pending consumers): `buttons: StylusButtons` lands with C6, `StylusGesture` with D8, `tilt` / `azimuth` / `time` when a consumer (D1 smoothing) needs them. The full trait-based `trait InputSource` arrives when more than one platform exists (E1 / E2). |
-| R5 | `platform/` module split | `drawing/platform/{android, desktop, ios}.rs`, gated by `cfg(target_os)`. Each file owns its `SurfaceSource` + `InputSource` impls and lifecycle hooks. Cross-cutting concerns (NDK context init, JNI class caching) live in the Android-specific file. | Pending |
+| R5 | `platform/` module split | `drawing/platform/{android, desktop, ios}.rs`, gated by `cfg(target_os)`. Each file owns its `SurfaceSource` + input bridge + lifecycle hooks. Cross-cutting concerns (NDK context init, JNI class caching) live in the Android-specific file. | **Done** (Android side) — `drawing/platform/android.rs` consolidates `AndroidWindow` (was `surface.rs`) and all JNI exports (was `jni.rs`); the old top-level files are deleted. `drawing/platform/mod.rs` is the cfg-gated module router. `desktop.rs` / `ios.rs` slot in here when E1 / E2 land. JNI symbol names + arg order are unchanged so Kotlin linkage is unaffected. |
 | R6 | Cargo workspace consideration | When the drawing crate grows past `src-tauri/src/drawing/`, consider extracting it to a workspace member (`crates/mindstream-canvas/`) so the cross-platform render core has a clean dependency boundary from the Tauri app. Not urgent; flag if compile times get painful. | Pending (low priority) |
 
 ### C. Real-feature debt — depends on R landing first

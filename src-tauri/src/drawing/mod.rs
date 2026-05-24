@@ -7,32 +7,36 @@
 //!     lines via `wgpu` with an `egui` toolbar overlay.
 //!
 //! Module layout:
-//!   - `mod.rs`     — this file: Tauri commands + module declarations
-//!   - `input.rs`   — platform-neutral input types (`Sample`,
-//!                    `ToolKind`, `SampleAction`). Host-buildable;
-//!                    half of the R4 input abstraction.
-//!   - `jni.rs`     — JNI exports (Kotlin ↔ Rust bridge); translates
-//!                    raw `MotionEvent.*` ints into `input::Sample`.
-//!   - `surface.rs` — `AndroidWindow` raw-window-handle wrapper
-//!                    (cross-platform `SurfaceSource` trait pending,
-//!                    see R3 in the roadmap)
-//!   - `pipeline.rs`— wgpu state + per-frame GPU pass
-//!                    (`PersistentGpu` + `SurfaceBoundState` +
-//!                    `render_frame`)
-//!   - `ui/`        — egui-driven UI overlay
-//!     - `mod.rs`     — `CanvasUi` + `RenderActions` + `UiOutput`
-//!     - `toolbar.rs` — the toolbar widget
-//!   - `render.rs`  — render thread state machine + JNI-facing
-//!                    public API
+//!   - `mod.rs`             — this file: Tauri commands + module decls
+//!   - `input.rs`           — platform-neutral input types (`Sample`,
+//!                            `ToolKind`, `SampleAction`, `buttons`).
+//!                            Host-buildable; the R4 input shape.
+//!   - `surface_source.rs`  — `SurfaceSource` trait (R3). Pure
+//!                            bounds, no platform deps.
+//!   - `page.rs`            — page-coordinate model + the
+//!                            `segment_quad_positions` geometry math.
+//!   - `strokes_doc.rs`     — yrs schema façade.
+//!   - `pipeline.rs`        — wgpu state + per-frame GPU pass.
+//!                            Takes `Box<dyn SurfaceSource>` rather
+//!                            than any platform-specific window type.
+//!   - `ui/`                — egui-driven UI overlay.
+//!     - `mod.rs`             — `CanvasUi` + `RenderActions` + `UiOutput`
+//!     - `toolbar.rs`         — the toolbar widget
+//!   - `render.rs`          — render thread state machine + the
+//!                            Tauri-facing public API.
+//!   - `platform/`          — per-OS glue (R5):
+//!     - `android.rs`         — `AndroidWindow` + JNI exports.
+//!                              cfg-gated to `target_os = "android"`.
 //!
 //! Threading model:
 //!   - All wgpu / egui state lives on a dedicated render thread
 //!     spawned by `render::set_surface` on first call.
-//!   - JNI entrypoints just push messages onto an mpsc channel
-//!     the render thread owns.
+//!   - Platform input bridges (today: Android JNI in `platform::android`)
+//!     just push messages onto an mpsc channel the render thread
+//!     owns.
 //!   - The Tauri commands below only forward to Kotlin via JNI
-//!     callback (`jni::ui::call_show` / `call_hide`) — they do
-//!     not touch render state directly.
+//!     callback (`platform::android::ui::call_show` / `call_hide`)
+//!     — they do not touch render state directly.
 //!
 //! Layering (Android):
 //!   `[ Status bar (system overlay) ]`
@@ -42,22 +46,24 @@
 //!   `[ stroke canvas (atop above)  ]`    its toolbar at the top of the
 //!                                       surface (which is below header)
 
-// page.rs + input.rs + strokes_doc.rs are pure cross-platform code
-// (no wgpu / no JNI / no NDK) — keep them compiled everywhere so
-// cargo test catches regressions on the host without needing the
-// Android target.
+// Cross-platform modules (no wgpu / no JNI / no NDK) — kept
+// compiled everywhere so `cargo test` catches regressions on the
+// host without needing the Android target.
 pub mod input;
 pub mod page;
 pub mod strokes_doc;
+pub mod surface_source;
 
-#[cfg(target_os = "android")]
-pub mod jni;
+// Android-only modules (wgpu / egui / NDK / JNI). When the desktop
+// port (E1) lands, `pipeline` + `render` + `ui` drop their cfg
+// gates and the per-platform glue under `platform/` carries the
+// remaining cfgs.
 #[cfg(target_os = "android")]
 pub mod pipeline;
 #[cfg(target_os = "android")]
-pub mod render;
+pub mod platform;
 #[cfg(target_os = "android")]
-pub mod surface;
+pub mod render;
 #[cfg(target_os = "android")]
 pub mod ui;
 
@@ -86,7 +92,7 @@ pub fn drawing_show(note_id: String, yrs_state: Vec<u8>) -> Result<(), String> {
         // Set the active note BEFORE bringing the surface up so the
         // first frame already shows the right strokes.
         render::set_active_note(Some(note_id), Some(yrs_state));
-        jni::ui::call_show().map_err(|e| format!("drawing_show: {e}"))
+        platform::android::ui::call_show().map_err(|e| format!("drawing_show: {e}"))
     }
     #[cfg(not(target_os = "android"))]
     {
@@ -120,7 +126,7 @@ pub fn drawing_get_state() -> Result<Vec<u8>, String> {
 pub fn drawing_hide() -> Result<(), String> {
     #[cfg(target_os = "android")]
     {
-        jni::ui::call_hide().map_err(|e| format!("drawing_hide: {e}"))
+        platform::android::ui::call_hide().map_err(|e| format!("drawing_hide: {e}"))
     }
     #[cfg(not(target_os = "android"))]
     {
