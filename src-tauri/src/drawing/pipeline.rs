@@ -21,13 +21,16 @@
 //! `crate::drawing::ui::CanvasUi`), encodes a single render pass
 //! that draws strokes underneath + egui on top, submits, presents.
 
-use std::ptr::NonNull;
-
 use bytemuck::{Pod, Zeroable};
+// HasWindowHandle + HasDisplayHandle are supertraits of
+// SurfaceSource. Imported here so the `window.window_handle()` /
+// `.display_handle()` method calls on `Box<dyn SurfaceSource>`
+// resolve (trait methods need the trait in scope at the call site,
+// even when dispatched dynamically).
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 use super::page::{self, PageSize, ViewTransform};
-use super::surface::AndroidWindow;
+use super::surface_source::SurfaceSource;
 use super::ui::UiOutput;
 
 #[repr(C)]
@@ -77,13 +80,15 @@ pub struct PersistentGpu {
 
 /// Per-surface state. Rebuilt each `SurfaceReady`, dropped each
 /// `SurfaceLost`. Holds nothing that touches shared driver state on
-/// Drop beyond `eglDestroySurface` + `ANativeWindow_release`.
+/// Drop beyond `eglDestroySurface` + the platform-specific window
+/// release (on Android, that's `ANativeWindow_release`).
 pub struct SurfaceBoundState {
     // Drop order is field-declaration order in Rust — `surface` is
     // declared before `_window` so the wgpu surface is dropped first,
-    // then `AndroidWindow::drop` runs `ANativeWindow_release`.
+    // then the `SurfaceSource`'s `Drop` runs (e.g. on Android,
+    // `AndroidWindow::drop → ANativeWindow_release`).
     surface: wgpu::Surface<'static>,
-    _window: Box<AndroidWindow>,
+    _window: Box<dyn SurfaceSource>,
     config: wgpu::SurfaceConfiguration,
     vertex_buffer: Option<wgpu::Buffer>,
     vertex_capacity: u64,
@@ -138,14 +143,16 @@ impl SurfaceBoundState {
 }
 
 /// First-time init: builds both halves at once. Returns the
-/// persistent state + the first surface bound to it.
+/// persistent state + the first surface bound to it. Caller owns
+/// the [`SurfaceSource`] (typically constructed at the platform
+/// glue layer, e.g. `AndroidWindow` from
+/// `crate::drawing::platform::android`); ownership transfers into
+/// the returned `SurfaceBoundState`.
 pub async fn build_first_time(
-    native_window: NonNull<ndk_sys::ANativeWindow>,
+    window: Box<dyn SurfaceSource>,
     width: u32,
     height: u32,
 ) -> Result<(PersistentGpu, SurfaceBoundState), String> {
-    let window = Box::new(AndroidWindow::new(native_window));
-
     // GL only — Mesa Vulkan on the emulator returns null handles
     // that wgpu's Vulkan path then deref-crashes; GLES works
     // everywhere we've tested.
@@ -154,10 +161,11 @@ pub async fn build_first_time(
         ..Default::default()
     });
 
-    // SAFETY: `window` lives at a stable address (boxed) and is
-    // owned by the returned SurfaceBoundState. The raw handle's
-    // ANativeWindow ref is owned by `window` and released on its
-    // Drop, after the wgpu surface has been torn down.
+    // SAFETY: `window` is owned by us (boxed) and will move into the
+    // returned `SurfaceBoundState`, so its raw handle stays valid
+    // for the surface's lifetime. The window's `Drop` runs only
+    // after the wgpu surface has been torn down (drop order in
+    // SurfaceBoundState is `surface` then `_window`).
     let surface = unsafe {
         instance
             .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
@@ -317,18 +325,17 @@ pub async fn build_first_time(
 }
 
 /// Subsequent attaches: reuse the existing persistent state, just
-/// build a new `Surface` against the new ANativeWindow and configure
-/// it with the pinned format / cached caps.
+/// build a new `Surface` against the freshly-handed `SurfaceSource`
+/// and configure it with the pinned format / cached caps.
 pub async fn build_surface_only(
     persistent: &PersistentGpu,
-    native_window: NonNull<ndk_sys::ANativeWindow>,
+    window: Box<dyn SurfaceSource>,
     width: u32,
     height: u32,
 ) -> Result<SurfaceBoundState, String> {
-    let window = Box::new(AndroidWindow::new(native_window));
-
-    // SAFETY: as in build_first_time — `window` is boxed for stable
-    // address and owned by the returned SurfaceBoundState.
+    // SAFETY: as in build_first_time — `window` is owned by us
+    // and moves into the returned SurfaceBoundState, so its raw
+    // handle stays valid for the surface's lifetime.
     let surface = unsafe {
         persistent
             .instance
