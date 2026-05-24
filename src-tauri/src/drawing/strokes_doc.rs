@@ -21,20 +21,32 @@
 //!       tombstoned: Any::Bool(false)           — eraser flips this to true
 //!       points:     Y.Array<f64>               — flat [x0, y0, x1, y1, …]
 //!                                                 in page coords
+//!       pressures:  Y.Array<f64>               — parallel to points,
+//!                                                 one entry per (x,y) pair.
+//!                                                 Absent on pre-C3 strokes,
+//!                                                 in which case readers
+//!                                                 default each point to 1.0.
 //!
 //! Why a flat points array (vs an array of {x, y} maps): tighter
 //! storage, simpler encode/decode, and we don't need per-point
 //! collab anyway — points within a single stroke are written by a
 //! single device in a tight burst. Inter-stroke ordering and
 //! tombstoning are the only collab-interesting bits, and those live
-//! at the stroke-map level.
+//! at the stroke-map level. The parallel `pressures` array is the
+//! same trade-off — kept beside `points` instead of widening each
+//! entry to a `{x, y, p}` map.
+//!
+//! Backward compat: adding `pressures` to a stroke is purely
+//! additive, so a doc written by an older app version (no
+//! `pressures` field at all) deserialises without a migration —
+//! readers fall back to 1.0 per point. That's why there's no schema
+//! version bump for C3.
 //!
 //! What's NOT in the schema yet (deferred per the roadmap):
-//!   - pressure / tilt per point (C3)
+//!   - tilt per point (open; revisit if D1's stroke modeller wants it)
 //!   - actual user-chosen color/width (D5)
 //!   - a top-level schema-version map (revisit when the schema
-//!     actually changes; for now a v1-encoded doc with our shape is
-//!     unambiguous)
+//!     actually changes in a non-additive way)
 
 use yrs::any::Any;
 use yrs::updates::decoder::Decode;
@@ -45,6 +57,7 @@ use yrs::{
 const STROKES_KEY: &str = "strokes";
 const FIELD_TOMBSTONED: &str = "tombstoned";
 const FIELD_POINTS: &str = "points";
+const FIELD_PRESSURES: &str = "pressures";
 const FIELD_ID: &str = "id";
 const FIELD_COLOR: &str = "color";
 const FIELD_WIDTH: &str = "width";
@@ -53,6 +66,12 @@ const FIELD_WIDTH: &str = "width";
 const DEFAULT_COLOR: i64 = 0xFF00_0000;
 /// Default stroke width in page units (1 unit = 1/144 inch).
 const DEFAULT_WIDTH: f64 = 1.0;
+/// Pressure value substituted on read for points written by an
+/// older app version (no `pressures` array) or by an input device
+/// that doesn't report pressure. Treated as "full pressure" so
+/// future variable-width rendering (C4) doesn't render those points
+/// hair-thin.
+const FALLBACK_PRESSURE: f32 = 1.0;
 
 /// Wrapper around a `yrs::Doc` holding the stroke document for one
 /// ink note. See module header for the schema.
@@ -67,6 +86,11 @@ pub struct StrokesDoc {
     /// Points array of the in-progress stroke (set between
     /// `begin_stroke` and `end_stroke`). None outside a stroke.
     in_progress_points: Option<ArrayRef>,
+    /// Parallel pressures array for the in-progress stroke. Same
+    /// life-cycle as `in_progress_points`; kept as a separate handle
+    /// so `push_point` doesn't have to re-resolve it from the stroke
+    /// map on every sample.
+    in_progress_pressures: Option<ArrayRef>,
 }
 
 impl StrokesDoc {
@@ -79,6 +103,7 @@ impl StrokesDoc {
             doc,
             strokes,
             in_progress_points: None,
+            in_progress_pressures: None,
         }
     }
 
@@ -121,30 +146,41 @@ impl StrokesDoc {
         stroke_map.insert(&mut tx, FIELD_WIDTH, Any::Number(DEFAULT_WIDTH));
         stroke_map.insert(&mut tx, FIELD_TOMBSTONED, Any::Bool(false));
         let points = stroke_map.insert(&mut tx, FIELD_POINTS, ArrayPrelim::default());
-        // Have to drop tx before storing the ArrayRef into self —
+        let pressures = stroke_map.insert(&mut tx, FIELD_PRESSURES, ArrayPrelim::default());
+        // Have to drop tx before storing the ArrayRefs into self —
         // ArrayRef itself is fine to hold across transactions, but
         // we want the begin_stroke transaction to commit before we
         // start receiving samples.
         drop(tx);
         self.in_progress_points = Some(points);
+        self.in_progress_pressures = Some(pressures);
     }
 
-    /// Append a single point (in page coordinates) to the
-    /// in-progress stroke. No-op outside `begin_stroke` /
-    /// `end_stroke` — protects against stray MOVE samples between
+    /// Append a single point (in page coordinates) and its pressure
+    /// to the in-progress stroke. `pressure` is the raw value from
+    /// the input device (typically 0..1 for stylus, 1.0 for inputs
+    /// that don't report pressure); stored as-is so future
+    /// normalisation policies can live in the renderer rather than
+    /// being baked into the wire format. No-op outside `begin_stroke`
+    /// / `end_stroke` — protects against stray MOVE samples between
     /// strokes.
-    pub fn push_point(&mut self, x: f32, y: f32) {
-        let Some(points) = self.in_progress_points.as_ref() else {
+    pub fn push_point(&mut self, x: f32, y: f32, pressure: f32) {
+        let (Some(points), Some(pressures)) = (
+            self.in_progress_points.as_ref(),
+            self.in_progress_pressures.as_ref(),
+        ) else {
             return;
         };
         let mut tx = self.doc.transact_mut();
         points.push_back(&mut tx, Any::Number(x as f64));
         points.push_back(&mut tx, Any::Number(y as f64));
+        pressures.push_back(&mut tx, Any::Number(pressure as f64));
     }
 
     /// Close the in-progress stroke. Idempotent.
     pub fn end_stroke(&mut self) {
         self.in_progress_points = None;
+        self.in_progress_pressures = None;
     }
 
     /// Tombstone every stroke. Used by the Clear toolbar button —
@@ -160,18 +196,30 @@ impl StrokesDoc {
             };
             stroke.insert(&mut tx, FIELD_TOMBSTONED, Any::Bool(true));
         }
-        // Drop the in-progress pointer too — Clear during a stroke
+        // Drop the in-progress pointers too — Clear during a stroke
         // should also end that stroke.
         drop(tx);
         self.in_progress_points = None;
+        self.in_progress_pressures = None;
     }
 
-    /// Visit each non-tombstoned stroke's points as a flat slice
-    /// `[x0, y0, x1, y1, …]` in page coordinates. Used after
-    /// `from_bytes` to rebuild the render-side segment cache.
+    /// Visit each non-tombstoned stroke. `points` is a flat slice
+    /// `[x0, y0, x1, y1, …]` in page coordinates; `pressures` is a
+    /// parallel slice with one entry per (x, y) pair, i.e.
+    /// `pressures.len() == points.len() / 2`.
+    ///
+    /// Backward compat: strokes saved before C3 don't have a
+    /// `pressures` field — the slice handed to the visitor is then
+    /// filled with [`FALLBACK_PRESSURE`] (1.0) per point so the
+    /// consumer can treat all strokes uniformly without branching on
+    /// "was this drawn before pressure capture landed". If the
+    /// `pressures` array is present but shorter than expected (e.g.
+    /// a remote-merge race that committed `points` but not
+    /// `pressures`), trailing positions fall back to 1.0 the same
+    /// way; longer is truncated.
     pub fn for_each_stroke_points<F>(&self, mut visit: F)
     where
-        F: FnMut(&[f32]),
+        F: FnMut(&[f32], &[f32]),
     {
         let tx = self.doc.transact();
         let len = self.strokes.len(&tx);
@@ -196,9 +244,26 @@ impl StrokesDoc {
                     flat.push(v as f32);
                 }
             }
-            if !flat.is_empty() {
-                visit(&flat);
+            if flat.is_empty() {
+                continue;
             }
+            let expected_pressures = flat.len() / 2;
+            let mut pressures: Vec<f32> = Vec::with_capacity(expected_pressures);
+            if let Some(Out::YArray(stored)) = stroke.get(&tx, FIELD_PRESSURES) {
+                let m = stored.len(&tx);
+                for j in 0..m {
+                    if let Some(Out::Any(Any::Number(v))) = stored.get(&tx, j) {
+                        pressures.push(v as f32);
+                    }
+                }
+            }
+            // Pad missing / trailing positions with the fallback so
+            // the visitor always sees pressures.len() == points/2.
+            // Truncate extras the same way (a writer that pushed an
+            // odd point doesn't get to grow the pressure array past
+            // the matching point count).
+            pressures.resize(expected_pressures, FALLBACK_PRESSURE);
+            visit(&flat, &pressures);
         }
     }
 }
@@ -214,9 +279,21 @@ mod tests {
     use super::*;
 
     /// Pull all visible stroke point lists into a Vec for assertion.
+    /// Pressures are discarded here — tests that care about pressure
+    /// use `collect_strokes_with_pressure` instead.
     fn collect_strokes(doc: &StrokesDoc) -> Vec<Vec<f32>> {
         let mut out = Vec::new();
-        doc.for_each_stroke_points(|points| out.push(points.to_vec()));
+        doc.for_each_stroke_points(|points, _pressures| out.push(points.to_vec()));
+        out
+    }
+
+    /// Pair-wise (points, pressures) per stroke for assertions that
+    /// exercise the C3 path.
+    fn collect_strokes_with_pressure(doc: &StrokesDoc) -> Vec<(Vec<f32>, Vec<f32>)> {
+        let mut out = Vec::new();
+        doc.for_each_stroke_points(|points, pressures| {
+            out.push((points.to_vec(), pressures.to_vec()));
+        });
         out
     }
 
@@ -240,9 +317,9 @@ mod tests {
     fn one_stroke_round_trips() {
         let mut doc = StrokesDoc::new();
         doc.begin_stroke();
-        doc.push_point(10.0, 20.0);
-        doc.push_point(30.0, 40.0);
-        doc.push_point(50.0, 60.0);
+        doc.push_point(10.0, 20.0, 1.0);
+        doc.push_point(30.0, 40.0, 1.0);
+        doc.push_point(50.0, 60.0, 1.0);
         doc.end_stroke();
 
         let bytes = doc.encode();
@@ -254,14 +331,104 @@ mod tests {
     }
 
     #[test]
+    fn pressure_round_trips() {
+        let mut doc = StrokesDoc::new();
+        doc.begin_stroke();
+        doc.push_point(0.0, 0.0, 0.25);
+        doc.push_point(1.0, 1.0, 0.50);
+        doc.push_point(2.0, 2.0, 0.75);
+        doc.end_stroke();
+
+        let bytes = doc.encode();
+        let restored = StrokesDoc::from_bytes(&bytes);
+        assert_eq!(
+            collect_strokes_with_pressure(&restored),
+            vec![(
+                vec![0.0, 0.0, 1.0, 1.0, 2.0, 2.0],
+                vec![0.25, 0.50, 0.75],
+            )]
+        );
+    }
+
+    #[test]
+    fn legacy_stroke_without_pressures_defaults_to_one() {
+        // Build a doc that mimics what a pre-C3 app version would
+        // have written: a stroke with a `points` array but no
+        // `pressures` field at all. We can't call begin_stroke /
+        // push_point (those always create the pressures field now),
+        // so we poke the doc directly at the yrs level.
+        let doc = StrokesDoc::new();
+        {
+            let mut tx = doc.doc.transact_mut();
+            let len = doc.strokes.len(&tx);
+            let stroke_map = doc
+                .strokes
+                .insert(&mut tx, len, MapPrelim::default());
+            stroke_map.insert(
+                &mut tx,
+                FIELD_ID,
+                Any::from("legacy_stroke".to_string()),
+            );
+            stroke_map.insert(&mut tx, FIELD_TOMBSTONED, Any::Bool(false));
+            let points = stroke_map.insert(&mut tx, FIELD_POINTS, ArrayPrelim::default());
+            for v in [10.0_f64, 20.0, 30.0, 40.0] {
+                points.push_back(&mut tx, Any::Number(v));
+            }
+            // Deliberately no FIELD_PRESSURES insert.
+        }
+
+        let collected = collect_strokes_with_pressure(&doc);
+        assert_eq!(collected.len(), 1);
+        let (points, pressures) = &collected[0];
+        assert_eq!(points, &vec![10.0, 20.0, 30.0, 40.0]);
+        // Two (x, y) pairs → two fallback pressure entries.
+        assert_eq!(pressures, &vec![1.0, 1.0]);
+    }
+
+    #[test]
+    fn short_pressures_array_pads_with_fallback() {
+        // A stroke whose pressures array is shorter than the point
+        // count (e.g. a crashed write or a malformed remote update)
+        // should still surface every point, with missing tail
+        // pressures padded to the fallback.
+        let doc = StrokesDoc::new();
+        {
+            let mut tx = doc.doc.transact_mut();
+            let len = doc.strokes.len(&tx);
+            let stroke_map = doc
+                .strokes
+                .insert(&mut tx, len, MapPrelim::default());
+            stroke_map.insert(
+                &mut tx,
+                FIELD_ID,
+                Any::from("short_pressures".to_string()),
+            );
+            stroke_map.insert(&mut tx, FIELD_TOMBSTONED, Any::Bool(false));
+            let points = stroke_map.insert(&mut tx, FIELD_POINTS, ArrayPrelim::default());
+            for v in [0.0_f64, 0.0, 1.0, 1.0, 2.0, 2.0] {
+                points.push_back(&mut tx, Any::Number(v));
+            }
+            let pressures = stroke_map
+                .insert(&mut tx, FIELD_PRESSURES, ArrayPrelim::default());
+            // Only the first sample has a pressure entry.
+            pressures.push_back(&mut tx, Any::Number(0.4_f64));
+        }
+
+        let collected = collect_strokes_with_pressure(&doc);
+        assert_eq!(collected.len(), 1);
+        let (_, pressures) = &collected[0];
+        assert_eq!(pressures, &vec![0.4, 1.0, 1.0]);
+    }
+
+    #[test]
     fn multiple_strokes_keep_their_order() {
         let mut doc = StrokesDoc::new();
         doc.begin_stroke();
-        doc.push_point(1.0, 1.0);
+        doc.push_point(1.0, 1.0, 1.0);
         doc.end_stroke();
         doc.begin_stroke();
-        doc.push_point(2.0, 2.0);
-        doc.push_point(3.0, 3.0);
+        doc.push_point(2.0, 2.0, 1.0);
+        doc.push_point(3.0, 3.0, 1.0);
         doc.end_stroke();
 
         assert_eq!(
@@ -273,7 +440,7 @@ mod tests {
     #[test]
     fn push_point_without_begin_stroke_is_a_noop() {
         let mut doc = StrokesDoc::new();
-        doc.push_point(7.0, 8.0);
+        doc.push_point(7.0, 8.0, 1.0);
         assert!(collect_strokes(&doc).is_empty());
     }
 
@@ -281,7 +448,7 @@ mod tests {
     fn tombstone_all_hides_existing_strokes() {
         let mut doc = StrokesDoc::new();
         doc.begin_stroke();
-        doc.push_point(1.0, 1.0);
+        doc.push_point(1.0, 1.0, 1.0);
         doc.end_stroke();
         assert_eq!(collect_strokes(&doc).len(), 1);
 
@@ -289,7 +456,7 @@ mod tests {
         assert!(collect_strokes(&doc).is_empty());
         // But new strokes after a clear should still render.
         doc.begin_stroke();
-        doc.push_point(5.0, 5.0);
+        doc.push_point(5.0, 5.0, 1.0);
         doc.end_stroke();
         assert_eq!(collect_strokes(&doc), vec![vec![5.0, 5.0]]);
     }
@@ -301,19 +468,19 @@ mod tests {
         // strokes (yrs CRDT property).
         let mut base = StrokesDoc::new();
         base.begin_stroke();
-        base.push_point(0.0, 0.0);
+        base.push_point(0.0, 0.0, 1.0);
         base.end_stroke();
         let base_bytes = base.encode();
 
         let mut a = StrokesDoc::from_bytes(&base_bytes);
         a.begin_stroke();
-        a.push_point(1.0, 1.0);
+        a.push_point(1.0, 1.0, 1.0);
         a.end_stroke();
         let a_bytes = a.encode();
 
         let mut b = StrokesDoc::from_bytes(&base_bytes);
         b.begin_stroke();
-        b.push_point(2.0, 2.0);
+        b.push_point(2.0, 2.0, 1.0);
         b.end_stroke();
         let b_bytes = b.encode();
 

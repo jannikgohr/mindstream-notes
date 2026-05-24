@@ -212,7 +212,7 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
         external fun setSurface(surface: Surface, width: Int, height: Int)
         external fun resizeSurface(width: Int, height: Int)
         external fun clearSurface()
-        external fun pushPoint(x: Float, y: Float, action: Int)
+        external fun pushPoint(x: Float, y: Float, pressure: Float, action: Int)
 
         /**
          * Hands Rust a GlobalRef to the Drawing class so render-thread
@@ -370,22 +370,40 @@ private class DrawingSurfaceView(context: Context) :
         // Drop these once the pipeline is verified end-to-end.
         Log.d(
             "MindstreamDrawing",
-            "onTouchEvent action=$action history=${event.historySize} x=${event.x} y=${event.y}"
+            "onTouchEvent action=$action history=${event.historySize} x=${event.x} y=${event.y} p=${event.pressure}"
         )
         // Historical samples are the buffered digitizer reads between
         // the previous frame and this MotionEvent batch — replaying
         // them is what gets us the full pen sample rate instead of the
         // ~60Hz vsync rate. Iterate in order, then read the current
         // sample fields last so the stroke ends at the freshest point.
+        // Pressure: AXIS_PRESSURE is 0..1 for stylus + force-touch
+        // capable screens. Devices without pressure sensing report
+        // 1.0 by Android convention, but a stray 0.0 (some emulators,
+        // some HID drivers) would render future variable-width
+        // strokes as invisible hairlines — substitute the same 1.0
+        // here so the Rust side never sees the zero.
         val historySize = event.historySize
         for (h in 0 until historySize) {
             Drawing.pushPoint(
                 event.getHistoricalX(h),
                 event.getHistoricalY(h),
+                sanitizePressure(event.getHistoricalPressure(h)),
                 action
             )
         }
-        Drawing.pushPoint(event.x, event.y, action)
+        Drawing.pushPoint(
+            event.x,
+            event.y,
+            sanitizePressure(event.pressure),
+            action
+        )
         return true
+    }
+
+    private fun sanitizePressure(raw: Float): Float {
+        if (raw.isNaN() || raw <= 0f) return 1f
+        if (raw > 1f) return 1f
+        return raw
     }
 }
