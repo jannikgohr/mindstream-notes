@@ -26,6 +26,7 @@ use std::ptr::NonNull;
 use bytemuck::{Pod, Zeroable};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
+use super::page::{self, PageSize, ViewTransform};
 use super::surface::AndroidWindow;
 use super::ui::UiOutput;
 
@@ -58,6 +59,11 @@ pub struct PersistentGpu {
     /// thereafter — `egui_renderer` is compiled against this format,
     /// changing it later would require rebuilding the renderer.
     surface_format: wgpu::TextureFormat,
+    /// Bind group layout for the view uniform (group 0 of the line
+    /// pipeline). Owned here because the pipeline references it; the
+    /// matching bind group lives in SurfaceBoundState (it points at
+    /// the per-surface uniform buffer).
+    view_bind_group_layout: wgpu::BindGroupLayout,
     pipeline: wgpu::RenderPipeline,
     egui_renderer: egui_wgpu::Renderer,
 }
@@ -76,6 +82,19 @@ pub struct SurfaceBoundState {
     vertex_capacity: u64,
     width: u32,
     height: u32,
+    /// Page-coord ↔ surface-pixel mapping. Recomputed on every
+    /// resize so rotations re-fit the page. Pan/zoom (D6) will
+    /// stop deriving this from surface size and start mutating it
+    /// directly from gesture events.
+    view_transform: ViewTransform,
+    /// GPU mirror of `view_transform`. Re-uploaded whenever
+    /// `view_transform` changes.
+    view_uniform_buffer: wgpu::Buffer,
+    /// Binds `view_uniform_buffer` to group 0 of the line pipeline.
+    view_bind_group: wgpu::BindGroup,
+    /// Page size used for the current surface (per the page module's
+    /// default). C1 makes this per-note.
+    page: PageSize,
 }
 
 impl SurfaceBoundState {
@@ -88,15 +107,22 @@ impl SurfaceBoundState {
         self.config.width = width;
         self.config.height = height;
         self.surface.configure(&persistent.device, &self.config);
+        // Re-fit the page to the new surface size and push the
+        // updated uniform to the GPU so the next render uses the
+        // correct mapping.
+        self.view_transform = ViewTransform::fit_in_surface(self.page, width as f32, height as f32);
+        persistent.queue.write_buffer(
+            &self.view_uniform_buffer,
+            0,
+            bytemuck::bytes_of(&self.view_transform.as_uniform()),
+        );
     }
 
-    /// Convert a pixel coordinate on the surface (origin top-left)
-    /// to wgpu NDC space (origin centre, Y up, [-1, 1]). Will be
-    /// replaced by a page-coordinate transform in C0.
-    pub fn to_ndc(&self, x: f32, y: f32) -> [f32; 2] {
-        let w = self.width.max(1) as f32;
-        let h = self.height.max(1) as f32;
-        [(x / w) * 2.0 - 1.0, 1.0 - (y / h) * 2.0]
+    /// Convert a surface-pixel touch coordinate into the page
+    /// coordinate value we store in the vertex buffer. Inverse of
+    /// the GPU transform applied in the line shader.
+    pub fn surface_to_page(&self, x: f32, y: f32) -> [f32; 2] {
+        self.view_transform.surface_to_page(x, y)
     }
 
     pub fn size_px(&self) -> (u32, u32) {
@@ -196,9 +222,10 @@ pub async fn build_first_time(
         label: Some("drawing-shader"),
         source: wgpu::ShaderSource::Wgsl(include_str!("line.wgsl").into()),
     });
+    let view_bind_group_layout = create_view_bind_group_layout(&device);
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("drawing-pipeline-layout"),
-        bind_group_layouts: &[],
+        bind_group_layouts: &[&view_bind_group_layout],
         push_constant_ranges: &[],
     });
     let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -239,12 +266,25 @@ pub async fn build_first_time(
     // color format, optional depth format, msaa samples, dithering.
     let egui_renderer = egui_wgpu::Renderer::new(&device, surface_format, None, 1, false);
 
+    // Initial page + view transform. Resize() will rebuild the
+    // transform whenever the surface changes size.
+    let page = page::DEFAULT_PAGE;
+    let view_transform =
+        ViewTransform::fit_in_surface(page, width.max(1) as f32, height.max(1) as f32);
+    let view_uniform_buffer = create_view_uniform_buffer(&device, &view_transform);
+    let view_bind_group = create_view_bind_group(
+        &device,
+        &view_bind_group_layout,
+        &view_uniform_buffer,
+    );
+
     let persistent = PersistentGpu {
         instance,
         adapter,
         device,
         queue,
         surface_format,
+        view_bind_group_layout,
         pipeline,
         egui_renderer,
     };
@@ -256,6 +296,10 @@ pub async fn build_first_time(
         vertex_capacity: 0,
         width,
         height,
+        view_transform,
+        view_uniform_buffer,
+        view_bind_group,
+        page,
     };
     Ok((persistent, surface_state))
 }
@@ -302,6 +346,16 @@ pub async fn build_surface_only(
     };
     surface.configure(&persistent.device, &config);
 
+    let page = page::DEFAULT_PAGE;
+    let view_transform =
+        ViewTransform::fit_in_surface(page, width.max(1) as f32, height.max(1) as f32);
+    let view_uniform_buffer = create_view_uniform_buffer(&persistent.device, &view_transform);
+    let view_bind_group = create_view_bind_group(
+        &persistent.device,
+        &persistent.view_bind_group_layout,
+        &view_uniform_buffer,
+    );
+
     Ok(SurfaceBoundState {
         surface,
         _window: window,
@@ -310,6 +364,55 @@ pub async fn build_surface_only(
         vertex_capacity: 0,
         width,
         height,
+        view_transform,
+        view_uniform_buffer,
+        view_bind_group,
+        page,
+    })
+}
+
+// ---------- view-uniform / bind-group helpers ----------
+
+fn create_view_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("drawing-view-bind-group-layout"),
+        entries: &[wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::VERTEX,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        }],
+    })
+}
+
+fn create_view_uniform_buffer(
+    device: &wgpu::Device,
+    view_transform: &ViewTransform,
+) -> wgpu::Buffer {
+    use wgpu::util::DeviceExt;
+    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("drawing-view-uniform"),
+        contents: bytemuck::bytes_of(&view_transform.as_uniform()),
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+    })
+}
+
+fn create_view_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    buffer: &wgpu::Buffer,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("drawing-view-bind-group"),
+        layout,
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: buffer.as_entire_binding(),
+        }],
     })
 }
 
@@ -411,6 +514,11 @@ pub fn render_frame(
         if let Some(vbuf) = surface_state.vertex_buffer.as_ref() {
             if !segments.is_empty() {
                 pass.set_pipeline(&persistent.pipeline);
+                // Bind the view uniform (page → screen → NDC) so the
+                // line shader can transform our page-coordinate
+                // vertices. Vertex data itself stays constant
+                // across rotations / re-attaches.
+                pass.set_bind_group(0, &surface_state.view_bind_group, &[]);
                 pass.set_vertex_buffer(0, vbuf.slice(..));
                 pass.draw(0..segments.len() as u32, 0..1);
             }
