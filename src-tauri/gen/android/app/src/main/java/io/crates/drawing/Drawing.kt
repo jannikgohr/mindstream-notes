@@ -217,6 +217,7 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
             y: Float,
             pressure: Float,
             toolType: Int,
+            buttons: Int,
             action: Int
         )
 
@@ -370,19 +371,25 @@ private class DrawingSurfaceView(context: Context) :
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         val action = event.actionMasked
-        // Tool type comes from the active pointer. We only handle
-        // single-pointer gestures, so pointer index 0 is always the
-        // one we care about. It doesn't change between an event's
-        // historical samples and its current sample (Android batches
-        // them per-pointer), so read it once and reuse.
+        // Tool type + button state come from the event-level (not
+        // historical-sample-level) accessors — Android batches both
+        // per-pointer rather than per-historical-sample, so we read
+        // them once and reuse for the whole sweep. `buttonState` is
+        // the bitmask of `BUTTON_*` flags currently held; for the
+        // S Pen, BUTTON_STYLUS_PRIMARY (0x20) tracks the side
+        // button. Forwarded raw to Rust which does the bit tests.
         val toolType = event.getToolType(0)
+        val buttons = event.buttonState
         // Diagnostic during POC bring-up: confirms touches actually
-        // reach the SurfaceView even if nothing visible appears. The
-        // matching Rust-side log lives in render.rs::push_sample.
-        // Drop these once the pipeline is verified end-to-end.
+        // reach the SurfaceView even if nothing visible appears, and
+        // exposes the raw tool/button values the device's driver is
+        // actually reporting (handy for "is my S Pen side button
+        // detected?" sanity checks). The matching Rust-side log
+        // lives in render.rs::push_sample. Drop these once the
+        // pipeline is verified end-to-end.
         Log.d(
             "MindstreamDrawing",
-            "onTouchEvent action=$action history=${event.historySize} x=${event.x} y=${event.y} p=${event.pressure} tool=$toolType"
+            "onTouchEvent action=$action history=${event.historySize} x=${event.x} y=${event.y} p=${event.pressure} tool=$toolType buttons=0x${buttons.toString(16)}"
         )
         // Historical samples are the buffered digitizer reads between
         // the previous frame and this MotionEvent batch — replaying
@@ -402,6 +409,7 @@ private class DrawingSurfaceView(context: Context) :
                 event.getHistoricalY(h),
                 sanitizePressure(event.getHistoricalPressure(h)),
                 toolType,
+                buttons,
                 action
             )
         }
@@ -410,6 +418,7 @@ private class DrawingSurfaceView(context: Context) :
             event.y,
             sanitizePressure(event.pressure),
             toolType,
+            buttons,
             action
         )
         return true

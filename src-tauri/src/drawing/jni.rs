@@ -6,7 +6,7 @@
 //!     setSurface(Surface, w, h)
 //!     resizeSurface(w, h)
 //!     clearSurface()
-//!     pushPoint(x, y, pressure, toolType, action)
+//!     pushPoint(x, y, pressure, toolType, buttons, action)
 //!
 //!     Exposed as `Java_io_crates_drawing_Drawing_00024Companion_*`
 //!     symbols. Package + class + `$Companion` are load-bearing for
@@ -126,8 +126,8 @@ pub extern "system" fn Java_io_crates_drawing_Drawing_00024Companion_clearSurfac
     render::clear_surface();
 }
 
-/// `Drawing.Companion.pushPoint(x, y, pressure, toolType, action)` —
-/// a single MotionEvent sample (or one element of the
+/// `Drawing.Companion.pushPoint(x, y, pressure, toolType, buttons, action)`
+/// — a single MotionEvent sample (or one element of the
 /// historical-sample sweep).
 ///
 ///   - `pressure` is `MotionEvent.AXIS_PRESSURE` in 0..1 (1.0 for
@@ -136,6 +136,12 @@ pub extern "system" fn Java_io_crates_drawing_Drawing_00024Companion_clearSurfac
 ///   - `tool_type` mirrors `MotionEvent.TOOL_TYPE_*` (0 unknown,
 ///     1 finger, 2 stylus, 3 mouse, 4 eraser). Converted to
 ///     [`ToolKind`] here.
+///   - `buttons` is `MotionEvent.buttonState` — a bitmask of
+///     `BUTTON_*` flags. Forwarded raw into `Sample.buttons`;
+///     bit tests live in `crate::drawing::input::buttons` /
+///     [`Sample::has_stylus_primary_button`]. Android's button
+///     state is per-event, not per-historical-sample, so the
+///     Kotlin side passes the same value for the whole batch.
 ///   - `action` uses Android's `MotionEvent.ACTION_*` integer
 ///     constants verbatim. Converted to [`SampleAction`] here;
 ///     unrecognised values (e.g. ACTION_HOVER_MOVE) are dropped
@@ -155,6 +161,7 @@ pub extern "system" fn Java_io_crates_drawing_Drawing_00024Companion_pushPoint(
     y: jfloat,
     pressure: jfloat,
     tool_type: jint,
+    buttons: jint,
     action: jint,
 ) {
     let Some(action) = SampleAction::from_raw(action) else {
@@ -169,6 +176,11 @@ pub extern "system" fn Java_io_crates_drawing_Drawing_00024Companion_pushPoint(
         y,
         pressure,
         tool: ToolKind::from_raw(tool_type),
+        // Reinterpret rather than sign-extend: `MotionEvent
+        // .buttonState` is an Int in Kotlin but is treated as an
+        // unsigned bitmask. `as u32` on a negative jint would set
+        // the high bits unexpectedly; cast through the bit pattern.
+        buttons: buttons as u32,
         action,
     });
 }

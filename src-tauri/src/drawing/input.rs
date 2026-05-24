@@ -11,10 +11,14 @@
 //!
 //! Notably absent (per the roadmap, deferred until they have a
 //! consumer):
-//!   - `buttons: StylusButtons` (held barrel buttons) — wired in C6.
 //!   - `StylusGesture` (discrete Apple-Pencil-style events) — D8.
 //!   - `tilt`, `azimuth` — open; revisit once the smoothing / brush
 //!     pipeline can use them.
+//!
+//! Stylus buttons (per C6) are present as `Sample.buttons: u32` — a
+//! raw bitmask matching `android.view.MotionEvent.BUTTON_*` so the
+//! JNI translation is a transparent forward. Promote to a typed
+//! `bitflags` once a second consumer (D8's mapping layer) appears.
 //!
 //! Lives in a host-buildable file (no `cfg(target_os = "android")`)
 //! so the conversion helpers + enum shape can be unit-tested
@@ -92,6 +96,23 @@ impl SampleAction {
     }
 }
 
+/// Bit values for `Sample.buttons` — mirror
+/// `android.view.MotionEvent.BUTTON_*` constants verbatim so the
+/// JNI side can forward `event.buttonState` without translation.
+/// We only expose the bits we currently care about; the others sit
+/// in the bitmask unread until someone wants them.
+pub mod buttons {
+    /// S Pen / Surface Pen / Wacom side barrel button — the most
+    /// common "modifier key on a pen" surface. Held while drawing
+    /// = the de-facto "switch to eraser" gesture on Samsung, the
+    /// "right-click" surface on Surface Pen, etc.
+    pub const STYLUS_PRIMARY: u32 = 0x20;
+    /// Rare second barrel button (some Wacom pens). Wired through
+    /// so a future toolbar can bind it, even though no shipping
+    /// device under test exercises it today.
+    pub const STYLUS_SECONDARY: u32 = 0x40;
+}
+
 /// One pointer sample in surface-pixel coordinates.
 ///
 /// "Surface-pixel" rather than page coordinates because the render
@@ -108,7 +129,24 @@ pub struct Sample {
     /// Android Kotlin side does this for finger touches).
     pub pressure: f32,
     pub tool: ToolKind,
+    /// Held-button bitmask, raw from the platform (Android's
+    /// `MotionEvent.buttonState`). Bit values are in
+    /// [`buttons`]; helpers like
+    /// [`Sample::has_stylus_primary_button`] do the bit test.
+    /// Always 0 on platforms / events that don't carry button
+    /// state (most finger touches).
+    pub buttons: u32,
     pub action: SampleAction,
+}
+
+impl Sample {
+    /// True when the stylus's primary barrel button is being held
+    /// during this sample. Used by the renderer at ACTION_DOWN to
+    /// pick a debug colour; D8 will wire this into a real
+    /// UX-policy mapping (e.g. "button held = eraser mode").
+    pub fn has_stylus_primary_button(&self) -> bool {
+        self.buttons & buttons::STYLUS_PRIMARY != 0
+    }
 }
 
 #[cfg(test)]
@@ -148,5 +186,34 @@ mod tests {
         assert_eq!(SampleAction::from_raw(4), None);
         assert_eq!(SampleAction::from_raw(7), None);
         assert_eq!(SampleAction::from_raw(-1), None);
+    }
+
+    fn sample_with_buttons(buttons: u32) -> Sample {
+        Sample {
+            x: 0.0,
+            y: 0.0,
+            pressure: 1.0,
+            tool: ToolKind::Stylus,
+            buttons,
+            action: SampleAction::Down,
+        }
+    }
+
+    #[test]
+    fn stylus_primary_button_detected_when_bit_set() {
+        assert!(sample_with_buttons(buttons::STYLUS_PRIMARY).has_stylus_primary_button());
+        // Mixed with other bits (e.g. the system also reporting
+        // BUTTON_PRIMARY = 0x1 for the pen tip touch on some devices)
+        // — still detected.
+        assert!(sample_with_buttons(buttons::STYLUS_PRIMARY | 0x1).has_stylus_primary_button());
+    }
+
+    #[test]
+    fn stylus_primary_button_absent_when_bit_clear() {
+        // No buttons.
+        assert!(!sample_with_buttons(0).has_stylus_primary_button());
+        // Other buttons held but not stylus-primary.
+        assert!(!sample_with_buttons(buttons::STYLUS_SECONDARY).has_stylus_primary_button());
+        assert!(!sample_with_buttons(0x1 /* BUTTON_PRIMARY */).has_stylus_primary_button());
     }
 }
