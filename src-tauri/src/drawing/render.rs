@@ -153,19 +153,16 @@ fn sender_slot() -> &'static Mutex<Option<Sender<Msg>>> {
     SENDER.get_or_init(|| Mutex::new(None))
 }
 
+/// Send a message to the render thread, lazily spawning the thread
+/// on first call. This is the single entry point all public
+/// APIs (and the JNI exports) go through.
+///
+/// Lazy spawn here, not in `set_surface`, because `drawing_show`
+/// calls `set_active_note` BEFORE `call_show` — without the lazy
+/// spawn the SetActiveNote message lands in a None sender slot
+/// and gets dropped, leaving `active_note_id` unset and the first
+/// surfaceCreated → render rendering an empty doc.
 fn send(msg: Msg) {
-    if let Ok(slot) = sender_slot().lock() {
-        if let Some(tx) = slot.as_ref() {
-            let _ = tx.send(msg);
-        }
-    }
-}
-
-// ---------- public API (called from JNI exports in jni.rs) ----------
-
-/// JNI entrypoint: hand a freshly-acquired ANativeWindow over to
-/// the render thread, spawning it lazily on first call.
-pub fn set_surface(native_window: NonNull<ndk_sys::ANativeWindow>, width: u32, height: u32) {
     let mut slot = match sender_slot().lock() {
         Ok(g) => g,
         Err(_) => return,
@@ -195,12 +192,20 @@ pub fn set_surface(native_window: NonNull<ndk_sys::ANativeWindow>, width: u32, h
         *slot = Some(tx);
     }
     if let Some(tx) = slot.as_ref() {
-        let _ = tx.send(Msg::SurfaceReady {
-            native_window,
-            width,
-            height,
-        });
+        let _ = tx.send(msg);
     }
+}
+
+// ---------- public API (called from JNI exports in jni.rs) ----------
+
+/// JNI entrypoint: hand a freshly-acquired ANativeWindow over to
+/// the render thread.
+pub fn set_surface(native_window: NonNull<ndk_sys::ANativeWindow>, width: u32, height: u32) {
+    send(Msg::SurfaceReady {
+        native_window,
+        width,
+        height,
+    });
 }
 
 pub fn resize_surface(width: u32, height: u32) {

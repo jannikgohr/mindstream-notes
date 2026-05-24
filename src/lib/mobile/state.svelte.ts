@@ -13,6 +13,7 @@
  * and writes through the tree store.
  */
 
+import { pushState } from '$app/navigation';
 import { setNoteFavourite } from '$lib/stores/tree.svelte';
 import { tree } from '$lib/stores/tree.svelte';
 import { setActiveNote } from '$lib/state.svelte';
@@ -126,67 +127,38 @@ export function setMobileScreen(screen: MobileScreen) {
 // `Activity.finish()` whenever `webView.canGoBack()` is false, and
 // without history entries it always was.
 //
-// The fix is the standard SPA pattern: every navigation that changes
-// `mobileState.screen` ALSO pushes a `history.pushState` entry, and a
-// `popstate` listener mirrors browser-back-pops (whether triggered by
-// Android, an in-app back arrow calling `navigateBack`, or the egui
-// toolbar's Back button) into `setMobileScreen` + `setActiveNote`.
+// Fix: push a history entry every time the user navigates from home
+// to an editor, and treat any popstate as "go back to home". The
+// nav is currently 1-level (home ↔ editor) so we don't need to read
+// state off the popstate event — any pop means we're coming back
+// from an editor.
 //
-// State shape on each history entry: `{ mobileScreen: MobileScreen,
-// noteId: string | null }`. Anything else still in history (e.g.
-// SvelteKit's own route entries) is ignored — we read the field by
-// name and fall back to 'home' if absent.
-
-type HistoryEntry = {
-  mobileScreen: MobileScreen;
-  noteId: string | null;
-};
+// Why SvelteKit's `pushState` and not `window.history.pushState`:
+// SvelteKit wraps the history API to drive its own client-side
+// router, and direct calls trigger an `Avoid using history.pushState`
+// warning at runtime. SvelteKit's `pushState` calls into the same
+// underlying history API but coordinates with the router. The url
+// argument is `''` because we don't want SvelteKit to navigate to a
+// new route — just record a history entry our popstate handler can
+// pop.
 
 let historyInstalled = false;
 
 /**
- * Install the popstate listener and seed the current history entry
- * with a `home` state so a back press while on home doesn't fire a
- * popstate with `null` state (which would silently skip our handler
- * and let the activity finish — which IS what we want on home, but
- * we want it via a controlled path rather than a quirk of state
- * absence).
- *
- * Safe to call multiple times — only installs once. Designed to run
- * from `MobileLayout.onMount`.
+ * Install the popstate listener. Safe to call multiple times —
+ * only installs once. Designed to run from `MobileLayout.onMount`.
  */
 export function installMobileHistoryNav(): () => void {
   if (typeof window === 'undefined') return () => {};
   if (historyInstalled) return () => {};
   historyInstalled = true;
 
-  // Replace the current entry with a typed home state so future
-  // pops back to "the initial entry" land cleanly. If the page was
-  // loaded with a different initial state (deep link, reload), we
-  // keep that — only seed when the field is missing.
-  const current = window.history.state as HistoryEntry | null;
-  if (!current || typeof current.mobileScreen !== 'string') {
-    window.history.replaceState(
-      { mobileScreen: 'home', noteId: null } satisfies HistoryEntry,
-      ''
-    );
-  }
-
-  const onPopState = (event: PopStateEvent) => {
-    const state = event.state as HistoryEntry | null;
-    const targetScreen: MobileScreen =
-      state && typeof state.mobileScreen === 'string' ? state.mobileScreen : 'home';
-    const targetNote = state?.noteId ?? null;
-    // Order matters: set the note BEFORE the screen so the editor
-    // mounts against the right note id. Going home is the inverse
-    // — clear the note after flipping screens so the editor's
-    // onDestroy sees a non-null id during its cleanup.
-    if (targetScreen === 'editor') {
-      if (targetNote) setActiveNote(targetNote);
-      setMobileScreen('editor');
-    } else {
-      setMobileScreen('home');
-    }
+  const onPopState = () => {
+    // 1-level nav: any pop means we're coming back from an
+    // editor screen. If we ever add deeper nesting (modal /
+    // settings / multi-step flows) on mobile, track the current
+    // depth in pushState's state object and dispatch per-pop.
+    setMobileScreen('home');
   };
   window.addEventListener('popstate', onPopState);
   return () => {
@@ -196,20 +168,22 @@ export function installMobileHistoryNav(): () => void {
 }
 
 /**
- * Push a new history entry for the editor screen and switch state to
- * match. Use this from anything that "opens a note" — the home note
- * list, a wikilink follow inside another editor, the FAB after
- * creating a fresh note. Calling it while already on the same note
- * still pushes a new entry — match the existing `openNote` semantics.
+ * Push a new history entry for the editor screen and switch state
+ * to match. Use this from anything that "opens a note" — the home
+ * note list, a wikilink follow, the FAB after creating a fresh
+ * note. Calling it while already on the same note still pushes a
+ * new entry, matching the existing `openNote` semantics.
  */
 export function navigateToEditor(noteId: string) {
   setActiveNote(noteId);
   setMobileScreen('editor');
   if (typeof window !== 'undefined') {
-    window.history.pushState(
-      { mobileScreen: 'editor', noteId } satisfies HistoryEntry,
-      ''
-    );
+    // Empty URL = keep the current SvelteKit route (we're not
+    // route-navigating, just recording a history entry our
+    // popstate handler can pop). Empty state object because the
+    // popstate handler doesn't currently read it — we only track
+    // 1-level nav.
+    pushState('', {});
   }
 }
 
