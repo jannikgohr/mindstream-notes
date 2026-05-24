@@ -104,6 +104,13 @@
 
   onMount(async () => {
     if (!isAndroid()) return;
+    // Open-latency timing markers — these go into the WebView's
+    // console, which Android relays into logcat under the
+    // "chromium" / "console" tags. Combined with the Rust-side
+    // `[drawing.perf]` logs they give a full picture: JS-perceived
+    // loadNote + drawingShow durations vs. wgpu init vs. surface
+    // attach. Strip these when the perf investigation is done.
+    const tMountStart = performance.now();
     // The native egui toolbar's Back button bounces through Rust →
     // Kotlin → webView.evaluateJavascript, which dispatches this
     // CustomEvent on the WebView's window. We respond by popping
@@ -131,6 +138,7 @@
     // surface up so the first rendered frame already shows the
     // existing strokes. A brand-new note has yrs_state === [] and
     // the Rust side treats that as a fresh StrokesDoc.
+    const tLoadStart = performance.now();
     let initialState: number[] = [];
     try {
       const note = await loadNote(noteId);
@@ -141,13 +149,22 @@
       // (and lose nothing) than fail the whole open.
       console.warn('[ink] loadNote failed; opening with empty state', err);
     }
+    const tLoadEnd = performance.now();
     // noteId selects which per-note CanvasDocument the render
     // thread pulls strokes from; the active-note swap happens
     // before the SurfaceView comes up so the first frame already
     // shows the right note's content (rather than briefly the
     // previous one).
+    const tShowStart = performance.now();
     void drawingShow(noteId, initialState);
+    const tShowEnd = performance.now();
     mountedAndroid = true;
+    console.log(
+      `[ink-open] loadNote=${(tLoadEnd - tLoadStart).toFixed(1)}ms ` +
+        `state_bytes=${initialState.length} ` +
+        `drawingShow_ipc=${(tShowEnd - tShowStart).toFixed(1)}ms ` +
+        `total_to_show=${(tShowEnd - tMountStart).toFixed(1)}ms`
+    );
   });
 
   onDestroy(() => {

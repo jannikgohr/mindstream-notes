@@ -201,8 +201,16 @@ impl CanvasDocument {
     }
 
     fn from_bytes(bytes: &[u8]) -> Self {
+        // Timing — scales with stroke count, so heavy notes might
+        // measurably stall the first frame after open. Logging
+        // here makes it obvious when the rebuild itself is the
+        // perf bottleneck vs. wgpu init or IPC overhead.
+        let t_total = std::time::Instant::now();
+        let t_decode = std::time::Instant::now();
         let strokes_doc = StrokesDoc::from_bytes(bytes);
+        let decode_ms = t_decode.elapsed();
         let mut segments = Vec::new();
+        let mut stroke_count: usize = 0;
         // Each stroke's points are [x0, y0, x1, y1, …]; emit
         // (prev → curr) line-list pairs for the GPU. Single-point
         // strokes (no second sample) generate no segments — the
@@ -214,6 +222,7 @@ impl CanvasDocument {
         // renders pixel-equivalently to the same doc replayed
         // sample-by-sample.
         strokes_doc.for_each_stroke(|view| {
+            stroke_count += 1;
             let color = unpack_color(view.color);
             let mut prev: Option<(f32, f32, f32)> = None;
             for (i, chunk) in view.points.chunks_exact(2).enumerate() {
@@ -233,6 +242,14 @@ impl CanvasDocument {
                 prev = Some(curr);
             }
         });
+        log::info!(
+            "[drawing.perf] from_bytes TOTAL={:?} decode={:?} bytes={} strokes={} vertices={}",
+            t_total.elapsed(),
+            decode_ms,
+            bytes.len(),
+            stroke_count,
+            segments.len(),
+        );
         Self {
             strokes_doc,
             segments,
@@ -449,6 +466,11 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
     // Per-frame input batch handed to egui. Drained on each render
     // via std::mem::take.
     let mut egui_input = egui::RawInput::default();
+    // One-shot: log the duration of the very first successful
+    // render_frame. That's the "user-perceived first paint" cost,
+    // separate from the wgpu init logged elsewhere. Flipped to
+    // false after the first log so subsequent frames stay quiet.
+    let mut log_first_frame = true;
 
     loop {
         let first = match rx.recv() {
@@ -473,8 +495,18 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                     width,
                     height,
                 } => {
+                    // Mark SurfaceReady arrival — this is the
+                    // hand-off point between "Android UI thread
+                    // attached the SurfaceView" and "render thread
+                    // is doing wgpu work". The wallclock between
+                    // drawing_show (logged in mod.rs) and this line
+                    // is roughly the Kotlin runOnUiThread + addView
+                    // + layout-pass cost.
+                    let t_ready = std::time::Instant::now();
+                    let path: &str;
                     surface_state = None;
                     if persistent.is_none() {
+                        path = "first_time";
                         match pollster::block_on(pipeline::build_first_time(
                             window, width, height,
                         )) {
@@ -486,6 +518,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             Err(e) => log::error!("[drawing] build_first_time failed: {e:?}"),
                         }
                     } else {
+                        path = "surface_only";
                         let p = persistent.as_ref().unwrap();
                         match pollster::block_on(pipeline::build_surface_only(
                             p, window, width, height,
@@ -497,6 +530,10 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             Err(e) => log::error!("[drawing] build_surface_only failed: {e:?}"),
                         }
                     }
+                    log::info!(
+                        "[drawing.perf] SurfaceReady handled in {:?} (path={path} size={width}x{height})",
+                        t_ready.elapsed(),
+                    );
                 }
                 Msg::Resize { width, height } => {
                     if let (Some(p), Some(s)) = (persistent.as_ref(), surface_state.as_mut()) {
@@ -726,10 +763,20 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
         if let (Some(p), Some(s)) = (persistent.as_mut(), surface_state.as_mut()) {
             if needs_rebuild || dirty {
                 let segs = active_segments(&active_note_id, &documents);
+                let segs_len = segs.len();
                 let input = std::mem::take(&mut egui_input);
                 let (actions, ui_output) = canvas_ui.run(input, s.size_px());
+                let t_frame = std::time::Instant::now();
                 match pipeline::render_frame(p, s, segs, ui_output) {
                     Ok(()) => {
+                        if log_first_frame {
+                            log::info!(
+                                "[drawing.perf] first render_frame took {:?} (vertices={})",
+                                t_frame.elapsed(),
+                                segs_len,
+                            );
+                            log_first_frame = false;
+                        }
                         if actions.clear {
                             if let Some(id) = active_note_id.as_ref() {
                                 if let Some(doc) = documents.get_mut(id) {
