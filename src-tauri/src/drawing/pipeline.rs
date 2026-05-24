@@ -248,7 +248,12 @@ pub async fn build_first_time(
             compilation_options: Default::default(),
         }),
         primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::LineList,
+            // TriangleList — the render thread expands each pen
+            // segment into a 6-vertex quad (2 triangles) on the CPU
+            // so width can vary per endpoint with pressure. Front
+            // face / cull-mode are irrelevant because we don't cull
+            // (a stroke quad's winding flips with stroke direction).
+            topology: wgpu::PrimitiveTopology::TriangleList,
             strip_index_format: None,
             front_face: wgpu::FrontFace::Ccw,
             cull_mode: None,
