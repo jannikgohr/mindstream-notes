@@ -81,7 +81,7 @@ pub extern "system" fn Java_io_crates_drawing_Drawing_00024Companion_cacheJniCla
 /// render side.
 #[no_mangle]
 pub extern "system" fn Java_io_crates_drawing_Drawing_00024Companion_setSurface(
-    mut env: JNIEnv,
+    env: JNIEnv,
     _class: JClass,
     surface: JObject,
     width: jint,
