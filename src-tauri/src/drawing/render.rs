@@ -27,8 +27,44 @@ use std::time::Duration;
 
 use super::page::segment_quad_positions;
 use super::pipeline::{self, PersistentGpu, SurfaceBoundState, Vertex};
-use super::strokes_doc::StrokesDoc;
+use super::strokes_doc::{StrokesDoc, DEFAULT_COLOR};
 use super::ui::{self, CanvasUi};
+
+// MotionEvent.TOOL_TYPE_* constants, mirrored from Kotlin so we can
+// match on the raw int the JNI bridge forwards. Keep these in sync
+// with android.view.MotionEvent.
+const TOOL_TYPE_STYLUS: i32 = 2;
+const TOOL_TYPE_ERASER: i32 = 4;
+
+/// Debug palette for "is this stroke from the pen?" — pen strokes
+/// (TOOL_TYPE_STYLUS / TOOL_TYPE_ERASER, both of which the S Pen
+/// reports) render in this packed 0xAARRGGBB blue; anything else
+/// (finger, mouse, unknown) renders in [`DEFAULT_COLOR`] (black).
+/// D5 replaces this with a real user-chosen palette; until then it's
+/// a visual confirmation that pen detection works end-to-end.
+const PEN_DEBUG_COLOR: u32 = 0xFF00_66FF;
+
+/// Decide what colour a stroke should use, given the tool that
+/// started it. Pen-family tools get the debug blue; everything else
+/// gets the default black so finger doodles look the same as they
+/// always did.
+fn color_for_tool(tool_type: i32) -> u32 {
+    match tool_type {
+        TOOL_TYPE_STYLUS | TOOL_TYPE_ERASER => PEN_DEBUG_COLOR,
+        _ => DEFAULT_COLOR,
+    }
+}
+
+/// Unpack a 0xAARRGGBB stroke colour into the linear-RGBA `[f32; 4]`
+/// the WGSL pipeline expects (matches the no-sRGB surface format the
+/// renderer picks).
+fn unpack_color(color: u32) -> [f32; 4] {
+    let a = ((color >> 24) & 0xFF) as f32 / 255.0;
+    let r = ((color >> 16) & 0xFF) as f32 / 255.0;
+    let g = ((color >> 8) & 0xFF) as f32 / 255.0;
+    let b = (color & 0xFF) as f32 / 255.0;
+    [r, g, b, a]
+}
 
 /// Maximum stroke width in page units (1 unit = 1/144 inch ≈ 0.176 mm).
 /// A pen sample with `pressure == 1.0` renders at this width; lower
@@ -55,7 +91,9 @@ fn width_for_pressure(pressure: f32) -> f32 {
 }
 
 /// Adapt the host-testable [`segment_quad_positions`] math into the
-/// wgpu `Vertex` array shape the render pipeline consumes.
+/// wgpu `Vertex` array shape the render pipeline consumes. Colour is
+/// uniform across the six output vertices — the value the caller
+/// chose at `begin_stroke` time stays constant for the whole stroke.
 ///
 /// Joints between consecutive segments are not mitered — each quad
 /// is independent. For thin strokes (sub-pixel-scale widths) this is
@@ -66,9 +104,10 @@ fn tessellate_segment(
     p1: (f32, f32),
     w0: f32,
     w1: f32,
+    color: [f32; 4],
 ) -> [Vertex; 6] {
     let positions = segment_quad_positions(p0, p1, w0, w1);
-    positions.map(|position| Vertex { position })
+    positions.map(|position| Vertex { position, color })
 }
 
 /// Android MotionEvent action constants we care about. Mirrors
@@ -105,10 +144,14 @@ enum Msg {
         /// pressure" or "device doesn't report pressure" (finger
         /// touch on a non-pressure-sensing screen, Android's
         /// default for events without AXIS_PRESSURE). Stored as-is
-        /// on each point; future renderers (C4) apply width
-        /// modulation, future smoothers (D1) consume it as an
-        /// extra stroke-modeller channel.
+        /// on each point; the renderer applies width modulation via
+        /// [`width_for_pressure`].
         pressure: f32,
+        /// MotionEvent.TOOL_TYPE_* — used at ACTION_DOWN to decide
+        /// the stroke colour (see [`color_for_tool`]). MOVE/UP
+        /// samples carry the same value but the stroke's colour
+        /// was already fixed at DOWN time, so they're a no-op here.
+        tool_type: i32,
         action: i32,
     },
     Clear,
@@ -169,14 +212,16 @@ impl CanvasDocument {
         // strokes (no second sample) generate no segments — the
         // user lifted the pen without moving; nothing to draw.
         // Walk each stroke's (point, pressure) pairs and emit a
-        // tessellated quad per segment. Geometry is identical to
-        // what the live ACTION_MOVE handler emits, so a re-hydrated
-        // doc renders pixel-equivalently to the same doc replayed
+        // tessellated quad per segment, coloured by the stroke's
+        // stored colour. Geometry + colour are identical to what the
+        // live ACTION_MOVE handler emits, so a re-hydrated doc
+        // renders pixel-equivalently to the same doc replayed
         // sample-by-sample.
-        strokes_doc.for_each_stroke_points(|flat, pressures| {
+        strokes_doc.for_each_stroke(|view| {
+            let color = unpack_color(view.color);
             let mut prev: Option<(f32, f32, f32)> = None;
-            for (i, chunk) in flat.chunks_exact(2).enumerate() {
-                let curr_p = pressures.get(i).copied().unwrap_or(1.0);
+            for (i, chunk) in view.points.chunks_exact(2).enumerate() {
+                let curr_p = view.pressures.get(i).copied().unwrap_or(1.0);
                 let curr = (chunk[0], chunk[1], curr_p);
                 if let Some((px, py, pp)) = prev {
                     let w_prev = width_for_pressure(pp);
@@ -186,6 +231,7 @@ impl CanvasDocument {
                         (curr.0, curr.1),
                         w_prev,
                         w_curr,
+                        color,
                     ));
                 }
                 prev = Some(curr);
@@ -298,17 +344,18 @@ pub fn clear_surface() {
     }
 }
 
-pub fn push_sample(x: f32, y: f32, pressure: f32, action: i32) {
+pub fn push_sample(x: f32, y: f32, pressure: f32, tool_type: i32, action: i32) {
     // debug! rather than trace! so the per-sample stream is visible
     // under default logcat filters during POC bring-up. Drop back
     // to trace! once the input pipeline is fully verified.
     log::debug!(
-        "[drawing] push_sample x={x:.1} y={y:.1} p={pressure:.2} action={action}"
+        "[drawing] push_sample x={x:.1} y={y:.1} p={pressure:.2} tool={tool_type} action={action}"
     );
     send(Msg::Sample {
         x,
         y,
         pressure,
+        tool_type,
         action,
     });
 }
@@ -385,6 +432,13 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
     // in-flight stroke can't leak from one note into another.
     let mut last_point: Option<(f32, f32)> = None;
     let mut last_pressure: Option<f32> = None;
+    // Linear-RGBA colour for the currently-open stroke, chosen at
+    // ACTION_DOWN from the input tool type via [`color_for_tool`].
+    // Same lifecycle as `last_point` — None between strokes; set on
+    // DOWN; consumed on every MOVE's tessellation; cleared on UP /
+    // CANCEL / Clear / SetActiveNote so a leaked colour can't paint
+    // an unrelated note's stroke the wrong shade.
+    let mut current_stroke_color: Option<[f32; 4]> = None;
     // True while the in-progress gesture started inside the toolbar
     // region — mirror to egui so its buttons see the press, but
     // skip the line pipeline.
@@ -466,6 +520,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                     x,
                     y,
                     pressure,
+                    tool_type,
                     action,
                 } => {
                     let pos = px_to_egui(x, y);
@@ -484,6 +539,17 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                 stroke_suppressed = false;
                                 last_point = Some((x, y));
                                 last_pressure = Some(pressure);
+                                // Choose stroke colour from the input
+                                // tool: pen/eraser → debug blue,
+                                // finger / mouse / unknown → black.
+                                // Stored on both the doc (for
+                                // persistence + re-hydration) and as
+                                // unpacked linear-RGBA in
+                                // current_stroke_color (so MOVE
+                                // handlers don't re-unpack per
+                                // sample).
+                                let packed = color_for_tool(tool_type);
+                                current_stroke_color = Some(unpack_color(packed));
                                 // Open a fresh stroke in the active
                                 // doc and seed its points array with
                                 // the down sample. The first MOVE
@@ -496,7 +562,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                     let doc = documents
                                         .entry(id.clone())
                                         .or_insert_with(CanvasDocument::new);
-                                    doc.strokes_doc.begin_stroke();
+                                    doc.strokes_doc.begin_stroke(packed);
                                     let [px, py] = s.surface_to_page(x, y);
                                     doc.strokes_doc.push_point(px, py, pressure);
                                 }
@@ -509,11 +575,13 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                 if let (
                                     Some((px, py)),
                                     Some(pp),
+                                    Some(color),
                                     Some(s),
                                     Some(id),
                                 ) = (
                                     last_point,
                                     last_pressure,
+                                    current_stroke_color,
                                     surface_state.as_ref(),
                                     active_note_id.as_ref(),
                                 ) {
@@ -526,7 +594,9 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                         .entry(id.clone())
                                         .or_insert_with(CanvasDocument::new);
                                     // Render-side cache: tessellated
-                                    // pressure-tapered quad (2 tris).
+                                    // pressure-tapered quad (2 tris),
+                                    // coloured by the per-stroke
+                                    // colour chosen at DOWN time.
                                     let w_prev = width_for_pressure(pp);
                                     let w_curr = width_for_pressure(pressure);
                                     doc.segments.extend_from_slice(
@@ -535,6 +605,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                             (curr_page[0], curr_page[1]),
                                             w_prev,
                                             w_curr,
+                                            color,
                                         ),
                                     );
                                     // Source-of-truth side: append
@@ -566,6 +637,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             }
                             last_point = None;
                             last_pressure = None;
+                            current_stroke_color = None;
                             stroke_suppressed = false;
                             dirty = true;
                         }
@@ -581,6 +653,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                     }
                     last_point = None;
                     last_pressure = None;
+                    current_stroke_color = None;
                     dirty = true;
                 }
                 Msg::SetActiveNote {
@@ -612,6 +685,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                     // into the new doc on the next MOVE sample.
                     last_point = None;
                     last_pressure = None;
+                    current_stroke_color = None;
                     stroke_suppressed = false;
                     dirty = true;
                 }
@@ -641,6 +715,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             }
                             last_point = None;
                             last_pressure = None;
+                            current_stroke_color = None;
                             // Re-render so the user sees the cleared
                             // canvas immediately.
                             let fresh_segs = active_segments(&active_note_id, &documents);
