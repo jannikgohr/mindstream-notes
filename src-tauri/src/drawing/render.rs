@@ -31,23 +31,39 @@ use super::pipeline::{self, PersistentGpu, SurfaceBoundState, Vertex};
 use super::strokes_doc::{StrokesDoc, DEFAULT_COLOR};
 use super::ui::{self, CanvasUi};
 
-/// Debug palette for "is this stroke from the pen?" — pen-family
-/// strokes (`ToolKind::Stylus` / `Eraser`, both of which the S Pen
-/// reports) render in this packed 0xAARRGGBB blue; anything else
-/// (finger, mouse, unknown) renders in [`DEFAULT_COLOR`] (black).
-/// D5 replaces this with a real user-chosen palette; until then it's
-/// a visual confirmation that pen detection works end-to-end.
+/// Debug palette — visual confirmation that input-device detection
+/// works end-to-end. Packed 0xAARRGGBB; the leading `FF` is the
+/// alpha byte (a value like `0x00FF_600F` would paint fully
+/// transparent over the white background and look like the stroke
+/// vanished). D5 replaces all of this with a real user-chosen
+/// palette.
+///
+/// Three distinct colours so the user can tell which detection
+/// path actually fired on their device:
+///   - [`PEN_DEBUG_COLOR`] (blue): tool = Stylus, no button held.
+///   - [`STYLUS_BUTTON_HELD_COLOR`] (orange): stylus barrel button
+///     is held. Wins over tool-type colouring because some Samsung
+///     devices *also* mirror the press into `getToolType =
+///     TOOL_TYPE_ERASER`, and checking buttons first lets us tell
+///     the two cases apart visually.
+///   - [`ERASER_TIP_COLOR`] (red): tool = Eraser (e.g. flipped S
+///     Pen on a Galaxy Note, or a Samsung driver that mirrors
+///     button-press into the tool type *without* setting the
+///     button bit).
 const PEN_DEBUG_COLOR: u32 = 0xFF00_66FF;
-const PEN_DEBUG_COLOR_2: u32 = 0xFF00_66FF;
+const STYLUS_BUTTON_HELD_COLOR: u32 = 0xFFFF_600F;
+const ERASER_TIP_COLOR: u32 = 0xFFCC_2222;
 
-/// Decide what colour a stroke should use, given the tool that
-/// started it. Pen-family tools get the debug blue; everything else
-/// gets the default black so finger doodles look the same as they
-/// always did.
-fn color_for_tool(tool: ToolKind) -> u32 {
+/// Decide what colour a stroke should use, given the input sample
+/// that started it. See the debug-palette docs above for the
+/// precedence rationale.
+fn color_for_input(tool: ToolKind, buttons: u32) -> u32 {
+    if buttons & super::input::buttons::STYLUS_PRIMARY != 0 {
+        return STYLUS_BUTTON_HELD_COLOR;
+    }
     match tool {
         ToolKind::Stylus => PEN_DEBUG_COLOR,
-        ToolKind::Eraser => PEN_DEBUG_COLOR_2,
+        ToolKind::Eraser => ERASER_TIP_COLOR,
         ToolKind::Finger | ToolKind::Mouse | ToolKind::Unknown => DEFAULT_COLOR,
     }
 }
@@ -324,13 +340,16 @@ pub fn clear_surface() {
 pub fn push_sample(sample: Sample) {
     // debug! rather than trace! so the per-sample stream is visible
     // under default logcat filters during POC bring-up. Drop back
-    // to trace! once the input pipeline is fully verified.
+    // to trace! once the input pipeline is fully verified. Buttons
+    // are logged in hex so the BUTTON_STYLUS_PRIMARY bit (0x20) is
+    // obvious at a glance when the user holds the S Pen side button.
     log::debug!(
-        "[drawing] push_sample x={x:.1} y={y:.1} p={p:.2} tool={tool:?} action={action:?}",
+        "[drawing] push_sample x={x:.1} y={y:.1} p={p:.2} tool={tool:?} buttons=0x{buttons:x} action={action:?}",
         x = sample.x,
         y = sample.y,
         p = sample.pressure,
         tool = sample.tool,
+        buttons = sample.buttons,
         action = sample.action,
     );
     send(Msg::Sample(sample));
@@ -498,6 +517,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                         y,
                         pressure,
                         tool,
+                        buttons,
                         action,
                     } = sample;
                     let pos = px_to_egui(x, y);
@@ -516,16 +536,26 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                 stroke_suppressed = false;
                                 last_point = Some((x, y));
                                 last_pressure = Some(pressure);
-                                // Choose stroke colour from the input
-                                // tool: pen/eraser → debug blue,
-                                // finger / mouse / unknown → black.
-                                // Stored on both the doc (for
-                                // persistence + re-hydration) and as
-                                // unpacked linear-RGBA in
+                                // Choose stroke colour from tool +
+                                // buttons (button-held wins over
+                                // tool type; see color_for_input
+                                // docstring). Stored on both the
+                                // doc (for persistence + re-hydration)
+                                // and as unpacked linear-RGBA in
                                 // current_stroke_color (so MOVE
                                 // handlers don't re-unpack per
                                 // sample).
-                                let packed = color_for_tool(tool);
+                                let packed = color_for_input(tool, buttons);
+                                // Stroke-open log: one line per
+                                // stroke so the user can see at a
+                                // glance which detection path fired
+                                // ("stylus + button=0x20 → orange").
+                                // Tighter than the per-sample debug
+                                // log; survives a logcat filter on
+                                // "stroke_open".
+                                log::info!(
+                                    "[drawing] stroke_open tool={tool:?} buttons=0x{buttons:x} -> color=0x{packed:08X}"
+                                );
                                 current_stroke_color = Some(unpack_color(packed));
                                 // Open a fresh stroke in the active
                                 // doc and seed its points array with
