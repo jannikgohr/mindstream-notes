@@ -12,21 +12,22 @@ import { invokeOrFallback } from './index';
 
 /**
  * Bring the native drawing surface up for the given note and seed
- * its in-memory stroke document with the persisted CRDT bytes from
- * SQLite. Combines "show the SurfaceView" + "activate this note's
- * stroke document" in one command on purpose — splitting them opens
- * a race where the surface would briefly render the previous note's
- * strokes before the active-note swap landed.
+ * its in-memory stroke document with the persisted CRDT bytes.
  *
- * `yrsState` is the `note.yrs_state` field from `loadNote(noteId)`.
- * Pass `[]` for a brand-new note that's never been saved.
+ * The Rust side reads `yrs_state` from SQLite itself rather than
+ * accepting the bytes as an IPC arg — bypassing Tauri's JSON-encoded
+ * IPC (which adds ~700ms per MB measured on real device traffic with
+ * the StrokesDoc shape). Frontend callers just hand over the note
+ * id; a fresh / never-saved note is treated as an empty StrokesDoc
+ * inside Rust.
+ *
+ * "Show the SurfaceView" and "activate this note's stroke document"
+ * are combined in one command on purpose — splitting them would
+ * open a race where the surface briefly renders the previous note's
+ * strokes before the active-note swap landed.
  */
-export function drawingShow(noteId: string, yrsState: number[]): Promise<void> {
-  return invokeOrFallback<void>(
-    'drawing_show',
-    { noteId, yrsState },
-    () => undefined
-  );
+export function drawingShow(noteId: string): Promise<void> {
+  return invokeOrFallback<void>('drawing_show', { noteId }, () => undefined);
 }
 
 export function drawingHide(): Promise<void> {
