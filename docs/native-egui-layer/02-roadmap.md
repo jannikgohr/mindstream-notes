@@ -32,11 +32,13 @@ page coordinates with A4 portrait default (C0), per-note canvas
 state (C1), yrs-backed persistence + live-CRDT stroke document
 (C2), end-to-end pressure capture (C3 — also threads
 `MotionEvent.getToolType` so the render thread knows whether a
-sample came from finger / stylus / eraser), and variable-width
+sample came from finger / stylus / eraser), variable-width
 pressure-tapered strokes (C4 — per-segment CPU tessellation into
 TriangleList quads; per-vertex colour means S Pen strokes render in
 debug-blue while finger strokes stay black; no `lyon` dep yet,
-joints aren't mitered).
+joints aren't mitered), and stylus-button capture (C6 — Kotlin
+forwards `event.buttonState` so the renderer can debug-colour
+"side button held" in orange).
 The code has been split out of single-file `render.rs` into
 `surface.rs` / `pipeline.rs` / `ui/{mod, toolbar}.rs` / `jni.rs`
 (R1, R2 partial), and the platform-neutral input shape lives in
@@ -45,10 +47,11 @@ render-thread loop + JNI-facing public API and now consumes
 `input::Sample` rather than raw `MotionEvent.*` ints.
 
 **Deliberately NOT yet implemented** — see roadmap below: stroke
-smoothing; stylus button capture; live collab; cross-platform
-`SurfaceSource` / `InputSource` traits; desktop port. Rounded caps
-+ mitered joints (via `lyon`) deferred until thick-stroke joints
-actually look notchy in practice.
+smoothing; stylus-button → action mapping (the bits flow but
+nothing acts on them yet); live collab; cross-platform
+`SurfaceSource` trait; desktop port. Rounded caps + mitered joints
+(via `lyon`) deferred until thick-stroke joints actually look
+notchy in practice.
 
 ## Roadmap
 
@@ -103,7 +106,7 @@ that order. R3–R5 still gate E.)
 | C3 | Pressure + tool-type capture | Kotlin reads `MotionEvent.AXIS_PRESSURE` (+ historical samples), sanitises NaN/0/over-1 to 1.0, and reads `event.getToolType(0)`, then passes through `pushPoint(x, y, pressure, toolType, action)`. Pressure stored as a parallel `pressures: Y.Array<f64>` on each stroke map (additive — no schema bump; legacy strokes default to 1.0 on read). Tool type isn't persisted directly; instead the renderer uses it at `begin_stroke` time to pick a colour (see C4) which is what survives into the doc. Unblocks C4 + D1 + D2 + C6. | **Done** |
 | C4 | Variable-width strokes + per-stroke colour | Per-segment CPU tessellation (2-triangle quad with potentially different widths at each endpoint) — no `lyon` dep yet. Each stroke segment uses `width = MIN_WIDTH + (BASE_WIDTH - MIN_WIDTH) * pressure` (MIN=1.0, BASE=4.0 page-units = ~0.18–0.7 mm). Topology flipped to `TriangleList`; vertex format grew to `{position, color}` so each stroke can be rendered in its own colour. `begin_stroke` now takes a packed 0xAARRGGBB colour — currently chosen from tool type (stylus / eraser → debug blue, else → black) as a "did pen detection actually work" visualisation; D5 swaps that mapping for a user-picked palette. Pure-math `segment_quad_positions` lives in `page.rs` with host-side unit tests. Joints aren't mitered — fine for the current thin-stroke regime; revisit (probably with `lyon`'s stroke tessellator) if thick-stroke joints look notchy. Per-stroke `width` field in the schema is still ignored — wires up with D5. | **Done** (deferred lyon + rounded caps) |
 | C5 | Live collab on the canvas | Each open ink note's `yrs::Doc` plugs into the existing `CollabProvider` infrastructure (same path markdown notes use for live editing). Yrs broadcasts pen samples to peers as they arrive; remote samples merge into the doc and trigger a re-render. Local-first by construction: offline writes append to the local Y.Array and sync on next reconnect with CRDT-correct merge. Depends on C2. | Pending |
-| C6 | Stylus button capture (data plumbing) | Mirrors C3: Kotlin reads `event.buttonState`, JNI signature grows to `pushPoint(x, y, pressure, toolType, buttons, action)`, `Msg::Sample` carries `buttons: u32` (raw bitmask while there's one consumer; promote to a `StylusButtons` bitflags type when R4 lands). No persistence — buttons are an input-time concept; their *consequences* (e.g. eraser stroke) get persisted, not the buttons themselves. No UX policy yet — render thread just exposes the bits; D8 decides what they do. Apple Pencil's discrete gestures (double-tap, Pro squeeze) get a separate `Msg::StylusGesture` shape because they fire between strokes, not as a per-sample state. Unblocks D8. | Pending |
+| C6 | Stylus button capture (data plumbing) | Mirrors C3: Kotlin reads `event.buttonState`, JNI signature grew to `pushPoint(x, y, pressure, toolType, buttons, action)`, `Sample` carries `buttons: u32` (raw bitmask matching `MotionEvent.BUTTON_*`; `Sample::has_stylus_primary_button` does the typed bit test). Bit-value constants live in `drawing::input::buttons`. No persistence — buttons are input-time; their *consequences* (e.g. the chosen stroke colour) are what survives. UX policy still deferred to D8; the renderer currently uses `BUTTON_STYLUS_PRIMARY` only as a debug-colour override (button held → orange) so the user can visually confirm detection works on their device. Apple Pencil's discrete gestures (double-tap, Pro squeeze) still need a separate `StylusGesture` shape — open for D8. | **Done** (data plumbing) — promote `buttons: u32` to a `bitflags` type when a second consumer (D8) materialises. |
 
 ### D. Quality / feel — depends on C
 
