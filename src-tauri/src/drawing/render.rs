@@ -249,6 +249,10 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                 }
                 Msg::Resize { width, height } => {
                     if let (Some(p), Some(s)) = (persistent.as_ref(), surface_state.as_mut()) {
+                        let (prev_w, prev_h) = s.size_px();
+                        log::info!(
+                            "[drawing] Msg::Resize w={width} h={height} (was {prev_w}x{prev_h})"
+                        );
                         s.resize(p, width, height);
                         dirty = true;
                     }
