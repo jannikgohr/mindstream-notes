@@ -304,11 +304,23 @@ private class DrawingSurfaceView(context: Context) :
         // Android versions it either doesn't or fires with stale
         // dimensions — symptom: egui toolbar keeps the old portrait
         // width after rotating to landscape until the next touch
-        // wakes the render thread. addOnLayoutChangeListener fires
-        // reliably whenever the SurfaceView's bounds change, which
-        // includes every rotation, so we push a resize message that
-        // wakes the (otherwise blocked-on-recv) render thread and
-        // updates surface_state's width/height.
+        // wakes the render thread.
+        //
+        // addOnLayoutChangeListener fires reliably whenever the
+        // SurfaceView's bounds change (which includes every rotation),
+        // so we push a Resize message immediately. But it can fire
+        // BEFORE SurfaceFlinger has finished reallocating the
+        // underlying ANativeWindow buffers at the new size — meaning
+        // wgpu's surface.configure() succeeds at the new dims but
+        // get_current_texture returns a buffer of the OLD dims,
+        // producing a stretched/stale frame.
+        //
+        // The follow-up postDelayed calls re-fire the resize so the
+        // wgpu surface gets re-configured after buffers have settled.
+        // 50ms / 250ms covers both the common case (settle within a
+        // frame or two) and the slow case (SurfaceFlinger backed up).
+        // Each retry is idempotent: render thread calls surface
+        // .configure with the same dims, sets dirty, renders.
         addOnLayoutChangeListener { _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
             val newWidth = right - left
             val newHeight = bottom - top
@@ -320,6 +332,8 @@ private class DrawingSurfaceView(context: Context) :
                 "layout changed: ${oldWidth}x${oldHeight} -> ${newWidth}x${newHeight}"
             )
             Drawing.resizeSurface(newWidth, newHeight)
+            postDelayed({ Drawing.resizeSurface(newWidth, newHeight) }, 50)
+            postDelayed({ Drawing.resizeSurface(newWidth, newHeight) }, 250)
         }
     }
 
