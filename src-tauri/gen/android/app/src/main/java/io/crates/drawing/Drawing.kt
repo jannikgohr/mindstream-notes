@@ -215,19 +215,6 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
         external fun pushPoint(x: Float, y: Float, action: Int)
 
         /**
-         * Push the current top / bottom system-bar inset (in pixels)
-         * to the render thread. Triggered by the SurfaceView's
-         * `OnApplyWindowInsetsListener` — first fires on attach with
-         * the device's real values, then again on rotation / IME /
-         * any other inset-changing system event.
-         *
-         * Bottom isn't used yet on the Rust side but exposed in the
-         * signature so a future bottom-bar (eraser palette, color
-         * picker, …) doesn't need a second JNI export.
-         */
-        external fun setInsets(top: Int, bottom: Int)
-
-        /**
          * Hands Rust a GlobalRef to the Drawing class so render-thread
          * callbacks (showFromNative/hideFromNative/backFromNative) can
          * dispatch without going through `env.find_class`, which fails

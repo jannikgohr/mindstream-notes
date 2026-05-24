@@ -125,25 +125,6 @@ pub extern "system" fn Java_io_crates_drawing_Drawing_00024Companion_clearSurfac
     render::clear_surface();
 }
 
-/// `Drawing.Companion.setInsets(top, bottom)`.
-///
-/// Pushes the current top safe-area inset (in pixels) into the
-/// render thread's atomic state. Triggered by the SurfaceView's
-/// `OnApplyWindowInsetsListener`, which fires once when the view is
-/// first attached and then again on rotations / IME show-hide / etc.
-/// Bottom is accepted but not yet used — wired so a future
-/// bottom-bar toolbar (or a nav-bar-aware canvas inset) doesn't need
-/// a second JNI export.
-#[no_mangle]
-pub extern "system" fn Java_io_crates_drawing_Drawing_00024Companion_setInsets(
-    _env: JNIEnv,
-    _class: JClass,
-    top: jint,
-    _bottom: jint,
-) {
-    render::set_top_inset(top.max(0) as u32);
-}
-
 /// `Drawing.Companion.pushPoint(x, y, action)` — a single MotionEvent
 /// sample (or one element of the historical-sample sweep). `action`
 /// uses Android's MotionEvent.ACTION_* integer constants verbatim;
