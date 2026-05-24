@@ -1,26 +1,38 @@
-//! JNI boundary for the drawing plugin.
+//! Android platform glue for the drawing surface.
 //!
-//! Two directions:
+//! Two responsibilities, both intrinsically Android-specific:
 //!
-//!   Kotlin → Rust  (data plane — high-frequency)
-//!     setSurface(Surface, w, h)
-//!     resizeSurface(w, h)
-//!     clearSurface()
-//!     pushPoint(x, y, pressure, toolType, buttons, action)
+//!   1. `AndroidWindow` — the [`SurfaceSource`](super::super::surface_source::SurfaceSource)
+//!      impl wrapping `ANativeWindow*`. The render pipeline only
+//!      sees the trait; this file owns the unsafe pointer
+//!      ownership + the raw-handle plumbing.
 //!
-//!     Exposed as `Java_io_crates_drawing_Drawing_00024Companion_*`
-//!     symbols. Package + class + `$Companion` are load-bearing for
-//!     the symbol mangling, matching the proven `io.crates.keyring`
-//!     pattern already in this repo.
+//!   2. JNI exports — Kotlin ↔ Rust bridge. Two directions:
 //!
-//!   Rust → Kotlin  (control plane — low-frequency)
-//!     `ui::call_show()`  → Drawing.showFromNative()
-//!     `ui::call_hide()`  → Drawing.hideFromNative()
+//!      Kotlin → Rust  (data plane — high-frequency)
+//!        setSurface(Surface, w, h)
+//!        resizeSurface(w, h)
+//!        clearSurface()
+//!        pushPoint(x, y, pressure, toolType, buttons, action)
 //!
-//!     Uses the JavaVM stashed in ndk_context by Keyring.kt's
-//!     `initializeNdkContext` in MainActivity.onCreate. The Kotlin
-//!     companion methods are `@JvmStatic` so the call site just
-//!     hits a plain static method on `Drawing` directly.
+//!        Exposed as `Java_io_crates_drawing_Drawing_00024Companion_*`
+//!        symbols. Package + class + `$Companion` are load-bearing
+//!        for the symbol mangling, matching the proven
+//!        `io.crates.keyring` pattern already in this repo —
+//!        renaming any fragment breaks the link at startup.
+//!
+//!      Rust → Kotlin  (control plane — low-frequency)
+//!        `ui::call_show()`  → Drawing.showFromNative()
+//!        `ui::call_hide()`  → Drawing.hideFromNative()
+//!        `ui::call_back()`  → Drawing.backFromNative()
+//!
+//!        Uses the JavaVM stashed in ndk_context by Keyring.kt's
+//!        `initializeNdkContext` in MainActivity.onCreate. The
+//!        Kotlin companion methods are `@JvmStatic` so the call
+//!        site just hits a plain static method on `Drawing`
+//!        directly. The `DRAWING_CLASS` GlobalRef is what makes
+//!        that resolvable from the render thread (which would
+//!        otherwise see only the system class loader).
 
 use std::ptr::NonNull;
 use std::sync::OnceLock;
@@ -28,9 +40,74 @@ use std::sync::OnceLock;
 use jni::objects::{GlobalRef, JClass, JObject};
 use jni::sys::{jfloat, jint};
 use jni::JNIEnv;
+use raw_window_handle::{
+    AndroidDisplayHandle, AndroidNdkWindowHandle, DisplayHandle, HandleError, HasDisplayHandle,
+    HasWindowHandle, RawDisplayHandle, RawWindowHandle, WindowHandle,
+};
 
 use crate::drawing::input::{Sample, SampleAction, ToolKind};
 use crate::drawing::render;
+
+// ---------- AndroidWindow (SurfaceSource impl) ----------
+
+/// Owns an `ANativeWindow*` and implements the raw-handle traits
+/// wgpu needs to build a Surface. Drop releases the window
+/// reference, balancing the `ANativeWindow_acquire` (or the
+/// equivalent `ANativeWindow_fromSurface` call below) that
+/// produced the pointer in the first place.
+///
+/// This is the Android impl of `crate::drawing::surface_source::SurfaceSource`
+/// — picked up automatically by the blanket impl over types that
+/// satisfy `HasWindowHandle + HasDisplayHandle + Send`.
+pub struct AndroidWindow {
+    inner: NonNull<ndk_sys::ANativeWindow>,
+}
+
+// SAFETY: The pointer is `Send` once we own the reference — wgpu
+// shuttles the surface across threads internally even though we
+// only touch it from the render thread.
+unsafe impl Send for AndroidWindow {}
+unsafe impl Sync for AndroidWindow {}
+
+impl AndroidWindow {
+    /// Wrap an `ANativeWindow*` that the caller has already acquired
+    /// (typically via `ANativeWindow_fromSurface`, which increments
+    /// the reference count). `Drop` balances the acquire by calling
+    /// `ANativeWindow_release`.
+    pub fn new(inner: NonNull<ndk_sys::ANativeWindow>) -> Self {
+        Self { inner }
+    }
+}
+
+impl HasWindowHandle for AndroidWindow {
+    fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
+        let raw = RawWindowHandle::AndroidNdk(AndroidNdkWindowHandle::new(self.inner.cast()));
+        // SAFETY: `self.inner` is a valid ANativeWindow* held alive
+        // by this struct (released only in `Drop`), so the borrow is
+        // valid for as long as `&self` is.
+        Ok(unsafe { WindowHandle::borrow_raw(raw) })
+    }
+}
+
+impl HasDisplayHandle for AndroidWindow {
+    fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
+        let raw = RawDisplayHandle::Android(AndroidDisplayHandle::new());
+        // SAFETY: Android's display handle is unit / has no associated
+        // resource, so any lifetime is sound.
+        Ok(unsafe { DisplayHandle::borrow_raw(raw) })
+    }
+}
+
+impl Drop for AndroidWindow {
+    fn drop(&mut self) {
+        // SAFETY: `inner` was obtained via `ANativeWindow_fromSurface`
+        // which acquires a reference; releasing exactly once balances
+        // that acquire.
+        unsafe { ndk_sys::ANativeWindow_release(self.inner.as_ptr()) };
+    }
+}
+
+// ---------- JNI: Kotlin → Rust ----------
 
 /// Global ref to the Kotlin `io.crates.drawing.Drawing` class,
 /// populated by `cacheJniClass` from the companion's static `init`
@@ -41,8 +118,6 @@ use crate::drawing::render;
 /// made during Java-originating class loading sidesteps that
 /// entirely.
 static DRAWING_CLASS: OnceLock<GlobalRef> = OnceLock::new();
-
-// ---------- Kotlin → Rust ----------
 
 /// `Drawing.Companion.cacheJniClass(Drawing.class)`.
 ///
@@ -73,13 +148,13 @@ pub extern "system" fn Java_io_crates_drawing_Drawing_00024Companion_cacheJniCla
     }
 }
 
-
 /// `Drawing.Companion.setSurface(surface, width, height)`.
 ///
-/// The render thread takes ownership of an `ANativeWindow*` derived
-/// from the Java Surface; ANativeWindow_fromSurface already acquires
-/// a reference, which is balanced by `AndroidWindow::drop` on the
-/// render side.
+/// Acquires an `ANativeWindow*` from the Java `Surface`, wraps it
+/// in [`AndroidWindow`], boxes it as `Box<dyn SurfaceSource>`, and
+/// hands ownership to the render thread. `ANativeWindow_fromSurface`
+/// already acquires a reference, which is balanced by `AndroidWindow::drop`
+/// after the wgpu surface is torn down.
 #[no_mangle]
 pub extern "system" fn Java_io_crates_drawing_Drawing_00024Companion_setSurface(
     env: JNIEnv,
@@ -98,7 +173,8 @@ pub extern "system" fn Java_io_crates_drawing_Drawing_00024Companion_setSurface(
         log::error!("[drawing] ANativeWindow_fromSurface returned null");
         return;
     };
-    render::set_surface(ptr, width.max(0) as u32, height.max(0) as u32);
+    let window = Box::new(AndroidWindow::new(ptr));
+    render::set_surface(window, width.max(0) as u32, height.max(0) as u32);
 }
 
 /// `Drawing.Companion.resizeSurface(width, height)`.
@@ -149,10 +225,7 @@ pub extern "system" fn Java_io_crates_drawing_Drawing_00024Companion_clearSurfac
 ///
 /// Hot path: this fires up to a few hundred Hz when the user is
 /// drawing. Keep the body trivial — anything heavy belongs on the
-/// render thread, behind the channel. The enum conversions here
-/// are constant-time matches on small ints; the platform-neutral
-/// `Sample` lives in `crate::drawing::input` so the render thread
-/// doesn't have to know Android's wire format.
+/// render thread, behind the channel.
 #[no_mangle]
 pub extern "system" fn Java_io_crates_drawing_Drawing_00024Companion_pushPoint(
     _env: JNIEnv,
@@ -185,7 +258,7 @@ pub extern "system" fn Java_io_crates_drawing_Drawing_00024Companion_pushPoint(
     });
 }
 
-// ---------- Rust → Kotlin (UI thread callbacks) ----------
+// ---------- JNI: Rust → Kotlin (UI thread callbacks) ----------
 
 pub mod ui {
     use jni::objects::{JClass, JValue};

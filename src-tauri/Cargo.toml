@@ -45,6 +45,15 @@ rmp-serde = "1"
 serde_bytes = "0.11"
 tokio = { version = "1.52.3", features = ["time", "sync"] }
 
+# raw-window-handle lives at the top level (rather than buried under
+# the android-only deps with wgpu) because `drawing::surface_source`
+# defines the cross-platform `SurfaceSource` trait in terms of
+# `HasWindowHandle` + `HasDisplayHandle`. It's a small types-only
+# crate — no runtime cost, no link-time growth — and putting it
+# here lets the trait file compile on host so cargo test can sanity
+# check the abstraction without an Android target.
+raw-window-handle = "0.6"
+
 [profile.release]
 panic = "abort"
 codegen-units = 1
@@ -98,7 +107,8 @@ wgpu = "25"
 # Pins match tauri-plugin-egui's audit-validated trio.
 egui = "0.32"
 egui-wgpu = "0.32"
-raw-window-handle = "0.6"
+# (raw-window-handle promoted to the top-level [dependencies] so
+# `drawing::surface_source` can use the traits on host targets too.)
 # ndk gives us ANativeWindow_fromSurface(env, jsurface) — the bridge
 # between the Java Surface and the raw pointer wgpu's create_surface
 # needs. ndk-sys is the raw FFI; ndk is the higher-level wrapper —
