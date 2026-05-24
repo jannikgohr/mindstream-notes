@@ -42,6 +42,7 @@
 // keep it compiled everywhere so cargo test catches regressions on
 // the host without needing the Android target.
 pub mod page;
+pub mod strokes_doc;
 
 #[cfg(target_os = "android")]
 pub mod jni;
@@ -57,27 +58,52 @@ pub mod ui;
 /// Reveal the native drawing surface over the current WebView and
 /// activate the per-note stroke document for the given note id.
 ///
-/// Called by `DrawingNoteEditor.svelte` in `onMount`. On desktop this
-/// is a no-op success: the frontend renders a placeholder rather than
-/// trying to call native code.
+/// Called by `DrawingNoteEditor.svelte` in `onMount`. On desktop
+/// this is a no-op success: the frontend renders a placeholder
+/// rather than trying to call native code.
 ///
-/// The set-active-note hop is on the same Tauri command on purpose:
-/// going through two separate IPC round-trips opens a race where the
-/// SurfaceView would briefly render the previous note's strokes
-/// before the active-note swap message reaches the render thread.
+/// `yrs_state` is the persisted CRDT bytes from SQLite (empty for
+/// a brand-new note) — passed through to the render thread which
+/// builds the in-memory `StrokesDoc` from them on first activation
+/// and ignores them on subsequent re-activations of the same note.
+///
+/// The set-active-note + initial-state hop and the surface-show
+/// hop are on the same Tauri command on purpose: going through two
+/// separate IPC round-trips opens a race where the SurfaceView
+/// would briefly render the previous note's strokes before the
+/// active-note swap message reaches the render thread.
 #[tauri::command]
 #[allow(unused_variables)]
-pub fn drawing_show(note_id: String) -> Result<(), String> {
+pub fn drawing_show(note_id: String, yrs_state: Vec<u8>) -> Result<(), String> {
     #[cfg(target_os = "android")]
     {
         // Set the active note BEFORE bringing the surface up so the
         // first frame already shows the right strokes.
-        render::set_active_note(Some(note_id));
+        render::set_active_note(Some(note_id), Some(yrs_state));
         jni::ui::call_show().map_err(|e| format!("drawing_show: {e}"))
     }
     #[cfg(not(target_os = "android"))]
     {
         Ok(())
+    }
+}
+
+/// Fetch the active note's stroke document as v1-yrs bytes — the
+/// shape the frontend hands to `save_note(..., yrs_state=...)` to
+/// persist. Returns empty if no note is active.
+///
+/// Called by `DrawingNoteEditor.svelte` in `onDestroy` (and
+/// eventually periodically while drawing) to flush in-memory
+/// stroke state to SQLite + sync.
+#[tauri::command]
+pub fn drawing_get_state() -> Result<Vec<u8>, String> {
+    #[cfg(target_os = "android")]
+    {
+        Ok(render::get_active_state())
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        Ok(Vec::new())
     }
 }
 
