@@ -95,6 +95,14 @@ dbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust", 
 # src-tauri/gen/android/app/...
 android-native-keyring-store = "1"
 
+# `log` is just a facade — without a concrete backend, every
+# `log::info!` / `log::warn!` call silently no-ops. android_logger
+# routes Rust logs into logcat under a configurable tag so the
+# `[drawing.perf]` / `[drawing]` lines actually surface. Only
+# needed on Android; desktop targets get whatever backend the
+# Tauri plugins set up (or none, which is fine for now).
+android_logger = "0.14"
+
 # ---- Native "ink" drawing layer (POC) ----
 # Android-only for now: wgpu draws into a SurfaceView injected as a
 # sibling of the Tauri WebView. See src/drawing/* + Drawing.kt.
