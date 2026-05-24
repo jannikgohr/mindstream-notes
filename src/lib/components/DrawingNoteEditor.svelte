@@ -26,11 +26,7 @@
   interface Props {
     noteId: string;
   }
-  // The noteId is unused for the ephemeral POC — strokes aren't
-  // associated with any note yet — but kept on the props so the
-  // signature matches NoteEditor / FreeformNoteEditor and the dispatch
-  // sites don't need a special case.
-  let { noteId: _noteId }: Props = $props();
+  let { noteId }: Props = $props();
 
   let mountedAndroid = false;
   let backCleanup: (() => void) | null = null;
@@ -50,7 +46,11 @@
     const onBack = () => navigateBack();
     window.addEventListener('drawing-back', onBack);
     backCleanup = () => window.removeEventListener('drawing-back', onBack);
-    void drawingShow();
+    // noteId selects which per-note CanvasDocument the render thread
+    // pulls strokes from; the active-note swap happens before the
+    // SurfaceView comes up so the first frame already shows the
+    // right note's content (rather than briefly the previous one).
+    void drawingShow(noteId);
     mountedAndroid = true;
   });
 

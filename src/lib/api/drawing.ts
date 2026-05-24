@@ -10,8 +10,15 @@
 
 import { invokeOrFallback } from './index';
 
-export function drawingShow(): Promise<void> {
-  return invokeOrFallback<void>('drawing_show', undefined, () => undefined);
+/**
+ * Bring the native drawing surface up for the given note. Combines
+ * "show the SurfaceView" + "activate this note's stroke document"
+ * in one command on purpose — splitting them opens a race where
+ * the surface would briefly render the previous note's strokes
+ * before the active-note swap landed.
+ */
+export function drawingShow(noteId: string): Promise<void> {
+  return invokeOrFallback<void>('drawing_show', { noteId }, () => undefined);
 }
 
 export function drawingHide(): Promise<void> {

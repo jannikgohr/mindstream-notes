@@ -18,6 +18,7 @@
 //! the calling JNI thread on a sync ack from the render thread.
 //! See the function comment for why.
 
+use std::collections::HashMap;
 use std::ptr::NonNull;
 use std::sync::mpsc::{self, Sender, SyncSender, TryRecvError};
 use std::sync::{Mutex, OnceLock};
@@ -60,6 +61,20 @@ enum Msg {
         action: i32,
     },
     Clear,
+    /// Switch which note's stroke document the renderer is editing.
+    /// `None` parks the renderer with no active document (no
+    /// strokes drawn, samples ignored). Sent from `drawing_show`
+    /// before the SurfaceView is brought up so the first render
+    /// already shows the right note's content.
+    SetActiveNote(Option<String>),
+}
+
+/// Per-note stroke storage on the render thread. Currently just a
+/// flat segment vec, same shape we used pre-C1 — extending this to
+/// a yrs-backed `Y.Array<Y.Map>` is C2.
+#[derive(Default)]
+struct CanvasDocument {
+    segments: Vec<Vertex>,
 }
 
 // SAFETY: NonNull<ANativeWindow> is the only non-Send field; the
@@ -169,6 +184,15 @@ pub fn clear_strokes() {
     send(Msg::Clear);
 }
 
+/// Tell the render thread which note's stroke document is active.
+/// Pass `None` to detach (no doc → renderer paints background +
+/// toolbar only, samples ignored). Called by `drawing_show` before
+/// the surface comes up so the first render already shows the
+/// right strokes.
+pub fn set_active_note(note_id: Option<String>) {
+    send(Msg::SetActiveNote(note_id));
+}
+
 // ---------- render thread ----------
 
 /// Translate a pixel coordinate (origin top-left) into the egui
@@ -177,14 +201,38 @@ fn px_to_egui(x: f32, y: f32) -> egui::Pos2 {
     egui::Pos2::new(x / ui::PIXELS_PER_POINT, y / ui::PIXELS_PER_POINT)
 }
 
+/// Slice into the active note's stroke segments — empty slice if
+/// no note is active or its doc hasn't been seeded yet. Lifetime
+/// is tied to the `documents` borrow so the slice can be handed
+/// straight to `pipeline::render_frame` without a clone.
+fn active_segments<'a>(
+    active_id: &Option<String>,
+    documents: &'a HashMap<String, CanvasDocument>,
+) -> &'a [Vertex] {
+    active_id
+        .as_ref()
+        .and_then(|id| documents.get(id))
+        .map(|d| d.segments.as_slice())
+        .unwrap_or(&[])
+}
+
 fn render_thread(rx: mpsc::Receiver<Msg>) {
     let mut persistent: Option<PersistentGpu> = None;
     let mut surface_state: Option<SurfaceBoundState> = None;
     let mut canvas_ui = CanvasUi::new();
-    // Flat list: pairs of vertices, each pair a line segment.
-    let mut segments: Vec<Vertex> = Vec::new();
+    // Per-note stroke storage. Keyed by note_id. Entries are
+    // created lazily on the first sample for an active note and
+    // live for the render thread's lifetime (= process lifetime,
+    // ephemeral until C2 lands yrs persistence).
+    let mut documents: HashMap<String, CanvasDocument> = HashMap::new();
+    /// Which document samples accumulate into and which renders
+    /// pull segments from. `None` means "no note open" — the
+    /// renderer still draws background + toolbar but skips strokes.
+    let mut active_note_id: Option<String> = None;
     // The most-recent sample's surface coordinates, used to anchor
     // the next MOVE sample's starting vertex. None between strokes.
+    // Per-stroke transient; reset on active-note swap so an
+    // in-flight stroke can't leak from one note into another.
     let mut last_point: Option<(f32, f32)> = None;
     // True while the in-progress gesture started inside the toolbar
     // region — mirror to egui so its buttons see the press, but
@@ -285,19 +333,24 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                         ACTION_MOVE => {
                             egui_input.events.push(egui::Event::PointerMoved(pos));
                             if !stroke_suppressed {
-                                if let (Some((px, py)), Some(s)) =
-                                    (last_point, surface_state.as_ref())
-                                {
+                                if let (Some((px, py)), Some(s), Some(id)) = (
+                                    last_point,
+                                    surface_state.as_ref(),
+                                    active_note_id.as_ref(),
+                                ) {
                                     // Convert surface-pixel touch
                                     // coords into page coords so
                                     // stored vertices stay stable
                                     // across rotation / re-attach.
                                     // The shader applies the view
                                     // transform per frame.
-                                    segments.push(Vertex {
+                                    let doc = documents
+                                        .entry(id.clone())
+                                        .or_insert_with(CanvasDocument::default);
+                                    doc.segments.push(Vertex {
                                         position: s.surface_to_page(px, py),
                                     });
-                                    segments.push(Vertex {
+                                    doc.segments.push(Vertex {
                                         position: s.surface_to_page(x, y),
                                     });
                                     dirty = true;
@@ -320,8 +373,34 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                     }
                 }
                 Msg::Clear => {
-                    segments.clear();
+                    if let Some(id) = active_note_id.as_ref() {
+                        if let Some(doc) = documents.get_mut(id) {
+                            doc.segments.clear();
+                        }
+                    }
                     last_point = None;
+                    dirty = true;
+                }
+                Msg::SetActiveNote(new_id) => {
+                    log::info!(
+                        "[drawing] active note: {:?} -> {:?}",
+                        active_note_id.as_deref(),
+                        new_id.as_deref()
+                    );
+                    // Seed an empty doc on first activation so the
+                    // ACTION_MOVE handler's `entry().or_insert_with`
+                    // is cheap (it usually hits an existing entry).
+                    if let Some(ref id) = new_id {
+                        documents
+                            .entry(id.clone())
+                            .or_insert_with(CanvasDocument::default);
+                    }
+                    active_note_id = new_id;
+                    // Truncate any in-flight stroke that came from
+                    // the previous note's gesture so it can't leak
+                    // into the new doc on the next MOVE sample.
+                    last_point = None;
+                    stroke_suppressed = false;
                     dirty = true;
                 }
             }
@@ -329,18 +408,24 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
 
         if let (Some(p), Some(s)) = (persistent.as_mut(), surface_state.as_mut()) {
             if needs_rebuild || dirty {
+                let segs = active_segments(&active_note_id, &documents);
                 let input = std::mem::take(&mut egui_input);
                 let (actions, ui_output) = canvas_ui.run(input, s.size_px());
-                match pipeline::render_frame(p, s, &segments, ui_output) {
+                match pipeline::render_frame(p, s, segs, ui_output) {
                     Ok(()) => {
                         if actions.clear {
-                            segments.clear();
+                            if let Some(id) = active_note_id.as_ref() {
+                                if let Some(doc) = documents.get_mut(id) {
+                                    doc.segments.clear();
+                                }
+                            }
                             last_point = None;
                             // Re-render so the user sees the cleared
                             // canvas immediately.
+                            let fresh_segs = active_segments(&active_note_id, &documents);
                             let fresh_input = egui::RawInput::default();
                             let (_, fresh_ui) = canvas_ui.run(fresh_input, s.size_px());
-                            let _ = pipeline::render_frame(p, s, &segments, fresh_ui);
+                            let _ = pipeline::render_frame(p, s, fresh_segs, fresh_ui);
                         }
                         if actions.back {
                             if let Err(e) = crate::drawing::jni::ui::call_back() {
