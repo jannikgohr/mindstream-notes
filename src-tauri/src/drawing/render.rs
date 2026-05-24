@@ -640,9 +640,22 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                 pressed: false,
                                 modifiers: egui::Modifiers::NONE,
                             });
+                            // Snapshot before we mutate `stroke_suppressed` below
+                            // so the dirty-notify decision sees what kind of
+                            // gesture this was.
+                            let was_drawing_stroke = !stroke_suppressed;
                             if let Some(id) = active_note_id.as_ref() {
                                 if let Some(doc) = documents.get_mut(id) {
                                     doc.strokes_doc.end_stroke();
+                                }
+                                // Notify the frontend's debounced auto-save —
+                                // but only for real strokes. A "stroke" that
+                                // started inside the toolbar region never
+                                // touched strokes_doc, so saving would be a
+                                // wasted round-trip (and would noisily flip
+                                // the dockview saving-icon).
+                                if was_drawing_stroke {
+                                    crate::drawing::notify_dirty(id);
                                 }
                             }
                             last_point = None;
@@ -659,6 +672,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             doc.strokes_doc.tombstone_all();
                             doc.segments.clear();
                         }
+                        crate::drawing::notify_dirty(id);
                     }
                     last_point = None;
                     last_pressure = None;
@@ -719,8 +733,19 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                         if actions.clear {
                             if let Some(id) = active_note_id.as_ref() {
                                 if let Some(doc) = documents.get_mut(id) {
+                                    // Tombstone the doc too, not just
+                                    // the GPU cache — otherwise the
+                                    // visually-cleared strokes would
+                                    // come back on the next reload /
+                                    // sync. Same semantics as Msg::Clear.
+                                    doc.strokes_doc.tombstone_all();
                                     doc.segments.clear();
                                 }
+                                // Auto-save picks this up via the
+                                // debounce; without it a Clear-then-
+                                // close would persist a still-full
+                                // doc on the close-path save.
+                                crate::drawing::notify_dirty(id);
                             }
                             last_point = None;
                             last_pressure = None;

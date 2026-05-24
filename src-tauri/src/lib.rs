@@ -130,6 +130,12 @@ pub fn run() {
             app.manage(sync::scheduler::SyncScheduler::new());
             sync::scheduler::spawn(app.handle().clone());
 
+            // Hand the drawing module an AppHandle so its render
+            // thread can emit `drawing:dirty` events back to JS for
+            // debounced auto-save. Idempotent (OnceLock) — second
+            // call would silently no-op.
+            drawing::init(app.handle().clone());
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
