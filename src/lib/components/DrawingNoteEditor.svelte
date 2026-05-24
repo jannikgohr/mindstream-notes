@@ -31,7 +31,6 @@
     drawingGetState,
     drawingHide,
     drawingShow,
-    loadNote,
     saveNote,
     TRASH_ID
   } from '$lib/api';
@@ -134,35 +133,20 @@
       scheduleSave();
     });
 
-    // Load the persisted CRDT state from SQLite before bringing the
-    // surface up so the first rendered frame already shows the
-    // existing strokes. A brand-new note has yrs_state === [] and
-    // the Rust side treats that as a fresh StrokesDoc.
-    const tLoadStart = performance.now();
-    let initialState: number[] = [];
-    try {
-      const note = await loadNote(noteId);
-      initialState = note.yrs_state ?? [];
-    } catch (err) {
-      // If we can't load the note, log it but still bring the
-      // surface up with empty state — better to let the user draw
-      // (and lose nothing) than fail the whole open.
-      console.warn('[ink] loadNote failed; opening with empty state', err);
-    }
-    const tLoadEnd = performance.now();
-    // noteId selects which per-note CanvasDocument the render
-    // thread pulls strokes from; the active-note swap happens
-    // before the SurfaceView comes up so the first frame already
-    // shows the right note's content (rather than briefly the
-    // previous one).
+    // Bring the native surface up. The Rust side reads the
+    // persisted yrs_state from SQLite itself (see drawing_show)
+    // so we don't ship the (potentially MB-class) blob through
+    // Tauri's JSON-encoded IPC. noteId selects which per-note
+    // CanvasDocument the render thread pulls strokes from; the
+    // active-note swap happens before the SurfaceView comes up so
+    // the first frame already shows the right note's content
+    // (rather than briefly the previous one).
     const tShowStart = performance.now();
-    void drawingShow(noteId, initialState);
+    void drawingShow(noteId);
     const tShowEnd = performance.now();
     mountedAndroid = true;
     console.log(
-      `[ink-open] loadNote=${(tLoadEnd - tLoadStart).toFixed(1)}ms ` +
-        `state_bytes=${initialState.length} ` +
-        `drawingShow_ipc=${(tShowEnd - tShowStart).toFixed(1)}ms ` +
+      `[ink-open] drawingShow_ipc=${(tShowEnd - tShowStart).toFixed(1)}ms ` +
         `total_to_show=${(tShowEnd - tMountStart).toFixed(1)}ms`
     );
   });
