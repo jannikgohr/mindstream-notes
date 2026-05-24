@@ -46,6 +46,10 @@
 //!   `[ stroke canvas (atop above)  ]`    its toolbar at the top of the
 //!                                       surface (which is below header)
 
+use std::sync::OnceLock;
+
+use tauri::{AppHandle, Emitter};
+
 // Cross-platform modules (no wgpu / no JNI / no NDK) — kept
 // compiled everywhere so `cargo test` catches regressions on the
 // host without needing the Android target.
@@ -66,6 +70,53 @@ pub mod platform;
 pub mod render;
 #[cfg(target_os = "android")]
 pub mod ui;
+
+// ---------- Tauri event-emit plumbing ----------
+
+/// Name of the "stroke document changed, save it soon" event.
+/// `DrawingNoteEditor.svelte` listens for this and debounces a
+/// `drawing_get_state` → `save_note` round-trip. Payload is a
+/// `String` carrying the affected note id so editors filter to
+/// only their own note (dockview can have multiple ink notes
+/// open in separate tabs on desktop).
+pub const DIRTY_EVENT: &str = "drawing:dirty";
+
+/// AppHandle stashed at app startup so the render thread (which
+/// has no other way to reach Tauri's emitter) can fire events.
+/// Populated by [`init`] from `lib.rs`'s setup hook.
+static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
+
+/// Capture the `AppHandle` so [`notify_dirty`] can emit events
+/// later. Called exactly once from the Tauri `setup` callback. A
+/// second call silently no-ops (OnceLock semantics) — useful if a
+/// future restart-without-process-exit story emerges.
+pub fn init(app: AppHandle) {
+    if APP_HANDLE.set(app).is_err() {
+        log::warn!("[drawing] init called more than once — ignoring");
+    }
+}
+
+/// Tell the frontend that the named ink note's stroke document
+/// changed and should be saved soon. Called from the render thread
+/// at the three "stroke document mutated" edges:
+///   - stroke end (ACTION_UP / ACTION_CANCEL)
+///   - eraser-style clear (`Msg::Clear`)
+///   - toolbar clear button (egui `actions.clear`)
+///
+/// Cheap and non-blocking — emit returns immediately; the actual
+/// fetch + save happens on the JS side after a debounce. If the
+/// app handle hasn't been installed yet (defensive; shouldn't
+/// happen in practice because `init` runs before any render
+/// thread spawns), this is a silent no-op.
+pub fn notify_dirty(note_id: &str) {
+    let Some(app) = APP_HANDLE.get() else {
+        log::debug!("[drawing] notify_dirty before init — ignored");
+        return;
+    };
+    if let Err(e) = app.emit(DIRTY_EVENT, note_id.to_string()) {
+        log::warn!("[drawing] emit {DIRTY_EVENT} failed: {e}");
+    }
+}
 
 /// Reveal the native drawing surface over the current WebView and
 /// activate the per-note stroke document for the given note id.
