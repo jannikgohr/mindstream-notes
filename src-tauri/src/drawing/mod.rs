@@ -125,10 +125,15 @@ pub fn notify_dirty(note_id: &str) {
 /// this is a no-op success: the frontend renders a placeholder
 /// rather than trying to call native code.
 ///
-/// `yrs_state` is the persisted CRDT bytes from SQLite (empty for
-/// a brand-new note) — passed through to the render thread which
-/// builds the in-memory `StrokesDoc` from them on first activation
-/// and ignores them on subsequent re-activations of the same note.
+/// The persisted CRDT bytes are read here from SQLite directly —
+/// originally the frontend did a separate `loadNote` IPC and
+/// passed `yrs_state` into this command, but at 1+ MB of stroke
+/// data Tauri's JSON-encoded IPC dominated the open path (~800ms
+/// for a 1.24 MB blob measured on a Tab S7 FE). Reading the column
+/// in-process drops that to a single SQLite SELECT (~few ms) and
+/// keeps the bytes from ever crossing a serialisation boundary.
+/// A missing / never-saved note returns empty bytes, which the
+/// render thread treats as a fresh `StrokesDoc`.
 ///
 /// The set-active-note + initial-state hop and the surface-show
 /// hop are on the same Tauri command on purpose: going through two
@@ -137,20 +142,28 @@ pub fn notify_dirty(note_id: &str) {
 /// active-note swap message reaches the render thread.
 #[tauri::command]
 #[allow(unused_variables)]
-pub fn drawing_show(note_id: String, yrs_state: Vec<u8>) -> Result<(), String> {
+pub fn drawing_show(
+    db: tauri::State<'_, crate::db::Db>,
+    note_id: String,
+) -> Result<(), String> {
     #[cfg(target_os = "android")]
     {
         // Open-path timing — prefix `[drawing.perf]` so it's easy to
-        // grep in logcat. Three numbers tell the whole story for the
-        // perceived "tap to canvas" latency, when combined with the
-        // SurfaceReady / pipeline logs in render.rs + pipeline.rs:
-        //   - set_active:  channel send for Msg::SetActiveNote
-        //   - call_show:   JNI call into Kotlin's Drawing.show
-        //   - state_bytes: how big the JSON-encoded yrs blob was on
-        //                  the way through Tauri's IPC (rough proxy
-        //                  for "is the JSON serialisation the slow
-        //                  part?")
+        // grep in logcat. Tells us:
+        //   - sql_load:   SQLite read of yrs_state (was a full
+        //                 loadNote IPC, now an in-process column read)
+        //   - set_active: channel send for Msg::SetActiveNote
+        //   - call_show:  JNI call into Kotlin's Drawing.show
+        //   - state_bytes: how heavy the stroke doc is — informs
+        //                  whether the from_bytes rebuild on the
+        //                  render thread might be the next bottleneck
+        let t_load_start = std::time::Instant::now();
+        let yrs_state = db
+            .with_conn(|c| crate::notes::load_yrs_state(c, &note_id))
+            .map_err(|e| format!("drawing_show: load_yrs_state: {e}"))?;
+        let t_load = t_load_start.elapsed();
         let state_bytes = yrs_state.len();
+
         let t_active_start = std::time::Instant::now();
         // Set the active note BEFORE bringing the surface up so the
         // first frame already shows the right strokes.
@@ -160,7 +173,8 @@ pub fn drawing_show(note_id: String, yrs_state: Vec<u8>) -> Result<(), String> {
         let result = platform::android::ui::call_show()
             .map_err(|e| format!("drawing_show: {e}"));
         log::info!(
-            "[drawing.perf] drawing_show: set_active={:?} call_show={:?} state_bytes={}",
+            "[drawing.perf] drawing_show: sql_load={:?} set_active={:?} call_show={:?} state_bytes={}",
+            t_load,
             t_active,
             t_show_start.elapsed(),
             state_bytes

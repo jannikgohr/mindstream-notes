@@ -154,6 +154,24 @@ pub fn list(conn: &Connection, include_trashed: bool) -> AppResult<Vec<NoteSumma
     Ok(summaries)
 }
 
+/// Cheap fetch of just the `yrs_state` blob for a note id, skipping
+/// the rest of the row + the serde-derive overhead of building a
+/// `Note`. Used by ink-note open (`drawing_show`) to dodge the
+/// ~200KB/MB-class IPC cost of shipping a heavy `yrs_state` from
+/// SQLite → JS → back across Tauri's JSON-encoded IPC. Returns an
+/// empty `Vec` for a missing note or a null yrs_state column —
+/// matching the "fresh doc" treatment downstream.
+pub fn load_yrs_state(conn: &Connection, id: &str) -> AppResult<Vec<u8>> {
+    let state: Option<Option<Vec<u8>>> = conn
+        .query_row(
+            "SELECT yrs_state FROM notes WHERE id = ?1",
+            params![id],
+            |row| row.get::<_, Option<Vec<u8>>>(0),
+        )
+        .optional()?;
+    Ok(state.flatten().unwrap_or_default())
+}
+
 pub fn load(conn: &Connection, id: &str) -> AppResult<Note> {
     let mut stmt = conn.prepare(
         "SELECT id, parent_collection_id, title, position, created, modified,
