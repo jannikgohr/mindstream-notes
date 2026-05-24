@@ -54,15 +54,25 @@ pub mod surface;
 #[cfg(target_os = "android")]
 pub mod ui;
 
-/// Reveal the native drawing surface over the current WebView.
+/// Reveal the native drawing surface over the current WebView and
+/// activate the per-note stroke document for the given note id.
 ///
 /// Called by `DrawingNoteEditor.svelte` in `onMount`. On desktop this
 /// is a no-op success: the frontend renders a placeholder rather than
 /// trying to call native code.
+///
+/// The set-active-note hop is on the same Tauri command on purpose:
+/// going through two separate IPC round-trips opens a race where the
+/// SurfaceView would briefly render the previous note's strokes
+/// before the active-note swap message reaches the render thread.
 #[tauri::command]
-pub fn drawing_show() -> Result<(), String> {
+#[allow(unused_variables)]
+pub fn drawing_show(note_id: String) -> Result<(), String> {
     #[cfg(target_os = "android")]
     {
+        // Set the active note BEFORE bringing the surface up so the
+        // first frame already shows the right strokes.
+        render::set_active_note(Some(note_id));
         jni::ui::call_show().map_err(|e| format!("drawing_show: {e}"))
     }
     #[cfg(not(target_os = "android"))]
