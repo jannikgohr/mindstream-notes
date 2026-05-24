@@ -59,6 +59,14 @@ enum Msg {
     Sample {
         x: f32,
         y: f32,
+        /// Raw input-device pressure in 0..1. 1.0 means "full
+        /// pressure" or "device doesn't report pressure" (finger
+        /// touch on a non-pressure-sensing screen, Android's
+        /// default for events without AXIS_PRESSURE). Stored as-is
+        /// on each point; future renderers (C4) apply width
+        /// modulation, future smoothers (D1) consume it as an
+        /// extra stroke-modeller channel.
+        pressure: f32,
         action: i32,
     },
     Clear,
@@ -118,7 +126,13 @@ impl CanvasDocument {
         // (prev → curr) line-list pairs for the GPU. Single-point
         // strokes (no second sample) generate no segments — the
         // user lifted the pen without moving; nothing to draw.
-        strokes_doc.for_each_stroke_points(|flat| {
+        // Pressures are surfaced by the visitor but ignored here —
+        // the current `LineList` topology renders uniform-width
+        // segments, so per-point pressure has no effect on the GPU
+        // output until C4 (lyon tessellation) lands. Keeping it in
+        // the doc means we don't have to back-fill historical
+        // strokes when that hooks up.
+        strokes_doc.for_each_stroke_points(|flat, _pressures| {
             let mut prev: Option<(f32, f32)> = None;
             for chunk in flat.chunks_exact(2) {
                 let curr = (chunk[0], chunk[1]);
@@ -240,12 +254,19 @@ pub fn clear_surface() {
     }
 }
 
-pub fn push_sample(x: f32, y: f32, action: i32) {
+pub fn push_sample(x: f32, y: f32, pressure: f32, action: i32) {
     // debug! rather than trace! so the per-sample stream is visible
     // under default logcat filters during POC bring-up. Drop back
     // to trace! once the input pipeline is fully verified.
-    log::debug!("[drawing] push_sample x={x:.1} y={y:.1} action={action}");
-    send(Msg::Sample { x, y, action });
+    log::debug!(
+        "[drawing] push_sample x={x:.1} y={y:.1} p={pressure:.2} action={action}"
+    );
+    send(Msg::Sample {
+        x,
+        y,
+        pressure,
+        action,
+    });
 }
 
 pub fn clear_strokes() {
@@ -395,7 +416,12 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                         let _ = tx.send(());
                     }
                 }
-                Msg::Sample { x, y, action } => {
+                Msg::Sample {
+                    x,
+                    y,
+                    pressure,
+                    action,
+                } => {
                     let pos = px_to_egui(x, y);
                     match action {
                         ACTION_DOWN => {
@@ -425,7 +451,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                         .or_insert_with(CanvasDocument::new);
                                     doc.strokes_doc.begin_stroke();
                                     let [px, py] = s.surface_to_page(x, y);
-                                    doc.strokes_doc.push_point(px, py);
+                                    doc.strokes_doc.push_point(px, py, pressure);
                                 }
                             }
                             dirty = true;
@@ -455,9 +481,14 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                         position: curr_page,
                                     });
                                     // Source-of-truth side: append
-                                    // the new point to the in-flight
-                                    // stroke's yrs points array.
-                                    doc.strokes_doc.push_point(curr_page[0], curr_page[1]);
+                                    // the new point + its pressure to
+                                    // the in-flight stroke's yrs
+                                    // arrays.
+                                    doc.strokes_doc.push_point(
+                                        curr_page[0],
+                                        curr_page[1],
+                                        pressure,
+                                    );
                                     dirty = true;
                                 }
                                 last_point = Some((x, y));

@@ -27,14 +27,20 @@ Rotation triggers a re-render via the SurfaceView's
 `addOnLayoutChangeListener` (more reliable than `surfaceChanged` on
 Samsung devices).
 
-**Deliberately NOT yet implemented** — see roadmap below: page
-coordinates (strokes currently stored in NDC, stretch on rotate);
-persistence (strokes vanish on close); per-note canvas state (all
-ink notes share one global stroke buffer); pressure; stroke
-smoothing; thick / pressure-tapered strokes; live collab; desktop
-port. Code is still single-file (`drawing/render.rs` is ~700
-lines) — a modularisation pass is queued before the next big
-feature lands.
+Since the POC landed, the foundational data-model work is in:
+page coordinates with A4 portrait default (C0), per-note canvas
+state (C1), yrs-backed persistence + live-CRDT stroke document
+(C2), and end-to-end pressure capture (C3 — stored per-point;
+renderer ignores it until C4 hooks up variable-width tessellation).
+The code has been split out of single-file `render.rs` into
+`surface.rs` / `pipeline.rs` / `ui/{mod, toolbar}.rs` / `jni.rs`
+(R1, R2 partial); `render.rs` retains the render-thread loop +
+JNI-facing public API.
+
+**Deliberately NOT yet implemented** — see roadmap below: stroke
+smoothing; thick / pressure-tapered strokes; live collab;
+cross-platform `SurfaceSource` / `InputSource` traits; desktop
+port.
 
 ## Roadmap
 
@@ -66,25 +72,29 @@ This is the prerequisite for everything in C and E. Doing it now
 (while the surface area is still small enough to refactor in one
 session) saves migration pain later.
 
-| # | Item | Notes |
-|---|------|-------|
-| R1 | Split `drawing/render.rs` into a directory | `drawing/render.rs` is ~700 lines and growing. Suggested layout: `drawing/{mod, surface, input, render/{pipeline, frame}, ui/{toolbar}, thread, jni}.rs`. Pure mechanical move + re-exports — no behavioural change. |
-| R2 | `canvas_ui` submodule for egui UI | Carve the egui `TopBottomPanel` + button handling out of `render_frame` into `drawing/ui/`. Future toolbar tabs (color picker, eraser toggle, brush size, undo, page nav) each get their own file (`ui/color_picker.rs`, `ui/eraser.rs`, …). Top-level `ui/mod.rs` exposes a `CanvasUi` struct with `fn run(&mut self, ctx: &egui::Context) -> RenderActions`. |
-| R3 | `SurfaceSource` trait for cross-platform | Abstract "give me a raw-window-handle + width/height" behind a trait. Android impl wraps `ANativeWindow` (current code, moved to `platform/android.rs`); desktop impl wraps winit/wry handle (E1). Render core takes `&dyn SurfaceSource` and stops knowing about Android. |
-| R4 | `InputSource` abstraction | Same idea for the touch/stylus event stream. Android impl is JNI `pushPoint`; desktop impl is winit `WindowEvent`; iOS is UIKit pen events. Common output: `Sample { pos, pressure, tilt, action, time }`. |
-| R5 | `platform/` module split | `drawing/platform/{android, desktop, ios}.rs`, gated by `cfg(target_os)`. Each file owns its `SurfaceSource` + `InputSource` impls and lifecycle hooks. Cross-cutting concerns (NDK context init, JNI class caching) live in the Android-specific file. |
-| R6 | Cargo workspace consideration | When the drawing crate grows past `src-tauri/src/drawing/`, consider extracting it to a workspace member (`crates/mindstream-canvas/`) so the cross-platform render core has a clean dependency boundary from the Tauri app. Not urgent; flag if compile times get painful. |
+| # | Item | Notes | Status |
+|---|------|-------|--------|
+| R1 | Split `drawing/render.rs` into a directory | Suggested layout: `drawing/{mod, surface, input, render/{pipeline, frame}, ui/{toolbar}, thread, jni}.rs`. | **Done** (85896e3) — landed as `surface.rs` / `pipeline.rs` / `ui/{mod, toolbar}.rs` / `jni.rs`; render-thread loop + JNI-facing public API kept in `render.rs` as the orchestrator. Further fragmentation (separate `thread.rs` / `frame.rs`) deferred until it pays off. |
+| R2 | `canvas_ui` submodule for egui UI | Top-level `ui/mod.rs` exposes a `CanvasUi` struct with `fn run(&mut self, ctx: &egui::Context) -> RenderActions`. | **Done** (85896e3) — `CanvasUi` + `RenderActions` + `UiOutput` live in `drawing/ui/mod.rs`; toolbar widget in `ui/toolbar.rs`. Slot files (`ui/color_picker.rs`, `ui/eraser.rs`, …) referenced in the module doc, to be filled in during D. |
+| R3 | `SurfaceSource` trait for cross-platform | Abstract "give me a raw-window-handle + width/height" behind a trait. Android impl wraps `ANativeWindow` (current code, moved to `platform/android.rs`); desktop impl wraps winit/wry handle (E1). Render core takes `&dyn SurfaceSource` and stops knowing about Android. | Pending |
+| R4 | `InputSource` abstraction | Same idea for the touch/stylus event stream. Android impl is JNI `pushPoint`; desktop impl is winit `WindowEvent`; iOS is UIKit pen events. Common output: `Sample { pos, pressure, tilt, action, time }`. | Pending |
+| R5 | `platform/` module split | `drawing/platform/{android, desktop, ios}.rs`, gated by `cfg(target_os)`. Each file owns its `SurfaceSource` + `InputSource` impls and lifecycle hooks. Cross-cutting concerns (NDK context init, JNI class caching) live in the Android-specific file. | Pending |
+| R6 | Cargo workspace consideration | When the drawing crate grows past `src-tauri/src/drawing/`, consider extracting it to a workspace member (`crates/mindstream-canvas/`) so the cross-platform render core has a clean dependency boundary from the Tauri app. Not urgent; flag if compile times get painful. | Pending (low priority) |
 
 ### C. Real-feature debt — depends on R landing first
 
-| # | Item | Notes |
-|---|------|-------|
-| C0 | Page-coordinate model (stop-stretch + A4) | **Picked scope #1 + A4.** Strokes stored in page coordinates (f64 or f32 in document units), not NDC. View transform (`{scale, pan}`) computed each frame to fit page → surface preserving aspect. Default page: A4 portrait at 144 DPI (1190 × 1684 page-units). Constants live in `drawing/page.rs` so future page sizes (Letter, custom, infinite scroll) are a config swap. Rotation no longer stretches because the same page coordinates re-fit to the new surface. **Foundation for C1/C2/C5 — strokes must be stored in a coord system that's independent of which device drew them.** |
-| C1 | Per-note canvas state | Today there's one global stroke buffer; all ink notes share it. Move strokes into per-note `Document` keyed by `note_id`, swap on `drawing_show(note_id)`. |
-| C2 | Persistence via yrs (`yjs-rs`) | **Picked.** Use `yrs::Doc` like markdown / freeform notes — strokes as a `Y.Array<Y.Map>`, each map carrying `{id, color, width, points: Y.Array<Point>}`. Saved into `note.yrs_state`, synced via Etebase (no special-cased server schema — same path the other note kinds already use). Pen-down opens a fresh `Stroke`, samples append to its `points` Y.Array, pen-up commits. Eraser sets a tombstone field on the stroke (don't delete; we want offline-merge convergence). Format versioned via a `schema` field on the doc root for future migrations. |
-| C3 | Pressure capture | Kotlin already pulls `MotionEvent.AXIS_PRESSURE`; the JNI `pushPoint` signature drops it. Widen the `Sample` shape from R4 to carry `pressure` + `tilt` + `time`; thread through the render thread; store on each Point in the Y.Array (C2). |
-| C4 | Variable-width strokes via `lyon` | Replace `PrimitiveTopology::LineList` with `lyon` tessellation: pressure-tapered triangle strips with rounded caps. Vertex format grows to `{pos, width}` or pre-baked outlines. Page-coord model (C0) means the tessellator works in document space and the view transform handles screen mapping. |
-| C5 | Live collab on the canvas | Each open ink note's `yrs::Doc` plugs into the existing `CollabProvider` infrastructure (same path markdown notes use for live editing). Yrs broadcasts pen samples to peers as they arrive; remote samples merge into the doc and trigger a re-render. Local-first by construction: offline writes append to the local Y.Array and sync on next reconnect with CRDT-correct merge. Depends on C2 (must have the yrs doc shape first). |
+(In practice C0–C2 were taken ahead of R3–R5 because the data-model
+work was independent of the platform-abstraction work; C3+ continues
+that order. R3–R5 still gate E.)
+
+| # | Item | Notes | Status |
+|---|------|-------|--------|
+| C0 | Page-coordinate model (stop-stretch + A4) | Strokes stored in page coordinates (document units), not NDC. View transform (`{scale, pan}`) computed each frame to fit page → surface preserving aspect. Default page: A4 portrait at 144 DPI (1190 × 1684 page-units). Constants live in `drawing/page.rs` so future page sizes (Letter, custom, infinite scroll) are a config swap. Rotation no longer stretches. | **Done** (e555652) |
+| C1 | Per-note canvas state | One `StrokesDoc` per note, swapped on `drawing_show(note_id)`. | **Done** (f912c85) |
+| C2 | Persistence via yrs (`yjs-rs`) | `yrs::Doc` like markdown / freeform notes — strokes as a `Y.Array<Y.Map>`, each map carrying `{id, color, width, points: Y.Array<Point>}`. Persisted into `note.yrs_state`, synced via Etebase. Pen-down opens a fresh `Stroke`, samples append to its `points` Y.Array, pen-up commits. Eraser sets a tombstone field (don't delete; offline-merge convergence). Format versioned via a `schema` field on the doc root. | **Done** (645dff6; persistence bugfix 36e74b5) |
+| C3 | Pressure capture | Kotlin reads `MotionEvent.AXIS_PRESSURE` (+ historical samples), sanitises NaN/0/over-1 to 1.0, and passes through `pushPoint(x, y, pressure, action)`. Stored as a parallel `pressures: Y.Array<f64>` on each stroke map (additive — no schema bump; legacy strokes default to 1.0 on read). The renderer threads pressure to `StrokesDoc::push_point` but currently ignores it on the GPU side (uniform-width `LineList` until C4). Unblocks C4 + D1 + D2. | **Done** |
+| C4 | Variable-width strokes via `lyon` | Replace `PrimitiveTopology::LineList` with `lyon` tessellation: pressure-tapered triangle strips with rounded caps. Vertex format grows to `{pos, width}` or pre-baked outlines. Page-coord model (C0) means the tessellator works in document space and the view transform handles screen mapping. Depends on C3. | Pending |
+| C5 | Live collab on the canvas | Each open ink note's `yrs::Doc` plugs into the existing `CollabProvider` infrastructure (same path markdown notes use for live editing). Yrs broadcasts pen samples to peers as they arrive; remote samples merge into the doc and trigger a re-render. Local-first by construction: offline writes append to the local Y.Array and sync on next reconnect with CRDT-correct merge. Depends on C2. | Pending |
 
 ### D. Quality / feel — depends on C
 

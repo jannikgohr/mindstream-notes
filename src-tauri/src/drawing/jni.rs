@@ -6,7 +6,7 @@
 //!     setSurface(Surface, w, h)
 //!     resizeSurface(w, h)
 //!     clearSurface()
-//!     pushPoint(x, y, action)
+//!     pushPoint(x, y, pressure, action)
 //!
 //!     Exposed as `Java_io_crates_drawing_Drawing_00024Companion_*`
 //!     symbols. Package + class + `$Companion` are load-bearing for
@@ -125,8 +125,11 @@ pub extern "system" fn Java_io_crates_drawing_Drawing_00024Companion_clearSurfac
     render::clear_surface();
 }
 
-/// `Drawing.Companion.pushPoint(x, y, action)` — a single MotionEvent
-/// sample (or one element of the historical-sample sweep). `action`
+/// `Drawing.Companion.pushPoint(x, y, pressure, action)` — a single
+/// MotionEvent sample (or one element of the historical-sample
+/// sweep). `pressure` is `MotionEvent.AXIS_PRESSURE` in 0..1 (1.0
+/// for devices / events that don't report pressure — Kotlin
+/// substitutes the default before crossing the boundary). `action`
 /// uses Android's MotionEvent.ACTION_* integer constants verbatim;
 /// `render.rs` matches on the same values.
 ///
@@ -139,9 +142,10 @@ pub extern "system" fn Java_io_crates_drawing_Drawing_00024Companion_pushPoint(
     _class: JClass,
     x: jfloat,
     y: jfloat,
+    pressure: jfloat,
     action: jint,
 ) {
-    render::push_sample(x, y, action);
+    render::push_sample(x, y, pressure, action);
 }
 
 // ---------- Rust → Kotlin (UI thread callbacks) ----------
