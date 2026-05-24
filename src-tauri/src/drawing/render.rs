@@ -26,6 +26,7 @@ use std::thread;
 use std::time::Duration;
 
 use super::pipeline::{self, PersistentGpu, SurfaceBoundState, Vertex};
+use super::strokes_doc::StrokesDoc;
 use super::ui::{self, CanvasUi};
 
 /// Android MotionEvent action constants we care about. Mirrors
@@ -66,15 +67,77 @@ enum Msg {
     /// strokes drawn, samples ignored). Sent from `drawing_show`
     /// before the SurfaceView is brought up so the first render
     /// already shows the right note's content.
-    SetActiveNote(Option<String>),
+    ///
+    /// `initial_state` is the persisted yrs bytes for this note —
+    /// the frontend loads it from SQLite and passes it through.
+    /// Empty / missing = fresh note. Only consulted when the note
+    /// isn't already in the in-memory `documents` map; subsequent
+    /// activations of the same note id reuse the live doc so the
+    /// in-memory state stays authoritative.
+    SetActiveNote {
+        note_id: Option<String>,
+        initial_state: Option<Vec<u8>>,
+    },
+    /// Request a yrs serialisation of the active note's stroke
+    /// document. The render thread replies with the encoded
+    /// bytes (or empty if no active note). Used by
+    /// `drawing_get_state` to fetch state for `save_note`.
+    GetState {
+        reply: SyncSender<Vec<u8>>,
+    },
 }
 
-/// Per-note stroke storage on the render thread. Currently just a
-/// flat segment vec, same shape we used pre-C1 — extending this to
-/// a yrs-backed `Y.Array<Y.Map>` is C2.
-#[derive(Default)]
+/// Per-note stroke storage on the render thread.
+///
+/// `strokes_doc` is the source of truth — yrs-backed, mergeable,
+/// what we serialise on save. `segments` is a render-side cache
+/// of line-list vertex pairs derived from `strokes_doc`; we keep it
+/// because the GPU needs paired vertices for `LineList` topology,
+/// and reconstructing it every frame would cost an O(strokes ×
+/// points) walk through the yrs doc. The two are kept in sync by
+/// the sample handlers (`ACTION_DOWN`/`MOVE`/`UP` write to both)
+/// and by `CanvasDocument::from_bytes` (which rebuilds `segments`
+/// from the freshly-decoded doc).
 struct CanvasDocument {
+    strokes_doc: StrokesDoc,
     segments: Vec<Vertex>,
+}
+
+impl CanvasDocument {
+    fn new() -> Self {
+        Self {
+            strokes_doc: StrokesDoc::new(),
+            segments: Vec::new(),
+        }
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Self {
+        let strokes_doc = StrokesDoc::from_bytes(bytes);
+        let mut segments = Vec::new();
+        // Each stroke's points are [x0, y0, x1, y1, …]; emit
+        // (prev → curr) line-list pairs for the GPU. Single-point
+        // strokes (no second sample) generate no segments — the
+        // user lifted the pen without moving; nothing to draw.
+        strokes_doc.for_each_stroke_points(|flat| {
+            let mut prev: Option<(f32, f32)> = None;
+            for chunk in flat.chunks_exact(2) {
+                let curr = (chunk[0], chunk[1]);
+                if let Some((px, py)) = prev {
+                    segments.push(Vertex {
+                        position: [px, py],
+                    });
+                    segments.push(Vertex {
+                        position: [curr.0, curr.1],
+                    });
+                }
+                prev = Some(curr);
+            }
+        });
+        Self {
+            strokes_doc,
+            segments,
+        }
+    }
 }
 
 // SAFETY: NonNull<ANativeWindow> is the only non-Send field; the
@@ -185,12 +248,28 @@ pub fn clear_strokes() {
 }
 
 /// Tell the render thread which note's stroke document is active.
-/// Pass `None` to detach (no doc → renderer paints background +
-/// toolbar only, samples ignored). Called by `drawing_show` before
-/// the surface comes up so the first render already shows the
-/// right strokes.
-pub fn set_active_note(note_id: Option<String>) {
-    send(Msg::SetActiveNote(note_id));
+/// Pass `None` for `note_id` to detach (no doc → renderer paints
+/// background + toolbar only, samples ignored). `initial_state` is
+/// the persisted yrs bytes from SQLite — only consulted if this is
+/// the first activation of this note in the current process, so
+/// hot-reloads (open A → home → open A again) don't blow away
+/// in-memory edits with stale disk state.
+pub fn set_active_note(note_id: Option<String>, initial_state: Option<Vec<u8>>) {
+    send(Msg::SetActiveNote {
+        note_id,
+        initial_state,
+    });
+}
+
+/// Synchronously fetch the active note's stroke document as v1-yrs
+/// bytes — what the frontend hands to `save_note` to persist.
+/// Returns empty if no note is active or the render thread isn't
+/// responsive (bounded by the same 500ms timeout the other sync
+/// JNI calls use). Blocks the calling thread.
+pub fn get_active_state() -> Vec<u8> {
+    let (tx, rx) = mpsc::sync_channel::<Vec<u8>>(1);
+    send(Msg::GetState { reply: tx });
+    rx.recv_timeout(Duration::from_millis(500)).unwrap_or_default()
 }
 
 // ---------- render thread ----------
@@ -327,6 +406,22 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             } else {
                                 stroke_suppressed = false;
                                 last_point = Some((x, y));
+                                // Open a fresh stroke in the active
+                                // doc and seed its points array with
+                                // the down sample. The first MOVE
+                                // emits the first segment (down →
+                                // move-1); subsequent MOVEs pair
+                                // (move-N → move-N+1).
+                                if let (Some(id), Some(s)) =
+                                    (active_note_id.as_ref(), surface_state.as_ref())
+                                {
+                                    let doc = documents
+                                        .entry(id.clone())
+                                        .or_insert_with(CanvasDocument::new);
+                                    doc.strokes_doc.begin_stroke();
+                                    let [px, py] = s.surface_to_page(x, y);
+                                    doc.strokes_doc.push_point(px, py);
+                                }
                             }
                             dirty = true;
                         }
@@ -338,21 +433,26 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                     surface_state.as_ref(),
                                     active_note_id.as_ref(),
                                 ) {
-                                    // Convert surface-pixel touch
-                                    // coords into page coords so
-                                    // stored vertices stay stable
+                                    // Page coords for both endpoints
+                                    // so stored vertices stay stable
                                     // across rotation / re-attach.
-                                    // The shader applies the view
-                                    // transform per frame.
+                                    let prev_page = s.surface_to_page(px, py);
+                                    let curr_page = s.surface_to_page(x, y);
                                     let doc = documents
                                         .entry(id.clone())
-                                        .or_insert_with(CanvasDocument::default);
+                                        .or_insert_with(CanvasDocument::new);
+                                    // Render-side cache: line-list
+                                    // pair for the GPU.
                                     doc.segments.push(Vertex {
-                                        position: s.surface_to_page(px, py),
+                                        position: prev_page,
                                     });
                                     doc.segments.push(Vertex {
-                                        position: s.surface_to_page(x, y),
+                                        position: curr_page,
                                     });
+                                    // Source-of-truth side: append
+                                    // the new point to the in-flight
+                                    // stroke's yrs points array.
+                                    doc.strokes_doc.push_point(curr_page[0], curr_page[1]);
                                     dirty = true;
                                 }
                                 last_point = Some((x, y));
@@ -365,6 +465,11 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                 pressed: false,
                                 modifiers: egui::Modifiers::NONE,
                             });
+                            if let Some(id) = active_note_id.as_ref() {
+                                if let Some(doc) = documents.get_mut(id) {
+                                    doc.strokes_doc.end_stroke();
+                                }
+                            }
                             last_point = None;
                             stroke_suppressed = false;
                             dirty = true;
@@ -375,33 +480,51 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                 Msg::Clear => {
                     if let Some(id) = active_note_id.as_ref() {
                         if let Some(doc) = documents.get_mut(id) {
+                            doc.strokes_doc.tombstone_all();
                             doc.segments.clear();
                         }
                     }
                     last_point = None;
                     dirty = true;
                 }
-                Msg::SetActiveNote(new_id) => {
+                Msg::SetActiveNote {
+                    note_id,
+                    initial_state,
+                } => {
                     log::info!(
-                        "[drawing] active note: {:?} -> {:?}",
+                        "[drawing] active note: {:?} -> {:?} (initial state: {} bytes)",
                         active_note_id.as_deref(),
-                        new_id.as_deref()
+                        note_id.as_deref(),
+                        initial_state.as_deref().map(|b| b.len()).unwrap_or(0)
                     );
-                    // Seed an empty doc on first activation so the
-                    // ACTION_MOVE handler's `entry().or_insert_with`
-                    // is cheap (it usually hits an existing entry).
-                    if let Some(ref id) = new_id {
-                        documents
-                            .entry(id.clone())
-                            .or_insert_with(CanvasDocument::default);
+                    if let Some(id) = note_id.as_ref() {
+                        // First activation of this note in the
+                        // process → decode the persisted bytes from
+                        // SQLite. Subsequent activations (e.g. open
+                        // A → home → A) reuse the live doc so any
+                        // in-memory edits since the last save aren't
+                        // lost to a stale disk snapshot.
+                        documents.entry(id.clone()).or_insert_with(|| {
+                            CanvasDocument::from_bytes(
+                                initial_state.as_deref().unwrap_or(&[]),
+                            )
+                        });
                     }
-                    active_note_id = new_id;
+                    active_note_id = note_id;
                     // Truncate any in-flight stroke that came from
                     // the previous note's gesture so it can't leak
                     // into the new doc on the next MOVE sample.
                     last_point = None;
                     stroke_suppressed = false;
                     dirty = true;
+                }
+                Msg::GetState { reply } => {
+                    let bytes = active_note_id
+                        .as_ref()
+                        .and_then(|id| documents.get(id))
+                        .map(|doc| doc.strokes_doc.encode())
+                        .unwrap_or_default();
+                    let _ = reply.send(bytes);
                 }
             }
         }
