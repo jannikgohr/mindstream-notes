@@ -266,6 +266,20 @@ pub fn update(conn: &mut Connection, input: UpdateNote) -> AppResult<Note> {
                 params![new_body, new_state, now, input.id],
             )?;
         }
+    } else if let Some(supplied_state) = &input.yrs_state {
+        // Editor supplies a fresh yrs_state but no body — used by
+        // note kinds whose document content lives entirely in the
+        // CRDT and has no body equivalent (ink notes from C2 of the
+        // native-egui-layer roadmap; future shape-only kinds). We
+        // trust the supplied bytes verbatim; nothing about the
+        // payload_schema discriminator (markdown v1 / v2) applies
+        // here so we leave it alone.
+        tx.execute(
+            "UPDATE notes
+             SET yrs_state = ?1, modified = ?2
+             WHERE id = ?3",
+            params![supplied_state, now, input.id],
+        )?;
     }
     if let Some(parent) = &input.parent_collection_id {
         tx.execute(
