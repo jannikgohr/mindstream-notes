@@ -34,10 +34,17 @@ use super::ui::UiOutput;
 #[derive(Copy, Clone, Pod, Zeroable)]
 pub struct Vertex {
     pub position: [f32; 2],
+    /// Per-vertex linear RGBA in 0..1. Uniform across a single
+    /// stroke today (renderer bakes the stroke's packed colour at
+    /// tessellation time), but per-vertex storage means D5's
+    /// gradient brushes / per-sample colour interpolation just
+    /// drops in.
+    pub color: [f32; 4],
 }
 
 impl Vertex {
-    const ATTRIBS: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![0 => Float32x2];
+    const ATTRIBS: [wgpu::VertexAttribute; 2] =
+        wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x4];
 
     fn layout() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {

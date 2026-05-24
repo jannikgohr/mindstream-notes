@@ -44,7 +44,11 @@
 //!
 //! What's NOT in the schema yet (deferred per the roadmap):
 //!   - tilt per point (open; revisit if D1's stroke modeller wants it)
-//!   - actual user-chosen color/width (D5)
+//!   - tool type per stroke (currently only reflected indirectly via
+//!     `color` — the renderer picks blue for stylus/eraser strokes
+//!     and black otherwise; D5 replaces that mapping with a real
+//!     user-chosen palette)
+//!   - actual user-chosen width (D5)
 //!   - a top-level schema-version map (revisit when the schema
 //!     actually changes in a non-additive way)
 
@@ -63,7 +67,12 @@ const FIELD_COLOR: &str = "color";
 const FIELD_WIDTH: &str = "width";
 
 /// Default stroke colour: opaque black, packed as 0xAARRGGBB.
-const DEFAULT_COLOR: i64 = 0xFF00_0000;
+/// Substituted on read for strokes that have no `color` field
+/// (legacy data or test fixtures). The renderer chooses the actual
+/// color at `begin_stroke` time based on input-device tool type;
+/// this constant is purely the "what colour was this stroke when
+/// the writer didn't tell us" fallback.
+pub const DEFAULT_COLOR: u32 = 0xFF00_0000;
 /// Default stroke width in page units (1 unit = 1/144 inch).
 const DEFAULT_WIDTH: f64 = 1.0;
 /// Pressure value substituted on read for points written by an
@@ -131,9 +140,12 @@ impl StrokesDoc {
 
     /// Open a new stroke. Subsequent `push_point` calls append to
     /// this stroke's points array until `end_stroke` is called.
+    /// `color` is the packed 0xAARRGGBB the renderer should use for
+    /// this stroke (typically chosen at the call site based on
+    /// input-device tool type or a future user-picked palette).
     /// If a stroke was already open (no matching end_stroke), it's
     /// silently committed — defensive against missed pen-up events.
-    pub fn begin_stroke(&mut self) {
+    pub fn begin_stroke(&mut self, color: u32) {
         let mut tx = self.doc.transact_mut();
         // Empty MapPrelim first; field inserts below avoid having
         // to thread Any-typed initial fields through MapPrelim's
@@ -142,7 +154,10 @@ impl StrokesDoc {
         let stroke_map = self.strokes.insert(&mut tx, len, MapPrelim::default());
         let stroke_id = format!("stroke_{}", uuid::Uuid::new_v4());
         stroke_map.insert(&mut tx, FIELD_ID, Any::from(stroke_id));
-        stroke_map.insert(&mut tx, FIELD_COLOR, Any::BigInt(DEFAULT_COLOR));
+        // u32 → i64 widen for yrs `Any::BigInt` (which is i64).
+        // Cast is safe because u32 fits unambiguously; the visitor
+        // on read clamps back to u32.
+        stroke_map.insert(&mut tx, FIELD_COLOR, Any::BigInt(color as i64));
         stroke_map.insert(&mut tx, FIELD_WIDTH, Any::Number(DEFAULT_WIDTH));
         stroke_map.insert(&mut tx, FIELD_TOMBSTONED, Any::Bool(false));
         let points = stroke_map.insert(&mut tx, FIELD_POINTS, ArrayPrelim::default());
@@ -203,23 +218,23 @@ impl StrokesDoc {
         self.in_progress_pressures = None;
     }
 
-    /// Visit each non-tombstoned stroke. `points` is a flat slice
-    /// `[x0, y0, x1, y1, …]` in page coordinates; `pressures` is a
-    /// parallel slice with one entry per (x, y) pair, i.e.
-    /// `pressures.len() == points.len() / 2`.
+    /// Visit each non-tombstoned stroke.
     ///
-    /// Backward compat: strokes saved before C3 don't have a
-    /// `pressures` field — the slice handed to the visitor is then
-    /// filled with [`FALLBACK_PRESSURE`] (1.0) per point so the
-    /// consumer can treat all strokes uniformly without branching on
-    /// "was this drawn before pressure capture landed". If the
-    /// `pressures` array is present but shorter than expected (e.g.
-    /// a remote-merge race that committed `points` but not
-    /// `pressures`), trailing positions fall back to 1.0 the same
-    /// way; longer is truncated.
-    pub fn for_each_stroke_points<F>(&self, mut visit: F)
+    /// Backward compat:
+    ///   - Strokes saved before C3 don't carry a `pressures` field —
+    ///     the slice handed to the visitor is filled with
+    ///     [`FALLBACK_PRESSURE`] (1.0) per point so the consumer can
+    ///     treat all strokes uniformly. Pressure arrays present but
+    ///     shorter than `points.len() / 2` (e.g. a remote-merge race
+    ///     that committed `points` but not `pressures`) have
+    ///     trailing positions filled the same way; longer arrays are
+    ///     truncated.
+    ///   - Strokes without a `color` field (legacy data or hand-
+    ///     constructed test fixtures) get [`DEFAULT_COLOR`] (opaque
+    ///     black).
+    pub fn for_each_stroke<F>(&self, mut visit: F)
     where
-        F: FnMut(&[f32], &[f32]),
+        F: FnMut(StrokeView),
     {
         let tx = self.doc.transact();
         let len = self.strokes.len(&tx);
@@ -263,9 +278,39 @@ impl StrokesDoc {
             // odd point doesn't get to grow the pressure array past
             // the matching point count).
             pressures.resize(expected_pressures, FALLBACK_PRESSURE);
-            visit(&flat, &pressures);
+            // Colour is stored as an i64 BigInt to fit yrs's Any
+            // variants; cast back to u32. A doc without the field
+            // (or with a malformed entry) falls back to the
+            // module-level default so the consumer never has to
+            // branch on missing colour.
+            let color = match stroke.get(&tx, FIELD_COLOR) {
+                Some(Out::Any(Any::BigInt(v))) => v as u32,
+                _ => DEFAULT_COLOR,
+            };
+            visit(StrokeView {
+                points: &flat,
+                pressures: &pressures,
+                color,
+            });
         }
     }
+}
+
+/// One non-tombstoned stroke surfaced by [`StrokesDoc::for_each_stroke`].
+///
+/// Fields:
+///   - `points`: flat `[x0, y0, x1, y1, …]` in page coordinates.
+///   - `pressures`: parallel to `points`, one entry per (x, y) pair
+///     (`pressures.len() == points.len() / 2`).
+///   - `color`: packed 0xAARRGGBB the renderer chose at `begin_stroke`
+///     time — opaque black for legacy strokes that pre-date the field.
+///
+/// Borrowed view; valid only for the duration of the visitor
+/// callback. Copy out anything the caller wants to keep.
+pub struct StrokeView<'a> {
+    pub points: &'a [f32],
+    pub pressures: &'a [f32],
+    pub color: u32,
 }
 
 impl Default for StrokesDoc {
@@ -279,11 +324,11 @@ mod tests {
     use super::*;
 
     /// Pull all visible stroke point lists into a Vec for assertion.
-    /// Pressures are discarded here — tests that care about pressure
-    /// use `collect_strokes_with_pressure` instead.
+    /// Pressures + color are discarded here — tests that care about
+    /// those use the dedicated collectors below.
     fn collect_strokes(doc: &StrokesDoc) -> Vec<Vec<f32>> {
         let mut out = Vec::new();
-        doc.for_each_stroke_points(|points, _pressures| out.push(points.to_vec()));
+        doc.for_each_stroke(|view| out.push(view.points.to_vec()));
         out
     }
 
@@ -291,8 +336,18 @@ mod tests {
     /// exercise the C3 path.
     fn collect_strokes_with_pressure(doc: &StrokesDoc) -> Vec<(Vec<f32>, Vec<f32>)> {
         let mut out = Vec::new();
-        doc.for_each_stroke_points(|points, pressures| {
-            out.push((points.to_vec(), pressures.to_vec()));
+        doc.for_each_stroke(|view| {
+            out.push((view.points.to_vec(), view.pressures.to_vec()));
+        });
+        out
+    }
+
+    /// Triple (points, pressures, color) per stroke for assertions
+    /// that exercise the C4-color path.
+    fn collect_strokes_with_color(doc: &StrokesDoc) -> Vec<(Vec<f32>, Vec<f32>, u32)> {
+        let mut out = Vec::new();
+        doc.for_each_stroke(|view| {
+            out.push((view.points.to_vec(), view.pressures.to_vec(), view.color));
         });
         out
     }
@@ -316,7 +371,7 @@ mod tests {
     #[test]
     fn one_stroke_round_trips() {
         let mut doc = StrokesDoc::new();
-        doc.begin_stroke();
+        doc.begin_stroke(DEFAULT_COLOR);
         doc.push_point(10.0, 20.0, 1.0);
         doc.push_point(30.0, 40.0, 1.0);
         doc.push_point(50.0, 60.0, 1.0);
@@ -333,7 +388,7 @@ mod tests {
     #[test]
     fn pressure_round_trips() {
         let mut doc = StrokesDoc::new();
-        doc.begin_stroke();
+        doc.begin_stroke(DEFAULT_COLOR);
         doc.push_point(0.0, 0.0, 0.25);
         doc.push_point(1.0, 1.0, 0.50);
         doc.push_point(2.0, 2.0, 0.75);
@@ -348,6 +403,53 @@ mod tests {
                 vec![0.25, 0.50, 0.75],
             )]
         );
+    }
+
+    #[test]
+    fn color_round_trips() {
+        // Pen-blue at 0xFF0066FF should come back bit-identical after
+        // an encode/decode cycle.
+        const PEN_BLUE: u32 = 0xFF00_66FF;
+        let mut doc = StrokesDoc::new();
+        doc.begin_stroke(PEN_BLUE);
+        doc.push_point(0.0, 0.0, 1.0);
+        doc.push_point(1.0, 1.0, 1.0);
+        doc.end_stroke();
+
+        let bytes = doc.encode();
+        let restored = StrokesDoc::from_bytes(&bytes);
+        let collected = collect_strokes_with_color(&restored);
+        assert_eq!(collected.len(), 1);
+        assert_eq!(collected[0].2, PEN_BLUE);
+    }
+
+    #[test]
+    fn legacy_stroke_without_color_defaults_to_black() {
+        // Hand-build a stroke that mimics a pre-color-aware writer:
+        // points + pressures present, no FIELD_COLOR. Reader should
+        // substitute the module DEFAULT_COLOR (opaque black).
+        let doc = StrokesDoc::new();
+        {
+            let mut tx = doc.doc.transact_mut();
+            let len = doc.strokes.len(&tx);
+            let stroke_map = doc
+                .strokes
+                .insert(&mut tx, len, MapPrelim::default());
+            stroke_map.insert(
+                &mut tx,
+                FIELD_ID,
+                Any::from("legacy_no_color".to_string()),
+            );
+            stroke_map.insert(&mut tx, FIELD_TOMBSTONED, Any::Bool(false));
+            let points = stroke_map.insert(&mut tx, FIELD_POINTS, ArrayPrelim::default());
+            for v in [0.0_f64, 0.0, 1.0, 1.0] {
+                points.push_back(&mut tx, Any::Number(v));
+            }
+            // Deliberately no FIELD_COLOR insert.
+        }
+        let collected = collect_strokes_with_color(&doc);
+        assert_eq!(collected.len(), 1);
+        assert_eq!(collected[0].2, DEFAULT_COLOR);
     }
 
     #[test]
@@ -423,10 +525,10 @@ mod tests {
     #[test]
     fn multiple_strokes_keep_their_order() {
         let mut doc = StrokesDoc::new();
-        doc.begin_stroke();
+        doc.begin_stroke(DEFAULT_COLOR);
         doc.push_point(1.0, 1.0, 1.0);
         doc.end_stroke();
-        doc.begin_stroke();
+        doc.begin_stroke(DEFAULT_COLOR);
         doc.push_point(2.0, 2.0, 1.0);
         doc.push_point(3.0, 3.0, 1.0);
         doc.end_stroke();
@@ -447,7 +549,7 @@ mod tests {
     #[test]
     fn tombstone_all_hides_existing_strokes() {
         let mut doc = StrokesDoc::new();
-        doc.begin_stroke();
+        doc.begin_stroke(DEFAULT_COLOR);
         doc.push_point(1.0, 1.0, 1.0);
         doc.end_stroke();
         assert_eq!(collect_strokes(&doc).len(), 1);
@@ -455,7 +557,7 @@ mod tests {
         doc.tombstone_all();
         assert!(collect_strokes(&doc).is_empty());
         // But new strokes after a clear should still render.
-        doc.begin_stroke();
+        doc.begin_stroke(DEFAULT_COLOR);
         doc.push_point(5.0, 5.0, 1.0);
         doc.end_stroke();
         assert_eq!(collect_strokes(&doc), vec![vec![5.0, 5.0]]);
@@ -467,19 +569,19 @@ mod tests {
         // then merge in either order. Both should end up with both
         // strokes (yrs CRDT property).
         let mut base = StrokesDoc::new();
-        base.begin_stroke();
+        base.begin_stroke(DEFAULT_COLOR);
         base.push_point(0.0, 0.0, 1.0);
         base.end_stroke();
         let base_bytes = base.encode();
 
         let mut a = StrokesDoc::from_bytes(&base_bytes);
-        a.begin_stroke();
+        a.begin_stroke(DEFAULT_COLOR);
         a.push_point(1.0, 1.0, 1.0);
         a.end_stroke();
         let a_bytes = a.encode();
 
         let mut b = StrokesDoc::from_bytes(&base_bytes);
-        b.begin_stroke();
+        b.begin_stroke(DEFAULT_COLOR);
         b.push_point(2.0, 2.0, 1.0);
         b.end_stroke();
         let b_bytes = b.encode();

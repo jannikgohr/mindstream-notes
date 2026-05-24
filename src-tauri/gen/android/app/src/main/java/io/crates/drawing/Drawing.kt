@@ -212,7 +212,13 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
         external fun setSurface(surface: Surface, width: Int, height: Int)
         external fun resizeSurface(width: Int, height: Int)
         external fun clearSurface()
-        external fun pushPoint(x: Float, y: Float, pressure: Float, action: Int)
+        external fun pushPoint(
+            x: Float,
+            y: Float,
+            pressure: Float,
+            toolType: Int,
+            action: Int
+        )
 
         /**
          * Hands Rust a GlobalRef to the Drawing class so render-thread
@@ -364,13 +370,19 @@ private class DrawingSurfaceView(context: Context) :
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         val action = event.actionMasked
+        // Tool type comes from the active pointer. We only handle
+        // single-pointer gestures, so pointer index 0 is always the
+        // one we care about. It doesn't change between an event's
+        // historical samples and its current sample (Android batches
+        // them per-pointer), so read it once and reuse.
+        val toolType = event.getToolType(0)
         // Diagnostic during POC bring-up: confirms touches actually
         // reach the SurfaceView even if nothing visible appears. The
         // matching Rust-side log lives in render.rs::push_sample.
         // Drop these once the pipeline is verified end-to-end.
         Log.d(
             "MindstreamDrawing",
-            "onTouchEvent action=$action history=${event.historySize} x=${event.x} y=${event.y} p=${event.pressure}"
+            "onTouchEvent action=$action history=${event.historySize} x=${event.x} y=${event.y} p=${event.pressure} tool=$toolType"
         )
         // Historical samples are the buffered digitizer reads between
         // the previous frame and this MotionEvent batch — replaying
@@ -380,15 +392,16 @@ private class DrawingSurfaceView(context: Context) :
         // Pressure: AXIS_PRESSURE is 0..1 for stylus + force-touch
         // capable screens. Devices without pressure sensing report
         // 1.0 by Android convention, but a stray 0.0 (some emulators,
-        // some HID drivers) would render future variable-width
-        // strokes as invisible hairlines — substitute the same 1.0
-        // here so the Rust side never sees the zero.
+        // some HID drivers) would render variable-width strokes as
+        // invisible hairlines — substitute the same 1.0 here so the
+        // Rust side never sees the zero.
         val historySize = event.historySize
         for (h in 0 until historySize) {
             Drawing.pushPoint(
                 event.getHistoricalX(h),
                 event.getHistoricalY(h),
                 sanitizePressure(event.getHistoricalPressure(h)),
+                toolType,
                 action
             )
         }
@@ -396,6 +409,7 @@ private class DrawingSurfaceView(context: Context) :
             event.x,
             event.y,
             sanitizePressure(event.pressure),
+            toolType,
             action
         )
         return true
