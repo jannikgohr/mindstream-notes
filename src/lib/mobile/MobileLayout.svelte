@@ -19,7 +19,7 @@
    * under the Android status bar or gesture bar with edge-to-edge on.
    */
   import { onMount } from 'svelte';
-  import { FilePlus2, FolderPlus, Pen, Pencil } from 'lucide-svelte';
+  import { Feather, FilePlus2, FolderPlus, PencilRuler } from 'lucide-svelte';
   import type { IconComponent } from '$lib/settings/icons';
   import MobileTopBar from './MobileTopBar.svelte';
   import MobileBreadcrumb from './MobileBreadcrumb.svelte';
@@ -138,13 +138,13 @@
           {
             id: 'new-drawing',
             label: tUi('fab.newDrawing'),
-            icon: Pencil as unknown as IconComponent,
+            icon: PencilRuler as unknown as IconComponent,
             onSelect: createDrawing
           },
           {
             id: 'new-ink',
             label: tUi('fab.newInk'),
-            icon: Pen as unknown as IconComponent,
+            icon: Feather as unknown as IconComponent,
             onSelect: createInk
           },
           {
