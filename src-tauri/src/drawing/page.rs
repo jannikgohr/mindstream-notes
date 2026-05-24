@@ -143,6 +143,50 @@ pub struct ViewUniform {
     pub surface_dims: [f32; 2],
 }
 
+/// Expand a single pen segment into six vertex positions (two
+/// triangles, TriangleList ordering) with potentially different
+/// widths at each endpoint. Output is pure `[f32; 2]` so this can
+/// live on the host side of the cfg gate and be unit-tested without
+/// the wgpu vertex type.
+///
+/// Geometry:
+///
+///   p0 ─ p1 direction = `d`; perpendicular = `n` (90° CCW of `d`).
+///   Six vertices form the two triangles
+///     [a0, b0, a1]  and  [b0, b1, a1]
+///   where a* sit on the +n side and b* on the -n side.
+///
+/// Returns six identical `p0` vertices for degenerate (zero-length)
+/// segments so the GPU draws two zero-area triangles (no visible
+/// effect) while keeping the vertex count predictable for the
+/// caller's `extend`. NaN normals would otherwise propagate into
+/// the rasteriser.
+pub fn segment_quad_positions(
+    (p0x, p0y): (f32, f32),
+    (p1x, p1y): (f32, f32),
+    w0: f32,
+    w1: f32,
+) -> [[f32; 2]; 6] {
+    let dx = p1x - p0x;
+    let dy = p1y - p0y;
+    let len_sq = dx * dx + dy * dy;
+    if len_sq < 1e-8 {
+        let z = [p0x, p0y];
+        return [z, z, z, z, z, z];
+    }
+    let inv_len = 1.0 / len_sq.sqrt();
+    // Perpendicular (90° CCW of (dx, dy)) normalised.
+    let nx = -dy * inv_len;
+    let ny = dx * inv_len;
+    let h0 = w0 * 0.5;
+    let h1 = w1 * 0.5;
+    let a0 = [p0x + nx * h0, p0y + ny * h0];
+    let b0 = [p0x - nx * h0, p0y - ny * h0];
+    let a1 = [p1x + nx * h1, p1y + ny * h1];
+    let b1 = [p1x - nx * h1, p1y - ny * h1];
+    [a0, b0, a1, b0, b1, a1]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,6 +218,71 @@ mod tests {
         // page screen width = 1190 * (1080/1684) ≈ 763; horizontal
         // margin = (2400 - 763) / 2 ≈ 819
         approx(vt.pan_x, (2400.0 - 1190.0 * (1080.0 / 1684.0)) * 0.5);
+    }
+
+    fn approx2(a: [f32; 2], b: [f32; 2]) {
+        approx(a[0], b[0]);
+        approx(a[1], b[1]);
+    }
+
+    #[test]
+    fn segment_quad_horizontal_stroke_is_a_rectangle() {
+        // Horizontal segment (1, 0) → (3, 0) with uniform width 2:
+        // perpendicular is (0, 1) (CCW 90° of +x). The two
+        // triangles' six vertices should outline the rectangle
+        // (1, ±1)–(3, ±1).
+        let quad = segment_quad_positions((1.0, 0.0), (3.0, 0.0), 2.0, 2.0);
+        // First triangle: a0, b0, a1 = +y at p0, -y at p0, +y at p1
+        approx2(quad[0], [1.0, 1.0]);
+        approx2(quad[1], [1.0, -1.0]);
+        approx2(quad[2], [3.0, 1.0]);
+        // Second triangle: b0, b1, a1
+        approx2(quad[3], [1.0, -1.0]);
+        approx2(quad[4], [3.0, -1.0]);
+        approx2(quad[5], [3.0, 1.0]);
+    }
+
+    #[test]
+    fn segment_quad_tapers_when_widths_differ() {
+        // Same horizontal segment, but the trailing endpoint is
+        // half as wide as the leading endpoint — emulates a stroke
+        // where pressure dropped over time. The leading edge spans
+        // y ∈ [-1, 1], the trailing edge spans y ∈ [-0.5, 0.5].
+        let quad = segment_quad_positions((0.0, 0.0), (4.0, 0.0), 2.0, 1.0);
+        approx2(quad[0], [0.0, 1.0]); // a0
+        approx2(quad[1], [0.0, -1.0]); // b0
+        approx2(quad[2], [4.0, 0.5]); // a1
+        approx2(quad[4], [4.0, -0.5]); // b1
+    }
+
+    #[test]
+    fn segment_quad_diagonal_uses_perpendicular_normal() {
+        // 45° segment (0, 0) → (1, 1) with uniform width √2 so the
+        // offsets along the perpendicular ((-√2/2, √2/2) normalised
+        // = (-1/√2, 1/√2)) work out to nice unit values.
+        // a0 = (0,0) + n * w/2 with n = (-1/√2, 1/√2), w/2 = √2/2
+        //    = (0,0) + (-1/√2, 1/√2) * (√2/2)
+        //    = (-0.5, 0.5)
+        let quad = segment_quad_positions(
+            (0.0, 0.0),
+            (1.0, 1.0),
+            std::f32::consts::SQRT_2,
+            std::f32::consts::SQRT_2,
+        );
+        approx2(quad[0], [-0.5, 0.5]);
+        approx2(quad[1], [0.5, -0.5]);
+        approx2(quad[2], [0.5, 1.5]);
+    }
+
+    #[test]
+    fn segment_quad_degenerate_segment_collapses() {
+        // Zero-length segment shouldn't produce NaN normals — we
+        // collapse it to six copies of the start position so the
+        // rasteriser sees a zero-area triangle pair.
+        let quad = segment_quad_positions((7.0, 9.0), (7.0, 9.0), 2.0, 2.0);
+        for v in quad {
+            approx2(v, [7.0, 9.0]);
+        }
     }
 
     #[test]

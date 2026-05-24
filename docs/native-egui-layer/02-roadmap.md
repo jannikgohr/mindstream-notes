@@ -30,17 +30,19 @@ Samsung devices).
 Since the POC landed, the foundational data-model work is in:
 page coordinates with A4 portrait default (C0), per-note canvas
 state (C1), yrs-backed persistence + live-CRDT stroke document
-(C2), and end-to-end pressure capture (C3 — stored per-point;
-renderer ignores it until C4 hooks up variable-width tessellation).
+(C2), end-to-end pressure capture (C3), and variable-width
+pressure-tapered strokes (C4 — per-segment CPU tessellation into
+TriangleList quads; no `lyon` dep yet, joints aren't mitered).
 The code has been split out of single-file `render.rs` into
 `surface.rs` / `pipeline.rs` / `ui/{mod, toolbar}.rs` / `jni.rs`
 (R1, R2 partial); `render.rs` retains the render-thread loop +
 JNI-facing public API.
 
 **Deliberately NOT yet implemented** — see roadmap below: stroke
-smoothing; thick / pressure-tapered strokes; live collab;
-cross-platform `SurfaceSource` / `InputSource` traits; desktop
-port.
+smoothing; live collab; cross-platform `SurfaceSource` /
+`InputSource` traits; desktop port. Rounded caps + mitered joints
+(via `lyon`) deferred until thick-stroke joints actually look
+notchy in practice.
 
 ## Roadmap
 
@@ -93,7 +95,7 @@ that order. R3–R5 still gate E.)
 | C1 | Per-note canvas state | One `StrokesDoc` per note, swapped on `drawing_show(note_id)`. | **Done** (f912c85) |
 | C2 | Persistence via yrs (`yjs-rs`) | `yrs::Doc` like markdown / freeform notes — strokes as a `Y.Array<Y.Map>`, each map carrying `{id, color, width, points: Y.Array<Point>}`. Persisted into `note.yrs_state`, synced via Etebase. Pen-down opens a fresh `Stroke`, samples append to its `points` Y.Array, pen-up commits. Eraser sets a tombstone field (don't delete; offline-merge convergence). Format versioned via a `schema` field on the doc root. | **Done** (645dff6; persistence bugfix 36e74b5) |
 | C3 | Pressure capture | Kotlin reads `MotionEvent.AXIS_PRESSURE` (+ historical samples), sanitises NaN/0/over-1 to 1.0, and passes through `pushPoint(x, y, pressure, action)`. Stored as a parallel `pressures: Y.Array<f64>` on each stroke map (additive — no schema bump; legacy strokes default to 1.0 on read). The renderer threads pressure to `StrokesDoc::push_point` but currently ignores it on the GPU side (uniform-width `LineList` until C4). Unblocks C4 + D1 + D2. | **Done** |
-| C4 | Variable-width strokes via `lyon` | Replace `PrimitiveTopology::LineList` with `lyon` tessellation: pressure-tapered triangle strips with rounded caps. Vertex format grows to `{pos, width}` or pre-baked outlines. Page-coord model (C0) means the tessellator works in document space and the view transform handles screen mapping. Depends on C3. | Pending |
+| C4 | Variable-width strokes | Per-segment CPU tessellation (2-triangle quad with potentially different widths at each endpoint) — no `lyon` dep yet. Each stroke segment uses `width = MIN_WIDTH + (BASE_WIDTH - MIN_WIDTH) * pressure` (MIN=1.0, BASE=4.0 page-units = ~0.18–0.7 mm). Topology flipped to `TriangleList`; vertex format unchanged. Pure-math `segment_quad_positions` lives in `page.rs` with host-side unit tests. Joints aren't mitered yet — fine for the current thin-stroke regime; revisit (probably with `lyon`'s stroke tessellator) if thick-stroke joints look notchy. Per-stroke `width` field in the schema is still ignored — wires up with D5. | **Done** (deferred lyon + rounded caps) |
 | C5 | Live collab on the canvas | Each open ink note's `yrs::Doc` plugs into the existing `CollabProvider` infrastructure (same path markdown notes use for live editing). Yrs broadcasts pen samples to peers as they arrive; remote samples merge into the doc and trigger a re-render. Local-first by construction: offline writes append to the local Y.Array and sync on next reconnect with CRDT-correct merge. Depends on C2. | Pending |
 
 ### D. Quality / feel — depends on C

@@ -25,9 +25,51 @@ use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
 
+use super::page::segment_quad_positions;
 use super::pipeline::{self, PersistentGpu, SurfaceBoundState, Vertex};
 use super::strokes_doc::StrokesDoc;
 use super::ui::{self, CanvasUi};
+
+/// Maximum stroke width in page units (1 unit = 1/144 inch ≈ 0.176 mm).
+/// A pen sample with `pressure == 1.0` renders at this width; lower
+/// pressures scale linearly down to [`MIN_WIDTH`]. 4.0 ≈ 0.7 mm —
+/// the lower end of a felt-tip pen, which feels right for
+/// stylus input on a tablet.
+///
+/// Stroke-level width (the schema's per-stroke `FIELD_WIDTH`) is
+/// reserved for D5's "brush size" UI and currently ignored by the
+/// renderer — all strokes use the same `BASE_WIDTH`. Wiring it
+/// through is a one-line change once the toolbar exposes the picker.
+const BASE_WIDTH: f32 = 4.0;
+/// Floor for the pressure-tapered width so a near-zero-pressure
+/// sample doesn't tessellate into a sub-pixel sliver that disappears
+/// under nearest-pixel rasterisation. ~0.18 mm at 144 DPI.
+const MIN_WIDTH: f32 = 1.0;
+
+/// Map a raw pressure value in [0, 1] (already sanitised at the JNI
+/// boundary) to a page-unit stroke width. Linear ramp from
+/// MIN_WIDTH to BASE_WIDTH.
+fn width_for_pressure(pressure: f32) -> f32 {
+    let p = pressure.clamp(0.0, 1.0);
+    MIN_WIDTH + (BASE_WIDTH - MIN_WIDTH) * p
+}
+
+/// Adapt the host-testable [`segment_quad_positions`] math into the
+/// wgpu `Vertex` array shape the render pipeline consumes.
+///
+/// Joints between consecutive segments are not mitered — each quad
+/// is independent. For thin strokes (sub-pixel-scale widths) this is
+/// invisible; if thick-stroke joints look notchy later we can revisit
+/// (lyon's stroke tessellator handles miters / rounded joins).
+fn tessellate_segment(
+    p0: (f32, f32),
+    p1: (f32, f32),
+    w0: f32,
+    w1: f32,
+) -> [Vertex; 6] {
+    let positions = segment_quad_positions(p0, p1, w0, w1);
+    positions.map(|position| Vertex { position })
+}
 
 /// Android MotionEvent action constants we care about. Mirrors
 /// `android.view.MotionEvent.ACTION_*` so the Kotlin side can
@@ -126,23 +168,25 @@ impl CanvasDocument {
         // (prev → curr) line-list pairs for the GPU. Single-point
         // strokes (no second sample) generate no segments — the
         // user lifted the pen without moving; nothing to draw.
-        // Pressures are surfaced by the visitor but ignored here —
-        // the current `LineList` topology renders uniform-width
-        // segments, so per-point pressure has no effect on the GPU
-        // output until C4 (lyon tessellation) lands. Keeping it in
-        // the doc means we don't have to back-fill historical
-        // strokes when that hooks up.
-        strokes_doc.for_each_stroke_points(|flat, _pressures| {
-            let mut prev: Option<(f32, f32)> = None;
-            for chunk in flat.chunks_exact(2) {
-                let curr = (chunk[0], chunk[1]);
-                if let Some((px, py)) = prev {
-                    segments.push(Vertex {
-                        position: [px, py],
-                    });
-                    segments.push(Vertex {
-                        position: [curr.0, curr.1],
-                    });
+        // Walk each stroke's (point, pressure) pairs and emit a
+        // tessellated quad per segment. Geometry is identical to
+        // what the live ACTION_MOVE handler emits, so a re-hydrated
+        // doc renders pixel-equivalently to the same doc replayed
+        // sample-by-sample.
+        strokes_doc.for_each_stroke_points(|flat, pressures| {
+            let mut prev: Option<(f32, f32, f32)> = None;
+            for (i, chunk) in flat.chunks_exact(2).enumerate() {
+                let curr_p = pressures.get(i).copied().unwrap_or(1.0);
+                let curr = (chunk[0], chunk[1], curr_p);
+                if let Some((px, py, pp)) = prev {
+                    let w_prev = width_for_pressure(pp);
+                    let w_curr = width_for_pressure(curr.2);
+                    segments.extend_from_slice(&tessellate_segment(
+                        (px, py),
+                        (curr.0, curr.1),
+                        w_prev,
+                        w_curr,
+                    ));
                 }
                 prev = Some(curr);
             }
@@ -334,11 +378,13 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
     /// pull segments from. `None` means "no note open" — the
     /// renderer still draws background + toolbar but skips strokes.
     let mut active_note_id: Option<String> = None;
-    // The most-recent sample's surface coordinates, used to anchor
-    // the next MOVE sample's starting vertex. None between strokes.
+    // The most-recent sample's surface coordinates + pressure, used
+    // to anchor the next MOVE sample's starting vertex (position) and
+    // its starting width (pressure). None between strokes.
     // Per-stroke transient; reset on active-note swap so an
     // in-flight stroke can't leak from one note into another.
     let mut last_point: Option<(f32, f32)> = None;
+    let mut last_pressure: Option<f32> = None;
     // True while the in-progress gesture started inside the toolbar
     // region — mirror to egui so its buttons see the press, but
     // skip the line pipeline.
@@ -437,6 +483,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             } else {
                                 stroke_suppressed = false;
                                 last_point = Some((x, y));
+                                last_pressure = Some(pressure);
                                 // Open a fresh stroke in the active
                                 // doc and seed its points array with
                                 // the down sample. The first MOVE
@@ -459,8 +506,14 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                         ACTION_MOVE => {
                             egui_input.events.push(egui::Event::PointerMoved(pos));
                             if !stroke_suppressed {
-                                if let (Some((px, py)), Some(s), Some(id)) = (
+                                if let (
+                                    Some((px, py)),
+                                    Some(pp),
+                                    Some(s),
+                                    Some(id),
+                                ) = (
                                     last_point,
+                                    last_pressure,
                                     surface_state.as_ref(),
                                     active_note_id.as_ref(),
                                 ) {
@@ -472,14 +525,18 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                     let doc = documents
                                         .entry(id.clone())
                                         .or_insert_with(CanvasDocument::new);
-                                    // Render-side cache: line-list
-                                    // pair for the GPU.
-                                    doc.segments.push(Vertex {
-                                        position: prev_page,
-                                    });
-                                    doc.segments.push(Vertex {
-                                        position: curr_page,
-                                    });
+                                    // Render-side cache: tessellated
+                                    // pressure-tapered quad (2 tris).
+                                    let w_prev = width_for_pressure(pp);
+                                    let w_curr = width_for_pressure(pressure);
+                                    doc.segments.extend_from_slice(
+                                        &tessellate_segment(
+                                            (prev_page[0], prev_page[1]),
+                                            (curr_page[0], curr_page[1]),
+                                            w_prev,
+                                            w_curr,
+                                        ),
+                                    );
                                     // Source-of-truth side: append
                                     // the new point + its pressure to
                                     // the in-flight stroke's yrs
@@ -492,6 +549,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                     dirty = true;
                                 }
                                 last_point = Some((x, y));
+                                last_pressure = Some(pressure);
                             }
                         }
                         ACTION_UP | ACTION_CANCEL => {
@@ -507,6 +565,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                 }
                             }
                             last_point = None;
+                            last_pressure = None;
                             stroke_suppressed = false;
                             dirty = true;
                         }
@@ -521,6 +580,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                         }
                     }
                     last_point = None;
+                    last_pressure = None;
                     dirty = true;
                 }
                 Msg::SetActiveNote {
@@ -551,6 +611,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                     // the previous note's gesture so it can't leak
                     // into the new doc on the next MOVE sample.
                     last_point = None;
+                    last_pressure = None;
                     stroke_suppressed = false;
                     dirty = true;
                 }
@@ -579,6 +640,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                 }
                             }
                             last_point = None;
+                            last_pressure = None;
                             // Re-render so the user sees the cleared
                             // canvas immediately.
                             let fresh_segs = active_segments(&active_note_id, &documents);
