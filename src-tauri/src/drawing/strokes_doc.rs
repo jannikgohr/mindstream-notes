@@ -237,9 +237,13 @@ impl StrokesDoc {
         F: FnMut(StrokeView),
     {
         let tx = self.doc.transact();
-        let len = self.strokes.len(&tx);
-        for i in 0..len {
-            let Some(Out::YMap(stroke)) = self.strokes.get(&tx, i) else {
+        // iter() walks yrs's internal tree once, O(n); indexed get(i)
+        // is O(log n) per call, so the old `for i in 0..len` pattern
+        // was O(n log n) — measurable on heavy docs (200k+ points
+        // → multi-second decode on a tablet). Same correctness, far
+        // less wall-clock.
+        for stroke_value in self.strokes.iter(&tx) {
+            let Out::YMap(stroke) = stroke_value else {
                 continue;
             };
             let tombstoned = matches!(
@@ -252,10 +256,9 @@ impl StrokesDoc {
             let Some(Out::YArray(points)) = stroke.get(&tx, FIELD_POINTS) else {
                 continue;
             };
-            let n = points.len(&tx);
-            let mut flat: Vec<f32> = Vec::with_capacity(n as usize);
-            for j in 0..n {
-                if let Some(Out::Any(Any::Number(v))) = points.get(&tx, j) {
+            let mut flat: Vec<f32> = Vec::with_capacity(points.len(&tx) as usize);
+            for value in points.iter(&tx) {
+                if let Out::Any(Any::Number(v)) = value {
                     flat.push(v as f32);
                 }
             }
@@ -265,9 +268,8 @@ impl StrokesDoc {
             let expected_pressures = flat.len() / 2;
             let mut pressures: Vec<f32> = Vec::with_capacity(expected_pressures);
             if let Some(Out::YArray(stored)) = stroke.get(&tx, FIELD_PRESSURES) {
-                let m = stored.len(&tx);
-                for j in 0..m {
-                    if let Some(Out::Any(Any::Number(v))) = stored.get(&tx, j) {
+                for value in stored.iter(&tx) {
+                    if let Out::Any(Any::Number(v)) = value {
                         pressures.push(v as f32);
                     }
                 }
