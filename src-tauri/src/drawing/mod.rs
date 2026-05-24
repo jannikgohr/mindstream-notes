@@ -140,10 +140,32 @@ pub fn notify_dirty(note_id: &str) {
 pub fn drawing_show(note_id: String, yrs_state: Vec<u8>) -> Result<(), String> {
     #[cfg(target_os = "android")]
     {
+        // Open-path timing — prefix `[drawing.perf]` so it's easy to
+        // grep in logcat. Three numbers tell the whole story for the
+        // perceived "tap to canvas" latency, when combined with the
+        // SurfaceReady / pipeline logs in render.rs + pipeline.rs:
+        //   - set_active:  channel send for Msg::SetActiveNote
+        //   - call_show:   JNI call into Kotlin's Drawing.show
+        //   - state_bytes: how big the JSON-encoded yrs blob was on
+        //                  the way through Tauri's IPC (rough proxy
+        //                  for "is the JSON serialisation the slow
+        //                  part?")
+        let state_bytes = yrs_state.len();
+        let t_active_start = std::time::Instant::now();
         // Set the active note BEFORE bringing the surface up so the
         // first frame already shows the right strokes.
         render::set_active_note(Some(note_id), Some(yrs_state));
-        platform::android::ui::call_show().map_err(|e| format!("drawing_show: {e}"))
+        let t_active = t_active_start.elapsed();
+        let t_show_start = std::time::Instant::now();
+        let result = platform::android::ui::call_show()
+            .map_err(|e| format!("drawing_show: {e}"));
+        log::info!(
+            "[drawing.perf] drawing_show: set_active={:?} call_show={:?} state_bytes={}",
+            t_active,
+            t_show_start.elapsed(),
+            state_bytes
+        );
+        result
     }
     #[cfg(not(target_os = "android"))]
     {
