@@ -153,6 +153,13 @@ pub async fn build_first_time(
     width: u32,
     height: u32,
 ) -> Result<(PersistentGpu, SurfaceBoundState), String> {
+    // Per-phase timing for the open-latency investigation. Each
+    // `t_*` captures wallclock elapsed for the named step; the
+    // final summary log lets us see at a glance which step (adapter
+    // negotiation? device init? pipeline link?) dominates.
+    let t_total = std::time::Instant::now();
+
+    let t_phase = std::time::Instant::now();
     // GL only — Mesa Vulkan on the emulator returns null handles
     // that wgpu's Vulkan path then deref-crashes; GLES works
     // everywhere we've tested.
@@ -160,7 +167,9 @@ pub async fn build_first_time(
         backends: wgpu::Backends::GL,
         ..Default::default()
     });
+    let t_instance = t_phase.elapsed();
 
+    let t_phase = std::time::Instant::now();
     // SAFETY: `window` is owned by us (boxed) and will move into the
     // returned `SurfaceBoundState`, so its raw handle stays valid
     // for the surface's lifetime. The window's `Drop` runs only
@@ -174,7 +183,9 @@ pub async fn build_first_time(
             })
             .map_err(|e| format!("create_surface_unsafe: {e}"))?
     };
+    let t_surface = t_phase.elapsed();
 
+    let t_phase = std::time::Instant::now();
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
@@ -183,6 +194,7 @@ pub async fn build_first_time(
         })
         .await
         .map_err(|e| format!("request_adapter: {e:?}"))?;
+    let t_adapter = t_phase.elapsed();
     let info = adapter.get_info();
     log::info!(
         "[drawing] wgpu adapter: name={} backend={:?} type={:?} driver={}",
@@ -192,6 +204,7 @@ pub async fn build_first_time(
         info.driver
     );
 
+    let t_phase = std::time::Instant::now();
     let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor {
             label: Some("drawing-device"),
@@ -202,7 +215,9 @@ pub async fn build_first_time(
         })
         .await
         .map_err(|e| format!("request_device: {e:?}"))?;
+    let t_device = t_phase.elapsed();
 
+    let t_phase = std::time::Instant::now();
     let caps = surface.get_capabilities(&adapter);
     // egui_wgpu does its own colour conversion in the shader and
     // assumes a linear render target — sRGB formats produce washed-
@@ -232,11 +247,16 @@ pub async fn build_first_time(
         desired_maximum_frame_latency: 2,
     };
     surface.configure(&device, &config);
+    let t_configure = t_phase.elapsed();
 
+    let t_phase = std::time::Instant::now();
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("drawing-shader"),
         source: wgpu::ShaderSource::Wgsl(include_str!("line.wgsl").into()),
     });
+    let t_shader = t_phase.elapsed();
+
+    let t_phase = std::time::Instant::now();
     let view_bind_group_layout = create_view_bind_group_layout(&device);
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("drawing-pipeline-layout"),
@@ -281,10 +301,26 @@ pub async fn build_first_time(
         multiview: None,
         cache: None,
     });
+    let t_pipeline = t_phase.elapsed();
 
+    let t_phase = std::time::Instant::now();
     // 5-arg constructor matches egui-wgpu 0.32: device, output
     // color format, optional depth format, msaa samples, dithering.
     let egui_renderer = egui_wgpu::Renderer::new(&device, surface_format, None, 1, false);
+    let t_egui = t_phase.elapsed();
+
+    log::info!(
+        "[drawing.perf] build_first_time TOTAL={:?} instance={:?} surface={:?} adapter={:?} device={:?} configure={:?} shader={:?} pipeline={:?} egui={:?}",
+        t_total.elapsed(),
+        t_instance,
+        t_surface,
+        t_adapter,
+        t_device,
+        t_configure,
+        t_shader,
+        t_pipeline,
+        t_egui,
+    );
 
     // Initial page + view transform. Resize() will rebuild the
     // transform whenever the surface changes size.
@@ -333,6 +369,14 @@ pub async fn build_surface_only(
     width: u32,
     height: u32,
 ) -> Result<SurfaceBoundState, String> {
+    // Subsequent-attach timing — this is the hot path for the 2nd
+    // and later ink-note opens in a session (the first one pays
+    // build_first_time's cost instead). Tells us whether the
+    // surface_create + configure step is the dominant cost on
+    // re-opens, separate from build_first_time's adapter/device
+    // negotiation.
+    let t_total = std::time::Instant::now();
+    let t_phase = std::time::Instant::now();
     // SAFETY: as in build_first_time — `window` is owned by us
     // and moves into the returned SurfaceBoundState, so its raw
     // handle stays valid for the surface's lifetime.
@@ -345,7 +389,9 @@ pub async fn build_surface_only(
             })
             .map_err(|e| format!("create_surface_unsafe: {e}"))?
     };
+    let t_surface = t_phase.elapsed();
 
+    let t_phase = std::time::Instant::now();
     let caps = surface.get_capabilities(&persistent.adapter);
     let alpha_mode = caps
         .alpha_modes
@@ -364,6 +410,13 @@ pub async fn build_surface_only(
         desired_maximum_frame_latency: 2,
     };
     surface.configure(&persistent.device, &config);
+    let t_configure = t_phase.elapsed();
+    log::info!(
+        "[drawing.perf] build_surface_only TOTAL={:?} surface={:?} configure={:?}",
+        t_total.elapsed(),
+        t_surface,
+        t_configure,
+    );
 
     let page = page::DEFAULT_PAGE;
     let view_transform =
