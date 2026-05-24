@@ -29,6 +29,7 @@ use jni::objects::{GlobalRef, JClass, JObject};
 use jni::sys::{jfloat, jint};
 use jni::JNIEnv;
 
+use crate::drawing::input::{Sample, SampleAction, ToolKind};
 use crate::drawing::render;
 
 /// Global ref to the Kotlin `io.crates.drawing.Drawing` class,
@@ -133,14 +134,19 @@ pub extern "system" fn Java_io_crates_drawing_Drawing_00024Companion_clearSurfac
 ///     devices / events that don't report pressure — Kotlin
 ///     substitutes the default before crossing the boundary).
 ///   - `tool_type` mirrors `MotionEvent.TOOL_TYPE_*` (0 unknown,
-///     1 finger, 2 stylus, 3 mouse, 4 eraser). The render thread
-///     uses it at ACTION_DOWN to pick the stroke colour.
+///     1 finger, 2 stylus, 3 mouse, 4 eraser). Converted to
+///     [`ToolKind`] here.
 ///   - `action` uses Android's `MotionEvent.ACTION_*` integer
-///     constants verbatim; `render.rs` matches on the same values.
+///     constants verbatim. Converted to [`SampleAction`] here;
+///     unrecognised values (e.g. ACTION_HOVER_MOVE) are dropped
+///     before reaching the render thread.
 ///
 /// Hot path: this fires up to a few hundred Hz when the user is
 /// drawing. Keep the body trivial — anything heavy belongs on the
-/// render thread, behind the channel.
+/// render thread, behind the channel. The enum conversions here
+/// are constant-time matches on small ints; the platform-neutral
+/// `Sample` lives in `crate::drawing::input` so the render thread
+/// doesn't have to know Android's wire format.
 #[no_mangle]
 pub extern "system" fn Java_io_crates_drawing_Drawing_00024Companion_pushPoint(
     _env: JNIEnv,
@@ -151,7 +157,20 @@ pub extern "system" fn Java_io_crates_drawing_Drawing_00024Companion_pushPoint(
     tool_type: jint,
     action: jint,
 ) {
-    render::push_sample(x, y, pressure, tool_type, action);
+    let Some(action) = SampleAction::from_raw(action) else {
+        // Unknown ACTION_* (HOVER_MOVE, OUTSIDE, multi-pointer
+        // index bits, …) — the render thread only models the four
+        // stroke phases, so drop these at the boundary rather than
+        // pretend they're a recognised phase.
+        return;
+    };
+    render::push_sample(Sample {
+        x,
+        y,
+        pressure,
+        tool: ToolKind::from_raw(tool_type),
+        action,
+    });
 }
 
 // ---------- Rust → Kotlin (UI thread callbacks) ----------
