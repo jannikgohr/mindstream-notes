@@ -197,6 +197,17 @@ enum Msg {
     GetState {
         reply: SyncSender<Vec<u8>>,
     },
+    /// Like [`Msg::GetState`] but for any note id in the in-memory
+    /// `documents` map, not just the active one. Used by the
+    /// `save_worker` thread — pending saves may fire after the user
+    /// has navigated away from the note (it's still alive in the
+    /// HashMap for the process lifetime). Returns empty bytes if
+    /// the id isn't in the map (note was never opened this session,
+    /// or was somehow evicted).
+    GetStateForNote {
+        note_id: String,
+        reply: SyncSender<Vec<u8>>,
+    },
 }
 
 /// Pre-decoded form of one visible stroke, cached in
@@ -810,6 +821,25 @@ pub fn get_active_state() -> Vec<u8> {
     rx.recv_timeout(Duration::from_millis(500)).unwrap_or_default()
 }
 
+/// Like [`get_active_state`] but for a specific note id — used by
+/// the save_worker thread, which may need to flush bytes for a
+/// note that's no longer the active one (user navigated away during
+/// the debounce window). Returns empty bytes if the note isn't in
+/// the render thread's `documents` map.
+///
+/// Bounded by a 500 ms timeout to match `get_active_state` — if the
+/// render thread is stuck on something pathological the worker
+/// would otherwise hang forever. Worker logs + retries on the next
+/// dirty event.
+pub fn get_state_for_note(note_id: &str) -> Vec<u8> {
+    let (tx, rx) = mpsc::sync_channel::<Vec<u8>>(1);
+    send(Msg::GetStateForNote {
+        note_id: note_id.to_string(),
+        reply: tx,
+    });
+    rx.recv_timeout(Duration::from_millis(500)).unwrap_or_default()
+}
+
 // ---------- render thread ----------
 
 /// Translate a pixel coordinate (origin top-left) into the egui
@@ -1339,6 +1369,13 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                     let bytes = active_note_id
                         .as_ref()
                         .and_then(|id| documents.get(id))
+                        .map(|doc| doc.strokes_doc.encode())
+                        .unwrap_or_default();
+                    let _ = reply.send(bytes);
+                }
+                Msg::GetStateForNote { note_id, reply } => {
+                    let bytes = documents
+                        .get(&note_id)
                         .map(|doc| doc.strokes_doc.encode())
                         .unwrap_or_default();
                     let _ = reply.send(bytes);

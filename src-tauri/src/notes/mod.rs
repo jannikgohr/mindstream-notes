@@ -154,6 +154,26 @@ pub fn list(conn: &Connection, include_trashed: bool) -> AppResult<Vec<NoteSumma
     Ok(summaries)
 }
 
+/// Cheap-write helper for ink notes: updates JUST the `yrs_state`
+/// column + `modified` timestamp, no body / tags / parent shuffling.
+/// Used by the drawing save worker to flush in-memory `StrokesDoc`
+/// bytes to disk without going through the full `update` path
+/// (which is shaped for general note updates incl. body diffing,
+/// payload-schema bumping, parent moves, …).
+///
+/// Returns `Ok(false)` if the note id doesn't exist (caller's
+/// pending save has nothing to land on — note was deleted while the
+/// debounce was pending). Returns `Ok(true)` on a successful row
+/// update.
+pub fn save_yrs_state(conn: &mut Connection, id: &str, bytes: &[u8]) -> AppResult<bool> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let rows = conn.execute(
+        "UPDATE notes SET yrs_state = ?1, modified = ?2 WHERE id = ?3",
+        params![bytes, now, id],
+    )?;
+    Ok(rows > 0)
+}
+
 /// Cheap fetch of just the `yrs_state` blob for a note id, skipping
 /// the rest of the row + the serde-derive overhead of building a
 /// `Note`. Used by ink-note open (`drawing_show`) to dodge the
