@@ -537,21 +537,28 @@ fn pick_present_mode(modes: &[wgpu::PresentMode]) -> wgpu::PresentMode {
 /// stroke vertex buffer, encode a single render pass that draws
 /// strokes then egui on top, submit, present.
 ///
-/// Vertex buffer layout each frame:
+/// Vertex buffer layout each frame (three contiguous zones, single
+/// draw call):
 ///
 /// ```text
-/// [ committed strokes ][ D2 prediction ]
-///   0..committed.len()   committed.len()..committed.len() + prediction.len()
+/// [ committed smoothed ][ raw head ][ predicted lead ]
+///   0..C                  C..C+R     C+R..C+R+P
 /// ```
 ///
-/// The committed prefix uses the P1 partial-upload optimization —
-/// append-only writes when the slice grew (pen-drawing's hot path),
-/// full rewrite when it shrank (eraser tombstone, retessellate).
-/// The prediction suffix is always full-rewritten each frame because
-/// its contents change with every MOVE (the spring-mass model rolls
-/// forward as the user draws). Stale bytes past the draw range are
-/// harmless — the draw call's vertex range stops exactly at
-/// `committed.len() + prediction.len()`.
+/// - **Committed** uses the P1 partial-upload optimization —
+///   append-only writes when the slice grew (pen-drawing's hot
+///   path), full rewrite when it shrank (eraser tombstone,
+///   retessellate).
+/// - **Raw head** is the two-zone bridge between the smoothed body
+///   and the pen tip. Always full-rewritten at offset `C * vsz`
+///   because both its content and length change every MOVE.
+/// - **Predicted lead** is the future zone-3 forward extrapolation;
+///   today this slice is always empty. The pipeline still accepts
+///   it as a slot so re-enabling prediction doesn't need a
+///   signature change. Same full-rewrite treatment as the raw head.
+///
+/// Stale bytes past the draw range are harmless — the draw call's
+/// vertex range stops exactly at `C + R + P`.
 ///
 /// UI is already tessellated by `CanvasUi::run`; this function
 /// doesn't run egui itself.
@@ -559,6 +566,7 @@ pub fn render_frame(
     persistent: &mut PersistentGpu,
     surface_state: &mut SurfaceBoundState,
     committed: &[Vertex],
+    raw_head: &[Vertex],
     prediction: &[Vertex],
     ui_output: UiOutput,
 ) -> Result<(), wgpu::SurfaceError> {
@@ -579,7 +587,7 @@ pub fn render_frame(
     // allocate a fresh buffer; the GPU's old contents are gone, so
     // the next upload must rewrite from offset 0.
     let vertex_size = std::mem::size_of::<Vertex>() as u64;
-    let total_vertices = committed.len() + prediction.len();
+    let total_vertices = committed.len() + raw_head.len() + prediction.len();
     let needed = (total_vertices as u64) * vertex_size;
     if needed > surface_state.vertex_capacity {
         let new_capacity = needed.max(surface_state.vertex_capacity * 3 / 2).max(1024);
@@ -624,14 +632,25 @@ pub fn render_frame(
         // offset 0.
         surface_state.last_uploaded_committed_count = 0;
     }
-    // Prediction-suffix upload — always full rewrite at
-    // `committed.len() * vertex_size`. The spring-mass model emits
-    // a fresh tail every MOVE; trying to reuse the previous frame's
-    // bytes would mean tracking when prediction *content* (not just
-    // length) changed, which is far more state for no measurable
-    // win — the prediction is at most a handful of vertices.
+    // Raw-head upload — always full rewrite at
+    // `committed.len() * vertex_size`. The head changes every MOVE
+    // (new cursor or new raw input position) and is at most one
+    // quad's worth of vertices, so the trivial overwrite is far
+    // cheaper than tracking content equality.
+    if !raw_head.is_empty() {
+        let head_offset = (committed.len() as u64) * vertex_size;
+        let vbuf = surface_state.vertex_buffer.as_ref().unwrap();
+        persistent
+            .queue
+            .write_buffer(vbuf, head_offset, bytemuck::cast_slice(raw_head));
+    }
+    // Prediction-suffix upload — full rewrite at
+    // `(committed.len() + raw_head.len()) * vertex_size`. Today
+    // this slice is always empty; kept here so the slot exists for
+    // when we wire zone-3 forward extrapolation back up.
     if !prediction.is_empty() {
-        let pred_offset = (committed.len() as u64) * vertex_size;
+        let pred_offset =
+            ((committed.len() + raw_head.len()) as u64) * vertex_size;
         let vbuf = surface_state.vertex_buffer.as_ref().unwrap();
         persistent
             .queue

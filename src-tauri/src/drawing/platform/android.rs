@@ -14,6 +14,7 @@
 //!        resizeSurface(w, h)
 //!        clearSurface()
 //!        pushPoint(x, y, pressure, toolType, buttons, action, timeMs)
+//!        pushPredictedPoint(x, y, pressure, timeMs)
 //!
 //!        Exposed as `Java_io_crates_drawing_Drawing_00024Companion_*`
 //!        symbols. Package + class + `$Companion` are load-bearing
@@ -288,6 +289,35 @@ pub extern "system" fn Java_io_crates_drawing_Drawing_00024Companion_pushPoint(
         action,
         time: (time_ms.max(0) as f64) / 1000.0,
     });
+}
+
+/// `Drawing.Companion.pushPredictedPoint(x, y, pressure, timeMs)` —
+/// a forward extrapolation from Android's MotionPredictor (API 33+).
+/// Distinct from `pushPoint` because predicted samples are NOT
+/// persisted into the stroke document; they only paint a transient
+/// "predicted lead" segment past the raw head until the next real
+/// sample arrives and replaces them. No action / tool / buttons
+/// fields — predictions are always mid-stroke MOVE-style and the
+/// stroke's tool / button state was already captured at DOWN.
+///
+/// Hot path: fires once per Kotlin `onTouchEvent` while drawing
+/// (≈ 60 Hz). Same trivial-pass-through pattern as `pushPoint` —
+/// anything non-trivial belongs on the render thread.
+#[no_mangle]
+pub extern "system" fn Java_io_crates_drawing_Drawing_00024Companion_pushPredictedPoint(
+    _env: JNIEnv,
+    _class: JClass,
+    x: jfloat,
+    y: jfloat,
+    pressure: jfloat,
+    time_ms: jlong,
+) {
+    render::push_predicted_point(
+        x,
+        y,
+        pressure,
+        (time_ms.max(0) as f64) / 1000.0,
+    );
 }
 
 // ---------- JNI: Rust → Kotlin (UI thread callbacks) ----------
