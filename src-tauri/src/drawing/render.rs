@@ -142,6 +142,58 @@ fn tessellate_segment(
     positions.map(|position| Vertex { position, color })
 }
 
+/// D2 forward prediction: rebuild `out` from whatever the smoother
+/// currently predicts the stroke would do if the user lifted now.
+/// Called once per render (after the message-batch loop, before the
+/// render-pass submission) so the prediction reflects the freshest
+/// smoother state.
+///
+/// Empty result is the common case — outside a Pen stroke, when the
+/// smoother has no MOVE input to predict from (just-Down state), or
+/// when the spring-mass system has already converged on the current
+/// position. The render pipeline draws committed + prediction as a
+/// single contiguous vertex range, so an empty `out` means the
+/// committed strokes are drawn as before.
+///
+/// Stylistically the prediction shares the same colour as the
+/// committed stroke (no fade / no separate translucent pass) —
+/// matches Apple Pencil / Surface Pen prior art and side-steps an
+/// alpha-blending state change in the GPU pipeline. The visual
+/// effect is "the inked line stays ahead of the pen tip" rather
+/// than "a ghost line trails the pen tip".
+fn build_prediction_segments(
+    out: &mut Vec<Vertex>,
+    smoother: &mut InkSmoother,
+    tool_mode: ToolMode,
+    current_stroke_color: Option<[u8; 4]>,
+    pen_tess_cursor: Option<SmoothedSample>,
+) {
+    out.clear();
+    if !matches!(tool_mode, ToolMode::Pen) || !smoother.is_in_stroke() {
+        return;
+    }
+    let (Some(color), Some(seed)) = (current_stroke_color, pen_tess_cursor) else {
+        return;
+    };
+    let predicted = smoother.predict();
+    if predicted.is_empty() {
+        return;
+    }
+    let mut pred_cursor = seed;
+    for sample in predicted {
+        let w_prev = width_for_pressure(pred_cursor.pressure);
+        let w_curr = width_for_pressure(sample.pressure);
+        out.extend_from_slice(&tessellate_segment(
+            pred_cursor.pos,
+            sample.pos,
+            w_prev,
+            w_curr,
+            color,
+        ));
+        pred_cursor = sample;
+    }
+}
+
 /// Messages the render thread accepts.
 enum Msg {
     /// Pre-warm `PersistentGpu` (instance + adapter + device +
@@ -900,6 +952,13 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
     // swaps always coincide with a stroke being either committed or
     // abandoned (the smoother gets reset on Pen DOWN regardless).
     let mut ink_smoother = InkSmoother::new();
+    // D2 forward-prediction segments — rebuilt every render frame
+    // from `ink_smoother.predict()`, drawn after the committed
+    // segments. Empty between strokes, after Pen UP, in Eraser
+    // mode, and any frame where the spring-mass model has nothing
+    // to project forward (e.g. just-Down state). See
+    // [`build_prediction_segments`] for the rebuild policy.
+    let mut prediction_segments: Vec<Vertex> = Vec::new();
     // The last smoothed point we tessellated a segment to (page
     // coordinates + pressure). The next smoothed sample's segment
     // starts here. `None` between strokes; set on DOWN to the
@@ -1526,6 +1585,18 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
             if needs_rebuild || dirty {
                 let segs = active_segments(&active_note_id, &documents);
                 let segs_len = segs.len();
+                // Refresh the D2 prediction tail before submitting
+                // the frame. `predict` is allowed to mutate the
+                // smoother (it borrows &mut) but won't change any
+                // observable state; cheap enough to redo every frame
+                // (a handful of vertices' worth of CPU math).
+                build_prediction_segments(
+                    &mut prediction_segments,
+                    &mut ink_smoother,
+                    tool_mode,
+                    current_stroke_color,
+                    pen_tess_cursor,
+                );
                 let input = std::mem::take(&mut egui_input);
                 // Build the UiState the toolbar reads for selected-
                 // tool highlight + undo/redo button enabled state.
@@ -1535,7 +1606,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                 let ui_state = build_ui_state(tool_mode, &active_note_id, &documents);
                 let (actions, ui_output) = canvas_ui.run(input, s.size_px(), ui_state);
                 let t_frame = std::time::Instant::now();
-                match pipeline::render_frame(p, s, segs, ui_output) {
+                match pipeline::render_frame(p, s, segs, &prediction_segments, ui_output) {
                     Ok(()) => {
                         if log_first_frame {
                             log::info!(
@@ -1643,6 +1714,22 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             // stack after we popped its last entry.
                             let fresh_segs =
                                 active_segments(&active_note_id, &documents);
+                            // Re-tessellate the prediction tail for
+                            // the follow-up frame too: toolbar
+                            // actions (undo/redo/clear/tool change)
+                            // can invalidate it (tool change resets
+                            // the smoother; undo/redo/clear don't
+                            // touch in-flight stroke state but the
+                            // committed-segment count changed, so
+                            // we still need to write fresh
+                            // prediction at the new offset).
+                            build_prediction_segments(
+                                &mut prediction_segments,
+                                &mut ink_smoother,
+                                tool_mode,
+                                current_stroke_color,
+                                pen_tess_cursor,
+                            );
                             let fresh_input = egui::RawInput::default();
                             let fresh_state = build_ui_state(
                                 tool_mode,
@@ -1651,7 +1738,13 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             );
                             let (_, fresh_ui) =
                                 canvas_ui.run(fresh_input, s.size_px(), fresh_state);
-                            let _ = pipeline::render_frame(p, s, fresh_segs, fresh_ui);
+                            let _ = pipeline::render_frame(
+                                p,
+                                s,
+                                fresh_segs,
+                                &prediction_segments,
+                                fresh_ui,
+                            );
                         }
 
                         if actions.back {

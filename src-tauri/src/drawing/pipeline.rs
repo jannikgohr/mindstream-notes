@@ -100,14 +100,19 @@ pub struct SurfaceBoundState {
     config: wgpu::SurfaceConfiguration,
     vertex_buffer: Option<wgpu::Buffer>,
     vertex_capacity: u64,
-    /// Number of vertices currently committed to the GPU vertex
-    /// buffer. Drives `render_frame`'s partial-upload decision:
-    /// if the new segments are append-only relative to this count
-    /// (pen-drawing's hot path), upload just the new tail at the
-    /// right byte offset instead of rewriting the whole buffer.
-    /// Reset to 0 on buffer (re)allocation so the next render
-    /// uploads from offset 0.
-    last_uploaded_vertex_count: u64,
+    /// Number of *committed* vertices currently uploaded to the GPU
+    /// vertex buffer. Drives `render_frame`'s partial-upload
+    /// decision: if the new committed slice is append-only relative
+    /// to this count (pen-drawing's hot path), upload just the new
+    /// tail at the right byte offset instead of rewriting the whole
+    /// buffer. Reset to 0 on buffer (re)allocation so the next
+    /// render uploads from offset 0.
+    ///
+    /// Only tracks the *committed* prefix — D2 prediction segments
+    /// (which always change each frame) get full-rewritten at the
+    /// offset right after the committed tail every frame and do
+    /// not participate in this watermark.
+    last_uploaded_committed_count: u64,
     width: u32,
     height: u32,
     /// Page-coord ↔ surface-pixel mapping. Recomputed on every
@@ -409,7 +414,7 @@ pub async fn build_surface_bound(
         config,
         vertex_buffer: None,
         vertex_capacity: 0,
-        last_uploaded_vertex_count: 0,
+        last_uploaded_committed_count: 0,
         width,
         height,
         view_transform,
@@ -468,12 +473,29 @@ fn create_view_bind_group(
 /// stroke vertex buffer, encode a single render pass that draws
 /// strokes then egui on top, submit, present.
 ///
+/// Vertex buffer layout each frame:
+///
+/// ```text
+/// [ committed strokes ][ D2 prediction ]
+///   0..committed.len()   committed.len()..committed.len() + prediction.len()
+/// ```
+///
+/// The committed prefix uses the P1 partial-upload optimization —
+/// append-only writes when the slice grew (pen-drawing's hot path),
+/// full rewrite when it shrank (eraser tombstone, retessellate).
+/// The prediction suffix is always full-rewritten each frame because
+/// its contents change with every MOVE (the spring-mass model rolls
+/// forward as the user draws). Stale bytes past the draw range are
+/// harmless — the draw call's vertex range stops exactly at
+/// `committed.len() + prediction.len()`.
+///
 /// UI is already tessellated by `CanvasUi::run`; this function
 /// doesn't run egui itself.
 pub fn render_frame(
     persistent: &mut PersistentGpu,
     surface_state: &mut SurfaceBoundState,
-    segments: &[Vertex],
+    committed: &[Vertex],
+    prediction: &[Vertex],
     ui_output: UiOutput,
 ) -> Result<(), wgpu::SurfaceError> {
     // Push egui texture updates before any rendering — the font
@@ -492,7 +514,8 @@ pub fn render_frame(
     // allocate a fresh buffer; the GPU's old contents are gone, so
     // the next upload must rewrite from offset 0.
     let vertex_size = std::mem::size_of::<Vertex>() as u64;
-    let needed = (segments.len() as u64) * vertex_size;
+    let total_vertices = committed.len() + prediction.len();
+    let needed = (total_vertices as u64) * vertex_size;
     if needed > surface_state.vertex_capacity {
         let new_capacity = needed.max(surface_state.vertex_capacity * 3 / 2).max(1024);
         surface_state.vertex_buffer = Some(persistent.device.create_buffer(&wgpu::BufferDescriptor {
@@ -504,36 +527,50 @@ pub fn render_frame(
         surface_state.vertex_capacity = new_capacity;
         // Reset the upload watermark — fresh buffer has no
         // committed contents.
-        surface_state.last_uploaded_vertex_count = 0;
+        surface_state.last_uploaded_committed_count = 0;
     }
-    // Partial-upload decision (P1):
+    // Committed-prefix upload — partial-upload decision (P1):
     //   - Pen-mode append (new_len > last_uploaded): upload just the
     //     new tail at the right byte offset. Per-sample upload cost
     //     drops from ~2 MB rewrite to ~72 bytes for one segment quad.
     //   - Eraser shrink / retess-rebuild (new_len <= last): the
-    //     content of the prefix may have shifted, so full re-upload.
-    //     The draw call uses `0..segments.len()` so stale bytes in
-    //     [new_len..last] are ignored.
-    if !segments.is_empty() {
-        let new_len = segments.len() as u64;
-        let last = surface_state.last_uploaded_vertex_count;
+    //     content of the prefix may have shifted, so full re-upload
+    //     of the committed slice.
+    if !committed.is_empty() {
+        let new_len = committed.len() as u64;
+        let last = surface_state.last_uploaded_committed_count;
         let vbuf = surface_state.vertex_buffer.as_ref().unwrap();
         if new_len > last {
             let tail_offset = last * vertex_size;
-            let tail = &segments[last as usize..];
+            let tail = &committed[last as usize..];
             persistent
                 .queue
                 .write_buffer(vbuf, tail_offset, bytemuck::cast_slice(tail));
         } else {
             persistent
                 .queue
-                .write_buffer(vbuf, 0, bytemuck::cast_slice(segments));
+                .write_buffer(vbuf, 0, bytemuck::cast_slice(committed));
         }
-        surface_state.last_uploaded_vertex_count = new_len;
+        surface_state.last_uploaded_committed_count = new_len;
     } else {
-        // Empty segments: nothing to draw + nothing to upload.
-        // Reset watermark so the next append starts from offset 0.
-        surface_state.last_uploaded_vertex_count = 0;
+        // Empty committed: nothing to upload for the prefix. The
+        // prediction (if any) writes at offset 0 below. Reset
+        // watermark so the next committed append starts from
+        // offset 0.
+        surface_state.last_uploaded_committed_count = 0;
+    }
+    // Prediction-suffix upload — always full rewrite at
+    // `committed.len() * vertex_size`. The spring-mass model emits
+    // a fresh tail every MOVE; trying to reuse the previous frame's
+    // bytes would mean tracking when prediction *content* (not just
+    // length) changed, which is far more state for no measurable
+    // win — the prediction is at most a handful of vertices.
+    if !prediction.is_empty() {
+        let pred_offset = (committed.len() as u64) * vertex_size;
+        let vbuf = surface_state.vertex_buffer.as_ref().unwrap();
+        persistent
+            .queue
+            .write_buffer(vbuf, pred_offset, bytemuck::cast_slice(prediction));
     }
 
     let frame = match surface_state.surface.get_current_texture() {
@@ -586,9 +623,13 @@ pub fn render_frame(
 
         // Strokes underneath the toolbar — egui paints its panel
         // background on top, so any stroke vertices that happen to
-        // fall inside the toolbar region are covered visually.
+        // fall inside the toolbar region are covered visually. The
+        // committed strokes and the D2 prediction live contiguously
+        // in the same vertex buffer (committed first, prediction
+        // appended right after), drawn in a single pass to keep
+        // state-change cost flat.
         if let Some(vbuf) = surface_state.vertex_buffer.as_ref() {
-            if !segments.is_empty() {
+            if total_vertices > 0 {
                 pass.set_pipeline(&persistent.pipeline);
                 // Bind the view uniform (page → screen → NDC) so the
                 // line shader can transform our page-coordinate
@@ -596,7 +637,7 @@ pub fn render_frame(
                 // across rotations / re-attaches.
                 pass.set_bind_group(0, &surface_state.view_bind_group, &[]);
                 pass.set_vertex_buffer(0, vbuf.slice(..));
-                pass.draw(0..segments.len() as u32, 0..1);
+                pass.draw(0..total_vertices as u32, 0..1);
             }
         }
 
