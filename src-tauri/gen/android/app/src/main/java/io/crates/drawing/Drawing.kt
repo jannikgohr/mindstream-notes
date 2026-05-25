@@ -4,9 +4,11 @@ import android.app.Activity
 import android.content.Context
 import android.graphics.Color
 import android.graphics.PixelFormat
+import android.os.Build
 import android.os.SystemClock
 import android.util.Log
 import android.view.MotionEvent
+import android.view.MotionPredictor
 import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
@@ -235,6 +237,24 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
         )
 
         /**
+         * Predicted in-flight sample from android.view.MotionPredictor.
+         * Distinct entry point from pushPoint because predicted samples
+         * are NOT committed to the persisted stroke — they only paint a
+         * transient "predicted lead" segment past the raw head until
+         * the next real sample arrives. No action/tool/buttons because
+         * a prediction is always mid-stroke MOVE-style. Time is the
+         * predicted eventTime (uptimeMillis) so the Rust render thread
+         * can age it against other timestamps if needed; today it's
+         * only logged.
+         */
+        external fun pushPredictedPoint(
+            x: Float,
+            y: Float,
+            pressure: Float,
+            timeMs: Long
+        )
+
+        /**
          * Hands Rust a GlobalRef to the Drawing class so render-thread
          * callbacks (showFromNative/hideFromNative/backFromNative) can
          * dispatch without going through `env.find_class`, which fails
@@ -346,6 +366,33 @@ private fun releaseRefreshRate(activity: Activity) {
  */
 private class DrawingSurfaceView(context: Context) :
     SurfaceView(context), SurfaceHolder.Callback {
+
+    /**
+     * Android-system motion predictor. Records every MotionEvent and
+     * extrapolates forward in time so the inked stroke can paint a
+     * "predicted lead" segment past the raw pen position — visual
+     * compensation for the ~22 ms digitizer → display floor. Tuned
+     * by the platform against many stylus traces, so direction-change
+     * wobble is much less of a risk than a hand-rolled velocity
+     * extrapolator.
+     *
+     * Only available on Android 13+ (API 33 / TIRAMISU). On older
+     * versions this stays null and the prediction zone is empty —
+     * the two-zone (committed + raw head) path still renders fine.
+     * Both target devices (Tab S7 FE, S23+) are on Android 13+ so
+     * the null branch is effectively unreached in production.
+     *
+     * Constructed lazily on first touch rather than in `init {}`
+     * because the constructor takes a Context but the SurfaceView's
+     * context is the one we already hold — no async lifecycle to
+     * worry about.
+     */
+    private val motionPredictor: MotionPredictor? =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            MotionPredictor(context)
+        } else {
+            null
+        }
 
     init {
         setZOrderOnTop(true)
@@ -520,7 +567,52 @@ private class DrawingSurfaceView(context: Context) :
             action,
             event.eventTime
         )
+        // Forward extrapolation via MotionPredictor (API 33+).
+        // Record the just-arrived event (the system uses recent
+        // recorded events to extrapolate) and ask for a prediction
+        // PREDICTION_AHEAD_MS in the future. The result feeds the
+        // Rust render thread's "predicted lead" zone — one segment
+        // past the raw pen position. Skipped on Down/Up/Cancel
+        // because predictions only make sense mid-stroke; firing
+        // them on Down would extrapolate from a single point (the
+        // predictor would emit garbage or null), and on Up the
+        // stroke is over.
+        motionPredictor?.let { predictor ->
+            predictor.record(event)
+            if (action == MotionEvent.ACTION_MOVE) {
+                val targetMs = event.eventTime + PREDICTION_AHEAD_MS
+                val predicted: MotionEvent? =
+                    predictor.predict(targetMs * 1_000_000L)
+                if (predicted != null) {
+                    Drawing.pushPredictedPoint(
+                        predicted.x,
+                        predicted.y,
+                        sanitizePressure(predicted.pressure),
+                        predicted.eventTime
+                    )
+                    // recycle() is safe here — we only read the
+                    // primitive fields above and don't hold a
+                    // reference past this call.
+                    predicted.recycle()
+                }
+            }
+        }
         return true
+    }
+
+    companion object {
+        /**
+         * How far ahead, in milliseconds, to ask MotionPredictor to
+         * extrapolate. One vsync (~16 ms on a 60 Hz panel) is the
+         * typical sweet spot: long enough to visually compensate
+         * for the present-wait floor exposed by [drawing.perf.lag]
+         * gpu_split timings, short enough that direction-change
+         * wobble stays subtle. Worth tuning per-device if the lead
+         * feels too aggressive or too conservative; bump to 24 for
+         * more lead, drop to 8 if the predicted segment is visibly
+         * rubber-banding on reversals.
+         */
+        private const val PREDICTION_AHEAD_MS: Long = 16L
     }
 
     private fun sanitizePressure(raw: Float): Float {
