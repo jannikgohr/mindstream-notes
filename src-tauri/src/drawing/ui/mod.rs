@@ -7,7 +7,13 @@
 //! GPU pass needs.
 //!
 //! Module layout (grows as we add tools):
-//!   - `toolbar.rs`     — Back / tool toggle / Undo / Redo / Clear
+//!   - `toolbar.rs`     — Pen / Eraser toggle, Undo, Redo, Clear
+//!                        (no Back — the Svelte header above the
+//!                        SurfaceView already owns navigation).
+//!   - `theme.rs`       — shadcn-aligned colour tokens → `egui::Visuals`
+//!                        applied to the context. Bridged from JS
+//!                        via the (future) `drawing_set_theme` Tauri
+//!                        command.
 //!   - `color_picker.rs`— TODO: D5
 //!   - `eraser.rs`      — folded into the tool toggle for now; the
 //!                        eraser HIT-TEST lives in `render.rs` since
@@ -17,7 +23,15 @@
 //!                        graduate to a dedicated file.
 //!   - `brush.rs`       — TODO: D5
 
+pub mod theme;
 pub mod toolbar;
+
+pub use theme::DrawingTheme;
+
+/// Custom font family the toolbar references for icon glyphs. The
+/// matching `FontData` lives in `lucide-icons`' bundled TTF and is
+/// inserted into the egui context once in [`CanvasUi::new`].
+pub const LUCIDE_FAMILY: &str = "lucide";
 
 /// Scale factor we tell egui to use. Pixels per logical point.
 /// Roughly matches a typical phone density; a future improvement
@@ -54,10 +68,14 @@ pub struct UiState {
 /// orchestrator after the GPU pass completes. Defaulted fields mean
 /// "no action requested this frame" — the orchestrator only acts on
 /// the truthy / `Some(_)` ones.
+///
+/// No `back` field: B1 removed the egui Back button (it duplicated
+/// the Svelte mobile header's back arrow that sits above the
+/// SurfaceView). The JNI surface — `platform::android::ui::call_back`
+/// + `Drawing.backFromNative` — stays in place for a future re-wire
+/// if needed.
 #[derive(Default, Debug, Clone, Copy)]
 pub struct RenderActions {
-    /// Toolbar Back button or system-back gesture.
-    pub back: bool,
     /// Toolbar Clear button — tombstones every visible stroke and
     /// pushes a single ClearAll op onto the undo stack.
     pub clear: bool,
@@ -82,16 +100,59 @@ pub struct UiOutput {
 
 /// The UI side of the canvas. Owns the egui context so widget state
 /// (hover, focus, future tool mode, …) persists across frames
-/// without leaking into pipeline.rs.
+/// without leaking into pipeline.rs. Also holds the active theme so
+/// `set_theme` can re-apply visuals without rebuilding the whole
+/// context.
 pub struct CanvasUi {
     ctx: egui::Context,
+    theme: DrawingTheme,
 }
 
 impl CanvasUi {
     pub fn new() -> Self {
         let ctx = egui::Context::default();
         ctx.set_pixels_per_point(PIXELS_PER_POINT);
-        Self { ctx }
+
+        // Register the bundled Lucide TTF as a custom font family
+        // (`LUCIDE_FAMILY`) so the toolbar can render icons via
+        // `RichText::new(char::from(Icon::X).to_string())
+        //     .family(FontFamily::Name(LUCIDE_FAMILY.into()))`.
+        // We don't add Lucide to the proportional / monospace
+        // fallback chains — only widgets that explicitly opt in
+        // (the toolbar) render glyphs, so regular text isn't
+        // affected by the icon font's missing letter coverage.
+        let mut fonts = egui::FontDefinitions::default();
+        fonts.font_data.insert(
+            LUCIDE_FAMILY.into(),
+            egui::FontData::from_static(lucide_icons::LUCIDE_FONT_BYTES).into(),
+        );
+        fonts.families.insert(
+            egui::FontFamily::Name(LUCIDE_FAMILY.into()),
+            vec![LUCIDE_FAMILY.into()],
+        );
+        ctx.set_fonts(fonts);
+
+        let theme = DrawingTheme::default();
+        ctx.set_visuals(theme.to_visuals());
+
+        Self { ctx, theme }
+    }
+
+    /// Swap the toolbar theme — typically driven by a JS-side
+    /// observer of the app's dark-mode + accent settings (via the
+    /// future `drawing_set_theme` Tauri command). Re-applies
+    /// `Visuals` to the egui context so the next frame paints in
+    /// the new palette without any further wiring.
+    pub fn set_theme(&mut self, theme: DrawingTheme) {
+        self.theme = theme;
+        self.ctx.set_visuals(theme.to_visuals());
+    }
+
+    /// Read-only access for the toolbar, which needs the
+    /// non-Visuals tokens (panel background colour for the egui
+    /// `Frame::fill`).
+    pub fn theme(&self) -> &DrawingTheme {
+        &self.theme
     }
 
     /// Run one frame of the UI. Sets the egui screen rect from the
@@ -111,8 +172,9 @@ impl CanvasUi {
         input.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, surface_points));
 
         let mut actions = RenderActions::default();
+        let theme = self.theme;
         let full_output = self.ctx.run(input, |ctx| {
-            toolbar::show(ctx, PIXELS_PER_POINT, state, &mut actions);
+            toolbar::show(ctx, PIXELS_PER_POINT, &theme, state, &mut actions);
         });
         let paint_jobs = self.ctx.tessellate(full_output.shapes, PIXELS_PER_POINT);
         let ui_output = UiOutput {

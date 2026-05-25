@@ -204,6 +204,70 @@ pub fn drawing_hide() -> Result<(), String> {
     }
 }
 
+/// Push the resolved app theme down to the egui toolbar (B2).
+/// Called from `+layout.svelte` / `DrawingNoteEditor.svelte` whenever
+/// `appearance.mode` resolves to a new dark/light state or the user
+/// picks a new `appearance.accent`. The Rust side forwards to
+/// `render::set_theme` which re-applies `egui::Visuals`.
+///
+/// `accent_hex` is the user-picked accent (`#RRGGBB` / `#RRGGBBAA`).
+/// Missing / unparseable values fall back to the shadcn defaults
+/// baked into [`drawing::ui::DrawingTheme::dark`] / `::light` — that
+/// way an unset accent still produces a sensible palette.
+#[tauri::command]
+#[allow(unused_variables)]
+pub fn drawing_set_theme(dark: bool, accent_hex: Option<String>) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        let accent_argb = accent_hex
+            .as_deref()
+            .and_then(parse_accent_hex)
+            .unwrap_or_else(|| default_accent_argb(dark));
+        render::set_theme(dark, accent_argb);
+    }
+    Ok(())
+}
+
+/// Parse the `#RRGGBB` / `#RRGGBBAA` hex string the JS picker
+/// produces into a packed `0xAARRGGBB` u32 (with alpha forced to
+/// `0xFF` — the toolbar accent is always opaque).
+#[cfg(target_os = "android")]
+fn parse_accent_hex(input: &str) -> Option<u32> {
+    let s = input.strip_prefix('#').unwrap_or(input);
+    let (r, g, b) = match s.len() {
+        // `#RGB` / `#RGBA` shorthand: each nibble doubles into a byte.
+        3 | 4 => {
+            let r = u8::from_str_radix(&s[0..1], 16).ok()?;
+            let g = u8::from_str_radix(&s[1..2], 16).ok()?;
+            let b = u8::from_str_radix(&s[2..3], 16).ok()?;
+            (r * 17, g * 17, b * 17)
+        }
+        6 | 8 => {
+            let r = u8::from_str_radix(&s[0..2], 16).ok()?;
+            let g = u8::from_str_radix(&s[2..4], 16).ok()?;
+            let b = u8::from_str_radix(&s[4..6], 16).ok()?;
+            (r, g, b)
+        }
+        _ => return None,
+    };
+    Some(0xFF00_0000 | ((r as u32) << 16) | ((g as u32) << 8) | (b as u32))
+}
+
+/// Fallback accent if the JS side hasn't pushed one yet (or sent an
+/// unparseable value). Matches the `--primary` token resolved from
+/// `src/app.css` for the corresponding mode — near-white on dark,
+/// near-black on light.
+#[cfg(target_os = "android")]
+fn default_accent_argb(dark: bool) -> u32 {
+    if dark {
+        // oklch(0.985 0 0) ≈ #FAFAFA
+        0xFFFA_FAFA
+    } else {
+        // oklch(0.205 0 0) ≈ #262626
+        0xFF26_2626
+    }
+}
+
 /// Wipe the current accumulated strokes without hiding the surface.
 ///
 /// Unused by the POC frontend (no toolbar) but wired so a follow-up

@@ -202,6 +202,7 @@ pub fn run() {
             drawing::drawing_hide,
             drawing::drawing_clear,
             drawing::drawing_set_save_debounce,
+            drawing::drawing_set_theme,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
