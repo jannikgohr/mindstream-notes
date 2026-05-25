@@ -585,6 +585,7 @@ fn erase_at(
     sample_surface: (f32, f32),
     drag_hits: &mut Vec<String>,
     seen: &mut HashSet<String>,
+    pending_tombstones: &mut HashSet<String>,
 ) {
     let Some(id) = active_note_id.as_ref() else {
         return;
@@ -595,13 +596,15 @@ fn erase_at(
     let doc = documents.entry(id.clone()).or_insert_with(CanvasDocument::new);
     let [px, py] = s.surface_to_page(sample_surface.0, sample_surface.1);
 
-    // Per-call timing split into the three sub-phases so we can
-    // attribute the eraser hot path:
+    // Per-sample work, post-batching:
     //   hit_test: bbox-reject + fine point-to-segment check against
     //             the in-memory visible_strokes cache (no yrs)
-    //   tombstone+retain: flag-flip on the matching strokes_doc
-    //             entry + retain on the cache
-    //   retessellate: rebuild segments from cache (fast path)
+    //   retain:   drop matched strokes from the cache so the next
+    //             sample's hit-test sees the post-erase state
+    //   queue:    push hit ids into `pending_tombstones`; the actual
+    //             yrs writes + retessellation happen ONCE at the end
+    //             of the render-thread batch (see flush site in
+    //             render_thread).
     let t_hit = std::time::Instant::now();
     let raw_hits = strokes_within_eraser_radius(&doc.visible_strokes, (px, py));
     let hit_test_us = t_hit.elapsed();
@@ -617,25 +620,16 @@ fn erase_at(
         return;
     }
 
-    let t_mutate = std::time::Instant::now();
-    for hit_id in &fresh_hits {
-        doc.strokes_doc.set_stroke_tombstoned(hit_id, true);
-    }
-    // Drop the erased strokes from the cache too so the very next
-    // sample's hit-test doesn't bbox-overlap a tombstoned-but-still-
-    // cached entry.
     {
         let drop_set: HashSet<&String> = fresh_hits.iter().collect();
         doc.visible_strokes.retain(|m| !drop_set.contains(&m.id));
     }
-    let mutate_us = t_mutate.elapsed();
+    for hit_id in &fresh_hits {
+        pending_tombstones.insert(hit_id.clone());
+    }
 
-    let t_retess = std::time::Instant::now();
-    doc.retessellate_segments_from_cache();
-    let retess_us = t_retess.elapsed();
-
-    log::debug!(
-        "[drawing.perf.eraser] erase_at hits={} hit_test={hit_test_us:?} mutate={mutate_us:?} retess={retess_us:?}",
+    log::trace!(
+        "[drawing.perf.eraser] erase_at hits={} hit_test={hit_test_us:?} (deferred yrs + retess to batch end)",
         fresh_hits.len(),
     );
     drag_hits.extend(fresh_hits);
@@ -936,6 +930,12 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
 
         let mut dirty = false;
         let mut needs_rebuild = false;
+        // Eraser hits queued during this batch — flushed to yrs +
+        // retessellated ONCE after the message loop completes
+        // instead of per sample. Eliminates the
+        // O(samples × strokes) yrs-walk cost that dominated dense
+        // eraser drags.
+        let mut pending_eraser_tombstones: HashSet<String> = HashSet::new();
         // Captured before the `for msg in messages` loop consumes
         // the Vec — used by the backpressure log below.
         let batch_size = messages.len();
@@ -1195,6 +1195,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                 (x, y),
                                 &mut eraser_drag_hits,
                                 &mut eraser_drag_seen,
+                                &mut pending_eraser_tombstones,
                             );
                         }
                         (ToolMode::Eraser, SampleAction::Move) => {
@@ -1206,6 +1207,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                 (x, y),
                                 &mut eraser_drag_hits,
                                 &mut eraser_drag_seen,
+                                &mut pending_eraser_tombstones,
                             );
                             last_point = Some((x, y));
                         }
@@ -1330,6 +1332,34 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                     let _ = reply.send(bytes);
                 }
             }
+        }
+
+        // Flush any eraser-batched tombstones to yrs + retessellate
+        // ONCE per batch (instead of once per sample). For a dense
+        // drag this turns O(samples × strokes) yrs walks +
+        // O(samples × visible vertices) tessellation into one walk +
+        // one tessellation total. Has to run BEFORE the render
+        // block below so the GPU sees the post-erase segments, and
+        // BEFORE any in-loop rebuild_caches (none currently — but
+        // documented so future maintainers know the invariant: the
+        // visible_strokes cache is authoritative until this flush).
+        if !pending_eraser_tombstones.is_empty() {
+            if let Some(id) = active_note_id.as_ref() {
+                if let Some(doc) = documents.get_mut(id) {
+                    let t_flush = std::time::Instant::now();
+                    let n = doc.strokes_doc.tombstone_strokes(&pending_eraser_tombstones);
+                    let t_tombstone = t_flush.elapsed();
+                    let t_retess = std::time::Instant::now();
+                    doc.retessellate_segments_from_cache();
+                    log::debug!(
+                        "[drawing.perf.eraser] flush batch hits={n} tombstone={t_tombstone:?} retess={:?}",
+                        t_retess.elapsed(),
+                    );
+                }
+            }
+            // Always mark dirty so the render block below runs even
+            // if no other event flipped it.
+            dirty = true;
         }
 
         // Batch backpressure check — if many messages piled up
