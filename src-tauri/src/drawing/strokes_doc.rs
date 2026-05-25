@@ -81,7 +81,7 @@
 use yrs::any::Any;
 use yrs::updates::decoder::Decode;
 use yrs::{
-    Array, ArrayRef, Doc, Map, MapPrelim, Out, ReadTxn, StateVector, Transact, Update,
+    Array, ArrayRef, Doc, Map, MapPrelim, MapRef, Out, ReadTxn, StateVector, Transact, Update,
 };
 
 const STROKES_KEY: &str = "strokes";
@@ -325,6 +325,54 @@ impl StrokesDoc {
     /// If it ever does, the obvious fix is a render-thread side
     /// `HashMap<stroke_id, array_index>` cache invalidated on the
     /// strokes-array observer.
+    /// Tombstone every stroke whose id appears in `ids`. Returns the
+    /// number of strokes actually flipped. Used by the eraser hot
+    /// path to batch a whole render-frame's worth of erased strokes
+    /// into one yrs write — N × set_stroke_tombstoned would be
+    /// O(N × strokes) yrs walks, which dominated the per-sample
+    /// cost on dense drags. This is O(strokes) regardless of how
+    /// many ids are pending.
+    ///
+    /// Two-pass to keep the borrow checker happy:
+    ///   1. Read-only iter to collect the matching `MapRef`s
+    ///      (`iter(&tx)` holds the read borrow for the whole loop,
+    ///      blocking any mid-iter mutation).
+    ///   2. Single mutable transaction that walks the collected
+    ///      refs and flips their tombstone flag.
+    /// `MapRef` is a logical handle into the doc (no borrow), so
+    /// passing them across the transaction boundary is sound.
+    pub fn tombstone_strokes(&mut self, ids: &std::collections::HashSet<String>) -> usize {
+        if ids.is_empty() {
+            return 0;
+        }
+        // Pass 1: collect matching stroke handles.
+        let to_tombstone: Vec<MapRef> = {
+            let tx = self.doc.transact();
+            self.strokes
+                .iter(&tx)
+                .filter_map(|v| {
+                    let Out::YMap(stroke) = v else {
+                        return None;
+                    };
+                    let id_matches = matches!(
+                        stroke.get(&tx, FIELD_ID),
+                        Some(Out::Any(Any::String(s))) if ids.contains(&*s)
+                    );
+                    id_matches.then_some(stroke)
+                })
+                .collect()
+        };
+        let count = to_tombstone.len();
+        // Pass 2: flip every matching stroke's tombstone flag in
+        // one transaction. yrs commits the whole batch atomically
+        // on transact_mut drop.
+        let mut tx = self.doc.transact_mut();
+        for stroke in to_tombstone {
+            stroke.insert(&mut tx, FIELD_TOMBSTONED, Any::Bool(true));
+        }
+        count
+    }
+
     pub fn set_stroke_tombstoned(&mut self, id: &str, tombstoned: bool) -> bool {
         // Perf instrumentation: this is O(n) over the outer strokes
         // array. During an eraser drag with N hits, the caller runs
@@ -747,6 +795,50 @@ mod tests {
         assert!(collect_strokes(&doc).is_empty());
         // Untombstone restores visibility — the eraser-undo path.
         assert!(doc.set_stroke_tombstoned(&id, false));
+        assert_eq!(collect_strokes(&doc).len(), 1);
+    }
+
+    #[test]
+    fn tombstone_strokes_bulk_tombstones_matching_ids() {
+        use std::collections::HashSet;
+
+        let mut doc = StrokesDoc::new();
+        doc.begin_stroke(DEFAULT_COLOR);
+        doc.push_point(0.0, 0.0, 1.0);
+        let a = doc.end_stroke().unwrap();
+        doc.begin_stroke(DEFAULT_COLOR);
+        doc.push_point(1.0, 1.0, 1.0);
+        let b = doc.end_stroke().unwrap();
+        doc.begin_stroke(DEFAULT_COLOR);
+        doc.push_point(2.0, 2.0, 1.0);
+        let c = doc.end_stroke().unwrap();
+
+        // Tombstone a + c but not b in one bulk call.
+        let mut ids: HashSet<String> = HashSet::new();
+        ids.insert(a.clone());
+        ids.insert(c.clone());
+        let n = doc.tombstone_strokes(&ids);
+        assert_eq!(n, 2);
+
+        let visible: Vec<String> = {
+            let mut v = Vec::new();
+            doc.for_each_stroke(|view| v.push(view.id.to_string()));
+            v
+        };
+        assert_eq!(visible, vec![b]);
+    }
+
+    #[test]
+    fn tombstone_strokes_empty_set_is_a_noop() {
+        use std::collections::HashSet;
+        let mut doc = StrokesDoc::new();
+        doc.begin_stroke(DEFAULT_COLOR);
+        doc.push_point(0.0, 0.0, 1.0);
+        doc.end_stroke();
+
+        let empty: HashSet<String> = HashSet::new();
+        assert_eq!(doc.tombstone_strokes(&empty), 0);
+        // Stroke still visible.
         assert_eq!(collect_strokes(&doc).len(), 1);
     }
 
