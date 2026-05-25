@@ -37,17 +37,25 @@ use super::ui::UiOutput;
 #[derive(Copy, Clone, Pod, Zeroable)]
 pub struct Vertex {
     pub position: [f32; 2],
-    /// Per-vertex linear RGBA in 0..1. Uniform across a single
-    /// stroke today (renderer bakes the stroke's packed colour at
-    /// tessellation time), but per-vertex storage means D5's
-    /// gradient brushes / per-sample colour interpolation just
-    /// drops in.
-    pub color: [f32; 4],
+    /// Per-vertex RGBA bytes — interpreted as Unorm8x4, so the
+    /// vertex shader sees `vec4<f32>` with components `byte / 255`
+    /// (linear, no sRGB gamma). 4 bytes vs the 16 of `[f32; 4]`
+    /// saves ~3 MB of GPU memory + per-frame upload on a busy ink
+    /// note (~180k vertices for ~30k segments). Same flexibility
+    /// for D5's gradient brushes — still per-vertex, just at
+    /// 256-step quantisation, which is what every consumer ink
+    /// editor ships.
+    ///
+    /// Byte layout in memory MUST be `[R, G, B, A]` for the
+    /// `Unorm8x4` HW unpack to produce a shader-side vec4 in
+    /// `(r, g, b, a)` order. See `render::pack_color_bytes` for
+    /// the packed-u32 → bytes mapping.
+    pub color: [u8; 4],
 }
 
 impl Vertex {
     const ATTRIBS: [wgpu::VertexAttribute; 2] =
-        wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x4];
+        wgpu::vertex_attr_array![0 => Float32x2, 1 => Unorm8x4];
 
     fn layout() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {

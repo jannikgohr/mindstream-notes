@@ -71,14 +71,17 @@ fn color_for_input(tool: ToolKind, buttons: u32) -> u32 {
     }
 }
 
-/// Unpack a 0xAARRGGBB stroke colour into the linear-RGBA `[f32; 4]`
-/// the WGSL pipeline expects (matches the no-sRGB surface format the
-/// renderer picks).
-fn unpack_color(color: u32) -> [f32; 4] {
-    let a = ((color >> 24) & 0xFF) as f32 / 255.0;
-    let r = ((color >> 16) & 0xFF) as f32 / 255.0;
-    let g = ((color >> 8) & 0xFF) as f32 / 255.0;
-    let b = (color & 0xFF) as f32 / 255.0;
+/// Reshuffle a 0xAARRGGBB packed colour into the `[R, G, B, A]` byte
+/// order the `Unorm8x4` vertex attribute expects. The HW unpack
+/// then turns each byte into `byte / 255` to produce the
+/// `vec4<f32>` the fragment shader sees — bit-identical to the old
+/// `unpack_color` → `[f32; 4]` path, just without the extra 12 bytes
+/// per vertex.
+fn pack_color_bytes(color: u32) -> [u8; 4] {
+    let a = ((color >> 24) & 0xFF) as u8;
+    let r = ((color >> 16) & 0xFF) as u8;
+    let g = ((color >> 8) & 0xFF) as u8;
+    let b = (color & 0xFF) as u8;
     [r, g, b, a]
 }
 
@@ -109,7 +112,9 @@ fn width_for_pressure(pressure: f32) -> f32 {
 /// Adapt the host-testable [`segment_quad_positions`] math into the
 /// wgpu `Vertex` array shape the render pipeline consumes. Colour is
 /// uniform across the six output vertices — the value the caller
-/// chose at `begin_stroke` time stays constant for the whole stroke.
+/// chose at `begin_stroke` time (already packed to `[R, G, B, A]`
+/// bytes via [`pack_color_bytes`]) stays constant for the whole
+/// stroke.
 ///
 /// Joints between consecutive segments are not mitered — each quad
 /// is independent. For thin strokes (sub-pixel-scale widths) this is
@@ -120,7 +125,7 @@ fn tessellate_segment(
     p1: (f32, f32),
     w0: f32,
     w1: f32,
-    color: [f32; 4],
+    color: [u8; 4],
 ) -> [Vertex; 6] {
     let positions = segment_quad_positions(p0, p1, w0, w1);
     positions.map(|position| Vertex { position, color })
@@ -231,7 +236,7 @@ impl CanvasDocument {
         // sample-by-sample.
         strokes_doc.for_each_stroke(|view| {
             stroke_count += 1;
-            let color = unpack_color(view.color);
+            let color = pack_color_bytes(view.color);
             let mut prev: Option<(f32, f32, f32)> = None;
             for (i, chunk) in view.points.chunks_exact(2).enumerate() {
                 let curr_p = view.pressures.get(i).copied().unwrap_or(1.0);
@@ -477,7 +482,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
     // DOWN; consumed on every MOVE's tessellation; cleared on UP /
     // CANCEL / Clear / SetActiveNote so a leaked colour can't paint
     // an unrelated note's stroke the wrong shade.
-    let mut current_stroke_color: Option<[f32; 4]> = None;
+    let mut current_stroke_color: Option<[u8; 4]> = None;
     // True while the in-progress gesture started inside the toolbar
     // region — mirror to egui so its buttons see the press, but
     // skip the line pipeline.
@@ -628,7 +633,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                 log::info!(
                                     "[drawing] stroke_open tool={tool:?} buttons=0x{buttons:x} -> color=0x{packed:08X}"
                                 );
-                                current_stroke_color = Some(unpack_color(packed));
+                                current_stroke_color = Some(pack_color_bytes(packed));
                                 // Open a fresh stroke in the active
                                 // doc and seed its points array with
                                 // the down sample. The first MOVE
