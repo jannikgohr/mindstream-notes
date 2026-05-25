@@ -150,6 +150,32 @@ fn width_for_pressure(pressure: f32) -> f32 {
     MIN_WIDTH + (BASE_WIDTH - MIN_WIDTH) * p
 }
 
+/// Push the active live-ink style (colour + pressure-width range) to
+/// Kotlin's `FrontBufferInk` so the front-buffer overlay paints the
+/// in-flight stroke head with the same colour and pressure curve
+/// Rust will commit. Called whenever the colour/width source-of-truth
+/// changes — today at every Pen / Eraser DOWN; D5 colour-picker UI
+/// will call here too.
+///
+/// Width conversion: Rust holds widths in page units (1 unit = 1/144
+/// inch), but the Kotlin `Canvas` paints in surface pixels, so we
+/// multiply by [`SurfaceBoundState::page_to_surface_scale`] before
+/// the JNI hop. No surface yet (start-of-day) → silent no-op; the
+/// next DOWN that lands with a real surface will re-push.
+fn push_live_ink_style(surface: Option<&SurfaceBoundState>, color: u32) {
+    let Some(s) = surface else {
+        return;
+    };
+    let scale = s.page_to_surface_scale();
+    let min_px = MIN_WIDTH * scale;
+    let max_px = BASE_WIDTH * scale;
+    if let Err(e) =
+        crate::drawing::platform::android::ui::call_set_live_ink_style(color, min_px, max_px)
+    {
+        log::warn!("[drawing] call_set_live_ink_style failed: {e}");
+    }
+}
+
 /// Adapt the host-testable [`segment_quad_positions`] math into the
 /// wgpu `Vertex` array shape the render pipeline consumes. Colour is
 /// uniform across the six output vertices — the value the caller
@@ -1441,6 +1467,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             pen_in_flight_points.clear();
                             pen_in_flight_pressures.clear();
                             pen_tess_cursor = None;
+                            push_live_ink_style(surface_state.as_ref(), packed);
                             if let (Some(id), Some(s)) =
                                 (active_note_id.as_ref(), surface_state.as_ref())
                             {
@@ -1730,6 +1757,10 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             eraser_drag_seen.clear();
                             eraser_drag_start = Some(std::time::Instant::now());
                             eraser_drag_samples = 1; // count this DOWN sample
+                            // Mirror the eraser colour into the
+                            // front-buffer overlay so the drag's
+                            // live visual matches the action.
+                            push_live_ink_style(surface_state.as_ref(), ERASER_TIP_COLOR);
                             erase_at(
                                 &active_note_id,
                                 &mut documents,

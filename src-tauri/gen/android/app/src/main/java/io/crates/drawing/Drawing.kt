@@ -151,6 +151,19 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
         releaseRefreshRate(activity)
     }
 
+    /**
+     * Forward a Rust-driven style update to the active SurfaceView's
+     * front-buffer ink layer. No-op if the SurfaceView is currently
+     * detached (e.g. user hasn't opened an ink note yet, or has just
+     * navigated away). Safe to call from any thread — the style
+     * fields on [FrontBufferInk] are `@Volatile` so a write here
+     * publishes immediately to the touch / render threads that read
+     * them.
+     */
+    fun setLiveInkStyle(colorArgb: Int, minWidthPx: Float, maxWidthPx: Float) {
+        view?.setLiveInkStyle(colorArgb, minWidthPx, maxWidthPx)
+    }
+
     companion object {
         init {
             // Same library the Keyring JNI symbols live in — the Rust
@@ -233,6 +246,27 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
                     null
                 )
             }
+        }
+
+        /**
+         * Called from Rust to change the live-ink front-buffer overlay's
+         * color and stroke-width range. Rust is the source of truth for
+         * the active stroke style — Kotlin's FrontBufferInk reads these
+         * fields when queueing each segment, so a write here takes
+         * effect from the next segment onwards. `colorArgb` packs
+         * 0xAARRGGBB matching Android's `Color` int format, which is
+         * the same packing Rust uses internally (see strokes_doc.rs
+         * `DEFAULT_COLOR`). Widths are in surface pixels (Canvas
+         * coordinate space); Rust converts its page-unit constants
+         * via the current page-to-surface scale before the call.
+         */
+        @JvmStatic
+        fun setLiveInkStyleFromNative(
+            colorArgb: Int,
+            minWidthPx: Float,
+            maxWidthPx: Float
+        ) {
+            instance?.setLiveInkStyle(colorArgb, minWidthPx, maxWidthPx)
         }
 
         // ---- Rust JNI exports (called from DrawingSurfaceView below) ----
@@ -667,6 +701,10 @@ private class DrawingSurfaceView(context: Context) :
         if (raw > 1f) return 1f
         return raw
     }
+
+    fun setLiveInkStyle(colorArgb: Int, minWidthPx: Float, maxWidthPx: Float) {
+        frontBufferInk?.setStyle(colorArgb, minWidthPx, maxWidthPx)
+    }
 }
 
 private data class InkSegment(
@@ -676,7 +714,9 @@ private data class InkSegment(
     val y1: Float,
     val pressure0: Float,
     val pressure1: Float,
-    val color: Int
+    val color: Int,
+    val minWidthPx: Float,
+    val maxWidthPx: Float
 )
 
 private class FrontBufferInk(private val surfaceView: SurfaceView) {
@@ -694,7 +734,12 @@ private class FrontBufferInk(private val surfaceView: SurfaceView) {
                 param: InkSegment
             ) {
                 paint.color = param.color
-                paint.strokeWidth = widthForPressure(param.pressure0, param.pressure1)
+                paint.strokeWidth = widthForPressure(
+                    param.pressure0,
+                    param.pressure1,
+                    param.minWidthPx,
+                    param.maxWidthPx,
+                )
                 canvas.drawLine(param.x0, param.y0, param.x1, param.y1, paint)
             }
 
@@ -709,6 +754,18 @@ private class FrontBufferInk(private val surfaceView: SurfaceView) {
             }
         })
 
+    // Style state — Rust drives these via `Drawing.setLiveInkStyleFromNative`.
+    // Defaults reproduce the pre-Rust-driven look (debug-blue stylus,
+    // 2–5 px pressure ramp) so the overlay still renders correctly
+    // if Rust hasn't pushed a style yet — e.g. the very first
+    // segment after surface attach, before the render thread has
+    // had a chance to call back. `@Volatile` because writes come
+    // from a Rust-spawned JNI-attached thread and reads happen on
+    // the touch + front-buffer render threads.
+    @Volatile private var styleColor: Int = Color.rgb(0, 102, 255)
+    @Volatile private var styleMinWidthPx: Float = 2.0f
+    @Volatile private var styleMaxWidthPx: Float = 5.0f
+
     private var lastX = 0f
     private var lastY = 0f
     private var lastPressure = 1f
@@ -716,6 +773,20 @@ private class FrontBufferInk(private val surfaceView: SurfaceView) {
     private var suppressed = false
     private var generation = 0
     private var loggedFirstSegment = false
+
+    fun setStyle(colorArgb: Int, minWidthPx: Float, maxWidthPx: Float) {
+        styleColor = colorArgb
+        // Sanitise at the boundary: a zero / negative width would
+        // render as an invisible hairline (or throw on some
+        // platforms); clamp to a hard floor matching the original
+        // 2 px default. Inverted ranges (min > max) get swapped
+        // rather than rejected — easier to debug a too-thick stroke
+        // than a silent no-op.
+        val safeMin = minWidthPx.coerceAtLeast(0.5f)
+        val safeMax = maxWidthPx.coerceAtLeast(safeMin)
+        styleMinWidthPx = safeMin
+        styleMaxWidthPx = safeMax
+    }
 
     fun onPoint(
         x: Float,
@@ -737,15 +808,7 @@ private class FrontBufferInk(private val surfaceView: SurfaceView) {
             }
             MotionEvent.ACTION_MOVE -> {
                 if (!inStroke || suppressed) return
-                val segment = InkSegment(
-                    lastX,
-                    lastY,
-                    x,
-                    y,
-                    lastPressure,
-                    pressure,
-                    colorForInput(toolType, buttons)
-                )
+                val segment = buildSegment(x, y, pressure)
                 if (!loggedFirstSegment) {
                     loggedFirstSegment = true
                     Log.i("MindstreamDrawing", "front-buffer ink first segment rendered")
@@ -757,16 +820,7 @@ private class FrontBufferInk(private val surfaceView: SurfaceView) {
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 if (inStroke && !suppressed) {
-                    val segment = InkSegment(
-                        lastX,
-                        lastY,
-                        x,
-                        y,
-                        lastPressure,
-                        pressure,
-                        colorForInput(toolType, buttons)
-                    )
-                    renderer.renderFrontBufferedLayer(segment)
+                    renderer.renderFrontBufferedLayer(buildSegment(x, y, pressure))
                 }
                 inStroke = false
                 suppressed = false
@@ -801,17 +855,29 @@ private class FrontBufferInk(private val surfaceView: SurfaceView) {
         )
     }
 
-    private fun widthForPressure(p0: Float, p1: Float): Float {
-        val p = ((p0 + p1) * 0.5f).coerceIn(0f, 1f)
-        return 2.0f + 3.0f * p
-    }
+    // Bake the current style into the segment at queue time so a
+    // mid-stroke setStyle call doesn't retroactively change segments
+    // already in flight to the front-buffer renderer.
+    private fun buildSegment(x: Float, y: Float, pressure: Float): InkSegment =
+        InkSegment(
+            lastX,
+            lastY,
+            x,
+            y,
+            lastPressure,
+            pressure,
+            styleColor,
+            styleMinWidthPx,
+            styleMaxWidthPx,
+        )
 
-    private fun colorForInput(toolType: Int, buttons: Int): Int {
-        if (buttons and 0x20 != 0) return Color.rgb(255, 96, 15)
-        return when (toolType) {
-            MotionEvent.TOOL_TYPE_STYLUS -> Color.rgb(0, 102, 255)
-            MotionEvent.TOOL_TYPE_ERASER -> Color.rgb(204, 34, 34)
-            else -> Color.BLACK
-        }
+    private fun widthForPressure(
+        p0: Float,
+        p1: Float,
+        minWidthPx: Float,
+        maxWidthPx: Float
+    ): Float {
+        val p = ((p0 + p1) * 0.5f).coerceIn(0f, 1f)
+        return minWidthPx + (maxWidthPx - minWidthPx) * p
     }
 }
