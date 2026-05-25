@@ -130,6 +130,13 @@ pub struct SurfaceBoundState {
     page: PageSize,
 }
 
+pub struct AcquiredFrame {
+    frame: wgpu::SurfaceTexture,
+    view: wgpu::TextureView,
+    render_start: std::time::Instant,
+    acquire_done: std::time::Instant,
+}
+
 impl SurfaceBoundState {
     pub fn resize(&mut self, persistent: &PersistentGpu, width: u32, height: u32) {
         if width == 0 || height == 0 {
@@ -381,7 +388,7 @@ pub async fn build_surface_bound(
         .alpha_modes
         .iter()
         .copied()
-        .find(|m| *m != wgpu::CompositeAlphaMode::Opaque)
+        .find(|m| *m == wgpu::CompositeAlphaMode::Opaque)
         .unwrap_or(caps.alpha_modes[0]);
     // Prefer the lowest-latency present mode the device exposes.
     // `[drawing.perf.lag]` analysis on a Tab S7 FE showed
@@ -574,7 +581,57 @@ pub fn render_frame(
     prediction: &[Vertex],
     ui_output: UiOutput,
 ) -> Result<(), wgpu::SurfaceError> {
+    let acquired = acquire_frame(persistent, surface_state)?;
+    render_acquired_frame(
+        persistent,
+        surface_state,
+        acquired,
+        committed,
+        raw_head,
+        prediction,
+        ui_output,
+    )
+}
+
+/// Wait for the next drawable surface texture. With FIFO-only Android
+/// surfaces this can block until the compositor releases a buffer, so
+/// render.rs calls it before late-latching queued stylus samples.
+pub fn acquire_frame(
+    persistent: &PersistentGpu,
+    surface_state: &mut SurfaceBoundState,
+) -> Result<AcquiredFrame, wgpu::SurfaceError> {
     let t_render_start = std::time::Instant::now();
+    let frame = match surface_state.surface.get_current_texture() {
+        Ok(f) => f,
+        Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+            surface_state
+                .surface
+                .configure(&persistent.device, &surface_state.config);
+            surface_state.surface.get_current_texture()?
+        }
+        Err(e) => return Err(e),
+    };
+    let t_acquire_done = std::time::Instant::now();
+    let view = frame
+        .texture
+        .create_view(&wgpu::TextureViewDescriptor::default());
+    Ok(AcquiredFrame {
+        frame,
+        view,
+        render_start: t_render_start,
+        acquire_done: t_acquire_done,
+    })
+}
+
+pub fn render_acquired_frame(
+    persistent: &mut PersistentGpu,
+    surface_state: &mut SurfaceBoundState,
+    acquired: AcquiredFrame,
+    committed: &[Vertex],
+    raw_head: &[Vertex],
+    prediction: &[Vertex],
+    ui_output: UiOutput,
+) -> Result<(), wgpu::SurfaceError> {
     // Push egui texture updates before any rendering — the font
     // atlas ships this way. Free on the same frame is OK because
     // the GPU work hasn't been submitted yet.
@@ -662,21 +719,6 @@ pub fn render_frame(
     }
     let t_upload_done = std::time::Instant::now();
 
-    let frame = match surface_state.surface.get_current_texture() {
-        Ok(f) => f,
-        Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-            surface_state
-                .surface
-                .configure(&persistent.device, &surface_state.config);
-            surface_state.surface.get_current_texture()?
-        }
-        Err(e) => return Err(e),
-    };
-    let t_acquire_done = std::time::Instant::now();
-    let view = frame
-        .texture
-        .create_view(&wgpu::TextureViewDescriptor::default());
-
     let mut encoder = persistent
         .device
         .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -699,7 +741,7 @@ pub fn render_frame(
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("drawing-pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &view,
+                view: &acquired.view,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
@@ -745,7 +787,7 @@ pub fn render_frame(
     let t_encode_done = std::time::Instant::now();
     persistent.queue.submit(std::iter::once(encoder.finish()));
     let t_submit_done = std::time::Instant::now();
-    frame.present();
+    acquired.frame.present();
     let t_present_done = std::time::Instant::now();
 
     // Sub-breakdown of the [drawing.perf.lag] `gpu` field. If a
@@ -759,9 +801,9 @@ pub fn render_frame(
     if LAG_LOGGING_ENABLED {
         log::info!(
             "[drawing.perf.lag] gpu_split upload={:.1}ms acquire={:.1}ms encode={:.1}ms submit={:.1}ms present={:.1}ms",
-            t_upload_done.duration_since(t_render_start).as_secs_f64() * 1000.0,
-            t_acquire_done.duration_since(t_upload_done).as_secs_f64() * 1000.0,
-            t_encode_done.duration_since(t_acquire_done).as_secs_f64() * 1000.0,
+            t_upload_done.duration_since(acquired.acquire_done).as_secs_f64() * 1000.0,
+            acquired.acquire_done.duration_since(acquired.render_start).as_secs_f64() * 1000.0,
+            t_encode_done.duration_since(t_upload_done).as_secs_f64() * 1000.0,
             t_submit_done.duration_since(t_encode_done).as_secs_f64() * 1000.0,
             t_present_done.duration_since(t_submit_done).as_secs_f64() * 1000.0,
         );

@@ -21,7 +21,7 @@
 //! the calling JNI thread on a sync ack from the render thread.
 //! See the function comment for why.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::mpsc::{self, Sender, SyncSender, TryRecvError};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
@@ -135,7 +135,7 @@ const SMOOTHING_ENABLED: bool = false;
 /// and smoothed modes. In raw mode the lead extends past the raw
 /// input directly (no body smoothing involved); in smoothed mode it
 /// extends past the raw head, which extends past the smoothed body.
-const PREDICTION_ENABLED: bool = true;
+const PREDICTION_ENABLED: bool = false;
 
 /// High-volume input/frame latency diagnostics. Leave this disabled
 /// during normal drawing: Android logcat writes on the stylus hot path
@@ -1236,11 +1236,15 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
     // separate from the wgpu init logged elsewhere. Flipped to
     // false after the first log so subsequent frames stay quiet.
     let mut log_first_frame = true;
+    let mut deferred_messages: VecDeque<Msg> = VecDeque::new();
 
     loop {
-        let first = match rx.recv() {
-            Ok(m) => m,
-            Err(_) => return,
+        let first = match deferred_messages.pop_front() {
+            Some(m) => m,
+            None => match rx.recv() {
+                Ok(m) => m,
+                Err(_) => return,
+            },
         };
         let batch_start = std::time::Instant::now();
         // Latency-budget instrumentation: capture uptime in the same
@@ -1963,6 +1967,91 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
 
         if let (Some(p), Some(s)) = (persistent.as_mut(), surface_state.as_mut()) {
             if needs_rebuild || dirty {
+                let t_frame = std::time::Instant::now();
+                let acquired = match pipeline::acquire_frame(p, s) {
+                    Ok(frame) => frame,
+                    Err(e) => {
+                        log::warn!("[drawing] render acquire failed: {e:?}");
+                        continue;
+                    }
+                };
+
+                // Late-latch pen movement that arrived while FIFO
+                // surface acquisition was blocked. On the Tab S7 FE
+                // wgpu exposes only Fifo, so get_current_texture can
+                // wait close to a frame. Draining MOVE samples here
+                // lets the vertex upload below use the freshest pen
+                // point for the frame we just acquired instead of
+                // drawing the point that was current before the wait.
+                loop {
+                    match rx.try_recv() {
+                        Ok(Msg::Sample(sample))
+                            if matches!(tool_mode, ToolMode::Pen)
+                                && matches!(sample.action, SampleAction::Move)
+                                && !stroke_suppressed =>
+                        {
+                            sample_count += 1;
+                            newest_event_time_s = Some(match newest_event_time_s {
+                                Some(prev) => prev.max(sample.time),
+                                None => sample.time,
+                            });
+                            let pos = px_to_egui(sample.x, sample.y);
+                            egui_input.events.push(egui::Event::PointerMoved(pos));
+                            if let (Some(color), Some(id)) =
+                                (current_stroke_color, active_note_id.as_ref())
+                            {
+                                let [px, py] = s.surface_to_page(sample.x, sample.y);
+                                latest_raw_input = Some(SmoothedSample {
+                                    pos: (px, py),
+                                    pressure: sample.pressure,
+                                });
+                                let smoothed = if SMOOTHING_ENABLED {
+                                    ink_smoother.update((px, py), sample.time, sample.pressure)
+                                } else {
+                                    vec![SmoothedSample {
+                                        pos: (px, py),
+                                        pressure: sample.pressure,
+                                    }]
+                                };
+                                if !smoothed.is_empty() {
+                                    let doc = documents
+                                        .entry(id.clone())
+                                        .or_insert_with(CanvasDocument::new);
+                                    for out in smoothed {
+                                        if let Some(prev) = pen_tess_cursor {
+                                            let w_prev =
+                                                width_for_pressure(prev.pressure);
+                                            let w_curr =
+                                                width_for_pressure(out.pressure);
+                                            doc.segments.extend_from_slice(
+                                                &tessellate_segment(
+                                                    prev.pos,
+                                                    out.pos,
+                                                    w_prev,
+                                                    w_curr,
+                                                    color,
+                                                ),
+                                            );
+                                        }
+                                        doc.strokes_doc.push_point(
+                                            out.pos.0,
+                                            out.pos.1,
+                                            out.pressure,
+                                        );
+                                        pen_in_flight_points.push(out.pos.0);
+                                        pen_in_flight_points.push(out.pos.1);
+                                        pen_in_flight_pressures.push(out.pressure);
+                                        pen_tess_cursor = Some(out);
+                                    }
+                                }
+                            }
+                        }
+                        Ok(other) => deferred_messages.push_back(other),
+                        Err(TryRecvError::Empty) => break,
+                        Err(TryRecvError::Disconnected) => return,
+                    }
+                }
+
                 let segs = active_segments(&active_note_id, &documents);
                 let segs_len = segs.len();
                 // Refresh the two-zone raw head before submitting
@@ -2001,12 +2090,12 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                 // the doc hasn't been activated yet.
                 let ui_state = build_ui_state(tool_mode, &active_note_id, &documents);
                 let (actions, ui_output) = canvas_ui.run(input, s.size_px(), ui_state);
-                let t_frame = std::time::Instant::now();
                 let dispatch_uptime_ms =
                     crate::drawing::platform::android::now_uptime_ms();
-                match pipeline::render_frame(
+                match pipeline::render_acquired_frame(
                     p,
                     s,
+                    acquired,
                     segs,
                     &raw_head_segments,
                     &prediction_segments,

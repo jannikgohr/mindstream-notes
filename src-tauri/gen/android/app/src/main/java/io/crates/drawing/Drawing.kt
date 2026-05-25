@@ -17,7 +17,6 @@ import android.webkit.WebView
 import android.widget.FrameLayout
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
-import kotlin.math.hypot
 
 /**
  * Logical height of the Svelte mobile-editor header, in dp. Mirrors
@@ -40,13 +39,6 @@ private const val MOBILE_HEADER_HEIGHT_DP = 48
  * originally added to investigate.
  */
 private const val DRAWING_INPUT_LOGS = false
-
-private data class TimedPoint(
-    val x: Float,
-    val y: Float,
-    val pressure: Float,
-    val timeMs: Long
-)
 
 /**
  * Native "ink" drawing surface — POC.
@@ -372,9 +364,10 @@ private fun releaseRefreshRate(activity: Activity) {
  *     we eventually want a transparent egui toolbar above the canvas
  *     with the WebView further on top, we'll flip this off and rely
  *     on WebView transparency instead — see the audit's gotcha #1.
- *   - `PixelFormat.TRANSLUCENT` is required for the alpha channel to
- *     actually composite; without it the surface is opaque and any
- *     LoadOp::Clear(TRANSPARENT) on the wgpu side just paints black.
+ *   - `PixelFormat.OPAQUE` keeps SurfaceFlinger on the cheapest
+ *     composition path. The renderer clears the whole surface to white
+ *     every frame, so an alpha channel buys us nothing and can add
+ *     latency on stylus hardware.
  *   - `onTouchEvent` iterates historical samples first (chronologically
  *     older — Android's MotionEvent buffers up to ~240Hz of digitizer
  *     data between vsync ticks) then the current sample. Returning
@@ -394,8 +387,7 @@ private class DrawingSurfaceView(context: Context) :
      *
      * Only available on Android 14+ (API 34 / UPSIDE_DOWN_CAKE). On older
      * versions this stays null and the prediction zone is empty —
-     * the linear fallback predictor below still gives us a short
-     * visual lead.
+     * the two-zone (committed + raw head) path still renders.
      *
      * Constructed lazily on first touch rather than in `init {}`
      * because the constructor takes a Context but the SurfaceView's
@@ -409,16 +401,20 @@ private class DrawingSurfaceView(context: Context) :
             null
         }
 
-    private var previousActualPoint: TimedPoint? = null
-    private var latestActualPoint: TimedPoint? = null
     private var loggedPredictionSupport = false
 
     init {
         setZOrderOnTop(true)
-        holder.setFormat(PixelFormat.TRANSLUCENT)
+        holder.setFormat(PixelFormat.OPAQUE)
         holder.addCallback(this)
         isFocusable = true
         isClickable = true
+        if (motionPredictor == null) {
+            Log.i(
+                "MindstreamDrawing",
+                "MotionPredictor unavailable sdk=${Build.VERSION.SDK_INT} requires=${Build.VERSION_CODES.UPSIDE_DOWN_CAKE}"
+            )
+        }
 
         // Reapply the SurfaceView's topMargin on every inset change
         // so rotations / IME show-hide don't leave the canvas
@@ -577,8 +573,7 @@ private class DrawingSurfaceView(context: Context) :
             action,
             event.eventTime
         )
-        // Forward extrapolation via MotionPredictor (API 34+) or
-        // the bounded linear fallback on older / unsupported devices.
+        // Forward extrapolation via MotionPredictor (API 34+).
         // Record the just-arrived event (the system uses recent
         // recorded events to extrapolate) and ask for a prediction
         // PREDICTION_AHEAD_MS in the future. The result feeds the
@@ -602,18 +597,17 @@ private class DrawingSurfaceView(context: Context) :
                 val predicted: MotionEvent? =
                     predictor.predict(targetMs * 1_000_000L)
                 if (predicted != null) {
-                    pushPredictedPoint(predicted.x, predicted.y, sanitizePressure(predicted.pressure), predicted.eventTime)
+                    Drawing.pushPredictedPoint(
+                        predicted.x,
+                        predicted.y,
+                        sanitizePressure(predicted.pressure),
+                        predicted.eventTime
+                    )
                     // recycle() is safe here — we only read the
                     // primitive fields above and don't hold a
                     // reference past this call.
                     predicted.recycle()
-                } else {
-                    pushLinearPrediction(targetMs)
                 }
-            }
-        } ?: run {
-            if (action == MotionEvent.ACTION_MOVE) {
-                pushLinearPrediction(event.eventTime + PREDICTION_AHEAD_MS)
             }
         }
         return true
@@ -622,14 +616,11 @@ private class DrawingSurfaceView(context: Context) :
     companion object {
         /**
          * How far ahead, in milliseconds, to ask MotionPredictor to
-         * extrapolate. The Tab S7 FE is a 60 Hz panel, so a little
-         * more than one vsync helps cover both app-side acquire wait
-         * and compositor delay while staying short enough that
-         * direction-change wobble remains subtle.
+         * extrapolate. Prediction rendering is currently disabled on
+         * the Rust side because speculative endpoints caused visible
+         * ghost-line artifacts on the Tab S7 FE.
          */
-        private const val PREDICTION_AHEAD_MS: Long = 24L
-        private const val MAX_LINEAR_PREDICTION_DT_MS: Long = 40L
-        private const val MAX_LINEAR_LEAD_PX: Float = 72f
+        private const val PREDICTION_AHEAD_MS: Long = 16L
     }
 
     private fun pushActualPoint(
@@ -642,45 +633,6 @@ private class DrawingSurfaceView(context: Context) :
         timeMs: Long
     ) {
         Drawing.pushPoint(x, y, pressure, toolType, buttons, action, timeMs)
-        when (action) {
-            MotionEvent.ACTION_DOWN -> {
-                previousActualPoint = null
-                latestActualPoint = TimedPoint(x, y, pressure, timeMs)
-            }
-            MotionEvent.ACTION_MOVE -> {
-                latestActualPoint?.let { previousActualPoint = it }
-                latestActualPoint = TimedPoint(x, y, pressure, timeMs)
-            }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                latestActualPoint?.let { previousActualPoint = it }
-                latestActualPoint = TimedPoint(x, y, pressure, timeMs)
-            }
-        }
-    }
-
-    private fun pushPredictedPoint(x: Float, y: Float, pressure: Float, timeMs: Long) {
-        Drawing.pushPredictedPoint(x, y, pressure, timeMs)
-    }
-
-    private fun pushLinearPrediction(targetMs: Long) {
-        val prev = previousActualPoint ?: return
-        val latest = latestActualPoint ?: return
-        val dtMs = latest.timeMs - prev.timeMs
-        if (dtMs <= 0L || dtMs > MAX_LINEAR_PREDICTION_DT_MS) return
-        val horizonMs = targetMs - latest.timeMs
-        if (horizonMs <= 0L || horizonMs > MAX_LINEAR_PREDICTION_DT_MS) return
-
-        val scale = horizonMs.toFloat() / dtMs.toFloat()
-        var dx = (latest.x - prev.x) * scale
-        var dy = (latest.y - prev.y) * scale
-        val distance = hypot(dx, dy)
-        if (distance < 0.5f) return
-        if (distance > MAX_LINEAR_LEAD_PX) {
-            val clamp = MAX_LINEAR_LEAD_PX / distance
-            dx *= clamp
-            dy *= clamp
-        }
-        pushPredictedPoint(latest.x + dx, latest.y + dy, latest.pressure, targetMs)
     }
 
     private fun sanitizePressure(raw: Float): Float {
