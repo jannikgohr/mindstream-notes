@@ -16,6 +16,8 @@
 //!   - `page.rs`            — page-coordinate model + the
 //!                            `segment_quad_positions` geometry math.
 //!   - `strokes_doc.rs`     — yrs schema façade.
+//!   - `stroke_modeler.rs`  — D1 stroke smoothing wrapper around
+//!                            ink-stroke-modeler-rs. Host-buildable.
 //!   - `pipeline.rs`        — wgpu state + per-frame GPU pass.
 //!                            Takes `Box<dyn SurfaceSource>` rather
 //!                            than any platform-specific window type.
@@ -54,6 +56,7 @@ use tauri::AppHandle;
 pub mod input;
 pub mod page;
 pub mod save_worker;
+pub mod stroke_modeler;
 pub mod strokes_doc;
 pub mod surface_source;
 

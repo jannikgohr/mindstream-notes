@@ -4,7 +4,7 @@ version = "0.1.6"
 description = "Local-first modern markdown-based E2EE collaborative note-taking app"
 authors = ["Jannik Gohr"]
 edition = "2021"
-rust-version = "1.77"
+rust-version = "1.85"
 
 [lib]
 name = "mindstream_notes_lib"
@@ -53,6 +53,19 @@ tokio = { version = "1.52.3", features = ["time", "sync"] }
 # here lets the trait file compile on host so cargo test can sanity
 # check the abstraction without an Android target.
 raw-window-handle = "0.6"
+
+# D1 stroke smoothing — flxzt's pure-Rust port of Google's
+# ink-stroke-modeler (wobble smoothing + spring-mass position model
+# + upsampling). Used inside the Pen branch of the render thread;
+# the modeler eats raw samples and emits a smoothed stream that gets
+# tessellated + persisted instead. Originally the audit flagged a
+# cxx cross-compile risk because Google's reference impl is C++ —
+# this port avoids that entirely (single dep: thiserror), which is
+# what made it safe to pick. Battle-tested: same crate rnote uses.
+# Promoted to top-level (rather than the android-only block below)
+# so `drawing/stroke_modeler.rs` is host-testable, matching the
+# convention input.rs / page.rs follow.
+ink-stroke-modeler-rs = "0.1"
 
 [profile.release]
 panic = "abort"
