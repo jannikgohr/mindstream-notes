@@ -2666,6 +2666,7 @@ dependencies = [
  "ink-stroke-modeler-rs",
  "jni 0.21.1",
  "keyring-core",
+ "libc",
  "log",
  "ndk",
  "ndk-context",

@@ -147,3 +147,13 @@ bytemuck = { version = "1", features = ["derive"] }
 # pollster::block_on is the minimal way to drive wgpu's async init from
 # the render thread — we don't want a full tokio runtime here.
 pollster = "0.4"
+# libc here only to read CLOCK_MONOTONIC directly via clock_gettime.
+# `MotionEvent.eventTime` on Android is `SystemClock.uptimeMillis()`,
+# which is CLOCK_MONOTONIC under the hood — so subtracting our own
+# CLOCK_MONOTONIC reading from a sample's eventTime gives us the
+# sample's age in real wallclock ms. std::time::Instant *is* the
+# same clock on Android but exposes only deltas, not absolute
+# values, so it can't be subtracted from a foreign eventTime
+# directly. Used by drawing::platform::android::now_uptime_ms and
+# the [drawing.perf.lag] instrumentation in render.rs.
+libc = "0.2"

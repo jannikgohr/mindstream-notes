@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Context
 import android.graphics.Color
 import android.graphics.PixelFormat
+import android.os.SystemClock
 import android.util.Log
 import android.view.MotionEvent
 import android.view.Surface
@@ -465,6 +466,21 @@ private class DrawingSurfaceView(context: Context) :
         Log.d(
             "MindstreamDrawing",
             "onTouchEvent action=$action history=${event.historySize} x=${event.x} y=${event.y} p=${event.pressure} tool=$toolType buttons=0x${buttons.toString(16)}"
+        )
+        // OS-delivery lag: how stale is this MotionEvent by the time
+        // it hit onTouchEvent? eventTime is when the digitizer
+        // recorded it (uptimeMillis); SystemClock.uptimeMillis() now
+        // is the same clock. Difference = digitizer → Java dispatch
+        // budget — outside our control but useful to see what we're
+        // working with. Log per MotionEvent (not per historical
+        // sample) so the volume stays manageable; sample-level
+        // queue/dispatch/gpu breakdown lives on the Rust side in
+        // `[drawing.perf.lag]`.
+        val nowMs = SystemClock.uptimeMillis()
+        val osLagMs = nowMs - event.eventTime
+        Log.i(
+            "MindstreamDrawing",
+            "[drawing.perf.lag] os_dispatch action=$action history=${event.historySize} os_lag=${osLagMs}ms"
         )
         // Historical samples are the buffered digitizer reads between
         // the previous frame and this MotionEvent batch — replaying
