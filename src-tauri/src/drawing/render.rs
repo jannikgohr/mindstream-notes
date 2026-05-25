@@ -1027,6 +1027,13 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
             Err(_) => return,
         };
         let batch_start = std::time::Instant::now();
+        // Latency-budget instrumentation: capture uptime in the same
+        // clock `MotionEvent.eventTime` is in so we can subtract.
+        // Read once here at batch start, again right before / after
+        // render_frame, and feed all three into the
+        // `[drawing.perf.lag]` summary log at the bottom of the
+        // render block.
+        let batch_start_uptime_ms = crate::drawing::platform::android::now_uptime_ms();
         let mut messages = vec![first];
         loop {
             match rx.try_recv() {
@@ -1047,6 +1054,19 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
         // Captured before the `for msg in messages` loop consumes
         // the Vec — used by the backpressure log below.
         let batch_size = messages.len();
+        // Latency-budget tracking: the most recent sample's eventTime
+        // (in seconds) observed in this batch. After render_frame
+        // returns we subtract it from `now_uptime_ms` to derive
+        // "wallclock from this sample being timestamped by the
+        // digitizer to it being submitted/presented". `None` when no
+        // Sample messages are in the batch (e.g. SurfaceReady-only
+        // batch); the per-frame log skips lag computation in that
+        // case.
+        let mut newest_event_time_s: Option<f64> = None;
+        // Sample count in this batch — separates "pen drove this
+        // frame" from "toolbar / lifecycle event drove this frame"
+        // in the lag log.
+        let mut sample_count: u32 = 0;
         for msg in messages {
             match msg {
                 Msg::Prewarm => {
@@ -1133,6 +1153,17 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                         action,
                         time,
                     } = sample;
+                    sample_count += 1;
+                    // `time` is monotonic per-stroke (the JNI side
+                    // bumps duplicates), so "newest in batch" really
+                    // is the freshest digitizer reading. Max
+                    // protects against a hypothetical re-order if
+                    // the platform ever delivers samples out of
+                    // order.
+                    newest_event_time_s = Some(match newest_event_time_s {
+                        Some(prev) => prev.max(time),
+                        None => time,
+                    });
                     let pos = px_to_egui(x, y);
                     // Forward all gestures to egui so toolbar buttons
                     // remain interactive regardless of tool mode.
@@ -1606,15 +1637,67 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                 let ui_state = build_ui_state(tool_mode, &active_note_id, &documents);
                 let (actions, ui_output) = canvas_ui.run(input, s.size_px(), ui_state);
                 let t_frame = std::time::Instant::now();
+                let dispatch_uptime_ms =
+                    crate::drawing::platform::android::now_uptime_ms();
                 match pipeline::render_frame(p, s, segs, &prediction_segments, ui_output) {
                     Ok(()) => {
+                        let done_uptime_ms =
+                            crate::drawing::platform::android::now_uptime_ms();
+                        let render_elapsed = t_frame.elapsed();
                         if log_first_frame {
                             log::info!(
                                 "[drawing.perf] first render_frame took {:?} (vertices={})",
-                                t_frame.elapsed(),
+                                render_elapsed,
                                 segs_len,
                             );
                             log_first_frame = false;
+                        }
+
+                        // Latency-budget breakdown — only emitted for
+                        // sample-driven frames (skipped on toolbar /
+                        // lifecycle frames where there's no
+                        // digitizer timestamp to anchor against).
+                        // Subtracting eventTime from
+                        // `now_uptime_ms` gives wallclock ms because
+                        // both are CLOCK_MONOTONIC.
+                        //
+                        // Fields:
+                        //   queue   = digitizer → render thread woke
+                        //             (channel + Kotlin→JNI + OS dispatch)
+                        //   preproc = message loop + smoother +
+                        //             tessellation + egui run
+                        //   gpu     = render_frame end-to-end
+                        //             (vertex upload + encode +
+                        //              get_current_texture wait +
+                        //              submit + present queue)
+                        //   total   = digitizer → just past
+                        //             frame.present(). Doesn't include
+                        //             the final compositor → display
+                        //             hop (no app-side hook for that).
+                        //   samples = pen samples that drove this
+                        //             frame.
+                        //   verts   = committed vertices going out.
+                        if sample_count > 0 {
+                            if let Some(event_time_s) = newest_event_time_s {
+                                let event_time_ms = event_time_s * 1000.0;
+                                let queue_ms =
+                                    batch_start_uptime_ms - event_time_ms;
+                                let preproc_ms =
+                                    dispatch_uptime_ms - batch_start_uptime_ms;
+                                let gpu_ms =
+                                    done_uptime_ms - dispatch_uptime_ms;
+                                let total_ms =
+                                    done_uptime_ms - event_time_ms;
+                                log::info!(
+                                    "[drawing.perf.lag] samples={} verts={} queue={:.1}ms preproc={:.1}ms gpu={:.1}ms total={:.1}ms",
+                                    sample_count,
+                                    segs_len,
+                                    queue_ms,
+                                    preproc_ms,
+                                    gpu_ms,
+                                    total_ms,
+                                );
+                            }
                         }
 
                         // Drive doc/state mutations from toolbar
