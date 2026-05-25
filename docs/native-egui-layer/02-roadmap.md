@@ -88,6 +88,18 @@ paths instead of fresh Vec allocations. Diagnostic logs at
 `[drawing.perf] …` + `[drawing.perf.eraser] …` stay in for now
 since they're rare-event + useful for further tuning.
 
+Input-to-display latency on Galaxy Tab S7 FE: the device exposed
+only FIFO presentation and reported `MotionPredictor available=false`,
+so the winning path is no longer "predict farther ahead". The current
+Android pass uses late-latched FIFO rendering plus an AndroidX
+`CanvasFrontBufferedRenderer` live-ink overlay for the in-flight stroke
+head. The front-buffer layer draws directly from Kotlin touch samples
+while Rust/wgpu remains the source of truth for committed document
+strokes; it is cancelled shortly after pen-up so the normal renderer
+can take over without a visible gap. Runtime stroke prediction stays
+disabled on this device class because the predicted endpoint path could
+create ghost straight-line joins.
+
 **Deliberately NOT yet implemented** — see roadmap below: stroke
 smoothing; stylus-button → action mapping (the bits flow but
 nothing acts on them yet); colour picker / brush size; pan + zoom;
@@ -155,7 +167,7 @@ that order. R3–R5 still gate E.)
 | # | Item | Notes |
 |---|------|-------|
 | D1 | `ink-stroke-modeler-rs` smoothing | Audit's headline recommendation. Kalman-filtered strokes, battle-tested error handling, free pressure modeling. Requires verifying C++/cxx cross-compile to `aarch64-linux-android` — fallback is rnote's pure-Rust Catmull-Rom builder. |
-| D2 | Forward stroke prediction | `stroke_modeler.predict()` renders the ink a few ms ahead of the actual pen position; single largest perceived-latency win on Android per audit. Needs a prediction-window-ms decision (16–32 is the sane range). |
+| D2 | Low-latency live stroke head | **Done for Android current pass.** Android `MotionPredictor` support is plumbed and logged, but the Tab S7 FE reports it unavailable and the predicted endpoint path caused ghost straight-line joins. The production latency win is late-latched FIFO rendering plus a `CanvasFrontBufferedRenderer` front-buffer overlay for the in-flight stroke head; Rust/wgpu still owns committed strokes and the overlay cancels after pen-up. |
 | D3 | Eraser tool | Pen/Eraser segmented control in the toolbar; render thread holds the authoritative `ToolMode`. In Eraser mode each input sample runs a hit-test (`point_to_segment_distance_sq` from `page.rs`, host-tested) against `CanvasDocument::visible_strokes` — an in-memory `StrokeMeta { id, color, bbox, points, pressures }` cache that mirrors visible strokes from yrs. Bbox-reject most strokes in O(1); fine point-to-segment math only for the few overlap candidates. Matches accumulate into a per-batch `pending_eraser_tombstones: HashSet<String>`; at the end of each render-thread loop iteration the worker fires ONE `StrokesDoc::tombstone_strokes(&pending)` bulk yrs walk + one `retessellate_segments_from_cache` (instead of per-sample), turning a dense drag's O(samples × strokes) into O(strokes) total. Per-drag hits accumulate into a Vec that becomes one `UndoOp::EraserDrag` on pen-up. Eraser radius = 10 page-units (~1.4 mm at 144 DPI). End-to-end: ~1.5 s → ~80 ms on a 391-stroke / 65-sample / 55-hit drag (~20× from the original yrs-walking implementation). **Done.** |
 | D4 | Undo / redo | Per-note transient stacks on `CanvasDocument`. `UndoOp` enum: `StrokeAdded(id)` (pen-up), `EraserDrag(Vec<id>)` (one per eraser drag), `ClearAll(Vec<id>)` (toolbar Clear, captures the pre-clear visible set so undo restores exactly that). Standard semantics: new mutation clears the redo stack. Toolbar Undo/Redo buttons grey out via `add_enabled` when the matching stack is empty. **Done.** |
 | D5 | Color picker + brush size | Toolbar additions in `ui/color_picker.rs` / `ui/brush.rs`. Trivial after D3 lands the tool/state plumbing. |
@@ -175,7 +187,7 @@ that order. R3–R5 still gate E.)
 - **F1.** SurfaceView vs TextureView — **resolved:** SurfaceView. Latency is what we wanted.
 - **F2.** Single-process JNI design — **resolved:** all in `libmindstream_notes_lib.so`. Same library carries Keyring + Drawing JNI symbols. Side-effect: the drawing layer can't be extracted as a standalone Tauri plugin crate without restructuring (R6 may revisit).
 - **F3.** Whether drawing needs its own NDK-context init — **resolved:** no, `Keyring.initializeNdkContext` (called from `MainActivity.onCreate`) populates `ndk_context` process-wide. Documented load-bearing dependency: if Keyring ever goes away, drawing's `ui::call_*` JNI callbacks lose their JavaVM and silently no-op. The cached Drawing-class JNI GlobalRef is a related load-bearing dep — see the comments in `Drawing.kt`'s companion init.
-- **F4.** Prediction window in ms — open, deferred to D2.
+- **F4.** Prediction window in ms — deferred unless a target device reports reliable `MotionPredictor` support. Current Tab S7 FE path uses front-buffer live ink instead.
 - **F5.** Pen-vs-finger mode setting — open. `freeform` notes have an existing `editor.freeform.penMode` setting (auto / always / off); ink notes should mirror so the same gesture is consistent across both editor kinds.
 - **F6.** Page size as a user-facing setting? — open. C0 hardcodes A4 portrait; eventually probably needs to be a per-note property (some users want letter, some want square, some want infinite scroll). Not blocking; revisit when multi-page lands (D7).
 - **F7.** Default stylus-button + gesture binding? — open. Candidates for the held barrel button (S Pen / Surface / Wacom): (a) temporary eraser mode while held — matches most competing apps' default, makes the button feel like a "modifier key"; (b) cycle to next colour — useful for quick highlight runs; (c) open a radial quick-picker. Candidates for Apple Pencil double-tap: cycle current/previous tool (default in Apple Notes), open colour picker, undo. On iOS we should likely defer to `UIPencilInteraction.preferredTapAction` rather than ship our own default. On Android there's no system pref to defer to, so we ship a setting (`editor.ink.barrelButton` with the same enum as freeform's pen-mode setting per F5). Not blocking — C6 captures the bits regardless; D8 picks the mapping; this question just chooses the *default* the setting starts at.
