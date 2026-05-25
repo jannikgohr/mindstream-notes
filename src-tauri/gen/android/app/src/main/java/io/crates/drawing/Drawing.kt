@@ -63,6 +63,15 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
     fun show() {
         activity.runOnUiThread {
             if (view != null) return@runOnUiThread
+            // Request the highest-Hz display mode the panel offers
+            // (at the current resolution) while an ink note is open.
+            // 120Hz halves per-vsync latency on phones like the S23+
+            // vs the default 60Hz. Released in hide() so the markdown
+            // editor + general WebView UI stays on adaptive refresh.
+            // Triggers a surface re-create on devices that actually
+            // switch modes — same path that handles rotation, so
+            // SurfaceHolder.Callback already covers it.
+            requestHighRefreshRate(activity)
             val v = DrawingSurfaceView(activity)
             val parent = webView.parent as ViewGroup
             // topMargin = system-bar inset + Svelte header height so
@@ -98,6 +107,7 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
             Log.i("MindstreamDrawing", "Drawing.hide: detaching SurfaceView")
             (v.parent as? ViewGroup)?.removeView(v)
             view = null
+            releaseRefreshRate(activity)
         }
     }
 
@@ -121,6 +131,7 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
         Log.i("MindstreamDrawing", "Drawing.hideSync: detaching SurfaceView (UI thread)")
         (v.parent as? ViewGroup)?.removeView(v)
         view = null
+        releaseRefreshRate(activity)
     }
 
     companion object {
@@ -250,6 +261,69 @@ private fun computeTopInsetPx(parent: ViewGroup, activity: Activity): Int {
     val density = activity.resources.displayMetrics.density
     val headerHeightPx = (MOBILE_HEADER_HEIGHT_DP * density).toInt()
     return systemBarTop + headerHeightPx
+}
+
+/**
+ * Ask the system for the highest-refresh-rate display mode that
+ * matches the current resolution. Halves per-vsync latency on
+ * variable-refresh phones (e.g. ~8.3ms vs ~16.7ms on the S23+'s
+ * 120Hz panel). No-op on 60Hz-only displays like the Tab S7 FE —
+ * we just don't find a mode with a higher rate.
+ *
+ * We pick by exact resolution match rather than asking for a raw
+ * rate (`preferredRefreshRate`) because some panels expose 120Hz
+ * only at a lower resolution; we don't want to silently drop
+ * resolution to gain Hz. Mode-id pinning is the safer dial.
+ *
+ * Setting `preferredDisplayModeId` triggers a surface re-create on
+ * devices that actually switch modes — same surfaceDestroyed →
+ * surfaceCreated path the rotation listener already handles, so
+ * the wgpu side recovers automatically.
+ */
+private fun requestHighRefreshRate(activity: Activity) {
+    val window = activity.window
+    @Suppress("DEPRECATION")
+    val display = window.windowManager.defaultDisplay
+    val currentMode = display.mode
+    val target = display.supportedModes
+        .filter {
+            it.physicalWidth == currentMode.physicalWidth &&
+            it.physicalHeight == currentMode.physicalHeight
+        }
+        .maxByOrNull { it.refreshRate }
+    if (target == null || target.refreshRate <= currentMode.refreshRate + 0.5f) {
+        Log.i(
+            "MindstreamDrawing",
+            "no higher-refresh mode available (current=${currentMode.refreshRate}Hz)"
+        )
+        return
+    }
+    Log.i(
+        "MindstreamDrawing",
+        "requesting refresh rate ${target.refreshRate}Hz (modeId=${target.modeId}, was ${currentMode.refreshRate}Hz)"
+    )
+    val attrs = window.attributes
+    attrs.preferredDisplayModeId = target.modeId
+    window.attributes = attrs
+}
+
+/**
+ * Release the refresh-rate preference set by [requestHighRefreshRate]
+ * so the rest of the app (Svelte editor, etc.) goes back to the
+ * system's adaptive choice. `preferredDisplayModeId = 0` is the
+ * documented "no preference" value.
+ *
+ * Safe to call even if `request` wasn't called (e.g. on devices
+ * where the request was a no-op): writing 0 over 0 is a no-op
+ * itself.
+ */
+private fun releaseRefreshRate(activity: Activity) {
+    val attrs = activity.window.attributes
+    if (attrs.preferredDisplayModeId != 0) {
+        Log.i("MindstreamDrawing", "releasing refresh rate preference")
+        attrs.preferredDisplayModeId = 0
+        activity.window.attributes = attrs
+    }
 }
 
 /**
