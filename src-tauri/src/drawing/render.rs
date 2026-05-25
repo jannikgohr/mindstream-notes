@@ -128,6 +128,14 @@ fn tessellate_segment(
 
 /// Messages the render thread accepts.
 enum Msg {
+    /// Pre-warm `PersistentGpu` (instance + adapter + device +
+    /// pipeline + egui_renderer) so the first `SurfaceReady` only
+    /// has to do the per-surface bind. Fired from `lib.rs::run`'s
+    /// Tauri setup hook via [`prewarm`] so the wgpu cost moves off
+    /// the user-perceived open critical path. Idempotent — a
+    /// subsequent Prewarm with PersistentGpu already built is a
+    /// no-op log line.
+    Prewarm,
     SurfaceReady {
         window: Box<dyn SurfaceSource>,
         width: u32,
@@ -317,6 +325,17 @@ fn send(msg: Msg) {
 
 // ---------- public API (called from JNI exports in jni.rs) ----------
 
+/// Request a prewarm of the surface-independent wgpu state
+/// (`PersistentGpu`). Called once at app startup from
+/// `lib.rs::run`'s Tauri setup hook so the heavy adapter / device /
+/// pipeline / egui-renderer build is off the user-perceived
+/// "tap ink note → see canvas" critical path. Fires off the message
+/// and returns immediately — the actual build runs on the render
+/// thread (spawned lazily by `send` here on first call).
+pub fn prewarm() {
+    send(Msg::Prewarm);
+}
+
 /// Platform-bridge entrypoint: hand a freshly-acquired
 /// `SurfaceSource` to the render thread. The caller (today: the
 /// `setSurface` JNI export in `platform::android`) constructs the
@@ -490,6 +509,19 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
         let mut needs_rebuild = false;
         for msg in messages {
             match msg {
+                Msg::Prewarm => {
+                    if persistent.is_some() {
+                        log::debug!("[drawing] Prewarm requested but PersistentGpu already built — ignoring");
+                    } else {
+                        log::info!("[drawing] Prewarm: building PersistentGpu in the background");
+                        match pollster::block_on(pipeline::build_persistent()) {
+                            Ok(p) => persistent = Some(p),
+                            Err(e) => log::error!(
+                                "[drawing] prewarm build_persistent failed: {e:?} — first ink open will fall back to lazy init"
+                            ),
+                        }
+                    }
+                }
                 Msg::SurfaceReady {
                     window,
                     width,
@@ -503,33 +535,33 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                     // is roughly the Kotlin runOnUiThread + addView
                     // + layout-pass cost.
                     let t_ready = std::time::Instant::now();
-                    let path: &str;
                     surface_state = None;
-                    if persistent.is_none() {
-                        path = "first_time";
-                        match pollster::block_on(pipeline::build_first_time(
-                            window, width, height,
-                        )) {
-                            Ok((p, s)) => {
-                                persistent = Some(p);
-                                surface_state = Some(s);
-                                needs_rebuild = true;
+                    // Lazy fallback: if `Msg::Prewarm` didn't run
+                    // (or didn't finish) before this, build
+                    // PersistentGpu now on the critical path. Same
+                    // wall-clock as the old `build_first_time`
+                    // pathway — worst case = today's experience.
+                    let prewarmed = persistent.is_some();
+                    if !prewarmed {
+                        match pollster::block_on(pipeline::build_persistent()) {
+                            Ok(p) => persistent = Some(p),
+                            Err(e) => {
+                                log::error!("[drawing] lazy build_persistent failed: {e:?}");
+                                continue;
                             }
-                            Err(e) => log::error!("[drawing] build_first_time failed: {e:?}"),
-                        }
-                    } else {
-                        path = "surface_only";
-                        let p = persistent.as_ref().unwrap();
-                        match pollster::block_on(pipeline::build_surface_only(
-                            p, window, width, height,
-                        )) {
-                            Ok(s) => {
-                                surface_state = Some(s);
-                                needs_rebuild = true;
-                            }
-                            Err(e) => log::error!("[drawing] build_surface_only failed: {e:?}"),
                         }
                     }
+                    let p = persistent.as_ref().expect("persistent built above");
+                    match pollster::block_on(pipeline::build_surface_bound(
+                        p, window, width, height,
+                    )) {
+                        Ok(s) => {
+                            surface_state = Some(s);
+                            needs_rebuild = true;
+                        }
+                        Err(e) => log::error!("[drawing] build_surface_bound failed: {e:?}"),
+                    }
+                    let path = if prewarmed { "prewarmed" } else { "lazy_persistent" };
                     log::info!(
                         "[drawing.perf] SurfaceReady handled in {:?} (path={path} size={width}x{height})",
                         t_ready.elapsed(),

@@ -158,6 +158,16 @@ pub fn run() {
             // call would silently no-op.
             drawing::init(app.handle().clone());
 
+            // Kick off wgpu pre-warm in the background so the heavy
+            // adapter / device / pipeline / egui-renderer build is
+            // off the critical path of the user's first ink-note
+            // open. Returns immediately — the actual work runs on
+            // the drawing render thread (spawned lazily by this
+            // first message). Android-only because that's where the
+            // drawing pipeline runs.
+            #[cfg(target_os = "android")]
+            drawing::render::prewarm();
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
