@@ -123,7 +123,7 @@ const MIN_WIDTH: f32 = 1.0;
 ///                (zero-length segment) and the buffer is empty.
 ///                Saved geometry is raw input — visible jitter at low
 ///                speed.
-const SMOOTHING_ENABLED: bool = false;
+const SMOOTHING_ENABLED: bool = true;
 
 /// A/B flag: paint a `MotionPredictor`-driven "predicted lead"
 /// segment past the raw head (zone 3). `true` adds visual lead
@@ -135,7 +135,7 @@ const SMOOTHING_ENABLED: bool = false;
 /// and smoothed modes. In raw mode the lead extends past the raw
 /// input directly (no body smoothing involved); in smoothed mode it
 /// extends past the raw head, which extends past the smoothed body.
-const PREDICTION_ENABLED: bool = false;
+const PREDICTION_ENABLED: bool = true;
 
 /// High-volume input/frame latency diagnostics. Leave this disabled
 /// during normal drawing: Android logcat writes on the stylus hot path
