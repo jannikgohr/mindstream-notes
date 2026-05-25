@@ -387,7 +387,16 @@ pub async fn build_surface_bound(
         present_mode: caps.present_modes[0],
         alpha_mode,
         view_formats: vec![],
-        desired_maximum_frame_latency: 2,
+        // 1 rather than the wgpu default of 2: with two frames in
+        // flight, a sample arriving just after vsync waits the full
+        // remainder of *two* frames before becoming visible (~33 ms
+        // on 60 Hz). For ink-style input the lower-latency tradeoff
+        // beats the throughput buffering — we render in short
+        // bursts triggered by pen samples, not in a steady stream
+        // where a GPU stall would cost more than the latency win.
+        // If a single frame ever takes >16 ms the next get_current_texture
+        // call briefly stalls; that's acceptable for a drawing surface.
+        desired_maximum_frame_latency: 1,
     };
     surface.configure(&persistent.device, &config);
     let t_configure = t_phase.elapsed();
