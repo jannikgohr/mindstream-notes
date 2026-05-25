@@ -150,6 +150,22 @@ fn width_for_pressure(pressure: f32) -> f32 {
     MIN_WIDTH + (BASE_WIDTH - MIN_WIDTH) * p
 }
 
+/// How thick the Kotlin front-buffer overlay paints relative to the
+/// committed Rust/wgpu stroke. Strictly less than 1.0 so the
+/// committed stroke fully covers (with margin) the overlay's
+/// footprint — otherwise the moment the overlay cancels after
+/// pen-up the user sees a one-pixel ring of background flash where
+/// the overlay extended past the committed quad, reading as a
+/// "flicker" along the just-drawn stroke.
+///
+/// 0.85 gives ≥ ~1 device-pixel of cover on the widest end of the
+/// pressure ramp at typical tablet DPI, which is plenty to mask
+/// sub-pixel AA differences between Skia's `Paint` rasteriser and
+/// our wgpu triangle pass. Lower buys more margin at the cost of
+/// the live head reading visibly thinner than the committed stroke;
+/// 0.6 was the eyeball-test sweet spot on a Tab S7 FE.
+const LIVE_INK_WIDTH_SCALE: f32 = 0.6;
+
 /// Push the active live-ink style (colour + pressure-width range) to
 /// Kotlin's `FrontBufferInk` so the front-buffer overlay paints the
 /// in-flight stroke head with the same colour and pressure curve
@@ -160,13 +176,17 @@ fn width_for_pressure(pressure: f32) -> f32 {
 /// Width conversion: Rust holds widths in page units (1 unit = 1/144
 /// inch), but the Kotlin `Canvas` paints in surface pixels, so we
 /// multiply by [`SurfaceBoundState::page_to_surface_scale`] before
-/// the JNI hop. No surface yet (start-of-day) → silent no-op; the
-/// next DOWN that lands with a real surface will re-push.
+/// the JNI hop. The overlay also gets a [`LIVE_INK_WIDTH_SCALE`]
+/// haircut so the committed stroke is always *slightly* thicker —
+/// see that constant's doc for the no-flicker rationale.
+///
+/// No surface yet (start-of-day) → silent no-op; the next DOWN that
+/// lands with a real surface will re-push.
 fn push_live_ink_style(surface: Option<&SurfaceBoundState>, color: u32) {
     let Some(s) = surface else {
         return;
     };
-    let scale = s.page_to_surface_scale();
+    let scale = s.page_to_surface_scale() * LIVE_INK_WIDTH_SCALE;
     let min_px = MIN_WIDTH * scale;
     let max_px = BASE_WIDTH * scale;
     if let Err(e) =
