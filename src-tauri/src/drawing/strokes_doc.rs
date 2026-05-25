@@ -326,8 +326,16 @@ impl StrokesDoc {
     /// `HashMap<stroke_id, array_index>` cache invalidated on the
     /// strokes-array observer.
     pub fn set_stroke_tombstoned(&mut self, id: &str, tombstoned: bool) -> bool {
+        // Perf instrumentation: this is O(n) over the outer strokes
+        // array. During an eraser drag with N hits, the caller runs
+        // this N times → O(N × strokes). Logged at trace so we can
+        // turn it on cheaply when investigating slowdowns, plus a
+        // warn! escape hatch for individually-pathological cases.
+        let t0 = std::time::Instant::now();
+        let mut scanned: usize = 0;
         let mut tx = self.doc.transact_mut();
         for stroke_value in self.strokes.iter(&tx) {
+            scanned += 1;
             let Out::YMap(stroke) = stroke_value else {
                 continue;
             };
@@ -337,9 +345,22 @@ impl StrokesDoc {
             );
             if matches {
                 stroke.insert(&mut tx, FIELD_TOMBSTONED, Any::Bool(tombstoned));
+                let elapsed = t0.elapsed();
+                log::trace!(
+                    "[drawing.perf.eraser] set_stroke_tombstoned id={id} scanned={scanned} took={elapsed:?}"
+                );
+                if elapsed.as_millis() > 5 {
+                    log::warn!(
+                        "[drawing.perf.eraser] slow set_stroke_tombstoned id={id} scanned={scanned} took={elapsed:?}"
+                    );
+                }
                 return true;
             }
         }
+        let elapsed = t0.elapsed();
+        log::trace!(
+            "[drawing.perf.eraser] set_stroke_tombstoned id={id} MISS scanned={scanned} took={elapsed:?}"
+        );
         false
     }
 
