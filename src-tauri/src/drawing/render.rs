@@ -199,6 +199,74 @@ enum Msg {
     },
 }
 
+/// Pre-decoded form of one visible stroke, cached in
+/// [`CanvasDocument::visible_strokes`] so the eraser hot path
+/// doesn't have to re-decode the yrs `Any::Buffer` payload on
+/// every sample. Mirrors what the (Schema v2) stroke payload
+/// contains, plus a precomputed axis-aligned bbox for O(1)
+/// rejection during hit-test.
+///
+/// Memory cost: ~3 KB per stroke for typical doodle-density notes
+/// (varies with point count). For a heavy 400-stroke doc that's
+/// ~1.2 MB extra resident — well below noise on a tablet.
+struct StrokeMeta {
+    id: String,
+    color: u32,
+    bbox_min: (f32, f32),
+    bbox_max: (f32, f32),
+    /// Interleaved (x, y) in page coords. Same shape `decode_payload_v1`
+    /// hands back, copied out so we own it for the cache's lifetime.
+    points: Vec<f32>,
+    /// Parallel to `points`, one entry per (x, y) pair.
+    pressures: Vec<f32>,
+}
+
+impl StrokeMeta {
+    /// Build from the freshly-pen-drawn buffers the render thread
+    /// accumulates during a Pen drag. `points` interleaved (x, y),
+    /// `pressures` per pair. Bbox precomputed here once.
+    fn from_pen_drag(id: String, color: u32, points: Vec<f32>, pressures: Vec<f32>) -> Self {
+        let (bbox_min, bbox_max) = bbox_of_points(&points);
+        Self {
+            id,
+            color,
+            bbox_min,
+            bbox_max,
+            points,
+            pressures,
+        }
+    }
+}
+
+/// Compute the axis-aligned bbox of an interleaved (x, y) point
+/// list. Empty input collapses to a degenerate (0, 0) bbox —
+/// the eraser's bbox check rejects everything that doesn't
+/// overlap, so a degenerate empty stroke never hits.
+fn bbox_of_points(points: &[f32]) -> ((f32, f32), (f32, f32)) {
+    let mut min = (f32::INFINITY, f32::INFINITY);
+    let mut max = (f32::NEG_INFINITY, f32::NEG_INFINITY);
+    for chunk in points.chunks_exact(2) {
+        let (x, y) = (chunk[0], chunk[1]);
+        if x < min.0 {
+            min.0 = x;
+        }
+        if y < min.1 {
+            min.1 = y;
+        }
+        if x > max.0 {
+            max.0 = x;
+        }
+        if y > max.1 {
+            max.1 = y;
+        }
+    }
+    if min.0 == f32::INFINITY {
+        ((0.0, 0.0), (0.0, 0.0))
+    } else {
+        (min, max)
+    }
+}
+
 /// A single reversible change to the active note's stroke document,
 /// captured for the undo/redo stack. Each variant's *direction* is
 /// determined by which stack it's on: an `UndoOp` on the undo stack
@@ -244,6 +312,19 @@ enum UndoOp {
 struct CanvasDocument {
     strokes_doc: StrokesDoc,
     segments: Vec<Vertex>,
+    /// Pre-decoded copy of every visible stroke's geometry, kept in
+    /// lock-step with `segments`. The eraser hit-test reads from
+    /// here instead of walking `strokes_doc` per sample — eliminates
+    /// 391 yrs map lookups + 391 payload decodes per sample on a
+    /// heavy note, which is what made the eraser feel laggy. See
+    /// the `[drawing.perf.eraser]` log story in the git history.
+    ///
+    /// Sync points: rebuilt from yrs (slow path) in `rebuild_caches`
+    /// (used by `from_bytes` + undo/redo/clear); rebuilt from cache
+    /// (fast path) in `retessellate_segments_from_cache` (used after
+    /// eraser tombstones a stroke); incrementally appended on pen-up
+    /// from the render thread's in-flight buffers.
+    visible_strokes: Vec<StrokeMeta>,
     undo: Vec<UndoOp>,
     redo: Vec<UndoOp>,
 }
@@ -253,6 +334,7 @@ impl CanvasDocument {
         Self {
             strokes_doc: StrokesDoc::new(),
             segments: Vec::new(),
+            visible_strokes: Vec::new(),
             undo: Vec::new(),
             redo: Vec::new(),
         }
@@ -271,6 +353,12 @@ impl CanvasDocument {
     /// undo stack. Caller is responsible for stack-juggling (popping
     /// from undo, pushing to redo) — separated so the borrow shapes
     /// stay simple.
+    ///
+    /// Always takes the slow `rebuild_caches` path because undo can
+    /// resurrect previously-tombstoned strokes (which aren't in the
+    /// `visible_strokes` cache), so we have to re-decode from yrs to
+    /// repopulate them. Per-action ~25 ms — fine for a button press,
+    /// not for a per-sample hot path.
     fn apply_undo_op(&mut self, op: &UndoOp) {
         match op {
             UndoOp::StrokeAdded(id) => {
@@ -282,7 +370,7 @@ impl CanvasDocument {
                 }
             }
         }
-        self.rebuild_segments();
+        self.rebuild_caches();
     }
 
     /// Apply `op` in its original direction — what the user means by
@@ -298,23 +386,87 @@ impl CanvasDocument {
                 }
             }
         }
-        self.rebuild_segments();
+        self.rebuild_caches();
     }
 
-    /// Re-tessellate `segments` from the current strokes_doc state.
-    /// Used after doc-level mutations (undo/redo/clear/eraser drag)
-    /// where the visible-stroke set changed but we don't want to
-    /// re-decode bytes — just re-walk what's already in memory.
-    fn rebuild_segments(&mut self) {
-        // Build into a local Vec then swap, so the closure captures
-        // `&mut local_segments` (disjoint from the `&self.strokes_doc`
-        // for_each_stroke needs).
-        let mut fresh: Vec<Vertex> = Vec::new();
+    /// Slow path: walk `strokes_doc` once and rebuild *both* caches
+    /// (`segments` for the GPU + `visible_strokes` for the eraser
+    /// hit-test). O(visible vertices). Used by `from_bytes`,
+    /// undo/redo, and Clear — paths where the visible-stroke set
+    /// has changed in ways the in-memory cache can't reconstruct
+    /// (resurrected strokes need their geometry re-decoded from
+    /// yrs).
+    ///
+    /// Hot eraser path uses [`retessellate_segments_from_cache`]
+    /// instead — fast path that walks `visible_strokes` only.
+    fn rebuild_caches(&mut self) {
+        let t0 = std::time::Instant::now();
+        let mut fresh_segments: Vec<Vertex> = Vec::new();
+        let mut fresh_visible: Vec<StrokeMeta> = Vec::new();
         self.strokes_doc.for_each_stroke(|view| {
-            let color = pack_color_bytes(view.color);
+            let color = view.color;
+            let color_bytes = pack_color_bytes(color);
+            let points: Vec<f32> = view.points.to_vec();
+            let pressures: Vec<f32> = view.pressures.to_vec();
+            let (bbox_min, bbox_max) = bbox_of_points(&points);
+            // Tessellate into segments while we have the data hot.
             let mut prev: Option<(f32, f32, f32)> = None;
-            for (i, chunk) in view.points.chunks_exact(2).enumerate() {
-                let curr_p = view.pressures.get(i).copied().unwrap_or(1.0);
+            for (i, chunk) in points.chunks_exact(2).enumerate() {
+                let curr_p = pressures.get(i).copied().unwrap_or(1.0);
+                let curr = (chunk[0], chunk[1], curr_p);
+                if let Some((px, py, pp)) = prev {
+                    let w_prev = width_for_pressure(pp);
+                    let w_curr = width_for_pressure(curr.2);
+                    fresh_segments.extend_from_slice(&tessellate_segment(
+                        (px, py),
+                        (curr.0, curr.1),
+                        w_prev,
+                        w_curr,
+                        color_bytes,
+                    ));
+                }
+                prev = Some(curr);
+            }
+            fresh_visible.push(StrokeMeta {
+                id: view.id.to_string(),
+                color,
+                bbox_min,
+                bbox_max,
+                points,
+                pressures,
+            });
+        });
+        let stroke_count = fresh_visible.len();
+        let vertex_count = fresh_segments.len();
+        self.segments = fresh_segments;
+        self.visible_strokes = fresh_visible;
+        let elapsed = t0.elapsed();
+        log::debug!(
+            "[drawing.perf.eraser] rebuild_caches strokes={stroke_count} vertices={vertex_count} took={elapsed:?}"
+        );
+        if elapsed.as_millis() > 5 {
+            log::warn!(
+                "[drawing.perf.eraser] slow rebuild_caches strokes={stroke_count} vertices={vertex_count} took={elapsed:?}"
+            );
+        }
+    }
+
+    /// Fast path: rebuild only `segments` from the existing
+    /// `visible_strokes` cache. Zero yrs touches. Used after an
+    /// eraser hit (where we've just `retain`'d the cache to drop
+    /// the erased stroke — segments need to follow).
+    ///
+    /// O(visible vertices) in pure-CPU math (the tessellator loop);
+    /// runs in ~1-5 ms even for a heavy note vs ~25 ms for the
+    /// yrs-walking `rebuild_caches`.
+    fn retessellate_segments_from_cache(&mut self) {
+        let t0 = std::time::Instant::now();
+        let mut fresh: Vec<Vertex> = Vec::new();
+        for meta in &self.visible_strokes {
+            let color_bytes = pack_color_bytes(meta.color);
+            let mut prev: Option<(f32, f32, f32)> = None;
+            for (i, chunk) in meta.points.chunks_exact(2).enumerate() {
+                let curr_p = meta.pressures.get(i).copied().unwrap_or(1.0);
                 let curr = (chunk[0], chunk[1], curr_p);
                 if let Some((px, py, pp)) = prev {
                     let w_prev = width_for_pressure(pp);
@@ -324,13 +476,18 @@ impl CanvasDocument {
                         (curr.0, curr.1),
                         w_prev,
                         w_curr,
-                        color,
+                        color_bytes,
                     ));
                 }
                 prev = Some(curr);
             }
-        });
+        }
+        let vertex_count = fresh.len();
         self.segments = fresh;
+        log::debug!(
+            "[drawing.perf.eraser] retessellate_segments_from_cache vertices={vertex_count} took={:?}",
+            t0.elapsed(),
+        );
     }
 
     fn from_bytes(bytes: &[u8]) -> Self {
@@ -342,82 +499,73 @@ impl CanvasDocument {
         let t_decode = std::time::Instant::now();
         let strokes_doc = StrokesDoc::from_bytes(bytes);
         let decode_ms = t_decode.elapsed();
-        let mut segments = Vec::new();
-        let mut stroke_count: usize = 0;
-        // Each stroke's points are [x0, y0, x1, y1, …]; emit
-        // (prev → curr) line-list pairs for the GPU. Single-point
-        // strokes (no second sample) generate no segments — the
-        // user lifted the pen without moving; nothing to draw.
-        // Walk each stroke's (point, pressure) pairs and emit a
-        // tessellated quad per segment, coloured by the stroke's
-        // stored colour. Geometry + colour are identical to what the
-        // live ACTION_MOVE handler emits, so a re-hydrated doc
-        // renders pixel-equivalently to the same doc replayed
-        // sample-by-sample.
-        strokes_doc.for_each_stroke(|view| {
-            stroke_count += 1;
-            let color = pack_color_bytes(view.color);
-            let mut prev: Option<(f32, f32, f32)> = None;
-            for (i, chunk) in view.points.chunks_exact(2).enumerate() {
-                let curr_p = view.pressures.get(i).copied().unwrap_or(1.0);
-                let curr = (chunk[0], chunk[1], curr_p);
-                if let Some((px, py, pp)) = prev {
-                    let w_prev = width_for_pressure(pp);
-                    let w_curr = width_for_pressure(curr.2);
-                    segments.extend_from_slice(&tessellate_segment(
-                        (px, py),
-                        (curr.0, curr.1),
-                        w_prev,
-                        w_curr,
-                        color,
-                    ));
-                }
-                prev = Some(curr);
-            }
-        });
+        // Start with empty caches then run the shared rebuild
+        // path. Single source of truth for "yrs-walk + tessellate +
+        // populate visible_strokes". Slightly slower than the old
+        // inline loop (extra Vec allocation indirection) but the
+        // duplication wasn't pulling its weight.
+        let mut doc = Self {
+            strokes_doc,
+            segments: Vec::new(),
+            visible_strokes: Vec::new(),
+            undo: Vec::new(),
+            redo: Vec::new(),
+        };
+        doc.rebuild_caches();
         log::info!(
             "[drawing.perf] from_bytes TOTAL={:?} decode={:?} bytes={} strokes={} vertices={}",
             t_total.elapsed(),
             decode_ms,
             bytes.len(),
-            stroke_count,
-            segments.len(),
+            doc.visible_strokes.len(),
+            doc.segments.len(),
         );
-        Self {
-            strokes_doc,
-            segments,
-            undo: Vec::new(),
-            redo: Vec::new(),
-        }
+        doc
     }
 }
 
 /// Find every visible stroke whose closest segment is within
-/// [`ERASER_RADIUS_PAGE`] of `point` (page coordinates). Walks the
-/// outer strokes array once; for each stroke, checks segments until
-/// the first hit (early-returns from the closure — no point
-/// re-tombstoning the same stroke multiple times via different
-/// segments). Returns the matched stroke ids; caller tombstones +
+/// [`ERASER_RADIUS_PAGE`] of `point` (page coordinates). Hits the
+/// in-memory `visible_strokes` cache — zero yrs touches — and
+/// rejects most strokes with an O(1) bbox check before walking
+/// segments. Returns the matched stroke ids; caller tombstones +
 /// records the eraser-drag op.
 fn strokes_within_eraser_radius(
-    strokes_doc: &StrokesDoc,
+    cache: &[StrokeMeta],
     point: (f32, f32),
 ) -> Vec<String> {
     let mut hits = Vec::new();
     let radius_sq = ERASER_RADIUS_PAGE * ERASER_RADIUS_PAGE;
-    strokes_doc.for_each_stroke(|view| {
+    for meta in cache {
+        // Expanded bbox = real bbox inflated by ERASER_RADIUS_PAGE
+        // on each side. If the eraser point is outside this, no
+        // segment of the stroke can possibly be within radius;
+        // skip without walking points. The common "drag through a
+        // gap" case rejects most strokes here in nanoseconds.
+        if point.0 < meta.bbox_min.0 - ERASER_RADIUS_PAGE
+            || point.0 > meta.bbox_max.0 + ERASER_RADIUS_PAGE
+            || point.1 < meta.bbox_min.1 - ERASER_RADIUS_PAGE
+            || point.1 > meta.bbox_max.1 + ERASER_RADIUS_PAGE
+        {
+            continue;
+        }
+        // Bbox-overlap stroke — do the fine point-to-segment check.
         let mut prev: Option<(f32, f32)> = None;
-        for chunk in view.points.chunks_exact(2) {
+        let mut hit = false;
+        for chunk in meta.points.chunks_exact(2) {
             let curr = (chunk[0], chunk[1]);
             if let Some(prev_pt) = prev {
                 if point_to_segment_distance_sq(point, prev_pt, curr) <= radius_sq {
-                    hits.push(view.id.to_string());
-                    return;
+                    hit = true;
+                    break;
                 }
             }
             prev = Some(curr);
         }
-    });
+        if hit {
+            hits.push(meta.id.clone());
+        }
+    }
     hits
 }
 
@@ -446,17 +594,50 @@ fn erase_at(
     };
     let doc = documents.entry(id.clone()).or_insert_with(CanvasDocument::new);
     let [px, py] = s.surface_to_page(sample_surface.0, sample_surface.1);
-    let fresh_hits: Vec<String> = strokes_within_eraser_radius(&doc.strokes_doc, (px, py))
+
+    // Per-call timing split into the three sub-phases so we can
+    // attribute the eraser hot path:
+    //   hit_test: bbox-reject + fine point-to-segment check against
+    //             the in-memory visible_strokes cache (no yrs)
+    //   tombstone+retain: flag-flip on the matching strokes_doc
+    //             entry + retain on the cache
+    //   retessellate: rebuild segments from cache (fast path)
+    let t_hit = std::time::Instant::now();
+    let raw_hits = strokes_within_eraser_radius(&doc.visible_strokes, (px, py));
+    let hit_test_us = t_hit.elapsed();
+
+    let fresh_hits: Vec<String> = raw_hits
         .into_iter()
         .filter(|hit_id| seen.insert(hit_id.clone()))
         .collect();
     if fresh_hits.is_empty() {
+        log::trace!(
+            "[drawing.perf.eraser] erase_at no_hits hit_test={hit_test_us:?}"
+        );
         return;
     }
+
+    let t_mutate = std::time::Instant::now();
     for hit_id in &fresh_hits {
         doc.strokes_doc.set_stroke_tombstoned(hit_id, true);
     }
-    doc.rebuild_segments();
+    // Drop the erased strokes from the cache too so the very next
+    // sample's hit-test doesn't bbox-overlap a tombstoned-but-still-
+    // cached entry.
+    {
+        let drop_set: HashSet<&String> = fresh_hits.iter().collect();
+        doc.visible_strokes.retain(|m| !drop_set.contains(&m.id));
+    }
+    let mutate_us = t_mutate.elapsed();
+
+    let t_retess = std::time::Instant::now();
+    doc.retessellate_segments_from_cache();
+    let retess_us = t_retess.elapsed();
+
+    log::debug!(
+        "[drawing.perf.eraser] erase_at hits={} hit_test={hit_test_us:?} mutate={mutate_us:?} retess={retess_us:?}",
+        fresh_hits.len(),
+    );
     drag_hits.extend(fresh_hits);
 }
 
@@ -691,6 +872,20 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
     // CANCEL / Clear / SetActiveNote so a leaked colour can't paint
     // an unrelated note's stroke the wrong shade.
     let mut current_stroke_color: Option<[u8; 4]> = None;
+    // Pen-mode in-flight geometry buffers — Rust-side mirror of what
+    // gets pushed into the StrokesDoc during a pen drag. On pen-up
+    // we move-out of these and into a fresh StrokeMeta which goes
+    // into `doc.visible_strokes` (the eraser hit-test cache). Lets
+    // us update the cache incrementally without walking yrs to
+    // re-decode the just-committed stroke. Cleared on every Pen
+    // Down, tool switch, and active-note swap.
+    let mut pen_in_flight_points: Vec<f32> = Vec::new();
+    let mut pen_in_flight_pressures: Vec<f32> = Vec::new();
+    // Packed 0xAARRGGBB the current pen stroke was opened with —
+    // stored separately from `current_stroke_color` (the unpacked
+    // [u8;4] used in the GPU vertex bytes) so the StrokeMeta we
+    // build on pen-up can carry the schema-side packed form.
+    let mut current_stroke_packed: Option<u32> = None;
     // User-selected drawing tool. Authoritative state lives here on
     // the render thread; the egui toolbar mirrors via UiState and
     // sends changes back via RenderActions::set_tool. Defaults to
@@ -704,6 +899,13 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
     // eraser passes over it multiple times mid-drag.
     let mut eraser_drag_hits: Vec<String> = Vec::new();
     let mut eraser_drag_seen: HashSet<String> = HashSet::new();
+    // Perf instrumentation for the eraser slowdown investigation —
+    // accumulated across all ACTION_MOVE samples in the current
+    // drag, summarised on ACTION_UP. Lets us see at a glance "the
+    // drag touched 60 samples, hit 12 strokes total, spent 4 s in
+    // rebuild_segments" without parsing per-sample logs.
+    let mut eraser_drag_start: Option<std::time::Instant> = None;
+    let mut eraser_drag_samples: u32 = 0;
     // True while the in-progress gesture started inside the toolbar
     // region — mirror to egui so its buttons see the press, but
     // skip the line pipeline.
@@ -722,6 +924,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
             Ok(m) => m,
             Err(_) => return,
         };
+        let batch_start = std::time::Instant::now();
         let mut messages = vec![first];
         loop {
             match rx.try_recv() {
@@ -733,6 +936,9 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
 
         let mut dirty = false;
         let mut needs_rebuild = false;
+        // Captured before the `for msg in messages` loop consumes
+        // the Vec — used by the backpressure log below.
+        let batch_size = messages.len();
         for msg in messages {
             match msg {
                 Msg::Prewarm => {
@@ -874,6 +1080,9 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                 "[drawing] stroke_open tool={tool:?} buttons=0x{buttons:x} -> color=0x{packed:08X}"
                             );
                             current_stroke_color = Some(pack_color_bytes(packed));
+                            current_stroke_packed = Some(packed);
+                            pen_in_flight_points.clear();
+                            pen_in_flight_pressures.clear();
                             if let (Some(id), Some(s)) =
                                 (active_note_id.as_ref(), surface_state.as_ref())
                             {
@@ -883,6 +1092,12 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                 doc.strokes_doc.begin_stroke(packed);
                                 let [px, py] = s.surface_to_page(x, y);
                                 doc.strokes_doc.push_point(px, py, pressure);
+                                // Mirror into the Rust-side cache
+                                // buffer so the StrokeMeta on
+                                // pen-up has the full geometry.
+                                pen_in_flight_points.push(px);
+                                pen_in_flight_points.push(py);
+                                pen_in_flight_pressures.push(pressure);
                             }
                         }
                         (ToolMode::Pen, SampleAction::Move) => {
@@ -918,6 +1133,10 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                     curr_page[1],
                                     pressure,
                                 );
+                                // Mirror to the Rust-side cache.
+                                pen_in_flight_points.push(curr_page[0]);
+                                pen_in_flight_points.push(curr_page[1]);
+                                pen_in_flight_pressures.push(pressure);
                             }
                             last_point = Some((x, y));
                             last_pressure = Some(pressure);
@@ -928,10 +1147,26 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                     .get_mut(id)
                                     .and_then(|doc| doc.strokes_doc.end_stroke());
                                 if let Some(stroke_id) = committed_id {
-                                    // Pen stroke landed in the doc —
-                                    // record an undo op + notify
-                                    // auto-save.
                                     if let Some(doc) = documents.get_mut(id) {
+                                        // Append a fresh StrokeMeta
+                                        // to the eraser hit-test
+                                        // cache so the next sample
+                                        // can see this stroke
+                                        // without a yrs walk. The
+                                        // packed colour falls back
+                                        // to DEFAULT_COLOR for the
+                                        // (impossible-in-practice)
+                                        // case where the DOWN
+                                        // handler didn't set it.
+                                        let packed = current_stroke_packed
+                                            .unwrap_or(DEFAULT_COLOR);
+                                        let meta = StrokeMeta::from_pen_drag(
+                                            stroke_id.clone(),
+                                            packed,
+                                            std::mem::take(&mut pen_in_flight_points),
+                                            std::mem::take(&mut pen_in_flight_pressures),
+                                        );
+                                        doc.visible_strokes.push(meta);
                                         doc.record_op(UndoOp::StrokeAdded(stroke_id));
                                     }
                                     crate::drawing::notify_dirty(id);
@@ -940,6 +1175,9 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             last_point = None;
                             last_pressure = None;
                             current_stroke_color = None;
+                            current_stroke_packed = None;
+                            pen_in_flight_points.clear();
+                            pen_in_flight_pressures.clear();
                         }
                         // ---------- Eraser ----------
                         (ToolMode::Eraser, SampleAction::Down) => {
@@ -947,6 +1185,8 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             // step for the whole drag, not per hit.
                             eraser_drag_hits.clear();
                             eraser_drag_seen.clear();
+                            eraser_drag_start = Some(std::time::Instant::now());
+                            eraser_drag_samples = 1; // count this DOWN sample
                             last_point = Some((x, y));
                             erase_at(
                                 &active_note_id,
@@ -958,6 +1198,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             );
                         }
                         (ToolMode::Eraser, SampleAction::Move) => {
+                            eraser_drag_samples += 1;
                             erase_at(
                                 &active_note_id,
                                 &mut documents,
@@ -969,6 +1210,25 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             last_point = Some((x, y));
                         }
                         (ToolMode::Eraser, SampleAction::Up | SampleAction::Cancel) => {
+                            // Drag summary log — single line, info-
+                            // level, has everything you need to
+                            // correlate the post-lift delay with the
+                            // per-sample cost. `elapsed` here is the
+                            // wallclock from DOWN to render-thread
+                            // processing UP — if it's much larger
+                            // than the actual finger-on-screen time,
+                            // the channel queued up (samples piled
+                            // faster than we could drain them).
+                            let elapsed = eraser_drag_start
+                                .take()
+                                .map(|t| t.elapsed())
+                                .unwrap_or_default();
+                            log::info!(
+                                "[drawing.perf.eraser] drag complete: samples={} hits={} elapsed={elapsed:?}",
+                                eraser_drag_samples,
+                                eraser_drag_hits.len(),
+                            );
+                            eraser_drag_samples = 0;
                             // Commit the drag as a single undo step
                             // (if anything was actually erased).
                             if !eraser_drag_hits.is_empty() {
@@ -995,12 +1255,14 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             // untombstoning every doc entry —
                             // resurrecting strokes the user had
                             // already erased earlier).
-                            let mut cleared: Vec<String> = Vec::new();
-                            doc.strokes_doc.for_each_stroke(|view| {
-                                cleared.push(view.id.to_string());
-                            });
+                            let cleared: Vec<String> = doc
+                                .visible_strokes
+                                .iter()
+                                .map(|m| m.id.clone())
+                                .collect();
                             doc.strokes_doc.tombstone_all();
                             doc.segments.clear();
+                            doc.visible_strokes.clear();
                             if !cleared.is_empty() {
                                 doc.record_op(UndoOp::ClearAll(cleared));
                             }
@@ -1010,6 +1272,9 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                     last_point = None;
                     last_pressure = None;
                     current_stroke_color = None;
+                    current_stroke_packed = None;
+                    pen_in_flight_points.clear();
+                    pen_in_flight_pressures.clear();
                     eraser_drag_hits.clear();
                     eraser_drag_seen.clear();
                     dirty = true;
@@ -1048,6 +1313,9 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                     last_point = None;
                     last_pressure = None;
                     current_stroke_color = None;
+                    current_stroke_packed = None;
+                    pen_in_flight_points.clear();
+                    pen_in_flight_pressures.clear();
                     eraser_drag_hits.clear();
                     eraser_drag_seen.clear();
                     stroke_suppressed = false;
@@ -1062,6 +1330,22 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                     let _ = reply.send(bytes);
                 }
             }
+        }
+
+        // Batch backpressure check — if many messages piled up
+        // between vsync drains (or while the previous batch was
+        // working its way through a slow path), log it. A drag at
+        // ~120 Hz that batches 50+ samples per loop iteration is a
+        // strong signal the channel is queueing faster than we can
+        // process — the symptom you'd feel as "seconds of latency
+        // after pen lift". Threshold of 8 chosen to surface real
+        // backpressure without spamming the common case (1-3 per
+        // batch under healthy load).
+        if batch_size > 8 {
+            log::warn!(
+                "[drawing.perf.eraser] chunky batch: {batch_size} msgs processed in {:?}",
+                batch_start.elapsed(),
+            );
         }
 
         if let (Some(p), Some(s)) = (persistent.as_mut(), surface_state.as_mut()) {
@@ -1110,6 +1394,9 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             last_point = None;
                             last_pressure = None;
                             current_stroke_color = None;
+                            current_stroke_packed = None;
+                            pen_in_flight_points.clear();
+                            pen_in_flight_pressures.clear();
                             eraser_drag_hits.clear();
                             eraser_drag_seen.clear();
                             // Tool change alone doesn't repaint
@@ -1150,12 +1437,14 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                     // Capture pre-clear visibility
                                     // for the ClearAll undo step,
                                     // matching Msg::Clear semantics.
-                                    let mut cleared: Vec<String> = Vec::new();
-                                    doc.strokes_doc.for_each_stroke(|view| {
-                                        cleared.push(view.id.to_string());
-                                    });
+                                    let cleared: Vec<String> = doc
+                                        .visible_strokes
+                                        .iter()
+                                        .map(|m| m.id.clone())
+                                        .collect();
                                     doc.strokes_doc.tombstone_all();
                                     doc.segments.clear();
+                                    doc.visible_strokes.clear();
                                     if !cleared.is_empty() {
                                         doc.record_op(UndoOp::ClearAll(cleared));
                                     }
@@ -1165,6 +1454,9 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             last_point = None;
                             last_pressure = None;
                             current_stroke_color = None;
+                            current_stroke_packed = None;
+                            pen_in_flight_points.clear();
+                            pen_in_flight_pressures.clear();
                             eraser_drag_hits.clear();
                             eraser_drag_seen.clear();
                             needs_rerender = true;
