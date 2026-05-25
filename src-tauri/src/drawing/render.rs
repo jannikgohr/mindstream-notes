@@ -137,6 +137,11 @@ const SMOOTHING_ENABLED: bool = false;
 /// extends past the raw head, which extends past the smoothed body.
 const PREDICTION_ENABLED: bool = true;
 
+/// High-volume input/frame latency diagnostics. Leave this disabled
+/// during normal drawing: Android logcat writes on the stylus hot path
+/// can create the very queueing and frame delay these logs measure.
+const LAG_LOGGING_ENABLED: bool = false;
+
 /// Map a raw pressure value in [0, 1] (already sanitised at the JNI
 /// boundary) to a page-unit stroke width. Linear ramp from
 /// MIN_WIDTH to BASE_WIDTH.
@@ -979,20 +984,17 @@ pub fn clear_surface() {
 }
 
 pub fn push_sample(sample: Sample) {
-    // debug! rather than trace! so the per-sample stream is visible
-    // under default logcat filters during POC bring-up. Drop back
-    // to trace! once the input pipeline is fully verified. Buttons
-    // are logged in hex so the BUTTON_STYLUS_PRIMARY bit (0x20) is
-    // obvious at a glance when the user holds the S Pen side button.
-    log::debug!(
-        "[drawing] push_sample x={x:.1} y={y:.1} p={p:.2} tool={tool:?} buttons=0x{buttons:x} action={action:?}",
-        x = sample.x,
-        y = sample.y,
-        p = sample.pressure,
-        tool = sample.tool,
-        buttons = sample.buttons,
-        action = sample.action,
-    );
+    if LAG_LOGGING_ENABLED {
+        log::trace!(
+            "[drawing] push_sample x={x:.1} y={y:.1} p={p:.2} tool={tool:?} buttons=0x{buttons:x} action={action:?}",
+            x = sample.x,
+            y = sample.y,
+            p = sample.pressure,
+            tool = sample.tool,
+            buttons = sample.buttons,
+            action = sample.action,
+        );
+    }
     send(Msg::Sample(sample));
 }
 
@@ -1952,7 +1954,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
         // after pen lift". Threshold of 8 chosen to surface real
         // backpressure without spamming the common case (1-3 per
         // batch under healthy load).
-        if batch_size > 8 {
+        if LAG_LOGGING_ENABLED && batch_size > 8 {
             log::warn!(
                 "[drawing.perf.eraser] chunky batch: {batch_size} msgs processed in {:?}",
                 batch_start.elapsed(),
@@ -2047,7 +2049,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                         //   samples = pen samples that drove this
                         //             frame.
                         //   verts   = committed vertices going out.
-                        if sample_count > 0 {
+                        if LAG_LOGGING_ENABLED && sample_count > 0 {
                             if let Some(event_time_s) = newest_event_time_s {
                                 let event_time_ms = event_time_s * 1000.0;
                                 let queue_ms =
