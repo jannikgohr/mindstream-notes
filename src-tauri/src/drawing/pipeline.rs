@@ -100,6 +100,14 @@ pub struct SurfaceBoundState {
     config: wgpu::SurfaceConfiguration,
     vertex_buffer: Option<wgpu::Buffer>,
     vertex_capacity: u64,
+    /// Number of vertices currently committed to the GPU vertex
+    /// buffer. Drives `render_frame`'s partial-upload decision:
+    /// if the new segments are append-only relative to this count
+    /// (pen-drawing's hot path), upload just the new tail at the
+    /// right byte offset instead of rewriting the whole buffer.
+    /// Reset to 0 on buffer (re)allocation so the next render
+    /// uploads from offset 0.
+    last_uploaded_vertex_count: u64,
     width: u32,
     height: u32,
     /// Page-coord ↔ surface-pixel mapping. Recomputed on every
@@ -401,6 +409,7 @@ pub async fn build_surface_bound(
         config,
         vertex_buffer: None,
         vertex_capacity: 0,
+        last_uploaded_vertex_count: 0,
         width,
         height,
         view_transform,
@@ -479,8 +488,11 @@ pub fn render_frame(
         persistent.egui_renderer.free_texture(id);
     }
 
-    // Stroke vertex buffer — grow geometrically.
-    let needed = (segments.len() as u64) * std::mem::size_of::<Vertex>() as u64;
+    // Stroke vertex buffer — grow geometrically. On grow we
+    // allocate a fresh buffer; the GPU's old contents are gone, so
+    // the next upload must rewrite from offset 0.
+    let vertex_size = std::mem::size_of::<Vertex>() as u64;
+    let needed = (segments.len() as u64) * vertex_size;
     if needed > surface_state.vertex_capacity {
         let new_capacity = needed.max(surface_state.vertex_capacity * 3 / 2).max(1024);
         surface_state.vertex_buffer = Some(persistent.device.create_buffer(&wgpu::BufferDescriptor {
@@ -490,13 +502,38 @@ pub fn render_frame(
             mapped_at_creation: false,
         }));
         surface_state.vertex_capacity = new_capacity;
+        // Reset the upload watermark — fresh buffer has no
+        // committed contents.
+        surface_state.last_uploaded_vertex_count = 0;
     }
+    // Partial-upload decision (P1):
+    //   - Pen-mode append (new_len > last_uploaded): upload just the
+    //     new tail at the right byte offset. Per-sample upload cost
+    //     drops from ~2 MB rewrite to ~72 bytes for one segment quad.
+    //   - Eraser shrink / retess-rebuild (new_len <= last): the
+    //     content of the prefix may have shifted, so full re-upload.
+    //     The draw call uses `0..segments.len()` so stale bytes in
+    //     [new_len..last] are ignored.
     if !segments.is_empty() {
-        persistent.queue.write_buffer(
-            surface_state.vertex_buffer.as_ref().unwrap(),
-            0,
-            bytemuck::cast_slice(segments),
-        );
+        let new_len = segments.len() as u64;
+        let last = surface_state.last_uploaded_vertex_count;
+        let vbuf = surface_state.vertex_buffer.as_ref().unwrap();
+        if new_len > last {
+            let tail_offset = last * vertex_size;
+            let tail = &segments[last as usize..];
+            persistent
+                .queue
+                .write_buffer(vbuf, tail_offset, bytemuck::cast_slice(tail));
+        } else {
+            persistent
+                .queue
+                .write_buffer(vbuf, 0, bytemuck::cast_slice(segments));
+        }
+        surface_state.last_uploaded_vertex_count = new_len;
+    } else {
+        // Empty segments: nothing to draw + nothing to upload.
+        // Reset watermark so the next append starts from offset 0.
+        surface_state.last_uploaded_vertex_count = 0;
     }
 
     let frame = match surface_state.surface.get_current_texture() {
