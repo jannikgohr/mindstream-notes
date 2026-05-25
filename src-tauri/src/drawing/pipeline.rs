@@ -379,12 +379,41 @@ pub async fn build_surface_bound(
         .copied()
         .find(|m| *m != wgpu::CompositeAlphaMode::Opaque)
         .unwrap_or(caps.alpha_modes[0]);
+    // Prefer the lowest-latency present mode the device exposes.
+    // `[drawing.perf.lag]` analysis on a Tab S7 FE showed
+    // `frame.present()` (= eglSwapBuffers on the GL backend) was
+    // blocking ~10 ms per frame waiting for vsync under the default
+    // FIFO mode. Picking Immediate / Mailbox where available drops
+    // that wait to ~0:
+    //
+    //   - Immediate: eglSwapBuffers with swap_interval=0. Tearing
+    //     is theoretically possible but ink updates are local and
+    //     small, so it's invisible in practice. Lowest latency.
+    //   - Mailbox: render at unlimited rate; compositor picks the
+    //     newest queued frame at each vsync. No tearing; still
+    //     displays at 60 Hz, but always the freshest frame we
+    //     submitted before vsync.
+    //   - FifoRelaxed: like Fifo but allows tearing when behind
+    //     schedule. Treated as a Fifo upgrade.
+    //   - Fifo: the floor. What we'd get without any preference.
+    //
+    // Log the full list so future debugging doesn't have to guess
+    // what the device offered.
+    log::info!(
+        "[drawing] surface present_modes available: {:?}",
+        caps.present_modes
+    );
+    let chosen_present_mode = pick_present_mode(&caps.present_modes);
+    log::info!(
+        "[drawing] surface present_mode chosen: {:?}",
+        chosen_present_mode
+    );
     let config = wgpu::SurfaceConfiguration {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         format: persistent.surface_format,
         width: width.max(1),
         height: height.max(1),
-        present_mode: caps.present_modes[0],
+        present_mode: chosen_present_mode,
         alpha_mode,
         view_formats: vec![],
         // 1 rather than the wgpu default of 2: with two frames in
@@ -478,6 +507,32 @@ fn create_view_bind_group(
     })
 }
 
+/// Pick the lowest-latency `PresentMode` from what the device offers.
+///
+/// Preference order:
+///   1. **Immediate**   — `eglSwapBuffers(swap_interval=0)` on the GL
+///                        backend. No vsync wait. Tearing in theory,
+///                        invisible for ink in practice (small,
+///                        localised updates).
+///   2. **Mailbox**     — drop old frames, present newest at vsync.
+///                        No tearing, but still vsync-paced display.
+///   3. **FifoRelaxed** — like FIFO but allows tearing when running
+///                        late. Mild improvement over FIFO.
+///   4. **Fifo**        — strict vsync. The floor.
+///
+/// We fall back to whatever the platform exposes first if none of
+/// the above match — wgpu guarantees `Fifo` is always present, so
+/// this only triggers if the caps list is somehow malformed.
+fn pick_present_mode(modes: &[wgpu::PresentMode]) -> wgpu::PresentMode {
+    use wgpu::PresentMode::*;
+    for preferred in [Immediate, Mailbox, FifoRelaxed, Fifo] {
+        if modes.contains(&preferred) {
+            return preferred;
+        }
+    }
+    modes.first().copied().unwrap_or(Fifo)
+}
+
 /// One frame of GPU work: upload egui texture deltas, write the
 /// stroke vertex buffer, encode a single render pass that draws
 /// strokes then egui on top, submit, present.
@@ -507,6 +562,7 @@ pub fn render_frame(
     prediction: &[Vertex],
     ui_output: UiOutput,
 ) -> Result<(), wgpu::SurfaceError> {
+    let t_render_start = std::time::Instant::now();
     // Push egui texture updates before any rendering — the font
     // atlas ships this way. Free on the same frame is OK because
     // the GPU work hasn't been submitted yet.
@@ -581,6 +637,7 @@ pub fn render_frame(
             .queue
             .write_buffer(vbuf, pred_offset, bytemuck::cast_slice(prediction));
     }
+    let t_upload_done = std::time::Instant::now();
 
     let frame = match surface_state.surface.get_current_texture() {
         Ok(f) => f,
@@ -592,6 +649,7 @@ pub fn render_frame(
         }
         Err(e) => return Err(e),
     };
+    let t_acquire_done = std::time::Instant::now();
     let view = frame
         .texture
         .create_view(&wgpu::TextureViewDescriptor::default());
@@ -661,8 +719,28 @@ pub fn render_frame(
             &screen_descriptor,
         );
     }
+    let t_encode_done = std::time::Instant::now();
     persistent.queue.submit(std::iter::once(encoder.finish()));
+    let t_submit_done = std::time::Instant::now();
     frame.present();
+    let t_present_done = std::time::Instant::now();
+
+    // Sub-breakdown of the [drawing.perf.lag] `gpu` field. If a
+    // pen-driven render is reporting gpu≈14-16ms on a 60Hz panel,
+    // this log will show the time is in `acquire` (= the swap-chain
+    // wait for `get_current_texture` to return a free buffer = one
+    // vsync on FIFO). Encode + submit + present are all
+    // sub-millisecond on this workload (~few thousand vertices,
+    // one draw call). Tagged with the same `[drawing.perf.lag]`
+    // prefix as the outer breakdown so a single grep gets both.
+    log::info!(
+        "[drawing.perf.lag] gpu_split upload={:.1}ms acquire={:.1}ms encode={:.1}ms submit={:.1}ms present={:.1}ms",
+        t_upload_done.duration_since(t_render_start).as_secs_f64() * 1000.0,
+        t_acquire_done.duration_since(t_upload_done).as_secs_f64() * 1000.0,
+        t_encode_done.duration_since(t_acquire_done).as_secs_f64() * 1000.0,
+        t_submit_done.duration_since(t_encode_done).as_secs_f64() * 1000.0,
+        t_present_done.duration_since(t_submit_done).as_secs_f64() * 1000.0,
+    );
 
     Ok(())
 }

@@ -48,6 +48,30 @@ use raw_window_handle::{
 use crate::drawing::input::{Sample, SampleAction, ToolKind};
 use crate::drawing::render;
 
+/// Read the system uptime in milliseconds, in the same clock
+/// `MotionEvent.eventTime` is reported in (`SystemClock.uptimeMillis()`
+/// → `CLOCK_MONOTONIC`). Lets the render-thread latency
+/// instrumentation compute `now_uptime_ms() - sample.eventTime_ms`
+/// = "how old is this sample" without having to plumb the Kotlin
+/// SystemClock through JNI on the hot path.
+///
+/// `clock_gettime` is a vDSO call on Android — ~tens of nanoseconds,
+/// safe to call freely from the render thread. Returns 0 on the
+/// (in-practice-impossible) failure case; the worst that does is
+/// produce wildly wrong-looking lag numbers in logcat which we'd
+/// notice instantly.
+pub fn now_uptime_ms() -> f64 {
+    let mut ts: libc::timespec = unsafe { std::mem::zeroed() };
+    // SAFETY: clock_gettime is async-signal-safe and well-defined
+    // on Android for CLOCK_MONOTONIC; we own `ts` so the write is
+    // bounded to our stack slot.
+    let rc = unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) };
+    if rc != 0 {
+        return 0.0;
+    }
+    (ts.tv_sec as f64) * 1000.0 + (ts.tv_nsec as f64) / 1_000_000.0
+}
+
 // ---------- AndroidWindow (SurfaceSource impl) ----------
 
 /// Owns an `ANativeWindow*` and implements the raw-handle traits
