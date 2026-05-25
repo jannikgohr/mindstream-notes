@@ -178,6 +178,10 @@ impl SurfaceBoundState {
 /// half the prewarm benefit.
 const PREWARM_SURFACE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
+/// High-volume per-frame latency diagnostics. Disabled by default
+/// because logcat I/O on the render loop can create visible stylus lag.
+const LAG_LOGGING_ENABLED: bool = false;
+
 /// Build the surface-independent half of `PersistentGpu` —
 /// everything we can construct without an `ANativeWindow` /
 /// `SurfaceSource`. Called from `drawing::render::prewarm()` at
@@ -752,14 +756,16 @@ pub fn render_frame(
     // sub-millisecond on this workload (~few thousand vertices,
     // one draw call). Tagged with the same `[drawing.perf.lag]`
     // prefix as the outer breakdown so a single grep gets both.
-    log::info!(
-        "[drawing.perf.lag] gpu_split upload={:.1}ms acquire={:.1}ms encode={:.1}ms submit={:.1}ms present={:.1}ms",
-        t_upload_done.duration_since(t_render_start).as_secs_f64() * 1000.0,
-        t_acquire_done.duration_since(t_upload_done).as_secs_f64() * 1000.0,
-        t_encode_done.duration_since(t_acquire_done).as_secs_f64() * 1000.0,
-        t_submit_done.duration_since(t_encode_done).as_secs_f64() * 1000.0,
-        t_present_done.duration_since(t_submit_done).as_secs_f64() * 1000.0,
-    );
+    if LAG_LOGGING_ENABLED {
+        log::info!(
+            "[drawing.perf.lag] gpu_split upload={:.1}ms acquire={:.1}ms encode={:.1}ms submit={:.1}ms present={:.1}ms",
+            t_upload_done.duration_since(t_render_start).as_secs_f64() * 1000.0,
+            t_acquire_done.duration_since(t_upload_done).as_secs_f64() * 1000.0,
+            t_encode_done.duration_since(t_acquire_done).as_secs_f64() * 1000.0,
+            t_submit_done.duration_since(t_encode_done).as_secs_f64() * 1000.0,
+            t_present_done.duration_since(t_submit_done).as_secs_f64() * 1000.0,
+        );
+    }
 
     Ok(())
 }
