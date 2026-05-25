@@ -2,7 +2,9 @@ package io.crates.drawing
 
 import android.app.Activity
 import android.content.Context
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
 import android.graphics.PixelFormat
 import android.os.Build
 import android.os.SystemClock
@@ -17,6 +19,7 @@ import android.webkit.WebView
 import android.widget.FrameLayout
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.graphics.lowlatency.CanvasFrontBufferedRenderer
 
 /**
  * Logical height of the Svelte mobile-editor header, in dp. Mirrors
@@ -39,6 +42,9 @@ private const val MOBILE_HEADER_HEIGHT_DP = 48
  * originally added to investigate.
  */
 private const val DRAWING_INPUT_LOGS = false
+
+private const val FRONT_BUFFER_TOOLBAR_HEIGHT_PX = 120f
+private const val FRONT_BUFFER_CANCEL_DELAY_MS = 48L
 
 /**
  * Native "ink" drawing surface — POC.
@@ -174,6 +180,7 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
 
         /** Called from MainActivity.onWebViewCreate. */
         fun attach(activity: Activity, webView: WebView) {
+            Log.i("MindstreamDrawing", "Drawing.attach: native ink bridge attached")
             instance = Drawing(activity, webView)
         }
 
@@ -402,6 +409,16 @@ private class DrawingSurfaceView(context: Context) :
         }
 
     private var loggedPredictionSupport = false
+    private val frontBufferInk: FrontBufferInk? =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            FrontBufferInk(this)
+        } else {
+            Log.i(
+                "MindstreamDrawing",
+                "front-buffer ink unavailable sdk=${Build.VERSION.SDK_INT} requires=${Build.VERSION_CODES.Q}"
+            )
+            null
+        }
 
     init {
         setZOrderOnTop(true)
@@ -414,6 +431,9 @@ private class DrawingSurfaceView(context: Context) :
                 "MindstreamDrawing",
                 "MotionPredictor unavailable sdk=${Build.VERSION.SDK_INT} requires=${Build.VERSION_CODES.UPSIDE_DOWN_CAKE}"
             )
+        }
+        if (frontBufferInk != null) {
+            Log.i("MindstreamDrawing", "front-buffer ink enabled")
         }
 
         // Reapply the SurfaceView's topMargin on every inset change
@@ -497,6 +517,7 @@ private class DrawingSurfaceView(context: Context) :
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
         Log.i("MindstreamDrawing", "surfaceDestroyed — entering sync wait")
+        frontBufferInk?.cancel()
         // Drop the wgpu surface before the underlying ANativeWindow
         // becomes invalid; the Rust side keeps its render thread and
         // accumulated geometry around so a return-from-background just
@@ -505,6 +526,11 @@ private class DrawingSurfaceView(context: Context) :
         // wgpu's swap-chain teardown from racing past EGL invalidation.
         Drawing.clearSurface()
         Log.i("MindstreamDrawing", "surfaceDestroyed — sync wait complete")
+    }
+
+    override fun onDetachedFromWindow() {
+        frontBufferInk?.release()
+        super.onDetachedFromWindow()
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -633,11 +659,159 @@ private class DrawingSurfaceView(context: Context) :
         timeMs: Long
     ) {
         Drawing.pushPoint(x, y, pressure, toolType, buttons, action, timeMs)
+        frontBufferInk?.onPoint(x, y, pressure, toolType, buttons, action)
     }
 
     private fun sanitizePressure(raw: Float): Float {
         if (raw.isNaN() || raw <= 0f) return 1f
         if (raw > 1f) return 1f
         return raw
+    }
+}
+
+private data class InkSegment(
+    val x0: Float,
+    val y0: Float,
+    val x1: Float,
+    val y1: Float,
+    val pressure0: Float,
+    val pressure1: Float,
+    val color: Int
+)
+
+private class FrontBufferInk(private val surfaceView: SurfaceView) {
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
+    }
+    private val renderer =
+        CanvasFrontBufferedRenderer(surfaceView, object : CanvasFrontBufferedRenderer.Callback<InkSegment> {
+            override fun onDrawFrontBufferedLayer(
+                canvas: Canvas,
+                bufferWidth: Int,
+                bufferHeight: Int,
+                param: InkSegment
+            ) {
+                paint.color = param.color
+                paint.strokeWidth = widthForPressure(param.pressure0, param.pressure1)
+                canvas.drawLine(param.x0, param.y0, param.x1, param.y1, paint)
+            }
+
+            override fun onDrawMultiBufferedLayer(
+                canvas: Canvas,
+                bufferWidth: Int,
+                bufferHeight: Int,
+                params: Collection<InkSegment>
+            ) {
+                // The Rust/wgpu layer owns committed strokes. This
+                // renderer is only the transient low-latency head.
+            }
+        })
+
+    private var lastX = 0f
+    private var lastY = 0f
+    private var lastPressure = 1f
+    private var inStroke = false
+    private var suppressed = false
+    private var generation = 0
+    private var loggedFirstSegment = false
+
+    fun onPoint(
+        x: Float,
+        y: Float,
+        pressure: Float,
+        toolType: Int,
+        buttons: Int,
+        action: Int
+    ) {
+        when (action) {
+            MotionEvent.ACTION_DOWN -> {
+                generation += 1
+                renderer.cancel()
+                suppressed = y < FRONT_BUFFER_TOOLBAR_HEIGHT_PX
+                inStroke = !suppressed
+                lastX = x
+                lastY = y
+                lastPressure = pressure
+            }
+            MotionEvent.ACTION_MOVE -> {
+                if (!inStroke || suppressed) return
+                val segment = InkSegment(
+                    lastX,
+                    lastY,
+                    x,
+                    y,
+                    lastPressure,
+                    pressure,
+                    colorForInput(toolType, buttons)
+                )
+                if (!loggedFirstSegment) {
+                    loggedFirstSegment = true
+                    Log.i("MindstreamDrawing", "front-buffer ink first segment rendered")
+                }
+                renderer.renderFrontBufferedLayer(segment)
+                lastX = x
+                lastY = y
+                lastPressure = pressure
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                if (inStroke && !suppressed) {
+                    val segment = InkSegment(
+                        lastX,
+                        lastY,
+                        x,
+                        y,
+                        lastPressure,
+                        pressure,
+                        colorForInput(toolType, buttons)
+                    )
+                    renderer.renderFrontBufferedLayer(segment)
+                }
+                inStroke = false
+                suppressed = false
+                val finishedGeneration = generation
+                rendererSurfacePostCancel(finishedGeneration)
+            }
+        }
+    }
+
+    fun cancel() {
+        inStroke = false
+        suppressed = false
+        generation += 1
+        renderer.cancel()
+    }
+
+    fun release() {
+        renderer.release(true)
+    }
+
+    private fun rendererSurfacePostCancel(finishedGeneration: Int) {
+        // Leave the front-buffer layer up briefly so the committed
+        // wgpu stroke can catch up on FIFO-only surfaces before the
+        // transient overlay is hidden.
+        surfaceView.postDelayed(
+            {
+                if (generation == finishedGeneration) {
+                    renderer.cancel()
+                }
+            },
+            FRONT_BUFFER_CANCEL_DELAY_MS
+        )
+    }
+
+    private fun widthForPressure(p0: Float, p1: Float): Float {
+        val p = ((p0 + p1) * 0.5f).coerceIn(0f, 1f)
+        return 2.0f + 3.0f * p
+    }
+
+    private fun colorForInput(toolType: Int, buttons: Int): Int {
+        if (buttons and 0x20 != 0) return Color.rgb(255, 96, 15)
+        return when (toolType) {
+            MotionEvent.TOOL_TYPE_STYLUS -> Color.rgb(0, 102, 255)
+            MotionEvent.TOOL_TYPE_ERASER -> Color.rgb(204, 34, 34)
+            else -> Color.BLACK
+        }
     }
 }
