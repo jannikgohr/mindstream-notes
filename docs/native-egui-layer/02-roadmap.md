@@ -50,11 +50,31 @@ owns the Android-specific glue (the `AndroidWindow` SurfaceSource
 impl + all JNI exports). R1, R2, R3, R4 initial scope, and R5
 (Android side) are all in.
 
+Auto-save shipped: render thread emits a `drawing:dirty` Tauri
+event at stroke-end / Clear, `DrawingNoteEditor.svelte` debounces
+800 ms and round-trips through `drawing_get_state` → `save_note`;
+mirrors `savingState` into the global note-status store so the
+dockview header reflects live state.
+
+Tap-to-canvas latency: end-to-end perf pass dropped a heavy ink
+note from ~1.1 s to ~287 ms on a Tab S7 FE. Stack of wins:
+schema-v2 opaque-payload strokes (one yrs op per stroke instead of
+per point — collab-safe via the outer `Y.Array<Y.Map>`); skipping
+the JS-side `loadNote` round-trip (Rust reads `yrs_state` from
+SQLite directly inside `drawing_show`); pre-warming `PersistentGpu`
+in a background task at app startup so wgpu init is off the open
+critical path; `for_each_stroke` switched from indexed `.get()`
+(O(log n) per call) to `.iter()` (O(n) total); vertex colour packed
+to `Unorm8x4` for half the per-vertex bytes. Diagnostic logs at
+`[drawing.perf] …` stay in for now since they're rare-event +
+useful for further tuning.
+
 **Deliberately NOT yet implemented** — see roadmap below: stroke
 smoothing; stylus-button → action mapping (the bits flow but
-nothing acts on them yet); live collab; desktop / iOS ports.
-Rounded caps + mitered joints (via `lyon`) deferred until
-thick-stroke joints actually look notchy in practice.
+nothing acts on them yet); colour picker / brush size; pan + zoom;
+multi-page; live collab; desktop / iOS ports. Rounded caps +
+mitered joints (via `lyon`) deferred until thick-stroke joints
+actually look notchy in practice.
 
 ## Roadmap
 
@@ -105,7 +125,7 @@ that order. R3–R5 still gate E.)
 |---|------|-------|--------|
 | C0 | Page-coordinate model (stop-stretch + A4) | Strokes stored in page coordinates (document units), not NDC. View transform (`{scale, pan}`) computed each frame to fit page → surface preserving aspect. Default page: A4 portrait at 144 DPI (1190 × 1684 page-units). Constants live in `drawing/page.rs` so future page sizes (Letter, custom, infinite scroll) are a config swap. Rotation no longer stretches. | **Done** (e555652) |
 | C1 | Per-note canvas state | One `StrokesDoc` per note, swapped on `drawing_show(note_id)`. | **Done** (f912c85) |
-| C2 | Persistence via yrs (`yjs-rs`) | `yrs::Doc` like markdown / freeform notes — strokes as a `Y.Array<Y.Map>`, each map carrying `{id, color, width, points: Y.Array<Point>}`. Persisted into `note.yrs_state`, synced via Etebase. Pen-down opens a fresh `Stroke`, samples append to its `points` Y.Array, pen-up commits. Eraser sets a tombstone field (don't delete; offline-merge convergence). Format versioned via a `schema` field on the doc root. | **Done** (645dff6; persistence bugfix 36e74b5) |
+| C2 | Persistence via yrs (`yjs-rs`) + auto-save | Schema-v2: `strokes: Y.Array<Y.Map>` with each map carrying `{id, tombstoned, payload: Any::Buffer}`. The payload is our own little binary format (version + color + n_points + interleaved f32 points + f32 pressures, LE throughout) — one yrs op per stroke instead of per-point. Persisted into `note.yrs_state`, synced via Etebase, collab-safe at stroke granularity (outer `Y.Array<Y.Map>` keeps merge correctness; remote strokes appear atomically on pen-up). Auto-save: render thread emits `drawing:dirty` Tauri events at stroke-end / Clear; `DrawingNoteEditor.svelte` debounces 800 ms then round-trips through `drawing_get_state` → `save_note`. | **Done** (645dff6; persistence bugfix 36e74b5; schema-v2 + auto-save shipped post-original-C2) |
 | C3 | Pressure + tool-type capture | Kotlin reads `MotionEvent.AXIS_PRESSURE` (+ historical samples), sanitises NaN/0/over-1 to 1.0, and reads `event.getToolType(0)`, then passes through `pushPoint(x, y, pressure, toolType, action)`. Pressure stored as a parallel `pressures: Y.Array<f64>` on each stroke map (additive — no schema bump; legacy strokes default to 1.0 on read). Tool type isn't persisted directly; instead the renderer uses it at `begin_stroke` time to pick a colour (see C4) which is what survives into the doc. Unblocks C4 + D1 + D2 + C6. | **Done** |
 | C4 | Variable-width strokes + per-stroke colour | Per-segment CPU tessellation (2-triangle quad with potentially different widths at each endpoint) — no `lyon` dep yet. Each stroke segment uses `width = MIN_WIDTH + (BASE_WIDTH - MIN_WIDTH) * pressure` (MIN=1.0, BASE=4.0 page-units = ~0.18–0.7 mm). Topology flipped to `TriangleList`; vertex format grew to `{position, color}` so each stroke can be rendered in its own colour. `begin_stroke` now takes a packed 0xAARRGGBB colour — currently chosen from tool type (stylus / eraser → debug blue, else → black) as a "did pen detection actually work" visualisation; D5 swaps that mapping for a user-picked palette. Pure-math `segment_quad_positions` lives in `page.rs` with host-side unit tests. Joints aren't mitered — fine for the current thin-stroke regime; revisit (probably with `lyon`'s stroke tessellator) if thick-stroke joints look notchy. Per-stroke `width` field in the schema is still ignored — wires up with D5. | **Done** (deferred lyon + rounded caps) |
 | C5 | Live collab on the canvas | Each open ink note's `yrs::Doc` plugs into the existing `CollabProvider` infrastructure (same path markdown notes use for live editing). Yrs broadcasts pen samples to peers as they arrive; remote samples merge into the doc and trigger a re-render. Local-first by construction: offline writes append to the local Y.Array and sync on next reconnect with CRDT-correct merge. Depends on C2. | Pending |
@@ -117,8 +137,8 @@ that order. R3–R5 still gate E.)
 |---|------|-------|
 | D1 | `ink-stroke-modeler-rs` smoothing | Audit's headline recommendation. Kalman-filtered strokes, battle-tested error handling, free pressure modeling. Requires verifying C++/cxx cross-compile to `aarch64-linux-android` — fallback is rnote's pure-Rust Catmull-Rom builder. |
 | D2 | Forward stroke prediction | `stroke_modeler.predict()` renders the ink a few ms ahead of the actual pen position; single largest perceived-latency win on Android per audit. Needs a prediction-window-ms decision (16–32 is the sane range). |
-| D3 | Eraser tool | Tool-mode toggle in the toolbar (lives in `ui/eraser.rs` per R2); drag-to-erase tombstones intersecting strokes (C2). |
-| D4 | Undo / redo | Stack of Y.Array operations or per-stroke tombstone toggles. Easy once strokes are first-class CRDT entities. |
+| D3 | Eraser tool | Pen/Eraser segmented control in the toolbar; render thread holds the authoritative `ToolMode`. In Eraser mode each input sample runs a hit-test (`point_to_segment_distance_sq` from `page.rs`, host-tested) against every visible stroke's segments; matches tombstone via `set_stroke_tombstoned` and accumulate into a per-drag Vec that becomes one `UndoOp::EraserDrag` on pen-up. Eraser radius = 10 page-units (~1.4 mm at 144 DPI). Dedup via HashSet so the same stroke can't be hit twice in one drag. **Done.** |
+| D4 | Undo / redo | Per-note transient stacks on `CanvasDocument`. `UndoOp` enum: `StrokeAdded(id)` (pen-up), `EraserDrag(Vec<id>)` (one per eraser drag), `ClearAll(Vec<id>)` (toolbar Clear, captures the pre-clear visible set so undo restores exactly that). Standard semantics: new mutation clears the redo stack. Toolbar Undo/Redo buttons grey out via `add_enabled` when the matching stack is empty. **Done.** |
 | D5 | Color picker + brush size | Toolbar additions in `ui/color_picker.rs` / `ui/brush.rs`. Trivial after D3 lands the tool/state plumbing. |
 | D6 | Pan + pinch-zoom on the page | Two-finger gesture handling: Kotlin `GestureDetector` + `ScaleGestureDetector` push `Msg::ViewTransform { pan_delta, scale_delta }` to Rust; render reads current view transform from a uniform buffer (already added in C0). Clamp to keep page on-screen; momentum on fling. |
 | D7 | Multi-page / infinite scroll | Once C0 + D6 are in, multi-page is "more pages along Y in document space". Page break renders as a thin gap + page number badge. |

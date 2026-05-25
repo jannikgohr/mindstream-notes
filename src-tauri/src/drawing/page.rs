@@ -143,6 +143,45 @@ pub struct ViewUniform {
     pub surface_dims: [f32; 2],
 }
 
+/// Squared distance from point `p` to the line segment `a → b`,
+/// in whatever coordinate system the caller is using (typically
+/// page coordinates for the eraser hit-test). Squared because the
+/// caller almost always compares against a squared radius — one
+/// `sqrt` saved per hit-test, which adds up across thousands of
+/// (sample × stroke segment) checks per drag frame.
+///
+/// Behaviour:
+///   - Degenerate segment (a == b) returns squared distance from
+///     `p` to `a`, no NaN.
+///   - Point past either endpoint clamps to the endpoint (so the
+///     segment doesn't "extend infinitely" — what the user expects
+///     for eraser hits near a stroke's start / end).
+pub fn point_to_segment_distance_sq(
+    (px, py): (f32, f32),
+    (ax, ay): (f32, f32),
+    (bx, by): (f32, f32),
+) -> f32 {
+    let dx = bx - ax;
+    let dy = by - ay;
+    let len_sq = dx * dx + dy * dy;
+    if len_sq < 1e-12 {
+        // Degenerate — segment collapsed to a point; return distance
+        // to that point.
+        let qx = px - ax;
+        let qy = py - ay;
+        return qx * qx + qy * qy;
+    }
+    // Project (p - a) onto (b - a) / |b - a|², clamped to [0, 1] for
+    // segment (vs line) semantics.
+    let t = ((px - ax) * dx + (py - ay) * dy) / len_sq;
+    let t = t.clamp(0.0, 1.0);
+    let cx = ax + t * dx;
+    let cy = ay + t * dy;
+    let qx = px - cx;
+    let qy = py - cy;
+    qx * qx + qy * qy
+}
+
 /// Expand a single pen segment into six vertex positions (two
 /// triangles, TriangleList ordering) with potentially different
 /// widths at each endpoint. Output is pure `[f32; 2]` so this can
@@ -223,6 +262,44 @@ mod tests {
     fn approx2(a: [f32; 2], b: [f32; 2]) {
         approx(a[0], b[0]);
         approx(a[1], b[1]);
+    }
+
+    #[test]
+    fn point_to_segment_distance_perpendicular() {
+        // Horizontal segment (0,0)→(10,0); point at (5, 3).
+        // Closest point is (5, 0), distance 3, sq = 9.
+        let d_sq = point_to_segment_distance_sq((5.0, 3.0), (0.0, 0.0), (10.0, 0.0));
+        approx(d_sq, 9.0);
+    }
+
+    #[test]
+    fn point_to_segment_distance_beyond_endpoint_clamps() {
+        // Segment (0,0)→(10,0); point at (15, 0) is 5 past the end.
+        // Should clamp to (10, 0), distance 5, sq = 25.
+        let d_sq = point_to_segment_distance_sq((15.0, 0.0), (0.0, 0.0), (10.0, 0.0));
+        approx(d_sq, 25.0);
+        // Same the other way: point at (-3, 4) is past the start.
+        // Closest is (0, 0), distance 5, sq = 25.
+        let d_sq = point_to_segment_distance_sq((-3.0, 4.0), (0.0, 0.0), (10.0, 0.0));
+        approx(d_sq, 25.0);
+    }
+
+    #[test]
+    fn point_to_segment_distance_on_segment_is_zero() {
+        // Diagonal segment (0,0)→(10,10); point at (5, 5) lies on it.
+        let d_sq = point_to_segment_distance_sq((5.0, 5.0), (0.0, 0.0), (10.0, 10.0));
+        approx(d_sq, 0.0);
+    }
+
+    #[test]
+    fn point_to_segment_distance_degenerate_segment() {
+        // Zero-length segment (collapsed to a point) — must not NaN.
+        // Returns distance from p to that point.
+        let d_sq = point_to_segment_distance_sq((3.0, 4.0), (0.0, 0.0), (0.0, 0.0));
+        approx(d_sq, 25.0); // sqrt(3² + 4²)² = 25
+        // Sanity: a point ON the degenerate point.
+        let d_sq = point_to_segment_distance_sq((0.0, 0.0), (0.0, 0.0), (0.0, 0.0));
+        approx(d_sq, 0.0);
     }
 
     #[test]
