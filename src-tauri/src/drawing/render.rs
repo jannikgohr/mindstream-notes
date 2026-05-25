@@ -112,6 +112,31 @@ const ERASER_RADIUS_PAGE: f32 = 10.0;
 /// under nearest-pixel rasterisation. ~0.18 mm at 144 DPI.
 const MIN_WIDTH: f32 = 1.0;
 
+/// A/B flag: feed pen samples through [`InkSmoother`] (true) vs.
+/// tessellate raw input directly (false). Decouples the body
+/// smoothing decision from the two-zone architecture:
+///
+///   - `true`  — smoother runs on every sample, smoothed body +
+///                raw head + (if enabled) predicted lead.
+///   - `false` — raw everywhere. `pen_tess_cursor` advances to every
+///                raw input, so the raw head is degenerate
+///                (zero-length segment) and the buffer is empty.
+///                Saved geometry is raw input — visible jitter at low
+///                speed.
+const SMOOTHING_ENABLED: bool = false;
+
+/// A/B flag: paint a `MotionPredictor`-driven "predicted lead"
+/// segment past the raw head (zone 3). `true` adds visual lead
+/// equal to roughly one vsync (~16 ms) of forward extrapolation;
+/// `false` disables it, leaving zone 3 empty. Use to compare the
+/// two-zone-alone feel against two-zone-plus-prediction.
+///
+/// Independent of `SMOOTHING_ENABLED` — works the same in both raw
+/// and smoothed modes. In raw mode the lead extends past the raw
+/// input directly (no body smoothing involved); in smoothed mode it
+/// extends past the raw head, which extends past the smoothed body.
+const PREDICTION_ENABLED: bool = true;
+
 /// Map a raw pressure value in [0, 1] (already sanitised at the JNI
 /// boundary) to a page-unit stroke width. Linear ramp from
 /// MIN_WIDTH to BASE_WIDTH.
@@ -161,6 +186,7 @@ fn tessellate_segment(
 /// alpha-blending state change in the GPU pipeline. The visual
 /// effect is "the inked line stays ahead of the pen tip" rather
 /// than "a ghost line trails the pen tip".
+#[allow(dead_code)]
 fn build_prediction_segments(
     out: &mut Vec<Vertex>,
     smoother: &mut InkSmoother,
@@ -192,6 +218,113 @@ fn build_prediction_segments(
         ));
         pred_cursor = sample;
     }
+}
+
+/// Two-zone architecture: tessellate a single straight segment from
+/// the last smoothed point (`pen_tess_cursor`) to the most recent
+/// raw input position (`latest_raw_input`). Rebuilt every render
+/// frame; uploaded into the GPU vertex buffer between the committed
+/// strokes and the (currently empty) prediction zone.
+///
+/// This is the perceptual fix that gets us "ink under the pen tip."
+/// The spring-mass smoother by design produces a modeled centerline
+/// that trails the raw input by 5-10 ms; without a raw head the
+/// visible stroke ends at that modeled position and the eye reads
+/// "ink trailing the pen." With the raw head, the visible tip is
+/// exactly the most recent raw input position — same compositor
+/// floor as before, but the head no longer carries smoother-induced
+/// lag.
+///
+/// Degeneracy is fine:
+///   - Outside a Pen stroke / no cursor / no latest_raw_input → empty.
+///   - `SMOOTHING_ENABLED == false`: the cursor advances to every raw
+///     input sample, so `cursor.pos == latest_raw_input.pos` and the
+///     emitted segment is zero-length — visually nothing, no perf
+///     cost worth caring about. Means the two-zone code path is also
+///     correct in raw mode without needing a flag check.
+///
+/// Why not push the raw head into `strokes_doc.push_point` /
+/// `pen_in_flight_*`: the raw head is **ephemeral**. The next MOVE
+/// will replace it (smoother emits new body samples, new raw head
+/// from the new cursor); persisting every intermediate head into the
+/// CRDT would balloon the saved point count for no benefit. On Pen
+/// UP, the smoother's `end_stroke` drain lands the modeled tail at
+/// the lift position, so the final persisted geometry already ends
+/// where the user lifted.
+fn build_raw_head_segments(
+    out: &mut Vec<Vertex>,
+    tool_mode: ToolMode,
+    current_stroke_color: Option<[u8; 4]>,
+    pen_tess_cursor: Option<SmoothedSample>,
+    latest_raw_input: Option<SmoothedSample>,
+) {
+    out.clear();
+    if !matches!(tool_mode, ToolMode::Pen) {
+        return;
+    }
+    let (Some(color), Some(cursor), Some(raw)) =
+        (current_stroke_color, pen_tess_cursor, latest_raw_input)
+    else {
+        return;
+    };
+    let w_prev = width_for_pressure(cursor.pressure);
+    let w_curr = width_for_pressure(raw.pressure);
+    out.extend_from_slice(&tessellate_segment(
+        cursor.pos,
+        raw.pos,
+        w_prev,
+        w_curr,
+        color,
+    ));
+}
+
+/// Zone 3: tessellate a single segment from the most recent raw
+/// input position to the `MotionPredictor`-extrapolated lead. The
+/// visible result is "ink leads pen" — the stroke extends past the
+/// physical pen tip by ~1 vsync of motion. Reset every render frame
+/// (the predictor produces a fresh sample per onTouchEvent and we
+/// only ever keep one).
+///
+/// Empty in all the cases where it wouldn't make sense:
+///   - Eraser mode.
+///   - Outside a stroke (no `latest_raw_input`).
+///   - Predictor returned null (or MotionPredictor unavailable on
+///     pre-API-33 devices — Kotlin guards) so `latest_prediction`
+///     is None.
+///   - [`PREDICTION_ENABLED`] = false (A/B knob; caller short-
+///     circuits before this helper is called).
+///
+/// Stylistic note: the predicted segment paints in the same colour
+/// as the rest of the stroke. Some apps fade prediction alpha as a
+/// "this might be wrong" cue; we don't — the prediction window is
+/// short (one vsync) so the wrong-snap penalty on direction changes
+/// is small enough to commit to solid colour and dodge the
+/// alpha-blend state change in the GPU pipeline.
+fn build_predicted_lead_segments(
+    out: &mut Vec<Vertex>,
+    tool_mode: ToolMode,
+    current_stroke_color: Option<[u8; 4]>,
+    latest_raw_input: Option<SmoothedSample>,
+    latest_prediction: Option<SmoothedSample>,
+) {
+    out.clear();
+    if !matches!(tool_mode, ToolMode::Pen) {
+        return;
+    }
+    let (Some(color), Some(raw), Some(predicted)) =
+        (current_stroke_color, latest_raw_input, latest_prediction)
+    else {
+        return;
+    };
+    let w_prev = width_for_pressure(raw.pressure);
+    let w_curr = width_for_pressure(predicted.pressure);
+    out.extend_from_slice(&tessellate_segment(
+        raw.pos,
+        predicted.pos,
+        w_prev,
+        w_curr,
+        color,
+    ));
 }
 
 /// Messages the render thread accepts.
@@ -226,6 +359,24 @@ enum Msg {
     /// into [`Sample`] before sending. See `crate::drawing::input`
     /// for the type definitions.
     Sample(Sample),
+    /// Forward extrapolation from Android's `MotionPredictor` (or
+    /// any future equivalent). Distinct from `Sample` because
+    /// predicted points do NOT flow into the persisted stroke; the
+    /// render thread uses them only to paint the zone-3 "predicted
+    /// lead" segment past the raw head. Coordinates are surface
+    /// pixels (the render thread converts to page coords when it
+    /// updates `latest_prediction`).
+    ///
+    /// No tool / buttons / action — predictions are always
+    /// mid-stroke and inherit the in-flight stroke's state from the
+    /// last real DOWN.
+    PredictedPoint {
+        x: f32,
+        y: f32,
+        pressure: f32,
+        #[allow(dead_code)] // reserved for future age-out logic
+        time: f64,
+    },
     Clear,
     /// Switch which note's stroke document the renderer is editing.
     /// `None` parks the renderer with no active document (no
@@ -849,6 +1000,33 @@ pub fn clear_strokes() {
     send(Msg::Clear);
 }
 
+/// Push a `MotionPredictor` (Android API 33+) extrapolation into the
+/// render thread. Coordinates are surface pixels — same convention
+/// as `push_sample` — and the render thread converts to page coords
+/// when it updates the `latest_prediction` state.
+///
+/// Distinct from `push_sample` because predicted points must NOT
+/// flow into the persisted stroke document. They paint the
+/// transient "predicted lead" segment (zone 3) past the raw head,
+/// nothing more. On the next real sample arriving, the prediction
+/// is overwritten; on Pen UP it's cleared.
+///
+/// `time` is the predicted eventTime in seconds (uptimeMillis /
+/// 1000). Today only logged for debugging; reserved for future use
+/// (e.g. age-out logic if predictions ever go stale faster than
+/// they arrive).
+pub fn push_predicted_point(x: f32, y: f32, pressure: f32, time: f64) {
+    log::trace!(
+        "[drawing] push_predicted_point x={x:.1} y={y:.1} p={pressure:.2} t={time:.3}"
+    );
+    send(Msg::PredictedPoint {
+        x,
+        y,
+        pressure,
+        time,
+    });
+}
+
 /// Tell the render thread which note's stroke document is active.
 /// Pass `None` for `note_id` to detach (no doc → renderer paints
 /// background + toolbar only, samples ignored). `initial_state` is
@@ -952,13 +1130,49 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
     // swaps always coincide with a stroke being either committed or
     // abandoned (the smoother gets reset on Pen DOWN regardless).
     let mut ink_smoother = InkSmoother::new();
-    // D2 forward-prediction segments — rebuilt every render frame
-    // from `ink_smoother.predict()`, drawn after the committed
-    // segments. Empty between strokes, after Pen UP, in Eraser
-    // mode, and any frame where the spring-mass model has nothing
-    // to project forward (e.g. just-Down state). See
-    // [`build_prediction_segments`] for the rebuild policy.
+    // Two-zone in-flight rendering. The visible in-flight stroke is
+    // composed of three slices uploaded contiguously to the GPU each
+    // frame:
+    //
+    //   ```
+    //   [ committed smoothed ][ raw head ][ predicted lead ]
+    //                          ^^^^^^^^^^  ^^^^^^^^^^^^^^^^^
+    //                          straight    future zone 3
+    //                          line to     (currently empty)
+    //                          raw pen pos
+    //   ```
+    //
+    // The raw head is what closes the perceptual lag gap with apps
+    // like tldraw — without it the spring-mass smoother's "modeled
+    // centerline" lags the raw input by 5-10 ms even though both
+    // hit the same compositor floor, and the eye reads that as
+    // "ink trailing the pen." With the raw head the visible tip is
+    // exactly under the pen tip; smoothing still applies to the
+    // body (jitter rejection, pressure modeling, persistence).
+    //
+    // `prediction_segments` is reserved for a future zone-3 lead
+    // (forward extrapolation past the raw head — Apple-Pencil-style
+    // "ink leads pen" feel). Kept empty for now to avoid stacking
+    // direction-change-wobble artifacts on top of the structural
+    // win. See [`build_prediction_segments`] — the helper survives
+    // for if/when we wire it back up against a different anchor.
+    let mut raw_head_segments: Vec<Vertex> = Vec::new();
+    // Page-coord position + pressure of the most recent raw input
+    // sample, captured at JNI ingest. Drives the raw-head endpoint.
+    // `None` between strokes (cleared on Pen UP / state-clear sites)
+    // so a stale value can't leak into the next stroke and paint a
+    // phantom segment.
+    let mut latest_raw_input: Option<SmoothedSample> = None;
+    // Zone 3 — predicted lead. `latest_prediction` is the
+    // `MotionPredictor` extrapolation (page coords + pressure)
+    // received via `Msg::PredictedPoint`. Overwritten by each
+    // subsequent predicted point; cleared on every state-clear
+    // site (Pen DOWN/UP/Cancel, Clear, SetActiveNote, tool change,
+    // actions.clear). Drives [`build_predicted_lead_segments`].
+    // The vertex buffer is rebuilt each render frame from
+    // `latest_raw_input` → `latest_prediction`.
     let mut prediction_segments: Vec<Vertex> = Vec::new();
+    let mut latest_prediction: Option<SmoothedSample> = None;
     // The last smoothed point we tessellated a segment to (page
     // coordinates + pressure). The next smoothed sample's segment
     // starts here. `None` between strokes; set on DOWN to the
@@ -1225,17 +1439,41 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                 (active_note_id.as_ref(), surface_state.as_ref())
                             {
                                 let [px, py] = s.surface_to_page(x, y);
-                                let anchor = ink_smoother
-                                    .begin_stroke((px, py), time, pressure);
+                                // Seed the raw-head endpoint with the
+                                // down position. At this moment the
+                                // cursor and the raw input coincide,
+                                // so the head is degenerate (zero
+                                // length) until the first MOVE.
+                                latest_raw_input = Some(SmoothedSample {
+                                    pos: (px, py),
+                                    pressure,
+                                });
+                                // Anchor source depends on the A/B
+                                // flag: smoothed-mode runs the input
+                                // through the modeler (which on
+                                // DOWN identity-passes-through, so
+                                // the anchor IS the raw point);
+                                // raw-mode constructs the anchor
+                                // directly and skips the modeler
+                                // entirely. Either way the anchor
+                                // is a SmoothedSample so the rest
+                                // of the code is shape-identical.
+                                let anchor = if SMOOTHING_ENABLED {
+                                    ink_smoother
+                                        .begin_stroke((px, py), time, pressure)
+                                } else {
+                                    Some(SmoothedSample {
+                                        pos: (px, py),
+                                        pressure,
+                                    })
+                                };
                                 let doc = documents
                                     .entry(id.clone())
                                     .or_insert_with(CanvasDocument::new);
                                 doc.strokes_doc.begin_stroke(packed);
-                                // The smoother passes the DOWN
-                                // sample through unchanged as the
-                                // anchor — push it into both the
-                                // yrs doc and the Rust-side cache
-                                // so the first MOVE has a previous
+                                // Push the anchor into both the yrs
+                                // doc and the Rust-side cache so
+                                // the first MOVE has a previous
                                 // point to tessellate from.
                                 if let Some(anchor) = anchor {
                                     doc.strokes_doc.push_point(
@@ -1254,7 +1492,9 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                 // gesture's lifetime. Make sure it's
                                 // reset so the NEXT stroke (after a
                                 // SetActiveNote arrives) starts
-                                // clean.
+                                // clean. No-op if SMOOTHING_ENABLED
+                                // is false (smoother was never
+                                // touched).
                                 ink_smoother.reset();
                             }
                         }
@@ -1265,8 +1505,38 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                 active_note_id.as_ref(),
                             ) {
                                 let [px, py] = s.surface_to_page(x, y);
-                                let smoothed =
-                                    ink_smoother.update((px, py), time, pressure);
+                                // Track the freshest raw input
+                                // position for the raw-head zone.
+                                // Captured BEFORE the smoother runs
+                                // because we want the head to track
+                                // the raw input regardless of
+                                // whether the modeler emitted any
+                                // smoothed samples this MOVE (it
+                                // may emit 0 on early upsampling
+                                // ticks before the spring-mass
+                                // system has accumulated enough
+                                // state to integrate forward).
+                                latest_raw_input = Some(SmoothedSample {
+                                    pos: (px, py),
+                                    pressure,
+                                });
+                                // Same A/B fork as DOWN: smoothed-
+                                // mode runs the sample through the
+                                // modeler (which may emit 0..N
+                                // upsampled outputs); raw-mode
+                                // produces exactly one output at
+                                // the raw input position. The
+                                // tessellation loop below treats
+                                // the two identically.
+                                let smoothed = if SMOOTHING_ENABLED {
+                                    ink_smoother
+                                        .update((px, py), time, pressure)
+                                } else {
+                                    vec![SmoothedSample {
+                                        pos: (px, py),
+                                        pressure,
+                                    }]
+                                };
                                 if !smoothed.is_empty() {
                                     let doc = documents
                                         .entry(id.clone())
@@ -1324,15 +1594,45 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             // visible stroke would end mid-air
                             // (wherever the spring-mass system had
                             // got to at the last MOVE input).
-                            if ink_smoother.is_in_stroke() {
+                            // Both modes need to commit the UP
+                            // sample's position so the stroke ends
+                            // exactly where the user lifted:
+                            //   - smoothed: drain the modeler's
+                            //     end-of-stroke tail (its iterative
+                            //     "land the spring" pass emits the
+                            //     samples that pull the line the rest
+                            //     of the way to the lift point).
+                            //   - raw: synthesise a single-sample
+                            //     "tail" containing just the UP
+                            //     position; treat it identically to
+                            //     a MOVE output. Without this the
+                            //     stroke would end at the last MOVE
+                            //     and the final lift gesture would
+                            //     be invisible.
+                            let needs_tail = if SMOOTHING_ENABLED {
+                                ink_smoother.is_in_stroke()
+                            } else {
+                                pen_tess_cursor.is_some()
+                            };
+                            if needs_tail {
                                 if let (Some(s), Some(color), Some(id)) = (
                                     surface_state.as_ref(),
                                     current_stroke_color,
                                     active_note_id.as_ref(),
                                 ) {
                                     let [px, py] = s.surface_to_page(x, y);
-                                    let drained = ink_smoother
-                                        .end_stroke((px, py), time, pressure);
+                                    let drained = if SMOOTHING_ENABLED {
+                                        ink_smoother.end_stroke(
+                                            (px, py),
+                                            time,
+                                            pressure,
+                                        )
+                                    } else {
+                                        vec![SmoothedSample {
+                                            pos: (px, py),
+                                            pressure,
+                                        }]
+                                    };
                                     if !drained.is_empty() {
                                         let doc = documents
                                             .entry(id.clone())
@@ -1408,6 +1708,13 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             pen_in_flight_points.clear();
                             pen_in_flight_pressures.clear();
                             pen_tess_cursor = None;
+                            // The smoother's end_stroke drain
+                            // committed the lift-position into the
+                            // doc; the raw head zone is now redundant
+                            // and should disappear so the rendered
+                            // stroke matches what's persisted exactly.
+                            latest_raw_input = None;
+                            latest_prediction = None;
                         }
                         // ---------- Eraser ----------
                         (ToolMode::Eraser, SampleAction::Down) => {
@@ -1475,6 +1782,42 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                         }
                     }
                 }
+                Msg::PredictedPoint {
+                    x,
+                    y,
+                    pressure,
+                    time: _,
+                } => {
+                    // Update the zone-3 predicted lead state. We
+                    // only paint a predicted segment when we're in a
+                    // Pen stroke with a known raw head — outside
+                    // that the prediction is meaningless. Dropping
+                    // (rather than buffering) predictions in those
+                    // edge cases avoids painting a phantom predicted
+                    // segment with no anchor.
+                    if !PREDICTION_ENABLED {
+                        continue;
+                    }
+                    if !matches!(tool_mode, ToolMode::Pen) {
+                        continue;
+                    }
+                    if !ink_smoother.is_in_stroke()
+                        && pen_tess_cursor.is_none()
+                    {
+                        // Not in a stroke (predictor fired between
+                        // strokes / before DOWN landed). Skip.
+                        continue;
+                    }
+                    let Some(s) = surface_state.as_ref() else {
+                        continue;
+                    };
+                    let [px, py] = s.surface_to_page(x, y);
+                    latest_prediction = Some(SmoothedSample {
+                        pos: (px, py),
+                        pressure,
+                    });
+                    dirty = true;
+                }
                 Msg::Clear => {
                     if let Some(id) = active_note_id.as_ref() {
                         if let Some(doc) = documents.get_mut(id) {
@@ -1503,6 +1846,8 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                     pen_in_flight_points.clear();
                     pen_in_flight_pressures.clear();
                     pen_tess_cursor = None;
+                    latest_raw_input = None;
+                    latest_prediction = None;
                     ink_smoother.reset();
                     eraser_drag_hits.clear();
                     eraser_drag_seen.clear();
@@ -1544,6 +1889,8 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                     pen_in_flight_points.clear();
                     pen_in_flight_pressures.clear();
                     pen_tess_cursor = None;
+                    latest_raw_input = None;
+                    latest_prediction = None;
                     ink_smoother.reset();
                     eraser_drag_hits.clear();
                     eraser_drag_seen.clear();
@@ -1616,17 +1963,33 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
             if needs_rebuild || dirty {
                 let segs = active_segments(&active_note_id, &documents);
                 let segs_len = segs.len();
-                // Refresh the D2 prediction tail before submitting
-                // the frame. `predict` is allowed to mutate the
-                // smoother (it borrows &mut) but won't change any
-                // observable state; cheap enough to redo every frame
-                // (a handful of vertices' worth of CPU math).
-                build_prediction_segments(
-                    &mut prediction_segments,
-                    &mut ink_smoother,
+                // Refresh the two-zone raw head before submitting
+                // the frame: a straight segment from the last
+                // smoothed point to the most recent raw input
+                // position. Negligible CPU (one quad's worth of
+                // tessellation math) and recomputing per render
+                // means a stale cursor / raw position can never
+                // paint a wrong head.
+                build_raw_head_segments(
+                    &mut raw_head_segments,
                     tool_mode,
                     current_stroke_color,
                     pen_tess_cursor,
+                    latest_raw_input,
+                );
+                // Refresh the zone-3 predicted lead too: another
+                // single segment from the raw head's endpoint past
+                // the pen tip. The PREDICTION_ENABLED check inside
+                // `Msg::PredictedPoint` keeps `latest_prediction`
+                // empty when the flag is off; passing it through
+                // here unconditionally means the helper short-
+                // circuits naturally.
+                build_predicted_lead_segments(
+                    &mut prediction_segments,
+                    tool_mode,
+                    current_stroke_color,
+                    latest_raw_input,
+                    latest_prediction,
                 );
                 let input = std::mem::take(&mut egui_input);
                 // Build the UiState the toolbar reads for selected-
@@ -1639,7 +2002,14 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                 let t_frame = std::time::Instant::now();
                 let dispatch_uptime_ms =
                     crate::drawing::platform::android::now_uptime_ms();
-                match pipeline::render_frame(p, s, segs, &prediction_segments, ui_output) {
+                match pipeline::render_frame(
+                    p,
+                    s,
+                    segs,
+                    &raw_head_segments,
+                    &prediction_segments,
+                    ui_output,
+                ) {
                     Ok(()) => {
                         let done_uptime_ms =
                             crate::drawing::platform::android::now_uptime_ms();
@@ -1724,6 +2094,8 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             pen_in_flight_points.clear();
                             pen_in_flight_pressures.clear();
                             pen_tess_cursor = None;
+                            latest_raw_input = None;
+                            latest_prediction = None;
                             ink_smoother.reset();
                             eraser_drag_hits.clear();
                             eraser_drag_seen.clear();
@@ -1784,6 +2156,8 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             pen_in_flight_points.clear();
                             pen_in_flight_pressures.clear();
                             pen_tess_cursor = None;
+                            latest_raw_input = None;
+                            latest_prediction = None;
                             ink_smoother.reset();
                             eraser_drag_hits.clear();
                             eraser_drag_seen.clear();
@@ -1797,21 +2171,28 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             // stack after we popped its last entry.
                             let fresh_segs =
                                 active_segments(&active_note_id, &documents);
-                            // Re-tessellate the prediction tail for
-                            // the follow-up frame too: toolbar
-                            // actions (undo/redo/clear/tool change)
-                            // can invalidate it (tool change resets
-                            // the smoother; undo/redo/clear don't
-                            // touch in-flight stroke state but the
-                            // committed-segment count changed, so
-                            // we still need to write fresh
-                            // prediction at the new offset).
-                            build_prediction_segments(
-                                &mut prediction_segments,
-                                &mut ink_smoother,
+                            // Re-tessellate the raw head for the
+                            // follow-up frame too: toolbar actions
+                            // (undo/redo/clear/tool change) can
+                            // invalidate state the head depends on
+                            // (tool change clears latest_raw_input;
+                            // undo/redo/clear don't touch in-flight
+                            // stroke state but the committed-segment
+                            // count changed, so the head needs to
+                            // re-upload at the new offset).
+                            build_raw_head_segments(
+                                &mut raw_head_segments,
                                 tool_mode,
                                 current_stroke_color,
                                 pen_tess_cursor,
+                                latest_raw_input,
+                            );
+                            build_predicted_lead_segments(
+                                &mut prediction_segments,
+                                tool_mode,
+                                current_stroke_color,
+                                latest_raw_input,
+                                latest_prediction,
                             );
                             let fresh_input = egui::RawInput::default();
                             let fresh_state = build_ui_state(
@@ -1825,6 +2206,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                 p,
                                 s,
                                 fresh_segs,
+                                &raw_head_segments,
                                 &prediction_segments,
                                 fresh_ui,
                             );
