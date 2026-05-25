@@ -142,21 +142,33 @@ impl SurfaceBoundState {
     }
 }
 
-/// First-time init: builds both halves at once. Returns the
-/// persistent state + the first surface bound to it. Caller owns
-/// the [`SurfaceSource`] (typically constructed at the platform
-/// glue layer, e.g. `AndroidWindow` from
-/// `crate::drawing::platform::android`); ownership transfers into
-/// the returned `SurfaceBoundState`.
-pub async fn build_first_time(
-    window: Box<dyn SurfaceSource>,
-    width: u32,
-    height: u32,
-) -> Result<(PersistentGpu, SurfaceBoundState), String> {
-    // Per-phase timing for the open-latency investigation. Each
-    // `t_*` captures wallclock elapsed for the named step; the
-    // final summary log lets us see at a glance which step (adapter
-    // negotiation? device init? pipeline link?) dominates.
+/// Hardcoded surface format for prewarmed `PersistentGpu`. Android
+/// GL adapters (Adreno, Mali, …) consistently expose `Rgba8Unorm`
+/// as their primary non-sRGB format, so picking it ahead of having
+/// a Surface to query is safe in practice. `build_surface_bound`
+/// double-checks the actual surface caps and warns (rather than
+/// silently miscolouring) if a device ever turns up that doesn't
+/// support it.
+///
+/// Why hardcode at all: `egui_wgpu::Renderer::new` + the line
+/// pipeline both bake the surface format into compiled state — if
+/// we deferred picking until the first Surface attach, those two
+/// (≈45 ms combined) would stay on the critical path, defeating
+/// half the prewarm benefit.
+const PREWARM_SURFACE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+
+/// Build the surface-independent half of `PersistentGpu` —
+/// everything we can construct without an `ANativeWindow` /
+/// `SurfaceSource`. Called from `drawing::render::prewarm()` at
+/// app startup so by the time the user opens an ink note the
+/// 150–200 ms of adapter / device / pipeline / egui-renderer
+/// negotiation has already happened in the background.
+///
+/// The lazy fallback in the render-thread `Msg::SurfaceReady`
+/// handler calls this if prewarm didn't run (or hasn't completed)
+/// before the first surface arrives — worst case = today's
+/// "blocking init on first open" behaviour.
+pub async fn build_persistent() -> Result<PersistentGpu, String> {
     let t_total = std::time::Instant::now();
 
     let t_phase = std::time::Instant::now();
@@ -170,26 +182,15 @@ pub async fn build_first_time(
     let t_instance = t_phase.elapsed();
 
     let t_phase = std::time::Instant::now();
-    // SAFETY: `window` is owned by us (boxed) and will move into the
-    // returned `SurfaceBoundState`, so its raw handle stays valid
-    // for the surface's lifetime. The window's `Drop` runs only
-    // after the wgpu surface has been torn down (drop order in
-    // SurfaceBoundState is `surface` then `_window`).
-    let surface = unsafe {
-        instance
-            .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
-                raw_display_handle: window.display_handle().unwrap().as_raw(),
-                raw_window_handle: window.window_handle().unwrap().as_raw(),
-            })
-            .map_err(|e| format!("create_surface_unsafe: {e}"))?
-    };
-    let t_surface = t_phase.elapsed();
-
-    let t_phase = std::time::Instant::now();
+    // `compatible_surface: None` — we don't have one yet. On
+    // Android there's typically one GL adapter and it'll match
+    // any GL surface we later build, so this is safe. If we ever
+    // ship a multi-adapter platform via this path we'd need to
+    // revisit (and probably re-pick at SurfaceReady time).
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
-            compatible_surface: Some(&surface),
+            compatible_surface: None,
             force_fallback_adapter: false,
         })
         .await
@@ -217,37 +218,8 @@ pub async fn build_first_time(
         .map_err(|e| format!("request_device: {e:?}"))?;
     let t_device = t_phase.elapsed();
 
-    let t_phase = std::time::Instant::now();
-    let caps = surface.get_capabilities(&adapter);
-    // egui_wgpu does its own colour conversion in the shader and
-    // assumes a linear render target — sRGB formats produce washed-
-    // out colours.
-    let surface_format = caps
-        .formats
-        .iter()
-        .copied()
-        .find(|f| !f.is_srgb())
-        .unwrap_or(caps.formats[0]);
-    log::info!("[drawing] surface format: {surface_format:?}");
-    let alpha_mode = caps
-        .alpha_modes
-        .iter()
-        .copied()
-        .find(|m| *m != wgpu::CompositeAlphaMode::Opaque)
-        .unwrap_or(caps.alpha_modes[0]);
-
-    let config = wgpu::SurfaceConfiguration {
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-        format: surface_format,
-        width: width.max(1),
-        height: height.max(1),
-        present_mode: caps.present_modes[0],
-        alpha_mode,
-        view_formats: vec![],
-        desired_maximum_frame_latency: 2,
-    };
-    surface.configure(&device, &config);
-    let t_configure = t_phase.elapsed();
+    let surface_format = PREWARM_SURFACE_FORMAT;
+    log::info!("[drawing] surface format (prewarm assumed): {surface_format:?}");
 
     let t_phase = std::time::Instant::now();
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -310,31 +282,17 @@ pub async fn build_first_time(
     let t_egui = t_phase.elapsed();
 
     log::info!(
-        "[drawing.perf] build_first_time TOTAL={:?} instance={:?} surface={:?} adapter={:?} device={:?} configure={:?} shader={:?} pipeline={:?} egui={:?}",
+        "[drawing.perf] build_persistent TOTAL={:?} instance={:?} adapter={:?} device={:?} shader={:?} pipeline={:?} egui={:?}",
         t_total.elapsed(),
         t_instance,
-        t_surface,
         t_adapter,
         t_device,
-        t_configure,
         t_shader,
         t_pipeline,
         t_egui,
     );
 
-    // Initial page + view transform. Resize() will rebuild the
-    // transform whenever the surface changes size.
-    let page = page::DEFAULT_PAGE;
-    let view_transform =
-        ViewTransform::fit_in_surface(page, width.max(1) as f32, height.max(1) as f32);
-    let view_uniform_buffer = create_view_uniform_buffer(&device, &view_transform);
-    let view_bind_group = create_view_bind_group(
-        &device,
-        &view_bind_group_layout,
-        &view_uniform_buffer,
-    );
-
-    let persistent = PersistentGpu {
+    Ok(PersistentGpu {
         instance,
         adapter,
         device,
@@ -343,43 +301,32 @@ pub async fn build_first_time(
         view_bind_group_layout,
         pipeline,
         egui_renderer,
-    };
-    let surface_state = SurfaceBoundState {
-        surface,
-        _window: window,
-        config,
-        vertex_buffer: None,
-        vertex_capacity: 0,
-        width,
-        height,
-        view_transform,
-        view_uniform_buffer,
-        view_bind_group,
-        page,
-    };
-    Ok((persistent, surface_state))
+    })
 }
 
-/// Subsequent attaches: reuse the existing persistent state, just
-/// build a new `Surface` against the freshly-handed `SurfaceSource`
-/// and configure it with the pinned format / cached caps.
-pub async fn build_surface_only(
+/// Build the per-surface half of the renderer state: wgpu `Surface`,
+/// surface configuration, and the view transform / uniform buffer /
+/// bind group. Takes an already-built [`PersistentGpu`] (typically
+/// from `build_persistent` at app startup) and a freshly-handed
+/// [`SurfaceSource`].
+///
+/// Hot path for every ink-note open (first or subsequent): the
+/// `Surface` itself is per-window, so this can't be prewarmed. But
+/// it's also fast — typically <10 ms on real hardware.
+pub async fn build_surface_bound(
     persistent: &PersistentGpu,
     window: Box<dyn SurfaceSource>,
     width: u32,
     height: u32,
 ) -> Result<SurfaceBoundState, String> {
-    // Subsequent-attach timing — this is the hot path for the 2nd
-    // and later ink-note opens in a session (the first one pays
-    // build_first_time's cost instead). Tells us whether the
-    // surface_create + configure step is the dominant cost on
-    // re-opens, separate from build_first_time's adapter/device
-    // negotiation.
     let t_total = std::time::Instant::now();
+
     let t_phase = std::time::Instant::now();
-    // SAFETY: as in build_first_time — `window` is owned by us
-    // and moves into the returned SurfaceBoundState, so its raw
-    // handle stays valid for the surface's lifetime.
+    // SAFETY: `window` is owned by us (boxed) and moves into the
+    // returned SurfaceBoundState, so its raw handle stays valid
+    // for the surface's lifetime. The window's `Drop` runs only
+    // after the wgpu surface has been torn down (drop order in
+    // SurfaceBoundState is `surface` then `_window`).
     let surface = unsafe {
         persistent
             .instance
@@ -393,6 +340,18 @@ pub async fn build_surface_only(
 
     let t_phase = std::time::Instant::now();
     let caps = surface.get_capabilities(&persistent.adapter);
+    // Sanity-check the prewarm-assumed format actually appears in
+    // this surface's caps. If a device ever turns up that lacks
+    // Rgba8Unorm we don't have a quick recovery (the egui_renderer
+    // + pipeline were baked against the assumed format), but a
+    // loud warning beats silent miscolouring.
+    if !caps.formats.contains(&persistent.surface_format) {
+        log::warn!(
+            "[drawing] surface caps don't include prewarm format {:?} — available: {:?}",
+            persistent.surface_format,
+            caps.formats,
+        );
+    }
     let alpha_mode = caps
         .alpha_modes
         .iter()
@@ -412,7 +371,7 @@ pub async fn build_surface_only(
     surface.configure(&persistent.device, &config);
     let t_configure = t_phase.elapsed();
     log::info!(
-        "[drawing.perf] build_surface_only TOTAL={:?} surface={:?} configure={:?}",
+        "[drawing.perf] build_surface_bound TOTAL={:?} surface={:?} configure={:?}",
         t_total.elapsed(),
         t_surface,
         t_configure,
