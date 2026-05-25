@@ -158,7 +158,7 @@ fn width_for_pressure(pressure: f32) -> f32 {
 /// the overlay extended past the committed quad, reading as a
 /// "flicker" along the just-drawn stroke.
 ///
-/// 0.85 gives ≥ ~1 device-pixel of cover on the widest end of the
+/// 0.6 buys several device-pixels of cover on the widest end of the
 /// pressure ramp at typical tablet DPI, which is plenty to mask
 /// sub-pixel AA differences between Skia's `Paint` rasteriser and
 /// our wgpu triangle pass. Lower buys more margin at the cost of
@@ -451,6 +451,17 @@ enum Msg {
     /// `drawing_get_state` to fetch state for `save_note`.
     GetState {
         reply: SyncSender<Vec<u8>>,
+    },
+    /// Push a new toolbar theme to the egui UI. Driven by JS — see
+    /// the `drawing_set_theme` Tauri command — whenever the user's
+    /// `appearance.mode` or `appearance.accent` setting changes (or
+    /// when the prefers-color-scheme media query flips under
+    /// `system` mode). The render thread forwards directly to
+    /// `CanvasUi::set_theme`, which re-applies `egui::Visuals` so
+    /// the next paint uses the new palette.
+    SetTheme {
+        dark: bool,
+        accent_argb: u32,
     },
     /// Like [`Msg::GetState`] but for any note id in the in-memory
     /// `documents` map, not just the active one. Used by the
@@ -1087,6 +1098,17 @@ pub fn set_active_note(note_id: Option<String>, initial_state: Option<Vec<u8>>) 
         note_id,
         initial_state,
     });
+}
+
+/// Drive the egui toolbar's theme from JS — see the `drawing_set_theme`
+/// Tauri command. Sent on every change to the user's
+/// `appearance.mode` (light / dark / system → resolved) and
+/// `appearance.accent` settings, plus once on `drawing_show` so the
+/// initial frame already paints in the right palette. Idempotent on
+/// the render thread side — re-applying the same theme just re-runs
+/// `egui::Context::set_visuals` which the context tolerates.
+pub fn set_theme(dark: bool, accent_argb: u32) {
+    send(Msg::SetTheme { dark, accent_argb });
 }
 
 /// Synchronously fetch the active note's stroke document as v1-yrs
@@ -1969,6 +1991,25 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                         .unwrap_or_default();
                     let _ = reply.send(bytes);
                 }
+                Msg::SetTheme { dark, accent_argb } => {
+                    // Drop the alpha byte — egui's `Color32` is always
+                    // opaque for our toolbar's purposes, and the JS
+                    // side may pass either `0xAARRGGBB` or `0x00RRGGBB`
+                    // depending on whether it includes the implicit
+                    // alpha. We pin it to 0xFF either way.
+                    let r = ((accent_argb >> 16) & 0xFF) as u8;
+                    let g = ((accent_argb >> 8) & 0xFF) as u8;
+                    let b = (accent_argb & 0xFF) as u8;
+                    let accent = egui::Color32::from_rgb(r, g, b);
+                    log::info!(
+                        "[drawing] theme update: dark={dark} accent=#{r:02X}{g:02X}{b:02X}"
+                    );
+                    canvas_ui.set_theme(ui::DrawingTheme { dark, accent });
+                    // Repaint so the new palette shows up immediately
+                    // (otherwise the toolbar stays on the old colours
+                    // until the next input event drives a frame).
+                    dirty = true;
+                }
             }
         }
 
@@ -2354,11 +2395,12 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             );
                         }
 
-                        if actions.back {
-                            if let Err(e) = crate::drawing::platform::android::ui::call_back() {
-                                log::warn!("[drawing] call_back failed: {e}");
-                            }
-                        }
+                        // The egui Back button is gone (B1 cleanup —
+                        // the Svelte mobile header above the
+                        // SurfaceView owns navigation). The matching
+                        // JNI helper `call_back()` plus the Kotlin
+                        // `Drawing.backFromNative()` stay in place
+                        // for a future re-wire.
                     }
                     Err(e) => log::warn!("[drawing] render failed: {e:?}"),
                 }

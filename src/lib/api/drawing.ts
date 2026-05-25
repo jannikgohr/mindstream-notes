@@ -59,6 +59,30 @@ export function drawingSetSaveDebounce(ms: number): Promise<void> {
 }
 
 /**
+ * Push the resolved app theme down to the egui toolbar (B2). Called
+ * whenever `appearance.mode` resolves to a new dark/light state or
+ * the user picks a new `appearance.accent`. The Rust side rebuilds
+ * `egui::Visuals` and the next paint uses the new palette.
+ *
+ * `accentHex` accepts shadcn's `#RRGGBB[AA]` (or shorthand `#RGB`)
+ * — the picker setting type is `color` which always emits the long
+ * form. Passing `null` (or omitting) tells Rust to use the
+ * mode-appropriate shadcn default (`oklch(0.985)` on dark,
+ * `oklch(0.205)` on light) so an unset accent doesn't produce a
+ * jarring fallback.
+ */
+export function drawingSetTheme(
+  dark: boolean,
+  accentHex: string | null
+): Promise<void> {
+  return invokeOrFallback<void>(
+    'drawing_set_theme',
+    { dark, accentHex },
+    () => undefined
+  );
+}
+
+/**
  * Per-note save-status event the Rust save worker emits whenever
  * an ink note transitions between editing / saving / saved / error.
  * `DrawingNoteEditor.svelte` listens, filters by note id, and

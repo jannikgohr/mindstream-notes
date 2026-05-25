@@ -119,6 +119,17 @@ multi-page; live collab; desktop / iOS ports. Rounded caps +
 mitered joints (via `lyon`) deferred until thick-stroke joints
 actually look notchy in practice.
 
+Toolchain pins moved with B1/B2: `egui` 0.32 → 0.33, `egui-wgpu`
+0.32 → 0.33, `wgpu` 25 → 27, `rust-version` 1.85 → 1.88. Three
+small source fixes were enough — `wgpu::DeviceDescriptor` grew an
+`experimental_features` field, `egui_wgpu::Renderer::new` collapsed
+its tail args into a `RendererOptions` struct, and
+`wgpu::RenderPassColorAttachment` grew a `depth_slice` field. No
+egui API breakage touched our code. Headroom for the 0.34 / wgpu 29
+bump exists if a future feature wants `Context::run_ui`, the new
+`Panel` API, or font hinting — but that bump also requires MSRV
+1.92 (we're on 1.91.1 locally) so it stays parked.
+
 ## Roadmap
 
 Items grouped by readiness/effort, not chronology. Within each
@@ -139,8 +150,8 @@ All resolved.
 
 | # | Item | Notes | Status |
 |---|------|-------|--------|
-| B1 | Toolbar icons not text | `← Back` / `Clear` → ArrowLeft + Trash glyphs via egui `ImageButton` (`egui::include_image!`). | Pending |
-| B2 | Theme egui to match app accent + dark mode | `egui::Visuals` bridged to `getSettingValue('app.theme')`. | Pending |
+| B1 | Toolbar icons not text | Lucide glyphs (`lucide-icons` crate, ~30 KB bundled TTF) replace the text labels. `CanvasUi::new` registers the font as a custom egui family (`LUCIDE_FAMILY = "lucide"`); the toolbar references glyphs via `RichText::new(char::from(Icon::X).to_string()).family(FontFamily::Name(LUCIDE_FAMILY.into()))`. Back button was also removed in this pass since the Svelte mobile header above the SurfaceView already owns navigation — the JNI surface (`call_back` / `Drawing.backFromNative`) stays in place for a future re-wire. Not pulling in the full `egui-shadcn` kit (which uses these same icons) because its tree-sitter / chrono / regex transitive deps are wasted weight for a 4-button toolbar; revisit if D5's colour-picker / slider components would benefit from the broader component library. | **Done** |
+| B2 | Theme egui to match app accent + dark mode | `drawing/ui/theme.rs` defines `DrawingTheme { dark, accent }` → `egui::Visuals` bridging the shadcn design tokens in `src/app.css` (panel = `--background`, button = `--secondary`/`--muted`, hover one shade brighter, active = `--primary`/user accent, border = `--border`, fg = `--foreground`, destructive = `--destructive` for the Clear button). Tauri command `drawing_set_theme(dark, accent_hex)` + `Msg::SetTheme` push updates from JS via `drawingSetTheme(dark, accentHex)`. `+layout.svelte` has the `$effect` that reads mode-watcher's resolved `$mode` plus `getSettingValue('appearance.accent')` and calls it — fires once on app start and on every dark/accent change so the toolbar is already in the right palette by the time `drawing_show` lands. Unset accent falls back to the shadcn-default `--primary` for the resolved mode rather than a jarring sentinel. | **Done** |
 | B3 | Layering decision | **Done** — inset SurfaceView via `topMargin`. Svelte header stays reachable; egui toolbar sits below it. |
 
 ### R. Refactor — modularity + cross-platform groundwork
