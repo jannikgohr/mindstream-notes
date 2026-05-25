@@ -340,8 +340,12 @@ pub mod ui {
 
     /// Call `Drawing.backFromNative()` — dispatches a `drawing-back`
     /// CustomEvent on the WebView's window so the Svelte mobile
-    /// shell can navigate back to its home view. Triggered when the
-    /// user taps the in-egui Back button.
+    /// shell can navigate back to its home view. Currently unused
+    /// (the in-egui Back button was removed in B1 because the Svelte
+    /// mobile header above the SurfaceView already owns navigation);
+    /// kept around for a future re-wire so the Kotlin
+    /// `Drawing.backFromNative` export stays a valid JNI symbol.
+    #[allow(dead_code)]
     pub fn call_back() -> Result<(), String> {
         invoke_static_void("backFromNative")
     }

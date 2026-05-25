@@ -252,6 +252,9 @@ pub async fn build_persistent() -> Result<PersistentGpu, String> {
         .request_device(&wgpu::DeviceDescriptor {
             label: Some("drawing-device"),
             required_features: wgpu::Features::empty(),
+            // wgpu 26+ split out unstable feature gates into their own field.
+            // We don't opt into anything experimental, so default = empty.
+            experimental_features: wgpu::ExperimentalFeatures::default(),
             required_limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
             memory_hints: wgpu::MemoryHints::default(),
             trace: wgpu::Trace::default(),
@@ -318,9 +321,20 @@ pub async fn build_persistent() -> Result<PersistentGpu, String> {
     let t_pipeline = t_phase.elapsed();
 
     let t_phase = std::time::Instant::now();
-    // 5-arg constructor matches egui-wgpu 0.32: device, output
-    // color format, optional depth format, msaa samples, dithering.
-    let egui_renderer = egui_wgpu::Renderer::new(&device, surface_format, None, 1, false);
+    // egui-wgpu 0.33 collapsed the old positional (depth_format,
+    // msaa_samples, dithering) tail into a `RendererOptions` struct.
+    // We don't use depth or MSAA in this pipeline; dithering off
+    // matches the previous behaviour.
+    let egui_renderer = egui_wgpu::Renderer::new(
+        &device,
+        surface_format,
+        egui_wgpu::RendererOptions {
+            msaa_samples: 1,
+            depth_stencil_format: None,
+            dithering: false,
+            ..Default::default()
+        },
+    );
     let t_egui = t_phase.elapsed();
 
     log::info!(
@@ -752,6 +766,10 @@ pub fn render_acquired_frame(
             label: Some("drawing-pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &acquired.view,
+                // wgpu 26+ added depth_slice for binding a single layer
+                // of a 3D / array texture as the colour target. We use
+                // a plain 2D surface texture, so None = whole view.
+                depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
