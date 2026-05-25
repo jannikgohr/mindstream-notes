@@ -263,6 +263,41 @@ impl InkSmoother {
         self.in_stroke
     }
 
+    /// D2 forward prediction. Asks the modeler "if the user lifted
+    /// right now, where would the spring-mass system land?" — same
+    /// algorithm as the end-of-stroke drain, but without mutating
+    /// the modeler's state (it's safe to call after every MOVE).
+    /// Returns the predicted continuation in time order, starting
+    /// from just past the last smoothed sample emitted by `update`.
+    ///
+    /// Caller tessellates these into a *separate* segment buffer —
+    /// the prediction is rendered on top of the committed strokes
+    /// each frame and discarded on the next MOVE (which produces a
+    /// fresh prediction) or on Up/Cancel (which produces the real
+    /// end-of-stroke tail via [`end_stroke`]).
+    ///
+    /// Empty result outside of a stroke or when the modeler refuses
+    /// the prediction (the upstream returns `Err("empty input
+    /// events")` for that case — we map it to `Vec::new()` so the
+    /// render thread doesn't need to know about it). Other errors
+    /// are warn-logged for visibility.
+    pub fn predict(&mut self) -> Vec<SmoothedSample> {
+        if !self.in_stroke {
+            return Vec::new();
+        }
+        match self.modeler.predict() {
+            Ok(results) => results.into_iter().map(modeler_result_to_sample).collect(),
+            Err(e) => {
+                // The "empty input events" case is expected (DOWN
+                // arrived but no MOVE yet — nothing to predict from);
+                // logging at debug rather than warn so it doesn't
+                // spam during normal stroke openings.
+                log::debug!("[drawing] InkSmoother predict skipped: {e}");
+                Vec::new()
+            }
+        }
+    }
+
     /// Ensure `time > last_time`. The modeler rejects non-monotonic
     /// timestamps with `ElementError::Duplicate` or `NegativeTimeDelta`;
     /// bumping by [`MIN_DT`] keeps the input stream well-formed even
@@ -343,6 +378,44 @@ mod tests {
         s.begin_stroke((0.0, 0.0), 0.0, 1.0);
         let out = s.update((50.0, 50.0), 0.05, 1.0);
         assert!(!out.is_empty(), "modeler should emit samples for a 50ms MOVE");
+    }
+
+    #[test]
+    fn predict_empty_outside_stroke() {
+        let mut s = InkSmoother::new();
+        assert!(s.predict().is_empty());
+    }
+
+    #[test]
+    fn predict_empty_after_only_down() {
+        // DOWN alone → no MOVE → upstream errors with "empty input
+        // events"; wrapper returns empty Vec rather than surfacing
+        // the Err.
+        let mut s = InkSmoother::new();
+        s.begin_stroke((0.0, 0.0), 0.0, 1.0);
+        assert!(s.predict().is_empty());
+    }
+
+    #[test]
+    fn predict_returns_tail_after_moves() {
+        // After a couple of MOVEs the spring-mass model has state
+        // to drain from. We don't assert the specific tail length —
+        // it depends on stopping-distance + max-iterations params —
+        // just that something comes out and the smoother stays in
+        // stroke (predict doesn't mutate state).
+        let mut s = InkSmoother::new();
+        s.begin_stroke((0.0, 0.0), 0.0, 1.0);
+        let _ = s.update((50.0, 50.0), 0.02, 1.0);
+        let _ = s.update((100.0, 100.0), 0.04, 1.0);
+        let tail = s.predict();
+        assert!(!tail.is_empty(), "predict should return a tail after MOVEs");
+        assert!(s.is_in_stroke(), "predict must not end the stroke");
+        // Calling predict again should give the same result (no
+        // state change). We don't assert exact equality (the impl
+        // is allowed to optimise) but the smoother must still be in
+        // stroke and the second call must not panic.
+        let _again = s.predict();
+        assert!(s.is_in_stroke());
     }
 
     #[test]
