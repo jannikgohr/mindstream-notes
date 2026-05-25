@@ -32,6 +32,7 @@ use std::collections::HashSet;
 use super::input::{Sample, SampleAction, ToolKind};
 use super::page::{point_to_segment_distance_sq, segment_quad_positions};
 use super::pipeline::{self, PersistentGpu, SurfaceBoundState, Vertex};
+use super::stroke_modeler::{InkSmoother, SmoothedSample};
 use super::strokes_doc::{StrokesDoc, DEFAULT_COLOR};
 use super::surface_source::SurfaceSource;
 use super::ui::{self, CanvasUi, ToolMode, UiState};
@@ -894,17 +895,23 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
     // pull segments from. `None` means "no note open" — the
     // renderer still draws background + toolbar but skips strokes.
     let mut active_note_id: Option<String> = None;
-    // The most-recent sample's surface coordinates + pressure, used
-    // to anchor the next MOVE sample's starting vertex (position) and
-    // its starting width (pressure). None between strokes.
-    // Per-stroke transient; reset on active-note swap so an
-    // in-flight stroke can't leak from one note into another.
-    let mut last_point: Option<(f32, f32)> = None;
-    let mut last_pressure: Option<f32> = None;
+    // D1 stroke smoother. One instance held for the render thread's
+    // lifetime — its only state is per-stroke, and active-note
+    // swaps always coincide with a stroke being either committed or
+    // abandoned (the smoother gets reset on Pen DOWN regardless).
+    let mut ink_smoother = InkSmoother::new();
+    // The last smoothed point we tessellated a segment to (page
+    // coordinates + pressure). The next smoothed sample's segment
+    // starts here. `None` between strokes; set on DOWN to the
+    // smoother's anchor output; advanced by every smoothed sample
+    // emitted from update / end_stroke; cleared on UP / CANCEL /
+    // Clear / SetActiveNote / tool change so an in-flight cursor
+    // can't leak across strokes or notes.
+    let mut pen_tess_cursor: Option<SmoothedSample> = None;
     // Linear-RGBA colour for the currently-open stroke, chosen at
-    // ACTION_DOWN from the input tool type via [`color_for_tool`].
-    // Same lifecycle as `last_point` — None between strokes; set on
-    // DOWN; consumed on every MOVE's tessellation; cleared on UP /
+    // ACTION_DOWN from the input tool type via [`color_for_input`].
+    // Same lifecycle as `pen_tess_cursor` — None between strokes; set
+    // on DOWN; consumed on every MOVE's tessellation; cleared on UP /
     // CANCEL / Clear / SetActiveNote so a leaked colour can't paint
     // an unrelated note's stroke the wrong shade.
     let mut current_stroke_color: Option<[u8; 4]> = None;
@@ -1065,6 +1072,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                         tool,
                         buttons,
                         action,
+                        time,
                     } = sample;
                     let pos = px_to_egui(x, y);
                     // Forward all gestures to egui so toolbar buttons
@@ -1107,16 +1115,13 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
 
                     // Branch on tool. Pen and Eraser have very
                     // different data flows — Pen accumulates points
-                    // into an in-progress yrs stroke, Eraser hits
-                    // existing strokes per-sample and tombstones
-                    // them. Common state (last_point / last_pressure)
-                    // is reused so a future tool switch keeps the
-                    // "where did the last sample land" cursor.
+                    // into an in-progress yrs stroke (via the D1
+                    // smoother, which can emit many output samples
+                    // per raw input), Eraser hits existing strokes
+                    // per-sample and tombstones them.
                     match (tool_mode, action) {
                         // ---------- Pen ----------
                         (ToolMode::Pen, SampleAction::Down) => {
-                            last_point = Some((x, y));
-                            last_pressure = Some(pressure);
                             let packed = color_for_input(tool, buttons);
                             log::info!(
                                 "[drawing] stroke_open tool={tool:?} buttons=0x{buttons:x} -> color=0x{packed:08X}"
@@ -1125,65 +1130,159 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             current_stroke_packed = Some(packed);
                             pen_in_flight_points.clear();
                             pen_in_flight_pressures.clear();
+                            pen_tess_cursor = None;
                             if let (Some(id), Some(s)) =
                                 (active_note_id.as_ref(), surface_state.as_ref())
                             {
+                                let [px, py] = s.surface_to_page(x, y);
+                                let anchor = ink_smoother
+                                    .begin_stroke((px, py), time, pressure);
                                 let doc = documents
                                     .entry(id.clone())
                                     .or_insert_with(CanvasDocument::new);
                                 doc.strokes_doc.begin_stroke(packed);
-                                let [px, py] = s.surface_to_page(x, y);
-                                doc.strokes_doc.push_point(px, py, pressure);
-                                // Mirror into the Rust-side cache
-                                // buffer so the StrokeMeta on
-                                // pen-up has the full geometry.
-                                pen_in_flight_points.push(px);
-                                pen_in_flight_points.push(py);
-                                pen_in_flight_pressures.push(pressure);
+                                // The smoother passes the DOWN
+                                // sample through unchanged as the
+                                // anchor — push it into both the
+                                // yrs doc and the Rust-side cache
+                                // so the first MOVE has a previous
+                                // point to tessellate from.
+                                if let Some(anchor) = anchor {
+                                    doc.strokes_doc.push_point(
+                                        anchor.pos.0,
+                                        anchor.pos.1,
+                                        anchor.pressure,
+                                    );
+                                    pen_in_flight_points.push(anchor.pos.0);
+                                    pen_in_flight_points.push(anchor.pos.1);
+                                    pen_in_flight_pressures.push(anchor.pressure);
+                                    pen_tess_cursor = Some(anchor);
+                                }
+                            } else {
+                                // No surface or no active note: the
+                                // smoother is held idle for this
+                                // gesture's lifetime. Make sure it's
+                                // reset so the NEXT stroke (after a
+                                // SetActiveNote arrives) starts
+                                // clean.
+                                ink_smoother.reset();
                             }
                         }
                         (ToolMode::Pen, SampleAction::Move) => {
-                            if let (
-                                Some((px, py)),
-                                Some(pp),
-                                Some(color),
-                                Some(s),
-                                Some(id),
-                            ) = (
-                                last_point,
-                                last_pressure,
+                            if let (Some(color), Some(s), Some(id)) = (
                                 current_stroke_color,
                                 surface_state.as_ref(),
                                 active_note_id.as_ref(),
                             ) {
-                                let prev_page = s.surface_to_page(px, py);
-                                let curr_page = s.surface_to_page(x, y);
-                                let doc = documents
-                                    .entry(id.clone())
-                                    .or_insert_with(CanvasDocument::new);
-                                let w_prev = width_for_pressure(pp);
-                                let w_curr = width_for_pressure(pressure);
-                                doc.segments.extend_from_slice(&tessellate_segment(
-                                    (prev_page[0], prev_page[1]),
-                                    (curr_page[0], curr_page[1]),
-                                    w_prev,
-                                    w_curr,
-                                    color,
-                                ));
-                                doc.strokes_doc.push_point(
-                                    curr_page[0],
-                                    curr_page[1],
-                                    pressure,
-                                );
-                                // Mirror to the Rust-side cache.
-                                pen_in_flight_points.push(curr_page[0]);
-                                pen_in_flight_points.push(curr_page[1]);
-                                pen_in_flight_pressures.push(pressure);
+                                let [px, py] = s.surface_to_page(x, y);
+                                let smoothed =
+                                    ink_smoother.update((px, py), time, pressure);
+                                if !smoothed.is_empty() {
+                                    let doc = documents
+                                        .entry(id.clone())
+                                        .or_insert_with(CanvasDocument::new);
+                                    for out in smoothed {
+                                        // Tessellate a segment from
+                                        // the previous smoothed
+                                        // point to this one. The
+                                        // smoother emits the down
+                                        // anchor on begin_stroke,
+                                        // so by the time we get
+                                        // here pen_tess_cursor is
+                                        // virtually always Some;
+                                        // the guard handles the
+                                        // edge case where DOWN
+                                        // arrived without a surface
+                                        // (anchor wasn't pushed)
+                                        // and a MOVE then lands
+                                        // after a surface_state
+                                        // becomes available.
+                                        if let Some(prev) = pen_tess_cursor {
+                                            let w_prev =
+                                                width_for_pressure(prev.pressure);
+                                            let w_curr =
+                                                width_for_pressure(out.pressure);
+                                            doc.segments.extend_from_slice(
+                                                &tessellate_segment(
+                                                    prev.pos,
+                                                    out.pos,
+                                                    w_prev,
+                                                    w_curr,
+                                                    color,
+                                                ),
+                                            );
+                                        }
+                                        doc.strokes_doc.push_point(
+                                            out.pos.0,
+                                            out.pos.1,
+                                            out.pressure,
+                                        );
+                                        pen_in_flight_points.push(out.pos.0);
+                                        pen_in_flight_points.push(out.pos.1);
+                                        pen_in_flight_pressures.push(out.pressure);
+                                        pen_tess_cursor = Some(out);
+                                    }
+                                }
                             }
-                            last_point = Some((x, y));
-                            last_pressure = Some(pressure);
                         }
                         (ToolMode::Pen, SampleAction::Up | SampleAction::Cancel) => {
+                            // Drain the modeler's end-of-stroke tail
+                            // — its iterative "land the spring" pass
+                            // emits the samples that pull the drawn
+                            // line the rest of the way to where the
+                            // user actually lifted. Without this the
+                            // visible stroke would end mid-air
+                            // (wherever the spring-mass system had
+                            // got to at the last MOVE input).
+                            if ink_smoother.is_in_stroke() {
+                                if let (Some(s), Some(color), Some(id)) = (
+                                    surface_state.as_ref(),
+                                    current_stroke_color,
+                                    active_note_id.as_ref(),
+                                ) {
+                                    let [px, py] = s.surface_to_page(x, y);
+                                    let drained = ink_smoother
+                                        .end_stroke((px, py), time, pressure);
+                                    if !drained.is_empty() {
+                                        let doc = documents
+                                            .entry(id.clone())
+                                            .or_insert_with(CanvasDocument::new);
+                                        for out in drained {
+                                            if let Some(prev) = pen_tess_cursor {
+                                                let w_prev =
+                                                    width_for_pressure(prev.pressure);
+                                                let w_curr =
+                                                    width_for_pressure(out.pressure);
+                                                doc.segments.extend_from_slice(
+                                                    &tessellate_segment(
+                                                        prev.pos,
+                                                        out.pos,
+                                                        w_prev,
+                                                        w_curr,
+                                                        color,
+                                                    ),
+                                                );
+                                            }
+                                            doc.strokes_doc.push_point(
+                                                out.pos.0,
+                                                out.pos.1,
+                                                out.pressure,
+                                            );
+                                            pen_in_flight_points.push(out.pos.0);
+                                            pen_in_flight_points.push(out.pos.1);
+                                            pen_in_flight_pressures.push(out.pressure);
+                                            pen_tess_cursor = Some(out);
+                                        }
+                                    }
+                                } else {
+                                    // Lost the surface (or active
+                                    // note) between DOWN and UP —
+                                    // abandon the smoother's state
+                                    // without trying to materialise
+                                    // the tail.
+                                    ink_smoother.reset();
+                                }
+                            }
                             if let Some(id) = active_note_id.as_ref() {
                                 let committed_id = documents
                                     .get_mut(id)
@@ -1214,12 +1313,11 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                     crate::drawing::notify_dirty(id);
                                 }
                             }
-                            last_point = None;
-                            last_pressure = None;
                             current_stroke_color = None;
                             current_stroke_packed = None;
                             pen_in_flight_points.clear();
                             pen_in_flight_pressures.clear();
+                            pen_tess_cursor = None;
                         }
                         // ---------- Eraser ----------
                         (ToolMode::Eraser, SampleAction::Down) => {
@@ -1229,7 +1327,6 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             eraser_drag_seen.clear();
                             eraser_drag_start = Some(std::time::Instant::now());
                             eraser_drag_samples = 1; // count this DOWN sample
-                            last_point = Some((x, y));
                             erase_at(
                                 &active_note_id,
                                 &mut documents,
@@ -1251,7 +1348,6 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                 &mut eraser_drag_seen,
                                 &mut pending_eraser_tombstones,
                             );
-                            last_point = Some((x, y));
                         }
                         (ToolMode::Eraser, SampleAction::Up | SampleAction::Cancel) => {
                             // Drag summary log — single line, info-
@@ -1286,7 +1382,6 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             }
                             eraser_drag_hits.clear();
                             eraser_drag_seen.clear();
-                            last_point = None;
                         }
                     }
                 }
@@ -1313,12 +1408,12 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                         }
                         crate::drawing::notify_dirty(id);
                     }
-                    last_point = None;
-                    last_pressure = None;
                     current_stroke_color = None;
                     current_stroke_packed = None;
                     pen_in_flight_points.clear();
                     pen_in_flight_pressures.clear();
+                    pen_tess_cursor = None;
+                    ink_smoother.reset();
                     eraser_drag_hits.clear();
                     eraser_drag_seen.clear();
                     dirty = true;
@@ -1354,12 +1449,12 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                     // preserved across notes — most users want a
                     // single "I'm in pen mode" mental model rather
                     // than per-note settings.
-                    last_point = None;
-                    last_pressure = None;
                     current_stroke_color = None;
                     current_stroke_packed = None;
                     pen_in_flight_points.clear();
                     pen_in_flight_pressures.clear();
+                    pen_tess_cursor = None;
+                    ink_smoother.reset();
                     eraser_drag_hits.clear();
                     eraser_drag_seen.clear();
                     stroke_suppressed = false;
@@ -1470,12 +1565,12 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             // Drop any in-flight gesture state —
                             // switching mid-drag shouldn't carry pen
                             // or eraser buffers across.
-                            last_point = None;
-                            last_pressure = None;
                             current_stroke_color = None;
                             current_stroke_packed = None;
                             pen_in_flight_points.clear();
                             pen_in_flight_pressures.clear();
+                            pen_tess_cursor = None;
+                            ink_smoother.reset();
                             eraser_drag_hits.clear();
                             eraser_drag_seen.clear();
                             // Tool change alone doesn't repaint
@@ -1530,12 +1625,12 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                 }
                                 crate::drawing::notify_dirty(id);
                             }
-                            last_point = None;
-                            last_pressure = None;
                             current_stroke_color = None;
                             current_stroke_packed = None;
                             pen_in_flight_points.clear();
                             pen_in_flight_pressures.clear();
+                            pen_tess_cursor = None;
+                            ink_smoother.reset();
                             eraser_drag_hits.clear();
                             eraser_drag_seen.clear();
                             needs_rerender = true;

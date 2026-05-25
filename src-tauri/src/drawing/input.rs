@@ -12,8 +12,17 @@
 //! Notably absent (per the roadmap, deferred until they have a
 //! consumer):
 //!   - `StylusGesture` (discrete Apple-Pencil-style events) — D8.
-//!   - `tilt`, `azimuth` — open; revisit once the smoothing / brush
-//!     pipeline can use them.
+//!   - `tilt`, `azimuth` — open; revisit once a consumer (brush
+//!     model, future modeler upgrade) wants them.
+//!
+//! `time` (seconds, monotonic) is present — fed by D1's stroke
+//! modeler, which is time-sensitive (Kalman / spring-mass terms
+//! integrate over dt). On Android the platform layer divides
+//! `MotionEvent.getEventTime()` (uptimeMillis) by 1000 before
+//! filling this. On platforms that haven't been wired yet this
+//! falls back to 0.0 — the modeler tolerates a single instant
+//! per stroke but a *negative* dt would error, so the JNI layer
+//! is the one source of truth that must keep this monotonic.
 //!
 //! Stylus buttons (per C6) are present as `Sample.buttons: u32` — a
 //! raw bitmask matching `android.view.MotionEvent.BUTTON_*` so the
@@ -137,6 +146,13 @@ pub struct Sample {
     /// state (most finger touches).
     pub buttons: u32,
     pub action: SampleAction,
+    /// Monotonic event time in seconds. On Android this is
+    /// `MotionEvent.getEventTime()` (uptimeMillis) / 1000 —
+    /// guaranteed monotonic across the lifetime of a stroke. Read
+    /// by the D1 stroke modeler; consumers that don't care about
+    /// timing (e.g. the eraser hit-test) can ignore it. Defaults
+    /// to 0.0 on platforms that haven't wired it through yet.
+    pub time: f64,
 }
 
 impl Sample {
@@ -196,6 +212,7 @@ mod tests {
             tool: ToolKind::Stylus,
             buttons,
             action: SampleAction::Down,
+            time: 0.0,
         }
     }
 
