@@ -218,7 +218,8 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
             pressure: Float,
             toolType: Int,
             buttons: Int,
-            action: Int
+            action: Int,
+            timeMs: Long
         )
 
         /**
@@ -402,6 +403,12 @@ private class DrawingSurfaceView(context: Context) :
         // some HID drivers) would render variable-width strokes as
         // invisible hairlines — substitute the same 1.0 here so the
         // Rust side never sees the zero.
+        // Per-historical-sample timestamps come from
+        // getHistoricalEventTime(h); the final sample uses the
+        // event-level eventTime. Both are uptimeMillis() (monotonic
+        // since boot), which the Rust side divides by 1000 to feed
+        // the D1 stroke modeler — which needs strictly non-negative
+        // dt across consecutive samples within one stroke.
         val historySize = event.historySize
         for (h in 0 until historySize) {
             Drawing.pushPoint(
@@ -410,7 +417,8 @@ private class DrawingSurfaceView(context: Context) :
                 sanitizePressure(event.getHistoricalPressure(h)),
                 toolType,
                 buttons,
-                action
+                action,
+                event.getHistoricalEventTime(h)
             )
         }
         Drawing.pushPoint(
@@ -419,7 +427,8 @@ private class DrawingSurfaceView(context: Context) :
             sanitizePressure(event.pressure),
             toolType,
             buttons,
-            action
+            action,
+            event.eventTime
         )
         return true
     }

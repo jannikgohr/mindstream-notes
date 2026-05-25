@@ -13,7 +13,7 @@
 //!        setSurface(Surface, w, h)
 //!        resizeSurface(w, h)
 //!        clearSurface()
-//!        pushPoint(x, y, pressure, toolType, buttons, action)
+//!        pushPoint(x, y, pressure, toolType, buttons, action, timeMs)
 //!
 //!        Exposed as `Java_io_crates_drawing_Drawing_00024Companion_*`
 //!        symbols. Package + class + `$Companion` are load-bearing
@@ -38,7 +38,7 @@ use std::ptr::NonNull;
 use std::sync::OnceLock;
 
 use jni::objects::{GlobalRef, JClass, JObject};
-use jni::sys::{jfloat, jint};
+use jni::sys::{jfloat, jint, jlong};
 use jni::JNIEnv;
 use raw_window_handle::{
     AndroidDisplayHandle, AndroidNdkWindowHandle, DisplayHandle, HandleError, HasDisplayHandle,
@@ -202,7 +202,7 @@ pub extern "system" fn Java_io_crates_drawing_Drawing_00024Companion_clearSurfac
     render::clear_surface();
 }
 
-/// `Drawing.Companion.pushPoint(x, y, pressure, toolType, buttons, action)`
+/// `Drawing.Companion.pushPoint(x, y, pressure, toolType, buttons, action, timeMs)`
 /// — a single MotionEvent sample (or one element of the
 /// historical-sample sweep).
 ///
@@ -222,6 +222,12 @@ pub extern "system" fn Java_io_crates_drawing_Drawing_00024Companion_clearSurfac
 ///     constants verbatim. Converted to [`SampleAction`] here;
 ///     unrecognised values (e.g. ACTION_HOVER_MOVE) are dropped
 ///     before reaching the render thread.
+///   - `time_ms` is `MotionEvent.getEventTime()` / `getHistoricalEventTime(h)`
+///     in milliseconds since boot (monotonic). Divided by 1000 to
+///     produce the `f64` seconds the D1 stroke modeler expects.
+///     Negative values (shouldn't happen — eventTime is documented
+///     monotonic per gesture) get clamped to 0 so a buggy driver
+///     can't poison the modeler with a negative dt.
 ///
 /// Hot path: this fires up to a few hundred Hz when the user is
 /// drawing. Keep the body trivial — anything heavy belongs on the
@@ -236,6 +242,7 @@ pub extern "system" fn Java_io_crates_drawing_Drawing_00024Companion_pushPoint(
     tool_type: jint,
     buttons: jint,
     action: jint,
+    time_ms: jlong,
 ) {
     let Some(action) = SampleAction::from_raw(action) else {
         // Unknown ACTION_* (HOVER_MOVE, OUTSIDE, multi-pointer
@@ -255,6 +262,7 @@ pub extern "system" fn Java_io_crates_drawing_Drawing_00024Companion_pushPoint(
         // the high bits unexpectedly; cast through the bit pattern.
         buttons: buttons as u32,
         action,
+        time: (time_ms.max(0) as f64) / 1000.0,
     });
 }
 
