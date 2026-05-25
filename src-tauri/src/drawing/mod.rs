@@ -46,15 +46,14 @@
 //!   `[ stroke canvas (atop above)  ]`    its toolbar at the top of the
 //!                                       surface (which is below header)
 
-use std::sync::OnceLock;
-
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
 
 // Cross-platform modules (no wgpu / no JNI / no NDK) — kept
 // compiled everywhere so `cargo test` catches regressions on the
 // host without needing the Android target.
 pub mod input;
 pub mod page;
+pub mod save_worker;
 pub mod strokes_doc;
 pub mod surface_source;
 
@@ -71,51 +70,34 @@ pub mod render;
 #[cfg(target_os = "android")]
 pub mod ui;
 
-// ---------- Tauri event-emit plumbing ----------
+// ---------- App startup hook ----------
 
-/// Name of the "stroke document changed, save it soon" event.
-/// `DrawingNoteEditor.svelte` listens for this and debounces a
-/// `drawing_get_state` → `save_note` round-trip. Payload is a
-/// `String` carrying the affected note id so editors filter to
-/// only their own note (dockview can have multiple ink notes
-/// open in separate tabs on desktop).
-pub const DIRTY_EVENT: &str = "drawing:dirty";
-
-/// AppHandle stashed at app startup so the render thread (which
-/// has no other way to reach Tauri's emitter) can fire events.
-/// Populated by [`init`] from `lib.rs`'s setup hook.
-static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
-
-/// Capture the `AppHandle` so [`notify_dirty`] can emit events
-/// later. Called exactly once from the Tauri `setup` callback. A
-/// second call silently no-ops (OnceLock semantics) — useful if a
-/// future restart-without-process-exit story emerges.
+/// One-time wiring at app start: stand up the save-worker thread
+/// (which owns auto-save debounce + SQLite writes for ink notes).
+/// Called exactly once from the Tauri `setup` callback. Save worker
+/// init itself is idempotent — second call silently no-ops.
 pub fn init(app: AppHandle) {
-    if APP_HANDLE.set(app).is_err() {
-        log::warn!("[drawing] init called more than once — ignoring");
-    }
+    save_worker::init(app);
 }
 
-/// Tell the frontend that the named ink note's stroke document
-/// changed and should be saved soon. Called from the render thread
-/// at the three "stroke document mutated" edges:
+/// Tell the auto-save worker that the named ink note's stroke
+/// document changed. Called from the render thread at the three
+/// "stroke document mutated" edges:
 ///   - stroke end (ACTION_UP / ACTION_CANCEL)
 ///   - eraser-style clear (`Msg::Clear`)
 ///   - toolbar clear button (egui `actions.clear`)
 ///
-/// Cheap and non-blocking — emit returns immediately; the actual
-/// fetch + save happens on the JS side after a debounce. If the
-/// app handle hasn't been installed yet (defensive; shouldn't
-/// happen in practice because `init` runs before any render
-/// thread spawns), this is a silent no-op.
+/// Cheap and non-blocking — an mpsc channel send. The save worker
+/// handles the debounce + SQLite write on its own thread and emits
+/// `drawing:save_status` Tauri events back to JS for the UI's
+/// editing / saving / saved / error state.
+///
+/// Pre-P4 this also emitted a `drawing:dirty` Tauri event that JS
+/// listened on for a debounced `drawing_get_state` → `saveNote`
+/// round-trip. That JS path is gone — the worker owns everything
+/// now and the (potentially MB-class) yrs blob never crosses IPC.
 pub fn notify_dirty(note_id: &str) {
-    let Some(app) = APP_HANDLE.get() else {
-        log::debug!("[drawing] notify_dirty before init — ignored");
-        return;
-    };
-    if let Err(e) = app.emit(DIRTY_EVENT, note_id.to_string()) {
-        log::warn!("[drawing] emit {DIRTY_EVENT} failed: {e}");
-    }
+    save_worker::notify_dirty(note_id);
 }
 
 /// Reveal the native drawing surface over the current WebView and
@@ -187,30 +169,28 @@ pub fn drawing_show(
     }
 }
 
-/// Fetch the active note's stroke document as v1-yrs bytes — the
-/// shape the frontend hands to `save_note(..., yrs_state=...)` to
-/// persist. Returns empty if no note is active.
-///
-/// Called by `DrawingNoteEditor.svelte` in `onDestroy` (and
-/// eventually periodically while drawing) to flush in-memory
-/// stroke state to SQLite + sync.
+/// Push a new auto-save debounce window (in ms) to the save worker.
+/// JS calls this from the editor's settings effect so the worker
+/// uses the same value the user picked. Idempotent — same-value
+/// re-pushes are no-ops on the worker side.
 #[tauri::command]
-pub fn drawing_get_state() -> Result<Vec<u8>, String> {
-    #[cfg(target_os = "android")]
-    {
-        Ok(render::get_active_state())
-    }
-    #[cfg(not(target_os = "android"))]
-    {
-        Ok(Vec::new())
-    }
+#[allow(unused_variables)]
+pub fn drawing_set_save_debounce(ms: u64) -> Result<(), String> {
+    save_worker::set_debounce(ms);
+    Ok(())
 }
 
 /// Hide the native drawing surface and let the WebView take input again.
 ///
 /// Called from `onDestroy`. Idempotent — repeated hides are fine.
+/// Also flushes any pending auto-save immediately so a "drew, then
+/// navigated away within the 800 ms debounce window" gesture
+/// doesn't strand the change in the worker's pending map (which
+/// would still eventually fire, but with a visible delay if the
+/// user is, say, scrolling through other notes immediately after).
 #[tauri::command]
 pub fn drawing_hide() -> Result<(), String> {
+    save_worker::flush_all();
     #[cfg(target_os = "android")]
     {
         platform::android::ui::call_hide().map_err(|e| format!("drawing_hide: {e}"))

@@ -39,15 +39,40 @@ export function drawingClear(): Promise<void> {
 }
 
 /**
- * Fetch the active ink note's stroke document as CRDT bytes — the
- * shape that goes into `saveNote(..., yrs_state=...)` for SQLite
- * persistence and Etebase sync. Returns `[]` if there's no active
- * note (e.g. called from outside Tauri or before drawingShow).
+ * Push a new auto-save debounce window (in ms) to the Rust-side
+ * save worker. Used by `DrawingNoteEditor.svelte` to keep the
+ * worker's debounce in sync with the user's setting.
  *
- * On the Rust side this is a synchronous round-trip to the render
- * thread bounded by a 500ms timeout, so the Promise typically
- * resolves within a few ms.
+ * Pre-P4 the debounce was a `setTimeout` inside the Svelte editor,
+ * which round-tripped the yrs blob through Tauri's JSON-encoded IPC
+ * twice (drawingGetState + saveNote). Now the worker owns both the
+ * debounce and the SQLite write; JS only sends the ms value.
+ *
+ * Idempotent on the Rust side — same-value re-pushes are no-ops.
  */
-export function drawingGetState(): Promise<number[]> {
-  return invokeOrFallback<number[]>('drawing_get_state', undefined, () => []);
+export function drawingSetSaveDebounce(ms: number): Promise<void> {
+  return invokeOrFallback<void>(
+    'drawing_set_save_debounce',
+    { ms },
+    () => undefined
+  );
+}
+
+/**
+ * Per-note save-status event the Rust save worker emits whenever
+ * an ink note transitions between editing / saving / saved / error.
+ * `DrawingNoteEditor.svelte` listens, filters by note id, and
+ * mirrors `status` into the global note-status store so the
+ * dockview saving-icon reflects live state.
+ *
+ * Event name + payload shape must stay in sync with
+ * `src-tauri/src/drawing/save_worker.rs::SAVE_STATUS_EVENT` and
+ * `SaveStatusEvent`.
+ */
+export const DRAWING_SAVE_STATUS_EVENT = 'drawing:save_status';
+
+export interface DrawingSaveStatusPayload {
+  note_id: string;
+  /** Snake-cased server-side serde — matches Rust's `SaveStatus`. */
+  status: 'editing' | 'saving' | 'saved' | 'error';
 }
