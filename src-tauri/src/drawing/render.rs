@@ -27,12 +27,14 @@ use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
 
+use std::collections::HashSet;
+
 use super::input::{Sample, SampleAction, ToolKind};
-use super::page::segment_quad_positions;
+use super::page::{point_to_segment_distance_sq, segment_quad_positions};
 use super::pipeline::{self, PersistentGpu, SurfaceBoundState, Vertex};
 use super::strokes_doc::{StrokesDoc, DEFAULT_COLOR};
 use super::surface_source::SurfaceSource;
-use super::ui::{self, CanvasUi};
+use super::ui::{self, CanvasUi, ToolMode, UiState};
 
 /// Debug palette — visual confirmation that input-device detection
 /// works end-to-end. Packed 0xAARRGGBB; the leading `FF` is the
@@ -96,6 +98,14 @@ fn pack_color_bytes(color: u32) -> [u8; 4] {
 /// renderer — all strokes use the same `BASE_WIDTH`. Wiring it
 /// through is a one-line change once the toolbar exposes the picker.
 const BASE_WIDTH: f32 = 4.0;
+/// Hit-test radius for the eraser tool, in page units. ~1.4 mm at
+/// 144 DPI — narrow enough to pick individual strokes in a dense
+/// doodle, wide enough that the user doesn't have to be
+/// pixel-perfect with a touchscreen. Tuned against the same f32
+/// constants as stroke width; bump it if eraser feels "sticky"
+/// (catching unintended strokes) or "missy" (passing through thin
+/// ones) in practice.
+const ERASER_RADIUS_PAGE: f32 = 10.0;
 /// Floor for the pressure-tapered width so a near-zero-pressure
 /// sample doesn't tessellate into a sub-pixel sliver that disappears
 /// under nearest-pixel rasterisation. ~0.18 mm at 144 DPI.
@@ -189,20 +199,53 @@ enum Msg {
     },
 }
 
+/// A single reversible change to the active note's stroke document,
+/// captured for the undo/redo stack. Each variant's *direction* is
+/// determined by which stack it's on: an `UndoOp` on the undo stack
+/// represents "do the inverse to undo me"; the same op moved to the
+/// redo stack represents "redo my original effect".
+///
+/// Stroke entries are referenced by id (the uuid assigned at
+/// `end_stroke` time), not array index, so concurrent remote
+/// inserts can't shift the indices out from under our records.
+#[derive(Debug, Clone)]
+enum UndoOp {
+    /// User drew a new stroke. Undo: tombstone it. Redo: untombstone.
+    StrokeAdded(String),
+    /// One eraser drag tombstoned this set of strokes. The whole
+    /// drag is one undo step (matches Apple Notes / OneNote UX) —
+    /// undoing un-tombstones every stroke the eraser touched in
+    /// that gesture. Redo re-tombstones them.
+    EraserDrag(Vec<String>),
+    /// Toolbar Clear: every previously-visible stroke at the time
+    /// of the press, captured so undo restores exactly what was
+    /// visible (rather than untombstoning every doc entry including
+    /// strokes the user had already erased before pressing Clear).
+    ClearAll(Vec<String>),
+}
+
 /// Per-note stroke storage on the render thread.
 ///
 /// `strokes_doc` is the source of truth — yrs-backed, mergeable,
-/// what we serialise on save. `segments` is a render-side cache
-/// of line-list vertex pairs derived from `strokes_doc`; we keep it
-/// because the GPU needs paired vertices for `LineList` topology,
-/// and reconstructing it every frame would cost an O(strokes ×
-/// points) walk through the yrs doc. The two are kept in sync by
-/// the sample handlers (`ACTION_DOWN`/`MOVE`/`UP` write to both)
-/// and by `CanvasDocument::from_bytes` (which rebuilds `segments`
-/// from the freshly-decoded doc).
+/// what we serialise on save. `segments` is a render-side cache of
+/// tessellated triangle vertices derived from `strokes_doc`; we keep
+/// it because rebuilding from yrs on every frame would cost an
+/// O(strokes × segments) walk through the doc. The two are kept in
+/// sync by the sample handlers (pen ACTION_DOWN/MOVE/UP append to
+/// both), `CanvasDocument::from_bytes` / `rebuild_segments` (which
+/// re-tessellate from scratch after a doc-level mutation like
+/// undo/redo/clear/initial-decode), and the eraser hit-test path
+/// (which rebuilds after tombstoning).
+///
+/// `undo` / `redo` are per-note transient stacks — not persisted,
+/// scoped to this note's open session. Switching to a different
+/// note in the same process keeps its stacks intact; restarting the
+/// app loses history (acceptable; matches every consumer note app).
 struct CanvasDocument {
     strokes_doc: StrokesDoc,
     segments: Vec<Vertex>,
+    undo: Vec<UndoOp>,
+    redo: Vec<UndoOp>,
 }
 
 impl CanvasDocument {
@@ -210,7 +253,84 @@ impl CanvasDocument {
         Self {
             strokes_doc: StrokesDoc::new(),
             segments: Vec::new(),
+            undo: Vec::new(),
+            redo: Vec::new(),
         }
+    }
+
+    /// Record a new mutating op on the undo stack and clear the redo
+    /// stack. Standard undo/redo semantics — any fresh user action
+    /// invalidates the previously-redoable history.
+    fn record_op(&mut self, op: UndoOp) {
+        self.undo.push(op);
+        self.redo.clear();
+    }
+
+    /// Apply the *inverse* of `op` to the doc — what the user means
+    /// when they press Undo for the op that was at the top of the
+    /// undo stack. Caller is responsible for stack-juggling (popping
+    /// from undo, pushing to redo) — separated so the borrow shapes
+    /// stay simple.
+    fn apply_undo_op(&mut self, op: &UndoOp) {
+        match op {
+            UndoOp::StrokeAdded(id) => {
+                self.strokes_doc.set_stroke_tombstoned(id, true);
+            }
+            UndoOp::EraserDrag(ids) | UndoOp::ClearAll(ids) => {
+                for id in ids {
+                    self.strokes_doc.set_stroke_tombstoned(id, false);
+                }
+            }
+        }
+        self.rebuild_segments();
+    }
+
+    /// Apply `op` in its original direction — what the user means by
+    /// Redo. Mirror of [`apply_undo_op`].
+    fn apply_redo_op(&mut self, op: &UndoOp) {
+        match op {
+            UndoOp::StrokeAdded(id) => {
+                self.strokes_doc.set_stroke_tombstoned(id, false);
+            }
+            UndoOp::EraserDrag(ids) | UndoOp::ClearAll(ids) => {
+                for id in ids {
+                    self.strokes_doc.set_stroke_tombstoned(id, true);
+                }
+            }
+        }
+        self.rebuild_segments();
+    }
+
+    /// Re-tessellate `segments` from the current strokes_doc state.
+    /// Used after doc-level mutations (undo/redo/clear/eraser drag)
+    /// where the visible-stroke set changed but we don't want to
+    /// re-decode bytes — just re-walk what's already in memory.
+    fn rebuild_segments(&mut self) {
+        // Build into a local Vec then swap, so the closure captures
+        // `&mut local_segments` (disjoint from the `&self.strokes_doc`
+        // for_each_stroke needs).
+        let mut fresh: Vec<Vertex> = Vec::new();
+        self.strokes_doc.for_each_stroke(|view| {
+            let color = pack_color_bytes(view.color);
+            let mut prev: Option<(f32, f32, f32)> = None;
+            for (i, chunk) in view.points.chunks_exact(2).enumerate() {
+                let curr_p = view.pressures.get(i).copied().unwrap_or(1.0);
+                let curr = (chunk[0], chunk[1], curr_p);
+                if let Some((px, py, pp)) = prev {
+                    let w_prev = width_for_pressure(pp);
+                    let w_curr = width_for_pressure(curr.2);
+                    fresh.extend_from_slice(&tessellate_segment(
+                        (px, py),
+                        (curr.0, curr.1),
+                        w_prev,
+                        w_curr,
+                        color,
+                    ));
+                }
+                prev = Some(curr);
+            }
+        });
+        self.segments = fresh;
     }
 
     fn from_bytes(bytes: &[u8]) -> Self {
@@ -266,8 +386,78 @@ impl CanvasDocument {
         Self {
             strokes_doc,
             segments,
+            undo: Vec::new(),
+            redo: Vec::new(),
         }
     }
+}
+
+/// Find every visible stroke whose closest segment is within
+/// [`ERASER_RADIUS_PAGE`] of `point` (page coordinates). Walks the
+/// outer strokes array once; for each stroke, checks segments until
+/// the first hit (early-returns from the closure — no point
+/// re-tombstoning the same stroke multiple times via different
+/// segments). Returns the matched stroke ids; caller tombstones +
+/// records the eraser-drag op.
+fn strokes_within_eraser_radius(
+    strokes_doc: &StrokesDoc,
+    point: (f32, f32),
+) -> Vec<String> {
+    let mut hits = Vec::new();
+    let radius_sq = ERASER_RADIUS_PAGE * ERASER_RADIUS_PAGE;
+    strokes_doc.for_each_stroke(|view| {
+        let mut prev: Option<(f32, f32)> = None;
+        for chunk in view.points.chunks_exact(2) {
+            let curr = (chunk[0], chunk[1]);
+            if let Some(prev_pt) = prev {
+                if point_to_segment_distance_sq(point, prev_pt, curr) <= radius_sq {
+                    hits.push(view.id.to_string());
+                    return;
+                }
+            }
+            prev = Some(curr);
+        }
+    });
+    hits
+}
+
+/// Run the eraser hit-test for one sample at `(x, y)` (surface
+/// coords), tombstone every newly-hit stroke in the active note's
+/// doc, dedupe via `seen` so subsequent samples in the same drag
+/// don't re-tombstone the same stroke, and append the new hits to
+/// `drag_hits` (committed as a single `UndoOp::EraserDrag` on UP).
+///
+/// Splits out of the `Msg::Sample` arm because both DOWN and MOVE
+/// need this exact sequence; inlining would mean duplicating the
+/// borrow dance around `documents` + `surface_state`.
+fn erase_at(
+    active_note_id: &Option<String>,
+    documents: &mut HashMap<String, CanvasDocument>,
+    surface_state: Option<&SurfaceBoundState>,
+    sample_surface: (f32, f32),
+    drag_hits: &mut Vec<String>,
+    seen: &mut HashSet<String>,
+) {
+    let Some(id) = active_note_id.as_ref() else {
+        return;
+    };
+    let Some(s) = surface_state else {
+        return;
+    };
+    let doc = documents.entry(id.clone()).or_insert_with(CanvasDocument::new);
+    let [px, py] = s.surface_to_page(sample_surface.0, sample_surface.1);
+    let fresh_hits: Vec<String> = strokes_within_eraser_radius(&doc.strokes_doc, (px, py))
+        .into_iter()
+        .filter(|hit_id| seen.insert(hit_id.clone()))
+        .collect();
+    if fresh_hits.is_empty() {
+        return;
+    }
+    for hit_id in &fresh_hits {
+        doc.strokes_doc.set_stroke_tombstoned(hit_id, true);
+    }
+    doc.rebuild_segments();
+    drag_hits.extend(fresh_hits);
 }
 
 // `unsafe impl Send for Msg` is no longer required: post-R3 every
@@ -456,6 +646,24 @@ fn active_segments<'a>(
         .unwrap_or(&[])
 }
 
+/// Snapshot the bits the egui toolbar needs to render correctly:
+/// the active tool (for the selected-button highlight) and whether
+/// the undo / redo stacks have anything to pop (for the
+/// add_enabled grey-out). Defaults to "no buttons enabled" if no
+/// note is open or the doc hasn't been activated yet.
+fn build_ui_state(
+    tool_mode: ToolMode,
+    active_id: &Option<String>,
+    documents: &HashMap<String, CanvasDocument>,
+) -> UiState {
+    let active = active_id.as_ref().and_then(|id| documents.get(id));
+    UiState {
+        current_tool: tool_mode,
+        can_undo: active.map(|d| !d.undo.is_empty()).unwrap_or(false),
+        can_redo: active.map(|d| !d.redo.is_empty()).unwrap_or(false),
+    }
+}
+
 fn render_thread(rx: mpsc::Receiver<Msg>) {
     let mut persistent: Option<PersistentGpu> = None;
     let mut surface_state: Option<SurfaceBoundState> = None;
@@ -483,6 +691,19 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
     // CANCEL / Clear / SetActiveNote so a leaked colour can't paint
     // an unrelated note's stroke the wrong shade.
     let mut current_stroke_color: Option<[u8; 4]> = None;
+    // User-selected drawing tool. Authoritative state lives here on
+    // the render thread; the egui toolbar mirrors via UiState and
+    // sends changes back via RenderActions::set_tool. Defaults to
+    // Pen — the existing single-tool behaviour pre-D3.
+    let mut tool_mode: ToolMode = ToolMode::Pen;
+    // Strokes tombstoned during the *current* eraser drag (between
+    // ACTION_DOWN and ACTION_UP in Eraser mode). On UP, this Vec
+    // becomes the payload of a single `UndoOp::EraserDrag` so the
+    // whole drag is one undo step. The HashSet sibling is just a
+    // dedup so we don't tombstone the same stroke twice when the
+    // eraser passes over it multiple times mid-drag.
+    let mut eraser_drag_hits: Vec<String> = Vec::new();
+    let mut eraser_drag_seen: HashSet<String> = HashSet::new();
     // True while the in-progress gesture started inside the toolbar
     // region — mirror to egui so its buttons see the press, but
     // skip the line pipeline.
@@ -598,6 +819,8 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                         action,
                     } = sample;
                     let pos = px_to_egui(x, y);
+                    // Forward all gestures to egui so toolbar buttons
+                    // remain interactive regardless of tool mode.
                     match action {
                         SampleAction::Down => {
                             egui_input.events.push(egui::Event::PointerMoved(pos));
@@ -607,105 +830,9 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                 pressed: true,
                                 modifiers: egui::Modifiers::NONE,
                             });
-                            if y < ui::toolbar::TOOLBAR_HEIGHT_PX {
-                                stroke_suppressed = true;
-                            } else {
-                                stroke_suppressed = false;
-                                last_point = Some((x, y));
-                                last_pressure = Some(pressure);
-                                // Choose stroke colour from tool +
-                                // buttons (button-held wins over
-                                // tool type; see color_for_input
-                                // docstring). Stored on both the
-                                // doc (for persistence + re-hydration)
-                                // and as unpacked linear-RGBA in
-                                // current_stroke_color (so MOVE
-                                // handlers don't re-unpack per
-                                // sample).
-                                let packed = color_for_input(tool, buttons);
-                                // Stroke-open log: one line per
-                                // stroke so the user can see at a
-                                // glance which detection path fired
-                                // ("stylus + button=0x20 → orange").
-                                // Tighter than the per-sample debug
-                                // log; survives a logcat filter on
-                                // "stroke_open".
-                                log::info!(
-                                    "[drawing] stroke_open tool={tool:?} buttons=0x{buttons:x} -> color=0x{packed:08X}"
-                                );
-                                current_stroke_color = Some(pack_color_bytes(packed));
-                                // Open a fresh stroke in the active
-                                // doc and seed its points array with
-                                // the down sample. The first MOVE
-                                // emits the first segment (down →
-                                // move-1); subsequent MOVEs pair
-                                // (move-N → move-N+1).
-                                if let (Some(id), Some(s)) =
-                                    (active_note_id.as_ref(), surface_state.as_ref())
-                                {
-                                    let doc = documents
-                                        .entry(id.clone())
-                                        .or_insert_with(CanvasDocument::new);
-                                    doc.strokes_doc.begin_stroke(packed);
-                                    let [px, py] = s.surface_to_page(x, y);
-                                    doc.strokes_doc.push_point(px, py, pressure);
-                                }
-                            }
-                            dirty = true;
                         }
                         SampleAction::Move => {
                             egui_input.events.push(egui::Event::PointerMoved(pos));
-                            if !stroke_suppressed {
-                                if let (
-                                    Some((px, py)),
-                                    Some(pp),
-                                    Some(color),
-                                    Some(s),
-                                    Some(id),
-                                ) = (
-                                    last_point,
-                                    last_pressure,
-                                    current_stroke_color,
-                                    surface_state.as_ref(),
-                                    active_note_id.as_ref(),
-                                ) {
-                                    // Page coords for both endpoints
-                                    // so stored vertices stay stable
-                                    // across rotation / re-attach.
-                                    let prev_page = s.surface_to_page(px, py);
-                                    let curr_page = s.surface_to_page(x, y);
-                                    let doc = documents
-                                        .entry(id.clone())
-                                        .or_insert_with(CanvasDocument::new);
-                                    // Render-side cache: tessellated
-                                    // pressure-tapered quad (2 tris),
-                                    // coloured by the per-stroke
-                                    // colour chosen at DOWN time.
-                                    let w_prev = width_for_pressure(pp);
-                                    let w_curr = width_for_pressure(pressure);
-                                    doc.segments.extend_from_slice(
-                                        &tessellate_segment(
-                                            (prev_page[0], prev_page[1]),
-                                            (curr_page[0], curr_page[1]),
-                                            w_prev,
-                                            w_curr,
-                                            color,
-                                        ),
-                                    );
-                                    // Source-of-truth side: append
-                                    // the new point + its pressure to
-                                    // the in-flight stroke's yrs
-                                    // arrays.
-                                    doc.strokes_doc.push_point(
-                                        curr_page[0],
-                                        curr_page[1],
-                                        pressure,
-                                    );
-                                    dirty = true;
-                                }
-                                last_point = Some((x, y));
-                                last_pressure = Some(pressure);
-                            }
                         }
                         SampleAction::Up | SampleAction::Cancel => {
                             egui_input.events.push(egui::Event::PointerButton {
@@ -714,43 +841,177 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                 pressed: false,
                                 modifiers: egui::Modifiers::NONE,
                             });
-                            // Snapshot before we mutate `stroke_suppressed` below
-                            // so the dirty-notify decision sees what kind of
-                            // gesture this was.
-                            let was_drawing_stroke = !stroke_suppressed;
+                        }
+                    }
+                    // Toolbar-region gesture? Suppress both pen + eraser
+                    // paths for the duration of the drag so the user can
+                    // tap buttons without unintended draws or erases.
+                    if matches!(action, SampleAction::Down) {
+                        stroke_suppressed = y < ui::toolbar::TOOLBAR_HEIGHT_PX;
+                    }
+                    dirty = true;
+                    if stroke_suppressed {
+                        if matches!(action, SampleAction::Up | SampleAction::Cancel) {
+                            stroke_suppressed = false;
+                        }
+                        continue;
+                    }
+
+                    // Branch on tool. Pen and Eraser have very
+                    // different data flows — Pen accumulates points
+                    // into an in-progress yrs stroke, Eraser hits
+                    // existing strokes per-sample and tombstones
+                    // them. Common state (last_point / last_pressure)
+                    // is reused so a future tool switch keeps the
+                    // "where did the last sample land" cursor.
+                    match (tool_mode, action) {
+                        // ---------- Pen ----------
+                        (ToolMode::Pen, SampleAction::Down) => {
+                            last_point = Some((x, y));
+                            last_pressure = Some(pressure);
+                            let packed = color_for_input(tool, buttons);
+                            log::info!(
+                                "[drawing] stroke_open tool={tool:?} buttons=0x{buttons:x} -> color=0x{packed:08X}"
+                            );
+                            current_stroke_color = Some(pack_color_bytes(packed));
+                            if let (Some(id), Some(s)) =
+                                (active_note_id.as_ref(), surface_state.as_ref())
+                            {
+                                let doc = documents
+                                    .entry(id.clone())
+                                    .or_insert_with(CanvasDocument::new);
+                                doc.strokes_doc.begin_stroke(packed);
+                                let [px, py] = s.surface_to_page(x, y);
+                                doc.strokes_doc.push_point(px, py, pressure);
+                            }
+                        }
+                        (ToolMode::Pen, SampleAction::Move) => {
+                            if let (
+                                Some((px, py)),
+                                Some(pp),
+                                Some(color),
+                                Some(s),
+                                Some(id),
+                            ) = (
+                                last_point,
+                                last_pressure,
+                                current_stroke_color,
+                                surface_state.as_ref(),
+                                active_note_id.as_ref(),
+                            ) {
+                                let prev_page = s.surface_to_page(px, py);
+                                let curr_page = s.surface_to_page(x, y);
+                                let doc = documents
+                                    .entry(id.clone())
+                                    .or_insert_with(CanvasDocument::new);
+                                let w_prev = width_for_pressure(pp);
+                                let w_curr = width_for_pressure(pressure);
+                                doc.segments.extend_from_slice(&tessellate_segment(
+                                    (prev_page[0], prev_page[1]),
+                                    (curr_page[0], curr_page[1]),
+                                    w_prev,
+                                    w_curr,
+                                    color,
+                                ));
+                                doc.strokes_doc.push_point(
+                                    curr_page[0],
+                                    curr_page[1],
+                                    pressure,
+                                );
+                            }
+                            last_point = Some((x, y));
+                            last_pressure = Some(pressure);
+                        }
+                        (ToolMode::Pen, SampleAction::Up | SampleAction::Cancel) => {
                             if let Some(id) = active_note_id.as_ref() {
-                                if let Some(doc) = documents.get_mut(id) {
-                                    doc.strokes_doc.end_stroke();
-                                }
-                                // Notify the frontend's debounced auto-save —
-                                // but only for real strokes. A "stroke" that
-                                // started inside the toolbar region never
-                                // touched strokes_doc, so saving would be a
-                                // wasted round-trip (and would noisily flip
-                                // the dockview saving-icon).
-                                if was_drawing_stroke {
+                                let committed_id = documents
+                                    .get_mut(id)
+                                    .and_then(|doc| doc.strokes_doc.end_stroke());
+                                if let Some(stroke_id) = committed_id {
+                                    // Pen stroke landed in the doc —
+                                    // record an undo op + notify
+                                    // auto-save.
+                                    if let Some(doc) = documents.get_mut(id) {
+                                        doc.record_op(UndoOp::StrokeAdded(stroke_id));
+                                    }
                                     crate::drawing::notify_dirty(id);
                                 }
                             }
                             last_point = None;
                             last_pressure = None;
                             current_stroke_color = None;
-                            stroke_suppressed = false;
-                            dirty = true;
+                        }
+                        // ---------- Eraser ----------
+                        (ToolMode::Eraser, SampleAction::Down) => {
+                            // Start a fresh drag — undo gets one
+                            // step for the whole drag, not per hit.
+                            eraser_drag_hits.clear();
+                            eraser_drag_seen.clear();
+                            last_point = Some((x, y));
+                            erase_at(
+                                &active_note_id,
+                                &mut documents,
+                                surface_state.as_ref(),
+                                (x, y),
+                                &mut eraser_drag_hits,
+                                &mut eraser_drag_seen,
+                            );
+                        }
+                        (ToolMode::Eraser, SampleAction::Move) => {
+                            erase_at(
+                                &active_note_id,
+                                &mut documents,
+                                surface_state.as_ref(),
+                                (x, y),
+                                &mut eraser_drag_hits,
+                                &mut eraser_drag_seen,
+                            );
+                            last_point = Some((x, y));
+                        }
+                        (ToolMode::Eraser, SampleAction::Up | SampleAction::Cancel) => {
+                            // Commit the drag as a single undo step
+                            // (if anything was actually erased).
+                            if !eraser_drag_hits.is_empty() {
+                                if let Some(id) = active_note_id.as_ref() {
+                                    if let Some(doc) = documents.get_mut(id) {
+                                        let hits = std::mem::take(&mut eraser_drag_hits);
+                                        doc.record_op(UndoOp::EraserDrag(hits));
+                                    }
+                                    crate::drawing::notify_dirty(id);
+                                }
+                            }
+                            eraser_drag_hits.clear();
+                            eraser_drag_seen.clear();
+                            last_point = None;
                         }
                     }
                 }
                 Msg::Clear => {
                     if let Some(id) = active_note_id.as_ref() {
                         if let Some(doc) = documents.get_mut(id) {
+                            // Capture which strokes were visible
+                            // before the clear so undo restores
+                            // exactly that set (rather than blindly
+                            // untombstoning every doc entry —
+                            // resurrecting strokes the user had
+                            // already erased earlier).
+                            let mut cleared: Vec<String> = Vec::new();
+                            doc.strokes_doc.for_each_stroke(|view| {
+                                cleared.push(view.id.to_string());
+                            });
                             doc.strokes_doc.tombstone_all();
                             doc.segments.clear();
+                            if !cleared.is_empty() {
+                                doc.record_op(UndoOp::ClearAll(cleared));
+                            }
                         }
                         crate::drawing::notify_dirty(id);
                     }
                     last_point = None;
                     last_pressure = None;
                     current_stroke_color = None;
+                    eraser_drag_hits.clear();
+                    eraser_drag_seen.clear();
                     dirty = true;
                 }
                 Msg::SetActiveNote {
@@ -777,12 +1038,18 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                         });
                     }
                     active_note_id = note_id;
-                    // Truncate any in-flight stroke that came from
-                    // the previous note's gesture so it can't leak
-                    // into the new doc on the next MOVE sample.
+                    // Truncate any in-flight stroke or eraser drag
+                    // that came from the previous note's gesture so
+                    // it can't leak into the new doc on the next
+                    // MOVE sample. Tool mode itself is intentionally
+                    // preserved across notes — most users want a
+                    // single "I'm in pen mode" mental model rather
+                    // than per-note settings.
                     last_point = None;
                     last_pressure = None;
                     current_stroke_color = None;
+                    eraser_drag_hits.clear();
+                    eraser_drag_seen.clear();
                     stroke_suppressed = false;
                     dirty = true;
                 }
@@ -802,7 +1069,13 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                 let segs = active_segments(&active_note_id, &documents);
                 let segs_len = segs.len();
                 let input = std::mem::take(&mut egui_input);
-                let (actions, ui_output) = canvas_ui.run(input, s.size_px());
+                // Build the UiState the toolbar reads for selected-
+                // tool highlight + undo/redo button enabled state.
+                // Active doc lookup is `documents.get(id)`; defaults
+                // to "no buttons enabled" when no note is open or
+                // the doc hasn't been activated yet.
+                let ui_state = build_ui_state(tool_mode, &active_note_id, &documents);
+                let (actions, ui_output) = canvas_ui.run(input, s.size_px(), ui_state);
                 let t_frame = std::time::Instant::now();
                 match pipeline::render_frame(p, s, segs, ui_output) {
                     Ok(()) => {
@@ -814,33 +1087,107 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             );
                             log_first_frame = false;
                         }
+
+                        // Drive doc/state mutations from toolbar
+                        // actions. Anything that changes what's
+                        // visible flips `needs_rerender = true` so we
+                        // submit a follow-up frame at the bottom of
+                        // this block — the user sees the result
+                        // immediately rather than waiting for the
+                        // next sample.
+                        let mut needs_rerender = false;
+
+                        if let Some(new_tool) = actions.set_tool {
+                            log::info!(
+                                "[drawing] tool: {:?} -> {:?}",
+                                tool_mode,
+                                new_tool
+                            );
+                            tool_mode = new_tool;
+                            // Drop any in-flight gesture state —
+                            // switching mid-drag shouldn't carry pen
+                            // or eraser buffers across.
+                            last_point = None;
+                            last_pressure = None;
+                            current_stroke_color = None;
+                            eraser_drag_hits.clear();
+                            eraser_drag_seen.clear();
+                            // Tool change alone doesn't repaint
+                            // anything, but the toolbar highlight
+                            // needs a re-render to reflect it.
+                            needs_rerender = true;
+                        }
+
+                        if actions.undo {
+                            if let Some(id) = active_note_id.as_ref() {
+                                if let Some(doc) = documents.get_mut(id) {
+                                    if let Some(op) = doc.undo.pop() {
+                                        doc.apply_undo_op(&op);
+                                        doc.redo.push(op);
+                                        crate::drawing::notify_dirty(id);
+                                        needs_rerender = true;
+                                    }
+                                }
+                            }
+                        }
+
+                        if actions.redo {
+                            if let Some(id) = active_note_id.as_ref() {
+                                if let Some(doc) = documents.get_mut(id) {
+                                    if let Some(op) = doc.redo.pop() {
+                                        doc.apply_redo_op(&op);
+                                        doc.undo.push(op);
+                                        crate::drawing::notify_dirty(id);
+                                        needs_rerender = true;
+                                    }
+                                }
+                            }
+                        }
+
                         if actions.clear {
                             if let Some(id) = active_note_id.as_ref() {
                                 if let Some(doc) = documents.get_mut(id) {
-                                    // Tombstone the doc too, not just
-                                    // the GPU cache — otherwise the
-                                    // visually-cleared strokes would
-                                    // come back on the next reload /
-                                    // sync. Same semantics as Msg::Clear.
+                                    // Capture pre-clear visibility
+                                    // for the ClearAll undo step,
+                                    // matching Msg::Clear semantics.
+                                    let mut cleared: Vec<String> = Vec::new();
+                                    doc.strokes_doc.for_each_stroke(|view| {
+                                        cleared.push(view.id.to_string());
+                                    });
                                     doc.strokes_doc.tombstone_all();
                                     doc.segments.clear();
+                                    if !cleared.is_empty() {
+                                        doc.record_op(UndoOp::ClearAll(cleared));
+                                    }
                                 }
-                                // Auto-save picks this up via the
-                                // debounce; without it a Clear-then-
-                                // close would persist a still-full
-                                // doc on the close-path save.
                                 crate::drawing::notify_dirty(id);
                             }
                             last_point = None;
                             last_pressure = None;
                             current_stroke_color = None;
-                            // Re-render so the user sees the cleared
-                            // canvas immediately.
-                            let fresh_segs = active_segments(&active_note_id, &documents);
+                            eraser_drag_hits.clear();
+                            eraser_drag_seen.clear();
+                            needs_rerender = true;
+                        }
+
+                        if needs_rerender {
+                            // Build a fresh frame from the post-
+                            // mutation state. New UiState so the
+                            // toolbar reflects e.g. an empty undo
+                            // stack after we popped its last entry.
+                            let fresh_segs =
+                                active_segments(&active_note_id, &documents);
                             let fresh_input = egui::RawInput::default();
-                            let (_, fresh_ui) = canvas_ui.run(fresh_input, s.size_px());
+                            let fresh_state = build_ui_state(
+                                tool_mode,
+                                &active_note_id,
+                                &documents,
+                            );
+                            let (_, fresh_ui) =
+                                canvas_ui.run(fresh_input, s.size_px(), fresh_state);
                             let _ = pipeline::render_frame(p, s, fresh_segs, fresh_ui);
                         }
+
                         if actions.back {
                             if let Err(e) = crate::drawing::platform::android::ui::call_back() {
                                 log::warn!("[drawing] call_back failed: {e}");

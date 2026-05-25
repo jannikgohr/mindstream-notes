@@ -271,17 +271,19 @@ impl StrokesDoc {
     /// Close the in-progress stroke and commit it to the yrs doc as
     /// a single payload insert. Idempotent — calling without an open
     /// stroke (or with a stroke that recorded zero points) is a no-op
-    /// and adds nothing to the doc.
-    pub fn end_stroke(&mut self) {
-        let Some(color) = self.in_progress_color.take() else {
-            return;
-        };
+    /// and returns `None`.
+    ///
+    /// Returns the committed stroke's id so callers (specifically the
+    /// render-thread undo stack) can refer back to this specific
+    /// stroke for later "undo the add" / "remove" operations.
+    pub fn end_stroke(&mut self) -> Option<String> {
+        let color = self.in_progress_color.take()?;
         // Empty strokes — pen-down without any subsequent move sample —
         // would tessellate to zero segments anyway; skip them so the
         // doc doesn't accumulate inert stroke entries.
         if self.in_progress_pressures.is_empty() {
             self.in_progress_points.clear();
-            return;
+            return None;
         }
         let payload = encode_payload_v1(
             color,
@@ -291,11 +293,11 @@ impl StrokesDoc {
         self.in_progress_points.clear();
         self.in_progress_pressures.clear();
 
+        let stroke_id = format!("stroke_{}", uuid::Uuid::new_v4());
         let mut tx = self.doc.transact_mut();
         let len = self.strokes.len(&tx);
         let stroke_map = self.strokes.insert(&mut tx, len, MapPrelim::default());
-        let stroke_id = format!("stroke_{}", uuid::Uuid::new_v4());
-        stroke_map.insert(&mut tx, FIELD_ID, Any::from(stroke_id));
+        stroke_map.insert(&mut tx, FIELD_ID, Any::from(stroke_id.clone()));
         stroke_map.insert(&mut tx, FIELD_TOMBSTONED, Any::Bool(false));
         stroke_map.insert(
             &mut tx,
@@ -306,6 +308,39 @@ impl StrokesDoc {
             // show up in the profile.
             Any::Buffer(payload.into_boxed_slice().into()),
         );
+        Some(stroke_id)
+    }
+
+    /// Toggle a specific stroke's tombstoned flag by id. Returns
+    /// `true` if a stroke with that id existed and was updated; `false`
+    /// if no matching stroke was found (caller's id is stale, e.g.
+    /// after a remote merge dropped that stroke). Used by the eraser
+    /// (set to `true`) and by the undo stack (toggle either way to
+    /// reverse a previous action).
+    ///
+    /// Walks the outer `Y.Array<Y.Map>` linearly. For docs with
+    /// thousands of strokes this is O(n) per call, which matters
+    /// during an eraser drag (one call per dirtied stroke per frame);
+    /// at the workload sizes we're seeing today it doesn't register.
+    /// If it ever does, the obvious fix is a render-thread side
+    /// `HashMap<stroke_id, array_index>` cache invalidated on the
+    /// strokes-array observer.
+    pub fn set_stroke_tombstoned(&mut self, id: &str, tombstoned: bool) -> bool {
+        let mut tx = self.doc.transact_mut();
+        for stroke_value in self.strokes.iter(&tx) {
+            let Out::YMap(stroke) = stroke_value else {
+                continue;
+            };
+            let matches = matches!(
+                stroke.get(&tx, FIELD_ID),
+                Some(Out::Any(Any::String(s))) if &*s == id
+            );
+            if matches {
+                stroke.insert(&mut tx, FIELD_TOMBSTONED, Any::Bool(tombstoned));
+                return true;
+            }
+        }
+        false
     }
 
     /// Tombstone every stroke. Used by the Clear toolbar button —
@@ -334,12 +369,12 @@ impl StrokesDoc {
     /// per-stroke decoded buffer — copy out anything that needs to
     /// outlive the callback.
     ///
-    /// Skipped on malformed entries: missing/non-buffer payload,
-    /// unknown payload version, truncated bytes. We choose to drop
-    /// the stroke rather than render garbage; a logged warning would
-    /// be noise here because the in-process writer can't produce
-    /// malformed payloads — only a future schema change or a
-    /// hostile / corrupted blob could.
+    /// Skipped on malformed entries: missing id, missing/non-buffer
+    /// payload, unknown payload version, truncated bytes. We choose
+    /// to drop the stroke rather than render garbage; a logged
+    /// warning would be noise here because the in-process writer
+    /// can't produce malformed payloads — only a future schema
+    /// change or a hostile / corrupted blob could.
     pub fn for_each_stroke<F>(&self, mut visit: F)
     where
         F: FnMut(StrokeView),
@@ -359,6 +394,10 @@ impl StrokesDoc {
             if tombstoned {
                 continue;
             }
+            let id = match stroke.get(&tx, FIELD_ID) {
+                Some(Out::Any(Any::String(s))) => s.to_string(),
+                _ => continue,
+            };
             let Some(Out::Any(Any::Buffer(bytes))) = stroke.get(&tx, FIELD_PAYLOAD) else {
                 continue;
             };
@@ -366,10 +405,38 @@ impl StrokesDoc {
                 continue;
             };
             visit(StrokeView {
+                id: &id,
                 points: &decoded.points,
                 pressures: &decoded.pressures,
                 color: decoded.color,
             });
+        }
+    }
+
+    /// Walk every stroke (visible *and* tombstoned) yielding just
+    /// its id + tombstone state. Used by undo's "Clear All" capture
+    /// so we can restore the exact pre-clear visibility on undo
+    /// (rather than blindly untombstoning everything, which would
+    /// resurrect strokes the user had already erased before the
+    /// clear).
+    pub fn for_each_stroke_id<F>(&self, mut visit: F)
+    where
+        F: FnMut(&str, bool),
+    {
+        let tx = self.doc.transact();
+        for stroke_value in self.strokes.iter(&tx) {
+            let Out::YMap(stroke) = stroke_value else {
+                continue;
+            };
+            let id = match stroke.get(&tx, FIELD_ID) {
+                Some(Out::Any(Any::String(s))) => s,
+                _ => continue,
+            };
+            let tombstoned = matches!(
+                stroke.get(&tx, FIELD_TOMBSTONED),
+                Some(Out::Any(Any::Bool(true)))
+            );
+            visit(&id, tombstoned);
         }
     }
 }
@@ -377,6 +444,9 @@ impl StrokesDoc {
 /// One non-tombstoned stroke surfaced by [`StrokesDoc::for_each_stroke`].
 ///
 /// Fields:
+///   - `id`: stable per-stroke uuid (`"stroke_{uuid}"`), assigned at
+///     `end_stroke` time. Used by the eraser hit-test + undo stack to
+///     refer back to specific strokes for tombstone toggling.
 ///   - `points`: flat `[x0, y0, x1, y1, …]` in page coordinates.
 ///   - `pressures`: parallel to `points`, one entry per (x, y) pair
 ///     (`pressures.len() == points.len() / 2`).
@@ -386,6 +456,7 @@ impl StrokesDoc {
 /// Borrowed view; valid only for the duration of the visitor
 /// callback. Copy out anything the caller wants to keep.
 pub struct StrokeView<'a> {
+    pub id: &'a str,
     pub points: &'a [f32],
     pub pressures: &'a [f32],
     pub color: u32,
@@ -619,6 +690,70 @@ mod tests {
         doc.end_stroke();
 
         assert_eq!(collect_strokes(&doc), vec![vec![1.0, 2.0]]);
+    }
+
+    #[test]
+    fn end_stroke_returns_committed_id() {
+        let mut doc = StrokesDoc::new();
+        doc.begin_stroke(DEFAULT_COLOR);
+        doc.push_point(0.0, 0.0, 1.0);
+        let id = doc.end_stroke().expect("non-empty stroke commits");
+        assert!(id.starts_with("stroke_"), "id has expected prefix: {id}");
+
+        // The id surfaced by for_each_stroke must match.
+        let mut seen_ids = Vec::new();
+        doc.for_each_stroke(|view| seen_ids.push(view.id.to_string()));
+        assert_eq!(seen_ids, vec![id]);
+    }
+
+    #[test]
+    fn end_stroke_returns_none_for_empty_stroke() {
+        let mut doc = StrokesDoc::new();
+        doc.begin_stroke(DEFAULT_COLOR);
+        // no push_point
+        assert!(doc.end_stroke().is_none());
+    }
+
+    #[test]
+    fn set_stroke_tombstoned_toggles_visibility() {
+        let mut doc = StrokesDoc::new();
+        doc.begin_stroke(DEFAULT_COLOR);
+        doc.push_point(0.0, 0.0, 1.0);
+        let id = doc.end_stroke().unwrap();
+
+        assert_eq!(collect_strokes(&doc).len(), 1);
+        assert!(doc.set_stroke_tombstoned(&id, true));
+        assert!(collect_strokes(&doc).is_empty());
+        // Untombstone restores visibility — the eraser-undo path.
+        assert!(doc.set_stroke_tombstoned(&id, false));
+        assert_eq!(collect_strokes(&doc).len(), 1);
+    }
+
+    #[test]
+    fn set_stroke_tombstoned_unknown_id_returns_false() {
+        let mut doc = StrokesDoc::new();
+        // No strokes at all; any id should miss.
+        assert!(!doc.set_stroke_tombstoned("stroke_does_not_exist", true));
+    }
+
+    #[test]
+    fn for_each_stroke_id_yields_visible_and_tombstoned() {
+        let mut doc = StrokesDoc::new();
+        doc.begin_stroke(DEFAULT_COLOR);
+        doc.push_point(0.0, 0.0, 1.0);
+        let a = doc.end_stroke().unwrap();
+        doc.begin_stroke(DEFAULT_COLOR);
+        doc.push_point(1.0, 1.0, 1.0);
+        let b = doc.end_stroke().unwrap();
+        // Tombstone b — for_each_stroke (visible only) hides it but
+        // for_each_stroke_id (all) still sees it.
+        doc.set_stroke_tombstoned(&b, true);
+
+        let mut entries: Vec<(String, bool)> = Vec::new();
+        doc.for_each_stroke_id(|id, tombstoned| {
+            entries.push((id.to_string(), tombstoned));
+        });
+        assert_eq!(entries, vec![(a, false), (b, true)]);
     }
 
     #[test]
