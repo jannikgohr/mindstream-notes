@@ -168,6 +168,16 @@ impl SurfaceBoundState {
     pub fn size_px(&self) -> (u32, u32) {
         (self.width, self.height)
     }
+
+    /// How many surface pixels one page unit currently maps to.
+    /// Tracks the fit-in-surface scale recomputed on each resize; D6
+    /// pan/zoom will mutate this independently of surface size. Used
+    /// to convert page-unit quantities (e.g. stroke widths in
+    /// `render.rs`'s `MIN_WIDTH` / `BASE_WIDTH`) into the pixel space
+    /// the Kotlin front-buffer ink Canvas paints in.
+    pub fn page_to_surface_scale(&self) -> f32 {
+        self.view_transform.scale
+    }
 }
 
 /// Hardcoded surface format for prewarmed `PersistentGpu`. Android

@@ -23,9 +23,10 @@
 //!        renaming any fragment breaks the link at startup.
 //!
 //!      Rust → Kotlin  (control plane — low-frequency)
-//!        `ui::call_show()`  → Drawing.showFromNative()
-//!        `ui::call_hide()`  → Drawing.hideFromNative()
-//!        `ui::call_back()`  → Drawing.backFromNative()
+//!        `ui::call_show()`                 → Drawing.showFromNative()
+//!        `ui::call_hide()`                 → Drawing.hideFromNative()
+//!        `ui::call_back()`                 → Drawing.backFromNative()
+//!        `ui::call_set_live_ink_style(…)`  → Drawing.setLiveInkStyleFromNative(…)
 //!
 //!        Uses the JavaVM stashed in ndk_context by Keyring.kt's
 //!        `initializeNdkContext` in MainActivity.onCreate. The
@@ -345,9 +346,46 @@ pub mod ui {
         invoke_static_void("backFromNative")
     }
 
-    /// Common path: invoke a no-arg `void` static method on the
-    /// cached `Drawing` class. All three of show/hide/back go through
-    /// here; this also makes the error message uniform.
+    /// Push a new live-ink style (front-buffer overlay colour + width
+    /// range) down to Kotlin. The render thread calls this whenever
+    /// its source-of-truth stroke style changes — today: at every
+    /// Pen / Eraser DOWN, so the very next segment uses the right
+    /// colour. Future colour-picker / brush-size UI (D5) is expected
+    /// to plug in here.
+    ///
+    /// Args:
+    ///   - `color_argb` packs `0xAARRGGBB`. Matches the packing Rust
+    ///     uses internally (`strokes_doc::DEFAULT_COLOR`) and the
+    ///     `android.graphics.Color` int format — no conversion needed
+    ///     on either side.
+    ///   - `min_width_px` / `max_width_px` are in *surface pixels*,
+    ///     because the Kotlin `Canvas` paints in pixels. Render-thread
+    ///     callers multiply their page-unit constants by
+    ///     `SurfaceBoundState::page_to_surface_scale` before the
+    ///     call. The Kotlin side does its own bounds clamp so a
+    ///     bogus negative width can't crash the Paint.
+    pub fn call_set_live_ink_style(
+        color_argb: u32,
+        min_width_px: f32,
+        max_width_px: f32,
+    ) -> Result<(), String> {
+        let args = [
+            JValue::from(color_argb as i32),
+            JValue::from(min_width_px),
+            JValue::from(max_width_px),
+        ];
+        invoke_static("setLiveInkStyleFromNative", "(IFF)V", &args)
+    }
+
+    /// Shortcut for the common "no args, returns void" shape.
+    fn invoke_static_void(method: &str) -> Result<(), String> {
+        invoke_static(method, "()V", &[] as &[JValue])
+    }
+
+    /// Common path: invoke a `void` static method on the cached
+    /// `Drawing` class with optional JNI args. All show/hide/back/
+    /// set-live-ink-style calls go through here; this also makes
+    /// the error message uniform.
     ///
     /// Threading: ndk_context's JavaVM is process-global once
     /// initialised; `attach_current_thread` is safe to call from any
@@ -359,7 +397,7 @@ pub mod ui {
     /// in `cacheJniClass` from the companion's static init, which
     /// runs on a Java-originating thread that has the app class
     /// loader.
-    fn invoke_static_void(method: &str) -> Result<(), String> {
+    fn invoke_static(method: &str, sig: &str, args: &[JValue]) -> Result<(), String> {
         let ctx = ndk_context::android_context();
         let vm_ptr = ctx.vm();
         if vm_ptr.is_null() {
@@ -388,7 +426,7 @@ pub mod ui {
         // this call is sound because the GlobalRef keeps the
         // underlying class alive for the rest of the process.
         let class = unsafe { JClass::from_raw(global_ref.as_raw()) };
-        env.call_static_method(&class, method, "()V", &[] as &[JValue])
+        env.call_static_method(&class, method, sig, args)
             .map_err(|e| format!("call_static_method {method}: {e}"))?;
         Ok(())
     }
