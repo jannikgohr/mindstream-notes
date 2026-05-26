@@ -29,32 +29,13 @@ use std::time::Duration;
 
 use std::collections::HashSet;
 
-use super::input::{Sample, SampleAction, ToolKind};
+use super::input::{Sample, SampleAction};
 use super::page::{point_to_segment_distance_sq, segment_quad_positions};
 use super::pipeline::{self, PersistentGpu, SurfaceBoundState, Vertex};
 use super::stroke_modeler::{InkSmoother, SmoothedSample};
-use super::strokes_doc::{StrokesDoc, DEFAULT_COLOR};
+use super::strokes_doc::{StrokesDoc, DEFAULT_COLOR, DEFAULT_WIDTH};
 use super::surface_source::SurfaceSource;
 use super::ui::{self, CanvasUi, ToolMode, UiState};
-
-/// Debug palette — visual confirmation that input-device detection
-/// works end-to-end. Packed 0xAARRGGBB; the leading `FF` is the
-/// alpha byte (a value like `0x00FF_600F` would paint fully
-/// transparent over the white background and look like the stroke
-/// vanished). D5 replaces all of this with a real user-chosen
-/// palette.
-///
-///   - [`PEN_DEBUG_COLOR`] (blue): tool = Stylus, no button held.
-///
-/// The previous `STYLUS_BUTTON_HELD_COLOR` (orange) and
-/// `ERASER_TIP_COLOR` (red) entries were retired with the first
-/// slice of D8: barrel-button-held now promotes the stroke to
-/// Eraser (so `color_for_input` is never reached with the button
-/// bit set), and Eraser strokes don't commit visible ink at all —
-/// neither in the wgpu doc nor in the front-buffer overlay (which
-/// now receives a transparent style during eraser drags; see
-/// [`LIVE_INK_OVERLAY_HIDDEN`]).
-const PEN_DEBUG_COLOR: u32 = 0xFF00_66FF;
 
 /// Fully transparent ARGB pushed to Kotlin's `FrontBufferInk` while
 /// the active stroke is an eraser — Canvas SRC_OVER with a 0-alpha
@@ -63,23 +44,6 @@ const PEN_DEBUG_COLOR: u32 = 0xFF00_66FF;
 /// no visible drag trail. Without this, the eraser path used to
 /// paint a red line across the canvas as you erased.
 const LIVE_INK_OVERLAY_HIDDEN: u32 = 0x0000_0000;
-
-/// Decide what colour a stroke should use, given the input sample
-/// that started it. Only reached for Pen-mode strokes — Eraser-
-/// mode strokes (including the D8 barrel-button-held override) never
-/// commit visible ink. `buttons` is currently unused because the
-/// only held-button mapping today is the barrel-button-to-eraser
-/// override (handled in [`effective_tool_at_down`] before we get
-/// here); kept in the signature so future bindings (F7's cycle-
-/// colour, etc.) plug in without churn at every callsite.
-fn color_for_input(tool: ToolKind, _buttons: u32) -> u32 {
-    match tool {
-        ToolKind::Stylus => PEN_DEBUG_COLOR,
-        ToolKind::Finger | ToolKind::Mouse | ToolKind::Eraser | ToolKind::Unknown => {
-            DEFAULT_COLOR
-        }
-    }
-}
 
 /// Reshuffle a 0xAARRGGBB packed colour into the `[R, G, B, A]` byte
 /// order the `Unorm8x4` vertex attribute expects. The HW unpack
@@ -95,29 +59,27 @@ fn pack_color_bytes(color: u32) -> [u8; 4] {
     [r, g, b, a]
 }
 
-/// Maximum stroke width in page units (1 unit = 1/144 inch ≈ 0.176 mm).
-/// A pen sample with `pressure == 1.0` renders at this width; lower
-/// pressures scale linearly down to [`MIN_WIDTH`]. 4.0 ≈ 0.7 mm —
-/// the lower end of a felt-tip pen, which feels right for
-/// stylus input on a tablet.
-///
-/// Stroke-level width (the schema's per-stroke `FIELD_WIDTH`) is
-/// reserved for D5's "brush size" UI and currently ignored by the
-/// renderer — all strokes use the same `BASE_WIDTH`. Wiring it
-/// through is a one-line change once the toolbar exposes the picker.
-const BASE_WIDTH: f32 = 4.0;
 /// Hit-test radius for the eraser tool, in page units. ~1.4 mm at
 /// 144 DPI — narrow enough to pick individual strokes in a dense
 /// doodle, wide enough that the user doesn't have to be
-/// pixel-perfect with a touchscreen. Tuned against the same f32
-/// constants as stroke width; bump it if eraser feels "sticky"
-/// (catching unintended strokes) or "missy" (passing through thin
-/// ones) in practice.
+/// pixel-perfect with a touchscreen. Bump it if eraser feels
+/// "sticky" (catching unintended strokes) or "missy" (passing
+/// through thin ones) in practice.
 const ERASER_RADIUS_PAGE: f32 = 10.0;
-/// Floor for the pressure-tapered width so a near-zero-pressure
-/// sample doesn't tessellate into a sub-pixel sliver that disappears
-/// under nearest-pixel rasterisation. ~0.18 mm at 144 DPI.
-const MIN_WIDTH: f32 = 1.0;
+
+/// Hard floor on the pressure-tapered minimum width so a
+/// near-zero-pressure sample doesn't tessellate into a sub-pixel
+/// sliver that disappears under nearest-pixel rasterisation.
+/// ~0.09 mm at 144 DPI.
+const MIN_WIDTH_FLOOR: f32 = 0.5;
+
+/// Ratio of `base_width` used as the minimum pressure-tapered
+/// width. The visible width sweeps from `base_width * RATIO` (at
+/// pressure 0) up to `base_width` (at pressure 1). 0.25 keeps the
+/// classic "felt-tip" look (a 4x dynamic range) and matches what
+/// the pre-D5 hardcoded 1.0 / 4.0 pair produced, so existing notes
+/// still render the same after D5 lands.
+const MIN_WIDTH_RATIO: f32 = 0.25;
 
 /// A/B flag: feed pen samples through [`InkSmoother`] (true) vs.
 /// tessellate raw input directly (false). Decouples the body
@@ -151,10 +113,14 @@ const LAG_LOGGING_ENABLED: bool = false;
 
 /// Map a raw pressure value in [0, 1] (already sanitised at the JNI
 /// boundary) to a page-unit stroke width. Linear ramp from
-/// MIN_WIDTH to BASE_WIDTH.
-fn width_for_pressure(pressure: f32) -> f32 {
+/// `base_width * MIN_WIDTH_RATIO` (floored at [`MIN_WIDTH_FLOOR`])
+/// up to `base_width`. The brush-size slider in the toolbar moves
+/// `base_width`, so fatter brushes get fatter pressure ramps.
+fn width_for_pressure(pressure: f32, base_width: f32) -> f32 {
     let p = pressure.clamp(0.0, 1.0);
-    MIN_WIDTH + (BASE_WIDTH - MIN_WIDTH) * p
+    let min_w = (base_width * MIN_WIDTH_RATIO).max(MIN_WIDTH_FLOOR);
+    let min_w = min_w.min(base_width);
+    min_w + (base_width - min_w) * p
 }
 
 /// How thick the Kotlin front-buffer overlay paints relative to the
@@ -189,13 +155,18 @@ const LIVE_INK_WIDTH_SCALE: f32 = 0.6;
 ///
 /// No surface yet (start-of-day) → silent no-op; the next DOWN that
 /// lands with a real surface will re-push.
-fn push_live_ink_style(surface: Option<&SurfaceBoundState>, color: u32) {
+fn push_live_ink_style(surface: Option<&SurfaceBoundState>, color: u32, base_width: f32) {
     let Some(s) = surface else {
         return;
     };
     let scale = s.page_to_surface_scale() * LIVE_INK_WIDTH_SCALE;
-    let min_px = MIN_WIDTH * scale;
-    let max_px = BASE_WIDTH * scale;
+    // Same min/max page-unit pair the wgpu tessellator uses (see
+    // [`width_for_pressure`]) so the overlay's pressure ramp lines up
+    // exactly with the committed stroke's ramp.
+    let min_pu = (base_width * MIN_WIDTH_RATIO).max(MIN_WIDTH_FLOOR);
+    let min_pu = min_pu.min(base_width);
+    let min_px = min_pu * scale;
+    let max_px = base_width * scale;
     if let Err(e) =
         crate::drawing::platform::android::ui::call_set_live_ink_style(color, min_px, max_px)
     {
@@ -250,13 +221,16 @@ fn build_prediction_segments(
     smoother: &mut InkSmoother,
     tool_mode: ToolMode,
     current_stroke_color: Option<[u8; 4]>,
+    current_stroke_width: Option<f32>,
     pen_tess_cursor: Option<SmoothedSample>,
 ) {
     out.clear();
     if !matches!(tool_mode, ToolMode::Pen) || !smoother.is_in_stroke() {
         return;
     }
-    let (Some(color), Some(seed)) = (current_stroke_color, pen_tess_cursor) else {
+    let (Some(color), Some(width), Some(seed)) =
+        (current_stroke_color, current_stroke_width, pen_tess_cursor)
+    else {
         return;
     };
     let predicted = smoother.predict();
@@ -265,8 +239,8 @@ fn build_prediction_segments(
     }
     let mut pred_cursor = seed;
     for sample in predicted {
-        let w_prev = width_for_pressure(pred_cursor.pressure);
-        let w_curr = width_for_pressure(sample.pressure);
+        let w_prev = width_for_pressure(pred_cursor.pressure, width);
+        let w_curr = width_for_pressure(sample.pressure, width);
         out.extend_from_slice(&tessellate_segment(
             pred_cursor.pos,
             sample.pos,
@@ -313,6 +287,7 @@ fn build_raw_head_segments(
     out: &mut Vec<Vertex>,
     tool_mode: ToolMode,
     current_stroke_color: Option<[u8; 4]>,
+    current_stroke_width: Option<f32>,
     pen_tess_cursor: Option<SmoothedSample>,
     latest_raw_input: Option<SmoothedSample>,
 ) {
@@ -320,13 +295,16 @@ fn build_raw_head_segments(
     if !matches!(tool_mode, ToolMode::Pen) {
         return;
     }
-    let (Some(color), Some(cursor), Some(raw)) =
-        (current_stroke_color, pen_tess_cursor, latest_raw_input)
-    else {
+    let (Some(color), Some(width), Some(cursor), Some(raw)) = (
+        current_stroke_color,
+        current_stroke_width,
+        pen_tess_cursor,
+        latest_raw_input,
+    ) else {
         return;
     };
-    let w_prev = width_for_pressure(cursor.pressure);
-    let w_curr = width_for_pressure(raw.pressure);
+    let w_prev = width_for_pressure(cursor.pressure, width);
+    let w_curr = width_for_pressure(raw.pressure, width);
     out.extend_from_slice(&tessellate_segment(
         cursor.pos,
         raw.pos,
@@ -362,6 +340,7 @@ fn build_predicted_lead_segments(
     out: &mut Vec<Vertex>,
     tool_mode: ToolMode,
     current_stroke_color: Option<[u8; 4]>,
+    current_stroke_width: Option<f32>,
     latest_raw_input: Option<SmoothedSample>,
     latest_prediction: Option<SmoothedSample>,
 ) {
@@ -369,13 +348,16 @@ fn build_predicted_lead_segments(
     if !matches!(tool_mode, ToolMode::Pen) {
         return;
     }
-    let (Some(color), Some(raw), Some(predicted)) =
-        (current_stroke_color, latest_raw_input, latest_prediction)
-    else {
+    let (Some(color), Some(width), Some(raw), Some(predicted)) = (
+        current_stroke_color,
+        current_stroke_width,
+        latest_raw_input,
+        latest_prediction,
+    ) else {
         return;
     };
-    let w_prev = width_for_pressure(raw.pressure);
-    let w_curr = width_for_pressure(predicted.pressure);
+    let w_prev = width_for_pressure(raw.pressure, width);
+    let w_curr = width_for_pressure(predicted.pressure, width);
     out.extend_from_slice(&tessellate_segment(
         raw.pos,
         predicted.pos,
@@ -496,10 +478,15 @@ enum Msg {
 struct StrokeMeta {
     id: String,
     color: u32,
+    /// Per-stroke base width in page units — the D5 "brush size"
+    /// the renderer used at `begin_stroke` time. Drives the
+    /// pressure-tapered tessellation width in [`width_for_pressure`].
+    width: f32,
     bbox_min: (f32, f32),
     bbox_max: (f32, f32),
-    /// Interleaved (x, y) in page coords. Same shape `decode_payload_v1`
-    /// hands back, copied out so we own it for the cache's lifetime.
+    /// Interleaved (x, y) in page coords. Same shape the payload
+    /// decoder hands back, copied out so we own it for the cache's
+    /// lifetime.
     points: Vec<f32>,
     /// Parallel to `points`, one entry per (x, y) pair.
     pressures: Vec<f32>,
@@ -509,11 +496,18 @@ impl StrokeMeta {
     /// Build from the freshly-pen-drawn buffers the render thread
     /// accumulates during a Pen drag. `points` interleaved (x, y),
     /// `pressures` per pair. Bbox precomputed here once.
-    fn from_pen_drag(id: String, color: u32, points: Vec<f32>, pressures: Vec<f32>) -> Self {
+    fn from_pen_drag(
+        id: String,
+        color: u32,
+        width: f32,
+        points: Vec<f32>,
+        pressures: Vec<f32>,
+    ) -> Self {
         let (bbox_min, bbox_max) = bbox_of_points(&points);
         Self {
             id,
             color,
+            width,
             bbox_min,
             bbox_max,
             points,
@@ -701,6 +695,7 @@ impl CanvasDocument {
         let visible = &mut self.visible_strokes;
         self.strokes_doc.for_each_stroke(|view| {
             let color = view.color;
+            let width = view.width;
             let color_bytes = pack_color_bytes(color);
             let points: Vec<f32> = view.points.to_vec();
             let pressures: Vec<f32> = view.pressures.to_vec();
@@ -711,8 +706,8 @@ impl CanvasDocument {
                 let curr_p = pressures.get(i).copied().unwrap_or(1.0);
                 let curr = (chunk[0], chunk[1], curr_p);
                 if let Some((px, py, pp)) = prev {
-                    let w_prev = width_for_pressure(pp);
-                    let w_curr = width_for_pressure(curr.2);
+                    let w_prev = width_for_pressure(pp, width);
+                    let w_curr = width_for_pressure(curr.2, width);
                     segments.extend_from_slice(&tessellate_segment(
                         (px, py),
                         (curr.0, curr.1),
@@ -726,6 +721,7 @@ impl CanvasDocument {
             visible.push(StrokeMeta {
                 id: view.id.to_string(),
                 color,
+                width,
                 bbox_min,
                 bbox_max,
                 points,
@@ -761,13 +757,14 @@ impl CanvasDocument {
         self.segments.clear();
         for meta in &self.visible_strokes {
             let color_bytes = pack_color_bytes(meta.color);
+            let width = meta.width;
             let mut prev: Option<(f32, f32, f32)> = None;
             for (i, chunk) in meta.points.chunks_exact(2).enumerate() {
                 let curr_p = meta.pressures.get(i).copied().unwrap_or(1.0);
                 let curr = (chunk[0], chunk[1], curr_p);
                 if let Some((px, py, pp)) = prev {
-                    let w_prev = width_for_pressure(pp);
-                    let w_curr = width_for_pressure(curr.2);
+                    let w_prev = width_for_pressure(pp, width);
+                    let w_curr = width_for_pressure(curr.2, width);
                     self.segments.extend_from_slice(&tessellate_segment(
                         (px, py),
                         (curr.0, curr.1),
@@ -1185,6 +1182,8 @@ fn active_segments<'a>(
 fn build_ui_state(
     tool_mode: ToolMode,
     stroke_tool_override: Option<ToolMode>,
+    picked_color: u32,
+    picked_width: f32,
     active_id: &Option<String>,
     documents: &HashMap<String, CanvasDocument>,
 ) -> UiState {
@@ -1193,6 +1192,8 @@ fn build_ui_state(
         current_tool: stroke_tool_override.unwrap_or(tool_mode),
         can_undo: active.map(|d| !d.undo.is_empty()).unwrap_or(false),
         can_redo: active.map(|d| !d.redo.is_empty()).unwrap_or(false),
+        current_color: picked_color,
+        current_width: picked_width,
     }
 }
 
@@ -1287,12 +1288,12 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
     // Clear / SetActiveNote / tool change so an in-flight cursor
     // can't leak across strokes or notes.
     let mut pen_tess_cursor: Option<SmoothedSample> = None;
-    // Linear-RGBA colour for the currently-open stroke, chosen at
-    // ACTION_DOWN from the input tool type via [`color_for_input`].
-    // Same lifecycle as `pen_tess_cursor` — None between strokes; set
-    // on DOWN; consumed on every MOVE's tessellation; cleared on UP /
-    // CANCEL / Clear / SetActiveNote so a leaked colour can't paint
-    // an unrelated note's stroke the wrong shade.
+    // Linear-RGBA colour for the currently-open stroke, captured at
+    // ACTION_DOWN from `picked_color`. Same lifecycle as
+    // `pen_tess_cursor` — None between strokes; set on DOWN;
+    // consumed on every MOVE's tessellation; cleared on UP / CANCEL
+    // / Clear / SetActiveNote / tool change so a leaked colour
+    // can't paint an unrelated stroke the wrong shade.
     let mut current_stroke_color: Option<[u8; 4]> = None;
     // Pen-mode in-flight geometry buffers — Rust-side mirror of what
     // gets pushed into the StrokesDoc during a pen drag. On pen-up
@@ -1308,6 +1309,19 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
     // [u8;4] used in the GPU vertex bytes) so the StrokeMeta we
     // build on pen-up can carry the schema-side packed form.
     let mut current_stroke_packed: Option<u32> = None;
+    // Per-stroke base width in page units, captured at ACTION_DOWN
+    // from `picked_width`. None between strokes. Drives the pressure
+    // ramp in `width_for_pressure` for both the live raw-head zone
+    // and the just-committed stroke's tessellation on pen-up.
+    let mut current_stroke_width: Option<f32> = None;
+    // D5 user-picked pen colour and base width. Persist between
+    // strokes so the toolbar's selection survives multiple drags
+    // (and the toolbar reads them via UiState to render the active
+    // selection). Defaults match the strokes_doc schema defaults
+    // so a fresh app paints in opaque black at the renderer's
+    // historical width.
+    let mut picked_color: u32 = DEFAULT_COLOR;
+    let mut picked_width: f32 = DEFAULT_WIDTH;
     // User-selected drawing tool. Authoritative state lives here on
     // the render thread; the egui toolbar mirrors via UiState and
     // sends changes back via RenderActions::set_tool. Defaults to
@@ -1566,16 +1580,18 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                     match (effective_tool, action) {
                         // ---------- Pen ----------
                         (ToolMode::Pen, SampleAction::Down) => {
-                            let packed = color_for_input(tool, buttons);
+                            let packed = picked_color;
+                            let width = picked_width;
                             log::info!(
-                                "[drawing] stroke_open tool={tool:?} buttons=0x{buttons:x} -> color=0x{packed:08X}"
+                                "[drawing] stroke_open tool={tool:?} buttons=0x{buttons:x} -> color=0x{packed:08X} width={width:.2}"
                             );
                             current_stroke_color = Some(pack_color_bytes(packed));
                             current_stroke_packed = Some(packed);
+                            current_stroke_width = Some(width);
                             pen_in_flight_points.clear();
                             pen_in_flight_pressures.clear();
                             pen_tess_cursor = None;
-                            push_live_ink_style(surface_state.as_ref(), packed);
+                            push_live_ink_style(surface_state.as_ref(), packed, width);
                             if let (Some(id), Some(s)) =
                                 (active_note_id.as_ref(), surface_state.as_ref())
                             {
@@ -1611,7 +1627,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                 let doc = documents
                                     .entry(id.clone())
                                     .or_insert_with(CanvasDocument::new);
-                                doc.strokes_doc.begin_stroke(packed);
+                                doc.strokes_doc.begin_stroke(packed, width);
                                 // Push the anchor into both the yrs
                                 // doc and the Rust-side cache so
                                 // the first MOVE has a previous
@@ -1640,8 +1656,9 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             }
                         }
                         (ToolMode::Pen, SampleAction::Move) => {
-                            if let (Some(color), Some(s), Some(id)) = (
+                            if let (Some(color), Some(stroke_width), Some(s), Some(id)) = (
                                 current_stroke_color,
+                                current_stroke_width,
                                 surface_state.as_ref(),
                                 active_note_id.as_ref(),
                             ) {
@@ -1700,9 +1717,9 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                         // becomes available.
                                         if let Some(prev) = pen_tess_cursor {
                                             let w_prev =
-                                                width_for_pressure(prev.pressure);
+                                                width_for_pressure(prev.pressure, stroke_width);
                                             let w_curr =
-                                                width_for_pressure(out.pressure);
+                                                width_for_pressure(out.pressure, stroke_width);
                                             doc.segments.extend_from_slice(
                                                 &tessellate_segment(
                                                     prev.pos,
@@ -1756,9 +1773,10 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                 pen_tess_cursor.is_some()
                             };
                             if needs_tail {
-                                if let (Some(s), Some(color), Some(id)) = (
+                                if let (Some(s), Some(color), Some(stroke_width), Some(id)) = (
                                     surface_state.as_ref(),
                                     current_stroke_color,
+                                    current_stroke_width,
                                     active_note_id.as_ref(),
                                 ) {
                                     let [px, py] = s.surface_to_page(x, y);
@@ -1781,9 +1799,9 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                         for out in drained {
                                             if let Some(prev) = pen_tess_cursor {
                                                 let w_prev =
-                                                    width_for_pressure(prev.pressure);
+                                                    width_for_pressure(prev.pressure, stroke_width);
                                                 let w_curr =
-                                                    width_for_pressure(out.pressure);
+                                                    width_for_pressure(out.pressure, stroke_width);
                                                 doc.segments.extend_from_slice(
                                                     &tessellate_segment(
                                                         prev.pos,
@@ -1832,9 +1850,12 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                         // handler didn't set it.
                                         let packed = current_stroke_packed
                                             .unwrap_or(DEFAULT_COLOR);
+                                        let width = current_stroke_width
+                                            .unwrap_or(DEFAULT_WIDTH);
                                         let meta = StrokeMeta::from_pen_drag(
                                             stroke_id.clone(),
                                             packed,
+                                            width,
                                             std::mem::take(&mut pen_in_flight_points),
                                             std::mem::take(&mut pen_in_flight_pressures),
                                         );
@@ -1846,6 +1867,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             }
                             current_stroke_color = None;
                             current_stroke_packed = None;
+                            current_stroke_width = None;
                             pen_in_flight_points.clear();
                             pen_in_flight_pressures.clear();
                             pen_tess_cursor = None;
@@ -1882,9 +1904,17 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             // colour and you saw a red line where the
                             // pen tip went — confusing while erasing
                             // via the barrel-button override.)
+                            // Width passed here is irrelevant — the
+                            // hidden colour makes the overlay invisible
+                            // regardless. Pass `picked_width` so the
+                            // overlay's geometry computation doesn't
+                            // accidentally clamp to a stale value if a
+                            // future change makes the colour visible
+                            // again.
                             push_live_ink_style(
                                 surface_state.as_ref(),
                                 LIVE_INK_OVERLAY_HIDDEN,
+                                picked_width,
                             );
                             erase_at(
                                 &active_note_id,
@@ -2016,6 +2046,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                     }
                     current_stroke_color = None;
                     current_stroke_packed = None;
+                    current_stroke_width = None;
                     pen_in_flight_points.clear();
                     pen_in_flight_pressures.clear();
                     pen_tess_cursor = None;
@@ -2060,6 +2091,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                     // than per-note settings.
                     current_stroke_color = None;
                     current_stroke_packed = None;
+                    current_stroke_width = None;
                     pen_in_flight_points.clear();
                     pen_in_flight_pressures.clear();
                     pen_tess_cursor = None;
@@ -2185,9 +2217,11 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             });
                             let pos = px_to_egui(sample.x, sample.y);
                             egui_input.events.push(egui::Event::PointerMoved(pos));
-                            if let (Some(color), Some(id)) =
-                                (current_stroke_color, active_note_id.as_ref())
-                            {
+                            if let (Some(color), Some(stroke_width), Some(id)) = (
+                                current_stroke_color,
+                                current_stroke_width,
+                                active_note_id.as_ref(),
+                            ) {
                                 let [px, py] = s.surface_to_page(sample.x, sample.y);
                                 latest_raw_input = Some(SmoothedSample {
                                     pos: (px, py),
@@ -2208,9 +2242,9 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                     for out in smoothed {
                                         if let Some(prev) = pen_tess_cursor {
                                             let w_prev =
-                                                width_for_pressure(prev.pressure);
+                                                width_for_pressure(prev.pressure, stroke_width);
                                             let w_curr =
-                                                width_for_pressure(out.pressure);
+                                                width_for_pressure(out.pressure, stroke_width);
                                             doc.segments.extend_from_slice(
                                                 &tessellate_segment(
                                                     prev.pos,
@@ -2253,6 +2287,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                     &mut raw_head_segments,
                     tool_mode,
                     current_stroke_color,
+                    current_stroke_width,
                     pen_tess_cursor,
                     latest_raw_input,
                 );
@@ -2267,6 +2302,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                     &mut prediction_segments,
                     tool_mode,
                     current_stroke_color,
+                    current_stroke_width,
                     latest_raw_input,
                     latest_prediction,
                 );
@@ -2276,8 +2312,14 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                 // Active doc lookup is `documents.get(id)`; defaults
                 // to "no buttons enabled" when no note is open or
                 // the doc hasn't been activated yet.
-                let ui_state =
-                    build_ui_state(tool_mode, stroke_tool_override, &active_note_id, &documents);
+                let ui_state = build_ui_state(
+                    tool_mode,
+                    stroke_tool_override,
+                    picked_color,
+                    picked_width,
+                    &active_note_id,
+                    &documents,
+                );
                 let (actions, ui_output) = canvas_ui.run(input, s.size_px(), ui_state);
                 let dispatch_uptime_ms =
                     crate::drawing::platform::android::now_uptime_ms();
@@ -2359,6 +2401,40 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                         // next sample.
                         let mut needs_rerender = false;
 
+                        // D5 colour picker: user picked a swatch.
+                        // Persist into picked_color for the next
+                        // stroke and re-push the live-ink overlay
+                        // style so the in-flight front-buffer head
+                        // also paints in the new colour. Reborrow
+                        // `s` immutably (it's the same SurfaceBoundState
+                        // we're already holding mutably for the
+                        // render-pass machinery — going through
+                        // `surface_state.as_ref()` here would
+                        // double-borrow it).
+                        if let Some(new_color) = actions.set_color {
+                            log::info!(
+                                "[drawing] picked colour 0x{new_color:08X} (was 0x{picked_color:08X})"
+                            );
+                            picked_color = new_color;
+                            push_live_ink_style(Some(&*s), picked_color, picked_width);
+                            // Toolbar's swatch shows `picked_color`
+                            // via UiState — re-render so the user
+                            // sees the active selection update.
+                            needs_rerender = true;
+                        }
+
+                        // D5 brush size: slider moved. Same plumbing
+                        // as set_color — persist and re-push the
+                        // overlay style so the pressure ramp scales.
+                        if let Some(new_width) = actions.set_width {
+                            log::debug!(
+                                "[drawing] picked width {new_width:.2} (was {picked_width:.2})"
+                            );
+                            picked_width = new_width;
+                            push_live_ink_style(Some(&*s), picked_color, picked_width);
+                            needs_rerender = true;
+                        }
+
                         if let Some(new_tool) = actions.set_tool {
                             log::info!(
                                 "[drawing] tool: {:?} -> {:?}",
@@ -2371,6 +2447,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             // or eraser buffers across.
                             current_stroke_color = None;
                             current_stroke_packed = None;
+                            current_stroke_width = None;
                             pen_in_flight_points.clear();
                             pen_in_flight_pressures.clear();
                             pen_tess_cursor = None;
@@ -2434,6 +2511,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             }
                             current_stroke_color = None;
                             current_stroke_packed = None;
+                            current_stroke_width = None;
                             pen_in_flight_points.clear();
                             pen_in_flight_pressures.clear();
                             pen_tess_cursor = None;
@@ -2466,6 +2544,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                 &mut raw_head_segments,
                                 tool_mode,
                                 current_stroke_color,
+                                current_stroke_width,
                                 pen_tess_cursor,
                                 latest_raw_input,
                             );
@@ -2473,6 +2552,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                 &mut prediction_segments,
                                 tool_mode,
                                 current_stroke_color,
+                                current_stroke_width,
                                 latest_raw_input,
                                 latest_prediction,
                             );
@@ -2480,6 +2560,8 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             let fresh_state = build_ui_state(
                                 tool_mode,
                                 stroke_tool_override,
+                                picked_color,
+                                picked_width,
                                 &active_note_id,
                                 &documents,
                             );
