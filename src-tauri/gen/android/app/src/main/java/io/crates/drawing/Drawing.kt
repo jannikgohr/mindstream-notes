@@ -18,7 +18,9 @@ import android.view.ViewGroup
 import android.webkit.WebView
 import android.widget.FrameLayout
 import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.graphics.lowlatency.CanvasFrontBufferedRenderer
 
 /**
@@ -102,6 +104,12 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
             // user / JS asked for it, the resume path shouldn't also
             // pile on a second show.
             attachedBeforePause = false
+            // Hide Android's bottom navigation bar while an ink note
+            // is open — every device pixel matters for drawing, and
+            // the egui toolbar already provides our own navigation.
+            // Idempotent so re-asserting on a no-op show() is safe.
+            // Paired with `showSystemNavigation` in hide() below.
+            hideSystemNavigation(activity)
             if (view != null) return@runOnUiThread
             // Request the highest-Hz display mode the panel offers
             // (at the current resolution) while an ink note is open.
@@ -148,6 +156,12 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
             // back and then locked the screen), onResume should NOT
             // re-attach — the user isn't on the ink note anymore.
             attachedBeforePause = false
+            // Restore the system navigation bar — paired with the
+            // hide() in show() above. Done unconditionally (before
+            // the view null-check) so the user always returns to a
+            // consistent system-UI state even if hide() was called
+            // without a matching show().
+            showSystemNavigation(activity)
             val v = view ?: return@runOnUiThread
             Log.i("MindstreamDrawing", "Drawing.hide: detaching SurfaceView")
             (v.parent as? ViewGroup)?.removeView(v)
@@ -472,6 +486,40 @@ private fun releaseRefreshRate(activity: Activity) {
         attrs.preferredDisplayModeId = 0
         activity.window.attributes = attrs
     }
+}
+
+/**
+ * Hide the system navigation bar (bottom buttons / gesture bar) so
+ * the ink note has the full screen for drawing. We keep the status
+ * bar visible — the Svelte mobile header at the top of the WebView
+ * reads as "the app's chrome" and looks wrong without the status
+ * bar above it.
+ *
+ * `BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE` is the standard immersive
+ * mode: a swipe from the bottom edge briefly reveals the nav bar,
+ * which then auto-hides — so the user can still reach system
+ * navigation without permanently giving up canvas space.
+ *
+ * Idempotent: hiding an already-hidden bar is a no-op at the
+ * `WindowInsetsControllerCompat` level.
+ */
+private fun hideSystemNavigation(activity: Activity) {
+    val window = activity.window
+    val controller = WindowCompat.getInsetsController(window, window.decorView)
+    controller.systemBarsBehavior =
+        WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+    controller.hide(WindowInsetsCompat.Type.navigationBars())
+}
+
+/**
+ * Restore the system navigation bar so the rest of the app (markdown
+ * editor, home screen, settings, …) shows it normally. Paired with
+ * [hideSystemNavigation] on the show() / hide() lifecycle.
+ */
+private fun showSystemNavigation(activity: Activity) {
+    val window = activity.window
+    val controller = WindowCompat.getInsetsController(window, window.decorView)
+    controller.show(WindowInsetsCompat.Type.navigationBars())
 }
 
 /**
