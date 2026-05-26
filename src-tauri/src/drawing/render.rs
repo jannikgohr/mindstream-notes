@@ -33,7 +33,9 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
 use super::input::{Sample, SampleAction, ToolKind};
-use super::page::{point_to_segment_distance_sq, segment_quad_positions};
+use super::page::{
+    point_to_segment_distance_sq, segment_quad_positions, stroke_polyline_positions,
+};
 use super::pipeline::{self, PersistentGpu, SurfaceBoundState, Vertex};
 use super::stroke_modeler::{InkSmoother, SmoothedSample};
 use super::strokes_doc::{StrokesDoc, DEFAULT_COLOR, DEFAULT_WIDTH};
@@ -222,6 +224,48 @@ fn tessellate_segment(
 ) -> [Vertex; 6] {
     let positions = segment_quad_positions(p0, p1, w0, w1);
     positions.map(|position| Vertex { position, color })
+}
+
+/// Append a centreline-preserving visual mesh for one whole stroke.
+/// Stored points are not altered; the smoother outline comes from
+/// stroke-level tangent/width filtering in `page::stroke_polyline_positions`.
+fn append_tessellated_stroke(
+    out: &mut Vec<Vertex>,
+    points: &[f32],
+    pressures: &[f32],
+    base_width: f32,
+    color: [u8; 4],
+) {
+    let point_count = points.len() / 2;
+    if point_count < 2 {
+        return;
+    }
+
+    let mut centers = Vec::with_capacity(point_count);
+    let mut widths = Vec::with_capacity(point_count);
+    for (i, chunk) in points.chunks_exact(2).enumerate() {
+        centers.push((chunk[0], chunk[1]));
+        let pressure = pressures.get(i).copied().unwrap_or(1.0);
+        widths.push(width_for_pressure(pressure, base_width));
+    }
+
+    out.extend(
+        stroke_polyline_positions(&centers, &widths)
+            .into_iter()
+            .map(|position| Vertex { position, color }),
+    );
+}
+
+fn retessellate_in_flight_stroke(
+    doc: &mut CanvasDocument,
+    segment_start: usize,
+    points: &[f32],
+    pressures: &[f32],
+    base_width: f32,
+    color: [u8; 4],
+) {
+    doc.segments.truncate(segment_start.min(doc.segments.len()));
+    append_tessellated_stroke(&mut doc.segments, points, pressures, base_width, color);
 }
 
 /// D2 forward prediction: rebuild `out` from whatever the smoother
@@ -734,24 +778,8 @@ impl CanvasDocument {
             let points: Vec<f32> = view.points.to_vec();
             let pressures: Vec<f32> = view.pressures.to_vec();
             let (bbox_min, bbox_max) = bbox_of_points(&points);
-            // Tessellate into segments while we have the data hot.
-            let mut prev: Option<(f32, f32, f32)> = None;
-            for (i, chunk) in points.chunks_exact(2).enumerate() {
-                let curr_p = pressures.get(i).copied().unwrap_or(1.0);
-                let curr = (chunk[0], chunk[1], curr_p);
-                if let Some((px, py, pp)) = prev {
-                    let w_prev = width_for_pressure(pp, width);
-                    let w_curr = width_for_pressure(curr.2, width);
-                    segments.extend_from_slice(&tessellate_segment(
-                        (px, py),
-                        (curr.0, curr.1),
-                        w_prev,
-                        w_curr,
-                        color_bytes,
-                    ));
-                }
-                prev = Some(curr);
-            }
+            // Tessellate into visual mesh while we have the data hot.
+            append_tessellated_stroke(segments, &points, &pressures, width, color_bytes);
             visible.push(StrokeMeta {
                 id: view.id.to_string(),
                 color,
@@ -791,24 +819,13 @@ impl CanvasDocument {
         self.segments.clear();
         for meta in &self.visible_strokes {
             let color_bytes = pack_color_bytes(meta.color);
-            let width = meta.width;
-            let mut prev: Option<(f32, f32, f32)> = None;
-            for (i, chunk) in meta.points.chunks_exact(2).enumerate() {
-                let curr_p = meta.pressures.get(i).copied().unwrap_or(1.0);
-                let curr = (chunk[0], chunk[1], curr_p);
-                if let Some((px, py, pp)) = prev {
-                    let w_prev = width_for_pressure(pp, width);
-                    let w_curr = width_for_pressure(curr.2, width);
-                    self.segments.extend_from_slice(&tessellate_segment(
-                        (px, py),
-                        (curr.0, curr.1),
-                        w_prev,
-                        w_curr,
-                        color_bytes,
-                    ));
-                }
-                prev = Some(curr);
-            }
+            append_tessellated_stroke(
+                &mut self.segments,
+                &meta.points,
+                &meta.pressures,
+                meta.width,
+                color_bytes,
+            );
         }
         log::debug!(
             "[drawing.perf.eraser] retessellate_segments_from_cache vertices={} took={:?}",
@@ -1395,6 +1412,11 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
     // ramp in `width_for_pressure` for both the live raw-head zone
     // and the just-committed stroke's tessellation on pen-up.
     let mut current_stroke_width: Option<f32> = None;
+    // Vertex offset where the currently-open pen stroke starts in
+    // the active document's `segments` buffer. The live stroke is
+    // retessellated as a whole so neighbouring samples can smooth
+    // each other's outline normals without moving the centreline.
+    let mut current_stroke_segment_start: Option<usize> = None;
     // D5 user-picked pen colour and base width. Persist between
     // strokes so the toolbar's selection survives multiple drags
     // (and the toolbar reads them via UiState to render the active
@@ -1508,6 +1530,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
         // render-pass run so egui can advance its animation state.
         let mut dirty = animation_tick;
         let mut needs_rebuild = false;
+        let mut force_full_stroke_upload = false;
         // Eraser hits queued during this batch — flushed to yrs +
         // retessellated ONCE after the message loop completes
         // instead of per sample. Eliminates the
@@ -1720,6 +1743,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             pen_in_flight_points.clear();
                             pen_in_flight_pressures.clear();
                             pen_tess_cursor = None;
+                            current_stroke_segment_start = None;
                             push_live_ink_style(surface_state.as_ref(), packed, width);
                             if let (Some(id), Some(s)) =
                                 (active_note_id.as_ref(), surface_state.as_ref())
@@ -1755,6 +1779,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                 let doc = documents
                                     .entry(id.clone())
                                     .or_insert_with(CanvasDocument::new);
+                                current_stroke_segment_start = Some(doc.segments.len());
                                 doc.strokes_doc.begin_stroke(packed, width);
                                 // Push the anchor into both the yrs
                                 // doc and the Rust-side cache so
@@ -1826,31 +1851,9 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                     let doc = documents
                                         .entry(id.clone())
                                         .or_insert_with(CanvasDocument::new);
+                                    let segment_start = *current_stroke_segment_start
+                                        .get_or_insert(doc.segments.len());
                                     for out in smoothed {
-                                        // Tessellate a segment from
-                                        // the previous smoothed
-                                        // point to this one. The
-                                        // smoother emits the down
-                                        // anchor on begin_stroke,
-                                        // so by the time we get
-                                        // here pen_tess_cursor is
-                                        // virtually always Some;
-                                        // the guard handles the
-                                        // edge case where DOWN
-                                        // arrived without a surface
-                                        // (anchor wasn't pushed)
-                                        // and a MOVE then lands
-                                        // after a surface_state
-                                        // becomes available.
-                                        if let Some(prev) = pen_tess_cursor {
-                                            let w_prev =
-                                                width_for_pressure(prev.pressure, stroke_width);
-                                            let w_curr =
-                                                width_for_pressure(out.pressure, stroke_width);
-                                            doc.segments.extend_from_slice(&tessellate_segment(
-                                                prev.pos, out.pos, w_prev, w_curr, color,
-                                            ));
-                                        }
                                         doc.strokes_doc.push_point(
                                             out.pos.0,
                                             out.pos.1,
@@ -1861,6 +1864,15 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                         pen_in_flight_pressures.push(out.pressure);
                                         pen_tess_cursor = Some(out);
                                     }
+                                    retessellate_in_flight_stroke(
+                                        doc,
+                                        segment_start,
+                                        &pen_in_flight_points,
+                                        &pen_in_flight_pressures,
+                                        stroke_width,
+                                        color,
+                                    );
+                                    force_full_stroke_upload = true;
                                 }
                             }
                         }
@@ -1913,18 +1925,9 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                         let doc = documents
                                             .entry(id.clone())
                                             .or_insert_with(CanvasDocument::new);
+                                        let segment_start = *current_stroke_segment_start
+                                            .get_or_insert(doc.segments.len());
                                         for out in drained {
-                                            if let Some(prev) = pen_tess_cursor {
-                                                let w_prev =
-                                                    width_for_pressure(prev.pressure, stroke_width);
-                                                let w_curr =
-                                                    width_for_pressure(out.pressure, stroke_width);
-                                                doc.segments.extend_from_slice(
-                                                    &tessellate_segment(
-                                                        prev.pos, out.pos, w_prev, w_curr, color,
-                                                    ),
-                                                );
-                                            }
                                             doc.strokes_doc.push_point(
                                                 out.pos.0,
                                                 out.pos.1,
@@ -1935,6 +1938,15 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                             pen_in_flight_pressures.push(out.pressure);
                                             pen_tess_cursor = Some(out);
                                         }
+                                        retessellate_in_flight_stroke(
+                                            doc,
+                                            segment_start,
+                                            &pen_in_flight_points,
+                                            &pen_in_flight_pressures,
+                                            stroke_width,
+                                            color,
+                                        );
+                                        force_full_stroke_upload = true;
                                     }
                                 } else {
                                     // Lost the surface (or active
@@ -1982,6 +1994,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             pen_in_flight_points.clear();
                             pen_in_flight_pressures.clear();
                             pen_tess_cursor = None;
+                            current_stroke_segment_start = None;
                             // The smoother's end_stroke drain
                             // committed the lift-position into the
                             // doc; the raw head zone is now redundant
@@ -2156,6 +2169,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                     pen_in_flight_points.clear();
                     pen_in_flight_pressures.clear();
                     pen_tess_cursor = None;
+                    current_stroke_segment_start = None;
                     latest_raw_input = None;
                     latest_prediction = None;
                     ink_smoother.reset();
@@ -2199,6 +2213,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                     pen_in_flight_points.clear();
                     pen_in_flight_pressures.clear();
                     pen_tess_cursor = None;
+                    current_stroke_segment_start = None;
                     latest_raw_input = None;
                     latest_prediction = None;
                     ink_smoother.reset();
@@ -2399,16 +2414,9 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                     let doc = documents
                                         .entry(id.clone())
                                         .or_insert_with(CanvasDocument::new);
+                                    let segment_start = *current_stroke_segment_start
+                                        .get_or_insert(doc.segments.len());
                                     for out in smoothed {
-                                        if let Some(prev) = pen_tess_cursor {
-                                            let w_prev =
-                                                width_for_pressure(prev.pressure, stroke_width);
-                                            let w_curr =
-                                                width_for_pressure(out.pressure, stroke_width);
-                                            doc.segments.extend_from_slice(&tessellate_segment(
-                                                prev.pos, out.pos, w_prev, w_curr, color,
-                                            ));
-                                        }
                                         doc.strokes_doc.push_point(
                                             out.pos.0,
                                             out.pos.1,
@@ -2419,6 +2427,15 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                         pen_in_flight_pressures.push(out.pressure);
                                         pen_tess_cursor = Some(out);
                                     }
+                                    retessellate_in_flight_stroke(
+                                        doc,
+                                        segment_start,
+                                        &pen_in_flight_points,
+                                        &pen_in_flight_pressures,
+                                        stroke_width,
+                                        color,
+                                    );
+                                    force_full_stroke_upload = true;
                                 }
                             }
                         }
@@ -2495,6 +2512,9 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                 // as None so the next loop iter blocks on `recv()`.
                 let repaint_after = ui_output.repaint_after;
                 let dispatch_uptime_ms = crate::drawing::platform::android::now_uptime_ms();
+                if force_full_stroke_upload {
+                    s.force_full_stroke_upload();
+                }
                 match pipeline::render_acquired_frame(
                     p,
                     s,
@@ -2617,6 +2637,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             pen_in_flight_points.clear();
                             pen_in_flight_pressures.clear();
                             pen_tess_cursor = None;
+                            current_stroke_segment_start = None;
                             latest_raw_input = None;
                             latest_prediction = None;
                             ink_smoother.reset();
@@ -2707,6 +2728,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             pen_in_flight_points.clear();
                             pen_in_flight_pressures.clear();
                             pen_tess_cursor = None;
+                            current_stroke_segment_start = None;
                             latest_raw_input = None;
                             latest_prediction = None;
                             ink_smoother.reset();

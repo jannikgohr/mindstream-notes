@@ -178,6 +178,14 @@ impl SurfaceBoundState {
     pub fn page_to_surface_scale(&self) -> f32 {
         self.view_transform.scale
     }
+
+    /// Force the next frame to upload the whole committed stroke
+    /// prefix instead of only the append tail. Used when the active
+    /// stroke's outline is retessellated in place after a new
+    /// neighbour point changes the previous point's visual normal.
+    pub fn force_full_stroke_upload(&mut self) {
+        self.last_uploaded_committed_count = 0;
+    }
 }
 
 /// Hardcoded surface format for prewarmed `PersistentGpu`. Android
