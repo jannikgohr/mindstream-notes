@@ -345,6 +345,8 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
         private var controlBounds: List<android.graphics.RectF> = emptyList()
         @Volatile
         private var fingerDrawingAllowed: Boolean = true
+        @Volatile
+        private var fingerDrawingSettingLoaded: Boolean = false
 
         @JvmStatic
         fun setControlBoundsFromNative(bounds: FloatArray) {
@@ -360,12 +362,21 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
         @JvmStatic
         fun setFingerDrawingAllowedFromNative(allowed: Boolean) {
             fingerDrawingAllowed = allowed
+            fingerDrawingSettingLoaded = true
         }
 
         fun setFingerDrawingAllowedDefaultFromDevice(context: Context) {
+            if (fingerDrawingSettingLoaded) {
+                Log.i(
+                    "MindstreamDrawing",
+                    "finger drawing default skipped; using saved allowed=$fingerDrawingAllowed"
+                )
+                return
+            }
             val hasPen = hasPenSupport(context)
             val allowed = !hasPen
             fingerDrawingAllowed = allowed
+            fingerDrawingSettingLoaded = true
             Log.i(
                 "MindstreamDrawing",
                 "finger drawing default allowed=$allowed hasPenSupport=$hasPen"

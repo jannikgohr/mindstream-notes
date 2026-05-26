@@ -150,6 +150,7 @@
     "editor.input": { "label": "Eingabe" },
     "editor.markdown": { "label": "Markdown" },
     "editor.freeform": { "label": "Zeichenfläche" },
+    "editor.ink": { "label": "Ink-Werkzeugleiste" },
     "editor.autosave": { "label": "Auto-Speichern" },
     "data.database": { "label": "Datenbank" },
     "data.trash": { "label": "Papierkorb" },
@@ -187,6 +188,13 @@
       "label": "Stift-Modus",
       "description": "Wenn aktiv, zeichnet nur der Stift — Fingertippen verschiebt und zoomt. Verhindert ungewollte Striche durch den Handballen auf Tablets."
     },
+    "editor.ink.tool": { "label": "Letztes Ink-Werkzeug" },
+    "editor.ink.color": { "label": "Ink-Farbe" },
+    "editor.ink.width": { "label": "Pinselgröße" },
+    "editor.ink.fingerDrawing": {
+      "label": "Mit Fingern zeichnen",
+      "description": "Standardmäßig auf Geräten mit Stift-Unterstützung aus; danach gilt deine Auswahl in der Werkzeugleiste."
+    },
     "editor.autoSave": { "label": "Auto-Speichern" },
     "editor.autoSaveDebounce": { "label": "Auto-Speichern-Verzögerung" },
     "data.databasePath": { "label": "Datenbank-Speicherort" },
@@ -216,6 +224,8 @@
     "language.code.de": "Deutsch",
     "editor.freeform.penMode.auto": "Automatisch erkennen (empfohlen)",
     "editor.freeform.penMode.always": "Immer aktiv",
-    "editor.freeform.penMode.off": "Aus"
+    "editor.freeform.penMode.off": "Aus",
+    "editor.ink.tool.pen": "Stift",
+    "editor.ink.tool.eraser": "Radierer"
   }
 }

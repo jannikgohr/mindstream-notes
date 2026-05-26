@@ -80,7 +80,9 @@ pub mod ui;
 /// Called exactly once from the Tauri `setup` callback. Save worker
 /// init itself is idempotent — second call silently no-ops.
 pub fn init(app: AppHandle) {
-    save_worker::init(app);
+    save_worker::init(app.clone());
+    #[cfg(target_os = "android")]
+    render::init(app);
 }
 
 /// Tell the auto-save worker that the named ink note's stroke
@@ -224,6 +226,26 @@ pub fn drawing_set_theme(dark: bool, accent_hex: Option<String>) -> Result<(), S
             .and_then(parse_accent_hex)
             .unwrap_or_else(|| default_accent_argb(dark));
         render::set_theme(dark, accent_argb);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+#[allow(unused_variables)]
+pub fn drawing_set_toolbar_settings(
+    tool: Option<String>,
+    color_argb: Option<u32>,
+    width: Option<f32>,
+    finger_drawing_allowed: Option<bool>,
+) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        render::set_toolbar_settings(
+            tool,
+            color_argb,
+            width,
+            finger_drawing_allowed,
+        );
     }
     Ok(())
 }

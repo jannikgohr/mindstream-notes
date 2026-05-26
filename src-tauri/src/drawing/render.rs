@@ -29,6 +29,9 @@ use std::time::{Duration, Instant};
 
 use std::collections::HashSet;
 
+use serde::Serialize;
+use tauri::{AppHandle, Emitter};
+
 use super::input::{Sample, SampleAction, ToolKind};
 use super::page::{point_to_segment_distance_sq, segment_quad_positions};
 use super::pipeline::{self, PersistentGpu, SurfaceBoundState, Vertex};
@@ -44,6 +47,7 @@ use super::ui::{self, CanvasUi, ToolMode, UiState};
 /// no visible drag trail. Without this, the eraser path used to
 /// paint a red line across the canvas as you erased.
 const LIVE_INK_OVERLAY_HIDDEN: u32 = 0x0000_0000;
+const TOOLBAR_SETTINGS_EVENT: &str = "drawing:toolbar_settings";
 
 /// Reshuffle a 0xAARRGGBB packed colour into the `[R, G, B, A]` byte
 /// order the `Unorm8x4` vertex attribute expects. The HW unpack
@@ -57,6 +61,30 @@ fn pack_color_bytes(color: u32) -> [u8; 4] {
     let g = ((color >> 8) & 0xFF) as u8;
     let b = (color & 0xFF) as u8;
     [r, g, b, a]
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ToolbarSettingsEvent {
+    tool: &'static str,
+    color_argb: u32,
+    width: f32,
+    finger_drawing_allowed: bool,
+}
+
+fn tool_mode_to_setting(tool: ToolMode) -> &'static str {
+    match tool {
+        ToolMode::Pen => "pen",
+        ToolMode::Eraser => "eraser",
+    }
+}
+
+fn tool_mode_from_setting(tool: &str) -> Option<ToolMode> {
+    match tool {
+        "pen" => Some(ToolMode::Pen),
+        "eraser" => Some(ToolMode::Eraser),
+        _ => None,
+    }
 }
 
 /// Hit-test radius for the eraser tool, in page units. ~1.4 mm at
@@ -447,6 +475,12 @@ enum Msg {
     SetTheme {
         dark: bool,
         accent_argb: u32,
+    },
+    SetToolbarSettings {
+        tool: Option<String>,
+        color_argb: Option<u32>,
+        width: Option<f32>,
+        finger_drawing_allowed: Option<bool>,
     },
     /// Toggle whether finger/unknown touch samples can create or
     /// erase canvas strokes. They still feed egui so toolbar taps
@@ -935,9 +969,14 @@ fn erase_at(
 // ---------- channel plumbing ----------
 
 static SENDER: OnceLock<Mutex<Option<Sender<Msg>>>> = OnceLock::new();
+static APP: OnceLock<AppHandle> = OnceLock::new();
 
 fn sender_slot() -> &'static Mutex<Option<Sender<Msg>>> {
     SENDER.get_or_init(|| Mutex::new(None))
+}
+
+pub fn init(app: AppHandle) {
+    let _ = APP.set(app);
 }
 
 /// Send a message to the render thread, lazily spawning the thread
@@ -1111,6 +1150,20 @@ pub fn set_finger_drawing_allowed(allowed: bool) {
     send(Msg::SetFingerDrawingAllowed(allowed));
 }
 
+pub fn set_toolbar_settings(
+    tool: Option<String>,
+    color_argb: Option<u32>,
+    width: Option<f32>,
+    finger_drawing_allowed: Option<bool>,
+) {
+    send(Msg::SetToolbarSettings {
+        tool,
+        color_argb,
+        width,
+        finger_drawing_allowed,
+    });
+}
+
 /// Synchronously fetch the active note's stroke document as v1-yrs
 /// bytes — what the frontend hands to `save_note` to persist.
 /// Returns empty if no note is active or the render thread isn't
@@ -1201,6 +1254,26 @@ fn tool_can_draw(tool: ToolKind, finger_drawing_allowed: bool) -> bool {
     match tool {
         ToolKind::Finger | ToolKind::Unknown => finger_drawing_allowed,
         ToolKind::Stylus | ToolKind::Eraser | ToolKind::Mouse => true,
+    }
+}
+
+fn emit_toolbar_settings(
+    tool_mode: ToolMode,
+    picked_color: u32,
+    picked_width: f32,
+    finger_drawing_allowed: bool,
+) {
+    let Some(app) = APP.get() else {
+        return;
+    };
+    let event = ToolbarSettingsEvent {
+        tool: tool_mode_to_setting(tool_mode),
+        color_argb: picked_color,
+        width: picked_width,
+        finger_drawing_allowed,
+    };
+    if let Err(e) = app.emit(TOOLBAR_SETTINGS_EVENT, &event) {
+        log::warn!("[drawing] emit {TOOLBAR_SETTINGS_EVENT} failed: {e}");
     }
 }
 
@@ -2167,8 +2240,38 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                     // until the next input event drives a frame).
                     dirty = true;
                 }
+                Msg::SetToolbarSettings {
+                    tool,
+                    color_argb,
+                    width,
+                    finger_drawing_allowed: new_finger_drawing_allowed,
+                } => {
+                    if let Some(tool) = tool.as_deref().and_then(tool_mode_from_setting) {
+                        tool_mode = tool;
+                    }
+                    if let Some(color) = color_argb {
+                        picked_color = color;
+                    }
+                    if let Some(width) = width {
+                        picked_width = width;
+                    }
+                    if let Some(allowed) = new_finger_drawing_allowed {
+                        finger_drawing_allowed = allowed;
+                        #[cfg(target_os = "android")]
+                        if let Err(e) =
+                            crate::drawing::platform::android::ui::call_set_finger_drawing_allowed(
+                                allowed,
+                            )
+                        {
+                            log::error!("[drawing] call_set_finger_drawing_allowed failed: {e}");
+                        }
+                    }
+                    push_live_ink_style(surface_state.as_ref(), picked_color, picked_width);
+                    dirty = true;
+                }
                 Msg::SetFingerDrawingAllowed(allowed) => {
-                    if finger_drawing_allowed != allowed {
+                    let changed = finger_drawing_allowed != allowed;
+                    if changed {
                         log::info!(
                             "[drawing] finger drawing: {} -> {}",
                             finger_drawing_allowed,
@@ -2178,6 +2281,12 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                         stroke_suppressed = false;
                         dirty = true;
                     }
+                    emit_toolbar_settings(
+                        tool_mode,
+                        picked_color,
+                        picked_width,
+                        finger_drawing_allowed,
+                    );
                     #[cfg(target_os = "android")]
                     if let Err(e) =
                         crate::drawing::platform::android::ui::call_set_finger_drawing_allowed(
@@ -2458,6 +2567,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                         // immediately rather than waiting for the
                         // next sample.
                         let mut needs_rerender = false;
+                        let mut toolbar_settings_changed = false;
 
                         // D5 colour picker: user picked a swatch.
                         // Persist into picked_color for the next
@@ -2475,6 +2585,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             );
                             picked_color = new_color;
                             push_live_ink_style(Some(&*s), picked_color, picked_width);
+                            toolbar_settings_changed = true;
                             // Toolbar's swatch shows `picked_color`
                             // via UiState — re-render so the user
                             // sees the active selection update.
@@ -2490,6 +2601,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             );
                             picked_width = new_width;
                             push_live_ink_style(Some(&*s), picked_color, picked_width);
+                            toolbar_settings_changed = true;
                             needs_rerender = true;
                         }
 
@@ -2514,6 +2626,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             // Tool change alone doesn't repaint
                             // anything, but the toolbar highlight
                             // needs a re-render to reflect it.
+                            toolbar_settings_changed = true;
                             needs_rerender = true;
                         }
 
@@ -2531,8 +2644,18 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                         "[drawing] call_set_finger_drawing_allowed failed: {e}"
                                     );
                                 }
+                                toolbar_settings_changed = true;
                                 needs_rerender = true;
                             }
+                        }
+
+                        if toolbar_settings_changed {
+                            emit_toolbar_settings(
+                                tool_mode,
+                                picked_color,
+                                picked_width,
+                                finger_drawing_allowed,
+                            );
                         }
 
                         if actions.undo {
