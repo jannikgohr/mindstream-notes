@@ -19,12 +19,14 @@
 //! The JNI surface (`platform::android::ui::call_back` /
 //! `Drawing.backFromNative`) stays in place for a future re-wire.
 
-use egui::{pos2, Color32, FontFamily, FontId, Frame, Margin, Painter, Pos2, TopBottomPanel};
+use egui::{pos2, Color32, FontFamily, FontId, Frame, Id, Margin, Painter, Pos2, Rect, Response,
+    TopBottomPanel,
+};
 use egui_shadcn::button::{Button, ButtonSize, ButtonVariant};
 use egui_shadcn::Theme as ShadcnTheme;
 use lucide_icons::Icon;
 
-use super::{DrawingTheme, RenderActions, ToolMode, UiState, LUCIDE_FAMILY};
+use super::{brush, color_picker, DrawingTheme, RenderActions, ToolMode, UiState, LUCIDE_FAMILY};
 
 /// Visible height of the toolbar in pixels. Also used by the
 /// render-thread touch routing to decide which gestures egui owns
@@ -49,6 +51,10 @@ pub fn show(
     actions: &mut RenderActions,
 ) {
     let panel_height_pts = TOOLBAR_HEIGHT_PX / pixels_per_point;
+    let brush_popover_id = Id::new("drawing-brush-popover");
+    let color_popover_id = Id::new("drawing-color-popover");
+    let mut pen_button_rect: Rect = Rect::NOTHING;
+
     TopBottomPanel::top("drawing-toolbar")
         .exact_height(panel_height_pts)
         .frame(
@@ -82,24 +88,65 @@ pub fn show(
                 // pair of icon buttons, highlight the selected one
                 // with shadcn's `Default` variant (the styled
                 // primary look) and leave the other on `Ghost`.
+                //
+                // Pen has D5's "click-when-already-active opens the
+                // brush-size popover" semantics. Capture the
+                // Response (not just `.clicked()`) so we can both
+                // branch on tool state AND anchor the popover to
+                // the button's rect after the toolbar closure exits.
                 let pen_active = state.current_tool == ToolMode::Pen;
-                if shadcn_icon_button(ui, shadcn, &paint_pen, "Pen", variant_for(pen_active), true)
-                    && !pen_active
-                {
-                    actions.set_tool = Some(ToolMode::Pen);
+                let pen_response = shadcn_icon_button_response(
+                    ui,
+                    shadcn,
+                    &paint_pen,
+                    "Pen",
+                    variant_for(pen_active),
+                    true,
+                );
+                pen_button_rect = pen_response.rect;
+                if pen_response.clicked() {
+                    if pen_active {
+                        // Already on Pen → toggle the brush popover.
+                        brush::toggle_open(ui.ctx(), brush_popover_id);
+                    } else {
+                        // First tap switches tools. Make sure no
+                        // stale brush popover from a previous Pen
+                        // session is left open.
+                        actions.set_tool = Some(ToolMode::Pen);
+                        brush::close(ui.ctx(), brush_popover_id);
+                    }
                 }
+
                 let eraser_active = state.current_tool == ToolMode::Eraser;
-                if shadcn_icon_button(
+                let eraser_response = shadcn_icon_button_response(
                     ui,
                     shadcn,
                     &paint_eraser,
                     "Erase",
                     variant_for(eraser_active),
                     true,
-                ) && !eraser_active
-                {
+                );
+                if eraser_response.clicked() && !eraser_active {
                     actions.set_tool = Some(ToolMode::Eraser);
+                    // Switching to Eraser also dismisses the
+                    // brush-size popover — its slider is
+                    // pen-specific.
+                    brush::close(ui.ctx(), brush_popover_id);
                 }
+
+                ui.separator();
+
+                // Colour swatch — shadcn-popover anchored quick-
+                // select grid. Lives between the tool buttons and
+                // the action group to keep the "pen settings"
+                // cluster visually grouped.
+                color_picker::show(
+                    ui,
+                    shadcn,
+                    color_popover_id,
+                    state.current_color,
+                    actions,
+                );
 
                 ui.separator();
 
@@ -145,6 +192,19 @@ pub fn show(
                 }
             });
         });
+
+    // Brush-size popover renders in its own top-level Area so it
+    // can paint past the toolbar panel's clip rect. Anchored to the
+    // Pen button's rect captured above. No-op when closed.
+    brush::show_if_open(
+        ctx,
+        shadcn,
+        brush_popover_id,
+        pen_button_rect,
+        state.current_width,
+        state.current_color,
+        actions,
+    );
 }
 
 /// Map an "is this the active tool?" bool onto a shadcn button
@@ -175,6 +235,21 @@ fn shadcn_icon_button(
     variant: ButtonVariant,
     enabled: bool,
 ) -> bool {
+    shadcn_icon_button_response(ui, theme, painter, tooltip, variant, enabled).clicked()
+}
+
+/// Same as [`shadcn_icon_button`] but returns the raw `Response` so
+/// the caller can inspect the button's rect (e.g. to anchor a
+/// popover below it) and apply custom click logic (e.g. Pen's
+/// "click-when-already-active opens brush picker" branch).
+fn shadcn_icon_button_response(
+    ui: &mut egui::Ui,
+    theme: &ShadcnTheme,
+    painter: &dyn Fn(&Painter, Pos2, f32, Color32),
+    tooltip: &str,
+    variant: ButtonVariant,
+    enabled: bool,
+) -> Response {
     Button::new("")
         .variant(variant)
         .size(ButtonSize::Icon)
@@ -182,7 +257,6 @@ fn shadcn_icon_button(
         .icon(painter)
         .show(ui, theme)
         .on_hover_text(tooltip)
-        .clicked()
 }
 
 /// Build a `Button::icon` closure that paints `icon`'s Lucide glyph

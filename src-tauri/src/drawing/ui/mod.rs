@@ -23,6 +23,8 @@
 //!                        graduate to a dedicated file.
 //!   - `brush.rs`       — TODO: D5
 
+pub mod brush;
+pub mod color_picker;
 pub mod theme;
 pub mod toolbar;
 
@@ -59,11 +61,30 @@ pub enum ToolMode {
 /// can render the selected-tool highlight + grey out unavailable
 /// undo/redo buttons. Kept tiny (Copy) so passing it by value is
 /// trivial.
-#[derive(Copy, Clone, Debug, Default)]
+///
+/// `current_color` / `current_width` drive D5's colour swatch and
+/// brush-size slider — the toolbar shows them as the active
+/// selection so the user can see what the next pen stroke will look
+/// like.
+#[derive(Copy, Clone, Debug)]
 pub struct UiState {
     pub current_tool: ToolMode,
     pub can_undo: bool,
     pub can_redo: bool,
+    pub current_color: u32,
+    pub current_width: f32,
+}
+
+impl Default for UiState {
+    fn default() -> Self {
+        Self {
+            current_tool: ToolMode::default(),
+            can_undo: false,
+            can_redo: false,
+            current_color: crate::drawing::strokes_doc::DEFAULT_COLOR,
+            current_width: crate::drawing::strokes_doc::DEFAULT_WIDTH,
+        }
+    }
 }
 
 /// What the egui UI decided this frame. Read by the render-thread
@@ -88,6 +109,16 @@ pub struct RenderActions {
     /// matching stack and applies the inverse / re-applies.
     pub undo: bool,
     pub redo: bool,
+    /// `Some(packed_argb)` when the user picked a colour from the
+    /// swatch popover; `None` otherwise. Render thread updates its
+    /// `picked_color` state and re-pushes the live-ink overlay
+    /// style so the next stroke uses the new colour.
+    pub set_color: Option<u32>,
+    /// `Some(width)` when the user moved the brush-size slider;
+    /// `None` otherwise. Width is in page units (1 unit = 1/144 inch).
+    /// Render thread updates `picked_width` and re-pushes the
+    /// live-ink overlay style.
+    pub set_width: Option<f32>,
 }
 
 /// Everything pipeline.rs needs to draw the egui pass: tessellated
