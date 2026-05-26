@@ -14,7 +14,8 @@
 //! manually below.
 
 use egui::{
-    Align2, Area, CornerRadius, Frame, Id, Margin, Order, Pos2, Rect, Sense, Slider, Stroke, Ui,
+    Align, Align2, Area, CornerRadius, Frame, Id, Layout, Margin, Order, Pos2, Rect, Sense,
+    Slider, Stroke, Ui, Vec2,
 };
 use egui_shadcn::Theme as ShadcnTheme;
 
@@ -153,6 +154,15 @@ pub fn show_if_open(
 }
 
 /// Render the slider + size-preview swatch inside the popover frame.
+///
+/// Width strategy: we capture `row_width` once at entry and force
+/// each row into an `allocate_ui_with_layout(row_width, …)` slot.
+/// Without this, egui's per-widget desired-size negotiation lets
+/// the slider fall back to `spacing.slider_width` (≈ 100 pt) even
+/// after we override that spacing — the override doesn't survive
+/// through every internal sub-ui the widget allocates. Forcing the
+/// containing slot's max-size to `row_width` pins the slider's
+/// track to the full popover width.
 fn paint_popover_contents(
     ui: &mut Ui,
     shadcn: &ShadcnTheme,
@@ -161,54 +171,63 @@ fn paint_popover_contents(
     actions: &mut RenderActions,
 ) {
     let palette = &shadcn.palette;
+    let row_width = ui.available_width();
 
     // Header label — "Brush size" with the numeric value on the right.
-    ui.horizontal(|ui| {
-        ui.label(
-            egui::RichText::new("Brush size")
-                .color(palette.popover_foreground)
-                .size(13.0),
-        );
-        ui.with_layout(
-            egui::Layout::right_to_left(egui::Align::Center),
-            |ui| {
+    // `allocate_ui_with_layout(row_width, left_to_right)` forces the
+    // horizontal to span the full row so `with_layout(right_to_left)`
+    // for the value puts it flush against the right edge regardless
+    // of the label's intrinsic width.
+    ui.allocate_ui_with_layout(
+        Vec2::new(row_width, 0.0),
+        Layout::left_to_right(Align::Center),
+        |ui| {
+            ui.label(
+                egui::RichText::new("Brush size")
+                    .color(palette.popover_foreground)
+                    .size(13.0),
+            );
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.label(
                     egui::RichText::new(format!("{:.1}", current_width))
                         .color(palette.muted_foreground)
                         .size(12.0),
                 );
-            },
-        );
-    });
+            });
+        },
+    );
 
     ui.add_space(8.0);
 
     // Live preview: a horizontal pill whose height matches the
     // current brush width. Same fill colour the next stroke will
     // commit, so the user sees "this is what my pen looks like".
-    paint_preview(ui, current_width, current_color, palette);
+    paint_preview(ui, current_width, current_color, palette, row_width);
 
     ui.add_space(10.0);
 
-    // Stretch the slider's track to the popover's content width.
-    // egui's `Slider` defaults to `spacing.slider_width` (~100 pt),
-    // which left a stub-looking control aligned to the left margin
-    // while the header above filled the row. Setting slider_width
-    // = `ui.available_width()` makes the track match the rest of
-    // the layout. Restore the previous value after so we don't
-    // pollute any future widgets sharing this ui.
-    let saved_slider_width = ui.spacing().slider_width;
-    ui.spacing_mut().slider_width = ui.available_width();
-    let mut width_value = current_width;
-    let response = ui.add(
-        Slider::new(&mut width_value, MIN_WIDTH..=MAX_WIDTH)
-            .show_value(false)
-            .smart_aim(false),
+    // Slider: wrap in an explicit `row_width × slider_height` slot
+    // and pin `spacing.slider_width` to `row_width`. Belt-and-braces
+    // — either alone wasn't enough to make the slider fully expand
+    // in practice; combined they reliably stretch the track to the
+    // popover edge.
+    let slider_height = ui.spacing().interact_size.y;
+    ui.allocate_ui_with_layout(
+        Vec2::new(row_width, slider_height),
+        Layout::left_to_right(Align::Center),
+        |ui| {
+            ui.spacing_mut().slider_width = row_width;
+            let mut width_value = current_width;
+            let response = ui.add(
+                Slider::new(&mut width_value, MIN_WIDTH..=MAX_WIDTH)
+                    .show_value(false)
+                    .smart_aim(false),
+            );
+            if response.changed() {
+                actions.set_width = Some(width_value);
+            }
+        },
     );
-    ui.spacing_mut().slider_width = saved_slider_width;
-    if response.changed() {
-        actions.set_width = Some(width_value);
-    }
 }
 
 /// Paint a stroke preview at the current brush width + colour. The
@@ -221,21 +240,20 @@ fn paint_preview(
     width_pu: f32,
     color: u32,
     palette: &egui_shadcn::tokens::ColorPalette,
+    row_width: f32,
 ) {
     // Reserve a fixed-height slot so the preview's vertical bounds
     // stay stable regardless of brush size. Visual line height
     // tracks the brush width directly (page-unit ≈ egui-point
     // roughly enough at our pixels_per_point).
     let slot_height = MAX_WIDTH + 6.0;
-    // Use the parent's current row width — not the hardcoded
-    // POPOVER_WIDTH constant — so the preview matches whatever the
-    // popover ui actually resolved to (Frame margins / parent
-    // layout can shift the inner content width by a few pt, and
-    // hardcoding made the preview look indented relative to the
-    // header that *does* read available_width).
-    let row_width = ui.available_width();
+    // Caller passes `row_width` (captured once at the top of
+    // paint_popover_contents) so all three rows of the popover
+    // share the same width source — no chance of header / preview
+    // / slider disagreeing if the ui's available_width drifts
+    // mid-layout.
     let (rect, _resp) =
-        ui.allocate_exact_size(egui::Vec2::new(row_width, slot_height), Sense::hover());
+        ui.allocate_exact_size(Vec2::new(row_width, slot_height), Sense::hover());
     let painter = ui.painter_at(rect);
     // Subtle muted background so the preview swatch is visible even
     // when the user picks a colour that matches the popover bg
@@ -245,19 +263,14 @@ fn paint_preview(
         CornerRadius::same(6),
         palette.muted.linear_multiply(0.6),
     );
-    // Preview pill: rounded horizontal capsule, height = brush width.
-    // Inset the pill horizontally by a small margin (`PREVIEW_PILL_INSET`)
-    // so the colour doesn't run into the muted background's rounded
-    // corners — purely cosmetic; both edges visible at all sizes.
-    const PREVIEW_PILL_INSET: f32 = 14.0;
+    // Preview pill: rounded horizontal capsule, height = brush
+    // width, full row width. Rounded ends with `radius = line_h/2`
+    // give the capsule shape that matches what a real stroke at
+    // this width would look like — edge-to-edge so the preview
+    // tracks the popover's full content width.
     let line_h = width_pu.clamp(MIN_WIDTH, MAX_WIDTH);
-    let line_rect = Rect::from_center_size(
-        rect.center(),
-        egui::Vec2::new(
-            (rect.width() - PREVIEW_PILL_INSET * 2.0).max(1.0),
-            line_h.max(1.0),
-        ),
-    );
+    let line_rect =
+        Rect::from_center_size(rect.center(), Vec2::new(rect.width(), line_h.max(1.0)));
     let line_radius = (line_h * 0.5).max(1.0);
     painter.rect_filled(
         line_rect,
