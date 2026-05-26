@@ -154,6 +154,44 @@ pub fn list(conn: &Connection, include_trashed: bool) -> AppResult<Vec<NoteSumma
     Ok(summaries)
 }
 
+/// Cheap-write helper for ink notes: updates JUST the `yrs_state`
+/// column + `modified` timestamp, no body / tags / parent shuffling.
+/// Used by the drawing save worker to flush in-memory `StrokesDoc`
+/// bytes to disk without going through the full `update` path
+/// (which is shaped for general note updates incl. body diffing,
+/// payload-schema bumping, parent moves, …).
+///
+/// Returns `Ok(false)` if the note id doesn't exist (caller's
+/// pending save has nothing to land on — note was deleted while the
+/// debounce was pending). Returns `Ok(true)` on a successful row
+/// update.
+pub fn save_yrs_state(conn: &mut Connection, id: &str, bytes: &[u8]) -> AppResult<bool> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let rows = conn.execute(
+        "UPDATE notes SET yrs_state = ?1, modified = ?2 WHERE id = ?3",
+        params![bytes, now, id],
+    )?;
+    Ok(rows > 0)
+}
+
+/// Cheap fetch of just the `yrs_state` blob for a note id, skipping
+/// the rest of the row + the serde-derive overhead of building a
+/// `Note`. Used by ink-note open (`drawing_show`) to dodge the
+/// ~200KB/MB-class IPC cost of shipping a heavy `yrs_state` from
+/// SQLite → JS → back across Tauri's JSON-encoded IPC. Returns an
+/// empty `Vec` for a missing note or a null yrs_state column —
+/// matching the "fresh doc" treatment downstream.
+pub fn load_yrs_state(conn: &Connection, id: &str) -> AppResult<Vec<u8>> {
+    let state: Option<Option<Vec<u8>>> = conn
+        .query_row(
+            "SELECT yrs_state FROM notes WHERE id = ?1",
+            params![id],
+            |row| row.get::<_, Option<Vec<u8>>>(0),
+        )
+        .optional()?;
+    Ok(state.flatten().unwrap_or_default())
+}
+
 pub fn load(conn: &Connection, id: &str) -> AppResult<Note> {
     let mut stmt = conn.prepare(
         "SELECT id, parent_collection_id, title, position, created, modified,
@@ -266,6 +304,20 @@ pub fn update(conn: &mut Connection, input: UpdateNote) -> AppResult<Note> {
                 params![new_body, new_state, now, input.id],
             )?;
         }
+    } else if let Some(supplied_state) = &input.yrs_state {
+        // Editor supplies a fresh yrs_state but no body — used by
+        // note kinds whose document content lives entirely in the
+        // CRDT and has no body equivalent (ink notes from C2 of the
+        // native-egui-layer roadmap; future shape-only kinds). We
+        // trust the supplied bytes verbatim; nothing about the
+        // payload_schema discriminator (markdown v1 / v2) applies
+        // here so we leave it alone.
+        tx.execute(
+            "UPDATE notes
+             SET yrs_state = ?1, modified = ?2
+             WHERE id = ?3",
+            params![supplied_state, now, input.id],
+        )?;
     }
     if let Some(parent) = &input.parent_collection_id {
         tx.execute(

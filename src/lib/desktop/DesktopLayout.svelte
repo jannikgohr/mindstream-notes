@@ -20,6 +20,7 @@
   import MetadataPanel from '$lib/components/MetadataPanel.svelte';
   import NoteEditor from '$lib/components/NoteEditor.svelte';
   import FreeformNoteEditor from '$lib/components/FreeformNoteEditor.svelte';
+  import DrawingNoteEditor from '$lib/components/DrawingNoteEditor.svelte';
   import UnknownNoteKindError from '$lib/components/UnknownNoteKindError.svelte';
   import ResizeHandle from '$lib/components/ResizeHandle.svelte';
   import SettingsDialog from '$lib/settings/SettingsDialog.svelte';
@@ -101,6 +102,8 @@
             return new SvelteRenderer(NoteEditor);
           case 'freeformNote':
             return new SvelteRenderer(FreeformNoteEditor);
+          case 'inkNote':
+            return new SvelteRenderer(DrawingNoteEditor);
           case 'unknownNoteKind':
             return new SvelteRenderer(UnknownNoteKindError);
           default:
@@ -281,7 +284,9 @@
     const componentName = isKnownNoteKind(note.note_kind)
       ? note.note_kind === 'freeform'
         ? 'freeformNote'
-        : 'noteEditor'
+        : note.note_kind === 'ink'
+          ? 'inkNote'
+          : 'noteEditor'
       : 'unknownNoteKind';
     const panel = dock.addPanel({
       id: `note:${id}`,
