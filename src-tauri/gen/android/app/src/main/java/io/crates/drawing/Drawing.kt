@@ -340,6 +340,28 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
             }
         }
 
+        @Volatile
+        private var controlBounds: List<android.graphics.RectF> = emptyList()
+
+        @JvmStatic
+        fun setControlBoundsFromNative(bounds: FloatArray) {
+            val rects = java.util.ArrayList<android.graphics.RectF>()
+            for (i in 0 until bounds.size step 4) {
+                if (i + 3 < bounds.size) {
+                    rects.add(android.graphics.RectF(bounds[i], bounds[i + 1], bounds[i + 2], bounds[i + 3]))
+                }
+            }
+            controlBounds = rects
+        }
+
+        fun inControlBounds(x: Float, y: Float): Boolean {
+            val bounds = controlBounds
+            for (r in bounds) {
+                if (r.contains(x, y)) return true
+            }
+            return false
+        }
+
         /**
          * Called from Rust to change the live-ink front-buffer overlay's
          * color and stroke-width range. Rust is the source of truth for
@@ -926,7 +948,7 @@ private class FrontBufferInk(private val surfaceView: SurfaceView) {
             MotionEvent.ACTION_DOWN -> {
                 generation += 1
                 renderer.cancel()
-                suppressed = y < FRONT_BUFFER_TOOLBAR_HEIGHT_PX
+                suppressed = y < FRONT_BUFFER_TOOLBAR_HEIGHT_PX || Drawing.inControlBounds(x, y)
                 inStroke = !suppressed
                 lastX = x
                 lastY = y
