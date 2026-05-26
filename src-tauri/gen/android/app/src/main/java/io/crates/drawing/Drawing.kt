@@ -77,8 +77,31 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
     /** The currently-attached overlay, or null when hidden. */
     private var view: DrawingSurfaceView? = null
 
+    /**
+     * True if [hideSync] tore down an attached SurfaceView for a
+     * lifecycle pause (onPause) — i.e. we should re-create it on the
+     * matching [resumeIfNeeded] call. Cleared whenever JS or the user
+     * acts explicitly ([show] or [hide]). Read/written only from the
+     * UI thread (hideSync is UI-thread-only by contract; show/hide
+     * post their writes via runOnUiThread; resumeIfNeeded fires from
+     * MainActivity.onResume which is UI-thread).
+     *
+     * Without this flag, a screen-off / app-switch / lock cycle while
+     * an ink note is open detaches the SurfaceView (so EGL teardown
+     * stays away from wgpu's swap-chain Drop) but never re-attaches —
+     * the Svelte DrawingNoteEditor stays mounted across the pause,
+     * so its onMount-driven `drawingShow` doesn't fire a second time
+     * and the user is left with a frozen view that requires
+     * navigating away + back to recover.
+     */
+    private var attachedBeforePause: Boolean = false
+
     fun show() {
         activity.runOnUiThread {
+            // Any explicit show clears the auto-resume flag — if the
+            // user / JS asked for it, the resume path shouldn't also
+            // pile on a second show.
+            attachedBeforePause = false
             if (view != null) return@runOnUiThread
             // Request the highest-Hz display mode the panel offers
             // (at the current resolution) while an ink note is open.
@@ -120,6 +143,11 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
 
     fun hide() {
         activity.runOnUiThread {
+            // Explicit-hide path: JS navigated away from the ink note.
+            // Even if we then immediately pause (e.g. user pressed
+            // back and then locked the screen), onResume should NOT
+            // re-attach — the user isn't on the ink note anymore.
+            attachedBeforePause = false
             val v = view ?: return@runOnUiThread
             Log.i("MindstreamDrawing", "Drawing.hide: detaching SurfaceView")
             (v.parent as? ViewGroup)?.removeView(v)
@@ -148,7 +176,45 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
         Log.i("MindstreamDrawing", "Drawing.hideSync: detaching SurfaceView (UI thread)")
         (v.parent as? ViewGroup)?.removeView(v)
         view = null
+        // Mark for onResume — the early return above means this only
+        // fires if we actually tore down a live view. JS-driven hide()
+        // (which sets the flag false) would have nulled `view` first,
+        // so a pause that follows an explicit hide is correctly a
+        // no-op on resume.
+        attachedBeforePause = true
         releaseRefreshRate(activity)
+    }
+
+    /**
+     * UI-thread-only resume path mirroring [hideSync]. Called from
+     * [MainActivity.onResume] (and dispatched via [Drawing.resume]
+     * below). If [hideSync] tore the SurfaceView down for a lifecycle
+     * pause, re-create it now so the user comes back to a working
+     * ink note instead of a frozen view.
+     *
+     * The Rust render thread retains its per-note `CanvasDocument`
+     * map + `active_note_id` across the pause (only `surface_state`
+     * was dropped, by design — see `clear_surface` in render.rs), so
+     * `show()` bringing a new SurfaceView up triggers
+     * `surfaceCreated` → JNI `setSurface` → Rust rebuilds
+     * `SurfaceBoundState` from the persistent `PersistentGpu`, and
+     * the first repaint shows the correct note's strokes. No JS
+     * involvement needed.
+     */
+    fun resumeIfNeeded() {
+        check(android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+            "resumeIfNeeded must be called on the UI thread"
+        }
+        if (!attachedBeforePause) return
+        Log.i(
+            "MindstreamDrawing",
+            "Drawing.resumeIfNeeded: re-attaching SurfaceView after lifecycle pause"
+        )
+        // `show()` clears the flag itself (inside its runOnUiThread
+        // block) — go through the regular show path so any future
+        // changes there (high-refresh request, topMargin recompute,
+        // …) apply identically to the resume case.
+        show()
     }
 
     /**
@@ -206,6 +272,18 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
          */
         fun detach() {
             instance?.hideSync()
+        }
+
+        /**
+         * Called from MainActivity.onResume. Pair to [detach] — if
+         * the pause path tore down a live SurfaceView, re-create it
+         * here so the user comes back to a working ink note. No-op if
+         * detach didn't actually remove a view (we were on a non-ink
+         * screen at pause time) or if JS later called drawing_hide
+         * (the explicit-hide path clears the auto-resume flag).
+         */
+        fun resume() {
+            instance?.resumeIfNeeded()
         }
 
         // ---- Called from Rust via JNI (jni::ui::invoke_static_void) ----
