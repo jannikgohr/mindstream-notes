@@ -190,15 +190,22 @@ fn paint_popover_contents(
 
     ui.add_space(10.0);
 
-    // Tweak slider visuals to match the rest of the toolbar — drop
-    // egui's default 0.5-px hairline frame so the slider track sits
-    // on the popover background cleanly.
+    // Stretch the slider's track to the popover's content width.
+    // egui's `Slider` defaults to `spacing.slider_width` (~100 pt),
+    // which left a stub-looking control aligned to the left margin
+    // while the header above filled the row. Setting slider_width
+    // = `ui.available_width()` makes the track match the rest of
+    // the layout. Restore the previous value after so we don't
+    // pollute any future widgets sharing this ui.
+    let saved_slider_width = ui.spacing().slider_width;
+    ui.spacing_mut().slider_width = ui.available_width();
     let mut width_value = current_width;
     let response = ui.add(
         Slider::new(&mut width_value, MIN_WIDTH..=MAX_WIDTH)
             .show_value(false)
             .smart_aim(false),
     );
+    ui.spacing_mut().slider_width = saved_slider_width;
     if response.changed() {
         actions.set_width = Some(width_value);
     }
@@ -220,8 +227,15 @@ fn paint_preview(
     // tracks the brush width directly (page-unit ≈ egui-point
     // roughly enough at our pixels_per_point).
     let slot_height = MAX_WIDTH + 6.0;
+    // Use the parent's current row width — not the hardcoded
+    // POPOVER_WIDTH constant — so the preview matches whatever the
+    // popover ui actually resolved to (Frame margins / parent
+    // layout can shift the inner content width by a few pt, and
+    // hardcoding made the preview look indented relative to the
+    // header that *does* read available_width).
+    let row_width = ui.available_width();
     let (rect, _resp) =
-        ui.allocate_exact_size(egui::Vec2::new(POPOVER_WIDTH, slot_height), Sense::hover());
+        ui.allocate_exact_size(egui::Vec2::new(row_width, slot_height), Sense::hover());
     let painter = ui.painter_at(rect);
     // Subtle muted background so the preview swatch is visible even
     // when the user picks a colour that matches the popover bg
@@ -232,10 +246,17 @@ fn paint_preview(
         palette.muted.linear_multiply(0.6),
     );
     // Preview pill: rounded horizontal capsule, height = brush width.
+    // Inset the pill horizontally by a small margin (`PREVIEW_PILL_INSET`)
+    // so the colour doesn't run into the muted background's rounded
+    // corners — purely cosmetic; both edges visible at all sizes.
+    const PREVIEW_PILL_INSET: f32 = 14.0;
     let line_h = width_pu.clamp(MIN_WIDTH, MAX_WIDTH);
     let line_rect = Rect::from_center_size(
         rect.center(),
-        egui::Vec2::new(rect.width() - 28.0, line_h.max(1.0)),
+        egui::Vec2::new(
+            (rect.width() - PREVIEW_PILL_INSET * 2.0).max(1.0),
+            line_h.max(1.0),
+        ),
     );
     let line_radius = (line_h * 0.5).max(1.0);
     painter.rect_filled(
