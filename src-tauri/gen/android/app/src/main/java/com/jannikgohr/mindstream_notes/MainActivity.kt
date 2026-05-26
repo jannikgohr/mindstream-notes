@@ -43,12 +43,30 @@ class MainActivity : TauriActivity() {
    * (FORTIFY SIGABRT, two threads racing on the same mutex addr).
    *
    * Detach is a no-op when nothing is attached — safe to call on every
-   * pause regardless of whether an ink note is open. The next show()
-   * (e.g. coming back from background while in the same note) will
-   * rebuild from scratch via DrawingNoteEditor's onMount.
+   * pause regardless of whether an ink note is open. If a SurfaceView
+   * was actually attached, Drawing flags itself so the matching
+   * [onResume] below re-creates it. (Pre-resume-hook this was assumed
+   * to be re-driven by DrawingNoteEditor's onMount, but the Svelte
+   * component stays mounted across the activity-pause lifecycle, so
+   * onMount doesn't fire a second time and the user was left with a
+   * frozen ink view requiring back+forward navigation to recover.)
    */
   override fun onPause() {
     Drawing.detach()
     super.onPause()
+  }
+
+  /**
+   * Pair to [onPause]: re-create the drawing SurfaceView if it was
+   * torn down for the pause. No-op when nothing was attached (e.g.
+   * user was on a non-ink screen at pause time) or when JS hid the
+   * ink note explicitly during the paused window.
+   *
+   * Order matters: super.onResume first so wry / the WebView finish
+   * their own resume bookkeeping before we touch the view tree.
+   */
+  override fun onResume() {
+    super.onResume()
+    Drawing.resume()
   }
 }
