@@ -69,6 +69,7 @@ pub enum ToolMode {
 #[derive(Copy, Clone, Debug)]
 pub struct UiState {
     pub current_tool: ToolMode,
+    pub finger_drawing_allowed: bool,
     pub can_undo: bool,
     pub can_redo: bool,
     pub current_color: u32,
@@ -79,6 +80,7 @@ impl Default for UiState {
     fn default() -> Self {
         Self {
             current_tool: ToolMode::default(),
+            finger_drawing_allowed: true,
             can_undo: false,
             can_redo: false,
             current_color: crate::drawing::strokes_doc::DEFAULT_COLOR,
@@ -105,6 +107,10 @@ pub struct RenderActions {
     /// `Some(mode)` when the user picked a different tool; `None`
     /// otherwise. Render thread updates its `tool_mode` state.
     pub set_tool: Option<ToolMode>,
+    /// Finger drawing toggle. Stylus and eraser-tip input remain
+    /// accepted either way; this only controls finger/unknown touch
+    /// samples on the canvas.
+    pub set_finger_drawing_allowed: Option<bool>,
     /// Undo / redo button presses. Render thread pops from the
     /// matching stack and applies the inverse / re-applies.
     pub undo: bool,

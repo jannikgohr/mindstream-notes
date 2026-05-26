@@ -9,6 +9,7 @@ import android.graphics.PixelFormat
 import android.os.Build
 import android.os.SystemClock
 import android.util.Log
+import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.MotionPredictor
 import android.view.Surface
@@ -342,6 +343,8 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
 
         @Volatile
         private var controlBounds: List<android.graphics.RectF> = emptyList()
+        @Volatile
+        private var fingerDrawingAllowed: Boolean = true
 
         @JvmStatic
         fun setControlBoundsFromNative(bounds: FloatArray) {
@@ -353,6 +356,41 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
             }
             controlBounds = rects
         }
+
+        @JvmStatic
+        fun setFingerDrawingAllowedFromNative(allowed: Boolean) {
+            fingerDrawingAllowed = allowed
+        }
+
+        fun setFingerDrawingAllowedDefaultFromDevice(context: Context) {
+            val hasPen = hasPenSupport(context)
+            val allowed = !hasPen
+            fingerDrawingAllowed = allowed
+            Log.i(
+                "MindstreamDrawing",
+                "finger drawing default allowed=$allowed hasPenSupport=$hasPen"
+            )
+            setFingerDrawingAllowed(allowed)
+        }
+
+        private fun hasPenSupport(context: Context): Boolean {
+            val inputManager = context.getSystemService(Context.INPUT_SERVICE)
+                as? android.hardware.input.InputManager
+            if (inputManager == null) return false
+            for (deviceId in inputManager.inputDeviceIds) {
+                val device = inputManager.getInputDevice(deviceId) ?: continue
+                if ((device.sources and InputDevice.SOURCE_STYLUS) == InputDevice.SOURCE_STYLUS) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        fun canDrawWithTool(toolType: Int): Boolean =
+            fingerDrawingAllowed ||
+                toolType == MotionEvent.TOOL_TYPE_STYLUS ||
+                toolType == MotionEvent.TOOL_TYPE_ERASER ||
+                toolType == MotionEvent.TOOL_TYPE_MOUSE
 
         fun inControlBounds(x: Float, y: Float): Boolean {
             val bounds = controlBounds
@@ -478,6 +516,7 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
         external fun setSurface(surface: Surface, width: Int, height: Int)
         external fun resizeSurface(width: Int, height: Int)
         external fun clearSurface()
+        external fun setFingerDrawingAllowed(allowed: Boolean)
         external fun pushPoint(
             x: Float,
             y: Float,
@@ -697,6 +736,7 @@ private class DrawingSurfaceView(context: Context) :
         holder.addCallback(this)
         isFocusable = true
         isClickable = true
+        Drawing.setFingerDrawingAllowedDefaultFromDevice(context)
         if (motionPredictor == null) {
             Log.i(
                 "MindstreamDrawing",
@@ -1037,7 +1077,7 @@ private class FrontBufferInk(private val surfaceView: SurfaceView) {
             MotionEvent.ACTION_DOWN -> {
                 generation += 1
                 renderer.cancel()
-                suppressed = Drawing.blocksLiveInkAt(x, y)
+                suppressed = Drawing.blocksLiveInkAt(x, y) || !Drawing.canDrawWithTool(toolType)
                 inStroke = !suppressed
                 lastX = x
                 lastY = y
@@ -1046,7 +1086,7 @@ private class FrontBufferInk(private val surfaceView: SurfaceView) {
             MotionEvent.ACTION_MOVE -> {
                 if (!inStroke || suppressed) return
                 val segment = buildSegment(x, y, pressure)
-                if (!Drawing.blocksLiveInkSegment(lastX, lastY, x, y)) {
+                if (Drawing.canDrawWithTool(toolType) && !Drawing.blocksLiveInkSegment(lastX, lastY, x, y)) {
                     if (!loggedFirstSegment) {
                         loggedFirstSegment = true
                         Log.i("MindstreamDrawing", "front-buffer ink first segment rendered")
@@ -1058,7 +1098,11 @@ private class FrontBufferInk(private val surfaceView: SurfaceView) {
                 lastPressure = pressure
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                if (inStroke && !suppressed && !Drawing.blocksLiveInkSegment(lastX, lastY, x, y)) {
+                if (inStroke &&
+                    !suppressed &&
+                    Drawing.canDrawWithTool(toolType) &&
+                    !Drawing.blocksLiveInkSegment(lastX, lastY, x, y)
+                ) {
                     renderer.renderFrontBufferedLayer(buildSegment(x, y, pressure))
                 }
                 inStroke = false

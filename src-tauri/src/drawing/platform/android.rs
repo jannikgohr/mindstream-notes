@@ -13,6 +13,7 @@
 //!        setSurface(Surface, w, h)
 //!        resizeSurface(w, h)
 //!        clearSurface()
+//!        setFingerDrawingAllowed(allowed)
 //!        pushPoint(x, y, pressure, toolType, buttons, action, timeMs)
 //!        pushPredictedPoint(x, y, pressure, timeMs)
 //!
@@ -40,7 +41,7 @@ use std::ptr::NonNull;
 use std::sync::OnceLock;
 
 use jni::objects::{GlobalRef, JClass, JObject};
-use jni::sys::{jfloat, jint, jlong};
+use jni::sys::{jboolean, jfloat, jint, jlong};
 use jni::JNIEnv;
 use raw_window_handle::{
     AndroidDisplayHandle, AndroidNdkWindowHandle, DisplayHandle, HandleError, HasDisplayHandle,
@@ -190,10 +191,7 @@ pub extern "system" fn Java_io_crates_drawing_Drawing_00024Companion_setSurface(
     height: jint,
 ) {
     let native_window = unsafe {
-        ndk_sys::ANativeWindow_fromSurface(
-            env.get_raw() as *mut _,
-            surface.as_raw() as *mut _,
-        )
+        ndk_sys::ANativeWindow_fromSurface(env.get_raw() as *mut _, surface.as_raw() as *mut _)
     };
     let Some(ptr) = NonNull::new(native_window) else {
         log::error!("[drawing] ANativeWindow_fromSurface returned null");
@@ -226,6 +224,20 @@ pub extern "system" fn Java_io_crates_drawing_Drawing_00024Companion_clearSurfac
     _class: JClass,
 ) {
     render::clear_surface();
+}
+
+/// `Drawing.Companion.setFingerDrawingAllowed(allowed)` — low-rate
+/// Kotlin → Rust state sync. Kotlin sends the device-default value
+/// after checking whether Android exposes a stylus input source;
+/// toolbar changes flow Rust → Kotlin via
+/// `setFingerDrawingAllowedFromNative`.
+#[no_mangle]
+pub extern "system" fn Java_io_crates_drawing_Drawing_00024Companion_setFingerDrawingAllowed(
+    _env: JNIEnv,
+    _class: JClass,
+    allowed: jboolean,
+) {
+    render::set_finger_drawing_allowed(allowed != 0);
 }
 
 /// `Drawing.Companion.pushPoint(x, y, pressure, toolType, buttons, action, timeMs)`
@@ -313,12 +325,7 @@ pub extern "system" fn Java_io_crates_drawing_Drawing_00024Companion_pushPredict
     pressure: jfloat,
     time_ms: jlong,
 ) {
-    render::push_predicted_point(
-        x,
-        y,
-        pressure,
-        (time_ms.max(0) as f64) / 1000.0,
-    );
+    render::push_predicted_point(x, y, pressure, (time_ms.max(0) as f64) / 1000.0);
 }
 
 // ---------- JNI: Rust → Kotlin (UI thread callbacks) ----------
@@ -381,6 +388,11 @@ pub mod ui {
         invoke_static("setLiveInkStyleFromNative", "(IFF)V", &args)
     }
 
+    pub fn call_set_finger_drawing_allowed(allowed: bool) -> Result<(), String> {
+        let args = [JValue::Bool(if allowed { 1 } else { 0 })];
+        invoke_static("setFingerDrawingAllowedFromNative", "(Z)V", &args)
+    }
+
     /// Push all active control bounding boxes (flat f32 array: [minX, minY, maxX, maxY, ...])
     /// down to Kotlin so the front-buffer overlay can suppress strokes drawn over them.
     pub fn call_set_control_bounds(bounds: &[f32]) -> Result<(), String> {
@@ -388,8 +400,7 @@ pub mod ui {
         let vm_ptr = ctx.vm();
         if vm_ptr.is_null() {
             return Err(
-                "ndk_context JavaVM is null — Keyring.initializeNdkContext must run first"
-                    .into(),
+                "ndk_context JavaVM is null — Keyring.initializeNdkContext must run first".into(),
             );
         }
         let vm = unsafe { JavaVM::from_raw(vm_ptr.cast()) }
@@ -399,15 +410,14 @@ pub mod ui {
             .map_err(|e| format!("attach_current_thread: {e}"))?;
 
         let global_ref = super::DRAWING_CLASS.get().ok_or_else(|| {
-            "Drawing class not yet cached — Drawing companion static init must have run"
-                .to_string()
+            "Drawing class not yet cached — Drawing companion static init must have run".to_string()
         })?;
         let class = unsafe { JClass::from_raw(global_ref.as_raw()) };
 
         let array = env
             .new_float_array(bounds.len() as jni::sys::jsize)
             .map_err(|e| format!("new_float_array: {e}"))?;
-        
+
         env.set_float_array_region(&array, 0, bounds)
             .map_err(|e| format!("set_float_array_region: {e}"))?;
 
@@ -444,8 +454,7 @@ pub mod ui {
         let vm_ptr = ctx.vm();
         if vm_ptr.is_null() {
             return Err(
-                "ndk_context JavaVM is null — Keyring.initializeNdkContext must run first"
-                    .into(),
+                "ndk_context JavaVM is null — Keyring.initializeNdkContext must run first".into(),
             );
         }
         // SAFETY: ndk_context guarantees `vm()` returns a JavaVM
@@ -458,8 +467,7 @@ pub mod ui {
             .map_err(|e| format!("attach_current_thread: {e}"))?;
 
         let global_ref = super::DRAWING_CLASS.get().ok_or_else(|| {
-            "Drawing class not yet cached — Drawing companion static init must have run"
-                .to_string()
+            "Drawing class not yet cached — Drawing companion static init must have run".to_string()
         })?;
         // SAFETY: GlobalRef holds the same jobject we received as a
         // jclass from Kotlin's `Drawing::class.java`; JClass is a
