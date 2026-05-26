@@ -1,33 +1,36 @@
-//! Visual theme for the drawing toolbar (B2). Bridges the app's
-//! shadcn-style design tokens — see `src/app.css` — into an
-//! [`egui::Visuals`] the egui context applies once on construction
-//! and whenever the JS side pushes a fresh theme via the future
-//! `drawing_set_theme` Tauri command.
+//! Visual theme for the drawing toolbar (B2).
 //!
-//! Token mapping (matches the `:root` / `.dark` blocks in
-//! `src/app.css`, OKLCH → sRGB approximated to integer RGB):
+//! Two-layer split:
 //!
-//!   panel background      `--background`           dark `~oklch(0.18)` ≈ rgb 32,32,36
-//!   button background     `--secondary`/`--muted`  dark `~oklch(0.27)` ≈ rgb 58,58,60
-//!   button hover          one shade above muted                       ≈ rgb 78,78,82
-//!   button active / accent `--primary`             dark `~oklch(0.985)` ≈ rgb 250,250,250 (overridden by user accent if set)
-//!   border                `--border`               dark `~oklch(0.27)` ≈ rgb 58,58,60
-//!   foreground            `--foreground`           dark `~oklch(0.985)` ≈ rgb 250,250,250
+//!   1. [`DrawingTheme`] is the platform-neutral input shape — `dark`
+//!      flag + optional `accent` colour, the same two knobs the JS
+//!      side has (`appearance.mode` + `appearance.accent`). Stays
+//!      stable so the `drawing_set_theme` Tauri command never has to
+//!      learn shadcn internals.
 //!
-//! The toolbar reads the panel background through [`DrawingTheme::background`]
-//! (and not via egui visuals) because `egui::Frame::fill` must be the
-//! shadcn panel colour even when the surrounding widgets are
-//! themed by `Visuals`. The widget colours all come from
-//! [`DrawingTheme::to_visuals`] which the context applies on
-//! [`crate::drawing::ui::CanvasUi::set_theme`].
+//!   2. We use [`egui_shadcn::Theme`] for the per-frame widget
+//!      visuals — built from shadcn's `ColorPalette::shadcn_dark` /
+//!      `shadcn_light` with the same Neutral base the rest of the
+//!      app resolves to in `src/app.css`. The user accent overrides
+//!      `palette.primary` + `palette.ring` exactly the way
+//!      `src/lib/settings/accent.ts` does on the JS side.
+//!
+//! The toolbar reads the shadcn `Theme` directly; the panel
+//! background still goes through [`DrawingTheme::background`]
+//! because `egui::Frame::fill` needs an explicit value (egui doesn't
+//! auto-apply `Visuals::panel_fill` to user-built frames).
+//!
+//! For [`crate::drawing::ui::CanvasUi`] callers nothing changes —
+//! you still construct a `DrawingTheme` and hand it to `set_theme`.
 
-use egui::{Color32, Visuals};
+use egui::Color32;
+use egui_shadcn::tokens::{ColorPalette, ShadcnBaseColor};
+use egui_shadcn::Theme as ShadcnTheme;
 
 /// Visual tokens the toolbar reads. `dark = true` matches the
-/// existing `Color32::from_rgb(32, 32, 36)` panel and the rest of
-/// the app when `html.dark` is set; `accent` mirrors shadcn's
-/// `--primary` (i.e. the colour the user can override via the
-/// accent-picker setting).
+/// existing toolbar look and the rest of the app when `html.dark`
+/// is set; `accent` mirrors shadcn's `--primary` (the colour the
+/// user can override via the `appearance.accent` setting).
 #[derive(Copy, Clone, Debug)]
 pub struct DrawingTheme {
     pub dark: bool,
@@ -35,9 +38,9 @@ pub struct DrawingTheme {
 }
 
 impl DrawingTheme {
-    /// Default dark palette — matches the values that resolve from
-    /// the `.dark` block in `src/app.css`. Accent is shadcn's
-    /// default near-white `--primary` in dark mode.
+    /// Default dark palette. Accent is shadcn's default near-white
+    /// `--primary` in dark mode; the JS bridge overrides this when
+    /// the user has actually picked a custom accent.
     pub const fn dark() -> Self {
         Self {
             dark: true,
@@ -45,8 +48,8 @@ impl DrawingTheme {
         }
     }
 
-    /// Light palette — matches the `:root` block in `src/app.css`.
-    /// Accent is shadcn's near-black `--primary` in light mode.
+    /// Light palette. Accent is shadcn's near-black `--primary` in
+    /// light mode.
     pub const fn light() -> Self {
         Self {
             dark: false,
@@ -54,128 +57,50 @@ impl DrawingTheme {
         }
     }
 
+    /// Panel background for the egui `Frame::fill`. Pulled from
+    /// shadcn's resolved palette so it tracks dark/light without
+    /// our needing to maintain a parallel constant.
     pub fn background(&self) -> Color32 {
-        if self.dark {
-            Color32::from_rgb(32, 32, 36)
-        } else {
-            Color32::from_rgb(251, 251, 252)
-        }
+        self.palette().background
     }
 
-    pub fn foreground(&self) -> Color32 {
-        if self.dark {
-            Color32::from_rgb(250, 250, 250)
+    /// Build the shadcn `ColorPalette` for the current mode + accent.
+    /// We start from `shadcn_dark/light(Neutral)` (matches the
+    /// `:root` / `.dark` tokens in `src/app.css`) and overlay the
+    /// user accent onto `primary` + `ring`, identical to
+    /// `src/lib/settings/accent.ts`. `primary_foreground` is forced
+    /// to white so dark accents stay legible — same trade-off the
+    /// JS helper makes.
+    pub fn palette(&self) -> ColorPalette {
+        let mut palette = if self.dark {
+            ColorPalette::shadcn_dark(ShadcnBaseColor::Neutral)
         } else {
-            Color32::from_rgb(37, 37, 37)
-        }
-    }
-
-    pub fn muted(&self) -> Color32 {
-        if self.dark {
-            Color32::from_rgb(58, 58, 60)
-        } else {
-            Color32::from_rgb(244, 244, 245)
-        }
-    }
-
-    pub fn border(&self) -> Color32 {
-        if self.dark {
-            Color32::from_rgb(58, 58, 60)
-        } else {
-            Color32::from_rgb(228, 228, 231)
-        }
-    }
-
-    /// One shade brighter / darker than `muted` for hover state.
-    /// Shadcn doesn't have a dedicated "hover" token — apps usually
-    /// derive one with `bg-secondary/80` etc. We approximate by
-    /// stepping muted ~7% toward foreground.
-    pub fn hover(&self) -> Color32 {
-        if self.dark {
-            Color32::from_rgb(78, 78, 82)
-        } else {
-            Color32::from_rgb(232, 232, 234)
-        }
-    }
-
-    /// Construct an `egui::Visuals` that paints buttons, hover, and
-    /// selected states in the theme's palette. Applied on the egui
-    /// context whenever the theme changes.
-    pub fn to_visuals(&self) -> Visuals {
-        let mut v = if self.dark {
-            Visuals::dark()
-        } else {
-            Visuals::light()
+            ColorPalette::shadcn_light(ShadcnBaseColor::Neutral)
         };
+        // Only override if the JS bridge actually picked a custom
+        // accent. The shadcn defaults are sane on their own; rewriting
+        // them with the *default* white/black we hard-coded above
+        // would still work but creates needless noise in the dep
+        // graph.
+        if self.accent != Self::dark().accent && self.accent != Self::light().accent {
+            palette.primary = self.accent;
+            palette.ring = self.accent;
+            palette.primary_foreground = Color32::WHITE;
+        }
+        palette
+    }
 
-        let fg = self.foreground();
-        let muted = self.muted();
-        let border = self.border();
-        let hover = self.hover();
-        let accent_fg = contrast_for(self.accent);
-
-        v.window_fill = self.background();
-        v.panel_fill = self.background();
-        v.faint_bg_color = muted;
-        v.extreme_bg_color = self.background();
-
-        v.override_text_color = Some(fg);
-
-        // Buttons inherit from widgets.inactive (idle state) /
-        // hovered / active. The egui `Button` widget reads these
-        // directly; selectable_label reads `selection.bg_fill` for
-        // the on-state.
-        v.widgets.noninteractive.bg_fill = self.background();
-        v.widgets.noninteractive.weak_bg_fill = self.background();
-        v.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, border);
-        v.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, fg);
-
-        v.widgets.inactive.bg_fill = muted;
-        v.widgets.inactive.weak_bg_fill = muted;
-        v.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, border);
-        v.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, fg);
-        v.widgets.inactive.corner_radius = egui::CornerRadius::same(6);
-
-        v.widgets.hovered.bg_fill = hover;
-        v.widgets.hovered.weak_bg_fill = hover;
-        v.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, border);
-        v.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, fg);
-        v.widgets.hovered.corner_radius = egui::CornerRadius::same(6);
-
-        v.widgets.active.bg_fill = self.accent;
-        v.widgets.active.weak_bg_fill = self.accent;
-        v.widgets.active.bg_stroke = egui::Stroke::new(1.0, self.accent);
-        v.widgets.active.fg_stroke = egui::Stroke::new(1.0, accent_fg);
-        v.widgets.active.corner_radius = egui::CornerRadius::same(6);
-
-        // `selectable_label` reads these for the on-state — what we
-        // use for the Pen / Eraser toggle highlight.
-        v.selection.bg_fill = self.accent;
-        v.selection.stroke = egui::Stroke::new(1.0, accent_fg);
-
-        v
+    /// Construct the per-frame `egui_shadcn::Theme` the toolbar
+    /// passes to `button()` / `toggle()`. Cheap to build —
+    /// `Theme::new` just stashes the palette + default motion /
+    /// radius / focus tokens.
+    pub fn shadcn_theme(&self) -> ShadcnTheme {
+        ShadcnTheme::new(self.palette())
     }
 }
 
 impl Default for DrawingTheme {
     fn default() -> Self {
         Self::dark()
-    }
-}
-
-/// Pick a contrasting foreground (black or white) for a given
-/// background. Simple luminance test — `Y = 0.299R + 0.587G + 0.114B`
-/// against the standard mid-grey threshold. Used for accent fg so a
-/// user-picked light accent gets dark icons + a dark accent gets
-/// light icons without further tuning.
-fn contrast_for(bg: Color32) -> Color32 {
-    let r = bg.r() as f32;
-    let g = bg.g() as f32;
-    let b = bg.b() as f32;
-    let luminance = 0.299 * r + 0.587 * g + 0.114 * b;
-    if luminance > 140.0 {
-        Color32::from_rgb(20, 20, 20)
-    } else {
-        Color32::from_rgb(245, 245, 245)
     }
 }

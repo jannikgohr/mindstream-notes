@@ -117,8 +117,10 @@ impl CanvasUi {
         // (`LUCIDE_FAMILY`) so the toolbar can render icons via
         // `RichText::new(char::from(Icon::X).to_string())
         //     .family(FontFamily::Name(LUCIDE_FAMILY.into()))`.
+        // egui-shadcn doesn't auto-register the font even though it
+        // depends on lucide-icons — we still own the font loading.
         // We don't add Lucide to the proportional / monospace
-        // fallback chains — only widgets that explicitly opt in
+        // fallback chains; only widgets that explicitly opt in
         // (the toolbar) render glyphs, so regular text isn't
         // affected by the icon font's missing letter coverage.
         let mut fonts = egui::FontDefinitions::default();
@@ -132,25 +134,29 @@ impl CanvasUi {
         );
         ctx.set_fonts(fonts);
 
+        // No `set_visuals` call here — egui-shadcn manages per-widget
+        // visuals through its own scoped `Theme` (see `toolbar::show`).
+        // The default egui Visuals stay underneath for anything
+        // shadcn doesn't paint (e.g. the panel Frame's borderless
+        // background, which the toolbar fills explicitly).
         let theme = DrawingTheme::default();
-        ctx.set_visuals(theme.to_visuals());
-
         Self { ctx, theme }
     }
 
-    /// Swap the toolbar theme — typically driven by a JS-side
-    /// observer of the app's dark-mode + accent settings (via the
-    /// future `drawing_set_theme` Tauri command). Re-applies
-    /// `Visuals` to the egui context so the next frame paints in
-    /// the new palette without any further wiring.
+    /// Swap the toolbar theme — driven by the `drawing_set_theme`
+    /// Tauri command whenever JS observes a change in the app's
+    /// dark-mode + accent settings. The toolbar reads `self.theme`
+    /// each frame and rebuilds an `egui_shadcn::Theme` from it, so
+    /// no further wiring is needed beyond storing the new value.
     pub fn set_theme(&mut self, theme: DrawingTheme) {
         self.theme = theme;
-        self.ctx.set_visuals(theme.to_visuals());
+        // Force a repaint so the new palette shows up immediately
+        // rather than waiting for the next input event.
+        self.ctx.request_repaint();
     }
 
-    /// Read-only access for the toolbar, which needs the
-    /// non-Visuals tokens (panel background colour for the egui
-    /// `Frame::fill`).
+    /// Read-only access for the toolbar, which needs the panel
+    /// background colour for the egui `Frame::fill`.
     pub fn theme(&self) -> &DrawingTheme {
         &self.theme
     }
