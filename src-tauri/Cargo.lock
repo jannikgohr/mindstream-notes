@@ -1071,6 +1071,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "egui-shadcn"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ada5469e263b4e4f65d069351d7c4840b6284c1442d5dfdaea473fc9d42c9d7f"
+dependencies = [
+ "egui",
+ "log",
+ "lucide-icons",
+ "winres",
+]
+
+[[package]]
 name = "egui-wgpu"
 version = "0.33.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2577,9 +2589,9 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "lucide-icons"
-version = "0.575.0"
+version = "0.555.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7fe5ef57a7e2a313b5d15a2fe306a44acfe290247d5ff46af1780d1250b716fe"
+checksum = "f79d4192bafa80af9706015a2cd310f819aee94e765c00fcda5a1ab718436e8c"
 
 [[package]]
 name = "malloc_buf"
@@ -2648,6 +2660,7 @@ dependencies = [
  "chrono",
  "dbus-secret-service-keyring-store",
  "egui",
+ "egui-shadcn",
  "egui-wgpu",
  "etebase",
  "ink-stroke-modeler-rs",
@@ -5241,6 +5254,15 @@ dependencies = [
 
 [[package]]
 name = "toml"
+version = "0.5.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f4f7f0dd8d50a853a531c426359045b1998f04219d88799810762cd4ad314234"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "toml"
 version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "185d8ab0dfbb35cf1399a6344d8484209c088f75f8f68230da55d48d95d43e3d"
@@ -6632,6 +6654,15 @@ checksum = "cb5a765337c50e9ec252c2069be9bf91c7df47afb103b642ba3a53bf8101be97"
 dependencies = [
  "cfg-if",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "winres"
+version = "0.1.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b68db261ef59e9e52806f688020631e987592bd83619edccda9c47d42cde4f6c"
+dependencies = [
+ "toml 0.5.11",
 ]
 
 [[package]]
