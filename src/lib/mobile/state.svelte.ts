@@ -13,8 +13,10 @@
  * and writes through the tree store.
  */
 
+import { pushState } from '$app/navigation';
 import { setNoteFavourite } from '$lib/stores/tree.svelte';
 import { tree } from '$lib/stores/tree.svelte';
+import { setActiveNote } from '$lib/state.svelte';
 
 const DISPLAY_MODE_KEY = 'notes-app:mobile:displayMode';
 const LEGACY_FAVOURITES_KEY = 'notes-app:mobile:favourites';
@@ -115,6 +117,92 @@ export async function migrateLegacyFavourites(): Promise<void> {
 export function setMobileScreen(screen: MobileScreen) {
   mobileState.screen = screen;
   if (screen === 'home') mobileState.fabExpanded = false;
+}
+
+// ---------- Browser-history-backed navigation ----------
+//
+// The mobile shell's screen state used to live entirely in
+// `mobileState.screen`, with no browser history involvement. That made
+// the Android system back button useless: WryActivity falls back to
+// `Activity.finish()` whenever `webView.canGoBack()` is false, and
+// without history entries it always was.
+//
+// Fix: push a history entry every time the user navigates from home
+// to an editor, and treat any popstate as "go back to home". The
+// nav is currently 1-level (home ↔ editor) so we don't need to read
+// state off the popstate event — any pop means we're coming back
+// from an editor.
+//
+// Why SvelteKit's `pushState` and not `window.history.pushState`:
+// SvelteKit wraps the history API to drive its own client-side
+// router, and direct calls trigger an `Avoid using history.pushState`
+// warning at runtime. SvelteKit's `pushState` calls into the same
+// underlying history API but coordinates with the router. The url
+// argument is `''` because we don't want SvelteKit to navigate to a
+// new route — just record a history entry our popstate handler can
+// pop.
+
+let historyInstalled = false;
+
+/**
+ * Install the popstate listener. Safe to call multiple times —
+ * only installs once. Designed to run from `MobileLayout.onMount`.
+ */
+export function installMobileHistoryNav(): () => void {
+  if (typeof window === 'undefined') return () => {};
+  if (historyInstalled) return () => {};
+  historyInstalled = true;
+
+  const onPopState = () => {
+    // 1-level nav: any pop means we're coming back from an
+    // editor screen. If we ever add deeper nesting (modal /
+    // settings / multi-step flows) on mobile, track the current
+    // depth in pushState's state object and dispatch per-pop.
+    setMobileScreen('home');
+  };
+  window.addEventListener('popstate', onPopState);
+  return () => {
+    window.removeEventListener('popstate', onPopState);
+    historyInstalled = false;
+  };
+}
+
+/**
+ * Push a new history entry for the editor screen and switch state
+ * to match. Use this from anything that "opens a note" — the home
+ * note list, a wikilink follow, the FAB after creating a fresh
+ * note. Calling it while already on the same note still pushes a
+ * new entry, matching the existing `openNote` semantics.
+ */
+export function navigateToEditor(noteId: string) {
+  setActiveNote(noteId);
+  setMobileScreen('editor');
+  if (typeof window !== 'undefined') {
+    // Empty URL = keep the current SvelteKit route (we're not
+    // route-navigating, just recording a history entry our
+    // popstate handler can pop). Empty state object because the
+    // popstate handler doesn't currently read it — we only track
+    // 1-level nav.
+    pushState('', {});
+  }
+}
+
+/**
+ * Pop one entry off the browser history, letting the popstate
+ * listener mirror the change into mobile state. This is the only
+ * "go back" function code should call — the in-app back arrow, the
+ * egui toolbar's Back button (via `drawing-back` event), and the
+ * Android system back (already wired by WryActivity through
+ * `webView.goBack()`) all converge here.
+ *
+ * If history is at its first entry (we're on home with nothing
+ * pushed on top), `history.back()` falls through to the activity
+ * back handler, which finishes the activity and closes the app —
+ * the desired behaviour for "back from home".
+ */
+export function navigateBack() {
+  if (typeof window === 'undefined') return;
+  window.history.back();
 }
 
 export function setMobileView(view: MobileView) {

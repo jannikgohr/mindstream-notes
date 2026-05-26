@@ -81,7 +81,7 @@
 <div
   bind:this={menuEl}
   role="menu"
-  class="fixed z-50 min-w-[200px] rounded-md border border-border bg-popover py-1 text-sm text-popover-foreground shadow-lg"
+  class="fixed z-350 min-w-[200px] rounded-md border border-border bg-popover py-1 text-sm text-popover-foreground shadow-lg"
   style="left: {safeX}px; top: {safeY}px;"
 >
   {#each items as item, i (i)}
