@@ -123,7 +123,7 @@ const MIN_WIDTH: f32 = 1.0;
 ///                (zero-length segment) and the buffer is empty.
 ///                Saved geometry is raw input — visible jitter at low
 ///                speed.
-const SMOOTHING_ENABLED: bool = true;
+const SMOOTHING_ENABLED: bool = false;
 
 /// A/B flag: paint a `MotionPredictor`-driven "predicted lead"
 /// segment past the raw head (zone 3). `true` adds visual lead
@@ -135,7 +135,7 @@ const SMOOTHING_ENABLED: bool = true;
 /// and smoothed modes. In raw mode the lead extends past the raw
 /// input directly (no body smoothing involved); in smoothed mode it
 /// extends past the raw head, which extends past the smoothed body.
-const PREDICTION_ENABLED: bool = true;
+const PREDICTION_ENABLED: bool = false;
 
 /// High-volume input/frame latency diagnostics. Leave this disabled
 /// during normal drawing: Android logcat writes on the stylus hot path
@@ -1169,16 +1169,45 @@ fn active_segments<'a>(
 /// the undo / redo stacks have anything to pop (for the
 /// add_enabled grey-out). Defaults to "no buttons enabled" if no
 /// note is open or the doc hasn't been activated yet.
+///
+/// `stroke_tool_override` flips the selected-tool highlight to the
+/// temporary mode (e.g. Eraser while the S Pen barrel button is
+/// held mid-stroke). The user's underlying `tool_mode` doesn't
+/// change — the override only paints the toolbar so the user
+/// gets feedback that the modifier is doing something.
 fn build_ui_state(
     tool_mode: ToolMode,
+    stroke_tool_override: Option<ToolMode>,
     active_id: &Option<String>,
     documents: &HashMap<String, CanvasDocument>,
 ) -> UiState {
     let active = active_id.as_ref().and_then(|id| documents.get(id));
     UiState {
-        current_tool: tool_mode,
+        current_tool: stroke_tool_override.unwrap_or(tool_mode),
         can_undo: active.map(|d| !d.undo.is_empty()).unwrap_or(false),
         can_redo: active.map(|d| !d.redo.is_empty()).unwrap_or(false),
+    }
+}
+
+/// Map (user-selected tool, DOWN sample) onto the effective tool
+/// for the in-flight stroke. Implements the first slice of D8 — the
+/// barrel-button-held override from F7(a): while the S Pen / Surface
+/// Pen / Wacom primary button is held during DOWN, the stroke
+/// becomes Eraser regardless of the user's toolbar selection.
+/// Matches most competing apps' default mapping and turns the
+/// button into a "modifier key" the user can hold for one-off
+/// erase actions without giving up their Pen tool.
+///
+/// Latched at DOWN only — release / re-press of the button mid-
+/// stroke does NOT switch tools (would otherwise produce
+/// confusing half-ink / half-erase strokes). On UP the override
+/// clears and the next stroke re-evaluates from the user's tool
+/// mode + the button state at that DOWN.
+fn effective_tool_at_down(tool_mode: ToolMode, sample: &Sample) -> ToolMode {
+    if sample.has_stylus_primary_button() {
+        ToolMode::Eraser
+    } else {
+        tool_mode
     }
 }
 
@@ -1277,6 +1306,13 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
     // sends changes back via RenderActions::set_tool. Defaults to
     // Pen — the existing single-tool behaviour pre-D3.
     let mut tool_mode: ToolMode = ToolMode::Pen;
+    // D8 / F7(a) temporary-tool override: when the S Pen barrel
+    // button is held at DOWN, the in-flight stroke is treated as
+    // Eraser regardless of `tool_mode`. Latched at DOWN, cleared on
+    // UP / CANCEL / Clear / SetActiveNote / tool change so a stale
+    // override can't leak into the next stroke. None between strokes
+    // and for strokes where the modifier wasn't held.
+    let mut stroke_tool_override: Option<ToolMode> = None;
     // Strokes tombstoned during the *current* eraser drag (between
     // ACTION_DOWN and ACTION_UP in Eraser mode). On UP, this Vec
     // becomes the payload of a single `UndoOp::EraserDrag` so the
@@ -1491,13 +1527,36 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                         continue;
                     }
 
+                    // D8 / F7(a) modifier override: latch the
+                    // effective tool at DOWN based on the user's
+                    // selected `tool_mode` and the S Pen barrel
+                    // button. Latching once at DOWN means a button
+                    // press / release mid-stroke doesn't flip the
+                    // tool partway through (which would produce a
+                    // confusing half-ink / half-erase stroke). For
+                    // MOVE / UP / CANCEL we reuse the latched value
+                    // so the whole stroke stays on a single tool.
+                    if matches!(action, SampleAction::Down) {
+                        let effective = effective_tool_at_down(tool_mode, &sample);
+                        stroke_tool_override = if effective != tool_mode {
+                            log::info!(
+                                "[drawing] stroke modifier: button held → temporary {:?} (user tool = {:?})",
+                                effective, tool_mode,
+                            );
+                            Some(effective)
+                        } else {
+                            None
+                        };
+                    }
+                    let effective_tool = stroke_tool_override.unwrap_or(tool_mode);
+
                     // Branch on tool. Pen and Eraser have very
                     // different data flows — Pen accumulates points
                     // into an in-progress yrs stroke (via the D1
                     // smoother, which can emit many output samples
                     // per raw input), Eraser hits existing strokes
                     // per-sample and tombstones them.
-                    match (tool_mode, action) {
+                    match (effective_tool, action) {
                         // ---------- Pen ----------
                         (ToolMode::Pen, SampleAction::Down) => {
                             let packed = color_for_input(tool, buttons);
@@ -1790,6 +1849,11 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             // stroke matches what's persisted exactly.
                             latest_raw_input = None;
                             latest_prediction = None;
+                            // Modifier override (if any) was tied to
+                            // this stroke's lifetime — next stroke
+                            // re-evaluates from button state at its
+                            // own DOWN.
+                            stroke_tool_override = None;
                         }
                         // ---------- Eraser ----------
                         (ToolMode::Eraser, SampleAction::Down) => {
@@ -1858,6 +1922,11 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             }
                             eraser_drag_hits.clear();
                             eraser_drag_seen.clear();
+                            // Whether this drag was a "real" eraser
+                            // (tool_mode = Eraser) or a button-held
+                            // override over Pen, the next stroke
+                            // re-evaluates fresh — drop the latch.
+                            stroke_tool_override = None;
                         }
                     }
                 }
@@ -1877,7 +1946,13 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                     if !PREDICTION_ENABLED {
                         continue;
                     }
-                    if !matches!(tool_mode, ToolMode::Pen) {
+                    // Respect the modifier override: a Pen stroke
+                    // momentarily acting as Eraser (S Pen button
+                    // held at DOWN) shouldn't paint a predicted
+                    // lead — the visible "stroke head" is going to
+                    // erase, not commit ink.
+                    let effective_tool = stroke_tool_override.unwrap_or(tool_mode);
+                    if !matches!(effective_tool, ToolMode::Pen) {
                         continue;
                     }
                     if !ink_smoother.is_in_stroke()
@@ -1930,6 +2005,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                     ink_smoother.reset();
                     eraser_drag_hits.clear();
                     eraser_drag_seen.clear();
+                    stroke_tool_override = None;
                     dirty = true;
                 }
                 Msg::SetActiveNote {
@@ -1973,6 +2049,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                     ink_smoother.reset();
                     eraser_drag_hits.clear();
                     eraser_drag_seen.clear();
+                    stroke_tool_override = None;
                     stroke_suppressed = false;
                     dirty = true;
                 }
@@ -2180,7 +2257,8 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                 // Active doc lookup is `documents.get(id)`; defaults
                 // to "no buttons enabled" when no note is open or
                 // the doc hasn't been activated yet.
-                let ui_state = build_ui_state(tool_mode, &active_note_id, &documents);
+                let ui_state =
+                    build_ui_state(tool_mode, stroke_tool_override, &active_note_id, &documents);
                 let (actions, ui_output) = canvas_ui.run(input, s.size_px(), ui_state);
                 let dispatch_uptime_ms =
                     crate::drawing::platform::android::now_uptime_ms();
@@ -2282,6 +2360,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             ink_smoother.reset();
                             eraser_drag_hits.clear();
                             eraser_drag_seen.clear();
+                            stroke_tool_override = None;
                             // Tool change alone doesn't repaint
                             // anything, but the toolbar highlight
                             // needs a re-render to reflect it.
@@ -2344,6 +2423,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             ink_smoother.reset();
                             eraser_drag_hits.clear();
                             eraser_drag_seen.clear();
+                            stroke_tool_override = None;
                             needs_rerender = true;
                         }
 
@@ -2380,6 +2460,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             let fresh_input = egui::RawInput::default();
                             let fresh_state = build_ui_state(
                                 tool_mode,
+                                stroke_tool_override,
                                 &active_note_id,
                                 &documents,
                             );
