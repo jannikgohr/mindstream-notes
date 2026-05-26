@@ -141,6 +141,43 @@ pub struct UiOutput {
     pub repaint_after: std::time::Duration,
 }
 
+/// Per-frame registry of egui UI surfaces that sit above the canvas
+/// and must be protected from Android's front-buffer live-ink layer.
+///
+/// Widgets register themselves only while they are rendered. Because
+/// [`CanvasUi::run`] creates a fresh registry every frame, popovers
+/// and other transient controls unregister automatically as soon as
+/// they vanish.
+pub struct ActiveControlBounds {
+    pixels_per_point: f32,
+    rects_px: Vec<[f32; 4]>,
+}
+
+impl ActiveControlBounds {
+    fn new(pixels_per_point: f32) -> Self {
+        Self {
+            pixels_per_point,
+            rects_px: Vec::new(),
+        }
+    }
+
+    pub fn register_rect(&mut self, rect: egui::Rect) {
+        if !rect.is_positive() {
+            return;
+        }
+        self.rects_px.push([
+            rect.min.x * self.pixels_per_point,
+            rect.min.y * self.pixels_per_point,
+            rect.max.x * self.pixels_per_point,
+            rect.max.y * self.pixels_per_point,
+        ]);
+    }
+
+    fn into_rects(self) -> Vec<[f32; 4]> {
+        self.rects_px
+    }
+}
+
 /// The UI side of the canvas. Owns the egui context so widget state
 /// (hover, focus, future tool mode, …) persists across frames
 /// without leaking into pipeline.rs. Also holds the active theme so
@@ -157,6 +194,7 @@ pub struct CanvasUi {
     ctx: egui::Context,
     theme: DrawingTheme,
     shadcn: ShadcnTheme,
+    active_control_bounds: Vec<[f32; 4]>,
 }
 
 impl CanvasUi {
@@ -192,7 +230,12 @@ impl CanvasUi {
         // background, which the toolbar fills explicitly).
         let theme = DrawingTheme::default();
         let shadcn = theme.shadcn_theme();
-        Self { ctx, theme, shadcn }
+        Self {
+            ctx,
+            theme,
+            shadcn,
+            active_control_bounds: Vec::new(),
+        }
     }
 
     /// Swap the toolbar theme — driven by the `drawing_set_theme`
@@ -234,9 +277,19 @@ impl CanvasUi {
         let mut actions = RenderActions::default();
         let theme = self.theme;
         let shadcn = &self.shadcn;
+        let mut active_control_bounds = ActiveControlBounds::new(PIXELS_PER_POINT);
         let full_output = self.ctx.run(input, |ctx| {
-            toolbar::show(ctx, PIXELS_PER_POINT, &theme, shadcn, state, &mut actions);
+            toolbar::show(
+                ctx,
+                PIXELS_PER_POINT,
+                &theme,
+                shadcn,
+                state,
+                &mut actions,
+                &mut active_control_bounds,
+            );
         });
+        self.active_control_bounds = active_control_bounds.into_rects();
         // egui tracks per-viewport repaint delays — we have a
         // single embedded viewport, but iterate defensively in case
         // a future popover-in-window grows that count. The minimum
@@ -258,24 +311,10 @@ impl CanvasUi {
         (actions, ui_output)
     }
 
-    /// Get the physical screen-pixel coordinates of all active floated UI rects (e.g. popovers).
+    /// Get the physical screen-pixel coordinates of all active
+    /// transient UI rects (e.g. popovers).
     pub fn get_active_control_bounds(&self) -> Vec<[f32; 4]> {
-        let mut bounds = Vec::new();
-        self.ctx.memory(|mem| {
-            for layer in mem.layer_ids() {
-                if layer.order != egui::Order::Background {
-                    if let Some(r) = mem.area_rect(layer.id) {
-                        bounds.push([
-                            r.min.x * PIXELS_PER_POINT,
-                            r.min.y * PIXELS_PER_POINT,
-                            r.max.x * PIXELS_PER_POINT,
-                            r.max.y * PIXELS_PER_POINT,
-                        ]);
-                    }
-                }
-            }
-        });
-        bounds
+        self.active_control_bounds.clone()
     }
 }
 

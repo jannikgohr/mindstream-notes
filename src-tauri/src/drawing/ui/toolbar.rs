@@ -19,14 +19,18 @@
 //! The JNI surface (`platform::android::ui::call_back` /
 //! `Drawing.backFromNative`) stays in place for a future re-wire.
 
-use egui::{pos2, Color32, FontFamily, FontId, Frame, Id, Margin, Painter, Pos2, Rect, Response,
+use egui::{
+    pos2, Color32, FontFamily, FontId, Frame, Id, Margin, Painter, Pos2, Rect, Response,
     TopBottomPanel,
 };
 use egui_shadcn::button::{Button, ButtonSize, ButtonVariant};
 use egui_shadcn::Theme as ShadcnTheme;
 use lucide_icons::Icon;
 
-use super::{brush, color_picker, DrawingTheme, RenderActions, ToolMode, UiState, LUCIDE_FAMILY};
+use super::{
+    brush, color_picker, ActiveControlBounds, DrawingTheme, RenderActions, ToolMode, UiState,
+    LUCIDE_FAMILY,
+};
 
 /// Visible height of the toolbar in pixels. Also used by the
 /// render-thread touch routing to decide which gestures egui owns
@@ -49,6 +53,7 @@ pub fn show(
     shadcn: &ShadcnTheme,
     state: UiState,
     actions: &mut RenderActions,
+    active_control_bounds: &mut ActiveControlBounds,
 ) {
     let panel_height_pts = TOOLBAR_HEIGHT_PX / pixels_per_point;
     let brush_popover_id = Id::new("drawing-brush-popover");
@@ -146,6 +151,7 @@ pub fn show(
                     color_popover_id,
                     state.current_color,
                     actions,
+                    active_control_bounds,
                 );
 
                 ui.separator();
@@ -204,6 +210,7 @@ pub fn show(
         state.current_width,
         state.current_color,
         actions,
+        active_control_bounds,
     );
 }
 
@@ -270,8 +277,7 @@ fn shadcn_icon_button_response(
 fn lucide_painter(icon: Icon) -> impl Fn(&Painter, Pos2, f32, Color32) {
     move |painter, center, size, color| {
         let font_id = FontId::new(size, FontFamily::Name(LUCIDE_FAMILY.into()));
-        let galley =
-            painter.layout_no_wrap(icon.unicode().to_string(), font_id, color);
+        let galley = painter.layout_no_wrap(icon.unicode().to_string(), font_id, color);
         let pos = pos2(
             center.x - galley.rect.width() / 2.0,
             center.y - galley.rect.height() / 2.0,
