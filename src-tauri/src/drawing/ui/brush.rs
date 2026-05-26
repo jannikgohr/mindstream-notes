@@ -14,12 +14,12 @@
 //! manually below.
 
 use egui::{
-    Align, Align2, Area, CornerRadius, Frame, Id, Layout, Margin, Order, Pos2, Rect, Sense,
-    Slider, Stroke, Ui, Vec2,
+    Align, Align2, Area, CornerRadius, Frame, Id, Layout, Margin, Order, Pos2, Rect, Sense, Slider,
+    Stroke, Ui, Vec2,
 };
 use egui_shadcn::Theme as ShadcnTheme;
 
-use super::{color_picker, RenderActions};
+use super::{color_picker, ActiveControlBounds, RenderActions};
 
 /// Minimum brush base-width the slider exposes, in page units. Below
 /// ~0.5 page units (≈0.09 mm at 144 DPI) the pressure-modulated
@@ -73,6 +73,7 @@ pub fn show_if_open(
     current_width: f32,
     current_color: u32,
     actions: &mut RenderActions,
+    active_control_bounds: &mut ActiveControlBounds,
 ) {
     let open_id = id_source.with("open");
     let mut open = ctx.data(|d| d.get_temp::<bool>(open_id)).unwrap_or(false);
@@ -88,10 +89,7 @@ pub fn show_if_open(
     // Anchor below the trigger, horizontally centred. egui's `Area`
     // will clamp into the viewport for us, so a near-edge trigger
     // doesn't paint a partially-offscreen popover.
-    let anchor_pos = Pos2::new(
-        trigger_rect.center().x,
-        trigger_rect.bottom() + POPOVER_GAP,
-    );
+    let anchor_pos = Pos2::new(trigger_rect.center().x, trigger_rect.bottom() + POPOVER_GAP);
 
     let popover_id = id_source.with("popover");
     let mut popover_rect = Rect::NOTHING;
@@ -113,13 +111,7 @@ pub fn show_if_open(
                 .inner_margin(Margin::symmetric(14, 12));
             let resp = frame.show(ui, |ui| {
                 ui.set_width(POPOVER_WIDTH);
-                paint_popover_contents(
-                    ui,
-                    shadcn,
-                    current_width,
-                    current_color,
-                    actions,
-                );
+                paint_popover_contents(ui, shadcn, current_width, current_color, actions);
             });
             popover_rect = resp.response.rect;
         });
@@ -128,12 +120,8 @@ pub fn show_if_open(
     // not inside the popover rect (and not inside the trigger —
     // tapping the trigger again toggles via toggle_open and should
     // win) closes us.
-    let (pointer_click, pointer_pos) = ctx.input(|i| {
-        (
-            i.pointer.any_click(),
-            i.pointer.interact_pos(),
-        )
-    });
+    let (pointer_click, pointer_pos) =
+        ctx.input(|i| (i.pointer.any_click(), i.pointer.interact_pos()));
     if pointer_click {
         let inside_popover = pointer_pos
             .map(|p| popover_rect.contains(p))
@@ -149,6 +137,9 @@ pub fn show_if_open(
     // behaviour so the two popovers feel consistent.
     if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
         open = false;
+    }
+    if open {
+        active_control_bounds.register_rect(popover_rect);
     }
     ctx.data_mut(|d| d.insert_temp(open_id, open));
 }
@@ -252,8 +243,7 @@ fn paint_preview(
     // share the same width source — no chance of header / preview
     // / slider disagreeing if the ui's available_width drifts
     // mid-layout.
-    let (rect, _resp) =
-        ui.allocate_exact_size(Vec2::new(row_width, slot_height), Sense::hover());
+    let (rect, _resp) = ui.allocate_exact_size(Vec2::new(row_width, slot_height), Sense::hover());
     let painter = ui.painter_at(rect);
     // Subtle muted background so the preview swatch is visible even
     // when the user picks a colour that matches the popover bg
@@ -269,8 +259,7 @@ fn paint_preview(
     // this width would look like — edge-to-edge so the preview
     // tracks the popover's full content width.
     let line_h = width_pu.clamp(MIN_WIDTH, MAX_WIDTH);
-    let line_rect =
-        Rect::from_center_size(rect.center(), Vec2::new(rect.width(), line_h.max(1.0)));
+    let line_rect = Rect::from_center_size(rect.center(), Vec2::new(rect.width(), line_h.max(1.0)));
     let line_radius = (line_h * 0.5).max(1.0);
     painter.rect_filled(
         line_rect,
@@ -278,4 +267,3 @@ fn paint_preview(
         color_picker::unpack(color),
     );
 }
-

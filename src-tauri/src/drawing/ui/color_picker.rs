@@ -18,13 +18,11 @@
 //! theme's `border` colour; the selected swatch gets a 2px ring in
 //! the theme's `ring` colour matching the user's accent setting.
 
-use egui::{
-    Color32, CornerRadius, Id, Rect, Response, Sense, Stroke, StrokeKind, Ui, Vec2,
-};
+use egui::{Color32, CornerRadius, Id, Rect, Response, Sense, Stroke, StrokeKind, Ui, Vec2};
 use egui_shadcn::popover::{popover, PopoverProps, PopoverSide};
 use egui_shadcn::Theme as ShadcnTheme;
 
-use super::RenderActions;
+use super::{ActiveControlBounds, RenderActions};
 
 /// Diameter of each colour swatch inside the popover, in egui points.
 const SWATCH_DIAMETER: f32 = 32.0;
@@ -67,6 +65,7 @@ pub fn show(
     id_source: Id,
     current_color: u32,
     actions: &mut RenderActions,
+    active_control_bounds: &mut ActiveControlBounds,
 ) {
     // Load+save popover open state via context data so the caller
     // doesn't need a mutable bool. Same pattern is repeated in
@@ -94,17 +93,20 @@ pub fn show(
     if request_close {
         open = false;
     }
+    if open {
+        if let Some(rect) = ui
+            .ctx()
+            .memory(|mem| mem.area_rect(id_source.with("content")))
+        {
+            active_control_bounds.register_rect(rect);
+        }
+    }
     ui.ctx().data_mut(|d| d.insert_temp(open_id, open));
 }
 
 /// Paint a circular colour-swatch button. Returns the click `Response`
 /// the popover anchors to (and uses for click-toggle).
-fn paint_swatch_button(
-    ui: &mut Ui,
-    color: u32,
-    shadcn: &ShadcnTheme,
-    diameter: f32,
-) -> Response {
+fn paint_swatch_button(ui: &mut Ui, color: u32, shadcn: &ShadcnTheme, diameter: f32) -> Response {
     let size = Vec2::splat(diameter);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     let palette = &shadcn.palette;
@@ -177,18 +179,13 @@ fn paint_palette_swatch(
     painter.circle_filled(centre, fill_radius, unpack(color));
     // Inner border so every swatch (incl. near-white ones) is
     // clearly delimited from the popover background.
-    painter.circle_stroke(
-        centre,
-        fill_radius,
-        Stroke::new(1.0, palette.border),
-    );
+    painter.circle_stroke(centre, fill_radius, Stroke::new(1.0, palette.border));
     if selected {
         // Outer ring marks the active selection. Slightly larger
         // radius so it sits OUTSIDE the swatch fill, leaving a thin
         // popover-bg gap between the swatch and ring — same visual
         // affordance shadcn's web `select` uses.
-        let outer_rect =
-            Rect::from_center_size(centre, Vec2::splat(SWATCH_DIAMETER + 4.0));
+        let outer_rect = Rect::from_center_size(centre, Vec2::splat(SWATCH_DIAMETER + 4.0));
         painter.rect_stroke(
             outer_rect,
             CornerRadius::same((SWATCH_DIAMETER / 2.0 + 2.0).round() as u8),
@@ -198,8 +195,7 @@ fn paint_palette_swatch(
     }
     if response.hovered() {
         // Subtle hover halo — matches the trigger's hover treatment.
-        let hover_rect =
-            Rect::from_center_size(centre, Vec2::splat(SWATCH_DIAMETER + 2.0));
+        let hover_rect = Rect::from_center_size(centre, Vec2::splat(SWATCH_DIAMETER + 2.0));
         painter.rect_stroke(
             hover_rect,
             CornerRadius::same((SWATCH_DIAMETER / 2.0 + 1.0).round() as u8),
