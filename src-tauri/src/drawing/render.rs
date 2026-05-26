@@ -44,33 +44,40 @@ use super::ui::{self, CanvasUi, ToolMode, UiState};
 /// vanished). D5 replaces all of this with a real user-chosen
 /// palette.
 ///
-/// Three distinct colours so the user can tell which detection
-/// path actually fired on their device:
 ///   - [`PEN_DEBUG_COLOR`] (blue): tool = Stylus, no button held.
-///   - [`STYLUS_BUTTON_HELD_COLOR`] (orange): stylus barrel button
-///     is held. Wins over tool-type colouring because some Samsung
-///     devices *also* mirror the press into `getToolType =
-///     TOOL_TYPE_ERASER`, and checking buttons first lets us tell
-///     the two cases apart visually.
-///   - [`ERASER_TIP_COLOR`] (red): tool = Eraser (e.g. flipped S
-///     Pen on a Galaxy Note, or a Samsung driver that mirrors
-///     button-press into the tool type *without* setting the
-///     button bit).
+///
+/// The previous `STYLUS_BUTTON_HELD_COLOR` (orange) and
+/// `ERASER_TIP_COLOR` (red) entries were retired with the first
+/// slice of D8: barrel-button-held now promotes the stroke to
+/// Eraser (so `color_for_input` is never reached with the button
+/// bit set), and Eraser strokes don't commit visible ink at all —
+/// neither in the wgpu doc nor in the front-buffer overlay (which
+/// now receives a transparent style during eraser drags; see
+/// [`LIVE_INK_OVERLAY_HIDDEN`]).
 const PEN_DEBUG_COLOR: u32 = 0xFF00_66FF;
-const STYLUS_BUTTON_HELD_COLOR: u32 = 0xFFFF_600F;
-const ERASER_TIP_COLOR: u32 = 0xFFCC_2222;
+
+/// Fully transparent ARGB pushed to Kotlin's `FrontBufferInk` while
+/// the active stroke is an eraser — Canvas SRC_OVER with a 0-alpha
+/// paint is a visual no-op, so the front-buffer layer keeps
+/// processing samples (geometry, cancel timing, etc.) but produces
+/// no visible drag trail. Without this, the eraser path used to
+/// paint a red line across the canvas as you erased.
+const LIVE_INK_OVERLAY_HIDDEN: u32 = 0x0000_0000;
 
 /// Decide what colour a stroke should use, given the input sample
-/// that started it. See the debug-palette docs above for the
-/// precedence rationale.
-fn color_for_input(tool: ToolKind, buttons: u32) -> u32 {
-    if buttons & super::input::buttons::STYLUS_PRIMARY != 0 {
-        return STYLUS_BUTTON_HELD_COLOR;
-    }
+/// that started it. Only reached for Pen-mode strokes — Eraser-
+/// mode strokes (including the D8 barrel-button-held override) never
+/// commit visible ink. `buttons` is currently unused because the
+/// only held-button mapping today is the barrel-button-to-eraser
+/// override (handled in [`effective_tool_at_down`] before we get
+/// here); kept in the signature so future bindings (F7's cycle-
+/// colour, etc.) plug in without churn at every callsite.
+fn color_for_input(tool: ToolKind, _buttons: u32) -> u32 {
     match tool {
         ToolKind::Stylus => PEN_DEBUG_COLOR,
-        ToolKind::Eraser => ERASER_TIP_COLOR,
-        ToolKind::Finger | ToolKind::Mouse | ToolKind::Unknown => DEFAULT_COLOR,
+        ToolKind::Finger | ToolKind::Mouse | ToolKind::Eraser | ToolKind::Unknown => {
+            DEFAULT_COLOR
+        }
     }
 }
 
@@ -1863,10 +1870,22 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             eraser_drag_seen.clear();
                             eraser_drag_start = Some(std::time::Instant::now());
                             eraser_drag_samples = 1; // count this DOWN sample
-                            // Mirror the eraser colour into the
-                            // front-buffer overlay so the drag's
-                            // live visual matches the action.
-                            push_live_ink_style(surface_state.as_ref(), ERASER_TIP_COLOR);
+                            // Suppress the front-buffer overlay for
+                            // the duration of the drag — the eraser
+                            // tombstones strokes, it shouldn't paint
+                            // a visible drag trail. Transparent style
+                            // is a no-op SRC_OVER in Canvas, so the
+                            // overlay still consumes samples and
+                            // cancels normally on UP, just produces
+                            // nothing visible. (Previously this path
+                            // pushed a red `ERASER_TIP_COLOR` debug
+                            // colour and you saw a red line where the
+                            // pen tip went — confusing while erasing
+                            // via the barrel-button override.)
+                            push_live_ink_style(
+                                surface_state.as_ref(),
+                                LIVE_INK_OVERLAY_HIDDEN,
+                            );
                             erase_at(
                                 &active_note_id,
                                 &mut documents,
