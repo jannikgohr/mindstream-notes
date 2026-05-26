@@ -53,9 +53,11 @@
 
     "fab.newNote": "New note",
     "fab.newDrawing": "New drawing",
+    "fab.newInk": "New ink note",
     "fab.newFolder": "New folder",
     "fab.placeholder.noteTitle": "Note title",
     "fab.placeholder.drawingTitle": "Drawing title",
+    "fab.placeholder.inkTitle": "Ink note title",
     "fab.placeholder.folderName": "Folder name",
     "fab.submit.create": "Create",
 
@@ -105,6 +107,9 @@
     "editor.unknownKind.titleLabel": "Note",
     "editor.unknownKind.kindLabel": "Editor type",
 
+    "editor.ink.desktopPlaceholderTitle": "Ink notes are Android-only for now",
+    "editor.ink.desktopPlaceholderMessage": "The native drawing layer is still being ported to desktop. Open this note on your phone to draw — the stack lives in docs/native-egui-layer.",
+
     "updater.checkFailed.title": "Couldn't check for updates",
     "updater.checkFailed.message": "We weren't able to reach the update server. Check your internet connection and try again.",
     "updater.upToDate.title": "You're up to date",
@@ -145,6 +150,7 @@
     "editor.input": { "label": "Input" },
     "editor.markdown": { "label": "Markdown features" },
     "editor.freeform": { "label": "Drawing canvas" },
+    "editor.ink": { "label": "Ink toolbar" },
     "editor.autosave": { "label": "Auto-save" },
     "data.database": { "label": "Database" },
     "data.trash": { "label": "Trash" },
@@ -183,6 +189,13 @@
     "editor.freeform.penMode": {
       "label": "Stylus / pen mode",
       "description": "When on, only stylus input draws — finger touches pan and zoom. Helps prevent stray marks from your palm on tablets."
+    },
+    "editor.ink.tool": { "label": "Last ink tool" },
+    "editor.ink.color": { "label": "Ink colour" },
+    "editor.ink.width": { "label": "Brush size" },
+    "editor.ink.fingerDrawing": {
+      "label": "Draw with fingers",
+      "description": "Defaults off on devices with pen support, then follows your toolbar choice."
     },
     "editor.autoSave": { "label": "Auto-save" },
     "editor.autoSaveDebounce": { "label": "Auto-save debounce" },
@@ -232,6 +245,8 @@
     "editor.freeform.penMode.auto": "Auto-detect (recommended)",
     "editor.freeform.penMode.always": "Always on",
     "editor.freeform.penMode.off": "Off",
+    "editor.ink.tool.pen": "Pen",
+    "editor.ink.tool.eraser": "Eraser",
     "data.trashRetentionDays.7": "7 days",
     "data.trashRetentionDays.30": "30 days",
     "data.trashRetentionDays.90": "90 days",
