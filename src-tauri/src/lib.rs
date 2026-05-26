@@ -203,6 +203,7 @@ pub fn run() {
             drawing::drawing_clear,
             drawing::drawing_set_save_debounce,
             drawing::drawing_set_theme,
+            drawing::drawing_set_toolbar_settings,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
