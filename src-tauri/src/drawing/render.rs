@@ -1223,6 +1223,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
     let mut persistent: Option<PersistentGpu> = None;
     let mut surface_state: Option<SurfaceBoundState> = None;
     let mut canvas_ui = CanvasUi::new();
+    let mut active_control_bounds: Vec<[f32; 4]> = Vec::new();
     // Per-note stroke storage. Keyed by note_id. Entries are
     // created lazily on the first sample for an active note and
     // live for the render thread's lifetime (= process lifetime,
@@ -1572,7 +1573,11 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                     // paths for the duration of the drag so the user can
                     // tap buttons without unintended draws or erases.
                     if matches!(action, SampleAction::Down) {
-                        stroke_suppressed = y < ui::toolbar::TOOLBAR_HEIGHT_PX;
+                        stroke_suppressed = y < ui::toolbar::TOOLBAR_HEIGHT_PX || {
+                            active_control_bounds.iter().any(|b| {
+                                x >= b[0] && x <= b[2] && y >= b[1] && y <= b[3]
+                            })
+                        };
                     }
                     dirty = true;
                     if stroke_suppressed {
@@ -2355,6 +2360,17 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                     &documents,
                 );
                 let (actions, ui_output) = canvas_ui.run(input, s.size_px(), ui_state);
+                active_control_bounds = canvas_ui.get_active_control_bounds();
+                #[cfg(target_os = "android")]
+                {
+                    let mut flat_bounds = Vec::with_capacity(active_control_bounds.len() * 4);
+                    for b in &active_control_bounds {
+                        flat_bounds.extend_from_slice(b);
+                    }
+                    if let Err(e) = crate::drawing::platform::android::ui::call_set_control_bounds(&flat_bounds) {
+                        log::error!("[drawing] call_set_control_bounds failed: {e}");
+                    }
+                }
                 // Capture egui's animation hint BEFORE move-passing
                 // `ui_output` into pipeline. `Duration::MAX` means
                 // "nothing animating" — we leave `next_animation_wake`
@@ -2606,6 +2622,17 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             );
                             let (_, fresh_ui) =
                                 canvas_ui.run(fresh_input, s.size_px(), fresh_state);
+                            active_control_bounds = canvas_ui.get_active_control_bounds();
+                            #[cfg(target_os = "android")]
+                            {
+                                let mut flat_bounds = Vec::with_capacity(active_control_bounds.len() * 4);
+                                for b in &active_control_bounds {
+                                    flat_bounds.extend_from_slice(b);
+                                }
+                                if let Err(e) = crate::drawing::platform::android::ui::call_set_control_bounds(&flat_bounds) {
+                                    log::error!("[drawing] call_set_control_bounds failed: {e}");
+                                }
+                            }
                             // Follow-up frame may have its own animation
                             // requirement (e.g. tool-change re-tessellation
                             // triggers a hover-state animation reset). Take

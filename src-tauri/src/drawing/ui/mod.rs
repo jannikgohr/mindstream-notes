@@ -257,6 +257,26 @@ impl CanvasUi {
         };
         (actions, ui_output)
     }
+
+    /// Get the physical screen-pixel coordinates of all active floated UI rects (e.g. popovers).
+    pub fn get_active_control_bounds(&self) -> Vec<[f32; 4]> {
+        let mut bounds = Vec::new();
+        self.ctx.memory(|mem| {
+            for layer in mem.layer_ids() {
+                if layer.order != egui::Order::Background {
+                    if let Some(r) = mem.area_rect(layer.id) {
+                        bounds.push([
+                            r.min.x * PIXELS_PER_POINT,
+                            r.min.y * PIXELS_PER_POINT,
+                            r.max.x * PIXELS_PER_POINT,
+                            r.max.y * PIXELS_PER_POINT,
+                        ]);
+                    }
+                }
+            }
+        });
+        bounds
+    }
 }
 
 impl Default for CanvasUi {
