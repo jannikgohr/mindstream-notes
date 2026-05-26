@@ -19,7 +19,7 @@
    * under the Android status bar or gesture bar with edge-to-edge on.
    */
   import { onMount } from 'svelte';
-  import { FilePlus2, FolderPlus, Pencil } from 'lucide-svelte';
+  import { Feather, FilePlus2, FolderPlus, PencilRuler } from 'lucide-svelte';
   import type { IconComponent } from '$lib/settings/icons';
   import MobileTopBar from './MobileTopBar.svelte';
   import MobileBreadcrumb from './MobileBreadcrumb.svelte';
@@ -36,13 +36,13 @@
     loadTree,
     tree
   } from '$lib/stores/tree.svelte';
-  import { setActiveNote } from '$lib/state.svelte';
   import { subscribeOpenNoteRequest } from '$lib/stores/open-note-intent.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
   import {
+    installMobileHistoryNav,
     migrateLegacyFavourites,
     mobileState,
-    setMobileScreen
+    navigateToEditor
   } from './state.svelte';
 
   onMount(() => {
@@ -51,16 +51,26 @@
     } else {
       void migrateLegacyFavourites();
     }
+    // Install the browser-history shim so the Android system back
+    // button pops into our `setMobileScreen('home')` path instead of
+    // falling through WryActivity's `super.onBackPressed()` (which
+    // would finish the activity and close the app). Returns the
+    // unsubscribe — combined with the intent-bus unsubscribe via the
+    // wrapper below so both cleanups run on unmount.
+    const unsubHistory = installMobileHistoryNav();
     // Same intent-bus subscription as DesktopLayout — a wikilink click
     // in the open editor needs a way to ask the shell to surface a
     // different note. Mobile's "open" is just a screen switch + active
     // note swap; the editor's $effect tears down and re-mounts.
-    return subscribeOpenNoteRequest((id) => openNote(id));
+    const unsubIntent = subscribeOpenNoteRequest((id) => openNote(id));
+    return () => {
+      unsubHistory();
+      unsubIntent();
+    };
   });
 
   function openNote(id: string) {
-    setActiveNote(id);
-    setMobileScreen('editor');
+    navigateToEditor(id);
   }
 
   // Notes/folders created in 'trash', 'shared', or 'favourite' don't have
@@ -73,7 +83,8 @@
   // Tracks which create flow has its NameInputSheet open. null = no
   // sheet showing; commit lives in commitCreate().
   // 'drawing' creates a freeform note via createNoteIn(..., 'freeform').
-  let createPrompt = $state<'note' | 'drawing' | 'folder' | null>(null);
+  // 'ink' creates an Android-native drawing note via createNoteIn(..., 'ink').
+  let createPrompt = $state<'note' | 'drawing' | 'ink' | 'folder' | null>(null);
 
   function createNote() {
     createPrompt = 'note';
@@ -81,6 +92,10 @@
 
   function createDrawing() {
     createPrompt = 'drawing';
+  }
+
+  function createInk() {
+    createPrompt = 'ink';
   }
 
   function createFolder() {
@@ -92,11 +107,11 @@
     createPrompt = null;
     if (!kind) return;
     const parent = targetParent();
-    if (kind === 'note' || kind === 'drawing') {
+    if (kind === 'note' || kind === 'drawing' || kind === 'ink') {
       const id = await createNoteIn(
         parent,
         name,
-        kind === 'drawing' ? 'freeform' : 'markdown'
+        kind === 'drawing' ? 'freeform' : kind === 'ink' ? 'ink' : 'markdown'
       );
       openNote(id);
     } else {
@@ -123,8 +138,14 @@
           {
             id: 'new-drawing',
             label: tUi('fab.newDrawing'),
-            icon: Pencil as unknown as IconComponent,
+            icon: PencilRuler as unknown as IconComponent,
             onSelect: createDrawing
+          },
+          {
+            id: 'new-ink',
+            label: tUi('fab.newInk'),
+            icon: Feather as unknown as IconComponent,
+            onSelect: createInk
           },
           {
             id: 'new-folder',
@@ -182,6 +203,14 @@
   <NameInputSheet
     title={tUi('fab.newDrawing')}
     placeholder={tUi('fab.placeholder.drawingTitle')}
+    submitLabel={tUi('fab.submit.create')}
+    onSubmit={(n) => void commitCreate(n)}
+    onClose={() => (createPrompt = null)}
+  />
+{:else if createPrompt === 'ink'}
+  <NameInputSheet
+    title={tUi('fab.newInk')}
+    placeholder={tUi('fab.placeholder.inkTitle')}
     submitLabel={tUi('fab.submit.create')}
     onSubmit={(n) => void commitCreate(n)}
     onClose={() => (createPrompt = null)}

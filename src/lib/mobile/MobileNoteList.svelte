@@ -13,7 +13,14 @@
    * yet, so it just shows an explanatory empty state. Wire a real filter
    * in here when collab metadata lands.
    */
-  import { FileText, Folder, MoreVertical, Star } from 'lucide-svelte';
+  import {
+    Feather,
+    FileText,
+    Folder,
+    MoreVertical,
+    PencilRuler,
+    Star
+  } from 'lucide-svelte';
   import type { NoteSummary, TreeNode } from '$lib/api';
   import { TRASH_ID } from '$lib/api';
   import {
@@ -364,6 +371,8 @@
     <div class="grid grid-cols-2 gap-2">
       {#each visible as node (node.kind + ':' + node.id)}
         {@const fav = node.kind === 'note' && isFavourite(node.id)}
+        {@const noteKind =
+          node.kind === 'note' ? tree.notesById[node.id]?.note_kind : null}
         <!-- Wrapper is a div so the favourite-toggle button can sit inside
              alongside the primary tap target without nesting <button>s. -->
         <div
@@ -376,6 +385,10 @@
           >
             {#if node.kind === 'folder'}
               <Folder class="size-5 text-muted-foreground" />
+            {:else if noteKind === 'freeform'}
+              <PencilRuler class="size-5 text-muted-foreground" />
+            {:else if noteKind === 'ink'}
+              <Feather class="size-5 text-muted-foreground" />
             {:else}
               <FileText class="size-5 text-muted-foreground" />
             {/if}
@@ -416,6 +429,8 @@
     <ul class="flex flex-col">
       {#each visible as node (node.kind + ':' + node.id)}
         {@const fav = node.kind === 'note' && isFavourite(node.id)}
+        {@const noteKind =
+          node.kind === 'note' ? tree.notesById[node.id]?.note_kind : null}
         <li class="flex w-full items-center gap-1">
           <button
             type="button"
@@ -424,6 +439,10 @@
           >
             {#if node.kind === 'folder'}
               <Folder class="size-5 shrink-0 text-muted-foreground" />
+            {:else if noteKind === 'freeform'}
+              <PencilRuler class="size-5 shrink-0 text-muted-foreground" />
+            {:else if noteKind === 'ink'}
+              <Feather class="size-5 shrink-0 text-muted-foreground" />
             {:else}
               <FileText class="size-5 shrink-0 text-muted-foreground" />
             {/if}
