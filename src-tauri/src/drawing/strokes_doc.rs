@@ -45,9 +45,10 @@
 //! by sample" — remote strokes appear atomically on pen-up instead.
 //! Matches Apple Notes / OneNote / most production ink editors.
 //!
-//! ### Payload binary format (v1)
+//! ### Payload binary format
 //!
 //! ```text
+//! v1:
 //! offset  size            field
 //!     0    1 byte         version (= PAYLOAD_VERSION_V1)
 //!     1    4 bytes (LE)   color: u32   — packed 0xAARRGGBB
@@ -55,6 +56,15 @@
 //!     9    8 * n_points   points: f32 pairs (x0, y0, x1, y1, …) in
 //!                                          page coords
 //!  9+8n    4 * n_points   pressures: f32, one per (x, y) pair
+//!
+//! v2: same as v1 plus a per-stroke base width field
+//! offset  size            field
+//!     0    1 byte         version (= PAYLOAD_VERSION_V2)
+//!     1    4 bytes (LE)   color: u32   — packed 0xAARRGGBB
+//!     5    4 bytes (LE)   width: f32   — base width in page units
+//!     9    4 bytes (LE)   n_points: u32
+//!    13    8 * n_points   points: f32 pairs
+//! 13+8n    4 * n_points   pressures: f32 per pair
 //! ```
 //!
 //! Little-endian throughout. All modern target devices are LE; we
@@ -62,21 +72,21 @@
 //!
 //! ### Backward compat
 //!
-//! There is none — this is the first shipped schema for ink notes,
-//! so we don't carry a legacy reader. If a future migration becomes
-//! necessary we'd add a top-level `schema_version` field and bump
-//! `PAYLOAD_VERSION_V1` accordingly.
+//! v1 payloads written before D5 landed are still decodable —
+//! readers materialise them as v2-shaped strokes with `width =
+//! [`DEFAULT_WIDTH`]` (matching the renderer's pre-D5 hardcoded
+//! `BASE_WIDTH`). New writes always use v2. Bumping the version (vs
+//! adding an outer `schema_version` field) keeps the decoder co-
+//! located with the payload bytes and avoids a wider yrs-map shape
+//! change that would force a separate doc-level migration.
 //!
 //! ## What's NOT yet in the schema (deferred per the roadmap)
 //!
 //! - Tilt / azimuth per point. Open; revisit if D1's stroke modeller
 //!   wants them. Would slot into the payload as additional f32 arrays.
-//! - User-chosen per-stroke width (D5). Currently the renderer
-//!   modulates a hardcoded BASE_WIDTH by pressure; D5 would add a
-//!   `width: f32` to the payload header.
 //! - Tool type (currently reflected indirectly via the chosen
-//!   `color` — pen/eraser → blue, finger → black; D5's palette
-//!   replaces that mapping).
+//!   `color`; D5's user-picker bypasses the old debug palette
+//!   entirely).
 
 use yrs::any::Any;
 use yrs::updates::decoder::Decode;
@@ -89,23 +99,35 @@ const FIELD_TOMBSTONED: &str = "tombstoned";
 const FIELD_ID: &str = "id";
 const FIELD_PAYLOAD: &str = "payload";
 
-/// Default stroke colour: opaque black, packed as 0xAARRGGBB.
-/// The renderer chooses the actual stored colour at `begin_stroke`
-/// time based on input-device tool type; this constant is what the
-/// renderer falls back to for "no special pen colour" (finger,
-/// mouse, unknown tool).
+/// Default stroke colour: opaque black, packed as 0xAARRGGBB. Used
+/// as the renderer's `picked_color` on first launch and as the
+/// fall-back for malformed strokes / finger input. D5's colour
+/// picker overrides this per the user's pick; this constant is the
+/// "fresh app" baseline.
 pub const DEFAULT_COLOR: u32 = 0xFF00_0000;
 
-/// Current payload binary-format version. See module header for the
-/// layout. Bump if the layout ever changes in a non-additive way;
-/// readers refuse to decode unknown versions (the stroke is skipped
-/// rather than rendered with garbage).
-const PAYLOAD_VERSION_V1: u8 = 1;
+/// Default stroke base-width in page units. Matches the renderer's
+/// pre-D5 hardcoded `BASE_WIDTH` so v1 payloads decoded by the
+/// post-D5 reader paint identically to before. Also used as the
+/// renderer's `picked_width` on first launch.
+pub const DEFAULT_WIDTH: f32 = 4.0;
 
-/// Pure encoder for the v1 stroke payload binary format. Kept as a
-/// free function (separate from `StrokesDoc`) so it can be
+/// Payload binary-format versions. v1 is the pre-D5 format (no
+/// width field — readers synthesise [`DEFAULT_WIDTH`]). v2 carries
+/// per-stroke width. Unknown versions are skipped rather than
+/// painted with garbage.
+const PAYLOAD_VERSION_V1: u8 = 1;
+const PAYLOAD_VERSION_V2: u8 = 2;
+
+/// Encode the latest payload format (v2). v1 is read-only — we only
+/// emit v2 going forward. Kept as a free function so it can be
 /// unit-tested without spinning up a yrs Doc.
-fn encode_payload_v1(color: u32, points: &[f32], pressures: &[f32]) -> Vec<u8> {
+fn encode_payload_v2(
+    color: u32,
+    width: f32,
+    points: &[f32],
+    pressures: &[f32],
+) -> Vec<u8> {
     debug_assert_eq!(points.len() % 2, 0, "points must be interleaved (x, y) pairs");
     debug_assert_eq!(
         points.len() / 2,
@@ -113,10 +135,11 @@ fn encode_payload_v1(color: u32, points: &[f32], pressures: &[f32]) -> Vec<u8> {
         "one pressure per (x, y) pair"
     );
     let n_points = pressures.len() as u32;
-    // 1 (version) + 4 (color) + 4 (n_points) + 4 * 2n (points) + 4 * n (pressures)
-    let mut out = Vec::with_capacity(9 + points.len() * 4 + pressures.len() * 4);
-    out.push(PAYLOAD_VERSION_V1);
+    // 1 (version) + 4 (color) + 4 (width) + 4 (n_points) + 4 * 2n + 4 * n
+    let mut out = Vec::with_capacity(13 + points.len() * 4 + pressures.len() * 4);
+    out.push(PAYLOAD_VERSION_V2);
     out.extend_from_slice(&color.to_le_bytes());
+    out.extend_from_slice(&width.to_le_bytes());
     out.extend_from_slice(&n_points.to_le_bytes());
     for &v in points {
         out.extend_from_slice(&v.to_le_bytes());
@@ -127,23 +150,34 @@ fn encode_payload_v1(color: u32, points: &[f32], pressures: &[f32]) -> Vec<u8> {
     out
 }
 
-/// Decoded view of a v1 stroke payload. Owns its data — the
-/// visitor passes references into a [`StrokeView`] borrowing from
-/// this struct's `points` / `pressures` Vecs.
+/// Decoded view of a stroke payload. Owns its data; the visitor
+/// passes references into a [`StrokeView`] borrowing from this
+/// struct's `points` / `pressures` Vecs.
 struct DecodedPayload {
     color: u32,
+    width: f32,
     points: Vec<f32>,
     pressures: Vec<f32>,
 }
 
-/// Pure decoder. `None` on truncated / wrong-version / size-mismatch
-/// input — caller skips the stroke rather than rendering garbage.
-fn decode_payload_v1(bytes: &[u8]) -> Option<DecodedPayload> {
-    // Header: 1 (version) + 4 (color) + 4 (n_points) = 9 bytes.
-    if bytes.len() < 9 {
+/// Pure decoder. Handles both v1 (no width field — defaults to
+/// [`DEFAULT_WIDTH`]) and v2 transparently. `None` on truncated /
+/// wrong-version / size-mismatch input — caller skips the stroke
+/// rather than rendering garbage.
+fn decode_payload(bytes: &[u8]) -> Option<DecodedPayload> {
+    if bytes.is_empty() {
         return None;
     }
-    if bytes[0] != PAYLOAD_VERSION_V1 {
+    match bytes[0] {
+        PAYLOAD_VERSION_V1 => decode_payload_v1(bytes),
+        PAYLOAD_VERSION_V2 => decode_payload_v2(bytes),
+        _ => None,
+    }
+}
+
+fn decode_payload_v1(bytes: &[u8]) -> Option<DecodedPayload> {
+    // Header: 1 (version) + 4 (color) + 4 (n_points) = 9 bytes.
+    if bytes.len() < 9 || bytes[0] != PAYLOAD_VERSION_V1 {
         return None;
     }
     let color = u32::from_le_bytes(bytes[1..5].try_into().ok()?);
@@ -152,22 +186,56 @@ fn decode_payload_v1(bytes: &[u8]) -> Option<DecodedPayload> {
     if bytes.len() != expected_len {
         return None;
     }
-    let mut points = Vec::with_capacity(n_points * 2);
-    let mut pressures = Vec::with_capacity(n_points);
-    let mut offset = 9;
-    for _ in 0..(n_points * 2) {
-        points.push(f32::from_le_bytes(bytes[offset..offset + 4].try_into().ok()?));
-        offset += 4;
-    }
-    for _ in 0..n_points {
-        pressures.push(f32::from_le_bytes(bytes[offset..offset + 4].try_into().ok()?));
-        offset += 4;
-    }
+    let (points, pressures) = decode_geometry(&bytes[9..], n_points)?;
     Some(DecodedPayload {
         color,
+        width: DEFAULT_WIDTH,
         points,
         pressures,
     })
+}
+
+fn decode_payload_v2(bytes: &[u8]) -> Option<DecodedPayload> {
+    // Header: 1 (version) + 4 (color) + 4 (width) + 4 (n_points) = 13 bytes.
+    if bytes.len() < 13 || bytes[0] != PAYLOAD_VERSION_V2 {
+        return None;
+    }
+    let color = u32::from_le_bytes(bytes[1..5].try_into().ok()?);
+    let width = f32::from_le_bytes(bytes[5..9].try_into().ok()?);
+    let n_points = u32::from_le_bytes(bytes[9..13].try_into().ok()?) as usize;
+    let expected_len = 13 + n_points * 2 * 4 + n_points * 4;
+    if bytes.len() != expected_len {
+        return None;
+    }
+    let (points, pressures) = decode_geometry(&bytes[13..], n_points)?;
+    Some(DecodedPayload {
+        color,
+        width,
+        points,
+        pressures,
+    })
+}
+
+/// Shared geometry tail: `points` (2 × n_points × f32) then
+/// `pressures` (n_points × f32). v1 and v2 share this layout —
+/// only the header in front of it differs.
+fn decode_geometry(body: &[u8], n_points: usize) -> Option<(Vec<f32>, Vec<f32>)> {
+    let expected = n_points * 2 * 4 + n_points * 4;
+    if body.len() != expected {
+        return None;
+    }
+    let mut points = Vec::with_capacity(n_points * 2);
+    let mut pressures = Vec::with_capacity(n_points);
+    let mut offset = 0;
+    for _ in 0..(n_points * 2) {
+        points.push(f32::from_le_bytes(body[offset..offset + 4].try_into().ok()?));
+        offset += 4;
+    }
+    for _ in 0..n_points {
+        pressures.push(f32::from_le_bytes(body[offset..offset + 4].try_into().ok()?));
+        offset += 4;
+    }
+    Some((points, pressures))
 }
 
 /// Wrapper around a `yrs::Doc` holding the stroke document for one
@@ -192,6 +260,11 @@ pub struct StrokesDoc {
     /// currently open; doubles as the "is there a stroke in flight"
     /// guard for `push_point`.
     in_progress_color: Option<u32>,
+    /// Base width (page units) the renderer should use for this
+    /// stroke before pressure modulation. Captured at `begin_stroke`
+    /// alongside the colour. Always Some when `in_progress_color`
+    /// is Some.
+    in_progress_width: f32,
     /// Accumulated point coordinates for the in-progress stroke,
     /// interleaved (x0, y0, x1, y1, …). Lives on the Rust side
     /// until `end_stroke` serialises it into the stroke payload.
@@ -210,6 +283,7 @@ impl StrokesDoc {
             doc,
             strokes,
             in_progress_color: None,
+            in_progress_width: DEFAULT_WIDTH,
             in_progress_points: Vec::new(),
             in_progress_pressures: Vec::new(),
         }
@@ -242,15 +316,17 @@ impl StrokesDoc {
     /// commits the whole stroke as a single payload insert.
     ///
     /// `color` is the packed 0xAARRGGBB the renderer should use
-    /// (typically chosen at the call site based on input-device
-    /// tool type or a future user-picked palette).
+    /// (from D5's user-picked palette). `width` is the per-stroke
+    /// base width in page units — the renderer's pressure ramp
+    /// scales relative to it.
     ///
     /// If a stroke was already open (no matching end_stroke), its
     /// in-progress points are silently dropped — defensive against
     /// missed pen-up events. Since nothing was committed to yrs for
     /// the previous stroke, dropping has no on-disk effect.
-    pub fn begin_stroke(&mut self, color: u32) {
+    pub fn begin_stroke(&mut self, color: u32, width: f32) {
         self.in_progress_color = Some(color);
+        self.in_progress_width = width;
         self.in_progress_points.clear();
         self.in_progress_pressures.clear();
     }
@@ -278,6 +354,7 @@ impl StrokesDoc {
     /// stroke for later "undo the add" / "remove" operations.
     pub fn end_stroke(&mut self) -> Option<String> {
         let color = self.in_progress_color.take()?;
+        let width = self.in_progress_width;
         // Empty strokes — pen-down without any subsequent move sample —
         // would tessellate to zero segments anyway; skip them so the
         // doc doesn't accumulate inert stroke entries.
@@ -285,8 +362,9 @@ impl StrokesDoc {
             self.in_progress_points.clear();
             return None;
         }
-        let payload = encode_payload_v1(
+        let payload = encode_payload_v2(
             color,
+            width,
             &self.in_progress_points,
             &self.in_progress_pressures,
         );
@@ -429,6 +507,7 @@ impl StrokesDoc {
         // should also end that stroke.
         drop(tx);
         self.in_progress_color = None;
+        self.in_progress_width = DEFAULT_WIDTH;
         self.in_progress_points.clear();
         self.in_progress_pressures.clear();
     }
@@ -470,7 +549,7 @@ impl StrokesDoc {
             let Some(Out::Any(Any::Buffer(bytes))) = stroke.get(&tx, FIELD_PAYLOAD) else {
                 continue;
             };
-            let Some(decoded) = decode_payload_v1(&bytes) else {
+            let Some(decoded) = decode_payload(&bytes) else {
                 continue;
             };
             visit(StrokeView {
@@ -478,6 +557,7 @@ impl StrokesDoc {
                 points: &decoded.points,
                 pressures: &decoded.pressures,
                 color: decoded.color,
+                width: decoded.width,
             });
         }
     }
@@ -521,6 +601,8 @@ impl StrokesDoc {
 ///     (`pressures.len() == points.len() / 2`).
 ///   - `color`: packed 0xAARRGGBB the renderer chose at `begin_stroke`
 ///     time.
+///   - `width`: per-stroke base width in page units. v1 strokes
+///     (pre-D5) surface as [`DEFAULT_WIDTH`].
 ///
 /// Borrowed view; valid only for the duration of the visitor
 /// callback. Copy out anything the caller wants to keep.
@@ -529,6 +611,7 @@ pub struct StrokeView<'a> {
     pub points: &'a [f32],
     pub pressures: &'a [f32],
     pub color: u32,
+    pub width: f32,
 }
 
 impl Default for StrokesDoc {
@@ -571,53 +654,92 @@ mod tests {
 
     // ---------- Payload encoder/decoder (pure-function) ----------
 
+    /// Re-implementation of the retired `encode_payload_v1` kept here
+    /// so we can exercise the v1-read-only path without keeping dead
+    /// production code around. Same byte layout as the original.
+    fn encode_payload_v1_test(color: u32, points: &[f32], pressures: &[f32]) -> Vec<u8> {
+        debug_assert_eq!(points.len() % 2, 0);
+        debug_assert_eq!(points.len() / 2, pressures.len());
+        let n_points = pressures.len() as u32;
+        let mut out = Vec::with_capacity(9 + points.len() * 4 + pressures.len() * 4);
+        out.push(PAYLOAD_VERSION_V1);
+        out.extend_from_slice(&color.to_le_bytes());
+        out.extend_from_slice(&n_points.to_le_bytes());
+        for &v in points {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+        for &v in pressures {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+        out
+    }
+
     #[test]
-    fn payload_round_trips() {
+    fn payload_v2_round_trips() {
         let points = vec![1.0_f32, 2.0, 3.0, 4.0, 5.0, 6.0];
         let pressures = vec![0.25_f32, 0.5, 0.75];
-        let bytes = encode_payload_v1(0xFF00_66FF, &points, &pressures);
-        let decoded = decode_payload_v1(&bytes).expect("round-trip");
+        let bytes = encode_payload_v2(0xFF00_66FF, 2.5, &points, &pressures);
+        let decoded = decode_payload(&bytes).expect("round-trip");
         assert_eq!(decoded.color, 0xFF00_66FF);
+        assert_eq!(decoded.width, 2.5);
         assert_eq!(decoded.points, points);
         assert_eq!(decoded.pressures, pressures);
     }
 
     #[test]
-    fn payload_empty_stroke_round_trips() {
-        let bytes = encode_payload_v1(DEFAULT_COLOR, &[], &[]);
-        // Header only: version + color + n_points = 9 bytes.
-        assert_eq!(bytes.len(), 9);
-        let decoded = decode_payload_v1(&bytes).expect("zero-point round-trip");
+    fn payload_v2_empty_stroke_round_trips() {
+        let bytes = encode_payload_v2(DEFAULT_COLOR, DEFAULT_WIDTH, &[], &[]);
+        // Header only: version + color + width + n_points = 13 bytes.
+        assert_eq!(bytes.len(), 13);
+        let decoded = decode_payload(&bytes).expect("zero-point round-trip");
         assert_eq!(decoded.color, DEFAULT_COLOR);
+        assert_eq!(decoded.width, DEFAULT_WIDTH);
         assert!(decoded.points.is_empty());
         assert!(decoded.pressures.is_empty());
     }
 
     #[test]
+    fn payload_v1_decodes_with_default_width() {
+        // Pre-D5 strokes need to keep rendering exactly as before —
+        // the post-D5 decoder synthesises width = DEFAULT_WIDTH so
+        // tessellation paints them identically. The geometry +
+        // colour must survive untouched.
+        let points = vec![10.0_f32, 20.0, 30.0, 40.0];
+        let pressures = vec![0.5_f32, 0.75];
+        let bytes = encode_payload_v1_test(0xFF11_22_33, &points, &pressures);
+        let decoded = decode_payload(&bytes).expect("v1 still decodes");
+        assert_eq!(decoded.color, 0xFF11_22_33);
+        assert_eq!(decoded.width, DEFAULT_WIDTH);
+        assert_eq!(decoded.points, points);
+        assert_eq!(decoded.pressures, pressures);
+    }
+
+    #[test]
     fn payload_rejects_truncated_header() {
-        // Anything shorter than the 9-byte header is invalid.
-        assert!(decode_payload_v1(&[]).is_none());
-        assert!(decode_payload_v1(&[PAYLOAD_VERSION_V1]).is_none());
-        assert!(decode_payload_v1(&[PAYLOAD_VERSION_V1; 8]).is_none());
+        assert!(decode_payload(&[]).is_none());
+        assert!(decode_payload(&[PAYLOAD_VERSION_V1]).is_none());
+        assert!(decode_payload(&[PAYLOAD_VERSION_V1; 8]).is_none());
+        assert!(decode_payload(&[PAYLOAD_VERSION_V2; 12]).is_none());
     }
 
     #[test]
     fn payload_rejects_unknown_version() {
-        let bytes = encode_payload_v1(DEFAULT_COLOR, &[0.0, 0.0], &[1.0]);
+        let bytes = encode_payload_v2(DEFAULT_COLOR, DEFAULT_WIDTH, &[0.0, 0.0], &[1.0]);
         let mut bumped = bytes.clone();
-        bumped[0] = PAYLOAD_VERSION_V1 + 1;
-        assert!(decode_payload_v1(&bumped).is_none());
+        bumped[0] = PAYLOAD_VERSION_V2 + 99;
+        assert!(decode_payload(&bumped).is_none());
     }
 
     #[test]
     fn payload_rejects_size_mismatch() {
         // n_points = 1 but the body has zero point bytes.
         let mut bad = Vec::new();
-        bad.push(PAYLOAD_VERSION_V1);
+        bad.push(PAYLOAD_VERSION_V2);
         bad.extend_from_slice(&DEFAULT_COLOR.to_le_bytes());
+        bad.extend_from_slice(&DEFAULT_WIDTH.to_le_bytes());
         bad.extend_from_slice(&1u32.to_le_bytes());
         // (no point + pressure bytes appended)
-        assert!(decode_payload_v1(&bad).is_none());
+        assert!(decode_payload(&bad).is_none());
     }
 
     // ---------- StrokesDoc round-trip / behaviour tests ----------
@@ -641,7 +763,7 @@ mod tests {
     #[test]
     fn one_stroke_round_trips() {
         let mut doc = StrokesDoc::new();
-        doc.begin_stroke(DEFAULT_COLOR);
+        doc.begin_stroke(DEFAULT_COLOR, DEFAULT_WIDTH);
         doc.push_point(10.0, 20.0, 1.0);
         doc.push_point(30.0, 40.0, 1.0);
         doc.push_point(50.0, 60.0, 1.0);
@@ -658,7 +780,7 @@ mod tests {
     #[test]
     fn pressure_round_trips() {
         let mut doc = StrokesDoc::new();
-        doc.begin_stroke(DEFAULT_COLOR);
+        doc.begin_stroke(DEFAULT_COLOR, DEFAULT_WIDTH);
         doc.push_point(0.0, 0.0, 0.25);
         doc.push_point(1.0, 1.0, 0.50);
         doc.push_point(2.0, 2.0, 0.75);
@@ -676,10 +798,27 @@ mod tests {
     }
 
     #[test]
+    fn width_round_trips() {
+        // Strokes drawn with a user-picked width should reload at the
+        // same width — proves the v2 payload encode/decode + the
+        // StrokesDoc.in_progress_width plumbing are wired end-to-end.
+        let mut doc = StrokesDoc::new();
+        doc.begin_stroke(DEFAULT_COLOR, 7.25);
+        doc.push_point(0.0, 0.0, 1.0);
+        doc.push_point(1.0, 1.0, 1.0);
+        doc.end_stroke();
+        let bytes = doc.encode();
+        let restored = StrokesDoc::from_bytes(&bytes);
+        let mut widths = Vec::new();
+        restored.for_each_stroke(|view| widths.push(view.width));
+        assert_eq!(widths, vec![7.25_f32]);
+    }
+
+    #[test]
     fn color_round_trips() {
         const PEN_BLUE: u32 = 0xFF00_66FF;
         let mut doc = StrokesDoc::new();
-        doc.begin_stroke(PEN_BLUE);
+        doc.begin_stroke(PEN_BLUE, DEFAULT_WIDTH);
         doc.push_point(0.0, 0.0, 1.0);
         doc.push_point(1.0, 1.0, 1.0);
         doc.end_stroke();
@@ -694,10 +833,10 @@ mod tests {
     #[test]
     fn multiple_strokes_keep_their_order() {
         let mut doc = StrokesDoc::new();
-        doc.begin_stroke(DEFAULT_COLOR);
+        doc.begin_stroke(DEFAULT_COLOR, DEFAULT_WIDTH);
         doc.push_point(1.0, 1.0, 1.0);
         doc.end_stroke();
-        doc.begin_stroke(DEFAULT_COLOR);
+        doc.begin_stroke(DEFAULT_COLOR, DEFAULT_WIDTH);
         doc.push_point(2.0, 2.0, 1.0);
         doc.push_point(3.0, 3.0, 1.0);
         doc.end_stroke();
@@ -722,7 +861,7 @@ mod tests {
         // never registered a move sample (which would tessellate to
         // zero segments anyway).
         let mut doc = StrokesDoc::new();
-        doc.begin_stroke(DEFAULT_COLOR);
+        doc.begin_stroke(DEFAULT_COLOR, DEFAULT_WIDTH);
         doc.end_stroke();
         assert!(collect_strokes(&doc).is_empty());
     }
@@ -730,7 +869,7 @@ mod tests {
     #[test]
     fn tombstone_all_hides_existing_strokes() {
         let mut doc = StrokesDoc::new();
-        doc.begin_stroke(DEFAULT_COLOR);
+        doc.begin_stroke(DEFAULT_COLOR, DEFAULT_WIDTH);
         doc.push_point(1.0, 1.0, 1.0);
         doc.end_stroke();
         assert_eq!(collect_strokes(&doc).len(), 1);
@@ -738,7 +877,7 @@ mod tests {
         doc.tombstone_all();
         assert!(collect_strokes(&doc).is_empty());
         // But new strokes after a clear should still render.
-        doc.begin_stroke(DEFAULT_COLOR);
+        doc.begin_stroke(DEFAULT_COLOR, DEFAULT_WIDTH);
         doc.push_point(5.0, 5.0, 1.0);
         doc.end_stroke();
         assert_eq!(collect_strokes(&doc), vec![vec![5.0, 5.0]]);
@@ -751,10 +890,10 @@ mod tests {
         // buffers (nothing was committed to yrs for the first
         // stroke since end_stroke didn't run).
         let mut doc = StrokesDoc::new();
-        doc.begin_stroke(DEFAULT_COLOR);
+        doc.begin_stroke(DEFAULT_COLOR, DEFAULT_WIDTH);
         doc.push_point(99.0, 99.0, 1.0);
         // No end_stroke; start a fresh one.
-        doc.begin_stroke(DEFAULT_COLOR);
+        doc.begin_stroke(DEFAULT_COLOR, DEFAULT_WIDTH);
         doc.push_point(1.0, 2.0, 1.0);
         doc.end_stroke();
 
@@ -764,7 +903,7 @@ mod tests {
     #[test]
     fn end_stroke_returns_committed_id() {
         let mut doc = StrokesDoc::new();
-        doc.begin_stroke(DEFAULT_COLOR);
+        doc.begin_stroke(DEFAULT_COLOR, DEFAULT_WIDTH);
         doc.push_point(0.0, 0.0, 1.0);
         let id = doc.end_stroke().expect("non-empty stroke commits");
         assert!(id.starts_with("stroke_"), "id has expected prefix: {id}");
@@ -778,7 +917,7 @@ mod tests {
     #[test]
     fn end_stroke_returns_none_for_empty_stroke() {
         let mut doc = StrokesDoc::new();
-        doc.begin_stroke(DEFAULT_COLOR);
+        doc.begin_stroke(DEFAULT_COLOR, DEFAULT_WIDTH);
         // no push_point
         assert!(doc.end_stroke().is_none());
     }
@@ -786,7 +925,7 @@ mod tests {
     #[test]
     fn set_stroke_tombstoned_toggles_visibility() {
         let mut doc = StrokesDoc::new();
-        doc.begin_stroke(DEFAULT_COLOR);
+        doc.begin_stroke(DEFAULT_COLOR, DEFAULT_WIDTH);
         doc.push_point(0.0, 0.0, 1.0);
         let id = doc.end_stroke().unwrap();
 
@@ -803,13 +942,13 @@ mod tests {
         use std::collections::HashSet;
 
         let mut doc = StrokesDoc::new();
-        doc.begin_stroke(DEFAULT_COLOR);
+        doc.begin_stroke(DEFAULT_COLOR, DEFAULT_WIDTH);
         doc.push_point(0.0, 0.0, 1.0);
         let a = doc.end_stroke().unwrap();
-        doc.begin_stroke(DEFAULT_COLOR);
+        doc.begin_stroke(DEFAULT_COLOR, DEFAULT_WIDTH);
         doc.push_point(1.0, 1.0, 1.0);
         let b = doc.end_stroke().unwrap();
-        doc.begin_stroke(DEFAULT_COLOR);
+        doc.begin_stroke(DEFAULT_COLOR, DEFAULT_WIDTH);
         doc.push_point(2.0, 2.0, 1.0);
         let c = doc.end_stroke().unwrap();
 
@@ -832,7 +971,7 @@ mod tests {
     fn tombstone_strokes_empty_set_is_a_noop() {
         use std::collections::HashSet;
         let mut doc = StrokesDoc::new();
-        doc.begin_stroke(DEFAULT_COLOR);
+        doc.begin_stroke(DEFAULT_COLOR, DEFAULT_WIDTH);
         doc.push_point(0.0, 0.0, 1.0);
         doc.end_stroke();
 
@@ -852,10 +991,10 @@ mod tests {
     #[test]
     fn for_each_stroke_id_yields_visible_and_tombstoned() {
         let mut doc = StrokesDoc::new();
-        doc.begin_stroke(DEFAULT_COLOR);
+        doc.begin_stroke(DEFAULT_COLOR, DEFAULT_WIDTH);
         doc.push_point(0.0, 0.0, 1.0);
         let a = doc.end_stroke().unwrap();
-        doc.begin_stroke(DEFAULT_COLOR);
+        doc.begin_stroke(DEFAULT_COLOR, DEFAULT_WIDTH);
         doc.push_point(1.0, 1.0, 1.0);
         let b = doc.end_stroke().unwrap();
         // Tombstone b — for_each_stroke (visible only) hides it but
@@ -878,19 +1017,19 @@ mod tests {
         // convergence guarantee is preserved — that's the whole
         // point of keeping the outer array as a proper yrs structure.
         let mut base = StrokesDoc::new();
-        base.begin_stroke(DEFAULT_COLOR);
+        base.begin_stroke(DEFAULT_COLOR, DEFAULT_WIDTH);
         base.push_point(0.0, 0.0, 1.0);
         base.end_stroke();
         let base_bytes = base.encode();
 
         let mut a = StrokesDoc::from_bytes(&base_bytes);
-        a.begin_stroke(DEFAULT_COLOR);
+        a.begin_stroke(DEFAULT_COLOR, DEFAULT_WIDTH);
         a.push_point(1.0, 1.0, 1.0);
         a.end_stroke();
         let a_bytes = a.encode();
 
         let mut b = StrokesDoc::from_bytes(&base_bytes);
-        b.begin_stroke(DEFAULT_COLOR);
+        b.begin_stroke(DEFAULT_COLOR, DEFAULT_WIDTH);
         b.push_point(2.0, 2.0, 1.0);
         b.end_stroke();
         let b_bytes = b.encode();
