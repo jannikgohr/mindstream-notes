@@ -22,10 +22,10 @@
 //! See the function comment for why.
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::mpsc::{self, Sender, SyncSender, TryRecvError};
+use std::sync::mpsc::{self, RecvTimeoutError, Sender, SyncSender, TryRecvError};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use std::collections::HashSet;
 
@@ -1362,13 +1362,45 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
     // false after the first log so subsequent frames stay quiet.
     let mut log_first_frame = true;
     let mut deferred_messages: VecDeque<Msg> = VecDeque::new();
+    // Deadline for the next egui-driven repaint. `Some` means an
+    // animation (popover fade-in, hover transition, …) is in
+    // progress; `None` means nothing animating — block on `recv()`
+    // until real input arrives. Populated from `UiOutput::repaint_after`
+    // after each render and consumed by the recv branch below.
+    let mut next_animation_wake: Option<Instant> = None;
 
     loop {
-        let first = match deferred_messages.pop_front() {
-            Some(m) => m,
-            None => match rx.recv() {
-                Ok(m) => m,
-                Err(_) => return,
+        // Track whether this iteration was triggered by an animation
+        // timeout (no message) vs. a real message arrival. On
+        // timeout we still want to run the render block so the
+        // animation progresses one tick.
+        let mut animation_tick = false;
+        let first: Option<Msg> = match deferred_messages.pop_front() {
+            Some(m) => Some(m),
+            None => match next_animation_wake {
+                Some(deadline) => {
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    if remaining.is_zero() {
+                        // Deadline already past — render immediately.
+                        next_animation_wake = None;
+                        animation_tick = true;
+                        None
+                    } else {
+                        match rx.recv_timeout(remaining) {
+                            Ok(m) => Some(m),
+                            Err(RecvTimeoutError::Timeout) => {
+                                next_animation_wake = None;
+                                animation_tick = true;
+                                None
+                            }
+                            Err(RecvTimeoutError::Disconnected) => return,
+                        }
+                    }
+                }
+                None => match rx.recv() {
+                    Ok(m) => Some(m),
+                    Err(_) => return,
+                },
             },
         };
         let batch_start = std::time::Instant::now();
@@ -1379,7 +1411,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
         // `[drawing.perf.lag]` summary log at the bottom of the
         // render block.
         let batch_start_uptime_ms = crate::drawing::platform::android::now_uptime_ms();
-        let mut messages = vec![first];
+        let mut messages: Vec<Msg> = first.into_iter().collect();
         loop {
             match rx.try_recv() {
                 Ok(m) => messages.push(m),
@@ -1388,7 +1420,9 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
             }
         }
 
-        let mut dirty = false;
+        // Animation-tick iterations have no message but still need a
+        // render-pass run so egui can advance its animation state.
+        let mut dirty = animation_tick;
         let mut needs_rebuild = false;
         // Eraser hits queued during this batch — flushed to yrs +
         // retessellated ONCE after the message loop completes
@@ -2321,6 +2355,11 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                     &documents,
                 );
                 let (actions, ui_output) = canvas_ui.run(input, s.size_px(), ui_state);
+                // Capture egui's animation hint BEFORE move-passing
+                // `ui_output` into pipeline. `Duration::MAX` means
+                // "nothing animating" — we leave `next_animation_wake`
+                // as None so the next loop iter blocks on `recv()`.
+                let repaint_after = ui_output.repaint_after;
                 let dispatch_uptime_ms =
                     crate::drawing::platform::android::now_uptime_ms();
                 match pipeline::render_acquired_frame(
@@ -2567,6 +2606,12 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             );
                             let (_, fresh_ui) =
                                 canvas_ui.run(fresh_input, s.size_px(), fresh_state);
+                            // Follow-up frame may have its own animation
+                            // requirement (e.g. tool-change re-tessellation
+                            // triggers a hover-state animation reset). Take
+                            // the tighter of the two deadlines so neither
+                            // animation stalls.
+                            let fresh_repaint_after = fresh_ui.repaint_after;
                             let _ = pipeline::render_frame(
                                 p,
                                 s,
@@ -2574,6 +2619,10 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                 &raw_head_segments,
                                 &prediction_segments,
                                 fresh_ui,
+                            );
+                            schedule_next_wake(
+                                &mut next_animation_wake,
+                                fresh_repaint_after,
                             );
                         }
 
@@ -2586,7 +2635,29 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                     }
                     Err(e) => log::warn!("[drawing] render failed: {e:?}"),
                 }
+                // Schedule the next animation tick if egui's first-
+                // pass run reported one. If the follow-up render
+                // above ran, this is a no-op against whatever
+                // tighter deadline it already set.
+                schedule_next_wake(&mut next_animation_wake, repaint_after);
             }
         }
     }
+}
+
+/// Update `slot` with `repaint_after` if doing so brings the
+/// deadline earlier than what's already scheduled. `Duration::MAX`
+/// means "nothing animating" — leaves the slot untouched (so a
+/// pending earlier wake survives). Anything else is converted to
+/// an `Instant` deadline and only replaces `slot` if it fires
+/// sooner than the existing one.
+fn schedule_next_wake(slot: &mut Option<Instant>, repaint_after: Duration) {
+    if repaint_after == Duration::MAX {
+        return;
+    }
+    let candidate = Instant::now() + repaint_after;
+    *slot = Some(match *slot {
+        Some(existing) => existing.min(candidate),
+        None => candidate,
+    });
 }

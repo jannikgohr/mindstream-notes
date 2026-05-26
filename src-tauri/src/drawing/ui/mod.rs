@@ -125,10 +125,20 @@ pub struct RenderActions {
 /// geometry, font/texture updates, and the scale factor used during
 /// tessellation (must match the `ScreenDescriptor.pixels_per_point`
 /// the GPU side passes to `egui_wgpu::Renderer::render`).
+///
+/// `repaint_after` propagates egui's animation hint up to the
+/// render-thread loop so it knows whether to schedule a follow-up
+/// frame. Without honouring this, in-progress animations (the
+/// popover fade-in, hover transitions, …) stall mid-way: the
+/// render thread blocks on `rx.recv()` waiting for input and only
+/// wakes when the user touches the screen, which is exactly the
+/// symptom the user hit ("popover translucent until I touch
+/// elsewhere"). `Duration::MAX` means "nothing animating".
 pub struct UiOutput {
     pub paint_jobs: Vec<egui::epaint::ClippedPrimitive>,
     pub textures_delta: egui::TexturesDelta,
     pub pixels_per_point: f32,
+    pub repaint_after: std::time::Duration,
 }
 
 /// The UI side of the canvas. Owns the egui context so widget state
@@ -227,11 +237,23 @@ impl CanvasUi {
         let full_output = self.ctx.run(input, |ctx| {
             toolbar::show(ctx, PIXELS_PER_POINT, &theme, shadcn, state, &mut actions);
         });
+        // egui tracks per-viewport repaint delays — we have a
+        // single embedded viewport, but iterate defensively in case
+        // a future popover-in-window grows that count. The minimum
+        // is what the render thread needs to honour to keep
+        // animations smooth.
+        let repaint_after = full_output
+            .viewport_output
+            .values()
+            .map(|v| v.repaint_delay)
+            .min()
+            .unwrap_or(std::time::Duration::MAX);
         let paint_jobs = self.ctx.tessellate(full_output.shapes, PIXELS_PER_POINT);
         let ui_output = UiOutput {
             paint_jobs,
             textures_delta: full_output.textures_delta,
             pixels_per_point: PIXELS_PER_POINT,
+            repaint_after,
         };
         (actions, ui_output)
     }
