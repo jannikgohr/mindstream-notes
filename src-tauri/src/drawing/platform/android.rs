@@ -381,6 +381,44 @@ pub mod ui {
         invoke_static("setLiveInkStyleFromNative", "(IFF)V", &args)
     }
 
+    /// Push all active control bounding boxes (flat f32 array: [minX, minY, maxX, maxY, ...])
+    /// down to Kotlin so the front-buffer overlay can suppress strokes drawn over them.
+    pub fn call_set_control_bounds(bounds: &[f32]) -> Result<(), String> {
+        let ctx = ndk_context::android_context();
+        let vm_ptr = ctx.vm();
+        if vm_ptr.is_null() {
+            return Err(
+                "ndk_context JavaVM is null — Keyring.initializeNdkContext must run first"
+                    .into(),
+            );
+        }
+        let vm = unsafe { JavaVM::from_raw(vm_ptr.cast()) }
+            .map_err(|e| format!("JavaVM::from_raw: {e}"))?;
+        let mut env = vm
+            .attach_current_thread()
+            .map_err(|e| format!("attach_current_thread: {e}"))?;
+
+        let global_ref = super::DRAWING_CLASS.get().ok_or_else(|| {
+            "Drawing class not yet cached — Drawing companion static init must have run"
+                .to_string()
+        })?;
+        let class = unsafe { JClass::from_raw(global_ref.as_raw()) };
+
+        let array = env
+            .new_float_array(bounds.len() as jni::sys::jsize)
+            .map_err(|e| format!("new_float_array: {e}"))?;
+        
+        env.set_float_array_region(&array, 0, bounds)
+            .map_err(|e| format!("set_float_array_region: {e}"))?;
+
+        let args = [JValue::from(&array)];
+
+        env.call_static_method(&class, "setControlBoundsFromNative", "([F)V", &args)
+            .map_err(|e| format!("call_static_method setControlBoundsFromNative: {e}"))?;
+
+        Ok(())
+    }
+
     /// Shortcut for the common "no args, returns void" shape.
     fn invoke_static_void(method: &str) -> Result<(), String> {
         invoke_static(method, "()V", &[] as &[JValue])
