@@ -226,6 +226,130 @@ pub fn segment_quad_positions(
     [a0, b0, a1, b0, b1, a1]
 }
 
+/// Build a continuous triangle-list stroke mesh from an unchanged
+/// centreline. Unlike [`segment_quad_positions`], which expands each
+/// segment independently, this computes one normal per centre point
+/// from neighbouring points. Thick slow strokes then get a coherent
+/// outline instead of a visible chain of tiny rectangles.
+///
+/// The centreline is preserved exactly: every generated left/right
+/// pair is symmetric around the original input point. Only the visual
+/// offset direction and radius are filtered.
+pub fn stroke_polyline_positions(points: &[(f32, f32)], widths: &[f32]) -> Vec<[f32; 2]> {
+    let n = points.len();
+    if n < 2 {
+        return Vec::new();
+    }
+
+    let mut left = Vec::with_capacity(n);
+    let mut right = Vec::with_capacity(n);
+    for i in 0..n {
+        let (px, py) = points[i];
+        let Some((tx, ty)) = tangent_at(points, i) else {
+            left.push([px, py]);
+            right.push([px, py]);
+            continue;
+        };
+        let width = smoothed_width_at(widths, i);
+        let hx = -ty * width * 0.5;
+        let hy = tx * width * 0.5;
+        left.push([px + hx, py + hy]);
+        right.push([px - hx, py - hy]);
+    }
+
+    let mut out = Vec::with_capacity((n - 1) * 6);
+    for i in 0..(n - 1) {
+        let dx = points[i + 1].0 - points[i].0;
+        let dy = points[i + 1].1 - points[i].1;
+        if dx * dx + dy * dy < 1e-8 {
+            continue;
+        }
+        out.extend_from_slice(&[
+            left[i],
+            right[i],
+            left[i + 1],
+            right[i],
+            right[i + 1],
+            left[i + 1],
+        ]);
+    }
+    out
+}
+
+fn tangent_at(points: &[(f32, f32)], i: usize) -> Option<(f32, f32)> {
+    let current = points[i];
+    let prev = nearest_distinct_before(points, i);
+    let next = nearest_distinct_after(points, i);
+
+    if let (Some(p), Some(n)) = (prev, next) {
+        if let Some(t) = normalize((n.0 - p.0, n.1 - p.1)) {
+            return Some(t);
+        }
+    }
+    if let Some(n) = next {
+        if let Some(t) = normalize((n.0 - current.0, n.1 - current.1)) {
+            return Some(t);
+        }
+    }
+    if let Some(p) = prev {
+        if let Some(t) = normalize((current.0 - p.0, current.1 - p.1)) {
+            return Some(t);
+        }
+    }
+    None
+}
+
+fn nearest_distinct_before(points: &[(f32, f32)], i: usize) -> Option<(f32, f32)> {
+    let current = points[i];
+    points[..i]
+        .iter()
+        .rev()
+        .copied()
+        .find(|p| dist_sq(*p, current) >= 1e-8)
+}
+
+fn nearest_distinct_after(points: &[(f32, f32)], i: usize) -> Option<(f32, f32)> {
+    let current = points[i];
+    points
+        .get(i + 1..)
+        .unwrap_or(&[])
+        .iter()
+        .copied()
+        .find(|p| dist_sq(*p, current) >= 1e-8)
+}
+
+fn dist_sq(a: (f32, f32), b: (f32, f32)) -> f32 {
+    let dx = a.0 - b.0;
+    let dy = a.1 - b.1;
+    dx * dx + dy * dy
+}
+
+fn normalize((x, y): (f32, f32)) -> Option<(f32, f32)> {
+    let len_sq = x * x + y * y;
+    if len_sq < 1e-8 {
+        return None;
+    }
+    let inv_len = 1.0 / len_sq.sqrt();
+    Some((x * inv_len, y * inv_len))
+}
+
+fn smoothed_width_at(widths: &[f32], i: usize) -> f32 {
+    if widths.is_empty() {
+        return 1.0;
+    }
+    let current = widths
+        .get(i)
+        .copied()
+        .unwrap_or_else(|| *widths.last().unwrap());
+    let prev = if i == 0 {
+        current
+    } else {
+        widths.get(i - 1).copied().unwrap_or(current)
+    };
+    let next = widths.get(i + 1).copied().unwrap_or(current);
+    (prev + current * 2.0 + next) * 0.25
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -360,6 +484,29 @@ mod tests {
         for v in quad {
             approx2(v, [7.0, 9.0]);
         }
+    }
+
+    #[test]
+    fn stroke_polyline_two_points_matches_segment_quad() {
+        let points = [(1.0, 0.0), (3.0, 0.0)];
+        let mesh = stroke_polyline_positions(&points, &[2.0, 2.0]);
+        let quad = segment_quad_positions(points[0], points[1], 2.0, 2.0);
+        assert_eq!(mesh.len(), 6);
+        for (a, b) in mesh.into_iter().zip(quad) {
+            approx2(a, b);
+        }
+    }
+
+    #[test]
+    fn stroke_polyline_keeps_center_points_fixed_at_corner() {
+        let points = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)];
+        let mesh = stroke_polyline_positions(&points, &[2.0, 2.0, 2.0]);
+        assert_eq!(mesh.len(), 12);
+
+        let mid_left = mesh[2];
+        let mid_right = mesh[4];
+        approx((mid_left[0] + mid_right[0]) * 0.5, 1.0);
+        approx((mid_left[1] + mid_right[1]) * 0.5, 0.0);
     }
 
     #[test]
