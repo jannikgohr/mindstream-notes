@@ -113,12 +113,27 @@ overlay's footprint — without that margin the moment the overlay
 cancels after pen-up flashes a one-pixel ring of background and reads
 as a "flicker" along the just-drawn stroke.
 
-**Deliberately NOT yet implemented** — see roadmap below: stroke
-smoothing; stylus-button → action mapping (the bits flow but
-nothing acts on them yet); colour picker / brush size; pan + zoom;
-multi-page; live collab; desktop / iOS ports. Rounded caps +
-mitered joints (via `lyon`) deferred until thick-stroke joints
-actually look notchy in practice.
+Activity lifecycle is wired end-to-end (B4): `MainActivity.onPause`
+detaches the SurfaceView (Drawing.detach → hideSync) so wgpu's
+swap-chain Drop never fires after Android's GL teardown has
+invalidated EGL — the matching `onResume` → `Drawing.resume`
+re-creates the SurfaceView when the user comes back, transparently
+to the Svelte `DrawingNoteEditor` (which stays mounted across the
+pause). The Rust render thread keeps its per-note `CanvasDocument`
+map and `active_note_id` across the pause, so resume costs only a
+fresh `SurfaceBoundState` rebuild on top of the still-warm
+`PersistentGpu`. While an ink note is open the Android system
+navigation bar is hidden in transient-swipe immersive mode (B5),
+restored on hide — every device pixel for drawing without giving up
+the system back gesture entirely.
+
+**Deliberately NOT yet implemented** — see roadmap below: colour
+picker / brush size; pan + zoom; multi-page; live collab; desktop
+/ iOS ports. D8 (stylus button / gesture → action mapping) has its
+first slice in (barrel-button-held → temporary Eraser) but the
+configurable mapping + Apple Pencil discrete-gesture shape are
+still to come. Rounded caps + mitered joints (via `lyon`) deferred
+until thick-stroke joints actually look notchy in practice.
 
 Toolchain pins moved with B1/B2: `egui` 0.32 → 0.33, `egui-wgpu`
 0.32 → 0.33, `wgpu` 25 → 27, `rust-version` 1.85 → 1.88. Three
@@ -152,8 +167,10 @@ All resolved.
 | # | Item | Notes | Status |
 |---|------|-------|--------|
 | B1 | Toolbar icons not text | Lucide glyphs (`lucide-icons` crate, ~30 KB bundled TTF) replace the text labels. `CanvasUi::new` registers the font as a custom egui family (`LUCIDE_FAMILY = "lucide"`); the toolbar references glyphs via `RichText::new(char::from(Icon::X).to_string()).family(FontFamily::Name(LUCIDE_FAMILY.into()))`. Back button was also removed in this pass since the Svelte mobile header above the SurfaceView already owns navigation — the JNI surface (`call_back` / `Drawing.backFromNative`) stays in place for a future re-wire. Not pulling in the full `egui-shadcn` kit (which uses these same icons) because its tree-sitter / chrono / regex transitive deps are wasted weight for a 4-button toolbar; revisit if D5's colour-picker / slider components would benefit from the broader component library. | **Done** |
-| B2 | Theme egui to match app accent + dark mode | `drawing/ui/theme.rs` defines `DrawingTheme { dark, accent }` → `egui::Visuals` bridging the shadcn design tokens in `src/app.css` (panel = `--background`, button = `--secondary`/`--muted`, hover one shade brighter, active = `--primary`/user accent, border = `--border`, fg = `--foreground`, destructive = `--destructive` for the Clear button). Tauri command `drawing_set_theme(dark, accent_hex)` + `Msg::SetTheme` push updates from JS via `drawingSetTheme(dark, accentHex)`. `+layout.svelte` has the `$effect` that reads mode-watcher's resolved `$mode` plus `getSettingValue('appearance.accent')` and calls it — fires once on app start and on every dark/accent change so the toolbar is already in the right palette by the time `drawing_show` lands. Unset accent falls back to the shadcn-default `--primary` for the resolved mode rather than a jarring sentinel. | **Done** |
+| B2 | Theme egui to match app accent + dark mode | `drawing/ui/theme.rs` defines `DrawingTheme { dark, accent }` → `egui::Visuals` bridging the shadcn design tokens in `src/app.css` (panel = `--background`, button = `--secondary`/`--muted`, hover one shade brighter, active = `--primary`/user accent, border = `--border`, fg = `--foreground`, destructive = `--destructive` for the Clear button). Tauri command `drawing_set_theme(dark, accent_hex)` + `Msg::SetTheme` push updates from JS via `drawingSetTheme(dark, accentHex)`. `+layout.svelte` has the `$effect` that reads mode-watcher's resolved `$mode` plus `getSettingValue('appearance.accent')` and calls it — fires once on app start and on every dark/accent change so the toolbar is already in the right palette by the time `drawing_show` lands. Unset accent falls back to the shadcn-default `--primary` for the resolved mode rather than a jarring sentinel. `CanvasUi` caches the derived `egui_shadcn::Theme` so we don't rebuild it (and re-trigger `Theme::new`'s `info!` log) on every frame — only `set_theme` rebuilds the cache. | **Done** |
 | B3 | Layering decision | **Done** — inset SurfaceView via `topMargin`. Svelte header stays reachable; egui toolbar sits below it. |
+| B4 | Activity lifecycle: re-attach on resume | `MainActivity.onPause` detaches the SurfaceView via `Drawing.detach()` so wgpu's swap-chain Drop stays away from Android's GL teardown (FORTIFY SIGABRT). The matching re-attach was originally assumed to happen via `DrawingNoteEditor.onMount` when focus returned, but the Svelte component stays mounted across activity-pause so `onMount` doesn't re-fire and the user was left with a frozen ink view. Fix: `Drawing` tracks an `attachedBeforePause` flag set by `hideSync()` and cleared by explicit `show()` / `hide()`. `MainActivity.onResume` → `Drawing.resume()` → `resumeIfNeeded()` re-runs `show()` if the flag is set; the Rust render thread retains its per-note `CanvasDocument` map + `active_note_id` across the pause, so the rebuilt `SurfaceBoundState` paints the right note's strokes without JS involvement. | **Done** |
+| B5 | Hide system nav bar while ink-note open | Hide Android's bottom navigation bar (gesture / 3-button) for the duration of an open ink note — every device pixel matters for drawing and the egui toolbar already owns navigation. Implemented via `WindowInsetsControllerCompat.hide(navigationBars())` in `Drawing.show()`, restored in `Drawing.hide()`. Uses `BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE` so a swipe from the bottom briefly reveals the bar without permanently giving up canvas space. Status bar is intentionally left alone — the Svelte mobile header at the top of the WebView reads as "app chrome" and would look detached without the status bar above it. Helper pair lives next to `requestHighRefreshRate` / `releaseRefreshRate` and uses the same show/hide call sites, so the lifecycle resume path (B4) re-hides for free. | **Done** |
 
 ### R. Refactor — modularity + cross-platform groundwork
 
