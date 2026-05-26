@@ -85,6 +85,8 @@ pub fn show(
                 // bounded by the Button's `.show()` call).
                 let paint_pen = lucide_painter(Icon::Pen);
                 let paint_eraser = lucide_painter(Icon::Eraser);
+                let paint_pointer = lucide_painter(Icon::Pointer);
+                let paint_pointer_off = lucide_painter(Icon::PointerOff);
                 let paint_undo = lucide_painter(Icon::Undo);
                 let paint_redo = lucide_painter(Icon::Redo);
                 let paint_trash = lucide_painter(Icon::Trash2);
@@ -137,6 +139,26 @@ pub fn show(
                     // brush-size popover — its slider is
                     // pen-specific.
                     brush::close(ui.ctx(), brush_popover_id);
+                }
+
+                let finger_response = shadcn_icon_button_response(
+                    ui,
+                    shadcn,
+                    if state.finger_drawing_allowed {
+                        &paint_pointer
+                    } else {
+                        &paint_pointer_off
+                    },
+                    if state.finger_drawing_allowed {
+                        "Finger drawing on"
+                    } else {
+                        "Finger drawing off"
+                    },
+                    variant_for(state.finger_drawing_allowed),
+                    true,
+                );
+                if finger_response.clicked() {
+                    actions.set_finger_drawing_allowed = Some(!state.finger_drawing_allowed);
                 }
 
                 ui.separator();

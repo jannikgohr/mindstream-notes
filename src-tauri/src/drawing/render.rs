@@ -29,7 +29,7 @@ use std::time::{Duration, Instant};
 
 use std::collections::HashSet;
 
-use super::input::{Sample, SampleAction};
+use super::input::{Sample, SampleAction, ToolKind};
 use super::page::{point_to_segment_distance_sq, segment_quad_positions};
 use super::pipeline::{self, PersistentGpu, SurfaceBoundState, Vertex};
 use super::stroke_modeler::{InkSmoother, SmoothedSample};
@@ -306,11 +306,7 @@ fn build_raw_head_segments(
     let w_prev = width_for_pressure(cursor.pressure, width);
     let w_curr = width_for_pressure(raw.pressure, width);
     out.extend_from_slice(&tessellate_segment(
-        cursor.pos,
-        raw.pos,
-        w_prev,
-        w_curr,
-        color,
+        cursor.pos, raw.pos, w_prev, w_curr, color,
     ));
 }
 
@@ -452,6 +448,10 @@ enum Msg {
         dark: bool,
         accent_argb: u32,
     },
+    /// Toggle whether finger/unknown touch samples can create or
+    /// erase canvas strokes. They still feed egui so toolbar taps
+    /// work while finger drawing is disabled.
+    SetFingerDrawingAllowed(bool),
     /// Like [`Msg::GetState`] but for any note id in the in-memory
     /// `documents` map, not just the active one. Used by the
     /// `save_worker` thread — pending saves may fire after the user
@@ -823,10 +823,7 @@ impl CanvasDocument {
 /// rejects most strokes with an O(1) bbox check before walking
 /// segments. Returns the matched stroke ids; caller tombstones +
 /// records the eraser-drag op.
-fn strokes_within_eraser_radius(
-    cache: &[StrokeMeta],
-    point: (f32, f32),
-) -> Vec<String> {
+fn strokes_within_eraser_radius(cache: &[StrokeMeta], point: (f32, f32)) -> Vec<String> {
     let mut hits = Vec::new();
     let radius_sq = ERASER_RADIUS_PAGE * ERASER_RADIUS_PAGE;
     for meta in cache {
@@ -886,7 +883,9 @@ fn erase_at(
     let Some(s) = surface_state else {
         return;
     };
-    let doc = documents.entry(id.clone()).or_insert_with(CanvasDocument::new);
+    let doc = documents
+        .entry(id.clone())
+        .or_insert_with(CanvasDocument::new);
     let [px, py] = s.surface_to_page(sample_surface.0, sample_surface.1);
 
     // Per-sample work, post-batching:
@@ -907,9 +906,7 @@ fn erase_at(
         .filter(|hit_id| seen.insert(hit_id.clone()))
         .collect();
     if fresh_hits.is_empty() {
-        log::trace!(
-            "[drawing.perf.eraser] erase_at no_hits hit_test={hit_test_us:?}"
-        );
+        log::trace!("[drawing.perf.eraser] erase_at no_hits hit_test={hit_test_us:?}");
         return;
     }
 
@@ -1029,10 +1026,7 @@ pub fn resize_surface(width: u32, height: u32) {
 /// Surface" and matches the order of magnitude Android gives
 /// lifecycle callbacks before ANR.
 pub fn clear_surface() {
-    let render_thread_present = sender_slot()
-        .lock()
-        .map(|g| g.is_some())
-        .unwrap_or(false);
+    let render_thread_present = sender_slot().lock().map(|g| g.is_some()).unwrap_or(false);
     log::info!(
         "[drawing] clear_surface: entering sync wait (render thread alive = {render_thread_present})"
     );
@@ -1079,9 +1073,7 @@ pub fn clear_strokes() {
 /// (e.g. age-out logic if predictions ever go stale faster than
 /// they arrive).
 pub fn push_predicted_point(x: f32, y: f32, pressure: f32, time: f64) {
-    log::trace!(
-        "[drawing] push_predicted_point x={x:.1} y={y:.1} p={pressure:.2} t={time:.3}"
-    );
+    log::trace!("[drawing] push_predicted_point x={x:.1} y={y:.1} p={pressure:.2} t={time:.3}");
     send(Msg::PredictedPoint {
         x,
         y,
@@ -1115,6 +1107,10 @@ pub fn set_theme(dark: bool, accent_argb: u32) {
     send(Msg::SetTheme { dark, accent_argb });
 }
 
+pub fn set_finger_drawing_allowed(allowed: bool) {
+    send(Msg::SetFingerDrawingAllowed(allowed));
+}
+
 /// Synchronously fetch the active note's stroke document as v1-yrs
 /// bytes — what the frontend hands to `save_note` to persist.
 /// Returns empty if no note is active or the render thread isn't
@@ -1123,7 +1119,8 @@ pub fn set_theme(dark: bool, accent_argb: u32) {
 pub fn get_active_state() -> Vec<u8> {
     let (tx, rx) = mpsc::sync_channel::<Vec<u8>>(1);
     send(Msg::GetState { reply: tx });
-    rx.recv_timeout(Duration::from_millis(500)).unwrap_or_default()
+    rx.recv_timeout(Duration::from_millis(500))
+        .unwrap_or_default()
 }
 
 /// Like [`get_active_state`] but for a specific note id — used by
@@ -1142,7 +1139,8 @@ pub fn get_state_for_note(note_id: &str) -> Vec<u8> {
         note_id: note_id.to_string(),
         reply: tx,
     });
-    rx.recv_timeout(Duration::from_millis(500)).unwrap_or_default()
+    rx.recv_timeout(Duration::from_millis(500))
+        .unwrap_or_default()
 }
 
 // ---------- render thread ----------
@@ -1182,6 +1180,7 @@ fn active_segments<'a>(
 fn build_ui_state(
     tool_mode: ToolMode,
     stroke_tool_override: Option<ToolMode>,
+    finger_drawing_allowed: bool,
     picked_color: u32,
     picked_width: f32,
     active_id: &Option<String>,
@@ -1190,10 +1189,18 @@ fn build_ui_state(
     let active = active_id.as_ref().and_then(|id| documents.get(id));
     UiState {
         current_tool: stroke_tool_override.unwrap_or(tool_mode),
+        finger_drawing_allowed,
         can_undo: active.map(|d| !d.undo.is_empty()).unwrap_or(false),
         can_redo: active.map(|d| !d.redo.is_empty()).unwrap_or(false),
         current_color: picked_color,
         current_width: picked_width,
+    }
+}
+
+fn tool_can_draw(tool: ToolKind, finger_drawing_allowed: bool) -> bool {
+    match tool {
+        ToolKind::Finger | ToolKind::Unknown => finger_drawing_allowed,
+        ToolKind::Stylus | ToolKind::Eraser | ToolKind::Mouse => true,
     }
 }
 
@@ -1328,6 +1335,9 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
     // sends changes back via RenderActions::set_tool. Defaults to
     // Pen — the existing single-tool behaviour pre-D3.
     let mut tool_mode: ToolMode = ToolMode::Pen;
+    // Device-defaulted from Kotlin once the SurfaceView is created:
+    // off on tablets with stylus support, on for touch-only devices.
+    let mut finger_drawing_allowed = true;
     // D8 / F7(a) temporary-tool override: when the S Pen barrel
     // button is held at DOWN, the in-flight stroke is treated as
     // Eraser regardless of `tool_mode`. Latched at DOWN, cleared on
@@ -1501,7 +1511,11 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                         }
                         Err(e) => log::error!("[drawing] build_surface_bound failed: {e:?}"),
                     }
-                    let path = if prewarmed { "prewarmed" } else { "lazy_persistent" };
+                    let path = if prewarmed {
+                        "prewarmed"
+                    } else {
+                        "lazy_persistent"
+                    };
                     log::info!(
                         "[drawing.perf] SurfaceReady handled in {:?} (path={path} size={width}x{height})",
                         t_ready.elapsed(),
@@ -1569,15 +1583,18 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             });
                         }
                     }
-                    // Toolbar-region gesture? Suppress both pen + eraser
-                    // paths for the duration of the drag so the user can
-                    // tap buttons without unintended draws or erases.
+                    // Toolbar-region gesture, or finger gesture
+                    // while finger drawing is disabled? Suppress
+                    // both pen + eraser paths for the duration of
+                    // the drag while still feeding egui above.
                     if matches!(action, SampleAction::Down) {
-                        stroke_suppressed = y < ui::toolbar::TOOLBAR_HEIGHT_PX || {
-                            active_control_bounds.iter().any(|b| {
-                                x >= b[0] && x <= b[2] && y >= b[1] && y <= b[3]
-                            })
-                        };
+                        stroke_suppressed = !tool_can_draw(tool, finger_drawing_allowed)
+                            || y < ui::toolbar::TOOLBAR_HEIGHT_PX
+                            || {
+                                active_control_bounds
+                                    .iter()
+                                    .any(|b| x >= b[0] && x <= b[2] && y >= b[1] && y <= b[3])
+                            };
                     }
                     dirty = true;
                     if stroke_suppressed {
@@ -1655,8 +1672,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                 // is a SmoothedSample so the rest
                                 // of the code is shape-identical.
                                 let anchor = if SMOOTHING_ENABLED {
-                                    ink_smoother
-                                        .begin_stroke((px, py), time, pressure)
+                                    ink_smoother.begin_stroke((px, py), time, pressure)
                                 } else {
                                     Some(SmoothedSample {
                                         pos: (px, py),
@@ -1726,8 +1742,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                 // tessellation loop below treats
                                 // the two identically.
                                 let smoothed = if SMOOTHING_ENABLED {
-                                    ink_smoother
-                                        .update((px, py), time, pressure)
+                                    ink_smoother.update((px, py), time, pressure)
                                 } else {
                                     vec![SmoothedSample {
                                         pos: (px, py),
@@ -1759,15 +1774,9 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                                 width_for_pressure(prev.pressure, stroke_width);
                                             let w_curr =
                                                 width_for_pressure(out.pressure, stroke_width);
-                                            doc.segments.extend_from_slice(
-                                                &tessellate_segment(
-                                                    prev.pos,
-                                                    out.pos,
-                                                    w_prev,
-                                                    w_curr,
-                                                    color,
-                                                ),
-                                            );
+                                            doc.segments.extend_from_slice(&tessellate_segment(
+                                                prev.pos, out.pos, w_prev, w_curr, color,
+                                            ));
                                         }
                                         doc.strokes_doc.push_point(
                                             out.pos.0,
@@ -1820,11 +1829,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                 ) {
                                     let [px, py] = s.surface_to_page(x, y);
                                     let drained = if SMOOTHING_ENABLED {
-                                        ink_smoother.end_stroke(
-                                            (px, py),
-                                            time,
-                                            pressure,
-                                        )
+                                        ink_smoother.end_stroke((px, py), time, pressure)
                                     } else {
                                         vec![SmoothedSample {
                                             pos: (px, py),
@@ -1843,11 +1848,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                                     width_for_pressure(out.pressure, stroke_width);
                                                 doc.segments.extend_from_slice(
                                                     &tessellate_segment(
-                                                        prev.pos,
-                                                        out.pos,
-                                                        w_prev,
-                                                        w_curr,
-                                                        color,
+                                                        prev.pos, out.pos, w_prev, w_curr, color,
                                                     ),
                                                 );
                                             }
@@ -1887,10 +1888,8 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                         // (impossible-in-practice)
                                         // case where the DOWN
                                         // handler didn't set it.
-                                        let packed = current_stroke_packed
-                                            .unwrap_or(DEFAULT_COLOR);
-                                        let width = current_stroke_width
-                                            .unwrap_or(DEFAULT_WIDTH);
+                                        let packed = current_stroke_packed.unwrap_or(DEFAULT_COLOR);
+                                        let width = current_stroke_width.unwrap_or(DEFAULT_WIDTH);
                                         let meta = StrokeMeta::from_pen_drag(
                                             stroke_id.clone(),
                                             packed,
@@ -2043,9 +2042,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                     if !matches!(effective_tool, ToolMode::Pen) {
                         continue;
                     }
-                    if !ink_smoother.is_in_stroke()
-                        && pen_tess_cursor.is_none()
-                    {
+                    if !ink_smoother.is_in_stroke() && pen_tess_cursor.is_none() {
                         // Not in a stroke (predictor fired between
                         // strokes / before DOWN landed). Skip.
                         continue;
@@ -2069,11 +2066,8 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             // untombstoning every doc entry —
                             // resurrecting strokes the user had
                             // already erased earlier).
-                            let cleared: Vec<String> = doc
-                                .visible_strokes
-                                .iter()
-                                .map(|m| m.id.clone())
-                                .collect();
+                            let cleared: Vec<String> =
+                                doc.visible_strokes.iter().map(|m| m.id.clone()).collect();
                             doc.strokes_doc.tombstone_all();
                             doc.segments.clear();
                             doc.visible_strokes.clear();
@@ -2115,9 +2109,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                         // in-memory edits since the last save aren't
                         // lost to a stale disk snapshot.
                         documents.entry(id.clone()).or_insert_with(|| {
-                            CanvasDocument::from_bytes(
-                                initial_state.as_deref().unwrap_or(&[]),
-                            )
+                            CanvasDocument::from_bytes(initial_state.as_deref().unwrap_or(&[]))
                         });
                     }
                     active_note_id = note_id;
@@ -2168,14 +2160,32 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                     let g = ((accent_argb >> 8) & 0xFF) as u8;
                     let b = (accent_argb & 0xFF) as u8;
                     let accent = egui::Color32::from_rgb(r, g, b);
-                    log::info!(
-                        "[drawing] theme update: dark={dark} accent=#{r:02X}{g:02X}{b:02X}"
-                    );
+                    log::info!("[drawing] theme update: dark={dark} accent=#{r:02X}{g:02X}{b:02X}");
                     canvas_ui.set_theme(ui::DrawingTheme { dark, accent });
                     // Repaint so the new palette shows up immediately
                     // (otherwise the toolbar stays on the old colours
                     // until the next input event drives a frame).
                     dirty = true;
+                }
+                Msg::SetFingerDrawingAllowed(allowed) => {
+                    if finger_drawing_allowed != allowed {
+                        log::info!(
+                            "[drawing] finger drawing: {} -> {}",
+                            finger_drawing_allowed,
+                            allowed
+                        );
+                        finger_drawing_allowed = allowed;
+                        stroke_suppressed = false;
+                        dirty = true;
+                    }
+                    #[cfg(target_os = "android")]
+                    if let Err(e) =
+                        crate::drawing::platform::android::ui::call_set_finger_drawing_allowed(
+                            allowed,
+                        )
+                    {
+                        log::error!("[drawing] call_set_finger_drawing_allowed failed: {e}");
+                    }
                 }
             }
         }
@@ -2193,7 +2203,9 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
             if let Some(id) = active_note_id.as_ref() {
                 if let Some(doc) = documents.get_mut(id) {
                     let t_flush = std::time::Instant::now();
-                    let n = doc.strokes_doc.tombstone_strokes(&pending_eraser_tombstones);
+                    let n = doc
+                        .strokes_doc
+                        .tombstone_strokes(&pending_eraser_tombstones);
                     let t_tombstone = t_flush.elapsed();
                     let t_retess = std::time::Instant::now();
                     doc.retessellate_segments_from_cache();
@@ -2284,15 +2296,9 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                                 width_for_pressure(prev.pressure, stroke_width);
                                             let w_curr =
                                                 width_for_pressure(out.pressure, stroke_width);
-                                            doc.segments.extend_from_slice(
-                                                &tessellate_segment(
-                                                    prev.pos,
-                                                    out.pos,
-                                                    w_prev,
-                                                    w_curr,
-                                                    color,
-                                                ),
-                                            );
+                                            doc.segments.extend_from_slice(&tessellate_segment(
+                                                prev.pos, out.pos, w_prev, w_curr, color,
+                                            ));
                                         }
                                         doc.strokes_doc.push_point(
                                             out.pos.0,
@@ -2354,6 +2360,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                 let ui_state = build_ui_state(
                     tool_mode,
                     stroke_tool_override,
+                    finger_drawing_allowed,
                     picked_color,
                     picked_width,
                     &active_note_id,
@@ -2367,7 +2374,9 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                     for b in &active_control_bounds {
                         flat_bounds.extend_from_slice(b);
                     }
-                    if let Err(e) = crate::drawing::platform::android::ui::call_set_control_bounds(&flat_bounds) {
+                    if let Err(e) =
+                        crate::drawing::platform::android::ui::call_set_control_bounds(&flat_bounds)
+                    {
                         log::error!("[drawing] call_set_control_bounds failed: {e}");
                     }
                 }
@@ -2376,8 +2385,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                 // "nothing animating" — we leave `next_animation_wake`
                 // as None so the next loop iter blocks on `recv()`.
                 let repaint_after = ui_output.repaint_after;
-                let dispatch_uptime_ms =
-                    crate::drawing::platform::android::now_uptime_ms();
+                let dispatch_uptime_ms = crate::drawing::platform::android::now_uptime_ms();
                 match pipeline::render_acquired_frame(
                     p,
                     s,
@@ -2388,8 +2396,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                     ui_output,
                 ) {
                     Ok(()) => {
-                        let done_uptime_ms =
-                            crate::drawing::platform::android::now_uptime_ms();
+                        let done_uptime_ms = crate::drawing::platform::android::now_uptime_ms();
                         let render_elapsed = t_frame.elapsed();
                         if log_first_frame {
                             log::info!(
@@ -2427,14 +2434,10 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                         if LAG_LOGGING_ENABLED && sample_count > 0 {
                             if let Some(event_time_s) = newest_event_time_s {
                                 let event_time_ms = event_time_s * 1000.0;
-                                let queue_ms =
-                                    batch_start_uptime_ms - event_time_ms;
-                                let preproc_ms =
-                                    dispatch_uptime_ms - batch_start_uptime_ms;
-                                let gpu_ms =
-                                    done_uptime_ms - dispatch_uptime_ms;
-                                let total_ms =
-                                    done_uptime_ms - event_time_ms;
+                                let queue_ms = batch_start_uptime_ms - event_time_ms;
+                                let preproc_ms = dispatch_uptime_ms - batch_start_uptime_ms;
+                                let gpu_ms = done_uptime_ms - dispatch_uptime_ms;
+                                let total_ms = done_uptime_ms - event_time_ms;
                                 log::info!(
                                     "[drawing.perf.lag] samples={} verts={} queue={:.1}ms preproc={:.1}ms gpu={:.1}ms total={:.1}ms",
                                     sample_count,
@@ -2491,11 +2494,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                         }
 
                         if let Some(new_tool) = actions.set_tool {
-                            log::info!(
-                                "[drawing] tool: {:?} -> {:?}",
-                                tool_mode,
-                                new_tool
-                            );
+                            log::info!("[drawing] tool: {:?} -> {:?}", tool_mode, new_tool);
                             tool_mode = new_tool;
                             // Drop any in-flight gesture state —
                             // switching mid-drag shouldn't carry pen
@@ -2516,6 +2515,24 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             // anything, but the toolbar highlight
                             // needs a re-render to reflect it.
                             needs_rerender = true;
+                        }
+
+                        if let Some(allowed) = actions.set_finger_drawing_allowed {
+                            if finger_drawing_allowed != allowed {
+                                log::info!(
+                                    "[drawing] finger drawing: {} -> {}",
+                                    finger_drawing_allowed,
+                                    allowed
+                                );
+                                finger_drawing_allowed = allowed;
+                                #[cfg(target_os = "android")]
+                                if let Err(e) = crate::drawing::platform::android::ui::call_set_finger_drawing_allowed(allowed) {
+                                    log::error!(
+                                        "[drawing] call_set_finger_drawing_allowed failed: {e}"
+                                    );
+                                }
+                                needs_rerender = true;
+                            }
                         }
 
                         if actions.undo {
@@ -2550,11 +2567,8 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                     // Capture pre-clear visibility
                                     // for the ClearAll undo step,
                                     // matching Msg::Clear semantics.
-                                    let cleared: Vec<String> = doc
-                                        .visible_strokes
-                                        .iter()
-                                        .map(|m| m.id.clone())
-                                        .collect();
+                                    let cleared: Vec<String> =
+                                        doc.visible_strokes.iter().map(|m| m.id.clone()).collect();
                                     doc.strokes_doc.tombstone_all();
                                     doc.segments.clear();
                                     doc.visible_strokes.clear();
@@ -2584,8 +2598,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             // mutation state. New UiState so the
                             // toolbar reflects e.g. an empty undo
                             // stack after we popped its last entry.
-                            let fresh_segs =
-                                active_segments(&active_note_id, &documents);
+                            let fresh_segs = active_segments(&active_note_id, &documents);
                             // Re-tessellate the raw head for the
                             // follow-up frame too: toolbar actions
                             // (undo/redo/clear/tool change) can
@@ -2615,6 +2628,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             let fresh_state = build_ui_state(
                                 tool_mode,
                                 stroke_tool_override,
+                                finger_drawing_allowed,
                                 picked_color,
                                 picked_width,
                                 &active_note_id,
@@ -2625,11 +2639,16 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             active_control_bounds = canvas_ui.get_active_control_bounds();
                             #[cfg(target_os = "android")]
                             {
-                                let mut flat_bounds = Vec::with_capacity(active_control_bounds.len() * 4);
+                                let mut flat_bounds =
+                                    Vec::with_capacity(active_control_bounds.len() * 4);
                                 for b in &active_control_bounds {
                                     flat_bounds.extend_from_slice(b);
                                 }
-                                if let Err(e) = crate::drawing::platform::android::ui::call_set_control_bounds(&flat_bounds) {
+                                if let Err(e) =
+                                    crate::drawing::platform::android::ui::call_set_control_bounds(
+                                        &flat_bounds,
+                                    )
+                                {
                                     log::error!("[drawing] call_set_control_bounds failed: {e}");
                                 }
                             }
@@ -2647,10 +2666,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                 &prediction_segments,
                                 fresh_ui,
                             );
-                            schedule_next_wake(
-                                &mut next_animation_wake,
-                                fresh_repaint_after,
-                            );
+                            schedule_next_wake(&mut next_animation_wake, fresh_repaint_after);
                         }
 
                         // The egui Back button is gone (B1 cleanup —
