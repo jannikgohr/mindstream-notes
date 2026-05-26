@@ -82,6 +82,28 @@ export function drawingSetTheme(
   );
 }
 
+export interface DrawingToolbarSettings {
+  tool?: 'pen' | 'eraser' | null;
+  colorArgb?: number | null;
+  width?: number | null;
+  fingerDrawingAllowed?: boolean | null;
+}
+
+export function drawingSetToolbarSettings(
+  settings: DrawingToolbarSettings
+): Promise<void> {
+  return invokeOrFallback<void>(
+    'drawing_set_toolbar_settings',
+    {
+      tool: settings.tool ?? null,
+      colorArgb: settings.colorArgb ?? null,
+      width: settings.width ?? null,
+      fingerDrawingAllowed: settings.fingerDrawingAllowed ?? null
+    },
+    () => undefined
+  );
+}
+
 /**
  * Per-note save-status event the Rust save worker emits whenever
  * an ink note transitions between editing / saving / saved / error.
@@ -94,9 +116,17 @@ export function drawingSetTheme(
  * `SaveStatusEvent`.
  */
 export const DRAWING_SAVE_STATUS_EVENT = 'drawing:save_status';
+export const DRAWING_TOOLBAR_SETTINGS_EVENT = 'drawing:toolbar_settings';
 
 export interface DrawingSaveStatusPayload {
   note_id: string;
   /** Snake-cased server-side serde — matches Rust's `SaveStatus`. */
   status: 'editing' | 'saving' | 'saved' | 'error';
+}
+
+export interface DrawingToolbarSettingsPayload {
+  tool: 'pen' | 'eraser';
+  colorArgb: number;
+  width: number;
+  fingerDrawingAllowed: boolean;
 }

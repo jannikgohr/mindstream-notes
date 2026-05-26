@@ -117,6 +117,11 @@ export function getSettingValue(id: string): unknown {
   return def && 'default' in def ? def.default : undefined;
 }
 
+/** True when a value was explicitly loaded/saved, not just schema-defaulted. */
+export function hasSettingValue(id: string): boolean {
+  return id in settings.values;
+}
+
 /**
  * Async write: for binding-backed settings, updates the cache
  * optimistically, awaits the binding's `set()`, then re-reads from the

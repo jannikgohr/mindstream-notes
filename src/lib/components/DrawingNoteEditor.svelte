@@ -38,13 +38,21 @@
     drawingHide,
     drawingShow,
     drawingSetSaveDebounce,
+    drawingSetToolbarSettings,
     DRAWING_SAVE_STATUS_EVENT,
+    DRAWING_TOOLBAR_SETTINGS_EVENT,
     type DrawingSaveStatusPayload,
+    type DrawingToolbarSettingsPayload,
     TRASH_ID
   } from '$lib/api';
   import { isAndroid } from '$lib/platform';
   import { navigateBack } from '$lib/mobile/state.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
+  import {
+    getSettingValue,
+    hasSettingValue,
+    setSettingValue
+  } from '$lib/settings/store.svelte';
   import { tree } from '$lib/stores/tree.svelte';
   import {
     clearNoteStatus,
@@ -65,7 +73,13 @@
   let mountedAndroid = false;
   let backCleanup: (() => void) | null = null;
   let unsubSaveStatus: UnlistenFn | null = null;
+  let unsubToolbarSettings: UnlistenFn | null = null;
   let savingState = $state<SavingState>('idle');
+
+  const INK_TOOL_SETTING = 'editor.ink.tool';
+  const INK_COLOR_SETTING = 'editor.ink.color';
+  const INK_WIDTH_SETTING = 'editor.ink.width';
+  const INK_FINGER_SETTING = 'editor.ink.fingerDrawing';
 
   // ---- Trash detection (same shape as FreeformNoteEditor) ----
   //
@@ -122,6 +136,55 @@
     }
   }
 
+  function normalizeInkTool(value: unknown): 'pen' | 'eraser' {
+    return value === 'eraser' ? 'eraser' : 'pen';
+  }
+
+  function normalizeInkWidth(value: unknown): number {
+    const n = typeof value === 'number' ? value : Number(value);
+    return Number.isFinite(n) ? Math.min(12, Math.max(0.5, n)) : 4;
+  }
+
+  function colorHexToArgb(value: unknown): number {
+    const raw = typeof value === 'string' ? value : '#000000';
+    const hex = raw.startsWith('#') ? raw.slice(1) : raw;
+    const expanded =
+      hex.length === 3
+        ? hex
+            .split('')
+            .map((c) => c + c)
+            .join('')
+        : hex.slice(0, 6);
+    const rgb = Number.parseInt(expanded.padEnd(6, '0'), 16);
+    return (0xff000000 | (Number.isFinite(rgb) ? rgb : 0)) >>> 0;
+  }
+
+  function argbToColorHex(argb: number): string {
+    return `#${(argb & 0x00ffffff).toString(16).padStart(6, '0')}`;
+  }
+
+  function currentToolbarSettings() {
+    return {
+      tool: normalizeInkTool(getSettingValue(INK_TOOL_SETTING)),
+      colorArgb: colorHexToArgb(getSettingValue(INK_COLOR_SETTING)),
+      width: normalizeInkWidth(getSettingValue(INK_WIDTH_SETTING)),
+      fingerDrawingAllowed: hasSettingValue(INK_FINGER_SETTING)
+        ? Boolean(getSettingValue(INK_FINGER_SETTING))
+        : null
+    };
+  }
+
+  async function saveToolbarSettings(
+    payload: DrawingToolbarSettingsPayload
+  ): Promise<void> {
+    await Promise.all([
+      setSettingValue(INK_TOOL_SETTING, normalizeInkTool(payload.tool)),
+      setSettingValue(INK_COLOR_SETTING, argbToColorHex(payload.colorArgb)),
+      setSettingValue(INK_WIDTH_SETTING, normalizeInkWidth(payload.width)),
+      setSettingValue(INK_FINGER_SETTING, payload.fingerDrawingAllowed)
+    ]);
+  }
+
   onMount(async () => {
     if (!isAndroid()) return;
     // Open-latency timing marker — pairs with the Rust-side
@@ -154,10 +217,20 @@
       }
     );
 
+    unsubToolbarSettings = await listen<DrawingToolbarSettingsPayload>(
+      DRAWING_TOOLBAR_SETTINGS_EVENT,
+      (event) => {
+        void saveToolbarSettings(event.payload).catch((err) => {
+          console.warn('[ink-toolbar] failed to save toolbar settings', err);
+        });
+      }
+    );
+
     // Make sure the worker's debounce matches what this editor
     // expects. Cheap fire-and-forget; worker no-ops if the value
     // hasn't changed since the last push.
     void drawingSetSaveDebounce(SAVE_DEBOUNCE_MS);
+    void drawingSetToolbarSettings(currentToolbarSettings());
 
     // Bring the native surface up. The Rust side reads the
     // persisted yrs_state from SQLite itself (see drawing_show)
@@ -182,6 +255,8 @@
     backCleanup = null;
     unsubSaveStatus?.();
     unsubSaveStatus = null;
+    unsubToolbarSettings?.();
+    unsubToolbarSettings = null;
     // Clear the dockview status row so closing the panel removes
     // its icons.
     clearNoteStatus(noteId);
