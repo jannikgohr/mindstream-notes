@@ -35,15 +35,20 @@ pub const TOOLBAR_HEIGHT_PX: f32 = 120.0;
 /// `state` for the selected-tool highlight + the undo/redo
 /// availability; mutates `actions` so the render-thread orchestrator
 /// can act on what the user picked this frame.
+///
+/// `shadcn` is the per-frame `egui_shadcn::Theme` reference — owned
+/// and cached by [`super::CanvasUi`] so we don't pay
+/// `ShadcnTheme::new`'s `info!` log + token-defaults setup on every
+/// frame.
 pub fn show(
     ctx: &egui::Context,
     pixels_per_point: f32,
     theme: &DrawingTheme,
+    shadcn: &ShadcnTheme,
     state: UiState,
     actions: &mut RenderActions,
 ) {
     let panel_height_pts = TOOLBAR_HEIGHT_PX / pixels_per_point;
-    let shadcn = theme.shadcn_theme();
     TopBottomPanel::top("drawing-toolbar")
         .exact_height(panel_height_pts)
         .frame(
@@ -78,7 +83,7 @@ pub fn show(
                 // with shadcn's `Default` variant (the styled
                 // primary look) and leave the other on `Ghost`.
                 let pen_active = state.current_tool == ToolMode::Pen;
-                if shadcn_icon_button(ui, &shadcn, &paint_pen, "Pen", variant_for(pen_active), true)
+                if shadcn_icon_button(ui, shadcn, &paint_pen, "Pen", variant_for(pen_active), true)
                     && !pen_active
                 {
                     actions.set_tool = Some(ToolMode::Pen);
@@ -86,7 +91,7 @@ pub fn show(
                 let eraser_active = state.current_tool == ToolMode::Eraser;
                 if shadcn_icon_button(
                     ui,
-                    &shadcn,
+                    shadcn,
                     &paint_eraser,
                     "Erase",
                     variant_for(eraser_active),
@@ -103,7 +108,7 @@ pub fn show(
                 // visual treatment automatically.
                 if shadcn_icon_button(
                     ui,
-                    &shadcn,
+                    shadcn,
                     &paint_undo,
                     "Undo",
                     ButtonVariant::Ghost,
@@ -113,7 +118,7 @@ pub fn show(
                 }
                 if shadcn_icon_button(
                     ui,
-                    &shadcn,
+                    shadcn,
                     &paint_redo,
                     "Redo",
                     ButtonVariant::Ghost,
@@ -130,7 +135,7 @@ pub fn show(
                 // in the app.
                 if shadcn_icon_button(
                     ui,
-                    &shadcn,
+                    shadcn,
                     &paint_trash,
                     "Clear all",
                     ButtonVariant::Destructive,
