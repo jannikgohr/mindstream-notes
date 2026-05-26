@@ -128,16 +128,20 @@ wgpu = "27"
 # Pins match tauri-plugin-egui's audit-validated trio.
 egui = "0.33"
 egui-wgpu = "0.33"
-# Lucide icon glyphs for the egui toolbar (B1). Ships a pre-built TTF
-# (~30 KB) keyed by an `Icon` enum — we load `LUCIDE_FONT_BYTES` into
-# egui's font definitions once at startup and reference glyphs as
+# Shadcn-styled egui components (B2 / D5). Pulls in lucide-icons
+# transitively (0.555.x), so the same TTF backs the toolbar glyphs.
+# Pinned to v0.3.1 to match our `egui = "0.33"`; v0.5.0 requires
+# egui 0.34 and balloons the dep tree (tree-sitter / chrono / regex).
+# The v0.3.1 dep graph is tiny: egui + log + lucide-icons.
+egui-shadcn = "0.3.1"
+# Lucide icon glyphs for the egui toolbar (B1). `LUCIDE_FONT_BYTES`
+# gets loaded into egui's font definitions once at startup; glyphs
+# get referenced as
 # `RichText::new(char::from(Icon::Foo)).family(FontFamily::Name("lucide"))`.
-# Pure-Rust, no native deps; cross-compiles cleanly to aarch64-linux-android.
-# Not pulling in the full `egui-shadcn` kit (which uses these same icons)
-# because its tree-sitter / chrono / regex transitive deps are wasted
-# weight for a 4-button toolbar — revisit if D5's colour-picker / slider
-# components would benefit from the broader component library.
-lucide-icons = "0.575"
+# Pinned to 0.555 to match egui-shadcn 0.3.1's transitive pin —
+# otherwise Cargo would pull in two copies of the ~785 KB TTF,
+# which on a universal Android APK is 4× per-ABI overhead.
+lucide-icons = "0.555"
 # (raw-window-handle promoted to the top-level [dependencies] so
 # `drawing::surface_source` can use the traits on host targets too.)
 # ndk gives us ANativeWindow_fromSurface(env, jsurface) — the bridge
