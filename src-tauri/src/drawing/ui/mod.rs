@@ -28,6 +28,8 @@ pub mod toolbar;
 
 pub use theme::DrawingTheme;
 
+use egui_shadcn::Theme as ShadcnTheme;
+
 /// Custom font family the toolbar references for icon glyphs. The
 /// matching `FontData` lives in `lucide-icons`' bundled TTF and is
 /// inserted into the egui context once in [`CanvasUi::new`].
@@ -103,9 +105,17 @@ pub struct UiOutput {
 /// without leaking into pipeline.rs. Also holds the active theme so
 /// `set_theme` can re-apply visuals without rebuilding the whole
 /// context.
+///
+/// `shadcn` is the cached `egui_shadcn::Theme` derived from `theme`.
+/// We cache it because `ShadcnTheme::new()` emits an `info!`-level
+/// log on every call, and the toolbar reads the theme each frame —
+/// without caching the log spammed once per drawn frame. Rebuilt
+/// only when `set_theme` is called (rare; driven by user-level
+/// appearance / accent setting changes from JS).
 pub struct CanvasUi {
     ctx: egui::Context,
     theme: DrawingTheme,
+    shadcn: ShadcnTheme,
 }
 
 impl CanvasUi {
@@ -140,16 +150,19 @@ impl CanvasUi {
         // shadcn doesn't paint (e.g. the panel Frame's borderless
         // background, which the toolbar fills explicitly).
         let theme = DrawingTheme::default();
-        Self { ctx, theme }
+        let shadcn = theme.shadcn_theme();
+        Self { ctx, theme, shadcn }
     }
 
     /// Swap the toolbar theme — driven by the `drawing_set_theme`
     /// Tauri command whenever JS observes a change in the app's
-    /// dark-mode + accent settings. The toolbar reads `self.theme`
-    /// each frame and rebuilds an `egui_shadcn::Theme` from it, so
-    /// no further wiring is needed beyond storing the new value.
+    /// dark-mode + accent settings. Rebuilds the cached
+    /// `egui_shadcn::Theme` here so the per-frame toolbar path can
+    /// just read `self.shadcn` instead of re-running `Theme::new`
+    /// (which logs on every call — see the `CanvasUi` doc).
     pub fn set_theme(&mut self, theme: DrawingTheme) {
         self.theme = theme;
+        self.shadcn = theme.shadcn_theme();
         // Force a repaint so the new palette shows up immediately
         // rather than waiting for the next input event.
         self.ctx.request_repaint();
@@ -179,8 +192,9 @@ impl CanvasUi {
 
         let mut actions = RenderActions::default();
         let theme = self.theme;
+        let shadcn = &self.shadcn;
         let full_output = self.ctx.run(input, |ctx| {
-            toolbar::show(ctx, PIXELS_PER_POINT, &theme, state, &mut actions);
+            toolbar::show(ctx, PIXELS_PER_POINT, &theme, shadcn, state, &mut actions);
         });
         let paint_jobs = self.ctx.tessellate(full_output.shapes, PIXELS_PER_POINT);
         let ui_output = UiOutput {
