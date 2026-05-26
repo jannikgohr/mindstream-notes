@@ -362,6 +362,95 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
             return false
         }
 
+        fun blocksLiveInkAt(x: Float, y: Float): Boolean =
+            y < FRONT_BUFFER_TOOLBAR_HEIGHT_PX || inControlBounds(x, y)
+
+        fun blocksLiveInkSegment(x0: Float, y0: Float, x1: Float, y1: Float): Boolean {
+            if (y0 < FRONT_BUFFER_TOOLBAR_HEIGHT_PX || y1 < FRONT_BUFFER_TOOLBAR_HEIGHT_PX) {
+                return true
+            }
+            val bounds = controlBounds
+            for (r in bounds) {
+                if (segmentIntersectsRect(x0, y0, x1, y1, r)) return true
+            }
+            return false
+        }
+
+        private fun segmentIntersectsRect(
+            x0: Float,
+            y0: Float,
+            x1: Float,
+            y1: Float,
+            rect: android.graphics.RectF
+        ): Boolean {
+            if (rect.contains(x0, y0) || rect.contains(x1, y1)) return true
+
+            val minX = minOf(x0, x1)
+            val maxX = maxOf(x0, x1)
+            val minY = minOf(y0, y1)
+            val maxY = maxOf(y0, y1)
+            if (maxX < rect.left || minX > rect.right || maxY < rect.top || minY > rect.bottom) {
+                return false
+            }
+
+            return segmentsIntersect(x0, y0, x1, y1, rect.left, rect.top, rect.right, rect.top) ||
+                segmentsIntersect(x0, y0, x1, y1, rect.right, rect.top, rect.right, rect.bottom) ||
+                segmentsIntersect(x0, y0, x1, y1, rect.right, rect.bottom, rect.left, rect.bottom) ||
+                segmentsIntersect(x0, y0, x1, y1, rect.left, rect.bottom, rect.left, rect.top)
+        }
+
+        private fun segmentsIntersect(
+            ax: Float,
+            ay: Float,
+            bx: Float,
+            by: Float,
+            cx: Float,
+            cy: Float,
+            dx: Float,
+            dy: Float
+        ): Boolean {
+            val o1 = orientation(ax, ay, bx, by, cx, cy)
+            val o2 = orientation(ax, ay, bx, by, dx, dy)
+            val o3 = orientation(cx, cy, dx, dy, ax, ay)
+            val o4 = orientation(cx, cy, dx, dy, bx, by)
+
+            if (o1 == 0 && onSegment(ax, ay, cx, cy, bx, by)) return true
+            if (o2 == 0 && onSegment(ax, ay, dx, dy, bx, by)) return true
+            if (o3 == 0 && onSegment(cx, cy, ax, ay, dx, dy)) return true
+            if (o4 == 0 && onSegment(cx, cy, bx, by, dx, dy)) return true
+
+            return o1 != o2 && o3 != o4
+        }
+
+        private fun orientation(
+            ax: Float,
+            ay: Float,
+            bx: Float,
+            by: Float,
+            cx: Float,
+            cy: Float
+        ): Int {
+            val cross = (by - ay) * (cx - bx) - (bx - ax) * (cy - by)
+            return when {
+                kotlin.math.abs(cross) < 0.0001f -> 0
+                cross > 0f -> 1
+                else -> 2
+            }
+        }
+
+        private fun onSegment(
+            ax: Float,
+            ay: Float,
+            px: Float,
+            py: Float,
+            bx: Float,
+            by: Float
+        ): Boolean =
+            px >= minOf(ax, bx) - 0.0001f &&
+                px <= maxOf(ax, bx) + 0.0001f &&
+                py >= minOf(ay, by) - 0.0001f &&
+                py <= maxOf(ay, by) + 0.0001f
+
         /**
          * Called from Rust to change the live-ink front-buffer overlay's
          * color and stroke-width range. Rust is the source of truth for
@@ -948,7 +1037,7 @@ private class FrontBufferInk(private val surfaceView: SurfaceView) {
             MotionEvent.ACTION_DOWN -> {
                 generation += 1
                 renderer.cancel()
-                suppressed = y < FRONT_BUFFER_TOOLBAR_HEIGHT_PX || Drawing.inControlBounds(x, y)
+                suppressed = Drawing.blocksLiveInkAt(x, y)
                 inStroke = !suppressed
                 lastX = x
                 lastY = y
@@ -957,17 +1046,19 @@ private class FrontBufferInk(private val surfaceView: SurfaceView) {
             MotionEvent.ACTION_MOVE -> {
                 if (!inStroke || suppressed) return
                 val segment = buildSegment(x, y, pressure)
-                if (!loggedFirstSegment) {
-                    loggedFirstSegment = true
-                    Log.i("MindstreamDrawing", "front-buffer ink first segment rendered")
+                if (!Drawing.blocksLiveInkSegment(lastX, lastY, x, y)) {
+                    if (!loggedFirstSegment) {
+                        loggedFirstSegment = true
+                        Log.i("MindstreamDrawing", "front-buffer ink first segment rendered")
+                    }
+                    renderer.renderFrontBufferedLayer(segment)
                 }
-                renderer.renderFrontBufferedLayer(segment)
                 lastX = x
                 lastY = y
                 lastPressure = pressure
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                if (inStroke && !suppressed) {
+                if (inStroke && !suppressed && !Drawing.blocksLiveInkSegment(lastX, lastY, x, y)) {
                     renderer.renderFrontBufferedLayer(buildSegment(x, y, pressure))
                 }
                 inStroke = false
