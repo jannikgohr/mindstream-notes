@@ -1,12 +1,13 @@
 <script lang="ts">
   import {
     ChevronRight,
+    Feather,
     FileText,
     Folder,
     FolderOpen,
     FolderPlus,
-    Pencil,
-    Plus,
+    PencilRuler,
+    FilePlus2,
     Star,
     Trash2
   } from 'lucide-svelte';
@@ -490,7 +491,7 @@
         aria-label={tUi('fileTree.newDrawing')}
         class="size-7"
       >
-        <Pencil class="size-3.5" />
+        <PencilRuler class="size-3.5" />
       </Button>
       <Button
         variant="ghost"
@@ -500,7 +501,7 @@
         aria-label={tUi('fileTree.newNote')}
         class="size-7"
       >
-        <Plus class="size-3.5" />
+        <FilePlus2 class="size-3.5" />
       </Button>
     </div>
   </div>
@@ -556,7 +557,7 @@
     {#if kind === 'folder'}
       <Folder class="size-3.5 shrink-0 text-muted-foreground" />
     {:else if kind === 'drawing'}
-      <Pencil class="size-3.5 shrink-0 text-muted-foreground" />
+      <PencilRuler class="size-3.5 shrink-0 text-muted-foreground" />
     {:else}
       <FileText class="size-3.5 shrink-0 text-muted-foreground" />
     {/if}
@@ -665,7 +666,7 @@
     {@const note = tree.notesById[node.id]}
     {@const fav = note?.favourite === true}
     {@const inTrash = note?.parent_collection_id === TRASH_ID}
-    {@const isFreeform = note?.note_kind === 'freeform'}
+    {@const kind = note?.note_kind}
     <!-- Row uses a flex container so the favourite-toggle button can
          sit alongside the primary open-note tap target without nesting
          <button>s. The drag handlers live on the wrapper so users can
@@ -688,8 +689,10 @@
         onclick={() => onOpenNote(node.id)}
         oncontextmenu={(e) => openMenu(e, { kind: 'note', id: node.id })}
       >
-        {#if isFreeform}
-          <Pencil class="size-3.5 shrink-0 text-muted-foreground" />
+        {#if kind === 'freeform'}
+          <PencilRuler class="size-3.5 shrink-0 text-muted-foreground" />
+        {:else if kind === 'ink'}
+          <Feather class="size-3.5 shrink-0 text-muted-foreground" />
         {:else}
           <FileText class="size-3.5 shrink-0 text-muted-foreground" />
         {/if}

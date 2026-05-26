@@ -11,7 +11,7 @@
  */
 
 import * as api from '$lib/api';
-import type { Collection, NoteSummary, TreeNode } from '$lib/api';
+import type { Collection, NoteKind, NoteSummary, TreeNode } from '$lib/api';
 import { TRASH_ID } from '$lib/api';
 import { ui } from '$lib/state.svelte';
 import { getSettingValue } from '$lib/settings/store.svelte';
@@ -59,7 +59,7 @@ export async function loadTree(): Promise<void> {
 export async function createNoteIn(
   parentId: string | null,
   title?: string,
-  noteKind?: 'markdown' | 'freeform'
+  noteKind?: NoteKind
 ): Promise<string> {
   const note = await api.createNote({
     parent_collection_id: parentId,

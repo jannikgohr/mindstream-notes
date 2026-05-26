@@ -15,6 +15,7 @@ pub mod assets;
 pub mod auth;
 pub mod collections;
 pub mod db;
+pub mod drawing;
 pub mod error;
 pub mod notes;
 pub mod serde_helpers;
@@ -85,6 +86,28 @@ fn init_keyring() {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Route the `log` facade into logcat on Android. Without this
+    // every `log::info!` / `log::warn!` is a silent no-op, which is
+    // why none of the `[drawing.perf]` / `[boot]` lines were
+    // visible in earlier debugging sessions. Tag "Mindstream"
+    // separates our output from Android system + Tauri internals
+    // so it can be grepped on its own. Trace-level filter in debug
+    // builds so per-sample logs are visible during bring-up; Info
+    // in release to keep logcat usable.
+    #[cfg(target_os = "android")]
+    {
+        let level = if cfg!(debug_assertions) {
+            log::LevelFilter::Trace
+        } else {
+            log::LevelFilter::Info
+        };
+        android_logger::init_once(
+            android_logger::Config::default()
+                .with_max_level(level)
+                .with_tag("Mindstream"),
+        );
+    }
+
     #[cfg(desktop)]
     let app_handle = tauri::Builder::default()
         .plugin(tauri_plugin_autostart::Builder::new().build())
@@ -129,6 +152,22 @@ pub fn run() {
             app.manage(sync::scheduler::SyncScheduler::new());
             sync::scheduler::spawn(app.handle().clone());
 
+            // Hand the drawing module an AppHandle so its render
+            // thread can emit `drawing:dirty` events back to JS for
+            // debounced auto-save. Idempotent (OnceLock) — second
+            // call would silently no-op.
+            drawing::init(app.handle().clone());
+
+            // Kick off wgpu pre-warm in the background so the heavy
+            // adapter / device / pipeline / egui-renderer build is
+            // off the critical path of the user's first ink-note
+            // open. Returns immediately — the actual work runs on
+            // the drawing render thread (spawned lazily by this
+            // first message). Android-only because that's where the
+            // drawing pipeline runs.
+            #[cfg(target_os = "android")]
+            drawing::render::prewarm();
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -158,6 +197,13 @@ pub fn run() {
             sync::scheduler::set_sync_schedule,
             // System introspection
             system::is_appimage_install,
+            // Native drawing surface (Android only; no-op stubs on desktop)
+            drawing::drawing_show,
+            drawing::drawing_hide,
+            drawing::drawing_clear,
+            drawing::drawing_set_save_debounce,
+            drawing::drawing_set_theme,
+            drawing::drawing_set_toolbar_settings,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

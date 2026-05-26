@@ -618,6 +618,106 @@ body.dv-tab-dragging .tl-container * {
   pointer-events: none !important;
 }
 
+/*
+ * Tldraw toolbar at the top of the canvas (wide-viewport freeform notes).
+ *
+ * Tldraw's default layout keeps `.tlui-main-toolbar` at the bottom
+ * inside `.tlui-layout__bottom`. Moving the whole `__bottom` cell up
+ * displaces `.tlui-navigation-panel` too — that element uses
+ * `position: absolute; left: 0;` *without* a top/bottom, so its
+ * rendered y depends on its DOM-flow static position. We leave the grid
+ * alone and lift only the inner / extras rows.
+ *
+ * Absolute resolves to `.tlui-layout` (the nearest `position: relative`
+ * ancestor — `.tlui-main-toolbar` and its containers are all static),
+ * so `top: 0` is the top of the canvas area. The horizontal offset is
+ * driven by `--mtb-left`, written by toolbar-layout.ts from the menu
+ * zone's live `getBoundingClientRect().width`, so the buttons always
+ * slot in just past `.tlui-menu-zone` regardless of locale / font /
+ * tldraw breakpoint. Same story for `--mtb-extras-top`, which tracks
+ * the inner row's live height so `__extras` stacks directly below.
+ *
+ * Activation is gated by the `toolbar-top-active` class, which
+ * toolbar-layout.ts toggles based on `window.innerWidth >= 800`. Below
+ * that threshold the host falls back to tldraw's stock bottom layout
+ * (the rules below don't match) — that's the right call for narrow
+ * phones where the top corner can't host both the menu chip and the
+ * tool buttons side-by-side.
+ *
+ * The `padding-bottom: 0` override removes the safe-area gap tldraw
+ * normally reserves below the toolbar — with the inner/extras gone the
+ * bottom row would otherwise leave an empty band above the navigation
+ * panel.
+ */
+.freeform-canvas-host.toolbar-top-active .tlui-main-toolbar__inner {
+  position: absolute;
+  top: 0;
+  left: var(--mtb-left, 56px);
+  z-index: var(--tl-layer-panels);
+  pointer-events: all;
+}
+.freeform-canvas-host.toolbar-top-active .tlui-main-toolbar__extras {
+  position: absolute;
+  top: var(--mtb-extras-top, 48px);
+  left: var(--mtb-left, 56px);
+  z-index: var(--tl-layer-panels);
+  pointer-events: all;
+}
+.freeform-canvas-host.toolbar-top-active .tlui-main-toolbar--horizontal {
+  padding-bottom: 0;
+}
+
+/*
+ * Flip the extras controls' corner radii.
+ *
+ * Default tldraw layout puts `__extras` between the toolbar (above) and
+ * the canvas bottom edge, so its visual block (`__extras__controls`)
+ * is rounded on top and square on the bottom. With the toolbar pulled
+ * to the top of the canvas, the extras row hangs *under* `__inner`,
+ * so the rounded edge needs to be at the bottom — the controls read
+ * like a tab dangling from the toolbar above. Same `--tl-radius-4`
+ * everywhere; only the corners swap. Targeting the horizontal class
+ * keeps the vertical-layout case untouched (it has its own
+ * right-side rounding rule in tldraw's stock CSS).
+ */
+.freeform-canvas-host.toolbar-top-active
+  .tlui-main-toolbar--horizontal
+  .tlui-main-toolbar__extras__controls {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+  border-bottom-left-radius: var(--tl-radius-4);
+  border-bottom-right-radius: var(--tl-radius-4);
+}
+
+/*
+ * Narrow-window style-panel offset.
+ *
+ * In the 841–905px viewport range tldraw's style panel sits high enough
+ * to collide with the relocated toolbar at the top — wide enough to
+ * still anchor near the top-right, but narrow enough that there's no
+ * horizontal room to clear the toolbar buttons. Push the wrapper down
+ * by 58px so it lands below the toolbar / extras stack. Above 905px
+ * the helper buttons aren't in the same area; below 841px tldraw
+ * collapses the panel into a button, so neither side of the range
+ * needs the offset.
+ *
+ * Gated on `.toolbar-top-active` so we don't add the gap when the
+ * toolbar is in its default bottom position (e.g. a future viewport
+ * gating change drops below the 750px threshold but the media query
+ * still matches).
+ */
+@media (min-width: 841px) and (max-width: 905px) {
+  .freeform-canvas-host.toolbar-top-active .tlui-style-panel__wrapper {
+    margin-top: 58px;
+  }
+}
+
+@media (max-width: 731px) {
+  .freeform-canvas-host.toolbar-top-active .tlui-style-panel__wrapper {
+    margin-top: 58px;
+  }
+}
+
 /* dockview right-header pop-out button (see PopoutHeaderAction). */
 .dv-popout-host {
   display: inline-flex;
