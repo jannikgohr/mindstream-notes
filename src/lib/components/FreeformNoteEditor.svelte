@@ -49,6 +49,15 @@
   import { CollabProvider } from '$lib/sync/collab-provider';
   import { isMobile } from '$lib/platform';
   import { listen } from '$lib/api/events';
+  import {
+    acquireFullscreen,
+    releaseFullscreen
+  } from '$lib/window/fullscreen';
+  import { isTauri } from '$lib/api';
+  import {
+    attachToolbarLayout,
+    type ToolbarLayoutHandle
+  } from '$lib/freeform/toolbar-layout';
 
   interface Props {
     noteId: string;
@@ -79,6 +88,16 @@
     'idle'
   );
   let loading = $state(true);
+
+  // Mobile auto-fullscreen tracking. `fullscreenAcquired` records
+  // whether *this* component pushed the window into fullscreen so
+  // onDestroy knows whether it needs to release the ref count. Desktop
+  // has no fullscreen UI for freeform notes; the OS chrome stays.
+  let fullscreenAcquired = false;
+  // toolbar-layout module handle. Attached in onMount once mountEl is
+  // bound and detached in onDestroy. The module gates itself by viewport
+  // width internally, so no platform/mobile branching is needed here.
+  let toolbarLayout: ToolbarLayoutHandle | null = null;
   let loadError = $state<string | null>(null);
 
   let yDocUpdateHandler: (() => void) | null = null;
@@ -117,6 +136,27 @@
     return ancestorIsTrash(n.parent_collection_id);
   });
 
+  /** Stylus / pen-mode preference, sourced from settings and re-evaluated
+   *  reactively so toggling the setting from the dialog flows into the
+   *  open canvas without a remount. Narrowed to the union the island
+   *  expects; falls back to 'auto' if the cache hasn't hydrated yet. */
+  const penMode = $derived.by<'auto' | 'always' | 'off'>(() => {
+    const v = getSettingValue('editor.freeform.penMode');
+    if (v === 'always' || v === 'off') return v;
+    return 'auto';
+  });
+
+  /** Whether to cut tldraw's animation cost. We honour the existing
+   *  app-wide `appearance.reduceMotion` toggle AND default to true on
+   *  mobile, where the Android WebView's compositor is the bottleneck
+   *  during stroke rendering and incidental motion costs frame budget.
+   *  `mobile` is set in onMount, so this reads false on initial render
+   *  even on Android — that's fine, the [reduceMotion] effect re-runs
+   *  once `mobile` flips. */
+  const reduceMotion = $derived(
+    Boolean(getSettingValue('appearance.reduceMotion')) || mobile
+  );
+
   // ---- Mount ----
 
   let lastSeenPushed = false;
@@ -133,6 +173,20 @@
     if (!mountEl) return;
     try {
       mobile = isMobile();
+      // Mobile-only auto-fullscreen. Tauri-only because the API is a
+      // no-op in a plain dev browser; we don't gate desktop here at all
+      // since there's no UI for it. Fire-and-forget — the system-bar
+      // hide isn't on the critical path for the first stroke.
+      if (isTauri() && mobile) {
+        void acquireFullscreen();
+        fullscreenAcquired = true;
+      }
+      // Toolbar-layout watches for tldraw's UI to mount under us, then
+      // pins __inner / __extras to the top-right of the menu zone when
+      // the viewport is wide enough. The handle's MutationObserver
+      // covers the React island's async mount, so attaching now (before
+      // the island renders) is fine.
+      toolbarLayout = attachToolbarLayout(mountEl);
       const note = await loadNote(noteId);
       if (!mountEl) return; // unmounted while awaiting
 
@@ -199,7 +253,9 @@
           awareness,
           readOnly: untrack(() => isTrashed),
           noteId,
-          colorScheme: untrack(() => $userPrefersMode) ?? 'system'
+          colorScheme: untrack(() => $userPrefersMode) ?? 'system',
+          penMode: untrack(() => penMode),
+          reduceMotion: untrack(() => reduceMotion)
         })
       );
 
@@ -259,6 +315,8 @@
   $effect(() => {
     const readOnly = isTrashed;
     const colorScheme = $userPrefersMode ?? 'system';
+    const currentPenMode = penMode;
+    const currentReduceMotion = reduceMotion;
     if (!reactRoot || !TldrawIslandComponent || !reactCreateElement) return;
     if (!yDoc || !awareness) return;
     reactRoot.render(
@@ -267,7 +325,9 @@
         awareness,
         readOnly,
         noteId,
-        colorScheme
+        colorScheme,
+        penMode: currentPenMode,
+        reduceMotion: currentReduceMotion
       })
     );
   });
@@ -319,6 +379,17 @@
     unsubSync?.();
     unsubSync = null;
     unsubSession = null;
+    // Release our fullscreen ref if mobile auto-mode acquired one.
+    // Ref-counted in the helper, so multiple freeform notes only flip
+    // back out of fullscreen once the last one closes.
+    if (fullscreenAcquired) {
+      void releaseFullscreen();
+      fullscreenAcquired = false;
+    }
+    // Tear down the toolbar layout observers + clear CSS vars / class
+    // so a future re-mount starts clean.
+    toolbarLayout?.destroy();
+    toolbarLayout = null;
     // Drop our row from the global status store so the dockview
     // header doesn't keep showing stale icons after the panel closes.
     clearNoteStatus(noteId);
@@ -471,6 +542,16 @@
         Couldn't load drawing: {loadError}
       </p>
     {/if}
-    <div bind:this={mountEl} class="absolute inset-0"></div>
+    <!--
+      `freeform-canvas-host` scopes the tldraw UI tweaks in app.css to
+      this mount only. The matching rules in app.css further gate on a
+      `toolbar-top-active` class that toolbar-layout.ts toggles based on
+      `window.innerWidth >= 800` — narrow phones fall back to tldraw's
+      stock bottom layout where the top corner can't host the toolbar
+      next to the menu chip anyway. tldraw mounts its .tlui-layout grid
+      as a descendant of this div, so the 2-class selectors in the
+      stylesheet attach without !important.
+    -->
+    <div bind:this={mountEl} class="freeform-canvas-host absolute inset-0"></div>
   </div>
 </div>

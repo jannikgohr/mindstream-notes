@@ -25,6 +25,7 @@ export async function invokeOrFallback<T>(
 export * from './notes';
 export * from './assets';
 export * from './collections';
+export * from './drawing';
 export * from './tree';
 export * from './layout';
 export * from './window';

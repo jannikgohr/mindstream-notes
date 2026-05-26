@@ -193,6 +193,56 @@
           ]
         },
         {
+          "id": "editor.freeform",
+          "settings": [
+            {
+              "id": "editor.freeform.penMode",
+              "scope": "V",
+              "type": "select",
+              "default": "auto",
+              "options": ["auto", "always", "off"]
+            }
+          ]
+        },
+        {
+          "id": "editor.ink",
+          "settings": [
+            {
+              "id": "editor.ink.tool",
+              "scope": "D",
+              "type": "select",
+              "default": "pen",
+              "options": ["pen", "eraser"],
+              "platforms": ["android"]
+            },
+            {
+              "id": "editor.ink.color",
+              "scope": "D",
+              "type": "color",
+              "default": "#000000",
+              "platforms": ["android"]
+            },
+            {
+              "id": "editor.ink.width",
+              "scope": "D",
+              "type": "slider",
+              "default": 4,
+              "min": 0.5,
+              "max": 12,
+              "step": 0.5,
+              "unit": "pu",
+              "platforms": ["android"]
+            },
+            {
+              "id": "editor.ink.fingerDrawing",
+              "scope": "D",
+              "type": "toggle",
+              "default": true,
+              "platforms": ["android"]
+            }
+          ]
+        },
+        {
           "id": "editor.autosave",
           "settings": [
             { "id": "editor.autoSave", "scope": "V", "type": "toggle", "default": true },
