@@ -40,7 +40,7 @@ use super::pipeline::{self, PersistentGpu, SurfaceBoundState, Vertex};
 use super::stroke_modeler::{InkSmoother, SmoothedSample};
 use super::strokes_doc::{StrokesDoc, DEFAULT_COLOR, DEFAULT_WIDTH};
 use super::surface_source::SurfaceSource;
-use super::ui::{self, CanvasUi, ToolMode, UiState};
+use super::ui::{self, CanvasUi, InkPageThemeMode, ToolMode, UiState};
 
 /// Fully transparent ARGB pushed to Kotlin's `FrontBufferInk` while
 /// the active stroke is an eraser — Canvas SRC_OVER with a 0-alpha
@@ -66,8 +66,10 @@ fn pack_color_bytes(color: u32) -> [u8; 4] {
 }
 
 const PAGE_FILL_COLOR: u32 = 0xFFFF_FFFF;
+const PAGE_BACKGROUND_COLOR: u32 = 0xFFF1_F2F4;
 const PAGE_BORDER_COLOR: u32 = 0xFFE5_E7EB;
 const PAGE_SHADOW_COLOR: u32 = 0x2200_0000;
+const PAGE_DARK_SHADOW_COLOR: u32 = 0x33FF_FFFF;
 const PAGE_BORDER_WIDTH: f32 = 2.0;
 const PAGE_SHADOW_OFFSET: f32 = 5.0;
 
@@ -78,6 +80,7 @@ struct ToolbarSettingsEvent {
     color_argb: u32,
     width: f32,
     finger_drawing_allowed: bool,
+    page_theme_mode: &'static str,
 }
 
 fn tool_mode_to_setting(tool: ToolMode) -> &'static str {
@@ -93,6 +96,60 @@ fn tool_mode_from_setting(tool: &str) -> Option<ToolMode> {
         "eraser" => Some(ToolMode::Eraser),
         _ => None,
     }
+}
+
+fn page_theme_mode_to_setting(mode: InkPageThemeMode) -> &'static str {
+    match mode {
+        InkPageThemeMode::Light => "light",
+        InkPageThemeMode::System => "system",
+    }
+}
+
+fn page_theme_mode_from_setting(mode: &str) -> Option<InkPageThemeMode> {
+    match mode {
+        "light" => Some(InkPageThemeMode::Light),
+        "system" => Some(InkPageThemeMode::System),
+        _ => None,
+    }
+}
+
+fn page_theme_is_dark(mode: InkPageThemeMode, app_dark: bool) -> bool {
+    matches!(mode, InkPageThemeMode::System) && app_dark
+}
+
+fn invert_rgb_argb(color: u32) -> u32 {
+    let a = color & 0xFF00_0000;
+    let rgb = color & 0x00FF_FFFF;
+    a | (!rgb & 0x00FF_FFFF)
+}
+
+fn display_color_argb(color: u32, page_dark: bool) -> u32 {
+    if page_dark {
+        invert_rgb_argb(color)
+    } else {
+        color
+    }
+}
+
+fn background_color_argb(page_dark: bool) -> u32 {
+    display_color_argb(PAGE_BACKGROUND_COLOR, page_dark)
+}
+
+fn page_fill_color_argb(page_dark: bool) -> u32 {
+    display_color_argb(PAGE_FILL_COLOR, page_dark)
+}
+
+fn page_border_color_argb(page_dark: bool) -> u32 {
+    display_color_argb(PAGE_BORDER_COLOR, page_dark)
+}
+
+fn color_argb_to_f64_rgba(color: u32) -> [f64; 4] {
+    [
+        ((color >> 16) & 0xFF) as f64 / 255.0,
+        ((color >> 8) & 0xFF) as f64 / 255.0,
+        (color & 0xFF) as f64 / 255.0,
+        ((color >> 24) & 0xFF) as f64 / 255.0,
+    ]
 }
 
 /// Hit-test radius for the eraser tool, in page units. ~1.4 mm at
@@ -292,11 +349,15 @@ fn append_rect(out: &mut Vec<Vertex>, rect: [f32; 4], color: [u8; 4]) {
     ]);
 }
 
-fn append_page_backdrop(out: &mut Vec<Vertex>, layout: DocumentLayout) {
+fn append_page_backdrop(out: &mut Vec<Vertex>, layout: DocumentLayout, page_dark: bool) {
     out.clear();
-    let fill = pack_color_bytes(PAGE_FILL_COLOR);
-    let border = pack_color_bytes(PAGE_BORDER_COLOR);
-    let shadow = pack_color_bytes(PAGE_SHADOW_COLOR);
+    let fill = pack_color_bytes(page_fill_color_argb(page_dark));
+    let border = pack_color_bytes(page_border_color_argb(page_dark));
+    let shadow = pack_color_bytes(if page_dark {
+        PAGE_DARK_SHADOW_COLOR
+    } else {
+        PAGE_SHADOW_COLOR
+    });
     for page_index in 0..layout.page_count {
         let Some([x0, y0, x1, y1]) = layout.page_rect(page_index) else {
             continue;
@@ -597,6 +658,7 @@ enum Msg {
         color_argb: Option<u32>,
         width: Option<f32>,
         finger_drawing_allowed: Option<bool>,
+        page_theme_mode: Option<String>,
     },
     /// Toggle whether finger/unknown touch samples can create or
     /// erase canvas strokes. They still feed egui so toolbar taps
@@ -740,6 +802,7 @@ enum UndoOp {
 struct CanvasDocument {
     strokes_doc: StrokesDoc,
     segments: Vec<Vertex>,
+    segments_page_dark: bool,
     /// Pre-decoded copy of every visible stroke's geometry, kept in
     /// lock-step with `segments`. The eraser hit-test reads from
     /// here instead of walking `strokes_doc` per sample — eliminates
@@ -762,10 +825,19 @@ impl CanvasDocument {
         Self {
             strokes_doc: StrokesDoc::new(),
             segments: Vec::new(),
+            segments_page_dark: false,
             visible_strokes: Vec::new(),
             undo: Vec::new(),
             redo: Vec::new(),
         }
+    }
+
+    fn ensure_display_theme(&mut self, page_dark: bool) {
+        if self.segments_page_dark == page_dark {
+            return;
+        }
+        self.segments_page_dark = page_dark;
+        self.retessellate_segments_from_cache();
     }
 
     /// Record a new mutating op on the undo stack and clear the redo
@@ -841,12 +913,13 @@ impl CanvasDocument {
         // disjoint from `&self.strokes_doc` (avoids the "can't
         // borrow self mutably while for_each_stroke holds &self"
         // problem).
+        let page_dark = self.segments_page_dark;
         let segments = &mut self.segments;
         let visible = &mut self.visible_strokes;
         self.strokes_doc.for_each_stroke(|view| {
             let color = view.color;
             let width = view.width;
-            let color_bytes = pack_color_bytes(color);
+            let color_bytes = pack_color_bytes(display_color_argb(color, page_dark));
             let points: Vec<f32> = view.points.to_vec();
             let pressures: Vec<f32> = view.pressures.to_vec();
             let (bbox_min, bbox_max) = bbox_of_points(&points);
@@ -890,7 +963,8 @@ impl CanvasDocument {
         // we grew. Saves ~1-3 ms per eraser batch on heavy notes.
         self.segments.clear();
         for meta in &self.visible_strokes {
-            let color_bytes = pack_color_bytes(meta.color);
+            let color_bytes =
+                pack_color_bytes(display_color_argb(meta.color, self.segments_page_dark));
             append_tessellated_stroke(
                 &mut self.segments,
                 &meta.points,
@@ -932,6 +1006,7 @@ impl CanvasDocument {
         let mut doc = Self {
             strokes_doc,
             segments: Vec::new(),
+            segments_page_dark: false,
             visible_strokes: Vec::new(),
             undo: Vec::new(),
             redo: Vec::new(),
@@ -1266,12 +1341,14 @@ pub fn set_toolbar_settings(
     color_argb: Option<u32>,
     width: Option<f32>,
     finger_drawing_allowed: Option<bool>,
+    page_theme_mode: Option<String>,
 ) {
     send(Msg::SetToolbarSettings {
         tool,
         color_argb,
         width,
         finger_drawing_allowed,
+        page_theme_mode,
     });
 }
 
@@ -1341,6 +1418,15 @@ fn active_page_count(
         .unwrap_or_else(|| DocumentLayout::page_count_for_content_max_y(0.0))
 }
 
+fn ensure_documents_display_theme(
+    documents: &mut HashMap<String, CanvasDocument>,
+    page_dark: bool,
+) {
+    for doc in documents.values_mut() {
+        doc.ensure_display_theme(page_dark);
+    }
+}
+
 /// Snapshot the bits the egui toolbar needs to render correctly:
 /// the active tool (for the selected-button highlight) and whether
 /// the undo / redo stacks have anything to pop (for the
@@ -1356,6 +1442,7 @@ fn build_ui_state(
     tool_mode: ToolMode,
     stroke_tool_override: Option<ToolMode>,
     finger_drawing_allowed: bool,
+    page_theme_mode: InkPageThemeMode,
     picked_color: u32,
     picked_width: f32,
     active_id: &Option<String>,
@@ -1365,6 +1452,7 @@ fn build_ui_state(
     UiState {
         current_tool: stroke_tool_override.unwrap_or(tool_mode),
         finger_drawing_allowed,
+        page_theme_mode,
         can_undo: active.map(|d| !d.undo.is_empty()).unwrap_or(false),
         can_redo: active.map(|d| !d.redo.is_empty()).unwrap_or(false),
         current_color: picked_color,
@@ -1384,6 +1472,7 @@ fn emit_toolbar_settings(
     picked_color: u32,
     picked_width: f32,
     finger_drawing_allowed: bool,
+    page_theme_mode: InkPageThemeMode,
 ) {
     let Some(app) = APP.get() else {
         return;
@@ -1393,6 +1482,7 @@ fn emit_toolbar_settings(
         color_argb: picked_color,
         width: picked_width,
         finger_drawing_allowed,
+        page_theme_mode: page_theme_mode_to_setting(page_theme_mode),
     };
     if let Err(e) = app.emit(TOOLBAR_SETTINGS_EVENT, &event) {
         log::warn!("[drawing] emit {TOOLBAR_SETTINGS_EVENT} failed: {e}");
@@ -1543,6 +1633,11 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
     // Device-defaulted from Kotlin once the SurfaceView is created:
     // off on tablets with stylus support, on for touch-only devices.
     let mut finger_drawing_allowed = true;
+    // Resolved app chrome theme and ink-page preference are separate:
+    // Samsung Notes lets the page itself stay light, or follow the
+    // system/app dark mode and adjust ink colours for readability.
+    let mut app_dark = false;
+    let mut page_theme_mode = InkPageThemeMode::Light;
     // D8 / F7(a) temporary-tool override: when the S Pen barrel
     // button is held at DOWN, the in-flight stroke is treated as
     // Eraser regardless of `tool_mode`. Latched at DOWN, cleared on
@@ -1734,7 +1829,14 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             "[drawing] Msg::Resize w={width} h={height} (was {prev_w}x{prev_h})"
                         );
                         s.resize(p, width, height);
-                        push_live_ink_style(Some(&*s), picked_color, picked_width);
+                        push_live_ink_style(
+                            Some(&*s),
+                            display_color_argb(
+                                picked_color,
+                                page_theme_is_dark(page_theme_mode, app_dark),
+                            ),
+                            picked_width,
+                        );
                         dirty = true;
                     }
                 }
@@ -1747,7 +1849,14 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                 } => {
                     if let (Some(p), Some(s)) = (persistent.as_ref(), surface_state.as_mut()) {
                         s.apply_view_gesture(p, focus_x, focus_y, pan_dx, pan_dy, scale_delta);
-                        push_live_ink_style(Some(&*s), picked_color, picked_width);
+                        push_live_ink_style(
+                            Some(&*s),
+                            display_color_argb(
+                                picked_color,
+                                page_theme_is_dark(page_theme_mode, app_dark),
+                            ),
+                            picked_width,
+                        );
                         dirty = true;
                     }
                 }
@@ -1865,7 +1974,9 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             log::info!(
                                 "[drawing] stroke_open tool={tool:?} buttons=0x{buttons:x} -> color=0x{packed:08X} width={width:.2}"
                             );
-                            current_stroke_color = Some(pack_color_bytes(packed));
+                            let page_dark = page_theme_is_dark(page_theme_mode, app_dark);
+                            current_stroke_color =
+                                Some(pack_color_bytes(display_color_argb(packed, page_dark)));
                             current_stroke_packed = Some(packed);
                             current_stroke_width = Some(width);
                             pen_in_flight_points.clear();
@@ -1873,7 +1984,11 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             pen_tess_cursor = None;
                             current_stroke_segment_start = None;
                             current_stroke_page = None;
-                            push_live_ink_style(surface_state.as_ref(), packed, width);
+                            push_live_ink_style(
+                                surface_state.as_ref(),
+                                display_color_argb(packed, page_dark),
+                                width,
+                            );
                             if let (Some(id), Some(s)) =
                                 (active_note_id.as_ref(), surface_state.as_ref())
                             {
@@ -1912,6 +2027,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                 let doc = documents
                                     .entry(id.clone())
                                     .or_insert_with(CanvasDocument::new);
+                                doc.ensure_display_theme(page_dark);
                                 current_stroke_segment_start = Some(doc.segments.len());
                                 doc.strokes_doc.begin_stroke(packed, width);
                                 // Push the anchor into both the yrs
@@ -1987,6 +2103,10 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                     let doc = documents
                                         .entry(id.clone())
                                         .or_insert_with(CanvasDocument::new);
+                                    doc.ensure_display_theme(page_theme_is_dark(
+                                        page_theme_mode,
+                                        app_dark,
+                                    ));
                                     let segment_start = *current_stroke_segment_start
                                         .get_or_insert(doc.segments.len());
                                     for out in smoothed {
@@ -2091,6 +2211,10 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                         let doc = documents
                                             .entry(id.clone())
                                             .or_insert_with(CanvasDocument::new);
+                                        doc.ensure_display_theme(page_theme_is_dark(
+                                            page_theme_mode,
+                                            app_dark,
+                                        ));
                                         let segment_start = *current_stroke_segment_start
                                             .get_or_insert(doc.segments.len());
                                         for out in drained {
@@ -2362,9 +2486,10 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                         // A → home → A) reuse the live doc so any
                         // in-memory edits since the last save aren't
                         // lost to a stale disk snapshot.
-                        documents.entry(id.clone()).or_insert_with(|| {
+                        let doc = documents.entry(id.clone()).or_insert_with(|| {
                             CanvasDocument::from_bytes(initial_state.as_deref().unwrap_or(&[]))
                         });
+                        doc.ensure_display_theme(page_theme_is_dark(page_theme_mode, app_dark));
                     }
                     active_note_id = note_id;
                     // Truncate any in-flight stroke or eraser drag
@@ -2407,6 +2532,8 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                     let _ = reply.send(bytes);
                 }
                 Msg::SetTheme { dark, accent_argb } => {
+                    let was_page_dark = page_theme_is_dark(page_theme_mode, app_dark);
+                    app_dark = dark;
                     // Drop the alpha byte — egui's `Color32` is always
                     // opaque for our toolbar's purposes, and the JS
                     // side may pass either `0xAARRGGBB` or `0x00RRGGBB`
@@ -2418,6 +2545,36 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                     let accent = egui::Color32::from_rgb(r, g, b);
                     log::info!("[drawing] theme update: dark={dark} accent=#{r:02X}{g:02X}{b:02X}");
                     canvas_ui.set_theme(ui::DrawingTheme { dark, accent });
+                    let now_page_dark = page_theme_is_dark(page_theme_mode, app_dark);
+                    if was_page_dark != now_page_dark {
+                        ensure_documents_display_theme(&mut documents, now_page_dark);
+                        if let Some(packed) = current_stroke_packed {
+                            let display_color =
+                                pack_color_bytes(display_color_argb(packed, now_page_dark));
+                            current_stroke_color = Some(display_color);
+                            if let (Some(id), Some(segment_start), Some(stroke_width)) = (
+                                active_note_id.as_ref(),
+                                current_stroke_segment_start,
+                                current_stroke_width,
+                            ) {
+                                if let Some(doc) = documents.get_mut(id) {
+                                    retessellate_in_flight_stroke(
+                                        doc,
+                                        segment_start,
+                                        &pen_in_flight_points,
+                                        &pen_in_flight_pressures,
+                                        stroke_width,
+                                        display_color,
+                                    );
+                                }
+                            }
+                        }
+                        push_live_ink_style(
+                            surface_state.as_ref(),
+                            display_color_argb(picked_color, now_page_dark),
+                            picked_width,
+                        );
+                    }
                     // Repaint so the new palette shows up immediately
                     // (otherwise the toolbar stays on the old colours
                     // until the next input event drives a frame).
@@ -2428,7 +2585,9 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                     color_argb,
                     width,
                     finger_drawing_allowed: new_finger_drawing_allowed,
+                    page_theme_mode: new_page_theme_mode,
                 } => {
+                    let was_page_dark = page_theme_is_dark(page_theme_mode, app_dark);
                     if let Some(tool) = tool.as_deref().and_then(tool_mode_from_setting) {
                         tool_mode = tool;
                     }
@@ -2449,7 +2608,42 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             log::error!("[drawing] call_set_finger_drawing_allowed failed: {e}");
                         }
                     }
-                    push_live_ink_style(surface_state.as_ref(), picked_color, picked_width);
+                    if let Some(mode) = new_page_theme_mode
+                        .as_deref()
+                        .and_then(page_theme_mode_from_setting)
+                    {
+                        page_theme_mode = mode;
+                    }
+                    let now_page_dark = page_theme_is_dark(page_theme_mode, app_dark);
+                    if was_page_dark != now_page_dark {
+                        ensure_documents_display_theme(&mut documents, now_page_dark);
+                        if let Some(packed) = current_stroke_packed {
+                            let display_color =
+                                pack_color_bytes(display_color_argb(packed, now_page_dark));
+                            current_stroke_color = Some(display_color);
+                            if let (Some(id), Some(segment_start), Some(stroke_width)) = (
+                                active_note_id.as_ref(),
+                                current_stroke_segment_start,
+                                current_stroke_width,
+                            ) {
+                                if let Some(doc) = documents.get_mut(id) {
+                                    retessellate_in_flight_stroke(
+                                        doc,
+                                        segment_start,
+                                        &pen_in_flight_points,
+                                        &pen_in_flight_pressures,
+                                        stroke_width,
+                                        display_color,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    push_live_ink_style(
+                        surface_state.as_ref(),
+                        display_color_argb(picked_color, now_page_dark),
+                        picked_width,
+                    );
                     dirty = true;
                 }
                 Msg::SetFingerDrawingAllowed(allowed) => {
@@ -2469,6 +2663,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                         picked_color,
                         picked_width,
                         finger_drawing_allowed,
+                        page_theme_mode,
                     );
                     #[cfg(target_os = "android")]
                     if let Err(e) =
@@ -2587,6 +2782,10 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                     let doc = documents
                                         .entry(id.clone())
                                         .or_insert_with(CanvasDocument::new);
+                                    doc.ensure_display_theme(page_theme_is_dark(
+                                        page_theme_mode,
+                                        app_dark,
+                                    ));
                                     let segment_start = *current_stroke_segment_start
                                         .get_or_insert(doc.segments.len());
                                     for out in smoothed {
@@ -2620,7 +2819,8 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
 
                 let page_count = active_page_count(&active_note_id, &documents);
                 s.set_document_page_count(p, page_count);
-                append_page_backdrop(&mut page_backdrop_segments, s.layout());
+                let page_dark = page_theme_is_dark(page_theme_mode, app_dark);
+                append_page_backdrop(&mut page_backdrop_segments, s.layout(), page_dark);
                 let segs = active_segments(&active_note_id, &documents);
                 let segs_len = segs.len();
                 // Refresh the two-zone raw head before submitting
@@ -2663,6 +2863,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                     tool_mode,
                     stroke_tool_override,
                     finger_drawing_allowed,
+                    page_theme_mode,
                     picked_color,
                     picked_width,
                     &active_note_id,
@@ -2696,6 +2897,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                     s,
                     acquired,
                     &page_backdrop_segments,
+                    color_argb_to_f64_rgba(background_color_argb(page_dark)),
                     segs,
                     &raw_head_segments,
                     &prediction_segments,
@@ -2781,7 +2983,14 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                 "[drawing] picked colour 0x{new_color:08X} (was 0x{picked_color:08X})"
                             );
                             picked_color = new_color;
-                            push_live_ink_style(Some(&*s), picked_color, picked_width);
+                            push_live_ink_style(
+                                Some(&*s),
+                                display_color_argb(
+                                    picked_color,
+                                    page_theme_is_dark(page_theme_mode, app_dark),
+                                ),
+                                picked_width,
+                            );
                             toolbar_settings_changed = true;
                             // Toolbar's swatch shows `picked_color`
                             // via UiState — re-render so the user
@@ -2797,7 +3006,14 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                 "[drawing] picked width {new_width:.2} (was {picked_width:.2})"
                             );
                             picked_width = new_width;
-                            push_live_ink_style(Some(&*s), picked_color, picked_width);
+                            push_live_ink_style(
+                                Some(&*s),
+                                display_color_argb(
+                                    picked_color,
+                                    page_theme_is_dark(page_theme_mode, app_dark),
+                                ),
+                                picked_width,
+                            );
                             toolbar_settings_changed = true;
                             needs_rerender = true;
                         }
@@ -2848,12 +3064,59 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             }
                         }
 
+                        if let Some(new_mode) = actions.set_page_theme_mode {
+                            if page_theme_mode != new_mode {
+                                let was_page_dark = page_theme_is_dark(page_theme_mode, app_dark);
+                                log::info!(
+                                    "[drawing] page theme: {:?} -> {:?}",
+                                    page_theme_mode,
+                                    new_mode
+                                );
+                                page_theme_mode = new_mode;
+                                let now_page_dark = page_theme_is_dark(page_theme_mode, app_dark);
+                                if was_page_dark != now_page_dark {
+                                    ensure_documents_display_theme(&mut documents, now_page_dark);
+                                    if let Some(packed) = current_stroke_packed {
+                                        let display_color = pack_color_bytes(display_color_argb(
+                                            packed,
+                                            now_page_dark,
+                                        ));
+                                        current_stroke_color = Some(display_color);
+                                        if let (Some(id), Some(segment_start), Some(stroke_width)) = (
+                                            active_note_id.as_ref(),
+                                            current_stroke_segment_start,
+                                            current_stroke_width,
+                                        ) {
+                                            if let Some(doc) = documents.get_mut(id) {
+                                                retessellate_in_flight_stroke(
+                                                    doc,
+                                                    segment_start,
+                                                    &pen_in_flight_points,
+                                                    &pen_in_flight_pressures,
+                                                    stroke_width,
+                                                    display_color,
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                                push_live_ink_style(
+                                    Some(&*s),
+                                    display_color_argb(picked_color, now_page_dark),
+                                    picked_width,
+                                );
+                                toolbar_settings_changed = true;
+                                needs_rerender = true;
+                            }
+                        }
+
                         if toolbar_settings_changed {
                             emit_toolbar_settings(
                                 tool_mode,
                                 picked_color,
                                 picked_width,
                                 finger_drawing_allowed,
+                                page_theme_mode,
                             );
                         }
 
@@ -2924,7 +3187,12 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             // stack after we popped its last entry.
                             let fresh_page_count = active_page_count(&active_note_id, &documents);
                             s.set_document_page_count(p, fresh_page_count);
-                            append_page_backdrop(&mut page_backdrop_segments, s.layout());
+                            let fresh_page_dark = page_theme_is_dark(page_theme_mode, app_dark);
+                            append_page_backdrop(
+                                &mut page_backdrop_segments,
+                                s.layout(),
+                                fresh_page_dark,
+                            );
                             let fresh_segs = active_segments(&active_note_id, &documents);
                             // Re-tessellate the raw head for the
                             // follow-up frame too: toolbar actions
@@ -2956,6 +3224,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                 tool_mode,
                                 stroke_tool_override,
                                 finger_drawing_allowed,
+                                page_theme_mode,
                                 picked_color,
                                 picked_width,
                                 &active_note_id,
@@ -2989,6 +3258,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                 p,
                                 s,
                                 &page_backdrop_segments,
+                                color_argb_to_f64_rgba(background_color_argb(fresh_page_dark)),
                                 fresh_segs,
                                 &raw_head_segments,
                                 &prediction_segments,
