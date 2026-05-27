@@ -28,8 +28,8 @@ use egui_shadcn::Theme as ShadcnTheme;
 use lucide_icons::Icon;
 
 use super::{
-    brush, color_picker, ActiveControlBounds, DrawingTheme, RenderActions, ToolMode, UiState,
-    LUCIDE_FAMILY,
+    brush, color_picker, ActiveControlBounds, DrawingTheme, InkPageThemeMode, RenderActions,
+    ToolMode, UiState, LUCIDE_FAMILY,
 };
 
 /// Visible height of the toolbar in pixels. Also used by the
@@ -88,6 +88,8 @@ pub fn show(
                 let paint_eraser = lucide_painter(Icon::Eraser);
                 let paint_pointer = lucide_painter(Icon::Pointer);
                 let paint_pointer_off = lucide_painter(Icon::PointerOff);
+                let paint_light_page = lucide_painter(Icon::Sun);
+                let paint_system_page = lucide_painter(Icon::SunMoon);
                 let paint_undo = lucide_painter(Icon::Undo);
                 let paint_redo = lucide_painter(Icon::Redo);
                 let paint_trash = lucide_painter(Icon::Trash2);
@@ -160,6 +162,31 @@ pub fn show(
                 );
                 if finger_response.clicked() {
                     actions.set_finger_drawing_allowed = Some(!state.finger_drawing_allowed);
+                }
+
+                let system_pages = state.page_theme_mode == InkPageThemeMode::System;
+                let page_theme_response = shadcn_icon_button_response(
+                    ui,
+                    shadcn,
+                    if system_pages {
+                        &paint_system_page
+                    } else {
+                        &paint_light_page
+                    },
+                    if system_pages {
+                        "Ink pages follow system theme"
+                    } else {
+                        "Ink pages always light"
+                    },
+                    variant_for(system_pages),
+                    true,
+                );
+                if page_theme_response.clicked() {
+                    actions.set_page_theme_mode = Some(if system_pages {
+                        InkPageThemeMode::Light
+                    } else {
+                        InkPageThemeMode::System
+                    });
                 }
 
                 ui.separator();
