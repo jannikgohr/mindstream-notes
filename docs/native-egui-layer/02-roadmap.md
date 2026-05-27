@@ -10,12 +10,14 @@ POC complete and stable on real hardware (Samsung S23+, Tab S7+ FE):
 opening a note of `note_kind === 'ink'` injects an Android
 `SurfaceView` *below* MobileEditor's header (via `topMargin =
 systemBarInset + 48dp`), drives a wgpu render loop with raw
-stylus/touch input flowing in via JNI, paints thin black lines on
-a white canvas, and shows an egui toolbar with working Back + Clear
-buttons. The Android system back, the in-app Svelte back arrow, and
-the egui Back all converge on a single `navigateBack()` that pops
-the browser history (`history.back()` → popstate → `setMobileScreen
-('home')`); from the home screen, system back closes the app.
+stylus/touch input flowing in via JNI, paints pressure-aware strokes
+on a Samsung Notes-style vertical stack of uniform A4 pages, and
+shows an egui toolbar for pen / eraser / finger drawing / page theme
+/ colour / brush / undo / redo / clear. The Android system back and
+the in-app Svelte back arrow converge on a single `navigateBack()`
+that pops the browser history (`history.back()` → popstate →
+`setMobileScreen('home')`); from the home screen, system back closes
+the app.
 
 Heavy wgpu state (`Device` / `Queue` / `pipeline` / `egui_renderer`)
 lives in a `PersistentGpu` struct that's built once and kept alive
@@ -116,12 +118,33 @@ cancels after pen-up flashes a one-pixel ring of background and reads
 as a "flicker" along the just-drawn stroke.
 
 Toolbar state is now persisted via the app settings store: tool,
-colour, brush width, and finger-drawing enablement round-trip through
-`drawing:toolbar_settings` events and `drawing_set_toolbar_settings`.
-The finger drawing setting is special-cased so the device default is
-used exactly once: on devices with pen support Kotlin defaults finger
-drawing off, but once JS has a saved value the native default path is
-skipped.
+colour, brush width, finger-drawing enablement, and ink page theme
+round-trip through `drawing:toolbar_settings` events and
+`drawing_set_toolbar_settings`. The finger drawing setting is
+special-cased so the device default is used exactly once: on devices
+with pen support Kotlin defaults finger drawing off, but once JS has
+a saved value the native default path is skipped. The ink page theme
+setting is shown only while the resolved app theme is dark and lets
+pages stay always-light or follow the system/app dark mode.
+
+Navigation now matches the Samsung Notes mental model: each document
+is a vertical stack of uniform pages with configurable-by-code A4
+portrait dimensions, inter-page gaps, and top/bottom scroll margins.
+The page stack is inset below the egui toolbar, so the first page has
+visible breathing room instead of hiding under toolbar chrome. Pinch
+zoom + pan update the same page-to-surface transform used by the
+renderer; panning clamps against the document bounds with enough
+margin to see when the user has reached the top or bottom. Finger
+input pans with one finger when finger drawing is disabled; when
+finger drawing is enabled, two-finger gestures pan/zoom and suppress
+stroke creation for that gesture.
+
+Ink page theming is Samsung Notes-style: in light mode pages/background
+render normally; in dark mode the toolbar exposes an ink-page toggle
+(`editor.ink.pageTheme`) for always-light vs system-following pages.
+When ink pages are dark, stored stroke colours are left untouched but
+display colours are RGB-inverted for rendering and live ink, so black
+renders white and white renders black while grey tones reverse.
 
 Activity lifecycle is wired end-to-end (B4): `MainActivity.onPause`
 detaches the SurfaceView (Drawing.detach → hideSync) so wgpu's
@@ -137,9 +160,11 @@ navigation bar is hidden in transient-swipe immersive mode (B5),
 restored on hide — every device pixel for drawing without giving up
 the system back gesture entirely.
 
-**Deliberately NOT yet implemented** — see roadmap below: pan +
-zoom; multi-page; live collab; desktop / iOS ports. D8 (stylus
-button / gesture → action mapping) has its first slice in
+**Deliberately NOT yet implemented** — see roadmap below: live
+collab; desktop / iOS ports; user-facing page-size/custom-template
+settings; true infinite-page creation policy beyond the current
+uniform vertical page stack. D8 (stylus button / gesture → action
+mapping) has its first slice in
 (barrel-button-held → temporary Eraser) but the configurable
 mapping + Apple Pencil discrete-gesture shape are still to come.
 D5's colour picker covers the 8-colour quick-select case; a full
@@ -166,11 +191,11 @@ Items grouped by readiness/effort, not chronology. Within each
 bucket they're rough-priority-ordered. Buckets later in the
 alphabet generally depend on earlier ones.
 
-**Recommended next move:** device-test the new centreline-preserving
-outline tessellator on the Tab S7 FE with thick/slow strokes, then
-start D6 pan + pinch-zoom. The ink feel/latency basics are now good
-enough that navigation around the page is the next user-visible
-ceiling. After D6, D7 multi-page/infinite scroll becomes much easier.
+**Recommended next move:** device-test the combined page-stack,
+pan/zoom, two-finger suppression, and dark ink-page theming on the
+Tab S7 FE. If that feels solid, the next user-visible feature choices
+are either live canvas collab (C5) or page customization (page size,
+templates, and creation policy) on top of the D7 layout.
 
 ### A. Unblocking — finish the POC
 
@@ -235,10 +260,11 @@ Status snapshot:
 | D4 | **Done** |
 | D5 | **Done** |
 | D5b | **Done** |
-| D6 | Pending |
-| D7 | Pending |
+| D6 | **Done** |
+| D7 | **Done** |
 | D8 | In progress |
 | D9 | **Done** |
+| D10 | **Done** |
 
 | # | Item | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 |---|------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -247,11 +273,12 @@ Status snapshot:
 | D3 | Eraser tool | Pen/Eraser segmented control in the toolbar; render thread holds the authoritative `ToolMode`. In Eraser mode each input sample runs a hit-test (`point_to_segment_distance_sq` from `page.rs`, host-tested) against `CanvasDocument::visible_strokes` — an in-memory `StrokeMeta { id, color, bbox, points, pressures }` cache that mirrors visible strokes from yrs. Bbox-reject most strokes in O(1); fine point-to-segment math only for the few overlap candidates. Matches accumulate into a per-batch `pending_eraser_tombstones: HashSet<String>`; at the end of each render-thread loop iteration the worker fires ONE `StrokesDoc::tombstone_strokes(&pending)` bulk yrs walk + one `retessellate_segments_from_cache` (instead of per-sample), turning a dense drag's O(samples × strokes) into O(strokes) total. Per-drag hits accumulate into a Vec that becomes one `UndoOp::EraserDrag` on pen-up. Eraser radius = 10 page-units (~1.4 mm at 144 DPI). End-to-end: ~1.5 s → ~80 ms on a 391-stroke / 65-sample / 55-hit drag (~20× from the original yrs-walking implementation). **Done.** |
 | D4 | Undo / redo | Per-note transient stacks on `CanvasDocument`. `UndoOp` enum: `StrokeAdded(id)` (pen-up), `EraserDrag(Vec<id>)` (one per eraser drag), `ClearAll(Vec<id>)` (toolbar Clear, captures the pre-clear visible set so undo restores exactly that). Standard semantics: new mutation clears the redo stack. Toolbar Undo/Redo buttons grey out via `add_enabled` when the matching stack is empty. **Done.**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | D5 | Color picker + brush size | **Done.** `ui/color_picker.rs` renders an 8-swatch quick-select grid (Tailwind 500/600 saturated + Black + Gray-500) inside an egui-shadcn `popover` anchored to a circular swatch button in the toolbar. `ui/brush.rs` renders a slider popover (0.5 – 12.0 page units) inside a hand-rolled `egui::Area` styled to match shadcn's popover frame — opens when the user taps the already-active Pen tool (Procreate / Apple Notes "tap-to-open-settings" pattern), closes on outside click or Escape. Both popovers use the same `egui_shadcn::tokens::ColorPalette` borders / popover-bg / accent-ring as the rest of the toolbar. Render thread persists `picked_color` / `picked_width` between strokes (defaults `DEFAULT_COLOR` / `DEFAULT_WIDTH` from `strokes_doc`); at Pen DOWN the latched values flow into `current_stroke_color` / `current_stroke_packed` / new `current_stroke_width`. `width_for_pressure(p, base_width)` got parameterised — min width sweeps with the user-picked base (`max(base * 0.25, 0.5)`), so fatter brushes get fatter pressure ramps. Front-buffer overlay style is re-pushed on every colour / width pick so the in-flight head matches the next stroke. Schema payload bumped to v2 — adds `width: f32` after `color` in the header — and the decoder transparently handles v1 (synthesises `DEFAULT_WIDTH`) so notes drawn pre-D5 still render identically. New v2 round-trip tests + v1-decodes-with-default test cover the migration. The retired debug palette (`PEN_DEBUG_COLOR`, `color_for_input`) is gone; the only colour the renderer chooses for the user is what they picked. |
-| D5b | Toolbar settings persistence | **Done.** `DrawingNoteEditor` hydrates native toolbar state from the settings store before `drawing_show`, then listens for Rust `drawing:toolbar_settings` events and persists tool / colour / width / finger-drawing changes back into `editor.ink.*` settings. The render thread owns authoritative toolbar state and emits settings after native egui changes. Finger drawing uses `hasSettingValue` so schema defaults don't accidentally override Kotlin's device default: when no saved value exists, Android checks pen support once and defaults finger drawing off on pen-capable devices; after a value is saved, Kotlin skips the device default path and uses the saved setting. |
-| D6 | Pan + pinch-zoom on the page | Two-finger gesture handling: Kotlin `GestureDetector` + `ScaleGestureDetector` push `Msg::ViewTransform { pan_delta, scale_delta }` to Rust; render reads current view transform from a uniform buffer (already added in C0). Clamp to keep page on-screen; momentum on fling.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| D7 | Multi-page / infinite scroll | Once C0 + D6 are in, multi-page is "more pages along Y in document space". Page break renders as a thin gap + page number badge.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| D5b | Toolbar settings persistence | **Done.** `DrawingNoteEditor` hydrates native toolbar state from the settings store before `drawing_show`, then listens for Rust `drawing:toolbar_settings` events and persists tool / colour / width / finger-drawing / ink-page-theme changes back into `editor.ink.*` settings. The render thread owns authoritative toolbar state and emits settings after native egui changes. Finger drawing uses `hasSettingValue` so schema defaults don't accidentally override Kotlin's device default: when no saved value exists, Android checks pen support once and defaults finger drawing off on pen-capable devices; after a value is saved, Kotlin skips the device default path and uses the saved setting. |
+| D6 | Pan + pinch-zoom on the page | **Done.** Kotlin recognises view gestures separately from drawing samples and sends pan / scale deltas to Rust, where `SurfaceBoundState` applies them to the document view transform. One-finger panning is allowed when finger drawing is disabled. When finger drawing is enabled, two-finger gestures pan/zoom and suppress stroke creation so the renderer never draws accidental lines during a view gesture. The transform clamps against the vertical document bounds and accounts for the egui toolbar top inset, with top/bottom scroll margins so reaching the edge is visually obvious. Momentum/fling remains optional polish. |
+| D7 | Multi-page / uniform vertical page stack | **Done for Samsung Notes-style fixed pages.** `DocumentLayout` models a vertical stack of uniform A4 portrait pages with a defined inter-page gap and top/bottom scroll margins; page count grows from visible stroke bounds, and strokes are constrained to the page where the gesture began so drags through gaps do not draw bridges between sheets. The renderer draws page fill, border, and shadow separately from the canvas background. Future work: user-facing page size/templates, page numbers, and a more explicit page-creation policy if we want infinite-scroll semantics beyond content-driven growth. |
 | D8 | Stylus button + gesture → action mapping | UX-policy layer over C6 + the discrete-gesture path. Maps `StylusButtons` bitmask states (held during a stroke) and discrete `StylusGesture` events (between strokes) onto canvas actions: switch to eraser, cycle colour, undo, open quick-picker, etc. Lives in `ui/` (above the render thread) because the policy needs to see the current tool mode + the user's settings — render thread stays a dumb carrier of the input bits. Apple Pencil 2 double-tap respects the system pref (`UIPencilInteraction.preferredTapAction`) when running on iOS so the gesture does the same thing in our app as in others; Android side has no equivalent system pref, so we expose our own setting. Depends on C6. **In progress** — first slice (F7's option (a) "barrel-button held → temporary Eraser") is wired: `render.rs::effective_tool_at_down` latches the modifier at every DOWN; a render-thread `stroke_tool_override: Option<ToolMode>` carries the latched value across MOVE / UP without flipping mid-stroke; cleared on every state-reset site (UP / Cancel / Clear / SetActiveNote / tool change). Toolbar's `UiState::current_tool` reflects the override during the stroke so the user gets visual feedback. The Eraser branch's front-buffer overlay now pushes `LIVE_INK_OVERLAY_HIDDEN` (transparent ARGB) instead of the old red `ERASER_TIP_COLOR` so a barrel-button-held erase no longer paints a confusing red drag trail. The orange `STYLUS_BUTTON_HELD_COLOR` debug constant was also retired in the same pass — D8 consumes the button bit before `color_for_input` is reached, so the orange path was dead code. Remaining: discrete `StylusGesture` shape for Apple Pencil 2 double-tap / Pencil Pro squeeze; the configurable mapping (`editor.ink.barrelButton` setting per F5/F7); cycle-colour / quick-picker bindings. |
 | D9 | Stroke outline quality | **Done for current brush range.** Replaced independent per-segment body quads with whole-stroke, centreline-preserving outline tessellation. The visual tangent for each stored point is derived from neighbouring points and width is lightly filtered, so thick slow strokes have a smooth edge without moving the stroke path or increasing saved point count. In-flight strokes retessellate their active suffix as new neighbours arrive and force a full committed-prefix GPU upload for that frame so changed tail vertices reach the surface. Remaining polish if needed: true round start/end caps, round joins, or a `lyon`-backed path for very large marker/highlighter brushes. |
+| D10 | Ink page/background theming | **Done.** Page/background theming is deliberately separate from the egui toolbar/app chrome. In dark app mode, the toolbar shows a Sun / SunMoon toggle for `InkPageThemeMode::{Light,System}`; in light app mode the toggle is hidden because both modes render the same light page surface. The preference persists via `editor.ink.pageTheme`. When dark ink pages are active, the renderer keeps stored stroke colours unchanged but inverts RGB at display time for committed meshes, in-flight raw heads, predictions, and the Android front-buffer live-ink overlay; black renders white, white renders black, and grey tones reverse. Page fill, border, shadow/highlight, and the WGPU clear background use the same dark-page decision so the whole ink surface changes together. |
 
 ### E. Platform expansion — unblocked by R
 
@@ -267,5 +294,5 @@ Status snapshot:
 - **F3.** Whether drawing needs its own NDK-context init — **resolved:** no, `Keyring.initializeNdkContext` (called from `MainActivity.onCreate`) populates `ndk_context` process-wide. Documented load-bearing dependency: if Keyring ever goes away, drawing's `ui::call_*` JNI callbacks lose their JavaVM and silently no-op. The cached Drawing-class JNI GlobalRef is a related load-bearing dep — see the comments in `Drawing.kt`'s companion init.
 - **F4.** Prediction window in ms — deferred unless a target device reports reliable `MotionPredictor` support. Current Tab S7 FE path uses front-buffer live ink instead.
 - **F5.** Pen-vs-finger mode setting — **resolved for ink notes.** The toolbar has a Pointer / PointerOff toggle backed by `editor.ink.fingerDrawing`. Kotlin detects pen-capable devices and defaults finger drawing off only when no saved setting exists; once the user toggles it, that saved value wins. Freeform parity is still a separate UX cleanup.
-- **F6.** Page size as a user-facing setting? — open. C0 hardcodes A4 portrait; eventually probably needs to be a per-note property (some users want letter, some want square, some want infinite scroll). Not blocking; revisit when multi-page lands (D7).
+- **F6.** Page size as a user-facing setting? — open. C0/D7 currently hardcode uniform A4 portrait pages; eventually this probably needs to be a per-note property (some users want Letter, some want square, some want custom templates). Not blocking; the render/layout path now has a single `DocumentLayout` place to hang that configuration.
 - **F7.** Default stylus-button + gesture binding? — open. Candidates for the held barrel button (S Pen / Surface / Wacom): (a) temporary eraser mode while held — matches most competing apps' default, makes the button feel like a "modifier key"; (b) cycle to next colour — useful for quick highlight runs; (c) open a radial quick-picker. Candidates for Apple Pencil double-tap: cycle current/previous tool (default in Apple Notes), open colour picker, undo. On iOS we should likely defer to `UIPencilInteraction.preferredTapAction` rather than ship our own default. On Android there's no system pref to defer to, so we ship a setting (`editor.ink.barrelButton` with the same enum as freeform's pen-mode setting per F5). Not blocking — C6 captures the bits regardless; D8 picks the mapping; this question just chooses the *default* the setting starts at.
