@@ -980,7 +980,7 @@ private class DrawingSurfaceView(context: Context) :
 
         if (action == MotionEvent.ACTION_POINTER_DOWN) {
             oneFingerPanActive = false
-            pushActualPoint(
+            Drawing.pushPoint(
                 event.x,
                 event.y,
                 sanitizePressure(event.pressure),
