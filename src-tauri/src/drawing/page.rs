@@ -77,7 +77,10 @@ pub const MIN_PAGE_COUNT: u32 = 2;
 
 /// Uniform fixed-size pages arranged top-to-bottom in one continuous
 /// document coordinate space. Page 0 starts at y=0; page 1 starts at
-/// `page.height + page_gap`; and so on.
+/// `page.height + page_gap`; and so on. The scrollable viewport also
+/// includes one `page_gap` above the first page and below the last so
+/// reaching the top/bottom has a visible gray margin without moving
+/// stored stroke coordinates.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct DocumentLayout {
     pub page: PageSize,
@@ -113,6 +116,14 @@ impl DocumentLayout {
     pub fn document_height(&self) -> f32 {
         let pages = self.page_count.max(1) as f32;
         self.page.height * pages + self.page_gap * (pages - 1.0)
+    }
+
+    pub fn scroll_min_y(&self) -> f32 {
+        -self.page_gap
+    }
+
+    pub fn scroll_max_y(&self) -> f32 {
+        self.document_height() + self.page_gap
     }
 
     pub fn page_top(&self, index: u32) -> f32 {
@@ -183,6 +194,11 @@ pub struct ViewTransform {
     pub layout: DocumentLayout,
     pub surface_w: f32,
     pub surface_h: f32,
+    /// Surface pixels covered by in-canvas UI at the top. Vertical
+    /// page fitting and scroll limits use the visible area below this
+    /// inset so top/bottom document margins are not hidden under the
+    /// toolbar.
+    pub viewport_top_inset: f32,
     /// 1 page-unit = `scale` surface pixels.
     pub scale: f32,
     /// Surface-pixel offset of the page's top-left corner.
@@ -200,21 +216,33 @@ impl ViewTransform {
     }
 
     pub fn fit_layout_in_surface(layout: DocumentLayout, surface_w: f32, surface_h: f32) -> Self {
+        Self::fit_layout_in_surface_with_top_inset(layout, surface_w, surface_h, 0.0)
+    }
+
+    pub fn fit_layout_in_surface_with_top_inset(
+        layout: DocumentLayout,
+        surface_w: f32,
+        surface_h: f32,
+        viewport_top_inset: f32,
+    ) -> Self {
         let sw = surface_w.max(1.0);
         let sh = surface_h.max(1.0);
+        let top = viewport_top_inset.clamp(0.0, sh - 1.0);
+        let visible_h = (sh - top).max(1.0);
         // Fit the first page, not the whole document. Multi-page
         // documents should open at readable page size with vertical
         // scrolling, not shrink until every page fits at once.
-        let scale = (sw / layout.page.width).min(sh / layout.page.height);
+        let scale = (sw / layout.page.width).min(visible_h / layout.page.height);
         let page_screen_w = layout.page.width * scale;
         let page_screen_h = layout.page.height * scale;
         let mut view = Self {
             layout,
             surface_w: sw,
             surface_h: sh,
+            viewport_top_inset: top,
             scale,
             pan_x: (sw - page_screen_w) * 0.5,
-            pan_y: (sh - page_screen_h) * 0.5,
+            pan_y: top + (visible_h - page_screen_h) * 0.5,
         };
         view.clamp_to_document();
         view
@@ -224,12 +252,20 @@ impl ViewTransform {
         let old_sw = self.surface_w.max(1.0);
         let old_sh = self.surface_h.max(1.0);
         let focus_x = old_sw * 0.5;
-        let focus_y = old_sh * 0.5;
+        let visible_h = (old_sh - self.viewport_top_inset).max(1.0);
+        let focus_y = self.viewport_top_inset + visible_h * 0.5;
         let doc_at_focus = self.surface_to_page(focus_x, focus_y);
         self.surface_w = surface_w.max(1.0);
         self.surface_h = surface_h.max(1.0);
+        self.viewport_top_inset = self.viewport_top_inset.clamp(0.0, self.surface_h - 1.0);
+        let new_visible_h = (self.surface_h - self.viewport_top_inset).max(1.0);
         self.pan_x = self.surface_w * 0.5 - doc_at_focus[0] * self.scale;
-        self.pan_y = self.surface_h * 0.5 - doc_at_focus[1] * self.scale;
+        self.pan_y = self.viewport_top_inset + new_visible_h * 0.5 - doc_at_focus[1] * self.scale;
+        self.clamp_to_document();
+    }
+
+    pub fn set_viewport_top_inset(&mut self, viewport_top_inset: f32) {
+        self.viewport_top_inset = viewport_top_inset.clamp(0.0, self.surface_h - 1.0);
         self.clamp_to_document();
     }
 
@@ -272,19 +308,29 @@ impl ViewTransform {
     }
 
     fn min_scale(&self) -> f32 {
-        (self.surface_w / self.layout.page.width).min(self.surface_h / self.layout.page.height)
+        let visible_h = (self.surface_h - self.viewport_top_inset).max(1.0);
+        (self.surface_w / self.layout.page.width).min(visible_h / self.layout.page.height)
     }
 
     pub fn clamp_to_document(&mut self) {
         self.scale = self.scale.max(self.min_scale());
         let doc_w = self.layout.document_width() * self.scale;
-        let doc_h = self.layout.document_height() * self.scale;
+        let scroll_min_y = self.layout.scroll_min_y() * self.scale;
+        let scroll_max_y = self.layout.scroll_max_y() * self.scale;
         let page_w = self.layout.page.width * self.scale;
         let page_h = self.layout.page.height * self.scale;
+        let visible_h = (self.surface_h - self.viewport_top_inset).max(1.0);
         let max_x = ((self.surface_w - page_w) * 0.5).max(0.0);
-        let max_y = ((self.surface_h - page_h) * 0.5).max(0.0);
+        let max_y = ((visible_h - page_h) * 0.5).max(0.0);
         self.pan_x = clamp_axis(self.pan_x, self.surface_w, doc_w, max_x);
-        self.pan_y = clamp_axis(self.pan_y, self.surface_h, doc_h, max_y);
+        self.pan_y = clamp_axis_with_bounds(
+            self.pan_y,
+            self.viewport_top_inset,
+            self.surface_h,
+            scroll_min_y,
+            scroll_max_y,
+            max_y,
+        );
     }
 
     /// Inverse of the GPU transform — convert a surface-pixel touch
@@ -322,6 +368,25 @@ fn clamp_axis(pan: f32, surface: f32, content: f32, leading_margin: f32) -> f32 
     } else {
         let max_pan = leading_margin;
         let min_pan = surface - content - leading_margin;
+        pan.clamp(min_pan, max_pan)
+    }
+}
+
+fn clamp_axis_with_bounds(
+    pan: f32,
+    viewport_top: f32,
+    viewport_bottom: f32,
+    content_min: f32,
+    content_max: f32,
+    leading_margin: f32,
+) -> f32 {
+    let surface = (viewport_bottom - viewport_top).max(1.0);
+    let content = content_max - content_min;
+    if content <= surface {
+        viewport_top + (surface - content) * 0.5 - content_min
+    } else {
+        let max_pan = viewport_top + leading_margin - content_min;
+        let min_pan = viewport_bottom - leading_margin - content_max;
         pan.clamp(min_pan, max_pan)
     }
 }
@@ -754,10 +819,28 @@ mod tests {
         let mut vt = ViewTransform::fit_layout_in_surface(layout, 1080.0, 2400.0);
         vt.pan_by(0.0, 100_000.0);
         let top_pan = vt.pan_y;
+        let leading_margin = ((vt.surface_h - layout.page.height * vt.scale) * 0.5).max(0.0);
+        approx(top_pan, leading_margin + layout.page_gap * vt.scale);
         vt.pan_by(0.0, -100_000.0);
         assert!(vt.pan_y < top_pan);
         let doc_bottom = vt.pan_y + layout.document_height() * vt.scale;
-        let trailing_margin = ((vt.surface_h - layout.page.height * vt.scale) * 0.5).max(0.0);
-        approx(doc_bottom, vt.surface_h - trailing_margin);
+        approx(
+            doc_bottom,
+            vt.surface_h - leading_margin - layout.page_gap * vt.scale,
+        );
+    }
+
+    #[test]
+    fn top_scroll_margin_starts_below_viewport_inset() {
+        let layout = DocumentLayout::default_pages(2);
+        let mut vt =
+            ViewTransform::fit_layout_in_surface_with_top_inset(layout, 1080.0, 2400.0, 120.0);
+        vt.pan_by(0.0, 100_000.0);
+        let visible_h = vt.surface_h - vt.viewport_top_inset;
+        let leading_margin = ((visible_h - layout.page.height * vt.scale) * 0.5).max(0.0);
+        approx(
+            vt.pan_y,
+            vt.viewport_top_inset + leading_margin + layout.page_gap * vt.scale,
+        );
     }
 }

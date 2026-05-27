@@ -31,7 +31,7 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 use super::page::{DocumentLayout, ViewTransform};
 use super::surface_source::SurfaceSource;
-use super::ui::UiOutput;
+use super::ui::{self, UiOutput};
 
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
@@ -530,8 +530,12 @@ pub async fn build_surface_bound(
     );
 
     let layout = DocumentLayout::default_pages(DocumentLayout::page_count_for_content_max_y(0.0));
-    let view_transform =
-        ViewTransform::fit_layout_in_surface(layout, width.max(1) as f32, height.max(1) as f32);
+    let view_transform = ViewTransform::fit_layout_in_surface_with_top_inset(
+        layout,
+        width.max(1) as f32,
+        height.max(1) as f32,
+        ui::toolbar::TOOLBAR_HEIGHT_PX,
+    );
     let view_uniform_buffer = create_view_uniform_buffer(&persistent.device, &view_transform);
     let view_bind_group = create_view_bind_group(
         &persistent.device,
