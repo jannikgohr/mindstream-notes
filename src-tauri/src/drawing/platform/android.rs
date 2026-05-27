@@ -328,6 +328,23 @@ pub extern "system" fn Java_io_crates_drawing_Drawing_00024Companion_pushPredict
     render::push_predicted_point(x, y, pressure, (time_ms.max(0) as f64) / 1000.0);
 }
 
+/// `Drawing.Companion.pushViewGesture(focusX, focusY, panDx, panDy, scaleDelta)`
+/// — a two-finger viewport gesture in surface pixels. Kotlin keeps
+/// this separate from `pushPoint` so pinch/pan gestures never enter
+/// the stroke model.
+#[no_mangle]
+pub extern "system" fn Java_io_crates_drawing_Drawing_00024Companion_pushViewGesture(
+    _env: JNIEnv,
+    _class: JClass,
+    focus_x: jfloat,
+    focus_y: jfloat,
+    pan_dx: jfloat,
+    pan_dy: jfloat,
+    scale_delta: jfloat,
+) {
+    render::push_view_gesture(focus_x, focus_y, pan_dx, pan_dy, scale_delta);
+}
+
 // ---------- JNI: Rust → Kotlin (UI thread callbacks) ----------
 
 pub mod ui {

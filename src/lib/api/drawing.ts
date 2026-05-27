@@ -87,6 +87,7 @@ export interface DrawingToolbarSettings {
   colorArgb?: number | null;
   width?: number | null;
   fingerDrawingAllowed?: boolean | null;
+  pageThemeMode?: 'light' | 'system' | null;
 }
 
 export function drawingSetToolbarSettings(
@@ -98,7 +99,8 @@ export function drawingSetToolbarSettings(
       tool: settings.tool ?? null,
       colorArgb: settings.colorArgb ?? null,
       width: settings.width ?? null,
-      fingerDrawingAllowed: settings.fingerDrawingAllowed ?? null
+      fingerDrawingAllowed: settings.fingerDrawingAllowed ?? null,
+      pageThemeMode: settings.pageThemeMode ?? null
     },
     () => undefined
   );
@@ -129,4 +131,5 @@ export interface DrawingToolbarSettingsPayload {
   colorArgb: number;
   width: number;
   fingerDrawingAllowed: boolean;
+  pageThemeMode: 'light' | 'system';
 }
