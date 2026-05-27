@@ -13,10 +13,6 @@ import {
   type IDockviewPanel
 } from 'dockview-core';
 
-export interface MSPanelElement extends IDockviewPanel {
-  component: string;
-}
-
 /**
  * Pick a WebView background colour matching the saved (or OS-default) theme
  * so the popout doesn't flash white before app.css loads. Mirrors the logic
@@ -45,6 +41,29 @@ function themedWindowBackground(): {
 }
 
 /**
+ * Note popout windows use the note id as their Tauri label. When one is
+ * already alive, bring that window forward instead of opening a second editor
+ * for the same note.
+ */
+export async function focusExistingNoteWindow(id: string): Promise<boolean> {
+  if (!isTauri()) return false;
+
+  try {
+    const win = await WebviewWindow.getByLabel(id);
+    if (!win) return false;
+
+    if (await win.isMinimized()) {
+      await win.unminimize();
+    }
+    await win.setFocus();
+    return true;
+  } catch (err) {
+    console.warn('[focusExistingNoteWindow] failed', id, err);
+    return false;
+  }
+}
+
+/**
  * Spawn a Tauri window for a single note.
  *
  * `panelGroup` and `dock` are optional context for the "pop out" flow:
@@ -58,6 +77,8 @@ export async function openNoteWindow(
   panelGroup: IDockviewGroupPanel | null,
   dock: DockviewApi | null
 ): Promise<void> {
+  if (await focusExistingNoteWindow(id)) return;
+
   // Browser fallback (`pnpm dev` outside Tauri): just open a tab with the
   // id encoded in the URL — keeps the UX clickable without Tauri.
   if (!isTauri()) {
@@ -92,7 +113,7 @@ export async function openNoteWindow(
   }).then();
 
   if (panelGroup) {
-    const activePanel: MSPanelElement | undefined = panelGroup?.activePanel as MSPanelElement;
+    const activePanel: IDockviewPanel | undefined = panelGroup?.activePanel;
 
     if (!activePanel || !dock) {
       console.error('[openNoteWindow] failed to spawn because activePanel or dockApi was null',
@@ -103,7 +124,7 @@ export async function openNoteWindow(
     // 1. Snapshot the panel state before it vanishes
     const panelConfig = {
       id: activePanel.id,
-      component: activePanel.component, // e.g., 'noteEditor'
+      component: activePanel.api.component,
       params: { ...activePanel.params },
       title: activePanel.title
     };
