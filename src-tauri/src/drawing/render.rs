@@ -1802,15 +1802,53 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             }
                         }
                     }
-                    let p = persistent.as_ref().expect("persistent built above");
-                    match pollster::block_on(pipeline::build_surface_bound(
-                        p, window, width, height,
-                    )) {
+                    let active_backend = persistent
+                        .as_ref()
+                        .expect("persistent built above")
+                        .backend();
+                    let surface_result = {
+                        let p = persistent.as_ref().expect("persistent built above");
+                        pollster::block_on(pipeline::build_surface_bound(p, window, width, height))
+                    };
+                    match surface_result {
                         Ok(s) => {
                             surface_state = Some(s);
                             needs_rebuild = true;
                         }
-                        Err(e) => log::error!("[drawing] build_surface_bound failed: {e:?}"),
+                        Err(e) => {
+                            if active_backend == pipeline::GpuBackend::Vulkan {
+                                log::warn!(
+                                    "[drawing] Vulkan surface attach failed ({}); falling back to OpenGL",
+                                    e.message,
+                                );
+                                match pollster::block_on(pipeline::build_persistent_with_backend(
+                                    pipeline::GpuBackend::OpenGl,
+                                )) {
+                                    Ok(gl_persistent) => {
+                                        persistent = Some(gl_persistent);
+                                        let p =
+                                            persistent.as_ref().expect("GL persistent built above");
+                                        match pollster::block_on(pipeline::build_surface_bound(
+                                            p, e.window, width, height,
+                                        )) {
+                                            Ok(s) => {
+                                                surface_state = Some(s);
+                                                needs_rebuild = true;
+                                            }
+                                            Err(gl_surface_err) => log::error!(
+                                                "[drawing] OpenGL build_surface_bound failed after Vulkan fallback: {}",
+                                                gl_surface_err.message,
+                                            ),
+                                        }
+                                    }
+                                    Err(gl_err) => log::error!(
+                                        "[drawing] OpenGL build_persistent fallback failed after Vulkan surface error: {gl_err}"
+                                    ),
+                                }
+                            } else {
+                                log::error!("[drawing] build_surface_bound failed: {}", e.message);
+                            }
+                        }
                     }
                     let path = if prewarmed {
                         "prewarmed"
