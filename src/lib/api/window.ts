@@ -45,6 +45,29 @@ function themedWindowBackground(): {
 }
 
 /**
+ * Note popout windows use the note id as their Tauri label. When one is
+ * already alive, bring that window forward instead of opening a second editor
+ * for the same note.
+ */
+export async function focusExistingNoteWindow(id: string): Promise<boolean> {
+  if (!isTauri()) return false;
+
+  try {
+    const win = await WebviewWindow.getByLabel(id);
+    if (!win) return false;
+
+    if (await win.isMinimized()) {
+      await win.unminimize();
+    }
+    await win.setFocus();
+    return true;
+  } catch (err) {
+    console.warn('[focusExistingNoteWindow] failed', id, err);
+    return false;
+  }
+}
+
+/**
  * Spawn a Tauri window for a single note.
  *
  * `panelGroup` and `dock` are optional context for the "pop out" flow:
@@ -58,6 +81,8 @@ export async function openNoteWindow(
   panelGroup: IDockviewGroupPanel | null,
   dock: DockviewApi | null
 ): Promise<void> {
+  if (await focusExistingNoteWindow(id)) return;
+
   // Browser fallback (`pnpm dev` outside Tauri): just open a tab with the
   // id encoded in the URL — keeps the UX clickable without Tauri.
   if (!isTauri()) {

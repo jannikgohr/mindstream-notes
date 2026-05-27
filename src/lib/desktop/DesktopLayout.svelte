@@ -25,7 +25,11 @@
   import ResizeHandle from '$lib/components/ResizeHandle.svelte';
   import SettingsDialog from '$lib/settings/SettingsDialog.svelte';
   import { PopoutHeaderAction } from './dockview-popout-action';
-  import { isKnownNoteKind, openNoteWindow } from '$lib/api';
+  import {
+    focusExistingNoteWindow,
+    isKnownNoteKind,
+    openNoteWindow
+  } from '$lib/api';
   import { clearSavedLayout, loadSavedLayout, saveLayout } from '$lib/api';
   import {
     setActiveNote,
@@ -168,7 +172,7 @@
     const restored = tryRestoreLayout();
     if (!restored) {
       const first = pickInitialNote();
-      if (first) openNote(first);
+      if (first) void openNote(first);
     }
 
     lastActiveGroup = dock.activeGroup ?? lastActiveGroup;
@@ -242,7 +246,7 @@
     referenceNoteId?: string;
   }
 
-  export function openNote(id: string, opts: OpenNoteOptions = {}) {
+  export async function openNote(id: string, opts: OpenNoteOptions = {}) {
     if (!dock) return;
     const note = tree.notesById[id];
     if (!note) return;
@@ -251,6 +255,13 @@
     const existing = openPanels.get(id);
     if (existing) {
       existing.api.setActive();
+      return;
+    }
+
+    if (await focusExistingNoteWindow(id)) return;
+    const openedWhileChecking = openPanels.get(id);
+    if (openedWhileChecking) {
+      openedWhileChecking.api.setActive();
       return;
     }
 
@@ -437,7 +448,9 @@
     // dispatch through the open-note bus rather than prop-drilling up
     // here. Unsubscribed on unmount so a stale handler from a
     // re-mounted layout doesn't double-open a note.
-    const unsub = subscribeOpenNoteRequest((id) => openNote(id));
+    const unsub = subscribeOpenNoteRequest((id) => {
+      void openNote(id);
+    });
 
     // Cleanup the dv-tab-dragging body class on every drag termination:
     //   - `dragend` fires on the source element after a successful drop
@@ -515,11 +528,13 @@
   });
 
   // Adapter functions handed to FileExplorer.
-  const onOpenNote = (id: string) => openNote(id);
+  const onOpenNote = (id: string) => {
+    void openNote(id);
+  };
   const onOpenNoteRight = (id: string) =>
-    openNote(id, { splitDirection: 'right' });
+    void openNote(id, { splitDirection: 'right' });
   const onOpenNoteBelow = (id: string) =>
-    openNote(id, { splitDirection: 'below' });
+    void openNote(id, { splitDirection: 'below' });
   const onOpenInNewWindow = (id: string) => {
     const note = tree.notesById[id];
     if (!note) return;
