@@ -9,10 +9,11 @@
 //! This file owns three pieces:
 //!   - `PageSize`        — width/height in page-units, with named
 //!                         constants for common paper sizes.
-//!   - `ViewTransform`   — runtime mapping from page → surface
-//!                         pixels. Currently always built via
-//!                         `fit_in_surface` (scope #1 of C0); D6
-//!                         adds user-driven pan/zoom on top.
+//!   - `DocumentLayout`  — uniform pages stacked vertically in
+//!                         document coordinates.
+//!   - `ViewTransform`   — runtime mapping from document → surface
+//!                         pixels. Initially fitted to page 0, then
+//!                         mutated by D6 pan/zoom gestures.
 //!   - `ViewUniform`     — std140-laid-out GPU uniform that mirrors
 //!                         the shader struct in `line.wgsl`.
 //!
@@ -64,6 +65,105 @@ impl PageSize {
 /// Becomes per-note in C1, then user-configurable in F6.
 pub const DEFAULT_PAGE: PageSize = PageSize::A4_PORTRAIT;
 
+/// Gap between vertically-stacked pages, in document units. At the
+/// default 144 units/inch this is roughly 0.5", enough to read as a
+/// page break without wasting too much scroll distance.
+pub const DEFAULT_PAGE_GAP: f32 = 72.0;
+
+/// Minimum number of pages kept reachable in an ink note. Keeping a
+/// trailing blank page available means the first D7 slice can support
+/// vertical paged drawing without separate "add page" UI.
+pub const MIN_PAGE_COUNT: u32 = 2;
+
+/// Uniform fixed-size pages arranged top-to-bottom in one continuous
+/// document coordinate space. Page 0 starts at y=0; page 1 starts at
+/// `page.height + page_gap`; and so on.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct DocumentLayout {
+    pub page: PageSize,
+    pub page_count: u32,
+    pub page_gap: f32,
+}
+
+impl DocumentLayout {
+    pub fn new(page: PageSize, page_count: u32, page_gap: f32) -> Self {
+        Self {
+            page,
+            page_count: page_count.max(1),
+            page_gap: page_gap.max(0.0),
+        }
+    }
+
+    pub fn default_pages(page_count: u32) -> Self {
+        Self::new(
+            DEFAULT_PAGE,
+            page_count.max(MIN_PAGE_COUNT),
+            DEFAULT_PAGE_GAP,
+        )
+    }
+
+    pub fn stride_y(&self) -> f32 {
+        self.page.height + self.page_gap
+    }
+
+    pub fn document_width(&self) -> f32 {
+        self.page.width
+    }
+
+    pub fn document_height(&self) -> f32 {
+        let pages = self.page_count.max(1) as f32;
+        self.page.height * pages + self.page_gap * (pages - 1.0)
+    }
+
+    pub fn page_top(&self, index: u32) -> f32 {
+        index as f32 * self.stride_y()
+    }
+
+    pub fn page_rect(&self, index: u32) -> Option<[f32; 4]> {
+        if index >= self.page_count {
+            return None;
+        }
+        let top = self.page_top(index);
+        Some([0.0, top, self.page.width, top + self.page.height])
+    }
+
+    /// Return the page containing `point`, or `None` when the point
+    /// is outside the document or inside a page gap.
+    pub fn page_index_at(&self, x: f32, y: f32) -> Option<u32> {
+        if x < 0.0 || x > self.page.width || y < 0.0 || y > self.document_height() {
+            return None;
+        }
+        let stride = self.stride_y();
+        if stride <= 0.0 {
+            return None;
+        }
+        let index = (y / stride).floor() as u32;
+        if index >= self.page_count {
+            return None;
+        }
+        let local_y = y - self.page_top(index);
+        if local_y <= self.page.height {
+            Some(index)
+        } else {
+            None
+        }
+    }
+
+    pub fn contains_page_point(&self, x: f32, y: f32) -> bool {
+        self.page_index_at(x, y).is_some()
+    }
+
+    pub fn page_count_for_content_max_y(max_y: f32) -> u32 {
+        if !max_y.is_finite() || max_y <= 0.0 {
+            return MIN_PAGE_COUNT;
+        }
+        let layout = Self::default_pages(MIN_PAGE_COUNT);
+        let stride = layout.stride_y();
+        let content_pages = (max_y / stride).floor() as u32 + 1;
+        (content_pages + 1).max(MIN_PAGE_COUNT)
+    }
+}
+
 /// Maps between page coordinates (what we store in vertices) and
 /// surface pixels (what touches arrive in and what the surface
 /// presents).
@@ -80,7 +180,7 @@ pub const DEFAULT_PAGE: PageSize = PageSize::A4_PORTRAIT;
 /// `as_uniform` API stays the same.
 #[derive(Copy, Clone, Debug)]
 pub struct ViewTransform {
-    pub page: PageSize,
+    pub layout: DocumentLayout,
     pub surface_w: f32,
     pub surface_h: f32,
     /// 1 page-unit = `scale` surface pixels.
@@ -92,26 +192,114 @@ pub struct ViewTransform {
 
 impl ViewTransform {
     pub fn fit_in_surface(page: PageSize, surface_w: f32, surface_h: f32) -> Self {
+        Self::fit_layout_in_surface(
+            DocumentLayout::new(page, 1, DEFAULT_PAGE_GAP),
+            surface_w,
+            surface_h,
+        )
+    }
+
+    pub fn fit_layout_in_surface(layout: DocumentLayout, surface_w: f32, surface_h: f32) -> Self {
         let sw = surface_w.max(1.0);
         let sh = surface_h.max(1.0);
-        let scale = (sw / page.width).min(sh / page.height);
-        let page_screen_w = page.width * scale;
-        let page_screen_h = page.height * scale;
-        Self {
-            page,
+        // Fit the first page, not the whole document. Multi-page
+        // documents should open at readable page size with vertical
+        // scrolling, not shrink until every page fits at once.
+        let scale = (sw / layout.page.width).min(sh / layout.page.height);
+        let page_screen_w = layout.page.width * scale;
+        let page_screen_h = layout.page.height * scale;
+        let mut view = Self {
+            layout,
             surface_w: sw,
             surface_h: sh,
             scale,
             pan_x: (sw - page_screen_w) * 0.5,
             pan_y: (sh - page_screen_h) * 0.5,
+        };
+        view.clamp_to_document();
+        view
+    }
+
+    pub fn set_surface_size(&mut self, surface_w: f32, surface_h: f32) {
+        let old_sw = self.surface_w.max(1.0);
+        let old_sh = self.surface_h.max(1.0);
+        let focus_x = old_sw * 0.5;
+        let focus_y = old_sh * 0.5;
+        let doc_at_focus = self.surface_to_page(focus_x, focus_y);
+        self.surface_w = surface_w.max(1.0);
+        self.surface_h = surface_h.max(1.0);
+        self.pan_x = self.surface_w * 0.5 - doc_at_focus[0] * self.scale;
+        self.pan_y = self.surface_h * 0.5 - doc_at_focus[1] * self.scale;
+        self.clamp_to_document();
+    }
+
+    pub fn set_layout(&mut self, layout: DocumentLayout) {
+        self.layout = layout;
+        self.clamp_to_document();
+    }
+
+    pub fn pan_by(&mut self, dx: f32, dy: f32) {
+        self.pan_x += dx;
+        self.pan_y += dy;
+        self.clamp_to_document();
+    }
+
+    pub fn zoom_around(&mut self, focus_x: f32, focus_y: f32, scale_delta: f32) {
+        if !scale_delta.is_finite() || scale_delta <= 0.0 {
+            return;
         }
+        let before = self.surface_to_page(focus_x, focus_y);
+        let min_scale = self.min_scale();
+        let max_scale = min_scale * 6.0;
+        self.scale = (self.scale * scale_delta).clamp(min_scale, max_scale);
+        self.pan_x = focus_x - before[0] * self.scale;
+        self.pan_y = focus_y - before[1] * self.scale;
+        self.clamp_to_document();
+    }
+
+    pub fn apply_gesture(
+        &mut self,
+        focus_x: f32,
+        focus_y: f32,
+        pan_dx: f32,
+        pan_dy: f32,
+        scale_delta: f32,
+    ) {
+        if scale_delta.is_finite() && (scale_delta - 1.0).abs() > f32::EPSILON {
+            self.zoom_around(focus_x, focus_y, scale_delta);
+        }
+        self.pan_by(pan_dx, pan_dy);
+    }
+
+    fn min_scale(&self) -> f32 {
+        (self.surface_w / self.layout.page.width).min(self.surface_h / self.layout.page.height)
+    }
+
+    pub fn clamp_to_document(&mut self) {
+        self.scale = self.scale.max(self.min_scale());
+        let doc_w = self.layout.document_width() * self.scale;
+        let doc_h = self.layout.document_height() * self.scale;
+        let page_w = self.layout.page.width * self.scale;
+        let page_h = self.layout.page.height * self.scale;
+        let max_x = ((self.surface_w - page_w) * 0.5).max(0.0);
+        let max_y = ((self.surface_h - page_h) * 0.5).max(0.0);
+        self.pan_x = clamp_axis(self.pan_x, self.surface_w, doc_w, max_x);
+        self.pan_y = clamp_axis(self.pan_y, self.surface_h, doc_h, max_y);
     }
 
     /// Inverse of the GPU transform — convert a surface-pixel touch
     /// coordinate into the page-coordinate value we'll store in the
     /// vertex buffer.
     pub fn surface_to_page(&self, sx: f32, sy: f32) -> [f32; 2] {
-        [(sx - self.pan_x) / self.scale, (sy - self.pan_y) / self.scale]
+        [
+            (sx - self.pan_x) / self.scale,
+            (sy - self.pan_y) / self.scale,
+        ]
+    }
+
+    pub fn surface_to_page_if_inside_page(&self, sx: f32, sy: f32) -> Option<[f32; 2]> {
+        let [px, py] = self.surface_to_page(sx, sy);
+        self.layout.contains_page_point(px, py).then_some([px, py])
     }
 
     /// Pack into the std140-laid-out uniform the shader reads.
@@ -125,6 +313,16 @@ impl ViewTransform {
             pan: [self.pan_x, self.pan_y],
             surface_dims: [self.surface_w, self.surface_h],
         }
+    }
+}
+
+fn clamp_axis(pan: f32, surface: f32, content: f32, leading_margin: f32) -> f32 {
+    if content <= surface {
+        (surface - content) * 0.5
+    } else {
+        let max_pan = leading_margin;
+        let min_pan = surface - content - leading_margin;
+        pan.clamp(min_pan, max_pan)
     }
 }
 
@@ -421,7 +619,7 @@ mod tests {
         // Returns distance from p to that point.
         let d_sq = point_to_segment_distance_sq((3.0, 4.0), (0.0, 0.0), (0.0, 0.0));
         approx(d_sq, 25.0); // sqrt(3² + 4²)² = 25
-        // Sanity: a point ON the degenerate point.
+                            // Sanity: a point ON the degenerate point.
         let d_sq = point_to_segment_distance_sq((0.0, 0.0), (0.0, 0.0), (0.0, 0.0));
         approx(d_sq, 0.0);
     }
@@ -517,10 +715,49 @@ mod tests {
         approx(px, 0.0);
         approx(py, 0.0);
         // A point at the page's bottom-right corner in surface space:
-        let br_x = vt.pan_x + vt.page.width * vt.scale;
-        let br_y = vt.pan_y + vt.page.height * vt.scale;
+        let br_x = vt.pan_x + vt.layout.page.width * vt.scale;
+        let br_y = vt.pan_y + vt.layout.page.height * vt.scale;
         let [px, py] = vt.surface_to_page(br_x, br_y);
-        approx(px, vt.page.width);
-        approx(py, vt.page.height);
+        approx(px, vt.layout.page.width);
+        approx(py, vt.layout.page.height);
+    }
+
+    #[test]
+    fn document_layout_detects_pages_and_gaps() {
+        let layout = DocumentLayout::new(PageSize::A4_PORTRAIT, 3, 72.0);
+        assert_eq!(layout.page_index_at(10.0, 10.0), Some(0));
+        assert_eq!(
+            layout.page_index_at(10.0, PageSize::A4_PORTRAIT.height + 10.0),
+            None
+        );
+        assert_eq!(
+            layout.page_index_at(10.0, PageSize::A4_PORTRAIT.height + 80.0),
+            Some(1)
+        );
+        assert_eq!(layout.page_index_at(-1.0, 10.0), None);
+    }
+
+    #[test]
+    fn zoom_around_keeps_focus_document_point_stable() {
+        let layout = DocumentLayout::default_pages(3);
+        let mut vt = ViewTransform::fit_layout_in_surface(layout, 1080.0, 2400.0);
+        let before = vt.surface_to_page(540.0, 900.0);
+        vt.zoom_around(540.0, 900.0, 2.0);
+        let after = vt.surface_to_page(540.0, 900.0);
+        approx(before[0], after[0]);
+        approx(before[1], after[1]);
+    }
+
+    #[test]
+    fn pan_clamps_against_vertical_document_bounds() {
+        let layout = DocumentLayout::default_pages(4);
+        let mut vt = ViewTransform::fit_layout_in_surface(layout, 1080.0, 2400.0);
+        vt.pan_by(0.0, 100_000.0);
+        let top_pan = vt.pan_y;
+        vt.pan_by(0.0, -100_000.0);
+        assert!(vt.pan_y < top_pan);
+        let doc_bottom = vt.pan_y + layout.document_height() * vt.scale;
+        let trailing_margin = ((vt.surface_h - layout.page.height * vt.scale) * 0.5).max(0.0);
+        approx(doc_bottom, vt.surface_h - trailing_margin);
     }
 }

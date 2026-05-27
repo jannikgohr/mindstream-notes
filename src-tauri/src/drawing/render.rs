@@ -34,7 +34,7 @@ use tauri::{AppHandle, Emitter};
 
 use super::input::{Sample, SampleAction, ToolKind};
 use super::page::{
-    point_to_segment_distance_sq, segment_quad_positions, stroke_polyline_positions,
+    point_to_segment_distance_sq, segment_quad_positions, stroke_polyline_positions, DocumentLayout,
 };
 use super::pipeline::{self, PersistentGpu, SurfaceBoundState, Vertex};
 use super::stroke_modeler::{InkSmoother, SmoothedSample};
@@ -64,6 +64,12 @@ fn pack_color_bytes(color: u32) -> [u8; 4] {
     let b = (color & 0xFF) as u8;
     [r, g, b, a]
 }
+
+const PAGE_FILL_COLOR: u32 = 0xFFFF_FFFF;
+const PAGE_BORDER_COLOR: u32 = 0xFFE5_E7EB;
+const PAGE_SHADOW_COLOR: u32 = 0x2200_0000;
+const PAGE_BORDER_WIDTH: f32 = 2.0;
+const PAGE_SHADOW_OFFSET: f32 = 5.0;
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -254,6 +260,65 @@ fn append_tessellated_stroke(
             .into_iter()
             .map(|position| Vertex { position, color }),
     );
+}
+
+fn append_rect(out: &mut Vec<Vertex>, rect: [f32; 4], color: [u8; 4]) {
+    let [x0, y0, x1, y1] = rect;
+    out.extend_from_slice(&[
+        Vertex {
+            position: [x0, y0],
+            color,
+        },
+        Vertex {
+            position: [x1, y0],
+            color,
+        },
+        Vertex {
+            position: [x0, y1],
+            color,
+        },
+        Vertex {
+            position: [x1, y0],
+            color,
+        },
+        Vertex {
+            position: [x1, y1],
+            color,
+        },
+        Vertex {
+            position: [x0, y1],
+            color,
+        },
+    ]);
+}
+
+fn append_page_backdrop(out: &mut Vec<Vertex>, layout: DocumentLayout) {
+    out.clear();
+    let fill = pack_color_bytes(PAGE_FILL_COLOR);
+    let border = pack_color_bytes(PAGE_BORDER_COLOR);
+    let shadow = pack_color_bytes(PAGE_SHADOW_COLOR);
+    for page_index in 0..layout.page_count {
+        let Some([x0, y0, x1, y1]) = layout.page_rect(page_index) else {
+            continue;
+        };
+        append_rect(
+            out,
+            [
+                x0 + PAGE_SHADOW_OFFSET,
+                y0 + PAGE_SHADOW_OFFSET,
+                x1 + PAGE_SHADOW_OFFSET,
+                y1 + PAGE_SHADOW_OFFSET,
+            ],
+            shadow,
+        );
+        append_rect(out, [x0, y0, x1, y1], fill);
+
+        let b = PAGE_BORDER_WIDTH;
+        append_rect(out, [x0 - b, y0 - b, x1 + b, y0], border);
+        append_rect(out, [x0 - b, y1, x1 + b, y1 + b], border);
+        append_rect(out, [x0 - b, y0, x0, y1], border);
+        append_rect(out, [x1, y0, x1 + b, y1], border);
+    }
 }
 
 fn retessellate_in_flight_stroke(
@@ -453,6 +518,13 @@ enum Msg {
     Resize {
         width: u32,
         height: u32,
+    },
+    ViewGesture {
+        focus_x: f32,
+        focus_y: f32,
+        pan_dx: f32,
+        pan_dy: f32,
+        scale_delta: f32,
     },
     /// `surfaceDestroyed` fired. The optional reply slot is what
     /// makes `clear_surface()` block until the render thread acks
@@ -834,6 +906,15 @@ impl CanvasDocument {
         );
     }
 
+    fn page_count(&self) -> u32 {
+        let max_y = self
+            .visible_strokes
+            .iter()
+            .map(|meta| meta.bbox_max.1)
+            .fold(0.0_f32, f32::max);
+        DocumentLayout::page_count_for_content_max_y(max_y)
+    }
+
     fn from_bytes(bytes: &[u8]) -> Self {
         // Timing — scales with stroke count, so heavy notes might
         // measurably stall the first frame after open. Logging
@@ -937,7 +1018,10 @@ fn erase_at(
     let doc = documents
         .entry(id.clone())
         .or_insert_with(CanvasDocument::new);
-    let [px, py] = s.surface_to_page(sample_surface.0, sample_surface.1);
+    let Some([px, py]) = s.surface_to_page_if_inside_page(sample_surface.0, sample_surface.1)
+    else {
+        return;
+    };
 
     // Per-sample work, post-batching:
     //   hit_test: bbox-reject + fine point-to-segment check against
@@ -1067,6 +1151,16 @@ pub fn set_surface(window: Box<dyn SurfaceSource>, width: u32, height: u32) {
 
 pub fn resize_surface(width: u32, height: u32) {
     send(Msg::Resize { width, height });
+}
+
+pub fn push_view_gesture(focus_x: f32, focus_y: f32, pan_dx: f32, pan_dy: f32, scale_delta: f32) {
+    send(Msg::ViewGesture {
+        focus_x,
+        focus_y,
+        pan_dx,
+        pan_dy,
+        scale_delta,
+    });
 }
 
 /// Synchronously drop the wgpu surface — blocks the JNI caller
@@ -1236,6 +1330,17 @@ fn active_segments<'a>(
         .unwrap_or(&[])
 }
 
+fn active_page_count(
+    active_id: &Option<String>,
+    documents: &HashMap<String, CanvasDocument>,
+) -> u32 {
+    active_id
+        .as_ref()
+        .and_then(|id| documents.get(id))
+        .map(CanvasDocument::page_count)
+        .unwrap_or_else(|| DocumentLayout::page_count_for_content_max_y(0.0))
+}
+
 /// Snapshot the bits the egui toolbar needs to render correctly:
 /// the active tool (for the selected-button highlight) and whether
 /// the undo / redo stacks have anything to pop (for the
@@ -1362,6 +1467,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
     // win. See [`build_prediction_segments`] — the helper survives
     // for if/when we wire it back up against a different anchor.
     let mut raw_head_segments: Vec<Vertex> = Vec::new();
+    let mut page_backdrop_segments: Vec<Vertex> = Vec::new();
     // Page-coord position + pressure of the most recent raw input
     // sample, captured at JNI ingest. Drives the raw-head endpoint.
     // `None` between strokes (cleared on Pen UP / state-clear sites)
@@ -1417,6 +1523,10 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
     // retessellated as a whole so neighbouring samples can smooth
     // each other's outline normals without moving the centreline.
     let mut current_stroke_segment_start: Option<usize> = None;
+    // Page index the current pen stroke began on. MOVE/UP samples
+    // outside that page are ignored so a drag across the inter-page
+    // gap cannot draw a bridge between sheets.
+    let mut current_stroke_page: Option<u32> = None;
     // D5 user-picked pen colour and base width. Persist between
     // strokes so the toolbar's selection survives multiple drags
     // (and the toolbar reads them via UiState to render the active
@@ -1624,6 +1734,20 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             "[drawing] Msg::Resize w={width} h={height} (was {prev_w}x{prev_h})"
                         );
                         s.resize(p, width, height);
+                        push_live_ink_style(Some(&*s), picked_color, picked_width);
+                        dirty = true;
+                    }
+                }
+                Msg::ViewGesture {
+                    focus_x,
+                    focus_y,
+                    pan_dx,
+                    pan_dy,
+                    scale_delta,
+                } => {
+                    if let (Some(p), Some(s)) = (persistent.as_ref(), surface_state.as_mut()) {
+                        s.apply_view_gesture(p, focus_x, focus_y, pan_dx, pan_dy, scale_delta);
+                        push_live_ink_style(Some(&*s), picked_color, picked_width);
                         dirty = true;
                     }
                 }
@@ -1686,6 +1810,10 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                     if matches!(action, SampleAction::Down) {
                         stroke_suppressed = !tool_can_draw(tool, finger_drawing_allowed)
                             || y < ui::toolbar::TOOLBAR_HEIGHT_PX
+                            || surface_state
+                                .as_ref()
+                                .map(|s| !s.contains_surface_point_in_page(x, y))
+                                .unwrap_or(false)
                             || {
                                 active_control_bounds
                                     .iter()
@@ -1744,10 +1872,15 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             pen_in_flight_pressures.clear();
                             pen_tess_cursor = None;
                             current_stroke_segment_start = None;
+                            current_stroke_page = None;
                             push_live_ink_style(surface_state.as_ref(), packed, width);
                             if let (Some(id), Some(s)) =
                                 (active_note_id.as_ref(), surface_state.as_ref())
                             {
+                                let Some(page_index) = s.page_index_at_surface_point(x, y) else {
+                                    continue;
+                                };
+                                current_stroke_page = Some(page_index);
                                 let [px, py] = s.surface_to_page(x, y);
                                 // Seed the raw-head endpoint with the
                                 // down position. At this moment the
@@ -1815,6 +1948,9 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                 surface_state.as_ref(),
                                 active_note_id.as_ref(),
                             ) {
+                                if s.page_index_at_surface_point(x, y) != current_stroke_page {
+                                    continue;
+                                }
                                 let [px, py] = s.surface_to_page(x, y);
                                 // Track the freshest raw input
                                 // position for the raw-head zone.
@@ -1912,14 +2048,20 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                     current_stroke_width,
                                     active_note_id.as_ref(),
                                 ) {
-                                    let [px, py] = s.surface_to_page(x, y);
-                                    let drained = if SMOOTHING_ENABLED {
-                                        ink_smoother.end_stroke((px, py), time, pressure)
+                                    let drained = if s.page_index_at_surface_point(x, y)
+                                        == current_stroke_page
+                                    {
+                                        let [px, py] = s.surface_to_page(x, y);
+                                        if SMOOTHING_ENABLED {
+                                            ink_smoother.end_stroke((px, py), time, pressure)
+                                        } else {
+                                            vec![SmoothedSample {
+                                                pos: (px, py),
+                                                pressure,
+                                            }]
+                                        }
                                     } else {
-                                        vec![SmoothedSample {
-                                            pos: (px, py),
-                                            pressure,
-                                        }]
+                                        Vec::new()
                                     };
                                     if !drained.is_empty() {
                                         let doc = documents
@@ -1936,7 +2078,6 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                             pen_in_flight_points.push(out.pos.0);
                                             pen_in_flight_points.push(out.pos.1);
                                             pen_in_flight_pressures.push(out.pressure);
-                                            pen_tess_cursor = Some(out);
                                         }
                                         retessellate_in_flight_stroke(
                                             doc,
@@ -1995,6 +2136,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             pen_in_flight_pressures.clear();
                             pen_tess_cursor = None;
                             current_stroke_segment_start = None;
+                            current_stroke_page = None;
                             // The smoother's end_stroke drain
                             // committed the lift-position into the
                             // doc; the raw head zone is now redundant
@@ -2016,25 +2158,25 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             eraser_drag_seen.clear();
                             eraser_drag_start = Some(std::time::Instant::now());
                             eraser_drag_samples = 1; // count this DOWN sample
-                            // Suppress the front-buffer overlay for
-                            // the duration of the drag — the eraser
-                            // tombstones strokes, it shouldn't paint
-                            // a visible drag trail. Transparent style
-                            // is a no-op SRC_OVER in Canvas, so the
-                            // overlay still consumes samples and
-                            // cancels normally on UP, just produces
-                            // nothing visible. (Previously this path
-                            // pushed a red `ERASER_TIP_COLOR` debug
-                            // colour and you saw a red line where the
-                            // pen tip went — confusing while erasing
-                            // via the barrel-button override.)
-                            // Width passed here is irrelevant — the
-                            // hidden colour makes the overlay invisible
-                            // regardless. Pass `picked_width` so the
-                            // overlay's geometry computation doesn't
-                            // accidentally clamp to a stale value if a
-                            // future change makes the colour visible
-                            // again.
+                                                     // Suppress the front-buffer overlay for
+                                                     // the duration of the drag — the eraser
+                                                     // tombstones strokes, it shouldn't paint
+                                                     // a visible drag trail. Transparent style
+                                                     // is a no-op SRC_OVER in Canvas, so the
+                                                     // overlay still consumes samples and
+                                                     // cancels normally on UP, just produces
+                                                     // nothing visible. (Previously this path
+                                                     // pushed a red `ERASER_TIP_COLOR` debug
+                                                     // colour and you saw a red line where the
+                                                     // pen tip went — confusing while erasing
+                                                     // via the barrel-button override.)
+                                                     // Width passed here is irrelevant — the
+                                                     // hidden colour makes the overlay invisible
+                                                     // regardless. Pass `picked_width` so the
+                                                     // overlay's geometry computation doesn't
+                                                     // accidentally clamp to a stale value if a
+                                                     // future change makes the colour visible
+                                                     // again.
                             push_live_ink_style(
                                 surface_state.as_ref(),
                                 LIVE_INK_OVERLAY_HIDDEN,
@@ -2170,6 +2312,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                     pen_in_flight_pressures.clear();
                     pen_tess_cursor = None;
                     current_stroke_segment_start = None;
+                    current_stroke_page = None;
                     latest_raw_input = None;
                     latest_prediction = None;
                     ink_smoother.reset();
@@ -2214,6 +2357,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                     pen_in_flight_pressures.clear();
                     pen_tess_cursor = None;
                     current_stroke_segment_start = None;
+                    current_stroke_page = None;
                     latest_raw_input = None;
                     latest_prediction = None;
                     ink_smoother.reset();
@@ -2397,6 +2541,11 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                 current_stroke_width,
                                 active_note_id.as_ref(),
                             ) {
+                                if s.page_index_at_surface_point(sample.x, sample.y)
+                                    != current_stroke_page
+                                {
+                                    continue;
+                                }
                                 let [px, py] = s.surface_to_page(sample.x, sample.y);
                                 latest_raw_input = Some(SmoothedSample {
                                     pos: (px, py),
@@ -2445,6 +2594,9 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                     }
                 }
 
+                let page_count = active_page_count(&active_note_id, &documents);
+                s.set_document_page_count(p, page_count);
+                append_page_backdrop(&mut page_backdrop_segments, s.layout());
                 let segs = active_segments(&active_note_id, &documents);
                 let segs_len = segs.len();
                 // Refresh the two-zone raw head before submitting
@@ -2519,6 +2671,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                     p,
                     s,
                     acquired,
+                    &page_backdrop_segments,
                     segs,
                     &raw_head_segments,
                     &prediction_segments,
@@ -2638,6 +2791,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             pen_in_flight_pressures.clear();
                             pen_tess_cursor = None;
                             current_stroke_segment_start = None;
+                            current_stroke_page = None;
                             latest_raw_input = None;
                             latest_prediction = None;
                             ink_smoother.reset();
@@ -2729,6 +2883,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             pen_in_flight_pressures.clear();
                             pen_tess_cursor = None;
                             current_stroke_segment_start = None;
+                            current_stroke_page = None;
                             latest_raw_input = None;
                             latest_prediction = None;
                             ink_smoother.reset();
@@ -2743,6 +2898,9 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             // mutation state. New UiState so the
                             // toolbar reflects e.g. an empty undo
                             // stack after we popped its last entry.
+                            let fresh_page_count = active_page_count(&active_note_id, &documents);
+                            s.set_document_page_count(p, fresh_page_count);
+                            append_page_backdrop(&mut page_backdrop_segments, s.layout());
                             let fresh_segs = active_segments(&active_note_id, &documents);
                             // Re-tessellate the raw head for the
                             // follow-up frame too: toolbar actions
@@ -2806,6 +2964,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             let _ = pipeline::render_frame(
                                 p,
                                 s,
+                                &page_backdrop_segments,
                                 fresh_segs,
                                 &raw_head_segments,
                                 &prediction_segments,

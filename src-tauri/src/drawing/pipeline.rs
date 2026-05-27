@@ -29,7 +29,7 @@ use bytemuck::{Pod, Zeroable};
 // even when dispatched dynamically).
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
-use super::page::{self, PageSize, ViewTransform};
+use super::page::{DocumentLayout, ViewTransform};
 use super::surface_source::SurfaceSource;
 use super::ui::UiOutput;
 
@@ -100,6 +100,8 @@ pub struct SurfaceBoundState {
     config: wgpu::SurfaceConfiguration,
     vertex_buffer: Option<wgpu::Buffer>,
     vertex_capacity: u64,
+    page_vertex_buffer: Option<wgpu::Buffer>,
+    page_vertex_capacity: u64,
     /// Number of *committed* vertices currently uploaded to the GPU
     /// vertex buffer. Drives `render_frame`'s partial-upload
     /// decision: if the new committed slice is append-only relative
@@ -115,19 +117,17 @@ pub struct SurfaceBoundState {
     last_uploaded_committed_count: u64,
     width: u32,
     height: u32,
-    /// Page-coord ↔ surface-pixel mapping. Recomputed on every
-    /// resize so rotations re-fit the page. Pan/zoom (D6) will
-    /// stop deriving this from surface size and start mutating it
-    /// directly from gesture events.
+    /// Document-coord ↔ surface-pixel mapping. Gestures mutate this
+    /// directly; resize preserves the document point under the old
+    /// viewport centre and reclamps to the vertical page stack.
     view_transform: ViewTransform,
     /// GPU mirror of `view_transform`. Re-uploaded whenever
     /// `view_transform` changes.
     view_uniform_buffer: wgpu::Buffer,
     /// Binds `view_uniform_buffer` to group 0 of the line pipeline.
     view_bind_group: wgpu::BindGroup,
-    /// Page size used for the current surface (per the page module's
-    /// default). C1 makes this per-note.
-    page: PageSize,
+    /// Uniform vertical page layout used for the current document.
+    layout: DocumentLayout,
 }
 
 pub struct AcquiredFrame {
@@ -147,10 +147,10 @@ impl SurfaceBoundState {
         self.config.width = width;
         self.config.height = height;
         self.surface.configure(&persistent.device, &self.config);
-        // Re-fit the page to the new surface size and push the
-        // updated uniform to the GPU so the next render uses the
-        // correct mapping.
-        self.view_transform = ViewTransform::fit_in_surface(self.page, width as f32, height as f32);
+        // Preserve the document point under the viewport centre
+        // across rotations/resizes, then push the updated uniform.
+        self.view_transform
+            .set_surface_size(width as f32, height as f32);
         persistent.queue.write_buffer(
             &self.view_uniform_buffer,
             0,
@@ -165,6 +165,21 @@ impl SurfaceBoundState {
         self.view_transform.surface_to_page(x, y)
     }
 
+    /// Convert a surface-pixel coordinate to document coordinates
+    /// only if it lands inside one of the uniform page rectangles.
+    pub fn surface_to_page_if_inside_page(&self, x: f32, y: f32) -> Option<[f32; 2]> {
+        self.view_transform.surface_to_page_if_inside_page(x, y)
+    }
+
+    pub fn contains_surface_point_in_page(&self, x: f32, y: f32) -> bool {
+        self.surface_to_page_if_inside_page(x, y).is_some()
+    }
+
+    pub fn page_index_at_surface_point(&self, x: f32, y: f32) -> Option<u32> {
+        let [px, py] = self.view_transform.surface_to_page(x, y);
+        self.layout.page_index_at(px, py)
+    }
+
     pub fn size_px(&self) -> (u32, u32) {
         (self.width, self.height)
     }
@@ -177,6 +192,41 @@ impl SurfaceBoundState {
     /// the Kotlin front-buffer ink Canvas paints in.
     pub fn page_to_surface_scale(&self) -> f32 {
         self.view_transform.scale
+    }
+
+    pub fn layout(&self) -> DocumentLayout {
+        self.layout
+    }
+
+    pub fn set_document_page_count(&mut self, persistent: &PersistentGpu, page_count: u32) {
+        if self.layout.page_count == page_count {
+            return;
+        }
+        self.layout.page_count = page_count.max(1);
+        self.view_transform.set_layout(self.layout);
+        persistent.queue.write_buffer(
+            &self.view_uniform_buffer,
+            0,
+            bytemuck::bytes_of(&self.view_transform.as_uniform()),
+        );
+    }
+
+    pub fn apply_view_gesture(
+        &mut self,
+        persistent: &PersistentGpu,
+        focus_x: f32,
+        focus_y: f32,
+        pan_dx: f32,
+        pan_dy: f32,
+        scale_delta: f32,
+    ) {
+        self.view_transform
+            .apply_gesture(focus_x, focus_y, pan_dx, pan_dy, scale_delta);
+        persistent.queue.write_buffer(
+            &self.view_uniform_buffer,
+            0,
+            bytemuck::bytes_of(&self.view_transform.as_uniform()),
+        );
     }
 
     /// Force the next frame to upload the whole committed stroke
@@ -479,9 +529,9 @@ pub async fn build_surface_bound(
         t_configure,
     );
 
-    let page = page::DEFAULT_PAGE;
+    let layout = DocumentLayout::default_pages(DocumentLayout::page_count_for_content_max_y(0.0));
     let view_transform =
-        ViewTransform::fit_in_surface(page, width.max(1) as f32, height.max(1) as f32);
+        ViewTransform::fit_layout_in_surface(layout, width.max(1) as f32, height.max(1) as f32);
     let view_uniform_buffer = create_view_uniform_buffer(&persistent.device, &view_transform);
     let view_bind_group = create_view_bind_group(
         &persistent.device,
@@ -495,13 +545,15 @@ pub async fn build_surface_bound(
         config,
         vertex_buffer: None,
         vertex_capacity: 0,
+        page_vertex_buffer: None,
+        page_vertex_capacity: 0,
         last_uploaded_committed_count: 0,
         width,
         height,
         view_transform,
         view_uniform_buffer,
         view_bind_group,
-        page,
+        layout,
     })
 }
 
@@ -608,6 +660,7 @@ fn pick_present_mode(modes: &[wgpu::PresentMode]) -> wgpu::PresentMode {
 pub fn render_frame(
     persistent: &mut PersistentGpu,
     surface_state: &mut SurfaceBoundState,
+    page_backdrop: &[Vertex],
     committed: &[Vertex],
     raw_head: &[Vertex],
     prediction: &[Vertex],
@@ -618,6 +671,7 @@ pub fn render_frame(
         persistent,
         surface_state,
         acquired,
+        page_backdrop,
         committed,
         raw_head,
         prediction,
@@ -659,6 +713,7 @@ pub fn render_acquired_frame(
     persistent: &mut PersistentGpu,
     surface_state: &mut SurfaceBoundState,
     acquired: AcquiredFrame,
+    page_backdrop: &[Vertex],
     committed: &[Vertex],
     raw_head: &[Vertex],
     prediction: &[Vertex],
@@ -668,28 +723,55 @@ pub fn render_acquired_frame(
     // atlas ships this way. Free on the same frame is OK because
     // the GPU work hasn't been submitted yet.
     for (id, image_delta) in &ui_output.textures_delta.set {
-        persistent
-            .egui_renderer
-            .update_texture(&persistent.device, &persistent.queue, *id, image_delta);
+        persistent.egui_renderer.update_texture(
+            &persistent.device,
+            &persistent.queue,
+            *id,
+            image_delta,
+        );
     }
     for id in &ui_output.textures_delta.free {
         persistent.egui_renderer.free_texture(id);
     }
 
+    // Page backdrop vertex buffer — tiny and regenerated whenever
+    // the vertical document layout changes, so rewrite it whole.
+    let vertex_size = std::mem::size_of::<Vertex>() as u64;
+    let page_needed = (page_backdrop.len() as u64) * vertex_size;
+    if page_needed > surface_state.page_vertex_capacity {
+        let new_capacity = page_needed
+            .max(surface_state.page_vertex_capacity * 3 / 2)
+            .max(1024);
+        surface_state.page_vertex_buffer =
+            Some(persistent.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("drawing-page-vbuf"),
+                size: new_capacity,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+        surface_state.page_vertex_capacity = new_capacity;
+    }
+    if !page_backdrop.is_empty() {
+        let vbuf = surface_state.page_vertex_buffer.as_ref().unwrap();
+        persistent
+            .queue
+            .write_buffer(vbuf, 0, bytemuck::cast_slice(page_backdrop));
+    }
+
     // Stroke vertex buffer — grow geometrically. On grow we
     // allocate a fresh buffer; the GPU's old contents are gone, so
     // the next upload must rewrite from offset 0.
-    let vertex_size = std::mem::size_of::<Vertex>() as u64;
     let total_vertices = committed.len() + raw_head.len() + prediction.len();
     let needed = (total_vertices as u64) * vertex_size;
     if needed > surface_state.vertex_capacity {
         let new_capacity = needed.max(surface_state.vertex_capacity * 3 / 2).max(1024);
-        surface_state.vertex_buffer = Some(persistent.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("drawing-vbuf"),
-            size: new_capacity,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        }));
+        surface_state.vertex_buffer =
+            Some(persistent.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("drawing-vbuf"),
+                size: new_capacity,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
         surface_state.vertex_capacity = new_capacity;
         // Reset the upload watermark — fresh buffer has no
         // committed contents.
@@ -742,8 +824,7 @@ pub fn render_acquired_frame(
     // this slice is always empty; kept here so the slot exists for
     // when we wire zone-3 forward extrapolation back up.
     if !prediction.is_empty() {
-        let pred_offset =
-            ((committed.len() + raw_head.len()) as u64) * vertex_size;
+        let pred_offset = ((committed.len() + raw_head.len()) as u64) * vertex_size;
         let vbuf = surface_state.vertex_buffer.as_ref().unwrap();
         persistent
             .queue
@@ -780,7 +861,12 @@ pub fn render_acquired_frame(
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
+                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                        r: 0.945,
+                        g: 0.949,
+                        b: 0.957,
+                        a: 1.0,
+                    }),
                     store: wgpu::StoreOp::Store,
                 },
             })],
@@ -788,6 +874,15 @@ pub fn render_acquired_frame(
             timestamp_writes: None,
             occlusion_query_set: None,
         });
+
+        if let Some(vbuf) = surface_state.page_vertex_buffer.as_ref() {
+            if !page_backdrop.is_empty() {
+                pass.set_pipeline(&persistent.pipeline);
+                pass.set_bind_group(0, &surface_state.view_bind_group, &[]);
+                pass.set_vertex_buffer(0, vbuf.slice(..));
+                pass.draw(0..page_backdrop.len() as u32, 0..1);
+            }
+        }
 
         // Strokes underneath the toolbar — egui paints its panel
         // background on top, so any stroke vertices that happen to
