@@ -758,6 +758,9 @@ private class DrawingSurfaceView(context: Context) :
     private var lastGestureFocusX = 0f
     private var lastGestureFocusY = 0f
     private var lastGestureSpan = 0f
+    private var oneFingerPanActive = false
+    private var lastOneFingerPanX = 0f
+    private var lastOneFingerPanY = 0f
 
     init {
         setZOrderOnTop(true)
@@ -900,6 +903,36 @@ private class DrawingSurfaceView(context: Context) :
         lastGestureSpan = 0f
     }
 
+    private fun shouldStartOneFingerPan(event: MotionEvent, toolType: Int): Boolean {
+        if (event.pointerCount != 1) return false
+        if (toolType != MotionEvent.TOOL_TYPE_FINGER &&
+            toolType != MotionEvent.TOOL_TYPE_UNKNOWN
+        ) {
+            return false
+        }
+        if (Drawing.canDrawWithTool(toolType)) return false
+        return !Drawing.blocksLiveInkAt(event.x, event.y)
+    }
+
+    private fun beginOneFingerPan(event: MotionEvent) {
+        oneFingerPanActive = true
+        frontBufferInk?.cancel()
+        lastOneFingerPanX = event.x
+        lastOneFingerPanY = event.y
+    }
+
+    private fun updateOneFingerPan(event: MotionEvent) {
+        val dx = event.x - lastOneFingerPanX
+        val dy = event.y - lastOneFingerPanY
+        Drawing.pushViewGesture(event.x, event.y, dx, dy, 1f)
+        lastOneFingerPanX = event.x
+        lastOneFingerPanY = event.y
+    }
+
+    private fun endOneFingerPan() {
+        oneFingerPanActive = false
+    }
+
     private fun gestureFocusX(event: MotionEvent): Float {
         var sum = 0f
         for (i in 0 until event.pointerCount) sum += event.getX(i)
@@ -946,6 +979,7 @@ private class DrawingSurfaceView(context: Context) :
         }
 
         if (action == MotionEvent.ACTION_POINTER_DOWN) {
+            oneFingerPanActive = false
             pushActualPoint(
                 event.x,
                 event.y,
@@ -959,6 +993,15 @@ private class DrawingSurfaceView(context: Context) :
             return true
         }
 
+        if (oneFingerPanActive) {
+            if (action == MotionEvent.ACTION_MOVE && event.pointerCount == 1) {
+                updateOneFingerPan(event)
+            } else {
+                endOneFingerPan()
+            }
+            return true
+        }
+
         if (viewGestureActive) {
             if (action == MotionEvent.ACTION_MOVE && event.pointerCount >= 2) {
                 updateViewGesture(event)
@@ -967,6 +1010,11 @@ private class DrawingSurfaceView(context: Context) :
             } else {
                 endViewGesture()
             }
+            return true
+        }
+
+        if (action == MotionEvent.ACTION_DOWN && shouldStartOneFingerPan(event, toolType)) {
+            beginOneFingerPan(event)
             return true
         }
 
