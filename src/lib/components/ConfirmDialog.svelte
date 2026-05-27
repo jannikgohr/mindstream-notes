@@ -34,7 +34,7 @@
 >
   <AlertDialog.Portal>
     <!--
-      z-[60] (vs the rest of the app's z-50 modals) so the confirm/alert
+      z-[400] (vs the rest of the app's z-50 modals) so the confirm/alert
       dialog is always painted above any open Dialog — including the
       Settings dialog, which would otherwise win the tie because
       bits-ui re-asserts the open Dialog's stack when a sibling portal
@@ -43,10 +43,10 @@
       they dismiss it, so it owns the topmost paint slot.
     -->
     <AlertDialog.Overlay
-      class="fixed inset-0 z-[60] bg-black/50 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
+      class="fixed inset-0 z-[400] bg-black/50 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
     />
     <AlertDialog.Content
-      class="fixed left-1/2 top-1/2 z-[60] w-[min(420px,92vw)] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-border bg-card p-5 text-card-foreground shadow-xl focus:outline-none"
+      class="fixed left-1/2 top-1/2 z-[400] w-[min(420px,92vw)] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-border bg-card p-5 text-card-foreground shadow-xl focus:outline-none"
     >
       {#if current}
         <AlertDialog.Title class="text-base font-semibold">

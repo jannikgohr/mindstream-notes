@@ -67,10 +67,10 @@
 >
   <Dialog.Portal>
     <Dialog.Overlay
-      class="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
+      class="fixed inset-0 z-350 bg-black/50 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
     />
     <Dialog.Content
-      class="fixed left-1/2 top-1/2 z-50 grid h-[80vh] w-[min(960px,92vw)] -translate-x-1/2 -translate-y-1/2 grid-rows-[auto_1fr] overflow-hidden rounded-lg border border-border bg-background text-foreground shadow-xl focus:outline-none"
+      class="fixed left-1/2 top-1/2 z-350 grid h-[80vh] w-[min(960px,92vw)] -translate-x-1/2 -translate-y-1/2 grid-rows-[auto_1fr] overflow-hidden rounded-lg border border-border bg-background text-foreground shadow-xl focus:outline-none"
     >
       <header class="flex items-center gap-3 border-b border-border bg-card px-4 py-3">
         <Dialog.Title class="text-base font-semibold">{tUi('title')}</Dialog.Title>
