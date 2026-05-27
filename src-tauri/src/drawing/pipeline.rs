@@ -71,6 +71,7 @@ impl Vertex {
 pub struct PersistentGpu {
     instance: wgpu::Instance,
     adapter: wgpu::Adapter,
+    backend: GpuBackend,
     device: wgpu::Device,
     queue: wgpu::Queue,
     /// Picked once based on the first surface's caps and pinned
@@ -84,6 +85,47 @@ pub struct PersistentGpu {
     view_bind_group_layout: wgpu::BindGroupLayout,
     pipeline: wgpu::RenderPipeline,
     egui_renderer: egui_wgpu::Renderer,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum GpuBackend {
+    Vulkan,
+    OpenGl,
+}
+
+impl GpuBackend {
+    fn backends(self) -> wgpu::Backends {
+        match self {
+            GpuBackend::Vulkan => wgpu::Backends::VULKAN,
+            GpuBackend::OpenGl => wgpu::Backends::GL,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            GpuBackend::Vulkan => "Vulkan",
+            GpuBackend::OpenGl => "OpenGL",
+        }
+    }
+}
+
+impl PersistentGpu {
+    pub fn backend(&self) -> GpuBackend {
+        self.backend
+    }
+}
+
+pub struct SurfaceBuildError {
+    pub message: String,
+    pub window: Box<dyn SurfaceSource>,
+}
+
+impl std::fmt::Debug for SurfaceBuildError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SurfaceBuildError")
+            .field("message", &self.message)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Per-surface state. Rebuilt each `SurfaceReady`, dropped each
@@ -269,14 +311,29 @@ const LAG_LOGGING_ENABLED: bool = false;
 /// before the first surface arrives — worst case = today's
 /// "blocking init on first open" behaviour.
 pub async fn build_persistent() -> Result<PersistentGpu, String> {
+    match build_persistent_with_backend(GpuBackend::Vulkan).await {
+        Ok(persistent) => Ok(persistent),
+        Err(vulkan_err) => {
+            log::warn!("[drawing] Vulkan init failed ({vulkan_err}); falling back to OpenGL");
+            build_persistent_with_backend(GpuBackend::OpenGl)
+                .await
+                .map_err(|gl_err| {
+                    format!("Vulkan init failed: {vulkan_err}; OpenGL fallback failed: {gl_err}")
+                })
+        }
+    }
+}
+
+pub async fn build_persistent_with_backend(backend: GpuBackend) -> Result<PersistentGpu, String> {
     let t_total = std::time::Instant::now();
 
     let t_phase = std::time::Instant::now();
-    // GL only — Mesa Vulkan on the emulator returns null handles
-    // that wgpu's Vulkan path then deref-crashes; GLES works
-    // everywhere we've tested.
+    log::info!(
+        "[drawing] building PersistentGpu with {} backend",
+        backend.label()
+    );
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-        backends: wgpu::Backends::GL,
+        backends: backend.backends(),
         ..Default::default()
     });
     let t_instance = t_phase.elapsed();
@@ -298,7 +355,8 @@ pub async fn build_persistent() -> Result<PersistentGpu, String> {
     let t_adapter = t_phase.elapsed();
     let info = adapter.get_info();
     log::info!(
-        "[drawing] wgpu adapter: name={} backend={:?} type={:?} driver={}",
+        "[drawing] wgpu adapter: requested={} name={} backend={:?} type={:?} driver={}",
+        backend.label(),
         info.name,
         info.backend,
         info.device_type,
@@ -322,7 +380,10 @@ pub async fn build_persistent() -> Result<PersistentGpu, String> {
     let t_device = t_phase.elapsed();
 
     let surface_format = PREWARM_SURFACE_FORMAT;
-    log::info!("[drawing] surface format (prewarm assumed): {surface_format:?}");
+    log::info!(
+        "[drawing] surface format (prewarm assumed, backend={}): {surface_format:?}",
+        backend.label()
+    );
 
     let t_phase = std::time::Instant::now();
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -396,7 +457,8 @@ pub async fn build_persistent() -> Result<PersistentGpu, String> {
     let t_egui = t_phase.elapsed();
 
     log::info!(
-        "[drawing.perf] build_persistent TOTAL={:?} instance={:?} adapter={:?} device={:?} shader={:?} pipeline={:?} egui={:?}",
+        "[drawing.perf] build_persistent backend={} TOTAL={:?} instance={:?} adapter={:?} device={:?} shader={:?} pipeline={:?} egui={:?}",
+        backend.label(),
         t_total.elapsed(),
         t_instance,
         t_adapter,
@@ -409,6 +471,7 @@ pub async fn build_persistent() -> Result<PersistentGpu, String> {
     Ok(PersistentGpu {
         instance,
         adapter,
+        backend,
         device,
         queue,
         surface_format,
@@ -432,7 +495,7 @@ pub async fn build_surface_bound(
     window: Box<dyn SurfaceSource>,
     width: u32,
     height: u32,
-) -> Result<SurfaceBoundState, String> {
+) -> Result<SurfaceBoundState, SurfaceBuildError> {
     let t_total = std::time::Instant::now();
 
     let t_phase = std::time::Instant::now();
@@ -441,14 +504,39 @@ pub async fn build_surface_bound(
     // for the surface's lifetime. The window's `Drop` runs only
     // after the wgpu surface has been torn down (drop order in
     // SurfaceBoundState is `surface` then `_window`).
-    let surface = unsafe {
+    let raw_display_handle = match window.display_handle() {
+        Ok(handle) => handle.as_raw(),
+        Err(e) => {
+            return Err(SurfaceBuildError {
+                message: format!("display_handle: {e}"),
+                window,
+            });
+        }
+    };
+    let raw_window_handle = match window.window_handle() {
+        Ok(handle) => handle.as_raw(),
+        Err(e) => {
+            return Err(SurfaceBuildError {
+                message: format!("window_handle: {e}"),
+                window,
+            });
+        }
+    };
+    let surface = match unsafe {
         persistent
             .instance
             .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
-                raw_display_handle: window.display_handle().unwrap().as_raw(),
-                raw_window_handle: window.window_handle().unwrap().as_raw(),
+                raw_display_handle,
+                raw_window_handle,
             })
-            .map_err(|e| format!("create_surface_unsafe: {e}"))?
+    } {
+        Ok(surface) => surface,
+        Err(e) => {
+            return Err(SurfaceBuildError {
+                message: format!("create_surface_unsafe: {e}"),
+                window,
+            });
+        }
     };
     let t_surface = t_phase.elapsed();
 
@@ -460,11 +548,14 @@ pub async fn build_surface_bound(
     // + pipeline were baked against the assumed format), but a
     // loud warning beats silent miscolouring.
     if !caps.formats.contains(&persistent.surface_format) {
-        log::warn!(
-            "[drawing] surface caps don't include prewarm format {:?} — available: {:?}",
-            persistent.surface_format,
-            caps.formats,
-        );
+        drop(surface);
+        return Err(SurfaceBuildError {
+            message: format!(
+                "surface caps don't include prewarm format {:?} — available: {:?}",
+                persistent.surface_format, caps.formats
+            ),
+            window,
+        });
     }
     let alpha_mode = caps
         .alpha_modes
