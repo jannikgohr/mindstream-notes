@@ -62,6 +62,7 @@ pub fn show(
 
     TopBottomPanel::top("drawing-toolbar")
         .exact_height(panel_height_pts)
+        .show_separator_line(false)
         .frame(
             Frame::default()
                 .fill(theme.background())
