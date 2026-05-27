@@ -164,29 +164,31 @@ pub fn show(
                     actions.set_finger_drawing_allowed = Some(!state.finger_drawing_allowed);
                 }
 
-                let system_pages = state.page_theme_mode == InkPageThemeMode::System;
-                let page_theme_response = shadcn_icon_button_response(
-                    ui,
-                    shadcn,
-                    if system_pages {
-                        &paint_system_page
-                    } else {
-                        &paint_light_page
-                    },
-                    if system_pages {
-                        "Ink pages follow system theme"
-                    } else {
-                        "Ink pages always light"
-                    },
-                    variant_for(system_pages),
-                    true,
-                );
-                if page_theme_response.clicked() {
-                    actions.set_page_theme_mode = Some(if system_pages {
-                        InkPageThemeMode::Light
-                    } else {
-                        InkPageThemeMode::System
-                    });
+                if theme.dark {
+                    let system_pages = state.page_theme_mode == InkPageThemeMode::System;
+                    let page_theme_response = shadcn_icon_button_response(
+                        ui,
+                        shadcn,
+                        if system_pages {
+                            &paint_system_page
+                        } else {
+                            &paint_light_page
+                        },
+                        if system_pages {
+                            "Ink pages follow system theme"
+                        } else {
+                            "Ink pages always light"
+                        },
+                        variant_for(system_pages),
+                        true,
+                    );
+                    if page_theme_response.clicked() {
+                        actions.set_page_theme_mode = Some(if system_pages {
+                            InkPageThemeMode::Light
+                        } else {
+                            InkPageThemeMode::System
+                        });
+                    }
                 }
 
                 ui.separator();
