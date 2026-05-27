@@ -45,6 +45,23 @@
   let lastActiveGroup: DockviewGroupPanel | null = null;
   const openPanels = new Map<string, IDockviewPanel>();
   let saveLayoutTimer: ReturnType<typeof setTimeout> | null = null;
+  type NotePanelComponent =
+    | 'noteEditor'
+    | 'freeformNote'
+    | 'inkNote'
+    | 'unknownNoteKind';
+
+  function componentForNoteKind(kind: string | null | undefined): NotePanelComponent {
+    if (!isKnownNoteKind(kind)) return 'unknownNoteKind';
+    switch (kind) {
+      case 'freeform':
+        return 'freeformNote';
+      case 'ink':
+        return 'inkNote';
+      case 'markdown':
+        return 'noteEditor';
+    }
+  }
 
   /**
    * Renders a Svelte component inside a dockview panel. Parameterised on
@@ -111,10 +128,10 @@
           case 'unknownNoteKind':
             return new SvelteRenderer(UnknownNoteKindError);
           default:
-            // Older saved layouts may reference panel names we no longer
-            // recognise. Defaulting to the markdown editor is safer than
-            // failing the whole dockview restore.
-            return new SvelteRenderer(NoteEditor);
+            // Unknown renderer names must not fall back to markdown. A
+            // binary/canvas note rendered in the text editor risks accidental
+            // corruption on save.
+            return new SvelteRenderer(UnknownNoteKindError);
         }
       },
       theme: { name: 'bridge', className: 'dockview-theme-bridge' },
@@ -139,7 +156,11 @@
       if (noteId) openPanels.delete(noteId);
       schedulePersist();
     });
-    dock.onDidAddPanel(() => schedulePersist());
+    dock.onDidAddPanel((panel) => {
+      const noteId = (panel.params as { noteId?: string } | undefined)?.noteId;
+      if (noteId) openPanels.set(noteId, panel);
+      schedulePersist();
+    });
     dock.onDidLayoutChange(() => schedulePersist());
 
     /*
@@ -213,12 +234,17 @@
 
   function sanitizeDockBlob(blob: unknown): unknown | null {
     try {
-      const json = blob as { panels?: Record<string, { params?: { noteId?: string } }> };
+      const json = blob as {
+        panels?: Record<string, { component?: string; params?: { noteId?: string } }>;
+      };
       const panels = json.panels ?? {};
       for (const p of Object.values(panels)) {
         const noteId = p?.params?.noteId;
         if (noteId && !(noteId in tree.notesById)) {
           return null;
+        }
+        if (noteId) {
+          p.component = componentForNoteKind(tree.notesById[noteId].note_kind);
         }
       }
       return blob;
@@ -287,21 +313,9 @@
       if (target) position = { referenceGroup: target };
     }
 
-    // Pick the dockview component by note kind. A note_kind that this
-    // app version doesn't recognise (synced from a newer-version peer)
-    // routes to the UnknownNoteKindError panel — falling through to
-    // NoteEditor would let the user "edit" a binary doc and corrupt
-    // the body on save.
-    const componentName = isKnownNoteKind(note.note_kind)
-      ? note.note_kind === 'freeform'
-        ? 'freeformNote'
-        : note.note_kind === 'ink'
-          ? 'inkNote'
-          : 'noteEditor'
-      : 'unknownNoteKind';
     const panel = dock.addPanel({
       id: `note:${id}`,
-      component: componentName,
+      component: componentForNoteKind(note.note_kind),
       title: note.title,
       params: { noteId: id },
       ...(position ? { position } : {})
