@@ -557,6 +557,19 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
         )
 
         /**
+         * Two-finger page viewport gesture. Focus and pan are in
+         * SurfaceView pixels; scaleDelta is relative to the previous
+         * gesture sample.
+         */
+        external fun pushViewGesture(
+            focusX: Float,
+            focusY: Float,
+            panDx: Float,
+            panDy: Float,
+            scaleDelta: Float
+        )
+
+        /**
          * Hands Rust a GlobalRef to the Drawing class so render-thread
          * callbacks (showFromNative/hideFromNative/backFromNative) can
          * dispatch without going through `env.find_class`, which fails
@@ -741,6 +754,11 @@ private class DrawingSurfaceView(context: Context) :
             null
         }
 
+    private var viewGestureActive = false
+    private var lastGestureFocusX = 0f
+    private var lastGestureFocusY = 0f
+    private var lastGestureSpan = 0f
+
     init {
         setZOrderOnTop(true)
         holder.setFormat(PixelFormat.OPAQUE)
@@ -855,6 +873,55 @@ private class DrawingSurfaceView(context: Context) :
         super.onDetachedFromWindow()
     }
 
+    private fun beginViewGesture(event: MotionEvent) {
+        viewGestureActive = true
+        frontBufferInk?.cancel()
+        lastGestureFocusX = gestureFocusX(event)
+        lastGestureFocusY = gestureFocusY(event)
+        lastGestureSpan = gestureSpan(event, lastGestureFocusX, lastGestureFocusY)
+    }
+
+    private fun updateViewGesture(event: MotionEvent) {
+        val focusX = gestureFocusX(event)
+        val focusY = gestureFocusY(event)
+        val span = gestureSpan(event, focusX, focusY)
+        val panDx = focusX - lastGestureFocusX
+        val panDy = focusY - lastGestureFocusY
+        val scaleDelta =
+            if (lastGestureSpan > 1f && span > 1f) span / lastGestureSpan else 1f
+        Drawing.pushViewGesture(focusX, focusY, panDx, panDy, scaleDelta)
+        lastGestureFocusX = focusX
+        lastGestureFocusY = focusY
+        lastGestureSpan = span
+    }
+
+    private fun endViewGesture() {
+        viewGestureActive = false
+        lastGestureSpan = 0f
+    }
+
+    private fun gestureFocusX(event: MotionEvent): Float {
+        var sum = 0f
+        for (i in 0 until event.pointerCount) sum += event.getX(i)
+        return sum / event.pointerCount.coerceAtLeast(1)
+    }
+
+    private fun gestureFocusY(event: MotionEvent): Float {
+        var sum = 0f
+        for (i in 0 until event.pointerCount) sum += event.getY(i)
+        return sum / event.pointerCount.coerceAtLeast(1)
+    }
+
+    private fun gestureSpan(event: MotionEvent, focusX: Float, focusY: Float): Float {
+        var sum = 0f
+        for (i in 0 until event.pointerCount) {
+            val dx = event.getX(i) - focusX
+            val dy = event.getY(i) - focusY
+            sum += kotlin.math.sqrt(dx * dx + dy * dy)
+        }
+        return (sum / event.pointerCount.coerceAtLeast(1)) * 2f
+    }
+
     override fun onTouchEvent(event: MotionEvent): Boolean {
         val action = event.actionMasked
         // Tool type + button state come from the event-level (not
@@ -877,6 +944,37 @@ private class DrawingSurfaceView(context: Context) :
                 "[drawing.perf.lag] os_dispatch action=$action history=${event.historySize} os_lag=${osLagMs}ms"
             )
         }
+
+        if (action == MotionEvent.ACTION_POINTER_DOWN) {
+            pushActualPoint(
+                event.x,
+                event.y,
+                sanitizePressure(event.pressure),
+                toolType,
+                buttons,
+                MotionEvent.ACTION_CANCEL,
+                event.eventTime
+            )
+            beginViewGesture(event)
+            return true
+        }
+
+        if (viewGestureActive) {
+            if (action == MotionEvent.ACTION_MOVE && event.pointerCount >= 2) {
+                updateViewGesture(event)
+            } else if (action == MotionEvent.ACTION_POINTER_UP && event.pointerCount > 2) {
+                beginViewGesture(event)
+            } else {
+                endViewGesture()
+            }
+            return true
+        }
+
+        if (event.pointerCount >= 2) {
+            beginViewGesture(event)
+            return true
+        }
+
         // Historical samples are the buffered digitizer reads between
         // the previous frame and this MotionEvent batch — replaying
         // them is what gets us the full pen sample rate instead of the
