@@ -344,6 +344,16 @@ impl StrokesDoc {
         self.in_progress_pressures.push(pressure);
     }
 
+    /// Drop the currently-open stroke without committing anything
+    /// to yrs. Used for system/gesture cancellation, such as the
+    /// user placing a second finger down to pan/zoom while a finger
+    /// stroke was tentatively in progress.
+    pub fn cancel_stroke(&mut self) {
+        self.in_progress_color = None;
+        self.in_progress_points.clear();
+        self.in_progress_pressures.clear();
+    }
+
     /// Close the in-progress stroke and commit it to the yrs doc as
     /// a single payload insert. Idempotent — calling without an open
     /// stroke (or with a stroke that recorded zero points) is a no-op
@@ -920,6 +930,16 @@ mod tests {
         doc.begin_stroke(DEFAULT_COLOR, DEFAULT_WIDTH);
         // no push_point
         assert!(doc.end_stroke().is_none());
+    }
+
+    #[test]
+    fn cancel_stroke_drops_in_progress_points() {
+        let mut doc = StrokesDoc::new();
+        doc.begin_stroke(DEFAULT_COLOR, DEFAULT_WIDTH);
+        doc.push_point(1.0, 2.0, 1.0);
+        doc.cancel_stroke();
+        assert!(doc.end_stroke().is_none());
+        assert!(collect_strokes(&doc).is_empty());
     }
 
     #[test]

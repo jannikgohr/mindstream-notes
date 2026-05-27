@@ -2012,7 +2012,31 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                 }
                             }
                         }
-                        (ToolMode::Pen, SampleAction::Up | SampleAction::Cancel) => {
+                        (ToolMode::Pen, SampleAction::Cancel) => {
+                            if let Some(id) = active_note_id.as_ref() {
+                                if let Some(doc) = documents.get_mut(id) {
+                                    doc.strokes_doc.cancel_stroke();
+                                    if let Some(segment_start) = current_stroke_segment_start {
+                                        doc.segments
+                                            .truncate(segment_start.min(doc.segments.len()));
+                                        force_full_stroke_upload = true;
+                                    }
+                                }
+                            }
+                            current_stroke_color = None;
+                            current_stroke_packed = None;
+                            current_stroke_width = None;
+                            pen_in_flight_points.clear();
+                            pen_in_flight_pressures.clear();
+                            pen_tess_cursor = None;
+                            current_stroke_segment_start = None;
+                            current_stroke_page = None;
+                            latest_raw_input = None;
+                            latest_prediction = None;
+                            ink_smoother.reset();
+                            stroke_tool_override = None;
+                        }
+                        (ToolMode::Pen, SampleAction::Up) => {
                             // Drain the modeler's end-of-stroke tail
                             // — its iterative "land the spring" pass
                             // emits the samples that pull the drawn
