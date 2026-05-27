@@ -362,6 +362,17 @@ pub async fn build_persistent_with_backend(backend: GpuBackend) -> Result<Persis
         info.device_type,
         info.driver
     );
+    let downlevel = adapter.get_downlevel_capabilities();
+    if backend == GpuBackend::Vulkan
+        && !downlevel
+            .flags
+            .contains(wgpu::DownlevelFlags::SURFACE_VIEW_FORMATS)
+    {
+        return Err(format!(
+            "Vulkan adapter is missing SURFACE_VIEW_FORMATS; refusing backend to avoid Android gralloc surface-format failures (flags={:?})",
+            downlevel.flags
+        ));
+    }
 
     let t_phase = std::time::Instant::now();
     let (device, queue) = adapter
