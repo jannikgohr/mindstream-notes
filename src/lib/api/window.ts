@@ -13,10 +13,6 @@ import {
   type IDockviewPanel
 } from 'dockview-core';
 
-export interface MSPanelElement extends IDockviewPanel {
-  component: string;
-}
-
 /**
  * Pick a WebView background colour matching the saved (or OS-default) theme
  * so the popout doesn't flash white before app.css loads. Mirrors the logic
@@ -117,7 +113,7 @@ export async function openNoteWindow(
   }).then();
 
   if (panelGroup) {
-    const activePanel: MSPanelElement | undefined = panelGroup?.activePanel as MSPanelElement;
+    const activePanel: IDockviewPanel | undefined = panelGroup?.activePanel;
 
     if (!activePanel || !dock) {
       console.error('[openNoteWindow] failed to spawn because activePanel or dockApi was null',
@@ -128,7 +124,7 @@ export async function openNoteWindow(
     // 1. Snapshot the panel state before it vanishes
     const panelConfig = {
       id: activePanel.id,
-      component: activePanel.component, // e.g., 'noteEditor'
+      component: activePanel.api.component,
       params: { ...activePanel.params },
       title: activePanel.title
     };
