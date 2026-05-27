@@ -115,7 +115,7 @@
     "updater.upToDate.title": "Alles aktuell",
     "updater.upToDate.message": "Mindstream Notes {version} ist die neueste Version.",
     "updater.available.title": "Update verfügbar",
-    "updater.available.message": "Version {to} ist verfügbar (du nutzt {from}). Das Update wird im Hintergrund geladen und nach deiner Bestätigung installiert.",
+    "updater.available.message": "Version {to} ist verfügbar (du nutzt {from}). Wenn du fortfährst, wird das Update jetzt heruntergeladen und direkt installiert. Das Programm startet automatisch neu.",
     "updater.install": "Herunterladen und installieren",
     "updater.later": "Später",
     "updater.dismiss": "OK",
