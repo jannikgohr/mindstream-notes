@@ -80,15 +80,15 @@
 <Dialog.Root open={updaterProgress.active} onOpenChange={ignoreClose}>
   <Dialog.Portal>
     <!--
-      z-[60] matches ConfirmDialog so we're above the Settings dialog
+      z-[400] matches ConfirmDialog so we're above the Settings dialog
       (z-50). The two never co-exist in the current flow (confirm →
       progress → confirm) so they don't fight for paint order.
     -->
     <Dialog.Overlay
-      class="fixed inset-0 z-[60] bg-black/50 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
+      class="fixed inset-0 z-[400] bg-black/50 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
     />
     <Dialog.Content
-      class="fixed left-1/2 top-1/2 z-[60] w-[min(420px,92vw)] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-border bg-card p-5 text-card-foreground shadow-xl focus:outline-none"
+      class="fixed left-1/2 top-1/2 z-[400] w-[min(420px,92vw)] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-border bg-card p-5 text-card-foreground shadow-xl focus:outline-none"
       onEscapeKeydown={suppressClose}
       onInteractOutside={suppressClose}
     >
