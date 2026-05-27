@@ -80,6 +80,7 @@
   const INK_COLOR_SETTING = 'editor.ink.color';
   const INK_WIDTH_SETTING = 'editor.ink.width';
   const INK_FINGER_SETTING = 'editor.ink.fingerDrawing';
+  const INK_PAGE_THEME_SETTING = 'editor.ink.pageTheme';
 
   // ---- Trash detection (same shape as FreeformNoteEditor) ----
   //
@@ -140,6 +141,10 @@
     return value === 'eraser' ? 'eraser' : 'pen';
   }
 
+  function normalizeInkPageTheme(value: unknown): 'light' | 'system' {
+    return value === 'system' ? 'system' : 'light';
+  }
+
   function normalizeInkWidth(value: unknown): number {
     const n = typeof value === 'number' ? value : Number(value);
     return Number.isFinite(n) ? Math.min(12, Math.max(0.5, n)) : 4;
@@ -170,7 +175,10 @@
       width: normalizeInkWidth(getSettingValue(INK_WIDTH_SETTING)),
       fingerDrawingAllowed: hasSettingValue(INK_FINGER_SETTING)
         ? Boolean(getSettingValue(INK_FINGER_SETTING))
-        : null
+        : null,
+      pageThemeMode: normalizeInkPageTheme(
+        getSettingValue(INK_PAGE_THEME_SETTING)
+      )
     };
   }
 
@@ -181,7 +189,11 @@
       setSettingValue(INK_TOOL_SETTING, normalizeInkTool(payload.tool)),
       setSettingValue(INK_COLOR_SETTING, argbToColorHex(payload.colorArgb)),
       setSettingValue(INK_WIDTH_SETTING, normalizeInkWidth(payload.width)),
-      setSettingValue(INK_FINGER_SETTING, payload.fingerDrawingAllowed)
+      setSettingValue(INK_FINGER_SETTING, payload.fingerDrawingAllowed),
+      setSettingValue(
+        INK_PAGE_THEME_SETTING,
+        normalizeInkPageTheme(payload.pageThemeMode)
+      )
     ]);
   }
 

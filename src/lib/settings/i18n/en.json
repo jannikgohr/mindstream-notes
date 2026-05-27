@@ -115,7 +115,7 @@
     "updater.upToDate.title": "You're up to date",
     "updater.upToDate.message": "Mindstream Notes {version} is the latest version.",
     "updater.available.title": "Update available",
-    "updater.available.message": "Version {to} is available (you're on {from}). The update will download in the background and install when you confirm.",
+    "updater.available.message": "Version {to} is available (you're on {from}). If you continue, the update will download now and install immediately. The pogram will be automatically restartet when ready.",
     "updater.install": "Download and install",
     "updater.later": "Later",
     "updater.dismiss": "OK",

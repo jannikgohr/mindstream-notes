@@ -129,10 +129,7 @@ pub fn notify_dirty(note_id: &str) {
 /// active-note swap message reaches the render thread.
 #[tauri::command]
 #[allow(unused_variables)]
-pub fn drawing_show(
-    db: tauri::State<'_, crate::db::Db>,
-    note_id: String,
-) -> Result<(), String> {
+pub fn drawing_show(db: tauri::State<'_, crate::db::Db>, note_id: String) -> Result<(), String> {
     #[cfg(target_os = "android")]
     {
         // Open-path timing — prefix `[drawing.perf]` so it's easy to
@@ -157,8 +154,7 @@ pub fn drawing_show(
         render::set_active_note(Some(note_id), Some(yrs_state));
         let t_active = t_active_start.elapsed();
         let t_show_start = std::time::Instant::now();
-        let result = platform::android::ui::call_show()
-            .map_err(|e| format!("drawing_show: {e}"));
+        let result = platform::android::ui::call_show().map_err(|e| format!("drawing_show: {e}"));
         log::info!(
             "[drawing.perf] drawing_show: sql_load={:?} set_active={:?} call_show={:?} state_bytes={}",
             t_load,
@@ -237,6 +233,7 @@ pub fn drawing_set_toolbar_settings(
     color_argb: Option<u32>,
     width: Option<f32>,
     finger_drawing_allowed: Option<bool>,
+    page_theme_mode: Option<String>,
 ) -> Result<(), String> {
     #[cfg(target_os = "android")]
     {
@@ -245,6 +242,7 @@ pub fn drawing_set_toolbar_settings(
             color_argb,
             width,
             finger_drawing_allowed,
+            page_theme_mode,
         );
     }
     Ok(())

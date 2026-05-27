@@ -57,6 +57,16 @@ pub enum ToolMode {
     Eraser,
 }
 
+/// Page/background theme for ink notes. `Light` keeps pages white
+/// regardless of the app chrome; `System` lets ink pages follow the
+/// resolved app dark mode, Samsung Notes-style.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
+pub enum InkPageThemeMode {
+    #[default]
+    Light,
+    System,
+}
+
 /// Per-frame state the render thread hands to the UI so the toolbar
 /// can render the selected-tool highlight + grey out unavailable
 /// undo/redo buttons. Kept tiny (Copy) so passing it by value is
@@ -70,6 +80,7 @@ pub enum ToolMode {
 pub struct UiState {
     pub current_tool: ToolMode,
     pub finger_drawing_allowed: bool,
+    pub page_theme_mode: InkPageThemeMode,
     pub can_undo: bool,
     pub can_redo: bool,
     pub current_color: u32,
@@ -81,6 +92,7 @@ impl Default for UiState {
         Self {
             current_tool: ToolMode::default(),
             finger_drawing_allowed: true,
+            page_theme_mode: InkPageThemeMode::default(),
             can_undo: false,
             can_redo: false,
             current_color: crate::drawing::strokes_doc::DEFAULT_COLOR,
@@ -111,6 +123,9 @@ pub struct RenderActions {
     /// accepted either way; this only controls finger/unknown touch
     /// samples on the canvas.
     pub set_finger_drawing_allowed: Option<bool>,
+    /// Page/background theme toggle. This does not affect the app
+    /// chrome; it only controls the ink-note surface.
+    pub set_page_theme_mode: Option<InkPageThemeMode>,
     /// Undo / redo button presses. Render thread pops from the
     /// matching stack and applies the inverse / re-applies.
     pub undo: bool,
