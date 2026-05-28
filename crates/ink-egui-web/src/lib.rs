@@ -3,8 +3,15 @@ use std::collections::HashSet;
 use eframe::egui;
 use ink_core::page::{DocumentLayout, MIN_PAGE_COUNT};
 use ink_core::strokes_doc::{StrokesDoc, DEFAULT_COLOR, DEFAULT_WIDTH};
+use ink_core::ui::{CanvasUi, DrawingTheme, InkPageThemeMode, ToolMode, UiState};
 use js_sys::{Function, Uint8Array};
 use wasm_bindgen::prelude::*;
+
+const PAGE_FILL_COLOR: u32 = 0xFFFF_FFFF;
+const PAGE_BACKGROUND_COLOR: u32 = 0xFFF1_F2F4;
+const PAGE_BORDER_COLOR: u32 = 0xFFE5_E7EB;
+const PAGE_SHADOW_COLOR: u32 = 0x2200_0000;
+const PAGE_DARK_SHADOW_COLOR: u32 = 0x33FF_FFFF;
 
 #[wasm_bindgen]
 #[derive(Clone)]
@@ -29,12 +36,17 @@ impl WebInkHandle {
         initial_state: Vec<u8>,
         on_change: Function,
     ) -> Result<(), JsValue> {
-        let app = InkWebApp::new(initial_state, on_change);
         self.runner
             .start(
                 canvas,
                 eframe::WebOptions::default(),
-                Box::new(move |_cc| Ok(Box::new(app))),
+                Box::new(move |cc| {
+                    Ok(Box::new(InkWebApp::new(
+                        initial_state.clone(),
+                        on_change.clone(),
+                        &cc.egui_ctx,
+                    )))
+                }),
             )
             .await
     }
@@ -55,7 +67,11 @@ struct InkWebApp {
     doc: StrokesDoc,
     strokes: Vec<Stroke>,
     view: View,
+    canvas_ui: CanvasUi,
+    drawing_theme: DrawingTheme,
     tool: ToolMode,
+    finger_drawing_allowed: bool,
+    page_theme_mode: InkPageThemeMode,
     color: u32,
     width: f32,
     in_flight: Vec<egui::Pos2>,
@@ -64,15 +80,21 @@ struct InkWebApp {
 }
 
 impl InkWebApp {
-    fn new(initial_state: Vec<u8>, on_change: Function) -> Self {
+    fn new(initial_state: Vec<u8>, on_change: Function, egui_ctx: &egui::Context) -> Self {
         let doc = StrokesDoc::from_bytes(&initial_state);
         let strokes = visible_strokes(&doc);
         let page_count = page_count_for_strokes(&strokes);
+        let mut canvas_ui = CanvasUi::new();
+        canvas_ui.prepare_embedded(egui_ctx);
         Self {
             doc,
             strokes,
             view: View::new(page_count),
+            canvas_ui,
+            drawing_theme: DrawingTheme::dark(),
             tool: ToolMode::Pen,
+            finger_drawing_allowed: true,
+            page_theme_mode: InkPageThemeMode::Light,
             color: DEFAULT_COLOR,
             width: DEFAULT_WIDTH,
             in_flight: Vec::new(),
@@ -93,25 +115,47 @@ impl InkWebApp {
         let _ = self.on_change.call1(&JsValue::NULL, &array);
     }
 
-    fn toolbar(&mut self, ctx: &egui::Context) {
-        egui::TopBottomPanel::top("ink-web-toolbar")
-            .exact_height(56.0)
-            .frame(egui::Frame::default().fill(egui::Color32::from_rgb(250, 250, 250)))
-            .show(ctx, |ui| {
-                ui.horizontal_centered(|ui| {
-                    ui.selectable_value(&mut self.tool, ToolMode::Pen, "Pen");
-                    ui.selectable_value(&mut self.tool, ToolMode::Eraser, "Eraser");
-                    ui.separator();
-                    ui.label("Width");
-                    ui.add(egui::Slider::new(&mut self.width, 0.5..=12.0).show_value(false));
-                    ui.separator();
-                    if ui.button("Clear").clicked() {
-                        self.doc.tombstone_all();
-                        self.refresh_strokes();
-                        self.emit_change();
-                    }
-                });
-            });
+    fn show_toolbar(&mut self, ctx: &egui::Context) {
+        let actions = self.canvas_ui.show_embedded(
+            ctx,
+            UiState {
+                current_tool: self.tool,
+                finger_drawing_allowed: self.finger_drawing_allowed,
+                page_theme_mode: self.page_theme_mode,
+                can_undo: false,
+                can_redo: false,
+                current_color: self.color,
+                current_width: self.width,
+            },
+        );
+        self.apply_toolbar_actions(actions);
+    }
+
+    fn apply_toolbar_actions(&mut self, actions: ink_core::ui::RenderActions) {
+        let mut changed = false;
+        if let Some(tool) = actions.set_tool {
+            self.tool = tool;
+        }
+        if let Some(allowed) = actions.set_finger_drawing_allowed {
+            self.finger_drawing_allowed = allowed;
+        }
+        if let Some(mode) = actions.set_page_theme_mode {
+            self.page_theme_mode = mode;
+        }
+        if let Some(color) = actions.set_color {
+            self.color = color;
+        }
+        if let Some(width) = actions.set_width {
+            self.width = width;
+        }
+        if actions.clear {
+            self.doc.tombstone_all();
+            self.refresh_strokes();
+            changed = true;
+        }
+        if changed {
+            self.emit_change();
+        }
     }
 
     fn handle_canvas_input(&mut self, response: &egui::Response, ctx: &egui::Context) {
@@ -208,7 +252,12 @@ impl InkWebApp {
     }
 
     fn paint_canvas(&self, painter: &egui::Painter, rect: egui::Rect) {
-        painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(238, 238, 238));
+        let page_dark = self.page_dark();
+        painter.rect_filled(
+            rect,
+            0.0,
+            color32_from_argb(display_color_argb(PAGE_BACKGROUND_COLOR, page_dark)),
+        );
         for page in 0..self.view.layout.page_count {
             let Some([left, top, right, bottom]) = self.view.layout.page_rect(page) else {
                 continue;
@@ -219,13 +268,24 @@ impl InkWebApp {
             painter.rect_filled(
                 page_rect.translate(egui::vec2(0.0, 2.0)),
                 2.0,
-                egui::Color32::from_black_alpha(24),
+                color32_from_argb(if page_dark {
+                    PAGE_DARK_SHADOW_COLOR
+                } else {
+                    PAGE_SHADOW_COLOR
+                }),
             );
-            painter.rect_filled(page_rect, 2.0, egui::Color32::WHITE);
+            painter.rect_filled(
+                page_rect,
+                2.0,
+                color32_from_argb(display_color_argb(PAGE_FILL_COLOR, page_dark)),
+            );
             painter.rect_stroke(
                 page_rect,
                 2.0,
-                egui::Stroke::new(1.0, egui::Color32::from_rgb(214, 214, 214)),
+                egui::Stroke::new(
+                    1.0,
+                    color32_from_argb(display_color_argb(PAGE_BORDER_COLOR, page_dark)),
+                ),
                 egui::StrokeKind::Outside,
             );
         }
@@ -235,17 +295,27 @@ impl InkWebApp {
                 painter,
                 &self.view,
                 &stroke.points,
-                stroke.color,
+                display_color_argb(stroke.color, page_dark),
                 stroke.width,
             );
         }
-        paint_polyline(painter, &self.view, &self.in_flight, self.color, self.width);
+        paint_polyline(
+            painter,
+            &self.view,
+            &self.in_flight,
+            display_color_argb(self.color, page_dark),
+            self.width,
+        );
+    }
+
+    fn page_dark(&self) -> bool {
+        matches!(self.page_theme_mode, InkPageThemeMode::System) && self.drawing_theme.dark
     }
 }
 
 impl eframe::App for InkWebApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.toolbar(ctx);
+        self.show_toolbar(ctx);
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
             .show(ctx, |ui| {
@@ -256,12 +326,6 @@ impl eframe::App for InkWebApp {
                 self.paint_canvas(&painter, response.rect);
             });
     }
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-enum ToolMode {
-    Pen,
-    Eraser,
 }
 
 #[derive(Clone)]
@@ -419,6 +483,20 @@ fn color32_from_argb(argb: u32) -> egui::Color32 {
         (argb & 0xff) as u8,
         ((argb >> 24) & 0xff) as u8,
     )
+}
+
+fn display_color_argb(color: u32, page_dark: bool) -> u32 {
+    if page_dark {
+        invert_rgb_argb(color)
+    } else {
+        color
+    }
+}
+
+fn invert_rgb_argb(color: u32) -> u32 {
+    let a = color & 0xFF00_0000;
+    let rgb = color & 0x00FF_FFFF;
+    a | (!rgb & 0x00FF_FFFF)
 }
 
 fn stroke_hits(stroke: &Stroke, p: egui::Pos2, radius: f32) -> bool {

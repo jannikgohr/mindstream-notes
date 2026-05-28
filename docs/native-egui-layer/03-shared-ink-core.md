@@ -51,7 +51,9 @@ crate consumed by both render paths.
   native code keeps its current imports.
 - Step 4: Done for the document/page model. `ink-egui-web` depends on
   `ink-core`, uses shared `StrokesDoc`, and uses shared page layout math.
-- Step 5: Pending.
+- Step 5: Done for toolbar integration. `ink-egui-web` now renders the
+  shared `CanvasUi` toolbar in eframe's context and consumes the same
+  `RenderActions` as native.
 - Step 6: Pending.
 - Step 7: Pending.
 
@@ -71,7 +73,7 @@ crate consumed by both render paths.
 ## Notes
 
 The current desktop web implementation is intentionally only a first
-slice. Its visual mismatch comes from using a small standalone egui app
-instead of the native `CanvasUi`. The shared-core extraction is the bridge
-from "works inside Dockview" to "same Samsung Notes-style toolbar and
-settings across Android and desktop."
+slice. It now uses the shared toolbar, document model, and page layout,
+but the actual stroke tessellation/smoothing path is still a simple
+web-side polyline renderer. Moving those remaining helpers into
+`ink-core` is the next bridge from "same toolbar" to "same ink feel."
