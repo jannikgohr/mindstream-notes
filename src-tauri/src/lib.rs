@@ -157,15 +157,16 @@ pub fn run() {
             // debounced auto-save. Idempotent (OnceLock) — second
             // call would silently no-op.
             drawing::init(app.handle().clone());
+            #[cfg(desktop)]
+            app.wry_plugin(drawing::platform::desktop::Builder::new());
 
             // Kick off wgpu pre-warm in the background so the heavy
             // adapter / device / pipeline / egui-renderer build is
             // off the critical path of the user's first ink-note
             // open. Returns immediately — the actual work runs on
             // the drawing render thread (spawned lazily by this
-            // first message). Android-only because that's where the
-            // drawing pipeline runs.
-            #[cfg(target_os = "android")]
+            // first message).
+            #[cfg(any(target_os = "android", desktop))]
             drawing::render::prewarm();
 
             Ok(())

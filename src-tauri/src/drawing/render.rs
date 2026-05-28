@@ -216,6 +216,18 @@ fn width_for_pressure(pressure: f32, base_width: f32) -> f32 {
     min_w + (base_width - min_w) * p
 }
 
+fn monotonic_time_ms() -> f64 {
+    #[cfg(target_os = "android")]
+    {
+        crate::drawing::platform::android::now_uptime_ms()
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        static START: OnceLock<Instant> = OnceLock::new();
+        START.get_or_init(Instant::now).elapsed().as_secs_f64() * 1000.0
+    }
+}
+
 /// How thick the Kotlin front-buffer overlay paints relative to the
 /// committed Rust/wgpu stroke. Strictly less than 1.0 so the
 /// committed stroke fully covers (with margin) the overlay's
@@ -260,11 +272,14 @@ fn push_live_ink_style(surface: Option<&SurfaceBoundState>, color: u32, base_wid
     let min_pu = min_pu.min(base_width);
     let min_px = min_pu * scale;
     let max_px = base_width * scale;
+    #[cfg(target_os = "android")]
     if let Err(e) =
         crate::drawing::platform::android::ui::call_set_live_ink_style(color, min_px, max_px)
     {
         log::warn!("[drawing] call_set_live_ink_style failed: {e}");
     }
+    #[cfg(not(target_os = "android"))]
+    let _ = (color, min_px, max_px);
 }
 
 /// Adapt the host-testable [`segment_quad_positions`] math into the
@@ -1721,7 +1736,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
         // render_frame, and feed all three into the
         // `[drawing.perf.lag]` summary log at the bottom of the
         // render block.
-        let batch_start_uptime_ms = crate::drawing::platform::android::now_uptime_ms();
+        let batch_start_uptime_ms = monotonic_time_ms();
         let mut messages: Vec<Msg> = first.into_iter().collect();
         loop {
             match rx.try_recv() {
@@ -2926,7 +2941,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                 // "nothing animating" — we leave `next_animation_wake`
                 // as None so the next loop iter blocks on `recv()`.
                 let repaint_after = ui_output.repaint_after;
-                let dispatch_uptime_ms = crate::drawing::platform::android::now_uptime_ms();
+                let dispatch_uptime_ms = monotonic_time_ms();
                 if force_full_stroke_upload {
                     s.force_full_stroke_upload();
                 }
@@ -2942,7 +2957,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                     ui_output,
                 ) {
                     Ok(()) => {
-                        let done_uptime_ms = crate::drawing::platform::android::now_uptime_ms();
+                        let done_uptime_ms = monotonic_time_ms();
                         let render_elapsed = t_frame.elapsed();
                         if log_first_frame {
                             log::info!(

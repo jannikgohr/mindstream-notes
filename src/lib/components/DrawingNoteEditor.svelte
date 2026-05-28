@@ -28,8 +28,9 @@
    * away" gesture doesn't strand the change for the rest of the
    * debounce window).
    *
-   * Desktop: the native layer isn't implemented yet (Phase 2 of
-   * the roadmap). Show a placeholder.
+   * Desktop: opens the first native ink window. The drawing surface
+   * is separate from the dock panel for now; embedding it back into
+   * the panel is the next desktop milestone.
    */
   import { onDestroy, onMount } from 'svelte';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
@@ -70,7 +71,7 @@
    *  timing is consistent across editor kinds. */
   const SAVE_DEBOUNCE_MS = 800;
 
-  let mountedAndroid = false;
+  let mountedNative = false;
   let backCleanup: (() => void) | null = null;
   let unsubSaveStatus: UnlistenFn | null = null;
   let unsubToolbarSettings: UnlistenFn | null = null;
@@ -198,7 +199,6 @@
   }
 
   onMount(async () => {
-    if (!isAndroid()) return;
     // Open-latency timing marker — pairs with the Rust-side
     // `[drawing.perf]` logs for the full open story.
     const tMountStart = performance.now();
@@ -211,9 +211,11 @@
     // onDestroy below detaches. Routing through navigateBack
     // (rather than setMobileScreen directly) keeps the history
     // stack in sync.
-    const onBack = () => navigateBack();
-    window.addEventListener('drawing-back', onBack);
-    backCleanup = () => window.removeEventListener('drawing-back', onBack);
+    if (isAndroid()) {
+      const onBack = () => navigateBack();
+      window.addEventListener('drawing-back', onBack);
+      backCleanup = () => window.removeEventListener('drawing-back', onBack);
+    }
 
     // Subscribe to the save worker's status stream. Filter by
     // note id so a tab opening a different ink note (desktop
@@ -255,7 +257,7 @@
     const tShowStart = performance.now();
     void drawingShow(noteId);
     const tShowEnd = performance.now();
-    mountedAndroid = true;
+    mountedNative = true;
     console.log(
       `[ink-open] drawingShow_ipc=${(tShowEnd - tShowStart).toFixed(1)}ms ` +
         `total_to_show=${(tShowEnd - tMountStart).toFixed(1)}ms`
@@ -272,7 +274,7 @@
     // Clear the dockview status row so closing the panel removes
     // its icons.
     clearNoteStatus(noteId);
-    if (!mountedAndroid) return;
+    if (!mountedNative) return;
     // drawing_hide also signals the save worker to flush any
     // pending save immediately — so a "drew + navigated away
     // within the debounce window" gesture doesn't strand the
@@ -299,10 +301,10 @@
     >
       <PenTool class="size-8 text-muted-foreground" aria-hidden="true" />
       <p class="text-sm font-medium text-foreground">
-        {tUi('editor.ink.desktopPlaceholderTitle')}
+        {tUi('editor.ink.desktopNativeWindowTitle')}
       </p>
       <p class="text-sm text-muted-foreground">
-        {tUi('editor.ink.desktopPlaceholderMessage')}
+        {tUi('editor.ink.desktopNativeWindowMessage')}
       </p>
     </div>
   </div>
