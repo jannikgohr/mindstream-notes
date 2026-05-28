@@ -470,6 +470,7 @@ impl StrokesDoc {
         // this N times → O(N × strokes). Logged at trace so we can
         // turn it on cheaply when investigating slowdowns, plus a
         // warn! escape hatch for individually-pathological cases.
+        #[cfg(not(target_arch = "wasm32"))]
         let t0 = std::time::Instant::now();
         let mut scanned: usize = 0;
         let mut tx = self.doc.transact_mut();
@@ -484,22 +485,34 @@ impl StrokesDoc {
             );
             if matches {
                 stroke.insert(&mut tx, FIELD_TOMBSTONED, Any::Bool(tombstoned));
-                let elapsed = t0.elapsed();
-                log::trace!(
-                    "[drawing.perf.eraser] set_stroke_tombstoned id={id} scanned={scanned} took={elapsed:?}"
-                );
-                if elapsed.as_millis() > 5 {
-                    log::warn!(
-                        "[drawing.perf.eraser] slow set_stroke_tombstoned id={id} scanned={scanned} took={elapsed:?}"
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    let elapsed = t0.elapsed();
+                    log::trace!(
+                        "[drawing.perf.eraser] set_stroke_tombstoned id={id} scanned={scanned} took={elapsed:?}"
                     );
+                    if elapsed.as_millis() > 5 {
+                        log::warn!(
+                            "[drawing.perf.eraser] slow set_stroke_tombstoned id={id} scanned={scanned} took={elapsed:?}"
+                        );
+                    }
                 }
+                #[cfg(target_arch = "wasm32")]
+                log::trace!(
+                    "[drawing.perf.eraser] set_stroke_tombstoned id={id} scanned={scanned}"
+                );
                 return true;
             }
         }
-        let elapsed = t0.elapsed();
-        log::trace!(
-            "[drawing.perf.eraser] set_stroke_tombstoned id={id} MISS scanned={scanned} took={elapsed:?}"
-        );
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let elapsed = t0.elapsed();
+            log::trace!(
+                "[drawing.perf.eraser] set_stroke_tombstoned id={id} MISS scanned={scanned} took={elapsed:?}"
+            );
+        }
+        #[cfg(target_arch = "wasm32")]
+        log::trace!("[drawing.perf.eraser] set_stroke_tombstoned id={id} MISS scanned={scanned}");
         false
     }
 

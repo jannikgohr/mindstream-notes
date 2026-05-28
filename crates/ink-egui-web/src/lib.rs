@@ -81,6 +81,10 @@ struct InkWebApp {
     width: f32,
     in_flight: Vec<egui::Pos2>,
     drawing: bool,
+    eraser_drag_hits: HashSet<String>,
+    eraser_drag_active: bool,
+    undo: Vec<UndoOp>,
+    redo: Vec<UndoOp>,
     on_change: Function,
     on_toolbar_settings: Function,
 }
@@ -111,6 +115,10 @@ impl InkWebApp {
             width: toolbar_settings.width,
             in_flight: Vec::new(),
             drawing: false,
+            eraser_drag_hits: HashSet::new(),
+            eraser_drag_active: false,
+            undo: Vec::new(),
+            redo: Vec::new(),
             on_change,
             on_toolbar_settings,
         }
@@ -167,8 +175,8 @@ impl InkWebApp {
                 current_tool: self.tool,
                 finger_drawing_allowed: self.finger_drawing_allowed,
                 page_theme_mode: self.page_theme_mode,
-                can_undo: false,
-                can_redo: false,
+                can_undo: !self.undo.is_empty(),
+                can_redo: !self.redo.is_empty(),
                 current_color: self.color,
                 current_width: self.width,
             },
@@ -210,9 +218,25 @@ impl InkWebApp {
             }
         }
         if actions.clear {
+            let cleared: Vec<String> = self
+                .strokes
+                .iter()
+                .map(|stroke| stroke.id.clone())
+                .collect();
             self.doc.tombstone_all();
             self.refresh_strokes();
+            self.cancel_in_flight_stroke();
+            self.finish_eraser_drag(false);
+            if !cleared.is_empty() {
+                self.record_op(UndoOp::ClearAll(cleared));
+            }
             doc_changed = true;
+        }
+        if actions.undo {
+            doc_changed |= self.undo();
+        }
+        if actions.redo {
+            doc_changed |= self.redo();
         }
         if toolbar_changed {
             self.emit_toolbar_settings();
@@ -244,15 +268,28 @@ impl InkWebApp {
             if self.drawing && !pointer_down {
                 self.finish_stroke();
             }
+            if self.eraser_drag_active && !pointer_down {
+                self.finish_eraser_drag(true);
+            }
             return;
         };
 
-        if self.tool == ToolMode::Eraser && response.dragged() {
-            if let Some(page_pos) = self.view.screen_to_page(pos) {
-                if self.erase_at(page_pos, 10.0) {
-                    self.refresh_strokes();
-                    self.emit_change();
+        if self.tool == ToolMode::Eraser {
+            if pointer_down && response.drag_started() {
+                self.begin_eraser_drag();
+            }
+            if pointer_down && (response.dragged() || response.drag_started()) {
+                if let Some(page_pos) = self.view.screen_to_page(pos) {
+                    let erased = self.erase_at(page_pos, 10.0);
+                    if !erased.is_empty() {
+                        self.eraser_drag_hits.extend(erased);
+                        self.refresh_strokes();
+                        self.emit_change();
+                    }
                 }
+            }
+            if self.eraser_drag_active && !pointer_down {
+                self.finish_eraser_drag(true);
             }
             return;
         }
@@ -299,20 +336,101 @@ impl InkWebApp {
     fn finish_stroke(&mut self) {
         self.drawing = false;
         self.in_flight.clear();
-        if self.doc.end_stroke().is_some() {
+        if let Some(id) = self.doc.end_stroke() {
+            self.record_op(UndoOp::StrokeAdded(id));
             self.refresh_strokes();
             self.emit_change();
         }
     }
 
-    fn erase_at(&mut self, page_pos: egui::Pos2, radius: f32) -> bool {
+    fn cancel_in_flight_stroke(&mut self) {
+        self.drawing = false;
+        self.in_flight.clear();
+        self.doc.cancel_stroke();
+    }
+
+    fn begin_eraser_drag(&mut self) {
+        self.eraser_drag_hits.clear();
+        self.eraser_drag_active = true;
+    }
+
+    fn finish_eraser_drag(&mut self, record: bool) {
+        if record && !self.eraser_drag_hits.is_empty() {
+            let mut ids: Vec<String> = self.eraser_drag_hits.iter().cloned().collect();
+            ids.sort();
+            self.record_op(UndoOp::EraserDrag(ids));
+        }
+        self.eraser_drag_hits.clear();
+        self.eraser_drag_active = false;
+    }
+
+    fn record_op(&mut self, op: UndoOp) {
+        self.undo.push(op);
+        self.redo.clear();
+    }
+
+    fn undo(&mut self) -> bool {
+        let Some(op) = self.undo.pop() else {
+            return false;
+        };
+        self.apply_undo_op(&op);
+        self.redo.push(op);
+        true
+    }
+
+    fn redo(&mut self) -> bool {
+        let Some(op) = self.redo.pop() else {
+            return false;
+        };
+        self.apply_redo_op(&op);
+        self.undo.push(op);
+        true
+    }
+
+    fn apply_undo_op(&mut self, op: &UndoOp) {
+        match op {
+            UndoOp::StrokeAdded(id) => {
+                self.doc.set_stroke_tombstoned(id, true);
+            }
+            UndoOp::EraserDrag(ids) | UndoOp::ClearAll(ids) => {
+                for id in ids {
+                    self.doc.set_stroke_tombstoned(id, false);
+                }
+            }
+        }
+        self.refresh_strokes();
+        self.cancel_in_flight_stroke();
+        self.finish_eraser_drag(false);
+    }
+
+    fn apply_redo_op(&mut self, op: &UndoOp) {
+        match op {
+            UndoOp::StrokeAdded(id) => {
+                self.doc.set_stroke_tombstoned(id, false);
+            }
+            UndoOp::EraserDrag(ids) | UndoOp::ClearAll(ids) => {
+                for id in ids {
+                    self.doc.set_stroke_tombstoned(id, true);
+                }
+            }
+        }
+        self.refresh_strokes();
+        self.cancel_in_flight_stroke();
+        self.finish_eraser_drag(false);
+    }
+
+    fn erase_at(&mut self, page_pos: egui::Pos2, radius: f32) -> Vec<String> {
         let ids: HashSet<String> = self
             .strokes
             .iter()
             .filter(|stroke| stroke_hits(stroke, page_pos, radius))
             .map(|stroke| stroke.id.clone())
             .collect();
-        self.doc.tombstone_strokes(&ids) > 0
+        if self.doc.tombstone_strokes(&ids) > 0 {
+            ids.into_iter().collect()
+        } else {
+            Vec::new()
+        }
     }
 
     fn paint_canvas(&self, painter: &egui::Painter, rect: egui::Rect) {
@@ -399,6 +517,13 @@ struct ToolbarSettings {
     page_theme_mode: InkPageThemeMode,
     color: u32,
     width: f32,
+}
+
+#[derive(Debug, Clone)]
+enum UndoOp {
+    StrokeAdded(String),
+    EraserDrag(Vec<String>),
+    ClearAll(Vec<String>),
 }
 
 impl ToolbarSettings {
