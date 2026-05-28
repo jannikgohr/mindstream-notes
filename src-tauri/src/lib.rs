@@ -21,6 +21,8 @@ pub mod notes;
 pub mod serde_helpers;
 pub mod sync;
 pub mod system;
+#[cfg(desktop)]
+pub mod tray;
 
 use tauri::Manager;
 
@@ -155,6 +157,9 @@ pub fn run() {
             .expect("failed to seed database");
 
             app.manage(db);
+
+            #[cfg(desktop)]
+            tray::init(app)?;
 
             // Periodic sync runs in a tokio task owned by this
             // process — replaces the JS setTimeout that used to live
