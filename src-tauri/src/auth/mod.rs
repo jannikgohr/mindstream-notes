@@ -146,7 +146,7 @@ pub fn has_session(app: &AppHandle) -> bool {
     let Ok(entry) = keyring_entry() else {
         return false;
     };
-    matches!(entry.get_password(), Ok(_))
+    entry.get_password().is_ok()
 }
 
 #[tauri::command]

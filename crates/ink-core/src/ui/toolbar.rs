@@ -257,12 +257,14 @@ pub fn show(
     brush::show_if_open(
         ctx,
         shadcn,
-        brush_popover_id,
-        pen_button_rect,
-        state.current_width,
-        state.current_color,
-        actions,
-        active_control_bounds,
+        brush::BrushPopover {
+            id_source: brush_popover_id,
+            trigger_rect: pen_button_rect,
+            current_width: state.current_width,
+            current_color: state.current_color,
+            actions,
+            active_control_bounds,
+        },
     );
 }
 

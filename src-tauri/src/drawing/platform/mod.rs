@@ -18,3 +18,6 @@
 
 #[cfg(target_os = "android")]
 pub mod android;
+
+#[cfg(desktop)]
+pub mod desktop;

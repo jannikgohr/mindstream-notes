@@ -5,11 +5,10 @@
 //! `platform::android`) reach into to drive the drawing engine.
 //! The actual work is delegated:
 //!
-//!   * `crate::drawing::pipeline`         — wgpu state + per-frame GPU pass
-//!   * `crate::drawing::ui`               — egui Context + UI widgets
-//!   * `crate::drawing::surface_source`   — `SurfaceSource` trait;
-//!                                          platform impls own the
-//!                                          native window handle.
+//! - `crate::drawing::pipeline`: wgpu state and per-frame GPU pass.
+//! - `crate::drawing::ui`: egui Context and UI widgets.
+//! - `crate::drawing::surface_source`: `SurfaceSource` trait;
+//!   platform impls own the native window handle.
 //!
 //! Threading: every public function here just packages a `Msg` and
 //! drops it on the render thread's mpsc channel. The render thread
@@ -178,13 +177,12 @@ const MIN_WIDTH_RATIO: f32 = 0.25;
 /// tessellate raw input directly (false). Decouples the body
 /// smoothing decision from the two-zone architecture:
 ///
-///   - `true`  — smoother runs on every sample, smoothed body +
-///                raw head + (if enabled) predicted lead.
-///   - `false` — raw everywhere. `pen_tess_cursor` advances to every
-///                raw input, so the raw head is degenerate
-///                (zero-length segment) and the buffer is empty.
-///                Saved geometry is raw input — visible jitter at low
-///                speed.
+/// - `true`: smoother runs on every sample, smoothed body + raw head
+///   + (if enabled) predicted lead.
+/// - `false`: raw everywhere. `pen_tess_cursor` advances to every raw
+///   input, so the raw head is degenerate (zero-length segment) and
+///   the buffer is empty. Saved geometry is raw input — visible jitter
+///   at low speed.
 const SMOOTHING_ENABLED: bool = false;
 
 /// A/B flag: paint a `MotionPredictor`-driven "predicted lead"
@@ -214,6 +212,18 @@ fn width_for_pressure(pressure: f32, base_width: f32) -> f32 {
     let min_w = (base_width * MIN_WIDTH_RATIO).max(MIN_WIDTH_FLOOR);
     let min_w = min_w.min(base_width);
     min_w + (base_width - min_w) * p
+}
+
+fn monotonic_time_ms() -> f64 {
+    #[cfg(target_os = "android")]
+    {
+        crate::drawing::platform::android::now_uptime_ms()
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        static START: OnceLock<Instant> = OnceLock::new();
+        START.get_or_init(Instant::now).elapsed().as_secs_f64() * 1000.0
+    }
 }
 
 /// How thick the Kotlin front-buffer overlay paints relative to the
@@ -260,11 +270,14 @@ fn push_live_ink_style(surface: Option<&SurfaceBoundState>, color: u32, base_wid
     let min_pu = min_pu.min(base_width);
     let min_px = min_pu * scale;
     let max_px = base_width * scale;
+    #[cfg(target_os = "android")]
     if let Err(e) =
         crate::drawing::platform::android::ui::call_set_live_ink_style(color, min_px, max_px)
     {
         log::warn!("[drawing] call_set_live_ink_style failed: {e}");
     }
+    #[cfg(not(target_os = "android"))]
+    let _ = (color, min_px, max_px);
 }
 
 /// Adapt the host-testable [`segment_quad_positions`] math into the
@@ -1438,25 +1451,30 @@ fn ensure_documents_display_theme(
 /// held mid-stroke). The user's underlying `tool_mode` doesn't
 /// change — the override only paints the toolbar so the user
 /// gets feedback that the modifier is doing something.
-fn build_ui_state(
+struct UiStateSource<'a> {
     tool_mode: ToolMode,
     stroke_tool_override: Option<ToolMode>,
     finger_drawing_allowed: bool,
     page_theme_mode: InkPageThemeMode,
     picked_color: u32,
     picked_width: f32,
-    active_id: &Option<String>,
-    documents: &HashMap<String, CanvasDocument>,
-) -> UiState {
-    let active = active_id.as_ref().and_then(|id| documents.get(id));
+    active_id: &'a Option<String>,
+    documents: &'a HashMap<String, CanvasDocument>,
+}
+
+fn build_ui_state(source: UiStateSource<'_>) -> UiState {
+    let active = source
+        .active_id
+        .as_ref()
+        .and_then(|id| source.documents.get(id));
     UiState {
-        current_tool: stroke_tool_override.unwrap_or(tool_mode),
-        finger_drawing_allowed,
-        page_theme_mode,
+        current_tool: source.stroke_tool_override.unwrap_or(source.tool_mode),
+        finger_drawing_allowed: source.finger_drawing_allowed,
+        page_theme_mode: source.page_theme_mode,
         can_undo: active.map(|d| !d.undo.is_empty()).unwrap_or(false),
         can_redo: active.map(|d| !d.redo.is_empty()).unwrap_or(false),
-        current_color: picked_color,
-        current_width: picked_width,
+        current_color: source.picked_color,
+        current_width: source.picked_width,
     }
 }
 
@@ -1721,7 +1739,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
         // render_frame, and feed all three into the
         // `[drawing.perf.lag]` summary log at the bottom of the
         // render block.
-        let batch_start_uptime_ms = crate::drawing::platform::android::now_uptime_ms();
+        let batch_start_uptime_ms = monotonic_time_ms();
         let mut messages: Vec<Msg> = first.into_iter().collect();
         loop {
             match rx.try_recv() {
@@ -2897,16 +2915,16 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                 // Active doc lookup is `documents.get(id)`; defaults
                 // to "no buttons enabled" when no note is open or
                 // the doc hasn't been activated yet.
-                let ui_state = build_ui_state(
+                let ui_state = build_ui_state(UiStateSource {
                     tool_mode,
                     stroke_tool_override,
                     finger_drawing_allowed,
                     page_theme_mode,
                     picked_color,
                     picked_width,
-                    &active_note_id,
-                    &documents,
-                );
+                    active_id: &active_note_id,
+                    documents: &documents,
+                });
                 let (actions, ui_output) = canvas_ui.run(input, s.size_px(), ui_state);
                 active_control_bounds = canvas_ui.get_active_control_bounds();
                 #[cfg(target_os = "android")]
@@ -2926,7 +2944,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                 // "nothing animating" — we leave `next_animation_wake`
                 // as None so the next loop iter blocks on `recv()`.
                 let repaint_after = ui_output.repaint_after;
-                let dispatch_uptime_ms = crate::drawing::platform::android::now_uptime_ms();
+                let dispatch_uptime_ms = monotonic_time_ms();
                 if force_full_stroke_upload {
                     s.force_full_stroke_upload();
                 }
@@ -2934,15 +2952,17 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                     p,
                     s,
                     acquired,
-                    &page_backdrop_segments,
-                    color_argb_to_f64_rgba(background_color_argb(page_dark)),
-                    segs,
-                    &raw_head_segments,
-                    &prediction_segments,
-                    ui_output,
+                    pipeline::FrameRenderData {
+                        page_backdrop: &page_backdrop_segments,
+                        background_color: color_argb_to_f64_rgba(background_color_argb(page_dark)),
+                        committed: segs,
+                        raw_head: &raw_head_segments,
+                        prediction: &prediction_segments,
+                        ui_output,
+                    },
                 ) {
                     Ok(()) => {
-                        let done_uptime_ms = crate::drawing::platform::android::now_uptime_ms();
+                        let done_uptime_ms = monotonic_time_ms();
                         let render_elapsed = t_frame.elapsed();
                         if log_first_frame {
                             log::info!(
@@ -3258,16 +3278,16 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                 latest_prediction,
                             );
                             let fresh_input = egui::RawInput::default();
-                            let fresh_state = build_ui_state(
+                            let fresh_state = build_ui_state(UiStateSource {
                                 tool_mode,
                                 stroke_tool_override,
                                 finger_drawing_allowed,
                                 page_theme_mode,
                                 picked_color,
                                 picked_width,
-                                &active_note_id,
-                                &documents,
-                            );
+                                active_id: &active_note_id,
+                                documents: &documents,
+                            });
                             let (_, fresh_ui) =
                                 canvas_ui.run(fresh_input, s.size_px(), fresh_state);
                             active_control_bounds = canvas_ui.get_active_control_bounds();
@@ -3295,12 +3315,16 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             let _ = pipeline::render_frame(
                                 p,
                                 s,
-                                &page_backdrop_segments,
-                                color_argb_to_f64_rgba(background_color_argb(fresh_page_dark)),
-                                fresh_segs,
-                                &raw_head_segments,
-                                &prediction_segments,
-                                fresh_ui,
+                                pipeline::FrameRenderData {
+                                    page_backdrop: &page_backdrop_segments,
+                                    background_color: color_argb_to_f64_rgba(
+                                        background_color_argb(fresh_page_dark),
+                                    ),
+                                    committed: fresh_segs,
+                                    raw_head: &raw_head_segments,
+                                    prediction: &prediction_segments,
+                                    ui_output: fresh_ui,
+                                },
                             );
                             schedule_next_wake(&mut next_animation_wake, fresh_repaint_after);
                         }

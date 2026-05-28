@@ -112,7 +112,19 @@ pub fn run() {
     let app_handle = tauri::Builder::default()
         .plugin(tauri_plugin_autostart::Builder::new().build())
         .plugin(tauri_plugin_window_state::Builder::new().build())
-        .plugin(tauri_plugin_updater::Builder::new().build());
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .on_window_event(|window, event| {
+            if window.label() == "main"
+                && matches!(
+                    event,
+                    tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed
+                )
+            {
+                let app_handle = window.app_handle();
+                drawing::shutdown_desktop(app_handle);
+                app_handle.exit(0);
+            }
+        });
     #[cfg(not(desktop))]
     let app_handle = tauri::Builder::default();
 
@@ -163,8 +175,7 @@ pub fn run() {
             // off the critical path of the user's first ink-note
             // open. Returns immediately — the actual work runs on
             // the drawing render thread (spawned lazily by this
-            // first message). Android-only because that's where the
-            // drawing pipeline runs.
+            // first message).
             #[cfg(target_os = "android")]
             drawing::render::prewarm();
 
@@ -202,8 +213,10 @@ pub fn run() {
             drawing::drawing_hide,
             drawing::drawing_clear,
             drawing::drawing_set_save_debounce,
+            drawing::drawing_save_ink_state,
             drawing::drawing_set_theme,
             drawing::drawing_set_toolbar_settings,
+            drawing::drawing_set_desktop_panel_bounds,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

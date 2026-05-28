@@ -90,13 +90,36 @@ pub struct PersistentGpu {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum GpuBackend {
     Vulkan,
+    #[cfg(target_os = "windows")]
+    Dx12,
+    #[cfg(target_os = "macos")]
+    Metal,
     OpenGl,
 }
 
 impl GpuBackend {
+    fn preferred_order() -> &'static [GpuBackend] {
+        #[cfg(target_os = "windows")]
+        {
+            &[GpuBackend::Vulkan, GpuBackend::Dx12, GpuBackend::OpenGl]
+        }
+        #[cfg(target_os = "macos")]
+        {
+            &[GpuBackend::Metal]
+        }
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        {
+            &[GpuBackend::Vulkan, GpuBackend::OpenGl]
+        }
+    }
+
     fn backends(self) -> wgpu::Backends {
         match self {
             GpuBackend::Vulkan => wgpu::Backends::VULKAN,
+            #[cfg(target_os = "windows")]
+            GpuBackend::Dx12 => wgpu::Backends::DX12,
+            #[cfg(target_os = "macos")]
+            GpuBackend::Metal => wgpu::Backends::METAL,
             GpuBackend::OpenGl => wgpu::Backends::GL,
         }
     }
@@ -104,6 +127,10 @@ impl GpuBackend {
     fn label(self) -> &'static str {
         match self {
             GpuBackend::Vulkan => "Vulkan",
+            #[cfg(target_os = "windows")]
+            GpuBackend::Dx12 => "DirectX 12",
+            #[cfg(target_os = "macos")]
+            GpuBackend::Metal => "Metal",
             GpuBackend::OpenGl => "OpenGL",
         }
     }
@@ -177,6 +204,15 @@ pub struct AcquiredFrame {
     view: wgpu::TextureView,
     render_start: std::time::Instant,
     acquire_done: std::time::Instant,
+}
+
+pub struct FrameRenderData<'a> {
+    pub page_backdrop: &'a [Vertex],
+    pub background_color: [f64; 4],
+    pub committed: &'a [Vertex],
+    pub raw_head: &'a [Vertex],
+    pub prediction: &'a [Vertex],
+    pub ui_output: UiOutput,
 }
 
 impl SurfaceBoundState {
@@ -311,17 +347,23 @@ const LAG_LOGGING_ENABLED: bool = false;
 /// before the first surface arrives — worst case = today's
 /// "blocking init on first open" behaviour.
 pub async fn build_persistent() -> Result<PersistentGpu, String> {
-    match build_persistent_with_backend(GpuBackend::Vulkan).await {
-        Ok(persistent) => Ok(persistent),
-        Err(vulkan_err) => {
-            log::warn!("[drawing] Vulkan init failed ({vulkan_err}); falling back to OpenGL");
-            build_persistent_with_backend(GpuBackend::OpenGl)
-                .await
-                .map_err(|gl_err| {
-                    format!("Vulkan init failed: {vulkan_err}; OpenGL fallback failed: {gl_err}")
-                })
+    let mut errors = Vec::new();
+    for backend in GpuBackend::preferred_order() {
+        match build_persistent_with_backend(*backend).await {
+            Ok(persistent) => return Ok(persistent),
+            Err(err) => {
+                log::warn!(
+                    "[drawing] {} init failed ({err}); trying next backend if available",
+                    backend.label()
+                );
+                errors.push(format!("{}: {err}", backend.label()));
+            }
         }
     }
+    Err(format!(
+        "all drawing GPU backends failed: {}",
+        errors.join("; ")
+    ))
 }
 
 pub async fn build_persistent_with_backend(backend: GpuBackend) -> Result<PersistentGpu, String> {
@@ -363,7 +405,8 @@ pub async fn build_persistent_with_backend(backend: GpuBackend) -> Result<Persis
         info.driver
     );
     let downlevel = adapter.get_downlevel_capabilities();
-    if backend == GpuBackend::Vulkan
+    if cfg!(target_os = "android")
+        && backend == GpuBackend::Vulkan
         && !downlevel
             .flags
             .contains(wgpu::DownlevelFlags::SURFACE_VIEW_FORMATS)
@@ -711,15 +754,14 @@ fn create_view_bind_group(
 /// Pick the lowest-latency `PresentMode` from what the device offers.
 ///
 /// Preference order:
-///   1. **Immediate**   — `eglSwapBuffers(swap_interval=0)` on the GL
-///                        backend. No vsync wait. Tearing in theory,
-///                        invisible for ink in practice (small,
-///                        localised updates).
-///   2. **Mailbox**     — drop old frames, present newest at vsync.
-///                        No tearing, but still vsync-paced display.
-///   3. **FifoRelaxed** — like FIFO but allows tearing when running
-///                        late. Mild improvement over FIFO.
-///   4. **Fifo**        — strict vsync. The floor.
+/// 1. **Immediate**: `eglSwapBuffers(swap_interval=0)` on the GL
+///    backend. No vsync wait. Tearing in theory, invisible for ink
+///    in practice (small, localised updates).
+/// 2. **Mailbox**: drop old frames, present newest at vsync. No
+///    tearing, but still vsync-paced display.
+/// 3. **FifoRelaxed**: like FIFO but allows tearing when running
+///    late. Mild improvement over FIFO.
+/// 4. **Fifo**: strict vsync. The floor.
 ///
 /// We fall back to whatever the platform exposes first if none of
 /// the above match — wgpu guarantees `Fifo` is always present, so
@@ -766,25 +808,10 @@ fn pick_present_mode(modes: &[wgpu::PresentMode]) -> wgpu::PresentMode {
 pub fn render_frame(
     persistent: &mut PersistentGpu,
     surface_state: &mut SurfaceBoundState,
-    page_backdrop: &[Vertex],
-    background_color: [f64; 4],
-    committed: &[Vertex],
-    raw_head: &[Vertex],
-    prediction: &[Vertex],
-    ui_output: UiOutput,
+    data: FrameRenderData<'_>,
 ) -> Result<(), wgpu::SurfaceError> {
     let acquired = acquire_frame(persistent, surface_state)?;
-    render_acquired_frame(
-        persistent,
-        surface_state,
-        acquired,
-        page_backdrop,
-        background_color,
-        committed,
-        raw_head,
-        prediction,
-        ui_output,
-    )
+    render_acquired_frame(persistent, surface_state, acquired, data)
 }
 
 /// Wait for the next drawable surface texture. With FIFO-only Android
@@ -821,13 +848,17 @@ pub fn render_acquired_frame(
     persistent: &mut PersistentGpu,
     surface_state: &mut SurfaceBoundState,
     acquired: AcquiredFrame,
-    page_backdrop: &[Vertex],
-    background_color: [f64; 4],
-    committed: &[Vertex],
-    raw_head: &[Vertex],
-    prediction: &[Vertex],
-    ui_output: UiOutput,
+    data: FrameRenderData<'_>,
 ) -> Result<(), wgpu::SurfaceError> {
+    let FrameRenderData {
+        page_backdrop,
+        background_color,
+        committed,
+        raw_head,
+        prediction,
+        ui_output,
+    } = data;
+
     // Push egui texture updates before any rendering — the font
     // atlas ships this way. Free on the same frame is OK because
     // the GPU work hasn't been submitted yet.

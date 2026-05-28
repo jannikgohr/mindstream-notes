@@ -2,13 +2,13 @@
  * Native drawing surface — JS bridge.
  *
  * The Rust side (`src-tauri/src/drawing/mod.rs`) exposes three commands
- * that toggle / clear the Android SurfaceView injected behind the
- * WebView. All three are no-ops on desktop and outside Tauri, so we
- * route through `invokeOrFallback` and never throw — the
- * DrawingNoteEditor renders a desktop-only placeholder anyway.
+ * that toggle / clear the native ink surface. Android injects a
+ * SurfaceView behind the WebView; desktop opens a first native ink
+ * window using the same Rust render thread.
  */
 
 import { invokeOrFallback } from './index';
+import { mockApi } from './mock-store';
 
 /**
  * Bring the native drawing surface up for the given note and seed
@@ -30,8 +30,12 @@ export function drawingShow(noteId: string): Promise<void> {
   return invokeOrFallback<void>('drawing_show', { noteId }, () => undefined);
 }
 
-export function drawingHide(): Promise<void> {
-  return invokeOrFallback<void>('drawing_hide', undefined, () => undefined);
+export function drawingHide(noteId?: string): Promise<void> {
+  return invokeOrFallback<void>(
+    'drawing_hide',
+    { noteId: noteId ?? null },
+    () => undefined
+  );
 }
 
 export function drawingClear(): Promise<void> {
@@ -55,6 +59,24 @@ export function drawingSetSaveDebounce(ms: number): Promise<void> {
     'drawing_set_save_debounce',
     { ms },
     () => undefined
+  );
+}
+
+/**
+ * Persist a desktop-web ink note state update through the same Rust
+ * merge/write helper Android's native save worker uses. The payload is a
+ * Yrs/Yjs v1 update produced by `ink_core::strokes_doc::StrokesDoc`.
+ */
+export function drawingSaveInkState(
+  noteId: string,
+  yrsState: number[]
+): Promise<void> {
+  return invokeOrFallback<void>(
+    'drawing_save_ink_state',
+    { noteId, yrsState },
+    async () => {
+      await mockApi.saveNote({ id: noteId, yrs_state: yrsState });
+    }
   );
 }
 
@@ -101,6 +123,32 @@ export function drawingSetToolbarSettings(
       width: settings.width ?? null,
       fingerDrawingAllowed: settings.fingerDrawingAllowed ?? null,
       pageThemeMode: settings.pageThemeMode ?? null
+    },
+    () => undefined
+  );
+}
+
+export interface DrawingDesktopPanelBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  visible: boolean;
+}
+
+export function drawingSetDesktopPanelBounds(
+  noteId: string,
+  bounds: DrawingDesktopPanelBounds
+): Promise<void> {
+  return invokeOrFallback<void>(
+    'drawing_set_desktop_panel_bounds',
+    {
+      noteId,
+      x: bounds.x,
+      y: bounds.y,
+      width: bounds.width,
+      height: bounds.height,
+      visible: bounds.visible
     },
     () => undefined
   );

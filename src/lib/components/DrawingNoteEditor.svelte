@@ -28,12 +28,13 @@
    * away" gesture doesn't strand the change for the rest of the
    * debounce window).
    *
-   * Desktop: the native layer isn't implemented yet (Phase 2 of
-   * the roadmap). Show a placeholder.
+   * Desktop: mounts a native overlay window that tracks this
+   * Dockview panel's viewport rect. It is still a milestone-1
+   * overlay, not a true child surface, but visually lives inside
+   * the panel.
    */
   import { onDestroy, onMount } from 'svelte';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-  import { PenTool } from 'lucide-svelte';
   import {
     drawingHide,
     drawingShow,
@@ -45,6 +46,7 @@
     type DrawingToolbarSettingsPayload,
     TRASH_ID
   } from '$lib/api';
+  import InkWebNoteEditor from '$lib/components/InkWebNoteEditor.svelte';
   import { isAndroid } from '$lib/platform';
   import { navigateBack } from '$lib/mobile/state.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
@@ -70,7 +72,7 @@
    *  timing is consistent across editor kinds. */
   const SAVE_DEBOUNCE_MS = 800;
 
-  let mountedAndroid = false;
+  let mountedNative = false;
   let backCleanup: (() => void) | null = null;
   let unsubSaveStatus: UnlistenFn | null = null;
   let unsubToolbarSettings: UnlistenFn | null = null;
@@ -199,6 +201,7 @@
 
   onMount(async () => {
     if (!isAndroid()) return;
+
     // Open-latency timing marker — pairs with the Rust-side
     // `[drawing.perf]` logs for the full open story.
     const tMountStart = performance.now();
@@ -211,9 +214,11 @@
     // onDestroy below detaches. Routing through navigateBack
     // (rather than setMobileScreen directly) keeps the history
     // stack in sync.
-    const onBack = () => navigateBack();
-    window.addEventListener('drawing-back', onBack);
-    backCleanup = () => window.removeEventListener('drawing-back', onBack);
+    if (isAndroid()) {
+      const onBack = () => navigateBack();
+      window.addEventListener('drawing-back', onBack);
+      backCleanup = () => window.removeEventListener('drawing-back', onBack);
+    }
 
     // Subscribe to the save worker's status stream. Filter by
     // note id so a tab opening a different ink note (desktop
@@ -253,9 +258,9 @@
     // the first frame already shows the right note's content
     // (rather than briefly the previous one).
     const tShowStart = performance.now();
-    void drawingShow(noteId);
+    await drawingShow(noteId);
     const tShowEnd = performance.now();
-    mountedAndroid = true;
+    mountedNative = true;
     console.log(
       `[ink-open] drawingShow_ipc=${(tShowEnd - tShowStart).toFixed(1)}ms ` +
         `total_to_show=${(tShowEnd - tMountStart).toFixed(1)}ms`
@@ -272,14 +277,14 @@
     // Clear the dockview status row so closing the panel removes
     // its icons.
     clearNoteStatus(noteId);
-    if (!mountedAndroid) return;
+    if (!mountedNative) return;
     // drawing_hide also signals the save worker to flush any
     // pending save immediately — so a "drew + navigated away
     // within the debounce window" gesture doesn't strand the
     // change. We don't await: the flush happens on the worker
     // thread asynchronously, and the next reopen of this note
     // will see the persisted bytes regardless.
-    void drawingHide();
+    void drawingHide(noteId);
   });
 </script>
 
@@ -291,19 +296,5 @@
        drop zOrderOnTop. -->
   <div class="h-full w-full"></div>
 {:else}
-  <div
-    class="flex h-full w-full items-center justify-center p-6 text-center"
-  >
-    <div
-      class="flex max-w-md flex-col items-center gap-3 rounded-lg border border-border bg-card p-6"
-    >
-      <PenTool class="size-8 text-muted-foreground" aria-hidden="true" />
-      <p class="text-sm font-medium text-foreground">
-        {tUi('editor.ink.desktopPlaceholderTitle')}
-      </p>
-      <p class="text-sm text-muted-foreground">
-        {tUi('editor.ink.desktopPlaceholderMessage')}
-      </p>
-    </div>
-  </div>
+  <InkWebNoteEditor {noteId} ariaLabel={tUi('editor.ink.desktopPanelLabel')} />
 {/if}

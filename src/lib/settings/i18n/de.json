@@ -32,6 +32,7 @@
     "fileTree.tree": "Dateibaum",
     "fileTree.newNote": "Neue Notiz",
     "fileTree.newDrawing": "Neue Zeichnung",
+    "fileTree.newInk": "Neue Tintennotiz",
     "fileTree.newFolder": "Neuer Ordner",
     "fileTree.loading": "Wird geladen…",
     "fileTree.error": "Notizen konnten nicht geladen werden",
@@ -107,8 +108,9 @@
     "editor.unknownKind.titleLabel": "Notiz",
     "editor.unknownKind.kindLabel": "Editor-Typ",
 
-    "editor.ink.desktopPlaceholderTitle": "Tintennotizen funktionieren vorerst nur unter Android",
-    "editor.ink.desktopPlaceholderMessage": "Die native Zeichenebene wird noch auf den Desktop portiert. Öffne diese Notiz auf deinem Smartphone, um zu zeichnen — der Stack ist in docs/native-egui-layer dokumentiert.",
+    "editor.ink.desktopNativeWindowTitle": "Tintennotiz in einem nativen Fenster geöffnet",
+    "editor.ink.desktopNativeWindowMessage": "Zeichne im separaten Tintenfenster, während die Desktop-Brücke in das Editor-Panel eingebettet wird.",
+    "editor.ink.desktopPanelLabel": "Tintennotiz-Leinwand",
 
     "updater.checkFailed.title": "Update-Prüfung fehlgeschlagen",
     "updater.checkFailed.message": "Der Update-Server ist nicht erreichbar. Bitte prüfe deine Internetverbindung und versuche es erneut.",
