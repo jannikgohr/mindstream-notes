@@ -20,7 +20,7 @@
 //! because `egui::Frame::fill` needs an explicit value (egui doesn't
 //! auto-apply `Visuals::panel_fill` to user-built frames).
 //!
-//! For [`crate::drawing::ui::CanvasUi`] callers nothing changes —
+//! For [`crate::ui::CanvasUi`] callers nothing changes —
 //! you still construct a `DrawingTheme` and hand it to `set_theme`.
 
 use egui::Color32;

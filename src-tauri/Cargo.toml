@@ -72,6 +72,7 @@ ink-stroke-modeler-rs = "0.1"
 # bridge and the first desktop native-window bridge. Platform-only
 # glue (JNI/NDK on Android, tao/wry event hooks on desktop) stays in
 # cfg-specific dependency blocks below.
+ink-core = { path = "../crates/ink-core" }
 wgpu = "27"
 egui = "0.33"
 egui-wgpu = "0.33"

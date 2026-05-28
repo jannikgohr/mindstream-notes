@@ -1,0 +1,15 @@
+[package]
+name = "ink-core"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+bytemuck = { version = "1", features = ["derive"] }
+egui = "0.33"
+egui-shadcn = "0.3.1"
+log = "0.4"
+lucide-icons = "0.555"
+uuid = { version = "1", features = ["v4", "js"] }
+yrs = "0.26"
+
