@@ -393,11 +393,25 @@ impl InkWebApp {
     }
 
     fn handle_scroll_navigation(&mut self, response: &egui::Response, ctx: &egui::Context) {
-        if !response.hovered() {
+        let (scroll, modifiers, hover_pos, zoom_delta) = ctx.input(|i| {
+            (
+                i.smooth_scroll_delta,
+                i.modifiers,
+                i.pointer.hover_pos(),
+                i.zoom_delta(),
+            )
+        });
+        let Some(hover_pos) = hover_pos.filter(|pos| response.rect.contains(*pos)) else {
+            return;
+        };
+
+        if zoom_delta.is_finite() && zoom_delta > 0.0 && (zoom_delta - 1.0).abs() > 0.001 {
+            self.cancel_in_flight_stroke();
+            self.finish_eraser_drag(true);
+            self.view.zoom_around(hover_pos, zoom_delta);
             return;
         }
-        let (scroll, modifiers, hover_pos) =
-            ctx.input(|i| (i.smooth_scroll_delta, i.modifiers, i.pointer.hover_pos()));
+
         if scroll == egui::Vec2::ZERO || !vec2_is_finite(scroll) {
             return;
         }
@@ -405,10 +419,8 @@ impl InkWebApp {
         self.cancel_in_flight_stroke();
         self.finish_eraser_drag(true);
         if modifiers.command || modifiers.ctrl {
-            if let Some(pos) = hover_pos.filter(|pos| response.rect.contains(*pos)) {
-                let factor = (1.0_f32 + scroll.y * 0.001).clamp(0.75, 1.25);
-                self.view.zoom_around(pos, factor);
-            }
+            let factor = (1.0_f32 + scroll.y * 0.001).clamp(0.75, 1.25);
+            self.view.zoom_around(hover_pos, factor);
         } else if modifiers.shift {
             self.view.pan_by(scroll.x + scroll.y, 0.0);
         } else {
