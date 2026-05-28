@@ -2227,6 +2227,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "ink-core"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "egui",
+ "egui-shadcn",
+ "log",
+ "lucide-icons",
+ "uuid",
+ "yrs",
+]
+
+[[package]]
 name = "ink-stroke-modeler-rs"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2663,6 +2676,7 @@ dependencies = [
  "egui-shadcn",
  "egui-wgpu",
  "etebase",
+ "ink-core",
  "ink-stroke-modeler-rs",
  "jni 0.21.1",
  "keyring-core",
@@ -2686,6 +2700,8 @@ dependencies = [
  "tauri-plugin-shell",
  "tauri-plugin-updater",
  "tauri-plugin-window-state",
+ "tauri-runtime",
+ "tauri-runtime-wry",
  "thiserror 2.0.18",
  "tokio",
  "urlencoding",

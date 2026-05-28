@@ -1,34 +1,33 @@
 //! Native "ink" drawing layer.
 //!
 //! What this is:
-//!   - A Tauri-callable surface that injects a hardware-accelerated
-//!     Android `SurfaceView` below the Tauri WebView's chrome. The
-//!     SurfaceView captures touch / stylus input and renders thin
-//!     lines via `wgpu` with an `egui` toolbar overlay.
+//! - A Tauri-callable surface that injects a hardware-accelerated
+//!   Android `SurfaceView` below the Tauri WebView's chrome. The
+//!   SurfaceView captures touch / stylus input and renders thin lines
+//!   via `wgpu` with an `egui` toolbar overlay.
 //!
 //! Module layout:
-//!   - `mod.rs`             — this file: Tauri commands + module decls
-//!   - `input.rs`           — platform-neutral input types (`Sample`,
-//!                            `ToolKind`, `SampleAction`, `buttons`).
-//!                            Host-buildable; the R4 input shape.
-//!   - `surface_source.rs`  — `SurfaceSource` trait (R3). Pure
-//!                            bounds, no platform deps.
-//!   - `page.rs`            — page-coordinate model + the
-//!                            `segment_quad_positions` geometry math.
-//!   - `strokes_doc.rs`     — yrs schema façade.
-//!   - `stroke_modeler.rs`  — D1 stroke smoothing wrapper around
-//!                            ink-stroke-modeler-rs. Host-buildable.
-//!   - `pipeline.rs`        — wgpu state + per-frame GPU pass.
-//!                            Takes `Box<dyn SurfaceSource>` rather
-//!                            than any platform-specific window type.
-//!   - `ui/`                — egui-driven UI overlay.
-//!     - `mod.rs`             — `CanvasUi` + `RenderActions` + `UiOutput`
-//!     - `toolbar.rs`         — the toolbar widget
-//!   - `render.rs`          — render thread state machine + the
-//!                            Tauri-facing public API.
-//!   - `platform/`          — per-OS glue (R5):
-//!     - `android.rs`         — `AndroidWindow` + JNI exports.
-//!                              cfg-gated to `target_os = "android"`.
+//! - `mod.rs`: this file, Tauri commands and module declarations.
+//! - `input.rs`: platform-neutral input types (`Sample`, `ToolKind`,
+//!   `SampleAction`, `buttons`). Host-buildable; the R4 input shape.
+//! - `surface_source.rs`: `SurfaceSource` trait (R3). Pure bounds, no
+//!   platform deps.
+//! - `page.rs`: page-coordinate model and the
+//!   `segment_quad_positions` geometry math.
+//! - `strokes_doc.rs`: yrs schema facade.
+//! - `stroke_modeler.rs`: D1 stroke smoothing wrapper around
+//!   ink-stroke-modeler-rs. Host-buildable.
+//! - `pipeline.rs`: wgpu state and per-frame GPU pass. Takes
+//!   `Box<dyn SurfaceSource>` rather than any platform-specific
+//!   window type.
+//! - `ui/`: egui-driven UI overlay.
+//!   - `mod.rs`: `CanvasUi`, `RenderActions`, and `UiOutput`.
+//!   - `toolbar.rs`: the toolbar widget.
+//! - `render.rs`: render thread state machine and the Tauri-facing
+//!   public API.
+//! - `platform/`: per-OS glue (R5).
+//!   - `android.rs`: `AndroidWindow` and JNI exports, cfg-gated to
+//!     `target_os = "android"`.
 //!
 //! Threading model:
 //!   - All wgpu / egui state lives on a dedicated render thread
@@ -48,7 +47,11 @@
 //!   `[ stroke canvas (atop above)  ]`    its toolbar at the top of the
 //!                                       surface (which is below header)
 
+#[cfg(desktop)]
+use std::sync::{Mutex, OnceLock};
 use tauri::AppHandle;
+#[cfg(desktop)]
+use tauri::{Manager, PhysicalPosition, PhysicalSize};
 
 // Cross-platform modules (no wgpu / no JNI / no NDK) — kept
 // compiled everywhere so `cargo test` catches regressions on the
@@ -60,18 +63,24 @@ pub mod stroke_modeler;
 pub mod strokes_doc;
 pub mod surface_source;
 
-// Android-only modules (wgpu / egui / NDK / JNI). When the desktop
-// port (E1) lands, `pipeline` + `render` + `ui` drop their cfg
-// gates and the per-platform glue under `platform/` carries the
-// remaining cfgs.
-#[cfg(target_os = "android")]
+// Native-render modules. `pipeline` / `render` / `ui` are shared by
+// Android's SurfaceView bridge and desktop's first native-window
+// bridge; `platform/` carries the OS-specific glue.
+#[cfg(any(target_os = "android", desktop))]
 pub mod pipeline;
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", desktop))]
 pub mod platform;
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", desktop))]
 pub mod render;
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", desktop))]
 pub mod ui;
+
+#[cfg(desktop)]
+const DESKTOP_INK_WINDOW_LABEL: &str = "mindstream-ink-note";
+#[cfg(desktop)]
+const MAIN_WINDOW_LABEL: &str = "main";
+#[cfg(desktop)]
+static DESKTOP_ACTIVE_NOTE: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 
 // ---------- App startup hook ----------
 
@@ -81,8 +90,33 @@ pub mod ui;
 /// init itself is idempotent — second call silently no-ops.
 pub fn init(app: AppHandle) {
     save_worker::init(app.clone());
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", desktop))]
     render::init(app);
+}
+
+#[cfg(desktop)]
+fn desktop_active_note() -> &'static Mutex<Option<String>> {
+    DESKTOP_ACTIVE_NOTE.get_or_init(|| Mutex::new(None))
+}
+
+#[cfg(desktop)]
+fn set_desktop_active_note(note_id: Option<String>) {
+    if let Ok(mut active) = desktop_active_note().lock() {
+        *active = note_id;
+    }
+}
+
+#[cfg(desktop)]
+fn desktop_active_note_id() -> Option<String> {
+    desktop_active_note()
+        .lock()
+        .ok()
+        .and_then(|active| active.clone())
+}
+
+#[cfg(desktop)]
+fn desktop_note_is_active(note_id: &str) -> bool {
+    desktop_active_note_id().as_deref() == Some(note_id)
 }
 
 /// Tell the auto-save worker that the named ink note's stroke
@@ -129,8 +163,12 @@ pub fn notify_dirty(note_id: &str) {
 /// active-note swap message reaches the render thread.
 #[tauri::command]
 #[allow(unused_variables)]
-pub fn drawing_show(db: tauri::State<'_, crate::db::Db>, note_id: String) -> Result<(), String> {
-    #[cfg(target_os = "android")]
+pub fn drawing_show(
+    app: AppHandle,
+    db: tauri::State<'_, crate::db::Db>,
+    note_id: String,
+) -> Result<(), String> {
+    #[cfg(any(target_os = "android", desktop))]
     {
         // Open-path timing — prefix `[drawing.perf]` so it's easy to
         // grep in logcat. Tells us:
@@ -151,10 +189,16 @@ pub fn drawing_show(db: tauri::State<'_, crate::db::Db>, note_id: String) -> Res
         let t_active_start = std::time::Instant::now();
         // Set the active note BEFORE bringing the surface up so the
         // first frame already shows the right strokes.
-        render::set_active_note(Some(note_id), Some(yrs_state));
+        render::set_active_note(Some(note_id.clone()), Some(yrs_state));
         let t_active = t_active_start.elapsed();
         let t_show_start = std::time::Instant::now();
+        #[cfg(target_os = "android")]
         let result = platform::android::ui::call_show().map_err(|e| format!("drawing_show: {e}"));
+        #[cfg(desktop)]
+        let result = {
+            set_desktop_active_note(Some(note_id.clone()));
+            show_desktop_ink_window(&app, &note_id)
+        };
         log::info!(
             "[drawing.perf] drawing_show: sql_load={:?} set_active={:?} call_show={:?} state_bytes={}",
             t_load,
@@ -164,7 +208,7 @@ pub fn drawing_show(db: tauri::State<'_, crate::db::Db>, note_id: String) -> Res
         );
         result
     }
-    #[cfg(not(target_os = "android"))]
+    #[cfg(not(any(target_os = "android", desktop)))]
     {
         Ok(())
     }
@@ -181,6 +225,22 @@ pub fn drawing_set_save_debounce(ms: u64) -> Result<(), String> {
     Ok(())
 }
 
+/// Persist an ink note state update through the same merge/write path
+/// the native save worker uses. Desktop web calls this with the
+/// `StrokesDoc` bytes emitted by `ink-egui-web`; Android normally
+/// reaches the same helper through `save_worker`.
+#[tauri::command]
+pub fn drawing_save_ink_state(
+    db: tauri::State<'_, crate::db::Db>,
+    note_id: String,
+    yrs_state: Vec<u8>,
+) -> Result<(), String> {
+    db.with_conn_mut(|c| crate::notes::save_yrs_state(c, &note_id, &yrs_state))
+        .map_err(|e| format!("drawing_save_ink_state: {e}"))?
+        .then_some(())
+        .ok_or_else(|| format!("drawing_save_ink_state: note {note_id} not found"))
+}
+
 /// Hide the native drawing surface and let the WebView take input again.
 ///
 /// Called from `onDestroy`. Idempotent — repeated hides are fine.
@@ -190,13 +250,73 @@ pub fn drawing_set_save_debounce(ms: u64) -> Result<(), String> {
 /// would still eventually fire, but with a visible delay if the
 /// user is, say, scrolling through other notes immediately after).
 #[tauri::command]
-pub fn drawing_hide() -> Result<(), String> {
+pub fn drawing_hide(_app: AppHandle, note_id: Option<String>) -> Result<(), String> {
     save_worker::flush_all();
     #[cfg(target_os = "android")]
     {
+        let _ = note_id;
+        render::set_active_note(None, None);
         platform::android::ui::call_hide().map_err(|e| format!("drawing_hide: {e}"))
     }
-    #[cfg(not(target_os = "android"))]
+    #[cfg(desktop)]
+    {
+        let should_hide = note_id
+            .as_deref()
+            .map(desktop_note_is_active)
+            .unwrap_or(true);
+        if should_hide {
+            set_desktop_active_note(None);
+            render::set_active_note(None, None);
+            render::clear_surface();
+            if let Some(window) = _app.get_window(DESKTOP_INK_WINDOW_LABEL) {
+                let _ = window.hide();
+            }
+        }
+        Ok(())
+    }
+    #[cfg(not(any(target_os = "android", desktop)))]
+    {
+        Ok(())
+    }
+}
+
+#[tauri::command]
+#[allow(unused_variables)]
+pub fn drawing_set_desktop_panel_bounds(
+    app: AppHandle,
+    note_id: String,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    visible: bool,
+) -> Result<(), String> {
+    #[cfg(desktop)]
+    {
+        let active_note_id = desktop_active_note_id();
+        let is_active = active_note_id.as_deref() == Some(note_id.as_str());
+        if !is_active {
+            if active_note_id.is_none() && visible {
+                set_desktop_active_note(Some(note_id.clone()));
+                render::set_active_note(Some(note_id.clone()), None);
+                if let Some(window) = app.get_window(DESKTOP_INK_WINDOW_LABEL) {
+                    let _ = window.set_title(&format!("Ink Note - {note_id}"));
+                }
+            } else {
+                return Ok(());
+            }
+        }
+        if is_active && !visible {
+            set_desktop_active_note(None);
+            render::set_active_note(None, None);
+            if let Some(window) = app.get_window(DESKTOP_INK_WINDOW_LABEL) {
+                let _ = window.hide();
+            }
+            return Ok(());
+        }
+        set_desktop_panel_bounds(&app, x, y, width, height, visible)
+    }
+    #[cfg(not(desktop))]
     {
         Ok(())
     }
@@ -215,7 +335,7 @@ pub fn drawing_hide() -> Result<(), String> {
 #[tauri::command]
 #[allow(unused_variables)]
 pub fn drawing_set_theme(dark: bool, accent_hex: Option<String>) -> Result<(), String> {
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", desktop))]
     {
         let accent_argb = accent_hex
             .as_deref()
@@ -235,7 +355,7 @@ pub fn drawing_set_toolbar_settings(
     finger_drawing_allowed: Option<bool>,
     page_theme_mode: Option<String>,
 ) -> Result<(), String> {
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", desktop))]
     {
         render::set_toolbar_settings(
             tool,
@@ -251,7 +371,6 @@ pub fn drawing_set_toolbar_settings(
 /// Parse the `#RRGGBB` / `#RRGGBBAA` hex string the JS picker
 /// produces into a packed `0xAARRGGBB` u32 (with alpha forced to
 /// `0xFF` — the toolbar accent is always opaque).
-#[cfg(target_os = "android")]
 fn parse_accent_hex(input: &str) -> Option<u32> {
     let s = input.strip_prefix('#').unwrap_or(input);
     let (r, g, b) = match s.len() {
@@ -277,7 +396,6 @@ fn parse_accent_hex(input: &str) -> Option<u32> {
 /// unparseable value). Matches the `--primary` token resolved from
 /// `src/app.css` for the corresponding mode — near-white on dark,
 /// near-black on light.
-#[cfg(target_os = "android")]
 fn default_accent_argb(dark: bool) -> u32 {
     if dark {
         // oklch(0.985 0 0) ≈ #FAFAFA
@@ -294,13 +412,85 @@ fn default_accent_argb(dark: bool) -> u32 {
 /// "clear canvas" button has somewhere to land.
 #[tauri::command]
 pub fn drawing_clear() -> Result<(), String> {
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", desktop))]
     {
         render::clear_strokes();
         Ok(())
     }
-    #[cfg(not(target_os = "android"))]
+    #[cfg(not(any(target_os = "android", desktop)))]
     {
         Ok(())
     }
+}
+
+#[cfg(desktop)]
+pub fn shutdown_desktop(app: &AppHandle) {
+    set_desktop_active_note(None);
+    if let Some(window) = app.get_window(DESKTOP_INK_WINDOW_LABEL) {
+        render::set_active_note(None, None);
+        render::clear_surface();
+        let _ = window.close();
+    }
+}
+
+#[cfg(desktop)]
+fn show_desktop_ink_window(app: &AppHandle, note_id: &str) -> Result<(), String> {
+    let window = if let Some(window) = app.get_window(DESKTOP_INK_WINDOW_LABEL) {
+        window
+    } else {
+        let mut builder = tauri::Window::builder(app, DESKTOP_INK_WINDOW_LABEL)
+            .title(format!("Ink Note - {note_id}"))
+            .decorations(false)
+            .shadow(false)
+            .skip_taskbar(true)
+            .resizable(false)
+            .visible(false)
+            .inner_size(1.0, 1.0)
+            .position(0.0, 0.0);
+        if let Some(main) = app.get_window(MAIN_WINDOW_LABEL) {
+            builder = builder
+                .parent(&main)
+                .map_err(|e| format!("desktop ink window parent: {e}"))?;
+        }
+        builder
+            .build()
+            .map_err(|e| format!("desktop ink window: {e}"))?
+    };
+
+    let _ = window.set_title(&format!("Ink Note - {note_id}"));
+    let size = window
+        .inner_size()
+        .map_err(|e| format!("desktop ink window size: {e}"))?;
+    render::set_surface(Box::new(window), size.width.max(1), size.height.max(1));
+    Ok(())
+}
+
+#[cfg(desktop)]
+fn set_desktop_panel_bounds(
+    app: &AppHandle,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    visible: bool,
+) -> Result<(), String> {
+    let Some(window) = app.get_window(DESKTOP_INK_WINDOW_LABEL) else {
+        return Ok(());
+    };
+    if !visible || width < 2.0 || height < 2.0 {
+        let _ = window.hide();
+        return Ok(());
+    }
+
+    let width = width.round().max(1.0) as u32;
+    let height = height.round().max(1.0) as u32;
+    window
+        .set_position(PhysicalPosition::new(x.round() as i32, y.round() as i32))
+        .map_err(|e| format!("desktop ink set_position: {e}"))?;
+    window
+        .set_size(PhysicalSize::new(width, height))
+        .map_err(|e| format!("desktop ink set_size: {e}"))?;
+    render::resize_surface(width, height);
+    let _ = window.show();
+    Ok(())
 }

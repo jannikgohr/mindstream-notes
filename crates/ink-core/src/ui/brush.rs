@@ -40,6 +40,15 @@ const POPOVER_WIDTH: f32 = 240.0;
 /// Vertical gap between the trigger button and the popover.
 const POPOVER_GAP: f32 = 6.0;
 
+pub struct BrushPopover<'a> {
+    pub id_source: Id,
+    pub trigger_rect: Rect,
+    pub current_width: f32,
+    pub current_color: u32,
+    pub actions: &'a mut RenderActions,
+    pub active_control_bounds: &'a mut ActiveControlBounds,
+}
+
 /// Toggle the brush popover's open state. Called by the toolbar
 /// when the user taps the already-active Pen button.
 pub fn toggle_open(ctx: &egui::Context, id_source: Id) {
@@ -65,16 +74,16 @@ pub fn close(ctx: &egui::Context, id_source: Id) {
 /// parent ui-tree to attach to and threading an outer Ui in just to
 /// reach `.ctx()` would force the caller to scaffold a dummy Area
 /// purely for that reason.
-pub fn show_if_open(
-    ctx: &egui::Context,
-    shadcn: &ShadcnTheme,
-    id_source: Id,
-    trigger_rect: Rect,
-    current_width: f32,
-    current_color: u32,
-    actions: &mut RenderActions,
-    active_control_bounds: &mut ActiveControlBounds,
-) {
+pub fn show_if_open(ctx: &egui::Context, shadcn: &ShadcnTheme, popover: BrushPopover<'_>) {
+    let BrushPopover {
+        id_source,
+        trigger_rect,
+        current_width,
+        current_color,
+        actions,
+        active_control_bounds,
+    } = popover;
+
     let open_id = id_source.with("open");
     let mut open = ctx.data(|d| d.get_temp::<bool>(open_id)).unwrap_or(false);
     if !open {

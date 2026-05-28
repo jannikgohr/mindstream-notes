@@ -9,6 +9,9 @@ node_modules
 
 # Tauri
 /src-tauri/target
+/crates/ink-core/target
+/crates/ink-core/Cargo.lock
+/crates/ink-egui-web/target
 /src-tauri/gen/schemas
 # Cargo.lock is intentionally committed for src-tauri: it's a binary
 # crate (the app), and reproducible builds need a pinned dependency
@@ -18,6 +21,7 @@ node_modules
 # It needs absolute paths (cargo doesn't resolve relative paths in build-script overrides),
 # so it can't be committed.
 /src-tauri/.cargo/config.toml
+/src/lib/ink-web/pkg
 ## Tauri signer
 .tauri
 
