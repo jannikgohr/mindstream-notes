@@ -168,6 +168,7 @@
     "account.collabServerUrl": { "label": "Live-Collab-Server", "description": "WebSocket-URL des verschlüsselten Relays für Echtzeit-Co-Editing. Leer lassen, um Live-Collab zu deaktivieren; periodische Synchronisation funktioniert weiterhin." },
     "account.syncEnabled": { "label": "Synchronisation aktivieren" },
     "general.startOnLogin": { "label": "Autostart bei Anmeldung" },
+    "general.closeToTray": { "label": "In Systemablage schließen", "description": "Blendet das Hauptfenster aus, statt die App beim Schließen zu beenden." },
     "appearance.mode": { "label": "Modus" },
     "appearance.accent": { "label": "Akzentfarbe" },
     "appearance.density": { "label": "Dichte" },
