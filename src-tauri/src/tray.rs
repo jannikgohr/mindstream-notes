@@ -1,6 +1,6 @@
 use serde::Serialize;
 use tauri::{
-    menu::{Menu, MenuItem},
+    menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     App, AppHandle, Emitter, Manager,
 };
@@ -26,8 +26,12 @@ pub fn init(app: &App) -> tauri::Result<()> {
     let new_note = MenuItem::with_id(app, NEW_NOTE_ID, "New note", true, None::<&str>)?;
     let new_drawing = MenuItem::with_id(app, NEW_DRAWING_ID, "New drawing", true, None::<&str>)?;
     let new_diagram = MenuItem::with_id(app, NEW_DIAGRAM_ID, "New diagram", true, None::<&str>)?;
+    let separator = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, QUIT_ID, "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&new_note, &new_drawing, &new_diagram, &quit])?;
+    let menu = Menu::with_items(
+        app,
+        &[&new_note, &new_drawing, &new_diagram, &separator, &quit],
+    )?;
 
     let mut builder = TrayIconBuilder::new()
         .menu(&menu)
