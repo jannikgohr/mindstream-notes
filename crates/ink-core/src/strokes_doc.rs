@@ -430,6 +430,7 @@ impl StrokesDoc {
     ///      blocking any mid-iter mutation).
     ///   2. Single mutable transaction that walks the collected
     ///      refs and flips their tombstone flag.
+    ///
     /// `MapRef` is a logical handle into the doc (no borrow), so
     /// passing them across the transaction boundary is sound.
     pub fn tombstone_strokes(&mut self, ids: &std::collections::HashSet<String>) -> usize {
