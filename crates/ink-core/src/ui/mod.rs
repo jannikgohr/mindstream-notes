@@ -216,33 +216,14 @@ pub struct CanvasUi {
     theme: DrawingTheme,
     shadcn: ShadcnTheme,
     active_control_bounds: Vec<[f32; 4]>,
+    embedded_fonts_installed: bool,
 }
 
 impl CanvasUi {
     pub fn new() -> Self {
         let ctx = egui::Context::default();
         ctx.set_pixels_per_point(PIXELS_PER_POINT);
-
-        // Register the bundled Lucide TTF as a custom font family
-        // (`LUCIDE_FAMILY`) so the toolbar can render icons via
-        // `RichText::new(char::from(Icon::X).to_string())
-        //     .family(FontFamily::Name(LUCIDE_FAMILY.into()))`.
-        // egui-shadcn doesn't auto-register the font even though it
-        // depends on lucide-icons — we still own the font loading.
-        // We don't add Lucide to the proportional / monospace
-        // fallback chains; only widgets that explicitly opt in
-        // (the toolbar) render glyphs, so regular text isn't
-        // affected by the icon font's missing letter coverage.
-        let mut fonts = egui::FontDefinitions::default();
-        fonts.font_data.insert(
-            LUCIDE_FAMILY.into(),
-            egui::FontData::from_static(lucide_icons::LUCIDE_FONT_BYTES).into(),
-        );
-        fonts.families.insert(
-            egui::FontFamily::Name(LUCIDE_FAMILY.into()),
-            vec![LUCIDE_FAMILY.into()],
-        );
-        ctx.set_fonts(fonts);
+        install_lucide_font(&ctx);
 
         // No `set_visuals` call here — egui-shadcn manages per-widget
         // visuals through its own scoped `Theme` (see `toolbar::show`).
@@ -256,7 +237,21 @@ impl CanvasUi {
             theme,
             shadcn,
             active_control_bounds: Vec::new(),
+            embedded_fonts_installed: false,
         }
+    }
+
+    /// Prepare a host-owned egui context before the first embedded
+    /// toolbar frame. eframe locks font data for layout during
+    /// `App::update`, so installing Lucide lazily inside the same
+    /// update that paints the toolbar is too late for that frame.
+    pub fn prepare_embedded(&mut self, ctx: &egui::Context) {
+        if self.embedded_fonts_installed {
+            return;
+        }
+        install_lucide_font(ctx);
+        self.embedded_fonts_installed = true;
+        ctx.request_repaint();
     }
 
     /// Swap the toolbar theme — driven by the `drawing_set_theme`
@@ -332,6 +327,32 @@ impl CanvasUi {
         (actions, ui_output)
     }
 
+    /// Render the same toolbar into an egui context owned by an
+    /// embedding framework, such as eframe on web. This keeps the
+    /// widget tree, theme, popovers, and actions shared with the
+    /// native wgpu path while letting the host framework own event
+    /// collection and tessellation.
+    pub fn show_embedded(&mut self, ctx: &egui::Context, state: UiState) -> RenderActions {
+        if !self.embedded_fonts_installed {
+            self.prepare_embedded(ctx);
+            return RenderActions::default();
+        }
+
+        let mut actions = RenderActions::default();
+        let mut active_control_bounds = ActiveControlBounds::new(PIXELS_PER_POINT);
+        toolbar::show(
+            ctx,
+            PIXELS_PER_POINT,
+            &self.theme,
+            &self.shadcn,
+            state,
+            &mut actions,
+            &mut active_control_bounds,
+        );
+        self.active_control_bounds = active_control_bounds.into_rects();
+        actions
+    }
+
     /// Get the physical screen-pixel coordinates of all active
     /// transient UI rects (e.g. popovers).
     pub fn get_active_control_bounds(&self) -> Vec<[f32; 4]> {
@@ -343,4 +364,25 @@ impl Default for CanvasUi {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn install_lucide_font(ctx: &egui::Context) {
+    // Register the bundled Lucide TTF as a custom font family
+    // (`LUCIDE_FAMILY`) so the toolbar can render icons via
+    // `RichText::new(char::from(Icon::X).to_string())
+    //     .family(FontFamily::Name(LUCIDE_FAMILY.into()))`.
+    // egui-shadcn doesn't auto-register the font even though it
+    // depends on lucide-icons — we still own the font loading.
+    // We don't add Lucide to the proportional / monospace fallback
+    // chains; only widgets that explicitly opt in render glyphs.
+    let mut fonts = egui::FontDefinitions::default();
+    fonts.font_data.insert(
+        LUCIDE_FAMILY.into(),
+        egui::FontData::from_static(lucide_icons::LUCIDE_FONT_BYTES).into(),
+    );
+    fonts.families.insert(
+        egui::FontFamily::Name(LUCIDE_FAMILY.into()),
+        vec![LUCIDE_FAMILY.into()],
+    );
+    ctx.set_fonts(fonts);
 }
