@@ -2,6 +2,8 @@
 name = "ink-egui-web"
 version = "0.1.0"
 edition = "2021"
+description = "WebAssembly egui ink editor for Mindstream Notes"
+repository = "https://github.com/jannikgohr/mindstream-notes"
 publish = false
 
 [lib]
