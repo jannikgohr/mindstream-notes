@@ -1,34 +1,33 @@
 //! Native "ink" drawing layer.
 //!
 //! What this is:
-//!   - A Tauri-callable surface that injects a hardware-accelerated
-//!     Android `SurfaceView` below the Tauri WebView's chrome. The
-//!     SurfaceView captures touch / stylus input and renders thin
-//!     lines via `wgpu` with an `egui` toolbar overlay.
+//! - A Tauri-callable surface that injects a hardware-accelerated
+//!   Android `SurfaceView` below the Tauri WebView's chrome. The
+//!   SurfaceView captures touch / stylus input and renders thin lines
+//!   via `wgpu` with an `egui` toolbar overlay.
 //!
 //! Module layout:
-//!   - `mod.rs`             — this file: Tauri commands + module decls
-//!   - `input.rs`           — platform-neutral input types (`Sample`,
-//!                            `ToolKind`, `SampleAction`, `buttons`).
-//!                            Host-buildable; the R4 input shape.
-//!   - `surface_source.rs`  — `SurfaceSource` trait (R3). Pure
-//!                            bounds, no platform deps.
-//!   - `page.rs`            — page-coordinate model + the
-//!                            `segment_quad_positions` geometry math.
-//!   - `strokes_doc.rs`     — yrs schema façade.
-//!   - `stroke_modeler.rs`  — D1 stroke smoothing wrapper around
-//!                            ink-stroke-modeler-rs. Host-buildable.
-//!   - `pipeline.rs`        — wgpu state + per-frame GPU pass.
-//!                            Takes `Box<dyn SurfaceSource>` rather
-//!                            than any platform-specific window type.
-//!   - `ui/`                — egui-driven UI overlay.
-//!     - `mod.rs`             — `CanvasUi` + `RenderActions` + `UiOutput`
-//!     - `toolbar.rs`         — the toolbar widget
-//!   - `render.rs`          — render thread state machine + the
-//!                            Tauri-facing public API.
-//!   - `platform/`          — per-OS glue (R5):
-//!     - `android.rs`         — `AndroidWindow` + JNI exports.
-//!                              cfg-gated to `target_os = "android"`.
+//! - `mod.rs`: this file, Tauri commands and module declarations.
+//! - `input.rs`: platform-neutral input types (`Sample`, `ToolKind`,
+//!   `SampleAction`, `buttons`). Host-buildable; the R4 input shape.
+//! - `surface_source.rs`: `SurfaceSource` trait (R3). Pure bounds, no
+//!   platform deps.
+//! - `page.rs`: page-coordinate model and the
+//!   `segment_quad_positions` geometry math.
+//! - `strokes_doc.rs`: yrs schema facade.
+//! - `stroke_modeler.rs`: D1 stroke smoothing wrapper around
+//!   ink-stroke-modeler-rs. Host-buildable.
+//! - `pipeline.rs`: wgpu state and per-frame GPU pass. Takes
+//!   `Box<dyn SurfaceSource>` rather than any platform-specific
+//!   window type.
+//! - `ui/`: egui-driven UI overlay.
+//!   - `mod.rs`: `CanvasUi`, `RenderActions`, and `UiOutput`.
+//!   - `toolbar.rs`: the toolbar widget.
+//! - `render.rs`: render thread state machine and the Tauri-facing
+//!   public API.
+//! - `platform/`: per-OS glue (R5).
+//!   - `android.rs`: `AndroidWindow` and JNI exports, cfg-gated to
+//!     `target_os = "android"`.
 //!
 //! Threading model:
 //!   - All wgpu / egui state lives on a dedicated render thread
@@ -48,9 +47,9 @@
 //!   `[ stroke canvas (atop above)  ]`    its toolbar at the top of the
 //!                                       surface (which is below header)
 
-use tauri::AppHandle;
 #[cfg(desktop)]
 use std::sync::{Mutex, OnceLock};
+use tauri::AppHandle;
 #[cfg(desktop)]
 use tauri::{Manager, PhysicalPosition, PhysicalSize};
 
@@ -109,7 +108,10 @@ fn set_desktop_active_note(note_id: Option<String>) {
 
 #[cfg(desktop)]
 fn desktop_active_note_id() -> Option<String> {
-    desktop_active_note().lock().ok().and_then(|active| active.clone())
+    desktop_active_note()
+        .lock()
+        .ok()
+        .and_then(|active| active.clone())
 }
 
 #[cfg(desktop)]
