@@ -2,10 +2,9 @@
  * Native drawing surface — JS bridge.
  *
  * The Rust side (`src-tauri/src/drawing/mod.rs`) exposes three commands
- * that toggle / clear the Android SurfaceView injected behind the
- * WebView. All three are no-ops on desktop and outside Tauri, so we
- * route through `invokeOrFallback` and never throw — the
- * DrawingNoteEditor renders a desktop-only placeholder anyway.
+ * that toggle / clear the native ink surface. Android injects a
+ * SurfaceView behind the WebView; desktop opens a first native ink
+ * window using the same Rust render thread.
  */
 
 import { invokeOrFallback } from './index';

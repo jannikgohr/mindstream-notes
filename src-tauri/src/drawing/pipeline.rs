@@ -90,13 +90,36 @@ pub struct PersistentGpu {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum GpuBackend {
     Vulkan,
+    #[cfg(target_os = "windows")]
+    Dx12,
+    #[cfg(target_os = "macos")]
+    Metal,
     OpenGl,
 }
 
 impl GpuBackend {
+    fn preferred_order() -> &'static [GpuBackend] {
+        #[cfg(target_os = "windows")]
+        {
+            &[GpuBackend::Vulkan, GpuBackend::Dx12, GpuBackend::OpenGl]
+        }
+        #[cfg(target_os = "macos")]
+        {
+            &[GpuBackend::Metal]
+        }
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        {
+            &[GpuBackend::Vulkan, GpuBackend::OpenGl]
+        }
+    }
+
     fn backends(self) -> wgpu::Backends {
         match self {
             GpuBackend::Vulkan => wgpu::Backends::VULKAN,
+            #[cfg(target_os = "windows")]
+            GpuBackend::Dx12 => wgpu::Backends::DX12,
+            #[cfg(target_os = "macos")]
+            GpuBackend::Metal => wgpu::Backends::METAL,
             GpuBackend::OpenGl => wgpu::Backends::GL,
         }
     }
@@ -104,6 +127,10 @@ impl GpuBackend {
     fn label(self) -> &'static str {
         match self {
             GpuBackend::Vulkan => "Vulkan",
+            #[cfg(target_os = "windows")]
+            GpuBackend::Dx12 => "DirectX 12",
+            #[cfg(target_os = "macos")]
+            GpuBackend::Metal => "Metal",
             GpuBackend::OpenGl => "OpenGL",
         }
     }
@@ -311,17 +338,23 @@ const LAG_LOGGING_ENABLED: bool = false;
 /// before the first surface arrives — worst case = today's
 /// "blocking init on first open" behaviour.
 pub async fn build_persistent() -> Result<PersistentGpu, String> {
-    match build_persistent_with_backend(GpuBackend::Vulkan).await {
-        Ok(persistent) => Ok(persistent),
-        Err(vulkan_err) => {
-            log::warn!("[drawing] Vulkan init failed ({vulkan_err}); falling back to OpenGL");
-            build_persistent_with_backend(GpuBackend::OpenGl)
-                .await
-                .map_err(|gl_err| {
-                    format!("Vulkan init failed: {vulkan_err}; OpenGL fallback failed: {gl_err}")
-                })
+    let mut errors = Vec::new();
+    for backend in GpuBackend::preferred_order() {
+        match build_persistent_with_backend(*backend).await {
+            Ok(persistent) => return Ok(persistent),
+            Err(err) => {
+                log::warn!(
+                    "[drawing] {} init failed ({err}); trying next backend if available",
+                    backend.label()
+                );
+                errors.push(format!("{}: {err}", backend.label()));
+            }
         }
     }
+    Err(format!(
+        "all drawing GPU backends failed: {}",
+        errors.join("; ")
+    ))
 }
 
 pub async fn build_persistent_with_backend(backend: GpuBackend) -> Result<PersistentGpu, String> {
@@ -363,7 +396,8 @@ pub async fn build_persistent_with_backend(backend: GpuBackend) -> Result<Persis
         info.driver
     );
     let downlevel = adapter.get_downlevel_capabilities();
-    if backend == GpuBackend::Vulkan
+    if cfg!(target_os = "android")
+        && backend == GpuBackend::Vulkan
         && !downlevel
             .flags
             .contains(wgpu::DownlevelFlags::SURFACE_VIEW_FORMATS)

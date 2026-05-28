@@ -14,7 +14,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2.11", features = [] }
+tauri = { version = "2.11", features = ["unstable"] }
 tauri-plugin-shell = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -67,6 +67,19 @@ raw-window-handle = "0.6"
 # convention input.rs / page.rs follow.
 ink-stroke-modeler-rs = "0.1"
 
+# ---- Native "ink" drawing layer (Android + desktop) ----
+# The render/pipeline/ui modules are shared by Android's SurfaceView
+# bridge and the first desktop native-window bridge. Platform-only
+# glue (JNI/NDK on Android, tao/wry event hooks on desktop) stays in
+# cfg-specific dependency blocks below.
+wgpu = "27"
+egui = "0.33"
+egui-wgpu = "0.33"
+egui-shadcn = "0.3.1"
+lucide-icons = "0.555"
+bytemuck = { version = "1", features = ["derive"] }
+pollster = "0.4"
+
 [profile.release]
 panic = "abort"
 codegen-units = 1
@@ -78,6 +91,12 @@ strip = true
 tauri-plugin-autostart = "2"
 tauri-plugin-window-state = "2.4.1"
 tauri-plugin-updater = "2.10.1"
+# Desktop ink notes follow the wry_plugin event-loop pattern from
+# clearlysid/tauri-plugin-egui: Tauri owns the native window, while
+# the plugin sees tao mouse/scroll/resize events and forwards them
+# into our existing render thread.
+tauri-runtime = "2.11"
+tauri-runtime-wry = "2.11"
 
 # ---- keyring v4 platform backends ----
 # Each crate's Store::new() returns Result<Arc<Self>>, which coerces
@@ -116,34 +135,8 @@ android-native-keyring-store = "1"
 # Tauri plugins set up (or none, which is fine for now).
 android_logger = "0.14"
 
-# ---- Native "ink" drawing layer (POC) ----
-# Android-only for now: wgpu draws into a SurfaceView injected as a
-# sibling of the Tauri WebView. See src/drawing/* + Drawing.kt.
-# Keep these under cfg(target_os="android") so desktop builds stay
-# lean — desktop dispatch shows a placeholder until Phase 2.
-wgpu = "27"
-# egui as the in-canvas toolbar (back, clear). egui-wgpu drives
-# its tessellation through the same wgpu device our line pipeline
-# uses, so adding it is dep weight without architectural conflict.
-# Pins match tauri-plugin-egui's audit-validated trio.
-egui = "0.33"
-egui-wgpu = "0.33"
-# Shadcn-styled egui components (B2 / D5). Pulls in lucide-icons
-# transitively (0.555.x), so the same TTF backs the toolbar glyphs.
-# Pinned to v0.3.1 to match our `egui = "0.33"`; v0.5.0 requires
-# egui 0.34 and balloons the dep tree (tree-sitter / chrono / regex).
-# The v0.3.1 dep graph is tiny: egui + log + lucide-icons.
-egui-shadcn = "0.3.1"
-# Lucide icon glyphs for the egui toolbar (B1). `LUCIDE_FONT_BYTES`
-# gets loaded into egui's font definitions once at startup; glyphs
-# get referenced as
-# `RichText::new(char::from(Icon::Foo)).family(FontFamily::Name("lucide"))`.
-# Pinned to 0.555 to match egui-shadcn 0.3.1's transitive pin —
-# otherwise Cargo would pull in two copies of the ~785 KB TTF,
-# which on a universal Android APK is 4× per-ABI overhead.
-lucide-icons = "0.555"
-# (raw-window-handle promoted to the top-level [dependencies] so
-# `drawing::surface_source` can use the traits on host targets too.)
+# (wgpu/egui/bytemuck/pollster/lucide live in top-level dependencies
+# so the same drawing core compiles on desktop as well as Android.)
 # ndk gives us ANativeWindow_fromSurface(env, jsurface) — the bridge
 # between the Java Surface and the raw pointer wgpu's create_surface
 # needs. ndk-sys is the raw FFI; ndk is the higher-level wrapper —
@@ -157,10 +150,6 @@ ndk-sys = "0.6"
 # Kotlin (show/hide) without having to also depend on the keyring crate.
 ndk-context = "0.1"
 jni = "0.21"
-bytemuck = { version = "1", features = ["derive"] }
-# pollster::block_on is the minimal way to drive wgpu's async init from
-# the render thread — we don't want a full tokio runtime here.
-pollster = "0.4"
 # libc here only to read CLOCK_MONOTONIC directly via clock_gettime.
 # `MotionEvent.eventTime` on Android is `SystemClock.uptimeMillis()`,
 # which is CLOCK_MONOTONIC under the hood — so subtracting our own

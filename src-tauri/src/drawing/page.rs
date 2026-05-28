@@ -25,10 +25,8 @@
 //!   - D7: multi-page (more pages stacked along Y in document space).
 
 // The GPU-uniform struct (`ViewUniform` + its bytemuck derives)
-// requires `bytemuck`, which lives in the Android-only dep block.
-// Cfg-gate the uniform itself + the conversion method so the rest
-// of this file (the pure math) compiles + tests on every host.
-#[cfg(target_os = "android")]
+// is shared by Android and desktop now that both use the native
+// wgpu drawing core.
 use bytemuck::{Pod, Zeroable};
 
 /// Page dimensions in document units. 1 unit = 1/144 inch at the
@@ -349,9 +347,7 @@ impl ViewTransform {
     }
 
     /// Pack into the std140-laid-out uniform the shader reads.
-    /// Android-only because the matching `ViewUniform` requires
-    /// bytemuck, which only ships on the Android-target dep set.
-    #[cfg(target_os = "android")]
+    /// Shared by every native renderer backend.
     pub fn as_uniform(&self) -> ViewUniform {
         ViewUniform {
             scale: self.scale,
@@ -396,7 +392,6 @@ fn clamp_axis_with_bounds(
 /// pad after `scale` mirrors the implicit padding the WGSL
 /// compiler inserts in the matching `ViewUniform` struct in
 /// `line.wgsl`. Total size: 24 bytes.
-#[cfg(target_os = "android")]
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
 pub struct ViewUniform {
