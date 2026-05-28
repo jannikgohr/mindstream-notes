@@ -7,22 +7,22 @@
 //! rotations, surface re-attaches, and (eventually) pan/zoom.
 //!
 //! This file owns three pieces:
-//!   - `PageSize`        — width/height in page-units, with named
-//!                         constants for common paper sizes.
-//!   - `DocumentLayout`  — uniform pages stacked vertically in
-//!                         document coordinates.
-//!   - `ViewTransform`   — runtime mapping from document → surface
-//!                         pixels. Initially fitted to page 0, then
-//!                         mutated by D6 pan/zoom gestures.
-//!   - `ViewUniform`     — std140-laid-out GPU uniform that mirrors
-//!                         the shader struct in `line.wgsl`.
+//! - `PageSize`: width/height in page-units, with named constants
+//!   for common paper sizes.
+//! - `DocumentLayout`: uniform pages stacked vertically in document
+//!   coordinates.
+//! - `ViewTransform`: runtime mapping from document to surface
+//!   pixels. Initially fitted to page 0, then mutated by D6 pan/zoom
+//!   gestures.
+//! - `ViewUniform`: std140-laid-out GPU uniform that mirrors the
+//!   shader struct in `line.wgsl`.
 //!
 //! Future work tracked in the roadmap:
-//!   - C1: per-note `PageSize` (today's `DEFAULT_PAGE` is hardcoded).
-//!   - F6: user-facing page-size setting.
-//!   - D6: pan + pinch-zoom (`ViewTransform::fit_in_surface` becomes
-//!         the initial state, then mutated by gesture handling).
-//!   - D7: multi-page (more pages stacked along Y in document space).
+//! - C1: per-note `PageSize` (today's `DEFAULT_PAGE` is hardcoded).
+//! - F6: user-facing page-size setting.
+//! - D6: pan + pinch-zoom (`ViewTransform::fit_in_surface` becomes
+//!   the initial state, then mutated by gesture handling).
+//! - D7: multi-page (more pages stacked along Y in document space).
 
 // The GPU-uniform struct (`ViewUniform` + its bytemuck derives)
 // is shared by Android and desktop now that both use the native

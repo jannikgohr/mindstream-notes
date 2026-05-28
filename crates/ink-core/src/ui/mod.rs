@@ -7,21 +7,17 @@
 //! GPU pass needs.
 //!
 //! Module layout (grows as we add tools):
-//!   - `toolbar.rs`     — Pen / Eraser toggle, Undo, Redo, Clear
-//!                        (no Back — the Svelte header above the
-//!                        SurfaceView already owns navigation).
-//!   - `theme.rs`       — shadcn-aligned colour tokens → `egui::Visuals`
-//!                        applied to the context. Bridged from JS
-//!                        via the (future) `drawing_set_theme` Tauri
-//!                        command.
-//!   - `color_picker.rs`— TODO: D5
-//!   - `eraser.rs`      — folded into the tool toggle for now; the
-//!                        eraser HIT-TEST lives in `render.rs` since
-//!                        it needs access to the StrokesDoc. If the
-//!                        eraser grows visual affordances (overlay
-//!                        circle at the pointer, etc.) those would
-//!                        graduate to a dedicated file.
-//!   - `brush.rs`       — TODO: D5
+//! - `toolbar.rs`: Pen / Eraser toggle, Undo, Redo, Clear (no Back;
+//!   the Svelte header above the SurfaceView already owns navigation).
+//! - `theme.rs`: shadcn-aligned colour tokens applied to the context.
+//!   Bridged from JS via the future `drawing_set_theme` Tauri command.
+//! - `color_picker.rs`: TODO: D5.
+//! - `eraser.rs`: folded into the tool toggle for now; the eraser
+//!   hit-test lives in `render.rs` since it needs access to the
+//!   StrokesDoc. If the eraser grows visual affordances (overlay
+//!   circle at the pointer, etc.) those would graduate to a dedicated
+//!   file.
+//! - `brush.rs`: TODO: D5.
 
 pub mod brush;
 pub mod color_picker;
@@ -108,9 +104,9 @@ impl Default for UiState {
 ///
 /// No `back` field: B1 removed the egui Back button (it duplicated
 /// the Svelte mobile header's back arrow that sits above the
-/// SurfaceView). The JNI surface — `platform::android::ui::call_back`
-/// + `Drawing.backFromNative` — stays in place for a future re-wire
-/// if needed.
+/// SurfaceView). The JNI bridge through
+/// `platform::android::ui::call_back` and `Drawing.backFromNative`
+/// stays in place if we need a future re-wire.
 #[derive(Default, Debug, Clone, Copy)]
 pub struct RenderActions {
     /// Toolbar Clear button — tombstones every visible stroke and
