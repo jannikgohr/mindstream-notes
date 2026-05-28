@@ -105,6 +105,32 @@ export function drawingSetToolbarSettings(
   );
 }
 
+export interface DrawingDesktopPanelBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  visible: boolean;
+}
+
+export function drawingSetDesktopPanelBounds(
+  noteId: string,
+  bounds: DrawingDesktopPanelBounds
+): Promise<void> {
+  return invokeOrFallback<void>(
+    'drawing_set_desktop_panel_bounds',
+    {
+      noteId,
+      x: bounds.x,
+      y: bounds.y,
+      width: bounds.width,
+      height: bounds.height,
+      visible: bounds.visible
+    },
+    () => undefined
+  );
+}
+
 /**
  * Per-note save-status event the Rust save worker emits whenever
  * an ink note transitions between editing / saving / saved / error.

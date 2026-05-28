@@ -28,16 +28,17 @@
    * away" gesture doesn't strand the change for the rest of the
    * debounce window).
    *
-   * Desktop: opens the first native ink window. The drawing surface
-   * is separate from the dock panel for now; embedding it back into
-   * the panel is the next desktop milestone.
+   * Desktop: mounts a native overlay window that tracks this
+   * Dockview panel's viewport rect. It is still a milestone-1
+   * overlay, not a true child surface, but visually lives inside
+   * the panel.
    */
   import { onDestroy, onMount } from 'svelte';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-  import { PenTool } from 'lucide-svelte';
   import {
     drawingHide,
     drawingShow,
+    drawingSetDesktopPanelBounds,
     drawingSetSaveDebounce,
     drawingSetToolbarSettings,
     DRAWING_SAVE_STATUS_EVENT,
@@ -72,7 +73,9 @@
   const SAVE_DEBOUNCE_MS = 800;
 
   let mountedNative = false;
+  let hostEl = $state<HTMLDivElement | null>(null);
   let backCleanup: (() => void) | null = null;
+  let desktopOverlayCleanup: (() => void) | null = null;
   let unsubSaveStatus: UnlistenFn | null = null;
   let unsubToolbarSettings: UnlistenFn | null = null;
   let savingState = $state<SavingState>('idle');
@@ -198,6 +201,97 @@
     ]);
   }
 
+  async function setupDesktopOverlay() {
+    if (isAndroid()) return;
+    if (!hostEl) return;
+    if (typeof window === 'undefined') return;
+    if (!('__TAURI_INTERNALS__' in window)) return;
+
+    let disposed = false;
+    let raf = 0;
+    let syncing = false;
+    const cleanupFns: Array<() => void> = [];
+
+    try {
+      const mod = await import('@tauri-apps/api/window');
+      const currentWindow = mod.getCurrentWindow();
+
+      const syncBounds = async () => {
+        raf = 0;
+        if (disposed || syncing || !hostEl) return;
+        syncing = true;
+        try {
+          const rect = hostEl.getBoundingClientRect();
+          const scale = await currentWindow.scaleFactor();
+          const origin = await currentWindow.innerPosition();
+          const left = Math.max(0, rect.left);
+          const top = Math.max(0, rect.top);
+          const right = Math.min(window.innerWidth, rect.right);
+          const bottom = Math.min(window.innerHeight, rect.bottom);
+          const width = Math.max(0, right - left);
+          const height = Math.max(0, bottom - top);
+          const visible =
+            document.visibilityState === 'visible' &&
+            width > 1 &&
+            height > 1 &&
+            hostEl.offsetParent !== null;
+
+          await drawingSetDesktopPanelBounds(noteId, {
+            x: origin.x + left * scale,
+            y: origin.y + top * scale,
+            width: width * scale,
+            height: height * scale,
+            visible
+          });
+        } catch (err) {
+          console.warn('[ink-overlay] failed to sync bounds', err);
+        } finally {
+          syncing = false;
+        }
+      };
+
+      const scheduleSync = () => {
+        if (disposed || raf) return;
+        raf = requestAnimationFrame(() => void syncBounds());
+      };
+
+      const resizeObserver = new ResizeObserver(scheduleSync);
+      resizeObserver.observe(hostEl);
+      cleanupFns.push(() => resizeObserver.disconnect());
+
+      window.addEventListener('resize', scheduleSync, true);
+      window.addEventListener('scroll', scheduleSync, true);
+      document.addEventListener('visibilitychange', scheduleSync);
+      cleanupFns.push(() => {
+        window.removeEventListener('resize', scheduleSync, true);
+        window.removeEventListener('scroll', scheduleSync, true);
+        document.removeEventListener('visibilitychange', scheduleSync);
+      });
+
+      cleanupFns.push(await currentWindow.onMoved(scheduleSync));
+      cleanupFns.push(await currentWindow.onResized(scheduleSync));
+
+      const interval = window.setInterval(scheduleSync, 250);
+      cleanupFns.push(() => window.clearInterval(interval));
+
+      desktopOverlayCleanup = () => {
+        disposed = true;
+        if (raf) cancelAnimationFrame(raf);
+        for (const cleanup of cleanupFns) cleanup();
+        void drawingSetDesktopPanelBounds(noteId, {
+          x: 0,
+          y: 0,
+          width: 0,
+          height: 0,
+          visible: false
+        });
+      };
+      scheduleSync();
+    } catch (err) {
+      console.warn('[ink-overlay] Tauri window API unavailable', err);
+    }
+  }
+
   onMount(async () => {
     // Open-latency timing marker — pairs with the Rust-side
     // `[drawing.perf]` logs for the full open story.
@@ -255,7 +349,8 @@
     // the first frame already shows the right note's content
     // (rather than briefly the previous one).
     const tShowStart = performance.now();
-    void drawingShow(noteId);
+    await drawingShow(noteId);
+    await setupDesktopOverlay();
     const tShowEnd = performance.now();
     mountedNative = true;
     console.log(
@@ -267,6 +362,8 @@
   onDestroy(() => {
     backCleanup?.();
     backCleanup = null;
+    desktopOverlayCleanup?.();
+    desktopOverlayCleanup = null;
     unsubSaveStatus?.();
     unsubSaveStatus = null;
     unsubToolbarSettings?.();
@@ -294,18 +391,9 @@
   <div class="h-full w-full"></div>
 {:else}
   <div
-    class="flex h-full w-full items-center justify-center p-6 text-center"
+    bind:this={hostEl}
+    class="h-full w-full bg-muted/20"
+    aria-label={tUi('editor.ink.desktopPanelLabel')}
   >
-    <div
-      class="flex max-w-md flex-col items-center gap-3 rounded-lg border border-border bg-card p-6"
-    >
-      <PenTool class="size-8 text-muted-foreground" aria-hidden="true" />
-      <p class="text-sm font-medium text-foreground">
-        {tUi('editor.ink.desktopNativeWindowTitle')}
-      </p>
-      <p class="text-sm text-muted-foreground">
-        {tUi('editor.ink.desktopNativeWindowMessage')}
-      </p>
-    </div>
   </div>
 {/if}

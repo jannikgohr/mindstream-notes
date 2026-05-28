@@ -110,6 +110,7 @@
 
     "editor.ink.desktopNativeWindowTitle": "Tintennotiz in einem nativen Fenster geöffnet",
     "editor.ink.desktopNativeWindowMessage": "Zeichne im separaten Tintenfenster, während die Desktop-Brücke in das Editor-Panel eingebettet wird.",
+    "editor.ink.desktopPanelLabel": "Tintennotiz-Leinwand",
 
     "updater.checkFailed.title": "Update-Prüfung fehlgeschlagen",
     "updater.checkFailed.message": "Der Update-Server ist nicht erreichbar. Bitte prüfe deine Internetverbindung und versuche es erneut.",
