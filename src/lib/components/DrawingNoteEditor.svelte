@@ -38,7 +38,6 @@
   import {
     drawingHide,
     drawingShow,
-    drawingSetDesktopPanelBounds,
     drawingSetSaveDebounce,
     drawingSetToolbarSettings,
     DRAWING_SAVE_STATUS_EVENT,
@@ -47,6 +46,7 @@
     type DrawingToolbarSettingsPayload,
     TRASH_ID
   } from '$lib/api';
+  import InkWebNoteEditor from '$lib/components/InkWebNoteEditor.svelte';
   import { isAndroid } from '$lib/platform';
   import { navigateBack } from '$lib/mobile/state.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
@@ -73,9 +73,7 @@
   const SAVE_DEBOUNCE_MS = 800;
 
   let mountedNative = false;
-  let hostEl = $state<HTMLDivElement | null>(null);
   let backCleanup: (() => void) | null = null;
-  let desktopOverlayCleanup: (() => void) | null = null;
   let unsubSaveStatus: UnlistenFn | null = null;
   let unsubToolbarSettings: UnlistenFn | null = null;
   let savingState = $state<SavingState>('idle');
@@ -201,98 +199,9 @@
     ]);
   }
 
-  async function setupDesktopOverlay() {
-    if (isAndroid()) return;
-    if (!hostEl) return;
-    if (typeof window === 'undefined') return;
-    if (!('__TAURI_INTERNALS__' in window)) return;
-
-    let disposed = false;
-    let raf = 0;
-    let syncing = false;
-    const cleanupFns: Array<() => void> = [];
-
-    try {
-      const mod = await import('@tauri-apps/api/window');
-      const currentWindow = mod.getCurrentWindow();
-
-      const syncBounds = async () => {
-        raf = 0;
-        if (disposed || syncing || !hostEl) return;
-        syncing = true;
-        try {
-          const rect = hostEl.getBoundingClientRect();
-          const scale = await currentWindow.scaleFactor();
-          const origin = await currentWindow.innerPosition();
-          const left = Math.max(0, rect.left);
-          const top = Math.max(0, rect.top);
-          const right = Math.min(window.innerWidth, rect.right);
-          const bottom = Math.min(window.innerHeight, rect.bottom);
-          const width = Math.max(0, right - left);
-          const height = Math.max(0, bottom - top);
-          const visible =
-            document.visibilityState === 'visible' &&
-            width > 1 &&
-            height > 1 &&
-            hostEl.offsetParent !== null;
-
-          await drawingSetDesktopPanelBounds(noteId, {
-            x: origin.x + left * scale,
-            y: origin.y + top * scale,
-            width: width * scale,
-            height: height * scale,
-            visible
-          });
-        } catch (err) {
-          console.warn('[ink-overlay] failed to sync bounds', err);
-        } finally {
-          syncing = false;
-        }
-      };
-
-      const scheduleSync = () => {
-        if (disposed || raf) return;
-        raf = requestAnimationFrame(() => void syncBounds());
-      };
-
-      const resizeObserver = new ResizeObserver(scheduleSync);
-      resizeObserver.observe(hostEl);
-      cleanupFns.push(() => resizeObserver.disconnect());
-
-      window.addEventListener('resize', scheduleSync, true);
-      window.addEventListener('scroll', scheduleSync, true);
-      document.addEventListener('visibilitychange', scheduleSync);
-      cleanupFns.push(() => {
-        window.removeEventListener('resize', scheduleSync, true);
-        window.removeEventListener('scroll', scheduleSync, true);
-        document.removeEventListener('visibilitychange', scheduleSync);
-      });
-
-      cleanupFns.push(await currentWindow.onMoved(scheduleSync));
-      cleanupFns.push(await currentWindow.onResized(scheduleSync));
-
-      const interval = window.setInterval(scheduleSync, 250);
-      cleanupFns.push(() => window.clearInterval(interval));
-
-      desktopOverlayCleanup = () => {
-        disposed = true;
-        if (raf) cancelAnimationFrame(raf);
-        for (const cleanup of cleanupFns) cleanup();
-        void drawingSetDesktopPanelBounds(noteId, {
-          x: 0,
-          y: 0,
-          width: 0,
-          height: 0,
-          visible: false
-        });
-      };
-      scheduleSync();
-    } catch (err) {
-      console.warn('[ink-overlay] Tauri window API unavailable', err);
-    }
-  }
-
   onMount(async () => {
+    if (!isAndroid()) return;
+
     // Open-latency timing marker — pairs with the Rust-side
     // `[drawing.perf]` logs for the full open story.
     const tMountStart = performance.now();
@@ -350,7 +259,6 @@
     // (rather than briefly the previous one).
     const tShowStart = performance.now();
     await drawingShow(noteId);
-    await setupDesktopOverlay();
     const tShowEnd = performance.now();
     mountedNative = true;
     console.log(
@@ -362,8 +270,6 @@
   onDestroy(() => {
     backCleanup?.();
     backCleanup = null;
-    desktopOverlayCleanup?.();
-    desktopOverlayCleanup = null;
     unsubSaveStatus?.();
     unsubSaveStatus = null;
     unsubToolbarSettings?.();
@@ -390,10 +296,5 @@
        drop zOrderOnTop. -->
   <div class="h-full w-full"></div>
 {:else}
-  <div
-    bind:this={hostEl}
-    class="h-full w-full bg-muted/20"
-    aria-label={tUi('editor.ink.desktopPanelLabel')}
-  >
-  </div>
+  <InkWebNoteEditor {noteId} ariaLabel={tUi('editor.ink.desktopPanelLabel')} />
 {/if}
