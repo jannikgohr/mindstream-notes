@@ -5,6 +5,8 @@ description = "Local-first modern markdown-based E2EE collaborative note-taking 
 authors = ["Jannik Gohr"]
 edition = "2021"
 rust-version = "1.88"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jannikgohr/mindstream-notes"
 
 [lib]
 name = "mindstream_notes_lib"
