@@ -170,6 +170,7 @@
     "account.syncInterval": { "label": "Sync frequency" },
     "account.conflict": { "label": "Conflict resolution" },
     "general.startOnLogin": { "label": "Start on login" },
+    "general.closeToTray": { "label": "Close to system tray", "description": "Hide the main window instead of quitting when you close it." },
     "appearance.mode": { "label": "Mode" },
     "appearance.accent": { "label": "Accent colour" },
     "appearance.density": { "label": "UI density" },

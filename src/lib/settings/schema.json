@@ -77,6 +77,13 @@
               "type": "toggle",
               "default": false,
               "platforms": ["desktop"]
+            },
+            {
+              "id": "general.closeToTray",
+              "scope": "D",
+              "type": "toggle",
+              "default": false,
+              "platforms": ["desktop"]
             }
           ]
         }

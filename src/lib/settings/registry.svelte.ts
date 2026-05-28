@@ -18,7 +18,7 @@ import {
   isEnabled as isEnabledAutostart,
   disable as disableAutostart
 } from '@tauri-apps/plugin-autostart';
-import { isAppImageInstall, isTauri } from '$lib/api';
+import { getCloseToTray, isAppImageInstall, isTauri, setCloseToTray } from '$lib/api';
 import { getPlatform, isMobile } from '$lib/platform';
 import {
   setLeftSidebarWidth,
@@ -63,6 +63,13 @@ export const SETTING_BINDINGS: Record<string, Binding> = {
       if (!autostartAvailable()) return;
       if (v) await enableAutostart();
       else await disableAutostart();
+    }
+  },
+  'general.closeToTray': {
+    get: async () => (isTauri() && !isMobile() ? await getCloseToTray() : false),
+    set: async (v) => {
+      if (!isTauri() || isMobile()) return;
+      await setCloseToTray(v === true);
     }
   },
   'appearance.mode': {

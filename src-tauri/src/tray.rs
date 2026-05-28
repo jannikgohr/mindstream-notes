@@ -7,6 +7,7 @@ use tauri::{
 
 use crate::{
     db::Db,
+    drawing,
     notes::{self, CreateNote},
 };
 
@@ -14,6 +15,7 @@ const TRAY_NOTE_CREATED_EVENT: &str = "tray-note-created";
 const NEW_NOTE_ID: &str = "new_note";
 const NEW_DRAWING_ID: &str = "new_drawing";
 const NEW_DIAGRAM_ID: &str = "new_diagram";
+const QUIT_ID: &str = "quit";
 
 #[derive(Clone, Debug, Serialize)]
 struct TrayNoteCreatedPayload {
@@ -24,7 +26,8 @@ pub fn init(app: &App) -> tauri::Result<()> {
     let new_note = MenuItem::with_id(app, NEW_NOTE_ID, "New note", true, None::<&str>)?;
     let new_drawing = MenuItem::with_id(app, NEW_DRAWING_ID, "New drawing", true, None::<&str>)?;
     let new_diagram = MenuItem::with_id(app, NEW_DIAGRAM_ID, "New diagram", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&new_note, &new_drawing, &new_diagram])?;
+    let quit = MenuItem::with_id(app, QUIT_ID, "Quit", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&new_note, &new_drawing, &new_diagram, &quit])?;
 
     let mut builder = TrayIconBuilder::new()
         .menu(&menu)
@@ -53,6 +56,12 @@ pub fn init(app: &App) -> tauri::Result<()> {
 }
 
 fn handle_menu_event(app: &AppHandle, item_id: &str) {
+    if item_id == QUIT_ID {
+        drawing::shutdown_desktop(app);
+        app.exit(0);
+        return;
+    }
+
     let Some((title, body, note_kind)) = note_template(item_id) else {
         log::warn!("[tray] unhandled menu item {item_id}");
         return;

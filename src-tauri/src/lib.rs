@@ -15,6 +15,8 @@ pub mod assets;
 pub mod auth;
 pub mod collections;
 pub mod db;
+#[cfg(desktop)]
+pub mod desktop_settings;
 pub mod drawing;
 pub mod error;
 pub mod notes;
@@ -116,15 +118,25 @@ pub fn run() {
         .plugin(tauri_plugin_window_state::Builder::new().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .on_window_event(|window, event| {
-            if window.label() == "main"
-                && matches!(
-                    event,
-                    tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed
-                )
-            {
-                let app_handle = window.app_handle();
-                drawing::shutdown_desktop(app_handle);
-                app_handle.exit(0);
+            if window.label() == "main" {
+                match event {
+                    tauri::WindowEvent::CloseRequested { api, .. } => {
+                        let app_handle = window.app_handle();
+                        if desktop_settings::should_close_to_tray(app_handle) {
+                            api.prevent_close();
+                            let _ = window.hide();
+                            return;
+                        }
+                        drawing::shutdown_desktop(app_handle);
+                        app_handle.exit(0);
+                    }
+                    tauri::WindowEvent::Destroyed => {
+                        let app_handle = window.app_handle();
+                        drawing::shutdown_desktop(app_handle);
+                        app_handle.exit(0);
+                    }
+                    _ => {}
+                }
             }
         });
     #[cfg(not(desktop))]
@@ -157,6 +169,9 @@ pub fn run() {
             .expect("failed to seed database");
 
             app.manage(db);
+
+            #[cfg(desktop)]
+            app.manage(desktop_settings::DesktopSettings::load(app));
 
             #[cfg(desktop)]
             tray::init(app)?;
@@ -213,6 +228,10 @@ pub fn run() {
             sync::scheduler::set_sync_schedule,
             // System introspection
             system::is_appimage_install,
+            #[cfg(desktop)]
+            desktop_settings::get_close_to_tray,
+            #[cfg(desktop)]
+            desktop_settings::set_close_to_tray,
             // Native drawing surface (Android only; no-op stubs on desktop)
             drawing::drawing_show,
             drawing::drawing_hide,
