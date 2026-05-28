@@ -55,7 +55,9 @@ crate consumed by both render paths.
   `ink-core`, uses shared `StrokesDoc`, and uses shared page layout math.
 - Step 5: Done for toolbar integration. `ink-egui-web` now renders the
   shared `CanvasUi` toolbar in eframe's context and consumes the same
-  `RenderActions` as native.
+  `RenderActions` as native. Undo/redo, Clear, eraser, and toolbar
+  setting actions now mutate the web document through matching
+  transient undo/redo stacks.
 - Step 6: Pending.
 - Step 7: Done. Desktop web now calls the `drawing_save_ink_state`
   Tauri command, which lands in the same `notes::save_yrs_state` helper
