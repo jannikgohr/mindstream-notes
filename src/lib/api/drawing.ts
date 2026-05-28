@@ -29,8 +29,12 @@ export function drawingShow(noteId: string): Promise<void> {
   return invokeOrFallback<void>('drawing_show', { noteId }, () => undefined);
 }
 
-export function drawingHide(): Promise<void> {
-  return invokeOrFallback<void>('drawing_hide', undefined, () => undefined);
+export function drawingHide(noteId?: string): Promise<void> {
+  return invokeOrFallback<void>(
+    'drawing_hide',
+    { noteId: noteId ?? null },
+    () => undefined
+  );
 }
 
 export function drawingClear(): Promise<void> {

@@ -112,7 +112,19 @@ pub fn run() {
     let app_handle = tauri::Builder::default()
         .plugin(tauri_plugin_autostart::Builder::new().build())
         .plugin(tauri_plugin_window_state::Builder::new().build())
-        .plugin(tauri_plugin_updater::Builder::new().build());
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .on_window_event(|window, event| {
+            if window.label() == "main"
+                && matches!(
+                    event,
+                    tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed
+                )
+            {
+                let app_handle = window.app_handle();
+                drawing::shutdown_desktop(app_handle);
+                app_handle.exit(0);
+            }
+        });
     #[cfg(not(desktop))]
     let app_handle = tauri::Builder::default();
 
