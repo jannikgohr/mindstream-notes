@@ -2,6 +2,8 @@
 name = "ink-core"
 version = "0.1.0"
 edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jannikgohr/mindstream-notes"
 publish = false
 
 [dependencies]
@@ -12,4 +14,3 @@ log = "0.4"
 lucide-icons = "0.555"
 uuid = { version = "1", features = ["v4", "js"] }
 yrs = "0.26"
-

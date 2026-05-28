@@ -2,6 +2,7 @@
   "name": "mindstream-notes",
   "private": true,
   "version": "0.1.8",
+  "license": "MIT OR Apache-2.0",
   "type": "module",
   "scripts": {
     "dev": "pnpm build:ink-web && vite dev",
