@@ -50,7 +50,7 @@
 
 use tauri::AppHandle;
 #[cfg(desktop)]
-use tauri::Manager;
+use tauri::{Manager, PhysicalPosition, PhysicalSize};
 
 // Cross-platform modules (no wgpu / no JNI / no NDK) — kept
 // compiled everywhere so `cargo test` catches regressions on the
@@ -76,6 +76,8 @@ pub mod ui;
 
 #[cfg(desktop)]
 const DESKTOP_INK_WINDOW_LABEL: &str = "mindstream-ink-note";
+#[cfg(desktop)]
+const MAIN_WINDOW_LABEL: &str = "main";
 
 // ---------- App startup hook ----------
 
@@ -223,6 +225,27 @@ pub fn drawing_hide(_app: AppHandle) -> Result<(), String> {
     }
 }
 
+#[tauri::command]
+#[allow(unused_variables)]
+pub fn drawing_set_desktop_panel_bounds(
+    app: AppHandle,
+    note_id: String,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    visible: bool,
+) -> Result<(), String> {
+    #[cfg(desktop)]
+    {
+        set_desktop_panel_bounds(&app, x, y, width, height, visible)
+    }
+    #[cfg(not(desktop))]
+    {
+        Ok(())
+    }
+}
+
 /// Push the resolved app theme down to the egui toolbar (B2).
 /// Called from `+layout.svelte` / `DrawingNoteEditor.svelte` whenever
 /// `appearance.mode` resolves to a new dark/light state or the user
@@ -329,20 +352,59 @@ fn show_desktop_ink_window(app: &AppHandle, note_id: &str) -> Result<(), String>
     let window = if let Some(window) = app.get_window(DESKTOP_INK_WINDOW_LABEL) {
         window
     } else {
-        tauri::Window::builder(app, DESKTOP_INK_WINDOW_LABEL)
+        let mut builder = tauri::Window::builder(app, DESKTOP_INK_WINDOW_LABEL)
             .title(format!("Ink Note - {note_id}"))
-            .inner_size(900.0, 1100.0)
-            .min_inner_size(420.0, 500.0)
+            .decorations(false)
+            .shadow(false)
+            .skip_taskbar(true)
+            .resizable(false)
+            .visible(false)
+            .inner_size(1.0, 1.0)
+            .position(0.0, 0.0);
+        if let Some(main) = app.get_window(MAIN_WINDOW_LABEL) {
+            builder = builder
+                .parent(&main)
+                .map_err(|e| format!("desktop ink window parent: {e}"))?;
+        }
+        builder
             .build()
             .map_err(|e| format!("desktop ink window: {e}"))?
     };
 
     let _ = window.set_title(&format!("Ink Note - {note_id}"));
-    let _ = window.show();
-    let _ = window.set_focus();
     let size = window
         .inner_size()
         .map_err(|e| format!("desktop ink window size: {e}"))?;
     render::set_surface(Box::new(window), size.width.max(1), size.height.max(1));
+    Ok(())
+}
+
+#[cfg(desktop)]
+fn set_desktop_panel_bounds(
+    app: &AppHandle,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    visible: bool,
+) -> Result<(), String> {
+    let Some(window) = app.get_window(DESKTOP_INK_WINDOW_LABEL) else {
+        return Ok(());
+    };
+    if !visible || width < 2.0 || height < 2.0 {
+        let _ = window.hide();
+        return Ok(());
+    }
+
+    let width = width.round().max(1.0) as u32;
+    let height = height.round().max(1.0) as u32;
+    window
+        .set_position(PhysicalPosition::new(x.round() as i32, y.round() as i32))
+        .map_err(|e| format!("desktop ink set_position: {e}"))?;
+    window
+        .set_size(PhysicalSize::new(width, height))
+        .map_err(|e| format!("desktop ink set_size: {e}"))?;
+    render::resize_surface(width, height);
+    let _ = window.show();
     Ok(())
 }
