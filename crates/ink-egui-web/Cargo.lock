@@ -499,6 +499,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "egui-shadcn"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ada5469e263b4e4f65d069351d7c4840b6284c1442d5dfdaea473fc9d42c9d7f"
+dependencies = [
+ "egui",
+ "log",
+ "lucide-icons",
+ "winres",
+]
+
+[[package]]
 name = "egui-winit"
 version = "0.33.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1010,18 +1022,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "ink-core"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "egui",
+ "egui-shadcn",
+ "log",
+ "lucide-icons",
+ "uuid",
+ "yrs",
+]
+
+[[package]]
 name = "ink-egui-web"
 version = "0.1.0"
 dependencies = [
  "eframe",
  "egui",
+ "ink-core",
  "js-sys",
  "log",
- "uuid",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
- "yrs",
 ]
 
 [[package]]
@@ -1188,6 +1212,12 @@ name = "log"
 version = "0.4.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "616ec5685824bcc94416c6d4a7a446eea774a31efd7062c8480ba6fd06d7a6e5"
+
+[[package]]
+name = "lucide-icons"
+version = "0.555.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f79d4192bafa80af9706015a2cd310f819aee94e765c00fcda5a1ab718436e8c"
 
 [[package]]
 name = "memchr"
@@ -2129,6 +2159,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "toml"
+version = "0.5.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f4f7f0dd8d50a853a531c426359045b1998f04219d88799810762cd4ad314234"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "toml_datetime"
 version = "1.1.1+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2742,6 +2781,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0592e1c9d151f854e6fd382574c3a0855250e1d9b2f99d9281c6e6391af352f1"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "winres"
+version = "0.1.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b68db261ef59e9e52806f688020631e987592bd83619edccda9c47d42cde4f6c"
+dependencies = [
+ "toml",
 ]
 
 [[package]]
