@@ -57,7 +57,11 @@ crate consumed by both render paths.
   shared `CanvasUi` toolbar in eframe's context and consumes the same
   `RenderActions` as native. Undo/redo, Clear, eraser, and toolbar
   setting actions now mutate the web document through matching
-  transient undo/redo stacks.
+  transient undo/redo stacks. Web touch gestures now reserve
+  two-finger pan/pinch for view navigation and use one-finger pan when
+  finger drawing is disabled. Desktop web also supports wheel/trackpad
+  pan, Shift+wheel horizontal pan, Ctrl/Cmd+wheel zoom, middle-mouse
+  drag pan, Space+drag pan, keyboard pan, and Ctrl/Cmd zoom shortcuts.
 - Step 6: Pending.
 - Step 7: Done. Desktop web now calls the `drawing_save_ink_state`
   Tauri command, which lands in the same `notes::save_yrs_state` helper

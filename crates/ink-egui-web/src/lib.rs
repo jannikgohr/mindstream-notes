@@ -12,6 +12,9 @@ const PAGE_BACKGROUND_COLOR: u32 = 0xFFF1_F2F4;
 const PAGE_BORDER_COLOR: u32 = 0xFFE5_E7EB;
 const PAGE_SHADOW_COLOR: u32 = 0x2200_0000;
 const PAGE_DARK_SHADOW_COLOR: u32 = 0x33FF_FFFF;
+const KEYBOARD_PAN_STEP: f32 = 80.0;
+const KEYBOARD_PAN_STEP_LARGE: f32 = 320.0;
+const ZOOM_STEP: f32 = 1.2;
 
 #[wasm_bindgen]
 #[derive(Clone)]
@@ -83,6 +86,7 @@ struct InkWebApp {
     drawing: bool,
     eraser_drag_hits: HashSet<String>,
     eraser_drag_active: bool,
+    desktop_pan_active: bool,
     undo: Vec<UndoOp>,
     redo: Vec<UndoOp>,
     on_change: Function,
@@ -117,6 +121,7 @@ impl InkWebApp {
             drawing: false,
             eraser_drag_hits: HashSet::new(),
             eraser_drag_active: false,
+            desktop_pan_active: false,
             undo: Vec::new(),
             redo: Vec::new(),
             on_change,
@@ -247,20 +252,16 @@ impl InkWebApp {
     }
 
     fn handle_canvas_input(&mut self, response: &egui::Response, ctx: &egui::Context) {
-        if response.hovered() {
-            ctx.input(|i| {
-                let scroll = i.smooth_scroll_delta;
-                if scroll != egui::Vec2::ZERO {
-                    if i.modifiers.ctrl {
-                        if let Some(pos) = response.hover_pos() {
-                            let factor = (1.0_f32 + scroll.y * 0.001).clamp(0.75, 1.25);
-                            self.view.zoom_around(pos, factor);
-                        }
-                    } else {
-                        self.view.pan_by(scroll.x, scroll.y);
-                    }
-                }
-            });
+        self.handle_keyboard_navigation(ctx);
+
+        if self.handle_touch_view_gesture(response, ctx) {
+            return;
+        }
+
+        self.handle_scroll_navigation(response, ctx);
+
+        if self.handle_desktop_drag_pan(response, ctx) {
+            return;
         }
 
         let pointer_down = ctx.input(|i| i.pointer.primary_down());
@@ -305,6 +306,178 @@ impl InkWebApp {
         } else if self.drawing && !pointer_down {
             self.finish_stroke();
         }
+    }
+
+    fn handle_keyboard_navigation(&mut self, ctx: &egui::Context) {
+        let command_action = ctx.input(|i| {
+            if !i.modifiers.command {
+                return None;
+            }
+            if i.key_pressed(egui::Key::Plus) || i.key_pressed(egui::Key::Equals) {
+                Some(CommandAction::ZoomIn)
+            } else if i.key_pressed(egui::Key::Minus) {
+                Some(CommandAction::ZoomOut)
+            } else if i.key_pressed(egui::Key::Num0) {
+                Some(CommandAction::FitWidth)
+            } else if i.key_pressed(egui::Key::Num1) {
+                Some(CommandAction::Zoom100)
+            } else {
+                None
+            }
+        });
+
+        if let Some(action) = command_action {
+            self.cancel_in_flight_stroke();
+            self.finish_eraser_drag(true);
+            match action {
+                CommandAction::ZoomIn => self.view.zoom_around(self.view.center(), ZOOM_STEP),
+                CommandAction::ZoomOut => {
+                    self.view.zoom_around(self.view.center(), 1.0 / ZOOM_STEP)
+                }
+                CommandAction::FitWidth => self.view.fit_page_width(),
+                CommandAction::Zoom100 => self.view.set_zoom_100(),
+            }
+        }
+
+        let (pan, jump) = ctx.input(|i| {
+            let step = if i.modifiers.shift {
+                KEYBOARD_PAN_STEP_LARGE
+            } else {
+                KEYBOARD_PAN_STEP
+            };
+            let mut pan = egui::Vec2::ZERO;
+            if i.key_pressed(egui::Key::ArrowLeft) {
+                pan.x += step;
+            }
+            if i.key_pressed(egui::Key::ArrowRight) {
+                pan.x -= step;
+            }
+            if i.key_pressed(egui::Key::ArrowUp) {
+                pan.y += step;
+            }
+            if i.key_pressed(egui::Key::ArrowDown) {
+                pan.y -= step;
+            }
+            if i.key_pressed(egui::Key::PageUp) {
+                pan.y += self.view.surface.y * 0.85;
+            }
+            if i.key_pressed(egui::Key::PageDown) {
+                pan.y -= self.view.surface.y * 0.85;
+            }
+
+            let jump = if i.key_pressed(egui::Key::Home) {
+                Some(DocumentJump::Top)
+            } else if i.key_pressed(egui::Key::End) {
+                Some(DocumentJump::Bottom)
+            } else {
+                None
+            };
+            (pan, jump)
+        });
+
+        if pan != egui::Vec2::ZERO {
+            self.cancel_in_flight_stroke();
+            self.finish_eraser_drag(true);
+            self.view.pan_by(pan.x, pan.y);
+        }
+        if let Some(jump) = jump {
+            self.cancel_in_flight_stroke();
+            self.finish_eraser_drag(true);
+            match jump {
+                DocumentJump::Top => self.view.scroll_to_top(),
+                DocumentJump::Bottom => self.view.scroll_to_bottom(),
+            }
+        }
+    }
+
+    fn handle_scroll_navigation(&mut self, response: &egui::Response, ctx: &egui::Context) {
+        if !response.hovered() {
+            return;
+        }
+        let (scroll, modifiers, hover_pos) =
+            ctx.input(|i| (i.smooth_scroll_delta, i.modifiers, i.pointer.hover_pos()));
+        if scroll == egui::Vec2::ZERO {
+            return;
+        }
+
+        self.cancel_in_flight_stroke();
+        self.finish_eraser_drag(true);
+        if modifiers.command || modifiers.ctrl {
+            if let Some(pos) = hover_pos.filter(|pos| response.rect.contains(*pos)) {
+                let factor = (1.0_f32 + scroll.y * 0.001).clamp(0.75, 1.25);
+                self.view.zoom_around(pos, factor);
+            }
+        } else if modifiers.shift {
+            self.view.pan_by(scroll.x + scroll.y, 0.0);
+        } else {
+            self.view.pan_by(scroll.x, scroll.y);
+        }
+    }
+
+    fn handle_desktop_drag_pan(&mut self, response: &egui::Response, ctx: &egui::Context) -> bool {
+        let (middle_down, primary_down, space_down, pointer_pos, delta) = ctx.input(|i| {
+            (
+                i.pointer.button_down(egui::PointerButton::Middle),
+                i.pointer.primary_down(),
+                i.key_down(egui::Key::Space),
+                i.pointer.interact_pos(),
+                i.pointer.delta(),
+            )
+        });
+        let pan_down = middle_down || (space_down && primary_down);
+        let pointer_on_canvas = pointer_pos.is_some_and(|pos| response.rect.contains(pos));
+        if pan_down && (self.desktop_pan_active || pointer_on_canvas) {
+            self.desktop_pan_active = true;
+            self.cancel_in_flight_stroke();
+            self.finish_eraser_drag(true);
+            if delta != egui::Vec2::ZERO {
+                self.view.pan_by(delta.x, delta.y);
+            }
+            return true;
+        }
+        self.desktop_pan_active = false;
+        false
+    }
+
+    fn handle_touch_view_gesture(
+        &mut self,
+        response: &egui::Response,
+        ctx: &egui::Context,
+    ) -> bool {
+        let multi_touch = ctx.input(|i| i.multi_touch());
+        if let Some(touch) = multi_touch {
+            if response.rect.contains(touch.center_pos) || response.rect.contains(touch.start_pos) {
+                self.cancel_in_flight_stroke();
+                self.finish_eraser_drag(true);
+                if touch.translation_delta != egui::Vec2::ZERO {
+                    self.view
+                        .pan_by(touch.translation_delta.x, touch.translation_delta.y);
+                }
+                if (touch.zoom_delta - 1.0).abs() > 0.001 {
+                    self.view.zoom_around(touch.center_pos, touch.zoom_delta);
+                }
+                return true;
+            }
+        }
+
+        let (touch_pan, delta) = ctx.input(|i| {
+            let delta = i.pointer.delta();
+            (
+                i.any_touches()
+                    && !self.finger_drawing_allowed
+                    && i.pointer.primary_down()
+                    && delta != egui::Vec2::ZERO,
+                delta,
+            )
+        });
+        if touch_pan {
+            self.cancel_in_flight_stroke();
+            self.finish_eraser_drag(true);
+            self.view.pan_by(delta.x, delta.y);
+            return true;
+        }
+
+        false
     }
 
     fn begin_stroke(&mut self, pos: egui::Pos2) {
@@ -519,6 +692,20 @@ struct ToolbarSettings {
     width: f32,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum DocumentJump {
+    Top,
+    Bottom,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum CommandAction {
+    ZoomIn,
+    ZoomOut,
+    FitWidth,
+    Zoom100,
+}
+
 #[derive(Debug, Clone)]
 enum UndoOp {
     StrokeAdded(String),
@@ -628,6 +815,49 @@ impl View {
             focus.y - before.y * self.scale,
         );
         self.clamp();
+    }
+
+    fn center(&self) -> egui::Pos2 {
+        egui::pos2(self.surface.x * 0.5, self.surface.y * 0.5)
+    }
+
+    fn fit_page_width(&mut self) {
+        let target_width = (self.surface.x - 32.0).max(1.0);
+        self.scale =
+            (target_width / self.layout.page.width).clamp(self.min_scale(), self.max_scale());
+        self.pan.x = (self.surface.x - self.layout.page.width * self.scale) * 0.5;
+        self.pan.y = self.layout.page_gap * self.scale;
+        self.clamp();
+    }
+
+    fn set_zoom_100(&mut self) {
+        let focus = self.center();
+        let before = egui::pos2(
+            (focus.x - self.pan.x) / self.scale,
+            (focus.y - self.pan.y) / self.scale,
+        );
+        self.scale = 1.0_f32.clamp(self.min_scale(), self.max_scale());
+        self.pan = egui::vec2(
+            focus.x - before.x * self.scale,
+            focus.y - before.y * self.scale,
+        );
+        self.clamp();
+    }
+
+    fn scroll_to_top(&mut self) {
+        self.pan.y = self.layout.page_gap * self.scale;
+        self.clamp();
+    }
+
+    fn scroll_to_bottom(&mut self) {
+        let content_h = self.layout.document_height() * self.scale;
+        let margin = self.layout.page_gap * self.scale;
+        self.pan.y = self.surface.y - content_h - margin;
+        self.clamp();
+    }
+
+    fn max_scale(&self) -> f32 {
+        self.min_scale() * 6.0
     }
 
     fn clamp(&mut self) {
