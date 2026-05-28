@@ -50,6 +50,8 @@
 
 use tauri::AppHandle;
 #[cfg(desktop)]
+use std::sync::{Mutex, OnceLock};
+#[cfg(desktop)]
 use tauri::{Manager, PhysicalPosition, PhysicalSize};
 
 // Cross-platform modules (no wgpu / no JNI / no NDK) — kept
@@ -78,6 +80,8 @@ pub mod ui;
 const DESKTOP_INK_WINDOW_LABEL: &str = "mindstream-ink-note";
 #[cfg(desktop)]
 const MAIN_WINDOW_LABEL: &str = "main";
+#[cfg(desktop)]
+static DESKTOP_ACTIVE_NOTE: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 
 // ---------- App startup hook ----------
 
@@ -89,6 +93,28 @@ pub fn init(app: AppHandle) {
     save_worker::init(app.clone());
     #[cfg(any(target_os = "android", desktop))]
     render::init(app);
+}
+
+#[cfg(desktop)]
+fn desktop_active_note() -> &'static Mutex<Option<String>> {
+    DESKTOP_ACTIVE_NOTE.get_or_init(|| Mutex::new(None))
+}
+
+#[cfg(desktop)]
+fn set_desktop_active_note(note_id: Option<String>) {
+    if let Ok(mut active) = desktop_active_note().lock() {
+        *active = note_id;
+    }
+}
+
+#[cfg(desktop)]
+fn desktop_active_note_id() -> Option<String> {
+    desktop_active_note().lock().ok().and_then(|active| active.clone())
+}
+
+#[cfg(desktop)]
+fn desktop_note_is_active(note_id: &str) -> bool {
+    desktop_active_note_id().as_deref() == Some(note_id)
 }
 
 /// Tell the auto-save worker that the named ink note's stroke
@@ -167,7 +193,10 @@ pub fn drawing_show(
         #[cfg(target_os = "android")]
         let result = platform::android::ui::call_show().map_err(|e| format!("drawing_show: {e}"));
         #[cfg(desktop)]
-        let result = show_desktop_ink_window(&app, &note_id);
+        let result = {
+            set_desktop_active_note(Some(note_id.clone()));
+            show_desktop_ink_window(&app, &note_id)
+        };
         log::info!(
             "[drawing.perf] drawing_show: sql_load={:?} set_active={:?} call_show={:?} state_bytes={}",
             t_load,
@@ -203,19 +232,27 @@ pub fn drawing_set_save_debounce(ms: u64) -> Result<(), String> {
 /// would still eventually fire, but with a visible delay if the
 /// user is, say, scrolling through other notes immediately after).
 #[tauri::command]
-pub fn drawing_hide(_app: AppHandle) -> Result<(), String> {
+pub fn drawing_hide(_app: AppHandle, note_id: Option<String>) -> Result<(), String> {
     save_worker::flush_all();
-    #[cfg(any(target_os = "android", desktop))]
-    render::set_active_note(None, None);
     #[cfg(target_os = "android")]
     {
+        let _ = note_id;
+        render::set_active_note(None, None);
         platform::android::ui::call_hide().map_err(|e| format!("drawing_hide: {e}"))
     }
     #[cfg(desktop)]
     {
-        if let Some(window) = _app.get_window(DESKTOP_INK_WINDOW_LABEL) {
+        let should_hide = note_id
+            .as_deref()
+            .map(desktop_note_is_active)
+            .unwrap_or(true);
+        if should_hide {
+            set_desktop_active_note(None);
+            render::set_active_note(None, None);
             render::clear_surface();
-            let _ = window.close();
+            if let Some(window) = _app.get_window(DESKTOP_INK_WINDOW_LABEL) {
+                let _ = window.hide();
+            }
         }
         Ok(())
     }
@@ -238,6 +275,27 @@ pub fn drawing_set_desktop_panel_bounds(
 ) -> Result<(), String> {
     #[cfg(desktop)]
     {
+        let active_note_id = desktop_active_note_id();
+        let is_active = active_note_id.as_deref() == Some(note_id.as_str());
+        if !is_active {
+            if active_note_id.is_none() && visible {
+                set_desktop_active_note(Some(note_id.clone()));
+                render::set_active_note(Some(note_id.clone()), None);
+                if let Some(window) = app.get_window(DESKTOP_INK_WINDOW_LABEL) {
+                    let _ = window.set_title(&format!("Ink Note - {note_id}"));
+                }
+            } else {
+                return Ok(());
+            }
+        }
+        if is_active && !visible {
+            set_desktop_active_note(None);
+            render::set_active_note(None, None);
+            if let Some(window) = app.get_window(DESKTOP_INK_WINDOW_LABEL) {
+                let _ = window.hide();
+            }
+            return Ok(());
+        }
         set_desktop_panel_bounds(&app, x, y, width, height, visible)
     }
     #[cfg(not(desktop))]
@@ -344,6 +402,16 @@ pub fn drawing_clear() -> Result<(), String> {
     #[cfg(not(any(target_os = "android", desktop)))]
     {
         Ok(())
+    }
+}
+
+#[cfg(desktop)]
+pub fn shutdown_desktop(app: &AppHandle) {
+    set_desktop_active_note(None);
+    if let Some(window) = app.get_window(DESKTOP_INK_WINDOW_LABEL) {
+        render::set_active_note(None, None);
+        render::clear_surface();
+        let _ = window.close();
     }
 }
 

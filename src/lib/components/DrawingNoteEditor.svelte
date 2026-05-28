@@ -378,7 +378,7 @@
     // change. We don't await: the flush happens on the worker
     // thread asynchronously, and the next reopen of this note
     // will see the persisted bytes regardless.
-    void drawingHide();
+    void drawingHide(noteId);
   });
 </script>
 
