@@ -4,7 +4,7 @@ use eframe::egui;
 use ink_core::page::{DocumentLayout, MIN_PAGE_COUNT};
 use ink_core::strokes_doc::{StrokesDoc, DEFAULT_COLOR, DEFAULT_WIDTH};
 use ink_core::ui::{CanvasUi, DrawingTheme, InkPageThemeMode, ToolMode, UiState};
-use js_sys::{Function, Uint8Array};
+use js_sys::{Function, Object, Reflect, Uint8Array};
 use wasm_bindgen::prelude::*;
 
 const PAGE_FILL_COLOR: u32 = 0xFFFF_FFFF;
@@ -34,8 +34,11 @@ impl WebInkHandle {
         &self,
         canvas: web_sys::HtmlCanvasElement,
         initial_state: Vec<u8>,
+        initial_toolbar_settings: JsValue,
         on_change: Function,
+        on_toolbar_settings: Function,
     ) -> Result<(), JsValue> {
+        let toolbar_settings = ToolbarSettings::from_js(&initial_toolbar_settings);
         self.runner
             .start(
                 canvas,
@@ -43,7 +46,9 @@ impl WebInkHandle {
                 Box::new(move |cc| {
                     Ok(Box::new(InkWebApp::new(
                         initial_state.clone(),
+                        toolbar_settings,
                         on_change.clone(),
+                        on_toolbar_settings.clone(),
                         &cc.egui_ctx,
                     )))
                 }),
@@ -77,10 +82,17 @@ struct InkWebApp {
     in_flight: Vec<egui::Pos2>,
     drawing: bool,
     on_change: Function,
+    on_toolbar_settings: Function,
 }
 
 impl InkWebApp {
-    fn new(initial_state: Vec<u8>, on_change: Function, egui_ctx: &egui::Context) -> Self {
+    fn new(
+        initial_state: Vec<u8>,
+        toolbar_settings: ToolbarSettings,
+        on_change: Function,
+        on_toolbar_settings: Function,
+        egui_ctx: &egui::Context,
+    ) -> Self {
         let doc = StrokesDoc::from_bytes(&initial_state);
         let strokes = visible_strokes(&doc);
         let page_count = page_count_for_strokes(&strokes);
@@ -92,14 +104,15 @@ impl InkWebApp {
             view: View::new(page_count),
             canvas_ui,
             drawing_theme: DrawingTheme::dark(),
-            tool: ToolMode::Pen,
-            finger_drawing_allowed: true,
-            page_theme_mode: InkPageThemeMode::Light,
-            color: DEFAULT_COLOR,
-            width: DEFAULT_WIDTH,
+            tool: toolbar_settings.tool,
+            finger_drawing_allowed: toolbar_settings.finger_drawing_allowed,
+            page_theme_mode: toolbar_settings.page_theme_mode,
+            color: toolbar_settings.color,
+            width: toolbar_settings.width,
             in_flight: Vec::new(),
             drawing: false,
             on_change,
+            on_toolbar_settings,
         }
     }
 
@@ -113,6 +126,38 @@ impl InkWebApp {
         let bytes = self.doc.encode();
         let array = Uint8Array::from(bytes.as_slice());
         let _ = self.on_change.call1(&JsValue::NULL, &array);
+    }
+
+    fn emit_toolbar_settings(&self) {
+        let payload = Object::new();
+        let _ = Reflect::set(
+            &payload,
+            &JsValue::from_str("tool"),
+            &JsValue::from_str(tool_to_setting(self.tool)),
+        );
+        let _ = Reflect::set(
+            &payload,
+            &JsValue::from_str("colorArgb"),
+            &JsValue::from_f64(self.color as f64),
+        );
+        let _ = Reflect::set(
+            &payload,
+            &JsValue::from_str("width"),
+            &JsValue::from_f64(self.width as f64),
+        );
+        let _ = Reflect::set(
+            &payload,
+            &JsValue::from_str("fingerDrawingAllowed"),
+            &JsValue::from_bool(self.finger_drawing_allowed),
+        );
+        let _ = Reflect::set(
+            &payload,
+            &JsValue::from_str("pageThemeMode"),
+            &JsValue::from_str(page_theme_to_setting(self.page_theme_mode)),
+        );
+        let _ = self
+            .on_toolbar_settings
+            .call1(&JsValue::NULL, payload.as_ref());
     }
 
     fn show_toolbar(&mut self, ctx: &egui::Context) {
@@ -132,28 +177,47 @@ impl InkWebApp {
     }
 
     fn apply_toolbar_actions(&mut self, actions: ink_core::ui::RenderActions) {
-        let mut changed = false;
+        let mut doc_changed = false;
+        let mut toolbar_changed = false;
         if let Some(tool) = actions.set_tool {
-            self.tool = tool;
+            if self.tool != tool {
+                self.tool = tool;
+                toolbar_changed = true;
+            }
         }
         if let Some(allowed) = actions.set_finger_drawing_allowed {
-            self.finger_drawing_allowed = allowed;
+            if self.finger_drawing_allowed != allowed {
+                self.finger_drawing_allowed = allowed;
+                toolbar_changed = true;
+            }
         }
         if let Some(mode) = actions.set_page_theme_mode {
-            self.page_theme_mode = mode;
+            if self.page_theme_mode != mode {
+                self.page_theme_mode = mode;
+                toolbar_changed = true;
+            }
         }
         if let Some(color) = actions.set_color {
-            self.color = color;
+            if self.color != color {
+                self.color = color;
+                toolbar_changed = true;
+            }
         }
         if let Some(width) = actions.set_width {
-            self.width = width;
+            if (self.width - width).abs() > f32::EPSILON {
+                self.width = width;
+                toolbar_changed = true;
+            }
         }
         if actions.clear {
             self.doc.tombstone_all();
             self.refresh_strokes();
-            changed = true;
+            doc_changed = true;
         }
-        if changed {
+        if toolbar_changed {
+            self.emit_toolbar_settings();
+        }
+        if doc_changed {
             self.emit_change();
         }
     }
@@ -328,6 +392,39 @@ impl eframe::App for InkWebApp {
     }
 }
 
+#[derive(Clone, Copy)]
+struct ToolbarSettings {
+    tool: ToolMode,
+    finger_drawing_allowed: bool,
+    page_theme_mode: InkPageThemeMode,
+    color: u32,
+    width: f32,
+}
+
+impl ToolbarSettings {
+    fn from_js(value: &JsValue) -> Self {
+        Self {
+            tool: read_string(value, "tool")
+                .as_deref()
+                .and_then(tool_from_setting)
+                .unwrap_or(ToolMode::Pen),
+            finger_drawing_allowed: read_bool(value, "fingerDrawingAllowed").unwrap_or(true),
+            page_theme_mode: read_string(value, "pageThemeMode")
+                .as_deref()
+                .and_then(page_theme_from_setting)
+                .unwrap_or(InkPageThemeMode::Light),
+            color: read_number(value, "colorArgb")
+                .map(|n| n as u32)
+                .unwrap_or(DEFAULT_COLOR),
+            width: read_number(value, "width")
+                .map(|n| n as f32)
+                .filter(|n| n.is_finite())
+                .map(|n| n.clamp(0.5, 12.0))
+                .unwrap_or(DEFAULT_WIDTH),
+        }
+    }
+}
+
 #[derive(Clone)]
 struct Stroke {
     id: String,
@@ -473,6 +570,59 @@ fn paint_polyline(
             [view.page_to_screen(pair[0]), view.page_to_screen(pair[1])],
             stroke,
         );
+    }
+}
+
+fn read_property(value: &JsValue, key: &str) -> Option<JsValue> {
+    let property = Reflect::get(value, &JsValue::from_str(key)).ok()?;
+    if property.is_null() || property.is_undefined() {
+        None
+    } else {
+        Some(property)
+    }
+}
+
+fn read_string(value: &JsValue, key: &str) -> Option<String> {
+    read_property(value, key)?.as_string()
+}
+
+fn read_bool(value: &JsValue, key: &str) -> Option<bool> {
+    read_property(value, key)?.as_bool()
+}
+
+fn read_number(value: &JsValue, key: &str) -> Option<f64> {
+    read_property(value, key)?
+        .as_f64()
+        .filter(|n| n.is_finite())
+}
+
+fn tool_from_setting(value: &str) -> Option<ToolMode> {
+    match value {
+        "pen" => Some(ToolMode::Pen),
+        "eraser" => Some(ToolMode::Eraser),
+        _ => None,
+    }
+}
+
+fn tool_to_setting(tool: ToolMode) -> &'static str {
+    match tool {
+        ToolMode::Pen => "pen",
+        ToolMode::Eraser => "eraser",
+    }
+}
+
+fn page_theme_from_setting(value: &str) -> Option<InkPageThemeMode> {
+    match value {
+        "light" => Some(InkPageThemeMode::Light),
+        "system" => Some(InkPageThemeMode::System),
+        _ => None,
+    }
+}
+
+fn page_theme_to_setting(mode: InkPageThemeMode) -> &'static str {
+    match mode {
+        InkPageThemeMode::Light => "light",
+        InkPageThemeMode::System => "system",
     }
 }
 
