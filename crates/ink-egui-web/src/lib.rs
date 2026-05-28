@@ -87,6 +87,7 @@ struct InkWebApp {
     eraser_drag_hits: HashSet<String>,
     eraser_drag_active: bool,
     desktop_pan_active: bool,
+    touch_view_active: bool,
     undo: Vec<UndoOp>,
     redo: Vec<UndoOp>,
     on_change: Function,
@@ -122,6 +123,7 @@ impl InkWebApp {
             eraser_drag_hits: HashSet::new(),
             eraser_drag_active: false,
             desktop_pan_active: false,
+            touch_view_active: false,
             undo: Vec::new(),
             redo: Vec::new(),
             on_change,
@@ -396,7 +398,7 @@ impl InkWebApp {
         }
         let (scroll, modifiers, hover_pos) =
             ctx.input(|i| (i.smooth_scroll_delta, i.modifiers, i.pointer.hover_pos()));
-        if scroll == egui::Vec2::ZERO {
+        if scroll == egui::Vec2::ZERO || !vec2_is_finite(scroll) {
             return;
         }
 
@@ -415,22 +417,26 @@ impl InkWebApp {
     }
 
     fn handle_desktop_drag_pan(&mut self, response: &egui::Response, ctx: &egui::Context) -> bool {
-        let (middle_down, primary_down, space_down, pointer_pos, delta) = ctx.input(|i| {
-            (
-                i.pointer.button_down(egui::PointerButton::Middle),
-                i.pointer.primary_down(),
-                i.key_down(egui::Key::Space),
-                i.pointer.interact_pos(),
-                i.pointer.delta(),
-            )
-        });
+        let (middle_down, primary_down, space_down, pointer_pos, hover_pos, delta) =
+            ctx.input(|i| {
+                (
+                    i.pointer.button_down(egui::PointerButton::Middle),
+                    i.pointer.primary_down(),
+                    i.key_down(egui::Key::Space),
+                    i.pointer.interact_pos(),
+                    i.pointer.hover_pos(),
+                    i.pointer.delta(),
+                )
+            });
         let pan_down = middle_down || (space_down && primary_down);
-        let pointer_on_canvas = pointer_pos.is_some_and(|pos| response.rect.contains(pos));
+        let pointer_on_canvas = pointer_pos
+            .or(hover_pos)
+            .is_some_and(|pos| response.rect.contains(pos));
         if pan_down && (self.desktop_pan_active || pointer_on_canvas) {
             self.desktop_pan_active = true;
             self.cancel_in_flight_stroke();
             self.finish_eraser_drag(true);
-            if delta != egui::Vec2::ZERO {
+            if delta != egui::Vec2::ZERO && vec2_is_finite(delta) {
                 self.view.pan_by(delta.x, delta.y);
             }
             return true;
@@ -444,16 +450,33 @@ impl InkWebApp {
         response: &egui::Response,
         ctx: &egui::Context,
     ) -> bool {
+        let has_touch_input = ctx.input(|i| {
+            i.any_touches()
+                || i.events
+                    .iter()
+                    .any(|event| matches!(event, egui::Event::Touch { .. }))
+        });
+        if !has_touch_input {
+            self.touch_view_active = false;
+            return false;
+        }
+
         let multi_touch = ctx.input(|i| i.multi_touch());
         if let Some(touch) = multi_touch {
             if response.rect.contains(touch.center_pos) || response.rect.contains(touch.start_pos) {
+                self.touch_view_active = true;
                 self.cancel_in_flight_stroke();
                 self.finish_eraser_drag(true);
-                if touch.translation_delta != egui::Vec2::ZERO {
+                if touch.translation_delta != egui::Vec2::ZERO
+                    && vec2_is_finite(touch.translation_delta)
+                {
                     self.view
                         .pan_by(touch.translation_delta.x, touch.translation_delta.y);
                 }
-                if (touch.zoom_delta - 1.0).abs() > 0.001 {
+                if touch.zoom_delta.is_finite()
+                    && touch.zoom_delta > 0.0
+                    && (touch.zoom_delta - 1.0).abs() > 0.001
+                {
                     self.view.zoom_around(touch.center_pos, touch.zoom_delta);
                 }
                 return true;
@@ -463,7 +486,11 @@ impl InkWebApp {
         let (touch_pan, delta) = ctx.input(|i| {
             let delta = i.pointer.delta();
             (
-                i.any_touches()
+                (self.touch_view_active
+                    || i.pointer
+                        .interact_pos()
+                        .is_some_and(|pos| response.rect.contains(pos)))
+                    && i.any_touches()
                     && !self.finger_drawing_allowed
                     && i.pointer.primary_down()
                     && delta != egui::Vec2::ZERO,
@@ -471,12 +498,16 @@ impl InkWebApp {
             )
         });
         if touch_pan {
+            self.touch_view_active = true;
             self.cancel_in_flight_stroke();
             self.finish_eraser_drag(true);
-            self.view.pan_by(delta.x, delta.y);
+            if vec2_is_finite(delta) {
+                self.view.pan_by(delta.x, delta.y);
+            }
             return true;
         }
 
+        self.touch_view_active = false;
         false
     }
 
@@ -800,11 +831,22 @@ impl View {
     }
 
     fn pan_by(&mut self, dx: f32, dy: f32) {
+        if !dx.is_finite() || !dy.is_finite() {
+            return;
+        }
         self.pan += egui::vec2(dx, dy);
         self.clamp();
     }
 
     fn zoom_around(&mut self, focus: egui::Pos2, factor: f32) {
+        if !focus.x.is_finite()
+            || !focus.y.is_finite()
+            || !factor.is_finite()
+            || factor <= 0.0
+            || !self.scale.is_finite()
+        {
+            return;
+        }
         let before = egui::pos2(
             (focus.x - self.pan.x) / self.scale,
             (focus.y - self.pan.y) / self.scale,
@@ -862,6 +904,12 @@ impl View {
 
     fn clamp(&mut self) {
         self.layout = DocumentLayout::default_pages(self.layout.page_count.max(MIN_PAGE_COUNT));
+        if !self.scale.is_finite() {
+            self.scale = self.min_scale();
+        }
+        if !vec2_is_finite(self.pan) {
+            self.pan = egui::Vec2::ZERO;
+        }
         self.scale = self.scale.max(self.min_scale());
 
         let content_w = self.layout.document_width() * self.scale;
@@ -881,6 +929,10 @@ impl View {
             self.pan.y = (self.surface.y - content_h) * 0.5;
         }
     }
+}
+
+fn vec2_is_finite(v: egui::Vec2) -> bool {
+    v.x.is_finite() && v.y.is_finite()
 }
 
 fn visible_strokes(doc: &StrokesDoc) -> Vec<Stroke> {
