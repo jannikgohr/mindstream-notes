@@ -154,12 +154,18 @@ pub fn list(conn: &Connection, include_trashed: bool) -> AppResult<Vec<NoteSumma
     Ok(summaries)
 }
 
-/// Cheap-write helper for ink notes: updates JUST the `yrs_state`
-/// column + `modified` timestamp, no body / tags / parent shuffling.
+/// Cheap-write helper for ink notes: merges incoming Yrs bytes into
+/// the existing `yrs_state`, then updates JUST that column plus
+/// `modified` / `dirty`, no body / tags / parent shuffling.
 /// Used by the drawing save worker to flush in-memory `StrokesDoc`
 /// bytes to disk without going through the full `update` path
 /// (which is shaped for general note updates incl. body diffing,
 /// payload-schema bumping, parent moves, …).
+///
+/// The merge matters because Android/native and desktop web can both
+/// produce full-state Yrs updates for the same note. Overwriting here
+/// would make the last saver win; applying the incoming state onto
+/// the row's current state lets Yjs/Yrs converge instead.
 ///
 /// Returns `Ok(false)` if the note id doesn't exist (caller's
 /// pending save has nothing to land on — note was deleted while the
@@ -167,11 +173,31 @@ pub fn list(conn: &Connection, include_trashed: bool) -> AppResult<Vec<NoteSumma
 /// update.
 pub fn save_yrs_state(conn: &mut Connection, id: &str, bytes: &[u8]) -> AppResult<bool> {
     let now = chrono::Utc::now().to_rfc3339();
-    let rows = conn.execute(
-        "UPDATE notes SET yrs_state = ?1, modified = ?2 WHERE id = ?3",
-        params![bytes, now, id],
+    let tx = conn.transaction()?;
+    let existing_row: Option<Option<Vec<u8>>> = tx
+        .query_row(
+            "SELECT yrs_state FROM notes WHERE id = ?1",
+            params![id],
+            |row| row.get::<_, Option<Vec<u8>>>(0),
+        )
+        .optional()?;
+    let Some(existing_state) = existing_row else {
+        return Ok(false);
+    };
+    let existing_state = existing_state.unwrap_or_default();
+    let merged_state = if existing_state.is_empty() {
+        bytes.to_vec()
+    } else if bytes.is_empty() {
+        existing_state
+    } else {
+        yrs_doc::merge_remote(&existing_state, bytes)
+    };
+    tx.execute(
+        "UPDATE notes SET yrs_state = ?1, modified = ?2, dirty = 1 WHERE id = ?3",
+        params![merged_state, now, id],
     )?;
-    Ok(rows > 0)
+    tx.commit()?;
+    Ok(true)
 }
 
 /// Cheap fetch of just the `yrs_state` blob for a note id, skipping
@@ -729,6 +755,71 @@ mod tests {
             .unwrap();
         assert_eq!(state, supplied);
         assert_eq!(schema, 2);
+    }
+
+    #[test]
+    fn ink_save_path_merges_yrs_state_and_marks_dirty() {
+        fn one_stroke(x: f32) -> Vec<u8> {
+            let mut doc = ink_core::strokes_doc::StrokesDoc::new();
+            doc.begin_stroke(
+                ink_core::strokes_doc::DEFAULT_COLOR,
+                ink_core::strokes_doc::DEFAULT_WIDTH,
+            );
+            doc.push_point(x, x, 1.0);
+            doc.push_point(x + 1.0, x + 1.0, 1.0);
+            doc.end_stroke();
+            doc.encode()
+        }
+
+        fn visible_count(bytes: &[u8]) -> usize {
+            let doc = ink_core::strokes_doc::StrokesDoc::from_bytes(bytes);
+            let mut count = 0;
+            doc.for_each_stroke(|_| count += 1);
+            count
+        }
+
+        let db = open_memory_for_tests();
+        let n = db
+            .with_conn(|c| {
+                create(
+                    c,
+                    CreateNote {
+                        title: Some("Ink".into()),
+                        body: None,
+                        parent_collection_id: None,
+                        note_kind: Some("ink".into()),
+                    },
+                )
+            })
+            .unwrap();
+
+        db.with_conn(|c| {
+            Ok(c.execute(
+                "UPDATE notes SET dirty = 0 WHERE id = ?1",
+                params![n.summary.id],
+            )?)
+        })
+        .unwrap();
+        assert_eq!(dirty_flag(&db, &n.summary.id), 0);
+
+        let android_state = one_stroke(0.0);
+        let desktop_state = one_stroke(10.0);
+        db.with_conn_mut(|c| save_yrs_state(c, &n.summary.id, &android_state))
+            .unwrap();
+        db.with_conn_mut(|c| save_yrs_state(c, &n.summary.id, &desktop_state))
+            .unwrap();
+
+        let merged: Vec<u8> = db
+            .with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT yrs_state FROM notes WHERE id = ?1",
+                    params![n.summary.id],
+                    |r| r.get::<_, Vec<u8>>(0),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(visible_count(&merged), 2);
+        assert_eq!(dirty_flag(&db, &n.summary.id), 1);
     }
 
     #[test]

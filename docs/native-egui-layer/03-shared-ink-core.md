@@ -40,7 +40,9 @@ crate consumed by both render paths.
 5. Replace the temporary web toolbar with shared `ink_core::ui::CanvasUi`.
 6. Move the remaining portable stroke tessellation/smoothing helpers into
    `ink-core` so the web renderer can match native stroke feel.
-7. Retire the desktop native overlay commands once the web path reaches
+7. Route Android/native and desktop-web ink saves through one Rust
+   merge/write path so concurrent Yjs/Yrs document states converge.
+8. Retire the desktop native overlay commands once the web path reaches
    feature parity.
 
 ## Current Status
@@ -55,7 +57,11 @@ crate consumed by both render paths.
   shared `CanvasUi` toolbar in eframe's context and consumes the same
   `RenderActions` as native.
 - Step 6: Pending.
-- Step 7: Pending.
+- Step 7: Done. Desktop web now calls the `drawing_save_ink_state`
+  Tauri command, which lands in the same `notes::save_yrs_state` helper
+  as the Android/native save worker. That helper merges incoming Yrs
+  bytes with the existing SQLite row before marking the note dirty.
+- Step 8: Pending.
 
 ## Verification
 
@@ -65,6 +71,7 @@ crate consumed by both render paths.
 - `cargo check` in `src-tauri`
 - `cargo check --target aarch64-linux-android` in `src-tauri`
 - `cargo test --manifest-path crates/ink-core/Cargo.toml`
+- `cargo test -p mindstream-notes ink_save_path_merges_yrs_state_and_marks_dirty`
 - `cargo clippy --manifest-path crates/ink-egui-web/Cargo.toml --target wasm32-unknown-unknown -- -D warnings`
 - `pnpm check`
 - `pnpm build`

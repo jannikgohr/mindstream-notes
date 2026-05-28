@@ -8,6 +8,7 @@
  */
 
 import { invokeOrFallback } from './index';
+import { mockApi } from './mock-store';
 
 /**
  * Bring the native drawing surface up for the given note and seed
@@ -58,6 +59,24 @@ export function drawingSetSaveDebounce(ms: number): Promise<void> {
     'drawing_set_save_debounce',
     { ms },
     () => undefined
+  );
+}
+
+/**
+ * Persist a desktop-web ink note state update through the same Rust
+ * merge/write helper Android's native save worker uses. The payload is a
+ * Yrs/Yjs v1 update produced by `ink_core::strokes_doc::StrokesDoc`.
+ */
+export function drawingSaveInkState(
+  noteId: string,
+  yrsState: number[]
+): Promise<void> {
+  return invokeOrFallback<void>(
+    'drawing_save_ink_state',
+    { noteId, yrsState },
+    async () => {
+      await mockApi.saveNote({ id: noteId, yrs_state: yrsState });
+    }
   );
 }
 

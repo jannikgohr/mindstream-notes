@@ -213,6 +213,7 @@ pub fn run() {
             drawing::drawing_hide,
             drawing::drawing_clear,
             drawing::drawing_set_save_debounce,
+            drawing::drawing_save_ink_state,
             drawing::drawing_set_theme,
             drawing::drawing_set_toolbar_settings,
             drawing::drawing_set_desktop_panel_bounds,

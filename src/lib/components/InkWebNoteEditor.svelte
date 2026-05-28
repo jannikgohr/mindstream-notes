@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
-  import { loadNote, saveNote } from '$lib/api';
+  import { drawingSaveInkState, loadNote } from '$lib/api';
   import {
     setNoteStatus,
     type SavingState
@@ -52,7 +52,7 @@
     pendingState = null;
     savingState = 'saving';
     try {
-      await saveNote({ id: noteId, yrs_state: state });
+      await drawingSaveInkState(noteId, state);
       savingState = 'saved';
     } catch (err) {
       pendingState = state;

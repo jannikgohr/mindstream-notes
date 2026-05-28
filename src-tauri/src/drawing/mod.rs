@@ -223,6 +223,22 @@ pub fn drawing_set_save_debounce(ms: u64) -> Result<(), String> {
     Ok(())
 }
 
+/// Persist an ink note state update through the same merge/write path
+/// the native save worker uses. Desktop web calls this with the
+/// `StrokesDoc` bytes emitted by `ink-egui-web`; Android normally
+/// reaches the same helper through `save_worker`.
+#[tauri::command]
+pub fn drawing_save_ink_state(
+    db: tauri::State<'_, crate::db::Db>,
+    note_id: String,
+    yrs_state: Vec<u8>,
+) -> Result<(), String> {
+    db.with_conn_mut(|c| crate::notes::save_yrs_state(c, &note_id, &yrs_state))
+        .map_err(|e| format!("drawing_save_ink_state: {e}"))?
+        .then_some(())
+        .ok_or_else(|| format!("drawing_save_ink_state: note {note_id} not found"))
+}
+
 /// Hide the native drawing surface and let the WebView take input again.
 ///
 /// Called from `onDestroy`. Idempotent — repeated hides are fine.
