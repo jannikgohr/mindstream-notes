@@ -43,7 +43,7 @@
   <Select.Portal>
     <Select.Content
       sideOffset={4}
-      class="z-50 max-h-[min(60vh,400px)] min-w-[var(--bits-select-anchor-width)] overflow-hidden rounded-md border border-border bg-popover text-sm text-popover-foreground shadow-lg focus:outline-none"
+      class="z-[360] max-h-[min(60vh,400px)] min-w-[var(--bits-select-anchor-width)] overflow-hidden rounded-md border border-border bg-popover text-sm text-popover-foreground shadow-lg focus:outline-none"
     >
       <Select.Viewport class="p-1">
         {#each options as opt (opt)}

@@ -46,6 +46,11 @@
     "search.notes.label": "Search notes",
     "settings.open": "Open settings",
 
+    "tray.newNote": "New note",
+    "tray.newDrawing": "New drawing",
+    "tray.newDiagram": "New diagram",
+    "tray.quit": "Quit",
+
     "nav.primary": "Primary",
     "nav.home": "Home",
     "nav.shared": "Shared",
@@ -170,6 +175,8 @@
     "account.syncInterval": { "label": "Sync frequency" },
     "account.conflict": { "label": "Conflict resolution" },
     "general.startOnLogin": { "label": "Start on login" },
+    "general.closeToTray": { "label": "Close to system tray", "description": "Hide the main window instead of quitting when you close it." },
+    "general.startInTray": { "label": "Start in system tray", "description": "When launched by your system at login, start hidden in the tray instead of opening the window." },
     "appearance.mode": { "label": "Mode" },
     "appearance.accent": { "label": "Accent colour" },
     "appearance.density": { "label": "UI density" },
