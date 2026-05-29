@@ -18,7 +18,16 @@ import {
   isEnabled as isEnabledAutostart,
   disable as disableAutostart
 } from '@tauri-apps/plugin-autostart';
-import { isAppImageInstall, isTauri } from '$lib/api';
+import {
+  getCloseToTray,
+  getDesktopLanguage,
+  getStartInTray,
+  isAppImageInstall,
+  isTauri,
+  setCloseToTray,
+  setDesktopLanguage,
+  setStartInTray
+} from '$lib/api';
 import { getPlatform, isMobile } from '$lib/platform';
 import {
   setLeftSidebarWidth,
@@ -65,6 +74,24 @@ export const SETTING_BINDINGS: Record<string, Binding> = {
       else await disableAutostart();
     }
   },
+  'general.closeToTray': {
+    get: async () => (isTauri() && !isMobile() ? await getCloseToTray() : false),
+    set: async (v) => {
+      if (!isTauri() || isMobile()) return;
+      await setCloseToTray(v === true);
+    }
+  },
+  'general.startInTray': {
+    get: async () => (isTauri() && !isMobile() ? await getStartInTray() : false),
+    set: async (v) => {
+      if (!isTauri() || isMobile()) return;
+      await setStartInTray(v === true);
+      if (await isEnabledAutostart()) {
+        await disableAutostart();
+        await enableAutostart();
+      }
+    }
+  },
   'appearance.mode': {
     get: async () => {
       // mode-watcher writes/reads from localStorage; mirror its key here so
@@ -90,8 +117,22 @@ export const SETTING_BINDINGS: Record<string, Binding> = {
   },
   'language.code': {
     get: async () => {
-      if (typeof localStorage === 'undefined') return 'en';
-      return localStorage.getItem('notes-app:language') ?? 'en';
+      let code =
+        typeof localStorage === 'undefined'
+          ? 'en'
+          : localStorage.getItem('notes-app:language');
+      if (!code && isTauri() && !isMobile()) {
+        code = await getDesktopLanguage();
+      }
+      code = code ?? 'en';
+      if (isTauri() && !isMobile()) {
+        await setDesktopLanguage(code);
+      }
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem('notes-app:language', code);
+      }
+      setLanguage(code);
+      return code;
     },
     set: async (v) => {
       const code = String(v);
@@ -99,6 +140,9 @@ export const SETTING_BINDINGS: Record<string, Binding> = {
         localStorage.setItem('notes-app:language', code);
       }
       setLanguage(code);
+      if (isTauri() && !isMobile()) {
+        await setDesktopLanguage(code);
+      }
     }
   }
 };

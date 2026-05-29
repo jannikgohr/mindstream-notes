@@ -46,6 +46,11 @@
     "search.notes.label": "Notizen suchen",
     "settings.open": "Einstellungen öffnen",
 
+    "tray.newNote": "Neue Notiz",
+    "tray.newDrawing": "Neue Zeichnung",
+    "tray.newDiagram": "Neues Diagramm",
+    "tray.quit": "Beenden",
+
     "nav.primary": "Hauptnavigation",
     "nav.home": "Start",
     "nav.shared": "Geteilt",
@@ -168,6 +173,8 @@
     "account.collabServerUrl": { "label": "Live-Collab-Server", "description": "WebSocket-URL des verschlüsselten Relays für Echtzeit-Co-Editing. Leer lassen, um Live-Collab zu deaktivieren; periodische Synchronisation funktioniert weiterhin." },
     "account.syncEnabled": { "label": "Synchronisation aktivieren" },
     "general.startOnLogin": { "label": "Autostart bei Anmeldung" },
+    "general.closeToTray": { "label": "In Systemablage schließen", "description": "Blendet das Hauptfenster aus, statt die App beim Schließen zu beenden." },
+    "general.startInTray": { "label": "In Systemablage starten", "description": "Wenn das System die App bei der Anmeldung startet, wird sie ausgeblendet in der Systemablage geöffnet." },
     "appearance.mode": { "label": "Modus" },
     "appearance.accent": { "label": "Akzentfarbe" },
     "appearance.density": { "label": "Dichte" },

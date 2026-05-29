@@ -15,16 +15,24 @@ pub mod assets;
 pub mod auth;
 pub mod collections;
 pub mod db;
+#[cfg(desktop)]
+pub mod desktop_settings;
 pub mod drawing;
 pub mod error;
+pub mod i18n;
 pub mod notes;
 pub mod serde_helpers;
 pub mod sync;
 pub mod system;
+#[cfg(desktop)]
+pub mod tray;
 
 use tauri::Manager;
 
 use crate::db::{migrations, Db};
+
+#[cfg(desktop)]
+const AUTOSTART_ARG: &str = "--mindstream-autostart";
 
 /// Pick a platform credential store and register it with keyring-core
 /// so subsequent `Entry::new(...)` calls in `auth::*` know where to
@@ -110,19 +118,29 @@ pub fn run() {
 
     #[cfg(desktop)]
     let app_handle = tauri::Builder::default()
-        .plugin(tauri_plugin_autostart::Builder::new().build())
+        .plugin(tauri_plugin_autostart::Builder::new().arg(AUTOSTART_ARG).build())
         .plugin(tauri_plugin_window_state::Builder::new().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .on_window_event(|window, event| {
-            if window.label() == "main"
-                && matches!(
-                    event,
-                    tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed
-                )
-            {
-                let app_handle = window.app_handle();
-                drawing::shutdown_desktop(app_handle);
-                app_handle.exit(0);
+            if window.label() == "main" {
+                match event {
+                    tauri::WindowEvent::CloseRequested { api, .. } => {
+                        let app_handle = window.app_handle();
+                        if desktop_settings::should_close_to_tray(app_handle) {
+                            api.prevent_close();
+                            let _ = window.hide();
+                            return;
+                        }
+                        drawing::shutdown_desktop(app_handle);
+                        app_handle.exit(0);
+                    }
+                    tauri::WindowEvent::Destroyed => {
+                        let app_handle = window.app_handle();
+                        drawing::shutdown_desktop(app_handle);
+                        app_handle.exit(0);
+                    }
+                    _ => {}
+                }
             }
         });
     #[cfg(not(desktop))]
@@ -155,6 +173,19 @@ pub fn run() {
             .expect("failed to seed database");
 
             app.manage(db);
+
+            #[cfg(desktop)]
+            app.manage(desktop_settings::DesktopSettings::load(app));
+
+            #[cfg(desktop)]
+            tray::init(app)?;
+
+            #[cfg(desktop)]
+            if was_started_by_autostart() && desktop_settings::should_start_in_tray(app.handle()) {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.hide();
+                }
+            }
 
             // Periodic sync runs in a tokio task owned by this
             // process — replaces the JS setTimeout that used to live
@@ -208,6 +239,18 @@ pub fn run() {
             sync::scheduler::set_sync_schedule,
             // System introspection
             system::is_appimage_install,
+            #[cfg(desktop)]
+            desktop_settings::get_close_to_tray,
+            #[cfg(desktop)]
+            desktop_settings::set_close_to_tray,
+            #[cfg(desktop)]
+            desktop_settings::get_start_in_tray,
+            #[cfg(desktop)]
+            desktop_settings::set_start_in_tray,
+            #[cfg(desktop)]
+            desktop_settings::get_desktop_language,
+            #[cfg(desktop)]
+            desktop_settings::set_desktop_language,
             // Native drawing surface (Android only; no-op stubs on desktop)
             drawing::drawing_show,
             drawing::drawing_hide,
@@ -220,4 +263,9 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(desktop)]
+fn was_started_by_autostart() -> bool {
+    std::env::args().any(|arg| arg == AUTOSTART_ARG)
 }

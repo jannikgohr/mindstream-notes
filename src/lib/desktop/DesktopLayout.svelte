@@ -31,6 +31,7 @@
     openNoteWindow
   } from '$lib/api';
   import { clearSavedLayout, loadSavedLayout, saveLayout } from '$lib/api';
+  import { listen } from '$lib/api/events';
   import {
     setActiveNote,
     setLeftSidebarWidth,
@@ -39,12 +40,14 @@
   } from '$lib/state.svelte';
   import { loadTree, tree } from '$lib/stores/tree.svelte';
   import { subscribeOpenNoteRequest } from '$lib/stores/open-note-intent.svelte';
+  import { runSync } from '$lib/sync/runner';
 
   let dockHost: HTMLDivElement | null = $state(null);
   let dock: DockviewApi | null = null;
   let lastActiveGroup: DockviewGroupPanel | null = null;
   const openPanels = new Map<string, IDockviewPanel>();
   let saveLayoutTimer: ReturnType<typeof setTimeout> | null = null;
+  let pendingTrayNoteId: string | null = null;
   type NotePanelComponent =
     | 'noteEditor'
     | 'freeformNote'
@@ -197,6 +200,12 @@
     }
 
     lastActiveGroup = dock.activeGroup ?? lastActiveGroup;
+
+    if (pendingTrayNoteId) {
+      const id = pendingTrayNoteId;
+      pendingTrayNoteId = null;
+      void openNote(id);
+    }
   }
 
   function pickInitialNote(): string | null {
@@ -338,6 +347,29 @@
     document.body.classList.remove('dv-tab-dragging');
   }
 
+  async function openTrayCreatedNote(id: string) {
+    await loadTree();
+    scheduleTrayCreateSync(id);
+    if (!dock) {
+      pendingTrayNoteId = id;
+      return;
+    }
+    await openNote(id);
+  }
+
+  function scheduleTrayCreateSync(id: string) {
+    void (async () => {
+      try {
+        await runSync();
+        if (!tree.notesById[id]?.pushed) {
+          await runSync();
+        }
+      } catch (err) {
+        console.debug('[tray] post-create sync failed', err);
+      }
+    })();
+  }
+
   /**
    * Reposition the tabs-overflow popup so it appears under whichever
    * chevron was just clicked, rather than at the top-right of the
@@ -465,6 +497,9 @@
     const unsub = subscribeOpenNoteRequest((id) => {
       void openNote(id);
     });
+    const trayUnlisten = listen('tray-note-created', (payload) => {
+      void openTrayCreatedNote(payload.note_id);
+    });
 
     // Cleanup the dv-tab-dragging body class on every drag termination:
     //   - `dragend` fires on the source element after a successful drop
@@ -508,6 +543,7 @@
       // leave the class stuck on <body>.
       clearDragging();
       unsub();
+      void trayUnlisten.then((unlisten) => unlisten());
     };
   });
 

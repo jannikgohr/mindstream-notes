@@ -26,6 +26,7 @@ export interface SyncCompletedPayload {
 export type TauriEvents = {
     'fullscreen-note': {noteId: string, title: string}
     'sync-completed': SyncCompletedPayload
+    'tray-note-created': { note_id: string }
 }
 
 export function emit<K extends keyof TauriEvents>(
