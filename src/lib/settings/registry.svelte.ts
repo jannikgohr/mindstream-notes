@@ -21,10 +21,12 @@ import {
 import {
   getCloseToTray,
   getDesktopLanguage,
+  getStartInTray,
   isAppImageInstall,
   isTauri,
   setCloseToTray,
-  setDesktopLanguage
+  setDesktopLanguage,
+  setStartInTray
 } from '$lib/api';
 import { getPlatform, isMobile } from '$lib/platform';
 import {
@@ -77,6 +79,17 @@ export const SETTING_BINDINGS: Record<string, Binding> = {
     set: async (v) => {
       if (!isTauri() || isMobile()) return;
       await setCloseToTray(v === true);
+    }
+  },
+  'general.startInTray': {
+    get: async () => (isTauri() && !isMobile() ? await getStartInTray() : false),
+    set: async (v) => {
+      if (!isTauri() || isMobile()) return;
+      await setStartInTray(v === true);
+      if (await isEnabledAutostart()) {
+        await disableAutostart();
+        await enableAutostart();
+      }
     }
   },
   'appearance.mode': {
