@@ -9,6 +9,7 @@ use crate::{
     db::Db,
     desktop_settings::DesktopSettings,
     drawing,
+    i18n,
     notes::{self, CreateNote},
 };
 
@@ -31,18 +32,18 @@ struct TrayMenuItems {
 }
 
 pub fn init(app: &App) -> tauri::Result<()> {
-    let labels = tray_labels(
-        &app.try_state::<DesktopSettings>()
-            .map(|settings| settings.language_code())
-            .unwrap_or_else(|| "en".to_string()),
-    );
-    let new_note = MenuItem::with_id(app, NEW_NOTE_ID, labels.new_note, true, None::<&str>)?;
+    let language_code = app
+        .try_state::<DesktopSettings>()
+        .map(|settings| settings.language_code())
+        .unwrap_or_else(|| "en".to_string());
+    let labels = TrayLabels::for_language(&language_code);
+    let new_note = MenuItem::with_id(app, NEW_NOTE_ID, &labels.new_note, true, None::<&str>)?;
     let new_drawing =
-        MenuItem::with_id(app, NEW_DRAWING_ID, labels.new_drawing, true, None::<&str>)?;
+        MenuItem::with_id(app, NEW_DRAWING_ID, &labels.new_drawing, true, None::<&str>)?;
     let new_diagram =
-        MenuItem::with_id(app, NEW_DIAGRAM_ID, labels.new_diagram, true, None::<&str>)?;
+        MenuItem::with_id(app, NEW_DIAGRAM_ID, &labels.new_diagram, true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
-    let quit = MenuItem::with_id(app, QUIT_ID, labels.quit, true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, QUIT_ID, &labels.quit, true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
         &[&new_note, &new_drawing, &new_diagram, &separator, &quit],
@@ -82,20 +83,20 @@ pub fn init(app: &App) -> tauri::Result<()> {
 }
 
 pub fn set_language(app: &AppHandle, code: &str) {
-    let labels = tray_labels(code);
+    let labels = TrayLabels::for_language(code);
     let Some(items) = app.try_state::<TrayMenuItems>() else {
         return;
     };
-    if let Err(err) = items.new_note.set_text(labels.new_note) {
+    if let Err(err) = items.new_note.set_text(&labels.new_note) {
         log::warn!("[tray] failed to update New note label: {err}");
     }
-    if let Err(err) = items.new_drawing.set_text(labels.new_drawing) {
+    if let Err(err) = items.new_drawing.set_text(&labels.new_drawing) {
         log::warn!("[tray] failed to update New drawing label: {err}");
     }
-    if let Err(err) = items.new_diagram.set_text(labels.new_diagram) {
+    if let Err(err) = items.new_diagram.set_text(&labels.new_diagram) {
         log::warn!("[tray] failed to update New diagram label: {err}");
     }
-    if let Err(err) = items.quit.set_text(labels.quit) {
+    if let Err(err) = items.quit.set_text(&labels.quit) {
         log::warn!("[tray] failed to update Quit label: {err}");
     }
 }
@@ -164,25 +165,19 @@ fn focus_main_window(app: &AppHandle) {
 }
 
 struct TrayLabels {
-    new_note: &'static str,
-    new_drawing: &'static str,
-    new_diagram: &'static str,
-    quit: &'static str,
+    new_note: String,
+    new_drawing: String,
+    new_diagram: String,
+    quit: String,
 }
 
-fn tray_labels(code: &str) -> TrayLabels {
-    match code {
-        "de" => TrayLabels {
-            new_note: "Neue Notiz",
-            new_drawing: "Neue Zeichnung",
-            new_diagram: "Neues Diagramm",
-            quit: "Beenden",
-        },
-        _ => TrayLabels {
-            new_note: "New note",
-            new_drawing: "New drawing",
-            new_diagram: "New diagram",
-            quit: "Quit",
-        },
+impl TrayLabels {
+    fn for_language(code: &str) -> Self {
+        Self {
+            new_note: i18n::t_ui(code, "tray.newNote"),
+            new_drawing: i18n::t_ui(code, "tray.newDrawing"),
+            new_diagram: i18n::t_ui(code, "tray.newDiagram"),
+            quit: i18n::t_ui(code, "tray.quit"),
+        }
     }
 }

@@ -19,6 +19,7 @@ pub mod db;
 pub mod desktop_settings;
 pub mod drawing;
 pub mod error;
+pub mod i18n;
 pub mod notes;
 pub mod serde_helpers;
 pub mod sync;

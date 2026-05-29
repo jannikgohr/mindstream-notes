@@ -115,6 +115,10 @@ export const SETTING_BINDINGS: Record<string, Binding> = {
       if (isTauri() && !isMobile()) {
         await setDesktopLanguage(code);
       }
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem('notes-app:language', code);
+      }
+      setLanguage(code);
       return code;
     },
     set: async (v) => {
