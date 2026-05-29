@@ -18,7 +18,14 @@ import {
   isEnabled as isEnabledAutostart,
   disable as disableAutostart
 } from '@tauri-apps/plugin-autostart';
-import { getCloseToTray, isAppImageInstall, isTauri, setCloseToTray } from '$lib/api';
+import {
+  getCloseToTray,
+  getDesktopLanguage,
+  isAppImageInstall,
+  isTauri,
+  setCloseToTray,
+  setDesktopLanguage
+} from '$lib/api';
 import { getPlatform, isMobile } from '$lib/platform';
 import {
   setLeftSidebarWidth,
@@ -97,8 +104,18 @@ export const SETTING_BINDINGS: Record<string, Binding> = {
   },
   'language.code': {
     get: async () => {
-      if (typeof localStorage === 'undefined') return 'en';
-      return localStorage.getItem('notes-app:language') ?? 'en';
+      let code =
+        typeof localStorage === 'undefined'
+          ? 'en'
+          : localStorage.getItem('notes-app:language');
+      if (!code && isTauri() && !isMobile()) {
+        code = await getDesktopLanguage();
+      }
+      code = code ?? 'en';
+      if (isTauri() && !isMobile()) {
+        await setDesktopLanguage(code);
+      }
+      return code;
     },
     set: async (v) => {
       const code = String(v);
@@ -106,6 +123,9 @@ export const SETTING_BINDINGS: Record<string, Binding> = {
         localStorage.setItem('notes-app:language', code);
       }
       setLanguage(code);
+      if (isTauri() && !isMobile()) {
+        await setDesktopLanguage(code);
+      }
     }
   }
 };

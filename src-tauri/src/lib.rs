@@ -232,6 +232,10 @@ pub fn run() {
             desktop_settings::get_close_to_tray,
             #[cfg(desktop)]
             desktop_settings::set_close_to_tray,
+            #[cfg(desktop)]
+            desktop_settings::get_desktop_language,
+            #[cfg(desktop)]
+            desktop_settings::set_desktop_language,
             // Native drawing surface (Android only; no-op stubs on desktop)
             drawing::drawing_show,
             drawing::drawing_hide,

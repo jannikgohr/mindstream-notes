@@ -7,3 +7,11 @@ export function getCloseToTray(): Promise<boolean> {
 export function setCloseToTray(value: boolean): Promise<void> {
   return invokeOrFallback<void>('set_close_to_tray', { value }, () => undefined);
 }
+
+export function getDesktopLanguage(): Promise<string> {
+  return invokeOrFallback<string>('get_desktop_language', undefined, () => 'en');
+}
+
+export function setDesktopLanguage(code: string): Promise<void> {
+  return invokeOrFallback<void>('set_desktop_language', { code }, () => undefined);
+}
