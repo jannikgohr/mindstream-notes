@@ -31,6 +31,9 @@ use tauri::Manager;
 
 use crate::db::{migrations, Db};
 
+#[cfg(desktop)]
+const AUTOSTART_ARG: &str = "--mindstream-autostart";
+
 /// Pick a platform credential store and register it with keyring-core
 /// so subsequent `Entry::new(...)` calls in `auth::*` know where to
 /// read/write secrets. v4 of the keyring ecosystem split each backend
@@ -115,7 +118,7 @@ pub fn run() {
 
     #[cfg(desktop)]
     let app_handle = tauri::Builder::default()
-        .plugin(tauri_plugin_autostart::Builder::new().build())
+        .plugin(tauri_plugin_autostart::Builder::new().arg(AUTOSTART_ARG).build())
         .plugin(tauri_plugin_window_state::Builder::new().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .on_window_event(|window, event| {
@@ -177,6 +180,13 @@ pub fn run() {
             #[cfg(desktop)]
             tray::init(app)?;
 
+            #[cfg(desktop)]
+            if was_started_by_autostart() && desktop_settings::should_start_in_tray(app.handle()) {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.hide();
+                }
+            }
+
             // Periodic sync runs in a tokio task owned by this
             // process — replaces the JS setTimeout that used to live
             // in +layout.svelte. Starts disabled; the JS settings
@@ -234,6 +244,10 @@ pub fn run() {
             #[cfg(desktop)]
             desktop_settings::set_close_to_tray,
             #[cfg(desktop)]
+            desktop_settings::get_start_in_tray,
+            #[cfg(desktop)]
+            desktop_settings::set_start_in_tray,
+            #[cfg(desktop)]
             desktop_settings::get_desktop_language,
             #[cfg(desktop)]
             desktop_settings::set_desktop_language,
@@ -249,4 +263,9 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(desktop)]
+fn was_started_by_autostart() -> bool {
+    std::env::args().any(|arg| arg == AUTOSTART_ARG)
 }

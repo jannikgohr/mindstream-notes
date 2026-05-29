@@ -18,12 +18,15 @@ const SETTINGS_FILE: &str = "desktop-settings.json";
 struct DesktopSettingsFile {
     #[serde(default)]
     close_to_tray: bool,
+    #[serde(default)]
+    start_in_tray: bool,
     #[serde(default = "default_language_code")]
     language_code: String,
 }
 
 pub struct DesktopSettings {
     close_to_tray: AtomicBool,
+    start_in_tray: AtomicBool,
     language_code: Mutex<String>,
     path: PathBuf,
 }
@@ -41,6 +44,7 @@ impl DesktopSettings {
             .unwrap_or_default();
         Self {
             close_to_tray: AtomicBool::new(file.close_to_tray),
+            start_in_tray: AtomicBool::new(file.start_in_tray),
             language_code: Mutex::new(
                 i18n::normalize_language_code(&file.language_code).to_string(),
             ),
@@ -54,6 +58,14 @@ impl DesktopSettings {
 
     fn set_close_to_tray(&self, value: bool) {
         self.close_to_tray.store(value, Ordering::Relaxed);
+    }
+
+    fn start_in_tray(&self) -> bool {
+        self.start_in_tray.load(Ordering::Relaxed)
+    }
+
+    fn set_start_in_tray(&self, value: bool) {
+        self.start_in_tray.store(value, Ordering::Relaxed);
     }
 
     pub fn language_code(&self) -> String {
@@ -75,6 +87,7 @@ impl DesktopSettings {
         }
         let file = DesktopSettingsFile {
             close_to_tray: self.close_to_tray(),
+            start_in_tray: self.start_in_tray(),
             language_code: self.language_code(),
         };
         let json = serde_json::to_string_pretty(&file)
@@ -93,6 +106,12 @@ pub fn should_close_to_tray(app: &AppHandle) -> bool {
         .unwrap_or(false)
 }
 
+pub fn should_start_in_tray(app: &AppHandle) -> bool {
+    app.try_state::<DesktopSettings>()
+        .map(|settings| settings.start_in_tray())
+        .unwrap_or(false)
+}
+
 #[tauri::command]
 pub fn get_close_to_tray(settings: State<'_, DesktopSettings>) -> bool {
     settings.close_to_tray()
@@ -105,6 +124,21 @@ pub fn set_close_to_tray(
     value: bool,
 ) -> Result<(), String> {
     settings.set_close_to_tray(value);
+    settings.save()
+}
+
+#[tauri::command]
+pub fn get_start_in_tray(settings: State<'_, DesktopSettings>) -> bool {
+    settings.start_in_tray()
+}
+
+#[tauri::command]
+pub fn set_start_in_tray(
+    _app: AppHandle,
+    settings: State<'_, DesktopSettings>,
+    value: bool,
+) -> Result<(), String> {
+    settings.set_start_in_tray(value);
     settings.save()
 }
 

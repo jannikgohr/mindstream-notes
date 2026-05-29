@@ -176,6 +176,7 @@
     "account.conflict": { "label": "Conflict resolution" },
     "general.startOnLogin": { "label": "Start on login" },
     "general.closeToTray": { "label": "Close to system tray", "description": "Hide the main window instead of quitting when you close it." },
+    "general.startInTray": { "label": "Start in system tray", "description": "When launched by your system at login, start hidden in the tray instead of opening the window." },
     "appearance.mode": { "label": "Mode" },
     "appearance.accent": { "label": "Accent colour" },
     "appearance.density": { "label": "UI density" },
