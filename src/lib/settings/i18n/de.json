@@ -46,6 +46,11 @@
     "search.notes.label": "Notizen suchen",
     "settings.open": "Einstellungen öffnen",
 
+    "tray.newNote": "Neue Notiz",
+    "tray.newDrawing": "Neue Zeichnung",
+    "tray.newDiagram": "Neues Diagramm",
+    "tray.quit": "Beenden",
+
     "nav.primary": "Hauptnavigation",
     "nav.home": "Start",
     "nav.shared": "Geteilt",

@@ -10,6 +10,8 @@ use std::{
 use serde::{Deserialize, Serialize};
 use tauri::{App, AppHandle, Manager, State};
 
+use crate::i18n;
+
 const SETTINGS_FILE: &str = "desktop-settings.json";
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -39,7 +41,9 @@ impl DesktopSettings {
             .unwrap_or_default();
         Self {
             close_to_tray: AtomicBool::new(file.close_to_tray),
-            language_code: Mutex::new(normalize_language_code(&file.language_code).to_string()),
+            language_code: Mutex::new(
+                i18n::normalize_language_code(&file.language_code).to_string(),
+            ),
             path,
         }
     }
@@ -61,7 +65,7 @@ impl DesktopSettings {
 
     fn set_language_code(&self, value: &str) {
         if let Ok(mut code) = self.language_code.lock() {
-            *code = normalize_language_code(value).to_string();
+            *code = i18n::normalize_language_code(value).to_string();
         }
     }
 
@@ -81,13 +85,6 @@ impl DesktopSettings {
 
 fn default_language_code() -> String {
     "en".to_string()
-}
-
-fn normalize_language_code(value: &str) -> &'static str {
-    match value {
-        "de" => "de",
-        _ => "en",
-    }
 }
 
 pub fn should_close_to_tray(app: &AppHandle) -> bool {
