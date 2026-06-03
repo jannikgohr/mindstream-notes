@@ -123,6 +123,8 @@
     "pdf.signature.add": "Add new signature",
     "pdf.signature.delete": "Delete signature",
     "pdf.signature.preview": "Signature preview",
+    "pdf.export.label": "Download annotated PDF",
+    "pdf.export.failed": "Export failed",
 
     "updater.checkFailed.title": "Couldn't check for updates",
     "updater.checkFailed.message": "We weren't able to reach the update server. Check your internet connection and try again.",

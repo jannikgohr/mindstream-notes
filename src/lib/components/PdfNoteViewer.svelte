@@ -5,6 +5,7 @@
     AlertCircle,
     Check,
     ChevronDown,
+    Download,
     FileText,
     Highlighter,
     Loader2,
@@ -33,6 +34,16 @@
   import { pickCursorColor } from '$lib/editor/cursor-color';
   import { getSettingValue } from '$lib/settings/store.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
+  import { exportAnnotatedPdf } from '$lib/pdf/export-annotated-pdf';
+  import {
+    PDF_ANNOTATIONS_MAP,
+    type PdfAnnotation,
+    type PdfAnnotationType,
+    type PdfInkStroke,
+    type PdfRect,
+    type PdfSignatureSnapshot,
+    type PdfStrokePoint
+  } from '$lib/pdf/types';
   import { CollabProvider } from '$lib/sync/collab-provider';
   import { tree } from '$lib/stores/tree.svelte';
   import {
@@ -57,45 +68,6 @@
     | 'pen'
     | 'signature'
     | 'delete';
-  type PdfAnnotationType = 'highlight' | 'comment' | 'ink' | 'signature';
-  type PdfRect = {
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-  };
-  type PdfStrokePoint = {
-    x: number;
-    y: number;
-    pressure?: number;
-  };
-  type PdfInkStroke = {
-    id: string;
-    points: PdfStrokePoint[];
-    color: string;
-    width: number;
-  };
-  type PdfSignatureSnapshot = {
-    id: string;
-    width: number;
-    height: number;
-    strokes: PdfInkStroke[];
-  };
-  type PdfAnnotation = {
-    id: string;
-    type: PdfAnnotationType;
-    pageIndex: number;
-    rects: PdfRect[];
-    color: string;
-    opacity: number;
-    authorId: string;
-    createdAt: string;
-    updatedAt: string;
-    body?: string;
-    resolved?: boolean;
-    strokes?: PdfInkStroke[];
-    signature?: PdfSignatureSnapshot;
-  };
   type RenderParams = {
     pageNumber: number;
     version: number;
@@ -112,7 +84,6 @@
   const QUICK_ZOOMS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
   const PDF_TO_CSS_UNITS = 96 / 72;
   const SAVE_DEBOUNCE_MS = 800;
-  const PDF_ANNOTATIONS_MAP = 'pdf_annotations';
   const HIGHLIGHT_COLOR = '#facc15';
   const COMMENT_COLOR = '#3b82f6';
   const SIGNATURE_COLOR = '#111827';
@@ -159,6 +130,8 @@
   let collabConfigured = $state(false);
   let collabOnline = $state(false);
   let activePageNumber = $state(1);
+  let exportInProgress = $state(false);
+  let exportError = $state<string | null>(null);
   let pdfjsLib: PdfJs | null = null;
   let pdfViewerLib: PdfViewer | null = null;
   let yDoc: Y.Doc | null = null;
@@ -445,6 +418,56 @@
     } catch (err) {
       savingState = 'error';
       console.error('[PdfNoteViewer] save failed', err);
+    }
+  }
+
+  function sanitizeFilename(name: string): string {
+    // Strip the characters Windows / macOS refuse, collapse whitespace,
+    // and fall back to a sensible default so the <a download> attribute
+    // never resolves to an empty string.
+    const cleaned = name
+      .replace(/[\\/:*?"<>|]+/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return cleaned.slice(0, 120) || 'pdf-note';
+  }
+
+  async function downloadAnnotatedPdf() {
+    if (exportInProgress) return;
+    if (!pdfDoc) return;
+    exportInProgress = true;
+    exportError = null;
+    try {
+      // getData() returns the original bytes the document was opened from
+      // — we never serialise pdf.js's parsed representation back to disk,
+      // so the result here is byte-identical to the source asset.
+      const sourceBytes = await pdfDoc.getData();
+      const out = await exportAnnotatedPdf(
+        sourceBytes,
+        annotations.filter((annotation) => !annotation.deletedAt)
+      );
+      // Blob copy uses .slice() to give Blob ownership over its own
+      // ArrayBuffer; without it, future GC of `out` could surprise the
+      // download mid-write on some webviews.
+      const blob = new Blob([out.slice().buffer], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+      const title = tree.notesById[noteId]?.title ?? 'pdf-note';
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `${sanitizeFilename(title)}.pdf`;
+      anchor.rel = 'noopener';
+      document.body.append(anchor);
+      anchor.click();
+      anchor.remove();
+      // Give the webview a moment to spool the download before we drop
+      // the blob URL — Chrome/WebKit both keep the reference alive across
+      // the click, but revoking immediately can race in Tauri's webview.
+      setTimeout(() => URL.revokeObjectURL(url), 1500);
+    } catch (err) {
+      exportError = err instanceof Error ? err.message : String(err);
+      console.error('[PdfNoteViewer] export failed', err);
+    } finally {
+      exportInProgress = false;
     }
   }
 
@@ -1451,6 +1474,24 @@
             aria-pressed={commentsSidebarOpen}
           >
             <PanelRight class="size-3.5" aria-hidden="true" />
+          </Button>
+
+          <Button
+            variant="ghost"
+            size="icon"
+            class="size-7"
+            onclick={() => void downloadAnnotatedPdf()}
+            aria-label={tUi('pdf.export.label')}
+            title={exportError
+              ? `${tUi('pdf.export.failed')}: ${exportError}`
+              : tUi('pdf.export.label')}
+            disabled={exportInProgress || !pdfDoc}
+          >
+            {#if exportInProgress}
+              <Loader2 class="size-3.5 animate-spin" aria-hidden="true" />
+            {:else}
+              <Download class="size-3.5" aria-hidden="true" />
+            {/if}
           </Button>
         </div>
 
