@@ -2,9 +2,11 @@ import { sveltekit } from '@sveltejs/kit/vite';
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
+import { fileURLToPath } from 'node:url';
 
 // Tauri expects a fixed port and ignores hidden Vite cache changes.
 const host = process.env.TAURI_DEV_HOST;
+const packageJsonPath = fileURLToPath(new URL('package.json', import.meta.url));
 
 export default defineConfig({
   plugins: [
@@ -35,6 +37,9 @@ export default defineConfig({
     // Don't watch src-tauri to avoid full-reload loops.
     watch: {
       ignored: ['**/src-tauri/**']
+    },
+    fs: {
+      allow: [packageJsonPath]
     }
   },
 
