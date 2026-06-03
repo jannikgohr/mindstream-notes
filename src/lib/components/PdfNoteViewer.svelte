@@ -1449,7 +1449,7 @@
             <svg
               role="img"
               aria-label="Signature drawing pad"
-              class="h-40 w-full touch-none rounded-md border border-input bg-white"
+              class="aspect-[420/168] w-full touch-none rounded-md border border-input bg-white"
               viewBox="0 0 {SIGNATURE_PAD_WIDTH} {SIGNATURE_PAD_HEIGHT}"
               onpointerdown={beginSignaturePadStroke}
               onpointermove={pushSignaturePadPoint}
