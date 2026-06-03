@@ -15,6 +15,7 @@
 
 import { invokeOrFallback } from './index';
 import { mockApi } from './mock-store';
+import type { Note } from './notes';
 
 export interface AssetSummary {
   id: string;
@@ -43,6 +44,12 @@ export interface UploadAssetInput {
   bytes: number[];
 }
 
+export interface ImportPdfNoteInput {
+  title?: string;
+  parent_collection_id?: string | null;
+  bytes: number[];
+}
+
 export function uploadDrawingAsset(input: UploadAssetInput): Promise<Asset> {
   return invokeOrFallback<Asset>('upload_drawing_asset', { input }, () =>
     mockApi.uploadDrawingAsset(input)
@@ -52,5 +59,11 @@ export function uploadDrawingAsset(input: UploadAssetInput): Promise<Asset> {
 export function fetchDrawingAsset(id: string): Promise<Asset> {
   return invokeOrFallback<Asset>('fetch_drawing_asset', { id }, () =>
     mockApi.fetchDrawingAsset(id)
+  );
+}
+
+export function importPdfNote(input: ImportPdfNoteInput): Promise<Note> {
+  return invokeOrFallback<Note>('import_pdf_note', { input }, () =>
+    mockApi.importPdfNote(input)
   );
 }
