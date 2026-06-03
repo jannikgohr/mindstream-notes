@@ -21,6 +21,7 @@ pub mod drawing;
 pub mod error;
 pub mod i18n;
 pub mod notes;
+pub mod pdf_export;
 pub mod serde_helpers;
 pub mod sync;
 pub mod system;
@@ -148,6 +149,7 @@ pub fn run() {
 
     app_handle
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             // Register a credential store before any auth code can hit
             // it — Entry::new() returns Error::NoDefaultStore otherwise.
@@ -229,6 +231,7 @@ pub fn run() {
             // Assets (freeform drawing attachments)
             assets::upload_drawing_asset,
             assets::fetch_drawing_asset,
+            assets::import_pdf_note,
             // Auth (Etebase)
             auth::etebase_login,
             auth::etebase_logout,
@@ -237,6 +240,8 @@ pub fn run() {
             sync::sync_now,
             sync::note_room_info,
             sync::scheduler::set_sync_schedule,
+            // PDF export
+            pdf_export::save_pdf_export,
             // System introspection
             system::is_appimage_install,
             #[cfg(desktop)]

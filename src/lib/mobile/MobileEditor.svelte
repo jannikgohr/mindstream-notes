@@ -11,6 +11,7 @@
   import NoteEditor from '$lib/components/NoteEditor.svelte';
   import FreeformNoteEditor from '$lib/components/FreeformNoteEditor.svelte';
   import DrawingNoteEditor from '$lib/components/DrawingNoteEditor.svelte';
+  import PdfNoteViewer from '$lib/components/PdfNoteViewer.svelte';
   import UnknownNoteKindError from '$lib/components/UnknownNoteKindError.svelte';
   import { tree } from '$lib/stores/tree.svelte';
   import { ui } from '$lib/state.svelte';
@@ -87,6 +88,8 @@
       <FreeformNoteEditor {noteId} />
     {:else if note.note_kind === 'ink'}
       <DrawingNoteEditor {noteId} />
+    {:else if note.note_kind === 'pdf'}
+      <PdfNoteViewer {noteId} />
     {:else if note.note_kind === 'markdown'}
       <NoteEditor {noteId} />
     {:else}

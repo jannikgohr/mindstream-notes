@@ -1,4 +1,4 @@
-import type { Reroute } from '@sveltejs/kit';
+import type { HandleClientError, Reroute } from '@sveltejs/kit';
 
 /**
  * Tauri opens spawned WebviewWindows by file path (e.g. `index.html?...`).
@@ -13,6 +13,18 @@ export const reroute: Reroute = ({ url }) => {
     return '/';
   }
   return undefined;
+};
+
+/**
+ * SvelteKit's optimised client bundle destructures `{ handleError, init }`
+ * from this module unconditionally; declaring them — even as no-op
+ * pass-throughs — silences the "not exported" rollup warning and gives
+ * us a single place to add real client-error reporting later.
+ */
+export const init = () => {};
+
+export const handleError: HandleClientError = ({ error, event }) => {
+  console.error('[hooks.client] uncaught', { error, event });
 };
 
 /**
