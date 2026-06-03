@@ -66,9 +66,7 @@
 //! (active-note swap, tool flip mid-drag, system gesture cancel) is
 //! cleanly discarded.
 
-use ink_stroke_modeler_rs::{
-    ModelerInput, ModelerInputEventType, ModelerResult, StrokeModeler,
-};
+use ink_stroke_modeler_rs::{ModelerInput, ModelerInputEventType, ModelerResult, StrokeModeler};
 
 /// Minimum time delta the wrapper enforces between consecutive
 /// samples within a stroke. 1 ms ≈ the smallest dt a typical
@@ -179,12 +177,7 @@ impl InkSmoother {
     /// the time-bump) we log a warning and return empty — the stroke
     /// stays alive for subsequent samples. Dropping a single sample
     /// is invisible at 120+ Hz input rates.
-    pub fn update(
-        &mut self,
-        pos: (f32, f32),
-        time: f64,
-        pressure: f32,
-    ) -> Vec<SmoothedSample> {
+    pub fn update(&mut self, pos: (f32, f32), time: f64, pressure: f32) -> Vec<SmoothedSample> {
         if !self.in_stroke {
             return Vec::new();
         }
@@ -215,12 +208,7 @@ impl InkSmoother {
     /// After this call the smoother is ready for the next
     /// `begin_stroke`. Safe to call when not in a stroke (returns
     /// empty).
-    pub fn end_stroke(
-        &mut self,
-        pos: (f32, f32),
-        time: f64,
-        pressure: f32,
-    ) -> Vec<SmoothedSample> {
+    pub fn end_stroke(&mut self, pos: (f32, f32), time: f64, pressure: f32) -> Vec<SmoothedSample> {
         if !self.in_stroke {
             return Vec::new();
         }
@@ -377,7 +365,10 @@ mod tests {
         let mut s = InkSmoother::new();
         s.begin_stroke((0.0, 0.0), 0.0, 1.0);
         let out = s.update((50.0, 50.0), 0.05, 1.0);
-        assert!(!out.is_empty(), "modeler should emit samples for a 50ms MOVE");
+        assert!(
+            !out.is_empty(),
+            "modeler should emit samples for a 50ms MOVE"
+        );
     }
 
     #[test]

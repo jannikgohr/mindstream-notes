@@ -171,9 +171,7 @@ pub fn flush_all() {
 fn worker_loop(app: AppHandle, rx: mpsc::Receiver<SaveMsg>) {
     let mut pending: HashMap<String, Instant> = HashMap::new();
     let mut debounce_ms: u64 = DEFAULT_DEBOUNCE_MS;
-    log::info!(
-        "[drawing.save_worker] started (default debounce = {DEFAULT_DEBOUNCE_MS} ms)"
-    );
+    log::info!("[drawing.save_worker] started (default debounce = {DEFAULT_DEBOUNCE_MS} ms)");
 
     loop {
         // Compute the next deadline = earliest (last_dirty +
@@ -225,8 +223,7 @@ fn worker_loop(app: AppHandle, rx: mpsc::Receiver<SaveMsg>) {
                 let due: Vec<String> = pending
                     .iter()
                     .filter(|(_, t)| {
-                        now.saturating_duration_since(**t).as_millis()
-                            >= debounce_ms as u128
+                        now.saturating_duration_since(**t).as_millis() >= debounce_ms as u128
                     })
                     .map(|(id, _)| id.clone())
                     .collect();
@@ -236,9 +233,7 @@ fn worker_loop(app: AppHandle, rx: mpsc::Receiver<SaveMsg>) {
                 }
             }
             Err(RecvTimeoutError::Disconnected) => {
-                log::info!(
-                    "[drawing.save_worker] channel disconnected — worker exiting"
-                );
+                log::info!("[drawing.save_worker] channel disconnected — worker exiting");
                 return;
             }
         }
@@ -271,9 +266,7 @@ fn save_one(app: &AppHandle, note_id: &str) {
         // to zero bytes (fresh / never-edited — shouldn't happen on
         // a dirty path). Treat as a successful no-op to avoid the
         // JS-side icon flickering on Error for a benign case.
-        log::debug!(
-            "[drawing.save_worker] no bytes returned for {note_id} — treating as saved"
-        );
+        log::debug!("[drawing.save_worker] no bytes returned for {note_id} — treating as saved");
         emit_status(app, note_id, SaveStatus::Saved);
         return;
     }
@@ -295,9 +288,7 @@ fn save_one(app: &AppHandle, note_id: &str) {
         Ok(false) => {
             // Row missing — note was deleted while save was
             // pending. Not really an error; nothing to do.
-            log::debug!(
-                "[drawing.save_worker] {note_id} not in db (deleted?) — skipping"
-            );
+            log::debug!("[drawing.save_worker] {note_id} not in db (deleted?) — skipping");
             emit_status(app, note_id, SaveStatus::Saved);
         }
         Err(e) => {
