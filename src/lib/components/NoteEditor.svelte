@@ -34,7 +34,6 @@
   import EditorToolbar from './editor-toolbar/EditorToolbar.svelte';
   import MobileEditorToolbar from './editor-toolbar/MobileEditorToolbar.svelte';
   import TrashBanner from './note-editor/TrashBanner.svelte';
-  import StatusRow from './note-editor/StatusRow.svelte';
   import WikilinkMenu from './note-editor/WikilinkMenu.svelte';
 
   interface Props {
@@ -630,20 +629,15 @@
       class="border-b border-border bg-background"
     />
   {/if}
-  {#if mobile && !isTrashed}
-    <StatusRow {collabConfigured} {collabOnline} {savingState} {isTrashed} />
-  {/if}
   {#if isTrashed}
     <TrashBanner />
   {/if}
   <!--
     flex-1 + min-h-0 (not h-full) so the scroll area fills the *remaining*
-    height after the desktop toolbar, status row, and trash banner take
-    theirs. h-full was strict-100%-of-parent and overflowed by exactly
-    the status row's height (20px) on every non-trashed note — invisible
-    on desktop (clipped by panel chrome) but on mobile could push the
-    focused caret into the hidden zone and tempt the webview to scroll
-    the document body to "fix" it.
+    height after the desktop toolbar and trash banner take theirs.
+    h-full was strict-100%-of-parent and could overflow the parent chrome,
+    especially on mobile where focused content can tempt the webview to
+    scroll the document body to "fix" it.
   -->
   <div class="themed-scrollbar relative min-h-0 w-full flex-1 overflow-y-auto">
     {#if loading}

@@ -7,6 +7,7 @@
    */
   import { ArrowLeft, Star } from 'lucide-svelte';
   import { Button } from '$lib/components/ui/button';
+  import NoteStatusIcons from '$lib/desktop/NoteStatusIcons.svelte';
   import NoteEditor from '$lib/components/NoteEditor.svelte';
   import FreeformNoteEditor from '$lib/components/FreeformNoteEditor.svelte';
   import DrawingNoteEditor from '$lib/components/DrawingNoteEditor.svelte';
@@ -53,6 +54,8 @@
            handler can't accidentally fire against a different note if
            ui.activeNoteId changes between render and click. -->
       {@const currentNoteId = noteId}
+      <NoteStatusIcons />
+      <span class="mx-1 h-5 w-px shrink-0 bg-border" aria-hidden="true"></span>
       <Button
         variant="ghost"
         size="icon"
