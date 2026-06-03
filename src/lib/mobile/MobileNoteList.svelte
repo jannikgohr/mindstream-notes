@@ -16,6 +16,7 @@
   import {
     Feather,
     FileText,
+    FileType2,
     Folder,
     MoreVertical,
     PencilRuler,
@@ -394,6 +395,8 @@
               <PencilRuler class="size-5 text-muted-foreground" />
             {:else if noteKind === 'ink'}
               <Feather class="size-5 text-muted-foreground" />
+            {:else if noteKind === 'pdf'}
+              <FileType2 class="size-5 text-muted-foreground" />
             {:else}
               <FileText class="size-5 text-muted-foreground" />
             {/if}
@@ -448,6 +451,8 @@
               <PencilRuler class="size-5 shrink-0 text-muted-foreground" />
             {:else if noteKind === 'ink'}
               <Feather class="size-5 shrink-0 text-muted-foreground" />
+            {:else if noteKind === 'pdf'}
+              <FileType2 class="size-5 shrink-0 text-muted-foreground" />
             {:else}
               <FileText class="size-5 shrink-0 text-muted-foreground" />
             {/if}

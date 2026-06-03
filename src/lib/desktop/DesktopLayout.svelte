@@ -21,6 +21,7 @@
   import NoteEditor from '$lib/components/NoteEditor.svelte';
   import FreeformNoteEditor from '$lib/components/FreeformNoteEditor.svelte';
   import DrawingNoteEditor from '$lib/components/DrawingNoteEditor.svelte';
+  import PdfNoteViewer from '$lib/components/PdfNoteViewer.svelte';
   import UnknownNoteKindError from '$lib/components/UnknownNoteKindError.svelte';
   import ResizeHandle from '$lib/components/ResizeHandle.svelte';
   import SettingsDialog from '$lib/settings/SettingsDialog.svelte';
@@ -52,6 +53,7 @@
     | 'noteEditor'
     | 'freeformNote'
     | 'inkNote'
+    | 'pdfNote'
     | 'unknownNoteKind';
 
   function componentForNoteKind(kind: string | null | undefined): NotePanelComponent {
@@ -61,6 +63,8 @@
         return 'freeformNote';
       case 'ink':
         return 'inkNote';
+      case 'pdf':
+        return 'pdfNote';
       case 'markdown':
         return 'noteEditor';
     }
@@ -128,6 +132,8 @@
             return new SvelteRenderer(FreeformNoteEditor);
           case 'inkNote':
             return new SvelteRenderer(DrawingNoteEditor);
+          case 'pdfNote':
+            return new SvelteRenderer(PdfNoteViewer);
           case 'unknownNoteKind':
             return new SvelteRenderer(UnknownNoteKindError);
           default:

@@ -19,6 +19,7 @@ import type {
   UpdateNoteInput
 } from './notes';
 import type { Asset, UploadAssetInput } from './assets';
+import type { ImportPdfNoteInput } from './assets';
 
 const collections: Collection[] = [];
 const notes = new Map<string, Note>();
@@ -262,5 +263,20 @@ export const mockApi = {
     const a = assets.get(id);
     if (!a) throw new Error(`asset ${id} not found`);
     return { ...a };
+  },
+  async importPdfNote(input: ImportPdfNoteInput): Promise<Note> {
+    const note = await this.createNote({
+      title: input.title,
+      parent_collection_id: input.parent_collection_id,
+      note_kind: 'pdf'
+    });
+    const asset = await this.uploadDrawingAsset({
+      owning_note_id: note.id,
+      mime_type: 'application/pdf',
+      bytes: input.bytes
+    });
+    note.body = JSON.stringify({ pdfAssetId: asset.id });
+    notes.set(note.id, note);
+    return { ...note };
   }
 };

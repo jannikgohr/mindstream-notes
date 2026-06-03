@@ -91,6 +91,28 @@ export async function createNoteIn(
   return note.id;
 }
 
+export async function importPdfIn(parentId: string | null, file: File): Promise<string> {
+  const bytes = Array.from(new Uint8Array(await file.arrayBuffer()));
+  const title = file.name.replace(/\.pdf$/i, '').trim() || 'Untitled PDF';
+  const note = await api.importPdfNote({
+    parent_collection_id: parentId,
+    title,
+    bytes
+  });
+  await loadTree();
+  void (async () => {
+    try {
+      await runSync();
+      if (!tree.notesById[note.id]?.pushed) {
+        await runSync();
+      }
+    } catch (err) {
+      console.debug('[tree] post-pdf-import sync failed', err);
+    }
+  })();
+  return note.id;
+}
+
 export async function renameNote(id: string, title: string): Promise<void> {
   await api.saveNote({ id, title });
   const existing = tree.notesById[id];

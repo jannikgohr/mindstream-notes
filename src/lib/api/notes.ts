@@ -19,8 +19,10 @@ import { mockApi } from './mock-store';
  *   ink      — native egui+wgpu drawing surface (Android-only POC; see
  *              docs/native-egui-layer/01-audit.md). Desktop dispatch
  *              shows a placeholder until Phase 2 lands.
+ *   pdf      — imported PDF binary stored as an app-owned asset, with
+ *              yrs_state reserved for collaborative annotations.
  */
-export type NoteKind = 'markdown' | 'freeform' | 'ink';
+export type NoteKind = 'markdown' | 'freeform' | 'ink' | 'pdf';
 
 /**
  * The full set of editor kinds this app version knows how to render.
@@ -34,7 +36,7 @@ export type NoteKind = 'markdown' | 'freeform' | 'ink';
  * matching `default_note_kind` / supported list in
  * src-tauri/src/notes/mod.rs.
  */
-export const KNOWN_NOTE_KINDS = ['markdown', 'freeform', 'ink'] as const;
+export const KNOWN_NOTE_KINDS = ['markdown', 'freeform', 'ink', 'pdf'] as const;
 
 /** Narrows an arbitrary string (e.g. from a remote-synced row) into
  *  the typed `NoteKind` union. */

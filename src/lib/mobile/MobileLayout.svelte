@@ -19,7 +19,7 @@
    * under the Android status bar or gesture bar with edge-to-edge on.
    */
   import { onMount } from 'svelte';
-  import { Feather, FilePlus2, FolderPlus, PencilRuler } from 'lucide-svelte';
+  import { Feather, FilePlus2, FileUp, FolderPlus, PencilRuler } from 'lucide-svelte';
   import type { IconComponent } from '$lib/settings/icons';
   import MobileTopBar from './MobileTopBar.svelte';
   import MobileBreadcrumb from './MobileBreadcrumb.svelte';
@@ -33,6 +33,7 @@
   import {
     createCollectionIn,
     createNoteIn,
+    importPdfIn,
     loadTree,
     tree
   } from '$lib/stores/tree.svelte';
@@ -85,6 +86,7 @@
   // 'drawing' creates a freeform note via createNoteIn(..., 'freeform').
   // 'ink' creates an Android-native drawing note via createNoteIn(..., 'ink').
   let createPrompt = $state<'note' | 'drawing' | 'ink' | 'folder' | null>(null);
+  let pdfInput = $state<HTMLInputElement | null>(null);
 
   function createNote() {
     createPrompt = 'note';
@@ -100,6 +102,20 @@
 
   function createFolder() {
     createPrompt = 'folder';
+  }
+
+  function importPdf() {
+    if (pdfInput) pdfInput.value = '';
+    pdfInput?.click();
+  }
+
+  async function onPdfPicked(e: Event) {
+    const input = e.currentTarget as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file) return;
+    const id = await importPdfIn(targetParent(), file);
+    openNote(id);
   }
 
   async function commitCreate(name: string) {
@@ -152,6 +168,12 @@
             label: tUi('fab.newFolder'),
             icon: FolderPlus as unknown as IconComponent,
             onSelect: createFolder
+          },
+          {
+            id: 'import-pdf',
+            label: tUi('fab.importPdf'),
+            icon: FileUp as unknown as IconComponent,
+            onSelect: importPdf
           }
         ]
   );
@@ -226,3 +248,11 @@
 {/if}
 
 <MobileSettingsDialog />
+
+<input
+  bind:this={pdfInput}
+  class="hidden"
+  type="file"
+  accept="application/pdf,.pdf"
+  onchange={(e) => void onPdfPicked(e)}
+/>
