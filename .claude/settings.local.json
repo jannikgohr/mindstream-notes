@@ -27,7 +27,8 @@
       "Bash(pnpm exec svelte-kit *)",
       "Bash(gh api *)",
       "Bash(rustup target list *)",
-      "Bash(npx svelte-check *)"
+      "Bash(npx svelte-check *)",
+      "Bash(npx vitest *)"
     ]
   }
 }

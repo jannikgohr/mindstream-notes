@@ -18,10 +18,22 @@
     Trash2
   } from 'lucide-svelte';
   import * as Y from 'yjs';
+  import { Awareness } from 'y-protocols/awareness';
   import { Button } from '$lib/components/ui/button';
-  import { fetchDrawingAsset, loadNote, saveNote as apiSaveNote } from '$lib/api';
+  import {
+    etebaseSession,
+    fetchDrawingAsset,
+    loadNote,
+    noteRoomInfo,
+    onSessionChange,
+    saveNote as apiSaveNote
+  } from '$lib/api';
   import { listen } from '$lib/api/events';
+  import { base64ToBytes } from '$lib/editor/base64';
+  import { pickCursorColor } from '$lib/editor/cursor-color';
+  import { getSettingValue } from '$lib/settings/store.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
+  import { CollabProvider } from '$lib/sync/collab-provider';
   import { tree } from '$lib/stores/tree.svelte';
   import {
     clearNoteStatus,
@@ -144,20 +156,36 @@
     'idle'
   );
   let isTrashed = $state(false);
+  let collabConfigured = $state(false);
+  let collabOnline = $state(false);
+  let activePageNumber = $state(1);
   let pdfjsLib: PdfJs | null = null;
   let pdfViewerLib: PdfViewer | null = null;
   let yDoc: Y.Doc | null = null;
+  let awareness: Awareness | null = null;
+  let provider: CollabProvider | null = null;
   let annotationsMap: Y.Map<PdfAnnotation> | null = null;
   let yDocUpdateHandler: (() => void) | null = null;
   let saveReady = false;
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
   let unsubSync: (() => void) | null = null;
+  let unsubSession: (() => void) | null = null;
   let resizeObserver: ResizeObserver | null = null;
+  let pageIntersectionObserver: IntersectionObserver | null = null;
+  // Per-page visibility ratios — most-visible page wins as the awareness
+  // pageIndex. Map (not array) because the observer fires per-page and
+  // multiple pages can be partially visible during scroll.
+  const pageVisibility = new Map<number, number>();
+  // Tracks whether the post-create push has landed so we can re-init
+  // the collab provider once the note becomes joinable. Mirrors the
+  // pattern used in NoteEditor.svelte.
+  let lastSeenPushed = false;
+  let collabReady = false;
 
   $effect(() => {
     setNoteStatus(noteId, {
-      collabConfigured: false,
-      collabOnline: false,
+      collabConfigured,
+      collabOnline,
       savingState: error ? 'error' : loading ? 'idle' : savingState,
       isTrashed
     });
@@ -687,6 +715,127 @@
     bumpRenderVersion();
   });
 
+  // Re-init the live-collab provider once the note becomes joinable.
+  // Same pattern as NoteEditor: until the first push lands the note has
+  // no UID/key, so noteRoomInfo returns null. The flag-gating prevents
+  // tearing down and reconnecting on every save once the note is pushed.
+  $effect(() => {
+    const pushed = tree.notesById[noteId]?.pushed ?? false;
+    if (!collabReady) return;
+    if (pushed === lastSeenPushed) return;
+    lastSeenPushed = pushed;
+    void setupCollabProvider();
+  });
+
+  // Publish PDF-specific awareness so peers know which page each user is
+  // on, which tool they have active, and which annotation they have
+  // selected. setLocalStateField is debounced internally by Awareness,
+  // so three calls per change are fine.
+  $effect(() => {
+    if (!awareness) return;
+    awareness.setLocalStateField('tool', activeTool);
+  });
+  $effect(() => {
+    if (!awareness) return;
+    awareness.setLocalStateField('pageIndex', Math.max(0, activePageNumber - 1));
+  });
+  $effect(() => {
+    if (!awareness) return;
+    awareness.setLocalStateField('selection', selectedAnnotationId);
+  });
+
+  /**
+   * (Re)create the live-collab provider for this PDF note. Mirrors
+   * NoteEditor.setupCollabProvider — same prerequisites (relay URL
+   * configured, etebase session, note has been pushed at least once)
+   * and the same per-note encryption key sourced from the Rust side
+   * via noteRoomInfo.
+   */
+  async function setupCollabProvider() {
+    if (provider) {
+      provider.destroy();
+      provider = null;
+      collabOnline = false;
+    }
+    collabConfigured = false;
+
+    const collabUrl = (
+      (getSettingValue('account.collabServerUrl') as string | undefined) ?? ''
+    ).trim();
+    if (!collabUrl) return;
+    if (!yDoc || !awareness) return;
+
+    try {
+      const room = await noteRoomInfo(noteId);
+      if (!room) return;
+      collabConfigured = true;
+      provider = new CollabProvider({
+        url: collabUrl,
+        roomId: room.room_id,
+        keyBytes: base64ToBytes(room.key_b64),
+        doc: yDoc,
+        awareness,
+        onStatusChange: (online) => {
+          collabOnline = online;
+        }
+      });
+    } catch (err) {
+      console.debug('[PdfNoteViewer] collab provider init failed', err);
+    }
+  }
+
+  // Track which page the user is most likely looking at via
+  // IntersectionObserver. Used as the awareness `pageIndex` so peers can
+  // see what other peers are reading. Re-runs whenever pageNumbers
+  // changes (i.e. once the PDF loads) to start observing fresh DOM nodes.
+  $effect(() => {
+    if (!container || pageNumbers.length === 0) return;
+    pageIntersectionObserver?.disconnect();
+    pageVisibility.clear();
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          const pageAttr = (entry.target as HTMLElement).dataset.pageNumber;
+          const pageNum = pageAttr ? Number(pageAttr) : NaN;
+          if (!Number.isFinite(pageNum)) continue;
+          if (entry.intersectionRatio > 0) {
+            pageVisibility.set(pageNum, entry.intersectionRatio);
+          } else {
+            pageVisibility.delete(pageNum);
+          }
+        }
+        // Pick the most-visible page; ties go to the smaller page number
+        // so scrolling down advances the indicator predictably.
+        let best = activePageNumber;
+        let bestRatio = -1;
+        for (const [page, ratio] of pageVisibility) {
+          if (ratio > bestRatio) {
+            bestRatio = ratio;
+            best = page;
+          }
+        }
+        if (best !== activePageNumber) activePageNumber = best;
+      },
+      {
+        root: container,
+        threshold: [0, 0.1, 0.25, 0.5, 0.75, 1]
+      }
+    );
+    pageIntersectionObserver = observer;
+    // Observe after DOM updates so all page wrappers exist.
+    void tick().then(() => {
+      const targets = container?.querySelectorAll<HTMLElement>(
+        '[data-page-number]'
+      );
+      targets?.forEach((el) => observer.observe(el));
+    });
+    return () => {
+      observer.disconnect();
+      pageIntersectionObserver = null;
+      pageVisibility.clear();
+    };
+  });
+
   onMount(async () => {
     savedSignatures = loadReusableSignatures();
     activeSignatureId = savedSignatures[0]?.id ?? null;
@@ -710,6 +859,22 @@
         scheduleSave();
       };
       localYDoc.on('update', yDocUpdateHandler);
+
+      // Awareness goes alongside the Y.Doc — the CollabProvider takes
+      // both as constructor args. Seed the local user field now so peers
+      // see our name + colour as soon as we join the room.
+      const localAwareness = new Awareness(localYDoc);
+      awareness = localAwareness;
+      try {
+        const session = await etebaseSession();
+        const userName = session?.username ?? 'You';
+        localAwareness.setLocalStateField('user', {
+          name: userName,
+          color: pickCursorColor(userName)
+        });
+      } catch (err) {
+        console.debug('[PdfNoteViewer] no session for awareness', err);
+      }
 
       const assetId = pdfAssetIdFromBody(note.body);
       if (!assetId) throw new Error('PDF asset is missing.');
@@ -748,6 +913,16 @@
       }).then((unlisten) => {
         unsubSync = unlisten;
       });
+
+      // Capture the initial pushed state, set up the provider once, then
+      // let the $effect react only to subsequent transitions.
+      lastSeenPushed = tree.notesById[noteId]?.pushed ?? false;
+      await setupCollabProvider();
+      collabReady = true;
+
+      unsubSession = onSessionChange(() => {
+        void setupCollabProvider();
+      });
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
       loading = false;
@@ -761,12 +936,25 @@
     saveReady = false;
     unsubSync?.();
     unsubSync = null;
+    unsubSession?.();
+    unsubSession = null;
     resizeObserver?.disconnect();
+    pageIntersectionObserver?.disconnect();
+    pageIntersectionObserver = null;
+    pageVisibility.clear();
     void pdfDoc?.cleanup();
     if (yDoc && yDocUpdateHandler) {
       yDoc.off('update', yDocUpdateHandler);
     }
     yDocUpdateHandler = null;
+    // CollabProvider must be torn down before awareness/yDoc so its
+    // destroy() can broadcast the null-state cleanup frame to peers.
+    provider?.destroy();
+    provider = null;
+    collabOnline = false;
+    collabConfigured = false;
+    awareness?.destroy();
+    awareness = null;
     yDoc?.destroy();
     yDoc = null;
     annotationsMap = null;
@@ -1313,7 +1501,10 @@
       >
         <div class="mx-auto flex min-w-full w-max flex-col items-center gap-4">
           {#each pageNumbers as pageNumber (pageNumber)}
-            <figure class="flex w-max flex-col items-center gap-1">
+            <figure
+              class="flex w-max flex-col items-center gap-1"
+              data-page-number={pageNumber}
+            >
               <div
                 use:renderPage={{
                   pageNumber,
