@@ -12,7 +12,9 @@
     Minus,
     MousePointer2,
     PanelRight,
+    PenLine,
     Plus,
+    Signature,
     Trash2
   } from 'lucide-svelte';
   import * as Y from 'yjs';
@@ -35,13 +37,35 @@
   type PdfDocument = Awaited<ReturnType<PdfJs['getDocument']>['promise']>;
   type PdfPageView = InstanceType<PdfViewer['PDFPageView']>;
   type ZoomMode = 'fixed' | 'fit-width';
-  type PdfTool = 'select' | 'highlight' | 'comment' | 'delete';
-  type PdfAnnotationType = 'highlight' | 'comment';
+  type PdfTool =
+    | 'select'
+    | 'highlight'
+    | 'comment'
+    | 'pen'
+    | 'signature'
+    | 'delete';
+  type PdfAnnotationType = 'highlight' | 'comment' | 'ink' | 'signature';
   type PdfRect = {
     x: number;
     y: number;
     width: number;
     height: number;
+  };
+  type PdfStrokePoint = {
+    x: number;
+    y: number;
+    pressure?: number;
+  };
+  type PdfInkStroke = {
+    id: string;
+    points: PdfStrokePoint[];
+    color: string;
+    width: number;
+  };
+  type PdfSignatureSnapshot = {
+    width: number;
+    height: number;
+    strokes: PdfInkStroke[];
   };
   type PdfAnnotation = {
     id: string;
@@ -55,6 +79,8 @@
     updatedAt: string;
     body?: string;
     resolved?: boolean;
+    strokes?: PdfInkStroke[];
+    signature?: PdfSignatureSnapshot;
   };
   type RenderParams = {
     pageNumber: number;
@@ -75,6 +101,12 @@
   const PDF_ANNOTATIONS_MAP = 'pdf_annotations';
   const HIGHLIGHT_COLOR = '#facc15';
   const COMMENT_COLOR = '#3b82f6';
+  const SIGNATURE_COLOR = '#111827';
+  const INK_COLOR = '#111827';
+  const INK_WIDTH = 2.25;
+  const SIGNATURE_STORAGE_KEY = 'mindstream.pdf.signature.v1';
+  const SIGNATURE_PAD_WIDTH = 420;
+  const SIGNATURE_PAD_HEIGHT = 168;
 
   let container = $state<HTMLDivElement | null>(null);
   let zoomButton = $state<HTMLButtonElement | null>(null);
@@ -95,6 +127,10 @@
   let activeTool = $state<PdfTool>('select');
   let commentsSidebarOpen = $state(false);
   let selectedAnnotationId = $state<string | null>(null);
+  let savedSignature = $state<PdfSignatureSnapshot | null>(null);
+  let signatureDialogOpen = $state(false);
+  let signaturePadStrokes = $state<PdfInkStroke[]>([]);
+  let signaturePadDraft = $state<PdfInkStroke | null>(null);
   let savingState = $state<'idle' | 'pending' | 'saving' | 'saved' | 'error'>(
     'idle'
   );
@@ -139,11 +175,72 @@
     return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, value));
   }
 
+  function strokePointsAttr(points: PdfStrokePoint[]): string {
+    return points.map((point) => `${point.x},${point.y}`).join(' ');
+  }
+
+  function strokeBounds(points: PdfStrokePoint[], padding = 0): PdfRect {
+    let minX = Number.POSITIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+    for (const point of points) {
+      minX = Math.min(minX, point.x);
+      minY = Math.min(minY, point.y);
+      maxX = Math.max(maxX, point.x);
+      maxY = Math.max(maxY, point.y);
+    }
+    if (!Number.isFinite(minX)) {
+      return { x: 0, y: 0, width: 0, height: 0 };
+    }
+    return {
+      x: minX - padding,
+      y: minY - padding,
+      width: maxX - minX + padding * 2,
+      height: maxY - minY + padding * 2
+    };
+  }
+
+  function cloneSignatureSnapshot(
+    signature: PdfSignatureSnapshot
+  ): PdfSignatureSnapshot {
+    return {
+      width: signature.width,
+      height: signature.height,
+      strokes: signature.strokes.map((stroke) => ({
+        id: stroke.id,
+        color: stroke.color,
+        width: stroke.width,
+        points: stroke.points.map((point) => ({ ...point }))
+      }))
+    };
+  }
+
+  function loadReusableSignature(): PdfSignatureSnapshot | null {
+    try {
+      const raw = localStorage.getItem(SIGNATURE_STORAGE_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as PdfSignatureSnapshot;
+      if (!Array.isArray(parsed.strokes) || parsed.strokes.length === 0) {
+        return null;
+      }
+      return parsed;
+    } catch {
+      return null;
+    }
+  }
+
+  function saveReusableSignature(signature: PdfSignatureSnapshot) {
+    localStorage.setItem(SIGNATURE_STORAGE_KEY, JSON.stringify(signature));
+    savedSignature = signature;
+  }
+
   function createAnnotation(
     type: PdfAnnotationType,
     pageIndex: number,
     rect: PdfRect,
-    body?: string
+    body?: string,
+    extras: Partial<Pick<PdfAnnotation, 'strokes' | 'signature'>> = {}
   ) {
     if (!annotationsMap || isTrashed) return;
     const now = new Date().toISOString();
@@ -153,15 +250,30 @@
       type,
       pageIndex,
       rects: [rect],
-      color: type === 'highlight' ? HIGHLIGHT_COLOR : COMMENT_COLOR,
-      opacity: type === 'highlight' ? 0.32 : 0.18,
+      color:
+        type === 'highlight'
+          ? HIGHLIGHT_COLOR
+          : type === 'comment'
+            ? COMMENT_COLOR
+            : type === 'ink'
+              ? INK_COLOR
+              : SIGNATURE_COLOR,
+      opacity: type === 'highlight' ? 0.32 : type === 'comment' ? 0.18 : 1,
       authorId: 'local',
       createdAt: now,
       updatedAt: now,
-      body
+      body,
+      ...extras
     });
     selectedAnnotationId = id;
     if (type === 'comment') commentsSidebarOpen = true;
+  }
+
+  function isCommentLikeAnnotation(annotation: PdfAnnotation): boolean {
+    return (
+      annotation.type === 'comment' ||
+      (annotation.type === 'highlight' && Boolean(annotation.body?.trim()))
+    );
   }
 
   function deleteAnnotation(id: string) {
@@ -183,7 +295,10 @@
 
   function selectAnnotation(id: string | null) {
     selectedAnnotationId = id;
-    if (id) commentsSidebarOpen = true;
+    const annotation = id ? annotationsMap?.get(id) : null;
+    if (annotation && isCommentLikeAnnotation(annotation)) {
+      commentsSidebarOpen = true;
+    }
   }
 
   function jumpToAnnotation(id: string) {
@@ -242,7 +357,88 @@
   }
 
   function setTool(tool: PdfTool) {
+    if (tool === 'signature' && !savedSignature) {
+      signatureDialogOpen = true;
+      return;
+    }
     activeTool = activeTool === tool && tool !== 'select' ? 'select' : tool;
+  }
+
+  function signaturePadPoint(event: PointerEvent): PdfStrokePoint {
+    const rect = (event.currentTarget as SVGSVGElement).getBoundingClientRect();
+    const x =
+      ((event.clientX - rect.left) / Math.max(1, rect.width)) *
+      SIGNATURE_PAD_WIDTH;
+    const y =
+      ((event.clientY - rect.top) / Math.max(1, rect.height)) *
+      SIGNATURE_PAD_HEIGHT;
+    return {
+      x: Math.min(SIGNATURE_PAD_WIDTH, Math.max(0, x)),
+      y: Math.min(SIGNATURE_PAD_HEIGHT, Math.max(0, y)),
+      pressure: event.pressure || 1
+    };
+  }
+
+  function pushSignaturePadPoint(event: PointerEvent) {
+    if (!signaturePadDraft) return;
+    const point = signaturePadPoint(event);
+    const previous =
+      signaturePadDraft.points[signaturePadDraft.points.length - 1];
+    if (previous && Math.hypot(point.x - previous.x, point.y - previous.y) < 1.5) {
+      return;
+    }
+    signaturePadDraft = {
+      ...signaturePadDraft,
+      points: [...signaturePadDraft.points, point]
+    };
+  }
+
+  function beginSignaturePadStroke(event: PointerEvent) {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    (event.currentTarget as SVGSVGElement).setPointerCapture(event.pointerId);
+    signaturePadDraft = {
+      id: crypto.randomUUID(),
+      points: [signaturePadPoint(event)],
+      color: SIGNATURE_COLOR,
+      width: 3.5
+    };
+  }
+
+  function finishSignaturePadStroke(event: PointerEvent) {
+    if (!signaturePadDraft) return;
+    pushSignaturePadPoint(event);
+    const draft = signaturePadDraft;
+    signaturePadDraft = null;
+    if (draft.points.length < 2) return;
+    signaturePadStrokes = [...signaturePadStrokes, draft];
+  }
+
+  function clearSignaturePad() {
+    signaturePadDraft = null;
+    signaturePadStrokes = [];
+  }
+
+  function closeSignatureDialog() {
+    signatureDialogOpen = false;
+    signaturePadDraft = null;
+    if (!savedSignature) activeTool = 'select';
+  }
+
+  function saveSignatureFromPad() {
+    if (signaturePadStrokes.length === 0) return;
+    const signature: PdfSignatureSnapshot = {
+      width: SIGNATURE_PAD_WIDTH,
+      height: SIGNATURE_PAD_HEIGHT,
+      strokes: signaturePadStrokes.map((stroke) => ({
+        ...stroke,
+        points: stroke.points.map((point) => ({ ...point }))
+      }))
+    };
+    saveReusableSignature(signature);
+    signatureDialogOpen = false;
+    signaturePadDraft = null;
+    activeTool = 'signature';
   }
 
   const fitWidthZoom = $derived.by(() => {
@@ -253,9 +449,7 @@
   const effectiveZoom = $derived(zoomMode === 'fit-width' ? fitWidthZoom : zoom);
   const zoomLabel = $derived(`${Math.round(effectiveZoom * 100)}%`);
   const commentAnnotations = $derived(
-    annotations.filter(
-      (annotation) => annotation.type === 'comment' || annotation.body?.trim()
-    )
+    annotations.filter((annotation) => isCommentLikeAnnotation(annotation))
   );
   const menuRect = $derived.by(() => {
     void menuRectVersion;
@@ -370,6 +564,7 @@
   });
 
   onMount(async () => {
+    savedSignature = loadReusableSignature();
     try {
       const note = await loadNote(noteId);
       isTrashed = note.trashed;
@@ -484,6 +679,10 @@
             rect.x + rect.width,
             rect.y + rect.height
           );
+          const left = Math.min(x1, x2);
+          const top = Math.min(y1, y2);
+          const width = Math.abs(x2 - x1);
+          const height = Math.abs(y2 - y1);
           const node = document.createElement('div');
           node.className = `pdf-app-annotation pdf-app-annotation-${annotation.type}`;
           if (annotation.id === current.selectedAnnotationId) {
@@ -493,13 +692,63 @@
             node.classList.add('pdf-app-annotation-resolved');
           }
           node.dataset.annotationId = annotation.id;
-          node.style.left = `${Math.min(x1, x2)}px`;
-          node.style.top = `${Math.min(y1, y2)}px`;
-          node.style.width = `${Math.abs(x2 - x1)}px`;
-          node.style.height = `${Math.abs(y2 - y1)}px`;
+          node.style.left = `${left}px`;
+          node.style.top = `${top}px`;
+          node.style.width = `${width}px`;
+          node.style.height = `${height}px`;
           node.style.setProperty('--annotation-color', annotation.color);
           node.style.setProperty('--annotation-opacity', `${annotation.opacity}`);
           if (annotation.body) node.title = annotation.body;
+          if (annotation.type === 'signature' && annotation.signature) {
+            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            svg.setAttribute(
+              'viewBox',
+              `0 0 ${annotation.signature.width} ${annotation.signature.height}`
+            );
+            svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+            svg.classList.add('pdf-app-stroke-svg');
+            for (const stroke of annotation.signature.strokes) {
+              const polyline = document.createElementNS(
+                'http://www.w3.org/2000/svg',
+                'polyline'
+              );
+              polyline.setAttribute('points', strokePointsAttr(stroke.points));
+              polyline.setAttribute('fill', 'none');
+              polyline.setAttribute('stroke', stroke.color);
+              polyline.setAttribute('stroke-width', `${stroke.width}`);
+              polyline.setAttribute('stroke-linecap', 'round');
+              polyline.setAttribute('stroke-linejoin', 'round');
+              svg.append(polyline);
+            }
+            node.append(svg);
+          } else if (annotation.type === 'ink' && annotation.strokes) {
+            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+            svg.classList.add('pdf-app-stroke-svg');
+            for (const stroke of annotation.strokes) {
+              const polyline = document.createElementNS(
+                'http://www.w3.org/2000/svg',
+                'polyline'
+              );
+              const points = stroke.points
+                .map((point) => {
+                  const [pointX, pointY] = viewport.convertToViewportPoint(
+                    point.x,
+                    point.y
+                  );
+                  return `${pointX - left},${pointY - top}`;
+                })
+                .join(' ');
+              polyline.setAttribute('points', points);
+              polyline.setAttribute('fill', 'none');
+              polyline.setAttribute('stroke', stroke.color);
+              polyline.setAttribute('stroke-width', `${stroke.width * viewport.scale}`);
+              polyline.setAttribute('stroke-linecap', 'round');
+              polyline.setAttribute('stroke-linejoin', 'round');
+              svg.append(polyline);
+            }
+            node.append(svg);
+          }
           if (current.activeTool === 'delete') {
             node.addEventListener('pointerdown', (event) => {
               event.preventDefault();
@@ -517,9 +766,85 @@
         }
       }
 
+      if (current.activeTool === 'pen') {
+        layer.addEventListener('pointerdown', (event) => {
+          if (event.button !== 0) return;
+          event.preventDefault();
+          const pageRect = pageEl.getBoundingClientRect();
+          const preview = document.createElementNS(
+            'http://www.w3.org/2000/svg',
+            'svg'
+          );
+          preview.setAttribute('viewBox', `0 0 ${pageRect.width} ${pageRect.height}`);
+          preview.classList.add('pdf-app-ink-preview');
+          const previewStroke = document.createElementNS(
+            'http://www.w3.org/2000/svg',
+            'polyline'
+          );
+          previewStroke.setAttribute('fill', 'none');
+          previewStroke.setAttribute('stroke', INK_COLOR);
+          previewStroke.setAttribute('stroke-width', `${INK_WIDTH * viewport.scale}`);
+          previewStroke.setAttribute('stroke-linecap', 'round');
+          previewStroke.setAttribute('stroke-linejoin', 'round');
+          preview.append(previewStroke);
+          layer.append(preview);
+
+          const pdfPoints: PdfStrokePoint[] = [];
+          const viewportPoints: PdfStrokePoint[] = [];
+          const pushPoint = (clientX: number, clientY: number) => {
+            const x = clientX - pageRect.left;
+            const y = clientY - pageRect.top;
+            const previous = viewportPoints[viewportPoints.length - 1];
+            if (previous && Math.hypot(x - previous.x, y - previous.y) < 1.5) {
+              return;
+            }
+            const [pdfX, pdfY] = viewport.convertToPdfPoint(x, y);
+            pdfPoints.push({ x: pdfX, y: pdfY });
+            viewportPoints.push({ x, y });
+            previewStroke.setAttribute('points', strokePointsAttr(viewportPoints));
+          };
+
+          pushPoint(event.clientX, event.clientY);
+
+          const onMove = (moveEvent: PointerEvent) => {
+            pushPoint(moveEvent.clientX, moveEvent.clientY);
+          };
+          const onUp = (upEvent: PointerEvent) => {
+            window.removeEventListener('pointermove', onMove);
+            window.removeEventListener('pointerup', onUp);
+            pushPoint(upEvent.clientX, upEvent.clientY);
+            preview.remove();
+            if (pdfPoints.length < 2) return;
+            const rect = strokeBounds(pdfPoints, INK_WIDTH * 2);
+            if (rect.width < 1 || rect.height < 1) return;
+            createAnnotation(
+              'ink',
+              current.pageNumber - 1,
+              rect,
+              undefined,
+              {
+                strokes: [
+                  {
+                    id: crypto.randomUUID(),
+                    points: pdfPoints,
+                    color: INK_COLOR,
+                    width: INK_WIDTH
+                  }
+                ]
+              }
+            );
+          };
+
+          window.addEventListener('pointermove', onMove);
+          window.addEventListener('pointerup', onUp, { once: true });
+        });
+        return;
+      }
+
       if (
         current.activeTool !== 'highlight' &&
-        current.activeTool !== 'comment'
+        current.activeTool !== 'comment' &&
+        current.activeTool !== 'signature'
       ) {
         return;
       }
@@ -527,6 +852,11 @@
       layer.addEventListener('pointerdown', (event) => {
         if (event.button !== 0) return;
         event.preventDefault();
+        if (current.activeTool === 'signature' && !savedSignature) {
+          signatureDialogOpen = true;
+          activeTool = 'select';
+          return;
+        }
         const pageRect = pageEl.getBoundingClientRect();
         const startX = event.clientX - pageRect.left;
         const startY = event.clientY - pageRect.top;
@@ -565,7 +895,10 @@
             height: Math.abs(pdfEndY - pdfStartY)
           };
 
-          if (current.activeTool === 'comment' && (rect.width < 4 || rect.height < 4)) {
+          if (
+            current.activeTool === 'comment' &&
+            (rect.width < 4 || rect.height < 4)
+          ) {
             rect = {
               x: pdfStartX,
               y: pdfStartY - 36,
@@ -573,17 +906,40 @@
               height: 36
             };
           }
+          if (
+            current.activeTool === 'signature' &&
+            (rect.width < 4 || rect.height < 4)
+          ) {
+            rect = {
+              x: pdfStartX,
+              y: pdfStartY - 48,
+              width: 180,
+              height: 48
+            };
+          }
           if (rect.width < 4 || rect.height < 4) return;
 
           const annotationType: PdfAnnotationType =
-            current.activeTool === 'comment' ? 'comment' : 'highlight';
+            current.activeTool === 'comment'
+              ? 'comment'
+              : current.activeTool === 'signature'
+                ? 'signature'
+                : 'highlight';
           const body =
-            annotationType === 'comment' ? window.prompt('Comment')?.trim() : undefined;
+            annotationType === 'comment'
+              ? window.prompt('Comment')?.trim()
+              : undefined;
+          const signature =
+            annotationType === 'signature' && savedSignature
+              ? cloneSignatureSnapshot(savedSignature)
+              : undefined;
+          if (annotationType === 'signature' && !signature) return;
           createAnnotation(
             annotationType,
             current.pageNumber - 1,
             rect,
-            body || undefined
+            body || undefined,
+            signature ? { signature } : {}
           );
         };
 
@@ -725,6 +1081,32 @@
               disabled={isTrashed}
             >
               <MessageSquare class="size-3.5" aria-hidden="true" />
+            </Button>
+
+            <Button
+              variant={activeTool === 'pen' ? 'secondary' : 'ghost'}
+              size="icon"
+              class="size-7"
+              onclick={() => setTool('pen')}
+              aria-label="Pen"
+              title="Pen"
+              aria-pressed={activeTool === 'pen'}
+              disabled={isTrashed}
+            >
+              <PenLine class="size-3.5" aria-hidden="true" />
+            </Button>
+
+            <Button
+              variant={activeTool === 'signature' ? 'secondary' : 'ghost'}
+              size="icon"
+              class="size-7"
+              onclick={() => setTool('signature')}
+              aria-label="Sign"
+              title="Sign"
+              aria-pressed={activeTool === 'signature'}
+              disabled={isTrashed}
+            >
+              <Signature class="size-3.5" aria-hidden="true" />
             </Button>
 
             <Button
@@ -907,6 +1289,88 @@
         </aside>
       {/if}
     </div>
+
+    {#if signatureDialogOpen}
+      <div
+        class="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm"
+        role="presentation"
+      >
+        <div
+          class="flex w-[min(34rem,100%)] flex-col rounded-md border border-border bg-popover text-popover-foreground shadow-lg"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Create signature"
+        >
+          <div class="flex h-9 items-center justify-between border-b border-border px-3">
+            <div class="text-xs font-medium text-muted-foreground">
+              Signature
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              class="h-7 px-2 text-xs"
+              onclick={closeSignatureDialog}
+            >
+              Cancel
+            </Button>
+          </div>
+
+          <div class="p-3">
+            <svg
+              role="img"
+              aria-label="Signature drawing pad"
+              class="h-40 w-full touch-none rounded-md border border-input bg-white"
+              viewBox="0 0 {SIGNATURE_PAD_WIDTH} {SIGNATURE_PAD_HEIGHT}"
+              onpointerdown={beginSignaturePadStroke}
+              onpointermove={pushSignaturePadPoint}
+              onpointerup={finishSignaturePadStroke}
+              onpointercancel={finishSignaturePadStroke}
+            >
+              {#each signaturePadStrokes as stroke (stroke.id)}
+                <polyline
+                  points={strokePointsAttr(stroke.points)}
+                  fill="none"
+                  stroke={stroke.color}
+                  stroke-width={stroke.width}
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              {/each}
+              {#if signaturePadDraft}
+                <polyline
+                  points={strokePointsAttr(signaturePadDraft.points)}
+                  fill="none"
+                  stroke={signaturePadDraft.color}
+                  stroke-width={signaturePadDraft.width}
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              {/if}
+            </svg>
+          </div>
+
+          <div class="flex h-10 items-center justify-between border-t border-border px-3">
+            <Button
+              variant="ghost"
+              size="sm"
+              class="h-7 px-2 text-xs"
+              onclick={clearSignaturePad}
+              disabled={signaturePadStrokes.length === 0 && !signaturePadDraft}
+            >
+              Clear
+            </Button>
+            <Button
+              size="sm"
+              class="h-7 px-2 text-xs"
+              onclick={saveSignatureFromPad}
+              disabled={signaturePadStrokes.length === 0}
+            >
+              Save
+            </Button>
+          </div>
+        </div>
+      </div>
+    {/if}
 
     {#if zoomMenuOpen && menuRect}
       <div
@@ -1096,6 +1560,36 @@
       var(--annotation-color) calc(var(--annotation-opacity) * 100%),
       transparent
     );
+  }
+
+  :global(.pdf-page-host .pdf-app-annotation-signature) {
+    border: 1px solid transparent;
+    border-bottom-color: color-mix(
+      in srgb,
+      var(--annotation-color) 70%,
+      transparent
+    );
+    background: rgb(255 255 255 / 0.54);
+    padding: 3px 6px;
+  }
+
+  :global(.pdf-page-host .pdf-app-annotation-ink) {
+    background: transparent;
+  }
+
+  :global(.pdf-page-host .pdf-app-stroke-svg) {
+    display: block;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+    pointer-events: none;
+  }
+
+  :global(.pdf-page-host .pdf-app-ink-preview) {
+    position: absolute;
+    inset: 0;
+    overflow: visible;
+    pointer-events: none;
   }
 
   :global(.pdf-page-host .pdf-app-annotation-preview) {
