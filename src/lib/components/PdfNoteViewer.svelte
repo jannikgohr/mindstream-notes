@@ -9,10 +9,10 @@
     FileText,
     Highlighter,
     Loader2,
-    MessageSquare,
+    MessageSquarePlus,
+    MessagesSquare,
     Minus,
     MousePointer2,
-    PanelRight,
     PenLine,
     Plus,
     Signature,
@@ -1410,7 +1410,7 @@
               aria-pressed={activeTool === 'comment'}
               disabled={isTrashed}
             >
-              <MessageSquare class="size-3.5" aria-hidden="true" />
+              <MessageSquarePlus class="size-3.5" aria-hidden="true" />
             </Button>
 
             <Button
@@ -1465,7 +1465,7 @@
             title="Toggle comments"
             aria-pressed={commentsSidebarOpen}
           >
-            <PanelRight class="size-3.5" aria-hidden="true" />
+            <MessagesSquare class="size-3.5" aria-hidden="true" />
           </Button>
 
           <Button
