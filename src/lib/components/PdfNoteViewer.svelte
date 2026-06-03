@@ -21,6 +21,7 @@
   import { Button } from '$lib/components/ui/button';
   import { fetchDrawingAsset, loadNote, saveNote as apiSaveNote } from '$lib/api';
   import { listen } from '$lib/api/events';
+  import { tUi } from '$lib/settings/i18n.svelte';
   import { tree } from '$lib/stores/tree.svelte';
   import {
     clearNoteStatus,
@@ -63,6 +64,7 @@
     width: number;
   };
   type PdfSignatureSnapshot = {
+    id: string;
     width: number;
     height: number;
     strokes: PdfInkStroke[];
@@ -104,9 +106,11 @@
   const SIGNATURE_COLOR = '#111827';
   const INK_COLOR = '#111827';
   const INK_WIDTH = 2.25;
-  const SIGNATURE_STORAGE_KEY = 'mindstream.pdf.signature.v1';
+  const SIGNATURE_STORAGE_KEY = 'mindstream.pdf.signatures.v1';
+  const LEGACY_SIGNATURE_STORAGE_KEY = 'mindstream.pdf.signature.v1';
   const SIGNATURE_PAD_WIDTH = 420;
   const SIGNATURE_PAD_HEIGHT = 168;
+  const SIGNATURE_MENU_WIDTH = 240;
 
   let container = $state<HTMLDivElement | null>(null);
   let zoomButton = $state<HTMLButtonElement | null>(null);
@@ -127,10 +131,15 @@
   let activeTool = $state<PdfTool>('select');
   let commentsSidebarOpen = $state(false);
   let selectedAnnotationId = $state<string | null>(null);
-  let savedSignature = $state<PdfSignatureSnapshot | null>(null);
+  let savedSignatures = $state<PdfSignatureSnapshot[]>([]);
+  let activeSignatureId = $state<string | null>(null);
   let signatureDialogOpen = $state(false);
   let signaturePadStrokes = $state<PdfInkStroke[]>([]);
   let signaturePadDraft = $state<PdfInkStroke | null>(null);
+  let signaturePickerOpen = $state(false);
+  let signatureButton = $state<HTMLButtonElement | null>(null);
+  let signaturePickerEl = $state<HTMLDivElement | null>(null);
+  let signaturePickerRectVersion = $state(0);
   let savingState = $state<'idle' | 'pending' | 'saving' | 'saved' | 'error'>(
     'idle'
   );
@@ -205,6 +214,7 @@
     signature: PdfSignatureSnapshot
   ): PdfSignatureSnapshot {
     return {
+      id: signature.id,
       width: signature.width,
       height: signature.height,
       strokes: signature.strokes.map((stroke) => ({
@@ -216,23 +226,77 @@
     };
   }
 
-  function loadReusableSignature(): PdfSignatureSnapshot | null {
+  function loadReusableSignatures(): PdfSignatureSnapshot[] {
     try {
       const raw = localStorage.getItem(SIGNATURE_STORAGE_KEY);
-      if (!raw) return null;
-      const parsed = JSON.parse(raw) as PdfSignatureSnapshot;
-      if (!Array.isArray(parsed.strokes) || parsed.strokes.length === 0) {
-        return null;
+      if (raw) {
+        const parsed = JSON.parse(raw) as PdfSignatureSnapshot[];
+        if (Array.isArray(parsed)) {
+          return parsed
+            .filter(
+              (sig) => Array.isArray(sig?.strokes) && sig.strokes.length > 0
+            )
+            .map((sig) => ({ ...sig, id: sig.id ?? crypto.randomUUID() }));
+        }
       }
-      return parsed;
+      const legacy = localStorage.getItem(LEGACY_SIGNATURE_STORAGE_KEY);
+      if (legacy) {
+        const parsed = JSON.parse(legacy) as PdfSignatureSnapshot;
+        if (Array.isArray(parsed?.strokes) && parsed.strokes.length > 0) {
+          const migrated: PdfSignatureSnapshot[] = [
+            { ...parsed, id: crypto.randomUUID() }
+          ];
+          localStorage.setItem(SIGNATURE_STORAGE_KEY, JSON.stringify(migrated));
+          localStorage.removeItem(LEGACY_SIGNATURE_STORAGE_KEY);
+          return migrated;
+        }
+      }
+      return [];
     } catch {
-      return null;
+      return [];
     }
   }
 
-  function saveReusableSignature(signature: PdfSignatureSnapshot) {
-    localStorage.setItem(SIGNATURE_STORAGE_KEY, JSON.stringify(signature));
-    savedSignature = signature;
+  function persistSignatures() {
+    localStorage.setItem(SIGNATURE_STORAGE_KEY, JSON.stringify(savedSignatures));
+  }
+
+  function appendSignature(signature: PdfSignatureSnapshot) {
+    savedSignatures = [...savedSignatures, signature];
+    activeSignatureId = signature.id;
+    persistSignatures();
+  }
+
+  function deleteSignature(id: string) {
+    savedSignatures = savedSignatures.filter((sig) => sig.id !== id);
+    persistSignatures();
+    if (activeSignatureId === id) {
+      activeSignatureId = savedSignatures[0]?.id ?? null;
+    }
+    if (savedSignatures.length === 0) {
+      signaturePickerOpen = false;
+      if (activeTool === 'signature') activeTool = 'select';
+    }
+  }
+
+  function selectSignature(id: string) {
+    activeSignatureId = id;
+    signaturePickerOpen = false;
+  }
+
+  function getActiveSignature(): PdfSignatureSnapshot | null {
+    if (savedSignatures.length === 0) return null;
+    return (
+      savedSignatures.find((sig) => sig.id === activeSignatureId) ??
+      savedSignatures[0]
+    );
+  }
+
+  function openSignaturePad() {
+    signaturePickerOpen = false;
+    signaturePadDraft = null;
+    signaturePadStrokes = [];
+    signatureDialogOpen = true;
   }
 
   function createAnnotation(
@@ -357,10 +421,21 @@
   }
 
   function setTool(tool: PdfTool) {
-    if (tool === 'signature' && !savedSignature) {
-      signatureDialogOpen = true;
+    if (tool === 'signature') {
+      if (savedSignatures.length === 0) {
+        openSignaturePad();
+        return;
+      }
+      if (activeTool === 'signature') {
+        signaturePickerOpen = !signaturePickerOpen;
+        signaturePickerRectVersion += 1;
+        return;
+      }
+      if (!activeSignatureId) activeSignatureId = savedSignatures[0].id;
+      activeTool = 'signature';
       return;
     }
+    signaturePickerOpen = false;
     activeTool = activeTool === tool && tool !== 'select' ? 'select' : tool;
   }
 
@@ -422,12 +497,14 @@
   function closeSignatureDialog() {
     signatureDialogOpen = false;
     signaturePadDraft = null;
-    if (!savedSignature) activeTool = 'select';
+    signaturePadStrokes = [];
+    if (savedSignatures.length === 0) activeTool = 'select';
   }
 
   function saveSignatureFromPad() {
     if (signaturePadStrokes.length === 0) return;
     const signature: PdfSignatureSnapshot = {
+      id: crypto.randomUUID(),
       width: SIGNATURE_PAD_WIDTH,
       height: SIGNATURE_PAD_HEIGHT,
       strokes: signaturePadStrokes.map((stroke) => ({
@@ -435,9 +512,10 @@
         points: stroke.points.map((point) => ({ ...point }))
       }))
     };
-    saveReusableSignature(signature);
+    appendSignature(signature);
     signatureDialogOpen = false;
     signaturePadDraft = null;
+    signaturePadStrokes = [];
     activeTool = 'signature';
   }
 
@@ -461,6 +539,23 @@
     return Math.max(8, Math.min(menuRect.left, window.innerWidth - width - 8));
   });
   const menuTop = $derived(menuRect ? menuRect.bottom : 0);
+  const signatureMenuRect = $derived.by(() => {
+    void signaturePickerRectVersion;
+    return signatureButton?.getBoundingClientRect() ?? null;
+  });
+  const signatureMenuLeft = $derived.by(() => {
+    if (!signatureMenuRect || typeof window === 'undefined') return 0;
+    return Math.max(
+      8,
+      Math.min(
+        signatureMenuRect.left,
+        window.innerWidth - SIGNATURE_MENU_WIDTH - 8
+      )
+    );
+  });
+  const signatureMenuTop = $derived(
+    signatureMenuRect ? signatureMenuRect.bottom : 0
+  );
 
   function setFixedZoom(value: number) {
     zoomMode = 'fixed';
@@ -558,13 +653,43 @@
   });
 
   $effect(() => {
+    if (!signaturePickerOpen) return;
+    const onPointerDown = (e: PointerEvent) => {
+      const target = e.target as Node;
+      if (signaturePickerEl?.contains(target)) return;
+      if (signatureButton?.contains(target)) return;
+      signaturePickerOpen = false;
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') signaturePickerOpen = false;
+    };
+    const onResize = () => {
+      signaturePickerRectVersion += 1;
+    };
+    queueMicrotask(() => window.addEventListener('pointerdown', onPointerDown));
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('resize', onResize);
+    window.visualViewport?.addEventListener('resize', onResize);
+    window.visualViewport?.addEventListener('scroll', onResize);
+
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('resize', onResize);
+      window.visualViewport?.removeEventListener('resize', onResize);
+      window.visualViewport?.removeEventListener('scroll', onResize);
+    };
+  });
+
+  $effect(() => {
     void zoom;
     void zoomMode;
     bumpRenderVersion();
   });
 
   onMount(async () => {
-    savedSignature = loadReusableSignature();
+    savedSignatures = loadReusableSignatures();
+    activeSignatureId = savedSignatures[0]?.id ?? null;
     try {
       const note = await loadNote(noteId);
       isTrashed = note.trashed;
@@ -852,8 +977,8 @@
       layer.addEventListener('pointerdown', (event) => {
         if (event.button !== 0) return;
         event.preventDefault();
-        if (current.activeTool === 'signature' && !savedSignature) {
-          signatureDialogOpen = true;
+        if (current.activeTool === 'signature' && savedSignatures.length === 0) {
+          openSignaturePad();
           activeTool = 'select';
           return;
         }
@@ -929,9 +1054,11 @@
             annotationType === 'comment'
               ? window.prompt('Comment')?.trim()
               : undefined;
+          const activeSignature =
+            annotationType === 'signature' ? getActiveSignature() : null;
           const signature =
-            annotationType === 'signature' && savedSignature
-              ? cloneSignatureSnapshot(savedSignature)
+            annotationType === 'signature' && activeSignature
+              ? cloneSignatureSnapshot(activeSignature)
               : undefined;
           if (annotationType === 'signature' && !signature) return;
           createAnnotation(
@@ -1097,6 +1224,7 @@
             </Button>
 
             <Button
+              bind:ref={signatureButton}
               variant={activeTool === 'signature' ? 'secondary' : 'ghost'}
               size="icon"
               class="size-7"
@@ -1104,6 +1232,8 @@
               aria-label="Sign"
               title="Sign"
               aria-pressed={activeTool === 'signature'}
+              aria-haspopup="menu"
+              aria-expanded={signaturePickerOpen}
               disabled={isTrashed}
             >
               <Signature class="size-3.5" aria-hidden="true" />
@@ -1369,6 +1499,75 @@
             </Button>
           </div>
         </div>
+      </div>
+    {/if}
+
+    {#if signaturePickerOpen && signatureMenuRect && savedSignatures.length > 0}
+      <div
+        bind:this={signaturePickerEl}
+        role="menu"
+        aria-label={tUi('pdf.signature.menuLabel')}
+        class="fixed z-50 rounded-md border border-border bg-popover p-1 text-sm text-popover-foreground shadow-lg"
+        style="left: {signatureMenuLeft}px; top: {signatureMenuTop}px; width: {SIGNATURE_MENU_WIDTH}px;"
+      >
+        <div class="flex flex-col gap-0.5">
+          {#each savedSignatures as signature (signature.id)}
+            <div class="flex items-center gap-1 rounded-sm hover:bg-accent">
+              <button
+                type="button"
+                role="menuitemradio"
+                aria-checked={activeSignatureId === signature.id}
+                class="flex flex-1 items-center gap-2 rounded-sm px-2 py-1.5 text-left"
+                onclick={() => selectSignature(signature.id)}
+              >
+                <Check
+                  class="size-3.5 shrink-0 {activeSignatureId === signature.id
+                    ? 'opacity-100'
+                    : 'opacity-0'}"
+                  aria-hidden="true"
+                />
+                <svg
+                  role="img"
+                  aria-label={tUi('pdf.signature.preview')}
+                  class="h-8 flex-1 rounded-sm border border-input bg-white"
+                  viewBox="0 0 {signature.width} {signature.height}"
+                  preserveAspectRatio="xMidYMid meet"
+                >
+                  {#each signature.strokes as stroke (stroke.id)}
+                    <polyline
+                      points={strokePointsAttr(stroke.points)}
+                      fill="none"
+                      stroke={stroke.color}
+                      stroke-width={stroke.width}
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    />
+                  {/each}
+                </svg>
+              </button>
+              <Button
+                variant="ghost"
+                size="icon"
+                class="size-7 shrink-0 text-muted-foreground hover:text-destructive"
+                onclick={() => deleteSignature(signature.id)}
+                aria-label={tUi('pdf.signature.delete')}
+                title={tUi('pdf.signature.delete')}
+              >
+                <Trash2 class="size-3.5" aria-hidden="true" />
+              </Button>
+            </div>
+          {/each}
+        </div>
+        <div class="my-1 border-t border-border"></div>
+        <button
+          type="button"
+          role="menuitem"
+          class="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left transition-colors hover:bg-accent hover:text-accent-foreground"
+          onclick={openSignaturePad}
+        >
+          <Plus class="size-3.5 shrink-0" aria-hidden="true" />
+          <span>{tUi('pdf.signature.add')}</span>
+        </button>
       </div>
     {/if}
 
