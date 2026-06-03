@@ -20,10 +20,26 @@
   // Labels go through tUi at render time (see {#each} below) rather
   // than being baked into the array, so language switches re-evaluate.
   const TABS: Tab[] = [
-    { id: 'home', labelKey: 'nav.home', icon: Home as unknown as IconComponent },
-    { id: 'shared', labelKey: 'nav.shared', icon: Share2 as unknown as IconComponent },
-    { id: 'favourite', labelKey: 'nav.favourite', icon: Star as unknown as IconComponent },
-    { id: 'trash', labelKey: 'nav.trash', icon: Trash2 as unknown as IconComponent }
+    {
+      id: 'home',
+      labelKey: 'nav.home',
+      icon: Home as unknown as IconComponent
+    },
+    {
+      id: 'shared',
+      labelKey: 'nav.shared',
+      icon: Share2 as unknown as IconComponent
+    },
+    {
+      id: 'favourite',
+      labelKey: 'nav.favourite',
+      icon: Star as unknown as IconComponent
+    },
+    {
+      id: 'trash',
+      labelKey: 'nav.trash',
+      icon: Trash2 as unknown as IconComponent
+    }
   ];
 </script>
 

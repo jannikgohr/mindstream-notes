@@ -27,7 +27,12 @@
   import { cn } from '$lib/utils';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { getSettingValue } from '$lib/settings/store.svelte';
-  import { TOOLBAR_ITEMS, type ToolbarItem, type ToolbarLeaf, type ToolbarGroup } from './commands';
+  import {
+    TOOLBAR_ITEMS,
+    type ToolbarItem,
+    type ToolbarLeaf,
+    type ToolbarGroup
+  } from './commands';
   import ToolbarMenu, { type MenuEntry } from './ToolbarMenu.svelte';
 
   interface Props {
@@ -225,9 +230,13 @@
 
   function readWidths() {
     if (!measureEl) return;
-    const buttons = measureEl.querySelectorAll<HTMLElement>('[data-toolbar-measure]');
+    const buttons = measureEl.querySelectorAll<HTMLElement>(
+      '[data-toolbar-measure]'
+    );
     itemWidths = Array.from(buttons).map((el) => el.offsetWidth);
-    const more = measureEl.querySelector<HTMLElement>('[data-toolbar-more-measure]');
+    const more = measureEl.querySelector<HTMLElement>(
+      '[data-toolbar-more-measure]'
+    );
     if (more) moreButtonWidth = more.offsetWidth;
   }
 

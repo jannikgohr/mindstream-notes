@@ -72,11 +72,17 @@
     <Dialog.Content
       class="fixed left-1/2 top-1/2 z-350 grid h-[80vh] w-[min(960px,92vw)] -translate-x-1/2 -translate-y-1/2 grid-rows-[auto_1fr] overflow-hidden rounded-lg border border-border bg-background text-foreground shadow-xl focus:outline-none"
     >
-      <header class="flex items-center gap-3 border-b border-border bg-card px-4 py-3">
-        <Dialog.Title class="text-base font-semibold">{tUi('title')}</Dialog.Title>
+      <header
+        class="flex items-center gap-3 border-b border-border bg-card px-4 py-3"
+      >
+        <Dialog.Title class="text-base font-semibold"
+          >{tUi('title')}</Dialog.Title
+        >
 
         <div class="relative ml-4 flex-1">
-          <Search class="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Search
+            class="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
+          />
           <input
             type="text"
             bind:value={query}
@@ -97,7 +103,9 @@
         <!-- Left rail: categories -->
         <nav class="overflow-y-auto bg-card/40 py-2">
           {#if visibleCategories.length === 0}
-            <p class="px-4 py-3 text-xs text-muted-foreground">{tUi('empty')}</p>
+            <p class="px-4 py-3 text-xs text-muted-foreground">
+              {tUi('empty')}
+            </p>
           {/if}
           {#each visibleCategories as cat (cat.id)}
             {@const Icon = categoryIcon(cat.icon)}
@@ -118,14 +126,18 @@
         <!-- Right pane: sections + settings -->
         <section class="themed-scrollbar overflow-y-auto px-6 py-5">
           {#if activeCategory}
-            <h2 class="text-base font-semibold">{tLabel('categories', activeCategory.id)}</h2>
+            <h2 class="text-base font-semibold">
+              {tLabel('categories', activeCategory.id)}
+            </h2>
             {#each activeCategory.sections as sec (sec.id)}
               {@const visibleSettings = isSectionVisible(sec)
                 ? sec.settings.filter((s) => isVisible(s) && settingMatches(s))
                 : []}
               {#if visibleSettings.length > 0}
                 <div class="mt-5">
-                  <h3 class="border-b border-border pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  <h3
+                    class="border-b border-border pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+                  >
                     {tLabel('sections', sec.id)}
                   </h3>
                   <div class="divide-y divide-border">

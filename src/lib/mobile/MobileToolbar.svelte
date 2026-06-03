@@ -9,18 +9,12 @@
    */
   import { LayoutGrid, List } from 'lucide-svelte';
   import SortControl from '$lib/components/SortControl.svelte';
-  import {
-    setSortDirection,
-    setSortStrategy,
-    ui
-  } from '$lib/state.svelte';
+  import { setSortDirection, setSortStrategy, ui } from '$lib/state.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { mobileState, setDisplayMode } from './state.svelte';
 </script>
 
-<div
-  class="flex shrink-0 items-center justify-between gap-2 px-3 pb-2 pt-1"
->
+<div class="flex shrink-0 items-center justify-between gap-2 px-3 pb-2 pt-1">
   <SortControl
     strategy={ui.sortStrategy}
     direction={ui.sortDirection}

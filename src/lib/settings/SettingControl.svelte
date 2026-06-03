@@ -14,7 +14,11 @@
     setSettingValue,
     resetSettingValue
   } from './store.svelte';
-  import { CUSTOM_COMPONENTS, INFO_VALUES, SETTING_ACTIONS } from './registry.svelte';
+  import {
+    CUSTOM_COMPONENTS,
+    INFO_VALUES,
+    SETTING_ACTIONS
+  } from './registry.svelte';
   import { tDescription, tLabel, tUi, tValue } from './i18n.svelte';
   import SettingSelect from './SettingSelect.svelte';
   import type {
@@ -80,7 +84,9 @@
           aria-label={tUi('modified')}
         ></span>
       {/if}
-      <span class="ml-auto text-[10px] uppercase tracking-wide text-muted-foreground">
+      <span
+        class="ml-auto text-[10px] uppercase tracking-wide text-muted-foreground"
+      >
         [{setting.scope}]
       </span>
     </div>
@@ -103,7 +109,8 @@
         {#each s.options as opt (opt)}
           <button
             type="button"
-            class="rounded-md border border-border px-3 py-1 text-xs transition-colors hover:bg-accent {value === opt
+            class="rounded-md border border-border px-3 py-1 text-xs transition-colors hover:bg-accent {value ===
+            opt
               ? 'border-ring bg-accent text-accent-foreground'
               : 'bg-background text-foreground'}"
             onclick={() => commit(opt)}
@@ -116,14 +123,17 @@
       {@const s = setting as MultiSelectSetting}
       <div class="mt-2 flex flex-wrap gap-1.5">
         {#each s.options as opt (opt)}
-          {@const arr = (Array.isArray(value) ? (value as string[]) : []) as string[]}
+          {@const arr = (
+            Array.isArray(value) ? (value as string[]) : []
+          ) as string[]}
           {@const selected = arr.includes(opt)}
           <button
             type="button"
             class="rounded-md border border-border px-3 py-1 text-xs transition-colors hover:bg-accent {selected
               ? 'border-ring bg-accent text-accent-foreground'
               : 'bg-background text-foreground'}"
-            onclick={() => commit(selected ? arr.filter((x) => x !== opt) : [...arr, opt])}
+            onclick={() =>
+              commit(selected ? arr.filter((x) => x !== opt) : [...arr, opt])}
           >
             {tValue(s.id, opt)}
           </button>
@@ -150,7 +160,10 @@
   <!-- Right-side compact controls -->
   <div class="flex items-center gap-2 pt-0.5">
     {#if pending}
-      <Loader2 class="size-3.5 animate-spin text-muted-foreground" aria-label={tUi('saving')} />
+      <Loader2
+        class="size-3.5 animate-spin text-muted-foreground"
+        aria-label={tUi('saving')}
+      />
     {/if}
     {#if setting.type === 'toggle'}
       <button
@@ -188,7 +201,8 @@
       <input
         type="number"
         value={(value as number | undefined) ?? ''}
-        oninput={(e) => commit(Number((e.currentTarget as HTMLInputElement).value))}
+        oninput={(e) =>
+          commit(Number((e.currentTarget as HTMLInputElement).value))}
         min={s.min}
         max={s.max}
         step={s.step}
@@ -210,7 +224,8 @@
           max={s.max}
           step={s.step}
           value={display}
-          oninput={(e) => (sliderDrag = Number((e.currentTarget as HTMLInputElement).value))}
+          oninput={(e) =>
+            (sliderDrag = Number((e.currentTarget as HTMLInputElement).value))}
           onchange={(e) => {
             const v = Number((e.currentTarget as HTMLInputElement).value);
             sliderDrag = null;
@@ -218,7 +233,9 @@
           }}
           class="h-1.5 w-44 cursor-pointer appearance-none rounded-full bg-input accent-primary"
         />
-        <span class="w-12 text-right text-xs tabular-nums text-muted-foreground">
+        <span
+          class="w-12 text-right text-xs tabular-nums text-muted-foreground"
+        >
           {display}{s.unit ?? ''}
         </span>
       </div>
@@ -249,7 +266,9 @@
         type="text"
         value={(value as string | undefined) ?? ''}
         oninput={(e) => commit((e.currentTarget as HTMLInputElement).value)}
-        placeholder={s.mode === 'directory' ? '/path/to/folder' : '/path/to/file'}
+        placeholder={s.mode === 'directory'
+          ? '/path/to/folder'
+          : '/path/to/file'}
         class="h-8 w-56 rounded-md border border-input bg-background px-2 font-mono text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       />
     {:else if setting.type === 'keybinding'}
@@ -288,8 +307,8 @@
           stroke-linejoin="round"
           aria-hidden="true"
         >
-          <path d="M3 12a9 9 0 1 0 9-9 9.74 9.74 0 0 0-6.74 2.74L3 8"/>
-          <path d="M3 3v5h5"/>
+          <path d="M3 12a9 9 0 1 0 9-9 9.74 9.74 0 0 0-6.74 2.74L3 8" />
+          <path d="M3 3v5h5" />
         </svg>
       </button>
     {/if}

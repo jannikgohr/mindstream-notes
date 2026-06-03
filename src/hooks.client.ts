@@ -49,7 +49,8 @@ if (typeof window !== 'undefined' && window.visualViewport) {
   const vv = window.visualViewport;
   const sync = () => {
     document.documentElement.style.setProperty('--app-h', `${vv.height}px`);
-    if (document.documentElement.scrollTop !== 0) document.documentElement.scrollTop = 0;
+    if (document.documentElement.scrollTop !== 0)
+      document.documentElement.scrollTop = 0;
     if (document.body.scrollTop !== 0) document.body.scrollTop = 0;
   };
   vv.addEventListener('resize', sync);

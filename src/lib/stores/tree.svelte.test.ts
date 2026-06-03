@@ -31,7 +31,7 @@ vi.mock('$lib/state.svelte', () => ({
 // settings/store.svelte transitively imports mode-watcher; stub the surface
 // the tree store reads from it instead of trying to resolve the real thing.
 vi.mock('$lib/settings/store.svelte', () => ({
-  getSettingValue: () => false  // useTrash off → trashNote does hard delete
+  getSettingValue: () => false // useTrash off → trashNote does hard delete
 }));
 
 import {

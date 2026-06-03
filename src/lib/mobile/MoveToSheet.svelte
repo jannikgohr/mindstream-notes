@@ -12,7 +12,13 @@
    *   - When moving a folder: the folder itself + all its descendants
    *     (a folder can't become its own ancestor).
    */
-  import { ChevronRight, FolderClosed, FolderOpen, FolderRoot, X } from 'lucide-svelte';
+  import {
+    ChevronRight,
+    FolderClosed,
+    FolderOpen,
+    FolderRoot,
+    X
+  } from 'lucide-svelte';
   import { Button } from '$lib/components/ui/button';
   import { TRASH_ID } from '$lib/api';
   import type { Collection } from '$lib/api';
@@ -120,7 +126,8 @@
     // Root is always selectable — picking it when already at root is a
     // harmless no-op and the alternative (greying it out) makes it look
     // like a section header instead of a destination.
-    if (id !== null && target.currentParent === id) return 'Already in this folder';
+    if (id !== null && target.currentParent === id)
+      return 'Already in this folder';
     if (id !== null && forbidden.has(id)) {
       return 'Cannot move a folder into itself or one of its children';
     }
@@ -146,7 +153,9 @@
   aria-modal="true"
   aria-label="Move to folder"
 >
-  <header class="flex h-12 shrink-0 items-center justify-between border-b border-border px-3">
+  <header
+    class="flex h-12 shrink-0 items-center justify-between border-b border-border px-3"
+  >
     <span class="text-sm font-semibold">Move to…</span>
     <Button
       variant="ghost"
@@ -218,7 +227,9 @@
         aria-label={args.open ? 'Collapse folder' : 'Expand folder'}
         title={args.open ? 'Collapse' : 'Expand'}
       >
-        <ChevronRight class="size-4 transition-transform {args.open ? 'rotate-90' : ''}" />
+        <ChevronRight
+          class="size-4 transition-transform {args.open ? 'rotate-90' : ''}"
+        />
       </button>
     {:else}
       <!-- Spacer so leaf rows align with the icon column of expandable

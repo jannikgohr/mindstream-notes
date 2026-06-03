@@ -80,7 +80,9 @@ interface TriggerState {
   startPos: number | null;
 }
 
-const triggerPluginKey = new PluginKey<TriggerState>('mindstream-wikilink-trigger');
+const triggerPluginKey = new PluginKey<TriggerState>(
+  'mindstream-wikilink-trigger'
+);
 
 /**
  * Maximum query length — closes the menu if the user types something
@@ -158,10 +160,7 @@ function findEnclosingWikilinkStart(state: EditorState): number | null {
 function validateOpen(startPos: number, state: EditorState): boolean {
   const cursor = state.selection.from;
   if (cursor < startPos + 2) return false;
-  if (
-    state.doc.resolve(startPos).parent !==
-    state.doc.resolve(cursor).parent
-  ) {
+  if (state.doc.resolve(startPos).parent !== state.doc.resolve(cursor).parent) {
     return false;
   }
   const queryRaw = state.doc.textBetween(startPos + 2, cursor, '\n');
@@ -184,7 +183,9 @@ function wikilinkTriggerPlugin(bridge: WikilinkBridge): Plugin<TriggerState> {
     bridge.state.caretRect = null;
     bridge.state.highlight = 0;
     if (viewRef) {
-      viewRef.dispatch(viewRef.state.tr.setMeta(triggerPluginKey, { close: true }));
+      viewRef.dispatch(
+        viewRef.state.tr.setMeta(triggerPluginKey, { close: true })
+      );
     }
   }
 
@@ -200,10 +201,17 @@ function wikilinkTriggerPlugin(bridge: WikilinkBridge): Plugin<TriggerState> {
     const cursor = view.state.selection.from;
     // If auto-pair (or the user) put `]]` right after the cursor, swallow
     // it so we end up with exactly one closing pair from our insertion.
-    const after = view.state.doc.textBetween(cursor, Math.min(cursor + 2, view.state.doc.content.size));
+    const after = view.state.doc.textBetween(
+      cursor,
+      Math.min(cursor + 2, view.state.doc.content.size)
+    );
     const consumeClose = after === ']]' ? 2 : 0;
     const replacement = `[[${title}]]`;
-    const tr = view.state.tr.insertText(replacement, start, cursor + consumeClose);
+    const tr = view.state.tr.insertText(
+      replacement,
+      start,
+      cursor + consumeClose
+    );
     tr.setMeta(triggerPluginKey, { close: true });
     view.dispatch(tr);
     view.focus();
@@ -365,7 +373,9 @@ const decorationPluginKey = new PluginKey('mindstream-wikilink-decoration');
 const WIKILINK_RE = /\[\[([^[\]\n]+?)]]/g;
 
 function wikilinkDecorationPlugin(): Plugin {
-  function build(doc: Parameters<typeof DecorationSet.create>[0]): DecorationSet {
+  function build(
+    doc: Parameters<typeof DecorationSet.create>[0]
+  ): DecorationSet {
     const decos: Decoration[] = [];
     // descendants over textblocks; wikilinks span only text within one
     // block (the regex forbids \n).

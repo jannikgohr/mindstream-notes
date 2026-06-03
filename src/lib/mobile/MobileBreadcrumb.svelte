@@ -15,7 +15,11 @@
   import { tree } from '$lib/stores/tree.svelte';
   import type { Collection } from '$lib/api';
   import { tUi } from '$lib/settings/i18n.svelte';
-  import { mobileState, setCurrentFolder, type MobileView } from './state.svelte';
+  import {
+    mobileState,
+    setCurrentFolder,
+    type MobileView
+  } from './state.svelte';
 
   interface Segment {
     id: string | null;

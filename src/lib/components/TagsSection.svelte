@@ -318,7 +318,9 @@
         {node.segment}
       </span>
       {#if onNote}
-        <span class="ml-2 text-[10px] uppercase tracking-wide text-muted-foreground">
+        <span
+          class="ml-2 text-[10px] uppercase tracking-wide text-muted-foreground"
+        >
           on note
         </span>
       {/if}
@@ -339,4 +341,3 @@
     {/each}
   </span>
 {/snippet}
-

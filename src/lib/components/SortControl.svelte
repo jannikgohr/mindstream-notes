@@ -13,8 +13,14 @@
    * bundle) and the picker picks it up automatically.
    */
   import { ArrowUpDown } from 'lucide-svelte';
-  import ContextMenu, { type MenuItem } from '$lib/components/ContextMenu.svelte';
-  import { SORT_STRATEGIES, type SortDirection, type SortStrategy } from '$lib/sort';
+  import ContextMenu, {
+    type MenuItem
+  } from '$lib/components/ContextMenu.svelte';
+  import {
+    SORT_STRATEGIES,
+    type SortDirection,
+    type SortStrategy
+  } from '$lib/sort';
   import { tUi } from '$lib/settings/i18n.svelte';
 
   interface Props {
@@ -98,7 +104,9 @@
 <div
   class="inline-flex select-none items-stretch overflow-hidden rounded-md text-xs {compact
     ? 'h-7'
-    : 'h-8'} {variant === 'outlined' ? 'border border-border bg-background' : ''}"
+    : 'h-8'} {variant === 'outlined'
+    ? 'border border-border bg-background'
+    : ''}"
   role="group"
   aria-label={tUi('sort.label')}
 >
@@ -116,7 +124,9 @@
       than swapping between two distinct icons.
     -->
     <ArrowUpDown
-      class="{iconClass} transition-transform {direction === 'desc' ? '-scale-y-100' : ''}"
+      class="{iconClass} transition-transform {direction === 'desc'
+        ? '-scale-y-100'
+        : ''}"
     />
   </button>
 

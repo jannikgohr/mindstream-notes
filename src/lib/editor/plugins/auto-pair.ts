@@ -59,7 +59,11 @@ export const autoPair = $prose(
               const selected = view.state.doc.textBetween(from, to, '\n');
               tr.insertText(text + selected + closer, from, to);
               tr.setSelection(
-                TextSelection.create(tr.doc, from + 1, from + 1 + selected.length)
+                TextSelection.create(
+                  tr.doc,
+                  from + 1,
+                  from + 1 + selected.length
+                )
               );
             } else {
               tr.insertText(text + closer, from);

@@ -56,7 +56,9 @@
     | 'pdfNote'
     | 'unknownNoteKind';
 
-  function componentForNoteKind(kind: string | null | undefined): NotePanelComponent {
+  function componentForNoteKind(
+    kind: string | null | undefined
+  ): NotePanelComponent {
     if (!isKnownNoteKind(kind)) return 'unknownNoteKind';
     switch (kind) {
       case 'freeform':
@@ -232,7 +234,8 @@
       const api = dock as unknown as { fromJSON: (s: unknown) => void };
       api.fromJSON(sanitized);
       for (const panel of dock.panels) {
-        const noteId = (panel.params as { noteId?: string } | undefined)?.noteId;
+        const noteId = (panel.params as { noteId?: string } | undefined)
+          ?.noteId;
         if (noteId) openPanels.set(noteId, panel);
       }
       if (saved.activeNoteId) {
@@ -250,7 +253,10 @@
   function sanitizeDockBlob(blob: unknown): unknown | null {
     try {
       const json = blob as {
-        panels?: Record<string, { component?: string; params?: { noteId?: string } }>;
+        panels?: Record<
+          string,
+          { component?: string; params?: { noteId?: string } }
+        >;
       };
       const panels = json.panels ?? {};
       for (const p of Object.values(panels)) {
@@ -308,8 +314,8 @@
 
     // Re-add a group if last panel was closed
     if (dock.groups.length === 0) {
-      dock.addGroup()
-      lastActiveGroup = dock.groups[0]
+      dock.addGroup();
+      lastActiveGroup = dock.groups[0];
     }
 
     let position:
@@ -624,7 +630,10 @@
     {/if}
 
     <main class="min-w-0 flex-1">
-      <div bind:this={dockHost} class="dockview-theme-bridge h-full w-full"></div>
+      <div
+        bind:this={dockHost}
+        class="dockview-theme-bridge h-full w-full"
+      ></div>
     </main>
 
     {#if ui.rightSidebarOpen}

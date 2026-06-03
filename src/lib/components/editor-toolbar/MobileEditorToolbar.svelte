@@ -92,7 +92,8 @@
 -->
 <div
   class="pointer-events-none fixed inset-x-0 z-30 flex justify-center px-3"
-  style="bottom: calc({bottomOffset + FLOAT_GAP_PX}px + env(safe-area-inset-bottom, 0px));"
+  style="bottom: calc({bottomOffset +
+    FLOAT_GAP_PX}px + env(safe-area-inset-bottom, 0px));"
 >
   <div bind:this={host} class="max-w-full">
     <EditorToolbar
