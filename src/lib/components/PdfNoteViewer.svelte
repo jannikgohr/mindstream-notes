@@ -23,7 +23,9 @@
   let { noteId }: Props = $props();
 
   type PdfJs = typeof import('pdfjs-dist');
+  type PdfViewer = typeof import('pdfjs-dist/web/pdf_viewer.mjs');
   type PdfDocument = Awaited<ReturnType<PdfJs['getDocument']>['promise']>;
+  type PdfPageView = InstanceType<PdfViewer['PDFPageView']>;
   type ZoomMode = 'fixed' | 'fit-width';
   type RenderParams = {
     pageNumber: number;
@@ -36,6 +38,7 @@
   const MAX_ZOOM = 4;
   const ZOOM_STEP = 1.2;
   const QUICK_ZOOMS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
+  const PDF_TO_CSS_UNITS = 96 / 72;
 
   let container = $state<HTMLDivElement | null>(null);
   let zoomButton = $state<HTMLButtonElement | null>(null);
@@ -52,6 +55,8 @@
   let zoomMenuOpen = $state(false);
   let menuRectVersion = $state(0);
   let isTrashed = $state(false);
+  let pdfjsLib: PdfJs | null = null;
+  let pdfViewerLib: PdfViewer | null = null;
   let resizeObserver: ResizeObserver | null = null;
 
   $effect(() => {
@@ -216,7 +221,10 @@
       }
 
       const pdfjs = await import('pdfjs-dist');
+      const pdfViewer = await import('pdfjs-dist/web/pdf_viewer.mjs');
       pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+      pdfjsLib = pdfjs;
+      pdfViewerLib = pdfViewer;
       const task = pdfjs.getDocument({ data: new Uint8Array(asset.bytes) });
       pdfDoc = await task.promise;
       const firstPage = await pdfDoc.getPage(1);
@@ -237,40 +245,54 @@
     clearNoteStatus(noteId);
   });
 
-  function renderPage(canvas: HTMLCanvasElement, params: RenderParams) {
+  function renderPage(pageSurface: HTMLDivElement, params: RenderParams) {
     let current = params;
     let cancelled = false;
-    let renderTask: { cancel?: () => void; promise: Promise<unknown> } | null = null;
+    let drawGeneration = 0;
+    let pageView: PdfPageView | null = null;
 
     async function draw() {
-      if (!pdfDoc || !container) return;
-      renderTask?.cancel?.();
-      const page = await pdfDoc.getPage(current.pageNumber);
-      if (cancelled) return;
+      const generation = ++drawGeneration;
+      const request = { ...current };
+      const doc = pdfDoc;
+      const pdfjs = pdfjsLib;
+      const pdfViewer = pdfViewerLib;
+      const renderContainer = container;
+      if (!doc || !pdfjs || !pdfViewer || !renderContainer) return;
+      pageView?.cancelRendering();
+      pageView?.destroy();
+      pageView = null;
+      pageSurface.replaceChildren();
+
+      const page = await doc.getPage(request.pageNumber);
+      if (cancelled || generation !== drawGeneration) return;
 
       const baseViewport = page.getViewport({ scale: 1 });
-      const availableWidth = Math.max(280, container.clientWidth - 32);
+      const availableWidth = Math.max(280, renderContainer.clientWidth - 32);
       const fitScale = clampZoom(availableWidth / baseViewport.width);
-      const scale =
-        current.zoomMode === 'fit-width' ? fitScale : clampZoom(current.zoom);
-      const viewport = page.getViewport({ scale });
-      const dpr = window.devicePixelRatio || 1;
-      const context = canvas.getContext('2d');
-      if (!context) return;
+      const requestedScale =
+        request.zoomMode === 'fit-width' ? fitScale : clampZoom(request.zoom);
+      const viewerScale = requestedScale / PDF_TO_CSS_UNITS;
+      const viewport = page.getViewport({ scale: requestedScale });
 
-      canvas.width = Math.floor(viewport.width * dpr);
-      canvas.height = Math.floor(viewport.height * dpr);
-      canvas.style.width = `${viewport.width}px`;
-      canvas.style.height = `${viewport.height}px`;
-
-      renderTask = page.render({
-        canvas,
-        canvasContext: context,
-        viewport,
-        transform: dpr === 1 ? undefined : [dpr, 0, 0, dpr, 0, 0]
+      if (cancelled || generation !== drawGeneration) return;
+      const eventBus = new pdfViewer.EventBus();
+      pageView = new pdfViewer.PDFPageView({
+        container: pageSurface,
+        eventBus,
+        id: request.pageNumber,
+        scale: viewerScale,
+        defaultViewport: viewport,
+        annotationMode: pdfjs.AnnotationMode.DISABLE,
+        maxCanvasPixels: -1,
+        maxCanvasDim: -1,
+        enableDetailCanvas: true,
+        enableOptimizedPartialRendering: true,
+        enableSelectionRendering: true
       });
+      pageView.setPdfPage(page);
       try {
-        await renderTask.promise;
+        await pageView.draw();
       } catch (err) {
         if ((err as { name?: string })?.name !== 'RenderingCancelledException') {
           console.warn('[PdfNoteViewer] page render failed', err);
@@ -286,7 +308,9 @@
       },
       destroy() {
         cancelled = true;
-        renderTask?.cancel?.();
+        drawGeneration += 1;
+        pageView?.cancelRendering();
+        pageView?.destroy();
       }
     };
   }
@@ -355,10 +379,10 @@
       <div class="mx-auto flex min-w-full w-max flex-col items-center gap-4">
         {#each pageNumbers as pageNumber (pageNumber)}
           <figure class="flex w-max flex-col items-center gap-1">
-            <canvas
+            <div
               use:renderPage={{ pageNumber, version: renderVersion, zoom, zoomMode }}
-              class="bg-white shadow-sm ring-1 ring-border"
-            ></canvas>
+              class="pdf-page-host pdfViewer bg-white shadow-sm ring-1 ring-border"
+            ></div>
             <figcaption class="flex items-center gap-1 text-[10px] text-muted-foreground">
               <FileText class="size-3" aria-hidden="true" />
               Page {pageNumber}
@@ -408,3 +432,123 @@
     {/if}
   {/if}
 </div>
+
+<style>
+  :global(.pdf-page-host) {
+    --scale-factor: 1;
+    --page-bg-color: white;
+    --page-border: 0;
+    --page-margin: 0;
+    --pdfViewer-padding-bottom: 0;
+    --hcm-highlight-filter: none;
+    --hcm-highlight-selected-filter: none;
+    background-color: white;
+  }
+
+  :global(.pdf-page-host .page) {
+    --user-unit: 1;
+    --total-scale-factor: calc(var(--scale-factor) * var(--user-unit));
+    --scale-round-x: 1px;
+    --scale-round-y: 1px;
+    direction: ltr;
+    position: relative;
+    overflow: visible;
+    margin: 0;
+    border: 0;
+    background-clip: content-box;
+    background-color: var(--page-bg-color);
+  }
+
+  :global(.pdf-page-host .canvasWrapper) {
+    overflow: hidden;
+    width: 100%;
+    height: 100%;
+  }
+
+  :global(.pdf-page-host .canvasWrapper canvas) {
+    position: absolute;
+    top: 0;
+    left: 0;
+    display: block;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    contain: content;
+  }
+
+  :global(.pdf-page-host .textLayer) {
+    color-scheme: only light;
+    position: absolute;
+    inset: 0;
+    overflow: clip;
+    line-height: 1;
+    letter-spacing: normal;
+    word-spacing: normal;
+    text-align: initial;
+    transform-origin: 0 0;
+    -webkit-text-size-adjust: none;
+    -moz-text-size-adjust: none;
+    text-size-adjust: none;
+    forced-color-adjust: none;
+    caret-color: CanvasText;
+    --min-font-size: 1;
+    --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+    --min-font-size-inv: calc(1 / var(--min-font-size));
+  }
+
+  :global(.pdf-page-host .textLayer :is(span, br)) {
+    color: transparent;
+    position: absolute;
+    white-space: pre;
+    cursor: text;
+    transform-origin: 0% 0%;
+    -webkit-user-select: text;
+    -moz-user-select: text;
+    user-select: text;
+  }
+
+  :global(.pdf-page-host .textLayer > :not(.markedContent)),
+  :global(.pdf-page-host .textLayer .markedContent span:not(.markedContent)) {
+    z-index: 1;
+    --font-height: 0;
+    font-size: calc(var(--text-scale-factor) * var(--font-height));
+    --scale-x: 1;
+    --rotate: 0deg;
+    transform: rotate(var(--rotate)) scaleX(var(--scale-x))
+      scale(var(--min-font-size-inv));
+  }
+
+  :global(.pdf-page-host .textLayer .markedContent) {
+    display: contents;
+  }
+
+  :global(.pdf-page-host .textLayer ::selection),
+  :global(.pdf-page-host .textLayer br::selection) {
+    background: transparent;
+  }
+
+  :global(.pdf-page-host .textLayer .endOfContent) {
+    display: block;
+    position: absolute;
+    inset: 100% 0 0;
+    z-index: 0;
+    cursor: default;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    user-select: none;
+  }
+
+  :global(.pdf-page-host .textLayer.selecting .endOfContent) {
+    top: 0;
+  }
+
+  :global(.pdf-page-host .canvasWrapper .selection) {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    background: rgb(0 90 255 / 0.22);
+  }
+</style>
