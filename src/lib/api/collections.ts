@@ -27,10 +27,8 @@ export interface UpdateCollectionInput {
 }
 
 export function listCollections(): Promise<Collection[]> {
-  return invokeOrFallback<Collection[]>(
-    'list_collections',
-    undefined,
-    () => mockApi.listCollections()
+  return invokeOrFallback<Collection[]>('list_collections', undefined, () =>
+    mockApi.listCollections()
   );
 }
 

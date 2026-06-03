@@ -30,7 +30,8 @@
   let lastReport = $state<SyncReport | null>(null);
 
   const serverType = $derived(
-    (getSettingValue('account.serverType') as string | undefined) ?? 'local-only'
+    (getSettingValue('account.serverType') as string | undefined) ??
+      'local-only'
   );
   const serverUrl = $derived(
     ((getSettingValue('account.serverUrl') as string | undefined) ?? '').trim()
@@ -111,13 +112,19 @@
   function summarise(r: SyncReport): string {
     const parts: string[] = [];
     if (r.notes_pulled || r.folders_pulled) {
-      parts.push(`pulled ${r.notes_pulled} note${r.notes_pulled === 1 ? '' : 's'}, ${r.folders_pulled} folder${r.folders_pulled === 1 ? '' : 's'}`);
+      parts.push(
+        `pulled ${r.notes_pulled} note${r.notes_pulled === 1 ? '' : 's'}, ${r.folders_pulled} folder${r.folders_pulled === 1 ? '' : 's'}`
+      );
     }
     if (r.notes_pushed || r.folders_pushed) {
-      parts.push(`pushed ${r.notes_pushed} note${r.notes_pushed === 1 ? '' : 's'}, ${r.folders_pushed} folder${r.folders_pushed === 1 ? '' : 's'}`);
+      parts.push(
+        `pushed ${r.notes_pushed} note${r.notes_pushed === 1 ? '' : 's'}, ${r.folders_pushed} folder${r.folders_pushed === 1 ? '' : 's'}`
+      );
     }
     if (r.conflicts_resolved) {
-      parts.push(`${r.conflicts_resolved} conflict${r.conflicts_resolved === 1 ? '' : 's'} merged`);
+      parts.push(
+        `${r.conflicts_resolved} conflict${r.conflicts_resolved === 1 ? '' : 's'} merged`
+      );
     }
     return parts.length > 0 ? parts.join(' · ') : 'Already up to date';
   }
@@ -136,7 +143,10 @@
           Signed in
         </div>
         <div class="mt-1 font-medium">{session.username}</div>
-        <div class="mt-0.5 truncate font-mono text-xs text-muted-foreground" title={session.server_url}>
+        <div
+          class="mt-0.5 truncate font-mono text-xs text-muted-foreground"
+          title={session.server_url}
+        >
           {session.server_url}
         </div>
       </div>
@@ -150,7 +160,12 @@
             Sync now
           {/if}
         </Button>
-        <Button size="sm" variant="destructive" onclick={signOut} disabled={busy || syncing}>
+        <Button
+          size="sm"
+          variant="destructive"
+          onclick={signOut}
+          disabled={busy || syncing}
+        >
           {#if busy}
             <Loader2 class="mr-1.5 size-3.5 animate-spin" />
             Logging out…
@@ -168,7 +183,13 @@
       {/if}
     </div>
   {:else}
-    <form class="grid gap-2" onsubmit={(e) => { e.preventDefault(); void signIn(); }}>
+    <form
+      class="grid gap-2"
+      onsubmit={(e) => {
+        e.preventDefault();
+        void signIn();
+      }}
+    >
       <label class="grid gap-1">
         <span class="text-xs text-muted-foreground">Username or email</span>
         <input
@@ -202,7 +223,9 @@
         {#if error}
           <span class="text-xs text-destructive">{error}</span>
         {:else if serverType === 'self-hosted' && !serverUrl}
-          <span class="text-xs text-muted-foreground">Set a server URL above first.</span>
+          <span class="text-xs text-muted-foreground"
+            >Set a server URL above first.</span
+          >
         {/if}
       </div>
     </form>

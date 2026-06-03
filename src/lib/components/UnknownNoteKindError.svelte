@@ -36,7 +36,9 @@
     <p class="text-foreground">
       {tUi('editor.unknownKind.message')}
     </p>
-    <dl class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs text-muted-foreground">
+    <dl
+      class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs text-muted-foreground"
+    >
       <dt>{tUi('editor.unknownKind.titleLabel')}</dt>
       <dd class="break-words font-medium text-foreground">{title}</dd>
       <dt>{tUi('editor.unknownKind.kindLabel')}</dt>

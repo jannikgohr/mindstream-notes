@@ -23,7 +23,8 @@
       type="search"
       placeholder={tUi('search.notes.placeholder')}
       value={mobileState.searchQuery}
-      oninput={(e) => setSearchQuery((e.currentTarget as HTMLInputElement).value)}
+      oninput={(e) =>
+        setSearchQuery((e.currentTarget as HTMLInputElement).value)}
       class="h-12 w-full rounded-full pl-11 pr-4"
       aria-label={tUi('search.notes.label')}
     />

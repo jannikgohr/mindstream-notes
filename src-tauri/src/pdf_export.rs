@@ -28,10 +28,7 @@ pub struct SavePdfExportInput {
     pub bytes: Vec<u8>,
 }
 
-async fn save_pdf_export_inner(
-    app: AppHandle,
-    input: SavePdfExportInput,
-) -> AppResult<bool> {
+async fn save_pdf_export_inner(app: AppHandle, input: SavePdfExportInput) -> AppResult<bool> {
     // The dialog API is callback-based; bridge it to async via a one-shot
     // channel so the command's caller can `await` the user's choice.
     let (tx, rx) = oneshot::channel();
@@ -64,9 +61,6 @@ async fn save_pdf_export_inner(
 }
 
 #[tauri::command]
-pub async fn save_pdf_export(
-    app: AppHandle,
-    input: SavePdfExportInput,
-) -> Result<bool, String> {
+pub async fn save_pdf_export(app: AppHandle, input: SavePdfExportInput) -> Result<bool, String> {
     save_pdf_export_inner(app, input).await.map_err(Into::into)
 }

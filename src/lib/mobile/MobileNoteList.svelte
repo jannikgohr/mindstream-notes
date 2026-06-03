@@ -39,7 +39,9 @@
   } from '$lib/stores/tree.svelte';
   import { ui } from '$lib/state.svelte';
   import { sortTree } from '$lib/sort';
-  import ContextMenu, { type MenuItem } from '$lib/components/ContextMenu.svelte';
+  import ContextMenu, {
+    type MenuItem
+  } from '$lib/components/ContextMenu.svelte';
   import { confirm } from '$lib/components/confirm-dialog.svelte';
   import MoveToSheet, { type MoveTarget } from './MoveToSheet.svelte';
   import NameInputSheet from './NameInputSheet.svelte';
@@ -140,7 +142,9 @@
 
     // view === 'home' — skip the trash folder at the root.
     if (folderId === null) {
-      return sortedTree.filter((n) => !(n.kind === 'folder' && n.id === TRASH_ID));
+      return sortedTree.filter(
+        (n) => !(n.kind === 'folder' && n.id === TRASH_ID)
+      );
     }
     return childrenOf(folderId, sortedTree);
   });
@@ -253,14 +257,14 @@
 
   function nameFor(t: NodeRef): string {
     return t.kind === 'note'
-      ? tree.notesById[t.id]?.title ?? 'note'
-      : tree.collectionsById[t.id]?.name ?? 'folder';
+      ? (tree.notesById[t.id]?.title ?? 'note')
+      : (tree.collectionsById[t.id]?.name ?? 'folder');
   }
 
   function currentParentOf(t: NodeRef): string | null {
     return t.kind === 'note'
-      ? tree.notesById[t.id]?.parent_collection_id ?? null
-      : tree.collectionsById[t.id]?.parent_collection_id ?? null;
+      ? (tree.notesById[t.id]?.parent_collection_id ?? null)
+      : (tree.collectionsById[t.id]?.parent_collection_id ?? null);
   }
 
   function startRename(t: NodeRef) {
@@ -296,7 +300,8 @@
     const label = nameFor(t);
     if (
       !(await confirm({
-        title: t.kind === 'note' ? 'Move note to trash' : 'Move folder to trash',
+        title:
+          t.kind === 'note' ? 'Move note to trash' : 'Move folder to trash',
         message: `"${label}" will move to the trash. You can restore it from there later.`,
         confirmLabel: 'Move to trash',
         destructive: true
@@ -362,7 +367,10 @@
   }
 </script>
 
-<div class:fab-space={reserveFabSpace} class="mobile-note-list flex-1 overflow-y-auto px-3 pt-3">
+<div
+  class:fab-space={reserveFabSpace}
+  class="mobile-note-list flex-1 overflow-y-auto px-3 pt-3"
+>
   {#if !tree.ready}
     <p class="px-1 py-2 text-sm text-muted-foreground">Loading…</p>
   {:else if tree.error}
@@ -407,14 +415,18 @@
               </span>
             {/if}
           </button>
-          <div class="absolute right-1 top-1 flex flex-col items-center gap-0.5">
+          <div
+            class="absolute right-1 top-1 flex flex-col items-center gap-0.5"
+          >
             {#if node.kind === 'note'}
               <button
                 type="button"
                 class="rounded p-1 text-muted-foreground hover:text-foreground"
                 onclick={() => toggleFavourite(node.id)}
                 aria-pressed={fav}
-                aria-label={fav ? 'Remove from favourites' : 'Add to favourites'}
+                aria-label={fav
+                  ? 'Remove from favourites'
+                  : 'Add to favourites'}
                 title={fav ? 'Remove from favourites' : 'Add to favourites'}
               >
                 <Star class="size-4" fill={fav ? 'currentColor' : 'none'} />
@@ -423,7 +435,8 @@
             <button
               type="button"
               class="rounded p-1 text-muted-foreground hover:text-foreground"
-              onclick={(e) => openContextMenu(e, { kind: node.kind, id: node.id })}
+              onclick={(e) =>
+                openContextMenu(e, { kind: node.kind, id: node.id })}
               aria-label="More actions"
               title="More actions"
             >
@@ -480,7 +493,8 @@
           <button
             type="button"
             class="shrink-0 rounded p-2 text-muted-foreground hover:text-foreground"
-            onclick={(e) => openContextMenu(e, { kind: node.kind, id: node.id })}
+            onclick={(e) =>
+              openContextMenu(e, { kind: node.kind, id: node.id })}
             aria-label="More actions"
             title="More actions"
           >
@@ -502,22 +516,6 @@
   />
 {/if}
 
-<style>
-  .mobile-note-list {
-    padding-bottom: 0.75rem;
-  }
-
-  .mobile-note-list.fab-space {
-    /*
-     * MobileFab is anchored 1rem from the bottom and its collapsed stack is:
-     * primary 3.5rem + gap 0.75rem + plus 3rem. Keeping this as scrollable
-     * padding lets the last row clear the buttons at max scroll.
-     */
-    padding-bottom: 9.5rem;
-    scroll-padding-bottom: 9.5rem;
-  }
-</style>
-
 {#if moveTarget}
   <MoveToSheet
     target={moveTarget}
@@ -536,3 +534,19 @@
     onClose={() => (renameTarget = null)}
   />
 {/if}
+
+<style>
+  .mobile-note-list {
+    padding-bottom: 0.75rem;
+  }
+
+  .mobile-note-list.fab-space {
+    /*
+     * MobileFab is anchored 1rem from the bottom and its collapsed stack is:
+     * primary 3.5rem + gap 0.75rem + plus 3rem. Keeping this as scrollable
+     * padding lets the last row clear the buttons at max scroll.
+     */
+    padding-bottom: 9.5rem;
+    scroll-padding-bottom: 9.5rem;
+  }
+</style>

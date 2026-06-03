@@ -11,7 +11,7 @@
 
 import type { NoteSummary } from './api';
 import type { FolderNode, TreeNode } from './api';
-import {getSettingValue} from "$lib/settings/store.svelte";
+import { getSettingValue } from '$lib/settings/store.svelte';
 
 export type SortStrategy = 'alphabetical' | 'modified' | 'created';
 export type SortDirection = 'asc' | 'desc';
@@ -43,7 +43,9 @@ function labelOf(node: TreeNode): string {
 
 /** A→Z. */
 function alphabetical(a: TreeNode, b: TreeNode): number {
-  return labelOf(a).localeCompare(labelOf(b), undefined, { sensitivity: 'base' });
+  return labelOf(a).localeCompare(labelOf(b), undefined, {
+    sensitivity: 'base'
+  });
 }
 
 function noteModified(node: TreeNode, ctx: SortContext): string {
@@ -96,15 +98,13 @@ export function sortTree(
     return strategyCompare(a, b, ctx) * factor;
   };
 
-  return [...tree]
-    .sort(unifiedCompare)
-    .map((node) => {
-      if (node.kind === 'folder' && node.children?.length > 0) {
-        return {
-          ...node,
-          children: sortTree(node.children, strategy, ctx, direction)
-        };
-      }
-      return node;
-    });
+  return [...tree].sort(unifiedCompare).map((node) => {
+    if (node.kind === 'folder' && node.children?.length > 0) {
+      return {
+        ...node,
+        children: sortTree(node.children, strategy, ctx, direction)
+      };
+    }
+    return node;
+  });
 }

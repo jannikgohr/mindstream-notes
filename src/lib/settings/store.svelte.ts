@@ -128,7 +128,10 @@ export function hasSettingValue(id: string): boolean {
  * binding to pick up whatever value actually stuck. Rolls back the cache
  * if the binding throws so a failed Tauri call doesn't leave the UI lying.
  */
-export async function setSettingValue(id: string, value: unknown): Promise<void> {
+export async function setSettingValue(
+  id: string,
+  value: unknown
+): Promise<void> {
   const binding = SETTING_BINDINGS[id];
   if (binding) {
     const prev = settings.values[id];
@@ -207,7 +210,8 @@ export function isVisible(setting: Setting): boolean {
   if (!cond) return true;
   const v = getSettingValue(cond.id);
   if ('equals' in cond && cond.equals !== undefined) return v === cond.equals;
-  if ('notEquals' in cond && cond.notEquals !== undefined) return v !== cond.notEquals;
+  if ('notEquals' in cond && cond.notEquals !== undefined)
+    return v !== cond.notEquals;
   if ('in' in cond && Array.isArray(cond.in)) return cond.in.includes(v);
   return true;
 }

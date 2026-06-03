@@ -95,7 +95,9 @@ function resolveTheme(): 'default' | 'dark' {
   if (sys === 'dark') return 'dark';
   if (sys === 'light') return 'default';
   // Last-resort: read the dark class Tailwind toggles via mode-watcher.
-  return document.documentElement.classList.contains('dark') ? 'dark' : 'default';
+  return document.documentElement.classList.contains('dark')
+    ? 'dark'
+    : 'default';
 }
 
 /**

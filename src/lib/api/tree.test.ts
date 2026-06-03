@@ -4,7 +4,11 @@ import { TRASH_ID } from './index';
 import type { Collection } from './collections';
 import type { NoteSummary } from './notes';
 
-const collection = (id: string, parent: string | null, name: string): Collection => ({
+const collection = (
+  id: string,
+  parent: string | null,
+  name: string
+): Collection => ({
   id,
   parent_collection_id: parent,
   name,

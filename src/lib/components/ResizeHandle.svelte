@@ -71,8 +71,5 @@
   onpointercancel={endDrag}
 >
   <!-- Wider invisible hit-target so the 1px handle is easy to grab. -->
-  <span
-    aria-hidden="true"
-    class="absolute inset-y-0 -left-1 -right-1"
-  ></span>
+  <span aria-hidden="true" class="absolute inset-y-0 -left-1 -right-1"></span>
 </div>

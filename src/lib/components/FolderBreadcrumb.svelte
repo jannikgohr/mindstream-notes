@@ -71,14 +71,16 @@
     <!-- flex-1 + justify-end: when content fits, items right-anchor; when it
          doesn't, items still fill the cell and the truncate-able children
          shrink instead of the row clipping from the wrong side. -->
-    <div
-      class="flex min-w-0 flex-1 items-center justify-end whitespace-nowrap"
-    >
+    <div class="flex min-w-0 flex-1 items-center justify-end whitespace-nowrap">
       {#if collapsed && path.length > 2}
         <span class="min-w-0 truncate">{path[0].name}</span>
-        <ChevronRight class="mx-0.5 h-3 w-3 shrink-0 text-muted-foreground/60" />
+        <ChevronRight
+          class="mx-0.5 h-3 w-3 shrink-0 text-muted-foreground/60"
+        />
         <span class="shrink-0 text-muted-foreground">…</span>
-        <ChevronRight class="mx-0.5 h-3 w-3 shrink-0 text-muted-foreground/60" />
+        <ChevronRight
+          class="mx-0.5 h-3 w-3 shrink-0 text-muted-foreground/60"
+        />
         <span class="min-w-0 truncate">{path[path.length - 1].name}</span>
       {:else}
         {#each path as c, i (c.id)}
@@ -87,8 +89,7 @@
               class="mx-0.5 h-3 w-3 shrink-0 text-muted-foreground/60"
             />
           {/if}
-          <span
-            class={i === path.length - 1 ? 'min-w-0 truncate' : 'shrink-0'}
+          <span class={i === path.length - 1 ? 'min-w-0 truncate' : 'shrink-0'}
             >{c.name}</span
           >
         {/each}

@@ -4,7 +4,11 @@
  * this file is now strictly window/sidebar/sort UI.
  */
 
-import { DEFAULT_PREFERENCES, loadPreferences, savePreferences } from './preferences';
+import {
+  DEFAULT_PREFERENCES,
+  loadPreferences,
+  savePreferences
+} from './preferences';
 import type { SortDirection, SortStrategy } from './sort';
 
 const initialPrefs = loadPreferences();

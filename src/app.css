@@ -273,7 +273,9 @@ body {
  * hovered or becomes active, which matches Chrome — the slighter hover
  * pill replaces the separator as the visual cue, so showing both at
  * once would feel busy. */
-.dockview-theme-bridge .dv-tabs-container > .dv-tab:not(.dv-active-tab):not(:hover)
+.dockview-theme-bridge
+  .dv-tabs-container
+  > .dv-tab:not(.dv-active-tab):not(:hover)
   + .dv-tab:not(.dv-active-tab):not(:hover)::before {
   content: '';
   position: absolute;
@@ -310,7 +312,9 @@ body {
  * rather than dockview's default flat `border + tabs container
  * background` look.
  */
-.dockview-theme-bridge .dv-popover-anchor > div:has(.dv-tabs-overflow-container) {
+.dockview-theme-bridge
+  .dv-popover-anchor
+  > div:has(.dv-tabs-overflow-container) {
   top: var(--dv-tabs-and-actions-container-height) !important;
   left: auto !important;
   right: 0 !important;
@@ -362,7 +366,8 @@ body {
 
 .dockview-theme-bridge .dv-tabs-overflow-dropdown-default:hover,
 .dockview-theme-bridge .dv-tabs-overflow-dropdown-default:active,
-.dockview-theme-bridge:has(.dv-tabs-overflow-container) .dv-tabs-overflow-dropdown-default {
+.dockview-theme-bridge:has(.dv-tabs-overflow-container)
+  .dv-tabs-overflow-dropdown-default {
   background-color: var(--accent);
   color: var(--accent-foreground);
 }
@@ -475,7 +480,9 @@ body {
  * at `top: -2px` in the 2px margin gap above the row, 8%/8% inset
  * from the sides so it doesn't run edge-to-edge. Vanishes the moment
  * either neighbour is hovered or active, same as the strip. */
-.dockview-theme-bridge .dv-tabs-overflow-container .dv-tab:not(.dv-active-tab):not(:hover)
+.dockview-theme-bridge
+  .dv-tabs-overflow-container
+  .dv-tab:not(.dv-active-tab):not(:hover)
   + .dv-tab:not(.dv-active-tab):not(:hover)::before {
   content: '';
   position: absolute;
@@ -499,7 +506,9 @@ body {
 }
 
 main:not(.fullscreen-note) .milkdown-drop-indicator {
-  left: calc(var(--left-sidebar-width) * var(--left-sidebar-enabled) * -1) !important;
+  left: calc(
+    var(--left-sidebar-width) * var(--left-sidebar-enabled) * -1
+  ) !important;
   top: -40px !important;
 }
 
@@ -565,11 +574,9 @@ main:not(.fullscreen-note) .milkdown-drop-indicator {
   --crepe-color-inline-area: oklch(0.27 0 0);
 
   --crepe-shadow-1:
-    0px 1px 2px 0px rgba(0, 0, 0, 0.55),
-    0px 1px 3px 1px rgba(0, 0, 0, 0.4);
+    0px 1px 2px 0px rgba(0, 0, 0, 0.55), 0px 1px 3px 1px rgba(0, 0, 0, 0.4);
   --crepe-shadow-2:
-    0px 1px 2px 0px rgba(0, 0, 0, 0.55),
-    0px 2px 6px 2px rgba(0, 0, 0, 0.4);
+    0px 1px 2px 0px rgba(0, 0, 0, 0.55), 0px 2px 6px 2px rgba(0, 0, 0, 0.4);
 }
 
 /*
@@ -737,7 +744,9 @@ body.dv-tab-dragging .tl-container * {
   background: transparent;
   color: var(--muted-foreground);
   cursor: pointer;
-  transition: background-color 120ms, color 120ms;
+  transition:
+    background-color 120ms,
+    color 120ms;
 }
 
 .dv-popout-button:hover {

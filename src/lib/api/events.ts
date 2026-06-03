@@ -1,4 +1,7 @@
-import {emit as tauriEmit, listen as tauriListen} from '@tauri-apps/api/event'
+import {
+  emit as tauriEmit,
+  listen as tauriListen
+} from '@tauri-apps/api/event';
 
 import type { SyncReport } from './sync';
 
@@ -18,27 +21,27 @@ import type { SyncReport } from './sync';
  * keep this string in sync if you change it there.
  */
 export interface SyncCompletedPayload {
-    report: SyncReport;
-    notes_pulled_ids: string[];
-    assets_pulled_ids: string[];
+  report: SyncReport;
+  notes_pulled_ids: string[];
+  assets_pulled_ids: string[];
 }
 
 export type TauriEvents = {
-    'fullscreen-note': {noteId: string, title: string}
-    'sync-completed': SyncCompletedPayload
-    'tray-note-created': { note_id: string }
-}
+  'fullscreen-note': { noteId: string; title: string };
+  'sync-completed': SyncCompletedPayload;
+  'tray-note-created': { note_id: string };
+};
 
 export function emit<K extends keyof TauriEvents>(
-    event: K,
-    payload: TauriEvents[K]
+  event: K,
+  payload: TauriEvents[K]
 ) {
-    return tauriEmit(event, payload)
+  return tauriEmit(event, payload);
 }
 
 export function listen<K extends keyof TauriEvents>(
-    event: K,
-    handler: (payload: TauriEvents[K]) => void
+  event: K,
+  handler: (payload: TauriEvents[K]) => void
 ) {
-    return tauriListen(event, (e) => handler(e.payload as TauriEvents[K]))
+  return tauriListen(event, (e) => handler(e.payload as TauriEvents[K]));
 }

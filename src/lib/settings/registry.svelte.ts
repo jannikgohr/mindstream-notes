@@ -67,7 +67,8 @@ const autostartAvailable = () => isTauri() && !isMobile();
 
 export const SETTING_BINDINGS: Record<string, Binding> = {
   'general.startOnLogin': {
-    get: async () => (autostartAvailable() ? await isEnabledAutostart() : false),
+    get: async () =>
+      autostartAvailable() ? await isEnabledAutostart() : false,
     set: async (v) => {
       if (!autostartAvailable()) return;
       if (v) await enableAutostart();
@@ -75,14 +76,16 @@ export const SETTING_BINDINGS: Record<string, Binding> = {
     }
   },
   'general.closeToTray': {
-    get: async () => (isTauri() && !isMobile() ? await getCloseToTray() : false),
+    get: async () =>
+      isTauri() && !isMobile() ? await getCloseToTray() : false,
     set: async (v) => {
       if (!isTauri() || isMobile()) return;
       await setCloseToTray(v === true);
     }
   },
   'general.startInTray': {
-    get: async () => (isTauri() && !isMobile() ? await getStartInTray() : false),
+    get: async () =>
+      isTauri() && !isMobile() ? await getStartInTray() : false,
     set: async (v) => {
       if (!isTauri() || isMobile()) return;
       await setStartInTray(v === true);

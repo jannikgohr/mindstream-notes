@@ -92,7 +92,9 @@
         type="button"
         role="menuitem"
         disabled={item.disabled}
-        class="flex w-full items-center justify-between gap-4 px-3 py-1.5 text-left transition-colors hover:bg-accent hover:text-accent-foreground disabled:cursor-not-allowed disabled:opacity-50 {item.destructive ? 'text-destructive hover:bg-destructive/10 hover:text-destructive' : ''}"
+        class="flex w-full items-center justify-between gap-4 px-3 py-1.5 text-left transition-colors hover:bg-accent hover:text-accent-foreground disabled:cursor-not-allowed disabled:opacity-50 {item.destructive
+          ? 'text-destructive hover:bg-destructive/10 hover:text-destructive'
+          : ''}"
         onclick={() => invoke(item)}
       >
         <span>{item.label}</span>

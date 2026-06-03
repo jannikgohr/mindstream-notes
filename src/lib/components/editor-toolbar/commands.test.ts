@@ -331,16 +331,12 @@ describe('applyListAction — multi line', () => {
   });
 
   it('toggles an all-bullet selection off', () => {
-    const s = withSelectionAll(
-      stateOf(makeDoc(ul('one', 'two', 'three')))
-    );
+    const s = withSelectionAll(stateOf(makeDoc(ul('one', 'two', 'three'))));
     expect(structure(run(s, 'bullet'))).toBe('p(one) p(two) p(three)');
   });
 
   it('toggles an all-ordered selection off', () => {
-    const s = withSelectionAll(
-      stateOf(makeDoc(ol('one', 'two', 'three')))
-    );
+    const s = withSelectionAll(stateOf(makeDoc(ol('one', 'two', 'three'))));
     expect(structure(run(s, 'ordered'))).toBe('p(one) p(two) p(three)');
   });
 
@@ -387,16 +383,12 @@ describe('applyListAction — multi line', () => {
 
   it('unifies bullet + ordered to task — listType reset on every item', () => {
     const s = withSelectionAll(stateOf(makeDoc(ul('one'), ol('two'))));
-    expect(structure(run(s, 'task'))).toBe(
-      'ul[li○(p(one)) li○(p(two))]'
-    );
+    expect(structure(run(s, 'task'))).toBe('ul[li○(p(one)) li○(p(two))]');
   });
 
   it('unifies a mix of task and bullet to bullet (clears checked, merges)', () => {
     const s = withSelectionAll(
-      stateOf(
-        makeDoc(ul(li('one', false), li('two', true)), ul('three'))
-      )
+      stateOf(makeDoc(ul(li('one', false), li('two', true)), ul('three')))
     );
     expect(structure(run(s, 'bullet'))).toBe(
       'ul[li(p(one)) li(p(two)) li(p(three))]'
@@ -404,9 +396,7 @@ describe('applyListAction — multi line', () => {
   });
 
   it('does not toggle off when not every block matches target', () => {
-    const s = withSelectionAll(
-      stateOf(makeDoc(ul('one', 'two'), ol('three')))
-    );
+    const s = withSelectionAll(stateOf(makeDoc(ul('one', 'two'), ol('three'))));
     expect(structure(run(s, 'ordered'))).toBe(
       'ol[li:1.(p(one)) li:2.(p(two)) li:3.(p(three))]'
     );
@@ -421,9 +411,7 @@ describe('applyListAction — multi line', () => {
 
   it('coerces headings in a mixed selection to paragraphs inside one list', () => {
     const s = withSelectionAll(stateOf(makeDoc(h(1, 'title'), p('body'))));
-    expect(structure(run(s, 'bullet'))).toBe(
-      'ul[li(p(title)) li(p(body))]'
-    );
+    expect(structure(run(s, 'bullet'))).toBe('ul[li(p(title)) li(p(body))]');
   });
 
   it('no-ops when the selection touches a code block', () => {
@@ -496,9 +484,7 @@ describe('applyListAction — round-trip', () => {
   //   1st click: bullet + ordered → one merged bullet list
   //   2nd click: that bullet list toggles off
   it('applying bullet twice to a mixed list flattens to paragraphs', () => {
-    const initial = stateOf(
-      makeDoc(ul('one', 'two'), ol('three', 'four'))
-    );
+    const initial = stateOf(makeDoc(ul('one', 'two'), ol('three', 'four')));
     const sel = TextSelection.between(
       initial.doc.resolve(0),
       initial.doc.resolve(initial.doc.content.size)

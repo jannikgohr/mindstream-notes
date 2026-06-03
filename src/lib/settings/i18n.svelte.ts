@@ -38,7 +38,10 @@ export function setLanguage(code: string) {
 }
 
 /** Look up a label by id from the active bundle, with English fallback. */
-export function tLabel(scope: 'categories' | 'sections' | 'settings', id: string): string {
+export function tLabel(
+  scope: 'categories' | 'sections' | 'settings',
+  id: string
+): string {
   const active = i18n.bundle[scope]?.[id];
   if (active?.label) return active.label;
   const fb = FALLBACK[scope]?.[id];
@@ -50,25 +53,19 @@ export function tDescription(
   id: string
 ): string | undefined {
   return (
-    i18n.bundle[scope]?.[id]?.description ??
-    FALLBACK[scope]?.[id]?.description
+    i18n.bundle[scope]?.[id]?.description ?? FALLBACK[scope]?.[id]?.description
   );
 }
 
 /** Look up a value label, e.g. tValue('account.serverType', 'managed'). */
 export function tValue(settingId: string, value: string): string {
   const key = `${settingId}.${value}`;
-  return (
-    i18n.bundle.values?.[key] ??
-    FALLBACK.values?.[key] ??
-    value
-  );
+  return i18n.bundle.values?.[key] ?? FALLBACK.values?.[key] ?? value;
 }
 
 export function tUi(key: keyof I18nBundle['ui']): string {
   return i18n.bundle.ui?.[key] ?? FALLBACK.ui?.[key] ?? key;
 }
-
 
 // Initialize language from localStorage on first load (browser-only).
 if (typeof localStorage !== 'undefined') {

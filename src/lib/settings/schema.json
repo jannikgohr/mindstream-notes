@@ -28,7 +28,10 @@
               "scope": "G",
               "type": "custom",
               "customId": "sign-in-form",
-              "showIf": { "id": "account.serverType", "notEquals": "local-only" }
+              "showIf": {
+                "id": "account.serverType",
+                "notEquals": "local-only"
+              }
             },
             {
               "id": "account.collabServerUrl",
@@ -36,14 +39,22 @@
               "type": "text",
               "default": "",
               "placeholder": "wss://collab.example.com",
-              "showIf": { "id": "account.serverType", "notEquals": "local-only" }
+              "showIf": {
+                "id": "account.serverType",
+                "notEquals": "local-only"
+              }
             }
           ]
         },
         {
           "id": "account.sync",
           "settings": [
-            { "id": "account.syncEnabled", "scope": "V", "type": "toggle", "default": false },
+            {
+              "id": "account.syncEnabled",
+              "scope": "V",
+              "type": "toggle",
+              "default": false
+            },
             {
               "id": "account.syncInterval",
               "scope": "V",
@@ -111,7 +122,12 @@
               "default": "system",
               "options": ["light", "dark", "system"]
             },
-            { "id": "appearance.accent", "scope": "V", "type": "color", "default": "#0a0a0a" },
+            {
+              "id": "appearance.accent",
+              "scope": "V",
+              "type": "color",
+              "default": "#0a0a0a"
+            },
             {
               "id": "appearance.density",
               "scope": "V",
@@ -119,7 +135,12 @@
               "default": "cozy",
               "options": ["compact", "cozy", "roomy"]
             },
-            { "id": "appearance.reduceMotion", "scope": "D", "type": "toggle", "default": false }
+            {
+              "id": "appearance.reduceMotion",
+              "scope": "D",
+              "type": "toggle",
+              "default": false
+            }
           ]
         },
         {
@@ -166,7 +187,12 @@
               "default": "alphabetical",
               "options": ["alphabetical", "modified", "created"]
             },
-            { "id": "appearance.foldersFirst", "scope": "V", "type": "toggle", "default": true }
+            {
+              "id": "appearance.foldersFirst",
+              "scope": "V",
+              "type": "toggle",
+              "default": true
+            }
           ]
         }
       ]
@@ -193,18 +219,54 @@
               "min": 1,
               "max": 8
             },
-            { "id": "editor.autoPair", "scope": "V", "type": "toggle", "default": true },
-            { "id": "editor.trimTrailing", "scope": "V", "type": "toggle", "default": true },
-            { "id": "editor.desktopToolbar", "scope": "D", "type": "toggle", "default": true, "platforms": ["desktop"] }
+            {
+              "id": "editor.autoPair",
+              "scope": "V",
+              "type": "toggle",
+              "default": true
+            },
+            {
+              "id": "editor.trimTrailing",
+              "scope": "V",
+              "type": "toggle",
+              "default": true
+            },
+            {
+              "id": "editor.desktopToolbar",
+              "scope": "D",
+              "type": "toggle",
+              "default": true,
+              "platforms": ["desktop"]
+            }
           ]
         },
         {
           "id": "editor.markdown",
           "settings": [
-            { "id": "editor.math", "scope": "V", "type": "toggle", "default": true },
-            { "id": "editor.mermaid", "scope": "V", "type": "toggle", "default": true },
-            { "id": "editor.wikilinks", "scope": "V", "type": "toggle", "default": true },
-            { "id": "editor.footnotes", "scope": "V", "type": "toggle", "default": true }
+            {
+              "id": "editor.math",
+              "scope": "V",
+              "type": "toggle",
+              "default": true
+            },
+            {
+              "id": "editor.mermaid",
+              "scope": "V",
+              "type": "toggle",
+              "default": true
+            },
+            {
+              "id": "editor.wikilinks",
+              "scope": "V",
+              "type": "toggle",
+              "default": true
+            },
+            {
+              "id": "editor.footnotes",
+              "scope": "V",
+              "type": "toggle",
+              "default": true
+            }
           ]
         },
         {
@@ -260,7 +322,12 @@
         {
           "id": "editor.autosave",
           "settings": [
-            { "id": "editor.autoSave", "scope": "V", "type": "toggle", "default": true },
+            {
+              "id": "editor.autoSave",
+              "scope": "V",
+              "type": "toggle",
+              "default": true
+            },
             {
               "id": "editor.autoSaveDebounce",
               "scope": "V",
@@ -290,13 +357,23 @@
               "mode": "file",
               "default": ""
             },
-            { "id": "data.openFolder", "scope": "V", "type": "button", "actionId": "open-data-folder" }
+            {
+              "id": "data.openFolder",
+              "scope": "V",
+              "type": "button",
+              "actionId": "open-data-folder"
+            }
           ]
         },
         {
           "id": "data.trash",
           "settings": [
-            { "id": "data.useTrash", "scope": "V", "type": "toggle", "default": true },
+            {
+              "id": "data.useTrash",
+              "scope": "V",
+              "type": "toggle",
+              "default": true
+            },
             {
               "id": "data.trashRetentionDays",
               "scope": "V",
@@ -317,7 +394,12 @@
         {
           "id": "data.backup",
           "settings": [
-            { "id": "data.backupEnabled", "scope": "V", "type": "toggle", "default": true },
+            {
+              "id": "data.backupEnabled",
+              "scope": "V",
+              "type": "toggle",
+              "default": true
+            },
             {
               "id": "data.backupSchedule",
               "scope": "V",
@@ -326,7 +408,12 @@
               "options": ["daily", "weekly", "manual"],
               "showIf": { "id": "data.backupEnabled", "equals": true }
             },
-            { "id": "data.backupNow", "scope": "V", "type": "button", "actionId": "backup-now" },
+            {
+              "id": "data.backupNow",
+              "scope": "V",
+              "type": "button",
+              "actionId": "backup-now"
+            },
             {
               "id": "data.exportVault",
               "scope": "V",
@@ -350,9 +437,24 @@
         {
           "id": "privacy.telemetry",
           "settings": [
-            { "id": "privacy.usageStats", "scope": "G", "type": "toggle", "default": false },
-            { "id": "privacy.crashReports", "scope": "G", "type": "toggle", "default": true },
-            { "id": "privacy.clearCache", "scope": "D", "type": "button", "actionId": "clear-cache" }
+            {
+              "id": "privacy.usageStats",
+              "scope": "G",
+              "type": "toggle",
+              "default": false
+            },
+            {
+              "id": "privacy.crashReports",
+              "scope": "G",
+              "type": "toggle",
+              "default": true
+            },
+            {
+              "id": "privacy.clearCache",
+              "scope": "D",
+              "type": "button",
+              "actionId": "clear-cache"
+            }
           ]
         }
       ]
@@ -384,7 +486,12 @@
           "settings": [
             { "id": "about.appVersion", "scope": "G", "type": "info" },
             { "id": "about.tauriVersion", "scope": "G", "type": "info" },
-            { "id": "about.checkUpdates", "scope": "G", "type": "button", "actionId": "check-updates" }
+            {
+              "id": "about.checkUpdates",
+              "scope": "G",
+              "type": "button",
+              "actionId": "check-updates"
+            }
           ]
         }
       ]

@@ -97,7 +97,9 @@
   aria-modal="true"
   aria-label={title}
 >
-  <header class="flex h-12 shrink-0 items-center justify-between border-b border-border px-3">
+  <header
+    class="flex h-12 shrink-0 items-center justify-between border-b border-border px-3"
+  >
     <span class="text-sm font-semibold">{title}</span>
     <Button
       variant="ghost"

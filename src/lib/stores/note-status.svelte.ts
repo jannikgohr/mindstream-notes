@@ -18,12 +18,7 @@
  * onDestroy so closing a panel removes its row.
  */
 
-export type SavingState =
-  | 'idle'
-  | 'pending'
-  | 'saving'
-  | 'saved'
-  | 'error';
+export type SavingState = 'idle' | 'pending' | 'saving' | 'saved' | 'error';
 
 export interface NoteStatus {
   /** Live-collab relay is configured for this note (URL set, room

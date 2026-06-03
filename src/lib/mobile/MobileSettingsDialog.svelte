@@ -39,7 +39,7 @@
   const activeCategory = $derived<Category | null>(
     activeCategoryId === null
       ? null
-      : visibleCategories.find((c) => c.id === activeCategoryId) ?? null
+      : (visibleCategories.find((c) => c.id === activeCategoryId) ?? null)
   );
 
   /** Reset to the category list whenever the dialog closes. */
@@ -76,7 +76,9 @@
     >
       {#if activeCategory === null}
         <!-- ====================== Category list ====================== -->
-        <header class="flex h-12 shrink-0 items-center justify-between border-b border-border bg-card px-2">
+        <header
+          class="flex h-12 shrink-0 items-center justify-between border-b border-border bg-card px-2"
+        >
           <div class="w-9 shrink-0"></div>
           <Dialog.Title class="truncate text-sm font-semibold">
             {tUi('title')}
@@ -107,7 +109,9 @@
         </nav>
       {:else}
         <!-- ====================== Category detail ====================== -->
-        <header class="flex h-12 shrink-0 items-center gap-1 border-b border-border bg-card px-2">
+        <header
+          class="flex h-12 shrink-0 items-center gap-1 border-b border-border bg-card px-2"
+        >
           <button
             type="button"
             class="flex size-9 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -140,7 +144,9 @@
               : []}
             {#if sectionSettings.length > 0}
               <div class="mb-6">
-                <h3 class="mb-2 border-b border-border pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                <h3
+                  class="mb-2 border-b border-border pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+                >
                   {tLabel('sections', sec.id)}
                 </h3>
                 <div class="divide-y divide-border">

@@ -108,16 +108,22 @@ export async function openNoteWindow(
 
   // Surface failures so future regressions show up in the console instead
   // of silently producing a half-broken window.
-  win.once('tauri://error', (e) => {
-    console.error('[openNoteWindow] failed to spawn', id, e);
-  }).then();
+  win
+    .once('tauri://error', (e) => {
+      console.error('[openNoteWindow] failed to spawn', id, e);
+    })
+    .then();
 
   if (panelGroup) {
     const activePanel: IDockviewPanel | undefined = panelGroup?.activePanel;
 
     if (!activePanel || !dock) {
-      console.error('[openNoteWindow] failed to spawn because activePanel or dockApi was null',
-          id, activePanel, dock);
+      console.error(
+        '[openNoteWindow] failed to spawn because activePanel or dockApi was null',
+        id,
+        activePanel,
+        dock
+      );
       return;
     }
 
@@ -133,7 +139,7 @@ export async function openNoteWindow(
 
     // 2. Close the original panel once the window is ready
     await win.once('tauri://webview-created', () => {
-      dock.removePanel(activePanel)
+      dock.removePanel(activePanel);
     });
 
     // 3. Re-open the panel when the popout window is closed
@@ -147,7 +153,9 @@ export async function openNoteWindow(
         component: panelConfig.component,
         params: panelConfig.params,
         title: panelConfig.title,
-        ...(targetGroup ? { position: { referenceGroup: originalGroupId } } : {})
+        ...(targetGroup
+          ? { position: { referenceGroup: originalGroupId } }
+          : {})
       });
 
       // Close the Tauri window

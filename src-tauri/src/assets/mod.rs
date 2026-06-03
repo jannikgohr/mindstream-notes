@@ -178,7 +178,8 @@ pub fn fetch_drawing_asset(db: tauri::State<'_, Db>, id: String) -> Result<Asset
 
 #[tauri::command]
 pub fn import_pdf_note(db: tauri::State<'_, Db>, input: ImportPdfNote) -> Result<Note, String> {
-    db.with_conn(|c| import_pdf_note_inner(c, input)).map_err(Into::into)
+    db.with_conn(|c| import_pdf_note_inner(c, input))
+        .map_err(Into::into)
 }
 
 #[cfg(test)]

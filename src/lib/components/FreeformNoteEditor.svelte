@@ -49,10 +49,7 @@
   import { CollabProvider } from '$lib/sync/collab-provider';
   import { isMobile } from '$lib/platform';
   import { listen } from '$lib/api/events';
-  import {
-    acquireFullscreen,
-    releaseFullscreen
-  } from '$lib/window/fullscreen';
+  import { acquireFullscreen, releaseFullscreen } from '$lib/window/fullscreen';
   import { isTauri } from '$lib/api';
   import {
     attachToolbarLayout,
@@ -484,7 +481,9 @@
       role="status"
     >
       <Trash2 class="size-3.5 shrink-0" aria-hidden="true" />
-      <span>This note is in the trash and is read-only. Restore it to edit.</span>
+      <span
+        >This note is in the trash and is read-only. Restore it to edit.</span
+      >
     </div>
   {/if}
   <!--
@@ -495,11 +494,15 @@
   -->
   <div class="relative min-h-0 w-full flex-1">
     {#if loading}
-      <p class="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">
+      <p
+        class="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground"
+      >
         Loading drawing…
       </p>
     {:else if loadError}
-      <p class="absolute inset-0 flex items-center justify-center px-2 text-sm text-destructive">
+      <p
+        class="absolute inset-0 flex items-center justify-center px-2 text-sm text-destructive"
+      >
         Couldn't load drawing: {loadError}
       </p>
     {/if}
@@ -513,6 +516,9 @@
       as a descendant of this div, so the 2-class selectors in the
       stylesheet attach without !important.
     -->
-    <div bind:this={mountEl} class="freeform-canvas-host absolute inset-0"></div>
+    <div
+      bind:this={mountEl}
+      class="freeform-canvas-host absolute inset-0"
+    ></div>
   </div>
 </div>

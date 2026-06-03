@@ -1,14 +1,14 @@
 <script lang="ts">
-  import { PanelLeft, PanelRight, Settings as SettingsIcon } from 'lucide-svelte';
+  import {
+    PanelLeft,
+    PanelRight,
+    Settings as SettingsIcon
+  } from 'lucide-svelte';
   import { Button } from '$lib/components/ui/button';
   import { Separator } from '$lib/components/ui/separator';
   import ThemeToggle from '$lib/components/ThemeToggle.svelte';
   import WindowControls from '$lib/components/WindowControls.svelte';
-  import {
-    ui,
-    toggleLeftSidebar,
-    toggleRightSidebar
-  } from '$lib/state.svelte';
+  import { ui, toggleLeftSidebar, toggleRightSidebar } from '$lib/state.svelte';
   import { openSettings } from '$lib/settings/store.svelte';
 </script>
 
@@ -26,7 +26,10 @@
     <PanelLeft class="size-4" />
   </Button>
   <Separator orientation="vertical" class="mx-1 h-5" />
-  <span data-tauri-drag-region class="text-xs font-medium text-muted-foreground">
+  <span
+    data-tauri-drag-region
+    class="text-xs font-medium text-muted-foreground"
+  >
     Mindstream Notes
   </span>
 

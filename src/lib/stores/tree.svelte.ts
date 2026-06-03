@@ -91,7 +91,10 @@ export async function createNoteIn(
   return note.id;
 }
 
-export async function importPdfIn(parentId: string | null, file: File): Promise<string> {
+export async function importPdfIn(
+  parentId: string | null,
+  file: File
+): Promise<string> {
   const bytes = Array.from(new Uint8Array(await file.arrayBuffer()));
   const title = file.name.replace(/\.pdf$/i, '').trim() || 'Untitled PDF';
   const note = await api.importPdfNote({
@@ -164,7 +167,10 @@ export async function setNoteBody(id: string, body: string): Promise<void> {
  * tree refetch. Backed by the SQLite `notes.favourite` column and
  * carried across devices via the v2 NotePayload (see sync/mod.rs).
  */
-export async function setNoteFavourite(id: string, favourite: boolean): Promise<void> {
+export async function setNoteFavourite(
+  id: string,
+  favourite: boolean
+): Promise<void> {
   await api.saveNote({ id, favourite });
   const existing = tree.notesById[id];
   if (existing) {
@@ -229,7 +235,9 @@ export function allTagsInUse(): string[] {
     if (n.trashed) continue;
     for (const t of n.tags) set.add(t);
   }
-  return [...set].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+  return [...set].sort((a, b) =>
+    a.localeCompare(b, undefined, { sensitivity: 'base' })
+  );
 }
 
 /**
@@ -265,7 +273,10 @@ export async function createCollectionIn(
   parentId: string | null,
   name: string
 ): Promise<string> {
-  const c = await api.createCollection({ name, parent_collection_id: parentId });
+  const c = await api.createCollection({
+    name,
+    parent_collection_id: parentId
+  });
   await loadTree();
   return c.id;
 }

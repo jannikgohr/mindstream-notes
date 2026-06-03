@@ -147,11 +147,20 @@
     "updater.unsupportedLinux.message": "Mindstream Notes was installed from a system package (rpm / deb), which can only be updated through your distribution. Download the latest version from https://github.com/jannikgohr/mindstream-notes/releases/latest and reinstall, or use the AppImage build for in-app updates."
   },
   "categories": {
-    "account": { "label": "Account & Sync", "description": "Connect to a managed or self-hosted server, manage devices and sync." },
-    "general": { "label":  "General" },
-    "appearance": { "label": "Appearance", "description": "Theme, typography, file-tree look." },
+    "account": {
+      "label": "Account & Sync",
+      "description": "Connect to a managed or self-hosted server, manage devices and sync."
+    },
+    "general": { "label": "General" },
+    "appearance": {
+      "label": "Appearance",
+      "description": "Theme, typography, file-tree look."
+    },
     "editor": { "label": "Editor", "description": "How notes feel to write." },
-    "data": { "label": "Data & Backup", "description": "Database location, trash, backup, import/export." },
+    "data": {
+      "label": "Data & Backup",
+      "description": "Database location, trash, backup, import/export."
+    },
     "privacy": { "label": "Privacy" },
     "language": { "label": "Language" },
     "about": { "label": "About" }
@@ -176,16 +185,28 @@
     "about.version": { "label": "Version" }
   },
   "settings": {
-    "account.serverType": { "label": "Server type", "description": "Where your notes live." },
+    "account.serverType": {
+      "label": "Server type",
+      "description": "Where your notes live."
+    },
     "account.serverUrl": { "label": "Server URL" },
     "account.signInForm": { "label": "Sign in" },
-    "account.collabServerUrl": { "label": "Live collab server", "description": "WebSocket URL of the encrypted relay used for real-time co-editing. Leave empty to disable live collab; periodic sync still works." },
+    "account.collabServerUrl": {
+      "label": "Live collab server",
+      "description": "WebSocket URL of the encrypted relay used for real-time co-editing. Leave empty to disable live collab; periodic sync still works."
+    },
     "account.syncEnabled": { "label": "Enable sync" },
     "account.syncInterval": { "label": "Sync frequency" },
     "account.conflict": { "label": "Conflict resolution" },
     "general.startOnLogin": { "label": "Start on login" },
-    "general.closeToTray": { "label": "Close to system tray", "description": "Hide the main window instead of quitting when you close it." },
-    "general.startInTray": { "label": "Start in system tray", "description": "When launched by your system at login, start hidden in the tray instead of opening the window." },
+    "general.closeToTray": {
+      "label": "Close to system tray",
+      "description": "Hide the main window instead of quitting when you close it."
+    },
+    "general.startInTray": {
+      "label": "Start in system tray",
+      "description": "When launched by your system at login, start hidden in the tray instead of opening the window."
+    },
     "appearance.mode": { "label": "Mode" },
     "appearance.accent": { "label": "Accent colour" },
     "appearance.density": { "label": "UI density" },
@@ -199,7 +220,10 @@
     "editor.tabSize": { "label": "Tab size" },
     "editor.autoPair": { "label": "Auto-pair brackets" },
     "editor.trimTrailing": { "label": "Trim trailing whitespace on save" },
-    "editor.desktopToolbar": { "label": "Show formatting toolbar", "description": "Adds an icon toolbar above each note for quick formatting." },
+    "editor.desktopToolbar": {
+      "label": "Show formatting toolbar",
+      "description": "Adds an icon toolbar above each note for quick formatting."
+    },
     "editor.math": { "label": "KaTeX math" },
     "editor.mermaid": { "label": "Mermaid diagrams" },
     "editor.wikilinks": { "label": "Wikilinks [[...]]" },
@@ -217,7 +241,10 @@
     },
     "editor.autoSave": { "label": "Auto-save" },
     "editor.autoSaveDebounce": { "label": "Auto-save debounce" },
-    "data.databasePath": { "label": "Database location", "description": "The SQLite/DB file your notes live in." },
+    "data.databasePath": {
+      "label": "Database location",
+      "description": "The SQLite/DB file your notes live in."
+    },
     "data.openFolder": { "label": "Open data folder" },
     "data.useTrash": { "label": "Use trash on delete" },
     "data.trashRetentionDays": { "label": "Trash retention" },

@@ -58,12 +58,16 @@
 <div class="pointer-events-none absolute inset-0 z-40">
   <!-- Stack anchored bottom-right. pointer-events re-enabled on the
        interactive children only so the rest of the screen stays tappable. -->
-  <div class="pointer-events-none absolute bottom-4 right-4 flex flex-col items-end gap-3">
+  <div
+    class="pointer-events-none absolute bottom-4 right-4 flex flex-col items-end gap-3"
+  >
     {#if mobileState.fabExpanded}
       {#each actions as a (a.id)}
         {@const Icon = a.icon}
         <div class="pointer-events-auto flex items-center gap-2">
-          <span class="rounded-md bg-card px-2 py-1 text-xs font-medium shadow-md">
+          <span
+            class="rounded-md bg-card px-2 py-1 text-xs font-medium shadow-md"
+          >
             {a.label}
           </span>
           <button
@@ -85,7 +89,9 @@
       class:rotate-45={mobileState.fabExpanded}
       onclick={toggleFabExpanded}
       aria-expanded={mobileState.fabExpanded}
-      aria-label={mobileState.fabExpanded ? 'Close action menu' : 'More actions'}
+      aria-label={mobileState.fabExpanded
+        ? 'Close action menu'
+        : 'More actions'}
       title={mobileState.fabExpanded ? 'Close' : 'More actions'}
     >
       {#if mobileState.fabExpanded}

@@ -160,7 +160,10 @@ function detectListKindAt($pos: ResolvedPos): ListKind | null {
   let listItemChecked: unknown = null;
   for (let d = $pos.depth; d >= 0; d--) {
     const name = $pos.node(d).type.name;
-    if (parentList === null && (name === 'bullet_list' || name === 'ordered_list')) {
+    if (
+      parentList === null &&
+      (name === 'bullet_list' || name === 'ordered_list')
+    ) {
       parentList = name;
     }
     if (!foundListItem && name === 'list_item') {
@@ -178,9 +181,10 @@ function detectListKindAt($pos: ResolvedPos): ListKind | null {
  *  Returns `null` entries for blocks that aren't in any list. Also flags
  *  whether the range crosses a code block (lists can't wrap code, so we
  *  bail out of the list action in that case). */
-function inspectSelectionBlocks(
-  state: EditorState
-): { blocks: (ListKind | null)[]; hasCodeBlock: boolean } {
+function inspectSelectionBlocks(state: EditorState): {
+  blocks: (ListKind | null)[];
+  hasCodeBlock: boolean;
+} {
   const { from, to } = state.selection;
   const blocks: (ListKind | null)[] = [];
   let hasCodeBlock = false;
@@ -507,8 +511,7 @@ function wrapBlockInNewList(
   };
   const item = types.listItem.create(itemAttrs, inner);
 
-  const listType =
-    target === 'ordered' ? types.orderedList : types.bulletList;
+  const listType = target === 'ordered' ? types.orderedList : types.bulletList;
   const newList = listType.create(null, item);
 
   tr.replaceWith(pos, pos + block.nodeSize, newList);
@@ -633,23 +636,91 @@ const insertMermaid = (ctx: Ctx) => {
 // -- Catalogue ---------------------------------------------------------------
 
 export const TOOLBAR_ITEMS: ToolbarItem[] = [
-  { kind: 'leaf',  id: 'undo',   labelKey: 'editor.toolbar.undo',   icon: Undo2,  action: undo },
-  { kind: 'leaf',  id: 'redo',   labelKey: 'editor.toolbar.redo',   icon: Redo2,  action: redo },
-  { kind: 'leaf',  id: 'bold',   labelKey: 'editor.toolbar.bold',   icon: Bold,   action: toggleBold,   isActive: isBoldActive },
-  { kind: 'leaf',  id: 'italic', labelKey: 'editor.toolbar.italic', icon: Italic, action: toggleItalic, isActive: isItalicActive },
+  {
+    kind: 'leaf',
+    id: 'undo',
+    labelKey: 'editor.toolbar.undo',
+    icon: Undo2,
+    action: undo
+  },
+  {
+    kind: 'leaf',
+    id: 'redo',
+    labelKey: 'editor.toolbar.redo',
+    icon: Redo2,
+    action: redo
+  },
+  {
+    kind: 'leaf',
+    id: 'bold',
+    labelKey: 'editor.toolbar.bold',
+    icon: Bold,
+    action: toggleBold,
+    isActive: isBoldActive
+  },
+  {
+    kind: 'leaf',
+    id: 'italic',
+    labelKey: 'editor.toolbar.italic',
+    icon: Italic,
+    action: toggleItalic,
+    isActive: isItalicActive
+  },
   {
     kind: 'group',
     id: 'text',
     labelKey: 'editor.toolbar.text.group',
     icon: Type,
     items: [
-      { kind: 'leaf', id: 'p',  labelKey: 'editor.toolbar.text.normal', icon: Pilcrow,  action: turnIntoParagraph },
-      { kind: 'leaf', id: 'h1', labelKey: 'editor.toolbar.text.h1',     icon: Heading1, action: turnIntoHeading(1) },
-      { kind: 'leaf', id: 'h2', labelKey: 'editor.toolbar.text.h2',     icon: Heading2, action: turnIntoHeading(2) },
-      { kind: 'leaf', id: 'h3', labelKey: 'editor.toolbar.text.h3',     icon: Heading3, action: turnIntoHeading(3) },
-      { kind: 'leaf', id: 'h4', labelKey: 'editor.toolbar.text.h4',     icon: Heading4, action: turnIntoHeading(4) },
-      { kind: 'leaf', id: 'h5', labelKey: 'editor.toolbar.text.h5',     icon: Heading5, action: turnIntoHeading(5) },
-      { kind: 'leaf', id: 'h6', labelKey: 'editor.toolbar.text.h6',     icon: Heading6, action: turnIntoHeading(6) }
+      {
+        kind: 'leaf',
+        id: 'p',
+        labelKey: 'editor.toolbar.text.normal',
+        icon: Pilcrow,
+        action: turnIntoParagraph
+      },
+      {
+        kind: 'leaf',
+        id: 'h1',
+        labelKey: 'editor.toolbar.text.h1',
+        icon: Heading1,
+        action: turnIntoHeading(1)
+      },
+      {
+        kind: 'leaf',
+        id: 'h2',
+        labelKey: 'editor.toolbar.text.h2',
+        icon: Heading2,
+        action: turnIntoHeading(2)
+      },
+      {
+        kind: 'leaf',
+        id: 'h3',
+        labelKey: 'editor.toolbar.text.h3',
+        icon: Heading3,
+        action: turnIntoHeading(3)
+      },
+      {
+        kind: 'leaf',
+        id: 'h4',
+        labelKey: 'editor.toolbar.text.h4',
+        icon: Heading4,
+        action: turnIntoHeading(4)
+      },
+      {
+        kind: 'leaf',
+        id: 'h5',
+        labelKey: 'editor.toolbar.text.h5',
+        icon: Heading5,
+        action: turnIntoHeading(5)
+      },
+      {
+        kind: 'leaf',
+        id: 'h6',
+        labelKey: 'editor.toolbar.text.h6',
+        icon: Heading6,
+        action: turnIntoHeading(6)
+      }
     ]
   },
   {
@@ -658,9 +729,27 @@ export const TOOLBAR_ITEMS: ToolbarItem[] = [
     labelKey: 'editor.toolbar.list.group',
     icon: List,
     items: [
-      { kind: 'leaf', id: 'bullet',  labelKey: 'editor.toolbar.list.bullet',  icon: List,        action: turnIntoBulletList },
-      { kind: 'leaf', id: 'ordered', labelKey: 'editor.toolbar.list.ordered', icon: ListOrdered, action: turnIntoOrderedList },
-      { kind: 'leaf', id: 'task',    labelKey: 'editor.toolbar.list.task',    icon: ListTodo,    action: turnIntoTaskList }
+      {
+        kind: 'leaf',
+        id: 'bullet',
+        labelKey: 'editor.toolbar.list.bullet',
+        icon: List,
+        action: turnIntoBulletList
+      },
+      {
+        kind: 'leaf',
+        id: 'ordered',
+        labelKey: 'editor.toolbar.list.ordered',
+        icon: ListOrdered,
+        action: turnIntoOrderedList
+      },
+      {
+        kind: 'leaf',
+        id: 'task',
+        labelKey: 'editor.toolbar.list.task',
+        icon: ListTodo,
+        action: turnIntoTaskList
+      }
     ]
   },
   {
@@ -669,11 +758,43 @@ export const TOOLBAR_ITEMS: ToolbarItem[] = [
     labelKey: 'editor.toolbar.advanced.group',
     icon: Sparkles,
     items: [
-      { kind: 'leaf', id: 'image',   labelKey: 'editor.toolbar.advanced.image',   icon: ImageIcon, action: insertImageBlock },
-      { kind: 'leaf', id: 'code',    labelKey: 'editor.toolbar.advanced.code',    icon: Code,      action: insertCodeBlock },
-      { kind: 'leaf', id: 'table',   labelKey: 'editor.toolbar.advanced.table',   icon: TableIcon, action: insertTable },
-      { kind: 'leaf', id: 'math',    labelKey: 'editor.toolbar.advanced.math',    icon: Sigma,     action: insertMath,     gate: 'editor.math' },
-      { kind: 'leaf', id: 'mermaid', labelKey: 'editor.toolbar.advanced.mermaid', icon: Workflow,  action: insertMermaid,  gate: 'editor.mermaid' }
+      {
+        kind: 'leaf',
+        id: 'image',
+        labelKey: 'editor.toolbar.advanced.image',
+        icon: ImageIcon,
+        action: insertImageBlock
+      },
+      {
+        kind: 'leaf',
+        id: 'code',
+        labelKey: 'editor.toolbar.advanced.code',
+        icon: Code,
+        action: insertCodeBlock
+      },
+      {
+        kind: 'leaf',
+        id: 'table',
+        labelKey: 'editor.toolbar.advanced.table',
+        icon: TableIcon,
+        action: insertTable
+      },
+      {
+        kind: 'leaf',
+        id: 'math',
+        labelKey: 'editor.toolbar.advanced.math',
+        icon: Sigma,
+        action: insertMath,
+        gate: 'editor.math'
+      },
+      {
+        kind: 'leaf',
+        id: 'mermaid',
+        labelKey: 'editor.toolbar.advanced.mermaid',
+        icon: Workflow,
+        action: insertMermaid,
+        gate: 'editor.mermaid'
+      }
     ]
   }
 ];
