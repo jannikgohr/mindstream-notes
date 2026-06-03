@@ -51,8 +51,13 @@
 
   interface Props {
     onOpenNote: (id: string) => void;
+    /**
+     * Reserve scrollable space for MobileFab's collapsed two-button stack.
+     * This keeps the final rows and their context-menu triggers reachable.
+     */
+    reserveFabSpace?: boolean;
   }
-  let { onOpenNote }: Props = $props();
+  let { onOpenNote, reserveFabSpace = false }: Props = $props();
 
   /** Locate the children of a given folder id (or roots when null). */
   function childrenOf(folderId: string | null, roots: TreeNode[]): TreeNode[] {
@@ -356,7 +361,7 @@
   }
 </script>
 
-<div class="flex-1 overflow-y-auto px-3 py-3">
+<div class:fab-space={reserveFabSpace} class="mobile-note-list flex-1 overflow-y-auto px-3 pt-3">
   {#if !tree.ready}
     <p class="px-1 py-2 text-sm text-muted-foreground">Loading…</p>
   {:else if tree.error}
@@ -491,6 +496,22 @@
     onClose={closeMenu}
   />
 {/if}
+
+<style>
+  .mobile-note-list {
+    padding-bottom: 0.75rem;
+  }
+
+  .mobile-note-list.fab-space {
+    /*
+     * MobileFab is anchored 1rem from the bottom and its collapsed stack is:
+     * primary 3.5rem + gap 0.75rem + plus 3rem. Keeping this as scrollable
+     * padding lets the last row clear the buttons at max scroll.
+     */
+    padding-bottom: 9.5rem;
+    scroll-padding-bottom: 9.5rem;
+  }
+</style>
 
 {#if moveTarget}
   <MoveToSheet
