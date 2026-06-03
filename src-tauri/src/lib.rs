@@ -119,7 +119,11 @@ pub fn run() {
 
     #[cfg(desktop)]
     let app_handle = tauri::Builder::default()
-        .plugin(tauri_plugin_autostart::Builder::new().arg(AUTOSTART_ARG).build())
+        .plugin(
+            tauri_plugin_autostart::Builder::new()
+                .arg(AUTOSTART_ARG)
+                .build(),
+        )
         .plugin(tauri_plugin_window_state::Builder::new().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .on_window_event(|window, event| {

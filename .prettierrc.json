@@ -5,6 +5,7 @@
   "trailingComma": "none",
   "printWidth": 80,
   "semi": true,
+  "endOfLine": "auto",
   "plugins": ["prettier-plugin-svelte"],
   "overrides": [
     {

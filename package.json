@@ -19,20 +19,16 @@
     "verify": "pnpm check && pnpm test && pnpm build",
     "verify:rust": "cd src-tauri && cargo test",
     "format": "prettier --write \"src/**/*.{js,ts,svelte,json,html,css,md}\" \"*.{js,ts,mjs,cjs,json,md,html,css}\"",
-    "format:check": "prettier --check \"src/**/*.{js,ts,svelte,json,html,css,md}\" \"*.{js,ts,mjs,cjs,json,md,html,css}\"",
+    "format:check": "prettier --check \"src/**/*.{js,ts,svelte,json,html,css,md}\" \"*.{js,ts,mjs,cjs,json,md,html,css}\" && pnpm run format:rust:check",
+    "format:rust": "cargo fmt --manifest-path src-tauri/Cargo.toml && cargo fmt --manifest-path crates/ink-core/Cargo.toml && cargo fmt --manifest-path crates/ink-egui-web/Cargo.toml",
+    "format:rust:check": "cargo fmt --manifest-path src-tauri/Cargo.toml -- --check && cargo fmt --manifest-path crates/ink-core/Cargo.toml -- --check && cargo fmt --manifest-path crates/ink-egui-web/Cargo.toml -- --check",
     "setup-android-cargo": "node src-tauri/scripts/setup-android-cargo.mjs",
     "postinstall": "node src-tauri/scripts/setup-android-cargo.mjs",
     "prepare": "husky"
   },
   "lint-staged": {
     "*.{js,ts,mjs,cjs,svelte,json,html,css,md}": [
-      "prettier --write"
-    ],
-    "src-tauri/**/*.rs": [
-      "rustfmt --edition 2021"
-    ],
-    "crates/**/*.rs": [
-      "rustfmt --edition 2021"
+      "prettier --check"
     ]
   },
   "devDependencies": {

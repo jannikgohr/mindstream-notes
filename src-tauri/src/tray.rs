@@ -8,8 +8,7 @@ use tauri::{
 use crate::{
     db::Db,
     desktop_settings::DesktopSettings,
-    drawing,
-    i18n,
+    drawing, i18n,
     notes::{self, CreateNote},
 };
 
