@@ -6,12 +6,19 @@
     Check,
     ChevronDown,
     FileText,
+    Highlighter,
     Loader2,
+    MessageSquare,
     Minus,
-    Plus
+    MousePointer2,
+    Plus,
+    Trash2
   } from 'lucide-svelte';
+  import * as Y from 'yjs';
   import { Button } from '$lib/components/ui/button';
-  import { fetchDrawingAsset, loadNote } from '$lib/api';
+  import { fetchDrawingAsset, loadNote, saveNote as apiSaveNote } from '$lib/api';
+  import { listen } from '$lib/api/events';
+  import { tree } from '$lib/stores/tree.svelte';
   import {
     clearNoteStatus,
     setNoteStatus
@@ -27,11 +34,33 @@
   type PdfDocument = Awaited<ReturnType<PdfJs['getDocument']>['promise']>;
   type PdfPageView = InstanceType<PdfViewer['PDFPageView']>;
   type ZoomMode = 'fixed' | 'fit-width';
+  type PdfTool = 'select' | 'highlight' | 'comment' | 'delete';
+  type PdfAnnotationType = 'highlight' | 'comment';
+  type PdfRect = {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+  type PdfAnnotation = {
+    id: string;
+    type: PdfAnnotationType;
+    pageIndex: number;
+    rects: PdfRect[];
+    color: string;
+    opacity: number;
+    authorId: string;
+    createdAt: string;
+    updatedAt: string;
+    body?: string;
+  };
   type RenderParams = {
     pageNumber: number;
     version: number;
     zoom: number;
     zoomMode: ZoomMode;
+    annotationVersion: number;
+    activeTool: PdfTool;
   };
 
   const MIN_ZOOM = 0.5;
@@ -39,6 +68,10 @@
   const ZOOM_STEP = 1.2;
   const QUICK_ZOOMS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
   const PDF_TO_CSS_UNITS = 96 / 72;
+  const SAVE_DEBOUNCE_MS = 800;
+  const PDF_ANNOTATIONS_MAP = 'pdf_annotations';
+  const HIGHLIGHT_COLOR = '#facc15';
+  const COMMENT_COLOR = '#3b82f6';
 
   let container = $state<HTMLDivElement | null>(null);
   let zoomButton = $state<HTMLButtonElement | null>(null);
@@ -54,16 +87,28 @@
   let firstPageWidth = $state(0);
   let zoomMenuOpen = $state(false);
   let menuRectVersion = $state(0);
+  let annotationVersion = $state(0);
+  let annotations = $state<PdfAnnotation[]>([]);
+  let activeTool = $state<PdfTool>('select');
+  let savingState = $state<'idle' | 'pending' | 'saving' | 'saved' | 'error'>(
+    'idle'
+  );
   let isTrashed = $state(false);
   let pdfjsLib: PdfJs | null = null;
   let pdfViewerLib: PdfViewer | null = null;
+  let yDoc: Y.Doc | null = null;
+  let annotationsMap: Y.Map<PdfAnnotation> | null = null;
+  let yDocUpdateHandler: (() => void) | null = null;
+  let saveReady = false;
+  let saveTimer: ReturnType<typeof setTimeout> | null = null;
+  let unsubSync: (() => void) | null = null;
   let resizeObserver: ResizeObserver | null = null;
 
   $effect(() => {
     setNoteStatus(noteId, {
       collabConfigured: false,
       collabOnline: false,
-      savingState: error ? 'error' : loading ? 'idle' : 'saved',
+      savingState: error ? 'error' : loading ? 'idle' : savingState,
       isTrashed
     });
   });
@@ -87,6 +132,79 @@
 
   function clampZoom(value: number): number {
     return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, value));
+  }
+
+  function createAnnotation(
+    type: PdfAnnotationType,
+    pageIndex: number,
+    rect: PdfRect,
+    body?: string
+  ) {
+    if (!annotationsMap || isTrashed) return;
+    const now = new Date().toISOString();
+    const id = crypto.randomUUID();
+    annotationsMap.set(id, {
+      id,
+      type,
+      pageIndex,
+      rects: [rect],
+      color: type === 'highlight' ? HIGHLIGHT_COLOR : COMMENT_COLOR,
+      opacity: type === 'highlight' ? 0.32 : 0.18,
+      authorId: 'local',
+      createdAt: now,
+      updatedAt: now,
+      body
+    });
+  }
+
+  function deleteAnnotation(id: string) {
+    if (isTrashed) return;
+    annotationsMap?.delete(id);
+  }
+
+  function syncAnnotationsFromYDoc() {
+    annotations = Array.from(annotationsMap?.values() ?? []).sort((a, b) =>
+      a.createdAt.localeCompare(b.createdAt)
+    );
+    annotationVersion += 1;
+  }
+
+  function scheduleSave() {
+    if (isTrashed || !saveReady) return;
+    savingState = 'pending';
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      void flushSave();
+    }, SAVE_DEBOUNCE_MS);
+  }
+
+  async function flushSave() {
+    if (saveTimer) {
+      clearTimeout(saveTimer);
+      saveTimer = null;
+    }
+    const doc = yDoc;
+    if (!doc) return;
+    try {
+      savingState = 'saving';
+      const yrsState = Array.from(Y.encodeStateAsUpdate(doc));
+      await apiSaveNote({ id: noteId, yrs_state: yrsState });
+      const existing = tree.notesById[noteId];
+      if (existing) {
+        tree.notesById[noteId] = {
+          ...existing,
+          modified: new Date().toISOString()
+        };
+      }
+      savingState = 'saved';
+    } catch (err) {
+      savingState = 'error';
+      console.error('[PdfNoteViewer] save failed', err);
+    }
+  }
+
+  function setTool(tool: PdfTool) {
+    activeTool = activeTool === tool && tool !== 'select' ? 'select' : tool;
   }
 
   const fitWidthZoom = $derived.by(() => {
@@ -212,6 +330,24 @@
     try {
       const note = await loadNote(noteId);
       isTrashed = note.trashed;
+
+      const localYDoc = new Y.Doc();
+      yDoc = localYDoc;
+      if (note.yrs_state.length > 0) {
+        try {
+          Y.applyUpdate(localYDoc, new Uint8Array(note.yrs_state));
+        } catch (err) {
+          console.warn('[PdfNoteViewer] yrs_state hydration failed', err);
+        }
+      }
+      annotationsMap = localYDoc.getMap<PdfAnnotation>(PDF_ANNOTATIONS_MAP);
+      syncAnnotationsFromYDoc();
+      yDocUpdateHandler = () => {
+        syncAnnotationsFromYDoc();
+        scheduleSave();
+      };
+      localYDoc.on('update', yDocUpdateHandler);
+
       const assetId = pdfAssetIdFromBody(note.body);
       if (!assetId) throw new Error('PDF asset is missing.');
 
@@ -231,8 +367,24 @@
       firstPageWidth = firstPage.getViewport({ scale: 1 }).width;
       pageNumbers = Array.from({ length: pdfDoc.numPages }, (_, i) => i + 1);
       loading = false;
+      savingState = 'saved';
+      saveReady = true;
       await tick();
       bumpRenderVersion();
+
+      void listen('sync-completed', async (payload) => {
+        if (!payload.notes_pulled_ids.includes(noteId) || !yDoc) return;
+        try {
+          const fresh = await loadNote(noteId);
+          if (yDoc && fresh.yrs_state.length > 0) {
+            Y.applyUpdate(yDoc, new Uint8Array(fresh.yrs_state));
+          }
+        } catch (err) {
+          console.warn('[PdfNoteViewer] sync-completed merge failed', err);
+        }
+      }).then((unlisten) => {
+        unsubSync = unlisten;
+      });
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
       loading = false;
@@ -240,8 +392,21 @@
   });
 
   onDestroy(() => {
+    if (saveTimer) {
+      void flushSave();
+    }
+    saveReady = false;
+    unsubSync?.();
+    unsubSync = null;
     resizeObserver?.disconnect();
     void pdfDoc?.cleanup();
+    if (yDoc && yDocUpdateHandler) {
+      yDoc.off('update', yDocUpdateHandler);
+    }
+    yDocUpdateHandler = null;
+    yDoc?.destroy();
+    yDoc = null;
+    annotationsMap = null;
     clearNoteStatus(noteId);
   });
 
@@ -250,6 +415,127 @@
     let cancelled = false;
     let drawGeneration = 0;
     let pageView: PdfPageView | null = null;
+    let currentViewport:
+      | ReturnType<Awaited<ReturnType<PdfDocument['getPage']>>['getViewport']>
+      | null = null;
+
+    function renderAppAnnotations() {
+      const pageEl = pageSurface.querySelector<HTMLElement>('.page');
+      const viewport = currentViewport;
+      if (!pageEl || !viewport) return;
+
+      pageEl.querySelector('.pdf-app-annotation-layer')?.remove();
+      const layer = document.createElement('div');
+      layer.className = 'pdf-app-annotation-layer';
+      layer.style.pointerEvents =
+        current.activeTool === 'select' || isTrashed ? 'none' : 'auto';
+      pageEl.append(layer);
+
+      const pageAnnotations = annotations.filter(
+        (annotation) => annotation.pageIndex === current.pageNumber - 1
+      );
+      for (const annotation of pageAnnotations) {
+        for (const rect of annotation.rects) {
+          const [x1, y1] = viewport.convertToViewportPoint(rect.x, rect.y);
+          const [x2, y2] = viewport.convertToViewportPoint(
+            rect.x + rect.width,
+            rect.y + rect.height
+          );
+          const node = document.createElement('div');
+          node.className = `pdf-app-annotation pdf-app-annotation-${annotation.type}`;
+          node.dataset.annotationId = annotation.id;
+          node.style.left = `${Math.min(x1, x2)}px`;
+          node.style.top = `${Math.min(y1, y2)}px`;
+          node.style.width = `${Math.abs(x2 - x1)}px`;
+          node.style.height = `${Math.abs(y2 - y1)}px`;
+          node.style.setProperty('--annotation-color', annotation.color);
+          node.style.setProperty('--annotation-opacity', `${annotation.opacity}`);
+          if (annotation.body) node.title = annotation.body;
+          if (current.activeTool === 'delete') {
+            node.addEventListener('pointerdown', (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              deleteAnnotation(annotation.id);
+            });
+          }
+          layer.append(node);
+        }
+      }
+
+      if (
+        current.activeTool !== 'highlight' &&
+        current.activeTool !== 'comment'
+      ) {
+        return;
+      }
+
+      layer.addEventListener('pointerdown', (event) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        const pageRect = pageEl.getBoundingClientRect();
+        const startX = event.clientX - pageRect.left;
+        const startY = event.clientY - pageRect.top;
+        const [pdfStartX, pdfStartY] = viewport.convertToPdfPoint(
+          startX,
+          startY
+        );
+        const preview = document.createElement('div');
+        preview.className = `pdf-app-annotation pdf-app-annotation-preview pdf-app-annotation-${current.activeTool}`;
+        layer.append(preview);
+
+        const updatePreview = (clientX: number, clientY: number) => {
+          const x = clientX - pageRect.left;
+          const y = clientY - pageRect.top;
+          preview.style.left = `${Math.min(startX, x)}px`;
+          preview.style.top = `${Math.min(startY, y)}px`;
+          preview.style.width = `${Math.abs(x - startX)}px`;
+          preview.style.height = `${Math.abs(y - startY)}px`;
+        };
+
+        const onMove = (moveEvent: PointerEvent) => {
+          updatePreview(moveEvent.clientX, moveEvent.clientY);
+        };
+        const onUp = (upEvent: PointerEvent) => {
+          window.removeEventListener('pointermove', onMove);
+          window.removeEventListener('pointerup', onUp);
+          preview.remove();
+
+          const endX = upEvent.clientX - pageRect.left;
+          const endY = upEvent.clientY - pageRect.top;
+          const [pdfEndX, pdfEndY] = viewport.convertToPdfPoint(endX, endY);
+          let rect: PdfRect = {
+            x: Math.min(pdfStartX, pdfEndX),
+            y: Math.min(pdfStartY, pdfEndY),
+            width: Math.abs(pdfEndX - pdfStartX),
+            height: Math.abs(pdfEndY - pdfStartY)
+          };
+
+          if (current.activeTool === 'comment' && (rect.width < 4 || rect.height < 4)) {
+            rect = {
+              x: pdfStartX,
+              y: pdfStartY - 36,
+              width: 96,
+              height: 36
+            };
+          }
+          if (rect.width < 4 || rect.height < 4) return;
+
+          const annotationType: PdfAnnotationType =
+            current.activeTool === 'comment' ? 'comment' : 'highlight';
+          const body =
+            annotationType === 'comment' ? window.prompt('Comment')?.trim() : undefined;
+          createAnnotation(
+            annotationType,
+            current.pageNumber - 1,
+            rect,
+            body || undefined
+          );
+        };
+
+        window.addEventListener('pointermove', onMove);
+        window.addEventListener('pointerup', onUp, { once: true });
+      });
+    }
 
     async function draw() {
       const generation = ++drawGeneration;
@@ -274,6 +560,7 @@
         request.zoomMode === 'fit-width' ? fitScale : clampZoom(request.zoom);
       const viewerScale = requestedScale / PDF_TO_CSS_UNITS;
       const viewport = page.getViewport({ scale: requestedScale });
+      currentViewport = viewport;
 
       if (cancelled || generation !== drawGeneration) return;
       const eventBus = new pdfViewer.EventBus();
@@ -293,6 +580,8 @@
       pageView.setPdfPage(page);
       try {
         await pageView.draw();
+        if (cancelled || generation !== drawGeneration) return;
+        renderAppAnnotations();
       } catch (err) {
         if ((err as { name?: string })?.name !== 'RenderingCancelledException') {
           console.warn('[PdfNoteViewer] page render failed', err);
@@ -303,8 +592,17 @@
     void draw();
     return {
       update(next: RenderParams) {
+        const shouldRedraw =
+          next.pageNumber !== current.pageNumber ||
+          next.version !== current.version ||
+          next.zoom !== current.zoom ||
+          next.zoomMode !== current.zoomMode;
         current = next;
-        void draw();
+        if (shouldRedraw) {
+          void draw();
+        } else {
+          renderAppAnnotations();
+        }
       },
       destroy() {
         cancelled = true;
@@ -333,7 +631,60 @@
       role="toolbar"
       aria-label="PDF controls"
     >
-      <div class="flex h-9 items-center justify-end gap-1 pl-2">
+      <div class="flex h-9 items-center justify-between gap-2 pl-2">
+        <div class="inline-flex items-center rounded-md border border-border bg-background p-0.5">
+          <Button
+            variant={activeTool === 'select' ? 'secondary' : 'ghost'}
+            size="icon"
+            class="size-7"
+            onclick={() => setTool('select')}
+            aria-label="Select"
+            title="Select"
+            aria-pressed={activeTool === 'select'}
+          >
+            <MousePointer2 class="size-3.5" aria-hidden="true" />
+          </Button>
+
+          <Button
+            variant={activeTool === 'highlight' ? 'secondary' : 'ghost'}
+            size="icon"
+            class="size-7"
+            onclick={() => setTool('highlight')}
+            aria-label="Highlight"
+            title="Highlight"
+            aria-pressed={activeTool === 'highlight'}
+            disabled={isTrashed}
+          >
+            <Highlighter class="size-3.5" aria-hidden="true" />
+          </Button>
+
+          <Button
+            variant={activeTool === 'comment' ? 'secondary' : 'ghost'}
+            size="icon"
+            class="size-7"
+            onclick={() => setTool('comment')}
+            aria-label="Comment"
+            title="Comment"
+            aria-pressed={activeTool === 'comment'}
+            disabled={isTrashed}
+          >
+            <MessageSquare class="size-3.5" aria-hidden="true" />
+          </Button>
+
+          <Button
+            variant={activeTool === 'delete' ? 'secondary' : 'ghost'}
+            size="icon"
+            class="size-7"
+            onclick={() => setTool('delete')}
+            aria-label="Delete annotation"
+            title="Delete annotation"
+            aria-pressed={activeTool === 'delete'}
+            disabled={isTrashed}
+          >
+            <Trash2 class="size-3.5" aria-hidden="true" />
+          </Button>
+        </div>
+
         <div class="inline-flex items-center rounded-md border border-border bg-background p-0.5">
           <Button
             variant="ghost"
@@ -382,7 +733,14 @@
         {#each pageNumbers as pageNumber (pageNumber)}
           <figure class="flex w-max flex-col items-center gap-1">
             <div
-              use:renderPage={{ pageNumber, version: renderVersion, zoom, zoomMode }}
+              use:renderPage={{
+                pageNumber,
+                version: renderVersion,
+                zoom,
+                zoomMode,
+                annotationVersion,
+                activeTool
+              }}
               class="pdf-page-host pdfViewer bg-white shadow-sm ring-1 ring-border"
             ></div>
             <figcaption class="flex items-center gap-1 text-[10px] text-muted-foreground">
@@ -552,5 +910,38 @@
     height: 100%;
     pointer-events: none;
     background: rgb(0 90 255 / 0.22);
+  }
+
+  :global(.pdf-page-host .pdf-app-annotation-layer) {
+    position: absolute;
+    inset: 0;
+    z-index: 3;
+    overflow: clip;
+    touch-action: none;
+  }
+
+  :global(.pdf-page-host .pdf-app-annotation) {
+    position: absolute;
+    box-sizing: border-box;
+    border-radius: 2px;
+  }
+
+  :global(.pdf-page-host .pdf-app-annotation-highlight) {
+    background: var(--annotation-color);
+    opacity: var(--annotation-opacity);
+  }
+
+  :global(.pdf-page-host .pdf-app-annotation-comment) {
+    border: 2px solid var(--annotation-color);
+    background: color-mix(
+      in srgb,
+      var(--annotation-color) calc(var(--annotation-opacity) * 100%),
+      transparent
+    );
+  }
+
+  :global(.pdf-page-host .pdf-app-annotation-preview) {
+    outline: 1px dashed color-mix(in srgb, var(--foreground) 70%, transparent);
+    background: rgb(250 204 21 / 0.18);
   }
 </style>
