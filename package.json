@@ -18,9 +18,22 @@
     "test:watch": "vitest",
     "verify": "pnpm check && pnpm test && pnpm build",
     "verify:rust": "cd src-tauri && cargo test",
+    "format": "prettier --write \"src/**/*.{js,ts,svelte,json,html,css,md}\" \"*.{js,ts,mjs,cjs,json,md,html,css}\"",
+    "format:check": "prettier --check \"src/**/*.{js,ts,svelte,json,html,css,md}\" \"*.{js,ts,mjs,cjs,json,md,html,css}\"",
     "setup-android-cargo": "node src-tauri/scripts/setup-android-cargo.mjs",
     "postinstall": "node src-tauri/scripts/setup-android-cargo.mjs",
     "prepare": "husky"
+  },
+  "lint-staged": {
+    "*.{js,ts,mjs,cjs,svelte,json,html,css,md}": [
+      "prettier --write"
+    ],
+    "src-tauri/**/*.rs": [
+      "rustfmt --edition 2021"
+    ],
+    "crates/**/*.rs": [
+      "rustfmt --edition 2021"
+    ]
   },
   "devDependencies": {
     "@commitlint/cli": "^21.0.1",
@@ -37,6 +50,9 @@
     "@vitejs/plugin-react": "^4.7.0",
     "happy-dom": "^15.11.0",
     "husky": "^9.1.7",
+    "lint-staged": "^17.0.7",
+    "prettier": "^3.8.3",
+    "prettier-plugin-svelte": "^4.1.0",
     "svelte": "^5.16.0",
     "svelte-check": "^4.1.1",
     "tailwindcss": "^4.0.0",
