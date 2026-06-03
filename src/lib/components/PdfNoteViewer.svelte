@@ -34,6 +34,7 @@
   import { pickCursorColor } from '$lib/editor/cursor-color';
   import { getSettingValue } from '$lib/settings/store.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
+  import { saveAnnotatedPdf } from '$lib/api/pdf-export';
   import { exportAnnotatedPdf } from '$lib/pdf/export-annotated-pdf';
   import {
     PDF_ANNOTATIONS_MAP,
@@ -446,23 +447,14 @@
         sourceBytes,
         annotations.filter((annotation) => !annotation.deletedAt)
       );
-      // Blob copy uses .slice() to give Blob ownership over its own
-      // ArrayBuffer; without it, future GC of `out` could surprise the
-      // download mid-write on some webviews.
-      const blob = new Blob([out.slice().buffer], { type: 'application/pdf' });
-      const url = URL.createObjectURL(blob);
       const title = tree.notesById[noteId]?.title ?? 'pdf-note';
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = `${sanitizeFilename(title)}.pdf`;
-      anchor.rel = 'noopener';
-      document.body.append(anchor);
-      anchor.click();
-      anchor.remove();
-      // Give the webview a moment to spool the download before we drop
-      // the blob URL — Chrome/WebKit both keep the reference alive across
-      // the click, but revoking immediately can race in Tauri's webview.
-      setTimeout(() => URL.revokeObjectURL(url), 1500);
+      // Bridge handles the platform split: native save dialog in Tauri,
+      // <a download> fallback in the browser. Returns false if the user
+      // cancelled the dialog — leave the toolbar quiet in that case.
+      await saveAnnotatedPdf({
+        suggestedName: `${sanitizeFilename(title)}.pdf`,
+        bytes: out
+      });
     } catch (err) {
       exportError = err instanceof Error ? err.message : String(err);
       console.error('[PdfNoteViewer] export failed', err);
