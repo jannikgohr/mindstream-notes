@@ -329,45 +329,47 @@
     </div>
   {:else}
     <div
-      class="flex h-9 shrink-0 items-center justify-end gap-1 border-b border-border bg-background px-2"
+      class="shrink-0 border-b border-border bg-background"
       role="toolbar"
       aria-label="PDF controls"
     >
-      <div class="inline-flex items-center rounded-md border border-border bg-background p-0.5">
-        <Button
-          variant="ghost"
-          size="icon"
-          class="size-7"
-          onclick={() => zoomBy(1 / ZOOM_STEP)}
-          aria-label="Zoom out"
-          title="Zoom out"
-        >
-          <Minus class="size-3.5" aria-hidden="true" />
-        </Button>
+      <div class="flex h-9 items-center justify-end gap-1 pl-2">
+        <div class="inline-flex items-center rounded-md border border-border bg-background p-0.5">
+          <Button
+            variant="ghost"
+            size="icon"
+            class="size-7"
+            onclick={() => zoomBy(1 / ZOOM_STEP)}
+            aria-label="Zoom out"
+            title="Zoom out"
+          >
+            <Minus class="size-3.5" aria-hidden="true" />
+          </Button>
 
-        <button
-          bind:this={zoomButton}
-          type="button"
-          class="flex h-7 min-w-22 items-center justify-center gap-1 rounded-sm px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-          onclick={toggleZoomMenu}
-          aria-haspopup="menu"
-          aria-expanded={zoomMenuOpen}
-          title="Choose zoom"
-        >
-          <span>{zoomLabel}</span>
-          <ChevronDown class="size-3" aria-hidden="true" />
-        </button>
+          <button
+            bind:this={zoomButton}
+            type="button"
+            class="flex h-7 min-w-22 items-center justify-center gap-1 rounded-sm px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+            onclick={toggleZoomMenu}
+            aria-haspopup="menu"
+            aria-expanded={zoomMenuOpen}
+            title="Choose zoom"
+          >
+            <span>{zoomLabel}</span>
+            <ChevronDown class="size-3" aria-hidden="true" />
+          </button>
 
-        <Button
-          variant="ghost"
-          size="icon"
-          class="size-7"
-          onclick={() => zoomBy(ZOOM_STEP)}
-          aria-label="Zoom in"
-          title="Zoom in"
-        >
-          <Plus class="size-3.5" aria-hidden="true" />
-        </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            class="size-7"
+            onclick={() => zoomBy(ZOOM_STEP)}
+            aria-label="Zoom in"
+            title="Zoom in"
+          >
+            <Plus class="size-3.5" aria-hidden="true" />
+          </Button>
+        </div>
       </div>
     </div>
 
