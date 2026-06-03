@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "pnpm build:ink-web && vite dev",
     "build": "pnpm build:ink-web && vite build",
-    "build:ink-web": "rustup target add wasm32-unknown-unknown && wasm-pack build crates/ink-egui-web --target web --out-dir ../../src/lib/ink-web/pkg --out-name ink_egui_web",
+    "build:ink-web": "node src-tauri/scripts/build-ink-web.mjs",
     "preview": "vite preview",
     "check": "pnpm build:ink-web && svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "pnpm build:ink-web && svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
