@@ -123,6 +123,8 @@
     "pdf.signature.add": "Neue Signatur hinzufügen",
     "pdf.signature.delete": "Signatur löschen",
     "pdf.signature.preview": "Signatur-Vorschau",
+    "pdf.export.label": "Annotiertes PDF herunterladen",
+    "pdf.export.failed": "Export fehlgeschlagen",
 
     "updater.checkFailed.title": "Update-Prüfung fehlgeschlagen",
     "updater.checkFailed.message": "Der Update-Server ist nicht erreichbar. Bitte prüfe deine Internetverbindung und versuche es erneut.",

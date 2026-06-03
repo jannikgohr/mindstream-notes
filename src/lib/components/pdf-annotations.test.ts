@@ -8,22 +8,9 @@
 
 import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
+import { PDF_ANNOTATIONS_MAP, type PdfAnnotation } from '$lib/pdf/types';
 
-const PDF_ANNOTATIONS_MAP = 'pdf_annotations';
-
-type Annotation = {
-  id: string;
-  type: 'highlight' | 'comment' | 'ink' | 'signature';
-  pageIndex: number;
-  rects: { x: number; y: number; width: number; height: number }[];
-  color: string;
-  opacity: number;
-  authorId: string;
-  createdAt: string;
-  updatedAt: string;
-  body?: string;
-  resolved?: boolean;
-};
+type Annotation = PdfAnnotation;
 
 function makeAnnotation(overrides: Partial<Annotation> = {}): Annotation {
   return {
