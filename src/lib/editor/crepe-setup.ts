@@ -16,7 +16,7 @@
  *     Keeping the resolution here means consumers can't drift.
  */
 
-import { Crepe, CrepeFeature } from '@milkdown/crepe';
+import { Crepe, type CrepeFeature } from '@milkdown/crepe';
 import { collab } from '@milkdown/plugin-collab';
 // Imported via the kit subpath rather than `@milkdown/plugin-listener`
 // directly — keeps us from declaring a transitive dep that's already
