@@ -30,7 +30,7 @@
   import { onDestroy, onMount, untrack } from 'svelte';
   import * as Y from 'yjs';
   import { Awareness } from 'y-protocols/awareness';
-  import { Trash2, Wifi, WifiOff } from 'lucide-svelte';
+  import { Trash2 } from 'lucide-svelte';
   import { userPrefersMode } from 'mode-watcher';
   import {
     loadNote,
@@ -71,9 +71,7 @@
    *  the island fills it via `position: absolute; inset: 0`. */
   let mountEl: HTMLDivElement | null = $state(null);
   // isMobile() reads navigator.userAgent — unavailable during SSR, so
-  // resolve in onMount. Same dance as NoteEditor.svelte. Drives whether
-  // the inline Saved/Editing/Live indicator renders (mobile only) vs
-  // pushes to the global note-status store for the dockview header.
+  // resolve in onMount. Same dance as NoteEditor.svelte.
   let mobile = $state(false);
 
   let yDoc: Y.Doc | null = null;
@@ -465,17 +463,6 @@
     return out;
   }
 
-  const statusLabel = $derived.by(() => {
-    if (isTrashed) return 'Read-only';
-    switch (savingState) {
-      case 'pending': return 'Editing…';
-      case 'saving': return 'Saving…';
-      case 'saved': return 'Saved';
-      case 'error': return 'Save failed';
-      default: return '';
-    }
-  });
-
   // Mirror our reactive status into the global per-note store so the
   // dockview right-header (NoteStatusIcons.svelte) renders the icons
   // next to the popout button. Same plumbing NoteEditor uses; the
@@ -491,31 +478,6 @@
 </script>
 
 <div class="flex h-full w-full flex-col">
-  {#if mobile && !isTrashed}
-    <!-- Mobile keeps the inline indicator since there's no dockview
-         tab header to host the icon chips. Desktop pushes the same
-         state into the note-status store and the right-header renders
-         it next to the popout button. -->
-    <div
-      class="flex h-5 shrink-0 items-center justify-end gap-2 px-3 text-[10px] uppercase tracking-wider text-muted-foreground"
-      aria-live="polite"
-    >
-      {#if collabConfigured}
-        {#if collabOnline}
-          <span class="flex items-center gap-1" title="Live collab connected">
-            <Wifi class="size-3" aria-hidden="true" />
-            Live
-          </span>
-        {:else}
-          <span class="flex items-center gap-1" title="Live collab disconnected — reconnecting">
-            <WifiOff class="size-3" aria-hidden="true" />
-            Offline
-          </span>
-        {/if}
-      {/if}
-      <span>{statusLabel}</span>
-    </div>
-  {/if}
   {#if isTrashed}
     <div
       class="flex shrink-0 items-center gap-2 border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-xs text-destructive"
@@ -529,8 +491,7 @@
     Tldraw's root sizes itself via `position: absolute; inset: 0`. The
     mount div needs `position: relative` to be that absolute's containing
     block, and `flex-1 min-h-0` so it actually claims the remaining
-    column height inside the surrounding flex layout (h-full alone would
-    overflow the parent if the status row is rendered).
+    column height inside the surrounding flex layout.
   -->
   <div class="relative min-h-0 w-full flex-1">
     {#if loading}

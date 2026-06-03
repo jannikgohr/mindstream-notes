@@ -175,7 +175,7 @@
     <div class="relative flex min-h-0 flex-1 flex-col">
       <MobileBreadcrumb />
       <MobileToolbar />
-      <MobileNoteList onOpenNote={openNote} />
+      <MobileNoteList onOpenNote={openNote} reserveFabSpace={fabVisible} />
       {#if fabVisible}
         <MobileFab primary={primaryAction} actions={secondaryActions} />
       {/if}
