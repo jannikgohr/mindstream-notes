@@ -36,6 +36,19 @@
   import { tUi } from '$lib/settings/i18n.svelte';
   import { saveAnnotatedPdf } from '$lib/api/pdf-export';
   import { exportAnnotatedPdf } from '$lib/pdf/export-annotated-pdf';
+  import { sanitizePdfFilename } from '$lib/pdf/filename';
+  import CommentsSidebar from '$lib/pdf/CommentsSidebar.svelte';
+  import SignaturePadDialog from '$lib/pdf/SignaturePadDialog.svelte';
+  import SignaturePicker from '$lib/pdf/SignaturePicker.svelte';
+  import {
+    loadReusableSignatures,
+    persistReusableSignatures
+  } from '$lib/pdf/signature-storage';
+  import {
+    cloneSignatureSnapshot,
+    strokeBounds,
+    strokePointsAttr
+  } from '$lib/pdf/stroke-utils';
   import {
     PDF_ANNOTATIONS_MAP,
     type PdfAnnotation,
@@ -90,11 +103,6 @@
   const SIGNATURE_COLOR = '#111827';
   const INK_COLOR = '#111827';
   const INK_WIDTH = 2.25;
-  const SIGNATURE_STORAGE_KEY = 'mindstream.pdf.signatures.v1';
-  const LEGACY_SIGNATURE_STORAGE_KEY = 'mindstream.pdf.signature.v1';
-  const SIGNATURE_PAD_WIDTH = 420;
-  const SIGNATURE_PAD_HEIGHT = 168;
-  const SIGNATURE_MENU_WIDTH = 240;
 
   let container = $state<HTMLDivElement | null>(null);
   let zoomButton = $state<HTMLButtonElement | null>(null);
@@ -118,12 +126,8 @@
   let savedSignatures = $state<PdfSignatureSnapshot[]>([]);
   let activeSignatureId = $state<string | null>(null);
   let signatureDialogOpen = $state(false);
-  let signaturePadStrokes = $state<PdfInkStroke[]>([]);
-  let signaturePadDraft = $state<PdfInkStroke | null>(null);
   let signaturePickerOpen = $state(false);
   let signatureButton = $state<HTMLButtonElement | null>(null);
-  let signaturePickerEl = $state<HTMLDivElement | null>(null);
-  let signaturePickerRectVersion = $state(0);
   let savingState = $state<'idle' | 'pending' | 'saving' | 'saved' | 'error'>(
     'idle'
   );
@@ -186,81 +190,8 @@
     return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, value));
   }
 
-  function strokePointsAttr(points: PdfStrokePoint[]): string {
-    return points.map((point) => `${point.x},${point.y}`).join(' ');
-  }
-
-  function strokeBounds(points: PdfStrokePoint[], padding = 0): PdfRect {
-    let minX = Number.POSITIVE_INFINITY;
-    let minY = Number.POSITIVE_INFINITY;
-    let maxX = Number.NEGATIVE_INFINITY;
-    let maxY = Number.NEGATIVE_INFINITY;
-    for (const point of points) {
-      minX = Math.min(minX, point.x);
-      minY = Math.min(minY, point.y);
-      maxX = Math.max(maxX, point.x);
-      maxY = Math.max(maxY, point.y);
-    }
-    if (!Number.isFinite(minX)) {
-      return { x: 0, y: 0, width: 0, height: 0 };
-    }
-    return {
-      x: minX - padding,
-      y: minY - padding,
-      width: maxX - minX + padding * 2,
-      height: maxY - minY + padding * 2
-    };
-  }
-
-  function cloneSignatureSnapshot(
-    signature: PdfSignatureSnapshot
-  ): PdfSignatureSnapshot {
-    return {
-      id: signature.id,
-      width: signature.width,
-      height: signature.height,
-      strokes: signature.strokes.map((stroke) => ({
-        id: stroke.id,
-        color: stroke.color,
-        width: stroke.width,
-        points: stroke.points.map((point) => ({ ...point }))
-      }))
-    };
-  }
-
-  function loadReusableSignatures(): PdfSignatureSnapshot[] {
-    try {
-      const raw = localStorage.getItem(SIGNATURE_STORAGE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw) as PdfSignatureSnapshot[];
-        if (Array.isArray(parsed)) {
-          return parsed
-            .filter(
-              (sig) => Array.isArray(sig?.strokes) && sig.strokes.length > 0
-            )
-            .map((sig) => ({ ...sig, id: sig.id ?? crypto.randomUUID() }));
-        }
-      }
-      const legacy = localStorage.getItem(LEGACY_SIGNATURE_STORAGE_KEY);
-      if (legacy) {
-        const parsed = JSON.parse(legacy) as PdfSignatureSnapshot;
-        if (Array.isArray(parsed?.strokes) && parsed.strokes.length > 0) {
-          const migrated: PdfSignatureSnapshot[] = [
-            { ...parsed, id: crypto.randomUUID() }
-          ];
-          localStorage.setItem(SIGNATURE_STORAGE_KEY, JSON.stringify(migrated));
-          localStorage.removeItem(LEGACY_SIGNATURE_STORAGE_KEY);
-          return migrated;
-        }
-      }
-      return [];
-    } catch {
-      return [];
-    }
-  }
-
   function persistSignatures() {
-    localStorage.setItem(SIGNATURE_STORAGE_KEY, JSON.stringify(savedSignatures));
+    persistReusableSignatures(savedSignatures);
   }
 
   function appendSignature(signature: PdfSignatureSnapshot) {
@@ -296,9 +227,18 @@
 
   function openSignaturePad() {
     signaturePickerOpen = false;
-    signaturePadDraft = null;
-    signaturePadStrokes = [];
     signatureDialogOpen = true;
+  }
+
+  function handleSignatureSaved(signature: PdfSignatureSnapshot) {
+    appendSignature(signature);
+    signatureDialogOpen = false;
+    activeTool = 'signature';
+  }
+
+  function handleSignatureCancelled() {
+    signatureDialogOpen = false;
+    if (savedSignatures.length === 0) activeTool = 'select';
   }
 
   function createAnnotation(
@@ -422,17 +362,6 @@
     }
   }
 
-  function sanitizeFilename(name: string): string {
-    // Strip the characters Windows / macOS refuse, collapse whitespace,
-    // and fall back to a sensible default so the <a download> attribute
-    // never resolves to an empty string.
-    const cleaned = name
-      .replace(/[\\/:*?"<>|]+/g, '')
-      .replace(/\s+/g, ' ')
-      .trim();
-    return cleaned.slice(0, 120) || 'pdf-note';
-  }
-
   async function downloadAnnotatedPdf() {
     if (exportInProgress) return;
     if (!pdfDoc) return;
@@ -452,7 +381,7 @@
       // <a download> fallback in the browser. Returns false if the user
       // cancelled the dialog — leave the toolbar quiet in that case.
       await saveAnnotatedPdf({
-        suggestedName: `${sanitizeFilename(title)}.pdf`,
+        suggestedName: `${sanitizePdfFilename(title)}.pdf`,
         bytes: out
       });
     } catch (err) {
@@ -471,7 +400,6 @@
       }
       if (activeTool === 'signature') {
         signaturePickerOpen = !signaturePickerOpen;
-        signaturePickerRectVersion += 1;
         return;
       }
       if (!activeSignatureId) activeSignatureId = savedSignatures[0].id;
@@ -482,92 +410,14 @@
     activeTool = activeTool === tool && tool !== 'select' ? 'select' : tool;
   }
 
-  function signaturePadPoint(event: PointerEvent): PdfStrokePoint {
-    const rect = (event.currentTarget as SVGSVGElement).getBoundingClientRect();
-    const x =
-      ((event.clientX - rect.left) / Math.max(1, rect.width)) *
-      SIGNATURE_PAD_WIDTH;
-    const y =
-      ((event.clientY - rect.top) / Math.max(1, rect.height)) *
-      SIGNATURE_PAD_HEIGHT;
-    return {
-      x: Math.min(SIGNATURE_PAD_WIDTH, Math.max(0, x)),
-      y: Math.min(SIGNATURE_PAD_HEIGHT, Math.max(0, y)),
-      pressure: event.pressure || 1
-    };
-  }
-
-  function pushSignaturePadPoint(event: PointerEvent) {
-    if (!signaturePadDraft) return;
-    const point = signaturePadPoint(event);
-    const previous =
-      signaturePadDraft.points[signaturePadDraft.points.length - 1];
-    if (previous && Math.hypot(point.x - previous.x, point.y - previous.y) < 1.5) {
-      return;
-    }
-    signaturePadDraft = {
-      ...signaturePadDraft,
-      points: [...signaturePadDraft.points, point]
-    };
-  }
-
-  function beginSignaturePadStroke(event: PointerEvent) {
-    if (event.button !== 0) return;
-    event.preventDefault();
-    (event.currentTarget as SVGSVGElement).setPointerCapture(event.pointerId);
-    signaturePadDraft = {
-      id: crypto.randomUUID(),
-      points: [signaturePadPoint(event)],
-      color: SIGNATURE_COLOR,
-      width: 3.5
-    };
-  }
-
-  function finishSignaturePadStroke(event: PointerEvent) {
-    if (!signaturePadDraft) return;
-    pushSignaturePadPoint(event);
-    const draft = signaturePadDraft;
-    signaturePadDraft = null;
-    if (draft.points.length < 2) return;
-    signaturePadStrokes = [...signaturePadStrokes, draft];
-  }
-
-  function clearSignaturePad() {
-    signaturePadDraft = null;
-    signaturePadStrokes = [];
-  }
-
-  function closeSignatureDialog() {
-    signatureDialogOpen = false;
-    signaturePadDraft = null;
-    signaturePadStrokes = [];
-    if (savedSignatures.length === 0) activeTool = 'select';
-  }
-
-  function saveSignatureFromPad() {
-    if (signaturePadStrokes.length === 0) return;
-    const signature: PdfSignatureSnapshot = {
-      id: crypto.randomUUID(),
-      width: SIGNATURE_PAD_WIDTH,
-      height: SIGNATURE_PAD_HEIGHT,
-      strokes: signaturePadStrokes.map((stroke) => ({
-        ...stroke,
-        points: stroke.points.map((point) => ({ ...point }))
-      }))
-    };
-    appendSignature(signature);
-    signatureDialogOpen = false;
-    signaturePadDraft = null;
-    signaturePadStrokes = [];
-    activeTool = 'signature';
-  }
-
   const fitWidthZoom = $derived.by(() => {
     if (!container || firstPageWidth <= 0) return 1;
     return clampZoom((container.clientWidth - 32) / firstPageWidth);
   });
 
-  const effectiveZoom = $derived(zoomMode === 'fit-width' ? fitWidthZoom : zoom);
+  const effectiveZoom = $derived(
+    zoomMode === 'fit-width' ? fitWidthZoom : zoom
+  );
   const zoomLabel = $derived(`${Math.round(effectiveZoom * 100)}%`);
   const commentAnnotations = $derived(
     annotations.filter((annotation) => isCommentLikeAnnotation(annotation))
@@ -582,23 +432,6 @@
     return Math.max(8, Math.min(menuRect.left, window.innerWidth - width - 8));
   });
   const menuTop = $derived(menuRect ? menuRect.bottom : 0);
-  const signatureMenuRect = $derived.by(() => {
-    void signaturePickerRectVersion;
-    return signatureButton?.getBoundingClientRect() ?? null;
-  });
-  const signatureMenuLeft = $derived.by(() => {
-    if (!signatureMenuRect || typeof window === 'undefined') return 0;
-    return Math.max(
-      8,
-      Math.min(
-        signatureMenuRect.left,
-        window.innerWidth - SIGNATURE_MENU_WIDTH - 8
-      )
-    );
-  });
-  const signatureMenuTop = $derived(
-    signatureMenuRect ? signatureMenuRect.bottom : 0
-  );
 
   function setFixedZoom(value: number) {
     zoomMode = 'fixed';
@@ -620,7 +453,11 @@
     menuRectVersion += 1;
   }
 
-  async function zoomFromWheel(deltaY: number, clientX: number, clientY: number) {
+  async function zoomFromWheel(
+    deltaY: number,
+    clientX: number,
+    clientY: number
+  ) {
     if (!container) return;
     const previous = effectiveZoom;
     const next = clampZoom(previous * Math.exp(-deltaY * 0.001));
@@ -629,8 +466,10 @@
     const rect = container.getBoundingClientRect();
     const offsetX = clientX - rect.left;
     const offsetY = clientY - rect.top;
-    const xRatio = (container.scrollLeft + offsetX) / Math.max(1, container.scrollWidth);
-    const yRatio = (container.scrollTop + offsetY) / Math.max(1, container.scrollHeight);
+    const xRatio =
+      (container.scrollLeft + offsetX) / Math.max(1, container.scrollWidth);
+    const yRatio =
+      (container.scrollTop + offsetY) / Math.max(1, container.scrollHeight);
 
     zoomMode = 'fixed';
     zoom = next;
@@ -696,35 +535,6 @@
   });
 
   $effect(() => {
-    if (!signaturePickerOpen) return;
-    const onPointerDown = (e: PointerEvent) => {
-      const target = e.target as Node;
-      if (signaturePickerEl?.contains(target)) return;
-      if (signatureButton?.contains(target)) return;
-      signaturePickerOpen = false;
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') signaturePickerOpen = false;
-    };
-    const onResize = () => {
-      signaturePickerRectVersion += 1;
-    };
-    queueMicrotask(() => window.addEventListener('pointerdown', onPointerDown));
-    window.addEventListener('keydown', onKey);
-    window.addEventListener('resize', onResize);
-    window.visualViewport?.addEventListener('resize', onResize);
-    window.visualViewport?.addEventListener('scroll', onResize);
-
-    return () => {
-      window.removeEventListener('pointerdown', onPointerDown);
-      window.removeEventListener('keydown', onKey);
-      window.removeEventListener('resize', onResize);
-      window.visualViewport?.removeEventListener('resize', onResize);
-      window.visualViewport?.removeEventListener('scroll', onResize);
-    };
-  });
-
-  $effect(() => {
     void zoom;
     void zoomMode;
     bumpRenderVersion();
@@ -752,7 +562,10 @@
   });
   $effect(() => {
     if (!awareness) return;
-    awareness.setLocalStateField('pageIndex', Math.max(0, activePageNumber - 1));
+    awareness.setLocalStateField(
+      'pageIndex',
+      Math.max(0, activePageNumber - 1)
+    );
   });
   $effect(() => {
     if (!awareness) return;
@@ -839,9 +652,8 @@
     pageIntersectionObserver = observer;
     // Observe after DOM updates so all page wrappers exist.
     void tick().then(() => {
-      const targets = container?.querySelectorAll<HTMLElement>(
-        '[data-page-number]'
-      );
+      const targets =
+        container?.querySelectorAll<HTMLElement>('[data-page-number]');
       targets?.forEach((el) => observer.observe(el));
     });
     return () => {
@@ -981,9 +793,9 @@
     let cancelled = false;
     let drawGeneration = 0;
     let pageView: PdfPageView | null = null;
-    let currentViewport:
-      | ReturnType<Awaited<ReturnType<PdfDocument['getPage']>>['getViewport']>
-      | null = null;
+    let currentViewport: ReturnType<
+      Awaited<ReturnType<PdfDocument['getPage']>>['getViewport']
+    > | null = null;
 
     function renderAppAnnotations() {
       const pageEl = pageSurface.querySelector<HTMLElement>('.page');
@@ -1025,10 +837,16 @@
           node.style.width = `${width}px`;
           node.style.height = `${height}px`;
           node.style.setProperty('--annotation-color', annotation.color);
-          node.style.setProperty('--annotation-opacity', `${annotation.opacity}`);
+          node.style.setProperty(
+            '--annotation-opacity',
+            `${annotation.opacity}`
+          );
           if (annotation.body) node.title = annotation.body;
           if (annotation.type === 'signature' && annotation.signature) {
-            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            const svg = document.createElementNS(
+              'http://www.w3.org/2000/svg',
+              'svg'
+            );
             svg.setAttribute(
               'viewBox',
               `0 0 ${annotation.signature.width} ${annotation.signature.height}`
@@ -1050,7 +868,10 @@
             }
             node.append(svg);
           } else if (annotation.type === 'ink' && annotation.strokes) {
-            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            const svg = document.createElementNS(
+              'http://www.w3.org/2000/svg',
+              'svg'
+            );
             svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
             svg.classList.add('pdf-app-stroke-svg');
             for (const stroke of annotation.strokes) {
@@ -1070,7 +891,10 @@
               polyline.setAttribute('points', points);
               polyline.setAttribute('fill', 'none');
               polyline.setAttribute('stroke', stroke.color);
-              polyline.setAttribute('stroke-width', `${stroke.width * viewport.scale}`);
+              polyline.setAttribute(
+                'stroke-width',
+                `${stroke.width * viewport.scale}`
+              );
               polyline.setAttribute('stroke-linecap', 'round');
               polyline.setAttribute('stroke-linejoin', 'round');
               svg.append(polyline);
@@ -1103,7 +927,10 @@
             'http://www.w3.org/2000/svg',
             'svg'
           );
-          preview.setAttribute('viewBox', `0 0 ${pageRect.width} ${pageRect.height}`);
+          preview.setAttribute(
+            'viewBox',
+            `0 0 ${pageRect.width} ${pageRect.height}`
+          );
           preview.classList.add('pdf-app-ink-preview');
           const previewStroke = document.createElementNS(
             'http://www.w3.org/2000/svg',
@@ -1111,7 +938,10 @@
           );
           previewStroke.setAttribute('fill', 'none');
           previewStroke.setAttribute('stroke', INK_COLOR);
-          previewStroke.setAttribute('stroke-width', `${INK_WIDTH * viewport.scale}`);
+          previewStroke.setAttribute(
+            'stroke-width',
+            `${INK_WIDTH * viewport.scale}`
+          );
           previewStroke.setAttribute('stroke-linecap', 'round');
           previewStroke.setAttribute('stroke-linejoin', 'round');
           preview.append(previewStroke);
@@ -1129,7 +959,10 @@
             const [pdfX, pdfY] = viewport.convertToPdfPoint(x, y);
             pdfPoints.push({ x: pdfX, y: pdfY });
             viewportPoints.push({ x, y });
-            previewStroke.setAttribute('points', strokePointsAttr(viewportPoints));
+            previewStroke.setAttribute(
+              'points',
+              strokePointsAttr(viewportPoints)
+            );
           };
 
           pushPoint(event.clientX, event.clientY);
@@ -1145,22 +978,16 @@
             if (pdfPoints.length < 2) return;
             const rect = strokeBounds(pdfPoints, INK_WIDTH * 2);
             if (rect.width < 1 || rect.height < 1) return;
-            createAnnotation(
-              'ink',
-              current.pageNumber - 1,
-              rect,
-              undefined,
-              {
-                strokes: [
-                  {
-                    id: crypto.randomUUID(),
-                    points: pdfPoints,
-                    color: INK_COLOR,
-                    width: INK_WIDTH
-                  }
-                ]
-              }
-            );
+            createAnnotation('ink', current.pageNumber - 1, rect, undefined, {
+              strokes: [
+                {
+                  id: crypto.randomUUID(),
+                  points: pdfPoints,
+                  color: INK_COLOR,
+                  width: INK_WIDTH
+                }
+              ]
+            });
           };
 
           window.addEventListener('pointermove', onMove);
@@ -1180,7 +1007,10 @@
       layer.addEventListener('pointerdown', (event) => {
         if (event.button !== 0) return;
         event.preventDefault();
-        if (current.activeTool === 'signature' && savedSignatures.length === 0) {
+        if (
+          current.activeTool === 'signature' &&
+          savedSignatures.length === 0
+        ) {
           openSignaturePad();
           activeTool = 'select';
           return;
@@ -1324,7 +1154,9 @@
         if (cancelled || generation !== drawGeneration) return;
         renderAppAnnotations();
       } catch (err) {
-        if ((err as { name?: string })?.name !== 'RenderingCancelledException') {
+        if (
+          (err as { name?: string })?.name !== 'RenderingCancelledException'
+        ) {
           console.warn('[PdfNoteViewer] page render failed', err);
         }
       }
@@ -1357,12 +1189,16 @@
 
 <div class="flex h-full w-full flex-col bg-background">
   {#if loading}
-    <div class="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground">
+    <div
+      class="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground"
+    >
       <Loader2 class="size-4 animate-spin" aria-hidden="true" />
       <span>Loading PDF…</span>
     </div>
   {:else if error}
-    <div class="flex h-full items-center justify-center gap-2 p-6 text-sm text-destructive">
+    <div
+      class="flex h-full items-center justify-center gap-2 p-6 text-sm text-destructive"
+    >
       <AlertCircle class="size-4 shrink-0" aria-hidden="true" />
       <span>{error}</span>
     </div>
@@ -1374,7 +1210,9 @@
     >
       <div class="flex h-9 items-center justify-between gap-2 pl-2">
         <div class="flex items-center gap-1">
-          <div class="inline-flex items-center rounded-md border border-border bg-background p-0.5">
+          <div
+            class="inline-flex items-center rounded-md border border-border bg-background p-0.5"
+          >
             <Button
               variant={activeTool === 'select' ? 'secondary' : 'ghost'}
               size="icon"
@@ -1487,7 +1325,9 @@
           </Button>
         </div>
 
-        <div class="inline-flex items-center rounded-md border border-border bg-background p-0.5">
+        <div
+          class="inline-flex items-center rounded-md border border-border bg-background p-0.5"
+        >
           <Button
             variant="ghost"
             size="icon"
@@ -1550,7 +1390,9 @@
                 }}
                 class="pdf-page-host pdfViewer bg-white shadow-sm ring-1 ring-border"
               ></div>
-              <figcaption class="flex items-center gap-1 text-[10px] text-muted-foreground">
+              <figcaption
+                class="flex items-center gap-1 text-[10px] text-muted-foreground"
+              >
                 <FileText class="size-3" aria-hidden="true" />
                 Page {pageNumber}
               </figcaption>
@@ -1560,240 +1402,33 @@
       </div>
 
       {#if commentsSidebarOpen}
-        <aside
-          class="themed-scrollbar flex w-[min(20rem,80vw)] shrink-0 flex-col overflow-auto border-l border-border bg-background"
-          aria-label="PDF comments"
-        >
-          <div class="flex h-9 shrink-0 items-center justify-between border-b border-border px-3">
-            <div class="text-xs font-medium text-muted-foreground">
-              Comments
-            </div>
-            <div class="text-[10px] text-muted-foreground">
-              {commentAnnotations.length}
-            </div>
-          </div>
-
-          {#if commentAnnotations.length === 0}
-            <div class="px-3 py-4 text-xs text-muted-foreground">
-              No comments yet.
-            </div>
-          {:else}
-            <div class="flex flex-col gap-2 p-2">
-              {#each commentAnnotations as annotation (annotation.id)}
-                <section
-                  class:ring-1={selectedAnnotationId === annotation.id}
-                  class:ring-ring={selectedAnnotationId === annotation.id}
-                  class="rounded-md border border-border bg-card p-2 text-card-foreground"
-                >
-                  <button
-                    type="button"
-                    class="flex w-full items-center justify-between gap-2 text-left"
-                    onclick={() => jumpToAnnotation(annotation.id)}
-                  >
-                    <span class="text-xs font-medium">
-                      Page {annotation.pageIndex + 1}
-                    </span>
-                    <span
-                      class="rounded-sm px-1.5 py-0.5 text-[10px] uppercase text-muted-foreground"
-                    >
-                      {annotation.type}
-                    </span>
-                  </button>
-
-                  <textarea
-                    class="mt-2 min-h-20 w-full resize-y rounded-md border border-input bg-background px-2 py-1.5 text-xs outline-none transition-colors placeholder:text-muted-foreground focus:border-ring disabled:cursor-not-allowed disabled:opacity-60"
-                    value={annotation.body ?? ''}
-                    placeholder="Comment"
-                    disabled={isTrashed}
-                    oninput={(event) =>
-                      updateAnnotation(annotation.id, {
-                        body: (event.currentTarget as HTMLTextAreaElement).value
-                      })}
-                  ></textarea>
-
-                  <div class="mt-2 flex items-center justify-between gap-2">
-                    <Button
-                      variant={annotation.resolved ? 'secondary' : 'ghost'}
-                      size="sm"
-                      class="h-7 px-2 text-xs"
-                      disabled={isTrashed}
-                      onclick={() =>
-                        updateAnnotation(annotation.id, {
-                          resolved: !annotation.resolved
-                        })}
-                    >
-                      {annotation.resolved ? 'Resolved' : 'Resolve'}
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      class="size-7 text-muted-foreground hover:text-destructive"
-                      disabled={isTrashed}
-                      onclick={() => deleteAnnotation(annotation.id)}
-                      aria-label="Delete comment"
-                      title="Delete comment"
-                    >
-                      <Trash2 class="size-3.5" aria-hidden="true" />
-                    </Button>
-                  </div>
-                </section>
-              {/each}
-            </div>
-          {/if}
-        </aside>
+        <CommentsSidebar
+          annotations={commentAnnotations}
+          {selectedAnnotationId}
+          {isTrashed}
+          onJump={jumpToAnnotation}
+          onUpdate={updateAnnotation}
+          onDelete={deleteAnnotation}
+        />
       {/if}
     </div>
 
-    {#if signatureDialogOpen}
-      <div
-        class="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm"
-        role="presentation"
-      >
-        <div
-          class="flex w-[min(34rem,100%)] flex-col rounded-md border border-border bg-popover text-popover-foreground shadow-lg"
-          role="dialog"
-          aria-modal="true"
-          aria-label="Create signature"
-        >
-          <div class="flex h-9 items-center justify-between border-b border-border px-3">
-            <div class="text-xs font-medium text-muted-foreground">
-              Signature
-            </div>
-            <Button
-              variant="ghost"
-              size="sm"
-              class="h-7 px-2 text-xs"
-              onclick={closeSignatureDialog}
-            >
-              Cancel
-            </Button>
-          </div>
+    <SignaturePadDialog
+      open={signatureDialogOpen}
+      onCancel={handleSignatureCancelled}
+      onSave={handleSignatureSaved}
+    />
 
-          <div class="p-3">
-            <svg
-              role="img"
-              aria-label="Signature drawing pad"
-              class="aspect-[420/168] w-full touch-none rounded-md border border-input bg-white"
-              viewBox="0 0 {SIGNATURE_PAD_WIDTH} {SIGNATURE_PAD_HEIGHT}"
-              onpointerdown={beginSignaturePadStroke}
-              onpointermove={pushSignaturePadPoint}
-              onpointerup={finishSignaturePadStroke}
-              onpointercancel={finishSignaturePadStroke}
-            >
-              {#each signaturePadStrokes as stroke (stroke.id)}
-                <polyline
-                  points={strokePointsAttr(stroke.points)}
-                  fill="none"
-                  stroke={stroke.color}
-                  stroke-width={stroke.width}
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                />
-              {/each}
-              {#if signaturePadDraft}
-                <polyline
-                  points={strokePointsAttr(signaturePadDraft.points)}
-                  fill="none"
-                  stroke={signaturePadDraft.color}
-                  stroke-width={signaturePadDraft.width}
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                />
-              {/if}
-            </svg>
-          </div>
-
-          <div class="flex h-10 items-center justify-between border-t border-border px-3">
-            <Button
-              variant="ghost"
-              size="sm"
-              class="h-7 px-2 text-xs"
-              onclick={clearSignaturePad}
-              disabled={signaturePadStrokes.length === 0 && !signaturePadDraft}
-            >
-              Clear
-            </Button>
-            <Button
-              size="sm"
-              class="h-7 px-2 text-xs"
-              onclick={saveSignatureFromPad}
-              disabled={signaturePadStrokes.length === 0}
-            >
-              Save
-            </Button>
-          </div>
-        </div>
-      </div>
-    {/if}
-
-    {#if signaturePickerOpen && signatureMenuRect && savedSignatures.length > 0}
-      <div
-        bind:this={signaturePickerEl}
-        role="menu"
-        aria-label={tUi('pdf.signature.menuLabel')}
-        class="fixed z-50 rounded-md border border-border bg-popover p-1 text-sm text-popover-foreground shadow-lg"
-        style="left: {signatureMenuLeft}px; top: {signatureMenuTop}px; width: {SIGNATURE_MENU_WIDTH}px;"
-      >
-        <div class="flex flex-col gap-0.5">
-          {#each savedSignatures as signature (signature.id)}
-            <div class="flex items-center gap-1 rounded-sm hover:bg-accent">
-              <button
-                type="button"
-                role="menuitemradio"
-                aria-checked={activeSignatureId === signature.id}
-                class="flex flex-1 items-center gap-2 rounded-sm px-2 py-1.5 text-left"
-                onclick={() => selectSignature(signature.id)}
-              >
-                <Check
-                  class="size-3.5 shrink-0 {activeSignatureId === signature.id
-                    ? 'opacity-100'
-                    : 'opacity-0'}"
-                  aria-hidden="true"
-                />
-                <svg
-                  role="img"
-                  aria-label={tUi('pdf.signature.preview')}
-                  class="h-8 flex-1 rounded-sm border border-input bg-white"
-                  viewBox="0 0 {signature.width} {signature.height}"
-                  preserveAspectRatio="xMidYMid meet"
-                >
-                  {#each signature.strokes as stroke (stroke.id)}
-                    <polyline
-                      points={strokePointsAttr(stroke.points)}
-                      fill="none"
-                      stroke={stroke.color}
-                      stroke-width={stroke.width}
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                    />
-                  {/each}
-                </svg>
-              </button>
-              <Button
-                variant="ghost"
-                size="icon"
-                class="size-7 shrink-0 text-muted-foreground hover:text-destructive"
-                onclick={() => deleteSignature(signature.id)}
-                aria-label={tUi('pdf.signature.delete')}
-                title={tUi('pdf.signature.delete')}
-              >
-                <Trash2 class="size-3.5" aria-hidden="true" />
-              </Button>
-            </div>
-          {/each}
-        </div>
-        <div class="my-1 border-t border-border"></div>
-        <button
-          type="button"
-          role="menuitem"
-          class="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left transition-colors hover:bg-accent hover:text-accent-foreground"
-          onclick={openSignaturePad}
-        >
-          <Plus class="size-3.5 shrink-0" aria-hidden="true" />
-          <span>{tUi('pdf.signature.add')}</span>
-        </button>
-      </div>
-    {/if}
+    <SignaturePicker
+      open={signaturePickerOpen}
+      anchor={signatureButton}
+      signatures={savedSignatures}
+      {activeSignatureId}
+      onSelect={selectSignature}
+      onDelete={deleteSignature}
+      onAddNew={openSignaturePad}
+      onClose={() => (signaturePickerOpen = false)}
+    />
 
     {#if zoomMenuOpen && menuRect}
       <div
@@ -1809,7 +1444,9 @@
           onclick={setFitWidthZoom}
         >
           <Check
-            class="size-4 shrink-0 {zoomMode === 'fit-width' ? 'opacity-100' : 'opacity-0'}"
+            class="size-4 shrink-0 {zoomMode === 'fit-width'
+              ? 'opacity-100'
+              : 'opacity-0'}"
             aria-hidden="true"
           />
           <span>Fit width</span>
@@ -1823,7 +1460,8 @@
             onclick={() => setFixedZoom(option)}
           >
             <Check
-              class="size-4 shrink-0 {zoomMode === 'fixed' && Math.abs(zoom - option) < 0.01
+              class="size-4 shrink-0 {zoomMode === 'fixed' &&
+              Math.abs(zoom - option) < 0.01
                 ? 'opacity-100'
                 : 'opacity-0'}"
               aria-hidden="true"
