@@ -229,6 +229,7 @@ pub fn run() {
             // Assets (freeform drawing attachments)
             assets::upload_drawing_asset,
             assets::fetch_drawing_asset,
+            assets::import_pdf_note,
             // Auth (Etebase)
             auth::etebase_login,
             auth::etebase_logout,

@@ -35,8 +35,9 @@ pub struct NoteSummary {
     /// row with unsynced edits still reports `pushed: true`.
     pub pushed: bool,
     /// Discriminator that tells the frontend which editor component to
-    /// render. Values in use today: `"markdown"` (Crepe / y-prosemirror)
-    /// and `"freeform"` (drawing canvas backed by a Y.Array of strokes).
+    /// render. Values in use today: `"markdown"` (Crepe / y-prosemirror),
+    /// `"freeform"` / `"ink"` (drawing surfaces), and `"pdf"` (PDF bytes
+    /// stored as a separate asset, annotations in yrs_state).
     /// On the summary so the file tree / dispatch can branch without
     /// loading the full note. Serde-defaulted to "markdown" so legacy
     /// rows decoded before the column existed still parse cleanly.
@@ -74,8 +75,8 @@ pub struct CreateNote {
     pub parent_collection_id: Option<String>,
     /// Optional discriminator. Omitted ⇒ defaults to "markdown" in
     /// `create()`, matching existing call sites that don't know about
-    /// kinds. The frontend sets this to "freeform" when the user picks
-    /// "New drawing" from the creation menus.
+    /// kinds. The frontend sets this for non-markdown note variants such
+    /// as drawings, ink notes, and imported PDFs.
     #[serde(default)]
     pub note_kind: Option<String>,
 }

@@ -6,6 +6,8 @@
     Folder,
     FolderOpen,
     FolderPlus,
+    FileType2,
+    FileUp,
     PencilRuler,
     FilePlus2,
     Star,
@@ -23,6 +25,7 @@
     createCollectionIn,
     createNoteIn,
     emptyTrash,
+    importPdfIn,
     moveCollectionTo,
     moveNoteTo,
     purgeCollection,
@@ -93,6 +96,8 @@
   let draft = $state<Draft | null>(null);
   let rename = $state<Rename | null>(null);
   let nameInput = $state<HTMLInputElement | null>(null);
+  let pdfInput = $state<HTMLInputElement | null>(null);
+  let pdfImportParentId = $state<string | null>(null);
 
   $effect(() => {
     if (!nameInput) return;
@@ -113,6 +118,20 @@
             ? 'Untitled ink note'
           : 'Untitled';
     draft = { kind, parentId, text: defaultText };
+  }
+  function startPdfImport(parentId: string | null) {
+    pdfImportParentId = parentId;
+    if (pdfInput) pdfInput.value = '';
+    pdfInput?.click();
+  }
+  async function onPdfPicked(e: Event) {
+    const input = e.currentTarget as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file) return;
+    const id = await importPdfIn(pdfImportParentId, file);
+    pdfImportParentId = null;
+    onOpenNote(id);
   }
   function cancelDraft() {
     draft = null;
@@ -345,6 +364,7 @@
         { label: 'New note in folder', onSelect: () => startDraft('note', id) },
         { label: 'New drawing in folder', onSelect: () => startDraft('drawing', id) },
         { label: 'New ink note in folder', onSelect: () => startDraft('ink', id) },
+        { label: 'Import PDF in folder', onSelect: () => startPdfImport(id) },
         { label: 'New folder inside', onSelect: () => startDraft('folder', id) },
         'separator',
         {
@@ -367,6 +387,7 @@
       { label: 'New note', onSelect: () => startDraft('note', null) },
       { label: 'New drawing', onSelect: () => startDraft('drawing', null) },
       { label: 'New ink note', onSelect: () => startDraft('ink', null) },
+      { label: 'Import PDF', onSelect: () => startPdfImport(null) },
       { label: 'New folder', onSelect: () => startDraft('folder', null) }
     ];
   }
@@ -510,6 +531,16 @@
       <Button
         variant="ghost"
         size="icon"
+        onclick={() => startPdfImport(null)}
+        title={tUi('fileTree.importPdf')}
+        aria-label={tUi('fileTree.importPdf')}
+        class="size-7"
+      >
+        <FileUp class="size-3.5" />
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon"
         onclick={() => startDraft('note', null)}
         title={tUi('fileTree.newNote')}
         aria-label={tUi('fileTree.newNote')}
@@ -558,6 +589,14 @@
     {/if}
   </div>
 </aside>
+
+<input
+  bind:this={pdfInput}
+  class="hidden"
+  type="file"
+  accept="application/pdf,.pdf"
+  onchange={(e) => void onPdfPicked(e)}
+/>
 
 {#snippet renderDraft()}
   {@const kind = draft?.kind ?? 'note'}
@@ -711,6 +750,8 @@
           <PencilRuler class="size-3.5 shrink-0 text-muted-foreground" />
         {:else if kind === 'ink'}
           <Feather class="size-3.5 shrink-0 text-muted-foreground" />
+        {:else if kind === 'pdf'}
+          <FileType2 class="size-3.5 shrink-0 text-muted-foreground" />
         {:else}
           <FileText class="size-3.5 shrink-0 text-muted-foreground" />
         {/if}

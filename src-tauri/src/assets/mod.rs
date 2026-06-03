@@ -14,9 +14,11 @@
 use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 use crate::db::Db;
 use crate::error::{AppError, AppResult};
+use crate::notes::{self, CreateNote, Note};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AssetSummary {
@@ -48,6 +50,13 @@ pub struct UploadAsset {
     pub bytes: Vec<u8>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct ImportPdfNote {
+    pub title: Option<String>,
+    pub parent_collection_id: Option<String>,
+    pub bytes: Vec<u8>,
+}
+
 fn row_to_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<AssetSummary> {
     let etebase_uid: Option<String> = row.get("etebase_uid")?;
     Ok(AssetSummary {
@@ -62,6 +71,11 @@ fn row_to_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<AssetSummary> {
 }
 
 pub fn upload(conn: &Connection, input: UploadAsset) -> AppResult<Asset> {
+    let id = format!("asset_{}", uuid::Uuid::new_v4());
+    upload_with_id(conn, id, input)
+}
+
+pub fn upload_with_id(conn: &Connection, id: String, input: UploadAsset) -> AppResult<Asset> {
     // Confirm the owning note exists first — the FK constraint would
     // surface as a generic SQLite error otherwise. A targeted NotFound
     // gives the JS side a useful message to relay if the user trashes
@@ -81,7 +95,6 @@ pub fn upload(conn: &Connection, input: UploadAsset) -> AppResult<Asset> {
         )));
     }
 
-    let id = format!("asset_{}", uuid::Uuid::new_v4());
     let now = Utc::now().to_rfc3339();
     let size = input.bytes.len() as i64;
 
@@ -99,6 +112,36 @@ pub fn upload(conn: &Connection, input: UploadAsset) -> AppResult<Asset> {
         ],
     )?;
     load(conn, &id)
+}
+
+pub fn import_pdf_note_inner(conn: &Connection, input: ImportPdfNote) -> AppResult<Note> {
+    if input.bytes.is_empty() {
+        return Err(AppError::InvalidArg("PDF file is empty".into()));
+    }
+
+    let asset_id = format!("asset_{}", uuid::Uuid::new_v4());
+    let body = json!({ "pdfAssetId": asset_id }).to_string();
+    let note = notes::create(
+        conn,
+        CreateNote {
+            title: input.title,
+            body: Some(body),
+            parent_collection_id: input.parent_collection_id,
+            note_kind: Some("pdf".into()),
+        },
+    )?;
+
+    upload_with_id(
+        conn,
+        asset_id,
+        UploadAsset {
+            owning_note_id: note.summary.id.clone(),
+            mime_type: "application/pdf".into(),
+            bytes: input.bytes,
+        },
+    )?;
+
+    Ok(note)
 }
 
 pub fn load(conn: &Connection, id: &str) -> AppResult<Asset> {
@@ -131,6 +174,11 @@ pub fn upload_drawing_asset(db: tauri::State<'_, Db>, input: UploadAsset) -> Res
 #[tauri::command]
 pub fn fetch_drawing_asset(db: tauri::State<'_, Db>, id: String) -> Result<Asset, String> {
     db.with_conn(|c| load(c, &id)).map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn import_pdf_note(db: tauri::State<'_, Db>, input: ImportPdfNote) -> Result<Note, String> {
+    db.with_conn(|c| import_pdf_note_inner(c, input)).map_err(Into::into)
 }
 
 #[cfg(test)]
@@ -237,5 +285,34 @@ mod tests {
             Err(AppError::NotFound(_)) => {}
             other => panic!("expected NotFound, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn import_pdf_creates_pdf_note_with_separate_asset() {
+        let db = open_memory_for_tests();
+        let pdf_bytes = b"%PDF-1.7\n%mindstream-test\n".to_vec();
+        let note = db
+            .with_conn(|c| {
+                import_pdf_note_inner(
+                    c,
+                    ImportPdfNote {
+                        title: Some("Paper".into()),
+                        parent_collection_id: None,
+                        bytes: pdf_bytes.clone(),
+                    },
+                )
+            })
+            .unwrap();
+
+        assert_eq!(note.summary.title, "Paper");
+        assert_eq!(note.summary.note_kind, "pdf");
+        assert!(note.yrs_state.is_empty());
+        let pointer: serde_json::Value = serde_json::from_str(&note.body).unwrap();
+        let asset_id = pointer["pdfAssetId"].as_str().unwrap();
+
+        let asset = db.with_conn(|c| load(c, asset_id)).unwrap();
+        assert_eq!(asset.summary.owning_note_id, note.summary.id);
+        assert_eq!(asset.summary.mime_type, "application/pdf");
+        assert_eq!(asset.bytes, pdf_bytes);
     }
 }
