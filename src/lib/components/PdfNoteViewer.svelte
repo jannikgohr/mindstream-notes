@@ -15,7 +15,10 @@
 
   type PdfJs = typeof import('pdfjs-dist');
   type PdfDocument = Awaited<ReturnType<PdfJs['getDocument']>['promise']>;
-  type RenderParams = { pageNumber: number; version: number };
+  type RenderParams = { pageNumber: number; version: number; zoom: number };
+
+  const MIN_ZOOM = 0.5;
+  const MAX_ZOOM = 4;
 
   let container = $state<HTMLDivElement | null>(null);
   let pdfDoc = $state<PdfDocument | null>(null);
@@ -23,6 +26,7 @@
   let loading = $state(true);
   let error = $state<string | null>(null);
   let renderVersion = $state(0);
+  let zoom = $state(1);
   let isTrashed = $state(false);
   let resizeObserver: ResizeObserver | null = null;
 
@@ -51,10 +55,53 @@
     renderVersion += 1;
   }
 
-  onMount(async () => {
-    resizeObserver = new ResizeObserver(() => bumpRenderVersion());
-    if (container) resizeObserver.observe(container);
+  function clampZoom(value: number): number {
+    return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, value));
+  }
 
+  async function zoomFromWheel(deltaY: number, clientX: number, clientY: number) {
+    if (!container) return;
+    const previous = zoom;
+    const next = clampZoom(previous * Math.exp(-deltaY * 0.001));
+    if (Math.abs(next - previous) < 0.001) return;
+
+    const rect = container.getBoundingClientRect();
+    const offsetX = clientX - rect.left;
+    const offsetY = clientY - rect.top;
+    const xRatio = (container.scrollLeft + offsetX) / Math.max(1, container.scrollWidth);
+    const yRatio = (container.scrollTop + offsetY) / Math.max(1, container.scrollHeight);
+
+    zoom = next;
+    await tick();
+    requestAnimationFrame(() => {
+      if (!container) return;
+      container.scrollLeft = xRatio * container.scrollWidth - offsetX;
+      container.scrollTop = yRatio * container.scrollHeight - offsetY;
+    });
+  }
+
+  function ctrlWheelZoom(node: HTMLElement) {
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+      void zoomFromWheel(e.deltaY, e.clientX, e.clientY);
+    };
+    node.addEventListener('wheel', onWheel, { passive: false });
+    return {
+      destroy() {
+        node.removeEventListener('wheel', onWheel);
+      }
+    };
+  }
+
+  $effect(() => {
+    if (!container) return;
+    resizeObserver?.disconnect();
+    resizeObserver = new ResizeObserver(() => bumpRenderVersion());
+    resizeObserver.observe(container);
+  });
+
+  onMount(async () => {
     try {
       const note = await loadNote(noteId);
       isTrashed = note.trashed;
@@ -99,7 +146,8 @@
 
       const baseViewport = page.getViewport({ scale: 1 });
       const availableWidth = Math.max(280, container.clientWidth - 32);
-      const scale = Math.min(2, availableWidth / baseViewport.width);
+      const fitScale = Math.min(2, Math.max(1, availableWidth / baseViewport.width));
+      const scale = clampZoom(fitScale * current.zoom);
       const viewport = page.getViewport({ scale });
       const dpr = window.devicePixelRatio || 1;
       const context = canvas.getContext('2d');
@@ -153,14 +201,15 @@
   {:else}
     <div
       bind:this={container}
-      class="themed-scrollbar min-h-0 flex-1 overflow-y-auto px-3 py-4"
+      use:ctrlWheelZoom
+      class="themed-scrollbar min-h-0 flex-1 overflow-auto px-3 py-4"
     >
-      <div class="mx-auto flex max-w-5xl flex-col items-center gap-4">
+      <div class="mx-auto flex min-w-full w-max flex-col items-center gap-4">
         {#each pageNumbers as pageNumber (pageNumber)}
-          <figure class="flex w-full flex-col items-center gap-1">
+          <figure class="flex w-max flex-col items-center gap-1">
             <canvas
-              use:renderPage={{ pageNumber, version: renderVersion }}
-              class="max-w-full bg-white shadow-sm ring-1 ring-border"
+              use:renderPage={{ pageNumber, version: renderVersion, zoom }}
+              class="bg-white shadow-sm ring-1 ring-border"
             ></canvas>
             <figcaption class="flex items-center gap-1 text-[10px] text-muted-foreground">
               <FileText class="size-3" aria-hidden="true" />
