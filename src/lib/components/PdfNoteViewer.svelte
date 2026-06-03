@@ -11,6 +11,7 @@
     MessageSquare,
     Minus,
     MousePointer2,
+    PanelRight,
     Plus,
     Trash2
   } from 'lucide-svelte';
@@ -53,6 +54,7 @@
     createdAt: string;
     updatedAt: string;
     body?: string;
+    resolved?: boolean;
   };
   type RenderParams = {
     pageNumber: number;
@@ -61,6 +63,7 @@
     zoomMode: ZoomMode;
     annotationVersion: number;
     activeTool: PdfTool;
+    selectedAnnotationId: string | null;
   };
 
   const MIN_ZOOM = 0.5;
@@ -90,6 +93,8 @@
   let annotationVersion = $state(0);
   let annotations = $state<PdfAnnotation[]>([]);
   let activeTool = $state<PdfTool>('select');
+  let commentsSidebarOpen = $state(false);
+  let selectedAnnotationId = $state<string | null>(null);
   let savingState = $state<'idle' | 'pending' | 'saving' | 'saved' | 'error'>(
     'idle'
   );
@@ -155,11 +160,44 @@
       updatedAt: now,
       body
     });
+    selectedAnnotationId = id;
+    if (type === 'comment') commentsSidebarOpen = true;
   }
 
   function deleteAnnotation(id: string) {
     if (isTrashed) return;
     annotationsMap?.delete(id);
+    if (selectedAnnotationId === id) selectedAnnotationId = null;
+  }
+
+  function updateAnnotation(id: string, patch: Partial<PdfAnnotation>) {
+    if (isTrashed || !annotationsMap) return;
+    const existing = annotationsMap.get(id);
+    if (!existing) return;
+    annotationsMap.set(id, {
+      ...existing,
+      ...patch,
+      updatedAt: new Date().toISOString()
+    });
+  }
+
+  function selectAnnotation(id: string | null) {
+    selectedAnnotationId = id;
+    if (id) commentsSidebarOpen = true;
+  }
+
+  function jumpToAnnotation(id: string) {
+    selectAnnotation(id);
+    requestAnimationFrame(() => {
+      const target = document.querySelector<HTMLElement>(
+        `[data-annotation-id="${CSS.escape(id)}"]`
+      );
+      target?.scrollIntoView({
+        block: 'center',
+        inline: 'center',
+        behavior: 'smooth'
+      });
+    });
   }
 
   function syncAnnotationsFromYDoc() {
@@ -214,6 +252,11 @@
 
   const effectiveZoom = $derived(zoomMode === 'fit-width' ? fitWidthZoom : zoom);
   const zoomLabel = $derived(`${Math.round(effectiveZoom * 100)}%`);
+  const commentAnnotations = $derived(
+    annotations.filter(
+      (annotation) => annotation.type === 'comment' || annotation.body?.trim()
+    )
+  );
   const menuRect = $derived.by(() => {
     void menuRectVersion;
     return zoomButton?.getBoundingClientRect() ?? null;
@@ -443,6 +486,12 @@
           );
           const node = document.createElement('div');
           node.className = `pdf-app-annotation pdf-app-annotation-${annotation.type}`;
+          if (annotation.id === current.selectedAnnotationId) {
+            node.classList.add('pdf-app-annotation-selected');
+          }
+          if (annotation.resolved) {
+            node.classList.add('pdf-app-annotation-resolved');
+          }
           node.dataset.annotationId = annotation.id;
           node.style.left = `${Math.min(x1, x2)}px`;
           node.style.top = `${Math.min(y1, y2)}px`;
@@ -456,6 +505,12 @@
               event.preventDefault();
               event.stopPropagation();
               deleteAnnotation(annotation.id);
+            });
+          } else {
+            node.addEventListener('pointerdown', (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              selectAnnotation(annotation.id);
             });
           }
           layer.append(node);
@@ -632,56 +687,70 @@
       aria-label="PDF controls"
     >
       <div class="flex h-9 items-center justify-between gap-2 pl-2">
-        <div class="inline-flex items-center rounded-md border border-border bg-background p-0.5">
-          <Button
-            variant={activeTool === 'select' ? 'secondary' : 'ghost'}
-            size="icon"
-            class="size-7"
-            onclick={() => setTool('select')}
-            aria-label="Select"
-            title="Select"
-            aria-pressed={activeTool === 'select'}
-          >
-            <MousePointer2 class="size-3.5" aria-hidden="true" />
-          </Button>
+        <div class="flex items-center gap-1">
+          <div class="inline-flex items-center rounded-md border border-border bg-background p-0.5">
+            <Button
+              variant={activeTool === 'select' ? 'secondary' : 'ghost'}
+              size="icon"
+              class="size-7"
+              onclick={() => setTool('select')}
+              aria-label="Select"
+              title="Select"
+              aria-pressed={activeTool === 'select'}
+            >
+              <MousePointer2 class="size-3.5" aria-hidden="true" />
+            </Button>
+
+            <Button
+              variant={activeTool === 'highlight' ? 'secondary' : 'ghost'}
+              size="icon"
+              class="size-7"
+              onclick={() => setTool('highlight')}
+              aria-label="Highlight"
+              title="Highlight"
+              aria-pressed={activeTool === 'highlight'}
+              disabled={isTrashed}
+            >
+              <Highlighter class="size-3.5" aria-hidden="true" />
+            </Button>
+
+            <Button
+              variant={activeTool === 'comment' ? 'secondary' : 'ghost'}
+              size="icon"
+              class="size-7"
+              onclick={() => setTool('comment')}
+              aria-label="Comment"
+              title="Comment"
+              aria-pressed={activeTool === 'comment'}
+              disabled={isTrashed}
+            >
+              <MessageSquare class="size-3.5" aria-hidden="true" />
+            </Button>
+
+            <Button
+              variant={activeTool === 'delete' ? 'secondary' : 'ghost'}
+              size="icon"
+              class="size-7"
+              onclick={() => setTool('delete')}
+              aria-label="Delete annotation"
+              title="Delete annotation"
+              aria-pressed={activeTool === 'delete'}
+              disabled={isTrashed}
+            >
+              <Trash2 class="size-3.5" aria-hidden="true" />
+            </Button>
+          </div>
 
           <Button
-            variant={activeTool === 'highlight' ? 'secondary' : 'ghost'}
+            variant={commentsSidebarOpen ? 'secondary' : 'ghost'}
             size="icon"
             class="size-7"
-            onclick={() => setTool('highlight')}
-            aria-label="Highlight"
-            title="Highlight"
-            aria-pressed={activeTool === 'highlight'}
-            disabled={isTrashed}
+            onclick={() => (commentsSidebarOpen = !commentsSidebarOpen)}
+            aria-label="Toggle comments"
+            title="Toggle comments"
+            aria-pressed={commentsSidebarOpen}
           >
-            <Highlighter class="size-3.5" aria-hidden="true" />
-          </Button>
-
-          <Button
-            variant={activeTool === 'comment' ? 'secondary' : 'ghost'}
-            size="icon"
-            class="size-7"
-            onclick={() => setTool('comment')}
-            aria-label="Comment"
-            title="Comment"
-            aria-pressed={activeTool === 'comment'}
-            disabled={isTrashed}
-          >
-            <MessageSquare class="size-3.5" aria-hidden="true" />
-          </Button>
-
-          <Button
-            variant={activeTool === 'delete' ? 'secondary' : 'ghost'}
-            size="icon"
-            class="size-7"
-            onclick={() => setTool('delete')}
-            aria-label="Delete annotation"
-            title="Delete annotation"
-            aria-pressed={activeTool === 'delete'}
-            disabled={isTrashed}
-          >
-            <Trash2 class="size-3.5" aria-hidden="true" />
+            <PanelRight class="size-3.5" aria-hidden="true" />
           </Button>
         </div>
 
@@ -724,32 +793,119 @@
       </div>
     </div>
 
-    <div
-      bind:this={container}
-      use:ctrlWheelZoom
-      class="themed-scrollbar min-h-0 flex-1 overflow-auto px-3 py-4"
-    >
-      <div class="mx-auto flex min-w-full w-max flex-col items-center gap-4">
-        {#each pageNumbers as pageNumber (pageNumber)}
-          <figure class="flex w-max flex-col items-center gap-1">
-            <div
-              use:renderPage={{
-                pageNumber,
-                version: renderVersion,
-                zoom,
-                zoomMode,
-                annotationVersion,
-                activeTool
-              }}
-              class="pdf-page-host pdfViewer bg-white shadow-sm ring-1 ring-border"
-            ></div>
-            <figcaption class="flex items-center gap-1 text-[10px] text-muted-foreground">
-              <FileText class="size-3" aria-hidden="true" />
-              Page {pageNumber}
-            </figcaption>
-          </figure>
-        {/each}
+    <div class="flex min-h-0 flex-1 overflow-hidden">
+      <div
+        bind:this={container}
+        use:ctrlWheelZoom
+        class="themed-scrollbar min-h-0 flex-1 overflow-auto px-3 py-4"
+      >
+        <div class="mx-auto flex min-w-full w-max flex-col items-center gap-4">
+          {#each pageNumbers as pageNumber (pageNumber)}
+            <figure class="flex w-max flex-col items-center gap-1">
+              <div
+                use:renderPage={{
+                  pageNumber,
+                  version: renderVersion,
+                  zoom,
+                  zoomMode,
+                  annotationVersion,
+                  activeTool,
+                  selectedAnnotationId
+                }}
+                class="pdf-page-host pdfViewer bg-white shadow-sm ring-1 ring-border"
+              ></div>
+              <figcaption class="flex items-center gap-1 text-[10px] text-muted-foreground">
+                <FileText class="size-3" aria-hidden="true" />
+                Page {pageNumber}
+              </figcaption>
+            </figure>
+          {/each}
+        </div>
       </div>
+
+      {#if commentsSidebarOpen}
+        <aside
+          class="themed-scrollbar flex w-[min(20rem,80vw)] shrink-0 flex-col overflow-auto border-l border-border bg-background"
+          aria-label="PDF comments"
+        >
+          <div class="flex h-9 shrink-0 items-center justify-between border-b border-border px-3">
+            <div class="text-xs font-medium text-muted-foreground">
+              Comments
+            </div>
+            <div class="text-[10px] text-muted-foreground">
+              {commentAnnotations.length}
+            </div>
+          </div>
+
+          {#if commentAnnotations.length === 0}
+            <div class="px-3 py-4 text-xs text-muted-foreground">
+              No comments yet.
+            </div>
+          {:else}
+            <div class="flex flex-col gap-2 p-2">
+              {#each commentAnnotations as annotation (annotation.id)}
+                <section
+                  class:ring-1={selectedAnnotationId === annotation.id}
+                  class:ring-ring={selectedAnnotationId === annotation.id}
+                  class="rounded-md border border-border bg-card p-2 text-card-foreground"
+                >
+                  <button
+                    type="button"
+                    class="flex w-full items-center justify-between gap-2 text-left"
+                    onclick={() => jumpToAnnotation(annotation.id)}
+                  >
+                    <span class="text-xs font-medium">
+                      Page {annotation.pageIndex + 1}
+                    </span>
+                    <span
+                      class="rounded-sm px-1.5 py-0.5 text-[10px] uppercase text-muted-foreground"
+                    >
+                      {annotation.type}
+                    </span>
+                  </button>
+
+                  <textarea
+                    class="mt-2 min-h-20 w-full resize-y rounded-md border border-input bg-background px-2 py-1.5 text-xs outline-none transition-colors placeholder:text-muted-foreground focus:border-ring disabled:cursor-not-allowed disabled:opacity-60"
+                    value={annotation.body ?? ''}
+                    placeholder="Comment"
+                    disabled={isTrashed}
+                    oninput={(event) =>
+                      updateAnnotation(annotation.id, {
+                        body: (event.currentTarget as HTMLTextAreaElement).value
+                      })}
+                  ></textarea>
+
+                  <div class="mt-2 flex items-center justify-between gap-2">
+                    <Button
+                      variant={annotation.resolved ? 'secondary' : 'ghost'}
+                      size="sm"
+                      class="h-7 px-2 text-xs"
+                      disabled={isTrashed}
+                      onclick={() =>
+                        updateAnnotation(annotation.id, {
+                          resolved: !annotation.resolved
+                        })}
+                    >
+                      {annotation.resolved ? 'Resolved' : 'Resolve'}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      class="size-7 text-muted-foreground hover:text-destructive"
+                      disabled={isTrashed}
+                      onclick={() => deleteAnnotation(annotation.id)}
+                      aria-label="Delete comment"
+                      title="Delete comment"
+                    >
+                      <Trash2 class="size-3.5" aria-hidden="true" />
+                    </Button>
+                  </div>
+                </section>
+              {/each}
+            </div>
+          {/if}
+        </aside>
+      {/if}
     </div>
 
     {#if zoomMenuOpen && menuRect}
@@ -924,6 +1080,8 @@
     position: absolute;
     box-sizing: border-box;
     border-radius: 2px;
+    cursor: pointer;
+    pointer-events: auto;
   }
 
   :global(.pdf-page-host .pdf-app-annotation-highlight) {
@@ -943,5 +1101,14 @@
   :global(.pdf-page-host .pdf-app-annotation-preview) {
     outline: 1px dashed color-mix(in srgb, var(--foreground) 70%, transparent);
     background: rgb(250 204 21 / 0.18);
+  }
+
+  :global(.pdf-page-host .pdf-app-annotation-selected) {
+    outline: 2px solid color-mix(in srgb, var(--ring) 85%, transparent);
+    outline-offset: 2px;
+  }
+
+  :global(.pdf-page-host .pdf-app-annotation-resolved) {
+    opacity: 0.36;
   }
 </style>
