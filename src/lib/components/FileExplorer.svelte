@@ -116,7 +116,7 @@
           ? 'Untitled drawing'
           : kind === 'ink'
             ? 'Untitled ink note'
-          : 'Untitled';
+            : 'Untitled';
     draft = { kind, parentId, text: defaultText };
   }
   function startPdfImport(parentId: string | null) {
@@ -362,17 +362,29 @@
 
       return [
         { label: 'New note in folder', onSelect: () => startDraft('note', id) },
-        { label: 'New drawing in folder', onSelect: () => startDraft('drawing', id) },
-        { label: 'New ink note in folder', onSelect: () => startDraft('ink', id) },
+        {
+          label: 'New drawing in folder',
+          onSelect: () => startDraft('drawing', id)
+        },
+        {
+          label: 'New ink note in folder',
+          onSelect: () => startDraft('ink', id)
+        },
         { label: 'Import PDF in folder', onSelect: () => startPdfImport(id) },
-        { label: 'New folder inside', onSelect: () => startDraft('folder', id) },
+        {
+          label: 'New folder inside',
+          onSelect: () => startDraft('folder', id)
+        },
         'separator',
         {
           label: 'Rename folder…',
           shortcut: 'F2',
           onSelect: () => startRename('folder', id, folder?.name ?? 'Folder')
         },
-        { label: 'Move to root', onSelect: () => void moveCollectionTo(id, null) },
+        {
+          label: 'Move to root',
+          onSelect: () => void moveCollectionTo(id, null)
+        },
         'separator',
         {
           label: 'Delete',
@@ -423,7 +435,6 @@
   function canDropOnFolder(targetFolderId: string | null): boolean {
     if (!drag) return true;
     return !(drag.kind === 'folder' && targetFolderId === drag.id);
-
   }
   function onDragOverFolder(e: DragEvent, folderId: string) {
     if (!e.dataTransfer) return;
@@ -564,7 +575,9 @@
     ondrop={onDropOnRoot}
   >
     {#if !tree.ready}
-      <p class="px-2 py-3 text-xs text-muted-foreground">{tUi('fileTree.loading')}</p>
+      <p class="px-2 py-3 text-xs text-muted-foreground">
+        {tUi('fileTree.loading')}
+      </p>
     {:else if tree.error}
       <p class="px-2 py-3 text-xs text-destructive">
         {tUi('fileTree.error')}: {tree.error}
@@ -607,7 +620,7 @@
         ? tUi('fileTree.newDrawing')
         : kind === 'ink'
           ? tUi('fileTree.newInk')
-        : tUi('fileTree.newNote')}
+          : tUi('fileTree.newNote')}
   <div class="my-0.5 flex items-center gap-1.5 rounded-md px-2 py-0.5">
     {#if kind === 'folder'}
       <Folder class="size-3.5 shrink-0 text-muted-foreground" />
@@ -658,7 +671,8 @@
     <Trash2 class="size-3.5 shrink-0 text-muted-foreground" />
     <span class="truncate">{node.name}</span>
     {#if childCount > 0}
-      <span class="ml-auto text-[10px] text-muted-foreground">{childCount}</span>
+      <span class="ml-auto text-[10px] text-muted-foreground">{childCount}</span
+      >
     {/if}
   </button>
   {#if expanded[node.id]}
@@ -678,7 +692,8 @@
 {#snippet renderNode(node: TreeNode)}
   {#if node.kind === 'folder'}
     {@const isOver = dragOver === `f:${node.id}`}
-    {@const renaming = rename && rename.kind === 'folder' && rename.id === node.id}
+    {@const renaming =
+      rename && rename.kind === 'folder' && rename.id === node.id}
     <button
       type="button"
       draggable="true"
@@ -719,7 +734,8 @@
     {/if}
   {:else}
     {@const isOver = dragOver === `n:${node.id}`}
-    {@const renaming = rename && rename.kind === 'note' && rename.id === node.id}
+    {@const renaming =
+      rename && rename.kind === 'note' && rename.id === node.id}
     {@const note = tree.notesById[node.id]}
     {@const fav = note?.favourite === true}
     {@const inTrash = note?.parent_collection_id === TRASH_ID}

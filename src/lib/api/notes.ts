@@ -40,8 +40,13 @@ export const KNOWN_NOTE_KINDS = ['markdown', 'freeform', 'ink', 'pdf'] as const;
 
 /** Narrows an arbitrary string (e.g. from a remote-synced row) into
  *  the typed `NoteKind` union. */
-export function isKnownNoteKind(kind: string | undefined | null): kind is NoteKind {
-  return typeof kind === 'string' && (KNOWN_NOTE_KINDS as readonly string[]).includes(kind);
+export function isKnownNoteKind(
+  kind: string | undefined | null
+): kind is NoteKind {
+  return (
+    typeof kind === 'string' &&
+    (KNOWN_NOTE_KINDS as readonly string[]).includes(kind)
+  );
 }
 
 export interface NoteSummary {
@@ -111,15 +116,15 @@ export interface UpdateNoteInput {
 }
 
 export function listNotes(includeTrashed = false): Promise<NoteSummary[]> {
-  return invokeOrFallback<NoteSummary[]>(
-    'list_notes',
-    { includeTrashed },
-    () => mockApi.listNotes(includeTrashed)
+  return invokeOrFallback<NoteSummary[]>('list_notes', { includeTrashed }, () =>
+    mockApi.listNotes(includeTrashed)
   );
 }
 
 export function loadNote(id: string): Promise<Note> {
-  return invokeOrFallback<Note>('load_note', { id }, () => mockApi.loadNote(id));
+  return invokeOrFallback<Note>('load_note', { id }, () =>
+    mockApi.loadNote(id)
+  );
 }
 
 export function createNote(input: CreateNoteInput): Promise<Note> {
@@ -135,7 +140,9 @@ export function saveNote(input: UpdateNoteInput): Promise<Note> {
 }
 
 export function trashNote(id: string): Promise<void> {
-  return invokeOrFallback<void>('trash_note', { id }, () => mockApi.trashNote(id));
+  return invokeOrFallback<void>('trash_note', { id }, () =>
+    mockApi.trashNote(id)
+  );
 }
 
 export function restoreNote(id: string): Promise<void> {
@@ -145,9 +152,10 @@ export function restoreNote(id: string): Promise<void> {
 }
 
 export function purgeNote(id: string): Promise<void> {
-  return invokeOrFallback<void>('purge_note', { id }, () => mockApi.purgeNote(id));
+  return invokeOrFallback<void>('purge_note', { id }, () =>
+    mockApi.purgeNote(id)
+  );
 }
-
 
 /**
  * Back-compat: the old callsites passed { id, title, body }. Map it onto

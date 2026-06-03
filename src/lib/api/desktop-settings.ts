@@ -5,7 +5,11 @@ export function getCloseToTray(): Promise<boolean> {
 }
 
 export function setCloseToTray(value: boolean): Promise<void> {
-  return invokeOrFallback<void>('set_close_to_tray', { value }, () => undefined);
+  return invokeOrFallback<void>(
+    'set_close_to_tray',
+    { value },
+    () => undefined
+  );
 }
 
 export function getStartInTray(): Promise<boolean> {
@@ -13,13 +17,25 @@ export function getStartInTray(): Promise<boolean> {
 }
 
 export function setStartInTray(value: boolean): Promise<void> {
-  return invokeOrFallback<void>('set_start_in_tray', { value }, () => undefined);
+  return invokeOrFallback<void>(
+    'set_start_in_tray',
+    { value },
+    () => undefined
+  );
 }
 
 export function getDesktopLanguage(): Promise<string> {
-  return invokeOrFallback<string>('get_desktop_language', undefined, () => 'en');
+  return invokeOrFallback<string>(
+    'get_desktop_language',
+    undefined,
+    () => 'en'
+  );
 }
 
 export function setDesktopLanguage(code: string): Promise<void> {
-  return invokeOrFallback<void>('set_desktop_language', { code }, () => undefined);
+  return invokeOrFallback<void>(
+    'set_desktop_language',
+    { code },
+    () => undefined
+  );
 }

@@ -2,7 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { sortTree } from './sort';
 import type { NoteSummary, TreeNode } from './api';
 
-const note = (id: string, title: string, modified = '2024-01-01T00:00:00Z'): NoteSummary => ({
+const note = (
+  id: string,
+  title: string,
+  modified = '2024-01-01T00:00:00Z'
+): NoteSummary => ({
   id,
   parent_collection_id: null,
   title,
@@ -16,7 +20,11 @@ const note = (id: string, title: string, modified = '2024-01-01T00:00:00Z'): Not
   note_kind: 'markdown'
 });
 
-const folder = (id: string, name: string, children: TreeNode[] = []): TreeNode => ({
+const folder = (
+  id: string,
+  name: string,
+  children: TreeNode[] = []
+): TreeNode => ({
   kind: 'folder',
   id,
   name,
@@ -42,7 +50,12 @@ describe('sortTree', () => {
       folder('f2', 'alpha')
     ];
     const out = sortTree(tree, 'alphabetical', { notesById: {} });
-    expect(out.map((n) => n.kind)).toEqual(['folder', 'folder', 'note', 'note']);
+    expect(out.map((n) => n.kind)).toEqual([
+      'folder',
+      'folder',
+      'note',
+      'note'
+    ]);
   });
 
   it('alphabetical: case-insensitive, name order', () => {
@@ -63,7 +76,11 @@ describe('sortTree', () => {
         n3: note('n3', 'mid', '2022-03-15T00:00:00Z')
       }
     };
-    const tree: TreeNode[] = [noteNode('n1', 'old'), noteNode('n2', 'new'), noteNode('n3', 'mid')];
+    const tree: TreeNode[] = [
+      noteNode('n1', 'old'),
+      noteNode('n2', 'new'),
+      noteNode('n3', 'mid')
+    ];
     const out = sortTree(tree, 'modified', ctx, 'asc');
     expect(out.map((n) => n.id)).toEqual(['n1', 'n3', 'n2']);
   });
@@ -76,7 +93,11 @@ describe('sortTree', () => {
         n3: note('n3', 'mid', '2022-03-15T00:00:00Z')
       }
     };
-    const tree: TreeNode[] = [noteNode('n1', 'old'), noteNode('n2', 'new'), noteNode('n3', 'mid')];
+    const tree: TreeNode[] = [
+      noteNode('n1', 'old'),
+      noteNode('n2', 'new'),
+      noteNode('n3', 'mid')
+    ];
     const out = sortTree(tree, 'modified', ctx, 'desc');
     expect(out.map((n) => n.id)).toEqual(['n2', 'n3', 'n1']);
   });
@@ -97,6 +118,8 @@ describe('sortTree', () => {
     ];
     const out = sortTree(tree, 'alphabetical', { notesById: {} });
     const f = out[0] as TreeNode & { children: TreeNode[] };
-    expect((f as { children: TreeNode[] }).children.map((n) => n.name)).toEqual(['a', 'b']);
+    expect((f as { children: TreeNode[] }).children.map((n) => n.name)).toEqual(
+      ['a', 'b']
+    );
   });
 });

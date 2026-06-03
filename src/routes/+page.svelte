@@ -42,7 +42,9 @@
       }
     }
     if (!id && window.location.hash) {
-      const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+      const hashParams = new URLSearchParams(
+        window.location.hash.replace(/^#/, '')
+      );
       id = hashParams.get('popout');
     }
 

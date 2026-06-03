@@ -8,7 +8,9 @@
 
   // Summary only — bodies live with the editor and would force every tree
   // refresh through a load_note round trip.
-  const note = $derived(ui.activeNoteId ? tree.notesById[ui.activeNoteId] : null);
+  const note = $derived(
+    ui.activeNoteId ? tree.notesById[ui.activeNoteId] : null
+  );
 
   /**
    * Walk parent_collection_id from leaf to root and return the chain in

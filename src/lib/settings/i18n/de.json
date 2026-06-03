@@ -148,7 +148,7 @@
   },
   "categories": {
     "account": { "label": "Konto & Synchronisation" },
-    "general": { "label":  "Allgemein" },
+    "general": { "label": "Allgemein" },
     "appearance": { "label": "Darstellung" },
     "editor": { "label": "Editor" },
     "data": { "label": "Daten & Backup" },
@@ -176,14 +176,26 @@
     "about.version": { "label": "Version" }
   },
   "settings": {
-    "account.serverType": { "label": "Servertyp", "description": "Wo deine Notizen liegen." },
+    "account.serverType": {
+      "label": "Servertyp",
+      "description": "Wo deine Notizen liegen."
+    },
     "account.serverUrl": { "label": "Server-URL" },
     "account.signInForm": { "label": "Anmelden" },
-    "account.collabServerUrl": { "label": "Live-Collab-Server", "description": "WebSocket-URL des verschlüsselten Relays für Echtzeit-Co-Editing. Leer lassen, um Live-Collab zu deaktivieren; periodische Synchronisation funktioniert weiterhin." },
+    "account.collabServerUrl": {
+      "label": "Live-Collab-Server",
+      "description": "WebSocket-URL des verschlüsselten Relays für Echtzeit-Co-Editing. Leer lassen, um Live-Collab zu deaktivieren; periodische Synchronisation funktioniert weiterhin."
+    },
     "account.syncEnabled": { "label": "Synchronisation aktivieren" },
     "general.startOnLogin": { "label": "Autostart bei Anmeldung" },
-    "general.closeToTray": { "label": "In Systemablage schließen", "description": "Blendet das Hauptfenster aus, statt die App beim Schließen zu beenden." },
-    "general.startInTray": { "label": "In Systemablage starten", "description": "Wenn das System die App bei der Anmeldung startet, wird sie ausgeblendet in der Systemablage geöffnet." },
+    "general.closeToTray": {
+      "label": "In Systemablage schließen",
+      "description": "Blendet das Hauptfenster aus, statt die App beim Schließen zu beenden."
+    },
+    "general.startInTray": {
+      "label": "In Systemablage starten",
+      "description": "Wenn das System die App bei der Anmeldung startet, wird sie ausgeblendet in der Systemablage geöffnet."
+    },
     "appearance.mode": { "label": "Modus" },
     "appearance.accent": { "label": "Akzentfarbe" },
     "appearance.density": { "label": "Dichte" },
@@ -197,7 +209,10 @@
     "editor.tabSize": { "label": "Tab-Breite" },
     "editor.autoPair": { "label": "Klammern automatisch schließen" },
     "editor.trimTrailing": { "label": "Leerzeichen am Zeilenende entfernen" },
-    "editor.desktopToolbar": { "label": "Formatierungsleiste anzeigen", "description": "Blendet eine Symbolleiste über jeder Notiz für schnelles Formatieren ein." },
+    "editor.desktopToolbar": {
+      "label": "Formatierungsleiste anzeigen",
+      "description": "Blendet eine Symbolleiste über jeder Notiz für schnelles Formatieren ein."
+    },
     "editor.math": { "label": "Mathe (KaTeX)" },
     "editor.mermaid": { "label": "Mermaid-Diagramme" },
     "editor.wikilinks": { "label": "Wikilinks [[...]]" },

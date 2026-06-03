@@ -22,7 +22,9 @@ export interface SavePdfExportArgs {
  * Returns `true` if the file was written, `false` if the user cancelled
  * the dialog. Throws on actual IO / dialog errors.
  */
-export async function saveAnnotatedPdf(args: SavePdfExportArgs): Promise<boolean> {
+export async function saveAnnotatedPdf(
+  args: SavePdfExportArgs
+): Promise<boolean> {
   // Tauri's IPC layer serialises Uint8Array as a JSON number array,
   // which the Rust side decodes into Vec<u8>. Array.from forces the
   // serialisation explicitly — letting the typed array through
@@ -42,7 +44,9 @@ export async function saveAnnotatedPdf(args: SavePdfExportArgs): Promise<boolean
 function downloadViaAnchor(args: SavePdfExportArgs): boolean {
   // Slice forces Blob to own its own ArrayBuffer; otherwise a later
   // GC of `bytes` can surprise the download mid-write on some webviews.
-  const blob = new Blob([args.bytes.slice().buffer], { type: 'application/pdf' });
+  const blob = new Blob([args.bytes.slice().buffer], {
+    type: 'application/pdf'
+  });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;

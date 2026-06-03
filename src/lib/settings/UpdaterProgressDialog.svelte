@@ -27,7 +27,9 @@
       v /= 1024;
       i++;
     }
-    return i >= 2 ? `${v.toFixed(1)} ${units[i]}` : `${Math.round(v)} ${units[i]}`;
+    return i >= 2
+      ? `${v.toFixed(1)} ${units[i]}`
+      : `${Math.round(v)} ${units[i]}`;
   }
 
   /**
@@ -66,7 +68,10 @@
   );
   const percent = $derived(
     updaterProgress.total > 0
-      ? Math.min(100, Math.round((updaterProgress.downloaded / updaterProgress.total) * 100))
+      ? Math.min(
+          100,
+          Math.round((updaterProgress.downloaded / updaterProgress.total) * 100)
+        )
       : 0
   );
   const sizeLabel = $derived.by(() => {
@@ -119,7 +124,9 @@
         {/if}
       </div>
 
-      <div class="mt-2 flex items-center justify-between text-xs text-muted-foreground tabular-nums">
+      <div
+        class="mt-2 flex items-center justify-between text-xs text-muted-foreground tabular-nums"
+      >
         <span>{sizeLabel}</span>
         {#if !isIndeterminate}
           <span>{percent}%</span>
@@ -138,7 +145,11 @@
     transform: translateX(-100%);
   }
   @keyframes updater-indeterminate-sweep {
-    0% { transform: translateX(-100%); }
-    100% { transform: translateX(400%); }
+    0% {
+      transform: translateX(-100%);
+    }
+    100% {
+      transform: translateX(400%);
+    }
   }
 </style>

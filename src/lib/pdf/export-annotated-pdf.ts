@@ -64,7 +64,10 @@ function quadPointsForRect(rect: PdfRect): number[] {
   return [x1, yTop, x2, yTop, x1, yBot, x2, yBot];
 }
 
-function strokeBounds(points: { x: number; y: number }[], padding = 0): PdfRect {
+function strokeBounds(
+  points: { x: number; y: number }[],
+  padding = 0
+): PdfRect {
   if (points.length === 0) return { x: 0, y: 0, width: 0, height: 0 };
   let minX = Number.POSITIVE_INFINITY;
   let minY = Number.POSITIVE_INFINITY;
@@ -161,7 +164,10 @@ function buildInk(annotation: PdfAnnotation, lib: PdfLibModule) {
   const inkList = inkListFromStrokes(annotation.strokes);
   if (inkList.length === 0) return null;
   const allPoints = annotation.strokes.flatMap((s) => s.points);
-  const bbox = strokeBounds(allPoints, Math.max(...annotation.strokes.map((s) => s.width)));
+  const bbox = strokeBounds(
+    allPoints,
+    Math.max(...annotation.strokes.map((s) => s.width))
+  );
   const [r, g, b] = hexToRgb(annotation.strokes[0].color || annotation.color);
   const width = annotation.strokes[0]?.width ?? 1.5;
   const dict: Record<string, unknown> = {
@@ -253,7 +259,8 @@ export async function exportAnnotatedPdf(
 
   for (const annotation of annotations) {
     if (!annotationIsLive(annotation)) continue;
-    if (annotation.pageIndex < 0 || annotation.pageIndex >= pages.length) continue;
+    if (annotation.pageIndex < 0 || annotation.pageIndex >= pages.length)
+      continue;
     const dict = buildAnnotationDict(annotation, lib);
     if (!dict) continue;
     // pdf-lib types `obj` as accepting a recursive Literal shape, which

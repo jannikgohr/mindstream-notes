@@ -17,7 +17,12 @@
   import PdfNoteViewer from '$lib/components/PdfNoteViewer.svelte';
   import UnknownNoteKindError from '$lib/components/UnknownNoteKindError.svelte';
   import WindowControls from '$lib/components/WindowControls.svelte';
-  import { isKnownNoteKind, loadNote, openNoteWindow, type NoteKind } from '$lib/api';
+  import {
+    isKnownNoteKind,
+    loadNote,
+    openNoteWindow,
+    type NoteKind
+  } from '$lib/api';
   import { tree } from '$lib/stores/tree.svelte';
   import { subscribeOpenNoteRequest } from '$lib/stores/open-note-intent.svelte';
 
@@ -67,7 +72,10 @@
     data-tauri-drag-region
     class="flex h-9 shrink-0 select-none items-center gap-1 border-b border-border bg-card px-2"
   >
-    <span data-tauri-drag-region class="ml-2 truncate text-xs font-medium text-muted-foreground">
+    <span
+      data-tauri-drag-region
+      class="ml-2 truncate text-xs font-medium text-muted-foreground"
+    >
       {title}
     </span>
     <div data-tauri-drag-region class="flex-1"></div>
@@ -78,7 +86,9 @@
     {#if exists === null}
       <p class="p-4 text-sm text-muted-foreground">Loading…</p>
     {:else if !exists}
-      <div class="flex h-full items-center justify-center p-6 text-sm text-muted-foreground">
+      <div
+        class="flex h-full items-center justify-center p-6 text-sm text-muted-foreground"
+      >
         Note <code class="mx-1 rounded bg-muted px-1.5 py-0.5">{noteId}</code>
         couldn't be found in the database.
       </div>

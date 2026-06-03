@@ -34,9 +34,9 @@ function syncDocs(a: Y.Doc, b: Y.Doc) {
 }
 
 function annotationsOf(doc: Y.Doc): Annotation[] {
-  return Array.from(
-    doc.getMap<Annotation>(PDF_ANNOTATIONS_MAP).values()
-  ).sort((x, y) => x.id.localeCompare(y.id));
+  return Array.from(doc.getMap<Annotation>(PDF_ANNOTATIONS_MAP).values()).sort(
+    (x, y) => x.id.localeCompare(y.id)
+  );
 }
 
 describe('pdf annotations sync', () => {
@@ -93,12 +93,8 @@ describe('pdf annotations sync', () => {
 
     syncDocs(peerA, peerB);
 
-    const winnerA = peerA
-      .getMap<Annotation>(PDF_ANNOTATIONS_MAP)
-      .get(ann.id)!;
-    const winnerB = peerB
-      .getMap<Annotation>(PDF_ANNOTATIONS_MAP)
-      .get(ann.id)!;
+    const winnerA = peerA.getMap<Annotation>(PDF_ANNOTATIONS_MAP).get(ann.id)!;
+    const winnerB = peerB.getMap<Annotation>(PDF_ANNOTATIONS_MAP).get(ann.id)!;
     expect(winnerA).toEqual(winnerB);
     expect(['edit-from-A', 'edit-from-B']).toContain(winnerA.body);
   });

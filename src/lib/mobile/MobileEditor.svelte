@@ -81,9 +81,7 @@
            kind. The mobile list calls openNote() which awaits the
            post-create loadTree, but a deep-link / restore-on-launch
            could race the initial hydration. -->
-      <p class="p-6 text-center text-sm text-muted-foreground">
-        Loading note…
-      </p>
+      <p class="p-6 text-center text-sm text-muted-foreground">Loading note…</p>
     {:else if note.note_kind === 'freeform'}
       <FreeformNoteEditor {noteId} />
     {:else if note.note_kind === 'ink'}

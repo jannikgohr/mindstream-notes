@@ -162,7 +162,11 @@ export function bindStoreToYDoc({ yDoc, store }: BindOptions): BindHandle {
         }
       });
     }
-    if (sawLocalOrigin && recordsToPut.length === 0 && idsToRemove.length === 0) {
+    if (
+      sawLocalOrigin &&
+      recordsToPut.length === 0 &&
+      idsToRemove.length === 0
+    ) {
       return;
     }
     applyingRemote = true;

@@ -26,7 +26,13 @@
   });
 </script>
 
-<Button variant="ghost" size="icon" onclick={cycle} title={tooltip} aria-label={tooltip}>
+<Button
+  variant="ghost"
+  size="icon"
+  onclick={cycle}
+  title={tooltip}
+  aria-label={tooltip}
+>
   {#if $userPrefersMode === 'light'}
     <Sun class="size-4" />
   {:else if $userPrefersMode === 'dark'}

@@ -19,7 +19,13 @@
    * under the Android status bar or gesture bar with edge-to-edge on.
    */
   import { onMount } from 'svelte';
-  import { Feather, FilePlus2, FileUp, FolderPlus, PencilRuler } from 'lucide-svelte';
+  import {
+    Feather,
+    FilePlus2,
+    FileUp,
+    FolderPlus,
+    PencilRuler
+  } from 'lucide-svelte';
   import type { IconComponent } from '$lib/settings/icons';
   import MobileTopBar from './MobileTopBar.svelte';
   import MobileBreadcrumb from './MobileBreadcrumb.svelte';
