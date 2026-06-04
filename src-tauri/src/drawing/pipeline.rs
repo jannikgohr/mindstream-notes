@@ -98,7 +98,47 @@ pub enum GpuBackend {
 }
 
 impl GpuBackend {
+    const OVERRIDE_ENV: &'static str = "MINDSTREAM_DRAWING_BACKEND";
+
+    fn candidates() -> Vec<GpuBackend> {
+        if let Ok(raw) = std::env::var(Self::OVERRIDE_ENV) {
+            let mut requested = Vec::new();
+            for token in raw.split([',', ';', ' ']).filter(|s| !s.is_empty()) {
+                match Self::from_override_token(token) {
+                    Some(backend) => requested.push(backend),
+                    None => log::warn!(
+                        "[drawing] ignoring unknown {} token {:?}",
+                        Self::OVERRIDE_ENV,
+                        token
+                    ),
+                }
+            }
+            if !requested.is_empty() {
+                log::info!(
+                    "[drawing] using GPU backend override {}={raw:?}: {}",
+                    Self::OVERRIDE_ENV,
+                    requested
+                        .iter()
+                        .map(|b| b.label())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+                return requested;
+            }
+        }
+
+        Self::preferred_order().to_vec()
+    }
+
     fn preferred_order() -> &'static [GpuBackend] {
+        #[cfg(target_os = "android")]
+        {
+            // Android emulator Vulkan can successfully create an adapter,
+            // device, and pipeline, then segfault later on the render thread.
+            // Prefer the historically stable GLES path unless a developer
+            // explicitly opts into Vulkan via MINDSTREAM_DRAWING_BACKEND.
+            &[GpuBackend::OpenGl]
+        }
         #[cfg(target_os = "windows")]
         {
             &[GpuBackend::Vulkan, GpuBackend::Dx12, GpuBackend::OpenGl]
@@ -107,9 +147,21 @@ impl GpuBackend {
         {
             &[GpuBackend::Metal]
         }
-        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "android")))]
         {
             &[GpuBackend::Vulkan, GpuBackend::OpenGl]
+        }
+    }
+
+    fn from_override_token(token: &str) -> Option<GpuBackend> {
+        match token.trim().to_ascii_lowercase().as_str() {
+            "vulkan" | "vk" => Some(GpuBackend::Vulkan),
+            #[cfg(target_os = "windows")]
+            "dx12" | "directx12" | "directx-12" => Some(GpuBackend::Dx12),
+            #[cfg(target_os = "macos")]
+            "metal" => Some(GpuBackend::Metal),
+            "gl" | "gles" | "opengl" | "opengles" => Some(GpuBackend::OpenGl),
+            _ => None,
         }
     }
 
@@ -348,8 +400,8 @@ const LAG_LOGGING_ENABLED: bool = false;
 /// "blocking init on first open" behaviour.
 pub async fn build_persistent() -> Result<PersistentGpu, String> {
     let mut errors = Vec::new();
-    for backend in GpuBackend::preferred_order() {
-        match build_persistent_with_backend(*backend).await {
+    for backend in GpuBackend::candidates() {
+        match build_persistent_with_backend(backend).await {
             Ok(persistent) => return Ok(persistent),
             Err(err) => {
                 log::warn!(
