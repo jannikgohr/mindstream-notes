@@ -10,6 +10,7 @@
   import { openSettings } from '$lib/settings/store.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { mobileState, setSearchQuery } from './state.svelte';
+  import MobileNotificationCenter from './MobileNotificationCenter.svelte';
 </script>
 
 <header
@@ -29,6 +30,8 @@
       aria-label={tUi('search.notes.label')}
     />
   </div>
+
+  <MobileNotificationCenter />
 
   <Button
     variant="ghost"

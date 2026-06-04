@@ -6,7 +6,7 @@
  * Svelte component break at IDE time even though Vite resolves them
  * at runtime.
  *
- * The pattern is "one singleton component (UpdaterProgressDialog.svelte)
+ * The pattern is "one singleton component (ProgressDialog.svelte)
  * watches this state; any caller calls beginDownload/updateProgress/
  * finishDownload/endProgress to drive it." We export those helpers
  * rather than letting callers mutate the state directly so the

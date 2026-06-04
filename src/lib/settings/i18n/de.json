@@ -47,6 +47,13 @@
     "search.notes.label": "Notizen suchen",
     "settings.open": "Einstellungen öffnen",
 
+    "notifications.open": "Benachrichtigungen öffnen",
+    "notifications.title": "Benachrichtigungen",
+    "notifications.empty": "Derzeit keine Benachrichtigungen.",
+    "notifications.dismiss": "Benachrichtigung ausblenden",
+    "notifications.update.title": "Update verfügbar",
+    "notifications.update.message": "Mindstream Notes {to} ist verfügbar. Du nutzt {from}.",
+
     "tray.newNote": "Neue Notiz",
     "tray.newDrawing": "Neue Zeichnung",
     "tray.newDiagram": "Neues Diagramm",
@@ -244,6 +251,11 @@
     "privacy.clearCache": { "label": "Lokalen Cache leeren" },
     "language.code": { "label": "Anzeigesprache" },
     "about.appVersion": { "label": "App-Version" },
+    "about.tauriVersion": { "label": "Komponenten-Versionen" },
+    "about.scanForUpdates": {
+      "label": "Nach Updates suchen",
+      "description": "Prüft beim Start der Desktop-App auf eine neue Mindstream-Notes-Version und zeigt sie als Benachrichtigung an."
+    },
     "about.checkUpdates": { "label": "Auf Updates prüfen" }
   },
   "values": {

@@ -8,6 +8,7 @@
   import { Separator } from '$lib/components/ui/separator';
   import ThemeToggle from '$lib/components/ThemeToggle.svelte';
   import WindowControls from '$lib/components/WindowControls.svelte';
+  import NotificationCenter from '$lib/notifications/NotificationCenter.svelte';
   import { ui, toggleLeftSidebar, toggleRightSidebar } from '$lib/state.svelte';
   import { openSettings } from '$lib/settings/store.svelte';
 </script>
@@ -35,6 +36,7 @@
 
   <div data-tauri-drag-region class="flex-1"></div>
 
+  <NotificationCenter />
   <Button
     variant="ghost"
     size="icon"

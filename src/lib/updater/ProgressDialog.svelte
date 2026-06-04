@@ -1,9 +1,8 @@
 <script lang="ts">
   /**
-   * Blocking progress dialog driven by `updater-progress.svelte.ts`. Mounted
-   * once at the root (alongside ConfirmDialog), so any caller that drives
-   * the updater state machine gets the UI for free — currently that's the
-   * `check-updates` action in registry.svelte.ts.
+   * Blocking progress dialog driven by `progress.svelte.ts`. Mounted once
+   * at the root (alongside ConfirmDialog), so any caller that drives the
+   * updater state machine gets the UI for free.
    *
    * Non-dismissible by design: a partial download that gets killed mid-
    * flight by a closed dialog leaves disk artefacts and confuses the
@@ -12,8 +11,8 @@
    */
 
   import { Dialog } from 'bits-ui';
-  import { updaterProgress } from './updater-progress.svelte';
-  import { tUi } from './i18n.svelte';
+  import { tUi } from '$lib/settings/i18n.svelte';
+  import { updaterProgress } from './progress.svelte';
 
   // Round to 1 decimal at MB+ scale, integer at KB scale. Matches the
   // precision users actually care about for a download bar (jumpy
