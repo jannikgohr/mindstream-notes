@@ -10,8 +10,6 @@
  */
 
 import type { Component } from 'svelte';
-import { check } from '@tauri-apps/plugin-updater';
-import { relaunch } from '@tauri-apps/plugin-process';
 import { setMode } from 'mode-watcher';
 import {
   enable as enableAutostart,
@@ -22,29 +20,23 @@ import {
   getCloseToTray,
   getDesktopLanguage,
   getStartInTray,
-  isAppImageInstall,
   isTauri,
   setCloseToTray,
   setDesktopLanguage,
   setStartInTray
 } from '$lib/api';
-import { getPlatform, isMobile } from '$lib/platform';
+import { isMobile } from '$lib/platform';
 import {
   setLeftSidebarWidth,
   setRightSidebarWidth,
   setSortStrategy,
   ui
 } from '$lib/state.svelte';
-import { setLanguage, tUi } from './i18n.svelte';
+import { setLanguage } from './i18n.svelte';
 import type { SortStrategy } from '$lib/sort';
 import SignInForm from './customs/SignInForm.svelte';
 import { alert, confirm } from '$lib/components/confirm-dialog.svelte';
-import {
-  beginDownload,
-  endProgress,
-  finishDownload,
-  recordChunk
-} from './updater-progress.svelte';
+import { checkForUpdatesInteractively } from '$lib/updater';
 // Vite resolves JSON imports at build time (tsconfig has resolveJsonModule),
 // so the version values below get inlined into the bundle. No runtime cost,
 // no risk of drift between the About panel and what's actually installed.
@@ -192,126 +184,7 @@ export const SETTING_ACTIONS: Record<string, () => void | Promise<void>> = {
   'clear-cache': () => {
     console.info('[settings] action: clear-cache (stub)');
   },
-  'check-updates': async () => {
-    // The update flow is three confirm() gates so the user always knows
-    // what's about to happen:
-    //
-    //   1. After check()       — "v0.1.5 available, install now?"
-    //   2. After download      — "Update ready. Restart now?"
-    //
-    // Without #1, the NSIS installer dialog (even in `passive` mode)
-    // appears with no JS-side warning and reads as a scary OS prompt
-    // out of nowhere. Without #2, the app vanishes mid-session because
-    // relaunch() takes effect immediately.
-    //
-    // The Windows installer's "do you want to uninstall this app"
-    // wording (which was what surprised you on the first release) is
-    // suppressed at the system level by `plugins.updater.windows.installMode
-    // = "passive"` in tauri.conf.json. Passive mode shows a small
-    // progress bar but no buttons — the install proceeds without user
-    // interaction. The change here is purely about *our* messaging
-    // around it.
-
-    // Linux gate: the Tauri updater plugin's only Linux install path is
-    // "overwrite $APPIMAGE", so rpm / deb installations have no working
-    // install step. Symptom without this gate: the download completes
-    // (bar reaches 100%, flips to indeterminate install phase) and then
-    // downloadAndInstall() hangs forever because there's no AppImage to
-    // replace. Catch it before calling check() and point the user at a
-    // manual download instead.
-    if (getPlatform() === 'linux' && !(await isAppImageInstall())) {
-      await alert({
-        title: tUi('updater.unsupportedLinux.title'),
-        message: tUi('updater.unsupportedLinux.message'),
-        confirmLabel: tUi('updater.dismiss')
-      });
-      return;
-    }
-
-    let update;
-    try {
-      update = await check();
-    } catch (err) {
-      console.error('[updater] check failed', err);
-      await alert({
-        title: tUi('updater.checkFailed.title'),
-        message: tUi('updater.checkFailed.message'),
-        confirmLabel: tUi('updater.dismiss')
-      });
-      return;
-    }
-
-    if (!update) {
-      await alert({
-        title: tUi('updater.upToDate.title'),
-        message: tUi('updater.upToDate.message').replace(
-          '{version}',
-          pkg.version
-        ),
-        confirmLabel: tUi('updater.dismiss')
-      });
-      return;
-    }
-
-    console.info(
-      `[updater] available: ${update.version} (current ${pkg.version})`
-    );
-
-    const installNow = await confirm({
-      title: tUi('updater.available.title'),
-      message: tUi('updater.available.message')
-        .replace('{from}', pkg.version)
-        .replace('{to}', update.version),
-      confirmLabel: tUi('updater.install'),
-      cancelLabel: tUi('updater.later')
-    });
-    if (!installNow) return;
-
-    // Push events into the shared progress state (throttling lives in
-    // recordChunk so callbacks here stay one-liners). `endProgress()`
-    // runs in `finally` so the blocking progress dialog can't get
-    // stuck open if downloadAndInstall throws mid-download.
-    try {
-      await update.downloadAndInstall((event) => {
-        switch (event.event) {
-          case 'Started':
-            beginDownload(event.data.contentLength ?? 0);
-            console.info(
-              `[updater] downloading ${event.data.contentLength ?? '?'} bytes`
-            );
-            break;
-          case 'Progress':
-            recordChunk(event.data.chunkLength);
-            break;
-          case 'Finished':
-            finishDownload();
-            console.info('[updater] download finished, installing');
-            break;
-        }
-      });
-    } catch (err) {
-      console.error('[updater] install failed', err);
-      await alert({
-        title: tUi('updater.installFailed.title'),
-        message: tUi('updater.installFailed.message'),
-        confirmLabel: tUi('updater.dismiss')
-      });
-      return;
-    } finally {
-      endProgress();
-    }
-
-    const restartNow = await confirm({
-      title: tUi('updater.ready.title'),
-      message: tUi('updater.ready.message'),
-      confirmLabel: tUi('updater.restart'),
-      cancelLabel: tUi('updater.later')
-    });
-    if (restartNow) await relaunch();
-    // If the user declined, the new bits are already on disk — the
-    // next launch (manual quit + reopen) picks them up. No further
-    // action needed here.
-  }
+  'check-updates': checkForUpdatesInteractively
 };
 
 /**

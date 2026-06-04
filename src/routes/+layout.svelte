@@ -6,7 +6,7 @@
   import { applyAccentColor, clearAccentColor } from '$lib/settings/accent';
   import { invokeOrFallback, drawingSetTheme } from '$lib/api';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
-  import UpdaterProgressDialog from '$lib/settings/UpdaterProgressDialog.svelte';
+  import UpdaterProgressDialog from '$lib/updater/ProgressDialog.svelte';
 
   let { children } = $props();
 
@@ -119,7 +119,6 @@
 <ConfirmDialog />
 
 <!-- Singleton updater progress dialog. Driven by the helpers in
-     $lib/settings/updater-progress.svelte.ts — mounting it here means
-     anything that drives that state (currently the check-updates
-     settings action) gets the dialog for free, no per-call wiring. -->
+     $lib/updater/progress.svelte.ts — mounting it here means anything
+     that drives that state gets the dialog for free, no per-call wiring. -->
 <UpdaterProgressDialog />

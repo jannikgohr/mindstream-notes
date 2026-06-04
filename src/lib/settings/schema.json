@@ -487,6 +487,13 @@
             { "id": "about.appVersion", "scope": "G", "type": "info" },
             { "id": "about.tauriVersion", "scope": "G", "type": "info" },
             {
+              "id": "about.scanForUpdates",
+              "scope": "D",
+              "type": "toggle",
+              "default": true,
+              "platforms": ["desktop"]
+            },
+            {
               "id": "about.checkUpdates",
               "scope": "G",
               "type": "button",
