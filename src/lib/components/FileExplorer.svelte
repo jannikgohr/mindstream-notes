@@ -2,6 +2,7 @@
   import {
     ChevronRight,
     Feather,
+    FileQuestion,
     FileText,
     Folder,
     FolderOpen,
@@ -42,6 +43,7 @@
   import { tUi } from '$lib/settings/i18n.svelte';
   import { TRASH_ID } from '$lib/api';
   import type { TreeNode } from '$lib/api';
+  import { isKnownNoteKind } from '$lib/api/notes';
 
   interface Props {
     onOpenNote: (id: string) => void;
@@ -768,6 +770,8 @@
           <Feather class="size-3.5 shrink-0 text-muted-foreground" />
         {:else if kind === 'pdf'}
           <FileType2 class="size-3.5 shrink-0 text-muted-foreground" />
+        {:else if kind != null && !isKnownNoteKind(kind)}
+          <FileQuestion class="size-3.5 shrink-0 text-muted-foreground" />
         {:else}
           <FileText class="size-3.5 shrink-0 text-muted-foreground" />
         {/if}

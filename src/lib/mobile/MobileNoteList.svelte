@@ -15,6 +15,7 @@
    */
   import {
     Feather,
+    FileQuestion,
     FileText,
     FileType2,
     Folder,
@@ -24,6 +25,7 @@
   } from 'lucide-svelte';
   import type { NoteSummary, TreeNode } from '$lib/api';
   import { TRASH_ID } from '$lib/api';
+  import { isKnownNoteKind } from '$lib/api/notes';
   import {
     moveCollectionTo,
     moveNoteTo,
@@ -405,6 +407,8 @@
               <Feather class="size-5 text-muted-foreground" />
             {:else if noteKind === 'pdf'}
               <FileType2 class="size-5 text-muted-foreground" />
+            {:else if noteKind != null && !isKnownNoteKind(noteKind)}
+              <FileQuestion class="size-5 text-muted-foreground" />
             {:else}
               <FileText class="size-5 text-muted-foreground" />
             {/if}
@@ -466,6 +470,8 @@
               <Feather class="size-5 shrink-0 text-muted-foreground" />
             {:else if noteKind === 'pdf'}
               <FileType2 class="size-5 shrink-0 text-muted-foreground" />
+            {:else if noteKind != null && !isKnownNoteKind(noteKind)}
+              <FileQuestion class="size-5 shrink-0 text-muted-foreground" />
             {:else}
               <FileText class="size-5 shrink-0 text-muted-foreground" />
             {/if}
