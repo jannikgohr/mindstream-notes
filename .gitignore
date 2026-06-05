@@ -21,6 +21,7 @@ node_modules
 # It needs absolute paths (cargo doesn't resolve relative paths in build-script overrides),
 # so it can't be committed.
 /src-tauri/.cargo/config.toml
+/src-tauri/.pkgconfig
 /src/lib/ink-web/pkg
 ## Tauri signer
 .tauri
