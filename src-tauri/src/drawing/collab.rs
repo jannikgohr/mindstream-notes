@@ -7,6 +7,8 @@
 //! the collab room.
 
 use std::collections::HashMap;
+use std::io::ErrorKind;
+use std::net::IpAddr;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
@@ -17,7 +19,7 @@ use futures_util::{FutureExt, SinkExt, StreamExt};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc;
-use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::{Error as WsError, Message};
 
 const FRAME_SYNC_STEP_1: u8 = 0x00;
 const FRAME_SYNC_STEP_2: u8 = 0x01;
@@ -78,6 +80,11 @@ pub fn start(
 
     stop(&app, &note_id);
     log::info!("[drawing.collab] init note={note_id} room=resolved key=present url=configured");
+    if endpoint_kind(&url) == EndpointKind::Loopback {
+        log::warn!(
+            "[drawing.collab] relay endpoint is loopback note={note_id}; Android cannot reach a desktop relay through localhost/127.0.0.1"
+        );
+    }
 
     let (tx, rx) = mpsc::unbounded_channel();
     {
@@ -136,9 +143,10 @@ async fn provider_loop(
 ) {
     let cipher = Aes256Gcm::new_from_slice(&key).expect("32-byte key");
     let mut reconnect_attempt = 0_u32;
+    let connect_url = room_url(&url, &room_id);
+    let endpoint = endpoint_kind(&url);
 
     loop {
-        let connect_url = format!("{}?room={}", url, urlencoding::encode(&room_id));
         match tokio_tungstenite::connect_async(&connect_url).await {
             Ok((ws, _)) => {
                 reconnect_attempt = 0;
@@ -202,9 +210,11 @@ async fn provider_loop(
                 }
                 emit_status(&app, &note_id, true, false);
             }
-            Err(_) => {
+            Err(err) => {
                 log::warn!(
-                    "[drawing.collab] connect failed note={note_id} (relay unavailable or invalid)"
+                    "[drawing.collab] connect failed note={note_id} endpoint={} reason={}",
+                    endpoint.label(),
+                    connect_failure_reason(&err)
                 );
                 emit_status(&app, &note_id, true, false);
             }
@@ -325,6 +335,135 @@ fn decrypt_frame(cipher: &Aes256Gcm, frame: &[u8]) -> Option<(u8, Vec<u8>)> {
     Some((ty, payload))
 }
 
+fn room_url(url: &str, room_id: &str) -> String {
+    let url = websocket_url(url);
+    let separator = if url.contains('?') {
+        if url.ends_with('?') || url.ends_with('&') {
+            ""
+        } else {
+            "&"
+        }
+    } else {
+        "?"
+    };
+    format!("{url}{separator}room={}", urlencoding::encode(room_id))
+}
+
+fn websocket_url(url: &str) -> String {
+    let lower = url.to_ascii_lowercase();
+    if lower.starts_with("http://") {
+        format!("ws://{}", &url["http://".len()..])
+    } else if lower.starts_with("https://") {
+        format!("wss://{}", &url["https://".len()..])
+    } else {
+        url.to_string()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EndpointKind {
+    Loopback,
+    PrivateLan,
+    PublicOrHostname,
+    Invalid,
+}
+
+impl EndpointKind {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Loopback => "loopback",
+            Self::PrivateLan => "private_lan",
+            Self::PublicOrHostname => "configured",
+            Self::Invalid => "invalid",
+        }
+    }
+}
+
+fn endpoint_kind(url: &str) -> EndpointKind {
+    let Some(host) = websocket_host(url) else {
+        return EndpointKind::Invalid;
+    };
+    let normalized = host.trim_end_matches('.').to_ascii_lowercase();
+    if normalized == "localhost" || normalized.ends_with(".localhost") {
+        return EndpointKind::Loopback;
+    }
+    match normalized.parse::<IpAddr>() {
+        Ok(ip) if ip.is_loopback() => EndpointKind::Loopback,
+        Ok(IpAddr::V4(ip)) if ip.is_private() || ip.is_link_local() => EndpointKind::PrivateLan,
+        Ok(IpAddr::V6(ip)) if is_private_ipv6(&ip) => EndpointKind::PrivateLan,
+        Ok(_) | Err(_) => EndpointKind::PublicOrHostname,
+    }
+}
+
+fn websocket_host(url: &str) -> Option<&str> {
+    let (scheme, rest) = url.split_once("://")?;
+    if !matches!(
+        scheme.to_ascii_lowercase().as_str(),
+        "ws" | "wss" | "http" | "https"
+    ) {
+        return None;
+    }
+    let authority = rest
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or(rest)
+        .rsplit_once('@')
+        .map_or_else(
+            || rest.split(['/', '?', '#']).next().unwrap_or(rest),
+            |(_, host)| host,
+        );
+    if let Some(bracketed) = authority.strip_prefix('[') {
+        return bracketed.split_once(']').map(|(host, _)| host);
+    }
+    let host = authority
+        .rsplit_once(':')
+        .map_or(authority, |(host, port)| {
+            if port.chars().all(|ch| ch.is_ascii_digit()) {
+                host
+            } else {
+                authority
+            }
+        });
+    (!host.is_empty()).then_some(host)
+}
+
+fn is_private_ipv6(ip: &std::net::Ipv6Addr) -> bool {
+    let first = ip.segments()[0];
+    // fc00::/7 unique local, fe80::/10 link local.
+    (first & 0xfe00) == 0xfc00 || (first & 0xffc0) == 0xfe80
+}
+
+fn connect_failure_reason(err: &WsError) -> String {
+    match err {
+        WsError::Io(err) => match err.kind() {
+            ErrorKind::ConnectionRefused => "connection_refused".to_string(),
+            ErrorKind::ConnectionReset => "connection_reset".to_string(),
+            ErrorKind::ConnectionAborted => "connection_aborted".to_string(),
+            ErrorKind::NotConnected => "not_connected".to_string(),
+            ErrorKind::AddrInUse => "addr_in_use".to_string(),
+            ErrorKind::AddrNotAvailable => "addr_not_available".to_string(),
+            ErrorKind::TimedOut => "timed_out".to_string(),
+            ErrorKind::Interrupted => "interrupted".to_string(),
+            ErrorKind::Unsupported => "unsupported".to_string(),
+            ErrorKind::UnexpectedEof => "unexpected_eof".to_string(),
+            _ => err
+                .raw_os_error()
+                .map_or_else(|| "io".to_string(), |code| format!("io_os_{code}")),
+        },
+        WsError::Tls(_) => "tls".to_string(),
+        WsError::Url(_) => "url".to_string(),
+        WsError::Http(response) => format!("http_{}", response.status().as_u16()),
+        WsError::HttpFormat(_) => "http_format".to_string(),
+        WsError::Protocol(_) => "protocol".to_string(),
+        WsError::Capacity(_) => "capacity".to_string(),
+        WsError::Utf8(_) => "utf8".to_string(),
+        WsError::ConnectionClosed => "closed".to_string(),
+        WsError::AlreadyClosed => "already_closed".to_string(),
+        WsError::WriteBufferFull(_) => "write_buffer_full".to_string(),
+        WsError::AttackAttempt => "attack_attempt".to_string(),
+    }
+}
+
 fn emit_status(app: &AppHandle, note_id: &str, configured: bool, online: bool) {
     let event = CollabStatusEvent {
         note_id: note_id.to_string(),
@@ -333,5 +472,60 @@ fn emit_status(app: &AppHandle, note_id: &str, configured: bool, online: bool) {
     };
     if let Err(err) = app.emit(COLLAB_STATUS_EVENT, &event) {
         log::warn!("[drawing.collab] emit {COLLAB_STATUS_EVENT} failed: {err}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{endpoint_kind, room_url, EndpointKind};
+
+    #[test]
+    fn room_url_preserves_existing_query() {
+        assert_eq!(
+            room_url("wss://relay.example/ws", "room one"),
+            "wss://relay.example/ws?room=room%20one"
+        );
+        assert_eq!(
+            room_url("wss://relay.example/ws?token=abc", "room one"),
+            "wss://relay.example/ws?token=abc&room=room%20one"
+        );
+        assert_eq!(
+            room_url("wss://relay.example/ws?", "room one"),
+            "wss://relay.example/ws?room=room%20one"
+        );
+        assert_eq!(
+            room_url("http://192.168.1.10:1234/ws", "room one"),
+            "ws://192.168.1.10:1234/ws?room=room%20one"
+        );
+        assert_eq!(
+            room_url("https://relay.example/ws", "room one"),
+            "wss://relay.example/ws?room=room%20one"
+        );
+    }
+
+    #[test]
+    fn endpoint_kind_does_not_expose_endpoint_values() {
+        assert_eq!(endpoint_kind("ws://localhost:1234"), EndpointKind::Loopback);
+        assert_eq!(
+            endpoint_kind("http://localhost:1234"),
+            EndpointKind::Loopback
+        );
+        assert_eq!(endpoint_kind("ws://127.0.0.1:1234"), EndpointKind::Loopback);
+        assert_eq!(
+            endpoint_kind("ws://10.0.2.2:1234"),
+            EndpointKind::PrivateLan
+        );
+        assert_eq!(
+            endpoint_kind("wss://relay.example/ws"),
+            EndpointKind::PublicOrHostname
+        );
+        assert_eq!(
+            endpoint_kind("https://relay.example/ws"),
+            EndpointKind::PublicOrHostname
+        );
+        assert_eq!(
+            endpoint_kind("ftp://relay.example/ws"),
+            EndpointKind::Invalid
+        );
     }
 }

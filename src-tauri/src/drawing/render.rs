@@ -2672,6 +2672,9 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                         doc.rebuild_caches();
                         crate::drawing::notify_dirty(&note_id);
                         dirty = active_note_id.as_deref() == Some(note_id.as_str());
+                        if dirty {
+                            force_full_stroke_upload = true;
+                        }
                         log::debug!(
                             "[drawing.collab] remote update applied note={note_id} payload={}B active={}",
                             update.len(),

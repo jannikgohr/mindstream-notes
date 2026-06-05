@@ -28,6 +28,21 @@ function frameName(type: number): string {
   }
 }
 
+function roomUrl(url: string, roomId: string): string {
+  const lowerUrl = url.toLowerCase();
+  const websocketUrl = lowerUrl.startsWith('http://')
+    ? `ws://${url.slice('http://'.length)}`
+    : lowerUrl.startsWith('https://')
+      ? `wss://${url.slice('https://'.length)}`
+      : url;
+  const separator = websocketUrl.includes('?')
+    ? websocketUrl.endsWith('?') || websocketUrl.endsWith('&')
+      ? ''
+      : '&'
+    : '?';
+  return `${websocketUrl}${separator}room=${encodeURIComponent(roomId)}`;
+}
+
 export interface InkWebCollabHandle {
   encode_state_vector(): Uint8Array;
   encode_diff_for_state_vector(stateVector: Uint8Array): Uint8Array;
@@ -98,7 +113,7 @@ export class InkWebCollabProvider {
     }
     if (this.destroyed) return;
 
-    const url = `${this.opts.url}?room=${encodeURIComponent(this.opts.roomId)}`;
+    const url = roomUrl(this.opts.url, this.opts.roomId);
     let ws: WebSocket;
     try {
       ws = new WebSocket(url);
