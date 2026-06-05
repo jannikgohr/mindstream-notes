@@ -202,8 +202,10 @@ async fn provider_loop(
                 }
                 emit_status(&app, &note_id, true, false);
             }
-            Err(err) => {
-                log::warn!("[drawing.collab] connect failed note={note_id}: {err}");
+            Err(_) => {
+                log::warn!(
+                    "[drawing.collab] connect failed note={note_id} (relay unavailable or invalid)"
+                );
                 emit_status(&app, &note_id, true, false);
             }
         }

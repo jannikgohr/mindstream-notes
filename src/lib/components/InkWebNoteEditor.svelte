@@ -3,6 +3,8 @@
   import {
     drawingSaveInkState,
     loadNote,
+    noteRoomInfo,
+    onSessionChange,
     type DrawingToolbarSettings,
     type DrawingToolbarSettingsPayload
   } from '$lib/api';
@@ -12,9 +14,12 @@
     setSettingValue
   } from '$lib/settings/store.svelte';
   import {
+    clearNoteStatus,
     setNoteStatus,
     type SavingState
   } from '$lib/stores/note-status.svelte';
+  import { tree } from '$lib/stores/tree.svelte';
+  import { InkWebCollabProvider } from '$lib/sync/ink-web-collab-provider';
 
   interface Props {
     noteId: string;
@@ -31,8 +36,12 @@
       initialState: Uint8Array,
       initialToolbarSettings: DrawingToolbarSettings,
       onChange: (bytes: Uint8Array) => void,
-      onToolbarSettings: (settings: DrawingToolbarSettingsPayload) => void
+      onToolbarSettings: (settings: DrawingToolbarSettingsPayload) => void,
+      onCollabUpdate: (update: Uint8Array) => void
     ) => Promise<void>;
+    encode_state_vector: () => Uint8Array;
+    encode_diff_for_state_vector: (stateVector: Uint8Array) => Uint8Array;
+    apply_remote_update: (update: Uint8Array) => boolean;
     destroy?: () => void;
   };
 
@@ -43,6 +52,12 @@
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
   let pendingState: number[] | null = null;
   let handle: WebInkHandleInstance | null = null;
+  let provider: InkWebCollabProvider | null = null;
+  let collabConfigured = $state(false);
+  let collabOnline = $state(false);
+  let collabReady = false;
+  let lastSeenPushed = false;
+  let unsubSession: (() => void) | null = null;
 
   const INK_TOOL_SETTING = 'editor.ink.tool';
   const INK_COLOR_SETTING = 'editor.ink.color';
@@ -52,11 +67,19 @@
 
   $effect(() => {
     setNoteStatus(noteId, {
-      collabConfigured: false,
-      collabOnline: false,
+      collabConfigured,
+      collabOnline,
       savingState,
       isTrashed: false
     });
+  });
+
+  $effect(() => {
+    const pushed = tree.notesById[noteId]?.pushed ?? false;
+    if (!collabReady) return;
+    if (pushed === lastSeenPushed) return;
+    lastSeenPushed = pushed;
+    void setupCollabProvider();
   });
 
   function clearSaveTimer() {
@@ -147,6 +170,62 @@
     ]);
   }
 
+  async function setupCollabProvider(): Promise<void> {
+    provider?.destroy();
+    provider = null;
+    collabOnline = false;
+    collabConfigured = false;
+    console.info('[ink-collab] reset note=%s', noteId);
+
+    const collabUrl = (
+      (getSettingValue('account.collabServerUrl') as string | undefined) ?? ''
+    ).trim();
+    if (!collabUrl) {
+      console.info('[ink-collab] disabled note=%s (no relay URL)', noteId);
+      return;
+    }
+    if (!handle) return;
+
+    try {
+      const room = await noteRoomInfo(noteId);
+      if (!room) {
+        console.info(
+          '[ink-collab] no room note=%s (not pushed, no session, or missing key)',
+          noteId
+        );
+        return;
+      }
+      collabConfigured = true;
+      provider = new InkWebCollabProvider({
+        url: collabUrl,
+        roomId: room.room_id,
+        keyBytes: base64ToBytes(room.key_b64),
+        handle,
+        noteId,
+        onStatusChange: (online) => {
+          collabOnline = online;
+          console.info(
+            '[ink-collab] status note=%s configured=%s online=%s',
+            noteId,
+            collabConfigured,
+            online
+          );
+        }
+      });
+    } catch (err) {
+      console.debug('[InkWebNoteEditor] collab provider init failed', err);
+    }
+  }
+
+  function base64ToBytes(b64: string): Uint8Array {
+    const standard = b64.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = standard + '='.repeat((4 - (standard.length % 4)) % 4);
+    const bin = atob(padded);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+
   onMount(async () => {
     if (!canvasEl) return;
     const note = await loadNote(noteId);
@@ -171,15 +250,32 @@
         void saveToolbarSettings(settings).catch((err) => {
           console.warn('[ink-web-toolbar] failed to save settings', err);
         });
+      },
+      (update: Uint8Array) => {
+        provider?.sendLocalUpdate(update);
       }
     );
     toolbarSettingsReady = true;
+    lastSeenPushed = tree.notesById[noteId]?.pushed ?? false;
+    await setupCollabProvider();
+    collabReady = true;
+    unsubSession = onSessionChange(() => {
+      void setupCollabProvider();
+    });
   });
 
   onDestroy(() => {
     clearSaveTimer();
     void flushPendingState();
     disposed = true;
+    collabReady = false;
+    unsubSession?.();
+    unsubSession = null;
+    provider?.destroy();
+    provider = null;
+    collabConfigured = false;
+    collabOnline = false;
+    clearNoteStatus(noteId);
     handle?.destroy?.();
     handle = null;
   });
