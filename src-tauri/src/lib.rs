@@ -124,7 +124,14 @@ pub fn run() {
                 .arg(AUTOSTART_ARG)
                 .build(),
         )
-        .plugin(tauri_plugin_window_state::Builder::new().build())
+        .plugin(
+            tauri_plugin_window_state::Builder::new()
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::all()
+                        - tauri_plugin_window_state::StateFlags::VISIBLE,
+                )
+                .build(),
+        )
         .plugin(tauri_plugin_updater::Builder::new().build())
         .on_window_event(|window, event| {
             if window.label() == "main" {
@@ -187,9 +194,14 @@ pub fn run() {
             tray::init(app)?;
 
             #[cfg(desktop)]
-            if was_started_by_autostart() && desktop_settings::should_start_in_tray(app.handle()) {
-                if let Some(window) = app.get_webview_window("main") {
+            if let Some(window) = app.get_webview_window("main") {
+                if was_started_by_autostart()
+                    && desktop_settings::should_start_in_tray(app.handle())
+                {
                     let _ = window.hide();
+                } else {
+                    let _ = window.show();
+                    let _ = window.set_focus();
                 }
             }
 
