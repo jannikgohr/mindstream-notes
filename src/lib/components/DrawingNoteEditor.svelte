@@ -40,9 +40,15 @@
     drawingShow,
     drawingSetSaveDebounce,
     drawingSetToolbarSettings,
+    drawingStartCollab,
+    drawingStopCollab,
+    DRAWING_COLLAB_STATUS_EVENT,
     DRAWING_SAVE_STATUS_EVENT,
     DRAWING_TOOLBAR_SETTINGS_EVENT,
+    noteRoomInfo,
+    onSessionChange,
     type DrawingSaveStatusPayload,
+    type DrawingCollabStatusPayload,
     type DrawingToolbarSettingsPayload,
     TRASH_ID
   } from '$lib/api';
@@ -76,7 +82,13 @@
   let backCleanup: (() => void) | null = null;
   let unsubSaveStatus: UnlistenFn | null = null;
   let unsubToolbarSettings: UnlistenFn | null = null;
+  let unsubCollabStatus: UnlistenFn | null = null;
+  let unsubSession: (() => void) | null = null;
   let savingState = $state<SavingState>('idle');
+  let collabConfigured = $state(false);
+  let collabOnline = $state(false);
+  let collabReady = false;
+  let lastSeenPushed = false;
 
   const INK_TOOL_SETTING = 'editor.ink.tool';
   const INK_COLOR_SETTING = 'editor.ink.color';
@@ -112,16 +124,22 @@
 
   // Mirror our reactive status into the global per-note store so
   // the dockview right-header (NoteStatusIcons.svelte) renders the
-  // saving / trash icons next to the popout button. Same plumbing
-  // NoteEditor + FreeformNoteEditor use; ink notes have no collab
-  // (C5 pending), so collabConfigured / collabOnline stay false.
+  // saving / collab / trash icons next to the popout button.
   $effect(() => {
     setNoteStatus(noteId, {
-      collabConfigured: false,
-      collabOnline: false,
+      collabConfigured,
+      collabOnline,
       savingState,
       isTrashed
     });
+  });
+
+  $effect(() => {
+    const pushed = tree.notesById[noteId]?.pushed ?? false;
+    if (!collabReady) return;
+    if (pushed === lastSeenPushed) return;
+    lastSeenPushed = pushed;
+    void setupCollabProvider();
   });
 
   /** Translate the worker's snake_case status string into the
@@ -199,6 +217,39 @@
     ]);
   }
 
+  async function setupCollabProvider(): Promise<void> {
+    collabOnline = false;
+    collabConfigured = false;
+    await drawingStopCollab(noteId);
+
+    const collabUrl = (
+      (getSettingValue('account.collabServerUrl') as string | undefined) ?? ''
+    ).trim();
+    if (!collabUrl) return;
+
+    try {
+      const room = await noteRoomInfo(noteId);
+      if (!room) return;
+      await drawingStartCollab(
+        noteId,
+        collabUrl,
+        room.room_id,
+        base64ToBytes(room.key_b64)
+      );
+    } catch (err) {
+      console.debug('[DrawingNoteEditor] collab provider init failed', err);
+    }
+  }
+
+  function base64ToBytes(b64: string): Uint8Array {
+    const standard = b64.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = standard + '='.repeat((4 - (standard.length % 4)) % 4);
+    const bin = atob(padded);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+
   onMount(async () => {
     if (!isAndroid()) return;
 
@@ -243,6 +294,15 @@
       }
     );
 
+    unsubCollabStatus = await listen<DrawingCollabStatusPayload>(
+      DRAWING_COLLAB_STATUS_EVENT,
+      (event) => {
+        if (event.payload.note_id !== noteId) return;
+        collabConfigured = event.payload.configured;
+        collabOnline = event.payload.online;
+      }
+    );
+
     // Make sure the worker's debounce matches what this editor
     // expects. Cheap fire-and-forget; worker no-ops if the value
     // hasn't changed since the last push.
@@ -261,6 +321,12 @@
     await drawingShow(noteId);
     const tShowEnd = performance.now();
     mountedNative = true;
+    lastSeenPushed = tree.notesById[noteId]?.pushed ?? false;
+    await setupCollabProvider();
+    collabReady = true;
+    unsubSession = onSessionChange(() => {
+      void setupCollabProvider();
+    });
     console.log(
       `[ink-open] drawingShow_ipc=${(tShowEnd - tShowStart).toFixed(1)}ms ` +
         `total_to_show=${(tShowEnd - tMountStart).toFixed(1)}ms`
@@ -274,9 +340,17 @@
     unsubSaveStatus = null;
     unsubToolbarSettings?.();
     unsubToolbarSettings = null;
+    unsubCollabStatus?.();
+    unsubCollabStatus = null;
+    unsubSession?.();
+    unsubSession = null;
+    collabReady = false;
+    collabConfigured = false;
+    collabOnline = false;
     // Clear the dockview status row so closing the panel removes
     // its icons.
     clearNoteStatus(noteId);
+    void drawingStopCollab(noteId);
     if (!mountedNative) return;
     // drawing_hide also signals the save worker to flush any
     // pending save immediately — so a "drew + navigated away

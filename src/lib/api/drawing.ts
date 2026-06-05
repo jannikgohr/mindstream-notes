@@ -80,6 +80,32 @@ export function drawingSaveInkState(
   );
 }
 
+export function drawingStartCollab(
+  noteId: string,
+  url: string,
+  roomId: string,
+  keyBytes: Uint8Array
+): Promise<void> {
+  return invokeOrFallback<void>(
+    'drawing_start_collab',
+    {
+      noteId,
+      url,
+      roomId,
+      keyBytes: Array.from(keyBytes)
+    },
+    () => undefined
+  );
+}
+
+export function drawingStopCollab(noteId: string): Promise<void> {
+  return invokeOrFallback<void>(
+    'drawing_stop_collab',
+    { noteId },
+    () => undefined
+  );
+}
+
 /**
  * Push the resolved app theme down to the egui toolbar (B2). Called
  * whenever `appearance.mode` resolves to a new dark/light state or
@@ -167,6 +193,7 @@ export function drawingSetDesktopPanelBounds(
  */
 export const DRAWING_SAVE_STATUS_EVENT = 'drawing:save_status';
 export const DRAWING_TOOLBAR_SETTINGS_EVENT = 'drawing:toolbar_settings';
+export const DRAWING_COLLAB_STATUS_EVENT = 'drawing:collab_status';
 
 export interface DrawingSaveStatusPayload {
   note_id: string;
@@ -180,4 +207,10 @@ export interface DrawingToolbarSettingsPayload {
   width: number;
   fingerDrawingAllowed: boolean;
   pageThemeMode: 'light' | 'system';
+}
+
+export interface DrawingCollabStatusPayload {
+  note_id: string;
+  configured: boolean;
+  online: boolean;
 }

@@ -90,6 +90,7 @@
 
 use yrs::any::Any;
 use yrs::updates::decoder::Decode;
+use yrs::updates::encoder::{Encode, Encoder, EncoderV1};
 use yrs::{
     Array, ArrayRef, Doc, Map, MapPrelim, MapRef, Out, ReadTxn, StateVector, Transact, Update,
 };
@@ -312,6 +313,56 @@ impl StrokesDoc {
     pub fn encode(&self) -> Vec<u8> {
         let tx = self.doc.transact();
         tx.encode_state_as_update_v1(&StateVector::default())
+    }
+
+    /// Encode the current document's state vector. Used by the live
+    /// collab handshake so a peer can send only the updates this doc
+    /// is missing.
+    pub fn encode_state_vector(&self) -> Vec<u8> {
+        let tx = self.doc.transact();
+        let mut encoder = EncoderV1::new();
+        tx.state_vector().encode(&mut encoder);
+        encoder.to_vec()
+    }
+
+    /// Encode the diff between the given remote state vector and this
+    /// document. The remote vector is the v1 state-vector encoding used
+    /// by Yjs (`Y.encodeStateVector`).
+    pub fn encode_diff_for_state_vector(&self, state_vector: &[u8]) -> Option<Vec<u8>> {
+        let sv = StateVector::decode_v1(state_vector).ok()?;
+        let tx = self.doc.transact();
+        Some(tx.encode_state_as_update_v1(&sv))
+    }
+
+    /// Apply a v1 Yrs/Yjs update into the live stroke doc. Returns true
+    /// if the update decoded and was handed to yrs. Duplicate or already
+    /// known updates are accepted; yrs treats them as no-ops.
+    pub fn apply_update(&mut self, bytes: &[u8]) -> bool {
+        let Ok(update) = Update::decode_v1(bytes) else {
+            return false;
+        };
+        let mut tx = self.doc.transact_mut();
+        tx.apply_update(update).is_ok()
+    }
+
+    /// Run a local mutation and return the v1 update produced by exactly
+    /// that transaction. This is the narrow live-collab hook: callers can
+    /// broadcast a tiny delta without observing every yrs transaction or
+    /// re-encoding the full document.
+    pub fn transact_local_update<R>(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> (R, Option<Vec<u8>>) {
+        let before = {
+            let tx = self.doc.transact();
+            tx.state_vector()
+        };
+        let result = f(self);
+        let update = {
+            let tx = self.doc.transact();
+            tx.encode_state_as_update_v1(&before)
+        };
+        (result, (update.len() > 2).then_some(update))
     }
 
     /// Open a new stroke. Subsequent `push_point` calls accumulate

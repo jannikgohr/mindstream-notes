@@ -688,6 +688,19 @@ enum Msg {
         note_id: String,
         reply: SyncSender<Vec<u8>>,
     },
+    GetStateVectorForNote {
+        note_id: String,
+        reply: SyncSender<Option<Vec<u8>>>,
+    },
+    EncodeDiffForNote {
+        note_id: String,
+        state_vector: Vec<u8>,
+        reply: SyncSender<Option<Vec<u8>>>,
+    },
+    ApplyRemoteUpdate {
+        note_id: String,
+        update: Vec<u8>,
+    },
 }
 
 /// Pre-decoded form of one visible stroke, cached in
@@ -872,34 +885,40 @@ impl CanvasDocument {
     /// `visible_strokes` cache), so we have to re-decode from yrs to
     /// repopulate them. Per-action ~25 ms — fine for a button press,
     /// not for a per-sample hot path.
-    fn apply_undo_op(&mut self, op: &UndoOp) {
-        match op {
-            UndoOp::StrokeAdded(id) => {
-                self.strokes_doc.set_stroke_tombstoned(id, true);
-            }
-            UndoOp::EraserDrag(ids) | UndoOp::ClearAll(ids) => {
-                for id in ids {
-                    self.strokes_doc.set_stroke_tombstoned(id, false);
+    fn apply_undo_op(&mut self, op: &UndoOp) -> Option<Vec<u8>> {
+        let (_, update) = self
+            .strokes_doc
+            .transact_local_update(|strokes_doc| match op {
+                UndoOp::StrokeAdded(id) => {
+                    strokes_doc.set_stroke_tombstoned(id, true);
                 }
-            }
-        }
+                UndoOp::EraserDrag(ids) | UndoOp::ClearAll(ids) => {
+                    for id in ids {
+                        strokes_doc.set_stroke_tombstoned(id, false);
+                    }
+                }
+            });
         self.rebuild_caches();
+        update
     }
 
     /// Apply `op` in its original direction — what the user means by
     /// Redo. Mirror of [`apply_undo_op`].
-    fn apply_redo_op(&mut self, op: &UndoOp) {
-        match op {
-            UndoOp::StrokeAdded(id) => {
-                self.strokes_doc.set_stroke_tombstoned(id, false);
-            }
-            UndoOp::EraserDrag(ids) | UndoOp::ClearAll(ids) => {
-                for id in ids {
-                    self.strokes_doc.set_stroke_tombstoned(id, true);
+    fn apply_redo_op(&mut self, op: &UndoOp) -> Option<Vec<u8>> {
+        let (_, update) = self
+            .strokes_doc
+            .transact_local_update(|strokes_doc| match op {
+                UndoOp::StrokeAdded(id) => {
+                    strokes_doc.set_stroke_tombstoned(id, false);
                 }
-            }
-        }
+                UndoOp::EraserDrag(ids) | UndoOp::ClearAll(ids) => {
+                    for id in ids {
+                        strokes_doc.set_stroke_tombstoned(id, true);
+                    }
+                }
+            });
         self.rebuild_caches();
+        update
     }
 
     /// Slow path: walk `strokes_doc` once and rebuild *both* caches
@@ -1395,6 +1414,31 @@ pub fn get_state_for_note(note_id: &str) -> Vec<u8> {
     });
     rx.recv_timeout(Duration::from_millis(500))
         .unwrap_or_default()
+}
+
+pub fn get_state_vector_for_note(note_id: &str) -> Option<Vec<u8>> {
+    let (tx, rx) = mpsc::sync_channel::<Option<Vec<u8>>>(1);
+    send(Msg::GetStateVectorForNote {
+        note_id: note_id.to_string(),
+        reply: tx,
+    });
+    rx.recv_timeout(Duration::from_millis(500))
+        .unwrap_or_default()
+}
+
+pub fn encode_diff_for_note(note_id: &str, state_vector: &[u8]) -> Option<Vec<u8>> {
+    let (tx, rx) = mpsc::sync_channel::<Option<Vec<u8>>>(1);
+    send(Msg::EncodeDiffForNote {
+        note_id: note_id.to_string(),
+        state_vector: state_vector.to_vec(),
+        reply: tx,
+    });
+    rx.recv_timeout(Duration::from_millis(500))
+        .unwrap_or_default()
+}
+
+pub fn apply_remote_update(note_id: String, update: Vec<u8>) {
+    send(Msg::ApplyRemoteUpdate { note_id, update });
 }
 
 // ---------- render thread ----------
@@ -2303,10 +2347,16 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                 }
                             }
                             if let Some(id) = active_note_id.as_ref() {
-                                let committed_id = documents
-                                    .get_mut(id)
-                                    .and_then(|doc| doc.strokes_doc.end_stroke());
-                                if let Some(stroke_id) = committed_id {
+                                let committed = documents.get_mut(id).and_then(|doc| {
+                                    let (stroke_id, update) = doc
+                                        .strokes_doc
+                                        .transact_local_update(|strokes| strokes.end_stroke());
+                                    stroke_id.map(|stroke_id| (stroke_id, update))
+                                });
+                                if let Some((stroke_id, update)) = committed {
+                                    if let Some(update) = update {
+                                        crate::drawing::collab::broadcast_update(id, update);
+                                    }
                                     if let Some(doc) = documents.get_mut(id) {
                                         // Append a fresh StrokeMeta
                                         // to the eraser hit-test
@@ -2500,7 +2550,12 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             // already erased earlier).
                             let cleared: Vec<String> =
                                 doc.visible_strokes.iter().map(|m| m.id.clone()).collect();
-                            doc.strokes_doc.tombstone_all();
+                            let (_, update) = doc
+                                .strokes_doc
+                                .transact_local_update(|strokes| strokes.tombstone_all());
+                            if let Some(update) = update {
+                                crate::drawing::collab::broadcast_update(id, update);
+                            }
                             doc.segments.clear();
                             doc.visible_strokes.clear();
                             if !cleared.is_empty() {
@@ -2586,6 +2641,34 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                         .map(|doc| doc.strokes_doc.encode())
                         .unwrap_or_default();
                     let _ = reply.send(bytes);
+                }
+                Msg::GetStateVectorForNote { note_id, reply } => {
+                    let bytes = documents
+                        .get(&note_id)
+                        .map(|doc| doc.strokes_doc.encode_state_vector());
+                    let _ = reply.send(bytes);
+                }
+                Msg::EncodeDiffForNote {
+                    note_id,
+                    state_vector,
+                    reply,
+                } => {
+                    let bytes = documents.get(&note_id).and_then(|doc| {
+                        doc.strokes_doc.encode_diff_for_state_vector(&state_vector)
+                    });
+                    let _ = reply.send(bytes);
+                }
+                Msg::ApplyRemoteUpdate { note_id, update } => {
+                    let page_dark = page_theme_is_dark(page_theme_mode, app_dark);
+                    let Some(doc) = documents.get_mut(&note_id) else {
+                        continue;
+                    };
+                    if doc.strokes_doc.apply_update(&update) {
+                        doc.ensure_display_theme(page_dark);
+                        doc.rebuild_caches();
+                        crate::drawing::notify_dirty(&note_id);
+                        dirty = active_note_id.as_deref() == Some(note_id.as_str());
+                    }
                 }
                 Msg::SetTheme { dark, accent_argb } => {
                     let was_page_dark = page_theme_is_dark(page_theme_mode, app_dark);
@@ -2746,9 +2829,12 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
             if let Some(id) = active_note_id.as_ref() {
                 if let Some(doc) = documents.get_mut(id) {
                     let t_flush = std::time::Instant::now();
-                    let n = doc
-                        .strokes_doc
-                        .tombstone_strokes(&pending_eraser_tombstones);
+                    let (n, update) = doc.strokes_doc.transact_local_update(|strokes| {
+                        strokes.tombstone_strokes(&pending_eraser_tombstones)
+                    });
+                    if let Some(update) = update {
+                        crate::drawing::collab::broadcast_update(id, update);
+                    }
                     let t_tombstone = t_flush.elapsed();
                     let t_retess = std::time::Instant::now();
                     doc.retessellate_segments_from_cache();
@@ -2761,6 +2847,7 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
             // Always mark dirty so the render block below runs even
             // if no other event flipped it.
             dirty = true;
+            pending_eraser_tombstones.clear();
         }
 
         // Batch backpressure check — if many messages piled up
@@ -3182,7 +3269,9 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             if let Some(id) = active_note_id.as_ref() {
                                 if let Some(doc) = documents.get_mut(id) {
                                     if let Some(op) = doc.undo.pop() {
-                                        doc.apply_undo_op(&op);
+                                        if let Some(update) = doc.apply_undo_op(&op) {
+                                            crate::drawing::collab::broadcast_update(id, update);
+                                        }
                                         doc.redo.push(op);
                                         crate::drawing::notify_dirty(id);
                                         needs_rerender = true;
@@ -3195,7 +3284,9 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                             if let Some(id) = active_note_id.as_ref() {
                                 if let Some(doc) = documents.get_mut(id) {
                                     if let Some(op) = doc.redo.pop() {
-                                        doc.apply_redo_op(&op);
+                                        if let Some(update) = doc.apply_redo_op(&op) {
+                                            crate::drawing::collab::broadcast_update(id, update);
+                                        }
                                         doc.undo.push(op);
                                         crate::drawing::notify_dirty(id);
                                         needs_rerender = true;
@@ -3212,7 +3303,12 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                                     // matching Msg::Clear semantics.
                                     let cleared: Vec<String> =
                                         doc.visible_strokes.iter().map(|m| m.id.clone()).collect();
-                                    doc.strokes_doc.tombstone_all();
+                                    let (_, update) = doc
+                                        .strokes_doc
+                                        .transact_local_update(|strokes| strokes.tombstone_all());
+                                    if let Some(update) = update {
+                                        crate::drawing::collab::broadcast_update(id, update);
+                                    }
                                     doc.segments.clear();
                                     doc.visible_strokes.clear();
                                     if !cleared.is_empty() {

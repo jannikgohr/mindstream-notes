@@ -67,6 +67,8 @@ pub mod surface_source;
 // Android's SurfaceView bridge and desktop's first native-window
 // bridge; `platform/` carries the OS-specific glue.
 #[cfg(any(target_os = "android", desktop))]
+pub mod collab;
+#[cfg(any(target_os = "android", desktop))]
 pub mod pipeline;
 #[cfg(any(target_os = "android", desktop))]
 pub mod platform;
@@ -241,6 +243,35 @@ pub fn drawing_save_ink_state(
         .ok_or_else(|| format!("drawing_save_ink_state: note {note_id} not found"))
 }
 
+#[tauri::command]
+#[allow(unused_variables)]
+pub fn drawing_start_collab(
+    app: AppHandle,
+    note_id: String,
+    url: String,
+    room_id: String,
+    key_bytes: Vec<u8>,
+) -> Result<(), String> {
+    #[cfg(any(target_os = "android", desktop))]
+    {
+        collab::start(app, note_id, url, room_id, key_bytes)
+    }
+    #[cfg(not(any(target_os = "android", desktop)))]
+    {
+        Ok(())
+    }
+}
+
+#[tauri::command]
+#[allow(unused_variables)]
+pub fn drawing_stop_collab(app: AppHandle, note_id: String) -> Result<(), String> {
+    #[cfg(any(target_os = "android", desktop))]
+    {
+        collab::stop(&app, &note_id);
+    }
+    Ok(())
+}
+
 /// Hide the native drawing surface and let the WebView take input again.
 ///
 /// Called from `onDestroy`. Idempotent — repeated hides are fine.
@@ -252,6 +283,10 @@ pub fn drawing_save_ink_state(
 #[tauri::command]
 pub fn drawing_hide(_app: AppHandle, note_id: Option<String>) -> Result<(), String> {
     save_worker::flush_all();
+    #[cfg(any(target_os = "android", desktop))]
+    if let Some(id) = note_id.as_deref() {
+        collab::stop(&_app, id);
+    }
     #[cfg(target_os = "android")]
     {
         let _ = note_id;
