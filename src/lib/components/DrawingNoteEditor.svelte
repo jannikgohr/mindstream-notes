@@ -220,22 +220,32 @@
   async function setupCollabProvider(): Promise<void> {
     collabOnline = false;
     collabConfigured = false;
+    console.info('[ink-collab] reset note=%s', noteId);
     await drawingStopCollab(noteId);
 
     const collabUrl = (
       (getSettingValue('account.collabServerUrl') as string | undefined) ?? ''
     ).trim();
-    if (!collabUrl) return;
+    if (!collabUrl) {
+      console.info('[ink-collab] disabled note=%s (no relay URL)', noteId);
+      return;
+    }
 
     try {
       const room = await noteRoomInfo(noteId);
-      if (!room) return;
-      await drawingStartCollab(
-        noteId,
-        collabUrl,
-        room.room_id,
-        base64ToBytes(room.key_b64)
+      if (!room) {
+        console.info(
+          '[ink-collab] no room note=%s (not pushed, no session, or missing key)',
+          noteId
+        );
+        return;
+      }
+      const keyBytes = base64ToBytes(room.key_b64);
+      console.info(
+        '[ink-collab] init note=%s room=resolved key=present url=configured',
+        noteId
       );
+      await drawingStartCollab(noteId, collabUrl, room.room_id, keyBytes);
     } catch (err) {
       console.debug('[DrawingNoteEditor] collab provider init failed', err);
     }
@@ -298,6 +308,12 @@
       DRAWING_COLLAB_STATUS_EVENT,
       (event) => {
         if (event.payload.note_id !== noteId) return;
+        console.info(
+          '[ink-collab] status note=%s configured=%s online=%s',
+          noteId,
+          event.payload.configured,
+          event.payload.online
+        );
         collabConfigured = event.payload.configured;
         collabOnline = event.payload.online;
       }

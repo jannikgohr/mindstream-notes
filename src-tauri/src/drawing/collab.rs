@@ -30,7 +30,6 @@ const RECONNECT_MAX_MS: u64 = 30_000;
 pub const COLLAB_STATUS_EVENT: &str = "drawing:collab_status";
 
 #[derive(Serialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
 pub struct CollabStatusEvent {
     pub note_id: String,
     pub configured: bool,
@@ -52,6 +51,15 @@ fn providers() -> &'static Mutex<HashMap<String, ProviderHandle>> {
     PROVIDERS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+fn frame_name(ty: u8) -> String {
+    match ty {
+        FRAME_SYNC_STEP_1 => "sync_step_1".to_string(),
+        FRAME_SYNC_STEP_2 => "sync_step_2".to_string(),
+        FRAME_AWARENESS => "awareness".to_string(),
+        other => format!("unknown(0x{other:02x})"),
+    }
+}
+
 pub fn start(
     app: AppHandle,
     note_id: String,
@@ -69,6 +77,7 @@ pub fn start(
     key.copy_from_slice(&key_bytes);
 
     stop(&app, &note_id);
+    log::info!("[drawing.collab] init note={note_id} room=resolved key=present url=configured");
 
     let (tx, rx) = mpsc::unbounded_channel();
     {
@@ -89,6 +98,7 @@ pub fn stop(app: &AppHandle, note_id: &str) {
         .ok()
         .and_then(|mut map| map.remove(note_id));
     if let Some(handle) = handle {
+        log::info!("[drawing.collab] stop note={note_id}");
         let _ = handle.tx.send(ProviderCommand::Stop);
     }
     emit_status(app, note_id, false, false);
@@ -103,7 +113,16 @@ pub fn broadcast_update(note_id: &str, update: Vec<u8>) {
         .ok()
         .and_then(|map| map.get(note_id).map(|handle| handle.tx.clone()));
     if let Some(tx) = tx {
+        log::debug!(
+            "[drawing.collab] enqueue local update note={note_id} payload={}B",
+            update.len()
+        );
         let _ = tx.send(ProviderCommand::LocalUpdate(update));
+    } else {
+        log::debug!(
+            "[drawing.collab] send dropped (provider not running) note={note_id} payload={}B",
+            update.len()
+        );
     }
 }
 
@@ -124,13 +143,22 @@ async fn provider_loop(
             Ok((ws, _)) => {
                 reconnect_attempt = 0;
                 emit_status(&app, &note_id, true, true);
-                log::info!("[drawing.collab] open note={note_id} room={room_id}");
+                log::info!("[drawing.collab] open note={note_id}");
 
                 let (mut write, mut read) = ws.split();
                 if let Some(sv) = crate::drawing::render::get_state_vector_for_note(&note_id) {
                     if let Ok(frame) = encrypt_frame(&cipher, FRAME_SYNC_STEP_1, &sv) {
+                        log::debug!(
+                            "[drawing.collab] send sync_step_1 note={note_id} payload={}B frame={}B",
+                            sv.len(),
+                            frame.len()
+                        );
                         let _ = write.send(Message::Binary(frame.into())).await;
                     }
+                } else {
+                    log::warn!(
+                        "[drawing.collab] no state vector for note={note_id}; initial sync skipped"
+                    );
                 }
 
                 loop {
@@ -139,6 +167,11 @@ async fn provider_loop(
                             ProviderCommand::LocalUpdate(update) => {
                                 match encrypt_frame(&cipher, FRAME_SYNC_STEP_2, &update) {
                                     Ok(frame) => {
+                                        log::debug!(
+                                            "[drawing.collab] send sync_step_2 note={note_id} payload={}B frame={}B",
+                                            update.len(),
+                                            frame.len()
+                                        );
                                         if write.send(Message::Binary(frame.into())).await.is_err()
                                         {
                                             break;
@@ -212,24 +245,49 @@ async fn handle_frame<S>(
     S: SinkExt<Message> + Unpin,
     <S as futures_util::Sink<Message>>::Error: std::fmt::Display,
 {
+    let ty_for_log = frame.first().copied().unwrap_or(0xff);
     let Some((ty, payload)) = decrypt_frame(cipher, frame) else {
-        log::warn!("[drawing.collab] decrypt failed note={note_id}");
+        log::warn!(
+            "[drawing.collab] decrypt failed type={} frame={}B note={note_id} - likely a key mismatch between devices",
+            frame_name(ty_for_log),
+            frame.len()
+        );
         return;
     };
+    log::debug!(
+        "[drawing.collab] recv {} note={note_id} payload={}B frame={}B",
+        frame_name(ty),
+        payload.len(),
+        frame.len()
+    );
     match ty {
         FRAME_SYNC_STEP_1 => {
             if let Some(diff) = crate::drawing::render::encode_diff_for_note(note_id, &payload) {
                 match encrypt_frame(cipher, FRAME_SYNC_STEP_2, &diff) {
                     Ok(frame) => {
+                        log::debug!(
+                            "[drawing.collab] send sync_step_2 note={note_id} payload={}B frame={}B",
+                            diff.len(),
+                            frame.len()
+                        );
                         if let Err(err) = write.send(Message::Binary(frame.into())).await {
                             log::warn!("[drawing.collab] sync reply failed note={note_id}: {err}");
                         }
                     }
                     Err(err) => log::warn!("[drawing.collab] encrypt sync reply failed: {err}"),
                 }
+            } else {
+                log::warn!(
+                    "[drawing.collab] invalid state vector in sync_step_1 note={note_id} payload={}B",
+                    payload.len()
+                );
             }
         }
         FRAME_SYNC_STEP_2 => {
+            log::debug!(
+                "[drawing.collab] apply remote update note={note_id} payload={}B",
+                payload.len()
+            );
             crate::drawing::render::apply_remote_update(note_id.to_string(), payload.to_vec());
         }
         FRAME_AWARENESS => {

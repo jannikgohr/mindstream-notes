@@ -2661,6 +2661,10 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                 Msg::ApplyRemoteUpdate { note_id, update } => {
                     let page_dark = page_theme_is_dark(page_theme_mode, app_dark);
                     let Some(doc) = documents.get_mut(&note_id) else {
+                        log::warn!(
+                            "[drawing.collab] remote update dropped; note not loaded note={note_id} payload={}B",
+                            update.len()
+                        );
                         continue;
                     };
                     if doc.strokes_doc.apply_update(&update) {
@@ -2668,6 +2672,16 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
                         doc.rebuild_caches();
                         crate::drawing::notify_dirty(&note_id);
                         dirty = active_note_id.as_deref() == Some(note_id.as_str());
+                        log::debug!(
+                            "[drawing.collab] remote update applied note={note_id} payload={}B active={}",
+                            update.len(),
+                            dirty
+                        );
+                    } else {
+                        log::warn!(
+                            "[drawing.collab] remote update decode failed note={note_id} payload={}B",
+                            update.len()
+                        );
                     }
                 }
                 Msg::SetTheme { dark, accent_argb } => {
