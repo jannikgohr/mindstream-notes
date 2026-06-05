@@ -40,6 +40,7 @@ impl WebInkHandle {
         initial_toolbar_settings: JsValue,
         on_change: Function,
         on_toolbar_settings: Function,
+        on_collab_update: Function,
     ) -> Result<(), JsValue> {
         let toolbar_settings = ToolbarSettings::from_js(&initial_toolbar_settings);
         self.runner
@@ -52,6 +53,7 @@ impl WebInkHandle {
                         toolbar_settings,
                         on_change.clone(),
                         on_toolbar_settings.clone(),
+                        on_collab_update.clone(),
                         &cc.egui_ctx,
                     )))
                 }),
@@ -62,6 +64,29 @@ impl WebInkHandle {
     #[wasm_bindgen]
     pub fn destroy(&self) {
         self.runner.destroy();
+    }
+
+    #[wasm_bindgen]
+    pub fn encode_state_vector(&self) -> Vec<u8> {
+        self.runner
+            .app_mut::<InkWebApp>()
+            .map(|app| app.doc.encode_state_vector())
+            .unwrap_or_default()
+    }
+
+    #[wasm_bindgen]
+    pub fn encode_diff_for_state_vector(&self, state_vector: Vec<u8>) -> Vec<u8> {
+        self.runner
+            .app_mut::<InkWebApp>()
+            .and_then(|app| app.doc.encode_diff_for_state_vector(&state_vector))
+            .unwrap_or_default()
+    }
+
+    #[wasm_bindgen]
+    pub fn apply_remote_update(&self, update: Vec<u8>) -> bool {
+        self.runner
+            .app_mut::<InkWebApp>()
+            .is_some_and(|mut app| app.apply_remote_update(&update))
     }
 }
 
@@ -92,6 +117,8 @@ struct InkWebApp {
     redo: Vec<UndoOp>,
     on_change: Function,
     on_toolbar_settings: Function,
+    on_collab_update: Function,
+    egui_ctx: egui::Context,
 }
 
 impl InkWebApp {
@@ -100,6 +127,7 @@ impl InkWebApp {
         toolbar_settings: ToolbarSettings,
         on_change: Function,
         on_toolbar_settings: Function,
+        on_collab_update: Function,
         egui_ctx: &egui::Context,
     ) -> Self {
         let doc = StrokesDoc::from_bytes(&initial_state);
@@ -128,6 +156,8 @@ impl InkWebApp {
             redo: Vec::new(),
             on_change,
             on_toolbar_settings,
+            on_collab_update,
+            egui_ctx: egui_ctx.clone(),
         }
     }
 
@@ -141,6 +171,26 @@ impl InkWebApp {
         let bytes = self.doc.encode();
         let array = Uint8Array::from(bytes.as_slice());
         let _ = self.on_change.call1(&JsValue::NULL, &array);
+    }
+
+    fn emit_collab_update(&self, update: Option<Vec<u8>>) {
+        let Some(update) = update.filter(|update| !update.is_empty()) else {
+            return;
+        };
+        let array = Uint8Array::from(update.as_slice());
+        let _ = self.on_collab_update.call1(&JsValue::NULL, &array);
+    }
+
+    fn apply_remote_update(&mut self, update: &[u8]) -> bool {
+        if !self.doc.apply_update(update) {
+            return false;
+        }
+        self.refresh_strokes();
+        self.cancel_in_flight_stroke();
+        self.finish_eraser_drag(false);
+        self.emit_change();
+        self.egui_ctx.request_repaint();
+        true
     }
 
     fn emit_toolbar_settings(&self) {
@@ -230,13 +280,16 @@ impl InkWebApp {
                 .iter()
                 .map(|stroke| stroke.id.clone())
                 .collect();
-            self.doc.tombstone_all();
+            let (_, update) = self
+                .doc
+                .transact_local_update(|strokes| strokes.tombstone_all());
             self.refresh_strokes();
             self.cancel_in_flight_stroke();
             self.finish_eraser_drag(false);
             if !cleared.is_empty() {
                 self.record_op(UndoOp::ClearAll(cleared));
             }
+            self.emit_collab_update(update);
             doc_changed = true;
         }
         if actions.undo {
@@ -552,9 +605,13 @@ impl InkWebApp {
     fn finish_stroke(&mut self) {
         self.drawing = false;
         self.in_flight.clear();
-        if let Some(id) = self.doc.end_stroke() {
+        let (id, update) = self
+            .doc
+            .transact_local_update(|strokes| strokes.end_stroke());
+        if let Some(id) = id {
             self.record_op(UndoOp::StrokeAdded(id));
             self.refresh_strokes();
+            self.emit_collab_update(update);
             self.emit_change();
         }
     }
@@ -589,8 +646,9 @@ impl InkWebApp {
         let Some(op) = self.undo.pop() else {
             return false;
         };
-        self.apply_undo_op(&op);
+        let update = self.apply_undo_op(&op);
         self.redo.push(op);
+        self.emit_collab_update(update);
         true
     }
 
@@ -598,41 +656,44 @@ impl InkWebApp {
         let Some(op) = self.redo.pop() else {
             return false;
         };
-        self.apply_redo_op(&op);
+        let update = self.apply_redo_op(&op);
         self.undo.push(op);
+        self.emit_collab_update(update);
         true
     }
 
-    fn apply_undo_op(&mut self, op: &UndoOp) {
-        match op {
+    fn apply_undo_op(&mut self, op: &UndoOp) -> Option<Vec<u8>> {
+        let (_, update) = self.doc.transact_local_update(|doc| match op {
             UndoOp::StrokeAdded(id) => {
-                self.doc.set_stroke_tombstoned(id, true);
+                doc.set_stroke_tombstoned(id, true);
             }
             UndoOp::EraserDrag(ids) | UndoOp::ClearAll(ids) => {
                 for id in ids {
-                    self.doc.set_stroke_tombstoned(id, false);
+                    doc.set_stroke_tombstoned(id, false);
                 }
             }
-        }
+        });
         self.refresh_strokes();
         self.cancel_in_flight_stroke();
         self.finish_eraser_drag(false);
+        update
     }
 
-    fn apply_redo_op(&mut self, op: &UndoOp) {
-        match op {
+    fn apply_redo_op(&mut self, op: &UndoOp) -> Option<Vec<u8>> {
+        let (_, update) = self.doc.transact_local_update(|doc| match op {
             UndoOp::StrokeAdded(id) => {
-                self.doc.set_stroke_tombstoned(id, false);
+                doc.set_stroke_tombstoned(id, false);
             }
             UndoOp::EraserDrag(ids) | UndoOp::ClearAll(ids) => {
                 for id in ids {
-                    self.doc.set_stroke_tombstoned(id, true);
+                    doc.set_stroke_tombstoned(id, true);
                 }
             }
-        }
+        });
         self.refresh_strokes();
         self.cancel_in_flight_stroke();
         self.finish_eraser_drag(false);
+        update
     }
 
     fn erase_at(&mut self, page_pos: egui::Pos2, radius: f32) -> Vec<String> {
@@ -642,7 +703,11 @@ impl InkWebApp {
             .filter(|stroke| stroke_hits(stroke, page_pos, radius))
             .map(|stroke| stroke.id.clone())
             .collect();
-        if self.doc.tombstone_strokes(&ids) > 0 {
+        let (count, update) = self
+            .doc
+            .transact_local_update(|doc| doc.tombstone_strokes(&ids));
+        if count > 0 {
+            self.emit_collab_update(update);
             ids.into_iter().collect()
         } else {
             Vec::new()
@@ -712,6 +777,10 @@ impl InkWebApp {
 }
 
 impl eframe::App for InkWebApp {
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        Some(self)
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.show_toolbar(ctx);
         egui::CentralPanel::default()

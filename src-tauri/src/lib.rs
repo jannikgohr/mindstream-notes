@@ -278,6 +278,8 @@ pub fn run() {
             drawing::drawing_clear,
             drawing::drawing_set_save_debounce,
             drawing::drawing_save_ink_state,
+            drawing::drawing_start_collab,
+            drawing::drawing_stop_collab,
             drawing::drawing_set_theme,
             drawing::drawing_set_toolbar_settings,
             drawing::drawing_set_desktop_panel_bounds,
