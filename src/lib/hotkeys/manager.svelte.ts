@@ -47,7 +47,7 @@
  */
 
 import { SvelteSet } from 'svelte/reactivity';
-import { formatChord, parseBinding } from './parse';
+import { formatChord, normalizeKey, parseBinding } from './parse';
 import {
   COMMAND_BY_ID,
   HOTKEY_COMMANDS,
@@ -145,7 +145,7 @@ interface EventFlags {
   ctrl: boolean;
   alt: boolean;
   shift: boolean;
-  key: string;
+  keys: string[];
 }
 
 /**
@@ -156,6 +156,25 @@ interface EventFlags {
  * property is the source of the user-facing "use current keyboard
  * layout" guarantee.
  */
+function keyCandidatesFromEvent(e: KeyboardEvent): string[] {
+  const keys: string[] = [];
+  const add = (key: string | null) => {
+    if (key && !keys.includes(key)) keys.push(key);
+  };
+
+  add(normalizeKey(e.key));
+
+  // `KeyboardEvent.key` is layout-aware, which is right for recorded
+  // shortcuts, but shifted number-row defaults such as Mod+Shift+8 turn
+  // into symbols on many layouts (for example `(` on German keyboards).
+  // Keep the typed key first, then add the physical digit as a fallback
+  // so catalogue defaults still fire across layouts.
+  const digit = /^(?:Digit|Numpad)([0-9])$/.exec(e.code)?.[1] ?? null;
+  add(digit);
+
+  return keys;
+}
+
 function flagsFromEvent(e: KeyboardEvent): EventFlags | null {
   if (e.isComposing) return null;
   if (e.key === 'Dead' || e.key === 'Unidentified') return null;
@@ -168,12 +187,14 @@ function flagsFromEvent(e: KeyboardEvent): EventFlags | null {
   ) {
     return null;
   }
+  const keys = keyCandidatesFromEvent(e);
+  if (keys.length === 0) return null;
   return {
     meta: e.metaKey,
     ctrl: e.ctrlKey,
     alt: e.altKey,
     shift: e.shiftKey,
-    key: e.key.toLowerCase()
+    keys
   };
 }
 
@@ -226,7 +247,7 @@ function chordMatchesEvent(binding: Chord, event: EventFlags): boolean {
   if (event.ctrl !== want.ctrl) return false;
   if (event.alt !== want.alt) return false;
   if (event.shift !== want.shift) return false;
-  if (event.key !== binding.key) return false;
+  if (!event.keys.includes(binding.key)) return false;
   return true;
 }
 
@@ -359,7 +380,7 @@ export function bindingFromEvent(event: KeyboardEvent): string | null {
     ctrl: mac ? flags.ctrl : false,
     alt: flags.alt,
     shift: flags.shift,
-    key: flags.key
+    key: flags.keys[0]
   };
   // Round-trip through the parser to reuse the "no unmodified printable
   // key" validation rule — the recorder mustn't store something the

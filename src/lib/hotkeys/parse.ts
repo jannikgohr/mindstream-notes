@@ -137,7 +137,7 @@ function blankChord(): Chord {
  * else goes through KEY_ALIASES then `toLowerCase()`. Empty / whitespace
  * input returns `null` so the caller can reject the whole binding.
  */
-function normalizeToken(raw: string): string | null {
+export function normalizeKey(raw: string): string | null {
   const t = raw.trim().toLowerCase();
   if (t.length === 0) return null;
   if (KEY_ALIASES[t]) return KEY_ALIASES[t];
@@ -176,7 +176,7 @@ export function parseBinding(input: string): Chord | null {
   const keyTokens: string[] = [];
 
   for (const raw of rawTokens) {
-    const token = normalizeToken(raw);
+    const token = normalizeKey(raw);
     if (token === null) return null;
     if (MODIFIER_TOKENS.has(token)) {
       // Aliases for the same modifier merge silently — "ctrl"/"control"

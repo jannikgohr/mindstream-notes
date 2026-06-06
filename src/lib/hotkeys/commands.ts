@@ -46,10 +46,14 @@ import {
   orderedListSchema,
   listItemSchema,
   codeBlockSchema,
-  toggleStrongCommand,
-  toggleEmphasisCommand
+  strongSchema,
+  emphasisSchema
 } from '@milkdown/kit/preset/commonmark';
-import { undoCommand, redoCommand } from '@milkdown/kit/plugin/history';
+import { toggleMark } from '@milkdown/kit/prose/commands';
+import {
+  redo as proseRedo,
+  undo as proseUndo
+} from '@milkdown/kit/prose/history';
 import { applyListAction } from '$lib/components/editor-toolbar/commands';
 import type { CommandScope, EditorKind } from './types';
 
@@ -97,16 +101,24 @@ export type CommandDefinition = GlobalCommand | EditorCommand;
  */
 
 const undo = (ctx: Ctx) => {
-  ctx.get(commandsCtx).call(undoCommand.key);
+  const view = ctx.get(editorViewCtx);
+  proseUndo(view.state, view.dispatch, view);
+  view.focus();
 };
 const redo = (ctx: Ctx) => {
-  ctx.get(commandsCtx).call(redoCommand.key);
+  const view = ctx.get(editorViewCtx);
+  proseRedo(view.state, view.dispatch, view);
+  view.focus();
 };
 const toggleBold = (ctx: Ctx) => {
-  ctx.get(commandsCtx).call(toggleStrongCommand.key);
+  const view = ctx.get(editorViewCtx);
+  toggleMark(strongSchema.type(ctx))(view.state, view.dispatch, view);
+  view.focus();
 };
 const toggleItalic = (ctx: Ctx) => {
-  ctx.get(commandsCtx).call(toggleEmphasisCommand.key);
+  const view = ctx.get(editorViewCtx);
+  toggleMark(emphasisSchema.type(ctx))(view.state, view.dispatch, view);
+  view.focus();
 };
 
 /** Headings and paragraph: skipped inside code/lists, same gate the
