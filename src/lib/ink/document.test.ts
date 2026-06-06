@@ -159,6 +159,25 @@ describe('InkDocument', () => {
     expect(doc.visibleStrokes()).toHaveLength(0);
   });
 
+  it('returns only strokes intersecting a viewport bounds query', () => {
+    const doc = new InkDocument();
+    doc.beginStroke(DEFAULT_COLOR, DEFAULT_WIDTH);
+    doc.pushPoint(10, 10, 1);
+    doc.pushPoint(20, 10, 1);
+    const visible = doc.endStroke().value;
+    doc.beginStroke(DEFAULT_COLOR, DEFAULT_WIDTH);
+    doc.pushPoint(2000, 2000, 1);
+    doc.pushPoint(2010, 2000, 1);
+    doc.endStroke();
+    if (!visible) throw new Error('expected committed stroke');
+
+    expect(
+      doc
+        .visibleStrokesInBounds({ minX: 0, minY: 0, maxX: 100, maxY: 100 }, 2)
+        .map((stroke) => stroke.id)
+    ).toEqual([visible]);
+  });
+
   it('clears visible strokes and restores exactly those on undo', () => {
     const doc = new InkDocument();
     doc.beginStroke(DEFAULT_COLOR, DEFAULT_WIDTH);

@@ -506,8 +506,9 @@
     ctx.fillRect(0, 0, view.width, view.height);
 
     drawPages(ctx, visibleBounds);
-    for (const stroke of strokes) {
-      if (!strokeIntersectsBounds(stroke, visibleBounds)) continue;
+    const visibleStrokes =
+      doc?.visibleStrokesInBounds(visibleBounds, 2) ?? strokes;
+    for (const stroke of visibleStrokes) {
       drawStroke(ctx, stroke.points, displayColor(stroke.color), stroke.width);
     }
     drawStroke(ctx, inFlight, displayColor(colorArgb), width);
@@ -520,37 +521,6 @@
       maxX: (view.width - view.panX) / view.scale,
       maxY: (view.height - view.panY) / view.scale
     };
-  }
-
-  function strokeIntersectsBounds(
-    stroke: InkStroke,
-    visible: StrokeBounds
-  ): boolean {
-    const bounds = stroke.bounds ?? boundsOfPoints(stroke.points);
-    const padding = stroke.width + 2;
-    return (
-      bounds.maxX + padding >= visible.minX &&
-      bounds.minX - padding <= visible.maxX &&
-      bounds.maxY + padding >= visible.minY &&
-      bounds.minY - padding <= visible.maxY
-    );
-  }
-
-  function boundsOfPoints(points: InkPoint[]): StrokeBounds {
-    let minX = Number.POSITIVE_INFINITY;
-    let minY = Number.POSITIVE_INFINITY;
-    let maxX = Number.NEGATIVE_INFINITY;
-    let maxY = Number.NEGATIVE_INFINITY;
-    for (const point of points) {
-      minX = Math.min(minX, point.x);
-      minY = Math.min(minY, point.y);
-      maxX = Math.max(maxX, point.x);
-      maxY = Math.max(maxY, point.y);
-    }
-    if (minX === Number.POSITIVE_INFINITY) {
-      return { minX: 0, minY: 0, maxX: 0, maxY: 0 };
-    }
-    return { minX, minY, maxX, maxY };
   }
 
   function drawPages(ctx: CanvasRenderingContext2D, visible: StrokeBounds) {
