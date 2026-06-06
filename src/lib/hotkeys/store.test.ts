@@ -1,0 +1,188 @@
+/**
+ * Tests for the hotkey store — the reactive `hotkeys.bindings` map
+ * and the get / set / reset helpers that mediate between the UI, the
+ * manager, and the settings store on disk.
+ *
+ * Each test isolates state by clearing both the in-memory map and any
+ * `hotkey.*` entries that landed in `settings.values` via `setBinding`.
+ * Without that sweep tests would leak bindings into each other and
+ * later asserts would fail on the residue.
+ */
+import { afterEach, describe, expect, it } from 'vitest';
+import {
+  findCommandByBinding,
+  getBinding,
+  hotkeys,
+  hydrateBindingsFromSettings,
+  isCustomized,
+  resetBinding,
+  setBinding
+} from './store.svelte';
+import { settings } from '$lib/settings/store.svelte';
+import { COMMAND_BY_ID } from './commands';
+
+const BOLD = 'editor.markdown.bold';
+const ITALIC = 'editor.markdown.italic';
+
+afterEach(() => {
+  // In-memory map: wipe all overrides so the next test starts on
+  // catalogue defaults.
+  for (const key of Object.keys(hotkeys.bindings)) {
+    delete hotkeys.bindings[key];
+  }
+  // Settings persistence: drop any hotkey.* rows. We don't touch
+  // other settings — those belong to the parent test suite.
+  for (const key of Object.keys(settings.values)) {
+    if (key.startsWith('hotkey.')) delete settings.values[key];
+  }
+});
+
+describe('store.getBinding', () => {
+  it('returns the catalogue default when not customised', () => {
+    expect(getBinding(BOLD)).toBe(COMMAND_BY_ID[BOLD].defaultBinding);
+  });
+
+  it('returns the in-map value when customised', () => {
+    hotkeys.bindings[BOLD] = 'mod+j';
+    expect(getBinding(BOLD)).toBe('mod+j');
+  });
+
+  it('returns null when the binding is explicitly unset', () => {
+    // Distinct from "no entry in the map" — `null` means the user
+    // touched this row and chose "no shortcut". The default must
+    // NOT come back as a fallback.
+    hotkeys.bindings[BOLD] = null;
+    expect(getBinding(BOLD)).toBeNull();
+  });
+
+  it('returns null for an unknown command id', () => {
+    expect(getBinding('totally.made.up')).toBeNull();
+  });
+});
+
+describe('store.setBinding', () => {
+  it('canonicalises the stored value', async () => {
+    // The recorder doesn't have to hand us canonical input — the
+    // store decides what's persisted. Casing and modifier order
+    // both normalise.
+    await setBinding(BOLD, 'Shift+Mod+B');
+    expect(hotkeys.bindings[BOLD]).toBe('mod+shift+b');
+  });
+
+  it('null is the explicit-unset signal', async () => {
+    await setBinding(BOLD, null);
+    expect(hotkeys.bindings[BOLD]).toBeNull();
+  });
+
+  it('refuses to persist input that fails to parse', async () => {
+    await expect(setBinding(BOLD, 'garbage')).rejects.toThrow();
+  });
+
+  it('clears the previous owner when a chord is already taken', async () => {
+    // The conflict-swap path. User had bold on a custom chord;
+    // assigning that same chord to italic must clear bold so the
+    // single-binding invariant survives.
+    await setBinding(BOLD, 'mod+x');
+    await setBinding(ITALIC, 'mod+x');
+    expect(getBinding(BOLD)).toBeNull();
+    expect(getBinding(ITALIC)).toBe('mod+x');
+  });
+
+  it('leaves a default-only binding alone when the new chord collides with its default', async () => {
+    // setBinding's swap path only clears OTHER commands whose user
+    // override matches the new chord. A default-only command is
+    // left alone — the matcher's user-override-wins priority
+    // handles the collision at dispatch time. That keeps the user's
+    // intent reversible: reset italic and bold's default kicks
+    // back in without the user having to manually rebind it.
+    const boldDefault = COMMAND_BY_ID[BOLD].defaultBinding;
+    expect(boldDefault).not.toBeNull();
+    if (!boldDefault) return;
+    await setBinding(ITALIC, boldDefault);
+    expect(getBinding(BOLD)).toBe(boldDefault);
+    expect(getBinding(ITALIC)).toBe(boldDefault);
+  });
+
+  it('ignores writes to unknown command ids', async () => {
+    await setBinding('not.a.real.command', 'mod+a');
+    expect(getBinding('not.a.real.command')).toBeNull();
+  });
+});
+
+describe('store.resetBinding', () => {
+  it('restores the catalogue default', async () => {
+    await setBinding(BOLD, 'mod+j');
+    await resetBinding(BOLD);
+    expect(getBinding(BOLD)).toBe(COMMAND_BY_ID[BOLD].defaultBinding);
+  });
+});
+
+describe('store.isCustomized', () => {
+  it('is false when the binding equals the default', () => {
+    expect(isCustomized(BOLD)).toBe(false);
+  });
+
+  it('is true when a custom binding is set', () => {
+    hotkeys.bindings[BOLD] = 'mod+j';
+    expect(isCustomized(BOLD)).toBe(true);
+  });
+
+  it('is true when the binding is explicitly unset', () => {
+    hotkeys.bindings[BOLD] = null;
+    expect(isCustomized(BOLD)).toBe(true);
+  });
+
+  it('is false for an unknown command id', () => {
+    expect(isCustomized('made.up')).toBe(false);
+  });
+});
+
+describe('store.findCommandByBinding', () => {
+  it('returns the command that owns a chord via override', () => {
+    hotkeys.bindings[BOLD] = 'mod+j';
+    expect(findCommandByBinding('mod+j')?.id).toBe(BOLD);
+  });
+
+  it('returns the command that owns a chord via default', () => {
+    // No overrides — the default for bold is mod+b.
+    const def = COMMAND_BY_ID[BOLD].defaultBinding;
+    expect(def).not.toBeNull();
+    if (!def) return;
+    expect(findCommandByBinding(def)?.id).toBe(BOLD);
+  });
+
+  it('returns null when no command owns the chord', () => {
+    expect(findCommandByBinding('mod+q')).toBeNull();
+  });
+});
+
+describe('store.hydrateBindingsFromSettings', () => {
+  it('overlays user-saved values from settings.values', () => {
+    settings.values[`hotkey.${BOLD}`] = 'mod+j';
+    hydrateBindingsFromSettings();
+    expect(getBinding(BOLD)).toBe('mod+j');
+  });
+
+  it('forgets overrides when the settings entry disappears', () => {
+    // Mirrors a "reset to default" round-trip: the row gets the
+    // default written back, then localStorage gets cleaned out, and
+    // the next hydrate falls back to the catalogue.
+    settings.values[`hotkey.${BOLD}`] = 'mod+j';
+    hydrateBindingsFromSettings();
+    delete settings.values[`hotkey.${BOLD}`];
+    hydrateBindingsFromSettings();
+    expect(getBinding(BOLD)).toBe(COMMAND_BY_ID[BOLD].defaultBinding);
+  });
+
+  it('preserves null (explicit unset) from settings', () => {
+    settings.values[`hotkey.${BOLD}`] = null;
+    hydrateBindingsFromSettings();
+    expect(getBinding(BOLD)).toBeNull();
+  });
+
+  it('canonicalises non-canonical persisted strings', () => {
+    settings.values[`hotkey.${BOLD}`] = 'Shift+Mod+B';
+    hydrateBindingsFromSettings();
+    expect(getBinding(BOLD)).toBe('mod+shift+b');
+  });
+});

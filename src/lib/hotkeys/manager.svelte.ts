@@ -35,7 +35,11 @@
 
 import { formatChord, normalizeKey, parseBinding } from './parse';
 import { HOTKEY_COMMANDS, type CommandDefinition } from './commands';
-import { getBinding, hydrateBindingsFromSettings } from './store.svelte';
+import {
+  getBinding,
+  hotkeys,
+  hydrateBindingsFromSettings
+} from './store.svelte';
 import { activeEditor, emitCommand } from './bus.svelte';
 import { isMac } from './platform';
 import type { Chord } from './types';
@@ -259,22 +263,37 @@ function shouldSuppressCrepeNative(event: EventFlags): boolean {
 }
 
 /**
- * Find a command whose current binding matches the given event. Goes
- * through `getBinding` so catalogue defaults work even before
- * `hydrateBindingsFromSettings` runs (e.g. inside a vitest where
- * `initHotkeys` isn't fully set up), AND so the read is reactive — a
- * binding the user just changed in the settings panel is effective
- * on the very next keypress, no remount needed.
+ * Find a command whose current binding matches the given event.
+ *
+ * Two-pass with a priority rule:
+ *
+ *   1. User-customised bindings (entries in `hotkeys.bindings`) win
+ *      immediately — return on first match.
+ *   2. Catalogue-default matches are kept aside and only returned if
+ *      no user-customised binding matched.
+ *
+ * Why: without this, remapping italic to `mod+b` while leaving bold
+ * alone leaves both commands claiming `mod+b` (italic via override,
+ * bold via default). Catalogue iteration order would pick bold and
+ * italic would silently never fire.
+ *
+ * Reads go through `getBinding` so default-only commands still work
+ * before `hydrateBindingsFromSettings` runs, AND so reactivity tracks
+ * — a binding the user just changed in the settings panel is
+ * effective on the very next keypress.
  */
 function findMatchingCommand(event: EventFlags): CommandDefinition | null {
+  let defaultMatch: CommandDefinition | null = null;
   for (const cmd of HOTKEY_COMMANDS) {
     const raw = getBinding(cmd.id);
     if (!raw) continue;
     const parsed = parseBinding(raw);
     if (!parsed) continue;
-    if (chordMatchesEvent(parsed, event)) return cmd;
+    if (!chordMatchesEvent(parsed, event)) continue;
+    if (cmd.id in hotkeys.bindings) return cmd;
+    defaultMatch ??= cmd;
   }
-  return null;
+  return defaultMatch;
 }
 
 let installed = false;

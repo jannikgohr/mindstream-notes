@@ -56,10 +56,25 @@ note about what shipped, and move on.
 
 ## Testing coverage
 
-- [ ] **#5. Manager / bus / store test gaps.**
-      Only two manager tests today. Missing coverage for: - bus stack push / re-promote / pop ordering - conflict swap on `setBinding` - "no listener handled, don't preventDefault" path - "unset binding doesn't fire even though the default did" - input-blocking inside non-editor text fields - hydrate from `settings.values` then mutate and re-hydrate
-      **Plan:** one `bus.test.ts`, one `store.test.ts`, extra cases
-      in `manager.test.ts`.
+- [x] **#5. Manager / bus / store test gaps.**
+      Only two manager tests existed before. Missing coverage for
+      stack ordering, conflict swap, listener-declined dispatch,
+      unset / Crepe-suppression, input blocking, hydration.
+      **Shipped:** three new files. `bus.test.ts` (14 cases) covers
+      push / re-promote / pop / idempotent unregister plus all
+      `emitCommand` paths (global, editor kinds match / mismatch,
+      handle-by-default, explicit `false`, listener throws).
+      `store.test.ts` (22 cases) covers `getBinding` fallbacks,
+      `setBinding` canonical / null / invalid / conflict-swap /
+      unknown-id, `resetBinding`, `isCustomized`, `findCommandByBinding`,
+      and `hydrateBindingsFromSettings` overlay / forget / null /
+      canonicalise. `manager.test.ts` grew from 2 → 10 cases
+      covering input-blocking, listener-declined fall-through, no
+      active editor, Crepe-native suppression on remap and unset,
+      and an explicit regression for the matcher's user-override
+      priority. While writing tests I also discovered and fixed a
+      matcher bug: user customisations now win over catalogue
+      defaults when both match the same chord.
 
 ---
 
