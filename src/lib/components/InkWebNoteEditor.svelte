@@ -141,6 +141,7 @@
   let queuedEraserSamples: QueuedEraserSample[] = [];
   let eraserFrame: number | null = null;
   let drawFrame: number | null = null;
+  const cssColorCache = new Map<number, string>();
   let layout = defaultLayout();
   let view = {
     width: 1,
@@ -501,15 +502,20 @@
     const visibleBounds = visiblePageBounds();
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, view.width, view.height);
-    ctx.fillStyle = cssColor(displayColor(PAGE_BG_LIGHT));
+    ctx.fillStyle = displayCssColor(PAGE_BG_LIGHT);
     ctx.fillRect(0, 0, view.width, view.height);
 
     drawPages(ctx, visibleBounds);
     const visibleStrokes = doc?.visibleStrokesInBounds(visibleBounds, 2) ?? [];
     for (const stroke of visibleStrokes) {
-      drawStroke(ctx, stroke.points, displayColor(stroke.color), stroke.width);
+      drawStroke(
+        ctx,
+        stroke.points,
+        displayCssColor(stroke.color),
+        stroke.width
+      );
     }
-    drawStroke(ctx, inFlight, displayColor(colorArgb), width);
+    drawStroke(ctx, inFlight, displayCssColor(colorArgb), width);
   }
 
   function visiblePageBounds(): StrokeBounds {
@@ -537,9 +543,9 @@
       if (b.y < -32 || a.y > view.height + 32) continue;
       ctx.fillStyle = pageDark ? PAGE_SHADOW_DARK : PAGE_SHADOW_LIGHT;
       ctx.fillRect(a.x + 3, a.y + 3, b.x - a.x, b.y - a.y);
-      ctx.fillStyle = cssColor(displayColor(PAGE_FILL_LIGHT));
+      ctx.fillStyle = displayCssColor(PAGE_FILL_LIGHT);
       ctx.fillRect(a.x, a.y, b.x - a.x, b.y - a.y);
-      ctx.strokeStyle = cssColor(displayColor(PAGE_BORDER_LIGHT));
+      ctx.strokeStyle = displayCssColor(PAGE_BORDER_LIGHT);
       ctx.lineWidth = 1;
       ctx.strokeRect(a.x, a.y, b.x - a.x, b.y - a.y);
     }
@@ -548,13 +554,13 @@
   function drawStroke(
     ctx: CanvasRenderingContext2D,
     points: InkPoint[],
-    color: number,
+    color: string,
     baseWidth: number
   ) {
     if (points.length < 2) return;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    ctx.strokeStyle = cssColor(color);
+    ctx.strokeStyle = color;
     const scale = view.scale;
     const panX = view.panX;
     const panY = view.panY;
@@ -1007,12 +1013,21 @@
     return `#${(argb & 0x00ffffff).toString(16).padStart(6, '0')}`;
   }
 
+  function displayCssColor(argb: number): string {
+    return cssColor(displayColor(argb));
+  }
+
   function cssColor(argb: number): string {
+    const key = argb >>> 0;
+    const cached = cssColorCache.get(key);
+    if (cached) return cached;
     const a = ((argb >>> 24) & 0xff) / 255;
     const r = (argb >>> 16) & 0xff;
     const g = (argb >>> 8) & 0xff;
     const b = argb & 0xff;
-    return `rgba(${r}, ${g}, ${b}, ${a})`;
+    const value = `rgba(${r}, ${g}, ${b}, ${a})`;
+    cssColorCache.set(key, value);
+    return value;
   }
 
   function displayColor(argb: number): number {
