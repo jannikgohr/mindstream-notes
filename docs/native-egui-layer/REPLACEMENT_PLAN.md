@@ -31,7 +31,7 @@ needs to change this plan, update this file in that step's commit.
    - Use Pointer Events, `getCoalescedEvents()`, and optionally
      `getPredictedEvents()`.
 
-3. **Use the JS canvas on desktop first** - In progress
+3. **Use the JS canvas on desktop first** - Done
    - Make desktop ink notes use the new JS canvas editor.
    - Keep the existing save/collab path.
    - Verify large notes, pan/zoom, undo/redo, and live collab behavior.
