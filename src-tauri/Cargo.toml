@@ -52,42 +52,6 @@ futures-util = "0.3"
 aes-gcm = "0.10"
 getrandom = "0.3"
 
-# raw-window-handle lives at the top level (rather than buried under
-# the android-only deps with wgpu) because `drawing::surface_source`
-# defines the cross-platform `SurfaceSource` trait in terms of
-# `HasWindowHandle` + `HasDisplayHandle`. It's a small types-only
-# crate — no runtime cost, no link-time growth — and putting it
-# here lets the trait file compile on host so cargo test can sanity
-# check the abstraction without an Android target.
-raw-window-handle = "0.6"
-
-# D1 stroke smoothing — flxzt's pure-Rust port of Google's
-# ink-stroke-modeler (wobble smoothing + spring-mass position model
-# + upsampling). Used inside the Pen branch of the render thread;
-# the modeler eats raw samples and emits a smoothed stream that gets
-# tessellated + persisted instead. Originally the audit flagged a
-# cxx cross-compile risk because Google's reference impl is C++ —
-# this port avoids that entirely (single dep: thiserror), which is
-# what made it safe to pick. Battle-tested: same crate rnote uses.
-# Promoted to top-level (rather than the android-only block below)
-# so `drawing/stroke_modeler.rs` is host-testable, matching the
-# convention input.rs / page.rs follow.
-ink-stroke-modeler-rs = "0.1"
-
-# ---- Native "ink" drawing layer (Android + desktop) ----
-# The render/pipeline/ui modules are shared by Android's SurfaceView
-# bridge and the first desktop native-window bridge. Platform-only
-# glue (JNI/NDK on Android, tao/wry event hooks on desktop) stays in
-# cfg-specific dependency blocks below.
-ink-core = { path = "../crates/ink-core" }
-wgpu = "27"
-egui = "0.33"
-egui-wgpu = "0.33"
-egui-shadcn = "0.3.1"
-lucide-icons = "0.555"
-bytemuck = { version = "1", features = ["derive"] }
-pollster = "0.4"
-
 [profile.release]
 panic = "abort"
 codegen-units = 1
@@ -105,6 +69,22 @@ tauri-plugin-updater = "2.10.1"
 # into our existing render thread.
 tauri-runtime = "2.11"
 tauri-runtime-wry = "2.11"
+raw-window-handle = "0.6"
+
+# ---- Native "ink" drawing layer (desktop legacy/dev path only) ----
+# Android's canonical ink editor is the Svelte canvas; Kotlin keeps
+# only the live front-buffer overlay. Keep the old egui/wgpu renderer
+# available on desktop while the replacement is validated, but do not
+# compile these heavy crates into Android.
+ink-core = { path = "../crates/ink-core" }
+ink-stroke-modeler-rs = "0.1"
+wgpu = "27"
+egui = "0.33"
+egui-wgpu = "0.33"
+egui-shadcn = "0.3.1"
+lucide-icons = "0.555"
+bytemuck = { version = "1", features = ["derive"] }
+pollster = "0.4"
 
 # ---- keyring v4 platform backends ----
 # Each crate's Store::new() returns Result<Arc<Self>>, which coerces
@@ -143,28 +123,9 @@ android-native-keyring-store = "1"
 # Tauri plugins set up (or none, which is fine for now).
 android_logger = "0.14"
 
-# (wgpu/egui/bytemuck/pollster/lucide live in top-level dependencies
-# so the same drawing core compiles on desktop as well as Android.)
-# ndk gives us ANativeWindow_fromSurface(env, jsurface) — the bridge
-# between the Java Surface and the raw pointer wgpu's create_surface
-# needs. ndk-sys is the raw FFI; ndk is the higher-level wrapper —
-# we hold the pointer ourselves but use the ndk crate's symbol
-# definitions for type compatibility with raw-window-handle.
-ndk = "0.9"
-ndk-sys = "0.6"
 # ndk-context is already initialised process-wide by Keyring.initializeNdkContext
 # in MainActivity.onCreate (see Keyring.kt). We pull it in explicitly
 # so the drawing JNI code can fetch the JavaVM for callbacks back into
 # Kotlin (show/hide) without having to also depend on the keyring crate.
 ndk-context = "0.1"
 jni = "0.21"
-# libc here only to read CLOCK_MONOTONIC directly via clock_gettime.
-# `MotionEvent.eventTime` on Android is `SystemClock.uptimeMillis()`,
-# which is CLOCK_MONOTONIC under the hood — so subtracting our own
-# CLOCK_MONOTONIC reading from a sample's eventTime gives us the
-# sample's age in real wallclock ms. std::time::Instant *is* the
-# same clock on Android but exposes only deltas, not absolute
-# values, so it can't be subtracted from a foreign eventTime
-# directly. Used by drawing::platform::android::now_uptime_ms and
-# the [drawing.perf.lag] instrumentation in render.rs.
-libc = "0.2"
