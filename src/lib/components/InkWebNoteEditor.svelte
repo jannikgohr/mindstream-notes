@@ -68,6 +68,9 @@
   const PAGE_BORDER_LIGHT = 0xffe5e7eb;
   const PAGE_SHADOW_LIGHT = 'rgba(0, 0, 0, 0.14)';
   const PAGE_SHADOW_DARK = 'rgba(255, 255, 255, 0.2)';
+  const POINTER_BUTTON_SECONDARY = 2;
+  const POINTER_BUTTON_STYLUS_PRIMARY = 32;
+  const POINTER_BUTTON_STYLUS_SECONDARY = 64;
 
   const INK_TOOL_SETTING = 'editor.ink.tool';
   const INK_COLOR_SETTING = 'editor.ink.color';
@@ -476,6 +479,19 @@
     return p;
   }
 
+  function isStylusButtonErasing(event: PointerEvent): boolean {
+    if (event.pointerType !== 'pen') return false;
+    const eraserButtons =
+      POINTER_BUTTON_SECONDARY |
+      POINTER_BUTTON_STYLUS_PRIMARY |
+      POINTER_BUTTON_STYLUS_SECONDARY;
+    return (
+      event.button === 2 ||
+      event.button === 5 ||
+      (event.buttons & eraserButtons) !== 0
+    );
+  }
+
   function handlePointerDown(event: PointerEvent) {
     if (!doc || !canvasEl) return;
     event.preventDefault();
@@ -492,7 +508,7 @@
       return;
     }
     if (isTrashed) return;
-    if (tool === 'eraser') {
+    if (tool === 'eraser' || isStylusButtonErasing(event)) {
       pointerMode = 'erase';
       eraserHits.clear();
       eraseFromEvent(event);
@@ -525,6 +541,13 @@
     }
     if (pointerMode === 'draw') {
       event.preventDefault();
+      if (isStylusButtonErasing(event)) {
+        finishActiveStroke();
+        pointerMode = 'erase';
+        eraserHits.clear();
+        eraseFromEvent(event);
+        return;
+      }
       pushPointerSamples(event);
     }
   }
@@ -533,7 +556,9 @@
     if (activePointerId !== event.pointerId) return;
     event.preventDefault();
     if (pointerMode === 'draw' && doc) {
-      pushPointerSamples(event);
+      if (!isStylusButtonErasing(event)) {
+        pushPointerSamples(event);
+      }
       finishActiveStroke();
     } else if (pointerMode === 'erase' && doc) {
       doc.finishEraserDrag(eraserHits);
@@ -553,6 +578,7 @@
 
   function pushPointerSamples(event: PointerEvent) {
     if (!doc) return;
+    if (isStylusButtonErasing(event)) return;
     const next = [...inFlight];
     for (const sample of pointerSamples(event)) {
       const point = eventPoint(sample);

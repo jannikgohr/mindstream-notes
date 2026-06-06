@@ -470,6 +470,15 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
                 toolType == MotionEvent.TOOL_TYPE_ERASER ||
                 toolType == MotionEvent.TOOL_TYPE_MOUSE
 
+        fun isStylusButtonPressed(buttons: Int): Boolean =
+            (buttons and MotionEvent.BUTTON_STYLUS_PRIMARY) != 0 ||
+                (buttons and MotionEvent.BUTTON_STYLUS_SECONDARY) != 0
+
+        fun canDrawLiveInk(toolType: Int, buttons: Int): Boolean =
+            canDrawWithTool(toolType) &&
+                toolType != MotionEvent.TOOL_TYPE_ERASER &&
+                !isStylusButtonPressed(buttons)
+
         fun inControlBounds(x: Float, y: Float): Boolean {
             val bounds = controlBounds
             for (r in bounds) {
@@ -1195,6 +1204,7 @@ private class DrawingSurfaceView(
             return true
         }
         val toolType = event.getToolType(0)
+        val buttons = event.buttonState
         val historySize = event.historySize
         val historicalAction =
             if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
@@ -1208,6 +1218,7 @@ private class DrawingSurfaceView(
                 event.getHistoricalY(h),
                 sanitizePressure(event.getHistoricalPressure(h)),
                 toolType,
+                buttons,
                 historicalAction
             )
         }
@@ -1216,6 +1227,7 @@ private class DrawingSurfaceView(
             event.y,
             sanitizePressure(event.pressure),
             toolType,
+            buttons,
             action
         )
         return true
@@ -1249,7 +1261,7 @@ private class DrawingSurfaceView(
         timeMs: Long
     ) {
         Drawing.pushPoint(x, y, pressure, toolType, buttons, action, timeMs)
-        frontBufferInk?.onPoint(x, y, pressure, toolType, action)
+        frontBufferInk?.onPoint(x, y, pressure, toolType, buttons, action)
     }
 
     private fun pushLiveInkPoint(
@@ -1257,9 +1269,10 @@ private class DrawingSurfaceView(
         y: Float,
         pressure: Float,
         toolType: Int,
+        buttons: Int,
         action: Int
     ) {
-        frontBufferInk?.onPoint(x, y, pressure, toolType, action)
+        frontBufferInk?.onPoint(x, y, pressure, toolType, buttons, action)
     }
 
     private fun sanitizePressure(raw: Float): Float {
@@ -1363,13 +1376,14 @@ private class FrontBufferInk(private val surfaceView: SurfaceView) {
         y: Float,
         pressure: Float,
         toolType: Int,
+        buttons: Int,
         action: Int
     ) {
         when (action) {
             MotionEvent.ACTION_DOWN -> {
                 generation += 1
                 renderer.cancel()
-                suppressed = Drawing.blocksLiveInkAt(x, y) || !Drawing.canDrawWithTool(toolType)
+                suppressed = Drawing.blocksLiveInkAt(x, y) || !Drawing.canDrawLiveInk(toolType, buttons)
                 inStroke = !suppressed
                 lastX = x
                 lastY = y
@@ -1377,8 +1391,12 @@ private class FrontBufferInk(private val surfaceView: SurfaceView) {
             }
             MotionEvent.ACTION_MOVE -> {
                 if (!inStroke || suppressed) return
+                if (!Drawing.canDrawLiveInk(toolType, buttons)) {
+                    cancel()
+                    return
+                }
                 val segment = buildSegment(x, y, pressure)
-                if (Drawing.canDrawWithTool(toolType) && !Drawing.blocksLiveInkSegment(lastX, lastY, x, y)) {
+                if (!Drawing.blocksLiveInkSegment(lastX, lastY, x, y)) {
                     if (!loggedFirstSegment) {
                         loggedFirstSegment = true
                         Log.i("MindstreamDrawing", "front-buffer ink first segment rendered")
@@ -1392,7 +1410,7 @@ private class FrontBufferInk(private val surfaceView: SurfaceView) {
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 if (inStroke &&
                     !suppressed &&
-                    Drawing.canDrawWithTool(toolType) &&
+                    Drawing.canDrawLiveInk(toolType, buttons) &&
                     !Drawing.blocksLiveInkSegment(lastX, lastY, x, y)
                 ) {
                     renderer.renderFrontBufferedLayer(buildSegment(x, y, pressure))
