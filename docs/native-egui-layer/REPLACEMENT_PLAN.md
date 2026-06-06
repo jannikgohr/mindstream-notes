@@ -73,11 +73,16 @@ needs to change this plan, update this file in that step's commit.
    - JS-canvas open timing now logs `[ink.perf] web_open ...` for the
      retained editor path.
 
-8. **Remove egui/wgpu from Android** - Pending
+8. **Remove egui/wgpu from Android** - Done
    - Remove Android use of `egui`, `egui-wgpu`, `wgpu`, `egui-shadcn`,
      and `lucide-icons` where no longer needed.
    - Keep only Rust document/save/collab code.
    - Rebuild release APK and confirm size drop.
+   - Android no longer has `egui` or `wgpu` in
+     `cargo tree --target aarch64-linux-android`.
+   - Release size after rebuild: universal APK 91.55 MiB -> 60.90 MiB,
+     universal AAB 54.45 MiB -> 37.04 MiB, arm64 native library
+     21.37 MiB -> 13.67 MiB.
 
 ## Out of Scope For This Pass
 

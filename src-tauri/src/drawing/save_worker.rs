@@ -2,7 +2,7 @@
 //!
 //! ## Why this lives on its own thread
 //!
-//! Before this module, the save flow was:
+//! Before this module, the native-render save flow was:
 //!
 //!   render thread → emit "drawing:dirty" Tauri event → JS → 800 ms
 //!   setTimeout → drawingGetState (Tauri command, returns Vec<u8>
@@ -35,9 +35,14 @@
 //! - Receives [`SaveMsg`] over an mpsc channel. `recv_timeout`
 //!   blocks until either a new message arrives or the next pending
 //!   save's deadline elapses, whichever is sooner.
-//! - On deadline: emit "saving", ask the render thread for bytes
-//!   (bounded 500 ms call via `render::get_state_for_note`), write
-//!   to SQLite via `notes::save_yrs_state`, emit saved / error.
+//! - On deadline in the legacy desktop renderer: emit "saving", ask
+//!   the render thread for bytes (bounded 500 ms call via
+//!   `render::get_state_for_note`), write to SQLite via
+//!   `notes::save_yrs_state`, emit saved / error.
+//!
+//! Android's current JS-canvas editor saves through
+//! `drawing_save_ink_state` directly, so this worker is a benign
+//! no-op there.
 //!
 //! Crucially, the render thread is never blocked by this worker.
 //! `notify_dirty` is a non-blocking channel send. `GetStateForNote`
@@ -250,14 +255,13 @@ fn save_one(app: &AppHandle, note_id: &str) {
     emit_status(app, note_id, SaveStatus::Saving);
 
     let t_fetch = Instant::now();
-    // The render thread (where the in-memory StrokesDoc lives) is
-    // Android-only. On desktop / other targets there's no live ink
-    // editor yet (E1 / E2 pending) so the worker's saves are
-    // effectively a no-op — empty bytes here means the "saved as
-    // empty" path below treats it as a benign success, no DB write.
-    #[cfg(target_os = "android")]
+    // The legacy native render thread owns an in-memory StrokesDoc
+    // only on desktop now. Android's JS-canvas path calls
+    // drawing_save_ink_state directly, so worker saves are a no-op
+    // there.
+    #[cfg(desktop)]
     let bytes = crate::drawing::render::get_state_for_note(note_id);
-    #[cfg(not(target_os = "android"))]
+    #[cfg(not(desktop))]
     let bytes: Vec<u8> = Vec::new();
     let fetch_ms = t_fetch.elapsed();
 

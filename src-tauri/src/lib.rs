@@ -219,13 +219,11 @@ pub fn run() {
             // call would silently no-op.
             drawing::init(app.handle().clone());
 
-            // Kick off wgpu pre-warm in the background so the heavy
-            // adapter / device / pipeline / egui-renderer build is
-            // off the critical path of the user's first ink-note
-            // open. Returns immediately — the actual work runs on
-            // the drawing render thread (spawned lazily by this
-            // first message).
-            #[cfg(target_os = "android")]
+            // Kick off wgpu pre-warm in the background for the
+            // legacy desktop native ink renderer. Android now uses
+            // the JS canvas plus Kotlin live ink overlay, so it no
+            // longer compiles this renderer.
+            #[cfg(desktop)]
             drawing::render::prewarm();
 
             Ok(())

@@ -8,6 +8,7 @@ const projectRoot = resolve(scriptDir, '../..');
 const srcTauriDir = join(projectRoot, 'src-tauri');
 
 const cargoToml = readFileSync(join(srcTauriDir, 'Cargo.toml'), 'utf8');
+const cargoDependencies = parseCargoDependencies(cargoToml);
 const packageJson = JSON.parse(
   readFileSync(join(projectRoot, 'package.json'), 'utf8')
 );
@@ -69,11 +70,54 @@ function dependencySnapshot() {
   return names.map((name) => ({
     name,
     present: new RegExp(`^${escapeRegExp(name)}\\s*=`, 'm').test(cargoToml),
-    spec:
-      cargoToml
-        .match(new RegExp(`^${escapeRegExp(name)}\\s*=\\s*(.+)$`, 'm'))?.[1]
-        ?.trim() ?? null
+    spec: cargoDependencies
+      .filter((dep) => dep.name === name)
+      .map((dep) => ({
+        spec: dep.spec,
+        section: dep.section,
+        appliesToAndroid: dep.appliesToAndroid
+      }))
   }));
+}
+
+function parseCargoDependencies(toml) {
+  const deps = [];
+  let section = '';
+  let inDependencySection = false;
+  let appliesToAndroid = false;
+
+  for (const rawLine of toml.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) continue;
+
+    const sectionMatch = line.match(/^\[(.+)]$/);
+    if (sectionMatch) {
+      section = `[${sectionMatch[1]}]`;
+      inDependencySection =
+        section.endsWith('.dependencies]') || section === '[dependencies]';
+      appliesToAndroid =
+        section === '[dependencies]' ||
+        ((section.includes('target_os = "android"') ||
+          section.includes("target_os = 'android'")) &&
+          !section.includes('not(any(target_os = "android"') &&
+          !section.includes("not(any(target_os = 'android'") &&
+          !section.includes('not(target_os = "android"') &&
+          !section.includes("not(target_os = 'android'"));
+      continue;
+    }
+
+    if (!inDependencySection) continue;
+    const depMatch = line.match(/^([A-Za-z0-9_-]+)\s*=\s*(.+)$/);
+    if (!depMatch) continue;
+    deps.push({
+      name: depMatch[1],
+      spec: depMatch[2].trim(),
+      section,
+      appliesToAndroid
+    });
+  }
+
+  return deps;
 }
 
 function findCargoNativeLibs() {
@@ -148,8 +192,17 @@ function printMarkdown(data) {
   console.log('');
   console.log('## Native Ink Dependencies');
   for (const dep of data.dependencies) {
-    const spec = dep.spec ? ` ${dep.spec}` : '';
-    console.log(`- ${dep.name}: ${dep.present ? `present${spec}` : 'absent'}`);
+    if (!dep.present) {
+      console.log(`- ${dep.name}: absent`);
+      continue;
+    }
+    const androidState = dep.spec.some((entry) => entry.appliesToAndroid)
+      ? 'android'
+      : 'desktop-only';
+    const specs = dep.spec
+      .map((entry) => `${entry.spec} in ${entry.section}`)
+      .join('; ');
+    console.log(`- ${dep.name}: present (${androidState}) ${specs}`);
   }
 
   console.log('');

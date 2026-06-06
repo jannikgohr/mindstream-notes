@@ -1,51 +1,23 @@
-//! Native "ink" drawing layer.
+//! Ink note bridge.
 //!
 //! What this is:
-//! - A Tauri-callable surface that injects a hardware-accelerated
-//!   Android `SurfaceView` below the Tauri WebView's chrome. The
-//!   SurfaceView captures touch / stylus input and renders thin lines
-//!   via `wgpu` with an `egui` toolbar overlay.
+//! - The canonical ink editor is the Svelte/Pointer Events canvas.
+//! - Android keeps a Kotlin `SurfaceView` live-ink overlay for the
+//!   in-flight wet stroke only; committed strokes and persistence stay
+//!   in JS/Rust save commands.
+//! - The old Rust `egui`/`wgpu` renderer remains compiled on desktop
+//!   only as a temporary legacy/dev path while the replacement is
+//!   validated.
 //!
 //! Module layout:
 //! - `mod.rs`: this file, Tauri commands and module declarations.
-//! - `input.rs`: platform-neutral input types (`Sample`, `ToolKind`,
-//!   `SampleAction`, `buttons`). Host-buildable; the R4 input shape.
-//! - `surface_source.rs`: `SurfaceSource` trait (R3). Pure bounds, no
-//!   platform deps.
-//! - `page.rs`: page-coordinate model and the
-//!   `segment_quad_positions` geometry math.
-//! - `strokes_doc.rs`: yrs schema facade.
-//! - `stroke_modeler.rs`: D1 stroke smoothing wrapper around
-//!   ink-stroke-modeler-rs. Host-buildable.
-//! - `pipeline.rs`: wgpu state and per-frame GPU pass. Takes
-//!   `Box<dyn SurfaceSource>` rather than any platform-specific
-//!   window type.
-//! - `ui/`: egui-driven UI overlay.
-//!   - `mod.rs`: `CanvasUi`, `RenderActions`, and `UiOutput`.
-//!   - `toolbar.rs`: the toolbar widget.
-//! - `render.rs`: render thread state machine and the Tauri-facing
-//!   public API.
-//! - `platform/`: per-OS glue (R5).
-//!   - `android.rs`: `AndroidWindow` and JNI exports, cfg-gated to
-//!     `target_os = "android"`.
-//!
-//! Threading model:
-//!   - All wgpu / egui state lives on a dedicated render thread
-//!     spawned by `render::set_surface` on first call.
-//!   - Platform input bridges (today: Android JNI in `platform::android`)
-//!     just push messages onto an mpsc channel the render thread
-//!     owns.
-//!   - The Tauri commands below only forward to Kotlin via JNI
-//!     callback (`platform::android::ui::call_show` / `call_hide`)
-//!     — they do not touch render state directly.
-//!
-//! Layering (Android):
-//!   `[ Status bar (system overlay) ]`
-//!   `[ Svelte header (WebView)     ]` ← reachable; back arrow lives here
-//!   `[ Android SurfaceView         ]` ← inset by topMargin so it sits
-//!   `[ egui toolbar (atop above)   ]`    below the header; egui paints
-//!   `[ stroke canvas (atop above)  ]`    its toolbar at the top of the
-//!                                       surface (which is below header)
+//! - `save_worker.rs`: legacy native-render debounce worker.
+//! - `platform/android.rs`: JNI callbacks into Kotlin's live overlay,
+//!   plus no-op compatibility exports for the removed Android native
+//!   data plane.
+//! - desktop-only modules (`input`, `page`, `pipeline`, `render`,
+//!   `strokes_doc`, `stroke_modeler`, `surface_source`, `ui`) support
+//!   the temporary native renderer.
 
 #[cfg(desktop)]
 use std::sync::{Mutex, OnceLock};
@@ -53,28 +25,33 @@ use tauri::AppHandle;
 #[cfg(desktop)]
 use tauri::{Manager, PhysicalPosition, PhysicalSize};
 
-// Cross-platform modules (no wgpu / no JNI / no NDK) — kept
-// compiled everywhere so `cargo test` catches regressions on the
-// host without needing the Android target.
-pub mod input;
-pub mod page;
+// Kept compiled everywhere because command stubs and legacy desktop
+// save plumbing still use it, but Android's canonical save path is
+// `drawing_save_ink_state` from the JS canvas.
 pub mod save_worker;
-pub mod stroke_modeler;
-pub mod strokes_doc;
-pub mod surface_source;
 
-// Native-render modules. `pipeline` / `render` / `ui` are shared by
-// Android's SurfaceView bridge and desktop's first native-window
-// bridge; `platform/` carries the OS-specific glue.
-#[cfg(any(target_os = "android", desktop))]
+// Legacy native-render modules. Desktop only now: Android uses JS
+// canvas + Kotlin live overlay and must not pull egui/wgpu into the
+// mobile binary.
+#[cfg(desktop)]
 pub mod collab;
-#[cfg(any(target_os = "android", desktop))]
+#[cfg(desktop)]
+pub mod input;
+#[cfg(desktop)]
+pub mod page;
+#[cfg(desktop)]
 pub mod pipeline;
 #[cfg(any(target_os = "android", desktop))]
 pub mod platform;
-#[cfg(any(target_os = "android", desktop))]
+#[cfg(desktop)]
 pub mod render;
-#[cfg(any(target_os = "android", desktop))]
+#[cfg(desktop)]
+pub mod stroke_modeler;
+#[cfg(desktop)]
+pub mod strokes_doc;
+#[cfg(desktop)]
+pub mod surface_source;
+#[cfg(desktop)]
 pub mod ui;
 
 #[cfg(desktop)]
@@ -92,7 +69,7 @@ static DESKTOP_ACTIVE_NOTE: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 /// init itself is idempotent — second call silently no-ops.
 pub fn init(app: AppHandle) {
     save_worker::init(app.clone());
-    #[cfg(any(target_os = "android", desktop))]
+    #[cfg(desktop)]
     render::init(app);
 }
 
@@ -170,7 +147,7 @@ pub fn drawing_show(
     db: tauri::State<'_, crate::db::Db>,
     note_id: String,
 ) -> Result<(), String> {
-    #[cfg(any(target_os = "android", desktop))]
+    #[cfg(desktop)]
     {
         // Open-path timing — prefix `[drawing.perf]` so it's easy to
         // grep in logcat. Tells us:
@@ -210,7 +187,7 @@ pub fn drawing_show(
         );
         result
     }
-    #[cfg(not(any(target_os = "android", desktop)))]
+    #[cfg(not(desktop))]
     {
         Ok(())
     }
@@ -229,8 +206,7 @@ pub fn drawing_set_save_debounce(ms: u64) -> Result<(), String> {
 
 /// Persist an ink note state update through the same merge/write path
 /// the native save worker uses. Desktop web calls this with the
-/// `StrokesDoc` bytes emitted by `ink-egui-web`; Android normally
-/// reaches the same helper through `save_worker`.
+/// Yrs/Yjs update bytes emitted by the JS canvas ink editor.
 #[tauri::command]
 pub fn drawing_save_ink_state(
     db: tauri::State<'_, crate::db::Db>,
@@ -252,11 +228,11 @@ pub fn drawing_start_collab(
     room_id: String,
     key_bytes: Vec<u8>,
 ) -> Result<(), String> {
-    #[cfg(any(target_os = "android", desktop))]
+    #[cfg(desktop)]
     {
         collab::start(app, note_id, url, room_id, key_bytes)
     }
-    #[cfg(not(any(target_os = "android", desktop)))]
+    #[cfg(not(desktop))]
     {
         Ok(())
     }
@@ -265,7 +241,7 @@ pub fn drawing_start_collab(
 #[tauri::command]
 #[allow(unused_variables)]
 pub fn drawing_stop_collab(app: AppHandle, note_id: String) -> Result<(), String> {
-    #[cfg(any(target_os = "android", desktop))]
+    #[cfg(desktop)]
     {
         collab::stop(&app, &note_id);
     }
@@ -283,14 +259,13 @@ pub fn drawing_stop_collab(app: AppHandle, note_id: String) -> Result<(), String
 #[tauri::command]
 pub fn drawing_hide(_app: AppHandle, note_id: Option<String>) -> Result<(), String> {
     save_worker::flush_all();
-    #[cfg(any(target_os = "android", desktop))]
+    #[cfg(desktop)]
     if let Some(id) = note_id.as_deref() {
         collab::stop(&_app, id);
     }
     #[cfg(target_os = "android")]
     {
         let _ = note_id;
-        render::set_active_note(None, None);
         platform::android::ui::call_hide().map_err(|e| format!("drawing_hide: {e}"))
     }
     #[cfg(desktop)]
@@ -428,7 +403,7 @@ pub fn drawing_set_desktop_panel_bounds(
     }
 }
 
-/// Push the resolved app theme down to the egui toolbar (B2).
+/// Push the resolved app theme down to the legacy egui toolbar.
 /// Called from `+layout.svelte` / `DrawingNoteEditor.svelte` whenever
 /// `appearance.mode` resolves to a new dark/light state or the user
 /// picks a new `appearance.accent`. The Rust side forwards to
@@ -441,7 +416,7 @@ pub fn drawing_set_desktop_panel_bounds(
 #[tauri::command]
 #[allow(unused_variables)]
 pub fn drawing_set_theme(dark: bool, accent_hex: Option<String>) -> Result<(), String> {
-    #[cfg(any(target_os = "android", desktop))]
+    #[cfg(desktop)]
     {
         let accent_argb = accent_hex
             .as_deref()
@@ -461,7 +436,7 @@ pub fn drawing_set_toolbar_settings(
     finger_drawing_allowed: Option<bool>,
     page_theme_mode: Option<String>,
 ) -> Result<(), String> {
-    #[cfg(any(target_os = "android", desktop))]
+    #[cfg(desktop)]
     {
         render::set_toolbar_settings(
             tool,
@@ -477,6 +452,7 @@ pub fn drawing_set_toolbar_settings(
 /// Parse the `#RRGGBB` / `#RRGGBBAA` hex string the JS picker
 /// produces into a packed `0xAARRGGBB` u32 (with alpha forced to
 /// `0xFF` — the toolbar accent is always opaque).
+#[cfg(desktop)]
 fn parse_accent_hex(input: &str) -> Option<u32> {
     let s = input.strip_prefix('#').unwrap_or(input);
     let (r, g, b) = match s.len() {
@@ -502,6 +478,7 @@ fn parse_accent_hex(input: &str) -> Option<u32> {
 /// unparseable value). Matches the `--primary` token resolved from
 /// `src/app.css` for the corresponding mode — near-white on dark,
 /// near-black on light.
+#[cfg(desktop)]
 fn default_accent_argb(dark: bool) -> u32 {
     if dark {
         // oklch(0.985 0 0) ≈ #FAFAFA
@@ -512,18 +489,16 @@ fn default_accent_argb(dark: bool) -> u32 {
     }
 }
 
-/// Wipe the current accumulated strokes without hiding the surface.
-///
-/// Unused by the POC frontend (no toolbar) but wired so a follow-up
-/// "clear canvas" button has somewhere to land.
+/// Wipe the current accumulated strokes in the legacy native renderer
+/// without hiding the surface.
 #[tauri::command]
 pub fn drawing_clear() -> Result<(), String> {
-    #[cfg(any(target_os = "android", desktop))]
+    #[cfg(desktop)]
     {
         render::clear_strokes();
         Ok(())
     }
-    #[cfg(not(any(target_os = "android", desktop)))]
+    #[cfg(not(desktop))]
     {
         Ok(())
     }
