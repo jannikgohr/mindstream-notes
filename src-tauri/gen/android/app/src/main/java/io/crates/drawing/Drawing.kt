@@ -79,6 +79,7 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
 
     /** The currently-attached overlay, or null when hidden. */
     private var view: DrawingSurfaceView? = null
+    private var liveView: DrawingSurfaceView? = null
 
     /**
      * True if [hideSync] tore down an attached SurfaceView for a
@@ -98,6 +99,7 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
      * navigating away + back to recover.
      */
     private var attachedBeforePause: Boolean = false
+    private var liveAttachedBeforePause: Boolean = false
 
     fun show() {
         activity.runOnUiThread {
@@ -150,6 +152,24 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
         }
     }
 
+    fun showLiveOverlay() {
+        activity.runOnUiThread {
+            liveAttachedBeforePause = false
+            if (liveView != null) return@runOnUiThread
+            requestHighRefreshRate(activity)
+            val v = DrawingSurfaceView(activity, webView, mirrorOnly = true)
+            val parent = webView.parent as ViewGroup
+            val params = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+            params.topMargin = computeTopInsetPx(parent, activity)
+            v.layoutParams = params
+            parent.addView(v)
+            liveView = v
+        }
+    }
+
     fun hide() {
         activity.runOnUiThread {
             // Explicit-hide path: JS navigated away from the ink note.
@@ -171,6 +191,29 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
         }
     }
 
+    fun hideLiveOverlay() {
+        activity.runOnUiThread {
+            liveAttachedBeforePause = false
+            val v = liveView ?: return@runOnUiThread
+            Log.i("MindstreamDrawing", "Drawing.hideLiveOverlay: detaching SurfaceView")
+            (v.parent as? ViewGroup)?.removeView(v)
+            liveView = null
+            releaseRefreshRate(activity)
+        }
+    }
+
+    fun enterImmersiveInkMode() {
+        activity.runOnUiThread {
+            hideSystemNavigation(activity)
+        }
+    }
+
+    fun exitImmersiveInkMode() {
+        activity.runOnUiThread {
+            showSystemNavigation(activity)
+        }
+    }
+
     /**
      * UI-thread-only synchronous tear-down. Used from MainActivity
      * lifecycle hooks (onPause, onDestroy) — those callbacks run on
@@ -187,17 +230,24 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
         check(android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
             "hideSync must be called on the UI thread"
         }
-        val v = view ?: return
-        Log.i("MindstreamDrawing", "Drawing.hideSync: detaching SurfaceView (UI thread)")
-        (v.parent as? ViewGroup)?.removeView(v)
-        view = null
-        // Mark for onResume — the early return above means this only
-        // fires if we actually tore down a live view. JS-driven hide()
-        // (which sets the flag false) would have nulled `view` first,
-        // so a pause that follows an explicit hide is correctly a
-        // no-op on resume.
-        attachedBeforePause = true
+        val v = view
+        if (v != null) {
+            detachViewSync(v)
+            view = null
+            attachedBeforePause = true
+        }
+        val live = liveView
+        if (live != null) {
+            detachViewSync(live)
+            liveView = null
+            liveAttachedBeforePause = true
+        }
         releaseRefreshRate(activity)
+    }
+
+    private fun detachViewSync(v: DrawingSurfaceView) {
+        Log.i("MindstreamDrawing", "Drawing.detachViewSync: detaching SurfaceView (UI thread)")
+        (v.parent as? ViewGroup)?.removeView(v)
     }
 
     /**
@@ -220,16 +270,24 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
         check(android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
             "resumeIfNeeded must be called on the UI thread"
         }
-        if (!attachedBeforePause) return
-        Log.i(
-            "MindstreamDrawing",
-            "Drawing.resumeIfNeeded: re-attaching SurfaceView after lifecycle pause"
-        )
-        // `show()` clears the flag itself (inside its runOnUiThread
-        // block) — go through the regular show path so any future
-        // changes there (high-refresh request, topMargin recompute,
-        // …) apply identically to the resume case.
-        show()
+        if (attachedBeforePause) {
+            Log.i(
+                "MindstreamDrawing",
+                "Drawing.resumeIfNeeded: re-attaching SurfaceView after lifecycle pause"
+            )
+            // `show()` clears the flag itself (inside its runOnUiThread
+            // block) — go through the regular show path so any future
+            // changes there (high-refresh request, topMargin recompute,
+            // …) apply identically to the resume case.
+            show()
+        }
+        if (liveAttachedBeforePause) {
+            Log.i(
+                "MindstreamDrawing",
+                "Drawing.resumeIfNeeded: re-attaching live overlay after lifecycle pause"
+            )
+            showLiveOverlay()
+        }
     }
 
     /**
@@ -243,6 +301,12 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
      */
     fun setLiveInkStyle(colorArgb: Int, minWidthPx: Float, maxWidthPx: Float) {
         view?.setLiveInkStyle(colorArgb, minWidthPx, maxWidthPx)
+        liveView?.setLiveInkStyle(colorArgb, minWidthPx, maxWidthPx)
+    }
+
+    fun cancelLiveInk() {
+        view?.cancelLiveInk()
+        liveView?.cancelLiveInk()
     }
 
     companion object {
@@ -317,6 +381,31 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
         @JvmStatic
         fun hideFromNative() {
             instance?.hide()
+        }
+
+        @JvmStatic
+        fun showLiveOverlayFromNative() {
+            instance?.showLiveOverlay()
+        }
+
+        @JvmStatic
+        fun hideLiveOverlayFromNative() {
+            instance?.hideLiveOverlay()
+        }
+
+        @JvmStatic
+        fun enterImmersiveInkModeFromNative() {
+            instance?.enterImmersiveInkMode()
+        }
+
+        @JvmStatic
+        fun exitImmersiveInkModeFromNative() {
+            instance?.exitImmersiveInkMode()
+        }
+
+        @JvmStatic
+        fun cancelLiveInkFromNative() {
+            instance?.cancelLiveInk()
         }
 
         /**
@@ -402,6 +491,15 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
                 toolType == MotionEvent.TOOL_TYPE_STYLUS ||
                 toolType == MotionEvent.TOOL_TYPE_ERASER ||
                 toolType == MotionEvent.TOOL_TYPE_MOUSE
+
+        fun isStylusButtonPressed(buttons: Int): Boolean =
+            (buttons and MotionEvent.BUTTON_STYLUS_PRIMARY) != 0 ||
+                (buttons and MotionEvent.BUTTON_STYLUS_SECONDARY) != 0
+
+        fun canDrawLiveInk(toolType: Int, buttons: Int): Boolean =
+            canDrawWithTool(toolType) &&
+                toolType != MotionEvent.TOOL_TYPE_ERASER &&
+                !isStylusButtonPressed(buttons)
 
         fun inControlBounds(x: Float, y: Float): Boolean {
             val bounds = controlBounds
@@ -714,7 +812,11 @@ private fun showSystemNavigation(activity: Activity) {
  *     data between vsync ticks) then the current sample. Returning
  *     `true` consumes the event so it doesn't bubble to the WebView.
  */
-private class DrawingSurfaceView(context: Context) :
+private class DrawingSurfaceView(
+    context: Context,
+    private val webView: WebView? = null,
+    private val mirrorOnly: Boolean = false
+) :
     SurfaceView(context), SurfaceHolder.Callback {
 
     /**
@@ -761,10 +863,11 @@ private class DrawingSurfaceView(context: Context) :
     private var oneFingerPanActive = false
     private var lastOneFingerPanX = 0f
     private var lastOneFingerPanY = 0f
+    private var mirrorStylusEraserActive = false
 
     init {
         setZOrderOnTop(true)
-        holder.setFormat(PixelFormat.OPAQUE)
+        holder.setFormat(if (mirrorOnly) PixelFormat.TRANSLUCENT else PixelFormat.OPAQUE)
         holder.addCallback(this)
         isFocusable = true
         isClickable = true
@@ -847,6 +950,7 @@ private class DrawingSurfaceView(context: Context) :
 
     override fun surfaceCreated(holder: SurfaceHolder) {
         Log.i("MindstreamDrawing", "surfaceCreated w=$width h=$height")
+        if (mirrorOnly) return
         // width/height may still be 0 at this point on some devices —
         // surfaceChanged fires immediately after with the real size, at
         // which point the Rust side calls resize and reconfigures wgpu.
@@ -855,12 +959,17 @@ private class DrawingSurfaceView(context: Context) :
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
         Log.i("MindstreamDrawing", "surfaceChanged w=$width h=$height format=$format")
+        if (mirrorOnly) return
         Drawing.resizeSurface(width, height)
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
         Log.i("MindstreamDrawing", "surfaceDestroyed — entering sync wait")
         frontBufferInk?.cancel()
+        if (mirrorOnly) {
+            Log.i("MindstreamDrawing", "surfaceDestroyed — live overlay only")
+            return
+        }
         // Drop the wgpu surface before the underlying ANativeWindow
         // becomes invalid; the Rust side keeps its render thread and
         // accumulated geometry around so a return-from-background just
@@ -956,6 +1065,9 @@ private class DrawingSurfaceView(context: Context) :
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (mirrorOnly) {
+            return onMirrorTouchEvent(event)
+        }
         val action = event.actionMasked
         // Tool type + button state come from the event-level (not
         // historical-sample-level) accessors — Android batches both
@@ -1107,6 +1219,116 @@ private class DrawingSurfaceView(context: Context) :
         return true
     }
 
+    private fun onMirrorTouchEvent(event: MotionEvent): Boolean {
+        val action = event.actionMasked
+        if (event.pointerCount != 1) {
+            frontBufferInk?.cancel()
+            if (mirrorStylusEraserActive) {
+                dispatchStylusEraserEvent(event, MotionEvent.ACTION_CANCEL)
+                mirrorStylusEraserActive = false
+            } else {
+                forwardToWebView(event)
+            }
+            return true
+        }
+        val toolType = event.getToolType(0)
+        val buttons = event.buttonState
+        if (Drawing.isStylusButtonPressed(buttons) || mirrorStylusEraserActive) {
+            dispatchStylusEraserEvent(event, action)
+            mirrorStylusEraserActive =
+                action != MotionEvent.ACTION_UP && action != MotionEvent.ACTION_CANCEL
+            frontBufferInk?.cancel()
+            return true
+        }
+
+        forwardToWebView(event)
+        val historySize = event.historySize
+        val historicalAction =
+            if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                MotionEvent.ACTION_MOVE
+            } else {
+                action
+            }
+        for (h in 0 until historySize) {
+            pushLiveInkPoint(
+                event.getHistoricalX(h),
+                event.getHistoricalY(h),
+                sanitizePressure(event.getHistoricalPressure(h)),
+                toolType,
+                buttons,
+                historicalAction
+            )
+        }
+        pushLiveInkPoint(
+            event.x,
+            event.y,
+            sanitizePressure(event.pressure),
+            toolType,
+            buttons,
+            action
+        )
+        return true
+    }
+
+    private fun dispatchStylusEraserEvent(event: MotionEvent, action: Int) {
+        val target = webView ?: return
+        val density = target.resources.displayMetrics.density.coerceAtLeast(1f)
+        val offsetX = (left - target.left).toFloat()
+        val offsetY = (top - target.top).toFloat()
+        val pointsJson = StringBuilder("[")
+        for (h in 0 until event.historySize) {
+            appendEraserPoint(
+                pointsJson,
+                (event.getHistoricalX(h) + offsetX) / density,
+                (event.getHistoricalY(h) + offsetY) / density,
+                sanitizePressure(event.getHistoricalPressure(h))
+            )
+        }
+        appendEraserPoint(
+            pointsJson,
+            (event.x + offsetX) / density,
+            (event.y + offsetY) / density,
+            sanitizePressure(event.pressure)
+        )
+        pointsJson.append("]")
+
+        val actionName = when (action) {
+            MotionEvent.ACTION_DOWN -> "down"
+            MotionEvent.ACTION_UP -> "up"
+            MotionEvent.ACTION_CANCEL -> "cancel"
+            else -> "move"
+        }
+        target.evaluateJavascript(
+            "window.dispatchEvent(new CustomEvent('mindstream:android-stylus-eraser',{detail:{action:'$actionName',points:$pointsJson}}));",
+            null
+        )
+    }
+
+    private fun appendEraserPoint(
+        out: StringBuilder,
+        x: Float,
+        y: Float,
+        pressure: Float
+    ) {
+        if (out.length > 1) out.append(',')
+        out
+            .append("{\"x\":")
+            .append(x)
+            .append(",\"y\":")
+            .append(y)
+            .append(",\"pressure\":")
+            .append(pressure)
+            .append('}')
+    }
+
+    private fun forwardToWebView(event: MotionEvent) {
+        val target = webView ?: return
+        val copy = MotionEvent.obtain(event)
+        copy.offsetLocation((left - target.left).toFloat(), (top - target.top).toFloat())
+        target.dispatchTouchEvent(copy)
+        copy.recycle()
+    }
+
     companion object {
         /**
          * How far ahead, in milliseconds, to ask MotionPredictor to
@@ -1130,6 +1352,17 @@ private class DrawingSurfaceView(context: Context) :
         frontBufferInk?.onPoint(x, y, pressure, toolType, buttons, action)
     }
 
+    private fun pushLiveInkPoint(
+        x: Float,
+        y: Float,
+        pressure: Float,
+        toolType: Int,
+        buttons: Int,
+        action: Int
+    ) {
+        frontBufferInk?.onPoint(x, y, pressure, toolType, buttons, action)
+    }
+
     private fun sanitizePressure(raw: Float): Float {
         if (raw.isNaN() || raw <= 0f) return 1f
         if (raw > 1f) return 1f
@@ -1138,6 +1371,10 @@ private class DrawingSurfaceView(context: Context) :
 
     fun setLiveInkStyle(colorArgb: Int, minWidthPx: Float, maxWidthPx: Float) {
         frontBufferInk?.setStyle(colorArgb, minWidthPx, maxWidthPx)
+    }
+
+    fun cancelLiveInk() {
+        frontBufferInk?.cancel()
     }
 }
 
@@ -1234,7 +1471,7 @@ private class FrontBufferInk(private val surfaceView: SurfaceView) {
             MotionEvent.ACTION_DOWN -> {
                 generation += 1
                 renderer.cancel()
-                suppressed = Drawing.blocksLiveInkAt(x, y) || !Drawing.canDrawWithTool(toolType)
+                suppressed = Drawing.blocksLiveInkAt(x, y) || !Drawing.canDrawLiveInk(toolType, buttons)
                 inStroke = !suppressed
                 lastX = x
                 lastY = y
@@ -1242,8 +1479,12 @@ private class FrontBufferInk(private val surfaceView: SurfaceView) {
             }
             MotionEvent.ACTION_MOVE -> {
                 if (!inStroke || suppressed) return
+                if (!Drawing.canDrawLiveInk(toolType, buttons)) {
+                    cancel()
+                    return
+                }
                 val segment = buildSegment(x, y, pressure)
-                if (Drawing.canDrawWithTool(toolType) && !Drawing.blocksLiveInkSegment(lastX, lastY, x, y)) {
+                if (!Drawing.blocksLiveInkSegment(lastX, lastY, x, y)) {
                     if (!loggedFirstSegment) {
                         loggedFirstSegment = true
                         Log.i("MindstreamDrawing", "front-buffer ink first segment rendered")
@@ -1257,7 +1498,7 @@ private class FrontBufferInk(private val surfaceView: SurfaceView) {
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 if (inStroke &&
                     !suppressed &&
-                    Drawing.canDrawWithTool(toolType) &&
+                    Drawing.canDrawLiveInk(toolType, buttons) &&
                     !Drawing.blocksLiveInkSegment(lastX, lastY, x, y)
                 ) {
                     renderer.renderFrontBufferedLayer(buildSegment(x, y, pressure))
