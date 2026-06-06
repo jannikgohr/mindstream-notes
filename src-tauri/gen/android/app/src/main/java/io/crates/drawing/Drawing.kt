@@ -841,6 +841,7 @@ private class DrawingSurfaceView(
     private var oneFingerPanActive = false
     private var lastOneFingerPanX = 0f
     private var lastOneFingerPanY = 0f
+    private var mirrorStylusEraserActive = false
 
     init {
         setZOrderOnTop(true)
@@ -1197,14 +1198,28 @@ private class DrawingSurfaceView(
     }
 
     private fun onMirrorTouchEvent(event: MotionEvent): Boolean {
-        forwardToWebView(event)
         val action = event.actionMasked
         if (event.pointerCount != 1) {
             frontBufferInk?.cancel()
+            if (mirrorStylusEraserActive) {
+                dispatchStylusEraserEvent(event, MotionEvent.ACTION_CANCEL)
+                mirrorStylusEraserActive = false
+            } else {
+                forwardToWebView(event)
+            }
             return true
         }
         val toolType = event.getToolType(0)
         val buttons = event.buttonState
+        if (Drawing.isStylusButtonPressed(buttons) || mirrorStylusEraserActive) {
+            dispatchStylusEraserEvent(event, action)
+            mirrorStylusEraserActive =
+                action != MotionEvent.ACTION_UP && action != MotionEvent.ACTION_CANCEL
+            frontBufferInk?.cancel()
+            return true
+        }
+
+        forwardToWebView(event)
         val historySize = event.historySize
         val historicalAction =
             if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
@@ -1231,6 +1246,57 @@ private class DrawingSurfaceView(
             action
         )
         return true
+    }
+
+    private fun dispatchStylusEraserEvent(event: MotionEvent, action: Int) {
+        val target = webView ?: return
+        val density = target.resources.displayMetrics.density.coerceAtLeast(1f)
+        val offsetX = (left - target.left).toFloat()
+        val offsetY = (top - target.top).toFloat()
+        val pointsJson = StringBuilder("[")
+        for (h in 0 until event.historySize) {
+            appendEraserPoint(
+                pointsJson,
+                (event.getHistoricalX(h) + offsetX) / density,
+                (event.getHistoricalY(h) + offsetY) / density,
+                sanitizePressure(event.getHistoricalPressure(h))
+            )
+        }
+        appendEraserPoint(
+            pointsJson,
+            (event.x + offsetX) / density,
+            (event.y + offsetY) / density,
+            sanitizePressure(event.pressure)
+        )
+        pointsJson.append("]")
+
+        val actionName = when (action) {
+            MotionEvent.ACTION_DOWN -> "down"
+            MotionEvent.ACTION_UP -> "up"
+            MotionEvent.ACTION_CANCEL -> "cancel"
+            else -> "move"
+        }
+        target.evaluateJavascript(
+            "window.dispatchEvent(new CustomEvent('mindstream:android-stylus-eraser',{detail:{action:'$actionName',points:$pointsJson}}));",
+            null
+        )
+    }
+
+    private fun appendEraserPoint(
+        out: StringBuilder,
+        x: Float,
+        y: Float,
+        pressure: Float
+    ) {
+        if (out.length > 1) out.append(',')
+        out
+            .append("{\"x\":")
+            .append(x)
+            .append(",\"y\":")
+            .append(y)
+            .append(",\"pressure\":")
+            .append(pressure)
+            .append('}')
     }
 
     private fun forwardToWebView(event: MotionEvent) {

@@ -80,6 +80,16 @@
 
   type ToolMode = 'pen' | 'eraser';
   type PageThemeMode = 'light' | 'system';
+  type AndroidStylusEraserAction = 'down' | 'move' | 'up' | 'cancel';
+  type AndroidStylusEraserPoint = {
+    x: number;
+    y: number;
+    pressure?: number;
+  };
+  type AndroidStylusEraserPayload = {
+    action: AndroidStylusEraserAction;
+    points: AndroidStylusEraserPoint[];
+  };
   type WebInkHandleInstance = {
     encode_state_vector: () => Uint8Array;
     encode_diff_for_state_vector: (stateVector: Uint8Array) => Uint8Array;
@@ -113,6 +123,8 @@
   let undoDepth = $state(0);
   let redoDepth = $state(0);
   let eraserHits = new Set<string>();
+  let androidStylusEraserHits = new Set<string>();
+  let androidStylusEraserActive = false;
   let pointerMode: 'draw' | 'erase' | 'pan' | null = null;
   let activePointerId: number | null = null;
   let lastPointer: { x: number; y: number } | null = null;
@@ -470,13 +482,21 @@
     return samples.length > 0 ? samples : [event];
   }
 
-  function eventPoint(event: PointerEvent): InkPoint {
+  function clientPoint(
+    clientX: number,
+    clientY: number,
+    pressure: number
+  ): InkPoint {
     const rect = canvasEl?.getBoundingClientRect();
-    const x = event.clientX - (rect?.left ?? 0);
-    const y = event.clientY - (rect?.top ?? 0);
+    const x = clientX - (rect?.left ?? 0);
+    const y = clientY - (rect?.top ?? 0);
     const p = screenToPage(x, y);
-    p.pressure = sanitizePressure(event.pressure);
+    p.pressure = sanitizePressure(pressure);
     return p;
+  }
+
+  function eventPoint(event: PointerEvent): InkPoint {
+    return clientPoint(event.clientX, event.clientY, event.pressure);
   }
 
   function isStylusButtonErasing(event: PointerEvent): boolean {
@@ -604,17 +624,55 @@
     inFlight = next;
   }
 
-  function eraseFromEvent(event: PointerEvent) {
+  function eraseAtPoint(point: InkPoint, hits: Set<string>) {
     if (!doc) return;
+    if (!containsPagePoint(layout, point.x, point.y)) return;
+    const { value: erased, update } = doc.eraseAt(point, ERASER_RADIUS);
+    for (const id of erased) {
+      hits.add(id);
+    }
+    if (erased.length > 0) {
+      applyDocumentMutation(update);
+    }
+  }
+
+  function eraseFromEvent(event: PointerEvent) {
     for (const sample of pointerSamples(event)) {
       const point = eventPoint(sample);
-      if (!containsPagePoint(layout, point.x, point.y)) continue;
-      const { value: erased, update } = doc.eraseAt(point, ERASER_RADIUS);
-      for (const id of erased) {
-        eraserHits.add(id);
-      }
-      if (erased.length > 0) {
-        applyDocumentMutation(update);
+      eraseAtPoint(point, eraserHits);
+    }
+  }
+
+  function handleAndroidStylusEraser(event: Event) {
+    if (!doc || !canvasEl || isTrashed) return;
+    const detail = (event as CustomEvent<AndroidStylusEraserPayload>).detail;
+    if (!detail || !Array.isArray(detail.points)) return;
+
+    if (pointerMode === 'draw') {
+      finishActiveStroke();
+      releaseActivePointerCapture();
+      resetPointer();
+    }
+    if (detail.action === 'down' || !androidStylusEraserActive) {
+      androidStylusEraserHits.clear();
+      androidStylusEraserActive = true;
+    }
+
+    for (const sample of detail.points) {
+      if (!Number.isFinite(sample.x) || !Number.isFinite(sample.y)) continue;
+      const point = clientPoint(sample.x, sample.y, sample.pressure ?? 1);
+      eraseAtPoint(point, androidStylusEraserHits);
+    }
+
+    if (detail.action === 'up' || detail.action === 'cancel') {
+      doc.finishEraserDrag(androidStylusEraserHits);
+      syncHistoryState();
+      scheduleSave();
+      androidStylusEraserHits.clear();
+      androidStylusEraserActive = false;
+      if (pointerMode === 'erase') {
+        releaseActivePointerCapture();
+        resetPointer();
       }
     }
   }
@@ -624,6 +682,17 @@
     activePointerId = null;
     lastPointer = null;
     drawingStrokeActive = false;
+  }
+
+  function releaseActivePointerCapture() {
+    if (!canvasEl || activePointerId === null) return;
+    try {
+      if (canvasEl.hasPointerCapture(activePointerId)) {
+        canvasEl.releasePointerCapture(activePointerId);
+      }
+    } catch {
+      // Pointer capture may already have been released by the browser.
+    }
   }
 
   function finishActiveStroke() {
@@ -789,6 +858,10 @@
 
   onMount(async () => {
     const mountStartedAt = performance.now();
+    window.addEventListener(
+      'mindstream:android-stylus-eraser',
+      handleAndroidStylusEraser
+    );
     await tick();
     const afterTickAt = performance.now();
     if (isAndroid()) {
@@ -852,6 +925,10 @@
   });
 
   onDestroy(() => {
+    window.removeEventListener(
+      'mindstream:android-stylus-eraser',
+      handleAndroidStylusEraser
+    );
     clearSaveTimer();
     void flushPendingState();
     if (isAndroid()) {
