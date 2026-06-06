@@ -90,6 +90,10 @@
     action: AndroidStylusEraserAction;
     points: AndroidStylusEraserPoint[];
   };
+  type QueuedEraserSample = {
+    point: InkPoint;
+    hits: Set<string>;
+  };
   type WebInkHandleInstance = {
     encode_state_vector: () => Uint8Array;
     encode_diff_for_state_vector: (stateVector: Uint8Array) => Uint8Array;
@@ -105,6 +109,7 @@
   let disposed = false;
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
   let pendingState: number[] | null = null;
+  let saveDirty = false;
   let toolbarSettingsReady = false;
   let savingState = $state<SavingState>('idle');
   let collabConfigured = $state(false);
@@ -129,6 +134,8 @@
   let activePointerId: number | null = null;
   let lastPointer: { x: number; y: number } | null = null;
   let drawingStrokeActive = false;
+  let queuedEraserSamples: QueuedEraserSample[] = [];
+  let eraserFrame: number | null = null;
   let layout = defaultLayout();
   let view = {
     width: 1,
@@ -257,32 +264,41 @@
   }
 
   async function flushPendingState() {
-    const state = pendingState;
-    if (!state || disposed) return;
+    if ((!saveDirty && !pendingState) || disposed) return;
+    const state = pendingState ?? (doc ? Array.from(doc.encode()) : null);
+    if (!state) return;
     pendingState = null;
+    saveDirty = false;
     savingState = 'saving';
     try {
       await drawingSaveInkState(noteId, state);
-      savingState = 'saved';
+      savingState = saveDirty ? 'pending' : 'saved';
     } catch (err) {
-      pendingState = state;
-      savingState = 'error';
+      if (!saveDirty) {
+        pendingState = state;
+      }
+      savingState = saveDirty ? 'pending' : 'error';
       console.warn('[ink-canvas] failed to save note', err);
     }
   }
 
   function scheduleSave() {
     if (!doc) return;
-    pendingState = Array.from(doc.encode());
+    saveDirty = true;
+    pendingState = null;
     savingState = 'pending';
     clearSaveTimer();
     saveTimer = setTimeout(() => void flushPendingState(), SAVE_DEBOUNCE_MS);
   }
 
   function applyDocumentMutation(update: Uint8Array | null) {
+    applyDocumentMutations(update ? [update] : []);
+  }
+
+  function applyDocumentMutations(updates: Uint8Array[]) {
     refreshFromDoc();
     scheduleSave();
-    if (update) {
+    for (const update of updates) {
       provider?.sendLocalUpdate(update);
     }
   }
@@ -581,6 +597,7 @@
       }
       finishActiveStroke();
     } else if (pointerMode === 'erase' && doc) {
+      flushQueuedEraserSamples();
       doc.finishEraserDrag(eraserHits);
       syncHistoryState();
       scheduleSave();
@@ -590,6 +607,14 @@
 
   function handlePointerCancel(event: PointerEvent) {
     if (activePointerId !== event.pointerId) return;
+    if (pointerMode === 'erase' && doc) {
+      flushQueuedEraserSamples();
+      doc.finishEraserDrag(eraserHits);
+      syncHistoryState();
+      scheduleSave();
+    } else {
+      clearQueuedEraserSamples();
+    }
     cancelActiveStroke();
     inFlight = [];
     resetPointer();
@@ -625,15 +650,10 @@
   }
 
   function eraseAtPoint(point: InkPoint, hits: Set<string>) {
-    if (!doc) return;
     if (!containsPagePoint(layout, point.x, point.y)) return;
-    const { value: erased, update } = doc.eraseAt(point, ERASER_RADIUS);
-    for (const id of erased) {
-      hits.add(id);
-    }
-    if (erased.length > 0) {
-      applyDocumentMutation(update);
-    }
+    queuedEraserSamples.push({ point, hits });
+    if (eraserFrame !== null) return;
+    eraserFrame = requestAnimationFrame(() => flushQueuedEraserSamples());
   }
 
   function eraseFromEvent(event: PointerEvent) {
@@ -665,6 +685,7 @@
     }
 
     if (detail.action === 'up' || detail.action === 'cancel') {
+      flushQueuedEraserSamples();
       doc.finishEraserDrag(androidStylusEraserHits);
       syncHistoryState();
       scheduleSave();
@@ -675,6 +696,58 @@
         resetPointer();
       }
     }
+  }
+
+  function flushQueuedEraserSamples() {
+    if (eraserFrame !== null) {
+      cancelAnimationFrame(eraserFrame);
+      eraserFrame = null;
+    }
+    if (!doc || queuedEraserSamples.length === 0) {
+      queuedEraserSamples = [];
+      return;
+    }
+
+    const grouped = new Map<Set<string>, InkPoint[]>();
+    for (const sample of queuedEraserSamples) {
+      const group = grouped.get(sample.hits);
+      if (group) {
+        group.push(sample.point);
+      } else {
+        grouped.set(sample.hits, [sample.point]);
+      }
+    }
+    queuedEraserSamples = [];
+
+    const updates: Uint8Array[] = [];
+    let erasedAny = false;
+    for (const [hits, points] of grouped) {
+      const { value: erased, update } = doc.eraseAtMany(
+        points,
+        ERASER_RADIUS,
+        hits
+      );
+      if (erased.length === 0) continue;
+      erasedAny = true;
+      for (const id of erased) {
+        hits.add(id);
+      }
+      if (update) {
+        updates.push(update);
+      }
+    }
+
+    if (erasedAny) {
+      applyDocumentMutations(updates);
+    }
+  }
+
+  function clearQueuedEraserSamples() {
+    if (eraserFrame !== null) {
+      cancelAnimationFrame(eraserFrame);
+      eraserFrame = null;
+    }
+    queuedEraserSamples = [];
   }
 
   function resetPointer() {
@@ -782,18 +855,21 @@
 
   function undo() {
     if (!doc) return;
+    flushQueuedEraserSamples();
     const { value, update } = doc.undoLast();
     if (value) applyDocumentMutation(update);
   }
 
   function redo() {
     if (!doc) return;
+    flushQueuedEraserSamples();
     const { value, update } = doc.redoLast();
     if (value) applyDocumentMutation(update);
   }
 
   function clearCanvas() {
     if (!doc) return;
+    flushQueuedEraserSamples();
     const { value, update } = doc.clearAll();
     if (value.length > 0) applyDocumentMutation(update);
   }
@@ -929,6 +1005,7 @@
       'mindstream:android-stylus-eraser',
       handleAndroidStylusEraser
     );
+    flushQueuedEraserSamples();
     clearSaveTimer();
     void flushPendingState();
     if (isAndroid()) {

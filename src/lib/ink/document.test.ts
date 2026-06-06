@@ -113,6 +113,40 @@ describe('InkDocument', () => {
     expect(doc.visibleStrokes()).toHaveLength(2);
   });
 
+  it('erases multiple samples in one batch and ignores prior drag hits', () => {
+    const doc = new InkDocument();
+    doc.beginStroke(DEFAULT_COLOR, DEFAULT_WIDTH);
+    doc.pushPoint(0, 0, 1);
+    doc.pushPoint(10, 0, 1);
+    const first = doc.endStroke().value;
+    doc.beginStroke(DEFAULT_COLOR, DEFAULT_WIDTH);
+    doc.pushPoint(100, 0, 1);
+    doc.pushPoint(110, 0, 1);
+    const second = doc.endStroke().value;
+    doc.beginStroke(DEFAULT_COLOR, DEFAULT_WIDTH);
+    doc.pushPoint(200, 0, 1);
+    doc.pushPoint(210, 0, 1);
+    doc.endStroke();
+    if (!first || !second) throw new Error('expected committed strokes');
+
+    const { value: erased, update } = doc.eraseAtMany(
+      [
+        { x: 5, y: 1 },
+        { x: 105, y: 1 },
+        { x: 5, y: 1 }
+      ],
+      3
+    );
+
+    expect(new Set(erased)).toEqual(new Set([first, second]));
+    expect(update).toBeInstanceOf(Uint8Array);
+    expect(doc.visibleStrokes()).toHaveLength(1);
+
+    const again = doc.eraseAtMany([{ x: 105, y: 1 }], 3, erased);
+    expect(again.value).toEqual([]);
+    expect(again.update).toBeNull();
+  });
+
   it('clears visible strokes and restores exactly those on undo', () => {
     const doc = new InkDocument();
     doc.beginStroke(DEFAULT_COLOR, DEFAULT_WIDTH);
