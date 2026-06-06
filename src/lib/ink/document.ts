@@ -124,6 +124,10 @@ export class InkDocument {
     return this.ensureVisibleStrokeCache().map(strokeFromMeta);
   }
 
+  visibleStrokeCount(): number {
+    return this.ensureVisibleStrokeCache().length;
+  }
+
   visibleStrokesInBounds(bounds: StrokeBounds, extraPadding = 0): InkStroke[] {
     return this.strokeMetasInBounds(bounds, extraPadding).map(strokeFromMeta);
   }

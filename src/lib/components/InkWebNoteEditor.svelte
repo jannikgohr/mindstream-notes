@@ -43,7 +43,6 @@
     DEFAULT_COLOR,
     DEFAULT_WIDTH,
     InkDocument,
-    type InkStroke,
     type StrokeBounds
   } from '$lib/ink/document';
   import {
@@ -128,7 +127,7 @@
   let width = $state(DEFAULT_WIDTH);
   let fingerDrawingAllowed = $state(true);
   let pageThemeMode = $state<PageThemeMode>('light');
-  let strokes = $state<InkStroke[]>([]);
+  let strokeCount = $state(0);
   let inFlight = $state<InkPoint[]>([]);
   let undoDepth = $state(0);
   let redoDepth = $state(0);
@@ -204,7 +203,7 @@
   });
 
   $effect(() => {
-    strokes;
+    strokeCount;
     inFlight;
     tool;
     colorArgb;
@@ -362,7 +361,7 @@
 
   function refreshFromDoc() {
     if (!doc) return;
-    strokes = doc.visibleStrokes();
+    strokeCount = doc.visibleStrokeCount();
     syncHistoryState();
     const maxY = doc.contentMaxY();
     layout = defaultLayout(pageCountForContentMaxY(maxY));
@@ -506,8 +505,7 @@
     ctx.fillRect(0, 0, view.width, view.height);
 
     drawPages(ctx, visibleBounds);
-    const visibleStrokes =
-      doc?.visibleStrokesInBounds(visibleBounds, 2) ?? strokes;
+    const visibleStrokes = doc?.visibleStrokesInBounds(visibleBounds, 2) ?? [];
     for (const stroke of visibleStrokes) {
       drawStroke(ctx, stroke.points, displayColor(stroke.color), stroke.width);
     }
@@ -1088,7 +1086,7 @@
       Math.round(decodedAt - noteLoadedAt),
       Math.round(performance.now() - mountStartedAt),
       note.yrs_state.length,
-      strokes.length,
+      strokeCount,
       layout.pageCount,
       isAndroid()
     );
