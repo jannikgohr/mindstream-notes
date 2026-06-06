@@ -18,6 +18,7 @@
     "test:watch": "vitest",
     "verify": "pnpm check && pnpm test && pnpm build",
     "verify:rust": "cd src-tauri && cargo test",
+    "measure:ink-replacement": "node src-tauri/scripts/measure-ink-replacement.mjs",
     "format": "pnpm run format:web && pnpm run format:rust",
     "format:check": "pnpm run format:web:check && pnpm run format:rust:check",
     "format:web": "node src-tauri/scripts/format-web.mjs",

@@ -42,16 +42,18 @@ needs to change this plan, update this file in that step's commit.
    - Stop routing canonical input through Rust/egui.
    - JS records strokes and commits them to the shared ink document.
 
-5. **Convert Kotlin live ink into a mirror overlay** - In progress
+5. **Convert Kotlin live ink into a mirror overlay** - Done
    - Keep Kotlin `MotionEvent` capture.
    - Draw only the in-flight wet stroke with
      `CanvasFrontBufferedRenderer`.
    - Do not let Kotlin own persistence or stroke geometry.
    - Cancel/hide the wet overlay after JS commits the stroke.
    - Make the native layer ignore toolbar/control regions.
-   - Implementation exists; needs Android stylus validation.
+   - Implemented and validated on Android/desktop for basic drawing.
+   - Follow-up caveats found during validation were fixed: page bounds,
+     undo/redo, and S Pen side-button erasing with live ink suppressed.
 
-6. **Add an Android input tee** - In progress
+6. **Add an Android input tee** - Done
    - Kotlin observes stylus samples while still letting WebView receive
      pointer events.
    - Match JS and Kotlin coordinates exactly.
@@ -59,12 +61,17 @@ needs to change this plan, update this file in that step's commit.
      eraser/live-ink hidden state.
    - Add a simple "JS committed stroke" ack so Kotlin knows when to
      clear the overlay.
-   - Implementation exists; needs Android stylus validation.
+   - Implemented with WebView event forwarding and matching live overlay
+     style updates. Live collab remains part of the step 7 validation
+     gate because it requires multi-client testing.
 
-7. **Measure before deleting egui** - Pending
+7. **Measure before deleting egui** - In progress
    - Compare APK/AAB size, note-open time, Tab S7 FE pen latency, memory
      use on large notes, and save/collab correctness.
    - Keep the old egui path behind a dev flag until this passes.
+   - Measurement harness added: `pnpm measure:ink-replacement`.
+   - JS-canvas open timing now logs `[ink.perf] web_open ...` for the
+     retained editor path.
 
 8. **Remove egui/wgpu from Android** - Pending
    - Remove Android use of `egui`, `egui-wgpu`, `wgpu`, `egui-shadcn`,

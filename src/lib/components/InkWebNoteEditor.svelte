@@ -788,13 +788,18 @@
   }
 
   onMount(async () => {
+    const mountStartedAt = performance.now();
     await tick();
+    const afterTickAt = performance.now();
     if (isAndroid()) {
       await drawingShowLiveInkOverlay();
     }
+    const liveOverlayReadyAt = performance.now();
     const note = await loadNote(noteId);
     if (disposed) return;
+    const noteLoadedAt = performance.now();
     doc = InkDocument.fromBytes(new Uint8Array(note.yrs_state));
+    const decodedAt = performance.now();
     handle = {
       encode_state_vector: () => doc?.encodeStateVector() ?? new Uint8Array(),
       encode_diff_for_state_vector: (stateVector) =>
@@ -818,6 +823,23 @@
     refreshFromDoc();
     resizeCanvas();
     updateLiveInkOverlayStyle();
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => resolve())
+    );
+    if (disposed) return;
+    console.info(
+      '[ink.perf] web_open note=%s tick_ms=%d live_overlay_ms=%d load_note_ms=%d decode_ms=%d first_draw_ms=%d state_bytes=%d strokes=%d pages=%d android=%s',
+      noteId,
+      Math.round(afterTickAt - mountStartedAt),
+      Math.round(liveOverlayReadyAt - afterTickAt),
+      Math.round(noteLoadedAt - liveOverlayReadyAt),
+      Math.round(decodedAt - noteLoadedAt),
+      Math.round(performance.now() - mountStartedAt),
+      note.yrs_state.length,
+      strokes.length,
+      layout.pageCount,
+      isAndroid()
+    );
     resizeObserver = new ResizeObserver(resizeCanvas);
     if (hostEl) resizeObserver.observe(hostEl);
     toolbarSettingsReady = true;
