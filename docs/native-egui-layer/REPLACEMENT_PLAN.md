@@ -16,14 +16,14 @@ needs to change this plan, update this file in that step's commit.
 
 ## Steps
 
-1. **Define the new boundary** - In progress
+1. **Define the new boundary** - Done
    - Create a platform-neutral ink document module with no `egui` and
      no `wgpu`.
    - Keep: stroke schema, Yrs/Yjs encoding, page layout, hit testing,
      undo/redo model, and brush settings.
    - Move egui-specific UI into a deprecated/temporary adapter.
 
-2. **Build the JS canvas ink editor** - Pending
+2. **Build the JS canvas ink editor** - In progress
    - Replace `InkWebNoteEditor`'s egui WASM canvas with a Svelte +
      TypeScript canvas editor.
    - Implement page-stack rendering, pen strokes with pressure, eraser,
