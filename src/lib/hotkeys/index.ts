@@ -1,17 +1,19 @@
 /**
  * Barrel for the hotkey module. Consumers (NoteEditor, FreeformNoteEditor,
- * settings panel, root layout) import from `$lib/hotkeys` rather than
- * reaching into individual files so internal restructuring stays
+ * settings panel, root layout, toolbar) import from `$lib/hotkeys` rather
+ * than reaching into individual files so internal restructuring stays
  * local.
  */
 
+export { initHotkeys, bindingFromEvent } from './manager.svelte';
+
 export {
-  initHotkeys,
-  pushActiveEditor,
-  popActiveEditor,
-  bindingFromEvent,
-  type ActiveEditor
-} from './manager.svelte';
+  registerEditor,
+  unregisterEditor,
+  emitCommand,
+  activeEditor,
+  type EditorListener
+} from './bus.svelte';
 
 export {
   HOTKEY_COMMANDS,
@@ -25,6 +27,7 @@ export {
 } from './commands';
 
 export {
+  hotkeys,
   getBinding,
   setBinding,
   resetBinding,

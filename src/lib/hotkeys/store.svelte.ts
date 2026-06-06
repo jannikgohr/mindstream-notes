@@ -1,27 +1,43 @@
 /**
  * Reactive store of user-customised hotkey bindings.
  *
- * Persistence rides on top of the existing settings store: each
- * command's binding is held as a setting whose id is
- * `'hotkey.' + command.id`. We didn't add a row per hotkey to
- * `schema.json` because:
+ * Two layers, deliberately separated:
  *
- *   - the schema is meant to be *authored* JSON, and 17+ identical
- *     skeletons of `{ scope:'V', type:'keybinding', default:'mod+...' }`
- *     would be tedious to maintain alongside the catalogue;
- *   - the catalogue is already the source of truth for defaults and
- *     labels, and duplicating that into schema.json would be a
- *     guaranteed-to-rot mirror;
- *   - the settings store's `getSettingValue` / `setSettingValue`
- *     happily take any id, schema-listed or not — the schema is only
- *     consulted for type info and default lookup, both of which we
- *     provide ourselves here.
+ *   1. **Reactive surface** — `hotkeys.bindings` is a `$state` map of
+ *      `commandId → binding | null`. Every UI consumer (toolbar
+ *      tooltips, the menu shortcut column, the settings panel) reads
+ *      this map directly via `getBinding(id)`. Because each commandId
+ *      is its own property of the proxy, a write to one key
+ *      invalidates only the readers of that key — exactly the
+ *      i18n.bundle / setLanguage model. No "void settings.values"
+ *      tracking hack; the reactivity is per-binding.
  *
- * Conflict policy: at most one command per chord. When the user sets a
- * binding that's already in use, the old owner is silently cleared.
- * The settings UI warns about this before the write happens; the store
- * itself trusts the caller and just performs the swap so internal
- * invariants (`bindingToCommand` is single-valued) hold.
+ *   2. **Persistence** — the underlying settings store is still where
+ *      bindings end up on disk, under the key prefix `'hotkey.'`.
+ *      `setBinding` mirrors writes through to it so the value survives
+ *      a reload and the existing localStorage migration / debounce
+ *      machinery applies. Reads at module-load time pull initial
+ *      values out of `settings.values` so a refresh comes back with
+ *      whatever the user last picked.
+ *
+ * The split is the same trick `mode-watcher` and `i18n.svelte.ts` use:
+ * the source of truth is in a fast in-memory `$state` so the UI feels
+ * instant, the disk is just where the value goes for next time.
+ *
+ * Negative-space rules:
+ *
+ *   - `getBinding` never returns an unknown value type. If the
+ *     localStorage row is corrupt (number, object, …) we fall back to
+ *     the default — the manager / UI never sees garbage.
+ *
+ *   - `setBinding` refuses to persist a string that doesn't round-trip
+ *     through `parseBinding`. Anything that gets stored is guaranteed
+ *     to be a chord the matcher can recognise.
+ *
+ *   - Single-binding invariant: at most one command owns a given chord.
+ *     Setting a binding that's already in use silently clears the old
+ *     owner. The settings UI surfaces the swap to the user before the
+ *     call; the store itself just enforces the invariant.
  */
 
 import { setSettingValue, settings } from '$lib/settings/store.svelte';
@@ -32,48 +48,115 @@ import {
   type CommandDefinition
 } from './commands';
 
-/**
- * Settings-store key for a given command id. The `'hotkey.'` prefix
- * keeps these clearly distinct from regular settings (`'editor.'`,
- * `'appearance.'`, …) so a stale binding doesn't accidentally collide
- * with a future setting id.
- */
+/** Settings-store key for a given command id. The `'hotkey.'` prefix
+ *  keeps these clearly distinct from regular settings (`'editor.'`,
+ *  `'appearance.'`, …) so a stale binding doesn't collide with a
+ *  future setting id. */
 function settingKey(commandId: string): string {
   return `hotkey.${commandId}`;
 }
 
 /**
- * Read the active binding for a command, falling back to its default
- * when the user has never customised it. Returns `null` only when the
- * user has explicitly unset the hotkey — i.e. there is no fallback to a
- * default in that case. That's deliberate: "unset" must mean "no key",
- * not "no key for now, then default again later", or unsetting would
- * appear to do nothing.
+ * The reactive binding map. Same shape as the i18n.bundle pattern:
+ * a single `$state` object, mutated in place, read by the entire app.
+ *
+ * Exported directly so callers can subscribe in `$derived` chains
+ * without going through a helper — `displayBinding(hotkeys.bindings[id])`
+ * is the canonical reactive read. `getBinding(id)` is the same thing
+ * with a null-safe fallback baked in.
+ *
+ * Starts empty (NOT populated with catalogue defaults) so module init
+ * doesn't depend on `HOTKEY_COMMANDS` being fully loaded — there's a
+ * transitive import cycle (settings.registry → HotkeysPanel →
+ * $lib/hotkeys → store → commands → editor-toolbar/commands) that
+ * would otherwise make `HOTKEY_COMMANDS` undefined at the time this
+ * file evaluates. Defaults are served lazily by `getBinding`, and
+ * `hydrateBindingsFromSettings` overlays user-saved overrides at
+ * `initHotkeys` time.
+ */
+export const hotkeys = $state<{
+  bindings: Record<string, string | null>;
+}>({
+  bindings: {}
+});
+
+/**
+ * Pull user-saved bindings out of the settings store and into the
+ * reactive `hotkeys.bindings` map. Idempotent — re-running just
+ * re-overwrites every command's entry from the current settings
+ * snapshot, so callers don't need to track whether hydration has
+ * happened.
+ *
+ * Defensive against settings being only partially loaded (corrupt
+ * localStorage, in-flight Tauri IPC for a binding-backed value): an
+ * unknown row type falls back to the catalogue default, never throws.
+ */
+export function hydrateBindingsFromSettings(): void {
+  if (!settings || !settings.values) return;
+  // Defensive: HOTKEY_COMMANDS is populated synchronously at module
+  // load, but if a future caller triggers hydration mid-circular-load
+  // we'd rather skip than throw "not iterable".
+  if (!Array.isArray(HOTKEY_COMMANDS)) return;
+  for (const cmd of HOTKEY_COMMANDS) {
+    const key = settingKey(cmd.id);
+    if (!(key in settings.values)) {
+      // No persisted override → leave the map entry absent so
+      // `getBinding` falls through to the catalogue default. This
+      // keeps the map small (only customised rows are present) and
+      // means resetting back to default truly "forgets" the override.
+      delete hotkeys.bindings[cmd.id];
+      continue;
+    }
+    const raw = settings.values[key];
+    if (raw === null) {
+      hotkeys.bindings[cmd.id] = null;
+    } else if (typeof raw === 'string') {
+      hotkeys.bindings[cmd.id] = canonicalize(raw);
+    } else {
+      delete hotkeys.bindings[cmd.id];
+    }
+  }
+}
+
+/**
+ * Read the active binding for a command.
+ *
+ * Lookup order:
+ *
+ *   1. If the user has touched this command (entry exists in the
+ *      reactive map), return that value — whether it's a string or
+ *      `null`. Explicit `null` means "user unset this", and the
+ *      catalogue default is intentionally NOT a fallback in that
+ *      case: unset must mean "no key", not "no key for now, then
+ *      default again later".
+ *
+ *   2. Otherwise (entry missing — pre-hydrate or a command the user
+ *      hasn't touched since install), return the catalogue default.
+ *
+ * Reading through this helper keeps the reactivity dependency targeted
+ * at `hotkeys.bindings[commandId]` specifically — the toolbar's Bold
+ * tooltip re-renders only when Bold's binding changes, not when any
+ * other command changes.
  */
 export function getBinding(commandId: string): string | null {
   const def = COMMAND_BY_ID[commandId];
   if (!def) return null;
-  const key = settingKey(commandId);
-  if (key in settings.values) {
-    const raw = settings.values[key];
-    // We accept `null` (explicit unset), a string (custom binding), and
-    // refuse anything else. A corrupt localStorage row therefore falls
-    // back to the default rather than blowing up the reader.
-    if (raw === null) return null;
-    if (typeof raw === 'string') return canonicalize(raw);
-    return def.defaultBinding;
+  // Property access on the $state proxy. Tracking is per-key, so each
+  // call wires up a dep on exactly this binding.
+  if (commandId in hotkeys.bindings) {
+    return hotkeys.bindings[commandId];
   }
   return def.defaultBinding;
 }
 
 /**
- * Set a new binding, persisted via the settings store. Pass `null` to
- * mark the hotkey as unset (no key fires it).
+ * Update a binding. Mirrors the write through both the reactive
+ * surface (`hotkeys.bindings`) and the settings store (persistence).
  *
- * Conflict resolution: if `binding` is non-null and currently in use
- * by another command, that other command is silently cleared so the
- * single-binding invariant holds. The caller (settings UI) is expected
- * to have surfaced this beforehand.
+ * Conflict handling: when `binding` is non-null and another command
+ * already owns it, that other command is cleared first. Both writes
+ * land in the same microtask so the UI never observes a "two commands
+ * own the same chord" transient state.
  */
 export async function setBinding(
   commandId: string,
@@ -81,31 +164,36 @@ export async function setBinding(
 ): Promise<void> {
   const def = COMMAND_BY_ID[commandId];
   if (!def) return;
+
   const normalized = binding === null ? null : canonicalize(binding);
-  // Refuse to persist a binding that doesn't parse. The recorder UI
-  // is responsible for only handing us valid input — if we got here
-  // with garbage, the alternative would be silently storing a string
-  // that the manager could never match.
   if (binding !== null && normalized === null) {
     throw new Error(`[hotkeys] refused to store invalid binding: ${binding}`);
   }
 
+  // Resolve conflicts FIRST so a write that swaps two bindings always
+  // produces a consistent final state, even if the second await rejects.
   if (normalized !== null) {
     for (const other of HOTKEY_COMMANDS) {
       if (other.id === commandId) continue;
-      const otherBinding = getBinding(other.id);
-      if (otherBinding === normalized) {
-        await setSettingValue(settingKey(other.id), null);
+      if (hotkeys.bindings[other.id] === normalized) {
+        hotkeys.bindings[other.id] = null;
+        // Persistence is async but cheap (localStorage is sync under
+        // the hood; the await is just to satisfy the settings store's
+        // contract). We don't block on the disk write — by the time
+        // anyone reads, hotkeys.bindings is already correct.
+        void setSettingValue(settingKey(other.id), null);
       }
     }
   }
 
+  hotkeys.bindings[commandId] = normalized;
   await setSettingValue(settingKey(commandId), normalized);
 }
 
-/** Restore a command's default binding. Behaviour matches `setBinding`
- *  with `defaultBinding` as the value: defaults can also collide with
- *  customised entries so the swap rules apply. */
+/** Restore a command's default binding. Goes through `setBinding` so
+ *  the conflict-swap path applies — if the default is currently used
+ *  by another command (because the user remapped two bindings into a
+ *  swap), the other side is cleared before the default lands. */
 export async function resetBinding(commandId: string): Promise<void> {
   const def = COMMAND_BY_ID[commandId];
   if (!def) return;
@@ -114,31 +202,29 @@ export async function resetBinding(commandId: string): Promise<void> {
 
 /** True when the user's binding differs from the catalogue default —
  *  used by the settings UI to draw the small "modified" dot next to
- *  custom rows. */
+ *  custom rows. Goes through `getBinding` so the dot's reactivity
+ *  surface matches what the chip actually displays. */
 export function isCustomized(commandId: string): boolean {
   const def = COMMAND_BY_ID[commandId];
   if (!def) return false;
-  const key = settingKey(commandId);
-  if (!(key in settings.values)) return false;
-  const current = getBinding(commandId);
-  return current !== def.defaultBinding;
+  return getBinding(commandId) !== def.defaultBinding;
 }
 
 /**
- * Build the reverse map { normalized-binding → command id } for fast
- * dispatch. Recomputed inline because the manager calls
- * `findCommandByBinding` on every keydown and the catalogue is small
- * (well under 100 entries) — a memoized derived would be a marginal
- * win we don't need. Reading is dependency-tracked through
- * `settings.values`, so changes invalidate any `$derived` chain that
- * built up from this call automatically.
+ * Reverse lookup: which command currently owns this binding, if any.
+ * Used by the recorder UI to surface the conflict warning before the
+ * user commits.
+ *
+ * Walks the small catalogue (under 50 entries) rather than caching a
+ * reverse map — keeps the reactive dependency on `hotkeys.bindings`
+ * via `getBinding` rather than on a derived cache that would need its
+ * own invalidation.
  */
 export function findCommandByBinding(
   binding: string
 ): CommandDefinition | null {
   for (const cmd of HOTKEY_COMMANDS) {
-    const b = getBinding(cmd.id);
-    if (b === binding) return cmd;
+    if (getBinding(cmd.id) === binding) return cmd;
   }
   return null;
 }

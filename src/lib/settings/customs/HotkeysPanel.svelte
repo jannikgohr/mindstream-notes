@@ -39,7 +39,6 @@
     type CommandDefinition
   } from '$lib/hotkeys';
   import { tUi } from '$lib/settings/i18n.svelte';
-  import { settings } from '$lib/settings/store.svelte';
 
   /**
    * Local recording state. Only one row can record at a time — the
@@ -54,32 +53,18 @@
    *  no conflict. */
   let conflictWithId = $state<string | null>(null);
 
-  /** Re-read on every settings.values change so committing a new binding
-   *  refreshes the chips on every row (the conflict-swap case in
-   *  particular clears another row). */
-  const groups = $derived.by(() => {
-    // Tracking dependency: read the values map so the derived re-fires
-    // when any hotkey row's setting changes. We don't need the value
-    // itself — `getBinding` does its own read inside row rendering —
-    // but Svelte's tracker needs the read to be on this surface.
-    void settings.values;
-    return groupedCommands();
-  });
+  /** Static catalogue grouped by scope/editor-kind. The catalogue
+   *  itself doesn't change at runtime, and per-binding reactivity
+   *  comes from `getBinding(cmd.id)` inside the row template
+   *  (`hotkeys.bindings[id]` is per-key tracked) — so this is a plain
+   *  one-shot read, not a `$derived`. */
+  const groups = groupedCommands();
 
-  /**
-   * Flat lookup so the conflict warning can render the OTHER command's
-   * label without re-walking the groups array. Derived (not constant)
-   * because the catalogue itself is static, but threading it through
-   * the same reactive surface as `groups` keeps both in sync if the
-   * catalogue ever becomes data-driven.
-   */
-  const flatById = $derived.by(() => {
-    const map = new Map<string, CommandDefinition>();
-    for (const g of groups) {
-      for (const c of g.commands) map.set(c.id, c);
-    }
-    return map;
-  });
+  /** Flat lookup so the conflict warning can render the OTHER
+   *  command's label without re-walking the groups array. */
+  const flatById = new Map<string, CommandDefinition>(
+    groups.flatMap((g) => g.commands.map((c) => [c.id, c]))
+  );
 
   function groupLabel(scope: string, kind: string | null): string {
     if (scope === 'global') return tUi('hotkeys.group.global');

@@ -56,9 +56,9 @@
     type ToolbarLayoutHandle
   } from '$lib/freeform/toolbar-layout';
   import {
-    pushActiveEditor,
-    popActiveEditor,
-    type ActiveEditor
+    registerEditor,
+    unregisterEditor,
+    type EditorListener
   } from '$lib/hotkeys';
 
   interface Props {
@@ -101,16 +101,18 @@
   let loadError = $state<string | null>(null);
 
   /**
-   * Hotkey-manager registration for this freeform canvas. There aren't
-   * any freeform-scoped commands in the catalogue yet — registering as
-   * an active editor of kind 'freeform' still matters because it
-   * displaces any markdown editor above it on the stack, so a Mod+B
-   * fired here is treated as "no command for this scope" and falls
-   * through to tldraw rather than secretly editing a markdown note
-   * the user can't see. Negative-space programming: refuse the bug,
-   * don't paper it over.
+   * Command-bus listener for this freeform canvas. There aren't any
+   * freeform-scoped commands in the catalogue yet, so `onCommand`
+   * just reports "didn't handle" for every id it receives — but
+   * registering the listener still matters because it displaces any
+   * markdown listener above it on the stack. A Mod+B fired here is
+   * therefore routed to the freeform listener (which declines), the
+   * bus reports the command as unhandled, and the manager lets the
+   * keystroke fall through to tldraw rather than secretly editing a
+   * markdown note the user can't see. Negative-space programming:
+   * refuse the bug, don't paper it over.
    */
-  let activeEditor: ActiveEditor | null = null;
+  let editorListener: EditorListener | null = null;
 
   let yDocUpdateHandler: (() => void) | null = null;
   /** Gate yDoc updates from triggering saves until hydration is done. */
@@ -312,23 +314,28 @@
 
       loading = false;
 
-      // Register with the hotkey manager. No `dispatch` body to write
-      // yet — the catalogue carries zero freeform commands — but we
-      // still install the adapter so opening a freeform note while a
-      // markdown note is also mounted re-targets editor-scoped
-      // hotkeys away from the markdown one. The dispatch body warns
-      // and returns; if a freeform command id ever reaches it without
-      // a matching action, that's a catalogue drift the developer
-      // should see.
+      // Register with the command bus. No commands to handle yet —
+      // the catalogue carries zero freeform commands — but installing
+      // the listener still matters: it displaces any markdown
+      // listener above it on the stack so editor-scoped commands
+      // don't accidentally route to a hidden markdown note while the
+      // user is in a freeform canvas. Returning `false` from
+      // `onCommand` tells the bus nothing was handled, so the manager
+      // lets the keystroke flow through to tldraw.
       if (mountEl) {
-        activeEditor = {
+        editorListener = {
           kind: 'freeform',
           host: mountEl,
-          dispatch: (id: string) => {
-            console.warn('[FreeformNoteEditor] unknown freeform hotkey id', id);
+          onCommand: (id: string) => {
+            // No freeform commands yet. The bus only routes ids
+            // whose `editorKind` is `'freeform'`, so reaching this
+            // means a future catalogue addition wasn't accompanied
+            // by an action here — log it.
+            console.warn('[FreeformNoteEditor] unhandled command', id);
+            return false;
           }
         };
-        pushActiveEditor(activeEditor);
+        registerEditor(editorListener);
       }
     } catch (err) {
       loadError = err instanceof Error ? err.message : String(err);
@@ -342,9 +349,9 @@
    * notes need the most recently focused one to win.
    */
   $effect(() => {
-    if (!mountEl || !activeEditor) return;
-    const editor = activeEditor;
-    const onFocusIn = () => pushActiveEditor(editor);
+    if (!mountEl || !editorListener) return;
+    const listener = editorListener;
+    const onFocusIn = () => registerEditor(listener);
     mountEl.addEventListener('focusin', onFocusIn);
     return () => mountEl?.removeEventListener('focusin', onFocusIn);
   });
@@ -418,9 +425,9 @@
 
   onDestroy(() => {
     if (saveTimer) clearTimeout(saveTimer);
-    if (activeEditor) {
-      popActiveEditor(activeEditor);
-      activeEditor = null;
+    if (editorListener) {
+      unregisterEditor(editorListener);
+      editorListener = null;
     }
     unsubSession?.();
     unsubSync?.();

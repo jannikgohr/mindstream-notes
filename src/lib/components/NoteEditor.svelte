@@ -32,10 +32,10 @@
   import { base64ToBytes } from '$lib/editor/base64';
   import { createWikilinkBridge } from '$lib/editor/plugins';
   import {
-    pushActiveEditor,
-    popActiveEditor,
+    registerEditor,
+    unregisterEditor,
     MARKDOWN_ACTIONS,
-    type ActiveEditor
+    type EditorListener
   } from '$lib/hotkeys';
   import EditorToolbar from './editor-toolbar/EditorToolbar.svelte';
   import MobileEditorToolbar from './editor-toolbar/MobileEditorToolbar.svelte';
@@ -113,14 +113,18 @@
   let loadError = $state<string | null>(null);
 
   /**
-   * The hotkey manager's view of this editor. Constructed once the
-   * Crepe instance is live so `dispatch` always has a valid `crepe` to
-   * close over — pushing earlier with a null crepe would risk a hotkey
-   * firing during the brief window between mount and `crepe.create()`.
-   * Unregistered in onDestroy (and re-promoted on focusin so two open
-   * notes route Mod+B to the one the user just clicked into).
+   * Command-bus listener for this note. Built once Crepe is live so
+   * `onCommand` always has a valid `crepe` to close over — registering
+   * earlier with a null crepe would risk a command firing during the
+   * brief window between mount and `crepe.create()`. Unregistered in
+   * onDestroy (and re-promoted on focusin so two open notes route a
+   * command to the one the user just clicked into).
+   *
+   * The listener is the editor's ONLY contact with the hotkey module:
+   * it receives command ids and runs the matching action. It knows
+   * nothing about keyboard shortcuts, binding strings, or settings.
    */
-  let activeEditor: ActiveEditor | null = null;
+  let editorListener: EditorListener | null = null;
 
   // Captured inside the editor's `action` callback so handleChange can
   // read the live markdown without going through the listener plugin —
@@ -330,33 +334,37 @@
       crepeReady = true;
       loading = false;
 
-      // Register with the hotkey manager. `dispatch` closes over the
-      // *current* crepe so reassignment in onDestroy can't strand a
-      // stale reference. The manager's `host.contains(target)` check
-      // uses this host element to exempt the contenteditable from the
+      // Register with the command bus. `onCommand` closes over the
+      // current `crepe` so reassignment in onDestroy can't strand a
+      // stale reference. The bus's `host.contains(target)` check uses
+      // this host element to exempt the contenteditable from the
       // blocked-input rule.
       if (host && crepe) {
         const activeCrepe = crepe;
-        activeEditor = {
+        editorListener = {
           kind: 'markdown',
           host,
-          dispatch: (id: string) => {
+          onCommand: (id: string) => {
             const action = MARKDOWN_ACTIONS[id];
-            // The manager already gated on `editorKind === 'markdown'`,
-            // so an id missing from the table can only happen during a
-            // catalogue drift — log loudly rather than silently no-op.
+            // The bus already gated on `editorKind === 'markdown'`,
+            // so an id missing from the table means catalogue drift
+            // (a hotkey command registered without a matching
+            // markdown action). Return `false` so the bus knows
+            // nothing was handled and the keystroke falls through.
             if (!action) {
-              console.warn('[NoteEditor] unknown markdown hotkey id', id);
-              return;
+              console.warn('[NoteEditor] unknown markdown command', id);
+              return false;
             }
             try {
               activeCrepe.editor.action(action);
+              return true;
             } catch (err) {
-              console.error('[NoteEditor] hotkey dispatch failed', id, err);
+              console.error('[NoteEditor] command threw', id, err);
+              return false;
             }
           }
         };
-        pushActiveEditor(activeEditor);
+        registerEditor(editorListener);
       }
     } catch (err) {
       loadError = err instanceof Error ? err.message : String(err);
@@ -516,12 +524,12 @@
   }
 
   /**
-   * Re-promote this editor to the top of the hotkey stack when the
-   * user clicks back into it. Without this, two notes open in dockview
-   * would always route hotkeys to whichever was registered LAST — even
-   * after the user clicked the other one. focusin bubbles, so we can
-   * watch the editor host and catch any contenteditable / toolbar
-   * focus.
+   * Re-promote this editor to the top of the command bus stack when
+   * the user clicks back into it. Without this, two notes open in
+   * dockview would always route commands to whichever was registered
+   * LAST — even after the user clicked the other one. focusin bubbles,
+   * so we can watch the editor host and catch any contenteditable /
+   * toolbar focus.
    *
    * No focusout handler: focusout fires on every toolbar click and
    * would pop the editor mid-action. The stack ordering alone is
@@ -529,12 +537,12 @@
    * in or it unmounts.
    */
   $effect(() => {
-    if (!host || !activeEditor) return;
-    const editor = activeEditor;
+    if (!host || !editorListener) return;
+    const listener = editorListener;
     const onFocusIn = () => {
-      // pushActiveEditor is the "re-promote" path too: if the editor
-      // is already registered it gets moved to the top.
-      pushActiveEditor(editor);
+      // registerEditor is the "re-promote" path too: if the listener
+      // is already registered it gets moved to the top of the stack.
+      registerEditor(listener);
     };
     host.addEventListener('focusin', onFocusIn);
     return () => host?.removeEventListener('focusin', onFocusIn);
@@ -542,9 +550,9 @@
 
   onDestroy(() => {
     if (saveTimer) clearTimeout(saveTimer);
-    if (activeEditor) {
-      popActiveEditor(activeEditor);
-      activeEditor = null;
+    if (editorListener) {
+      unregisterEditor(editorListener);
+      editorListener = null;
     }
     unsubSession?.();
     unsubSession = null;

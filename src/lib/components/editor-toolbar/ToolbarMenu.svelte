@@ -16,7 +16,6 @@
   import { Portal } from 'bits-ui';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { displayBinding, getBinding } from '$lib/hotkeys';
-  import { settings } from '$lib/settings/store.svelte';
 
   export interface MenuItem {
     kind: 'item';
@@ -117,14 +116,12 @@
   }
 
   /**
-   * Resolve the per-row shortcut display string. Reads the settings
-   * values map so the menu re-renders if the user rebinds something
-   * with the menu open — admittedly a rare event (the only way to
-   * reach the settings dialog with the menu open is via Mod+,) but
-   * cheap to keep correct.
+   * Per-row shortcut display string. `getBinding` reads the reactive
+   * `hotkeys.bindings` map, so the menu re-renders automatically if a
+   * binding changes while the menu is open — without depending on the
+   * whole settings.values surface.
    */
   function shortcutFor(entry: MenuItem): string {
-    void settings.values;
     if (!entry.hotkeyId) return '';
     return displayBinding(getBinding(entry.hotkeyId));
   }

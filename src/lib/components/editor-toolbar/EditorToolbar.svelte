@@ -26,7 +26,7 @@
   import { Button } from '$lib/components/ui/button';
   import { cn } from '$lib/utils';
   import { tUi } from '$lib/settings/i18n.svelte';
-  import { getSettingValue, settings } from '$lib/settings/store.svelte';
+  import { getSettingValue } from '$lib/settings/store.svelte';
   import { displayBinding, getBinding } from '$lib/hotkeys';
   import {
     TOOLBAR_ITEMS,
@@ -140,16 +140,14 @@
 
   /**
    * Tooltip text for a leaf: label, plus the user's current hotkey
-   * binding in parentheses when one is bound. Reads `settings.values`
-   * so the tooltip live-refreshes when the user rebinds in the
-   * settings panel — no editor remount required. Items without a
-   * `hotkeyId` (image, table, math, mermaid) just get the label.
+   * binding in parentheses when one is bound. `getBinding` reads from
+   * the `hotkeys.bindings` $state map (per-key reactive), so the
+   * tooltip live-refreshes the instant the user rebinds in the
+   * settings panel — no editor remount required, no global tracking
+   * dependency on the whole values map. Items without a `hotkeyId`
+   * (image, table, math, mermaid) just get the label.
    */
   function leafTitle(item: ToolbarLeaf): string {
-    // Tracking read: surfaces a dependency on the values map so the
-    // `$derived` chain that evaluates this in the template re-runs
-    // when any binding changes.
-    void settings.values;
     const label = tUi(item.labelKey);
     if (!item.hotkeyId) return label;
     const shortcut = displayBinding(getBinding(item.hotkeyId));
