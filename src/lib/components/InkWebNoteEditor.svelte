@@ -587,17 +587,41 @@
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     ctx.strokeStyle = cssColor(color);
+    const scale = view.scale;
+    const panX = view.panX;
+    const panY = view.panY;
+    let previous = points[0];
+    let previousX = previous.x * scale + panX;
+    let previousY = previous.y * scale + panY;
+    let currentWidth = 0;
+    let pathOpen = false;
+
     for (let i = 1; i < points.length; i += 1) {
-      const a = pageToScreen(points[i - 1]);
-      const b = pageToScreen(points[i]);
-      const pressure = (points[i - 1].pressure + points[i].pressure) * 0.5;
-      ctx.lineWidth = Math.max(
+      const point = points[i];
+      const x = point.x * scale + panX;
+      const y = point.y * scale + panY;
+      const pressure = (previous.pressure + point.pressure) * 0.5;
+      const lineWidth = Math.max(
         1,
-        baseWidth * view.scale * pressureWidth(pressure)
+        baseWidth * scale * pressureWidth(pressure)
       );
-      ctx.beginPath();
-      ctx.moveTo(a.x, a.y);
-      ctx.lineTo(b.x, b.y);
+      const quantizedWidth = Math.round(lineWidth * 4) / 4;
+      if (!pathOpen || quantizedWidth !== currentWidth) {
+        if (pathOpen) {
+          ctx.stroke();
+        }
+        ctx.lineWidth = quantizedWidth;
+        ctx.beginPath();
+        ctx.moveTo(previousX, previousY);
+        currentWidth = quantizedWidth;
+        pathOpen = true;
+      }
+      ctx.lineTo(x, y);
+      previous = point;
+      previousX = x;
+      previousY = y;
+    }
+    if (pathOpen) {
       ctx.stroke();
     }
   }
