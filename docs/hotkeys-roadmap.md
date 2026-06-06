@@ -151,13 +151,21 @@ note about what shipped, and move on.
       layout `$effect` so the tray menu's accelerators stay current.
       Defer until a tray action actually overlaps with a hotkey.
 
-- [ ] **#13. No persistence migration story.**
-      Rename a command id (`editor.markdown.bulletList` → something
-      else) and users with custom bindings silently lose them.
-      **Plan:** small `migrations` map keyed by old id → new id,
-      walked at the top of `hydrateBindingsFromSettings`. Each entry
-      moves the persisted value and deletes the old key. Add a unit
-      test per migration so future renames don't forget.
+- [x] **#13. No persistence migration story.**
+      Renaming a command id silently lost every user's custom binding
+      for that command.
+      **Shipped:** new `$lib/hotkeys/migrations.ts` exports a
+      `MIGRATIONS` map (`oldId → newId`, empty until the first
+      rename ships) and a pure `applyMigrations(values, table)`
+      walker that `hydrateBindingsFromSettings` runs before the main
+      load. On collision (both old and new have values) the user's
+      later choice on the new id wins; the old key is always cleaned
+      up so it doesn't re-migrate on the next load. New
+      `migrations.test.ts` (10 cases) covers the walker behaviour
+      and four authoring-rule guards (targets must exist in the
+      catalogue, sources must not be live ids, no chains, no
+      self-refs) — empty-table-passes-trivially today, real guard
+      rails the moment the first rename lands.
 
 ---
 

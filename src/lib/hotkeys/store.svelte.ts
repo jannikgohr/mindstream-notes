@@ -43,6 +43,7 @@
 import { setSettingValue, settings } from '$lib/settings/store.svelte';
 import { canonicalize } from './parse';
 import { wellKnownConflict } from './collisions';
+import { applyMigrations, MIGRATIONS } from './migrations';
 import {
   COMMAND_BY_ID,
   HOTKEY_COMMANDS,
@@ -98,6 +99,12 @@ export function hydrateBindingsFromSettings(): void {
   // load, but if a future caller triggers hydration mid-circular-load
   // we'd rather skip than throw "not iterable".
   if (!Array.isArray(HOTKEY_COMMANDS)) return;
+
+  // Walk the rename table BEFORE the main hydrate so renamed
+  // commands inherit their old `settings.values` entry. Without
+  // this, every rename silently loses every user's custom binding.
+  applyMigrations(settings.values, MIGRATIONS);
+
   for (const cmd of HOTKEY_COMMANDS) {
     const key = settingKey(cmd.id);
     if (!(key in settings.values)) {
