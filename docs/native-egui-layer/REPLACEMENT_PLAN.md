@@ -23,7 +23,7 @@ needs to change this plan, update this file in that step's commit.
      undo/redo model, and brush settings.
    - Move egui-specific UI into a deprecated/temporary adapter.
 
-2. **Build the JS canvas ink editor** - In progress
+2. **Build the JS canvas ink editor** - Done
    - Replace `InkWebNoteEditor`'s egui WASM canvas with a Svelte +
      TypeScript canvas editor.
    - Implement page-stack rendering, pen strokes with pressure, eraser,
@@ -31,7 +31,7 @@ needs to change this plan, update this file in that step's commit.
    - Use Pointer Events, `getCoalescedEvents()`, and optionally
      `getPredictedEvents()`.
 
-3. **Use the JS canvas on desktop first** - Pending
+3. **Use the JS canvas on desktop first** - In progress
    - Make desktop ink notes use the new JS canvas editor.
    - Keep the existing save/collab path.
    - Verify large notes, pan/zoom, undo/redo, and live collab behavior.
