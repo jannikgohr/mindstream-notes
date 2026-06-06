@@ -58,6 +58,7 @@ export class InkDocument {
   private readonly strokes: Y.Array<Y.Map<unknown>>;
   private inProgress: InProgressStroke | null = null;
   private visibleStrokeCache: StrokeMeta[] | null = null;
+  private strokeMapCache: Map<string, Y.Map<unknown>> | null = null;
   readonly undo: UndoOp[] = [];
   readonly redo: UndoOp[] = [];
 
@@ -92,6 +93,7 @@ export class InkDocument {
       Y.applyUpdate(this.doc, update);
       this.cancelStroke();
       this.invalidateVisibleStrokeCache();
+      this.invalidateStrokeMapCache();
       this.undo.length = 0;
       this.redo.length = 0;
       return true;
@@ -169,6 +171,7 @@ export class InkDocument {
       map.set(FIELD_TOMBSTONED, false);
       map.set(FIELD_PAYLOAD, encodePayloadV2(stroke));
       this.strokes.push([map]);
+      this.strokeMapCache?.set(id, map);
       this.invalidateVisibleStrokeCache();
       if (recordUndo) {
         this.recordOp({ kind: 'strokeAdded', id });
@@ -178,25 +181,19 @@ export class InkDocument {
   }
 
   setStrokeTombstoned(id: string, tombstoned: boolean): boolean {
-    const stroke = this.findStrokeMap(id);
-    if (!stroke) return false;
-    const current = stroke.get(FIELD_TOMBSTONED) === true;
-    stroke.set(FIELD_TOMBSTONED, tombstoned);
-    if (current !== tombstoned) {
-      this.invalidateVisibleStrokeCache();
-    }
-    return true;
+    return this.setStrokesTombstoned([id], tombstoned) > 0;
   }
 
-  tombstoneStrokes(ids: Iterable<string>): number {
+  setStrokesTombstoned(ids: Iterable<string>, tombstoned: boolean): number {
     const wanted = new Set(ids);
     if (wanted.size === 0) return 0;
+    const strokeMaps = this.ensureStrokeMapCache();
     let count = 0;
-    for (const stroke of this.strokes.toArray()) {
-      const id = stroke.get(FIELD_ID);
-      if (typeof id !== 'string' || !wanted.has(id)) continue;
-      if (stroke.get(FIELD_TOMBSTONED) === true) continue;
-      stroke.set(FIELD_TOMBSTONED, true);
+    for (const id of wanted) {
+      const stroke = strokeMaps.get(id);
+      if (!stroke) continue;
+      if (stroke.get(FIELD_TOMBSTONED) === tombstoned) continue;
+      stroke.set(FIELD_TOMBSTONED, tombstoned);
       count += 1;
     }
     if (count > 0) {
@@ -205,12 +202,14 @@ export class InkDocument {
     return count;
   }
 
+  tombstoneStrokes(ids: Iterable<string>): number {
+    return this.setStrokesTombstoned(ids, true);
+  }
+
   clearAll(): MutationResult<string[]> {
     return this.transactLocalUpdate(() => {
       const visible = this.strokeIds(false).map((entry) => entry.id);
-      for (const id of visible) {
-        this.setStrokeTombstoned(id, true);
-      }
+      this.setStrokesTombstoned(visible, true);
       if (visible.length > 0) {
         this.recordOp({ kind: 'clearAll', ids: visible });
       }
@@ -298,10 +297,20 @@ export class InkDocument {
   }
 
   private findStrokeMap(id: string): Y.Map<unknown> | null {
-    return (
-      this.strokes.toArray().find((stroke) => stroke.get(FIELD_ID) === id) ??
-      null
-    );
+    return this.ensureStrokeMapCache().get(id) ?? null;
+  }
+
+  private ensureStrokeMapCache(): Map<string, Y.Map<unknown>> {
+    if (this.strokeMapCache) return this.strokeMapCache;
+    const out = new Map<string, Y.Map<unknown>>();
+    for (const stroke of this.strokes.toArray()) {
+      const id = stroke.get(FIELD_ID);
+      if (typeof id === 'string') {
+        out.set(id, stroke);
+      }
+    }
+    this.strokeMapCache = out;
+    return out;
   }
 
   private ensureVisibleStrokeCache(): StrokeMeta[] {
@@ -330,6 +339,10 @@ export class InkDocument {
 
   private invalidateVisibleStrokeCache(): void {
     this.visibleStrokeCache = null;
+  }
+
+  private invalidateStrokeMapCache(): void {
+    this.strokeMapCache = null;
   }
 
   private tombstoneStrokeSet(ids: Set<string>): string[] {
@@ -425,9 +438,7 @@ function applyUndoOp(doc: InkDocument, op: UndoOp): void {
       break;
     case 'eraserDrag':
     case 'clearAll':
-      for (const id of op.ids) {
-        doc.setStrokeTombstoned(id, false);
-      }
+      doc.setStrokesTombstoned(op.ids, false);
       break;
   }
 }
@@ -439,9 +450,7 @@ function applyRedoOp(doc: InkDocument, op: UndoOp): void {
       break;
     case 'eraserDrag':
     case 'clearAll':
-      for (const id of op.ids) {
-        doc.setStrokeTombstoned(id, true);
-      }
+      doc.setStrokesTombstoned(op.ids, true);
       break;
   }
 }
