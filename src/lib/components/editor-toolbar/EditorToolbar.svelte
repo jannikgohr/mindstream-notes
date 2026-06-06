@@ -26,7 +26,8 @@
   import { Button } from '$lib/components/ui/button';
   import { cn } from '$lib/utils';
   import { tUi } from '$lib/settings/i18n.svelte';
-  import { getSettingValue } from '$lib/settings/store.svelte';
+  import { getSettingValue, settings } from '$lib/settings/store.svelte';
+  import { displayBinding, getBinding } from '$lib/hotkeys';
   import {
     TOOLBAR_ITEMS,
     type ToolbarItem,
@@ -135,6 +136,24 @@
    * the desktop selection vanishes on click. */
   function holdFocus(e: Event) {
     e.preventDefault();
+  }
+
+  /**
+   * Tooltip text for a leaf: label, plus the user's current hotkey
+   * binding in parentheses when one is bound. Reads `settings.values`
+   * so the tooltip live-refreshes when the user rebinds in the
+   * settings panel — no editor remount required. Items without a
+   * `hotkeyId` (image, table, math, mermaid) just get the label.
+   */
+  function leafTitle(item: ToolbarLeaf): string {
+    // Tracking read: surfaces a dependency on the values map so the
+    // `$derived` chain that evaluates this in the template re-runs
+    // when any binding changes.
+    void settings.values;
+    const label = tUi(item.labelKey);
+    if (!item.hotkeyId) return label;
+    const shortcut = displayBinding(getBinding(item.hotkeyId));
+    return shortcut ? `${label} (${shortcut})` : label;
   }
 
   function invokeLeaf(item: ToolbarLeaf) {
@@ -351,6 +370,7 @@
       id: leaf.id,
       labelKey: leaf.labelKey,
       icon: leaf.icon,
+      hotkeyId: leaf.hotkeyId,
       onSelect: () => invokeLeaf(leaf)
     }));
   }
@@ -364,6 +384,7 @@
           id: item.id,
           labelKey: item.labelKey,
           icon: item.icon,
+          hotkeyId: item.hotkeyId,
           onSelect: () => invokeLeaf(item)
         });
       } else {
@@ -378,6 +399,7 @@
             id: `${item.id}-${leaf.id}`,
             labelKey: leaf.labelKey,
             icon: leaf.icon,
+            hotkeyId: leaf.hotkeyId,
             onSelect: () => invokeLeaf(leaf)
           });
         }
@@ -427,7 +449,7 @@
           onpointerdown={holdFocus}
           onclick={() => invokeLeaf(item)}
           aria-pressed={item.isActive ? isActive : undefined}
-          title={tUi(item.labelKey)}
+          title={leafTitle(item)}
           aria-label={tUi(item.labelKey)}
         >
           <Icon aria-hidden="true" />
