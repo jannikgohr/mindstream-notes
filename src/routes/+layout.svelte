@@ -7,6 +7,7 @@
   import { invokeOrFallback, drawingSetTheme } from '$lib/api';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import UpdaterProgressDialog from '$lib/updater/ProgressDialog.svelte';
+  import ShortcutHelpDialog from '$lib/components/ShortcutHelpDialog.svelte';
   import { initHotkeys } from '$lib/hotkeys';
 
   let { children } = $props();
@@ -131,3 +132,7 @@
      $lib/updater/progress.svelte.ts — mounting it here means anything
      that drives that state gets the dialog for free, no per-call wiring. -->
 <UpdaterProgressDialog />
+
+<!-- Shortcut cheat-sheet overlay. Triggered by `global.showShortcutHelp`
+     (Shift+? by default) and `openShortcutHelp()` from anywhere. -->
+<ShortcutHelpDialog />

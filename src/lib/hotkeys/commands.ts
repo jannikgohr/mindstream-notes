@@ -36,6 +36,7 @@
  */
 
 import { openSettings } from '$lib/settings/store.svelte';
+import { openShortcutHelp } from './help.svelte';
 import type { Ctx } from '@milkdown/kit/ctx';
 import { commandsCtx, editorViewCtx } from '@milkdown/kit/core';
 import {
@@ -224,6 +225,18 @@ export const HOTKEY_COMMANDS: CommandDefinition[] = [
     // de-facto convention almost everywhere else (VS Code, Chrome).
     defaultBinding: 'mod+,',
     run: () => openSettings()
+  },
+  {
+    id: 'global.showShortcutHelp',
+    scope: 'global',
+    labelKey: 'hotkeys.command.global.showShortcutHelp',
+    // Shift+? — Gmail / GitHub / Notion convention for "show shortcuts".
+    // The user types `?` (which already requires Shift on most layouts);
+    // the matcher's strict modifier check requires us to encode the
+    // shift explicitly so the chord doesn't accidentally fire on
+    // layouts where `?` is produced without Shift.
+    defaultBinding: 'shift+?',
+    run: () => openShortcutHelp()
   },
 
   // --- Markdown editor ------------------------------------------------------

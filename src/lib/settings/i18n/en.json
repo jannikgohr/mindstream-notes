@@ -103,6 +103,8 @@
     "hotkeys.resetAll.confirm": "Reset all",
 
     "hotkeys.command.global.openSettings": "Open settings",
+    "hotkeys.command.global.showShortcutHelp": "Show keyboard shortcuts",
+    "hotkeys.help.title": "Keyboard shortcuts",
     "hotkeys.command.editor.markdown.undo": "Undo",
     "hotkeys.command.editor.markdown.redo": "Redo",
     "hotkeys.command.editor.markdown.bold": "Bold",

@@ -39,6 +39,11 @@ export {
 export { displayBinding, ariaKeyShortcut } from './format';
 export { parseBinding, canonicalize, bindingsConflict } from './parse';
 export { wellKnownConflict } from './collisions';
+export {
+  shortcutHelp,
+  openShortcutHelp,
+  closeShortcutHelp
+} from './help.svelte';
 export { isMac } from './platform';
 
 export type { Chord, CommandScope, EditorKind } from './types';

@@ -103,6 +103,8 @@
     "hotkeys.resetAll.confirm": "Alle zurücksetzen",
 
     "hotkeys.command.global.openSettings": "Einstellungen öffnen",
+    "hotkeys.command.global.showShortcutHelp": "Tastenkürzel anzeigen",
+    "hotkeys.help.title": "Tastenkürzel",
     "hotkeys.command.editor.markdown.undo": "Rückgängig",
     "hotkeys.command.editor.markdown.redo": "Wiederholen",
     "hotkeys.command.editor.markdown.bold": "Fett",

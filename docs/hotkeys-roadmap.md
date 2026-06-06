@@ -113,13 +113,19 @@ note about what shipped, and move on.
       readers announce `aria-keyshortcuts=""` as "no shortcut",
       worse than silence).
 
-- [ ] **#9. No global-command discoverability.**
-      `Mod+,` opens settings but nothing tells you so. A Gmail /
-      GitHub-style "?" overlay listing every bound hotkey would
-      help.
-      **Plan:** new global command `global.showShortcutHelp` bound
-      to `Shift+?` by default; opens a modal that reads from
-      `HOTKEY_COMMANDS` + `hotkeys.bindings` and renders the table.
+- [x] **#9. No global-command discoverability.**
+      `Mod+,` opened settings but nothing told you so. Power users
+      had to dig through the panel to learn what was bound.
+      **Shipped:** new global command `global.showShortcutHelp`
+      bound to `Shift+?` (Gmail / GitHub convention). Triggers a
+      modal in `ShortcutHelpDialog.svelte` (mounted at root) that
+      reads `groupedCommands()` + live bindings and renders one
+      section per scope / editor kind. Each row shows the command
+      label plus its current chord (or "Unset" placeholder). State
+      lives in `help.svelte.ts` mirroring the `settingsDialog`
+      pattern so any non-keyboard caller can `openShortcutHelp()`
+      from anywhere — the bus already routes the global command's
+      `run()` to it.
 
 ---
 
