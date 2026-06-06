@@ -127,6 +127,18 @@ note about what shipped, and move on.
       from anywhere — the bus already routes the global command's
       `run()` to it.
 
+- [ ] **#14. Shortcut discovery needs search.**
+      The Shift+? shortcut-help menu is useful once it is open, but
+      it still asks users to scan every section. Settings search also
+      treats the hotkeys custom panel as a single opaque row, so a
+      search for "bold" or "heading" cannot jump directly to the
+      relevant hotkey function.
+      **Plan:** add a search field to `ShortcutHelpDialog` that filters
+      commands by label, group, id, raw binding, and formatted binding.
+      Thread the settings dialog's search query into `HotkeysPanel` so
+      hotkey functions are searchable from Settings and the panel shows
+      only matching commands while the query is active.
+
 ---
 
 ## Architecture / extensibility

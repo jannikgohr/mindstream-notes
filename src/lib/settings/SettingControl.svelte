@@ -34,8 +34,9 @@
 
   interface Props {
     setting: Setting;
+    searchQuery?: string;
   }
-  let { setting }: Props = $props();
+  let { setting, searchQuery = '' }: Props = $props();
 
   const label = $derived(tLabel('settings', setting.id));
   const description = $derived(tDescription('settings', setting.id));
@@ -144,7 +145,7 @@
       {@const C = CUSTOM_COMPONENTS[s.customId ?? '']}
       <div class="mt-2">
         {#if C}
-          <C />
+          <C {searchQuery} />
         {:else}
           <p class="text-xs text-destructive">
             Missing custom component: {s.customId}

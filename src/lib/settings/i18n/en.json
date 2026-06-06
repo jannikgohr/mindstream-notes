@@ -101,6 +101,9 @@
     "hotkeys.resetAll.title": "Reset all shortcuts?",
     "hotkeys.resetAll.message": "Every customised keyboard shortcut will return to its default. This cannot be undone.",
     "hotkeys.resetAll.confirm": "Reset all",
+    "hotkeys.search.placeholder": "Search shortcuts…",
+    "hotkeys.search.label": "Search keyboard shortcuts",
+    "hotkeys.search.empty": "No shortcuts match your search.",
 
     "hotkeys.command.global.openSettings": "Open settings",
     "hotkeys.command.global.showShortcutHelp": "Show keyboard shortcuts",

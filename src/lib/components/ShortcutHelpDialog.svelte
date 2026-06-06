@@ -22,7 +22,7 @@
    *     where most users will look.
    */
   import { Dialog } from 'bits-ui';
-  import { Keyboard, X } from 'lucide-svelte';
+  import { Keyboard, Search, X } from 'lucide-svelte';
   import {
     closeShortcutHelp,
     displayBinding,
@@ -39,6 +39,8 @@
    * `getBinding(cmd.id)` at the row level.
    */
   const groups = groupedCommands();
+  let query = $state('');
+  const lowerQuery = $derived(query.trim().toLowerCase());
 
   function groupTitle(scope: string, kind: string | null): string {
     if (scope === 'global') return tUi('hotkeys.group.global');
@@ -47,6 +49,19 @@
 
   function commandLabel(cmd: CommandDefinition): string {
     return tUi(cmd.labelKey);
+  }
+
+  function matchesCommand(
+    cmd: CommandDefinition,
+    groupLabel: string,
+    current: string | null
+  ): boolean {
+    if (!lowerQuery) return true;
+    const display = displayBinding(current) || tUi('hotkeys.unset');
+    return [cmd.id, commandLabel(cmd), groupLabel, current ?? '', display]
+      .join(' ')
+      .toLowerCase()
+      .includes(lowerQuery);
   }
 </script>
 
@@ -70,8 +85,21 @@
         <Dialog.Title class="text-base font-semibold">
           {tUi('hotkeys.help.title')}
         </Dialog.Title>
+        <div class="relative ml-2 flex-1">
+          <Search
+            class="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
+            aria-hidden="true"
+          />
+          <input
+            type="search"
+            bind:value={query}
+            placeholder={tUi('hotkeys.search.placeholder')}
+            aria-label={tUi('hotkeys.search.label')}
+            class="h-8 w-full rounded-md border border-input bg-background pl-7 pr-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          />
+        </div>
         <Dialog.Close
-          class="ml-auto rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          class="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           aria-label={tUi('close')}
         >
           <X class="size-4" />
@@ -81,38 +109,52 @@
       <section class="themed-scrollbar overflow-y-auto px-5 py-4">
         <div class="space-y-6">
           {#each groups as group (`${group.scope}:${group.editorKind ?? ''}`)}
-            <div>
-              <h3
-                class="border-b border-border pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
-              >
-                {groupTitle(group.scope, group.editorKind)}
-              </h3>
-              <ul class="divide-y divide-border">
-                {#each group.commands as cmd (cmd.id)}
-                  {@const current = getBinding(cmd.id)}
-                  {@const display = displayBinding(current)}
-                  <li
-                    class="flex items-center justify-between gap-3 py-2 text-sm"
-                  >
-                    <span class="min-w-0 truncate">{commandLabel(cmd)}</span>
-                    {#if display}
-                      <kbd
-                        class="shrink-0 rounded-md border border-border bg-muted px-2 py-0.5 font-mono text-xs"
-                      >
-                        {display}
-                      </kbd>
-                    {:else}
-                      <span
-                        class="shrink-0 text-xs italic text-muted-foreground"
-                      >
-                        {tUi('hotkeys.unset')}
-                      </span>
-                    {/if}
-                  </li>
-                {/each}
-              </ul>
-            </div>
+            {@const title = groupTitle(group.scope, group.editorKind)}
+            {@const visibleCommands = group.commands.filter((cmd) =>
+              matchesCommand(cmd, title, getBinding(cmd.id))
+            )}
+            {#if visibleCommands.length > 0}
+              <div>
+                <h3
+                  class="border-b border-border pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+                >
+                  {title}
+                </h3>
+                <ul class="divide-y divide-border">
+                  {#each visibleCommands as cmd (cmd.id)}
+                    {@const current = getBinding(cmd.id)}
+                    {@const display = displayBinding(current)}
+                    <li
+                      class="flex items-center justify-between gap-3 py-2 text-sm"
+                    >
+                      <span class="min-w-0 truncate">{commandLabel(cmd)}</span>
+                      {#if display}
+                        <kbd
+                          class="shrink-0 rounded-md border border-border bg-muted px-2 py-0.5 font-mono text-xs"
+                        >
+                          {display}
+                        </kbd>
+                      {:else}
+                        <span
+                          class="shrink-0 text-xs italic text-muted-foreground"
+                        >
+                          {tUi('hotkeys.unset')}
+                        </span>
+                      {/if}
+                    </li>
+                  {/each}
+                </ul>
+              </div>
+            {/if}
           {/each}
+          {#if lowerQuery && groups.every((group) => {
+              const title = groupTitle(group.scope, group.editorKind);
+              return group.commands.every((cmd) => !matchesCommand(cmd, title, getBinding(cmd.id)));
+            })}
+            <p class="py-8 text-center text-sm text-muted-foreground">
+              {tUi('hotkeys.search.empty')}
+            </p>
+          {/if}
         </div>
       </section>
     </Dialog.Content>

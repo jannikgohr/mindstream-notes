@@ -13,14 +13,54 @@
   import { FALLBACK_ICON, SETTINGS_ICONS } from './icons';
   import { i18n, tLabel, tUi } from './i18n.svelte';
   import type { Category, Setting } from './types';
+  import {
+    displayBinding,
+    getBinding,
+    groupedCommands,
+    type CommandDefinition
+  } from '$lib/hotkeys';
 
   let activeCategoryId = $state<string>(SCHEMA.categories[0]?.id ?? '');
   let query = $state('');
 
   const lowerQuery = $derived(query.trim().toLowerCase());
+  const hotkeyGroups = groupedCommands();
+
+  function hotkeyGroupLabel(scope: string, kind: string | null): string {
+    if (scope === 'global') return tUi('hotkeys.group.global');
+    return tUi(`hotkeys.group.editor.${kind}`);
+  }
+
+  function hotkeyCommandMatches(
+    cmd: CommandDefinition,
+    groupLabel: string
+  ): boolean {
+    const current = getBinding(cmd.id);
+    const display = displayBinding(current) || tUi('hotkeys.unset');
+    return [
+      cmd.id,
+      tUi(cmd.labelKey),
+      groupLabel,
+      current ?? '',
+      display,
+      tLabel('settings', 'hotkeys.panel')
+    ]
+      .join(' ')
+      .toLowerCase()
+      .includes(lowerQuery);
+  }
+
+  function hotkeysPanelMatches(): boolean {
+    if (!lowerQuery) return true;
+    return hotkeyGroups.some((group) => {
+      const label = hotkeyGroupLabel(group.scope, group.editorKind);
+      return group.commands.some((cmd) => hotkeyCommandMatches(cmd, label));
+    });
+  }
 
   function settingMatches(s: Setting): boolean {
     if (!lowerQuery) return true;
+    if (s.id === 'hotkeys.panel' && hotkeysPanelMatches()) return true;
     const haystack = [
       s.id,
       tLabel('settings', s.id),
@@ -142,7 +182,7 @@
                   </h3>
                   <div class="divide-y divide-border">
                     {#each visibleSettings as s (s.id)}
-                      <SettingControl setting={s} />
+                      <SettingControl setting={s} searchQuery={query} />
                     {/each}
                   </div>
                 </div>

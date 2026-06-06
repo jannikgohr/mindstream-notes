@@ -101,6 +101,9 @@
     "hotkeys.resetAll.title": "Alle Tastenkürzel zurücksetzen?",
     "hotkeys.resetAll.message": "Alle angepassten Tastenkürzel werden auf ihre Standardwerte zurückgesetzt. Dies kann nicht rückgängig gemacht werden.",
     "hotkeys.resetAll.confirm": "Alle zurücksetzen",
+    "hotkeys.search.placeholder": "Tastenkürzel suchen…",
+    "hotkeys.search.label": "Tastenkürzel suchen",
+    "hotkeys.search.empty": "Keine Tastenkürzel passen zur Suche.",
 
     "hotkeys.command.global.openSettings": "Einstellungen öffnen",
     "hotkeys.command.global.showShortcutHelp": "Tastenkürzel anzeigen",
