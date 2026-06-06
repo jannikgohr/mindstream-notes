@@ -75,6 +75,7 @@
   const PAGE_SHADOW_LIGHT = 'rgba(0, 0, 0, 0.14)';
   const PAGE_SHADOW_DARK = 'rgba(255, 255, 255, 0.2)';
   const FIT_PAGE_MARGIN_PX = 32;
+  const FIT_PAGE_TOP_MARGIN_PX = 72;
   const MAX_ZOOM_FACTOR = 6;
   const POINTER_BUTTON_SECONDARY = 2;
   const POINTER_BUTTON_STYLUS_PRIMARY = 32;
@@ -477,7 +478,13 @@
   function fitPage() {
     view.scale = minScale();
     view.panX = (view.width - layout.page.width * view.scale) * 0.5;
-    view.panY = (view.height - layout.page.height * view.scale) * 0.5;
+    view.panY =
+      FIT_PAGE_TOP_MARGIN_PX +
+      (view.height -
+        FIT_PAGE_TOP_MARGIN_PX -
+        FIT_PAGE_MARGIN_PX -
+        layout.page.height * view.scale) *
+        0.5;
     clampView();
   }
 
@@ -493,9 +500,13 @@
     } else {
       view.panX = Math.min(16, Math.max(view.width - contentW - 16, view.panX));
     }
-    const margin = Math.max(FIT_PAGE_MARGIN_PX, layout.pageGap * view.scale);
-    const minY = view.height - contentH - margin;
-    const maxY = margin;
+    const bottomMargin = Math.max(
+      FIT_PAGE_MARGIN_PX,
+      layout.pageGap * view.scale
+    );
+    const topMargin = Math.max(FIT_PAGE_TOP_MARGIN_PX, bottomMargin);
+    const minY = view.height - contentH - bottomMargin;
+    const maxY = topMargin;
     view.panY =
       minY <= maxY
         ? Math.min(maxY, Math.max(minY, view.panY))
@@ -1140,7 +1151,10 @@
 
   function minScale(): number {
     const availableWidth = Math.max(1, view.width - FIT_PAGE_MARGIN_PX * 2);
-    const availableHeight = Math.max(1, view.height - FIT_PAGE_MARGIN_PX * 2);
+    const availableHeight = Math.max(
+      1,
+      view.height - FIT_PAGE_TOP_MARGIN_PX - FIT_PAGE_MARGIN_PX
+    );
     return Math.max(
       0.05,
       Math.min(
