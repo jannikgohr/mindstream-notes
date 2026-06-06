@@ -16,6 +16,7 @@
     loadNote,
     noteRoomInfo,
     onSessionChange,
+    TRASH_ID,
     type DrawingToolbarSettings,
     type DrawingToolbarSettingsPayload
   } from '$lib/api';
@@ -115,12 +116,32 @@
   const pageDark = $derived(pageThemeMode === 'system');
   const colorHex = $derived(argbToColorHex(colorArgb));
 
+  function ancestorIsTrash(parentId: string | null): boolean {
+    let current = parentId;
+    const seen = new Set<string>();
+    while (current) {
+      if (current === TRASH_ID) return true;
+      if (seen.has(current)) return false;
+      seen.add(current);
+      current = tree.collectionsById[current]?.parent_collection_id ?? null;
+    }
+    return false;
+  }
+
+  const isTrashed = $derived.by(() => {
+    if (!tree.ready) return false;
+    const n = tree.notesById[noteId];
+    if (!n) return true;
+    if (n.trashed === true) return true;
+    return ancestorIsTrash(n.parent_collection_id);
+  });
+
   $effect(() => {
     setNoteStatus(noteId, {
       collabConfigured,
       collabOnline,
       savingState,
-      isTrashed: false
+      isTrashed
     });
   });
 
@@ -432,15 +453,16 @@
     canvasEl.setPointerCapture(event.pointerId);
     activePointerId = event.pointerId;
     const isFinger = event.pointerType === 'touch';
-    if (
+    const shouldPan =
       event.button === 1 ||
       event.buttons === 4 ||
-      (isFinger && !fingerDrawingAllowed)
-    ) {
+      (isFinger && !fingerDrawingAllowed);
+    if (shouldPan) {
       pointerMode = 'pan';
       lastPointer = { x: event.clientX, y: event.clientY };
       return;
     }
+    if (isTrashed) return;
     if (tool === 'eraser') {
       pointerMode = 'erase';
       eraserHits.clear();
@@ -775,7 +797,7 @@
       variant="ghost"
       aria-label="Undo"
       title="Undo"
-      disabled={!doc || doc.undo.length === 0}
+      disabled={isTrashed || !doc || doc.undo.length === 0}
       onclick={undo}
     >
       <Undo2 class="size-4" />
@@ -785,7 +807,7 @@
       variant="ghost"
       aria-label="Redo"
       title="Redo"
-      disabled={!doc || doc.redo.length === 0}
+      disabled={isTrashed || !doc || doc.redo.length === 0}
       onclick={redo}
     >
       <Redo2 class="size-4" />
@@ -819,6 +841,7 @@
       variant="ghost"
       aria-label="Clear"
       title="Clear"
+      disabled={isTrashed}
       onclick={clearCanvas}
     >
       <Trash2 class="size-4" />

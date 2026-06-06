@@ -36,7 +36,7 @@ needs to change this plan, update this file in that step's commit.
    - Keep the existing save/collab path.
    - Verify large notes, pan/zoom, undo/redo, and live collab behavior.
 
-4. **Switch Android canonical rendering to WebView canvas** - Pending
+4. **Switch Android canonical rendering to WebView canvas** - Done
    - Change Android ink note UI so the WebView canvas is the real
      drawing surface.
    - Stop routing canonical input through Rust/egui.
