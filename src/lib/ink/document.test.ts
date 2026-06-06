@@ -147,6 +147,18 @@ describe('InkDocument', () => {
     expect(again.update).toBeNull();
   });
 
+  it('erases strokes across spatial index tile boundaries', () => {
+    const doc = new InkDocument();
+    doc.beginStroke(DEFAULT_COLOR, DEFAULT_WIDTH);
+    doc.pushPoint(514, 10, 1);
+    doc.pushPoint(530, 10, 1);
+    const id = doc.endStroke().value;
+    if (!id) throw new Error('expected committed stroke');
+
+    expect(doc.eraseAt({ x: 511, y: 10 }, 5).value).toEqual([id]);
+    expect(doc.visibleStrokes()).toHaveLength(0);
+  });
+
   it('clears visible strokes and restores exactly those on undo', () => {
     const doc = new InkDocument();
     doc.beginStroke(DEFAULT_COLOR, DEFAULT_WIDTH);

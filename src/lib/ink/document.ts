@@ -8,6 +8,7 @@ const FIELD_PAYLOAD = 'payload';
 
 const PAYLOAD_VERSION_V1 = 1;
 const PAYLOAD_VERSION_V2 = 2;
+const ERASER_INDEX_TILE_SIZE = 512;
 
 export const DEFAULT_COLOR = 0xff000000;
 export const DEFAULT_WIDTH = 4;
@@ -42,6 +43,11 @@ interface StrokeMeta extends InkStroke {
   bounds: StrokeBounds;
 }
 
+interface StrokeSpatialIndex {
+  tileSize: number;
+  buckets: Map<string, StrokeMeta[]>;
+}
+
 interface InProgressStroke {
   color: number;
   width: number;
@@ -59,6 +65,7 @@ export class InkDocument {
   private inProgress: InProgressStroke | null = null;
   private visibleStrokeCache: StrokeMeta[] | null = null;
   private strokeMapCache: Map<string, Y.Map<unknown>> | null = null;
+  private eraserIndexCache: StrokeSpatialIndex | null = null;
   readonly undo: UndoOp[] = [];
   readonly redo: UndoOp[] = [];
 
@@ -238,9 +245,8 @@ export class InkDocument {
 
     const ignored = new Set(ignoreIds);
     const hitIds = new Set<string>();
-    const candidates = this.ensureVisibleStrokeCache();
     for (const point of validPoints) {
-      for (const meta of candidates) {
+      for (const meta of this.eraseCandidatesForPoint(point, radius)) {
         if (ignored.has(meta.id) || hitIds.has(meta.id)) continue;
         if (strokeHitAt(meta, point, radius)) {
           hitIds.add(meta.id);
@@ -259,6 +265,7 @@ export class InkDocument {
         this.visibleStrokeCache = this.visibleStrokeCache.filter(
           (meta) => !erasedSet.has(meta.id)
         );
+        this.invalidateEraserIndexCache();
       }
       return erased;
     });
@@ -337,12 +344,70 @@ export class InkDocument {
     return out;
   }
 
+  private eraseCandidatesForPoint(
+    point: { x: number; y: number },
+    radius: number
+  ): StrokeMeta[] {
+    const index = this.ensureEraserIndexCache();
+    const minTileX = tileCoord(point.x - radius, index.tileSize);
+    const maxTileX = tileCoord(point.x + radius, index.tileSize);
+    const minTileY = tileCoord(point.y - radius, index.tileSize);
+    const maxTileY = tileCoord(point.y + radius, index.tileSize);
+    const candidates: StrokeMeta[] = [];
+    const seen = new Set<string>();
+
+    for (let tileY = minTileY; tileY <= maxTileY; tileY += 1) {
+      for (let tileX = minTileX; tileX <= maxTileX; tileX += 1) {
+        const bucket = index.buckets.get(tileKey(tileX, tileY));
+        if (!bucket) continue;
+        for (const meta of bucket) {
+          if (seen.has(meta.id)) continue;
+          seen.add(meta.id);
+          candidates.push(meta);
+        }
+      }
+    }
+    return candidates;
+  }
+
+  private ensureEraserIndexCache(): StrokeSpatialIndex {
+    if (this.eraserIndexCache) return this.eraserIndexCache;
+    const tileSize = ERASER_INDEX_TILE_SIZE;
+    const buckets = new Map<string, StrokeMeta[]>();
+
+    for (const meta of this.ensureVisibleStrokeCache()) {
+      const minTileX = tileCoord(meta.bounds.minX, tileSize);
+      const maxTileX = tileCoord(meta.bounds.maxX, tileSize);
+      const minTileY = tileCoord(meta.bounds.minY, tileSize);
+      const maxTileY = tileCoord(meta.bounds.maxY, tileSize);
+      for (let tileY = minTileY; tileY <= maxTileY; tileY += 1) {
+        for (let tileX = minTileX; tileX <= maxTileX; tileX += 1) {
+          const key = tileKey(tileX, tileY);
+          const bucket = buckets.get(key);
+          if (bucket) {
+            bucket.push(meta);
+          } else {
+            buckets.set(key, [meta]);
+          }
+        }
+      }
+    }
+
+    this.eraserIndexCache = { tileSize, buckets };
+    return this.eraserIndexCache;
+  }
+
   private invalidateVisibleStrokeCache(): void {
     this.visibleStrokeCache = null;
+    this.invalidateEraserIndexCache();
   }
 
   private invalidateStrokeMapCache(): void {
     this.strokeMapCache = null;
+  }
+
+  private invalidateEraserIndexCache(): void {
+    this.eraserIndexCache = null;
   }
 
   private tombstoneStrokeSet(ids: Set<string>): string[] {
@@ -429,6 +494,14 @@ function boundsContainPoint(
     point.y >= bounds.minY - padding &&
     point.y <= bounds.maxY + padding
   );
+}
+
+function tileCoord(value: number, tileSize: number): number {
+  return Math.floor(value / tileSize);
+}
+
+function tileKey(x: number, y: number): string {
+  return `${x}:${y}`;
 }
 
 function applyUndoOp(doc: InkDocument, op: UndoOp): void {
