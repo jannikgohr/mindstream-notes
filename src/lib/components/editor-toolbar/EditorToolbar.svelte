@@ -27,7 +27,7 @@
   import { cn } from '$lib/utils';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { getSettingValue } from '$lib/settings/store.svelte';
-  import { displayBinding, getBinding } from '$lib/hotkeys';
+  import { ariaKeyShortcut, displayBinding, getBinding } from '$lib/hotkeys';
   import {
     TOOLBAR_ITEMS,
     type ToolbarItem,
@@ -152,6 +152,20 @@
     if (!item.hotkeyId) return label;
     const shortcut = displayBinding(getBinding(item.hotkeyId));
     return shortcut ? `${label} (${shortcut})` : label;
+  }
+
+  /**
+   * Screen-reader form of the shortcut for the same button. ARIA's
+   * `aria-keyshortcuts` attribute is a parallel surface to the
+   * sighted `title` — NVDA / JAWS / VoiceOver announce it alongside
+   * the accessible name ("Bold, Control B"). Returns the empty
+   * string for unset / unmapped items so we can drop the attribute
+   * entirely rather than ship `aria-keyshortcuts=""`, which some
+   * screen readers announce as "no shortcut".
+   */
+  function leafAriaShortcut(item: ToolbarLeaf): string {
+    if (!item.hotkeyId) return '';
+    return ariaKeyShortcut(getBinding(item.hotkeyId));
   }
 
   function invokeLeaf(item: ToolbarLeaf) {
@@ -449,6 +463,7 @@
           aria-pressed={item.isActive ? isActive : undefined}
           title={leafTitle(item)}
           aria-label={tUi(item.labelKey)}
+          aria-keyshortcuts={leafAriaShortcut(item) || undefined}
         >
           <Icon aria-hidden="true" />
         </Button>

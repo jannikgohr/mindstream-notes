@@ -35,7 +35,7 @@ export {
   findCommandByBinding
 } from './store.svelte';
 
-export { displayBinding } from './format';
+export { displayBinding, ariaKeyShortcut } from './format';
 export { parseBinding, canonicalize, bindingsConflict } from './parse';
 export { isMac } from './platform';
 

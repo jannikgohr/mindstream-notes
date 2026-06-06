@@ -82,11 +82,17 @@ note about what shipped, and move on.
       nothing was bound). Disappears once a chord is captured —
       what matters then is the new chord, not the old one.
 
-- [ ] **#8. `aria-label`s on toolbar buttons don't include the shortcut.**
-      Sighted users get "Bold (⌘B)" via `title`; screen readers get
-      just "Bold".
-      **Plan:** mirror the `leafTitle` logic into `aria-label`.
-      Same for `ToolbarMenu`'s shortcut column.
+- [x] **#8. Screen readers didn't get the toolbar shortcut.**
+      Sighted users saw "Bold (⌘B)" via `title`; screen-reader users
+      got just "Bold".
+      **Shipped:** new `ariaKeyShortcut(binding)` formatter in
+      `format.ts` produces the ARIA-named form (`Control+B` on Win /
+      Linux, `Meta+B` on Mac). Wired into `aria-keyshortcuts` on
+      every `EditorToolbar` leaf and every `ToolbarMenu` item. Visible
+      glyph column is now `aria-hidden` so the chord isn't announced
+      twice. Empty string → attribute dropped entirely (some screen
+      readers announce `aria-keyshortcuts=""` as "no shortcut",
+      worse than silence).
 
 - [ ] **#9. No global-command discoverability.**
       `Mod+,` opens settings but nothing tells you so. A Gmail /
