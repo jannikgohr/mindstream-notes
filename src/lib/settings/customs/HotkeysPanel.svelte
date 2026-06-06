@@ -33,11 +33,13 @@
     findCommandByBinding,
     getBinding,
     groupedCommands,
+    HOTKEY_COMMANDS,
     isCustomized,
     resetBinding,
     setBinding,
     type CommandDefinition
   } from '$lib/hotkeys';
+  import { confirm } from '$lib/components/confirm-dialog.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
 
   /**
@@ -59,6 +61,17 @@
    *  (`hotkeys.bindings[id]` is per-key tracked) — so this is a plain
    *  one-shot read, not a `$derived`. */
   const groups = groupedCommands();
+
+  /**
+   * Does any command differ from its catalogue default? Drives the
+   * "Reset all" button's disabled state. Reactive via `isCustomized`,
+   * which reads through `getBinding` → `hotkeys.bindings[id]`, so the
+   * button enables / disables live as the user customises and resets
+   * individual rows.
+   */
+  const anyCustomized = $derived(
+    HOTKEY_COMMANDS.some((c) => isCustomized(c.id))
+  );
 
   /** Flat lookup so the conflict warning can render the OTHER
    *  command's label without re-walking the groups array. */
@@ -155,6 +168,42 @@
   }
 
   /**
+   * Restore every command's binding to the catalogue default.
+   *
+   * Gated behind a confirm — this wipes the user's customisations in
+   * one click and there's no undo (each reset persists immediately).
+   * The `destructive` variant on the dialog tints the confirm button
+   * red so the action's weight is obvious.
+   *
+   * Iterates `HOTKEY_COMMANDS` rather than `Object.keys(hotkeys.bindings)`
+   * so commands the user has never touched (no entry in the map) still
+   * get an explicit re-write back to default — a no-op for them, but
+   * keeps the post-reset state describable as "every row matches the
+   * catalogue" instead of "every row the user touched matches".
+   */
+  async function resetAll() {
+    const ok = await confirm({
+      title: tUi('hotkeys.resetAll.title'),
+      message: tUi('hotkeys.resetAll.message'),
+      confirmLabel: tUi('hotkeys.resetAll.confirm'),
+      destructive: true
+    });
+    if (!ok) return;
+    // Sequential rather than Promise.all so the conflict-swap path in
+    // `setBinding` (which clears collisions before writing) sees a
+    // consistent intermediate state. Doing them in parallel would let
+    // two settles race over the same chord. Catalogue is small (~17
+    // entries) — the cost is invisible.
+    for (const cmd of HOTKEY_COMMANDS) {
+      try {
+        await resetBinding(cmd.id);
+      } catch (err) {
+        console.error('[HotkeysPanel] reset failed for', cmd.id, err);
+      }
+    }
+  }
+
+  /**
    * Svelte action: focus the capture chip the moment it mounts so the
    * user's next keystroke is the binding without an extra Tab. The
    * microtask defer avoids racing with the dialog's scroll restoration
@@ -166,6 +215,24 @@
     return {};
   }
 </script>
+
+<!--
+  Reset-all anchor: top-right of the panel so the destructive action
+  sits away from the per-row controls. Disabled when nothing is
+  customised so the button doesn't tempt users to click a no-op.
+-->
+<div class="mt-2 flex justify-end">
+  <Button
+    variant="ghost"
+    size="sm"
+    onclick={resetAll}
+    disabled={!anyCustomized}
+    title={tUi('hotkeys.resetAll.tooltip')}
+  >
+    <RotateCcw class="size-3.5" />
+    {tUi('hotkeys.resetAll.label')}
+  </Button>
+</div>
 
 <div class="mt-2 space-y-6">
   {#each groups as group (`${group.scope}:${group.editorKind ?? ''}`)}
@@ -198,17 +265,31 @@
             </div>
             <div class="flex items-center gap-1.5">
               {#if recording}
+                {@const originalDisplay = display || tUi('hotkeys.unset')}
                 <button
                   type="button"
-                  class="flex h-7 min-w-[7rem] items-center justify-center rounded-md border border-ring bg-accent px-2 font-mono text-xs text-accent-foreground"
+                  class="flex h-7 min-w-[10rem] items-center justify-center gap-1 rounded-md border border-ring bg-accent px-2 font-mono text-xs text-accent-foreground"
                   onkeydown={onRecordKeyDown}
                   onclick={(e) => e.preventDefault()}
                   use:focusOnMount
                   aria-label={tUi('hotkeys.recording.prompt')}
                 >
-                  {pendingBinding
-                    ? displayBinding(pendingBinding)
-                    : tUi('hotkeys.recording.prompt')}
+                  {#if pendingBinding}
+                    {displayBinding(pendingBinding)}
+                  {:else}
+                    <!--
+                      Show the existing binding next to the "Press a
+                      key…" prompt so the user keeps a visual anchor of
+                      what they're about to replace. Disappears the
+                      moment they press a key — at that point what
+                      matters is the NEW chord, not the old one.
+                    -->
+                    <span class="text-muted-foreground">{originalDisplay}</span>
+                    <span class="text-muted-foreground" aria-hidden="true"
+                      >→</span
+                    >
+                    <span>{tUi('hotkeys.recording.prompt')}</span>
+                  {/if}
                 </button>
                 {#if pendingBinding && conflictWithId}
                   <span

@@ -92,6 +92,11 @@
     "hotkeys.recording.cancel": "Cancel",
     "hotkeys.conflict.label": "In use by",
     "hotkeys.conflict.tooltip": "Saving will reassign the shortcut — the other command will become unset.",
+    "hotkeys.resetAll.label": "Reset all",
+    "hotkeys.resetAll.tooltip": "Restore every shortcut to its default",
+    "hotkeys.resetAll.title": "Reset all shortcuts?",
+    "hotkeys.resetAll.message": "Every customised keyboard shortcut will return to its default. This cannot be undone.",
+    "hotkeys.resetAll.confirm": "Reset all",
 
     "hotkeys.command.global.openSettings": "Open settings",
     "hotkeys.command.editor.markdown.undo": "Undo",

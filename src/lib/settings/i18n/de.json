@@ -92,6 +92,11 @@
     "hotkeys.recording.cancel": "Abbrechen",
     "hotkeys.conflict.label": "Verwendet von",
     "hotkeys.conflict.tooltip": "Beim Speichern wird das Tastenkürzel neu zugewiesen — der andere Befehl wird zurückgesetzt.",
+    "hotkeys.resetAll.label": "Alle zurücksetzen",
+    "hotkeys.resetAll.tooltip": "Alle Tastenkürzel auf die Standardwerte zurücksetzen",
+    "hotkeys.resetAll.title": "Alle Tastenkürzel zurücksetzen?",
+    "hotkeys.resetAll.message": "Alle angepassten Tastenkürzel werden auf ihre Standardwerte zurückgesetzt. Dies kann nicht rückgängig gemacht werden.",
+    "hotkeys.resetAll.confirm": "Alle zurücksetzen",
 
     "hotkeys.command.global.openSettings": "Einstellungen öffnen",
     "hotkeys.command.editor.markdown.undo": "Rückgängig",
