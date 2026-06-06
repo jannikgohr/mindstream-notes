@@ -17,6 +17,7 @@ export interface InkStroke {
   color: number;
   width: number;
   points: InkPoint[];
+  bounds?: StrokeBounds;
 }
 
 export type UndoOp =
@@ -30,7 +31,7 @@ interface DecodedPayload {
   points: InkPoint[];
 }
 
-interface StrokeBounds {
+export interface StrokeBounds {
   minX: number;
   minY: number;
   maxX: number;
@@ -111,6 +112,13 @@ export class InkDocument {
 
   visibleStrokes(): InkStroke[] {
     return this.ensureVisibleStrokeCache().map(strokeFromMeta);
+  }
+
+  contentMaxY(): number {
+    return this.ensureVisibleStrokeCache().reduce(
+      (max, stroke) => Math.max(max, stroke.bounds.maxY),
+      0
+    );
   }
 
   strokeIds(
@@ -231,17 +239,14 @@ export class InkDocument {
 
     const ignored = new Set(ignoreIds);
     const hitIds = new Set<string>();
-    let candidates = this.ensureVisibleStrokeCache().filter(
-      (meta) => !ignored.has(meta.id)
-    );
+    const candidates = this.ensureVisibleStrokeCache();
     for (const point of validPoints) {
-      const freshHits = strokeIdsHitAt(candidates, point, radius);
-      if (freshHits.length === 0) continue;
-      const freshSet = new Set(freshHits);
-      for (const id of freshHits) {
-        hitIds.add(id);
+      for (const meta of candidates) {
+        if (ignored.has(meta.id) || hitIds.has(meta.id)) continue;
+        if (strokeHitAt(meta, point, radius)) {
+          hitIds.add(meta.id);
+        }
       }
-      candidates = candidates.filter((meta) => !freshSet.has(meta.id));
     }
 
     if (hitIds.size === 0) {
@@ -355,16 +360,6 @@ export function strokesHitAt(
   );
 }
 
-function strokeIdsHitAt(
-  strokes: StrokeMeta[],
-  point: { x: number; y: number },
-  radius: number
-): string[] {
-  return strokes
-    .filter((stroke) => strokeHitAt(stroke, point, radius))
-    .map((stroke) => stroke.id);
-}
-
 function strokeHitAt(
   stroke: StrokeMeta,
   point: { x: number; y: number },
@@ -388,7 +383,8 @@ function strokeFromMeta(meta: StrokeMeta): InkStroke {
     id: meta.id,
     color: meta.color,
     width: meta.width,
-    points: meta.points
+    points: meta.points,
+    bounds: meta.bounds
   };
 }
 

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import * as Y from 'yjs';
   import { onDestroy, onMount, tick } from 'svelte';
   import {
     Eraser,
@@ -42,7 +43,8 @@
     DEFAULT_COLOR,
     DEFAULT_WIDTH,
     InkDocument,
-    type InkStroke
+    type InkStroke,
+    type StrokeBounds
   } from '$lib/ink/document';
   import {
     DEFAULT_PAGE_GAP,
@@ -50,6 +52,7 @@
     defaultLayout,
     pageCountForContentMaxY,
     pageRect,
+    strideY,
     type DocumentLayout,
     type InkPoint
   } from '$lib/ink/page';
@@ -109,7 +112,9 @@
   let disposed = false;
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
   let pendingState: number[] | null = null;
+  let pendingSaveUpdates: Uint8Array[] = [];
   let saveDirty = false;
+  let saveInFlight = false;
   let toolbarSettingsReady = false;
   let savingState = $state<SavingState>('idle');
   let collabConfigured = $state(false);
@@ -136,6 +141,7 @@
   let drawingStrokeActive = false;
   let queuedEraserSamples: QueuedEraserSample[] = [];
   let eraserFrame: number | null = null;
+  let drawFrame: number | null = null;
   let layout = defaultLayout();
   let view = {
     width: 1,
@@ -204,7 +210,7 @@
     colorArgb;
     width;
     pageThemeMode;
-    draw();
+    scheduleDraw();
   });
 
   function updateLiveInkOverlayStyle() {
@@ -264,31 +270,80 @@
   }
 
   async function flushPendingState() {
-    if ((!saveDirty && !pendingState) || disposed) return;
-    const state = pendingState ?? (doc ? Array.from(doc.encode()) : null);
+    saveTimer = null;
+    if (
+      (!saveDirty && !pendingState && pendingSaveUpdates.length === 0) ||
+      disposed
+    ) {
+      return;
+    }
+    if (saveInFlight) {
+      scheduleSave();
+      return;
+    }
+
+    const updates = pendingSaveUpdates;
+    const state =
+      pendingState ??
+      (updates.length > 0
+        ? Array.from(Y.mergeUpdates(updates))
+        : doc
+          ? Array.from(doc.encode())
+          : null);
     if (!state) return;
     pendingState = null;
+    pendingSaveUpdates = [];
     saveDirty = false;
+    saveInFlight = true;
     savingState = 'saving';
     try {
       await drawingSaveInkState(noteId, state);
-      savingState = saveDirty ? 'pending' : 'saved';
+      savingState =
+        saveDirty || pendingSaveUpdates.length > 0 || pendingState
+          ? 'pending'
+          : 'saved';
     } catch (err) {
-      if (!saveDirty) {
+      if (!saveDirty && pendingSaveUpdates.length === 0) {
         pendingState = state;
+      } else {
+        pendingSaveUpdates = [new Uint8Array(state), ...pendingSaveUpdates];
       }
-      savingState = saveDirty ? 'pending' : 'error';
+      savingState =
+        saveDirty || pendingSaveUpdates.length > 0 || pendingState
+          ? 'pending'
+          : 'error';
       console.warn('[ink-canvas] failed to save note', err);
+    } finally {
+      saveInFlight = false;
+      if (
+        !disposed &&
+        (saveDirty || pendingState || pendingSaveUpdates.length > 0) &&
+        saveTimer === null
+      ) {
+        saveTimer = setTimeout(
+          () => void flushPendingState(),
+          SAVE_DEBOUNCE_MS
+        );
+      }
     }
   }
 
   function scheduleSave() {
-    if (!doc) return;
+    if (!doc && pendingSaveUpdates.length === 0 && !pendingState) return;
     saveDirty = true;
     pendingState = null;
     savingState = 'pending';
     clearSaveTimer();
     saveTimer = setTimeout(() => void flushPendingState(), SAVE_DEBOUNCE_MS);
+  }
+
+  function queueSaveUpdates(updates: Uint8Array[]) {
+    for (const update of updates) {
+      if (update.byteLength > 0) {
+        pendingSaveUpdates.push(update);
+      }
+    }
+    scheduleSave();
   }
 
   function applyDocumentMutation(update: Uint8Array | null) {
@@ -297,7 +352,9 @@
 
   function applyDocumentMutations(updates: Uint8Array[]) {
     refreshFromDoc();
-    scheduleSave();
+    if (updates.length > 0) {
+      queueSaveUpdates(updates);
+    }
     for (const update of updates) {
       provider?.sendLocalUpdate(update);
     }
@@ -307,11 +364,10 @@
     if (!doc) return;
     strokes = doc.visibleStrokes();
     syncHistoryState();
-    const maxY = strokes
-      .flatMap((stroke) => stroke.points.map((p) => p.y))
-      .reduce((max, y) => Math.max(max, y), 0);
+    const maxY = doc.contentMaxY();
     layout = defaultLayout(pageCountForContentMaxY(maxY));
     clampView();
+    scheduleDraw();
   }
 
   function syncHistoryState() {
@@ -384,7 +440,7 @@
     } else {
       clampView();
     }
-    draw();
+    scheduleDraw();
     updateLiveInkOverlayStyle();
   }
 
@@ -430,30 +486,87 @@
     };
   }
 
+  function scheduleDraw() {
+    if (drawFrame !== null) return;
+    drawFrame = requestAnimationFrame(() => {
+      drawFrame = null;
+      draw();
+    });
+  }
+
   function draw() {
     if (!canvasEl) return;
     const ctx = canvasEl.getContext('2d');
     if (!ctx) return;
     const dpr = window.devicePixelRatio || 1;
+    const visibleBounds = visiblePageBounds();
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, view.width, view.height);
     ctx.fillStyle = cssColor(displayColor(PAGE_BG_LIGHT));
     ctx.fillRect(0, 0, view.width, view.height);
 
-    drawPages(ctx);
+    drawPages(ctx, visibleBounds);
     for (const stroke of strokes) {
+      if (!strokeIntersectsBounds(stroke, visibleBounds)) continue;
       drawStroke(ctx, stroke.points, displayColor(stroke.color), stroke.width);
     }
     drawStroke(ctx, inFlight, displayColor(colorArgb), width);
   }
 
-  function drawPages(ctx: CanvasRenderingContext2D) {
-    for (let i = 0; i < layout.pageCount; i += 1) {
+  function visiblePageBounds(): StrokeBounds {
+    return {
+      minX: -view.panX / view.scale,
+      minY: -view.panY / view.scale,
+      maxX: (view.width - view.panX) / view.scale,
+      maxY: (view.height - view.panY) / view.scale
+    };
+  }
+
+  function strokeIntersectsBounds(
+    stroke: InkStroke,
+    visible: StrokeBounds
+  ): boolean {
+    const bounds = stroke.bounds ?? boundsOfPoints(stroke.points);
+    const padding = stroke.width + 2;
+    return (
+      bounds.maxX + padding >= visible.minX &&
+      bounds.minX - padding <= visible.maxX &&
+      bounds.maxY + padding >= visible.minY &&
+      bounds.minY - padding <= visible.maxY
+    );
+  }
+
+  function boundsOfPoints(points: InkPoint[]): StrokeBounds {
+    let minX = Number.POSITIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+    for (const point of points) {
+      minX = Math.min(minX, point.x);
+      minY = Math.min(minY, point.y);
+      maxX = Math.max(maxX, point.x);
+      maxY = Math.max(maxY, point.y);
+    }
+    if (minX === Number.POSITIVE_INFINITY) {
+      return { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+    }
+    return { minX, minY, maxX, maxY };
+  }
+
+  function drawPages(ctx: CanvasRenderingContext2D, visible: StrokeBounds) {
+    const stride = strideY(layout);
+    const firstPage = Math.max(0, Math.floor(visible.minY / stride) - 1);
+    const lastPage = Math.min(
+      layout.pageCount - 1,
+      Math.floor(visible.maxY / stride) + 1
+    );
+    for (let i = firstPage; i <= lastPage; i += 1) {
       const rect = pageRect(layout, i);
       if (!rect) continue;
       const [x0, y0, x1, y1] = rect;
       const a = pageToScreen({ x: x0, y: y0 });
       const b = pageToScreen({ x: x1, y: y1 });
+      if (b.y < -32 || a.y > view.height + 32) continue;
       ctx.fillStyle = pageDark ? PAGE_SHADOW_DARK : PAGE_SHADOW_LIGHT;
       ctx.fillRect(a.x + 3, a.y + 3, b.x - a.x, b.y - a.y);
       ctx.fillStyle = cssColor(displayColor(PAGE_FILL_LIGHT));
@@ -565,7 +678,7 @@
         view.panX += current.x - lastPointer.x;
         view.panY += current.y - lastPointer.y;
         clampView();
-        draw();
+        scheduleDraw();
       }
       lastPointer = current;
       return;
@@ -600,7 +713,6 @@
       flushQueuedEraserSamples();
       doc.finishEraserDrag(eraserHits);
       syncHistoryState();
-      scheduleSave();
     }
     resetPointer();
   }
@@ -611,14 +723,13 @@
       flushQueuedEraserSamples();
       doc.finishEraserDrag(eraserHits);
       syncHistoryState();
-      scheduleSave();
     } else {
       clearQueuedEraserSamples();
     }
     cancelActiveStroke();
     inFlight = [];
     resetPointer();
-    draw();
+    scheduleDraw();
   }
 
   function pushPointerSamples(event: PointerEvent) {
@@ -688,7 +799,6 @@
       flushQueuedEraserSamples();
       doc.finishEraserDrag(androidStylusEraserHits);
       syncHistoryState();
-      scheduleSave();
       androidStylusEraserHits.clear();
       androidStylusEraserActive = false;
       if (pointerMode === 'erase') {
@@ -783,7 +893,7 @@
       }
     } else {
       syncHistoryState();
-      draw();
+      scheduleDraw();
     }
   }
 
@@ -813,7 +923,7 @@
       view.panY -= event.deltaY;
     }
     clampView();
-    draw();
+    scheduleDraw();
     updateLiveInkOverlayStyle();
   }
 
@@ -957,8 +1067,7 @@
         const applied = doc?.applyRemoteUpdate(update) ?? false;
         if (applied) {
           refreshFromDoc();
-          scheduleSave();
-          draw();
+          queueSaveUpdates([update]);
         }
         return applied;
       }
@@ -1008,6 +1117,10 @@
     flushQueuedEraserSamples();
     clearSaveTimer();
     void flushPendingState();
+    if (drawFrame !== null) {
+      cancelAnimationFrame(drawFrame);
+      drawFrame = null;
+    }
     if (isAndroid()) {
       void drawingHideLiveInkOverlay();
     }
