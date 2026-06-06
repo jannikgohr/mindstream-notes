@@ -198,6 +198,67 @@ function targetIsBlockedInput(event: KeyboardEvent): boolean {
 }
 
 /**
+ * Crepe's ProseMirror keymap binds a handful of chords to its built-in
+ * commands at editor construction. These are baked in and we can't
+ * uninstall them from outside, so a user who unsets `Mod+B` in our
+ * settings would *still* see Crepe toggle bold when they press it —
+ * because Crepe's keymap fires independently of ours.
+ *
+ * Fix: when a chord lands that matches a Crepe-native binding AND our
+ * binding for the same command has been changed or unset, we
+ * `preventDefault` to swallow the event without running anything. Our
+ * normal "the binding matches, fire and preventDefault" path still
+ * wins when the user hasn't changed the default — same chord, same
+ * outcome, just routed through our path with our error handling.
+ *
+ * Whitelist is small on purpose: every entry here is a chord that
+ * Crepe is *known* to bind (verified against the @milkdown/preset-
+ * commonmark and @milkdown/plugin-history keymaps). Adding a chord
+ * that Crepe DOESN'T bind would be a false positive — the user
+ * presses it expecting their default-typing behaviour (e.g. a
+ * shifted symbol) and we silently swallow it. False negatives
+ * (a chord we don't list that Crepe DOES bind) only mean
+ * "unsetting it doesn't actually disable it" — annoying but
+ * recoverable. We err on the side of the negative.
+ */
+const CREPE_NATIVE_CHORDS: Record<string, string> = {
+  'mod+b': 'editor.markdown.bold',
+  'mod+i': 'editor.markdown.italic',
+  'mod+z': 'editor.markdown.undo',
+  'mod+shift+z': 'editor.markdown.redo'
+};
+
+/**
+ * True when the event matches a Crepe-native chord whose command our
+ * user has remapped or unset. Caller responds by calling
+ * `preventDefault` without dispatching anything — that's enough to
+ * stop Crepe's ProseMirror keymap from acting.
+ *
+ * Only kicks in when a markdown editor is active. On any other surface
+ * Crepe's keymap isn't installed, so suppression would be both
+ * unnecessary and a UX bug (the user might want the character to type
+ * normally).
+ */
+function shouldSuppressCrepeNative(event: EventFlags): boolean {
+  const active = activeEditor();
+  if (!active || active.kind !== 'markdown') return false;
+  for (const [chord, commandId] of Object.entries(CREPE_NATIVE_CHORDS)) {
+    const parsed = parseBinding(chord);
+    if (!parsed) continue;
+    if (!chordMatchesEvent(parsed, event)) continue;
+    // The event is the Crepe-native chord. If our binding for the
+    // same command STILL points at this chord, the normal match path
+    // already fired our command (and called preventDefault). We
+    // wouldn't be here — `findMatchingCommand` would have returned
+    // the command. So reaching this point means the binding has
+    // diverged, and we suppress.
+    const current = getBinding(commandId);
+    return current !== chord;
+  }
+  return false;
+}
+
+/**
  * Find a command whose current binding matches the given event. Goes
  * through `getBinding` so catalogue defaults work even before
  * `hydrateBindingsFromSettings` runs (e.g. inside a vitest where
@@ -241,15 +302,26 @@ export function initHotkeys(): () => void {
     const flags = flagsFromEvent(event);
     if (!flags) return;
     const cmd = findMatchingCommand(flags);
-    if (!cmd) return;
-    // Emit first, then preventDefault only if the bus actually
-    // handled it. An editor-scoped binding fired with no matching
-    // editor active should fall through to the editor / browser
-    // exactly as it would have if no binding existed at all.
-    const handled = emitCommand(cmd);
-    if (!handled) return;
-    event.preventDefault();
-    event.stopPropagation();
+    if (cmd) {
+      // Emit first, then preventDefault only if the bus actually
+      // handled it. An editor-scoped binding fired with no matching
+      // editor active should fall through to the editor / browser
+      // exactly as it would have if no binding existed at all.
+      const handled = emitCommand(cmd);
+      if (!handled) return;
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    // No matching binding — but if the event would have activated one
+    // of Crepe's built-in shortcuts for a command our user has
+    // remapped or unset, suppress it. Otherwise the editor's keymap
+    // would keep firing the OLD chord forever after a rebind, which
+    // is what "unset" is supposed to fix.
+    if (shouldSuppressCrepeNative(flags)) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
   };
 
   document.addEventListener('keydown', onKeyDown, { capture: true });
