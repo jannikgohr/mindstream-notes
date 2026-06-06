@@ -94,6 +94,8 @@
     "hotkeys.conflict.tooltip": "Saving will reassign the shortcut — the other command will become unset.",
     "hotkeys.osConflict.label": "May be captured by",
     "hotkeys.osConflict.tooltip": "Your operating system usually captures this shortcut before the app can see it. You can still save it, but it may not fire.",
+    "hotkeys.macAltHint.label": "Tip: hold ⌘ as well — on macOS, Option alone composes special characters",
+    "hotkeys.macAltHint.tooltip": "macOS composes special characters when Option (Alt) is held alone (Option+A → å). Adding Cmd captures the plain key.",
     "hotkeys.resetAll.label": "Reset all",
     "hotkeys.resetAll.tooltip": "Restore every shortcut to its default",
     "hotkeys.resetAll.title": "Reset all shortcuts?",

@@ -94,6 +94,8 @@
     "hotkeys.conflict.tooltip": "Beim Speichern wird das Tastenkürzel neu zugewiesen — der andere Befehl wird zurückgesetzt.",
     "hotkeys.osConflict.label": "Wird ggf. abgefangen von",
     "hotkeys.osConflict.tooltip": "Dieses Tastenkürzel wird vom Betriebssystem üblicherweise abgefangen, bevor die App es sieht. Speichern ist möglich, das Kürzel wird jedoch evtl. nicht ausgelöst.",
+    "hotkeys.macAltHint.label": "Tipp: zusätzlich ⌘ halten — Option allein erzeugt unter macOS Sonderzeichen",
+    "hotkeys.macAltHint.tooltip": "Unter macOS erzeugt Option (Alt) allein Sonderzeichen (Option+A → å). Mit zusätzlich gehaltenem Cmd wird die normale Taste erfasst.",
     "hotkeys.resetAll.label": "Alle zurücksetzen",
     "hotkeys.resetAll.tooltip": "Alle Tastenkürzel auf die Standardwerte zurücksetzen",
     "hotkeys.resetAll.title": "Alle Tastenkürzel zurücksetzen?",

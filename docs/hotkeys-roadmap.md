@@ -36,17 +36,17 @@ note about what shipped, and move on.
       hitting a known reservation. New `collisions.test.ts` (10
       cases) locks the platform gates and seed-list parseability.
 
-- [ ] **#3. macOS Alt+letter produces special characters.**
-      `Alt+1` on Mac = `¡`; our `normalizeKey` keeps the typed
-      character, so a bound `alt+1` only matches when the user
-      actually produces `¡`. Following the user's "use current
-      keyboard layout" rule prevents an `event.code` fallback for
-      letters.
-      **Plan:** at minimum surface the limitation in the recorder
-      when on Mac with Alt held — show a hint that the captured chord
-      may differ from what the label suggests. Optional follow-up:
-      offer the user a choice between layout-aware and physical-key
-      modes per-binding.
+- [x] **#3. macOS Alt+letter produces special characters.**
+      `Alt+1` on Mac = `¡`, `Alt+A` = `å`; our `normalizeKey` keeps
+      the typed character. The binding worked but the label was
+      confusing (`alt+å` rather than `alt+a`).
+      **Shipped:** recorder shows a muted hint when the pending
+      binding has `alt` without `mod` while on Mac. Wording suggests
+      adding Cmd (which suppresses Option's composition behaviour
+      and captures the plain key). Informational only — a user who
+      genuinely wants `alt+å` can still save. No matcher change;
+      digit-row bindings already work via the `event.code` fallback,
+      letter bindings continue to record the special character.
 
 - [ ] **#4. Sequence chords (`Mod+K Mod+S`).**
       Single-chord only. VS Code, Obsidian, Emacs all support chord

@@ -35,6 +35,8 @@
     groupedCommands,
     HOTKEY_COMMANDS,
     isCustomized,
+    isMac,
+    parseBinding,
     resetBinding,
     setBinding,
     wellKnownConflict,
@@ -59,6 +61,30 @@
    *  hits a chord the OS captures (Cmd+Q, Alt+Tab, …). Advisory only —
    *  the user can still save it. */
   let osConflictReason = $state<string | null>(null);
+
+  /**
+   * On macOS, the Option (Alt) key composes characters: Alt+A becomes
+   * `å`, Alt+1 becomes `¡`, etc. Holding Cmd ALSO suppresses that
+   * composition, so `mod+alt+letter` records cleanly. But `alt+letter`
+   * by itself captures the typed special character — the resulting
+   * binding looks weird to the user ("alt+å" — what's that?) even
+   * though it functions.
+   *
+   * Show a one-line hint when the pending binding is in that shape.
+   * The hint is advisory, not blocking: a user who actually wants
+   * `alt+å` (a real character on their layout) can still save it.
+   *
+   * Derived rather than computed inline so the template stays
+   * readable; `pendingBinding` is the only dynamic input so the
+   * derivation cost is negligible.
+   */
+  const showMacAltHint = $derived.by(() => {
+    if (!pendingBinding) return false;
+    if (!isMac()) return false;
+    const chord = parseBinding(pendingBinding);
+    if (!chord) return false;
+    return chord.alt && !chord.mod;
+  });
 
   /** Static catalogue grouped by scope/editor-kind. The catalogue
    *  itself doesn't change at runtime, and per-binding reactivity
@@ -321,6 +347,20 @@
                     title={tUi('hotkeys.osConflict.tooltip')}
                   >
                     {tUi('hotkeys.osConflict.label')}: {osConflictReason}
+                  </span>
+                {/if}
+                {#if showMacAltHint}
+                  <!--
+                    Plain muted-foreground because this is informational,
+                    not a warning — the binding works as recorded, just
+                    looks unfamiliar. Suggesting Cmd is the easiest
+                    fix; we don't try to force it.
+                  -->
+                  <span
+                    class="max-w-[18rem] text-xs text-muted-foreground"
+                    title={tUi('hotkeys.macAltHint.tooltip')}
+                  >
+                    {tUi('hotkeys.macAltHint.label')}
                   </span>
                 {/if}
                 {#if pendingBinding}
