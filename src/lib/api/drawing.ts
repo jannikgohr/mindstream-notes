@@ -42,6 +42,52 @@ export function drawingClear(): Promise<void> {
   return invokeOrFallback<void>('drawing_clear', undefined, () => undefined);
 }
 
+export function drawingShowLiveInkOverlay(): Promise<void> {
+  return invokeOrFallback<void>(
+    'drawing_show_live_ink_overlay',
+    undefined,
+    () => undefined
+  );
+}
+
+export function drawingHideLiveInkOverlay(): Promise<void> {
+  return invokeOrFallback<void>(
+    'drawing_hide_live_ink_overlay',
+    undefined,
+    () => undefined
+  );
+}
+
+export function drawingCancelLiveInk(): Promise<void> {
+  return invokeOrFallback<void>(
+    'drawing_cancel_live_ink',
+    undefined,
+    () => undefined
+  );
+}
+
+export function drawingSetLiveInkStyle(
+  colorArgb: number,
+  minWidthPx: number,
+  maxWidthPx: number
+): Promise<void> {
+  return invokeOrFallback<void>(
+    'drawing_set_live_ink_style',
+    { colorArgb, minWidthPx, maxWidthPx },
+    () => undefined
+  );
+}
+
+export function drawingSetLiveInkFingerDrawing(
+  allowed: boolean
+): Promise<void> {
+  return invokeOrFallback<void>(
+    'drawing_set_live_ink_finger_drawing',
+    { allowed },
+    () => undefined
+  );
+}
+
 /**
  * Push a new auto-save debounce window (in ms) to the Rust-side
  * save worker. Used by `DrawingNoteEditor.svelte` to keep the

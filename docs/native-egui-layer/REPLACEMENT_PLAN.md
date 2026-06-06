@@ -42,15 +42,16 @@ needs to change this plan, update this file in that step's commit.
    - Stop routing canonical input through Rust/egui.
    - JS records strokes and commits them to the shared ink document.
 
-5. **Convert Kotlin live ink into a mirror overlay** - Pending
+5. **Convert Kotlin live ink into a mirror overlay** - In progress
    - Keep Kotlin `MotionEvent` capture.
    - Draw only the in-flight wet stroke with
      `CanvasFrontBufferedRenderer`.
    - Do not let Kotlin own persistence or stroke geometry.
    - Cancel/hide the wet overlay after JS commits the stroke.
    - Make the native layer ignore toolbar/control regions.
+   - Implementation exists; needs Android stylus validation.
 
-6. **Add an Android input tee** - Pending
+6. **Add an Android input tee** - In progress
    - Kotlin observes stylus samples while still letting WebView receive
      pointer events.
    - Match JS and Kotlin coordinates exactly.
@@ -58,6 +59,7 @@ needs to change this plan, update this file in that step's commit.
      eraser/live-ink hidden state.
    - Add a simple "JS committed stroke" ack so Kotlin knows when to
      clear the overlay.
+   - Implementation exists; needs Android stylus validation.
 
 7. **Measure before deleting egui** - Pending
    - Compare APK/AAB size, note-open time, Tab S7 FE pen latency, memory

@@ -362,6 +362,18 @@ pub mod ui {
         invoke_static_void("hideFromNative")
     }
 
+    pub fn call_show_live_overlay() -> Result<(), String> {
+        invoke_static_void("showLiveOverlayFromNative")
+    }
+
+    pub fn call_hide_live_overlay() -> Result<(), String> {
+        invoke_static_void("hideLiveOverlayFromNative")
+    }
+
+    pub fn call_cancel_live_ink() -> Result<(), String> {
+        invoke_static_void("cancelLiveInkFromNative")
+    }
+
     /// Call `Drawing.backFromNative()` — dispatches a `drawing-back`
     /// CustomEvent on the WebView's window so the Svelte mobile
     /// shell can navigate back to its home view. Currently unused

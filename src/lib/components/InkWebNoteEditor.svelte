@@ -12,7 +12,12 @@
   } from 'lucide-svelte';
   import { Button } from '$lib/components/ui/button';
   import {
+    drawingCancelLiveInk,
+    drawingHideLiveInkOverlay,
     drawingSaveInkState,
+    drawingSetLiveInkFingerDrawing,
+    drawingSetLiveInkStyle,
+    drawingShowLiveInkOverlay,
     loadNote,
     noteRoomInfo,
     onSessionChange,
@@ -20,6 +25,7 @@
     type DrawingToolbarSettings,
     type DrawingToolbarSettingsPayload
   } from '$lib/api';
+  import { isAndroid } from '$lib/platform';
   import {
     getSettingValue,
     hasSettingValue,
@@ -179,6 +185,18 @@
     draw();
   });
 
+  function updateLiveInkOverlayStyle() {
+    if (!isAndroid()) return;
+    if (tool !== 'pen') {
+      void drawingCancelLiveInk();
+    }
+    const maxWidthPx = Math.max(0.5, width * view.scale);
+    const minWidthPx = Math.max(0.5, maxWidthPx * 0.25);
+    const liveColorArgb = tool === 'pen' ? colorArgb : 0x00000000;
+    void drawingSetLiveInkStyle(liveColorArgb, minWidthPx, maxWidthPx);
+    void drawingSetLiveInkFingerDrawing(fingerDrawingAllowed);
+  }
+
   function currentToolbarSettings(): DrawingToolbarSettings {
     return {
       tool,
@@ -336,6 +354,7 @@
       clampView();
     }
     draw();
+    updateLiveInkOverlayStyle();
   }
 
   function fitWidth() {
@@ -591,6 +610,9 @@
     inFlight = [];
     if (value) {
       applyDocumentMutation(update);
+      if (isAndroid()) {
+        void drawingCancelLiveInk();
+      }
     } else {
       syncHistoryState();
       draw();
@@ -600,6 +622,9 @@
   function cancelActiveStroke() {
     doc?.cancelStroke();
     drawingStrokeActive = false;
+    if (isAndroid()) {
+      void drawingCancelLiveInk();
+    }
   }
 
   function handleWheel(event: WheelEvent) {
@@ -621,6 +646,7 @@
     }
     clampView();
     draw();
+    updateLiveInkOverlayStyle();
   }
 
   function minScale(): number {
@@ -633,21 +659,25 @@
   function setTool(next: ToolMode) {
     tool = next;
     emitToolbarSettings();
+    updateLiveInkOverlayStyle();
   }
 
   function setColor(value: string) {
     colorArgb = colorHexToArgb(value);
     emitToolbarSettings();
+    updateLiveInkOverlayStyle();
   }
 
   function setWidth(value: string) {
     width = normalizeInkWidth(Number(value));
     emitToolbarSettings();
+    updateLiveInkOverlayStyle();
   }
 
   function toggleFingerDrawing() {
     fingerDrawingAllowed = !fingerDrawingAllowed;
     emitToolbarSettings();
+    updateLiveInkOverlayStyle();
   }
 
   function togglePageTheme() {
@@ -733,6 +763,9 @@
 
   onMount(async () => {
     await tick();
+    if (isAndroid()) {
+      await drawingShowLiveInkOverlay();
+    }
     const note = await loadNote(noteId);
     if (disposed) return;
     doc = InkDocument.fromBytes(new Uint8Array(note.yrs_state));
@@ -758,6 +791,7 @@
     pageThemeMode = settings.pageThemeMode ?? 'light';
     refreshFromDoc();
     resizeCanvas();
+    updateLiveInkOverlayStyle();
     resizeObserver = new ResizeObserver(resizeCanvas);
     if (hostEl) resizeObserver.observe(hostEl);
     toolbarSettingsReady = true;
@@ -772,6 +806,9 @@
   onDestroy(() => {
     clearSaveTimer();
     void flushPendingState();
+    if (isAndroid()) {
+      void drawingHideLiveInkOverlay();
+    }
     disposed = true;
     collabReady = false;
     unsubSession?.();

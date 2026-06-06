@@ -316,6 +316,77 @@ pub fn drawing_hide(_app: AppHandle, note_id: Option<String>) -> Result<(), Stri
 }
 
 #[tauri::command]
+pub fn drawing_show_live_ink_overlay() -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        platform::android::ui::call_show_live_overlay()
+            .map_err(|e| format!("drawing_show_live_ink_overlay: {e}"))
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        Ok(())
+    }
+}
+
+#[tauri::command]
+pub fn drawing_hide_live_ink_overlay() -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        platform::android::ui::call_hide_live_overlay()
+            .map_err(|e| format!("drawing_hide_live_ink_overlay: {e}"))
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        Ok(())
+    }
+}
+
+#[tauri::command]
+pub fn drawing_cancel_live_ink() -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        platform::android::ui::call_cancel_live_ink()
+            .map_err(|e| format!("drawing_cancel_live_ink: {e}"))
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        Ok(())
+    }
+}
+
+#[tauri::command]
+pub fn drawing_set_live_ink_style(
+    color_argb: u32,
+    min_width_px: f32,
+    max_width_px: f32,
+) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        platform::android::ui::call_set_live_ink_style(color_argb, min_width_px, max_width_px)
+            .map_err(|e| format!("drawing_set_live_ink_style: {e}"))?;
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (color_argb, min_width_px, max_width_px);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn drawing_set_live_ink_finger_drawing(allowed: bool) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        platform::android::ui::call_set_finger_drawing_allowed(allowed)
+            .map_err(|e| format!("drawing_set_live_ink_finger_drawing: {e}"))?;
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = allowed;
+    }
+    Ok(())
+}
+
+#[tauri::command]
 #[allow(unused_variables)]
 pub fn drawing_set_desktop_panel_bounds(
     app: AppHandle,
