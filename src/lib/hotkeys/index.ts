@@ -18,6 +18,7 @@ export {
 export {
   HOTKEY_COMMANDS,
   COMMAND_BY_ID,
+  commandById,
   MARKDOWN_ACTIONS,
   groupedCommands,
   type CommandDefinition,

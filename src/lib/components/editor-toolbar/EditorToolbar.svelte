@@ -27,7 +27,13 @@
   import { cn } from '$lib/utils';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { getSettingValue } from '$lib/settings/store.svelte';
-  import { ariaKeyShortcut, displayBinding, getBinding } from '$lib/hotkeys';
+  import {
+    ariaKeyShortcut,
+    commandById,
+    displayBinding,
+    emitCommand,
+    getBinding
+  } from '$lib/hotkeys';
   import {
     TOOLBAR_ITEMS,
     type ToolbarItem,
@@ -170,7 +176,37 @@
 
   function invokeLeaf(item: ToolbarLeaf) {
     if (!crepe) return;
-    crepe.editor.action(item.action);
+    // Route through the command bus when this button corresponds to a
+    // catalogued hotkey id. Two reasons:
+    //
+    //   1. Keyboard and pointer both dispatch the SAME way, so a future
+    //      change to the listener (e.g. wrapping every command in a
+    //      transaction tag) doesn't require updating the toolbar.
+    //   2. The bus is the contract any future non-keyboard caller will
+    //      use (command palette, tray menu). Exercising it on every
+    //      click means a regression there is caught the moment someone
+    //      opens a note, not eventually by whoever lands the palette.
+    //
+    // Falls back to calling the action directly when the bus path
+    // can't satisfy the request:
+    //   - item has no `hotkeyId` (image, table, math, mermaid — no
+    //     keyboard equivalent, so the bus has nothing to route);
+    //   - the id isn't in the catalogue (drift — log and proceed);
+    //   - `emitCommand` returns false (no active markdown listener,
+    //     which is unlikely when a toolbar BELONGING to this editor
+    //     is on screen — but defend the keystroke-equivalent against
+    //     "didn't do anything when I clicked" anyway).
+    let handled = false;
+    if (item.hotkeyId) {
+      const cmd = commandById(item.hotkeyId);
+      if (cmd) handled = emitCommand(cmd);
+      else
+        console.warn(
+          '[EditorToolbar] hotkey id not in catalogue',
+          item.hotkeyId
+        );
+    }
+    if (!handled) crepe.editor.action(item.action);
     // Recompute manually as well as via the listener. Mark toggles on an
     // empty selection only mutate `state.storedMarks` — doc and selection
     // are unchanged — so neither selectionUpdated nor updated would fire,

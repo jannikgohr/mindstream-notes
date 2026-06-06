@@ -133,15 +133,21 @@ note about what shipped, and move on.
       no duplicate defaults). Runtime warnings stay in place as the
       safety net; tests catch it at PR review.
 
-- [ ] **#10. No way to fire a command from non-keyboard sources.**
-      `emitCommand` is exported but nothing else uses it. The bus
-      design anticipated palette / tray-menu callers — they don't
-      exist yet, and there's no `byId(commandId)` helper exposed.
-      **Plan:** export `commandById(id): CommandDefinition | null`
-      from `$lib/hotkeys`. Document the calling pattern. Use it
-      ourselves from at least one non-keyboard surface (e.g. the
-      toolbar buttons could route through the bus instead of
-      calling Crepe directly) so the wire stays exercised.
+- [x] **#10. No way to fire a command from non-keyboard sources.**
+      `emitCommand` was exported but nothing else used it — the
+      bus's general-purpose surface was unexercised in production.
+      **Shipped:** new `commandById(id): CommandDefinition | null`
+      null-safe lookup helper in `commands.ts`, exported from the
+      barrel with the canonical calling pattern documented inline
+      (`const cmd = commandById(id); if (cmd) emitCommand(cmd);`).
+      `EditorToolbar.invokeLeaf` now routes through the bus
+      whenever the clicked button has a `hotkeyId`, falling back
+      to the direct `crepe.editor.action(item.action)` call if the
+      id isn't in the catalogue or the bus reports unhandled. Every
+      click on Bold / Italic / heading / list buttons now exercises
+      the same dispatch path as the keyboard, so a regression in
+      the bus surfaces immediately. Two `catalogue.test.ts` cases
+      cover `commandById` happy + miss paths.
 
 - [ ] **#12. Tauri tray / native menus can't show their bindings.**
       Bindings live in JS `$state`; the Rust side that builds the

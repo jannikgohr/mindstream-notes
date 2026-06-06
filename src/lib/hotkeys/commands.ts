@@ -352,6 +352,29 @@ export const HOTKEY_COMMANDS: CommandDefinition[] = [
 export const COMMAND_BY_ID: Record<string, CommandDefinition> =
   Object.fromEntries(HOTKEY_COMMANDS.map((c) => [c.id, c]));
 
+/**
+ * Null-safe lookup for non-keyboard callers (toolbar buttons,
+ * command palette, future tray menus).
+ *
+ * Use this rather than reading from `COMMAND_BY_ID` directly so an
+ * unknown / mistyped id surfaces as a `null` return — a runtime
+ * TypeError on `cmd.run()` (because `COMMAND_BY_ID[badId]` is
+ * `undefined`) is harder to debug than the missing branch you'd add
+ * to handle `null` here.
+ *
+ * Calling pattern:
+ *
+ *     const cmd = commandById('editor.markdown.bold');
+ *     if (cmd) emitCommand(cmd);
+ *
+ * That's the entire non-keyboard contract. The bus does scope routing
+ * and error handling internally; callers shouldn't need to know about
+ * `EditorListener`, `activeEditor`, or any of the dispatch internals.
+ */
+export function commandById(id: string): CommandDefinition | null {
+  return COMMAND_BY_ID[id] ?? null;
+}
+
 /** Group commands for the settings UI. Order of groups itself matches
  *  the order ids first appear in HOTKEY_COMMANDS. Returns
  *  `[{ scope, editorKind, commands }]` so the rendering layer can

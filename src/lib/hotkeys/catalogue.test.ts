@@ -23,7 +23,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { HOTKEY_COMMANDS, MARKDOWN_ACTIONS } from './commands';
+import { commandById, HOTKEY_COMMANDS, MARKDOWN_ACTIONS } from './commands';
 import { parseBinding } from './parse';
 
 describe('catalogue consistency', () => {
@@ -100,6 +100,21 @@ describe('catalogue consistency', () => {
       seen.add(cmd.id);
     }
     expect(duplicates).toEqual([]);
+  });
+
+  it('commandById returns the matching definition', () => {
+    // The null-safe lookup helper is the contract for non-keyboard
+    // callers. Keep its happy and miss paths covered so a regression
+    // (e.g. someone replacing `?? null` with an unsafe cast) shows up.
+    expect(commandById('editor.markdown.bold')?.id).toBe(
+      'editor.markdown.bold'
+    );
+    expect(commandById('global.openSettings')?.scope).toBe('global');
+  });
+
+  it('commandById returns null for unknown ids', () => {
+    expect(commandById('totally.made.up')).toBeNull();
+    expect(commandById('')).toBeNull();
   });
 
   it('no two commands ship the same default binding', () => {
