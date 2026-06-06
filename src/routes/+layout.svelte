@@ -7,6 +7,7 @@
   import { invokeOrFallback, drawingSetTheme } from '$lib/api';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import UpdaterProgressDialog from '$lib/updater/ProgressDialog.svelte';
+  import { initHotkeys } from '$lib/hotkeys';
 
   let { children } = $props();
 
@@ -24,6 +25,14 @@
     };
     window.addEventListener('contextmenu', block);
     return () => window.removeEventListener('contextmenu', block);
+  });
+
+  // Install the global hotkey dispatcher once. Idempotent — the manager
+  // guards against double-init internally, so this stays safe if the
+  // root layout ever remounts (HMR, route swap). Returned teardown only
+  // matters in tests; we drop it intentionally here.
+  onMount(() => {
+    initHotkeys();
   });
 
   import { ui } from '$lib/state.svelte.js';

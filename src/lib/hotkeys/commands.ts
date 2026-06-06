@@ -1,0 +1,366 @@
+/**
+ * Catalogue of every keyboard-bindable command.
+ *
+ * One static list, two consumers:
+ *
+ *   - The hotkey manager iterates this to know what `dispatch` calls
+ *     are legal and what default binding each id has.
+ *   - The settings panel iterates it to render a row per command,
+ *     grouped by `scope` / `editorKind`.
+ *
+ * Defaults follow the convention the user asked for: Google Docs for
+ * headings (`Mod+Alt+0..6`) and list types (`Mod+Shift+7..9`), Notion
+ * for inline marks (`Mod+B`, `Mod+I`) which Google Docs and most other
+ * editors also agree on.
+ *
+ * Negative-space rules baked into the catalogue:
+ *
+ *   1. Editor commands MUST carry an `editorKind`. The settings UI uses
+ *      that to group them and the manager uses it to refuse dispatch
+ *      to the wrong editor kind. Global commands MUST NOT carry one.
+ *
+ *   2. `defaultBinding` is the only thing that's allowed to be `null`
+ *      — it represents "no default; user can assign one". `null` is
+ *      NOT a way to delete a command; remove its row from this list
+ *      to do that.
+ *
+ *   3. Global commands carry their `run` callback inline (they don't
+ *      depend on any editor). Editor commands omit `run` — the
+ *      editor adapter is the one that knows how to perform them. This
+ *      asymmetry is enforced at the type level (see the
+ *      `CommandDefinition` union below).
+ *
+ *   4. Every command id must be unique. The reverse-lookup map in the
+ *      store assumes uniqueness; duplicates would silently overwrite
+ *      each other.
+ */
+
+import { openSettings } from '$lib/settings/store.svelte';
+import type { Ctx } from '@milkdown/kit/ctx';
+import { commandsCtx, editorViewCtx } from '@milkdown/kit/core';
+import {
+  setBlockTypeCommand,
+  paragraphSchema,
+  headingSchema,
+  bulletListSchema,
+  orderedListSchema,
+  listItemSchema,
+  codeBlockSchema,
+  toggleStrongCommand,
+  toggleEmphasisCommand
+} from '@milkdown/kit/preset/commonmark';
+import { undoCommand, redoCommand } from '@milkdown/kit/plugin/history';
+import { applyListAction } from '$lib/components/editor-toolbar/commands';
+import type { CommandScope, EditorKind } from './types';
+
+interface BaseCommand {
+  id: string;
+  labelKey: string;
+  defaultBinding: string | null;
+}
+
+export interface GlobalCommand extends BaseCommand {
+  scope: 'global';
+  /**
+   * Direct invocation. Runs synchronously from the manager's keydown
+   * handler — keep these cheap and side-effect-safe (no async I/O
+   * without a yielded `void` Promise) because the listener is on the
+   * capture phase and a throw would suppress the default handling
+   * without re-firing.
+   */
+  run: () => void;
+}
+
+export interface EditorCommand extends BaseCommand {
+  scope: 'editor';
+  editorKind: EditorKind;
+}
+
+export type CommandDefinition = GlobalCommand | EditorCommand;
+
+/* --- Markdown actions ------------------------------------------------------
+ *
+ * These are the body of the markdown editor's `dispatch(id)` entries.
+ * Pulled out as named functions (not as the toolbar's `TOOLBAR_ITEMS`
+ * action references) so:
+ *
+ *   - the hotkey manager doesn't depend on the toolbar's catalogue
+ *     ordering staying stable,
+ *   - adding a hotkey-only command (no toolbar button) doesn't require
+ *     adding a fake toolbar row.
+ *
+ * Behaviour matches the toolbar recipes — those are the
+ * non-destructive forms documented at the top of editor-toolbar/
+ * commands.ts. We deliberately call `setBlockTypeCommand` for headings
+ * (which leaves the cursor's text alone) instead of Crepe's slash-menu
+ * recipes (which start by wiping the current line).
+ */
+
+const undo = (ctx: Ctx) => {
+  ctx.get(commandsCtx).call(undoCommand.key);
+};
+const redo = (ctx: Ctx) => {
+  ctx.get(commandsCtx).call(redoCommand.key);
+};
+const toggleBold = (ctx: Ctx) => {
+  ctx.get(commandsCtx).call(toggleStrongCommand.key);
+};
+const toggleItalic = (ctx: Ctx) => {
+  ctx.get(commandsCtx).call(toggleEmphasisCommand.key);
+};
+
+/** Headings and paragraph: skipped inside code/lists, same gate the
+ *  toolbar uses. We don't fail silently — we just no-op, because a
+ *  keyboard shortcut firing inside a code block should not corrupt the
+ *  doc nor surprise the user with a heading. */
+function isInCodeOrList(ctx: Ctx): boolean {
+  const view = ctx.get(editorViewCtx);
+  const { $from } = view.state.selection;
+  for (let d = $from.depth; d >= 0; d--) {
+    const name = $from.node(d).type.name;
+    if (
+      name === 'code_block' ||
+      name === 'bullet_list' ||
+      name === 'ordered_list' ||
+      name === 'list_item'
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+const turnIntoParagraph = (ctx: Ctx) => {
+  if (isInCodeOrList(ctx)) return;
+  ctx.get(commandsCtx).call(setBlockTypeCommand.key, {
+    nodeType: paragraphSchema.type(ctx)
+  });
+};
+const turnIntoHeading = (level: number) => (ctx: Ctx) => {
+  if (isInCodeOrList(ctx)) return;
+  ctx.get(commandsCtx).call(setBlockTypeCommand.key, {
+    nodeType: headingSchema.type(ctx),
+    attrs: { level }
+  });
+};
+
+/** List toggles reuse the shared `applyListAction` helper so the
+ *  hotkey path produces identical behaviour to the toolbar buttons
+ *  (mixed-selection unify, partial-unlist splits, item renumbering).
+ *  Reimplementing the algorithm here would have been a guaranteed
+ *  divergence over time. */
+function switchListAction(target: 'bullet' | 'ordered' | 'task') {
+  return (ctx: Ctx) => {
+    const view = ctx.get(editorViewCtx);
+    applyListAction(view.state, view.dispatch.bind(view), target, {
+      bulletList: bulletListSchema.type(ctx),
+      orderedList: orderedListSchema.type(ctx),
+      listItem: listItemSchema.type(ctx),
+      paragraph: paragraphSchema.type(ctx)
+    });
+  };
+}
+
+const turnIntoCodeBlock = (ctx: Ctx) => {
+  // Same recipe Crepe's keymap uses for ```. `setBlockTypeCommand`
+  // keeps the current text in the converted block instead of inserting
+  // a new empty one — same as the toolbar's behaviour-matched recipe.
+  ctx.get(commandsCtx).call(setBlockTypeCommand.key, {
+    nodeType: codeBlockSchema.type(ctx)
+  });
+};
+
+/**
+ * Lookup table for the markdown editor adapter: hotkey command id →
+ * the milkdown ctx callback that performs it. Kept in this file (not
+ * in NoteEditor.svelte) so the catalogue and the dispatch table are
+ * authored together and can't drift.
+ */
+export const MARKDOWN_ACTIONS: Record<string, (ctx: Ctx) => void> = {
+  'editor.markdown.undo': undo,
+  'editor.markdown.redo': redo,
+  'editor.markdown.bold': toggleBold,
+  'editor.markdown.italic': toggleItalic,
+  'editor.markdown.paragraph': turnIntoParagraph,
+  'editor.markdown.h1': turnIntoHeading(1),
+  'editor.markdown.h2': turnIntoHeading(2),
+  'editor.markdown.h3': turnIntoHeading(3),
+  'editor.markdown.h4': turnIntoHeading(4),
+  'editor.markdown.h5': turnIntoHeading(5),
+  'editor.markdown.h6': turnIntoHeading(6),
+  'editor.markdown.bulletList': switchListAction('bullet'),
+  'editor.markdown.orderedList': switchListAction('ordered'),
+  'editor.markdown.taskList': switchListAction('task'),
+  'editor.markdown.codeBlock': turnIntoCodeBlock
+};
+
+/* --- Command catalogue ----------------------------------------------------- */
+
+/**
+ * The canonical list. Order is the order rows appear in the settings
+ * UI within each group — kept hand-curated rather than alphabetical so
+ * related operations stay visually adjacent (all six headings in a
+ * row, the three list types together, etc.).
+ */
+export const HOTKEY_COMMANDS: CommandDefinition[] = [
+  // --- Global ---------------------------------------------------------------
+  {
+    id: 'global.openSettings',
+    scope: 'global',
+    labelKey: 'hotkeys.command.global.openSettings',
+    // Mod+, — the universal "open preferences" shortcut on macOS and the
+    // de-facto convention almost everywhere else (VS Code, Chrome).
+    defaultBinding: 'mod+,',
+    run: () => openSettings()
+  },
+
+  // --- Markdown editor ------------------------------------------------------
+  {
+    id: 'editor.markdown.undo',
+    scope: 'editor',
+    editorKind: 'markdown',
+    labelKey: 'hotkeys.command.editor.markdown.undo',
+    defaultBinding: 'mod+z'
+  },
+  {
+    id: 'editor.markdown.redo',
+    scope: 'editor',
+    editorKind: 'markdown',
+    labelKey: 'hotkeys.command.editor.markdown.redo',
+    // Mod+Shift+Z is the universal redo on macOS and works on
+    // Windows/Linux too. We deliberately do NOT ship Ctrl+Y as a second
+    // default — the user can add it from settings if they want, and
+    // sticking to a single default keeps the conflict surface clean.
+    defaultBinding: 'mod+shift+z'
+  },
+  {
+    id: 'editor.markdown.bold',
+    scope: 'editor',
+    editorKind: 'markdown',
+    labelKey: 'hotkeys.command.editor.markdown.bold',
+    defaultBinding: 'mod+b'
+  },
+  {
+    id: 'editor.markdown.italic',
+    scope: 'editor',
+    editorKind: 'markdown',
+    labelKey: 'hotkeys.command.editor.markdown.italic',
+    defaultBinding: 'mod+i'
+  },
+  {
+    id: 'editor.markdown.paragraph',
+    scope: 'editor',
+    editorKind: 'markdown',
+    labelKey: 'hotkeys.command.editor.markdown.paragraph',
+    // Google Docs convention: Mod+Alt+0 returns to normal text.
+    defaultBinding: 'mod+alt+0'
+  },
+  {
+    id: 'editor.markdown.h1',
+    scope: 'editor',
+    editorKind: 'markdown',
+    labelKey: 'hotkeys.command.editor.markdown.h1',
+    defaultBinding: 'mod+alt+1'
+  },
+  {
+    id: 'editor.markdown.h2',
+    scope: 'editor',
+    editorKind: 'markdown',
+    labelKey: 'hotkeys.command.editor.markdown.h2',
+    defaultBinding: 'mod+alt+2'
+  },
+  {
+    id: 'editor.markdown.h3',
+    scope: 'editor',
+    editorKind: 'markdown',
+    labelKey: 'hotkeys.command.editor.markdown.h3',
+    defaultBinding: 'mod+alt+3'
+  },
+  {
+    id: 'editor.markdown.h4',
+    scope: 'editor',
+    editorKind: 'markdown',
+    labelKey: 'hotkeys.command.editor.markdown.h4',
+    defaultBinding: 'mod+alt+4'
+  },
+  {
+    id: 'editor.markdown.h5',
+    scope: 'editor',
+    editorKind: 'markdown',
+    labelKey: 'hotkeys.command.editor.markdown.h5',
+    defaultBinding: 'mod+alt+5'
+  },
+  {
+    id: 'editor.markdown.h6',
+    scope: 'editor',
+    editorKind: 'markdown',
+    labelKey: 'hotkeys.command.editor.markdown.h6',
+    defaultBinding: 'mod+alt+6'
+  },
+  {
+    id: 'editor.markdown.bulletList',
+    scope: 'editor',
+    editorKind: 'markdown',
+    labelKey: 'hotkeys.command.editor.markdown.bulletList',
+    // Google Docs convention: Shift+8 on the number row maps to the
+    // bullet glyph for typists who learned by symbol position.
+    defaultBinding: 'mod+shift+8'
+  },
+  {
+    id: 'editor.markdown.orderedList',
+    scope: 'editor',
+    editorKind: 'markdown',
+    labelKey: 'hotkeys.command.editor.markdown.orderedList',
+    defaultBinding: 'mod+shift+7'
+  },
+  {
+    id: 'editor.markdown.taskList',
+    scope: 'editor',
+    editorKind: 'markdown',
+    labelKey: 'hotkeys.command.editor.markdown.taskList',
+    defaultBinding: 'mod+shift+9'
+  },
+  {
+    id: 'editor.markdown.codeBlock',
+    scope: 'editor',
+    editorKind: 'markdown',
+    labelKey: 'hotkeys.command.editor.markdown.codeBlock',
+    // No truly universal default for "code block" — Notion uses
+    // Mod+Shift+C, VS Code uses Mod+K Ctrl+K, Google Docs has nothing
+    // specific. We pick Notion's because it composes well with the
+    // existing inline shortcuts and reads cleanly.
+    defaultBinding: 'mod+shift+c'
+  }
+];
+
+/**
+ * Map id → definition. Built once at module load; the catalogue is
+ * static so we don't need to invalidate.
+ */
+export const COMMAND_BY_ID: Record<string, CommandDefinition> =
+  Object.fromEntries(HOTKEY_COMMANDS.map((c) => [c.id, c]));
+
+/** Group commands for the settings UI. Order of groups itself matches
+ *  the order ids first appear in HOTKEY_COMMANDS. Returns
+ *  `[{ scope, editorKind, commands }]` so the rendering layer can
+ *  iterate and never has to know about the underlying flat list. */
+export interface CommandGroup {
+  scope: CommandScope;
+  editorKind: EditorKind | null;
+  commands: CommandDefinition[];
+}
+
+export function groupedCommands(): CommandGroup[] {
+  const groups = new Map<string, CommandGroup>();
+  for (const cmd of HOTKEY_COMMANDS) {
+    const editorKind = cmd.scope === 'editor' ? cmd.editorKind : null;
+    const key = `${cmd.scope}:${editorKind ?? ''}`;
+    let group = groups.get(key);
+    if (!group) {
+      group = { scope: cmd.scope, editorKind, commands: [] };
+      groups.set(key, group);
+    }
+    group.commands.push(cmd);
+  }
+  return Array.from(groups.values());
+}

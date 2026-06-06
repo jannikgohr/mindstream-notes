@@ -2,6 +2,7 @@ import type { Component } from 'svelte';
 import {
   Database,
   Info,
+  Keyboard,
   Languages,
   Palette,
   PencilLine,
@@ -24,6 +25,7 @@ export type IconComponent = Component<any>;
 export const SETTINGS_ICONS: Record<string, IconComponent> = {
   database: Database as unknown as IconComponent,
   info: Info as unknown as IconComponent,
+  keyboard: Keyboard as unknown as IconComponent,
   languages: Languages as unknown as IconComponent,
   palette: Palette as unknown as IconComponent,
   'pencil-line': PencilLine as unknown as IconComponent,

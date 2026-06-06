@@ -76,6 +76,40 @@
     "fab.placeholder.folderName": "Folder name",
     "fab.submit.create": "Create",
 
+    "hotkeys.group.global": "Application",
+    "hotkeys.group.editor.markdown": "Markdown editor",
+    "hotkeys.group.editor.freeform": "Drawing canvas",
+    "hotkeys.group.editor.drawing": "Ink (native) editor",
+    "hotkeys.group.editor.ink": "Ink editor",
+    "hotkeys.group.editor.pdf": "PDF viewer",
+    "hotkeys.unset": "Unset",
+    "hotkeys.edit": "Change shortcut",
+    "hotkeys.unsetAction": "Clear shortcut",
+    "hotkeys.editChip.tooltip": "Click to record a new shortcut",
+    "hotkeys.editChip.aria": "Record new keyboard shortcut",
+    "hotkeys.recording.prompt": "Press a key…",
+    "hotkeys.recording.save": "Save",
+    "hotkeys.recording.cancel": "Cancel",
+    "hotkeys.conflict.label": "In use by",
+    "hotkeys.conflict.tooltip": "Saving will reassign the shortcut — the other command will become unset.",
+
+    "hotkeys.command.global.openSettings": "Open settings",
+    "hotkeys.command.editor.markdown.undo": "Undo",
+    "hotkeys.command.editor.markdown.redo": "Redo",
+    "hotkeys.command.editor.markdown.bold": "Bold",
+    "hotkeys.command.editor.markdown.italic": "Italic",
+    "hotkeys.command.editor.markdown.paragraph": "Normal text",
+    "hotkeys.command.editor.markdown.h1": "Heading 1",
+    "hotkeys.command.editor.markdown.h2": "Heading 2",
+    "hotkeys.command.editor.markdown.h3": "Heading 3",
+    "hotkeys.command.editor.markdown.h4": "Heading 4",
+    "hotkeys.command.editor.markdown.h5": "Heading 5",
+    "hotkeys.command.editor.markdown.h6": "Heading 6",
+    "hotkeys.command.editor.markdown.bulletList": "Bullet list",
+    "hotkeys.command.editor.markdown.orderedList": "Ordered list",
+    "hotkeys.command.editor.markdown.taskList": "Task list",
+    "hotkeys.command.editor.markdown.codeBlock": "Code block",
+
     "editor.toolbar.label": "Formatting",
     "editor.toolbar.undo": "Undo",
     "editor.toolbar.redo": "Redo",
@@ -164,6 +198,10 @@
       "description": "Theme, typography, file-tree look."
     },
     "editor": { "label": "Editor", "description": "How notes feel to write." },
+    "hotkeys": {
+      "label": "Hotkeys",
+      "description": "Customise keyboard shortcuts for actions across the app and editors."
+    },
     "data": {
       "label": "Data & Backup",
       "description": "Database location, trash, backup, import/export."
@@ -184,6 +222,7 @@
     "editor.freeform": { "label": "Drawing canvas" },
     "editor.ink": { "label": "Ink toolbar" },
     "editor.autosave": { "label": "Auto-save" },
+    "hotkeys.list": { "label": "Shortcuts" },
     "data.database": { "label": "Database" },
     "data.trash": { "label": "Trash" },
     "data.backup": { "label": "Backup, import & export" },
@@ -247,6 +286,7 @@
       "description": "Defaults off on devices with pen support, then follows your toolbar choice."
     },
     "editor.autoSave": { "label": "Auto-save" },
+    "hotkeys.panel": { "label": "Keyboard shortcuts" },
     "editor.autoSaveDebounce": { "label": "Auto-save debounce" },
     "data.databasePath": {
       "label": "Database location",

@@ -35,6 +35,7 @@ import {
 import { setLanguage } from './i18n.svelte';
 import type { SortStrategy } from '$lib/sort';
 import SignInForm from './customs/SignInForm.svelte';
+import HotkeysPanel from './customs/HotkeysPanel.svelte';
 import { alert, confirm } from '$lib/components/confirm-dialog.svelte';
 import { checkForUpdatesInteractively } from '$lib/updater';
 // Vite resolves JSON imports at build time (tsconfig has resolveJsonModule),
@@ -147,7 +148,8 @@ type AnyComponent = Component<any>;
 
 /** Components rendered in place of a generic control. */
 export const CUSTOM_COMPONENTS: Record<string, AnyComponent> = {
-  'sign-in-form': SignInForm as unknown as AnyComponent
+  'sign-in-form': SignInForm as unknown as AnyComponent,
+  'hotkeys-panel': HotkeysPanel as unknown as AnyComponent
 };
 
 /** Handlers for button-type settings. */

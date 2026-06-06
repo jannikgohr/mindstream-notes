@@ -55,6 +55,11 @@
     attachToolbarLayout,
     type ToolbarLayoutHandle
   } from '$lib/freeform/toolbar-layout';
+  import {
+    pushActiveEditor,
+    popActiveEditor,
+    type ActiveEditor
+  } from '$lib/hotkeys';
 
   interface Props {
     noteId: string;
@@ -94,6 +99,18 @@
   // width internally, so no platform/mobile branching is needed here.
   let toolbarLayout: ToolbarLayoutHandle | null = null;
   let loadError = $state<string | null>(null);
+
+  /**
+   * Hotkey-manager registration for this freeform canvas. There aren't
+   * any freeform-scoped commands in the catalogue yet — registering as
+   * an active editor of kind 'freeform' still matters because it
+   * displaces any markdown editor above it on the stack, so a Mod+B
+   * fired here is treated as "no command for this scope" and falls
+   * through to tldraw rather than secretly editing a markdown note
+   * the user can't see. Negative-space programming: refuse the bug,
+   * don't paper it over.
+   */
+  let activeEditor: ActiveEditor | null = null;
 
   let yDocUpdateHandler: (() => void) | null = null;
   /** Gate yDoc updates from triggering saves until hydration is done. */
@@ -294,11 +311,42 @@
       });
 
       loading = false;
+
+      // Register with the hotkey manager. No `dispatch` body to write
+      // yet — the catalogue carries zero freeform commands — but we
+      // still install the adapter so opening a freeform note while a
+      // markdown note is also mounted re-targets editor-scoped
+      // hotkeys away from the markdown one. The dispatch body warns
+      // and returns; if a freeform command id ever reaches it without
+      // a matching action, that's a catalogue drift the developer
+      // should see.
+      if (mountEl) {
+        activeEditor = {
+          kind: 'freeform',
+          host: mountEl,
+          dispatch: (id: string) => {
+            console.warn('[FreeformNoteEditor] unknown freeform hotkey id', id);
+          }
+        };
+        pushActiveEditor(activeEditor);
+      }
     } catch (err) {
       loadError = err instanceof Error ? err.message : String(err);
       loading = false;
       console.error('[FreeformNoteEditor] load failed', err);
     }
+  });
+
+  /**
+   * Re-promote on focusin — same rationale as NoteEditor: two open
+   * notes need the most recently focused one to win.
+   */
+  $effect(() => {
+    if (!mountEl || !activeEditor) return;
+    const editor = activeEditor;
+    const onFocusIn = () => pushActiveEditor(editor);
+    mountEl.addEventListener('focusin', onFocusIn);
+    return () => mountEl?.removeEventListener('focusin', onFocusIn);
   });
 
   // Re-render the island whenever any prop tldraw cares about flips —
@@ -370,6 +418,10 @@
 
   onDestroy(() => {
     if (saveTimer) clearTimeout(saveTimer);
+    if (activeEditor) {
+      popActiveEditor(activeEditor);
+      activeEditor = null;
+    }
     unsubSession?.();
     unsubSync?.();
     unsubSync = null;

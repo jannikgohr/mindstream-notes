@@ -31,6 +31,12 @@
   import { pickCursorColor } from '$lib/editor/cursor-color';
   import { base64ToBytes } from '$lib/editor/base64';
   import { createWikilinkBridge } from '$lib/editor/plugins';
+  import {
+    pushActiveEditor,
+    popActiveEditor,
+    MARKDOWN_ACTIONS,
+    type ActiveEditor
+  } from '$lib/hotkeys';
   import EditorToolbar from './editor-toolbar/EditorToolbar.svelte';
   import MobileEditorToolbar from './editor-toolbar/MobileEditorToolbar.svelte';
   import TrashBanner from './note-editor/TrashBanner.svelte';
@@ -105,6 +111,16 @@
     'idle'
   );
   let loadError = $state<string | null>(null);
+
+  /**
+   * The hotkey manager's view of this editor. Constructed once the
+   * Crepe instance is live so `dispatch` always has a valid `crepe` to
+   * close over — pushing earlier with a null crepe would risk a hotkey
+   * firing during the brief window between mount and `crepe.create()`.
+   * Unregistered in onDestroy (and re-promoted on focusin so two open
+   * notes route Mod+B to the one the user just clicked into).
+   */
+  let activeEditor: ActiveEditor | null = null;
 
   // Captured inside the editor's `action` callback so handleChange can
   // read the live markdown without going through the listener plugin —
@@ -313,6 +329,35 @@
 
       crepeReady = true;
       loading = false;
+
+      // Register with the hotkey manager. `dispatch` closes over the
+      // *current* crepe so reassignment in onDestroy can't strand a
+      // stale reference. The manager's `host.contains(target)` check
+      // uses this host element to exempt the contenteditable from the
+      // blocked-input rule.
+      if (host && crepe) {
+        const activeCrepe = crepe;
+        activeEditor = {
+          kind: 'markdown',
+          host,
+          dispatch: (id: string) => {
+            const action = MARKDOWN_ACTIONS[id];
+            // The manager already gated on `editorKind === 'markdown'`,
+            // so an id missing from the table can only happen during a
+            // catalogue drift — log loudly rather than silently no-op.
+            if (!action) {
+              console.warn('[NoteEditor] unknown markdown hotkey id', id);
+              return;
+            }
+            try {
+              activeCrepe.editor.action(action);
+            } catch (err) {
+              console.error('[NoteEditor] hotkey dispatch failed', id, err);
+            }
+          }
+        };
+        pushActiveEditor(activeEditor);
+      }
     } catch (err) {
       loadError = err instanceof Error ? err.message : String(err);
       loading = false;
@@ -470,8 +515,37 @@
     }
   }
 
+  /**
+   * Re-promote this editor to the top of the hotkey stack when the
+   * user clicks back into it. Without this, two notes open in dockview
+   * would always route hotkeys to whichever was registered LAST — even
+   * after the user clicked the other one. focusin bubbles, so we can
+   * watch the editor host and catch any contenteditable / toolbar
+   * focus.
+   *
+   * No focusout handler: focusout fires on every toolbar click and
+   * would pop the editor mid-action. The stack ordering alone is
+   * enough — the editor stays "active" until another editor focuses
+   * in or it unmounts.
+   */
+  $effect(() => {
+    if (!host || !activeEditor) return;
+    const editor = activeEditor;
+    const onFocusIn = () => {
+      // pushActiveEditor is the "re-promote" path too: if the editor
+      // is already registered it gets moved to the top.
+      pushActiveEditor(editor);
+    };
+    host.addEventListener('focusin', onFocusIn);
+    return () => host?.removeEventListener('focusin', onFocusIn);
+  });
+
   onDestroy(() => {
     if (saveTimer) clearTimeout(saveTimer);
+    if (activeEditor) {
+      popActiveEditor(activeEditor);
+      activeEditor = null;
+    }
     unsubSession?.();
     unsubSession = null;
     unsubSync?.();
