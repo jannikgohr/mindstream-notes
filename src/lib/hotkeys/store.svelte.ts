@@ -24,12 +24,8 @@
  * invariants (`bindingToCommand` is single-valued) hold.
  */
 
-import {
-  getSettingValue,
-  setSettingValue,
-  settings
-} from '$lib/settings/store.svelte';
-import { canonicalize, parseBinding } from './parse';
+import { setSettingValue, settings } from '$lib/settings/store.svelte';
+import { canonicalize } from './parse';
 import {
   COMMAND_BY_ID,
   HOTKEY_COMMANDS,
@@ -145,17 +141,4 @@ export function findCommandByBinding(
     if (b === binding) return cmd;
   }
   return null;
-}
-
-/**
- * For each command, the chord (parsed binding) it currently maps to —
- * or `null` if unset / invalid. Useful for the conflict warning in the
- * recorder ("X is already bound to Bold; reassign?") without exposing
- * the binding-string format outside the store.
- */
-export function getCurrentChord(
-  commandId: string
-): ReturnType<typeof parseBinding> {
-  const b = getBinding(commandId);
-  return b ? parseBinding(b) : null;
 }

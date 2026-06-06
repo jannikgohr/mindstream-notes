@@ -15,6 +15,8 @@
   import type { ComponentType } from 'svelte';
   import { Portal } from 'bits-ui';
   import { tUi } from '$lib/settings/i18n.svelte';
+  import { displayBinding, getBinding } from '$lib/hotkeys';
+  import { settings } from '$lib/settings/store.svelte';
 
   export interface MenuItem {
     kind: 'item';
@@ -22,6 +24,13 @@
     labelKey: string;
     icon: ComponentType;
     onSelect: () => void;
+    /**
+     * Optional hotkey command id (from `$lib/hotkeys`). When set, the
+     * row renders the user's current binding right-aligned next to the
+     * label, mirroring native menu conventions ("Bold ⌘B"). Omitted on
+     * items with no keyboard equivalent.
+     */
+    hotkeyId?: string;
   }
   export interface MenuSection {
     kind: 'section';
@@ -106,6 +115,19 @@
   function holdFocus(e: Event) {
     e.preventDefault();
   }
+
+  /**
+   * Resolve the per-row shortcut display string. Reads the settings
+   * values map so the menu re-renders if the user rebinds something
+   * with the menu open — admittedly a rare event (the only way to
+   * reach the settings dialog with the menu open is via Mod+,) but
+   * cheap to keep correct.
+   */
+  function shortcutFor(entry: MenuItem): string {
+    void settings.values;
+    if (!entry.hotkeyId) return '';
+    return displayBinding(getBinding(entry.hotkeyId));
+  }
 </script>
 
 <!--
@@ -132,6 +154,7 @@
         </div>
       {:else}
         {@const Icon = entry.icon}
+        {@const shortcut = shortcutFor(entry)}
         <button
           type="button"
           role="menuitem"
@@ -140,7 +163,14 @@
           onclick={() => invoke(entry)}
         >
           <Icon class="size-4 shrink-0" aria-hidden="true" />
-          <span>{tUi(entry.labelKey)}</span>
+          <span class="flex-1 truncate">{tUi(entry.labelKey)}</span>
+          {#if shortcut}
+            <span
+              class="ml-3 shrink-0 font-mono text-[11px] text-muted-foreground"
+            >
+              {shortcut}
+            </span>
+          {/if}
         </button>
       {/if}
     {/each}

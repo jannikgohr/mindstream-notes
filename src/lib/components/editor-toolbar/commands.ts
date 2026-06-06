@@ -107,6 +107,14 @@ export interface ToolbarLeaf {
    * is baked into Crepe at construct time).
    */
   gate?: string;
+  /**
+   * Optional hotkey command id (from `$lib/hotkeys`). When set, the
+   * toolbar surfaces the user's current binding in the button's
+   * tooltip / menu row so the shortcut is discoverable next to the
+   * action. Omitted on items that have no keyboard equivalent (image,
+   * table, math, mermaid) — those just show their label.
+   */
+  hotkeyId?: string;
 }
 
 export interface ToolbarGroup {
@@ -641,14 +649,16 @@ export const TOOLBAR_ITEMS: ToolbarItem[] = [
     id: 'undo',
     labelKey: 'editor.toolbar.undo',
     icon: Undo2,
-    action: undo
+    action: undo,
+    hotkeyId: 'editor.markdown.undo'
   },
   {
     kind: 'leaf',
     id: 'redo',
     labelKey: 'editor.toolbar.redo',
     icon: Redo2,
-    action: redo
+    action: redo,
+    hotkeyId: 'editor.markdown.redo'
   },
   {
     kind: 'leaf',
@@ -656,7 +666,8 @@ export const TOOLBAR_ITEMS: ToolbarItem[] = [
     labelKey: 'editor.toolbar.bold',
     icon: Bold,
     action: toggleBold,
-    isActive: isBoldActive
+    isActive: isBoldActive,
+    hotkeyId: 'editor.markdown.bold'
   },
   {
     kind: 'leaf',
@@ -664,7 +675,8 @@ export const TOOLBAR_ITEMS: ToolbarItem[] = [
     labelKey: 'editor.toolbar.italic',
     icon: Italic,
     action: toggleItalic,
-    isActive: isItalicActive
+    isActive: isItalicActive,
+    hotkeyId: 'editor.markdown.italic'
   },
   {
     kind: 'group',
@@ -677,49 +689,56 @@ export const TOOLBAR_ITEMS: ToolbarItem[] = [
         id: 'p',
         labelKey: 'editor.toolbar.text.normal',
         icon: Pilcrow,
-        action: turnIntoParagraph
+        action: turnIntoParagraph,
+        hotkeyId: 'editor.markdown.paragraph'
       },
       {
         kind: 'leaf',
         id: 'h1',
         labelKey: 'editor.toolbar.text.h1',
         icon: Heading1,
-        action: turnIntoHeading(1)
+        action: turnIntoHeading(1),
+        hotkeyId: 'editor.markdown.h1'
       },
       {
         kind: 'leaf',
         id: 'h2',
         labelKey: 'editor.toolbar.text.h2',
         icon: Heading2,
-        action: turnIntoHeading(2)
+        action: turnIntoHeading(2),
+        hotkeyId: 'editor.markdown.h2'
       },
       {
         kind: 'leaf',
         id: 'h3',
         labelKey: 'editor.toolbar.text.h3',
         icon: Heading3,
-        action: turnIntoHeading(3)
+        action: turnIntoHeading(3),
+        hotkeyId: 'editor.markdown.h3'
       },
       {
         kind: 'leaf',
         id: 'h4',
         labelKey: 'editor.toolbar.text.h4',
         icon: Heading4,
-        action: turnIntoHeading(4)
+        action: turnIntoHeading(4),
+        hotkeyId: 'editor.markdown.h4'
       },
       {
         kind: 'leaf',
         id: 'h5',
         labelKey: 'editor.toolbar.text.h5',
         icon: Heading5,
-        action: turnIntoHeading(5)
+        action: turnIntoHeading(5),
+        hotkeyId: 'editor.markdown.h5'
       },
       {
         kind: 'leaf',
         id: 'h6',
         labelKey: 'editor.toolbar.text.h6',
         icon: Heading6,
-        action: turnIntoHeading(6)
+        action: turnIntoHeading(6),
+        hotkeyId: 'editor.markdown.h6'
       }
     ]
   },
@@ -734,21 +753,24 @@ export const TOOLBAR_ITEMS: ToolbarItem[] = [
         id: 'bullet',
         labelKey: 'editor.toolbar.list.bullet',
         icon: List,
-        action: turnIntoBulletList
+        action: turnIntoBulletList,
+        hotkeyId: 'editor.markdown.bulletList'
       },
       {
         kind: 'leaf',
         id: 'ordered',
         labelKey: 'editor.toolbar.list.ordered',
         icon: ListOrdered,
-        action: turnIntoOrderedList
+        action: turnIntoOrderedList,
+        hotkeyId: 'editor.markdown.orderedList'
       },
       {
         kind: 'leaf',
         id: 'task',
         labelKey: 'editor.toolbar.list.task',
         icon: ListTodo,
-        action: turnIntoTaskList
+        action: turnIntoTaskList,
+        hotkeyId: 'editor.markdown.taskList'
       }
     ]
   },
@@ -770,7 +792,8 @@ export const TOOLBAR_ITEMS: ToolbarItem[] = [
         id: 'code',
         labelKey: 'editor.toolbar.advanced.code',
         icon: Code,
-        action: insertCodeBlock
+        action: insertCodeBlock,
+        hotkeyId: 'editor.markdown.codeBlock'
       },
       {
         kind: 'leaf',
