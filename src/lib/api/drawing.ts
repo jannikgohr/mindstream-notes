@@ -58,6 +58,22 @@ export function drawingHideLiveInkOverlay(): Promise<void> {
   );
 }
 
+export function drawingEnterImmersiveInkMode(): Promise<void> {
+  return invokeOrFallback<void>(
+    'drawing_enter_immersive_ink_mode',
+    undefined,
+    () => undefined
+  );
+}
+
+export function drawingExitImmersiveInkMode(): Promise<void> {
+  return invokeOrFallback<void>(
+    'drawing_exit_immersive_ink_mode',
+    undefined,
+    () => undefined
+  );
+}
+
 export function drawingCancelLiveInk(): Promise<void> {
   return invokeOrFallback<void>(
     'drawing_cancel_live_ink',

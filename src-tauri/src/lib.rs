@@ -278,6 +278,8 @@ pub fn run() {
             drawing::drawing_save_ink_state,
             drawing::drawing_show_live_ink_overlay,
             drawing::drawing_hide_live_ink_overlay,
+            drawing::drawing_enter_immersive_ink_mode,
+            drawing::drawing_exit_immersive_ink_mode,
             drawing::drawing_cancel_live_ink,
             drawing::drawing_set_live_ink_style,
             drawing::drawing_set_live_ink_finger_drawing,

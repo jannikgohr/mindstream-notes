@@ -317,6 +317,32 @@ pub fn drawing_hide_live_ink_overlay() -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn drawing_enter_immersive_ink_mode() -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        platform::android::ui::call_enter_immersive_ink_mode()
+            .map_err(|e| format!("drawing_enter_immersive_ink_mode: {e}"))
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        Ok(())
+    }
+}
+
+#[tauri::command]
+pub fn drawing_exit_immersive_ink_mode() -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        platform::android::ui::call_exit_immersive_ink_mode()
+            .map_err(|e| format!("drawing_exit_immersive_ink_mode: {e}"))
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        Ok(())
+    }
+}
+
+#[tauri::command]
 pub fn drawing_cancel_live_ink() -> Result<(), String> {
     #[cfg(target_os = "android")]
     {

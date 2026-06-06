@@ -202,6 +202,18 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
         }
     }
 
+    fun enterImmersiveInkMode() {
+        activity.runOnUiThread {
+            hideSystemNavigation(activity)
+        }
+    }
+
+    fun exitImmersiveInkMode() {
+        activity.runOnUiThread {
+            showSystemNavigation(activity)
+        }
+    }
+
     /**
      * UI-thread-only synchronous tear-down. Used from MainActivity
      * lifecycle hooks (onPause, onDestroy) — those callbacks run on
@@ -379,6 +391,16 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
         @JvmStatic
         fun hideLiveOverlayFromNative() {
             instance?.hideLiveOverlay()
+        }
+
+        @JvmStatic
+        fun enterImmersiveInkModeFromNative() {
+            instance?.enterImmersiveInkMode()
+        }
+
+        @JvmStatic
+        fun exitImmersiveInkModeFromNative() {
+            instance?.exitImmersiveInkMode()
         }
 
         @JvmStatic

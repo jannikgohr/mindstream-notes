@@ -144,6 +144,14 @@ pub mod ui {
         invoke_static_void("hideLiveOverlayFromNative")
     }
 
+    pub fn call_enter_immersive_ink_mode() -> Result<(), String> {
+        invoke_static_void("enterImmersiveInkModeFromNative")
+    }
+
+    pub fn call_exit_immersive_ink_mode() -> Result<(), String> {
+        invoke_static_void("exitImmersiveInkModeFromNative")
+    }
+
     pub fn call_cancel_live_ink() -> Result<(), String> {
         invoke_static_void("cancelLiveInkFromNative")
     }

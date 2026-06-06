@@ -14,6 +14,8 @@
   import { Button } from '$lib/components/ui/button';
   import {
     drawingCancelLiveInk,
+    drawingEnterImmersiveInkMode,
+    drawingExitImmersiveInkMode,
     drawingHideLiveInkOverlay,
     drawingSaveInkState,
     drawingSetLiveInkFingerDrawing,
@@ -22,11 +24,12 @@
     loadNote,
     noteRoomInfo,
     onSessionChange,
+    isTauri,
     TRASH_ID,
     type DrawingToolbarSettings,
     type DrawingToolbarSettingsPayload
   } from '$lib/api';
-  import { isAndroid } from '$lib/platform';
+  import { isAndroid, isMobile } from '$lib/platform';
   import {
     getSettingValue,
     hasSettingValue,
@@ -55,6 +58,7 @@
     type DocumentLayout,
     type InkPoint
   } from '$lib/ink/page';
+  import { acquireFullscreen, releaseFullscreen } from '$lib/window/fullscreen';
 
   interface Props {
     noteId: string;
@@ -70,6 +74,8 @@
   const PAGE_BORDER_LIGHT = 0xffe5e7eb;
   const PAGE_SHADOW_LIGHT = 'rgba(0, 0, 0, 0.14)';
   const PAGE_SHADOW_DARK = 'rgba(255, 255, 255, 0.2)';
+  const FIT_PAGE_MARGIN_PX = 32;
+  const MAX_ZOOM_FACTOR = 6;
   const POINTER_BUTTON_SECONDARY = 2;
   const POINTER_BUTTON_STYLUS_PRIMARY = 32;
   const POINTER_BUTTON_STYLUS_SECONDARY = 64;
@@ -96,6 +102,18 @@
     point: InkPoint;
     hits: Set<string>;
   };
+  type PointerMode = 'draw' | 'erase' | 'pan' | 'touchGesture';
+  type TouchPointer = {
+    clientX: number;
+    clientY: number;
+    x: number;
+    y: number;
+  };
+  type TouchGestureState = {
+    centerX: number;
+    centerY: number;
+    distance: number;
+  };
   type WebInkHandleInstance = {
     encode_state_vector: () => Uint8Array;
     encode_diff_for_state_vector: (stateVector: Uint8Array) => Uint8Array;
@@ -109,6 +127,8 @@
   let provider: InkWebCollabProvider | null = null;
   let resizeObserver: ResizeObserver | null = null;
   let disposed = false;
+  let fullscreenAcquired = false;
+  let immersiveInkModeActive = false;
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
   let pendingState: number[] | null = null;
   let pendingSaveUpdates: Uint8Array[] = [];
@@ -134,13 +154,16 @@
   let eraserHits = new Set<string>();
   let androidStylusEraserHits = new Set<string>();
   let androidStylusEraserActive = false;
-  let pointerMode: 'draw' | 'erase' | 'pan' | null = null;
+  let pointerMode: PointerMode | null = null;
   let activePointerId: number | null = null;
   let lastPointer: { x: number; y: number } | null = null;
+  const touchPointers = new Map<number, TouchPointer>();
+  let touchGesture: TouchGestureState | null = null;
   let drawingStrokeActive = false;
   let queuedEraserSamples: QueuedEraserSample[] = [];
   let eraserFrame: number | null = null;
   let drawFrame: number | null = null;
+  let viewInitialized = false;
   const cssColorCache = new Map<number, string>();
   let layout = defaultLayout();
   let view = {
@@ -221,8 +244,10 @@
     const maxWidthPx = Math.max(0.5, width * view.scale);
     const minWidthPx = Math.max(0.5, maxWidthPx * 0.25);
     const liveColorArgb = tool === 'pen' ? colorArgb : 0x00000000;
+    const liveFingerDrawingAllowed =
+      pointerMode === 'touchGesture' ? false : fingerDrawingAllowed;
     void drawingSetLiveInkStyle(liveColorArgb, minWidthPx, maxWidthPx);
-    void drawingSetLiveInkFingerDrawing(fingerDrawingAllowed);
+    void drawingSetLiveInkFingerDrawing(liveFingerDrawingAllowed);
   }
 
   function currentToolbarSettings(): DrawingToolbarSettings {
@@ -425,6 +450,8 @@
 
   function resizeCanvas() {
     if (!hostEl || !canvasEl) return;
+    const previousMinScale = minScale();
+    const wasAtMinScale = view.scale <= previousMinScale + 0.001;
     const rect = hostEl.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
     const widthPx = Math.max(1, Math.floor(rect.width * dpr));
@@ -435,23 +462,27 @@
     }
     view.width = rect.width;
     view.height = rect.height;
-    if (view.scale <= 1) {
-      fitWidth();
+    const nextMinScale = minScale();
+    if (!viewInitialized || wasAtMinScale) {
+      fitPage();
+      viewInitialized = true;
     } else {
+      view.scale = Math.max(view.scale, nextMinScale);
       clampView();
     }
     scheduleDraw();
     updateLiveInkOverlayStyle();
   }
 
-  function fitWidth() {
-    view.scale = Math.max(0.05, (view.width - 32) / layout.page.width);
+  function fitPage() {
+    view.scale = minScale();
     view.panX = (view.width - layout.page.width * view.scale) * 0.5;
-    view.panY = DEFAULT_PAGE_GAP * view.scale;
+    view.panY = (view.height - layout.page.height * view.scale) * 0.5;
     clampView();
   }
 
   function clampView() {
+    view.scale = Math.max(view.scale, minScale());
     const contentW = layout.page.width * view.scale;
     const contentH =
       (layout.page.height * layout.pageCount +
@@ -462,7 +493,7 @@
     } else {
       view.panX = Math.min(16, Math.max(view.width - contentW - 16, view.panX));
     }
-    const margin = layout.pageGap * view.scale;
+    const margin = Math.max(FIT_PAGE_MARGIN_PX, layout.pageGap * view.scale);
     const minY = view.height - contentH - margin;
     const maxY = margin;
     view.panY =
@@ -609,15 +640,34 @@
     return samples.length > 0 ? samples : [event];
   }
 
+  function canvasPoint(
+    clientX: number,
+    clientY: number
+  ): { x: number; y: number } {
+    const rect = canvasEl?.getBoundingClientRect();
+    return {
+      x: clientX - (rect?.left ?? 0),
+      y: clientY - (rect?.top ?? 0)
+    };
+  }
+
+  function touchPointer(event: PointerEvent): TouchPointer {
+    const point = canvasPoint(event.clientX, event.clientY);
+    return {
+      clientX: event.clientX,
+      clientY: event.clientY,
+      x: point.x,
+      y: point.y
+    };
+  }
+
   function clientPoint(
     clientX: number,
     clientY: number,
     pressure: number
   ): InkPoint {
-    const rect = canvasEl?.getBoundingClientRect();
-    const x = clientX - (rect?.left ?? 0);
-    const y = clientY - (rect?.top ?? 0);
-    const p = screenToPage(x, y);
+    const point = canvasPoint(clientX, clientY);
+    const p = screenToPage(point.x, point.y);
     p.pressure = sanitizePressure(pressure);
     return p;
   }
@@ -639,8 +689,142 @@
     );
   }
 
+  function currentTouchGesture(): TouchGestureState | null {
+    const pointers = [...touchPointers.values()];
+    if (pointers.length < 2) return null;
+    const a = pointers[0];
+    const b = pointers[1];
+    return {
+      centerX: (a.x + b.x) * 0.5,
+      centerY: (a.y + b.y) * 0.5,
+      distance: Math.hypot(a.x - b.x, a.y - b.y)
+    };
+  }
+
+  function beginTouchGesture() {
+    if (pointerMode === 'draw') {
+      cancelActiveStroke();
+      inFlight = [];
+    } else if (pointerMode === 'erase' && doc) {
+      flushQueuedEraserSamples();
+      doc.finishEraserDrag(eraserHits);
+      syncHistoryState();
+    }
+    pointerMode = 'touchGesture';
+    activePointerId = null;
+    lastPointer = null;
+    touchGesture = currentTouchGesture();
+    if (isAndroid()) {
+      void drawingCancelLiveInk();
+      void drawingSetLiveInkFingerDrawing(false);
+    }
+  }
+
+  function updateTouchGesture() {
+    const next = currentTouchGesture();
+    if (!next) return;
+    if (!touchGesture || touchGesture.distance <= 0 || next.distance <= 0) {
+      touchGesture = next;
+      return;
+    }
+    const before = screenToPage(touchGesture.centerX, touchGesture.centerY);
+    const factor = next.distance / touchGesture.distance;
+    const min = minScale();
+    view.scale = Math.min(
+      Math.max(view.scale * factor, min),
+      min * MAX_ZOOM_FACTOR
+    );
+    view.panX = next.centerX - before.x * view.scale;
+    view.panY = next.centerY - before.y * view.scale;
+    touchGesture = next;
+    clampView();
+    scheduleDraw();
+    updateLiveInkOverlayStyle();
+  }
+
+  function continueAfterTouchGesture() {
+    touchGesture = null;
+    if (touchPointers.size >= 2) {
+      touchGesture = currentTouchGesture();
+      return;
+    }
+    if (touchPointers.size === 1) {
+      const entry = touchPointers.entries().next().value;
+      if (!entry) {
+        resetPointer();
+        updateLiveInkOverlayStyle();
+        return;
+      }
+      const [id, pointer] = entry;
+      pointerMode = 'pan';
+      activePointerId = id;
+      lastPointer = { x: pointer.clientX, y: pointer.clientY };
+      updateLiveInkOverlayStyle();
+      return;
+    }
+    resetPointer();
+    updateLiveInkOverlayStyle();
+  }
+
+  function handleTouchPointerDown(event: PointerEvent) {
+    if (!doc || !canvasEl) return;
+    event.preventDefault();
+    canvasEl.setPointerCapture(event.pointerId);
+    touchPointers.set(event.pointerId, touchPointer(event));
+    if (touchPointers.size >= 2) {
+      beginTouchGesture();
+      return;
+    }
+    activePointerId = event.pointerId;
+    if (!fingerDrawingAllowed) {
+      pointerMode = 'pan';
+      lastPointer = { x: event.clientX, y: event.clientY };
+      return;
+    }
+    if (isTrashed) return;
+    if (tool === 'eraser') {
+      pointerMode = 'erase';
+      eraserHits.clear();
+      eraseFromEvent(event);
+      return;
+    }
+    pointerMode = 'draw';
+    inFlight = [];
+    drawingStrokeActive = false;
+    pushPointerSamples(event);
+  }
+
+  function handleTouchPointerMove(event: PointerEvent) {
+    if (!touchPointers.has(event.pointerId)) return;
+    event.preventDefault();
+    touchPointers.set(event.pointerId, touchPointer(event));
+    if (pointerMode === 'touchGesture' || touchPointers.size >= 2) {
+      if (pointerMode !== 'touchGesture') {
+        beginTouchGesture();
+      }
+      updateTouchGesture();
+      return;
+    }
+    handleActivePointerMove(event);
+  }
+
+  function handleTouchPointerEnd(event: PointerEvent, cancelled = false) {
+    const hadPointer = touchPointers.delete(event.pointerId);
+    if (!hadPointer) return;
+    event.preventDefault();
+    if (pointerMode === 'touchGesture') {
+      continueAfterTouchGesture();
+      return;
+    }
+    handleActivePointerEnd(event, cancelled);
+  }
+
   function handlePointerDown(event: PointerEvent) {
     if (!doc || !canvasEl) return;
+    if (event.pointerType === 'touch') {
+      handleTouchPointerDown(event);
+      return;
+    }
     event.preventDefault();
     canvasEl.setPointerCapture(event.pointerId);
     activePointerId = event.pointerId;
@@ -668,6 +852,14 @@
   }
 
   function handlePointerMove(event: PointerEvent) {
+    if (event.pointerType === 'touch') {
+      handleTouchPointerMove(event);
+      return;
+    }
+    handleActivePointerMove(event);
+  }
+
+  function handleActivePointerMove(event: PointerEvent) {
     if (activePointerId !== event.pointerId) return;
     if (pointerMode === 'pan') {
       event.preventDefault();
@@ -700,8 +892,30 @@
   }
 
   function handlePointerUp(event: PointerEvent) {
+    if (event.pointerType === 'touch') {
+      handleTouchPointerEnd(event);
+      return;
+    }
+    handleActivePointerEnd(event);
+  }
+
+  function handleActivePointerEnd(event: PointerEvent, cancelled = false) {
     if (activePointerId !== event.pointerId) return;
     event.preventDefault();
+    if (cancelled) {
+      if (pointerMode === 'erase' && doc) {
+        flushQueuedEraserSamples();
+        doc.finishEraserDrag(eraserHits);
+        syncHistoryState();
+      } else {
+        clearQueuedEraserSamples();
+      }
+      cancelActiveStroke();
+      inFlight = [];
+      resetPointer();
+      scheduleDraw();
+      return;
+    }
     if (pointerMode === 'draw' && doc) {
       if (!isStylusButtonErasing(event)) {
         pushPointerSamples(event);
@@ -716,18 +930,11 @@
   }
 
   function handlePointerCancel(event: PointerEvent) {
-    if (activePointerId !== event.pointerId) return;
-    if (pointerMode === 'erase' && doc) {
-      flushQueuedEraserSamples();
-      doc.finishEraserDrag(eraserHits);
-      syncHistoryState();
-    } else {
-      clearQueuedEraserSamples();
+    if (event.pointerType === 'touch') {
+      handleTouchPointerEnd(event, true);
+      return;
     }
-    cancelActiveStroke();
-    inFlight = [];
-    resetPointer();
-    scheduleDraw();
+    handleActivePointerEnd(event, true);
   }
 
   function pushPointerSamples(event: PointerEvent) {
@@ -862,6 +1069,7 @@
     pointerMode = null;
     activePointerId = null;
     lastPointer = null;
+    touchGesture = null;
     drawingStrokeActive = false;
   }
 
@@ -907,13 +1115,7 @@
     event.preventDefault();
     if (event.ctrlKey || event.metaKey) {
       const factor = Math.exp(-event.deltaY * 0.001);
-      const before = screenToPage(event.offsetX, event.offsetY);
-      view.scale = Math.min(
-        Math.max(view.scale * factor, minScale()),
-        minScale() * 6
-      );
-      view.panX = event.offsetX - before.x * view.scale;
-      view.panY = event.offsetY - before.y * view.scale;
+      zoomAround(event.offsetX, event.offsetY, factor);
     } else if (event.shiftKey) {
       view.panX -= event.deltaY + event.deltaX;
     } else {
@@ -925,10 +1127,26 @@
     updateLiveInkOverlayStyle();
   }
 
+  function zoomAround(screenX: number, screenY: number, factor: number) {
+    const before = screenToPage(screenX, screenY);
+    const min = minScale();
+    view.scale = Math.min(
+      Math.max(view.scale * factor, min),
+      min * MAX_ZOOM_FACTOR
+    );
+    view.panX = screenX - before.x * view.scale;
+    view.panY = screenY - before.y * view.scale;
+  }
+
   function minScale(): number {
-    return Math.min(
-      view.width / layout.page.width,
-      view.height / layout.page.height
+    const availableWidth = Math.max(1, view.width - FIT_PAGE_MARGIN_PX * 2);
+    const availableHeight = Math.max(1, view.height - FIT_PAGE_MARGIN_PX * 2);
+    return Math.max(
+      0.05,
+      Math.min(
+        availableWidth / layout.page.width,
+        availableHeight / layout.page.height
+      )
     );
   }
 
@@ -1051,6 +1269,15 @@
 
   onMount(async () => {
     const mountStartedAt = performance.now();
+    const mobile = isMobile();
+    if (isTauri() && mobile) {
+      void acquireFullscreen();
+      fullscreenAcquired = true;
+    }
+    if (isAndroid()) {
+      void drawingEnterImmersiveInkMode();
+      immersiveInkModeActive = true;
+    }
     window.addEventListener(
       'mindstream:android-stylus-eraser',
       handleAndroidStylusEraser
@@ -1130,6 +1357,14 @@
     }
     if (isAndroid()) {
       void drawingHideLiveInkOverlay();
+    }
+    if (immersiveInkModeActive) {
+      void drawingExitImmersiveInkMode();
+      immersiveInkModeActive = false;
+    }
+    if (fullscreenAcquired) {
+      void releaseFullscreen();
+      fullscreenAcquired = false;
     }
     disposed = true;
     collabReady = false;
