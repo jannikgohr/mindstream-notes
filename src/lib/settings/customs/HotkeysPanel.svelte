@@ -37,6 +37,7 @@
     isCustomized,
     resetBinding,
     setBinding,
+    wellKnownConflict,
     type CommandDefinition
   } from '$lib/hotkeys';
   import { confirm } from '$lib/components/confirm-dialog.svelte';
@@ -54,6 +55,10 @@
    *  belongs to, surfaced as the conflict warning. Null when there's
    *  no conflict. */
   let conflictWithId = $state<string | null>(null);
+  /** Reason string from `wellKnownConflict()` if the pending binding
+   *  hits a chord the OS captures (Cmd+Q, Alt+Tab, …). Advisory only —
+   *  the user can still save it. */
+  let osConflictReason = $state<string | null>(null);
 
   /** Static catalogue grouped by scope/editor-kind. The catalogue
    *  itself doesn't change at runtime, and per-binding reactivity
@@ -103,6 +108,7 @@
     recordingId = null;
     pendingBinding = null;
     conflictWithId = null;
+    osConflictReason = null;
   }
 
   /**
@@ -139,6 +145,7 @@
 
     const owner = findCommandByBinding(binding);
     conflictWithId = owner && owner.id !== recordingId ? owner.id : null;
+    osConflictReason = wellKnownConflict(binding);
   }
 
   async function commitRecording() {
@@ -299,6 +306,21 @@
                     {tUi('hotkeys.conflict.label')}: {conflictLabel(
                       conflictWithId
                     )}
+                  </span>
+                {/if}
+                {#if pendingBinding && osConflictReason}
+                  <!--
+                    OS-collision warning. Uses an amber muted-foreground
+                    rather than destructive red because the user may
+                    still want to save the binding — many "OS reserved"
+                    chords are actually overridable in a Tauri webview;
+                    we just can't tell for sure.
+                  -->
+                  <span
+                    class="max-w-[16rem] text-xs text-amber-600 dark:text-amber-500"
+                    title={tUi('hotkeys.osConflict.tooltip')}
+                  >
+                    {tUi('hotkeys.osConflict.label')}: {osConflictReason}
                   </span>
                 {/if}
                 {#if pendingBinding}

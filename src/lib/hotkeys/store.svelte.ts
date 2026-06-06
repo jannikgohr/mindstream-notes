@@ -42,6 +42,7 @@
 
 import { setSettingValue, settings } from '$lib/settings/store.svelte';
 import { canonicalize } from './parse';
+import { wellKnownConflict } from './collisions';
 import {
   COMMAND_BY_ID,
   HOTKEY_COMMANDS,
@@ -114,6 +115,26 @@ export function hydrateBindingsFromSettings(): void {
       hotkeys.bindings[cmd.id] = canonicalize(raw);
     } else {
       delete hotkeys.bindings[cmd.id];
+    }
+  }
+
+  // After hydration, warn about any effective binding (override or
+  // default) that hits a chord the OS captures. Surfaces in the
+  // devtools console at app start so power users can spot a binding
+  // that "didn't fire" without having to dig through settings.
+  // Iterates the catalogue rather than `hotkeys.bindings` so defaults
+  // are covered too — the rare case where a catalogue author picks
+  // an unfortunate default chord.
+  for (const cmd of HOTKEY_COMMANDS) {
+    const binding =
+      cmd.id in hotkeys.bindings
+        ? hotkeys.bindings[cmd.id]
+        : cmd.defaultBinding;
+    const reason = wellKnownConflict(binding);
+    if (reason) {
+      console.warn(
+        `[hotkeys] ${cmd.id} bound to ${binding} — ${reason}; the shortcut may not fire.`
+      );
     }
   }
 }

@@ -21,16 +21,20 @@ note about what shipped, and move on.
       a markdown editor is active. Small whitelist on purpose — false
       positives swallow user keystrokes.
 
-- [ ] **#2. Browser / OS shortcut collisions silently lose.**
-      We `preventDefault` in capture, which handles most cases. But
-      `Mod+W` / `Mod+T` / `Mod+N` / `Mod+Q` are usually hard-coded in
-      the browser / OS and uninterceptable. The user can save a
-      binding that quietly never fires.
-      **Plan:** maintain a list of "well-known un-overridable chords"
-      and surface a warning in the recorder (and on hydrate-load with
-      a console warn) when the user's binding hits one. Don't reject —
-      Tauri's webview _does_ let us override most of them, so the
-      detection is advisory.
+- [x] **#2. Browser / OS shortcut collisions silently lost.**
+      Users could save a binding that quietly never fired because the
+      OS captured it first.
+      **Shipped:** new `$lib/hotkeys/collisions.ts` exposes
+      `wellKnownConflict(binding)` against a conservative
+      platform-gated seed list (Cmd+Q / Spotlight / Tab switcher on
+      Mac, Alt+Tab / Alt+F4 on Win/Linux, screenshots, etc.). The
+      recorder shows an amber inline warning when the pending chord
+      hits a known reservation; the user can still save it
+      (advisory only — many "reserved" chords actually work inside
+      a Tauri webview). `hydrateBindingsFromSettings` also logs a
+      one-line console warn at app start for any effective binding
+      hitting a known reservation. New `collisions.test.ts` (10
+      cases) locks the platform gates and seed-list parseability.
 
 - [ ] **#3. macOS Alt+letter produces special characters.**
       `Alt+1` on Mac = `¡`; our `normalizeKey` keeps the typed
