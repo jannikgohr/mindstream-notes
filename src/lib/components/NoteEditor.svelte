@@ -113,18 +113,21 @@
   let loadError = $state<string | null>(null);
 
   /**
-   * Command-bus listener for this note. Built once Crepe is live so
-   * `onCommand` always has a valid `crepe` to close over — registering
-   * earlier with a null crepe would risk a command firing during the
-   * brief window between mount and `crepe.create()`. Unregistered in
-   * onDestroy (and re-promoted on focusin so two open notes route a
-   * command to the one the user just clicked into).
+   * Command-bus listener for this note.
+   *
+   * `$state` so the `focusin` $effect below picks up the transition
+   * from `null` → the registered listener (a plain `let` wouldn't
+   * trigger Svelte's reactivity — the effect would run once with
+   * `null`, early-return, and never re-attach). That matters when
+   * two notes are open in dockview: without it, clicking the
+   * non-top note wouldn't re-promote it on the bus stack and
+   * editor hotkeys would route to the wrong document.
    *
    * The listener is the editor's ONLY contact with the hotkey module:
    * it receives command ids and runs the matching action. It knows
    * nothing about keyboard shortcuts, binding strings, or settings.
    */
-  let editorListener: EditorListener | null = null;
+  let editorListener: EditorListener | null = $state(null);
 
   // Captured inside the editor's `action` callback so handleChange can
   // read the live markdown without going through the listener plugin —
@@ -254,6 +257,51 @@
       });
       await crepe.create();
 
+      // Register with the command bus as soon as Crepe is interactive.
+      //
+      // Do this BEFORE the subsequent awaits (`setupCollabProvider`'s
+      // Tauri `noteRoomInfo` IPC in particular can take hundreds of ms
+      // during cold app startup, when dockview is restoring a session's
+      // worth of panels). The editor is fully typable the moment
+      // `crepe.create()` resolves; if we wait until the end of onMount
+      // to register, anything the user types in that window — including
+      // hotkey-shaped events like AltGr+0 (`Ctrl+Alt+0` on German
+      // Windows) — bypasses the manager and goes straight into the
+      // contenteditable as a `}`. Reopening the note happened to win the
+      // race because by then the IPC layer is warm.
+      //
+      // `onCommand` closes over the *current* `crepe`; reassignment in
+      // onDestroy can't strand a stale reference. The bus's
+      // `host.contains(target)` check uses this host element to exempt
+      // the contenteditable from the blocked-input rule.
+      if (host && crepe) {
+        const activeCrepe = crepe;
+        editorListener = {
+          kind: 'markdown',
+          host,
+          onCommand: (id: string) => {
+            const action = MARKDOWN_ACTIONS[id];
+            // The bus already gated on `editorKind === 'markdown'`,
+            // so an id missing from the table means catalogue drift
+            // (a hotkey command registered without a matching
+            // markdown action). Return `false` so the bus knows
+            // nothing was handled and the keystroke falls through.
+            if (!action) {
+              console.warn('[NoteEditor] unknown markdown command', id);
+              return false;
+            }
+            try {
+              activeCrepe.editor.action(action);
+              return true;
+            } catch (err) {
+              console.error('[NoteEditor] command threw', id, err);
+              return false;
+            }
+          }
+        };
+        registerEditor(editorListener);
+      }
+
       // Bind y-doc + awareness AFTER create, then snapshot the serializer
       // + view so we can render markdown on demand from any save trigger.
       crepe.editor.action((ctx) => {
@@ -333,39 +381,6 @@
 
       crepeReady = true;
       loading = false;
-
-      // Register with the command bus. `onCommand` closes over the
-      // current `crepe` so reassignment in onDestroy can't strand a
-      // stale reference. The bus's `host.contains(target)` check uses
-      // this host element to exempt the contenteditable from the
-      // blocked-input rule.
-      if (host && crepe) {
-        const activeCrepe = crepe;
-        editorListener = {
-          kind: 'markdown',
-          host,
-          onCommand: (id: string) => {
-            const action = MARKDOWN_ACTIONS[id];
-            // The bus already gated on `editorKind === 'markdown'`,
-            // so an id missing from the table means catalogue drift
-            // (a hotkey command registered without a matching
-            // markdown action). Return `false` so the bus knows
-            // nothing was handled and the keystroke falls through.
-            if (!action) {
-              console.warn('[NoteEditor] unknown markdown command', id);
-              return false;
-            }
-            try {
-              activeCrepe.editor.action(action);
-              return true;
-            } catch (err) {
-              console.error('[NoteEditor] command threw', id, err);
-              return false;
-            }
-          }
-        };
-        registerEditor(editorListener);
-      }
     } catch (err) {
       loadError = err instanceof Error ? err.message : String(err);
       loading = false;

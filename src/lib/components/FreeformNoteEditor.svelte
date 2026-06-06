@@ -111,8 +111,11 @@
    * keystroke fall through to tldraw rather than secretly editing a
    * markdown note the user can't see. Negative-space programming:
    * refuse the bug, don't paper it over.
+   *
+   * `$state` so the focusin $effect picks up the null → object
+   * transition — same rationale as NoteEditor's listener.
    */
-  let editorListener: EditorListener | null = null;
+  let editorListener: EditorListener | null = $state(null);
 
   let yDocUpdateHandler: (() => void) | null = null;
   /** Gate yDoc updates from triggering saves until hydration is done. */
