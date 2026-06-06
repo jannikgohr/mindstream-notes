@@ -48,14 +48,6 @@ note about what shipped, and move on.
       digit-row bindings already work via the `event.code` fallback,
       letter bindings continue to record the special character.
 
-- [ ] **#4. Sequence chords (`Mod+K Mod+S`).**
-      Single-chord only. VS Code, Obsidian, Emacs all support chord
-      sequences for deeper menus.
-      **Plan:** small state machine in the manager — first match
-      opens a "leader pending" state with a short timeout; second
-      keydown completes or cancels. Settings recorder needs to
-      capture two chords with a visible interstitial.
-
 ---
 
 ## Testing coverage
@@ -127,17 +119,16 @@ note about what shipped, and move on.
       from anywhere — the bus already routes the global command's
       `run()` to it.
 
-- [ ] **#14. Shortcut discovery needs search.**
+- [x] **#14. Shortcut discovery needs search.**
       The Shift+? shortcut-help menu is useful once it is open, but
       it still asks users to scan every section. Settings search also
       treats the hotkeys custom panel as a single opaque row, so a
       search for "bold" or "heading" cannot jump directly to the
       relevant hotkey function.
-      **Plan:** add a search field to `ShortcutHelpDialog` that filters
-      commands by label, group, id, raw binding, and formatted binding.
-      Thread the settings dialog's search query into `HotkeysPanel` so
-      hotkey functions are searchable from Settings and the panel shows
-      only matching commands while the query is active.
+      **Shipped:** 817da7c added a search field to
+      `ShortcutHelpDialog` and threaded the Settings query into
+      `HotkeysPanel`, filtering commands by label, group, id, raw
+      binding, and formatted binding.
 
 ---
 
@@ -167,13 +158,14 @@ note about what shipped, and move on.
       the bus surfaces immediately. Two `catalogue.test.ts` cases
       cover `commandById` happy + miss paths.
 
-- [ ] **#12. Tauri tray / native menus can't show their bindings.**
+- [x] **#12. Tauri tray / native menus can't show their bindings.**
       Bindings live in JS `$state`; the Rust side that builds the
       tray menu doesn't see them.
-      **Plan:** small Tauri command `get_hotkey_display(commandId)`
-      returns the formatted display string. Push updates from the
-      layout `$effect` so the tray menu's accelerators stay current.
-      Defer until a tray action actually overlaps with a hotkey.
+      **Shipped:** native hotkey display state now syncs from the
+      root layout via `set_hotkey_displays`, with
+      `get_hotkey_display(commandId)` available to Rust callers and a
+      tray accelerator sync hook ready for the first tray item that
+      overlaps a hotkey command.
 
 - [x] **#13. No persistence migration story.**
       Renaming a command id silently lost every user's custom binding

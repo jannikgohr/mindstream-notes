@@ -36,7 +36,7 @@ export {
   findCommandByBinding
 } from './store.svelte';
 
-export { displayBinding, ariaKeyShortcut } from './format';
+export { displayBinding, ariaKeyShortcut, tauriAccelerator } from './format';
 export { parseBinding, canonicalize, bindingsConflict } from './parse';
 export { wellKnownConflict } from './collisions';
 export {

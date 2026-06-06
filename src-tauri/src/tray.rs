@@ -18,6 +18,11 @@ const NEW_DRAWING_ID: &str = "new_drawing";
 const NEW_DIAGRAM_ID: &str = "new_diagram";
 const QUIT_ID: &str = "quit";
 
+// Tray item id -> hotkey command id. Kept empty until a tray action
+// actually overlaps the JS hotkey catalogue; the sync path below is
+// the guard rail that makes adding the first overlap a data-only edit.
+const TRAY_HOTKEY_COMMANDS: &[(&str, &str)] = &[];
+
 #[derive(Clone, Debug, Serialize)]
 struct TrayNoteCreatedPayload {
     note_id: String,
@@ -100,6 +105,23 @@ pub fn set_language(app: &AppHandle, code: &str) {
     }
 }
 
+pub fn sync_hotkey_displays(app: &AppHandle) {
+    let Some(items) = app.try_state::<TrayMenuItems>() else {
+        return;
+    };
+
+    for (item_id, command_id) in TRAY_HOTKEY_COMMANDS {
+        let Some(item) = items.by_id(item_id) else {
+            log::warn!("[tray] no tray menu item for hotkey mapping {item_id}");
+            continue;
+        };
+        let accelerator = crate::hotkeys::hotkey_accelerator(app, command_id);
+        if let Err(err) = item.set_accelerator(accelerator.as_deref()) {
+            log::warn!("[tray] failed to update accelerator for {item_id}: {err}");
+        }
+    }
+}
+
 fn handle_menu_event(app: &AppHandle, item_id: &str) {
     if item_id == QUIT_ID {
         drawing::shutdown_desktop(app);
@@ -168,6 +190,18 @@ struct TrayLabels {
     new_drawing: String,
     new_diagram: String,
     quit: String,
+}
+
+impl TrayMenuItems {
+    fn by_id(&self, item_id: &str) -> Option<&MenuItem<tauri::Wry>> {
+        match item_id {
+            NEW_NOTE_ID => Some(&self.new_note),
+            NEW_DRAWING_ID => Some(&self.new_drawing),
+            NEW_DIAGRAM_ID => Some(&self.new_diagram),
+            QUIT_ID => Some(&self.quit),
+            _ => None,
+        }
+    }
 }
 
 impl TrayLabels {

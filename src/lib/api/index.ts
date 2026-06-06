@@ -33,6 +33,7 @@ export * from './auth';
 export * from './sync';
 export * from './system';
 export * from './desktop-settings';
+export * from './hotkeys';
 
 /** Reserved id for the always-present trash collection (mirrors Rust). */
 export const TRASH_ID = 'trash';

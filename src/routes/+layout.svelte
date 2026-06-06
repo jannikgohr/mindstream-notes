@@ -4,11 +4,21 @@
   import { ModeWatcher, mode } from 'mode-watcher';
   import { getSettingValue, isModified } from '$lib/settings/store.svelte';
   import { applyAccentColor, clearAccentColor } from '$lib/settings/accent';
-  import { invokeOrFallback, drawingSetTheme } from '$lib/api';
+  import {
+    invokeOrFallback,
+    drawingSetTheme,
+    setNativeHotkeyDisplays
+  } from '$lib/api';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import UpdaterProgressDialog from '$lib/updater/ProgressDialog.svelte';
   import ShortcutHelpDialog from '$lib/components/ShortcutHelpDialog.svelte';
-  import { initHotkeys } from '$lib/hotkeys';
+  import {
+    displayBinding,
+    getBinding,
+    HOTKEY_COMMANDS,
+    initHotkeys,
+    tauriAccelerator
+  } from '$lib/hotkeys';
 
   let { children } = $props();
 
@@ -91,6 +101,18 @@
     const accent = getSettingValue('appearance.accent') as string | undefined;
     const accentHex = isModified('appearance.accent') && accent ? accent : null;
     void drawingSetTheme(dark, accentHex);
+  });
+
+  $effect(() => {
+    const displays = HOTKEY_COMMANDS.map((cmd) => {
+      const binding = getBinding(cmd.id);
+      return {
+        commandId: cmd.id,
+        display: displayBinding(binding) || null,
+        accelerator: tauriAccelerator(binding)
+      };
+    });
+    void setNativeHotkeyDisplays(displays);
   });
 
   $effect(() => {

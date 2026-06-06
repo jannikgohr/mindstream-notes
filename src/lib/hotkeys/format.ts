@@ -118,6 +118,48 @@ export function ariaKeyShortcut(binding: string | null): string {
   return parts.join('+');
 }
 
+const TAURI_KEY_NAMES: Record<string, string> = {
+  space: 'Space',
+  enter: 'Enter',
+  tab: 'Tab',
+  escape: 'Escape',
+  backspace: 'Backspace',
+  delete: 'Delete',
+  arrowup: 'ArrowUp',
+  arrowdown: 'ArrowDown',
+  arrowleft: 'ArrowLeft',
+  arrowright: 'ArrowRight',
+  pageup: 'PageUp',
+  pagedown: 'PageDown',
+  home: 'Home',
+  end: 'End',
+  plus: '+',
+  minus: '-'
+};
+
+function tauriKeyName(key: string): string {
+  if (TAURI_KEY_NAMES[key]) return TAURI_KEY_NAMES[key];
+  return key.length === 1 ? key.toUpperCase() : key.toUpperCase();
+}
+
+/**
+ * Format a binding for Tauri/muda menu accelerators. This is separate
+ * from `displayBinding`: native menus need a parseable accelerator
+ * string (`CmdOrCtrl+B`), not a human display string (`⌘B` / `Ctrl+B`).
+ */
+export function tauriAccelerator(binding: string | null): string | null {
+  if (!binding) return null;
+  const chord = parseBinding(binding);
+  if (!chord) return null;
+  const parts: string[] = [];
+  if (chord.mod) parts.push('CmdOrCtrl');
+  if (chord.ctrl) parts.push('Ctrl');
+  if (chord.alt) parts.push('Alt');
+  if (chord.shift) parts.push('Shift');
+  parts.push(tauriKeyName(chord.key));
+  return parts.join('+');
+}
+
 /**
  * Render a binding for display. `null` or invalid input returns the
  * empty string — surfaces should show their own "unset" placeholder in
