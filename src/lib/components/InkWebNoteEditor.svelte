@@ -40,6 +40,7 @@
   } from '$lib/ink/document';
   import {
     DEFAULT_PAGE_GAP,
+    containsPagePoint,
     defaultLayout,
     pageCountForContentMaxY,
     pageRect,
@@ -100,10 +101,13 @@
   let pageThemeMode = $state<PageThemeMode>('light');
   let strokes = $state<InkStroke[]>([]);
   let inFlight = $state<InkPoint[]>([]);
+  let undoDepth = $state(0);
+  let redoDepth = $state(0);
   let eraserHits = new Set<string>();
   let pointerMode: 'draw' | 'erase' | 'pan' | null = null;
   let activePointerId: number | null = null;
   let lastPointer: { x: number; y: number } | null = null;
+  let drawingStrokeActive = false;
   let layout = defaultLayout();
   let view = {
     width: 1,
@@ -253,11 +257,17 @@
   function refreshFromDoc() {
     if (!doc) return;
     strokes = doc.visibleStrokes();
+    syncHistoryState();
     const maxY = strokes
       .flatMap((stroke) => stroke.points.map((p) => p.y))
       .reduce((max, y) => Math.max(max, y), 0);
     layout = defaultLayout(pageCountForContentMaxY(maxY));
     clampView();
+  }
+
+  function syncHistoryState() {
+    undoDepth = doc?.undo.length ?? 0;
+    redoDepth = doc?.redo.length ?? 0;
   }
 
   async function setupCollabProvider(): Promise<void> {
@@ -471,7 +481,7 @@
     }
     pointerMode = 'draw';
     inFlight = [];
-    doc.beginStroke(colorArgb, width);
+    drawingStrokeActive = false;
     pushPointerSamples(event);
   }
 
@@ -505,11 +515,10 @@
     event.preventDefault();
     if (pointerMode === 'draw' && doc) {
       pushPointerSamples(event);
-      const { update } = doc.endStroke();
-      inFlight = [];
-      applyDocumentMutation(update);
+      finishActiveStroke();
     } else if (pointerMode === 'erase' && doc) {
       doc.finishEraserDrag(eraserHits);
+      syncHistoryState();
       scheduleSave();
     }
     resetPointer();
@@ -517,7 +526,7 @@
 
   function handlePointerCancel(event: PointerEvent) {
     if (activePointerId !== event.pointerId) return;
-    doc?.cancelStroke();
+    cancelActiveStroke();
     inFlight = [];
     resetPointer();
     draw();
@@ -528,6 +537,18 @@
     const next = [...inFlight];
     for (const sample of pointerSamples(event)) {
       const point = eventPoint(sample);
+      if (!containsPagePoint(layout, point.x, point.y)) {
+        if (drawingStrokeActive) {
+          inFlight = next;
+          finishActiveStroke();
+          next.length = 0;
+        }
+        continue;
+      }
+      if (!drawingStrokeActive) {
+        doc.beginStroke(colorArgb, width);
+        drawingStrokeActive = true;
+      }
       const last = next[next.length - 1];
       if (last && Math.hypot(point.x - last.x, point.y - last.y) < 1.5) {
         continue;
@@ -542,6 +563,7 @@
     if (!doc) return;
     for (const sample of pointerSamples(event)) {
       const point = eventPoint(sample);
+      if (!containsPagePoint(layout, point.x, point.y)) continue;
       const { value: erased, update } = doc.eraseAt(point, ERASER_RADIUS);
       for (const id of erased) {
         eraserHits.add(id);
@@ -556,6 +578,28 @@
     pointerMode = null;
     activePointerId = null;
     lastPointer = null;
+    drawingStrokeActive = false;
+  }
+
+  function finishActiveStroke() {
+    if (!doc || !drawingStrokeActive) {
+      inFlight = [];
+      return;
+    }
+    const { value, update } = doc.endStroke();
+    drawingStrokeActive = false;
+    inFlight = [];
+    if (value) {
+      applyDocumentMutation(update);
+    } else {
+      syncHistoryState();
+      draw();
+    }
+  }
+
+  function cancelActiveStroke() {
+    doc?.cancelStroke();
+    drawingStrokeActive = false;
   }
 
   function handleWheel(event: WheelEvent) {
@@ -797,7 +841,7 @@
       variant="ghost"
       aria-label="Undo"
       title="Undo"
-      disabled={isTrashed || !doc || doc.undo.length === 0}
+      disabled={isTrashed || !doc || undoDepth === 0}
       onclick={undo}
     >
       <Undo2 class="size-4" />
@@ -807,7 +851,7 @@
       variant="ghost"
       aria-label="Redo"
       title="Redo"
-      disabled={isTrashed || !doc || doc.redo.length === 0}
+      disabled={isTrashed || !doc || redoDepth === 0}
       onclick={redo}
     >
       <Redo2 class="size-4" />
