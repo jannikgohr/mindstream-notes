@@ -25,16 +25,16 @@ const LOCAL_ORIGIN = 'excalidraw-local';
 const MIGRATION_ORIGIN = 'excalidraw-migration';
 const WRITE_THROTTLE_MS = 180;
 
+// Scene-level Excalidraw settings that all collaborators should see.
+// Viewport state (scrollX, scrollY, zoom) is intentionally NOT here:
+// it's per-device, and broadcasting it makes every pan/zoom on one
+// device snap the other devices' canvases — instantly unusable. The
+// official Excalidraw collab and the y-excalidraw binding both make
+// the same call (viewport stays local, syncs only when one user
+// explicitly follows another).
 type PersistedAppState = Pick<
   AppState,
-  | 'viewBackgroundColor'
-  | 'gridModeEnabled'
-  | 'gridSize'
-  | 'gridStep'
-  | 'name'
-  | 'scrollX'
-  | 'scrollY'
-  | 'zoom'
+  'viewBackgroundColor' | 'gridModeEnabled' | 'gridSize' | 'gridStep' | 'name'
 >;
 
 export interface ExcalidrawSceneSnapshot {
@@ -74,10 +74,7 @@ function sanitizeAppState(appState: AppState): Partial<PersistedAppState> {
     gridModeEnabled: appState.gridModeEnabled,
     gridSize: appState.gridSize,
     gridStep: appState.gridStep,
-    name: appState.name,
-    scrollX: appState.scrollX,
-    scrollY: appState.scrollY,
-    zoom: appState.zoom
+    name: appState.name
   };
 }
 
