@@ -34,10 +34,12 @@
  *     through `parseBinding`. Anything that gets stored is guaranteed
  *     to be a chord the matcher can recognise.
  *
- *   - Single-binding invariant: at most one command owns a given chord.
- *     Setting a binding that's already in use is rejected with a
- *     `HotkeyBindingConflictError` so callers can show the rejected
- *     shortcut next to the row the user is editing.
+ *   - Collision invariant: at most one command owns a given chord
+ *     inside the same runnable context. Global/app commands can fire
+ *     anywhere, so they conflict with everything. Editor commands only
+ *     conflict with global commands and commands for the same editor
+ *     kind; markdown and ink can share a chord because only one editor
+ *     kind is active at a time.
  */
 
 import { setSettingValue, settings } from '$lib/settings/store.svelte';
@@ -177,14 +179,23 @@ export function getBinding(commandId: string): string | null {
   return def.defaultBinding;
 }
 
+export function commandsCanCollide(
+  command: CommandDefinition,
+  other: CommandDefinition
+): boolean {
+  if (command.id === other.id) return false;
+  if (command.scope === 'global' || other.scope === 'global') return true;
+  return command.editorKind === other.editorKind;
+}
+
 /**
  * Update a binding. Mirrors the write through both the reactive
  * surface (`hotkeys.bindings`) and the settings store (persistence).
  *
  * Conflict handling: when `binding` is non-null and another command
- * already owns it, reject the write. This keeps collisions visible at
- * the edge where the user attempted them instead of silently clearing
- * the old owner.
+ * in the same collision domain already owns it, reject the write. This
+ * keeps collisions visible at the edge where the user attempted them
+ * instead of silently clearing the old owner.
  */
 export class HotkeyBindingConflictError extends Error {
   constructor(
@@ -212,11 +223,9 @@ export async function setBinding(
   }
 
   if (normalized !== null) {
-    for (const other of HOTKEY_COMMANDS) {
-      if (other.id === commandId) continue;
-      if (getBinding(other.id) === normalized) {
-        throw new HotkeyBindingConflictError(commandId, other.id, normalized);
-      }
+    const owner = findCommandByBinding(normalized, commandId);
+    if (owner) {
+      throw new HotkeyBindingConflictError(commandId, owner.id, normalized);
     }
   }
 
@@ -253,9 +262,13 @@ export function isCustomized(commandId: string): boolean {
  * own invalidation.
  */
 export function findCommandByBinding(
-  binding: string
+  binding: string,
+  commandId?: string
 ): CommandDefinition | null {
+  const command = commandId ? COMMAND_BY_ID[commandId] : null;
   for (const cmd of HOTKEY_COMMANDS) {
+    if (cmd.id === commandId) continue;
+    if (command && !commandsCanCollide(command, cmd)) continue;
     if (getBinding(cmd.id) === binding) {
       return cmd;
     }

@@ -10,6 +10,7 @@
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  commandsCanCollide,
   findCommandByBinding,
   getBinding,
   hotkeys,
@@ -24,6 +25,10 @@ import { COMMAND_BY_ID } from './commands';
 
 const BOLD = 'editor.markdown.bold';
 const ITALIC = 'editor.markdown.italic';
+const INK_PEN = 'editor.ink.pen';
+const INK_ERASER = 'editor.ink.eraser';
+const OPEN_SETTINGS = 'global.openSettings';
+const NEW_MARKDOWN_NOTE = 'global.newMarkdownNote';
 
 afterEach(() => {
   // In-memory map: wipe all overrides so the next test starts on
@@ -100,6 +105,58 @@ describe('store.setBinding', () => {
     expect(getBinding(ITALIC)).toBe(COMMAND_BY_ID[ITALIC].defaultBinding);
   });
 
+  it('allows the same chord across different editor note types', async () => {
+    await setBinding(BOLD, 'mod+x');
+    await setBinding(INK_PEN, 'mod+x');
+    expect(getBinding(BOLD)).toBe('mod+x');
+    expect(getBinding(INK_PEN)).toBe('mod+x');
+  });
+
+  it('rejects collisions within the same editor note type', async () => {
+    await setBinding(INK_PEN, 'mod+x');
+    await expect(setBinding(INK_ERASER, 'mod+x')).rejects.toMatchObject({
+      commandId: INK_ERASER,
+      conflictingCommandId: INK_PEN,
+      binding: 'mod+x'
+    });
+    expect(getBinding(INK_PEN)).toBe('mod+x');
+    expect(getBinding(INK_ERASER)).toBeNull();
+  });
+
+  it('rejects an editor binding that collides with an application-level default', async () => {
+    const settingsDefault = COMMAND_BY_ID[OPEN_SETTINGS].defaultBinding;
+    expect(settingsDefault).not.toBeNull();
+    if (!settingsDefault) return;
+    await expect(setBinding(INK_PEN, settingsDefault)).rejects.toMatchObject({
+      commandId: INK_PEN,
+      conflictingCommandId: OPEN_SETTINGS,
+      binding: settingsDefault
+    });
+    expect(getBinding(INK_PEN)).toBeNull();
+  });
+
+  it('rejects an application-level binding that collides with an editor command', async () => {
+    await setBinding(INK_PEN, 'mod+x');
+    await expect(setBinding(OPEN_SETTINGS, 'mod+x')).rejects.toMatchObject({
+      commandId: OPEN_SETTINGS,
+      conflictingCommandId: INK_PEN,
+      binding: 'mod+x'
+    });
+    expect(getBinding(OPEN_SETTINGS)).toBe(
+      COMMAND_BY_ID[OPEN_SETTINGS].defaultBinding
+    );
+    expect(getBinding(INK_PEN)).toBe('mod+x');
+  });
+
+  it('rejects an application-level binding that collides with another application command', async () => {
+    await setBinding(NEW_MARKDOWN_NOTE, 'mod+x');
+    await expect(setBinding(OPEN_SETTINGS, 'mod+x')).rejects.toMatchObject({
+      commandId: OPEN_SETTINGS,
+      conflictingCommandId: NEW_MARKDOWN_NOTE,
+      binding: 'mod+x'
+    });
+  });
+
   it('rejects a default-owner collision without changing either command', async () => {
     // A visible collision is still a collision: if italic takes
     // bold's default, the caller needs to know bold owns it even
@@ -166,6 +223,48 @@ describe('store.findCommandByBinding', () => {
 
   it('returns null when no command owns the chord', () => {
     expect(findCommandByBinding('mod+q')).toBeNull();
+  });
+
+  it('ignores owners from other editor note types for an editor target', () => {
+    hotkeys.bindings[BOLD] = 'mod+j';
+    expect(findCommandByBinding('mod+j', INK_PEN)).toBeNull();
+  });
+
+  it('includes global owners for an editor target', () => {
+    const settingsDefault = COMMAND_BY_ID[OPEN_SETTINGS].defaultBinding;
+    expect(settingsDefault).not.toBeNull();
+    if (!settingsDefault) return;
+    expect(findCommandByBinding(settingsDefault, INK_PEN)?.id).toBe(
+      OPEN_SETTINGS
+    );
+  });
+
+  it('includes editor owners for an application-level target', () => {
+    hotkeys.bindings[INK_PEN] = 'mod+j';
+    expect(findCommandByBinding('mod+j', OPEN_SETTINGS)?.id).toBe(INK_PEN);
+  });
+});
+
+describe('store.commandsCanCollide', () => {
+  it('does not collide editor commands from different note types', () => {
+    expect(
+      commandsCanCollide(COMMAND_BY_ID[BOLD], COMMAND_BY_ID[INK_PEN])
+    ).toBe(false);
+  });
+
+  it('collides editor commands from the same note type', () => {
+    expect(
+      commandsCanCollide(COMMAND_BY_ID[INK_PEN], COMMAND_BY_ID[INK_ERASER])
+    ).toBe(true);
+  });
+
+  it('collides editor commands with application-level commands both ways', () => {
+    expect(
+      commandsCanCollide(COMMAND_BY_ID[INK_PEN], COMMAND_BY_ID[OPEN_SETTINGS])
+    ).toBe(true);
+    expect(
+      commandsCanCollide(COMMAND_BY_ID[OPEN_SETTINGS], COMMAND_BY_ID[INK_PEN])
+    ).toBe(true);
   });
 });
 

@@ -36,6 +36,7 @@ export {
   resetBinding,
   isCustomized,
   findCommandByBinding,
+  commandsCanCollide,
   HotkeyBindingConflictError
 } from './store.svelte';
 

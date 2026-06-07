@@ -289,8 +289,10 @@ function shouldSuppressCrepeNative(event: EventFlags): boolean {
  * effective on the very next keypress.
  */
 function findMatchingCommand(event: EventFlags): CommandDefinition | null {
+  const active = activeEditor();
   let defaultMatch: CommandDefinition | null = null;
   for (const cmd of HOTKEY_COMMANDS) {
+    if (cmd.scope === 'editor' && active?.kind !== cmd.editorKind) continue;
     const raw = getBinding(cmd.id);
     if (!raw) continue;
     const parsed = parseBinding(raw);

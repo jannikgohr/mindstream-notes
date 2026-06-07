@@ -22,6 +22,7 @@ import {
   type EditorListener
 } from './bus.svelte';
 import { hotkeys } from './store.svelte';
+import type { EditorKind } from './types';
 
 let teardownHotkeys: (() => void) | null = null;
 let listener: EditorListener | null = null;
@@ -40,9 +41,16 @@ function forceWindowsModKey() {
 function registerMarkdownListener(
   onCommand: EditorListener['onCommand']
 ): HTMLElement {
+  return registerEditorListener('markdown', onCommand);
+}
+
+function registerEditorListener(
+  kind: EditorKind,
+  onCommand: EditorListener['onCommand']
+): HTMLElement {
   const host = document.createElement('div');
   document.body.appendChild(host);
-  listener = { kind: 'markdown', host, onCommand };
+  listener = { kind, host, onCommand };
   registerEditor(listener);
   return host;
 }
@@ -124,6 +132,24 @@ describe('initHotkeys — match and dispatch', () => {
     const event = press({ key: 'b', code: 'KeyB', ctrlKey: true });
 
     expect(onCommand).toHaveBeenCalledWith('editor.markdown.italic');
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it('routes shared editor chords to the active note type', () => {
+    // Markdown and ink are allowed to share a binding because only
+    // one editor kind can be active. The manager must therefore skip
+    // matching commands for inactive editor kinds instead of stopping
+    // at the first catalogue match.
+    forceWindowsModKey();
+    const onCommand = vi.fn(() => true);
+    registerEditorListener('ink', onCommand);
+    teardownHotkeys = initHotkeys();
+    hotkeys.bindings['editor.markdown.bold'] = 'mod+x';
+    hotkeys.bindings['editor.ink.pen'] = 'mod+x';
+
+    const event = press({ key: 'x', code: 'KeyX', ctrlKey: true });
+
+    expect(onCommand).toHaveBeenCalledWith('editor.ink.pen');
     expect(event.defaultPrevented).toBe(true);
   });
 });

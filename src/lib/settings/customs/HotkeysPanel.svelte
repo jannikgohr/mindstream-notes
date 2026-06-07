@@ -288,7 +288,7 @@
     pendingBinding = binding;
     feedback = null;
 
-    const owner = findCommandByBinding(binding);
+    const owner = findCommandByBinding(binding, recordingId ?? undefined);
     conflictWithId = owner && owner.id !== recordingId ? owner.id : null;
     osConflictReason = wellKnownConflict(binding);
     if (conflictWithId) {
