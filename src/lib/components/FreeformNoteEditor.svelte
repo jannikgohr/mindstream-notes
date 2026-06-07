@@ -9,20 +9,19 @@
    * React + Excalidraw + the bridge are dynamically imported so they only
    * pay their bundle cost when a drawing note is opened.
    *
-   * Doc shape: Excalidraw scene snapshots (`elements`, selected app state,
-   * `files`) stored in a Y.Map via `$lib/freeform/excalidraw-yjs.ts`. The
-   * Rust persistence pipeline doesn't care — `yrs_state` round-trips opaque
-   * bytes. The relay sees only encrypted Yjs updates (same E2EE story as the
-   * markdown editor).
+   * Doc shape: Excalidraw elements/files are keyed by id in Y.Maps, with
+   * ordering and selected app state kept separately via
+   * `$lib/freeform/excalidraw-yjs.ts`. The Rust persistence pipeline doesn't
+   * care — `yrs_state` round-trips opaque bytes. The relay sees only encrypted
+   * Yjs updates (same E2EE story as the markdown editor).
    *
    * Mobile: Excalidraw has touch handling built in (pan, pinch, draw). The
    * existing mobile formatting toolbar only mounts inside markdown notes,
    * so there's no conflict here.
    *
    * Deferred follow-ups (intentional):
-   *   - Asset upload currently persists Excalidraw's data URLs inside the
-   *     Y.Doc. Moving those bytes into the shared asset table can be layered
-   *     on later if large drawings need it.
+   *   - Image insertion is disabled until Excalidraw files are backed by the
+   *     shared asset table instead of inline data URLs.
    *   - Presence (remote cursors). Awareness instance is wired into the
    *     island already; the bridge just doesn't read from it yet.
    */

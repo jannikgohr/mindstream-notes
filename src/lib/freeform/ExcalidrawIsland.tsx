@@ -18,7 +18,7 @@ import type {
   ExcalidrawInitialDataState,
   ExcalidrawImperativeAPI
 } from '@excalidraw/excalidraw/types';
-import type { FileId, Theme } from '@excalidraw/excalidraw/element/types';
+import type { Theme } from '@excalidraw/excalidraw/element/types';
 import {
   bindExcalidrawToYDoc,
   readSceneFromYDoc,
@@ -178,7 +178,7 @@ export default function ExcalidrawIsland({
         theme={theme}
         detectScroll={false}
         handleKeyboardGlobally={false}
-        generateIdForFile={() => crypto.randomUUID() as FileId}
+        onPaste={(data) => Boolean(data.files && Object.keys(data.files).length)}
         UIOptions={{
           canvasActions: {
             export: false,
@@ -188,7 +188,7 @@ export default function ExcalidrawIsland({
             toggleTheme: false
           },
           tools: {
-            image: true
+            image: false
           }
         }}
       />

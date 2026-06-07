@@ -1604,8 +1604,8 @@ fn render_thread(rx: mpsc::Receiver<Msg>) {
     //                          raw pen pos
     //   ```
     //
-    // The raw head is what closes the perceptual lag gap with apps
-    // like tldraw — without it the spring-mass smoother's "modeled
+    // The raw head is what closes the perceptual lag gap with fast
+    // drawing surfaces — without it the spring-mass smoother's "modeled
     // centerline" lags the raw input by 5-10 ms even though both
     // hit the same compositor floor, and the eye reads that as
     // "ink trailing the pen." With the raw head the visible tip is
