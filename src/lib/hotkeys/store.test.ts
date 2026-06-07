@@ -27,8 +27,10 @@ const BOLD = 'editor.markdown.bold';
 const ITALIC = 'editor.markdown.italic';
 const INK_PEN = 'editor.ink.pen';
 const INK_ERASER = 'editor.ink.eraser';
+const PDF_PEN = 'editor.pdf.pen';
 const OPEN_SETTINGS = 'global.openSettings';
 const NEW_MARKDOWN_NOTE = 'global.newMarkdownNote';
+const SHOW_SHORTCUT_HELP = 'global.showShortcutHelp';
 
 afterEach(() => {
   // In-memory map: wipe all overrides so the next test starts on
@@ -230,6 +232,20 @@ describe('store.findCommandByBinding', () => {
     expect(findCommandByBinding('mod+j', INK_PEN)).toBeNull();
   });
 
+  it('returns owners from the same editor note type for an editor target', () => {
+    hotkeys.bindings[INK_ERASER] = 'mod+j';
+    expect(findCommandByBinding('mod+j', INK_PEN)?.id).toBe(INK_ERASER);
+  });
+
+  it('ignores multiple owners from other editor note types until a global owner exists', () => {
+    hotkeys.bindings[BOLD] = 'mod+j';
+    hotkeys.bindings[PDF_PEN] = 'mod+j';
+    expect(findCommandByBinding('mod+j', INK_PEN)).toBeNull();
+
+    hotkeys.bindings[OPEN_SETTINGS] = 'mod+j';
+    expect(findCommandByBinding('mod+j', INK_PEN)?.id).toBe(OPEN_SETTINGS);
+  });
+
   it('includes global owners for an editor target', () => {
     const settingsDefault = COMMAND_BY_ID[OPEN_SETTINGS].defaultBinding;
     expect(settingsDefault).not.toBeNull();
@@ -243,28 +259,81 @@ describe('store.findCommandByBinding', () => {
     hotkeys.bindings[INK_PEN] = 'mod+j';
     expect(findCommandByBinding('mod+j', OPEN_SETTINGS)?.id).toBe(INK_PEN);
   });
+
+  it('includes application owners for an application-level target', () => {
+    hotkeys.bindings[NEW_MARKDOWN_NOTE] = 'mod+j';
+    expect(findCommandByBinding('mod+j', OPEN_SETTINGS)?.id).toBe(
+      NEW_MARKDOWN_NOTE
+    );
+  });
 });
 
 describe('store.commandsCanCollide', () => {
-  it('does not collide editor commands from different note types', () => {
+  it.each([
+    {
+      name: 'same command',
+      commandId: BOLD,
+      otherId: BOLD,
+      expected: false
+    },
+    {
+      name: 'two application-level commands',
+      commandId: OPEN_SETTINGS,
+      otherId: SHOW_SHORTCUT_HELP,
+      expected: true
+    },
+    {
+      name: 'application-level command against markdown editor command',
+      commandId: OPEN_SETTINGS,
+      otherId: BOLD,
+      expected: true
+    },
+    {
+      name: 'markdown editor command against application-level command',
+      commandId: BOLD,
+      otherId: OPEN_SETTINGS,
+      expected: true
+    },
+    {
+      name: 'two markdown editor commands',
+      commandId: BOLD,
+      otherId: ITALIC,
+      expected: true
+    },
+    {
+      name: 'two ink editor commands',
+      commandId: INK_PEN,
+      otherId: INK_ERASER,
+      expected: true
+    },
+    {
+      name: 'markdown command against ink command',
+      commandId: BOLD,
+      otherId: INK_PEN,
+      expected: false
+    },
+    {
+      name: 'ink command against markdown command',
+      commandId: INK_PEN,
+      otherId: BOLD,
+      expected: false
+    },
+    {
+      name: 'ink command against pdf command',
+      commandId: INK_PEN,
+      otherId: PDF_PEN,
+      expected: false
+    },
+    {
+      name: 'pdf command against markdown command',
+      commandId: PDF_PEN,
+      otherId: BOLD,
+      expected: false
+    }
+  ])('$name', ({ commandId, otherId, expected }) => {
     expect(
-      commandsCanCollide(COMMAND_BY_ID[BOLD], COMMAND_BY_ID[INK_PEN])
-    ).toBe(false);
-  });
-
-  it('collides editor commands from the same note type', () => {
-    expect(
-      commandsCanCollide(COMMAND_BY_ID[INK_PEN], COMMAND_BY_ID[INK_ERASER])
-    ).toBe(true);
-  });
-
-  it('collides editor commands with application-level commands both ways', () => {
-    expect(
-      commandsCanCollide(COMMAND_BY_ID[INK_PEN], COMMAND_BY_ID[OPEN_SETTINGS])
-    ).toBe(true);
-    expect(
-      commandsCanCollide(COMMAND_BY_ID[OPEN_SETTINGS], COMMAND_BY_ID[INK_PEN])
-    ).toBe(true);
+      commandsCanCollide(COMMAND_BY_ID[commandId], COMMAND_BY_ID[otherId])
+    ).toBe(expected);
   });
 });
 
