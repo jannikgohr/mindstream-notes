@@ -61,6 +61,7 @@ strip = true
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-autostart = "2"
+tauri-plugin-global-shortcut = "2.3.2"
 tauri-plugin-window-state = "2.4.1"
 tauri-plugin-updater = "2.10.1"
 # Desktop ink notes follow the wry_plugin event-loop pattern from

@@ -20,7 +20,11 @@
 import { describe, expect, it } from 'vitest';
 import { Schema, type Node as ProseNode } from 'prosemirror-model';
 import { EditorState, TextSelection } from 'prosemirror-state';
-import { applyListAction, type ListActionTypes } from './commands';
+import {
+  applyListAction,
+  TOOLBAR_ITEMS,
+  type ListActionTypes
+} from './commands';
 
 // -- Schema -----------------------------------------------------------------
 
@@ -77,6 +81,34 @@ const types: ListActionTypes = {
   listItem: testSchema.nodes.list_item,
   paragraph: testSchema.nodes.paragraph
 };
+
+describe('toolbar catalogue', () => {
+  it('shows ordered list before bullet list in the list menu', () => {
+    const listGroup = TOOLBAR_ITEMS.find((item) => item.id === 'list');
+    expect(listGroup?.kind).toBe('group');
+    if (listGroup?.kind !== 'group') return;
+    expect(listGroup.items.map((item) => item.id)).toEqual([
+      'ordered',
+      'bullet',
+      'task'
+    ]);
+  });
+
+  it('makes every advanced toolbar action hotkey-bindable', () => {
+    const advancedGroup = TOOLBAR_ITEMS.find((item) => item.id === 'advanced');
+    expect(advancedGroup?.kind).toBe('group');
+    if (advancedGroup?.kind !== 'group') return;
+    expect(advancedGroup.items.map((item) => [item.id, item.hotkeyId])).toEqual(
+      [
+        ['image', 'editor.markdown.imageBlock'],
+        ['code', 'editor.markdown.codeBlock'],
+        ['table', 'editor.markdown.table'],
+        ['math', 'editor.markdown.math'],
+        ['mermaid', 'editor.markdown.mermaidDiagram']
+      ]
+    );
+  });
+});
 
 // -- Builders ---------------------------------------------------------------
 

@@ -55,6 +55,11 @@
     attachToolbarLayout,
     type ToolbarLayoutHandle
   } from '$lib/freeform/toolbar-layout';
+  import {
+    registerEditor,
+    unregisterEditor,
+    type EditorListener
+  } from '$lib/hotkeys';
 
   interface Props {
     noteId: string;
@@ -94,6 +99,23 @@
   // width internally, so no platform/mobile branching is needed here.
   let toolbarLayout: ToolbarLayoutHandle | null = null;
   let loadError = $state<string | null>(null);
+
+  /**
+   * Command-bus listener for this freeform canvas. There aren't any
+   * freeform-scoped commands in the catalogue yet, so `onCommand`
+   * just reports "didn't handle" for every id it receives — but
+   * registering the listener still matters because it displaces any
+   * markdown listener above it on the stack. A Mod+B fired here is
+   * therefore routed to the freeform listener (which declines), the
+   * bus reports the command as unhandled, and the manager lets the
+   * keystroke fall through to tldraw rather than secretly editing a
+   * markdown note the user can't see. Negative-space programming:
+   * refuse the bug, don't paper it over.
+   *
+   * `$state` so the focusin $effect picks up the null → object
+   * transition — same rationale as NoteEditor's listener.
+   */
+  let editorListener: EditorListener | null = $state(null);
 
   let yDocUpdateHandler: (() => void) | null = null;
   /** Gate yDoc updates from triggering saves until hydration is done. */
@@ -294,11 +316,47 @@
       });
 
       loading = false;
+
+      // Register with the command bus. No commands to handle yet —
+      // the catalogue carries zero freeform commands — but installing
+      // the listener still matters: it displaces any markdown
+      // listener above it on the stack so editor-scoped commands
+      // don't accidentally route to a hidden markdown note while the
+      // user is in a freeform canvas. Returning `false` from
+      // `onCommand` tells the bus nothing was handled, so the manager
+      // lets the keystroke flow through to tldraw.
+      if (mountEl) {
+        editorListener = {
+          kind: 'freeform',
+          host: mountEl,
+          onCommand: (id: string) => {
+            // No freeform commands yet. The bus only routes ids
+            // whose `editorKind` is `'freeform'`, so reaching this
+            // means a future catalogue addition wasn't accompanied
+            // by an action here — log it.
+            console.warn('[FreeformNoteEditor] unhandled command', id);
+            return false;
+          }
+        };
+        registerEditor(editorListener);
+      }
     } catch (err) {
       loadError = err instanceof Error ? err.message : String(err);
       loading = false;
       console.error('[FreeformNoteEditor] load failed', err);
     }
+  });
+
+  /**
+   * Re-promote on focusin — same rationale as NoteEditor: two open
+   * notes need the most recently focused one to win.
+   */
+  $effect(() => {
+    if (!mountEl || !editorListener) return;
+    const listener = editorListener;
+    const onFocusIn = () => registerEditor(listener);
+    mountEl.addEventListener('focusin', onFocusIn);
+    return () => mountEl?.removeEventListener('focusin', onFocusIn);
   });
 
   // Re-render the island whenever any prop tldraw cares about flips —
@@ -370,6 +428,10 @@
 
   onDestroy(() => {
     if (saveTimer) clearTimeout(saveTimer);
+    if (editorListener) {
+      unregisterEditor(editorListener);
+      editorListener = null;
+    }
     unsubSession?.();
     unsubSync?.();
     unsubSync = null;

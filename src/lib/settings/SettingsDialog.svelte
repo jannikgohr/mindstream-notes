@@ -5,6 +5,7 @@
   import {
     SCHEMA,
     closeSettings,
+    getSettingValue,
     isCategoryVisible,
     isSectionVisible,
     isVisible,
@@ -13,14 +14,113 @@
   import { FALLBACK_ICON, SETTINGS_ICONS } from './icons';
   import { i18n, tLabel, tUi } from './i18n.svelte';
   import type { Category, Setting } from './types';
+  import {
+    displayBinding,
+    getBinding,
+    groupedCommands,
+    isGlobalShortcutCommand,
+    isGlobalShortcutOnlyCommand,
+    type CommandGroup,
+    type CommandDefinition
+  } from '$lib/hotkeys';
 
   let activeCategoryId = $state<string>(SCHEMA.categories[0]?.id ?? '');
   let query = $state('');
 
   const lowerQuery = $derived(query.trim().toLowerCase());
+  const catalogueHotkeyGroups = groupedCommands();
+  const globalShortcutsEnabled = $derived(
+    getSettingValue('hotkeys.globalShortcuts') === true
+  );
+
+  type DisplayCommandGroup = CommandGroup & {
+    displayScope?: 'globalShortcuts';
+  };
+
+  const hotkeyGroups = $derived.by<DisplayCommandGroup[]>(() => {
+    if (!globalShortcutsEnabled) {
+      return catalogueHotkeyGroups
+        .map((group) =>
+          group.scope === 'global'
+            ? {
+                ...group,
+                commands: group.commands.filter(
+                  (cmd) => !isGlobalShortcutOnlyCommand(cmd)
+                )
+              }
+            : group
+        )
+        .filter((group) => group.commands.length > 0);
+    }
+
+    const next: DisplayCommandGroup[] = [];
+    for (const group of catalogueHotkeyGroups) {
+      if (group.scope !== 'global') {
+        next.push(group);
+        continue;
+      }
+
+      const globalShortcutCommands = group.commands.filter(
+        isGlobalShortcutCommand
+      );
+      const applicationCommands = group.commands.filter(
+        (cmd) => !isGlobalShortcutCommand(cmd)
+      );
+
+      if (globalShortcutCommands.length > 0) {
+        next.push({
+          scope: 'global',
+          editorKind: null,
+          commands: globalShortcutCommands,
+          displayScope: 'globalShortcuts'
+        });
+      }
+      if (applicationCommands.length > 0) {
+        next.push({ ...group, commands: applicationCommands });
+      }
+    }
+    return next;
+  });
+
+  function hotkeyGroupLabel(group: DisplayCommandGroup): string {
+    if (group.displayScope === 'globalShortcuts') {
+      return tUi('hotkeys.group.globalShortcuts');
+    }
+    const { scope, editorKind } = group;
+    if (scope === 'global') return tUi('hotkeys.group.global');
+    return tUi(`hotkeys.group.editor.${editorKind}`);
+  }
+
+  function hotkeyCommandMatches(
+    cmd: CommandDefinition,
+    groupLabel: string
+  ): boolean {
+    const current = getBinding(cmd.id);
+    const display = displayBinding(current) || tUi('hotkeys.unset');
+    return [
+      cmd.id,
+      tUi(cmd.labelKey),
+      groupLabel,
+      current ?? '',
+      display,
+      tLabel('settings', 'hotkeys.panel')
+    ]
+      .join(' ')
+      .toLowerCase()
+      .includes(lowerQuery);
+  }
+
+  function hotkeysPanelMatches(): boolean {
+    if (!lowerQuery) return true;
+    return hotkeyGroups.some((group) => {
+      const label = hotkeyGroupLabel(group);
+      return group.commands.some((cmd) => hotkeyCommandMatches(cmd, label));
+    });
+  }
 
   function settingMatches(s: Setting): boolean {
     if (!lowerQuery) return true;
+    if (s.id === 'hotkeys.panel' && hotkeysPanelMatches()) return true;
     const haystack = [
       s.id,
       tLabel('settings', s.id),
@@ -142,7 +242,7 @@
                   </h3>
                   <div class="divide-y divide-border">
                     {#each visibleSettings as s (s.id)}
-                      <SettingControl setting={s} />
+                      <SettingControl setting={s} searchQuery={query} />
                     {/each}
                   </div>
                 </div>

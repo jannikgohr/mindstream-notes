@@ -19,6 +19,7 @@ pub mod db;
 pub mod desktop_settings;
 pub mod drawing;
 pub mod error;
+pub mod hotkeys;
 pub mod i18n;
 pub mod notes;
 pub mod pdf_export;
@@ -124,6 +125,7 @@ pub fn run() {
                 .arg(AUTOSTART_ARG)
                 .build(),
         )
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(
             tauri_plugin_window_state::Builder::new()
                 .with_state_flags(
@@ -186,6 +188,9 @@ pub fn run() {
             .expect("failed to seed database");
 
             app.manage(db);
+            app.manage(hotkeys::NativeHotkeyDisplays::default());
+            #[cfg(desktop)]
+            app.manage(hotkeys::DesktopGlobalShortcuts::default());
 
             #[cfg(desktop)]
             app.manage(desktop_settings::DesktopSettings::load(app));
@@ -258,6 +263,11 @@ pub fn run() {
             pdf_export::save_pdf_export,
             // System introspection
             system::is_appimage_install,
+            // Hotkey display state mirrored from the JS hotkey store
+            hotkeys::get_hotkey_display,
+            hotkeys::set_hotkey_displays,
+            #[cfg(desktop)]
+            hotkeys::sync_global_shortcuts,
             #[cfg(desktop)]
             desktop_settings::get_close_to_tray,
             #[cfg(desktop)]

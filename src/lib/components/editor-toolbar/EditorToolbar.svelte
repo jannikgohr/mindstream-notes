@@ -28,6 +28,13 @@
   import { tUi } from '$lib/settings/i18n.svelte';
   import { getSettingValue } from '$lib/settings/store.svelte';
   import {
+    ariaKeyShortcut,
+    commandById,
+    displayBinding,
+    emitCommand,
+    getBinding
+  } from '$lib/hotkeys';
+  import {
     TOOLBAR_ITEMS,
     type ToolbarItem,
     type ToolbarLeaf,
@@ -137,9 +144,69 @@
     e.preventDefault();
   }
 
+  /**
+   * Tooltip text for a leaf: label, plus the user's current hotkey
+   * binding in parentheses when one is bound. `getBinding` reads from
+   * the `hotkeys.bindings` $state map (per-key reactive), so the
+   * tooltip live-refreshes the instant the user rebinds in the
+   * settings panel — no editor remount required, no global tracking
+   * dependency on the whole values map. Items without a `hotkeyId`
+   * (image, table, math, mermaid) just get the label.
+   */
+  function leafTitle(item: ToolbarLeaf): string {
+    const label = tUi(item.labelKey);
+    if (!item.hotkeyId) return label;
+    const shortcut = displayBinding(getBinding(item.hotkeyId));
+    return shortcut ? `${label} (${shortcut})` : label;
+  }
+
+  /**
+   * Screen-reader form of the shortcut for the same button. ARIA's
+   * `aria-keyshortcuts` attribute is a parallel surface to the
+   * sighted `title` — NVDA / JAWS / VoiceOver announce it alongside
+   * the accessible name ("Bold, Control B"). Returns the empty
+   * string for unset / unmapped items so we can drop the attribute
+   * entirely rather than ship `aria-keyshortcuts=""`, which some
+   * screen readers announce as "no shortcut".
+   */
+  function leafAriaShortcut(item: ToolbarLeaf): string {
+    if (!item.hotkeyId) return '';
+    return ariaKeyShortcut(getBinding(item.hotkeyId));
+  }
+
   function invokeLeaf(item: ToolbarLeaf) {
     if (!crepe) return;
-    crepe.editor.action(item.action);
+    // Route through the command bus when this button corresponds to a
+    // catalogued hotkey id. Two reasons:
+    //
+    //   1. Keyboard and pointer both dispatch the SAME way, so a future
+    //      change to the listener (e.g. wrapping every command in a
+    //      transaction tag) doesn't require updating the toolbar.
+    //   2. The bus is the contract any future non-keyboard caller will
+    //      use (command palette, tray menu). Exercising it on every
+    //      click means a regression there is caught the moment someone
+    //      opens a note, not eventually by whoever lands the palette.
+    //
+    // Falls back to calling the action directly when the bus path
+    // can't satisfy the request:
+    //   - item has no `hotkeyId` (image, table, math, mermaid — no
+    //     keyboard equivalent, so the bus has nothing to route);
+    //   - the id isn't in the catalogue (drift — log and proceed);
+    //   - `emitCommand` returns false (no active markdown listener,
+    //     which is unlikely when a toolbar BELONGING to this editor
+    //     is on screen — but defend the keystroke-equivalent against
+    //     "didn't do anything when I clicked" anyway).
+    let handled = false;
+    if (item.hotkeyId) {
+      const cmd = commandById(item.hotkeyId);
+      if (cmd) handled = emitCommand(cmd);
+      else
+        console.warn(
+          '[EditorToolbar] hotkey id not in catalogue',
+          item.hotkeyId
+        );
+    }
+    if (!handled) crepe.editor.action(item.action);
     // Recompute manually as well as via the listener. Mark toggles on an
     // empty selection only mutate `state.storedMarks` — doc and selection
     // are unchanged — so neither selectionUpdated nor updated would fire,
@@ -351,6 +418,7 @@
       id: leaf.id,
       labelKey: leaf.labelKey,
       icon: leaf.icon,
+      hotkeyId: leaf.hotkeyId,
       onSelect: () => invokeLeaf(leaf)
     }));
   }
@@ -364,6 +432,7 @@
           id: item.id,
           labelKey: item.labelKey,
           icon: item.icon,
+          hotkeyId: item.hotkeyId,
           onSelect: () => invokeLeaf(item)
         });
       } else {
@@ -378,6 +447,7 @@
             id: `${item.id}-${leaf.id}`,
             labelKey: leaf.labelKey,
             icon: leaf.icon,
+            hotkeyId: leaf.hotkeyId,
             onSelect: () => invokeLeaf(leaf)
           });
         }
@@ -427,8 +497,9 @@
           onpointerdown={holdFocus}
           onclick={() => invokeLeaf(item)}
           aria-pressed={item.isActive ? isActive : undefined}
-          title={tUi(item.labelKey)}
+          title={leafTitle(item)}
           aria-label={tUi(item.labelKey)}
+          aria-keyshortcuts={leafAriaShortcut(item) || undefined}
         >
           <Icon aria-hidden="true" />
         </Button>
