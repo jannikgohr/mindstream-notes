@@ -59,7 +59,8 @@ note about what shipped, and move on.
       application commands, plus editor formatting commands, stay
       in-app only so the app never steals common shortcuts from other
       programs. Mirror set shortcuts for tray create actions into the
-      system tray menu accelerator column.
+      system tray menu accelerator column only while global shortcuts
+      are enabled.
 
 ---
 

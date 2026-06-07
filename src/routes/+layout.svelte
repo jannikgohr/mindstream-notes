@@ -114,10 +114,14 @@
       getSettingValue('hotkeys.globalShortcuts') === true;
     const displays = HOTKEY_COMMANDS.map((cmd) => {
       const binding = getBinding(cmd.id);
+      const accelerator =
+        globalShortcutsEnabled || !isGlobalShortcutCommand(cmd)
+          ? tauriAccelerator(binding)
+          : null;
       return {
         commandId: cmd.id,
         display: displayBinding(binding) || null,
-        accelerator: tauriAccelerator(binding)
+        accelerator
       };
     });
     void setNativeHotkeyDisplays(displays);
