@@ -3,6 +3,16 @@ use std::{collections::HashMap, sync::Mutex};
 use serde::Deserialize;
 use tauri::{AppHandle, Manager, State};
 
+#[cfg(desktop)]
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+
+#[cfg(desktop)]
+const GLOBAL_SHORTCUT_COMMAND_IDS: &[&str] = &[
+    "global.newMarkdownNote",
+    "global.newDrawing",
+    "global.newInkNote",
+];
+
 #[derive(Clone, Debug, Default)]
 struct NativeHotkeyDisplay {
     display: Option<String>,
@@ -14,11 +24,25 @@ pub struct NativeHotkeyDisplays {
     values: Mutex<HashMap<String, NativeHotkeyDisplay>>,
 }
 
+#[cfg(desktop)]
+#[derive(Default)]
+pub struct DesktopGlobalShortcuts {
+    registered: Mutex<Vec<String>>,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HotkeyDisplayUpdate {
     command_id: String,
     display: Option<String>,
+    accelerator: Option<String>,
+}
+
+#[cfg(desktop)]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GlobalShortcutRegistration {
+    command_id: String,
     accelerator: Option<String>,
 }
 
@@ -94,5 +118,56 @@ pub fn set_hotkey_displays(
     state.replace_all(displays)?;
     #[cfg(desktop)]
     crate::tray::sync_hotkey_displays(&app);
+    Ok(())
+}
+
+#[cfg(desktop)]
+fn is_global_shortcut_command_id(command_id: &str) -> bool {
+    GLOBAL_SHORTCUT_COMMAND_IDS.contains(&command_id)
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+pub fn sync_global_shortcuts(
+    app: AppHandle,
+    state: State<'_, DesktopGlobalShortcuts>,
+    registrations: Vec<GlobalShortcutRegistration>,
+) -> Result<(), String> {
+    let mut registered = state
+        .registered
+        .lock()
+        .map_err(|_| "global shortcut state is poisoned".to_string())?;
+
+    if !registered.is_empty() {
+        app.global_shortcut()
+            .unregister_multiple(registered.iter().map(String::as_str))
+            .map_err(|err| format!("unregister global shortcuts: {err}"))?;
+        registered.clear();
+    }
+
+    for registration in registrations {
+        if !is_global_shortcut_command_id(&registration.command_id) {
+            continue;
+        }
+        let Some(accelerator) = clean_optional(registration.accelerator) else {
+            continue;
+        };
+        let command_id = registration.command_id.clone();
+        app.global_shortcut()
+            .on_shortcut(accelerator.as_str(), move |app, _shortcut, event| {
+                if event.state != ShortcutState::Pressed {
+                    return;
+                }
+                crate::tray::handle_global_shortcut_command(app, &command_id);
+            })
+            .map_err(|err| {
+                format!(
+                    "register global shortcut {} for {}: {err}",
+                    accelerator, registration.command_id
+                )
+            })?;
+        registered.push(accelerator);
+    }
+
     Ok(())
 }

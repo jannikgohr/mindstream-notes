@@ -189,6 +189,8 @@ pub fn run() {
 
             app.manage(db);
             app.manage(hotkeys::NativeHotkeyDisplays::default());
+            #[cfg(desktop)]
+            app.manage(hotkeys::DesktopGlobalShortcuts::default());
 
             #[cfg(desktop)]
             app.manage(desktop_settings::DesktopSettings::load(app));
@@ -264,6 +266,8 @@ pub fn run() {
             // Hotkey display state mirrored from the JS hotkey store
             hotkeys::get_hotkey_display,
             hotkeys::set_hotkey_displays,
+            #[cfg(desktop)]
+            hotkeys::sync_global_shortcuts,
             #[cfg(desktop)]
             desktop_settings::get_close_to_tray,
             #[cfg(desktop)]

@@ -6,6 +6,11 @@ export interface NativeHotkeyDisplay {
   accelerator: string | null;
 }
 
+export interface NativeGlobalShortcutRegistration {
+  commandId: string;
+  accelerator: string | null;
+}
+
 export function setNativeHotkeyDisplays(
   displays: NativeHotkeyDisplay[]
 ): Promise<void> {
@@ -23,5 +28,15 @@ export function getNativeHotkeyDisplay(
     'get_hotkey_display',
     { commandId },
     () => null
+  );
+}
+
+export function syncNativeGlobalShortcuts(
+  registrations: NativeGlobalShortcutRegistration[]
+): Promise<void> {
+  return invokeOrFallback<void>(
+    'sync_global_shortcuts',
+    { registrations },
+    () => undefined
   );
 }

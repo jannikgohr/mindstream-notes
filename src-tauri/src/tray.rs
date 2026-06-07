@@ -151,6 +151,24 @@ fn handle_menu_event(app: &AppHandle, item_id: &str) {
         return;
     };
 
+    create_note_and_emit(app, title, body, note_kind, "tray");
+}
+
+pub(crate) fn handle_global_shortcut_command(app: &AppHandle, command_id: &str) {
+    let Some((title, body, note_kind)) = global_shortcut_template(command_id) else {
+        log::warn!("[global-shortcuts] unhandled command {command_id}");
+        return;
+    };
+    create_note_and_emit(app, title, body, note_kind, "global shortcut");
+}
+
+fn create_note_and_emit(
+    app: &AppHandle,
+    title: &str,
+    body: Option<&str>,
+    note_kind: &str,
+    source: &str,
+) {
     focus_main_window(app);
 
     let db = app.state::<Db>();
@@ -174,10 +192,10 @@ fn handle_menu_event(app: &AppHandle, item_id: &str) {
                     note_id: note.summary.id,
                 },
             ) {
-                log::warn!("[tray] failed to emit note-created event: {err}");
+                log::warn!("[{source}] failed to emit note-created event: {err}");
             }
         }
-        Err(err) => log::warn!("[tray] failed to create note from tray: {err}"),
+        Err(err) => log::warn!("[{source}] failed to create note: {err}"),
     }
 }
 
@@ -195,7 +213,18 @@ fn note_template(item_id: &str) -> Option<(&'static str, Option<&'static str>, &
     }
 }
 
-fn focus_main_window(app: &AppHandle) {
+fn global_shortcut_template(
+    command_id: &str,
+) -> Option<(&'static str, Option<&'static str>, &'static str)> {
+    match command_id {
+        "global.newMarkdownNote" => Some(("Untitled", None, "markdown")),
+        "global.newDrawing" => Some(("Untitled drawing", None, "freeform")),
+        "global.newInkNote" => Some(("Untitled ink note", None, "ink")),
+        _ => None,
+    }
+}
+
+pub(crate) fn focus_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
         let _ = window.show();
