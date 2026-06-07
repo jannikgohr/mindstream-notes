@@ -459,6 +459,136 @@ export const HOTKEY_COMMANDS: CommandDefinition[] = [
     editorKind: 'markdown',
     labelKey: 'hotkeys.command.editor.markdown.mermaidDiagram',
     defaultBinding: null
+  },
+
+  // --- Ink editor -----------------------------------------------------------
+  {
+    id: 'editor.ink.pen',
+    scope: 'editor',
+    editorKind: 'ink',
+    labelKey: 'hotkeys.command.editor.ink.pen',
+    defaultBinding: null
+  },
+  {
+    id: 'editor.ink.eraser',
+    scope: 'editor',
+    editorKind: 'ink',
+    labelKey: 'hotkeys.command.editor.ink.eraser',
+    defaultBinding: null
+  },
+  {
+    id: 'editor.ink.undo',
+    scope: 'editor',
+    editorKind: 'ink',
+    labelKey: 'hotkeys.command.editor.ink.undo',
+    defaultBinding: null
+  },
+  {
+    id: 'editor.ink.redo',
+    scope: 'editor',
+    editorKind: 'ink',
+    labelKey: 'hotkeys.command.editor.ink.redo',
+    defaultBinding: null
+  },
+  {
+    id: 'editor.ink.toggleFingerDrawing',
+    scope: 'editor',
+    editorKind: 'ink',
+    labelKey: 'hotkeys.command.editor.ink.toggleFingerDrawing',
+    defaultBinding: null
+  },
+  {
+    id: 'editor.ink.togglePageTheme',
+    scope: 'editor',
+    editorKind: 'ink',
+    labelKey: 'hotkeys.command.editor.ink.togglePageTheme',
+    defaultBinding: null
+  },
+  {
+    id: 'editor.ink.clear',
+    scope: 'editor',
+    editorKind: 'ink',
+    labelKey: 'hotkeys.command.editor.ink.clear',
+    defaultBinding: null
+  },
+
+  // --- PDF viewer -----------------------------------------------------------
+  {
+    id: 'editor.pdf.select',
+    scope: 'editor',
+    editorKind: 'pdf',
+    labelKey: 'hotkeys.command.editor.pdf.select',
+    defaultBinding: null
+  },
+  {
+    id: 'editor.pdf.highlight',
+    scope: 'editor',
+    editorKind: 'pdf',
+    labelKey: 'hotkeys.command.editor.pdf.highlight',
+    defaultBinding: null
+  },
+  {
+    id: 'editor.pdf.comment',
+    scope: 'editor',
+    editorKind: 'pdf',
+    labelKey: 'hotkeys.command.editor.pdf.comment',
+    defaultBinding: null
+  },
+  {
+    id: 'editor.pdf.pen',
+    scope: 'editor',
+    editorKind: 'pdf',
+    labelKey: 'hotkeys.command.editor.pdf.pen',
+    defaultBinding: null
+  },
+  {
+    id: 'editor.pdf.signature',
+    scope: 'editor',
+    editorKind: 'pdf',
+    labelKey: 'hotkeys.command.editor.pdf.signature',
+    defaultBinding: null
+  },
+  {
+    id: 'editor.pdf.deleteAnnotation',
+    scope: 'editor',
+    editorKind: 'pdf',
+    labelKey: 'hotkeys.command.editor.pdf.deleteAnnotation',
+    defaultBinding: null
+  },
+  {
+    id: 'editor.pdf.toggleComments',
+    scope: 'editor',
+    editorKind: 'pdf',
+    labelKey: 'hotkeys.command.editor.pdf.toggleComments',
+    defaultBinding: null
+  },
+  {
+    id: 'editor.pdf.export',
+    scope: 'editor',
+    editorKind: 'pdf',
+    labelKey: 'hotkeys.command.editor.pdf.export',
+    defaultBinding: null
+  },
+  {
+    id: 'editor.pdf.zoomOut',
+    scope: 'editor',
+    editorKind: 'pdf',
+    labelKey: 'hotkeys.command.editor.pdf.zoomOut',
+    defaultBinding: null
+  },
+  {
+    id: 'editor.pdf.toggleZoomMenu',
+    scope: 'editor',
+    editorKind: 'pdf',
+    labelKey: 'hotkeys.command.editor.pdf.toggleZoomMenu',
+    defaultBinding: null
+  },
+  {
+    id: 'editor.pdf.zoomIn',
+    scope: 'editor',
+    editorKind: 'pdf',
+    labelKey: 'hotkeys.command.editor.pdf.zoomIn',
+    defaultBinding: null
   }
 ];
 

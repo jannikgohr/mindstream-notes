@@ -169,4 +169,50 @@ describe('catalogue consistency', () => {
       expect(commandById(id)?.defaultBinding).toBeNull();
     }
   });
+
+  it('ships ink toolbar actions unset by default', () => {
+    const inkIds = [
+      'editor.ink.pen',
+      'editor.ink.eraser',
+      'editor.ink.undo',
+      'editor.ink.redo',
+      'editor.ink.toggleFingerDrawing',
+      'editor.ink.togglePageTheme',
+      'editor.ink.clear'
+    ];
+
+    for (const id of inkIds) {
+      const command = commandById(id);
+      expect(command).toMatchObject({
+        scope: 'editor',
+        editorKind: 'ink',
+        defaultBinding: null
+      });
+    }
+  });
+
+  it('ships pdf toolbar actions unset by default', () => {
+    const pdfIds = [
+      'editor.pdf.select',
+      'editor.pdf.highlight',
+      'editor.pdf.comment',
+      'editor.pdf.pen',
+      'editor.pdf.signature',
+      'editor.pdf.deleteAnnotation',
+      'editor.pdf.toggleComments',
+      'editor.pdf.export',
+      'editor.pdf.zoomOut',
+      'editor.pdf.toggleZoomMenu',
+      'editor.pdf.zoomIn'
+    ];
+
+    for (const id of pdfIds) {
+      const command = commandById(id);
+      expect(command).toMatchObject({
+        scope: 'editor',
+        editorKind: 'pdf',
+        defaultBinding: null
+      });
+    }
+  });
 });

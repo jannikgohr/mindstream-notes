@@ -40,6 +40,11 @@
     setNoteStatus,
     type SavingState
   } from '$lib/stores/note-status.svelte';
+  import {
+    registerEditor,
+    unregisterEditor,
+    type EditorListener
+  } from '$lib/hotkeys';
   import { tree } from '$lib/stores/tree.svelte';
   import { InkWebCollabProvider } from '$lib/sync/ink-web-collab-provider';
   import {
@@ -142,6 +147,7 @@
   let collabReady = false;
   let lastSeenPushed = false;
   let unsubSession: (() => void) | null = null;
+  let editorListener: EditorListener | null = null;
 
   let tool = $state<ToolMode>('pen');
   let colorArgb = $state(DEFAULT_COLOR);
@@ -1214,6 +1220,35 @@
     if (value.length > 0) applyDocumentMutation(update);
   }
 
+  function handleInkCommand(id: string): boolean {
+    switch (id) {
+      case 'editor.ink.pen':
+        setTool('pen');
+        return true;
+      case 'editor.ink.eraser':
+        setTool('eraser');
+        return true;
+      case 'editor.ink.undo':
+        undo();
+        return true;
+      case 'editor.ink.redo':
+        redo();
+        return true;
+      case 'editor.ink.toggleFingerDrawing':
+        toggleFingerDrawing();
+        return true;
+      case 'editor.ink.togglePageTheme':
+        togglePageTheme();
+        return true;
+      case 'editor.ink.clear':
+        if (!isTrashed) clearCanvas();
+        return true;
+      default:
+        console.warn('[InkWebNoteEditor] unknown ink command', id);
+        return false;
+    }
+  }
+
   function normalizeInkTool(value: unknown): ToolMode {
     return value === 'eraser' ? 'eraser' : 'pen';
   }
@@ -1297,6 +1332,14 @@
       handleAndroidStylusEraser
     );
     await tick();
+    if (hostEl) {
+      editorListener = {
+        kind: 'ink',
+        host: hostEl,
+        onCommand: handleInkCommand
+      };
+      registerEditor(editorListener);
+    }
     const afterTickAt = performance.now();
     if (isAndroid()) {
       await drawingShowLiveInkOverlay();
@@ -1357,6 +1400,19 @@
     });
   });
 
+  $effect(() => {
+    if (!hostEl || !editorListener) return;
+    const host = hostEl;
+    const listener = editorListener;
+    const promote = () => registerEditor(listener);
+    host.addEventListener('focusin', promote);
+    host.addEventListener('pointerdown', promote);
+    return () => {
+      host.removeEventListener('focusin', promote);
+      host.removeEventListener('pointerdown', promote);
+    };
+  });
+
   onDestroy(() => {
     window.removeEventListener(
       'mindstream:android-stylus-eraser',
@@ -1365,6 +1421,10 @@
     flushQueuedEraserSamples();
     clearSaveTimer();
     void flushPendingState();
+    if (editorListener) {
+      unregisterEditor(editorListener);
+      editorListener = null;
+    }
     if (drawFrame !== null) {
       cancelAnimationFrame(drawFrame);
       drawFrame = null;
