@@ -93,6 +93,21 @@ describe('toolbar catalogue', () => {
       'task'
     ]);
   });
+
+  it('makes every advanced toolbar action hotkey-bindable', () => {
+    const advancedGroup = TOOLBAR_ITEMS.find((item) => item.id === 'advanced');
+    expect(advancedGroup?.kind).toBe('group');
+    if (advancedGroup?.kind !== 'group') return;
+    expect(advancedGroup.items.map((item) => [item.id, item.hotkeyId])).toEqual(
+      [
+        ['image', 'editor.markdown.imageBlock'],
+        ['code', 'editor.markdown.codeBlock'],
+        ['table', 'editor.markdown.table'],
+        ['math', 'editor.markdown.math'],
+        ['mermaid', 'editor.markdown.mermaidDiagram']
+      ]
+    );
+  });
 });
 
 // -- Builders ---------------------------------------------------------------

@@ -127,7 +127,11 @@
     "hotkeys.command.editor.markdown.bulletList": "Aufzählungsliste",
     "hotkeys.command.editor.markdown.orderedList": "Nummerierte Liste",
     "hotkeys.command.editor.markdown.taskList": "Aufgabenliste",
+    "hotkeys.command.editor.markdown.imageBlock": "Bild",
     "hotkeys.command.editor.markdown.codeBlock": "Code-Block",
+    "hotkeys.command.editor.markdown.table": "Tabelle",
+    "hotkeys.command.editor.markdown.math": "Mathematik",
+    "hotkeys.command.editor.markdown.mermaidDiagram": "Mermaid-Diagramm",
 
     "editor.toolbar.label": "Formatierung",
     "editor.toolbar.undo": "Rückgängig",

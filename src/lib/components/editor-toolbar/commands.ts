@@ -603,7 +603,7 @@ const turnIntoTaskList = switchListAction('task');
 // Advanced actions all use `addBlockTypeCommand`, which inserts a fresh
 // empty block after the current line (rather than overwriting it). The
 // cursor's existing content is preserved on its own line.
-const insertImageBlock = (ctx: Ctx) => {
+export const insertImageBlock = (ctx: Ctx) => {
   ctx.get(commandsCtx).call(addBlockTypeCommand.key, {
     nodeType: imageBlockSchema.type(ctx)
   });
@@ -613,12 +613,12 @@ const insertCodeBlock = (ctx: Ctx) => {
     nodeType: codeBlockSchema.type(ctx)
   });
 };
-const insertTable = (ctx: Ctx) => {
+export const insertTable = (ctx: Ctx) => {
   ctx.get(commandsCtx).call(addBlockTypeCommand.key, {
     nodeType: createTable(ctx, 3, 3)
   });
 };
-const insertMath = (ctx: Ctx) => {
+export const insertMath = (ctx: Ctx) => {
   // Crepe's Latex feature renders math as a code block whose `language`
   // attribute is "LaTeX" — same recipe Crepe uses for its slash-menu math
   // item, but via `addBlockTypeCommand` so the math sits on its own new
@@ -628,7 +628,7 @@ const insertMath = (ctx: Ctx) => {
     attrs: { language: 'LaTeX' }
   });
 };
-const insertMermaid = (ctx: Ctx) => {
+export const insertMermaid = (ctx: Ctx) => {
   // Same recipe as `insertMath` but with `language: 'mermaid'`, which
   // the renderPreview hook in `$lib/editor/plugins/mermaid.ts` picks up
   // to render the diagram below the source. Always present in the
@@ -785,7 +785,8 @@ export const TOOLBAR_ITEMS: ToolbarItem[] = [
         id: 'image',
         labelKey: 'editor.toolbar.advanced.image',
         icon: ImageIcon,
-        action: insertImageBlock
+        action: insertImageBlock,
+        hotkeyId: 'editor.markdown.imageBlock'
       },
       {
         kind: 'leaf',
@@ -800,7 +801,8 @@ export const TOOLBAR_ITEMS: ToolbarItem[] = [
         id: 'table',
         labelKey: 'editor.toolbar.advanced.table',
         icon: TableIcon,
-        action: insertTable
+        action: insertTable,
+        hotkeyId: 'editor.markdown.table'
       },
       {
         kind: 'leaf',
@@ -808,6 +810,7 @@ export const TOOLBAR_ITEMS: ToolbarItem[] = [
         labelKey: 'editor.toolbar.advanced.math',
         icon: Sigma,
         action: insertMath,
+        hotkeyId: 'editor.markdown.math',
         gate: 'editor.math'
       },
       {
@@ -816,6 +819,7 @@ export const TOOLBAR_ITEMS: ToolbarItem[] = [
         labelKey: 'editor.toolbar.advanced.mermaid',
         icon: Workflow,
         action: insertMermaid,
+        hotkeyId: 'editor.markdown.mermaidDiagram',
         gate: 'editor.mermaid'
       }
     ]

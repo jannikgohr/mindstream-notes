@@ -156,4 +156,17 @@ describe('catalogue consistency', () => {
       ids.indexOf('editor.markdown.bulletList')
     );
   });
+
+  it('ships non-code advanced markdown toolbar actions unset by default', () => {
+    const advancedIds = [
+      'editor.markdown.imageBlock',
+      'editor.markdown.table',
+      'editor.markdown.math',
+      'editor.markdown.mermaidDiagram'
+    ];
+
+    for (const id of advancedIds) {
+      expect(commandById(id)?.defaultBinding).toBeNull();
+    }
+  });
 });

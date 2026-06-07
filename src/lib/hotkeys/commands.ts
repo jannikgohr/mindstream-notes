@@ -55,7 +55,13 @@ import {
   redo as proseRedo,
   undo as proseUndo
 } from '@milkdown/kit/prose/history';
-import { applyListAction } from '$lib/components/editor-toolbar/commands';
+import {
+  applyListAction,
+  insertImageBlock,
+  insertMath,
+  insertMermaid,
+  insertTable
+} from '$lib/components/editor-toolbar/commands';
 import type { CommandScope, EditorKind } from './types';
 
 interface BaseCommand {
@@ -204,7 +210,11 @@ export const MARKDOWN_ACTIONS: Record<string, (ctx: Ctx) => void> = {
   'editor.markdown.bulletList': switchListAction('bullet'),
   'editor.markdown.orderedList': switchListAction('ordered'),
   'editor.markdown.taskList': switchListAction('task'),
-  'editor.markdown.codeBlock': turnIntoCodeBlock
+  'editor.markdown.imageBlock': insertImageBlock,
+  'editor.markdown.codeBlock': turnIntoCodeBlock,
+  'editor.markdown.table': insertTable,
+  'editor.markdown.math': insertMath,
+  'editor.markdown.mermaidDiagram': insertMermaid
 };
 
 type RootNoteKind = 'markdown' | 'freeform' | 'ink';
@@ -412,6 +422,13 @@ export const HOTKEY_COMMANDS: CommandDefinition[] = [
     defaultBinding: 'mod+shift+9'
   },
   {
+    id: 'editor.markdown.imageBlock',
+    scope: 'editor',
+    editorKind: 'markdown',
+    labelKey: 'hotkeys.command.editor.markdown.imageBlock',
+    defaultBinding: null
+  },
+  {
     id: 'editor.markdown.codeBlock',
     scope: 'editor',
     editorKind: 'markdown',
@@ -421,6 +438,27 @@ export const HOTKEY_COMMANDS: CommandDefinition[] = [
     // specific. We pick Notion's because it composes well with the
     // existing inline shortcuts and reads cleanly.
     defaultBinding: 'mod+shift+c'
+  },
+  {
+    id: 'editor.markdown.table',
+    scope: 'editor',
+    editorKind: 'markdown',
+    labelKey: 'hotkeys.command.editor.markdown.table',
+    defaultBinding: null
+  },
+  {
+    id: 'editor.markdown.math',
+    scope: 'editor',
+    editorKind: 'markdown',
+    labelKey: 'hotkeys.command.editor.markdown.math',
+    defaultBinding: null
+  },
+  {
+    id: 'editor.markdown.mermaidDiagram',
+    scope: 'editor',
+    editorKind: 'markdown',
+    labelKey: 'hotkeys.command.editor.markdown.mermaidDiagram',
+    defaultBinding: null
   }
 ];
 
