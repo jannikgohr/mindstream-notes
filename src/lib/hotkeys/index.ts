@@ -18,9 +18,11 @@ export {
 export {
   HOTKEY_COMMANDS,
   GLOBAL_SHORTCUT_COMMAND_IDS,
+  GLOBAL_SHORTCUT_ONLY_COMMAND_IDS,
   COMMAND_BY_ID,
   commandById,
   isGlobalShortcutCommand,
+  isGlobalShortcutOnlyCommand,
   MARKDOWN_ACTIONS,
   groupedCommands,
   type CommandDefinition,

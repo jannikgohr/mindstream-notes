@@ -36,6 +36,7 @@
     HotkeyBindingConflictError,
     HOTKEY_COMMANDS,
     isGlobalShortcutCommand,
+    isGlobalShortcutOnlyCommand,
     isCustomized,
     isMac,
     parseBinding,
@@ -116,7 +117,20 @@
   };
 
   const groups = $derived.by<DisplayCommandGroup[]>(() => {
-    if (!globalShortcutsEnabled) return catalogueGroups;
+    if (!globalShortcutsEnabled) {
+      return catalogueGroups
+        .map((group) =>
+          group.scope === 'global'
+            ? {
+                ...group,
+                commands: group.commands.filter(
+                  (cmd) => !isGlobalShortcutOnlyCommand(cmd)
+                )
+              }
+            : group
+        )
+        .filter((group) => group.commands.length > 0);
+    }
 
     const next: DisplayCommandGroup[] = [];
     for (const group of catalogueGroups) {

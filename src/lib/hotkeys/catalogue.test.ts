@@ -25,8 +25,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   commandById,
+  GLOBAL_SHORTCUT_COMMAND_IDS,
+  GLOBAL_SHORTCUT_ONLY_COMMAND_IDS,
   groupedCommands,
   HOTKEY_COMMANDS,
+  isGlobalShortcutCommand,
+  isGlobalShortcutOnlyCommand,
   MARKDOWN_ACTIONS
 } from './commands';
 import { parseBinding } from './parse';
@@ -91,6 +95,25 @@ describe('catalogue consistency', () => {
       }
     }
     expect(missing).toEqual([]);
+  });
+
+  it('registers only native global shortcut commands in the global shortcut set', () => {
+    expect([...GLOBAL_SHORTCUT_COMMAND_IDS]).toEqual([
+      'global.newMarkdownNote',
+      'global.newDrawing',
+      'global.newInkNote',
+      'global.showApp'
+    ]);
+    for (const id of GLOBAL_SHORTCUT_COMMAND_IDS) {
+      expect(commandById(id)?.scope).toBe('global');
+      expect(isGlobalShortcutCommand(id)).toBe(true);
+    }
+  });
+
+  it('marks show app as the only global-shortcut-only command', () => {
+    expect([...GLOBAL_SHORTCUT_ONLY_COMMAND_IDS]).toEqual(['global.showApp']);
+    expect(isGlobalShortcutOnlyCommand('global.showApp')).toBe(true);
+    expect(isGlobalShortcutOnlyCommand('global.newMarkdownNote')).toBe(false);
   });
 
   it('command ids are unique', () => {

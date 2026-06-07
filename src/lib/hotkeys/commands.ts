@@ -37,6 +37,12 @@
 
 import { openSettings } from '$lib/settings/store.svelte';
 import { openShortcutHelp } from './help.svelte';
+import {
+  openRightSidebar,
+  toggleLeftSidebar,
+  toggleRightSidebar,
+  ui
+} from '$lib/state.svelte';
 import type { Ctx } from '@milkdown/kit/ctx';
 import { commandsCtx, editorViewCtx } from '@milkdown/kit/core';
 import {
@@ -245,14 +251,35 @@ function runCreateRootNote(kind: RootNoteKind) {
   });
 }
 
+const ADD_TAG_HOTKEY_EVENT = 'mindstream:hotkeys:add-tag';
+
+function requestAddTag() {
+  openRightSidebar();
+  if (!ui.activeNoteId || typeof window === 'undefined') return;
+  setTimeout(() => {
+    window.dispatchEvent(new CustomEvent(ADD_TAG_HOTKEY_EVENT));
+  }, 0);
+}
+
+function runShowApp() {
+  void import('$lib/api').then(({ focusMainWindow }) => focusMainWindow());
+}
+
 export const GLOBAL_SHORTCUT_COMMAND_IDS = [
   'global.newMarkdownNote',
   'global.newDrawing',
-  'global.newInkNote'
+  'global.newInkNote',
+  'global.showApp'
 ] as const;
 
 const GLOBAL_SHORTCUT_COMMAND_ID_SET = new Set<string>(
   GLOBAL_SHORTCUT_COMMAND_IDS
+);
+
+export const GLOBAL_SHORTCUT_ONLY_COMMAND_IDS = ['global.showApp'] as const;
+
+const GLOBAL_SHORTCUT_ONLY_COMMAND_ID_SET = new Set<string>(
+  GLOBAL_SHORTCUT_ONLY_COMMAND_IDS
 );
 
 export function isGlobalShortcutCommand(
@@ -260,6 +287,13 @@ export function isGlobalShortcutCommand(
 ): boolean {
   const id = typeof command === 'string' ? command : command.id;
   return GLOBAL_SHORTCUT_COMMAND_ID_SET.has(id);
+}
+
+export function isGlobalShortcutOnlyCommand(
+  command: CommandDefinition | string
+): boolean {
+  const id = typeof command === 'string' ? command : command.id;
+  return GLOBAL_SHORTCUT_ONLY_COMMAND_ID_SET.has(id);
 }
 
 /* --- Command catalogue ----------------------------------------------------- */
@@ -303,6 +337,27 @@ export const HOTKEY_COMMANDS: CommandDefinition[] = [
     run: () => openSettings()
   },
   {
+    id: 'global.toggleNoteOverview',
+    scope: 'global',
+    labelKey: 'hotkeys.command.global.toggleNoteOverview',
+    defaultBinding: null,
+    run: () => toggleLeftSidebar()
+  },
+  {
+    id: 'global.toggleNoteMetadata',
+    scope: 'global',
+    labelKey: 'hotkeys.command.global.toggleNoteMetadata',
+    defaultBinding: null,
+    run: () => toggleRightSidebar()
+  },
+  {
+    id: 'global.addTag',
+    scope: 'global',
+    labelKey: 'hotkeys.command.global.addTag',
+    defaultBinding: null,
+    run: () => requestAddTag()
+  },
+  {
     id: 'global.showShortcutHelp',
     scope: 'global',
     labelKey: 'hotkeys.command.global.showShortcutHelp',
@@ -313,6 +368,13 @@ export const HOTKEY_COMMANDS: CommandDefinition[] = [
     // layouts where `?` is produced without Shift.
     defaultBinding: 'shift+?',
     run: () => openShortcutHelp()
+  },
+  {
+    id: 'global.showApp',
+    scope: 'global',
+    labelKey: 'hotkeys.command.global.showApp',
+    defaultBinding: null,
+    run: () => runShowApp()
   },
 
   // --- Markdown editor ------------------------------------------------------

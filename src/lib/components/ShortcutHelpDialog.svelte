@@ -28,9 +28,11 @@
     displayBinding,
     getBinding,
     groupedCommands,
+    isGlobalShortcutOnlyCommand,
     shortcutHelp,
     type CommandDefinition
   } from '$lib/hotkeys';
+  import { getSettingValue } from '$lib/settings/store.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
 
   /**
@@ -38,7 +40,25 @@
    * doesn't change at runtime; per-binding reactivity comes from
    * `getBinding(cmd.id)` at the row level.
    */
-  const groups = groupedCommands();
+  const catalogueGroups = groupedCommands();
+  const globalShortcutsEnabled = $derived(
+    getSettingValue('hotkeys.globalShortcuts') === true
+  );
+  const groups = $derived.by(() => {
+    if (globalShortcutsEnabled) return catalogueGroups;
+    return catalogueGroups
+      .map((group) =>
+        group.scope === 'global'
+          ? {
+              ...group,
+              commands: group.commands.filter(
+                (cmd) => !isGlobalShortcutOnlyCommand(cmd)
+              )
+            }
+          : group
+      )
+      .filter((group) => group.commands.length > 0);
+  });
   let query = $state('');
   const lowerQuery = $derived(query.trim().toLowerCase());
 

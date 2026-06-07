@@ -48,6 +48,12 @@ export function toggleRightSidebar() {
   persistUi();
 }
 
+export function openRightSidebar() {
+  if (ui.rightSidebarOpen) return;
+  ui.rightSidebarOpen = true;
+  persistUi();
+}
+
 export function setLeftSidebarWidth(px: number) {
   ui.leftSidebarWidth = px;
   persistUi();

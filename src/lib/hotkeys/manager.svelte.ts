@@ -34,7 +34,11 @@
  */
 
 import { formatChord, normalizeKey, parseBinding } from './parse';
-import { HOTKEY_COMMANDS, type CommandDefinition } from './commands';
+import {
+  HOTKEY_COMMANDS,
+  isGlobalShortcutOnlyCommand,
+  type CommandDefinition
+} from './commands';
 import {
   getBinding,
   hotkeys,
@@ -292,6 +296,7 @@ function findMatchingCommand(event: EventFlags): CommandDefinition | null {
   const active = activeEditor();
   let defaultMatch: CommandDefinition | null = null;
   for (const cmd of HOTKEY_COMMANDS) {
+    if (isGlobalShortcutOnlyCommand(cmd)) continue;
     if (cmd.scope === 'editor' && active?.kind !== cmd.editorKind) continue;
     const raw = getBinding(cmd.id);
     if (!raw) continue;

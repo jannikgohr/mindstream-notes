@@ -152,6 +152,16 @@ describe('initHotkeys — match and dispatch', () => {
     expect(onCommand).toHaveBeenCalledWith('editor.ink.pen');
     expect(event.defaultPrevented).toBe(true);
   });
+
+  it('does not dispatch global-shortcut-only commands inside the webview', () => {
+    forceWindowsModKey();
+    teardownHotkeys = initHotkeys();
+    hotkeys.bindings['global.showApp'] = 'mod+x';
+
+    const event = press({ key: 'x', code: 'KeyX', ctrlKey: true });
+
+    expect(event.defaultPrevented).toBe(false);
+  });
 });
 
 describe('initHotkeys — fall-through cases', () => {

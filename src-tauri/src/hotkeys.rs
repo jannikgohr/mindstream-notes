@@ -11,6 +11,7 @@ const GLOBAL_SHORTCUT_COMMAND_IDS: &[&str] = &[
     "global.newMarkdownNote",
     "global.newDrawing",
     "global.newInkNote",
+    "global.showApp",
 ];
 
 #[derive(Clone, Debug, Default)]

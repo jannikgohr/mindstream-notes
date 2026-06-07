@@ -155,6 +155,11 @@ fn handle_menu_event(app: &AppHandle, item_id: &str) {
 }
 
 pub(crate) fn handle_global_shortcut_command(app: &AppHandle, command_id: &str) {
+    if command_id == "global.showApp" {
+        focus_main_window(app);
+        return;
+    }
+
     let Some((title, body, note_kind)) = global_shortcut_template(command_id) else {
         log::warn!("[global-shortcuts] unhandled command {command_id}");
         return;

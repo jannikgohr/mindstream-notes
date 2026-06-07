@@ -19,6 +19,7 @@
     getBinding,
     groupedCommands,
     isGlobalShortcutCommand,
+    isGlobalShortcutOnlyCommand,
     type CommandGroup,
     type CommandDefinition
   } from '$lib/hotkeys';
@@ -37,7 +38,20 @@
   };
 
   const hotkeyGroups = $derived.by<DisplayCommandGroup[]>(() => {
-    if (!globalShortcutsEnabled) return catalogueHotkeyGroups;
+    if (!globalShortcutsEnabled) {
+      return catalogueHotkeyGroups
+        .map((group) =>
+          group.scope === 'global'
+            ? {
+                ...group,
+                commands: group.commands.filter(
+                  (cmd) => !isGlobalShortcutOnlyCommand(cmd)
+                )
+              }
+            : group
+        )
+        .filter((group) => group.commands.length > 0);
+    }
 
     const next: DisplayCommandGroup[] = [];
     for (const group of catalogueHotkeyGroups) {
