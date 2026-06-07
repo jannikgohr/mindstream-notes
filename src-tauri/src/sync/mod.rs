@@ -78,10 +78,13 @@ fn panic_payload_to_string(payload: Box<dyn Any + Send>) -> String {
 }
 
 fn is_corrupt_remote_content(err: &AppError) -> bool {
+    // Matches both the old panic-derived "out of bounds" message and the
+    // current etebase-rs error wording "Chunk index out of range" returned
+    // by EncryptedRevision::content() after the dedup-index fix.
     matches!(
         err,
         AppError::InvalidArg(message)
-            if message.contains("content: Chunk index out of bounds")
+            if message.contains("content: Chunk index out of")
     )
 }
 
@@ -403,7 +406,6 @@ fn pull_folders(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult
     let stoken = load_stoken(db, KIND_FOLDERS)?;
     let mut new_stoken = stoken.clone();
     let mut iter_token: Option<String> = None;
-    let mut had_corrupt_items = false;
     // Buffer of payloads we applied this pull so the repair pass below
     // can re-link any folder we had to orphan to root because its
     // parent hadn't been pulled yet. Etebase doesn't guarantee
@@ -424,10 +426,14 @@ fn pull_folders(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult
                 Ok(Some(payload)) => applied.push(payload),
                 Ok(None) => {}
                 Err(err) if is_corrupt_remote_content(&err) => {
-                    had_corrupt_items = true;
                     if mark_local_by_remote_uid_dirty(db, KIND_FOLDERS, item.uid())? {
                         log::warn!(
                             "[sync] marked local folder item {} dirty for remote repair",
+                            item.uid()
+                        );
+                    } else {
+                        log::error!(
+                            "[sync] corrupt remote folder item {} has no local copy — manual recovery required",
                             item.uid()
                         );
                     }
@@ -447,7 +453,7 @@ fn pull_folders(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult
         iter_token = None; // server uses stoken paging via response
     }
     repair_folder_parents(db, &applied)?;
-    if !had_corrupt_items && new_stoken != stoken {
+    if new_stoken != stoken {
         save_stoken(db, KIND_FOLDERS, new_stoken.as_deref())?;
     }
     Ok(())
@@ -461,7 +467,6 @@ fn pull_notes(
 ) -> AppResult<()> {
     let stoken = load_stoken(db, KIND_NOTES)?;
     let mut new_stoken = stoken.clone();
-    let mut had_corrupt_items = false;
     loop {
         let mut opts = FetchOptions::new();
         opts = opts.stoken(new_stoken.as_deref());
@@ -473,10 +478,14 @@ fn pull_notes(
                 Ok(Some(id)) => applied_ids.push(id),
                 Ok(None) => {}
                 Err(err) if is_corrupt_remote_content(&err) => {
-                    had_corrupt_items = true;
                     if mark_local_by_remote_uid_dirty(db, KIND_NOTES, item.uid())? {
                         log::warn!(
                             "[sync] marked local note item {} dirty for remote repair",
+                            item.uid()
+                        );
+                    } else {
+                        log::error!(
+                            "[sync] corrupt remote note item {} has no local copy — manual recovery required",
                             item.uid()
                         );
                     }
@@ -494,7 +503,7 @@ fn pull_notes(
             break;
         }
     }
-    if !had_corrupt_items && new_stoken != stoken {
+    if new_stoken != stoken {
         save_stoken(db, KIND_NOTES, new_stoken.as_deref())?;
     }
     Ok(())
@@ -519,7 +528,6 @@ fn pull_assets(
     let stoken = load_stoken(db, KIND_ASSETS)?;
     let mut new_stoken = stoken.clone();
     let mut had_orphans = false;
-    let mut had_corrupt_items = false;
     loop {
         let mut opts = FetchOptions::new();
         opts = opts.stoken(new_stoken.as_deref());
@@ -537,10 +545,14 @@ fn pull_assets(
                 }
                 Ok(ApplyAssetOutcome::Skipped) => {}
                 Err(err) if is_corrupt_remote_content(&err) => {
-                    had_corrupt_items = true;
                     if mark_local_by_remote_uid_dirty(db, KIND_ASSETS, item.uid())? {
                         log::warn!(
                             "[sync] marked local asset item {} dirty for remote repair",
+                            item.uid()
+                        );
+                    } else {
+                        log::error!(
+                            "[sync] corrupt remote asset item {} has no local copy — manual recovery required",
                             item.uid()
                         );
                     }
@@ -557,7 +569,7 @@ fn pull_assets(
             break;
         }
     }
-    if !had_orphans && !had_corrupt_items && new_stoken != stoken {
+    if !had_orphans && new_stoken != stoken {
         save_stoken(db, KIND_ASSETS, new_stoken.as_deref())?;
     }
     Ok(())
