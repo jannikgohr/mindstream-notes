@@ -201,6 +201,12 @@ function targetIsBlockedInput(event: KeyboardEvent): boolean {
   return false;
 }
 
+function targetIsHotkeyRecorder(event: KeyboardEvent): boolean {
+  const target = event.target;
+  if (!(target instanceof Element)) return false;
+  return Boolean(target.closest('[data-hotkey-recorder="true"]'));
+}
+
 /**
  * Crepe's ProseMirror keymap binds a handful of chords to its built-in
  * commands at editor construction. These are baked in and we can't
@@ -317,9 +323,16 @@ export function initHotkeys(): () => void {
   hydrateBindingsFromSettings();
 
   const onKeyDown = (event: KeyboardEvent) => {
-    if (targetIsBlockedInput(event)) return;
+    if (targetIsHotkeyRecorder(event)) {
+      return;
+    }
+    if (targetIsBlockedInput(event)) {
+      return;
+    }
     const flags = flagsFromEvent(event);
-    if (!flags) return;
+    if (!flags) {
+      return;
+    }
     const cmd = findMatchingCommand(flags);
     if (cmd) {
       // Emit first, then preventDefault only if the bus actually
@@ -340,6 +353,7 @@ export function initHotkeys(): () => void {
     if (shouldSuppressCrepeNative(flags)) {
       event.preventDefault();
       event.stopPropagation();
+      return;
     }
   };
 

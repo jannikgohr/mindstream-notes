@@ -33,6 +33,7 @@
     findCommandByBinding,
     getBinding,
     groupedCommands,
+    HotkeyBindingConflictError,
     HOTKEY_COMMANDS,
     isGlobalShortcutCommand,
     isCustomized,
@@ -69,6 +70,11 @@
    *  hits a chord the OS captures (Cmd+Q, Alt+Tab, …). Advisory only —
    *  the user can still save it. */
   let osConflictReason = $state<string | null>(null);
+  let feedback = $state<{
+    kind: 'success' | 'error' | 'warning';
+    commandId: string | null;
+    message: string;
+  } | null>(null);
 
   /**
    * On macOS, the Option (Alt) key composes characters: Alt+A becomes
@@ -189,10 +195,50 @@
     return cmd ? commandLabel(cmd) : id;
   }
 
+  function feedbackText(
+    key: string,
+    replacements: Record<string, string> = {}
+  ) {
+    let text = tUi(key);
+    for (const [name, value] of Object.entries(replacements)) {
+      text = text.replace(`{${name}}`, value);
+    }
+    return text;
+  }
+
+  function feedbackClass(kind: 'success' | 'error' | 'warning'): string {
+    if (kind === 'error') {
+      return 'border-destructive/40 bg-destructive/10 text-destructive';
+    }
+    if (kind === 'warning') {
+      return 'border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400';
+    }
+    return 'border-border bg-muted text-muted-foreground';
+  }
+
+  function errorMessage(err: unknown): string {
+    if (err instanceof Error && err.message.trim()) return err.message;
+    if (typeof err === 'string' && err.trim()) return err;
+    return feedbackText('hotkeys.feedback.unknownError');
+  }
+
+  function isModifierOnlyEvent(e: KeyboardEvent): boolean {
+    return (
+      e.key === 'Shift' ||
+      e.key === 'Control' ||
+      e.key === 'Alt' ||
+      e.key === 'Meta' ||
+      e.key === 'Dead' ||
+      e.isComposing
+    );
+  }
+
   function startRecording(cmd: CommandDefinition) {
     recordingId = cmd.id;
     pendingBinding = null;
     conflictWithId = null;
+    osConflictReason = null;
+    feedback = null;
   }
 
   function cancelRecording() {
@@ -230,38 +276,126 @@
     if (!binding) {
       // Modifier-only press, dead key, IME — wait for a real chord.
       // Don't update pendingBinding so the prompt stays visible.
+      if (!isModifierOnlyEvent(e)) {
+        feedback = {
+          kind: 'error',
+          commandId: recordingId,
+          message: feedbackText('hotkeys.feedback.invalid')
+        };
+      }
       return;
     }
     pendingBinding = binding;
+    feedback = null;
 
     const owner = findCommandByBinding(binding);
     conflictWithId = owner && owner.id !== recordingId ? owner.id : null;
     osConflictReason = wellKnownConflict(binding);
+    if (conflictWithId) {
+      feedback = {
+        kind: 'error',
+        commandId: recordingId,
+        message: feedbackText('hotkeys.feedback.conflict', {
+          command: conflictLabel(conflictWithId)
+        })
+      };
+    }
   }
 
   async function commitRecording() {
     if (!recordingId || !pendingBinding) return;
+    const commandId = recordingId;
+    const binding = pendingBinding;
+    if (conflictWithId) {
+      feedback = {
+        kind: 'error',
+        commandId,
+        message: feedbackText('hotkeys.feedback.conflict', {
+          command: conflictLabel(conflictWithId)
+        })
+      };
+      return;
+    }
     try {
-      await setBinding(recordingId, pendingBinding);
+      await setBinding(commandId, binding);
+      if (osConflictReason) {
+        feedback = {
+          kind: 'warning',
+          commandId,
+          message: feedbackText('hotkeys.feedback.savedWithOsWarning')
+        };
+      } else {
+        feedback = {
+          kind: 'success',
+          commandId,
+          message: feedbackText('hotkeys.feedback.saved')
+        };
+      }
+      cancelRecording();
     } catch (err) {
       console.error('[HotkeysPanel] commit failed', err);
+      if (err instanceof HotkeyBindingConflictError) {
+        conflictWithId = err.conflictingCommandId;
+        feedback = {
+          kind: 'error',
+          commandId,
+          message: feedbackText('hotkeys.feedback.conflict', {
+            command: conflictLabel(err.conflictingCommandId)
+          })
+        };
+        return;
+      }
+      feedback = {
+        kind: 'error',
+        commandId,
+        message: feedbackText('hotkeys.feedback.saveFailed', {
+          reason: errorMessage(err)
+        })
+      };
     }
-    cancelRecording();
   }
 
   async function unset(cmd: CommandDefinition) {
     try {
       await setBinding(cmd.id, null);
+      feedback = {
+        kind: 'success',
+        commandId: cmd.id,
+        message: feedbackText('hotkeys.feedback.cleared', {
+          command: commandLabel(cmd)
+        })
+      };
     } catch (err) {
       console.error('[HotkeysPanel] unset failed', err);
+      feedback = {
+        kind: 'error',
+        commandId: cmd.id,
+        message: feedbackText('hotkeys.feedback.saveFailed', {
+          reason: errorMessage(err)
+        })
+      };
     }
   }
 
   async function reset(cmd: CommandDefinition) {
     try {
       await resetBinding(cmd.id);
+      feedback = {
+        kind: 'success',
+        commandId: cmd.id,
+        message: feedbackText('hotkeys.feedback.reset', {
+          command: commandLabel(cmd)
+        })
+      };
     } catch (err) {
       console.error('[HotkeysPanel] reset failed', err);
+      feedback = {
+        kind: 'error',
+        commandId: cmd.id,
+        message: feedbackText('hotkeys.feedback.saveFailed', {
+          reason: errorMessage(err)
+        })
+      };
     }
   }
 
@@ -287,18 +421,29 @@
       destructive: true
     });
     if (!ok) return;
-    // Sequential rather than Promise.all so the conflict-swap path in
-    // `setBinding` (which clears collisions before writing) sees a
-    // consistent intermediate state. Doing them in parallel would let
-    // two settles race over the same chord. Catalogue is small (~17
-    // entries) — the cost is invisible.
+    // Sequential rather than Promise.all so a write that fails can
+    // stop on the exact command that needs feedback. Catalogue is
+    // small (~17 entries) — the cost is invisible.
     for (const cmd of HOTKEY_COMMANDS) {
       try {
         await resetBinding(cmd.id);
       } catch (err) {
         console.error('[HotkeysPanel] reset failed for', cmd.id, err);
+        feedback = {
+          kind: 'error',
+          commandId: cmd.id,
+          message: feedbackText('hotkeys.feedback.saveFailed', {
+            reason: errorMessage(err)
+          })
+        };
+        return;
       }
     }
+    feedback = {
+      kind: 'success',
+      commandId: null,
+      message: feedbackText('hotkeys.feedback.resetAll')
+    };
   }
 
   /**
@@ -366,135 +511,155 @@
                   ></span>
                 {/if}
               </div>
-              <div class="flex items-center gap-1.5">
-                {#if recording}
-                  {@const originalDisplay = display || tUi('hotkeys.unset')}
-                  <button
-                    type="button"
-                    class="flex h-7 min-w-[10rem] items-center justify-center gap-1 rounded-md border border-ring bg-accent px-2 font-mono text-xs text-accent-foreground"
-                    onkeydown={onRecordKeyDown}
-                    onclick={(e) => e.preventDefault()}
-                    use:focusOnMount
-                    aria-label={tUi('hotkeys.recording.prompt')}
+              <div class="flex flex-col items-end gap-1.5">
+                {#if recording && conflictWithId}
+                  <div
+                    role="status"
+                    aria-live="polite"
+                    class="max-w-[28rem] rounded-md border px-3 py-2 text-xs {feedbackClass(
+                      'error'
+                    )}"
                   >
-                    {#if pendingBinding}
-                      {displayBinding(pendingBinding)}
-                    {:else}
-                      <!--
-                      Show the existing binding next to the "Press a
-                      key…" prompt so the user keeps a visual anchor of
-                      what they're about to replace. Disappears the
-                      moment they press a key — at that point what
-                      matters is the NEW chord, not the old one.
-                    -->
-                      <span class="text-muted-foreground"
-                        >{originalDisplay}</span
-                      >
-                      <span class="text-muted-foreground" aria-hidden="true"
-                        >→</span
-                      >
-                      <span>{tUi('hotkeys.recording.prompt')}</span>
-                    {/if}
-                  </button>
-                  {#if pendingBinding && conflictWithId}
-                    <span
-                      class="max-w-[14rem] text-xs text-destructive"
-                      title={tUi('hotkeys.conflict.tooltip')}
-                    >
-                      {tUi('hotkeys.conflict.label')}: {conflictLabel(
-                        conflictWithId
-                      )}
-                    </span>
-                  {/if}
-                  {#if pendingBinding && osConflictReason}
-                    <!--
-                    OS-collision warning. Uses an amber muted-foreground
-                    rather than destructive red because the user may
-                    still want to save the binding — many "OS reserved"
-                    chords are actually overridable in a Tauri webview;
-                    we just can't tell for sure.
-                  -->
-                    <span
-                      class="max-w-[16rem] text-xs text-amber-600 dark:text-amber-500"
-                      title={tUi('hotkeys.osConflict.tooltip')}
-                    >
-                      {tUi('hotkeys.osConflict.label')}: {osConflictReason}
-                    </span>
-                  {/if}
-                  {#if showMacAltHint}
-                    <!--
-                    Plain muted-foreground because this is informational,
-                    not a warning — the binding works as recorded, just
-                    looks unfamiliar. Suggesting Cmd is the easiest
-                    fix; we don't try to force it.
-                  -->
-                    <span
-                      class="max-w-[18rem] text-xs text-muted-foreground"
-                      title={tUi('hotkeys.macAltHint.tooltip')}
-                    >
-                      {tUi('hotkeys.macAltHint.label')}
-                    </span>
-                  {/if}
-                  {#if pendingBinding}
-                    <Button
-                      size="sm"
-                      variant="default"
-                      onclick={commitRecording}
-                    >
-                      {tUi('hotkeys.recording.save')}
-                    </Button>
-                  {/if}
-                  <Button size="sm" variant="ghost" onclick={cancelRecording}>
-                    {tUi('hotkeys.recording.cancel')}
-                  </Button>
-                {:else}
-                  <button
-                    type="button"
-                    class="flex h-7 min-w-[7rem] items-center justify-center rounded-md border border-input bg-background px-2 font-mono text-xs transition-colors hover:border-ring hover:bg-accent"
-                    onclick={() => startRecording(cmd)}
-                    title={tUi('hotkeys.editChip.tooltip')}
-                    aria-label={tUi('hotkeys.editChip.aria')}
+                    {feedbackText('hotkeys.feedback.conflict', {
+                      command: conflictLabel(conflictWithId)
+                    })}
+                  </div>
+                {:else if recording && feedback && feedback.commandId === cmd.id}
+                  <div
+                    role="status"
+                    aria-live="polite"
+                    class="max-w-[28rem] rounded-md border px-3 py-2 text-xs {feedbackClass(
+                      feedback.kind
+                    )}"
                   >
-                    {#if display}
-                      {display}
-                    {:else}
-                      <span class="text-muted-foreground"
-                        >{tUi('hotkeys.unset')}</span
-                      >
-                    {/if}
-                  </button>
-                  <button
-                    type="button"
-                    class="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                    onclick={() => startRecording(cmd)}
-                    title={tUi('hotkeys.edit')}
-                    aria-label={tUi('hotkeys.edit')}
-                  >
-                    <Pencil class="size-3.5" />
-                  </button>
-                  {#if current !== null}
-                    <button
-                      type="button"
-                      class="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                      onclick={() => unset(cmd)}
-                      title={tUi('hotkeys.unsetAction')}
-                      aria-label={tUi('hotkeys.unsetAction')}
-                    >
-                      <XCircle class="size-3.5" />
-                    </button>
-                  {/if}
-                  {#if customized && defaultBindingCanonical !== currentCanonical}
-                    <button
-                      type="button"
-                      class="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                      onclick={() => reset(cmd)}
-                      title={tUi('reset')}
-                      aria-label={tUi('reset')}
-                    >
-                      <RotateCcw class="size-3.5" />
-                    </button>
-                  {/if}
+                    {feedback.message}
+                  </div>
                 {/if}
+                <div class="flex items-center gap-1.5">
+                  {#if recording}
+                    {@const originalDisplay = display || tUi('hotkeys.unset')}
+                    <button
+                      type="button"
+                      data-hotkey-recorder="true"
+                      class="flex h-7 min-w-[10rem] items-center justify-center gap-1 rounded-md border border-ring bg-accent px-2 font-mono text-xs text-accent-foreground"
+                      onkeydown={onRecordKeyDown}
+                      onclick={(e) => e.preventDefault()}
+                      use:focusOnMount
+                      aria-label={tUi('hotkeys.recording.prompt')}
+                    >
+                      {#if pendingBinding}
+                        {displayBinding(pendingBinding)}
+                      {:else}
+                        <!--
+                        Show the existing binding next to the "Press a
+                        key…" prompt so the user keeps a visual anchor of
+                        what they're about to replace. Disappears the
+                        moment they press a key — at that point what
+                        matters is the NEW chord, not the old one.
+                      -->
+                        <span class="text-muted-foreground"
+                          >{originalDisplay}</span
+                        >
+                        <span class="text-muted-foreground" aria-hidden="true"
+                          >→</span
+                        >
+                        <span>{tUi('hotkeys.recording.prompt')}</span>
+                      {/if}
+                    </button>
+                    {#if pendingBinding && osConflictReason}
+                      <!--
+                      OS-collision warning. Uses an amber muted-foreground
+                      rather than destructive red because the user may
+                      still want to save the binding — many "OS reserved"
+                      chords are actually overridable in a Tauri webview;
+                      we just can't tell for sure.
+                    -->
+                      <span
+                        class="max-w-[16rem] text-xs text-amber-600 dark:text-amber-500"
+                        title={tUi('hotkeys.osConflict.tooltip')}
+                      >
+                        {tUi('hotkeys.osConflict.label')}: {osConflictReason}
+                      </span>
+                    {/if}
+                    {#if showMacAltHint}
+                      <!--
+                      Plain muted-foreground because this is informational,
+                      not a warning — the binding works as recorded, just
+                      looks unfamiliar. Suggesting Cmd is the easiest
+                      fix; we don't try to force it.
+                    -->
+                      <span
+                        class="max-w-[18rem] text-xs text-muted-foreground"
+                        title={tUi('hotkeys.macAltHint.tooltip')}
+                      >
+                        {tUi('hotkeys.macAltHint.label')}
+                      </span>
+                    {/if}
+                    {#if pendingBinding}
+                      <Button
+                        size="sm"
+                        variant="default"
+                        disabled={Boolean(conflictWithId)}
+                        title={conflictWithId
+                          ? tUi('hotkeys.conflict.tooltip')
+                          : undefined}
+                        onclick={commitRecording}
+                      >
+                        {tUi('hotkeys.recording.save')}
+                      </Button>
+                    {/if}
+                    <Button size="sm" variant="ghost" onclick={cancelRecording}>
+                      {tUi('hotkeys.recording.cancel')}
+                    </Button>
+                  {:else}
+                    <button
+                      type="button"
+                      class="flex h-7 min-w-[7rem] items-center justify-center rounded-md border border-input bg-background px-2 font-mono text-xs transition-colors hover:border-ring hover:bg-accent"
+                      onclick={() => startRecording(cmd)}
+                      title={tUi('hotkeys.editChip.tooltip')}
+                      aria-label={tUi('hotkeys.editChip.aria')}
+                    >
+                      {#if display}
+                        {display}
+                      {:else}
+                        <span class="text-muted-foreground"
+                          >{tUi('hotkeys.unset')}</span
+                        >
+                      {/if}
+                    </button>
+                    <button
+                      type="button"
+                      class="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                      onclick={() => startRecording(cmd)}
+                      title={tUi('hotkeys.edit')}
+                      aria-label={tUi('hotkeys.edit')}
+                    >
+                      <Pencil class="size-3.5" />
+                    </button>
+                    {#if current !== null}
+                      <button
+                        type="button"
+                        class="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                        onclick={() => unset(cmd)}
+                        title={tUi('hotkeys.unsetAction')}
+                        aria-label={tUi('hotkeys.unsetAction')}
+                      >
+                        <XCircle class="size-3.5" />
+                      </button>
+                    {/if}
+                    {#if customized && defaultBindingCanonical !== currentCanonical}
+                      <button
+                        type="button"
+                        class="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                        onclick={() => reset(cmd)}
+                        title={tUi('reset')}
+                        aria-label={tUi('reset')}
+                      >
+                        <RotateCcw class="size-3.5" />
+                      </button>
+                    {/if}
+                  {/if}
+                </div>
               </div>
             </div>
           {/each}

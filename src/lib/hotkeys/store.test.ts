@@ -13,6 +13,7 @@ import {
   findCommandByBinding,
   getBinding,
   hotkeys,
+  HotkeyBindingConflictError,
   hydrateBindingsFromSettings,
   isCustomized,
   resetBinding,
@@ -78,29 +79,41 @@ describe('store.setBinding', () => {
     await expect(setBinding(BOLD, 'garbage')).rejects.toThrow();
   });
 
-  it('clears the previous owner when a chord is already taken', async () => {
-    // The conflict-swap path. User had bold on a custom chord;
-    // assigning that same chord to italic must clear bold so the
-    // single-binding invariant survives.
+  it('rejects a custom-owner collision without changing either command', async () => {
+    // User had bold on a custom chord; assigning that same chord to
+    // italic must be reported to the caller so the UI can show the
+    // rejection next to the row being edited.
     await setBinding(BOLD, 'mod+x');
-    await setBinding(ITALIC, 'mod+x');
-    expect(getBinding(BOLD)).toBeNull();
-    expect(getBinding(ITALIC)).toBe('mod+x');
+    let err: unknown;
+    try {
+      await setBinding(ITALIC, 'mod+x');
+    } catch (caught) {
+      err = caught;
+    }
+    expect(err).toBeInstanceOf(HotkeyBindingConflictError);
+    expect(err).toMatchObject({
+      commandId: ITALIC,
+      conflictingCommandId: BOLD,
+      binding: 'mod+x'
+    });
+    expect(getBinding(BOLD)).toBe('mod+x');
+    expect(getBinding(ITALIC)).toBe(COMMAND_BY_ID[ITALIC].defaultBinding);
   });
 
-  it('leaves a default-only binding alone when the new chord collides with its default', async () => {
-    // setBinding's swap path only clears OTHER commands whose user
-    // override matches the new chord. A default-only command is
-    // left alone — the matcher's user-override-wins priority
-    // handles the collision at dispatch time. That keeps the user's
-    // intent reversible: reset italic and bold's default kicks
-    // back in without the user having to manually rebind it.
+  it('rejects a default-owner collision without changing either command', async () => {
+    // A visible collision is still a collision: if italic takes
+    // bold's default, the caller needs to know bold owns it even
+    // though bold has no explicit override in the settings map.
     const boldDefault = COMMAND_BY_ID[BOLD].defaultBinding;
     expect(boldDefault).not.toBeNull();
     if (!boldDefault) return;
-    await setBinding(ITALIC, boldDefault);
+    await expect(setBinding(ITALIC, boldDefault)).rejects.toMatchObject({
+      commandId: ITALIC,
+      conflictingCommandId: BOLD,
+      binding: boldDefault
+    });
     expect(getBinding(BOLD)).toBe(boldDefault);
-    expect(getBinding(ITALIC)).toBe(boldDefault);
+    expect(getBinding(ITALIC)).toBe(COMMAND_BY_ID[ITALIC].defaultBinding);
   });
 
   it('ignores writes to unknown command ids', async () => {

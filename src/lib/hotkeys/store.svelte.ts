@@ -35,9 +35,9 @@
  *     to be a chord the matcher can recognise.
  *
  *   - Single-binding invariant: at most one command owns a given chord.
- *     Setting a binding that's already in use silently clears the old
- *     owner. The settings UI surfaces the swap to the user before the
- *     call; the store itself just enforces the invariant.
+ *     Setting a binding that's already in use is rejected with a
+ *     `HotkeyBindingConflictError` so callers can show the rejected
+ *     shortcut next to the row the user is editing.
  */
 
 import { setSettingValue, settings } from '$lib/settings/store.svelte';
@@ -182,10 +182,23 @@ export function getBinding(commandId: string): string | null {
  * surface (`hotkeys.bindings`) and the settings store (persistence).
  *
  * Conflict handling: when `binding` is non-null and another command
- * already owns it, that other command is cleared first. Both writes
- * land in the same microtask so the UI never observes a "two commands
- * own the same chord" transient state.
+ * already owns it, reject the write. This keeps collisions visible at
+ * the edge where the user attempted them instead of silently clearing
+ * the old owner.
  */
+export class HotkeyBindingConflictError extends Error {
+  constructor(
+    public readonly commandId: string,
+    public readonly conflictingCommandId: string,
+    public readonly binding: string
+  ) {
+    super(
+      `[hotkeys] ${binding} is already assigned to ${conflictingCommandId}`
+    );
+    this.name = 'HotkeyBindingConflictError';
+  }
+}
+
 export async function setBinding(
   commandId: string,
   binding: string | null
@@ -198,18 +211,11 @@ export async function setBinding(
     throw new Error(`[hotkeys] refused to store invalid binding: ${binding}`);
   }
 
-  // Resolve conflicts FIRST so a write that swaps two bindings always
-  // produces a consistent final state, even if the second await rejects.
   if (normalized !== null) {
     for (const other of HOTKEY_COMMANDS) {
       if (other.id === commandId) continue;
-      if (hotkeys.bindings[other.id] === normalized) {
-        hotkeys.bindings[other.id] = null;
-        // Persistence is async but cheap (localStorage is sync under
-        // the hood; the await is just to satisfy the settings store's
-        // contract). We don't block on the disk write — by the time
-        // anyone reads, hotkeys.bindings is already correct.
-        void setSettingValue(settingKey(other.id), null);
+      if (getBinding(other.id) === normalized) {
+        throw new HotkeyBindingConflictError(commandId, other.id, normalized);
       }
     }
   }
@@ -219,9 +225,7 @@ export async function setBinding(
 }
 
 /** Restore a command's default binding. Goes through `setBinding` so
- *  the conflict-swap path applies — if the default is currently used
- *  by another command (because the user remapped two bindings into a
- *  swap), the other side is cleared before the default lands. */
+ *  the same conflict checks apply before the default lands. */
 export async function resetBinding(commandId: string): Promise<void> {
   const def = COMMAND_BY_ID[commandId];
   if (!def) return;
@@ -252,7 +256,9 @@ export function findCommandByBinding(
   binding: string
 ): CommandDefinition | null {
   for (const cmd of HOTKEY_COMMANDS) {
-    if (getBinding(cmd.id) === binding) return cmd;
+    if (getBinding(cmd.id) === binding) {
+      return cmd;
+    }
   }
   return null;
 }

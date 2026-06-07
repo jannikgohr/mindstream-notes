@@ -35,7 +35,8 @@ export {
   setBinding,
   resetBinding,
   isCustomized,
-  findCommandByBinding
+  findCommandByBinding,
+  HotkeyBindingConflictError
 } from './store.svelte';
 
 export { displayBinding, ariaKeyShortcut, tauriAccelerator } from './format';
