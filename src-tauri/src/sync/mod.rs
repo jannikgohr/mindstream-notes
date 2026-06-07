@@ -20,6 +20,7 @@
 //! This is the "stoken + transaction" optimistic-concurrency pattern
 //! Etebase exposes; the CRDT does the actual conflict-free merging.
 
+pub mod repair;
 pub mod scheduler;
 pub mod yrs_doc;
 
