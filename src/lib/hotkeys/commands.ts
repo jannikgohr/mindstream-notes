@@ -207,6 +207,51 @@ export const MARKDOWN_ACTIONS: Record<string, (ctx: Ctx) => void> = {
   'editor.markdown.codeBlock': turnIntoCodeBlock
 };
 
+type RootNoteKind = 'markdown' | 'freeform' | 'ink';
+
+function rootNoteTitle(kind: RootNoteKind): string {
+  switch (kind) {
+    case 'freeform':
+      return 'Untitled drawing';
+    case 'ink':
+      return 'Untitled ink note';
+    case 'markdown':
+      return 'Untitled';
+  }
+}
+
+async function createRootNote(kind: RootNoteKind) {
+  const [{ createNoteIn }, { requestOpenNote }] = await Promise.all([
+    import('$lib/stores/tree.svelte'),
+    import('$lib/stores/open-note-intent.svelte')
+  ]);
+  const id = await createNoteIn(null, rootNoteTitle(kind), kind);
+  requestOpenNote(id);
+}
+
+function runCreateRootNote(kind: RootNoteKind) {
+  void createRootNote(kind).catch((err) => {
+    console.error('[hotkeys] failed to create note', kind, err);
+  });
+}
+
+export const GLOBAL_SHORTCUT_COMMAND_IDS = [
+  'global.newMarkdownNote',
+  'global.newDrawing',
+  'global.newInkNote'
+] as const;
+
+const GLOBAL_SHORTCUT_COMMAND_ID_SET = new Set<string>(
+  GLOBAL_SHORTCUT_COMMAND_IDS
+);
+
+export function isGlobalShortcutCommand(
+  command: CommandDefinition | string
+): boolean {
+  const id = typeof command === 'string' ? command : command.id;
+  return GLOBAL_SHORTCUT_COMMAND_ID_SET.has(id);
+}
+
 /* --- Command catalogue ----------------------------------------------------- */
 
 /**
@@ -217,6 +262,27 @@ export const MARKDOWN_ACTIONS: Record<string, (ctx: Ctx) => void> = {
  */
 export const HOTKEY_COMMANDS: CommandDefinition[] = [
   // --- Global ---------------------------------------------------------------
+  {
+    id: 'global.newMarkdownNote',
+    scope: 'global',
+    labelKey: 'hotkeys.command.global.newMarkdownNote',
+    defaultBinding: 'mod+alt+n',
+    run: () => runCreateRootNote('markdown')
+  },
+  {
+    id: 'global.newDrawing',
+    scope: 'global',
+    labelKey: 'hotkeys.command.global.newDrawing',
+    defaultBinding: 'mod+alt+d',
+    run: () => runCreateRootNote('freeform')
+  },
+  {
+    id: 'global.newInkNote',
+    scope: 'global',
+    labelKey: 'hotkeys.command.global.newInkNote',
+    defaultBinding: 'mod+alt+i',
+    run: () => runCreateRootNote('ink')
+  },
   {
     id: 'global.openSettings',
     scope: 'global',

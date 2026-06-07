@@ -56,6 +56,7 @@
 
     "tray.newNote": "New note",
     "tray.newDrawing": "New drawing",
+    "tray.newInk": "New ink note",
     "tray.newDiagram": "New diagram",
     "tray.quit": "Quit",
 
@@ -77,6 +78,7 @@
     "fab.submit.create": "Create",
 
     "hotkeys.group.global": "Application",
+    "hotkeys.group.globalShortcuts": "Global shortcuts",
     "hotkeys.group.editor.markdown": "Markdown editor",
     "hotkeys.group.editor.freeform": "Drawing canvas",
     "hotkeys.group.editor.drawing": "Ink (native) editor",
@@ -105,6 +107,9 @@
     "hotkeys.search.label": "Search keyboard shortcuts",
     "hotkeys.search.empty": "No shortcuts match your search.",
 
+    "hotkeys.command.global.newMarkdownNote": "New Markdown note",
+    "hotkeys.command.global.newDrawing": "New drawing",
+    "hotkeys.command.global.newInkNote": "New ink note",
     "hotkeys.command.global.openSettings": "Open settings",
     "hotkeys.command.global.showShortcutHelp": "Show keyboard shortcuts",
     "hotkeys.help.title": "Keyboard shortcuts",
@@ -301,6 +306,10 @@
     },
     "editor.autoSave": { "label": "Auto-save" },
     "hotkeys.panel": { "label": "Keyboard shortcuts" },
+    "hotkeys.globalShortcuts": {
+      "label": "Enable global shortcuts",
+      "description": "Let application-level shortcuts fire while Mindstream Notes is in the background. Editor formatting shortcuts stay in-app only."
+    },
     "editor.autoSaveDebounce": { "label": "Auto-save debounce" },
     "data.databasePath": {
       "label": "Database location",

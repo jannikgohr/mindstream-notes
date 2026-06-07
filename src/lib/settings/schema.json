@@ -352,6 +352,13 @@
           "id": "hotkeys.list",
           "settings": [
             {
+              "id": "hotkeys.globalShortcuts",
+              "scope": "D",
+              "type": "toggle",
+              "default": false,
+              "platforms": ["desktop"]
+            },
+            {
               "id": "hotkeys.panel",
               "scope": "D",
               "type": "custom",

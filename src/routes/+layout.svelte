@@ -17,7 +17,10 @@
     getBinding,
     HOTKEY_COMMANDS,
     initHotkeys,
-    tauriAccelerator
+    isGlobalShortcutCommand,
+    syncGlobalShortcuts,
+    tauriAccelerator,
+    teardownGlobalShortcuts
   } from '$lib/hotkeys';
 
   let { children } = $props();
@@ -44,6 +47,9 @@
   // matters in tests; we drop it intentionally here.
   onMount(() => {
     initHotkeys();
+    return () => {
+      void teardownGlobalShortcuts();
+    };
   });
 
   import { ui } from '$lib/state.svelte.js';
@@ -104,6 +110,8 @@
   });
 
   $effect(() => {
+    const globalShortcutsEnabled =
+      getSettingValue('hotkeys.globalShortcuts') === true;
     const displays = HOTKEY_COMMANDS.map((cmd) => {
       const binding = getBinding(cmd.id);
       return {
@@ -113,6 +121,17 @@
       };
     });
     void setNativeHotkeyDisplays(displays);
+    void syncGlobalShortcuts(
+      globalShortcutsEnabled
+        ? HOTKEY_COMMANDS.filter(isGlobalShortcutCommand).map((cmd) => {
+            const binding = getBinding(cmd.id);
+            return {
+              commandId: cmd.id,
+              accelerator: tauriAccelerator(binding)
+            };
+          })
+        : []
+    );
   });
 
   $effect(() => {

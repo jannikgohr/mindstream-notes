@@ -5,6 +5,7 @@
   import {
     SCHEMA,
     closeSettings,
+    getSettingValue,
     isCategoryVisible,
     isSectionVisible,
     isVisible,
@@ -17,6 +18,8 @@
     displayBinding,
     getBinding,
     groupedCommands,
+    isGlobalShortcutCommand,
+    type CommandGroup,
     type CommandDefinition
   } from '$lib/hotkeys';
 
@@ -24,11 +27,54 @@
   let query = $state('');
 
   const lowerQuery = $derived(query.trim().toLowerCase());
-  const hotkeyGroups = groupedCommands();
+  const catalogueHotkeyGroups = groupedCommands();
+  const globalShortcutsEnabled = $derived(
+    getSettingValue('hotkeys.globalShortcuts') === true
+  );
 
-  function hotkeyGroupLabel(scope: string, kind: string | null): string {
+  type DisplayCommandGroup = CommandGroup & {
+    displayScope?: 'globalShortcuts';
+  };
+
+  const hotkeyGroups = $derived.by<DisplayCommandGroup[]>(() => {
+    if (!globalShortcutsEnabled) return catalogueHotkeyGroups;
+
+    const next: DisplayCommandGroup[] = [];
+    for (const group of catalogueHotkeyGroups) {
+      if (group.scope !== 'global') {
+        next.push(group);
+        continue;
+      }
+
+      const globalShortcutCommands = group.commands.filter(
+        isGlobalShortcutCommand
+      );
+      const applicationCommands = group.commands.filter(
+        (cmd) => !isGlobalShortcutCommand(cmd)
+      );
+
+      if (globalShortcutCommands.length > 0) {
+        next.push({
+          scope: 'global',
+          editorKind: null,
+          commands: globalShortcutCommands,
+          displayScope: 'globalShortcuts'
+        });
+      }
+      if (applicationCommands.length > 0) {
+        next.push({ ...group, commands: applicationCommands });
+      }
+    }
+    return next;
+  });
+
+  function hotkeyGroupLabel(group: DisplayCommandGroup): string {
+    if (group.displayScope === 'globalShortcuts') {
+      return tUi('hotkeys.group.globalShortcuts');
+    }
+    const { scope, editorKind } = group;
     if (scope === 'global') return tUi('hotkeys.group.global');
-    return tUi(`hotkeys.group.editor.${kind}`);
+    return tUi(`hotkeys.group.editor.${editorKind}`);
   }
 
   function hotkeyCommandMatches(
@@ -53,7 +99,7 @@
   function hotkeysPanelMatches(): boolean {
     if (!lowerQuery) return true;
     return hotkeyGroups.some((group) => {
-      const label = hotkeyGroupLabel(group.scope, group.editorKind);
+      const label = hotkeyGroupLabel(group);
       return group.commands.some((cmd) => hotkeyCommandMatches(cmd, label));
     });
   }

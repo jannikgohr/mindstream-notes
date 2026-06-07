@@ -56,6 +56,7 @@
 
     "tray.newNote": "Neue Notiz",
     "tray.newDrawing": "Neue Zeichnung",
+    "tray.newInk": "Neue Tintennotiz",
     "tray.newDiagram": "Neues Diagramm",
     "tray.quit": "Beenden",
 
@@ -77,6 +78,7 @@
     "fab.submit.create": "Erstellen",
 
     "hotkeys.group.global": "Anwendung",
+    "hotkeys.group.globalShortcuts": "Globale Tastenkürzel",
     "hotkeys.group.editor.markdown": "Markdown-Editor",
     "hotkeys.group.editor.freeform": "Zeichenfläche",
     "hotkeys.group.editor.drawing": "Tinten-Editor (nativ)",
@@ -105,6 +107,9 @@
     "hotkeys.search.label": "Tastenkürzel suchen",
     "hotkeys.search.empty": "Keine Tastenkürzel passen zur Suche.",
 
+    "hotkeys.command.global.newMarkdownNote": "Neue Markdown-Notiz",
+    "hotkeys.command.global.newDrawing": "Neue Zeichnung",
+    "hotkeys.command.global.newInkNote": "Neue Tintennotiz",
     "hotkeys.command.global.openSettings": "Einstellungen öffnen",
     "hotkeys.command.global.showShortcutHelp": "Tastenkürzel anzeigen",
     "hotkeys.help.title": "Tastenkürzel",
@@ -290,6 +295,10 @@
     },
     "editor.autoSave": { "label": "Auto-Speichern" },
     "hotkeys.panel": { "label": "Tastaturkürzel" },
+    "hotkeys.globalShortcuts": {
+      "label": "Globale Tastenkürzel aktivieren",
+      "description": "Anwendungsweite Tastenkürzel auch auslösen, wenn Mindstream Notes im Hintergrund ist. Formatierungs-Tastenkürzel bleiben auf die App beschränkt."
+    },
     "editor.autoSaveDebounce": { "label": "Auto-Speichern-Verzögerung" },
     "data.databasePath": { "label": "Datenbank-Speicherort" },
     "data.useTrash": { "label": "Papierkorb verwenden" },

@@ -48,6 +48,19 @@ note about what shipped, and move on.
       digit-row bindings already work via the `event.code` fallback,
       letter bindings continue to record the special character.
 
+- [ ] **#15. Desktop global shortcuts.**
+      In-app global commands only fire while the webview is focused.
+      Desktop users may want a small set of creation commands (new
+      Markdown note, drawing, and ink note) to fire while Mindstream
+      Notes is in the background.
+      **Plan:** add the Tauri global-shortcut plugin on desktop, keep
+      the feature opt-in from Settings, and register only the three
+      note-creation commands as OS-level global shortcuts. Other
+      application commands, plus editor formatting commands, stay
+      in-app only so the app never steals common shortcuts from other
+      programs. Mirror set shortcuts for tray create actions into the
+      system tray menu accelerator column.
+
 ---
 
 ## Testing coverage

@@ -145,14 +145,15 @@ function tauriKeyName(key: string): string {
 /**
  * Format a binding for Tauri/muda menu accelerators. This is separate
  * from `displayBinding`: native menus need a parseable accelerator
- * string (`CmdOrCtrl+B`), not a human display string (`⌘B` / `Ctrl+B`).
+ * string (`CommandOrControl+B`), not a human display string (`⌘B` /
+ * `Ctrl+B`).
  */
 export function tauriAccelerator(binding: string | null): string | null {
   if (!binding) return null;
   const chord = parseBinding(binding);
   if (!chord) return null;
   const parts: string[] = [];
-  if (chord.mod) parts.push('CmdOrCtrl');
+  if (chord.mod) parts.push('CommandOrControl');
   if (chord.ctrl) parts.push('Ctrl');
   if (chord.alt) parts.push('Alt');
   if (chord.shift) parts.push('Shift');

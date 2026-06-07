@@ -17,8 +17,10 @@ export {
 
 export {
   HOTKEY_COMMANDS,
+  GLOBAL_SHORTCUT_COMMAND_IDS,
   COMMAND_BY_ID,
   commandById,
+  isGlobalShortcutCommand,
   MARKDOWN_ACTIONS,
   groupedCommands,
   type CommandDefinition,
@@ -44,6 +46,7 @@ export {
   openShortcutHelp,
   closeShortcutHelp
 } from './help.svelte';
+export { syncGlobalShortcuts, teardownGlobalShortcuts } from './global.svelte';
 export { isMac } from './platform';
 
 export type { Chord, CommandScope, EditorKind } from './types';

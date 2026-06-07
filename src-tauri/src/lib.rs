@@ -125,6 +125,7 @@ pub fn run() {
                 .arg(AUTOSTART_ARG)
                 .build(),
         )
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(
             tauri_plugin_window_state::Builder::new()
                 .with_state_flags(

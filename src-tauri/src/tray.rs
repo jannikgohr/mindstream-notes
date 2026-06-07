@@ -15,13 +15,17 @@ use crate::{
 const TRAY_NOTE_CREATED_EVENT: &str = "tray-note-created";
 const NEW_NOTE_ID: &str = "new_note";
 const NEW_DRAWING_ID: &str = "new_drawing";
+const NEW_INK_ID: &str = "new_ink";
 const NEW_DIAGRAM_ID: &str = "new_diagram";
 const QUIT_ID: &str = "quit";
 
-// Tray item id -> hotkey command id. Kept empty until a tray action
-// actually overlaps the JS hotkey catalogue; the sync path below is
-// the guard rail that makes adding the first overlap a data-only edit.
-const TRAY_HOTKEY_COMMANDS: &[(&str, &str)] = &[];
+// Tray item id -> hotkey command id. The JS side owns bindings; Rust only
+// mirrors their native accelerator strings into the tray menu.
+const TRAY_HOTKEY_COMMANDS: &[(&str, &str)] = &[
+    (NEW_NOTE_ID, "global.newMarkdownNote"),
+    (NEW_DRAWING_ID, "global.newDrawing"),
+    (NEW_INK_ID, "global.newInkNote"),
+];
 
 #[derive(Clone, Debug, Serialize)]
 struct TrayNoteCreatedPayload {
@@ -31,6 +35,7 @@ struct TrayNoteCreatedPayload {
 struct TrayMenuItems {
     new_note: MenuItem<tauri::Wry>,
     new_drawing: MenuItem<tauri::Wry>,
+    new_ink: MenuItem<tauri::Wry>,
     new_diagram: MenuItem<tauri::Wry>,
     quit: MenuItem<tauri::Wry>,
 }
@@ -44,13 +49,21 @@ pub fn init(app: &App) -> tauri::Result<()> {
     let new_note = MenuItem::with_id(app, NEW_NOTE_ID, &labels.new_note, true, None::<&str>)?;
     let new_drawing =
         MenuItem::with_id(app, NEW_DRAWING_ID, &labels.new_drawing, true, None::<&str>)?;
+    let new_ink = MenuItem::with_id(app, NEW_INK_ID, &labels.new_ink, true, None::<&str>)?;
     let new_diagram =
         MenuItem::with_id(app, NEW_DIAGRAM_ID, &labels.new_diagram, true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, QUIT_ID, &labels.quit, true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
-        &[&new_note, &new_drawing, &new_diagram, &separator, &quit],
+        &[
+            &new_note,
+            &new_drawing,
+            &new_ink,
+            &new_diagram,
+            &separator,
+            &quit,
+        ],
     )?;
 
     let mut builder = TrayIconBuilder::new()
@@ -78,6 +91,7 @@ pub fn init(app: &App) -> tauri::Result<()> {
     app.manage(TrayMenuItems {
         new_note: new_note.clone(),
         new_drawing: new_drawing.clone(),
+        new_ink: new_ink.clone(),
         new_diagram: new_diagram.clone(),
         quit: quit.clone(),
     });
@@ -96,6 +110,9 @@ pub fn set_language(app: &AppHandle, code: &str) {
     }
     if let Err(err) = items.new_drawing.set_text(&labels.new_drawing) {
         log::warn!("[tray] failed to update New drawing label: {err}");
+    }
+    if let Err(err) = items.new_ink.set_text(&labels.new_ink) {
+        log::warn!("[tray] failed to update New ink note label: {err}");
     }
     if let Err(err) = items.new_diagram.set_text(&labels.new_diagram) {
         log::warn!("[tray] failed to update New diagram label: {err}");
@@ -168,6 +185,7 @@ fn note_template(item_id: &str) -> Option<(&'static str, Option<&'static str>, &
     match item_id {
         NEW_NOTE_ID => Some(("Untitled", None, "markdown")),
         NEW_DRAWING_ID => Some(("Untitled drawing", None, "freeform")),
+        NEW_INK_ID => Some(("Untitled ink note", None, "ink")),
         NEW_DIAGRAM_ID => Some((
             "Untitled diagram",
             Some("```mermaid\nflowchart TD\n  A[Start] --> B[Next]\n```\n"),
@@ -188,6 +206,7 @@ fn focus_main_window(app: &AppHandle) {
 struct TrayLabels {
     new_note: String,
     new_drawing: String,
+    new_ink: String,
     new_diagram: String,
     quit: String,
 }
@@ -197,6 +216,7 @@ impl TrayMenuItems {
         match item_id {
             NEW_NOTE_ID => Some(&self.new_note),
             NEW_DRAWING_ID => Some(&self.new_drawing),
+            NEW_INK_ID => Some(&self.new_ink),
             NEW_DIAGRAM_ID => Some(&self.new_diagram),
             QUIT_ID => Some(&self.quit),
             _ => None,
@@ -209,6 +229,7 @@ impl TrayLabels {
         Self {
             new_note: i18n::t_ui(code, "tray.newNote"),
             new_drawing: i18n::t_ui(code, "tray.newDrawing"),
+            new_ink: i18n::t_ui(code, "tray.newInk"),
             new_diagram: i18n::t_ui(code, "tray.newDiagram"),
             quit: i18n::t_ui(code, "tray.quit"),
         }

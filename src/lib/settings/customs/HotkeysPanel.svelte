@@ -34,16 +34,19 @@
     getBinding,
     groupedCommands,
     HOTKEY_COMMANDS,
+    isGlobalShortcutCommand,
     isCustomized,
     isMac,
     parseBinding,
     resetBinding,
     setBinding,
     wellKnownConflict,
+    type CommandGroup,
     type CommandDefinition
   } from '$lib/hotkeys';
   import { confirm } from '$lib/components/confirm-dialog.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
+  import { getSettingValue } from '$lib/settings/store.svelte';
 
   interface Props {
     searchQuery?: string;
@@ -96,8 +99,47 @@
    *  comes from `getBinding(cmd.id)` inside the row template
    *  (`hotkeys.bindings[id]` is per-key tracked) — so this is a plain
    *  one-shot read, not a `$derived`. */
-  const groups = groupedCommands();
+  const catalogueGroups = groupedCommands();
+  const globalShortcutsEnabled = $derived(
+    getSettingValue('hotkeys.globalShortcuts') === true
+  );
   const lowerSearchQuery = $derived(searchQuery.trim().toLowerCase());
+
+  type DisplayCommandGroup = CommandGroup & {
+    displayScope?: 'globalShortcuts';
+  };
+
+  const groups = $derived.by<DisplayCommandGroup[]>(() => {
+    if (!globalShortcutsEnabled) return catalogueGroups;
+
+    const next: DisplayCommandGroup[] = [];
+    for (const group of catalogueGroups) {
+      if (group.scope !== 'global') {
+        next.push(group);
+        continue;
+      }
+
+      const globalShortcutCommands = group.commands.filter(
+        isGlobalShortcutCommand
+      );
+      const applicationCommands = group.commands.filter(
+        (cmd) => !isGlobalShortcutCommand(cmd)
+      );
+
+      if (globalShortcutCommands.length > 0) {
+        next.push({
+          scope: 'global',
+          editorKind: null,
+          commands: globalShortcutCommands,
+          displayScope: 'globalShortcuts'
+        });
+      }
+      if (applicationCommands.length > 0) {
+        next.push({ ...group, commands: applicationCommands });
+      }
+    }
+    return next;
+  });
 
   /**
    * Does any command differ from its catalogue default? Drives the
@@ -113,12 +155,16 @@
   /** Flat lookup so the conflict warning can render the OTHER
    *  command's label without re-walking the groups array. */
   const flatById = new Map<string, CommandDefinition>(
-    groups.flatMap((g) => g.commands.map((c) => [c.id, c]))
+    HOTKEY_COMMANDS.map((c) => [c.id, c])
   );
 
-  function groupLabel(scope: string, kind: string | null): string {
+  function groupLabel(group: DisplayCommandGroup): string {
+    if (group.displayScope === 'globalShortcuts') {
+      return tUi('hotkeys.group.globalShortcuts');
+    }
+    const { scope, editorKind } = group;
     if (scope === 'global') return tUi('hotkeys.group.global');
-    return tUi(`hotkeys.group.editor.${kind}`);
+    return tUi(`hotkeys.group.editor.${editorKind}`);
   }
 
   function commandLabel(cmd: CommandDefinition): string {
@@ -287,8 +333,8 @@
 </div>
 
 <div class="mt-2 space-y-6">
-  {#each groups as group (`${group.scope}:${group.editorKind ?? ''}`)}
-    {@const title = groupLabel(group.scope, group.editorKind)}
+  {#each groups as group (`${group.displayScope ?? group.scope}:${group.editorKind ?? ''}`)}
+    {@const title = groupLabel(group)}
     {@const visibleCommands = group.commands.filter((cmd) =>
       commandMatchesSearch(cmd, getBinding(cmd.id), title)
     )}
@@ -457,7 +503,7 @@
     {/if}
   {/each}
   {#if lowerSearchQuery && groups.every((group) => {
-      const title = groupLabel(group.scope, group.editorKind);
+      const title = groupLabel(group);
       return group.commands.every((cmd) => !commandMatchesSearch(cmd, getBinding(cmd.id), title));
     })}
     <p class="py-6 text-center text-sm text-muted-foreground">
