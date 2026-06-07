@@ -147,6 +147,12 @@ function tauriKeyName(key: string): string {
  * from `displayBinding`: native menus need a parseable accelerator
  * string (`CommandOrControl+B`), not a human display string (`⌘B` /
  * `Ctrl+B`).
+ *
+ * Best-effort — if the key token doesn't map cleanly (e.g. a German
+ * umlaut), the result is still produced and muda decides whether to
+ * accept it. For OS-level GLOBAL shortcuts use
+ * `globalShortcutAccelerator` instead; the global-hotkey plugin's
+ * vocabulary is much narrower and we validate against it explicitly.
  */
 export function tauriAccelerator(binding: string | null): string | null {
   if (!binding) return null;
@@ -158,6 +164,160 @@ export function tauriAccelerator(binding: string | null): string | null {
   if (chord.alt) parts.push('Alt');
   if (chord.shift) parts.push('Shift');
   parts.push(tauriKeyName(chord.key));
+  return parts.join('+');
+}
+
+/**
+ * Typed-character key tokens (lower-cased, as parser-normalised) →
+ * the accelerator key name accepted by the global-hotkey plugin used
+ * by `tauri_plugin_global_shortcut`.
+ *
+ * Source: the plugin's own `keyToCodeMap` (Tauri 2.x). Empirically
+ * verified: any key OUTSIDE this set either fails to register or —
+ * worse — registers silently but never dispatches (the Pressed
+ * callback simply never fires when the user hits the chord), which is
+ * the trap we ran into trying to bind `Ctrl+Alt+Ö` (Semicolon
+ * physical position on QWERTZ). So instead of silently registering an
+ * unsupported chord, we reject it at the UI layer and ask the user
+ * to pick something the plugin actually dispatches.
+ *
+ * The map IS the contract: any addition / removal here must be
+ * tested against the plugin's actual behaviour, not just whether
+ * `on_shortcut` returns Ok.
+ */
+const GLOBAL_SHORTCUT_KEY_MAP: Record<string, string> = {
+  // Letters (a-z → KeyA-KeyZ). Generated rather than spelled out so
+  // the map can't drift out of sync with the alphabet.
+  ...Object.fromEntries(
+    Array.from({ length: 26 }, (_, i) => {
+      const ch = String.fromCharCode(97 + i);
+      return [ch, `Key${ch.toUpperCase()}`];
+    })
+  ),
+  // Digits 0-9
+  ...Object.fromEntries(
+    Array.from({ length: 10 }, (_, i) => [String(i), `Digit${i}`])
+  ),
+  // F1-F24
+  ...Object.fromEntries(
+    Array.from({ length: 24 }, (_, i) => [`f${i + 1}`, `F${i + 1}`])
+  ),
+  // Symbol keys (US-layout typed characters)
+  '`': 'Backquote',
+  '\\': 'Backslash',
+  '[': 'BracketLeft',
+  ']': 'BracketRight',
+  ',': 'Comma',
+  '=': 'Equal',
+  '.': 'Period',
+  "'": 'Quote',
+  ';': 'Semicolon',
+  '/': 'Slash',
+  // Minus is bound via the `-` → `minus` alias the parser emits.
+  // `plus` (Shift+= on US) isn't a base key on its own in the plugin
+  // vocabulary; users wanting "+" must bind `shift+=` instead.
+  minus: 'Minus',
+  // Named keys
+  backspace: 'Backspace',
+  capslock: 'CapsLock',
+  enter: 'Enter',
+  space: 'Space',
+  tab: 'Tab',
+  delete: 'Delete',
+  end: 'End',
+  home: 'Home',
+  insert: 'Insert',
+  pagedown: 'PageDown',
+  pageup: 'PageUp',
+  printscreen: 'PrintScreen',
+  scrolllock: 'ScrollLock',
+  arrowdown: 'ArrowDown',
+  arrowleft: 'ArrowLeft',
+  arrowright: 'ArrowRight',
+  arrowup: 'ArrowUp',
+  numlock: 'NumLock',
+  numpad0: 'Numpad0',
+  numpad1: 'Numpad1',
+  numpad2: 'Numpad2',
+  numpad3: 'Numpad3',
+  numpad4: 'Numpad4',
+  numpad5: 'Numpad5',
+  numpad6: 'Numpad6',
+  numpad7: 'Numpad7',
+  numpad8: 'Numpad8',
+  numpad9: 'Numpad9',
+  numpadadd: 'NumpadAdd',
+  numpaddecimal: 'NumpadDecimal',
+  numpaddivide: 'NumpadDivide',
+  numpadenter: 'NumpadEnter',
+  numpadequal: 'NumpadEqual',
+  numpadmultiply: 'NumpadMultiply',
+  numpadsubtract: 'NumpadSubtract',
+  escape: 'Escape',
+  // Media keys. `mediatrackprevious` (the typed event.key) maps to
+  // `MediaTrackPrev` (not `Previous`) — that's what the plugin's
+  // own map uses; copying that quirk verbatim.
+  audiovolumedown: 'AudioVolumeDown',
+  audiovolumeup: 'AudioVolumeUp',
+  audiovolumemute: 'AudioVolumeMute',
+  mediaplay: 'MediaPlay',
+  mediapause: 'MediaPause',
+  mediaplaypause: 'MediaPlayPause',
+  mediastop: 'MediaStop',
+  mediatracknext: 'MediaTrackNext',
+  mediatrackprevious: 'MediaTrackPrev'
+};
+
+/** Reason codes returned by `globalShortcutSupportReason`. Surfaced
+ *  as-is to the i18n layer so each case can have a tailored message. */
+export type GlobalShortcutUnsupportedReason = 'unsupported-key';
+
+/**
+ * Check whether a binding can be registered as an OS-level global
+ * shortcut. Returns `null` when it can — i.e. every key token maps
+ * cleanly into the plugin's vocabulary — and a reason code otherwise.
+ *
+ * Modifier-only or unparseable bindings are also considered
+ * unsupported; the recorder's chord-validity check should already
+ * have rejected those before this is called, but we treat them as
+ * not-registerable for safety.
+ */
+export function globalShortcutSupportReason(
+  binding: string | null
+): GlobalShortcutUnsupportedReason | null {
+  if (!binding) return 'unsupported-key';
+  const chord = parseBinding(binding);
+  if (!chord) return 'unsupported-key';
+  if (!(chord.key in GLOBAL_SHORTCUT_KEY_MAP)) return 'unsupported-key';
+  return null;
+}
+
+/**
+ * Build the accelerator string for the OS-level global-shortcut
+ * registration. Returns `null` for any binding whose key isn't in
+ * `GLOBAL_SHORTCUT_KEY_MAP` — the +layout.svelte sync skips those
+ * rather than handing the plugin a chord that would register silently
+ * and never fire.
+ *
+ * Distinct from `tauriAccelerator`: that one is best-effort for muda
+ * menu accelerators, where a wrong string just falls back to "no
+ * accelerator displayed in the menu". Global registration HAS to be
+ * correct — a silent miss is the bug we're fixing.
+ */
+export function globalShortcutAccelerator(
+  binding: string | null
+): string | null {
+  if (!binding) return null;
+  const chord = parseBinding(binding);
+  if (!chord) return null;
+  const keyName = GLOBAL_SHORTCUT_KEY_MAP[chord.key];
+  if (!keyName) return null;
+  const parts: string[] = [];
+  if (chord.mod) parts.push('CommandOrControl');
+  if (chord.ctrl) parts.push('Ctrl');
+  if (chord.alt) parts.push('Alt');
+  if (chord.shift) parts.push('Shift');
+  parts.push(keyName);
   return parts.join('+');
 }
 

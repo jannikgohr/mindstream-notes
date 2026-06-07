@@ -45,7 +45,19 @@ export async function syncGlobalShortcuts(
   if (signature === activeSignature) return;
   activeSignature = signature;
 
-  await syncNativeGlobalShortcuts(eligible);
+  try {
+    await syncNativeGlobalShortcuts(eligible);
+  } catch (err) {
+    // Surfacing instead of swallowing the IPC error: previous
+    // fire-and-forget behaviour hid bad accelerators silently and
+    // left every global shortcut unregistered.
+    console.error('[hotkeys] syncGlobalShortcuts failed', err);
+    // Reset the signature so the next render retries — otherwise a
+    // transient failure would lock the app into "looks saved but
+    // nothing registered" until the binding changes.
+    activeSignature = '';
+    throw err;
+  }
 }
 
 export async function teardownGlobalShortcuts() {

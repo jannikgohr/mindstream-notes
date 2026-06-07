@@ -15,6 +15,7 @@
   import {
     displayBinding,
     getBinding,
+    globalShortcutAccelerator,
     HOTKEY_COMMANDS,
     initHotkeys,
     isGlobalShortcutCommand,
@@ -125,17 +126,26 @@
       };
     });
     void setNativeHotkeyDisplays(displays);
-    void syncGlobalShortcuts(
-      globalShortcutsEnabled
-        ? HOTKEY_COMMANDS.filter(isGlobalShortcutCommand).map((cmd) => {
-            const binding = getBinding(cmd.id);
-            return {
-              commandId: cmd.id,
-              accelerator: tauriAccelerator(binding)
-            };
-          })
-        : []
-    );
+    // Only the OS-shortcut-compatible accelerator form goes to
+    // syncGlobalShortcuts — `globalShortcutAccelerator` returns null
+    // when the user's chord uses a key the plugin can't dispatch (any
+    // non-ASCII character, plus a handful of less common physical
+    // keys). The HotkeysPanel blocks save for those, so this branch
+    // mostly handles legacy bindings stored before the validation
+    // existed; we silently skip them rather than handing the plugin
+    // a chord that would register but never fire.
+    const globalRegistrations = globalShortcutsEnabled
+      ? HOTKEY_COMMANDS.filter(isGlobalShortcutCommand).map((cmd) => ({
+          commandId: cmd.id,
+          accelerator: globalShortcutAccelerator(getBinding(cmd.id))
+        }))
+      : [];
+    void syncGlobalShortcuts(globalRegistrations).catch((err) => {
+      // Surfacing this so a bad accelerator (e.g. a legacy binding
+      // stored before validation) shows up in the dev console instead
+      // of silently leaving every global shortcut unregistered.
+      console.error('[hotkeys] syncGlobalShortcuts threw', err);
+    });
   });
 
   $effect(() => {

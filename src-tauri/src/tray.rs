@@ -156,7 +156,9 @@ fn handle_menu_event(app: &AppHandle, item_id: &str) {
 }
 
 pub(crate) fn handle_global_shortcut_command(app: &AppHandle, command_id: &str) {
+    eprintln!("[global-shortcuts] handle_global_shortcut_command command_id={command_id}");
     if command_id == "global.showApp" {
+        eprintln!("[global-shortcuts] global.showApp -> focus_main_window + emit show-app");
         focus_main_window(app);
         // Mirror the new-note path: the webview-side listener calls
         // focusMainWindow again, which goes through Tauri's main-thread
@@ -164,8 +166,9 @@ pub(crate) fn handle_global_shortcut_command(app: &AppHandle, command_id: &str) 
         // in the global-shortcut callback thread and on Windows that
         // alone doesn't reliably defeat focus-stealing prevention when
         // the window is hidden in the tray.
-        if let Err(err) = app.emit(SHOW_APP_EVENT, ()) {
-            log::warn!("[global-shortcuts] failed to emit show-app event: {err}");
+        match app.emit(SHOW_APP_EVENT, ()) {
+            Ok(()) => eprintln!("[global-shortcuts] emitted show-app event"),
+            Err(err) => eprintln!("[global-shortcuts] failed to emit show-app event: {err}"),
         }
         return;
     }
@@ -240,11 +243,34 @@ fn global_shortcut_template(
 }
 
 pub(crate) fn focus_main_window(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.unminimize();
-        let _ = window.show();
-        let _ = window.set_focus();
+    let Some(window) = app.get_webview_window("main") else {
+        eprintln!("[focus_main_window] no 'main' window — cannot focus");
+        return;
+    };
+    let visible = window.is_visible().ok();
+    let minimized = window.is_minimized().ok();
+    let focused = window.is_focused().ok();
+    eprintln!(
+        "[focus_main_window] entry: visible={visible:?} minimized={minimized:?} focused={focused:?}"
+    );
+    match window.unminimize() {
+        Ok(()) => eprintln!("[focus_main_window] unminimize ok"),
+        Err(err) => eprintln!("[focus_main_window] unminimize err={err}"),
     }
+    match window.show() {
+        Ok(()) => eprintln!("[focus_main_window] show ok"),
+        Err(err) => eprintln!("[focus_main_window] show err={err}"),
+    }
+    match window.set_focus() {
+        Ok(()) => eprintln!("[focus_main_window] set_focus ok"),
+        Err(err) => eprintln!("[focus_main_window] set_focus err={err}"),
+    }
+    let visible_after = window.is_visible().ok();
+    let minimized_after = window.is_minimized().ok();
+    let focused_after = window.is_focused().ok();
+    eprintln!(
+        "[focus_main_window] exit: visible={visible_after:?} minimized={minimized_after:?} focused={focused_after:?}"
+    );
 }
 
 struct TrayLabels {

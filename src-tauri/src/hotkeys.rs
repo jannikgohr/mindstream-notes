@@ -134,12 +134,26 @@ pub fn sync_global_shortcuts(
     state: State<'_, DesktopGlobalShortcuts>,
     registrations: Vec<GlobalShortcutRegistration>,
 ) -> Result<(), String> {
+    eprintln!(
+        "[global-shortcuts] sync_global_shortcuts called with {} registration(s): {:?}",
+        registrations.len(),
+        registrations
+            .iter()
+            .map(|r| (r.command_id.as_str(), r.accelerator.as_deref()))
+            .collect::<Vec<_>>()
+    );
+
     let mut registered = state
         .registered
         .lock()
         .map_err(|_| "global shortcut state is poisoned".to_string())?;
 
     if !registered.is_empty() {
+        eprintln!(
+            "[global-shortcuts] unregistering {} previous accelerator(s): {:?}",
+            registered.len(),
+            *registered
+        );
         app.global_shortcut()
             .unregister_multiple(registered.iter().map(String::as_str))
             .map_err(|err| format!("unregister global shortcuts: {err}"))?;
@@ -148,27 +162,64 @@ pub fn sync_global_shortcuts(
 
     for registration in registrations {
         if !is_global_shortcut_command_id(&registration.command_id) {
+            eprintln!(
+                "[global-shortcuts] skipping unknown command_id={}",
+                registration.command_id
+            );
             continue;
         }
         let Some(accelerator) = clean_optional(registration.accelerator) else {
+            eprintln!(
+                "[global-shortcuts] skipping {} — no accelerator",
+                registration.command_id
+            );
             continue;
         };
         let command_id = registration.command_id.clone();
-        app.global_shortcut()
-            .on_shortcut(accelerator.as_str(), move |app, _shortcut, event| {
+        let command_id_for_callback = command_id.clone();
+        let accelerator_for_log = accelerator.clone();
+        eprintln!(
+            "[global-shortcuts] registering accelerator={} for command_id={}",
+            accelerator, command_id
+        );
+        match app.global_shortcut().on_shortcut(
+            accelerator.as_str(),
+            move |app, _shortcut, event| {
+                eprintln!(
+                    "[global-shortcuts] callback fired command_id={} state={:?}",
+                    command_id_for_callback, event.state
+                );
                 if event.state != ShortcutState::Pressed {
                     return;
                 }
-                crate::tray::handle_global_shortcut_command(app, &command_id);
-            })
-            .map_err(|err| {
-                format!(
+                crate::tray::handle_global_shortcut_command(app, &command_id_for_callback);
+            },
+        ) {
+            Ok(()) => {
+                eprintln!(
+                    "[global-shortcuts] OK accelerator={} command_id={}",
+                    accelerator_for_log, command_id
+                );
+            }
+            Err(err) => {
+                eprintln!(
+                    "[global-shortcuts] FAILED accelerator={} command_id={} err={}",
+                    accelerator_for_log, command_id, err
+                );
+                return Err(format!(
                     "register global shortcut {} for {}: {err}",
-                    accelerator, registration.command_id
-                )
-            })?;
+                    accelerator_for_log, command_id
+                ));
+            }
+        }
         registered.push(accelerator);
     }
+
+    eprintln!(
+        "[global-shortcuts] sync complete; {} accelerator(s) active: {:?}",
+        registered.len(),
+        *registered
+    );
 
     Ok(())
 }

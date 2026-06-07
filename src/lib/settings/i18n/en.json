@@ -101,6 +101,7 @@
     "hotkeys.feedback.conflict": "That shortcut is already used by {command}.",
     "hotkeys.feedback.saved": "Shortcut saved.",
     "hotkeys.feedback.savedWithOsWarning": "Shortcut saved, but your operating system may capture it before the app sees it.",
+    "hotkeys.feedback.globalUnsupported": "That key can't be used as a global shortcut — pick a key from A–Z, 0–9, the function keys, or the standard US punctuation row.",
     "hotkeys.feedback.saveFailed": "Shortcut wasn't saved: {reason}",
     "hotkeys.feedback.unknownError": "Unknown error",
     "hotkeys.feedback.cleared": "Shortcut cleared for {command}.",

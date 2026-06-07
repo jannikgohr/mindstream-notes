@@ -32,6 +32,7 @@
     displayBinding,
     findCommandByBinding,
     getBinding,
+    globalShortcutSupportReason,
     groupedCommands,
     HotkeyBindingConflictError,
     HOTKEY_COMMANDS,
@@ -71,6 +72,13 @@
    *  hits a chord the OS captures (Cmd+Q, Alt+Tab, …). Advisory only —
    *  the user can still save it. */
   let osConflictReason = $state<string | null>(null);
+  /** Non-null when the pending binding can't be registered as a global
+   *  shortcut (key isn't in the global-hotkey plugin's vocabulary).
+   *  BLOCKING — distinct from `osConflictReason`, which is advisory:
+   *  the plugin will silently fail to dispatch chords with unsupported
+   *  keys, so we refuse to save instead of leaving the user with a
+   *  binding that looks set but never fires. */
+  let globalUnsupportedReason = $state<string | null>(null);
   let feedback = $state<{
     kind: 'success' | 'error' | 'warning';
     commandId: string | null;
@@ -252,6 +260,7 @@
     pendingBinding = null;
     conflictWithId = null;
     osConflictReason = null;
+    globalUnsupportedReason = null;
     feedback = null;
   }
 
@@ -260,6 +269,7 @@
     pendingBinding = null;
     conflictWithId = null;
     osConflictReason = null;
+    globalUnsupportedReason = null;
   }
 
   /**
@@ -286,6 +296,7 @@
       return;
     }
 
+    const recordingCmd = recordingId ? flatById.get(recordingId) : null;
     const binding = bindingFromEvent(e);
     if (!binding) {
       // Modifier-only press, dead key, IME — wait for a real chord.
@@ -305,6 +316,17 @@
     const owner = findCommandByBinding(binding, recordingId ?? undefined);
     conflictWithId = owner && owner.id !== recordingId ? owner.id : null;
     osConflictReason = wellKnownConflict(binding);
+    // Block save when the user picks a chord whose key can't be
+    // registered with tauri_plugin_global_shortcut — empirically the
+    // plugin accepts the registration but silently never fires the
+    // callback (the trap we hit with `Ctrl+Alt+Semicolon` / QWERTZ
+    // BracketLeft). Only enforce for commands that actually drive a
+    // global registration; the same chord on an editor command is
+    // fine because the JS matcher handles it directly.
+    globalUnsupportedReason =
+      recordingCmd && isGlobalShortcutCommand(recordingCmd)
+        ? globalShortcutSupportReason(binding)
+        : null;
     if (conflictWithId) {
       feedback = {
         kind: 'error',
@@ -312,6 +334,12 @@
         message: feedbackText('hotkeys.feedback.conflict', {
           command: conflictLabel(conflictWithId)
         })
+      };
+    } else if (globalUnsupportedReason) {
+      feedback = {
+        kind: 'error',
+        commandId: recordingId,
+        message: feedbackText('hotkeys.feedback.globalUnsupported')
       };
     }
   }
@@ -327,6 +355,14 @@
         message: feedbackText('hotkeys.feedback.conflict', {
           command: conflictLabel(conflictWithId)
         })
+      };
+      return;
+    }
+    if (globalUnsupportedReason) {
+      feedback = {
+        kind: 'error',
+        commandId,
+        message: feedbackText('hotkeys.feedback.globalUnsupported')
       };
       return;
     }
@@ -613,10 +649,14 @@
                       <Button
                         size="sm"
                         variant="default"
-                        disabled={Boolean(conflictWithId)}
+                        disabled={Boolean(
+                          conflictWithId || globalUnsupportedReason
+                        )}
                         title={conflictWithId
                           ? tUi('hotkeys.conflict.tooltip')
-                          : undefined}
+                          : globalUnsupportedReason
+                            ? tUi('hotkeys.globalUnsupported.tooltip')
+                            : undefined}
                         onclick={commitRecording}
                       >
                         {tUi('hotkeys.recording.save')}

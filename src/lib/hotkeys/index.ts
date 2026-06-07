@@ -42,7 +42,14 @@ export {
   HotkeyBindingConflictError
 } from './store.svelte';
 
-export { displayBinding, ariaKeyShortcut, tauriAccelerator } from './format';
+export {
+  displayBinding,
+  ariaKeyShortcut,
+  tauriAccelerator,
+  globalShortcutAccelerator,
+  globalShortcutSupportReason,
+  type GlobalShortcutUnsupportedReason
+} from './format';
 export { parseBinding, canonicalize, bindingsConflict } from './parse';
 export { wellKnownConflict } from './collisions';
 export {

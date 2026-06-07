@@ -101,6 +101,7 @@
     "hotkeys.feedback.conflict": "Dieses Tastenkürzel wird bereits von {command} verwendet.",
     "hotkeys.feedback.saved": "Tastenkürzel gespeichert.",
     "hotkeys.feedback.savedWithOsWarning": "Tastenkürzel gespeichert, aber das Betriebssystem fängt es eventuell ab, bevor die App es sieht.",
+    "hotkeys.feedback.globalUnsupported": "Diese Taste kann nicht als globales Tastenkürzel verwendet werden — bitte eine Taste aus A–Z, 0–9, den Funktionstasten oder den US-Standardsatzzeichen wählen.",
     "hotkeys.feedback.saveFailed": "Tastenkürzel wurde nicht gespeichert: {reason}",
     "hotkeys.feedback.unknownError": "Unbekannter Fehler",
     "hotkeys.feedback.cleared": "Tastenkürzel für {command} entfernt.",
