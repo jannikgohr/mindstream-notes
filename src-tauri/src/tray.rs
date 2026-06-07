@@ -13,6 +13,7 @@ use crate::{
 };
 
 const TRAY_NOTE_CREATED_EVENT: &str = "tray-note-created";
+const SHOW_APP_EVENT: &str = "show-app";
 const NEW_NOTE_ID: &str = "new_note";
 const NEW_DRAWING_ID: &str = "new_drawing";
 const NEW_INK_ID: &str = "new_ink";
@@ -157,6 +158,15 @@ fn handle_menu_event(app: &AppHandle, item_id: &str) {
 pub(crate) fn handle_global_shortcut_command(app: &AppHandle, command_id: &str) {
     if command_id == "global.showApp" {
         focus_main_window(app);
+        // Mirror the new-note path: the webview-side listener calls
+        // focusMainWindow again, which goes through Tauri's main-thread
+        // command dispatch. The pure-Rust focus_main_window above runs
+        // in the global-shortcut callback thread and on Windows that
+        // alone doesn't reliably defeat focus-stealing prevention when
+        // the window is hidden in the tray.
+        if let Err(err) = app.emit(SHOW_APP_EVENT, ()) {
+            log::warn!("[global-shortcuts] failed to emit show-app event: {err}");
+        }
         return;
     }
 

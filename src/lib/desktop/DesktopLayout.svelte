@@ -28,6 +28,7 @@
   import { PopoutHeaderAction } from './dockview-popout-action';
   import {
     focusExistingNoteWindow,
+    focusMainWindow,
     isKnownNoteKind,
     openNoteWindow
   } from '$lib/api';
@@ -512,6 +513,9 @@
     const trayUnlisten = listen('tray-note-created', (payload) => {
       void openTrayCreatedNote(payload.note_id);
     });
+    const showAppUnlisten = listen('show-app', () => {
+      void focusMainWindow();
+    });
 
     // Cleanup the dv-tab-dragging body class on every drag termination:
     //   - `dragend` fires on the source element after a successful drop
@@ -556,6 +560,7 @@
       clearDragging();
       unsub();
       void trayUnlisten.then((unlisten) => unlisten());
+      void showAppUnlisten.then((unlisten) => unlisten());
     };
   });
 
