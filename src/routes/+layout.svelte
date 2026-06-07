@@ -64,7 +64,7 @@
   //
   // The Rust scheduler was previously a JS `setTimeout` self-
   // rescheduler here, which paused if the event loop got blocked
-  // (long Crepe operation, complex tldraw paint) and was subject
+  // (long Crepe operation, complex drawing-canvas paint) and was subject
   // to background-throttling on mobile webviews. Owning the tick
   // in Rust makes the cadence reliable.
   const INTERVAL_SECS: Record<string, number> = {

@@ -24,7 +24,7 @@ const config = {
     },
     typescript: {
       /*
-       * Pull our .tsx files (the React/tldraw island under
+       * Pull our .tsx files (the React/Excalidraw island under
        * src/lib/freeform/) into SvelteKit's generated
        * .svelte-kit/tsconfig.json. The default include globs
        * only `*.js`, `*.ts`, and `*.svelte`, so without this hook

@@ -15,7 +15,7 @@ import { mockApi } from './mock-store';
  * introducing a new editor variant.
  *
  *   markdown — Crepe / y-prosemirror text editor (the original kind)
- *   freeform — drawing canvas backed by tldraw + Y.Doc
+ *   freeform — Excalidraw canvas backed by Y.Doc scene snapshots
  *   ink      — native egui+wgpu drawing surface (Android-only POC; see
  *              docs/native-egui-layer/01-audit.md). Desktop dispatch
  *              shows a placeholder until Phase 2 lands.

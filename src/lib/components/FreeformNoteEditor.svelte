@@ -5,24 +5,24 @@
    * Architecture: this Svelte component is just the shell — it owns the
    * Y.Doc, the CollabProvider (live E2EE relay socket), persistence
    * (debounced save), and trashed-state detection. The actual drawing
-   * surface is tldraw, mounted as a React island inside this shell.
-   * React + tldraw + the bridge are dynamically imported so they only
-   * pay their bundle cost (~750 KB gz) when a drawing note is opened.
+   * surface is Excalidraw, mounted as a React island inside this shell.
+   * React + Excalidraw + the bridge are dynamically imported so they only
+   * pay their bundle cost when a drawing note is opened.
    *
-   * Doc shape: a tldraw `TLStore` mapped onto a single `Y.Map<TLRecord>`
-   * via the bridge in `$lib/freeform/tldraw-yjs.ts`. The Rust persistence
-   * pipeline doesn't care — `yrs_state` round-trips opaque bytes. The
-   * relay sees only encrypted Yjs updates (same E2EE story as the
+   * Doc shape: Excalidraw scene snapshots (`elements`, selected app state,
+   * `files`) stored in a Y.Map via `$lib/freeform/excalidraw-yjs.ts`. The
+   * Rust persistence pipeline doesn't care — `yrs_state` round-trips opaque
+   * bytes. The relay sees only encrypted Yjs updates (same E2EE story as the
    * markdown editor).
    *
-   * Mobile: tldraw has touch handling built in (pan, pinch, draw). The
+   * Mobile: Excalidraw has touch handling built in (pan, pinch, draw). The
    * existing mobile formatting toolbar only mounts inside markdown notes,
    * so there's no conflict here.
    *
    * Deferred follow-ups (intentional):
-   *   - Asset upload (image drop) routes through Etebase as opaque
-   *     encrypted Items. The island ships with a stub assetStore that
-   *     errors loudly on upload so the failure mode is obvious.
+   *   - Asset upload currently persists Excalidraw's data URLs inside the
+   *     Y.Doc. Moving those bytes into the shared asset table can be layered
+   *     on later if large drawings need it.
    *   - Presence (remote cursors). Awareness instance is wired into the
    *     island already; the bridge just doesn't read from it yet.
    */
@@ -51,10 +51,6 @@
   import { listen } from '$lib/api/events';
   import { acquireFullscreen, releaseFullscreen } from '$lib/window/fullscreen';
   import { isTauri } from '$lib/api';
-  import {
-    attachToolbarLayout,
-    type ToolbarLayoutHandle
-  } from '$lib/freeform/toolbar-layout';
   import {
     registerEditor,
     unregisterEditor,
@@ -94,10 +90,6 @@
   // onDestroy knows whether it needs to release the ref count. Desktop
   // has no fullscreen UI for freeform notes; the OS chrome stays.
   let fullscreenAcquired = false;
-  // toolbar-layout module handle. Attached in onMount once mountEl is
-  // bound and detached in onDestroy. The module gates itself by viewport
-  // width internally, so no platform/mobile branching is needed here.
-  let toolbarLayout: ToolbarLayoutHandle | null = null;
   let loadError = $state<string | null>(null);
 
   /**
@@ -108,7 +100,7 @@
    * markdown listener above it on the stack. A Mod+B fired here is
    * therefore routed to the freeform listener (which declines), the
    * bus reports the command as unhandled, and the manager lets the
-   * keystroke fall through to tldraw rather than secretly editing a
+   * keystroke fall through to Excalidraw rather than secretly editing a
    * markdown note the user can't see. Negative-space programming:
    * refuse the bug, don't paper it over.
    *
@@ -127,7 +119,7 @@
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let reactRoot: any = null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let TldrawIslandComponent: any = null;
+  let ExcalidrawIslandComponent: any = null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let reactCreateElement: any = null;
 
@@ -163,7 +155,7 @@
     return 'auto';
   });
 
-  /** Whether to cut tldraw's animation cost. We honour the existing
+  /** Whether to cut editor animation cost. We honour the existing
    *  app-wide `appearance.reduceMotion` toggle AND default to true on
    *  mobile, where the Android WebView's compositor is the bottleneck
    *  during stroke rendering and incidental motion costs frame budget.
@@ -182,8 +174,7 @@
   /** Tauri sync-completed subscription. Same idea as in NoteEditor:
    *  when sync pulls a fresh yrs_state for THIS note, we merge it into
    *  the open Y.Doc via Y.applyUpdate (Yjs CRDT-safe). Asset
-   *  invalidation for tldraw lives inside the React island so it can
-   *  re-put store records directly. */
+   *  invalidation for Excalidraw scene files lives inside the React island. */
   let unsubSync: (() => void) | null = null;
 
   onMount(async () => {
@@ -198,12 +189,6 @@
         void acquireFullscreen();
         fullscreenAcquired = true;
       }
-      // Toolbar-layout watches for tldraw's UI to mount under us, then
-      // pins __inner / __extras to the top-right of the menu zone when
-      // the viewport is wide enough. The handle's MutationObserver
-      // covers the React island's async mount, so attaching now (before
-      // the island renders) is fine.
-      toolbarLayout = attachToolbarLayout(mountEl);
       const note = await loadNote(noteId);
       if (!mountEl) return; // unmounted while awaiting
 
@@ -234,9 +219,9 @@
         console.debug('[FreeformNoteEditor] no session for awareness', err);
       }
 
-      // Dynamically import React + tldraw + the island. Three separate
+      // Dynamically import React + Excalidraw + the island. Three separate
       // chunks fall out of this: react-dom/client, the island module
-      // (which statically imports tldraw + the bridge), and react itself
+      // (which statically imports Excalidraw + the bridge), and react itself
       // is pulled in transitively by the island. The markdown editor's
       // bundle stays untouched — drawing notes pay this cost only when
       // opened.
@@ -249,13 +234,13 @@
       // in parallel; awaiting each ref preserves the specific module
       // type for narrowing.
       const reactDomPromise = import('react-dom/client');
-      const islandPromise = import('$lib/freeform/TldrawIsland');
+      const islandPromise = import('$lib/freeform/ExcalidrawIsland');
       const reactPromise = import('react');
       const { createRoot } = await reactDomPromise;
       const islandModule = await islandPromise;
       const reactModule = await reactPromise;
       if (!mountEl) return;
-      TldrawIslandComponent = islandModule.default;
+      ExcalidrawIslandComponent = islandModule.default;
       reactCreateElement = reactModule.createElement;
       reactRoot = createRoot(mountEl);
       // First render: pass yDoc + awareness + current readonly + the
@@ -265,7 +250,7 @@
       // onMount, not inside a tracking scope — the $effect below is
       // what wires the reactivity for subsequent updates.
       reactRoot.render(
-        reactCreateElement(TldrawIslandComponent, {
+        reactCreateElement(ExcalidrawIslandComponent, {
           yDoc,
           awareness,
           readOnly: untrack(() => isTrashed),
@@ -278,7 +263,7 @@
 
       // Same save trigger as NoteEditor: yDoc 'update' fires for every
       // mutation (local + remote-applied), giving us one hook to debounce
-      // against. The bridge translates tldraw store ops into Yjs ops
+      // against. The bridge translates Excalidraw scene changes into Yjs ops
       // before this fires, so we capture both editor-driven and
       // collab-driven changes through the same path.
       yDocUpdateHandler = () => {
@@ -299,8 +284,8 @@
       // Merge fresh yrs_state into the live Y.Doc whenever sync pulls
       // this note. Same Yjs CRDT-merge story as NoteEditor — local
       // edits stay, pulled state converges, re-applying an already-
-      // known update is a no-op. The tldraw store auto-reflects the
-      // resulting Y.Doc changes via the bridge in tldraw-yjs.
+      // known update is a no-op. The Excalidraw island observes the
+      // resulting Y.Doc changes via the bridge in excalidraw-yjs.
       void listen('sync-completed', async (payload) => {
         if (!payload.notes_pulled_ids.includes(noteId) || !yDoc) return;
         try {
@@ -324,7 +309,7 @@
       // don't accidentally route to a hidden markdown note while the
       // user is in a freeform canvas. Returning `false` from
       // `onCommand` tells the bus nothing was handled, so the manager
-      // lets the keystroke flow through to tldraw.
+      // lets the keystroke flow through to Excalidraw.
       if (mountEl) {
         editorListener = {
           kind: 'freeform',
@@ -359,21 +344,21 @@
     return () => mountEl?.removeEventListener('focusin', onFocusIn);
   });
 
-  // Re-render the island whenever any prop tldraw cares about flips —
+  // Re-render the island whenever any prop Excalidraw cares about flips —
   // currently trashed state (toggles the canvas to read-only mid-session)
-  // and the app-wide colour scheme (mode-watcher → tldraw user
-  // preferences). The island maps each prop into the matching tldraw API
+  // and the app-wide colour scheme. The island maps each prop into the
+  // matching Excalidraw API
   // inside its own useEffect; React reconciliation between renders keeps
-  // tldraw's internal state intact.
+  // Excalidraw's internal state intact.
   $effect(() => {
     const readOnly = isTrashed;
     const colorScheme = $userPrefersMode ?? 'system';
     const currentPenMode = penMode;
     const currentReduceMotion = reduceMotion;
-    if (!reactRoot || !TldrawIslandComponent || !reactCreateElement) return;
+    if (!reactRoot || !ExcalidrawIslandComponent || !reactCreateElement) return;
     if (!yDoc || !awareness) return;
     reactRoot.render(
-      reactCreateElement(TldrawIslandComponent, {
+      reactCreateElement(ExcalidrawIslandComponent, {
         yDoc,
         awareness,
         readOnly,
@@ -443,10 +428,6 @@
       void releaseFullscreen();
       fullscreenAcquired = false;
     }
-    // Tear down the toolbar layout observers + clear CSS vars / class
-    // so a future re-mount starts clean.
-    toolbarLayout?.destroy();
-    toolbarLayout = null;
     // Drop our row from the global status store so the dockview
     // header doesn't keep showing stale icons after the panel closes.
     clearNoteStatus(noteId);
@@ -463,7 +444,7 @@
       }
       reactRoot = null;
     }
-    TldrawIslandComponent = null;
+    ExcalidrawIslandComponent = null;
     reactCreateElement = null;
 
     if (yDoc && yDocUpdateHandler) yDoc.off('update', yDocUpdateHandler);
@@ -549,7 +530,7 @@
     </div>
   {/if}
   <!--
-    Tldraw's root sizes itself via `position: absolute; inset: 0`. The
+    Excalidraw sizes itself to the containing block. The
     mount div needs `position: relative` to be that absolute's containing
     block, and `flex-1 min-h-0` so it actually claims the remaining
     column height inside the surrounding flex layout.
@@ -569,14 +550,8 @@
       </p>
     {/if}
     <!--
-      `freeform-canvas-host` scopes the tldraw UI tweaks in app.css to
-      this mount only. The matching rules in app.css further gate on a
-      `toolbar-top-active` class that toolbar-layout.ts toggles based on
-      `window.innerWidth >= 800` — narrow phones fall back to tldraw's
-      stock bottom layout where the top corner can't host the toolbar
-      next to the menu chip anyway. tldraw mounts its .tlui-layout grid
-      as a descendant of this div, so the 2-class selectors in the
-      stylesheet attach without !important.
+      `freeform-canvas-host` gives app.css one stable, editor-agnostic
+      hook for dockview drag routing and local canvas tweaks.
     -->
     <div
       bind:this={mountEl}
