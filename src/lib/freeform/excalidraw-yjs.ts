@@ -179,32 +179,74 @@ function writeSceneToYDoc(
   const nextOrder = elements.map((element) => element.id);
   const nextAppState = sanitizeAppState(appState);
 
+  // Compute exactly what's about to change BEFORE opening the transact.
+  // Y.Map.set generates a CRDT op even when the value is structurally
+  // identical, so unconditional writes (e.g. `meta.set('version', 2)`)
+  // produce a sync frame on every flush — including ones triggered by
+  // pan/zoom that don't touch any persisted field. Skip the transact
+  // entirely when there's nothing to write.
+  const versionNeedsWrite = meta.get('version') !== 2;
+  const orderNeedsWrite = !shallowJsonEqual(
+    meta.get('elementOrder'),
+    nextOrder
+  );
+  const appStateNeedsWrite = !shallowJsonEqual(
+    meta.get('appState'),
+    nextAppState
+  );
+
+  const elementsToWrite: ExcalidrawElement[] = [];
+  for (const element of elements) {
+    if (elementChanged(eMap.get(element.id), element)) {
+      elementsToWrite.push(element);
+    }
+  }
+  const elementsToDelete: string[] = [];
+  for (const id of Array.from(eMap.keys())) {
+    if (!nextIds.has(id)) elementsToDelete.push(id);
+  }
+
+  const filesToWrite: Array<[string, BinaryFileData]> = [];
+  for (const [id, file] of Object.entries(files)) {
+    const current = fMap.get(id);
+    if (!current || current.version !== file.version) {
+      filesToWrite.push([id, file]);
+    }
+  }
+  const filesToDelete: string[] = [];
+  for (const id of Array.from(fMap.keys())) {
+    if (!nextFileIds.has(id)) filesToDelete.push(id);
+  }
+
+  if (
+    !versionNeedsWrite &&
+    !orderNeedsWrite &&
+    !appStateNeedsWrite &&
+    elementsToWrite.length === 0 &&
+    elementsToDelete.length === 0 &&
+    filesToWrite.length === 0 &&
+    filesToDelete.length === 0
+  ) {
+    return;
+  }
+
   yDoc.transact(() => {
-    meta.set('version', 2);
-    if (!shallowJsonEqual(meta.get('elementOrder'), nextOrder)) {
-      meta.set('elementOrder', cloneJson(nextOrder));
+    if (versionNeedsWrite) meta.set('version', 2);
+    if (orderNeedsWrite) meta.set('elementOrder', cloneJson(nextOrder));
+    if (appStateNeedsWrite) meta.set('appState', cloneJson(nextAppState));
+
+    for (const element of elementsToWrite) {
+      eMap.set(element.id, cloneJson(element));
     }
-    if (!shallowJsonEqual(meta.get('appState'), nextAppState)) {
-      meta.set('appState', cloneJson(nextAppState));
+    for (const id of elementsToDelete) {
+      eMap.delete(id);
     }
 
-    for (const element of elements) {
-      if (elementChanged(eMap.get(element.id), element)) {
-        eMap.set(element.id, cloneJson(element));
-      }
+    for (const [id, file] of filesToWrite) {
+      fMap.set(id, cloneJson(file));
     }
-    for (const id of Array.from(eMap.keys())) {
-      if (!nextIds.has(id)) eMap.delete(id);
-    }
-
-    for (const [id, file] of Object.entries(files)) {
-      const current = fMap.get(id);
-      if (!current || current.version !== file.version) {
-        fMap.set(id, cloneJson(file));
-      }
-    }
-    for (const id of Array.from(fMap.keys())) {
-      if (!nextFileIds.has(id)) fMap.delete(id);
+    for (const id of filesToDelete) {
+      fMap.delete(id);
     }
   }, LOCAL_ORIGIN);
 }
@@ -220,6 +262,72 @@ export function bindExcalidrawToYDoc({ yDoc, api }: BindOptions): BindHandle {
     files: BinaryFiles;
   } | null = null;
 
+  // Last scene state we wrote-or-applied, used to short-circuit onChange
+  // before it schedules a flush. Same pattern as y-excalidraw: keep the
+  // "should I write?" decision orthogonal to what's in the Y.Doc, so a
+  // spurious onChange after `api.updateScene` (which Excalidraw can fire
+  // asynchronously, defeating the `applyingRemote` guard) doesn't trip
+  // a meaningless write. Initialised from the current Y.Doc snapshot so
+  // the very first onChange after mount doesn't re-write what we just
+  // loaded as initialData.
+  type ElState = { version: number; versionNonce: number; isDeleted: boolean };
+  const lastKnownEls = new Map<string, ElState>();
+  // `BinaryFileData.version` is optional in Excalidraw's types; treat it
+  // as `number | undefined` so missing-version files round-trip cleanly
+  // through the unchanged-check.
+  const lastKnownFiles = new Map<string, number | undefined>();
+  let lastKnownApp: Partial<PersistedAppState> = {};
+
+  function captureEls(els: readonly ExcalidrawElement[]): void {
+    lastKnownEls.clear();
+    for (const el of els) {
+      lastKnownEls.set(el.id, {
+        version: el.version,
+        versionNonce: el.versionNonce,
+        isDeleted: Boolean(el.isDeleted)
+      });
+    }
+  }
+
+  function captureFiles(files: BinaryFiles): void {
+    lastKnownFiles.clear();
+    for (const [id, file] of Object.entries(files)) {
+      lastKnownFiles.set(id, file.version);
+    }
+  }
+
+  function elsUnchanged(els: readonly ExcalidrawElement[]): boolean {
+    if (els.length !== lastKnownEls.size) return false;
+    for (const el of els) {
+      const k = lastKnownEls.get(el.id);
+      if (
+        !k ||
+        k.version !== el.version ||
+        k.versionNonce !== el.versionNonce ||
+        k.isDeleted !== Boolean(el.isDeleted)
+      ) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  function filesUnchanged(files: BinaryFiles): boolean {
+    const entries = Object.entries(files);
+    if (entries.length !== lastKnownFiles.size) return false;
+    for (const [id, f] of entries) {
+      if (lastKnownFiles.get(id) !== f.version) return false;
+    }
+    return true;
+  }
+
+  {
+    const seed = readSceneFromYDoc(yDoc);
+    captureEls(seed.elements);
+    captureFiles(seed.files);
+    lastKnownApp = seed.appState;
+  }
+
   function clearFlushTimer(): void {
     if (!flushTimer) return;
     clearTimeout(flushTimer);
@@ -233,6 +341,9 @@ export function bindExcalidrawToYDoc({ yDoc, api }: BindOptions): BindHandle {
     pending = null;
     lastFlush = Date.now();
     writeSceneToYDoc(yDoc, elements, appState, files);
+    captureEls(elements);
+    captureFiles(files);
+    lastKnownApp = sanitizeAppState(appState);
   }
 
   function scheduleFlush(): void {
@@ -248,6 +359,14 @@ export function bindExcalidrawToYDoc({ yDoc, api }: BindOptions): BindHandle {
 
   const unlistenEditor = api.onChange((elements, appState, files) => {
     if (destroyed || applyingRemote || appState.viewModeEnabled) return;
+    const sanitized = sanitizeAppState(appState);
+    if (
+      elsUnchanged(elements) &&
+      filesUnchanged(files) &&
+      shallowJsonEqual(lastKnownApp, sanitized)
+    ) {
+      return;
+    }
     pending = { elements, appState, files };
     scheduleFlush();
   });
@@ -269,6 +388,9 @@ export function bindExcalidrawToYDoc({ yDoc, api }: BindOptions): BindHandle {
     } finally {
       applyingRemote = false;
     }
+    captureEls(snapshot.elements);
+    captureFiles(snapshot.files);
+    lastKnownApp = snapshot.appState;
   };
 
   const observer = (events: Y.YEvent<Y.AbstractType<unknown>>[]) => {
