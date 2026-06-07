@@ -121,6 +121,21 @@ pub fn run() {
     #[cfg(desktop)]
     let app_handle = tauri::Builder::default()
         .plugin(
+            tauri_plugin_log::Builder::new()
+                .level(if cfg!(debug_assertions) {
+                    log::LevelFilter::Trace
+                } else {
+                    log::LevelFilter::Info
+                })
+                .targets([
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
+                        file_name: Some("Mindstream".into()),
+                    }),
+                ])
+                .build(),
+        )
+        .plugin(
             tauri_plugin_autostart::Builder::new()
                 .arg(AUTOSTART_ARG)
                 .build(),
