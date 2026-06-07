@@ -20,7 +20,11 @@
 import { describe, expect, it } from 'vitest';
 import { Schema, type Node as ProseNode } from 'prosemirror-model';
 import { EditorState, TextSelection } from 'prosemirror-state';
-import { applyListAction, type ListActionTypes } from './commands';
+import {
+  applyListAction,
+  TOOLBAR_ITEMS,
+  type ListActionTypes
+} from './commands';
 
 // -- Schema -----------------------------------------------------------------
 
@@ -77,6 +81,19 @@ const types: ListActionTypes = {
   listItem: testSchema.nodes.list_item,
   paragraph: testSchema.nodes.paragraph
 };
+
+describe('toolbar catalogue', () => {
+  it('shows ordered list before bullet list in the list menu', () => {
+    const listGroup = TOOLBAR_ITEMS.find((item) => item.id === 'list');
+    expect(listGroup?.kind).toBe('group');
+    if (listGroup?.kind !== 'group') return;
+    expect(listGroup.items.map((item) => item.id)).toEqual([
+      'ordered',
+      'bullet',
+      'task'
+    ]);
+  });
+});
 
 // -- Builders ---------------------------------------------------------------
 

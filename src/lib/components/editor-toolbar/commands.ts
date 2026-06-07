@@ -750,19 +750,19 @@ export const TOOLBAR_ITEMS: ToolbarItem[] = [
     items: [
       {
         kind: 'leaf',
-        id: 'bullet',
-        labelKey: 'editor.toolbar.list.bullet',
-        icon: List,
-        action: turnIntoBulletList,
-        hotkeyId: 'editor.markdown.bulletList'
-      },
-      {
-        kind: 'leaf',
         id: 'ordered',
         labelKey: 'editor.toolbar.list.ordered',
         icon: ListOrdered,
         action: turnIntoOrderedList,
         hotkeyId: 'editor.markdown.orderedList'
+      },
+      {
+        kind: 'leaf',
+        id: 'bullet',
+        labelKey: 'editor.toolbar.list.bullet',
+        icon: List,
+        action: turnIntoBulletList,
+        hotkeyId: 'editor.markdown.bulletList'
       },
       {
         kind: 'leaf',

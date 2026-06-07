@@ -389,6 +389,13 @@ export const HOTKEY_COMMANDS: CommandDefinition[] = [
     defaultBinding: 'mod+alt+6'
   },
   {
+    id: 'editor.markdown.orderedList',
+    scope: 'editor',
+    editorKind: 'markdown',
+    labelKey: 'hotkeys.command.editor.markdown.orderedList',
+    defaultBinding: 'mod+shift+7'
+  },
+  {
     id: 'editor.markdown.bulletList',
     scope: 'editor',
     editorKind: 'markdown',
@@ -396,13 +403,6 @@ export const HOTKEY_COMMANDS: CommandDefinition[] = [
     // Google Docs convention: Shift+8 on the number row maps to the
     // bullet glyph for typists who learned by symbol position.
     defaultBinding: 'mod+shift+8'
-  },
-  {
-    id: 'editor.markdown.orderedList',
-    scope: 'editor',
-    editorKind: 'markdown',
-    labelKey: 'hotkeys.command.editor.markdown.orderedList',
-    defaultBinding: 'mod+shift+7'
   },
   {
     id: 'editor.markdown.taskList',

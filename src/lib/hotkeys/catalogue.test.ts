@@ -23,7 +23,12 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { commandById, HOTKEY_COMMANDS, MARKDOWN_ACTIONS } from './commands';
+import {
+  commandById,
+  groupedCommands,
+  HOTKEY_COMMANDS,
+  MARKDOWN_ACTIONS
+} from './commands';
 import { parseBinding } from './parse';
 
 describe('catalogue consistency', () => {
@@ -135,5 +140,20 @@ describe('catalogue consistency', () => {
       if (ids.length > 1) collisions.push(`${binding} → ${ids.join(', ')}`);
     }
     expect(collisions).toEqual([]);
+  });
+
+  it('shows ordered list before bullet list in markdown hotkey groups', () => {
+    const markdownGroup = groupedCommands().find(
+      (group) => group.scope === 'editor' && group.editorKind === 'markdown'
+    );
+    const ids = markdownGroup?.commands.map((cmd) => cmd.id) ?? [];
+
+    expect(ids.indexOf('editor.markdown.orderedList')).toBeGreaterThanOrEqual(
+      0
+    );
+    expect(ids.indexOf('editor.markdown.bulletList')).toBeGreaterThanOrEqual(0);
+    expect(ids.indexOf('editor.markdown.orderedList')).toBeLessThan(
+      ids.indexOf('editor.markdown.bulletList')
+    );
   });
 });
