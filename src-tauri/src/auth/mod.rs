@@ -23,6 +23,7 @@ use keyring_core::Entry;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
+use crate::db::Db;
 use crate::error::{AppError, AppResult};
 
 const KEYRING_SERVICE: &str = "mindstream-notes";
@@ -111,6 +112,29 @@ fn clear_local_state(path: &Path) {
     if let Ok(entry) = keyring_entry() {
         let _ = entry.delete_credential();
     }
+}
+
+/// Wipe server-bound sync cursors so the next login starts from a
+/// clean slate. `sync_state` (per-kind stoken + cached collection UID)
+/// and `tombstones` (queued server-side deletes) are both meaningful
+/// only against the server we were just signed into — surviving them
+/// across logout produced the `bad_stoken` error users hit when they
+/// signed back in to a different server.
+///
+/// Per-row `etebase_uid` / `etebase_etag` columns are intentionally
+/// **not** touched here. They're still useful when the next login goes
+/// back to the same account, and `ensure_collection` already self-
+/// heals when the cached collection UID can't be fetched on a fresh
+/// server — by listing existing collections and reusing one if found,
+/// or creating a new one if not.
+fn reset_sync_cursors(db: &Db) -> AppResult<()> {
+    db.with_conn_mut(|c| {
+        let tx = c.transaction()?;
+        tx.execute("DELETE FROM sync_state", [])?;
+        tx.execute("DELETE FROM tombstones", [])?;
+        tx.commit()?;
+        Ok(())
+    })
 }
 
 /// Re-hydrate the Etebase `Account` from the on-disk session blob and the
@@ -235,6 +259,20 @@ pub async fn etebase_logout(app: AppHandle) -> Result<(), String> {
     // (which deletes the keyring entry below) makes those fetches fail
     // immediately and the editor falls back to single-device mode.
     clear_local_state(&path);
+
+    // Drop sync cursors after the session file is gone, so a crash here
+    // leaves the user in a "no session, no cursors" state rather than
+    // "no session, stale cursors" (which is the bug we're fixing).
+    // Best-effort: the user clearly intended to log out, so we don't
+    // want a DB hiccup to turn into a logout failure they have to
+    // retry. Worst case: pull_folders self-heals from bad_stoken on
+    // the next login.
+    if let Some(db) = app.try_state::<Db>() {
+        if let Err(err) = reset_sync_cursors(db.inner()) {
+            log::warn!("[auth] reset_sync_cursors on logout: {err}");
+        }
+    }
+
     Ok(())
 }
 

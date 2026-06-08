@@ -89,6 +89,24 @@ fn is_corrupt_remote_content(err: &AppError) -> bool {
     )
 }
 
+/// True for the `400 bad_stoken` etebase returns when our cached
+/// sync cursor refers to a state the server no longer recognises —
+/// typically because the user switched accounts/servers, or because
+/// the collection was rebuilt server-side. Sample error message:
+///
+///   list folders: HTTP error 400! Code: 'bad_stoken'. Detail: 'Invalid stoken.'
+///
+/// The etebase SDK packs all of this into a single string we then
+/// wrap in `AppError::InvalidArg`. Matching on `'bad_stoken'` (with
+/// the quotes) is precise enough to avoid colliding with unrelated
+/// errors that happen to mention the substring.
+fn is_bad_stoken_error(err: &AppError) -> bool {
+    matches!(
+        err,
+        AppError::InvalidArg(message) if message.contains("'bad_stoken'")
+    )
+}
+
 fn mark_local_by_remote_uid_dirty(db: &Db, kind: &str, etebase_uid: &str) -> AppResult<bool> {
     let table = match kind {
         KIND_FOLDERS => "collections",
@@ -404,6 +422,30 @@ fn save_collection_uid(db: &Db, kind: &str, uid: &str) -> AppResult<()> {
 // ---------- Pull ----------
 
 fn pull_folders(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult<()> {
+    // Outer retry handles `bad_stoken`: if the etebase server rejects
+    // our cached cursor (because the user logged into a different
+    // account, or the collection was rebuilt server-side), clear the
+    // stoken and replay the whole pull from scratch. One retry is
+    // enough — if it still fails after we've reset to None, the
+    // server is unhappy about something else and we bubble it up.
+    let mut already_retried = false;
+    loop {
+        match pull_folders_once(db, im, report) {
+            Ok(()) => return Ok(()),
+            Err(err) if !already_retried && is_bad_stoken_error(&err) => {
+                log::warn!(
+                    "[sync] bad_stoken on folders pull — resetting cursor and retrying ({err})"
+                );
+                save_stoken(db, KIND_FOLDERS, None)?;
+                already_retried = true;
+                continue;
+            }
+            Err(err) => return Err(err),
+        }
+    }
+}
+
+fn pull_folders_once(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult<()> {
     let stoken = load_stoken(db, KIND_FOLDERS)?;
     let mut new_stoken = stoken.clone();
     let mut iter_token: Option<String> = None;
@@ -466,6 +508,31 @@ fn pull_notes(
     report: &mut SyncReport,
     applied_ids: &mut Vec<String>,
 ) -> AppResult<()> {
+    // Same bad_stoken self-heal pattern as pull_folders — see the
+    // comment there.
+    let mut already_retried = false;
+    loop {
+        match pull_notes_once(db, im, report, applied_ids) {
+            Ok(()) => return Ok(()),
+            Err(err) if !already_retried && is_bad_stoken_error(&err) => {
+                log::warn!(
+                    "[sync] bad_stoken on notes pull — resetting cursor and retrying ({err})"
+                );
+                save_stoken(db, KIND_NOTES, None)?;
+                already_retried = true;
+                continue;
+            }
+            Err(err) => return Err(err),
+        }
+    }
+}
+
+fn pull_notes_once(
+    db: &Db,
+    im: &ItemManager,
+    report: &mut SyncReport,
+    applied_ids: &mut Vec<String>,
+) -> AppResult<()> {
     let stoken = load_stoken(db, KIND_NOTES)?;
     let mut new_stoken = stoken.clone();
     loop {
@@ -521,6 +588,30 @@ fn pull_notes(
 /// note, then this re-runs from the same stoken and the previously-
 /// orphaned assets land cleanly.
 fn pull_assets(
+    db: &Db,
+    im: &ItemManager,
+    report: &mut SyncReport,
+    applied_ids: &mut Vec<String>,
+) -> AppResult<()> {
+    // Same bad_stoken self-heal pattern as pull_folders.
+    let mut already_retried = false;
+    loop {
+        match pull_assets_once(db, im, report, applied_ids) {
+            Ok(()) => return Ok(()),
+            Err(err) if !already_retried && is_bad_stoken_error(&err) => {
+                log::warn!(
+                    "[sync] bad_stoken on assets pull — resetting cursor and retrying ({err})"
+                );
+                save_stoken(db, KIND_ASSETS, None)?;
+                already_retried = true;
+                continue;
+            }
+            Err(err) => return Err(err),
+        }
+    }
+}
+
+fn pull_assets_once(
     db: &Db,
     im: &ItemManager,
     report: &mut SyncReport,
@@ -1625,4 +1716,52 @@ pub fn queue_tombstone(conn: &Connection, kind: &str, etebase_uid: &str) -> AppR
         params![kind, etebase_uid, Utc::now().to_rfc3339()],
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_bad_stoken_error_matches_etebase_sdk_message() {
+        // The exact wording the etebase-rs SDK surfaces when the
+        // server returns 400 Bad Request with code='bad_stoken'.
+        // Reproduced from a real failure when signing back in to a
+        // different etebase server with stale local cursors.
+        let folders = AppError::InvalidArg(
+            "list folders: HTTP error 400! Code: 'bad_stoken'. Detail: 'Invalid stoken.'".into(),
+        );
+        let notes = AppError::InvalidArg(
+            "list notes: HTTP error 400! Code: 'bad_stoken'. Detail: 'Invalid stoken.'".into(),
+        );
+        let assets = AppError::InvalidArg(
+            "list assets: HTTP error 400! Code: 'bad_stoken'. Detail: 'Invalid stoken.'".into(),
+        );
+        assert!(is_bad_stoken_error(&folders));
+        assert!(is_bad_stoken_error(&notes));
+        assert!(is_bad_stoken_error(&assets));
+    }
+
+    #[test]
+    fn is_bad_stoken_error_rejects_unrelated_errors() {
+        // Adjacent etebase errors must NOT trigger the retry — silently
+        // resetting cursors on, say, a transient 401 would mask the
+        // real failure and cost the user a full re-sync.
+        let unauthorized = AppError::InvalidArg(
+            "list folders: HTTP error 401! Code: 'unauthorized'. Detail: 'Bad token.'".into(),
+        );
+        let not_found = AppError::InvalidArg(
+            "list notes: HTTP error 404! Code: 'not_found'. Detail: 'Collection not found.'".into(),
+        );
+        let bare = AppError::InvalidArg("list folders: connection refused".into());
+        // Substring without the quotes (someone misspelling in a log
+        // message) should not trip either.
+        let prose = AppError::InvalidArg(
+            "list folders: HTTP error 500! the server replied with bad stoken handling".into(),
+        );
+        assert!(!is_bad_stoken_error(&unauthorized));
+        assert!(!is_bad_stoken_error(&not_found));
+        assert!(!is_bad_stoken_error(&bare));
+        assert!(!is_bad_stoken_error(&prose));
+    }
 }
