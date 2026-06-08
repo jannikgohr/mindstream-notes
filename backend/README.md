@@ -51,16 +51,69 @@ the excalidraw-room transport.
 `.env.example` is the source of truth. The four marked **required**
 matter; the rest have sensible defaults.
 
-| Var                      | Default          | Notes                                                                                                                                                           |
-| ------------------------ | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `NGINX_PORT`             | `8080`           | Host port published by `nginx`. Compose maps `NGINX_PORT:80`.                                                                                                   |
-| `EXCALIDRAW_CORS_ORIGIN` | `*`              | Forwarded to excalidraw-room. Tighten to your exact origin if nothing in front of nginx is gating CORS.                                                         |
-| `POSTGRES_DB`            | `etebase`        | Database name shared between postgres and etebase.                                                                                                              |
-| `POSTGRES_USER`          | `etebase`        | Postgres role etebase logs in as.                                                                                                                               |
-| `POSTGRES_PASSWORD`      | — **(required)** | Compose refuses to start without it. Internal to the docker network; doesn't need to be human-memorable.                                                        |
-| `ETEBASE_ALLOWED_HOSTS`  | `*`              | Comma-separated hostnames Django will accept. **Set to your public hostname in production** (e.g. `notes.example.com`); `*` is a foot-gun on the open internet. |
-| `ETEBASE_SUPER_USER`     | `admin`          | Django superuser created on first boot. Used at `/admin` and to bootstrap signups.                                                                              |
-| `ETEBASE_SUPER_PASS`     | _(auto-gen)_     | Leave blank to let the image print a random one to the logs on first boot. Pin it only if you have to.                                                          |
+| Var                      | Default          | Notes                                                                                                                                                                                      |
+| ------------------------ | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `NGINX_PORT`             | `8080`           | Host port published by `nginx`. Compose maps `NGINX_PORT:80`.                                                                                                                              |
+| `EXCALIDRAW_CORS_ORIGIN` | `*`              | Forwarded to excalidraw-room. Tighten to your exact origin if nothing in front of nginx is gating CORS.                                                                                    |
+| `POSTGRES_DB`            | `etebase`        | Database name shared between postgres and etebase.                                                                                                                                         |
+| `POSTGRES_USER`          | `etebase`        | Postgres role etebase logs in as.                                                                                                                                                          |
+| `POSTGRES_PASSWORD`      | — **(required)** | Compose refuses to start without it. Internal to the docker network; doesn't need to be human-memorable.                                                                                   |
+| `ETEBASE_ALLOWED_HOSTS`  | `*`              | Comma-separated hostnames Django will accept; also drives `CSRF_TRUSTED_ORIGINS`. **See the "Domain & CSRF" section below** — `*` works for local testing but is a foot-gun in production. |
+| `ETEBASE_SUPER_USER`     | `admin`          | Django superuser created on first boot. Used at `/admin` and to bootstrap signups.                                                                                                         |
+| `ETEBASE_SUPER_PASS`     | _(auto-gen)_     | Leave blank to let the image print a random one to the logs on first boot. Pin it only if you have to.                                                                                     |
+
+## Domain & CSRF
+
+Etebase is a Django app and Django 4.2+ enforces `CSRF_TRUSTED_ORIGINS`
+on every state-changing POST (including the `/admin` login). The
+victorrds image **derives both `ALLOWED_HOSTS` and
+`CSRF_TRUSTED_ORIGINS` from the single `ETEBASE_ALLOWED_HOSTS` env
+var**, so as long as you set that to the right thing, both lists end
+up populated. Get it wrong and Django returns either a 400
+`DisallowedHost` (ALLOWED_HOSTS mismatch) or a 403 "CSRF verification
+failed — Origin checking failed" (trusted-origin mismatch).
+
+**Set `ETEBASE_ALLOWED_HOSTS` to the exact hostname your client
+addresses the stack with**, comma-separated if there's more than one:
+
+```
+# Local dev
+ETEBASE_ALLOWED_HOSTS=localhost,127.0.0.1
+
+# Single public hostname
+ETEBASE_ALLOWED_HOSTS=notes.example.com
+
+# Multiple hostnames (clients hit one, admins hit another)
+ETEBASE_ALLOWED_HOSTS=notes.example.com,admin.notes.example.com
+
+# Wildcard — note the leading `*.`; bare `.example.com` is rejected
+# by the underlying Starlette TrustedHost middleware
+ETEBASE_ALLOWED_HOSTS=*.example.com
+```
+
+**Behind a TLS terminator** (Caddy/Cloudflare/outer nginx), Django
+also needs to know the original request was HTTPS so it builds the
+trusted origin as `https://notes.example.com`, not `http://`. The
+edge nginx in this stack already forwards `X-Forwarded-Proto $scheme`
+(see `nginx/nginx.conf`); make sure your _outer_ proxy sets the same
+header when it talks to `NGINX_PORT`:
+
+```
+# Caddy does this by default — no config needed.
+# Plain nginx in front needs:
+proxy_set_header X-Forwarded-Proto $scheme;
+```
+
+**Symptom → fix cheat sheet:**
+
+| What you see                                             | Cause                                                                    | Fix                                          |
+| -------------------------------------------------------- | ------------------------------------------------------------------------ | -------------------------------------------- |
+| `400 DisallowedHost: Invalid HTTP_HOST header`           | Your hostname isn't in `ETEBASE_ALLOWED_HOSTS`.                          | Add it, restart etebase.                     |
+| `403 CSRF verification failed. Origin checking failed.`  | Same root cause — `CSRF_TRUSTED_ORIGINS` is built from the same env var. | Add the hostname to `ETEBASE_ALLOWED_HOSTS`. |
+| Works on `http://`, breaks on `https://` with 403 CSRF   | Outer proxy isn't forwarding `X-Forwarded-Proto: https`.                 | Set the header in your TLS terminator.       |
+| `Domain wildcard patterns must be like '*.example.com'.` | You used bare `.example.com` or `*example.com`.                          | Use `*.example.com` (asterisk-dot-domain).   |
+
+Restart etebase after changing the env var: `docker compose up -d etebase`.
 
 ## TLS
 
