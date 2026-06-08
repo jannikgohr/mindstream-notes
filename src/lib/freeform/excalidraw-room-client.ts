@@ -35,6 +35,29 @@ const HKDF_INFO = new TextEncoder().encode('mindstream:excalidraw-room:v1');
 // Match Excalidraw's outbound throttle: drawing fires onChange dozens
 // of times per second, but the wire only needs the latest state.
 const BROADCAST_THROTTLE_MS = 50;
+// Cap repeated decrypt warnings so a misconfigured peer in the same
+// room can't flood the console.
+const MAX_DECRYPT_WARNINGS = 5;
+
+/**
+ * Normalise whatever Socket.IO hands us into an ArrayBuffer. The
+ * binary attachment representation varies by transport (websocket vs
+ * polling), platform (browser vs Node), and even Socket.IO version —
+ * we've seen ArrayBuffer, Uint8Array, and Buffer arrive depending on
+ * the path. The TypeScript types are aspirational; trust them at your
+ * peril. Returns null for anything we can't read as bytes so the caller
+ * can drop the frame cleanly instead of throwing inside crypto.subtle.
+ */
+function asArrayBuffer(value: unknown): ArrayBuffer | null {
+  if (value instanceof ArrayBuffer) return value;
+  if (value instanceof Uint8Array || ArrayBuffer.isView(value)) {
+    // `new Uint8Array(typedArray)` copies into a fresh ArrayBuffer-
+    // backed view, which also strips any SharedArrayBuffer backing
+    // that some runtimes would otherwise hand us.
+    return new Uint8Array(value as Uint8Array).buffer;
+  }
+  return null;
+}
 
 export interface ExcalidrawRoomClientOptions {
   /** URL of the nginx fronting excalidraw-room. socket.io will
@@ -66,11 +89,17 @@ export class ExcalidrawRoomClient {
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private lastFlush = 0;
   private pendingBroadcast = false;
+  /** Set while we're applying a remote SCENE_UPDATE so the resulting
+   *  Excalidraw onChange doesn't bounce straight back out as a fresh
+   *  broadcast. Peers would reconcile it to a no-op (their elements
+   *  already match), but it's wasted bandwidth and CPU. */
+  private applyingRemote = false;
+  private decryptWarningCount = 0;
   private readonly unlistenOnChange: () => void;
 
   constructor(private readonly opts: ExcalidrawRoomClientOptions) {
     this.unlistenOnChange = opts.api.onChange(() => {
-      if (this.destroyed) return;
+      if (this.destroyed || this.applyingRemote) return;
       this.scheduleBroadcast();
     });
     void this.connect();
@@ -114,6 +143,9 @@ export class ExcalidrawRoomClient {
     });
     this.socket = socket;
 
+    // `init-room` is emitted by excalidraw-room on every successful
+    // connect — including reconnects after a transient drop — so this
+    // single handler covers the initial join and every recovery.
     socket.on('init-room', () => {
       if (this.destroyed) return;
       socket.emit('join-room', this.opts.roomId);
@@ -121,8 +153,15 @@ export class ExcalidrawRoomClient {
     socket.on('connect', () => {
       this.opts.onStatusChange?.(true);
     });
-    socket.on('disconnect', () => {
+    socket.on('disconnect', (reason) => {
       this.opts.onStatusChange?.(false);
+      console.debug('[excalidraw-room] disconnect', reason);
+    });
+    socket.on('connect_error', (err) => {
+      // Don't tear down — Socket.IO retries with backoff on its own.
+      // Just surface the error so a bad URL or CORS rejection is
+      // visible instead of silently never connecting.
+      console.warn('[excalidraw-room] connect_error', err.message);
     });
     socket.on('first-in-room', () => {
       // No remote peers yet — nothing to send until one joins. New
@@ -135,13 +174,10 @@ export class ExcalidrawRoomClient {
       // don't have to wait for the next local edit.
       void this.broadcastScene();
     });
-    socket.on(
-      'client-broadcast',
-      (encryptedBuffer: ArrayBuffer, iv: Uint8Array) => {
-        if (this.destroyed) return;
-        void this.handleClientBroadcast(encryptedBuffer, iv);
-      }
-    );
+    socket.on('client-broadcast', (encryptedBuffer: unknown, iv: unknown) => {
+      if (this.destroyed) return;
+      void this.handleClientBroadcast(encryptedBuffer, iv);
+    });
   }
 
   private scheduleBroadcast(): void {
@@ -185,29 +221,48 @@ export class ExcalidrawRoomClient {
   }
 
   private async handleClientBroadcast(
-    encryptedBuffer: ArrayBuffer,
-    iv: Uint8Array
+    encryptedBuffer: unknown,
+    iv: unknown
   ): Promise<void> {
     const key = this.cryptoKey;
     if (!key) return;
+
+    // Socket.IO may hand us Uint8Array, ArrayBuffer, or Buffer depending
+    // on transport. Normalise to ArrayBuffer before touching crypto.
+    const ivBuffer = asArrayBuffer(iv);
+    const ctBuffer = asArrayBuffer(encryptedBuffer);
+    if (!ivBuffer || !ctBuffer) {
+      this.warnDecrypt('malformed frame: unexpected binary shape');
+      return;
+    }
+    if (ivBuffer.byteLength !== IV_LENGTH_BYTES) {
+      this.warnDecrypt(`bad iv length ${ivBuffer.byteLength}`);
+      return;
+    }
+    if (ctBuffer.byteLength === 0) {
+      // GCM tag alone is 16 bytes — an empty ciphertext can't decrypt.
+      this.warnDecrypt('empty ciphertext');
+      return;
+    }
+
     let decoded: RemoteMessage;
     try {
-      // Materialise a fresh ArrayBuffer-backed iv so TS 5.7's narrowed
-      // BufferSource definition accepts it — same dance as encryptScene.
-      const ivBuffer = iv.slice().buffer;
       const plaintext = await crypto.subtle.decrypt(
         { name: 'AES-GCM', iv: ivBuffer },
         key,
-        encryptedBuffer
+        ctBuffer
       );
       decoded = JSON.parse(
         new TextDecoder().decode(plaintext)
       ) as RemoteMessage;
     } catch (err) {
-      // Likely a peer in the same room with a different key — log once
-      // per session would be nicer, but a noisy console beats silent
-      // data loss for now.
-      console.warn('[excalidraw-room] decrypt failed', err);
+      // Most likely cause: a peer in the same room with a different
+      // key (e.g. they opened the note before we pushed the crypto_key
+      // to etebase). Less likely: corruption. Either way, drop and
+      // wait for the next frame.
+      this.warnDecrypt(
+        `decrypt or parse failed: ${err instanceof Error ? err.message : String(err)}`
+      );
       return;
     }
 
@@ -215,15 +270,36 @@ export class ExcalidrawRoomClient {
     const incoming = (
       decoded.payload as { elements?: readonly ExcalidrawElement[] }
     )?.elements;
-    if (!incoming) return;
+    if (!incoming || !Array.isArray(incoming)) return;
 
     const current = this.opts.api.getSceneElementsIncludingDeleted();
     const merged = reconcileElements(current, incoming);
-    this.opts.api.updateScene({
-      elements: merged,
-      // NEVER: the remote update isn't an undoable local action.
-      captureUpdate: CaptureUpdateAction.NEVER
-    });
+    this.applyingRemote = true;
+    try {
+      this.opts.api.updateScene({
+        elements: merged,
+        // NEVER: the remote update isn't an undoable local action.
+        captureUpdate: CaptureUpdateAction.NEVER
+      });
+    } finally {
+      // Excalidraw can fire onChange asynchronously after updateScene,
+      // so defer clearing the guard to the next microtask. Anything
+      // observed in the same tick is the remote apply itself; anything
+      // later is genuine user input and should broadcast normally.
+      queueMicrotask(() => {
+        this.applyingRemote = false;
+      });
+    }
+  }
+
+  private warnDecrypt(reason: string): void {
+    if (this.decryptWarningCount >= MAX_DECRYPT_WARNINGS) return;
+    this.decryptWarningCount += 1;
+    const suffix =
+      this.decryptWarningCount === MAX_DECRYPT_WARNINGS
+        ? ' (further warnings suppressed)'
+        : '';
+    console.warn(`[excalidraw-room] ${reason}${suffix}`);
   }
 }
 
