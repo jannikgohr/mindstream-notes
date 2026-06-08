@@ -15,67 +15,76 @@
  *
  * Behind a reverse proxy (recommended), terminate TLS at the proxy and
  * point clients at `wss://...`. Direct exposure works for trusted LANs.
- *
- * Dependencies: just `ws`. Install with `npm i ws`.
  */
 
-import { WebSocketServer } from 'ws';
+import uWS from 'uWebSockets.js';
 
 const PORT = Number(process.env.PORT ?? 1234);
 const HOST = process.env.HOST ?? '0.0.0.0';
 
-/** room id (string) -> Set<WebSocket> */
-const rooms = new Map();
+const MAX_PAYLOAD_LENGTH = 16 * 1024 * 1024;
+// Drop peers whose outbound queue grows past this. Frames are encrypted
+// ciphertext, so we can't coalesce or merge a slow consumer's backlog —
+// disconnecting and letting the client resync is the cleanest option.
+const MAX_BACKPRESSURE_BYTES = 4 * 1024 * 1024; // 4 MiB
 
-const wss = new WebSocketServer({ host: HOST, port: PORT });
+const app = uWS.App();
 
-wss.on('connection', (ws, req) => {
-  // Pull room from the query string. The client encodes it via
-  // encodeURIComponent on the etebase Item UID.
-  const url = new URL(req.url ?? '/', 'http://localhost');
-  const room = url.searchParams.get('room');
-  if (!room) {
-    ws.close(1008, 'missing room param');
-    return;
-  }
+app.ws('/*', {
+  // Payloads are AES-GCM ciphertext; permessage-deflate burns CPU for
+  // ~0% compression and would only hurt throughput.
+  compression: uWS.DISABLED,
+  maxPayloadLength: MAX_PAYLOAD_LENGTH,
+  idleTimeout: 120,
 
-  let peers = rooms.get(room);
-  if (!peers) {
-    peers = new Set();
-    rooms.set(room, peers);
-  }
-  peers.add(ws);
-
-  ws.on('message', (data) => {
-    // Broadcast to every other client in this room. We send the payload
-    // as-is (binary frame, opaque ciphertext); ws preserves the type.
-    for (const peer of peers) {
-      if (peer === ws) continue;
-      if (peer.readyState !== ws.OPEN) continue;
-      try {
-        peer.send(data);
-      } catch (err) {
-        // Don't let one bad peer take down the broadcast.
-        console.warn('[collab] send failed:', err?.message ?? err);
-      }
+  upgrade: (res, req, context) => {
+    const query = req.getQuery() ?? '';
+    // URLSearchParams.get() returns the percent-decoded value, which
+    // matches the client's encodeURIComponent on the etebase Item UID.
+    const room = new URLSearchParams(query).get('room');
+    if (!room) {
+      res.writeStatus('400 Bad Request').end('missing room param');
+      return;
     }
-  });
+    res.upgrade(
+      { room },
+      req.getHeader('sec-websocket-key'),
+      req.getHeader('sec-websocket-protocol'),
+      req.getHeader('sec-websocket-extensions'),
+      context
+    );
+  },
 
-  ws.on('close', () => {
-    peers.delete(ws);
-    if (peers.size === 0) rooms.delete(room);
-  });
+  open: (ws) => {
+    // uWS pub/sub fans out natively in C++ and ws.publish() skips the
+    // sender, so we no longer iterate a JS Set per inbound frame.
+    ws.subscribe(ws.room);
+  },
 
-  ws.on('error', (err) => {
-    console.warn('[collab] ws error:', err?.message ?? err);
-  });
+  message: (ws, message, isBinary) => {
+    if (ws.getBufferedAmount() > MAX_BACKPRESSURE_BYTES) {
+      // The sender's own socket is backed up — disconnect rather than
+      // feed more bytes into a stuck queue.
+      ws.end(1009, 'backpressure');
+      return;
+    }
+    ws.publish(ws.room, message, isBinary, false);
+  },
+
+  drain: (ws) => {
+    // Fires when this socket's outbound buffer drains. If it's still
+    // huge, the subscriber can't keep up — drop them.
+    if (ws.getBufferedAmount() > MAX_BACKPRESSURE_BYTES) {
+      ws.end(1009, 'backpressure');
+    }
+  }
 });
 
-wss.on('listening', () => {
-  console.log(`[collab] relay listening on ws://${HOST}:${PORT}`);
-});
-
-wss.on('error', (err) => {
-  console.error('[collab] server error:', err);
-  process.exit(1);
+app.listen(HOST, PORT, (token) => {
+  if (token) {
+    console.log(`[collab] relay listening on ws://${HOST}:${PORT}`);
+  } else {
+    console.error(`[collab] failed to bind ${HOST}:${PORT}`);
+    process.exit(1);
+  }
 });
