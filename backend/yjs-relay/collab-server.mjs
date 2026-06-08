@@ -10,11 +10,12 @@
  * Wire format (opaque to this server): [1 byte type][12 byte IV][N bytes ciphertext+tag].
  *
  * Run:
- *   node backend/yjs-collab/collab-server.mjs           # binds 0.0.0.0:1234
- *   PORT=8080 HOST=127.0.0.1 node ...        # override
+ *   node backend/yjs-relay/collab-server.mjs           # binds 0.0.0.0:1234
+ *   PORT=8080 HOST=127.0.0.1 node ...                  # override
  *
- * Behind a reverse proxy (recommended), terminate TLS at the proxy and
- * point clients at `wss://...`. Direct exposure works for trusted LANs.
+ * Deployed behind the backend/ nginx in docker-compose, which forwards
+ * root-path WebSocket upgrades here (everything not under /socket.io/,
+ * which goes to excalidraw-room for freeform live sync).
  */
 
 import uWS from 'uWebSockets.js';

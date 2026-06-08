@@ -1,0 +1,44 @@
+# Mindstream Notes — backend stack.
+#
+# Single entrypoint for all server-side collab services. nginx fronts:
+#   /socket.io/ → excalidraw-room  (freeform live sync)
+#   /          → yjs-relay         (markdown + PDF collab)
+#
+# Usage from this directory:
+#   cp .env.example .env
+#   docker compose up -d --build
+#
+# Plain HTTP only. Put your TLS-terminating proxy (Caddy, Cloudflare,
+# nginx, ...) in front of NGINX_PORT.
+
+services:
+  nginx:
+    build: ./nginx
+    container_name: mindstream-nginx
+    restart: always
+    depends_on:
+      - yjs-relay
+      - excalidraw-room
+    ports:
+      - "${NGINX_PORT:-8080}:80"
+
+  yjs-relay:
+    build: ./yjs-relay
+    container_name: mindstream-yjs-relay
+    restart: always
+    environment:
+      - HOST=0.0.0.0
+      - PORT=1234
+    expose:
+      - "1234"
+
+  excalidraw-room:
+    build: ./excalidraw-room
+    container_name: mindstream-excalidraw-room
+    restart: always
+    environment:
+      - NODE_ENV=production
+      - PORT=80
+      - CORS_ORIGIN=${EXCALIDRAW_CORS_ORIGIN:-*}
+    expose:
+      - "80"

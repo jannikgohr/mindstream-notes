@@ -1,11 +1,23 @@
 /**
- * Yjs scene adapter for Excalidraw-backed freeform notes.
+ * Yjs scene adapter for Excalidraw-backed freeform notes — local
+ * persistence only.
  *
- * Important performance note: Excalidraw calls `onChange` frequently while
- * drawing. Do not write a full scene snapshot on each callback. That makes
- * Yjs retain a stream of large replaced arrays and quickly turns a simple
- * stroke into a huge persisted/synced payload. We store elements/files by id,
- * store order separately, and throttle local writes.
+ * Live collaboration for freeform notes goes over excalidraw-room (see
+ * excalidraw-room-client.ts), not Yjs. This module's job is narrower
+ * now: keep the local Y.Doc in step with what Excalidraw is drawing so
+ * the FreeformNoteEditor can serialise it as `yrs_state` into etebase
+ * (and load it back unchanged on a different device).
+ *
+ * The observer is therefore only ever triggered by `Y.applyUpdate`
+ * calls that the Svelte component makes when sync pulls a fresher
+ * yrs_state from etebase — there's no peer who can push Y.Doc ops over
+ * a socket any more.
+ *
+ * Performance note: Excalidraw calls `onChange` frequently while
+ * drawing. Don't write a full scene snapshot on each callback. That
+ * makes Yjs retain a stream of large replaced arrays and quickly turns
+ * a simple stroke into a huge persisted payload. We store elements/
+ * files by id, store order separately, and throttle local writes.
  */
 
 import * as Y from 'yjs';
@@ -251,7 +263,10 @@ function writeSceneToYDoc(
   }, LOCAL_ORIGIN);
 }
 
-export function bindExcalidrawToYDoc({ yDoc, api }: BindOptions): BindHandle {
+export function bindExcalidrawToLocalYDoc({
+  yDoc,
+  api
+}: BindOptions): BindHandle {
   let applyingRemote = false;
   let destroyed = false;
   let flushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -393,6 +408,10 @@ export function bindExcalidrawToYDoc({ yDoc, api }: BindOptions): BindHandle {
     lastKnownApp = snapshot.appState;
   };
 
+  // Fires when something other than our own write touches the Y.Doc.
+  // The only such "something" today is the FreeformNoteEditor calling
+  // `Y.applyUpdate(yDoc, fresh.yrs_state)` after sync pulls a newer
+  // copy from etebase. Live collab no longer flows through here.
   const observer = (events: Y.YEvent<Y.AbstractType<unknown>>[]) => {
     if (
       events.every(

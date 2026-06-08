@@ -3,17 +3,20 @@
    * Freeform / drawing editor for `note_kind === 'freeform'` notes.
    *
    * Architecture: this Svelte component is just the shell — it owns the
-   * Y.Doc, the CollabProvider (live E2EE relay socket), persistence
-   * (debounced save), and trashed-state detection. The actual drawing
-   * surface is Excalidraw, mounted as a React island inside this shell.
-   * React + Excalidraw + the bridge are dynamically imported so they only
-   * pay their bundle cost when a drawing note is opened.
+   * local Y.Doc (for at-rest persistence), the ExcalidrawRoomClient
+   * (live sync over the official excalidraw-room protocol), debounced
+   * save, and trashed-state detection. The actual drawing surface is
+   * Excalidraw, mounted as a React island inside this shell. React +
+   * Excalidraw + the bridge are dynamically imported so they only pay
+   * their bundle cost when a drawing note is opened.
    *
-   * Doc shape: Excalidraw elements/files are keyed by id in Y.Maps, with
-   * ordering and selected app state kept separately via
-   * `$lib/freeform/excalidraw-yjs.ts`. The Rust persistence pipeline doesn't
-   * care — `yrs_state` round-trips opaque bytes. The relay sees only encrypted
-   * Yjs updates (same E2EE story as the markdown editor).
+   * Doc shape: Excalidraw elements/files are still keyed by id in
+   * Y.Maps via `$lib/freeform/excalidraw-yjs.ts` — the etebase
+   * `yrs_state` field on each note round-trips that doc unchanged. The
+   * Y.Doc is purely local persistence now; the wire goes through
+   * excalidraw-room, not the yjs-relay, and the room sees only AES-GCM
+   * ciphertext (per-note key HKDF-derived from the existing crypto_key,
+   * see excalidraw-room-client.ts).
    *
    * Mobile: Excalidraw has touch handling built in (pan, pinch, draw). The
    * existing mobile formatting toolbar only mounts inside markdown notes,
@@ -22,13 +25,12 @@
    * Deferred follow-ups (intentional):
    *   - Image insertion is disabled until Excalidraw files are backed by the
    *     shared asset table instead of inline data URLs.
-   *   - Presence (remote cursors). Awareness instance is wired into the
-   *     island already; the bridge just doesn't read from it yet.
+   *   - Presence (remote cursors). excalidraw-room emits room-user-change
+   *     and supports MOUSE_LOCATION; the client doesn't subscribe yet.
    */
 
   import { onDestroy, onMount, untrack } from 'svelte';
   import * as Y from 'yjs';
-  import { Awareness } from 'y-protocols/awareness';
   import { Trash2 } from 'lucide-svelte';
   import { userPrefersMode } from 'mode-watcher';
   import {
@@ -36,7 +38,6 @@
     saveNote as apiSaveNote,
     TRASH_ID,
     noteRoomInfo,
-    etebaseSession,
     onSessionChange
   } from '$lib/api';
   import { tree } from '$lib/stores/tree.svelte';
@@ -45,7 +46,11 @@
     clearNoteStatus
   } from '$lib/stores/note-status.svelte';
   import { getSettingValue } from '$lib/settings/store.svelte';
-  import { CollabProvider } from '$lib/sync/collab-provider';
+  import {
+    ExcalidrawRoomClient,
+    deriveExcalidrawKey
+  } from '$lib/freeform/excalidraw-room-client';
+  import type { ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types';
   import { isMobile } from '$lib/platform';
   import { listen } from '$lib/api/events';
   import { acquireFullscreen, releaseFullscreen } from '$lib/window/fullscreen';
@@ -72,9 +77,9 @@
   let mobile = $state(false);
 
   let yDoc: Y.Doc | null = null;
-  let awareness: Awareness | null = null;
+  let excalidrawApi: ExcalidrawImperativeAPI | null = null;
 
-  let provider: CollabProvider | null = null;
+  let roomClient: ExcalidrawRoomClient | null = null;
   let collabOnline = $state(false);
   let collabConfigured = $state(false);
 
@@ -208,16 +213,6 @@
         }
       }
 
-      const localAwareness = new Awareness(localYDoc);
-      awareness = localAwareness;
-      try {
-        const session = await etebaseSession();
-        const userName = session?.username ?? 'You';
-        localAwareness.setLocalStateField('user', { name: userName });
-      } catch (err) {
-        console.debug('[FreeformNoteEditor] no session for awareness', err);
-      }
-
       // Dynamically import React + Excalidraw + the island. Three separate
       // chunks fall out of this: react-dom/client, the island module
       // (which statically imports Excalidraw + the bridge), and react itself
@@ -242,7 +237,7 @@
       ExcalidrawIslandComponent = islandModule.default;
       reactCreateElement = reactModule.createElement;
       reactRoot = createRoot(mountEl);
-      // First render: pass yDoc + awareness + current readonly + the
+      // First render: pass yDoc + current readonly + the
       // current colour-scheme preference. Re-render happens reactively
       // via the $effect below whenever isTrashed or the app theme flips.
       // Both reads use untrack() because this initial render runs inside
@@ -251,20 +246,21 @@
       reactRoot.render(
         reactCreateElement(ExcalidrawIslandComponent, {
           yDoc,
-          awareness,
           readOnly: untrack(() => isTrashed),
           noteId,
           colorScheme: untrack(() => $userPrefersMode) ?? 'system',
           penMode: untrack(() => penMode),
-          reduceMotion: untrack(() => reduceMotion)
+          reduceMotion: untrack(() => reduceMotion),
+          onApiReady: handleExcalidrawApi
         })
       );
 
       // Same save trigger as NoteEditor: yDoc 'update' fires for every
-      // mutation (local + remote-applied), giving us one hook to debounce
-      // against. The bridge translates Excalidraw scene changes into Yjs ops
-      // before this fires, so we capture both editor-driven and
-      // collab-driven changes through the same path.
+      // mutation (local + remote-applied via Y.applyUpdate after sync
+      // pulls a fresh yrs_state), giving us one hook to debounce against.
+      // The local-write bridge in excalidraw-yjs.ts translates Excalidraw
+      // onChange callbacks into the Y.Doc, so editor-driven changes flow
+      // through the same path.
       yDocUpdateHandler = () => {
         if (!saveReady) return;
         scheduleSave();
@@ -273,11 +269,11 @@
       saveReady = true;
 
       lastSeenPushed = tree.notesById[noteId]?.pushed ?? false;
-      await setupCollabProvider();
+      await setupExcalidrawRoom();
       collabReady = true;
 
       unsubSession = onSessionChange(() => {
-        void setupCollabProvider();
+        void setupExcalidrawRoom();
       });
 
       // Merge fresh yrs_state into the live Y.Doc whenever sync pulls
@@ -355,16 +351,16 @@
     const currentPenMode = penMode;
     const currentReduceMotion = reduceMotion;
     if (!reactRoot || !ExcalidrawIslandComponent || !reactCreateElement) return;
-    if (!yDoc || !awareness) return;
+    if (!yDoc) return;
     reactRoot.render(
       reactCreateElement(ExcalidrawIslandComponent, {
         yDoc,
-        awareness,
         readOnly,
         noteId,
         colorScheme,
         penMode: currentPenMode,
-        reduceMotion: currentReduceMotion
+        reduceMotion: currentReduceMotion,
+        onApiReady: handleExcalidrawApi
       })
     );
   });
@@ -374,13 +370,32 @@
     if (!collabReady) return;
     if (pushed === lastSeenPushed) return;
     lastSeenPushed = pushed;
-    void setupCollabProvider();
+    void setupExcalidrawRoom();
   });
 
-  async function setupCollabProvider() {
-    if (provider) {
-      provider.destroy();
-      provider = null;
+  function handleExcalidrawApi(api: ExcalidrawImperativeAPI | null): void {
+    excalidrawApi = api;
+    if (api) {
+      // The room client needs the live API to push remote scenes into
+      // updateScene and to read local elements off getSceneElements.
+      // The island fires this callback right after mount, before any
+      // user edit; setup is idempotent (destroys the prior client) so
+      // calling it from both here and the load/session/pushed paths is
+      // safe.
+      void setupExcalidrawRoom();
+    } else if (roomClient) {
+      // API gone (island unmounted ahead of us). Tear down so the
+      // socket doesn't keep emitting against a dead reference.
+      roomClient.destroy();
+      roomClient = null;
+      collabOnline = false;
+    }
+  }
+
+  async function setupExcalidrawRoom() {
+    if (roomClient) {
+      roomClient.destroy();
+      roomClient = null;
       collabOnline = false;
     }
     collabConfigured = false;
@@ -389,24 +404,27 @@
       (getSettingValue('account.collabServerUrl') as string | undefined) ?? ''
     ).trim();
     if (!collabUrl) return;
-    if (!yDoc || !awareness) return;
+    if (!excalidrawApi) return;
 
     try {
       const room = await noteRoomInfo(noteId);
-      if (!room) return;
+      if (!room || !excalidrawApi) return;
+      const keyBytes16 = await deriveExcalidrawKey(base64ToBytes(room.key_b64));
+      // Re-check the api after the awaits in case the panel was
+      // dismantled while we were fetching room info / deriving the key.
+      if (!excalidrawApi) return;
       collabConfigured = true;
-      provider = new CollabProvider({
+      roomClient = new ExcalidrawRoomClient({
         url: collabUrl,
         roomId: room.room_id,
-        keyBytes: base64ToBytes(room.key_b64),
-        doc: yDoc,
-        awareness,
+        keyBytes16,
+        api: excalidrawApi,
         onStatusChange: (online) => {
           collabOnline = online;
         }
       });
     } catch (err) {
-      console.debug('[FreeformNoteEditor] collab provider init failed', err);
+      console.debug('[FreeformNoteEditor] excalidraw-room init failed', err);
     }
   }
 
@@ -448,12 +466,11 @@
 
     if (yDoc && yDocUpdateHandler) yDoc.off('update', yDocUpdateHandler);
     yDocUpdateHandler = null;
-    provider?.destroy();
-    provider = null;
+    roomClient?.destroy();
+    roomClient = null;
+    excalidrawApi = null;
     collabOnline = false;
     collabConfigured = false;
-    awareness?.destroy();
-    awareness = null;
     yDoc?.destroy();
     yDoc = null;
   });
