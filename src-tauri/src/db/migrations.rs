@@ -194,7 +194,7 @@ const MIGRATIONS: &[Migration] = &[
         // note_kind discriminates between note variants the editor knows
         // how to render. Values currently in use:
         //   'markdown'  — Crepe / y-prosemirror editor (the existing default)
-        //   'freeform'  — drawing canvas backed by a Y.Doc (tldraw store)
+        //   'freeform'  — drawing canvas backed by a Y.Doc
         // Stored as TEXT (instead of an INTEGER enum) so future kinds can
         // be added without renumbering and so a quick `SELECT note_kind`
         // is self-documenting when inspecting the DB by hand.
@@ -208,12 +208,12 @@ const MIGRATIONS: &[Migration] = &[
         to: 9,
         // Freeform notes briefly stored their content as a Y.Array of
         // hand-rolled StrokeRecord items (the first-cut canvas editor).
-        // The editor now embeds tldraw, whose store has an entirely
-        // different doc shape (a flat keyed map of TLRecord rows). The
-        // old StrokeRecord state can't be decoded by tldraw and would
+        // The editor now embeds a third-party drawing surface whose doc
+        // shape is different from the first-cut StrokeRecord format.
+        // The old state can't be decoded by newer canvas editors and would
         // surface as a corrupted / empty drawing on first open.
         //
-        // Wipe yrs_state for every freeform row so tldraw initialises a
+        // Wipe yrs_state for every freeform row so the canvas initialises a
         // fresh store on next open. The body column was always empty
         // for freeform notes (no markdown rendering) so it's untouched.
         // Markdown notes are unaffected.
@@ -236,8 +236,8 @@ const MIGRATIONS: &[Migration] = &[
         // wire the push, every existing row gets uploaded automatically.
         //
         //   id              client-generated UUID (`asset_<uuid>`). The
-        //                   tldraw record stores this as the asset's src
-        //                   URL via `mindstream-asset://<id>`, so it's
+        //                   Drawing records can store this as the asset's
+        //                   src URL via `mindstream-asset://<id>`, so it's
         //                   the stable cross-device identifier.
         //
         //   owning_note_id  FK with ON DELETE CASCADE so purging a

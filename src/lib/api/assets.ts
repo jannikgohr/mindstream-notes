@@ -1,12 +1,10 @@
 /**
  * Asset API. Mirror of src-tauri/src/assets/mod.rs.
  *
- * Assets are byte blobs (images, files) attached to freeform notes. Each
- * asset is keyed by a client-generated UUID (`asset_<uuid>`) that's
- * stable across devices — the tldraw record store carries the
- * `mindstream-asset://<id>` URL inside the encrypted Yjs doc, and the
- * React island's resolver materialises it back into a blob URL via
- * `fetchDrawingAsset`.
+ * Assets are byte blobs (images, files) owned by notes. Each asset is
+ * keyed by a client-generated UUID (`asset_<uuid>`) that's stable across
+ * devices. Editors store app-owned asset URLs in note content / state, and
+ * resolvers materialise them back into blob URLs via `fetchDrawingAsset`.
  *
  * Local-only for this slice — `dirty = 1` on insert, so when the
  * Etebase sync layer for assets ships (slice 2b), every existing row

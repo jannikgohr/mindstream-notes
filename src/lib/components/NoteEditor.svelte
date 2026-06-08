@@ -99,9 +99,7 @@
   let awareness: Awareness | null = null;
   let provider: CollabProvider | null = null;
   // Asset bridge for image upload + render-time URL resolution. One per
-  // open note, disposed in onDestroy so blob URLs don't leak. Same
-  // bridge backs the freeform editor's tldraw assetStore — see
-  // $lib/assets/bridge.
+  // open note, disposed in onDestroy so blob URLs don't leak.
   let assetBridge: AssetBridge | null = null;
   let collabOnline = $state(false);
   let collabConfigured = $state(false);

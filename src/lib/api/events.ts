@@ -14,8 +14,7 @@ import type { SyncReport } from './sync';
  *                       (CRDT-safe, never overwrites local edits)
  *   assets_pulled_ids — asset bytes inserted or updated; open editors
  *                       evict matching blob URLs from AssetBridge and
- *                       kick the matching image NodeView / tldraw
- *                       record so it re-resolves
+ *                       kick matching image views so they re-resolve
  *
  * The Rust event name is hard-coded in `sync::SYNC_COMPLETED_EVENT`;
  * keep this string in sync if you change it there.

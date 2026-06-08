@@ -20,10 +20,13 @@
 //! This is the "stoken + transaction" optimistic-concurrency pattern
 //! Etebase exposes; the CRDT does the actual conflict-free merging.
 
+pub mod repair;
 pub mod scheduler;
 pub mod yrs_doc;
 
+use std::any::Any;
 use std::collections::HashMap;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use chrono::Utc;
 use etebase::error::Error as EtebaseError;
@@ -50,6 +53,57 @@ const KIND_FOLDERS: &str = "folders";
 const KIND_ASSETS: &str = "assets";
 
 const PAYLOAD_SCHEMA: u32 = 2;
+
+pub(super) fn catch_blocking_panic<T>(
+    label: &str,
+    task: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    match catch_unwind(AssertUnwindSafe(task)) {
+        Ok(result) => result,
+        Err(payload) => {
+            let message = panic_payload_to_string(payload);
+            log::error!("[{label}] blocking task panicked: {message}");
+            Err(format!("{label} task panicked: {message}"))
+        }
+    }
+}
+
+fn panic_payload_to_string(payload: Box<dyn Any + Send>) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        (*message).to_string()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "unknown panic payload".to_string()
+    }
+}
+
+fn is_corrupt_remote_content(err: &AppError) -> bool {
+    // Matches both the old panic-derived "out of bounds" message and the
+    // current etebase-rs error wording "Chunk index out of range" returned
+    // by EncryptedRevision::content() after the dedup-index fix.
+    matches!(
+        err,
+        AppError::InvalidArg(message)
+            if message.contains("content: Chunk index out of")
+    )
+}
+
+fn mark_local_by_remote_uid_dirty(db: &Db, kind: &str, etebase_uid: &str) -> AppResult<bool> {
+    let table = match kind {
+        KIND_FOLDERS => "collections",
+        KIND_NOTES => "notes",
+        KIND_ASSETS => "assets",
+        _ => return Ok(false),
+    };
+    db.with_conn(|c| {
+        let changed = c.execute(
+            &format!("UPDATE {table} SET dirty = 1 WHERE etebase_uid = ?1"),
+            params![etebase_uid],
+        )?;
+        Ok(changed > 0)
+    })
+}
 
 /// What ends up in `Item::content` for a note. We keep our own `id`
 /// (the local SQLite UUID) inside the payload so we can correlate
@@ -112,7 +166,7 @@ struct FolderPayload {
 /// Wire format for a drawing-asset Etebase Item.
 ///
 /// `id` is the same client-generated UUID the SQLite row uses and that
-/// the tldraw store records as `asset:mindstream/<id>` — stable across
+/// drawing records can refer to via `mindstream-asset://<id>` — stable across
 /// devices. `etebase_uid` doesn't appear here because Etebase already
 /// owns it (it's the Item.uid()); we only need it on the local row for
 /// dirty-tracking and tombstone routing.
@@ -181,11 +235,13 @@ pub async fn sync_now(app: AppHandle) -> Result<SyncReport, String> {
     let _guard = scheduler_state.acquire_in_flight().await;
     let app_for_blocking = app.clone();
     let delta = tauri::async_runtime::spawn_blocking(move || -> Result<SyncDelta, String> {
-        let account = auth::try_restore(&app_for_blocking)
-            .map_err(|e| format!("restore session: {e}"))?
-            .ok_or_else(|| "not signed in".to_string())?;
-        let db = app_for_blocking.state::<Db>();
-        run(&db, &account).map_err(|e| e.to_string())
+        catch_blocking_panic("sync", || {
+            let account = auth::try_restore(&app_for_blocking)
+                .map_err(|e| format!("restore session: {e}"))?
+                .ok_or_else(|| "not signed in".to_string())?;
+            let db = app_for_blocking.state::<Db>();
+            run(&db, &account).map_err(|e| e.to_string())
+        })
     })
     .await
     .map_err(|e| format!("sync task: {e}"))??;
@@ -367,8 +423,27 @@ fn pull_folders(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult
             .list(Some(&opts))
             .map_err(|e| AppError::InvalidArg(format!("list folders: {e}")))?;
         for item in resp.data() {
-            if let Some(payload) = apply_folder(db, item)? {
-                applied.push(payload);
+            match apply_folder(db, item) {
+                Ok(Some(payload)) => applied.push(payload),
+                Ok(None) => {}
+                Err(err) if is_corrupt_remote_content(&err) => {
+                    if mark_local_by_remote_uid_dirty(db, KIND_FOLDERS, item.uid())? {
+                        log::warn!(
+                            "[sync] marked local folder item {} dirty for remote repair",
+                            item.uid()
+                        );
+                    } else {
+                        log::error!(
+                            "[sync] corrupt remote folder item {} has no local copy — manual recovery required",
+                            item.uid()
+                        );
+                    }
+                    log::error!(
+                        "[sync] skipping corrupt remote folder item {}: {err}",
+                        item.uid()
+                    );
+                }
+                Err(err) => return Err(err),
             }
             report.folders_pulled += 1;
         }
@@ -400,8 +475,27 @@ fn pull_notes(
             .list(Some(&opts))
             .map_err(|e| AppError::InvalidArg(format!("list notes: {e}")))?;
         for item in resp.data() {
-            if let Some(id) = apply_note(db, item)? {
-                applied_ids.push(id);
+            match apply_note(db, item) {
+                Ok(Some(id)) => applied_ids.push(id),
+                Ok(None) => {}
+                Err(err) if is_corrupt_remote_content(&err) => {
+                    if mark_local_by_remote_uid_dirty(db, KIND_NOTES, item.uid())? {
+                        log::warn!(
+                            "[sync] marked local note item {} dirty for remote repair",
+                            item.uid()
+                        );
+                    } else {
+                        log::error!(
+                            "[sync] corrupt remote note item {} has no local copy — manual recovery required",
+                            item.uid()
+                        );
+                    }
+                    log::error!(
+                        "[sync] skipping corrupt remote note item {}: {err}",
+                        item.uid()
+                    );
+                }
+                Err(err) => return Err(err),
             }
             report.notes_pulled += 1;
         }
@@ -442,15 +536,33 @@ fn pull_assets(
             .list(Some(&opts))
             .map_err(|e| AppError::InvalidArg(format!("list assets: {e}")))?;
         for item in resp.data() {
-            match apply_asset(db, item)? {
-                ApplyAssetOutcome::Applied(id) => {
+            match apply_asset(db, item) {
+                Ok(ApplyAssetOutcome::Applied(id)) => {
                     report.assets_pulled += 1;
                     applied_ids.push(id);
                 }
-                ApplyAssetOutcome::Orphaned => {
+                Ok(ApplyAssetOutcome::Orphaned) => {
                     had_orphans = true;
                 }
-                ApplyAssetOutcome::Skipped => {}
+                Ok(ApplyAssetOutcome::Skipped) => {}
+                Err(err) if is_corrupt_remote_content(&err) => {
+                    if mark_local_by_remote_uid_dirty(db, KIND_ASSETS, item.uid())? {
+                        log::warn!(
+                            "[sync] marked local asset item {} dirty for remote repair",
+                            item.uid()
+                        );
+                    } else {
+                        log::error!(
+                            "[sync] corrupt remote asset item {} has no local copy — manual recovery required",
+                            item.uid()
+                        );
+                    }
+                    log::error!(
+                        "[sync] skipping corrupt remote asset item {}: {err}",
+                        item.uid()
+                    );
+                }
+                Err(err) => return Err(err),
             }
         }
         new_stoken = resp.stoken().map(str::to_string).or(new_stoken);
@@ -1073,7 +1185,7 @@ fn push_assets(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult<
         let mut meta = ItemMetadata::new();
         meta.set_item_type(Some(ITEM_TYPE_ASSET))
             // Asset items don't have a human-facing name; use the id
-            // (matches the URL the tldraw record carries) so the
+            // (matches the URL drawing records can carry) so the
             // server-side metadata is at least debuggable.
             .set_name(Some(row.id.clone()))
             .set_mtime(Some(now_unix_ms()));
@@ -1450,54 +1562,56 @@ pub async fn note_room_info(
     // owned value escapes the blocking pool.
     let app_for_blocking = app.clone();
     tauri::async_runtime::spawn_blocking(move || -> Result<Option<RoomInfo>, String> {
-        let account = match crate::auth::try_restore(&app_for_blocking)
-            .map_err(|e| format!("restore session: {e}"))?
-        {
-            Some(a) => a,
-            None => return Ok(None),
-        };
-        let cm = account
-            .collection_manager()
-            .map_err(|e| format!("collection_manager: {e}"))?;
-        let col = match cm.fetch(&col_uid, None) {
-            Ok(c) => c,
-            Err(e) => {
-                log::warn!("[room_info] fetch notes collection failed: {e}");
+        catch_blocking_panic("room_info", || {
+            let account = match crate::auth::try_restore(&app_for_blocking)
+                .map_err(|e| format!("restore session: {e}"))?
+            {
+                Some(a) => a,
+                None => return Ok(None),
+            };
+            let cm = account
+                .collection_manager()
+                .map_err(|e| format!("collection_manager: {e}"))?;
+            let col = match cm.fetch(&col_uid, None) {
+                Ok(c) => c,
+                Err(e) => {
+                    log::warn!("[room_info] fetch notes collection failed: {e}");
+                    return Ok(None);
+                }
+            };
+            let im = cm
+                .item_manager(&col)
+                .map_err(|e| format!("item_manager: {e}"))?;
+            let item = match im.fetch(&note_uid, None) {
+                Ok(it) => it,
+                Err(e) => {
+                    log::warn!("[room_info] fetch note item {note_uid} failed: {e}");
+                    return Ok(None);
+                }
+            };
+            if item.is_deleted() || item.is_missing_content() {
                 return Ok(None);
             }
-        };
-        let im = cm
-            .item_manager(&col)
-            .map_err(|e| format!("item_manager: {e}"))?;
-        let item = match im.fetch(&note_uid, None) {
-            Ok(it) => it,
-            Err(e) => {
-                log::warn!("[room_info] fetch note item {note_uid} failed: {e}");
+            let raw = item.content().map_err(|e| format!("item content: {e}"))?;
+            let payload: NotePayload = match rmp_serde::from_slice(&raw) {
+                Ok(p) => p,
+                Err(e) => {
+                    log::warn!("[room_info] payload decode failed: {e}");
+                    return Ok(None);
+                }
+            };
+            if payload.crypto_key.is_empty() {
+                // Legacy v1 payload, or a peer pushed before live collab was
+                // wired up. Surface as "no room available" rather than
+                // encoding zero bytes.
                 return Ok(None);
             }
-        };
-        if item.is_deleted() || item.is_missing_content() {
-            return Ok(None);
-        }
-        let raw = item.content().map_err(|e| format!("item content: {e}"))?;
-        let payload: NotePayload = match rmp_serde::from_slice(&raw) {
-            Ok(p) => p,
-            Err(e) => {
-                log::warn!("[room_info] payload decode failed: {e}");
-                return Ok(None);
-            }
-        };
-        if payload.crypto_key.is_empty() {
-            // Legacy v1 payload, or a peer pushed before live collab was
-            // wired up. Surface as "no room available" rather than
-            // encoding zero bytes.
-            return Ok(None);
-        }
-        Ok(Some(RoomInfo {
-            room_id: note_uid,
-            key_b64: etebase::utils::to_base64(&payload.crypto_key)
-                .map_err(|e| format!("encode key: {e}"))?,
-        }))
+            Ok(Some(RoomInfo {
+                room_id: note_uid,
+                key_b64: etebase::utils::to_base64(&payload.crypto_key)
+                    .map_err(|e| format!("encode key: {e}"))?,
+            }))
+        })
     })
     .await
     .map_err(|e| format!("note_room_info task: {e}"))?

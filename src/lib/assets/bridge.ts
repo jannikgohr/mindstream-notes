@@ -1,15 +1,12 @@
 /**
- * Framework-neutral asset upload/resolve plumbing shared by the
- * markdown editor (Crepe / Milkdown) and the freeform editor
- * (tldraw / React).
+ * Framework-neutral asset upload/resolve plumbing for editor surfaces
+ * that store app-owned asset URLs in their documents.
  *
  * The shape on both sides is the same: a file gets uploaded to the
  * encrypted SQLite assets table via `uploadDrawingAsset`, embedded into
  * the document as an `asset:mindstream/<id>` URL, and resolved back to
  * a blob URL at render time via `fetchDrawingAsset`. The two editors
- * call slightly different methods (`onUpload` / `proxyDomURL` for
- * Crepe; `TLAssetStore.upload` / `TLAssetStore.resolve` for tldraw)
- * but both end up here.
+ * call slightly different methods; both upload and resolve end up here.
  *
  * Per-editor instance: one bridge owns the blob-URL cache and disposes
  * it on unmount so we don't leak `URL.createObjectURL` references.
@@ -22,8 +19,8 @@
 import { fetchDrawingAsset, uploadDrawingAsset } from '$lib/api';
 
 /**
- * URL scheme stored in document bodies (markdown `![alt](url)`, tldraw
- * `props.src`). Stable across devices because the asset id is
+ * URL scheme stored in document bodies (for example markdown
+ * `![alt](url)`). Stable across devices because the asset id is
  * client-generated — sync uses `etebase_uid` for routing but the
  * public id never changes.
  */
@@ -57,10 +54,9 @@ export function createAssetBridge(noteId: string): AssetBridge {
   // future asset:-flavoured source could share the cache without
   // colliding (just match on prefix in resolve).
   const resolved = new Map<string, string>();
-  // De-duplicate concurrent resolves of the same URL — Crepe and
-  // tldraw can both fire several resolveDomURL/resolve calls per render
-  // for the same image when nodes refresh; we don't want N parallel
-  // SQLite fetches + N blob URLs of the same bytes.
+  // De-duplicate concurrent resolves of the same URL. Editor image
+  // nodes can request the same URL several times per render; we don't
+  // want N parallel SQLite fetches + N blob URLs of the same bytes.
   const inflight = new Map<string, Promise<string>>();
 
   async function loadAssetBlob(id: string, url: string): Promise<string> {

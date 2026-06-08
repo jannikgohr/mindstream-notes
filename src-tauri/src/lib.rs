@@ -121,6 +121,37 @@ pub fn run() {
     #[cfg(desktop)]
     let app_handle = tauri::Builder::default()
         .plugin(
+            tauri_plugin_log::Builder::new()
+                .level(if cfg!(debug_assertions) {
+                    log::LevelFilter::Trace
+                } else {
+                    log::LevelFilter::Info
+                })
+                // Silence noisy third-party crates that emit DEBUG/TRACE
+                // at high volume during normal operation — shader compile
+                // (naga), GPU plumbing (wgpu_*), webview/window backend
+                // (wry/tao), and HTTP/TLS (hyper/reqwest/rustls). Our
+                // own modules stay at the global level.
+                .level_for("naga", log::LevelFilter::Warn)
+                .level_for("wgpu", log::LevelFilter::Warn)
+                .level_for("wgpu_core", log::LevelFilter::Warn)
+                .level_for("wgpu_hal", log::LevelFilter::Warn)
+                .level_for("wry", log::LevelFilter::Warn)
+                .level_for("tao", log::LevelFilter::Warn)
+                .level_for("hyper", log::LevelFilter::Warn)
+                .level_for("hyper_util", log::LevelFilter::Warn)
+                .level_for("reqwest", log::LevelFilter::Warn)
+                .level_for("rustls", log::LevelFilter::Warn)
+                .level_for("keyring_core", log::LevelFilter::Info)
+                .targets([
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
+                        file_name: Some("Mindstream".into()),
+                    }),
+                ])
+                .build(),
+        )
+        .plugin(
             tauri_plugin_autostart::Builder::new()
                 .arg(AUTOSTART_ARG)
                 .build(),
@@ -259,6 +290,10 @@ pub fn run() {
             sync::sync_now,
             sync::note_room_info,
             sync::scheduler::set_sync_schedule,
+            // One-shot recovery for items the pre-fix etebase encoder
+            // bug left corrupt on the server. Invoke from dev tools.
+            sync::repair::audit_corrupt_remote_items,
+            sync::repair::purge_corrupt_remote_note,
             // PDF export
             pdf_export::save_pdf_export,
             // System introspection

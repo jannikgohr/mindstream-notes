@@ -64,6 +64,12 @@ tauri-plugin-autostart = "2"
 tauri-plugin-global-shortcut = "2.3.2"
 tauri-plugin-window-state = "2.4.1"
 tauri-plugin-updater = "2.10.1"
+# `log` facade backend for desktop. Routes log::info!/warn!/error! to
+# stdout (visible under `cargo tauri dev`) and to a rotating file in
+# the OS-specific app log dir, so sync warnings like the corrupt-
+# remote-item recovery path actually surface for diagnosis. Android
+# stays on android_logger (logcat).
+tauri-plugin-log = "2"
 # Desktop ink notes follow the wry_plugin event-loop pattern from
 # clearlysid/tauri-plugin-egui: Tauri owns the native window, while
 # the plugin sees tao mouse/scroll/resize events and forwards them

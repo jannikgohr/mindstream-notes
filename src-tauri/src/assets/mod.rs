@@ -1,10 +1,9 @@
 //! Asset blobs attached to freeform (drawing) notes.
 //!
 //! Each asset is the raw byte payload of an image (or, later, any file the
-//! user drags onto a tldraw canvas). The frontend stores `mindstream-asset
-//! ://<id>` URLs inside the tldraw record store; the React island's
-//! `assetStore.resolve` calls `fetch_drawing_asset` to materialise those
-//! into blob URLs at render time.
+//! user drops onto a drawing canvas). The frontend can store
+//! `mindstream-asset://<id>` URLs inside drawing records and call
+//! `fetch_drawing_asset` to materialise those into blob URLs at render time.
 //!
 //! Sync model: the table has the same `dirty` / `etebase_uid` /
 //! `etebase_etag` columns as `notes`, but the actual push / pull
@@ -38,8 +37,8 @@ pub struct Asset {
     #[serde(flatten)]
     pub summary: AssetSummary,
     /// Raw file bytes. JS receives this as a number array (Tauri's
-    /// default Vec<u8> serialisation). The TldrawIsland reassembles a
-    /// `Blob` from it client-side.
+    /// default Vec<u8> serialisation) and reassembles a `Blob` from it
+    /// client-side.
     pub bytes: Vec<u8>,
 }
 
