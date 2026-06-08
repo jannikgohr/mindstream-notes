@@ -34,6 +34,7 @@
   import { Trash2 } from 'lucide-svelte';
   import { userPrefersMode } from 'mode-watcher';
   import {
+    getExcalidrawRoomUrl,
     loadNote,
     saveNote as apiSaveNote,
     TRASH_ID,
@@ -400,9 +401,12 @@
     }
     collabConfigured = false;
 
-    const collabUrl = (
-      (getSettingValue('account.collabServerUrl') as string | undefined) ?? ''
-    ).trim();
+    // Derived from the single account.serverUrl setting: socket.io
+    // appends /socket.io/ which nginx routes to excalidraw-room (see
+    // backend/nginx/nginx.conf).
+    const collabUrl = getExcalidrawRoomUrl(
+      (getSettingValue('account.serverUrl') as string | undefined) ?? ''
+    );
     if (!collabUrl) return;
     if (!excalidrawApi) return;
 

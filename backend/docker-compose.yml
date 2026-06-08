@@ -1,11 +1,16 @@
 # Mindstream Notes — backend stack.
 #
-# Single entrypoint for all server-side collab services. nginx fronts:
-#   /socket.io/ → excalidraw-room  (freeform live sync)
-#   /          → yjs-relay         (markdown + PDF collab)
+# Single entrypoint for everything the client talks to:
+#   /socket.io/  → excalidraw-room   (freeform live sync)
+#   /yjs         → yjs-relay         (markdown + PDF Yjs collab)
+#   /            → etebase           (encrypted note storage + auth)
+#
+# Postgres backs etebase (etebase supports sqlite too but Postgres is
+# what the official docs recommend for anything beyond a single user).
 #
 # Usage from this directory:
 #   cp .env.example .env
+#   # edit .env — at minimum set POSTGRES_PASSWORD and ETEBASE_ALLOWED_HOSTS
 #   docker compose up -d --build
 #
 # Plain HTTP only. Put your TLS-terminating proxy (Caddy, Cloudflare,
@@ -19,6 +24,7 @@ services:
     depends_on:
       - yjs-relay
       - excalidraw-room
+      - etebase
     ports:
       - "${NGINX_PORT:-8080}:80"
 
@@ -42,3 +48,61 @@ services:
       - CORS_ORIGIN=${EXCALIDRAW_CORS_ORIGIN:-*}
     expose:
       - "80"
+
+  etebase:
+    # victorrds/etebase is the most widely-used community image of the
+    # upstream etesync/server repo. It runs uvicorn against the bundled
+    # etebase Django app on 3735 and reads its config from /data.
+    # Bump the tag below when upstream cuts a new release.
+    image: victorrds/etebase:0.14.2-alpine
+    container_name: mindstream-etebase
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - DB_ENGINE=postgres
+      - DATABASE_NAME=${POSTGRES_DB:-etebase}
+      - DATABASE_USER=${POSTGRES_USER:-etebase}
+      - DATABASE_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+      - DATABASE_HOST=postgres
+      - DATABASE_PORT=5432
+      - SUPER_USER=${ETEBASE_SUPER_USER:-admin}
+      # SUPER_PASS intentionally omitted — image auto-generates a random
+      # password on first boot and prints it to `docker compose logs
+      # etebase`. Grab it once, save it in your password manager, then
+      # the line is gone. Or set ETEBASE_SUPER_PASS in .env if you want
+      # to pin it (less safe; it stays in the env).
+      - SUPER_PASS=${ETEBASE_SUPER_PASS:-}
+      - ALLOWED_HOSTS=${ETEBASE_ALLOWED_HOSTS:-*}
+    volumes:
+      # /data holds etebase-server.ini, secret.txt, and the media dir
+      # (user-uploaded blobs). Keep this volume around — losing it
+      # means losing everyone's data.
+      - etebase_data:/data
+    expose:
+      - "3735"
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: mindstream-postgres
+    restart: always
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-etebase}
+      - POSTGRES_USER=${POSTGRES_USER:-etebase}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      # `pg_isready -U $POSTGRES_USER` returns 0 once the cluster is
+      # accepting connections; etebase blocks on this via depends_on so
+      # the migrations don't race a half-started Postgres on first boot.
+      test:
+        ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-etebase} -d ${POSTGRES_DB:-etebase}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  etebase_data:
+  postgres_data:

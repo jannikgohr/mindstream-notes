@@ -32,17 +32,6 @@
                 "id": "account.serverType",
                 "notEquals": "local-only"
               }
-            },
-            {
-              "id": "account.collabServerUrl",
-              "scope": "G",
-              "type": "text",
-              "default": "",
-              "placeholder": "wss://collab.example.com",
-              "showIf": {
-                "id": "account.serverType",
-                "notEquals": "local-only"
-              }
             }
           ]
         },

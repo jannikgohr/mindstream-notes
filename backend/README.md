@@ -1,49 +1,66 @@
 # Mindstream Notes — backend
 
-Self-hosted live-collaboration stack for the Mindstream Notes client. Two
-WebSocket services sit behind a single nginx so the client only ever
-needs one URL:
+Self-hosted stack for the Mindstream Notes client. One nginx fronts
+note storage and both live-collab transports so the client only needs
+a single URL:
 
 | Service           | Image / source                                     | Path                  | What it carries                                   |
 | ----------------- | -------------------------------------------------- | --------------------- | ------------------------------------------------- |
 | `nginx`           | `nginx/Dockerfile` (alpine)                        | edge — `:NGINX_PORT`  | HTTP front; terminates the inbound connection.    |
 | `excalidraw-room` | upstream `excalidraw/excalidraw-room` (pinned ref) | `/socket.io/`         | Freeform-note live sync, official protocol, E2EE. |
-| `yjs-relay`       | `yjs-relay/Dockerfile` (uWebSockets.js)            | `/` (everything else) | Markdown & PDF Yjs collab, encrypted broadcast.   |
+| `yjs-relay`       | `yjs-relay/Dockerfile` (uWebSockets.js)            | `/yjs`                | Markdown & PDF Yjs collab, encrypted broadcast.   |
+| `etebase`         | `victorrds/etebase` (Django + uvicorn)             | `/` (everything else) | Encrypted note storage, auth, sync.               |
+| `postgres`        | `postgres:16-alpine`                               | internal only         | Backing store for etebase.                        |
 
-This stack only handles **live collaboration**. Notes themselves are
-stored in [Etebase](https://www.etebase.com/) — bring your own server
-(managed or self-hosted) and point the client at it from the in-app
-settings.
+Etebase is the source of truth for your notes; the two WebSocket
+services only carry transient live-collab traffic. Both collab
+services see ciphertext only — the AES-GCM key lives client-side in
+the Etebase NotePayload.
 
 ## Quick start
 
 ```sh
 cp .env.example .env
-# edit .env if you want to change the host port or restrict CORS
+# At minimum set POSTGRES_PASSWORD and (for production) ETEBASE_ALLOWED_HOSTS.
 docker compose up -d --build
 ```
 
 The stack listens on `${NGINX_PORT}` (default `8080`) over plain HTTP.
-Point your client at it from the in-app settings:
+On first boot etebase generates a random super-user password unless
+you set `ETEBASE_SUPER_PASS`. Grab it from the logs:
+
+```sh
+docker compose logs etebase | grep -i password
+```
+
+Then point the client at the stack from the in-app settings:
 
 ```
-Settings → Account → Collab server URL
-  ws://localhost:8080         # local
-  wss://collab.example.com    # behind your TLS proxy
+Settings → Account → Server type   → Self-hosted
+Settings → Account → Server URL    → https://collab.example.com
+                                     # or http://localhost:8080 in dev
 ```
 
-`socket.io-client` appends `/socket.io/` itself, and the yjs-relay
-ignores the path, so the same root URL serves both transports.
+That single URL covers everything: the client uses it as the etebase
+API root, derives `wss://…/yjs` for the markdown/PDF Yjs relay, and
+hands the origin to `socket.io-client` which appends `/socket.io/` for
+the excalidraw-room transport.
 
 ## Environment
 
-`.env.example` is the source of truth. Everything is optional; defaults
-work for local testing.
+`.env.example` is the source of truth. The four marked **required**
+matter; the rest have sensible defaults.
 
-| Var                      | Default | Notes                                                                                                      |
-| ------------------------ | ------- | ---------------------------------------------------------------------------------------------------------- |
-| `NGINX_PORT`             | `8080`  | Host port published by the `nginx` service. Compose maps `NGINX_PORT:80`.                                  |
-| `EXCALIDRAW_CORS_ORIGIN` | `*`     | Forwarded to excalidraw-room. Set to your exact client origin if nothing in front of nginx restricts CORS. |
+| Var                      | Default          | Notes                                                                                                                                                           |
+| ------------------------ | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NGINX_PORT`             | `8080`           | Host port published by `nginx`. Compose maps `NGINX_PORT:80`.                                                                                                   |
+| `EXCALIDRAW_CORS_ORIGIN` | `*`              | Forwarded to excalidraw-room. Tighten to your exact origin if nothing in front of nginx is gating CORS.                                                         |
+| `POSTGRES_DB`            | `etebase`        | Database name shared between postgres and etebase.                                                                                                              |
+| `POSTGRES_USER`          | `etebase`        | Postgres role etebase logs in as.                                                                                                                               |
+| `POSTGRES_PASSWORD`      | — **(required)** | Compose refuses to start without it. Internal to the docker network; doesn't need to be human-memorable.                                                        |
+| `ETEBASE_ALLOWED_HOSTS`  | `*`              | Comma-separated hostnames Django will accept. **Set to your public hostname in production** (e.g. `notes.example.com`); `*` is a foot-gun on the open internet. |
+| `ETEBASE_SUPER_USER`     | `admin`          | Django superuser created on first boot. Used at `/admin` and to bootstrap signups.                                                                              |
+| `ETEBASE_SUPER_PASS`     | _(auto-gen)_     | Leave blank to let the image print a random one to the logs on first boot. Pin it only if you have to.                                                          |
 
 ## TLS
 
@@ -68,6 +85,8 @@ collab.example.com {
 docker compose logs -f nginx
 docker compose logs -f excalidraw-room
 docker compose logs -f yjs-relay
+docker compose logs -f etebase
+docker compose logs -f postgres
 ```
 
 **Restart one service**
@@ -83,7 +102,17 @@ docker compose restart yjs-relay
 curl 'http://localhost:8080/socket.io/?EIO=4&transport=polling'
 
 # yjs-relay WebSocket — should print a 101 upgrade and stay open
-wscat -c 'ws://localhost:8080/?room=smoke-test'
+wscat -c 'ws://localhost:8080/yjs?room=smoke-test'
+
+# Etebase liveness — should respond with a Django page (200 or a
+# DisallowedHost 400 if ALLOWED_HOSTS doesn't include localhost)
+curl -i http://localhost:8080/
+```
+
+**Reset the super-user password**
+
+```sh
+docker compose exec etebase ./manage.py changepassword "$ETEBASE_SUPER_USER"
 ```
 
 **Bumping the excalidraw-room version**
@@ -103,6 +132,21 @@ the line, and rebuild:
 docker compose build --no-cache excalidraw-room
 docker compose up -d excalidraw-room
 ```
+
+**Bumping etebase**
+
+Etebase pins the image tag in `docker-compose.yml`
+(`victorrds/etebase:<version>`). Check
+<https://hub.docker.com/r/victorrds/etebase/tags> for the latest
+release, update the tag, and:
+
+```sh
+docker compose pull etebase
+docker compose up -d etebase
+```
+
+The etebase image runs Django migrations on every boot, so schema
+changes are picked up automatically.
 
 ## Pulling just `backend/` from the repo
 
@@ -133,18 +177,25 @@ the full history.
 
 ## Architecture notes
 
-- **End-to-end encryption.** Both services see only ciphertext.
+- **End-to-end encryption.**
+  - Etebase encrypts every note client-side under the user's password-
+    derived key; the server stores only ciphertext.
+  - Live collab AES-GCM-encrypts every frame under a per-note key the
+    client fetches from etebase. The two collab services are dumb
+    broadcast hubs and never see plaintext.
   - Freeform: AES-GCM-128, room key HKDF-derived client-side from the
-    per-note `crypto_key` that lives inside the Etebase NotePayload.
-    excalidraw-room is a plain broadcast hub; key never leaves the
-    client.
+    per-note `crypto_key`.
   - Markdown / PDF: AES-GCM-256 over a custom framing
-    (`[1B type][12B IV][ciphertext]`) the yjs-relay forwards verbatim.
-    Same per-note key, full 32 bytes.
-- **Stateless.** Neither service persists anything. Restarting the
-  stack only kicks live peers; they reconnect, exchange state with
-  whoever's still in the room, and continue.
-- **Single shared port.** nginx multiplexes so the client setting holds
-  one URL even though there are two protocols. If you really want to
+    (`[1B type][12B IV][ciphertext]`).
+- **Stateless collab.** Restarting the stack only kicks live peers;
+  they reconnect, exchange state with whoever's still in the room, and
+  continue. Persistence lives in etebase + postgres.
+- **Single shared port.** nginx path-routes so the client setting holds
+  one URL even though there are three protocols. If you really want to
   expose them on separate ports, edit `docker-compose.yml` to add
   `ports:` blocks to the inner services and drop `nginx`.
+- **Backups.** Two named docker volumes hold all state:
+  - `postgres_data` — the etebase database. Back up with
+    `docker compose exec postgres pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"`.
+  - `etebase_data` — `/data` (config + media uploads). Snapshot the
+    volume directly.
