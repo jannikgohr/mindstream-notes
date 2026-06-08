@@ -63,6 +63,22 @@ export async function focusExistingNoteWindow(id: string): Promise<boolean> {
   }
 }
 
+export async function focusMainWindow(): Promise<void> {
+  if (!isTauri()) return;
+
+  try {
+    const win = await WebviewWindow.getByLabel('main');
+    if (!win) return;
+    if (await win.isMinimized()) {
+      await win.unminimize();
+    }
+    await win.show();
+    await win.setFocus();
+  } catch (err) {
+    console.warn('[focusMainWindow] failed', err);
+  }
+}
+
 /**
  * Spawn a Tauri window for a single note.
  *

@@ -16,7 +16,7 @@
    *   own tag, only as a prefix of others) render as headers but aren't
    *   clickable — picking one would create a tag the user never asked for.
    */
-  import { tick } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { SvelteSet } from 'svelte/reactivity';
   import { ChevronRight, Plus, X } from 'lucide-svelte';
   import {
@@ -31,6 +31,8 @@
     noteId: string;
   }
   let { noteId }: Props = $props();
+
+  const ADD_TAG_HOTKEY_EVENT = 'mindstream:hotkeys:add-tag';
 
   const note = $derived(tree.notesById[noteId]);
   const noteTags = $derived(note?.tags ?? []);
@@ -192,6 +194,16 @@
   $effect(() => {
     void noteId;
     closePicker();
+  });
+
+  onMount(() => {
+    const onAddTagHotkey = () => {
+      void openPicker();
+    };
+    window.addEventListener(ADD_TAG_HOTKEY_EVENT, onAddTagHotkey);
+    return () => {
+      window.removeEventListener(ADD_TAG_HOTKEY_EVENT, onAddTagHotkey);
+    };
   });
 </script>
 

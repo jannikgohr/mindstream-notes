@@ -15,6 +15,7 @@
   import type { ComponentType } from 'svelte';
   import { Portal } from 'bits-ui';
   import { tUi } from '$lib/settings/i18n.svelte';
+  import { ariaKeyShortcut, displayBinding, getBinding } from '$lib/hotkeys';
 
   export interface MenuItem {
     kind: 'item';
@@ -22,6 +23,13 @@
     labelKey: string;
     icon: ComponentType;
     onSelect: () => void;
+    /**
+     * Optional hotkey command id (from `$lib/hotkeys`). When set, the
+     * row renders the user's current binding right-aligned next to the
+     * label, mirroring native menu conventions ("Bold ⌘B"). Omitted on
+     * items with no keyboard equivalent.
+     */
+    hotkeyId?: string;
   }
   export interface MenuSection {
     kind: 'section';
@@ -106,6 +114,25 @@
   function holdFocus(e: Event) {
     e.preventDefault();
   }
+
+  /**
+   * Per-row shortcut display string. `getBinding` reads the reactive
+   * `hotkeys.bindings` map, so the menu re-renders automatically if a
+   * binding changes while the menu is open — without depending on the
+   * whole settings.values surface.
+   */
+  function shortcutFor(entry: MenuItem): string {
+    if (!entry.hotkeyId) return '';
+    return displayBinding(getBinding(entry.hotkeyId));
+  }
+
+  /** Screen-reader form of the shortcut — same data, different
+   *  format (ARIA-named modifiers, no ⌘⇧ glyphs). Returns empty when
+   *  unset so the caller can drop the attribute entirely. */
+  function shortcutAriaFor(entry: MenuItem): string {
+    if (!entry.hotkeyId) return '';
+    return ariaKeyShortcut(getBinding(entry.hotkeyId));
+  }
 </script>
 
 <!--
@@ -132,15 +159,31 @@
         </div>
       {:else}
         {@const Icon = entry.icon}
+        {@const shortcut = shortcutFor(entry)}
+        {@const ariaShortcut = shortcutAriaFor(entry)}
         <button
           type="button"
           role="menuitem"
           class="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-accent hover:text-accent-foreground"
           onpointerdown={holdFocus}
           onclick={() => invoke(entry)}
+          aria-keyshortcuts={ariaShortcut || undefined}
         >
           <Icon class="size-4 shrink-0" aria-hidden="true" />
-          <span>{tUi(entry.labelKey)}</span>
+          <span class="flex-1 truncate">{tUi(entry.labelKey)}</span>
+          {#if shortcut}
+            <!--
+              `aria-hidden` so the shortcut text isn't announced twice:
+              the menuitem's `aria-keyshortcuts` is the screen-reader
+              channel; the visible glyphs are decoration.
+            -->
+            <span
+              class="ml-3 shrink-0 font-mono text-[11px] text-muted-foreground"
+              aria-hidden="true"
+            >
+              {shortcut}
+            </span>
+          {/if}
         </button>
       {/if}
     {/each}

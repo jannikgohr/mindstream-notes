@@ -19,6 +19,7 @@ pub mod db;
 pub mod desktop_settings;
 pub mod drawing;
 pub mod error;
+pub mod hotkeys;
 pub mod i18n;
 pub mod notes;
 pub mod pdf_export;
@@ -120,10 +121,42 @@ pub fn run() {
     #[cfg(desktop)]
     let app_handle = tauri::Builder::default()
         .plugin(
+            tauri_plugin_log::Builder::new()
+                .level(if cfg!(debug_assertions) {
+                    log::LevelFilter::Trace
+                } else {
+                    log::LevelFilter::Info
+                })
+                // Silence noisy third-party crates that emit DEBUG/TRACE
+                // at high volume during normal operation — shader compile
+                // (naga), GPU plumbing (wgpu_*), webview/window backend
+                // (wry/tao), and HTTP/TLS (hyper/reqwest/rustls). Our
+                // own modules stay at the global level.
+                .level_for("naga", log::LevelFilter::Warn)
+                .level_for("wgpu", log::LevelFilter::Warn)
+                .level_for("wgpu_core", log::LevelFilter::Warn)
+                .level_for("wgpu_hal", log::LevelFilter::Warn)
+                .level_for("wry", log::LevelFilter::Warn)
+                .level_for("tao", log::LevelFilter::Warn)
+                .level_for("hyper", log::LevelFilter::Warn)
+                .level_for("hyper_util", log::LevelFilter::Warn)
+                .level_for("reqwest", log::LevelFilter::Warn)
+                .level_for("rustls", log::LevelFilter::Warn)
+                .level_for("keyring_core", log::LevelFilter::Info)
+                .targets([
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
+                        file_name: Some("Mindstream".into()),
+                    }),
+                ])
+                .build(),
+        )
+        .plugin(
             tauri_plugin_autostart::Builder::new()
                 .arg(AUTOSTART_ARG)
                 .build(),
         )
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(
             tauri_plugin_window_state::Builder::new()
                 .with_state_flags(
@@ -186,6 +219,9 @@ pub fn run() {
             .expect("failed to seed database");
 
             app.manage(db);
+            app.manage(hotkeys::NativeHotkeyDisplays::default());
+            #[cfg(desktop)]
+            app.manage(hotkeys::DesktopGlobalShortcuts::default());
 
             #[cfg(desktop)]
             app.manage(desktop_settings::DesktopSettings::load(app));
@@ -219,13 +255,11 @@ pub fn run() {
             // call would silently no-op.
             drawing::init(app.handle().clone());
 
-            // Kick off wgpu pre-warm in the background so the heavy
-            // adapter / device / pipeline / egui-renderer build is
-            // off the critical path of the user's first ink-note
-            // open. Returns immediately — the actual work runs on
-            // the drawing render thread (spawned lazily by this
-            // first message).
-            #[cfg(target_os = "android")]
+            // Kick off wgpu pre-warm in the background for the
+            // legacy desktop native ink renderer. Android now uses
+            // the JS canvas plus Kotlin live ink overlay, so it no
+            // longer compiles this renderer.
+            #[cfg(desktop)]
             drawing::render::prewarm();
 
             Ok(())
@@ -256,10 +290,19 @@ pub fn run() {
             sync::sync_now,
             sync::note_room_info,
             sync::scheduler::set_sync_schedule,
+            // One-shot recovery for items the pre-fix etebase encoder
+            // bug left corrupt on the server. Invoke from dev tools.
+            sync::repair::audit_corrupt_remote_items,
+            sync::repair::purge_corrupt_remote_note,
             // PDF export
             pdf_export::save_pdf_export,
             // System introspection
             system::is_appimage_install,
+            // Hotkey display state mirrored from the JS hotkey store
+            hotkeys::get_hotkey_display,
+            hotkeys::set_hotkey_displays,
+            #[cfg(desktop)]
+            hotkeys::sync_global_shortcuts,
             #[cfg(desktop)]
             desktop_settings::get_close_to_tray,
             #[cfg(desktop)]
@@ -278,6 +321,13 @@ pub fn run() {
             drawing::drawing_clear,
             drawing::drawing_set_save_debounce,
             drawing::drawing_save_ink_state,
+            drawing::drawing_show_live_ink_overlay,
+            drawing::drawing_hide_live_ink_overlay,
+            drawing::drawing_enter_immersive_ink_mode,
+            drawing::drawing_exit_immersive_ink_mode,
+            drawing::drawing_cancel_live_ink,
+            drawing::drawing_set_live_ink_style,
+            drawing::drawing_set_live_ink_finger_drawing,
             drawing::drawing_start_collab,
             drawing::drawing_stop_collab,
             drawing::drawing_set_theme,

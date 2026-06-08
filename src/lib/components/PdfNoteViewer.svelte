@@ -64,6 +64,11 @@
     clearNoteStatus,
     setNoteStatus
   } from '$lib/stores/note-status.svelte';
+  import {
+    registerEditor,
+    unregisterEditor,
+    type EditorListener
+  } from '$lib/hotkeys';
 
   interface Props {
     noteId: string;
@@ -104,6 +109,7 @@
   const INK_COLOR = '#111827';
   const INK_WIDTH = 2.25;
 
+  let hostEl = $state<HTMLDivElement | null>(null);
   let container = $state<HTMLDivElement | null>(null);
   let zoomButton = $state<HTMLButtonElement | null>(null);
   let zoomMenuEl = $state<HTMLDivElement | null>(null);
@@ -148,6 +154,7 @@
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
   let unsubSync: (() => void) | null = null;
   let unsubSession: (() => void) | null = null;
+  let editorListener: EditorListener | null = null;
   let resizeObserver: ResizeObserver | null = null;
   let pageIntersectionObserver: IntersectionObserver | null = null;
   // Per-page visibility ratios — most-visible page wins as the awareness
@@ -410,6 +417,47 @@
     activeTool = activeTool === tool && tool !== 'select' ? 'select' : tool;
   }
 
+  function handlePdfCommand(id: string): boolean {
+    switch (id) {
+      case 'editor.pdf.select':
+        setTool('select');
+        return true;
+      case 'editor.pdf.highlight':
+        if (!isTrashed) setTool('highlight');
+        return true;
+      case 'editor.pdf.comment':
+        if (!isTrashed) setTool('comment');
+        return true;
+      case 'editor.pdf.pen':
+        if (!isTrashed) setTool('pen');
+        return true;
+      case 'editor.pdf.signature':
+        if (!isTrashed) setTool('signature');
+        return true;
+      case 'editor.pdf.deleteAnnotation':
+        if (!isTrashed) setTool('delete');
+        return true;
+      case 'editor.pdf.toggleComments':
+        commentsSidebarOpen = !commentsSidebarOpen;
+        return true;
+      case 'editor.pdf.export':
+        void downloadAnnotatedPdf();
+        return true;
+      case 'editor.pdf.zoomOut':
+        zoomBy(1 / ZOOM_STEP);
+        return true;
+      case 'editor.pdf.toggleZoomMenu':
+        toggleZoomMenu();
+        return true;
+      case 'editor.pdf.zoomIn':
+        zoomBy(ZOOM_STEP);
+        return true;
+      default:
+        console.warn('[PdfNoteViewer] unknown pdf command', id);
+        return false;
+    }
+  }
+
   const fitWidthZoom = $derived.by(() => {
     if (!container || firstPageWidth <= 0) return 1;
     return clampZoom((container.clientWidth - 32) / firstPageWidth);
@@ -666,6 +714,15 @@
   onMount(async () => {
     savedSignatures = loadReusableSignatures();
     activeSignatureId = savedSignatures[0]?.id ?? null;
+    await tick();
+    if (hostEl) {
+      editorListener = {
+        kind: 'pdf',
+        host: hostEl,
+        onCommand: handlePdfCommand
+      };
+      registerEditor(editorListener);
+    }
     try {
       const note = await loadNote(noteId);
       isTrashed = note.trashed;
@@ -756,11 +813,28 @@
     }
   });
 
+  $effect(() => {
+    if (!hostEl || !editorListener) return;
+    const host = hostEl;
+    const listener = editorListener;
+    const promote = () => registerEditor(listener);
+    host.addEventListener('focusin', promote);
+    host.addEventListener('pointerdown', promote);
+    return () => {
+      host.removeEventListener('focusin', promote);
+      host.removeEventListener('pointerdown', promote);
+    };
+  });
+
   onDestroy(() => {
     if (saveTimer) {
       void flushSave();
     }
     saveReady = false;
+    if (editorListener) {
+      unregisterEditor(editorListener);
+      editorListener = null;
+    }
     unsubSync?.();
     unsubSync = null;
     unsubSession?.();
@@ -1187,7 +1261,7 @@
   }
 </script>
 
-<div class="flex h-full w-full flex-col bg-background">
+<div bind:this={hostEl} class="flex h-full w-full flex-col bg-background">
   {#if loading}
     <div
       class="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground"

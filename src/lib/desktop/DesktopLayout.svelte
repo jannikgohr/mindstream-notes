@@ -28,6 +28,7 @@
   import { PopoutHeaderAction } from './dockview-popout-action';
   import {
     focusExistingNoteWindow,
+    focusMainWindow,
     isKnownNoteKind,
     openNoteWindow
   } from '$lib/api';
@@ -176,25 +177,9 @@
 
     /*
      * Tab/group drag → flag the <body> so freeform panels can opt out of
-     * pointer events for the duration of the drag.
-     *
-     * Why: tldraw (mounted inside freeform panels) installs `dragover` /
-     * `drop` listeners on `.tl-container` in @tldraw/editor's
-     * useDocumentEvents.js that call `e.stopPropagation()` and re-dispatch
-     * onto `.tl-canvas`. dockview's own `dragover` listener uses
-     * `useCapture: true` so it still fires (which is why the drop indicator
-     * shows up correctly), but its `drop` listener is bubble-phase only —
-     * tldraw's stopPropagation kills the bubble before dockview ever sees
-     * the drop, so the layout change never happens and the freeform panel
-     * looks like it can't be dropped onto.
-     *
-     * Fix: while a dockview drag is in progress, hide tldraw from pointer
-     * routing entirely (see `body.dv-tab-dragging .tl-container` in
-     * app.css). dockview's drop overlay sits above tldraw at z-index 1000,
-     * so the drop fires on the overlay where its handlers are wired
-     * normally. External file drops (image → tldraw asset import) still
-     * work because they don't go through onWillDragPanel/Group — they
-     * originate outside the window.
+     * pointer events for the duration of the drag. That lets dockview's
+     * own drop overlay receive the event cleanly even when an embedded
+     * canvas editor has its own drag/drop handling.
      */
     dock.onWillDragPanel(markDragging);
     dock.onWillDragGroup(markDragging);
@@ -348,9 +333,9 @@
 
   /**
    * Tag the document body for the duration of a dockview tab/group drag,
-   * so CSS in app.css can disable pointer events on tldraw subtrees.
+   * so CSS in app.css can disable pointer events inside freeform canvases.
    * Idempotent — `add`/`remove` on a classList is safe to call repeatedly.
-   * See the long comment in setupDockview() above for why this exists.
+   * See the comment in setupDockview() above for why this exists.
    */
   function markDragging() {
     document.body.classList.add('dv-tab-dragging');
@@ -512,6 +497,9 @@
     const trayUnlisten = listen('tray-note-created', (payload) => {
       void openTrayCreatedNote(payload.note_id);
     });
+    const showAppUnlisten = listen('show-app', () => {
+      void focusMainWindow();
+    });
 
     // Cleanup the dv-tab-dragging body class on every drag termination:
     //   - `dragend` fires on the source element after a successful drop
@@ -556,6 +544,7 @@
       clearDragging();
       unsub();
       void trayUnlisten.then((unlisten) => unlisten());
+      void showAppUnlisten.then((unlisten) => unlisten());
     };
   });
 

@@ -4,9 +4,25 @@
   import { ModeWatcher, mode } from 'mode-watcher';
   import { getSettingValue, isModified } from '$lib/settings/store.svelte';
   import { applyAccentColor, clearAccentColor } from '$lib/settings/accent';
-  import { invokeOrFallback, drawingSetTheme } from '$lib/api';
+  import {
+    invokeOrFallback,
+    drawingSetTheme,
+    setNativeHotkeyDisplays
+  } from '$lib/api';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import UpdaterProgressDialog from '$lib/updater/ProgressDialog.svelte';
+  import ShortcutHelpDialog from '$lib/components/ShortcutHelpDialog.svelte';
+  import {
+    displayBinding,
+    getBinding,
+    globalShortcutAccelerator,
+    HOTKEY_COMMANDS,
+    initHotkeys,
+    isGlobalShortcutCommand,
+    syncGlobalShortcuts,
+    tauriAccelerator,
+    teardownGlobalShortcuts
+  } from '$lib/hotkeys';
 
   let { children } = $props();
 
@@ -26,6 +42,17 @@
     return () => window.removeEventListener('contextmenu', block);
   });
 
+  // Install the global hotkey dispatcher once. Idempotent — the manager
+  // guards against double-init internally, so this stays safe if the
+  // root layout ever remounts (HMR, route swap). Returned teardown only
+  // matters in tests; we drop it intentionally here.
+  onMount(() => {
+    initHotkeys();
+    return () => {
+      void teardownGlobalShortcuts();
+    };
+  });
+
   import { ui } from '$lib/state.svelte.js';
 
   // Periodic sync runs in a Rust tokio task — see
@@ -37,7 +64,7 @@
   //
   // The Rust scheduler was previously a JS `setTimeout` self-
   // rescheduler here, which paused if the event loop got blocked
-  // (long Crepe operation, complex tldraw paint) and was subject
+  // (long Crepe operation, complex drawing-canvas paint) and was subject
   // to background-throttling on mobile webviews. Owning the tick
   // in Rust makes the cadence reliable.
   const INTERVAL_SECS: Record<string, number> = {
@@ -84,6 +111,44 @@
   });
 
   $effect(() => {
+    const globalShortcutsEnabled =
+      getSettingValue('hotkeys.globalShortcuts') === true;
+    const displays = HOTKEY_COMMANDS.map((cmd) => {
+      const binding = getBinding(cmd.id);
+      const accelerator =
+        globalShortcutsEnabled || !isGlobalShortcutCommand(cmd)
+          ? tauriAccelerator(binding)
+          : null;
+      return {
+        commandId: cmd.id,
+        display: displayBinding(binding) || null,
+        accelerator
+      };
+    });
+    void setNativeHotkeyDisplays(displays);
+    // Only the OS-shortcut-compatible accelerator form goes to
+    // syncGlobalShortcuts — `globalShortcutAccelerator` returns null
+    // when the user's chord uses a key the plugin can't dispatch (any
+    // non-ASCII character, plus a handful of less common physical
+    // keys). The HotkeysPanel blocks save for those, so this branch
+    // mostly handles legacy bindings stored before the validation
+    // existed; we silently skip them rather than handing the plugin
+    // a chord that would register but never fire.
+    const globalRegistrations = globalShortcutsEnabled
+      ? HOTKEY_COMMANDS.filter(isGlobalShortcutCommand).map((cmd) => ({
+          commandId: cmd.id,
+          accelerator: globalShortcutAccelerator(getBinding(cmd.id))
+        }))
+      : [];
+    void syncGlobalShortcuts(globalRegistrations).catch((err) => {
+      // Surfacing this so a bad accelerator (e.g. a legacy binding
+      // stored before validation) shows up in the dev console instead
+      // of silently leaving every global shortcut unregistered.
+      console.error('[hotkeys] syncGlobalShortcuts threw', err);
+    });
+  });
+
+  $effect(() => {
     const interval =
       (getSettingValue('account.syncInterval') as string | undefined) ?? 'live';
     // `manual` => scheduler disabled. `account.syncEnabled` false
@@ -122,3 +187,7 @@
      $lib/updater/progress.svelte.ts — mounting it here means anything
      that drives that state gets the dialog for free, no per-call wiring. -->
 <UpdaterProgressDialog />
+
+<!-- Shortcut cheat-sheet overlay. Triggered by `global.showShortcutHelp`
+     (Shift+? by default) and `openShortcutHelp()` from anywhere. -->
+<ShortcutHelpDialog />

@@ -2,7 +2,7 @@
 //! `setTimeout` self-rescheduler that used to live in `+layout.svelte`.
 //!
 //! Why move it: the JS timer pauses if the event loop gets blocked
-//! (long Crepe operation, complex tldraw paint) and is subject to
+//! (long Crepe operation, complex drawing paint) and is subject to
 //! background-throttling rules on mobile webviews. A Rust task ticks
 //! on its own thread regardless of what JS is doing, gives us a
 //! single schedule per process even with multiple windows, and lets
@@ -30,7 +30,7 @@ use tokio::sync::{Mutex, MutexGuard};
 use crate::auth;
 use crate::db::Db;
 
-use super::{run, SyncCompletedEvent, SYNC_COMPLETED_EVENT};
+use super::{catch_blocking_panic, run, SyncCompletedEvent, SYNC_COMPLETED_EVENT};
 
 /// Default tick interval (seconds) before the JS side hydrates the
 /// schedule from settings. 30s matches the previous JS `'live'`
@@ -118,11 +118,13 @@ pub fn spawn(app: AppHandle) {
 async fn tick(app: &AppHandle) -> Result<(), String> {
     let app_for_blocking = app.clone();
     let delta = tauri::async_runtime::spawn_blocking(move || {
-        let account = auth::try_restore(&app_for_blocking)
-            .map_err(|e| format!("restore session: {e}"))?
-            .ok_or_else(|| "not signed in".to_string())?;
-        let db = app_for_blocking.state::<Db>();
-        run(&db, &account).map_err(|e| e.to_string())
+        catch_blocking_panic("sync-scheduler", || {
+            let account = auth::try_restore(&app_for_blocking)
+                .map_err(|e| format!("restore session: {e}"))?
+                .ok_or_else(|| "not signed in".to_string())?;
+            let db = app_for_blocking.state::<Db>();
+            run(&db, &account).map_err(|e| e.to_string())
+        })
     })
     .await
     .map_err(|e| format!("sync task: {e}"))??;

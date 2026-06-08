@@ -54,7 +54,7 @@ export default defineConfig({
     sveltekit(),
     // React JSX transform — scoped to .tsx files so it doesn't touch
     // .ts / .svelte (which are owned by SvelteKit's pipeline). The only
-    // React in the app today is the tldraw island under src/lib/freeform/
+    // React in the app today is the Excalidraw island under src/lib/freeform/
     // (lazy-loaded when a drawing note is opened); leaving the include
     // narrow keeps the markdown editor and the rest of the SPA on the
     // Svelte-only path.
@@ -90,7 +90,7 @@ export default defineConfig({
       process.env.TAURI_ENV_PLATFORM === 'windows' ? 'chrome105' : 'safari13',
     minify: !process.env.TAURI_ENV_DEBUG ? 'esbuild' : false,
     sourcemap: !!process.env.TAURI_ENV_DEBUG,
-    // Editor (Crepe/ProseMirror), tldraw, pdfjs and pdf-lib chunks are
+    // Editor (Crepe/ProseMirror), Excalidraw, pdfjs and pdf-lib chunks are
     // legitimately heavy. We're a desktop app loading from local disk,
     // so further splitting wouldn't change UX. Bumped from the default
     // 500 kB so the warning still fires for genuinely surprising bloat.
