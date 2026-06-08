@@ -89,17 +89,28 @@ export class ExcalidrawRoomClient {
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private lastFlush = 0;
   private pendingBroadcast = false;
-  /** Set while we're applying a remote SCENE_UPDATE so the resulting
-   *  Excalidraw onChange doesn't bounce straight back out as a fresh
-   *  broadcast. Peers would reconcile it to a no-op (their elements
-   *  already match), but it's wasted bandwidth and CPU. */
-  private applyingRemote = false;
+  /** Fingerprint of the last scene we either sent or accepted from a
+   *  peer. We compare against it on every potential broadcast so we
+   *  don't re-emit our own state coming back from a peer, and on every
+   *  inbound frame so we don't re-apply our own state to ourselves.
+   *
+   *  Why this matters: without it, a stylus stroke kicks off an
+   *  infinite echo cycle. A draws → B receives → updateScene → B fires
+   *  onChange asynchronously → broadcasts back → A receives → ... at
+   *  the throttle rate forever. Each cycle replaces every element with
+   *  a freshly-deserialised copy whose versionNonce differs from what
+   *  the local Y.Doc binding saw last time, so the Y.Doc grows by an
+   *  op per element per cycle. Yjs op logs are append-only — they
+   *  don't GC live items — so over a long session the doc balloons
+   *  from a few KB to multiple GB even though the visible scene
+   *  hasn't changed since the user put the stylus down. */
+  private lastSceneFingerprint: string | null = null;
   private decryptWarningCount = 0;
   private readonly unlistenOnChange: () => void;
 
   constructor(private readonly opts: ExcalidrawRoomClientOptions) {
     this.unlistenOnChange = opts.api.onChange(() => {
-      if (this.destroyed || this.applyingRemote) return;
+      if (this.destroyed) return;
       this.scheduleBroadcast();
     });
     void this.connect();
@@ -206,8 +217,14 @@ export class ExcalidrawRoomClient {
     const socket = this.socket;
     const key = this.cryptoKey;
     if (!socket || !key || !socket.connected) return;
-    this.lastFlush = Date.now();
     const elements = this.opts.api.getSceneElementsIncludingDeleted();
+    const fingerprint = sceneFingerprint(elements);
+    // Short-circuit: this is the scene we just sent (or just received
+    // from a peer). Re-emitting it would feed the echo loop that
+    // grows the local Y.Doc forever — see `lastSceneFingerprint`.
+    if (fingerprint === this.lastSceneFingerprint) return;
+    this.lastFlush = Date.now();
+    this.lastSceneFingerprint = fingerprint;
     const message: RemoteMessage = {
       type: 'SCENE_UPDATE',
       payload: { elements }
@@ -272,24 +289,24 @@ export class ExcalidrawRoomClient {
     )?.elements;
     if (!incoming || !Array.isArray(incoming)) return;
 
+    // Short-circuit: this is our own state coming back to us via the
+    // peer (or a peer's re-emit of an unchanged state). Skipping here
+    // is what keeps the echo cycle from updating the scene, firing
+    // onChange, and triggering another broadcast we'd then re-receive.
+    const incomingFingerprint = sceneFingerprint(incoming);
+    if (incomingFingerprint === this.lastSceneFingerprint) return;
+
     const current = this.opts.api.getSceneElementsIncludingDeleted();
     const merged = reconcileElements(current, incoming);
-    this.applyingRemote = true;
-    try {
-      this.opts.api.updateScene({
-        elements: merged,
-        // NEVER: the remote update isn't an undoable local action.
-        captureUpdate: CaptureUpdateAction.NEVER
-      });
-    } finally {
-      // Excalidraw can fire onChange asynchronously after updateScene,
-      // so defer clearing the guard to the next microtask. Anything
-      // observed in the same tick is the remote apply itself; anything
-      // later is genuine user input and should broadcast normally.
-      queueMicrotask(() => {
-        this.applyingRemote = false;
-      });
-    }
+    // Record before updateScene so the onChange that fires synchronously
+    // (or on the next task) sees the fingerprint as "already known" and
+    // skips its broadcast.
+    this.lastSceneFingerprint = sceneFingerprint(merged);
+    this.opts.api.updateScene({
+      elements: merged,
+      // NEVER: the remote update isn't an undoable local action.
+      captureUpdate: CaptureUpdateAction.NEVER
+    });
   }
 
   private warnDecrypt(reason: string): void {
@@ -336,10 +353,28 @@ function shouldKeepLocal(
 ): boolean {
   if (local.version > remote.version) return true;
   if (local.version < remote.version) return false;
-  // Tiebreaker mirrors Excalidraw's: higher versionNonce wins so the
-  // two clients deterministically converge to the same winner without
-  // any coordination.
-  return local.versionNonce > remote.versionNonce;
+  // Tiebreaker on versionNonce. We use >= (not just >) on purpose: when
+  // the two elements are bit-for-bit equal, keep the local reference.
+  // Swapping in the freshly-deserialised remote object for an
+  // unchanged element would still pass equality on disk but breaks
+  // reference identity downstream — Excalidraw treats that as a scene
+  // mutation and the local Y.Doc binding writes a new op for it,
+  // which is half of what made the echo loop grow the doc forever.
+  return local.versionNonce >= remote.versionNonce;
+}
+
+/**
+ * Stable, cheap fingerprint covering exactly the bits that matter for
+ * "is this scene the same one we already know about?". Element order
+ * matters (z-stacking), so we don't sort. Versions and the deleted
+ * flag are what reconcile cares about; everything else is derivable.
+ */
+function sceneFingerprint(elements: readonly ExcalidrawElement[]): string {
+  let out = '';
+  for (const el of elements) {
+    out += `${el.id}:${el.version}.${el.versionNonce}${el.isDeleted ? 'D' : ''}|`;
+  }
+  return out;
 }
 
 async function encryptScene(
