@@ -78,7 +78,6 @@
   const SAVE_DEBOUNCE_MS = 800;
   const ERASER_RADIUS = 10;
   const PAGE_FILL_LIGHT = 0xffffffff;
-  const PAGE_BG_LIGHT = 0xfff1f2f4;
   const PAGE_BORDER_LIGHT = 0xffe5e7eb;
   const PAGE_SHADOW_LIGHT = 'rgba(0, 0, 0, 0.14)';
   const PAGE_SHADOW_DARK = 'rgba(255, 255, 255, 0.2)';
@@ -637,9 +636,9 @@
     const dpr = window.devicePixelRatio || 1;
     const visibleBounds = visiblePageBounds();
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    // Canvas stays transparent so the wrapper's `bg-background` shows
+    // through — that's how Ink picks up the shared editor surround.
     ctx.clearRect(0, 0, view.width, view.height);
-    ctx.fillStyle = displayCssColor(PAGE_BG_LIGHT);
-    ctx.fillRect(0, 0, view.width, view.height);
 
     drawPages(ctx, visibleBounds);
     const visibleStrokes = doc?.visibleStrokesInBounds(visibleBounds, 2) ?? [];
@@ -1597,7 +1596,7 @@
 
 <div
   bind:this={hostEl}
-  class="relative h-full w-full overflow-hidden bg-muted/20"
+  class="relative h-full w-full overflow-hidden bg-background"
 >
   <div
     bind:this={toolbarEl}
