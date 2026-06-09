@@ -23,6 +23,7 @@ use keyring_core::Entry;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
+use crate::db::Db;
 use crate::error::{AppError, AppResult};
 
 const KEYRING_SERVICE: &str = "mindstream-notes";
@@ -111,6 +112,60 @@ fn clear_local_state(path: &Path) {
     if let Ok(entry) = keyring_entry() {
         let _ = entry.delete_credential();
     }
+}
+
+/// Wipe **all** server-bound state so the next login starts from a
+/// clean slate, regardless of whether the user signs back into the
+/// same account or a different one.
+///
+/// What gets cleared:
+///
+///   * `sync_state` — per-kind stoken + cached collection UID. Tied
+///     to whichever server we were just on. Surviving this across
+///     logout produced the original `bad_stoken` error when signing
+///     in to a different server.
+///   * `tombstones` — queued server-side deletes. Reference UIDs on
+///     the old server that don't exist on the new one.
+///   * per-row `etebase_uid` / `etebase_etag` on notes, collections,
+///     assets — point at items on the old server that aren't there
+///     on the new one. Pushing dirty rows with stale UIDs is the
+///     "fetch note <uid>: Server error" failure: push_notes tries to
+///     update an item that doesn't exist.
+///
+/// Every row also gets `dirty = 1` so the next sync pushes a fresh
+/// copy of everything to whatever server the user logs into. The
+/// built-in `trash` collection stays clean — it's a local-only
+/// construct that's never pushed.
+///
+/// Trade-off: if the user logs out and back in to the **same**
+/// account, this re-pushes every note as a new item, producing
+/// duplicates on the server. That's the lesser evil compared to the
+/// alternative — silent "my notes vanished" on a server switch.
+/// Recovery from duplicates is straightforward; recovery from
+/// vanished notes is not.
+fn reset_sync_cursors(db: &Db) -> AppResult<()> {
+    db.with_conn_mut(|c| {
+        let tx = c.transaction()?;
+        tx.execute("DELETE FROM sync_state", [])?;
+        tx.execute("DELETE FROM tombstones", [])?;
+        // Strip server-side identifiers from every row so the next
+        // sync treats them as freshly-created locally.
+        tx.execute(
+            "UPDATE notes SET etebase_uid = NULL, etebase_etag = NULL, dirty = 1",
+            [],
+        )?;
+        tx.execute(
+            "UPDATE collections SET etebase_uid = NULL, etebase_etag = NULL, dirty = 1
+             WHERE id != 'trash'",
+            [],
+        )?;
+        tx.execute(
+            "UPDATE assets SET etebase_uid = NULL, etebase_etag = NULL, dirty = 1",
+            [],
+        )?;
+        tx.commit()?;
+        Ok(())
+    })
 }
 
 /// Re-hydrate the Etebase `Account` from the on-disk session blob and the
@@ -235,6 +290,20 @@ pub async fn etebase_logout(app: AppHandle) -> Result<(), String> {
     // (which deletes the keyring entry below) makes those fetches fail
     // immediately and the editor falls back to single-device mode.
     clear_local_state(&path);
+
+    // Drop sync cursors after the session file is gone, so a crash here
+    // leaves the user in a "no session, no cursors" state rather than
+    // "no session, stale cursors" (which is the bug we're fixing).
+    // Best-effort: the user clearly intended to log out, so we don't
+    // want a DB hiccup to turn into a logout failure they have to
+    // retry. Worst case: pull_folders self-heals from bad_stoken on
+    // the next login.
+    if let Some(db) = app.try_state::<Db>() {
+        if let Err(err) = reset_sync_cursors(db.inner()) {
+            log::warn!("[auth] reset_sync_cursors on logout: {err}");
+        }
+    }
+
     Ok(())
 }
 
@@ -248,4 +317,125 @@ pub async fn etebase_session(app: AppHandle) -> Result<Option<SessionInfo>, Stri
         username: stored.username,
         server_url: stored.server_url,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::open_memory_for_tests;
+    use rusqlite::params;
+
+    /// Seed the DB to look like a device that successfully synced
+    /// against a previous server: stoken rows, tombstones, and per-row
+    /// etebase_uid/etag on a note, a collection, and an asset.
+    fn seed_synced_state(db: &Db) {
+        db.with_conn_mut(|c| {
+            let tx = c.transaction().unwrap();
+            tx.execute(
+                "INSERT INTO sync_state (kind, etebase_collection_uid, stoken)
+                 VALUES ('notes', 'old-col-notes', 'old-stoken-notes'),
+                        ('folders', 'old-col-folders', 'old-stoken-folders')",
+                [],
+            )
+            .unwrap();
+            tx.execute(
+                "INSERT INTO tombstones (kind, etebase_uid, queued_at)
+                 VALUES ('note', 'old-dead-note', '2025-01-01T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+            tx.execute(
+                "INSERT INTO notes (id, title, body, created, modified,
+                                    etebase_uid, etebase_etag, dirty)
+                 VALUES ('n1', 'Note', '', '2025-01-01', '2025-01-01',
+                         'old-note-uid', 'old-note-etag', 0)",
+                [],
+            )
+            .unwrap();
+            tx.execute(
+                "INSERT INTO collections (id, name, parent_collection_id,
+                                         created, modified,
+                                         etebase_uid, etebase_etag, dirty)
+                 VALUES ('c1', 'Folder', NULL, '2025-01-01', '2025-01-01',
+                         'old-col-uid', 'old-col-etag', 0)",
+                [],
+            )
+            .unwrap();
+            tx.execute(
+                "INSERT INTO assets (id, owning_note_id, mime_type, bytes, size,
+                                    created, modified,
+                                    etebase_uid, etebase_etag, dirty)
+                 VALUES ('a1', 'n1', 'image/png', X'89504E47', 4,
+                         '2025-01-01', '2025-01-01',
+                         'old-asset-uid', 'old-asset-etag', 0)",
+                [],
+            )
+            .unwrap();
+            tx.commit().unwrap();
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn reset_sync_cursors_wipes_server_side_state_and_re_dirties_rows() {
+        let db = open_memory_for_tests();
+        seed_synced_state(&db);
+
+        reset_sync_cursors(&db).unwrap();
+
+        db.with_conn(|c| {
+            // Cursor tables emptied
+            let sync_state_count: i64 = c
+                .query_row("SELECT COUNT(*) FROM sync_state", [], |r| r.get(0))
+                .unwrap();
+            let tombstone_count: i64 = c
+                .query_row("SELECT COUNT(*) FROM tombstones", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(sync_state_count, 0);
+            assert_eq!(tombstone_count, 0);
+
+            // Per-row server identifiers cleared, rows marked dirty.
+            for (table, id) in [("notes", "n1"), ("collections", "c1"), ("assets", "a1")] {
+                let (uid, etag, dirty): (Option<String>, Option<String>, i64) = c
+                    .query_row(
+                        &format!(
+                            "SELECT etebase_uid, etebase_etag, dirty
+                             FROM {table} WHERE id = ?1"
+                        ),
+                        params![id],
+                        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                    )
+                    .unwrap();
+                assert_eq!(uid, None, "{table}.{id} etebase_uid should be NULL");
+                assert_eq!(etag, None, "{table}.{id} etebase_etag should be NULL");
+                assert_eq!(dirty, 1, "{table}.{id} should be marked dirty");
+            }
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn reset_sync_cursors_leaves_trash_collection_alone() {
+        let db = open_memory_for_tests();
+        // The trash row is inserted by migration v2; its dirty bit is
+        // explicitly cleared by migration v4. We want to confirm
+        // reset_sync_cursors doesn't disturb that — the trash
+        // collection is a local-only construct and must never be
+        // pushed to a server.
+        reset_sync_cursors(&db).unwrap();
+        db.with_conn(|c| {
+            let dirty: i64 = c
+                .query_row(
+                    "SELECT dirty FROM collections WHERE id = 'trash'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(dirty, 0, "trash collection must stay clean after reset");
+            Ok(())
+        })
+        .unwrap();
+    }
 }

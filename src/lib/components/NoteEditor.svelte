@@ -11,6 +11,7 @@
     TRASH_ID,
     noteRoomInfo,
     etebaseSession,
+    getYjsRelayUrl,
     onSessionChange
   } from '$lib/api';
   import { tree } from '$lib/stores/tree.svelte';
@@ -424,9 +425,11 @@
     }
     collabConfigured = false;
 
-    const collabUrl = (
-      (getSettingValue('account.collabServerUrl') as string | undefined) ?? ''
-    ).trim();
+    // Derived from the single account.serverUrl setting: nginx routes
+    // /yjs to the yjs-relay upstream (see backend/nginx/nginx.conf).
+    const collabUrl = getYjsRelayUrl(
+      (getSettingValue('account.serverUrl') as string | undefined) ?? ''
+    );
     if (!collabUrl) return;
     if (!yDoc || !awareness) return;
 

@@ -6,7 +6,8 @@ import { createRequire } from 'node:module';
 const patterns = [
   'src/**/*.{js,ts,svelte,json,html,css,md}',
   '*.{js,ts,mjs,cjs,json,md,html,css}',
-  'docs/**/*.{js,ts,mjs,cjs,json,md,html,css}'
+  'docs/**/*.{js,ts,mjs,cjs,json,md,html,css}',
+  'backend/**/*.{js,ts,mjs,cjs,json,md,html,css}'
 ];
 
 const check = process.argv.includes('--check');

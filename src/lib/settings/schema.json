@@ -16,29 +16,16 @@
               "options": ["managed", "self-hosted", "local-only"]
             },
             {
-              "id": "account.serverUrl",
+              "id": "account.managedUnavailable",
               "scope": "G",
-              "type": "text",
-              "default": "",
-              "placeholder": "https://notes.example.com",
-              "showIf": { "id": "account.serverType", "equals": "self-hosted" }
+              "type": "info",
+              "showIf": { "id": "account.serverType", "equals": "managed" }
             },
             {
               "id": "account.signInForm",
               "scope": "G",
               "type": "custom",
               "customId": "sign-in-form",
-              "showIf": {
-                "id": "account.serverType",
-                "notEquals": "local-only"
-              }
-            },
-            {
-              "id": "account.collabServerUrl",
-              "scope": "G",
-              "type": "text",
-              "default": "",
-              "placeholder": "wss://collab.example.com",
               "showIf": {
                 "id": "account.serverType",
                 "notEquals": "local-only"

@@ -51,6 +51,51 @@ function emitSessionChange() {
   sessionEvents.dispatchEvent(new Event('change'));
 }
 
+/**
+ * Reactive session store. Cheap to read from any Svelte component
+ * (`authSession.current` in a `$derived`) without each one having to
+ * keep its own `etebaseSession()` polling state. Hydrated lazily on
+ * first read via `refreshAuthSession()` and re-fetched after every
+ * login/logout below, so the value stays correct across windows that
+ * share the underlying session file.
+ *
+ * `initialised` is false until the first refresh completes, which lets
+ * callers distinguish "we're still loading" from "definitely signed
+ * out" — important for the settings UI that gates a radio on session
+ * state and doesn't want to flicker.
+ */
+class AuthSessionStore {
+  current = $state<SessionInfo | null>(null);
+  initialised = $state(false);
+}
+
+export const authSession = new AuthSessionStore();
+
+/**
+ * Pull the live session from Rust into `authSession.current`. Safe to
+ * call repeatedly; the Rust side is just a file read + keyring probe.
+ * Errors are swallowed and treated as "not signed in" — same fallback
+ * the old per-component refresh() used.
+ */
+export async function refreshAuthSession(): Promise<void> {
+  try {
+    authSession.current = await etebaseSession();
+  } catch (err) {
+    console.warn('[auth] session refresh failed', err);
+    authSession.current = null;
+  } finally {
+    authSession.initialised = true;
+  }
+}
+
+// Kick off an initial hydration once at module load so the first
+// component that reads `authSession.current` doesn't have to await.
+// Tauri-only — outside Tauri the Rust IPC isn't available and
+// `etebaseSession()` resolves to null synchronously anyway.
+if (typeof window !== 'undefined') {
+  void refreshAuthSession();
+}
+
 export async function etebaseLogin(input: LoginInput): Promise<SessionInfo> {
   if (!isTauri()) {
     throw new Error('Sign-in is only available in the desktop app.');
@@ -63,6 +108,8 @@ export async function etebaseLogin(input: LoginInput): Promise<SessionInfo> {
       password: input.password
     }
   });
+  authSession.current = session;
+  authSession.initialised = true;
   emitSessionChange();
   return session;
 }
@@ -70,6 +117,8 @@ export async function etebaseLogin(input: LoginInput): Promise<SessionInfo> {
 export async function etebaseLogout(): Promise<void> {
   if (!isTauri()) return;
   await tauriInvoke<void>('etebase_logout');
+  authSession.current = null;
+  authSession.initialised = true;
   emitSessionChange();
 }
 

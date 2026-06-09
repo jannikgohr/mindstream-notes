@@ -82,6 +82,7 @@
     "pdfjs-dist": "^6.0.227",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
+    "socket.io-client": "^4.8.3",
     "tailwind-merge": "^2.6.0",
     "tailwind-variants": "^0.3.0",
     "y-protocols": "^1.0.7",

@@ -32,7 +32,7 @@ import {
   setSortStrategy,
   ui
 } from '$lib/state.svelte';
-import { setLanguage } from './i18n.svelte';
+import { setLanguage, tUi } from './i18n.svelte';
 import type { SortStrategy } from '$lib/sort';
 import SignInForm from './customs/SignInForm.svelte';
 import HotkeysPanel from './customs/HotkeysPanel.svelte';
@@ -213,5 +213,9 @@ export const INFO_VALUES: Record<string, () => string> = {
       `Svelte ${depVersion('svelte')}`,
       `Milkdown Crepe ${depVersion('@milkdown/crepe')}`,
       `dockview ${depVersion('dockview-core')}`
-    ].join(' · ')
+    ].join(' · '),
+  // Body of the "Managed mode" notice in the account section. Lives
+  // here (rather than as a hardcoded string in the schema) so the
+  // text routes through tUi and stays translatable.
+  'account.managedUnavailable': () => tUi('account.managedUnavailable')
 };

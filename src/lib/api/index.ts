@@ -29,11 +29,12 @@ export * from './drawing';
 export * from './tree';
 export * from './layout';
 export * from './window';
-export * from './auth';
+export * from './auth.svelte';
 export * from './sync';
 export * from './system';
 export * from './desktop-settings';
 export * from './hotkeys';
+export * from './server-urls';
 
 /** Reserved id for the always-present trash collection (mirrors Rust). */
 export const TRASH_ID = 'trash';

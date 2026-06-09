@@ -21,6 +21,7 @@
     drawingSetLiveInkFingerDrawing,
     drawingSetLiveInkStyle,
     drawingShowLiveInkOverlay,
+    getYjsRelayUrl,
     loadNote,
     noteRoomInfo,
     onSessionChange,
@@ -414,9 +415,11 @@
     collabConfigured = false;
     console.info('[ink-collab] reset note=%s', noteId);
 
-    const collabUrl = (
-      (getSettingValue('account.collabServerUrl') as string | undefined) ?? ''
-    ).trim();
+    // Derived from the single account.serverUrl setting: nginx routes
+    // /yjs to the yjs-relay upstream (see backend/nginx/nginx.conf).
+    const collabUrl = getYjsRelayUrl(
+      (getSettingValue('account.serverUrl') as string | undefined) ?? ''
+    );
     if (!collabUrl || !handle) {
       if (!collabUrl) {
         console.info('[ink-collab] disabled note=%s (no relay URL)', noteId);

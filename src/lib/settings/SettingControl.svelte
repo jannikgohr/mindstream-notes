@@ -7,6 +7,7 @@
    */
   import { Loader2 } from 'lucide-svelte';
   import { Button } from '$lib/components/ui/button';
+  import { authSession } from '$lib/api/auth.svelte';
   import {
     getSettingValue,
     isModified,
@@ -43,6 +44,14 @@
   const value = $derived(getSettingValue(setting.id));
   const modified = $derived(isModified(setting.id));
   const pending = $derived(isPending(setting.id));
+
+  /** Lock the server-type radio while a session is live. Changing the
+   *  server type out from under an authenticated session would put the
+   *  app in an incoherent state (managed creds against a self-hosted
+   *  flow or vice versa); the user has to sign out first. */
+  const lockedBySession = $derived(
+    setting.id === 'account.serverType' && authSession.current !== null
+  );
 
   /**
    * `commit` is async because some bindings (autostart in particular)
@@ -110,7 +119,11 @@
         {#each s.options as opt (opt)}
           <button
             type="button"
-            class="rounded-md border border-border px-3 py-1 text-xs transition-colors hover:bg-accent {value ===
+            disabled={lockedBySession}
+            title={lockedBySession
+              ? 'Sign out to change server type.'
+              : undefined}
+            class="rounded-md border border-border px-3 py-1 text-xs transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-transparent {value ===
             opt
               ? 'border-ring bg-accent text-accent-foreground'
               : 'bg-background text-foreground'}"
@@ -120,6 +133,11 @@
           </button>
         {/each}
       </div>
+      {#if lockedBySession}
+        <p class="mt-1 text-xs text-muted-foreground">
+          Sign out to change server type.
+        </p>
+      {/if}
     {:else if setting.type === 'multi-select'}
       {@const s = setting as MultiSelectSetting}
       <div class="mt-2 flex flex-wrap gap-1.5">

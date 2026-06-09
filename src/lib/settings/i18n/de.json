@@ -10,6 +10,8 @@
     "empty": "Keine Einstellungen passen zur Suche.",
     "saving": "Wird gespeichert…",
 
+    "account.managedUnavailable": "Noch nicht verfügbar — wähle \"Selbst gehostet\", um deinen eigenen Server zu nutzen.",
+
     "sort.label": "Sortierung",
     "sort.ascending": "Aufsteigend sortieren",
     "sort.descending": "Absteigend sortieren",
@@ -280,12 +282,8 @@
       "label": "Servertyp",
       "description": "Wo deine Notizen liegen."
     },
-    "account.serverUrl": { "label": "Server-URL" },
+    "account.managedUnavailable": { "label": "Verwalteter Modus" },
     "account.signInForm": { "label": "Anmelden" },
-    "account.collabServerUrl": {
-      "label": "Live-Collab-Server",
-      "description": "WebSocket-URL des verschlüsselten Relays für Echtzeit-Co-Editing. Leer lassen, um Live-Collab zu deaktivieren; periodische Synchronisation funktioniert weiterhin."
-    },
     "account.syncEnabled": { "label": "Synchronisation aktivieren" },
     "general.startOnLogin": { "label": "Autostart bei Anmeldung" },
     "general.closeToTray": {

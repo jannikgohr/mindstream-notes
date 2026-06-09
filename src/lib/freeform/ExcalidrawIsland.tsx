@@ -13,14 +13,13 @@ import {
 import '@excalidraw/excalidraw/index.css';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type * as Y from 'yjs';
-import type { Awareness } from 'y-protocols/awareness';
 import type {
   ExcalidrawInitialDataState,
   ExcalidrawImperativeAPI
 } from '@excalidraw/excalidraw/types';
 import type { Theme } from '@excalidraw/excalidraw/element/types';
 import {
-  bindExcalidrawToYDoc,
+  bindExcalidrawToLocalYDoc,
   readSceneFromYDoc,
   type BindHandle
 } from './excalidraw-yjs';
@@ -29,13 +28,14 @@ export type PenModeSetting = 'auto' | 'always' | 'off';
 
 export interface ExcalidrawIslandProps {
   yDoc: Y.Doc;
-  /** Reserved for future remote cursor/presence wiring. */
-  awareness: Awareness;
   readOnly: boolean;
   noteId: string;
   colorScheme: 'light' | 'dark' | 'system';
   penMode: PenModeSetting;
   reduceMotion: boolean;
+  /** Surfaces the Excalidraw API up to the Svelte parent, which feeds
+   *  it to the excalidraw-room client. Receives null on unmount. */
+  onApiReady?: (api: ExcalidrawImperativeAPI | null) => void;
 }
 
 function resolveTheme(colorScheme: ExcalidrawIslandProps['colorScheme']): Theme {
@@ -89,16 +89,18 @@ function initialDataFor(
 
 export default function ExcalidrawIsland({
   yDoc,
-  awareness: _awareness,
   readOnly,
   noteId: _noteId,
   colorScheme,
   penMode,
-  reduceMotion
+  reduceMotion,
+  onApiReady
 }: ExcalidrawIslandProps) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const apiRef = useRef<ExcalidrawImperativeAPI | null>(null);
   const bindRef = useRef<BindHandle | null>(null);
+  const onApiReadyRef = useRef(onApiReady);
+  onApiReadyRef.current = onApiReady;
   const [apiReady, setApiReady] = useState(false);
   const theme = useResolvedTheme(colorScheme);
 
@@ -111,6 +113,7 @@ export default function ExcalidrawIsland({
     return () => {
       bindRef.current?.destroy();
       bindRef.current = null;
+      onApiReadyRef.current?.(null);
       apiRef.current = null;
     };
   }, []);
@@ -119,8 +122,9 @@ export default function ExcalidrawIsland({
     (api: ExcalidrawImperativeAPI) => {
       apiRef.current = api;
       bindRef.current?.destroy();
-      bindRef.current = bindExcalidrawToYDoc({ yDoc, api });
+      bindRef.current = bindExcalidrawToLocalYDoc({ yDoc, api });
       setApiReady(true);
+      onApiReadyRef.current?.(api);
     },
     [yDoc]
   );
