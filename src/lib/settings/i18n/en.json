@@ -289,10 +289,6 @@
       "label": "Server type",
       "description": "Where your notes live."
     },
-    "account.serverUrl": {
-      "label": "Server URL",
-      "description": "URL of your self-hosted Mindstream backend. The same host serves note storage (etebase) and live collab (yjs-relay at /yjs, excalidraw-room at /socket.io/)."
-    },
     "account.signInForm": { "label": "Sign in" },
     "account.syncEnabled": { "label": "Enable sync" },
     "account.syncInterval": { "label": "Sync frequency" },

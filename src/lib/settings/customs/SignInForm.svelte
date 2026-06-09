@@ -3,19 +3,32 @@
    * Etebase sign-in / sign-out panel. Only mounted when the surrounding
    * `account.serverType` is "managed" or "self-hosted" (see schema.json).
    *
-   * The Rust side stashes the encrypted session on disk and the encryption
-   * key in the OS keystore — see src-tauri/src/auth/mod.rs. We never send
-   * the password anywhere except the etebase server, and never persist it.
+   * Three rendering branches:
+   *   - signed in  → "Signed in as X" + server URL + sync/logout
+   *   - signed out, managed     → fixed "Managed (api.mindstream-notes.invalid)" label,
+   *                                creds, submit
+   *   - signed out, self-hosted → URL input + creds + submit
+   *
+   * The URL field used to live as its own setting in schema.json. Moving
+   * it in here means the user only sees it where it's actually relevant
+   * (the sign-in flow), and we can lock it implicitly once signed in by
+   * just not rendering the input — the value the user actually used is
+   * shown in the signed-in card below.
+   *
+   * The Rust side stashes the encrypted session on disk and the
+   * encryption key in the OS keystore — see src-tauri/src/auth/mod.rs.
+   * We never send the password anywhere except the etebase server, and
+   * never persist it.
    */
   import { Button } from '$lib/components/ui/button';
   import { LogOut, Loader2, RefreshCw } from 'lucide-svelte';
   import {
+    authSession,
     etebaseLogin,
     etebaseLogout,
-    etebaseSession,
-    type ServerType,
-    type SessionInfo
-  } from '$lib/api/auth';
+    refreshAuthSession,
+    type ServerType
+  } from '$lib/api/auth.svelte';
   import { type SyncReport } from '$lib/api/sync';
   import { normalizeServerUrl } from '$lib/api/server-urls';
   import { runSync } from '$lib/sync/runner';
@@ -25,12 +38,14 @@
     settingsDialog
   } from '../store.svelte';
 
-  let session = $state<SessionInfo | null>(null);
+  /** What "managed" mode is bound to. Mirrors MANAGED_SERVER_URL in
+   *  src-tauri/src/auth/mod.rs — keep both in sync when changing. */
+  const MANAGED_SERVER_URL = 'https://api.mindstream-notes.invalid/';
+
   let username = $state('');
   let password = $state('');
   let busy = $state(false);
   let error = $state<string | null>(null);
-  let initialised = $state(false);
   let syncing = $state(false);
   let lastReport = $state<SyncReport | null>(null);
 
@@ -65,21 +80,10 @@
           serverUrlValidation.error === null))
   );
 
-  async function refresh() {
-    try {
-      session = await etebaseSession();
-    } catch (err) {
-      console.warn('[auth] session check failed', err);
-      session = null;
-    } finally {
-      initialised = true;
-    }
-  }
-
   // Re-check whenever the settings dialog opens — covers the case where
   // a different window signed in or logged out while this one was idle.
   $effect(() => {
-    if (settingsDialog.open) void refresh();
+    if (settingsDialog.open) void refreshAuthSession();
   });
 
   async function signIn() {
@@ -88,7 +92,7 @@
     error = null;
     const normalizedUrl = serverUrlValidation.url;
     try {
-      session = await etebaseLogin({
+      await etebaseLogin({
         serverType: serverType as ServerType,
         serverUrl: serverType === 'self-hosted' ? normalizedUrl : undefined,
         username: username.trim(),
@@ -124,7 +128,6 @@
     error = null;
     try {
       await etebaseLogout();
-      session = null;
       lastReport = null;
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
@@ -165,26 +168,34 @@
     }
     return parts.length > 0 ? parts.join(' · ') : 'Already up to date';
   }
+
+  /** Two-way binding for the URL input. We can't `bind:value` against a
+   *  `$derived` (it's read-only by design), so the input drives
+   *  setSettingValue and reads back through the same derived store. */
+  function onServerUrlInput(event: Event): void {
+    const target = event.currentTarget as HTMLInputElement;
+    void setSettingValue('account.serverUrl', target.value);
+  }
 </script>
 
 <div class="rounded-md border border-border bg-muted/40 p-3 text-sm">
-  {#if !initialised}
+  {#if !authSession.initialised}
     <div class="flex items-center gap-2 text-xs text-muted-foreground">
       <Loader2 class="size-3.5 animate-spin" />
       Checking session…
     </div>
-  {:else if session}
+  {:else if authSession.current}
     <div class="grid gap-2">
       <div>
         <div class="text-xs uppercase tracking-wide text-muted-foreground">
           Signed in
         </div>
-        <div class="mt-1 font-medium">{session.username}</div>
+        <div class="mt-1 font-medium">{authSession.current.username}</div>
         <div
           class="mt-0.5 truncate font-mono text-xs text-muted-foreground"
-          title={session.server_url}
+          title={authSession.current.server_url}
         >
-          {session.server_url}
+          {authSession.current.server_url}
         </div>
       </div>
       <div class="flex items-center gap-2 pt-1">
@@ -227,6 +238,31 @@
         void signIn();
       }}
     >
+      {#if serverType === 'self-hosted'}
+        <label class="grid gap-1">
+          <span class="text-xs text-muted-foreground">Server URL</span>
+          <input
+            type="url"
+            inputmode="url"
+            autocomplete="url"
+            value={serverUrlInput}
+            oninput={onServerUrlInput}
+            placeholder="https://collab.example.com"
+            disabled={busy}
+            class="h-8 rounded-md border border-input bg-background px-2 font-mono text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+          />
+        </label>
+      {:else if serverType === 'managed'}
+        <div class="grid gap-1">
+          <span class="text-xs text-muted-foreground">Server</span>
+          <div
+            class="flex h-8 items-center rounded-md border border-input bg-background/40 px-2 font-mono text-xs text-muted-foreground"
+            title="Managed by Etebase. Switch to self-hosted in the radio above to use your own server."
+          >
+            Managed ({MANAGED_SERVER_URL})
+          </div>
+        </div>
+      {/if}
       <label class="grid gap-1">
         <span class="text-xs text-muted-foreground">Username or email</span>
         <input
@@ -263,7 +299,7 @@
           <span class="text-xs text-destructive">{serverUrlError}</span>
         {:else if serverType === 'self-hosted' && !serverUrlValidation.url}
           <span class="text-xs text-muted-foreground"
-            >Set a server URL above first.</span
+            >Enter your server URL above first.</span
           >
         {/if}
       </div>

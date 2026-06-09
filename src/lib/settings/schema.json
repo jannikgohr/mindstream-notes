@@ -16,14 +16,6 @@
               "options": ["managed", "self-hosted", "local-only"]
             },
             {
-              "id": "account.serverUrl",
-              "scope": "G",
-              "type": "text",
-              "default": "",
-              "placeholder": "https://notes.example.com",
-              "showIf": { "id": "account.serverType", "equals": "self-hosted" }
-            },
-            {
               "id": "account.signInForm",
               "scope": "G",
               "type": "custom",

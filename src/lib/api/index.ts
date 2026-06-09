@@ -29,7 +29,7 @@ export * from './drawing';
 export * from './tree';
 export * from './layout';
 export * from './window';
-export * from './auth';
+export * from './auth.svelte';
 export * from './sync';
 export * from './system';
 export * from './desktop-settings';

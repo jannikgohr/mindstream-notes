@@ -280,10 +280,6 @@
       "label": "Servertyp",
       "description": "Wo deine Notizen liegen."
     },
-    "account.serverUrl": {
-      "label": "Server-URL",
-      "description": "URL deines selbst gehosteten Mindstream-Backends. Derselbe Host stellt Notiz-Speicher (etebase) und Live-Collab (yjs-relay unter /yjs, excalidraw-room unter /socket.io/) bereit."
-    },
     "account.signInForm": { "label": "Anmelden" },
     "account.syncEnabled": { "label": "Synchronisation aktivieren" },
     "general.startOnLogin": { "label": "Autostart bei Anmeldung" },
