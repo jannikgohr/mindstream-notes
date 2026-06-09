@@ -1,8 +1,8 @@
 //! Android live-ink JNI bridge.
 //!
-//! The canonical ink editor is now the WebView/Svelte canvas. Android
-//! still owns a tiny native latency helper: Kotlin captures
-//! `MotionEvent`s and paints the in-flight wet stroke with
+//! The canonical ink editor is the WebView/Svelte canvas. Android still
+//! owns a small native latency helper: Kotlin captures `MotionEvent`s
+//! and paints the in-flight wet stroke with
 //! `CanvasFrontBufferedRenderer`, while forwarding the same event to
 //! the WebView for canonical document mutation.
 //!
@@ -11,14 +11,11 @@
 //! - cache a `Drawing` class ref so Rust commands can call Kotlin
 //!   static methods from any thread,
 //! - expose the Rust-to-Kotlin live-overlay commands used by JS via
-//!   Tauri,
-//! - keep no-op JNI exports for the removed Android egui/wgpu data
-//!   plane so stale Kotlin paths fail soft instead of crashing.
+//!   Tauri.
 
 use std::sync::OnceLock;
 
 use jni::objects::{GlobalRef, JClass, JObject};
-use jni::sys::{jboolean, jfloat, jint, jlong};
 use jni::JNIEnv;
 
 /// Global ref to the Kotlin `io.crates.drawing.Drawing` class,
@@ -46,95 +43,9 @@ pub extern "system" fn Java_io_crates_drawing_Drawing_00024Companion_cacheJniCla
     }
 }
 
-// Compatibility stubs for the removed Android native-render data
-// plane. Kotlin's live-overlay path uses `mirrorOnly = true` and
-// does not need these. Keeping the symbols prevents stale/non-mirror
-// calls from failing JNI resolution while step 8 removes egui/wgpu
-// from Android.
-
-#[no_mangle]
-pub extern "system" fn Java_io_crates_drawing_Drawing_00024Companion_setSurface(
-    _env: JNIEnv,
-    _class: JClass,
-    _surface: JObject,
-    _width: jint,
-    _height: jint,
-) {
-    log::debug!("[drawing] ignored removed Android setSurface JNI call");
-}
-
-#[no_mangle]
-pub extern "system" fn Java_io_crates_drawing_Drawing_00024Companion_resizeSurface(
-    _env: JNIEnv,
-    _class: JClass,
-    _width: jint,
-    _height: jint,
-) {
-}
-
-#[no_mangle]
-pub extern "system" fn Java_io_crates_drawing_Drawing_00024Companion_clearSurface(
-    _env: JNIEnv,
-    _class: JClass,
-) {
-}
-
-#[no_mangle]
-pub extern "system" fn Java_io_crates_drawing_Drawing_00024Companion_setFingerDrawingAllowed(
-    _env: JNIEnv,
-    _class: JClass,
-    _allowed: jboolean,
-) {
-}
-
-#[no_mangle]
-pub extern "system" fn Java_io_crates_drawing_Drawing_00024Companion_pushPoint(
-    _env: JNIEnv,
-    _class: JClass,
-    _x: jfloat,
-    _y: jfloat,
-    _pressure: jfloat,
-    _tool_type: jint,
-    _buttons: jint,
-    _action: jint,
-    _time_ms: jlong,
-) {
-}
-
-#[no_mangle]
-pub extern "system" fn Java_io_crates_drawing_Drawing_00024Companion_pushPredictedPoint(
-    _env: JNIEnv,
-    _class: JClass,
-    _x: jfloat,
-    _y: jfloat,
-    _pressure: jfloat,
-    _time_ms: jlong,
-) {
-}
-
-#[no_mangle]
-pub extern "system" fn Java_io_crates_drawing_Drawing_00024Companion_pushViewGesture(
-    _env: JNIEnv,
-    _class: JClass,
-    _focus_x: jfloat,
-    _focus_y: jfloat,
-    _pan_dx: jfloat,
-    _pan_dy: jfloat,
-    _scale_delta: jfloat,
-) {
-}
-
 pub mod ui {
     use jni::objects::{JClass, JValue};
     use jni::JavaVM;
-
-    pub fn call_show() -> Result<(), String> {
-        invoke_static_void("showFromNative")
-    }
-
-    pub fn call_hide() -> Result<(), String> {
-        invoke_static_void("hideFromNative")
-    }
 
     pub fn call_show_live_overlay() -> Result<(), String> {
         invoke_static_void("showLiveOverlayFromNative")

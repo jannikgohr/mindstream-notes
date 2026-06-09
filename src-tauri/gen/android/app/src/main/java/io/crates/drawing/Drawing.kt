@@ -7,12 +7,9 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.PixelFormat
 import android.os.Build
-import android.os.SystemClock
 import android.util.Log
 import android.view.InputDevice
 import android.view.MotionEvent
-import android.view.MotionPredictor
-import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.ViewGroup
@@ -39,125 +36,60 @@ import androidx.graphics.lowlatency.CanvasFrontBufferedRenderer
 private const val MOBILE_HEADER_HEIGHT_DP = 48
 
 /**
- * High-volume touch diagnostics. Keep disabled for normal drawing:
- * S Pen input can deliver hundreds of samples per second, and logcat
- * writes on that path are enough to create the lag these logs were
- * originally added to investigate.
+ * Top strip (in surface pixels) where the live-ink overlay refuses to
+ * paint, so the Svelte ink-editor toolbar at the top of the canvas
+ * stays clear of pen ink. JS could push exact toolbar bounds via
+ * [Drawing.setControlBoundsFromNative], but a flat top-strip is
+ * enough for the current Svelte layout.
  */
-private const val DRAWING_INPUT_LOGS = false
-
 private const val FRONT_BUFFER_TOOLBAR_HEIGHT_PX = 120f
 private const val FRONT_BUFFER_CANCEL_DELAY_MS = 48L
 
 /**
- * Native "ink" drawing surface — POC.
+ * Android live-ink overlay bridge.
  *
- * Mirrors the architecture from the audit (`io.crates.keyring.Keyring`
- * gave us the canonical raw-JNI pattern; `tauri-plugin-barcode-scanner`
- * gave us the sibling-view injection pattern). The two are stitched
- * together here:
+ * The canonical ink editor is the WebView/Svelte canvas. This class
+ * adds a sibling `SurfaceView` that captures the in-flight wet stroke
+ * with `CanvasFrontBufferedRenderer` for sub-vsync latency, while
+ * forwarding the underlying `MotionEvent`s to the WebView so the
+ * Svelte editor remains the source of truth for committed strokes.
  *
- *   - `attach(activity, webView)` runs from MainActivity.onWebViewCreate,
- *     which is WryActivity's official "the webview now exists" hook
- *     (equivalent to a Tauri mobile plugin's `Plugin.load(webView)`).
- *   - `Drawing.instance.show()` injects a SurfaceView as a sibling of
- *     the WebView. Visibility / lifecycle is driven by JS through Rust
- *     via the `Drawing.showFromNative()` / `hideFromNative()` callbacks
- *     defined in the companion below.
- *   - The SurfaceView captures stylus / touch input directly and pushes
- *     each sample (incl. historical buffered samples for >120Hz devices)
- *     straight to Rust via `pushPoint`. We never go through Tauri's
- *     `@Command` IPC for input — that pipeline would JSON-serialise
- *     every sample and crater on a real stylus.
+ * Wiring:
+ *   - `attach(activity, webView)` runs from `MainActivity.onWebViewCreate`.
+ *   - JS opens an ink note → `drawing_show_live_ink_overlay` Tauri
+ *     command → Rust calls `Drawing.showLiveOverlayFromNative()` →
+ *     this class injects a `DrawingSurfaceView` as a sibling of the
+ *     WebView and starts rendering the front-buffer ink layer.
+ *   - The SurfaceView reads pen / touch input directly, forwards each
+ *     event to the WebView via `dispatchTouchEvent`, and queues the
+ *     same samples into its own `FrontBufferInk` layer for low-latency
+ *     paint. Stylus-button erases get dispatched to JS as a custom
+ *     event the editor handles.
  *
  * JNI symbol mangling: package + class + `$Companion` are load-bearing,
- * so the Rust exports are `Java_io_crates_drawing_Drawing_00024Companion_*`.
- * Renaming any of those fragments breaks the link at startup — same
- * lesson as the Keyring class comment documents.
+ * so the Rust JNI export must mangle to
+ * `Java_io_crates_drawing_Drawing_00024Companion_cacheJniClass`.
+ * Renaming any of those fragments breaks the link at startup.
  */
 class Drawing(private val activity: Activity, private val webView: WebView) {
 
-    /** The currently-attached overlay, or null when hidden. */
-    private var view: DrawingSurfaceView? = null
+    /** The currently-attached live-overlay view, or null when hidden. */
     private var liveView: DrawingSurfaceView? = null
 
     /**
-     * True if [hideSync] tore down an attached SurfaceView for a
-     * lifecycle pause (onPause) — i.e. we should re-create it on the
-     * matching [resumeIfNeeded] call. Cleared whenever JS or the user
-     * acts explicitly ([show] or [hide]). Read/written only from the
-     * UI thread (hideSync is UI-thread-only by contract; show/hide
-     * post their writes via runOnUiThread; resumeIfNeeded fires from
-     * MainActivity.onResume which is UI-thread).
-     *
-     * Without this flag, a screen-off / app-switch / lock cycle while
-     * an ink note is open detaches the SurfaceView (so EGL teardown
-     * stays away from wgpu's swap-chain Drop) but never re-attaches —
-     * the Svelte DrawingNoteEditor stays mounted across the pause,
-     * so its onMount-driven `drawingShow` doesn't fire a second time
-     * and the user is left with a frozen view that requires
-     * navigating away + back to recover.
+     * True if [hideSync] tore down the live overlay for a lifecycle
+     * pause (`onPause`) — i.e. we should re-create it on the matching
+     * [resumeIfNeeded] call. Cleared whenever JS or the user act
+     * explicitly ([showLiveOverlay] or [hideLiveOverlay]).
      */
-    private var attachedBeforePause: Boolean = false
     private var liveAttachedBeforePause: Boolean = false
-
-    fun show() {
-        activity.runOnUiThread {
-            // Any explicit show clears the auto-resume flag — if the
-            // user / JS asked for it, the resume path shouldn't also
-            // pile on a second show.
-            attachedBeforePause = false
-            // Hide Android's bottom navigation bar while an ink note
-            // is open — every device pixel matters for drawing, and
-            // the egui toolbar already provides our own navigation.
-            // Idempotent so re-asserting on a no-op show() is safe.
-            // Paired with `showSystemNavigation` in hide() below.
-            hideSystemNavigation(activity)
-            if (view != null) return@runOnUiThread
-            // Request the highest-Hz display mode the panel offers
-            // (at the current resolution) while an ink note is open.
-            // 120Hz halves per-vsync latency on phones like the S23+
-            // vs the default 60Hz. Released in hide() so the markdown
-            // editor + general WebView UI stays on adaptive refresh.
-            // Triggers a surface re-create on devices that actually
-            // switch modes — same path that handles rotation, so
-            // SurfaceHolder.Callback already covers it.
-            requestHighRefreshRate(activity)
-            val v = DrawingSurfaceView(activity)
-            val parent = webView.parent as ViewGroup
-            // topMargin = system-bar inset + Svelte header height so
-            // the SurfaceView sits below MobileEditor's header rather
-            // than covering it. The header's back arrow / title /
-            // favourite star stay reachable because touches in y <
-            // topMargin fall through to the WebView underneath
-            // (SurfaceView only receives touches inside its own
-            // bounds). The WindowInsets listener inside
-            // DrawingSurfaceView reapplies topMargin on rotation /
-            // IME show-hide so the offset adapts.
-            val params = FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT
-            )
-            params.topMargin = computeTopInsetPx(parent, activity)
-            v.layoutParams = params
-            parent.addView(v)
-            // Make the WebView transparent so any UI rendered by the
-            // Svelte DrawingNoteEditor (even just a background colour)
-            // doesn't sit between us and the user. Cosmetic-only for the
-            // POC because setZOrderOnTop(true) on the SurfaceView already
-            // puts our content above the WebView; flip it anyway so the
-            // peek-through is consistent if we later drop zOrderOnTop.
-            webView.setBackgroundColor(Color.TRANSPARENT)
-            view = v
-        }
-    }
 
     fun showLiveOverlay() {
         activity.runOnUiThread {
             liveAttachedBeforePause = false
             if (liveView != null) return@runOnUiThread
             requestHighRefreshRate(activity)
-            val v = DrawingSurfaceView(activity, webView, mirrorOnly = true)
+            val v = DrawingSurfaceView(activity, webView)
             val parent = webView.parent as ViewGroup
             val params = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -167,27 +99,6 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
             v.layoutParams = params
             parent.addView(v)
             liveView = v
-        }
-    }
-
-    fun hide() {
-        activity.runOnUiThread {
-            // Explicit-hide path: JS navigated away from the ink note.
-            // Even if we then immediately pause (e.g. user pressed
-            // back and then locked the screen), onResume should NOT
-            // re-attach — the user isn't on the ink note anymore.
-            attachedBeforePause = false
-            // Restore the system navigation bar — paired with the
-            // hide() in show() above. Done unconditionally (before
-            // the view null-check) so the user always returns to a
-            // consistent system-UI state even if hide() was called
-            // without a matching show().
-            showSystemNavigation(activity)
-            val v = view ?: return@runOnUiThread
-            Log.i("MindstreamDrawing", "Drawing.hide: detaching SurfaceView")
-            (v.parent as? ViewGroup)?.removeView(v)
-            view = null
-            releaseRefreshRate(activity)
         }
     }
 
@@ -215,71 +126,27 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
     }
 
     /**
-     * UI-thread-only synchronous tear-down. Used from MainActivity
-     * lifecycle hooks (onPause, onDestroy) — those callbacks run on
-     * the UI thread, so we skip the runOnUiThread bounce and the
-     * SurfaceView detach happens immediately. Inside the detach,
-     * `SurfaceView.onDetachedFromWindow` fires `surfaceDestroyed`
-     * synchronously, which calls into Rust's `clear_surface`, which
-     * blocks until the render thread has dropped wgpu's GpuState.
-     * By the time this method returns, the EGL handles wgpu held
-     * are gone — safe for the Activity to continue tearing down its
-     * own GL context.
+     * UI-thread-only synchronous tear-down. Called from
+     * [MainActivity.onPause]; pairs with [resumeIfNeeded] on resume so
+     * the overlay survives a screen-off / app-switch / lock cycle.
      */
     fun hideSync() {
         check(android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
             "hideSync must be called on the UI thread"
         }
-        val v = view
-        if (v != null) {
-            detachViewSync(v)
-            view = null
-            attachedBeforePause = true
-        }
         val live = liveView
         if (live != null) {
-            detachViewSync(live)
+            Log.i("MindstreamDrawing", "Drawing.hideSync: detaching live overlay (UI thread)")
+            (live.parent as? ViewGroup)?.removeView(live)
             liveView = null
             liveAttachedBeforePause = true
         }
         releaseRefreshRate(activity)
     }
 
-    private fun detachViewSync(v: DrawingSurfaceView) {
-        Log.i("MindstreamDrawing", "Drawing.detachViewSync: detaching SurfaceView (UI thread)")
-        (v.parent as? ViewGroup)?.removeView(v)
-    }
-
-    /**
-     * UI-thread-only resume path mirroring [hideSync]. Called from
-     * [MainActivity.onResume] (and dispatched via [Drawing.resume]
-     * below). If [hideSync] tore the SurfaceView down for a lifecycle
-     * pause, re-create it now so the user comes back to a working
-     * ink note instead of a frozen view.
-     *
-     * The Rust render thread retains its per-note `CanvasDocument`
-     * map + `active_note_id` across the pause (only `surface_state`
-     * was dropped, by design — see `clear_surface` in render.rs), so
-     * `show()` bringing a new SurfaceView up triggers
-     * `surfaceCreated` → JNI `setSurface` → Rust rebuilds
-     * `SurfaceBoundState` from the persistent `PersistentGpu`, and
-     * the first repaint shows the correct note's strokes. No JS
-     * involvement needed.
-     */
     fun resumeIfNeeded() {
         check(android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
             "resumeIfNeeded must be called on the UI thread"
-        }
-        if (attachedBeforePause) {
-            Log.i(
-                "MindstreamDrawing",
-                "Drawing.resumeIfNeeded: re-attaching SurfaceView after lifecycle pause"
-            )
-            // `show()` clears the flag itself (inside its runOnUiThread
-            // block) — go through the regular show path so any future
-            // changes there (high-refresh request, topMargin recompute,
-            // …) apply identically to the resume case.
-            show()
         }
         if (liveAttachedBeforePause) {
             Log.i(
@@ -291,47 +158,42 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
     }
 
     /**
-     * Forward a Rust-driven style update to the active SurfaceView's
+     * Forward a Rust-driven style update to the active live overlay's
      * front-buffer ink layer. No-op if the SurfaceView is currently
-     * detached (e.g. user hasn't opened an ink note yet, or has just
-     * navigated away). Safe to call from any thread — the style
-     * fields on [FrontBufferInk] are `@Volatile` so a write here
-     * publishes immediately to the touch / render threads that read
-     * them.
+     * detached. Safe to call from any thread — the style fields on
+     * [FrontBufferInk] are `@Volatile` so a write here publishes
+     * immediately to the touch / render threads that read them.
      */
     fun setLiveInkStyle(colorArgb: Int, minWidthPx: Float, maxWidthPx: Float) {
-        view?.setLiveInkStyle(colorArgb, minWidthPx, maxWidthPx)
         liveView?.setLiveInkStyle(colorArgb, minWidthPx, maxWidthPx)
     }
 
     fun cancelLiveInk() {
-        view?.cancelLiveInk()
         liveView?.cancelLiveInk()
     }
 
     companion object {
         init {
             // Same library the Keyring JNI symbols live in — the Rust
-            // drawing code is statically linked into libmindstream_notes_lib.so
-            // alongside the rest of the app. System.loadLibrary is
-            // idempotent so it's fine that Keyring also loaded it.
+            // drawing code is statically linked into
+            // libmindstream_notes_lib.so alongside the rest of the app.
+            // System.loadLibrary is idempotent so it's fine that Keyring
+            // also loaded it.
             System.loadLibrary("mindstream_notes_lib")
             // Hand Rust a GlobalRef to this class so it can call our
-            // @JvmStatic methods from the render thread without doing
-            // its own env.find_class(). That find_class fails for app
-            // classes on a Rust-spawned thread (the JVM hands those
-            // threads the system class loader, which only sees core
-            // Android classes) — see jni.rs::DRAWING_CLASS. This must
-            // run AFTER loadLibrary because the JNI symbol it dispatches
-            // to lives in libmindstream_notes_lib.so.
+            // @JvmStatic methods from a JVM-attached thread without
+            // doing its own env.find_class() — that fails for app
+            // classes on Rust-spawned threads. Must run AFTER
+            // loadLibrary because the JNI symbol it dispatches to
+            // lives in libmindstream_notes_lib.so.
             cacheJniClass(Drawing::class.java)
         }
 
         /**
          * Held by MainActivity once `attach` runs in onWebViewCreate.
-         * Lives for the activity's lifetime; the showFromNative /
-         * hideFromNative callbacks bounce off it, so a Rust call that
-         * arrives before attach is a silent no-op.
+         * Lives for the activity's lifetime; the live-overlay
+         * callbacks bounce off it, so a Rust call that arrives before
+         * attach is a silent no-op.
          */
         @Volatile
         private var instance: Drawing? = null
@@ -342,25 +204,12 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
             instance = Drawing(activity, webView)
         }
 
-        /**
-         * Called from MainActivity.onPause. Tears down our SurfaceView +
-         * wgpu state while EGL is still valid — leaving cleanup to
-         * Activity.onStop / onDestroy runs it after the system has
-         * already invalidated the EGL display, which triggers wgpu's
-         * Drop into a destroyed mutex (FORTIFY SIGABRT).
-         */
+        /** Called from MainActivity.onPause. */
         fun detach() {
             instance?.hideSync()
         }
 
-        /**
-         * Called from MainActivity.onResume. Pair to [detach] — if
-         * the pause path tore down a live SurfaceView, re-create it
-         * here so the user comes back to a working ink note. No-op if
-         * detach didn't actually remove a view (we were on a non-ink
-         * screen at pause time) or if JS later called drawing_hide
-         * (the explicit-hide path clears the auto-resume flag).
-         */
+        /** Called from MainActivity.onResume. */
         fun resume() {
             instance?.resumeIfNeeded()
         }
@@ -369,19 +218,9 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
         // @JvmStatic so they show up as plain static methods on the
         // Drawing class itself — call_static_method on the Rust side
         // would otherwise need to dig out the Companion field. The
-        // external functions below intentionally DON'T use @JvmStatic
-        // because that changes the JNI symbol-mangling and would break
-        // the matching Rust exports.
-
-        @JvmStatic
-        fun showFromNative() {
-            instance?.show()
-        }
-
-        @JvmStatic
-        fun hideFromNative() {
-            instance?.hide()
-        }
+        // `cacheJniClass` external function below intentionally DOESN'T
+        // use @JvmStatic because that would change the JNI symbol
+        // mangling and break the matching Rust export.
 
         @JvmStatic
         fun showLiveOverlayFromNative() {
@@ -408,28 +247,6 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
             instance?.cancelLiveInk()
         }
 
-        /**
-         * Called from Rust when the in-egui Back button is tapped.
-         * We don't tear down the SurfaceView ourselves here — that
-         * happens via the JS side: dispatching a `drawing-back`
-         * CustomEvent on `window` triggers the Svelte mobile shell
-         * to navigate away, which unmounts DrawingNoteEditor, which
-         * calls drawingHide, which lands back here via hideFromNative.
-         * Going through JS keeps the back behaviour symmetric with
-         * any future in-app back affordance the Svelte side adds.
-         */
-        @JvmStatic
-        fun backFromNative() {
-            val inst = instance ?: return
-            inst.activity.runOnUiThread {
-                Log.i("MindstreamDrawing", "backFromNative: dispatching drawing-back JS event")
-                inst.webView.evaluateJavascript(
-                    "window.dispatchEvent(new CustomEvent('drawing-back'))",
-                    null
-                )
-            }
-        }
-
         @Volatile
         private var controlBounds: List<android.graphics.RectF> = emptyList()
         @Volatile
@@ -437,6 +254,15 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
         @Volatile
         private var fingerDrawingSettingLoaded: Boolean = false
 
+        /**
+         * Pushes the screen-space bounds of UI controls (the Svelte
+         * editor toolbar etc.) so the live overlay can refuse to paint
+         * over them. Currently unused — the JS side hasn't been wired
+         * to push bounds, and [FRONT_BUFFER_TOOLBAR_HEIGHT_PX] covers
+         * the current Svelte toolbar layout. Kept so a future bounds
+         * push has somewhere to land without re-introducing JNI
+         * plumbing.
+         */
         @JvmStatic
         fun setControlBoundsFromNative(bounds: FloatArray) {
             val rects = java.util.ArrayList<android.graphics.RectF>()
@@ -470,7 +296,6 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
                 "MindstreamDrawing",
                 "finger drawing default allowed=$allowed hasPenSupport=$hasPen"
             )
-            setFingerDrawingAllowed(allowed)
         }
 
         private fun hasPenSupport(context: Context): Boolean {
@@ -599,16 +424,13 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
                 py <= maxOf(ay, by) + 0.0001f
 
         /**
-         * Called from Rust to change the live-ink front-buffer overlay's
-         * color and stroke-width range. Rust is the source of truth for
-         * the active stroke style — Kotlin's FrontBufferInk reads these
-         * fields when queueing each segment, so a write here takes
-         * effect from the next segment onwards. `colorArgb` packs
-         * 0xAARRGGBB matching Android's `Color` int format, which is
-         * the same packing Rust uses internally (see strokes_doc.rs
-         * `DEFAULT_COLOR`). Widths are in surface pixels (Canvas
-         * coordinate space); Rust converts its page-unit constants
-         * via the current page-to-surface scale before the call.
+         * Called from Rust to change the live-ink front-buffer
+         * overlay's color and stroke-width range. Rust is the source
+         * of truth for the active stroke style — Kotlin's
+         * [FrontBufferInk] reads these fields when queueing each
+         * segment, so a write here takes effect from the next segment
+         * onwards. `colorArgb` packs 0xAARRGGBB matching Android's
+         * `Color` int format. Widths are in surface pixels.
          */
         @JvmStatic
         fun setLiveInkStyleFromNative(
@@ -619,72 +441,22 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
             instance?.setLiveInkStyle(colorArgb, minWidthPx, maxWidthPx)
         }
 
-        // ---- Rust JNI exports (called from DrawingSurfaceView below) ----
-        // No @JvmStatic on these: their symbol must mangle to
-        // Java_io_crates_drawing_Drawing_00024Companion_<name>.
-        external fun setSurface(surface: Surface, width: Int, height: Int)
-        external fun resizeSurface(width: Int, height: Int)
-        external fun clearSurface()
-        external fun setFingerDrawingAllowed(allowed: Boolean)
-        external fun pushPoint(
-            x: Float,
-            y: Float,
-            pressure: Float,
-            toolType: Int,
-            buttons: Int,
-            action: Int,
-            timeMs: Long
-        )
-
-        /**
-         * Predicted in-flight sample from android.view.MotionPredictor.
-         * Distinct entry point from pushPoint because predicted samples
-         * are NOT committed to the persisted stroke — they only paint a
-         * transient "predicted lead" segment past the raw head until
-         * the next real sample arrives. No action/tool/buttons because
-         * a prediction is always mid-stroke MOVE-style. Time is the
-         * predicted eventTime (uptimeMillis) so the Rust render thread
-         * can age it against other timestamps if needed; today it's
-         * only logged.
-         */
-        external fun pushPredictedPoint(
-            x: Float,
-            y: Float,
-            pressure: Float,
-            timeMs: Long
-        )
-
-        /**
-         * Two-finger page viewport gesture. Focus and pan are in
-         * SurfaceView pixels; scaleDelta is relative to the previous
-         * gesture sample.
-         */
-        external fun pushViewGesture(
-            focusX: Float,
-            focusY: Float,
-            panDx: Float,
-            panDy: Float,
-            scaleDelta: Float
-        )
-
-        /**
-         * Hands Rust a GlobalRef to the Drawing class so render-thread
-         * callbacks (showFromNative/hideFromNative/backFromNative) can
-         * dispatch without going through `env.find_class`, which fails
-         * for app classes on a Rust-spawned JVM-attached thread. Called
-         * exactly once from the companion's static init.
-         */
+        // ---- Rust JNI export ----
+        // No @JvmStatic: the symbol must mangle to
+        // Java_io_crates_drawing_Drawing_00024Companion_cacheJniClass
+        // so the matching Rust extern in
+        // src-tauri/src/drawing/platform/android.rs resolves.
         external fun cacheJniClass(klass: Class<*>)
     }
 }
 
 /**
- * Compute the top inset that the drawing SurfaceView's layoutParams
- * should use: system status bar inset (e.g. 74px on Samsung S23+)
- * plus the Svelte header height (48dp × density). Falls back to 0
- * for the system bar if the root window insets aren't available
- * yet (rare; the OnApplyWindowInsetsListener will re-run with the
- * real value soon after attach).
+ * Compute the top inset that the live-overlay SurfaceView's
+ * layoutParams should use: system status bar inset (e.g. 74px on
+ * Samsung S23+) plus the Svelte header height (48dp × density).
+ * Falls back to 0 for the system bar if the root window insets
+ * aren't available yet (rare; the OnApplyWindowInsetsListener will
+ * re-run with the real value soon after attach).
  */
 private fun computeTopInsetPx(parent: ViewGroup, activity: Activity): Int {
     val rootInsets = ViewCompat.getRootWindowInsets(parent)
@@ -700,19 +472,7 @@ private fun computeTopInsetPx(parent: ViewGroup, activity: Activity): Int {
 /**
  * Ask the system for the highest-refresh-rate display mode that
  * matches the current resolution. Halves per-vsync latency on
- * variable-refresh phones (e.g. ~8.3ms vs ~16.7ms on the S23+'s
- * 120Hz panel). No-op on 60Hz-only displays like the Tab S7 FE —
- * we just don't find a mode with a higher rate.
- *
- * We pick by exact resolution match rather than asking for a raw
- * rate (`preferredRefreshRate`) because some panels expose 120Hz
- * only at a lower resolution; we don't want to silently drop
- * resolution to gain Hz. Mode-id pinning is the safer dial.
- *
- * Setting `preferredDisplayModeId` triggers a surface re-create on
- * devices that actually switch modes — same surfaceDestroyed →
- * surfaceCreated path the rotation listener already handles, so
- * the wgpu side recovers automatically.
+ * variable-refresh phones. No-op on 60Hz-only displays.
  */
 private fun requestHighRefreshRate(activity: Activity) {
     val window = activity.window
@@ -743,13 +503,7 @@ private fun requestHighRefreshRate(activity: Activity) {
 
 /**
  * Release the refresh-rate preference set by [requestHighRefreshRate]
- * so the rest of the app (Svelte editor, etc.) goes back to the
- * system's adaptive choice. `preferredDisplayModeId = 0` is the
- * documented "no preference" value.
- *
- * Safe to call even if `request` wasn't called (e.g. on devices
- * where the request was a no-op): writing 0 over 0 is a no-op
- * itself.
+ * so the rest of the app goes back to the system's adaptive choice.
  */
 private fun releaseRefreshRate(activity: Activity) {
     val attrs = activity.window.attributes
@@ -760,21 +514,6 @@ private fun releaseRefreshRate(activity: Activity) {
     }
 }
 
-/**
- * Hide the system navigation bar (bottom buttons / gesture bar) so
- * the ink note has the full screen for drawing. We keep the status
- * bar visible — the Svelte mobile header at the top of the WebView
- * reads as "the app's chrome" and looks wrong without the status
- * bar above it.
- *
- * `BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE` is the standard immersive
- * mode: a swipe from the bottom edge briefly reveals the nav bar,
- * which then auto-hides — so the user can still reach system
- * navigation without permanently giving up canvas space.
- *
- * Idempotent: hiding an already-hidden bar is a no-op at the
- * `WindowInsetsControllerCompat` level.
- */
 private fun hideSystemNavigation(activity: Activity) {
     val window = activity.window
     val controller = WindowCompat.getInsetsController(window, window.decorView)
@@ -783,11 +522,6 @@ private fun hideSystemNavigation(activity: Activity) {
     controller.hide(WindowInsetsCompat.Type.navigationBars())
 }
 
-/**
- * Restore the system navigation bar so the rest of the app (markdown
- * editor, home screen, settings, …) shows it normally. Paired with
- * [hideSystemNavigation] on the show() / hide() lifecycle.
- */
 private fun showSystemNavigation(activity: Activity) {
     val window = activity.window
     val controller = WindowCompat.getInsetsController(window, window.decorView)
@@ -795,56 +529,21 @@ private fun showSystemNavigation(activity: Activity) {
 }
 
 /**
- * The actual hardware-accelerated surface we draw into.
+ * The live-ink overlay surface. Mirror-mode only: every touch event
+ * is forwarded to the WebView (so Svelte stays the source of truth
+ * for committed strokes), and the same samples are queued into a
+ * `CanvasFrontBufferedRenderer` for sub-vsync wet-stroke paint.
  *
- *   - `setZOrderOnTop(true)` puts the surface above the activity's main
- *     window content (i.e. above the WebView). For the POC this is
- *     fine: no Svelte UI sits between the user and the canvas. When
- *     we eventually want a transparent egui toolbar above the canvas
- *     with the WebView further on top, we'll flip this off and rely
- *     on WebView transparency instead — see the audit's gotcha #1.
- *   - `PixelFormat.OPAQUE` keeps SurfaceFlinger on the cheapest
- *     composition path. The renderer clears the whole surface to white
- *     every frame, so an alpha channel buys us nothing and can add
- *     latency on stylus hardware.
- *   - `onTouchEvent` iterates historical samples first (chronologically
- *     older — Android's MotionEvent buffers up to ~240Hz of digitizer
- *     data between vsync ticks) then the current sample. Returning
- *     `true` consumes the event so it doesn't bubble to the WebView.
+ * Stylus-button (eraser) input is routed differently — instead of
+ * feeding ink, we serialise the coalesced sample list into a custom
+ * DOM event so the Svelte editor's eraser path can handle it on the
+ * same canvas it owns committed strokes on.
  */
 private class DrawingSurfaceView(
     context: Context,
-    private val webView: WebView? = null,
-    private val mirrorOnly: Boolean = false
-) :
-    SurfaceView(context), SurfaceHolder.Callback {
+    private val webView: WebView
+) : SurfaceView(context), SurfaceHolder.Callback {
 
-    /**
-     * Android-system motion predictor. Records every MotionEvent and
-     * extrapolates forward in time so the inked stroke can paint a
-     * "predicted lead" segment past the raw pen position — visual
-     * compensation for the ~22 ms digitizer → display floor. Tuned
-     * by the platform against many stylus traces, so direction-change
-     * wobble is much less of a risk than a hand-rolled velocity
-     * extrapolator.
-     *
-     * Only available on Android 14+ (API 34 / UPSIDE_DOWN_CAKE). On older
-     * versions this stays null and the prediction zone is empty —
-     * the two-zone (committed + raw head) path still renders.
-     *
-     * Constructed lazily on first touch rather than in `init {}`
-     * because the constructor takes a Context but the SurfaceView's
-     * context is the one we already hold — no async lifecycle to
-     * worry about.
-     */
-    private val motionPredictor: MotionPredictor? =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            MotionPredictor(context)
-        } else {
-            null
-        }
-
-    private var loggedPredictionSupport = false
     private val frontBufferInk: FrontBufferInk? =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             FrontBufferInk(this)
@@ -856,42 +555,25 @@ private class DrawingSurfaceView(
             null
         }
 
-    private var viewGestureActive = false
-    private var lastGestureFocusX = 0f
-    private var lastGestureFocusY = 0f
-    private var lastGestureSpan = 0f
-    private var oneFingerPanActive = false
-    private var lastOneFingerPanX = 0f
-    private var lastOneFingerPanY = 0f
     private var mirrorStylusEraserActive = false
 
     init {
         setZOrderOnTop(true)
-        holder.setFormat(if (mirrorOnly) PixelFormat.TRANSLUCENT else PixelFormat.OPAQUE)
+        holder.setFormat(PixelFormat.TRANSLUCENT)
         holder.addCallback(this)
         isFocusable = true
         isClickable = true
         Drawing.setFingerDrawingAllowedDefaultFromDevice(context)
-        if (motionPredictor == null) {
-            Log.i(
-                "MindstreamDrawing",
-                "MotionPredictor unavailable sdk=${Build.VERSION.SDK_INT} requires=${Build.VERSION_CODES.UPSIDE_DOWN_CAKE}"
-            )
-        }
         if (frontBufferInk != null) {
             Log.i("MindstreamDrawing", "front-buffer ink enabled")
         }
 
-        // Reapply the SurfaceView's topMargin on every inset change
-        // so rotations / IME show-hide don't leave the canvas
-        // overlapping the system bar + Svelte header. On many
-        // devices (Samsung S23+ FE included) the system-bar inset
-        // doesn't actually change between portrait/landscape, so
-        // this listener may never fire — that's fine, the initial
-        // `computeTopInsetPx` call in `Drawing.show()` already set
-        // the right value. We always return the original insets
-        // unconsumed — other views (the WebView in particular) still
-        // need to see them.
+        // Reapply the SurfaceView's topMargin on every inset change so
+        // rotations / IME show-hide don't leave the canvas overlapping
+        // the system bar + Svelte header. On many devices the inset
+        // doesn't change between portrait/landscape, so this listener
+        // may never fire — the initial `computeTopInsetPx` call in
+        // `Drawing.showLiveOverlay()` already set the right value.
         ViewCompat.setOnApplyWindowInsetsListener(this) { view, insets ->
             val parent = view.parent as? ViewGroup
             val ctx = view.context as? Activity
@@ -909,75 +591,19 @@ private class DrawingSurfaceView(
             }
             insets
         }
-
-        // Belt-and-braces resize trigger. SurfaceHolder.surfaceChanged
-        // is supposed to fire on rotation, but on some devices /
-        // Android versions it either doesn't or fires with stale
-        // dimensions — symptom: egui toolbar keeps the old portrait
-        // width after rotating to landscape until the next touch
-        // wakes the render thread.
-        //
-        // addOnLayoutChangeListener fires reliably whenever the
-        // SurfaceView's bounds change (which includes every rotation),
-        // so we push a Resize message immediately. But it can fire
-        // BEFORE SurfaceFlinger has finished reallocating the
-        // underlying ANativeWindow buffers at the new size — meaning
-        // wgpu's surface.configure() succeeds at the new dims but
-        // get_current_texture returns a buffer of the OLD dims,
-        // producing a stretched/stale frame.
-        //
-        // The follow-up postDelayed calls re-fire the resize so the
-        // wgpu surface gets re-configured after buffers have settled.
-        // 50ms / 250ms covers both the common case (settle within a
-        // frame or two) and the slow case (SurfaceFlinger backed up).
-        // Each retry is idempotent: render thread calls surface
-        // .configure with the same dims, sets dirty, renders.
-        addOnLayoutChangeListener { _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
-            val newWidth = right - left
-            val newHeight = bottom - top
-            val oldWidth = oldRight - oldLeft
-            val oldHeight = oldBottom - oldTop
-            if (newWidth == oldWidth && newHeight == oldHeight) return@addOnLayoutChangeListener
-            Log.i(
-                "MindstreamDrawing",
-                "layout changed: ${oldWidth}x${oldHeight} -> ${newWidth}x${newHeight}"
-            )
-            Drawing.resizeSurface(newWidth, newHeight)
-            postDelayed({ Drawing.resizeSurface(newWidth, newHeight) }, 50)
-            postDelayed({ Drawing.resizeSurface(newWidth, newHeight) }, 250)
-        }
     }
 
     override fun surfaceCreated(holder: SurfaceHolder) {
         Log.i("MindstreamDrawing", "surfaceCreated w=$width h=$height")
-        if (mirrorOnly) return
-        // width/height may still be 0 at this point on some devices —
-        // surfaceChanged fires immediately after with the real size, at
-        // which point the Rust side calls resize and reconfigures wgpu.
-        Drawing.setSurface(holder.surface, width, height)
     }
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
         Log.i("MindstreamDrawing", "surfaceChanged w=$width h=$height format=$format")
-        if (mirrorOnly) return
-        Drawing.resizeSurface(width, height)
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
-        Log.i("MindstreamDrawing", "surfaceDestroyed — entering sync wait")
+        Log.i("MindstreamDrawing", "surfaceDestroyed — cancelling live overlay")
         frontBufferInk?.cancel()
-        if (mirrorOnly) {
-            Log.i("MindstreamDrawing", "surfaceDestroyed — live overlay only")
-            return
-        }
-        // Drop the wgpu surface before the underlying ANativeWindow
-        // becomes invalid; the Rust side keeps its render thread and
-        // accumulated geometry around so a return-from-background just
-        // rebuilds the surface. clearSurface blocks until the render
-        // thread acks — that's the lifecycle ordering that prevents
-        // wgpu's swap-chain teardown from racing past EGL invalidation.
-        Drawing.clearSurface()
-        Log.i("MindstreamDrawing", "surfaceDestroyed — sync wait complete")
     }
 
     override fun onDetachedFromWindow() {
@@ -985,241 +611,7 @@ private class DrawingSurfaceView(
         super.onDetachedFromWindow()
     }
 
-    private fun beginViewGesture(event: MotionEvent) {
-        viewGestureActive = true
-        frontBufferInk?.cancel()
-        lastGestureFocusX = gestureFocusX(event)
-        lastGestureFocusY = gestureFocusY(event)
-        lastGestureSpan = gestureSpan(event, lastGestureFocusX, lastGestureFocusY)
-    }
-
-    private fun updateViewGesture(event: MotionEvent) {
-        val focusX = gestureFocusX(event)
-        val focusY = gestureFocusY(event)
-        val span = gestureSpan(event, focusX, focusY)
-        val panDx = focusX - lastGestureFocusX
-        val panDy = focusY - lastGestureFocusY
-        val scaleDelta =
-            if (lastGestureSpan > 1f && span > 1f) span / lastGestureSpan else 1f
-        Drawing.pushViewGesture(focusX, focusY, panDx, panDy, scaleDelta)
-        lastGestureFocusX = focusX
-        lastGestureFocusY = focusY
-        lastGestureSpan = span
-    }
-
-    private fun endViewGesture() {
-        viewGestureActive = false
-        lastGestureSpan = 0f
-    }
-
-    private fun shouldStartOneFingerPan(event: MotionEvent, toolType: Int): Boolean {
-        if (event.pointerCount != 1) return false
-        if (toolType != MotionEvent.TOOL_TYPE_FINGER &&
-            toolType != MotionEvent.TOOL_TYPE_UNKNOWN
-        ) {
-            return false
-        }
-        if (Drawing.canDrawWithTool(toolType)) return false
-        return !Drawing.blocksLiveInkAt(event.x, event.y)
-    }
-
-    private fun beginOneFingerPan(event: MotionEvent) {
-        oneFingerPanActive = true
-        frontBufferInk?.cancel()
-        lastOneFingerPanX = event.x
-        lastOneFingerPanY = event.y
-    }
-
-    private fun updateOneFingerPan(event: MotionEvent) {
-        val dx = event.x - lastOneFingerPanX
-        val dy = event.y - lastOneFingerPanY
-        Drawing.pushViewGesture(event.x, event.y, dx, dy, 1f)
-        lastOneFingerPanX = event.x
-        lastOneFingerPanY = event.y
-    }
-
-    private fun endOneFingerPan() {
-        oneFingerPanActive = false
-    }
-
-    private fun gestureFocusX(event: MotionEvent): Float {
-        var sum = 0f
-        for (i in 0 until event.pointerCount) sum += event.getX(i)
-        return sum / event.pointerCount.coerceAtLeast(1)
-    }
-
-    private fun gestureFocusY(event: MotionEvent): Float {
-        var sum = 0f
-        for (i in 0 until event.pointerCount) sum += event.getY(i)
-        return sum / event.pointerCount.coerceAtLeast(1)
-    }
-
-    private fun gestureSpan(event: MotionEvent, focusX: Float, focusY: Float): Float {
-        var sum = 0f
-        for (i in 0 until event.pointerCount) {
-            val dx = event.getX(i) - focusX
-            val dy = event.getY(i) - focusY
-            sum += kotlin.math.sqrt(dx * dx + dy * dy)
-        }
-        return (sum / event.pointerCount.coerceAtLeast(1)) * 2f
-    }
-
     override fun onTouchEvent(event: MotionEvent): Boolean {
-        if (mirrorOnly) {
-            return onMirrorTouchEvent(event)
-        }
-        val action = event.actionMasked
-        // Tool type + button state come from the event-level (not
-        // historical-sample-level) accessors — Android batches both
-        // per-pointer rather than per-historical-sample, so we read
-        // them once and reuse for the whole sweep. `buttonState` is
-        // the bitmask of `BUTTON_*` flags currently held; for the
-        // S Pen, BUTTON_STYLUS_PRIMARY (0x20) tracks the side
-        // button. Forwarded raw to Rust which does the bit tests.
-        val toolType = event.getToolType(0)
-        val buttons = event.buttonState
-        if (DRAWING_INPUT_LOGS) {
-            Log.d(
-                "MindstreamDrawing",
-                "onTouchEvent action=$action history=${event.historySize} x=${event.x} y=${event.y} p=${event.pressure} tool=$toolType buttons=0x${buttons.toString(16)}"
-            )
-            val osLagMs = SystemClock.uptimeMillis() - event.eventTime
-            Log.i(
-                "MindstreamDrawing",
-                "[drawing.perf.lag] os_dispatch action=$action history=${event.historySize} os_lag=${osLagMs}ms"
-            )
-        }
-
-        if (action == MotionEvent.ACTION_POINTER_DOWN) {
-            oneFingerPanActive = false
-            Drawing.pushPoint(
-                event.x,
-                event.y,
-                sanitizePressure(event.pressure),
-                toolType,
-                buttons,
-                MotionEvent.ACTION_CANCEL,
-                event.eventTime
-            )
-            beginViewGesture(event)
-            return true
-        }
-
-        if (oneFingerPanActive) {
-            if (action == MotionEvent.ACTION_MOVE && event.pointerCount == 1) {
-                updateOneFingerPan(event)
-            } else {
-                endOneFingerPan()
-            }
-            return true
-        }
-
-        if (viewGestureActive) {
-            if (action == MotionEvent.ACTION_MOVE && event.pointerCount >= 2) {
-                updateViewGesture(event)
-            } else if (action == MotionEvent.ACTION_POINTER_UP && event.pointerCount > 2) {
-                beginViewGesture(event)
-            } else {
-                endViewGesture()
-            }
-            return true
-        }
-
-        if (action == MotionEvent.ACTION_DOWN && shouldStartOneFingerPan(event, toolType)) {
-            beginOneFingerPan(event)
-            return true
-        }
-
-        if (event.pointerCount >= 2) {
-            beginViewGesture(event)
-            return true
-        }
-
-        // Historical samples are the buffered digitizer reads between
-        // the previous frame and this MotionEvent batch — replaying
-        // them is what gets us the full pen sample rate instead of the
-        // ~60Hz vsync rate. Iterate in order, then read the current
-        // sample fields last so the stroke ends at the freshest point.
-        // Pressure: AXIS_PRESSURE is 0..1 for stylus + force-touch
-        // capable screens. Devices without pressure sensing report
-        // 1.0 by Android convention, but a stray 0.0 (some emulators,
-        // some HID drivers) would render variable-width strokes as
-        // invisible hairlines — substitute the same 1.0 here so the
-        // Rust side never sees the zero.
-        // Per-historical-sample timestamps come from
-        // getHistoricalEventTime(h); the final sample uses the
-        // event-level eventTime. Both are uptimeMillis() (monotonic
-        // since boot), which the Rust side divides by 1000 to feed
-        // the D1 stroke modeler — which needs strictly non-negative
-        // dt across consecutive samples within one stroke.
-        val historySize = event.historySize
-        val historicalAction =
-            if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
-                MotionEvent.ACTION_MOVE
-            } else {
-                action
-            }
-        for (h in 0 until historySize) {
-            pushActualPoint(
-                event.getHistoricalX(h),
-                event.getHistoricalY(h),
-                sanitizePressure(event.getHistoricalPressure(h)),
-                toolType,
-                buttons,
-                historicalAction,
-                event.getHistoricalEventTime(h)
-            )
-        }
-        pushActualPoint(
-            event.x,
-            event.y,
-            sanitizePressure(event.pressure),
-            toolType,
-            buttons,
-            action,
-            event.eventTime
-        )
-        // Forward extrapolation via MotionPredictor (API 34+).
-        // Record the just-arrived event (the system uses recent
-        // recorded events to extrapolate) and ask for a prediction
-        // PREDICTION_AHEAD_MS in the future. The result feeds the
-        // Rust render thread's "predicted lead" zone — one segment
-        // past the raw pen position. Skipped on Down/Up/Cancel
-        // because predictions only make sense mid-stroke; firing
-        // them on Down would extrapolate from a single point (the
-        // predictor would emit garbage or null), and on Up the
-        // stroke is over.
-        motionPredictor?.let { predictor ->
-            if (!loggedPredictionSupport) {
-                loggedPredictionSupport = true
-                Log.i(
-                    "MindstreamDrawing",
-                    "MotionPredictor available=${predictor.isPredictionAvailable(event.deviceId, event.source)} device=${event.deviceId} source=0x${event.source.toString(16)}"
-                )
-            }
-            predictor.record(event)
-            if (action == MotionEvent.ACTION_MOVE) {
-                val targetMs = event.eventTime + PREDICTION_AHEAD_MS
-                val predicted: MotionEvent? =
-                    predictor.predict(targetMs * 1_000_000L)
-                if (predicted != null) {
-                    Drawing.pushPredictedPoint(
-                        predicted.x,
-                        predicted.y,
-                        sanitizePressure(predicted.pressure),
-                        predicted.eventTime
-                    )
-                    // recycle() is safe here — we only read the
-                    // primitive fields above and don't hold a
-                    // reference past this call.
-                    predicted.recycle()
-                }
-            }
-        }
-        return true
-    }
-
-    private fun onMirrorTouchEvent(event: MotionEvent): Boolean {
         val action = event.actionMasked
         if (event.pointerCount != 1) {
             frontBufferInk?.cancel()
@@ -1250,7 +642,7 @@ private class DrawingSurfaceView(
                 action
             }
         for (h in 0 until historySize) {
-            pushLiveInkPoint(
+            frontBufferInk?.onPoint(
                 event.getHistoricalX(h),
                 event.getHistoricalY(h),
                 sanitizePressure(event.getHistoricalPressure(h)),
@@ -1259,7 +651,7 @@ private class DrawingSurfaceView(
                 historicalAction
             )
         }
-        pushLiveInkPoint(
+        frontBufferInk?.onPoint(
             event.x,
             event.y,
             sanitizePressure(event.pressure),
@@ -1271,10 +663,9 @@ private class DrawingSurfaceView(
     }
 
     private fun dispatchStylusEraserEvent(event: MotionEvent, action: Int) {
-        val target = webView ?: return
-        val density = target.resources.displayMetrics.density.coerceAtLeast(1f)
-        val offsetX = (left - target.left).toFloat()
-        val offsetY = (top - target.top).toFloat()
+        val density = webView.resources.displayMetrics.density.coerceAtLeast(1f)
+        val offsetX = (left - webView.left).toFloat()
+        val offsetY = (top - webView.top).toFloat()
         val pointsJson = StringBuilder("[")
         for (h in 0 until event.historySize) {
             appendEraserPoint(
@@ -1298,7 +689,7 @@ private class DrawingSurfaceView(
             MotionEvent.ACTION_CANCEL -> "cancel"
             else -> "move"
         }
-        target.evaluateJavascript(
+        webView.evaluateJavascript(
             "window.dispatchEvent(new CustomEvent('mindstream:android-stylus-eraser',{detail:{action:'$actionName',points:$pointsJson}}));",
             null
         )
@@ -1322,45 +713,10 @@ private class DrawingSurfaceView(
     }
 
     private fun forwardToWebView(event: MotionEvent) {
-        val target = webView ?: return
         val copy = MotionEvent.obtain(event)
-        copy.offsetLocation((left - target.left).toFloat(), (top - target.top).toFloat())
-        target.dispatchTouchEvent(copy)
+        copy.offsetLocation((left - webView.left).toFloat(), (top - webView.top).toFloat())
+        webView.dispatchTouchEvent(copy)
         copy.recycle()
-    }
-
-    companion object {
-        /**
-         * How far ahead, in milliseconds, to ask MotionPredictor to
-         * extrapolate. Prediction rendering is currently disabled on
-         * the Rust side because speculative endpoints caused visible
-         * ghost-line artifacts on the Tab S7 FE.
-         */
-        private const val PREDICTION_AHEAD_MS: Long = 16L
-    }
-
-    private fun pushActualPoint(
-        x: Float,
-        y: Float,
-        pressure: Float,
-        toolType: Int,
-        buttons: Int,
-        action: Int,
-        timeMs: Long
-    ) {
-        Drawing.pushPoint(x, y, pressure, toolType, buttons, action, timeMs)
-        frontBufferInk?.onPoint(x, y, pressure, toolType, buttons, action)
-    }
-
-    private fun pushLiveInkPoint(
-        x: Float,
-        y: Float,
-        pressure: Float,
-        toolType: Int,
-        buttons: Int,
-        action: Int
-    ) {
-        frontBufferInk?.onPoint(x, y, pressure, toolType, buttons, action)
     }
 
     private fun sanitizePressure(raw: Float): Float {
@@ -1420,19 +776,18 @@ private class FrontBufferInk(private val surfaceView: SurfaceView) {
                 bufferHeight: Int,
                 params: Collection<InkSegment>
             ) {
-                // The Rust/wgpu layer owns committed strokes. This
+                // The Svelte canvas owns committed strokes. This
                 // renderer is only the transient low-latency head.
             }
         })
 
-    // Style state — Rust drives these via `Drawing.setLiveInkStyleFromNative`.
-    // Defaults reproduce the pre-Rust-driven look (debug-blue stylus,
-    // 2–5 px pressure ramp) so the overlay still renders correctly
-    // if Rust hasn't pushed a style yet — e.g. the very first
-    // segment after surface attach, before the render thread has
-    // had a chance to call back. `@Volatile` because writes come
-    // from a Rust-spawned JNI-attached thread and reads happen on
-    // the touch + front-buffer render threads.
+    // Style state — Rust drives these via
+    // `Drawing.setLiveInkStyleFromNative`. Defaults reproduce the
+    // pre-Rust-driven look (debug-blue stylus, 2–5 px pressure ramp)
+    // so the overlay still renders correctly if Rust hasn't pushed a
+    // style yet. `@Volatile` because writes come from a Rust-spawned
+    // JNI-attached thread and reads happen on the touch + front-buffer
+    // render threads.
     @Volatile private var styleColor: Int = Color.rgb(0, 102, 255)
     @Volatile private var styleMinWidthPx: Float = 2.0f
     @Volatile private var styleMaxWidthPx: Float = 5.0f
@@ -1451,8 +806,7 @@ private class FrontBufferInk(private val surfaceView: SurfaceView) {
         // render as an invisible hairline (or throw on some
         // platforms); clamp to a hard floor matching the original
         // 2 px default. Inverted ranges (min > max) get swapped
-        // rather than rejected — easier to debug a too-thick stroke
-        // than a silent no-op.
+        // rather than rejected.
         val safeMin = minWidthPx.coerceAtLeast(0.5f)
         val safeMax = maxWidthPx.coerceAtLeast(safeMin)
         styleMinWidthPx = safeMin
@@ -1524,8 +878,8 @@ private class FrontBufferInk(private val surfaceView: SurfaceView) {
 
     private fun rendererSurfacePostCancel(finishedGeneration: Int) {
         // Leave the front-buffer layer up briefly so the committed
-        // wgpu stroke can catch up on FIFO-only surfaces before the
-        // transient overlay is hidden.
+        // Svelte canvas stroke can catch up before the transient
+        // overlay is hidden.
         surfaceView.postDelayed(
             {
                 if (generation == finishedGeneration) {
