@@ -36,6 +36,7 @@
  */
 
 import { openSettings } from '$lib/settings/store.svelte';
+import { openSearch } from '$lib/search/store.svelte';
 import { openShortcutHelp } from './help.svelte';
 import {
   openRightSidebar,
@@ -335,6 +336,16 @@ export const HOTKEY_COMMANDS: CommandDefinition[] = [
     // de-facto convention almost everywhere else (VS Code, Chrome).
     defaultBinding: 'mod+,',
     run: () => openSettings()
+  },
+  {
+    id: 'global.openSearch',
+    scope: 'global',
+    labelKey: 'hotkeys.command.global.openSearch',
+    // Mod+Shift+F — Joplin's convention for global note search. Plain
+    // Mod+F is reserved for in-document find (browser/editor convention),
+    // so we add Shift to disambiguate.
+    defaultBinding: 'mod+shift+f',
+    run: () => openSearch()
   },
   {
     id: 'global.toggleNoteOverview',

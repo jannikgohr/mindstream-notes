@@ -23,6 +23,7 @@ pub mod hotkeys;
 pub mod i18n;
 pub mod notes;
 pub mod pdf_export;
+pub mod search;
 pub mod serde_helpers;
 pub mod sync;
 pub mod system;
@@ -278,6 +279,8 @@ pub fn run() {
             notes::trash_note,
             notes::restore_note,
             notes::purge_note,
+            // Search
+            search::search_notes,
             // Assets (freeform drawing attachments)
             assets::upload_drawing_asset,
             assets::fetch_drawing_asset,

@@ -33,7 +33,7 @@
     size,
     type VirtualElement
   } from '@floating-ui/dom';
-  import { FileText } from 'lucide-svelte';
+  import { noteKindIcon } from '$lib/components/note-kind-icon';
   import { tree } from '$lib/stores/tree.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
   import type {
@@ -57,6 +57,8 @@
   interface Suggestion {
     id: string;
     title: string;
+    /** Discriminator for the per-row icon (see noteKindIcon). */
+    note_kind: string;
   }
 
   /**
@@ -70,9 +72,19 @@
     if (!bridge.state.open) return [];
     const q = bridge.state.query.trim().toLowerCase();
     const all = Object.values(tree.notesById).filter((n) => !n.trashed);
-    let scored: Array<{ id: string; title: string; rank: number }> = [];
+    let scored: Array<{
+      id: string;
+      title: string;
+      note_kind: string;
+      rank: number;
+    }> = [];
     if (!q) {
-      scored = all.map((n) => ({ id: n.id, title: n.title, rank: 0 }));
+      scored = all.map((n) => ({
+        id: n.id,
+        title: n.title,
+        note_kind: n.note_kind,
+        rank: 0
+      }));
       scored.sort((a, b) => {
         const ma = tree.notesById[a.id]?.modified ?? '';
         const mb = tree.notesById[b.id]?.modified ?? '';
@@ -84,11 +96,13 @@
         const idx = t.indexOf(q);
         if (idx < 0) continue;
         const rank = idx === 0 ? 0 : idx + t.length / 1000;
-        scored.push({ id: n.id, title: n.title, rank });
+        scored.push({ id: n.id, title: n.title, note_kind: n.note_kind, rank });
       }
       scored.sort((a, b) => a.rank - b.rank);
     }
-    return scored.slice(0, MAX_RESULTS).map(({ id, title }) => ({ id, title }));
+    return scored
+      .slice(0, MAX_RESULTS)
+      .map(({ id, title, note_kind }) => ({ id, title, note_kind }));
   });
 
   // Keep the plugin's highlight inside the visible range. Triggered
@@ -243,6 +257,7 @@
       >
         {#each candidates as note, i (note.id)}
           {@const active = i === bridge.state.highlight}
+          {@const Icon = noteKindIcon(note.note_kind)}
           <button
             type="button"
             role="option"
@@ -258,7 +273,7 @@
             }}
             onmouseenter={() => (bridge.state.highlight = i)}
           >
-            <FileText class="size-4 shrink-0 opacity-60" aria-hidden="true" />
+            <Icon class="size-4 shrink-0 opacity-60" aria-hidden="true" />
             <span class="truncate">{note.title}</span>
           </button>
         {/each}

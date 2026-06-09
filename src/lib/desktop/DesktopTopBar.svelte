@@ -2,6 +2,7 @@
   import {
     PanelLeft,
     PanelRight,
+    Search as SearchIcon,
     Settings as SettingsIcon
   } from 'lucide-svelte';
   import { Button } from '$lib/components/ui/button';
@@ -11,6 +12,8 @@
   import NotificationCenter from '$lib/notifications/NotificationCenter.svelte';
   import { ui, toggleLeftSidebar, toggleRightSidebar } from '$lib/state.svelte';
   import { openSettings } from '$lib/settings/store.svelte';
+  import { openSearch } from '$lib/search/store.svelte';
+  import { tUi } from '$lib/settings/i18n.svelte';
 </script>
 
 <header
@@ -36,6 +39,15 @@
 
   <div data-tauri-drag-region class="flex-1"></div>
 
+  <Button
+    variant="ghost"
+    size="icon"
+    onclick={openSearch}
+    title={tUi('search.open')}
+    aria-label={tUi('search.open')}
+  >
+    <SearchIcon class="size-4" />
+  </Button>
   <NotificationCenter />
   <Button
     variant="ghost"

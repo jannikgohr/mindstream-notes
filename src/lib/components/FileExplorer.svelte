@@ -2,18 +2,17 @@
   import {
     ChevronRight,
     Feather,
-    FileQuestion,
     FileText,
     Folder,
     FolderOpen,
     FolderPlus,
-    FileType2,
     FileUp,
     PencilRuler,
     FilePlus2,
     Star,
     Trash2
   } from 'lucide-svelte';
+  import { noteKindIcon } from './note-kind-icon';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import { Separator } from '$lib/components/ui/separator';
@@ -43,7 +42,6 @@
   import { tUi } from '$lib/settings/i18n.svelte';
   import { TRASH_ID } from '$lib/api';
   import type { TreeNode } from '$lib/api';
-  import { isKnownNoteKind } from '$lib/api/notes';
 
   interface Props {
     onOpenNote: (id: string) => void;
@@ -742,6 +740,7 @@
     {@const fav = note?.favourite === true}
     {@const inTrash = note?.parent_collection_id === TRASH_ID}
     {@const kind = note?.note_kind}
+    {@const NoteIcon = noteKindIcon(kind)}
     <!-- Row uses a flex container so the favourite-toggle button can
          sit alongside the primary open-note tap target without nesting
          <button>s. The drag handlers live on the wrapper so users can
@@ -764,17 +763,7 @@
         onclick={() => onOpenNote(node.id)}
         oncontextmenu={(e) => openMenu(e, { kind: 'note', id: node.id })}
       >
-        {#if kind === 'freeform'}
-          <PencilRuler class="size-3.5 shrink-0 text-muted-foreground" />
-        {:else if kind === 'ink'}
-          <Feather class="size-3.5 shrink-0 text-muted-foreground" />
-        {:else if kind === 'pdf'}
-          <FileType2 class="size-3.5 shrink-0 text-muted-foreground" />
-        {:else if kind != null && !isKnownNoteKind(kind)}
-          <FileQuestion class="size-3.5 shrink-0 text-muted-foreground" />
-        {:else}
-          <FileText class="size-3.5 shrink-0 text-muted-foreground" />
-        {/if}
+        <NoteIcon class="size-3.5 shrink-0 text-muted-foreground" />
         {#if renaming}
           {@render renderRenameInput()}
         {:else}

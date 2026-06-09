@@ -20,6 +20,8 @@ import type {
 } from './notes';
 import type { Asset, UploadAssetInput } from './assets';
 import type { ImportPdfNoteInput } from './assets';
+import type { SearchHit } from './search';
+import { mockSearchNotes } from './search-matcher';
 
 const collections: Collection[] = [];
 const notes = new Map<string, Note>();
@@ -238,6 +240,26 @@ export const mockApi = {
     for (const [aid, a] of assets) {
       if (a.owning_note_id === id) assets.delete(aid);
     }
+  },
+
+  async searchNotes(query: string): Promise<SearchHit[]> {
+    const pool = [...notes.values()]
+      .filter((n) => !n.trashed)
+      .map((n) => ({
+        ...n,
+        // Strip body off the hit-emitted summary — the dialog reads
+        // from the snippet field instead, matching the Rust shape.
+        body: n.body,
+        tags: n.tags
+      }));
+    const hits = mockSearchNotes(pool, query);
+    // Drop body from each emitted note summary so the shape matches
+    // Rust's NoteSummary (no body).
+    return hits.map((h) => {
+      const summary = { ...(h.note as unknown as Note) };
+      const { body: _b, yrs_state: _y, payload_schema: _p, ...rest } = summary;
+      return { ...h, note: rest as unknown as SearchHit['note'] };
+    });
   },
 
   // ---- Drawing assets ----

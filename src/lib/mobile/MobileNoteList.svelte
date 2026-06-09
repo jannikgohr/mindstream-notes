@@ -13,19 +13,10 @@
    * yet, so it just shows an explanatory empty state. Wire a real filter
    * in here when collab metadata lands.
    */
-  import {
-    Feather,
-    FileQuestion,
-    FileText,
-    FileType2,
-    Folder,
-    MoreVertical,
-    PencilRuler,
-    Star
-  } from 'lucide-svelte';
+  import { Folder, MoreVertical, Star } from 'lucide-svelte';
   import type { NoteSummary, TreeNode } from '$lib/api';
   import { TRASH_ID } from '$lib/api';
-  import { isKnownNoteKind } from '$lib/api/notes';
+  import { noteKindIcon } from '$lib/components/note-kind-icon';
   import {
     moveCollectionTo,
     moveNoteTo,
@@ -151,39 +142,10 @@
     return childrenOf(folderId, sortedTree);
   });
 
-  // Apply free-text search. Empty query = no filter. Search runs against
-  // the entire pool of notes when active so users can find things across
-  // folders without drilling manually.
-  const visible = $derived.by<TreeNode[]>(() => {
-    const q = mobileState.searchQuery.trim().toLowerCase();
-    if (!q) return nodes;
-
-    if (mobileState.view === 'shared') return [];
-
-    let pool: NoteSummary[];
-    if (mobileState.view === 'trash') {
-      pool = Object.values(tree.notesById).filter(
-        (n) => n.trashed || n.parent_collection_id === TRASH_ID
-      );
-    } else if (mobileState.view === 'favourite') {
-      pool = Object.values(tree.notesById).filter(
-        (n) => n.favourite && !isUnderTrash(n)
-      );
-    } else {
-      pool = Object.values(tree.notesById).filter(
-        (n) => !n.trashed && n.parent_collection_id !== TRASH_ID
-      );
-    }
-    return pool
-      .filter((n) => n.title.toLowerCase().includes(q))
-      .map<TreeNode>((n) => ({
-        kind: 'note',
-        id: n.id,
-        name: n.title,
-        position: n.position,
-        parent_collection_id: n.parent_collection_id
-      }));
-  });
+  // Free-text search lives in the global SearchDialog now (mobile and
+  // desktop share the Rust-backed scorer). The list itself stays a plain
+  // tree view; the top-bar's search pill opens the dialog.
+  const visible = $derived<TreeNode[]>(nodes);
 
   function previewFor(noteId: string): string {
     const n = tree.notesById[noteId];
@@ -201,7 +163,6 @@
   }
 
   function emptyStateMessage(): string {
-    if (mobileState.searchQuery.trim()) return 'No notes match this search.';
     switch (mobileState.view) {
       case 'shared':
         return 'Shared notes will appear here once you collaborate with someone.';
@@ -401,16 +362,9 @@
           >
             {#if node.kind === 'folder'}
               <Folder class="size-5 text-muted-foreground" />
-            {:else if noteKind === 'freeform'}
-              <PencilRuler class="size-5 text-muted-foreground" />
-            {:else if noteKind === 'ink'}
-              <Feather class="size-5 text-muted-foreground" />
-            {:else if noteKind === 'pdf'}
-              <FileType2 class="size-5 text-muted-foreground" />
-            {:else if noteKind != null && !isKnownNoteKind(noteKind)}
-              <FileQuestion class="size-5 text-muted-foreground" />
             {:else}
-              <FileText class="size-5 text-muted-foreground" />
+              {@const Icon = noteKindIcon(noteKind)}
+              <Icon class="size-5 text-muted-foreground" />
             {/if}
             <span class="line-clamp-2 text-sm font-medium">{node.name}</span>
             {#if node.kind === 'note'}
@@ -464,16 +418,9 @@
           >
             {#if node.kind === 'folder'}
               <Folder class="size-5 shrink-0 text-muted-foreground" />
-            {:else if noteKind === 'freeform'}
-              <PencilRuler class="size-5 shrink-0 text-muted-foreground" />
-            {:else if noteKind === 'ink'}
-              <Feather class="size-5 shrink-0 text-muted-foreground" />
-            {:else if noteKind === 'pdf'}
-              <FileType2 class="size-5 shrink-0 text-muted-foreground" />
-            {:else if noteKind != null && !isKnownNoteKind(noteKind)}
-              <FileQuestion class="size-5 shrink-0 text-muted-foreground" />
             {:else}
-              <FileText class="size-5 shrink-0 text-muted-foreground" />
+              {@const Icon = noteKindIcon(noteKind)}
+              <Icon class="size-5 shrink-0 text-muted-foreground" />
             {/if}
             <span class="flex min-w-0 flex-1 flex-col">
               <span class="truncate text-sm font-medium">{node.name}</span>

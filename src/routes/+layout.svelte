@@ -12,6 +12,7 @@
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import UpdaterProgressDialog from '$lib/updater/ProgressDialog.svelte';
   import ShortcutHelpDialog from '$lib/components/ShortcutHelpDialog.svelte';
+  import SearchDialog from '$lib/search/SearchDialog.svelte';
   import {
     displayBinding,
     getBinding,
@@ -191,3 +192,8 @@
 <!-- Shortcut cheat-sheet overlay. Triggered by `global.showShortcutHelp`
      (Shift+? by default) and `openShortcutHelp()` from anywhere. -->
 <ShortcutHelpDialog />
+
+<!-- Joplin-style global note search. Driven by the searchDialog store —
+     desktop top-bar button, mobile top-bar button, and the
+     `global.openSearch` hotkey all flip it open. -->
+<SearchDialog />

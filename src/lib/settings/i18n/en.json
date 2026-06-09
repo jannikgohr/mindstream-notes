@@ -47,6 +47,11 @@
 
     "search.notes.placeholder": "Search notes",
     "search.notes.label": "Search notes",
+    "search.open": "Search notes",
+    "search.empty": "Type to search across every note's title, body, and tags.",
+    "search.noResults": "No notes match your search.",
+    "search.close": "Close search",
+    "search.hint": "↑↓ to navigate · ↵ to open · Esc to close",
     "settings.open": "Open settings",
 
     "notifications.open": "Open notifications",
@@ -122,6 +127,7 @@
     "hotkeys.command.global.newDrawing": "New drawing",
     "hotkeys.command.global.newInkNote": "New ink note",
     "hotkeys.command.global.openSettings": "Open settings",
+    "hotkeys.command.global.openSearch": "Search notes",
     "hotkeys.command.global.toggleNoteOverview": "Toggle note overview",
     "hotkeys.command.global.toggleNoteMetadata": "Toggle note metadata",
     "hotkeys.command.global.addTag": "Add tag",

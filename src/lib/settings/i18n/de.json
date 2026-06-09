@@ -47,6 +47,11 @@
 
     "search.notes.placeholder": "Notizen suchen",
     "search.notes.label": "Notizen suchen",
+    "search.open": "Notizen suchen",
+    "search.empty": "Tippe los, um alle Titel, Texte und Tags zu durchsuchen.",
+    "search.noResults": "Keine Notizen passen zur Suche.",
+    "search.close": "Suche schließen",
+    "search.hint": "↑↓ zum Navigieren · ↵ zum Öffnen · Esc zum Schließen",
     "settings.open": "Einstellungen öffnen",
 
     "notifications.open": "Benachrichtigungen öffnen",
@@ -122,6 +127,7 @@
     "hotkeys.command.global.newDrawing": "Neue Zeichnung",
     "hotkeys.command.global.newInkNote": "Neue Tintennotiz",
     "hotkeys.command.global.openSettings": "Einstellungen öffnen",
+    "hotkeys.command.global.openSearch": "Notizen suchen",
     "hotkeys.command.global.toggleNoteOverview": "Notizübersicht ein-/ausblenden",
     "hotkeys.command.global.toggleNoteMetadata": "Notizmetadaten ein-/ausblenden",
     "hotkeys.command.global.addTag": "Tag hinzufügen",
