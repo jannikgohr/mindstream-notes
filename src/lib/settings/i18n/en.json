@@ -10,6 +10,8 @@
     "empty": "No settings match your search.",
     "saving": "Saving…",
 
+    "account.managedUnavailable": "Not available yet — pick \"Self-hosted\" to use your own server.",
+
     "sort.label": "Sort",
     "sort.ascending": "Sort ascending",
     "sort.descending": "Sort descending",
@@ -289,6 +291,7 @@
       "label": "Server type",
       "description": "Where your notes live."
     },
+    "account.managedUnavailable": { "label": "Managed mode" },
     "account.signInForm": { "label": "Sign in" },
     "account.syncEnabled": { "label": "Enable sync" },
     "account.syncInterval": { "label": "Sync frequency" },

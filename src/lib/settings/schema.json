@@ -16,6 +16,12 @@
               "options": ["managed", "self-hosted", "local-only"]
             },
             {
+              "id": "account.managedUnavailable",
+              "scope": "G",
+              "type": "info",
+              "showIf": { "id": "account.serverType", "equals": "managed" }
+            },
+            {
               "id": "account.signInForm",
               "scope": "G",
               "type": "custom",
