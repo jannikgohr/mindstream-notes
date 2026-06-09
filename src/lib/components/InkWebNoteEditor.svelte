@@ -1385,9 +1385,29 @@
     return value;
   }
 
+  // Mirrors Excalidraw's dark-mode color transform: the CSS filter
+  // `invert(93%) hue-rotate(180deg)` applied mathematically per ARGB,
+  // so red stays red and blue stays blue but lightness is flipped.
+  // invert(93%) gives R' = 0.93 - 0.86·R; the 180° hue rotation uses
+  // the YIQ-like matrix from the CSS filter-effects spec, which (at
+  // θ=180°) reduces to row sums of 1, so greys round-trip cleanly.
   function displayColor(argb: number): number {
     if (!pageDark) return argb >>> 0;
-    return (argb & 0xff000000) | (~argb & 0x00ffffff);
+    const alpha = argb & 0xff000000;
+    const ir = 0.93 - 0.86 * (((argb >>> 16) & 0xff) / 255);
+    const ig = 0.93 - 0.86 * (((argb >>> 8) & 0xff) / 255);
+    const ib = 0.93 - 0.86 * ((argb & 0xff) / 255);
+    const r = clampUnit(-0.574 * ir + 1.43 * ig + 0.144 * ib);
+    const g = clampUnit(0.426 * ir + 0.43 * ig + 0.144 * ib);
+    const b = clampUnit(0.426 * ir + 1.43 * ig - 0.856 * ib);
+    const R = Math.round(r * 255);
+    const G = Math.round(g * 255);
+    const B = Math.round(b * 255);
+    return (alpha | (R << 16) | (G << 8) | B) >>> 0;
+  }
+
+  function clampUnit(value: number): number {
+    return value < 0 ? 0 : value > 1 ? 1 : value;
   }
 
   function sanitizePressure(value: number): number {
