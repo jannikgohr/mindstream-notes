@@ -41,7 +41,6 @@ interface MobileState {
    */
   currentFolderId: string | null;
   displayMode: DisplayMode;
-  searchQuery: string;
   /** Whether the FAB's secondary actions are revealed. */
   fabExpanded: boolean;
 }
@@ -57,7 +56,6 @@ export const mobileState = $state<MobileState>({
   view: 'home',
   currentFolderId: null,
   displayMode: loadDisplayMode(),
-  searchQuery: '',
   fabExpanded: false
 });
 
@@ -225,10 +223,6 @@ export function setDisplayMode(mode: DisplayMode) {
   if (typeof localStorage !== 'undefined') {
     localStorage.setItem(DISPLAY_MODE_KEY, mode);
   }
-}
-
-export function setSearchQuery(q: string) {
-  mobileState.searchQuery = q;
 }
 
 export function toggleFabExpanded() {
