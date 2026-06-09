@@ -51,6 +51,57 @@ pub mod ui {
         invoke_static_void("showLiveOverlayFromNative")
     }
 
+    /// Push the screen-space bounds of the ink document's visible
+    /// pages — the only region the live overlay is allowed to paint
+    /// in. Bounds are `[x0, y0, x1, y1, ...]` quads in webview-local
+    /// surface pixels. Pass an empty slice to disable painting
+    /// entirely (used when a note is trashed or before JS has
+    /// computed the layout).
+    pub fn call_set_document_bounds(bounds: &[f32]) -> Result<(), String> {
+        push_float_array("setDocumentBoundsFromNative", bounds)
+    }
+
+    /// Push the screen-space bounds of Svelte UI controls (the ink
+    /// editor toolbar, popovers, etc.) so the live overlay refuses to
+    /// paint over them. Bounds are `[x0, y0, x1, y1, ...]` quads in
+    /// webview-local surface pixels — what JS gets from
+    /// `getBoundingClientRect()` multiplied by `devicePixelRatio`.
+    /// Pass an empty slice to clear.
+    pub fn call_set_control_bounds(bounds: &[f32]) -> Result<(), String> {
+        push_float_array("setControlBoundsFromNative", bounds)
+    }
+
+    fn push_float_array(method: &str, bounds: &[f32]) -> Result<(), String> {
+        let ctx = ndk_context::android_context();
+        let vm_ptr = ctx.vm();
+        if vm_ptr.is_null() {
+            return Err(
+                "ndk_context JavaVM is null; Keyring.initializeNdkContext must run first".into(),
+            );
+        }
+        let vm = unsafe { JavaVM::from_raw(vm_ptr.cast()) }
+            .map_err(|e| format!("JavaVM::from_raw: {e}"))?;
+        let mut env = vm
+            .attach_current_thread()
+            .map_err(|e| format!("attach_current_thread: {e}"))?;
+
+        let array = env
+            .new_float_array(bounds.len() as i32)
+            .map_err(|e| format!("new_float_array: {e}"))?;
+        if !bounds.is_empty() {
+            env.set_float_array_region(&array, 0, bounds)
+                .map_err(|e| format!("set_float_array_region: {e}"))?;
+        }
+
+        let global_ref = super::DRAWING_CLASS.get().ok_or_else(|| {
+            "Drawing class not yet cached; Drawing companion static init must have run".to_string()
+        })?;
+        let class = unsafe { JClass::from_raw(global_ref.as_raw()) };
+        env.call_static_method(&class, method, "([F)V", &[JValue::Object(&array)])
+            .map_err(|e| format!("call_static_method {method}: {e}"))?;
+        Ok(())
+    }
+
     pub fn call_hide_live_overlay() -> Result<(), String> {
         invoke_static_void("hideLiveOverlayFromNative")
     }

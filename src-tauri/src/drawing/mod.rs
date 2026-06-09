@@ -111,6 +111,45 @@ pub fn drawing_set_live_ink_style(
     Ok(())
 }
 
+/// Push the screen-space bounds of the ink document's visible pages
+/// to Kotlin's live overlay — the only region it's allowed to paint
+/// in. Flat list of `[x0, y0, x1, y1, …]` quads in webview-local
+/// surface pixels. Pass an empty list to disable painting entirely
+/// (trashed note, layout not yet computed). No-op on desktop.
+#[tauri::command]
+pub fn drawing_set_document_bounds(bounds: Vec<f32>) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        platform::android::ui::call_set_document_bounds(&bounds)
+            .map_err(|e| format!("drawing_set_document_bounds: {e}"))
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = bounds;
+        Ok(())
+    }
+}
+
+/// Push the screen-space bounds of Svelte UI controls (toolbar,
+/// popovers, …) to Kotlin's live overlay so it refuses to paint over
+/// them. `bounds` is a flat list of `[x0, y0, x1, y1, x0', y0', …]`
+/// rectangles in webview-local surface pixels — what JS gets from
+/// `getBoundingClientRect()` multiplied by `devicePixelRatio`. Pass
+/// an empty list to clear. No-op on desktop.
+#[tauri::command]
+pub fn drawing_set_control_bounds(bounds: Vec<f32>) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        platform::android::ui::call_set_control_bounds(&bounds)
+            .map_err(|e| format!("drawing_set_control_bounds: {e}"))
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = bounds;
+        Ok(())
+    }
+}
+
 #[tauri::command]
 pub fn drawing_set_live_ink_finger_drawing(allowed: bool) -> Result<(), String> {
     #[cfg(target_os = "android")]

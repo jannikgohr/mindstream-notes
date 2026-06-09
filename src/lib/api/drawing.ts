@@ -73,6 +73,37 @@ export function drawingSetLiveInkFingerDrawing(
 }
 
 /**
+ * Push the screen-space bounds of the ink document's visible pages to
+ * the Android live overlay — the only region it's allowed to paint
+ * in. Flat list of [x0, y0, x1, y1] quads in webview-local surface
+ * pixels. Pass an empty list to disable painting entirely (trashed
+ * note, layout not ready). No-op on desktop.
+ */
+export function drawingSetDocumentBounds(bounds: number[]): Promise<void> {
+  return invokeOrFallback<void>(
+    'drawing_set_document_bounds',
+    { bounds },
+    () => undefined
+  );
+}
+
+/**
+ * Push the screen-space bounds of Svelte UI controls (ink toolbar,
+ * popovers, …) to the Android live-ink overlay so it refuses to paint
+ * over them. `bounds` is a flat list of [x0, y0, x1, y1] rectangles in
+ * webview-local surface pixels — i.e. `getBoundingClientRect()` values
+ * multiplied by `devicePixelRatio`. Pass an empty list to clear.
+ * No-op on desktop.
+ */
+export function drawingSetControlBounds(bounds: number[]): Promise<void> {
+  return invokeOrFallback<void>(
+    'drawing_set_control_bounds',
+    { bounds },
+    () => undefined
+  );
+}
+
+/**
  * Persist an ink note state update through the same Rust merge/write
  * helper sync uses. The payload is a Yrs/Yjs v1 update produced by the
  * Svelte canvas editor (`$lib/ink/document`).

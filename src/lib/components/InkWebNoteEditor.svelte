@@ -18,6 +18,8 @@
     drawingExitImmersiveInkMode,
     drawingHideLiveInkOverlay,
     drawingSaveInkState,
+    drawingSetControlBounds,
+    drawingSetDocumentBounds,
     drawingSetLiveInkFingerDrawing,
     drawingSetLiveInkStyle,
     drawingShowLiveInkOverlay,
@@ -129,6 +131,8 @@
 
   let hostEl = $state<HTMLDivElement | null>(null);
   let canvasEl = $state<HTMLCanvasElement | null>(null);
+  let toolbarEl = $state<HTMLDivElement | null>(null);
+  let boundsFrame: number | null = null;
   let doc = $state<InkDocument | null>(null);
   let handle: WebInkHandleInstance | null = null;
   let provider: InkWebCollabProvider | null = null;
@@ -256,6 +260,81 @@
       pointerMode === 'touchGesture' ? false : fingerDrawingAllowed;
     void drawingSetLiveInkStyle(liveColorArgb, minWidthPx, maxWidthPx);
     void drawingSetLiveInkFingerDrawing(liveFingerDrawingAllowed);
+  }
+
+  /**
+   * Collect the bounds of any UI element that should be excluded from
+   * live-ink rendering — the toolbar at minimum. Returned as a flat
+   * float list of [x0, y0, x1, y1] quads in webview-local surface
+   * pixels, the format Kotlin's `setControlBoundsFromNative` expects.
+   */
+  function collectControlBounds(): number[] {
+    if (!toolbarEl) return [];
+    const dpr = window.devicePixelRatio || 1;
+    const rect = toolbarEl.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return [];
+    return [
+      rect.left * dpr,
+      rect.top * dpr,
+      rect.right * dpr,
+      rect.bottom * dpr
+    ];
+  }
+
+  /**
+   * Collect the visible page rects in webview-local surface pixels so
+   * the Android overlay can refuse to paint outside the document area
+   * — same allow-region the JS canvas enforces with `containsPagePoint`.
+   * Returns an empty list when the layout isn't ready yet or the note
+   * is trashed; Kotlin treats empty as "block all painting".
+   */
+  function collectDocumentBounds(): number[] {
+    if (!canvasEl || isTrashed) return [];
+    const canvasRect = canvasEl.getBoundingClientRect();
+    if (canvasRect.width <= 0 || canvasRect.height <= 0) return [];
+    const dpr = window.devicePixelRatio || 1;
+    const bounds: number[] = [];
+    for (let i = 0; i < layout.pageCount; i++) {
+      const rect = pageRect(layout, i);
+      if (!rect) continue;
+      const [x0p, y0p, x1p, y1p] = rect;
+      const tl = pageToScreen({ x: x0p, y: y0p });
+      const br = pageToScreen({ x: x1p, y: y1p });
+      // Clip to the visible canvas area; off-canvas portions are
+      // already invisible and would just waste Kotlin's rect test.
+      const left = Math.max(tl.x, 0);
+      const top = Math.max(tl.y, 0);
+      const right = Math.min(br.x, view.width);
+      const bottom = Math.min(br.y, view.height);
+      if (right <= left || bottom <= top) continue;
+      bounds.push(
+        (canvasRect.left + left) * dpr,
+        (canvasRect.top + top) * dpr,
+        (canvasRect.left + right) * dpr,
+        (canvasRect.top + bottom) * dpr
+      );
+    }
+    return bounds;
+  }
+
+  /**
+   * Push the current UI control + document bounds to the Android live
+   * overlay. Coalesced via requestAnimationFrame so a burst of
+   * scheduleDraw / ResizeObserver / visualViewport events only produces
+   * one IPC pair per frame.
+   */
+  function scheduleBoundsPush() {
+    if (!isAndroid() || disposed) return;
+    if (boundsFrame !== null) return;
+    boundsFrame = requestAnimationFrame(() => {
+      boundsFrame = null;
+      void drawingSetDocumentBounds(collectDocumentBounds()).catch((err) => {
+        console.warn('[ink-canvas] failed to push document bounds', err);
+      });
+      void drawingSetControlBounds(collectControlBounds()).catch((err) => {
+        console.warn('[ink-canvas] failed to push control bounds', err);
+      });
+    });
   }
 
   function currentToolbarSettings(): DrawingToolbarSettings {
@@ -538,11 +617,17 @@
   }
 
   function scheduleDraw() {
-    if (drawFrame !== null) return;
-    drawFrame = requestAnimationFrame(() => {
-      drawFrame = null;
-      draw();
-    });
+    if (drawFrame === null) {
+      drawFrame = requestAnimationFrame(() => {
+        drawFrame = null;
+        draw();
+      });
+    }
+    // Pan / zoom / page-count changes go through scheduleDraw, so
+    // piggy-back the bounds push here. The bounds push has its own rAF
+    // guard, so the over-eager calls from strokeCount / tool / colour
+    // change effects coalesce to at most one IPC pair per frame.
+    scheduleBoundsPush();
   }
 
   function draw() {
@@ -1345,6 +1430,14 @@
     }
     const afterTickAt = performance.now();
     if (isAndroid()) {
+      // Push the initial bounds BEFORE showing the overlay so Kotlin
+      // already knows the document + control regions the moment the
+      // SurfaceView starts receiving MotionEvents. Document bounds
+      // start empty (Kotlin treats empty as "block all"), keeping the
+      // overlay inert until the post-loadNote re-push lands the real
+      // page rects below.
+      await drawingSetDocumentBounds(collectDocumentBounds());
+      await drawingSetControlBounds(collectControlBounds());
       await drawingShowLiveInkOverlay();
     }
     const liveOverlayReadyAt = performance.now();
@@ -1392,8 +1485,19 @@
       layout.pageCount,
       isAndroid()
     );
-    resizeObserver = new ResizeObserver(resizeCanvas);
+    resizeObserver = new ResizeObserver(() => {
+      resizeCanvas();
+      scheduleBoundsPush();
+    });
     if (hostEl) resizeObserver.observe(hostEl);
+    if (toolbarEl) resizeObserver.observe(toolbarEl);
+    // visualViewport tracks IME show/hide and orientation in the way
+    // the standard window `resize` event misses on mobile Chromium —
+    // keep both wired up so a software keyboard popping over the
+    // toolbar or a rotation reshapes the no-paint region promptly.
+    window.addEventListener('resize', scheduleBoundsPush);
+    window.visualViewport?.addEventListener('resize', scheduleBoundsPush);
+    window.visualViewport?.addEventListener('scroll', scheduleBoundsPush);
     toolbarSettingsReady = true;
     lastSeenPushed = tree.notesById[noteId]?.pushed ?? false;
     await setupCollabProvider();
@@ -1421,6 +1525,13 @@
       'mindstream:android-stylus-eraser',
       handleAndroidStylusEraser
     );
+    window.removeEventListener('resize', scheduleBoundsPush);
+    window.visualViewport?.removeEventListener('resize', scheduleBoundsPush);
+    window.visualViewport?.removeEventListener('scroll', scheduleBoundsPush);
+    if (boundsFrame !== null) {
+      cancelAnimationFrame(boundsFrame);
+      boundsFrame = null;
+    }
     flushQueuedEraserSamples();
     clearSaveTimer();
     void flushPendingState();
@@ -1433,6 +1544,11 @@
       drawFrame = null;
     }
     if (isAndroid()) {
+      // hideLiveInkOverlay resets bounds + offset on the Kotlin side,
+      // but push an explicit clear too in case the overlay was already
+      // hidden — keeps the next show from inheriting stale bounds.
+      void drawingSetDocumentBounds([]);
+      void drawingSetControlBounds([]);
       void drawingHideLiveInkOverlay();
     }
     if (immersiveInkModeActive) {
@@ -1464,6 +1580,7 @@
   class="relative h-full w-full overflow-hidden bg-muted/20"
 >
   <div
+    bind:this={toolbarEl}
     class="absolute left-3 top-3 z-10 flex h-10 items-center gap-1 rounded-md border border-border bg-background/95 px-1 shadow-sm"
   >
     <Button

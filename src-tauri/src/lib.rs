@@ -308,6 +308,8 @@ pub fn run() {
             drawing::drawing_cancel_live_ink,
             drawing::drawing_set_live_ink_style,
             drawing::drawing_set_live_ink_finger_drawing,
+            drawing::drawing_set_control_bounds,
+            drawing::drawing_set_document_bounds,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -35,14 +35,6 @@ import androidx.graphics.lowlatency.CanvasFrontBufferedRenderer
  */
 private const val MOBILE_HEADER_HEIGHT_DP = 48
 
-/**
- * Top strip (in surface pixels) where the live-ink overlay refuses to
- * paint, so the Svelte ink-editor toolbar at the top of the canvas
- * stays clear of pen ink. JS could push exact toolbar bounds via
- * [Drawing.setControlBoundsFromNative], but a flat top-strip is
- * enough for the current Svelte layout.
- */
-private const val FRONT_BUFFER_TOOLBAR_HEIGHT_PX = 120f
 private const val FRONT_BUFFER_CANCEL_DELAY_MS = 48L
 
 /**
@@ -95,10 +87,15 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
-            params.topMargin = computeTopInsetPx(parent, activity)
+            val topMarginPx = computeTopInsetPx(parent, activity)
+            params.topMargin = topMarginPx
             v.layoutParams = params
             parent.addView(v)
             liveView = v
+            // Snapshot the SurfaceView's top offset so the companion's
+            // bounds check can translate MotionEvent coords (SurfaceView-
+            // local) into the webview-local space JS pushes bounds in.
+            liveOverlaySurfaceTopOffsetPx = topMarginPx
         }
     }
 
@@ -109,6 +106,12 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
             Log.i("MindstreamDrawing", "Drawing.hideLiveOverlay: detaching SurfaceView")
             (v.parent as? ViewGroup)?.removeView(v)
             liveView = null
+            // Drop any stale bounds so a future overlay (e.g. a
+            // different note) starts from a clean slate — JS pushes
+            // its own bounds on mount.
+            controlBounds = emptyList()
+            documentBounds = emptyList()
+            liveOverlaySurfaceTopOffsetPx = 0
             releaseRefreshRate(activity)
         }
     }
@@ -248,30 +251,69 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
         }
 
         @Volatile
-        private var controlBounds: List<android.graphics.RectF> = emptyList()
+        internal var controlBounds: List<android.graphics.RectF> = emptyList()
+        /**
+         * Visible page rects in webview-local surface pixels. Acts as
+         * an allow-list: the live overlay refuses to paint anywhere
+         * outside the union of these rectangles, mirroring the JS
+         * canvas's `containsPagePoint` check. An empty list means
+         * "nothing is paintable" — also the initial state, so the
+         * overlay stays inert until JS has pushed real bounds.
+         */
+        @Volatile
+        internal var documentBounds: List<android.graphics.RectF> = emptyList()
+        /**
+         * Top inset (in surface pixels) of the active live-overlay
+         * SurfaceView, relative to the WebView origin. Set by
+         * [showLiveOverlay] when the SurfaceView is attached. Used by
+         * [blocksLiveInkAt] / [blocksLiveInkSegment] to translate
+         * SurfaceView-local MotionEvent y into the webview-local space
+         * [controlBounds] and [documentBounds] are pushed in. Reset to
+         * 0 on hide so a stale value doesn't bleed into the next
+         * overlay.
+         */
+        @Volatile
+        internal var liveOverlaySurfaceTopOffsetPx: Int = 0
         @Volatile
         private var fingerDrawingAllowed: Boolean = true
         @Volatile
         private var fingerDrawingSettingLoaded: Boolean = false
 
         /**
-         * Pushes the screen-space bounds of UI controls (the Svelte
-         * editor toolbar etc.) so the live overlay can refuse to paint
-         * over them. Currently unused — the JS side hasn't been wired
-         * to push bounds, and [FRONT_BUFFER_TOOLBAR_HEIGHT_PX] covers
-         * the current Svelte toolbar layout. Kept so a future bounds
-         * push has somewhere to land without re-introducing JNI
-         * plumbing.
+         * Pushes the screen-space bounds of Svelte UI controls (ink
+         * toolbar, popovers, …) so the live overlay refuses to paint
+         * over them. Called from Rust via the
+         * `drawing_set_control_bounds` Tauri command. The flat
+         * `bounds` array is grouped into quads of [x0, y0, x1, y1] in
+         * webview-local surface pixels — what JS produces from
+         * `getBoundingClientRect()` × `devicePixelRatio`. Pushing an
+         * empty array clears all bounds.
          */
         @JvmStatic
         fun setControlBoundsFromNative(bounds: FloatArray) {
+            controlBounds = decodeBounds(bounds)
+        }
+
+        /**
+         * Pushes the visible page rects so the live overlay only
+         * paints inside the document area. Called from Rust via the
+         * `drawing_set_document_bounds` Tauri command. Empty array
+         * means "block all painting" — the overlay returns to the
+         * inert state it has before JS pushes any layout.
+         */
+        @JvmStatic
+        fun setDocumentBoundsFromNative(bounds: FloatArray) {
+            documentBounds = decodeBounds(bounds)
+        }
+
+        private fun decodeBounds(bounds: FloatArray): List<android.graphics.RectF> {
             val rects = java.util.ArrayList<android.graphics.RectF>()
             for (i in 0 until bounds.size step 4) {
                 if (i + 3 < bounds.size) {
                     rects.add(android.graphics.RectF(bounds[i], bounds[i + 1], bounds[i + 2], bounds[i + 3]))
                 }
             }
-            controlBounds = rects
+            return rects
         }
 
         @JvmStatic
@@ -334,16 +376,38 @@ class Drawing(private val activity: Activity, private val webView: WebView) {
             return false
         }
 
-        fun blocksLiveInkAt(x: Float, y: Float): Boolean =
-            y < FRONT_BUFFER_TOOLBAR_HEIGHT_PX || inControlBounds(x, y)
+        private fun inDocumentBounds(x: Float, y: Float): Boolean {
+            val bounds = documentBounds
+            for (r in bounds) {
+                if (r.contains(x, y)) return true
+            }
+            return false
+        }
+
+        /**
+         * `x` and `y` are SurfaceView-local surface pixels (MotionEvent
+         * coords). Bounds are stored in webview-local surface pixels —
+         * translate by [liveOverlaySurfaceTopOffsetPx] before
+         * comparing. Painting is allowed iff the point lies inside any
+         * [documentBounds] rect AND outside every [controlBounds] rect.
+         */
+        fun blocksLiveInkAt(x: Float, y: Float): Boolean {
+            val yCanvas = y + liveOverlaySurfaceTopOffsetPx
+            if (!inDocumentBounds(x, yCanvas)) return true
+            return inControlBounds(x, yCanvas)
+        }
 
         fun blocksLiveInkSegment(x0: Float, y0: Float, x1: Float, y1: Float): Boolean {
-            if (y0 < FRONT_BUFFER_TOOLBAR_HEIGHT_PX || y1 < FRONT_BUFFER_TOOLBAR_HEIGHT_PX) {
-                return true
-            }
+            val offset = liveOverlaySurfaceTopOffsetPx
+            val y0c = y0 + offset
+            val y1c = y1 + offset
+            // Either endpoint outside the document area → drop the
+            // segment. Mirrors the JS sampler's behaviour of ending
+            // strokes when the pointer exits the page.
+            if (!inDocumentBounds(x0, y0c) || !inDocumentBounds(x1, y1c)) return true
             val bounds = controlBounds
             for (r in bounds) {
-                if (segmentIntersectsRect(x0, y0, x1, y1, r)) return true
+                if (segmentIntersectsRect(x0, y0c, x1, y1c, r)) return true
             }
             return false
         }
