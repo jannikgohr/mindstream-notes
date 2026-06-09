@@ -14,7 +14,7 @@
    */
   import { onDestroy } from 'svelte';
   import { Dialog } from 'bits-ui';
-  import { FileText, Folder, Search as SearchIcon, X } from 'lucide-svelte';
+  import { Folder, Search as SearchIcon, X } from 'lucide-svelte';
   import {
     searchNotes,
     TRASH_ID,
@@ -22,6 +22,7 @@
     type SearchHit
   } from '$lib/api';
   import { splitByRanges } from '$lib/api/search-matcher';
+  import { noteKindIcon } from '$lib/components/note-kind-icon';
   import { requestOpenNote } from '$lib/stores/open-note-intent.svelte';
   import { tree } from '$lib/stores/tree.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
@@ -219,6 +220,7 @@
             {#each hits as hit, i (hit.note.id)}
               {@const isActive = i === selectedIndex}
               {@const path = pathLabel(hit.note.parent_collection_id)}
+              {@const Icon = noteKindIcon(hit.note.note_kind)}
               {@const titleParts = splitByRanges(
                 hit.note.title,
                 hit.note.title.length > 0 ? hit.title_matches : []
@@ -238,7 +240,7 @@
                     : 'border-transparent text-foreground hover:bg-accent/60'}"
                 >
                   <span class="flex w-full items-center gap-2">
-                    <FileText class="size-4 shrink-0 text-muted-foreground" />
+                    <Icon class="size-4 shrink-0 text-muted-foreground" />
                     <span class="truncate font-medium">
                       {#each titleParts as part}
                         {#if part.highlight}
