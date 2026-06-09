@@ -101,15 +101,6 @@ cd src-tauri
 cargo clippy -- -D warnings
 ```
 
-Shared ink core:
-
-```shell
-cd crates/ink-core
-cargo fmt -- --check
-cargo clippy -- -D warnings
-cargo test
-```
-
 ## Useful Scripts
 
 ```text

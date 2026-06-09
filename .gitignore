@@ -9,8 +9,6 @@ node_modules
 
 # Tauri
 /src-tauri/target
-/crates/ink-core/target
-/crates/ink-core/Cargo.lock
 /src-tauri/gen/schemas
 # Cargo.lock is intentionally committed for src-tauri: it's a binary
 # crate (the app), and reproducible builds need a pinned dependency

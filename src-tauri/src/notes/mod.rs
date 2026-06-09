@@ -760,25 +760,9 @@ mod tests {
 
     #[test]
     fn ink_save_path_merges_yrs_state_and_marks_dirty() {
-        fn one_stroke(x: f32) -> Vec<u8> {
-            let mut doc = ink_core::strokes_doc::StrokesDoc::new();
-            doc.begin_stroke(
-                ink_core::strokes_doc::DEFAULT_COLOR,
-                ink_core::strokes_doc::DEFAULT_WIDTH,
-            );
-            doc.push_point(x, x, 1.0);
-            doc.push_point(x + 1.0, x + 1.0, 1.0);
-            doc.end_stroke();
-            doc.encode()
-        }
-
-        fn visible_count(bytes: &[u8]) -> usize {
-            let doc = ink_core::strokes_doc::StrokesDoc::from_bytes(bytes);
-            let mut count = 0;
-            doc.for_each_stroke(|_| count += 1);
-            count
-        }
-
+        // Two concurrent edits forked from the same base. `save_yrs_state`
+        // must merge them into the existing row rather than overwriting,
+        // and re-mark the row dirty so sync picks up the merged result.
         let db = open_memory_for_tests();
         let n = db
             .with_conn(|c| {
@@ -803,11 +787,12 @@ mod tests {
         .unwrap();
         assert_eq!(dirty_flag(&db, &n.summary.id), 0);
 
-        let android_state = one_stroke(0.0);
-        let desktop_state = one_stroke(10.0);
-        db.with_conn_mut(|c| save_yrs_state(c, &n.summary.id, &android_state))
+        let base = crate::sync::yrs_doc::init_with_markdown("base");
+        let edit_a = crate::sync::yrs_doc::apply_local_edit(&base, "base", "base A");
+        let edit_b = crate::sync::yrs_doc::apply_local_edit(&base, "base", "base B");
+        db.with_conn_mut(|c| save_yrs_state(c, &n.summary.id, &edit_a))
             .unwrap();
-        db.with_conn_mut(|c| save_yrs_state(c, &n.summary.id, &desktop_state))
+        db.with_conn_mut(|c| save_yrs_state(c, &n.summary.id, &edit_b))
             .unwrap();
 
         let merged: Vec<u8> = db
@@ -819,7 +804,9 @@ mod tests {
                 )?)
             })
             .unwrap();
-        assert_eq!(visible_count(&merged), 2);
+        let merged_text = crate::sync::yrs_doc::to_markdown(&merged);
+        assert!(merged_text.contains('A'), "lost edit_a in merged state");
+        assert!(merged_text.contains('B'), "lost edit_b in merged state");
         assert_eq!(dirty_flag(&db, &n.summary.id), 1);
     }
 
