@@ -1,8 +1,8 @@
 //! Android live-ink JNI bridge.
 //!
-//! The canonical ink editor is now the WebView/Svelte canvas. Android
-//! still owns a tiny native latency helper: Kotlin captures
-//! `MotionEvent`s and paints the in-flight wet stroke with
+//! The canonical ink editor is the WebView/Svelte canvas. Android still
+//! owns a small native latency helper: Kotlin captures `MotionEvent`s
+//! and paints the in-flight wet stroke with
 //! `CanvasFrontBufferedRenderer`, while forwarding the same event to
 //! the WebView for canonical document mutation.
 //!
@@ -11,14 +11,11 @@
 //! - cache a `Drawing` class ref so Rust commands can call Kotlin
 //!   static methods from any thread,
 //! - expose the Rust-to-Kotlin live-overlay commands used by JS via
-//!   Tauri,
-//! - keep no-op JNI exports for the removed Android egui/wgpu data
-//!   plane so stale Kotlin paths fail soft instead of crashing.
+//!   Tauri.
 
 use std::sync::OnceLock;
 
 use jni::objects::{GlobalRef, JClass, JObject};
-use jni::sys::{jboolean, jfloat, jint, jlong};
 use jni::JNIEnv;
 
 /// Global ref to the Kotlin `io.crates.drawing.Drawing` class,
@@ -46,98 +43,63 @@ pub extern "system" fn Java_io_crates_drawing_Drawing_00024Companion_cacheJniCla
     }
 }
 
-// Compatibility stubs for the removed Android native-render data
-// plane. Kotlin's live-overlay path uses `mirrorOnly = true` and
-// does not need these. Keeping the symbols prevents stale/non-mirror
-// calls from failing JNI resolution while step 8 removes egui/wgpu
-// from Android.
-
-#[no_mangle]
-pub extern "system" fn Java_io_crates_drawing_Drawing_00024Companion_setSurface(
-    _env: JNIEnv,
-    _class: JClass,
-    _surface: JObject,
-    _width: jint,
-    _height: jint,
-) {
-    log::debug!("[drawing] ignored removed Android setSurface JNI call");
-}
-
-#[no_mangle]
-pub extern "system" fn Java_io_crates_drawing_Drawing_00024Companion_resizeSurface(
-    _env: JNIEnv,
-    _class: JClass,
-    _width: jint,
-    _height: jint,
-) {
-}
-
-#[no_mangle]
-pub extern "system" fn Java_io_crates_drawing_Drawing_00024Companion_clearSurface(
-    _env: JNIEnv,
-    _class: JClass,
-) {
-}
-
-#[no_mangle]
-pub extern "system" fn Java_io_crates_drawing_Drawing_00024Companion_setFingerDrawingAllowed(
-    _env: JNIEnv,
-    _class: JClass,
-    _allowed: jboolean,
-) {
-}
-
-#[no_mangle]
-pub extern "system" fn Java_io_crates_drawing_Drawing_00024Companion_pushPoint(
-    _env: JNIEnv,
-    _class: JClass,
-    _x: jfloat,
-    _y: jfloat,
-    _pressure: jfloat,
-    _tool_type: jint,
-    _buttons: jint,
-    _action: jint,
-    _time_ms: jlong,
-) {
-}
-
-#[no_mangle]
-pub extern "system" fn Java_io_crates_drawing_Drawing_00024Companion_pushPredictedPoint(
-    _env: JNIEnv,
-    _class: JClass,
-    _x: jfloat,
-    _y: jfloat,
-    _pressure: jfloat,
-    _time_ms: jlong,
-) {
-}
-
-#[no_mangle]
-pub extern "system" fn Java_io_crates_drawing_Drawing_00024Companion_pushViewGesture(
-    _env: JNIEnv,
-    _class: JClass,
-    _focus_x: jfloat,
-    _focus_y: jfloat,
-    _pan_dx: jfloat,
-    _pan_dy: jfloat,
-    _scale_delta: jfloat,
-) {
-}
-
 pub mod ui {
     use jni::objects::{JClass, JValue};
     use jni::JavaVM;
 
-    pub fn call_show() -> Result<(), String> {
-        invoke_static_void("showFromNative")
-    }
-
-    pub fn call_hide() -> Result<(), String> {
-        invoke_static_void("hideFromNative")
-    }
-
     pub fn call_show_live_overlay() -> Result<(), String> {
         invoke_static_void("showLiveOverlayFromNative")
+    }
+
+    /// Push the screen-space bounds of the ink document's visible
+    /// pages — the only region the live overlay is allowed to paint
+    /// in. Bounds are `[x0, y0, x1, y1, ...]` quads in webview-local
+    /// surface pixels. Pass an empty slice to disable painting
+    /// entirely (used when a note is trashed or before JS has
+    /// computed the layout).
+    pub fn call_set_document_bounds(bounds: &[f32]) -> Result<(), String> {
+        push_float_array("setDocumentBoundsFromNative", bounds)
+    }
+
+    /// Push the screen-space bounds of Svelte UI controls (the ink
+    /// editor toolbar, popovers, etc.) so the live overlay refuses to
+    /// paint over them. Bounds are `[x0, y0, x1, y1, ...]` quads in
+    /// webview-local surface pixels — what JS gets from
+    /// `getBoundingClientRect()` multiplied by `devicePixelRatio`.
+    /// Pass an empty slice to clear.
+    pub fn call_set_control_bounds(bounds: &[f32]) -> Result<(), String> {
+        push_float_array("setControlBoundsFromNative", bounds)
+    }
+
+    fn push_float_array(method: &str, bounds: &[f32]) -> Result<(), String> {
+        let ctx = ndk_context::android_context();
+        let vm_ptr = ctx.vm();
+        if vm_ptr.is_null() {
+            return Err(
+                "ndk_context JavaVM is null; Keyring.initializeNdkContext must run first".into(),
+            );
+        }
+        let vm = unsafe { JavaVM::from_raw(vm_ptr.cast()) }
+            .map_err(|e| format!("JavaVM::from_raw: {e}"))?;
+        let mut env = vm
+            .attach_current_thread()
+            .map_err(|e| format!("attach_current_thread: {e}"))?;
+
+        let array = env
+            .new_float_array(bounds.len() as i32)
+            .map_err(|e| format!("new_float_array: {e}"))?;
+        if !bounds.is_empty() {
+            env.set_float_array_region(&array, 0, bounds)
+                .map_err(|e| format!("set_float_array_region: {e}"))?;
+        }
+
+        let global_ref = super::DRAWING_CLASS.get().ok_or_else(|| {
+            "Drawing class not yet cached; Drawing companion static init must have run".to_string()
+        })?;
+        let class = unsafe { JClass::from_raw(global_ref.as_raw()) };
+        env.call_static_method(&class, method, "([F)V", &[JValue::Object(&array)])
+            .map_err(|e| format!("call_static_method {method}: {e}"))?;
+        Ok(())
     }
 
     pub fn call_hide_live_overlay() -> Result<(), String> {

@@ -47,10 +47,6 @@ similar = "3"
 rmp-serde = "1"
 serde_bytes = "0.11"
 tokio = { version = "1.52.3", features = ["time", "sync"] }
-tokio-tungstenite = { version = "0.28", features = ["rustls-tls-native-roots"] }
-futures-util = "0.3"
-aes-gcm = "0.10"
-getrandom = "0.3"
 
 [profile.release]
 panic = "abort"
@@ -70,28 +66,6 @@ tauri-plugin-updater = "2.10.1"
 # remote-item recovery path actually surface for diagnosis. Android
 # stays on android_logger (logcat).
 tauri-plugin-log = "2"
-# Desktop ink notes follow the wry_plugin event-loop pattern from
-# clearlysid/tauri-plugin-egui: Tauri owns the native window, while
-# the plugin sees tao mouse/scroll/resize events and forwards them
-# into our existing render thread.
-tauri-runtime = "2.11"
-tauri-runtime-wry = "2.11"
-raw-window-handle = "0.6"
-
-# ---- Native "ink" drawing layer (desktop legacy/dev path only) ----
-# Android's canonical ink editor is the Svelte canvas; Kotlin keeps
-# only the live front-buffer overlay. Keep the old egui/wgpu renderer
-# available on desktop while the replacement is validated, but do not
-# compile these heavy crates into Android.
-ink-core = { path = "../crates/ink-core" }
-ink-stroke-modeler-rs = "0.1"
-wgpu = "27"
-egui = "0.33"
-egui-wgpu = "0.33"
-egui-shadcn = "0.3.1"
-lucide-icons = "0.555"
-bytemuck = { version = "1", features = ["derive"] }
-pollster = "0.4"
 
 # ---- keyring v4 platform backends ----
 # Each crate's Store::new() returns Result<Arc<Self>>, which coerces

@@ -129,14 +129,9 @@ pub fn run() {
                     log::LevelFilter::Info
                 })
                 // Silence noisy third-party crates that emit DEBUG/TRACE
-                // at high volume during normal operation — shader compile
-                // (naga), GPU plumbing (wgpu_*), webview/window backend
-                // (wry/tao), and HTTP/TLS (hyper/reqwest/rustls). Our
-                // own modules stay at the global level.
-                .level_for("naga", log::LevelFilter::Warn)
-                .level_for("wgpu", log::LevelFilter::Warn)
-                .level_for("wgpu_core", log::LevelFilter::Warn)
-                .level_for("wgpu_hal", log::LevelFilter::Warn)
+                // at high volume during normal operation — webview/window
+                // backend (wry/tao) and HTTP/TLS (hyper/reqwest/rustls).
+                // Our own modules stay at the global level.
                 .level_for("wry", log::LevelFilter::Warn)
                 .level_for("tao", log::LevelFilter::Warn)
                 .level_for("hyper", log::LevelFilter::Warn)
@@ -177,12 +172,10 @@ pub fn run() {
                             let _ = window.hide();
                             return;
                         }
-                        drawing::shutdown_desktop(app_handle);
                         app_handle.exit(0);
                     }
                     tauri::WindowEvent::Destroyed => {
                         let app_handle = window.app_handle();
-                        drawing::shutdown_desktop(app_handle);
                         app_handle.exit(0);
                     }
                     _ => {}
@@ -250,19 +243,6 @@ pub fn run() {
             app.manage(sync::scheduler::SyncScheduler::new());
             sync::scheduler::spawn(app.handle().clone());
 
-            // Hand the drawing module an AppHandle so its render
-            // thread can emit `drawing:dirty` events back to JS for
-            // debounced auto-save. Idempotent (OnceLock) — second
-            // call would silently no-op.
-            drawing::init(app.handle().clone());
-
-            // Kick off wgpu pre-warm in the background for the
-            // legacy desktop native ink renderer. Android now uses
-            // the JS canvas plus Kotlin live ink overlay, so it no
-            // longer compiles this renderer.
-            #[cfg(desktop)]
-            drawing::render::prewarm();
-
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -318,11 +298,8 @@ pub fn run() {
             desktop_settings::get_desktop_language,
             #[cfg(desktop)]
             desktop_settings::set_desktop_language,
-            // Native drawing surface (Android only; no-op stubs on desktop)
-            drawing::drawing_show,
-            drawing::drawing_hide,
-            drawing::drawing_clear,
-            drawing::drawing_set_save_debounce,
+            // Ink note bridge — save + Android live-ink overlay control
+            // plane. The overlay commands are no-ops on desktop.
             drawing::drawing_save_ink_state,
             drawing::drawing_show_live_ink_overlay,
             drawing::drawing_hide_live_ink_overlay,
@@ -331,11 +308,8 @@ pub fn run() {
             drawing::drawing_cancel_live_ink,
             drawing::drawing_set_live_ink_style,
             drawing::drawing_set_live_ink_finger_drawing,
-            drawing::drawing_start_collab,
-            drawing::drawing_stop_collab,
-            drawing::drawing_set_theme,
-            drawing::drawing_set_toolbar_settings,
-            drawing::drawing_set_desktop_panel_bounds,
+            drawing::drawing_set_control_bounds,
+            drawing::drawing_set_document_bounds,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -4,11 +4,7 @@
   import { ModeWatcher, mode } from 'mode-watcher';
   import { getSettingValue, isModified } from '$lib/settings/store.svelte';
   import { applyAccentColor, clearAccentColor } from '$lib/settings/accent';
-  import {
-    invokeOrFallback,
-    drawingSetTheme,
-    setNativeHotkeyDisplays
-  } from '$lib/api';
+  import { invokeOrFallback, setNativeHotkeyDisplays } from '$lib/api';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import UpdaterProgressDialog from '$lib/updater/ProgressDialog.svelte';
   import ShortcutHelpDialog from '$lib/components/ShortcutHelpDialog.svelte';
@@ -88,27 +84,6 @@
     } else {
       clearAccentColor();
     }
-  });
-
-  // Mirror the resolved dark/light state + accent into the native
-  // egui drawing toolbar (B2). The Rust side rebuilds `egui::Visuals`
-  // on every push; idempotent re-pushes are cheap. We do this in the
-  // root layout (not DrawingNoteEditor) so the toolbar's palette is
-  // already up-to-date the moment the ink note opens — by the time
-  // `drawing_show` lands on the render thread, a fresh
-  // `Msg::SetTheme` has already been processed. `mode` from
-  // mode-watcher resolves `system` against the prefers-color-scheme
-  // media query and emits 'dark' | 'light' | undefined (undefined
-  // = not yet resolved, treat as dark since that's our default).
-  // `accentHex` falls back to null when the user hasn't picked a
-  // custom accent so Rust uses the mode-appropriate shadcn default
-  // (matching the CSS `--primary` token).
-  $effect(() => {
-    const resolved = $mode ?? 'dark';
-    const dark = resolved === 'dark';
-    const accent = getSettingValue('appearance.accent') as string | undefined;
-    const accentHex = isModified('appearance.accent') && accent ? accent : null;
-    void drawingSetTheme(dark, accentHex);
   });
 
   $effect(() => {

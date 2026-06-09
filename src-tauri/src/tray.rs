@@ -8,7 +8,7 @@ use tauri::{
 use crate::{
     db::Db,
     desktop_settings::DesktopSettings,
-    drawing, i18n,
+    i18n,
     notes::{self, CreateNote},
 };
 
@@ -142,7 +142,6 @@ pub fn sync_hotkey_displays(app: &AppHandle) {
 
 fn handle_menu_event(app: &AppHandle, item_id: &str) {
     if item_id == QUIT_ID {
-        drawing::shutdown_desktop(app);
         app.exit(0);
         return;
     }

@@ -2,7 +2,7 @@
 
 Mindstream Notes is a local-first note-taking app built with Tauri, Svelte, Rust, and Yjs. It is designed around fast desktop note workflows, markdown editing, local persistence, optional encrypted sync, and native ink support for handwritten notes.
 
-The project is still under active development. Expect sharp edges, but the core shape is already in place: a desktop app shell, a markdown editor, a note tree, local storage, CRDT-backed document state, and an ink canvas shared between native Rust and WebAssembly paths.
+The project is still under active development. Expect sharp edges, but the core shape is already in place: a desktop app shell, a markdown editor, a note tree, local storage, CRDT-backed document state, and a Yjs-backed ink canvas.
 
 ## Features
 
@@ -18,9 +18,8 @@ The project is still under active development. Expect sharp edges, but the core 
 
 - Tauri 2 for the desktop/mobile app shell.
 - Svelte 5 and SvelteKit for the interface.
-- Rust for persistence, sync, native drawing, and Tauri commands.
-- egui, wgpu, and a shared `ink-core` crate for native ink rendering.
-- WebAssembly plus eframe/egui for the desktop web ink editor.
+- Rust for persistence, sync, and Tauri commands.
+- Svelte canvas + Pointer Events for the ink editor, with an Android-only Kotlin `CanvasFrontBufferedRenderer` overlay for live-stroke latency.
 - Yjs/yrs for CRDT document state.
 - Vitest and Cargo tests for the current test suite.
 
@@ -28,9 +27,7 @@ The project is still under active development. Expect sharp edges, but the core 
 
 ```text
 src/                    Svelte app, UI components, stores, editor code
-src-tauri/              Tauri app, Rust backend, persistence, sync, native drawing
-crates/ink-core/        Shared ink document, page, input, and toolbar logic
-crates/ink-egui-web/    WebAssembly egui ink editor used by the Svelte UI
+src-tauri/              Tauri app, Rust backend, persistence, sync
 backend/yjs-collab/     Experimental Yjs collaboration server pieces
 docs/                   Architecture notes and build documentation
 ```

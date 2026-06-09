@@ -14,9 +14,6 @@ src-tauri/Cargo.lock
 **/target/
 crates/**/Cargo.lock
 
-# Generated bindings
-src/lib/ink-web/pkg/
-
 # Test snapshots / coverage
 coverage/
 
