@@ -12,7 +12,7 @@
    * subscribe to that bus, so a single dialog drives both. On mobile the
    * dialog goes edge-to-edge; on desktop it sits centred at the top.
    */
-  import { onDestroy } from 'svelte';
+  import { onDestroy, tick } from 'svelte';
   import { Dialog } from 'bits-ui';
   import { Folder, Search as SearchIcon, X } from 'lucide-svelte';
   import {
@@ -79,29 +79,36 @@
       });
   });
 
-  // Reset on every open so the previous query doesn't linger.
-  $effect(() => {
-    if (searchDialog.open) {
-      query = '';
-      debouncedQuery = '';
-      hits = [];
-      selectedIndex = 0;
-    }
-  });
+  /**
+   * Wipe the previous session's state so the dialog opens clean every
+   * time. Called synchronously from `onOpenChange` when bits-ui
+   * transitions to open — this is intentional. The earlier
+   * `$effect(() => { if (searchDialog.open) … })` form deferred the
+   * reset to the next microtask, which races the user's first keystroke:
+   * if they type before the microtask drains, `query = ''` wipes the
+   * just-typed character. Doing the reset inline with the open
+   * transition removes the race entirely.
+   */
+  function resetState() {
+    query = '';
+    debouncedQuery = '';
+    hits = [];
+    selectedIndex = 0;
+  }
 
   /**
-   * bits-ui's FocusScope auto-focuses the first focusable descendant on
-   * open — which here is the Dialog.Close ✕ button (the input is a plain
-   * <input>, but the close button is rendered ahead of the list and bits-
-   * ui's tabbable-finder lands on it). Intercepting `onOpenAutoFocus`
-   * and pointing focus at the search input keeps the typing flow
-   * continuous: open → type without an extra tab. The handler runs
-   * after the FocusScope mounts so `inputEl` is already bound.
+   * bits-ui's FocusScope tries to focus the first tabbable descendant
+   * on open. The input usually IS that descendant — but to keep the
+   * order deterministic across browsers (and to `select()` any
+   * prefilled value), we take the open-focus event ourselves and
+   * point focus at the input directly. `tick()` guarantees Svelte's
+   * render cycle has committed the dialog DOM and resolved
+   * `bind:this={inputEl}` before we call `focus()`.
    */
-  function handleOpenAutoFocus(e: Event) {
+  async function handleOpenAutoFocus(e: Event) {
     e.preventDefault();
+    await tick();
     inputEl?.focus();
-    inputEl?.select();
   }
 
   function moveSelection(delta: number) {
@@ -172,7 +179,13 @@
 <Dialog.Root
   bind:open={searchDialog.open}
   onOpenChange={(o: boolean) => {
-    if (!o) closeSearch();
+    if (o) {
+      // Sync reset BEFORE the user can type. See `resetState()` above
+      // for why this doesn't live in a $effect.
+      resetState();
+    } else {
+      closeSearch();
+    }
   }}
 >
   <Dialog.Portal>
