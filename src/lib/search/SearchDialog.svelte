@@ -85,11 +85,23 @@
       debouncedQuery = '';
       hits = [];
       selectedIndex = 0;
-      // Defer focus to next frame so bits-ui's portal has mounted the
-      // input before we try to focus it.
-      queueMicrotask(() => inputEl?.focus());
     }
   });
+
+  /**
+   * bits-ui's FocusScope auto-focuses the first focusable descendant on
+   * open — which here is the Dialog.Close ✕ button (the input is a plain
+   * <input>, but the close button is rendered ahead of the list and bits-
+   * ui's tabbable-finder lands on it). Intercepting `onOpenAutoFocus`
+   * and pointing focus at the search input keeps the typing flow
+   * continuous: open → type without an extra tab. The handler runs
+   * after the FocusScope mounts so `inputEl` is already bound.
+   */
+  function handleOpenAutoFocus(e: Event) {
+    e.preventDefault();
+    inputEl?.focus();
+    inputEl?.select();
+  }
 
   function moveSelection(delta: number) {
     if (hits.length === 0) return;
@@ -168,6 +180,7 @@
     />
     <Dialog.Content
       onkeydown={onKeydown}
+      onOpenAutoFocus={handleOpenAutoFocus}
       class="fixed left-1/2 top-[8vh] z-350 flex h-[min(72vh,640px)] w-[min(720px,94vw)] -translate-x-1/2 flex-col overflow-hidden rounded-lg border border-border bg-background text-foreground shadow-xl focus:outline-none"
     >
       <Dialog.Title class="sr-only">{tUi('search.open')}</Dialog.Title>
