@@ -19,7 +19,6 @@ const snapshot = {
   status: run('git', ['status', '--short']) || 'clean',
   dependencies: dependencySnapshot(),
   scripts: {
-    buildInkWeb: Boolean(packageJson.scripts?.['build:ink-web']),
     measureInkReplacement: Boolean(
       packageJson.scripts?.['measure:ink-replacement']
     )
@@ -45,11 +44,7 @@ const snapshot = {
         basename(path) === 'libmindstream_notes_lib.so' &&
         path.includes('Release')
     ),
-    cargoNativeLibs: findCargoNativeLibs(),
-    wasmEguiPackage: findFiles(
-      [join(projectRoot, 'src', 'lib', 'wasm', 'ink-egui-web')],
-      () => true
-    )
+    cargoNativeLibs: findCargoNativeLibs()
   }
 };
 
@@ -207,7 +202,6 @@ function printMarkdown(data) {
 
   console.log('');
   console.log('## Package Scripts');
-  console.log(`- build:ink-web: ${yesNo(data.scripts.buildInkWeb)}`);
   console.log(
     `- measure:ink-replacement: ${yesNo(data.scripts.measureInkReplacement)}`
   );
@@ -215,7 +209,6 @@ function printMarkdown(data) {
   printFiles('Android APK/AAB Outputs', data.artifacts.androidPackages);
   printFiles('Android Native Libraries', data.artifacts.androidNativeLibs);
   printFiles('Cargo Native Libraries', data.artifacts.cargoNativeLibs);
-  printFiles('egui WASM Package', data.artifacts.wasmEguiPackage);
 }
 
 function printFiles(title, files) {

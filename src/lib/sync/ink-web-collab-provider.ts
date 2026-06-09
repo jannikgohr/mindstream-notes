@@ -2,9 +2,9 @@
  * E2EE live-collab provider for desktop web ink notes.
  *
  * This mirrors the frame protocol used by `$lib/sync/collab-provider`
- * and `src-tauri/src/drawing/collab.rs`, but keeps all Yrs document
- * operations inside the `ink-egui-web` WASM handle. JS only encrypts,
- * decrypts, and routes update bytes.
+ * and `src-tauri/src/drawing/collab.rs`, but delegates all Yjs document
+ * operations to the handle supplied by `InkWebNoteEditor`. JS only
+ * encrypts, decrypts, and routes update bytes.
  */
 
 const FRAME_SYNC_STEP_1 = 0x00;

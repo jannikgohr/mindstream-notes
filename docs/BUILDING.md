@@ -7,14 +7,7 @@ This document collects setup, build, and verification notes that are too detaile
 - Node.js and pnpm.
 - Rust with the stable toolchain.
 - The Tauri 2 platform prerequisites for your operating system.
-- `wasm32-unknown-unknown` Rust target for the web ink editor.
 - Java 21 for Android builds.
-
-The `wasm32-unknown-unknown` target is installed automatically by `pnpm build:ink-web`, but installing it yourself is also fine:
-
-```shell
-rustup target add wasm32-unknown-unknown
-```
 
 On minimal Linux systems, install and enable a Secret Service provider such as `gnome-keyring`, or run KeePassXC with Secret Service enabled. Some crypto dependencies may also require OpenSSL development libraries or the Perl build tooling used by OpenSSL builds.
 
@@ -39,20 +32,6 @@ pnpm tauri-dev
 ```
 
 The Tauri config runs `pnpm setup-android-cargo` before dev and build commands so Android cargo configuration stays in sync.
-
-## WebAssembly Ink Editor
-
-Build only the WASM ink editor:
-
-```shell
-pnpm build:ink-web
-```
-
-This compiles `crates/ink-egui-web` and writes the generated package to:
-
-```text
-src/lib/ink-web/pkg/
-```
 
 ## Desktop Builds
 
@@ -131,21 +110,12 @@ cargo clippy -- -D warnings
 cargo test
 ```
 
-Web ink crate:
-
-```shell
-cd crates/ink-egui-web
-cargo fmt -- --check
-cargo clippy --target wasm32-unknown-unknown -- -D warnings
-```
-
 ## Useful Scripts
 
 ```text
-pnpm dev              Build WASM ink package, then start Vite
-pnpm build            Build WASM ink package, then build SvelteKit
-pnpm build:ink-web    Build the eframe/egui WASM ink package
-pnpm check            Build WASM, sync SvelteKit, run svelte-check
+pnpm dev              Start Vite
+pnpm build            Build SvelteKit
+pnpm check            Sync SvelteKit, run svelte-check
 pnpm test             Run Vitest
 pnpm tauri-dev        Start the Tauri desktop app
 pnpm tauri-build      Build the Tauri desktop app
