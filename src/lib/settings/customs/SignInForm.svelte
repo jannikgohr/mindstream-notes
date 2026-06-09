@@ -17,8 +17,13 @@
     type SessionInfo
   } from '$lib/api/auth';
   import { type SyncReport } from '$lib/api/sync';
+  import { normalizeServerUrl } from '$lib/api/server-urls';
   import { runSync } from '$lib/sync/runner';
-  import { getSettingValue, settingsDialog } from '../store.svelte';
+  import {
+    getSettingValue,
+    setSettingValue,
+    settingsDialog
+  } from '../store.svelte';
 
   let session = $state<SessionInfo | null>(null);
   let username = $state('');
@@ -33,8 +38,21 @@
     (getSettingValue('account.serverType') as string | undefined) ??
       'local-only'
   );
-  const serverUrl = $derived(
-    ((getSettingValue('account.serverUrl') as string | undefined) ?? '').trim()
+  /** Raw input as the user typed it — kept verbatim so the field
+   *  doesn't fight them mid-typing. The submit path uses the
+   *  normalised value below. */
+  const serverUrlInput = $derived(
+    (getSettingValue('account.serverUrl') as string | undefined) ?? ''
+  );
+  /** Result of running the raw input through the normaliser:
+   *  canonical origin URL when parseable, plus an inline error
+   *  string when the user typed something we can't accept. */
+  const serverUrlValidation = $derived(normalizeServerUrl(serverUrlInput));
+  /** Only surface the validation error once the user has actually
+   *  typed something — an empty field is "not yet configured",
+   *  which is the prompt below, not an error. */
+  const serverUrlError = $derived(
+    serverUrlInput.trim().length > 0 ? serverUrlValidation.error : null
   );
 
   const canSubmit = $derived(
@@ -42,7 +60,9 @@
       username.trim().length > 0 &&
       password.length > 0 &&
       (serverType === 'managed' ||
-        (serverType === 'self-hosted' && serverUrl.length > 0))
+        (serverType === 'self-hosted' &&
+          serverUrlValidation.url.length > 0 &&
+          serverUrlValidation.error === null))
   );
 
   async function refresh() {
@@ -66,15 +86,32 @@
     if (!canSubmit) return;
     busy = true;
     error = null;
+    const normalizedUrl = serverUrlValidation.url;
     try {
       session = await etebaseLogin({
         serverType: serverType as ServerType,
-        serverUrl: serverType === 'self-hosted' ? serverUrl : undefined,
+        serverUrl: serverType === 'self-hosted' ? normalizedUrl : undefined,
         username: username.trim(),
         password
       });
       password = '';
       username = '';
+      // Persist the cleaned-up URL back so the next time the user
+      // opens settings they see the form the app actually uses. We
+      // only do this after a successful login: a network failure or
+      // wrong password doesn't prove the URL was right, and rewriting
+      // on failure would feel intrusive.
+      if (
+        serverType === 'self-hosted' &&
+        normalizedUrl &&
+        normalizedUrl !== serverUrlInput.trim()
+      ) {
+        try {
+          await setSettingValue('account.serverUrl', normalizedUrl);
+        } catch (err) {
+          console.warn('[auth] persist normalized server URL', err);
+        }
+      }
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
     } finally {
@@ -222,7 +259,9 @@
         </Button>
         {#if error}
           <span class="text-xs text-destructive">{error}</span>
-        {:else if serverType === 'self-hosted' && !serverUrl}
+        {:else if serverType === 'self-hosted' && serverUrlError}
+          <span class="text-xs text-destructive">{serverUrlError}</span>
+        {:else if serverType === 'self-hosted' && !serverUrlValidation.url}
           <span class="text-xs text-muted-foreground"
             >Set a server URL above first.</span
           >
