@@ -338,22 +338,15 @@ export async function purgeCollection(id: string): Promise<void> {
 }
 
 /**
- * Permanently delete every direct child of the trash collection.
- * Done in parallel — for typical note counts the round-trip cost
- * dominates, not server-side throughput.
+ * Permanently delete every item under the trash collection — including
+ * notes nested in sub-folders. The Rust side does it in one transaction
+ * (see src-tauri/src/data.rs); the returned counts feed any "deleted N
+ * items" UX the caller wants.
  */
-export async function emptyTrash(): Promise<void> {
-  const trashedNotes = Object.values(tree.notesById).filter(
-    (n) => n.parent_collection_id === TRASH_ID
-  );
-  const trashedColls = Object.values(tree.collectionsById).filter(
-    (c) => c.parent_collection_id === TRASH_ID
-  );
-  await Promise.all([
-    ...trashedNotes.map((n) => api.purgeNote(n.id)),
-    ...trashedColls.map((c) => api.deleteCollection(c.id))
-  ]);
+export async function emptyTrash(): Promise<api.TrashCounts> {
+  const result = await api.emptyTrashCmd();
   await loadTree();
+  return result;
 }
 
 // ---------- Internal: in-place tree patches for optimistic updates ----------

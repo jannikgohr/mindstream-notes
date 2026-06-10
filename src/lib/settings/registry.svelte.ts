@@ -21,10 +21,13 @@ import {
   getDesktopLanguage,
   getStartInTray,
   isTauri,
+  openDataFolder,
   setCloseToTray,
   setDesktopLanguage,
-  setStartInTray
+  setStartInTray,
+  trashCounts
 } from '$lib/api';
+import { emptyTrash as emptyTrashStore } from '$lib/stores/tree.svelte';
 import { isMobile } from '$lib/platform';
 import {
   setLeftSidebarWidth,
@@ -154,24 +157,73 @@ export const CUSTOM_COMPONENTS: Record<string, AnyComponent> = {
 
 /** Handlers for button-type settings. */
 export const SETTING_ACTIONS: Record<string, () => void | Promise<void>> = {
-  'open-data-folder': () => {
-    console.info('[settings] action: open-data-folder (stub)');
+  'open-data-folder': async () => {
+    try {
+      await openDataFolder();
+    } catch (err) {
+      console.error('[settings] open-data-folder failed', err);
+      await alert({
+        title: tUi('data.openFolder.failed.title'),
+        message: tUi('data.openFolder.failed.message').replace(
+          '{error}',
+          String(err)
+        )
+      });
+    }
   },
   'empty-trash': async () => {
+    // Ask Rust for an authoritative count first — the file tree only
+    // knows about direct children of the trash collection, but the
+    // backend also catches notes nested inside trashed folders. The
+    // confirm dialog needs the full damage.
+    let counts;
+    try {
+      counts = await trashCounts();
+    } catch (err) {
+      console.error('[settings] trash_counts failed', err);
+      await alert({
+        title: tUi('data.emptyTrash.failed.title'),
+        message: tUi('data.emptyTrash.failed.message').replace(
+          '{error}',
+          String(err)
+        )
+      });
+      return;
+    }
+    if (counts.notes === 0 && counts.folders === 0) {
+      await alert({
+        title: tUi('data.emptyTrash.alreadyEmpty.title'),
+        message: tUi('data.emptyTrash.alreadyEmpty.message')
+      });
+      return;
+    }
     // `confirm` is imported statically from confirm-dialog.svelte.ts —
     // that .ts file doesn't touch bits-ui, so the original dynamic-import
     // workaround (keeping the bits-ui re-export chain out of this
     // module's static graph) is no longer needed.
-    if (
-      await confirm({
-        title: 'Empty trash',
-        message:
-          'Every item currently in the trash will be removed permanently. This cannot be undone.',
-        confirmLabel: 'Empty trash',
-        destructive: true
-      })
-    ) {
-      console.info('[settings] action: empty-trash (stub)');
+    const ok = await confirm({
+      title: tUi('data.emptyTrash.confirm.title'),
+      message: tUi('data.emptyTrash.confirm.message')
+        .replace('{notes}', String(counts.notes))
+        .replace('{folders}', String(counts.folders)),
+      confirmLabel: tUi('data.emptyTrash.confirm.button'),
+      destructive: true
+    });
+    if (!ok) return;
+    try {
+      // Routes through the store so the file tree refetches and any
+      // open Trash view rerenders. Same transactional purge as a
+      // direct invoke('empty_trash') would do.
+      await emptyTrashStore();
+    } catch (err) {
+      console.error('[settings] empty_trash failed', err);
+      await alert({
+        title: tUi('data.emptyTrash.failed.title'),
+        message: tUi('data.emptyTrash.failed.message').replace(
+          '{error}',
+          String(err)
+        )
+      });
     }
   },
   'backup-now': () => {

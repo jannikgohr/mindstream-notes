@@ -12,6 +12,16 @@
 
     "account.managedUnavailable": "Not available yet — pick \"Self-hosted\" to use your own server.",
 
+    "data.openFolder.failed.title": "Couldn't open the data folder",
+    "data.openFolder.failed.message": "{error}",
+    "data.emptyTrash.confirm.title": "Empty trash",
+    "data.emptyTrash.confirm.message": "{notes} note(s) and {folders} folder(s) will be permanently deleted. This cannot be undone.",
+    "data.emptyTrash.confirm.button": "Empty trash",
+    "data.emptyTrash.alreadyEmpty.title": "Trash is empty",
+    "data.emptyTrash.alreadyEmpty.message": "There's nothing to remove right now.",
+    "data.emptyTrash.failed.title": "Couldn't empty trash",
+    "data.emptyTrash.failed.message": "{error}",
+
     "sort.label": "Sort",
     "sort.ascending": "Sort ascending",
     "sort.descending": "Sort descending",

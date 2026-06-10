@@ -247,7 +247,17 @@
     "updater.progress.downloading": "Update wird heruntergeladen…",
     "updater.progress.installing": "Wird installiert…",
     "updater.unsupportedLinux.title": "In-App-Update nicht verfügbar",
-    "updater.unsupportedLinux.message": "Mindstream Notes wurde aus einem Systempaket (rpm / deb) installiert und kann nur über deine Distribution aktualisiert werden. Lade die neueste Version unter https://github.com/jannikgohr/mindstream-notes/releases/latest herunter und installiere sie neu, oder nutze die AppImage-Variante für In-App-Updates."
+    "updater.unsupportedLinux.message": "Mindstream Notes wurde aus einem Systempaket (rpm / deb) installiert und kann nur über deine Distribution aktualisiert werden. Lade die neueste Version unter https://github.com/jannikgohr/mindstream-notes/releases/latest herunter und installiere sie neu, oder nutze die AppImage-Variante für In-App-Updates.",
+
+    "data.openFolder.failed.title": "Datenordner konnte nicht geöffnet werden",
+    "data.openFolder.failed.message": "{error}",
+    "data.emptyTrash.confirm.title": "Papierkorb leeren",
+    "data.emptyTrash.confirm.message": "{notes} Notiz(en) und {folders} Ordner werden endgültig gelöscht. Diese Aktion kann nicht rückgängig gemacht werden.",
+    "data.emptyTrash.confirm.button": "Leeren",
+    "data.emptyTrash.alreadyEmpty.title": "Papierkorb ist leer",
+    "data.emptyTrash.alreadyEmpty.message": "Es gibt aktuell nichts zu entfernen.",
+    "data.emptyTrash.failed.title": "Papierkorb konnte nicht geleert werden",
+    "data.emptyTrash.failed.message": "{error}"
   },
   "categories": {
     "account": { "label": "Konto & Synchronisation" },

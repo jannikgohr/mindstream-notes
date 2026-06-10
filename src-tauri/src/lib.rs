@@ -14,6 +14,7 @@
 pub mod assets;
 pub mod auth;
 pub mod collections;
+pub mod data;
 pub mod db;
 #[cfg(desktop)]
 pub mod desktop_settings;
@@ -277,6 +278,10 @@ pub fn run() {
             // bug left corrupt on the server. Invoke from dev tools.
             sync::repair::audit_corrupt_remote_items,
             sync::repair::purge_corrupt_remote_note,
+            // Data & Backup (Settings → Data)
+            data::open_data_folder,
+            data::trash_counts,
+            data::empty_trash,
             // PDF export
             pdf_export::save_pdf_export,
             // System introspection

@@ -36,6 +36,12 @@ export * from './system';
 export * from './desktop-settings';
 export * from './hotkeys';
 export * from './server-urls';
+export {
+  openDataFolder,
+  trashCounts,
+  emptyTrash as emptyTrashCmd,
+  type TrashCounts
+} from './data';
 
 /** Reserved id for the always-present trash collection (mirrors Rust). */
 export const TRASH_ID = 'trash';
