@@ -71,6 +71,23 @@ function initialDataFor(
   penMode: PenModeSetting
 ): ExcalidrawInitialDataState {
   const snapshot = readSceneFromYDoc(yDoc);
+  // First-time scenes get a transparent canvas so the freeform-canvas-host
+  // (and through it, the dockview panel's --background) shows through.
+  // Sidesteps Excalidraw's per-theme color transform on viewBackgroundColor
+  // — any concrete color we'd store gets inverted in dark mode and we
+  // end up with the opposite shade. Transparent has no color to invert,
+  // so the canvas tracks --background automatically as the app theme
+  // changes. Once Excalidraw writes appState back to the Y.Doc the
+  // string is persisted and never overwritten, so the in-canvas color
+  // picker stays authoritative if the user picks something concrete.
+  //
+  // The conditional spread (rather than a post-hoc mutation) keeps
+  // TypeScript happy — `appState` fields on ExcalidrawInitialDataState
+  // are typed `readonly`, so we have to fold viewBackgroundColor into
+  // the object literal instead of assigning it after construction.
+  const seedBackground = !snapshot.appState.viewBackgroundColor
+    ? 'transparent'
+    : null;
   return {
     type: 'excalidraw',
     version: 2,
@@ -78,6 +95,7 @@ function initialDataFor(
     elements: snapshot.elements,
     appState: {
       ...snapshot.appState,
+      ...(seedBackground ? { viewBackgroundColor: seedBackground } : {}),
       theme,
       viewModeEnabled: readOnly,
       penMode: penMode === 'always' ? true : false
