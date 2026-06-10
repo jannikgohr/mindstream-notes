@@ -352,8 +352,6 @@
     "data.useTrash": { "label": "Papierkorb verwenden" },
     "data.trashRetentionDays": { "label": "Papierkorb-Aufbewahrung" },
     "data.emptyTrash": { "label": "Papierkorb jetzt leeren" },
-    "data.backupEnabled": { "label": "Backups aktivieren" },
-    "data.backupSchedule": { "label": "Backup-Zeitplan" },
     "data.backupNow": { "label": "Jetzt sichern" },
     "data.exportVault": { "label": "Vault exportieren" },
     "data.importNotes": { "label": "Notizen importieren" },
