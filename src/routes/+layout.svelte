@@ -4,7 +4,12 @@
   import { ModeWatcher, mode } from 'mode-watcher';
   import { getSettingValue, isModified } from '$lib/settings/store.svelte';
   import { applyAccentColor, clearAccentColor } from '$lib/settings/accent';
-  import { invokeOrFallback, setNativeHotkeyDisplays } from '$lib/api';
+  import {
+    invokeOrFallback,
+    setNativeHotkeyDisplays,
+    setTrashRetention,
+    sweepTrashRetention
+  } from '$lib/api';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import UpdaterProgressDialog from '$lib/updater/ProgressDialog.svelte';
   import ShortcutHelpDialog from '$lib/components/ShortcutHelpDialog.svelte';
@@ -122,6 +127,47 @@
       // of silently leaving every global shortcut unregistered.
       console.error('[hotkeys] syncGlobalShortcuts threw', err);
     });
+  });
+
+  // Trash retention sweep. The Rust scheduler runs the actual purge
+  // (see src-tauri/src/data.rs). This effect mirrors the
+  // `set_sync_schedule` pattern above: translate the user's settings
+  // choice ("forever" / "7" / "30" / "90") into a day count and push
+  // it to the scheduler. `data.useTrash = false` also disables — no
+  // trash, nothing to age out.
+  //
+  // We also fire a one-shot `sweepTrashRetention` whenever the value
+  // changes, so the first sweep doesn't have to wait up to an hour
+  // for the scheduler tick. The scheduler keeps running it on its
+  // own cadence after that.
+  const RETENTION_DAYS: Record<string, number> = {
+    '7': 7,
+    '30': 30,
+    '90': 90,
+    forever: 0
+  };
+  $effect(() => {
+    const useTrash = getSettingValue('data.useTrash') !== false;
+    const choice =
+      (getSettingValue('data.trashRetentionDays') as string | undefined) ??
+      '30';
+    const days = useTrash ? (RETENTION_DAYS[choice] ?? 0) : 0;
+    void setTrashRetention(days);
+    void sweepTrashRetention(days)
+      .then(async (purged) => {
+        // If the sweep actually removed anything, the in-memory tree
+        // store is stale. The hourly scheduler tick can't see the
+        // store, so reload from here — cheap when nothing changed.
+        if (purged > 0) {
+          const { loadTree } = await import('$lib/stores/tree.svelte');
+          await loadTree();
+        }
+      })
+      .catch((err) => {
+        // Surface but don't block render — a failed sweep doesn't
+        // break anything user-visible, but worth knowing in dev tools.
+        console.warn('[trash-retention] initial sweep failed', err);
+      });
   });
 
   $effect(() => {

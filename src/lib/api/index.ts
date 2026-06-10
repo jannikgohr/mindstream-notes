@@ -40,6 +40,8 @@ export {
   openDataFolder,
   trashCounts,
   emptyTrash as emptyTrashCmd,
+  setTrashRetention,
+  sweepTrashRetention,
   type TrashCounts
 } from './data';
 

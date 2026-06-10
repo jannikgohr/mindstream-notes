@@ -244,6 +244,13 @@ pub fn run() {
             app.manage(sync::scheduler::SyncScheduler::new());
             sync::scheduler::spawn(app.handle().clone());
 
+            // Trash retention sweep — same setup pattern. Starts
+            // disabled until the JS settings effect hands over the
+            // restored `data.trashRetentionDays` value (and confirms
+            // `data.useTrash` is on).
+            app.manage(data::TrashRetentionScheduler::new());
+            data::spawn_retention_sweep(app.handle().clone());
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -282,6 +289,8 @@ pub fn run() {
             data::open_data_folder,
             data::trash_counts,
             data::empty_trash,
+            data::set_trash_retention,
+            data::sweep_trash_retention,
             // PDF export
             pdf_export::save_pdf_export,
             // System introspection

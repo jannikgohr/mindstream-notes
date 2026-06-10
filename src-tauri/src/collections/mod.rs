@@ -48,6 +48,35 @@ fn is_trash(id: &str) -> bool {
     id == TRASH_ID
 }
 
+/// Stamp `trashed_at` when a note/folder is being moved into the trash,
+/// and clear it when moving back out. Called from `notes::update` and
+/// `collections::update` after the parent change is applied.
+///
+/// `COALESCE` on the SET keeps the original timestamp if the row was
+/// already in trash and got re-shuffled inside it — retention should
+/// run from when the user originally trashed the item, not from the
+/// last drag-and-drop within the Trash view.
+pub fn stamp_trashed_at_on_parent_change(
+    conn: &rusqlite::Connection,
+    table: &str,
+    id: &str,
+    new_parent: Option<&str>,
+    now: &str,
+) -> AppResult<()> {
+    // Hard-coded list avoids passing arbitrary user input into the
+    // statement. Only callers in the crate touch this; the table arg
+    // is a constant at the call site.
+    debug_assert!(matches!(table, "notes" | "collections"));
+    if matches!(new_parent, Some(TRASH_ID)) {
+        let sql = format!("UPDATE {table} SET trashed_at = COALESCE(trashed_at, ?1) WHERE id = ?2");
+        conn.execute(&sql, params![now, id])?;
+    } else {
+        let sql = format!("UPDATE {table} SET trashed_at = NULL WHERE id = ?1");
+        conn.execute(&sql, params![id])?;
+    }
+    Ok(())
+}
+
 fn row_to_collection(row: &rusqlite::Row<'_>) -> rusqlite::Result<Collection> {
     Ok(Collection {
         id: row.get("id")?,
@@ -73,11 +102,26 @@ pub fn create(conn: &Connection, input: CreateCollection) -> AppResult<Collectio
     let id = format!("coll_{}", uuid::Uuid::new_v4());
     let now = Utc::now().to_rfc3339();
     let position = next_position(conn, input.parent_collection_id.as_deref())?;
+    // Stamp `trashed_at` if the new folder is being created straight
+    // into the trash (mirrors the create-note path) so retention has a
+    // timestamp to compare against.
+    let trashed_at: Option<&str> = if input.parent_collection_id.as_deref() == Some(TRASH_ID) {
+        Some(&now)
+    } else {
+        None
+    };
     // dirty defaults to 1 in the schema; row will be picked up by the next sync push.
     conn.execute(
-        "INSERT INTO collections(id, parent_collection_id, name, position, created, modified)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
-        params![id, input.parent_collection_id, input.name, position, now],
+        "INSERT INTO collections(id, parent_collection_id, name, position, created, modified, trashed_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6)",
+        params![
+            id,
+            input.parent_collection_id,
+            input.name,
+            position,
+            now,
+            trashed_at,
+        ],
     )?;
     get(conn, &id)
 }
@@ -125,6 +169,12 @@ pub fn update(conn: &Connection, input: UpdateCollection) -> AppResult<Collectio
             "UPDATE collections SET parent_collection_id = ?1, modified = ?2 WHERE id = ?3",
             params![parent, now, input.id],
         )?;
+        // Track when the folder enters / leaves the trash so the retention
+        // sweep has a real timestamp to age against. `modified` already
+        // updated above, but it would tick on every later in-place edit
+        // too — `trashed_at` is the dedicated "when did this enter trash"
+        // stamp the sweep needs.
+        stamp_trashed_at_on_parent_change(conn, "collections", &input.id, parent.as_deref(), &now)?;
     }
     if let Some(position) = input.position {
         conn.execute(

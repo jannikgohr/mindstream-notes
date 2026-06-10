@@ -32,3 +32,24 @@ export async function emptyTrash(): Promise<TrashCounts> {
   if (!isTauri()) return { notes: 0, folders: 0 };
   return await tauriInvoke<TrashCounts>('empty_trash');
 }
+
+/**
+ * Tell the Rust scheduler the current retention preference.
+ * `days = 0` disables the sweep (used for both the "Forever" option
+ * and `data.useTrash = false`). No-op outside Tauri.
+ */
+export async function setTrashRetention(days: number): Promise<void> {
+  if (!isTauri()) return;
+  await tauriInvoke<void>('set_trash_retention', { days });
+}
+
+/**
+ * Run the retention sweep right now. Returns how many top-level
+ * trash items were aged out. The settings effect calls this on
+ * startup so the user doesn't have to wait up to an hour for the
+ * first scheduled tick to fire.
+ */
+export async function sweepTrashRetention(days: number): Promise<number> {
+  if (!isTauri()) return 0;
+  return await tauriInvoke<number>('sweep_trash_retention', { days });
+}

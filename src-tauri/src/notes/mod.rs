@@ -262,10 +262,21 @@ pub fn create(conn: &Connection, input: CreateNote) -> AppResult<Note> {
     // resulting v2 state back through `update`. Pre-seeding a v1 Y.Text
     // here would fight the editor's initialisation, and is meaningless
     // for freeform notes anyway.
+    // If the new note is being created directly under the trash
+    // collection (rare in practice — UI normally moves an existing note
+    // there), stamp `trashed_at` up front so the retention sweep can
+    // age it out. Saves a separate stamping pass through the
+    // collections::stamp_trashed_at_on_parent_change helper.
+    let trashed_at: Option<&str> =
+        if input.parent_collection_id.as_deref() == Some(crate::collections::TRASH_ID) {
+            Some(&now)
+        } else {
+            None
+        };
     conn.execute(
         "INSERT INTO notes(id, parent_collection_id, title, body, position,
-                            created, modified, dirty, note_kind)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, 1, ?7)",
+                            created, modified, dirty, note_kind, trashed_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, 1, ?7, ?8)",
         params![
             id,
             input.parent_collection_id,
@@ -273,7 +284,8 @@ pub fn create(conn: &Connection, input: CreateNote) -> AppResult<Note> {
             body,
             position,
             now,
-            note_kind
+            note_kind,
+            trashed_at,
         ],
     )?;
     load(conn, &id)
@@ -350,6 +362,19 @@ pub fn update(conn: &mut Connection, input: UpdateNote) -> AppResult<Note> {
         tx.execute(
             "UPDATE notes SET parent_collection_id = ?1, modified = ?2 WHERE id = ?3",
             params![parent, now, input.id],
+        )?;
+        // Mirror of the collection path: stamp `trashed_at` when the note
+        // moves into the trash, clear it on the way out. The soft-delete
+        // path in `notes::trash` keeps its own behaviour (writes
+        // `trashed_at` without moving) — that's a separate flow used when
+        // `data.useTrash` is off and the user wants the row to disappear
+        // outright.
+        crate::collections::stamp_trashed_at_on_parent_change(
+            &tx,
+            "notes",
+            &input.id,
+            parent.as_deref(),
+            &now,
         )?;
     }
     if let Some(position) = input.position {
