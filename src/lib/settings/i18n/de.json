@@ -339,7 +339,6 @@
       "description": "Anwendungsweite Tastenkürzel auch auslösen, wenn Mindstream Notes im Hintergrund ist. Formatierungs-Tastenkürzel bleiben auf die App beschränkt."
     },
     "editor.autoSaveDebounce": { "label": "Auto-Speichern-Verzögerung" },
-    "data.databasePath": { "label": "Datenbank-Speicherort" },
     "data.useTrash": { "label": "Papierkorb verwenden" },
     "data.trashRetentionDays": { "label": "Papierkorb-Aufbewahrung" },
     "data.emptyTrash": { "label": "Papierkorb jetzt leeren" },

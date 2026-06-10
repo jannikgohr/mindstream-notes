@@ -363,13 +363,6 @@
           "id": "data.database",
           "settings": [
             {
-              "id": "data.databasePath",
-              "scope": "V",
-              "type": "path",
-              "mode": "file",
-              "default": ""
-            },
-            {
               "id": "data.openFolder",
               "scope": "V",
               "type": "button",

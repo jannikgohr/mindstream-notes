@@ -266,7 +266,7 @@
     },
     "data": {
       "label": "Data & Backup",
-      "description": "Database location, trash, backup, import/export."
+      "description": "Trash, backup, import/export."
     },
     "privacy": { "label": "Privacy" },
     "language": { "label": "Language" },
@@ -350,10 +350,6 @@
       "description": "Let application-level shortcuts fire while Mindstream Notes is in the background. Editor formatting shortcuts stay in-app only."
     },
     "editor.autoSaveDebounce": { "label": "Auto-save debounce" },
-    "data.databasePath": {
-      "label": "Database location",
-      "description": "The SQLite/DB file your notes live in."
-    },
     "data.openFolder": { "label": "Open data folder" },
     "data.useTrash": { "label": "Use trash on delete" },
     "data.trashRetentionDays": { "label": "Trash retention" },
