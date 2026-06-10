@@ -97,6 +97,7 @@
     activeTool: PdfTool;
     selectedAnnotationId: string | null;
     shouldRender: boolean;
+    invalidation: number;
   };
   type PageSize = { width: number; height: number };
 
@@ -120,6 +121,13 @@
   // "scrolled past" and "scrolled back to" so scrubbing doesn't churn the
   // pageview lifecycle.
   const RENDER_DROP_DELAY_MS = 200;
+  // Settle delay before kicking off a page render. Fast-scroll page
+  // transitions enter & leave the band within milliseconds — without this
+  // delay, doc.getPage() calls pile up on PDF.js's single worker thread
+  // (those calls are NOT cancellable; only the subsequent pageView.draw()
+  // is). Visible pages then wait behind the queue. With the delay,
+  // transient enters never start a render at all.
+  const DRAW_KICKOFF_DELAY_MS = 80;
 
   let hostEl = $state<HTMLDivElement | null>(null);
   let container = $state<HTMLDivElement | null>(null);
@@ -187,6 +195,22 @@
   // Pending teardown timers per page — set when a page leaves the render
   // window, cleared if it re-enters within the grace window.
   const renderDropTimers = new Map<number, ReturnType<typeof setTimeout>>();
+  // Per-page cancellation hooks the renderObserver fires the instant a
+  // page leaves the band — without this, an in-flight PDF.js render keeps
+  // hogging the worker for ~200 ms (the DOM-teardown grace) before the
+  // action sees shouldRender=false and tears it down. Cancelling the
+  // worker task immediately lets the now-visible page jump the queue.
+  const pageCancelHooks = new Map<number, () => void>();
+  // Pages whose in-flight render was pre-empted while still inside the
+  // grace window. Used to trigger a fresh draw if the user scrolls back
+  // before the timer fires (otherwise the canvas would stay partially-
+  // drawn until the next zoom/pan invalidation).
+  const pageRenderCancelled = new Set<number>();
+  // Per-page redraw counter bumped on grace-window re-entry. Threaded
+  // through RenderParams so the action sees a `visualChange` and re-runs
+  // draw() to complete the cancelled render.
+  const pageInvalidation = new Map<number, number>();
+  let pageInvalidationVersion = $state(0);
   // Reactive container width drives the fit-width placeholder sizing. The
   // resizeObserver below pushes updates into it.
   let containerWidth = $state(0);
@@ -504,6 +528,14 @@
     void renderSetVersion;
     return renderSet.has(pageNumber);
   }
+  function invalidationOf(pageNumber: number): number {
+    void pageInvalidationVersion;
+    return pageInvalidation.get(pageNumber) ?? 0;
+  }
+  function invalidatePage(pageNum: number): void {
+    pageInvalidation.set(pageNum, (pageInvalidation.get(pageNum) ?? 0) + 1);
+    pageInvalidationVersion += 1;
+  }
 
   async function prefetchPageSizes(
     doc: PdfDocument,
@@ -766,6 +798,11 @@
     renderSet.clear();
     for (const t of renderDropTimers.values()) clearTimeout(t);
     renderDropTimers.clear();
+    pageRenderCancelled.clear();
+    // pageCancelHooks is owned by per-action lifecycles, not the effect.
+    // pageInvalidation persists across PDF reloads — clearing it would
+    // reset all action params' invalidation counter back to 0, which
+    // would not trigger redraws on subsequent re-entry events.
     // No renderSetVersion bump here — `renderSetVersion += 1` reads the
     // state, which Svelte 5 records as a dep of this effect; the write
     // then re-triggers the effect, creating a teardown loop. The clear()
@@ -822,15 +859,28 @@
               clearTimeout(existing);
               renderDropTimers.delete(pageNum);
             }
+            // If a page comes back inside the band before its grace timer
+            // fired, its in-flight render had already been pre-empted —
+            // bump invalidation so the action restarts draw() instead of
+            // leaving the canvas half-finished.
+            if (pageRenderCancelled.delete(pageNum)) {
+              invalidatePage(pageNum);
+            }
             if (!renderSet.has(pageNum)) {
               renderSet.add(pageNum);
               changed = true;
             }
           } else {
             if (!renderSet.has(pageNum)) continue;
+            // Pre-empt the in-flight PDF.js render immediately. The DOM
+            // teardown is still gated by the grace timer below, so a
+            // scrub-back within ~200 ms reuses the existing canvas/figure.
+            pageCancelHooks.get(pageNum)?.();
+            pageRenderCancelled.add(pageNum);
             if (renderDropTimers.has(pageNum)) continue;
             const timer = setTimeout(() => {
               renderDropTimers.delete(pageNum);
+              pageRenderCancelled.delete(pageNum);
               if (renderSet.delete(pageNum)) {
                 renderSetVersion += 1;
               }
@@ -866,6 +916,7 @@
       renderSet.clear();
       for (const t of renderDropTimers.values()) clearTimeout(t);
       renderDropTimers.clear();
+      pageRenderCancelled.clear();
     };
   });
 
@@ -1010,6 +1061,8 @@
     renderSet.clear();
     for (const t of renderDropTimers.values()) clearTimeout(t);
     renderDropTimers.clear();
+    pageRenderCancelled.clear();
+    pageCancelHooks.clear();
     void pdfDoc?.cleanup();
     if (yDoc && yDocUpdateHandler) {
       yDoc.off('update', yDocUpdateHandler);
@@ -1037,6 +1090,23 @@
     let currentViewport: ReturnType<
       Awaited<ReturnType<PdfDocument['getPage']>>['getViewport']
     > | null = null;
+    // Register the in-flight-cancel hook so the renderObserver can pre-empt
+    // this page's render the instant the page leaves the band — even if
+    // the DOM teardown is still inside its 200 ms grace window. Three
+    // things happen here, in order:
+    //   1. cancelScheduledDraw — if the kickoff timer hasn't fired yet,
+    //      kill it. This is what stops doc.getPage() pileups on PDF.js's
+    //      single worker thread during fast scroll: a page that's in the
+    //      band for less than DRAW_KICKOFF_DELAY_MS never queues a fetch.
+    //   2. drawGeneration += 1 — any in-flight draw() awaiting at the
+    //      checkpoints below will read the new generation and bail.
+    //   3. pageView.cancelRendering — interrupts the pageView's own
+    //      render task (only relevant once draw() got past getPage()).
+    pageCancelHooks.set(current.pageNumber, () => {
+      cancelScheduledDraw();
+      drawGeneration += 1;
+      pageView?.cancelRendering();
+    });
 
     function renderAppAnnotations() {
       const pageEl = pageSurface.querySelector<HTMLElement>('.page');
@@ -1357,6 +1427,21 @@
       pageSurface.replaceChildren();
     }
 
+    let drawKickoffTimer: ReturnType<typeof setTimeout> | null = null;
+    function cancelScheduledDraw() {
+      if (drawKickoffTimer) {
+        clearTimeout(drawKickoffTimer);
+        drawKickoffTimer = null;
+      }
+    }
+    function scheduleDraw() {
+      cancelScheduledDraw();
+      drawKickoffTimer = setTimeout(() => {
+        drawKickoffTimer = null;
+        void draw();
+      }, DRAW_KICKOFF_DELAY_MS);
+    }
+
     async function draw() {
       const generation = ++drawGeneration;
       const request = { ...current };
@@ -1412,7 +1497,10 @@
       }
     }
 
-    void draw();
+    // Initial mount: respect shouldRender like any other transition.
+    // shouldRender=false short-circuits inside draw() so no worker calls
+    // happen for the 95+ off-screen pages mounted at PDF open.
+    if (params.shouldRender) scheduleDraw();
     return {
       update(next: RenderParams) {
         const prev = current;
@@ -1426,9 +1514,23 @@
           next.pageNumber !== prev.pageNumber ||
           next.version !== prev.version ||
           next.zoom !== prev.zoom ||
-          next.zoomMode !== prev.zoomMode;
-        if (leavingRender || enteringRender || visualChange) {
+          next.zoomMode !== prev.zoomMode ||
+          // Bumped when an externally-cancelled render needs to restart
+          // after the user scrolled back inside the band before grace.
+          next.invalidation !== prev.invalidation;
+        if (leavingRender) {
+          // Tear down immediately — the now-irrelevant pageView is hogging
+          // worker capacity that a visible page needs. No debounce here.
+          cancelScheduledDraw();
           void draw();
+        } else if (enteringRender || visualChange) {
+          // Debounce. Fast scrolling fires enteringRender for many pages
+          // in quick succession; each call to scheduleDraw clears the
+          // previous timer, so a page that's been in the band for less
+          // than DRAW_KICKOFF_DELAY_MS never calls doc.getPage(). That
+          // keeps the worker queue uncontended for whichever page the
+          // user actually settles on.
+          scheduleDraw();
         } else if (next.shouldRender) {
           // Same page, same zoom, still rendered — only annotation state
           // changed. Skip the canvas redraw and just refresh overlays.
@@ -1438,6 +1540,8 @@
       destroy() {
         cancelled = true;
         drawGeneration += 1;
+        cancelScheduledDraw();
+        pageCancelHooks.delete(current.pageNumber);
         teardownPageView();
       }
     };
@@ -1633,6 +1737,7 @@
           {#each pageNumbers as pageNumber (pageNumber)}
             {@const size = placeholderSize(pageNumber)}
             {@const shouldRender = isRendering(pageNumber)}
+            {@const invalidation = invalidationOf(pageNumber)}
             <figure
               class="flex w-max flex-col items-center gap-1"
               data-page-number={pageNumber}
@@ -1646,7 +1751,8 @@
                   annotationVersion,
                   activeTool,
                   selectedAnnotationId,
-                  shouldRender
+                  shouldRender,
+                  invalidation
                 }}
                 style="width:{size.width}px; height:{size.height}px"
                 class="pdf-page-host pdfViewer bg-white shadow-sm ring-1 ring-border"
