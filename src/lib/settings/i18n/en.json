@@ -53,6 +53,10 @@
     "data.import.restart.later": "Later",
     "data.import.failed.title": "Couldn't import backup",
     "data.import.failed.message": "{error}",
+    "data.exportVault.success.title": "Notes exported",
+    "data.exportVault.success.message": "Wrote {notes} note(s) across {folders} folder(s) ({assets} attachment(s), {skippedInk} ink note(s) skipped, {errors} error(s)) to {destination}.",
+    "data.exportVault.failed.title": "Couldn't export notes",
+    "data.exportVault.failed.message": "{error}",
 
     "sort.label": "Sort",
     "sort.ascending": "Sort ascending",

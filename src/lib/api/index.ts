@@ -36,6 +36,7 @@ export * from './system';
 export * from './desktop-settings';
 export * from './hotkeys';
 export * from './server-urls';
+export { pickExportDir, writeExportFile } from './notes-export';
 export {
   openDataFolder,
   trashCounts,

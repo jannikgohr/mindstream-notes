@@ -27,11 +27,16 @@ import {
   importRestore,
   isTauri,
   openDataFolder,
+  pickExportDir,
   setCloseToTray,
   setDesktopLanguage,
   setStartInTray,
   trashCounts
 } from '$lib/api';
+// `notes-export` pulls in the Excalidraw dep through its freeform
+// branch — keep it out of the static module graph so tests for
+// unrelated modules don't trip over Excalidraw's roughjs resolution.
+// Loaded lazily inside the export-vault action below.
 import {
   emptyTrash as emptyTrashStore,
   loadTree
@@ -260,8 +265,48 @@ export const SETTING_ACTIONS: Record<string, () => void | Promise<void>> = {
       });
     }
   },
-  'export-vault': () => {
-    console.info('[settings] action: export-vault (stub)');
+  'export-vault': async () => {
+    let root: string | null;
+    try {
+      root = await pickExportDir();
+    } catch (err) {
+      console.error('[settings] export-vault picker failed', err);
+      await alert({
+        title: tUi('data.exportVault.failed.title'),
+        message: tUi('data.exportVault.failed.message').replace(
+          '{error}',
+          String(err)
+        )
+      });
+      return;
+    }
+    if (!root) {
+      // User cancelled the folder picker — stay quiet.
+      return;
+    }
+    try {
+      const { exportVault } = await import('$lib/notes-export');
+      const report = await exportVault(root);
+      await alert({
+        title: tUi('data.exportVault.success.title'),
+        message: tUi('data.exportVault.success.message')
+          .replace('{notes}', String(report.notes_written))
+          .replace('{folders}', String(report.folders_written))
+          .replace('{assets}', String(report.assets_written))
+          .replace('{skippedInk}', String(report.skipped_ink))
+          .replace('{errors}', String(report.errors))
+          .replace('{destination}', root)
+      });
+    } catch (err) {
+      console.error('[settings] export-vault failed', err);
+      await alert({
+        title: tUi('data.exportVault.failed.title'),
+        message: tUi('data.exportVault.failed.message').replace(
+          '{error}',
+          String(err)
+        )
+      });
+    }
   },
   'import-notes': async () => {
     let preview;

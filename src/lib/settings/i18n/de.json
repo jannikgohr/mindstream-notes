@@ -289,7 +289,11 @@
     "data.import.restart.button": "Jetzt neu starten",
     "data.import.restart.later": "Später",
     "data.import.failed.title": "Backup konnte nicht importiert werden",
-    "data.import.failed.message": "{error}"
+    "data.import.failed.message": "{error}",
+    "data.exportVault.success.title": "Notizen exportiert",
+    "data.exportVault.success.message": "{notes} Notiz(en) in {folders} Ordner(n) ({assets} Anhang/Anhänge, {skippedInk} Ink-Notiz(en) übersprungen, {errors} Fehler) wurden nach {destination} geschrieben.",
+    "data.exportVault.failed.title": "Notizen konnten nicht exportiert werden",
+    "data.exportVault.failed.message": "{error}"
   },
   "categories": {
     "account": { "label": "Konto & Synchronisation" },

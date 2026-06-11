@@ -24,6 +24,7 @@ pub mod error;
 pub mod hotkeys;
 pub mod i18n;
 pub mod notes;
+pub mod notes_export;
 pub mod pdf_export;
 pub mod search;
 pub mod serde_helpers;
@@ -304,6 +305,8 @@ pub fn run() {
             backup::import_cleanup,
             backup::import_restore,
             backup::import_merge,
+            notes_export::notes_export_pick_dir,
+            notes_export::notes_export_write_file,
             // PDF export
             pdf_export::save_pdf_export,
             // System introspection
