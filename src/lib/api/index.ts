@@ -42,7 +42,10 @@ export {
   emptyTrash as emptyTrashCmd,
   setTrashRetention,
   sweepTrashRetention,
-  type TrashCounts
+  backupNow,
+  type TrashCounts,
+  type BackupCounts,
+  type BackupReport
 } from './data';
 
 /** Reserved id for the always-present trash collection (mirrors Rust). */

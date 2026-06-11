@@ -176,6 +176,23 @@ fn reset_sync_cursors(db: &Db) -> AppResult<()> {
 /// `Ok(None)` means "user is signed out"; an `Err` means we *thought* there
 /// was a session but couldn't unlock it (corrupt file, missing keychain
 /// entry, server URL invalid, …).
+/// Friendly identifiers for the currently-signed-in account, read
+/// from the on-disk session file without touching the keyring. Used by
+/// the backup module to stamp username + server URL into the manifest
+/// — we only need the bytes the JSON file already holds, no decrypted
+/// `Account` and no Etebase round-trip. Returns `None` for signed-out
+/// installs.
+pub fn read_session_info(app: &AppHandle) -> AppResult<Option<SessionInfo>> {
+    let path = session_path(app)?;
+    let Some(stored) = read_stored(&path)? else {
+        return Ok(None);
+    };
+    Ok(Some(SessionInfo {
+        username: stored.username,
+        server_url: stored.server_url,
+    }))
+}
+
 pub fn try_restore(app: &AppHandle) -> AppResult<Option<Account>> {
     let path = session_path(app)?;
     let Some(stored) = read_stored(&path)? else {

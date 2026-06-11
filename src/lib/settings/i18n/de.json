@@ -257,7 +257,11 @@
     "data.emptyTrash.alreadyEmpty.title": "Papierkorb ist leer",
     "data.emptyTrash.alreadyEmpty.message": "Es gibt aktuell nichts zu entfernen.",
     "data.emptyTrash.failed.title": "Papierkorb konnte nicht geleert werden",
-    "data.emptyTrash.failed.message": "{error}"
+    "data.emptyTrash.failed.message": "{error}",
+    "data.backupNow.success.title": "Backup gespeichert",
+    "data.backupNow.success.message": "{notes} Notiz(en) und {folders} Ordner wurden in {destination} gesichert.",
+    "data.backupNow.failed.title": "Backup konnte nicht erstellt werden",
+    "data.backupNow.failed.message": "{error}"
   },
   "categories": {
     "account": { "label": "Konto & Synchronisation" },

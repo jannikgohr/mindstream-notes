@@ -21,6 +21,10 @@
     "data.emptyTrash.alreadyEmpty.message": "There's nothing to remove right now.",
     "data.emptyTrash.failed.title": "Couldn't empty trash",
     "data.emptyTrash.failed.message": "{error}",
+    "data.backupNow.success.title": "Backup saved",
+    "data.backupNow.success.message": "Backed up {notes} note(s) and {folders} folder(s) to {destination}.",
+    "data.backupNow.failed.title": "Couldn't create backup",
+    "data.backupNow.failed.message": "{error}",
 
     "sort.label": "Sort",
     "sort.ascending": "Sort ascending",

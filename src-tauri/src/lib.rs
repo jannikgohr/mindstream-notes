@@ -13,6 +13,7 @@
 
 pub mod assets;
 pub mod auth;
+pub mod backup;
 pub mod collections;
 pub mod data;
 pub mod db;
@@ -291,6 +292,7 @@ pub fn run() {
             data::empty_trash,
             data::set_trash_retention,
             data::sweep_trash_retention,
+            backup::backup_now,
             // PDF export
             pdf_export::save_pdf_export,
             // System introspection

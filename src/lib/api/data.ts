@@ -53,3 +53,28 @@ export async function sweepTrashRetention(days: number): Promise<number> {
   if (!isTauri()) return 0;
   return await tauriInvoke<number>('sweep_trash_retention', { days });
 }
+
+// ---------- Backup export (Slice A) ----------
+
+export interface BackupCounts {
+  notes: number;
+  folders: number;
+  assets_bytes: number;
+}
+
+export interface BackupReport {
+  destination: string;
+  counts: BackupCounts;
+  account_present: boolean;
+}
+
+/**
+ * Pop the Save-As dialog (defaults to `<app_data>/backups/`), then
+ * run the export to whatever path the user picks. Returns `null` if
+ * the user cancelled the dialog — the caller should stay quiet in
+ * that case, not surface a "backup failed" toast.
+ */
+export async function backupNow(): Promise<BackupReport | null> {
+  if (!isTauri()) return null;
+  return await tauriInvoke<BackupReport | null>('backup_now');
+}

@@ -17,6 +17,7 @@ import {
   disable as disableAutostart
 } from '@tauri-apps/plugin-autostart';
 import {
+  backupNow,
   getCloseToTray,
   getDesktopLanguage,
   getStartInTray,
@@ -226,8 +227,30 @@ export const SETTING_ACTIONS: Record<string, () => void | Promise<void>> = {
       });
     }
   },
-  'backup-now': () => {
-    console.info('[settings] action: backup-now (stub)');
+  'backup-now': async () => {
+    try {
+      const report = await backupNow();
+      if (report === null) {
+        // User cancelled the Save-As dialog — stay quiet, no toast.
+        return;
+      }
+      await alert({
+        title: tUi('data.backupNow.success.title'),
+        message: tUi('data.backupNow.success.message')
+          .replace('{notes}', String(report.counts.notes))
+          .replace('{folders}', String(report.counts.folders))
+          .replace('{destination}', report.destination)
+      });
+    } catch (err) {
+      console.error('[settings] backup-now failed', err);
+      await alert({
+        title: tUi('data.backupNow.failed.title'),
+        message: tUi('data.backupNow.failed.message').replace(
+          '{error}',
+          String(err)
+        )
+      });
+    }
   },
   'export-vault': () => {
     console.info('[settings] action: export-vault (stub)');
