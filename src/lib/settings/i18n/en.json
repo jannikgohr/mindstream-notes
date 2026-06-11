@@ -401,8 +401,15 @@
     "data.trashRetentionDays": { "label": "Trash retention" },
     "data.emptyTrash": { "label": "Empty trash now" },
     "data.backupNow": { "label": "Back up now" },
+    "data.restoreBackup": {
+      "label": "Restore from backup",
+      "description": "Open a Mindstream Notes backup zip and either replace your current vault or merge missing items in."
+    },
     "data.exportVault": { "label": "Export vault" },
-    "data.importNotes": { "label": "Import notes" },
+    "data.importNotes": {
+      "label": "Import notes",
+      "description": "Import notes from external sources like Markdown files or Obsidian vaults. Coming soon."
+    },
     "privacy.usageStats": { "label": "Send anonymous usage stats" },
     "privacy.crashReports": { "label": "Send crash reports" },
     "privacy.clearCache": { "label": "Clear local cache" },

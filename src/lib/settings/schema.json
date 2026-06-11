@@ -406,6 +406,12 @@
               "actionId": "backup-now"
             },
             {
+              "id": "data.restoreBackup",
+              "scope": "V",
+              "type": "button",
+              "actionId": "restore-backup"
+            },
+            {
               "id": "data.exportVault",
               "scope": "V",
               "type": "button",

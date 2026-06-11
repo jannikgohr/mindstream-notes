@@ -389,8 +389,15 @@
     "data.trashRetentionDays": { "label": "Papierkorb-Aufbewahrung" },
     "data.emptyTrash": { "label": "Papierkorb jetzt leeren" },
     "data.backupNow": { "label": "Jetzt sichern" },
+    "data.restoreBackup": {
+      "label": "Aus Backup wiederherstellen",
+      "description": "Öffne ein Mindstream-Notes-Backup und ersetze deinen aktuellen Datenbestand oder führe fehlende Einträge zusammen."
+    },
     "data.exportVault": { "label": "Vault exportieren" },
-    "data.importNotes": { "label": "Notizen importieren" },
+    "data.importNotes": {
+      "label": "Notizen importieren",
+      "description": "Notizen aus externen Quellen wie Markdown-Dateien oder Obsidian-Vaults importieren. Folgt in Kürze."
+    },
     "privacy.usageStats": { "label": "Anonyme Nutzungsstatistik senden" },
     "privacy.crashReports": { "label": "Absturzberichte senden" },
     "privacy.clearCache": { "label": "Lokalen Cache leeren" },

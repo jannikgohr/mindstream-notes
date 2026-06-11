@@ -308,7 +308,15 @@ export const SETTING_ACTIONS: Record<string, () => void | Promise<void>> = {
       });
     }
   },
-  'import-notes': async () => {
+  'import-notes': () => {
+    // No logic yet — placeholder for the upcoming "import markdown /
+    // Obsidian / external sources" flow. The settings-dialog button
+    // is wired through this action so the button at least renders
+    // without throwing; replace with the real implementation when
+    // that slice lands.
+    console.info('[settings] action: import-notes (stub, not yet wired)');
+  },
+  'restore-backup': async () => {
     let preview;
     try {
       preview = await importBegin();
