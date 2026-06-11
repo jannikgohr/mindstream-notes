@@ -199,6 +199,13 @@ pub fn run() {
                 .path()
                 .app_data_dir()
                 .expect("could not resolve app_data_dir");
+
+            // Apply any pending restore the user staged in a previous
+            // session BEFORE opening the live DB. If the sentinel
+            // file is present, we move the live DB aside and swap the
+            // staged copy into place. No-op when nothing's pending.
+            backup::apply_pending_restore_if_any(app.handle());
+
             let db_path = app_data.join("mindstream.db");
             log::info!("[boot] db path = {}", db_path.display());
 
@@ -293,6 +300,10 @@ pub fn run() {
             data::set_trash_retention,
             data::sweep_trash_retention,
             backup::backup_now,
+            backup::import_begin,
+            backup::import_cleanup,
+            backup::import_restore,
+            backup::import_merge,
             // PDF export
             pdf_export::save_pdf_export,
             // System introspection

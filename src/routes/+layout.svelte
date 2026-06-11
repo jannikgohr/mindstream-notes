@@ -11,6 +11,7 @@
     sweepTrashRetention
   } from '$lib/api';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+  import ImportChoiceDialog from '$lib/components/ImportChoiceDialog.svelte';
   import UpdaterProgressDialog from '$lib/updater/ProgressDialog.svelte';
   import ShortcutHelpDialog from '$lib/components/ShortcutHelpDialog.svelte';
   import SearchDialog from '$lib/search/SearchDialog.svelte';
@@ -204,6 +205,12 @@
      caller anywhere in the tree can `await confirm(...)` without
      stashing its own component. -->
 <ConfirmDialog />
+
+<!-- Singleton three-way import-choice dialog. Driven by
+     `pickImportChoice()` in the sibling .svelte.ts; mounting here
+     means the registry's `import-notes` action can pop it without
+     stashing its own component. -->
+<ImportChoiceDialog />
 
 <!-- Singleton updater progress dialog. Driven by the helpers in
      $lib/updater/progress.svelte.ts — mounting it here means anything

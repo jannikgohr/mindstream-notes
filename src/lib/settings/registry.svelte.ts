@@ -21,6 +21,10 @@ import {
   getCloseToTray,
   getDesktopLanguage,
   getStartInTray,
+  importBegin,
+  importCleanup,
+  importMerge,
+  importRestore,
   isTauri,
   openDataFolder,
   setCloseToTray,
@@ -28,7 +32,11 @@ import {
   setStartInTray,
   trashCounts
 } from '$lib/api';
-import { emptyTrash as emptyTrashStore } from '$lib/stores/tree.svelte';
+import {
+  emptyTrash as emptyTrashStore,
+  loadTree
+} from '$lib/stores/tree.svelte';
+import { pickImportChoice } from '$lib/components/import-choice-dialog.svelte';
 import { isMobile } from '$lib/platform';
 import {
   setLeftSidebarWidth,
@@ -255,8 +263,95 @@ export const SETTING_ACTIONS: Record<string, () => void | Promise<void>> = {
   'export-vault': () => {
     console.info('[settings] action: export-vault (stub)');
   },
-  'import-notes': () => {
-    console.info('[settings] action: import-notes (stub)');
+  'import-notes': async () => {
+    let preview;
+    try {
+      preview = await importBegin();
+    } catch (err) {
+      console.error('[settings] import_begin failed', err);
+      await alert({
+        title: tUi('data.import.failed.title'),
+        message: tUi('data.import.failed.message').replace(
+          '{error}',
+          String(err)
+        )
+      });
+      return;
+    }
+    if (preview === null) {
+      // User cancelled the file picker — stay quiet.
+      return;
+    }
+    const choice = await pickImportChoice(preview);
+    if (choice === 'cancel') {
+      await importCleanup(preview.token).catch((err) =>
+        console.warn('[settings] import_cleanup failed', err)
+      );
+      return;
+    }
+    if (choice === 'merge') {
+      try {
+        const report = await importMerge(preview.token);
+        await loadTree();
+        await alert({
+          title: tUi('data.import.merge.success.title'),
+          message: tUi('data.import.merge.success.message')
+            .replace('{notes}', String(report.notes_added))
+            .replace('{folders}', String(report.folders_added))
+            .replace('{assets}', String(report.assets_added))
+            .replace('{orphaned}', String(report.notes_orphaned))
+        });
+      } catch (err) {
+        console.error('[settings] import_merge failed', err);
+        await alert({
+          title: tUi('data.import.failed.title'),
+          message: tUi('data.import.failed.message').replace(
+            '{error}',
+            String(err)
+          )
+        });
+      }
+      return;
+    }
+    // Restore path — destructive. Re-confirm before staging.
+    const confirmed = await confirm({
+      title: tUi('data.import.restore.confirm.title'),
+      message: preview.same_account
+        ? tUi('data.import.restore.confirm.sameAccount')
+        : tUi('data.import.restore.confirm.differentAccount'),
+      confirmLabel: tUi('data.import.restore.confirm.button'),
+      destructive: true
+    });
+    if (!confirmed) {
+      await importCleanup(preview.token).catch((err) =>
+        console.warn('[settings] import_cleanup failed', err)
+      );
+      return;
+    }
+    try {
+      const staged = await importRestore(preview.token, preview.same_account);
+      if (staged.restart_required) {
+        const restart = await confirm({
+          title: tUi('data.import.restart.title'),
+          message: tUi('data.import.restart.message'),
+          confirmLabel: tUi('data.import.restart.button'),
+          cancelLabel: tUi('data.import.restart.later')
+        });
+        if (restart) {
+          const { relaunch } = await import('@tauri-apps/plugin-process');
+          await relaunch();
+        }
+      }
+    } catch (err) {
+      console.error('[settings] import_restore failed', err);
+      await alert({
+        title: tUi('data.import.failed.title'),
+        message: tUi('data.import.failed.message').replace(
+          '{error}',
+          String(err)
+        )
+      });
+    }
   },
   'clear-cache': () => {
     console.info('[settings] action: clear-cache (stub)');

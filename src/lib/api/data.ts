@@ -78,3 +78,79 @@ export async function backupNow(): Promise<BackupReport | null> {
   if (!isTauri()) return null;
   return await tauriInvoke<BackupReport | null>('backup_now');
 }
+
+// ---------- Backup import (Slices B/C/D) ----------
+
+export interface AccountDisplay {
+  username: string | null;
+  server_url: string | null;
+}
+
+export interface ImportPreview {
+  token: string;
+  backup_counts: BackupCounts;
+  current_counts: BackupCounts;
+  backup_app_version: string;
+  backup_created_at: string;
+  same_account: boolean;
+  backup_account: AccountDisplay | null;
+  current_account: AccountDisplay | null;
+}
+
+export interface RestoreStaged {
+  restart_required: boolean;
+  sanitized: boolean;
+}
+
+export interface MergeReport {
+  folders_added: number;
+  notes_added: number;
+  assets_added: number;
+  notes_orphaned: number;
+}
+
+/**
+ * Pop the file picker for a backup zip; extract + validate + return a
+ * preview struct. `null` means the user cancelled the picker.
+ */
+export async function importBegin(): Promise<ImportPreview | null> {
+  if (!isTauri()) return null;
+  return await tauriInvoke<ImportPreview | null>('import_begin');
+}
+
+/** Drop the staging dir created by `importBegin`. Safe on stale tokens. */
+export async function importCleanup(token: string): Promise<void> {
+  if (!isTauri()) return;
+  await tauriInvoke<void>('import_cleanup', { token });
+}
+
+/**
+ * Stage a replace-all restore. The Rust side moves the staged DB
+ * into pending-restore.db and writes the sentinel; the app needs a
+ * relaunch to actually swap the files in.
+ */
+export async function importRestore(
+  token: string,
+  sameAccount: boolean
+): Promise<RestoreStaged> {
+  if (!isTauri()) return { restart_required: false, sanitized: !sameAccount };
+  return await tauriInvoke<RestoreStaged>('import_restore', {
+    token,
+    sameAccount
+  });
+}
+
+/**
+ * In-process merge: copy missing items from the staged DB into the
+ * live one. No restart needed. Sync metadata is always stripped.
+ */
+export async function importMerge(token: string): Promise<MergeReport> {
+  if (!isTauri())
+    return {
+      folders_added: 0,
+      notes_added: 0,
+      assets_added: 0,
+      notes_orphaned: 0
+    };
+  return await tauriInvoke<MergeReport>('import_merge', { token });
+}
