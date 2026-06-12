@@ -26,6 +26,7 @@
     removeNoteTag,
     tree
   } from '$lib/stores/tree.svelte';
+  import { tUi } from '$lib/settings/i18n.svelte';
 
   interface Props {
     noteId: string;
@@ -211,7 +212,7 @@
   <span
     class="text-xs font-semibold uppercase tracking-wide text-muted-foreground"
   >
-    Tags
+    {tUi('tags.label')}
   </span>
   <div class="mt-2 flex flex-wrap items-center gap-1">
     {#each noteTags as tag (tag)}
@@ -222,7 +223,7 @@
         <button
           type="button"
           class="inline-flex h-5 w-5 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-          aria-label="Remove tag {tag}"
+          aria-label={tUi('tags.remove').replace('{tag}', tag)}
           onclick={() => handleRemove(tag)}
         >
           <X class="h-3 w-3" />
@@ -232,19 +233,20 @@
 
     <button
       type="button"
-      class="inline-flex h-6 w-6 items-center justify-center rounded-full border border-dashed border-border text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-      aria-label="Add tag"
+      class="inline-flex h-6 items-center gap-1 rounded-full border border-dashed border-border px-2 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+      aria-label={tUi('tags.add')}
       aria-expanded={pickerOpen}
       onclick={() => (pickerOpen ? closePicker() : openPicker())}
     >
       <Plus class="h-3.5 w-3.5" />
+      <span>{tUi('tags.add')}</span>
     </button>
 
     {#if pickerOpen}
       <div
         bind:this={pickerEl}
         role="dialog"
-        aria-label="Add tag"
+        aria-label={tUi('tags.add')}
         class="absolute left-0 top-full z-50 mt-2 w-full min-w-50 overflow-hidden rounded-md border border-border bg-popover text-popover-foreground shadow-lg"
       >
         <div class="border-b border-border p-2">
@@ -252,12 +254,14 @@
             bind:this={inputEl}
             bind:value={pickerQuery}
             type="text"
-            placeholder="Search or create tag…"
+            placeholder={tUi('tags.searchPlaceholder')}
             class="h-7 w-full rounded-sm border border-input bg-background px-2 text-xs shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             onkeydown={handleKeydown}
           />
           <p class="mt-1 text-[10px] text-muted-foreground">
-            Use <code class="font-mono">/</code> for nested tags.
+            {tUi('tags.nestingHint.before')}
+            <code class="font-mono">/</code>
+            {tUi('tags.nestingHint.after')}
           </p>
         </div>
         <div class="max-h-60 overflow-y-auto py-1">
@@ -272,24 +276,25 @@
               onclick={() => handleSubmitInput()}
             >
               <Plus class="h-3 w-3" />
-              <span>Create &ldquo;{@render path(trimmedQuery)}&rdquo;</span>
+              <span
+                >{tUi('tags.create')} &ldquo;{@render path(
+                  trimmedQuery
+                )}&rdquo;</span
+              >
             </button>
           {/if}
 
           {#if visibleTree.length === 0 && !canCreate}
             <p class="px-3 py-2 text-xs text-muted-foreground">
               {allTags.length === 0
-                ? 'No tags yet. Type one and press Enter.'
-                : 'No matches.'}
+                ? tUi('tags.emptyType')
+                : tUi('tags.noMatches')}
             </p>
           {/if}
         </div>
       </div>
     {/if}
   </div>
-  {#if noteTags.length === 0 && !pickerOpen}
-    <p class="mt-1 text-xs text-muted-foreground">No tags yet</p>
-  {/if}
 </div>
 
 {#snippet row(node: TagNode, depth: number)}
@@ -302,7 +307,9 @@
       class="flex h-6 w-5 shrink-0 items-center justify-center text-muted-foreground transition-colors hover:text-foreground disabled:opacity-0"
       disabled={!hasChildren || queryActive}
       style="margin-left: {depth * 12}px"
-      aria-label={isExpanded(node.fullPath) ? 'Collapse' : 'Expand'}
+      aria-label={isExpanded(node.fullPath)
+        ? tUi('tags.collapse')
+        : tUi('tags.expand')}
       onclick={() => toggleExpand(node.fullPath)}
     >
       {#if hasChildren}
@@ -333,7 +340,7 @@
         <span
           class="ml-2 text-[10px] uppercase tracking-wide text-muted-foreground"
         >
-          on note
+          {tUi('tags.onNote')}
         </span>
       {/if}
     </button>
