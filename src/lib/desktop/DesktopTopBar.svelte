@@ -2,9 +2,9 @@
   import {
     PanelLeft,
     PanelRight,
-    Search as SearchIcon,
     Settings as SettingsIcon
   } from 'lucide-svelte';
+  import { Search as SearchIcon } from '@jis3r/icons';
   import { Button } from '$lib/components/ui/button';
   import { Separator } from '$lib/components/ui/separator';
   import ThemeToggle from '$lib/components/ThemeToggle.svelte';
@@ -46,7 +46,7 @@
     title={tUi('search.open')}
     aria-label={tUi('search.open')}
   >
-    <SearchIcon class="size-4" />
+    <SearchIcon size={16} />
   </Button>
   <NotificationCenter />
   <Button

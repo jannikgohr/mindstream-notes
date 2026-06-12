@@ -10,7 +10,8 @@
    * dialog input, so the typing flow stays continuous despite the
    * intermediate UI step.
    */
-  import { Search, Settings as SettingsIcon } from 'lucide-svelte';
+  import { Settings as SettingsIcon } from 'lucide-svelte';
+  import { Search } from '@jis3r/icons';
   import { Button } from '$lib/components/ui/button';
   import { openSettings } from '$lib/settings/store.svelte';
   import { openSearch } from '$lib/search/store.svelte';
@@ -28,7 +29,8 @@
     class="relative flex h-12 min-w-0 flex-1 items-center gap-3 rounded-full border border-input bg-background pl-11 pr-4 text-left text-sm text-muted-foreground hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
   >
     <Search
-      class="pointer-events-none absolute left-4 top-1/2 size-5 -translate-y-1/2 text-muted-foreground"
+      size={20}
+      class="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground"
     />
     <span class="truncate">{tUi('search.notes.placeholder')}</span>
   </button>

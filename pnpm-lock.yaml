@@ -14,6 +14,9 @@ importers:
       '@floating-ui/dom':
         specifier: ^1.7.6
         version: 1.7.6
+      '@jis3r/icons':
+        specifier: ^2.7.0
+        version: 2.7.0(svelte@5.55.5)
       '@milkdown/crepe':
         specifier: ^7.5.8
         version: 7.20.0(prosemirror-model@1.25.4)(prosemirror-state@1.4.4)(prosemirror-view@1.41.8)(typescript@5.9.3)
@@ -783,6 +786,11 @@ packages:
 
   '@internationalized/date@3.12.1':
     resolution: {integrity: sha512-6IedsVWXyq4P9Tj+TxuU8WGWM70hYLl12nbYU8jkikVpa6WXapFazPUcHUMDMoWftIDE2ILDkFFte6W2nFCkRQ==}
+
+  '@jis3r/icons@2.7.0':
+    resolution: {integrity: sha512-RXee+W1AoWFHtFliLZ7SQxVopAezmCH0xU45HKTvvpDQ+6Y3g6tUHvKOK16J52TM8YsN4WDnsiOmcwau+bHmwg==}
+    peerDependencies:
+      svelte: ^5.0.0
 
   '@jridgewell/gen-mapping@0.3.13':
     resolution: {integrity: sha512-2kkt/7niJ6MgEPxF0bYdQ6etZaA+fQvDcLKckhy1yIQOzaoKjBBjSj63/aLVjYE3qhRt5dvM+uUyfCg6UKCBbA==}
@@ -4544,6 +4552,10 @@ snapshots:
   '@internationalized/date@3.12.1':
     dependencies:
       '@swc/helpers': 0.5.21
+
+  '@jis3r/icons@2.7.0(svelte@5.55.5)':
+    dependencies:
+      svelte: 5.55.5
 
   '@jridgewell/gen-mapping@0.3.13':
     dependencies:

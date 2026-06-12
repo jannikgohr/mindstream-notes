@@ -9,9 +9,9 @@
     FileUp,
     PencilRuler,
     FilePlus2,
-    Star,
     Trash2
   } from 'lucide-svelte';
+  import { Star } from '@jis3r/icons';
   import { noteKindIcon } from './note-kind-icon';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
@@ -781,7 +781,7 @@
           aria-label={fav ? tUi('favourite.remove') : tUi('favourite.add')}
           title={fav ? tUi('favourite.remove') : tUi('favourite.add')}
         >
-          <Star class="size-3.5" fill={fav ? 'currentColor' : 'none'} />
+          <Star size={14} class={fav ? 'fav-filled' : ''} />
         </button>
       {/if}
     </div>

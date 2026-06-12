@@ -13,7 +13,8 @@
    * yet, so it just shows an explanatory empty state. Wire a real filter
    * in here when collab metadata lands.
    */
-  import { Folder, Loader2, MoreVertical, Star, Trash2 } from 'lucide-svelte';
+  import { Folder, Loader2, MoreVertical, Trash2 } from 'lucide-svelte';
+  import { Star } from '@jis3r/icons';
   import type { NoteSummary, TreeNode } from '$lib/api';
   import { TRASH_ID } from '$lib/api';
   import { noteKindIcon } from '$lib/components/note-kind-icon';
@@ -445,7 +446,7 @@
                     : 'Add to favourites'}
                   title={fav ? 'Remove from favourites' : 'Add to favourites'}
                 >
-                  <Star class="size-4" fill={fav ? 'currentColor' : 'none'} />
+                  <Star size={16} class={fav ? 'fav-filled' : ''} />
                 </button>
               {/if}
               <button
@@ -500,7 +501,7 @@
                   : 'Add to favourites'}
                 title={fav ? 'Remove from favourites' : 'Add to favourites'}
               >
-                <Star class="size-4" fill={fav ? 'currentColor' : 'none'} />
+                <Star size={16} class={fav ? 'fav-filled' : ''} />
               </button>
             {/if}
             <button

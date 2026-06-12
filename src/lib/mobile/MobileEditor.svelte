@@ -5,7 +5,8 @@
    * this is foreground. NoteEditor is shared with desktop — only the
    * surrounding chrome changes per platform.
    */
-  import { ArrowLeft, Info, Star, X } from 'lucide-svelte';
+  import { ArrowLeft, Info, X } from 'lucide-svelte';
+  import { Star } from '@jis3r/icons';
   import { Button } from '$lib/components/ui/button';
   import NoteStatusIcons from '$lib/desktop/NoteStatusIcons.svelte';
   import MetadataPanel from '$lib/components/MetadataPanel.svelte';
@@ -73,7 +74,7 @@
         aria-label={fav ? 'Remove from favourites' : 'Add to favourites'}
         title={fav ? 'Remove from favourites' : 'Add to favourites'}
       >
-        <Star class="size-5" fill={fav ? 'currentColor' : 'none'} />
+        <Star size={20} class={fav ? 'fav-filled' : ''} />
       </Button>
       <Button
         variant="ghost"

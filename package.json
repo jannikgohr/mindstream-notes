@@ -61,6 +61,7 @@
   "dependencies": {
     "@excalidraw/excalidraw": "^0.18.1",
     "@floating-ui/dom": "^1.7.6",
+    "@jis3r/icons": "^2.7.0",
     "@milkdown/crepe": "^7.5.8",
     "@milkdown/kit": "^7.5.8",
     "@milkdown/plugin-collab": "^7.20.0",

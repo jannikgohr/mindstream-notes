@@ -1,12 +1,6 @@
 <script lang="ts">
-  import {
-    CalendarPlus,
-    Edit3,
-    Folder,
-    Paperclip,
-    Star,
-    Tag
-  } from 'lucide-svelte';
+  import { CalendarPlus, Edit3, Folder, Paperclip, Tag } from 'lucide-svelte';
+  import { Star } from '@jis3r/icons';
   import TagsSection from '$lib/components/TagsSection.svelte';
   import { loadNote, type Collection, type NoteSummary } from '$lib/api';
   import { noteKindIcon } from '$lib/components/note-kind-icon';
@@ -266,10 +260,7 @@
               ? tUi('favourite.remove')
               : tUi('favourite.add')}
           >
-            <Star
-              class="size-4"
-              fill={note.favourite ? 'currentColor' : 'none'}
-            />
+            <Star size={16} class={note.favourite ? 'fav-filled' : ''} />
           </button>
         </div>
 

@@ -21,6 +21,8 @@
     PencilRuler,
     RotateCcw
   } from 'lucide-svelte';
+  import { Archive as JisArchive } from '@jis3r/icons';
+  import PartyPopperAnimated from './PartyPopperAnimated.svelte';
   import { Button } from '$lib/components/ui/button';
   import { exportResultQueue } from './export-result-dialog.svelte';
   import type {
@@ -30,9 +32,39 @@
   } from './export-result-dialog.svelte';
   import { openFolder } from '$lib/api';
   import { tUi } from '$lib/settings/i18n.svelte';
+  import { getSettingValue } from '$lib/settings/store.svelte';
   import type { Component } from 'svelte';
 
+  // Mirror the in-app `appearance.reduceMotion` toggle. The CSS in
+  // `app.css` already disables the OS-level case via media query; this
+  // covers the one place we trigger animation programmatically
+  // (the header-icon one-shot), so the toggle in Settings actually
+  // suppresses it.
+  const reduceMotion = $derived(
+    getSettingValue('appearance.reduceMotion') === true
+  );
+
   type IconComponent = Component<{ class?: string }>;
+
+  // Header-strip icon plays a one-shot animation a moment after the
+  // dialog finishes its open-fade — long enough that the user's eye
+  // has landed on it, short enough to still register as a reaction
+  // to the action they just took. Re-armed by the keyed reactive
+  // tying to whatever queue item is currently on top.
+  const ANIMATE_DELAY_MS = 350;
+  let headerAnimate = $state(false);
+  $effect(() => {
+    // Track the current item so the effect re-runs when the queue
+    // pops to a new one. Reset to false synchronously, then arm.
+    void exportResultQueue.items[0];
+    headerAnimate = false;
+    if (!exportResultQueue.items[0]) return;
+    if (reduceMotion) return;
+    const handle = setTimeout(() => {
+      headerAnimate = true;
+    }, ANIMATE_DELAY_MS);
+    return () => clearTimeout(handle);
+  });
 
   const iconMap: Record<DataResultIcon, IconComponent> = {
     archive: Archive as unknown as IconComponent,
@@ -166,11 +198,15 @@
               current.tone
             ].headerIcon}"
           >
-            <HeaderIcon
-              class="size-5 {current.headerIcon === 'partyPopper'
-                ? 'animate-party-wave'
-                : ''}"
-            />
+            {#if current.headerIcon === 'partyPopper'}
+              <!-- Svelte port of pqoqubbw/icons' party-popper. -->
+              <PartyPopperAnimated size={20} animate={headerAnimate} />
+            {:else if current.headerIcon === 'archive'}
+              <!-- jis3r/icons animated archive. -->
+              <JisArchive size={20} animate={headerAnimate} />
+            {:else}
+              <HeaderIcon class="size-5" />
+            {/if}
           </span>
           <div>
             <AlertDialog.Title class="text-lg font-semibold tracking-tight">
@@ -278,10 +314,3 @@
     </AlertDialog.Content>
   </AlertDialog.Portal>
 </AlertDialog.Root>
-
-<!--
-  The `.animate-party-wave` class — including its `prefers-reduced-motion`
-  override — lives in `src/app.css`. `:global()` inside a Svelte `<style>`
-  block doesn't reliably carry an @media rule through the scoping
-  pipeline, so the reduce-motion preference would silently fail here.
--->

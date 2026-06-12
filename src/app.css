@@ -826,46 +826,64 @@ body.dv-tab-dragging .freeform-canvas-host * {
 }
 
 /* -------------------------------------------------------------------------
- *  ExportResultDialog — PartyPopper celebration wave
- *  ---------------------------------------------------
- *  Lives here rather than in the component's <style> block because
- *  Svelte scopes scoped CSS even through `:global()` when combined with
- *  `@media` queries, which made the `prefers-reduced-motion` override
- *  silently fail in practice. Hoisting to app.css sidesteps the scoping
- *  pipeline entirely.
+ *  Animated-icon motion gates
+ *  --------------------------
+ *  Honour both the OS-level `prefers-reduced-motion` preference AND
+ *  the in-app `appearance.reduceMotion` toggle (wired up in
+ *  `src/routes/+layout.svelte`, which mirrors the setting onto
+ *  `html.reduce-motion`). These rules live in global CSS because
+ *  Svelte's scoped pipeline chews on `:global()` inside @media
+ *  selectors, which made earlier per-component overrides silently fail.
+ *
+ *  Add new animated-icon class hooks here when shipping new
+ *  microinteractions so a single switch governs them all.
  * ------------------------------------------------------------------------- */
-
-.animate-party-wave {
-  transform-origin: 50% 90%;
-  animation: party-wave-once 0.9s ease-out 0.35s 1 both;
+@media (prefers-reduced-motion: reduce) {
+  /* Local microinteractions (PartyPopperAnimated component). */
+  .party-popper.animate .pp-popper,
+  .party-popper.animate .pp-dots,
+  .party-popper.animate .pp-lines,
+  .party-popper.animate .pp-lines path {
+    animation: none;
+  }
+  /*
+   * jis3r/icons internal animation classes. The library doesn't
+   * honour either motion preference itself — these rules suppress
+   * the transitions even when the user hovers an icon directly.
+   * `!important` because the per-icon styles are scoped (so they
+   * win specificity) and use `transform` directly.
+   */
+  .animate-group,
+  .animate-rect,
+  .animate-path {
+    transform: none !important;
+    transition: none !important;
+    animation: none !important;
+  }
 }
 
-@keyframes party-wave-once {
-  0% {
-    transform: rotate(0deg) scale(1);
-  }
-  35% {
-    transform: rotate(-10deg) scale(1.1);
-  }
-  65% {
-    transform: rotate(8deg) scale(1.1);
-  }
-  100% {
-    transform: rotate(0deg) scale(1);
-  }
+.reduce-motion .party-popper.animate .pp-popper,
+.reduce-motion .party-popper.animate .pp-dots,
+.reduce-motion .party-popper.animate .pp-lines,
+.reduce-motion .party-popper.animate .pp-lines path {
+  animation: none;
+}
+
+.reduce-motion .animate-group,
+.reduce-motion .animate-rect,
+.reduce-motion .animate-path {
+  transform: none !important;
+  transition: none !important;
+  animation: none !important;
 }
 
 /*
- * Honour both the OS-level preference AND the in-app
- * `appearance.reduceMotion` toggle (wired up in src/routes/+layout.svelte,
- * which mirrors the setting onto `html.reduce-motion`).
+ * Favourite-toggle "filled" state for jis3r Star. The icon's own SVG
+ * sets `fill="none"`; CSS overrides the presentation attribute so the
+ * star renders as a filled glyph when a note is marked favourite.
+ * Targets the SVG (and the path inside it, which inherits) under the
+ * wrapper div the icon component renders.
  */
-@media (prefers-reduced-motion: reduce) {
-  .animate-party-wave {
-    animation: none;
-  }
-}
-
-.reduce-motion .animate-party-wave {
-  animation: none;
+.fav-filled svg {
+  fill: currentColor;
 }
