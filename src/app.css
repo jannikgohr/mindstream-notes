@@ -824,3 +824,48 @@ body.dv-tab-dragging .freeform-canvas-host * {
 .ProseMirror .wikilink:hover[data-link-active='true'] {
   cursor: pointer;
 }
+
+/* -------------------------------------------------------------------------
+ *  ExportResultDialog — PartyPopper celebration wave
+ *  ---------------------------------------------------
+ *  Lives here rather than in the component's <style> block because
+ *  Svelte scopes scoped CSS even through `:global()` when combined with
+ *  `@media` queries, which made the `prefers-reduced-motion` override
+ *  silently fail in practice. Hoisting to app.css sidesteps the scoping
+ *  pipeline entirely.
+ * ------------------------------------------------------------------------- */
+
+.animate-party-wave {
+  transform-origin: 50% 90%;
+  animation: party-wave-once 0.9s ease-out 0.35s 1 both;
+}
+
+@keyframes party-wave-once {
+  0% {
+    transform: rotate(0deg) scale(1);
+  }
+  35% {
+    transform: rotate(-10deg) scale(1.1);
+  }
+  65% {
+    transform: rotate(8deg) scale(1.1);
+  }
+  100% {
+    transform: rotate(0deg) scale(1);
+  }
+}
+
+/*
+ * Honour both the OS-level preference AND the in-app
+ * `appearance.reduceMotion` toggle (wired up in src/routes/+layout.svelte,
+ * which mirrors the setting onto `html.reduce-motion`).
+ */
+@media (prefers-reduced-motion: reduce) {
+  .animate-party-wave {
+    animation: none;
+  }
+}
+
+.reduce-motion .animate-party-wave {
+  animation: none;
+}

@@ -236,41 +236,9 @@
   </AlertDialog.Portal>
 </AlertDialog.Root>
 
-<style>
-  /*
-   * Single, subtle wave that fires once after the dialog has settled
-   * in. The 350 ms delay covers the AlertDialog's open-fade so the
-   * icon doesn't move while the surround is still composing — by the
-   * time the wiggle plays, the user's eye has already landed on it.
-   * transform-origin at the base makes it tip like a popper rather
-   * than spin around its centre.
-   */
-  :global(.animate-party-wave) {
-    transform-origin: 50% 90%;
-    animation: party-wave-once 0.9s ease-out 0.35s 1 both;
-  }
-
-  @keyframes party-wave-once {
-    0% {
-      transform: rotate(0deg) scale(1);
-    }
-    35% {
-      transform: rotate(-10deg) scale(1.1);
-    }
-    65% {
-      transform: rotate(8deg) scale(1.1);
-    }
-    100% {
-      transform: rotate(0deg) scale(1);
-    }
-  }
-
-  /*
-   * Respect the user's motion preference — drop the wiggle entirely.
-   */
-  @media (prefers-reduced-motion: reduce) {
-    :global(.animate-party-wave) {
-      animation: none;
-    }
-  }
-</style>
+<!--
+  The `.animate-party-wave` class — including its `prefers-reduced-motion`
+  override — lives in `src/app.css`. `:global()` inside a Svelte `<style>`
+  block doesn't reliably carry an @media rule through the scoping
+  pipeline, so the reduce-motion preference would silently fail here.
+-->

@@ -93,6 +93,18 @@
     }
   });
 
+  // Mirror `appearance.reduceMotion` onto `html.reduce-motion` so any
+  // animation in the app can opt out with a simple `.reduce-motion &`
+  // CSS selector — same shape as the dark-mode plumbing in app.html.
+  // The OS-level `prefers-reduced-motion` media query is honoured
+  // separately by the same CSS rules; this effect just makes the
+  // in-app toggle actually do something across the rest of the UI.
+  $effect(() => {
+    if (typeof document === 'undefined') return;
+    const on = getSettingValue('appearance.reduceMotion') === true;
+    document.documentElement.classList.toggle('reduce-motion', on);
+  });
+
   $effect(() => {
     const globalShortcutsEnabled =
       getSettingValue('hotkeys.globalShortcuts') === true;
