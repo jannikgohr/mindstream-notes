@@ -863,7 +863,14 @@ body.dv-tab-dragging .freeform-canvas-host * {
   .animate-bell,
   .animate-clapper,
   .animate-svg,
-  .settings-gear.animate {
+  .settings-gear.animate,
+  /*
+   * jis3r Search puts the animation on a bare `.animate` class on the
+   * inner SVG — too generic to target alone without clobbering shadcn
+   * dialog state classes etc. Scope it through the wrapper div's
+   * `aria-label="search"` which the library sets unconditionally.
+   */
+  [aria-label='search'] svg.animate {
     transform: none !important;
     transition: none !important;
     animation: none !important;
@@ -883,7 +890,8 @@ body.dv-tab-dragging .freeform-canvas-host * {
 .reduce-motion .animate-bell,
 .reduce-motion .animate-clapper,
 .reduce-motion .animate-svg,
-.reduce-motion .settings-gear.animate {
+.reduce-motion .settings-gear.animate,
+.reduce-motion [aria-label='search'] svg.animate {
   transform: none !important;
   transition: none !important;
   animation: none !important;
