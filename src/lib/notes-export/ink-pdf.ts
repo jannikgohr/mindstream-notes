@@ -14,7 +14,7 @@
 
 import { InkDocument } from '$lib/ink/document';
 import type { InkStroke } from '$lib/ink/document';
-import { defaultLayout, pageCountForContentMaxY, strideY } from '$lib/ink/page';
+import { defaultLayout, strideY } from '$lib/ink/page';
 import type { DocumentLayout, InkPoint } from '$lib/ink/page';
 
 const WIDTH_QUANTUM = 0.25;
@@ -37,7 +37,15 @@ export async function buildInkPdf(
   }
 
   const strokes = inkDoc.visibleStrokes();
-  const layout = defaultLayout(pageCountForContentMaxY(inkDoc.contentMaxY()));
+  // The editor keeps a trailing blank page (and a 2-page minimum) so
+  // there's always room to keep drawing. The export wants the opposite
+  // — just the pages that actually contain ink, with a single blank
+  // page as a fallback so the file always exists.
+  const baseLayout = defaultLayout();
+  const maxY = inkDoc.contentMaxY();
+  const exportPageCount =
+    maxY > 0 ? Math.floor(maxY / strideY(baseLayout)) + 1 : 1;
+  const layout: DocumentLayout = { ...baseLayout, pageCount: exportPageCount };
 
   const lib = await import('pdf-lib');
   const pdf = await lib.PDFDocument.create();
