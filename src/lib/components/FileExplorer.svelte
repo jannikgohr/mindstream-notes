@@ -11,7 +11,7 @@
     FilePlus2,
     Trash2
   } from 'lucide-svelte';
-  import { Star } from '@jis3r/icons';
+  import FavouriteStar from './FavouriteStar.svelte';
   import { noteKindIcon } from './note-kind-icon';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
@@ -781,7 +781,7 @@
           aria-label={fav ? tUi('favourite.remove') : tUi('favourite.add')}
           title={fav ? tUi('favourite.remove') : tUi('favourite.add')}
         >
-          <Star size={14} class={fav ? 'fav-filled' : ''} />
+          <FavouriteStar size={14} favourited={fav} />
         </button>
       {/if}
     </div>

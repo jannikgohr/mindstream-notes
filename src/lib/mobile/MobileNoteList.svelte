@@ -14,7 +14,7 @@
    * in here when collab metadata lands.
    */
   import { Folder, Loader2, MoreVertical, Trash2 } from 'lucide-svelte';
-  import { Star } from '@jis3r/icons';
+  import FavouriteStar from '$lib/components/FavouriteStar.svelte';
   import type { NoteSummary, TreeNode } from '$lib/api';
   import { TRASH_ID } from '$lib/api';
   import { noteKindIcon } from '$lib/components/note-kind-icon';
@@ -446,7 +446,7 @@
                     : 'Add to favourites'}
                   title={fav ? 'Remove from favourites' : 'Add to favourites'}
                 >
-                  <Star size={16} class={fav ? 'fav-filled' : ''} />
+                  <FavouriteStar size={16} favourited={fav} />
                 </button>
               {/if}
               <button
@@ -501,7 +501,7 @@
                   : 'Add to favourites'}
                 title={fav ? 'Remove from favourites' : 'Add to favourites'}
               >
-                <Star size={16} class={fav ? 'fav-filled' : ''} />
+                <FavouriteStar size={16} favourited={fav} />
               </button>
             {/if}
             <button

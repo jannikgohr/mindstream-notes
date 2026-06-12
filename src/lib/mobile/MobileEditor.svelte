@@ -6,7 +6,7 @@
    * surrounding chrome changes per platform.
    */
   import { ArrowLeft, Info, X } from 'lucide-svelte';
-  import { Star } from '@jis3r/icons';
+  import FavouriteStar from '$lib/components/FavouriteStar.svelte';
   import { Button } from '$lib/components/ui/button';
   import NoteStatusIcons from '$lib/desktop/NoteStatusIcons.svelte';
   import MetadataPanel from '$lib/components/MetadataPanel.svelte';
@@ -74,7 +74,7 @@
         aria-label={fav ? 'Remove from favourites' : 'Add to favourites'}
         title={fav ? 'Remove from favourites' : 'Add to favourites'}
       >
-        <Star size={20} class={fav ? 'fav-filled' : ''} />
+        <FavouriteStar size={20} favourited={fav} />
       </Button>
       <Button
         variant="ghost"

@@ -1,10 +1,6 @@
 <script lang="ts">
-  import {
-    PanelLeft,
-    PanelRight,
-    Settings as SettingsIcon
-  } from 'lucide-svelte';
-  import { Search as SearchIcon } from '@jis3r/icons';
+  import { PanelLeft, PanelRight } from 'lucide-svelte';
+  import { Search as SearchIcon, Settings as SettingsIcon } from '@jis3r/icons';
   import { Button } from '$lib/components/ui/button';
   import { Separator } from '$lib/components/ui/separator';
   import ThemeToggle from '$lib/components/ThemeToggle.svelte';
@@ -56,7 +52,7 @@
     title="Settings"
     aria-label="Open settings"
   >
-    <SettingsIcon class="size-4" />
+    <SettingsIcon size={16} />
   </Button>
   <ThemeToggle />
   <Button

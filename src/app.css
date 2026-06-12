@@ -852,10 +852,18 @@ body.dv-tab-dragging .freeform-canvas-host * {
    * the transitions even when the user hovers an icon directly.
    * `!important` because the per-icon styles are scoped (so they
    * win specificity) and use `transform` directly.
+   *
+   * Each icon ships its own class name (no shared root), so this
+   * block has to enumerate them. Add new entries here when adopting
+   * additional jis3r icons.
    */
   .animate-group,
   .animate-rect,
-  .animate-path {
+  .animate-path,
+  .animate-bell,
+  .animate-clapper,
+  .animate-svg,
+  .settings-gear.animate {
     transform: none !important;
     transition: none !important;
     animation: none !important;
@@ -871,7 +879,11 @@ body.dv-tab-dragging .freeform-canvas-host * {
 
 .reduce-motion .animate-group,
 .reduce-motion .animate-rect,
-.reduce-motion .animate-path {
+.reduce-motion .animate-path,
+.reduce-motion .animate-bell,
+.reduce-motion .animate-clapper,
+.reduce-motion .animate-svg,
+.reduce-motion .settings-gear.animate {
   transform: none !important;
   transition: none !important;
   animation: none !important;

@@ -5,8 +5,10 @@
    * icon + label and a top accent stripe. Add a new tab by appending
    * to the TABS array and matching MobileView.
    */
-  import { Home, Share2, Trash2 } from 'lucide-svelte';
-  import { Star } from '@jis3r/icons';
+  // Bottom-nav star is a tab affordance, not a favourite-toggle —
+  // there's no "flip" moment to celebrate, so we stick to the static
+  // lucide glyph instead of pulling in jis3r's hover-driven version.
+  import { Home, Share2, Star, Trash2 } from 'lucide-svelte';
   import type { IconComponent } from '$lib/settings/icons';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { mobileState, setMobileView, type MobileView } from './state.svelte';
@@ -67,13 +69,7 @@
           aria-hidden="true"
         ></span>
       {/if}
-      <!--
-        Pass `size` numerically so lucide-svelte and @jis3r/icons both
-        render at the same dimension. The class lingers for parent
-        colour inheritance — jis3r drops it on the wrapper div, lucide
-        on the svg, and `size-5` is harmless on either.
-      -->
-      <Icon class="size-5" size={20} />
+      <Icon class="size-5" />
       <span class="text-[10px] font-medium">{label}</span>
     </button>
   {/each}
