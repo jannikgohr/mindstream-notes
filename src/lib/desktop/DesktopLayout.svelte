@@ -13,8 +13,10 @@
     IDockviewPanel,
     IContentRenderer,
     GroupPanelPartInitParameters,
+    TabPartInitParameters,
     DockviewGroupPanel
   } from 'dockview-core';
+  import { DefaultTab } from 'dockview-core';
   import TopBar from './DesktopTopBar.svelte';
   import FileExplorer from '$lib/components/FileExplorer.svelte';
   import MetadataPanel from '$lib/components/MetadataPanel.svelte';
@@ -122,6 +124,13 @@
     }
   }
 
+  class DockviewTabRenderer extends DefaultTab {
+    init(parameters: TabPartInitParameters): void {
+      super.init(parameters);
+      this.element.dataset.dockPanelId = parameters.api.id;
+    }
+  }
+
   async function setupDockview() {
     if (!dockHost) return;
     const { DockviewComponent } = await import('dockview-core');
@@ -146,6 +155,8 @@
             return new SvelteRenderer(UnknownNoteKindError);
         }
       },
+      defaultTabComponent: 'noteTab',
+      createTabComponent: () => new DockviewTabRenderer(),
       theme: { name: 'bridge', className: 'dockview-theme-bridge' },
       disableFloatingGroups: false,
       disableDnd: false,
@@ -483,6 +494,34 @@
     requestAnimationFrame(() => repositionOverflowPopup(chevron));
   }
 
+  function dockPanelIdFromTabEventTarget(
+    target: EventTarget | null
+  ): string | null {
+    if (!(target instanceof Element)) return null;
+    const metadata =
+      target.closest<HTMLElement>('[data-dock-panel-id]') ??
+      target
+        .closest('.dv-tab')
+        ?.querySelector<HTMLElement>('[data-dock-panel-id]');
+    return metadata?.dataset.dockPanelId ?? null;
+  }
+
+  function handleDockTabMiddlePointerDown(event: PointerEvent) {
+    if (event.button !== 1) return;
+    if (!dockPanelIdFromTabEventTarget(event.target)) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }
+
+  function handleDockTabAuxClick(event: MouseEvent) {
+    if (event.button !== 1) return;
+    const panelId = dockPanelIdFromTabEventTarget(event.target);
+    if (!panelId) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    dock?.getPanel(panelId)?.api.close();
+  }
+
   onMount(() => {
     void tick().then(setupDockview);
     const onResize = () => {};
@@ -527,6 +566,12 @@
     //   - stop dockview's click handler (bubble phase on the dropdown
     //     root) with stopImmediatePropagation on the toggle-close path.
     dockHost?.addEventListener('pointerdown', handleChevronPointerDown, true);
+    dockHost?.addEventListener(
+      'pointerdown',
+      handleDockTabMiddlePointerDown,
+      true
+    );
+    dockHost?.addEventListener('auxclick', handleDockTabAuxClick, true);
     dockHost?.addEventListener('click', handleChevronClick, true);
 
     return () => {
@@ -538,6 +583,12 @@
         handleChevronPointerDown,
         true
       );
+      dockHost?.removeEventListener(
+        'pointerdown',
+        handleDockTabMiddlePointerDown,
+        true
+      );
+      dockHost?.removeEventListener('auxclick', handleDockTabAuxClick, true);
       dockHost?.removeEventListener('click', handleChevronClick, true);
       // Defensive — if we unmount mid-drag (HMR, route change), don't
       // leave the class stuck on <body>.
