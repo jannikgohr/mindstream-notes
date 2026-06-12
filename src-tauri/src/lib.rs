@@ -33,6 +33,8 @@ pub mod system;
 #[cfg(desktop)]
 pub mod tray;
 
+use std::borrow::Cow;
+
 use tauri::Manager;
 
 use crate::db::{migrations, Db};
@@ -191,6 +193,7 @@ pub fn run() {
     app_handle
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
+        .register_uri_scheme_protocol("mindstream", serve_asset_bytes)
         .setup(|app| {
             // Register a credential store before any auth code can hit
             // it — Entry::new() returns Error::NoDefaultStore otherwise.
@@ -349,4 +352,60 @@ pub fn run() {
 #[cfg(desktop)]
 fn was_started_by_autostart() -> bool {
     std::env::args().any(|arg| arg == AUTOSTART_ARG)
+}
+
+/// URI scheme handler for `mindstream://localhost/<asset_id>` (and the
+/// `http://mindstream.localhost/<asset_id>` form wry uses on
+/// Windows/Android). Looks up the asset row, streams the bytes back
+/// with the row's MIME type.
+///
+/// Returns 404 with an empty body on any lookup failure — the
+/// markdown image just falls back to its alt text in the editor, which
+/// matches what the user used to see when the bridge returned a blob
+/// URL for missing bytes.
+fn serve_asset_bytes<R: tauri::Runtime>(
+    ctx: tauri::UriSchemeContext<'_, R>,
+    request: tauri::http::Request<Vec<u8>>,
+) -> tauri::http::Response<Cow<'static, [u8]>> {
+    // Path is `/asset_<uuid>` regardless of platform — both rewrite
+    // forms (`mindstream://localhost/...` and `http://mindstream.localhost/...`)
+    // produce the same `path()` after parsing.
+    let raw_path = request.uri().path();
+    let id = raw_path.trim_start_matches('/');
+    // Defensive: ids are `asset_<uuid>` (plain ASCII), but if the
+    // webview happens to percent-encode anything we still want to
+    // match what's in the assets table.
+    let id = match urlencoding::decode(id) {
+        Ok(decoded) => decoded.into_owned(),
+        Err(_) => id.to_string(),
+    };
+
+    let app = ctx.app_handle();
+    let db = app.state::<Db>();
+    let load_result = db.with_conn(|c| crate::assets::load(c, &id));
+
+    match load_result {
+        Ok(asset) => tauri::http::Response::builder()
+            .status(tauri::http::StatusCode::OK)
+            .header(tauri::http::header::CONTENT_TYPE, asset.summary.mime_type)
+            // Bytes for a given asset id never change (a new upload
+            // produces a new id), so allow long-lived caching. Sync's
+            // "fetch fresh bytes for previously-missing asset" path
+            // goes from 404 → 200 — browsers don't aggressively cache
+            // 404s, so this stays correct.
+            .header(
+                tauri::http::header::CACHE_CONTROL,
+                "public, max-age=31536000, immutable",
+            )
+            .header("Access-Control-Allow-Origin", "*")
+            .body(Cow::Owned(asset.bytes))
+            .unwrap(),
+        Err(err) => {
+            log::warn!("[asset-scheme] {id} lookup failed: {err}");
+            tauri::http::Response::builder()
+                .status(tauri::http::StatusCode::NOT_FOUND)
+                .body(Cow::Owned(Vec::new()))
+                .unwrap()
+        }
+    }
 }
