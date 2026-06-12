@@ -94,11 +94,6 @@
           aria-label={tUi('modified')}
         ></span>
       {/if}
-      <span
-        class="ml-auto text-[10px] uppercase tracking-wide text-muted-foreground"
-      >
-        [{setting.scope}]
-      </span>
     </div>
     {#if description}
       <p class="mt-0.5 text-xs text-muted-foreground">{description}</p>
