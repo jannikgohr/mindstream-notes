@@ -48,14 +48,28 @@ pub fn open_data_folder(app: AppHandle) -> Result<(), String> {
     let path_str = dir
         .to_str()
         .ok_or_else(|| "app data dir path is not valid UTF-8".to_string())?;
+    open_with_shell(&app, path_str)
+}
+
+/// Open an arbitrary directory in the OS file manager. Driven from the
+/// JS side with a path the user already picked through a Tauri folder
+/// dialog (export destination, backup target), so we trust the caller
+/// to hand us a real on-disk path — we just forward to the shell
+/// plugin's `open`.
+#[tauri::command]
+pub fn open_folder(app: AppHandle, path: String) -> Result<(), String> {
+    open_with_shell(&app, &path)
+}
+
+fn open_with_shell(app: &AppHandle, path: &str) -> Result<(), String> {
     // The shell plugin marks `open` as deprecated in favour of
     // tauri-plugin-opener, but we don't depend on opener yet and the
     // shell:allow-open capability is already granted. Migrate when we
     // pull opener in for the broader Data & Backup feature set.
     #[allow(deprecated)]
     app.shell()
-        .open(path_str, None)
-        .map_err(|e| format!("could not open data folder: {e}"))
+        .open(path, None)
+        .map_err(|e| format!("could not open folder: {e}"))
 }
 
 /// Notes and folders the user would lose by emptying the trash now.

@@ -23,6 +23,16 @@ export async function openDataFolder(): Promise<void> {
   await tauriInvoke<void>('open_data_folder');
 }
 
+/**
+ * Reveal an arbitrary directory in the OS file manager. Used by the
+ * export-result dialog's "Open location" button — the path here came
+ * from `pickExportDir()`, so it's already user-chosen.
+ */
+export async function openFolder(path: string): Promise<void> {
+  if (!isTauri()) return;
+  await tauriInvoke<void>('open_folder', { path });
+}
+
 export async function trashCounts(): Promise<TrashCounts> {
   if (!isTauri()) return { notes: 0, folders: 0 };
   return await tauriInvoke<TrashCounts>('trash_counts');

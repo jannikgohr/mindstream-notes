@@ -39,6 +39,7 @@ export * from './server-urls';
 export { pickExportDir, writeExportFile } from './notes-export';
 export {
   openDataFolder,
+  openFolder,
   trashCounts,
   emptyTrash as emptyTrashCmd,
   setTrashRetention,

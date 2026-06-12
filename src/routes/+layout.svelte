@@ -11,6 +11,7 @@
     sweepTrashRetention
   } from '$lib/api';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+  import ExportResultDialog from '$lib/components/ExportResultDialog.svelte';
   import ImportChoiceDialog from '$lib/components/ImportChoiceDialog.svelte';
   import UpdaterProgressDialog from '$lib/updater/ProgressDialog.svelte';
   import ShortcutHelpDialog from '$lib/components/ShortcutHelpDialog.svelte';
@@ -211,6 +212,11 @@
      means the registry's `import-notes` action can pop it without
      stashing its own component. -->
 <ImportChoiceDialog />
+
+<!-- Singleton export-result summary. Driven by `showExportResult()`
+     in the sibling .svelte.ts — the export-vault settings action
+     pops it once the Rust walk finishes. -->
+<ExportResultDialog />
 
 <!-- Singleton updater progress dialog. Driven by the helpers in
      $lib/updater/progress.svelte.ts — mounting it here means anything

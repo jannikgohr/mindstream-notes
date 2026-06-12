@@ -296,6 +296,7 @@ pub fn run() {
             sync::repair::purge_corrupt_remote_note,
             // Data & Backup (Settings → Data)
             data::open_data_folder,
+            data::open_folder,
             data::trash_counts,
             data::empty_trash,
             data::set_trash_retention,

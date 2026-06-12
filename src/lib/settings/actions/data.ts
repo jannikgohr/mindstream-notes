@@ -23,6 +23,7 @@ import {
 } from '$lib/stores/tree.svelte';
 import { pickImportChoice } from '$lib/components/import-choice-dialog.svelte';
 import { alert, confirm } from '$lib/components/confirm-dialog.svelte';
+import { showExportResult } from '$lib/components/export-result-dialog.svelte';
 import { tUi } from '../i18n.svelte';
 
 export const DATA_ACTIONS: Record<string, () => void | Promise<void>> = {
@@ -141,16 +142,7 @@ export const DATA_ACTIONS: Record<string, () => void | Promise<void>> = {
       // unrelated modules don't trip over Excalidraw's roughjs resolution.
       const { exportVault } = await import('$lib/notes-export');
       const report = await exportVault(root);
-      await alert({
-        title: tUi('data.exportVault.success.title'),
-        message: tUi('data.exportVault.success.message')
-          .replace('{notes}', String(report.notes_written))
-          .replace('{folders}', String(report.folders_written))
-          .replace('{assets}', String(report.assets_written))
-          .replace('{skippedInk}', String(report.skipped_ink))
-          .replace('{errors}', String(report.errors))
-          .replace('{destination}', root)
-      });
+      await showExportResult(report, root);
     } catch (err) {
       console.error('[settings] export-vault failed', err);
       await alert({

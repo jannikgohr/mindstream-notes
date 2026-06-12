@@ -27,8 +27,14 @@ import { dedupeAgainst, sanitizeName } from './sanitize';
 const ASSET_SUBDIR = '_assets';
 
 export interface ExportReport {
-  notes_written: number;
+  /** `.md` files written (note_kind = 'markdown'). */
+  markdown_written: number;
+  /** `.excalidraw` files written (note_kind = 'freeform'). */
+  freeform_written: number;
+  /** `.pdf` files written (note_kind = 'pdf'). */
+  pdf_written: number;
   folders_written: number;
+  /** Image / blob files copied into the per-folder `_assets/` subdir. */
   assets_written: number;
   skipped_ink: number;
   skipped_trashed: number;
@@ -38,7 +44,9 @@ export interface ExportReport {
 
 export async function exportVault(root: string): Promise<ExportReport> {
   const report: ExportReport = {
-    notes_written: 0,
+    markdown_written: 0,
+    freeform_written: 0,
+    pdf_written: 0,
     folders_written: 0,
     assets_written: 0,
     skipped_ink: 0,
@@ -93,8 +101,24 @@ export async function exportVault(root: string): Promise<ExportReport> {
     }
     try {
       const written = await exportNote(root, summary, parentDir, takenFor);
-      report.notes_written++;
       report.assets_written += written.assets_written;
+      switch (written.kind) {
+        case 'markdown':
+          report.markdown_written++;
+          break;
+        case 'freeform':
+          report.freeform_written++;
+          break;
+        case 'pdf':
+          report.pdf_written++;
+          break;
+        case 'unknown':
+          // Helper logged a warning and wrote nothing; surface it in
+          // the report under the existing "skipped unknown kind"
+          // bucket instead of double-counting it as a written note.
+          report.skipped_unknown_kind++;
+          break;
+      }
     } catch (err) {
       console.error('[notes-export] note failed', summary.id, err);
       report.errors++;
@@ -151,6 +175,16 @@ function computeFolderPaths(): Map<string, string> {
 }
 
 interface NoteWriteSummary {
+  /** Kind that was actually handled (mirrors the loaded `note.note_kind`,
+   *  which can lag the cached `summary.note_kind` if the tree is stale).
+   *  The outer loop reads this to bump the right per-kind counter. */
+  kind: 'markdown' | 'freeform' | 'pdf' | 'unknown';
+  assets_written: number;
+}
+
+/** Per-helper return: the helpers don't carry the kind themselves —
+ *  exportNote adds it from the switch arm above. */
+interface AssetWriteSummary {
   assets_written: number;
 }
 
@@ -162,19 +196,25 @@ async function exportNote(
 ): Promise<NoteWriteSummary> {
   const note = await api.loadNote(summary.id);
   switch (note.note_kind) {
-    case 'markdown':
-      return exportMarkdown(root, note, parentDir, takenFor);
-    case 'freeform':
-      return exportFreeform(root, note, parentDir, takenFor);
-    case 'pdf':
-      return exportPdf(root, note, parentDir, takenFor);
+    case 'markdown': {
+      const written = await exportMarkdown(root, note, parentDir, takenFor);
+      return { kind: 'markdown', assets_written: written.assets_written };
+    }
+    case 'freeform': {
+      const written = await exportFreeform(root, note, parentDir, takenFor);
+      return { kind: 'freeform', assets_written: written.assets_written };
+    }
+    case 'pdf': {
+      const written = await exportPdf(root, note, parentDir, takenFor);
+      return { kind: 'pdf', assets_written: written.assets_written };
+    }
     default:
       // Unknown kind — count it but don't fail the whole export.
       console.warn(
         '[notes-export] unknown note kind, skipping',
         note.note_kind
       );
-      return { assets_written: 0 };
+      return { kind: 'unknown', assets_written: 0 };
   }
 }
 
@@ -183,7 +223,7 @@ async function exportMarkdown(
   note: Note,
   parentDir: string,
   takenFor: (dir: string) => Set<string>
-): Promise<NoteWriteSummary> {
+): Promise<AssetWriteSummary> {
   // 1. Resolve a per-folder filename for the markdown file.
   const fileBasename = dedupeAgainst(
     takenFor(parentDir),
@@ -238,7 +278,7 @@ async function exportFreeform(
   note: Note,
   parentDir: string,
   takenFor: (dir: string) => Set<string>
-): Promise<NoteWriteSummary> {
+): Promise<AssetWriteSummary> {
   const excalidraw = buildExcalidrawFile(note.yrs_state);
   if (!excalidraw) {
     // Empty doc — write an empty scene so the file still appears in
@@ -279,7 +319,7 @@ async function exportPdf(
   note: Note,
   parentDir: string,
   takenFor: (dir: string) => Set<string>
-): Promise<NoteWriteSummary> {
+): Promise<AssetWriteSummary> {
   // PDF note body is a tiny JSON stub holding the asset id; the bytes
   // live on the assets table. See assets::import_pdf_note in the Rust
   // side for the schema.
