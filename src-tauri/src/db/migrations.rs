@@ -275,6 +275,38 @@ const MIGRATIONS: &[Migration] = &[
             CREATE INDEX idx_assets_etebase_uid ON assets(etebase_uid) WHERE etebase_uid IS NOT NULL;
         "#,
     },
+    Migration {
+        to: 11,
+        // Track when items enter the trash so the retention sweep can age
+        // them out. Notes already had `trashed_at` from the soft-delete
+        // path (see notes::trash); collections gain the equivalent so the
+        // sweep can find direct-child trash items uniformly.
+        //
+        // Backfill: anything currently reparented under the 'trash'
+        // collection got there before this migration without a recorded
+        // timestamp. `modified` is the best guess we have — it's the
+        // moment the parent move was persisted, which is correct for
+        // every reparent except later in-place edits (rare for trash).
+        //
+        // The new column also unlocks a sync-side improvement later:
+        // collection moves into trash can carry `trashed_at` across
+        // devices the same way notes already do. Not wired into the
+        // payload yet — that's a future slice.
+        sql: r#"
+            ALTER TABLE collections ADD COLUMN trashed_at TEXT;
+            CREATE INDEX idx_collections_trashed ON collections(trashed_at);
+
+            UPDATE collections
+               SET trashed_at = modified
+             WHERE parent_collection_id = 'trash'
+               AND trashed_at IS NULL;
+
+            UPDATE notes
+               SET trashed_at = modified
+             WHERE parent_collection_id = 'trash'
+               AND trashed_at IS NULL;
+        "#,
+    },
 ];
 
 pub fn run(conn: &mut Connection) -> AppResult<()> {

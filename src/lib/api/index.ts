@@ -36,6 +36,27 @@ export * from './system';
 export * from './desktop-settings';
 export * from './hotkeys';
 export * from './server-urls';
+export { pickExportDir, writeExportFile } from './notes-export';
+export {
+  openDataFolder,
+  openFolder,
+  trashCounts,
+  emptyTrash as emptyTrashCmd,
+  setTrashRetention,
+  sweepTrashRetention,
+  backupNow,
+  importBegin,
+  importCleanup,
+  importRestore,
+  importMerge,
+  type TrashCounts,
+  type BackupCounts,
+  type BackupReport,
+  type AccountDisplay,
+  type ImportPreview,
+  type RestoreStaged,
+  type MergeReport
+} from './data';
 
 /** Reserved id for the always-present trash collection (mirrors Rust). */
 export const TRASH_ID = 'trash';

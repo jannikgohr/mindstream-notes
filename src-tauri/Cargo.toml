@@ -48,6 +48,12 @@ rmp-serde = "1"
 serde_bytes = "0.11"
 tokio = { version = "1.52.3", features = ["time", "sync"] }
 
+# Backup format: backups are zip files containing manifest.json + the
+# SQLite snapshot (see src/backup.rs). default-features keeps DEFLATE
+# on — SQLite DBs compress 3-5×, and the standard format means users
+# can peek inside with any unzip tool.
+zip = "8.6.0"
+
 [profile.release]
 panic = "abort"
 codegen-units = 1

@@ -363,13 +363,6 @@
           "id": "data.database",
           "settings": [
             {
-              "id": "data.databasePath",
-              "scope": "V",
-              "type": "path",
-              "mode": "file",
-              "default": ""
-            },
-            {
               "id": "data.openFolder",
               "scope": "V",
               "type": "button",
@@ -407,24 +400,16 @@
           "id": "data.backup",
           "settings": [
             {
-              "id": "data.backupEnabled",
-              "scope": "V",
-              "type": "toggle",
-              "default": true
-            },
-            {
-              "id": "data.backupSchedule",
-              "scope": "V",
-              "type": "select",
-              "default": "daily",
-              "options": ["daily", "weekly", "manual"],
-              "showIf": { "id": "data.backupEnabled", "equals": true }
-            },
-            {
               "id": "data.backupNow",
               "scope": "V",
               "type": "button",
               "actionId": "backup-now"
+            },
+            {
+              "id": "data.restoreBackup",
+              "scope": "V",
+              "type": "button",
+              "actionId": "restore-backup"
             },
             {
               "id": "data.exportVault",

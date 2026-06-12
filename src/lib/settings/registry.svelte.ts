@@ -36,7 +36,7 @@ import { setLanguage, tUi } from './i18n.svelte';
 import type { SortStrategy } from '$lib/sort';
 import SignInForm from './customs/SignInForm.svelte';
 import HotkeysPanel from './customs/HotkeysPanel.svelte';
-import { alert, confirm } from '$lib/components/confirm-dialog.svelte';
+import { DATA_ACTIONS } from './actions/data';
 import { checkForUpdatesInteractively } from '$lib/updater';
 // Vite resolves JSON imports at build time (tsconfig has resolveJsonModule),
 // so the version values below get inlined into the bundle. No runtime cost,
@@ -154,38 +154,7 @@ export const CUSTOM_COMPONENTS: Record<string, AnyComponent> = {
 
 /** Handlers for button-type settings. */
 export const SETTING_ACTIONS: Record<string, () => void | Promise<void>> = {
-  'open-data-folder': () => {
-    console.info('[settings] action: open-data-folder (stub)');
-  },
-  'empty-trash': async () => {
-    // `confirm` is imported statically from confirm-dialog.svelte.ts —
-    // that .ts file doesn't touch bits-ui, so the original dynamic-import
-    // workaround (keeping the bits-ui re-export chain out of this
-    // module's static graph) is no longer needed.
-    if (
-      await confirm({
-        title: 'Empty trash',
-        message:
-          'Every item currently in the trash will be removed permanently. This cannot be undone.',
-        confirmLabel: 'Empty trash',
-        destructive: true
-      })
-    ) {
-      console.info('[settings] action: empty-trash (stub)');
-    }
-  },
-  'backup-now': () => {
-    console.info('[settings] action: backup-now (stub)');
-  },
-  'export-vault': () => {
-    console.info('[settings] action: export-vault (stub)');
-  },
-  'import-notes': () => {
-    console.info('[settings] action: import-notes (stub)');
-  },
-  'clear-cache': () => {
-    console.info('[settings] action: clear-cache (stub)');
-  },
+  ...DATA_ACTIONS,
   'check-updates': checkForUpdatesInteractively
 };
 
