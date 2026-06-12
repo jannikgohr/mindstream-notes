@@ -5,7 +5,7 @@
  *   markdown → `.md` with YAML frontmatter + asset bundling
  *   freeform → `.excalidraw` JSON
  *   pdf      → `.pdf` (raw bytes from the owning asset)
- *   ink      → skipped (deliberate scope cut for v1)
+ *   ink      → `.pdf` (one page per ink page, strokes rendered as vector polylines)
  *
  * The actual disk writes go through `writeExportFile` in the Rust
  * shim, which enforces a path-traversal guard so user-supplied
@@ -17,6 +17,7 @@ import { TRASH_ID, writeExportFile } from '$lib/api';
 import type { Note, NoteSummary, Collection } from '$lib/api';
 import { tree } from '$lib/stores/tree.svelte';
 import { buildExcalidrawFile } from './excalidraw';
+import { buildInkPdf } from './ink-pdf';
 import {
   extractAssetIds,
   renderMarkdownFile,
@@ -33,10 +34,11 @@ export interface ExportReport {
   freeform_written: number;
   /** `.pdf` files written (note_kind = 'pdf'). */
   pdf_written: number;
+  /** `.pdf` files written for ink notes (note_kind = 'ink'). */
+  ink_written: number;
   folders_written: number;
   /** Image / blob files copied into the per-folder `_assets/` subdir. */
   assets_written: number;
-  skipped_ink: number;
   skipped_trashed: number;
   skipped_unknown_kind: number;
   errors: number;
@@ -47,9 +49,9 @@ export async function exportVault(root: string): Promise<ExportReport> {
     markdown_written: 0,
     freeform_written: 0,
     pdf_written: 0,
+    ink_written: 0,
     folders_written: 0,
     assets_written: 0,
-    skipped_ink: 0,
     skipped_trashed: 0,
     skipped_unknown_kind: 0,
     errors: 0
@@ -81,10 +83,6 @@ export async function exportVault(root: string): Promise<ExportReport> {
       report.skipped_trashed++;
       continue;
     }
-    if (summary.note_kind === 'ink') {
-      report.skipped_ink++;
-      continue;
-    }
     if (summary.parent_collection_id === TRASH_ID) {
       report.skipped_trashed++;
       continue;
@@ -111,6 +109,9 @@ export async function exportVault(root: string): Promise<ExportReport> {
           break;
         case 'pdf':
           report.pdf_written++;
+          break;
+        case 'ink':
+          report.ink_written++;
           break;
         case 'unknown':
           // Helper logged a warning and wrote nothing; surface it in
@@ -178,7 +179,7 @@ interface NoteWriteSummary {
   /** Kind that was actually handled (mirrors the loaded `note.note_kind`,
    *  which can lag the cached `summary.note_kind` if the tree is stale).
    *  The outer loop reads this to bump the right per-kind counter. */
-  kind: 'markdown' | 'freeform' | 'pdf' | 'unknown';
+  kind: 'markdown' | 'freeform' | 'pdf' | 'ink' | 'unknown';
   assets_written: number;
 }
 
@@ -207,6 +208,10 @@ async function exportNote(
     case 'pdf': {
       const written = await exportPdf(root, note, parentDir, takenFor);
       return { kind: 'pdf', assets_written: written.assets_written };
+    }
+    case 'ink': {
+      const written = await exportInk(root, note, parentDir, takenFor);
+      return { kind: 'ink', assets_written: written.assets_written };
     }
     default:
       // Unknown kind — count it but don't fail the whole export.
@@ -349,6 +354,32 @@ async function exportPdf(
     joinRel(parentDir, basename),
     new Uint8Array(asset.bytes)
   );
+  return { assets_written: 0 };
+}
+
+async function exportInk(
+  root: string,
+  note: Note,
+  parentDir: string,
+  takenFor: (dir: string) => Set<string>
+): Promise<AssetWriteSummary> {
+  // Ink note geometry lives in yrs_state — a Y.Doc holding the stroke
+  // array. buildInkPdf hydrates it and renders one PDF page per ink
+  // page; a blank doc still produces a valid (blank) PDF so the file
+  // appears in the export just like exportFreeform's empty scene.
+  const pdfBytes = await buildInkPdf(note.yrs_state);
+  if (!pdfBytes) {
+    console.warn(
+      '[notes-export] ink note yrs_state unreadable, skipping',
+      note.id
+    );
+    return { assets_written: 0 };
+  }
+  const basename = dedupeAgainst(
+    takenFor(parentDir),
+    `${sanitizeName(note.title)}.pdf`
+  );
+  await writeExportFile(root, joinRel(parentDir, basename), pdfBytes);
   return { assets_written: 0 };
 }
 

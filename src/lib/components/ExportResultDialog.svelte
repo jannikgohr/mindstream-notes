@@ -62,6 +62,15 @@
         show: r.pdf_written > 0
       },
       {
+        count: r.ink_written,
+        oneKey: 'data.exportVault.chip.inkNotes.one',
+        otherKey: 'data.exportVault.chip.inkNotes.other',
+        statusKey: 'data.exportVault.chip.inkNotes.status',
+        boxClass: 'border-amber-500/30 bg-amber-500/10',
+        statusClass: 'text-amber-700 dark:text-amber-400',
+        show: r.ink_written > 0
+      },
+      {
         count: r.freeform_written,
         oneKey: 'data.exportVault.chip.diagrams.one',
         otherKey: 'data.exportVault.chip.diagrams.other',
@@ -78,15 +87,6 @@
         boxClass: 'border-teal-500/30 bg-teal-500/10',
         statusClass: 'text-teal-700 dark:text-teal-400',
         show: r.assets_written > 0
-      },
-      {
-        count: r.skipped_ink,
-        oneKey: 'data.exportVault.chip.skippedInk.one',
-        otherKey: 'data.exportVault.chip.skippedInk.other',
-        statusKey: 'data.exportVault.chip.skippedInk.status',
-        boxClass: 'border-amber-500/30 bg-amber-500/10',
-        statusClass: 'text-amber-700 dark:text-amber-400',
-        show: r.skipped_ink > 0
       },
       {
         count: r.errors,
