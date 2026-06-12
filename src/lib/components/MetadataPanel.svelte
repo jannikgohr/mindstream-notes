@@ -55,9 +55,18 @@
 
   let noteBody = $state('');
   let contentLoading = $state(false);
+  const showContentStats = $derived(
+    note ? hasContentStats(note.note_kind) : false
+  );
+  const showAttachments = $derived(
+    note ? canHaveAttachments(note.note_kind) : false
+  );
 
   $effect(() => {
-    if (!note) {
+    if (
+      !note ||
+      (!hasContentStats(note.note_kind) && !canHaveAttachments(note.note_kind))
+    ) {
       noteBody = '';
       contentLoading = false;
       return;
@@ -90,7 +99,9 @@
     };
   });
 
-  const contentStats = $derived.by(() => analyzeContent(noteBody));
+  const contentStats = $derived.by(() =>
+    analyzeContent(noteBody, note?.note_kind ?? null)
+  );
 
   function fmt(iso: string) {
     try {
@@ -122,12 +133,29 @@
     }
   }
 
-  function analyzeContent(body: string) {
+  function hasContentStats(kind: string | null | undefined): boolean {
+    return kind === 'markdown' || kind === 'pdf';
+  }
+
+  function canHaveAttachments(kind: string | null | undefined): boolean {
+    return kind === 'markdown' || kind === 'freeform' || kind === 'pdf';
+  }
+
+  function analyzeContent(body: string, kind: string | null | undefined) {
+    const attachments = extractAssetIds(body).length;
+    if (kind === 'pdf') {
+      return {
+        words: 0,
+        readMinutes: 0,
+        links: 0,
+        attachments
+      };
+    }
+
     const plain = plainTextForStats(body);
     const words =
       plain.match(/[\p{L}\p{N}]+(?:['’_-][\p{L}\p{N}]+)*/gu)?.length ?? 0;
     const links = countLinks(body);
-    const attachments = extractAssetIds(body).length;
     return {
       words,
       readMinutes: words === 0 ? 0 : Math.max(1, Math.ceil(words / 200)),
@@ -187,6 +215,26 @@
     return tUi(key).replace('{count}', String(count));
   }
 </script>
+
+{#snippet attachmentsRow()}
+  <dl class="border-y border-border">
+    <div
+      class="flex min-w-0 items-center justify-between gap-3 border-b border-border py-2 last:border-b-0"
+    >
+      <dt
+        class="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
+      >
+        <Paperclip class="size-3.5" />
+        {tUi('metadata.attachments')}
+      </dt>
+      <dd
+        class="min-w-0 truncate text-right text-xs font-medium text-muted-foreground"
+      >
+        {attachmentsValue(contentStats.attachments)}
+      </dd>
+    </div>
+  </dl>
+{/snippet}
 
 <aside class="flex h-full w-full min-w-0 flex-col bg-card text-sm">
   <div class="flex-1 overflow-y-auto p-3">
@@ -307,56 +355,55 @@
           </dl>
         </section>
 
-        <section class="mt-5">
-          <h4
-            class="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground"
-          >
-            {tUi('metadata.content')}
-          </h4>
-          <div class="grid grid-cols-3 gap-2">
-            <div class="rounded-md bg-muted px-2.5 py-2">
-              <div class="truncate text-base font-semibold leading-none">
-                {statValue(contentStats.words)}
-              </div>
-              <div class="mt-1 truncate text-[10px] text-muted-foreground">
-                {tUi('metadata.content.words')}
-              </div>
-            </div>
-            <div class="rounded-md bg-muted px-2.5 py-2">
-              <div class="truncate text-base font-semibold leading-none">
-                {readValue(contentStats.readMinutes)}
-              </div>
-              <div class="mt-1 truncate text-[10px] text-muted-foreground">
-                {tUi('metadata.content.read')}
-              </div>
-            </div>
-            <div class="rounded-md bg-muted px-2.5 py-2">
-              <div class="truncate text-base font-semibold leading-none">
-                {statValue(contentStats.links)}
-              </div>
-              <div class="mt-1 truncate text-[10px] text-muted-foreground">
-                {tUi('metadata.content.links')}
-              </div>
-            </div>
-          </div>
-          <dl class="mt-4 border-y border-border">
-            <div
-              class="flex min-w-0 items-center justify-between gap-3 border-b border-border py-2 last:border-b-0"
+        {#if showContentStats}
+          <section class="mt-5">
+            <h4
+              class="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground"
             >
-              <dt
-                class="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
-              >
-                <Paperclip class="size-3.5" />
-                {tUi('metadata.attachments')}
-              </dt>
-              <dd
-                class="min-w-0 truncate text-right text-xs font-medium text-muted-foreground"
-              >
-                {attachmentsValue(contentStats.attachments)}
-              </dd>
+              {tUi('metadata.content')}
+            </h4>
+            <div class="grid grid-cols-3 gap-2">
+              <div class="rounded-md bg-muted px-2.5 py-2">
+                <div class="truncate text-base font-semibold leading-none">
+                  {statValue(contentStats.words)}
+                </div>
+                <div class="mt-1 truncate text-[10px] text-muted-foreground">
+                  {tUi('metadata.content.words')}
+                </div>
+              </div>
+              <div class="rounded-md bg-muted px-2.5 py-2">
+                <div class="truncate text-base font-semibold leading-none">
+                  {readValue(contentStats.readMinutes)}
+                </div>
+                <div class="mt-1 truncate text-[10px] text-muted-foreground">
+                  {tUi('metadata.content.read')}
+                </div>
+              </div>
+              <div class="rounded-md bg-muted px-2.5 py-2">
+                <div class="truncate text-base font-semibold leading-none">
+                  {statValue(contentStats.links)}
+                </div>
+                <div class="mt-1 truncate text-[10px] text-muted-foreground">
+                  {tUi('metadata.content.links')}
+                </div>
+              </div>
             </div>
-          </dl>
-        </section>
+            {#if showAttachments}
+              <div class="mt-4">
+                {@render attachmentsRow()}
+              </div>
+            {/if}
+          </section>
+        {:else if showAttachments}
+          <section class="mt-5">
+            <h4
+              class="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground"
+            >
+              {tUi('metadata.attachments')}
+            </h4>
+            {@render attachmentsRow()}
+          </section>
+        {/if}
 
         <div class="mt-5 border-t border-border pt-5">
           <TagsSection noteId={note.id} />
