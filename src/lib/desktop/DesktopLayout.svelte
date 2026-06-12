@@ -578,6 +578,37 @@
     }
   });
 
+  // Close dock panels whose backing note has been removed from the tree.
+  // Covers the local permanent-delete paths (purgeNote / purgeCollection /
+  // emptyTrash all reload the tree) and remote pulls (`runSync` reloads
+  // the tree after sync, so a peer's hard-delete propagates the same way).
+  // We snapshot the live key set into a Set so the dependency is the
+  // explicit Object.keys read — mirrors the title-sync effect above and
+  // avoids relying on the `in` operator being tracked by $state's proxy.
+  // Collect first, then call removePanel — the onDidRemovePanel handler
+  // mutates openPanels and we don't want to iterate it while it changes.
+  $effect(() => {
+    // Read the reactive state FIRST — an early `if (!dock) return` would
+    // short-circuit before this read on the first run (dock is set
+    // asynchronously inside setupDockview), and Svelte 5 would record no
+    // dependency, so the effect would never re-run.
+    const known = new Set(Object.keys(tree.notesById));
+    const ready = tree.ready;
+    if (!dock || !ready) return;
+    const stale: { noteId: string; panel: IDockviewPanel }[] = [];
+    for (const [noteId, panel] of openPanels) {
+      if (!known.has(noteId)) stale.push({ noteId, panel });
+    }
+    for (const { noteId, panel } of stale) {
+      try {
+        panel.api.close();
+        openPanels.delete(noteId);
+      } catch (err) {
+        console.warn('[layout] purge-close failed', noteId, err);
+      }
+    }
+  });
+
   // Adapter functions handed to FileExplorer.
   const onOpenNote = (id: string) => {
     void openNote(id);
