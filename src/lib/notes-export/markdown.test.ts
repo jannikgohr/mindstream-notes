@@ -67,7 +67,7 @@ describe('renderFrontmatter', () => {
 describe('extractAssetIds', () => {
   it('returns unique ids in encounter order', () => {
     const body =
-      'See ![](mindstream-asset://asset_a) and ![](mindstream-asset://asset_b) and again ![](mindstream-asset://asset_a).';
+      'See ![](asset:mindstream/asset_a) and ![](asset:mindstream/asset_b) and again ![](asset:mindstream/asset_a).';
     expect(extractAssetIds(body)).toEqual(['asset_a', 'asset_b']);
   });
 
@@ -79,7 +79,7 @@ describe('extractAssetIds', () => {
 describe('rewriteAssetUrls', () => {
   it('rewrites known ids to relative paths under the subdir', () => {
     const body =
-      '![alt](mindstream-asset://asset_a) and ![alt](mindstream-asset://asset_b)';
+      '![alt](asset:mindstream/asset_a) and ![alt](asset:mindstream/asset_b)';
     const filenames = new Map([
       ['asset_a', 'asset_a.png'],
       ['asset_b', 'asset_b.jpg']
@@ -90,9 +90,9 @@ describe('rewriteAssetUrls', () => {
   });
 
   it('leaves unknown ids untouched so nothing is silently dropped', () => {
-    const body = 'orphan ![](mindstream-asset://asset_missing)';
+    const body = 'orphan ![](asset:mindstream/asset_missing)';
     const out = rewriteAssetUrls(body, '_assets', () => undefined);
-    expect(out).toContain('mindstream-asset://asset_missing');
+    expect(out).toContain('asset:mindstream/asset_missing');
   });
 });
 

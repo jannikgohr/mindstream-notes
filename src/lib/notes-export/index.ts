@@ -264,7 +264,7 @@ async function exportMarkdown(
       );
     }
   }
-  // 3. Rewrite the body's mindstream-asset:// URLs to point at the
+  // 3. Rewrite the body's asset:mindstream/ URLs to point at the
   //    relative paths we just wrote, then render with frontmatter.
   const rewritten = rewriteAssetUrls(note.body, ASSET_SUBDIR, (id) =>
     filenameById.get(id)

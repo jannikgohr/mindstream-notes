@@ -6,9 +6,10 @@
  *     timestamps, tags, favourite, kind, id). Hand-rolled — the
  *     handful of types we serialise (strings, dates, booleans, string
  *     arrays) don't justify pulling js-yaml into the bundle.
- *   - Asset URL rewrite: every `mindstream-asset://<id>` reference in
+ *   - Asset URL rewrite: every `asset:mindstream/<id>` reference in
  *     the body is swapped for a relative `_assets/<id>.<ext>` path so
- *     the exported folder opens cleanly in any markdown reader.
+ *     the exported folder opens cleanly in any markdown reader. The
+ *     scheme matches `ASSET_SCHEME` in `$lib/assets/bridge`.
  */
 
 import type { Note } from '$lib/api';
@@ -66,13 +67,13 @@ function yamlScalar(raw: string): string {
 }
 
 /**
- * Find every `mindstream-asset://<id>` reference in the markdown body
+ * Find every `asset:mindstream/<id>` reference in the markdown body
  * and return the unique ids in encounter order.
  */
 export function extractAssetIds(body: string): string[] {
   const ids: string[] = [];
   const seen = new Set<string>();
-  const re = /mindstream-asset:\/\/([A-Za-z0-9_-]+)/g;
+  const re = assetUrlPattern();
   let m: RegExpExecArray | null;
   while ((m = re.exec(body)) !== null) {
     const id = m[1];
@@ -84,7 +85,7 @@ export function extractAssetIds(body: string): string[] {
 }
 
 /**
- * Rewrite the body so each `mindstream-asset://<id>` URL becomes
+ * Rewrite the body so each `asset:mindstream/<id>` URL becomes
  * `<assetSubdir>/<asset_filename>`, where the per-asset filename is
  * resolved through the `assetFilename` lookup. Unknown ids pass
  * through unchanged so we never silently drop a reference.
@@ -94,17 +95,26 @@ export function rewriteAssetUrls(
   assetSubdir: string,
   assetFilename: (id: string) => string | undefined
 ): string {
-  return body.replace(
-    /mindstream-asset:\/\/([A-Za-z0-9_-]+)/g,
-    (whole, id: string) => {
-      const filename = assetFilename(id);
-      if (!filename) return whole;
-      // Forward-slashes are valid in relative paths on every OS that
-      // can open a markdown file. Avoid backslashes — they're an
-      // escape sequence in markdown text.
-      return `${assetSubdir}/${filename}`;
-    }
-  );
+  return body.replace(assetUrlPattern(), (whole, id: string) => {
+    const filename = assetFilename(id);
+    if (!filename) return whole;
+    // Forward-slashes are valid in relative paths on every OS that
+    // can open a markdown file. Avoid backslashes — they're an
+    // escape sequence in markdown text.
+    return `${assetSubdir}/${filename}`;
+  });
+}
+
+/**
+ * Fresh stateful regex matching `asset:mindstream/<id>`. Built per call
+ * because callers use `exec` with the global flag, which mutates
+ * lastIndex; sharing the instance would tangle concurrent scans.
+ *
+ * The id charset matches what `uploadDrawingAsset` returns — a
+ * `asset_` prefix plus a UUID, both inside [A-Za-z0-9_-].
+ */
+function assetUrlPattern(): RegExp {
+  return /asset:mindstream\/([A-Za-z0-9_-]+)/g;
 }
 
 /** Convenience: build the complete `.md` payload from a `Note`. */
