@@ -49,14 +49,6 @@
               "default": "live",
               "options": ["live", "1m", "5m", "15m", "manual"],
               "showIf": { "id": "account.syncEnabled", "equals": true }
-            },
-            {
-              "id": "account.conflict",
-              "scope": "V",
-              "type": "radio",
-              "default": "ask",
-              "options": ["ask", "prefer-local", "prefer-remote", "keep-both"],
-              "showIf": { "id": "account.syncEnabled", "equals": true }
             }
           ]
         }
