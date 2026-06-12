@@ -146,6 +146,8 @@
     "favourite.remove": "Remove from favourites",
 
     "metadata.organization": "Organization",
+    "metadata.title": "Metadata",
+    "metadata.open": "Show note metadata",
     "metadata.folder": "Folder",
     "metadata.folder.root": "Root",
     "metadata.type": "Type",

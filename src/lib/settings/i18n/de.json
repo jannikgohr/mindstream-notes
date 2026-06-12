@@ -46,6 +46,8 @@
     "favourite.remove": "Aus Favoriten entfernen",
 
     "metadata.organization": "Organisation",
+    "metadata.title": "Metadaten",
+    "metadata.open": "Notizmetadaten anzeigen",
     "metadata.folder": "Ordner",
     "metadata.folder.root": "Stamm",
     "metadata.type": "Typ",
