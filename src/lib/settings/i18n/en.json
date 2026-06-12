@@ -368,7 +368,6 @@
       "label": "Data & Backup",
       "description": "Trash, backup, import/export."
     },
-    "privacy": { "label": "Privacy" },
     "language": { "label": "Language" },
     "about": { "label": "About" }
   },
@@ -388,7 +387,6 @@
     "data.database": { "label": "Database" },
     "data.trash": { "label": "Trash" },
     "data.backup": { "label": "Backup, import & export" },
-    "privacy.telemetry": { "label": "Telemetry" },
     "language.locale": { "label": "Language" },
     "about.version": { "label": "Version" }
   },
@@ -464,9 +462,6 @@
       "label": "Import notes",
       "description": "Import notes from external sources like Markdown files or Obsidian vaults. Coming soon."
     },
-    "privacy.usageStats": { "label": "Send anonymous usage stats" },
-    "privacy.crashReports": { "label": "Send crash reports" },
-    "privacy.clearCache": { "label": "Clear local cache" },
     "language.code": { "label": "Display language" },
     "about.appVersion": { "label": "App version" },
     "about.tauriVersion": { "label": "Component versions" },

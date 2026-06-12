@@ -428,35 +428,6 @@
       ]
     },
     {
-      "id": "privacy",
-      "icon": "shield",
-      "sections": [
-        {
-          "id": "privacy.telemetry",
-          "settings": [
-            {
-              "id": "privacy.usageStats",
-              "scope": "G",
-              "type": "toggle",
-              "default": false
-            },
-            {
-              "id": "privacy.crashReports",
-              "scope": "G",
-              "type": "toggle",
-              "default": true
-            },
-            {
-              "id": "privacy.clearCache",
-              "scope": "D",
-              "type": "button",
-              "actionId": "clear-cache"
-            }
-          ]
-        }
-      ]
-    },
-    {
       "id": "language",
       "icon": "languages",
       "sections": [

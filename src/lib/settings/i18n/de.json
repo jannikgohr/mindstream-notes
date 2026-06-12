@@ -359,7 +359,6 @@
       "description": "Tastenkürzel für die Anwendung und für die Editoren anpassen."
     },
     "data": { "label": "Daten & Backup" },
-    "privacy": { "label": "Datenschutz" },
     "language": { "label": "Sprache" },
     "about": { "label": "Über" }
   },
@@ -379,7 +378,6 @@
     "data.database": { "label": "Datenbank" },
     "data.trash": { "label": "Papierkorb" },
     "data.backup": { "label": "Sicherung, Import & Export" },
-    "privacy.telemetry": { "label": "Telemetrie" },
     "language.locale": { "label": "Sprache" },
     "about.version": { "label": "Version" }
   },
@@ -452,9 +450,6 @@
       "label": "Notizen importieren",
       "description": "Notizen aus externen Quellen wie Markdown-Dateien oder Obsidian-Vaults importieren. Folgt in Kürze."
     },
-    "privacy.usageStats": { "label": "Anonyme Nutzungsstatistik senden" },
-    "privacy.crashReports": { "label": "Absturzberichte senden" },
-    "privacy.clearCache": { "label": "Lokalen Cache leeren" },
     "language.code": { "label": "Anzeigesprache" },
     "about.appVersion": { "label": "App-Version" },
     "about.tauriVersion": { "label": "Komponenten-Versionen" },
