@@ -1570,15 +1570,15 @@
   {:else}
     <Toolbar
       dense
-      aria-label="PDF controls"
+      aria-label={tUi('pdf.toolbar.label')}
       class="shrink-0 justify-between border-b border-border bg-background"
     >
       <div class="flex items-center gap-0.5">
         <ToolbarButton
           active={activeTool === 'select'}
           onclick={() => setTool('select')}
-          aria-label="Select"
-          title="Select"
+          aria-label={tUi('pdf.toolbar.select')}
+          title={tUi('pdf.toolbar.select')}
           aria-pressed={activeTool === 'select'}
         >
           <MousePointer2 aria-hidden="true" />
@@ -1587,8 +1587,8 @@
         <ToolbarButton
           active={activeTool === 'highlight'}
           onclick={() => setTool('highlight')}
-          aria-label="Highlight"
-          title="Highlight"
+          aria-label={tUi('pdf.toolbar.highlight')}
+          title={tUi('pdf.toolbar.highlight')}
           aria-pressed={activeTool === 'highlight'}
           disabled={isTrashed}
         >
@@ -1598,8 +1598,8 @@
         <ToolbarButton
           active={activeTool === 'comment'}
           onclick={() => setTool('comment')}
-          aria-label="Comment"
-          title="Comment"
+          aria-label={tUi('pdf.toolbar.comment')}
+          title={tUi('pdf.toolbar.comment')}
           aria-pressed={activeTool === 'comment'}
           disabled={isTrashed}
         >
@@ -1609,8 +1609,8 @@
         <ToolbarButton
           active={activeTool === 'pen'}
           onclick={() => setTool('pen')}
-          aria-label="Pen"
-          title="Pen"
+          aria-label={tUi('pdf.toolbar.pen')}
+          title={tUi('pdf.toolbar.pen')}
           aria-pressed={activeTool === 'pen'}
           disabled={isTrashed}
         >
@@ -1621,8 +1621,8 @@
           bind:ref={signatureButton}
           active={activeTool === 'signature'}
           onclick={() => setTool('signature')}
-          aria-label="Sign"
-          title="Sign"
+          aria-label={tUi('pdf.toolbar.sign')}
+          title={tUi('pdf.toolbar.sign')}
           aria-pressed={activeTool === 'signature'}
           aria-haspopup="menu"
           aria-expanded={signaturePickerOpen}
@@ -1634,8 +1634,8 @@
         <ToolbarButton
           active={activeTool === 'delete'}
           onclick={() => setTool('delete')}
-          aria-label="Delete annotation"
-          title="Delete annotation"
+          aria-label={tUi('pdf.toolbar.delete')}
+          title={tUi('pdf.toolbar.delete')}
           aria-pressed={activeTool === 'delete'}
           disabled={isTrashed}
         >
@@ -1647,8 +1647,8 @@
         <ToolbarButton
           active={commentsSidebarOpen}
           onclick={() => (commentsSidebarOpen = !commentsSidebarOpen)}
-          aria-label="Toggle comments"
-          title="Toggle comments"
+          aria-label={tUi('pdf.toolbar.comments')}
+          title={tUi('pdf.toolbar.comments')}
           aria-pressed={commentsSidebarOpen}
         >
           <MessagesSquare aria-hidden="true" />
@@ -1673,8 +1673,8 @@
       <div class="flex items-center gap-0.5">
         <ToolbarButton
           onclick={() => zoomBy(1 / ZOOM_STEP)}
-          aria-label="Zoom out"
-          title="Zoom out"
+          aria-label={tUi('pdf.toolbar.zoomOut')}
+          title={tUi('pdf.toolbar.zoomOut')}
         >
           <Minus aria-hidden="true" />
         </ToolbarButton>
@@ -1686,7 +1686,7 @@
           onclick={toggleZoomMenu}
           aria-haspopup="menu"
           aria-expanded={zoomMenuOpen}
-          title="Choose zoom"
+          title={tUi('pdf.toolbar.zoom')}
         >
           <span>{zoomLabel}</span>
           <ChevronDown aria-hidden="true" />
@@ -1694,8 +1694,8 @@
 
         <ToolbarButton
           onclick={() => zoomBy(ZOOM_STEP)}
-          aria-label="Zoom in"
-          title="Zoom in"
+          aria-label={tUi('pdf.toolbar.zoomIn')}
+          title={tUi('pdf.toolbar.zoomIn')}
         >
           <Plus aria-hidden="true" />
         </ToolbarButton>
