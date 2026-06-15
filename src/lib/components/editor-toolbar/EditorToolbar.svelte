@@ -7,7 +7,7 @@
    *
    * Overflow strategy:
    *   - A hidden "measurer" container holds an *exact replica* of every
-   *     button — same shadcn Button, same classes, same icons — so
+   *     button — same ToolbarButton, same props, same icons — so
    *     offsetWidth reads match the visible bar to the pixel. We never
    *     measure the visible bar itself, which keeps collapsing items from
    *     feeding back into the cutoff calculation.
@@ -23,7 +23,7 @@
   import type { Crepe } from '@milkdown/crepe';
   import { listenerCtx } from '@milkdown/kit/plugin/listener';
   import { ChevronDown, MoreHorizontal } from 'lucide-svelte';
-  import { Button } from '$lib/components/ui/button';
+  import { ToolbarButton } from '$lib/components/ui/toolbar';
   import { cn } from '$lib/utils';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { getSettingValue } from '$lib/settings/store.svelte';
@@ -136,13 +136,6 @@
   let openGroupId = $state<string | null>(null);
   let moreOpen = $state(false);
   let openTriggerEl = $state<HTMLElement | null>(null);
-
-  /** Pointer down on toolbar buttons must NOT yank focus away from the
-   * editor — otherwise the soft keyboard collapses between every tap and
-   * the desktop selection vanishes on click. */
-  function holdFocus(e: Event) {
-    e.preventDefault();
-  }
 
   /**
    * Tooltip text for a leaf: label, plus the user's current hotkey
@@ -455,14 +448,6 @@
     }
     return out;
   }
-
-  // Classes for leaf and group buttons. Kept in `const`s so the visible
-  // bar and the measurer can't drift apart — same string in both places.
-  const LEAF_BTN_CLASS = 'size-9 shrink-0';
-  // Wider than a leaf so the icon + chevron + padding actually breathes.
-  // Base button styles force `[&_svg]:size-4` on every svg, so chevron is
-  // also 16px; total content ≈ 16 + 4 (gap-1) + 16 + 16 (px-2) ≈ 52px.
-  const GROUP_BTN_CLASS = 'h-9 shrink-0 gap-1 px-2';
 </script>
 
 <!--
@@ -489,12 +474,10 @@
       {#if item.kind === 'leaf'}
         {@const Icon = item.icon}
         {@const isActive = activeMap[item.id] === true}
-        <Button
-          variant={isActive ? 'secondary' : 'ghost'}
-          size="icon"
-          class={LEAF_BTN_CLASS}
+        <ToolbarButton
+          active={isActive}
+          holdFocus
           disabled={!crepe}
-          onpointerdown={holdFocus}
           onclick={() => invokeLeaf(item)}
           aria-pressed={item.isActive ? isActive : undefined}
           title={leafTitle(item)}
@@ -502,16 +485,15 @@
           aria-keyshortcuts={leafAriaShortcut(item) || undefined}
         >
           <Icon aria-hidden="true" />
-        </Button>
+        </ToolbarButton>
       {:else}
         {@const Icon = item.icon}
         {@const open = openGroupId === item.id}
-        <Button
-          variant={open ? 'secondary' : 'ghost'}
-          size="sm"
-          class={GROUP_BTN_CLASS}
+        <ToolbarButton
+          wide
+          active={open}
+          holdFocus
           disabled={!crepe}
-          onpointerdown={holdFocus}
           onclick={(e) => toggleGroup(item, e.currentTarget as HTMLElement)}
           aria-expanded={open}
           aria-haspopup="menu"
@@ -523,17 +505,15 @@
             class="opacity-60 transition-transform {open ? 'rotate-180' : ''}"
             aria-hidden="true"
           />
-        </Button>
+        </ToolbarButton>
       {/if}
     {/each}
 
     {#if showMoreButton}
-      <Button
-        variant={moreOpen ? 'secondary' : 'ghost'}
-        size="icon"
-        class={LEAF_BTN_CLASS}
+      <ToolbarButton
+        active={moreOpen}
+        holdFocus
         disabled={!crepe}
-        onpointerdown={holdFocus}
         onclick={(e) => toggleMore(e.currentTarget as HTMLElement)}
         aria-expanded={moreOpen}
         aria-haspopup="menu"
@@ -541,12 +521,12 @@
         aria-label={tUi('editor.toolbar.more')}
       >
         <MoreHorizontal aria-hidden="true" />
-      </Button>
+      </ToolbarButton>
     {/if}
   </div>
 
   <!--
-    Hidden measurer. Renders the *same* shadcn Button + classes the visible
+    Hidden measurer. Renders the *same* ToolbarButton + props the visible
     bar uses so offsetWidth matches what would render if everything fit.
     `invisible` keeps layout intact (offsetWidth still works); we tuck it
     off-screen left and clip the row at 0 height so it never paints
@@ -560,38 +540,20 @@
     {#each visibleItems as item (item.id)}
       {#if item.kind === 'leaf'}
         {@const Icon = item.icon}
-        <Button
-          variant="ghost"
-          size="icon"
-          class={LEAF_BTN_CLASS}
-          tabindex={-1}
-          data-toolbar-measure
-        >
+        <ToolbarButton tabindex={-1} data-toolbar-measure>
           <Icon aria-hidden="true" />
-        </Button>
+        </ToolbarButton>
       {:else}
         {@const Icon = item.icon}
-        <Button
-          variant="ghost"
-          size="sm"
-          class={GROUP_BTN_CLASS}
-          tabindex={-1}
-          data-toolbar-measure
-        >
+        <ToolbarButton wide tabindex={-1} data-toolbar-measure>
           <Icon aria-hidden="true" />
           <ChevronDown aria-hidden="true" />
-        </Button>
+        </ToolbarButton>
       {/if}
     {/each}
-    <Button
-      variant="ghost"
-      size="icon"
-      class={LEAF_BTN_CLASS}
-      tabindex={-1}
-      data-toolbar-more-measure
-    >
+    <ToolbarButton tabindex={-1} data-toolbar-more-measure>
       <MoreHorizontal aria-hidden="true" />
-    </Button>
+    </ToolbarButton>
   </div>
 
   {#if openGroup && openTriggerEl}

@@ -20,7 +20,11 @@
   } from 'lucide-svelte';
   import * as Y from 'yjs';
   import { Awareness } from 'y-protocols/awareness';
-  import { Button } from '$lib/components/ui/button';
+  import {
+    Toolbar,
+    ToolbarButton,
+    ToolbarSeparator
+  } from '$lib/components/ui/toolbar';
   import {
     etebaseSession,
     fetchDrawingAsset,
@@ -1564,168 +1568,139 @@
       <span>{error}</span>
     </div>
   {:else}
-    <div
-      class="shrink-0 border-b border-border bg-background"
-      role="toolbar"
+    <Toolbar
+      dense
       aria-label="PDF controls"
+      class="shrink-0 justify-between border-b border-border bg-background"
     >
-      <div class="flex h-9 items-center justify-between gap-2 pl-2">
-        <div class="flex items-center gap-1">
-          <div
-            class="inline-flex items-center rounded-md border border-border bg-background p-0.5"
-          >
-            <Button
-              variant={activeTool === 'select' ? 'secondary' : 'ghost'}
-              size="icon"
-              class="size-7"
-              onclick={() => setTool('select')}
-              aria-label="Select"
-              title="Select"
-              aria-pressed={activeTool === 'select'}
-            >
-              <MousePointer2 class="size-3.5" aria-hidden="true" />
-            </Button>
-
-            <Button
-              variant={activeTool === 'highlight' ? 'secondary' : 'ghost'}
-              size="icon"
-              class="size-7"
-              onclick={() => setTool('highlight')}
-              aria-label="Highlight"
-              title="Highlight"
-              aria-pressed={activeTool === 'highlight'}
-              disabled={isTrashed}
-            >
-              <Highlighter class="size-3.5" aria-hidden="true" />
-            </Button>
-
-            <Button
-              variant={activeTool === 'comment' ? 'secondary' : 'ghost'}
-              size="icon"
-              class="size-7"
-              onclick={() => setTool('comment')}
-              aria-label="Comment"
-              title="Comment"
-              aria-pressed={activeTool === 'comment'}
-              disabled={isTrashed}
-            >
-              <MessageSquarePlus class="size-3.5" aria-hidden="true" />
-            </Button>
-
-            <Button
-              variant={activeTool === 'pen' ? 'secondary' : 'ghost'}
-              size="icon"
-              class="size-7"
-              onclick={() => setTool('pen')}
-              aria-label="Pen"
-              title="Pen"
-              aria-pressed={activeTool === 'pen'}
-              disabled={isTrashed}
-            >
-              <PenLine class="size-3.5" aria-hidden="true" />
-            </Button>
-
-            <Button
-              bind:ref={signatureButton}
-              variant={activeTool === 'signature' ? 'secondary' : 'ghost'}
-              size="icon"
-              class="size-7"
-              onclick={() => setTool('signature')}
-              aria-label="Sign"
-              title="Sign"
-              aria-pressed={activeTool === 'signature'}
-              aria-haspopup="menu"
-              aria-expanded={signaturePickerOpen}
-              disabled={isTrashed}
-            >
-              <Signature class="size-3.5" aria-hidden="true" />
-            </Button>
-
-            <Button
-              variant={activeTool === 'delete' ? 'secondary' : 'ghost'}
-              size="icon"
-              class="size-7"
-              onclick={() => setTool('delete')}
-              aria-label="Delete annotation"
-              title="Delete annotation"
-              aria-pressed={activeTool === 'delete'}
-              disabled={isTrashed}
-            >
-              <Trash2 class="size-3.5" aria-hidden="true" />
-            </Button>
-          </div>
-
-          <Button
-            variant={commentsSidebarOpen ? 'secondary' : 'ghost'}
-            size="icon"
-            class="size-7"
-            onclick={() => (commentsSidebarOpen = !commentsSidebarOpen)}
-            aria-label="Toggle comments"
-            title="Toggle comments"
-            aria-pressed={commentsSidebarOpen}
-          >
-            <MessagesSquare class="size-3.5" aria-hidden="true" />
-          </Button>
-
-          <Button
-            variant="ghost"
-            size="icon"
-            class="size-7"
-            onclick={() => void downloadAnnotatedPdf()}
-            aria-label={tUi('pdf.export.label')}
-            title={exportError
-              ? `${tUi('pdf.export.failed')}: ${exportError}`
-              : tUi('pdf.export.label')}
-            disabled={exportInProgress || !pdfDoc}
-          >
-            {#if exportInProgress}
-              <Loader2 class="size-3.5 animate-spin" aria-hidden="true" />
-            {:else}
-              <Download class="size-3.5" aria-hidden="true" />
-            {/if}
-          </Button>
-        </div>
-
-        <div
-          class="inline-flex items-center rounded-md border border-border bg-background p-0.5"
+      <div class="flex items-center gap-0.5">
+        <ToolbarButton
+          active={activeTool === 'select'}
+          onclick={() => setTool('select')}
+          aria-label="Select"
+          title="Select"
+          aria-pressed={activeTool === 'select'}
         >
-          <Button
-            variant="ghost"
-            size="icon"
-            class="size-7"
-            onclick={() => zoomBy(1 / ZOOM_STEP)}
-            aria-label="Zoom out"
-            title="Zoom out"
-          >
-            <Minus class="size-3.5" aria-hidden="true" />
-          </Button>
+          <MousePointer2 aria-hidden="true" />
+        </ToolbarButton>
 
-          <button
-            bind:this={zoomButton}
-            type="button"
-            class="flex h-7 min-w-22 items-center justify-center gap-1 rounded-sm px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-            onclick={toggleZoomMenu}
-            aria-haspopup="menu"
-            aria-expanded={zoomMenuOpen}
-            title="Choose zoom"
-          >
-            <span>{zoomLabel}</span>
-            <ChevronDown class="size-3" aria-hidden="true" />
-          </button>
+        <ToolbarButton
+          active={activeTool === 'highlight'}
+          onclick={() => setTool('highlight')}
+          aria-label="Highlight"
+          title="Highlight"
+          aria-pressed={activeTool === 'highlight'}
+          disabled={isTrashed}
+        >
+          <Highlighter aria-hidden="true" />
+        </ToolbarButton>
 
-          <Button
-            variant="ghost"
-            size="icon"
-            class="size-7"
-            onclick={() => zoomBy(ZOOM_STEP)}
-            aria-label="Zoom in"
-            title="Zoom in"
-          >
-            <Plus class="size-3.5" aria-hidden="true" />
-          </Button>
-        </div>
+        <ToolbarButton
+          active={activeTool === 'comment'}
+          onclick={() => setTool('comment')}
+          aria-label="Comment"
+          title="Comment"
+          aria-pressed={activeTool === 'comment'}
+          disabled={isTrashed}
+        >
+          <MessageSquarePlus aria-hidden="true" />
+        </ToolbarButton>
+
+        <ToolbarButton
+          active={activeTool === 'pen'}
+          onclick={() => setTool('pen')}
+          aria-label="Pen"
+          title="Pen"
+          aria-pressed={activeTool === 'pen'}
+          disabled={isTrashed}
+        >
+          <PenLine aria-hidden="true" />
+        </ToolbarButton>
+
+        <ToolbarButton
+          bind:ref={signatureButton}
+          active={activeTool === 'signature'}
+          onclick={() => setTool('signature')}
+          aria-label="Sign"
+          title="Sign"
+          aria-pressed={activeTool === 'signature'}
+          aria-haspopup="menu"
+          aria-expanded={signaturePickerOpen}
+          disabled={isTrashed}
+        >
+          <Signature aria-hidden="true" />
+        </ToolbarButton>
+
+        <ToolbarButton
+          active={activeTool === 'delete'}
+          onclick={() => setTool('delete')}
+          aria-label="Delete annotation"
+          title="Delete annotation"
+          aria-pressed={activeTool === 'delete'}
+          disabled={isTrashed}
+        >
+          <Trash2 aria-hidden="true" />
+        </ToolbarButton>
+
+        <ToolbarSeparator />
+
+        <ToolbarButton
+          active={commentsSidebarOpen}
+          onclick={() => (commentsSidebarOpen = !commentsSidebarOpen)}
+          aria-label="Toggle comments"
+          title="Toggle comments"
+          aria-pressed={commentsSidebarOpen}
+        >
+          <MessagesSquare aria-hidden="true" />
+        </ToolbarButton>
+
+        <ToolbarButton
+          onclick={() => void downloadAnnotatedPdf()}
+          aria-label={tUi('pdf.export.label')}
+          title={exportError
+            ? `${tUi('pdf.export.failed')}: ${exportError}`
+            : tUi('pdf.export.label')}
+          disabled={exportInProgress || !pdfDoc}
+        >
+          {#if exportInProgress}
+            <Loader2 class="animate-spin" aria-hidden="true" />
+          {:else}
+            <Download aria-hidden="true" />
+          {/if}
+        </ToolbarButton>
       </div>
-    </div>
+
+      <div class="flex items-center gap-0.5">
+        <ToolbarButton
+          onclick={() => zoomBy(1 / ZOOM_STEP)}
+          aria-label="Zoom out"
+          title="Zoom out"
+        >
+          <Minus aria-hidden="true" />
+        </ToolbarButton>
+
+        <ToolbarButton
+          bind:ref={zoomButton}
+          wide
+          class="min-w-22 justify-center font-medium text-muted-foreground"
+          onclick={toggleZoomMenu}
+          aria-haspopup="menu"
+          aria-expanded={zoomMenuOpen}
+          title="Choose zoom"
+        >
+          <span>{zoomLabel}</span>
+          <ChevronDown aria-hidden="true" />
+        </ToolbarButton>
+
+        <ToolbarButton
+          onclick={() => zoomBy(ZOOM_STEP)}
+          aria-label="Zoom in"
+          title="Zoom in"
+        >
+          <Plus aria-hidden="true" />
+        </ToolbarButton>
+      </div>
+    </Toolbar>
 
     <div class="flex min-h-0 flex-1 overflow-hidden">
       <div
