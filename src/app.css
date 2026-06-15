@@ -231,10 +231,6 @@ body {
   display: none !important;
 }
 
-.dv-tab-ghost-drag {
-  margin: 0 !important;
-}
-
 .dockview-theme-bridge .dv-tabs-container > .dv-tab:first-child {
   margin-left: 4px;
 }
