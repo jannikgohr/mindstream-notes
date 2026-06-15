@@ -13,9 +13,8 @@
    * bundle) and the picker picks it up automatically.
    */
   import { ArrowUpDown } from 'lucide-svelte';
-  import ContextMenu, {
-    type MenuItem
-  } from '$lib/components/ContextMenu.svelte';
+  import ContextMenu from '$lib/components/ContextMenu.svelte';
+  import type { MenuItem } from '$lib/components/context-menu-types';
   import {
     SORT_STRATEGIES,
     type SortDirection,

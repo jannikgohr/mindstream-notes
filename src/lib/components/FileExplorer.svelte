@@ -16,8 +16,9 @@
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import { Separator } from '$lib/components/ui/separator';
-  import ContextMenu, { type MenuItem } from './ContextMenu.svelte';
-  import { confirm } from './confirm-dialog.svelte';
+  import ContextMenu from './ContextMenu.svelte';
+  import type { MenuItem } from './context-menu-types';
+  import { alert, confirm } from './confirm-dialog.svelte';
   import SortControl from './SortControl.svelte';
   import { sortTree } from '$lib/sort';
   import {
@@ -42,6 +43,7 @@
   import { tUi } from '$lib/settings/i18n.svelte';
   import { TRASH_ID } from '$lib/api';
   import type { TreeNode } from '$lib/api';
+  import { exportersForNote } from '$lib/note-exporters';
 
   interface Props {
     onOpenNote: (id: string) => void;
@@ -232,6 +234,22 @@
     menuTarget = null;
   }
 
+  async function runNoteExporter(
+    id: string,
+    label: string,
+    run: () => Promise<void>
+  ) {
+    try {
+      await run();
+    } catch (err) {
+      console.error('[FileExplorer] note export failed', id, err);
+      await alert({
+        title: `${label} export failed`,
+        message: err instanceof Error ? err.message : String(err)
+      });
+    }
+  }
+
   function menuItems(): (MenuItem | 'separator')[] {
     if (!menuTarget) return [];
     if (menuTarget.kind === 'note') {
@@ -282,6 +300,18 @@
         items.push({
           label: 'Open in new window',
           onSelect: () => onOpenInNewWindow(id)
+        });
+      }
+      const exporters = exportersForNote(note);
+      if (exporters.length > 0) {
+        items.push('separator', {
+          label: 'Export',
+          children: exporters.map((exporter) => ({
+            id: exporter.id,
+            label: exporter.label,
+            onSelect: () =>
+              void runNoteExporter(id, exporter.label, () => exporter.run(id))
+          }))
         });
       }
       items.push(

@@ -34,9 +34,8 @@
   } from '$lib/stores/tree.svelte';
   import { ui } from '$lib/state.svelte';
   import { sortTree } from '$lib/sort';
-  import ContextMenu, {
-    type MenuItem
-  } from '$lib/components/ContextMenu.svelte';
+  import ContextMenu from '$lib/components/ContextMenu.svelte';
+  import type { MenuItem } from '$lib/components/context-menu-types';
   import { alert, confirm } from '$lib/components/confirm-dialog.svelte';
   import MoveToSheet, { type MoveTarget } from './MoveToSheet.svelte';
   import NameInputSheet from './NameInputSheet.svelte';

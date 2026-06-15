@@ -3,7 +3,6 @@
   import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
   import {
     AlertCircle,
-    Download,
     FileText,
     Highlighter,
     Loader2,
@@ -37,9 +36,7 @@
   import { isMobile } from '$lib/platform';
   import { getSettingValue } from '$lib/settings/store.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
-  import { saveAnnotatedPdf } from '$lib/api/pdf-export';
-  import { exportAnnotatedPdf } from '$lib/pdf/export-annotated-pdf';
-  import { sanitizePdfFilename } from '$lib/pdf/filename';
+  import { exportAnnotatedPdfNote } from '$lib/note-exporters/pdf';
   import CommentsSidebar from '$lib/pdf/CommentsSidebar.svelte';
   import SignaturePadDialog from '$lib/pdf/SignaturePadDialog.svelte';
   import SignaturePicker from '$lib/pdf/SignaturePicker.svelte';
@@ -72,6 +69,7 @@
     unregisterEditor,
     type EditorListener
   } from '$lib/hotkeys';
+  import { alert } from './confirm-dialog.svelte';
 
   interface Props {
     noteId: string;
@@ -161,8 +159,6 @@
   let collabConfigured = $state(false);
   let collabOnline = $state(false);
   let activePageNumber = $state(1);
-  let exportInProgress = $state(false);
-  let exportError = $state<string | null>(null);
   let pdfjsLib: PdfJs | null = null;
   let pdfViewerLib: PdfViewer | null = null;
   let yDoc: Y.Doc | null = null;
@@ -422,36 +418,6 @@
     }
   }
 
-  async function downloadAnnotatedPdf() {
-    if (exportInProgress) return;
-    if (!pdfDoc) return;
-    exportInProgress = true;
-    exportError = null;
-    try {
-      // getData() returns the original bytes the document was opened from
-      // — we never serialise pdf.js's parsed representation back to disk,
-      // so the result here is byte-identical to the source asset.
-      const sourceBytes = await pdfDoc.getData();
-      const out = await exportAnnotatedPdf(
-        sourceBytes,
-        annotations.filter((annotation) => !annotation.deletedAt)
-      );
-      const title = tree.notesById[noteId]?.title ?? 'pdf-note';
-      // Bridge handles the platform split: native save dialog in Tauri,
-      // <a download> fallback in the browser. Returns false if the user
-      // cancelled the dialog — leave the toolbar quiet in that case.
-      await saveAnnotatedPdf({
-        suggestedName: `${sanitizePdfFilename(title)}.pdf`,
-        bytes: out
-      });
-    } catch (err) {
-      exportError = err instanceof Error ? err.message : String(err);
-      console.error('[PdfNoteViewer] export failed', err);
-    } finally {
-      exportInProgress = false;
-    }
-  }
-
   function setTool(tool: PdfTool) {
     if (tool === 'signature') {
       if (savedSignatures.length === 0) {
@@ -468,6 +434,19 @@
     }
     signaturePickerOpen = false;
     activeTool = activeTool === tool && tool !== 'select' ? 'select' : tool;
+  }
+
+  async function exportCurrentPdfNote() {
+    try {
+      await flushSave();
+      await exportAnnotatedPdfNote(noteId);
+    } catch (err) {
+      console.error('[PdfNoteViewer] export failed', err);
+      await alert({
+        title: 'Annotated PDF export failed',
+        message: err instanceof Error ? err.message : String(err)
+      });
+    }
   }
 
   function handlePdfCommand(id: string): boolean {
@@ -494,7 +473,7 @@
         commentsSidebarOpen = !commentsSidebarOpen;
         return true;
       case 'editor.pdf.export':
-        void downloadAnnotatedPdf();
+        void exportCurrentPdfNote();
         return true;
       case 'editor.pdf.zoomOut':
         zoomBy(1 / ZOOM_STEP);
@@ -1607,21 +1586,6 @@
           aria-pressed={commentsSidebarOpen}
         >
           <MessagesSquare aria-hidden="true" />
-        </ToolbarButton>
-
-        <ToolbarButton
-          onclick={() => void downloadAnnotatedPdf()}
-          aria-label={tUi('pdf.export.label')}
-          title={exportError
-            ? `${tUi('pdf.export.failed')}: ${exportError}`
-            : tUi('pdf.export.label')}
-          disabled={exportInProgress || !pdfDoc}
-        >
-          {#if exportInProgress}
-            <Loader2 class="animate-spin" aria-hidden="true" />
-          {:else}
-            <Download aria-hidden="true" />
-          {/if}
         </ToolbarButton>
       </div>
 

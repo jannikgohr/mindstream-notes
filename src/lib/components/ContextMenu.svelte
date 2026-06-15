@@ -8,16 +8,8 @@
    * default is suppressed in step 3.
    */
   import { onMount } from 'svelte';
-
-  export interface MenuItem {
-    label: string;
-    /** Optional shortcut hint shown right-aligned. */
-    shortcut?: string;
-    /** Mark as destructive — gets red styling. */
-    destructive?: boolean;
-    disabled?: boolean;
-    onSelect: () => void;
-  }
+  import { ChevronRight } from 'lucide-svelte';
+  import type { MenuItem } from './context-menu-types';
 
   interface Props {
     /** Cursor X / Y in client coords (e.g. event.clientX). */
@@ -36,6 +28,7 @@
 
   let { x, y, items, ignoreEl, onClose }: Props = $props();
   let menuEl: HTMLDivElement | null = $state(null);
+  let activeSubmenu = $state<number | null>(null);
 
   onMount(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -70,10 +63,15 @@
     if (typeof window === 'undefined') return y;
     return Math.min(y, window.innerHeight - items.length * 32 - 16);
   });
+  let submenuOpensLeft = $derived.by(() => {
+    if (typeof window === 'undefined') return false;
+    return safeX > window.innerWidth - 440;
+  });
 
   function invoke(item: MenuItem) {
     if (item.disabled) return;
-    item.onSelect();
+    if (item.children?.length) return;
+    item.onSelect?.();
     onClose();
   }
 </script>
@@ -88,20 +86,71 @@
     {#if item === 'separator'}
       <div class="my-1 h-px bg-border"></div>
     {:else}
-      <button
-        type="button"
-        role="menuitem"
-        disabled={item.disabled}
-        class="flex w-full items-center justify-between gap-4 px-3 py-1.5 text-left transition-colors hover:bg-accent hover:text-accent-foreground disabled:cursor-not-allowed disabled:opacity-50 {item.destructive
-          ? 'text-destructive hover:bg-destructive/10 hover:text-destructive'
-          : ''}"
-        onclick={() => invoke(item)}
+      <div
+        role="none"
+        class="relative"
+        onpointerenter={() =>
+          (activeSubmenu = item.children?.length ? i : null)}
       >
-        <span>{item.label}</span>
-        {#if item.shortcut}
-          <span class="text-xs text-muted-foreground">{item.shortcut}</span>
+        <button
+          type="button"
+          role="menuitem"
+          aria-haspopup={item.children?.length ? 'menu' : undefined}
+          aria-expanded={item.children?.length
+            ? activeSubmenu === i
+            : undefined}
+          disabled={item.disabled}
+          class="flex w-full items-center justify-between gap-4 px-3 py-1.5 text-left transition-colors hover:bg-accent hover:text-accent-foreground disabled:cursor-not-allowed disabled:opacity-50 {activeSubmenu ===
+          i
+            ? 'bg-accent text-accent-foreground'
+            : ''} {item.destructive
+            ? 'text-destructive hover:bg-destructive/10 hover:text-destructive'
+            : ''}"
+          onclick={() => {
+            if (item.children?.length)
+              activeSubmenu = activeSubmenu === i ? null : i;
+            else invoke(item);
+          }}
+          onfocus={() => (activeSubmenu = item.children?.length ? i : null)}
+        >
+          <span>{item.label}</span>
+          {#if item.children?.length}
+            <ChevronRight
+              class="size-4 text-muted-foreground"
+              aria-hidden="true"
+            />
+          {:else if item.shortcut}
+            <span class="text-xs text-muted-foreground">{item.shortcut}</span>
+          {/if}
+        </button>
+        {#if item.children?.length && activeSubmenu === i}
+          <div
+            role="menu"
+            class="absolute top-0 z-350 min-w-[200px] rounded-md border border-border bg-popover py-1 text-sm text-popover-foreground shadow-lg {submenuOpensLeft
+              ? 'right-full mr-1'
+              : 'left-full ml-1'}"
+          >
+            {#each item.children as child, childIndex (child.id ?? child.label ?? childIndex)}
+              <button
+                type="button"
+                role="menuitem"
+                disabled={child.disabled}
+                class="flex w-full items-center justify-between gap-4 px-3 py-1.5 text-left transition-colors hover:bg-accent hover:text-accent-foreground disabled:cursor-not-allowed disabled:opacity-50 {child.destructive
+                  ? 'text-destructive hover:bg-destructive/10 hover:text-destructive'
+                  : ''}"
+                onclick={() => invoke(child)}
+              >
+                <span>{child.label}</span>
+                {#if child.shortcut}
+                  <span class="text-xs text-muted-foreground"
+                    >{child.shortcut}</span
+                  >
+                {/if}
+              </button>
+            {/each}
+          </div>
         {/if}
-      </button>
+      </div>
     {/if}
   {/each}
 </div>
