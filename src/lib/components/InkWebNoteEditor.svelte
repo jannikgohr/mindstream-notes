@@ -134,6 +134,7 @@
   };
 
   let hostEl = $state<HTMLDivElement | null>(null);
+  let canvasHostEl = $state<HTMLDivElement | null>(null);
   let canvasEl = $state<HTMLCanvasElement | null>(null);
   let toolbarEl = $state<HTMLDivElement | null>(null);
   let boundsFrame: number | null = null;
@@ -157,6 +158,7 @@
   let lastSeenPushed = false;
   let unsubSession: (() => void) | null = null;
   let editorListener: EditorListener | null = null;
+  let mobileToolbar = $state(false);
 
   let tool = $state<ToolMode>('pen');
   let colorArgb = $state(DEFAULT_COLOR);
@@ -542,10 +544,10 @@
   }
 
   function resizeCanvas() {
-    if (!hostEl || !canvasEl) return;
+    if (!canvasHostEl || !canvasEl) return;
     const previousMinScale = minScale();
     const wasAtMinScale = view.scale <= previousMinScale + 0.001;
-    const rect = hostEl.getBoundingClientRect();
+    const rect = canvasHostEl.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
     const widthPx = Math.max(1, Math.floor(rect.width * dpr));
     const heightPx = Math.max(1, Math.floor(rect.height * dpr));
@@ -1431,6 +1433,7 @@
   onMount(async () => {
     const mountStartedAt = performance.now();
     const mobile = isMobile();
+    mobileToolbar = mobile;
     if (isTauri() && mobile) {
       void acquireFullscreen();
       fullscreenAcquired = true;
@@ -1513,7 +1516,7 @@
       resizeCanvas();
       scheduleBoundsPush();
     });
-    if (hostEl) resizeObserver.observe(hostEl);
+    if (canvasHostEl) resizeObserver.observe(canvasHostEl);
     if (toolbarEl) resizeObserver.observe(toolbarEl);
     // visualViewport tracks IME show/hide and orientation in the way
     // the standard window `resize` event misses on mobile Chromium —
@@ -1599,122 +1602,138 @@
   });
 </script>
 
+{#snippet inkToolbar(dense: boolean, className: string)}
+  <Toolbar {dense} aria-label={tUi('ink.toolbar.label')} class={className}>
+    <ToolbarButton
+      active={tool === 'pen'}
+      aria-label={tUi('ink.toolbar.pen')}
+      title={tUi('ink.toolbar.pen')}
+      aria-pressed={tool === 'pen'}
+      onclick={() => setTool('pen')}
+    >
+      <PenLine aria-hidden="true" />
+    </ToolbarButton>
+
+    <ToolbarButton
+      active={tool === 'eraser'}
+      aria-label={tUi('ink.toolbar.eraser')}
+      title={tUi('ink.toolbar.eraser')}
+      aria-pressed={tool === 'eraser'}
+      onclick={() => setTool('eraser')}
+    >
+      <Eraser aria-hidden="true" />
+    </ToolbarButton>
+
+    <ToolbarSeparator />
+
+    <label
+      class="grid size-9 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+      aria-label={tUi('ink.toolbar.color')}
+      title={tUi('ink.toolbar.color')}
+    >
+      <input
+        class="size-6 cursor-pointer border-0 bg-transparent p-0"
+        type="color"
+        value={colorHex}
+        oninput={(e) => setColor(e.currentTarget.value)}
+      />
+    </label>
+    <input
+      class="mx-2 h-2 w-24 shrink-0 accent-primary"
+      aria-label={tUi('ink.toolbar.brushSize')}
+      title={tUi('ink.toolbar.brushSize')}
+      type="range"
+      min="0.5"
+      max="12"
+      step="0.5"
+      value={width}
+      oninput={(e) => setWidth(e.currentTarget.value)}
+    />
+
+    <ToolbarSeparator />
+
+    <ToolbarButton
+      aria-label={tUi('ink.toolbar.undo')}
+      title={tUi('ink.toolbar.undo')}
+      disabled={isTrashed || !doc || undoDepth === 0}
+      onclick={undo}
+    >
+      <Undo2 aria-hidden="true" />
+    </ToolbarButton>
+    <ToolbarButton
+      aria-label={tUi('ink.toolbar.redo')}
+      title={tUi('ink.toolbar.redo')}
+      disabled={isTrashed || !doc || redoDepth === 0}
+      onclick={redo}
+    >
+      <Redo2 aria-hidden="true" />
+    </ToolbarButton>
+
+    <ToolbarSeparator />
+
+    <ToolbarButton
+      active={fingerDrawingAllowed}
+      aria-label={tUi('ink.toolbar.fingerDrawing')}
+      title={tUi('ink.toolbar.fingerDrawing')}
+      aria-pressed={fingerDrawingAllowed}
+      onclick={toggleFingerDrawing}
+    >
+      <MousePointer2 aria-hidden="true" />
+    </ToolbarButton>
+    <ToolbarButton
+      active={pageThemeMode === 'system'}
+      aria-label={tUi('ink.toolbar.pageTheme')}
+      title={tUi('ink.toolbar.pageTheme')}
+      aria-pressed={pageThemeMode === 'system'}
+      onclick={togglePageTheme}
+    >
+      {#if pageThemeMode === 'system'}
+        <MoonStar aria-hidden="true" />
+      {:else}
+        <Sun aria-hidden="true" />
+      {/if}
+    </ToolbarButton>
+    <ToolbarButton
+      aria-label={tUi('ink.toolbar.clear')}
+      title={tUi('ink.toolbar.clear')}
+      disabled={isTrashed}
+      onclick={clearCanvas}
+    >
+      <Trash2 aria-hidden="true" />
+    </ToolbarButton>
+  </Toolbar>
+{/snippet}
+
 <div
   bind:this={hostEl}
-  class="relative h-full w-full overflow-hidden bg-background"
+  class="relative flex h-full w-full flex-col overflow-hidden bg-background"
 >
-  <div bind:this={toolbarEl} class="absolute left-3 top-3 z-10">
-    <Toolbar
-      aria-label={tUi('ink.toolbar.label')}
-      class="rounded-md border border-border bg-background/95 shadow-sm backdrop-blur"
-    >
-      <ToolbarButton
-        active={tool === 'pen'}
-        aria-label={tUi('ink.toolbar.pen')}
-        title={tUi('ink.toolbar.pen')}
-        aria-pressed={tool === 'pen'}
-        onclick={() => setTool('pen')}
-      >
-        <PenLine aria-hidden="true" />
-      </ToolbarButton>
+  {#if mobileToolbar}
+    <div bind:this={toolbarEl} class="absolute left-3 top-3 z-10">
+      {@render inkToolbar(
+        false,
+        'rounded-md border border-border bg-background/95 shadow-sm backdrop-blur'
+      )}
+    </div>
+  {:else}
+    <div bind:this={toolbarEl} class="shrink-0">
+      {@render inkToolbar(
+        true,
+        'shrink-0 border-b border-border bg-background'
+      )}
+    </div>
+  {/if}
 
-      <ToolbarButton
-        active={tool === 'eraser'}
-        aria-label={tUi('ink.toolbar.eraser')}
-        title={tUi('ink.toolbar.eraser')}
-        aria-pressed={tool === 'eraser'}
-        onclick={() => setTool('eraser')}
-      >
-        <Eraser aria-hidden="true" />
-      </ToolbarButton>
-
-      <ToolbarSeparator />
-
-      <label
-        class="grid size-9 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-        aria-label={tUi('ink.toolbar.color')}
-        title={tUi('ink.toolbar.color')}
-      >
-        <input
-          class="size-6 cursor-pointer border-0 bg-transparent p-0"
-          type="color"
-          value={colorHex}
-          oninput={(e) => setColor(e.currentTarget.value)}
-        />
-      </label>
-      <input
-        class="mx-2 h-2 w-24 shrink-0 accent-primary"
-        aria-label={tUi('ink.toolbar.brushSize')}
-        title={tUi('ink.toolbar.brushSize')}
-        type="range"
-        min="0.5"
-        max="12"
-        step="0.5"
-        value={width}
-        oninput={(e) => setWidth(e.currentTarget.value)}
-      />
-
-      <ToolbarSeparator />
-
-      <ToolbarButton
-        aria-label={tUi('ink.toolbar.undo')}
-        title={tUi('ink.toolbar.undo')}
-        disabled={isTrashed || !doc || undoDepth === 0}
-        onclick={undo}
-      >
-        <Undo2 aria-hidden="true" />
-      </ToolbarButton>
-      <ToolbarButton
-        aria-label={tUi('ink.toolbar.redo')}
-        title={tUi('ink.toolbar.redo')}
-        disabled={isTrashed || !doc || redoDepth === 0}
-        onclick={redo}
-      >
-        <Redo2 aria-hidden="true" />
-      </ToolbarButton>
-
-      <ToolbarSeparator />
-
-      <ToolbarButton
-        active={fingerDrawingAllowed}
-        aria-label={tUi('ink.toolbar.fingerDrawing')}
-        title={tUi('ink.toolbar.fingerDrawing')}
-        aria-pressed={fingerDrawingAllowed}
-        onclick={toggleFingerDrawing}
-      >
-        <MousePointer2 aria-hidden="true" />
-      </ToolbarButton>
-      <ToolbarButton
-        active={pageThemeMode === 'system'}
-        aria-label={tUi('ink.toolbar.pageTheme')}
-        title={tUi('ink.toolbar.pageTheme')}
-        aria-pressed={pageThemeMode === 'system'}
-        onclick={togglePageTheme}
-      >
-        {#if pageThemeMode === 'system'}
-          <MoonStar aria-hidden="true" />
-        {:else}
-          <Sun aria-hidden="true" />
-        {/if}
-      </ToolbarButton>
-      <ToolbarButton
-        aria-label={tUi('ink.toolbar.clear')}
-        title={tUi('ink.toolbar.clear')}
-        disabled={isTrashed}
-        onclick={clearCanvas}
-      >
-        <Trash2 aria-hidden="true" />
-      </ToolbarButton>
-    </Toolbar>
+  <div bind:this={canvasHostEl} class="relative min-h-0 flex-1">
+    <canvas
+      bind:this={canvasEl}
+      class="block h-full w-full touch-none"
+      aria-label={ariaLabel}
+      onpointerdown={handlePointerDown}
+      onpointermove={handlePointerMove}
+      onpointerup={handlePointerUp}
+      onpointercancel={handlePointerCancel}
+      onwheel={handleWheel}
+    ></canvas>
   </div>
-  <canvas
-    bind:this={canvasEl}
-    class="block h-full w-full touch-none"
-    aria-label={ariaLabel}
-    onpointerdown={handlePointerDown}
-    onpointermove={handlePointerMove}
-    onpointerup={handlePointerUp}
-    onpointercancel={handlePointerCancel}
-    onwheel={handleWheel}
-  ></canvas>
 </div>
