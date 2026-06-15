@@ -57,8 +57,6 @@
     };
   });
 
-  import { ui } from '$lib/state.svelte.js';
-
   // Periodic sync runs in a Rust tokio task — see
   // src-tauri/src/sync/scheduler.rs. This effect just forwards the
   // settings UI choice into that task via `set_sync_schedule`.
@@ -208,8 +206,6 @@
 
 <div
   class="flex h-full w-full flex-col overflow-hidden bg-background text-foreground"
-  style:--left-sidebar-width="{ui.leftSidebarWidth}px"
-  style:--left-sidebar-enabled={Number(ui.leftSidebarOpen)}
 >
   {@render children()}
 </div>

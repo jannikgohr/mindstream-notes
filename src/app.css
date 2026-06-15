@@ -37,8 +37,6 @@
    * the tab strip reads as a distinct band from both the content panel
    * below it and the inactive tabs above it. */
   --dock-strip: oklch(0.9542 0.003 247.86);
-  --left-sidebar-width: 0px;
-  --left-sidebar-enabled: 1;
   /* Height of the floating mobile formatting toolbar — set live by
    * MobileEditorToolbar.svelte on mount, cleared on destroy. The 0px
    * default keeps desktop unaffected and tells CSS resolvers (IDE
@@ -500,12 +498,13 @@ body {
   padding: 1.25rem 5px;
 }
 
-main:not(.fullscreen-note) .milkdown-drop-indicator {
-  left: calc(
-    var(--left-sidebar-width) * var(--left-sidebar-enabled) * -1
-  ) !important;
-  top: -40px !important;
-}
+/*
+ * The block-drag drop indicator's left/top are set live by
+ * drop-indicator-align.ts so it tracks the cursor regardless of the
+ * surrounding chrome (top bar, sidebar, toolbars). It used to be corrected
+ * with a hardcoded `top: -40px` + sidebar-width calc here, which broke
+ * whenever the chrome's dimensions changed.
+ */
 
 .ProseMirror {
   padding-left: 90px !important;

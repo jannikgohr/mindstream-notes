@@ -29,6 +29,7 @@
   } from '$lib/assets/bridge';
   import { listen } from '$lib/api/events';
   import { buildCrepe } from '$lib/editor/crepe-setup';
+  import { ensureDropIndicatorAlignment } from '$lib/editor/drop-indicator-align';
   import { pickCursorColor } from '$lib/editor/cursor-color';
   import { base64ToBytes } from '$lib/editor/base64';
   import { createWikilinkBridge } from '$lib/editor/plugins';
@@ -255,6 +256,13 @@
         assetBridge
       });
       await crepe.create();
+
+      // Keep the block-drag drop indicator aligned with the cursor. The
+      // indicator is `position: fixed` but lives inside Dockview's
+      // transformed panel, so it'd otherwise render offset by the chrome.
+      // See drop-indicator-align.ts. Idempotent + global; the block handle
+      // (and thus the indicator) only exists on desktop, where BlockEdit is on.
+      if (!mobile) ensureDropIndicatorAlignment();
 
       // Register with the command bus as soon as Crepe is interactive.
       //
