@@ -14,7 +14,8 @@
   import {
     Toolbar,
     ToolbarButton,
-    ToolbarSeparator
+    ToolbarSeparator,
+    ToolbarZoomControls
   } from '$lib/components/ui/toolbar';
   import {
     drawingCancelLiveInk,
@@ -89,6 +90,8 @@
   const FIT_PAGE_MARGIN_PX = 32;
   const FIT_PAGE_TOP_MARGIN_PX = 72;
   const MAX_ZOOM_FACTOR = 6;
+  const INK_ZOOM_STEP = 1.2;
+  const INK_QUICK_ZOOMS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
   const POINTER_BUTTON_SECONDARY = 2;
   const POINTER_BUTTON_STYLUS_PRIMARY = 32;
   const POINTER_BUTTON_STYLUS_SECONDARY = 64;
@@ -159,6 +162,8 @@
   let unsubSession: (() => void) | null = null;
   let editorListener: EditorListener | null = null;
   let mobileToolbar = $state(false);
+  let zoomMenuOpen = $state(false);
+  let zoomUiVersion = $state(0);
 
   let tool = $state<ToolMode>('pen');
   let colorArgb = $state(DEFAULT_COLOR);
@@ -194,6 +199,14 @@
 
   const pageDark = $derived(pageThemeMode === 'system');
   const colorHex = $derived(argbToColorHex(colorArgb));
+  const inkZoomLabel = $derived.by(() => {
+    void zoomUiVersion;
+    return `${Math.round(view.scale * 100)}%`;
+  });
+  const inkFitActive = $derived.by(() => {
+    void zoomUiVersion;
+    return Math.abs(view.scale - minScale()) < 0.01;
+  });
 
   function ancestorIsTrash(parentId: string | null): boolean {
     let current = parentId;
@@ -567,6 +580,7 @@
     }
     scheduleDraw();
     updateLiveInkOverlayStyle();
+    zoomUiVersion += 1;
   }
 
   function fitPage() {
@@ -1227,6 +1241,7 @@
     if (event.ctrlKey || event.metaKey) {
       const factor = Math.exp(-event.deltaY * 0.001);
       zoomAround(event.offsetX, event.offsetY, factor);
+      zoomUiVersion += 1;
     } else if (event.shiftKey) {
       view.panX -= event.deltaY + event.deltaX;
     } else {
@@ -1247,6 +1262,33 @@
     );
     view.panX = screenX - before.x * view.scale;
     view.panY = screenY - before.y * view.scale;
+  }
+
+  function setInkZoom(value: number) {
+    const centerX = view.width * 0.5;
+    const centerY = view.height * 0.5;
+    const before = screenToPage(centerX, centerY);
+    const min = minScale();
+    view.scale = Math.min(Math.max(value, min), min * MAX_ZOOM_FACTOR);
+    view.panX = centerX - before.x * view.scale;
+    view.panY = centerY - before.y * view.scale;
+    clampView();
+    scheduleDraw();
+    updateLiveInkOverlayStyle();
+    zoomMenuOpen = false;
+    zoomUiVersion += 1;
+  }
+
+  function setFitPageZoom() {
+    fitPage();
+    scheduleDraw();
+    updateLiveInkOverlayStyle();
+    zoomMenuOpen = false;
+    zoomUiVersion += 1;
+  }
+
+  function zoomInkBy(factor: number) {
+    setInkZoom(view.scale * factor);
   }
 
   function minScale(): number {
@@ -1604,103 +1646,123 @@
 
 {#snippet inkToolbar(dense: boolean, className: string)}
   <Toolbar {dense} aria-label={tUi('ink.toolbar.label')} class={className}>
-    <ToolbarButton
-      active={tool === 'pen'}
-      aria-label={tUi('ink.toolbar.pen')}
-      title={tUi('ink.toolbar.pen')}
-      aria-pressed={tool === 'pen'}
-      onclick={() => setTool('pen')}
-    >
-      <PenLine aria-hidden="true" />
-    </ToolbarButton>
+    <div class="flex items-center gap-0.5">
+      <ToolbarButton
+        active={tool === 'pen'}
+        aria-label={tUi('ink.toolbar.pen')}
+        title={tUi('ink.toolbar.pen')}
+        aria-pressed={tool === 'pen'}
+        onclick={() => setTool('pen')}
+      >
+        <PenLine aria-hidden="true" />
+      </ToolbarButton>
 
-    <ToolbarButton
-      active={tool === 'eraser'}
-      aria-label={tUi('ink.toolbar.eraser')}
-      title={tUi('ink.toolbar.eraser')}
-      aria-pressed={tool === 'eraser'}
-      onclick={() => setTool('eraser')}
-    >
-      <Eraser aria-hidden="true" />
-    </ToolbarButton>
+      <ToolbarButton
+        active={tool === 'eraser'}
+        aria-label={tUi('ink.toolbar.eraser')}
+        title={tUi('ink.toolbar.eraser')}
+        aria-pressed={tool === 'eraser'}
+        onclick={() => setTool('eraser')}
+      >
+        <Eraser aria-hidden="true" />
+      </ToolbarButton>
 
-    <ToolbarSeparator />
+      <ToolbarSeparator />
 
-    <label
-      class="grid size-9 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-      aria-label={tUi('ink.toolbar.color')}
-      title={tUi('ink.toolbar.color')}
-    >
+      <label
+        class="grid size-9 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+        aria-label={tUi('ink.toolbar.color')}
+        title={tUi('ink.toolbar.color')}
+      >
+        <input
+          class="size-6 cursor-pointer border-0 bg-transparent p-0"
+          type="color"
+          value={colorHex}
+          oninput={(e) => setColor(e.currentTarget.value)}
+        />
+      </label>
       <input
-        class="size-6 cursor-pointer border-0 bg-transparent p-0"
-        type="color"
-        value={colorHex}
-        oninput={(e) => setColor(e.currentTarget.value)}
+        class="mx-2 h-2 w-24 shrink-0 accent-primary"
+        aria-label={tUi('ink.toolbar.brushSize')}
+        title={tUi('ink.toolbar.brushSize')}
+        type="range"
+        min="0.5"
+        max="12"
+        step="0.5"
+        value={width}
+        oninput={(e) => setWidth(e.currentTarget.value)}
       />
-    </label>
-    <input
-      class="mx-2 h-2 w-24 shrink-0 accent-primary"
-      aria-label={tUi('ink.toolbar.brushSize')}
-      title={tUi('ink.toolbar.brushSize')}
-      type="range"
-      min="0.5"
-      max="12"
-      step="0.5"
-      value={width}
-      oninput={(e) => setWidth(e.currentTarget.value)}
-    />
 
-    <ToolbarSeparator />
+      <ToolbarSeparator />
 
-    <ToolbarButton
-      aria-label={tUi('ink.toolbar.undo')}
-      title={tUi('ink.toolbar.undo')}
-      disabled={isTrashed || !doc || undoDepth === 0}
-      onclick={undo}
-    >
-      <Undo2 aria-hidden="true" />
-    </ToolbarButton>
-    <ToolbarButton
-      aria-label={tUi('ink.toolbar.redo')}
-      title={tUi('ink.toolbar.redo')}
-      disabled={isTrashed || !doc || redoDepth === 0}
-      onclick={redo}
-    >
-      <Redo2 aria-hidden="true" />
-    </ToolbarButton>
+      <ToolbarButton
+        aria-label={tUi('ink.toolbar.undo')}
+        title={tUi('ink.toolbar.undo')}
+        disabled={isTrashed || !doc || undoDepth === 0}
+        onclick={undo}
+      >
+        <Undo2 aria-hidden="true" />
+      </ToolbarButton>
+      <ToolbarButton
+        aria-label={tUi('ink.toolbar.redo')}
+        title={tUi('ink.toolbar.redo')}
+        disabled={isTrashed || !doc || redoDepth === 0}
+        onclick={redo}
+      >
+        <Redo2 aria-hidden="true" />
+      </ToolbarButton>
 
-    <ToolbarSeparator />
+      <ToolbarSeparator />
 
-    <ToolbarButton
-      active={fingerDrawingAllowed}
-      aria-label={tUi('ink.toolbar.fingerDrawing')}
-      title={tUi('ink.toolbar.fingerDrawing')}
-      aria-pressed={fingerDrawingAllowed}
-      onclick={toggleFingerDrawing}
-    >
-      <MousePointer2 aria-hidden="true" />
-    </ToolbarButton>
-    <ToolbarButton
-      active={pageThemeMode === 'system'}
-      aria-label={tUi('ink.toolbar.pageTheme')}
-      title={tUi('ink.toolbar.pageTheme')}
-      aria-pressed={pageThemeMode === 'system'}
-      onclick={togglePageTheme}
-    >
-      {#if pageThemeMode === 'system'}
-        <MoonStar aria-hidden="true" />
-      {:else}
-        <Sun aria-hidden="true" />
-      {/if}
-    </ToolbarButton>
-    <ToolbarButton
-      aria-label={tUi('ink.toolbar.clear')}
-      title={tUi('ink.toolbar.clear')}
-      disabled={isTrashed}
-      onclick={clearCanvas}
-    >
-      <Trash2 aria-hidden="true" />
-    </ToolbarButton>
+      <ToolbarButton
+        active={fingerDrawingAllowed}
+        aria-label={tUi('ink.toolbar.fingerDrawing')}
+        title={tUi('ink.toolbar.fingerDrawing')}
+        aria-pressed={fingerDrawingAllowed}
+        onclick={toggleFingerDrawing}
+      >
+        <MousePointer2 aria-hidden="true" />
+      </ToolbarButton>
+      <ToolbarButton
+        active={pageThemeMode === 'system'}
+        aria-label={tUi('ink.toolbar.pageTheme')}
+        title={tUi('ink.toolbar.pageTheme')}
+        aria-pressed={pageThemeMode === 'system'}
+        onclick={togglePageTheme}
+      >
+        {#if pageThemeMode === 'system'}
+          <MoonStar aria-hidden="true" />
+        {:else}
+          <Sun aria-hidden="true" />
+        {/if}
+      </ToolbarButton>
+      <ToolbarButton
+        aria-label={tUi('ink.toolbar.clear')}
+        title={tUi('ink.toolbar.clear')}
+        disabled={isTrashed}
+        onclick={clearCanvas}
+      >
+        <Trash2 aria-hidden="true" />
+      </ToolbarButton>
+    </div>
+
+    {#if !mobileToolbar}
+      <ToolbarZoomControls
+        bind:open={zoomMenuOpen}
+        label={inkZoomLabel}
+        zoomOutLabel={tUi('ink.toolbar.zoomOut')}
+        zoomInLabel={tUi('ink.toolbar.zoomIn')}
+        zoomMenuLabel={tUi('ink.toolbar.zoom')}
+        fitLabel={tUi('ink.toolbar.fitPage')}
+        fitActive={inkFitActive}
+        zoomOptions={INK_QUICK_ZOOMS}
+        selectedZoom={inkFitActive ? null : view.scale}
+        onZoomOut={() => zoomInkBy(1 / INK_ZOOM_STEP)}
+        onZoomIn={() => zoomInkBy(INK_ZOOM_STEP)}
+        onFit={setFitPageZoom}
+        onSelectZoom={setInkZoom}
+      />
+    {/if}
   </Toolbar>
 {/snippet}
 
@@ -1719,7 +1781,7 @@
     <div bind:this={toolbarEl} class="shrink-0">
       {@render inkToolbar(
         true,
-        'shrink-0 border-b border-border bg-background'
+        'shrink-0 justify-between border-b border-border bg-background'
       )}
     </div>
   {/if}

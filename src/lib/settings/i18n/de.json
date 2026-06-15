@@ -266,6 +266,10 @@
     "ink.toolbar.brushSize": "Pinselgröße",
     "ink.toolbar.undo": "Rückgängig",
     "ink.toolbar.redo": "Wiederholen",
+    "ink.toolbar.zoomOut": "Verkleinern",
+    "ink.toolbar.zoomIn": "Vergrößern",
+    "ink.toolbar.zoom": "Zoom wählen",
+    "ink.toolbar.fitPage": "Breite anpassen",
     "ink.toolbar.fingerDrawing": "Fingerzeichnen umschalten",
     "ink.toolbar.pageTheme": "Seitendesign umschalten",
     "ink.toolbar.clear": "Tinte löschen",
@@ -287,6 +291,7 @@
     "pdf.toolbar.zoomOut": "Verkleinern",
     "pdf.toolbar.zoomIn": "Vergrößern",
     "pdf.toolbar.zoom": "Zoom wählen",
+    "pdf.toolbar.fitWidth": "Breite anpassen",
 
     "updater.checkFailed.title": "Update-Prüfung fehlgeschlagen",
     "updater.checkFailed.message": "Der Update-Server ist nicht erreichbar. Bitte prüfe deine Internetverbindung und versuche es erneut.",

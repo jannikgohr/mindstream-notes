@@ -3,18 +3,14 @@
   import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
   import {
     AlertCircle,
-    Check,
-    ChevronDown,
     Download,
     FileText,
     Highlighter,
     Loader2,
     MessageSquarePlus,
     MessagesSquare,
-    Minus,
     MousePointer2,
     PenLine,
-    Plus,
     Signature,
     Trash2
   } from 'lucide-svelte';
@@ -23,7 +19,8 @@
   import {
     Toolbar,
     ToolbarButton,
-    ToolbarSeparator
+    ToolbarSeparator,
+    ToolbarZoomControls
   } from '$lib/components/ui/toolbar';
   import {
     etebaseSession,
@@ -37,6 +34,7 @@
   import { listen } from '$lib/api/events';
   import { base64ToBytes } from '$lib/editor/base64';
   import { pickCursorColor } from '$lib/editor/cursor-color';
+  import { isMobile } from '$lib/platform';
   import { getSettingValue } from '$lib/settings/store.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { saveAnnotatedPdf } from '$lib/api/pdf-export';
@@ -135,8 +133,6 @@
 
   let hostEl = $state<HTMLDivElement | null>(null);
   let container = $state<HTMLDivElement | null>(null);
-  let zoomButton = $state<HTMLButtonElement | null>(null);
-  let zoomMenuEl = $state<HTMLDivElement | null>(null);
   let pdfDoc = $state<PdfDocument | null>(null);
   let pageNumbers = $state<number[]>([]);
   let loading = $state(true);
@@ -147,7 +143,7 @@
   let zoomMode = $state<ZoomMode>('fixed');
   let firstPageWidth = $state(0);
   let zoomMenuOpen = $state(false);
-  let menuRectVersion = $state(0);
+  let mobileToolbar = $state(false);
   let annotationVersion = $state(0);
   let annotations = $state<PdfAnnotation[]>([]);
   let activeTool = $state<PdfTool>('select');
@@ -592,17 +588,6 @@
   const commentAnnotations = $derived(
     annotations.filter((annotation) => isCommentLikeAnnotation(annotation))
   );
-  const menuRect = $derived.by(() => {
-    void menuRectVersion;
-    return zoomButton?.getBoundingClientRect() ?? null;
-  });
-  const menuLeft = $derived.by(() => {
-    if (!menuRect || typeof window === 'undefined') return 0;
-    const width = 160;
-    return Math.max(8, Math.min(menuRect.left, window.innerWidth - width - 8));
-  });
-  const menuTop = $derived(menuRect ? menuRect.bottom : 0);
-
   function setFixedZoom(value: number) {
     zoomMode = 'fixed';
     zoom = clampZoom(value);
@@ -620,7 +605,6 @@
 
   function toggleZoomMenu() {
     zoomMenuOpen = !zoomMenuOpen;
-    menuRectVersion += 1;
   }
 
   async function zoomFromWheel(
@@ -671,7 +655,6 @@
     containerWidth = node.clientWidth;
     resizeObserver?.disconnect();
     resizeObserver = new ResizeObserver(() => {
-      menuRectVersion += 1;
       bumpRenderVersion();
       // Drives fit-width placeholder sizing reactively. Without this,
       // placeholder dimensions go stale on window resize even though the
@@ -679,35 +662,6 @@
       containerWidth = node.clientWidth;
     });
     resizeObserver.observe(node);
-  });
-
-  $effect(() => {
-    if (!zoomMenuOpen) return;
-    const onPointerDown = (e: PointerEvent) => {
-      const target = e.target as Node;
-      if (zoomMenuEl?.contains(target)) return;
-      if (zoomButton?.contains(target)) return;
-      zoomMenuOpen = false;
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') zoomMenuOpen = false;
-    };
-    const onResize = () => {
-      menuRectVersion += 1;
-    };
-    queueMicrotask(() => window.addEventListener('pointerdown', onPointerDown));
-    window.addEventListener('keydown', onKey);
-    window.addEventListener('resize', onResize);
-    window.visualViewport?.addEventListener('resize', onResize);
-    window.visualViewport?.addEventListener('scroll', onResize);
-
-    return () => {
-      window.removeEventListener('pointerdown', onPointerDown);
-      window.removeEventListener('keydown', onKey);
-      window.removeEventListener('resize', onResize);
-      window.visualViewport?.removeEventListener('resize', onResize);
-      window.visualViewport?.removeEventListener('scroll', onResize);
-    };
   });
 
   $effect(() => {
@@ -925,6 +879,7 @@
   });
 
   onMount(async () => {
+    mobileToolbar = isMobile();
     savedSignatures = loadReusableSignatures();
     activeSignatureId = savedSignatures[0]?.id ?? null;
     await tick();
@@ -1670,36 +1625,23 @@
         </ToolbarButton>
       </div>
 
-      <div class="flex items-center gap-0.5">
-        <ToolbarButton
-          onclick={() => zoomBy(1 / ZOOM_STEP)}
-          aria-label={tUi('pdf.toolbar.zoomOut')}
-          title={tUi('pdf.toolbar.zoomOut')}
-        >
-          <Minus aria-hidden="true" />
-        </ToolbarButton>
-
-        <ToolbarButton
-          bind:ref={zoomButton}
-          wide
-          class="min-w-22 justify-center font-medium text-muted-foreground"
-          onclick={toggleZoomMenu}
-          aria-haspopup="menu"
-          aria-expanded={zoomMenuOpen}
-          title={tUi('pdf.toolbar.zoom')}
-        >
-          <span>{zoomLabel}</span>
-          <ChevronDown aria-hidden="true" />
-        </ToolbarButton>
-
-        <ToolbarButton
-          onclick={() => zoomBy(ZOOM_STEP)}
-          aria-label={tUi('pdf.toolbar.zoomIn')}
-          title={tUi('pdf.toolbar.zoomIn')}
-        >
-          <Plus aria-hidden="true" />
-        </ToolbarButton>
-      </div>
+      {#if !mobileToolbar}
+        <ToolbarZoomControls
+          bind:open={zoomMenuOpen}
+          label={zoomLabel}
+          zoomOutLabel={tUi('pdf.toolbar.zoomOut')}
+          zoomInLabel={tUi('pdf.toolbar.zoomIn')}
+          zoomMenuLabel={tUi('pdf.toolbar.zoom')}
+          fitLabel={tUi('pdf.toolbar.fitWidth')}
+          fitActive={zoomMode === 'fit-width'}
+          zoomOptions={QUICK_ZOOMS}
+          selectedZoom={zoomMode === 'fixed' ? zoom : null}
+          onZoomOut={() => zoomBy(1 / ZOOM_STEP)}
+          onZoomIn={() => zoomBy(ZOOM_STEP)}
+          onFit={setFitWidthZoom}
+          onSelectZoom={setFixedZoom}
+        />
+      {/if}
     </Toolbar>
 
     <div class="flex min-h-0 flex-1 overflow-hidden">
@@ -1771,48 +1713,6 @@
       onAddNew={openSignaturePad}
       onClose={() => (signaturePickerOpen = false)}
     />
-
-    {#if zoomMenuOpen && menuRect}
-      <div
-        bind:this={zoomMenuEl}
-        role="menu"
-        class="fixed z-50 min-w-40 rounded-md border border-border bg-popover py-1 text-sm text-popover-foreground shadow-lg"
-        style="left: {menuLeft}px; top: {menuTop}px;"
-      >
-        <button
-          type="button"
-          role="menuitem"
-          class="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-accent hover:text-accent-foreground"
-          onclick={setFitWidthZoom}
-        >
-          <Check
-            class="size-4 shrink-0 {zoomMode === 'fit-width'
-              ? 'opacity-100'
-              : 'opacity-0'}"
-            aria-hidden="true"
-          />
-          <span>Fit width</span>
-        </button>
-        <div class="my-1 border-t border-border"></div>
-        {#each QUICK_ZOOMS as option (option)}
-          <button
-            type="button"
-            role="menuitem"
-            class="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-accent hover:text-accent-foreground"
-            onclick={() => setFixedZoom(option)}
-          >
-            <Check
-              class="size-4 shrink-0 {zoomMode === 'fixed' &&
-              Math.abs(zoom - option) < 0.01
-                ? 'opacity-100'
-                : 'opacity-0'}"
-              aria-hidden="true"
-            />
-            <span>{Math.round(option * 100)}%</span>
-          </button>
-        {/each}
-      </div>
-    {/if}
   {/if}
 </div>
 

@@ -366,6 +366,10 @@
     "ink.toolbar.brushSize": "Brush size",
     "ink.toolbar.undo": "Undo",
     "ink.toolbar.redo": "Redo",
+    "ink.toolbar.zoomOut": "Zoom out",
+    "ink.toolbar.zoomIn": "Zoom in",
+    "ink.toolbar.zoom": "Choose zoom",
+    "ink.toolbar.fitPage": "Fit page",
     "ink.toolbar.fingerDrawing": "Toggle finger drawing",
     "ink.toolbar.pageTheme": "Toggle page theme",
     "ink.toolbar.clear": "Clear ink",
@@ -387,6 +391,7 @@
     "pdf.toolbar.zoomOut": "Zoom out",
     "pdf.toolbar.zoomIn": "Zoom in",
     "pdf.toolbar.zoom": "Choose zoom",
+    "pdf.toolbar.fitWidth": "Fit width",
 
     "updater.checkFailed.title": "Couldn't check for updates",
     "updater.checkFailed.message": "We weren't able to reach the update server. Check your internet connection and try again.",
