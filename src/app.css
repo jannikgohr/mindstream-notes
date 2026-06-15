@@ -499,12 +499,20 @@ body {
 }
 
 /*
- * The block-drag drop indicator's left/top are set live by
- * drop-indicator-align.ts so it tracks the cursor regardless of the
- * surrounding chrome (top bar, sidebar, toolbars). It used to be corrected
- * with a hardcoded `top: -40px` + sidebar-width calc here, which broke
- * whenever the chrome's dimensions changed.
+ * Only show the drop indicator for editor-initiated block drags. The upstream
+ * prosemirror-drop-indicator binds its `dragover` handler to the whole editor
+ * and shows the line for ANY drag passing over it — file drops, Dockview tab
+ * and sash drags, etc. — none of which are block reorders. The block plugin
+ * flags a genuine block drag with `data-dragging="true"` on `.ProseMirror`
+ * (set from ProseMirror's `view.dragging`, which foreign drags never set);
+ * the indicator is appended as a sibling of `.ProseMirror`, so when that flag
+ * is absent we force-hide it, overriding the plugin's inline `display: block`.
+ * During a real block drag the flag is set and the plugin's own show/hide
+ * (it sets `display: none` when there's no target line) governs as normal.
  */
+.ProseMirror:not([data-dragging='true']) ~ .milkdown-drop-indicator {
+  display: none !important;
+}
 
 .ProseMirror {
   padding-left: 90px !important;
