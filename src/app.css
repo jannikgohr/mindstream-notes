@@ -227,6 +227,10 @@ body {
     opacity var(--dv-transition-duration, 200ms) ease-out;
 }
 
+.dv-tab-ghost-drag::after {
+  display: none !important;
+}
+
 .dockview-theme-bridge .dv-tabs-container > .dv-tab:first-child {
   margin-left: 4px;
 }
