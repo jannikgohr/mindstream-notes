@@ -214,6 +214,19 @@ body {
   transition: background-color 120ms ease-out;
 }
 
+.dockview-theme-bridge .dv-tabs-container > .dv-tab.dv-tab--shifting {
+  transition:
+    transform var(--dv-transition-duration, 200ms) ease-out,
+    margin var(--dv-transition-duration, 200ms) ease-out;
+}
+.dockview-theme-bridge .dv-tabs-container > .dv-tab.dv-tab--dragging {
+  transition:
+    width var(--dv-transition-duration, 200ms) ease-out,
+    padding var(--dv-transition-duration, 200ms) ease-out,
+    margin var(--dv-transition-duration, 200ms) ease-out,
+    opacity var(--dv-transition-duration, 200ms) ease-out;
+}
+
 .dockview-theme-bridge .dv-tabs-container > .dv-tab:first-child {
   margin-left: 4px;
 }

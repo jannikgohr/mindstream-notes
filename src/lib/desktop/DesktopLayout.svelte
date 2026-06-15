@@ -157,7 +157,12 @@
       },
       defaultTabComponent: 'noteTab',
       createTabComponent: () => new DockviewTabRenderer(),
-      theme: { name: 'bridge', className: 'dockview-theme-bridge' },
+      theme: {
+        name: 'bridge',
+        className: 'dockview-theme-bridge',
+        tabAnimation: 'smooth',
+        dndTabIndicator: 'line'
+      },
       disableFloatingGroups: false,
       disableDnd: false,
       createRightHeaderActionComponent: () => new PopoutHeaderAction(dock)
