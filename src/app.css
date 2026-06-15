@@ -235,6 +235,24 @@ body {
   margin: 0 !important;
 }
 
+/* The seated pointer-drag ghost plus smooth tab gap are enough feedback for
+ * dropping into a tab strip. Hide Dockview's generic header drop overlay on the
+ * empty/right chrome so it doesn't flash a second "drop here" highlight. */
+body.dv-tab-dragging
+  .dockview-theme-bridge
+  .dv-tabs-and-actions-container
+  > .dv-void-container.dv-drop-target
+  > .dv-drop-target-dropzone
+  > .dv-drop-target-selection,
+body.dv-tab-dragging
+  .dockview-theme-bridge
+  .dv-tabs-and-actions-container
+  > .dv-right-actions-container.dv-drop-target
+  > .dv-drop-target-dropzone
+  > .dv-drop-target-selection {
+  opacity: 0 !important;
+}
+
 .dockview-theme-bridge .dv-tabs-container > .dv-tab:first-child {
   margin-left: 4px;
 }
