@@ -28,7 +28,11 @@
   import ResizeHandle from '$lib/components/ResizeHandle.svelte';
   import SettingsDialog from '$lib/settings/SettingsDialog.svelte';
   import { PopoutHeaderAction } from './dockview-popout-action';
-  import { ensureTabDragGhost } from './dockview-tab-drag-ghost';
+  import {
+    ensureTabDragPin,
+    startTabDragPin,
+    stopTabDragPin
+  } from './dockview-tab-drag-pin';
   import {
     focusExistingNoteWindow,
     focusMainWindow,
@@ -53,6 +57,11 @@
   const openPanels = new Map<string, IDockviewPanel>();
   let saveLayoutTimer: ReturnType<typeof setTimeout> | null = null;
   let pendingTrayNoteId: string | null = null;
+  let pointerDraggedPanel: IDockviewPanel | null = null;
+  let pointerTabDropTarget: {
+    group: DockviewGroupPanel;
+    index: number;
+  } | null = null;
   type NotePanelComponent =
     | 'noteEditor'
     | 'freeformNote'
@@ -166,10 +175,11 @@
       },
       disableFloatingGroups: false,
       disableDnd: false,
-      // Stay on the default (HTML5-for-mouse) drag engine: only its tab-strip
-      // drop handler commits smooth cross-group "drop between two tabs". The
-      // Chrome-style seated drag visual is rendered separately by
-      // dockview-tab-drag-ghost.ts (the native drag image is blanked).
+      // Pointer-driven tab drags avoid Chromium/Tauri's native HTML5 drag
+      // cursor badge, which can render as a missing-glyph square beside the
+      // mouse cursor. The seated tab visual is pinned by
+      // dockview-tab-drag-pin.ts.
+      dndStrategy: 'pointer',
       createRightHeaderActionComponent: () => new PopoutHeaderAction(dock)
     });
 
@@ -202,10 +212,16 @@
      * own drop overlay receive the event cleanly even when an embedded
      * canvas editor has its own drag/drop handling.
      */
-    // Render the Chrome-style seated drag visual for mouse tab drags.
-    ensureTabDragGhost();
-    dock.onWillDragPanel(markDragging);
-    dock.onWillDragGroup(markDragging);
+    ensureTabDragPin();
+    dock.onWillDragPanel((event) => {
+      pointerDraggedPanel = event.panel;
+      markDragging();
+    });
+    dock.onWillDragGroup(() => {
+      pointerDraggedPanel = null;
+      pointerTabDropTarget = null;
+      markDragging();
+    });
 
     if (!tree.ready) await loadTree();
 
@@ -362,9 +378,101 @@
    */
   function markDragging() {
     document.body.classList.add('dv-tab-dragging');
+    // Start pinning the pointer-drag ghost to the tab strip (see
+    // dockview-tab-drag-pin.ts). Idempotent.
+    startTabDragPin();
   }
   function clearDragging() {
     document.body.classList.remove('dv-tab-dragging');
+    stopTabDragPin();
+    pointerDraggedPanel = null;
+    pointerTabDropTarget = null;
+  }
+
+  function findDockGroupForElement(el: Element): DockviewGroupPanel | null {
+    return (
+      dock?.groups.find((group) => {
+        const element = group.element as HTMLElement | undefined;
+        return !!element?.contains(el);
+      }) ?? null
+    );
+  }
+
+  function tabElementForPanel(
+    group: DockviewGroupPanel,
+    panelId: string
+  ): HTMLElement | null {
+    const escapedId = CSS.escape(panelId);
+    return (
+      group.element
+        .querySelector<HTMLElement>(`[data-dock-panel-id="${escapedId}"]`)
+        ?.closest<HTMLElement>('.dv-tab') ?? null
+    );
+  }
+
+  function updatePointerTabDropTarget(event: PointerEvent) {
+    if (!dock || !pointerDraggedPanel) return;
+    const strip = document
+      .elementFromPoint(event.clientX, event.clientY)
+      ?.closest<HTMLElement>('.dv-tabs-and-actions-container');
+    if (!strip) {
+      pointerTabDropTarget = null;
+      return;
+    }
+
+    const group = findDockGroupForElement(strip);
+    if (!group || group.locked) {
+      pointerTabDropTarget = null;
+      return;
+    }
+
+    const panels = group.panels;
+    let insertionIndex = panels.length;
+    for (let i = 0; i < panels.length; i += 1) {
+      const tab = tabElementForPanel(group, panels[i].id);
+      if (!tab) continue;
+      const rect = tab.getBoundingClientRect();
+      if (event.clientX < rect.left + rect.width / 2) {
+        insertionIndex = i;
+        break;
+      }
+    }
+
+    const sourceIndex =
+      pointerDraggedPanel.group === group
+        ? panels.findIndex((panel) => panel.id === pointerDraggedPanel?.id)
+        : -1;
+    const adjustedIndex =
+      sourceIndex !== -1 && sourceIndex < insertionIndex
+        ? insertionIndex - 1
+        : insertionIndex;
+    pointerTabDropTarget = { group, index: adjustedIndex };
+  }
+
+  function commitPointerTabDrop() {
+    const panel = pointerDraggedPanel;
+    const target = pointerTabDropTarget;
+    if (!panel || !target) return;
+
+    // Dockview's pointer backend can route pointerup to the tab under the
+    // cursor instead of the smooth tab-list gap. Let it finish first, then
+    // correct the panel into the gap we tracked from pointermove.
+    setTimeout(() => {
+      if (!dock?.getPanel(panel.id)) return;
+      const currentIndex = target.group.panels.findIndex(
+        (p) => p.id === panel.id
+      );
+      if (panel.group === target.group && currentIndex === target.index) return;
+      panel.api.moveTo({
+        group: target.group,
+        index: target.index
+      });
+    }, 0);
+  }
+
+  function handlePointerDragEnd() {
+    commitPointerTabDrop();
+    clearDragging();
   }
 
   async function openTrayCreatedNote(id: string) {
@@ -561,6 +669,12 @@
     //     dragend we still want the class gone.
     window.addEventListener('dragend', clearDragging, true);
     window.addEventListener('drop', clearDragging, true);
+    // Pointer drags (dndStrategy: 'pointer') don't emit a DOM `dragend`/`drop`,
+    // so the drag terminates on pointerup/pointercancel. clearDragging is
+    // idempotent, so firing it on unrelated pointerups is harmless.
+    window.addEventListener('pointermove', updatePointerTabDropTarget, true);
+    window.addEventListener('pointerup', handlePointerDragEnd, true);
+    window.addEventListener('pointercancel', clearDragging, true);
 
     // Reposition the tabs-overflow popup relative to whichever chevron
     // was clicked, AND give the chevron click toggle-close semantics —
@@ -590,6 +704,13 @@
       window.removeEventListener('resize', onResize);
       window.removeEventListener('dragend', clearDragging, true);
       window.removeEventListener('drop', clearDragging, true);
+      window.removeEventListener(
+        'pointermove',
+        updatePointerTabDropTarget,
+        true
+      );
+      window.removeEventListener('pointerup', handlePointerDragEnd, true);
+      window.removeEventListener('pointercancel', clearDragging, true);
       dockHost?.removeEventListener(
         'pointerdown',
         handleChevronPointerDown,
