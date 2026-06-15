@@ -29,6 +29,11 @@
   import SettingsDialog from '$lib/settings/SettingsDialog.svelte';
   import { PopoutHeaderAction } from './dockview-popout-action';
   import {
+    ensureTabDragPin,
+    startTabDragPin,
+    stopTabDragPin
+  } from './dockview-tab-drag-pin';
+  import {
     focusExistingNoteWindow,
     focusMainWindow,
     isKnownNoteKind,
@@ -165,6 +170,7 @@
       },
       disableFloatingGroups: false,
       disableDnd: false,
+      dndStrategy: 'pointer',
       createRightHeaderActionComponent: () => new PopoutHeaderAction(dock)
     });
 
@@ -197,6 +203,7 @@
      * own drop overlay receive the event cleanly even when an embedded
      * canvas editor has its own drag/drop handling.
      */
+    ensureTabDragPin();
     dock.onWillDragPanel(markDragging);
     dock.onWillDragGroup(markDragging);
 
@@ -355,9 +362,13 @@
    */
   function markDragging() {
     document.body.classList.add('dv-tab-dragging');
+    // Start pinning the pointer-drag ghost to the tab strip (see
+    // dockview-tab-drag-pin.ts). Idempotent.
+    startTabDragPin();
   }
   function clearDragging() {
     document.body.classList.remove('dv-tab-dragging');
+    stopTabDragPin();
   }
 
   async function openTrayCreatedNote(id: string) {
@@ -554,6 +565,11 @@
     //     dragend we still want the class gone.
     window.addEventListener('dragend', clearDragging, true);
     window.addEventListener('drop', clearDragging, true);
+    // Pointer drags (dndStrategy: 'pointer') don't emit a DOM `dragend`/`drop`,
+    // so the drag terminates on pointerup/pointercancel. clearDragging is
+    // idempotent, so firing it on unrelated pointerups is harmless.
+    window.addEventListener('pointerup', clearDragging, true);
+    window.addEventListener('pointercancel', clearDragging, true);
 
     // Reposition the tabs-overflow popup relative to whichever chevron
     // was clicked, AND give the chevron click toggle-close semantics —
@@ -583,6 +599,8 @@
       window.removeEventListener('resize', onResize);
       window.removeEventListener('dragend', clearDragging, true);
       window.removeEventListener('drop', clearDragging, true);
+      window.removeEventListener('pointerup', clearDragging, true);
+      window.removeEventListener('pointercancel', clearDragging, true);
       dockHost?.removeEventListener(
         'pointerdown',
         handleChevronPointerDown,
