@@ -2,8 +2,14 @@
   import { CalendarPlus, Edit3, Folder, Paperclip, Tag } from 'lucide-svelte';
   import FavouriteStar from './FavouriteStar.svelte';
   import TagsSection from '$lib/components/TagsSection.svelte';
-  import { loadNote, type Collection, type NoteSummary } from '$lib/api';
+  import {
+    fetchDrawingAsset,
+    loadNote,
+    type Collection,
+    type NoteSummary
+  } from '$lib/api';
   import { noteKindIcon } from '$lib/components/note-kind-icon';
+  import { extractPdfText } from '$lib/pdf/extract-text';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { ui } from '$lib/state.svelte';
   import { setNoteFavourite, tree } from '$lib/stores/tree.svelte';
@@ -48,6 +54,7 @@
   // TODO: Render saved versions once note version history is modeled.
 
   let noteBody = $state('');
+  let noteText = $state('');
   let contentLoading = $state(false);
   const showContentStats = $derived(
     note ? hasContentStats(note.note_kind) : false
@@ -62,6 +69,7 @@
       (!hasContentStats(note.note_kind) && !canHaveAttachments(note.note_kind))
     ) {
       noteBody = '';
+      noteText = '';
       contentLoading = false;
       return;
     }
@@ -71,15 +79,20 @@
     void note.modified;
     contentLoading = true;
     loadNote(id)
-      .then((loaded) => {
+      .then(async (loaded) => {
+        const body = loaded.body ?? '';
+        const text =
+          loaded.note_kind === 'pdf' ? await pdfTextForMetadata(body) : body;
         if (!cancelled && ui.activeNoteId === id) {
-          noteBody = loaded.body ?? '';
+          noteBody = body;
+          noteText = text;
         }
       })
       .catch((err) => {
         console.warn('[metadata] failed to load note content stats', err);
         if (!cancelled && ui.activeNoteId === id) {
           noteBody = '';
+          noteText = '';
         }
       })
       .finally(() => {
@@ -94,7 +107,7 @@
   });
 
   const contentStats = $derived.by(() =>
-    analyzeContent(noteBody, note?.note_kind ?? null)
+    analyzeContent(noteBody, noteText, note?.note_kind ?? null)
   );
 
   function fmt(iso: string) {
@@ -135,20 +148,49 @@
     return kind === 'markdown' || kind === 'freeform' || kind === 'pdf';
   }
 
-  function analyzeContent(body: string, kind: string | null | undefined) {
+  async function pdfTextForMetadata(body: string): Promise<string> {
+    const assetId = pdfAssetIdFromBody(body);
+    if (!assetId) return '';
+    try {
+      const asset = await fetchDrawingAsset(assetId);
+      if (asset.mime_type !== 'application/pdf') return '';
+      return await extractPdfText(new Uint8Array(asset.bytes));
+    } catch (err) {
+      console.warn('[metadata] failed to extract PDF text', err);
+      return '';
+    }
+  }
+
+  function pdfAssetIdFromBody(body: string): string | null {
+    const trimmed = body.trim();
+    if (!trimmed) return null;
+    if (trimmed.startsWith('asset_')) return trimmed;
+    try {
+      const parsed = JSON.parse(trimmed) as { pdfAssetId?: unknown };
+      return typeof parsed.pdfAssetId === 'string' ? parsed.pdfAssetId : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function analyzeContent(
+    body: string,
+    text: string,
+    kind: string | null | undefined
+  ) {
     const attachments = extractAssetIds(body).length;
     if (kind === 'pdf') {
+      const words = countWords(text);
       return {
-        words: 0,
-        readMinutes: 0,
+        words,
+        readMinutes: words === 0 ? 0 : Math.max(1, Math.ceil(words / 200)),
         links: 0,
         attachments
       };
     }
 
-    const plain = plainTextForStats(body);
-    const words =
-      plain.match(/[\p{L}\p{N}]+(?:['’_-][\p{L}\p{N}]+)*/gu)?.length ?? 0;
+    const plain = plainTextForStats(text);
+    const words = countWords(plain);
     const links = countLinks(body);
     return {
       words,
@@ -156,6 +198,10 @@
       links,
       attachments
     };
+  }
+
+  function countWords(text: string): number {
+    return text.match(/[\p{L}\p{N}]+(?:['’_-][\p{L}\p{N}]+)*/gu)?.length ?? 0;
   }
 
   function plainTextForStats(body: string): string {
