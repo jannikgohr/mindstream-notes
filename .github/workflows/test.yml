@@ -47,6 +47,8 @@ jobs:
       - run: pnpm check
       - run: pnpm test
       - run: pnpm build
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
 
   rust:
     name: Cargo test (${{ matrix.os }})
