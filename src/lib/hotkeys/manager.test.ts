@@ -292,3 +292,42 @@ describe('initHotkeys — unset and Crepe-native suppression', () => {
     expect(event.defaultPrevented).toBe(false);
   });
 });
+
+describe('initHotkeys — browser find suppression', () => {
+  it('suppresses Mod+F even when no editor handles find', () => {
+    // The webview's native find is useless here, so the chord must be
+    // swallowed regardless of whether anything opens. No editor is
+    // registered, so search-active-note reports unhandled — yet the
+    // browser find must still not appear.
+    forceWindowsModKey();
+    teardownHotkeys = initHotkeys();
+
+    const event = press({ key: 'f', code: 'KeyF', ctrlKey: true });
+
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it('suppresses Mod+F even when the binding is unset', () => {
+    forceWindowsModKey();
+    teardownHotkeys = initHotkeys();
+    hotkeys.bindings['global.searchActiveNote'] = null;
+
+    const event = press({ key: 'f', code: 'KeyF', ctrlKey: true });
+
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it('leaves other F chords (e.g. Ctrl+Alt+F) alone', () => {
+    forceWindowsModKey();
+    teardownHotkeys = initHotkeys();
+
+    const event = press({
+      key: 'f',
+      code: 'KeyF',
+      ctrlKey: true,
+      altKey: true
+    });
+
+    expect(event.defaultPrevented).toBe(false);
+  });
+});
