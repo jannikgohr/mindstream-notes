@@ -139,6 +139,7 @@
   let hostEl = $state<HTMLDivElement | null>(null);
   let canvasHostEl = $state<HTMLDivElement | null>(null);
   let canvasEl = $state<HTMLCanvasElement | null>(null);
+  let resizeSnapshotCanvasEl = $state<HTMLCanvasElement | null>(null);
   let toolbarEl = $state<HTMLDivElement | null>(null);
   let boundsFrame: number | null = null;
   let doc = $state<InkDocument | null>(null);
@@ -186,6 +187,9 @@
   let queuedEraserSamples: QueuedEraserSample[] = [];
   let eraserFrame: number | null = null;
   let drawFrame: number | null = null;
+  let resizeSnapshotHideTimer: ReturnType<typeof setTimeout> | null = null;
+  let resizeSnapshotVisible = $state(false);
+  let hasDrawnFrame = false;
   let viewInitialized = false;
   const cssColorCache = new Map<number, string>();
   let layout = defaultLayout();
@@ -564,7 +568,10 @@
     const dpr = window.devicePixelRatio || 1;
     const widthPx = Math.max(1, Math.floor(rect.width * dpr));
     const heightPx = Math.max(1, Math.floor(rect.height * dpr));
-    if (canvasEl.width !== widthPx || canvasEl.height !== heightPx) {
+    const backingStoreChanged =
+      canvasEl.width !== widthPx || canvasEl.height !== heightPx;
+    if (backingStoreChanged) {
+      captureResizeSnapshot();
       canvasEl.width = widthPx;
       canvasEl.height = heightPx;
     }
@@ -578,9 +585,63 @@
       view.scale = Math.max(view.scale, nextMinScale);
       clampView();
     }
-    scheduleDraw();
+    if (backingStoreChanged) {
+      if (drawFrame !== null) {
+        cancelAnimationFrame(drawFrame);
+        drawFrame = null;
+      }
+      draw();
+      scheduleBoundsPush();
+    } else {
+      scheduleDraw();
+    }
     updateLiveInkOverlayStyle();
     zoomUiVersion += 1;
+  }
+
+  function captureResizeSnapshot() {
+    if (
+      !hasDrawnFrame ||
+      !canvasEl ||
+      !resizeSnapshotCanvasEl ||
+      canvasEl.width <= 1 ||
+      canvasEl.height <= 1
+    ) {
+      return;
+    }
+    const ctx = resizeSnapshotCanvasEl.getContext('2d');
+    if (!ctx) return;
+    if (
+      resizeSnapshotCanvasEl.width !== canvasEl.width ||
+      resizeSnapshotCanvasEl.height !== canvasEl.height
+    ) {
+      resizeSnapshotCanvasEl.width = canvasEl.width;
+      resizeSnapshotCanvasEl.height = canvasEl.height;
+    }
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(
+      0,
+      0,
+      resizeSnapshotCanvasEl.width,
+      resizeSnapshotCanvasEl.height
+    );
+    ctx.drawImage(canvasEl, 0, 0);
+    resizeSnapshotVisible = true;
+    resizeSnapshotCanvasEl.style.opacity = '1';
+    if (resizeSnapshotHideTimer) {
+      clearTimeout(resizeSnapshotHideTimer);
+      resizeSnapshotHideTimer = null;
+    }
+  }
+
+  function scheduleResizeSnapshotHide() {
+    if (!resizeSnapshotVisible) return;
+    if (resizeSnapshotHideTimer) clearTimeout(resizeSnapshotHideTimer);
+    resizeSnapshotHideTimer = setTimeout(() => {
+      resizeSnapshotHideTimer = null;
+      resizeSnapshotVisible = false;
+      if (resizeSnapshotCanvasEl) resizeSnapshotCanvasEl.style.opacity = '';
+    }, 120);
   }
 
   function fitPage() {
@@ -672,6 +733,8 @@
       );
     }
     drawStroke(ctx, inFlight, displayCssColor(colorArgb), width);
+    hasDrawnFrame = true;
+    scheduleResizeSnapshotHide();
   }
 
   function visiblePageBounds(): StrokeBounds {
@@ -1612,6 +1675,10 @@
       cancelAnimationFrame(drawFrame);
       drawFrame = null;
     }
+    if (resizeSnapshotHideTimer !== null) {
+      clearTimeout(resizeSnapshotHideTimer);
+      resizeSnapshotHideTimer = null;
+    }
     if (isAndroid()) {
       // hideLiveInkOverlay resets bounds + offset on the Kotlin side,
       // but push an explicit clear too in case the overlay was already
@@ -1788,8 +1855,15 @@
 
   <div bind:this={canvasHostEl} class="relative min-h-0 flex-1">
     <canvas
+      bind:this={resizeSnapshotCanvasEl}
+      aria-hidden="true"
+      class="pointer-events-none absolute inset-0 z-0 block h-full w-full opacity-0 transition-opacity duration-75 {resizeSnapshotVisible
+        ? 'opacity-100'
+        : 'opacity-0'}"
+    ></canvas>
+    <canvas
       bind:this={canvasEl}
-      class="block h-full w-full touch-none"
+      class="relative z-10 block h-full w-full touch-none"
       aria-label={ariaLabel}
       onpointerdown={handlePointerDown}
       onpointermove={handlePointerMove}
