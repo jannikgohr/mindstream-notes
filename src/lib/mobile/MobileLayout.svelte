@@ -89,8 +89,8 @@
 
   // Tracks which create flow has its NameInputSheet open. null = no
   // sheet showing; commit lives in commitCreate().
-  // 'drawing' creates a freeform note via createNoteIn(..., 'freeform').
-  // 'ink' creates an Android-native drawing note via createNoteIn(..., 'ink').
+  // 'drawing' creates a drawing canvas via createNoteIn(..., 'freeform').
+  // 'ink' creates a handwritten note via createNoteIn(..., 'ink').
   let createPrompt = $state<'note' | 'drawing' | 'ink' | 'folder' | null>(null);
   let pdfInput = $state<HTMLInputElement | null>(null);
 

@@ -229,9 +229,9 @@ type RootNoteKind = 'markdown' | 'freeform' | 'ink';
 function rootNoteTitle(kind: RootNoteKind): string {
   switch (kind) {
     case 'freeform':
-      return 'Untitled drawing';
+      return 'Untitled drawing canvas';
     case 'ink':
-      return 'Untitled ink note';
+      return 'Untitled handwritten note';
     case 'markdown':
       return 'Untitled';
   }
