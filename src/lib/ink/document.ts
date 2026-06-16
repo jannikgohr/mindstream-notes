@@ -25,7 +25,8 @@ export type UndoOp =
   | { kind: 'strokeAdded'; id: string }
   | { kind: 'eraserDrag'; ids: string[] }
   | { kind: 'clearAll'; ids: string[] }
-  | { kind: 'selectionDelete'; ids: string[] };
+  | { kind: 'selectionDelete'; ids: string[] }
+  | { kind: 'selectionMove'; ids: string[]; dx: number; dy: number };
 
 interface DecodedPayload {
   color: number;
@@ -259,6 +260,26 @@ export class InkDocument {
     });
   }
 
+  translateStrokes(
+    ids: Iterable<string>,
+    dx: number,
+    dy: number
+  ): MutationResult<string[]> {
+    if (!Number.isFinite(dx) || !Number.isFinite(dy)) {
+      return { value: [], update: null };
+    }
+    if (Math.abs(dx) < 0.001 && Math.abs(dy) < 0.001) {
+      return { value: [], update: null };
+    }
+    return this.transactLocalUpdate(() => {
+      const moved = this.translateStrokeSet(new Set(ids), dx, dy);
+      if (moved.length > 0) {
+        this.recordOp({ kind: 'selectionMove', ids: moved, dx, dy });
+      }
+      return moved;
+    });
+  }
+
   eraseAt(
     point: { x: number; y: number },
     radius: number
@@ -488,6 +509,37 @@ export class InkDocument {
     }
     return erased;
   }
+
+  translateStrokeSet(ids: Set<string>, dx: number, dy: number): string[] {
+    if (ids.size === 0) return [];
+    const strokeMaps = this.ensureStrokeMapCache();
+    const moved: string[] = [];
+    for (const id of ids) {
+      const stroke = strokeMaps.get(id);
+      if (!stroke || stroke.get(FIELD_TOMBSTONED) === true) continue;
+      const payload = stroke.get(FIELD_PAYLOAD);
+      if (!(payload instanceof Uint8Array)) continue;
+      const decoded = decodePayload(payload);
+      if (!decoded) continue;
+      stroke.set(
+        FIELD_PAYLOAD,
+        encodePayloadV2({
+          color: decoded.color,
+          width: decoded.width,
+          points: decoded.points.map((point) => ({
+            x: point.x + dx,
+            y: point.y + dy,
+            pressure: point.pressure
+          }))
+        })
+      );
+      moved.push(id);
+    }
+    if (moved.length > 0) {
+      this.invalidateVisibleStrokeCache();
+    }
+    return moved;
+  }
 }
 
 export function strokesHitAt(
@@ -671,6 +723,9 @@ function applyUndoOp(doc: InkDocument, op: UndoOp): void {
     case 'selectionDelete':
       doc.setStrokesTombstoned(op.ids, false);
       break;
+    case 'selectionMove':
+      doc.translateStrokeSet(new Set(op.ids), -op.dx, -op.dy);
+      break;
   }
 }
 
@@ -683,6 +738,9 @@ function applyRedoOp(doc: InkDocument, op: UndoOp): void {
     case 'clearAll':
     case 'selectionDelete':
       doc.setStrokesTombstoned(op.ids, true);
+      break;
+    case 'selectionMove':
+      doc.translateStrokeSet(new Set(op.ids), op.dx, op.dy);
       break;
   }
 }

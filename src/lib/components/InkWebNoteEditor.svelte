@@ -130,7 +130,13 @@
     point: InkPoint;
     hits: Set<string>;
   };
-  type PointerMode = 'draw' | 'erase' | 'lasso' | 'pan' | 'touchGesture';
+  type PointerMode =
+    | 'draw'
+    | 'erase'
+    | 'lasso'
+    | 'moveSelection'
+    | 'pan'
+    | 'touchGesture';
   type TouchPointer = {
     clientX: number;
     clientY: number;
@@ -190,6 +196,8 @@
   let selectedStrokeIds = $state<string[]>([]);
   let inFlight = $state<InkPoint[]>([]);
   let lassoPoints = $state<InkPoint[]>([]);
+  let selectionDragStart: InkPoint | null = null;
+  let selectionDragOffset = $state({ x: 0, y: 0 });
   let undoDepth = $state(0);
   let redoDepth = $state(0);
   let eraserHits = new Set<string>();
@@ -234,6 +242,10 @@
   );
   const selectedStrokeSet = $derived(new Set(selectedStrokeIds));
   const hasSelection = $derived(selectedStrokeIds.length > 0);
+  const selectionMoveActive = $derived(
+    Math.abs(selectionDragOffset.x) > 0.001 ||
+      Math.abs(selectionDragOffset.y) > 0.001
+  );
   const clearButtonLabel = $derived(
     hasSelection ? tUi('ink.toolbar.deleteSelected') : tUi('ink.toolbar.clear')
   );
@@ -761,12 +773,28 @@
     drawPages(ctx, visibleBounds);
     const visibleStrokes = doc?.visibleStrokesInBounds(visibleBounds, 2) ?? [];
     for (const stroke of visibleStrokes) {
+      if (selectionMoveActive && selectedStrokeSet.has(stroke.id)) continue;
       drawStroke(
         ctx,
         stroke.points,
         displayCssColor(stroke.color),
         stroke.width
       );
+    }
+    if (selectionMoveActive) {
+      for (const stroke of visibleStrokes) {
+        if (!selectedStrokeSet.has(stroke.id)) continue;
+        drawStroke(
+          ctx,
+          translatedPoints(
+            stroke.points,
+            selectionDragOffset.x,
+            selectionDragOffset.y
+          ),
+          displayCssColor(stroke.color),
+          stroke.width
+        );
+      }
     }
     drawStroke(ctx, inFlight, displayCssColor(colorArgb), width);
     drawSelectionOverlay(ctx);
@@ -861,6 +889,18 @@
     return 0.25 + 0.75 * Math.min(1, Math.max(0, pressure));
   }
 
+  function translatedPoints(
+    points: InkPoint[],
+    dx: number,
+    dy: number
+  ): InkPoint[] {
+    return points.map((point) => ({
+      x: point.x + dx,
+      y: point.y + dy,
+      pressure: point.pressure
+    }));
+  }
+
   function selectionBounds(): StrokeBounds | null {
     if (!doc || selectedStrokeIds.length === 0) return null;
     const selected = selectedStrokeSet;
@@ -879,8 +919,31 @@
     return out;
   }
 
-  function drawSelectionOverlay(ctx: CanvasRenderingContext2D) {
+  function selectionBoundsWithOffset(): StrokeBounds | null {
     const bounds = selectionBounds();
+    if (!bounds) return null;
+    return {
+      minX: bounds.minX + selectionDragOffset.x,
+      minY: bounds.minY + selectionDragOffset.y,
+      maxX: bounds.maxX + selectionDragOffset.x,
+      maxY: bounds.maxY + selectionDragOffset.y
+    };
+  }
+
+  function selectionContainsPoint(point: { x: number; y: number }): boolean {
+    const bounds = selectionBoundsWithOffset();
+    if (!bounds) return false;
+    const padding = 14 / Math.max(0.001, view.scale);
+    return (
+      point.x >= bounds.minX - padding &&
+      point.x <= bounds.maxX + padding &&
+      point.y >= bounds.minY - padding &&
+      point.y <= bounds.maxY + padding
+    );
+  }
+
+  function drawSelectionOverlay(ctx: CanvasRenderingContext2D) {
+    const bounds = selectionBoundsWithOffset();
     if (!bounds) return;
     const padding = 10;
     const a = pageToScreen({
@@ -1011,6 +1074,8 @@
     } else if (pointerMode === 'lasso') {
       lassoPoints = [];
       selectedStrokeIds = [];
+    } else if (pointerMode === 'moveSelection') {
+      cancelSelectionMove();
     }
     pointerMode = 'touchGesture';
     activePointerId = null;
@@ -1085,6 +1150,14 @@
       return;
     }
     if (isTrashed) return;
+    if (
+      tool === 'lasso' &&
+      hasSelection &&
+      selectionContainsPoint(eventPoint(event))
+    ) {
+      beginSelectionMove(event);
+      return;
+    }
     if (tool === 'lasso') {
       beginLasso(event);
       return;
@@ -1148,6 +1221,14 @@
       return;
     }
     if (isTrashed) return;
+    if (
+      tool === 'lasso' &&
+      hasSelection &&
+      selectionContainsPoint(eventPoint(event))
+    ) {
+      beginSelectionMove(event);
+      return;
+    }
     if (tool === 'lasso') {
       beginLasso(event);
       return;
@@ -1197,6 +1278,11 @@
       pushLassoSamples(event);
       return;
     }
+    if (pointerMode === 'moveSelection') {
+      event.preventDefault();
+      updateSelectionMove(event);
+      return;
+    }
     if (pointerMode === 'draw') {
       event.preventDefault();
       if (isStylusButtonErasing(event)) {
@@ -1230,6 +1316,8 @@
       } else if (pointerMode === 'lasso') {
         lassoPoints = [];
         selectedStrokeIds = [];
+      } else if (pointerMode === 'moveSelection') {
+        cancelSelectionMove();
       } else {
         clearQueuedEraserSamples();
       }
@@ -1250,6 +1338,8 @@
       syncHistoryState();
     } else if (pointerMode === 'lasso') {
       finishLasso();
+    } else if (pointerMode === 'moveSelection') {
+      finishSelectionMove();
     }
     resetPointer();
   }
@@ -1321,6 +1411,50 @@
     selectedStrokeIds = doc.strokeIdsInLasso(lassoPoints);
     lassoPoints = [];
     scheduleDraw();
+  }
+
+  function beginSelectionMove(event: PointerEvent) {
+    pointerMode = 'moveSelection';
+    selectionDragStart = eventPoint(event);
+    selectionDragOffset = { x: 0, y: 0 };
+    lassoPoints = [];
+  }
+
+  function updateSelectionMove(event: PointerEvent) {
+    if (!selectionDragStart) return;
+    const point = eventPoint(event);
+    selectionDragOffset = {
+      x: point.x - selectionDragStart.x,
+      y: point.y - selectionDragStart.y
+    };
+    scheduleDraw();
+  }
+
+  function cancelSelectionMove() {
+    selectionDragStart = null;
+    selectionDragOffset = { x: 0, y: 0 };
+    scheduleDraw();
+  }
+
+  function finishSelectionMove() {
+    if (!doc || !selectionDragStart) {
+      cancelSelectionMove();
+      return;
+    }
+    const { x, y } = selectionDragOffset;
+    selectionDragStart = null;
+    selectionDragOffset = { x: 0, y: 0 };
+    if (Math.abs(x) < 0.001 && Math.abs(y) < 0.001) {
+      scheduleDraw();
+      return;
+    }
+    const { value, update } = doc.translateStrokes(selectedStrokeIds, x, y);
+    if (value.length > 0) {
+      selectedStrokeIds = value;
+      applyDocumentMutation(update);
+    } else {
+      scheduleDraw();
+    }
   }
 
   function eraseAtPoint(point: InkPoint, hits: Set<string>) {
