@@ -13,8 +13,10 @@
     MousePointer2,
     PanelLeft,
     PenLine,
+    Redo2,
     Signature,
-    Trash2
+    Trash2,
+    Undo2
   } from 'lucide-svelte';
   import * as Y from 'yjs';
   import { Awareness } from 'y-protocols/awareness';
@@ -137,6 +139,20 @@
   const SIGNATURE_COLOR = '#111827';
   const INK_COLOR = '#111827';
   const INK_WIDTH = 2.25;
+  // Swatches offered for the highlight and pen tools.
+  const ANNOTATION_COLORS = [
+    '#facc15',
+    '#fb923c',
+    '#f87171',
+    '#4ade80',
+    '#60a5fa',
+    '#c084fc',
+    '#111827'
+  ];
+  // Transaction origin tagging local annotation edits, so the Yjs
+  // UndoManager captures only our own changes and never undoes a peer's
+  // edit or a sync merge (both applied with a different origin).
+  const LOCAL_ORIGIN = Symbol('pdf-local-change');
   // Pages within the viewport ± one viewport's worth above/below get a real
   // canvas; everything else stays as a sized placeholder. Picked so smooth
   // scrolling rarely catches a placeholder mid-screen, while a 500-page PDF
@@ -172,6 +188,18 @@
   let activeTool = $state<PdfTool>('select');
   let commentsSidebarOpen = $state(false);
   let selectedAnnotationId = $state<string | null>(null);
+  // Etebase username stamped on annotations this user creates; the
+  // sidebar shows it as the author (and "You" when it's the local user).
+  let localAuthorId = $state('local');
+  // Id of a just-created comment whose editor should grab focus once the
+  // sidebar renders it (replaces the old window.prompt flow).
+  let commentDraftFocusId = $state<string | null>(null);
+  // Per-tool colour for new annotations.
+  let highlightColor = $state(HIGHLIGHT_COLOR);
+  let inkColor = $state(INK_COLOR);
+  let undoManager: Y.UndoManager | null = null;
+  let canUndo = $state(false);
+  let canRedo = $state(false);
   let savedSignatures = $state<PdfSignatureSnapshot[]>([]);
   let activeSignatureId = $state<string | null>(null);
   let signatureDialogOpen = $state(false);
@@ -343,6 +371,14 @@
     if (savedSignatures.length === 0) activeTool = 'select';
   }
 
+  // Run a local annotation mutation inside a tagged transaction so the
+  // UndoManager records it (and only it). Falls back to a bare call
+  // before the Y.Doc exists.
+  function runLocal(fn: () => void) {
+    if (yDoc) yDoc.transact(fn, LOCAL_ORIGIN);
+    else fn();
+  }
+
   function createAnnotation(
     type: PdfAnnotationType,
     pageIndex: number,
@@ -350,31 +386,37 @@
     body?: string,
     extras: Partial<Pick<PdfAnnotation, 'strokes' | 'signature'>> = {}
   ) {
-    if (!annotationsMap || isTrashed) return;
+    const map = annotationsMap;
+    if (!map || isTrashed) return;
     const now = new Date().toISOString();
     const id = crypto.randomUUID();
-    annotationsMap.set(id, {
-      id,
-      type,
-      pageIndex,
-      rects: [rect],
-      color:
-        type === 'highlight'
-          ? HIGHLIGHT_COLOR
-          : type === 'comment'
-            ? COMMENT_COLOR
-            : type === 'ink'
-              ? INK_COLOR
-              : SIGNATURE_COLOR,
-      opacity: type === 'highlight' ? 0.32 : type === 'comment' ? 0.18 : 1,
-      authorId: 'local',
-      createdAt: now,
-      updatedAt: now,
-      body,
-      ...extras
+    runLocal(() => {
+      map.set(id, {
+        id,
+        type,
+        pageIndex,
+        rects: [rect],
+        color:
+          type === 'highlight'
+            ? highlightColor
+            : type === 'comment'
+              ? COMMENT_COLOR
+              : type === 'ink'
+                ? inkColor
+                : SIGNATURE_COLOR,
+        opacity: type === 'highlight' ? 0.32 : type === 'comment' ? 0.18 : 1,
+        authorId: localAuthorId,
+        createdAt: now,
+        updatedAt: now,
+        body,
+        ...extras
+      });
     });
     selectedAnnotationId = id;
-    if (type === 'comment') commentsSidebarOpen = true;
+    if (type === 'comment') {
+      commentsSidebarOpen = true;
+      commentDraftFocusId = id;
+    }
   }
 
   function isCommentLikeAnnotation(annotation: PdfAnnotation): boolean {
@@ -386,19 +428,41 @@
 
   function deleteAnnotation(id: string) {
     if (isTrashed) return;
-    annotationsMap?.delete(id);
+    runLocal(() => annotationsMap?.delete(id));
     if (selectedAnnotationId === id) selectedAnnotationId = null;
   }
 
   function updateAnnotation(id: string, patch: Partial<PdfAnnotation>) {
-    if (isTrashed || !annotationsMap) return;
-    const existing = annotationsMap.get(id);
+    const map = annotationsMap;
+    if (isTrashed || !map) return;
+    const existing = map.get(id);
     if (!existing) return;
-    annotationsMap.set(id, {
-      ...existing,
-      ...patch,
-      updatedAt: new Date().toISOString()
+    runLocal(() => {
+      map.set(id, {
+        ...existing,
+        ...patch,
+        updatedAt: new Date().toISOString()
+      });
     });
+  }
+
+  function undo() {
+    undoManager?.undo();
+  }
+
+  function redo() {
+    undoManager?.redo();
+  }
+
+  // The colour the active drawing tool paints with; the swatch row binds
+  // to this and writes back through setActiveColor.
+  const activeColor = $derived(
+    activeTool === 'pen' ? inkColor : highlightColor
+  );
+
+  function setActiveColor(color: string) {
+    if (activeTool === 'pen') inkColor = color;
+    else highlightColor = color;
   }
 
   function selectAnnotation(id: string | null) {
@@ -693,6 +757,12 @@
         return true;
       case 'editor.pdf.deleteAnnotation':
         if (!isTrashed) setTool('delete');
+        return true;
+      case 'editor.pdf.undo':
+        if (!isTrashed) undo();
+        return true;
+      case 'editor.pdf.redo':
+        if (!isTrashed) redo();
         return true;
       case 'editor.pdf.toggleComments':
         commentsSidebarOpen = !commentsSidebarOpen;
@@ -1129,6 +1199,20 @@
       };
       localYDoc.on('update', yDocUpdateHandler);
 
+      // Undo/redo scoped to this note's annotations. trackedOrigins is
+      // limited to LOCAL_ORIGIN so undo never reverts a peer's edit or a
+      // sync merge — only changes this client authored.
+      undoManager = new Y.UndoManager(annotationsMap, {
+        trackedOrigins: new Set([LOCAL_ORIGIN])
+      });
+      const refreshUndoState = () => {
+        canUndo = (undoManager?.undoStack.length ?? 0) > 0;
+        canRedo = (undoManager?.redoStack.length ?? 0) > 0;
+      };
+      undoManager.on('stack-item-added', refreshUndoState);
+      undoManager.on('stack-item-popped', refreshUndoState);
+      undoManager.on('stack-cleared', refreshUndoState);
+
       // Awareness goes alongside the Y.Doc — the CollabProvider takes
       // both as constructor args. Seed the local user field now so peers
       // see our name + colour as soon as we join the room.
@@ -1137,6 +1221,9 @@
       try {
         const session = await etebaseSession();
         const userName = session?.username ?? 'You';
+        // Stamp new annotations with the real username so authors are
+        // attributable across collaborators (not all "local").
+        if (session?.username) localAuthorId = session.username;
         localAwareness.setLocalStateField('user', {
           name: userName,
           color: pickCursorColor(userName)
@@ -1220,16 +1307,32 @@
     };
   });
 
-  // Opening find is the app-level "search active note" shortcut (routed
-  // through the hotkey bus to handlePdfCommand). Here we only handle
-  // Escape so it closes the bar from anywhere in the viewer, not just
-  // when the search field itself is focused.
+  // Local keyboard handling that shouldn't go through the hotkey bus:
+  //  - Escape closes the find bar from anywhere in the viewer.
+  //  - Delete/Backspace removes the selected annotation, but only when
+  //    focus isn't in a text field (so editing a comment still works).
+  // (Opening find is the app-level "search active note" bus command.)
   $effect(() => {
     if (!hostEl) return;
     const host = hostEl;
     const onKeydown = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && searchOpen) {
         closeSearch();
+        return;
+      }
+      if (event.key === 'Delete' || event.key === 'Backspace') {
+        if (isTrashed || !selectedAnnotationId) return;
+        const target = event.target as HTMLElement | null;
+        const tag = target?.tagName;
+        if (
+          tag === 'INPUT' ||
+          tag === 'TEXTAREA' ||
+          target?.isContentEditable
+        ) {
+          return;
+        }
+        event.preventDefault();
+        deleteAnnotation(selectedAnnotationId);
       }
     };
     host.addEventListener('keydown', onKeydown);
@@ -1268,6 +1371,8 @@
     pageRenderCancelled.clear();
     pageCancelHooks.clear();
     void pdfDoc?.cleanup();
+    undoManager?.destroy();
+    undoManager = null;
     if (yDoc && yDocUpdateHandler) {
       yDoc.off('update', yDocUpdateHandler);
     }
@@ -1540,7 +1645,7 @@
             'polyline'
           );
           previewStroke.setAttribute('fill', 'none');
-          previewStroke.setAttribute('stroke', INK_COLOR);
+          previewStroke.setAttribute('stroke', inkColor);
           previewStroke.setAttribute(
             'stroke-width',
             `${INK_WIDTH * viewport.scale}`
@@ -1586,7 +1691,7 @@
                 {
                   id: crypto.randomUUID(),
                   points: pdfPoints,
-                  color: INK_COLOR,
+                  color: inkColor,
                   width: INK_WIDTH
                 }
               ]
@@ -1686,10 +1791,6 @@
               : current.activeTool === 'signature'
                 ? 'signature'
                 : 'highlight';
-          const body =
-            annotationType === 'comment'
-              ? window.prompt('Comment')?.trim()
-              : undefined;
           const activeSignature =
             annotationType === 'signature' ? getActiveSignature() : null;
           const signature =
@@ -1697,11 +1798,13 @@
               ? cloneSignatureSnapshot(activeSignature)
               : undefined;
           if (annotationType === 'signature' && !signature) return;
+          // Comments are created empty; the sidebar editor opens focused
+          // for the body (see commentDraftFocusId), replacing window.prompt.
           createAnnotation(
             annotationType,
             current.pageNumber - 1,
             rect,
-            body || undefined,
+            undefined,
             signature ? { signature } : {}
           );
         };
@@ -1957,6 +2060,53 @@
           <Trash2 aria-hidden="true" />
         </ToolbarButton>
 
+        {#if activeTool === 'highlight' || activeTool === 'pen'}
+          <ToolbarSeparator />
+
+          <div
+            class="flex items-center gap-1 px-1"
+            role="group"
+            aria-label={tUi('pdf.toolbar.color')}
+          >
+            {#each ANNOTATION_COLORS as color (color)}
+              <button
+                type="button"
+                class="size-5 rounded-full transition hover:scale-110"
+                style="background-color: {color}; box-shadow: {activeColor ===
+                color
+                  ? '0 0 0 2px var(--ring)'
+                  : '0 0 0 1px var(--border)'}"
+                aria-label={tUi('pdf.toolbar.colorSwatch').replace(
+                  '{color}',
+                  color
+                )}
+                aria-pressed={activeColor === color}
+                onclick={() => setActiveColor(color)}
+              ></button>
+            {/each}
+          </div>
+        {/if}
+
+        <ToolbarSeparator />
+
+        <ToolbarButton
+          onclick={undo}
+          disabled={isTrashed || !canUndo}
+          aria-label={tUi('pdf.toolbar.undo')}
+          title={tUi('pdf.toolbar.undo')}
+        >
+          <Undo2 aria-hidden="true" />
+        </ToolbarButton>
+
+        <ToolbarButton
+          onclick={redo}
+          disabled={isTrashed || !canRedo}
+          aria-label={tUi('pdf.toolbar.redo')}
+          title={tUi('pdf.toolbar.redo')}
+        >
+          <Redo2 aria-hidden="true" />
+        </ToolbarButton>
+
         <ToolbarSeparator />
 
         <ToolbarButton
@@ -2120,9 +2270,12 @@
           annotations={commentAnnotations}
           {selectedAnnotationId}
           {isTrashed}
+          currentAuthorId={localAuthorId}
+          autofocusId={commentDraftFocusId}
           onJump={jumpToAnnotation}
           onUpdate={updateAnnotation}
           onDelete={deleteAnnotation}
+          onAutofocusHandled={() => (commentDraftFocusId = null)}
           onClose={() => (commentsSidebarOpen = false)}
         />
       {/if}

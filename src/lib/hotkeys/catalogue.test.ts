@@ -222,6 +222,8 @@ describe('catalogue consistency', () => {
       'editor.pdf.pen',
       'editor.pdf.signature',
       'editor.pdf.deleteAnnotation',
+      'editor.pdf.undo',
+      'editor.pdf.redo',
       'editor.pdf.toggleComments',
       'editor.pdf.toggleNavigator',
       'editor.pdf.previousPage',

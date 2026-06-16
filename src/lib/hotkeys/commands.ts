@@ -646,6 +646,20 @@ export const HOTKEY_COMMANDS: CommandDefinition[] = [
     defaultBinding: null
   },
   {
+    id: 'editor.pdf.undo',
+    scope: 'editor',
+    editorKind: 'pdf',
+    labelKey: 'hotkeys.command.editor.pdf.undo',
+    defaultBinding: null
+  },
+  {
+    id: 'editor.pdf.redo',
+    scope: 'editor',
+    editorKind: 'pdf',
+    labelKey: 'hotkeys.command.editor.pdf.redo',
+    defaultBinding: null
+  },
+  {
     id: 'editor.pdf.toggleComments',
     scope: 'editor',
     editorKind: 'pdf',

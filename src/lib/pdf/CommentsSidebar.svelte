@@ -27,20 +27,44 @@
     annotations: PdfAnnotation[];
     selectedAnnotationId: string | null;
     isTrashed: boolean;
+    /** Etebase username of the local user; their comments read as "You". */
+    currentAuthorId: string;
+    /** Comment whose editor should grab focus once rendered, then clear. */
+    autofocusId: string | null;
     onJump: (id: string) => void;
     onUpdate: (id: string, patch: Partial<PdfAnnotation>) => void;
     onDelete: (id: string) => void;
+    onAutofocusHandled: () => void;
     onClose: () => void;
   }
   let {
     annotations,
     selectedAnnotationId,
     isTrashed,
+    currentAuthorId,
+    autofocusId,
     onJump,
     onUpdate,
     onDelete,
+    onAutofocusHandled,
     onClose
   }: Props = $props();
+
+  // Focus a freshly-created comment's editor once it lands in the DOM,
+  // then tell the parent so it doesn't re-fire on the next render.
+  $effect(() => {
+    const id = autofocusId;
+    if (!id) return;
+    requestAnimationFrame(() => {
+      const el = document.querySelector<HTMLTextAreaElement>(
+        `textarea[data-comment-id="${CSS.escape(id)}"]`
+      );
+      if (el) {
+        el.focus();
+        onAutofocusHandled();
+      }
+    });
+  });
 
   let resolvedOpen = $state(false);
 
@@ -61,7 +85,9 @@
     tUi('pdf.comments.jump').replace('{page}', String(page));
 
   const authorName = (authorId: string) =>
-    authorId === 'local' ? tUi('pdf.comments.you') : authorId;
+    authorId === 'local' || authorId === currentAuthorId
+      ? tUi('pdf.comments.you')
+      : authorId;
 
   const initialsFor = (authorId: string) =>
     authorName(authorId)
@@ -221,6 +247,7 @@
     </div>
 
     <textarea
+      data-comment-id={annotation.id}
       class="min-h-16 w-full resize-y border-t border-border bg-transparent px-3 py-2 text-xs leading-relaxed outline-none transition-colors placeholder:text-muted-foreground focus:bg-background disabled:cursor-not-allowed disabled:opacity-60"
       value={annotation.body ?? ''}
       placeholder={tUi('pdf.comments.placeholder')}
