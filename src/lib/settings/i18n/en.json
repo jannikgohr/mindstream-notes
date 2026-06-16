@@ -378,6 +378,7 @@
     "pdf.signature.add": "Add new signature",
     "pdf.signature.delete": "Delete signature",
     "pdf.signature.preview": "Signature preview",
+    "pdf.page.caption": "Page {page}/{total}",
     "pdf.export.label": "Download annotated PDF",
     "pdf.export.failed": "Export failed",
     "pdf.toolbar.label": "PDF controls",

@@ -1619,6 +1619,9 @@
             {@const size = placeholderSize(pageNumber)}
             {@const shouldRender = isRendering(pageNumber)}
             {@const invalidation = invalidationOf(pageNumber)}
+            {@const pageCaption = tUi('pdf.page.caption')
+              .replace('{page}', String(pageNumber))
+              .replace('{total}', String(pageNumbers.length))}
             <figure
               class="flex w-max flex-col items-center gap-1"
               data-page-number={pageNumber}
@@ -1642,7 +1645,7 @@
                 class="flex items-center gap-1 text-[10px] text-muted-foreground"
               >
                 <FileText class="size-3" aria-hidden="true" />
-                Page {pageNumber}
+                {pageCaption}
               </figcaption>
             </figure>
           {/each}

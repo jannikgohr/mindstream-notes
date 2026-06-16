@@ -278,6 +278,7 @@
     "pdf.signature.add": "Neue Signatur hinzufügen",
     "pdf.signature.delete": "Signatur löschen",
     "pdf.signature.preview": "Signatur-Vorschau",
+    "pdf.page.caption": "Seite {page}/{total}",
     "pdf.export.label": "Annotiertes PDF herunterladen",
     "pdf.export.failed": "Export fehlgeschlagen",
     "pdf.toolbar.label": "PDF-Steuerung",
