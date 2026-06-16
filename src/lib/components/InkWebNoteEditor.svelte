@@ -5,6 +5,7 @@
     Eraser,
     MousePointer2,
     MoonStar,
+    Palette,
     PenLine,
     Redo2,
     Sun,
@@ -14,6 +15,7 @@
   import {
     Toolbar,
     ToolbarButton,
+    ToolbarCollapseWhenOverflow,
     ToolbarSeparator,
     ToolbarZoomControls
   } from '$lib/components/ui/toolbar';
@@ -173,6 +175,9 @@
   let editorListener: EditorListener | null = null;
   let mobileToolbar = $state(false);
   let zoomMenuOpen = $state(false);
+  let colorPaletteOpen = $state(false);
+  let colorPaletteButton = $state<HTMLButtonElement | null>(null);
+  let colorPaletteMenu = $state<HTMLDivElement | null>(null);
   let zoomUiVersion = $state(0);
 
   let tool = $state<ToolMode>('pen');
@@ -1394,6 +1399,15 @@
     updateLiveInkOverlayStyle();
   }
 
+  function selectPresetColor(value: string) {
+    setColor(value);
+    colorPaletteOpen = false;
+  }
+
+  function toggleColorPalette() {
+    colorPaletteOpen = !colorPaletteOpen;
+  }
+
   function setWidth(value: string) {
     width = normalizeInkWidth(Number(value));
     emitToolbarSettings();
@@ -1442,6 +1456,25 @@
     });
     if (ok) clearCanvas();
   }
+
+  $effect(() => {
+    if (!colorPaletteOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (colorPaletteMenu?.contains(target)) return;
+      if (colorPaletteButton?.contains(target)) return;
+      colorPaletteOpen = false;
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') colorPaletteOpen = false;
+    };
+    queueMicrotask(() => window.addEventListener('pointerdown', onPointerDown));
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('keydown', onKey);
+    };
+  });
 
   function handleInkCommand(id: string): boolean {
     switch (id) {
@@ -1772,29 +1805,77 @@
           oninput={(e) => setColor(e.currentTarget.value)}
         />
       </label>
-      <div
-        class="hidden shrink-0 items-center gap-1 sm:flex"
-        role="group"
-        aria-label={tUi('ink.toolbar.colorPresets')}
-      >
-        {#each INK_COLOR_SWATCHES as swatch, index (swatch)}
-          {@const activeSwatch = colorArgb === colorHexToArgb(swatch)}
-          <button
-            type="button"
-            class={`grid size-7 place-items-center rounded-md border border-border transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${activeSwatch ? 'ring-2 ring-ring' : ''}`}
-            aria-label={`${tUi('ink.toolbar.colorPreset')} ${index + 1}`}
-            aria-pressed={activeSwatch}
-            title={`${tUi('ink.toolbar.colorPreset')} ${index + 1}`}
-            onclick={() => setColor(swatch)}
+      <ToolbarCollapseWhenOverflow>
+        {#snippet expanded()}
+          <div
+            class="flex shrink-0 items-center gap-1"
+            role="group"
+            aria-label={tUi('ink.toolbar.colorPresets')}
           >
-            <span
-              class="size-4 rounded-full border border-black/20 shadow-sm"
-              style="background-color: {swatch};"
-              aria-hidden="true"
-            ></span>
-          </button>
-        {/each}
-      </div>
+            {#each INK_COLOR_SWATCHES as swatch, index (swatch)}
+              {@const activeSwatch = colorArgb === colorHexToArgb(swatch)}
+              <button
+                type="button"
+                class={`grid size-7 place-items-center rounded-md border border-border transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${activeSwatch ? 'ring-2 ring-ring' : ''}`}
+                aria-label={`${tUi('ink.toolbar.colorPreset')} ${index + 1}`}
+                aria-pressed={activeSwatch}
+                title={`${tUi('ink.toolbar.colorPreset')} ${index + 1}`}
+                onclick={() => setColor(swatch)}
+              >
+                <span
+                  class="size-4 rounded-full border border-black/20 shadow-sm"
+                  style="background-color: {swatch};"
+                  aria-hidden="true"
+                ></span>
+              </button>
+            {/each}
+          </div>
+        {/snippet}
+
+        {#snippet collapsed()}
+          <div class="relative shrink-0">
+            <ToolbarButton
+              bind:ref={colorPaletteButton}
+              active={colorPaletteOpen}
+              aria-label={tUi('ink.toolbar.colorPresets')}
+              title={tUi('ink.toolbar.colorPresets')}
+              aria-haspopup="menu"
+              aria-expanded={colorPaletteOpen}
+              onclick={toggleColorPalette}
+            >
+              <Palette aria-hidden="true" />
+            </ToolbarButton>
+
+            {#if colorPaletteOpen}
+              <div
+                bind:this={colorPaletteMenu}
+                role="menu"
+                class="absolute left-0 top-full z-50 mt-1 grid w-[7.25rem] grid-cols-3 gap-1 rounded-md border border-border bg-popover p-1.5 text-popover-foreground shadow-lg"
+                aria-label={tUi('ink.toolbar.colorPresets')}
+              >
+                {#each INK_COLOR_SWATCHES as swatch, index (swatch)}
+                  {@const activeSwatch = colorArgb === colorHexToArgb(swatch)}
+                  <button
+                    type="button"
+                    role="menuitemradio"
+                    class={`grid size-8 place-items-center rounded-md border border-border transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${activeSwatch ? 'ring-2 ring-ring' : ''}`}
+                    aria-label={`${tUi('ink.toolbar.colorPreset')} ${index + 1}`}
+                    aria-checked={activeSwatch}
+                    title={`${tUi('ink.toolbar.colorPreset')} ${index + 1}`}
+                    onclick={() => selectPresetColor(swatch)}
+                  >
+                    <span
+                      class="size-5 rounded-full border border-black/20 shadow-sm"
+                      style="background-color: {swatch};"
+                      aria-hidden="true"
+                    ></span>
+                  </button>
+                {/each}
+              </div>
+            {/if}
+          </div>
+        {/snippet}
+      </ToolbarCollapseWhenOverflow>
       <input
         class="ml-2 h-2 w-24 shrink-0 accent-primary"
         aria-label={tUi('ink.toolbar.brushSize')}
