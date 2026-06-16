@@ -24,7 +24,8 @@ export interface InkStroke {
 export type UndoOp =
   | { kind: 'strokeAdded'; id: string }
   | { kind: 'eraserDrag'; ids: string[] }
-  | { kind: 'clearAll'; ids: string[] };
+  | { kind: 'clearAll'; ids: string[] }
+  | { kind: 'selectionDelete'; ids: string[] };
 
 interface DecodedPayload {
   color: number;
@@ -132,6 +133,14 @@ export class InkDocument {
     return this.strokeMetasInBounds(bounds, extraPadding).map(strokeFromMeta);
   }
 
+  strokeIdsInLasso(points: Array<{ x: number; y: number }>): string[] {
+    if (points.length < 3) return [];
+    const bounds = boundsOfPoints(points.map((p) => ({ ...p, pressure: 1 })));
+    return this.strokeMetasInBounds(bounds, 0)
+      .filter((stroke) => strokeIntersectsLasso(stroke, points))
+      .map((stroke) => stroke.id);
+  }
+
   contentMaxY(): number {
     return this.ensureVisibleStrokeCache().reduce(
       (max, stroke) => Math.max(max, stroke.bounds.maxY),
@@ -230,6 +239,23 @@ export class InkDocument {
         this.recordOp({ kind: 'clearAll', ids: visible });
       }
       return visible;
+    });
+  }
+
+  deleteStrokes(ids: Iterable<string>): MutationResult<string[]> {
+    return this.transactLocalUpdate(() => {
+      const deleted = this.tombstoneStrokeSet(new Set(ids));
+      if (deleted.length > 0) {
+        this.recordOp({ kind: 'selectionDelete', ids: deleted });
+        if (this.visibleStrokeCache) {
+          const deletedSet = new Set(deleted);
+          this.visibleStrokeCache = this.visibleStrokeCache.filter(
+            (meta) => !deletedSet.has(meta.id)
+          );
+          this.invalidateSpatialIndexCache();
+        }
+      }
+      return deleted;
     });
   }
 
@@ -496,6 +522,84 @@ function strokeHitAt(
   return false;
 }
 
+function strokeIntersectsLasso(
+  stroke: StrokeMeta,
+  lasso: Array<{ x: number; y: number }>
+): boolean {
+  if (lasso.length < 3) return false;
+  for (const point of stroke.points) {
+    if (pointInPolygon(point, lasso)) return true;
+  }
+  for (let i = 1; i < stroke.points.length; i += 1) {
+    const a = stroke.points[i - 1];
+    const b = stroke.points[i];
+    for (let j = 0; j < lasso.length; j += 1) {
+      const c = lasso[j];
+      const d = lasso[(j + 1) % lasso.length];
+      if (segmentsIntersect(a, b, c, d)) return true;
+    }
+  }
+  return false;
+}
+
+function pointInPolygon(
+  point: { x: number; y: number },
+  polygon: Array<{ x: number; y: number }>
+): boolean {
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const a = polygon[i];
+    const b = polygon[j];
+    const intersects =
+      a.y > point.y !== b.y > point.y &&
+      point.x < ((b.x - a.x) * (point.y - a.y)) / (b.y - a.y) + a.x;
+    if (intersects) inside = !inside;
+  }
+  return inside;
+}
+
+function segmentsIntersect(
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+  c: { x: number; y: number },
+  d: { x: number; y: number }
+): boolean {
+  const abC = orientation(a, b, c);
+  const abD = orientation(a, b, d);
+  const cdA = orientation(c, d, a);
+  const cdB = orientation(c, d, b);
+
+  if (abC === 0 && pointOnSegment(c, a, b)) return true;
+  if (abD === 0 && pointOnSegment(d, a, b)) return true;
+  if (cdA === 0 && pointOnSegment(a, c, d)) return true;
+  if (cdB === 0 && pointOnSegment(b, c, d)) return true;
+
+  return abC !== abD && cdA !== cdB;
+}
+
+function orientation(
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+  c: { x: number; y: number }
+): -1 | 0 | 1 {
+  const value = (b.y - a.y) * (c.x - b.x) - (b.x - a.x) * (c.y - b.y);
+  if (Math.abs(value) < 1e-6) return 0;
+  return value > 0 ? 1 : -1;
+}
+
+function pointOnSegment(
+  point: { x: number; y: number },
+  a: { x: number; y: number },
+  b: { x: number; y: number }
+): boolean {
+  return (
+    point.x >= Math.min(a.x, b.x) - 1e-6 &&
+    point.x <= Math.max(a.x, b.x) + 1e-6 &&
+    point.y >= Math.min(a.y, b.y) - 1e-6 &&
+    point.y <= Math.max(a.y, b.y) + 1e-6
+  );
+}
+
 function strokeFromMeta(meta: StrokeMeta): InkStroke {
   return {
     id: meta.id,
@@ -564,6 +668,7 @@ function applyUndoOp(doc: InkDocument, op: UndoOp): void {
       break;
     case 'eraserDrag':
     case 'clearAll':
+    case 'selectionDelete':
       doc.setStrokesTombstoned(op.ids, false);
       break;
   }
@@ -576,6 +681,7 @@ function applyRedoOp(doc: InkDocument, op: UndoOp): void {
       break;
     case 'eraserDrag':
     case 'clearAll':
+    case 'selectionDelete':
       doc.setStrokesTombstoned(op.ids, true);
       break;
   }

@@ -195,6 +195,54 @@ describe('InkDocument', () => {
     expect(doc.visibleStrokes().map((s) => s.id)).toEqual([first]);
   });
 
+  it('selects strokes that intersect a lasso path', () => {
+    const doc = new InkDocument();
+    doc.beginStroke(DEFAULT_COLOR, DEFAULT_WIDTH);
+    doc.pushPoint(10, 10, 1);
+    doc.pushPoint(50, 10, 1);
+    const inside = doc.endStroke().value;
+    doc.beginStroke(DEFAULT_COLOR, DEFAULT_WIDTH);
+    doc.pushPoint(-10, 60, 1);
+    doc.pushPoint(130, 60, 1);
+    const crossing = doc.endStroke().value;
+    doc.beginStroke(DEFAULT_COLOR, DEFAULT_WIDTH);
+    doc.pushPoint(250, 250, 1);
+    doc.pushPoint(260, 250, 1);
+    doc.endStroke();
+    if (!inside || !crossing) throw new Error('expected committed strokes');
+
+    const ids = doc.strokeIdsInLasso([
+      { x: 0, y: 0 },
+      { x: 120, y: 0 },
+      { x: 120, y: 120 },
+      { x: 0, y: 120 }
+    ]);
+
+    expect(new Set(ids)).toEqual(new Set([inside, crossing]));
+  });
+
+  it('deletes selected strokes as one undoable operation', () => {
+    const doc = new InkDocument();
+    doc.beginStroke(DEFAULT_COLOR, DEFAULT_WIDTH);
+    doc.pushPoint(0, 0, 1);
+    doc.pushPoint(10, 0, 1);
+    const first = doc.endStroke().value;
+    doc.beginStroke(DEFAULT_COLOR, DEFAULT_WIDTH);
+    doc.pushPoint(100, 100, 1);
+    doc.pushPoint(110, 100, 1);
+    const second = doc.endStroke().value;
+    if (!first || !second) throw new Error('expected committed strokes');
+
+    expect(doc.deleteStrokes([first]).value).toEqual([first]);
+    expect(doc.visibleStrokes().map((s) => s.id)).toEqual([second]);
+    expect(doc.undoLast().value).toBe(true);
+    expect(new Set(doc.visibleStrokes().map((s) => s.id))).toEqual(
+      new Set([first, second])
+    );
+    expect(doc.redoLast().value).toBe(true);
+    expect(doc.visibleStrokes().map((s) => s.id)).toEqual([second]);
+  });
+
   it('rejects malformed remote updates', () => {
     const doc = new InkDocument();
 

@@ -3,6 +3,7 @@
   import { onDestroy, onMount, tick } from 'svelte';
   import {
     Eraser,
+    LassoSelect,
     MousePointer2,
     MoonStar,
     Palette,
@@ -113,7 +114,7 @@
   const INK_FINGER_SETTING = 'editor.ink.fingerDrawing';
   const INK_PAGE_THEME_SETTING = 'editor.ink.pageTheme';
 
-  type ToolMode = 'pen' | 'eraser';
+  type ToolMode = 'pen' | 'eraser' | 'lasso';
   type PageThemeMode = 'light' | 'system';
   type AndroidStylusEraserAction = 'down' | 'move' | 'up' | 'cancel';
   type AndroidStylusEraserPoint = {
@@ -129,7 +130,7 @@
     point: InkPoint;
     hits: Set<string>;
   };
-  type PointerMode = 'draw' | 'erase' | 'pan' | 'touchGesture';
+  type PointerMode = 'draw' | 'erase' | 'lasso' | 'pan' | 'touchGesture';
   type TouchPointer = {
     clientX: number;
     clientY: number;
@@ -186,7 +187,9 @@
   let fingerDrawingAllowed = $state(true);
   let pageThemeMode = $state<PageThemeMode>('light');
   let strokeCount = $state(0);
+  let selectedStrokeIds = $state<string[]>([]);
   let inFlight = $state<InkPoint[]>([]);
+  let lassoPoints = $state<InkPoint[]>([]);
   let undoDepth = $state(0);
   let redoDepth = $state(0);
   let eraserHits = new Set<string>();
@@ -228,6 +231,11 @@
   const brushPreviewSize = $derived(Math.max(4, Math.min(18, width * 1.25)));
   const brushSizeText = $derived(
     Number.isInteger(width) ? String(width) : width.toFixed(1)
+  );
+  const selectedStrokeSet = $derived(new Set(selectedStrokeIds));
+  const hasSelection = $derived(selectedStrokeIds.length > 0);
+  const clearButtonLabel = $derived(
+    hasSelection ? tUi('ink.toolbar.deleteSelected') : tUi('ink.toolbar.clear')
   );
 
   function ancestorIsTrash(parentId: string | null): boolean {
@@ -516,11 +524,21 @@
   function refreshFromDoc() {
     if (!doc) return;
     strokeCount = doc.visibleStrokeCount();
+    pruneSelection();
     syncHistoryState();
     const maxY = doc.contentMaxY();
     layout = defaultLayout(pageCountForContentMaxY(maxY));
     clampView();
     scheduleDraw();
+  }
+
+  function pruneSelection() {
+    if (!doc || selectedStrokeIds.length === 0) return;
+    const visible = new Set(doc.strokeIds(false).map((entry) => entry.id));
+    const next = selectedStrokeIds.filter((id) => visible.has(id));
+    if (next.length !== selectedStrokeIds.length) {
+      selectedStrokeIds = next;
+    }
   }
 
   function syncHistoryState() {
@@ -751,6 +769,8 @@
       );
     }
     drawStroke(ctx, inFlight, displayCssColor(colorArgb), width);
+    drawSelectionOverlay(ctx);
+    drawLassoOverlay(ctx);
     hasDrawnFrame = true;
     scheduleResizeSnapshotHide();
   }
@@ -841,6 +861,79 @@
     return 0.25 + 0.75 * Math.min(1, Math.max(0, pressure));
   }
 
+  function selectionBounds(): StrokeBounds | null {
+    if (!doc || selectedStrokeIds.length === 0) return null;
+    const selected = selectedStrokeSet;
+    let out: StrokeBounds | null = null;
+    for (const stroke of doc.visibleStrokes()) {
+      if (!selected.has(stroke.id) || !stroke.bounds) continue;
+      out = out
+        ? {
+            minX: Math.min(out.minX, stroke.bounds.minX),
+            minY: Math.min(out.minY, stroke.bounds.minY),
+            maxX: Math.max(out.maxX, stroke.bounds.maxX),
+            maxY: Math.max(out.maxY, stroke.bounds.maxY)
+          }
+        : { ...stroke.bounds };
+    }
+    return out;
+  }
+
+  function drawSelectionOverlay(ctx: CanvasRenderingContext2D) {
+    const bounds = selectionBounds();
+    if (!bounds) return;
+    const padding = 10;
+    const a = pageToScreen({
+      x: bounds.minX - padding,
+      y: bounds.minY - padding
+    });
+    const b = pageToScreen({
+      x: bounds.maxX + padding,
+      y: bounds.maxY + padding
+    });
+    ctx.save();
+    ctx.strokeStyle = '#2563eb';
+    ctx.fillStyle = 'rgba(37, 99, 235, 0.08)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([6, 4]);
+    ctx.fillRect(a.x, a.y, b.x - a.x, b.y - a.y);
+    ctx.strokeRect(a.x, a.y, b.x - a.x, b.y - a.y);
+    ctx.setLineDash([]);
+    const handleSize = 6;
+    ctx.fillStyle = '#2563eb';
+    for (const point of [a, { x: b.x, y: a.y }, b, { x: a.x, y: b.y }]) {
+      ctx.fillRect(
+        point.x - handleSize / 2,
+        point.y - handleSize / 2,
+        handleSize,
+        handleSize
+      );
+    }
+    ctx.restore();
+  }
+
+  function drawLassoOverlay(ctx: CanvasRenderingContext2D) {
+    if (lassoPoints.length < 2) return;
+    ctx.save();
+    ctx.strokeStyle = '#2563eb';
+    ctx.fillStyle = 'rgba(37, 99, 235, 0.06)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([5, 4]);
+    ctx.beginPath();
+    const start = pageToScreen(lassoPoints[0]);
+    ctx.moveTo(start.x, start.y);
+    for (const point of lassoPoints.slice(1)) {
+      const screen = pageToScreen(point);
+      ctx.lineTo(screen.x, screen.y);
+    }
+    if (lassoPoints.length > 2) {
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
   function pointerSamples(event: PointerEvent): PointerEvent[] {
     const samples = event.getCoalescedEvents?.() ?? [];
     return samples.length > 0 ? samples : [event];
@@ -915,6 +1008,9 @@
       flushQueuedEraserSamples();
       doc.finishEraserDrag(eraserHits);
       syncHistoryState();
+    } else if (pointerMode === 'lasso') {
+      lassoPoints = [];
+      selectedStrokeIds = [];
     }
     pointerMode = 'touchGesture';
     activePointerId = null;
@@ -975,6 +1071,7 @@
   function handleTouchPointerDown(event: PointerEvent) {
     if (!doc || !canvasEl) return;
     event.preventDefault();
+    canvasEl.focus({ preventScroll: true });
     canvasEl.setPointerCapture(event.pointerId);
     touchPointers.set(event.pointerId, touchPointer(event));
     if (touchPointers.size >= 2) {
@@ -988,8 +1085,13 @@
       return;
     }
     if (isTrashed) return;
+    if (tool === 'lasso') {
+      beginLasso(event);
+      return;
+    }
     if (tool === 'eraser') {
       pointerMode = 'erase';
+      selectedStrokeIds = [];
       eraserHits.clear();
       eraseFromEvent(event);
       return;
@@ -1032,6 +1134,7 @@
       return;
     }
     event.preventDefault();
+    canvasEl.focus({ preventScroll: true });
     canvasEl.setPointerCapture(event.pointerId);
     activePointerId = event.pointerId;
     const isFinger = event.pointerType === 'touch';
@@ -1045,8 +1148,13 @@
       return;
     }
     if (isTrashed) return;
+    if (tool === 'lasso') {
+      beginLasso(event);
+      return;
+    }
     if (tool === 'eraser' || isStylusButtonErasing(event)) {
       pointerMode = 'erase';
+      selectedStrokeIds = [];
       eraserHits.clear();
       eraseFromEvent(event);
       return;
@@ -1084,11 +1192,17 @@
       eraseFromEvent(event);
       return;
     }
+    if (pointerMode === 'lasso') {
+      event.preventDefault();
+      pushLassoSamples(event);
+      return;
+    }
     if (pointerMode === 'draw') {
       event.preventDefault();
       if (isStylusButtonErasing(event)) {
         finishActiveStroke();
         pointerMode = 'erase';
+        selectedStrokeIds = [];
         eraserHits.clear();
         eraseFromEvent(event);
         return;
@@ -1113,6 +1227,9 @@
         flushQueuedEraserSamples();
         doc.finishEraserDrag(eraserHits);
         syncHistoryState();
+      } else if (pointerMode === 'lasso') {
+        lassoPoints = [];
+        selectedStrokeIds = [];
       } else {
         clearQueuedEraserSamples();
       }
@@ -1131,6 +1248,8 @@
       flushQueuedEraserSamples();
       doc.finishEraserDrag(eraserHits);
       syncHistoryState();
+    } else if (pointerMode === 'lasso') {
+      finishLasso();
     }
     resetPointer();
   }
@@ -1146,6 +1265,7 @@
   function pushPointerSamples(event: PointerEvent) {
     if (!doc) return;
     if (isStylusButtonErasing(event)) return;
+    selectedStrokeIds = [];
     const next = [...inFlight];
     for (const sample of pointerSamples(event)) {
       const point = eventPoint(sample);
@@ -1169,6 +1289,38 @@
       next.push(point);
     }
     inFlight = next;
+  }
+
+  function beginLasso(event: PointerEvent) {
+    pointerMode = 'lasso';
+    selectedStrokeIds = [];
+    lassoPoints = [];
+    pushLassoSamples(event);
+  }
+
+  function pushLassoSamples(event: PointerEvent) {
+    const next = [...lassoPoints];
+    for (const sample of pointerSamples(event)) {
+      const point = eventPoint(sample);
+      const last = next[next.length - 1];
+      if (last && Math.hypot(point.x - last.x, point.y - last.y) < 6) {
+        continue;
+      }
+      next.push(point);
+    }
+    lassoPoints = next;
+    scheduleDraw();
+  }
+
+  function finishLasso() {
+    if (!doc || lassoPoints.length < 3) {
+      lassoPoints = [];
+      scheduleDraw();
+      return;
+    }
+    selectedStrokeIds = doc.strokeIdsInLasso(lassoPoints);
+    lassoPoints = [];
+    scheduleDraw();
   }
 
   function eraseAtPoint(point: InkPoint, hits: Set<string>) {
@@ -1389,6 +1541,7 @@
 
   function setTool(next: ToolMode) {
     tool = next;
+    lassoPoints = [];
     emitToolbarSettings();
     updateLiveInkOverlayStyle();
   }
@@ -1428,6 +1581,8 @@
   function undo() {
     if (!doc) return;
     flushQueuedEraserSamples();
+    selectedStrokeIds = [];
+    lassoPoints = [];
     const { value, update } = doc.undoLast();
     if (value) applyDocumentMutation(update);
   }
@@ -1435,18 +1590,37 @@
   function redo() {
     if (!doc) return;
     flushQueuedEraserSamples();
+    selectedStrokeIds = [];
+    lassoPoints = [];
     const { value, update } = doc.redoLast();
     if (value) applyDocumentMutation(update);
+  }
+
+  function deleteSelection(): boolean {
+    if (!doc || isTrashed || selectedStrokeIds.length === 0) return false;
+    flushQueuedEraserSamples();
+    const { value, update } = doc.deleteStrokes(selectedStrokeIds);
+    selectedStrokeIds = [];
+    lassoPoints = [];
+    if (value.length > 0) {
+      applyDocumentMutation(update);
+      return true;
+    }
+    scheduleDraw();
+    return false;
   }
 
   function clearCanvas() {
     if (!doc) return;
     flushQueuedEraserSamples();
+    selectedStrokeIds = [];
+    lassoPoints = [];
     const { value, update } = doc.clearAll();
     if (value.length > 0) applyDocumentMutation(update);
   }
 
   async function confirmClearCanvas() {
+    if (deleteSelection()) return;
     if (!doc || isTrashed || strokeCount === 0) return;
     const ok = await confirm({
       title: tUi('ink.toolbar.clearConfirm.title'),
@@ -1455,6 +1629,14 @@
       destructive: true
     });
     if (ok) clearCanvas();
+  }
+
+  function handleKeyDown(event: KeyboardEvent) {
+    if (event.key === 'Delete' || event.key === 'Backspace') {
+      if (hasSelection && deleteSelection()) {
+        event.preventDefault();
+      }
+    }
   }
 
   $effect(() => {
@@ -1484,6 +1666,9 @@
       case 'editor.ink.eraser':
         setTool('eraser');
         return true;
+      case 'editor.ink.lasso':
+        setTool('lasso');
+        return true;
       case 'editor.ink.undo':
         undo();
         return true;
@@ -1506,7 +1691,8 @@
   }
 
   function normalizeInkTool(value: unknown): ToolMode {
-    return value === 'eraser' ? 'eraser' : 'pen';
+    if (value === 'eraser' || value === 'lasso') return value;
+    return 'pen';
   }
 
   function normalizeInkPageTheme(value: unknown): PageThemeMode {
@@ -1709,6 +1895,20 @@
     };
   });
 
+  $effect(() => {
+    if (!hostEl) return;
+    const host = hostEl;
+    const onKeyDown = (event: KeyboardEvent) => {
+      const active = document.activeElement;
+      if (!active || !host.contains(active)) return;
+      handleKeyDown(event);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  });
+
   onDestroy(() => {
     window.removeEventListener(
       'mindstream:android-stylus-eraser',
@@ -1789,6 +1989,16 @@
         onclick={() => setTool('eraser')}
       >
         <Eraser aria-hidden="true" />
+      </ToolbarButton>
+
+      <ToolbarButton
+        active={tool === 'lasso'}
+        aria-label={tUi('ink.toolbar.lasso')}
+        title={tUi('ink.toolbar.lasso')}
+        aria-pressed={tool === 'lasso'}
+        onclick={() => setTool('lasso')}
+      >
+        <LassoSelect aria-hidden="true" />
       </ToolbarButton>
 
       <ToolbarSeparator />
@@ -1945,9 +2155,9 @@
         {/if}
       </ToolbarButton>
       <ToolbarButton
-        aria-label={tUi('ink.toolbar.clear')}
-        title={tUi('ink.toolbar.clear')}
-        disabled={isTrashed || strokeCount === 0}
+        aria-label={clearButtonLabel}
+        title={clearButtonLabel}
+        disabled={isTrashed || (strokeCount === 0 && !hasSelection)}
         onclick={() => void confirmClearCanvas()}
       >
         <Trash2 aria-hidden="true" />
@@ -1987,6 +2197,7 @@
     <canvas
       bind:this={canvasEl}
       class="relative z-10 block h-full w-full touch-none"
+      tabindex="0"
       aria-label={ariaLabel}
       onpointerdown={handlePointerDown}
       onpointermove={handlePointerMove}

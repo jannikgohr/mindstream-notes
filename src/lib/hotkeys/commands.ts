@@ -550,6 +550,13 @@ export const HOTKEY_COMMANDS: CommandDefinition[] = [
     defaultBinding: null
   },
   {
+    id: 'editor.ink.lasso',
+    scope: 'editor',
+    editorKind: 'ink',
+    labelKey: 'hotkeys.command.editor.ink.lasso',
+    defaultBinding: null
+  },
+  {
     id: 'editor.ink.undo',
     scope: 'editor',
     editorKind: 'ink',
