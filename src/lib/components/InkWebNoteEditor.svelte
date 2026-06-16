@@ -1872,24 +1872,6 @@
         <Trash2 aria-hidden="true" />
       </ToolbarButton>
     </div>
-
-    {#if !mobileToolbar}
-      <ToolbarZoomControls
-        bind:open={zoomMenuOpen}
-        label={inkZoomLabel}
-        zoomOutLabel={tUi('ink.toolbar.zoomOut')}
-        zoomInLabel={tUi('ink.toolbar.zoomIn')}
-        zoomMenuLabel={tUi('ink.toolbar.zoom')}
-        fitLabel={tUi('ink.toolbar.fitPage')}
-        fitActive={inkFitActive}
-        zoomOptions={INK_QUICK_ZOOMS}
-        selectedZoom={inkFitActive ? null : view.scale}
-        onZoomOut={() => zoomInkBy(1 / INK_ZOOM_STEP)}
-        onZoomIn={() => zoomInkBy(INK_ZOOM_STEP)}
-        onFit={setFitPageZoom}
-        onSelectZoom={setInkZoom}
-      />
-    {/if}
   </Toolbar>
 {/snippet}
 
@@ -1908,7 +1890,7 @@
     <div bind:this={toolbarEl} class="shrink-0">
       {@render inkToolbar(
         true,
-        'shrink-0 justify-between border-b border-border bg-background'
+        'shrink-0 border-b border-border bg-background'
       )}
     </div>
   {/if}
@@ -1932,4 +1914,30 @@
       onwheel={handleWheel}
     ></canvas>
   </div>
+
+  {#if !mobileToolbar}
+    <div
+      class="absolute bottom-3 left-3 z-20"
+      role="toolbar"
+      aria-label={tUi('ink.toolbar.zoom')}
+    >
+      <ToolbarZoomControls
+        bind:open={zoomMenuOpen}
+        class="rounded-md border border-border bg-background/95 p-1 shadow-sm backdrop-blur"
+        menuPlacement="above"
+        label={inkZoomLabel}
+        zoomOutLabel={tUi('ink.toolbar.zoomOut')}
+        zoomInLabel={tUi('ink.toolbar.zoomIn')}
+        zoomMenuLabel={tUi('ink.toolbar.zoom')}
+        fitLabel={tUi('ink.toolbar.fitPage')}
+        fitActive={inkFitActive}
+        zoomOptions={INK_QUICK_ZOOMS}
+        selectedZoom={inkFitActive ? null : view.scale}
+        onZoomOut={() => zoomInkBy(1 / INK_ZOOM_STEP)}
+        onZoomIn={() => zoomInkBy(INK_ZOOM_STEP)}
+        onFit={setFitPageZoom}
+        onSelectZoom={setInkZoom}
+      />
+    </div>
+  {/if}
 </div>

@@ -14,6 +14,7 @@
     selectedZoom?: number | null;
     open?: boolean;
     disabled?: boolean;
+    menuPlacement?: 'above' | 'below';
     class?: string;
     onZoomOut: () => void;
     onZoomIn: () => void;
@@ -32,6 +33,7 @@
     selectedZoom = null,
     open = $bindable(false),
     disabled = false,
+    menuPlacement = 'below',
     class: className,
     onZoomOut,
     onZoomIn,
@@ -52,7 +54,13 @@
     const width = 160;
     return Math.max(8, Math.min(menuRect.left, window.innerWidth - width - 8));
   });
-  const menuTop = $derived(menuRect ? menuRect.bottom : 0);
+  const menuStyle = $derived.by(() => {
+    if (!menuRect) return '';
+    const top = menuPlacement === 'above' ? menuRect.top : menuRect.bottom;
+    const transform =
+      menuPlacement === 'above' ? 'transform: translateY(-100%);' : '';
+    return `left: ${menuLeft}px; top: ${top}px; ${transform}`;
+  });
   const hasMenu = $derived(Boolean(onFit || zoomOptions.length > 0));
 
   function toggleMenu() {
@@ -141,7 +149,7 @@
     bind:this={menuEl}
     role="menu"
     class="fixed z-50 min-w-40 rounded-md border border-border bg-popover py-1 text-sm text-popover-foreground shadow-lg"
-    style="left: {menuLeft}px; top: {menuTop}px;"
+    style={menuStyle}
   >
     {#if onFit && fitLabel}
       <button
