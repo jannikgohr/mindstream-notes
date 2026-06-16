@@ -1660,6 +1660,7 @@
           onJump={jumpToAnnotation}
           onUpdate={updateAnnotation}
           onDelete={deleteAnnotation}
+          onClose={() => (commentsSidebarOpen = false)}
         />
       {/if}
     </div>
