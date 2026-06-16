@@ -11,8 +11,15 @@
    * `selectedAnnotationId === annotation.id`.
    */
 
-  import { ChevronDown, ChevronRight, Trash2, X } from 'lucide-svelte';
+  import {
+    ChevronDown,
+    ChevronRight,
+    CircleCheckBig,
+    Trash2,
+    X
+  } from 'lucide-svelte';
   import { Button } from '$lib/components/ui/button';
+  import { formatNoteDateTime } from '$lib/date-time';
   import { tUi } from '$lib/settings/i18n.svelte';
   import type { PdfAnnotation } from './types';
 
@@ -49,6 +56,22 @@
 
   const pageLabel = (page: number) =>
     tUi('pdf.comments.page').replace('{page}', String(page));
+
+  const jumpLabel = (page: number) =>
+    tUi('pdf.comments.jump').replace('{page}', String(page));
+
+  const authorName = (authorId: string) =>
+    authorId === 'local' ? tUi('pdf.comments.you') : authorId;
+
+  const initialsFor = (authorId: string) =>
+    authorName(authorId)
+      .trim()
+      .split(/\s+/)
+      .slice(0, 2)
+      .map((part) => part[0]?.toUpperCase())
+      .join('') || '?';
+
+  const updatedLabel = (updatedAt: string) => formatNoteDateTime(updatedAt);
 </script>
 
 <aside
@@ -128,29 +151,77 @@
 </aside>
 
 {#snippet commentCard(annotation: PdfAnnotation)}
+  {@const label = annotation.resolved
+    ? tUi('pdf.comments.resolved')
+    : tUi('pdf.comments.resolve')}
+  {@const updated = updatedLabel(annotation.updatedAt)}
   <section
-    class:ring-1={selectedAnnotationId === annotation.id}
-    class:ring-ring={selectedAnnotationId === annotation.id}
+    class:border-ring={selectedAnnotationId === annotation.id}
+    class:shadow-md={selectedAnnotationId === annotation.id}
     class:opacity-75={annotation.resolved}
-    class="rounded-md border border-border bg-card p-2 text-card-foreground"
+    class="comment-card rounded-md border border-l-4 border-border bg-card text-card-foreground shadow-sm transition-colors"
+    style:--comment-accent={annotation.color}
   >
-    <button
-      type="button"
-      class="flex w-full items-center justify-between gap-2 text-left"
-      onclick={() => onJump(annotation.id)}
-    >
-      <span class="text-xs font-medium"
-        >{pageLabel(annotation.pageIndex + 1)}</span
+    <div class="flex items-start gap-2 px-3 pb-2 pt-3">
+      <button
+        type="button"
+        class="flex min-w-0 flex-1 items-start gap-2 text-left"
+        onclick={() => onJump(annotation.id)}
+        aria-label={jumpLabel(annotation.pageIndex + 1)}
       >
-      <span
-        class="rounded-sm px-1.5 py-0.5 text-[10px] uppercase text-muted-foreground"
-      >
-        {annotation.type}
-      </span>
-    </button>
+        <span
+          class="flex size-7 shrink-0 items-center justify-center rounded-full bg-primary text-[11px] font-semibold text-primary-foreground"
+          aria-hidden="true"
+        >
+          {initialsFor(annotation.authorId)}
+        </span>
+        <span class="min-w-0 flex-1">
+          <span class="block truncate text-xs font-semibold leading-none">
+            {authorName(annotation.authorId)}
+          </span>
+          <span
+            class="mt-1 flex items-center gap-1 text-[10px] leading-none text-muted-foreground"
+          >
+            <span>{pageLabel(annotation.pageIndex + 1)}</span>
+            {#if updated}
+              <span aria-hidden="true">·</span>
+              <span>{updated}</span>
+            {/if}
+          </span>
+        </span>
+      </button>
+
+      <div class="flex shrink-0 items-center gap-1">
+        <Button
+          variant={annotation.resolved ? 'secondary' : 'ghost'}
+          size="sm"
+          class="h-7 max-w-24 gap-1.5 px-2 text-xs"
+          disabled={isTrashed}
+          onclick={() =>
+            onUpdate(annotation.id, { resolved: !annotation.resolved })}
+          aria-label={label}
+          title={label}
+          aria-pressed={annotation.resolved}
+        >
+          <CircleCheckBig class="size-3.5 shrink-0" aria-hidden="true" />
+          <span class="resolve-label truncate">{label}</span>
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          class="size-7 text-muted-foreground hover:text-destructive"
+          disabled={isTrashed}
+          onclick={() => onDelete(annotation.id)}
+          aria-label={tUi('pdf.comments.delete')}
+          title={tUi('pdf.comments.delete')}
+        >
+          <Trash2 class="size-3.5" aria-hidden="true" />
+        </Button>
+      </div>
+    </div>
 
     <textarea
-      class="mt-2 min-h-20 w-full resize-y rounded-md border border-input bg-background px-2 py-1.5 text-xs outline-none transition-colors placeholder:text-muted-foreground focus:border-ring disabled:cursor-not-allowed disabled:opacity-60"
+      class="min-h-16 w-full resize-y border-t border-border bg-transparent px-3 py-2 text-xs leading-relaxed outline-none transition-colors placeholder:text-muted-foreground focus:bg-background disabled:cursor-not-allowed disabled:opacity-60"
       value={annotation.body ?? ''}
       placeholder={tUi('pdf.comments.placeholder')}
       disabled={isTrashed}
@@ -159,31 +230,22 @@
           body: (event.currentTarget as HTMLTextAreaElement).value
         })}
     ></textarea>
-
-    <div class="mt-2 flex items-center justify-between gap-2">
-      <Button
-        variant={annotation.resolved ? 'secondary' : 'ghost'}
-        size="sm"
-        class="h-7 px-2 text-xs"
-        disabled={isTrashed}
-        onclick={() =>
-          onUpdate(annotation.id, { resolved: !annotation.resolved })}
-      >
-        {annotation.resolved
-          ? tUi('pdf.comments.resolved')
-          : tUi('pdf.comments.resolve')}
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon"
-        class="size-7 text-muted-foreground hover:text-destructive"
-        disabled={isTrashed}
-        onclick={() => onDelete(annotation.id)}
-        aria-label={tUi('pdf.comments.delete')}
-        title={tUi('pdf.comments.delete')}
-      >
-        <Trash2 class="size-3.5" aria-hidden="true" />
-      </Button>
-    </div>
   </section>
 {/snippet}
+
+<style>
+  .comment-card {
+    container-type: inline-size;
+    border-left-color: var(--comment-accent);
+  }
+
+  .resolve-label {
+    display: none;
+  }
+
+  @container (min-width: 18rem) {
+    .resolve-label {
+      display: inline;
+    }
+  }
+</style>

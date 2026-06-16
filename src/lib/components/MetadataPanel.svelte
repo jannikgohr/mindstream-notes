@@ -9,6 +9,7 @@
     type NoteSummary
   } from '$lib/api';
   import { noteKindIcon } from '$lib/components/note-kind-icon';
+  import { formatNoteDateTime } from '$lib/date-time';
   import { extractPdfText } from '$lib/pdf/extract-text';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { ui } from '$lib/state.svelte';
@@ -109,19 +110,6 @@
   const contentStats = $derived.by(() =>
     analyzeContent(noteBody, noteText, note?.note_kind ?? null)
   );
-
-  function fmt(iso: string) {
-    try {
-      return new Intl.DateTimeFormat(undefined, {
-        day: '2-digit',
-        month: 'short',
-        hour: '2-digit',
-        minute: '2-digit'
-      }).format(new Date(iso));
-    } catch {
-      return iso;
-    }
-  }
 
   function noteKindLabel(kind: string | null | undefined): string {
     switch (kind) {
@@ -371,7 +359,7 @@
               <dd
                 class="min-w-0 truncate text-right text-xs font-medium tabular-nums"
               >
-                {fmt(note.created)}
+                {formatNoteDateTime(note.created)}
               </dd>
             </div>
             <div
@@ -386,7 +374,7 @@
               <dd
                 class="min-w-0 truncate text-right text-xs font-medium tabular-nums"
               >
-                {fmt(note.modified)}
+                {formatNoteDateTime(note.modified)}
               </dd>
             </div>
           </dl>
