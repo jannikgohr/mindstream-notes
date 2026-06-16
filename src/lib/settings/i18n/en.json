@@ -363,6 +363,8 @@
     "ink.toolbar.pen": "Pen",
     "ink.toolbar.eraser": "Eraser",
     "ink.toolbar.color": "Ink colour",
+    "ink.toolbar.colorPresets": "Ink colour presets",
+    "ink.toolbar.colorPreset": "Ink colour preset",
     "ink.toolbar.brushSize": "Brush size",
     "ink.toolbar.undo": "Undo",
     "ink.toolbar.redo": "Redo",
@@ -373,6 +375,9 @@
     "ink.toolbar.fingerDrawing": "Toggle finger drawing",
     "ink.toolbar.pageTheme": "Toggle page theme",
     "ink.toolbar.clear": "Clear ink",
+    "ink.toolbar.clearConfirm.title": "Clear all ink?",
+    "ink.toolbar.clearConfirm.message": "This removes every stroke from this handwritten note. You can undo it while the note stays open.",
+    "ink.toolbar.clearConfirm.button": "Clear ink",
 
     "pdf.signature.menuLabel": "Signatures",
     "pdf.signature.add": "Add new signature",

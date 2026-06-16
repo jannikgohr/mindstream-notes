@@ -17,6 +17,7 @@
     ToolbarSeparator,
     ToolbarZoomControls
   } from '$lib/components/ui/toolbar';
+  import { confirm } from '$lib/components/confirm-dialog.svelte';
   import {
     drawingCancelLiveInk,
     drawingEnterImmersiveInkMode,
@@ -92,6 +93,14 @@
   const MAX_ZOOM_FACTOR = 6;
   const INK_ZOOM_STEP = 1.2;
   const INK_QUICK_ZOOMS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
+  const INK_COLOR_SWATCHES = [
+    '#111827',
+    '#dc2626',
+    '#2563eb',
+    '#16a34a',
+    '#f59e0b',
+    '#7c3aed'
+  ];
   const POINTER_BUTTON_SECONDARY = 2;
   const POINTER_BUTTON_STYLUS_PRIMARY = 32;
   const POINTER_BUTTON_STYLUS_SECONDARY = 64;
@@ -211,6 +220,10 @@
     void zoomUiVersion;
     return Math.abs(view.scale - minScale()) < 0.01;
   });
+  const brushPreviewSize = $derived(Math.max(4, Math.min(18, width * 1.25)));
+  const brushSizeText = $derived(
+    Number.isInteger(width) ? String(width) : width.toFixed(1)
+  );
 
   function ancestorIsTrash(parentId: string | null): boolean {
     let current = parentId;
@@ -1419,6 +1432,17 @@
     if (value.length > 0) applyDocumentMutation(update);
   }
 
+  async function confirmClearCanvas() {
+    if (!doc || isTrashed || strokeCount === 0) return;
+    const ok = await confirm({
+      title: tUi('ink.toolbar.clearConfirm.title'),
+      message: tUi('ink.toolbar.clearConfirm.message'),
+      confirmLabel: tUi('ink.toolbar.clearConfirm.button'),
+      destructive: true
+    });
+    if (ok) clearCanvas();
+  }
+
   function handleInkCommand(id: string): boolean {
     switch (id) {
       case 'editor.ink.pen':
@@ -1440,7 +1464,7 @@
         togglePageTheme();
         return true;
       case 'editor.ink.clear':
-        if (!isTrashed) clearCanvas();
+        if (!isTrashed) void confirmClearCanvas();
         return true;
       default:
         console.warn('[InkWebNoteEditor] unknown ink command', id);
@@ -1748,8 +1772,31 @@
           oninput={(e) => setColor(e.currentTarget.value)}
         />
       </label>
+      <div
+        class="hidden shrink-0 items-center gap-1 sm:flex"
+        role="group"
+        aria-label={tUi('ink.toolbar.colorPresets')}
+      >
+        {#each INK_COLOR_SWATCHES as swatch, index (swatch)}
+          {@const activeSwatch = colorArgb === colorHexToArgb(swatch)}
+          <button
+            type="button"
+            class={`grid size-7 place-items-center rounded-md border border-border transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${activeSwatch ? 'ring-2 ring-ring' : ''}`}
+            aria-label={`${tUi('ink.toolbar.colorPreset')} ${index + 1}`}
+            aria-pressed={activeSwatch}
+            title={`${tUi('ink.toolbar.colorPreset')} ${index + 1}`}
+            onclick={() => setColor(swatch)}
+          >
+            <span
+              class="size-4 rounded-full border border-black/20 shadow-sm"
+              style="background-color: {swatch};"
+              aria-hidden="true"
+            ></span>
+          </button>
+        {/each}
+      </div>
       <input
-        class="mx-2 h-2 w-24 shrink-0 accent-primary"
+        class="ml-2 h-2 w-24 shrink-0 accent-primary"
         aria-label={tUi('ink.toolbar.brushSize')}
         title={tUi('ink.toolbar.brushSize')}
         type="range"
@@ -1759,6 +1806,19 @@
         value={width}
         oninput={(e) => setWidth(e.currentTarget.value)}
       />
+      <div
+        class="mr-2 flex h-9 w-20 shrink-0 items-center justify-center gap-1.5 rounded-md px-1.5 text-xs font-medium text-muted-foreground"
+        aria-label={`${tUi('ink.toolbar.brushSize')}: ${brushSizeText}`}
+        title={`${tUi('ink.toolbar.brushSize')}: ${brushSizeText}`}
+      >
+        <span class="grid size-6 place-items-center" aria-hidden="true">
+          <span
+            class="rounded-full border border-border shadow-sm"
+            style="width: {brushPreviewSize}px; height: {brushPreviewSize}px; background-color: {colorHex};"
+          ></span>
+        </span>
+        <span class="w-8 text-center tabular-nums">{brushSizeText}</span>
+      </div>
 
       <ToolbarSeparator />
 
@@ -1806,8 +1866,8 @@
       <ToolbarButton
         aria-label={tUi('ink.toolbar.clear')}
         title={tUi('ink.toolbar.clear')}
-        disabled={isTrashed}
-        onclick={clearCanvas}
+        disabled={isTrashed || strokeCount === 0}
+        onclick={() => void confirmClearCanvas()}
       >
         <Trash2 aria-hidden="true" />
       </ToolbarButton>

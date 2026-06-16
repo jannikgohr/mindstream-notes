@@ -263,6 +263,8 @@
     "ink.toolbar.pen": "Stift",
     "ink.toolbar.eraser": "Radierer",
     "ink.toolbar.color": "Ink-Farbe",
+    "ink.toolbar.colorPresets": "Ink-Farbvorgaben",
+    "ink.toolbar.colorPreset": "Ink-Farbvorgabe",
     "ink.toolbar.brushSize": "Pinselgröße",
     "ink.toolbar.undo": "Rückgängig",
     "ink.toolbar.redo": "Wiederholen",
@@ -273,6 +275,9 @@
     "ink.toolbar.fingerDrawing": "Fingerzeichnen umschalten",
     "ink.toolbar.pageTheme": "Seitendesign umschalten",
     "ink.toolbar.clear": "Tinte löschen",
+    "ink.toolbar.clearConfirm.title": "Alle Tinte löschen?",
+    "ink.toolbar.clearConfirm.message": "Dadurch werden alle Striche aus dieser handschriftlichen Notiz entfernt. Du kannst es rückgängig machen, solange die Notiz geöffnet bleibt.",
+    "ink.toolbar.clearConfirm.button": "Tinte löschen",
 
     "pdf.signature.menuLabel": "Signaturen",
     "pdf.signature.add": "Neue Signatur hinzufügen",
