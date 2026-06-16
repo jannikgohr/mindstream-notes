@@ -636,6 +636,34 @@ export const HOTKEY_COMMANDS: CommandDefinition[] = [
     defaultBinding: null
   },
   {
+    id: 'editor.pdf.toggleNavigator',
+    scope: 'editor',
+    editorKind: 'pdf',
+    labelKey: 'hotkeys.command.editor.pdf.toggleNavigator',
+    defaultBinding: null
+  },
+  {
+    id: 'editor.pdf.find',
+    scope: 'editor',
+    editorKind: 'pdf',
+    labelKey: 'hotkeys.command.editor.pdf.find',
+    defaultBinding: null
+  },
+  {
+    id: 'editor.pdf.previousPage',
+    scope: 'editor',
+    editorKind: 'pdf',
+    labelKey: 'hotkeys.command.editor.pdf.previousPage',
+    defaultBinding: null
+  },
+  {
+    id: 'editor.pdf.nextPage',
+    scope: 'editor',
+    editorKind: 'pdf',
+    labelKey: 'hotkeys.command.editor.pdf.nextPage',
+    defaultBinding: null
+  },
+  {
     id: 'editor.pdf.export',
     scope: 'editor',
     editorKind: 'pdf',

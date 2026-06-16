@@ -3,13 +3,17 @@
   import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
   import {
     AlertCircle,
+    ChevronLeft,
+    ChevronRight,
     FileText,
     Highlighter,
     Loader2,
     MessageSquarePlus,
     MessagesSquare,
     MousePointer2,
+    PanelLeft,
     PenLine,
+    Search,
     Signature,
     Trash2
   } from 'lucide-svelte';
@@ -25,6 +29,7 @@
     etebaseSession,
     fetchDrawingAsset,
     getYjsRelayUrl,
+    isTauri,
     loadNote,
     noteRoomInfo,
     onSessionChange,
@@ -38,8 +43,21 @@
   import { tUi } from '$lib/settings/i18n.svelte';
   import { exportAnnotatedPdfNote } from '$lib/note-exporters/pdf';
   import CommentsSidebar from '$lib/pdf/CommentsSidebar.svelte';
+  import PdfNavigatorSidebar from '$lib/pdf/PdfNavigatorSidebar.svelte';
+  import PdfSearchBar from '$lib/pdf/PdfSearchBar.svelte';
   import SignaturePadDialog from '$lib/pdf/SignaturePadDialog.svelte';
   import SignaturePicker from '$lib/pdf/SignaturePicker.svelte';
+  import {
+    loadFlatOutline,
+    resolveDestinationPageIndex,
+    type FlatOutlineItem
+  } from '$lib/pdf/outline';
+  import {
+    buildPageTextIndex,
+    findMatchesInPage,
+    type PageTextIndex,
+    type PdfSearchMatch
+  } from '$lib/pdf/pdf-text-index';
   import {
     loadReusableSignatures,
     persistReusableSignatures
@@ -98,8 +116,14 @@
     selectedAnnotationId: string | null;
     shouldRender: boolean;
     invalidation: number;
+    searchVersion: number;
   };
   type PageSize = { width: number; height: number };
+  type PdfLink = {
+    rect: number[];
+    url?: string;
+    dest?: string | unknown[] | null;
+  };
 
   const MIN_ZOOM = 0.5;
   const MAX_ZOOM = 4;
@@ -107,6 +131,7 @@
   const QUICK_ZOOMS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
   const PDF_TO_CSS_UNITS = 96 / 72;
   const SAVE_DEBOUNCE_MS = 800;
+  const SEARCH_DEBOUNCE_MS = 220;
   const HIGHLIGHT_COLOR = '#facc15';
   const COMMENT_COLOR = '#3b82f6';
   const SIGNATURE_COLOR = '#111827';
@@ -159,6 +184,27 @@
   let collabConfigured = $state(false);
   let collabOnline = $state(false);
   let activePageNumber = $state(1);
+  let pageInputValue = $state('1');
+  let pageInputFocused = false;
+  let navigatorOpen = $state(false);
+  let outline = $state<FlatOutlineItem[]>([]);
+  let searchOpen = $state(false);
+  let searchQuery = $state('');
+  let searchBusy = $state(false);
+  let searchMatches = $state<PdfSearchMatch[]>([]);
+  let activeMatchIndex = $state(0);
+  // Bumped to re-run the per-page overlay pass when search results change.
+  let searchVersion = $state(0);
+  let searchBar = $state<{ focus: () => void } | null>(null);
+  // Plain (non-reactive) lookups read imperatively inside the render
+  // action. `searchMatchesByPage` indexes matches by 0-based page;
+  // `activeSearchMatchId` flags the currently-focused hit.
+  const searchMatchesByPage = new Map<number, PdfSearchMatch[]>();
+  let activeSearchMatchId: string | null = null;
+  // Per-page text index, built lazily on first search and cached.
+  const textIndexCache = new Map<number, PageTextIndex>();
+  let searchGeneration = 0;
+  let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   let pdfjsLib: PdfJs | null = null;
   let pdfViewerLib: PdfViewer | null = null;
   let yDoc: Y.Doc | null = null;
@@ -384,6 +430,185 @@
     annotationVersion += 1;
   }
 
+  // --- Page navigation ------------------------------------------------------
+
+  function scrollToPage(
+    pageNumber: number,
+    behavior: ScrollBehavior = 'smooth'
+  ) {
+    const total = pageNumbers.length;
+    if (total === 0) return;
+    const clamped = Math.min(total, Math.max(1, pageNumber));
+    const target = container?.querySelector<HTMLElement>(
+      `[data-page-number="${clamped}"]`
+    );
+    target?.scrollIntoView({ block: 'start', behavior });
+    activePageNumber = clamped;
+  }
+
+  function goToPreviousPage() {
+    scrollToPage(activePageNumber - 1);
+  }
+
+  function goToNextPage() {
+    scrollToPage(activePageNumber + 1);
+  }
+
+  function commitPageInput() {
+    const parsed = Number.parseInt(pageInputValue, 10);
+    if (Number.isFinite(parsed)) {
+      scrollToPage(parsed);
+    }
+    pageInputValue = String(activePageNumber);
+  }
+
+  // Keep the page-number field in sync with the scroll position, but never
+  // clobber what the user is actively typing.
+  $effect(() => {
+    if (!pageInputFocused) pageInputValue = String(activePageNumber);
+  });
+
+  function toggleNavigator() {
+    navigatorOpen = !navigatorOpen;
+  }
+
+  // --- PDF links ------------------------------------------------------------
+
+  async function openExternalUrl(url: string) {
+    // Restrict to navigational schemes — never follow file: or javascript:
+    // URLs embedded in a document.
+    if (!/^(https?:|mailto:)/i.test(url)) return;
+    try {
+      if (isTauri()) {
+        const { open } = await import('@tauri-apps/plugin-shell');
+        await open(url);
+      } else if (typeof window !== 'undefined') {
+        window.open(url, '_blank', 'noopener,noreferrer');
+      }
+    } catch (err) {
+      console.warn('[PdfNoteViewer] failed to open link', url, err);
+    }
+  }
+
+  async function followLinkDest(dest: string | unknown[] | null | undefined) {
+    if (!pdfDoc || dest == null) return;
+    const pageIndex = await resolveDestinationPageIndex(pdfDoc, dest);
+    if (pageIndex != null) scrollToPage(pageIndex + 1);
+  }
+
+  // --- In-document search ---------------------------------------------------
+
+  function openSearch() {
+    searchOpen = true;
+    void tick().then(() => searchBar?.focus());
+  }
+
+  function closeSearch() {
+    searchOpen = false;
+    if (searchDebounceTimer) {
+      clearTimeout(searchDebounceTimer);
+      searchDebounceTimer = null;
+    }
+    searchGeneration += 1;
+    searchQuery = '';
+    clearSearchResults();
+  }
+
+  function clearSearchResults() {
+    searchMatches = [];
+    searchMatchesByPage.clear();
+    activeMatchIndex = 0;
+    activeSearchMatchId = null;
+    searchBusy = false;
+    searchVersion += 1;
+  }
+
+  function handleSearchInput(value: string) {
+    searchQuery = value;
+    if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
+    searchDebounceTimer = setTimeout(() => {
+      searchDebounceTimer = null;
+      void runSearch(value);
+    }, SEARCH_DEBOUNCE_MS);
+  }
+
+  function indexMatchesByPage(matches: PdfSearchMatch[]) {
+    searchMatchesByPage.clear();
+    for (const match of matches) {
+      const list = searchMatchesByPage.get(match.pageIndex);
+      if (list) list.push(match);
+      else searchMatchesByPage.set(match.pageIndex, [match]);
+    }
+  }
+
+  async function runSearch(rawQuery: string) {
+    const query = rawQuery.trim();
+    const generation = ++searchGeneration;
+    if (!query || !pdfDoc) {
+      clearSearchResults();
+      return;
+    }
+    searchBusy = true;
+    const doc = pdfDoc;
+    const collected: PdfSearchMatch[] = [];
+    for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber += 1) {
+      let index = textIndexCache.get(pageNumber - 1);
+      if (!index) {
+        try {
+          const page = await doc.getPage(pageNumber);
+          index = await buildPageTextIndex(page);
+        } catch (err) {
+          console.warn('[PdfNoteViewer] text index failed', pageNumber, err);
+          index = { text: '', segments: [] };
+        }
+        textIndexCache.set(pageNumber - 1, index);
+      }
+      // A newer query superseded this run — abandon it.
+      if (generation !== searchGeneration) return;
+      const pageMatches = findMatchesInPage(index, pageNumber - 1, query);
+      if (pageMatches.length) collected.push(...pageMatches);
+    }
+    if (generation !== searchGeneration) return;
+    searchBusy = false;
+    searchMatches = collected;
+    indexMatchesByPage(collected);
+    if (collected.length > 0) {
+      focusMatch(0);
+    } else {
+      activeMatchIndex = 0;
+      activeSearchMatchId = null;
+      searchVersion += 1;
+    }
+  }
+
+  function focusMatch(index: number) {
+    if (searchMatches.length === 0) return;
+    const wrapped =
+      ((index % searchMatches.length) + searchMatches.length) %
+      searchMatches.length;
+    activeMatchIndex = wrapped;
+    const match = searchMatches[wrapped];
+    activeSearchMatchId = match.id;
+    searchVersion += 1;
+    scrollToPage(match.pageIndex + 1);
+    // The page may still be rendering; if its overlay is already present,
+    // centre the exact hit, otherwise the page-level scroll is enough.
+    requestAnimationFrame(() => {
+      const el = container?.querySelector<HTMLElement>(
+        `[data-search-match-id="${CSS.escape(match.id)}"]`
+      );
+      el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    });
+  }
+
+  function nextMatch() {
+    focusMatch(activeMatchIndex + 1);
+  }
+
+  function previousMatch() {
+    focusMatch(activeMatchIndex - 1);
+  }
+
   function scheduleSave() {
     if (isTrashed || !saveReady) return;
     savingState = 'pending';
@@ -471,6 +696,18 @@
         return true;
       case 'editor.pdf.toggleComments':
         commentsSidebarOpen = !commentsSidebarOpen;
+        return true;
+      case 'editor.pdf.toggleNavigator':
+        toggleNavigator();
+        return true;
+      case 'editor.pdf.find':
+        openSearch();
+        return true;
+      case 'editor.pdf.previousPage':
+        goToPreviousPage();
+        return true;
+      case 'editor.pdf.nextPage':
+        goToNextPage();
         return true;
       case 'editor.pdf.export':
         void exportCurrentPdfNote();
@@ -929,6 +1166,11 @@
       // placeholders correctly before (and instead of) a canvas mounts.
       // PDF.js caches page proxies, so this is cheap and one-shot.
       void prefetchPageSizes(pdfDoc, firstPage);
+      // Document outline (bookmarks) for the navigator's Outline tab.
+      // Resolved off the load path; the tab simply stays empty until ready.
+      void loadFlatOutline(pdfDoc).then((items) => {
+        outline = items;
+      });
       loading = false;
       savingState = 'saved';
       saveReady = true;
@@ -977,11 +1219,36 @@
     };
   });
 
+  // Ctrl/Cmd+F opens find-in-document when focus is inside the viewer,
+  // regardless of any user-assigned hotkey binding (PDF commands ship
+  // unbound). Escape from anywhere in the viewer closes the search bar.
+  $effect(() => {
+    if (!hostEl) return;
+    const host = hostEl;
+    const onKeydown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
+        event.preventDefault();
+        openSearch();
+      } else if (event.key === 'Escape' && searchOpen) {
+        closeSearch();
+      }
+    };
+    host.addEventListener('keydown', onKeydown);
+    return () => host.removeEventListener('keydown', onKeydown);
+  });
+
   onDestroy(() => {
     if (saveTimer) {
       void flushSave();
     }
     saveReady = false;
+    if (searchDebounceTimer) {
+      clearTimeout(searchDebounceTimer);
+      searchDebounceTimer = null;
+    }
+    searchGeneration += 1;
+    textIndexCache.clear();
+    searchMatchesByPage.clear();
     if (editorListener) {
       unregisterEditor(editorListener);
       editorListener = null;
@@ -1028,6 +1295,9 @@
     let currentViewport: ReturnType<
       Awaited<ReturnType<PdfDocument['getPage']>>['getViewport']
     > | null = null;
+    // Link annotations for this page (external URLs + internal jumps),
+    // fetched once per draw and overlaid as clickable anchors.
+    let currentLinks: PdfLink[] = [];
     // Register the in-flight-cancel hook so the renderObserver can pre-empt
     // this page's render the instant the page leaves the band — even if
     // the DOM teardown is still inside its 200 ms grace window. Three
@@ -1046,10 +1316,95 @@
       pageView?.cancelRendering();
     });
 
+    // Search-hit overlay: translucent boxes over every match on this page,
+    // with the active hit emphasised. Read imperatively from the parent's
+    // per-page match map; the `searchVersion` param triggers the refresh.
+    function renderSearchLayer() {
+      const pageEl = pageSurface.querySelector<HTMLElement>('.page');
+      const viewport = currentViewport;
+      if (!pageEl || !viewport) return;
+      pageEl.querySelector('.pdf-search-layer')?.remove();
+      const matches = searchMatchesByPage.get(current.pageNumber - 1);
+      if (!matches || matches.length === 0) return;
+      const layer = document.createElement('div');
+      layer.className = 'pdf-search-layer';
+      for (const match of matches) {
+        for (const rect of match.rects) {
+          const [x1, y1] = viewport.convertToViewportPoint(rect.x, rect.y);
+          const [x2, y2] = viewport.convertToViewportPoint(
+            rect.x + rect.width,
+            rect.y + rect.height
+          );
+          const node = document.createElement('div');
+          node.className = 'pdf-search-hit';
+          if (match.id === activeSearchMatchId) {
+            node.classList.add('pdf-search-hit-active');
+          }
+          node.dataset.searchMatchId = match.id;
+          node.style.left = `${Math.min(x1, x2)}px`;
+          node.style.top = `${Math.min(y1, y2)}px`;
+          node.style.width = `${Math.abs(x2 - x1)}px`;
+          node.style.height = `${Math.abs(y2 - y1)}px`;
+          layer.append(node);
+        }
+      }
+      pageEl.append(layer);
+    }
+
+    // Clickable overlay for the page's link annotations. Sits below the
+    // app-annotation layer, so links are only hit in select mode (when
+    // that layer passes pointer events through).
+    function renderLinkLayer() {
+      const pageEl = pageSurface.querySelector<HTMLElement>('.page');
+      const viewport = currentViewport;
+      if (!pageEl || !viewport) return;
+      pageEl.querySelector('.pdf-link-layer')?.remove();
+      if (currentLinks.length === 0) return;
+      const layer = document.createElement('div');
+      layer.className = 'pdf-link-layer';
+      for (const link of currentLinks) {
+        if (!Array.isArray(link.rect) || link.rect.length < 4) continue;
+        const [x1, y1] = viewport.convertToViewportPoint(
+          link.rect[0],
+          link.rect[1]
+        );
+        const [x2, y2] = viewport.convertToViewportPoint(
+          link.rect[2],
+          link.rect[3]
+        );
+        const node = document.createElement(link.url ? 'a' : 'button');
+        node.className = 'pdf-link';
+        node.style.left = `${Math.min(x1, x2)}px`;
+        node.style.top = `${Math.min(y1, y2)}px`;
+        node.style.width = `${Math.abs(x2 - x1)}px`;
+        node.style.height = `${Math.abs(y2 - y1)}px`;
+        if (link.url) {
+          const anchor = node as HTMLAnchorElement;
+          anchor.href = link.url;
+          anchor.title = link.url;
+          anchor.rel = 'noopener noreferrer';
+          anchor.addEventListener('click', (event) => {
+            event.preventDefault();
+            void openExternalUrl(link.url as string);
+          });
+        } else {
+          node.addEventListener('click', (event) => {
+            event.preventDefault();
+            void followLinkDest(link.dest);
+          });
+        }
+        layer.append(node);
+      }
+      pageEl.append(layer);
+    }
+
     function renderAppAnnotations() {
       const pageEl = pageSurface.querySelector<HTMLElement>('.page');
       const viewport = currentViewport;
       if (!pageEl || !viewport) return;
+
+      renderLinkLayer();
+      renderSearchLayer();
 
       pageEl.querySelector('.pdf-app-annotation-layer')?.remove();
       const layer = document.createElement('div');
@@ -1423,6 +1778,21 @@
       });
       pageView.setPdfPage(page);
       try {
+        // Link annotations for the clickable overlay. Best-effort: a
+        // failure here shouldn't stop the page from rendering.
+        try {
+          const annots = await page.getAnnotations({ intent: 'display' });
+          if (cancelled || generation !== drawGeneration) return;
+          currentLinks = annots
+            .filter((a: { subtype?: string }) => a.subtype === 'Link')
+            .map((a: { rect: number[]; url?: string; dest?: unknown }) => ({
+              rect: a.rect,
+              url: a.url,
+              dest: a.dest as string | unknown[] | null | undefined
+            }));
+        } catch {
+          currentLinks = [];
+        }
         await pageView.draw();
         if (cancelled || generation !== drawGeneration) return;
         renderAppAnnotations();
@@ -1509,6 +1879,18 @@
     >
       <div class="flex items-center gap-0.5">
         <ToolbarButton
+          active={navigatorOpen}
+          onclick={toggleNavigator}
+          aria-label={tUi('pdf.toolbar.navigator')}
+          title={tUi('pdf.toolbar.navigator')}
+          aria-pressed={navigatorOpen}
+        >
+          <PanelLeft aria-hidden="true" />
+        </ToolbarButton>
+
+        <ToolbarSeparator />
+
+        <ToolbarButton
           active={activeTool === 'select'}
           onclick={() => setTool('select')}
           aria-label={tUi('pdf.toolbar.select')}
@@ -1579,6 +1961,16 @@
         <ToolbarSeparator />
 
         <ToolbarButton
+          active={searchOpen}
+          onclick={() => (searchOpen ? closeSearch() : openSearch())}
+          aria-label={tUi('pdf.toolbar.find')}
+          title={tUi('pdf.toolbar.find')}
+          aria-pressed={searchOpen}
+        >
+          <Search aria-hidden="true" />
+        </ToolbarButton>
+
+        <ToolbarButton
           active={commentsSidebarOpen}
           onclick={() => (commentsSidebarOpen = !commentsSidebarOpen)}
           aria-label={tUi('pdf.toolbar.comments')}
@@ -1589,26 +1981,107 @@
         </ToolbarButton>
       </div>
 
-      {#if !mobileToolbar}
-        <ToolbarZoomControls
-          bind:open={zoomMenuOpen}
-          label={zoomLabel}
-          zoomOutLabel={tUi('pdf.toolbar.zoomOut')}
-          zoomInLabel={tUi('pdf.toolbar.zoomIn')}
-          zoomMenuLabel={tUi('pdf.toolbar.zoom')}
-          fitLabel={tUi('pdf.toolbar.fitWidth')}
-          fitActive={zoomMode === 'fit-width'}
-          zoomOptions={QUICK_ZOOMS}
-          selectedZoom={zoomMode === 'fixed' ? zoom : null}
-          onZoomOut={() => zoomBy(1 / ZOOM_STEP)}
-          onZoomIn={() => zoomBy(ZOOM_STEP)}
-          onFit={setFitWidthZoom}
-          onSelectZoom={setFixedZoom}
-        />
-      {/if}
+      <div class="flex items-center gap-0.5">
+        <ToolbarButton
+          onclick={goToPreviousPage}
+          disabled={activePageNumber <= 1}
+          aria-label={tUi('pdf.toolbar.previousPage')}
+          title={tUi('pdf.toolbar.previousPage')}
+        >
+          <ChevronLeft aria-hidden="true" />
+        </ToolbarButton>
+
+        <div class="flex items-center gap-1 text-xs text-muted-foreground">
+          <input
+            type="text"
+            inputmode="numeric"
+            value={pageInputValue}
+            aria-label={tUi('pdf.page.inputLabel')}
+            class="h-7 w-9 rounded-md border border-border bg-background text-center tabular-nums outline-none focus:ring-1 focus:ring-ring"
+            oninput={(event) =>
+              (pageInputValue = (event.currentTarget as HTMLInputElement)
+                .value)}
+            onfocus={(event) => {
+              pageInputFocused = true;
+              (event.currentTarget as HTMLInputElement).select();
+            }}
+            onblur={() => {
+              pageInputFocused = false;
+              commitPageInput();
+            }}
+            onkeydown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                (event.currentTarget as HTMLInputElement).blur();
+              }
+            }}
+          />
+          <span class="tabular-nums">
+            {tUi('pdf.page.totalLabel').replace(
+              '{total}',
+              String(pageNumbers.length)
+            )}
+          </span>
+        </div>
+
+        <ToolbarButton
+          onclick={goToNextPage}
+          disabled={activePageNumber >= pageNumbers.length}
+          aria-label={tUi('pdf.toolbar.nextPage')}
+          title={tUi('pdf.toolbar.nextPage')}
+        >
+          <ChevronRight aria-hidden="true" />
+        </ToolbarButton>
+
+        {#if !mobileToolbar}
+          <ToolbarSeparator />
+
+          <ToolbarZoomControls
+            bind:open={zoomMenuOpen}
+            label={zoomLabel}
+            zoomOutLabel={tUi('pdf.toolbar.zoomOut')}
+            zoomInLabel={tUi('pdf.toolbar.zoomIn')}
+            zoomMenuLabel={tUi('pdf.toolbar.zoom')}
+            fitLabel={tUi('pdf.toolbar.fitWidth')}
+            fitActive={zoomMode === 'fit-width'}
+            zoomOptions={QUICK_ZOOMS}
+            selectedZoom={zoomMode === 'fixed' ? zoom : null}
+            onZoomOut={() => zoomBy(1 / ZOOM_STEP)}
+            onZoomIn={() => zoomBy(ZOOM_STEP)}
+            onFit={setFitWidthZoom}
+            onSelectZoom={setFixedZoom}
+          />
+        {/if}
+      </div>
     </Toolbar>
 
+    {#if searchOpen}
+      <PdfSearchBar
+        bind:this={searchBar}
+        query={searchQuery}
+        matchCount={searchMatches.length}
+        activeIndex={activeMatchIndex}
+        busy={searchBusy}
+        onInput={handleSearchInput}
+        onNext={nextMatch}
+        onPrevious={previousMatch}
+        onClose={closeSearch}
+      />
+    {/if}
+
     <div class="flex min-h-0 flex-1 overflow-hidden">
+      {#if navigatorOpen && pdfDoc}
+        <PdfNavigatorSidebar
+          {pdfDoc}
+          pageCount={pageNumbers.length}
+          {pageSizes}
+          {activePageNumber}
+          {outline}
+          onJump={(page) => scrollToPage(page)}
+          onClose={() => (navigatorOpen = false)}
+        />
+      {/if}
+
       <div
         bind:this={container}
         use:ctrlWheelZoom
@@ -1636,7 +2109,8 @@
                   activeTool,
                   selectedAnnotationId,
                   shouldRender,
-                  invalidation
+                  invalidation,
+                  searchVersion
                 }}
                 style="width:{size.width}px; height:{size.height}px"
                 class="pdf-page-host pdfViewer bg-white shadow-sm ring-1 ring-border"
@@ -1875,5 +2349,52 @@
 
   :global(.pdf-page-host .pdf-app-annotation-resolved) {
     opacity: 0.36;
+  }
+
+  /* Link overlay: sits above the canvas/text but below the annotation
+     layer (z-index 3), so links are only clickable in select mode when
+     that layer passes pointer events through. */
+  :global(.pdf-page-host .pdf-link-layer) {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    overflow: clip;
+  }
+
+  :global(.pdf-page-host .pdf-link) {
+    position: absolute;
+    display: block;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    border-radius: 2px;
+    cursor: pointer;
+  }
+
+  :global(.pdf-page-host .pdf-link:hover) {
+    background: color-mix(in srgb, var(--ring) 18%, transparent);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--ring) 55%, transparent);
+  }
+
+  /* Search-hit overlay: non-interactive translucent boxes. */
+  :global(.pdf-page-host .pdf-search-layer) {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    overflow: clip;
+    pointer-events: none;
+  }
+
+  :global(.pdf-page-host .pdf-search-hit) {
+    position: absolute;
+    border-radius: 1px;
+    background: rgb(250 204 21 / 0.42);
+    mix-blend-mode: multiply;
+  }
+
+  :global(.pdf-page-host .pdf-search-hit-active) {
+    background: rgb(249 115 22 / 0.55);
+    box-shadow: 0 0 0 1px rgb(234 88 12 / 0.9);
   }
 </style>
