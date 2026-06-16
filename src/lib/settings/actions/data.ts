@@ -23,7 +23,12 @@ import {
 } from '$lib/stores/tree.svelte';
 import { pickImportChoice } from '$lib/components/import-choice-dialog.svelte';
 import { alert, confirm } from '$lib/components/confirm-dialog.svelte';
-import { showExportResult } from '$lib/components/export-result-dialog.svelte';
+import {
+  showBackupResult,
+  showExportResult,
+  showMergeResult,
+  showRestoreReadyResult
+} from '$lib/components/export-result-dialog.svelte';
 import { tUi } from '../i18n.svelte';
 
 export const DATA_ACTIONS: Record<string, () => void | Promise<void>> = {
@@ -99,13 +104,7 @@ export const DATA_ACTIONS: Record<string, () => void | Promise<void>> = {
         // User cancelled the Save-As dialog — stay quiet, no toast.
         return;
       }
-      await alert({
-        title: tUi('data.backupNow.success.title'),
-        message: tUi('data.backupNow.success.message')
-          .replace('{notes}', String(report.counts.notes))
-          .replace('{folders}', String(report.counts.folders))
-          .replace('{destination}', report.destination)
-      });
+      await showBackupResult(report);
     } catch (err) {
       console.error('[settings] backup-now failed', err);
       await alert({
@@ -192,14 +191,7 @@ export const DATA_ACTIONS: Record<string, () => void | Promise<void>> = {
       try {
         const report = await importMerge(preview.token);
         await loadTree();
-        await alert({
-          title: tUi('data.import.merge.success.title'),
-          message: tUi('data.import.merge.success.message')
-            .replace('{notes}', String(report.notes_added))
-            .replace('{folders}', String(report.folders_added))
-            .replace('{assets}', String(report.assets_added))
-            .replace('{orphaned}', String(report.notes_orphaned))
-        });
+        await showMergeResult(report);
       } catch (err) {
         console.error('[settings] import_merge failed', err);
         await alert({
@@ -230,13 +222,8 @@ export const DATA_ACTIONS: Record<string, () => void | Promise<void>> = {
     try {
       const staged = await importRestore(preview.token, preview.same_account);
       if (staged.restart_required) {
-        const restart = await confirm({
-          title: tUi('data.import.restart.title'),
-          message: tUi('data.import.restart.message'),
-          confirmLabel: tUi('data.import.restart.button'),
-          cancelLabel: tUi('data.import.restart.later')
-        });
-        if (restart) {
+        const action = await showRestoreReadyResult(preview, staged);
+        if (action === 'restart') {
           const { relaunch } = await import('@tauri-apps/plugin-process');
           await relaunch();
         }

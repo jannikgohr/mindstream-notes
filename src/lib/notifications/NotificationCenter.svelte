@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { Bell, Loader2 } from 'lucide-svelte';
+  import { Loader2 } from 'lucide-svelte';
+  import { Bell } from '@jis3r/icons';
   import { Button } from '$lib/components/ui/button';
   import { tUi } from '$lib/settings/i18n.svelte';
   import {
@@ -67,7 +68,7 @@
     {#if notificationState.updateScanPending}
       <Loader2 class="size-4 animate-spin" />
     {:else}
-      <Bell class="size-4" />
+      <Bell size={16} />
     {/if}
     {#if notificationCount > 0}
       <span

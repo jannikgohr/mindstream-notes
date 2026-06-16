@@ -11,6 +11,7 @@
   import { importChoiceQueue } from './import-choice-dialog.svelte';
   import type { ImportChoice } from './import-choice-dialog.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
+  import { formatBytes } from '$lib/utils';
 
   const current = $derived(importChoiceQueue.items[0] ?? null);
 
@@ -19,13 +20,6 @@
     if (!item) return;
     importChoiceQueue.items = importChoiceQueue.items.slice(1);
     item.resolve(choice);
-  }
-
-  function formatBytes(n: number): string {
-    if (n < 1024) return `${n} B`;
-    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-    if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-    return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
   }
 
   function formatAccount(

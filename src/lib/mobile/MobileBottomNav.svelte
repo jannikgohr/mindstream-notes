@@ -5,6 +5,9 @@
    * icon + label and a top accent stripe. Add a new tab by appending
    * to the TABS array and matching MobileView.
    */
+  // Bottom-nav star is a tab affordance, not a favourite-toggle —
+  // there's no "flip" moment to celebrate, so we stick to the static
+  // lucide glyph instead of pulling in jis3r's hover-driven version.
   import { Home, Share2, Star, Trash2 } from 'lucide-svelte';
   import type { IconComponent } from '$lib/settings/icons';
   import { tUi } from '$lib/settings/i18n.svelte';

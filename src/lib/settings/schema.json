@@ -49,14 +49,6 @@
               "default": "live",
               "options": ["live", "1m", "5m", "15m", "manual"],
               "showIf": { "id": "account.syncEnabled", "equals": true }
-            },
-            {
-              "id": "account.conflict",
-              "scope": "V",
-              "type": "radio",
-              "default": "ask",
-              "options": ["ask", "prefer-local", "prefer-remote", "keep-both"],
-              "showIf": { "id": "account.syncEnabled", "equals": true }
             }
           ]
         }
@@ -422,35 +414,6 @@
               "scope": "V",
               "type": "button",
               "actionId": "import-notes"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "id": "privacy",
-      "icon": "shield",
-      "sections": [
-        {
-          "id": "privacy.telemetry",
-          "settings": [
-            {
-              "id": "privacy.usageStats",
-              "scope": "G",
-              "type": "toggle",
-              "default": false
-            },
-            {
-              "id": "privacy.crashReports",
-              "scope": "G",
-              "type": "toggle",
-              "default": true
-            },
-            {
-              "id": "privacy.clearCache",
-              "scope": "D",
-              "type": "button",
-              "actionId": "clear-cache"
             }
           ]
         }

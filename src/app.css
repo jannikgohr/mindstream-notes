@@ -37,8 +37,6 @@
    * the tab strip reads as a distinct band from both the content panel
    * below it and the inactive tabs above it. */
   --dock-strip: oklch(0.9542 0.003 247.86);
-  --left-sidebar-width: 0px;
-  --left-sidebar-enabled: 1;
   /* Height of the floating mobile formatting toolbar — set live by
    * MobileEditorToolbar.svelte on mount, cleared on destroy. The 0px
    * default keeps desktop unaffected and tells CSS resolvers (IDE
@@ -214,6 +212,45 @@ body {
   margin: 0 1px;
   padding: 0 12px;
   transition: background-color 120ms ease-out;
+}
+
+.dockview-theme-bridge .dv-tabs-container > .dv-tab.dv-tab--shifting {
+  transition:
+    transform var(--dv-transition-duration, 200ms) ease-out,
+    margin var(--dv-transition-duration, 200ms) ease-out;
+}
+.dockview-theme-bridge .dv-tabs-container > .dv-tab.dv-tab--dragging {
+  transition:
+    width var(--dv-transition-duration, 200ms) ease-out,
+    padding var(--dv-transition-duration, 200ms) ease-out,
+    margin var(--dv-transition-duration, 200ms) ease-out,
+    opacity var(--dv-transition-duration, 200ms) ease-out;
+}
+
+.dv-tab-ghost-drag::after {
+  display: none !important;
+}
+
+.dv-tab-ghost-drag {
+  margin: 0 !important;
+}
+
+/* The seated pointer-drag ghost plus smooth tab gap are enough feedback for
+ * dropping into a tab strip. Hide Dockview's generic header drop overlay on the
+ * empty/right chrome so it doesn't flash a second "drop here" highlight. */
+body.dv-tab-dragging
+  .dockview-theme-bridge
+  .dv-tabs-and-actions-container
+  > .dv-void-container.dv-drop-target
+  > .dv-drop-target-dropzone
+  > .dv-drop-target-selection,
+body.dv-tab-dragging
+  .dockview-theme-bridge
+  .dv-tabs-and-actions-container
+  > .dv-right-actions-container.dv-drop-target
+  > .dv-drop-target-dropzone
+  > .dv-drop-target-selection {
+  opacity: 0 !important;
 }
 
 .dockview-theme-bridge .dv-tabs-container > .dv-tab:first-child {
@@ -500,11 +537,20 @@ body {
   padding: 1.25rem 5px;
 }
 
-main:not(.fullscreen-note) .milkdown-drop-indicator {
-  left: calc(
-    var(--left-sidebar-width) * var(--left-sidebar-enabled) * -1
-  ) !important;
-  top: -40px !important;
+/*
+ * Only show the drop indicator for editor-initiated block drags. The upstream
+ * prosemirror-drop-indicator binds its `dragover` handler to the whole editor
+ * and shows the line for ANY drag passing over it — file drops, Dockview tab
+ * and sash drags, etc. — none of which are block reorders. The block plugin
+ * flags a genuine block drag with `data-dragging="true"` on `.ProseMirror`
+ * (set from ProseMirror's `view.dragging`, which foreign drags never set);
+ * the indicator is appended as a sibling of `.ProseMirror`, so when that flag
+ * is absent we force-hide it, overriding the plugin's inline `display: block`.
+ * During a real block drag the flag is set and the plugin's own show/hide
+ * (it sets `display: none` when there's no target line) governs as normal.
+ */
+.ProseMirror:not([data-dragging='true']) ~ .milkdown-drop-indicator {
+  display: none !important;
 }
 
 .ProseMirror {
@@ -826,46 +872,84 @@ body.dv-tab-dragging .freeform-canvas-host * {
 }
 
 /* -------------------------------------------------------------------------
- *  ExportResultDialog — PartyPopper celebration wave
- *  ---------------------------------------------------
- *  Lives here rather than in the component's <style> block because
- *  Svelte scopes scoped CSS even through `:global()` when combined with
- *  `@media` queries, which made the `prefers-reduced-motion` override
- *  silently fail in practice. Hoisting to app.css sidesteps the scoping
- *  pipeline entirely.
+ *  Animated-icon motion gates
+ *  --------------------------
+ *  Honour both the OS-level `prefers-reduced-motion` preference AND
+ *  the in-app `appearance.reduceMotion` toggle (wired up in
+ *  `src/routes/+layout.svelte`, which mirrors the setting onto
+ *  `html.reduce-motion`). These rules live in global CSS because
+ *  Svelte's scoped pipeline chews on `:global()` inside @media
+ *  selectors, which made earlier per-component overrides silently fail.
+ *
+ *  Add new animated-icon class hooks here when shipping new
+ *  microinteractions so a single switch governs them all.
  * ------------------------------------------------------------------------- */
-
-.animate-party-wave {
-  transform-origin: 50% 90%;
-  animation: party-wave-once 0.9s ease-out 0.35s 1 both;
+@media (prefers-reduced-motion: reduce) {
+  /* Local microinteractions (PartyPopperAnimated component). */
+  .party-popper.animate .pp-popper,
+  .party-popper.animate .pp-dots,
+  .party-popper.animate .pp-lines,
+  .party-popper.animate .pp-lines path {
+    animation: none;
+  }
+  /*
+   * jis3r/icons internal animation classes. The library doesn't
+   * honour either motion preference itself — these rules suppress
+   * the transitions even when the user hovers an icon directly.
+   * `!important` because the per-icon styles are scoped (so they
+   * win specificity) and use `transform` directly.
+   *
+   * Each icon ships its own class name (no shared root), so this
+   * block has to enumerate them. Add new entries here when adopting
+   * additional jis3r icons.
+   */
+  .animate-group,
+  .animate-rect,
+  .animate-path,
+  .animate-bell,
+  .animate-clapper,
+  .animate-svg,
+  .settings-gear.animate,
+  /*
+   * jis3r Search puts the animation on a bare `.animate` class on the
+   * inner SVG — too generic to target alone without clobbering shadcn
+   * dialog state classes etc. Scope it through the wrapper div's
+   * `aria-label="search"` which the library sets unconditionally.
+   */
+  [aria-label='search'] svg.animate {
+    transform: none !important;
+    transition: none !important;
+    animation: none !important;
+  }
 }
 
-@keyframes party-wave-once {
-  0% {
-    transform: rotate(0deg) scale(1);
-  }
-  35% {
-    transform: rotate(-10deg) scale(1.1);
-  }
-  65% {
-    transform: rotate(8deg) scale(1.1);
-  }
-  100% {
-    transform: rotate(0deg) scale(1);
-  }
+.reduce-motion .party-popper.animate .pp-popper,
+.reduce-motion .party-popper.animate .pp-dots,
+.reduce-motion .party-popper.animate .pp-lines,
+.reduce-motion .party-popper.animate .pp-lines path {
+  animation: none;
+}
+
+.reduce-motion .animate-group,
+.reduce-motion .animate-rect,
+.reduce-motion .animate-path,
+.reduce-motion .animate-bell,
+.reduce-motion .animate-clapper,
+.reduce-motion .animate-svg,
+.reduce-motion .settings-gear.animate,
+.reduce-motion [aria-label='search'] svg.animate {
+  transform: none !important;
+  transition: none !important;
+  animation: none !important;
 }
 
 /*
- * Honour both the OS-level preference AND the in-app
- * `appearance.reduceMotion` toggle (wired up in src/routes/+layout.svelte,
- * which mirrors the setting onto `html.reduce-motion`).
+ * Favourite-toggle "filled" state for jis3r Star. The icon's own SVG
+ * sets `fill="none"`; CSS overrides the presentation attribute so the
+ * star renders as a filled glyph when a note is marked favourite.
+ * Targets the SVG (and the path inside it, which inherits) under the
+ * wrapper div the icon component renders.
  */
-@media (prefers-reduced-motion: reduce) {
-  .animate-party-wave {
-    animation: none;
-  }
-}
-
-.reduce-motion .animate-party-wave {
-  animation: none;
+.fav-filled svg {
+  fill: currentColor;
 }

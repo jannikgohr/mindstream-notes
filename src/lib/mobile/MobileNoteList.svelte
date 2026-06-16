@@ -13,11 +13,13 @@
    * yet, so it just shows an explanatory empty state. Wire a real filter
    * in here when collab metadata lands.
    */
-  import { Folder, MoreVertical, Star } from 'lucide-svelte';
+  import { Folder, Loader2, MoreVertical, Trash2 } from 'lucide-svelte';
+  import FavouriteStar from '$lib/components/FavouriteStar.svelte';
   import type { NoteSummary, TreeNode } from '$lib/api';
   import { TRASH_ID } from '$lib/api';
   import { noteKindIcon } from '$lib/components/note-kind-icon';
   import {
+    emptyTrash as emptyTrashStore,
     moveCollectionTo,
     moveNoteTo,
     purgeCollection,
@@ -32,10 +34,9 @@
   } from '$lib/stores/tree.svelte';
   import { ui } from '$lib/state.svelte';
   import { sortTree } from '$lib/sort';
-  import ContextMenu, {
-    type MenuItem
-  } from '$lib/components/ContextMenu.svelte';
-  import { confirm } from '$lib/components/confirm-dialog.svelte';
+  import ContextMenu from '$lib/components/ContextMenu.svelte';
+  import type { MenuItem } from '$lib/components/context-menu-types';
+  import { alert, confirm } from '$lib/components/confirm-dialog.svelte';
   import MoveToSheet, { type MoveTarget } from './MoveToSheet.svelte';
   import NameInputSheet from './NameInputSheet.svelte';
   import {
@@ -146,6 +147,13 @@
   // desktop share the Rust-backed scorer). The list itself stays a plain
   // tree view; the top-bar's search pill opens the dialog.
   const visible = $derived<TreeNode[]>(nodes);
+  const showTrashRootActions = $derived(
+    mobileState.view === 'trash' && mobileState.currentFolderId === null
+  );
+  const trashRootItemCount = $derived(
+    showTrashRootActions ? visible.length : 0
+  );
+  const trashRootEmpty = $derived(trashRootItemCount === 0);
 
   function previewFor(noteId: string): string {
     const n = tree.notesById[noteId];
@@ -194,6 +202,7 @@
 
   let moveTarget = $state<MoveTarget | null>(null);
   let renameTarget = $state<NodeRef | null>(null);
+  let emptyTrashPending = $state(false);
 
   function openContextMenu(e: MouseEvent, target: NodeRef) {
     e.stopPropagation();
@@ -295,6 +304,34 @@
     else void purgeCollection(t.id);
   }
 
+  async function startEmptyTrash() {
+    if (emptyTrashPending || trashRootEmpty) return;
+    if (
+      !(await confirm({
+        title: 'Delete all permanently',
+        message:
+          'Everything in Trash will be removed. This includes items inside trashed folders and cannot be undone.',
+        confirmLabel: 'Delete all',
+        destructive: true
+      }))
+    ) {
+      return;
+    }
+
+    emptyTrashPending = true;
+    try {
+      await emptyTrashStore();
+    } catch (err) {
+      console.error('[mobile] empty trash failed', err);
+      await alert({
+        title: "Couldn't empty Trash",
+        message: String(err)
+      });
+    } finally {
+      emptyTrashPending = false;
+    }
+  }
+
   function startRestore(t: NodeRef) {
     if (t.kind === 'note') void restoreNote(t.id);
     else void restoreCollection(t.id);
@@ -340,46 +377,122 @@
     <p class="px-1 py-2 text-sm text-destructive">
       Couldn't load notes: {tree.error}
     </p>
-  {:else if visible.length === 0}
-    <p class="px-1 py-6 text-center text-sm text-muted-foreground">
-      {emptyStateMessage()}
-    </p>
-  {:else if mobileState.displayMode === 'grid'}
-    <div class="grid grid-cols-2 gap-2">
-      {#each visible as node (node.kind + ':' + node.id)}
-        {@const fav = node.kind === 'note' && isFavourite(node.id)}
-        {@const noteKind =
-          node.kind === 'note' ? tree.notesById[node.id]?.note_kind : null}
-        <!-- Wrapper is a div so the favourite-toggle button can sit inside
-             alongside the primary tap target without nesting <button>s. -->
-        <div
-          class="relative h-32 rounded-lg border border-border bg-card shadow-sm"
+  {:else}
+    {#if showTrashRootActions && !trashRootEmpty}
+      <div class="mb-3 flex justify-start">
+        <button
+          type="button"
+          class="inline-flex h-9 max-w-full shrink-0 items-center justify-center gap-1.5 rounded-md bg-destructive px-3 text-xs font-semibold text-destructive-foreground shadow-sm transition-colors hover:bg-destructive/90 disabled:cursor-not-allowed disabled:opacity-50"
+          onclick={() => void startEmptyTrash()}
+          disabled={trashRootEmpty || emptyTrashPending}
+          aria-label="Delete all trash permanently"
+          title="Delete all permanently"
         >
-          <button
-            type="button"
-            class="flex h-full w-full flex-col items-start gap-1.5 rounded-lg p-3 pr-9 text-left hover:bg-accent/50"
-            onclick={() => handleNodeTap(node)}
-          >
-            {#if node.kind === 'folder'}
-              <Folder class="size-5 text-muted-foreground" />
-            {:else}
-              {@const Icon = noteKindIcon(noteKind)}
-              <Icon class="size-5 text-muted-foreground" />
-            {/if}
-            <span class="line-clamp-2 text-sm font-medium">{node.name}</span>
-            {#if node.kind === 'note'}
-              <span class="mt-auto text-[10px] text-muted-foreground">
-                {previewFor(node.id)}
-              </span>
-            {/if}
-          </button>
+          {#if emptyTrashPending}
+            <Loader2 class="size-3.5 animate-spin" />
+          {:else}
+            <Trash2 class="size-3.5" />
+          {/if}
+          <span class="truncate">Delete all permanently</span>
+        </button>
+      </div>
+    {/if}
+
+    {#if visible.length === 0}
+      <p class="px-1 py-6 text-center text-sm text-muted-foreground">
+        {emptyStateMessage()}
+      </p>
+    {:else if mobileState.displayMode === 'grid'}
+      <div class="grid grid-cols-2 gap-2">
+        {#each visible as node (node.kind + ':' + node.id)}
+          {@const fav = node.kind === 'note' && isFavourite(node.id)}
+          {@const noteKind =
+            node.kind === 'note' ? tree.notesById[node.id]?.note_kind : null}
+          <!-- Wrapper is a div so the favourite-toggle button can sit inside
+             alongside the primary tap target without nesting <button>s. -->
           <div
-            class="absolute right-1 top-1 flex flex-col items-center gap-0.5"
+            class="relative h-32 rounded-lg border border-border bg-card shadow-sm"
           >
-            {#if node.kind === 'note'}
+            <button
+              type="button"
+              class="flex h-full w-full flex-col items-start gap-1.5 rounded-lg p-3 pr-9 text-left hover:bg-accent/50"
+              onclick={() => handleNodeTap(node)}
+            >
+              {#if node.kind === 'folder'}
+                <Folder class="size-5 text-muted-foreground" />
+              {:else}
+                {@const Icon = noteKindIcon(noteKind)}
+                <Icon class="size-5 text-muted-foreground" />
+              {/if}
+              <span class="line-clamp-2 text-sm font-medium">{node.name}</span>
+              {#if node.kind === 'note'}
+                <span class="mt-auto text-[10px] text-muted-foreground">
+                  {previewFor(node.id)}
+                </span>
+              {/if}
+            </button>
+            <div
+              class="absolute right-1 top-1 flex flex-col items-center gap-0.5"
+            >
+              {#if node.kind === 'note'}
+                <button
+                  type="button"
+                  class="rounded p-1 text-muted-foreground hover:text-foreground"
+                  onclick={() => toggleFavourite(node.id)}
+                  aria-pressed={fav}
+                  aria-label={fav
+                    ? 'Remove from favourites'
+                    : 'Add to favourites'}
+                  title={fav ? 'Remove from favourites' : 'Add to favourites'}
+                >
+                  <FavouriteStar size={16} favourited={fav} />
+                </button>
+              {/if}
               <button
                 type="button"
                 class="rounded p-1 text-muted-foreground hover:text-foreground"
+                onclick={(e) =>
+                  openContextMenu(e, { kind: node.kind, id: node.id })}
+                aria-label="More actions"
+                title="More actions"
+              >
+                <MoreVertical class="size-4" />
+              </button>
+            </div>
+          </div>
+        {/each}
+      </div>
+    {:else}
+      <ul class="flex flex-col">
+        {#each visible as node (node.kind + ':' + node.id)}
+          {@const fav = node.kind === 'note' && isFavourite(node.id)}
+          {@const noteKind =
+            node.kind === 'note' ? tree.notesById[node.id]?.note_kind : null}
+          <li class="flex w-full items-center gap-1">
+            <button
+              type="button"
+              class="flex min-w-0 flex-1 items-center gap-3 rounded-md px-2 py-2.5 text-left hover:bg-accent"
+              onclick={() => handleNodeTap(node)}
+            >
+              {#if node.kind === 'folder'}
+                <Folder class="size-5 shrink-0 text-muted-foreground" />
+              {:else}
+                {@const Icon = noteKindIcon(noteKind)}
+                <Icon class="size-5 shrink-0 text-muted-foreground" />
+              {/if}
+              <span class="flex min-w-0 flex-1 flex-col">
+                <span class="truncate text-sm font-medium">{node.name}</span>
+                {#if node.kind === 'note'}
+                  <span class="truncate text-xs text-muted-foreground">
+                    {previewFor(node.id)}
+                  </span>
+                {/if}
+              </span>
+            </button>
+            {#if node.kind === 'note'}
+              <button
+                type="button"
+                class="shrink-0 rounded p-2 text-muted-foreground hover:text-foreground"
                 onclick={() => toggleFavourite(node.id)}
                 aria-pressed={fav}
                 aria-label={fav
@@ -387,12 +500,12 @@
                   : 'Add to favourites'}
                 title={fav ? 'Remove from favourites' : 'Add to favourites'}
               >
-                <Star class="size-4" fill={fav ? 'currentColor' : 'none'} />
+                <FavouriteStar size={16} favourited={fav} />
               </button>
             {/if}
             <button
               type="button"
-              class="rounded p-1 text-muted-foreground hover:text-foreground"
+              class="shrink-0 rounded p-2 text-muted-foreground hover:text-foreground"
               onclick={(e) =>
                 openContextMenu(e, { kind: node.kind, id: node.id })}
               aria-label="More actions"
@@ -400,62 +513,10 @@
             >
               <MoreVertical class="size-4" />
             </button>
-          </div>
-        </div>
-      {/each}
-    </div>
-  {:else}
-    <ul class="flex flex-col">
-      {#each visible as node (node.kind + ':' + node.id)}
-        {@const fav = node.kind === 'note' && isFavourite(node.id)}
-        {@const noteKind =
-          node.kind === 'note' ? tree.notesById[node.id]?.note_kind : null}
-        <li class="flex w-full items-center gap-1">
-          <button
-            type="button"
-            class="flex min-w-0 flex-1 items-center gap-3 rounded-md px-2 py-2.5 text-left hover:bg-accent"
-            onclick={() => handleNodeTap(node)}
-          >
-            {#if node.kind === 'folder'}
-              <Folder class="size-5 shrink-0 text-muted-foreground" />
-            {:else}
-              {@const Icon = noteKindIcon(noteKind)}
-              <Icon class="size-5 shrink-0 text-muted-foreground" />
-            {/if}
-            <span class="flex min-w-0 flex-1 flex-col">
-              <span class="truncate text-sm font-medium">{node.name}</span>
-              {#if node.kind === 'note'}
-                <span class="truncate text-xs text-muted-foreground">
-                  {previewFor(node.id)}
-                </span>
-              {/if}
-            </span>
-          </button>
-          {#if node.kind === 'note'}
-            <button
-              type="button"
-              class="shrink-0 rounded p-2 text-muted-foreground hover:text-foreground"
-              onclick={() => toggleFavourite(node.id)}
-              aria-pressed={fav}
-              aria-label={fav ? 'Remove from favourites' : 'Add to favourites'}
-              title={fav ? 'Remove from favourites' : 'Add to favourites'}
-            >
-              <Star class="size-4" fill={fav ? 'currentColor' : 'none'} />
-            </button>
-          {/if}
-          <button
-            type="button"
-            class="shrink-0 rounded p-2 text-muted-foreground hover:text-foreground"
-            onclick={(e) =>
-              openContextMenu(e, { kind: node.kind, id: node.id })}
-            aria-label="More actions"
-            title="More actions"
-          >
-            <MoreVertical class="size-4" />
-          </button>
-        </li>
-      {/each}
-    </ul>
+          </li>
+        {/each}
+      </ul>
+    {/if}
   {/if}
 </div>
 

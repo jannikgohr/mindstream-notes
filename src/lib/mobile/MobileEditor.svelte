@@ -5,14 +5,17 @@
    * this is foreground. NoteEditor is shared with desktop — only the
    * surrounding chrome changes per platform.
    */
-  import { ArrowLeft, Star } from 'lucide-svelte';
+  import { ArrowLeft, Info, X } from 'lucide-svelte';
+  import FavouriteStar from '$lib/components/FavouriteStar.svelte';
   import { Button } from '$lib/components/ui/button';
   import NoteStatusIcons from '$lib/desktop/NoteStatusIcons.svelte';
+  import MetadataPanel from '$lib/components/MetadataPanel.svelte';
   import NoteEditor from '$lib/components/NoteEditor.svelte';
   import FreeformNoteEditor from '$lib/components/FreeformNoteEditor.svelte';
   import DrawingNoteEditor from '$lib/components/DrawingNoteEditor.svelte';
   import PdfNoteViewer from '$lib/components/PdfNoteViewer.svelte';
   import UnknownNoteKindError from '$lib/components/UnknownNoteKindError.svelte';
+  import { tUi } from '$lib/settings/i18n.svelte';
   import { tree } from '$lib/stores/tree.svelte';
   import { ui } from '$lib/state.svelte';
   import { isFavourite, navigateBack, toggleFavourite } from './state.svelte';
@@ -20,6 +23,7 @@
   const noteId = $derived(ui.activeNoteId);
   const note = $derived(noteId ? tree.notesById[noteId] : null);
   const fav = $derived(noteId ? isFavourite(noteId) : false);
+  let metadataOpen = $state(false);
 
   function back() {
     // navigateBack pops the browser history entry pushed by openNote,
@@ -29,6 +33,11 @@
     // next Android back press also Just Works.
     navigateBack();
   }
+
+  $effect(() => {
+    void noteId;
+    metadataOpen = false;
+  });
 </script>
 
 <div class="flex h-full w-full flex-col">
@@ -65,7 +74,16 @@
         aria-label={fav ? 'Remove from favourites' : 'Add to favourites'}
         title={fav ? 'Remove from favourites' : 'Add to favourites'}
       >
-        <Star class="size-5" fill={fav ? 'currentColor' : 'none'} />
+        <FavouriteStar size={20} favourited={fav} />
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon"
+        onclick={() => (metadataOpen = true)}
+        aria-label={tUi('metadata.open')}
+        title={tUi('metadata.open')}
+      >
+        <Info class="size-5" />
       </Button>
     {/if}
   </header>
@@ -99,3 +117,38 @@
     {/if}
   </main>
 </div>
+
+{#if metadataOpen && noteId}
+  <button
+    type="button"
+    aria-label={tUi('close')}
+    class="fixed inset-0 z-40 bg-black/40"
+    onclick={() => (metadataOpen = false)}
+  ></button>
+  <div
+    class="safe-bottom safe-x fixed inset-x-0 bottom-0 z-50 flex max-h-[85vh] min-h-[45vh] flex-col overflow-hidden rounded-t-xl border border-border bg-card shadow-2xl"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="mobile-metadata-title"
+  >
+    <header
+      class="flex h-12 shrink-0 items-center justify-between border-b border-border px-3"
+    >
+      <h2 id="mobile-metadata-title" class="truncate text-sm font-semibold">
+        {tUi('metadata.title')}
+      </h2>
+      <Button
+        variant="ghost"
+        size="icon"
+        onclick={() => (metadataOpen = false)}
+        title={tUi('close')}
+        aria-label={tUi('close')}
+      >
+        <X class="size-5" />
+      </Button>
+    </header>
+    <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+      <MetadataPanel />
+    </div>
+  </div>
+{/if}

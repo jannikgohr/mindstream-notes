@@ -13,8 +13,10 @@
     IDockviewPanel,
     IContentRenderer,
     GroupPanelPartInitParameters,
+    TabPartInitParameters,
     DockviewGroupPanel
   } from 'dockview-core';
+  import { DefaultTab } from 'dockview-core';
   import TopBar from './DesktopTopBar.svelte';
   import FileExplorer from '$lib/components/FileExplorer.svelte';
   import MetadataPanel from '$lib/components/MetadataPanel.svelte';
@@ -26,6 +28,11 @@
   import ResizeHandle from '$lib/components/ResizeHandle.svelte';
   import SettingsDialog from '$lib/settings/SettingsDialog.svelte';
   import { PopoutHeaderAction } from './dockview-popout-action';
+  import {
+    ensureTabDragPin,
+    startTabDragPin,
+    stopTabDragPin
+  } from './dockview-tab-drag-pin';
   import {
     focusExistingNoteWindow,
     focusMainWindow,
@@ -50,6 +57,11 @@
   const openPanels = new Map<string, IDockviewPanel>();
   let saveLayoutTimer: ReturnType<typeof setTimeout> | null = null;
   let pendingTrayNoteId: string | null = null;
+  let pointerDraggedPanel: IDockviewPanel | null = null;
+  let pointerTabDropTarget: {
+    group: DockviewGroupPanel;
+    index: number;
+  } | null = null;
   type NotePanelComponent =
     | 'noteEditor'
     | 'freeformNote'
@@ -122,6 +134,13 @@
     }
   }
 
+  class DockviewTabRenderer extends DefaultTab {
+    init(parameters: TabPartInitParameters): void {
+      super.init(parameters);
+      this.element.dataset.dockPanelId = parameters.api.id;
+    }
+  }
+
   async function setupDockview() {
     if (!dockHost) return;
     const { DockviewComponent } = await import('dockview-core');
@@ -146,9 +165,21 @@
             return new SvelteRenderer(UnknownNoteKindError);
         }
       },
-      theme: { name: 'bridge', className: 'dockview-theme-bridge' },
+      defaultTabComponent: 'noteTab',
+      createTabComponent: () => new DockviewTabRenderer(),
+      theme: {
+        name: 'bridge',
+        className: 'dockview-theme-bridge',
+        tabAnimation: 'smooth',
+        dndTabIndicator: 'line'
+      },
       disableFloatingGroups: false,
       disableDnd: false,
+      // Pointer-driven tab drags avoid Chromium/Tauri's native HTML5 drag
+      // cursor badge, which can render as a missing-glyph square beside the
+      // mouse cursor. The seated tab visual is pinned by
+      // dockview-tab-drag-pin.ts.
+      dndStrategy: 'pointer',
       createRightHeaderActionComponent: () => new PopoutHeaderAction(dock)
     });
 
@@ -181,8 +212,16 @@
      * own drop overlay receive the event cleanly even when an embedded
      * canvas editor has its own drag/drop handling.
      */
-    dock.onWillDragPanel(markDragging);
-    dock.onWillDragGroup(markDragging);
+    ensureTabDragPin();
+    dock.onWillDragPanel((event) => {
+      pointerDraggedPanel = event.panel;
+      markDragging();
+    });
+    dock.onWillDragGroup(() => {
+      pointerDraggedPanel = null;
+      pointerTabDropTarget = null;
+      markDragging();
+    });
 
     if (!tree.ready) await loadTree();
 
@@ -339,9 +378,101 @@
    */
   function markDragging() {
     document.body.classList.add('dv-tab-dragging');
+    // Start pinning the pointer-drag ghost to the tab strip (see
+    // dockview-tab-drag-pin.ts). Idempotent.
+    startTabDragPin();
   }
   function clearDragging() {
     document.body.classList.remove('dv-tab-dragging');
+    stopTabDragPin();
+    pointerDraggedPanel = null;
+    pointerTabDropTarget = null;
+  }
+
+  function findDockGroupForElement(el: Element): DockviewGroupPanel | null {
+    return (
+      dock?.groups.find((group) => {
+        const element = group.element as HTMLElement | undefined;
+        return !!element?.contains(el);
+      }) ?? null
+    );
+  }
+
+  function tabElementForPanel(
+    group: DockviewGroupPanel,
+    panelId: string
+  ): HTMLElement | null {
+    const escapedId = CSS.escape(panelId);
+    return (
+      group.element
+        .querySelector<HTMLElement>(`[data-dock-panel-id="${escapedId}"]`)
+        ?.closest<HTMLElement>('.dv-tab') ?? null
+    );
+  }
+
+  function updatePointerTabDropTarget(event: PointerEvent) {
+    if (!dock || !pointerDraggedPanel) return;
+    const strip = document
+      .elementFromPoint(event.clientX, event.clientY)
+      ?.closest<HTMLElement>('.dv-tabs-and-actions-container');
+    if (!strip) {
+      pointerTabDropTarget = null;
+      return;
+    }
+
+    const group = findDockGroupForElement(strip);
+    if (!group || group.locked) {
+      pointerTabDropTarget = null;
+      return;
+    }
+
+    const panels = group.panels;
+    let insertionIndex = panels.length;
+    for (let i = 0; i < panels.length; i += 1) {
+      const tab = tabElementForPanel(group, panels[i].id);
+      if (!tab) continue;
+      const rect = tab.getBoundingClientRect();
+      if (event.clientX < rect.left + rect.width / 2) {
+        insertionIndex = i;
+        break;
+      }
+    }
+
+    const sourceIndex =
+      pointerDraggedPanel.group === group
+        ? panels.findIndex((panel) => panel.id === pointerDraggedPanel?.id)
+        : -1;
+    const adjustedIndex =
+      sourceIndex !== -1 && sourceIndex < insertionIndex
+        ? insertionIndex - 1
+        : insertionIndex;
+    pointerTabDropTarget = { group, index: adjustedIndex };
+  }
+
+  function commitPointerTabDrop() {
+    const panel = pointerDraggedPanel;
+    const target = pointerTabDropTarget;
+    if (!panel || !target) return;
+
+    // Dockview's pointer backend can route pointerup to the tab under the
+    // cursor instead of the smooth tab-list gap. Let it finish first, then
+    // correct the panel into the gap we tracked from pointermove.
+    setTimeout(() => {
+      if (!dock?.getPanel(panel.id)) return;
+      const currentIndex = target.group.panels.findIndex(
+        (p) => p.id === panel.id
+      );
+      if (panel.group === target.group && currentIndex === target.index) return;
+      panel.api.moveTo({
+        group: target.group,
+        index: target.index
+      });
+    }, 0);
+  }
+
+  function handlePointerDragEnd() {
+    commitPointerTabDrop();
+    clearDragging();
   }
 
   async function openTrayCreatedNote(id: string) {
@@ -483,6 +614,34 @@
     requestAnimationFrame(() => repositionOverflowPopup(chevron));
   }
 
+  function dockPanelIdFromTabEventTarget(
+    target: EventTarget | null
+  ): string | null {
+    if (!(target instanceof Element)) return null;
+    const metadata =
+      target.closest<HTMLElement>('[data-dock-panel-id]') ??
+      target
+        .closest('.dv-tab')
+        ?.querySelector<HTMLElement>('[data-dock-panel-id]');
+    return metadata?.dataset.dockPanelId ?? null;
+  }
+
+  function handleDockTabMiddlePointerDown(event: PointerEvent) {
+    if (event.button !== 1) return;
+    if (!dockPanelIdFromTabEventTarget(event.target)) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }
+
+  function handleDockTabAuxClick(event: MouseEvent) {
+    if (event.button !== 1) return;
+    const panelId = dockPanelIdFromTabEventTarget(event.target);
+    if (!panelId) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    dock?.getPanel(panelId)?.api.close();
+  }
+
   onMount(() => {
     void tick().then(setupDockview);
     const onResize = () => {};
@@ -510,6 +669,12 @@
     //     dragend we still want the class gone.
     window.addEventListener('dragend', clearDragging, true);
     window.addEventListener('drop', clearDragging, true);
+    // Pointer drags (dndStrategy: 'pointer') don't emit a DOM `dragend`/`drop`,
+    // so the drag terminates on pointerup/pointercancel. clearDragging is
+    // idempotent, so firing it on unrelated pointerups is harmless.
+    window.addEventListener('pointermove', updatePointerTabDropTarget, true);
+    window.addEventListener('pointerup', handlePointerDragEnd, true);
+    window.addEventListener('pointercancel', clearDragging, true);
 
     // Reposition the tabs-overflow popup relative to whichever chevron
     // was clicked, AND give the chevron click toggle-close semantics —
@@ -527,17 +692,36 @@
     //   - stop dockview's click handler (bubble phase on the dropdown
     //     root) with stopImmediatePropagation on the toggle-close path.
     dockHost?.addEventListener('pointerdown', handleChevronPointerDown, true);
+    dockHost?.addEventListener(
+      'pointerdown',
+      handleDockTabMiddlePointerDown,
+      true
+    );
+    dockHost?.addEventListener('auxclick', handleDockTabAuxClick, true);
     dockHost?.addEventListener('click', handleChevronClick, true);
 
     return () => {
       window.removeEventListener('resize', onResize);
       window.removeEventListener('dragend', clearDragging, true);
       window.removeEventListener('drop', clearDragging, true);
+      window.removeEventListener(
+        'pointermove',
+        updatePointerTabDropTarget,
+        true
+      );
+      window.removeEventListener('pointerup', handlePointerDragEnd, true);
+      window.removeEventListener('pointercancel', clearDragging, true);
       dockHost?.removeEventListener(
         'pointerdown',
         handleChevronPointerDown,
         true
       );
+      dockHost?.removeEventListener(
+        'pointerdown',
+        handleDockTabMiddlePointerDown,
+        true
+      );
+      dockHost?.removeEventListener('auxclick', handleDockTabAuxClick, true);
       dockHost?.removeEventListener('click', handleChevronClick, true);
       // Defensive — if we unmount mid-drag (HMR, route change), don't
       // leave the class stuck on <body>.
@@ -575,6 +759,37 @@
     for (const noteId of Object.keys(tree.notesById)) {
       const panel = openPanels.get(noteId);
       if (panel) panel.api.setTitle(tree.notesById[noteId].title);
+    }
+  });
+
+  // Close dock panels whose backing note has been removed from the tree.
+  // Covers the local permanent-delete paths (purgeNote / purgeCollection /
+  // emptyTrash all reload the tree) and remote pulls (`runSync` reloads
+  // the tree after sync, so a peer's hard-delete propagates the same way).
+  // We snapshot the live key set into a Set so the dependency is the
+  // explicit Object.keys read — mirrors the title-sync effect above and
+  // avoids relying on the `in` operator being tracked by $state's proxy.
+  // Collect first, then call removePanel — the onDidRemovePanel handler
+  // mutates openPanels and we don't want to iterate it while it changes.
+  $effect(() => {
+    // Read the reactive state FIRST — an early `if (!dock) return` would
+    // short-circuit before this read on the first run (dock is set
+    // asynchronously inside setupDockview), and Svelte 5 would record no
+    // dependency, so the effect would never re-run.
+    const known = new Set(Object.keys(tree.notesById));
+    const ready = tree.ready;
+    if (!dock || !ready) return;
+    const stale: { noteId: string; panel: IDockviewPanel }[] = [];
+    for (const [noteId, panel] of openPanels) {
+      if (!known.has(noteId)) stale.push({ noteId, panel });
+    }
+    for (const { noteId, panel } of stale) {
+      try {
+        panel.api.close();
+        openPanels.delete(noteId);
+      } catch (err) {
+        console.warn('[layout] purge-close failed', noteId, err);
+      }
     }
   });
 

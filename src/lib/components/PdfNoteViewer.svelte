@@ -3,24 +3,24 @@
   import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
   import {
     AlertCircle,
-    Check,
-    ChevronDown,
-    Download,
     FileText,
     Highlighter,
     Loader2,
     MessageSquarePlus,
     MessagesSquare,
-    Minus,
     MousePointer2,
     PenLine,
-    Plus,
     Signature,
     Trash2
   } from 'lucide-svelte';
   import * as Y from 'yjs';
   import { Awareness } from 'y-protocols/awareness';
-  import { Button } from '$lib/components/ui/button';
+  import {
+    Toolbar,
+    ToolbarButton,
+    ToolbarSeparator,
+    ToolbarZoomControls
+  } from '$lib/components/ui/toolbar';
   import {
     etebaseSession,
     fetchDrawingAsset,
@@ -33,11 +33,10 @@
   import { listen } from '$lib/api/events';
   import { base64ToBytes } from '$lib/editor/base64';
   import { pickCursorColor } from '$lib/editor/cursor-color';
+  import { isMobile } from '$lib/platform';
   import { getSettingValue } from '$lib/settings/store.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
-  import { saveAnnotatedPdf } from '$lib/api/pdf-export';
-  import { exportAnnotatedPdf } from '$lib/pdf/export-annotated-pdf';
-  import { sanitizePdfFilename } from '$lib/pdf/filename';
+  import { exportAnnotatedPdfNote } from '$lib/note-exporters/pdf';
   import CommentsSidebar from '$lib/pdf/CommentsSidebar.svelte';
   import SignaturePadDialog from '$lib/pdf/SignaturePadDialog.svelte';
   import SignaturePicker from '$lib/pdf/SignaturePicker.svelte';
@@ -70,6 +69,7 @@
     unregisterEditor,
     type EditorListener
   } from '$lib/hotkeys';
+  import { alert } from './confirm-dialog.svelte';
 
   interface Props {
     noteId: string;
@@ -131,8 +131,6 @@
 
   let hostEl = $state<HTMLDivElement | null>(null);
   let container = $state<HTMLDivElement | null>(null);
-  let zoomButton = $state<HTMLButtonElement | null>(null);
-  let zoomMenuEl = $state<HTMLDivElement | null>(null);
   let pdfDoc = $state<PdfDocument | null>(null);
   let pageNumbers = $state<number[]>([]);
   let loading = $state(true);
@@ -143,7 +141,7 @@
   let zoomMode = $state<ZoomMode>('fixed');
   let firstPageWidth = $state(0);
   let zoomMenuOpen = $state(false);
-  let menuRectVersion = $state(0);
+  let mobileToolbar = $state(false);
   let annotationVersion = $state(0);
   let annotations = $state<PdfAnnotation[]>([]);
   let activeTool = $state<PdfTool>('select');
@@ -161,8 +159,6 @@
   let collabConfigured = $state(false);
   let collabOnline = $state(false);
   let activePageNumber = $state(1);
-  let exportInProgress = $state(false);
-  let exportError = $state<string | null>(null);
   let pdfjsLib: PdfJs | null = null;
   let pdfViewerLib: PdfViewer | null = null;
   let yDoc: Y.Doc | null = null;
@@ -422,36 +418,6 @@
     }
   }
 
-  async function downloadAnnotatedPdf() {
-    if (exportInProgress) return;
-    if (!pdfDoc) return;
-    exportInProgress = true;
-    exportError = null;
-    try {
-      // getData() returns the original bytes the document was opened from
-      // — we never serialise pdf.js's parsed representation back to disk,
-      // so the result here is byte-identical to the source asset.
-      const sourceBytes = await pdfDoc.getData();
-      const out = await exportAnnotatedPdf(
-        sourceBytes,
-        annotations.filter((annotation) => !annotation.deletedAt)
-      );
-      const title = tree.notesById[noteId]?.title ?? 'pdf-note';
-      // Bridge handles the platform split: native save dialog in Tauri,
-      // <a download> fallback in the browser. Returns false if the user
-      // cancelled the dialog — leave the toolbar quiet in that case.
-      await saveAnnotatedPdf({
-        suggestedName: `${sanitizePdfFilename(title)}.pdf`,
-        bytes: out
-      });
-    } catch (err) {
-      exportError = err instanceof Error ? err.message : String(err);
-      console.error('[PdfNoteViewer] export failed', err);
-    } finally {
-      exportInProgress = false;
-    }
-  }
-
   function setTool(tool: PdfTool) {
     if (tool === 'signature') {
       if (savedSignatures.length === 0) {
@@ -468,6 +434,19 @@
     }
     signaturePickerOpen = false;
     activeTool = activeTool === tool && tool !== 'select' ? 'select' : tool;
+  }
+
+  async function exportCurrentPdfNote() {
+    try {
+      await flushSave();
+      await exportAnnotatedPdfNote(noteId);
+    } catch (err) {
+      console.error('[PdfNoteViewer] export failed', err);
+      await alert({
+        title: 'Annotated PDF export failed',
+        message: err instanceof Error ? err.message : String(err)
+      });
+    }
   }
 
   function handlePdfCommand(id: string): boolean {
@@ -494,7 +473,7 @@
         commentsSidebarOpen = !commentsSidebarOpen;
         return true;
       case 'editor.pdf.export':
-        void downloadAnnotatedPdf();
+        void exportCurrentPdfNote();
         return true;
       case 'editor.pdf.zoomOut':
         zoomBy(1 / ZOOM_STEP);
@@ -588,17 +567,6 @@
   const commentAnnotations = $derived(
     annotations.filter((annotation) => isCommentLikeAnnotation(annotation))
   );
-  const menuRect = $derived.by(() => {
-    void menuRectVersion;
-    return zoomButton?.getBoundingClientRect() ?? null;
-  });
-  const menuLeft = $derived.by(() => {
-    if (!menuRect || typeof window === 'undefined') return 0;
-    const width = 160;
-    return Math.max(8, Math.min(menuRect.left, window.innerWidth - width - 8));
-  });
-  const menuTop = $derived(menuRect ? menuRect.bottom : 0);
-
   function setFixedZoom(value: number) {
     zoomMode = 'fixed';
     zoom = clampZoom(value);
@@ -616,7 +584,6 @@
 
   function toggleZoomMenu() {
     zoomMenuOpen = !zoomMenuOpen;
-    menuRectVersion += 1;
   }
 
   async function zoomFromWheel(
@@ -667,7 +634,6 @@
     containerWidth = node.clientWidth;
     resizeObserver?.disconnect();
     resizeObserver = new ResizeObserver(() => {
-      menuRectVersion += 1;
       bumpRenderVersion();
       // Drives fit-width placeholder sizing reactively. Without this,
       // placeholder dimensions go stale on window resize even though the
@@ -675,35 +641,6 @@
       containerWidth = node.clientWidth;
     });
     resizeObserver.observe(node);
-  });
-
-  $effect(() => {
-    if (!zoomMenuOpen) return;
-    const onPointerDown = (e: PointerEvent) => {
-      const target = e.target as Node;
-      if (zoomMenuEl?.contains(target)) return;
-      if (zoomButton?.contains(target)) return;
-      zoomMenuOpen = false;
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') zoomMenuOpen = false;
-    };
-    const onResize = () => {
-      menuRectVersion += 1;
-    };
-    queueMicrotask(() => window.addEventListener('pointerdown', onPointerDown));
-    window.addEventListener('keydown', onKey);
-    window.addEventListener('resize', onResize);
-    window.visualViewport?.addEventListener('resize', onResize);
-    window.visualViewport?.addEventListener('scroll', onResize);
-
-    return () => {
-      window.removeEventListener('pointerdown', onPointerDown);
-      window.removeEventListener('keydown', onKey);
-      window.removeEventListener('resize', onResize);
-      window.visualViewport?.removeEventListener('resize', onResize);
-      window.visualViewport?.removeEventListener('scroll', onResize);
-    };
   });
 
   $effect(() => {
@@ -921,6 +858,7 @@
   });
 
   onMount(async () => {
+    mobileToolbar = isMobile();
     savedSignatures = loadReusableSignatures();
     activeSignatureId = savedSignatures[0]?.id ?? null;
     await tick();
@@ -1564,168 +1502,111 @@
       <span>{error}</span>
     </div>
   {:else}
-    <div
-      class="shrink-0 border-b border-border bg-background"
-      role="toolbar"
-      aria-label="PDF controls"
+    <Toolbar
+      dense
+      aria-label={tUi('pdf.toolbar.label')}
+      class="shrink-0 justify-between border-b border-border bg-background"
     >
-      <div class="flex h-9 items-center justify-between gap-2 pl-2">
-        <div class="flex items-center gap-1">
-          <div
-            class="inline-flex items-center rounded-md border border-border bg-background p-0.5"
-          >
-            <Button
-              variant={activeTool === 'select' ? 'secondary' : 'ghost'}
-              size="icon"
-              class="size-7"
-              onclick={() => setTool('select')}
-              aria-label="Select"
-              title="Select"
-              aria-pressed={activeTool === 'select'}
-            >
-              <MousePointer2 class="size-3.5" aria-hidden="true" />
-            </Button>
-
-            <Button
-              variant={activeTool === 'highlight' ? 'secondary' : 'ghost'}
-              size="icon"
-              class="size-7"
-              onclick={() => setTool('highlight')}
-              aria-label="Highlight"
-              title="Highlight"
-              aria-pressed={activeTool === 'highlight'}
-              disabled={isTrashed}
-            >
-              <Highlighter class="size-3.5" aria-hidden="true" />
-            </Button>
-
-            <Button
-              variant={activeTool === 'comment' ? 'secondary' : 'ghost'}
-              size="icon"
-              class="size-7"
-              onclick={() => setTool('comment')}
-              aria-label="Comment"
-              title="Comment"
-              aria-pressed={activeTool === 'comment'}
-              disabled={isTrashed}
-            >
-              <MessageSquarePlus class="size-3.5" aria-hidden="true" />
-            </Button>
-
-            <Button
-              variant={activeTool === 'pen' ? 'secondary' : 'ghost'}
-              size="icon"
-              class="size-7"
-              onclick={() => setTool('pen')}
-              aria-label="Pen"
-              title="Pen"
-              aria-pressed={activeTool === 'pen'}
-              disabled={isTrashed}
-            >
-              <PenLine class="size-3.5" aria-hidden="true" />
-            </Button>
-
-            <Button
-              bind:ref={signatureButton}
-              variant={activeTool === 'signature' ? 'secondary' : 'ghost'}
-              size="icon"
-              class="size-7"
-              onclick={() => setTool('signature')}
-              aria-label="Sign"
-              title="Sign"
-              aria-pressed={activeTool === 'signature'}
-              aria-haspopup="menu"
-              aria-expanded={signaturePickerOpen}
-              disabled={isTrashed}
-            >
-              <Signature class="size-3.5" aria-hidden="true" />
-            </Button>
-
-            <Button
-              variant={activeTool === 'delete' ? 'secondary' : 'ghost'}
-              size="icon"
-              class="size-7"
-              onclick={() => setTool('delete')}
-              aria-label="Delete annotation"
-              title="Delete annotation"
-              aria-pressed={activeTool === 'delete'}
-              disabled={isTrashed}
-            >
-              <Trash2 class="size-3.5" aria-hidden="true" />
-            </Button>
-          </div>
-
-          <Button
-            variant={commentsSidebarOpen ? 'secondary' : 'ghost'}
-            size="icon"
-            class="size-7"
-            onclick={() => (commentsSidebarOpen = !commentsSidebarOpen)}
-            aria-label="Toggle comments"
-            title="Toggle comments"
-            aria-pressed={commentsSidebarOpen}
-          >
-            <MessagesSquare class="size-3.5" aria-hidden="true" />
-          </Button>
-
-          <Button
-            variant="ghost"
-            size="icon"
-            class="size-7"
-            onclick={() => void downloadAnnotatedPdf()}
-            aria-label={tUi('pdf.export.label')}
-            title={exportError
-              ? `${tUi('pdf.export.failed')}: ${exportError}`
-              : tUi('pdf.export.label')}
-            disabled={exportInProgress || !pdfDoc}
-          >
-            {#if exportInProgress}
-              <Loader2 class="size-3.5 animate-spin" aria-hidden="true" />
-            {:else}
-              <Download class="size-3.5" aria-hidden="true" />
-            {/if}
-          </Button>
-        </div>
-
-        <div
-          class="inline-flex items-center rounded-md border border-border bg-background p-0.5"
+      <div class="flex items-center gap-0.5">
+        <ToolbarButton
+          active={activeTool === 'select'}
+          onclick={() => setTool('select')}
+          aria-label={tUi('pdf.toolbar.select')}
+          title={tUi('pdf.toolbar.select')}
+          aria-pressed={activeTool === 'select'}
         >
-          <Button
-            variant="ghost"
-            size="icon"
-            class="size-7"
-            onclick={() => zoomBy(1 / ZOOM_STEP)}
-            aria-label="Zoom out"
-            title="Zoom out"
-          >
-            <Minus class="size-3.5" aria-hidden="true" />
-          </Button>
+          <MousePointer2 aria-hidden="true" />
+        </ToolbarButton>
 
-          <button
-            bind:this={zoomButton}
-            type="button"
-            class="flex h-7 min-w-22 items-center justify-center gap-1 rounded-sm px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-            onclick={toggleZoomMenu}
-            aria-haspopup="menu"
-            aria-expanded={zoomMenuOpen}
-            title="Choose zoom"
-          >
-            <span>{zoomLabel}</span>
-            <ChevronDown class="size-3" aria-hidden="true" />
-          </button>
+        <ToolbarButton
+          active={activeTool === 'highlight'}
+          onclick={() => setTool('highlight')}
+          aria-label={tUi('pdf.toolbar.highlight')}
+          title={tUi('pdf.toolbar.highlight')}
+          aria-pressed={activeTool === 'highlight'}
+          disabled={isTrashed}
+        >
+          <Highlighter aria-hidden="true" />
+        </ToolbarButton>
 
-          <Button
-            variant="ghost"
-            size="icon"
-            class="size-7"
-            onclick={() => zoomBy(ZOOM_STEP)}
-            aria-label="Zoom in"
-            title="Zoom in"
-          >
-            <Plus class="size-3.5" aria-hidden="true" />
-          </Button>
-        </div>
+        <ToolbarButton
+          active={activeTool === 'comment'}
+          onclick={() => setTool('comment')}
+          aria-label={tUi('pdf.toolbar.comment')}
+          title={tUi('pdf.toolbar.comment')}
+          aria-pressed={activeTool === 'comment'}
+          disabled={isTrashed}
+        >
+          <MessageSquarePlus aria-hidden="true" />
+        </ToolbarButton>
+
+        <ToolbarButton
+          active={activeTool === 'pen'}
+          onclick={() => setTool('pen')}
+          aria-label={tUi('pdf.toolbar.pen')}
+          title={tUi('pdf.toolbar.pen')}
+          aria-pressed={activeTool === 'pen'}
+          disabled={isTrashed}
+        >
+          <PenLine aria-hidden="true" />
+        </ToolbarButton>
+
+        <ToolbarButton
+          bind:ref={signatureButton}
+          active={activeTool === 'signature'}
+          onclick={() => setTool('signature')}
+          aria-label={tUi('pdf.toolbar.sign')}
+          title={tUi('pdf.toolbar.sign')}
+          aria-pressed={activeTool === 'signature'}
+          aria-haspopup="menu"
+          aria-expanded={signaturePickerOpen}
+          disabled={isTrashed}
+        >
+          <Signature aria-hidden="true" />
+        </ToolbarButton>
+
+        <ToolbarButton
+          active={activeTool === 'delete'}
+          onclick={() => setTool('delete')}
+          aria-label={tUi('pdf.toolbar.delete')}
+          title={tUi('pdf.toolbar.delete')}
+          aria-pressed={activeTool === 'delete'}
+          disabled={isTrashed}
+        >
+          <Trash2 aria-hidden="true" />
+        </ToolbarButton>
+
+        <ToolbarSeparator />
+
+        <ToolbarButton
+          active={commentsSidebarOpen}
+          onclick={() => (commentsSidebarOpen = !commentsSidebarOpen)}
+          aria-label={tUi('pdf.toolbar.comments')}
+          title={tUi('pdf.toolbar.comments')}
+          aria-pressed={commentsSidebarOpen}
+        >
+          <MessagesSquare aria-hidden="true" />
+        </ToolbarButton>
       </div>
-    </div>
+
+      {#if !mobileToolbar}
+        <ToolbarZoomControls
+          bind:open={zoomMenuOpen}
+          label={zoomLabel}
+          zoomOutLabel={tUi('pdf.toolbar.zoomOut')}
+          zoomInLabel={tUi('pdf.toolbar.zoomIn')}
+          zoomMenuLabel={tUi('pdf.toolbar.zoom')}
+          fitLabel={tUi('pdf.toolbar.fitWidth')}
+          fitActive={zoomMode === 'fit-width'}
+          zoomOptions={QUICK_ZOOMS}
+          selectedZoom={zoomMode === 'fixed' ? zoom : null}
+          onZoomOut={() => zoomBy(1 / ZOOM_STEP)}
+          onZoomIn={() => zoomBy(ZOOM_STEP)}
+          onFit={setFitWidthZoom}
+          onSelectZoom={setFixedZoom}
+        />
+      {/if}
+    </Toolbar>
 
     <div class="flex min-h-0 flex-1 overflow-hidden">
       <div
@@ -1738,6 +1619,9 @@
             {@const size = placeholderSize(pageNumber)}
             {@const shouldRender = isRendering(pageNumber)}
             {@const invalidation = invalidationOf(pageNumber)}
+            {@const pageCaption = tUi('pdf.page.caption')
+              .replace('{page}', String(pageNumber))
+              .replace('{total}', String(pageNumbers.length))}
             <figure
               class="flex w-max flex-col items-center gap-1"
               data-page-number={pageNumber}
@@ -1761,7 +1645,7 @@
                 class="flex items-center gap-1 text-[10px] text-muted-foreground"
               >
                 <FileText class="size-3" aria-hidden="true" />
-                Page {pageNumber}
+                {pageCaption}
               </figcaption>
             </figure>
           {/each}
@@ -1796,48 +1680,6 @@
       onAddNew={openSignaturePad}
       onClose={() => (signaturePickerOpen = false)}
     />
-
-    {#if zoomMenuOpen && menuRect}
-      <div
-        bind:this={zoomMenuEl}
-        role="menu"
-        class="fixed z-50 min-w-40 rounded-md border border-border bg-popover py-1 text-sm text-popover-foreground shadow-lg"
-        style="left: {menuLeft}px; top: {menuTop}px;"
-      >
-        <button
-          type="button"
-          role="menuitem"
-          class="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-accent hover:text-accent-foreground"
-          onclick={setFitWidthZoom}
-        >
-          <Check
-            class="size-4 shrink-0 {zoomMode === 'fit-width'
-              ? 'opacity-100'
-              : 'opacity-0'}"
-            aria-hidden="true"
-          />
-          <span>Fit width</span>
-        </button>
-        <div class="my-1 border-t border-border"></div>
-        {#each QUICK_ZOOMS as option (option)}
-          <button
-            type="button"
-            role="menuitem"
-            class="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-accent hover:text-accent-foreground"
-            onclick={() => setFixedZoom(option)}
-          >
-            <Check
-              class="size-4 shrink-0 {zoomMode === 'fixed' &&
-              Math.abs(zoom - option) < 0.01
-                ? 'opacity-100'
-                : 'opacity-0'}"
-              aria-hidden="true"
-            />
-            <span>{Math.round(option * 100)}%</span>
-          </button>
-        {/each}
-      </div>
-    {/if}
   {/if}
 </div>
 

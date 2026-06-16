@@ -11,7 +11,12 @@
     Trash2,
     Undo2
   } from 'lucide-svelte';
-  import { Button } from '$lib/components/ui/button';
+  import {
+    Toolbar,
+    ToolbarButton,
+    ToolbarSeparator,
+    ToolbarZoomControls
+  } from '$lib/components/ui/toolbar';
   import {
     drawingCancelLiveInk,
     drawingEnterImmersiveInkMode,
@@ -33,6 +38,7 @@
     type DrawingToolbarSettingsPayload
   } from '$lib/api';
   import { isAndroid, isMobile } from '$lib/platform';
+  import { tUi } from '$lib/settings/i18n.svelte';
   import {
     getSettingValue,
     hasSettingValue,
@@ -84,6 +90,8 @@
   const FIT_PAGE_MARGIN_PX = 32;
   const FIT_PAGE_TOP_MARGIN_PX = 72;
   const MAX_ZOOM_FACTOR = 6;
+  const INK_ZOOM_STEP = 1.2;
+  const INK_QUICK_ZOOMS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
   const POINTER_BUTTON_SECONDARY = 2;
   const POINTER_BUTTON_STYLUS_PRIMARY = 32;
   const POINTER_BUTTON_STYLUS_SECONDARY = 64;
@@ -129,7 +137,9 @@
   };
 
   let hostEl = $state<HTMLDivElement | null>(null);
+  let canvasHostEl = $state<HTMLDivElement | null>(null);
   let canvasEl = $state<HTMLCanvasElement | null>(null);
+  let resizeSnapshotCanvasEl = $state<HTMLCanvasElement | null>(null);
   let toolbarEl = $state<HTMLDivElement | null>(null);
   let boundsFrame: number | null = null;
   let doc = $state<InkDocument | null>(null);
@@ -152,6 +162,9 @@
   let lastSeenPushed = false;
   let unsubSession: (() => void) | null = null;
   let editorListener: EditorListener | null = null;
+  let mobileToolbar = $state(false);
+  let zoomMenuOpen = $state(false);
+  let zoomUiVersion = $state(0);
 
   let tool = $state<ToolMode>('pen');
   let colorArgb = $state(DEFAULT_COLOR);
@@ -174,6 +187,9 @@
   let queuedEraserSamples: QueuedEraserSample[] = [];
   let eraserFrame: number | null = null;
   let drawFrame: number | null = null;
+  let resizeSnapshotHideTimer: ReturnType<typeof setTimeout> | null = null;
+  let resizeSnapshotVisible = $state(false);
+  let hasDrawnFrame = false;
   let viewInitialized = false;
   const cssColorCache = new Map<number, string>();
   let layout = defaultLayout();
@@ -187,6 +203,14 @@
 
   const pageDark = $derived(pageThemeMode === 'system');
   const colorHex = $derived(argbToColorHex(colorArgb));
+  const inkZoomLabel = $derived.by(() => {
+    void zoomUiVersion;
+    return `${Math.round(view.scale * 100)}%`;
+  });
+  const inkFitActive = $derived.by(() => {
+    void zoomUiVersion;
+    return Math.abs(view.scale - minScale()) < 0.01;
+  });
 
   function ancestorIsTrash(parentId: string | null): boolean {
     let current = parentId;
@@ -537,14 +561,17 @@
   }
 
   function resizeCanvas() {
-    if (!hostEl || !canvasEl) return;
+    if (!canvasHostEl || !canvasEl) return;
     const previousMinScale = minScale();
     const wasAtMinScale = view.scale <= previousMinScale + 0.001;
-    const rect = hostEl.getBoundingClientRect();
+    const rect = canvasHostEl.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
     const widthPx = Math.max(1, Math.floor(rect.width * dpr));
     const heightPx = Math.max(1, Math.floor(rect.height * dpr));
-    if (canvasEl.width !== widthPx || canvasEl.height !== heightPx) {
+    const backingStoreChanged =
+      canvasEl.width !== widthPx || canvasEl.height !== heightPx;
+    if (backingStoreChanged) {
+      captureResizeSnapshot();
       canvasEl.width = widthPx;
       canvasEl.height = heightPx;
     }
@@ -558,8 +585,63 @@
       view.scale = Math.max(view.scale, nextMinScale);
       clampView();
     }
-    scheduleDraw();
+    if (backingStoreChanged) {
+      if (drawFrame !== null) {
+        cancelAnimationFrame(drawFrame);
+        drawFrame = null;
+      }
+      draw();
+      scheduleBoundsPush();
+    } else {
+      scheduleDraw();
+    }
     updateLiveInkOverlayStyle();
+    zoomUiVersion += 1;
+  }
+
+  function captureResizeSnapshot() {
+    if (
+      !hasDrawnFrame ||
+      !canvasEl ||
+      !resizeSnapshotCanvasEl ||
+      canvasEl.width <= 1 ||
+      canvasEl.height <= 1
+    ) {
+      return;
+    }
+    const ctx = resizeSnapshotCanvasEl.getContext('2d');
+    if (!ctx) return;
+    if (
+      resizeSnapshotCanvasEl.width !== canvasEl.width ||
+      resizeSnapshotCanvasEl.height !== canvasEl.height
+    ) {
+      resizeSnapshotCanvasEl.width = canvasEl.width;
+      resizeSnapshotCanvasEl.height = canvasEl.height;
+    }
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(
+      0,
+      0,
+      resizeSnapshotCanvasEl.width,
+      resizeSnapshotCanvasEl.height
+    );
+    ctx.drawImage(canvasEl, 0, 0);
+    resizeSnapshotVisible = true;
+    resizeSnapshotCanvasEl.style.opacity = '1';
+    if (resizeSnapshotHideTimer) {
+      clearTimeout(resizeSnapshotHideTimer);
+      resizeSnapshotHideTimer = null;
+    }
+  }
+
+  function scheduleResizeSnapshotHide() {
+    if (!resizeSnapshotVisible) return;
+    if (resizeSnapshotHideTimer) clearTimeout(resizeSnapshotHideTimer);
+    resizeSnapshotHideTimer = setTimeout(() => {
+      resizeSnapshotHideTimer = null;
+      resizeSnapshotVisible = false;
+      if (resizeSnapshotCanvasEl) resizeSnapshotCanvasEl.style.opacity = '';
+    }, 120);
   }
 
   function fitPage() {
@@ -651,6 +733,8 @@
       );
     }
     drawStroke(ctx, inFlight, displayCssColor(colorArgb), width);
+    hasDrawnFrame = true;
+    scheduleResizeSnapshotHide();
   }
 
   function visiblePageBounds(): StrokeBounds {
@@ -1220,6 +1304,7 @@
     if (event.ctrlKey || event.metaKey) {
       const factor = Math.exp(-event.deltaY * 0.001);
       zoomAround(event.offsetX, event.offsetY, factor);
+      zoomUiVersion += 1;
     } else if (event.shiftKey) {
       view.panX -= event.deltaY + event.deltaX;
     } else {
@@ -1240,6 +1325,33 @@
     );
     view.panX = screenX - before.x * view.scale;
     view.panY = screenY - before.y * view.scale;
+  }
+
+  function setInkZoom(value: number) {
+    const centerX = view.width * 0.5;
+    const centerY = view.height * 0.5;
+    const before = screenToPage(centerX, centerY);
+    const min = minScale();
+    view.scale = Math.min(Math.max(value, min), min * MAX_ZOOM_FACTOR);
+    view.panX = centerX - before.x * view.scale;
+    view.panY = centerY - before.y * view.scale;
+    clampView();
+    scheduleDraw();
+    updateLiveInkOverlayStyle();
+    zoomMenuOpen = false;
+    zoomUiVersion += 1;
+  }
+
+  function setFitPageZoom() {
+    fitPage();
+    scheduleDraw();
+    updateLiveInkOverlayStyle();
+    zoomMenuOpen = false;
+    zoomUiVersion += 1;
+  }
+
+  function zoomInkBy(factor: number) {
+    setInkZoom(view.scale * factor);
   }
 
   function minScale(): number {
@@ -1426,6 +1538,7 @@
   onMount(async () => {
     const mountStartedAt = performance.now();
     const mobile = isMobile();
+    mobileToolbar = mobile;
     if (isTauri() && mobile) {
       void acquireFullscreen();
       fullscreenAcquired = true;
@@ -1508,7 +1621,7 @@
       resizeCanvas();
       scheduleBoundsPush();
     });
-    if (hostEl) resizeObserver.observe(hostEl);
+    if (canvasHostEl) resizeObserver.observe(canvasHostEl);
     if (toolbarEl) resizeObserver.observe(toolbarEl);
     // visualViewport tracks IME show/hide and orientation in the way
     // the standard window `resize` event misses on mobile Chromium —
@@ -1562,6 +1675,10 @@
       cancelAnimationFrame(drawFrame);
       drawFrame = null;
     }
+    if (resizeSnapshotHideTimer !== null) {
+      clearTimeout(resizeSnapshotHideTimer);
+      resizeSnapshotHideTimer = null;
+    }
     if (isAndroid()) {
       // hideLiveInkOverlay resets bounds + offset on the Kotlin side,
       // but push an explicit clear too in case the overlay was already
@@ -1594,118 +1711,165 @@
   });
 </script>
 
+{#snippet inkToolbar(dense: boolean, className: string)}
+  <Toolbar {dense} aria-label={tUi('ink.toolbar.label')} class={className}>
+    <div class="flex items-center gap-0.5">
+      <ToolbarButton
+        active={tool === 'pen'}
+        aria-label={tUi('ink.toolbar.pen')}
+        title={tUi('ink.toolbar.pen')}
+        aria-pressed={tool === 'pen'}
+        onclick={() => setTool('pen')}
+      >
+        <PenLine aria-hidden="true" />
+      </ToolbarButton>
+
+      <ToolbarButton
+        active={tool === 'eraser'}
+        aria-label={tUi('ink.toolbar.eraser')}
+        title={tUi('ink.toolbar.eraser')}
+        aria-pressed={tool === 'eraser'}
+        onclick={() => setTool('eraser')}
+      >
+        <Eraser aria-hidden="true" />
+      </ToolbarButton>
+
+      <ToolbarSeparator />
+
+      <label
+        class="grid size-9 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+        aria-label={tUi('ink.toolbar.color')}
+        title={tUi('ink.toolbar.color')}
+      >
+        <input
+          class="size-6 cursor-pointer border-0 bg-transparent p-0"
+          type="color"
+          value={colorHex}
+          oninput={(e) => setColor(e.currentTarget.value)}
+        />
+      </label>
+      <input
+        class="mx-2 h-2 w-24 shrink-0 accent-primary"
+        aria-label={tUi('ink.toolbar.brushSize')}
+        title={tUi('ink.toolbar.brushSize')}
+        type="range"
+        min="0.5"
+        max="12"
+        step="0.5"
+        value={width}
+        oninput={(e) => setWidth(e.currentTarget.value)}
+      />
+
+      <ToolbarSeparator />
+
+      <ToolbarButton
+        aria-label={tUi('ink.toolbar.undo')}
+        title={tUi('ink.toolbar.undo')}
+        disabled={isTrashed || !doc || undoDepth === 0}
+        onclick={undo}
+      >
+        <Undo2 aria-hidden="true" />
+      </ToolbarButton>
+      <ToolbarButton
+        aria-label={tUi('ink.toolbar.redo')}
+        title={tUi('ink.toolbar.redo')}
+        disabled={isTrashed || !doc || redoDepth === 0}
+        onclick={redo}
+      >
+        <Redo2 aria-hidden="true" />
+      </ToolbarButton>
+
+      <ToolbarSeparator />
+
+      <ToolbarButton
+        active={fingerDrawingAllowed}
+        aria-label={tUi('ink.toolbar.fingerDrawing')}
+        title={tUi('ink.toolbar.fingerDrawing')}
+        aria-pressed={fingerDrawingAllowed}
+        onclick={toggleFingerDrawing}
+      >
+        <MousePointer2 aria-hidden="true" />
+      </ToolbarButton>
+      <ToolbarButton
+        active={pageThemeMode === 'system'}
+        aria-label={tUi('ink.toolbar.pageTheme')}
+        title={tUi('ink.toolbar.pageTheme')}
+        aria-pressed={pageThemeMode === 'system'}
+        onclick={togglePageTheme}
+      >
+        {#if pageThemeMode === 'system'}
+          <MoonStar aria-hidden="true" />
+        {:else}
+          <Sun aria-hidden="true" />
+        {/if}
+      </ToolbarButton>
+      <ToolbarButton
+        aria-label={tUi('ink.toolbar.clear')}
+        title={tUi('ink.toolbar.clear')}
+        disabled={isTrashed}
+        onclick={clearCanvas}
+      >
+        <Trash2 aria-hidden="true" />
+      </ToolbarButton>
+    </div>
+
+    {#if !mobileToolbar}
+      <ToolbarZoomControls
+        bind:open={zoomMenuOpen}
+        label={inkZoomLabel}
+        zoomOutLabel={tUi('ink.toolbar.zoomOut')}
+        zoomInLabel={tUi('ink.toolbar.zoomIn')}
+        zoomMenuLabel={tUi('ink.toolbar.zoom')}
+        fitLabel={tUi('ink.toolbar.fitPage')}
+        fitActive={inkFitActive}
+        zoomOptions={INK_QUICK_ZOOMS}
+        selectedZoom={inkFitActive ? null : view.scale}
+        onZoomOut={() => zoomInkBy(1 / INK_ZOOM_STEP)}
+        onZoomIn={() => zoomInkBy(INK_ZOOM_STEP)}
+        onFit={setFitPageZoom}
+        onSelectZoom={setInkZoom}
+      />
+    {/if}
+  </Toolbar>
+{/snippet}
+
 <div
   bind:this={hostEl}
-  class="relative h-full w-full overflow-hidden bg-background"
+  class="relative flex h-full w-full flex-col overflow-hidden bg-background"
 >
-  <div
-    bind:this={toolbarEl}
-    class="absolute left-3 top-3 z-10 flex h-10 items-center gap-1 rounded-md border border-border bg-background/95 px-1 shadow-sm"
-  >
-    <Button
-      size="icon"
-      variant={tool === 'pen' ? 'default' : 'ghost'}
-      aria-label="Pen"
-      title="Pen"
-      onclick={() => setTool('pen')}
-    >
-      <PenLine class="size-4" />
-    </Button>
-    <Button
-      size="icon"
-      variant={tool === 'eraser' ? 'default' : 'ghost'}
-      aria-label="Eraser"
-      title="Eraser"
-      onclick={() => setTool('eraser')}
-    >
-      <Eraser class="size-4" />
-    </Button>
-    <label
-      class="grid size-9 place-items-center rounded-md hover:bg-accent"
-      aria-label="Color"
-      title="Color"
-    >
-      <input
-        class="size-6 cursor-pointer border-0 bg-transparent p-0"
-        type="color"
-        value={colorHex}
-        oninput={(e) => setColor(e.currentTarget.value)}
-      />
-    </label>
-    <input
-      class="h-2 w-24 accent-primary"
-      aria-label="Brush size"
-      title="Brush size"
-      type="range"
-      min="0.5"
-      max="12"
-      step="0.5"
-      value={width}
-      oninput={(e) => setWidth(e.currentTarget.value)}
-    />
-    <Button
-      size="icon"
-      variant="ghost"
-      aria-label="Undo"
-      title="Undo"
-      disabled={isTrashed || !doc || undoDepth === 0}
-      onclick={undo}
-    >
-      <Undo2 class="size-4" />
-    </Button>
-    <Button
-      size="icon"
-      variant="ghost"
-      aria-label="Redo"
-      title="Redo"
-      disabled={isTrashed || !doc || redoDepth === 0}
-      onclick={redo}
-    >
-      <Redo2 class="size-4" />
-    </Button>
-    <Button
-      size="icon"
-      variant="ghost"
-      aria-label="Finger drawing"
-      title="Finger drawing"
-      onclick={toggleFingerDrawing}
-    >
-      <MousePointer2
-        class={`size-4 ${fingerDrawingAllowed ? '' : 'opacity-40'}`}
-      />
-    </Button>
-    <Button
-      size="icon"
-      variant="ghost"
-      aria-label="Page theme"
-      title="Page theme"
-      onclick={togglePageTheme}
-    >
-      {#if pageThemeMode === 'system'}
-        <MoonStar class="size-4" />
-      {:else}
-        <Sun class="size-4" />
-      {/if}
-    </Button>
-    <Button
-      size="icon"
-      variant="ghost"
-      aria-label="Clear"
-      title="Clear"
-      disabled={isTrashed}
-      onclick={clearCanvas}
-    >
-      <Trash2 class="size-4" />
-    </Button>
+  {#if mobileToolbar}
+    <div bind:this={toolbarEl} class="absolute left-3 top-3 z-10">
+      {@render inkToolbar(
+        false,
+        'rounded-md border border-border bg-background/95 shadow-sm backdrop-blur'
+      )}
+    </div>
+  {:else}
+    <div bind:this={toolbarEl} class="shrink-0">
+      {@render inkToolbar(
+        true,
+        'shrink-0 justify-between border-b border-border bg-background'
+      )}
+    </div>
+  {/if}
+
+  <div bind:this={canvasHostEl} class="relative min-h-0 flex-1">
+    <canvas
+      bind:this={resizeSnapshotCanvasEl}
+      aria-hidden="true"
+      class="pointer-events-none absolute inset-0 z-0 block h-full w-full opacity-0 transition-opacity duration-75 {resizeSnapshotVisible
+        ? 'opacity-100'
+        : 'opacity-0'}"
+    ></canvas>
+    <canvas
+      bind:this={canvasEl}
+      class="relative z-10 block h-full w-full touch-none"
+      aria-label={ariaLabel}
+      onpointerdown={handlePointerDown}
+      onpointermove={handlePointerMove}
+      onpointerup={handlePointerUp}
+      onpointercancel={handlePointerCancel}
+      onwheel={handleWheel}
+    ></canvas>
   </div>
-  <canvas
-    bind:this={canvasEl}
-    class="block h-full w-full touch-none"
-    aria-label={ariaLabel}
-    onpointerdown={handlePointerDown}
-    onpointermove={handlePointerMove}
-    onpointerup={handlePointerUp}
-    onpointercancel={handlePointerCancel}
-    onwheel={handleWheel}
-  ></canvas>
 </div>
