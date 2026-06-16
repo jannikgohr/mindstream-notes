@@ -13,7 +13,6 @@
     MousePointer2,
     PanelLeft,
     PenLine,
-    Search,
     Signature,
     Trash2
   } from 'lucide-svelte';
@@ -42,9 +41,9 @@
   import { getSettingValue } from '$lib/settings/store.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { exportAnnotatedPdfNote } from '$lib/note-exporters/pdf';
+  import FindBar from '$lib/components/FindBar.svelte';
   import CommentsSidebar from '$lib/pdf/CommentsSidebar.svelte';
   import PdfNavigatorSidebar from '$lib/pdf/PdfNavigatorSidebar.svelte';
-  import PdfSearchBar from '$lib/pdf/PdfSearchBar.svelte';
   import SignaturePadDialog from '$lib/pdf/SignaturePadDialog.svelte';
   import SignaturePicker from '$lib/pdf/SignaturePicker.svelte';
   import {
@@ -85,6 +84,7 @@
   import {
     registerEditor,
     unregisterEditor,
+    SEARCH_ACTIVE_NOTE_COMMAND,
     type EditorListener
   } from '$lib/hotkeys';
   import { alert } from './confirm-dialog.svelte';
@@ -700,7 +700,7 @@
       case 'editor.pdf.toggleNavigator':
         toggleNavigator();
         return true;
-      case 'editor.pdf.find':
+      case SEARCH_ACTIVE_NOTE_COMMAND:
         openSearch();
         return true;
       case 'editor.pdf.previousPage':
@@ -1103,6 +1103,7 @@
       editorListener = {
         kind: 'pdf',
         host: hostEl,
+        noteId,
         onCommand: handlePdfCommand
       };
       registerEditor(editorListener);
@@ -1219,17 +1220,15 @@
     };
   });
 
-  // Ctrl/Cmd+F opens find-in-document when focus is inside the viewer,
-  // regardless of any user-assigned hotkey binding (PDF commands ship
-  // unbound). Escape from anywhere in the viewer closes the search bar.
+  // Opening find is the app-level "search active note" shortcut (routed
+  // through the hotkey bus to handlePdfCommand). Here we only handle
+  // Escape so it closes the bar from anywhere in the viewer, not just
+  // when the search field itself is focused.
   $effect(() => {
     if (!hostEl) return;
     const host = hostEl;
     const onKeydown = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
-        event.preventDefault();
-        openSearch();
-      } else if (event.key === 'Escape' && searchOpen) {
+      if (event.key === 'Escape' && searchOpen) {
         closeSearch();
       }
     };
@@ -1961,16 +1960,6 @@
         <ToolbarSeparator />
 
         <ToolbarButton
-          active={searchOpen}
-          onclick={() => (searchOpen ? closeSearch() : openSearch())}
-          aria-label={tUi('pdf.toolbar.find')}
-          title={tUi('pdf.toolbar.find')}
-          aria-pressed={searchOpen}
-        >
-          <Search aria-hidden="true" />
-        </ToolbarButton>
-
-        <ToolbarButton
           active={commentsSidebarOpen}
           onclick={() => (commentsSidebarOpen = !commentsSidebarOpen)}
           aria-label={tUi('pdf.toolbar.comments')}
@@ -2056,7 +2045,7 @@
     </Toolbar>
 
     {#if searchOpen}
-      <PdfSearchBar
+      <FindBar
         bind:this={searchBar}
         query={searchQuery}
         matchCount={searchMatches.length}

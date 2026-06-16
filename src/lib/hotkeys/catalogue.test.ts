@@ -224,7 +224,6 @@ describe('catalogue consistency', () => {
       'editor.pdf.deleteAnnotation',
       'editor.pdf.toggleComments',
       'editor.pdf.toggleNavigator',
-      'editor.pdf.find',
       'editor.pdf.previousPage',
       'editor.pdf.nextPage',
       'editor.pdf.export',

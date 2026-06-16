@@ -15,6 +15,8 @@ import {
   unregisterEditor,
   activeEditor,
   emitCommand,
+  searchActiveNote,
+  SEARCH_ACTIVE_NOTE_COMMAND,
   type EditorListener
 } from './bus.svelte';
 import { COMMAND_BY_ID } from './commands';
@@ -24,13 +26,15 @@ const owned: EditorListener[] = [];
 
 function makeListener(
   kind: EditorListener['kind'],
-  onCommand?: EditorListener['onCommand']
+  onCommand?: EditorListener['onCommand'],
+  noteId?: string
 ): EditorListener {
   const host = document.createElement('div');
   document.body.appendChild(host);
   return {
     kind,
     host,
+    noteId,
     onCommand: onCommand ?? (() => true)
   };
 }
@@ -189,5 +193,48 @@ describe('bus.emitCommand', () => {
       expect(consoleSpy).toHaveBeenCalled();
       consoleSpy.mockRestore();
     });
+  });
+});
+
+describe('bus.searchActiveNote', () => {
+  it('routes to the editor for the active note, not the focus-stack top', () => {
+    // The PDF note is open but its tab was switched to without clicking
+    // into the body, so a markdown editor is still on top of the focus
+    // stack. The find command must still reach the PDF.
+    const pdfHandled = vi.fn(() => true);
+    track(makeListener('pdf', pdfHandled, 'note-pdf'));
+    const mdHandled = vi.fn(() => true);
+    track(makeListener('markdown', mdHandled, 'note-md'));
+    expect(activeEditor()?.noteId).toBe('note-md'); // markdown is on top
+
+    expect(searchActiveNote('note-pdf')).toBe(true);
+    expect(pdfHandled).toHaveBeenCalledWith(SEARCH_ACTIVE_NOTE_COMMAND);
+    expect(mdHandled).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the active editor when no noteId is given', () => {
+    const handled = vi.fn(() => true);
+    track(makeListener('pdf', handled, 'note-pdf'));
+    expect(searchActiveNote()).toBe(true);
+    expect(handled).toHaveBeenCalledWith(SEARCH_ACTIVE_NOTE_COMMAND);
+  });
+
+  it('returns false when the target editor does not handle find', () => {
+    // Lets the global command fall through to the browser's own find
+    // instead of swallowing the keystroke for nothing.
+    track(makeListener('markdown', () => false, 'note-md'));
+    expect(searchActiveNote('note-md')).toBe(false);
+  });
+
+  it('returns false when no editor is registered', () => {
+    expect(searchActiveNote('whatever')).toBe(false);
+  });
+
+  it('the global command falls through when find is unhandled', () => {
+    // emitCommand must propagate the run()'s `false` so the manager
+    // skips preventDefault and the browser find still works.
+    track(makeListener('markdown', () => false, 'note-md'));
+    const cmd = COMMAND_BY_ID['global.searchActiveNote'];
+    expect(emitCommand(cmd)).toBe(false);
   });
 });

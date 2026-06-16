@@ -70,6 +70,14 @@ import type { EditorKind } from './types';
 export interface EditorListener {
   kind: EditorKind;
   host: HTMLElement;
+  /**
+   * The note this editor is showing, when known. Lets app-level
+   * commands target the editor for the *active note* (`ui.activeNoteId`)
+   * rather than the focus-stack top — the two diverge when a note is
+   * opened or its dockview tab is switched without clicking into the
+   * content, which would otherwise route find/etc. to a stale editor.
+   */
+  noteId?: string;
   onCommand: (commandId: string) => boolean | void;
 }
 
@@ -125,6 +133,53 @@ export function activeEditor(): EditorListener | null {
 }
 
 /**
+ * Command id the app-level "search active note" shortcut hands to the
+ * active editor. It is editor-kind agnostic on purpose: one global
+ * shortcut opens in-document find on whichever note is focused, and each
+ * editor that supports find handles this id in its `onCommand`. Editors
+ * that don't support find simply return `false` (no-op).
+ */
+export const SEARCH_ACTIVE_NOTE_COMMAND = 'app.searchActiveNote';
+
+/** The registered editor showing `noteId`, if any. */
+function editorForNote(noteId: string): EditorListener | null {
+  for (const editor of editorStack) {
+    if (editor.noteId === noteId) return editor;
+  }
+  return null;
+}
+
+/**
+ * Ask the editor for the active note to open in-document search. Backs
+ * the global `searchActiveNote` command's `run()`.
+ *
+ * Targets the editor whose `noteId` matches the app's active note first,
+ * falling back to the focus-stack top — so it works even when the note
+ * was opened or tab-switched without the user clicking into the content
+ * (which is what leaves the focus stack pointing at a stale editor).
+ *
+ * Returns `true` only when an editor actually handled it. The caller
+ * (the global command via `emitCommand`) uses that to decide whether to
+ * swallow the keystroke: when nothing handles find — e.g. the active
+ * note is a kind without find — `false` lets Mod+F fall through to the
+ * browser's own find instead of being suppressed for nothing.
+ *
+ * Defined here (not in the catalogue) so the catalogue's runtime imports
+ * stay one-directional — `commands.ts` may import this, while this
+ * module only type-imports the catalogue.
+ */
+export function searchActiveNote(noteId?: string | null): boolean {
+  const target = (noteId ? editorForNote(noteId) : null) ?? activeEditor();
+  if (!target) return false;
+  try {
+    return target.onCommand(SEARCH_ACTIVE_NOTE_COMMAND) !== false;
+  } catch (err) {
+    console.error('[hotkeys] searchActiveNote threw', err);
+    return false;
+  }
+}
+
+/**
  * Run a command.
  *
  * For `global` commands: invoke the catalogue's inline `run()`.
@@ -140,8 +195,10 @@ export function activeEditor(): EditorListener | null {
 export function emitCommand(cmd: CommandDefinition): boolean {
   if (cmd.scope === 'global') {
     try {
-      (cmd as GlobalCommand).run();
-      return true;
+      // A global command may report `false` to mean "not handled" so the
+      // keystroke falls through (e.g. "search active note" when the
+      // active note kind has no find). Void is treated as handled.
+      return (cmd as GlobalCommand).run() !== false;
     } catch (err) {
       console.error('[hotkeys] global command threw', cmd.id, err);
       return false;
