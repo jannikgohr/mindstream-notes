@@ -47,6 +47,7 @@
   import FindBar from '$lib/components/FindBar.svelte';
   import CommentsSidebar from '$lib/pdf/CommentsSidebar.svelte';
   import PdfNavigatorSidebar from '$lib/pdf/PdfNavigatorSidebar.svelte';
+  import PdfAnnotationMenu from '$lib/pdf/PdfAnnotationMenu.svelte';
   import PdfSelectionMenu from '$lib/pdf/PdfSelectionMenu.svelte';
   import SignaturePadDialog from '$lib/pdf/SignaturePadDialog.svelte';
   import SignaturePicker from '$lib/pdf/SignaturePicker.svelte';
@@ -212,6 +213,9 @@
   let canRedo = $state(false);
   // Floating bubble for text-aware highlight/comment on a text selection.
   let selectionMenu = $state<{ x: number; y: number } | null>(null);
+  // Action popup for the currently-selected annotation (add comment /
+  // colour / delete), positioned above it in client coords.
+  let annotationMenu = $state<{ x: number; y: number } | null>(null);
   // Latest rendered viewport per page, so selection client-rects can be
   // converted back into PDF user space. Updated in the render action.
   const pageViewports = new Map<number, PdfViewport>();
@@ -659,6 +663,119 @@
       window.removeEventListener('resize', clearSelectionMenu);
     };
   });
+
+  // --- Selected-annotation action popup -------------------------------------
+
+  const selectedAnnotation = $derived(
+    selectedAnnotationId
+      ? (annotations.find((a) => a.id === selectedAnnotationId) ?? null)
+      : null
+  );
+
+  /** Position the action popup above the selected annotation, in client
+   *  coords, or hide it when the annotation is unrendered / scrolled out
+   *  of the viewport. */
+  function updateAnnotationMenu() {
+    const ann = selectedAnnotation;
+    if (!ann || isTrashed || !container) {
+      annotationMenu = null;
+      return;
+    }
+    const pageNum = ann.pageIndex + 1;
+    const figure = container.querySelector<HTMLElement>(
+      `figure[data-page-number="${pageNum}"]`
+    );
+    const pageEl = figure?.querySelector<HTMLElement>('.page') ?? null;
+    const viewport = pageViewports.get(pageNum);
+    if (!pageEl || !viewport) {
+      annotationMenu = null;
+      return;
+    }
+    const pageRect = pageEl.getBoundingClientRect();
+    let minTop = Infinity;
+    let maxBottom = -Infinity;
+    let minLeft = Infinity;
+    let maxRight = -Infinity;
+    for (const rect of ann.rects) {
+      const [x1, y1] = viewport.convertToViewportPoint(rect.x, rect.y);
+      const [x2, y2] = viewport.convertToViewportPoint(
+        rect.x + rect.width,
+        rect.y + rect.height
+      );
+      minTop = Math.min(minTop, y1, y2);
+      maxBottom = Math.max(maxBottom, y1, y2);
+      minLeft = Math.min(minLeft, x1, x2);
+      maxRight = Math.max(maxRight, x1, x2);
+    }
+    if (!Number.isFinite(minTop)) {
+      annotationMenu = null;
+      return;
+    }
+    const cont = container.getBoundingClientRect();
+    const topClient = pageRect.top + minTop;
+    const bottomClient = pageRect.top + maxBottom;
+    // Hide when the annotation is fully outside the scroll viewport.
+    if (bottomClient < cont.top || topClient > cont.bottom) {
+      annotationMenu = null;
+      return;
+    }
+    // Clamp so the bubble (drawn above `y`) stays inside the viewport.
+    const y = Math.max(topClient, cont.top + 52);
+    const centerClient = pageRect.left + (minLeft + maxRight) / 2;
+    const x = Math.min(window.innerWidth - 90, Math.max(90, centerClient));
+    annotationMenu = { x, y };
+  }
+
+  // Recompute when the selection, geometry (zoom), or annotation set
+  // changes — deferred a frame so the page layout has settled first.
+  $effect(() => {
+    void selectedAnnotationId;
+    void annotationVersion;
+    void renderVersion;
+    void zoom;
+    void zoomMode;
+    void containerWidth;
+    const id = requestAnimationFrame(updateAnnotationMenu);
+    return () => cancelAnimationFrame(id);
+  });
+
+  // Follow the annotation as the page scrolls (the popup is viewport-fixed).
+  $effect(() => {
+    if (!container) return;
+    const scrollEl = container;
+    let raf = 0;
+    const onScroll = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(updateAnnotationMenu);
+    };
+    scrollEl.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('resize', onScroll);
+    return () => {
+      cancelAnimationFrame(raf);
+      scrollEl.removeEventListener('scroll', onScroll);
+      window.removeEventListener('resize', onScroll);
+    };
+  });
+
+  function addCommentToSelected() {
+    const ann = selectedAnnotation;
+    if (!ann || isTrashed) return;
+    // Give the highlight an (empty) body so it reads as a comment, then
+    // open the sidebar focused on it.
+    updateAnnotation(ann.id, { body: ann.body ?? '' });
+    commentsSidebarOpen = true;
+    commentDraftFocusId = ann.id;
+  }
+
+  function recolorSelected(color: string) {
+    const ann = selectedAnnotation;
+    if (!ann || isTrashed) return;
+    updateAnnotation(ann.id, { color });
+  }
+
+  function deleteSelectedAnnotation() {
+    if (selectedAnnotationId) deleteAnnotation(selectedAnnotationId);
+  }
 
   function selectAnnotation(id: string | null) {
     selectedAnnotationId = id;
@@ -2513,6 +2630,22 @@
         y={selectionMenu.y}
         onHighlight={highlightSelection}
         onComment={commentSelection}
+      />
+    {/if}
+
+    {#if annotationMenu && selectedAnnotation && !isTrashed}
+      <PdfAnnotationMenu
+        x={annotationMenu.x}
+        y={annotationMenu.y}
+        canAddComment={selectedAnnotation.type === 'highlight' &&
+          typeof selectedAnnotation.body !== 'string'}
+        colorable={selectedAnnotation.type === 'highlight' ||
+          selectedAnnotation.type === 'comment'}
+        colors={ANNOTATION_COLORS}
+        activeColor={selectedAnnotation.color}
+        onAddComment={addCommentToSelected}
+        onPickColor={recolorSelected}
+        onDelete={deleteSelectedAnnotation}
       />
     {/if}
 
