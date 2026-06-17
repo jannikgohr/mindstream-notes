@@ -2494,13 +2494,15 @@
           <ChevronLeft aria-hidden="true" />
         </ToolbarButton>
 
-        <div class="flex items-center gap-1 text-xs text-muted-foreground">
+        <div
+          class="flex shrink-0 items-center gap-1 whitespace-nowrap text-xs text-muted-foreground"
+        >
           <input
             type="text"
             inputmode="numeric"
             value={pageInputValue}
             aria-label={tUi('pdf.page.inputLabel')}
-            class="h-7 w-9 rounded-md border border-border bg-background text-center tabular-nums outline-none focus:ring-1 focus:ring-ring"
+            class="h-7 w-9 shrink-0 rounded-md border border-border bg-background text-center tabular-nums outline-none focus:ring-1 focus:ring-ring"
             oninput={(event) =>
               (pageInputValue = (event.currentTarget as HTMLInputElement)
                 .value)}
@@ -2519,7 +2521,7 @@
               }
             }}
           />
-          <span class="tabular-nums">
+          <span class="shrink-0 whitespace-nowrap tabular-nums">
             {tUi('pdf.page.totalLabel').replace(
               '{total}',
               String(pageNumbers.length)
