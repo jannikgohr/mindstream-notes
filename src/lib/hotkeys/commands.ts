@@ -229,9 +229,9 @@ type RootNoteKind = 'markdown' | 'freeform' | 'ink';
 function rootNoteTitle(kind: RootNoteKind): string {
   switch (kind) {
     case 'freeform':
-      return 'Untitled drawing';
+      return 'Untitled drawing canvas';
     case 'ink':
-      return 'Untitled ink note';
+      return 'Untitled handwritten note';
     case 'markdown':
       return 'Untitled';
   }
@@ -547,6 +547,13 @@ export const HOTKEY_COMMANDS: CommandDefinition[] = [
     scope: 'editor',
     editorKind: 'ink',
     labelKey: 'hotkeys.command.editor.ink.eraser',
+    defaultBinding: null
+  },
+  {
+    id: 'editor.ink.lasso',
+    scope: 'editor',
+    editorKind: 'ink',
+    labelKey: 'hotkeys.command.editor.ink.lasso',
     defaultBinding: null
   },
   {

@@ -29,7 +29,7 @@ import {
   FileText,
   FileType2,
   PencilRuler
-} from 'lucide-svelte';
+} from '@lucide/svelte';
 import { isKnownNoteKind } from '$lib/api/notes';
 import type { IconComponent } from '$lib/settings/icons';
 

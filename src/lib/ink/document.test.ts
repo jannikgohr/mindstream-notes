@@ -195,6 +195,186 @@ describe('InkDocument', () => {
     expect(doc.visibleStrokes().map((s) => s.id)).toEqual([first]);
   });
 
+  it('selects strokes that intersect a lasso path', () => {
+    const doc = new InkDocument();
+    doc.beginStroke(DEFAULT_COLOR, DEFAULT_WIDTH);
+    doc.pushPoint(10, 10, 1);
+    doc.pushPoint(50, 10, 1);
+    const inside = doc.endStroke().value;
+    doc.beginStroke(DEFAULT_COLOR, DEFAULT_WIDTH);
+    doc.pushPoint(-10, 60, 1);
+    doc.pushPoint(130, 60, 1);
+    const crossing = doc.endStroke().value;
+    doc.beginStroke(DEFAULT_COLOR, DEFAULT_WIDTH);
+    doc.pushPoint(250, 250, 1);
+    doc.pushPoint(260, 250, 1);
+    doc.endStroke();
+    if (!inside || !crossing) throw new Error('expected committed strokes');
+
+    const ids = doc.strokeIdsInLasso([
+      { x: 0, y: 0 },
+      { x: 120, y: 0 },
+      { x: 120, y: 120 },
+      { x: 0, y: 120 }
+    ]);
+
+    expect(new Set(ids)).toEqual(new Set([inside, crossing]));
+  });
+
+  it('deletes selected strokes as one undoable operation', () => {
+    const doc = new InkDocument();
+    doc.beginStroke(DEFAULT_COLOR, DEFAULT_WIDTH);
+    doc.pushPoint(0, 0, 1);
+    doc.pushPoint(10, 0, 1);
+    const first = doc.endStroke().value;
+    doc.beginStroke(DEFAULT_COLOR, DEFAULT_WIDTH);
+    doc.pushPoint(100, 100, 1);
+    doc.pushPoint(110, 100, 1);
+    const second = doc.endStroke().value;
+    if (!first || !second) throw new Error('expected committed strokes');
+
+    expect(doc.deleteStrokes([first]).value).toEqual([first]);
+    expect(doc.visibleStrokes().map((s) => s.id)).toEqual([second]);
+    expect(doc.undoLast().value).toBe(true);
+    expect(new Set(doc.visibleStrokes().map((s) => s.id))).toEqual(
+      new Set([first, second])
+    );
+    expect(doc.redoLast().value).toBe(true);
+    expect(doc.visibleStrokes().map((s) => s.id)).toEqual([second]);
+  });
+
+  it('moves selected strokes as one undoable operation', () => {
+    const doc = new InkDocument();
+    doc.beginStroke(DEFAULT_COLOR, DEFAULT_WIDTH);
+    doc.pushPoint(0, 0, 0.5);
+    doc.pushPoint(10, 0, 1);
+    const first = doc.endStroke().value;
+    doc.beginStroke(DEFAULT_COLOR, DEFAULT_WIDTH);
+    doc.pushPoint(100, 100, 1);
+    doc.pushPoint(110, 100, 1);
+    doc.endStroke();
+    if (!first) throw new Error('expected committed stroke');
+
+    expect(doc.translateStrokes([first], 25, 40).value).toEqual([first]);
+    expect(doc.visibleStrokes()[0].points).toEqual([
+      { x: 25, y: 40, pressure: 0.5 },
+      { x: 35, y: 40, pressure: 1 }
+    ]);
+    expect(doc.undoLast().value).toBe(true);
+    expect(doc.visibleStrokes()[0].points).toEqual([
+      { x: 0, y: 0, pressure: 0.5 },
+      { x: 10, y: 0, pressure: 1 }
+    ]);
+    expect(doc.redoLast().value).toBe(true);
+    expect(doc.visibleStrokes()[0].points).toEqual([
+      { x: 25, y: 40, pressure: 0.5 },
+      { x: 35, y: 40, pressure: 1 }
+    ]);
+  });
+
+  it('transforms selected strokes as one undoable operation', () => {
+    const doc = new InkDocument();
+    doc.beginStroke(DEFAULT_COLOR, 4);
+    doc.pushPoint(10, 0, 0.5);
+    doc.pushPoint(20, 0, 1);
+    const first = doc.endStroke().value;
+    if (!first) throw new Error('expected committed stroke');
+
+    const transform = {
+      a: 0,
+      b: 2,
+      c: -2,
+      d: 0,
+      e: 0,
+      f: 0,
+      widthScale: 2
+    };
+
+    expect(doc.transformStrokes([first], transform).value).toEqual([first]);
+    expect(doc.visibleStrokes()[0].width).toBeCloseTo(8);
+    expect(doc.visibleStrokes()[0].points).toEqual([
+      { x: 0, y: 20, pressure: 0.5 },
+      { x: 0, y: 40, pressure: 1 }
+    ]);
+    expect(doc.undoLast().value).toBe(true);
+    expect(doc.visibleStrokes()[0].width).toBeCloseTo(4);
+    expect(doc.visibleStrokes()[0].points).toEqual([
+      { x: 10, y: 0, pressure: 0.5 },
+      { x: 20, y: 0, pressure: 1 }
+    ]);
+    expect(doc.redoLast().value).toBe(true);
+    expect(doc.visibleStrokes()[0].width).toBeCloseTo(8);
+  });
+
+  it('adds pasted strokes as one undoable operation', () => {
+    const doc = new InkDocument();
+
+    const { value: ids } = doc.addStrokes([
+      {
+        color: 0xff336699,
+        width: 5,
+        points: [
+          { x: 10, y: 20, pressure: 0.5 },
+          { x: 30, y: 40, pressure: 1 }
+        ]
+      },
+      {
+        color: 0xffaa5500,
+        width: 2,
+        points: [
+          { x: 50, y: 60, pressure: 1 },
+          { x: 70, y: 80, pressure: 1 }
+        ]
+      }
+    ]);
+
+    expect(ids).toHaveLength(2);
+    expect(doc.visibleStrokes()).toHaveLength(2);
+    expect(doc.visibleStrokes()[0]).toMatchObject({
+      color: 0xff336699,
+      width: 5
+    });
+    expect(doc.undoLast().value).toBe(true);
+    expect(doc.visibleStrokes()).toHaveLength(0);
+    expect(doc.redoLast().value).toBe(true);
+    expect(doc.visibleStrokes().map((stroke) => stroke.id)).toEqual(ids);
+  });
+
+  it('restyles selected strokes as one undoable operation', () => {
+    const doc = new InkDocument();
+    doc.beginStroke(DEFAULT_COLOR, 4);
+    doc.pushPoint(0, 0, 1);
+    doc.pushPoint(10, 0, 1);
+    const first = doc.endStroke().value;
+    doc.beginStroke(0xff112233, 2);
+    doc.pushPoint(100, 100, 1);
+    doc.pushPoint(110, 100, 1);
+    doc.endStroke();
+    if (!first) throw new Error('expected committed stroke');
+
+    expect(
+      doc.styleStrokes([first], { color: 0xffabcdef, width: 8 }).value
+    ).toEqual([first]);
+    expect(doc.visibleStrokes()[0]).toMatchObject({
+      color: 0xffabcdef,
+      width: 8
+    });
+    expect(doc.visibleStrokes()[1]).toMatchObject({
+      color: 0xff112233,
+      width: 2
+    });
+    expect(doc.undoLast().value).toBe(true);
+    expect(doc.visibleStrokes()[0]).toMatchObject({
+      color: DEFAULT_COLOR,
+      width: 4
+    });
+    expect(doc.redoLast().value).toBe(true);
+    expect(doc.visibleStrokes()[0]).toMatchObject({
+      color: 0xffabcdef,
+      width: 8
+    });
+  });
+
   it('rejects malformed remote updates', () => {
     const doc = new InkDocument();
 

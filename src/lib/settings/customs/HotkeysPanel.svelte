@@ -24,7 +24,7 @@
    *     Negative-space: we DON'T silently overwrite — the user must
    *     confirm.
    */
-  import { Pencil, RotateCcw, XCircle } from 'lucide-svelte';
+  import { Pencil, RotateCcw, XCircle } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import {
     bindingFromEvent,

@@ -268,15 +268,13 @@
               "scope": "D",
               "type": "select",
               "default": "pen",
-              "options": ["pen", "eraser"],
-              "platforms": ["android"]
+              "options": ["pen", "eraser", "lasso"]
             },
             {
               "id": "editor.ink.color",
               "scope": "D",
               "type": "color",
-              "default": "#000000",
-              "platforms": ["android"]
+              "default": "#000000"
             },
             {
               "id": "editor.ink.width",
@@ -286,15 +284,20 @@
               "min": 0.5,
               "max": 12,
               "step": 0.5,
-              "unit": "pu",
-              "platforms": ["android"]
+              "unit": "pu"
             },
             {
               "id": "editor.ink.fingerDrawing",
               "scope": "D",
               "type": "toggle",
-              "default": true,
-              "platforms": ["android"]
+              "default": true
+            },
+            {
+              "id": "editor.ink.pageTheme",
+              "scope": "D",
+              "type": "select",
+              "default": "light",
+              "options": ["light", "system"]
             }
           ]
         },

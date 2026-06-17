@@ -76,14 +76,14 @@ import {
   Table as TableIcon,
   Sigma,
   Workflow
-} from 'lucide-svelte';
-import type { ComponentType } from 'svelte';
+} from '@lucide/svelte';
+import type { Component } from 'svelte';
 
 export interface ToolbarLeaf {
   kind: 'leaf';
   id: string;
   labelKey: string;
-  icon: ComponentType;
+  icon: Component;
   action: (ctx: Ctx) => void;
   /**
    * Optional predicate: true means the button should render in its
@@ -121,7 +121,7 @@ export interface ToolbarGroup {
   kind: 'group';
   id: string;
   labelKey: string;
-  icon: ComponentType;
+  icon: Component;
   items: ToolbarLeaf[];
   /**
    * Same semantics as `ToolbarLeaf.gate` but for the whole group. A

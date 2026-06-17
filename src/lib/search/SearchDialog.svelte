@@ -14,7 +14,7 @@
    */
   import { onDestroy, tick } from 'svelte';
   import { Dialog } from 'bits-ui';
-  import { Folder, Search as SearchIcon, X } from 'lucide-svelte';
+  import { Folder, Search as SearchIcon, X } from '@lucide/svelte';
   import {
     searchNotes,
     TRASH_ID,

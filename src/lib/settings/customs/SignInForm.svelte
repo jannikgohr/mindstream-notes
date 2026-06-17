@@ -21,7 +21,7 @@
    * never persist it.
    */
   import { Button } from '$lib/components/ui/button';
-  import { LogOut, Loader2, RefreshCw } from 'lucide-svelte';
+  import { LogOut, Loader2, RefreshCw } from '@lucide/svelte';
   import {
     authSession,
     etebaseLogin,

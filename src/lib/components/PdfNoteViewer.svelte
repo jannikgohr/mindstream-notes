@@ -12,7 +12,7 @@
     PenLine,
     Signature,
     Trash2
-  } from 'lucide-svelte';
+  } from '@lucide/svelte';
   import * as Y from 'yjs';
   import { Awareness } from 'y-protocols/awareness';
   import {
@@ -1486,7 +1486,10 @@
   }
 </script>
 
-<div bind:this={hostEl} class="flex h-full w-full flex-col bg-background">
+<div
+  bind:this={hostEl}
+  class="relative flex h-full w-full flex-col overflow-hidden bg-background"
+>
   {#if loading}
     <div
       class="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground"
@@ -1588,24 +1591,6 @@
           <MessagesSquare aria-hidden="true" />
         </ToolbarButton>
       </div>
-
-      {#if !mobileToolbar}
-        <ToolbarZoomControls
-          bind:open={zoomMenuOpen}
-          label={zoomLabel}
-          zoomOutLabel={tUi('pdf.toolbar.zoomOut')}
-          zoomInLabel={tUi('pdf.toolbar.zoomIn')}
-          zoomMenuLabel={tUi('pdf.toolbar.zoom')}
-          fitLabel={tUi('pdf.toolbar.fitWidth')}
-          fitActive={zoomMode === 'fit-width'}
-          zoomOptions={QUICK_ZOOMS}
-          selectedZoom={zoomMode === 'fixed' ? zoom : null}
-          onZoomOut={() => zoomBy(1 / ZOOM_STEP)}
-          onZoomIn={() => zoomBy(ZOOM_STEP)}
-          onFit={setFitWidthZoom}
-          onSelectZoom={setFixedZoom}
-        />
-      {/if}
     </Toolbar>
 
     <div class="flex min-h-0 flex-1 overflow-hidden">
@@ -1663,6 +1648,32 @@
         />
       {/if}
     </div>
+
+    {#if !mobileToolbar}
+      <div
+        class="absolute bottom-3 left-3 z-20"
+        role="toolbar"
+        aria-label={tUi('pdf.toolbar.zoom')}
+      >
+        <ToolbarZoomControls
+          bind:open={zoomMenuOpen}
+          class="rounded-md border border-border bg-background/95 p-1 shadow-sm backdrop-blur"
+          menuPlacement="above"
+          label={zoomLabel}
+          zoomOutLabel={tUi('pdf.toolbar.zoomOut')}
+          zoomInLabel={tUi('pdf.toolbar.zoomIn')}
+          zoomMenuLabel={tUi('pdf.toolbar.zoom')}
+          fitLabel={tUi('pdf.toolbar.fitWidth')}
+          fitActive={zoomMode === 'fit-width'}
+          zoomOptions={QUICK_ZOOMS}
+          selectedZoom={zoomMode === 'fixed' ? zoom : null}
+          onZoomOut={() => zoomBy(1 / ZOOM_STEP)}
+          onZoomIn={() => zoomBy(ZOOM_STEP)}
+          onFit={setFitWidthZoom}
+          onSelectZoom={setFixedZoom}
+        />
+      </div>
+    {/if}
 
     <SignaturePadDialog
       open={signatureDialogOpen}

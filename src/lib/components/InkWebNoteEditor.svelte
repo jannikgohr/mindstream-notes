@@ -2,21 +2,31 @@
   import * as Y from 'yjs';
   import { onDestroy, onMount, tick } from 'svelte';
   import {
+    ClipboardPaste,
+    Copy,
     Eraser,
+    LassoSelect,
     MousePointer2,
     MoonStar,
+    Palette,
     PenLine,
+    PocketKnife,
     Redo2,
+    Scissors,
+    Settings2,
     Sun,
+    Shredder,
     Trash2,
     Undo2
-  } from 'lucide-svelte';
+  } from '@lucide/svelte';
   import {
     Toolbar,
     ToolbarButton,
+    ToolbarCollapseWhenOverflow,
     ToolbarSeparator,
     ToolbarZoomControls
   } from '$lib/components/ui/toolbar';
+  import { confirm } from '$lib/components/confirm-dialog.svelte';
   import {
     drawingCancelLiveInk,
     drawingEnterImmersiveInkMode,
@@ -60,7 +70,10 @@
     DEFAULT_COLOR,
     DEFAULT_WIDTH,
     InkDocument,
-    type StrokeBounds
+    type InkStrokeInput,
+    type StrokeBounds,
+    type StrokeStylePatch,
+    type StrokeTransform
   } from '$lib/ink/document';
   import {
     DEFAULT_PAGE_GAP,
@@ -84,17 +97,31 @@
   const SAVE_DEBOUNCE_MS = 800;
   const ERASER_RADIUS = 10;
   const PAGE_FILL_LIGHT = 0xffffffff;
-  const PAGE_BORDER_LIGHT = 0xffe5e7eb;
-  const PAGE_SHADOW_LIGHT = 'rgba(0, 0, 0, 0.14)';
-  const PAGE_SHADOW_DARK = 'rgba(255, 255, 255, 0.2)';
+  const PAGE_SHADOW_LIGHT = 'rgba(15, 23, 42, 0.16)';
+  const PAGE_SHADOW_DARK = 'rgba(0, 0, 0, 0.42)';
+  const PAGE_EDGE_DARK = 'rgba(255, 255, 255, 0.12)';
+  const PAGE_EDGE_LIGHT = 'rgba(15, 23, 42, 0.08)';
+  const TOOL_PREVIEW_DASH = [5, 4];
   const FIT_PAGE_MARGIN_PX = 32;
   const FIT_PAGE_TOP_MARGIN_PX = 72;
   const MAX_ZOOM_FACTOR = 6;
   const INK_ZOOM_STEP = 1.2;
   const INK_QUICK_ZOOMS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
+  const INK_COLOR_SWATCHES = [
+    '#111827',
+    '#dc2626',
+    '#2563eb',
+    '#16a34a',
+    '#f59e0b',
+    '#7c3aed'
+  ];
   const POINTER_BUTTON_SECONDARY = 2;
   const POINTER_BUTTON_STYLUS_PRIMARY = 32;
   const POINTER_BUTTON_STYLUS_SECONDARY = 64;
+  const SELECTION_HANDLE_RADIUS_PX = 7;
+  const SELECTION_HANDLE_HIT_RADIUS_PX = 22;
+  const SELECTION_ROTATE_GAP_PX = 30;
+  const SELECTION_PASTE_OFFSET_PX = 24;
 
   const INK_TOOL_SETTING = 'editor.ink.tool';
   const INK_COLOR_SETTING = 'editor.ink.color';
@@ -102,7 +129,7 @@
   const INK_FINGER_SETTING = 'editor.ink.fingerDrawing';
   const INK_PAGE_THEME_SETTING = 'editor.ink.pageTheme';
 
-  type ToolMode = 'pen' | 'eraser';
+  type ToolMode = 'pen' | 'eraser' | 'lasso';
   type PageThemeMode = 'light' | 'system';
   type AndroidStylusEraserAction = 'down' | 'move' | 'up' | 'cancel';
   type AndroidStylusEraserPoint = {
@@ -118,7 +145,38 @@
     point: InkPoint;
     hits: Set<string>;
   };
-  type PointerMode = 'draw' | 'erase' | 'pan' | 'touchGesture';
+  type ToolPreview = {
+    point: InkPoint;
+    erasing: boolean;
+    lassoing: boolean;
+    pointerType: string;
+  };
+  type PointerMode =
+    | 'draw'
+    | 'erase'
+    | 'lasso'
+    | 'moveSelection'
+    | 'pan'
+    | 'touchGesture';
+  type SelectionHandle = 'nw' | 'ne' | 'se' | 'sw' | 'rotate';
+  type SelectionFrame = Record<
+    Exclude<SelectionHandle, 'rotate'>,
+    { x: number; y: number }
+  >;
+  type SelectionInteraction =
+    | { kind: 'move'; start: InkPoint }
+    | {
+        kind: 'resize';
+        handle: Exclude<SelectionHandle, 'rotate'>;
+        anchor: { x: number; y: number };
+        startCorner: { x: number; y: number };
+      }
+    | {
+        kind: 'rotate';
+        center: { x: number; y: number };
+        startAngle: number;
+      };
+  type InkClipboardStroke = InkStrokeInput;
   type TouchPointer = {
     clientX: number;
     clientY: number;
@@ -164,15 +222,31 @@
   let editorListener: EditorListener | null = null;
   let mobileToolbar = $state(false);
   let zoomMenuOpen = $state(false);
+  let toolbarMenuOpen = $state<'style' | 'selection' | 'settings' | null>(null);
+  let styleMenuButton = $state<HTMLButtonElement | null>(null);
+  let styleMenuEl = $state<HTMLDivElement | null>(null);
+  let selectionMenuButton = $state<HTMLButtonElement | null>(null);
+  let selectionMenuEl = $state<HTMLDivElement | null>(null);
+  let settingsMenuButton = $state<HTMLButtonElement | null>(null);
+  let settingsMenuEl = $state<HTMLDivElement | null>(null);
   let zoomUiVersion = $state(0);
 
   let tool = $state<ToolMode>('pen');
   let colorArgb = $state(DEFAULT_COLOR);
+  let colorInputText = $state('#000000');
   let width = $state(DEFAULT_WIDTH);
   let fingerDrawingAllowed = $state(true);
   let pageThemeMode = $state<PageThemeMode>('light');
   let strokeCount = $state(0);
+  let selectedStrokeIds = $state<string[]>([]);
+  let selectionClipboard = $state<InkClipboardStroke[]>([]);
+  let selectionFrame = $state<SelectionFrame | null>(null);
   let inFlight = $state<InkPoint[]>([]);
+  let lassoPoints = $state<InkPoint[]>([]);
+  let selectionDragStart: InkPoint | null = null;
+  let selectionDragOffset = $state({ x: 0, y: 0 });
+  let selectionInteraction: SelectionInteraction | null = null;
+  let selectionTransformPreview = $state(identityTransform());
   let undoDepth = $state(0);
   let redoDepth = $state(0);
   let eraserHits = new Set<string>();
@@ -180,6 +254,7 @@
   let androidStylusEraserActive = false;
   let pointerMode: PointerMode | null = null;
   let activePointerId: number | null = null;
+  let toolPreview = $state<ToolPreview | null>(null);
   let lastPointer: { x: number; y: number } | null = null;
   const touchPointers = new Map<number, TouchPointer>();
   let touchGesture: TouchGestureState | null = null;
@@ -211,6 +286,19 @@
     void zoomUiVersion;
     return Math.abs(view.scale - minScale()) < 0.01;
   });
+  const brushLineHeight = $derived(Math.max(2, Math.min(12, width)));
+  const brushSizeText = $derived(
+    Number.isInteger(width) ? String(width) : width.toFixed(1)
+  );
+  const selectedStrokeSet = $derived(new Set(selectedStrokeIds));
+  const hasSelection = $derived(selectedStrokeIds.length > 0);
+  const hasSelectionClipboard = $derived(selectionClipboard.length > 0);
+  const selectionMoveActive = $derived(
+    Math.abs(selectionDragOffset.x) > 0.001 ||
+      Math.abs(selectionDragOffset.y) > 0.001 ||
+      !transformIsIdentity(selectionTransformPreview)
+  );
+  const clearButtonLabel = $derived(tUi('ink.toolbar.clear'));
 
   function ancestorIsTrash(parentId: string | null): boolean {
     let current = parentId;
@@ -259,6 +347,10 @@
     pageThemeMode = normalizeInkPageTheme(
       getSettingValue(INK_PAGE_THEME_SETTING)
     );
+  });
+
+  $effect(() => {
+    colorInputText = colorHex;
   });
 
   $effect(() => {
@@ -498,11 +590,26 @@
   function refreshFromDoc() {
     if (!doc) return;
     strokeCount = doc.visibleStrokeCount();
+    pruneSelection();
     syncHistoryState();
     const maxY = doc.contentMaxY();
     layout = defaultLayout(pageCountForContentMaxY(maxY));
     clampView();
     scheduleDraw();
+  }
+
+  function pruneSelection() {
+    if (!doc || selectedStrokeIds.length === 0) return;
+    const visible = new Set(doc.strokeIds(false).map((entry) => entry.id));
+    const next = selectedStrokeIds.filter((id) => visible.has(id));
+    if (next.length !== selectedStrokeIds.length) {
+      selectedStrokeIds = next;
+      selectionFrame = null;
+      if (next.length > 0) {
+        const bounds = selectionBounds();
+        selectionFrame = bounds ? frameFromBounds(bounds) : null;
+      }
+    }
   }
 
   function syncHistoryState() {
@@ -725,6 +832,7 @@
     drawPages(ctx, visibleBounds);
     const visibleStrokes = doc?.visibleStrokesInBounds(visibleBounds, 2) ?? [];
     for (const stroke of visibleStrokes) {
+      if (selectionMoveActive && selectedStrokeSet.has(stroke.id)) continue;
       drawStroke(
         ctx,
         stroke.points,
@@ -732,7 +840,22 @@
         stroke.width
       );
     }
+    if (selectionMoveActive) {
+      const transform = currentSelectionTransform();
+      for (const stroke of visibleStrokes) {
+        if (!selectedStrokeSet.has(stroke.id)) continue;
+        drawStroke(
+          ctx,
+          transformedPoints(stroke.points, transform),
+          displayCssColor(stroke.color),
+          stroke.width * transform.widthScale
+        );
+      }
+    }
     drawStroke(ctx, inFlight, displayCssColor(colorArgb), width);
+    drawSelectionOverlay(ctx);
+    drawLassoOverlay(ctx);
+    drawToolPreview(ctx);
     hasDrawnFrame = true;
     scheduleResizeSnapshotHide();
   }
@@ -760,14 +883,91 @@
       const a = pageToScreen({ x: x0, y: y0 });
       const b = pageToScreen({ x: x1, y: y1 });
       if (b.y < -32 || a.y > view.height + 32) continue;
-      ctx.fillStyle = pageDark ? PAGE_SHADOW_DARK : PAGE_SHADOW_LIGHT;
-      ctx.fillRect(a.x + 3, a.y + 3, b.x - a.x, b.y - a.y);
+      const width = b.x - a.x;
+      const height = b.y - a.y;
+      ctx.save();
+      ctx.shadowColor = pageDark ? PAGE_SHADOW_DARK : PAGE_SHADOW_LIGHT;
+      ctx.shadowBlur = pageDark ? 18 : 14;
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = pageDark ? 8 : 6;
       ctx.fillStyle = displayCssColor(PAGE_FILL_LIGHT);
-      ctx.fillRect(a.x, a.y, b.x - a.x, b.y - a.y);
-      ctx.strokeStyle = displayCssColor(PAGE_BORDER_LIGHT);
+      ctx.fillRect(a.x, a.y, width, height);
+      ctx.restore();
+      ctx.strokeStyle = pageDark ? PAGE_EDGE_DARK : PAGE_EDGE_LIGHT;
       ctx.lineWidth = 1;
-      ctx.strokeRect(a.x, a.y, b.x - a.x, b.y - a.y);
+      ctx.strokeRect(a.x + 0.5, a.y + 0.5, width - 1, height - 1);
     }
+  }
+
+  function drawToolPreview(ctx: CanvasRenderingContext2D) {
+    if (
+      !toolPreview ||
+      pointerMode === 'pan' ||
+      pointerMode === 'touchGesture'
+    ) {
+      return;
+    }
+    const onPage = containsPagePoint(
+      layout,
+      toolPreview.point.x,
+      toolPreview.point.y
+    );
+    if (!toolPreview.erasing && !toolPreview.lassoing && !onPage) {
+      return;
+    }
+    const center = pageToScreen(toolPreview.point);
+    ctx.save();
+    ctx.lineWidth = 1;
+    if (toolPreview.erasing) {
+      const radius = Math.max(4, ERASER_RADIUS * view.scale);
+      ctx.setLineDash(TOOL_PREVIEW_DASH);
+      ctx.beginPath();
+      ctx.arc(center.x, center.y, radius, 0, Math.PI * 2);
+      ctx.fillStyle = onPage
+        ? pageDark
+          ? 'rgba(248, 250, 252, 0.08)'
+          : 'rgba(15, 23, 42, 0.06)'
+        : 'rgba(248, 250, 252, 0.08)';
+      ctx.fill();
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = 'rgba(248, 250, 252, 0.78)';
+      ctx.stroke();
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = 'rgba(15, 23, 42, 0.78)';
+      ctx.stroke();
+    } else if (toolPreview.lassoing && lassoPoints.length === 0) {
+      const radiusX = 15;
+      const radiusY = 11;
+      ctx.setLineDash(TOOL_PREVIEW_DASH);
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = pageDark
+        ? 'rgba(96, 165, 250, 0.9)'
+        : 'rgba(37, 99, 235, 0.82)';
+      ctx.fillStyle = pageDark
+        ? 'rgba(96, 165, 250, 0.1)'
+        : 'rgba(37, 99, 235, 0.07)';
+      ctx.beginPath();
+      ctx.ellipse(center.x, center.y, radiusX, radiusY, -0.24, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    } else if (shouldDrawPenToolPreview()) {
+      const radius = Math.max(2, (width * view.scale) / 2);
+      const previewColor = displayColor(colorArgb);
+      ctx.strokeStyle = cssColor(previewColor);
+      ctx.fillStyle = cssColor(
+        (0x33000000 | (previewColor & 0x00ffffff)) >>> 0
+      );
+      ctx.beginPath();
+      ctx.arc(center.x, center.y, radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function shouldDrawPenToolPreview(): boolean {
+    if (toolPreview?.pointerType !== 'pen') return false;
+    return !(isAndroid() && pointerMode === 'draw');
   }
 
   function drawStroke(
@@ -823,6 +1023,304 @@
     return 0.25 + 0.75 * Math.min(1, Math.max(0, pressure));
   }
 
+  function identityTransform(): StrokeTransform {
+    return { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0, widthScale: 1 };
+  }
+
+  function translationTransform(dx: number, dy: number): StrokeTransform {
+    return { a: 1, b: 0, c: 0, d: 1, e: dx, f: dy, widthScale: 1 };
+  }
+
+  function transformIsIdentity(transform: StrokeTransform): boolean {
+    return (
+      Math.abs(transform.a - 1) < 0.0001 &&
+      Math.abs(transform.b) < 0.0001 &&
+      Math.abs(transform.c) < 0.0001 &&
+      Math.abs(transform.d - 1) < 0.0001 &&
+      Math.abs(transform.e) < 0.001 &&
+      Math.abs(transform.f) < 0.001 &&
+      Math.abs(transform.widthScale - 1) < 0.0001
+    );
+  }
+
+  function currentSelectionTransform(): StrokeTransform {
+    if (!transformIsIdentity(selectionTransformPreview)) {
+      return selectionTransformPreview;
+    }
+    return translationTransform(selectionDragOffset.x, selectionDragOffset.y);
+  }
+
+  function transformPoint(
+    point: { x: number; y: number },
+    transform: StrokeTransform
+  ): { x: number; y: number } {
+    return {
+      x: point.x * transform.a + point.y * transform.c + transform.e,
+      y: point.x * transform.b + point.y * transform.d + transform.f
+    };
+  }
+
+  function resizeTransform(
+    anchor: { x: number; y: number },
+    startCorner: { x: number; y: number },
+    current: { x: number; y: number }
+  ): StrokeTransform {
+    const minScale = 0.08;
+    const sxBase = startCorner.x - anchor.x;
+    const syBase = startCorner.y - anchor.y;
+    const rawSx =
+      Math.abs(sxBase) < 0.001 ? 1 : (current.x - anchor.x) / sxBase;
+    const rawSy =
+      Math.abs(syBase) < 0.001 ? 1 : (current.y - anchor.y) / syBase;
+    const sx = Math.max(minScale, rawSx);
+    const sy = Math.max(minScale, rawSy);
+    return {
+      a: sx,
+      b: 0,
+      c: 0,
+      d: sy,
+      e: anchor.x - anchor.x * sx,
+      f: anchor.y - anchor.y * sy,
+      widthScale: Math.sqrt(Math.max(minScale * minScale, sx * sy))
+    };
+  }
+
+  function rotationTransform(
+    center: { x: number; y: number },
+    angle: number
+  ): StrokeTransform {
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    return {
+      a: cos,
+      b: sin,
+      c: -sin,
+      d: cos,
+      e: center.x - center.x * cos + center.y * sin,
+      f: center.y - center.x * sin - center.y * cos,
+      widthScale: 1
+    };
+  }
+
+  function transformedPoints(
+    points: InkPoint[],
+    transform: StrokeTransform
+  ): InkPoint[] {
+    return points.map((point) => ({
+      ...transformPoint(point, transform),
+      pressure: point.pressure
+    }));
+  }
+
+  function selectionBounds(): StrokeBounds | null {
+    if (!doc || selectedStrokeIds.length === 0) return null;
+    const selected = selectedStrokeSet;
+    let out: StrokeBounds | null = null;
+    for (const stroke of doc.visibleStrokes()) {
+      if (!selected.has(stroke.id) || !stroke.bounds) continue;
+      out = out
+        ? {
+            minX: Math.min(out.minX, stroke.bounds.minX),
+            minY: Math.min(out.minY, stroke.bounds.minY),
+            maxX: Math.max(out.maxX, stroke.bounds.maxX),
+            maxY: Math.max(out.maxY, stroke.bounds.maxY)
+          }
+        : { ...stroke.bounds };
+    }
+    return out;
+  }
+
+  function frameFromBounds(bounds: StrokeBounds): SelectionFrame {
+    return {
+      nw: { x: bounds.minX, y: bounds.minY },
+      ne: { x: bounds.maxX, y: bounds.minY },
+      se: { x: bounds.maxX, y: bounds.maxY },
+      sw: { x: bounds.minX, y: bounds.maxY }
+    };
+  }
+
+  function transformSelectionFrame(
+    frame: SelectionFrame,
+    transform: StrokeTransform
+  ): SelectionFrame {
+    return {
+      nw: transformPoint(frame.nw, transform),
+      ne: transformPoint(frame.ne, transform),
+      se: transformPoint(frame.se, transform),
+      sw: transformPoint(frame.sw, transform)
+    };
+  }
+
+  function baseSelectionFrame(): SelectionFrame | null {
+    if (selectionFrame) return selectionFrame;
+    const bounds = selectionBounds();
+    return bounds ? frameFromBounds(bounds) : null;
+  }
+
+  function currentSelectionFrame(): SelectionFrame | null {
+    const frame = baseSelectionFrame();
+    if (!frame) return null;
+    return transformSelectionFrame(frame, currentSelectionTransform());
+  }
+
+  function selectionCenter(frame: SelectionFrame): { x: number; y: number } {
+    return {
+      x: (frame.nw.x + frame.ne.x + frame.se.x + frame.sw.x) * 0.25,
+      y: (frame.nw.y + frame.ne.y + frame.se.y + frame.sw.y) * 0.25
+    };
+  }
+
+  function selectionContainsPoint(point: { x: number; y: number }): boolean {
+    const corners = currentSelectionFrame();
+    if (!corners) return false;
+    return pointInPolygon(point, [
+      corners.nw,
+      corners.ne,
+      corners.se,
+      corners.sw
+    ]);
+  }
+
+  function selectionScreenGeometry(): {
+    corners: Record<
+      Exclude<SelectionHandle, 'rotate'>,
+      { x: number; y: number }
+    >;
+    rotate: { x: number; y: number };
+  } | null {
+    const corners = currentSelectionFrame();
+    if (!corners) return null;
+    const screenCorners = {
+      nw: pageToScreen(corners.nw),
+      ne: pageToScreen(corners.ne),
+      se: pageToScreen(corners.se),
+      sw: pageToScreen(corners.sw)
+    };
+    const topMid = {
+      x: (screenCorners.nw.x + screenCorners.ne.x) * 0.5,
+      y: (screenCorners.nw.y + screenCorners.ne.y) * 0.5
+    };
+    const center = pageToScreen(selectionCenter(corners));
+    const normal = {
+      x: topMid.x - center.x,
+      y: topMid.y - center.y
+    };
+    const len = Math.max(1, Math.hypot(normal.x, normal.y));
+    return {
+      corners: screenCorners,
+      rotate: {
+        x: topMid.x + (normal.x / len) * SELECTION_ROTATE_GAP_PX,
+        y: topMid.y + (normal.y / len) * SELECTION_ROTATE_GAP_PX
+      }
+    };
+  }
+
+  function selectionHandleAtCanvasPoint(point: {
+    x: number;
+    y: number;
+  }): SelectionHandle | null {
+    const geometry = selectionScreenGeometry();
+    if (!geometry) return null;
+    const handles: Array<[SelectionHandle, { x: number; y: number }]> = [
+      ['rotate', geometry.rotate],
+      ['nw', geometry.corners.nw],
+      ['ne', geometry.corners.ne],
+      ['se', geometry.corners.se],
+      ['sw', geometry.corners.sw]
+    ];
+    for (const [handle, handlePoint] of handles) {
+      if (
+        Math.hypot(point.x - handlePoint.x, point.y - handlePoint.y) <=
+        SELECTION_HANDLE_HIT_RADIUS_PX
+      ) {
+        return handle;
+      }
+    }
+    return null;
+  }
+
+  function pointInPolygon(
+    point: { x: number; y: number },
+    polygon: Array<{ x: number; y: number }>
+  ): boolean {
+    let inside = false;
+    for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+      const a = polygon[i];
+      const b = polygon[j];
+      const intersects =
+        a.y > point.y !== b.y > point.y &&
+        point.x < ((b.x - a.x) * (point.y - a.y)) / (b.y - a.y) + a.x;
+      if (intersects) inside = !inside;
+    }
+    return inside;
+  }
+
+  function drawSelectionOverlay(ctx: CanvasRenderingContext2D) {
+    const geometry = selectionScreenGeometry();
+    if (!geometry) return;
+    const { corners, rotate } = geometry;
+    const topMid = {
+      x: (corners.nw.x + corners.ne.x) * 0.5,
+      y: (corners.nw.y + corners.ne.y) * 0.5
+    };
+    ctx.save();
+    ctx.strokeStyle = '#2563eb';
+    ctx.fillStyle = 'rgba(37, 99, 235, 0.08)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([6, 4]);
+    ctx.beginPath();
+    ctx.moveTo(corners.nw.x, corners.nw.y);
+    ctx.lineTo(corners.ne.x, corners.ne.y);
+    ctx.lineTo(corners.se.x, corners.se.y);
+    ctx.lineTo(corners.sw.x, corners.sw.y);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.moveTo(topMid.x, topMid.y);
+    ctx.lineTo(rotate.x, rotate.y);
+    ctx.stroke();
+    for (const point of [
+      corners.nw,
+      corners.ne,
+      corners.se,
+      corners.sw,
+      rotate
+    ]) {
+      ctx.fillStyle = '#ffffff';
+      ctx.strokeStyle = '#2563eb';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(point.x, point.y, SELECTION_HANDLE_RADIUS_PX, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawLassoOverlay(ctx: CanvasRenderingContext2D) {
+    if (lassoPoints.length < 2) return;
+    ctx.save();
+    ctx.strokeStyle = '#2563eb';
+    ctx.fillStyle = 'rgba(37, 99, 235, 0.06)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([5, 4]);
+    ctx.beginPath();
+    const start = pageToScreen(lassoPoints[0]);
+    ctx.moveTo(start.x, start.y);
+    for (const point of lassoPoints.slice(1)) {
+      const screen = pageToScreen(point);
+      ctx.lineTo(screen.x, screen.y);
+    }
+    if (lassoPoints.length > 2) {
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
   function pointerSamples(event: PointerEvent): PointerEvent[] {
     const samples = event.getCoalescedEvents?.() ?? [];
     return samples.length > 0 ? samples : [event];
@@ -864,6 +1362,30 @@
     return clientPoint(event.clientX, event.clientY, event.pressure);
   }
 
+  function updateToolPreview(event: PointerEvent) {
+    if (event.pointerType === 'touch' || !canvasEl) return;
+    const point = eventPoint(event);
+    const erasing = tool === 'eraser' || isStylusButtonErasing(event);
+    const lassoing = tool === 'lasso';
+    const penHover = tool === 'pen' && event.pointerType === 'pen';
+    const onPage = containsPagePoint(layout, point.x, point.y);
+    if (
+      (!erasing && !lassoing && !penHover) ||
+      (!erasing && !lassoing && !onPage)
+    ) {
+      clearToolPreview();
+      return;
+    }
+    toolPreview = { point, erasing, lassoing, pointerType: event.pointerType };
+    scheduleDraw();
+  }
+
+  function clearToolPreview() {
+    if (!toolPreview) return;
+    toolPreview = null;
+    scheduleDraw();
+  }
+
   function isStylusButtonErasing(event: PointerEvent): boolean {
     if (event.pointerType !== 'pen') return false;
     const eraserButtons =
@@ -897,6 +1419,12 @@
       flushQueuedEraserSamples();
       doc.finishEraserDrag(eraserHits);
       syncHistoryState();
+    } else if (pointerMode === 'lasso') {
+      lassoPoints = [];
+      selectedStrokeIds = [];
+      selectionFrame = null;
+    } else if (pointerMode === 'moveSelection') {
+      cancelSelectionMove();
     }
     pointerMode = 'touchGesture';
     activePointerId = null;
@@ -957,6 +1485,7 @@
   function handleTouchPointerDown(event: PointerEvent) {
     if (!doc || !canvasEl) return;
     event.preventDefault();
+    canvasEl.focus({ preventScroll: true });
     canvasEl.setPointerCapture(event.pointerId);
     touchPointers.set(event.pointerId, touchPointer(event));
     if (touchPointers.size >= 2) {
@@ -970,8 +1499,29 @@
       return;
     }
     if (isTrashed) return;
+    const handle = selectionHandleAtCanvasPoint(
+      canvasPoint(event.clientX, event.clientY)
+    );
+    if (tool === 'lasso' && hasSelection && handle) {
+      beginSelectionTransform(handle, event);
+      return;
+    }
+    if (
+      tool === 'lasso' &&
+      hasSelection &&
+      selectionContainsPoint(eventPoint(event))
+    ) {
+      beginSelectionMove(event);
+      return;
+    }
+    if (tool === 'lasso') {
+      beginLasso(event);
+      return;
+    }
     if (tool === 'eraser') {
       pointerMode = 'erase';
+      selectedStrokeIds = [];
+      selectionFrame = null;
       eraserHits.clear();
       eraseFromEvent(event);
       return;
@@ -1007,6 +1557,16 @@
     handleActivePointerEnd(event, cancelled);
   }
 
+  function handlePointerEnter(event: PointerEvent) {
+    updateToolPreview(event);
+  }
+
+  function handlePointerLeave(event: PointerEvent) {
+    if (activePointerId === null || activePointerId === event.pointerId) {
+      clearToolPreview();
+    }
+  }
+
   function handlePointerDown(event: PointerEvent) {
     if (!doc || !canvasEl) return;
     if (event.pointerType === 'touch') {
@@ -1014,6 +1574,7 @@
       return;
     }
     event.preventDefault();
+    canvasEl.focus({ preventScroll: true });
     canvasEl.setPointerCapture(event.pointerId);
     activePointerId = event.pointerId;
     const isFinger = event.pointerType === 'touch';
@@ -1027,9 +1588,31 @@
       return;
     }
     if (isTrashed) return;
+    const handle = selectionHandleAtCanvasPoint(
+      canvasPoint(event.clientX, event.clientY)
+    );
+    if (tool === 'lasso' && hasSelection && handle) {
+      beginSelectionTransform(handle, event);
+      return;
+    }
+    if (
+      tool === 'lasso' &&
+      hasSelection &&
+      selectionContainsPoint(eventPoint(event))
+    ) {
+      beginSelectionMove(event);
+      return;
+    }
+    if (tool === 'lasso') {
+      beginLasso(event);
+      return;
+    }
     if (tool === 'eraser' || isStylusButtonErasing(event)) {
       pointerMode = 'erase';
+      selectedStrokeIds = [];
+      selectionFrame = null;
       eraserHits.clear();
+      updateToolPreview(event);
       eraseFromEvent(event);
       return;
     }
@@ -1044,6 +1627,7 @@
       handleTouchPointerMove(event);
       return;
     }
+    updateToolPreview(event);
     handleActivePointerMove(event);
   }
 
@@ -1063,7 +1647,18 @@
     }
     if (pointerMode === 'erase') {
       event.preventDefault();
+      updateToolPreview(event);
       eraseFromEvent(event);
+      return;
+    }
+    if (pointerMode === 'lasso') {
+      event.preventDefault();
+      pushLassoSamples(event);
+      return;
+    }
+    if (pointerMode === 'moveSelection') {
+      event.preventDefault();
+      updateSelectionMove(event);
       return;
     }
     if (pointerMode === 'draw') {
@@ -1071,7 +1666,10 @@
       if (isStylusButtonErasing(event)) {
         finishActiveStroke();
         pointerMode = 'erase';
+        selectedStrokeIds = [];
+        selectionFrame = null;
         eraserHits.clear();
+        updateToolPreview(event);
         eraseFromEvent(event);
         return;
       }
@@ -1095,6 +1693,12 @@
         flushQueuedEraserSamples();
         doc.finishEraserDrag(eraserHits);
         syncHistoryState();
+      } else if (pointerMode === 'lasso') {
+        lassoPoints = [];
+        selectedStrokeIds = [];
+        selectionFrame = null;
+      } else if (pointerMode === 'moveSelection') {
+        cancelSelectionMove();
       } else {
         clearQueuedEraserSamples();
       }
@@ -1113,6 +1717,10 @@
       flushQueuedEraserSamples();
       doc.finishEraserDrag(eraserHits);
       syncHistoryState();
+    } else if (pointerMode === 'lasso') {
+      finishLasso();
+    } else if (pointerMode === 'moveSelection') {
+      finishSelectionMove();
     }
     resetPointer();
   }
@@ -1128,6 +1736,8 @@
   function pushPointerSamples(event: PointerEvent) {
     if (!doc) return;
     if (isStylusButtonErasing(event)) return;
+    selectedStrokeIds = [];
+    selectionFrame = null;
     const next = [...inFlight];
     for (const sample of pointerSamples(event)) {
       const point = eventPoint(sample);
@@ -1151,6 +1761,188 @@
       next.push(point);
     }
     inFlight = next;
+  }
+
+  function beginLasso(event: PointerEvent) {
+    pointerMode = 'lasso';
+    selectedStrokeIds = [];
+    selectionFrame = null;
+    lassoPoints = [];
+    pushLassoSamples(event);
+  }
+
+  function pushLassoSamples(event: PointerEvent) {
+    const next = [...lassoPoints];
+    for (const sample of pointerSamples(event)) {
+      const point = eventPoint(sample);
+      const last = next[next.length - 1];
+      if (last && Math.hypot(point.x - last.x, point.y - last.y) < 6) {
+        continue;
+      }
+      next.push(point);
+    }
+    lassoPoints = next;
+    scheduleDraw();
+  }
+
+  function finishLasso() {
+    if (!doc || lassoPoints.length < 3) {
+      lassoPoints = [];
+      scheduleDraw();
+      return;
+    }
+    selectedStrokeIds = doc.strokeIdsInLasso(lassoPoints);
+    selectionFrame =
+      selectedStrokeIds.length > 0
+        ? (() => {
+            const bounds = selectionBounds();
+            return bounds ? frameFromBounds(bounds) : null;
+          })()
+        : null;
+    lassoPoints = [];
+    scheduleDraw();
+  }
+
+  function beginSelectionMove(event: PointerEvent) {
+    pointerMode = 'moveSelection';
+    selectionDragStart = eventPoint(event);
+    selectionInteraction = { kind: 'move', start: selectionDragStart };
+    selectionDragOffset = { x: 0, y: 0 };
+    selectionTransformPreview = identityTransform();
+    lassoPoints = [];
+  }
+
+  function beginSelectionTransform(
+    handle: SelectionHandle,
+    event: PointerEvent
+  ) {
+    const frame = baseSelectionFrame();
+    if (!frame) return;
+    pointerMode = 'moveSelection';
+    selectionDragStart = eventPoint(event);
+    selectionDragOffset = { x: 0, y: 0 };
+    selectionTransformPreview = identityTransform();
+    lassoPoints = [];
+    if (handle === 'rotate') {
+      const center = selectionCenter(frame);
+      const point = eventPoint(event);
+      selectionInteraction = {
+        kind: 'rotate',
+        center,
+        startAngle: Math.atan2(point.y - center.y, point.x - center.x)
+      };
+      return;
+    }
+    const opposite: Record<
+      Exclude<SelectionHandle, 'rotate'>,
+      Exclude<SelectionHandle, 'rotate'>
+    > = {
+      nw: 'se',
+      ne: 'sw',
+      se: 'nw',
+      sw: 'ne'
+    };
+    selectionInteraction = {
+      kind: 'resize',
+      handle,
+      anchor: frame[opposite[handle]],
+      startCorner: frame[handle]
+    };
+  }
+
+  function updateSelectionMove(event: PointerEvent) {
+    if (!selectionInteraction) return;
+    const point = eventPoint(event);
+    if (selectionInteraction.kind === 'move') {
+      selectionDragOffset = {
+        x: point.x - selectionInteraction.start.x,
+        y: point.y - selectionInteraction.start.y
+      };
+      selectionTransformPreview = identityTransform();
+    } else if (selectionInteraction.kind === 'resize') {
+      selectionDragOffset = { x: 0, y: 0 };
+      selectionTransformPreview = resizeTransform(
+        selectionInteraction.anchor,
+        selectionInteraction.startCorner,
+        point
+      );
+    } else {
+      selectionDragOffset = { x: 0, y: 0 };
+      const delta =
+        Math.atan2(
+          point.y - selectionInteraction.center.y,
+          point.x - selectionInteraction.center.x
+        ) - selectionInteraction.startAngle;
+      selectionTransformPreview = rotationTransform(
+        selectionInteraction.center,
+        delta
+      );
+    }
+    scheduleDraw();
+  }
+
+  function cancelSelectionMove() {
+    selectionDragStart = null;
+    selectionInteraction = null;
+    selectionDragOffset = { x: 0, y: 0 };
+    selectionTransformPreview = identityTransform();
+    scheduleDraw();
+  }
+
+  function finishSelectionMove() {
+    if (!doc || !selectionInteraction) {
+      cancelSelectionMove();
+      return;
+    }
+    const interaction = selectionInteraction;
+    const frame = baseSelectionFrame();
+    const move = selectionDragOffset;
+    const transform = currentSelectionTransform();
+    selectionDragStart = null;
+    selectionInteraction = null;
+    selectionDragOffset = { x: 0, y: 0 };
+    selectionTransformPreview = identityTransform();
+    if (interaction.kind === 'move') {
+      if (Math.abs(move.x) < 0.001 && Math.abs(move.y) < 0.001) {
+        scheduleDraw();
+        return;
+      }
+      const { value, update } = doc.translateStrokes(
+        selectedStrokeIds,
+        move.x,
+        move.y
+      );
+      if (value.length > 0) {
+        selectedStrokeIds = value;
+        if (frame) {
+          selectionFrame = transformSelectionFrame(
+            frame,
+            translationTransform(move.x, move.y)
+          );
+        }
+        applyDocumentMutation(update);
+      } else {
+        scheduleDraw();
+      }
+      return;
+    }
+    if (transformIsIdentity(transform)) {
+      scheduleDraw();
+      return;
+    }
+    const { value, update } = doc.transformStrokes(
+      selectedStrokeIds,
+      transform
+    );
+    if (value.length > 0) {
+      selectedStrokeIds = value;
+      if (frame) {
+        selectionFrame = transformSelectionFrame(frame, transform);
+      }
+      applyDocumentMutation(update);
+    } else {
+      scheduleDraw();
+    }
   }
 
   function eraseAtPoint(point: InkPoint, hits: Set<string>) {
@@ -1354,6 +2146,80 @@
     setInkZoom(view.scale * factor);
   }
 
+  function selectedClipboardStrokes(): InkClipboardStroke[] {
+    if (!doc || selectedStrokeIds.length === 0) return [];
+    const selected = new Set(selectedStrokeIds);
+    return doc
+      .visibleStrokes()
+      .filter((stroke) => selected.has(stroke.id))
+      .map((stroke) => ({
+        color: stroke.color,
+        width: stroke.width,
+        points: stroke.points.map((point) => ({ ...point }))
+      }));
+  }
+
+  function copySelection(): boolean {
+    const strokes = selectedClipboardStrokes();
+    if (strokes.length === 0) return false;
+    selectionClipboard = strokes;
+    return true;
+  }
+
+  function cutSelection(): boolean {
+    if (!copySelection()) return false;
+    return deleteSelection();
+  }
+
+  function pasteSelection(): boolean {
+    if (!doc || isTrashed || selectionClipboard.length === 0) return false;
+    flushQueuedEraserSamples();
+    const offset = SELECTION_PASTE_OFFSET_PX / Math.max(0.001, view.scale);
+    const pasted = selectionClipboard.map((stroke) => ({
+      color: stroke.color,
+      width: stroke.width,
+      points: stroke.points.map((point) => ({
+        x: point.x + offset,
+        y: point.y + offset,
+        pressure: point.pressure
+      }))
+    }));
+    const { value, update } = doc.addStrokes(pasted);
+    if (value.length === 0) return false;
+    selectionClipboard = pasted.map((stroke) => ({
+      color: stroke.color,
+      width: stroke.width,
+      points: stroke.points.map((point) => ({ ...point }))
+    }));
+    tool = 'lasso';
+    selectedStrokeIds = value;
+    selectionFrame = (() => {
+      const bounds = selectionBounds();
+      return bounds ? frameFromBounds(bounds) : null;
+    })();
+    lassoPoints = [];
+    selectionInteraction = null;
+    selectionDragStart = null;
+    selectionDragOffset = { x: 0, y: 0 };
+    selectionTransformPreview = identityTransform();
+    applyDocumentMutation(update);
+    emitToolbarSettings();
+    return true;
+  }
+
+  function applySelectionStyle(patch: StrokeStylePatch): boolean {
+    if (!doc || isTrashed || selectedStrokeIds.length === 0) return false;
+    flushQueuedEraserSamples();
+    const { value, update } = doc.styleStrokes(selectedStrokeIds, patch);
+    if (value.length === 0) {
+      scheduleDraw();
+      return false;
+    }
+    selectedStrokeIds = value;
+    applyDocumentMutation(update);
+    return true;
+  }
+
   function minScale(): number {
     const availableWidth = Math.max(1, view.width - FIT_PAGE_MARGIN_PX * 2);
     const availableHeight = Math.max(
@@ -1371,18 +2237,48 @@
 
   function setTool(next: ToolMode) {
     tool = next;
+    lassoPoints = [];
+    selectionInteraction = null;
+    selectionDragStart = null;
+    selectionDragOffset = { x: 0, y: 0 };
+    selectionTransformPreview = identityTransform();
+    clearToolPreview();
     emitToolbarSettings();
     updateLiveInkOverlayStyle();
   }
 
   function setColor(value: string) {
-    colorArgb = colorHexToArgb(value);
+    const normalized = normalizeColorHex(value);
+    if (!normalized) return;
+    colorInputText = normalized;
+    const next = colorHexToArgb(normalized);
+    colorArgb = next;
+    if (hasSelection) applySelectionStyle({ color: next });
+    scheduleDraw();
     emitToolbarSettings();
     updateLiveInkOverlayStyle();
   }
 
+  function setColorInputText(value: string) {
+    colorInputText = value;
+    const normalized = normalizeColorHex(value);
+    if (normalized) setColor(normalized);
+  }
+
+  function selectPresetColor(value: string) {
+    setColor(value);
+    toolbarMenuOpen = null;
+  }
+
+  function toggleToolbarMenu(menu: 'style' | 'selection' | 'settings') {
+    toolbarMenuOpen = toolbarMenuOpen === menu ? null : menu;
+  }
+
   function setWidth(value: string) {
-    width = normalizeInkWidth(Number(value));
+    const next = normalizeInkWidth(Number(value));
+    width = next;
+    if (hasSelection) applySelectionStyle({ width: next });
+    scheduleDraw();
     emitToolbarSettings();
     updateLiveInkOverlayStyle();
   }
@@ -1401,6 +2297,13 @@
   function undo() {
     if (!doc) return;
     flushQueuedEraserSamples();
+    selectedStrokeIds = [];
+    selectionFrame = null;
+    lassoPoints = [];
+    selectionInteraction = null;
+    selectionDragStart = null;
+    selectionDragOffset = { x: 0, y: 0 };
+    selectionTransformPreview = identityTransform();
     const { value, update } = doc.undoLast();
     if (value) applyDocumentMutation(update);
   }
@@ -1408,16 +2311,117 @@
   function redo() {
     if (!doc) return;
     flushQueuedEraserSamples();
+    selectedStrokeIds = [];
+    selectionFrame = null;
+    lassoPoints = [];
+    selectionInteraction = null;
+    selectionDragStart = null;
+    selectionDragOffset = { x: 0, y: 0 };
+    selectionTransformPreview = identityTransform();
     const { value, update } = doc.redoLast();
     if (value) applyDocumentMutation(update);
+  }
+
+  function deleteSelection(): boolean {
+    if (!doc || isTrashed || selectedStrokeIds.length === 0) return false;
+    flushQueuedEraserSamples();
+    const { value, update } = doc.deleteStrokes(selectedStrokeIds);
+    selectedStrokeIds = [];
+    selectionFrame = null;
+    lassoPoints = [];
+    selectionInteraction = null;
+    selectionDragStart = null;
+    selectionDragOffset = { x: 0, y: 0 };
+    selectionTransformPreview = identityTransform();
+    if (value.length > 0) {
+      applyDocumentMutation(update);
+      return true;
+    }
+    scheduleDraw();
+    return false;
   }
 
   function clearCanvas() {
     if (!doc) return;
     flushQueuedEraserSamples();
+    selectedStrokeIds = [];
+    selectionFrame = null;
+    lassoPoints = [];
+    selectionInteraction = null;
+    selectionDragStart = null;
+    selectionDragOffset = { x: 0, y: 0 };
+    selectionTransformPreview = identityTransform();
     const { value, update } = doc.clearAll();
     if (value.length > 0) applyDocumentMutation(update);
   }
+
+  async function confirmClearCanvas() {
+    if (!doc || isTrashed || strokeCount === 0) return;
+    const ok = await confirm({
+      title: tUi('ink.toolbar.clearConfirm.title'),
+      message: tUi('ink.toolbar.clearConfirm.message'),
+      confirmLabel: tUi('ink.toolbar.clearConfirm.button'),
+      destructive: true
+    });
+    if (ok) clearCanvas();
+  }
+
+  function isEditableShortcutTarget(target: EventTarget | null): boolean {
+    return (
+      target instanceof HTMLInputElement ||
+      target instanceof HTMLTextAreaElement ||
+      target instanceof HTMLSelectElement ||
+      (target instanceof HTMLElement && target.isContentEditable)
+    );
+  }
+
+  function handleKeyDown(event: KeyboardEvent) {
+    if (isEditableShortcutTarget(event.target)) return;
+    const modifier = event.ctrlKey || event.metaKey;
+    if (modifier && !event.shiftKey && !event.altKey) {
+      const key = event.key.toLowerCase();
+      if (key === 'c' && hasSelection && copySelection()) {
+        event.preventDefault();
+        return;
+      }
+      if (key === 'x' && hasSelection && cutSelection()) {
+        event.preventDefault();
+        return;
+      }
+      if (key === 'v' && hasSelectionClipboard && pasteSelection()) {
+        event.preventDefault();
+        return;
+      }
+    }
+    if (event.key === 'Delete' || event.key === 'Backspace') {
+      if (hasSelection && deleteSelection()) {
+        event.preventDefault();
+      }
+    }
+  }
+
+  $effect(() => {
+    if (!toolbarMenuOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (styleMenuEl?.contains(target)) return;
+      if (styleMenuButton?.contains(target)) return;
+      if (selectionMenuEl?.contains(target)) return;
+      if (selectionMenuButton?.contains(target)) return;
+      if (settingsMenuEl?.contains(target)) return;
+      if (settingsMenuButton?.contains(target)) return;
+      toolbarMenuOpen = null;
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') toolbarMenuOpen = null;
+    };
+    queueMicrotask(() => window.addEventListener('pointerdown', onPointerDown));
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('keydown', onKey);
+    };
+  });
 
   function handleInkCommand(id: string): boolean {
     switch (id) {
@@ -1426,6 +2430,9 @@
         return true;
       case 'editor.ink.eraser':
         setTool('eraser');
+        return true;
+      case 'editor.ink.lasso':
+        setTool('lasso');
         return true;
       case 'editor.ink.undo':
         undo();
@@ -1440,7 +2447,7 @@
         togglePageTheme();
         return true;
       case 'editor.ink.clear':
-        if (!isTrashed) clearCanvas();
+        if (!isTrashed) void confirmClearCanvas();
         return true;
       default:
         console.warn('[InkWebNoteEditor] unknown ink command', id);
@@ -1449,7 +2456,8 @@
   }
 
   function normalizeInkTool(value: unknown): ToolMode {
-    return value === 'eraser' ? 'eraser' : 'pen';
+    if (value === 'eraser' || value === 'lasso') return value;
+    return 'pen';
   }
 
   function normalizeInkPageTheme(value: unknown): PageThemeMode {
@@ -1459,6 +2467,21 @@
   function normalizeInkWidth(value: unknown): number {
     const n = typeof value === 'number' ? value : Number(value);
     return Number.isFinite(n) ? Math.min(12, Math.max(0.5, n)) : DEFAULT_WIDTH;
+  }
+
+  function normalizeColorHex(value: unknown): string | null {
+    if (typeof value !== 'string') return null;
+    const raw = value.trim();
+    const hex = raw.startsWith('#') ? raw.slice(1) : raw;
+    if (/^[0-9a-fA-F]{3}$/.test(hex)) {
+      return `#${hex
+        .split('')
+        .map((c) => c + c)
+        .join('')
+        .toLowerCase()}`;
+    }
+    if (/^[0-9a-fA-F]{6}$/.test(hex)) return `#${hex.toLowerCase()}`;
+    return null;
   }
 
   function colorHexToArgb(value: unknown): number {
@@ -1652,6 +2675,20 @@
     };
   });
 
+  $effect(() => {
+    if (!hostEl) return;
+    const host = hostEl;
+    const onKeyDown = (event: KeyboardEvent) => {
+      const active = document.activeElement;
+      if (!active || !host.contains(active)) return;
+      handleKeyDown(event);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  });
+
   onDestroy(() => {
     window.removeEventListener(
       'mindstream:android-stylus-eraser',
@@ -1711,125 +2748,381 @@
   });
 </script>
 
+{#snippet selectionActionsExpanded()}
+  <ToolbarButton
+    aria-label={tUi('ink.toolbar.cutSelected')}
+    title={tUi('ink.toolbar.cutSelected')}
+    disabled={isTrashed || !hasSelection}
+    onclick={cutSelection}
+  >
+    <Scissors aria-hidden="true" />
+  </ToolbarButton>
+  <ToolbarButton
+    aria-label={tUi('ink.toolbar.copySelected')}
+    title={tUi('ink.toolbar.copySelected')}
+    disabled={!hasSelection}
+    onclick={copySelection}
+  >
+    <Copy aria-hidden="true" />
+  </ToolbarButton>
+  <ToolbarButton
+    aria-label={tUi('ink.toolbar.pasteInk')}
+    title={tUi('ink.toolbar.pasteInk')}
+    disabled={isTrashed || !hasSelectionClipboard}
+    onclick={pasteSelection}
+  >
+    <ClipboardPaste aria-hidden="true" />
+  </ToolbarButton>
+  <ToolbarButton
+    aria-label={tUi('ink.toolbar.deleteSelected')}
+    title={tUi('ink.toolbar.deleteSelected')}
+    disabled={isTrashed || !hasSelection}
+    onclick={deleteSelection}
+  >
+    <Trash2 aria-hidden="true" />
+  </ToolbarButton>
+{/snippet}
+
+{#snippet selectionActionsCollapsed()}
+  <div class="relative shrink-0">
+    <ToolbarButton
+      bind:ref={selectionMenuButton}
+      active={toolbarMenuOpen === 'selection'}
+      aria-label={tUi('ink.toolbar.selectionActions')}
+      title={tUi('ink.toolbar.selectionActions')}
+      aria-haspopup="menu"
+      aria-expanded={toolbarMenuOpen === 'selection'}
+      onclick={() => toggleToolbarMenu('selection')}
+    >
+      <PocketKnife aria-hidden="true" />
+    </ToolbarButton>
+
+    {#if toolbarMenuOpen === 'selection'}
+      <div
+        bind:this={selectionMenuEl}
+        role="menu"
+        class="absolute left-0 top-full z-50 mt-1 min-w-44 rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-lg"
+        aria-label={tUi('ink.toolbar.selectionActions')}
+      >
+        <button
+          type="button"
+          role="menuitem"
+          class="flex h-8 w-full items-center gap-2 rounded-sm px-2 text-left text-sm hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-50"
+          disabled={isTrashed || !hasSelection}
+          onclick={() => {
+            if (cutSelection()) toolbarMenuOpen = null;
+          }}
+        >
+          <Scissors class="size-4" aria-hidden="true" />
+          <span>{tUi('ink.toolbar.cutSelected')}</span>
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          class="flex h-8 w-full items-center gap-2 rounded-sm px-2 text-left text-sm hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-50"
+          disabled={!hasSelection}
+          onclick={() => {
+            if (copySelection()) toolbarMenuOpen = null;
+          }}
+        >
+          <Copy class="size-4" aria-hidden="true" />
+          <span>{tUi('ink.toolbar.copySelected')}</span>
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          class="flex h-8 w-full items-center gap-2 rounded-sm px-2 text-left text-sm hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-50"
+          disabled={isTrashed || !hasSelectionClipboard}
+          onclick={() => {
+            if (pasteSelection()) toolbarMenuOpen = null;
+          }}
+        >
+          <ClipboardPaste class="size-4" aria-hidden="true" />
+          <span>{tUi('ink.toolbar.pasteInk')}</span>
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          class="flex h-8 w-full items-center gap-2 rounded-sm px-2 text-left text-sm text-destructive hover:bg-destructive/10 disabled:pointer-events-none disabled:opacity-50"
+          disabled={isTrashed || !hasSelection}
+          onclick={() => {
+            if (deleteSelection()) toolbarMenuOpen = null;
+          }}
+        >
+          <Trash2 class="size-4" aria-hidden="true" />
+          <span>{tUi('ink.toolbar.deleteSelected')}</span>
+        </button>
+      </div>
+    {/if}
+  </div>
+{/snippet}
+
 {#snippet inkToolbar(dense: boolean, className: string)}
   <Toolbar {dense} aria-label={tUi('ink.toolbar.label')} class={className}>
-    <div class="flex items-center gap-0.5">
-      <ToolbarButton
-        active={tool === 'pen'}
-        aria-label={tUi('ink.toolbar.pen')}
-        title={tUi('ink.toolbar.pen')}
-        aria-pressed={tool === 'pen'}
-        onclick={() => setTool('pen')}
-      >
-        <PenLine aria-hidden="true" />
-      </ToolbarButton>
+    <div class="flex min-w-0 flex-1 items-center gap-0.5">
+      <div class="flex shrink-0 items-center gap-0.5">
+        <ToolbarButton
+          active={tool === 'pen'}
+          aria-label={tUi('ink.toolbar.pen')}
+          title={tUi('ink.toolbar.pen')}
+          aria-pressed={tool === 'pen'}
+          onclick={() => setTool('pen')}
+        >
+          <PenLine aria-hidden="true" />
+        </ToolbarButton>
 
-      <ToolbarButton
-        active={tool === 'eraser'}
-        aria-label={tUi('ink.toolbar.eraser')}
-        title={tUi('ink.toolbar.eraser')}
-        aria-pressed={tool === 'eraser'}
-        onclick={() => setTool('eraser')}
-      >
-        <Eraser aria-hidden="true" />
-      </ToolbarButton>
+        <ToolbarButton
+          active={tool === 'eraser'}
+          aria-label={tUi('ink.toolbar.eraser')}
+          title={tUi('ink.toolbar.eraser')}
+          aria-pressed={tool === 'eraser'}
+          onclick={() => setTool('eraser')}
+        >
+          <Eraser aria-hidden="true" />
+        </ToolbarButton>
 
-      <ToolbarSeparator />
-
-      <label
-        class="grid size-9 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-        aria-label={tUi('ink.toolbar.color')}
-        title={tUi('ink.toolbar.color')}
-      >
-        <input
-          class="size-6 cursor-pointer border-0 bg-transparent p-0"
-          type="color"
-          value={colorHex}
-          oninput={(e) => setColor(e.currentTarget.value)}
-        />
-      </label>
-      <input
-        class="mx-2 h-2 w-24 shrink-0 accent-primary"
-        aria-label={tUi('ink.toolbar.brushSize')}
-        title={tUi('ink.toolbar.brushSize')}
-        type="range"
-        min="0.5"
-        max="12"
-        step="0.5"
-        value={width}
-        oninput={(e) => setWidth(e.currentTarget.value)}
-      />
+        <ToolbarButton
+          active={tool === 'lasso'}
+          aria-label={tUi('ink.toolbar.lasso')}
+          title={tUi('ink.toolbar.lasso')}
+          aria-pressed={tool === 'lasso'}
+          onclick={() => setTool('lasso')}
+        >
+          <LassoSelect aria-hidden="true" />
+        </ToolbarButton>
+      </div>
 
       <ToolbarSeparator />
 
-      <ToolbarButton
-        aria-label={tUi('ink.toolbar.undo')}
-        title={tUi('ink.toolbar.undo')}
-        disabled={isTrashed || !doc || undoDepth === 0}
-        onclick={undo}
-      >
-        <Undo2 aria-hidden="true" />
-      </ToolbarButton>
-      <ToolbarButton
-        aria-label={tUi('ink.toolbar.redo')}
-        title={tUi('ink.toolbar.redo')}
-        disabled={isTrashed || !doc || redoDepth === 0}
-        onclick={redo}
-      >
-        <Redo2 aria-hidden="true" />
-      </ToolbarButton>
+      <div class="relative shrink-0">
+        <ToolbarButton
+          bind:ref={styleMenuButton}
+          wide
+          active={toolbarMenuOpen === 'style'}
+          aria-label={tUi('ink.toolbar.style')}
+          title={tUi('ink.toolbar.style')}
+          aria-haspopup="menu"
+          aria-expanded={toolbarMenuOpen === 'style'}
+          onclick={() => toggleToolbarMenu('style')}
+        >
+          <Palette aria-hidden="true" />
+          <span class="grid h-5 w-8 place-items-center" aria-hidden="true">
+            <span
+              class="block w-7 rounded-full"
+              style="height: {brushLineHeight}px; background-color: {colorHex};"
+            ></span>
+          </span>
+          <span class="w-6 text-center text-xs tabular-nums">
+            {brushSizeText}
+          </span>
+        </ToolbarButton>
 
-      <ToolbarSeparator />
+        {#if toolbarMenuOpen === 'style'}
+          <div
+            bind:this={styleMenuEl}
+            role="menu"
+            class="absolute left-0 top-full z-50 mt-1 w-56 rounded-md border border-border bg-popover p-2 text-popover-foreground shadow-lg"
+            aria-label={tUi('ink.toolbar.style')}
+          >
+            <div
+              class="grid grid-cols-6 gap-1"
+              role="group"
+              aria-label={tUi('ink.toolbar.colorPresets')}
+            >
+              {#each INK_COLOR_SWATCHES as swatch, index (swatch)}
+                {@const activeSwatch = colorArgb === colorHexToArgb(swatch)}
+                <button
+                  type="button"
+                  role="menuitemradio"
+                  class={`grid size-8 place-items-center rounded-md border border-border transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${activeSwatch ? 'ring-2 ring-ring' : ''}`}
+                  aria-label={`${tUi('ink.toolbar.colorPreset')} ${index + 1}`}
+                  aria-checked={activeSwatch}
+                  title={`${tUi('ink.toolbar.colorPreset')} ${index + 1}`}
+                  onclick={() => selectPresetColor(swatch)}
+                >
+                  <span
+                    class="size-5 rounded-full border border-black/20 shadow-sm"
+                    style="background-color: {swatch};"
+                    aria-hidden="true"
+                  ></span>
+                </button>
+              {/each}
+            </div>
 
-      <ToolbarButton
-        active={fingerDrawingAllowed}
-        aria-label={tUi('ink.toolbar.fingerDrawing')}
-        title={tUi('ink.toolbar.fingerDrawing')}
-        aria-pressed={fingerDrawingAllowed}
-        onclick={toggleFingerDrawing}
-      >
-        <MousePointer2 aria-hidden="true" />
-      </ToolbarButton>
-      <ToolbarButton
-        active={pageThemeMode === 'system'}
-        aria-label={tUi('ink.toolbar.pageTheme')}
-        title={tUi('ink.toolbar.pageTheme')}
-        aria-pressed={pageThemeMode === 'system'}
-        onclick={togglePageTheme}
-      >
-        {#if pageThemeMode === 'system'}
-          <MoonStar aria-hidden="true" />
-        {:else}
-          <Sun aria-hidden="true" />
+            <div
+              class="mt-2 flex h-10 items-center gap-2 rounded-md px-2"
+              aria-label={tUi('ink.toolbar.color')}
+            >
+              <label
+                class="relative grid size-7 shrink-0 cursor-pointer place-items-center rounded-md border border-border bg-background shadow-sm focus-within:ring-2 focus-within:ring-ring"
+                title={tUi('ink.toolbar.color')}
+              >
+                <span
+                  class="size-5 rounded-sm border border-black/15"
+                  style="background-color: {colorHex};"
+                  aria-hidden="true"
+                ></span>
+                <input
+                  class="absolute inset-0 cursor-pointer opacity-0"
+                  type="color"
+                  aria-label={tUi('ink.toolbar.color')}
+                  value={colorHex}
+                  oninput={(e) => setColor(e.currentTarget.value)}
+                />
+              </label>
+              <label class="min-w-0 flex-1">
+                <span class="sr-only">{tUi('ink.toolbar.colorHex')}</span>
+                <input
+                  class="h-8 w-full rounded-md border border-input bg-background px-2 font-mono text-xs uppercase text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  aria-label={tUi('ink.toolbar.colorHex')}
+                  spellcheck="false"
+                  maxlength="7"
+                  value={colorInputText}
+                  oninput={(e) => setColorInputText(e.currentTarget.value)}
+                />
+              </label>
+            </div>
+
+            <div
+              class="mt-2 rounded-md px-2 py-1.5"
+              aria-label={`${tUi('ink.toolbar.brushSize')}: ${brushSizeText}`}
+              title={`${tUi('ink.toolbar.brushSize')}: ${brushSizeText}`}
+            >
+              <div class="mb-1 flex items-center justify-between gap-3">
+                <span class="text-xs text-muted-foreground">
+                  {tUi('ink.toolbar.brushSize')}
+                </span>
+                <span class="text-xs font-medium tabular-nums">
+                  {brushSizeText}
+                </span>
+              </div>
+              <div class="flex items-center gap-2">
+                <span
+                  class="grid h-6 w-10 place-items-center"
+                  aria-hidden="true"
+                >
+                  <span
+                    class="block w-9 rounded-full"
+                    style="height: {brushLineHeight}px; background-color: {colorHex};"
+                  ></span>
+                </span>
+                <input
+                  class="h-2 min-w-0 flex-1 accent-primary"
+                  aria-label={tUi('ink.toolbar.brushSize')}
+                  title={tUi('ink.toolbar.brushSize')}
+                  type="range"
+                  min="0.5"
+                  max="12"
+                  step="0.5"
+                  value={width}
+                  oninput={(e) => setWidth(e.currentTarget.value)}
+                />
+              </div>
+            </div>
+          </div>
         {/if}
-      </ToolbarButton>
-      <ToolbarButton
-        aria-label={tUi('ink.toolbar.clear')}
-        title={tUi('ink.toolbar.clear')}
-        disabled={isTrashed}
-        onclick={clearCanvas}
-      >
-        <Trash2 aria-hidden="true" />
-      </ToolbarButton>
-    </div>
+      </div>
 
-    {#if !mobileToolbar}
-      <ToolbarZoomControls
-        bind:open={zoomMenuOpen}
-        label={inkZoomLabel}
-        zoomOutLabel={tUi('ink.toolbar.zoomOut')}
-        zoomInLabel={tUi('ink.toolbar.zoomIn')}
-        zoomMenuLabel={tUi('ink.toolbar.zoom')}
-        fitLabel={tUi('ink.toolbar.fitPage')}
-        fitActive={inkFitActive}
-        zoomOptions={INK_QUICK_ZOOMS}
-        selectedZoom={inkFitActive ? null : view.scale}
-        onZoomOut={() => zoomInkBy(1 / INK_ZOOM_STEP)}
-        onZoomIn={() => zoomInkBy(INK_ZOOM_STEP)}
-        onFit={setFitPageZoom}
-        onSelectZoom={setInkZoom}
-      />
-    {/if}
+      <ToolbarSeparator />
+
+      <div class="flex shrink-0 items-center gap-0.5">
+        <ToolbarButton
+          aria-label={tUi('ink.toolbar.undo')}
+          title={tUi('ink.toolbar.undo')}
+          disabled={isTrashed || !doc || undoDepth === 0}
+          onclick={undo}
+        >
+          <Undo2 aria-hidden="true" />
+        </ToolbarButton>
+        <ToolbarButton
+          aria-label={tUi('ink.toolbar.redo')}
+          title={tUi('ink.toolbar.redo')}
+          disabled={isTrashed || !doc || redoDepth === 0}
+          onclick={redo}
+        >
+          <Redo2 aria-hidden="true" />
+        </ToolbarButton>
+      </div>
+
+      {#if hasSelection || hasSelectionClipboard}
+        <ToolbarSeparator />
+        <ToolbarCollapseWhenOverflow
+          class="items-center gap-0.5"
+          margin={6}
+          expanded={selectionActionsExpanded}
+          collapsed={selectionActionsCollapsed}
+        />
+      {/if}
+
+      <div class="ml-auto flex shrink-0 items-center gap-0.5 pl-2">
+        <ToolbarSeparator />
+        <div class="relative shrink-0">
+          <ToolbarButton
+            bind:ref={settingsMenuButton}
+            active={toolbarMenuOpen === 'settings'}
+            aria-label={tUi('ink.toolbar.settings')}
+            title={tUi('ink.toolbar.settings')}
+            aria-haspopup="menu"
+            aria-expanded={toolbarMenuOpen === 'settings'}
+            onclick={() => toggleToolbarMenu('settings')}
+          >
+            <Settings2 aria-hidden="true" />
+          </ToolbarButton>
+
+          {#if toolbarMenuOpen === 'settings'}
+            <div
+              bind:this={settingsMenuEl}
+              role="menu"
+              class="absolute right-0 top-full z-50 mt-1 min-w-52 rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-lg"
+              aria-label={tUi('ink.toolbar.settings')}
+            >
+              <button
+                type="button"
+                role="menuitemcheckbox"
+                class="flex h-8 w-full items-center justify-between gap-3 rounded-sm px-2 text-left text-sm hover:bg-accent hover:text-accent-foreground"
+                aria-checked={fingerDrawingAllowed}
+                onclick={toggleFingerDrawing}
+              >
+                <span>{tUi('ink.toolbar.fingerDrawing')}</span>
+                <MousePointer2
+                  class="size-4 {fingerDrawingAllowed
+                    ? 'opacity-100'
+                    : 'opacity-35'}"
+                  aria-hidden="true"
+                />
+              </button>
+              <button
+                type="button"
+                role="menuitemcheckbox"
+                class="flex h-8 w-full items-center justify-between gap-3 rounded-sm px-2 text-left text-sm hover:bg-accent hover:text-accent-foreground"
+                aria-checked={pageThemeMode === 'system'}
+                onclick={togglePageTheme}
+              >
+                <span>{tUi('ink.toolbar.pageTheme')}</span>
+                {#if pageThemeMode === 'system'}
+                  <MoonStar class="size-4" aria-hidden="true" />
+                {:else}
+                  <Sun class="size-4 opacity-70" aria-hidden="true" />
+                {/if}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                class="flex h-8 w-full items-center gap-2 rounded-sm px-2 text-left text-sm text-destructive hover:bg-destructive/10 disabled:pointer-events-none disabled:opacity-50"
+                disabled={isTrashed || strokeCount === 0}
+                onclick={() => {
+                  toolbarMenuOpen = null;
+                  void confirmClearCanvas();
+                }}
+              >
+                <Shredder class="size-4" aria-hidden="true" />
+                <span>{clearButtonLabel}</span>
+              </button>
+            </div>
+          {/if}
+        </div>
+      </div>
+    </div>
   </Toolbar>
 {/snippet}
 
@@ -1838,7 +3131,10 @@
   class="relative flex h-full w-full flex-col overflow-hidden bg-background"
 >
   {#if mobileToolbar}
-    <div bind:this={toolbarEl} class="absolute left-3 top-3 z-10">
+    <div
+      bind:this={toolbarEl}
+      class="pointer-events-auto absolute left-3 top-3 z-30"
+    >
       {@render inkToolbar(
         false,
         'rounded-md border border-border bg-background/95 shadow-sm backdrop-blur'
@@ -1848,7 +3144,7 @@
     <div bind:this={toolbarEl} class="shrink-0">
       {@render inkToolbar(
         true,
-        'shrink-0 justify-between border-b border-border bg-background'
+        'shrink-0 border-b border-border bg-background'
       )}
     </div>
   {/if}
@@ -1863,8 +3159,15 @@
     ></canvas>
     <canvas
       bind:this={canvasEl}
-      class="relative z-10 block h-full w-full touch-none"
+      class="relative z-10 block h-full w-full touch-none {tool === 'eraser'
+        ? 'cursor-none'
+        : tool === 'pen'
+          ? 'cursor-crosshair'
+          : 'cursor-default'}"
+      tabindex="0"
       aria-label={ariaLabel}
+      onpointerenter={handlePointerEnter}
+      onpointerleave={handlePointerLeave}
       onpointerdown={handlePointerDown}
       onpointermove={handlePointerMove}
       onpointerup={handlePointerUp}
@@ -1872,4 +3175,30 @@
       onwheel={handleWheel}
     ></canvas>
   </div>
+
+  {#if !mobileToolbar}
+    <div
+      class="absolute bottom-3 left-3 z-20"
+      role="toolbar"
+      aria-label={tUi('ink.toolbar.zoom')}
+    >
+      <ToolbarZoomControls
+        bind:open={zoomMenuOpen}
+        class="rounded-md border border-border bg-background/95 p-1 shadow-sm backdrop-blur"
+        menuPlacement="above"
+        label={inkZoomLabel}
+        zoomOutLabel={tUi('ink.toolbar.zoomOut')}
+        zoomInLabel={tUi('ink.toolbar.zoomIn')}
+        zoomMenuLabel={tUi('ink.toolbar.zoom')}
+        fitLabel={tUi('ink.toolbar.fitPage')}
+        fitActive={inkFitActive}
+        zoomOptions={INK_QUICK_ZOOMS}
+        selectedZoom={inkFitActive ? null : view.scale}
+        onZoomOut={() => zoomInkBy(1 / INK_ZOOM_STEP)}
+        onZoomIn={() => zoomInkBy(INK_ZOOM_STEP)}
+        onFit={setFitPageZoom}
+        onSelectZoom={setInkZoom}
+      />
+    </div>
+  {/if}
 </div>

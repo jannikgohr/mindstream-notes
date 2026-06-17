@@ -12,7 +12,7 @@
    * (`SORT_STRATEGIES` in sort.ts + `sort.strategy.<id>` in every i18n
    * bundle) and the picker picks it up automatically.
    */
-  import { ArrowUpDown } from 'lucide-svelte';
+  import { ArrowUpDown } from '@lucide/svelte';
   import ContextMenu from '$lib/components/ContextMenu.svelte';
   import type { MenuItem } from '$lib/components/context-menu-types';
   import {

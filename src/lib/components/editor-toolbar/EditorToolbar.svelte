@@ -22,7 +22,7 @@
   import { onMount } from 'svelte';
   import type { Crepe } from '@milkdown/crepe';
   import { listenerCtx } from '@milkdown/kit/plugin/listener';
-  import { ChevronDown, MoreHorizontal } from 'lucide-svelte';
+  import { ChevronDown, MoreHorizontal } from '@lucide/svelte';
   import { ToolbarButton } from '$lib/components/ui/toolbar';
   import { cn } from '$lib/utils';
   import { tUi } from '$lib/settings/i18n.svelte';

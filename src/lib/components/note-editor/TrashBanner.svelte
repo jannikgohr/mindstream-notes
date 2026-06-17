@@ -4,7 +4,7 @@
    * collection. The editor is also `setReadonly(true)` from NoteEditor;
    * this is the visible affordance that explains why.
    */
-  import { Trash2 } from 'lucide-svelte';
+  import { Trash2 } from '@lucide/svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
 </script>
 

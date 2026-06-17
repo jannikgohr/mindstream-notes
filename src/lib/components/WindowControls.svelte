@@ -11,7 +11,7 @@
    * shell without a try/catch at every callsite.
    */
   import { onMount } from 'svelte';
-  import { Copy, Minus, Square, X } from 'lucide-svelte';
+  import { Copy, Minus, Square, X } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
 
   type WindowApi = {

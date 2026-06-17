@@ -20,7 +20,7 @@
     PartyPopper,
     PencilRuler,
     RotateCcw
-  } from 'lucide-svelte';
+  } from '@lucide/svelte';
   import { Archive as JisArchive } from '@jis3r/icons';
   import PartyPopperAnimated from './PartyPopperAnimated.svelte';
   import { Button } from '$lib/components/ui/button';

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Monitor, Moon, Sun } from 'lucide-svelte';
+  import { Monitor, Moon, Sun } from '@lucide/svelte';
   import { setMode, userPrefersMode } from 'mode-watcher';
   import { Button } from '$lib/components/ui/button';
 

@@ -277,7 +277,7 @@ fn purge_impl(
         note_item
             .delete()
             .map_err(|e| AppError::InvalidArg(format!("mark deleted {etebase_uid}: {e}")))?;
-        let pending = vec![note_item];
+        let pending = [note_item];
         notes_im
             .transaction(pending.iter(), None)
             .map_err(|e| AppError::InvalidArg(format!("push note tombstone {etebase_uid}: {e}")))?;

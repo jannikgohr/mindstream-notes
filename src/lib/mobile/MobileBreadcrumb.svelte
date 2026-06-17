@@ -11,7 +11,7 @@
    * the note background, with the sort + display toolbar immediately
    * below it.
    */
-  import { Home, ChevronRight } from 'lucide-svelte';
+  import { Home, ChevronRight } from '@lucide/svelte';
   import { tree } from '$lib/stores/tree.svelte';
   import type { Collection } from '$lib/api';
   import { tUi } from '$lib/settings/i18n.svelte';

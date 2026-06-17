@@ -20,7 +20,7 @@
     Trash2,
     Wifi,
     WifiOff
-  } from 'lucide-svelte';
+  } from '@lucide/svelte';
   import { ui } from '$lib/state.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { getNoteStatus } from '$lib/stores/note-status.svelte';

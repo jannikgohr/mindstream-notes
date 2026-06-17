@@ -77,7 +77,7 @@ fn open_with_shell(app: &AppHandle, path: &str) -> Result<(), String> {
 /// the folder *and* all 50 notes.
 #[tauri::command]
 pub fn trash_counts(db: tauri::State<'_, Db>) -> Result<TrashCounts, String> {
-    db.with_conn(|c| Ok(counts(c)?)).map_err(Into::into)
+    db.with_conn(counts).map_err(Into::into)
 }
 
 /// Permanently delete every item under the special trash collection.
@@ -85,7 +85,7 @@ pub fn trash_counts(db: tauri::State<'_, Db>) -> Result<TrashCounts, String> {
 /// DELETE. ON DELETE CASCADE on `note_tags` and `assets` does the rest.
 #[tauri::command]
 pub fn empty_trash(db: tauri::State<'_, Db>) -> Result<TrashCounts, String> {
-    db.with_conn_mut(|c| empty(c)).map_err(Into::into)
+    db.with_conn_mut(empty).map_err(Into::into)
 }
 
 fn counts(conn: &Connection) -> AppResult<TrashCounts> {

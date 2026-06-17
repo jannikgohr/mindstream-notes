@@ -15,7 +15,7 @@
    * change that would visibly move the menu.
    */
 
-  import { Check, Plus, Trash2 } from 'lucide-svelte';
+  import { Check, Plus, Trash2 } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { strokePointsAttr } from './stroke-utils';
