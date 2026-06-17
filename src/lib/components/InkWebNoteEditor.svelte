@@ -950,7 +950,7 @@
       ctx.ellipse(center.x, center.y, radiusX, radiusY, -0.24, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
-    } else if (toolPreview.pointerType === 'pen') {
+    } else if (shouldDrawPenToolPreview()) {
       const radius = Math.max(2, (width * view.scale) / 2);
       const previewColor = displayColor(colorArgb);
       ctx.strokeStyle = cssColor(previewColor);
@@ -963,6 +963,11 @@
       ctx.stroke();
     }
     ctx.restore();
+  }
+
+  function shouldDrawPenToolPreview(): boolean {
+    if (toolPreview?.pointerType !== 'pen') return false;
+    return !(isAndroid() && pointerMode === 'draw');
   }
 
   function drawStroke(
@@ -3126,7 +3131,10 @@
   class="relative flex h-full w-full flex-col overflow-hidden bg-background"
 >
   {#if mobileToolbar}
-    <div bind:this={toolbarEl} class="absolute left-3 top-3 z-10">
+    <div
+      bind:this={toolbarEl}
+      class="pointer-events-auto absolute left-3 top-3 z-30"
+    >
       {@render inkToolbar(
         false,
         'rounded-md border border-border bg-background/95 shadow-sm backdrop-blur'
