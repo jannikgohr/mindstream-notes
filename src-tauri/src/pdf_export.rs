@@ -22,6 +22,8 @@ use crate::error::{AppError, AppResult};
 pub struct SavePdfExportInput {
     /// Suggested filename pre-filled into the dialog (without path).
     pub suggested_name: String,
+    /// Optional save-dialog title supplied by the export flow.
+    pub dialog_title: Option<String>,
     /// PDF bytes to write at the chosen path. Tauri serialises Uint8Array
     /// from the TS side as a JSON number array, which serde decodes into
     /// Vec<u8> transparently.
@@ -32,9 +34,10 @@ async fn save_pdf_export_inner(app: AppHandle, input: SavePdfExportInput) -> App
     // The dialog API is callback-based; bridge it to async via a one-shot
     // channel so the command's caller can `await` the user's choice.
     let (tx, rx) = oneshot::channel();
+    let title = input.dialog_title.as_deref().unwrap_or("Save PDF");
     app.dialog()
         .file()
-        .set_title("Save annotated PDF")
+        .set_title(title)
         .add_filter("PDF", &["pdf"])
         .set_file_name(&input.suggested_name)
         .save_file(move |path| {

@@ -5,7 +5,7 @@
    * this is foreground. NoteEditor is shared with desktop — only the
    * surrounding chrome changes per platform.
    */
-  import { ArrowLeft, Info, X } from 'lucide-svelte';
+  import { ArrowLeft, Info, X } from '@lucide/svelte';
   import FavouriteStar from '$lib/components/FavouriteStar.svelte';
   import { Button } from '$lib/components/ui/button';
   import NoteStatusIcons from '$lib/desktop/NoteStatusIcons.svelte';

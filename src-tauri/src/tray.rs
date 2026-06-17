@@ -110,10 +110,10 @@ pub fn set_language(app: &AppHandle, code: &str) {
         log::warn!("[tray] failed to update New note label: {err}");
     }
     if let Err(err) = items.new_drawing.set_text(&labels.new_drawing) {
-        log::warn!("[tray] failed to update New drawing label: {err}");
+        log::warn!("[tray] failed to update New drawing canvas label: {err}");
     }
     if let Err(err) = items.new_ink.set_text(&labels.new_ink) {
-        log::warn!("[tray] failed to update New ink note label: {err}");
+        log::warn!("[tray] failed to update New handwritten note label: {err}");
     }
     if let Err(err) = items.new_diagram.set_text(&labels.new_diagram) {
         log::warn!("[tray] failed to update New diagram label: {err}");
@@ -219,8 +219,8 @@ fn create_note_and_emit(
 fn note_template(item_id: &str) -> Option<(&'static str, Option<&'static str>, &'static str)> {
     match item_id {
         NEW_NOTE_ID => Some(("Untitled", None, "markdown")),
-        NEW_DRAWING_ID => Some(("Untitled drawing", None, "freeform")),
-        NEW_INK_ID => Some(("Untitled ink note", None, "ink")),
+        NEW_DRAWING_ID => Some(("Untitled drawing canvas", None, "freeform")),
+        NEW_INK_ID => Some(("Untitled handwritten note", None, "ink")),
         NEW_DIAGRAM_ID => Some((
             "Untitled diagram",
             Some("```mermaid\nflowchart TD\n  A[Start] --> B[Next]\n```\n"),
@@ -235,8 +235,8 @@ fn global_shortcut_template(
 ) -> Option<(&'static str, Option<&'static str>, &'static str)> {
     match command_id {
         "global.newMarkdownNote" => Some(("Untitled", None, "markdown")),
-        "global.newDrawing" => Some(("Untitled drawing", None, "freeform")),
-        "global.newInkNote" => Some(("Untitled ink note", None, "ink")),
+        "global.newDrawing" => Some(("Untitled drawing canvas", None, "freeform")),
+        "global.newInkNote" => Some(("Untitled handwritten note", None, "ink")),
         _ => None,
     }
 }

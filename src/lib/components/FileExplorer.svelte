@@ -10,7 +10,7 @@
     PencilRuler,
     FilePlus2,
     Trash2
-  } from 'lucide-svelte';
+  } from '@lucide/svelte';
   import FavouriteStar from './FavouriteStar.svelte';
   import { noteKindIcon } from './note-kind-icon';
   import { Button } from '$lib/components/ui/button';
@@ -115,9 +115,9 @@
       kind === 'folder'
         ? 'Untitled folder'
         : kind === 'drawing'
-          ? 'Untitled drawing'
+          ? 'Untitled drawing canvas'
           : kind === 'ink'
-            ? 'Untitled ink note'
+            ? 'Untitled handwritten note'
             : 'Untitled';
     draft = { kind, parentId, text: defaultText };
   }
@@ -393,11 +393,11 @@
       return [
         { label: 'New note in folder', onSelect: () => startDraft('note', id) },
         {
-          label: 'New drawing in folder',
+          label: 'New drawing canvas in folder',
           onSelect: () => startDraft('drawing', id)
         },
         {
-          label: 'New ink note in folder',
+          label: 'New handwritten note in folder',
           onSelect: () => startDraft('ink', id)
         },
         { label: 'Import PDF in folder', onSelect: () => startPdfImport(id) },
@@ -427,8 +427,14 @@
 
     return [
       { label: 'New note', onSelect: () => startDraft('note', null) },
-      { label: 'New drawing', onSelect: () => startDraft('drawing', null) },
-      { label: 'New ink note', onSelect: () => startDraft('ink', null) },
+      {
+        label: 'New drawing canvas',
+        onSelect: () => startDraft('drawing', null)
+      },
+      {
+        label: 'New handwritten note',
+        onSelect: () => startDraft('ink', null)
+      },
       { label: 'Import PDF', onSelect: () => startPdfImport(null) },
       { label: 'New folder', onSelect: () => startDraft('folder', null) }
     ];

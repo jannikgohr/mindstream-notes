@@ -58,6 +58,7 @@ export async function exportAnnotatedPdfNote(noteId: string): Promise<void> {
 
   await saveAnnotatedPdf({
     suggestedName: `${sanitizePdfFilename(note.title)}.pdf`,
+    dialogTitle: 'Save annotated PDF',
     bytes: out
   });
 }

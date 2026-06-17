@@ -11,7 +11,7 @@
    * text selection before the action reads it.
    */
 
-  import { Highlighter, MessageSquarePlus } from 'lucide-svelte';
+  import { Highlighter, MessageSquarePlus } from '@lucide/svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
 
   interface Props {

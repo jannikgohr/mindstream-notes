@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { PanelLeft, PanelRight } from 'lucide-svelte';
+  import { PanelLeft, PanelRight } from '@lucide/svelte';
   import { Search as SearchIcon, Settings as SettingsIcon } from '@jis3r/icons';
   import { Button } from '$lib/components/ui/button';
   import { Separator } from '$lib/components/ui/separator';

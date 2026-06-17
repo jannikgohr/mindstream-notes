@@ -14,6 +14,8 @@ import { invokeOrFallback, isTauri } from './index';
 export interface SavePdfExportArgs {
   /** Suggested filename pre-filled into the dialog (no extension stripped). */
   suggestedName: string;
+  /** Optional native save-dialog title. */
+  dialogTitle?: string;
   /** Bytes to write. */
   bytes: Uint8Array;
 }
@@ -34,6 +36,7 @@ export async function saveAnnotatedPdf(
     {
       input: {
         suggestedName: args.suggestedName,
+        dialogTitle: args.dialogTitle,
         bytes: Array.from(args.bytes)
       }
     },

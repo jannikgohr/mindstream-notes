@@ -13,7 +13,7 @@
    * container's clientWidth via a ResizeObserver, so dragging the
    * sidebar resize handle re-evaluates instantly.
    */
-  import { ChevronRight } from 'lucide-svelte';
+  import { ChevronRight } from '@lucide/svelte';
   import type { Collection } from '$lib/api';
 
   interface Props {

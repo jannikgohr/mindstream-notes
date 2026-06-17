@@ -17,7 +17,7 @@
     CircleCheckBig,
     Trash2,
     X
-  } from 'lucide-svelte';
+  } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import { formatNoteDateTime } from '$lib/date-time';
   import { tUi } from '$lib/settings/i18n.svelte';

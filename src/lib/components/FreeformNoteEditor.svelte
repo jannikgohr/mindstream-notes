@@ -31,7 +31,7 @@
 
   import { onDestroy, onMount, untrack } from 'svelte';
   import * as Y from 'yjs';
-  import { Trash2 } from 'lucide-svelte';
+  import { Trash2 } from '@lucide/svelte';
   import { userPrefersMode } from 'mode-watcher';
   import {
     getExcalidrawRoomUrl,

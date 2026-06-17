@@ -122,7 +122,7 @@ export function drawingSaveInkState(
 }
 
 export interface DrawingToolbarSettingsPayload {
-  tool: 'pen' | 'eraser';
+  tool: 'pen' | 'eraser' | 'lasso';
   colorArgb: number;
   width: number;
   fingerDrawingAllowed: boolean;
@@ -130,7 +130,7 @@ export interface DrawingToolbarSettingsPayload {
 }
 
 export interface DrawingToolbarSettings {
-  tool?: 'pen' | 'eraser' | null;
+  tool?: 'pen' | 'eraser' | 'lasso' | null;
   colorArgb?: number | null;
   width?: number | null;
   fingerDrawingAllowed?: boolean | null;

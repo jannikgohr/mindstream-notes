@@ -18,7 +18,7 @@
    */
   import { onMount, tick } from 'svelte';
   import { SvelteSet } from 'svelte/reactivity';
-  import { ChevronRight, Plus, X } from 'lucide-svelte';
+  import { ChevronRight, Plus, X } from '@lucide/svelte';
   import {
     addNoteTag,
     allTagsInUse,

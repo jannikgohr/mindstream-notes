@@ -11,7 +11,7 @@
    */
 
   import { onDestroy } from 'svelte';
-  import { X } from 'lucide-svelte';
+  import { X } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import { tUi } from '$lib/settings/i18n.svelte';
   import type { FlatOutlineItem } from './outline';

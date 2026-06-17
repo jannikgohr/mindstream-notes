@@ -11,7 +11,7 @@
    * window's `<main>`, or MobileEditor's `<main>` without any
    * adaptation.
    */
-  import { AlertTriangle } from 'lucide-svelte';
+  import { AlertTriangle } from '@lucide/svelte';
   import { tree } from '$lib/stores/tree.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
 

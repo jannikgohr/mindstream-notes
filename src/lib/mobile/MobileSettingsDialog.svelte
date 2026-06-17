@@ -16,7 +16,7 @@
    * status bar or gesture bar with edge-to-edge enabled.
    */
   import { Dialog } from 'bits-ui';
-  import { ArrowLeft, ChevronRight, X } from 'lucide-svelte';
+  import { ArrowLeft, ChevronRight, X } from '@lucide/svelte';
   import SettingControl from '$lib/settings/SettingControl.svelte';
   import {
     SCHEMA,

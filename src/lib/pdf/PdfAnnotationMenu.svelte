@@ -11,7 +11,7 @@
    * transformed/clipped dockview ancestor can't displace it.
    */
 
-  import { MessageSquarePlus, Trash2 } from 'lucide-svelte';
+  import { MessageSquarePlus, Trash2 } from '@lucide/svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
 
   interface Props {

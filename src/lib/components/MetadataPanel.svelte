@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { CalendarPlus, Edit3, Folder, Paperclip, Tag } from 'lucide-svelte';
+  import { CalendarPlus, Edit3, Folder, Paperclip, Tag } from '@lucide/svelte';
   import FavouriteStar from './FavouriteStar.svelte';
   import TagsSection from '$lib/components/TagsSection.svelte';
   import {

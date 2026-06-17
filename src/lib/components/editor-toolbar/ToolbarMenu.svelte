@@ -12,7 +12,7 @@
    */
 
   import { onMount } from 'svelte';
-  import type { ComponentType } from 'svelte';
+  import type { Component } from 'svelte';
   import { Portal } from 'bits-ui';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { ariaKeyShortcut, displayBinding, getBinding } from '$lib/hotkeys';
@@ -21,7 +21,7 @@
     kind: 'item';
     id: string;
     labelKey: string;
-    icon: ComponentType;
+    icon: Component;
     onSelect: () => void;
     /**
      * Optional hotkey command id (from `$lib/hotkeys`). When set, the

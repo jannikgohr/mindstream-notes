@@ -15,7 +15,7 @@
     Loader2,
     TextSearch,
     X
-  } from 'lucide-svelte';
+  } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import { tUi } from '$lib/settings/i18n.svelte';
 

@@ -9,7 +9,7 @@
    * The primary action is wired separately because it always shows
    * regardless of expansion state.
    */
-  import { Plus, X } from 'lucide-svelte';
+  import { Plus, X } from '@lucide/svelte';
   import type { IconComponent } from '$lib/settings/icons';
   import { mobileState, toggleFabExpanded, collapseFab } from './state.svelte';
 

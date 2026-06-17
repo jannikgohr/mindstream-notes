@@ -21,10 +21,51 @@ export interface InkStroke {
   bounds?: StrokeBounds;
 }
 
+export interface StrokeTransform {
+  a: number;
+  b: number;
+  c: number;
+  d: number;
+  e: number;
+  f: number;
+  widthScale: number;
+}
+
+export interface InkStrokeInput {
+  color: number;
+  width: number;
+  points: InkPoint[];
+}
+
+export interface StrokeStyleSnapshot {
+  id: string;
+  color: number;
+  width: number;
+}
+
+export interface StrokeStylePatch {
+  color?: number;
+  width?: number;
+}
+
 export type UndoOp =
   | { kind: 'strokeAdded'; id: string }
+  | { kind: 'strokesAdded'; ids: string[] }
   | { kind: 'eraserDrag'; ids: string[] }
-  | { kind: 'clearAll'; ids: string[] };
+  | { kind: 'clearAll'; ids: string[] }
+  | { kind: 'selectionDelete'; ids: string[] }
+  | { kind: 'selectionMove'; ids: string[]; dx: number; dy: number }
+  | {
+      kind: 'selectionTransform';
+      ids: string[];
+      transform: StrokeTransform;
+      inverse: StrokeTransform;
+    }
+  | {
+      kind: 'selectionStyle';
+      before: StrokeStyleSnapshot[];
+      after: StrokeStyleSnapshot[];
+    };
 
 interface DecodedPayload {
   color: number;
@@ -132,6 +173,14 @@ export class InkDocument {
     return this.strokeMetasInBounds(bounds, extraPadding).map(strokeFromMeta);
   }
 
+  strokeIdsInLasso(points: Array<{ x: number; y: number }>): string[] {
+    if (points.length < 3) return [];
+    const bounds = boundsOfPoints(points.map((p) => ({ ...p, pressure: 1 })));
+    return this.strokeMetasInBounds(bounds, 0)
+      .filter((stroke) => strokeIntersectsLasso(stroke, points))
+      .map((stroke) => stroke.id);
+  }
+
   contentMaxY(): number {
     return this.ensureVisibleStrokeCache().reduce(
       (max, stroke) => Math.max(max, stroke.bounds.maxY),
@@ -196,6 +245,36 @@ export class InkDocument {
     });
   }
 
+  addStrokes(strokes: Iterable<InkStrokeInput>): MutationResult<string[]> {
+    return this.transactLocalUpdate(() => {
+      const added: string[] = [];
+      for (const input of strokes) {
+        const points = sanitizedPoints(input.points);
+        if (points.length === 0) continue;
+        const id = `stroke_${randomId()}`;
+        const map = new Y.Map<unknown>();
+        map.set(FIELD_ID, id);
+        map.set(FIELD_TOMBSTONED, false);
+        map.set(
+          FIELD_PAYLOAD,
+          encodePayloadV2({
+            color: input.color >>> 0,
+            width: sanitizeWidth(input.width),
+            points
+          })
+        );
+        this.strokes.push([map]);
+        this.strokeMapCache?.set(id, map);
+        added.push(id);
+      }
+      if (added.length > 0) {
+        this.invalidateVisibleStrokeCache();
+        this.recordOp({ kind: 'strokesAdded', ids: added });
+      }
+      return added;
+    });
+  }
+
   setStrokeTombstoned(id: string, tombstoned: boolean): boolean {
     return this.setStrokesTombstoned([id], tombstoned) > 0;
   }
@@ -230,6 +309,90 @@ export class InkDocument {
         this.recordOp({ kind: 'clearAll', ids: visible });
       }
       return visible;
+    });
+  }
+
+  deleteStrokes(ids: Iterable<string>): MutationResult<string[]> {
+    return this.transactLocalUpdate(() => {
+      const deleted = this.tombstoneStrokeSet(new Set(ids));
+      if (deleted.length > 0) {
+        this.recordOp({ kind: 'selectionDelete', ids: deleted });
+        if (this.visibleStrokeCache) {
+          const deletedSet = new Set(deleted);
+          this.visibleStrokeCache = this.visibleStrokeCache.filter(
+            (meta) => !deletedSet.has(meta.id)
+          );
+          this.invalidateSpatialIndexCache();
+        }
+      }
+      return deleted;
+    });
+  }
+
+  translateStrokes(
+    ids: Iterable<string>,
+    dx: number,
+    dy: number
+  ): MutationResult<string[]> {
+    if (!Number.isFinite(dx) || !Number.isFinite(dy)) {
+      return { value: [], update: null };
+    }
+    if (Math.abs(dx) < 0.001 && Math.abs(dy) < 0.001) {
+      return { value: [], update: null };
+    }
+    return this.transactLocalUpdate(() => {
+      const moved = this.translateStrokeSet(new Set(ids), dx, dy);
+      if (moved.length > 0) {
+        this.recordOp({ kind: 'selectionMove', ids: moved, dx, dy });
+      }
+      return moved;
+    });
+  }
+
+  transformStrokes(
+    ids: Iterable<string>,
+    transform: StrokeTransform
+  ): MutationResult<string[]> {
+    if (!validTransform(transform)) {
+      return { value: [], update: null };
+    }
+    const inverse = invertTransform(transform);
+    if (!inverse) return { value: [], update: null };
+    if (transformIsIdentity(transform)) {
+      return { value: [], update: null };
+    }
+    return this.transactLocalUpdate(() => {
+      const transformed = this.transformStrokeSet(new Set(ids), transform);
+      if (transformed.length > 0) {
+        this.recordOp({
+          kind: 'selectionTransform',
+          ids: transformed,
+          transform,
+          inverse
+        });
+      }
+      return transformed;
+    });
+  }
+
+  styleStrokes(
+    ids: Iterable<string>,
+    patch: StrokeStylePatch
+  ): MutationResult<string[]> {
+    const hasColor = Number.isFinite(patch.color);
+    const hasWidth = Number.isFinite(patch.width);
+    if (!hasColor && !hasWidth) {
+      return { value: [], update: null };
+    }
+    return this.transactLocalUpdate(() => {
+      const { changed, before, after } = this.styleStrokeSet(
+        new Set(ids),
+        patch
+      );
+      if (changed.length > 0) {
+        this.recordOp({ kind: 'selectionStyle', before, after });
+      }
+      return changed;
     });
   }
 
@@ -462,6 +625,126 @@ export class InkDocument {
     }
     return erased;
   }
+
+  translateStrokeSet(ids: Set<string>, dx: number, dy: number): string[] {
+    return this.transformStrokeSet(ids, {
+      a: 1,
+      b: 0,
+      c: 0,
+      d: 1,
+      e: dx,
+      f: dy,
+      widthScale: 1
+    });
+  }
+
+  transformStrokeSet(ids: Set<string>, transform: StrokeTransform): string[] {
+    if (ids.size === 0) return [];
+    const strokeMaps = this.ensureStrokeMapCache();
+    const moved: string[] = [];
+    for (const id of ids) {
+      const stroke = strokeMaps.get(id);
+      if (!stroke || stroke.get(FIELD_TOMBSTONED) === true) continue;
+      const payload = stroke.get(FIELD_PAYLOAD);
+      if (!(payload instanceof Uint8Array)) continue;
+      const decoded = decodePayload(payload);
+      if (!decoded) continue;
+      stroke.set(
+        FIELD_PAYLOAD,
+        encodePayloadV2({
+          color: decoded.color,
+          width: sanitizeWidth(decoded.width * transform.widthScale),
+          points: decoded.points.map((point) =>
+            transformPoint(point, transform)
+          )
+        })
+      );
+      moved.push(id);
+    }
+    if (moved.length > 0) {
+      this.invalidateVisibleStrokeCache();
+    }
+    return moved;
+  }
+
+  styleStrokeSet(
+    ids: Set<string>,
+    patch: StrokeStylePatch
+  ): {
+    changed: string[];
+    before: StrokeStyleSnapshot[];
+    after: StrokeStyleSnapshot[];
+  } {
+    if (ids.size === 0) return { changed: [], before: [], after: [] };
+    const strokeMaps = this.ensureStrokeMapCache();
+    const changed: string[] = [];
+    const before: StrokeStyleSnapshot[] = [];
+    const after: StrokeStyleSnapshot[] = [];
+    const hasColor = Number.isFinite(patch.color);
+    const hasWidth = Number.isFinite(patch.width);
+    const color = hasColor ? (patch.color ?? DEFAULT_COLOR) >>> 0 : null;
+    const width = hasWidth ? sanitizeWidth(patch.width ?? DEFAULT_WIDTH) : null;
+
+    for (const id of ids) {
+      const stroke = strokeMaps.get(id);
+      if (!stroke || stroke.get(FIELD_TOMBSTONED) === true) continue;
+      const payload = stroke.get(FIELD_PAYLOAD);
+      if (!(payload instanceof Uint8Array)) continue;
+      const decoded = decodePayload(payload);
+      if (!decoded) continue;
+      const nextColor = color ?? decoded.color;
+      const nextWidth = width ?? decoded.width;
+      if (
+        nextColor === decoded.color &&
+        Math.abs(nextWidth - decoded.width) < 0.001
+      ) {
+        continue;
+      }
+      before.push({ id, color: decoded.color, width: decoded.width });
+      after.push({ id, color: nextColor, width: nextWidth });
+      stroke.set(
+        FIELD_PAYLOAD,
+        encodePayloadV2({
+          color: nextColor,
+          width: nextWidth,
+          points: decoded.points
+        })
+      );
+      changed.push(id);
+    }
+    if (changed.length > 0) {
+      this.invalidateVisibleStrokeCache();
+    }
+    return { changed, before, after };
+  }
+
+  applyStrokeStyleSnapshot(styles: StrokeStyleSnapshot[]): string[] {
+    if (styles.length === 0) return [];
+    const styleById = new Map(styles.map((style) => [style.id, style]));
+    const strokeMaps = this.ensureStrokeMapCache();
+    const changed: string[] = [];
+    for (const [id, style] of styleById) {
+      const stroke = strokeMaps.get(id);
+      if (!stroke || stroke.get(FIELD_TOMBSTONED) === true) continue;
+      const payload = stroke.get(FIELD_PAYLOAD);
+      if (!(payload instanceof Uint8Array)) continue;
+      const decoded = decodePayload(payload);
+      if (!decoded) continue;
+      stroke.set(
+        FIELD_PAYLOAD,
+        encodePayloadV2({
+          color: style.color >>> 0,
+          width: sanitizeWidth(style.width),
+          points: decoded.points
+        })
+      );
+      changed.push(id);
+    }
+    if (changed.length > 0) {
+      this.invalidateVisibleStrokeCache();
+    }
+    return changed;
+  }
 }
 
 export function strokesHitAt(
@@ -494,6 +777,84 @@ function strokeHitAt(
     }
   }
   return false;
+}
+
+function strokeIntersectsLasso(
+  stroke: StrokeMeta,
+  lasso: Array<{ x: number; y: number }>
+): boolean {
+  if (lasso.length < 3) return false;
+  for (const point of stroke.points) {
+    if (pointInPolygon(point, lasso)) return true;
+  }
+  for (let i = 1; i < stroke.points.length; i += 1) {
+    const a = stroke.points[i - 1];
+    const b = stroke.points[i];
+    for (let j = 0; j < lasso.length; j += 1) {
+      const c = lasso[j];
+      const d = lasso[(j + 1) % lasso.length];
+      if (segmentsIntersect(a, b, c, d)) return true;
+    }
+  }
+  return false;
+}
+
+function pointInPolygon(
+  point: { x: number; y: number },
+  polygon: Array<{ x: number; y: number }>
+): boolean {
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const a = polygon[i];
+    const b = polygon[j];
+    const intersects =
+      a.y > point.y !== b.y > point.y &&
+      point.x < ((b.x - a.x) * (point.y - a.y)) / (b.y - a.y) + a.x;
+    if (intersects) inside = !inside;
+  }
+  return inside;
+}
+
+function segmentsIntersect(
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+  c: { x: number; y: number },
+  d: { x: number; y: number }
+): boolean {
+  const abC = orientation(a, b, c);
+  const abD = orientation(a, b, d);
+  const cdA = orientation(c, d, a);
+  const cdB = orientation(c, d, b);
+
+  if (abC === 0 && pointOnSegment(c, a, b)) return true;
+  if (abD === 0 && pointOnSegment(d, a, b)) return true;
+  if (cdA === 0 && pointOnSegment(a, c, d)) return true;
+  if (cdB === 0 && pointOnSegment(b, c, d)) return true;
+
+  return abC !== abD && cdA !== cdB;
+}
+
+function orientation(
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+  c: { x: number; y: number }
+): -1 | 0 | 1 {
+  const value = (b.y - a.y) * (c.x - b.x) - (b.x - a.x) * (c.y - b.y);
+  if (Math.abs(value) < 1e-6) return 0;
+  return value > 0 ? 1 : -1;
+}
+
+function pointOnSegment(
+  point: { x: number; y: number },
+  a: { x: number; y: number },
+  b: { x: number; y: number }
+): boolean {
+  return (
+    point.x >= Math.min(a.x, b.x) - 1e-6 &&
+    point.x <= Math.max(a.x, b.x) + 1e-6 &&
+    point.y >= Math.min(a.y, b.y) - 1e-6 &&
+    point.y <= Math.max(a.y, b.y) + 1e-6
+  );
 }
 
 function strokeFromMeta(meta: StrokeMeta): InkStroke {
@@ -562,9 +923,22 @@ function applyUndoOp(doc: InkDocument, op: UndoOp): void {
     case 'strokeAdded':
       doc.setStrokeTombstoned(op.id, true);
       break;
+    case 'strokesAdded':
+      doc.setStrokesTombstoned(op.ids, true);
+      break;
     case 'eraserDrag':
     case 'clearAll':
+    case 'selectionDelete':
       doc.setStrokesTombstoned(op.ids, false);
+      break;
+    case 'selectionMove':
+      doc.translateStrokeSet(new Set(op.ids), -op.dx, -op.dy);
+      break;
+    case 'selectionTransform':
+      doc.transformStrokeSet(new Set(op.ids), op.inverse);
+      break;
+    case 'selectionStyle':
+      doc.applyStrokeStyleSnapshot(op.before);
       break;
   }
 }
@@ -574,11 +948,81 @@ function applyRedoOp(doc: InkDocument, op: UndoOp): void {
     case 'strokeAdded':
       doc.setStrokeTombstoned(op.id, false);
       break;
+    case 'strokesAdded':
+      doc.setStrokesTombstoned(op.ids, false);
+      break;
     case 'eraserDrag':
     case 'clearAll':
+    case 'selectionDelete':
       doc.setStrokesTombstoned(op.ids, true);
       break;
+    case 'selectionMove':
+      doc.translateStrokeSet(new Set(op.ids), op.dx, op.dy);
+      break;
+    case 'selectionTransform':
+      doc.transformStrokeSet(new Set(op.ids), op.transform);
+      break;
+    case 'selectionStyle':
+      doc.applyStrokeStyleSnapshot(op.after);
+      break;
   }
+}
+
+function validTransform(transform: StrokeTransform): boolean {
+  return (
+    Number.isFinite(transform.a) &&
+    Number.isFinite(transform.b) &&
+    Number.isFinite(transform.c) &&
+    Number.isFinite(transform.d) &&
+    Number.isFinite(transform.e) &&
+    Number.isFinite(transform.f) &&
+    Number.isFinite(transform.widthScale) &&
+    transform.widthScale > 0
+  );
+}
+
+function transformIsIdentity(transform: StrokeTransform): boolean {
+  return (
+    Math.abs(transform.a - 1) < 0.0001 &&
+    Math.abs(transform.b) < 0.0001 &&
+    Math.abs(transform.c) < 0.0001 &&
+    Math.abs(transform.d - 1) < 0.0001 &&
+    Math.abs(transform.e) < 0.001 &&
+    Math.abs(transform.f) < 0.001 &&
+    Math.abs(transform.widthScale - 1) < 0.0001
+  );
+}
+
+function invertTransform(transform: StrokeTransform): StrokeTransform | null {
+  const det = transform.a * transform.d - transform.b * transform.c;
+  if (Math.abs(det) < 1e-8) return null;
+  return {
+    a: transform.d / det,
+    b: -transform.b / det,
+    c: -transform.c / det,
+    d: transform.a / det,
+    e: (transform.c * transform.f - transform.d * transform.e) / det,
+    f: (transform.b * transform.e - transform.a * transform.f) / det,
+    widthScale: 1 / transform.widthScale
+  };
+}
+
+function transformPoint(point: InkPoint, transform: StrokeTransform): InkPoint {
+  return {
+    x: point.x * transform.a + point.y * transform.c + transform.e,
+    y: point.x * transform.b + point.y * transform.d + transform.f,
+    pressure: point.pressure
+  };
+}
+
+function sanitizedPoints(points: InkPoint[]): InkPoint[] {
+  return points
+    .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
+    .map((point) => ({
+      x: point.x,
+      y: point.y,
+      pressure: sanitizePressure(point.pressure)
+    }));
 }
 
 function encodePayloadV2(stroke: InProgressStroke): Uint8Array {

@@ -11,7 +11,7 @@
    * to the raw value when an i18n entry is missing.
    */
   import { Select } from 'bits-ui';
-  import { Check, ChevronDown } from 'lucide-svelte';
+  import { Check, ChevronDown } from '@lucide/svelte';
   import { tValue } from './i18n.svelte';
 
   interface Props {

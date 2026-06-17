@@ -22,7 +22,7 @@
    *     where most users will look.
    */
   import { Dialog } from 'bits-ui';
-  import { Keyboard, Search, X } from 'lucide-svelte';
+  import { Keyboard, Search, X } from '@lucide/svelte';
   import {
     closeShortcutHelp,
     displayBinding,
