@@ -6,21 +6,23 @@
     Copy,
     Eraser,
     LassoSelect,
-    MoreHorizontal,
     MousePointer2,
     MoonStar,
     Palette,
     PenLine,
+    PocketKnife,
     Redo2,
     Scissors,
     Settings2,
     Sun,
+    Shredder,
     Trash2,
     Undo2
   } from '@lucide/svelte';
   import {
     Toolbar,
     ToolbarButton,
+    ToolbarCollapseWhenOverflow,
     ToolbarSeparator,
     ToolbarZoomControls
   } from '$lib/components/ui/toolbar';
@@ -286,9 +288,7 @@
       Math.abs(selectionDragOffset.y) > 0.001 ||
       !transformIsIdentity(selectionTransformPreview)
   );
-  const clearButtonLabel = $derived(
-    hasSelection ? tUi('ink.toolbar.deleteSelected') : tUi('ink.toolbar.clear')
-  );
+  const clearButtonLabel = $derived(tUi('ink.toolbar.clear'));
 
   function ancestorIsTrash(parentId: string | null): boolean {
     let current = parentId;
@@ -2214,7 +2214,6 @@
   }
 
   async function confirmClearCanvas() {
-    if (deleteSelection()) return;
     if (!doc || isTrashed || strokeCount === 0) return;
     const ok = await confirm({
       title: tUi('ink.toolbar.clearConfirm.title'),
@@ -2592,6 +2591,115 @@
   });
 </script>
 
+{#snippet selectionActionsExpanded()}
+  <ToolbarButton
+    aria-label={tUi('ink.toolbar.cutSelected')}
+    title={tUi('ink.toolbar.cutSelected')}
+    disabled={isTrashed || !hasSelection}
+    onclick={cutSelection}
+  >
+    <Scissors aria-hidden="true" />
+  </ToolbarButton>
+  <ToolbarButton
+    aria-label={tUi('ink.toolbar.copySelected')}
+    title={tUi('ink.toolbar.copySelected')}
+    disabled={!hasSelection}
+    onclick={copySelection}
+  >
+    <Copy aria-hidden="true" />
+  </ToolbarButton>
+  <ToolbarButton
+    aria-label={tUi('ink.toolbar.pasteInk')}
+    title={tUi('ink.toolbar.pasteInk')}
+    disabled={isTrashed || !hasSelectionClipboard}
+    onclick={pasteSelection}
+  >
+    <ClipboardPaste aria-hidden="true" />
+  </ToolbarButton>
+  <ToolbarButton
+    aria-label={tUi('ink.toolbar.deleteSelected')}
+    title={tUi('ink.toolbar.deleteSelected')}
+    disabled={isTrashed || !hasSelection}
+    onclick={deleteSelection}
+  >
+    <Trash2 aria-hidden="true" />
+  </ToolbarButton>
+{/snippet}
+
+{#snippet selectionActionsCollapsed()}
+  <div class="relative shrink-0">
+    <ToolbarButton
+      bind:ref={selectionMenuButton}
+      active={toolbarMenuOpen === 'selection'}
+      aria-label={tUi('ink.toolbar.selectionActions')}
+      title={tUi('ink.toolbar.selectionActions')}
+      aria-haspopup="menu"
+      aria-expanded={toolbarMenuOpen === 'selection'}
+      onclick={() => toggleToolbarMenu('selection')}
+    >
+      <PocketKnife aria-hidden="true" />
+    </ToolbarButton>
+
+    {#if toolbarMenuOpen === 'selection'}
+      <div
+        bind:this={selectionMenuEl}
+        role="menu"
+        class="absolute left-0 top-full z-50 mt-1 min-w-44 rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-lg"
+        aria-label={tUi('ink.toolbar.selectionActions')}
+      >
+        <button
+          type="button"
+          role="menuitem"
+          class="flex h-8 w-full items-center gap-2 rounded-sm px-2 text-left text-sm hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-50"
+          disabled={isTrashed || !hasSelection}
+          onclick={() => {
+            if (cutSelection()) toolbarMenuOpen = null;
+          }}
+        >
+          <Scissors class="size-4" aria-hidden="true" />
+          <span>{tUi('ink.toolbar.cutSelected')}</span>
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          class="flex h-8 w-full items-center gap-2 rounded-sm px-2 text-left text-sm hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-50"
+          disabled={!hasSelection}
+          onclick={() => {
+            if (copySelection()) toolbarMenuOpen = null;
+          }}
+        >
+          <Copy class="size-4" aria-hidden="true" />
+          <span>{tUi('ink.toolbar.copySelected')}</span>
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          class="flex h-8 w-full items-center gap-2 rounded-sm px-2 text-left text-sm hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-50"
+          disabled={isTrashed || !hasSelectionClipboard}
+          onclick={() => {
+            if (pasteSelection()) toolbarMenuOpen = null;
+          }}
+        >
+          <ClipboardPaste class="size-4" aria-hidden="true" />
+          <span>{tUi('ink.toolbar.pasteInk')}</span>
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          class="flex h-8 w-full items-center gap-2 rounded-sm px-2 text-left text-sm text-destructive hover:bg-destructive/10 disabled:pointer-events-none disabled:opacity-50"
+          disabled={isTrashed || !hasSelection}
+          onclick={() => {
+            if (deleteSelection()) toolbarMenuOpen = null;
+          }}
+        >
+          <Trash2 class="size-4" aria-hidden="true" />
+          <span>{tUi('ink.toolbar.deleteSelected')}</span>
+        </button>
+      </div>
+    {/if}
+  </div>
+{/snippet}
+
 {#snippet inkToolbar(dense: boolean, className: string)}
   <Toolbar {dense} aria-label={tUi('ink.toolbar.label')} class={className}>
     <div class="flex min-w-0 flex-1 items-center gap-0.5">
@@ -2761,77 +2869,12 @@
 
       {#if hasSelection || hasSelectionClipboard}
         <ToolbarSeparator />
-        <div class="relative shrink-0">
-          <ToolbarButton
-            bind:ref={selectionMenuButton}
-            active={toolbarMenuOpen === 'selection'}
-            aria-label={tUi('ink.toolbar.selectionActions')}
-            title={tUi('ink.toolbar.selectionActions')}
-            aria-haspopup="menu"
-            aria-expanded={toolbarMenuOpen === 'selection'}
-            onclick={() => toggleToolbarMenu('selection')}
-          >
-            <MoreHorizontal aria-hidden="true" />
-          </ToolbarButton>
-
-          {#if toolbarMenuOpen === 'selection'}
-            <div
-              bind:this={selectionMenuEl}
-              role="menu"
-              class="absolute left-0 top-full z-50 mt-1 min-w-44 rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-lg"
-              aria-label={tUi('ink.toolbar.selectionActions')}
-            >
-              <button
-                type="button"
-                role="menuitem"
-                class="flex h-8 w-full items-center gap-2 rounded-sm px-2 text-left text-sm hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-50"
-                disabled={isTrashed || !hasSelection}
-                onclick={() => {
-                  if (cutSelection()) toolbarMenuOpen = null;
-                }}
-              >
-                <Scissors class="size-4" aria-hidden="true" />
-                <span>{tUi('ink.toolbar.cutSelected')}</span>
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                class="flex h-8 w-full items-center gap-2 rounded-sm px-2 text-left text-sm hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-50"
-                disabled={!hasSelection}
-                onclick={() => {
-                  if (copySelection()) toolbarMenuOpen = null;
-                }}
-              >
-                <Copy class="size-4" aria-hidden="true" />
-                <span>{tUi('ink.toolbar.copySelected')}</span>
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                class="flex h-8 w-full items-center gap-2 rounded-sm px-2 text-left text-sm hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-50"
-                disabled={isTrashed || !hasSelectionClipboard}
-                onclick={() => {
-                  if (pasteSelection()) toolbarMenuOpen = null;
-                }}
-              >
-                <ClipboardPaste class="size-4" aria-hidden="true" />
-                <span>{tUi('ink.toolbar.pasteInk')}</span>
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                class="flex h-8 w-full items-center gap-2 rounded-sm px-2 text-left text-sm text-destructive hover:bg-destructive/10 disabled:pointer-events-none disabled:opacity-50"
-                disabled={isTrashed || !hasSelection}
-                onclick={() => {
-                  if (deleteSelection()) toolbarMenuOpen = null;
-                }}
-              >
-                <Trash2 class="size-4" aria-hidden="true" />
-                <span>{tUi('ink.toolbar.deleteSelected')}</span>
-              </button>
-            </div>
-          {/if}
-        </div>
+        <ToolbarCollapseWhenOverflow
+          class="items-center gap-0.5"
+          margin={6}
+          expanded={selectionActionsExpanded}
+          collapsed={selectionActionsCollapsed}
+        />
       {/if}
 
       <div class="ml-auto flex shrink-0 items-center gap-0.5 pl-2">
@@ -2889,13 +2932,13 @@
                 type="button"
                 role="menuitem"
                 class="flex h-8 w-full items-center gap-2 rounded-sm px-2 text-left text-sm text-destructive hover:bg-destructive/10 disabled:pointer-events-none disabled:opacity-50"
-                disabled={isTrashed || (strokeCount === 0 && !hasSelection)}
+                disabled={isTrashed || strokeCount === 0}
                 onclick={() => {
                   toolbarMenuOpen = null;
                   void confirmClearCanvas();
                 }}
               >
-                <Trash2 class="size-4" aria-hidden="true" />
+                <Shredder class="size-4" aria-hidden="true" />
                 <span>{clearButtonLabel}</span>
               </button>
             </div>
