@@ -366,6 +366,7 @@
     "ink.toolbar.lasso": "Lasso select",
     "ink.toolbar.style": "Ink style",
     "ink.toolbar.color": "Ink colour",
+    "ink.toolbar.colorHex": "Ink colour hex value",
     "ink.toolbar.colorPresets": "Ink colour presets",
     "ink.toolbar.colorPreset": "Ink colour preset",
     "ink.toolbar.brushSize": "Brush size",

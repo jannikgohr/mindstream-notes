@@ -266,6 +266,7 @@
     "ink.toolbar.lasso": "Lasso-Auswahl",
     "ink.toolbar.style": "Ink-Stil",
     "ink.toolbar.color": "Ink-Farbe",
+    "ink.toolbar.colorHex": "Hex-Wert der Ink-Farbe",
     "ink.toolbar.colorPresets": "Ink-Farbvorgaben",
     "ink.toolbar.colorPreset": "Ink-Farbvorgabe",
     "ink.toolbar.brushSize": "Pinselgröße",

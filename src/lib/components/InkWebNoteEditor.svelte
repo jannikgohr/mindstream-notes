@@ -97,9 +97,11 @@
   const SAVE_DEBOUNCE_MS = 800;
   const ERASER_RADIUS = 10;
   const PAGE_FILL_LIGHT = 0xffffffff;
-  const PAGE_BORDER_LIGHT = 0xffe5e7eb;
-  const PAGE_SHADOW_LIGHT = 'rgba(0, 0, 0, 0.14)';
-  const PAGE_SHADOW_DARK = 'rgba(255, 255, 255, 0.2)';
+  const PAGE_SHADOW_LIGHT = 'rgba(15, 23, 42, 0.16)';
+  const PAGE_SHADOW_DARK = 'rgba(0, 0, 0, 0.42)';
+  const PAGE_EDGE_DARK = 'rgba(255, 255, 255, 0.12)';
+  const PAGE_EDGE_LIGHT = 'rgba(15, 23, 42, 0.08)';
+  const TOOL_PREVIEW_DASH = [5, 4];
   const FIT_PAGE_MARGIN_PX = 32;
   const FIT_PAGE_TOP_MARGIN_PX = 72;
   const MAX_ZOOM_FACTOR = 6;
@@ -142,6 +144,12 @@
   type QueuedEraserSample = {
     point: InkPoint;
     hits: Set<string>;
+  };
+  type ToolPreview = {
+    point: InkPoint;
+    erasing: boolean;
+    lassoing: boolean;
+    pointerType: string;
   };
   type PointerMode =
     | 'draw'
@@ -225,6 +233,7 @@
 
   let tool = $state<ToolMode>('pen');
   let colorArgb = $state(DEFAULT_COLOR);
+  let colorInputText = $state('#000000');
   let width = $state(DEFAULT_WIDTH);
   let fingerDrawingAllowed = $state(true);
   let pageThemeMode = $state<PageThemeMode>('light');
@@ -245,6 +254,7 @@
   let androidStylusEraserActive = false;
   let pointerMode: PointerMode | null = null;
   let activePointerId: number | null = null;
+  let toolPreview = $state<ToolPreview | null>(null);
   let lastPointer: { x: number; y: number } | null = null;
   const touchPointers = new Map<number, TouchPointer>();
   let touchGesture: TouchGestureState | null = null;
@@ -337,6 +347,10 @@
     pageThemeMode = normalizeInkPageTheme(
       getSettingValue(INK_PAGE_THEME_SETTING)
     );
+  });
+
+  $effect(() => {
+    colorInputText = colorHex;
   });
 
   $effect(() => {
@@ -841,6 +855,7 @@
     drawStroke(ctx, inFlight, displayCssColor(colorArgb), width);
     drawSelectionOverlay(ctx);
     drawLassoOverlay(ctx);
+    drawToolPreview(ctx);
     hasDrawnFrame = true;
     scheduleResizeSnapshotHide();
   }
@@ -868,14 +883,86 @@
       const a = pageToScreen({ x: x0, y: y0 });
       const b = pageToScreen({ x: x1, y: y1 });
       if (b.y < -32 || a.y > view.height + 32) continue;
-      ctx.fillStyle = pageDark ? PAGE_SHADOW_DARK : PAGE_SHADOW_LIGHT;
-      ctx.fillRect(a.x + 3, a.y + 3, b.x - a.x, b.y - a.y);
+      const width = b.x - a.x;
+      const height = b.y - a.y;
+      ctx.save();
+      ctx.shadowColor = pageDark ? PAGE_SHADOW_DARK : PAGE_SHADOW_LIGHT;
+      ctx.shadowBlur = pageDark ? 18 : 14;
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = pageDark ? 8 : 6;
       ctx.fillStyle = displayCssColor(PAGE_FILL_LIGHT);
-      ctx.fillRect(a.x, a.y, b.x - a.x, b.y - a.y);
-      ctx.strokeStyle = displayCssColor(PAGE_BORDER_LIGHT);
+      ctx.fillRect(a.x, a.y, width, height);
+      ctx.restore();
+      ctx.strokeStyle = pageDark ? PAGE_EDGE_DARK : PAGE_EDGE_LIGHT;
       ctx.lineWidth = 1;
-      ctx.strokeRect(a.x, a.y, b.x - a.x, b.y - a.y);
+      ctx.strokeRect(a.x + 0.5, a.y + 0.5, width - 1, height - 1);
     }
+  }
+
+  function drawToolPreview(ctx: CanvasRenderingContext2D) {
+    if (
+      !toolPreview ||
+      pointerMode === 'pan' ||
+      pointerMode === 'touchGesture'
+    ) {
+      return;
+    }
+    const onPage = containsPagePoint(
+      layout,
+      toolPreview.point.x,
+      toolPreview.point.y
+    );
+    if (!toolPreview.erasing && !toolPreview.lassoing && !onPage) {
+      return;
+    }
+    const center = pageToScreen(toolPreview.point);
+    ctx.save();
+    ctx.lineWidth = 1;
+    if (toolPreview.erasing) {
+      const radius = Math.max(4, ERASER_RADIUS * view.scale);
+      ctx.setLineDash(TOOL_PREVIEW_DASH);
+      ctx.beginPath();
+      ctx.arc(center.x, center.y, radius, 0, Math.PI * 2);
+      ctx.fillStyle = onPage
+        ? pageDark
+          ? 'rgba(248, 250, 252, 0.08)'
+          : 'rgba(15, 23, 42, 0.06)'
+        : 'rgba(248, 250, 252, 0.08)';
+      ctx.fill();
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = 'rgba(248, 250, 252, 0.78)';
+      ctx.stroke();
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = 'rgba(15, 23, 42, 0.78)';
+      ctx.stroke();
+    } else if (toolPreview.lassoing && lassoPoints.length === 0) {
+      const radiusX = 15;
+      const radiusY = 11;
+      ctx.setLineDash(TOOL_PREVIEW_DASH);
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = pageDark
+        ? 'rgba(96, 165, 250, 0.9)'
+        : 'rgba(37, 99, 235, 0.82)';
+      ctx.fillStyle = pageDark
+        ? 'rgba(96, 165, 250, 0.1)'
+        : 'rgba(37, 99, 235, 0.07)';
+      ctx.beginPath();
+      ctx.ellipse(center.x, center.y, radiusX, radiusY, -0.24, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    } else if (toolPreview.pointerType === 'pen') {
+      const radius = Math.max(2, (width * view.scale) / 2);
+      const previewColor = displayColor(colorArgb);
+      ctx.strokeStyle = cssColor(previewColor);
+      ctx.fillStyle = cssColor(
+        (0x33000000 | (previewColor & 0x00ffffff)) >>> 0
+      );
+      ctx.beginPath();
+      ctx.arc(center.x, center.y, radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 
   function drawStroke(
@@ -1270,6 +1357,30 @@
     return clientPoint(event.clientX, event.clientY, event.pressure);
   }
 
+  function updateToolPreview(event: PointerEvent) {
+    if (event.pointerType === 'touch' || !canvasEl) return;
+    const point = eventPoint(event);
+    const erasing = tool === 'eraser' || isStylusButtonErasing(event);
+    const lassoing = tool === 'lasso';
+    const penHover = tool === 'pen' && event.pointerType === 'pen';
+    const onPage = containsPagePoint(layout, point.x, point.y);
+    if (
+      (!erasing && !lassoing && !penHover) ||
+      (!erasing && !lassoing && !onPage)
+    ) {
+      clearToolPreview();
+      return;
+    }
+    toolPreview = { point, erasing, lassoing, pointerType: event.pointerType };
+    scheduleDraw();
+  }
+
+  function clearToolPreview() {
+    if (!toolPreview) return;
+    toolPreview = null;
+    scheduleDraw();
+  }
+
   function isStylusButtonErasing(event: PointerEvent): boolean {
     if (event.pointerType !== 'pen') return false;
     const eraserButtons =
@@ -1441,6 +1552,16 @@
     handleActivePointerEnd(event, cancelled);
   }
 
+  function handlePointerEnter(event: PointerEvent) {
+    updateToolPreview(event);
+  }
+
+  function handlePointerLeave(event: PointerEvent) {
+    if (activePointerId === null || activePointerId === event.pointerId) {
+      clearToolPreview();
+    }
+  }
+
   function handlePointerDown(event: PointerEvent) {
     if (!doc || !canvasEl) return;
     if (event.pointerType === 'touch') {
@@ -1486,6 +1607,7 @@
       selectedStrokeIds = [];
       selectionFrame = null;
       eraserHits.clear();
+      updateToolPreview(event);
       eraseFromEvent(event);
       return;
     }
@@ -1500,6 +1622,7 @@
       handleTouchPointerMove(event);
       return;
     }
+    updateToolPreview(event);
     handleActivePointerMove(event);
   }
 
@@ -1519,6 +1642,7 @@
     }
     if (pointerMode === 'erase') {
       event.preventDefault();
+      updateToolPreview(event);
       eraseFromEvent(event);
       return;
     }
@@ -1540,6 +1664,7 @@
         selectedStrokeIds = [];
         selectionFrame = null;
         eraserHits.clear();
+        updateToolPreview(event);
         eraseFromEvent(event);
         return;
       }
@@ -2112,16 +2237,27 @@
     selectionDragStart = null;
     selectionDragOffset = { x: 0, y: 0 };
     selectionTransformPreview = identityTransform();
+    clearToolPreview();
     emitToolbarSettings();
     updateLiveInkOverlayStyle();
   }
 
   function setColor(value: string) {
-    const next = colorHexToArgb(value);
+    const normalized = normalizeColorHex(value);
+    if (!normalized) return;
+    colorInputText = normalized;
+    const next = colorHexToArgb(normalized);
     colorArgb = next;
     if (hasSelection) applySelectionStyle({ color: next });
+    scheduleDraw();
     emitToolbarSettings();
     updateLiveInkOverlayStyle();
+  }
+
+  function setColorInputText(value: string) {
+    colorInputText = value;
+    const normalized = normalizeColorHex(value);
+    if (normalized) setColor(normalized);
   }
 
   function selectPresetColor(value: string) {
@@ -2137,6 +2273,7 @@
     const next = normalizeInkWidth(Number(value));
     width = next;
     if (hasSelection) applySelectionStyle({ width: next });
+    scheduleDraw();
     emitToolbarSettings();
     updateLiveInkOverlayStyle();
   }
@@ -2325,6 +2462,21 @@
   function normalizeInkWidth(value: unknown): number {
     const n = typeof value === 'number' ? value : Number(value);
     return Number.isFinite(n) ? Math.min(12, Math.max(0.5, n)) : DEFAULT_WIDTH;
+  }
+
+  function normalizeColorHex(value: unknown): string | null {
+    if (typeof value !== 'string') return null;
+    const raw = value.trim();
+    const hex = raw.startsWith('#') ? raw.slice(1) : raw;
+    if (/^[0-9a-fA-F]{3}$/.test(hex)) {
+      return `#${hex
+        .split('')
+        .map((c) => c + c)
+        .join('')
+        .toLowerCase()}`;
+    }
+    if (/^[0-9a-fA-F]{6}$/.test(hex)) return `#${hex.toLowerCase()}`;
+    return null;
   }
 
   function colorHexToArgb(value: unknown): number {
@@ -2792,19 +2944,39 @@
               {/each}
             </div>
 
-            <label
-              class="mt-2 flex h-9 items-center justify-between gap-3 rounded-md px-2 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+            <div
+              class="mt-2 flex h-10 items-center gap-2 rounded-md px-2"
               aria-label={tUi('ink.toolbar.color')}
-              title={tUi('ink.toolbar.color')}
             >
-              <span>{tUi('ink.toolbar.color')}</span>
-              <input
-                class="size-6 cursor-pointer border-0 bg-transparent p-0"
-                type="color"
-                value={colorHex}
-                oninput={(e) => setColor(e.currentTarget.value)}
-              />
-            </label>
+              <label
+                class="relative grid size-7 shrink-0 cursor-pointer place-items-center rounded-md border border-border bg-background shadow-sm focus-within:ring-2 focus-within:ring-ring"
+                title={tUi('ink.toolbar.color')}
+              >
+                <span
+                  class="size-5 rounded-sm border border-black/15"
+                  style="background-color: {colorHex};"
+                  aria-hidden="true"
+                ></span>
+                <input
+                  class="absolute inset-0 cursor-pointer opacity-0"
+                  type="color"
+                  aria-label={tUi('ink.toolbar.color')}
+                  value={colorHex}
+                  oninput={(e) => setColor(e.currentTarget.value)}
+                />
+              </label>
+              <label class="min-w-0 flex-1">
+                <span class="sr-only">{tUi('ink.toolbar.colorHex')}</span>
+                <input
+                  class="h-8 w-full rounded-md border border-input bg-background px-2 font-mono text-xs uppercase text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  aria-label={tUi('ink.toolbar.colorHex')}
+                  spellcheck="false"
+                  maxlength="7"
+                  value={colorInputText}
+                  oninput={(e) => setColorInputText(e.currentTarget.value)}
+                />
+              </label>
+            </div>
 
             <div
               class="mt-2 rounded-md px-2 py-1.5"
@@ -2979,9 +3151,15 @@
     ></canvas>
     <canvas
       bind:this={canvasEl}
-      class="relative z-10 block h-full w-full touch-none"
+      class="relative z-10 block h-full w-full touch-none {tool === 'eraser'
+        ? 'cursor-none'
+        : tool === 'pen'
+          ? 'cursor-crosshair'
+          : 'cursor-default'}"
       tabindex="0"
       aria-label={ariaLabel}
+      onpointerenter={handlePointerEnter}
+      onpointerleave={handlePointerLeave}
       onpointerdown={handlePointerDown}
       onpointermove={handlePointerMove}
       onpointerup={handlePointerUp}
