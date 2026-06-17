@@ -431,9 +431,13 @@
   }
 
   function isCommentLikeAnnotation(annotation: PdfAnnotation): boolean {
+    // A highlight is "comment-like" once it carries a body string — even
+    // an empty one, which is the pending state of a just-created text
+    // comment (select text → Comment). `undefined` body = a plain
+    // highlight, which stays out of the comments sidebar.
     return (
       annotation.type === 'comment' ||
-      (annotation.type === 'highlight' && Boolean(annotation.body?.trim()))
+      (annotation.type === 'highlight' && typeof annotation.body === 'string')
     );
   }
 
