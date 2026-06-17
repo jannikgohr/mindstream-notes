@@ -301,6 +301,7 @@
     "pdf.toolbar.delete": "Anmerkung löschen",
     "pdf.toolbar.undo": "Rückgängig",
     "pdf.toolbar.redo": "Wiederholen",
+    "pdf.toolbar.area": "Bereichsmodus (Rechteck ziehen)",
     "pdf.toolbar.color": "Anmerkungsfarbe",
     "pdf.toolbar.colorSwatch": "Farbe {color} verwenden",
     "pdf.toolbar.comments": "Kommentare ein-/ausblenden",

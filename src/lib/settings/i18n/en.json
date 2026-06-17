@@ -401,6 +401,7 @@
     "pdf.toolbar.delete": "Delete annotation",
     "pdf.toolbar.undo": "Undo",
     "pdf.toolbar.redo": "Redo",
+    "pdf.toolbar.area": "Area mode (draw a box)",
     "pdf.toolbar.color": "Annotation color",
     "pdf.toolbar.colorSwatch": "Use color {color}",
     "pdf.toolbar.comments": "Toggle comments",

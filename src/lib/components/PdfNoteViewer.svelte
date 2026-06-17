@@ -14,6 +14,7 @@
     PenLine,
     Redo2,
     Signature,
+    SquareDashed,
     TextCursor,
     Trash2,
     Undo2
@@ -116,6 +117,7 @@
     zoomMode: ZoomMode;
     annotationVersion: number;
     activeTool: PdfTool;
+    areaMode: boolean;
     selectedAnnotationId: string | null;
     shouldRender: boolean;
     invalidation: number;
@@ -190,6 +192,10 @@
   let annotationVersion = $state(0);
   let annotations = $state<PdfAnnotation[]>([]);
   let activeTool = $state<PdfTool>('select');
+  // When on, the highlight/comment tools draw a freeform rectangle (for
+  // figures / scanned pages with no text); when off they're text-aware
+  // and act on the text selection.
+  let areaMode = $state(false);
   let commentsSidebarOpen = $state(false);
   let selectedAnnotationId = $state<string | null>(null);
   // Etebase username stamped on annotations this user creates; the
@@ -611,9 +617,17 @@
     endSelectionAction();
   }
 
-  // Track the live selection and surface the bubble above it. selectionchange
-  // covers mouse, touch and keyboard selection; scroll/resize just hide it
-  // since the fixed position would otherwise go stale.
+  // Whether the active highlight/comment tool acts on the text selection
+  // (Acrobat-style text-aware tool) rather than drawing an area box.
+  const textToolActive = $derived(
+    !areaMode && (activeTool === 'highlight' || activeTool === 'comment')
+  );
+
+  // Track the live selection. In select mode we surface the bubble above
+  // it; with a text-aware tool active we instead apply that tool's
+  // annotation directly when the drag/keyboard selection ends.
+  // selectionchange covers mouse, touch and keyboard; scroll/resize hide
+  // the bubble since its fixed position would otherwise go stale.
   $effect(() => {
     if (!container) return;
     const scrollEl = container;
@@ -622,16 +636,25 @@
       cancelAnimationFrame(raf);
       raf = requestAnimationFrame(refreshSelectionMenu);
     };
+    const onPointerUp = () => {
+      if (textToolActive && !isTrashed) {
+        // Defer a frame so the selection has finalised, then apply.
+        requestAnimationFrame(() => {
+          if (activeTool === 'highlight') highlightSelection();
+          else if (activeTool === 'comment') commentSelection();
+        });
+        return;
+      }
+      schedule();
+    };
     document.addEventListener('selectionchange', schedule);
-    // Belt-and-braces for environments where selectionchange lands before
-    // the selection settles: also re-check when a drag/tap ends.
-    scrollEl.addEventListener('pointerup', schedule);
+    scrollEl.addEventListener('pointerup', onPointerUp);
     scrollEl.addEventListener('scroll', clearSelectionMenu, { passive: true });
     window.addEventListener('resize', clearSelectionMenu);
     return () => {
       cancelAnimationFrame(raf);
       document.removeEventListener('selectionchange', schedule);
-      scrollEl.removeEventListener('pointerup', schedule);
+      scrollEl.removeEventListener('pointerup', onPointerUp);
       scrollEl.removeEventListener('scroll', clearSelectionMenu);
       window.removeEventListener('resize', clearSelectionMenu);
     };
@@ -1686,8 +1709,15 @@
       pageEl.querySelector('.pdf-app-annotation-layer')?.remove();
       const layer = document.createElement('div');
       layer.className = 'pdf-app-annotation-layer';
-      layer.style.pointerEvents =
-        current.activeTool === 'select' || isTrashed ? 'none' : 'auto';
+      // Text-aware modes (select, plus highlight/comment when NOT in area
+      // mode) let pointer events fall through to the text layer so the
+      // user can select words; everything else captures drags to draw.
+      const textMode =
+        current.activeTool === 'select' ||
+        ((current.activeTool === 'highlight' ||
+          current.activeTool === 'comment') &&
+          !current.areaMode);
+      layer.style.pointerEvents = textMode || isTrashed ? 'none' : 'auto';
       pageEl.append(layer);
 
       const pageAnnotations = annotations.filter(
@@ -1877,11 +1907,15 @@
         return;
       }
 
-      if (
-        current.activeTool !== 'highlight' &&
-        current.activeTool !== 'comment' &&
-        current.activeTool !== 'signature'
-      ) {
+      // Drag-to-draw a rectangle is for signatures and for highlight/comment
+      // only in area mode. In text mode highlight/comment come from the
+      // selection (see the selection effect), so no drag handler here.
+      const wantsAreaDraw =
+        current.activeTool === 'signature' ||
+        ((current.activeTool === 'highlight' ||
+          current.activeTool === 'comment') &&
+          current.areaMode);
+      if (!wantsAreaDraw) {
         return;
       }
 
@@ -2236,9 +2270,24 @@
           <Trash2 aria-hidden="true" />
         </ToolbarButton>
 
-        {#if activeTool === 'highlight' || activeTool === 'pen'}
+        {#if activeTool === 'highlight' || activeTool === 'comment' || activeTool === 'pen'}
           <ToolbarSeparator />
+        {/if}
 
+        {#if activeTool === 'highlight' || activeTool === 'comment'}
+          <ToolbarButton
+            active={areaMode}
+            onclick={() => (areaMode = !areaMode)}
+            aria-label={tUi('pdf.toolbar.area')}
+            title={tUi('pdf.toolbar.area')}
+            aria-pressed={areaMode}
+            disabled={isTrashed}
+          >
+            <SquareDashed aria-hidden="true" />
+          </ToolbarButton>
+        {/if}
+
+        {#if activeTool === 'highlight' || activeTool === 'pen'}
           <div
             class="flex items-center gap-1 px-1"
             role="group"
@@ -2422,6 +2471,7 @@
                   zoomMode,
                   annotationVersion,
                   activeTool,
+                  areaMode,
                   selectedAnnotationId,
                   shouldRender,
                   invalidation,
