@@ -112,7 +112,7 @@ pub fn get_hotkey_display(
 
 #[tauri::command]
 pub fn set_hotkey_displays(
-    app: AppHandle,
+    #[cfg_attr(not(desktop), allow(unused_variables))] app: AppHandle,
     state: State<'_, NativeHotkeyDisplays>,
     displays: Vec<HotkeyDisplayUpdate>,
 ) -> Result<(), String> {

@@ -16,7 +16,9 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 use tauri::AppHandle;
+#[cfg(desktop)]
 use tauri_plugin_dialog::DialogExt;
+#[cfg(desktop)]
 use tokio::sync::oneshot;
 
 use crate::error::{AppError, AppResult};
@@ -28,6 +30,7 @@ pub async fn notes_export_pick_dir(app: AppHandle) -> Result<Option<String>, Str
     pick_dir_inner(app).await.map_err(Into::into)
 }
 
+#[cfg(desktop)]
 async fn pick_dir_inner(app: AppHandle) -> AppResult<Option<String>> {
     let (tx, rx) = oneshot::channel();
     app.dialog()
@@ -46,6 +49,13 @@ async fn pick_dir_inner(app: AppHandle) -> AppResult<Option<String>> {
         .to_str()
         .ok_or_else(|| AppError::InvalidArg("destination path is not valid UTF-8".into()))?;
     Ok(Some(path_str.to_string()))
+}
+
+#[cfg(not(desktop))]
+async fn pick_dir_inner(_app: AppHandle) -> AppResult<Option<String>> {
+    Err(AppError::InvalidArg(
+        "notes-as-files export is not supported on this platform yet".into(),
+    ))
 }
 
 /// Write a file under `root` at `relative_path`. The relative path is
