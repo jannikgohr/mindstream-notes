@@ -507,7 +507,11 @@
     "editor.ink.width": { "label": "Pinselgröße" },
     "editor.ink.fingerDrawing": {
       "label": "Mit Fingern zeichnen",
-      "description": "Standardmäßig auf Geräten mit Stift-Unterstützung aus; danach gilt deine Auswahl in der Werkzeugleiste."
+      "description": "Erlaubt Zeichnen mit Finger- oder Touch-Eingabe statt nur Verschieben und Zoomen."
+    },
+    "editor.ink.pageTheme": {
+      "label": "Ink-Seitendesign",
+      "description": "Legt fest, ob handschriftliche Seiten hell bleiben oder dem App-Design folgen."
     },
     "editor.autoSave": { "label": "Auto-Speichern" },
     "hotkeys.panel": { "label": "Tastaturkürzel" },
@@ -551,6 +555,9 @@
     "editor.freeform.penMode.always": "Immer aktiv",
     "editor.freeform.penMode.off": "Aus",
     "editor.ink.tool.pen": "Stift",
-    "editor.ink.tool.eraser": "Radierer"
+    "editor.ink.tool.eraser": "Radierer",
+    "editor.ink.tool.lasso": "Lasso-Auswahl",
+    "editor.ink.pageTheme.light": "Hell",
+    "editor.ink.pageTheme.system": "App-Design folgen"
   }
 }
