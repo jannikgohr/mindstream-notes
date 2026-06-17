@@ -21,12 +21,28 @@ export interface InkStroke {
   bounds?: StrokeBounds;
 }
 
+export interface StrokeTransform {
+  a: number;
+  b: number;
+  c: number;
+  d: number;
+  e: number;
+  f: number;
+  widthScale: number;
+}
+
 export type UndoOp =
   | { kind: 'strokeAdded'; id: string }
   | { kind: 'eraserDrag'; ids: string[] }
   | { kind: 'clearAll'; ids: string[] }
   | { kind: 'selectionDelete'; ids: string[] }
-  | { kind: 'selectionMove'; ids: string[]; dx: number; dy: number };
+  | { kind: 'selectionMove'; ids: string[]; dx: number; dy: number }
+  | {
+      kind: 'selectionTransform';
+      ids: string[];
+      transform: StrokeTransform;
+      inverse: StrokeTransform;
+    };
 
 interface DecodedPayload {
   color: number;
@@ -280,6 +296,32 @@ export class InkDocument {
     });
   }
 
+  transformStrokes(
+    ids: Iterable<string>,
+    transform: StrokeTransform
+  ): MutationResult<string[]> {
+    if (!validTransform(transform)) {
+      return { value: [], update: null };
+    }
+    const inverse = invertTransform(transform);
+    if (!inverse) return { value: [], update: null };
+    if (transformIsIdentity(transform)) {
+      return { value: [], update: null };
+    }
+    return this.transactLocalUpdate(() => {
+      const transformed = this.transformStrokeSet(new Set(ids), transform);
+      if (transformed.length > 0) {
+        this.recordOp({
+          kind: 'selectionTransform',
+          ids: transformed,
+          transform,
+          inverse
+        });
+      }
+      return transformed;
+    });
+  }
+
   eraseAt(
     point: { x: number; y: number },
     radius: number
@@ -511,6 +553,18 @@ export class InkDocument {
   }
 
   translateStrokeSet(ids: Set<string>, dx: number, dy: number): string[] {
+    return this.transformStrokeSet(ids, {
+      a: 1,
+      b: 0,
+      c: 0,
+      d: 1,
+      e: dx,
+      f: dy,
+      widthScale: 1
+    });
+  }
+
+  transformStrokeSet(ids: Set<string>, transform: StrokeTransform): string[] {
     if (ids.size === 0) return [];
     const strokeMaps = this.ensureStrokeMapCache();
     const moved: string[] = [];
@@ -525,12 +579,10 @@ export class InkDocument {
         FIELD_PAYLOAD,
         encodePayloadV2({
           color: decoded.color,
-          width: decoded.width,
-          points: decoded.points.map((point) => ({
-            x: point.x + dx,
-            y: point.y + dy,
-            pressure: point.pressure
-          }))
+          width: sanitizeWidth(decoded.width * transform.widthScale),
+          points: decoded.points.map((point) =>
+            transformPoint(point, transform)
+          )
         })
       );
       moved.push(id);
@@ -726,6 +778,9 @@ function applyUndoOp(doc: InkDocument, op: UndoOp): void {
     case 'selectionMove':
       doc.translateStrokeSet(new Set(op.ids), -op.dx, -op.dy);
       break;
+    case 'selectionTransform':
+      doc.transformStrokeSet(new Set(op.ids), op.inverse);
+      break;
   }
 }
 
@@ -742,7 +797,57 @@ function applyRedoOp(doc: InkDocument, op: UndoOp): void {
     case 'selectionMove':
       doc.translateStrokeSet(new Set(op.ids), op.dx, op.dy);
       break;
+    case 'selectionTransform':
+      doc.transformStrokeSet(new Set(op.ids), op.transform);
+      break;
   }
+}
+
+function validTransform(transform: StrokeTransform): boolean {
+  return (
+    Number.isFinite(transform.a) &&
+    Number.isFinite(transform.b) &&
+    Number.isFinite(transform.c) &&
+    Number.isFinite(transform.d) &&
+    Number.isFinite(transform.e) &&
+    Number.isFinite(transform.f) &&
+    Number.isFinite(transform.widthScale) &&
+    transform.widthScale > 0
+  );
+}
+
+function transformIsIdentity(transform: StrokeTransform): boolean {
+  return (
+    Math.abs(transform.a - 1) < 0.0001 &&
+    Math.abs(transform.b) < 0.0001 &&
+    Math.abs(transform.c) < 0.0001 &&
+    Math.abs(transform.d - 1) < 0.0001 &&
+    Math.abs(transform.e) < 0.001 &&
+    Math.abs(transform.f) < 0.001 &&
+    Math.abs(transform.widthScale - 1) < 0.0001
+  );
+}
+
+function invertTransform(transform: StrokeTransform): StrokeTransform | null {
+  const det = transform.a * transform.d - transform.b * transform.c;
+  if (Math.abs(det) < 1e-8) return null;
+  return {
+    a: transform.d / det,
+    b: -transform.b / det,
+    c: -transform.c / det,
+    d: transform.a / det,
+    e: (transform.c * transform.f - transform.d * transform.e) / det,
+    f: (transform.b * transform.e - transform.a * transform.f) / det,
+    widthScale: 1 / transform.widthScale
+  };
+}
+
+function transformPoint(point: InkPoint, transform: StrokeTransform): InkPoint {
+  return {
+    x: point.x * transform.a + point.y * transform.c + transform.e,
+    y: point.x * transform.b + point.y * transform.d + transform.f,
+    pressure: point.pressure
+  };
 }
 
 function encodePayloadV2(stroke: InProgressStroke): Uint8Array {

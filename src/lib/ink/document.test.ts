@@ -272,6 +272,40 @@ describe('InkDocument', () => {
     ]);
   });
 
+  it('transforms selected strokes as one undoable operation', () => {
+    const doc = new InkDocument();
+    doc.beginStroke(DEFAULT_COLOR, 4);
+    doc.pushPoint(10, 0, 0.5);
+    doc.pushPoint(20, 0, 1);
+    const first = doc.endStroke().value;
+    if (!first) throw new Error('expected committed stroke');
+
+    const transform = {
+      a: 0,
+      b: 2,
+      c: -2,
+      d: 0,
+      e: 0,
+      f: 0,
+      widthScale: 2
+    };
+
+    expect(doc.transformStrokes([first], transform).value).toEqual([first]);
+    expect(doc.visibleStrokes()[0].width).toBeCloseTo(8);
+    expect(doc.visibleStrokes()[0].points).toEqual([
+      { x: 0, y: 20, pressure: 0.5 },
+      { x: 0, y: 40, pressure: 1 }
+    ]);
+    expect(doc.undoLast().value).toBe(true);
+    expect(doc.visibleStrokes()[0].width).toBeCloseTo(4);
+    expect(doc.visibleStrokes()[0].points).toEqual([
+      { x: 10, y: 0, pressure: 0.5 },
+      { x: 20, y: 0, pressure: 1 }
+    ]);
+    expect(doc.redoLast().value).toBe(true);
+    expect(doc.visibleStrokes()[0].width).toBeCloseTo(8);
+  });
+
   it('rejects malformed remote updates', () => {
     const doc = new InkDocument();
 

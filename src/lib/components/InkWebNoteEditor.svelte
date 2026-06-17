@@ -64,7 +64,8 @@
     DEFAULT_COLOR,
     DEFAULT_WIDTH,
     InkDocument,
-    type StrokeBounds
+    type StrokeBounds,
+    type StrokeTransform
   } from '$lib/ink/document';
   import {
     DEFAULT_PAGE_GAP,
@@ -107,6 +108,9 @@
   const POINTER_BUTTON_SECONDARY = 2;
   const POINTER_BUTTON_STYLUS_PRIMARY = 32;
   const POINTER_BUTTON_STYLUS_SECONDARY = 64;
+  const SELECTION_HANDLE_RADIUS_PX = 7;
+  const SELECTION_HANDLE_HIT_RADIUS_PX = 22;
+  const SELECTION_ROTATE_GAP_PX = 30;
 
   const INK_TOOL_SETTING = 'editor.ink.tool';
   const INK_COLOR_SETTING = 'editor.ink.color';
@@ -137,6 +141,22 @@
     | 'moveSelection'
     | 'pan'
     | 'touchGesture';
+  type SelectionHandle = 'nw' | 'ne' | 'se' | 'sw' | 'rotate';
+  type SelectionInteraction =
+    | { kind: 'move'; start: InkPoint }
+    | {
+        kind: 'resize';
+        handle: Exclude<SelectionHandle, 'rotate'>;
+        bounds: StrokeBounds;
+        anchor: { x: number; y: number };
+        startCorner: { x: number; y: number };
+      }
+    | {
+        kind: 'rotate';
+        bounds: StrokeBounds;
+        center: { x: number; y: number };
+        startAngle: number;
+      };
   type TouchPointer = {
     clientX: number;
     clientY: number;
@@ -198,6 +218,8 @@
   let lassoPoints = $state<InkPoint[]>([]);
   let selectionDragStart: InkPoint | null = null;
   let selectionDragOffset = $state({ x: 0, y: 0 });
+  let selectionInteraction: SelectionInteraction | null = null;
+  let selectionTransformPreview = $state(identityTransform());
   let undoDepth = $state(0);
   let redoDepth = $state(0);
   let eraserHits = new Set<string>();
@@ -244,7 +266,8 @@
   const hasSelection = $derived(selectedStrokeIds.length > 0);
   const selectionMoveActive = $derived(
     Math.abs(selectionDragOffset.x) > 0.001 ||
-      Math.abs(selectionDragOffset.y) > 0.001
+      Math.abs(selectionDragOffset.y) > 0.001 ||
+      !transformIsIdentity(selectionTransformPreview)
   );
   const clearButtonLabel = $derived(
     hasSelection ? tUi('ink.toolbar.deleteSelected') : tUi('ink.toolbar.clear')
@@ -782,17 +805,14 @@
       );
     }
     if (selectionMoveActive) {
+      const transform = currentSelectionTransform();
       for (const stroke of visibleStrokes) {
         if (!selectedStrokeSet.has(stroke.id)) continue;
         drawStroke(
           ctx,
-          translatedPoints(
-            stroke.points,
-            selectionDragOffset.x,
-            selectionDragOffset.y
-          ),
+          transformedPoints(stroke.points, transform),
           displayCssColor(stroke.color),
-          stroke.width
+          stroke.width * transform.widthScale
         );
       }
     }
@@ -889,14 +909,91 @@
     return 0.25 + 0.75 * Math.min(1, Math.max(0, pressure));
   }
 
-  function translatedPoints(
+  function identityTransform(): StrokeTransform {
+    return { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0, widthScale: 1 };
+  }
+
+  function translationTransform(dx: number, dy: number): StrokeTransform {
+    return { a: 1, b: 0, c: 0, d: 1, e: dx, f: dy, widthScale: 1 };
+  }
+
+  function transformIsIdentity(transform: StrokeTransform): boolean {
+    return (
+      Math.abs(transform.a - 1) < 0.0001 &&
+      Math.abs(transform.b) < 0.0001 &&
+      Math.abs(transform.c) < 0.0001 &&
+      Math.abs(transform.d - 1) < 0.0001 &&
+      Math.abs(transform.e) < 0.001 &&
+      Math.abs(transform.f) < 0.001 &&
+      Math.abs(transform.widthScale - 1) < 0.0001
+    );
+  }
+
+  function currentSelectionTransform(): StrokeTransform {
+    if (!transformIsIdentity(selectionTransformPreview)) {
+      return selectionTransformPreview;
+    }
+    return translationTransform(selectionDragOffset.x, selectionDragOffset.y);
+  }
+
+  function transformPoint(
+    point: { x: number; y: number },
+    transform: StrokeTransform
+  ): { x: number; y: number } {
+    return {
+      x: point.x * transform.a + point.y * transform.c + transform.e,
+      y: point.x * transform.b + point.y * transform.d + transform.f
+    };
+  }
+
+  function resizeTransform(
+    anchor: { x: number; y: number },
+    startCorner: { x: number; y: number },
+    current: { x: number; y: number }
+  ): StrokeTransform {
+    const minScale = 0.08;
+    const sxBase = startCorner.x - anchor.x;
+    const syBase = startCorner.y - anchor.y;
+    const rawSx =
+      Math.abs(sxBase) < 0.001 ? 1 : (current.x - anchor.x) / sxBase;
+    const rawSy =
+      Math.abs(syBase) < 0.001 ? 1 : (current.y - anchor.y) / syBase;
+    const sx = Math.max(minScale, rawSx);
+    const sy = Math.max(minScale, rawSy);
+    return {
+      a: sx,
+      b: 0,
+      c: 0,
+      d: sy,
+      e: anchor.x - anchor.x * sx,
+      f: anchor.y - anchor.y * sy,
+      widthScale: Math.sqrt(Math.max(minScale * minScale, sx * sy))
+    };
+  }
+
+  function rotationTransform(
+    center: { x: number; y: number },
+    angle: number
+  ): StrokeTransform {
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    return {
+      a: cos,
+      b: sin,
+      c: -sin,
+      d: cos,
+      e: center.x - center.x * cos + center.y * sin,
+      f: center.y - center.x * sin - center.y * cos,
+      widthScale: 1
+    };
+  }
+
+  function transformedPoints(
     points: InkPoint[],
-    dx: number,
-    dy: number
+    transform: StrokeTransform
   ): InkPoint[] {
     return points.map((point) => ({
-      x: point.x + dx,
-      y: point.y + dy,
+      ...transformPoint(point, transform),
       pressure: point.pressure
     }));
   }
@@ -919,58 +1016,154 @@
     return out;
   }
 
-  function selectionBoundsWithOffset(): StrokeBounds | null {
-    const bounds = selectionBounds();
-    if (!bounds) return null;
+  function selectionCorners(
+    bounds: StrokeBounds,
+    transform = currentSelectionTransform()
+  ): Record<Exclude<SelectionHandle, 'rotate'>, { x: number; y: number }> {
     return {
-      minX: bounds.minX + selectionDragOffset.x,
-      minY: bounds.minY + selectionDragOffset.y,
-      maxX: bounds.maxX + selectionDragOffset.x,
-      maxY: bounds.maxY + selectionDragOffset.y
+      nw: transformPoint({ x: bounds.minX, y: bounds.minY }, transform),
+      ne: transformPoint({ x: bounds.maxX, y: bounds.minY }, transform),
+      se: transformPoint({ x: bounds.maxX, y: bounds.maxY }, transform),
+      sw: transformPoint({ x: bounds.minX, y: bounds.maxY }, transform)
+    };
+  }
+
+  function selectionCenter(bounds: StrokeBounds): { x: number; y: number } {
+    return {
+      x: (bounds.minX + bounds.maxX) * 0.5,
+      y: (bounds.minY + bounds.maxY) * 0.5
     };
   }
 
   function selectionContainsPoint(point: { x: number; y: number }): boolean {
-    const bounds = selectionBoundsWithOffset();
+    const bounds = selectionBounds();
     if (!bounds) return false;
-    const padding = 14 / Math.max(0.001, view.scale);
-    return (
-      point.x >= bounds.minX - padding &&
-      point.x <= bounds.maxX + padding &&
-      point.y >= bounds.minY - padding &&
-      point.y <= bounds.maxY + padding
+    const corners = selectionCorners(bounds);
+    return pointInPolygon(point, [
+      corners.nw,
+      corners.ne,
+      corners.se,
+      corners.sw
+    ]);
+  }
+
+  function selectionScreenGeometry(): {
+    corners: Record<
+      Exclude<SelectionHandle, 'rotate'>,
+      { x: number; y: number }
+    >;
+    rotate: { x: number; y: number };
+  } | null {
+    const bounds = selectionBounds();
+    if (!bounds) return null;
+    const corners = selectionCorners(bounds);
+    const screenCorners = {
+      nw: pageToScreen(corners.nw),
+      ne: pageToScreen(corners.ne),
+      se: pageToScreen(corners.se),
+      sw: pageToScreen(corners.sw)
+    };
+    const topMid = {
+      x: (screenCorners.nw.x + screenCorners.ne.x) * 0.5,
+      y: (screenCorners.nw.y + screenCorners.ne.y) * 0.5
+    };
+    const center = pageToScreen(
+      transformPoint(selectionCenter(bounds), currentSelectionTransform())
     );
+    const normal = {
+      x: topMid.x - center.x,
+      y: topMid.y - center.y
+    };
+    const len = Math.max(1, Math.hypot(normal.x, normal.y));
+    return {
+      corners: screenCorners,
+      rotate: {
+        x: topMid.x + (normal.x / len) * SELECTION_ROTATE_GAP_PX,
+        y: topMid.y + (normal.y / len) * SELECTION_ROTATE_GAP_PX
+      }
+    };
+  }
+
+  function selectionHandleAtCanvasPoint(point: {
+    x: number;
+    y: number;
+  }): SelectionHandle | null {
+    const geometry = selectionScreenGeometry();
+    if (!geometry) return null;
+    const handles: Array<[SelectionHandle, { x: number; y: number }]> = [
+      ['rotate', geometry.rotate],
+      ['nw', geometry.corners.nw],
+      ['ne', geometry.corners.ne],
+      ['se', geometry.corners.se],
+      ['sw', geometry.corners.sw]
+    ];
+    for (const [handle, handlePoint] of handles) {
+      if (
+        Math.hypot(point.x - handlePoint.x, point.y - handlePoint.y) <=
+        SELECTION_HANDLE_HIT_RADIUS_PX
+      ) {
+        return handle;
+      }
+    }
+    return null;
+  }
+
+  function pointInPolygon(
+    point: { x: number; y: number },
+    polygon: Array<{ x: number; y: number }>
+  ): boolean {
+    let inside = false;
+    for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+      const a = polygon[i];
+      const b = polygon[j];
+      const intersects =
+        a.y > point.y !== b.y > point.y &&
+        point.x < ((b.x - a.x) * (point.y - a.y)) / (b.y - a.y) + a.x;
+      if (intersects) inside = !inside;
+    }
+    return inside;
   }
 
   function drawSelectionOverlay(ctx: CanvasRenderingContext2D) {
-    const bounds = selectionBoundsWithOffset();
-    if (!bounds) return;
-    const padding = 10;
-    const a = pageToScreen({
-      x: bounds.minX - padding,
-      y: bounds.minY - padding
-    });
-    const b = pageToScreen({
-      x: bounds.maxX + padding,
-      y: bounds.maxY + padding
-    });
+    const geometry = selectionScreenGeometry();
+    if (!geometry) return;
+    const { corners, rotate } = geometry;
+    const topMid = {
+      x: (corners.nw.x + corners.ne.x) * 0.5,
+      y: (corners.nw.y + corners.ne.y) * 0.5
+    };
     ctx.save();
     ctx.strokeStyle = '#2563eb';
     ctx.fillStyle = 'rgba(37, 99, 235, 0.08)';
     ctx.lineWidth = 1.5;
     ctx.setLineDash([6, 4]);
-    ctx.fillRect(a.x, a.y, b.x - a.x, b.y - a.y);
-    ctx.strokeRect(a.x, a.y, b.x - a.x, b.y - a.y);
+    ctx.beginPath();
+    ctx.moveTo(corners.nw.x, corners.nw.y);
+    ctx.lineTo(corners.ne.x, corners.ne.y);
+    ctx.lineTo(corners.se.x, corners.se.y);
+    ctx.lineTo(corners.sw.x, corners.sw.y);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
     ctx.setLineDash([]);
-    const handleSize = 6;
-    ctx.fillStyle = '#2563eb';
-    for (const point of [a, { x: b.x, y: a.y }, b, { x: a.x, y: b.y }]) {
-      ctx.fillRect(
-        point.x - handleSize / 2,
-        point.y - handleSize / 2,
-        handleSize,
-        handleSize
-      );
+    ctx.beginPath();
+    ctx.moveTo(topMid.x, topMid.y);
+    ctx.lineTo(rotate.x, rotate.y);
+    ctx.stroke();
+    for (const point of [
+      corners.nw,
+      corners.ne,
+      corners.se,
+      corners.sw,
+      rotate
+    ]) {
+      ctx.fillStyle = '#ffffff';
+      ctx.strokeStyle = '#2563eb';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(point.x, point.y, SELECTION_HANDLE_RADIUS_PX, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
     }
     ctx.restore();
   }
@@ -1150,6 +1343,13 @@
       return;
     }
     if (isTrashed) return;
+    const handle = selectionHandleAtCanvasPoint(
+      canvasPoint(event.clientX, event.clientY)
+    );
+    if (tool === 'lasso' && hasSelection && handle) {
+      beginSelectionTransform(handle, event);
+      return;
+    }
     if (
       tool === 'lasso' &&
       hasSelection &&
@@ -1221,6 +1421,13 @@
       return;
     }
     if (isTrashed) return;
+    const handle = selectionHandleAtCanvasPoint(
+      canvasPoint(event.clientX, event.clientY)
+    );
+    if (tool === 'lasso' && hasSelection && handle) {
+      beginSelectionTransform(handle, event);
+      return;
+    }
     if (
       tool === 'lasso' &&
       hasSelection &&
@@ -1416,39 +1623,130 @@
   function beginSelectionMove(event: PointerEvent) {
     pointerMode = 'moveSelection';
     selectionDragStart = eventPoint(event);
+    selectionInteraction = { kind: 'move', start: selectionDragStart };
     selectionDragOffset = { x: 0, y: 0 };
+    selectionTransformPreview = identityTransform();
     lassoPoints = [];
   }
 
-  function updateSelectionMove(event: PointerEvent) {
-    if (!selectionDragStart) return;
-    const point = eventPoint(event);
-    selectionDragOffset = {
-      x: point.x - selectionDragStart.x,
-      y: point.y - selectionDragStart.y
+  function beginSelectionTransform(
+    handle: SelectionHandle,
+    event: PointerEvent
+  ) {
+    const bounds = selectionBounds();
+    if (!bounds) return;
+    pointerMode = 'moveSelection';
+    selectionDragStart = eventPoint(event);
+    selectionDragOffset = { x: 0, y: 0 };
+    selectionTransformPreview = identityTransform();
+    lassoPoints = [];
+    if (handle === 'rotate') {
+      const center = selectionCenter(bounds);
+      const point = eventPoint(event);
+      selectionInteraction = {
+        kind: 'rotate',
+        bounds,
+        center,
+        startAngle: Math.atan2(point.y - center.y, point.x - center.x)
+      };
+      return;
+    }
+    const corners = selectionCorners(bounds, identityTransform());
+    const opposite: Record<
+      Exclude<SelectionHandle, 'rotate'>,
+      Exclude<SelectionHandle, 'rotate'>
+    > = {
+      nw: 'se',
+      ne: 'sw',
+      se: 'nw',
+      sw: 'ne'
     };
+    selectionInteraction = {
+      kind: 'resize',
+      handle,
+      bounds,
+      anchor: corners[opposite[handle]],
+      startCorner: corners[handle]
+    };
+  }
+
+  function updateSelectionMove(event: PointerEvent) {
+    if (!selectionInteraction) return;
+    const point = eventPoint(event);
+    if (selectionInteraction.kind === 'move') {
+      selectionDragOffset = {
+        x: point.x - selectionInteraction.start.x,
+        y: point.y - selectionInteraction.start.y
+      };
+      selectionTransformPreview = identityTransform();
+    } else if (selectionInteraction.kind === 'resize') {
+      selectionDragOffset = { x: 0, y: 0 };
+      selectionTransformPreview = resizeTransform(
+        selectionInteraction.anchor,
+        selectionInteraction.startCorner,
+        point
+      );
+    } else {
+      selectionDragOffset = { x: 0, y: 0 };
+      const delta =
+        Math.atan2(
+          point.y - selectionInteraction.center.y,
+          point.x - selectionInteraction.center.x
+        ) - selectionInteraction.startAngle;
+      selectionTransformPreview = rotationTransform(
+        selectionInteraction.center,
+        delta
+      );
+    }
     scheduleDraw();
   }
 
   function cancelSelectionMove() {
     selectionDragStart = null;
+    selectionInteraction = null;
     selectionDragOffset = { x: 0, y: 0 };
+    selectionTransformPreview = identityTransform();
     scheduleDraw();
   }
 
   function finishSelectionMove() {
-    if (!doc || !selectionDragStart) {
+    if (!doc || !selectionInteraction) {
       cancelSelectionMove();
       return;
     }
-    const { x, y } = selectionDragOffset;
+    const interaction = selectionInteraction;
+    const move = selectionDragOffset;
+    const transform = currentSelectionTransform();
     selectionDragStart = null;
+    selectionInteraction = null;
     selectionDragOffset = { x: 0, y: 0 };
-    if (Math.abs(x) < 0.001 && Math.abs(y) < 0.001) {
+    selectionTransformPreview = identityTransform();
+    if (interaction.kind === 'move') {
+      if (Math.abs(move.x) < 0.001 && Math.abs(move.y) < 0.001) {
+        scheduleDraw();
+        return;
+      }
+      const { value, update } = doc.translateStrokes(
+        selectedStrokeIds,
+        move.x,
+        move.y
+      );
+      if (value.length > 0) {
+        selectedStrokeIds = value;
+        applyDocumentMutation(update);
+      } else {
+        scheduleDraw();
+      }
+      return;
+    }
+    if (transformIsIdentity(transform)) {
       scheduleDraw();
       return;
     }
-    const { value, update } = doc.translateStrokes(selectedStrokeIds, x, y);
+    const { value, update } = doc.transformStrokes(
+      selectedStrokeIds,
+      transform
+    );
     if (value.length > 0) {
       selectedStrokeIds = value;
       applyDocumentMutation(update);
@@ -1676,6 +1974,10 @@
   function setTool(next: ToolMode) {
     tool = next;
     lassoPoints = [];
+    selectionInteraction = null;
+    selectionDragStart = null;
+    selectionDragOffset = { x: 0, y: 0 };
+    selectionTransformPreview = identityTransform();
     emitToolbarSettings();
     updateLiveInkOverlayStyle();
   }
@@ -1717,6 +2019,10 @@
     flushQueuedEraserSamples();
     selectedStrokeIds = [];
     lassoPoints = [];
+    selectionInteraction = null;
+    selectionDragStart = null;
+    selectionDragOffset = { x: 0, y: 0 };
+    selectionTransformPreview = identityTransform();
     const { value, update } = doc.undoLast();
     if (value) applyDocumentMutation(update);
   }
@@ -1726,6 +2032,10 @@
     flushQueuedEraserSamples();
     selectedStrokeIds = [];
     lassoPoints = [];
+    selectionInteraction = null;
+    selectionDragStart = null;
+    selectionDragOffset = { x: 0, y: 0 };
+    selectionTransformPreview = identityTransform();
     const { value, update } = doc.redoLast();
     if (value) applyDocumentMutation(update);
   }
@@ -1736,6 +2046,10 @@
     const { value, update } = doc.deleteStrokes(selectedStrokeIds);
     selectedStrokeIds = [];
     lassoPoints = [];
+    selectionInteraction = null;
+    selectionDragStart = null;
+    selectionDragOffset = { x: 0, y: 0 };
+    selectionTransformPreview = identityTransform();
     if (value.length > 0) {
       applyDocumentMutation(update);
       return true;
@@ -1749,6 +2063,10 @@
     flushQueuedEraserSamples();
     selectedStrokeIds = [];
     lassoPoints = [];
+    selectionInteraction = null;
+    selectionDragStart = null;
+    selectionDragOffset = { x: 0, y: 0 };
+    selectionTransformPreview = identityTransform();
     const { value, update } = doc.clearAll();
     if (value.length > 0) applyDocumentMutation(update);
   }
