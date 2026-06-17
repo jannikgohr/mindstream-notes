@@ -148,18 +148,20 @@
     | 'pan'
     | 'touchGesture';
   type SelectionHandle = 'nw' | 'ne' | 'se' | 'sw' | 'rotate';
+  type SelectionFrame = Record<
+    Exclude<SelectionHandle, 'rotate'>,
+    { x: number; y: number }
+  >;
   type SelectionInteraction =
     | { kind: 'move'; start: InkPoint }
     | {
         kind: 'resize';
         handle: Exclude<SelectionHandle, 'rotate'>;
-        bounds: StrokeBounds;
         anchor: { x: number; y: number };
         startCorner: { x: number; y: number };
       }
     | {
         kind: 'rotate';
-        bounds: StrokeBounds;
         center: { x: number; y: number };
         startAngle: number;
       };
@@ -222,6 +224,7 @@
   let strokeCount = $state(0);
   let selectedStrokeIds = $state<string[]>([]);
   let selectionClipboard = $state<InkClipboardStroke[]>([]);
+  let selectionFrame = $state<SelectionFrame | null>(null);
   let inFlight = $state<InkPoint[]>([]);
   let lassoPoints = $state<InkPoint[]>([]);
   let selectionDragStart: InkPoint | null = null;
@@ -582,6 +585,11 @@
     const next = selectedStrokeIds.filter((id) => visible.has(id));
     if (next.length !== selectedStrokeIds.length) {
       selectedStrokeIds = next;
+      selectionFrame = null;
+      if (next.length > 0) {
+        const bounds = selectionBounds();
+        selectionFrame = bounds ? frameFromBounds(bounds) : null;
+      }
     }
   }
 
@@ -1025,29 +1033,49 @@
     return out;
   }
 
-  function selectionCorners(
-    bounds: StrokeBounds,
-    transform = currentSelectionTransform()
-  ): Record<Exclude<SelectionHandle, 'rotate'>, { x: number; y: number }> {
+  function frameFromBounds(bounds: StrokeBounds): SelectionFrame {
     return {
-      nw: transformPoint({ x: bounds.minX, y: bounds.minY }, transform),
-      ne: transformPoint({ x: bounds.maxX, y: bounds.minY }, transform),
-      se: transformPoint({ x: bounds.maxX, y: bounds.maxY }, transform),
-      sw: transformPoint({ x: bounds.minX, y: bounds.maxY }, transform)
+      nw: { x: bounds.minX, y: bounds.minY },
+      ne: { x: bounds.maxX, y: bounds.minY },
+      se: { x: bounds.maxX, y: bounds.maxY },
+      sw: { x: bounds.minX, y: bounds.maxY }
     };
   }
 
-  function selectionCenter(bounds: StrokeBounds): { x: number; y: number } {
+  function transformSelectionFrame(
+    frame: SelectionFrame,
+    transform: StrokeTransform
+  ): SelectionFrame {
     return {
-      x: (bounds.minX + bounds.maxX) * 0.5,
-      y: (bounds.minY + bounds.maxY) * 0.5
+      nw: transformPoint(frame.nw, transform),
+      ne: transformPoint(frame.ne, transform),
+      se: transformPoint(frame.se, transform),
+      sw: transformPoint(frame.sw, transform)
+    };
+  }
+
+  function baseSelectionFrame(): SelectionFrame | null {
+    if (selectionFrame) return selectionFrame;
+    const bounds = selectionBounds();
+    return bounds ? frameFromBounds(bounds) : null;
+  }
+
+  function currentSelectionFrame(): SelectionFrame | null {
+    const frame = baseSelectionFrame();
+    if (!frame) return null;
+    return transformSelectionFrame(frame, currentSelectionTransform());
+  }
+
+  function selectionCenter(frame: SelectionFrame): { x: number; y: number } {
+    return {
+      x: (frame.nw.x + frame.ne.x + frame.se.x + frame.sw.x) * 0.25,
+      y: (frame.nw.y + frame.ne.y + frame.se.y + frame.sw.y) * 0.25
     };
   }
 
   function selectionContainsPoint(point: { x: number; y: number }): boolean {
-    const bounds = selectionBounds();
-    if (!bounds) return false;
-    const corners = selectionCorners(bounds);
+    const corners = currentSelectionFrame();
+    if (!corners) return false;
     return pointInPolygon(point, [
       corners.nw,
       corners.ne,
@@ -1063,9 +1091,8 @@
     >;
     rotate: { x: number; y: number };
   } | null {
-    const bounds = selectionBounds();
-    if (!bounds) return null;
-    const corners = selectionCorners(bounds);
+    const corners = currentSelectionFrame();
+    if (!corners) return null;
     const screenCorners = {
       nw: pageToScreen(corners.nw),
       ne: pageToScreen(corners.ne),
@@ -1076,9 +1103,7 @@
       x: (screenCorners.nw.x + screenCorners.ne.x) * 0.5,
       y: (screenCorners.nw.y + screenCorners.ne.y) * 0.5
     };
-    const center = pageToScreen(
-      transformPoint(selectionCenter(bounds), currentSelectionTransform())
-    );
+    const center = pageToScreen(selectionCenter(corners));
     const normal = {
       x: topMid.x - center.x,
       y: topMid.y - center.y
@@ -1276,6 +1301,7 @@
     } else if (pointerMode === 'lasso') {
       lassoPoints = [];
       selectedStrokeIds = [];
+      selectionFrame = null;
     } else if (pointerMode === 'moveSelection') {
       cancelSelectionMove();
     }
@@ -1374,6 +1400,7 @@
     if (tool === 'eraser') {
       pointerMode = 'erase';
       selectedStrokeIds = [];
+      selectionFrame = null;
       eraserHits.clear();
       eraseFromEvent(event);
       return;
@@ -1452,6 +1479,7 @@
     if (tool === 'eraser' || isStylusButtonErasing(event)) {
       pointerMode = 'erase';
       selectedStrokeIds = [];
+      selectionFrame = null;
       eraserHits.clear();
       eraseFromEvent(event);
       return;
@@ -1505,6 +1533,7 @@
         finishActiveStroke();
         pointerMode = 'erase';
         selectedStrokeIds = [];
+        selectionFrame = null;
         eraserHits.clear();
         eraseFromEvent(event);
         return;
@@ -1532,6 +1561,7 @@
       } else if (pointerMode === 'lasso') {
         lassoPoints = [];
         selectedStrokeIds = [];
+        selectionFrame = null;
       } else if (pointerMode === 'moveSelection') {
         cancelSelectionMove();
       } else {
@@ -1572,6 +1602,7 @@
     if (!doc) return;
     if (isStylusButtonErasing(event)) return;
     selectedStrokeIds = [];
+    selectionFrame = null;
     const next = [...inFlight];
     for (const sample of pointerSamples(event)) {
       const point = eventPoint(sample);
@@ -1600,6 +1631,7 @@
   function beginLasso(event: PointerEvent) {
     pointerMode = 'lasso';
     selectedStrokeIds = [];
+    selectionFrame = null;
     lassoPoints = [];
     pushLassoSamples(event);
   }
@@ -1625,6 +1657,13 @@
       return;
     }
     selectedStrokeIds = doc.strokeIdsInLasso(lassoPoints);
+    selectionFrame =
+      selectedStrokeIds.length > 0
+        ? (() => {
+            const bounds = selectionBounds();
+            return bounds ? frameFromBounds(bounds) : null;
+          })()
+        : null;
     lassoPoints = [];
     scheduleDraw();
   }
@@ -1642,25 +1681,23 @@
     handle: SelectionHandle,
     event: PointerEvent
   ) {
-    const bounds = selectionBounds();
-    if (!bounds) return;
+    const frame = baseSelectionFrame();
+    if (!frame) return;
     pointerMode = 'moveSelection';
     selectionDragStart = eventPoint(event);
     selectionDragOffset = { x: 0, y: 0 };
     selectionTransformPreview = identityTransform();
     lassoPoints = [];
     if (handle === 'rotate') {
-      const center = selectionCenter(bounds);
+      const center = selectionCenter(frame);
       const point = eventPoint(event);
       selectionInteraction = {
         kind: 'rotate',
-        bounds,
         center,
         startAngle: Math.atan2(point.y - center.y, point.x - center.x)
       };
       return;
     }
-    const corners = selectionCorners(bounds, identityTransform());
     const opposite: Record<
       Exclude<SelectionHandle, 'rotate'>,
       Exclude<SelectionHandle, 'rotate'>
@@ -1673,9 +1710,8 @@
     selectionInteraction = {
       kind: 'resize',
       handle,
-      bounds,
-      anchor: corners[opposite[handle]],
-      startCorner: corners[handle]
+      anchor: frame[opposite[handle]],
+      startCorner: frame[handle]
     };
   }
 
@@ -1724,6 +1760,7 @@
       return;
     }
     const interaction = selectionInteraction;
+    const frame = baseSelectionFrame();
     const move = selectionDragOffset;
     const transform = currentSelectionTransform();
     selectionDragStart = null;
@@ -1742,6 +1779,12 @@
       );
       if (value.length > 0) {
         selectedStrokeIds = value;
+        if (frame) {
+          selectionFrame = transformSelectionFrame(
+            frame,
+            translationTransform(move.x, move.y)
+          );
+        }
         applyDocumentMutation(update);
       } else {
         scheduleDraw();
@@ -1758,6 +1801,9 @@
     );
     if (value.length > 0) {
       selectedStrokeIds = value;
+      if (frame) {
+        selectionFrame = transformSelectionFrame(frame, transform);
+      }
       applyDocumentMutation(update);
     } else {
       scheduleDraw();
@@ -2012,6 +2058,10 @@
     }));
     tool = 'lasso';
     selectedStrokeIds = value;
+    selectionFrame = (() => {
+      const bounds = selectionBounds();
+      return bounds ? frameFromBounds(bounds) : null;
+    })();
     lassoPoints = [];
     selectionInteraction = null;
     selectionDragStart = null;
@@ -2101,6 +2151,7 @@
     if (!doc) return;
     flushQueuedEraserSamples();
     selectedStrokeIds = [];
+    selectionFrame = null;
     lassoPoints = [];
     selectionInteraction = null;
     selectionDragStart = null;
@@ -2114,6 +2165,7 @@
     if (!doc) return;
     flushQueuedEraserSamples();
     selectedStrokeIds = [];
+    selectionFrame = null;
     lassoPoints = [];
     selectionInteraction = null;
     selectionDragStart = null;
@@ -2128,6 +2180,7 @@
     flushQueuedEraserSamples();
     const { value, update } = doc.deleteStrokes(selectedStrokeIds);
     selectedStrokeIds = [];
+    selectionFrame = null;
     lassoPoints = [];
     selectionInteraction = null;
     selectionDragStart = null;
@@ -2145,6 +2198,7 @@
     if (!doc) return;
     flushQueuedEraserSamples();
     selectedStrokeIds = [];
+    selectionFrame = null;
     lassoPoints = [];
     selectionInteraction = null;
     selectionDragStart = null;
