@@ -12,7 +12,7 @@
     PenLine,
     Signature,
     Trash2
-  } from 'lucide-svelte';
+  } from '@lucide/svelte';
   import * as Y from 'yjs';
   import { Awareness } from 'y-protocols/awareness';
   import {

@@ -25,7 +25,7 @@
     FileUp,
     FolderPlus,
     PencilRuler
-  } from 'lucide-svelte';
+  } from '@lucide/svelte';
   import type { IconComponent } from '$lib/settings/icons';
   import MobileTopBar from './MobileTopBar.svelte';
   import MobileBreadcrumb from './MobileBreadcrumb.svelte';

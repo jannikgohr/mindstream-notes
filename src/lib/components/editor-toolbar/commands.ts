@@ -76,7 +76,7 @@ import {
   Table as TableIcon,
   Sigma,
   Workflow
-} from 'lucide-svelte';
+} from '@lucide/svelte';
 import type { ComponentType } from 'svelte';
 
 export interface ToolbarLeaf {

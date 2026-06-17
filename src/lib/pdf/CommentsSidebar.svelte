@@ -11,7 +11,7 @@
    * `selectedAnnotationId === annotation.id`.
    */
 
-  import { Trash2 } from 'lucide-svelte';
+  import { Trash2 } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import type { PdfAnnotation } from './types';
 

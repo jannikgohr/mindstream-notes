@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Download, X } from 'lucide-svelte';
+  import { Download, X } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import { dismissNotification, openNotification } from './store.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';

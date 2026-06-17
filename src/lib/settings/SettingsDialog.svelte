@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Dialog } from 'bits-ui';
-  import { X, Search } from 'lucide-svelte';
+  import { X, Search } from '@lucide/svelte';
   import SettingControl from './SettingControl.svelte';
   import {
     SCHEMA,

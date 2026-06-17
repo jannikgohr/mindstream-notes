@@ -8,7 +8,7 @@
    * default is suppressed in step 3.
    */
   import { onMount } from 'svelte';
-  import { ChevronRight } from 'lucide-svelte';
+  import { ChevronRight } from '@lucide/svelte';
   import type { MenuItem } from './context-menu-types';
 
   interface Props {

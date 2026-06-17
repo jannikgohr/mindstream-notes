@@ -9,11 +9,11 @@ import {
   Settings as SettingsIcon,
   Shield,
   UserRound
-} from 'lucide-svelte';
+} from '@lucide/svelte';
 
 /**
  * Lookup table for the Lucide icon names referenced in schema.json.
- * lucide-svelte's exported components don't match Svelte 5's strict
+ * @lucide/svelte's exported components don't match Svelte 5's strict
  * `Component<{}, {}, string>` shape (the `class` prop in particular),
  * so we widen to `Component<any>` here. We only use them for rendering
  * with a class attribute — no event handlers — so it's safe.

@@ -10,7 +10,7 @@
     PencilRuler,
     FilePlus2,
     Trash2
-  } from 'lucide-svelte';
+  } from '@lucide/svelte';
   import FavouriteStar from './FavouriteStar.svelte';
   import { noteKindIcon } from './note-kind-icon';
   import { Button } from '$lib/components/ui/button';

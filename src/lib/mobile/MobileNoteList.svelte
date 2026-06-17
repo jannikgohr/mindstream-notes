@@ -13,7 +13,7 @@
    * yet, so it just shows an explanatory empty state. Wire a real filter
    * in here when collab metadata lands.
    */
-  import { Folder, Loader2, MoreVertical, Trash2 } from 'lucide-svelte';
+  import { Folder, Loader2, MoreVertical, Trash2 } from '@lucide/svelte';
   import FavouriteStar from '$lib/components/FavouriteStar.svelte';
   import type { NoteSummary, TreeNode } from '$lib/api';
   import { TRASH_ID } from '$lib/api';

@@ -7,7 +7,7 @@
    * of chrome. The controls themselves carry their own outlined
    * pills, so no parent border or background is needed.
    */
-  import { LayoutGrid, List } from 'lucide-svelte';
+  import { LayoutGrid, List } from '@lucide/svelte';
   import SortControl from '$lib/components/SortControl.svelte';
   import { setSortDirection, setSortStrategy, ui } from '$lib/state.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';

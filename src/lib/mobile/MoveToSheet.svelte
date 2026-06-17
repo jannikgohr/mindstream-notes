@@ -18,7 +18,7 @@
     FolderOpen,
     FolderRoot,
     X
-  } from 'lucide-svelte';
+  } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import { TRASH_ID } from '$lib/api';
   import type { Collection } from '$lib/api';

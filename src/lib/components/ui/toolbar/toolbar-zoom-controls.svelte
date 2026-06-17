@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Check, ChevronDown, Minus, Plus } from 'lucide-svelte';
+  import { Check, ChevronDown, Minus, Plus } from '@lucide/svelte';
   import { cn } from '$lib/utils';
   import ToolbarButton from './toolbar-button.svelte';
 

@@ -5,7 +5,7 @@
    * multiline / custom). Reads/writes through the store so all the
    * binding plumbing happens in one place.
    */
-  import { Loader2 } from 'lucide-svelte';
+  import { Loader2 } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import { authSession } from '$lib/api/auth.svelte';
   import {

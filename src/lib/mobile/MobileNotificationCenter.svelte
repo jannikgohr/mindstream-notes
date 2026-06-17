@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { Dialog } from 'bits-ui';
-  import { Bell, Loader2, X } from 'lucide-svelte';
+  import { Bell, Loader2, X } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import { tUi } from '$lib/settings/i18n.svelte';
   import {

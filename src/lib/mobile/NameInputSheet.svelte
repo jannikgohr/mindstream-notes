@@ -15,7 +15,7 @@
    *     the Android gesture bar with edge-to-edge enabled.
    */
   import { onMount, untrack } from 'svelte';
-  import { X } from 'lucide-svelte';
+  import { X } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
 

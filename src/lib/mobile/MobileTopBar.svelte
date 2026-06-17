@@ -10,7 +10,7 @@
    * dialog input, so the typing flow stays continuous despite the
    * intermediate UI step.
    */
-  import { Settings as SettingsIcon } from 'lucide-svelte';
+  import { Settings as SettingsIcon } from '@lucide/svelte';
   import { Search } from '@jis3r/icons';
   import { Button } from '$lib/components/ui/button';
   import { openSettings } from '$lib/settings/store.svelte';

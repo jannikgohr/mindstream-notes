@@ -17,7 +17,7 @@
     Sun,
     Trash2,
     Undo2
-  } from 'lucide-svelte';
+  } from '@lucide/svelte';
   import {
     Toolbar,
     ToolbarButton,
