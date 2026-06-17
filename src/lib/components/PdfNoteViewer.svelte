@@ -26,6 +26,7 @@
     Toolbar,
     ToolbarButton,
     ToolbarCollapseWhenOverflow,
+    ToolbarScrollbar,
     ToolbarSeparator,
     ToolbarZoomControls
   } from '$lib/components/ui/toolbar';
@@ -199,6 +200,8 @@
   // Live width of the right-aligned page-nav group; reserved as overflow
   // margin so the swatches collapse before they crowd the page controls.
   let pageNavWidth = $state(0);
+  // The scrollable toolbar row, driving the custom ToolbarScrollbar below it.
+  let toolbarScrollEl = $state<HTMLDivElement | null>(null);
   let mobileToolbar = $state(false);
   let annotationVersion = $state(0);
   let annotations = $state<PdfAnnotation[]>([]);
@@ -2440,210 +2443,214 @@
       <span>{error}</span>
     </div>
   {:else}
-    <Toolbar
-      dense
-      aria-label={tUi('pdf.toolbar.label')}
-      class="scrollbar-none shrink-0 justify-between overflow-x-auto border-b border-border bg-background"
-      onwheel={handleToolbarWheel}
-    >
-      <div class="flex shrink-0 items-center gap-0.5">
-        <ToolbarButton
-          active={navigatorOpen}
-          onclick={toggleNavigator}
-          aria-label={tUi('pdf.toolbar.navigator')}
-          title={tUi('pdf.toolbar.navigator')}
-          aria-pressed={navigatorOpen}
-        >
-          <PanelLeft aria-hidden="true" />
-        </ToolbarButton>
-
-        <ToolbarSeparator />
-
-        <ToolbarButton
-          active={activeTool === 'select'}
-          onclick={() => setTool('select')}
-          aria-label={tUi('pdf.toolbar.select')}
-          title={tUi('pdf.toolbar.select')}
-          aria-pressed={activeTool === 'select'}
-        >
-          <TextCursor aria-hidden="true" />
-        </ToolbarButton>
-
-        <ToolbarButton
-          active={activeTool === 'highlight'}
-          onclick={() => setTool('highlight')}
-          aria-label={tUi('pdf.toolbar.highlight')}
-          title={tUi('pdf.toolbar.highlight')}
-          aria-pressed={activeTool === 'highlight'}
-          disabled={isTrashed}
-        >
-          <Highlighter aria-hidden="true" />
-        </ToolbarButton>
-
-        <ToolbarButton
-          active={activeTool === 'comment'}
-          onclick={() => setTool('comment')}
-          aria-label={tUi('pdf.toolbar.comment')}
-          title={tUi('pdf.toolbar.comment')}
-          aria-pressed={activeTool === 'comment'}
-          disabled={isTrashed}
-        >
-          <MessageSquarePlus aria-hidden="true" />
-        </ToolbarButton>
-
-        <ToolbarButton
-          active={activeTool === 'pen'}
-          onclick={() => setTool('pen')}
-          aria-label={tUi('pdf.toolbar.pen')}
-          title={tUi('pdf.toolbar.pen')}
-          aria-pressed={activeTool === 'pen'}
-          disabled={isTrashed}
-        >
-          <PenLine aria-hidden="true" />
-        </ToolbarButton>
-
-        <ToolbarButton
-          bind:ref={signatureButton}
-          active={activeTool === 'signature'}
-          onclick={() => setTool('signature')}
-          aria-label={tUi('pdf.toolbar.sign')}
-          title={tUi('pdf.toolbar.sign')}
-          aria-pressed={activeTool === 'signature'}
-          aria-haspopup="menu"
-          aria-expanded={signaturePickerOpen}
-          disabled={isTrashed}
-        >
-          <Signature aria-hidden="true" />
-        </ToolbarButton>
-
-        <ToolbarButton
-          active={activeTool === 'delete'}
-          onclick={() => setTool('delete')}
-          aria-label={tUi('pdf.toolbar.delete')}
-          title={tUi('pdf.toolbar.delete')}
-          aria-pressed={activeTool === 'delete'}
-          disabled={isTrashed}
-        >
-          <Trash2 aria-hidden="true" />
-        </ToolbarButton>
-
-        {#if activeTool === 'highlight' || activeTool === 'comment' || activeTool === 'pen'}
-          <ToolbarSeparator />
-        {/if}
-
-        {#if activeTool === 'highlight' || activeTool === 'comment'}
+    <div class="shrink-0 border-b border-border bg-background">
+      <Toolbar
+        bind:ref={toolbarScrollEl}
+        dense
+        aria-label={tUi('pdf.toolbar.label')}
+        class="scrollbar-none justify-between overflow-x-auto"
+        onwheel={handleToolbarWheel}
+      >
+        <div class="flex shrink-0 items-center gap-0.5">
           <ToolbarButton
-            active={areaMode}
-            onclick={() => (areaMode = !areaMode)}
-            aria-label={tUi('pdf.toolbar.area')}
-            title={tUi('pdf.toolbar.area')}
-            aria-pressed={areaMode}
+            active={navigatorOpen}
+            onclick={toggleNavigator}
+            aria-label={tUi('pdf.toolbar.navigator')}
+            title={tUi('pdf.toolbar.navigator')}
+            aria-pressed={navigatorOpen}
+          >
+            <PanelLeft aria-hidden="true" />
+          </ToolbarButton>
+
+          <ToolbarSeparator />
+
+          <ToolbarButton
+            active={activeTool === 'select'}
+            onclick={() => setTool('select')}
+            aria-label={tUi('pdf.toolbar.select')}
+            title={tUi('pdf.toolbar.select')}
+            aria-pressed={activeTool === 'select'}
+          >
+            <TextCursor aria-hidden="true" />
+          </ToolbarButton>
+
+          <ToolbarButton
+            active={activeTool === 'highlight'}
+            onclick={() => setTool('highlight')}
+            aria-label={tUi('pdf.toolbar.highlight')}
+            title={tUi('pdf.toolbar.highlight')}
+            aria-pressed={activeTool === 'highlight'}
             disabled={isTrashed}
           >
-            <SquareDashed aria-hidden="true" />
+            <Highlighter aria-hidden="true" />
           </ToolbarButton>
-        {/if}
 
-        {#if activeTool === 'highlight' || activeTool === 'pen'}
-          <ToolbarCollapseWhenOverflow
-            class="items-center"
-            margin={pageNavWidth + 8}
-            expanded={colorSwatchesExpanded}
-            collapsed={colorSwatchesCollapsed}
-          />
-        {/if}
+          <ToolbarButton
+            active={activeTool === 'comment'}
+            onclick={() => setTool('comment')}
+            aria-label={tUi('pdf.toolbar.comment')}
+            title={tUi('pdf.toolbar.comment')}
+            aria-pressed={activeTool === 'comment'}
+            disabled={isTrashed}
+          >
+            <MessageSquarePlus aria-hidden="true" />
+          </ToolbarButton>
 
-        <ToolbarSeparator />
+          <ToolbarButton
+            active={activeTool === 'pen'}
+            onclick={() => setTool('pen')}
+            aria-label={tUi('pdf.toolbar.pen')}
+            title={tUi('pdf.toolbar.pen')}
+            aria-pressed={activeTool === 'pen'}
+            disabled={isTrashed}
+          >
+            <PenLine aria-hidden="true" />
+          </ToolbarButton>
 
-        <ToolbarButton
-          onclick={undo}
-          disabled={isTrashed || !canUndo}
-          aria-label={tUi('pdf.toolbar.undo')}
-          title={tUi('pdf.toolbar.undo')}
-        >
-          <Undo2 aria-hidden="true" />
-        </ToolbarButton>
+          <ToolbarButton
+            bind:ref={signatureButton}
+            active={activeTool === 'signature'}
+            onclick={() => setTool('signature')}
+            aria-label={tUi('pdf.toolbar.sign')}
+            title={tUi('pdf.toolbar.sign')}
+            aria-pressed={activeTool === 'signature'}
+            aria-haspopup="menu"
+            aria-expanded={signaturePickerOpen}
+            disabled={isTrashed}
+          >
+            <Signature aria-hidden="true" />
+          </ToolbarButton>
 
-        <ToolbarButton
-          onclick={redo}
-          disabled={isTrashed || !canRedo}
-          aria-label={tUi('pdf.toolbar.redo')}
-          title={tUi('pdf.toolbar.redo')}
-        >
-          <Redo2 aria-hidden="true" />
-        </ToolbarButton>
+          <ToolbarButton
+            active={activeTool === 'delete'}
+            onclick={() => setTool('delete')}
+            aria-label={tUi('pdf.toolbar.delete')}
+            title={tUi('pdf.toolbar.delete')}
+            aria-pressed={activeTool === 'delete'}
+            disabled={isTrashed}
+          >
+            <Trash2 aria-hidden="true" />
+          </ToolbarButton>
 
-        <ToolbarSeparator />
+          {#if activeTool === 'highlight' || activeTool === 'comment' || activeTool === 'pen'}
+            <ToolbarSeparator />
+          {/if}
 
-        <ToolbarButton
-          active={commentsSidebarOpen}
-          onclick={() => (commentsSidebarOpen = !commentsSidebarOpen)}
-          aria-label={tUi('pdf.toolbar.comments')}
-          title={tUi('pdf.toolbar.comments')}
-          aria-pressed={commentsSidebarOpen}
-        >
-          <MessagesSquare aria-hidden="true" />
-        </ToolbarButton>
-      </div>
+          {#if activeTool === 'highlight' || activeTool === 'comment'}
+            <ToolbarButton
+              active={areaMode}
+              onclick={() => (areaMode = !areaMode)}
+              aria-label={tUi('pdf.toolbar.area')}
+              title={tUi('pdf.toolbar.area')}
+              aria-pressed={areaMode}
+              disabled={isTrashed}
+            >
+              <SquareDashed aria-hidden="true" />
+            </ToolbarButton>
+          {/if}
 
-      <div
-        class="flex shrink-0 items-center gap-0.5"
-        bind:clientWidth={pageNavWidth}
-      >
-        <ToolbarButton
-          onclick={goToPreviousPage}
-          disabled={activePageNumber <= 1}
-          aria-label={tUi('pdf.toolbar.previousPage')}
-          title={tUi('pdf.toolbar.previousPage')}
-        >
-          <ChevronLeft aria-hidden="true" />
-        </ToolbarButton>
+          {#if activeTool === 'highlight' || activeTool === 'pen'}
+            <ToolbarCollapseWhenOverflow
+              class="items-center"
+              margin={pageNavWidth + 8}
+              expanded={colorSwatchesExpanded}
+              collapsed={colorSwatchesCollapsed}
+            />
+          {/if}
 
-        <div
-          class="flex shrink-0 items-center gap-1 whitespace-nowrap text-xs text-muted-foreground"
-        >
-          <input
-            type="text"
-            inputmode="numeric"
-            value={pageInputValue}
-            aria-label={tUi('pdf.page.inputLabel')}
-            class="h-7 w-9 shrink-0 rounded-md border border-border bg-background text-center tabular-nums outline-none focus:ring-1 focus:ring-ring"
-            oninput={(event) =>
-              (pageInputValue = (event.currentTarget as HTMLInputElement)
-                .value)}
-            onfocus={(event) => {
-              pageInputFocused = true;
-              (event.currentTarget as HTMLInputElement).select();
-            }}
-            onblur={() => {
-              pageInputFocused = false;
-              commitPageInput();
-            }}
-            onkeydown={(event) => {
-              if (event.key === 'Enter') {
-                event.preventDefault();
-                (event.currentTarget as HTMLInputElement).blur();
-              }
-            }}
-          />
-          <span class="shrink-0 whitespace-nowrap tabular-nums">
-            {tUi('pdf.page.totalLabel').replace(
-              '{total}',
-              String(pageNumbers.length)
-            )}
-          </span>
+          <ToolbarSeparator />
+
+          <ToolbarButton
+            onclick={undo}
+            disabled={isTrashed || !canUndo}
+            aria-label={tUi('pdf.toolbar.undo')}
+            title={tUi('pdf.toolbar.undo')}
+          >
+            <Undo2 aria-hidden="true" />
+          </ToolbarButton>
+
+          <ToolbarButton
+            onclick={redo}
+            disabled={isTrashed || !canRedo}
+            aria-label={tUi('pdf.toolbar.redo')}
+            title={tUi('pdf.toolbar.redo')}
+          >
+            <Redo2 aria-hidden="true" />
+          </ToolbarButton>
+
+          <ToolbarSeparator />
+
+          <ToolbarButton
+            active={commentsSidebarOpen}
+            onclick={() => (commentsSidebarOpen = !commentsSidebarOpen)}
+            aria-label={tUi('pdf.toolbar.comments')}
+            title={tUi('pdf.toolbar.comments')}
+            aria-pressed={commentsSidebarOpen}
+          >
+            <MessagesSquare aria-hidden="true" />
+          </ToolbarButton>
         </div>
 
-        <ToolbarButton
-          onclick={goToNextPage}
-          disabled={activePageNumber >= pageNumbers.length}
-          aria-label={tUi('pdf.toolbar.nextPage')}
-          title={tUi('pdf.toolbar.nextPage')}
+        <div
+          class="flex shrink-0 items-center gap-0.5"
+          bind:clientWidth={pageNavWidth}
         >
-          <ChevronRight aria-hidden="true" />
-        </ToolbarButton>
-      </div>
-    </Toolbar>
+          <ToolbarButton
+            onclick={goToPreviousPage}
+            disabled={activePageNumber <= 1}
+            aria-label={tUi('pdf.toolbar.previousPage')}
+            title={tUi('pdf.toolbar.previousPage')}
+          >
+            <ChevronLeft aria-hidden="true" />
+          </ToolbarButton>
+
+          <div
+            class="flex shrink-0 items-center gap-1 whitespace-nowrap text-xs text-muted-foreground"
+          >
+            <input
+              type="text"
+              inputmode="numeric"
+              value={pageInputValue}
+              aria-label={tUi('pdf.page.inputLabel')}
+              class="h-7 w-9 shrink-0 rounded-md border border-border bg-background text-center tabular-nums outline-none focus:ring-1 focus:ring-ring"
+              oninput={(event) =>
+                (pageInputValue = (event.currentTarget as HTMLInputElement)
+                  .value)}
+              onfocus={(event) => {
+                pageInputFocused = true;
+                (event.currentTarget as HTMLInputElement).select();
+              }}
+              onblur={() => {
+                pageInputFocused = false;
+                commitPageInput();
+              }}
+              onkeydown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  (event.currentTarget as HTMLInputElement).blur();
+                }
+              }}
+            />
+            <span class="shrink-0 whitespace-nowrap tabular-nums">
+              {tUi('pdf.page.totalLabel').replace(
+                '{total}',
+                String(pageNumbers.length)
+              )}
+            </span>
+          </div>
+
+          <ToolbarButton
+            onclick={goToNextPage}
+            disabled={activePageNumber >= pageNumbers.length}
+            aria-label={tUi('pdf.toolbar.nextPage')}
+            title={tUi('pdf.toolbar.nextPage')}
+          >
+            <ChevronRight aria-hidden="true" />
+          </ToolbarButton>
+        </div>
+      </Toolbar>
+      <ToolbarScrollbar target={toolbarScrollEl} />
+    </div>
 
     {#if searchOpen}
       <FindBar
