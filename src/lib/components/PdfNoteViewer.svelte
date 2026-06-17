@@ -10,11 +10,11 @@
     Loader2,
     MessageSquarePlus,
     MessagesSquare,
-    MousePointer2,
     PanelLeft,
     PenLine,
     Redo2,
     Signature,
+    TextCursor,
     Trash2,
     Undo2
   } from 'lucide-svelte';
@@ -46,6 +46,7 @@
   import FindBar from '$lib/components/FindBar.svelte';
   import CommentsSidebar from '$lib/pdf/CommentsSidebar.svelte';
   import PdfNavigatorSidebar from '$lib/pdf/PdfNavigatorSidebar.svelte';
+  import PdfSelectionMenu from '$lib/pdf/PdfSelectionMenu.svelte';
   import SignaturePadDialog from '$lib/pdf/SignaturePadDialog.svelte';
   import SignaturePicker from '$lib/pdf/SignaturePicker.svelte';
   import {
@@ -121,6 +122,9 @@
     searchVersion: number;
   };
   type PageSize = { width: number; height: number };
+  type PdfViewport = ReturnType<
+    Awaited<ReturnType<PdfDocument['getPage']>>['getViewport']
+  >;
   type PdfLink = {
     rect: number[];
     url?: string;
@@ -200,6 +204,11 @@
   let undoManager: Y.UndoManager | null = null;
   let canUndo = $state(false);
   let canRedo = $state(false);
+  // Floating bubble for text-aware highlight/comment on a text selection.
+  let selectionMenu = $state<{ x: number; y: number } | null>(null);
+  // Latest rendered viewport per page, so selection client-rects can be
+  // converted back into PDF user space. Updated in the render action.
+  const pageViewports = new Map<number, PdfViewport>();
   let savedSignatures = $state<PdfSignatureSnapshot[]>([]);
   let activeSignatureId = $state<string | null>(null);
   let signatureDialogOpen = $state(false);
@@ -382,12 +391,13 @@
   function createAnnotation(
     type: PdfAnnotationType,
     pageIndex: number,
-    rect: PdfRect,
+    rect: PdfRect | PdfRect[],
     body?: string,
     extras: Partial<Pick<PdfAnnotation, 'strokes' | 'signature'>> = {}
-  ) {
+  ): string | null {
     const map = annotationsMap;
-    if (!map || isTrashed) return;
+    if (!map || isTrashed) return null;
+    const rects = Array.isArray(rect) ? rect : [rect];
     const now = new Date().toISOString();
     const id = crypto.randomUUID();
     runLocal(() => {
@@ -395,7 +405,7 @@
         id,
         type,
         pageIndex,
-        rects: [rect],
+        rects,
         color:
           type === 'highlight'
             ? highlightColor
@@ -417,6 +427,7 @@
       commentsSidebarOpen = true;
       commentDraftFocusId = id;
     }
+    return id;
   }
 
   function isCommentLikeAnnotation(annotation: PdfAnnotation): boolean {
@@ -464,6 +475,163 @@
     if (activeTool === 'pen') inkColor = color;
     else highlightColor = color;
   }
+
+  // --- Text selection → text-aware highlight / comment ----------------------
+
+  type PdfSelection = {
+    range: Range;
+    pageEl: HTMLElement;
+    pageNumber: number;
+    viewport: PdfViewport;
+  };
+
+  /** Resolve the current DOM selection to the PDF page it sits in, or
+   *  null when there's no usable text selection inside a rendered page. */
+  function readPdfSelection(): PdfSelection | null {
+    if (!container) return null;
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0) return null;
+    const range = sel.getRangeAt(0);
+    const node = range.commonAncestorContainer;
+    const el =
+      node.nodeType === Node.TEXT_NODE
+        ? node.parentElement
+        : (node as Element | null);
+    if (!el || !container.contains(el)) return null;
+    // Scope to our wrapper <figure>: pdf.js also stamps data-page-number
+    // on its inner `.page` div, so a bare [data-page-number] would match
+    // that instead and the `.page` lookup below would then fail.
+    const figure = el.closest<HTMLElement>('figure[data-page-number]');
+    const pageEl = figure?.querySelector<HTMLElement>('.page') ?? null;
+    if (!figure || !pageEl) return null;
+    const pageNumber = Number(figure.dataset.pageNumber);
+    const viewport = pageViewports.get(pageNumber);
+    if (!Number.isFinite(pageNumber) || !viewport) return null;
+    return { range, pageEl, pageNumber, viewport };
+  }
+
+  /** Convert the selection's per-line client rects into PDF user-space
+   *  rects, clipped to the owning page so a spill onto the next page
+   *  doesn't produce mis-placed quads. */
+  function selectionRectsToPdf(selection: PdfSelection): PdfRect[] {
+    const { range, pageEl, viewport } = selection;
+    const pageRect = pageEl.getBoundingClientRect();
+    const rects: PdfRect[] = [];
+    for (const cr of Array.from(range.getClientRects())) {
+      if (cr.width < 1 || cr.height < 1) continue;
+      if (cr.bottom <= pageRect.top || cr.top >= pageRect.bottom) continue;
+      const [x1, y1] = viewport.convertToPdfPoint(
+        cr.left - pageRect.left,
+        cr.top - pageRect.top
+      );
+      const [x2, y2] = viewport.convertToPdfPoint(
+        cr.right - pageRect.left,
+        cr.bottom - pageRect.top
+      );
+      rects.push({
+        x: Math.min(x1, x2),
+        y: Math.min(y1, y2),
+        width: Math.abs(x2 - x1),
+        height: Math.abs(y2 - y1)
+      });
+    }
+    return rects;
+  }
+
+  function refreshSelectionMenu() {
+    if (activeTool !== 'select' || isTrashed) {
+      selectionMenu = null;
+      return;
+    }
+    const selection = readPdfSelection();
+    if (!selection) {
+      selectionMenu = null;
+      return;
+    }
+    const rect = selection.range.getBoundingClientRect();
+    if (rect.width < 1 && rect.height < 1) {
+      selectionMenu = null;
+      return;
+    }
+    const centerX = Math.min(
+      window.innerWidth - 60,
+      Math.max(60, rect.left + rect.width / 2)
+    );
+    selectionMenu = { x: centerX, y: rect.top };
+  }
+
+  function clearSelectionMenu() {
+    selectionMenu = null;
+  }
+
+  function endSelectionAction() {
+    window.getSelection()?.removeAllRanges();
+    selectionMenu = null;
+  }
+
+  function highlightSelection() {
+    const selection = readPdfSelection();
+    if (!selection || isTrashed) {
+      endSelectionAction();
+      return;
+    }
+    const rects = selectionRectsToPdf(selection);
+    if (rects.length > 0) {
+      createAnnotation('highlight', selection.pageNumber - 1, rects);
+    }
+    endSelectionAction();
+  }
+
+  function commentSelection() {
+    const selection = readPdfSelection();
+    if (!selection || isTrashed) {
+      endSelectionAction();
+      return;
+    }
+    const rects = selectionRectsToPdf(selection);
+    if (rects.length > 0) {
+      // A highlight carrying a body reads as a comment everywhere (sidebar,
+      // export), so a text comment is a highlight anchored to the selection
+      // with an empty, focus-ready body.
+      const id = createAnnotation(
+        'highlight',
+        selection.pageNumber - 1,
+        rects,
+        ''
+      );
+      if (id) {
+        commentsSidebarOpen = true;
+        commentDraftFocusId = id;
+      }
+    }
+    endSelectionAction();
+  }
+
+  // Track the live selection and surface the bubble above it. selectionchange
+  // covers mouse, touch and keyboard selection; scroll/resize just hide it
+  // since the fixed position would otherwise go stale.
+  $effect(() => {
+    if (!container) return;
+    const scrollEl = container;
+    let raf = 0;
+    const schedule = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(refreshSelectionMenu);
+    };
+    document.addEventListener('selectionchange', schedule);
+    // Belt-and-braces for environments where selectionchange lands before
+    // the selection settles: also re-check when a drag/tap ends.
+    scrollEl.addEventListener('pointerup', schedule);
+    scrollEl.addEventListener('scroll', clearSelectionMenu, { passive: true });
+    window.addEventListener('resize', clearSelectionMenu);
+    return () => {
+      cancelAnimationFrame(raf);
+      document.removeEventListener('selectionchange', schedule);
+      scrollEl.removeEventListener('pointerup', schedule);
+      scrollEl.removeEventListener('scroll', clearSelectionMenu);
+      window.removeEventListener('resize', clearSelectionMenu);
+    };
+  });
 
   function selectAnnotation(id: string | null) {
     selectedAnnotationId = id;
@@ -1351,6 +1519,7 @@
     searchGeneration += 1;
     textIndexCache.clear();
     searchMatchesByPage.clear();
+    pageViewports.clear();
     if (editorListener) {
       unregisterEditor(editorListener);
       editorListener = null;
@@ -1862,6 +2031,9 @@
       const viewerScale = requestedScale / PDF_TO_CSS_UNITS;
       const viewport = page.getViewport({ scale: requestedScale });
       currentViewport = viewport;
+      // Expose the rendered viewport so text-selection client-rects can be
+      // mapped back into PDF user space for text-aware annotations.
+      pageViewports.set(request.pageNumber, viewport);
 
       if (cancelled || generation !== drawGeneration) return;
       const eventBus = new pdfViewer.EventBus();
@@ -1999,7 +2171,7 @@
           title={tUi('pdf.toolbar.select')}
           aria-pressed={activeTool === 'select'}
         >
-          <MousePointer2 aria-hidden="true" />
+          <TextCursor aria-hidden="true" />
         </ToolbarButton>
 
         <ToolbarButton
@@ -2281,6 +2453,15 @@
       {/if}
     </div>
 
+    {#if selectionMenu && activeTool === 'select' && !isTrashed}
+      <PdfSelectionMenu
+        x={selectionMenu.x}
+        y={selectionMenu.y}
+        onHighlight={highlightSelection}
+        onComment={commentSelection}
+      />
+    {/if}
+
     <SignaturePadDialog
       open={signatureDialogOpen}
       onCancel={handleSignatureCancelled}
@@ -2501,6 +2682,10 @@
     inset: 0;
     z-index: 2;
     overflow: clip;
+    /* The layer spans the whole page above the text layer; without this
+       it would swallow pointer events and block text selection. Only the
+       individual link hotspots re-enable pointer events. */
+    pointer-events: none;
   }
 
   :global(.pdf-page-host .pdf-link) {
@@ -2512,6 +2697,7 @@
     background: transparent;
     border-radius: 2px;
     cursor: pointer;
+    pointer-events: auto;
   }
 
   :global(.pdf-page-host .pdf-link:hover) {
