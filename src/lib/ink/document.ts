@@ -31,8 +31,26 @@ export interface StrokeTransform {
   widthScale: number;
 }
 
+export interface InkStrokeInput {
+  color: number;
+  width: number;
+  points: InkPoint[];
+}
+
+export interface StrokeStyleSnapshot {
+  id: string;
+  color: number;
+  width: number;
+}
+
+export interface StrokeStylePatch {
+  color?: number;
+  width?: number;
+}
+
 export type UndoOp =
   | { kind: 'strokeAdded'; id: string }
+  | { kind: 'strokesAdded'; ids: string[] }
   | { kind: 'eraserDrag'; ids: string[] }
   | { kind: 'clearAll'; ids: string[] }
   | { kind: 'selectionDelete'; ids: string[] }
@@ -42,6 +60,11 @@ export type UndoOp =
       ids: string[];
       transform: StrokeTransform;
       inverse: StrokeTransform;
+    }
+  | {
+      kind: 'selectionStyle';
+      before: StrokeStyleSnapshot[];
+      after: StrokeStyleSnapshot[];
     };
 
 interface DecodedPayload {
@@ -222,6 +245,36 @@ export class InkDocument {
     });
   }
 
+  addStrokes(strokes: Iterable<InkStrokeInput>): MutationResult<string[]> {
+    return this.transactLocalUpdate(() => {
+      const added: string[] = [];
+      for (const input of strokes) {
+        const points = sanitizedPoints(input.points);
+        if (points.length === 0) continue;
+        const id = `stroke_${randomId()}`;
+        const map = new Y.Map<unknown>();
+        map.set(FIELD_ID, id);
+        map.set(FIELD_TOMBSTONED, false);
+        map.set(
+          FIELD_PAYLOAD,
+          encodePayloadV2({
+            color: input.color >>> 0,
+            width: sanitizeWidth(input.width),
+            points
+          })
+        );
+        this.strokes.push([map]);
+        this.strokeMapCache?.set(id, map);
+        added.push(id);
+      }
+      if (added.length > 0) {
+        this.invalidateVisibleStrokeCache();
+        this.recordOp({ kind: 'strokesAdded', ids: added });
+      }
+      return added;
+    });
+  }
+
   setStrokeTombstoned(id: string, tombstoned: boolean): boolean {
     return this.setStrokesTombstoned([id], tombstoned) > 0;
   }
@@ -319,6 +372,27 @@ export class InkDocument {
         });
       }
       return transformed;
+    });
+  }
+
+  styleStrokes(
+    ids: Iterable<string>,
+    patch: StrokeStylePatch
+  ): MutationResult<string[]> {
+    const hasColor = Number.isFinite(patch.color);
+    const hasWidth = Number.isFinite(patch.width);
+    if (!hasColor && !hasWidth) {
+      return { value: [], update: null };
+    }
+    return this.transactLocalUpdate(() => {
+      const { changed, before, after } = this.styleStrokeSet(
+        new Set(ids),
+        patch
+      );
+      if (changed.length > 0) {
+        this.recordOp({ kind: 'selectionStyle', before, after });
+      }
+      return changed;
     });
   }
 
@@ -592,6 +666,85 @@ export class InkDocument {
     }
     return moved;
   }
+
+  styleStrokeSet(
+    ids: Set<string>,
+    patch: StrokeStylePatch
+  ): {
+    changed: string[];
+    before: StrokeStyleSnapshot[];
+    after: StrokeStyleSnapshot[];
+  } {
+    if (ids.size === 0) return { changed: [], before: [], after: [] };
+    const strokeMaps = this.ensureStrokeMapCache();
+    const changed: string[] = [];
+    const before: StrokeStyleSnapshot[] = [];
+    const after: StrokeStyleSnapshot[] = [];
+    const hasColor = Number.isFinite(patch.color);
+    const hasWidth = Number.isFinite(patch.width);
+    const color = hasColor ? (patch.color ?? DEFAULT_COLOR) >>> 0 : null;
+    const width = hasWidth ? sanitizeWidth(patch.width ?? DEFAULT_WIDTH) : null;
+
+    for (const id of ids) {
+      const stroke = strokeMaps.get(id);
+      if (!stroke || stroke.get(FIELD_TOMBSTONED) === true) continue;
+      const payload = stroke.get(FIELD_PAYLOAD);
+      if (!(payload instanceof Uint8Array)) continue;
+      const decoded = decodePayload(payload);
+      if (!decoded) continue;
+      const nextColor = color ?? decoded.color;
+      const nextWidth = width ?? decoded.width;
+      if (
+        nextColor === decoded.color &&
+        Math.abs(nextWidth - decoded.width) < 0.001
+      ) {
+        continue;
+      }
+      before.push({ id, color: decoded.color, width: decoded.width });
+      after.push({ id, color: nextColor, width: nextWidth });
+      stroke.set(
+        FIELD_PAYLOAD,
+        encodePayloadV2({
+          color: nextColor,
+          width: nextWidth,
+          points: decoded.points
+        })
+      );
+      changed.push(id);
+    }
+    if (changed.length > 0) {
+      this.invalidateVisibleStrokeCache();
+    }
+    return { changed, before, after };
+  }
+
+  applyStrokeStyleSnapshot(styles: StrokeStyleSnapshot[]): string[] {
+    if (styles.length === 0) return [];
+    const styleById = new Map(styles.map((style) => [style.id, style]));
+    const strokeMaps = this.ensureStrokeMapCache();
+    const changed: string[] = [];
+    for (const [id, style] of styleById) {
+      const stroke = strokeMaps.get(id);
+      if (!stroke || stroke.get(FIELD_TOMBSTONED) === true) continue;
+      const payload = stroke.get(FIELD_PAYLOAD);
+      if (!(payload instanceof Uint8Array)) continue;
+      const decoded = decodePayload(payload);
+      if (!decoded) continue;
+      stroke.set(
+        FIELD_PAYLOAD,
+        encodePayloadV2({
+          color: style.color >>> 0,
+          width: sanitizeWidth(style.width),
+          points: decoded.points
+        })
+      );
+      changed.push(id);
+    }
+    if (changed.length > 0) {
+      this.invalidateVisibleStrokeCache();
+    }
+    return changed;
+  }
 }
 
 export function strokesHitAt(
@@ -770,6 +923,9 @@ function applyUndoOp(doc: InkDocument, op: UndoOp): void {
     case 'strokeAdded':
       doc.setStrokeTombstoned(op.id, true);
       break;
+    case 'strokesAdded':
+      doc.setStrokesTombstoned(op.ids, true);
+      break;
     case 'eraserDrag':
     case 'clearAll':
     case 'selectionDelete':
@@ -781,6 +937,9 @@ function applyUndoOp(doc: InkDocument, op: UndoOp): void {
     case 'selectionTransform':
       doc.transformStrokeSet(new Set(op.ids), op.inverse);
       break;
+    case 'selectionStyle':
+      doc.applyStrokeStyleSnapshot(op.before);
+      break;
   }
 }
 
@@ -788,6 +947,9 @@ function applyRedoOp(doc: InkDocument, op: UndoOp): void {
   switch (op.kind) {
     case 'strokeAdded':
       doc.setStrokeTombstoned(op.id, false);
+      break;
+    case 'strokesAdded':
+      doc.setStrokesTombstoned(op.ids, false);
       break;
     case 'eraserDrag':
     case 'clearAll':
@@ -799,6 +961,9 @@ function applyRedoOp(doc: InkDocument, op: UndoOp): void {
       break;
     case 'selectionTransform':
       doc.transformStrokeSet(new Set(op.ids), op.transform);
+      break;
+    case 'selectionStyle':
+      doc.applyStrokeStyleSnapshot(op.after);
       break;
   }
 }
@@ -848,6 +1013,16 @@ function transformPoint(point: InkPoint, transform: StrokeTransform): InkPoint {
     y: point.x * transform.b + point.y * transform.d + transform.f,
     pressure: point.pressure
   };
+}
+
+function sanitizedPoints(points: InkPoint[]): InkPoint[] {
+  return points
+    .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
+    .map((point) => ({
+      x: point.x,
+      y: point.y,
+      pressure: sanitizePressure(point.pressure)
+    }));
 }
 
 function encodePayloadV2(stroke: InProgressStroke): Uint8Array {

@@ -306,6 +306,75 @@ describe('InkDocument', () => {
     expect(doc.visibleStrokes()[0].width).toBeCloseTo(8);
   });
 
+  it('adds pasted strokes as one undoable operation', () => {
+    const doc = new InkDocument();
+
+    const { value: ids } = doc.addStrokes([
+      {
+        color: 0xff336699,
+        width: 5,
+        points: [
+          { x: 10, y: 20, pressure: 0.5 },
+          { x: 30, y: 40, pressure: 1 }
+        ]
+      },
+      {
+        color: 0xffaa5500,
+        width: 2,
+        points: [
+          { x: 50, y: 60, pressure: 1 },
+          { x: 70, y: 80, pressure: 1 }
+        ]
+      }
+    ]);
+
+    expect(ids).toHaveLength(2);
+    expect(doc.visibleStrokes()).toHaveLength(2);
+    expect(doc.visibleStrokes()[0]).toMatchObject({
+      color: 0xff336699,
+      width: 5
+    });
+    expect(doc.undoLast().value).toBe(true);
+    expect(doc.visibleStrokes()).toHaveLength(0);
+    expect(doc.redoLast().value).toBe(true);
+    expect(doc.visibleStrokes().map((stroke) => stroke.id)).toEqual(ids);
+  });
+
+  it('restyles selected strokes as one undoable operation', () => {
+    const doc = new InkDocument();
+    doc.beginStroke(DEFAULT_COLOR, 4);
+    doc.pushPoint(0, 0, 1);
+    doc.pushPoint(10, 0, 1);
+    const first = doc.endStroke().value;
+    doc.beginStroke(0xff112233, 2);
+    doc.pushPoint(100, 100, 1);
+    doc.pushPoint(110, 100, 1);
+    doc.endStroke();
+    if (!first) throw new Error('expected committed stroke');
+
+    expect(
+      doc.styleStrokes([first], { color: 0xffabcdef, width: 8 }).value
+    ).toEqual([first]);
+    expect(doc.visibleStrokes()[0]).toMatchObject({
+      color: 0xffabcdef,
+      width: 8
+    });
+    expect(doc.visibleStrokes()[1]).toMatchObject({
+      color: 0xff112233,
+      width: 2
+    });
+    expect(doc.undoLast().value).toBe(true);
+    expect(doc.visibleStrokes()[0]).toMatchObject({
+      color: DEFAULT_COLOR,
+      width: 4
+    });
+    expect(doc.redoLast().value).toBe(true);
+    expect(doc.visibleStrokes()[0]).toMatchObject({
+      color: 0xffabcdef,
+      width: 8
+    });
+  });
+
   it('rejects malformed remote updates', () => {
     const doc = new InkDocument();
 

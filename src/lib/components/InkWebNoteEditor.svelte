@@ -2,6 +2,8 @@
   import * as Y from 'yjs';
   import { onDestroy, onMount, tick } from 'svelte';
   import {
+    ClipboardPaste,
+    Copy,
     Eraser,
     LassoSelect,
     MousePointer2,
@@ -9,6 +11,7 @@
     Palette,
     PenLine,
     Redo2,
+    Scissors,
     Sun,
     Trash2,
     Undo2
@@ -64,7 +67,9 @@
     DEFAULT_COLOR,
     DEFAULT_WIDTH,
     InkDocument,
+    type InkStrokeInput,
     type StrokeBounds,
+    type StrokeStylePatch,
     type StrokeTransform
   } from '$lib/ink/document';
   import {
@@ -111,6 +116,7 @@
   const SELECTION_HANDLE_RADIUS_PX = 7;
   const SELECTION_HANDLE_HIT_RADIUS_PX = 22;
   const SELECTION_ROTATE_GAP_PX = 30;
+  const SELECTION_PASTE_OFFSET_PX = 24;
 
   const INK_TOOL_SETTING = 'editor.ink.tool';
   const INK_COLOR_SETTING = 'editor.ink.color';
@@ -157,6 +163,7 @@
         center: { x: number; y: number };
         startAngle: number;
       };
+  type InkClipboardStroke = InkStrokeInput;
   type TouchPointer = {
     clientX: number;
     clientY: number;
@@ -214,6 +221,7 @@
   let pageThemeMode = $state<PageThemeMode>('light');
   let strokeCount = $state(0);
   let selectedStrokeIds = $state<string[]>([]);
+  let selectionClipboard = $state<InkClipboardStroke[]>([]);
   let inFlight = $state<InkPoint[]>([]);
   let lassoPoints = $state<InkPoint[]>([]);
   let selectionDragStart: InkPoint | null = null;
@@ -264,6 +272,7 @@
   );
   const selectedStrokeSet = $derived(new Set(selectedStrokeIds));
   const hasSelection = $derived(selectedStrokeIds.length > 0);
+  const hasSelectionClipboard = $derived(selectionClipboard.length > 0);
   const selectionMoveActive = $derived(
     Math.abs(selectionDragOffset.x) > 0.001 ||
       Math.abs(selectionDragOffset.y) > 0.001 ||
@@ -1956,6 +1965,76 @@
     setInkZoom(view.scale * factor);
   }
 
+  function selectedClipboardStrokes(): InkClipboardStroke[] {
+    if (!doc || selectedStrokeIds.length === 0) return [];
+    const selected = new Set(selectedStrokeIds);
+    return doc
+      .visibleStrokes()
+      .filter((stroke) => selected.has(stroke.id))
+      .map((stroke) => ({
+        color: stroke.color,
+        width: stroke.width,
+        points: stroke.points.map((point) => ({ ...point }))
+      }));
+  }
+
+  function copySelection(): boolean {
+    const strokes = selectedClipboardStrokes();
+    if (strokes.length === 0) return false;
+    selectionClipboard = strokes;
+    return true;
+  }
+
+  function cutSelection(): boolean {
+    if (!copySelection()) return false;
+    return deleteSelection();
+  }
+
+  function pasteSelection(): boolean {
+    if (!doc || isTrashed || selectionClipboard.length === 0) return false;
+    flushQueuedEraserSamples();
+    const offset = SELECTION_PASTE_OFFSET_PX / Math.max(0.001, view.scale);
+    const pasted = selectionClipboard.map((stroke) => ({
+      color: stroke.color,
+      width: stroke.width,
+      points: stroke.points.map((point) => ({
+        x: point.x + offset,
+        y: point.y + offset,
+        pressure: point.pressure
+      }))
+    }));
+    const { value, update } = doc.addStrokes(pasted);
+    if (value.length === 0) return false;
+    selectionClipboard = pasted.map((stroke) => ({
+      color: stroke.color,
+      width: stroke.width,
+      points: stroke.points.map((point) => ({ ...point }))
+    }));
+    tool = 'lasso';
+    selectedStrokeIds = value;
+    lassoPoints = [];
+    selectionInteraction = null;
+    selectionDragStart = null;
+    selectionDragOffset = { x: 0, y: 0 };
+    selectionTransformPreview = identityTransform();
+    applyDocumentMutation(update);
+    emitToolbarSettings();
+    return true;
+  }
+
+  function applySelectionStyle(patch: StrokeStylePatch): boolean {
+    if (!doc || isTrashed || selectedStrokeIds.length === 0) return false;
+    flushQueuedEraserSamples();
+    const { value, update } = doc.styleStrokes(selectedStrokeIds, patch);
+    if (value.length === 0) {
+      scheduleDraw();
+      return false;
+    }
+    selectedStrokeIds = value;
+    applyDocumentMutation(update);
+    return true;
+  }
+
   function minScale(): number {
     const availableWidth = Math.max(1, view.width - FIT_PAGE_MARGIN_PX * 2);
     const availableHeight = Math.max(
@@ -1983,7 +2062,9 @@
   }
 
   function setColor(value: string) {
-    colorArgb = colorHexToArgb(value);
+    const next = colorHexToArgb(value);
+    colorArgb = next;
+    if (hasSelection) applySelectionStyle({ color: next });
     emitToolbarSettings();
     updateLiveInkOverlayStyle();
   }
@@ -1998,7 +2079,9 @@
   }
 
   function setWidth(value: string) {
-    width = normalizeInkWidth(Number(value));
+    const next = normalizeInkWidth(Number(value));
+    width = next;
+    if (hasSelection) applySelectionStyle({ width: next });
     emitToolbarSettings();
     updateLiveInkOverlayStyle();
   }
@@ -2083,7 +2166,33 @@
     if (ok) clearCanvas();
   }
 
+  function isEditableShortcutTarget(target: EventTarget | null): boolean {
+    return (
+      target instanceof HTMLInputElement ||
+      target instanceof HTMLTextAreaElement ||
+      target instanceof HTMLSelectElement ||
+      (target instanceof HTMLElement && target.isContentEditable)
+    );
+  }
+
   function handleKeyDown(event: KeyboardEvent) {
+    if (isEditableShortcutTarget(event.target)) return;
+    const modifier = event.ctrlKey || event.metaKey;
+    if (modifier && !event.shiftKey && !event.altKey) {
+      const key = event.key.toLowerCase();
+      if (key === 'c' && hasSelection && copySelection()) {
+        event.preventDefault();
+        return;
+      }
+      if (key === 'x' && hasSelection && cutSelection()) {
+        event.preventDefault();
+        return;
+      }
+      if (key === 'v' && hasSelectionClipboard && pasteSelection()) {
+        event.preventDefault();
+        return;
+      }
+    }
     if (event.key === 'Delete' || event.key === 'Backspace') {
       if (hasSelection && deleteSelection()) {
         event.preventDefault();
@@ -2452,6 +2561,48 @@
       >
         <LassoSelect aria-hidden="true" />
       </ToolbarButton>
+
+      {#if hasSelection || hasSelectionClipboard}
+        <ToolbarSeparator />
+        <div
+          class="flex items-center gap-0.5"
+          role="group"
+          aria-label={tUi('ink.toolbar.selectionActions')}
+        >
+          <ToolbarButton
+            aria-label={tUi('ink.toolbar.cutSelected')}
+            title={tUi('ink.toolbar.cutSelected')}
+            disabled={isTrashed || !hasSelection}
+            onclick={cutSelection}
+          >
+            <Scissors aria-hidden="true" />
+          </ToolbarButton>
+          <ToolbarButton
+            aria-label={tUi('ink.toolbar.copySelected')}
+            title={tUi('ink.toolbar.copySelected')}
+            disabled={!hasSelection}
+            onclick={copySelection}
+          >
+            <Copy aria-hidden="true" />
+          </ToolbarButton>
+          <ToolbarButton
+            aria-label={tUi('ink.toolbar.pasteInk')}
+            title={tUi('ink.toolbar.pasteInk')}
+            disabled={isTrashed || !hasSelectionClipboard}
+            onclick={pasteSelection}
+          >
+            <ClipboardPaste aria-hidden="true" />
+          </ToolbarButton>
+          <ToolbarButton
+            aria-label={tUi('ink.toolbar.deleteSelected')}
+            title={tUi('ink.toolbar.deleteSelected')}
+            disabled={isTrashed || !hasSelection}
+            onclick={deleteSelection}
+          >
+            <Trash2 aria-hidden="true" />
+          </ToolbarButton>
+        </div>
+      {/if}
 
       <ToolbarSeparator />
 
