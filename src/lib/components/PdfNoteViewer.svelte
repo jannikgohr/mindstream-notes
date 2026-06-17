@@ -757,6 +757,28 @@
     };
   });
 
+  // Clicking anywhere that isn't an annotation, its action popup, the
+  // selection bubble, or a sidebar clears the selection (hiding the
+  // popup). Annotation nodes also stopPropagation on pointerdown, so
+  // selecting one never trips this; the closest() check is a backstop.
+  $effect(() => {
+    const onPointerDown = (event: PointerEvent) => {
+      if (!selectedAnnotationId) return;
+      const target = event.target;
+      if (
+        target instanceof Element &&
+        target.closest(
+          '.pdf-app-annotation, .pdf-annotation-menu, .pdf-selection-menu, aside'
+        )
+      ) {
+        return;
+      }
+      selectedAnnotationId = null;
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    return () => document.removeEventListener('pointerdown', onPointerDown);
+  });
+
   function addCommentToSelected() {
     const ann = selectedAnnotation;
     if (!ann || isTrashed) return;
