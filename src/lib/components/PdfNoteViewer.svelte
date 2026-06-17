@@ -527,6 +527,18 @@
     colorMenuOpen = false;
   });
 
+  // When the toolbar overflows (controls already collapsed but still too
+  // wide), it scrolls horizontally. The scrollbar is hidden, so translate a
+  // vertical wheel into horizontal scroll for plain-mouse users.
+  function handleToolbarWheel(event: WheelEvent) {
+    const el = event.currentTarget as HTMLElement;
+    if (el.scrollWidth <= el.clientWidth) return;
+    const delta = event.deltaY !== 0 ? event.deltaY : event.deltaX;
+    if (delta === 0) return;
+    el.scrollLeft += delta;
+    event.preventDefault();
+  }
+
   // --- Text selection → text-aware highlight / comment ----------------------
 
   type PdfSelection = {
@@ -2431,9 +2443,10 @@
     <Toolbar
       dense
       aria-label={tUi('pdf.toolbar.label')}
-      class="shrink-0 justify-between border-b border-border bg-background"
+      class="scrollbar-none shrink-0 justify-between overflow-x-auto border-b border-border bg-background"
+      onwheel={handleToolbarWheel}
     >
-      <div class="flex min-w-0 items-center gap-0.5">
+      <div class="flex shrink-0 items-center gap-0.5">
         <ToolbarButton
           active={navigatorOpen}
           onclick={toggleNavigator}

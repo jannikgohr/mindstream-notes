@@ -724,6 +724,16 @@ body.dv-tab-dragging .freeform-canvas-host * {
   background: transparent;
 }
 
+/* Hide the scrollbar while keeping the element scrollable — used for the
+ * dense editor toolbars, where a 12px bar would eat a third of the row. */
+.scrollbar-none {
+  scrollbar-width: none;
+}
+
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
 /* ----------------------------------------------------------------------------
  * Live-collab cursors (y-prosemirror's yCursorPlugin)
  *
