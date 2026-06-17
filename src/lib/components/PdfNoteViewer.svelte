@@ -10,6 +10,7 @@
     Loader2,
     MessageSquarePlus,
     MessagesSquare,
+    Palette,
     PanelLeft,
     PenLine,
     Redo2,
@@ -24,6 +25,7 @@
   import {
     Toolbar,
     ToolbarButton,
+    ToolbarCollapseWhenOverflow,
     ToolbarSeparator,
     ToolbarZoomControls
   } from '$lib/components/ui/toolbar';
@@ -189,6 +191,14 @@
   let zoomMode = $state<ZoomMode>('fixed');
   let firstPageWidth = $state(0);
   let zoomMenuOpen = $state(false);
+  // Color palette popup, shown when the inline swatch row is collapsed
+  // (toolbar too narrow) — see ToolbarCollapseWhenOverflow below.
+  let colorMenuOpen = $state(false);
+  let colorMenuButton = $state<HTMLButtonElement | null>(null);
+  let colorMenuEl = $state<HTMLDivElement | null>(null);
+  // Live width of the right-aligned page-nav group; reserved as overflow
+  // margin so the swatches collapse before they crowd the page controls.
+  let pageNavWidth = $state(0);
   let mobileToolbar = $state(false);
   let annotationVersion = $state(0);
   let annotations = $state<PdfAnnotation[]>([]);
@@ -489,6 +499,33 @@
     if (activeTool === 'pen') inkColor = color;
     else highlightColor = color;
   }
+
+  // Dismiss the collapsed colour-palette popup on outside click / Escape.
+  $effect(() => {
+    if (!colorMenuOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (colorMenuEl?.contains(target)) return;
+      if (colorMenuButton?.contains(target)) return;
+      colorMenuOpen = false;
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') colorMenuOpen = false;
+    };
+    queueMicrotask(() => window.addEventListener('pointerdown', onPointerDown));
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('keydown', onKey);
+    };
+  });
+
+  // Close the palette popup whenever the active tool changes (it may no
+  // longer be a colourable tool, and the swatches now target the new tool).
+  $effect(() => {
+    void activeTool;
+    colorMenuOpen = false;
+  });
 
   // --- Text selection → text-aware highlight / comment ----------------------
 
@@ -2307,6 +2344,71 @@
   }
 </script>
 
+{#snippet colorSwatch(color: string)}
+  <button
+    type="button"
+    class="size-5 rounded-full transition hover:scale-110"
+    style="background-color: {color}; box-shadow: {activeColor === color
+      ? '0 0 0 2px var(--ring)'
+      : '0 0 0 1px var(--border)'}"
+    aria-label={tUi('pdf.toolbar.colorSwatch').replace('{color}', color)}
+    aria-pressed={activeColor === color}
+    onclick={() => {
+      setActiveColor(color);
+      colorMenuOpen = false;
+    }}
+  ></button>
+{/snippet}
+
+{#snippet colorSwatchesExpanded()}
+  <div
+    class="flex items-center gap-1 px-1"
+    role="group"
+    aria-label={tUi('pdf.toolbar.color')}
+  >
+    {#each ANNOTATION_COLORS as color (color)}
+      {@render colorSwatch(color)}
+    {/each}
+  </div>
+{/snippet}
+
+{#snippet colorSwatchesCollapsed()}
+  <div class="relative shrink-0">
+    <ToolbarButton
+      bind:ref={colorMenuButton}
+      wide
+      active={colorMenuOpen}
+      aria-label={tUi('pdf.toolbar.color')}
+      title={tUi('pdf.toolbar.color')}
+      aria-haspopup="menu"
+      aria-expanded={colorMenuOpen}
+      onclick={() => (colorMenuOpen = !colorMenuOpen)}
+    >
+      <Palette aria-hidden="true" />
+      <span
+        class="size-3 rounded-full"
+        style="background-color: {activeColor}; box-shadow: 0 0 0 1px var(--border)"
+        aria-hidden="true"
+      ></span>
+    </ToolbarButton>
+
+    {#if colorMenuOpen}
+      <div
+        bind:this={colorMenuEl}
+        role="menu"
+        class="absolute left-0 top-full z-50 mt-1 rounded-md border border-border bg-popover p-2 text-popover-foreground shadow-lg"
+        aria-label={tUi('pdf.toolbar.color')}
+      >
+        <div class="flex items-center gap-1" role="group">
+          {#each ANNOTATION_COLORS as color (color)}
+            {@render colorSwatch(color)}
+          {/each}
+        </div>
+      </div>
+    {/if}
+  </div>
+{/snippet}
+
 <div
   bind:this={hostEl}
   class="relative flex h-full w-full flex-col overflow-hidden bg-background"
@@ -2331,7 +2433,7 @@
       aria-label={tUi('pdf.toolbar.label')}
       class="shrink-0 justify-between border-b border-border bg-background"
     >
-      <div class="flex items-center gap-0.5">
+      <div class="flex min-w-0 items-center gap-0.5">
         <ToolbarButton
           active={navigatorOpen}
           onclick={toggleNavigator}
@@ -2430,28 +2532,12 @@
         {/if}
 
         {#if activeTool === 'highlight' || activeTool === 'pen'}
-          <div
-            class="flex items-center gap-1 px-1"
-            role="group"
-            aria-label={tUi('pdf.toolbar.color')}
-          >
-            {#each ANNOTATION_COLORS as color (color)}
-              <button
-                type="button"
-                class="size-5 rounded-full transition hover:scale-110"
-                style="background-color: {color}; box-shadow: {activeColor ===
-                color
-                  ? '0 0 0 2px var(--ring)'
-                  : '0 0 0 1px var(--border)'}"
-                aria-label={tUi('pdf.toolbar.colorSwatch').replace(
-                  '{color}',
-                  color
-                )}
-                aria-pressed={activeColor === color}
-                onclick={() => setActiveColor(color)}
-              ></button>
-            {/each}
-          </div>
+          <ToolbarCollapseWhenOverflow
+            class="items-center"
+            margin={pageNavWidth + 8}
+            expanded={colorSwatchesExpanded}
+            collapsed={colorSwatchesCollapsed}
+          />
         {/if}
 
         <ToolbarSeparator />
@@ -2487,7 +2573,10 @@
         </ToolbarButton>
       </div>
 
-      <div class="flex items-center gap-0.5">
+      <div
+        class="flex shrink-0 items-center gap-0.5"
+        bind:clientWidth={pageNavWidth}
+      >
         <ToolbarButton
           onclick={goToPreviousPage}
           disabled={activePageNumber <= 1}

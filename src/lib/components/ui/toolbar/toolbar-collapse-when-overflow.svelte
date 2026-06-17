@@ -83,6 +83,13 @@
     scheduleMeasure();
   });
 
+  // Re-measure when the reserved margin changes (callers may feed a live
+  // width here, e.g. the space taken by a sibling group).
+  $effect(() => {
+    void margin;
+    scheduleMeasure();
+  });
+
   onDestroy(() => {
     if (frame !== null) cancelAnimationFrame(frame);
     resizeObserver?.disconnect();
