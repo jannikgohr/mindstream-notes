@@ -12,6 +12,8 @@ export {
   unregisterEditor,
   emitCommand,
   activeEditor,
+  searchActiveNote,
+  SEARCH_ACTIVE_NOTE_COMMAND,
   type EditorListener
 } from './bus.svelte';
 

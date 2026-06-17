@@ -286,15 +286,19 @@
         editorListener = {
           kind: 'markdown',
           host,
+          noteId,
           onCommand: (id: string) => {
             const action = MARKDOWN_ACTIONS[id];
-            // The bus already gated on `editorKind === 'markdown'`,
-            // so an id missing from the table means catalogue drift
-            // (a hotkey command registered without a matching
-            // markdown action). Return `false` so the bus knows
-            // nothing was handled and the keystroke falls through.
+            // A missing markdown action for an `editor.markdown.*` id is
+            // catalogue drift (a hotkey command registered without a
+            // matching action) and worth a warning. App-level ids (e.g.
+            // the editor-agnostic `app.searchActiveNote` broadcast) are
+            // expected to land here unhandled until markdown wires them
+            // up — return `false` quietly so the keystroke falls through.
             if (!action) {
-              console.warn('[NoteEditor] unknown markdown command', id);
+              if (id.startsWith('editor.markdown.')) {
+                console.warn('[NoteEditor] unknown markdown command', id);
+              }
               return false;
             }
             try {

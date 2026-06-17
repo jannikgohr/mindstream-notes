@@ -3,15 +3,21 @@
   import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
   import {
     AlertCircle,
+    ChevronLeft,
+    ChevronRight,
     FileText,
     Highlighter,
     Loader2,
     MessageSquarePlus,
     MessagesSquare,
-    MousePointer2,
+    PanelLeft,
     PenLine,
+    Redo2,
     Signature,
-    Trash2
+    SquareDashed,
+    TextCursor,
+    Trash2,
+    Undo2
   } from '@lucide/svelte';
   import * as Y from 'yjs';
   import { Awareness } from 'y-protocols/awareness';
@@ -25,6 +31,7 @@
     etebaseSession,
     fetchDrawingAsset,
     getYjsRelayUrl,
+    isTauri,
     loadNote,
     noteRoomInfo,
     onSessionChange,
@@ -37,9 +44,24 @@
   import { getSettingValue } from '$lib/settings/store.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { exportAnnotatedPdfNote } from '$lib/note-exporters/pdf';
+  import FindBar from '$lib/components/FindBar.svelte';
   import CommentsSidebar from '$lib/pdf/CommentsSidebar.svelte';
+  import PdfNavigatorSidebar from '$lib/pdf/PdfNavigatorSidebar.svelte';
+  import PdfAnnotationMenu from '$lib/pdf/PdfAnnotationMenu.svelte';
+  import PdfSelectionMenu from '$lib/pdf/PdfSelectionMenu.svelte';
   import SignaturePadDialog from '$lib/pdf/SignaturePadDialog.svelte';
   import SignaturePicker from '$lib/pdf/SignaturePicker.svelte';
+  import {
+    loadFlatOutline,
+    resolveDestinationPageIndex,
+    type FlatOutlineItem
+  } from '$lib/pdf/outline';
+  import {
+    buildPageTextIndex,
+    findMatchesInPage,
+    type PageTextIndex,
+    type PdfSearchMatch
+  } from '$lib/pdf/pdf-text-index';
   import {
     loadReusableSignatures,
     persistReusableSignatures
@@ -67,6 +89,7 @@
   import {
     registerEditor,
     unregisterEditor,
+    SEARCH_ACTIVE_NOTE_COMMAND,
     type EditorListener
   } from '$lib/hotkeys';
   import { alert } from './confirm-dialog.svelte';
@@ -95,11 +118,21 @@
     zoomMode: ZoomMode;
     annotationVersion: number;
     activeTool: PdfTool;
+    areaMode: boolean;
     selectedAnnotationId: string | null;
     shouldRender: boolean;
     invalidation: number;
+    searchVersion: number;
   };
   type PageSize = { width: number; height: number };
+  type PdfViewport = ReturnType<
+    Awaited<ReturnType<PdfDocument['getPage']>>['getViewport']
+  >;
+  type PdfLink = {
+    rect: number[];
+    url?: string;
+    dest?: string | unknown[] | null;
+  };
 
   const MIN_ZOOM = 0.5;
   const MAX_ZOOM = 4;
@@ -107,11 +140,26 @@
   const QUICK_ZOOMS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
   const PDF_TO_CSS_UNITS = 96 / 72;
   const SAVE_DEBOUNCE_MS = 800;
+  const SEARCH_DEBOUNCE_MS = 220;
   const HIGHLIGHT_COLOR = '#facc15';
   const COMMENT_COLOR = '#3b82f6';
   const SIGNATURE_COLOR = '#111827';
   const INK_COLOR = '#111827';
   const INK_WIDTH = 2.25;
+  // Swatches offered for the highlight and pen tools.
+  const ANNOTATION_COLORS = [
+    '#facc15',
+    '#fb923c',
+    '#f87171',
+    '#4ade80',
+    '#60a5fa',
+    '#c084fc',
+    '#111827'
+  ];
+  // Transaction origin tagging local annotation edits, so the Yjs
+  // UndoManager captures only our own changes and never undoes a peer's
+  // edit or a sync merge (both applied with a different origin).
+  const LOCAL_ORIGIN = Symbol('pdf-local-change');
   // Pages within the viewport ± one viewport's worth above/below get a real
   // canvas; everything else stays as a sized placeholder. Picked so smooth
   // scrolling rarely catches a placeholder mid-screen, while a 500-page PDF
@@ -145,8 +193,32 @@
   let annotationVersion = $state(0);
   let annotations = $state<PdfAnnotation[]>([]);
   let activeTool = $state<PdfTool>('select');
+  // When on, the highlight/comment tools draw a freeform rectangle (for
+  // figures / scanned pages with no text); when off they're text-aware
+  // and act on the text selection.
+  let areaMode = $state(false);
   let commentsSidebarOpen = $state(false);
   let selectedAnnotationId = $state<string | null>(null);
+  // Etebase username stamped on annotations this user creates; the
+  // sidebar shows it as the author (and "You" when it's the local user).
+  let localAuthorId = $state('local');
+  // Id of a just-created comment whose editor should grab focus once the
+  // sidebar renders it (replaces the old window.prompt flow).
+  let commentDraftFocusId = $state<string | null>(null);
+  // Per-tool colour for new annotations.
+  let highlightColor = $state(HIGHLIGHT_COLOR);
+  let inkColor = $state(INK_COLOR);
+  let undoManager: Y.UndoManager | null = null;
+  let canUndo = $state(false);
+  let canRedo = $state(false);
+  // Floating bubble for text-aware highlight/comment on a text selection.
+  let selectionMenu = $state<{ x: number; y: number } | null>(null);
+  // Action popup for the currently-selected annotation (add comment /
+  // colour / delete), positioned above it in client coords.
+  let annotationMenu = $state<{ x: number; y: number } | null>(null);
+  // Latest rendered viewport per page, so selection client-rects can be
+  // converted back into PDF user space. Updated in the render action.
+  const pageViewports = new Map<number, PdfViewport>();
   let savedSignatures = $state<PdfSignatureSnapshot[]>([]);
   let activeSignatureId = $state<string | null>(null);
   let signatureDialogOpen = $state(false);
@@ -159,6 +231,27 @@
   let collabConfigured = $state(false);
   let collabOnline = $state(false);
   let activePageNumber = $state(1);
+  let pageInputValue = $state('1');
+  let pageInputFocused = false;
+  let navigatorOpen = $state(false);
+  let outline = $state<FlatOutlineItem[]>([]);
+  let searchOpen = $state(false);
+  let searchQuery = $state('');
+  let searchBusy = $state(false);
+  let searchMatches = $state<PdfSearchMatch[]>([]);
+  let activeMatchIndex = $state(0);
+  // Bumped to re-run the per-page overlay pass when search results change.
+  let searchVersion = $state(0);
+  let searchBar = $state<{ focus: () => void } | null>(null);
+  // Plain (non-reactive) lookups read imperatively inside the render
+  // action. `searchMatchesByPage` indexes matches by 0-based page;
+  // `activeSearchMatchId` flags the currently-focused hit.
+  const searchMatchesByPage = new Map<number, PdfSearchMatch[]>();
+  let activeSearchMatchId: string | null = null;
+  // Per-page text index, built lazily on first search and cached.
+  const textIndexCache = new Map<number, PageTextIndex>();
+  let searchGeneration = 0;
+  let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   let pdfjsLib: PdfJs | null = null;
   let pdfViewerLib: PdfViewer | null = null;
   let yDoc: Y.Doc | null = null;
@@ -297,62 +390,413 @@
     if (savedSignatures.length === 0) activeTool = 'select';
   }
 
+  // Run a local annotation mutation inside a tagged transaction so the
+  // UndoManager records it (and only it). Falls back to a bare call
+  // before the Y.Doc exists.
+  function runLocal(fn: () => void) {
+    if (yDoc) yDoc.transact(fn, LOCAL_ORIGIN);
+    else fn();
+  }
+
   function createAnnotation(
     type: PdfAnnotationType,
     pageIndex: number,
-    rect: PdfRect,
+    rect: PdfRect | PdfRect[],
     body?: string,
     extras: Partial<Pick<PdfAnnotation, 'strokes' | 'signature'>> = {}
-  ) {
-    if (!annotationsMap || isTrashed) return;
+  ): string | null {
+    const map = annotationsMap;
+    if (!map || isTrashed) return null;
+    const rects = Array.isArray(rect) ? rect : [rect];
     const now = new Date().toISOString();
     const id = crypto.randomUUID();
-    annotationsMap.set(id, {
-      id,
-      type,
-      pageIndex,
-      rects: [rect],
-      color:
-        type === 'highlight'
-          ? HIGHLIGHT_COLOR
-          : type === 'comment'
-            ? COMMENT_COLOR
-            : type === 'ink'
-              ? INK_COLOR
-              : SIGNATURE_COLOR,
-      opacity: type === 'highlight' ? 0.32 : type === 'comment' ? 0.18 : 1,
-      authorId: 'local',
-      createdAt: now,
-      updatedAt: now,
-      body,
-      ...extras
+    runLocal(() => {
+      map.set(id, {
+        id,
+        type,
+        pageIndex,
+        rects,
+        color:
+          type === 'highlight'
+            ? highlightColor
+            : type === 'comment'
+              ? COMMENT_COLOR
+              : type === 'ink'
+                ? inkColor
+                : SIGNATURE_COLOR,
+        opacity: type === 'highlight' ? 0.32 : type === 'comment' ? 0.18 : 1,
+        authorId: localAuthorId,
+        createdAt: now,
+        updatedAt: now,
+        body,
+        ...extras
+      });
     });
     selectedAnnotationId = id;
-    if (type === 'comment') commentsSidebarOpen = true;
+    if (type === 'comment') {
+      commentsSidebarOpen = true;
+      commentDraftFocusId = id;
+    }
+    return id;
   }
 
   function isCommentLikeAnnotation(annotation: PdfAnnotation): boolean {
+    // A highlight is "comment-like" once it carries a body string — even
+    // an empty one, which is the pending state of a just-created text
+    // comment (select text → Comment). `undefined` body = a plain
+    // highlight, which stays out of the comments sidebar.
     return (
       annotation.type === 'comment' ||
-      (annotation.type === 'highlight' && Boolean(annotation.body?.trim()))
+      (annotation.type === 'highlight' && typeof annotation.body === 'string')
     );
   }
 
   function deleteAnnotation(id: string) {
     if (isTrashed) return;
-    annotationsMap?.delete(id);
+    runLocal(() => annotationsMap?.delete(id));
     if (selectedAnnotationId === id) selectedAnnotationId = null;
   }
 
   function updateAnnotation(id: string, patch: Partial<PdfAnnotation>) {
-    if (isTrashed || !annotationsMap) return;
-    const existing = annotationsMap.get(id);
+    const map = annotationsMap;
+    if (isTrashed || !map) return;
+    const existing = map.get(id);
     if (!existing) return;
-    annotationsMap.set(id, {
-      ...existing,
-      ...patch,
-      updatedAt: new Date().toISOString()
+    runLocal(() => {
+      map.set(id, {
+        ...existing,
+        ...patch,
+        updatedAt: new Date().toISOString()
+      });
     });
+  }
+
+  function undo() {
+    undoManager?.undo();
+  }
+
+  function redo() {
+    undoManager?.redo();
+  }
+
+  // The colour the active drawing tool paints with; the swatch row binds
+  // to this and writes back through setActiveColor.
+  const activeColor = $derived(
+    activeTool === 'pen' ? inkColor : highlightColor
+  );
+
+  function setActiveColor(color: string) {
+    if (activeTool === 'pen') inkColor = color;
+    else highlightColor = color;
+  }
+
+  // --- Text selection → text-aware highlight / comment ----------------------
+
+  type PdfSelection = {
+    range: Range;
+    pageEl: HTMLElement;
+    pageNumber: number;
+    viewport: PdfViewport;
+  };
+
+  /** Resolve the current DOM selection to the PDF page it sits in, or
+   *  null when there's no usable text selection inside a rendered page. */
+  function readPdfSelection(): PdfSelection | null {
+    if (!container) return null;
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0) return null;
+    const range = sel.getRangeAt(0);
+    const node = range.commonAncestorContainer;
+    const el =
+      node.nodeType === Node.TEXT_NODE
+        ? node.parentElement
+        : (node as Element | null);
+    if (!el || !container.contains(el)) return null;
+    // Scope to our wrapper <figure>: pdf.js also stamps data-page-number
+    // on its inner `.page` div, so a bare [data-page-number] would match
+    // that instead and the `.page` lookup below would then fail.
+    const figure = el.closest<HTMLElement>('figure[data-page-number]');
+    const pageEl = figure?.querySelector<HTMLElement>('.page') ?? null;
+    if (!figure || !pageEl) return null;
+    const pageNumber = Number(figure.dataset.pageNumber);
+    const viewport = pageViewports.get(pageNumber);
+    if (!Number.isFinite(pageNumber) || !viewport) return null;
+    return { range, pageEl, pageNumber, viewport };
+  }
+
+  /** Convert the selection's per-line client rects into PDF user-space
+   *  rects, clipped to the owning page so a spill onto the next page
+   *  doesn't produce mis-placed quads. */
+  function selectionRectsToPdf(selection: PdfSelection): PdfRect[] {
+    const { range, pageEl, viewport } = selection;
+    const pageRect = pageEl.getBoundingClientRect();
+    const rects: PdfRect[] = [];
+    for (const cr of Array.from(range.getClientRects())) {
+      if (cr.width < 1 || cr.height < 1) continue;
+      if (cr.bottom <= pageRect.top || cr.top >= pageRect.bottom) continue;
+      const [x1, y1] = viewport.convertToPdfPoint(
+        cr.left - pageRect.left,
+        cr.top - pageRect.top
+      );
+      const [x2, y2] = viewport.convertToPdfPoint(
+        cr.right - pageRect.left,
+        cr.bottom - pageRect.top
+      );
+      rects.push({
+        x: Math.min(x1, x2),
+        y: Math.min(y1, y2),
+        width: Math.abs(x2 - x1),
+        height: Math.abs(y2 - y1)
+      });
+    }
+    return rects;
+  }
+
+  function refreshSelectionMenu() {
+    if (activeTool !== 'select' || isTrashed) {
+      selectionMenu = null;
+      return;
+    }
+    const selection = readPdfSelection();
+    if (!selection) {
+      selectionMenu = null;
+      return;
+    }
+    const rect = selection.range.getBoundingClientRect();
+    if (rect.width < 1 && rect.height < 1) {
+      selectionMenu = null;
+      return;
+    }
+    const centerX = Math.min(
+      window.innerWidth - 60,
+      Math.max(60, rect.left + rect.width / 2)
+    );
+    selectionMenu = { x: centerX, y: rect.top };
+  }
+
+  function clearSelectionMenu() {
+    selectionMenu = null;
+  }
+
+  function endSelectionAction() {
+    window.getSelection()?.removeAllRanges();
+    selectionMenu = null;
+  }
+
+  function highlightSelection() {
+    const selection = readPdfSelection();
+    if (!selection || isTrashed) {
+      endSelectionAction();
+      return;
+    }
+    const rects = selectionRectsToPdf(selection);
+    if (rects.length > 0) {
+      createAnnotation('highlight', selection.pageNumber - 1, rects);
+    }
+    endSelectionAction();
+  }
+
+  function commentSelection() {
+    const selection = readPdfSelection();
+    if (!selection || isTrashed) {
+      endSelectionAction();
+      return;
+    }
+    const rects = selectionRectsToPdf(selection);
+    if (rects.length > 0) {
+      // A highlight carrying a body reads as a comment everywhere (sidebar,
+      // export), so a text comment is a highlight anchored to the selection
+      // with an empty, focus-ready body.
+      const id = createAnnotation(
+        'highlight',
+        selection.pageNumber - 1,
+        rects,
+        ''
+      );
+      if (id) {
+        commentsSidebarOpen = true;
+        commentDraftFocusId = id;
+      }
+    }
+    endSelectionAction();
+  }
+
+  // Whether the active highlight/comment tool acts on the text selection
+  // (Acrobat-style text-aware tool) rather than drawing an area box.
+  const textToolActive = $derived(
+    !areaMode && (activeTool === 'highlight' || activeTool === 'comment')
+  );
+
+  // Track the live selection. In select mode we surface the bubble above
+  // it; with a text-aware tool active we instead apply that tool's
+  // annotation directly when the drag/keyboard selection ends.
+  // selectionchange covers mouse, touch and keyboard; scroll/resize hide
+  // the bubble since its fixed position would otherwise go stale.
+  $effect(() => {
+    if (!container) return;
+    const scrollEl = container;
+    let raf = 0;
+    const schedule = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(refreshSelectionMenu);
+    };
+    const onPointerUp = () => {
+      if (textToolActive && !isTrashed) {
+        // Defer a frame so the selection has finalised, then apply.
+        requestAnimationFrame(() => {
+          if (activeTool === 'highlight') highlightSelection();
+          else if (activeTool === 'comment') commentSelection();
+        });
+        return;
+      }
+      schedule();
+    };
+    document.addEventListener('selectionchange', schedule);
+    scrollEl.addEventListener('pointerup', onPointerUp);
+    scrollEl.addEventListener('scroll', clearSelectionMenu, { passive: true });
+    window.addEventListener('resize', clearSelectionMenu);
+    return () => {
+      cancelAnimationFrame(raf);
+      document.removeEventListener('selectionchange', schedule);
+      scrollEl.removeEventListener('pointerup', onPointerUp);
+      scrollEl.removeEventListener('scroll', clearSelectionMenu);
+      window.removeEventListener('resize', clearSelectionMenu);
+    };
+  });
+
+  // --- Selected-annotation action popup -------------------------------------
+
+  const selectedAnnotation = $derived(
+    selectedAnnotationId
+      ? (annotations.find((a) => a.id === selectedAnnotationId) ?? null)
+      : null
+  );
+
+  /** Position the action popup above the selected annotation, in client
+   *  coords, or hide it when the annotation is unrendered / scrolled out
+   *  of the viewport. */
+  function updateAnnotationMenu() {
+    const ann = selectedAnnotation;
+    if (!ann || isTrashed || !container) {
+      annotationMenu = null;
+      return;
+    }
+    const pageNum = ann.pageIndex + 1;
+    const figure = container.querySelector<HTMLElement>(
+      `figure[data-page-number="${pageNum}"]`
+    );
+    const pageEl = figure?.querySelector<HTMLElement>('.page') ?? null;
+    const viewport = pageViewports.get(pageNum);
+    if (!pageEl || !viewport) {
+      annotationMenu = null;
+      return;
+    }
+    const pageRect = pageEl.getBoundingClientRect();
+    let minTop = Infinity;
+    let maxBottom = -Infinity;
+    let minLeft = Infinity;
+    let maxRight = -Infinity;
+    for (const rect of ann.rects) {
+      const [x1, y1] = viewport.convertToViewportPoint(rect.x, rect.y);
+      const [x2, y2] = viewport.convertToViewportPoint(
+        rect.x + rect.width,
+        rect.y + rect.height
+      );
+      minTop = Math.min(minTop, y1, y2);
+      maxBottom = Math.max(maxBottom, y1, y2);
+      minLeft = Math.min(minLeft, x1, x2);
+      maxRight = Math.max(maxRight, x1, x2);
+    }
+    if (!Number.isFinite(minTop)) {
+      annotationMenu = null;
+      return;
+    }
+    const cont = container.getBoundingClientRect();
+    const topClient = pageRect.top + minTop;
+    const bottomClient = pageRect.top + maxBottom;
+    // Hide when the annotation is fully outside the scroll viewport.
+    if (bottomClient < cont.top || topClient > cont.bottom) {
+      annotationMenu = null;
+      return;
+    }
+    // Clamp so the bubble (drawn above `y`) stays inside the viewport.
+    const y = Math.max(topClient, cont.top + 52);
+    const centerClient = pageRect.left + (minLeft + maxRight) / 2;
+    const x = Math.min(window.innerWidth - 90, Math.max(90, centerClient));
+    annotationMenu = { x, y };
+  }
+
+  // Recompute when the selection, geometry (zoom), or annotation set
+  // changes — deferred a frame so the page layout has settled first.
+  $effect(() => {
+    void selectedAnnotationId;
+    void annotationVersion;
+    void renderVersion;
+    void zoom;
+    void zoomMode;
+    void containerWidth;
+    const id = requestAnimationFrame(updateAnnotationMenu);
+    return () => cancelAnimationFrame(id);
+  });
+
+  // Follow the annotation as the page scrolls (the popup is viewport-fixed).
+  $effect(() => {
+    if (!container) return;
+    const scrollEl = container;
+    let raf = 0;
+    const onScroll = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(updateAnnotationMenu);
+    };
+    scrollEl.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('resize', onScroll);
+    return () => {
+      cancelAnimationFrame(raf);
+      scrollEl.removeEventListener('scroll', onScroll);
+      window.removeEventListener('resize', onScroll);
+    };
+  });
+
+  // Clicking anywhere that isn't an annotation, its action popup, the
+  // selection bubble, or a sidebar clears the selection (hiding the
+  // popup). Annotation nodes also stopPropagation on pointerdown, so
+  // selecting one never trips this; the closest() check is a backstop.
+  $effect(() => {
+    const onPointerDown = (event: PointerEvent) => {
+      if (!selectedAnnotationId) return;
+      const target = event.target;
+      if (
+        target instanceof Element &&
+        target.closest(
+          '.pdf-app-annotation, .pdf-annotation-menu, .pdf-selection-menu, aside'
+        )
+      ) {
+        return;
+      }
+      selectedAnnotationId = null;
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    return () => document.removeEventListener('pointerdown', onPointerDown);
+  });
+
+  function addCommentToSelected() {
+    const ann = selectedAnnotation;
+    if (!ann || isTrashed) return;
+    // Give the highlight an (empty) body so it reads as a comment, then
+    // open the sidebar focused on it.
+    updateAnnotation(ann.id, { body: ann.body ?? '' });
+    commentsSidebarOpen = true;
+    commentDraftFocusId = ann.id;
+  }
+
+  function recolorSelected(color: string) {
+    const ann = selectedAnnotation;
+    if (!ann || isTrashed) return;
+    updateAnnotation(ann.id, { color });
+  }
+
+  function deleteSelectedAnnotation() {
+    if (selectedAnnotationId) deleteAnnotation(selectedAnnotationId);
   }
 
   function selectAnnotation(id: string | null) {
@@ -382,6 +826,185 @@
       a.createdAt.localeCompare(b.createdAt)
     );
     annotationVersion += 1;
+  }
+
+  // --- Page navigation ------------------------------------------------------
+
+  function scrollToPage(
+    pageNumber: number,
+    behavior: ScrollBehavior = 'smooth'
+  ) {
+    const total = pageNumbers.length;
+    if (total === 0) return;
+    const clamped = Math.min(total, Math.max(1, pageNumber));
+    const target = container?.querySelector<HTMLElement>(
+      `[data-page-number="${clamped}"]`
+    );
+    target?.scrollIntoView({ block: 'start', behavior });
+    activePageNumber = clamped;
+  }
+
+  function goToPreviousPage() {
+    scrollToPage(activePageNumber - 1);
+  }
+
+  function goToNextPage() {
+    scrollToPage(activePageNumber + 1);
+  }
+
+  function commitPageInput() {
+    const parsed = Number.parseInt(pageInputValue, 10);
+    if (Number.isFinite(parsed)) {
+      scrollToPage(parsed);
+    }
+    pageInputValue = String(activePageNumber);
+  }
+
+  // Keep the page-number field in sync with the scroll position, but never
+  // clobber what the user is actively typing.
+  $effect(() => {
+    if (!pageInputFocused) pageInputValue = String(activePageNumber);
+  });
+
+  function toggleNavigator() {
+    navigatorOpen = !navigatorOpen;
+  }
+
+  // --- PDF links ------------------------------------------------------------
+
+  async function openExternalUrl(url: string) {
+    // Restrict to navigational schemes — never follow file: or javascript:
+    // URLs embedded in a document.
+    if (!/^(https?:|mailto:)/i.test(url)) return;
+    try {
+      if (isTauri()) {
+        const { open } = await import('@tauri-apps/plugin-shell');
+        await open(url);
+      } else if (typeof window !== 'undefined') {
+        window.open(url, '_blank', 'noopener,noreferrer');
+      }
+    } catch (err) {
+      console.warn('[PdfNoteViewer] failed to open link', url, err);
+    }
+  }
+
+  async function followLinkDest(dest: string | unknown[] | null | undefined) {
+    if (!pdfDoc || dest == null) return;
+    const pageIndex = await resolveDestinationPageIndex(pdfDoc, dest);
+    if (pageIndex != null) scrollToPage(pageIndex + 1);
+  }
+
+  // --- In-document search ---------------------------------------------------
+
+  function openSearch() {
+    searchOpen = true;
+    void tick().then(() => searchBar?.focus());
+  }
+
+  function closeSearch() {
+    searchOpen = false;
+    if (searchDebounceTimer) {
+      clearTimeout(searchDebounceTimer);
+      searchDebounceTimer = null;
+    }
+    searchGeneration += 1;
+    searchQuery = '';
+    clearSearchResults();
+  }
+
+  function clearSearchResults() {
+    searchMatches = [];
+    searchMatchesByPage.clear();
+    activeMatchIndex = 0;
+    activeSearchMatchId = null;
+    searchBusy = false;
+    searchVersion += 1;
+  }
+
+  function handleSearchInput(value: string) {
+    searchQuery = value;
+    if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
+    searchDebounceTimer = setTimeout(() => {
+      searchDebounceTimer = null;
+      void runSearch(value);
+    }, SEARCH_DEBOUNCE_MS);
+  }
+
+  function indexMatchesByPage(matches: PdfSearchMatch[]) {
+    searchMatchesByPage.clear();
+    for (const match of matches) {
+      const list = searchMatchesByPage.get(match.pageIndex);
+      if (list) list.push(match);
+      else searchMatchesByPage.set(match.pageIndex, [match]);
+    }
+  }
+
+  async function runSearch(rawQuery: string) {
+    const query = rawQuery.trim();
+    const generation = ++searchGeneration;
+    if (!query || !pdfDoc) {
+      clearSearchResults();
+      return;
+    }
+    searchBusy = true;
+    const doc = pdfDoc;
+    const collected: PdfSearchMatch[] = [];
+    for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber += 1) {
+      let index = textIndexCache.get(pageNumber - 1);
+      if (!index) {
+        try {
+          const page = await doc.getPage(pageNumber);
+          index = await buildPageTextIndex(page);
+        } catch (err) {
+          console.warn('[PdfNoteViewer] text index failed', pageNumber, err);
+          index = { text: '', segments: [] };
+        }
+        textIndexCache.set(pageNumber - 1, index);
+      }
+      // A newer query superseded this run — abandon it.
+      if (generation !== searchGeneration) return;
+      const pageMatches = findMatchesInPage(index, pageNumber - 1, query);
+      if (pageMatches.length) collected.push(...pageMatches);
+    }
+    if (generation !== searchGeneration) return;
+    searchBusy = false;
+    searchMatches = collected;
+    indexMatchesByPage(collected);
+    if (collected.length > 0) {
+      focusMatch(0);
+    } else {
+      activeMatchIndex = 0;
+      activeSearchMatchId = null;
+      searchVersion += 1;
+    }
+  }
+
+  function focusMatch(index: number) {
+    if (searchMatches.length === 0) return;
+    const wrapped =
+      ((index % searchMatches.length) + searchMatches.length) %
+      searchMatches.length;
+    activeMatchIndex = wrapped;
+    const match = searchMatches[wrapped];
+    activeSearchMatchId = match.id;
+    searchVersion += 1;
+    scrollToPage(match.pageIndex + 1);
+    // The page may still be rendering; if its overlay is already present,
+    // centre the exact hit, otherwise the page-level scroll is enough.
+    requestAnimationFrame(() => {
+      const el = container?.querySelector<HTMLElement>(
+        `[data-search-match-id="${CSS.escape(match.id)}"]`
+      );
+      el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    });
+  }
+
+  function nextMatch() {
+    focusMatch(activeMatchIndex + 1);
+  }
+
+  function previousMatch() {
+    focusMatch(activeMatchIndex - 1);
   }
 
   function scheduleSave() {
@@ -469,8 +1092,26 @@
       case 'editor.pdf.deleteAnnotation':
         if (!isTrashed) setTool('delete');
         return true;
+      case 'editor.pdf.undo':
+        if (!isTrashed) undo();
+        return true;
+      case 'editor.pdf.redo':
+        if (!isTrashed) redo();
+        return true;
       case 'editor.pdf.toggleComments':
         commentsSidebarOpen = !commentsSidebarOpen;
+        return true;
+      case 'editor.pdf.toggleNavigator':
+        toggleNavigator();
+        return true;
+      case SEARCH_ACTIVE_NOTE_COMMAND:
+        openSearch();
+        return true;
+      case 'editor.pdf.previousPage':
+        goToPreviousPage();
+        return true;
+      case 'editor.pdf.nextPage':
+        goToNextPage();
         return true;
       case 'editor.pdf.export':
         void exportCurrentPdfNote();
@@ -866,6 +1507,7 @@
       editorListener = {
         kind: 'pdf',
         host: hostEl,
+        noteId,
         onCommand: handlePdfCommand
       };
       registerEditor(editorListener);
@@ -891,6 +1533,20 @@
       };
       localYDoc.on('update', yDocUpdateHandler);
 
+      // Undo/redo scoped to this note's annotations. trackedOrigins is
+      // limited to LOCAL_ORIGIN so undo never reverts a peer's edit or a
+      // sync merge — only changes this client authored.
+      undoManager = new Y.UndoManager(annotationsMap, {
+        trackedOrigins: new Set([LOCAL_ORIGIN])
+      });
+      const refreshUndoState = () => {
+        canUndo = (undoManager?.undoStack.length ?? 0) > 0;
+        canRedo = (undoManager?.redoStack.length ?? 0) > 0;
+      };
+      undoManager.on('stack-item-added', refreshUndoState);
+      undoManager.on('stack-item-popped', refreshUndoState);
+      undoManager.on('stack-cleared', refreshUndoState);
+
       // Awareness goes alongside the Y.Doc — the CollabProvider takes
       // both as constructor args. Seed the local user field now so peers
       // see our name + colour as soon as we join the room.
@@ -899,6 +1555,9 @@
       try {
         const session = await etebaseSession();
         const userName = session?.username ?? 'You';
+        // Stamp new annotations with the real username so authors are
+        // attributable across collaborators (not all "local").
+        if (session?.username) localAuthorId = session.username;
         localAwareness.setLocalStateField('user', {
           name: userName,
           color: pickCursorColor(userName)
@@ -929,6 +1588,11 @@
       // placeholders correctly before (and instead of) a canvas mounts.
       // PDF.js caches page proxies, so this is cheap and one-shot.
       void prefetchPageSizes(pdfDoc, firstPage);
+      // Document outline (bookmarks) for the navigator's Outline tab.
+      // Resolved off the load path; the tab simply stays empty until ready.
+      void loadFlatOutline(pdfDoc).then((items) => {
+        outline = items;
+      });
       loading = false;
       savingState = 'saved';
       saveReady = true;
@@ -977,11 +1641,51 @@
     };
   });
 
+  // Local keyboard handling that shouldn't go through the hotkey bus:
+  //  - Escape closes the find bar from anywhere in the viewer.
+  //  - Delete/Backspace removes the selected annotation, but only when
+  //    focus isn't in a text field (so editing a comment still works).
+  // (Opening find is the app-level "search active note" bus command.)
+  $effect(() => {
+    if (!hostEl) return;
+    const host = hostEl;
+    const onKeydown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && searchOpen) {
+        closeSearch();
+        return;
+      }
+      if (event.key === 'Delete' || event.key === 'Backspace') {
+        if (isTrashed || !selectedAnnotationId) return;
+        const target = event.target as HTMLElement | null;
+        const tag = target?.tagName;
+        if (
+          tag === 'INPUT' ||
+          tag === 'TEXTAREA' ||
+          target?.isContentEditable
+        ) {
+          return;
+        }
+        event.preventDefault();
+        deleteAnnotation(selectedAnnotationId);
+      }
+    };
+    host.addEventListener('keydown', onKeydown);
+    return () => host.removeEventListener('keydown', onKeydown);
+  });
+
   onDestroy(() => {
     if (saveTimer) {
       void flushSave();
     }
     saveReady = false;
+    if (searchDebounceTimer) {
+      clearTimeout(searchDebounceTimer);
+      searchDebounceTimer = null;
+    }
+    searchGeneration += 1;
+    textIndexCache.clear();
+    searchMatchesByPage.clear();
+    pageViewports.clear();
     if (editorListener) {
       unregisterEditor(editorListener);
       editorListener = null;
@@ -1002,6 +1706,8 @@
     pageRenderCancelled.clear();
     pageCancelHooks.clear();
     void pdfDoc?.cleanup();
+    undoManager?.destroy();
+    undoManager = null;
     if (yDoc && yDocUpdateHandler) {
       yDoc.off('update', yDocUpdateHandler);
     }
@@ -1028,6 +1734,9 @@
     let currentViewport: ReturnType<
       Awaited<ReturnType<PdfDocument['getPage']>>['getViewport']
     > | null = null;
+    // Link annotations for this page (external URLs + internal jumps),
+    // fetched once per draw and overlaid as clickable anchors.
+    let currentLinks: PdfLink[] = [];
     // Register the in-flight-cancel hook so the renderObserver can pre-empt
     // this page's render the instant the page leaves the band — even if
     // the DOM teardown is still inside its 200 ms grace window. Three
@@ -1046,16 +1755,108 @@
       pageView?.cancelRendering();
     });
 
+    // Search-hit overlay: translucent boxes over every match on this page,
+    // with the active hit emphasised. Read imperatively from the parent's
+    // per-page match map; the `searchVersion` param triggers the refresh.
+    function renderSearchLayer() {
+      const pageEl = pageSurface.querySelector<HTMLElement>('.page');
+      const viewport = currentViewport;
+      if (!pageEl || !viewport) return;
+      pageEl.querySelector('.pdf-search-layer')?.remove();
+      const matches = searchMatchesByPage.get(current.pageNumber - 1);
+      if (!matches || matches.length === 0) return;
+      const layer = document.createElement('div');
+      layer.className = 'pdf-search-layer';
+      for (const match of matches) {
+        for (const rect of match.rects) {
+          const [x1, y1] = viewport.convertToViewportPoint(rect.x, rect.y);
+          const [x2, y2] = viewport.convertToViewportPoint(
+            rect.x + rect.width,
+            rect.y + rect.height
+          );
+          const node = document.createElement('div');
+          node.className = 'pdf-search-hit';
+          if (match.id === activeSearchMatchId) {
+            node.classList.add('pdf-search-hit-active');
+          }
+          node.dataset.searchMatchId = match.id;
+          node.style.left = `${Math.min(x1, x2)}px`;
+          node.style.top = `${Math.min(y1, y2)}px`;
+          node.style.width = `${Math.abs(x2 - x1)}px`;
+          node.style.height = `${Math.abs(y2 - y1)}px`;
+          layer.append(node);
+        }
+      }
+      pageEl.append(layer);
+    }
+
+    // Clickable overlay for the page's link annotations. Sits below the
+    // app-annotation layer, so links are only hit in select mode (when
+    // that layer passes pointer events through).
+    function renderLinkLayer() {
+      const pageEl = pageSurface.querySelector<HTMLElement>('.page');
+      const viewport = currentViewport;
+      if (!pageEl || !viewport) return;
+      pageEl.querySelector('.pdf-link-layer')?.remove();
+      if (currentLinks.length === 0) return;
+      const layer = document.createElement('div');
+      layer.className = 'pdf-link-layer';
+      for (const link of currentLinks) {
+        if (!Array.isArray(link.rect) || link.rect.length < 4) continue;
+        const [x1, y1] = viewport.convertToViewportPoint(
+          link.rect[0],
+          link.rect[1]
+        );
+        const [x2, y2] = viewport.convertToViewportPoint(
+          link.rect[2],
+          link.rect[3]
+        );
+        const node = document.createElement(link.url ? 'a' : 'button');
+        node.className = 'pdf-link';
+        node.style.left = `${Math.min(x1, x2)}px`;
+        node.style.top = `${Math.min(y1, y2)}px`;
+        node.style.width = `${Math.abs(x2 - x1)}px`;
+        node.style.height = `${Math.abs(y2 - y1)}px`;
+        if (link.url) {
+          const anchor = node as HTMLAnchorElement;
+          anchor.href = link.url;
+          anchor.title = link.url;
+          anchor.rel = 'noopener noreferrer';
+          anchor.addEventListener('click', (event) => {
+            event.preventDefault();
+            void openExternalUrl(link.url as string);
+          });
+        } else {
+          node.addEventListener('click', (event) => {
+            event.preventDefault();
+            void followLinkDest(link.dest);
+          });
+        }
+        layer.append(node);
+      }
+      pageEl.append(layer);
+    }
+
     function renderAppAnnotations() {
       const pageEl = pageSurface.querySelector<HTMLElement>('.page');
       const viewport = currentViewport;
       if (!pageEl || !viewport) return;
 
+      renderLinkLayer();
+      renderSearchLayer();
+
       pageEl.querySelector('.pdf-app-annotation-layer')?.remove();
       const layer = document.createElement('div');
       layer.className = 'pdf-app-annotation-layer';
-      layer.style.pointerEvents =
-        current.activeTool === 'select' || isTrashed ? 'none' : 'auto';
+      // Text-aware modes (select, plus highlight/comment when NOT in area
+      // mode) let pointer events fall through to the text layer so the
+      // user can select words; everything else captures drags to draw.
+      const textMode =
+        current.activeTool === 'select' ||
+        ((current.activeTool === 'highlight' ||
+          current.activeTool === 'comment') &&
+          !current.areaMode);
+      layer.style.pointerEvents = textMode || isTrashed ? 'none' : 'auto';
       pageEl.append(layer);
 
       const pageAnnotations = annotations.filter(
@@ -1186,7 +1987,7 @@
             'polyline'
           );
           previewStroke.setAttribute('fill', 'none');
-          previewStroke.setAttribute('stroke', INK_COLOR);
+          previewStroke.setAttribute('stroke', inkColor);
           previewStroke.setAttribute(
             'stroke-width',
             `${INK_WIDTH * viewport.scale}`
@@ -1232,7 +2033,7 @@
                 {
                   id: crypto.randomUUID(),
                   points: pdfPoints,
-                  color: INK_COLOR,
+                  color: inkColor,
                   width: INK_WIDTH
                 }
               ]
@@ -1245,11 +2046,15 @@
         return;
       }
 
-      if (
-        current.activeTool !== 'highlight' &&
-        current.activeTool !== 'comment' &&
-        current.activeTool !== 'signature'
-      ) {
+      // Drag-to-draw a rectangle is for signatures and for highlight/comment
+      // only in area mode. In text mode highlight/comment come from the
+      // selection (see the selection effect), so no drag handler here.
+      const wantsAreaDraw =
+        current.activeTool === 'signature' ||
+        ((current.activeTool === 'highlight' ||
+          current.activeTool === 'comment') &&
+          current.areaMode);
+      if (!wantsAreaDraw) {
         return;
       }
 
@@ -1332,10 +2137,6 @@
               : current.activeTool === 'signature'
                 ? 'signature'
                 : 'highlight';
-          const body =
-            annotationType === 'comment'
-              ? window.prompt('Comment')?.trim()
-              : undefined;
           const activeSignature =
             annotationType === 'signature' ? getActiveSignature() : null;
           const signature =
@@ -1343,11 +2144,13 @@
               ? cloneSignatureSnapshot(activeSignature)
               : undefined;
           if (annotationType === 'signature' && !signature) return;
+          // Comments are created empty; the sidebar editor opens focused
+          // for the body (see commentDraftFocusId), replacing window.prompt.
           createAnnotation(
             annotationType,
             current.pageNumber - 1,
             rect,
-            body || undefined,
+            undefined,
             signature ? { signature } : {}
           );
         };
@@ -1405,6 +2208,9 @@
       const viewerScale = requestedScale / PDF_TO_CSS_UNITS;
       const viewport = page.getViewport({ scale: requestedScale });
       currentViewport = viewport;
+      // Expose the rendered viewport so text-selection client-rects can be
+      // mapped back into PDF user space for text-aware annotations.
+      pageViewports.set(request.pageNumber, viewport);
 
       if (cancelled || generation !== drawGeneration) return;
       const eventBus = new pdfViewer.EventBus();
@@ -1423,6 +2229,21 @@
       });
       pageView.setPdfPage(page);
       try {
+        // Link annotations for the clickable overlay. Best-effort: a
+        // failure here shouldn't stop the page from rendering.
+        try {
+          const annots = await page.getAnnotations({ intent: 'display' });
+          if (cancelled || generation !== drawGeneration) return;
+          currentLinks = annots
+            .filter((a: { subtype?: string }) => a.subtype === 'Link')
+            .map((a: { rect: number[]; url?: string; dest?: unknown }) => ({
+              rect: a.rect,
+              url: a.url,
+              dest: a.dest as string | unknown[] | null | undefined
+            }));
+        } catch {
+          currentLinks = [];
+        }
         await pageView.draw();
         if (cancelled || generation !== drawGeneration) return;
         renderAppAnnotations();
@@ -1512,13 +2333,25 @@
     >
       <div class="flex items-center gap-0.5">
         <ToolbarButton
+          active={navigatorOpen}
+          onclick={toggleNavigator}
+          aria-label={tUi('pdf.toolbar.navigator')}
+          title={tUi('pdf.toolbar.navigator')}
+          aria-pressed={navigatorOpen}
+        >
+          <PanelLeft aria-hidden="true" />
+        </ToolbarButton>
+
+        <ToolbarSeparator />
+
+        <ToolbarButton
           active={activeTool === 'select'}
           onclick={() => setTool('select')}
           aria-label={tUi('pdf.toolbar.select')}
           title={tUi('pdf.toolbar.select')}
           aria-pressed={activeTool === 'select'}
         >
-          <MousePointer2 aria-hidden="true" />
+          <TextCursor aria-hidden="true" />
         </ToolbarButton>
 
         <ToolbarButton
@@ -1579,6 +2412,68 @@
           <Trash2 aria-hidden="true" />
         </ToolbarButton>
 
+        {#if activeTool === 'highlight' || activeTool === 'comment' || activeTool === 'pen'}
+          <ToolbarSeparator />
+        {/if}
+
+        {#if activeTool === 'highlight' || activeTool === 'comment'}
+          <ToolbarButton
+            active={areaMode}
+            onclick={() => (areaMode = !areaMode)}
+            aria-label={tUi('pdf.toolbar.area')}
+            title={tUi('pdf.toolbar.area')}
+            aria-pressed={areaMode}
+            disabled={isTrashed}
+          >
+            <SquareDashed aria-hidden="true" />
+          </ToolbarButton>
+        {/if}
+
+        {#if activeTool === 'highlight' || activeTool === 'pen'}
+          <div
+            class="flex items-center gap-1 px-1"
+            role="group"
+            aria-label={tUi('pdf.toolbar.color')}
+          >
+            {#each ANNOTATION_COLORS as color (color)}
+              <button
+                type="button"
+                class="size-5 rounded-full transition hover:scale-110"
+                style="background-color: {color}; box-shadow: {activeColor ===
+                color
+                  ? '0 0 0 2px var(--ring)'
+                  : '0 0 0 1px var(--border)'}"
+                aria-label={tUi('pdf.toolbar.colorSwatch').replace(
+                  '{color}',
+                  color
+                )}
+                aria-pressed={activeColor === color}
+                onclick={() => setActiveColor(color)}
+              ></button>
+            {/each}
+          </div>
+        {/if}
+
+        <ToolbarSeparator />
+
+        <ToolbarButton
+          onclick={undo}
+          disabled={isTrashed || !canUndo}
+          aria-label={tUi('pdf.toolbar.undo')}
+          title={tUi('pdf.toolbar.undo')}
+        >
+          <Undo2 aria-hidden="true" />
+        </ToolbarButton>
+
+        <ToolbarButton
+          onclick={redo}
+          disabled={isTrashed || !canRedo}
+          aria-label={tUi('pdf.toolbar.redo')}
+          title={tUi('pdf.toolbar.redo')}
+        >
+          <Redo2 aria-hidden="true" />
+        </ToolbarButton>
+
         <ToolbarSeparator />
 
         <ToolbarButton
@@ -1591,9 +2486,90 @@
           <MessagesSquare aria-hidden="true" />
         </ToolbarButton>
       </div>
+
+      <div class="flex items-center gap-0.5">
+        <ToolbarButton
+          onclick={goToPreviousPage}
+          disabled={activePageNumber <= 1}
+          aria-label={tUi('pdf.toolbar.previousPage')}
+          title={tUi('pdf.toolbar.previousPage')}
+        >
+          <ChevronLeft aria-hidden="true" />
+        </ToolbarButton>
+
+        <div
+          class="flex shrink-0 items-center gap-1 whitespace-nowrap text-xs text-muted-foreground"
+        >
+          <input
+            type="text"
+            inputmode="numeric"
+            value={pageInputValue}
+            aria-label={tUi('pdf.page.inputLabel')}
+            class="h-7 w-9 shrink-0 rounded-md border border-border bg-background text-center tabular-nums outline-none focus:ring-1 focus:ring-ring"
+            oninput={(event) =>
+              (pageInputValue = (event.currentTarget as HTMLInputElement)
+                .value)}
+            onfocus={(event) => {
+              pageInputFocused = true;
+              (event.currentTarget as HTMLInputElement).select();
+            }}
+            onblur={() => {
+              pageInputFocused = false;
+              commitPageInput();
+            }}
+            onkeydown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                (event.currentTarget as HTMLInputElement).blur();
+              }
+            }}
+          />
+          <span class="shrink-0 whitespace-nowrap tabular-nums">
+            {tUi('pdf.page.totalLabel').replace(
+              '{total}',
+              String(pageNumbers.length)
+            )}
+          </span>
+        </div>
+
+        <ToolbarButton
+          onclick={goToNextPage}
+          disabled={activePageNumber >= pageNumbers.length}
+          aria-label={tUi('pdf.toolbar.nextPage')}
+          title={tUi('pdf.toolbar.nextPage')}
+        >
+          <ChevronRight aria-hidden="true" />
+        </ToolbarButton>
+      </div>
     </Toolbar>
 
+    {#if searchOpen}
+      <FindBar
+        bind:this={searchBar}
+        query={searchQuery}
+        matchCount={searchMatches.length}
+        activeIndex={activeMatchIndex}
+        busy={searchBusy}
+        onInput={handleSearchInput}
+        onNext={nextMatch}
+        onPrevious={previousMatch}
+        onClose={closeSearch}
+      />
+    {/if}
+
     <div class="flex min-h-0 flex-1 overflow-hidden">
+      {#if navigatorOpen && pdfDoc}
+        <PdfNavigatorSidebar
+          {pdfDoc}
+          pageCount={pageNumbers.length}
+          {pageSizes}
+          {activePageNumber}
+          {outline}
+          onJump={(page) => scrollToPage(page)}
+          onClose={() => (navigatorOpen = false)}
+        />
+      {/if}
+
       <div
         bind:this={container}
         use:ctrlWheelZoom
@@ -1619,9 +2595,11 @@
                   zoomMode,
                   annotationVersion,
                   activeTool,
+                  areaMode,
                   selectedAnnotationId,
                   shouldRender,
-                  invalidation
+                  invalidation,
+                  searchVersion
                 }}
                 style="width:{size.width}px; height:{size.height}px"
                 class="pdf-page-host pdfViewer bg-white shadow-sm ring-1 ring-border"
@@ -1642,12 +2620,41 @@
           annotations={commentAnnotations}
           {selectedAnnotationId}
           {isTrashed}
+          currentAuthorId={localAuthorId}
+          autofocusId={commentDraftFocusId}
           onJump={jumpToAnnotation}
           onUpdate={updateAnnotation}
           onDelete={deleteAnnotation}
+          onAutofocusHandled={() => (commentDraftFocusId = null)}
+          onClose={() => (commentsSidebarOpen = false)}
         />
       {/if}
     </div>
+
+    {#if selectionMenu && activeTool === 'select' && !isTrashed}
+      <PdfSelectionMenu
+        x={selectionMenu.x}
+        y={selectionMenu.y}
+        onHighlight={highlightSelection}
+        onComment={commentSelection}
+      />
+    {/if}
+
+    {#if annotationMenu && selectedAnnotation && !isTrashed}
+      <PdfAnnotationMenu
+        x={annotationMenu.x}
+        y={annotationMenu.y}
+        canAddComment={selectedAnnotation.type === 'highlight' &&
+          typeof selectedAnnotation.body !== 'string'}
+        colorable={selectedAnnotation.type === 'highlight' ||
+          selectedAnnotation.type === 'comment'}
+        colors={ANNOTATION_COLORS}
+        activeColor={selectedAnnotation.color}
+        onAddComment={addCommentToSelected}
+        onPickColor={recolorSelected}
+        onDelete={deleteSelectedAnnotation}
+      />
+    {/if}
 
     {#if !mobileToolbar}
       <div
@@ -1885,5 +2892,57 @@
 
   :global(.pdf-page-host .pdf-app-annotation-resolved) {
     opacity: 0.36;
+  }
+
+  /* Link overlay: sits above the canvas/text but below the annotation
+     layer (z-index 3), so links are only clickable in select mode when
+     that layer passes pointer events through. */
+  :global(.pdf-page-host .pdf-link-layer) {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    overflow: clip;
+    /* The layer spans the whole page above the text layer; without this
+       it would swallow pointer events and block text selection. Only the
+       individual link hotspots re-enable pointer events. */
+    pointer-events: none;
+  }
+
+  :global(.pdf-page-host .pdf-link) {
+    position: absolute;
+    display: block;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    border-radius: 2px;
+    cursor: pointer;
+    pointer-events: auto;
+  }
+
+  :global(.pdf-page-host .pdf-link:hover) {
+    background: color-mix(in srgb, var(--ring) 18%, transparent);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--ring) 55%, transparent);
+  }
+
+  /* Search-hit overlay: non-interactive translucent boxes. */
+  :global(.pdf-page-host .pdf-search-layer) {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    overflow: clip;
+    pointer-events: none;
+  }
+
+  :global(.pdf-page-host .pdf-search-hit) {
+    position: absolute;
+    border-radius: 1px;
+    background: rgb(250 204 21 / 0.42);
+    mix-blend-mode: multiply;
+  }
+
+  :global(.pdf-page-host .pdf-search-hit-active) {
+    background: rgb(249 115 22 / 0.55);
+    box-shadow: 0 0 0 1px rgb(234 88 12 / 0.9);
   }
 </style>

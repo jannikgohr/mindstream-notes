@@ -37,6 +37,7 @@
 
 import { openSettings } from '$lib/settings/store.svelte';
 import { openSearch } from '$lib/search/store.svelte';
+import { searchActiveNote } from './bus.svelte';
 import { openShortcutHelp } from './help.svelte';
 import {
   openRightSidebar,
@@ -85,8 +86,13 @@ export interface GlobalCommand extends BaseCommand {
    * without a yielded `void` Promise) because the listener is on the
    * capture phase and a throw would suppress the default handling
    * without re-firing.
+   *
+   * Return `false` to mean "not handled" so the manager lets the
+   * keystroke fall through to the browser/OS (used by "search active
+   * note", which should only swallow Mod+F when it actually opens find).
+   * Returning void counts as handled.
    */
-  run: () => void;
+  run: () => boolean | void;
 }
 
 export interface EditorCommand extends BaseCommand {
@@ -346,6 +352,17 @@ export const HOTKEY_COMMANDS: CommandDefinition[] = [
     // so we add Shift to disambiguate.
     defaultBinding: 'mod+shift+f',
     run: () => openSearch()
+  },
+  {
+    id: 'global.searchActiveNote',
+    scope: 'global',
+    labelKey: 'hotkeys.command.global.searchActiveNote',
+    // Mod+F — the universal in-document find shortcut. Routed through the
+    // bus to the active note's editor, so it's authored once at app
+    // level rather than per editor kind. Returns the editor's handled
+    // flag so an unhandled Mod+F falls through to the browser's find.
+    defaultBinding: 'mod+f',
+    run: () => searchActiveNote(ui.activeNoteId)
   },
   {
     id: 'global.toggleNoteOverview',
@@ -636,10 +653,45 @@ export const HOTKEY_COMMANDS: CommandDefinition[] = [
     defaultBinding: null
   },
   {
+    id: 'editor.pdf.undo',
+    scope: 'editor',
+    editorKind: 'pdf',
+    labelKey: 'hotkeys.command.editor.pdf.undo',
+    defaultBinding: null
+  },
+  {
+    id: 'editor.pdf.redo',
+    scope: 'editor',
+    editorKind: 'pdf',
+    labelKey: 'hotkeys.command.editor.pdf.redo',
+    defaultBinding: null
+  },
+  {
     id: 'editor.pdf.toggleComments',
     scope: 'editor',
     editorKind: 'pdf',
     labelKey: 'hotkeys.command.editor.pdf.toggleComments',
+    defaultBinding: null
+  },
+  {
+    id: 'editor.pdf.toggleNavigator',
+    scope: 'editor',
+    editorKind: 'pdf',
+    labelKey: 'hotkeys.command.editor.pdf.toggleNavigator',
+    defaultBinding: null
+  },
+  {
+    id: 'editor.pdf.previousPage',
+    scope: 'editor',
+    editorKind: 'pdf',
+    labelKey: 'hotkeys.command.editor.pdf.previousPage',
+    defaultBinding: null
+  },
+  {
+    id: 'editor.pdf.nextPage',
+    scope: 'editor',
+    editorKind: 'pdf',
+    labelKey: 'hotkeys.command.editor.pdf.nextPage',
     defaultBinding: null
   },
   {

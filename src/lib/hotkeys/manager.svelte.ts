@@ -212,6 +212,22 @@ function targetIsHotkeyRecorder(event: KeyboardEvent): boolean {
 }
 
 /**
+ * The literal browser "find in page" chord — Cmd+F on macOS, Ctrl+F
+ * elsewhere, with no other modifiers. Matched straight off the event
+ * (not via a binding) because we suppress it unconditionally: the
+ * webview's native find is useless against our virtualized PDF canvas
+ * and contenteditable editors, so it must never open regardless of what
+ * the user has (or hasn't) bound to the chord. A command bound to it —
+ * by default "search active note" — still runs via the normal dispatch
+ * path; this only guarantees the browser's own find never appears.
+ */
+function isBrowserFindChord(e: KeyboardEvent): boolean {
+  if ((e.key ? e.key.toLowerCase() : '') !== 'f') return false;
+  if (e.altKey || e.shiftKey) return false;
+  return isMac() ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
+}
+
+/**
  * Crepe's ProseMirror keymap binds a handful of chords to its built-in
  * commands at editor construction. These are baked in and we can't
  * uninstall them from outside, so a user who unsets `Mod+B` in our
@@ -332,6 +348,13 @@ export function initHotkeys(): () => void {
   const onKeyDown = (event: KeyboardEvent) => {
     if (targetIsHotkeyRecorder(event)) {
       return;
+    }
+    // Kill the webview's native find before anything else — including the
+    // blocked-input short-circuit below — so Mod+F never opens it, no
+    // matter where focus is or what's bound. Whatever command (if any)
+    // owns the chord still runs through the normal path that follows.
+    if (isBrowserFindChord(event)) {
+      event.preventDefault();
     }
     if (targetIsBlockedInput(event)) {
       return;
