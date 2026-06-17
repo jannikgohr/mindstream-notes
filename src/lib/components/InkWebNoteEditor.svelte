@@ -6,12 +6,14 @@
     Copy,
     Eraser,
     LassoSelect,
+    MoreHorizontal,
     MousePointer2,
     MoonStar,
     Palette,
     PenLine,
     Redo2,
     Scissors,
+    Settings2,
     Sun,
     Trash2,
     Undo2
@@ -19,7 +21,6 @@
   import {
     Toolbar,
     ToolbarButton,
-    ToolbarCollapseWhenOverflow,
     ToolbarSeparator,
     ToolbarZoomControls
   } from '$lib/components/ui/toolbar';
@@ -211,9 +212,13 @@
   let editorListener: EditorListener | null = null;
   let mobileToolbar = $state(false);
   let zoomMenuOpen = $state(false);
-  let colorPaletteOpen = $state(false);
-  let colorPaletteButton = $state<HTMLButtonElement | null>(null);
-  let colorPaletteMenu = $state<HTMLDivElement | null>(null);
+  let toolbarMenuOpen = $state<'style' | 'selection' | 'settings' | null>(null);
+  let styleMenuButton = $state<HTMLButtonElement | null>(null);
+  let styleMenuEl = $state<HTMLDivElement | null>(null);
+  let selectionMenuButton = $state<HTMLButtonElement | null>(null);
+  let selectionMenuEl = $state<HTMLDivElement | null>(null);
+  let settingsMenuButton = $state<HTMLButtonElement | null>(null);
+  let settingsMenuEl = $state<HTMLDivElement | null>(null);
   let zoomUiVersion = $state(0);
 
   let tool = $state<ToolMode>('pen');
@@ -269,7 +274,7 @@
     void zoomUiVersion;
     return Math.abs(view.scale - minScale()) < 0.01;
   });
-  const brushPreviewSize = $derived(Math.max(4, Math.min(18, width * 1.25)));
+  const brushLineHeight = $derived(Math.max(2, Math.min(12, width)));
   const brushSizeText = $derived(
     Number.isInteger(width) ? String(width) : width.toFixed(1)
   );
@@ -2121,11 +2126,11 @@
 
   function selectPresetColor(value: string) {
     setColor(value);
-    colorPaletteOpen = false;
+    toolbarMenuOpen = null;
   }
 
-  function toggleColorPalette() {
-    colorPaletteOpen = !colorPaletteOpen;
+  function toggleToolbarMenu(menu: 'style' | 'selection' | 'settings') {
+    toolbarMenuOpen = toolbarMenuOpen === menu ? null : menu;
   }
 
   function setWidth(value: string) {
@@ -2255,15 +2260,19 @@
   }
 
   $effect(() => {
-    if (!colorPaletteOpen) return;
+    if (!toolbarMenuOpen) return;
     const onPointerDown = (event: PointerEvent) => {
       const target = event.target as Node;
-      if (colorPaletteMenu?.contains(target)) return;
-      if (colorPaletteButton?.contains(target)) return;
-      colorPaletteOpen = false;
+      if (styleMenuEl?.contains(target)) return;
+      if (styleMenuButton?.contains(target)) return;
+      if (selectionMenuEl?.contains(target)) return;
+      if (selectionMenuButton?.contains(target)) return;
+      if (settingsMenuEl?.contains(target)) return;
+      if (settingsMenuButton?.contains(target)) return;
+      toolbarMenuOpen = null;
     };
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') colorPaletteOpen = false;
+      if (event.key === 'Escape') toolbarMenuOpen = null;
     };
     queueMicrotask(() => window.addEventListener('pointerdown', onPointerDown));
     window.addEventListener('keydown', onKey);
@@ -2585,240 +2594,314 @@
 
 {#snippet inkToolbar(dense: boolean, className: string)}
   <Toolbar {dense} aria-label={tUi('ink.toolbar.label')} class={className}>
-    <div class="flex items-center gap-0.5">
-      <ToolbarButton
-        active={tool === 'pen'}
-        aria-label={tUi('ink.toolbar.pen')}
-        title={tUi('ink.toolbar.pen')}
-        aria-pressed={tool === 'pen'}
-        onclick={() => setTool('pen')}
-      >
-        <PenLine aria-hidden="true" />
-      </ToolbarButton>
-
-      <ToolbarButton
-        active={tool === 'eraser'}
-        aria-label={tUi('ink.toolbar.eraser')}
-        title={tUi('ink.toolbar.eraser')}
-        aria-pressed={tool === 'eraser'}
-        onclick={() => setTool('eraser')}
-      >
-        <Eraser aria-hidden="true" />
-      </ToolbarButton>
-
-      <ToolbarButton
-        active={tool === 'lasso'}
-        aria-label={tUi('ink.toolbar.lasso')}
-        title={tUi('ink.toolbar.lasso')}
-        aria-pressed={tool === 'lasso'}
-        onclick={() => setTool('lasso')}
-      >
-        <LassoSelect aria-hidden="true" />
-      </ToolbarButton>
-
-      {#if hasSelection || hasSelectionClipboard}
-        <ToolbarSeparator />
-        <div
-          class="flex items-center gap-0.5"
-          role="group"
-          aria-label={tUi('ink.toolbar.selectionActions')}
+    <div class="flex min-w-0 flex-1 items-center gap-0.5">
+      <div class="flex shrink-0 items-center gap-0.5">
+        <ToolbarButton
+          active={tool === 'pen'}
+          aria-label={tUi('ink.toolbar.pen')}
+          title={tUi('ink.toolbar.pen')}
+          aria-pressed={tool === 'pen'}
+          onclick={() => setTool('pen')}
         >
-          <ToolbarButton
-            aria-label={tUi('ink.toolbar.cutSelected')}
-            title={tUi('ink.toolbar.cutSelected')}
-            disabled={isTrashed || !hasSelection}
-            onclick={cutSelection}
-          >
-            <Scissors aria-hidden="true" />
-          </ToolbarButton>
-          <ToolbarButton
-            aria-label={tUi('ink.toolbar.copySelected')}
-            title={tUi('ink.toolbar.copySelected')}
-            disabled={!hasSelection}
-            onclick={copySelection}
-          >
-            <Copy aria-hidden="true" />
-          </ToolbarButton>
-          <ToolbarButton
-            aria-label={tUi('ink.toolbar.pasteInk')}
-            title={tUi('ink.toolbar.pasteInk')}
-            disabled={isTrashed || !hasSelectionClipboard}
-            onclick={pasteSelection}
-          >
-            <ClipboardPaste aria-hidden="true" />
-          </ToolbarButton>
-          <ToolbarButton
-            aria-label={tUi('ink.toolbar.deleteSelected')}
-            title={tUi('ink.toolbar.deleteSelected')}
-            disabled={isTrashed || !hasSelection}
-            onclick={deleteSelection}
-          >
-            <Trash2 aria-hidden="true" />
-          </ToolbarButton>
-        </div>
-      {/if}
+          <PenLine aria-hidden="true" />
+        </ToolbarButton>
 
-      <ToolbarSeparator />
+        <ToolbarButton
+          active={tool === 'eraser'}
+          aria-label={tUi('ink.toolbar.eraser')}
+          title={tUi('ink.toolbar.eraser')}
+          aria-pressed={tool === 'eraser'}
+          onclick={() => setTool('eraser')}
+        >
+          <Eraser aria-hidden="true" />
+        </ToolbarButton>
 
-      <label
-        class="grid size-9 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-        aria-label={tUi('ink.toolbar.color')}
-        title={tUi('ink.toolbar.color')}
-      >
-        <input
-          class="size-6 cursor-pointer border-0 bg-transparent p-0"
-          type="color"
-          value={colorHex}
-          oninput={(e) => setColor(e.currentTarget.value)}
-        />
-      </label>
-      <ToolbarCollapseWhenOverflow>
-        {#snippet expanded()}
-          <div
-            class="flex shrink-0 items-center gap-1"
-            role="group"
-            aria-label={tUi('ink.toolbar.colorPresets')}
-          >
-            {#each INK_COLOR_SWATCHES as swatch, index (swatch)}
-              {@const activeSwatch = colorArgb === colorHexToArgb(swatch)}
-              <button
-                type="button"
-                class={`grid size-7 place-items-center rounded-md border border-border transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${activeSwatch ? 'ring-2 ring-ring' : ''}`}
-                aria-label={`${tUi('ink.toolbar.colorPreset')} ${index + 1}`}
-                aria-pressed={activeSwatch}
-                title={`${tUi('ink.toolbar.colorPreset')} ${index + 1}`}
-                onclick={() => setColor(swatch)}
-              >
-                <span
-                  class="size-4 rounded-full border border-black/20 shadow-sm"
-                  style="background-color: {swatch};"
-                  aria-hidden="true"
-                ></span>
-              </button>
-            {/each}
-          </div>
-        {/snippet}
-
-        {#snippet collapsed()}
-          <div class="relative shrink-0">
-            <ToolbarButton
-              bind:ref={colorPaletteButton}
-              active={colorPaletteOpen}
-              aria-label={tUi('ink.toolbar.colorPresets')}
-              title={tUi('ink.toolbar.colorPresets')}
-              aria-haspopup="menu"
-              aria-expanded={colorPaletteOpen}
-              onclick={toggleColorPalette}
-            >
-              <Palette aria-hidden="true" />
-            </ToolbarButton>
-
-            {#if colorPaletteOpen}
-              <div
-                bind:this={colorPaletteMenu}
-                role="menu"
-                class="absolute left-0 top-full z-50 mt-1 grid w-[7.25rem] grid-cols-3 gap-1 rounded-md border border-border bg-popover p-1.5 text-popover-foreground shadow-lg"
-                aria-label={tUi('ink.toolbar.colorPresets')}
-              >
-                {#each INK_COLOR_SWATCHES as swatch, index (swatch)}
-                  {@const activeSwatch = colorArgb === colorHexToArgb(swatch)}
-                  <button
-                    type="button"
-                    role="menuitemradio"
-                    class={`grid size-8 place-items-center rounded-md border border-border transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${activeSwatch ? 'ring-2 ring-ring' : ''}`}
-                    aria-label={`${tUi('ink.toolbar.colorPreset')} ${index + 1}`}
-                    aria-checked={activeSwatch}
-                    title={`${tUi('ink.toolbar.colorPreset')} ${index + 1}`}
-                    onclick={() => selectPresetColor(swatch)}
-                  >
-                    <span
-                      class="size-5 rounded-full border border-black/20 shadow-sm"
-                      style="background-color: {swatch};"
-                      aria-hidden="true"
-                    ></span>
-                  </button>
-                {/each}
-              </div>
-            {/if}
-          </div>
-        {/snippet}
-      </ToolbarCollapseWhenOverflow>
-      <input
-        class="ml-2 h-2 w-24 shrink-0 accent-primary"
-        aria-label={tUi('ink.toolbar.brushSize')}
-        title={tUi('ink.toolbar.brushSize')}
-        type="range"
-        min="0.5"
-        max="12"
-        step="0.5"
-        value={width}
-        oninput={(e) => setWidth(e.currentTarget.value)}
-      />
-      <div
-        class="mr-2 flex h-9 w-20 shrink-0 items-center justify-center gap-1.5 rounded-md px-1.5 text-xs font-medium text-muted-foreground"
-        aria-label={`${tUi('ink.toolbar.brushSize')}: ${brushSizeText}`}
-        title={`${tUi('ink.toolbar.brushSize')}: ${brushSizeText}`}
-      >
-        <span class="grid size-6 place-items-center" aria-hidden="true">
-          <span
-            class="rounded-full border border-border shadow-sm"
-            style="width: {brushPreviewSize}px; height: {brushPreviewSize}px; background-color: {colorHex};"
-          ></span>
-        </span>
-        <span class="w-8 text-center tabular-nums">{brushSizeText}</span>
+        <ToolbarButton
+          active={tool === 'lasso'}
+          aria-label={tUi('ink.toolbar.lasso')}
+          title={tUi('ink.toolbar.lasso')}
+          aria-pressed={tool === 'lasso'}
+          onclick={() => setTool('lasso')}
+        >
+          <LassoSelect aria-hidden="true" />
+        </ToolbarButton>
       </div>
 
       <ToolbarSeparator />
 
-      <ToolbarButton
-        aria-label={tUi('ink.toolbar.undo')}
-        title={tUi('ink.toolbar.undo')}
-        disabled={isTrashed || !doc || undoDepth === 0}
-        onclick={undo}
-      >
-        <Undo2 aria-hidden="true" />
-      </ToolbarButton>
-      <ToolbarButton
-        aria-label={tUi('ink.toolbar.redo')}
-        title={tUi('ink.toolbar.redo')}
-        disabled={isTrashed || !doc || redoDepth === 0}
-        onclick={redo}
-      >
-        <Redo2 aria-hidden="true" />
-      </ToolbarButton>
+      <div class="relative shrink-0">
+        <ToolbarButton
+          bind:ref={styleMenuButton}
+          wide
+          active={toolbarMenuOpen === 'style'}
+          aria-label={tUi('ink.toolbar.style')}
+          title={tUi('ink.toolbar.style')}
+          aria-haspopup="menu"
+          aria-expanded={toolbarMenuOpen === 'style'}
+          onclick={() => toggleToolbarMenu('style')}
+        >
+          <Palette aria-hidden="true" />
+          <span class="grid h-5 w-8 place-items-center" aria-hidden="true">
+            <span
+              class="block w-7 rounded-full"
+              style="height: {brushLineHeight}px; background-color: {colorHex};"
+            ></span>
+          </span>
+          <span class="w-6 text-center text-xs tabular-nums">
+            {brushSizeText}
+          </span>
+        </ToolbarButton>
+
+        {#if toolbarMenuOpen === 'style'}
+          <div
+            bind:this={styleMenuEl}
+            role="menu"
+            class="absolute left-0 top-full z-50 mt-1 w-56 rounded-md border border-border bg-popover p-2 text-popover-foreground shadow-lg"
+            aria-label={tUi('ink.toolbar.style')}
+          >
+            <div
+              class="grid grid-cols-6 gap-1"
+              role="group"
+              aria-label={tUi('ink.toolbar.colorPresets')}
+            >
+              {#each INK_COLOR_SWATCHES as swatch, index (swatch)}
+                {@const activeSwatch = colorArgb === colorHexToArgb(swatch)}
+                <button
+                  type="button"
+                  role="menuitemradio"
+                  class={`grid size-8 place-items-center rounded-md border border-border transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${activeSwatch ? 'ring-2 ring-ring' : ''}`}
+                  aria-label={`${tUi('ink.toolbar.colorPreset')} ${index + 1}`}
+                  aria-checked={activeSwatch}
+                  title={`${tUi('ink.toolbar.colorPreset')} ${index + 1}`}
+                  onclick={() => selectPresetColor(swatch)}
+                >
+                  <span
+                    class="size-5 rounded-full border border-black/20 shadow-sm"
+                    style="background-color: {swatch};"
+                    aria-hidden="true"
+                  ></span>
+                </button>
+              {/each}
+            </div>
+
+            <label
+              class="mt-2 flex h-9 items-center justify-between gap-3 rounded-md px-2 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+              aria-label={tUi('ink.toolbar.color')}
+              title={tUi('ink.toolbar.color')}
+            >
+              <span>{tUi('ink.toolbar.color')}</span>
+              <input
+                class="size-6 cursor-pointer border-0 bg-transparent p-0"
+                type="color"
+                value={colorHex}
+                oninput={(e) => setColor(e.currentTarget.value)}
+              />
+            </label>
+
+            <div
+              class="mt-2 rounded-md px-2 py-1.5"
+              aria-label={`${tUi('ink.toolbar.brushSize')}: ${brushSizeText}`}
+              title={`${tUi('ink.toolbar.brushSize')}: ${brushSizeText}`}
+            >
+              <div class="mb-1 flex items-center justify-between gap-3">
+                <span class="text-xs text-muted-foreground">
+                  {tUi('ink.toolbar.brushSize')}
+                </span>
+                <span class="text-xs font-medium tabular-nums">
+                  {brushSizeText}
+                </span>
+              </div>
+              <div class="flex items-center gap-2">
+                <span
+                  class="grid h-6 w-10 place-items-center"
+                  aria-hidden="true"
+                >
+                  <span
+                    class="block w-9 rounded-full"
+                    style="height: {brushLineHeight}px; background-color: {colorHex};"
+                  ></span>
+                </span>
+                <input
+                  class="h-2 min-w-0 flex-1 accent-primary"
+                  aria-label={tUi('ink.toolbar.brushSize')}
+                  title={tUi('ink.toolbar.brushSize')}
+                  type="range"
+                  min="0.5"
+                  max="12"
+                  step="0.5"
+                  value={width}
+                  oninput={(e) => setWidth(e.currentTarget.value)}
+                />
+              </div>
+            </div>
+          </div>
+        {/if}
+      </div>
 
       <ToolbarSeparator />
 
-      <ToolbarButton
-        active={fingerDrawingAllowed}
-        aria-label={tUi('ink.toolbar.fingerDrawing')}
-        title={tUi('ink.toolbar.fingerDrawing')}
-        aria-pressed={fingerDrawingAllowed}
-        onclick={toggleFingerDrawing}
-      >
-        <MousePointer2 aria-hidden="true" />
-      </ToolbarButton>
-      <ToolbarButton
-        active={pageThemeMode === 'system'}
-        aria-label={tUi('ink.toolbar.pageTheme')}
-        title={tUi('ink.toolbar.pageTheme')}
-        aria-pressed={pageThemeMode === 'system'}
-        onclick={togglePageTheme}
-      >
-        {#if pageThemeMode === 'system'}
-          <MoonStar aria-hidden="true" />
-        {:else}
-          <Sun aria-hidden="true" />
-        {/if}
-      </ToolbarButton>
-      <ToolbarButton
-        aria-label={clearButtonLabel}
-        title={clearButtonLabel}
-        disabled={isTrashed || (strokeCount === 0 && !hasSelection)}
-        onclick={() => void confirmClearCanvas()}
-      >
-        <Trash2 aria-hidden="true" />
-      </ToolbarButton>
+      <div class="flex shrink-0 items-center gap-0.5">
+        <ToolbarButton
+          aria-label={tUi('ink.toolbar.undo')}
+          title={tUi('ink.toolbar.undo')}
+          disabled={isTrashed || !doc || undoDepth === 0}
+          onclick={undo}
+        >
+          <Undo2 aria-hidden="true" />
+        </ToolbarButton>
+        <ToolbarButton
+          aria-label={tUi('ink.toolbar.redo')}
+          title={tUi('ink.toolbar.redo')}
+          disabled={isTrashed || !doc || redoDepth === 0}
+          onclick={redo}
+        >
+          <Redo2 aria-hidden="true" />
+        </ToolbarButton>
+      </div>
+
+      {#if hasSelection || hasSelectionClipboard}
+        <ToolbarSeparator />
+        <div class="relative shrink-0">
+          <ToolbarButton
+            bind:ref={selectionMenuButton}
+            active={toolbarMenuOpen === 'selection'}
+            aria-label={tUi('ink.toolbar.selectionActions')}
+            title={tUi('ink.toolbar.selectionActions')}
+            aria-haspopup="menu"
+            aria-expanded={toolbarMenuOpen === 'selection'}
+            onclick={() => toggleToolbarMenu('selection')}
+          >
+            <MoreHorizontal aria-hidden="true" />
+          </ToolbarButton>
+
+          {#if toolbarMenuOpen === 'selection'}
+            <div
+              bind:this={selectionMenuEl}
+              role="menu"
+              class="absolute left-0 top-full z-50 mt-1 min-w-44 rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-lg"
+              aria-label={tUi('ink.toolbar.selectionActions')}
+            >
+              <button
+                type="button"
+                role="menuitem"
+                class="flex h-8 w-full items-center gap-2 rounded-sm px-2 text-left text-sm hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-50"
+                disabled={isTrashed || !hasSelection}
+                onclick={() => {
+                  if (cutSelection()) toolbarMenuOpen = null;
+                }}
+              >
+                <Scissors class="size-4" aria-hidden="true" />
+                <span>{tUi('ink.toolbar.cutSelected')}</span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                class="flex h-8 w-full items-center gap-2 rounded-sm px-2 text-left text-sm hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-50"
+                disabled={!hasSelection}
+                onclick={() => {
+                  if (copySelection()) toolbarMenuOpen = null;
+                }}
+              >
+                <Copy class="size-4" aria-hidden="true" />
+                <span>{tUi('ink.toolbar.copySelected')}</span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                class="flex h-8 w-full items-center gap-2 rounded-sm px-2 text-left text-sm hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-50"
+                disabled={isTrashed || !hasSelectionClipboard}
+                onclick={() => {
+                  if (pasteSelection()) toolbarMenuOpen = null;
+                }}
+              >
+                <ClipboardPaste class="size-4" aria-hidden="true" />
+                <span>{tUi('ink.toolbar.pasteInk')}</span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                class="flex h-8 w-full items-center gap-2 rounded-sm px-2 text-left text-sm text-destructive hover:bg-destructive/10 disabled:pointer-events-none disabled:opacity-50"
+                disabled={isTrashed || !hasSelection}
+                onclick={() => {
+                  if (deleteSelection()) toolbarMenuOpen = null;
+                }}
+              >
+                <Trash2 class="size-4" aria-hidden="true" />
+                <span>{tUi('ink.toolbar.deleteSelected')}</span>
+              </button>
+            </div>
+          {/if}
+        </div>
+      {/if}
+
+      <div class="ml-auto flex shrink-0 items-center gap-0.5 pl-2">
+        <ToolbarSeparator />
+        <div class="relative shrink-0">
+          <ToolbarButton
+            bind:ref={settingsMenuButton}
+            active={toolbarMenuOpen === 'settings'}
+            aria-label={tUi('ink.toolbar.settings')}
+            title={tUi('ink.toolbar.settings')}
+            aria-haspopup="menu"
+            aria-expanded={toolbarMenuOpen === 'settings'}
+            onclick={() => toggleToolbarMenu('settings')}
+          >
+            <Settings2 aria-hidden="true" />
+          </ToolbarButton>
+
+          {#if toolbarMenuOpen === 'settings'}
+            <div
+              bind:this={settingsMenuEl}
+              role="menu"
+              class="absolute right-0 top-full z-50 mt-1 min-w-52 rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-lg"
+              aria-label={tUi('ink.toolbar.settings')}
+            >
+              <button
+                type="button"
+                role="menuitemcheckbox"
+                class="flex h-8 w-full items-center justify-between gap-3 rounded-sm px-2 text-left text-sm hover:bg-accent hover:text-accent-foreground"
+                aria-checked={fingerDrawingAllowed}
+                onclick={toggleFingerDrawing}
+              >
+                <span>{tUi('ink.toolbar.fingerDrawing')}</span>
+                <MousePointer2
+                  class="size-4 {fingerDrawingAllowed
+                    ? 'opacity-100'
+                    : 'opacity-35'}"
+                  aria-hidden="true"
+                />
+              </button>
+              <button
+                type="button"
+                role="menuitemcheckbox"
+                class="flex h-8 w-full items-center justify-between gap-3 rounded-sm px-2 text-left text-sm hover:bg-accent hover:text-accent-foreground"
+                aria-checked={pageThemeMode === 'system'}
+                onclick={togglePageTheme}
+              >
+                <span>{tUi('ink.toolbar.pageTheme')}</span>
+                {#if pageThemeMode === 'system'}
+                  <MoonStar class="size-4" aria-hidden="true" />
+                {:else}
+                  <Sun class="size-4 opacity-70" aria-hidden="true" />
+                {/if}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                class="flex h-8 w-full items-center gap-2 rounded-sm px-2 text-left text-sm text-destructive hover:bg-destructive/10 disabled:pointer-events-none disabled:opacity-50"
+                disabled={isTrashed || (strokeCount === 0 && !hasSelection)}
+                onclick={() => {
+                  toolbarMenuOpen = null;
+                  void confirmClearCanvas();
+                }}
+              >
+                <Trash2 class="size-4" aria-hidden="true" />
+                <span>{clearButtonLabel}</span>
+              </button>
+            </div>
+          {/if}
+        </div>
+      </div>
     </div>
   </Toolbar>
 {/snippet}
