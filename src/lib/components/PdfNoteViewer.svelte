@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy, onMount, tick } from 'svelte';
+  import { onDestroy, onMount, tick, untrack } from 'svelte';
   import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
   import {
     AlertCircle,
@@ -924,16 +924,26 @@
     if (target && container) {
       const containerRect = container.getBoundingClientRect();
       const targetRect = target.getBoundingClientRect();
+      const top =
+        container.scrollTop +
+        targetRect.top -
+        containerRect.top -
+        PAGE_SCROLL_PADDING_Y;
+      // Center the target page horizontally in the same animation. Doing it
+      // here (rather than letting the activePageNumber effect react) keeps a
+      // single uninterrupted smooth scroll — separate scrollLeft writes would
+      // abort it.
+      const left = targetScrollLeftForPage(clamped);
       container.scrollTo({
-        top:
-          container.scrollTop +
-          targetRect.top -
-          containerRect.top -
-          PAGE_SCROLL_PADDING_Y,
+        top,
+        left: left ?? container.scrollLeft,
         behavior
       });
     }
-    activePageNumber = clamped;
+    // Don't set activePageNumber eagerly. The IntersectionObserver advances it
+    // as the smooth scroll progresses; eagerly jumping it to the target made
+    // the indicator flick to the destination, snap back to the current page
+    // for the duration of the animation, then land on the destination again.
   }
 
   function goToPreviousPage() {
@@ -1336,8 +1346,14 @@
     if (!container) return;
     const maxLeft = Math.max(0, container.scrollWidth - container.clientWidth);
     const maxTop = Math.max(0, container.scrollHeight - container.clientHeight);
-    container.scrollLeft = Math.min(maxLeft, Math.max(0, container.scrollLeft));
-    container.scrollTop = Math.min(maxTop, Math.max(0, container.scrollTop));
+    // Only write when actually out of range. Assigning scrollLeft/scrollTop —
+    // even to their current value — aborts any in-flight smooth scroll (e.g.
+    // the one started by scrollToPage), which is what broke page navigation.
+    const clampedLeft = Math.min(maxLeft, Math.max(0, container.scrollLeft));
+    const clampedTop = Math.min(maxTop, Math.max(0, container.scrollTop));
+    if (clampedLeft !== container.scrollLeft)
+      container.scrollLeft = clampedLeft;
+    if (clampedTop !== container.scrollTop) container.scrollTop = clampedTop;
   }
 
   function offsetInsideScroller(el: HTMLElement): {
@@ -1368,16 +1384,27 @@
     );
   }
 
-  function centerPageHorizontally(pageNumber = activePageNumber): boolean {
-    if (!container) return false;
+  // The scrollLeft that horizontally centers a page (or left-aligns it with a
+  // small margin when it's wider than the viewport), clamped to range. Returns
+  // null when the page isn't laid out yet.
+  function targetScrollLeftForPage(pageNumber: number): number | null {
+    if (!container) return null;
     const figure = figureForPage(pageNumber);
     const pageHost = figure ? pageHostForFigure(figure) : null;
-    if (!pageHost) return false;
+    if (!pageHost) return null;
     const pageOffset = offsetInsideScroller(pageHost);
-    container.scrollLeft = pageFitsViewportWidth(pageHost)
+    const desired = pageFitsViewportWidth(pageHost)
       ? centeredPageScrollLeft(pageHost, pageOffset)
       : pageOffset.left - PAGE_FIT_MARGIN;
-    clampScrollerPosition();
+    const maxLeft = Math.max(0, container.scrollWidth - container.clientWidth);
+    return Math.min(maxLeft, Math.max(0, desired));
+  }
+
+  function centerPageHorizontally(pageNumber = activePageNumber): boolean {
+    if (!container) return false;
+    const left = targetScrollLeftForPage(pageNumber);
+    if (left == null) return false;
+    container.scrollLeft = left;
     return true;
   }
 
@@ -1626,7 +1653,11 @@
     void zoom;
     void zoomMode;
     if (!container || pageNumbers.length === 0) return;
-    const pageNumber = activePageNumber;
+    // Re-center on zoom / size changes only. Reading activePageNumber via
+    // untrack keeps page changes (scroll-driven or via the toolbar controls)
+    // from triggering a competing scrollLeft write that would abort an
+    // in-flight smooth scroll — toolbar navigation centers the page itself.
+    const pageNumber = untrack(() => activePageNumber);
     cancelAnimationFrame(horizontalCenterFrame);
     horizontalCenterFrame = requestAnimationFrame(() => {
       const figure = figureForPage(pageNumber);
