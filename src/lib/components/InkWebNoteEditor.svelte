@@ -6,6 +6,7 @@
     Copy,
     Eraser,
     LassoSelect,
+    Monitor,
     MousePointer2,
     MoonStar,
     Palette,
@@ -19,6 +20,7 @@
     Trash2,
     Undo2
   } from '@lucide/svelte';
+  import { mode } from 'mode-watcher';
   import {
     Toolbar,
     ToolbarButton,
@@ -48,7 +50,7 @@
     type DrawingToolbarSettingsPayload
   } from '$lib/api';
   import { isAndroid, isMobile } from '$lib/platform';
-  import { tUi } from '$lib/settings/i18n.svelte';
+  import { tUi, tValue } from '$lib/settings/i18n.svelte';
   import {
     getSettingValue,
     hasSettingValue,
@@ -130,7 +132,7 @@
   const INK_PAGE_THEME_SETTING = 'editor.ink.pageTheme';
 
   type ToolMode = 'pen' | 'eraser' | 'lasso';
-  type PageThemeMode = 'light' | 'system';
+  type PageThemeMode = 'light' | 'dark' | 'system';
   type AndroidStylusEraserAction = 'down' | 'move' | 'up' | 'cancel';
   type AndroidStylusEraserPoint = {
     x: number;
@@ -276,7 +278,9 @@
     panY: DEFAULT_PAGE_GAP
   };
 
-  const pageDark = $derived(pageThemeMode === 'system');
+  const pageDark = $derived(
+    pageThemeMode === 'dark' || (pageThemeMode === 'system' && $mode === 'dark')
+  );
   const colorHex = $derived(argbToColorHex(colorArgb));
   const inkZoomLabel = $derived.by(() => {
     void zoomUiVersion;
@@ -359,7 +363,9 @@
     tool;
     colorArgb;
     width;
-    pageThemeMode;
+    // Read the resolved value (not just the mode) so a live app-theme
+    // flip repaints the page while "follow app theme" is selected.
+    pageDark;
     scheduleDraw();
   });
 
@@ -2289,8 +2295,15 @@
     updateLiveInkOverlayStyle();
   }
 
-  function togglePageTheme() {
-    pageThemeMode = pageThemeMode === 'system' ? 'light' : 'system';
+  // Cycle Light → Dark → Follow app theme → Light, matching the
+  // three-way choice offered by the settings dialog's select.
+  function cyclePageTheme() {
+    pageThemeMode =
+      pageThemeMode === 'light'
+        ? 'dark'
+        : pageThemeMode === 'dark'
+          ? 'system'
+          : 'light';
     emitToolbarSettings();
   }
 
@@ -2444,7 +2457,7 @@
         toggleFingerDrawing();
         return true;
       case 'editor.ink.togglePageTheme':
-        togglePageTheme();
+        cyclePageTheme();
         return true;
       case 'editor.ink.clear':
         if (!isTrashed) void confirmClearCanvas();
@@ -2461,7 +2474,9 @@
   }
 
   function normalizeInkPageTheme(value: unknown): PageThemeMode {
-    return value === 'system' ? 'system' : 'light';
+    if (value === 'system') return 'system';
+    if (value === 'dark') return 'dark';
+    return 'light';
   }
 
   function normalizeInkWidth(value: unknown): number {
@@ -3093,17 +3108,23 @@
               </button>
               <button
                 type="button"
-                role="menuitemcheckbox"
+                role="menuitem"
                 class="flex h-8 w-full items-center justify-between gap-3 rounded-sm px-2 text-left text-sm hover:bg-accent hover:text-accent-foreground"
-                aria-checked={pageThemeMode === 'system'}
-                onclick={togglePageTheme}
+                onclick={cyclePageTheme}
               >
                 <span>{tUi('ink.toolbar.pageTheme')}</span>
-                {#if pageThemeMode === 'system'}
-                  <MoonStar class="size-4" aria-hidden="true" />
-                {:else}
-                  <Sun class="size-4 opacity-70" aria-hidden="true" />
-                {/if}
+                <span class="flex items-center gap-1.5 text-muted-foreground">
+                  <span class="text-xs">
+                    {tValue('editor.ink.pageTheme', pageThemeMode)}
+                  </span>
+                  {#if pageThemeMode === 'dark'}
+                    <MoonStar class="size-4" aria-hidden="true" />
+                  {:else if pageThemeMode === 'system'}
+                    <Monitor class="size-4" aria-hidden="true" />
+                  {:else}
+                    <Sun class="size-4" aria-hidden="true" />
+                  {/if}
+                </span>
               </button>
               <button
                 type="button"

@@ -575,7 +575,7 @@
     },
     "editor.ink.pageTheme": {
       "label": "Ink page theme",
-      "description": "Choose whether handwritten pages stay light or follow the app theme."
+      "description": "Choose whether handwritten pages stay light, dark, or follow the app theme."
     },
     "editor.autoSave": { "label": "Auto-save" },
     "hotkeys.panel": { "label": "Keyboard shortcuts" },
@@ -635,6 +635,7 @@
     "editor.ink.tool.eraser": "Eraser",
     "editor.ink.tool.lasso": "Lasso select",
     "editor.ink.pageTheme.light": "Light",
+    "editor.ink.pageTheme.dark": "Dark",
     "editor.ink.pageTheme.system": "Follow app theme",
     "data.trashRetentionDays.7": "7 days",
     "data.trashRetentionDays.30": "30 days",

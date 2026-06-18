@@ -126,7 +126,7 @@ export interface DrawingToolbarSettingsPayload {
   colorArgb: number;
   width: number;
   fingerDrawingAllowed: boolean;
-  pageThemeMode: 'light' | 'system';
+  pageThemeMode: 'light' | 'dark' | 'system';
 }
 
 export interface DrawingToolbarSettings {
@@ -134,5 +134,5 @@ export interface DrawingToolbarSettings {
   colorArgb?: number | null;
   width?: number | null;
   fingerDrawingAllowed?: boolean | null;
-  pageThemeMode?: 'light' | 'system' | null;
+  pageThemeMode?: 'light' | 'dark' | 'system' | null;
 }
