@@ -189,12 +189,13 @@
   // "scrolled past" and "scrolled back to" so scrubbing doesn't churn the
   // pageview lifecycle.
   const RENDER_DROP_DELAY_MS = 200;
-  // Settle delay before kicking off a page render. Fast-scroll page
-  // transitions enter & leave the band within milliseconds — without this
-  // delay, doc.getPage() calls pile up on PDF.js's single worker thread
-  // (those calls are NOT cancellable; only the subsequent pageView.draw()
-  // is). Visible pages then wait behind the queue. With the delay,
-  // transient enters never start a render at all.
+  // Settle delay before kicking off a render for a page that just entered
+  // the render band. Fast-scroll page transitions enter & leave within
+  // milliseconds — without this delay, doc.getPage() calls pile up on
+  // PDF.js's single worker thread (those calls are NOT cancellable; only
+  // the subsequent pageView.draw() is). Already-rendered visible pages
+  // skip this delay on zoom/resize so their preview-scaled canvas doesn't
+  // linger blurry.
   const DRAW_KICKOFF_DELAY_MS = 80;
 
   let hostEl = $state<HTMLDivElement | null>(null);
@@ -2089,6 +2090,9 @@
     let cancelled = false;
     let drawGeneration = 0;
     let pageView: PdfPageView | null = null;
+    let pendingPageView: PdfPageView | null = null;
+    let activeLayer: HTMLDivElement | null = null;
+    let pendingLayer: HTMLDivElement | null = null;
     let currentViewport: ReturnType<
       Awaited<ReturnType<PdfDocument['getPage']>>['getViewport']
     > | null = null;
@@ -2111,6 +2115,7 @@
     pageCancelHooks.set(current.pageNumber, () => {
       cancelScheduledDraw();
       drawGeneration += 1;
+      pendingPageView?.cancelRendering();
       pageView?.cancelRendering();
     });
 
@@ -2519,12 +2524,39 @@
       });
     }
 
+    function destroyPageView(view: PdfPageView | null) {
+      view?.cancelRendering();
+      view?.destroy();
+    }
+
+    function createPageLayer(kind: 'active' | 'pending'): HTMLDivElement {
+      const layer = document.createElement('div');
+      layer.className = `pdf-page-buffer pdf-page-buffer-${kind}`;
+      return layer;
+    }
+
+    function clearPendingPageView(
+      layer = pendingLayer,
+      view = pendingPageView
+    ) {
+      if (view && view === pendingPageView) {
+        destroyPageView(view);
+        pendingPageView = null;
+      }
+      if (layer && layer === pendingLayer) {
+        layer.remove();
+        pendingLayer = null;
+      }
+    }
+
     function teardownPageView() {
-      pageView?.cancelRendering();
-      pageView?.destroy();
+      clearPendingPageView();
+      destroyPageView(pageView);
       pageView = null;
+      activeLayer = null;
       currentViewport = null;
       renderedSize = null;
+      pageViewports.delete(current.pageNumber);
       pageSurface.replaceChildren();
       pageSurface.classList.remove('pdf-page-previewing');
     }
@@ -2593,12 +2625,12 @@
         drawKickoffTimer = null;
       }
     }
-    function scheduleDraw() {
+    function scheduleDraw(delayMs = DRAW_KICKOFF_DELAY_MS) {
       cancelScheduledDraw();
       drawKickoffTimer = setTimeout(() => {
         drawKickoffTimer = null;
         void draw();
-      }, DRAW_KICKOFF_DELAY_MS);
+      }, delayMs);
     }
 
     async function draw() {
@@ -2613,7 +2645,7 @@
         teardownPageView();
         return;
       }
-      teardownPageView();
+      clearPendingPageView();
 
       const page = await doc.getPage(request.pageNumber);
       if (cancelled || generation !== drawGeneration) return;
@@ -2628,16 +2660,15 @@
         request.zoomMode === 'fit-width' ? fitScale : clampZoom(request.zoom);
       const viewerScale = requestedScale / PDF_TO_CSS_UNITS;
       const viewport = page.getViewport({ scale: requestedScale });
-      currentViewport = viewport;
-      renderedSize = { width: viewport.width, height: viewport.height };
-      // Expose the rendered viewport so text-selection client-rects can be
-      // mapped back into PDF user space for text-aware annotations.
-      pageViewports.set(request.pageNumber, viewport);
 
       if (cancelled || generation !== drawGeneration) return;
+      const nextLayer = createPageLayer('pending');
+      pendingLayer = nextLayer;
+      pageSurface.append(nextLayer);
+
       const eventBus = new pdfViewer.EventBus();
-      pageView = new pdfViewer.PDFPageView({
-        container: pageSurface,
+      const nextPageView = new pdfViewer.PDFPageView({
+        container: nextLayer,
         eventBus,
         id: request.pageNumber,
         scale: viewerScale,
@@ -2649,14 +2680,19 @@
         enableOptimizedPartialRendering: true,
         enableSelectionRendering: true
       });
-      pageView.setPdfPage(page);
+      pendingPageView = nextPageView;
+      nextPageView.setPdfPage(page);
       try {
         // Link annotations for the clickable overlay. Best-effort: a
         // failure here shouldn't stop the page from rendering.
+        let nextLinks: PdfLink[] = [];
         try {
           const annots = await page.getAnnotations({ intent: 'display' });
-          if (cancelled || generation !== drawGeneration) return;
-          currentLinks = annots
+          if (cancelled || generation !== drawGeneration) {
+            clearPendingPageView(nextLayer, nextPageView);
+            return;
+          }
+          nextLinks = annots
             .filter((a: { subtype?: string }) => a.subtype === 'Link')
             .map((a: { rect: number[]; url?: string; dest?: unknown }) => ({
               rect: a.rect,
@@ -2664,17 +2700,39 @@
               dest: a.dest as string | unknown[] | null | undefined
             }));
         } catch {
-          currentLinks = [];
+          nextLinks = [];
         }
-        await pageView.draw();
-        if (cancelled || generation !== drawGeneration) return;
-        const pageEl = pageSurface.querySelector<HTMLElement>('.page');
+        await nextPageView.draw();
+        if (cancelled || generation !== drawGeneration) {
+          clearPendingPageView(nextLayer, nextPageView);
+          return;
+        }
+        const pageEl = nextLayer.querySelector<HTMLElement>('.page');
+        const previousPageView = pageView;
+        const previousLayer = activeLayer;
+        nextLayer.classList.remove('pdf-page-buffer-pending');
+        nextLayer.classList.add('pdf-page-buffer-active');
+        previousLayer?.remove();
+        destroyPageView(previousPageView);
+        pageView = nextPageView;
+        activeLayer = nextLayer;
+        pendingPageView = null;
+        pendingLayer = null;
+        currentViewport = viewport;
         renderedSize = pageEl
-          ? (measurePageSize(pageEl) ?? renderedSize)
-          : renderedSize;
+          ? (measurePageSize(pageEl) ?? {
+              width: viewport.width,
+              height: viewport.height
+            })
+          : { width: viewport.width, height: viewport.height };
+        currentLinks = nextLinks;
+        // Expose only the committed viewport so selection/client-rect math
+        // never points at an invisible staging layer.
+        pageViewports.set(request.pageNumber, viewport);
         clearPreviewScale();
         renderAppAnnotations();
       } catch (err) {
+        clearPendingPageView(nextLayer, nextPageView);
         if (
           (err as { name?: string })?.name !== 'RenderingCancelledException'
         ) {
@@ -2711,7 +2769,7 @@
           // worker capacity that a visible page needs. No debounce here.
           cancelScheduledDraw();
           void draw();
-        } else if (enteringRender || visualChange) {
+        } else if (enteringRender) {
           if (visualChange && next.shouldRender) {
             applyPreviewScale({ width: next.width, height: next.height });
           }
@@ -2722,6 +2780,11 @@
           // keeps the worker queue uncontended for whichever page the
           // user actually settles on.
           scheduleDraw();
+        } else if (visualChange) {
+          if (next.shouldRender) {
+            applyPreviewScale({ width: next.width, height: next.height });
+            scheduleDraw(0);
+          }
         } else if (next.shouldRender) {
           // Same page, same zoom, still rendered — only annotation state
           // changed. Skip the canvas redraw and just refresh overlays.
@@ -3204,6 +3267,7 @@
     --hcm-highlight-filter: none;
     --hcm-highlight-selected-filter: none;
     background-color: white;
+    position: relative;
   }
 
   :global(.pdf-page-scroller) {
@@ -3218,6 +3282,23 @@
 
   :global(.pdf-page-host.pdf-page-previewing) {
     overflow: hidden;
+  }
+
+  :global(.pdf-page-host .pdf-page-buffer) {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }
+
+  :global(.pdf-page-host .pdf-page-buffer-active) {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  :global(.pdf-page-host .pdf-page-buffer-pending) {
+    opacity: 0;
+    pointer-events: none;
   }
 
   :global(.pdf-page-host .page) {
