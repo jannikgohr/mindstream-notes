@@ -15,6 +15,7 @@
    * change that would visibly move the menu.
    */
 
+  import { untrack } from 'svelte';
   import { Check, Plus, Trash2 } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import { tUi } from '$lib/settings/i18n.svelte';
@@ -88,7 +89,12 @@
     // Trigger an initial recompute on open in case the toolbar shifted
     // between mount and the open toggle (the derived runs once for free,
     // but if a Resize fired while closed we want a fresh measurement).
-    rectVersion += 1;
+    // untrack the read: a bare `rectVersion += 1` reads rectVersion inside
+    // the effect, making the effect depend on the very value it writes — an
+    // infinite update loop that Svelte aborts with effect_update_depth_
+    // exceeded, wedging this component's scheduler (the toolbar then stops
+    // responding to clicks).
+    untrack(() => (rectVersion += 1));
 
     return () => {
       window.removeEventListener('pointerdown', onPointerDown);
