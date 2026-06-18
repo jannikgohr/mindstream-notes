@@ -724,6 +724,19 @@ body.dv-tab-dragging .freeform-canvas-host * {
   background: transparent;
 }
 
+/* Reserve the vertical-scrollbar gutter on BOTH edges, always. Payoffs:
+ * a fit-to-width page keeps one width whether or not the scrollbar is
+ * showing (no resize jump); paired with .themed-scrollbar, a scrolling
+ * DOM viewer (PDF) and a non-scrolling page canvas (ink) reserve the
+ * SAME gutter so their A4 pages render at the same physical size; and
+ * `both-edges` mirrors the gutter on the start edge too, so the page
+ * stays centred in the panel even when no scrollbar fills the end gutter
+ * (short PDFs, every ink note). On overlay-scrollbar platforms the
+ * gutter is 0 on both edges, so pages stay centred and matched. */
+.scrollbar-gutter-stable {
+  scrollbar-gutter: stable;
+}
+
 /* Hide the scrollbar while keeping the element scrollable — used for the
  * dense editor toolbars, where a 12px bar would eat a third of the row. */
 .scrollbar-none {

@@ -106,6 +106,7 @@
   const PAGE_FILL_LIGHT = 0xffffffff;
   const TOOL_PREVIEW_DASH = [5, 4];
   const MAX_ZOOM_FACTOR = 6;
+  const INK_ZOOM_DISPLAY_SCALE = 2;
   const INK_ZOOM_STEP = 1.2;
   const INK_QUICK_ZOOMS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
   const INK_COLOR_SWATCHES = [
@@ -283,7 +284,7 @@
   const colorHex = $derived(argbToColorHex(colorArgb));
   const inkZoomLabel = $derived.by(() => {
     void zoomUiVersion;
-    return `${Math.round(view.scale * 100)}%`;
+    return `${Math.round(displayInkZoom(view.scale) * 100)}%`;
   });
   const inkFitActive = $derived.by(() => {
     void zoomUiVersion;
@@ -765,6 +766,14 @@
     return Math.max(minScale(), availableWidth / layout.page.width);
   }
 
+  function displayInkZoom(scale: number): number {
+    return scale * INK_ZOOM_DISPLAY_SCALE;
+  }
+
+  function scaleFromDisplayInkZoom(value: number): number {
+    return value / INK_ZOOM_DISPLAY_SCALE;
+  }
+
   function fitWidth() {
     view.scale = fitWidthScale();
     view.panX = (view.width - layout.page.width * view.scale) * 0.5;
@@ -786,7 +795,9 @@
       view.panX = Math.min(16, Math.max(view.width - contentW - 16, view.panX));
     }
     const bottomMargin = Math.max(PAGE_FIT_MARGIN, layout.pageGap * view.scale);
-    const topMargin = Math.max(PAGE_FIT_TOP_MARGIN, bottomMargin);
+    const topMargin = mobileToolbar
+      ? Math.max(PAGE_FIT_TOP_MARGIN, bottomMargin)
+      : PAGE_FIT_MARGIN;
     const minY = view.height - contentH - bottomMargin;
     const maxY = topMargin;
     view.panY =
@@ -2141,6 +2152,10 @@
     zoomUiVersion += 1;
   }
 
+  function setInkDisplayZoom(value: number) {
+    setInkZoom(scaleFromDisplayInkZoom(value));
+  }
+
   function setFitWidthZoom() {
     fitWidth();
     scheduleDraw();
@@ -3215,11 +3230,11 @@
         fitLabel={tUi('ink.toolbar.fitWidth')}
         fitActive={inkFitActive}
         zoomOptions={INK_QUICK_ZOOMS}
-        selectedZoom={inkFitActive ? null : view.scale}
+        selectedZoom={inkFitActive ? null : displayInkZoom(view.scale)}
         onZoomOut={() => zoomInkBy(1 / INK_ZOOM_STEP)}
         onZoomIn={() => zoomInkBy(INK_ZOOM_STEP)}
         onFit={setFitWidthZoom}
-        onSelectZoom={setInkZoom}
+        onSelectZoom={setInkDisplayZoom}
       />
     </div>
   {/if}

@@ -46,10 +46,13 @@
   import { isMobile } from '$lib/platform';
   import {
     PAGE_FIT_MARGIN,
+    PAGE_SCROLL_PADDING_Y,
     PAGE_SCROLLER_CLASS,
+    PAGE_SCROLLER_SCROLLBAR_CLASS,
     PAGE_COLUMN_CLASS,
     PAGE_SURFACE_CLASS
   } from '$lib/layout/page-layout';
+  import PageOverlayScrollbar from '$lib/layout/page-overlay-scrollbar.svelte';
   import { getSettingValue } from '$lib/settings/store.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { exportAnnotatedPdfNote } from '$lib/note-exporters/pdf';
@@ -898,7 +901,18 @@
     const target = container?.querySelector<HTMLElement>(
       `[data-page-number="${clamped}"]`
     );
-    target?.scrollIntoView({ block: 'start', behavior });
+    if (target && container) {
+      const containerRect = container.getBoundingClientRect();
+      const targetRect = target.getBoundingClientRect();
+      container.scrollTo({
+        top:
+          container.scrollTop +
+          targetRect.top -
+          containerRect.top -
+          PAGE_SCROLL_PADDING_Y,
+        behavior
+      });
+    }
     activePageNumber = clamped;
   }
 
@@ -2688,49 +2702,52 @@
         />
       {/if}
 
-      <div
-        bind:this={container}
-        use:ctrlWheelZoom
-        class="themed-scrollbar min-h-0 flex-1 {PAGE_SCROLLER_CLASS}"
-      >
-        <div class={PAGE_COLUMN_CLASS}>
-          {#each pageNumbers as pageNumber (pageNumber)}
-            {@const size = placeholderSize(pageNumber)}
-            {@const shouldRender = isRendering(pageNumber)}
-            {@const invalidation = invalidationOf(pageNumber)}
-            {@const pageCaption = tUi('pdf.page.caption')
-              .replace('{page}', String(pageNumber))
-              .replace('{total}', String(pageNumbers.length))}
-            <figure
-              class="flex w-max flex-col items-center gap-1"
-              data-page-number={pageNumber}
-            >
-              <div
-                use:renderPage={{
-                  pageNumber,
-                  version: renderVersion,
-                  zoom,
-                  zoomMode,
-                  annotationVersion,
-                  activeTool,
-                  areaMode,
-                  selectedAnnotationId,
-                  shouldRender,
-                  invalidation,
-                  searchVersion
-                }}
-                style="width:{size.width}px; height:{size.height}px"
-                class="pdf-page-host pdfViewer {PAGE_SURFACE_CLASS}"
-              ></div>
-              <figcaption
-                class="flex items-center gap-1 text-[10px] text-muted-foreground"
+      <div class="relative flex min-h-0 flex-1">
+        <div
+          bind:this={container}
+          use:ctrlWheelZoom
+          class="min-h-0 flex-1 {PAGE_SCROLLER_CLASS} {PAGE_SCROLLER_SCROLLBAR_CLASS}"
+        >
+          <div class={PAGE_COLUMN_CLASS}>
+            {#each pageNumbers as pageNumber (pageNumber)}
+              {@const size = placeholderSize(pageNumber)}
+              {@const shouldRender = isRendering(pageNumber)}
+              {@const invalidation = invalidationOf(pageNumber)}
+              {@const pageCaption = tUi('pdf.page.caption')
+                .replace('{page}', String(pageNumber))
+                .replace('{total}', String(pageNumbers.length))}
+              <figure
+                class="flex w-max flex-col items-center gap-1"
+                data-page-number={pageNumber}
               >
-                <FileText class="size-3" aria-hidden="true" />
-                {pageCaption}
-              </figcaption>
-            </figure>
-          {/each}
+                <div
+                  use:renderPage={{
+                    pageNumber,
+                    version: renderVersion,
+                    zoom,
+                    zoomMode,
+                    annotationVersion,
+                    activeTool,
+                    areaMode,
+                    selectedAnnotationId,
+                    shouldRender,
+                    invalidation,
+                    searchVersion
+                  }}
+                  style="width:{size.width}px; height:{size.height}px"
+                  class="pdf-page-host pdfViewer {PAGE_SURFACE_CLASS}"
+                ></div>
+                <figcaption
+                  class="flex items-center gap-1 text-[10px] text-muted-foreground"
+                >
+                  <FileText class="size-3" aria-hidden="true" />
+                  {pageCaption}
+                </figcaption>
+              </figure>
+            {/each}
+          </div>
         </div>
+        <PageOverlayScrollbar target={container} />
       </div>
 
       {#if commentsSidebarOpen}

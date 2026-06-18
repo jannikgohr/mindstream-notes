@@ -16,23 +16,45 @@
  * one, tune its twin.
  */
 
+// ── Page size ───────────────────────────────────────────────────────
+
+/**
+ * ISO A4 page, expressed in ink-document units.
+ *
+ * 1190×1684 is exactly 2× the 595×842 pt A4 page PDF.js renders, so an
+ * ink page and an A4 PDF page share identical proportions and frame the
+ * same way at fit-width. (595×842 is the conventional A4 rounding — a
+ * hair, ~0.06%, taller than the 210:297 ideal — but matching the PDF is
+ * what page parity needs, so we mirror it rather than the ideal.)
+ *
+ * The ink editor's pages are always this size; only the page *count*
+ * grows. A note looking "taller" than a PDF is the editor's trailing
+ * blank page + 2-page minimum (room to keep drawing), not the page.
+ */
+export const A4_PAGE: { width: number; height: number } = {
+  width: 1190,
+  height: 1684
+};
+
 // ── Spacing (px) ────────────────────────────────────────────────────
 
 /** Vertical gap between consecutive pages — mirrors `gap-4`. */
 export const PAGE_GAP = 16;
 
-/** Horizontal padding around the scrollable page column — `px-3`. */
-export const PAGE_SCROLL_PADDING_X = 12;
-
 /** Vertical padding around the scrollable page column — `py-4`. */
 export const PAGE_SCROLL_PADDING_Y = 16;
 
 /**
- * Gutter (px) kept on EACH side between a fitted page and the viewport
- * edge, so a fit-to-width render never kisses the container. Both the
- * PDF viewer and the ink editor apply it per side (multiply by 2 for
- * the total horizontal inset), so an A4 page fills the column the same
- * way in either renderer.
+ * The page's normal breathing-room margin (px), kept on each side of a
+ * fitted page. Applied per side by both the PDF viewer (fit-width) and
+ * the ink editor (fit-width side gutter, top gap, and pan clamp).
+ *
+ * Because the page scrollbar is overlaid (it takes no layout width — see
+ * the consumers), this single margin is all that insets the page: both
+ * renderers fit an A4 page to the full panel width minus 2× this margin,
+ * so they're the same size and centred regardless of page count. No
+ * extra scrollbar gutter is reserved — there's no scrollbar width to
+ * reserve.
  */
 export const PAGE_FIT_MARGIN = 16;
 
@@ -46,8 +68,23 @@ export const PAGE_FIT_TOP_MARGIN = 72;
 
 // ── DOM surface (Tailwind class strings) ────────────────────────────
 
-/** Scroll container that holds the centred page column. */
-export const PAGE_SCROLLER_CLASS = 'overflow-auto px-3 py-4';
+/**
+ * Scroll container that holds the centred page column. No horizontal
+ * padding: the side gutter comes entirely from {@link PAGE_FIT_MARGIN}
+ * (the page fits to a width that already reserves it), and the vertical
+ * scrollbar is overlaid via {@link PAGE_SCROLLER_SCROLLBAR_CLASS} so it
+ * never steals width or shifts the page off-centre.
+ */
+export const PAGE_SCROLLER_CLASS = 'overflow-auto py-4';
+
+/**
+ * Overlay the page scrollbar: hide the native bar so it occupies no
+ * layout width (the page stays full-width and centred regardless of
+ * page count) while the container still scrolls via wheel / trackpad /
+ * drag. WebView2/Chromium has no native overlay scrollbar, so "overlay"
+ * here means "hidden footprint".
+ */
+export const PAGE_SCROLLER_SCROLLBAR_CLASS = 'scrollbar-none';
 
 /** Centred, content-width column the pages stack inside. */
 export const PAGE_COLUMN_CLASS =
