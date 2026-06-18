@@ -281,7 +281,7 @@
     "ink.toolbar.zoomOut": "Verkleinern",
     "ink.toolbar.zoomIn": "Vergrößern",
     "ink.toolbar.zoom": "Zoom wählen",
-    "ink.toolbar.fitPage": "Breite anpassen",
+    "ink.toolbar.fitWidth": "Breite anpassen",
     "ink.toolbar.settings": "Ink-Einstellungen",
     "ink.toolbar.fingerDrawing": "Fingerzeichnen umschalten",
     "ink.toolbar.pageTheme": "Seitendesign umschalten",

@@ -50,6 +50,11 @@
     type DrawingToolbarSettingsPayload
   } from '$lib/api';
   import { isAndroid, isMobile } from '$lib/platform';
+  import {
+    PAGE_FIT_MARGIN,
+    PAGE_FIT_TOP_MARGIN,
+    canvasPageSurface
+  } from '$lib/layout/page-layout';
   import { tUi, tValue } from '$lib/settings/i18n.svelte';
   import {
     getSettingValue,
@@ -99,13 +104,7 @@
   const SAVE_DEBOUNCE_MS = 800;
   const ERASER_RADIUS = 10;
   const PAGE_FILL_LIGHT = 0xffffffff;
-  const PAGE_SHADOW_LIGHT = 'rgba(15, 23, 42, 0.16)';
-  const PAGE_SHADOW_DARK = 'rgba(0, 0, 0, 0.42)';
-  const PAGE_EDGE_DARK = 'rgba(255, 255, 255, 0.12)';
-  const PAGE_EDGE_LIGHT = 'rgba(15, 23, 42, 0.08)';
   const TOOL_PREVIEW_DASH = [5, 4];
-  const FIT_PAGE_MARGIN_PX = 32;
-  const FIT_PAGE_TOP_MARGIN_PX = 72;
   const MAX_ZOOM_FACTOR = 6;
   const INK_ZOOM_STEP = 1.2;
   const INK_QUICK_ZOOMS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
@@ -288,7 +287,7 @@
   });
   const inkFitActive = $derived.by(() => {
     void zoomUiVersion;
-    return Math.abs(view.scale - minScale()) < 0.01;
+    return Math.abs(view.scale - fitWidthScale()) < 0.01;
   });
   const brushLineHeight = $derived(Math.max(2, Math.min(12, width)));
   const brushSizeText = $derived(
@@ -675,8 +674,7 @@
 
   function resizeCanvas() {
     if (!canvasHostEl || !canvasEl) return;
-    const previousMinScale = minScale();
-    const wasAtMinScale = view.scale <= previousMinScale + 0.001;
+    const wasAtFitWidth = view.scale <= fitWidthScale() + 0.001;
     const rect = canvasHostEl.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
     const widthPx = Math.max(1, Math.floor(rect.width * dpr));
@@ -691,8 +689,8 @@
     view.width = rect.width;
     view.height = rect.height;
     const nextMinScale = minScale();
-    if (!viewInitialized || wasAtMinScale) {
-      fitPage();
+    if (!viewInitialized || wasAtFitWidth) {
+      fitWidth();
       viewInitialized = true;
     } else {
       view.scale = Math.max(view.scale, nextMinScale);
@@ -757,16 +755,21 @@
     }, 120);
   }
 
-  function fitPage() {
-    view.scale = minScale();
+  // Default view: fill the column width with the A4 page, exactly like
+  // the PDF viewer's fit-width. The page overflows vertically and is
+  // scrolled/panned; zooming out below this reaches the whole-page floor
+  // (minScale). Mirrors PdfNoteViewer's fit-width zoom + PAGE_FIT_MARGIN
+  // gutters so both renderers frame an A4 sheet identically.
+  function fitWidthScale(): number {
+    const availableWidth = Math.max(1, view.width - PAGE_FIT_MARGIN * 2);
+    return Math.max(minScale(), availableWidth / layout.page.width);
+  }
+
+  function fitWidth() {
+    view.scale = fitWidthScale();
     view.panX = (view.width - layout.page.width * view.scale) * 0.5;
-    view.panY =
-      FIT_PAGE_TOP_MARGIN_PX +
-      (view.height -
-        FIT_PAGE_TOP_MARGIN_PX -
-        FIT_PAGE_MARGIN_PX -
-        layout.page.height * view.scale) *
-        0.5;
+    // Top-align the first page with the same gutter the sides get.
+    view.panY = PAGE_FIT_MARGIN;
     clampView();
   }
 
@@ -782,11 +785,8 @@
     } else {
       view.panX = Math.min(16, Math.max(view.width - contentW - 16, view.panX));
     }
-    const bottomMargin = Math.max(
-      FIT_PAGE_MARGIN_PX,
-      layout.pageGap * view.scale
-    );
-    const topMargin = Math.max(FIT_PAGE_TOP_MARGIN_PX, bottomMargin);
+    const bottomMargin = Math.max(PAGE_FIT_MARGIN, layout.pageGap * view.scale);
+    const topMargin = Math.max(PAGE_FIT_TOP_MARGIN, bottomMargin);
     const minY = view.height - contentH - bottomMargin;
     const maxY = topMargin;
     view.panY =
@@ -891,15 +891,16 @@
       if (b.y < -32 || a.y > view.height + 32) continue;
       const width = b.x - a.x;
       const height = b.y - a.y;
+      const surface = canvasPageSurface(pageDark);
       ctx.save();
-      ctx.shadowColor = pageDark ? PAGE_SHADOW_DARK : PAGE_SHADOW_LIGHT;
-      ctx.shadowBlur = pageDark ? 18 : 14;
+      ctx.shadowColor = surface.shadowColor;
+      ctx.shadowBlur = surface.shadowBlur;
       ctx.shadowOffsetX = 0;
-      ctx.shadowOffsetY = pageDark ? 8 : 6;
+      ctx.shadowOffsetY = surface.shadowOffsetY;
       ctx.fillStyle = displayCssColor(PAGE_FILL_LIGHT);
       ctx.fillRect(a.x, a.y, width, height);
       ctx.restore();
-      ctx.strokeStyle = pageDark ? PAGE_EDGE_DARK : PAGE_EDGE_LIGHT;
+      ctx.strokeStyle = surface.edgeColor;
       ctx.lineWidth = 1;
       ctx.strokeRect(a.x + 0.5, a.y + 0.5, width - 1, height - 1);
     }
@@ -2140,8 +2141,8 @@
     zoomUiVersion += 1;
   }
 
-  function setFitPageZoom() {
-    fitPage();
+  function setFitWidthZoom() {
+    fitWidth();
     scheduleDraw();
     updateLiveInkOverlayStyle();
     zoomMenuOpen = false;
@@ -2227,10 +2228,10 @@
   }
 
   function minScale(): number {
-    const availableWidth = Math.max(1, view.width - FIT_PAGE_MARGIN_PX * 2);
+    const availableWidth = Math.max(1, view.width - PAGE_FIT_MARGIN * 2);
     const availableHeight = Math.max(
       1,
-      view.height - FIT_PAGE_TOP_MARGIN_PX - FIT_PAGE_MARGIN_PX
+      view.height - PAGE_FIT_TOP_MARGIN - PAGE_FIT_MARGIN
     );
     return Math.max(
       0.05,
@@ -3211,13 +3212,13 @@
         zoomOutLabel={tUi('ink.toolbar.zoomOut')}
         zoomInLabel={tUi('ink.toolbar.zoomIn')}
         zoomMenuLabel={tUi('ink.toolbar.zoom')}
-        fitLabel={tUi('ink.toolbar.fitPage')}
+        fitLabel={tUi('ink.toolbar.fitWidth')}
         fitActive={inkFitActive}
         zoomOptions={INK_QUICK_ZOOMS}
         selectedZoom={inkFitActive ? null : view.scale}
         onZoomOut={() => zoomInkBy(1 / INK_ZOOM_STEP)}
         onZoomIn={() => zoomInkBy(INK_ZOOM_STEP)}
-        onFit={setFitPageZoom}
+        onFit={setFitWidthZoom}
         onSelectZoom={setInkZoom}
       />
     </div>

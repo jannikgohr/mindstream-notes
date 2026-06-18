@@ -381,7 +381,7 @@
     "ink.toolbar.zoomOut": "Zoom out",
     "ink.toolbar.zoomIn": "Zoom in",
     "ink.toolbar.zoom": "Choose zoom",
-    "ink.toolbar.fitPage": "Fit page",
+    "ink.toolbar.fitWidth": "Fit width",
     "ink.toolbar.settings": "Ink settings",
     "ink.toolbar.fingerDrawing": "Toggle finger drawing",
     "ink.toolbar.pageTheme": "Toggle page theme",

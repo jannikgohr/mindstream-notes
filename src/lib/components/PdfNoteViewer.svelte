@@ -44,6 +44,12 @@
   import { base64ToBytes } from '$lib/editor/base64';
   import { pickCursorColor } from '$lib/editor/cursor-color';
   import { isMobile } from '$lib/platform';
+  import {
+    PAGE_FIT_MARGIN,
+    PAGE_SCROLLER_CLASS,
+    PAGE_COLUMN_CLASS,
+    PAGE_SURFACE_CLASS
+  } from '$lib/layout/page-layout';
   import { getSettingValue } from '$lib/settings/store.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { exportAnnotatedPdfNote } from '$lib/note-exporters/pdf';
@@ -1185,7 +1191,7 @@
 
   const fitWidthZoom = $derived.by(() => {
     if (containerWidth <= 0 || firstPageWidth <= 0) return 1;
-    return clampZoom((containerWidth - 32) / firstPageWidth);
+    return clampZoom((containerWidth - PAGE_FIT_MARGIN * 2) / firstPageWidth);
   });
 
   const effectiveZoom = $derived(
@@ -2253,7 +2259,10 @@
       if (cancelled || generation !== drawGeneration) return;
 
       const baseViewport = page.getViewport({ scale: 1 });
-      const availableWidth = Math.max(280, renderContainer.clientWidth - 32);
+      const availableWidth = Math.max(
+        280,
+        renderContainer.clientWidth - PAGE_FIT_MARGIN * 2
+      );
       const fitScale = clampZoom(availableWidth / baseViewport.width);
       const requestedScale =
         request.zoomMode === 'fit-width' ? fitScale : clampZoom(request.zoom);
@@ -2682,9 +2691,9 @@
       <div
         bind:this={container}
         use:ctrlWheelZoom
-        class="themed-scrollbar min-h-0 flex-1 overflow-auto px-3 py-4"
+        class="themed-scrollbar min-h-0 flex-1 {PAGE_SCROLLER_CLASS}"
       >
-        <div class="mx-auto flex min-w-full w-max flex-col items-center gap-4">
+        <div class={PAGE_COLUMN_CLASS}>
           {#each pageNumbers as pageNumber (pageNumber)}
             {@const size = placeholderSize(pageNumber)}
             {@const shouldRender = isRendering(pageNumber)}
@@ -2711,7 +2720,7 @@
                   searchVersion
                 }}
                 style="width:{size.width}px; height:{size.height}px"
-                class="pdf-page-host pdfViewer bg-white shadow-sm ring-1 ring-border"
+                class="pdf-page-host pdfViewer {PAGE_SURFACE_CLASS}"
               ></div>
               <figcaption
                 class="flex items-center gap-1 text-[10px] text-muted-foreground"
