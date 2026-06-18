@@ -128,6 +128,8 @@
     version: number;
     zoom: number;
     zoomMode: ZoomMode;
+    width: number;
+    height: number;
     annotationVersion: number;
     activeTool: PdfTool;
     areaMode: boolean;
@@ -1806,6 +1808,7 @@
     let currentViewport: ReturnType<
       Awaited<ReturnType<PdfDocument['getPage']>>['getViewport']
     > | null = null;
+    let renderedSize: PageSize | null = null;
     // Link annotations for this page (external URLs + internal jumps),
     // fetched once per draw and overlaid as clickable anchors.
     let currentLinks: PdfLink[] = [];
@@ -2237,7 +2240,66 @@
       pageView?.destroy();
       pageView = null;
       currentViewport = null;
+      renderedSize = null;
       pageSurface.replaceChildren();
+      pageSurface.classList.remove('pdf-page-previewing');
+    }
+
+    function clearPreviewScale() {
+      const pageEl = pageSurface.querySelector<HTMLElement>('.page');
+      if (!pageEl) return;
+      pageEl.style.transform = '';
+      pageEl.style.transformOrigin = '';
+      for (const child of Array.from(pageEl.children) as HTMLElement[]) {
+        child.style.transform = '';
+        child.style.transformOrigin = '';
+        child.style.width = '';
+        child.style.height = '';
+        child.style.right = '';
+        child.style.bottom = '';
+      }
+      if (renderedSize) {
+        pageEl.style.width = `${renderedSize.width}px`;
+        pageEl.style.height = `${renderedSize.height}px`;
+      }
+      pageSurface.classList.remove('pdf-page-previewing');
+    }
+
+    function measurePageSize(pageEl: HTMLElement): PageSize | null {
+      const width = pageEl.offsetWidth;
+      const height = pageEl.offsetHeight;
+      if (width > 0 && height > 0) return { width, height };
+      const rect = pageEl.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) {
+        return { width: rect.width, height: rect.height };
+      }
+      return null;
+    }
+
+    function applyPreviewScale(target: PageSize) {
+      if (!renderedSize || target.width <= 0 || target.height <= 0) return;
+      const pageEl = pageSurface.querySelector<HTMLElement>('.page');
+      if (!pageEl) return;
+      const source = renderedSize ?? measurePageSize(pageEl);
+      if (!source) return;
+      renderedSize = source;
+      const scaleX = target.width / Math.max(1, renderedSize.width);
+      const scaleY = target.height / Math.max(1, renderedSize.height);
+      pageEl.style.width = `${target.width}px`;
+      pageEl.style.height = `${target.height}px`;
+      if (Math.abs(scaleX - 1) < 0.001 && Math.abs(scaleY - 1) < 0.001) {
+        clearPreviewScale();
+        return;
+      }
+      for (const child of Array.from(pageEl.children) as HTMLElement[]) {
+        child.style.width = `${renderedSize.width}px`;
+        child.style.height = `${renderedSize.height}px`;
+        child.style.right = 'auto';
+        child.style.bottom = 'auto';
+        child.style.transformOrigin = '0 0';
+        child.style.transform = `scale(${scaleX}, ${scaleY})`;
+      }
+      pageSurface.classList.add('pdf-page-previewing');
     }
 
     let drawKickoffTimer: ReturnType<typeof setTimeout> | null = null;
@@ -2283,6 +2345,7 @@
       const viewerScale = requestedScale / PDF_TO_CSS_UNITS;
       const viewport = page.getViewport({ scale: requestedScale });
       currentViewport = viewport;
+      renderedSize = { width: viewport.width, height: viewport.height };
       // Expose the rendered viewport so text-selection client-rects can be
       // mapped back into PDF user space for text-aware annotations.
       pageViewports.set(request.pageNumber, viewport);
@@ -2321,6 +2384,11 @@
         }
         await pageView.draw();
         if (cancelled || generation !== drawGeneration) return;
+        const pageEl = pageSurface.querySelector<HTMLElement>('.page');
+        renderedSize = pageEl
+          ? (measurePageSize(pageEl) ?? renderedSize)
+          : renderedSize;
+        clearPreviewScale();
         renderAppAnnotations();
       } catch (err) {
         if (
@@ -2349,6 +2417,8 @@
           next.version !== prev.version ||
           next.zoom !== prev.zoom ||
           next.zoomMode !== prev.zoomMode ||
+          next.width !== prev.width ||
+          next.height !== prev.height ||
           // Bumped when an externally-cancelled render needs to restart
           // after the user scrolled back inside the band before grace.
           next.invalidation !== prev.invalidation;
@@ -2358,6 +2428,9 @@
           cancelScheduledDraw();
           void draw();
         } else if (enteringRender || visualChange) {
+          if (visualChange && next.shouldRender) {
+            applyPreviewScale({ width: next.width, height: next.height });
+          }
           // Debounce. Fast scrolling fires enteringRender for many pages
           // in quick succession; each call to scheduleDraw clears the
           // previous timer, so a page that's been in the band for less
@@ -2726,6 +2799,8 @@
                     version: renderVersion,
                     zoom,
                     zoomMode,
+                    width: size.width,
+                    height: size.height,
                     annotationVersion,
                     activeTool,
                     areaMode,
@@ -2846,6 +2921,10 @@
     --hcm-highlight-filter: none;
     --hcm-highlight-selected-filter: none;
     background-color: white;
+  }
+
+  :global(.pdf-page-host.pdf-page-previewing) {
+    overflow: hidden;
   }
 
   :global(.pdf-page-host .page) {
