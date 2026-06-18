@@ -1266,30 +1266,43 @@
     pageInvalidationVersion += 1;
   }
 
-  async function prefetchPageSizes(
+  // Pages whose natural size has been fetched (or is in flight). Guards
+  // ensurePageSize against issuing duplicate getPage() calls for the same page.
+  const pageSizeFetches = new Set<number>();
+
+  // Seed the size array with just the first page. The rest are filled in
+  // lazily by ensurePageSize as they approach the viewport; until then
+  // placeholderSize estimates them from the first page so the scroll height
+  // is approximately right. This replaces an eager loop that round-tripped the
+  // worker once per page on open — a 500-page PDF flooded it before the user
+  // could interact.
+  function seedPageSizes(
     doc: PdfDocument,
     firstPage: Awaited<ReturnType<PdfDocument['getPage']>>
   ) {
-    // The first page is already in hand from the load path; reuse it instead
-    // of round-tripping again. PDF.js caches page proxies once obtained.
     const first = firstPage.getViewport({ scale: 1 });
     const sizes: PageSize[] = new Array(doc.numPages);
     sizes[0] = { width: first.width, height: first.height };
-    // Render the first page's size immediately so the top of the document
-    // looks right; the rest stream in as they resolve.
-    pageSizes = [...sizes];
-    for (let i = 2; i <= doc.numPages; i++) {
-      try {
-        const page = await doc.getPage(i);
-        const vp = page.getViewport({ scale: 1 });
-        sizes[i - 1] = { width: vp.width, height: vp.height };
-        // Batched commit every 25 pages keeps Svelte reactivity overhead low
-        // on huge documents while still letting the user see progressive
-        // placeholder fill-in.
-        if (i % 25 === 0 || i === doc.numPages) pageSizes = [...sizes];
-      } catch (err) {
-        console.warn('[PdfNoteViewer] prefetchPageSizes page', i, err);
-      }
+    pageSizes = sizes;
+    pageSizeFetches.clear();
+    pageSizeFetches.add(1);
+  }
+
+  // Fetch a single page's natural size on demand and patch it into pageSizes,
+  // correcting the placeholder once it's known. No-op if already known/pending.
+  async function ensurePageSize(pageNumber: number) {
+    const doc = pdfDoc;
+    if (!doc || pageNumber < 1 || pageNumber > doc.numPages) return;
+    if (pageSizes[pageNumber - 1] || pageSizeFetches.has(pageNumber)) return;
+    pageSizeFetches.add(pageNumber);
+    try {
+      const page = await doc.getPage(pageNumber);
+      if (doc !== pdfDoc) return; // document swapped out mid-await
+      const vp = page.getViewport({ scale: 1 });
+      pageSizes[pageNumber - 1] = { width: vp.width, height: vp.height };
+    } catch (err) {
+      pageSizeFetches.delete(pageNumber); // allow a later retry
+      console.warn('[PdfNoteViewer] ensurePageSize page', pageNumber, err);
     }
   }
 
@@ -1827,6 +1840,9 @@
           const pageNum = pageAttr ? Number(pageAttr) : NaN;
           if (!Number.isFinite(pageNum)) continue;
           if (entry.isIntersecting) {
+            // A page near the viewport: fetch its real size (if not already
+            // known) so the placeholder is correct by the time it renders.
+            void ensurePageSize(pageNum);
             const existing = renderDropTimers.get(pageNum);
             if (existing) {
               clearTimeout(existing);
@@ -1980,10 +1996,10 @@
       const firstPage = await pdfDoc.getPage(1);
       firstPageWidth = firstPage.getViewport({ scale: 1 }).width;
       pageNumbers = Array.from({ length: pdfDoc.numPages }, (_, i) => i + 1);
-      // Pre-fetch every page's natural viewport so the each-block can size
-      // placeholders correctly before (and instead of) a canvas mounts.
-      // PDF.js caches page proxies, so this is cheap and one-shot.
-      void prefetchPageSizes(pdfDoc, firstPage);
+      // Seed the first page's size; the rest are fetched lazily as they near
+      // the viewport (ensurePageSize, driven by the render observer) so we
+      // don't round-trip the worker once per page on open.
+      seedPageSizes(pdfDoc, firstPage);
       // Document outline (bookmarks) for the navigator's Outline tab.
       // Resolved off the load path; the tab simply stays empty until ready.
       void loadFlatOutline(pdfDoc).then((items) => {
