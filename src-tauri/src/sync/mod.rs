@@ -44,13 +44,16 @@ use crate::error::{AppError, AppResult};
 const COLLECTION_TYPE_NOTES: &str = "mindstream.notes";
 const COLLECTION_TYPE_FOLDERS: &str = "mindstream.folders";
 const COLLECTION_TYPE_ASSETS: &str = "mindstream.assets";
+const COLLECTION_TYPE_SIGNATURES: &str = "mindstream.signatures";
 const ITEM_TYPE_NOTE: &str = "ms-md-note";
 const ITEM_TYPE_FOLDER: &str = "ms-md-folder";
 const ITEM_TYPE_ASSET: &str = "ms-md-asset";
+const ITEM_TYPE_SIGNATURE: &str = "ms-md-signature";
 
 const KIND_NOTES: &str = "notes";
 const KIND_FOLDERS: &str = "folders";
 const KIND_ASSETS: &str = "assets";
+const KIND_SIGNATURES: &str = "signatures";
 
 const PAYLOAD_SCHEMA: u32 = 2;
 
@@ -112,6 +115,7 @@ fn mark_local_by_remote_uid_dirty(db: &Db, kind: &str, etebase_uid: &str) -> App
         KIND_FOLDERS => "collections",
         KIND_NOTES => "notes",
         KIND_ASSETS => "assets",
+        KIND_SIGNATURES => "signatures",
         _ => return Ok(false),
     };
     db.with_conn(|c| {
@@ -211,6 +215,19 @@ struct AssetPayload {
     modified: String,
 }
 
+/// What ends up in `Item::content` for a signature. `data` is the opaque
+/// JSON geometry blob (see signatures/mod.rs); we keep our own `id` inside
+/// so pulled items correlate back to local rows. Etebase E2E-encrypts the
+/// whole content, same as notes/assets.
+#[derive(Debug, Serialize, Deserialize)]
+struct SignaturePayload {
+    schema: u32,
+    id: String,
+    data: String,
+    created: String,
+    modified: String,
+}
+
 /// Result reported back to the UI after a sync attempt.
 #[derive(Debug, Default, Clone, Serialize)]
 pub struct SyncReport {
@@ -220,6 +237,8 @@ pub struct SyncReport {
     pub notes_pushed: usize,
     pub assets_pulled: usize,
     pub assets_pushed: usize,
+    pub signatures_pulled: usize,
+    pub signatures_pushed: usize,
     pub conflicts_resolved: usize,
 }
 
@@ -346,6 +365,15 @@ fn run(db: &Db, account: &Account) -> AppResult<SyncDelta> {
     )?;
     push_assets(db, &assets_im, &mut delta.report)?;
 
+    // Signatures are user-global (no FK back to notes), so order relative
+    // to the others doesn't matter — apply_signature never orphans.
+    let signatures_col = ensure_collection(db, &cm, KIND_SIGNATURES, COLLECTION_TYPE_SIGNATURES)?;
+    let signatures_im = cm
+        .item_manager(&signatures_col)
+        .map_err(|e| AppError::InvalidArg(format!("item_manager(signatures): {e}")))?;
+    pull_signatures(db, &signatures_im, &mut delta.report)?;
+    push_signatures(db, &signatures_im, &mut delta.report)?;
+
     Ok(delta)
 }
 
@@ -396,6 +424,7 @@ fn ensure_collection(
         KIND_NOTES => "Mindstream Notes",
         KIND_FOLDERS => "Mindstream Folders",
         KIND_ASSETS => "Mindstream Assets",
+        KIND_SIGNATURES => "Mindstream Signatures",
         _ => "Mindstream",
     }))
     .set_mtime(Some(now_unix_ms()));
@@ -781,6 +810,136 @@ fn apply_asset(db: &Db, item: &Item) -> AppResult<ApplyAssetOutcome> {
         }
         tx.commit()?;
         Ok(ApplyAssetOutcome::Applied(payload.id))
+    })
+}
+
+// ---------- Signatures pull ----------
+
+fn pull_signatures(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult<()> {
+    // Same bad_stoken self-heal pattern as pull_folders / pull_assets.
+    let mut already_retried = false;
+    loop {
+        match pull_signatures_once(db, im, report) {
+            Ok(()) => return Ok(()),
+            Err(err) if !already_retried && is_bad_stoken_error(&err) => {
+                log::warn!(
+                    "[sync] bad_stoken on signatures pull — resetting cursor and retrying ({err})"
+                );
+                save_stoken(db, KIND_SIGNATURES, None)?;
+                already_retried = true;
+                continue;
+            }
+            Err(err) => return Err(err),
+        }
+    }
+}
+
+fn pull_signatures_once(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult<()> {
+    let stoken = load_stoken(db, KIND_SIGNATURES)?;
+    let mut new_stoken = stoken.clone();
+    loop {
+        let mut opts = FetchOptions::new();
+        opts = opts.stoken(new_stoken.as_deref());
+        let resp = im
+            .list(Some(&opts))
+            .map_err(|e| AppError::InvalidArg(format!("list signatures: {e}")))?;
+        for item in resp.data() {
+            match apply_signature(db, item) {
+                Ok(true) => report.signatures_pulled += 1,
+                Ok(false) => {}
+                Err(err) if is_corrupt_remote_content(&err) => {
+                    if mark_local_by_remote_uid_dirty(db, KIND_SIGNATURES, item.uid())? {
+                        log::warn!(
+                            "[sync] marked local signature item {} dirty for remote repair",
+                            item.uid()
+                        );
+                    } else {
+                        log::error!(
+                            "[sync] corrupt remote signature item {} has no local copy — manual recovery required",
+                            item.uid()
+                        );
+                    }
+                    log::error!(
+                        "[sync] skipping corrupt remote signature item {}: {err}",
+                        item.uid()
+                    );
+                }
+                Err(err) => return Err(err),
+            }
+        }
+        new_stoken = resp.stoken().map(str::to_string).or(new_stoken);
+        if resp.done() {
+            break;
+        }
+    }
+    if new_stoken != stoken {
+        save_stoken(db, KIND_SIGNATURES, new_stoken.as_deref())?;
+    }
+    Ok(())
+}
+
+/// Apply one pulled signature item to local SQLite. Returns `true` when a
+/// row was inserted/updated (so the caller can bump the pulled counter),
+/// `false` for deletes and missing-content items. No FK gate — signatures
+/// are user-global, so there's nothing to orphan against.
+fn apply_signature(db: &Db, item: &Item) -> AppResult<bool> {
+    if item.is_deleted() {
+        db.with_conn(|c| {
+            c.execute(
+                "DELETE FROM signatures WHERE etebase_uid = ?1",
+                params![item.uid()],
+            )?;
+            Ok(())
+        })?;
+        return Ok(false);
+    }
+    if item.is_missing_content() {
+        return Ok(false);
+    }
+    let raw = item
+        .content()
+        .map_err(|e| AppError::InvalidArg(format!("signature content: {e}")))?;
+    let payload: SignaturePayload = rmp_serde::from_slice(&raw)
+        .map_err(|e| AppError::InvalidArg(format!("signature msgpack: {e}")))?;
+    let etag = item.etag().to_string();
+    let uid = item.uid().to_string();
+
+    db.with_conn_mut(|c| {
+        let tx = c.transaction()?;
+        let exists = tx
+            .query_row(
+                "SELECT 1 FROM signatures WHERE id = ?1",
+                params![payload.id],
+                |_| Ok(true),
+            )
+            .optional()?
+            .is_some();
+        if exists {
+            // Geometry blob, not a CRDT — last-write-wins on the remote copy.
+            tx.execute(
+                "UPDATE signatures
+                 SET data = ?1, modified = ?2, etebase_uid = ?3,
+                     etebase_etag = ?4, dirty = 0
+                 WHERE id = ?5",
+                params![payload.data, payload.modified, uid, etag, payload.id],
+            )?;
+        } else {
+            tx.execute(
+                "INSERT INTO signatures(id, data, created, modified,
+                                        etebase_uid, etebase_etag, dirty)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0)",
+                params![
+                    payload.id,
+                    payload.data,
+                    payload.created,
+                    payload.modified,
+                    uid,
+                    etag,
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(true)
     })
 }
 
@@ -1322,6 +1481,73 @@ fn push_assets(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult<
     drain_tombstones(db, im, "asset")
 }
 
+/// Push dirty signatures as per-signature items, then drain the signature
+/// tombstone queue. Mirrors `push_assets` — the geometry blob is small but
+/// the lifecycle (create vs fetch+set_content, etag round-trip, conflict
+/// resolution) is identical.
+fn push_signatures(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult<()> {
+    let dirty = load_dirty_signatures(db)?;
+    if dirty.is_empty() {
+        return drain_tombstones(db, im, "signature");
+    }
+
+    let mut prepared: Vec<(Item, String)> = Vec::with_capacity(dirty.len());
+    for row in &dirty {
+        let payload = SignaturePayload {
+            schema: 1,
+            id: row.id.clone(),
+            data: row.data.clone(),
+            created: row.created.clone(),
+            modified: row.modified.clone(),
+        };
+        let bytes = rmp_serde::to_vec_named(&payload)
+            .map_err(|e| AppError::InvalidArg(format!("encode signature: {e}")))?;
+        let mut meta = ItemMetadata::new();
+        meta.set_item_type(Some(ITEM_TYPE_SIGNATURE))
+            .set_name(Some(row.id.clone()))
+            .set_mtime(Some(now_unix_ms()));
+        let item = if let Some(uid) = &row.etebase_uid {
+            let mut existing = im
+                .fetch(uid, None)
+                .map_err(|e| AppError::InvalidArg(format!("fetch signature {uid}: {e}")))?;
+            existing
+                .set_meta(&meta)
+                .map_err(|e| AppError::InvalidArg(format!("set_meta signature: {e}")))?;
+            existing
+                .set_content(&bytes)
+                .map_err(|e| AppError::InvalidArg(format!("set_content signature: {e}")))?;
+            existing
+        } else {
+            im.create(&meta, &bytes)
+                .map_err(|e| AppError::InvalidArg(format!("create signature item: {e}")))?
+        };
+        prepared.push((item, row.id.clone()));
+    }
+
+    let local_ids: Vec<String> = prepared.iter().map(|(_, id)| id.clone()).collect();
+    let mut items: Vec<Item> = prepared.into_iter().map(|(i, _)| i).collect();
+    transact_or_resolve(im, &mut items, &mut report.conflicts_resolved)
+        .map_err(|e| AppError::InvalidArg(format!("transaction signatures: {e}")))?;
+
+    let pushed = items.len();
+    db.with_conn_mut(|c| {
+        let tx = c.transaction()?;
+        for (item, local_id) in items.iter().zip(local_ids.iter()) {
+            tx.execute(
+                "UPDATE signatures
+                 SET etebase_uid = ?1, etebase_etag = ?2, dirty = 0
+                 WHERE id = ?3",
+                params![item.uid(), item.etag(), local_id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    })?;
+    report.signatures_pushed += pushed;
+
+    drain_tombstones(db, im, "signature")
+}
+
 /// Try a transaction; on `Error::Conflict`, refetch the colliding items,
 /// CRDT-merge any note bodies, and retry. Bounded retry count so a
 /// pathological case doesn't loop forever.
@@ -1554,6 +1780,33 @@ fn load_dirty_assets(db: &Db) -> AppResult<Vec<DirtyAsset>> {
                 created: r.get(5)?,
                 modified: r.get(6)?,
                 etebase_uid: r.get(7)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    })
+}
+
+struct DirtySignature {
+    id: String,
+    data: String,
+    created: String,
+    modified: String,
+    etebase_uid: Option<String>,
+}
+
+fn load_dirty_signatures(db: &Db) -> AppResult<Vec<DirtySignature>> {
+    db.with_conn(|c| {
+        let mut stmt = c.prepare(
+            "SELECT id, data, created, modified, etebase_uid
+             FROM signatures WHERE dirty = 1",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(DirtySignature {
+                id: r.get(0)?,
+                data: r.get(1)?,
+                created: r.get(2)?,
+                modified: r.get(3)?,
+                etebase_uid: r.get(4)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)

@@ -76,7 +76,8 @@
   } from '$lib/pdf/pdf-text-index';
   import {
     loadReusableSignatures,
-    persistReusableSignatures
+    saveReusableSignature,
+    deleteReusableSignature
   } from '$lib/pdf/signature-storage';
   import {
     cloneSignatureSnapshot,
@@ -388,19 +389,22 @@
     return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, value));
   }
 
-  function persistSignatures() {
-    persistReusableSignatures(savedSignatures);
-  }
-
   function appendSignature(signature: PdfSignatureSnapshot) {
     savedSignatures = [...savedSignatures, signature];
     activeSignatureId = signature.id;
-    persistSignatures();
+    // Persist to the synced store (local DB write is immediate; the row
+    // syncs to the user's other devices on the next sync). Optimistic — the
+    // UI already reflects the new signature.
+    void saveReusableSignature(signature).catch((err) =>
+      console.warn('[PdfNoteViewer] failed to save signature', err)
+    );
   }
 
   function deleteSignature(id: string) {
     savedSignatures = savedSignatures.filter((sig) => sig.id !== id);
-    persistSignatures();
+    void deleteReusableSignature(id).catch((err) =>
+      console.warn('[PdfNoteViewer] failed to delete signature', err)
+    );
     if (activeSignatureId === id) {
       activeSignatureId = savedSignatures[0]?.id ?? null;
     }
@@ -1912,8 +1916,15 @@
 
   onMount(async () => {
     mobileToolbar = isMobile();
-    savedSignatures = loadReusableSignatures();
-    activeSignatureId = savedSignatures[0]?.id ?? null;
+    // Load the synced signature library (migrates any legacy localStorage
+    // signatures on first run). Best-effort — a failure just leaves the
+    // picker empty rather than blocking the viewer.
+    try {
+      savedSignatures = await loadReusableSignatures();
+      activeSignatureId = savedSignatures[0]?.id ?? null;
+    } catch (err) {
+      console.warn('[PdfNoteViewer] failed to load signatures', err);
+    }
     await tick();
     if (hostEl) {
       editorListener = {
@@ -2012,6 +2023,23 @@
       bumpRenderVersion();
 
       void listen('sync-completed', async (payload) => {
+        // Refresh the signature library so signatures added/removed on
+        // another device show up here without reopening. Cheap (one DB
+        // read) and independent of whether this note's content changed.
+        try {
+          savedSignatures = await loadReusableSignatures();
+          if (
+            activeSignatureId &&
+            !savedSignatures.some((sig) => sig.id === activeSignatureId)
+          ) {
+            activeSignatureId = savedSignatures[0]?.id ?? null;
+          } else if (!activeSignatureId && savedSignatures.length > 0) {
+            activeSignatureId = savedSignatures[0].id;
+          }
+        } catch (err) {
+          console.warn('[PdfNoteViewer] signature refresh failed', err);
+        }
+
         if (!payload.notes_pulled_ids.includes(noteId) || !yDoc) return;
         try {
           const fresh = await loadNote(noteId);

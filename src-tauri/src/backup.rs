@@ -673,6 +673,10 @@ fn sanitize_for_foreign_account(staged_db: &Path) -> AppResult<()> {
         "UPDATE assets SET etebase_uid = NULL, etebase_etag = NULL, dirty = 1",
         [],
     )?;
+    tx.execute(
+        "UPDATE signatures SET etebase_uid = NULL, etebase_etag = NULL, dirty = 1",
+        [],
+    )?;
     // Drop the per-kind collection pointers + stoken cursors and any
     // queued tombstones for the foreign account.
     tx.execute("DELETE FROM sync_state", [])?;
@@ -958,6 +962,39 @@ fn merge_into(live: &mut Connection, backup: &Connection) -> AppResult<MergeRepo
             params![id, owning_note_id, mime, bytes, size, created, modified],
         )?;
         assets_added += 1;
+    }
+
+    // ---- Signatures (user-global; no owning note to gate on) ----
+    let mut stmt = backup.prepare("SELECT id, data, created, modified FROM signatures")?;
+    let signature_rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(stmt);
+
+    for (id, data, created, modified) in &signature_rows {
+        let exists: Option<i64> = tx
+            .query_row("SELECT 1 FROM signatures WHERE id = ?1", params![id], |r| {
+                r.get(0)
+            })
+            .optional()?;
+        if exists.is_some() {
+            continue;
+        }
+        // dirty = 1 so the imported signature re-pushes under the current
+        // account. Not surfaced in MergeReport — the import preview/report
+        // only counts notes/folders/assets, so that contract stays put.
+        tx.execute(
+            "INSERT INTO signatures(id, data, created, modified, dirty)
+             VALUES (?1, ?2, ?3, ?4, 1)",
+            params![id, data, created, modified],
+        )?;
     }
 
     tx.commit()?;

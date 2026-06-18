@@ -28,6 +28,7 @@ pub mod notes_export;
 pub mod pdf_export;
 pub mod search;
 pub mod serde_helpers;
+pub mod signatures;
 pub mod sync;
 pub mod system;
 #[cfg(desktop)]
@@ -285,6 +286,10 @@ pub fn run() {
             assets::upload_drawing_asset,
             assets::fetch_drawing_asset,
             assets::import_pdf_note,
+            // Signatures (reusable, synced signature library)
+            signatures::list_signatures,
+            signatures::save_signature,
+            signatures::delete_signature,
             // Auth (Etebase)
             auth::etebase_login,
             auth::etebase_logout,
