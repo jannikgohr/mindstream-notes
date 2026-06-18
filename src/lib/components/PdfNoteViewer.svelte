@@ -75,10 +75,12 @@
     type PdfSearchMatch
   } from '$lib/pdf/pdf-text-index';
   import {
-    loadReusableSignatures,
-    saveReusableSignature,
-    deleteReusableSignature
-  } from '$lib/pdf/signature-storage';
+    signatureLibrary,
+    ensureSignaturesLoaded,
+    refreshSignatures,
+    addSignature,
+    removeSignature
+  } from '$lib/stores/signatures.svelte';
   import {
     cloneSignatureSnapshot,
     strokeBounds,
@@ -258,7 +260,11 @@
   // Latest rendered viewport per page, so selection client-rects can be
   // converted back into PDF user space. Updated in the render action.
   const pageViewports = new Map<number, PdfViewport>();
-  let savedSignatures = $state<PdfSignatureSnapshot[]>([]);
+  // The signature library is shared across all open viewers (see
+  // stores/signatures.svelte), so adding/removing one here updates a second
+  // PDF open side by side. activeSignatureId stays per-viewer — each document
+  // can have a different signature armed.
+  const savedSignatures = $derived(signatureLibrary.signatures);
   let activeSignatureId = $state<string | null>(null);
   let signatureDialogOpen = $state(false);
   let signaturePickerOpen = $state(false);
@@ -390,29 +396,38 @@
   }
 
   function appendSignature(signature: PdfSignatureSnapshot) {
-    savedSignatures = [...savedSignatures, signature];
+    // Update the shared library (optimistic) + persist. Every open viewer's
+    // savedSignatures reflects it via the shared store.
+    void addSignature(signature);
     activeSignatureId = signature.id;
-    // Persist to the synced store (local DB write is immediate; the row
-    // syncs to the user's other devices on the next sync). Optimistic — the
-    // UI already reflects the new signature.
-    void saveReusableSignature(signature).catch((err) =>
-      console.warn('[PdfNoteViewer] failed to save signature', err)
-    );
   }
 
   function deleteSignature(id: string) {
-    savedSignatures = savedSignatures.filter((sig) => sig.id !== id);
-    void deleteReusableSignature(id).catch((err) =>
-      console.warn('[PdfNoteViewer] failed to delete signature', err)
-    );
-    if (activeSignatureId === id) {
-      activeSignatureId = savedSignatures[0]?.id ?? null;
-    }
+    void removeSignature(id);
+    // activeSignatureId validity is reconciled by the effect below; here we
+    // only handle the picker/tool side-effects of an empty library.
     if (savedSignatures.length === 0) {
       signaturePickerOpen = false;
       if (activeTool === 'signature') activeTool = 'select';
     }
   }
+
+  // Keep this viewer's armed signature valid as the shared library changes —
+  // another viewer (or a remote sync) may have added the first signature or
+  // removed the one this viewer had selected. Converges in one extra run: the
+  // writes are guarded so a valid selection is left untouched.
+  $effect(() => {
+    if (savedSignatures.length === 0) {
+      if (activeSignatureId !== null) activeSignatureId = null;
+      return;
+    }
+    if (
+      !activeSignatureId ||
+      !savedSignatures.some((sig) => sig.id === activeSignatureId)
+    ) {
+      activeSignatureId = savedSignatures[0].id;
+    }
+  });
 
   function selectSignature(id: string) {
     activeSignatureId = id;
@@ -1916,15 +1931,10 @@
 
   onMount(async () => {
     mobileToolbar = isMobile();
-    // Load the synced signature library (migrates any legacy localStorage
-    // signatures on first run). Best-effort — a failure just leaves the
-    // picker empty rather than blocking the viewer.
-    try {
-      savedSignatures = await loadReusableSignatures();
-      activeSignatureId = savedSignatures[0]?.id ?? null;
-    } catch (err) {
-      console.warn('[PdfNoteViewer] failed to load signatures', err);
-    }
+    // Ensure the shared signature library is loaded (migrates any legacy
+    // localStorage signatures on first run). The reconciling effect arms a
+    // default selection once it populates; activeSignatureId stays per-viewer.
+    void ensureSignaturesLoaded();
     await tick();
     if (hostEl) {
       editorListener = {
@@ -2023,22 +2033,10 @@
       bumpRenderVersion();
 
       void listen('sync-completed', async (payload) => {
-        // Refresh the signature library so signatures added/removed on
-        // another device show up here without reopening. Cheap (one DB
-        // read) and independent of whether this note's content changed.
-        try {
-          savedSignatures = await loadReusableSignatures();
-          if (
-            activeSignatureId &&
-            !savedSignatures.some((sig) => sig.id === activeSignatureId)
-          ) {
-            activeSignatureId = savedSignatures[0]?.id ?? null;
-          } else if (!activeSignatureId && savedSignatures.length > 0) {
-            activeSignatureId = savedSignatures[0].id;
-          }
-        } catch (err) {
-          console.warn('[PdfNoteViewer] signature refresh failed', err);
-        }
+        // Refresh the shared signature library so signatures added/removed on
+        // another device show up here (and in any other open viewer) without
+        // reopening. The reconciling effect re-arms the selection if needed.
+        await refreshSignatures();
 
         if (!payload.notes_pulled_ids.includes(noteId) || !yDoc) return;
         try {

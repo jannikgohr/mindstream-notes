@@ -30,6 +30,13 @@ export type TauriEvents = {
   'sync-completed': SyncCompletedPayload;
   'tray-note-created': { note_id: string };
   'show-app': null;
+  /**
+   * Fired by a window whenever it changes the reusable signature library
+   * (add/delete). Separate note windows are separate JS contexts, so the
+   * in-process store can't reach them; every window listens and re-reads the
+   * (already-persisted) library when this fires. See stores/signatures.svelte.
+   */
+  'signatures-changed': null;
 };
 
 export function emit<K extends keyof TauriEvents>(
