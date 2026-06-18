@@ -159,6 +159,13 @@
   const QUICK_ZOOMS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
   const PDF_PAGE_COLUMN_CLASS = `${PAGE_COLUMN_CLASS} pdf-page-column`;
   const PDF_TO_CSS_UNITS = 96 / 72;
+  // Browser canvases have hard size limits; a Letter/A4 page rendered at the
+  // top of our zoom range (MAX_ZOOM, ×devicePixelRatio) stays comfortably
+  // under these, so the page renders at full resolution across the whole zoom
+  // range instead of getting downscaled to a blurry CSS upscale. See the
+  // PDFPageView options below for why we set these explicitly.
+  const MAX_CANVAS_DIM = 16384;
+  const MAX_CANVAS_PIXELS = 2 ** 25;
   const SAVE_DEBOUNCE_MS = 800;
   const SEARCH_DEBOUNCE_MS = 220;
   const HIGHLIGHT_COLOR = '#facc15';
@@ -2705,10 +2712,22 @@
         scale: viewerScale,
         defaultViewport: viewport,
         annotationMode: pdfjs.AnnotationMode.DISABLE,
-        maxCanvasPixels: -1,
-        maxCanvasDim: -1,
-        enableDetailCanvas: true,
-        enableOptimizedPartialRendering: true,
+        maxCanvasPixels: MAX_CANVAS_PIXELS,
+        maxCanvasDim: MAX_CANVAS_DIM,
+        // pdf.js's capCanvasAreaFactor defaults to 200%, which caps the canvas
+        // to 3× the *screen* area regardless of maxCanvasPixels — that was the
+        // real cause of the blur past ~230-330% zoom, and why the cutoff
+        // varied per monitor (it scales with screen size, not the page).
+        // Disable it and rely on the explicit pixel/dimension caps above, which
+        // sit at the browser's safe limits.
+        capCanvasAreaFactor: -1,
+        // The detail-canvas fallback renders only the visible region at full
+        // res, but it must be driven by updateVisibleArea() on every scroll —
+        // something only pdf.js's own PDFViewer does, not this standalone
+        // PDFPageView. Left enabled but undriven it renders the base canvas at
+        // 1/4 scale past the cap; disable it so over-cap zoom degrades to a
+        // plain CSS upscale instead.
+        enableDetailCanvas: false,
         enableSelectionRendering: true
       });
       pendingPageView = nextPageView;
