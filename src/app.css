@@ -185,6 +185,16 @@ body {
   color: var(--foreground);
 }
 
+/* Dockview's split-panel hairline is a pseudo-element on the following
+ * panel. Canvas-heavy editors can paint above the stock z-index (5),
+ * hiding the 1px separator. Keep the line above panel content while
+ * staying below dockview's sash hit target (z-index 99). */
+.dockview-theme-bridge
+  .dv-split-view-container.dv-separator-border
+  .dv-view:not(:first-child)::before {
+  z-index: 50;
+}
+
 /*
  * Chrome-style inline tabs.
  *

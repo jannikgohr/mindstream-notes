@@ -108,6 +108,7 @@
   const MAX_ZOOM_FACTOR = 6;
   const INK_ZOOM_DISPLAY_SCALE = 2;
   const INK_ZOOM_STEP = 1.2;
+  const RESIZE_SNAPSHOT_RESTORE_SUPPRESS_MS = 350;
   const INK_QUICK_ZOOMS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
   const INK_COLOR_SWATCHES = [
     '#111827',
@@ -266,6 +267,7 @@
   let drawFrame: number | null = null;
   let resizeSnapshotHideTimer: ReturnType<typeof setTimeout> | null = null;
   let resizeSnapshotVisible = $state(false);
+  let resizeSnapshotSuppressedUntil = 0;
   let hasDrawnFrame = false;
   let viewInitialized = false;
   const cssColorCache = new Map<number, string>();
@@ -677,13 +679,15 @@
     if (!canvasHostEl || !canvasEl) return;
     const wasAtFitWidth = view.scale <= fitWidthScale() + 0.001;
     const rect = canvasHostEl.getBoundingClientRect();
+    const usableSize = rect.width > 2 && rect.height > 2;
     const dpr = window.devicePixelRatio || 1;
     const widthPx = Math.max(1, Math.floor(rect.width * dpr));
     const heightPx = Math.max(1, Math.floor(rect.height * dpr));
     const backingStoreChanged =
       canvasEl.width !== widthPx || canvasEl.height !== heightPx;
     if (backingStoreChanged) {
-      captureResizeSnapshot();
+      if (usableSize) captureResizeSnapshot();
+      else suppressResizeSnapshot();
       canvasEl.width = widthPx;
       canvasEl.height = heightPx;
     }
@@ -713,6 +717,8 @@
 
   function captureResizeSnapshot() {
     if (
+      performance.now() < resizeSnapshotSuppressedUntil ||
+      document.visibilityState !== 'visible' ||
       !hasDrawnFrame ||
       !canvasEl ||
       !resizeSnapshotCanvasEl ||
@@ -743,6 +749,50 @@
     if (resizeSnapshotHideTimer) {
       clearTimeout(resizeSnapshotHideTimer);
       resizeSnapshotHideTimer = null;
+    }
+  }
+
+  function clearResizeSnapshot() {
+    if (resizeSnapshotHideTimer) {
+      clearTimeout(resizeSnapshotHideTimer);
+      resizeSnapshotHideTimer = null;
+    }
+    resizeSnapshotVisible = false;
+    if (resizeSnapshotCanvasEl) {
+      resizeSnapshotCanvasEl.style.opacity = '';
+      const ctx = resizeSnapshotCanvasEl.getContext('2d');
+      ctx?.clearRect(
+        0,
+        0,
+        resizeSnapshotCanvasEl.width,
+        resizeSnapshotCanvasEl.height
+      );
+    }
+  }
+
+  function suppressResizeSnapshot(
+    duration = RESIZE_SNAPSHOT_RESTORE_SUPPRESS_MS
+  ) {
+    resizeSnapshotSuppressedUntil = Math.max(
+      resizeSnapshotSuppressedUntil,
+      performance.now() + duration
+    );
+    clearResizeSnapshot();
+  }
+
+  function handleWindowRestoreBoundary() {
+    suppressResizeSnapshot();
+    requestAnimationFrame(() => {
+      resizeCanvas();
+      scheduleBoundsPush();
+    });
+  }
+
+  function handleVisibilityChange() {
+    if (document.visibilityState === 'visible') {
+      handleWindowRestoreBoundary();
+    } else {
+      suppressResizeSnapshot(RESIZE_SNAPSHOT_RESTORE_SUPPRESS_MS * 2);
     }
   }
 
@@ -821,6 +871,14 @@
     };
   }
 
+  function canvasBackdropColor(): string {
+    const color = hostEl ? getComputedStyle(hostEl).backgroundColor : '';
+    if (color && color !== 'transparent' && color !== 'rgba(0, 0, 0, 0)') {
+      return color;
+    }
+    return pageDark ? '#020617' : '#ffffff';
+  }
+
   function scheduleDraw() {
     if (drawFrame === null) {
       drawFrame = requestAnimationFrame(() => {
@@ -842,9 +900,9 @@
     const dpr = window.devicePixelRatio || 1;
     const visibleBounds = visiblePageBounds();
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    // Canvas stays transparent so the wrapper's `bg-background` shows
-    // through — that's how Ink picks up the shared editor surround.
     ctx.clearRect(0, 0, view.width, view.height);
+    ctx.fillStyle = canvasBackdropColor();
+    ctx.fillRect(0, 0, view.width, view.height);
 
     drawPages(ctx, visibleBounds);
     const visibleStrokes = doc?.visibleStrokesInBounds(visibleBounds, 2) ?? [];
@@ -2682,6 +2740,9 @@
     // keep both wired up so a software keyboard popping over the
     // toolbar or a rotation reshapes the no-paint region promptly.
     window.addEventListener('resize', scheduleBoundsPush);
+    window.addEventListener('focus', handleWindowRestoreBoundary);
+    window.addEventListener('pageshow', handleWindowRestoreBoundary);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
     window.visualViewport?.addEventListener('resize', scheduleBoundsPush);
     window.visualViewport?.addEventListener('scroll', scheduleBoundsPush);
     toolbarSettingsReady = true;
@@ -2726,6 +2787,9 @@
       handleAndroidStylusEraser
     );
     window.removeEventListener('resize', scheduleBoundsPush);
+    window.removeEventListener('focus', handleWindowRestoreBoundary);
+    window.removeEventListener('pageshow', handleWindowRestoreBoundary);
+    document.removeEventListener('visibilitychange', handleVisibilityChange);
     window.visualViewport?.removeEventListener('resize', scheduleBoundsPush);
     window.visualViewport?.removeEventListener('scroll', scheduleBoundsPush);
     if (boundsFrame !== null) {
