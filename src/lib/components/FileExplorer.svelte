@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount, tick } from 'svelte';
   import {
     ChevronRight,
     Feather,
@@ -44,7 +45,7 @@
     trashNote
   } from '$lib/stores/tree.svelte';
   import { setSortDirection, setSortStrategy, ui } from '$lib/state.svelte';
-  import { tUi } from '$lib/settings/i18n.svelte';
+  import { i18n, tUi } from '$lib/settings/i18n.svelte';
   import type { TreeNode } from '$lib/api';
   import { exportersForNote } from '$lib/note-exporters';
   import {
@@ -145,6 +146,9 @@
   let pdfInput = $state<HTMLInputElement | null>(null);
   let pdfImportParentId = $state<string | null>(null);
   let emptyTrashPending = $state(false);
+  let sourceChipRow = $state<HTMLElement | null>(null);
+  let sourceChipsCollapsed = $state(false);
+  let expandedSourceChipWidth = 0;
 
   $effect(() => {
     if (!nameInput) return;
@@ -620,41 +624,38 @@
         return tUi('fileTree.emptyRoot');
     }
   }
+
+  function updateSourceChipCollapse() {
+    if (!sourceChipRow) return;
+    if (!sourceChipsCollapsed) {
+      expandedSourceChipWidth = sourceChipRow.scrollWidth;
+    }
+    const needed = expandedSourceChipWidth || sourceChipRow.scrollWidth;
+    sourceChipsCollapsed = needed > sourceChipRow.clientWidth;
+  }
+
+  onMount(() => {
+    const observer = new ResizeObserver(() => updateSourceChipCollapse());
+    if (sourceChipRow) observer.observe(sourceChipRow);
+    requestAnimationFrame(updateSourceChipCollapse);
+    return () => observer.disconnect();
+  });
+
+  $effect(() => {
+    void source;
+    void sourceChipRow;
+    void i18n.language;
+    sourceChipsCollapsed = false;
+    expandedSourceChipWidth = 0;
+    void tick().then(() => requestAnimationFrame(updateSourceChipCollapse));
+  });
 </script>
 
 <aside
   class="flex h-full w-full flex-col bg-card text-sm"
   oncontextmenu={(e) => openMenu(e, { kind: 'root' })}
 >
-  <nav
-    class="flex shrink-0 flex-col gap-1 px-2 py-2"
-    aria-label={tUi('nav.primary')}
-    oncontextmenu={(e) => {
-      e.preventDefault();
-      e.stopPropagation();
-    }}
-  >
-    {#each SOURCES as item (item.id)}
-      {@const active = source === item.id}
-      {@const Icon = item.icon}
-      {@const label = tUi(item.labelKey)}
-      <button
-        type="button"
-        class="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left transition-colors {active
-          ? 'bg-accent text-accent-foreground'
-          : 'text-muted-foreground hover:bg-accent/70 hover:text-foreground'}"
-        aria-current={active ? 'page' : undefined}
-        onclick={() => onSourceChange?.(item.id)}
-      >
-        <Icon class="size-4 shrink-0" />
-        <span class="truncate">{label}</span>
-      </button>
-    {/each}
-  </nav>
-
-  <Separator />
-
-  <div class="flex items-center justify-between gap-2 px-3 py-1">
+  <div class="flex items-center justify-between gap-2 px-3 py-1.5">
     <SortControl
       strategy={ui.sortStrategy}
       direction={ui.sortDirection}
@@ -731,6 +732,37 @@
       </Button>
     {/if}
   </div>
+
+  <nav
+    bind:this={sourceChipRow}
+    class="source-chip-row flex shrink-0 gap-1 overflow-hidden px-3 pb-2"
+    class:source-chip-row-collapsed={sourceChipsCollapsed}
+    aria-label={tUi('nav.primary')}
+    oncontextmenu={(e) => {
+      e.preventDefault();
+      e.stopPropagation();
+    }}
+  >
+    {#each SOURCES as item (item.id)}
+      {@const active = source === item.id}
+      {@const Icon = item.icon}
+      {@const label = tUi(item.labelKey)}
+      <button
+        type="button"
+        class="source-chip inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium transition-colors {active
+          ? 'border-primary bg-primary text-primary-foreground'
+          : 'border-border bg-background text-muted-foreground hover:bg-accent hover:text-foreground'}"
+        class:source-chip-active={active}
+        aria-current={active ? 'page' : undefined}
+        aria-label={label}
+        title={active ? undefined : label}
+        onclick={() => onSourceChange?.(item.id)}
+      >
+        <Icon class="size-3.5 shrink-0" />
+        <span class="source-chip-label truncate">{label}</span>
+      </button>
+    {/each}
+  </nav>
 
   <Separator />
 
@@ -921,3 +953,22 @@
 {#if menuOpen}
   <ContextMenu x={menuX} y={menuY} items={menuItems()} onClose={closeMenu} />
 {/if}
+
+<style>
+  .source-chip-row-collapsed .source-chip:not(.source-chip-active) {
+    width: 1.75rem;
+    justify-content: center;
+    padding-inline: 0;
+  }
+
+  .source-chip-row-collapsed
+    .source-chip:not(.source-chip-active)
+    .source-chip-label {
+    display: none;
+  }
+
+  .source-chip-row-collapsed .source-chip.source-chip-active {
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+</style>
