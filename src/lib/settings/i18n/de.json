@@ -281,7 +281,7 @@
     "ink.toolbar.zoomOut": "Verkleinern",
     "ink.toolbar.zoomIn": "Vergrößern",
     "ink.toolbar.zoom": "Zoom wählen",
-    "ink.toolbar.fitPage": "Breite anpassen",
+    "ink.toolbar.fitWidth": "Breite anpassen",
     "ink.toolbar.settings": "Ink-Einstellungen",
     "ink.toolbar.fingerDrawing": "Fingerzeichnen umschalten",
     "ink.toolbar.pageTheme": "Seitendesign umschalten",
@@ -333,6 +333,16 @@
     "pdf.annotation.label": "Anmerkungsaktionen",
     "pdf.annotation.addComment": "Kommentar hinzufügen",
     "pdf.annotation.delete": "Anmerkung löschen",
+    "pdf.annotation.type.highlight": "Hervorhebung",
+    "pdf.annotation.type.comment": "Kommentar",
+    "pdf.annotation.type.ink": "Freihandzeichnung",
+    "pdf.annotation.type.signature": "Signatur",
+    "pdf.annotation.accessible.select": "{type}-Anmerkung auf Seite {page} auswählen{part}{state}{comment}",
+    "pdf.annotation.accessible.delete": "{type}-Anmerkung auf Seite {page} löschen{part}{state}{comment}",
+    "pdf.annotation.accessible.part": ". Teil {part} von {total}",
+    "pdf.annotation.accessible.selected": ". Ausgewählt",
+    "pdf.annotation.accessible.resolved": ". Erledigt",
+    "pdf.annotation.accessible.comment": ". Kommentar: {comment}",
     "pdf.selection.label": "Auswahlaktionen",
     "pdf.selection.highlight": "Auswahl hervorheben",
     "pdf.selection.comment": "Auswahl kommentieren",
@@ -564,7 +574,7 @@
     },
     "editor.ink.pageTheme": {
       "label": "Ink-Seitendesign",
-      "description": "Legt fest, ob handschriftliche Seiten hell bleiben oder dem App-Design folgen."
+      "description": "Legt fest, ob handschriftliche Seiten hell, dunkel bleiben oder dem App-Design folgen."
     },
     "editor.autoSave": { "label": "Auto-Speichern" },
     "hotkeys.panel": { "label": "Tastaturkürzel" },
@@ -611,6 +621,7 @@
     "editor.ink.tool.eraser": "Radierer",
     "editor.ink.tool.lasso": "Lasso-Auswahl",
     "editor.ink.pageTheme.light": "Hell",
+    "editor.ink.pageTheme.dark": "Dunkel",
     "editor.ink.pageTheme.system": "App-Design folgen"
   }
 }

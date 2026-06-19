@@ -297,7 +297,7 @@
               "scope": "D",
               "type": "select",
               "default": "light",
-              "options": ["light", "system"]
+              "options": ["light", "dark", "system"]
             }
           ]
         },

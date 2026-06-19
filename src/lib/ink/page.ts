@@ -1,3 +1,5 @@
+import { A4_PAGE } from '$lib/layout/page-layout';
+
 export interface PageSize {
   width: number;
   height: number;
@@ -15,10 +17,9 @@ export interface InkPoint {
   pressure: number;
 }
 
-export const DEFAULT_PAGE: PageSize = {
-  width: 1190,
-  height: 1684
-};
+// The ink page is A4, defined once in the shared layout module so it
+// stays 1:1 with the PDF viewer's A4 page. See A4_PAGE for the maths.
+export const DEFAULT_PAGE: PageSize = A4_PAGE;
 
 export const DEFAULT_PAGE_GAP = 72;
 export const MIN_PAGE_COUNT = 2;

@@ -6,6 +6,7 @@
     Copy,
     Eraser,
     LassoSelect,
+    Monitor,
     MousePointer2,
     MoonStar,
     Palette,
@@ -19,6 +20,7 @@
     Trash2,
     Undo2
   } from '@lucide/svelte';
+  import { mode } from 'mode-watcher';
   import {
     Toolbar,
     ToolbarButton,
@@ -48,7 +50,12 @@
     type DrawingToolbarSettingsPayload
   } from '$lib/api';
   import { isAndroid, isMobile } from '$lib/platform';
-  import { tUi } from '$lib/settings/i18n.svelte';
+  import {
+    PAGE_FIT_MARGIN,
+    PAGE_FIT_TOP_MARGIN,
+    canvasPageSurface
+  } from '$lib/layout/page-layout';
+  import { tUi, tValue } from '$lib/settings/i18n.svelte';
   import {
     getSettingValue,
     hasSettingValue,
@@ -97,15 +104,11 @@
   const SAVE_DEBOUNCE_MS = 800;
   const ERASER_RADIUS = 10;
   const PAGE_FILL_LIGHT = 0xffffffff;
-  const PAGE_SHADOW_LIGHT = 'rgba(15, 23, 42, 0.16)';
-  const PAGE_SHADOW_DARK = 'rgba(0, 0, 0, 0.42)';
-  const PAGE_EDGE_DARK = 'rgba(255, 255, 255, 0.12)';
-  const PAGE_EDGE_LIGHT = 'rgba(15, 23, 42, 0.08)';
   const TOOL_PREVIEW_DASH = [5, 4];
-  const FIT_PAGE_MARGIN_PX = 32;
-  const FIT_PAGE_TOP_MARGIN_PX = 72;
   const MAX_ZOOM_FACTOR = 6;
+  const INK_ZOOM_DISPLAY_SCALE = 2;
   const INK_ZOOM_STEP = 1.2;
+  const RESIZE_SNAPSHOT_RESTORE_SUPPRESS_MS = 350;
   const INK_QUICK_ZOOMS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
   const INK_COLOR_SWATCHES = [
     '#111827',
@@ -130,7 +133,7 @@
   const INK_PAGE_THEME_SETTING = 'editor.ink.pageTheme';
 
   type ToolMode = 'pen' | 'eraser' | 'lasso';
-  type PageThemeMode = 'light' | 'system';
+  type PageThemeMode = 'light' | 'dark' | 'system';
   type AndroidStylusEraserAction = 'down' | 'move' | 'up' | 'cancel';
   type AndroidStylusEraserPoint = {
     x: number;
@@ -264,6 +267,7 @@
   let drawFrame: number | null = null;
   let resizeSnapshotHideTimer: ReturnType<typeof setTimeout> | null = null;
   let resizeSnapshotVisible = $state(false);
+  let resizeSnapshotSuppressedUntil = 0;
   let hasDrawnFrame = false;
   let viewInitialized = false;
   const cssColorCache = new Map<number, string>();
@@ -276,15 +280,17 @@
     panY: DEFAULT_PAGE_GAP
   };
 
-  const pageDark = $derived(pageThemeMode === 'system');
+  const pageDark = $derived(
+    pageThemeMode === 'dark' || (pageThemeMode === 'system' && $mode === 'dark')
+  );
   const colorHex = $derived(argbToColorHex(colorArgb));
   const inkZoomLabel = $derived.by(() => {
     void zoomUiVersion;
-    return `${Math.round(view.scale * 100)}%`;
+    return `${Math.round(displayInkZoom(view.scale) * 100)}%`;
   });
   const inkFitActive = $derived.by(() => {
     void zoomUiVersion;
-    return Math.abs(view.scale - minScale()) < 0.01;
+    return Math.abs(view.scale - fitWidthScale()) < 0.01;
   });
   const brushLineHeight = $derived(Math.max(2, Math.min(12, width)));
   const brushSizeText = $derived(
@@ -359,7 +365,9 @@
     tool;
     colorArgb;
     width;
-    pageThemeMode;
+    // Read the resolved value (not just the mode) so a live app-theme
+    // flip repaints the page while "follow app theme" is selected.
+    pageDark;
     scheduleDraw();
   });
 
@@ -669,24 +677,25 @@
 
   function resizeCanvas() {
     if (!canvasHostEl || !canvasEl) return;
-    const previousMinScale = minScale();
-    const wasAtMinScale = view.scale <= previousMinScale + 0.001;
+    const wasAtFitWidth = view.scale <= fitWidthScale() + 0.001;
     const rect = canvasHostEl.getBoundingClientRect();
+    const usableSize = rect.width > 2 && rect.height > 2;
     const dpr = window.devicePixelRatio || 1;
     const widthPx = Math.max(1, Math.floor(rect.width * dpr));
     const heightPx = Math.max(1, Math.floor(rect.height * dpr));
     const backingStoreChanged =
       canvasEl.width !== widthPx || canvasEl.height !== heightPx;
     if (backingStoreChanged) {
-      captureResizeSnapshot();
+      if (usableSize) captureResizeSnapshot();
+      else suppressResizeSnapshot();
       canvasEl.width = widthPx;
       canvasEl.height = heightPx;
     }
     view.width = rect.width;
     view.height = rect.height;
     const nextMinScale = minScale();
-    if (!viewInitialized || wasAtMinScale) {
-      fitPage();
+    if (!viewInitialized || wasAtFitWidth) {
+      fitWidth();
       viewInitialized = true;
     } else {
       view.scale = Math.max(view.scale, nextMinScale);
@@ -708,6 +717,8 @@
 
   function captureResizeSnapshot() {
     if (
+      performance.now() < resizeSnapshotSuppressedUntil ||
+      document.visibilityState !== 'visible' ||
       !hasDrawnFrame ||
       !canvasEl ||
       !resizeSnapshotCanvasEl ||
@@ -741,6 +752,50 @@
     }
   }
 
+  function clearResizeSnapshot() {
+    if (resizeSnapshotHideTimer) {
+      clearTimeout(resizeSnapshotHideTimer);
+      resizeSnapshotHideTimer = null;
+    }
+    resizeSnapshotVisible = false;
+    if (resizeSnapshotCanvasEl) {
+      resizeSnapshotCanvasEl.style.opacity = '';
+      const ctx = resizeSnapshotCanvasEl.getContext('2d');
+      ctx?.clearRect(
+        0,
+        0,
+        resizeSnapshotCanvasEl.width,
+        resizeSnapshotCanvasEl.height
+      );
+    }
+  }
+
+  function suppressResizeSnapshot(
+    duration = RESIZE_SNAPSHOT_RESTORE_SUPPRESS_MS
+  ) {
+    resizeSnapshotSuppressedUntil = Math.max(
+      resizeSnapshotSuppressedUntil,
+      performance.now() + duration
+    );
+    clearResizeSnapshot();
+  }
+
+  function handleWindowRestoreBoundary() {
+    suppressResizeSnapshot();
+    requestAnimationFrame(() => {
+      resizeCanvas();
+      scheduleBoundsPush();
+    });
+  }
+
+  function handleVisibilityChange() {
+    if (document.visibilityState === 'visible') {
+      handleWindowRestoreBoundary();
+    } else {
+      suppressResizeSnapshot(RESIZE_SNAPSHOT_RESTORE_SUPPRESS_MS * 2);
+    }
+  }
+
   function scheduleResizeSnapshotHide() {
     if (!resizeSnapshotVisible) return;
     if (resizeSnapshotHideTimer) clearTimeout(resizeSnapshotHideTimer);
@@ -751,16 +806,29 @@
     }, 120);
   }
 
-  function fitPage() {
-    view.scale = minScale();
+  // Default view: fill the column width with the A4 page, exactly like
+  // the PDF viewer's fit-width. The page overflows vertically and is
+  // scrolled/panned; zooming out below this reaches the whole-page floor
+  // (minScale). Mirrors PdfNoteViewer's fit-width zoom + PAGE_FIT_MARGIN
+  // gutters so both renderers frame an A4 sheet identically.
+  function fitWidthScale(): number {
+    const availableWidth = Math.max(1, view.width - PAGE_FIT_MARGIN * 2);
+    return Math.max(minScale(), availableWidth / layout.page.width);
+  }
+
+  function displayInkZoom(scale: number): number {
+    return scale * INK_ZOOM_DISPLAY_SCALE;
+  }
+
+  function scaleFromDisplayInkZoom(value: number): number {
+    return value / INK_ZOOM_DISPLAY_SCALE;
+  }
+
+  function fitWidth() {
+    view.scale = fitWidthScale();
     view.panX = (view.width - layout.page.width * view.scale) * 0.5;
-    view.panY =
-      FIT_PAGE_TOP_MARGIN_PX +
-      (view.height -
-        FIT_PAGE_TOP_MARGIN_PX -
-        FIT_PAGE_MARGIN_PX -
-        layout.page.height * view.scale) *
-        0.5;
+    // Top-align the first page with the same gutter the sides get.
+    view.panY = PAGE_FIT_MARGIN;
     clampView();
   }
 
@@ -776,11 +844,10 @@
     } else {
       view.panX = Math.min(16, Math.max(view.width - contentW - 16, view.panX));
     }
-    const bottomMargin = Math.max(
-      FIT_PAGE_MARGIN_PX,
-      layout.pageGap * view.scale
-    );
-    const topMargin = Math.max(FIT_PAGE_TOP_MARGIN_PX, bottomMargin);
+    const bottomMargin = Math.max(PAGE_FIT_MARGIN, layout.pageGap * view.scale);
+    const topMargin = mobileToolbar
+      ? Math.max(PAGE_FIT_TOP_MARGIN, bottomMargin)
+      : PAGE_FIT_MARGIN;
     const minY = view.height - contentH - bottomMargin;
     const maxY = topMargin;
     view.panY =
@@ -804,6 +871,14 @@
     };
   }
 
+  function canvasBackdropColor(): string {
+    const color = hostEl ? getComputedStyle(hostEl).backgroundColor : '';
+    if (color && color !== 'transparent' && color !== 'rgba(0, 0, 0, 0)') {
+      return color;
+    }
+    return pageDark ? '#020617' : '#ffffff';
+  }
+
   function scheduleDraw() {
     if (drawFrame === null) {
       drawFrame = requestAnimationFrame(() => {
@@ -825,9 +900,9 @@
     const dpr = window.devicePixelRatio || 1;
     const visibleBounds = visiblePageBounds();
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    // Canvas stays transparent so the wrapper's `bg-background` shows
-    // through — that's how Ink picks up the shared editor surround.
     ctx.clearRect(0, 0, view.width, view.height);
+    ctx.fillStyle = canvasBackdropColor();
+    ctx.fillRect(0, 0, view.width, view.height);
 
     drawPages(ctx, visibleBounds);
     const visibleStrokes = doc?.visibleStrokesInBounds(visibleBounds, 2) ?? [];
@@ -885,15 +960,16 @@
       if (b.y < -32 || a.y > view.height + 32) continue;
       const width = b.x - a.x;
       const height = b.y - a.y;
+      const surface = canvasPageSurface(pageDark);
       ctx.save();
-      ctx.shadowColor = pageDark ? PAGE_SHADOW_DARK : PAGE_SHADOW_LIGHT;
-      ctx.shadowBlur = pageDark ? 18 : 14;
+      ctx.shadowColor = surface.shadowColor;
+      ctx.shadowBlur = surface.shadowBlur;
       ctx.shadowOffsetX = 0;
-      ctx.shadowOffsetY = pageDark ? 8 : 6;
+      ctx.shadowOffsetY = surface.shadowOffsetY;
       ctx.fillStyle = displayCssColor(PAGE_FILL_LIGHT);
       ctx.fillRect(a.x, a.y, width, height);
       ctx.restore();
-      ctx.strokeStyle = pageDark ? PAGE_EDGE_DARK : PAGE_EDGE_LIGHT;
+      ctx.strokeStyle = surface.edgeColor;
       ctx.lineWidth = 1;
       ctx.strokeRect(a.x + 0.5, a.y + 0.5, width - 1, height - 1);
     }
@@ -2134,8 +2210,12 @@
     zoomUiVersion += 1;
   }
 
-  function setFitPageZoom() {
-    fitPage();
+  function setInkDisplayZoom(value: number) {
+    setInkZoom(scaleFromDisplayInkZoom(value));
+  }
+
+  function setFitWidthZoom() {
+    fitWidth();
     scheduleDraw();
     updateLiveInkOverlayStyle();
     zoomMenuOpen = false;
@@ -2221,10 +2301,10 @@
   }
 
   function minScale(): number {
-    const availableWidth = Math.max(1, view.width - FIT_PAGE_MARGIN_PX * 2);
+    const availableWidth = Math.max(1, view.width - PAGE_FIT_MARGIN * 2);
     const availableHeight = Math.max(
       1,
-      view.height - FIT_PAGE_TOP_MARGIN_PX - FIT_PAGE_MARGIN_PX
+      view.height - PAGE_FIT_TOP_MARGIN - PAGE_FIT_MARGIN
     );
     return Math.max(
       0.05,
@@ -2289,8 +2369,15 @@
     updateLiveInkOverlayStyle();
   }
 
-  function togglePageTheme() {
-    pageThemeMode = pageThemeMode === 'system' ? 'light' : 'system';
+  // Cycle Light → Dark → Follow app theme → Light, matching the
+  // three-way choice offered by the settings dialog's select.
+  function cyclePageTheme() {
+    pageThemeMode =
+      pageThemeMode === 'light'
+        ? 'dark'
+        : pageThemeMode === 'dark'
+          ? 'system'
+          : 'light';
     emitToolbarSettings();
   }
 
@@ -2444,7 +2531,7 @@
         toggleFingerDrawing();
         return true;
       case 'editor.ink.togglePageTheme':
-        togglePageTheme();
+        cyclePageTheme();
         return true;
       case 'editor.ink.clear':
         if (!isTrashed) void confirmClearCanvas();
@@ -2461,7 +2548,9 @@
   }
 
   function normalizeInkPageTheme(value: unknown): PageThemeMode {
-    return value === 'system' ? 'system' : 'light';
+    if (value === 'system') return 'system';
+    if (value === 'dark') return 'dark';
+    return 'light';
   }
 
   function normalizeInkWidth(value: unknown): number {
@@ -2651,6 +2740,9 @@
     // keep both wired up so a software keyboard popping over the
     // toolbar or a rotation reshapes the no-paint region promptly.
     window.addEventListener('resize', scheduleBoundsPush);
+    window.addEventListener('focus', handleWindowRestoreBoundary);
+    window.addEventListener('pageshow', handleWindowRestoreBoundary);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
     window.visualViewport?.addEventListener('resize', scheduleBoundsPush);
     window.visualViewport?.addEventListener('scroll', scheduleBoundsPush);
     toolbarSettingsReady = true;
@@ -2695,6 +2787,9 @@
       handleAndroidStylusEraser
     );
     window.removeEventListener('resize', scheduleBoundsPush);
+    window.removeEventListener('focus', handleWindowRestoreBoundary);
+    window.removeEventListener('pageshow', handleWindowRestoreBoundary);
+    document.removeEventListener('visibilitychange', handleVisibilityChange);
     window.visualViewport?.removeEventListener('resize', scheduleBoundsPush);
     window.visualViewport?.removeEventListener('scroll', scheduleBoundsPush);
     if (boundsFrame !== null) {
@@ -3093,17 +3188,23 @@
               </button>
               <button
                 type="button"
-                role="menuitemcheckbox"
+                role="menuitem"
                 class="flex h-8 w-full items-center justify-between gap-3 rounded-sm px-2 text-left text-sm hover:bg-accent hover:text-accent-foreground"
-                aria-checked={pageThemeMode === 'system'}
-                onclick={togglePageTheme}
+                onclick={cyclePageTheme}
               >
                 <span>{tUi('ink.toolbar.pageTheme')}</span>
-                {#if pageThemeMode === 'system'}
-                  <MoonStar class="size-4" aria-hidden="true" />
-                {:else}
-                  <Sun class="size-4 opacity-70" aria-hidden="true" />
-                {/if}
+                <span class="flex items-center gap-1.5 text-muted-foreground">
+                  <span class="text-xs">
+                    {tValue('editor.ink.pageTheme', pageThemeMode)}
+                  </span>
+                  {#if pageThemeMode === 'dark'}
+                    <MoonStar class="size-4" aria-hidden="true" />
+                  {:else if pageThemeMode === 'system'}
+                    <Monitor class="size-4" aria-hidden="true" />
+                  {:else}
+                    <Sun class="size-4" aria-hidden="true" />
+                  {/if}
+                </span>
               </button>
               <button
                 type="button"
@@ -3190,14 +3291,14 @@
         zoomOutLabel={tUi('ink.toolbar.zoomOut')}
         zoomInLabel={tUi('ink.toolbar.zoomIn')}
         zoomMenuLabel={tUi('ink.toolbar.zoom')}
-        fitLabel={tUi('ink.toolbar.fitPage')}
+        fitLabel={tUi('ink.toolbar.fitWidth')}
         fitActive={inkFitActive}
         zoomOptions={INK_QUICK_ZOOMS}
-        selectedZoom={inkFitActive ? null : view.scale}
+        selectedZoom={inkFitActive ? null : displayInkZoom(view.scale)}
         onZoomOut={() => zoomInkBy(1 / INK_ZOOM_STEP)}
         onZoomIn={() => zoomInkBy(INK_ZOOM_STEP)}
-        onFit={setFitPageZoom}
-        onSelectZoom={setInkZoom}
+        onFit={setFitWidthZoom}
+        onSelectZoom={setInkDisplayZoom}
       />
     </div>
   {/if}

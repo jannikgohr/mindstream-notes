@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy, onMount, tick } from 'svelte';
+  import { onDestroy, onMount, tick, untrack } from 'svelte';
   import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
   import {
     AlertCircle,
@@ -10,6 +10,7 @@
     Loader2,
     MessageSquarePlus,
     MessagesSquare,
+    Palette,
     PanelLeft,
     PenLine,
     Redo2,
@@ -24,6 +25,8 @@
   import {
     Toolbar,
     ToolbarButton,
+    ToolbarCollapseWhenOverflow,
+    ToolbarScrollbar,
     ToolbarSeparator,
     ToolbarZoomControls
   } from '$lib/components/ui/toolbar';
@@ -41,6 +44,15 @@
   import { base64ToBytes } from '$lib/editor/base64';
   import { pickCursorColor } from '$lib/editor/cursor-color';
   import { isMobile } from '$lib/platform';
+  import {
+    PAGE_FIT_MARGIN,
+    PAGE_SCROLL_PADDING_Y,
+    PAGE_SCROLLER_CLASS,
+    PAGE_SCROLLER_SCROLLBAR_CLASS,
+    PAGE_COLUMN_CLASS,
+    PAGE_SURFACE_CLASS
+  } from '$lib/layout/page-layout';
+  import PageOverlayScrollbar from '$lib/layout/page-overlay-scrollbar.svelte';
   import { getSettingValue } from '$lib/settings/store.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { exportAnnotatedPdfNote } from '$lib/note-exporters/pdf';
@@ -63,9 +75,12 @@
     type PdfSearchMatch
   } from '$lib/pdf/pdf-text-index';
   import {
-    loadReusableSignatures,
-    persistReusableSignatures
-  } from '$lib/pdf/signature-storage';
+    signatureLibrary,
+    ensureSignaturesLoaded,
+    refreshSignatures,
+    addSignature,
+    removeSignature
+  } from '$lib/stores/signatures.svelte';
   import {
     cloneSignatureSnapshot,
     strokeBounds,
@@ -73,7 +88,9 @@
   } from '$lib/pdf/stroke-utils';
   import {
     PDF_ANNOTATIONS_MAP,
+    PDF_FORM_VALUES_MAP,
     type PdfAnnotation,
+    type PdfFormValue,
     type PdfAnnotationType,
     type PdfInkStroke,
     type PdfRect,
@@ -103,6 +120,7 @@
   type PdfViewer = typeof import('pdfjs-dist/web/pdf_viewer.mjs');
   type PdfDocument = Awaited<ReturnType<PdfJs['getDocument']>['promise']>;
   type PdfPageView = InstanceType<PdfViewer['PDFPageView']>;
+  type PdfAnnotationStorage = PdfDocument['annotationStorage'];
   type ZoomMode = 'fixed' | 'fit-width';
   type PdfTool =
     | 'select'
@@ -116,6 +134,8 @@
     version: number;
     zoom: number;
     zoomMode: ZoomMode;
+    width: number;
+    height: number;
     annotationVersion: number;
     activeTool: PdfTool;
     areaMode: boolean;
@@ -125,6 +145,11 @@
     searchVersion: number;
   };
   type PageSize = { width: number; height: number };
+  type ZoomAnchor = {
+    pageNumber: number;
+    xRatio: number;
+    yRatio: number;
+  };
   type PdfViewport = ReturnType<
     Awaited<ReturnType<PdfDocument['getPage']>>['getViewport']
   >;
@@ -138,7 +163,15 @@
   const MAX_ZOOM = 4;
   const ZOOM_STEP = 1.2;
   const QUICK_ZOOMS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
+  const PDF_PAGE_COLUMN_CLASS = `${PAGE_COLUMN_CLASS} pdf-page-column`;
   const PDF_TO_CSS_UNITS = 96 / 72;
+  // Browser canvases have hard size limits; a Letter/A4 page rendered at the
+  // top of our zoom range (MAX_ZOOM, ×devicePixelRatio) stays comfortably
+  // under these, so the page renders at full resolution across the whole zoom
+  // range instead of getting downscaled to a blurry CSS upscale. See the
+  // PDFPageView options below for why we set these explicitly.
+  const MAX_CANVAS_DIM = 16384;
+  const MAX_CANVAS_PIXELS = 2 ** 25;
   const SAVE_DEBOUNCE_MS = 800;
   const SEARCH_DEBOUNCE_MS = 220;
   const HIGHLIGHT_COLOR = '#facc15';
@@ -169,12 +202,13 @@
   // "scrolled past" and "scrolled back to" so scrubbing doesn't churn the
   // pageview lifecycle.
   const RENDER_DROP_DELAY_MS = 200;
-  // Settle delay before kicking off a page render. Fast-scroll page
-  // transitions enter & leave the band within milliseconds — without this
-  // delay, doc.getPage() calls pile up on PDF.js's single worker thread
-  // (those calls are NOT cancellable; only the subsequent pageView.draw()
-  // is). Visible pages then wait behind the queue. With the delay,
-  // transient enters never start a render at all.
+  // Settle delay before kicking off a render for a page that just entered
+  // the render band. Fast-scroll page transitions enter & leave within
+  // milliseconds — without this delay, doc.getPage() calls pile up on
+  // PDF.js's single worker thread (those calls are NOT cancellable; only
+  // the subsequent pageView.draw() is). Already-rendered visible pages
+  // skip this delay on zoom/resize so their preview-scaled canvas doesn't
+  // linger blurry.
   const DRAW_KICKOFF_DELAY_MS = 80;
 
   let hostEl = $state<HTMLDivElement | null>(null);
@@ -189,6 +223,16 @@
   let zoomMode = $state<ZoomMode>('fixed');
   let firstPageWidth = $state(0);
   let zoomMenuOpen = $state(false);
+  // Color palette popup, shown when the inline swatch row is collapsed
+  // (toolbar too narrow) — see ToolbarCollapseWhenOverflow below.
+  let colorMenuOpen = $state(false);
+  let colorMenuButton = $state<HTMLButtonElement | null>(null);
+  let colorMenuEl = $state<HTMLDivElement | null>(null);
+  // Live width of the right-aligned page-nav group; reserved as overflow
+  // margin so the swatches collapse before they crowd the page controls.
+  let pageNavWidth = $state(0);
+  // The scrollable toolbar row, driving the custom ToolbarScrollbar below it.
+  let toolbarScrollEl = $state<HTMLDivElement | null>(null);
   let mobileToolbar = $state(false);
   let annotationVersion = $state(0);
   let annotations = $state<PdfAnnotation[]>([]);
@@ -219,7 +263,11 @@
   // Latest rendered viewport per page, so selection client-rects can be
   // converted back into PDF user space. Updated in the render action.
   const pageViewports = new Map<number, PdfViewport>();
-  let savedSignatures = $state<PdfSignatureSnapshot[]>([]);
+  // The signature library is shared across all open viewers (see
+  // stores/signatures.svelte), so adding/removing one here updates a second
+  // PDF open side by side. activeSignatureId stays per-viewer — each document
+  // can have a different signature armed.
+  const savedSignatures = $derived(signatureLibrary.signatures);
   let activeSignatureId = $state<string | null>(null);
   let signatureDialogOpen = $state(false);
   let signaturePickerOpen = $state(false);
@@ -252,13 +300,32 @@
   const textIndexCache = new Map<number, PageTextIndex>();
   let searchGeneration = 0;
   let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  let touchZoomPointers = new Map<
+    number,
+    { clientX: number; clientY: number }
+  >();
+  let touchZoomAnchor: ZoomAnchor | null = null;
+  let touchZoomDistance: number | null = null;
+  let touchZoomStartZoom = 1;
+  let touchZoomActive = false;
+  let zoomScrollToken = 0;
+  let horizontalCenterFrame = 0;
+  let initialHorizontalCenterDone = false;
   let pdfjsLib: PdfJs | null = null;
   let pdfViewerLib: PdfViewer | null = null;
   let yDoc: Y.Doc | null = null;
   let awareness: Awareness | null = null;
   let provider: CollabProvider | null = null;
   let annotationsMap: Y.Map<PdfAnnotation> | null = null;
+  let formValuesMap: Y.Map<PdfFormValue> | null = null;
   let yDocUpdateHandler: (() => void) | null = null;
+  let formValuesObserver:
+    | ((event: Y.YMapEvent<PdfFormValue>, transaction: Y.Transaction) => void)
+    | null = null;
+  let suppressFormStorageSync = false;
+  let pdfFieldObjectsPromise: ReturnType<
+    PdfDocument['getFieldObjects']
+  > | null = null;
   let saveReady = false;
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
   let unsubSync: (() => void) | null = null;
@@ -339,27 +406,39 @@
     return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, value));
   }
 
-  function persistSignatures() {
-    persistReusableSignatures(savedSignatures);
-  }
-
   function appendSignature(signature: PdfSignatureSnapshot) {
-    savedSignatures = [...savedSignatures, signature];
+    // Update the shared library (optimistic) + persist. Every open viewer's
+    // savedSignatures reflects it via the shared store.
+    void addSignature(signature);
     activeSignatureId = signature.id;
-    persistSignatures();
   }
 
   function deleteSignature(id: string) {
-    savedSignatures = savedSignatures.filter((sig) => sig.id !== id);
-    persistSignatures();
-    if (activeSignatureId === id) {
-      activeSignatureId = savedSignatures[0]?.id ?? null;
-    }
+    void removeSignature(id);
+    // activeSignatureId validity is reconciled by the effect below; here we
+    // only handle the picker/tool side-effects of an empty library.
     if (savedSignatures.length === 0) {
       signaturePickerOpen = false;
       if (activeTool === 'signature') activeTool = 'select';
     }
   }
+
+  // Keep this viewer's armed signature valid as the shared library changes —
+  // another viewer (or a remote sync) may have added the first signature or
+  // removed the one this viewer had selected. Converges in one extra run: the
+  // writes are guarded so a valid selection is left untouched.
+  $effect(() => {
+    if (savedSignatures.length === 0) {
+      if (activeSignatureId !== null) activeSignatureId = null;
+      return;
+    }
+    if (
+      !activeSignatureId ||
+      !savedSignatures.some((sig) => sig.id === activeSignatureId)
+    ) {
+      activeSignatureId = savedSignatures[0].id;
+    }
+  });
 
   function selectSignature(id: string) {
     activeSignatureId = id;
@@ -396,6 +475,48 @@
   function runLocal(fn: () => void) {
     if (yDoc) yDoc.transact(fn, LOCAL_ORIGIN);
     else fn();
+  }
+
+  function clonePdfFormValue(value: unknown): PdfFormValue | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return null;
+    }
+    try {
+      return JSON.parse(JSON.stringify(value)) as PdfFormValue;
+    } catch {
+      return null;
+    }
+  }
+
+  function applyStoredFormValuesToPdfStorage() {
+    if (!pdfDoc || !formValuesMap) return;
+    const storage = pdfDoc.annotationStorage;
+    suppressFormStorageSync = true;
+    try {
+      for (const [id, value] of formValuesMap) {
+        storage.setValue(id, clonePdfFormValue(value) ?? value);
+      }
+    } finally {
+      suppressFormStorageSync = false;
+    }
+  }
+
+  function installPdfFormStorageSync(doc: PdfDocument) {
+    const storage = doc.annotationStorage as PdfAnnotationStorage & {
+      __mindstreamFormSyncInstalled?: boolean;
+    };
+    if (storage.__mindstreamFormSyncInstalled) return;
+    storage.__mindstreamFormSyncInstalled = true;
+    const setValue = storage.setValue.bind(storage);
+    storage.setValue = (key: string, value: Object) => {
+      setValue(key, value);
+      if (suppressFormStorageSync || !formValuesMap) return;
+      const stored = clonePdfFormValue(value);
+      if (!stored) return;
+      runLocal(() => {
+        formValuesMap?.set(key, stored);
+      });
+    };
   }
 
   function createAnnotation(
@@ -490,6 +611,45 @@
     else highlightColor = color;
   }
 
+  // Dismiss the collapsed colour-palette popup on outside click / Escape.
+  $effect(() => {
+    if (!colorMenuOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (colorMenuEl?.contains(target)) return;
+      if (colorMenuButton?.contains(target)) return;
+      colorMenuOpen = false;
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') colorMenuOpen = false;
+    };
+    queueMicrotask(() => window.addEventListener('pointerdown', onPointerDown));
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('keydown', onKey);
+    };
+  });
+
+  // Close the palette popup whenever the active tool changes (it may no
+  // longer be a colourable tool, and the swatches now target the new tool).
+  $effect(() => {
+    void activeTool;
+    colorMenuOpen = false;
+  });
+
+  // When the toolbar overflows (controls already collapsed but still too
+  // wide), it scrolls horizontally. The scrollbar is hidden, so translate a
+  // vertical wheel into horizontal scroll for plain-mouse users.
+  function handleToolbarWheel(event: WheelEvent) {
+    const el = event.currentTarget as HTMLElement;
+    if (el.scrollWidth <= el.clientWidth) return;
+    const delta = event.deltaY !== 0 ? event.deltaY : event.deltaX;
+    if (delta === 0) return;
+    el.scrollLeft += delta;
+    event.preventDefault();
+  }
+
   // --- Text selection → text-aware highlight / comment ----------------------
 
   type PdfSelection = {
@@ -518,29 +678,51 @@
     const figure = el.closest<HTMLElement>('figure[data-page-number]');
     const pageEl = figure?.querySelector<HTMLElement>('.page') ?? null;
     if (!figure || !pageEl) return null;
+    if (!rangeIntersectsElement(range, pageEl)) return null;
     const pageNumber = Number(figure.dataset.pageNumber);
     const viewport = pageViewports.get(pageNumber);
     if (!Number.isFinite(pageNumber) || !viewport) return null;
     return { range, pageEl, pageNumber, viewport };
   }
 
+  function rangeIntersectsElement(range: Range, element: HTMLElement): boolean {
+    try {
+      return range.intersectsNode(element);
+    } catch {
+      return false;
+    }
+  }
+
+  function selectionClientRectsOnPage(selection: PdfSelection): DOMRect[] {
+    const { range, pageEl } = selection;
+    const pageRect = pageEl.getBoundingClientRect();
+    return Array.from(range.getClientRects()).filter((cr) => {
+      if (cr.width < 1 || cr.height < 1) return false;
+      if (cr.right <= pageRect.left || cr.left >= pageRect.right) return false;
+      if (cr.bottom <= pageRect.top || cr.top >= pageRect.bottom) return false;
+      return true;
+    });
+  }
+
   /** Convert the selection's per-line client rects into PDF user-space
    *  rects, clipped to the owning page so a spill onto the next page
    *  doesn't produce mis-placed quads. */
   function selectionRectsToPdf(selection: PdfSelection): PdfRect[] {
-    const { range, pageEl, viewport } = selection;
+    const { pageEl, viewport } = selection;
     const pageRect = pageEl.getBoundingClientRect();
     const rects: PdfRect[] = [];
-    for (const cr of Array.from(range.getClientRects())) {
-      if (cr.width < 1 || cr.height < 1) continue;
-      if (cr.bottom <= pageRect.top || cr.top >= pageRect.bottom) continue;
+    for (const cr of selectionClientRectsOnPage(selection)) {
+      const left = Math.max(pageRect.left, cr.left);
+      const top = Math.max(pageRect.top, cr.top);
+      const right = Math.min(pageRect.right, cr.right);
+      const bottom = Math.min(pageRect.bottom, cr.bottom);
       const [x1, y1] = viewport.convertToPdfPoint(
-        cr.left - pageRect.left,
-        cr.top - pageRect.top
+        left - pageRect.left,
+        top - pageRect.top
       );
       const [x2, y2] = viewport.convertToPdfPoint(
-        cr.right - pageRect.left,
-        cr.bottom - pageRect.top
+        right - pageRect.left,
+        bottom - pageRect.top
       );
       rects.push({
         x: Math.min(x1, x2),
@@ -562,16 +744,19 @@
       selectionMenu = null;
       return;
     }
-    const rect = selection.range.getBoundingClientRect();
-    if (rect.width < 1 && rect.height < 1) {
+    const pageRects = selectionClientRectsOnPage(selection);
+    if (pageRects.length === 0) {
       selectionMenu = null;
       return;
     }
+    const left = Math.min(...pageRects.map((rect) => rect.left));
+    const right = Math.max(...pageRects.map((rect) => rect.right));
+    const top = Math.min(...pageRects.map((rect) => rect.top));
     const centerX = Math.min(
       window.innerWidth - 60,
-      Math.max(60, rect.left + rect.width / 2)
+      Math.max(60, left + (right - left) / 2)
     );
-    selectionMenu = { x: centerX, y: rect.top };
+    selectionMenu = { x: centerX, y: top };
   }
 
   function clearSelectionMenu() {
@@ -838,10 +1023,31 @@
     if (total === 0) return;
     const clamped = Math.min(total, Math.max(1, pageNumber));
     const target = container?.querySelector<HTMLElement>(
-      `[data-page-number="${clamped}"]`
+      `figure[data-page-number="${clamped}"]`
     );
-    target?.scrollIntoView({ block: 'start', behavior });
-    activePageNumber = clamped;
+    if (target && container) {
+      const containerRect = container.getBoundingClientRect();
+      const targetRect = target.getBoundingClientRect();
+      const top =
+        container.scrollTop +
+        targetRect.top -
+        containerRect.top -
+        PAGE_SCROLL_PADDING_Y;
+      // Center the target page horizontally in the same animation. Doing it
+      // here (rather than letting the activePageNumber effect react) keeps a
+      // single uninterrupted smooth scroll — separate scrollLeft writes would
+      // abort it.
+      const left = targetScrollLeftForPage(clamped);
+      container.scrollTo({
+        top,
+        left: left ?? container.scrollLeft,
+        behavior
+      });
+    }
+    // Don't set activePageNumber eagerly. The IntersectionObserver advances it
+    // as the smooth scroll progresses; eagerly jumping it to the target made
+    // the indicator flick to the destination, snap back to the current page
+    // for the duration of the animation, then land on the destination again.
   }
 
   function goToPreviousPage() {
@@ -1133,7 +1339,7 @@
 
   const fitWidthZoom = $derived.by(() => {
     if (containerWidth <= 0 || firstPageWidth <= 0) return 1;
-    return clampZoom((containerWidth - 32) / firstPageWidth);
+    return clampZoom((containerWidth - PAGE_FIT_MARGIN * 2) / firstPageWidth);
   });
 
   const effectiveZoom = $derived(
@@ -1157,30 +1363,43 @@
     pageInvalidationVersion += 1;
   }
 
-  async function prefetchPageSizes(
+  // Pages whose natural size has been fetched (or is in flight). Guards
+  // ensurePageSize against issuing duplicate getPage() calls for the same page.
+  const pageSizeFetches = new Set<number>();
+
+  // Seed the size array with just the first page. The rest are filled in
+  // lazily by ensurePageSize as they approach the viewport; until then
+  // placeholderSize estimates them from the first page so the scroll height
+  // is approximately right. This replaces an eager loop that round-tripped the
+  // worker once per page on open — a 500-page PDF flooded it before the user
+  // could interact.
+  function seedPageSizes(
     doc: PdfDocument,
     firstPage: Awaited<ReturnType<PdfDocument['getPage']>>
   ) {
-    // The first page is already in hand from the load path; reuse it instead
-    // of round-tripping again. PDF.js caches page proxies once obtained.
     const first = firstPage.getViewport({ scale: 1 });
     const sizes: PageSize[] = new Array(doc.numPages);
     sizes[0] = { width: first.width, height: first.height };
-    // Render the first page's size immediately so the top of the document
-    // looks right; the rest stream in as they resolve.
-    pageSizes = [...sizes];
-    for (let i = 2; i <= doc.numPages; i++) {
-      try {
-        const page = await doc.getPage(i);
-        const vp = page.getViewport({ scale: 1 });
-        sizes[i - 1] = { width: vp.width, height: vp.height };
-        // Batched commit every 25 pages keeps Svelte reactivity overhead low
-        // on huge documents while still letting the user see progressive
-        // placeholder fill-in.
-        if (i % 25 === 0 || i === doc.numPages) pageSizes = [...sizes];
-      } catch (err) {
-        console.warn('[PdfNoteViewer] prefetchPageSizes page', i, err);
-      }
+    pageSizes = sizes;
+    pageSizeFetches.clear();
+    pageSizeFetches.add(1);
+  }
+
+  // Fetch a single page's natural size on demand and patch it into pageSizes,
+  // correcting the placeholder once it's known. No-op if already known/pending.
+  async function ensurePageSize(pageNumber: number) {
+    const doc = pdfDoc;
+    if (!doc || pageNumber < 1 || pageNumber > doc.numPages) return;
+    if (pageSizes[pageNumber - 1] || pageSizeFetches.has(pageNumber)) return;
+    pageSizeFetches.add(pageNumber);
+    try {
+      const page = await doc.getPage(pageNumber);
+      if (doc !== pdfDoc) return; // document swapped out mid-await
+      const vp = page.getViewport({ scale: 1 });
+      pageSizes[pageNumber - 1] = { width: vp.width, height: vp.height };
+    } catch (err) {
+      pageSizeFetches.delete(pageNumber); // allow a later retry
+      console.warn('[PdfNoteViewer] ensurePageSize page', pageNumber, err);
     }
   }
 
@@ -1217,6 +1436,7 @@
   function setFitWidthZoom() {
     zoomMode = 'fit-width';
     zoomMenuOpen = false;
+    scheduleHorizontalCenter();
   }
 
   function zoomBy(factor: number) {
@@ -1227,39 +1447,298 @@
     zoomMenuOpen = !zoomMenuOpen;
   }
 
-  async function zoomFromWheel(
-    deltaY: number,
+  function pageHostForFigure(figure: HTMLElement): HTMLElement | null {
+    return figure.querySelector<HTMLElement>('.pdf-page-host');
+  }
+
+  function figureForPage(pageNumber: number): HTMLElement | null {
+    return (
+      container?.querySelector<HTMLElement>(
+        `figure[data-page-number="${pageNumber}"]`
+      ) ?? null
+    );
+  }
+
+  function clampScrollerPosition() {
+    if (!container) return;
+    const maxLeft = Math.max(0, container.scrollWidth - container.clientWidth);
+    const maxTop = Math.max(0, container.scrollHeight - container.clientHeight);
+    // Only write when actually out of range. Assigning scrollLeft/scrollTop —
+    // even to their current value — aborts any in-flight smooth scroll (e.g.
+    // the one started by scrollToPage), which is what broke page navigation.
+    const clampedLeft = Math.min(maxLeft, Math.max(0, container.scrollLeft));
+    const clampedTop = Math.min(maxTop, Math.max(0, container.scrollTop));
+    if (clampedLeft !== container.scrollLeft)
+      container.scrollLeft = clampedLeft;
+    if (clampedTop !== container.scrollTop) container.scrollTop = clampedTop;
+  }
+
+  function offsetInsideScroller(el: HTMLElement): {
+    left: number;
+    top: number;
+  } {
+    if (!container) return { left: 0, top: 0 };
+    const scrollerRect = container.getBoundingClientRect();
+    const rect = el.getBoundingClientRect();
+    return {
+      left: rect.left - scrollerRect.left + container.scrollLeft,
+      top: rect.top - scrollerRect.top + container.scrollTop
+    };
+  }
+
+  function pageFitsViewportWidth(pageHost: HTMLElement): boolean {
+    if (!container) return false;
+    return pageHost.offsetWidth + PAGE_FIT_MARGIN * 2 <= container.clientWidth;
+  }
+
+  function centeredPageScrollLeft(
+    pageHost: HTMLElement,
+    pageOffset: { left: number }
+  ): number {
+    if (!container) return 0;
+    return (
+      pageOffset.left + pageHost.offsetWidth / 2 - container.clientWidth / 2
+    );
+  }
+
+  // The scrollLeft that horizontally centers a page (or left-aligns it with a
+  // small margin when it's wider than the viewport), clamped to range. Returns
+  // null when the page isn't laid out yet.
+  function targetScrollLeftForPage(pageNumber: number): number | null {
+    if (!container) return null;
+    const figure = figureForPage(pageNumber);
+    const pageHost = figure ? pageHostForFigure(figure) : null;
+    if (!pageHost) return null;
+    const pageOffset = offsetInsideScroller(pageHost);
+    const desired = pageFitsViewportWidth(pageHost)
+      ? centeredPageScrollLeft(pageHost, pageOffset)
+      : pageOffset.left - PAGE_FIT_MARGIN;
+    const maxLeft = Math.max(0, container.scrollWidth - container.clientWidth);
+    return Math.min(maxLeft, Math.max(0, desired));
+  }
+
+  function centerPageHorizontally(pageNumber = activePageNumber): boolean {
+    if (!container) return false;
+    const left = targetScrollLeftForPage(pageNumber);
+    if (left == null) return false;
+    container.scrollLeft = left;
+    return true;
+  }
+
+  function scheduleHorizontalCenter(pageNumber = activePageNumber) {
+    cancelAnimationFrame(horizontalCenterFrame);
+    horizontalCenterFrame = requestAnimationFrame(() => {
+      centerPageHorizontally(pageNumber);
+    });
+  }
+
+  function zoomAnchorAtClientPoint(
+    clientX: number,
+    clientY: number
+  ): ZoomAnchor | null {
+    if (!container) return null;
+    const hit = document.elementFromPoint(
+      clientX,
+      clientY
+    ) as HTMLElement | null;
+    const hitFigure = hit?.closest<HTMLElement>('figure[data-page-number]');
+    const figure =
+      hitFigure && container.contains(hitFigure)
+        ? hitFigure
+        : container.querySelector<HTMLElement>(
+            `figure[data-page-number="${activePageNumber}"]`
+          );
+    if (!figure) return null;
+    const pageNumber = Number(figure.dataset.pageNumber);
+    const pageHost = pageHostForFigure(figure);
+    if (!Number.isFinite(pageNumber) || !pageHost) return null;
+    const rect = pageHost.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return null;
+    return {
+      pageNumber,
+      xRatio: Math.min(1, Math.max(0, (clientX - rect.left) / rect.width)),
+      yRatio: Math.min(1, Math.max(0, (clientY - rect.top) / rect.height))
+    };
+  }
+
+  async function zoomToAnchor(
+    nextZoom: number,
+    anchor: ZoomAnchor | null,
     clientX: number,
     clientY: number
   ) {
     if (!container) return;
     const previous = effectiveZoom;
-    const next = clampZoom(previous * Math.exp(-deltaY * 0.001));
+    const next = clampZoom(nextZoom);
     if (Math.abs(next - previous) < 0.001) return;
-
-    const rect = container.getBoundingClientRect();
-    const offsetX = clientX - rect.left;
-    const offsetY = clientY - rect.top;
-    const xRatio =
-      (container.scrollLeft + offsetX) / Math.max(1, container.scrollWidth);
-    const yRatio =
-      (container.scrollTop + offsetY) / Math.max(1, container.scrollHeight);
+    const token = ++zoomScrollToken;
 
     zoomMode = 'fixed';
     zoom = next;
     await tick();
     requestAnimationFrame(() => {
+      if (token !== zoomScrollToken) return;
       if (!container) return;
-      container.scrollLeft = xRatio * container.scrollWidth - offsetX;
-      container.scrollTop = yRatio * container.scrollHeight - offsetY;
+      if (!anchor) return;
+      const figure = figureForPage(anchor.pageNumber);
+      const pageHost = figure ? pageHostForFigure(figure) : null;
+      if (!pageHost) return;
+      const scrollerRect = container.getBoundingClientRect();
+      const pageOffset = offsetInsideScroller(pageHost);
+      const pointerX = clientX - scrollerRect.left;
+      const pointerY = clientY - scrollerRect.top;
+      container.scrollLeft = pageFitsViewportWidth(pageHost)
+        ? centeredPageScrollLeft(pageHost, pageOffset)
+        : pageOffset.left + anchor.xRatio * pageHost.offsetWidth - pointerX;
+      container.scrollTop =
+        pageOffset.top + anchor.yRatio * pageHost.offsetHeight - pointerY;
+      clampScrollerPosition();
     });
+  }
+
+  async function zoomAroundClientPoint(
+    nextZoom: number,
+    clientX: number,
+    clientY: number
+  ) {
+    await zoomToAnchor(
+      nextZoom,
+      zoomAnchorAtClientPoint(clientX, clientY),
+      clientX,
+      clientY
+    );
+  }
+
+  async function zoomFromWheel(
+    deltaY: number,
+    clientX: number,
+    clientY: number
+  ) {
+    await zoomAroundClientPoint(
+      effectiveZoom * Math.exp(-deltaY * 0.001),
+      clientX,
+      clientY
+    );
+  }
+
+  function touchDistance(): number | null {
+    if (touchZoomPointers.size < 2) return null;
+    const points = Array.from(touchZoomPointers.values()).slice(0, 2);
+    return Math.hypot(
+      points[0].clientX - points[1].clientX,
+      points[0].clientY - points[1].clientY
+    );
+  }
+
+  function touchCenter(): { clientX: number; clientY: number } | null {
+    if (touchZoomPointers.size < 2) return null;
+    const points = Array.from(touchZoomPointers.values()).slice(0, 2);
+    return {
+      clientX: (points[0].clientX + points[1].clientX) * 0.5,
+      clientY: (points[0].clientY + points[1].clientY) * 0.5
+    };
+  }
+
+  function touchPinchZoom(node: HTMLElement) {
+    const captureOptions = { capture: true };
+    const moveOptions = { capture: true, passive: false };
+    const clearPointer = (id: number) => {
+      touchZoomPointers.delete(id);
+      if (touchZoomPointers.size < 2) {
+        touchZoomAnchor = null;
+        touchZoomDistance = null;
+        touchZoomStartZoom = effectiveZoom;
+        touchZoomActive = false;
+      }
+    };
+
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.pointerType !== 'touch') return;
+      touchZoomPointers.set(event.pointerId, {
+        clientX: event.clientX,
+        clientY: event.clientY
+      });
+      if (touchZoomPointers.size === 2) {
+        const center = touchCenter();
+        touchZoomDistance = touchDistance();
+        touchZoomAnchor = center
+          ? zoomAnchorAtClientPoint(center.clientX, center.clientY)
+          : null;
+        touchZoomStartZoom = effectiveZoom;
+        touchZoomActive = true;
+      }
+    };
+
+    const onPointerMove = (event: PointerEvent) => {
+      if (event.pointerType !== 'touch') return;
+      if (!touchZoomPointers.has(event.pointerId)) return;
+      touchZoomPointers.set(event.pointerId, {
+        clientX: event.clientX,
+        clientY: event.clientY
+      });
+      if (!touchZoomActive || touchZoomPointers.size < 2) return;
+      const nextDistance = touchDistance();
+      const center = touchCenter();
+      if (!nextDistance || !touchZoomDistance || !center) return;
+      event.preventDefault();
+      const factor = nextDistance / touchZoomDistance;
+      void zoomToAnchor(
+        touchZoomStartZoom * factor,
+        touchZoomAnchor,
+        center.clientX,
+        center.clientY
+      );
+    };
+
+    const onPointerEnd = (event: PointerEvent) => {
+      if (event.pointerType !== 'touch') return;
+      clearPointer(event.pointerId);
+    };
+
+    node.addEventListener('pointerdown', onPointerDown, captureOptions);
+    node.addEventListener('pointermove', onPointerMove, moveOptions);
+    node.addEventListener('pointerup', onPointerEnd, captureOptions);
+    node.addEventListener('pointercancel', onPointerEnd, captureOptions);
+    node.addEventListener('lostpointercapture', onPointerEnd, captureOptions);
+    return {
+      destroy() {
+        node.removeEventListener('pointerdown', onPointerDown, captureOptions);
+        node.removeEventListener('pointermove', onPointerMove, moveOptions);
+        node.removeEventListener('pointerup', onPointerEnd, captureOptions);
+        node.removeEventListener('pointercancel', onPointerEnd, captureOptions);
+        node.removeEventListener(
+          'lostpointercapture',
+          onPointerEnd,
+          captureOptions
+        );
+        touchZoomPointers.clear();
+        touchZoomAnchor = null;
+        touchZoomDistance = null;
+        touchZoomStartZoom = effectiveZoom;
+        touchZoomActive = false;
+      }
+    };
   }
 
   function ctrlWheelZoom(node: HTMLElement) {
     const onWheel = (e: WheelEvent) => {
-      if (!e.ctrlKey) return;
-      e.preventDefault();
-      void zoomFromWheel(e.deltaY, e.clientX, e.clientY);
+      if (e.ctrlKey) {
+        e.preventDefault();
+        void zoomFromWheel(e.deltaY, e.clientX, e.clientY);
+        return;
+      }
+      if (e.shiftKey) {
+        e.preventDefault();
+        node.scrollLeft += e.deltaY + e.deltaX;
+        clampScrollerPosition();
+        return;
+      }
+      if (Math.abs(e.deltaX) > 0) {
+        e.preventDefault();
+        node.scrollLeft += e.deltaX;
+        node.scrollTop += e.deltaY;
+        clampScrollerPosition();
+      }
     };
     node.addEventListener('wheel', onWheel, { passive: false });
     return {
@@ -1282,6 +1761,32 @@
       containerWidth = node.clientWidth;
     });
     resizeObserver.observe(node);
+  });
+
+  $effect(() => {
+    void containerWidth;
+    void pageNumbers.length;
+    void pageSizes;
+    void zoom;
+    void zoomMode;
+    if (!container || pageNumbers.length === 0) return;
+    // Re-center on zoom / size changes only. Reading activePageNumber via
+    // untrack keeps page changes (scroll-driven or via the toolbar controls)
+    // from triggering a competing scrollLeft write that would abort an
+    // in-flight smooth scroll — toolbar navigation centers the page itself.
+    const pageNumber = untrack(() => activePageNumber);
+    cancelAnimationFrame(horizontalCenterFrame);
+    horizontalCenterFrame = requestAnimationFrame(() => {
+      const figure = figureForPage(pageNumber);
+      const pageHost = figure ? pageHostForFigure(figure) : null;
+      const shouldCenter =
+        zoomMode === 'fit-width' ||
+        !initialHorizontalCenterDone ||
+        (pageHost ? pageFitsViewportWidth(pageHost) : false);
+      if (shouldCenter && centerPageHorizontally(pageNumber)) {
+        initialHorizontalCenterDone = true;
+      }
+    });
   });
 
   $effect(() => {
@@ -1432,6 +1937,9 @@
           const pageNum = pageAttr ? Number(pageAttr) : NaN;
           if (!Number.isFinite(pageNum)) continue;
           if (entry.isIntersecting) {
+            // A page near the viewport: fetch its real size (if not already
+            // known) so the placeholder is correct by the time it renders.
+            void ensurePageSize(pageNum);
             const existing = renderDropTimers.get(pageNum);
             if (existing) {
               clearTimeout(existing);
@@ -1478,8 +1986,9 @@
 
     // Observe after DOM updates so all page wrappers exist.
     void tick().then(() => {
-      const targets =
-        container?.querySelectorAll<HTMLElement>('[data-page-number]');
+      const targets = container?.querySelectorAll<HTMLElement>(
+        'figure[data-page-number]'
+      );
       targets?.forEach((el) => {
         visibilityObserver.observe(el);
         renderObserver.observe(el);
@@ -1500,8 +2009,10 @@
 
   onMount(async () => {
     mobileToolbar = isMobile();
-    savedSignatures = loadReusableSignatures();
-    activeSignatureId = savedSignatures[0]?.id ?? null;
+    // Ensure the shared signature library is loaded (migrates any legacy
+    // localStorage signatures on first run). The reconciling effect arms a
+    // default selection once it populates; activeSignatureId stays per-viewer.
+    void ensureSignaturesLoaded();
     await tick();
     if (hostEl) {
       editorListener = {
@@ -1526,12 +2037,19 @@
         }
       }
       annotationsMap = localYDoc.getMap<PdfAnnotation>(PDF_ANNOTATIONS_MAP);
+      formValuesMap = localYDoc.getMap<PdfFormValue>(PDF_FORM_VALUES_MAP);
       syncAnnotationsFromYDoc();
       yDocUpdateHandler = () => {
         syncAnnotationsFromYDoc();
         scheduleSave();
       };
       localYDoc.on('update', yDocUpdateHandler);
+      formValuesObserver = (_event, transaction) => {
+        if (transaction.origin === LOCAL_ORIGIN) return;
+        applyStoredFormValuesToPdfStorage();
+        bumpRenderVersion();
+      };
+      formValuesMap.observe(formValuesObserver);
 
       // Undo/redo scoped to this note's annotations. trackedOrigins is
       // limited to LOCAL_ORIGIN so undo never reverts a peer's edit or a
@@ -1581,13 +2099,16 @@
       pdfViewerLib = pdfViewer;
       const task = pdfjs.getDocument({ data: new Uint8Array(asset.bytes) });
       pdfDoc = await task.promise;
+      installPdfFormStorageSync(pdfDoc);
+      applyStoredFormValuesToPdfStorage();
+      pdfFieldObjectsPromise = pdfDoc.getFieldObjects();
       const firstPage = await pdfDoc.getPage(1);
       firstPageWidth = firstPage.getViewport({ scale: 1 }).width;
       pageNumbers = Array.from({ length: pdfDoc.numPages }, (_, i) => i + 1);
-      // Pre-fetch every page's natural viewport so the each-block can size
-      // placeholders correctly before (and instead of) a canvas mounts.
-      // PDF.js caches page proxies, so this is cheap and one-shot.
-      void prefetchPageSizes(pdfDoc, firstPage);
+      // Seed the first page's size; the rest are fetched lazily as they near
+      // the viewport (ensurePageSize, driven by the render observer) so we
+      // don't round-trip the worker once per page on open.
+      seedPageSizes(pdfDoc, firstPage);
       // Document outline (bookmarks) for the navigator's Outline tab.
       // Resolved off the load path; the tab simply stays empty until ready.
       void loadFlatOutline(pdfDoc).then((items) => {
@@ -1600,6 +2121,11 @@
       bumpRenderVersion();
 
       void listen('sync-completed', async (payload) => {
+        // Refresh the shared signature library so signatures added/removed on
+        // another device show up here (and in any other open viewer) without
+        // reopening. The reconciling effect re-arms the selection if needed.
+        await refreshSignatures();
+
         if (!payload.notes_pulled_ids.includes(noteId) || !yDoc) return;
         try {
           const fresh = await loadNote(noteId);
@@ -1660,6 +2186,7 @@
         const tag = target?.tagName;
         if (
           tag === 'INPUT' ||
+          tag === 'SELECT' ||
           tag === 'TEXTAREA' ||
           target?.isContentEditable
         ) {
@@ -1694,6 +2221,7 @@
     unsubSync = null;
     unsubSession?.();
     unsubSession = null;
+    cancelAnimationFrame(horizontalCenterFrame);
     resizeObserver?.disconnect();
     pageIntersectionObserver?.disconnect();
     pageIntersectionObserver = null;
@@ -1706,12 +2234,17 @@
     pageRenderCancelled.clear();
     pageCancelHooks.clear();
     void pdfDoc?.cleanup();
+    pdfFieldObjectsPromise = null;
     undoManager?.destroy();
     undoManager = null;
     if (yDoc && yDocUpdateHandler) {
       yDoc.off('update', yDocUpdateHandler);
     }
+    if (formValuesMap && formValuesObserver) {
+      formValuesMap.unobserve(formValuesObserver);
+    }
     yDocUpdateHandler = null;
+    formValuesObserver = null;
     // CollabProvider must be torn down before awareness/yDoc so its
     // destroy() can broadcast the null-state cleanup frame to peers.
     provider?.destroy();
@@ -1723,6 +2256,7 @@
     yDoc?.destroy();
     yDoc = null;
     annotationsMap = null;
+    formValuesMap = null;
     clearNoteStatus(noteId);
   });
 
@@ -1731,9 +2265,13 @@
     let cancelled = false;
     let drawGeneration = 0;
     let pageView: PdfPageView | null = null;
+    let pendingPageView: PdfPageView | null = null;
+    let activeLayer: HTMLDivElement | null = null;
+    let pendingLayer: HTMLDivElement | null = null;
     let currentViewport: ReturnType<
       Awaited<ReturnType<PdfDocument['getPage']>>['getViewport']
     > | null = null;
+    let renderedSize: PageSize | null = null;
     // Link annotations for this page (external URLs + internal jumps),
     // fetched once per draw and overlaid as clickable anchors.
     let currentLinks: PdfLink[] = [];
@@ -1752,6 +2290,7 @@
     pageCancelHooks.set(current.pageNumber, () => {
       cancelScheduledDraw();
       drawGeneration += 1;
+      pendingPageView?.cancelRendering();
       pageView?.cancelRendering();
     });
 
@@ -1837,6 +2376,77 @@
       pageEl.append(layer);
     }
 
+    function formatPdfUi(
+      key: Parameters<typeof tUi>[0],
+      replacements: Record<string, string | number>
+    ): string {
+      let value = tUi(key);
+      for (const [name, replacement] of Object.entries(replacements)) {
+        value = value.replaceAll(`{${name}}`, String(replacement));
+      }
+      return value;
+    }
+
+    function annotationTypeLabel(type: PdfAnnotationType): string {
+      switch (type) {
+        case 'highlight':
+          return tUi('pdf.annotation.type.highlight');
+        case 'comment':
+          return tUi('pdf.annotation.type.comment');
+        case 'ink':
+          return tUi('pdf.annotation.type.ink');
+        case 'signature':
+          return tUi('pdf.annotation.type.signature');
+      }
+    }
+
+    function accessibleCommentText(annotation: PdfAnnotation): string {
+      const body = annotation.body?.replace(/\s+/g, ' ').trim();
+      if (!body) return '';
+      const comment = body.length > 140 ? `${body.slice(0, 137)}...` : body;
+      return formatPdfUi('pdf.annotation.accessible.comment', { comment });
+    }
+
+    function annotationAriaLabel(
+      annotation: PdfAnnotation,
+      rectIndex: number,
+      rectCount: number
+    ): string {
+      const part =
+        rectCount > 1
+          ? formatPdfUi('pdf.annotation.accessible.part', {
+              part: rectIndex + 1,
+              total: rectCount
+            })
+          : '';
+      const state =
+        annotation.id === current.selectedAnnotationId
+          ? tUi('pdf.annotation.accessible.selected')
+          : annotation.resolved
+            ? tUi('pdf.annotation.accessible.resolved')
+            : '';
+      return formatPdfUi(
+        current.activeTool === 'delete'
+          ? 'pdf.annotation.accessible.delete'
+          : 'pdf.annotation.accessible.select',
+        {
+          type: annotationTypeLabel(annotation.type),
+          page: annotation.pageIndex + 1,
+          part,
+          state,
+          comment: accessibleCommentText(annotation)
+        }
+      );
+    }
+
+    function activateAnnotation(annotation: PdfAnnotation) {
+      if (current.activeTool === 'delete' && !isTrashed) {
+        deleteAnnotation(annotation.id);
+      } else {
+        selectAnnotation(annotation.id);
+      }
+    }
+
     function renderAppAnnotations() {
       const pageEl = pageSurface.querySelector<HTMLElement>('.page');
       const viewport = currentViewport;
@@ -1863,7 +2473,8 @@
         (annotation) => annotation.pageIndex === current.pageNumber - 1
       );
       for (const annotation of pageAnnotations) {
-        for (const rect of annotation.rects) {
+        const rectCount = annotation.rects.length;
+        for (const [rectIndex, rect] of annotation.rects.entries()) {
           const [x1, y1] = viewport.convertToViewportPoint(rect.x, rect.y);
           const [x2, y2] = viewport.convertToViewportPoint(
             rect.x + rect.width,
@@ -1882,6 +2493,16 @@
             node.classList.add('pdf-app-annotation-resolved');
           }
           node.dataset.annotationId = annotation.id;
+          node.tabIndex = 0;
+          node.setAttribute('role', 'button');
+          node.setAttribute(
+            'aria-label',
+            annotationAriaLabel(annotation, rectIndex, rectCount)
+          );
+          node.setAttribute(
+            'aria-pressed',
+            annotation.id === current.selectedAnnotationId ? 'true' : 'false'
+          );
           node.style.left = `${left}px`;
           node.style.top = `${top}px`;
           node.style.width = `${width}px`;
@@ -1891,7 +2512,7 @@
             '--annotation-opacity',
             `${annotation.opacity}`
           );
-          if (annotation.body) node.title = annotation.body;
+          node.title = annotation.body || node.getAttribute('aria-label') || '';
           if (annotation.type === 'signature' && annotation.signature) {
             const svg = document.createElementNS(
               'http://www.w3.org/2000/svg',
@@ -1955,15 +2576,21 @@
             node.addEventListener('pointerdown', (event) => {
               event.preventDefault();
               event.stopPropagation();
-              deleteAnnotation(annotation.id);
+              activateAnnotation(annotation);
             });
           } else {
             node.addEventListener('pointerdown', (event) => {
               event.preventDefault();
               event.stopPropagation();
-              selectAnnotation(annotation.id);
+              activateAnnotation(annotation);
             });
           }
+          node.addEventListener('keydown', (event) => {
+            if (event.key !== 'Enter' && event.key !== ' ') return;
+            event.preventDefault();
+            event.stopPropagation();
+            activateAnnotation(annotation);
+          });
           layer.append(node);
         }
       }
@@ -2160,12 +2787,98 @@
       });
     }
 
+    function destroyPageView(view: PdfPageView | null) {
+      view?.cancelRendering();
+      view?.destroy();
+    }
+
+    function createPageLayer(kind: 'active' | 'pending'): HTMLDivElement {
+      const layer = document.createElement('div');
+      layer.className = `pdf-page-buffer pdf-page-buffer-${kind}`;
+      return layer;
+    }
+
+    function clearPendingPageView(
+      layer = pendingLayer,
+      view = pendingPageView
+    ) {
+      if (view && view === pendingPageView) {
+        destroyPageView(view);
+        pendingPageView = null;
+      }
+      if (layer && layer === pendingLayer) {
+        layer.remove();
+        pendingLayer = null;
+      }
+    }
+
     function teardownPageView() {
-      pageView?.cancelRendering();
-      pageView?.destroy();
+      clearPendingPageView();
+      destroyPageView(pageView);
       pageView = null;
+      activeLayer = null;
       currentViewport = null;
+      renderedSize = null;
+      pageViewports.delete(current.pageNumber);
       pageSurface.replaceChildren();
+      pageSurface.classList.remove('pdf-page-previewing');
+    }
+
+    function clearPreviewScale() {
+      const pageEl = pageSurface.querySelector<HTMLElement>('.page');
+      if (!pageEl) return;
+      pageEl.style.transform = '';
+      pageEl.style.transformOrigin = '';
+      for (const child of Array.from(pageEl.children) as HTMLElement[]) {
+        child.style.transform = '';
+        child.style.transformOrigin = '';
+        child.style.width = '';
+        child.style.height = '';
+        child.style.right = '';
+        child.style.bottom = '';
+      }
+      if (renderedSize) {
+        pageEl.style.width = `${renderedSize.width}px`;
+        pageEl.style.height = `${renderedSize.height}px`;
+      }
+      pageSurface.classList.remove('pdf-page-previewing');
+    }
+
+    function measurePageSize(pageEl: HTMLElement): PageSize | null {
+      const width = pageEl.offsetWidth;
+      const height = pageEl.offsetHeight;
+      if (width > 0 && height > 0) return { width, height };
+      const rect = pageEl.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) {
+        return { width: rect.width, height: rect.height };
+      }
+      return null;
+    }
+
+    function applyPreviewScale(target: PageSize) {
+      if (!renderedSize || target.width <= 0 || target.height <= 0) return;
+      const pageEl = pageSurface.querySelector<HTMLElement>('.page');
+      if (!pageEl) return;
+      const source = renderedSize ?? measurePageSize(pageEl);
+      if (!source) return;
+      renderedSize = source;
+      const scaleX = target.width / Math.max(1, renderedSize.width);
+      const scaleY = target.height / Math.max(1, renderedSize.height);
+      pageEl.style.width = `${target.width}px`;
+      pageEl.style.height = `${target.height}px`;
+      if (Math.abs(scaleX - 1) < 0.001 && Math.abs(scaleY - 1) < 0.001) {
+        clearPreviewScale();
+        return;
+      }
+      for (const child of Array.from(pageEl.children) as HTMLElement[]) {
+        child.style.width = `${renderedSize.width}px`;
+        child.style.height = `${renderedSize.height}px`;
+        child.style.right = 'auto';
+        child.style.bottom = 'auto';
+        child.style.transformOrigin = '0 0';
+        child.style.transform = `scale(${scaleX}, ${scaleY})`;
+      }
+      pageSurface.classList.add('pdf-page-previewing');
     }
 
     let drawKickoffTimer: ReturnType<typeof setTimeout> | null = null;
@@ -2175,12 +2888,12 @@
         drawKickoffTimer = null;
       }
     }
-    function scheduleDraw() {
+    function scheduleDraw(delayMs = DRAW_KICKOFF_DELAY_MS) {
       cancelScheduledDraw();
       drawKickoffTimer = setTimeout(() => {
         drawKickoffTimer = null;
         void draw();
-      }, DRAW_KICKOFF_DELAY_MS);
+      }, delayMs);
     }
 
     async function draw() {
@@ -2195,46 +2908,75 @@
         teardownPageView();
         return;
       }
-      teardownPageView();
+      clearPendingPageView();
 
       const page = await doc.getPage(request.pageNumber);
       if (cancelled || generation !== drawGeneration) return;
 
       const baseViewport = page.getViewport({ scale: 1 });
-      const availableWidth = Math.max(280, renderContainer.clientWidth - 32);
+      const availableWidth = Math.max(
+        280,
+        renderContainer.clientWidth - PAGE_FIT_MARGIN * 2
+      );
       const fitScale = clampZoom(availableWidth / baseViewport.width);
       const requestedScale =
         request.zoomMode === 'fit-width' ? fitScale : clampZoom(request.zoom);
       const viewerScale = requestedScale / PDF_TO_CSS_UNITS;
       const viewport = page.getViewport({ scale: requestedScale });
-      currentViewport = viewport;
-      // Expose the rendered viewport so text-selection client-rects can be
-      // mapped back into PDF user space for text-aware annotations.
-      pageViewports.set(request.pageNumber, viewport);
 
       if (cancelled || generation !== drawGeneration) return;
+      const nextLayer = createPageLayer('pending');
+      pendingLayer = nextLayer;
+      pageSurface.append(nextLayer);
+
       const eventBus = new pdfViewer.EventBus();
-      pageView = new pdfViewer.PDFPageView({
-        container: pageSurface,
+      const nextPageView = new pdfViewer.PDFPageView({
+        container: nextLayer,
         eventBus,
         id: request.pageNumber,
         scale: viewerScale,
         defaultViewport: viewport,
-        annotationMode: pdfjs.AnnotationMode.DISABLE,
-        maxCanvasPixels: -1,
-        maxCanvasDim: -1,
-        enableDetailCanvas: true,
-        enableOptimizedPartialRendering: true,
+        layerProperties: {
+          annotationStorage: doc.annotationStorage,
+          downloadManager: null,
+          enableScripting: false,
+          fieldObjectsPromise: pdfFieldObjectsPromise,
+          findController: null,
+          hasJSActionsPromise: Promise.resolve(false),
+          linkService: new pdfViewer.SimpleLinkService({ eventBus })
+        },
+        annotationMode: pdfjs.AnnotationMode.ENABLE_FORMS,
+        maxCanvasPixels: MAX_CANVAS_PIXELS,
+        maxCanvasDim: MAX_CANVAS_DIM,
+        // pdf.js's capCanvasAreaFactor defaults to 200%, which caps the canvas
+        // to 3× the *screen* area regardless of maxCanvasPixels — that was the
+        // real cause of the blur past ~230-330% zoom, and why the cutoff
+        // varied per monitor (it scales with screen size, not the page).
+        // Disable it and rely on the explicit pixel/dimension caps above, which
+        // sit at the browser's safe limits.
+        capCanvasAreaFactor: -1,
+        // The detail-canvas fallback renders only the visible region at full
+        // res, but it must be driven by updateVisibleArea() on every scroll —
+        // something only pdf.js's own PDFViewer does, not this standalone
+        // PDFPageView. Left enabled but undriven it renders the base canvas at
+        // 1/4 scale past the cap; disable it so over-cap zoom degrades to a
+        // plain CSS upscale instead.
+        enableDetailCanvas: false,
         enableSelectionRendering: true
       });
-      pageView.setPdfPage(page);
+      pendingPageView = nextPageView;
+      nextPageView.setPdfPage(page);
       try {
         // Link annotations for the clickable overlay. Best-effort: a
         // failure here shouldn't stop the page from rendering.
+        let nextLinks: PdfLink[] = [];
         try {
           const annots = await page.getAnnotations({ intent: 'display' });
-          if (cancelled || generation !== drawGeneration) return;
-          currentLinks = annots
+          if (cancelled || generation !== drawGeneration) {
+            clearPendingPageView(nextLayer, nextPageView);
+            return;
+          }
+          nextLinks = annots
             .filter((a: { subtype?: string }) => a.subtype === 'Link')
             .map((a: { rect: number[]; url?: string; dest?: unknown }) => ({
               rect: a.rect,
@@ -2242,12 +2984,39 @@
               dest: a.dest as string | unknown[] | null | undefined
             }));
         } catch {
-          currentLinks = [];
+          nextLinks = [];
         }
-        await pageView.draw();
-        if (cancelled || generation !== drawGeneration) return;
+        await nextPageView.draw();
+        if (cancelled || generation !== drawGeneration) {
+          clearPendingPageView(nextLayer, nextPageView);
+          return;
+        }
+        const pageEl = nextLayer.querySelector<HTMLElement>('.page');
+        const previousPageView = pageView;
+        const previousLayer = activeLayer;
+        nextLayer.classList.remove('pdf-page-buffer-pending');
+        nextLayer.classList.add('pdf-page-buffer-active');
+        previousLayer?.remove();
+        destroyPageView(previousPageView);
+        pageView = nextPageView;
+        activeLayer = nextLayer;
+        pendingPageView = null;
+        pendingLayer = null;
+        currentViewport = viewport;
+        renderedSize = pageEl
+          ? (measurePageSize(pageEl) ?? {
+              width: viewport.width,
+              height: viewport.height
+            })
+          : { width: viewport.width, height: viewport.height };
+        currentLinks = nextLinks;
+        // Expose only the committed viewport so selection/client-rect math
+        // never points at an invisible staging layer.
+        pageViewports.set(request.pageNumber, viewport);
+        clearPreviewScale();
         renderAppAnnotations();
       } catch (err) {
+        clearPendingPageView(nextLayer, nextPageView);
         if (
           (err as { name?: string })?.name !== 'RenderingCancelledException'
         ) {
@@ -2274,6 +3043,8 @@
           next.version !== prev.version ||
           next.zoom !== prev.zoom ||
           next.zoomMode !== prev.zoomMode ||
+          next.width !== prev.width ||
+          next.height !== prev.height ||
           // Bumped when an externally-cancelled render needs to restart
           // after the user scrolled back inside the band before grace.
           next.invalidation !== prev.invalidation;
@@ -2282,7 +3053,10 @@
           // worker capacity that a visible page needs. No debounce here.
           cancelScheduledDraw();
           void draw();
-        } else if (enteringRender || visualChange) {
+        } else if (enteringRender) {
+          if (visualChange && next.shouldRender) {
+            applyPreviewScale({ width: next.width, height: next.height });
+          }
           // Debounce. Fast scrolling fires enteringRender for many pages
           // in quick succession; each call to scheduleDraw clears the
           // previous timer, so a page that's been in the band for less
@@ -2290,6 +3064,11 @@
           // keeps the worker queue uncontended for whichever page the
           // user actually settles on.
           scheduleDraw();
+        } else if (visualChange) {
+          if (next.shouldRender) {
+            applyPreviewScale({ width: next.width, height: next.height });
+            scheduleDraw(0);
+          }
         } else if (next.shouldRender) {
           // Same page, same zoom, still rendered — only annotation state
           // changed. Skip the canvas redraw and just refresh overlays.
@@ -2306,6 +3085,71 @@
     };
   }
 </script>
+
+{#snippet colorSwatch(color: string)}
+  <button
+    type="button"
+    class="size-5 rounded-full transition hover:scale-110"
+    style="background-color: {color}; box-shadow: {activeColor === color
+      ? '0 0 0 2px var(--ring)'
+      : '0 0 0 1px var(--border)'}"
+    aria-label={tUi('pdf.toolbar.colorSwatch').replace('{color}', color)}
+    aria-pressed={activeColor === color}
+    onclick={() => {
+      setActiveColor(color);
+      colorMenuOpen = false;
+    }}
+  ></button>
+{/snippet}
+
+{#snippet colorSwatchesExpanded()}
+  <div
+    class="flex items-center gap-1 px-1"
+    role="group"
+    aria-label={tUi('pdf.toolbar.color')}
+  >
+    {#each ANNOTATION_COLORS as color (color)}
+      {@render colorSwatch(color)}
+    {/each}
+  </div>
+{/snippet}
+
+{#snippet colorSwatchesCollapsed()}
+  <div class="relative shrink-0">
+    <ToolbarButton
+      bind:ref={colorMenuButton}
+      wide
+      active={colorMenuOpen}
+      aria-label={tUi('pdf.toolbar.color')}
+      title={tUi('pdf.toolbar.color')}
+      aria-haspopup="menu"
+      aria-expanded={colorMenuOpen}
+      onclick={() => (colorMenuOpen = !colorMenuOpen)}
+    >
+      <Palette aria-hidden="true" />
+      <span
+        class="size-3 rounded-full"
+        style="background-color: {activeColor}; box-shadow: 0 0 0 1px var(--border)"
+        aria-hidden="true"
+      ></span>
+    </ToolbarButton>
+
+    {#if colorMenuOpen}
+      <div
+        bind:this={colorMenuEl}
+        role="menu"
+        class="absolute left-0 top-full z-50 mt-1 rounded-md border border-border bg-popover p-2 text-popover-foreground shadow-lg"
+        aria-label={tUi('pdf.toolbar.color')}
+      >
+        <div class="flex items-center gap-1" role="group">
+          {#each ANNOTATION_COLORS as color (color)}
+            {@render colorSwatch(color)}
+          {/each}
+        </div>
+      </div>
+    {/if}
+  </div>
+{/snippet}
 
 <div
   bind:this={hostEl}
@@ -2326,222 +3170,214 @@
       <span>{error}</span>
     </div>
   {:else}
-    <Toolbar
-      dense
-      aria-label={tUi('pdf.toolbar.label')}
-      class="shrink-0 justify-between border-b border-border bg-background"
-    >
-      <div class="flex items-center gap-0.5">
-        <ToolbarButton
-          active={navigatorOpen}
-          onclick={toggleNavigator}
-          aria-label={tUi('pdf.toolbar.navigator')}
-          title={tUi('pdf.toolbar.navigator')}
-          aria-pressed={navigatorOpen}
-        >
-          <PanelLeft aria-hidden="true" />
-        </ToolbarButton>
-
-        <ToolbarSeparator />
-
-        <ToolbarButton
-          active={activeTool === 'select'}
-          onclick={() => setTool('select')}
-          aria-label={tUi('pdf.toolbar.select')}
-          title={tUi('pdf.toolbar.select')}
-          aria-pressed={activeTool === 'select'}
-        >
-          <TextCursor aria-hidden="true" />
-        </ToolbarButton>
-
-        <ToolbarButton
-          active={activeTool === 'highlight'}
-          onclick={() => setTool('highlight')}
-          aria-label={tUi('pdf.toolbar.highlight')}
-          title={tUi('pdf.toolbar.highlight')}
-          aria-pressed={activeTool === 'highlight'}
-          disabled={isTrashed}
-        >
-          <Highlighter aria-hidden="true" />
-        </ToolbarButton>
-
-        <ToolbarButton
-          active={activeTool === 'comment'}
-          onclick={() => setTool('comment')}
-          aria-label={tUi('pdf.toolbar.comment')}
-          title={tUi('pdf.toolbar.comment')}
-          aria-pressed={activeTool === 'comment'}
-          disabled={isTrashed}
-        >
-          <MessageSquarePlus aria-hidden="true" />
-        </ToolbarButton>
-
-        <ToolbarButton
-          active={activeTool === 'pen'}
-          onclick={() => setTool('pen')}
-          aria-label={tUi('pdf.toolbar.pen')}
-          title={tUi('pdf.toolbar.pen')}
-          aria-pressed={activeTool === 'pen'}
-          disabled={isTrashed}
-        >
-          <PenLine aria-hidden="true" />
-        </ToolbarButton>
-
-        <ToolbarButton
-          bind:ref={signatureButton}
-          active={activeTool === 'signature'}
-          onclick={() => setTool('signature')}
-          aria-label={tUi('pdf.toolbar.sign')}
-          title={tUi('pdf.toolbar.sign')}
-          aria-pressed={activeTool === 'signature'}
-          aria-haspopup="menu"
-          aria-expanded={signaturePickerOpen}
-          disabled={isTrashed}
-        >
-          <Signature aria-hidden="true" />
-        </ToolbarButton>
-
-        <ToolbarButton
-          active={activeTool === 'delete'}
-          onclick={() => setTool('delete')}
-          aria-label={tUi('pdf.toolbar.delete')}
-          title={tUi('pdf.toolbar.delete')}
-          aria-pressed={activeTool === 'delete'}
-          disabled={isTrashed}
-        >
-          <Trash2 aria-hidden="true" />
-        </ToolbarButton>
-
-        {#if activeTool === 'highlight' || activeTool === 'comment' || activeTool === 'pen'}
-          <ToolbarSeparator />
-        {/if}
-
-        {#if activeTool === 'highlight' || activeTool === 'comment'}
+    <div class="shrink-0 border-b border-border bg-background">
+      <Toolbar
+        bind:ref={toolbarScrollEl}
+        dense
+        aria-label={tUi('pdf.toolbar.label')}
+        class="scrollbar-none justify-between overflow-x-auto"
+        onwheel={handleToolbarWheel}
+      >
+        <div class="flex shrink-0 items-center gap-0.5">
           <ToolbarButton
-            active={areaMode}
-            onclick={() => (areaMode = !areaMode)}
-            aria-label={tUi('pdf.toolbar.area')}
-            title={tUi('pdf.toolbar.area')}
-            aria-pressed={areaMode}
+            active={navigatorOpen}
+            onclick={toggleNavigator}
+            aria-label={tUi('pdf.toolbar.navigator')}
+            title={tUi('pdf.toolbar.navigator')}
+            aria-pressed={navigatorOpen}
+          >
+            <PanelLeft aria-hidden="true" />
+          </ToolbarButton>
+
+          <ToolbarSeparator />
+
+          <ToolbarButton
+            active={activeTool === 'select'}
+            onclick={() => setTool('select')}
+            aria-label={tUi('pdf.toolbar.select')}
+            title={tUi('pdf.toolbar.select')}
+            aria-pressed={activeTool === 'select'}
+          >
+            <TextCursor aria-hidden="true" />
+          </ToolbarButton>
+
+          <ToolbarButton
+            active={activeTool === 'highlight'}
+            onclick={() => setTool('highlight')}
+            aria-label={tUi('pdf.toolbar.highlight')}
+            title={tUi('pdf.toolbar.highlight')}
+            aria-pressed={activeTool === 'highlight'}
             disabled={isTrashed}
           >
-            <SquareDashed aria-hidden="true" />
+            <Highlighter aria-hidden="true" />
           </ToolbarButton>
-        {/if}
 
-        {#if activeTool === 'highlight' || activeTool === 'pen'}
-          <div
-            class="flex items-center gap-1 px-1"
-            role="group"
-            aria-label={tUi('pdf.toolbar.color')}
+          <ToolbarButton
+            active={activeTool === 'comment'}
+            onclick={() => setTool('comment')}
+            aria-label={tUi('pdf.toolbar.comment')}
+            title={tUi('pdf.toolbar.comment')}
+            aria-pressed={activeTool === 'comment'}
+            disabled={isTrashed}
           >
-            {#each ANNOTATION_COLORS as color (color)}
-              <button
-                type="button"
-                class="size-5 rounded-full transition hover:scale-110"
-                style="background-color: {color}; box-shadow: {activeColor ===
-                color
-                  ? '0 0 0 2px var(--ring)'
-                  : '0 0 0 1px var(--border)'}"
-                aria-label={tUi('pdf.toolbar.colorSwatch').replace(
-                  '{color}',
-                  color
-                )}
-                aria-pressed={activeColor === color}
-                onclick={() => setActiveColor(color)}
-              ></button>
-            {/each}
-          </div>
-        {/if}
+            <MessageSquarePlus aria-hidden="true" />
+          </ToolbarButton>
 
-        <ToolbarSeparator />
+          <ToolbarButton
+            active={activeTool === 'pen'}
+            onclick={() => setTool('pen')}
+            aria-label={tUi('pdf.toolbar.pen')}
+            title={tUi('pdf.toolbar.pen')}
+            aria-pressed={activeTool === 'pen'}
+            disabled={isTrashed}
+          >
+            <PenLine aria-hidden="true" />
+          </ToolbarButton>
 
-        <ToolbarButton
-          onclick={undo}
-          disabled={isTrashed || !canUndo}
-          aria-label={tUi('pdf.toolbar.undo')}
-          title={tUi('pdf.toolbar.undo')}
-        >
-          <Undo2 aria-hidden="true" />
-        </ToolbarButton>
+          <ToolbarButton
+            bind:ref={signatureButton}
+            active={activeTool === 'signature'}
+            onclick={() => setTool('signature')}
+            aria-label={tUi('pdf.toolbar.sign')}
+            title={tUi('pdf.toolbar.sign')}
+            aria-pressed={activeTool === 'signature'}
+            aria-haspopup="menu"
+            aria-expanded={signaturePickerOpen}
+            disabled={isTrashed}
+          >
+            <Signature aria-hidden="true" />
+          </ToolbarButton>
 
-        <ToolbarButton
-          onclick={redo}
-          disabled={isTrashed || !canRedo}
-          aria-label={tUi('pdf.toolbar.redo')}
-          title={tUi('pdf.toolbar.redo')}
-        >
-          <Redo2 aria-hidden="true" />
-        </ToolbarButton>
+          <ToolbarButton
+            active={activeTool === 'delete'}
+            onclick={() => setTool('delete')}
+            aria-label={tUi('pdf.toolbar.delete')}
+            title={tUi('pdf.toolbar.delete')}
+            aria-pressed={activeTool === 'delete'}
+            disabled={isTrashed}
+          >
+            <Trash2 aria-hidden="true" />
+          </ToolbarButton>
 
-        <ToolbarSeparator />
+          {#if activeTool === 'highlight' || activeTool === 'comment' || activeTool === 'pen'}
+            <ToolbarSeparator />
+          {/if}
 
-        <ToolbarButton
-          active={commentsSidebarOpen}
-          onclick={() => (commentsSidebarOpen = !commentsSidebarOpen)}
-          aria-label={tUi('pdf.toolbar.comments')}
-          title={tUi('pdf.toolbar.comments')}
-          aria-pressed={commentsSidebarOpen}
-        >
-          <MessagesSquare aria-hidden="true" />
-        </ToolbarButton>
-      </div>
+          {#if activeTool === 'highlight' || activeTool === 'comment'}
+            <ToolbarButton
+              active={areaMode}
+              onclick={() => (areaMode = !areaMode)}
+              aria-label={tUi('pdf.toolbar.area')}
+              title={tUi('pdf.toolbar.area')}
+              aria-pressed={areaMode}
+              disabled={isTrashed}
+            >
+              <SquareDashed aria-hidden="true" />
+            </ToolbarButton>
+          {/if}
 
-      <div class="flex items-center gap-0.5">
-        <ToolbarButton
-          onclick={goToPreviousPage}
-          disabled={activePageNumber <= 1}
-          aria-label={tUi('pdf.toolbar.previousPage')}
-          title={tUi('pdf.toolbar.previousPage')}
-        >
-          <ChevronLeft aria-hidden="true" />
-        </ToolbarButton>
+          {#if activeTool === 'highlight' || activeTool === 'pen'}
+            <ToolbarCollapseWhenOverflow
+              class="items-center"
+              margin={pageNavWidth + 8}
+              expanded={colorSwatchesExpanded}
+              collapsed={colorSwatchesCollapsed}
+            />
+          {/if}
 
-        <div
-          class="flex shrink-0 items-center gap-1 whitespace-nowrap text-xs text-muted-foreground"
-        >
-          <input
-            type="text"
-            inputmode="numeric"
-            value={pageInputValue}
-            aria-label={tUi('pdf.page.inputLabel')}
-            class="h-7 w-9 shrink-0 rounded-md border border-border bg-background text-center tabular-nums outline-none focus:ring-1 focus:ring-ring"
-            oninput={(event) =>
-              (pageInputValue = (event.currentTarget as HTMLInputElement)
-                .value)}
-            onfocus={(event) => {
-              pageInputFocused = true;
-              (event.currentTarget as HTMLInputElement).select();
-            }}
-            onblur={() => {
-              pageInputFocused = false;
-              commitPageInput();
-            }}
-            onkeydown={(event) => {
-              if (event.key === 'Enter') {
-                event.preventDefault();
-                (event.currentTarget as HTMLInputElement).blur();
-              }
-            }}
-          />
-          <span class="shrink-0 whitespace-nowrap tabular-nums">
-            {tUi('pdf.page.totalLabel').replace(
-              '{total}',
-              String(pageNumbers.length)
-            )}
-          </span>
+          <ToolbarSeparator />
+
+          <ToolbarButton
+            onclick={undo}
+            disabled={isTrashed || !canUndo}
+            aria-label={tUi('pdf.toolbar.undo')}
+            title={tUi('pdf.toolbar.undo')}
+          >
+            <Undo2 aria-hidden="true" />
+          </ToolbarButton>
+
+          <ToolbarButton
+            onclick={redo}
+            disabled={isTrashed || !canRedo}
+            aria-label={tUi('pdf.toolbar.redo')}
+            title={tUi('pdf.toolbar.redo')}
+          >
+            <Redo2 aria-hidden="true" />
+          </ToolbarButton>
+
+          <ToolbarSeparator />
+
+          <ToolbarButton
+            active={commentsSidebarOpen}
+            onclick={() => (commentsSidebarOpen = !commentsSidebarOpen)}
+            aria-label={tUi('pdf.toolbar.comments')}
+            title={tUi('pdf.toolbar.comments')}
+            aria-pressed={commentsSidebarOpen}
+          >
+            <MessagesSquare aria-hidden="true" />
+          </ToolbarButton>
         </div>
 
-        <ToolbarButton
-          onclick={goToNextPage}
-          disabled={activePageNumber >= pageNumbers.length}
-          aria-label={tUi('pdf.toolbar.nextPage')}
-          title={tUi('pdf.toolbar.nextPage')}
+        <div
+          class="flex shrink-0 items-center gap-0.5"
+          bind:clientWidth={pageNavWidth}
         >
-          <ChevronRight aria-hidden="true" />
-        </ToolbarButton>
-      </div>
-    </Toolbar>
+          <ToolbarButton
+            onclick={goToPreviousPage}
+            disabled={activePageNumber <= 1}
+            aria-label={tUi('pdf.toolbar.previousPage')}
+            title={tUi('pdf.toolbar.previousPage')}
+          >
+            <ChevronLeft aria-hidden="true" />
+          </ToolbarButton>
+
+          <div
+            class="flex shrink-0 items-center gap-1 whitespace-nowrap text-xs text-muted-foreground"
+          >
+            <input
+              type="text"
+              inputmode="numeric"
+              value={pageInputValue}
+              aria-label={tUi('pdf.page.inputLabel')}
+              class="h-7 w-9 shrink-0 rounded-md border border-border bg-background text-center tabular-nums outline-none focus:ring-1 focus:ring-ring"
+              oninput={(event) =>
+                (pageInputValue = (event.currentTarget as HTMLInputElement)
+                  .value)}
+              onfocus={(event) => {
+                pageInputFocused = true;
+                (event.currentTarget as HTMLInputElement).select();
+              }}
+              onblur={() => {
+                pageInputFocused = false;
+                commitPageInput();
+              }}
+              onkeydown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  (event.currentTarget as HTMLInputElement).blur();
+                }
+              }}
+            />
+            <span class="shrink-0 whitespace-nowrap tabular-nums">
+              {tUi('pdf.page.totalLabel').replace(
+                '{total}',
+                String(pageNumbers.length)
+              )}
+            </span>
+          </div>
+
+          <ToolbarButton
+            onclick={goToNextPage}
+            disabled={activePageNumber >= pageNumbers.length}
+            aria-label={tUi('pdf.toolbar.nextPage')}
+            title={tUi('pdf.toolbar.nextPage')}
+          >
+            <ChevronRight aria-hidden="true" />
+          </ToolbarButton>
+        </div>
+      </Toolbar>
+      <ToolbarScrollbar target={toolbarScrollEl} />
+    </div>
 
     {#if searchOpen}
       <FindBar
@@ -2557,7 +3393,7 @@
       />
     {/if}
 
-    <div class="flex min-h-0 flex-1 overflow-hidden">
+    <div class="flex min-h-0 min-w-0 flex-1 overflow-hidden">
       {#if navigatorOpen && pdfDoc}
         <PdfNavigatorSidebar
           {pdfDoc}
@@ -2570,49 +3406,55 @@
         />
       {/if}
 
-      <div
-        bind:this={container}
-        use:ctrlWheelZoom
-        class="themed-scrollbar min-h-0 flex-1 overflow-auto px-3 py-4"
-      >
-        <div class="mx-auto flex min-w-full w-max flex-col items-center gap-4">
-          {#each pageNumbers as pageNumber (pageNumber)}
-            {@const size = placeholderSize(pageNumber)}
-            {@const shouldRender = isRendering(pageNumber)}
-            {@const invalidation = invalidationOf(pageNumber)}
-            {@const pageCaption = tUi('pdf.page.caption')
-              .replace('{page}', String(pageNumber))
-              .replace('{total}', String(pageNumbers.length))}
-            <figure
-              class="flex w-max flex-col items-center gap-1"
-              data-page-number={pageNumber}
-            >
-              <div
-                use:renderPage={{
-                  pageNumber,
-                  version: renderVersion,
-                  zoom,
-                  zoomMode,
-                  annotationVersion,
-                  activeTool,
-                  areaMode,
-                  selectedAnnotationId,
-                  shouldRender,
-                  invalidation,
-                  searchVersion
-                }}
-                style="width:{size.width}px; height:{size.height}px"
-                class="pdf-page-host pdfViewer bg-white shadow-sm ring-1 ring-border"
-              ></div>
-              <figcaption
-                class="flex items-center gap-1 text-[10px] text-muted-foreground"
+      <div class="relative flex min-h-0 min-w-0 flex-1">
+        <div
+          bind:this={container}
+          use:ctrlWheelZoom
+          use:touchPinchZoom
+          class="pdf-page-scroller min-h-0 min-w-0 flex-1 {PAGE_SCROLLER_CLASS} {PAGE_SCROLLER_SCROLLBAR_CLASS}"
+        >
+          <div class={PDF_PAGE_COLUMN_CLASS}>
+            {#each pageNumbers as pageNumber (pageNumber)}
+              {@const size = placeholderSize(pageNumber)}
+              {@const shouldRender = isRendering(pageNumber)}
+              {@const invalidation = invalidationOf(pageNumber)}
+              {@const pageCaption = tUi('pdf.page.caption')
+                .replace('{page}', String(pageNumber))
+                .replace('{total}', String(pageNumbers.length))}
+              <figure
+                class="flex w-max flex-col items-center gap-1"
+                data-page-number={pageNumber}
               >
-                <FileText class="size-3" aria-hidden="true" />
-                {pageCaption}
-              </figcaption>
-            </figure>
-          {/each}
+                <div
+                  use:renderPage={{
+                    pageNumber,
+                    version: renderVersion,
+                    zoom,
+                    zoomMode,
+                    width: size.width,
+                    height: size.height,
+                    annotationVersion,
+                    activeTool,
+                    areaMode,
+                    selectedAnnotationId,
+                    shouldRender,
+                    invalidation,
+                    searchVersion
+                  }}
+                  style="width:{size.width}px; height:{size.height}px"
+                  class="pdf-page-host pdfViewer {PAGE_SURFACE_CLASS}"
+                ></div>
+                <figcaption
+                  class="flex items-center gap-1 text-[10px] text-muted-foreground"
+                >
+                  <FileText class="size-3" aria-hidden="true" />
+                  {pageCaption}
+                </figcaption>
+              </figure>
+            {/each}
+          </div>
         </div>
+        <PageOverlayScrollbar target={container} />
       </div>
 
       {#if commentsSidebarOpen}
@@ -2656,31 +3498,29 @@
       />
     {/if}
 
-    {#if !mobileToolbar}
-      <div
-        class="absolute bottom-3 left-3 z-20"
-        role="toolbar"
-        aria-label={tUi('pdf.toolbar.zoom')}
-      >
-        <ToolbarZoomControls
-          bind:open={zoomMenuOpen}
-          class="rounded-md border border-border bg-background/95 p-1 shadow-sm backdrop-blur"
-          menuPlacement="above"
-          label={zoomLabel}
-          zoomOutLabel={tUi('pdf.toolbar.zoomOut')}
-          zoomInLabel={tUi('pdf.toolbar.zoomIn')}
-          zoomMenuLabel={tUi('pdf.toolbar.zoom')}
-          fitLabel={tUi('pdf.toolbar.fitWidth')}
-          fitActive={zoomMode === 'fit-width'}
-          zoomOptions={QUICK_ZOOMS}
-          selectedZoom={zoomMode === 'fixed' ? zoom : null}
-          onZoomOut={() => zoomBy(1 / ZOOM_STEP)}
-          onZoomIn={() => zoomBy(ZOOM_STEP)}
-          onFit={setFitWidthZoom}
-          onSelectZoom={setFixedZoom}
-        />
-      </div>
-    {/if}
+    <div
+      class="absolute bottom-3 left-3 z-20"
+      role="toolbar"
+      aria-label={tUi('pdf.toolbar.zoom')}
+    >
+      <ToolbarZoomControls
+        bind:open={zoomMenuOpen}
+        class="rounded-md border border-border bg-background/95 p-1 shadow-sm backdrop-blur"
+        menuPlacement="above"
+        label={zoomLabel}
+        zoomOutLabel={tUi('pdf.toolbar.zoomOut')}
+        zoomInLabel={tUi('pdf.toolbar.zoomIn')}
+        zoomMenuLabel={tUi('pdf.toolbar.zoom')}
+        fitLabel={tUi('pdf.toolbar.fitWidth')}
+        fitActive={zoomMode === 'fit-width'}
+        zoomOptions={QUICK_ZOOMS}
+        selectedZoom={zoomMode === 'fixed' ? zoom : null}
+        onZoomOut={() => zoomBy(1 / ZOOM_STEP)}
+        onZoomIn={() => zoomBy(ZOOM_STEP)}
+        onFit={setFitWidthZoom}
+        onSelectZoom={setFixedZoom}
+      />
+    </div>
 
     <SignaturePadDialog
       open={signatureDialogOpen}
@@ -2711,6 +3551,38 @@
     --hcm-highlight-filter: none;
     --hcm-highlight-selected-filter: none;
     background-color: white;
+    position: relative;
+  }
+
+  :global(.pdf-page-scroller) {
+    overflow-anchor: none;
+    touch-action: pan-x pan-y;
+  }
+
+  :global(.pdf-page-column) {
+    box-sizing: content-box;
+    padding-inline: 50%;
+  }
+
+  :global(.pdf-page-host.pdf-page-previewing) {
+    overflow: hidden;
+  }
+
+  :global(.pdf-page-host .pdf-page-buffer) {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }
+
+  :global(.pdf-page-host .pdf-page-buffer-active) {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  :global(.pdf-page-host .pdf-page-buffer-pending) {
+    opacity: 0;
+    pointer-events: none;
   }
 
   :global(.pdf-page-host .page) {
@@ -2810,6 +3682,86 @@
     top: 0;
   }
 
+  :global(.pdf-page-host .annotationLayer) {
+    color-scheme: only light;
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    pointer-events: none;
+    transform-origin: 0 0;
+    --annotation-unfocused-field-background: rgba(0, 54, 255, 0.13);
+    --input-focus-border-color: Highlight;
+  }
+
+  :global(.pdf-page-host .annotationLayer section) {
+    position: absolute;
+    box-sizing: border-box;
+    text-align: initial;
+    pointer-events: auto;
+    transform-origin: 0 0;
+    user-select: none;
+  }
+
+  :global(.pdf-page-host .annotationLayer .textWidgetAnnotation input),
+  :global(.pdf-page-host .annotationLayer .textWidgetAnnotation textarea),
+  :global(.pdf-page-host .annotationLayer .choiceWidgetAnnotation select),
+  :global(.pdf-page-host .annotationLayer .buttonWidgetAnnotation input) {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    box-sizing: border-box;
+    border: 2px solid transparent;
+    background: var(--annotation-unfocused-field-background);
+    color: CanvasText;
+    font: calc(9px * var(--total-scale-factor)) sans-serif;
+    vertical-align: top;
+  }
+
+  :global(.pdf-page-host .annotationLayer .textWidgetAnnotation textarea) {
+    resize: none;
+  }
+
+  :global(.pdf-page-host .annotationLayer .textWidgetAnnotation input:focus),
+  :global(.pdf-page-host .annotationLayer .textWidgetAnnotation textarea:focus),
+  :global(
+    .pdf-page-host .annotationLayer .choiceWidgetAnnotation select:focus
+  ) {
+    border-color: var(--input-focus-border-color);
+    border-radius: 2px;
+    background: white;
+    outline: 1px solid Canvas;
+  }
+
+  :global(.pdf-page-host .annotationLayer .buttonWidgetAnnotation input) {
+    appearance: auto;
+  }
+
+  :global(
+    .pdf-page-host .annotationLayer .textWidgetAnnotation input[disabled]
+  ),
+  :global(
+    .pdf-page-host .annotationLayer .textWidgetAnnotation textarea[disabled]
+  ),
+  :global(
+    .pdf-page-host .annotationLayer .choiceWidgetAnnotation select[disabled]
+  ),
+  :global(
+    .pdf-page-host .annotationLayer .buttonWidgetAnnotation input[disabled]
+  ) {
+    background: transparent;
+    cursor: not-allowed;
+  }
+
+  :global(.pdf-page-host .annotationLayer .linkAnnotation > a),
+  :global(
+    .pdf-page-host .annotationLayer .buttonWidgetAnnotation.pushButton > a
+  ) {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }
+
   :global(.pdf-page-host .canvasWrapper .selection) {
     position: absolute;
     top: 0;
@@ -2834,6 +3786,11 @@
     border-radius: 2px;
     cursor: pointer;
     pointer-events: auto;
+  }
+
+  :global(.pdf-page-host .pdf-app-annotation:focus-visible) {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
   }
 
   :global(.pdf-page-host .pdf-app-annotation-highlight) {

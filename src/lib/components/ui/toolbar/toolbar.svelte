@@ -22,13 +22,22 @@
      * room around the buttons.
      */
     dense?: boolean;
+    /** Bind the underlying row element, e.g. to drive a ToolbarScrollbar. */
+    ref?: HTMLDivElement | null;
     children: Snippet;
   };
 
-  let { dense = false, class: className, children, ...rest }: Props = $props();
+  let {
+    dense = false,
+    class: className,
+    ref = $bindable(null),
+    children,
+    ...rest
+  }: Props = $props();
 </script>
 
 <div
+  bind:this={ref}
   role="toolbar"
   class={cn(
     'flex items-center gap-0.5 px-1',

@@ -44,13 +44,16 @@ use crate::error::{AppError, AppResult};
 const COLLECTION_TYPE_NOTES: &str = "mindstream.notes";
 const COLLECTION_TYPE_FOLDERS: &str = "mindstream.folders";
 const COLLECTION_TYPE_ASSETS: &str = "mindstream.assets";
+const COLLECTION_TYPE_SIGNATURES: &str = "mindstream.signatures";
 const ITEM_TYPE_NOTE: &str = "ms-md-note";
 const ITEM_TYPE_FOLDER: &str = "ms-md-folder";
 const ITEM_TYPE_ASSET: &str = "ms-md-asset";
+const ITEM_TYPE_SIGNATURE: &str = "ms-md-signature";
 
 const KIND_NOTES: &str = "notes";
 const KIND_FOLDERS: &str = "folders";
 const KIND_ASSETS: &str = "assets";
+const KIND_SIGNATURES: &str = "signatures";
 
 const PAYLOAD_SCHEMA: u32 = 2;
 
@@ -112,6 +115,7 @@ fn mark_local_by_remote_uid_dirty(db: &Db, kind: &str, etebase_uid: &str) -> App
         KIND_FOLDERS => "collections",
         KIND_NOTES => "notes",
         KIND_ASSETS => "assets",
+        KIND_SIGNATURES => "signatures",
         _ => return Ok(false),
     };
     db.with_conn(|c| {
@@ -211,6 +215,19 @@ struct AssetPayload {
     modified: String,
 }
 
+/// What ends up in `Item::content` for a signature. `data` is the opaque
+/// JSON geometry blob (see signatures/mod.rs); we keep our own `id` inside
+/// so pulled items correlate back to local rows. Etebase E2E-encrypts the
+/// whole content, same as notes/assets.
+#[derive(Debug, Serialize, Deserialize)]
+struct SignaturePayload {
+    schema: u32,
+    id: String,
+    data: String,
+    created: String,
+    modified: String,
+}
+
 /// Result reported back to the UI after a sync attempt.
 #[derive(Debug, Default, Clone, Serialize)]
 pub struct SyncReport {
@@ -220,6 +237,8 @@ pub struct SyncReport {
     pub notes_pushed: usize,
     pub assets_pulled: usize,
     pub assets_pushed: usize,
+    pub signatures_pulled: usize,
+    pub signatures_pushed: usize,
     pub conflicts_resolved: usize,
 }
 
@@ -346,6 +365,15 @@ fn run(db: &Db, account: &Account) -> AppResult<SyncDelta> {
     )?;
     push_assets(db, &assets_im, &mut delta.report)?;
 
+    // Signatures are user-global (no FK back to notes), so order relative
+    // to the others doesn't matter — apply_signature never orphans.
+    let signatures_col = ensure_collection(db, &cm, KIND_SIGNATURES, COLLECTION_TYPE_SIGNATURES)?;
+    let signatures_im = cm
+        .item_manager(&signatures_col)
+        .map_err(|e| AppError::InvalidArg(format!("item_manager(signatures): {e}")))?;
+    pull_signatures(db, &signatures_im, &mut delta.report)?;
+    push_signatures(db, &signatures_im, &mut delta.report)?;
+
     Ok(delta)
 }
 
@@ -396,6 +424,7 @@ fn ensure_collection(
         KIND_NOTES => "Mindstream Notes",
         KIND_FOLDERS => "Mindstream Folders",
         KIND_ASSETS => "Mindstream Assets",
+        KIND_SIGNATURES => "Mindstream Signatures",
         _ => "Mindstream",
     }))
     .set_mtime(Some(now_unix_ms()));
@@ -784,6 +813,136 @@ fn apply_asset(db: &Db, item: &Item) -> AppResult<ApplyAssetOutcome> {
     })
 }
 
+// ---------- Signatures pull ----------
+
+fn pull_signatures(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult<()> {
+    // Same bad_stoken self-heal pattern as pull_folders / pull_assets.
+    let mut already_retried = false;
+    loop {
+        match pull_signatures_once(db, im, report) {
+            Ok(()) => return Ok(()),
+            Err(err) if !already_retried && is_bad_stoken_error(&err) => {
+                log::warn!(
+                    "[sync] bad_stoken on signatures pull — resetting cursor and retrying ({err})"
+                );
+                save_stoken(db, KIND_SIGNATURES, None)?;
+                already_retried = true;
+                continue;
+            }
+            Err(err) => return Err(err),
+        }
+    }
+}
+
+fn pull_signatures_once(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult<()> {
+    let stoken = load_stoken(db, KIND_SIGNATURES)?;
+    let mut new_stoken = stoken.clone();
+    loop {
+        let mut opts = FetchOptions::new();
+        opts = opts.stoken(new_stoken.as_deref());
+        let resp = im
+            .list(Some(&opts))
+            .map_err(|e| AppError::InvalidArg(format!("list signatures: {e}")))?;
+        for item in resp.data() {
+            match apply_signature(db, item) {
+                Ok(true) => report.signatures_pulled += 1,
+                Ok(false) => {}
+                Err(err) if is_corrupt_remote_content(&err) => {
+                    if mark_local_by_remote_uid_dirty(db, KIND_SIGNATURES, item.uid())? {
+                        log::warn!(
+                            "[sync] marked local signature item {} dirty for remote repair",
+                            item.uid()
+                        );
+                    } else {
+                        log::error!(
+                            "[sync] corrupt remote signature item {} has no local copy — manual recovery required",
+                            item.uid()
+                        );
+                    }
+                    log::error!(
+                        "[sync] skipping corrupt remote signature item {}: {err}",
+                        item.uid()
+                    );
+                }
+                Err(err) => return Err(err),
+            }
+        }
+        new_stoken = resp.stoken().map(str::to_string).or(new_stoken);
+        if resp.done() {
+            break;
+        }
+    }
+    if new_stoken != stoken {
+        save_stoken(db, KIND_SIGNATURES, new_stoken.as_deref())?;
+    }
+    Ok(())
+}
+
+/// Apply one pulled signature item to local SQLite. Returns `true` when a
+/// row was inserted/updated (so the caller can bump the pulled counter),
+/// `false` for deletes and missing-content items. No FK gate — signatures
+/// are user-global, so there's nothing to orphan against.
+fn apply_signature(db: &Db, item: &Item) -> AppResult<bool> {
+    if item.is_deleted() {
+        db.with_conn(|c| {
+            c.execute(
+                "DELETE FROM signatures WHERE etebase_uid = ?1",
+                params![item.uid()],
+            )?;
+            Ok(())
+        })?;
+        return Ok(false);
+    }
+    if item.is_missing_content() {
+        return Ok(false);
+    }
+    let raw = item
+        .content()
+        .map_err(|e| AppError::InvalidArg(format!("signature content: {e}")))?;
+    let payload: SignaturePayload = rmp_serde::from_slice(&raw)
+        .map_err(|e| AppError::InvalidArg(format!("signature msgpack: {e}")))?;
+    let etag = item.etag().to_string();
+    let uid = item.uid().to_string();
+
+    db.with_conn_mut(|c| {
+        let tx = c.transaction()?;
+        let exists = tx
+            .query_row(
+                "SELECT 1 FROM signatures WHERE id = ?1",
+                params![payload.id],
+                |_| Ok(true),
+            )
+            .optional()?
+            .is_some();
+        if exists {
+            // Geometry blob, not a CRDT — last-write-wins on the remote copy.
+            tx.execute(
+                "UPDATE signatures
+                 SET data = ?1, modified = ?2, etebase_uid = ?3,
+                     etebase_etag = ?4, dirty = 0
+                 WHERE id = ?5",
+                params![payload.data, payload.modified, uid, etag, payload.id],
+            )?;
+        } else {
+            tx.execute(
+                "INSERT INTO signatures(id, data, created, modified,
+                                        etebase_uid, etebase_etag, dirty)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0)",
+                params![
+                    payload.id,
+                    payload.data,
+                    payload.created,
+                    payload.modified,
+                    uid,
+                    etag,
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(true)
+    })
+}
+
 /// Apply one pulled folder item to the local DB.
 ///
 /// Returns `Some(payload)` if we wrote a row (so `pull_folders` can
@@ -920,6 +1079,22 @@ fn repair_folder_parents(db: &Db, applied: &[FolderPayload]) -> AppResult<()> {
     })
 }
 
+/// Local note fields read before applying a pulled item: yrs_state + schema
+/// drive the CRDT body merge, and the rest is the last-write-wins metadata we
+/// must preserve when the row is locally dirty so a pull can't clobber an
+/// unpushed trash / move / rename / favourite change.
+struct LocalNoteState {
+    yrs_state: Vec<u8>,
+    dirty: i64,
+    schema: i64,
+    parent_collection_id: Option<String>,
+    trashed_at: Option<String>,
+    title: String,
+    position: i64,
+    favourite: i64,
+    note_kind: String,
+}
+
 /// Apply one pulled note item. Returns Some(note_id) when a row was
 /// written (insert or update) so the caller can include it in the
 /// `sync-completed` event payload — open editors merge the new
@@ -945,36 +1120,55 @@ fn apply_note(db: &Db, item: &Item) -> AppResult<Option<String>> {
     let payload: NotePayload = rmp_serde::from_slice(&raw)
         .map_err(|e| AppError::InvalidArg(format!("note msgpack: {e}")))?;
     let etag = item.etag().to_string();
+    apply_note_payload(db, &payload, item.uid(), &etag)
+}
+
+/// Apply a decoded note payload to local SQLite. Split out from `apply_note`
+/// so the local-vs-remote metadata logic can be unit-tested without
+/// constructing an etebase `Item`.
+fn apply_note_payload(
+    db: &Db,
+    payload: &NotePayload,
+    uid: &str,
+    etag: &str,
+) -> AppResult<Option<String>> {
     db.with_conn_mut(|c| {
         let tx = c.transaction()?;
 
-        // Existing local state, if any. We need yrs_state to merge into.
-        let existing: Option<(Vec<u8>, i64, i64)> = tx
+        // Existing local row, if any. We need yrs_state + schema to merge the
+        // body, plus the LWW metadata to preserve when the row is dirty.
+        let existing: Option<LocalNoteState> = tx
             .query_row(
-                "SELECT yrs_state, dirty, payload_schema FROM notes WHERE id = ?1",
+                "SELECT yrs_state, dirty, payload_schema, parent_collection_id,
+                        trashed_at, title, position, favourite, note_kind
+                 FROM notes WHERE id = ?1",
                 params![payload.id],
                 |r| {
-                    Ok((
-                        r.get::<_, Option<Vec<u8>>>(0)?.unwrap_or_default(),
-                        r.get(1)?,
-                        r.get(2)?,
-                    ))
+                    Ok(LocalNoteState {
+                        yrs_state: r.get::<_, Option<Vec<u8>>>(0)?.unwrap_or_default(),
+                        dirty: r.get(1)?,
+                        schema: r.get(2)?,
+                        parent_collection_id: r.get(3)?,
+                        trashed_at: r.get(4)?,
+                        title: r.get(5)?,
+                        position: r.get(6)?,
+                        favourite: r.get(7)?,
+                        note_kind: r.get(8)?,
+                    })
                 },
             )
             .optional()?;
 
         let incoming_schema = payload.schema as i64;
-        let (merged_state, dirty_after) = match existing {
+        let (merged_state, dirty_after) = match &existing {
             // Same-schema CRDT merge: this is the common case once both
             // devices are on the same payload version.
-            Some((local_state, local_dirty, local_schema))
-                if !local_state.is_empty() && local_schema == incoming_schema =>
-            {
-                let merged = yrs_doc::merge_remote(&local_state, &payload.yrs_state);
+            Some(local) if !local.yrs_state.is_empty() && local.schema == incoming_schema => {
+                let merged = yrs_doc::merge_remote(&local.yrs_state, &payload.yrs_state);
                 // If we had unpushed local edits, the merge contains both sides —
                 // keep dirty=1 so the next push uploads the merged state and lets
                 // the *server* converge with anyone else's offline edits.
-                (merged, local_dirty)
+                (merged, local.dirty)
             }
             // Either no local state, or the schema changed under us
             // (legacy v1 row got a v2 push from another device, or vice
@@ -983,6 +1177,16 @@ fn apply_note(db: &Db, item: &Item) -> AppResult<Option<String>> {
             // dictates below.
             _ => (payload.yrs_state.clone(), 0),
         };
+
+        // Metadata (parent / trashed_at / title / position / favourite /
+        // note_kind) is last-write-wins, not a CRDT. When the local row has
+        // unpushed changes (dirty), a pull must NOT overwrite that metadata
+        // with the remote's older copy — otherwise a note trashed (or moved /
+        // renamed) locally but not yet pushed silently reverts on the next
+        // pull, e.g. the full re-pull triggered by a bad_stoken reset. Keep
+        // the local metadata and force dirty=1 so the next push reconciles the
+        // server. The body above is still CRDT-merged regardless.
+        let keep_local_meta = existing.as_ref().is_some_and(|l| l.dirty != 0);
         // For v2 payloads the remote ships the rendered markdown alongside
         // the prosemirror state — Rust can't render markdown from XmlFragment.
         // For v1 we still have the Rust-side Y.Text → markdown helper.
@@ -998,23 +1202,54 @@ fn apply_note(db: &Db, item: &Item) -> AppResult<Option<String>> {
         // sole authority and nothing sensitive lands on disk.
         let modified = Utc::now().to_rfc3339();
 
-        // Defensive nullification — see resolve_parent_id. Folders are
-        // pulled before notes, so the common case is that the parent
-        // resolves cleanly; the fallback covers server-side orphans
-        // (note's folder was deleted upstream without reparenting) and
-        // folders that came back is_missing_content. Without this, a
-        // single dangling reference would abort the whole notes pull
-        // with a FOREIGN KEY violation.
-        let resolved_parent = resolve_parent_id(&tx, payload.parent_folder_id.as_deref())?;
+        // Pick each metadata field from local (when dirty) or remote. For the
+        // remote parent, resolve_parent_id does the defensive nullification of
+        // a dangling reference (see its doc) so one bad parent can't abort the
+        // pull with a FOREIGN KEY violation; a kept-local parent is already a
+        // valid local id, so it needs no resolving.
+        let final_parent = if keep_local_meta {
+            existing
+                .as_ref()
+                .and_then(|l| l.parent_collection_id.clone())
+        } else {
+            resolve_parent_id(&tx, payload.parent_folder_id.as_deref())?
+        };
+        let final_title = if keep_local_meta {
+            existing
+                .as_ref()
+                .map(|l| l.title.clone())
+                .unwrap_or_default()
+        } else {
+            payload.title.clone()
+        };
+        let final_position = if keep_local_meta {
+            existing.as_ref().map_or(0, |l| l.position)
+        } else {
+            payload.position
+        };
+        let final_trashed_at = if keep_local_meta {
+            existing.as_ref().and_then(|l| l.trashed_at.clone())
+        } else {
+            payload.trashed_at.clone()
+        };
+        let final_favourite = if keep_local_meta {
+            existing.as_ref().map_or(0, |l| l.favourite)
+        } else {
+            payload.favourite as i64
+        };
+        let final_note_kind = if keep_local_meta {
+            existing
+                .as_ref()
+                .map(|l| l.note_kind.clone())
+                .unwrap_or_default()
+        } else {
+            payload.note_kind.clone()
+        };
+        // Keep dirty=1 when we preserved local metadata so the next push sends
+        // it to the server; otherwise follow the body-merge's dirty decision.
+        let final_dirty = if keep_local_meta { 1 } else { dirty_after };
 
-        let exists = tx
-            .query_row(
-                "SELECT 1 FROM notes WHERE id = ?1",
-                params![payload.id],
-                |_| Ok(true),
-            )
-            .optional()?
-            .is_some();
+        let exists = existing.is_some();
         if exists {
             tx.execute(
                 "UPDATE notes
@@ -1024,19 +1259,19 @@ fn apply_note(db: &Db, item: &Item) -> AppResult<Option<String>> {
                      payload_schema = ?11, favourite = ?12, note_kind = ?13
                  WHERE id = ?14",
                 params![
-                    resolved_parent,
-                    payload.title,
+                    final_parent,
+                    final_title,
                     body,
-                    payload.position,
+                    final_position,
                     modified,
-                    payload.trashed_at,
+                    final_trashed_at,
                     merged_state,
-                    item.uid(),
+                    uid,
                     etag,
-                    dirty_after,
+                    final_dirty,
                     incoming_schema,
-                    payload.favourite as i64,
-                    payload.note_kind,
+                    final_favourite,
+                    final_note_kind,
                     payload.id,
                 ],
             )?;
@@ -1049,28 +1284,29 @@ fn apply_note(db: &Db, item: &Item) -> AppResult<Option<String>> {
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7, ?8, ?9, ?10, 0, ?11, ?12, ?13)",
                 params![
                     payload.id,
-                    resolved_parent,
-                    payload.title,
+                    final_parent,
+                    final_title,
                     body,
-                    payload.position,
+                    final_position,
                     modified,
-                    payload.trashed_at,
+                    final_trashed_at,
                     merged_state,
-                    item.uid(),
+                    uid,
                     etag,
                     incoming_schema,
-                    payload.favourite as i64,
-                    payload.note_kind,
+                    final_favourite,
+                    final_note_kind,
                 ],
             )?;
         }
 
-        // Refresh tags table in one shot.
-        tx.execute(
-            "DELETE FROM note_tags WHERE note_id = ?1",
-            params![payload.id],
-        )?;
-        {
+        // Refresh tags table in one shot — but not when we're keeping local
+        // metadata, since tags are part of that unpushed local state.
+        if !keep_local_meta {
+            tx.execute(
+                "DELETE FROM note_tags WHERE note_id = ?1",
+                params![payload.id],
+            )?;
             let mut stmt = tx.prepare("INSERT INTO note_tags(note_id, tag) VALUES (?1, ?2)")?;
             for tag in &payload.tags {
                 stmt.execute(params![payload.id, tag])?;
@@ -1078,7 +1314,7 @@ fn apply_note(db: &Db, item: &Item) -> AppResult<Option<String>> {
         }
 
         tx.commit()?;
-        Ok(Some(payload.id))
+        Ok(Some(payload.id.clone()))
     })
 }
 
@@ -1322,6 +1558,73 @@ fn push_assets(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult<
     drain_tombstones(db, im, "asset")
 }
 
+/// Push dirty signatures as per-signature items, then drain the signature
+/// tombstone queue. Mirrors `push_assets` — the geometry blob is small but
+/// the lifecycle (create vs fetch+set_content, etag round-trip, conflict
+/// resolution) is identical.
+fn push_signatures(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult<()> {
+    let dirty = load_dirty_signatures(db)?;
+    if dirty.is_empty() {
+        return drain_tombstones(db, im, "signature");
+    }
+
+    let mut prepared: Vec<(Item, String)> = Vec::with_capacity(dirty.len());
+    for row in &dirty {
+        let payload = SignaturePayload {
+            schema: 1,
+            id: row.id.clone(),
+            data: row.data.clone(),
+            created: row.created.clone(),
+            modified: row.modified.clone(),
+        };
+        let bytes = rmp_serde::to_vec_named(&payload)
+            .map_err(|e| AppError::InvalidArg(format!("encode signature: {e}")))?;
+        let mut meta = ItemMetadata::new();
+        meta.set_item_type(Some(ITEM_TYPE_SIGNATURE))
+            .set_name(Some(row.id.clone()))
+            .set_mtime(Some(now_unix_ms()));
+        let item = if let Some(uid) = &row.etebase_uid {
+            let mut existing = im
+                .fetch(uid, None)
+                .map_err(|e| AppError::InvalidArg(format!("fetch signature {uid}: {e}")))?;
+            existing
+                .set_meta(&meta)
+                .map_err(|e| AppError::InvalidArg(format!("set_meta signature: {e}")))?;
+            existing
+                .set_content(&bytes)
+                .map_err(|e| AppError::InvalidArg(format!("set_content signature: {e}")))?;
+            existing
+        } else {
+            im.create(&meta, &bytes)
+                .map_err(|e| AppError::InvalidArg(format!("create signature item: {e}")))?
+        };
+        prepared.push((item, row.id.clone()));
+    }
+
+    let local_ids: Vec<String> = prepared.iter().map(|(_, id)| id.clone()).collect();
+    let mut items: Vec<Item> = prepared.into_iter().map(|(i, _)| i).collect();
+    transact_or_resolve(im, &mut items, &mut report.conflicts_resolved)
+        .map_err(|e| AppError::InvalidArg(format!("transaction signatures: {e}")))?;
+
+    let pushed = items.len();
+    db.with_conn_mut(|c| {
+        let tx = c.transaction()?;
+        for (item, local_id) in items.iter().zip(local_ids.iter()) {
+            tx.execute(
+                "UPDATE signatures
+                 SET etebase_uid = ?1, etebase_etag = ?2, dirty = 0
+                 WHERE id = ?3",
+                params![item.uid(), item.etag(), local_id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    })?;
+    report.signatures_pushed += pushed;
+
+    drain_tombstones(db, im, "signature")
+}
+
 /// Try a transaction; on `Error::Conflict`, refetch the colliding items,
 /// CRDT-merge any note bodies, and retry. Bounded retry count so a
 /// pathological case doesn't loop forever.
@@ -1560,6 +1863,33 @@ fn load_dirty_assets(db: &Db) -> AppResult<Vec<DirtyAsset>> {
     })
 }
 
+struct DirtySignature {
+    id: String,
+    data: String,
+    created: String,
+    modified: String,
+    etebase_uid: Option<String>,
+}
+
+fn load_dirty_signatures(db: &Db) -> AppResult<Vec<DirtySignature>> {
+    db.with_conn(|c| {
+        let mut stmt = c.prepare(
+            "SELECT id, data, created, modified, etebase_uid
+             FROM signatures WHERE dirty = 1",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(DirtySignature {
+                id: r.get(0)?,
+                data: r.get(1)?,
+                created: r.get(2)?,
+                modified: r.get(3)?,
+                etebase_uid: r.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    })
+}
+
 // ---------- sync_state helpers ----------
 
 fn load_stoken(db: &Db, kind: &str) -> AppResult<Option<String>> {
@@ -1721,6 +2051,123 @@ pub fn queue_tombstone(conn: &Connection, kind: &str, etebase_uid: &str) -> AppR
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::open_memory_for_tests;
+
+    fn remote_note(id: &str, parent: Option<&str>, trashed_at: Option<&str>) -> NotePayload {
+        NotePayload {
+            schema: 2,
+            id: id.into(),
+            parent_folder_id: parent.map(str::to_string),
+            title: "Remote Title".into(),
+            position: 0,
+            tags: vec![],
+            trashed_at: trashed_at.map(str::to_string),
+            yrs_state: vec![],
+            body: String::new(),
+            crypto_key: vec![],
+            favourite: false,
+            note_kind: "markdown".into(),
+        }
+    }
+
+    #[test]
+    fn apply_note_keeps_local_trash_when_dirty() {
+        // Repro for the "notes restore themselves from trash on restart" bug:
+        // a note trashed locally but not yet pushed (dirty=1, trashed_at set)
+        // must not be reverted by a pull of the older, un-trashed remote copy
+        // (which a bad_stoken full re-pull would feed in).
+        let db = open_memory_for_tests();
+        db.with_conn(|c| {
+            c.execute(
+                "INSERT INTO collections(id, parent_collection_id, name, position,
+                                         created, modified, dirty)
+                 VALUES ('coll_work', NULL, 'Work', 0, 't', 't', 0)",
+                [],
+            )?;
+            c.execute(
+                "INSERT INTO notes(id, parent_collection_id, title, body, position,
+                                   created, modified, trashed_at, yrs_state,
+                                   etebase_uid, etebase_etag, dirty, payload_schema,
+                                   favourite, note_kind)
+                 VALUES ('note_x', 'coll_work', 'Local Title', '', 0, 't', 't',
+                         '2026-06-01T00:00:00Z', NULL, 'uid_x', 'etag_old', 1, 2,
+                         0, 'markdown')",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+        // Stale remote: not trashed, parent stripped to root.
+        let remote = remote_note("note_x", None, None);
+        apply_note_payload(&db, &remote, "uid_x", "etag_new").unwrap();
+
+        let (trashed_at, parent, dirty, title): (Option<String>, Option<String>, i64, String) = db
+            .with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT trashed_at, parent_collection_id, dirty, title
+                     FROM notes WHERE id = 'note_x'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                )?)
+            })
+            .unwrap();
+        assert!(
+            trashed_at.is_some(),
+            "locally-trashed note must stay trashed after a pull"
+        );
+        assert_eq!(
+            parent.as_deref(),
+            Some("coll_work"),
+            "local parent must be preserved, not reset to root"
+        );
+        assert_eq!(dirty, 1, "row stays dirty so the trash pushes next sync");
+        assert_eq!(
+            title, "Local Title",
+            "local metadata is preserved wholesale"
+        );
+    }
+
+    #[test]
+    fn apply_note_takes_remote_metadata_when_clean() {
+        // The flip side: a clean (non-dirty) local row must still accept the
+        // remote's metadata, including a remote-side trash.
+        let db = open_memory_for_tests();
+        db.with_conn(|c| {
+            c.execute(
+                "INSERT INTO notes(id, parent_collection_id, title, body, position,
+                                   created, modified, trashed_at, yrs_state,
+                                   etebase_uid, etebase_etag, dirty, payload_schema,
+                                   favourite, note_kind)
+                 VALUES ('note_y', NULL, 'Old', '', 0, 't', 't', NULL, NULL,
+                         'uid_y', 'etag_old', 0, 2, 0, 'markdown')",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+        let remote = remote_note("note_y", None, Some("2026-06-10T00:00:00Z"));
+        apply_note_payload(&db, &remote, "uid_y", "etag_new").unwrap();
+
+        let (title, trashed_at): (String, Option<String>) = db
+            .with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT title, trashed_at FROM notes WHERE id = 'note_y'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(
+            title, "Remote Title",
+            "a clean local row takes remote metadata"
+        );
+        assert!(
+            trashed_at.is_some(),
+            "a remote-side trash applies to a clean local row"
+        );
+    }
 
     #[test]
     fn is_bad_stoken_error_matches_etebase_sdk_message() {

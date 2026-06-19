@@ -307,6 +307,36 @@ const MIGRATIONS: &[Migration] = &[
                AND trashed_at IS NULL;
         "#,
     },
+    Migration {
+        to: 12,
+        // Reusable signature library, synced cross-device. Signatures used
+        // to live in browser localStorage (per-origin, per-device); this
+        // table gives them the same dirty / etebase_uid / etebase_etag sync
+        // model as `assets` so the existing engine pushes/pulls them as
+        // per-signature items in a new `mindstream.signatures` collection.
+        //
+        //   id        client-generated UUID, stable cross-device identifier.
+        //   data      JSON blob: { width, height, strokes[] } — the drawn
+        //             signature geometry. Kept as opaque TEXT so the schema
+        //             doesn't have to track the stroke shape (owned by the
+        //             frontend's PdfSignatureSnapshot type).
+        //
+        // Unlike assets there's no owning_note_id — signatures are
+        // user-global, so no FK and no apply-ordering race on pull.
+        sql: r#"
+            CREATE TABLE signatures (
+                id            TEXT PRIMARY KEY,
+                data          TEXT NOT NULL,
+                created       TEXT NOT NULL,
+                modified      TEXT NOT NULL,
+                etebase_uid   TEXT,
+                etebase_etag  TEXT,
+                dirty         INTEGER NOT NULL DEFAULT 1
+            );
+            CREATE INDEX idx_signatures_dirty       ON signatures(dirty)       WHERE dirty = 1;
+            CREATE INDEX idx_signatures_etebase_uid ON signatures(etebase_uid) WHERE etebase_uid IS NOT NULL;
+        "#,
+    },
 ];
 
 pub fn run(conn: &mut Connection) -> AppResult<()> {

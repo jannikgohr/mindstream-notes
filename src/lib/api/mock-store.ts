@@ -21,6 +21,7 @@ import type {
 import type { Asset, UploadAssetInput } from './assets';
 import type { ImportPdfNoteInput } from './assets';
 import type { SearchHit } from './search';
+import type { SaveSignatureInput, SignatureRecord } from './signatures';
 import { mockSearchNotes } from './search-matcher';
 
 const collections: Collection[] = [];
@@ -300,5 +301,55 @@ export const mockApi = {
     note.body = JSON.stringify({ pdfAssetId: asset.id });
     notes.set(note.id, note);
     return { ...note };
+  },
+  async listSignatures(): Promise<SignatureRecord[]> {
+    return loadMockSignatures();
+  },
+  async saveSignature(input: SaveSignatureInput): Promise<SignatureRecord> {
+    const list = loadMockSignatures();
+    const t = nowIso();
+    const existing = list.find((s) => s.id === input.id);
+    let rec: SignatureRecord;
+    if (existing) {
+      existing.data = input.data;
+      existing.modified = t;
+      rec = existing;
+    } else {
+      rec = {
+        id: input.id,
+        data: input.data,
+        created: t,
+        modified: t,
+        pushed: false
+      };
+      list.push(rec);
+    }
+    saveMockSignatures(list);
+    return { ...rec };
+  },
+  async deleteSignature(id: string): Promise<void> {
+    saveMockSignatures(loadMockSignatures().filter((s) => s.id !== id));
   }
 };
+
+// Dev signatures persist in localStorage so the picker survives a reload,
+// standing in for the synced SQLite table the Tauri build uses.
+const MOCK_SIGNATURES_KEY = 'mindstream.mock.signatures.v1';
+function loadMockSignatures(): SignatureRecord[] {
+  if (typeof localStorage === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(MOCK_SIGNATURES_KEY);
+    const parsed = raw ? (JSON.parse(raw) as SignatureRecord[]) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+function saveMockSignatures(list: SignatureRecord[]): void {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    localStorage.setItem(MOCK_SIGNATURES_KEY, JSON.stringify(list));
+  } catch {
+    /* ignore quota / serialisation errors in the dev fallback */
+  }
+}
