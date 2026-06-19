@@ -2376,6 +2376,77 @@
       pageEl.append(layer);
     }
 
+    function formatPdfUi(
+      key: Parameters<typeof tUi>[0],
+      replacements: Record<string, string | number>
+    ): string {
+      let value = tUi(key);
+      for (const [name, replacement] of Object.entries(replacements)) {
+        value = value.replaceAll(`{${name}}`, String(replacement));
+      }
+      return value;
+    }
+
+    function annotationTypeLabel(type: PdfAnnotationType): string {
+      switch (type) {
+        case 'highlight':
+          return tUi('pdf.annotation.type.highlight');
+        case 'comment':
+          return tUi('pdf.annotation.type.comment');
+        case 'ink':
+          return tUi('pdf.annotation.type.ink');
+        case 'signature':
+          return tUi('pdf.annotation.type.signature');
+      }
+    }
+
+    function accessibleCommentText(annotation: PdfAnnotation): string {
+      const body = annotation.body?.replace(/\s+/g, ' ').trim();
+      if (!body) return '';
+      const comment = body.length > 140 ? `${body.slice(0, 137)}...` : body;
+      return formatPdfUi('pdf.annotation.accessible.comment', { comment });
+    }
+
+    function annotationAriaLabel(
+      annotation: PdfAnnotation,
+      rectIndex: number,
+      rectCount: number
+    ): string {
+      const part =
+        rectCount > 1
+          ? formatPdfUi('pdf.annotation.accessible.part', {
+              part: rectIndex + 1,
+              total: rectCount
+            })
+          : '';
+      const state =
+        annotation.id === current.selectedAnnotationId
+          ? tUi('pdf.annotation.accessible.selected')
+          : annotation.resolved
+            ? tUi('pdf.annotation.accessible.resolved')
+            : '';
+      return formatPdfUi(
+        current.activeTool === 'delete'
+          ? 'pdf.annotation.accessible.delete'
+          : 'pdf.annotation.accessible.select',
+        {
+          type: annotationTypeLabel(annotation.type),
+          page: annotation.pageIndex + 1,
+          part,
+          state,
+          comment: accessibleCommentText(annotation)
+        }
+      );
+    }
+
+    function activateAnnotation(annotation: PdfAnnotation) {
+      if (current.activeTool === 'delete' && !isTrashed) {
+        deleteAnnotation(annotation.id);
+      } else {
+        selectAnnotation(annotation.id);
+      }
+    }
+
     function renderAppAnnotations() {
       const pageEl = pageSurface.querySelector<HTMLElement>('.page');
       const viewport = currentViewport;
@@ -2402,7 +2473,8 @@
         (annotation) => annotation.pageIndex === current.pageNumber - 1
       );
       for (const annotation of pageAnnotations) {
-        for (const rect of annotation.rects) {
+        const rectCount = annotation.rects.length;
+        for (const [rectIndex, rect] of annotation.rects.entries()) {
           const [x1, y1] = viewport.convertToViewportPoint(rect.x, rect.y);
           const [x2, y2] = viewport.convertToViewportPoint(
             rect.x + rect.width,
@@ -2421,6 +2493,16 @@
             node.classList.add('pdf-app-annotation-resolved');
           }
           node.dataset.annotationId = annotation.id;
+          node.tabIndex = 0;
+          node.setAttribute('role', 'button');
+          node.setAttribute(
+            'aria-label',
+            annotationAriaLabel(annotation, rectIndex, rectCount)
+          );
+          node.setAttribute(
+            'aria-pressed',
+            annotation.id === current.selectedAnnotationId ? 'true' : 'false'
+          );
           node.style.left = `${left}px`;
           node.style.top = `${top}px`;
           node.style.width = `${width}px`;
@@ -2430,7 +2512,7 @@
             '--annotation-opacity',
             `${annotation.opacity}`
           );
-          if (annotation.body) node.title = annotation.body;
+          node.title = annotation.body || node.getAttribute('aria-label') || '';
           if (annotation.type === 'signature' && annotation.signature) {
             const svg = document.createElementNS(
               'http://www.w3.org/2000/svg',
@@ -2494,15 +2576,21 @@
             node.addEventListener('pointerdown', (event) => {
               event.preventDefault();
               event.stopPropagation();
-              deleteAnnotation(annotation.id);
+              activateAnnotation(annotation);
             });
           } else {
             node.addEventListener('pointerdown', (event) => {
               event.preventDefault();
               event.stopPropagation();
-              selectAnnotation(annotation.id);
+              activateAnnotation(annotation);
             });
           }
+          node.addEventListener('keydown', (event) => {
+            if (event.key !== 'Enter' && event.key !== ' ') return;
+            event.preventDefault();
+            event.stopPropagation();
+            activateAnnotation(annotation);
+          });
           layer.append(node);
         }
       }
@@ -3698,6 +3786,11 @@
     border-radius: 2px;
     cursor: pointer;
     pointer-events: auto;
+  }
+
+  :global(.pdf-page-host .pdf-app-annotation:focus-visible) {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
   }
 
   :global(.pdf-page-host .pdf-app-annotation-highlight) {
