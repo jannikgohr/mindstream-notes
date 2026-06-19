@@ -113,7 +113,13 @@
           }}
           onfocus={() => (activeSubmenu = item.children?.length ? i : null)}
         >
-          <span>{item.label}</span>
+          <span class="flex min-w-0 items-center gap-2">
+            {#if item.icon}
+              {@const Icon = item.icon}
+              <Icon class="size-4 shrink-0 text-muted-foreground" />
+            {/if}
+            <span class="truncate">{item.label}</span>
+          </span>
           {#if item.children?.length}
             <ChevronRight
               class="size-4 text-muted-foreground"
@@ -140,7 +146,13 @@
                   : ''}"
                 onclick={() => invoke(child)}
               >
-                <span>{child.label}</span>
+                <span class="flex min-w-0 items-center gap-2">
+                  {#if child.icon}
+                    {@const ChildIcon = child.icon}
+                    <ChildIcon class="size-4 shrink-0 text-muted-foreground" />
+                  {/if}
+                  <span class="truncate">{child.label}</span>
+                </span>
                 {#if child.shortcut}
                   <span class="text-xs text-muted-foreground"
                     >{child.shortcut}</span

@@ -149,6 +149,9 @@
   let sourceChipRow = $state<HTMLElement | null>(null);
   let sourceChipsCollapsed = $state(false);
   let expandedSourceChipWidth = 0;
+  let toolbarRow = $state<HTMLElement | null>(null);
+  let sortControlCollapsed = $state(false);
+  let expandedToolbarWidth = 0;
 
   $effect(() => {
     if (!nameInput) return;
@@ -634,20 +637,49 @@
     sourceChipsCollapsed = needed > sourceChipRow.clientWidth;
   }
 
+  function updateSortControlCollapse() {
+    if (!toolbarRow) return;
+    if (!sortControlCollapsed) {
+      expandedToolbarWidth = toolbarRow.scrollWidth;
+    }
+    const needed = expandedToolbarWidth || toolbarRow.scrollWidth;
+    sortControlCollapsed = needed > toolbarRow.clientWidth;
+  }
+
   onMount(() => {
-    const observer = new ResizeObserver(() => updateSourceChipCollapse());
-    if (sourceChipRow) observer.observe(sourceChipRow);
-    requestAnimationFrame(updateSourceChipCollapse);
-    return () => observer.disconnect();
+    const sourceObserver = new ResizeObserver(() => updateSourceChipCollapse());
+    const toolbarObserver = new ResizeObserver(() =>
+      updateSortControlCollapse()
+    );
+    if (sourceChipRow) sourceObserver.observe(sourceChipRow);
+    if (toolbarRow) toolbarObserver.observe(toolbarRow);
+    requestAnimationFrame(() => {
+      updateSourceChipCollapse();
+      updateSortControlCollapse();
+    });
+    return () => {
+      sourceObserver.disconnect();
+      toolbarObserver.disconnect();
+    };
   });
 
   $effect(() => {
     void source;
     void sourceChipRow;
+    void toolbarRow;
     void i18n.language;
+    void ui.sortStrategy;
+    void ui.sortDirection;
     sourceChipsCollapsed = false;
     expandedSourceChipWidth = 0;
-    void tick().then(() => requestAnimationFrame(updateSourceChipCollapse));
+    sortControlCollapsed = false;
+    expandedToolbarWidth = 0;
+    void tick().then(() =>
+      requestAnimationFrame(() => {
+        updateSourceChipCollapse();
+        updateSortControlCollapse();
+      })
+    );
   });
 </script>
 
@@ -655,17 +687,24 @@
   class="flex h-full w-full flex-col bg-card text-sm"
   oncontextmenu={(e) => openMenu(e, { kind: 'root' })}
 >
-  <div class="flex items-center justify-between gap-2 px-3 py-1.5">
+  <div
+    bind:this={toolbarRow}
+    class="flex items-center justify-between gap-2 overflow-hidden px-3 py-1.5"
+  >
     <SortControl
       strategy={ui.sortStrategy}
       direction={ui.sortDirection}
       onStrategyChange={setSortStrategy}
       onDirectionChange={setSortDirection}
+      onLabelOverflowChange={(overflowing) => {
+        if (overflowing) sortControlCollapsed = true;
+      }}
       variant="ghost"
       compact
+      collapsed={sortControlCollapsed}
     />
     {#if canCreate}
-      <div class="flex items-center gap-1">
+      <div class="flex shrink-0 items-center gap-1">
         <Button
           variant="ghost"
           size="icon"
@@ -725,7 +764,7 @@
         disabled={trashItemCount === 0 || emptyTrashPending}
         title="Empty trash"
         aria-label="Empty trash"
-        class="h-7 px-2 text-xs text-destructive hover:text-destructive"
+        class="h-7 shrink-0 px-2 text-xs text-destructive hover:text-destructive"
       >
         <Trash2 class="size-3.5" />
         Empty
