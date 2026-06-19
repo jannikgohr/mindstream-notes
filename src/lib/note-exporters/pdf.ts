@@ -1,9 +1,15 @@
 import * as Y from 'yjs';
+import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
 import { fetchDrawingAsset, loadNote, type Note } from '$lib/api';
 import { saveAnnotatedPdf } from '$lib/api/pdf-export';
 import { exportAnnotatedPdf } from '$lib/pdf/export-annotated-pdf';
 import { sanitizePdfFilename } from '$lib/pdf/filename';
-import { PDF_ANNOTATIONS_MAP, type PdfAnnotation } from '$lib/pdf/types';
+import {
+  PDF_ANNOTATIONS_MAP,
+  PDF_FORM_VALUES_MAP,
+  type PdfAnnotation,
+  type PdfFormValue
+} from '$lib/pdf/types';
 import type { NoteExporter } from './types';
 
 function pdfAssetIdFromBody(body: string): string | null {
@@ -37,6 +43,45 @@ function liveAnnotationsFrom(note: Note): PdfAnnotation[] {
   }
 }
 
+function liveFormValuesFrom(note: Note): Map<string, PdfFormValue> {
+  const doc = new Y.Doc();
+  try {
+    if (note.yrs_state.length > 0) {
+      try {
+        Y.applyUpdate(doc, new Uint8Array(note.yrs_state));
+      } catch (err) {
+        console.warn('[note-exporters/pdf] form state unreadable', err);
+        return new Map();
+      }
+    }
+    return new Map(doc.getMap<PdfFormValue>(PDF_FORM_VALUES_MAP).entries());
+  } finally {
+    doc.destroy();
+  }
+}
+
+async function applyFormValuesToPdf(
+  pdfBytes: Uint8Array,
+  formValues: Map<string, PdfFormValue>
+): Promise<Uint8Array> {
+  if (formValues.size === 0) return pdfBytes;
+
+  const pdfjs = await import('pdfjs-dist');
+  pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+  const task = pdfjs.getDocument({ data: new Uint8Array(pdfBytes) });
+  const doc = await task.promise;
+  try {
+    const storage = doc.annotationStorage;
+    for (const [id, value] of formValues) {
+      storage.setValue(id, value);
+    }
+    return await doc.saveDocument();
+  } finally {
+    await doc.cleanup();
+    await task.destroy();
+  }
+}
+
 export async function exportAnnotatedPdfNote(noteId: string): Promise<void> {
   const note = await loadNote(noteId);
   if (note.note_kind !== 'pdf') {
@@ -51,8 +96,12 @@ export async function exportAnnotatedPdfNote(noteId: string): Promise<void> {
     throw new Error('Stored file is not a PDF.');
   }
 
-  const out = await exportAnnotatedPdf(
+  const formFilledPdf = await applyFormValuesToPdf(
     new Uint8Array(asset.bytes),
+    liveFormValuesFrom(note)
+  );
+  const out = await exportAnnotatedPdf(
+    formFilledPdf,
     liveAnnotationsFrom(note)
   );
 

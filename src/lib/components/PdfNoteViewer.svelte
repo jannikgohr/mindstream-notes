@@ -88,7 +88,9 @@
   } from '$lib/pdf/stroke-utils';
   import {
     PDF_ANNOTATIONS_MAP,
+    PDF_FORM_VALUES_MAP,
     type PdfAnnotation,
+    type PdfFormValue,
     type PdfAnnotationType,
     type PdfInkStroke,
     type PdfRect,
@@ -118,6 +120,7 @@
   type PdfViewer = typeof import('pdfjs-dist/web/pdf_viewer.mjs');
   type PdfDocument = Awaited<ReturnType<PdfJs['getDocument']>['promise']>;
   type PdfPageView = InstanceType<PdfViewer['PDFPageView']>;
+  type PdfAnnotationStorage = PdfDocument['annotationStorage'];
   type ZoomMode = 'fixed' | 'fit-width';
   type PdfTool =
     | 'select'
@@ -314,7 +317,15 @@
   let awareness: Awareness | null = null;
   let provider: CollabProvider | null = null;
   let annotationsMap: Y.Map<PdfAnnotation> | null = null;
+  let formValuesMap: Y.Map<PdfFormValue> | null = null;
   let yDocUpdateHandler: (() => void) | null = null;
+  let formValuesObserver:
+    | ((event: Y.YMapEvent<PdfFormValue>, transaction: Y.Transaction) => void)
+    | null = null;
+  let suppressFormStorageSync = false;
+  let pdfFieldObjectsPromise: ReturnType<
+    PdfDocument['getFieldObjects']
+  > | null = null;
   let saveReady = false;
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
   let unsubSync: (() => void) | null = null;
@@ -464,6 +475,48 @@
   function runLocal(fn: () => void) {
     if (yDoc) yDoc.transact(fn, LOCAL_ORIGIN);
     else fn();
+  }
+
+  function clonePdfFormValue(value: unknown): PdfFormValue | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return null;
+    }
+    try {
+      return JSON.parse(JSON.stringify(value)) as PdfFormValue;
+    } catch {
+      return null;
+    }
+  }
+
+  function applyStoredFormValuesToPdfStorage() {
+    if (!pdfDoc || !formValuesMap) return;
+    const storage = pdfDoc.annotationStorage;
+    suppressFormStorageSync = true;
+    try {
+      for (const [id, value] of formValuesMap) {
+        storage.setValue(id, clonePdfFormValue(value) ?? value);
+      }
+    } finally {
+      suppressFormStorageSync = false;
+    }
+  }
+
+  function installPdfFormStorageSync(doc: PdfDocument) {
+    const storage = doc.annotationStorage as PdfAnnotationStorage & {
+      __mindstreamFormSyncInstalled?: boolean;
+    };
+    if (storage.__mindstreamFormSyncInstalled) return;
+    storage.__mindstreamFormSyncInstalled = true;
+    const setValue = storage.setValue.bind(storage);
+    storage.setValue = (key: string, value: Object) => {
+      setValue(key, value);
+      if (suppressFormStorageSync || !formValuesMap) return;
+      const stored = clonePdfFormValue(value);
+      if (!stored) return;
+      runLocal(() => {
+        formValuesMap?.set(key, stored);
+      });
+    };
   }
 
   function createAnnotation(
@@ -625,29 +678,51 @@
     const figure = el.closest<HTMLElement>('figure[data-page-number]');
     const pageEl = figure?.querySelector<HTMLElement>('.page') ?? null;
     if (!figure || !pageEl) return null;
+    if (!rangeIntersectsElement(range, pageEl)) return null;
     const pageNumber = Number(figure.dataset.pageNumber);
     const viewport = pageViewports.get(pageNumber);
     if (!Number.isFinite(pageNumber) || !viewport) return null;
     return { range, pageEl, pageNumber, viewport };
   }
 
+  function rangeIntersectsElement(range: Range, element: HTMLElement): boolean {
+    try {
+      return range.intersectsNode(element);
+    } catch {
+      return false;
+    }
+  }
+
+  function selectionClientRectsOnPage(selection: PdfSelection): DOMRect[] {
+    const { range, pageEl } = selection;
+    const pageRect = pageEl.getBoundingClientRect();
+    return Array.from(range.getClientRects()).filter((cr) => {
+      if (cr.width < 1 || cr.height < 1) return false;
+      if (cr.right <= pageRect.left || cr.left >= pageRect.right) return false;
+      if (cr.bottom <= pageRect.top || cr.top >= pageRect.bottom) return false;
+      return true;
+    });
+  }
+
   /** Convert the selection's per-line client rects into PDF user-space
    *  rects, clipped to the owning page so a spill onto the next page
    *  doesn't produce mis-placed quads. */
   function selectionRectsToPdf(selection: PdfSelection): PdfRect[] {
-    const { range, pageEl, viewport } = selection;
+    const { pageEl, viewport } = selection;
     const pageRect = pageEl.getBoundingClientRect();
     const rects: PdfRect[] = [];
-    for (const cr of Array.from(range.getClientRects())) {
-      if (cr.width < 1 || cr.height < 1) continue;
-      if (cr.bottom <= pageRect.top || cr.top >= pageRect.bottom) continue;
+    for (const cr of selectionClientRectsOnPage(selection)) {
+      const left = Math.max(pageRect.left, cr.left);
+      const top = Math.max(pageRect.top, cr.top);
+      const right = Math.min(pageRect.right, cr.right);
+      const bottom = Math.min(pageRect.bottom, cr.bottom);
       const [x1, y1] = viewport.convertToPdfPoint(
-        cr.left - pageRect.left,
-        cr.top - pageRect.top
+        left - pageRect.left,
+        top - pageRect.top
       );
       const [x2, y2] = viewport.convertToPdfPoint(
-        cr.right - pageRect.left,
-        cr.bottom - pageRect.top
+        right - pageRect.left,
+        bottom - pageRect.top
       );
       rects.push({
         x: Math.min(x1, x2),
@@ -669,16 +744,19 @@
       selectionMenu = null;
       return;
     }
-    const rect = selection.range.getBoundingClientRect();
-    if (rect.width < 1 && rect.height < 1) {
+    const pageRects = selectionClientRectsOnPage(selection);
+    if (pageRects.length === 0) {
       selectionMenu = null;
       return;
     }
+    const left = Math.min(...pageRects.map((rect) => rect.left));
+    const right = Math.max(...pageRects.map((rect) => rect.right));
+    const top = Math.min(...pageRects.map((rect) => rect.top));
     const centerX = Math.min(
       window.innerWidth - 60,
-      Math.max(60, rect.left + rect.width / 2)
+      Math.max(60, left + (right - left) / 2)
     );
-    selectionMenu = { x: centerX, y: rect.top };
+    selectionMenu = { x: centerX, y: top };
   }
 
   function clearSelectionMenu() {
@@ -1959,12 +2037,19 @@
         }
       }
       annotationsMap = localYDoc.getMap<PdfAnnotation>(PDF_ANNOTATIONS_MAP);
+      formValuesMap = localYDoc.getMap<PdfFormValue>(PDF_FORM_VALUES_MAP);
       syncAnnotationsFromYDoc();
       yDocUpdateHandler = () => {
         syncAnnotationsFromYDoc();
         scheduleSave();
       };
       localYDoc.on('update', yDocUpdateHandler);
+      formValuesObserver = (_event, transaction) => {
+        if (transaction.origin === LOCAL_ORIGIN) return;
+        applyStoredFormValuesToPdfStorage();
+        bumpRenderVersion();
+      };
+      formValuesMap.observe(formValuesObserver);
 
       // Undo/redo scoped to this note's annotations. trackedOrigins is
       // limited to LOCAL_ORIGIN so undo never reverts a peer's edit or a
@@ -2014,6 +2099,9 @@
       pdfViewerLib = pdfViewer;
       const task = pdfjs.getDocument({ data: new Uint8Array(asset.bytes) });
       pdfDoc = await task.promise;
+      installPdfFormStorageSync(pdfDoc);
+      applyStoredFormValuesToPdfStorage();
+      pdfFieldObjectsPromise = pdfDoc.getFieldObjects();
       const firstPage = await pdfDoc.getPage(1);
       firstPageWidth = firstPage.getViewport({ scale: 1 }).width;
       pageNumbers = Array.from({ length: pdfDoc.numPages }, (_, i) => i + 1);
@@ -2098,6 +2186,7 @@
         const tag = target?.tagName;
         if (
           tag === 'INPUT' ||
+          tag === 'SELECT' ||
           tag === 'TEXTAREA' ||
           target?.isContentEditable
         ) {
@@ -2145,12 +2234,17 @@
     pageRenderCancelled.clear();
     pageCancelHooks.clear();
     void pdfDoc?.cleanup();
+    pdfFieldObjectsPromise = null;
     undoManager?.destroy();
     undoManager = null;
     if (yDoc && yDocUpdateHandler) {
       yDoc.off('update', yDocUpdateHandler);
     }
+    if (formValuesMap && formValuesObserver) {
+      formValuesMap.unobserve(formValuesObserver);
+    }
     yDocUpdateHandler = null;
+    formValuesObserver = null;
     // CollabProvider must be torn down before awareness/yDoc so its
     // destroy() can broadcast the null-state cleanup frame to peers.
     provider?.destroy();
@@ -2162,6 +2256,7 @@
     yDoc?.destroy();
     yDoc = null;
     annotationsMap = null;
+    formValuesMap = null;
     clearNoteStatus(noteId);
   });
 
@@ -2753,7 +2848,16 @@
         id: request.pageNumber,
         scale: viewerScale,
         defaultViewport: viewport,
-        annotationMode: pdfjs.AnnotationMode.DISABLE,
+        layerProperties: {
+          annotationStorage: doc.annotationStorage,
+          downloadManager: null,
+          enableScripting: false,
+          fieldObjectsPromise: pdfFieldObjectsPromise,
+          findController: null,
+          hasJSActionsPromise: Promise.resolve(false),
+          linkService: new pdfViewer.SimpleLinkService({ eventBus })
+        },
+        annotationMode: pdfjs.AnnotationMode.ENABLE_FORMS,
         maxCanvasPixels: MAX_CANVAS_PIXELS,
         maxCanvasDim: MAX_CANVAS_DIM,
         // pdf.js's capCanvasAreaFactor defaults to 200%, which caps the canvas
@@ -3488,6 +3592,86 @@
 
   :global(.pdf-page-host .textLayer.selecting .endOfContent) {
     top: 0;
+  }
+
+  :global(.pdf-page-host .annotationLayer) {
+    color-scheme: only light;
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    pointer-events: none;
+    transform-origin: 0 0;
+    --annotation-unfocused-field-background: rgba(0, 54, 255, 0.13);
+    --input-focus-border-color: Highlight;
+  }
+
+  :global(.pdf-page-host .annotationLayer section) {
+    position: absolute;
+    box-sizing: border-box;
+    text-align: initial;
+    pointer-events: auto;
+    transform-origin: 0 0;
+    user-select: none;
+  }
+
+  :global(.pdf-page-host .annotationLayer .textWidgetAnnotation input),
+  :global(.pdf-page-host .annotationLayer .textWidgetAnnotation textarea),
+  :global(.pdf-page-host .annotationLayer .choiceWidgetAnnotation select),
+  :global(.pdf-page-host .annotationLayer .buttonWidgetAnnotation input) {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    box-sizing: border-box;
+    border: 2px solid transparent;
+    background: var(--annotation-unfocused-field-background);
+    color: CanvasText;
+    font: calc(9px * var(--total-scale-factor)) sans-serif;
+    vertical-align: top;
+  }
+
+  :global(.pdf-page-host .annotationLayer .textWidgetAnnotation textarea) {
+    resize: none;
+  }
+
+  :global(.pdf-page-host .annotationLayer .textWidgetAnnotation input:focus),
+  :global(.pdf-page-host .annotationLayer .textWidgetAnnotation textarea:focus),
+  :global(
+    .pdf-page-host .annotationLayer .choiceWidgetAnnotation select:focus
+  ) {
+    border-color: var(--input-focus-border-color);
+    border-radius: 2px;
+    background: white;
+    outline: 1px solid Canvas;
+  }
+
+  :global(.pdf-page-host .annotationLayer .buttonWidgetAnnotation input) {
+    appearance: auto;
+  }
+
+  :global(
+    .pdf-page-host .annotationLayer .textWidgetAnnotation input[disabled]
+  ),
+  :global(
+    .pdf-page-host .annotationLayer .textWidgetAnnotation textarea[disabled]
+  ),
+  :global(
+    .pdf-page-host .annotationLayer .choiceWidgetAnnotation select[disabled]
+  ),
+  :global(
+    .pdf-page-host .annotationLayer .buttonWidgetAnnotation input[disabled]
+  ) {
+    background: transparent;
+    cursor: not-allowed;
+  }
+
+  :global(.pdf-page-host .annotationLayer .linkAnnotation > a),
+  :global(
+    .pdf-page-host .annotationLayer .buttonWidgetAnnotation.pushButton > a
+  ) {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
   }
 
   :global(.pdf-page-host .canvasWrapper .selection) {

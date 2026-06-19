@@ -55,5 +55,10 @@ export type PdfAnnotation = {
   signature?: PdfSignatureSnapshot;
 };
 
+export type PdfFormValue = Record<string, unknown>;
+
 /** Yjs map key the PDF annotations live under, inside the note's Y.Doc. */
 export const PDF_ANNOTATIONS_MAP = 'pdf_annotations';
+
+/** Yjs map key for PDF.js AcroForm widget values, keyed by widget id. */
+export const PDF_FORM_VALUES_MAP = 'pdf_form_values';
