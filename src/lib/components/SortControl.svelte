@@ -12,7 +12,17 @@
    * (`SORT_STRATEGIES` in sort.ts + `sort.strategy.<id>` in every i18n
    * bundle) and the picker picks it up automatically.
    */
-  import { ArrowUpDown } from '@lucide/svelte';
+  import {
+    ArrowDown01,
+    ArrowDown10,
+    ArrowDownAZ,
+    ArrowDownZA,
+    ArrowUpDown,
+    CalendarPlus,
+    Clock,
+    ListSortAscending,
+    ListSortDescending
+  } from '@lucide/svelte';
   import ContextMenu from '$lib/components/ContextMenu.svelte';
   import type { MenuItem } from '$lib/components/context-menu-types';
   import {
@@ -43,6 +53,8 @@
      * desktop file-tree header.
      */
     compact?: boolean;
+    collapsed?: boolean;
+    onLabelOverflowChange?: (overflowing: boolean) => void;
   }
   let {
     strategy,
@@ -51,7 +63,9 @@
     onDirectionChange,
     iconClass = 'size-3.5',
     variant = 'outlined',
-    compact = false
+    compact = false,
+    collapsed = false,
+    onLabelOverflowChange
   }: Props = $props();
 
   const strategyLabel = $derived.by(() => {
@@ -69,6 +83,7 @@
   let menuX = $state(0);
   let menuY = $state(0);
   let menuTriggerEl = $state<HTMLElement | null>(null);
+  let labelEl = $state<HTMLSpanElement | null>(null);
 
   function toggleDirection() {
     onDirectionChange(direction === 'asc' ? 'desc' : 'asc');
@@ -93,54 +108,131 @@
   }
 
   function strategyMenuItems(): (MenuItem | 'separator')[] {
+    if (collapsed) {
+      return [
+        {
+          label:
+            direction === 'asc'
+              ? tUi('sort.descending')
+              : tUi('sort.ascending'),
+          icon: direction === 'asc' ? ListSortDescending : ListSortAscending,
+          onSelect: toggleDirection
+        },
+        'separator',
+        ...SORT_STRATEGIES.map((opt) => ({
+          label: (strategy === opt.id ? '✓  ' : '    ') + tUi(opt.labelKey),
+          onSelect: () => onStrategyChange(opt.id as SortStrategy)
+        }))
+      ];
+    }
     return SORT_STRATEGIES.map((opt) => ({
       label: (strategy === opt.id ? '✓  ' : '    ') + tUi(opt.labelKey),
       onSelect: () => onStrategyChange(opt.id as SortStrategy)
     }));
   }
+
+  function reportLabelOverflow() {
+    if (!labelEl || collapsed) return;
+    onLabelOverflowChange?.(labelEl.scrollWidth > labelEl.clientWidth + 1);
+  }
+
+  $effect(() => {
+    void strategyLabel;
+    void collapsed;
+    void labelEl;
+    requestAnimationFrame(reportLabelOverflow);
+  });
+
+  $effect(() => {
+    if (!labelEl || collapsed) return;
+    const observer = new ResizeObserver(() => reportLabelOverflow());
+    observer.observe(labelEl);
+    requestAnimationFrame(reportLabelOverflow);
+    return () => observer.disconnect();
+  });
 </script>
 
-<div
-  class="inline-flex select-none items-stretch overflow-hidden rounded-md text-xs {compact
-    ? 'h-7'
-    : 'h-8'} {variant === 'outlined'
-    ? 'border border-border bg-background'
-    : ''}"
-  role="group"
-  aria-label={tUi('sort.label')}
->
+{#if collapsed}
   <button
     type="button"
-    class="flex items-center justify-center px-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-    onclick={toggleDirection}
-    aria-label={directionTooltip}
-    title={directionTooltip}
-  >
-    <!--
-      Single ArrowUpDown icon — shows both arrows side-by-side. On a
-      direction flip we vertically mirror it via -scale-y-100 so the
-      "currently leading" arrow swaps between top and bottom. Smoother
-      than swapping between two distinct icons.
-    -->
-    <ArrowUpDown
-      class="{iconClass} transition-transform {direction === 'desc'
-        ? '-scale-y-100'
-        : ''}"
-    />
-  </button>
-
-  <span class="w-px shrink-0 self-stretch bg-border" aria-hidden="true"></span>
-
-  <button
-    type="button"
-    class="flex min-w-0 items-center gap-1.5 px-2.5 transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    class="inline-flex select-none items-center justify-center gap-1.5 rounded-md px-2 text-xs transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring {compact
+      ? 'h-7'
+      : 'h-8'} {variant === 'outlined'
+      ? 'border border-border bg-background'
+      : ''}"
     onclick={openStrategyMenu}
     aria-label={tUi('sort.switch')}
-    title={tUi('sort.switch')}
+    title={`${strategyLabel} · ${tUi('sort.switch')}`}
   >
-    <span class="truncate">{strategyLabel}</span>
+    {#if strategy === 'alphabetical'}
+      {#if direction === 'asc'}
+        <ArrowDownAZ class={iconClass} />
+      {:else}
+        <ArrowDownZA class={iconClass} />
+      {/if}
+    {:else}
+      <span class="relative inline-flex">
+        {#if direction === 'asc'}
+          <ArrowDown01 class={iconClass} />
+        {:else}
+          <ArrowDown10 class={iconClass} />
+        {/if}
+        {#if strategy === 'modified'}
+          <Clock
+            class="absolute -bottom-1 -right-1 size-2.5 rounded-full bg-card"
+          />
+        {:else}
+          <CalendarPlus
+            class="absolute -bottom-1 -right-1 size-2.5 rounded-full bg-card"
+          />
+        {/if}
+      </span>
+    {/if}
   </button>
-</div>
+{:else}
+  <div
+    class="inline-flex min-w-0 select-none items-stretch overflow-hidden rounded-md text-xs {compact
+      ? 'h-7'
+      : 'h-8'} {variant === 'outlined'
+      ? 'border border-border bg-background'
+      : ''}"
+    role="group"
+    aria-label={tUi('sort.label')}
+  >
+    <button
+      type="button"
+      class="flex items-center justify-center px-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      onclick={toggleDirection}
+      aria-label={directionTooltip}
+      title={directionTooltip}
+    >
+      <!--
+        Single ArrowUpDown icon — shows both arrows side-by-side. On a
+        direction flip we vertically mirror it via -scale-y-100 so the
+        "currently leading" arrow swaps between top and bottom. Smoother
+        than swapping between two distinct icons.
+      -->
+      <ArrowUpDown
+        class="{iconClass} transition-transform {direction === 'desc'
+          ? '-scale-y-100'
+          : ''}"
+      />
+    </button>
+
+    <span class="w-px shrink-0 self-stretch bg-border" aria-hidden="true"
+    ></span>
+
+    <button
+      type="button"
+      class="flex min-w-0 items-center gap-1.5 px-2.5 transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      onclick={openStrategyMenu}
+      aria-label={tUi('sort.switch')}
+      title={tUi('sort.switch')}
+    >
+      <span bind:this={labelEl} class="truncate">{strategyLabel}</span>
+    </button>
+  </div>
+{/if}
 
 {#if menuOpen}
   <ContextMenu

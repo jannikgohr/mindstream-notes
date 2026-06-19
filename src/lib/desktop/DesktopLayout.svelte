@@ -48,6 +48,10 @@
     ui
   } from '$lib/state.svelte';
   import { loadTree, tree } from '$lib/stores/tree.svelte';
+  import {
+    desktopNoteSource,
+    setDesktopNoteSource
+  } from '$lib/stores/note-source.svelte';
   import { subscribeOpenNoteRequest } from '$lib/stores/open-note-intent.svelte';
   import { runSync } from '$lib/sync/runner';
 
@@ -818,6 +822,8 @@
         style="width: {ui.leftSidebarWidth}px;"
       >
         <FileExplorer
+          source={desktopNoteSource.active}
+          onSourceChange={setDesktopNoteSource}
           {onOpenNote}
           {onOpenNoteRight}
           {onOpenNoteBelow}
@@ -827,7 +833,7 @@
       <ResizeHandle
         side="left"
         value={ui.leftSidebarWidth}
-        min={200}
+        min={220}
         max={500}
         onChange={setLeftSidebarWidth}
       />
