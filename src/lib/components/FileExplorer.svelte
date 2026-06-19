@@ -7,8 +7,11 @@
     FolderOpen,
     FolderPlus,
     FileUp,
+    Home,
     PencilRuler,
     FilePlus2,
+    Share2,
+    Star,
     Trash2
   } from '@lucide/svelte';
   import FavouriteStar from './FavouriteStar.svelte';
@@ -18,6 +21,7 @@
   import { Separator } from '$lib/components/ui/separator';
   import ContextMenu from './ContextMenu.svelte';
   import type { MenuItem } from './context-menu-types';
+  import type { IconComponent } from '$lib/settings/icons';
   import { alert, confirm } from './confirm-dialog.svelte';
   import SortControl from './SortControl.svelte';
   import { sortTree } from '$lib/sort';
@@ -41,22 +45,59 @@
   } from '$lib/stores/tree.svelte';
   import { setSortDirection, setSortStrategy, ui } from '$lib/state.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
-  import { TRASH_ID } from '$lib/api';
   import type { TreeNode } from '$lib/api';
   import { exportersForNote } from '$lib/note-exporters';
+  import {
+    collectionIsUnderTrash,
+    nodesForDesktopSource,
+    noteIsUnderShared,
+    noteIsUnderTrash,
+    type DesktopNoteSource
+  } from '$lib/stores/note-source.svelte';
 
   interface Props {
+    source?: DesktopNoteSource;
+    onSourceChange?: (source: DesktopNoteSource) => void;
     onOpenNote: (id: string) => void;
     onOpenNoteRight?: (id: string) => void;
     onOpenNoteBelow?: (id: string) => void;
     onOpenInNewWindow?: (id: string) => void;
   }
   let {
+    source = 'home',
+    onSourceChange,
     onOpenNote,
     onOpenNoteRight,
     onOpenNoteBelow,
     onOpenInNewWindow
   }: Props = $props();
+
+  const SOURCES: {
+    id: DesktopNoteSource;
+    labelKey: string;
+    icon: IconComponent;
+  }[] = [
+    {
+      id: 'home',
+      labelKey: 'nav.home',
+      icon: Home as unknown as IconComponent
+    },
+    {
+      id: 'favourites',
+      labelKey: 'nav.favourite',
+      icon: Star as unknown as IconComponent
+    },
+    {
+      id: 'shared',
+      labelKey: 'nav.shared',
+      icon: Share2 as unknown as IconComponent
+    },
+    {
+      id: 'trash',
+      labelKey: 'nav.trash',
+      icon: Trash2 as unknown as IconComponent
+    }
+  ];
 
   let expanded = $state<Record<string, boolean>>({});
 
@@ -69,14 +110,17 @@
     )
   );
 
-  // Pull the trash folder out of sortedTree so it can be pinned at the
-  // bottom with its own context menu and icon. mainNodes is everything else.
-  const trashNode = $derived(
-    sortedTree.find((n) => n.kind === 'folder' && n.id === TRASH_ID) ?? null
+  const sourceNodes = $derived(
+    nodesForDesktopSource(
+      source,
+      sortedTree,
+      tree.notesById,
+      tree.collectionsById
+    )
   );
-  const mainNodes = $derived(
-    sortedTree.filter((n) => !(n.kind === 'folder' && n.id === TRASH_ID))
-  );
+  const canCreate = $derived(source === 'home');
+  const canReorganize = $derived(source === 'home');
+  const trashItemCount = $derived(source === 'trash' ? sourceNodes.length : 0);
 
   // ---------- Inline draft entry (replaces window.prompt) ----------
   // 'note' = markdown note, 'drawing' = freeform note, 'ink' =
@@ -100,6 +144,7 @@
   let nameInput = $state<HTMLInputElement | null>(null);
   let pdfInput = $state<HTMLInputElement | null>(null);
   let pdfImportParentId = $state<string | null>(null);
+  let emptyTrashPending = $state(false);
 
   $effect(() => {
     if (!nameInput) return;
@@ -110,6 +155,7 @@
   });
 
   function startDraft(kind: DraftKind, parentId: string | null) {
+    if (!canCreate) return;
     if (parentId) expanded[parentId] = true;
     const defaultText =
       kind === 'folder'
@@ -122,6 +168,7 @@
     draft = { kind, parentId, text: defaultText };
   }
   function startPdfImport(parentId: string | null) {
+    if (!canCreate) return;
     pdfImportParentId = parentId;
     if (pdfInput) pdfInput.value = '';
     pdfInput?.click();
@@ -224,6 +271,11 @@
   function openMenu(e: MouseEvent, target: MenuTarget) {
     e.preventDefault();
     e.stopPropagation();
+    const items =
+      target.kind === 'root' && !canCreate && source !== 'trash'
+        ? []
+        : menuItemsForTarget(target);
+    if (items.length === 0) return;
     menuX = e.clientX;
     menuY = e.clientY;
     menuTarget = target;
@@ -250,14 +302,35 @@
     }
   }
 
-  function menuItems(): (MenuItem | 'separator')[] {
-    if (!menuTarget) return [];
-    if (menuTarget.kind === 'note') {
-      const id = menuTarget.id;
+  async function startEmptyTrash() {
+    if (emptyTrashPending || trashItemCount === 0) return;
+    if (
+      await confirm({
+        title: 'Empty trash',
+        message: `${trashItemCount} item(s) will be removed permanently. This cannot be undone.`,
+        confirmLabel: 'Empty trash',
+        destructive: true
+      })
+    ) {
+      emptyTrashPending = true;
+      try {
+        await emptyTrash();
+      } finally {
+        emptyTrashPending = false;
+      }
+    }
+  }
+
+  function menuItemsForTarget(target: MenuTarget): (MenuItem | 'separator')[] {
+    if (target.kind === 'note') {
+      const id = target.id;
       const note = tree.notesById[id];
 
       // Notes inside the trash get a stripped-down menu.
-      if (note?.parent_collection_id === TRASH_ID) {
+      if (
+        source === 'trash' ||
+        (note && noteIsUnderTrash(note, tree.collectionsById))
+      ) {
         return [
           { label: 'Open', onSelect: () => onOpenNote(id) },
           'separator',
@@ -314,6 +387,12 @@
           }))
         });
       }
+      if (
+        source === 'shared' ||
+        (note && noteIsUnderShared(note, tree.collectionsById))
+      ) {
+        return items;
+      }
       items.push(
         'separator',
         {
@@ -333,42 +412,15 @@
       return items;
     }
 
-    if (menuTarget.kind === 'folder') {
-      const id = menuTarget.id;
+    if (target.kind === 'folder') {
+      const id = target.id;
       const folder = tree.collectionsById[id];
 
-      // Trash folder itself: only "Empty trash".
-      if (id === TRASH_ID) {
-        const trashedCount =
-          Object.values(tree.notesById).filter(
-            (n) => n.parent_collection_id === TRASH_ID
-          ).length +
-          Object.values(tree.collectionsById).filter(
-            (c) => c.parent_collection_id === TRASH_ID
-          ).length;
-        return [
-          {
-            label: `Empty trash (${trashedCount})`,
-            destructive: true,
-            disabled: trashedCount === 0,
-            onSelect: async () => {
-              if (
-                await confirm({
-                  title: 'Empty trash',
-                  message: `${trashedCount} item(s) will be removed permanently. This cannot be undone.`,
-                  confirmLabel: 'Empty trash',
-                  destructive: true
-                })
-              ) {
-                void emptyTrash();
-              }
-            }
-          }
-        ];
-      }
-
       // Sub-folders inside trash — restore or purge.
-      if (folder?.parent_collection_id === TRASH_ID) {
+      if (
+        source === 'trash' ||
+        collectionIsUnderTrash(id, tree.collectionsById)
+      ) {
         return [
           { label: 'Restore', onSelect: () => void restoreCollection(id) },
           {
@@ -378,7 +430,7 @@
               if (
                 await confirm({
                   title: 'Delete folder permanently',
-                  message: `Folder "${folder.name}" and everything inside will be removed. This cannot be undone.`,
+                  message: `Folder "${folder?.name ?? 'this folder'}" and everything inside will be removed. This cannot be undone.`,
                   confirmLabel: 'Delete',
                   destructive: true
                 })
@@ -389,6 +441,8 @@
           }
         ];
       }
+
+      if (!canCreate) return [];
 
       return [
         { label: 'New note in folder', onSelect: () => startDraft('note', id) },
@@ -425,6 +479,19 @@
       ];
     }
 
+    if (source === 'trash') {
+      return [
+        {
+          label: `Empty trash (${trashItemCount})`,
+          destructive: true,
+          disabled: trashItemCount === 0 || emptyTrashPending,
+          onSelect: () => void startEmptyTrash()
+        }
+      ];
+    }
+
+    if (!canCreate) return [];
+
     return [
       { label: 'New note', onSelect: () => startDraft('note', null) },
       {
@@ -440,6 +507,11 @@
     ];
   }
 
+  function menuItems(): (MenuItem | 'separator')[] {
+    if (!menuTarget) return [];
+    return menuItemsForTarget(menuTarget);
+  }
+
   // ---------- Drag and drop ----------
   type Drag =
     | { kind: 'note'; id: string }
@@ -450,6 +522,7 @@
   let dragOver = $state<string | null>(null);
 
   function onNoteDragStart(e: DragEvent, noteId: string) {
+    if (!canReorganize) return;
     if (!e.dataTransfer) return;
     e.dataTransfer.effectAllowed = 'move';
     e.dataTransfer.setData('application/x-note-id', noteId);
@@ -457,6 +530,7 @@
     drag = { kind: 'note', id: noteId };
   }
   function onFolderDragStart(e: DragEvent, folderId: string) {
+    if (!canReorganize) return;
     if (!e.dataTransfer) return;
     e.stopPropagation();
     e.dataTransfer.effectAllowed = 'move';
@@ -469,6 +543,7 @@
     dragOver = null;
   }
   function canDropOnFolder(targetFolderId: string | null): boolean {
+    if (!canReorganize) return false;
     if (!drag) return true;
     return !(drag.kind === 'folder' && targetFolderId === drag.id);
   }
@@ -481,12 +556,14 @@
     dragOver = `f:${folderId}`;
   }
   function onDragOverRoot(e: DragEvent) {
+    if (!canReorganize) return;
     if (!e.dataTransfer) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
     dragOver = 'root';
   }
   function onDragOverNote(e: DragEvent, noteId: string) {
+    if (!canReorganize) return;
     if (!e.dataTransfer) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
@@ -514,6 +591,7 @@
     else await moveCollectionTo(payload.id, targetFolderId);
   }
   async function onDropOnRoot(e: DragEvent) {
+    if (!canReorganize) return;
     e.preventDefault();
     const payload = readPayload(e);
     dragOver = null;
@@ -529,12 +607,53 @@
   function nodeKey(n: TreeNode): string {
     return n.kind === 'folder' ? `f:${n.id}` : `n:${n.id}`;
   }
+
+  function emptyStateMessage(): string {
+    switch (source) {
+      case 'favourites':
+        return 'Favourite notes will appear here.';
+      case 'shared':
+        return 'Shared folders will appear here.';
+      case 'trash':
+        return 'Trash is empty.';
+      case 'home':
+        return tUi('fileTree.emptyRoot');
+    }
+  }
 </script>
 
 <aside
   class="flex h-full w-full flex-col bg-card text-sm"
   oncontextmenu={(e) => openMenu(e, { kind: 'root' })}
 >
+  <nav
+    class="flex shrink-0 flex-col gap-1 px-2 py-2"
+    aria-label={tUi('nav.primary')}
+    oncontextmenu={(e) => {
+      e.preventDefault();
+      e.stopPropagation();
+    }}
+  >
+    {#each SOURCES as item (item.id)}
+      {@const active = source === item.id}
+      {@const Icon = item.icon}
+      {@const label = tUi(item.labelKey)}
+      <button
+        type="button"
+        class="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left transition-colors {active
+          ? 'bg-accent text-accent-foreground'
+          : 'text-muted-foreground hover:bg-accent/70 hover:text-foreground'}"
+        aria-current={active ? 'page' : undefined}
+        onclick={() => onSourceChange?.(item.id)}
+      >
+        <Icon class="size-4 shrink-0" />
+        <span class="truncate">{label}</span>
+      </button>
+    {/each}
+  </nav>
+
+  <Separator />
+
   <div class="flex items-center justify-between gap-2 px-3 py-1">
     <SortControl
       strategy={ui.sortStrategy}
@@ -544,58 +663,73 @@
       variant="ghost"
       compact
     />
-    <div class="flex items-center gap-1">
+    {#if canCreate}
+      <div class="flex items-center gap-1">
+        <Button
+          variant="ghost"
+          size="icon"
+          onclick={() => startDraft('folder', null)}
+          title={tUi('fileTree.newFolder')}
+          aria-label={tUi('fileTree.newFolder')}
+          class="size-7"
+        >
+          <FolderPlus class="size-3.5" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          onclick={() => startDraft('drawing', null)}
+          title={tUi('fileTree.newDrawing')}
+          aria-label={tUi('fileTree.newDrawing')}
+          class="size-7"
+        >
+          <PencilRuler class="size-3.5" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          onclick={() => startDraft('ink', null)}
+          title={tUi('fileTree.newInk')}
+          aria-label={tUi('fileTree.newInk')}
+          class="size-7"
+        >
+          <Feather class="size-3.5" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          onclick={() => startPdfImport(null)}
+          title={tUi('fileTree.importPdf')}
+          aria-label={tUi('fileTree.importPdf')}
+          class="size-7"
+        >
+          <FileUp class="size-3.5" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          onclick={() => startDraft('note', null)}
+          title={tUi('fileTree.newNote')}
+          aria-label={tUi('fileTree.newNote')}
+          class="size-7"
+        >
+          <FilePlus2 class="size-3.5" />
+        </Button>
+      </div>
+    {:else if source === 'trash'}
       <Button
         variant="ghost"
-        size="icon"
-        onclick={() => startDraft('folder', null)}
-        title={tUi('fileTree.newFolder')}
-        aria-label={tUi('fileTree.newFolder')}
-        class="size-7"
+        size="sm"
+        onclick={() => void startEmptyTrash()}
+        disabled={trashItemCount === 0 || emptyTrashPending}
+        title="Empty trash"
+        aria-label="Empty trash"
+        class="h-7 px-2 text-xs text-destructive hover:text-destructive"
       >
-        <FolderPlus class="size-3.5" />
+        <Trash2 class="size-3.5" />
+        Empty
       </Button>
-      <Button
-        variant="ghost"
-        size="icon"
-        onclick={() => startDraft('drawing', null)}
-        title={tUi('fileTree.newDrawing')}
-        aria-label={tUi('fileTree.newDrawing')}
-        class="size-7"
-      >
-        <PencilRuler class="size-3.5" />
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon"
-        onclick={() => startDraft('ink', null)}
-        title={tUi('fileTree.newInk')}
-        aria-label={tUi('fileTree.newInk')}
-        class="size-7"
-      >
-        <Feather class="size-3.5" />
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon"
-        onclick={() => startPdfImport(null)}
-        title={tUi('fileTree.importPdf')}
-        aria-label={tUi('fileTree.importPdf')}
-        class="size-7"
-      >
-        <FileUp class="size-3.5" />
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon"
-        onclick={() => startDraft('note', null)}
-        title={tUi('fileTree.newNote')}
-        aria-label={tUi('fileTree.newNote')}
-        class="size-7"
-      >
-        <FilePlus2 class="size-3.5" />
-      </Button>
-    </div>
+    {/if}
   </div>
 
   <Separator />
@@ -618,23 +752,18 @@
       <p class="px-2 py-3 text-xs text-destructive">
         {tUi('fileTree.error')}: {tree.error}
       </p>
-    {:else if mainNodes.length === 0 && !draft}
+    {:else if sourceNodes.length === 0 && !draft}
       <p class="px-2 py-3 text-xs text-muted-foreground">
-        {tUi('fileTree.emptyRoot')}
+        {emptyStateMessage()}
       </p>
     {/if}
 
-    {#each mainNodes as node (nodeKey(node))}
+    {#each sourceNodes as node (nodeKey(node))}
       {@render renderNode(node)}
     {/each}
 
-    {#if draft && draft.parentId === null}
+    {#if canCreate && draft && draft.parentId === null}
       {@render renderDraft()}
-    {/if}
-
-    {#if trashNode && trashNode.kind === 'folder'}
-      <div class="my-3 border-t border-border"></div>
-      {@render renderTrash(trashNode)}
     {/if}
   </div>
 </aside>
@@ -688,43 +817,6 @@
   />
 {/snippet}
 
-{#snippet renderTrash(node: TreeNode & { kind: 'folder' })}
-  {@const isOver = dragOver === `f:${node.id}`}
-  {@const childCount = node.children.length}
-  <button
-    type="button"
-    class="flex w-full items-center gap-1 rounded-md px-2 py-1 text-left hover:bg-accent hover:text-accent-foreground"
-    class:bg-accent={isOver}
-    onclick={() => toggleFolder(node.id)}
-    oncontextmenu={(e) => openMenu(e, { kind: 'folder', id: node.id })}
-    ondragover={(e) => onDragOverFolder(e, node.id)}
-    ondragleave={onDragLeave}
-    ondrop={(e) => onDropOnFolder(e, node.id)}
-  >
-    <ChevronRight
-      class={`size-3.5 shrink-0 transition-transform ${expanded[node.id] ? 'rotate-90' : ''}`}
-    />
-    <Trash2 class="size-3.5 shrink-0 text-muted-foreground" />
-    <span class="truncate">{node.name}</span>
-    {#if childCount > 0}
-      <span class="ml-auto text-[10px] text-muted-foreground">{childCount}</span
-      >
-    {/if}
-  </button>
-  {#if expanded[node.id]}
-    <div class="ml-3 border-l border-border pl-1">
-      {#each node.children as child (nodeKey(child))}
-        {@render renderNode(child)}
-      {/each}
-      {#if childCount === 0}
-        <p class="px-2 py-1 text-[11px] italic text-muted-foreground">
-          {tUi('fileTree.emptyFolder')}
-        </p>
-      {/if}
-    </div>
-  {/if}
-{/snippet}
-
 {#snippet renderNode(node: TreeNode)}
   {#if node.kind === 'folder'}
     {@const isOver = dragOver === `f:${node.id}`}
@@ -732,7 +824,7 @@
       rename && rename.kind === 'folder' && rename.id === node.id}
     <button
       type="button"
-      draggable="true"
+      draggable={canReorganize}
       class="flex w-full items-center gap-1 rounded-md px-2 py-1 text-left hover:bg-accent hover:text-accent-foreground"
       class:bg-accent={isOver}
       class:opacity-60={drag?.kind === 'folder' && drag.id === node.id}
@@ -763,7 +855,7 @@
         {#each node.children as child (nodeKey(child))}
           {@render renderNode(child)}
         {/each}
-        {#if draft && draft.parentId === node.id}
+        {#if canCreate && draft && draft.parentId === node.id}
           {@render renderDraft()}
         {/if}
       </div>
@@ -774,7 +866,9 @@
       rename && rename.kind === 'note' && rename.id === node.id}
     {@const note = tree.notesById[node.id]}
     {@const fav = note?.favourite === true}
-    {@const inTrash = note?.parent_collection_id === TRASH_ID}
+    {@const inTrash =
+      source === 'trash' ||
+      (note ? noteIsUnderTrash(note, tree.collectionsById) : false)}
     {@const kind = note?.note_kind}
     {@const NoteIcon = noteKindIcon(kind)}
     <!-- Row uses a flex container so the favourite-toggle button can
@@ -784,7 +878,7 @@
          to click + contextmenu. -->
     <div
       role="group"
-      draggable="true"
+      draggable={canReorganize}
       class="group flex w-full items-center gap-0.5 rounded-md pr-1 hover:bg-accent hover:text-accent-foreground"
       class:bg-accent={isOver}
       class:opacity-60={drag?.kind === 'note' && drag.id === node.id}
