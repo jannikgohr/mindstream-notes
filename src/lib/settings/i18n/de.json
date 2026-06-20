@@ -370,6 +370,10 @@
     "find.previous": "Vorheriger Treffer",
     "find.next": "Nächster Treffer",
     "find.close": "Suche schließen",
+    "find.toggleReplace": "Ersetzen umschalten",
+    "find.replacePlaceholder": "Ersetzen",
+    "find.replace": "Ersetzen",
+    "find.replaceAll": "Alle ersetzen",
 
     "updater.checkFailed.title": "Update-Prüfung fehlgeschlagen",
     "updater.checkFailed.message": "Der Update-Server ist nicht erreichbar. Bitte prüfe deine Internetverbindung und versuche es erneut.",

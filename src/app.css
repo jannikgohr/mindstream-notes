@@ -905,6 +905,25 @@ body.dv-tab-dragging .freeform-canvas-host * {
 }
 
 /* -------------------------------------------------------------------------
+ * Find & replace highlights
+ *
+ * Inline decorations from `$lib/editor/plugins/markdown-search` wrap every
+ * match in `.search-match`, with the active hit also carrying
+ * `.search-match-active`. Colours mirror the PDF viewer's search overlay
+ * (yellow for matches, orange for the focused one) so find feels the same
+ * across note kinds.
+ * ------------------------------------------------------------------------- */
+
+.ProseMirror .search-match {
+  background: rgb(250 204 21 / 0.4);
+  border-radius: 1px;
+}
+.ProseMirror .search-match-active {
+  background: rgb(249 115 22 / 0.5);
+  box-shadow: 0 0 0 1px rgb(234 88 12 / 0.9);
+}
+
+/* -------------------------------------------------------------------------
  *  Animated-icon motion gates
  *  --------------------------
  *  Honour both the OS-level `prefers-reduced-motion` preference AND

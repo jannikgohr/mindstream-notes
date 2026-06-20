@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy, onMount } from 'svelte';
+  import { onDestroy, onMount, tick } from 'svelte';
   import { Crepe } from '@milkdown/crepe';
   import { editorViewCtx, serializerCtx } from '@milkdown/kit/core';
   import { collabServiceCtx } from '@milkdown/plugin-collab';
@@ -32,13 +32,19 @@
   import { ensureDropIndicatorAlignment } from '$lib/editor/drop-indicator-align';
   import { pickCursorColor } from '$lib/editor/cursor-color';
   import { base64ToBytes } from '$lib/editor/base64';
-  import { createWikilinkBridge } from '$lib/editor/plugins';
+  import {
+    createWikilinkBridge,
+    createMarkdownSearchBridge
+  } from '$lib/editor/plugins';
   import {
     registerEditor,
     unregisterEditor,
     MARKDOWN_ACTIONS,
+    SEARCH_ACTIVE_NOTE_COMMAND,
     type EditorListener
   } from '$lib/hotkeys';
+  import { tUi } from '$lib/settings/i18n.svelte';
+  import FindBar from './FindBar.svelte';
   import EditorToolbar from './editor-toolbar/EditorToolbar.svelte';
   import MobileEditorToolbar from './editor-toolbar/MobileEditorToolbar.svelte';
   import TrashBanner from './note-editor/TrashBanner.svelte';
@@ -86,6 +92,16 @@
   // so the popup template never has to defend against `bridge == null`
   // — if wikilinks are off, the plugin simply never opens it.
   const wikilinkBridge = createWikilinkBridge();
+
+  // Per-editor find & replace bridge. The search prose plugin (registered
+  // in crepe-setup) reports match counts through `searchBridge.state`; the
+  // FindBar below drives it via the handler functions. See the
+  // `--- In-document find & replace ---` block lower down.
+  const searchBridge = createMarkdownSearchBridge();
+  let searchOpen = $state(false);
+  let searchQuery = $state('');
+  let replaceValue = $state('');
+  let searchBar = $state<{ focus: () => void } | null>(null);
 
   let host: HTMLDivElement | null = $state(null);
   // $state because we hand the instance to MobileEditorToolbar as a prop;
@@ -253,6 +269,7 @@
         mermaidEnabled,
         wikilinksEnabled,
         wikilinkBridge,
+        searchBridge,
         assetBridge
       });
       await crepe.create();
@@ -288,6 +305,13 @@
           host,
           noteId,
           onCommand: (id: string) => {
+            // Editor-agnostic "find in this note" broadcast — open the
+            // in-document find & replace bar. Handled before the markdown
+            // action lookup since it isn't an `editor.markdown.*` command.
+            if (id === SEARCH_ACTIVE_NOTE_COMMAND) {
+              openSearch();
+              return true;
+            }
             const action = MARKDOWN_ACTIONS[id];
             // A missing markdown action for an `editor.markdown.*` id is
             // catalogue drift (a hotkey command registered without a
@@ -705,6 +729,55 @@
     }, saveDebounceMs);
   }
 
+  // --- In-document find & replace -------------------------------------------
+  //
+  // The heavy lifting (matching, decorations, navigation, replace) lives in
+  // the search prose plugin; this side just owns the bar's open state + the
+  // two field values and forwards user intent through `searchBridge`. Match
+  // count / active index flow back via `searchBridge.state`.
+
+  function focusEditorView() {
+    if (!crepe) return;
+    try {
+      crepe.editor.action((ctx) => ctx.get(editorViewCtx).focus());
+    } catch (err) {
+      console.debug('[NoteEditor] focus editor failed', err);
+    }
+  }
+
+  function openSearch() {
+    searchOpen = true;
+    // Re-run the current query (covers reopening with text already typed)
+    // and surface its matches, then focus the field.
+    searchBridge.setQuery(searchQuery.trim());
+    void tick().then(() => searchBar?.focus());
+  }
+
+  function closeSearch() {
+    searchOpen = false;
+    searchBridge.clear();
+    focusEditorView();
+  }
+
+  function handleSearchInput(value: string) {
+    searchQuery = value;
+    searchBridge.setQuery(value.trim());
+  }
+
+  function handleReplaceInput(value: string) {
+    replaceValue = value;
+  }
+
+  function doReplaceCurrent() {
+    if (isTrashed) return;
+    searchBridge.replaceCurrent(replaceValue);
+  }
+
+  function doReplaceAll() {
+    if (isTrashed) return;
+    searchBridge.replaceAll(replaceValue);
+  }
+
   // Desktop toolbar visibility is a per-device toggle (default on). The
   // settings.values read makes this $derived re-evaluate when the user flips
   // the toggle live. Trashed notes hide the toolbar too — it'd be misleading
@@ -743,6 +816,29 @@
   {/if}
   {#if isTrashed}
     <TrashBanner />
+  {/if}
+  {#if searchOpen}
+    <!--
+      Replace is gated on !isTrashed: a read-only (trashed) note can still
+      be searched, but the bar then collapses to find-only because the
+      replace callbacks are omitted.
+    -->
+    <FindBar
+      bind:this={searchBar}
+      query={searchQuery}
+      matchCount={searchBridge.state.matchCount}
+      activeIndex={searchBridge.state.activeIndex}
+      busy={false}
+      placeholder={tUi('find.placeholder')}
+      onInput={handleSearchInput}
+      onNext={() => searchBridge.next()}
+      onPrevious={() => searchBridge.previous()}
+      onClose={closeSearch}
+      replaceValue={isTrashed ? undefined : replaceValue}
+      onReplaceInput={isTrashed ? undefined : handleReplaceInput}
+      onReplace={isTrashed ? undefined : doReplaceCurrent}
+      onReplaceAll={isTrashed ? undefined : doReplaceAll}
+    />
   {/if}
   <!--
     flex-1 + min-h-0 (not h-full) so the scroll area fills the *remaining*

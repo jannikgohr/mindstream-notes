@@ -470,6 +470,10 @@
     "find.previous": "Previous match",
     "find.next": "Next match",
     "find.close": "Close find",
+    "find.toggleReplace": "Toggle replace",
+    "find.replacePlaceholder": "Replace",
+    "find.replace": "Replace",
+    "find.replaceAll": "Replace all",
 
     "updater.checkFailed.title": "Couldn't check for updates",
     "updater.checkFailed.message": "We weren't able to reach the update server. Check your internet connection and try again.",
