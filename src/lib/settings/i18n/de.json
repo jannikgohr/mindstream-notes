@@ -199,6 +199,7 @@
     "hotkeys.command.editor.ink.redo": "Wiederholen",
     "hotkeys.command.editor.ink.toggleFingerDrawing": "Fingerzeichnen umschalten",
     "hotkeys.command.editor.ink.togglePageTheme": "Seitendesign umschalten",
+    "hotkeys.command.editor.ink.togglePageBackground": "Seitenhintergrund umschalten",
     "hotkeys.command.editor.ink.clear": "Handschriftliche Notiz leeren",
     "hotkeys.command.editor.pdf.select": "Auswählen",
     "hotkeys.command.editor.pdf.highlight": "Hervorheben",
@@ -285,6 +286,7 @@
     "ink.toolbar.settings": "Ink-Einstellungen",
     "ink.toolbar.fingerDrawing": "Fingerzeichnen umschalten",
     "ink.toolbar.pageTheme": "Seitendesign umschalten",
+    "ink.toolbar.pageBackground": "Seitenhintergrund umschalten",
     "ink.toolbar.clear": "Handschriftliche Notiz leeren",
     "ink.toolbar.selectionActions": "Auswahlaktionen",
     "ink.toolbar.cutSelected": "Ausgewählte Tinte ausschneiden",
@@ -576,6 +578,10 @@
       "label": "Ink-Seitendesign",
       "description": "Legt fest, ob handschriftliche Seiten hell, dunkel bleiben oder dem App-Design folgen."
     },
+    "editor.ink.pageBackground": {
+      "label": "Ink-Seitenhintergrund",
+      "description": "Hintergrundmuster für handschriftliche Seiten."
+    },
     "editor.autoSave": { "label": "Auto-Speichern" },
     "hotkeys.panel": { "label": "Tastaturkürzel" },
     "hotkeys.globalShortcuts": {
@@ -622,6 +628,10 @@
     "editor.ink.tool.lasso": "Lasso-Auswahl",
     "editor.ink.pageTheme.light": "Hell",
     "editor.ink.pageTheme.dark": "Dunkel",
-    "editor.ink.pageTheme.system": "App-Design folgen"
+    "editor.ink.pageTheme.system": "App-Design folgen",
+    "editor.ink.pageBackground.clear": "Leer",
+    "editor.ink.pageBackground.points": "Punkte",
+    "editor.ink.pageBackground.lines": "Linien",
+    "editor.ink.pageBackground.grid": "Raster"
   }
 }

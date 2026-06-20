@@ -298,6 +298,13 @@
               "type": "select",
               "default": "light",
               "options": ["light", "dark", "system"]
+            },
+            {
+              "id": "editor.ink.pageBackground",
+              "scope": "D",
+              "type": "select",
+              "default": "clear",
+              "options": ["clear", "points", "lines", "grid"]
             }
           ]
         },

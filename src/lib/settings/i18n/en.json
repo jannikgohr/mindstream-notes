@@ -299,6 +299,7 @@
     "hotkeys.command.editor.ink.redo": "Redo",
     "hotkeys.command.editor.ink.toggleFingerDrawing": "Toggle finger drawing",
     "hotkeys.command.editor.ink.togglePageTheme": "Toggle page theme",
+    "hotkeys.command.editor.ink.togglePageBackground": "Toggle page background",
     "hotkeys.command.editor.ink.clear": "Clear handwritten note",
     "hotkeys.command.editor.pdf.select": "Select",
     "hotkeys.command.editor.pdf.highlight": "Highlight",
@@ -385,6 +386,7 @@
     "ink.toolbar.settings": "Ink settings",
     "ink.toolbar.fingerDrawing": "Toggle finger drawing",
     "ink.toolbar.pageTheme": "Toggle page theme",
+    "ink.toolbar.pageBackground": "Toggle page background",
     "ink.toolbar.clear": "Clear handwritten note",
     "ink.toolbar.selectionActions": "Selection actions",
     "ink.toolbar.cutSelected": "Cut selected ink",
@@ -587,6 +589,10 @@
       "label": "Ink page theme",
       "description": "Choose whether handwritten pages stay light, dark, or follow the app theme."
     },
+    "editor.ink.pageBackground": {
+      "label": "Ink page background",
+      "description": "Background pattern for handwritten pages."
+    },
     "editor.autoSave": { "label": "Auto-save" },
     "hotkeys.panel": { "label": "Keyboard shortcuts" },
     "hotkeys.globalShortcuts": {
@@ -647,6 +653,10 @@
     "editor.ink.pageTheme.light": "Light",
     "editor.ink.pageTheme.dark": "Dark",
     "editor.ink.pageTheme.system": "Follow app theme",
+    "editor.ink.pageBackground.clear": "Clear",
+    "editor.ink.pageBackground.points": "Points",
+    "editor.ink.pageBackground.lines": "Lines",
+    "editor.ink.pageBackground.grid": "Grid",
     "data.trashRetentionDays.7": "7 days",
     "data.trashRetentionDays.30": "30 days",
     "data.trashRetentionDays.90": "90 days",
