@@ -201,6 +201,7 @@ describe('catalogue consistency', () => {
       'editor.ink.redo',
       'editor.ink.toggleFingerDrawing',
       'editor.ink.togglePageTheme',
+      'editor.ink.togglePageBackground',
       'editor.ink.clear'
     ];
 

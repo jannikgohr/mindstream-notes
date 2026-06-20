@@ -2,19 +2,24 @@
   import * as Y from 'yjs';
   import { onDestroy, onMount, tick } from 'svelte';
   import {
+    AlignJustify,
     ClipboardPaste,
     Copy,
     Eraser,
+    Grid3x3,
+    Grip,
     LassoSelect,
     Monitor,
-    MousePointer2,
     MoonStar,
     Palette,
     PenLine,
+    Pointer,
+    PointerOff,
     PocketKnife,
     Redo2,
     Scissors,
     Settings2,
+    Square,
     Sun,
     Shredder,
     Trash2,
@@ -104,6 +109,15 @@
   const SAVE_DEBOUNCE_MS = 800;
   const ERASER_RADIUS = 10;
   const PAGE_FILL_LIGHT = 0xffffffff;
+  // Page-background pattern (dots / ruled lines / grid). The user-chosen
+  // RGB is drawn at a fixed low alpha so it stays subtle, then run
+  // through `displayColor` whose dark-mode invert turns it into a faint
+  // light pattern on the dark page. Spacings are in ink-document units
+  // (the A4 page is 1190×1684; ~28u ≈ 5mm).
+  const PAGE_GRID_STEP = 28;
+  const PAGE_RULE_STEP = 48;
+  const PAGE_PATTERN_LINE_ALPHA = 0x1f;
+  const PAGE_PATTERN_DOT_ALPHA = 0x59;
   const TOOL_PREVIEW_DASH = [5, 4];
   const MAX_ZOOM_FACTOR = 6;
   const INK_ZOOM_DISPLAY_SCALE = 2;
@@ -131,9 +145,12 @@
   const INK_WIDTH_SETTING = 'editor.ink.width';
   const INK_FINGER_SETTING = 'editor.ink.fingerDrawing';
   const INK_PAGE_THEME_SETTING = 'editor.ink.pageTheme';
+  const INK_PAGE_BACKGROUND_SETTING = 'editor.ink.pageBackground';
+  const INK_PAGE_BACKGROUND_COLOR_SETTING = 'editor.ink.pageBackgroundColor';
 
   type ToolMode = 'pen' | 'eraser' | 'lasso';
   type PageThemeMode = 'light' | 'dark' | 'system';
+  type PageBackgroundMode = 'clear' | 'points' | 'lines' | 'grid';
   type AndroidStylusEraserAction = 'down' | 'move' | 'up' | 'cancel';
   type AndroidStylusEraserPoint = {
     x: number;
@@ -237,9 +254,19 @@
   let tool = $state<ToolMode>('pen');
   let colorArgb = $state(DEFAULT_COLOR);
   let colorInputText = $state('#000000');
+  // While the OS colour picker streams `input` events (dragging the
+  // wheel), recolour the selection on-canvas only — committed once on
+  // release. Non-null = a live preview colour for the selected strokes.
+  let selectionColorPreview = $state<number | null>(null);
+  // Committed colour captured at the first `input` of a drag so a
+  // cancelled pick (Escape / dismiss, which skips `change`) can revert.
+  let colorDragSnapshot: { argb: number; text: string } | null = null;
   let width = $state(DEFAULT_WIDTH);
   let fingerDrawingAllowed = $state(true);
   let pageThemeMode = $state<PageThemeMode>('light');
+  let pageBackground = $state<PageBackgroundMode>('clear');
+  // The pattern's RGB only (0xRRGGBB); alpha is applied per pattern kind.
+  let pageBackgroundColorRgb = $state(0x334155);
   let strokeCount = $state(0);
   let selectedStrokeIds = $state<string[]>([]);
   let selectionClipboard = $state<InkClipboardStroke[]>([]);
@@ -353,6 +380,12 @@
     pageThemeMode = normalizeInkPageTheme(
       getSettingValue(INK_PAGE_THEME_SETTING)
     );
+    pageBackground = normalizeInkPageBackground(
+      getSettingValue(INK_PAGE_BACKGROUND_SETTING)
+    );
+    pageBackgroundColorRgb =
+      colorHexToArgb(getSettingValue(INK_PAGE_BACKGROUND_COLOR_SETTING)) &
+      0x00ffffff;
   });
 
   $effect(() => {
@@ -368,6 +401,9 @@
     // Read the resolved value (not just the mode) so a live app-theme
     // flip repaints the page while "follow app theme" is selected.
     pageDark;
+    pageBackground;
+    pageBackgroundColorRgb;
+    selectionColorPreview;
     scheduleDraw();
   });
 
@@ -466,7 +502,8 @@
       colorArgb,
       width,
       fingerDrawingAllowed,
-      pageThemeMode
+      pageThemeMode,
+      pageBackground
     };
   }
 
@@ -481,6 +518,10 @@
       setSettingValue(
         INK_PAGE_THEME_SETTING,
         normalizeInkPageTheme(payload.pageThemeMode)
+      ),
+      setSettingValue(
+        INK_PAGE_BACKGROUND_SETTING,
+        normalizeInkPageBackground(payload.pageBackground)
       )
     ]);
   }
@@ -492,7 +533,8 @@
       colorArgb,
       width,
       fingerDrawingAllowed,
-      pageThemeMode
+      pageThemeMode,
+      pageBackground
     }).catch((err) => {
       console.warn('[ink-canvas-toolbar] failed to save settings', err);
     });
@@ -908,12 +950,11 @@
     const visibleStrokes = doc?.visibleStrokesInBounds(visibleBounds, 2) ?? [];
     for (const stroke of visibleStrokes) {
       if (selectionMoveActive && selectedStrokeSet.has(stroke.id)) continue;
-      drawStroke(
-        ctx,
-        stroke.points,
-        displayCssColor(stroke.color),
-        stroke.width
-      );
+      const color =
+        selectionColorPreview !== null && selectedStrokeSet.has(stroke.id)
+          ? selectionColorPreview
+          : stroke.color;
+      drawStroke(ctx, stroke.points, displayCssColor(color), stroke.width);
     }
     if (selectionMoveActive) {
       const transform = currentSelectionTransform();
@@ -922,7 +963,7 @@
         drawStroke(
           ctx,
           transformedPoints(stroke.points, transform),
-          displayCssColor(stroke.color),
+          displayCssColor(selectionColorPreview ?? stroke.color),
           stroke.width * transform.widthScale
         );
       }
@@ -969,10 +1010,74 @@
       ctx.fillStyle = displayCssColor(PAGE_FILL_LIGHT);
       ctx.fillRect(a.x, a.y, width, height);
       ctx.restore();
+      drawPageBackground(ctx, a, b);
       ctx.strokeStyle = surface.edgeColor;
       ctx.lineWidth = 1;
       ctx.strokeRect(a.x + 0.5, a.y + 0.5, width - 1, height - 1);
     }
+  }
+
+  /**
+   * Paint the selected page-background pattern (dots / ruled lines /
+   * grid) inside one page, clipped to its rect. Steps are page-unit
+   * spacings scaled to screen px and anchored to the page's top-left so
+   * the pattern is stable under pan/zoom. The pattern colour runs
+   * through `displayCssColor` so dark mode inverts it to faint light
+   * marks. Bails when zoomed out far enough that the pattern would turn
+   * into a solid wash.
+   */
+  function drawPageBackground(
+    ctx: CanvasRenderingContext2D,
+    a: { x: number; y: number },
+    b: { x: number; y: number }
+  ) {
+    if (pageBackground === 'clear') return;
+    const scale = view.scale;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(a.x, a.y, b.x - a.x, b.y - a.y);
+    ctx.clip();
+    if (pageBackground === 'points') {
+      const step = PAGE_GRID_STEP * scale;
+      if (step >= 3) {
+        const radius = Math.max(0.8, Math.min(1.6, 1.1 * scale * 2));
+        ctx.fillStyle = displayCssColor(
+          ((PAGE_PATTERN_DOT_ALPHA << 24) | pageBackgroundColorRgb) >>> 0
+        );
+        for (let y = a.y + step; y < b.y; y += step) {
+          for (let x = a.x + step; x < b.x; x += step) {
+            ctx.beginPath();
+            ctx.arc(x, y, radius, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+      }
+    } else {
+      const stepY =
+        (pageBackground === 'lines' ? PAGE_RULE_STEP : PAGE_GRID_STEP) * scale;
+      if (stepY >= 3) {
+        ctx.strokeStyle = displayCssColor(
+          ((PAGE_PATTERN_LINE_ALPHA << 24) | pageBackgroundColorRgb) >>> 0
+        );
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        for (let y = a.y + stepY; y < b.y; y += stepY) {
+          const py = Math.round(y) + 0.5;
+          ctx.moveTo(a.x, py);
+          ctx.lineTo(b.x, py);
+        }
+        if (pageBackground === 'grid') {
+          const stepX = PAGE_GRID_STEP * scale;
+          for (let x = a.x + stepX; x < b.x; x += stepX) {
+            const px = Math.round(x) + 0.5;
+            ctx.moveTo(px, a.y);
+            ctx.lineTo(px, b.y);
+          }
+        }
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
   }
 
   function drawToolPreview(ctx: CanvasRenderingContext2D) {
@@ -2345,6 +2450,39 @@
     if (normalized) setColor(normalized);
   }
 
+  // Preview a colour-picker drag without mutating the document: update
+  // the swatch and recolour the selected strokes on-canvas only. The
+  // real (undoable) update lands once in `commitColor` on release.
+  function previewColor(value: string) {
+    const normalized = normalizeColorHex(value);
+    if (!normalized) return;
+    if (!colorDragSnapshot) {
+      colorDragSnapshot = { argb: colorArgb, text: colorInputText };
+    }
+    colorInputText = normalized;
+    colorArgb = colorHexToArgb(normalized);
+    selectionColorPreview = hasSelection ? colorArgb : null;
+    scheduleDraw();
+  }
+
+  // Commit the final picked colour as a single document update.
+  function commitColor(value: string) {
+    colorDragSnapshot = null;
+    selectionColorPreview = null;
+    setColor(value);
+  }
+
+  // Picker dismissed without committing (no `change` fired): roll the
+  // swatch back to the pre-drag colour and drop the on-canvas preview.
+  function cancelColorPreview() {
+    if (!colorDragSnapshot) return;
+    colorArgb = colorDragSnapshot.argb;
+    colorInputText = colorDragSnapshot.text;
+    colorDragSnapshot = null;
+    selectionColorPreview = null;
+    scheduleDraw();
+  }
+
   function selectPresetColor(value: string) {
     setColor(value);
     toolbarMenuOpen = null;
@@ -2378,6 +2516,20 @@
         : pageThemeMode === 'dark'
           ? 'system'
           : 'light';
+    emitToolbarSettings();
+  }
+
+  // Cycle Clear → Points → Lines → Grid → Clear, matching the order of
+  // the settings dialog's select.
+  function cyclePageBackground() {
+    pageBackground =
+      pageBackground === 'clear'
+        ? 'points'
+        : pageBackground === 'points'
+          ? 'lines'
+          : pageBackground === 'lines'
+            ? 'grid'
+            : 'clear';
     emitToolbarSettings();
   }
 
@@ -2533,6 +2685,9 @@
       case 'editor.ink.togglePageTheme':
         cyclePageTheme();
         return true;
+      case 'editor.ink.togglePageBackground':
+        cyclePageBackground();
+        return true;
       case 'editor.ink.clear':
         if (!isTrashed) void confirmClearCanvas();
         return true;
@@ -2551,6 +2706,13 @@
     if (value === 'system') return 'system';
     if (value === 'dark') return 'dark';
     return 'light';
+  }
+
+  function normalizeInkPageBackground(value: unknown): PageBackgroundMode {
+    if (value === 'points' || value === 'lines' || value === 'grid') {
+      return value;
+    }
+    return 'clear';
   }
 
   function normalizeInkWidth(value: unknown): number {
@@ -2709,6 +2871,7 @@
     width = settings.width ?? DEFAULT_WIDTH;
     fingerDrawingAllowed = settings.fingerDrawingAllowed ?? true;
     pageThemeMode = settings.pageThemeMode ?? 'light';
+    pageBackground = settings.pageBackground ?? 'clear';
     refreshFromDoc();
     resizeCanvas();
     updateLiveInkOverlayStyle();
@@ -3062,7 +3225,9 @@
                   type="color"
                   aria-label={tUi('ink.toolbar.color')}
                   value={colorHex}
-                  oninput={(e) => setColor(e.currentTarget.value)}
+                  oninput={(e) => previewColor(e.currentTarget.value)}
+                  onchange={(e) => commitColor(e.currentTarget.value)}
+                  onblur={cancelColorPreview}
                 />
               </label>
               <label class="min-w-0 flex-1">
@@ -3176,33 +3341,56 @@
                 role="menuitemcheckbox"
                 class="flex h-8 w-full items-center justify-between gap-3 rounded-sm px-2 text-left text-sm hover:bg-accent hover:text-accent-foreground"
                 aria-checked={fingerDrawingAllowed}
+                title={tUi('ink.toolbar.fingerDrawing')}
+                aria-label={tUi('ink.toolbar.fingerDrawing')}
                 onclick={toggleFingerDrawing}
               >
                 <span>{tUi('ink.toolbar.fingerDrawing')}</span>
-                <MousePointer2
-                  class="size-4 {fingerDrawingAllowed
-                    ? 'opacity-100'
-                    : 'opacity-35'}"
-                  aria-hidden="true"
-                />
+                <span class="flex items-center text-muted-foreground">
+                  {#if fingerDrawingAllowed}
+                    <Pointer class="size-4" aria-hidden="true" />
+                  {:else}
+                    <PointerOff class="size-4" aria-hidden="true" />
+                  {/if}
+                </span>
               </button>
               <button
                 type="button"
                 role="menuitem"
                 class="flex h-8 w-full items-center justify-between gap-3 rounded-sm px-2 text-left text-sm hover:bg-accent hover:text-accent-foreground"
+                title={`${tUi('ink.toolbar.pageTheme')}: ${tValue('editor.ink.pageTheme', pageThemeMode)}`}
+                aria-label={`${tUi('ink.toolbar.pageTheme')}: ${tValue('editor.ink.pageTheme', pageThemeMode)}`}
                 onclick={cyclePageTheme}
               >
                 <span>{tUi('ink.toolbar.pageTheme')}</span>
-                <span class="flex items-center gap-1.5 text-muted-foreground">
-                  <span class="text-xs">
-                    {tValue('editor.ink.pageTheme', pageThemeMode)}
-                  </span>
+                <span class="flex items-center text-muted-foreground">
                   {#if pageThemeMode === 'dark'}
                     <MoonStar class="size-4" aria-hidden="true" />
                   {:else if pageThemeMode === 'system'}
                     <Monitor class="size-4" aria-hidden="true" />
                   {:else}
                     <Sun class="size-4" aria-hidden="true" />
+                  {/if}
+                </span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                class="flex h-8 w-full items-center justify-between gap-3 rounded-sm px-2 text-left text-sm hover:bg-accent hover:text-accent-foreground"
+                title={`${tUi('ink.toolbar.pageBackground')}: ${tValue('editor.ink.pageBackground', pageBackground)}`}
+                aria-label={`${tUi('ink.toolbar.pageBackground')}: ${tValue('editor.ink.pageBackground', pageBackground)}`}
+                onclick={cyclePageBackground}
+              >
+                <span>{tUi('ink.toolbar.pageBackground')}</span>
+                <span class="flex items-center text-muted-foreground">
+                  {#if pageBackground === 'points'}
+                    <Grip class="size-4" aria-hidden="true" />
+                  {:else if pageBackground === 'lines'}
+                    <AlignJustify class="size-4" aria-hidden="true" />
+                  {:else if pageBackground === 'grid'}
+                    <Grid3x3 class="size-4" aria-hidden="true" />
+                  {:else}
+                    <Square class="size-4" aria-hidden="true" />
                   {/if}
                 </span>
               </button>

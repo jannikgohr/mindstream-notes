@@ -298,6 +298,23 @@
               "type": "select",
               "default": "light",
               "options": ["light", "dark", "system"]
+            },
+            {
+              "id": "editor.ink.pageBackground",
+              "scope": "D",
+              "type": "select",
+              "default": "clear",
+              "options": ["clear", "points", "lines", "grid"]
+            },
+            {
+              "id": "editor.ink.pageBackgroundColor",
+              "scope": "D",
+              "type": "color",
+              "default": "#334155",
+              "showIf": {
+                "id": "editor.ink.pageBackground",
+                "notEquals": "clear"
+              }
             }
           ]
         },

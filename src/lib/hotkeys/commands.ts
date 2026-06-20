@@ -602,6 +602,13 @@ export const HOTKEY_COMMANDS: CommandDefinition[] = [
     defaultBinding: null
   },
   {
+    id: 'editor.ink.togglePageBackground',
+    scope: 'editor',
+    editorKind: 'ink',
+    labelKey: 'hotkeys.command.editor.ink.togglePageBackground',
+    defaultBinding: null
+  },
+  {
     id: 'editor.ink.clear',
     scope: 'editor',
     editorKind: 'ink',
