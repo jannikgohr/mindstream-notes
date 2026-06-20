@@ -582,6 +582,10 @@
       "label": "Ink-Seitenhintergrund",
       "description": "Hintergrundmuster für handschriftliche Seiten."
     },
+    "editor.ink.pageBackgroundColor": {
+      "label": "Ink-Seitenhintergrundfarbe",
+      "description": "Farbe des Seitenhintergrundmusters. Wird mit geringer Deckkraft angewendet, damit es dezent bleibt."
+    },
     "editor.autoSave": { "label": "Auto-Speichern" },
     "hotkeys.panel": { "label": "Tastaturkürzel" },
     "hotkeys.globalShortcuts": {

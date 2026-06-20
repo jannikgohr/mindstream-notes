@@ -593,6 +593,10 @@
       "label": "Ink page background",
       "description": "Background pattern for handwritten pages."
     },
+    "editor.ink.pageBackgroundColor": {
+      "label": "Ink page background color",
+      "description": "Colour of the page background pattern. Applied at a low opacity so it stays subtle."
+    },
     "editor.autoSave": { "label": "Auto-save" },
     "hotkeys.panel": { "label": "Keyboard shortcuts" },
     "hotkeys.globalShortcuts": {

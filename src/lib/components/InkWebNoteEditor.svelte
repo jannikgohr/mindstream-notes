@@ -109,14 +109,15 @@
   const SAVE_DEBOUNCE_MS = 800;
   const ERASER_RADIUS = 10;
   const PAGE_FILL_LIGHT = 0xffffffff;
-  // Page-background pattern (dots / ruled lines / grid). Drawn in a dark
-  // slate so `displayColor`'s dark-mode invert turns it into a faint
+  // Page-background pattern (dots / ruled lines / grid). The user-chosen
+  // RGB is drawn at a fixed low alpha so it stays subtle, then run
+  // through `displayColor` whose dark-mode invert turns it into a faint
   // light pattern on the dark page. Spacings are in ink-document units
   // (the A4 page is 1190×1684; ~28u ≈ 5mm).
   const PAGE_GRID_STEP = 28;
   const PAGE_RULE_STEP = 48;
-  const PAGE_PATTERN_LINE_ARGB = 0x1f334155;
-  const PAGE_PATTERN_DOT_ARGB = 0x59334155;
+  const PAGE_PATTERN_LINE_ALPHA = 0x1f;
+  const PAGE_PATTERN_DOT_ALPHA = 0x59;
   const TOOL_PREVIEW_DASH = [5, 4];
   const MAX_ZOOM_FACTOR = 6;
   const INK_ZOOM_DISPLAY_SCALE = 2;
@@ -145,6 +146,7 @@
   const INK_FINGER_SETTING = 'editor.ink.fingerDrawing';
   const INK_PAGE_THEME_SETTING = 'editor.ink.pageTheme';
   const INK_PAGE_BACKGROUND_SETTING = 'editor.ink.pageBackground';
+  const INK_PAGE_BACKGROUND_COLOR_SETTING = 'editor.ink.pageBackgroundColor';
 
   type ToolMode = 'pen' | 'eraser' | 'lasso';
   type PageThemeMode = 'light' | 'dark' | 'system';
@@ -256,6 +258,8 @@
   let fingerDrawingAllowed = $state(true);
   let pageThemeMode = $state<PageThemeMode>('light');
   let pageBackground = $state<PageBackgroundMode>('clear');
+  // The pattern's RGB only (0xRRGGBB); alpha is applied per pattern kind.
+  let pageBackgroundColorRgb = $state(0x334155);
   let strokeCount = $state(0);
   let selectedStrokeIds = $state<string[]>([]);
   let selectionClipboard = $state<InkClipboardStroke[]>([]);
@@ -372,6 +376,9 @@
     pageBackground = normalizeInkPageBackground(
       getSettingValue(INK_PAGE_BACKGROUND_SETTING)
     );
+    pageBackgroundColorRgb =
+      colorHexToArgb(getSettingValue(INK_PAGE_BACKGROUND_COLOR_SETTING)) &
+      0x00ffffff;
   });
 
   $effect(() => {
@@ -388,6 +395,7 @@
     // flip repaints the page while "follow app theme" is selected.
     pageDark;
     pageBackground;
+    pageBackgroundColorRgb;
     scheduleDraw();
   });
 
@@ -1026,7 +1034,9 @@
       const step = PAGE_GRID_STEP * scale;
       if (step >= 3) {
         const radius = Math.max(0.8, Math.min(1.6, 1.1 * scale * 2));
-        ctx.fillStyle = displayCssColor(PAGE_PATTERN_DOT_ARGB);
+        ctx.fillStyle = displayCssColor(
+          ((PAGE_PATTERN_DOT_ALPHA << 24) | pageBackgroundColorRgb) >>> 0
+        );
         for (let y = a.y + step; y < b.y; y += step) {
           for (let x = a.x + step; x < b.x; x += step) {
             ctx.beginPath();
@@ -1039,7 +1049,9 @@
       const stepY =
         (pageBackground === 'lines' ? PAGE_RULE_STEP : PAGE_GRID_STEP) * scale;
       if (stepY >= 3) {
-        ctx.strokeStyle = displayCssColor(PAGE_PATTERN_LINE_ARGB);
+        ctx.strokeStyle = displayCssColor(
+          ((PAGE_PATTERN_LINE_ALPHA << 24) | pageBackgroundColorRgb) >>> 0
+        );
         ctx.lineWidth = 1;
         ctx.beginPath();
         for (let y = a.y + stepY; y < b.y; y += stepY) {
