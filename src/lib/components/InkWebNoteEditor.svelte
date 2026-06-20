@@ -254,6 +254,13 @@
   let tool = $state<ToolMode>('pen');
   let colorArgb = $state(DEFAULT_COLOR);
   let colorInputText = $state('#000000');
+  // While the OS colour picker streams `input` events (dragging the
+  // wheel), recolour the selection on-canvas only — committed once on
+  // release. Non-null = a live preview colour for the selected strokes.
+  let selectionColorPreview = $state<number | null>(null);
+  // Committed colour captured at the first `input` of a drag so a
+  // cancelled pick (Escape / dismiss, which skips `change`) can revert.
+  let colorDragSnapshot: { argb: number; text: string } | null = null;
   let width = $state(DEFAULT_WIDTH);
   let fingerDrawingAllowed = $state(true);
   let pageThemeMode = $state<PageThemeMode>('light');
@@ -396,6 +403,7 @@
     pageDark;
     pageBackground;
     pageBackgroundColorRgb;
+    selectionColorPreview;
     scheduleDraw();
   });
 
@@ -942,12 +950,11 @@
     const visibleStrokes = doc?.visibleStrokesInBounds(visibleBounds, 2) ?? [];
     for (const stroke of visibleStrokes) {
       if (selectionMoveActive && selectedStrokeSet.has(stroke.id)) continue;
-      drawStroke(
-        ctx,
-        stroke.points,
-        displayCssColor(stroke.color),
-        stroke.width
-      );
+      const color =
+        selectionColorPreview !== null && selectedStrokeSet.has(stroke.id)
+          ? selectionColorPreview
+          : stroke.color;
+      drawStroke(ctx, stroke.points, displayCssColor(color), stroke.width);
     }
     if (selectionMoveActive) {
       const transform = currentSelectionTransform();
@@ -956,7 +963,7 @@
         drawStroke(
           ctx,
           transformedPoints(stroke.points, transform),
-          displayCssColor(stroke.color),
+          displayCssColor(selectionColorPreview ?? stroke.color),
           stroke.width * transform.widthScale
         );
       }
@@ -2443,6 +2450,39 @@
     if (normalized) setColor(normalized);
   }
 
+  // Preview a colour-picker drag without mutating the document: update
+  // the swatch and recolour the selected strokes on-canvas only. The
+  // real (undoable) update lands once in `commitColor` on release.
+  function previewColor(value: string) {
+    const normalized = normalizeColorHex(value);
+    if (!normalized) return;
+    if (!colorDragSnapshot) {
+      colorDragSnapshot = { argb: colorArgb, text: colorInputText };
+    }
+    colorInputText = normalized;
+    colorArgb = colorHexToArgb(normalized);
+    selectionColorPreview = hasSelection ? colorArgb : null;
+    scheduleDraw();
+  }
+
+  // Commit the final picked colour as a single document update.
+  function commitColor(value: string) {
+    colorDragSnapshot = null;
+    selectionColorPreview = null;
+    setColor(value);
+  }
+
+  // Picker dismissed without committing (no `change` fired): roll the
+  // swatch back to the pre-drag colour and drop the on-canvas preview.
+  function cancelColorPreview() {
+    if (!colorDragSnapshot) return;
+    colorArgb = colorDragSnapshot.argb;
+    colorInputText = colorDragSnapshot.text;
+    colorDragSnapshot = null;
+    selectionColorPreview = null;
+    scheduleDraw();
+  }
+
   function selectPresetColor(value: string) {
     setColor(value);
     toolbarMenuOpen = null;
@@ -3185,7 +3225,9 @@
                   type="color"
                   aria-label={tUi('ink.toolbar.color')}
                   value={colorHex}
-                  oninput={(e) => setColor(e.currentTarget.value)}
+                  oninput={(e) => previewColor(e.currentTarget.value)}
+                  onchange={(e) => commitColor(e.currentTarget.value)}
+                  onblur={cancelColorPreview}
                 />
               </label>
               <label class="min-w-0 flex-1">
