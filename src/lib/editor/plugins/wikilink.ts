@@ -174,14 +174,73 @@ function validateOpen(startPos: number, state: EditorState): boolean {
   return queryRaw.length <= MAX_QUERY_LEN;
 }
 
+/**
+ * Commit target for autocomplete insertion. When the cursor is inside an
+ * already-complete `[[Title]]`, replace the whole wikilink instead of only
+ * the text from `[[` to the cursor; otherwise committing in the middle leaves
+ * the existing suffix behind (`[[Test Note]] Note]]`).
+ */
+function findInsertionReplaceTo(
+  state: EditorState,
+  startPos: number,
+  cursor: number
+): number {
+  const $start = state.doc.resolve(startPos);
+  const $cursor = state.doc.resolve(cursor);
+  if ($start.parent !== $cursor.parent) return cursor;
+
+  const parentStart = $cursor.start();
+  const startOffset = startPos - parentStart;
+  const cursorOffset = cursor - parentStart;
+  const parentText = $cursor.parent.textBetween(
+    0,
+    $cursor.parent.content.size,
+    '\n',
+    '\n'
+  );
+
+  if (parentText.slice(startOffset, startOffset + 2) !== '[[') return cursor;
+
+  for (let i = cursorOffset; i < parentText.length; i++) {
+    const c = parentText[i];
+    if (c === '\n' || c === '[') return cursor;
+    if (c === ']') {
+      return parentText[i + 1] === ']' ? parentStart + i + 2 : cursor;
+    }
+  }
+
+  return cursor;
+}
+
 function wikilinkTriggerPlugin(bridge: WikilinkBridge): Plugin<TriggerState> {
   let viewRef: EditorView | null = null;
+  let suppressAutoOpen = false;
+  let suppressAutoOpenTimer: ReturnType<typeof setTimeout> | null = null;
 
-  function close() {
+  function resetBridgeState() {
     bridge.state.open = false;
     bridge.state.query = '';
     bridge.state.caretRect = null;
     bridge.state.highlight = 0;
+  }
+
+  function suppressModifierClickAutoOpen() {
+    suppressAutoOpen = true;
+    if (suppressAutoOpenTimer) clearTimeout(suppressAutoOpenTimer);
+    suppressAutoOpenTimer = setTimeout(() => {
+      suppressAutoOpen = false;
+      suppressAutoOpenTimer = null;
+    }, 500);
+  }
+
+  function isModifiedWikilinkMouseEvent(event: MouseEvent): boolean {
+    if (!event.ctrlKey && !event.metaKey) return false;
+    const target = event.target;
+    return target instanceof Element && !!target.closest('.wikilink');
+  }
+
+  function close() {
+    resetBridgeState();
     if (viewRef) {
       viewRef.dispatch(
         viewRef.state.tr.setMeta(triggerPluginKey, { close: true })
@@ -199,19 +258,9 @@ function wikilinkTriggerPlugin(bridge: WikilinkBridge): Plugin<TriggerState> {
       return;
     }
     const cursor = view.state.selection.from;
-    // If auto-pair (or the user) put `]]` right after the cursor, swallow
-    // it so we end up with exactly one closing pair from our insertion.
-    const after = view.state.doc.textBetween(
-      cursor,
-      Math.min(cursor + 2, view.state.doc.content.size)
-    );
-    const consumeClose = after === ']]' ? 2 : 0;
+    const replaceTo = findInsertionReplaceTo(view.state, start, cursor);
     const replacement = `[[${title}]]`;
-    const tr = view.state.tr.insertText(
-      replacement,
-      start,
-      cursor + consumeClose
-    );
+    const tr = view.state.tr.insertText(replacement, start, replaceTo);
     tr.setMeta(triggerPluginKey, { close: true });
     view.dispatch(tr);
     view.focus();
@@ -255,6 +304,7 @@ function wikilinkTriggerPlugin(bridge: WikilinkBridge): Plugin<TriggerState> {
         //    keying into an existing `[[Title]]`, which is what lets
         //    the user change the link target without retyping the
         //    brackets.
+        if (suppressAutoOpen) return { startPos: null };
         const start = findEnclosingWikilinkStart(newState);
         return { startPos: start };
       }
@@ -307,12 +357,31 @@ function wikilinkTriggerPlugin(bridge: WikilinkBridge): Plugin<TriggerState> {
           void prevState;
         },
         destroy() {
-          if (viewRef === view) viewRef = null;
+          if (viewRef === view) {
+            viewRef = null;
+            resetBridgeState();
+            if (suppressAutoOpenTimer) {
+              clearTimeout(suppressAutoOpenTimer);
+              suppressAutoOpenTimer = null;
+            }
+            suppressAutoOpen = false;
+          }
         }
       };
     },
 
     props: {
+      handleDOMEvents: {
+        mousedown(view, event) {
+          if (!isModifiedWikilinkMouseEvent(event)) return false;
+          suppressModifierClickAutoOpen();
+          resetBridgeState();
+          view.dispatch(
+            view.state.tr.setMeta(triggerPluginKey, { close: true })
+          );
+          return false;
+        }
+      },
       // No `handleTextInput` — auto-open lives in apply() now, so the
       // menu reacts to the doc + cursor state regardless of how the
       // brackets got there (typed, pasted, clicked-into, etc.). This
@@ -372,7 +441,7 @@ const decorationPluginKey = new PluginKey('mindstream-wikilink-decoration');
  */
 const WIKILINK_RE = /\[\[([^[\]\n]+?)]]/g;
 
-function wikilinkDecorationPlugin(): Plugin {
+function wikilinkDecorationPlugin(bridge: WikilinkBridge): Plugin {
   function build(
     doc: Parameters<typeof DecorationSet.create>[0]
   ): DecorationSet {
@@ -434,6 +503,7 @@ function wikilinkDecorationPlugin(): Plugin {
           return false;
         }
         event.preventDefault();
+        bridge.cancel();
         requestOpenNote(id);
         return true;
       }
@@ -456,6 +526,6 @@ function wikilinkDecorationPlugin(): Plugin {
 export function wikilinkPlugins(bridge: WikilinkBridge) {
   return [
     $prose(() => wikilinkTriggerPlugin(bridge)),
-    $prose(() => wikilinkDecorationPlugin())
+    $prose(() => wikilinkDecorationPlugin(bridge))
   ];
 }

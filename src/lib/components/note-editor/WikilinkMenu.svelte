@@ -152,6 +152,8 @@
 
   let popupEl = $state<HTMLDivElement | null>(null);
   let listEl = $state<HTMLDivElement | null>(null);
+  let positioned = $state(false);
+  let positionRun = 0;
 
   /**
    * `computePosition` is async; we re-call it whenever the menu state
@@ -198,8 +200,13 @@
     const rect = bridge.state.caretRect;
     // Re-run on query change because the caret moves as the user types.
     void bridge.state.query;
+    positionRun += 1;
+    positioned = false;
     if (!open || !rect || !popupEl) return;
-    void reposition(rect, popupEl);
+    const run = positionRun;
+    void reposition(rect, popupEl).then(() => {
+      if (run === positionRun && bridge.state.open) positioned = true;
+    });
   });
 
   // Recompute on viewport resize / scroll — the caret rect we stored is
@@ -212,7 +219,13 @@
     if (!bridge.state.open) return;
     const onResize = () => {
       const rect = bridge.state.caretRect;
-      if (rect && popupEl) void reposition(rect, popupEl);
+      if (rect && popupEl) {
+        const run = ++positionRun;
+        positioned = false;
+        void reposition(rect, popupEl).then(() => {
+          if (run === positionRun && bridge.state.open) positioned = true;
+        });
+      }
     };
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
@@ -231,7 +244,7 @@
   });
 </script>
 
-{#if bridge.state.open}
+{#if bridge.state.open && bridge.state.caretRect}
   <!--
     Portaled to <body> so dockview's panel transforms can't capture our
     position:fixed (which is why the menu was drifting). role=listbox:
@@ -241,7 +254,9 @@
   <div
     use:portal
     bind:this={popupEl}
-    class="wikilink-menu fixed z-50 flex flex-col overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-lg"
+    class="wikilink-menu fixed z-50 flex flex-col overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-lg {positioned
+      ? ''
+      : 'invisible pointer-events-none'}"
     style="width: 280px;"
     role="listbox"
     aria-label={tUi('editor.wikilink.menu.label')}
