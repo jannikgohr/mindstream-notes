@@ -101,6 +101,14 @@
   let searchOpen = $state(false);
   let searchQuery = $state('');
   let replaceValue = $state('');
+  // VS Code-style modifiers; persisted across open/close and re-applied to
+  // the plugin on open (closing clears the plugin's copy).
+  let searchOptions = $state({
+    caseSensitive: false,
+    wholeWord: false,
+    regex: false,
+    preserveCase: false
+  });
   let searchBar = $state<{ focus: () => void } | null>(null);
 
   let host: HTMLDivElement | null = $state(null);
@@ -747,8 +755,9 @@
 
   function openSearch() {
     searchOpen = true;
-    // Re-run the current query (covers reopening with text already typed)
-    // and surface its matches, then focus the field.
+    // Restore the modifiers (a prior close cleared the plugin's copy) and
+    // re-run the current query — covers reopening with text already typed.
+    searchBridge.setOptions({ ...searchOptions });
     searchBridge.setQuery(searchQuery.trim());
     void tick().then(() => searchBar?.focus());
   }
@@ -766,6 +775,27 @@
 
   function handleReplaceInput(value: string) {
     replaceValue = value;
+  }
+
+  // Toggle a single modifier and push the new set into the plugin, which
+  // recomputes matches against it.
+  function toggleMatchCase() {
+    searchOptions.caseSensitive = !searchOptions.caseSensitive;
+    searchBridge.setOptions({ ...searchOptions });
+  }
+  function toggleWholeWord() {
+    searchOptions.wholeWord = !searchOptions.wholeWord;
+    searchBridge.setOptions({ ...searchOptions });
+  }
+  function toggleRegex() {
+    searchOptions.regex = !searchOptions.regex;
+    searchBridge.setOptions({ ...searchOptions });
+  }
+  function togglePreserveCase() {
+    // Replace-only modifier — no need to recompute matches, but keep the
+    // plugin's copy current so the next replace honours it.
+    searchOptions.preserveCase = !searchOptions.preserveCase;
+    searchBridge.setOptions({ ...searchOptions });
   }
 
   function doReplaceCurrent() {
@@ -834,10 +864,18 @@
       onNext={() => searchBridge.next()}
       onPrevious={() => searchBridge.previous()}
       onClose={closeSearch}
+      matchCase={searchOptions.caseSensitive}
+      wholeWord={searchOptions.wholeWord}
+      useRegex={searchOptions.regex}
+      onToggleMatchCase={toggleMatchCase}
+      onToggleWholeWord={toggleWholeWord}
+      onToggleRegex={toggleRegex}
       replaceValue={isTrashed ? undefined : replaceValue}
       onReplaceInput={isTrashed ? undefined : handleReplaceInput}
       onReplace={isTrashed ? undefined : doReplaceCurrent}
       onReplaceAll={isTrashed ? undefined : doReplaceAll}
+      preserveCase={searchOptions.preserveCase}
+      onTogglePreserveCase={isTrashed ? undefined : togglePreserveCase}
     />
   {/if}
   <!--

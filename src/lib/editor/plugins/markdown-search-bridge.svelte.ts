@@ -17,9 +17,24 @@
  *   - Plugin calls:    setHandlers (once on attach)
  */
 
+/**
+ * VS Code-style search/replace modifiers. Re-declared here (rather than
+ * imported from `./markdown-search`) so this `.svelte.ts` module stays free
+ * of the prose-plugin import graph; the shapes are kept in sync by the
+ * `setOptions` contract.
+ */
+export interface MarkdownSearchOptions {
+  caseSensitive: boolean;
+  wholeWord: boolean;
+  regex: boolean;
+  preserveCase: boolean;
+}
+
 export interface MarkdownSearchHandlers {
   /** Set (or update) the query and recompute matches. Empty string clears. */
   setQuery(query: string): void;
+  /** Update the case/word/regex/preserve-case modifiers and recompute. */
+  setOptions(options: MarkdownSearchOptions): void;
   /** Move the active match forward, wrapping past the end. */
   next(): void;
   /** Move the active match backward, wrapping past the start. */
@@ -52,6 +67,7 @@ export function createMarkdownSearchBridge(): MarkdownSearchBridge {
   // even before the plugin has attached. Replaced via setHandlers.
   let handlers: MarkdownSearchHandlers = {
     setQuery: () => {},
+    setOptions: () => {},
     next: () => {},
     previous: () => {},
     replaceCurrent: () => {},
@@ -63,6 +79,7 @@ export function createMarkdownSearchBridge(): MarkdownSearchBridge {
   return {
     state,
     setQuery: (query) => handlers.setQuery(query),
+    setOptions: (options) => handlers.setOptions(options),
     next: () => handlers.next(),
     previous: () => handlers.previous(),
     replaceCurrent: (replacement) => handlers.replaceCurrent(replacement),

@@ -474,6 +474,10 @@
     "find.replacePlaceholder": "Replace",
     "find.replace": "Replace",
     "find.replaceAll": "Replace all",
+    "find.matchCase": "Match case",
+    "find.wholeWord": "Match whole word",
+    "find.useRegex": "Use regular expression",
+    "find.preserveCase": "Preserve case",
 
     "updater.checkFailed.title": "Couldn't check for updates",
     "updater.checkFailed.message": "We weren't able to reach the update server. Check your internet connection and try again.",

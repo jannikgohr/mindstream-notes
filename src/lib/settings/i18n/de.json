@@ -374,6 +374,10 @@
     "find.replacePlaceholder": "Ersetzen",
     "find.replace": "Ersetzen",
     "find.replaceAll": "Alle ersetzen",
+    "find.matchCase": "Groß-/Kleinschreibung beachten",
+    "find.wholeWord": "Ganzes Wort suchen",
+    "find.useRegex": "Regulären Ausdruck verwenden",
+    "find.preserveCase": "Groß-/Kleinschreibung beibehalten",
 
     "updater.checkFailed.title": "Update-Prüfung fehlgeschlagen",
     "updater.checkFailed.message": "Der Update-Server ist nicht erreichbar. Bitte prüfe deine Internetverbindung und versuche es erneut.",

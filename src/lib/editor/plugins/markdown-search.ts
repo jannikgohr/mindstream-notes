@@ -3,10 +3,10 @@
  * VS Code-style search bar (`FindBar.svelte`) for the markdown editor.
  *
  * Responsibilities:
- *   1. **Matching** — scan the doc for every (case-insensitive) occurrence
- *      of the query, mapping each hit back to its doc positions. Matches
- *      are scoped to a single text block, so a query never spans a
- *      paragraph boundary.
+ *   1. **Matching** — scan the doc for every occurrence of the query
+ *      (honouring the case / whole-word / regex modifiers), mapping each
+ *      hit back to its doc positions. Matches are scoped to a single text
+ *      block, so a query never spans a paragraph boundary.
  *   2. **Decoration** — highlight every match, with the active one styled
  *      distinctly (`.search-match` / `.search-match-active`, see app.css).
  *   3. **Navigation** — next/previous wrap around and scroll+select the
@@ -33,7 +33,10 @@ import type { Node as ProseNode } from '@milkdown/kit/prose/model';
 import { $prose } from '@milkdown/kit/utils';
 import type { MarkdownSearchBridge } from './markdown-search-bridge.svelte';
 
-export type { MarkdownSearchBridge } from './markdown-search-bridge.svelte';
+export type {
+  MarkdownSearchBridge,
+  MarkdownSearchOptions
+} from './markdown-search-bridge.svelte';
 export { createMarkdownSearchBridge } from './markdown-search-bridge.svelte';
 
 interface SearchMatch {
@@ -41,8 +44,31 @@ interface SearchMatch {
   to: number;
 }
 
+/**
+ * VS Code-style search/replace modifiers. The first three shape matching;
+ * `preserveCase` only affects how replacements are cased.
+ */
+export interface SearchOptions {
+  /** Case-sensitive matching (`Aa`). */
+  caseSensitive: boolean;
+  /** Only match whole words, bounded by `\b` (`ab|`). */
+  wholeWord: boolean;
+  /** Treat the query as a regular expression (`.*`). */
+  regex: boolean;
+  /** When replacing, carry the matched text's casing onto the replacement. */
+  preserveCase: boolean;
+}
+
+export const DEFAULT_SEARCH_OPTIONS: SearchOptions = {
+  caseSensitive: false,
+  wholeWord: false,
+  regex: false,
+  preserveCase: false
+};
+
 interface SearchPluginState {
   query: string;
+  options: SearchOptions;
   matches: SearchMatch[];
   activeIndex: number;
   deco: DecorationSet;
@@ -50,6 +76,7 @@ interface SearchPluginState {
 
 type SearchMeta =
   | { type: 'setQuery'; query: string }
+  | { type: 'setOptions'; options: SearchOptions }
   | { type: 'setActive'; index: number }
   | { type: 'clear' };
 
@@ -62,18 +89,67 @@ const searchPluginKey = new PluginKey<SearchPluginState>(
 // this code point, so it always breaks the run.
 const ATOM_SENTINEL = '￿';
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 /**
- * Find every case-insensitive occurrence of `query`, scoped per text
+ * Compile the query + options into a global RegExp, or `null` when there's
+ * nothing to match (empty query) or the user typed an invalid regex (which
+ * VS Code surfaces as "no results" — we do the same rather than throwing).
+ */
+function buildMatcher(query: string, options: SearchOptions): RegExp | null {
+  if (!query) return null;
+  let pattern = options.regex ? query : escapeRegExp(query);
+  if (options.wholeWord) pattern = `\\b(?:${pattern})\\b`;
+  const flags = options.caseSensitive ? 'g' : 'gi';
+  try {
+    return new RegExp(pattern, flags);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Re-case `replacement` to match `source`'s casing pattern — the
+ * "Preserve Case" behaviour. All-upper → upper, all-lower → lower,
+ * Title-case → title-case; anything mixed is left as the user typed it.
+ *
+ * Exported for unit testing; the plugin's replace paths are the only
+ * runtime callers.
+ */
+export function applyPreservedCase(
+  source: string,
+  replacement: string
+): string {
+  if (!source || !replacement) return replacement;
+  const lower = source.toLowerCase();
+  const upper = source.toUpperCase();
+  if (source === upper && source !== lower) return replacement.toUpperCase();
+  if (source === lower) return replacement.toLowerCase();
+  const firstIsUpper = source[0] === source[0].toUpperCase();
+  const restIsLower = source.slice(1) === source.slice(1).toLowerCase();
+  if (firstIsUpper && restIsLower) {
+    return replacement.charAt(0).toUpperCase() + replacement.slice(1);
+  }
+  return replacement;
+}
+
+/**
+ * Find every occurrence of `query` (honouring `options`), scoped per text
  * block. Returns matches in document order. Each match is a half-open
  * `{ from, to }` doc range.
  *
  * Exported for unit testing; the plugin is the only runtime caller.
  */
-export function findMatches(doc: ProseNode, query: string): SearchMatch[] {
+export function findMatches(
+  doc: ProseNode,
+  query: string,
+  options: SearchOptions = DEFAULT_SEARCH_OPTIONS
+): SearchMatch[] {
   const matches: SearchMatch[] = [];
-  if (!query) return matches;
-  const needle = query.toLowerCase();
-  const nlen = needle.length;
+  const matcher = buildMatcher(query, options);
+  if (!matcher) return matches;
 
   doc.descendants((node, pos) => {
     if (!node.isTextblock) return true;
@@ -95,16 +171,21 @@ export function findMatches(doc: ProseNode, query: string): SearchMatch[] {
       }
     });
 
-    const haystack = text.toLowerCase();
-    let searchFrom = 0;
-    let idx = haystack.indexOf(needle, searchFrom);
-    while (idx !== -1) {
-      matches.push({
-        from: posMap[idx],
-        to: posMap[idx + nlen - 1] + 1
-      });
-      searchFrom = idx + nlen;
-      idx = haystack.indexOf(needle, searchFrom);
+    matcher.lastIndex = 0;
+    let m: RegExpExecArray | null = matcher.exec(text);
+    while (m !== null) {
+      const len = m[0].length;
+      if (len === 0) {
+        // Zero-width match (e.g. a regex like `a*`) — step forward so the
+        // loop can't spin forever on the same position.
+        matcher.lastIndex += 1;
+      } else {
+        matches.push({
+          from: posMap[m.index],
+          to: posMap[m.index + len - 1] + 1
+        });
+      }
+      m = matcher.exec(text);
     }
     // Inline content already handled; no need to descend into text nodes.
     return false;
@@ -135,6 +216,7 @@ function clampIndex(index: number, length: number): number {
 
 const EMPTY_STATE: SearchPluginState = {
   query: '',
+  options: DEFAULT_SEARCH_OPTIONS,
   matches: [],
   activeIndex: 0,
   deco: DecorationSet.empty
@@ -173,6 +255,17 @@ function markdownSearchProsePlugin(
     focusMatch(0);
   }
 
+  function setOptions(options: SearchOptions) {
+    const view = viewRef;
+    if (!view) return;
+    view.dispatch(
+      view.state.tr.setMeta(searchPluginKey, { type: 'setOptions', options })
+    );
+    // Toggling case/word/regex re-shapes the match set; re-anchor to the
+    // first hit so the active highlight isn't pointing at a stale index.
+    focusMatch(0);
+  }
+
   function next() {
     const st = getState();
     if (st) focusMatch(st.activeIndex + 1);
@@ -195,6 +288,19 @@ function markdownSearchProsePlugin(
     else tr.delete(from, to);
   }
 
+  /** The replacement to actually insert for a given match, applying
+   *  Preserve Case against the match's current text when enabled. */
+  function resolveReplacement(
+    view: EditorView,
+    match: SearchMatch,
+    replacement: string,
+    options: SearchOptions
+  ): string {
+    if (!options.preserveCase) return replacement;
+    const source = view.state.doc.textBetween(match.from, match.to);
+    return applyPreservedCase(source, replacement);
+  }
+
   function replaceCurrent(replacement: string) {
     const view = viewRef;
     const st = getState();
@@ -202,7 +308,12 @@ function markdownSearchProsePlugin(
     const index = st.activeIndex;
     const match = st.matches[index];
     const tr = view.state.tr;
-    replaceRange(tr, match.from, match.to, replacement);
+    replaceRange(
+      tr,
+      match.from,
+      match.to,
+      resolveReplacement(view, match, replacement, st.options)
+    );
     view.dispatch(tr);
     // Matches recomputed against the new doc; the hit now sitting at the
     // same index is the following occurrence — VS Code's behaviour.
@@ -215,10 +326,16 @@ function markdownSearchProsePlugin(
     if (!view || !st || st.matches.length === 0) return;
     const tr = view.state.tr;
     // Back-to-front so each replacement's length change can't invalidate
-    // the positions of the matches we haven't touched yet.
+    // the positions of the matches we haven't touched yet. Per-match
+    // casing is read from the original doc (the loop hasn't dispatched).
     for (let i = st.matches.length - 1; i >= 0; i -= 1) {
       const match = st.matches[i];
-      replaceRange(tr, match.from, match.to, replacement);
+      replaceRange(
+        tr,
+        match.from,
+        match.to,
+        resolveReplacement(view, match, replacement, st.options)
+      );
     }
     view.dispatch(tr);
   }
@@ -236,6 +353,7 @@ function markdownSearchProsePlugin(
 
   bridge.setHandlers({
     setQuery,
+    setOptions,
     next,
     previous,
     replaceCurrent,
@@ -254,11 +372,16 @@ function markdownSearchProsePlugin(
         if (meta?.type === 'clear') return EMPTY_STATE;
 
         let query = prev.query;
+        let options = prev.options;
         let activeIndex = prev.activeIndex;
         let recompute = tr.docChanged;
 
         if (meta?.type === 'setQuery') {
           query = meta.query;
+          activeIndex = 0;
+          recompute = true;
+        } else if (meta?.type === 'setOptions') {
+          options = meta.options;
           activeIndex = 0;
           recompute = true;
         } else if (meta?.type === 'setActive') {
@@ -276,13 +399,14 @@ function markdownSearchProsePlugin(
           };
         }
 
-        const matches = findMatches(newState.doc, query);
+        const matches = findMatches(newState.doc, query, options);
         const clamped =
           matches.length === 0
             ? 0
             : Math.min(Math.max(activeIndex, 0), matches.length - 1);
         return {
           query,
+          options,
           matches,
           activeIndex: clamped,
           deco: buildDecorations(newState.doc, matches, clamped)

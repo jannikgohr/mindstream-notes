@@ -18,15 +18,20 @@
    */
 
   import {
+    CaseSensitive,
+    CaseUpper,
     ChevronDown,
     ChevronRight,
     ChevronUp,
     Loader2,
+    Regex,
     Replace,
     ReplaceAll,
     TextSearch,
+    WholeWord,
     X
   } from '@lucide/svelte';
+  import type { Component } from 'svelte';
   import { Button } from '$lib/components/ui/button';
   import { tUi } from '$lib/settings/i18n.svelte';
 
@@ -50,6 +55,21 @@
     onReplaceInput?: (value: string) => void;
     onReplace?: () => void;
     onReplaceAll?: () => void;
+    /**
+     * Search-field modifiers (VS Code's Aa / ab| / .* toggles). The current
+     * value + its toggle callback are passed together per option; supplying
+     * `onToggleMatchCase` switches the in-field icon cluster on. Omit them
+     * (the PDF case) for a plain search field.
+     */
+    matchCase?: boolean;
+    wholeWord?: boolean;
+    useRegex?: boolean;
+    onToggleMatchCase?: () => void;
+    onToggleWholeWord?: () => void;
+    onToggleRegex?: () => void;
+    /** Replace-field "Preserve Case" toggle (AB). */
+    preserveCase?: boolean;
+    onTogglePreserveCase?: () => void;
   }
   let {
     query,
@@ -65,7 +85,15 @@
     replacePlaceholder,
     onReplaceInput,
     onReplace,
-    onReplaceAll
+    onReplaceAll,
+    matchCase = false,
+    wholeWord = false,
+    useRegex = false,
+    onToggleMatchCase,
+    onToggleWholeWord,
+    onToggleRegex,
+    preserveCase = false,
+    onTogglePreserveCase
   }: Props = $props();
 
   let inputEl = $state<HTMLInputElement | null>(null);
@@ -82,6 +110,26 @@
   const replaceEnabled = $derived(
     typeof onReplace === 'function' && typeof onReplaceAll === 'function'
   );
+  // The three search modifiers are wired together by the host, so one
+  // callback gates the whole in-field cluster.
+  const searchOptionsEnabled = $derived(
+    typeof onToggleMatchCase === 'function'
+  );
+  const preserveCaseEnabled = $derived(
+    typeof onTogglePreserveCase === 'function'
+  );
+
+  // Shared field styling; the right padding grows to clear the in-field
+  // toggle icons so typed text never slides under them.
+  const FIELD_BASE =
+    'h-7 w-full rounded-md border border-border bg-background pl-7 text-xs outline-none focus:ring-1 focus:ring-ring';
+  const searchFieldClass = $derived(
+    `${FIELD_BASE} ${searchOptionsEnabled ? 'pr-[4.75rem]' : 'pr-2'}`
+  );
+  const replaceFieldClass = $derived(
+    `${FIELD_BASE} ${preserveCaseEnabled ? 'pr-8' : 'pr-2'}`
+  );
+
   const fieldPlaceholder = $derived(placeholder ?? tUi('find.placeholder'));
   const replaceFieldPlaceholder = $derived(
     replacePlaceholder ?? tUi('find.replacePlaceholder')
@@ -148,6 +196,30 @@
   }
 </script>
 
+<!--
+  A single in-field modifier toggle (VS Code's Aa / ab| / .* / AB chips).
+  `Icon` is a Lucide component passed by the caller so the same markup
+  serves every option. Active state uses aria-pressed both for a11y and as
+  the Tailwind styling hook.
+-->
+{#snippet optionToggle(
+  Icon: Component,
+  active: boolean,
+  onToggle: (() => void) | undefined,
+  label: string
+)}
+  <button
+    type="button"
+    class="flex size-5 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-muted aria-pressed:bg-primary/15 aria-pressed:text-primary"
+    aria-pressed={active}
+    aria-label={label}
+    title={label}
+    onclick={() => onToggle?.()}
+  >
+    <Icon class="size-3.5" aria-hidden="true" />
+  </button>
+{/snippet}
+
 <div
   class="flex shrink-0 items-start gap-1 border-b border-border bg-background px-2 py-1.5"
   role="search"
@@ -185,11 +257,35 @@
           value={query}
           placeholder={fieldPlaceholder}
           aria-label={fieldPlaceholder}
-          class="h-7 w-full rounded-md border border-border bg-background pl-7 pr-2 text-xs outline-none focus:ring-1 focus:ring-ring"
+          class={searchFieldClass}
           oninput={(event) =>
             onInput((event.currentTarget as HTMLInputElement).value)}
           onkeydown={handleKeydown}
         />
+        {#if searchOptionsEnabled}
+          <div
+            class="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5"
+          >
+            {@render optionToggle(
+              CaseSensitive,
+              matchCase,
+              onToggleMatchCase,
+              tUi('find.matchCase')
+            )}
+            {@render optionToggle(
+              WholeWord,
+              wholeWord,
+              onToggleWholeWord,
+              tUi('find.wholeWord')
+            )}
+            {@render optionToggle(
+              Regex,
+              useRegex,
+              onToggleRegex,
+              tUi('find.useRegex')
+            )}
+          </div>
+        {/if}
       </div>
 
       <span
@@ -250,11 +346,23 @@
             value={replaceValue}
             placeholder={replaceFieldPlaceholder}
             aria-label={replaceFieldPlaceholder}
-            class="h-7 w-full rounded-md border border-border bg-background pl-7 pr-2 text-xs outline-none focus:ring-1 focus:ring-ring"
+            class={replaceFieldClass}
             oninput={(event) =>
               onReplaceInput?.((event.currentTarget as HTMLInputElement).value)}
             onkeydown={handleReplaceKeydown}
           />
+          {#if preserveCaseEnabled}
+            <div
+              class="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5"
+            >
+              {@render optionToggle(
+                CaseUpper,
+                preserveCase,
+                onTogglePreserveCase,
+                tUi('find.preserveCase')
+              )}
+            </div>
+          {/if}
         </div>
 
         <!-- Spacer mirrors the count cell so both input fields are the

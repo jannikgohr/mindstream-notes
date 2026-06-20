@@ -8,7 +8,17 @@
 
 import { describe, expect, it } from 'vitest';
 import { Schema, type Node as ProseNode } from '@milkdown/kit/prose/model';
-import { findMatches } from './markdown-search';
+import {
+  applyPreservedCase,
+  DEFAULT_SEARCH_OPTIONS,
+  findMatches,
+  type SearchOptions
+} from './markdown-search';
+
+const options = (overrides: Partial<SearchOptions>): SearchOptions => ({
+  ...DEFAULT_SEARCH_OPTIONS,
+  ...overrides
+});
 
 const schema = new Schema({
   nodes: {
@@ -98,5 +108,65 @@ describe('findMatches', () => {
     const matches = findMatches(node, 'aa');
     expect(matches).toHaveLength(2);
     expect(matches[0].to).toBeLessThanOrEqual(matches[1].from);
+  });
+});
+
+describe('findMatches options', () => {
+  it('match case: only exact-case hits when enabled', () => {
+    const node = doc(paragraph(text('Foo foo FOO')));
+    const matches = findMatches(node, 'foo', options({ caseSensitive: true }));
+    expect(matches).toHaveLength(1);
+    expect(sliceAt(node, matches[0])).toBe('foo');
+  });
+
+  it('whole word: skips substrings inside larger words', () => {
+    const node = doc(paragraph(text('cat category scatter cat')));
+    const matches = findMatches(node, 'cat', options({ wholeWord: true }));
+    // "cat" (start) and "cat" (end) only — not inside "category"/"scatter".
+    expect(matches).toHaveLength(2);
+  });
+
+  it('regex: matches a pattern', () => {
+    const node = doc(paragraph(text('a1 b22 c333')));
+    const matches = findMatches(node, '[a-z][0-9]+', options({ regex: true }));
+    expect(matches.map((m) => sliceAt(node, m))).toEqual(['a1', 'b22', 'c333']);
+  });
+
+  it('regex: invalid pattern yields no matches (no throw)', () => {
+    const node = doc(paragraph(text('anything')));
+    expect(findMatches(node, '(', options({ regex: true }))).toEqual([]);
+  });
+
+  it('regex: special chars are literal when regex is off', () => {
+    const node = doc(paragraph(text('a.b axb')));
+    // The "." should be a literal dot, not "any char".
+    const matches = findMatches(node, 'a.b');
+    expect(matches).toHaveLength(1);
+    expect(sliceAt(node, matches[0])).toBe('a.b');
+  });
+
+  it('regex: does not spin on a zero-width pattern', () => {
+    const node = doc(paragraph(text('abc')));
+    // `a*` can match empty — the scanner must still terminate.
+    const matches = findMatches(node, 'a*', options({ regex: true }));
+    expect(Array.isArray(matches)).toBe(true);
+  });
+});
+
+describe('applyPreservedCase', () => {
+  it('upper-cases the replacement when the source is all upper', () => {
+    expect(applyPreservedCase('FOO', 'bar')).toBe('BAR');
+  });
+
+  it('lower-cases the replacement when the source is all lower', () => {
+    expect(applyPreservedCase('foo', 'BAR')).toBe('bar');
+  });
+
+  it('title-cases the replacement when the source is title-case', () => {
+    expect(applyPreservedCase('Foo', 'bar')).toBe('Bar');
+  });
+
+  it('leaves the replacement untouched for mixed-case sources', () => {
+    expect(applyPreservedCase('fOo', 'bar')).toBe('bar');
   });
 });

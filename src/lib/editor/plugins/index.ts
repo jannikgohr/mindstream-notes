@@ -30,5 +30,6 @@ export {
 export {
   createMarkdownSearchBridge,
   markdownSearchPlugins,
-  type MarkdownSearchBridge
+  type MarkdownSearchBridge,
+  type MarkdownSearchOptions
 } from './markdown-search';
