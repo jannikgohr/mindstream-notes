@@ -16,9 +16,10 @@
  *      like `[[Title]]` in the editor. Legacy literal `[[Title]]` spans are
  *      still styled and clickable as a compatibility fallback.
  *
- *   3. **Click handler** — Cmd/Ctrl+click on a `.wikilink` opens by stable
- *      note ID when present, falling back to title resolution only for
- *      legacy literal wikilinks. Plain click is left to ProseMirror.
+ *   3. **Click handler** — plain click (when enabled in settings) or
+ *      Cmd/Ctrl+click on a `.wikilink` opens by stable note ID when present,
+ *      falling back to title resolution only for legacy literal wikilinks.
+ *      When plain click is disabled, click is left to ProseMirror.
  *
  * The trigger plugin and the popup component share a `WikilinkBridge`
  * object that NoteEditor creates per editor instance. The bridge is how
@@ -469,6 +470,40 @@ function wikilinkTriggerPlugin(bridge: WikilinkBridge): Plugin<TriggerState> {
 
 const decorationPluginKey = new PluginKey('mindstream-wikilink-decoration');
 
+function closestNoteLinkElement(target: EventTarget | null): Element | null {
+  if (!(target instanceof Element)) return null;
+  const decorated = target.closest('.wikilink-note-link');
+  if (decorated) return decorated;
+
+  const anchor = target.closest('a[href]');
+  const href = anchor?.getAttribute('href');
+  return parseNoteHref(href) ? anchor : null;
+}
+
+function isNoteLinkTooltipElement(element: Element): boolean {
+  const previewLink = element.querySelector('.link-display[href]');
+  if (parseNoteHref(previewLink?.getAttribute('href'))) return true;
+
+  const input = element.querySelector('input');
+  return input instanceof HTMLInputElement && !!parseNoteHref(input.value);
+}
+
+function hideNativeNoteLinkTooltips(): void {
+  if (typeof document === 'undefined') return;
+
+  document
+    .querySelectorAll('.milkdown-link-preview, .milkdown-link-edit')
+    .forEach((element) => {
+      if (!isNoteLinkTooltipElement(element)) return;
+      element.setAttribute('data-show', 'false');
+    });
+}
+
+function hideNativeNoteLinkTooltipsSoon(): void {
+  hideNativeNoteLinkTooltips();
+  window.setTimeout(hideNativeNoteLinkTooltips, 75);
+}
+
 /**
  * Pattern: `[[…]]` where the inside has no brackets and no newlines.
  * Non-greedy on the inside so `[[a]] [[b]]` matches twice rather than
@@ -482,7 +517,14 @@ const decorationPluginKey = new PluginKey('mindstream-wikilink-decoration');
  */
 const WIKILINK_RE = /\[\[([^[\]\n]+?)]]/g;
 
-function wikilinkDecorationPlugin(bridge: WikilinkBridge): Plugin {
+interface WikilinkPluginOptions {
+  openOnClick: () => boolean;
+}
+
+function wikilinkDecorationPlugin(
+  bridge: WikilinkBridge,
+  options: WikilinkPluginOptions
+): Plugin {
   function build(
     doc: Parameters<typeof DecorationSet.create>[0]
   ): DecorationSet {
@@ -528,6 +570,32 @@ function wikilinkDecorationPlugin(bridge: WikilinkBridge): Plugin {
 
   return new Plugin({
     key: decorationPluginKey,
+    view(view) {
+      const suppressHoverTooltip = (event: MouseEvent) => {
+        if (!closestNoteLinkElement(event.target)) return;
+        hideNativeNoteLinkTooltipsSoon();
+        event.stopImmediatePropagation();
+      };
+
+      const hideTooltip = (event: MouseEvent) => {
+        if (!closestNoteLinkElement(event.target)) return;
+        hideNativeNoteLinkTooltipsSoon();
+      };
+
+      view.dom.addEventListener('mousemove', suppressHoverTooltip, true);
+      view.dom.addEventListener('mouseover', suppressHoverTooltip, true);
+      view.dom.addEventListener('mousedown', hideTooltip, true);
+      view.dom.addEventListener('click', hideTooltip, true);
+
+      return {
+        destroy() {
+          view.dom.removeEventListener('mousemove', suppressHoverTooltip, true);
+          view.dom.removeEventListener('mouseover', suppressHoverTooltip, true);
+          view.dom.removeEventListener('mousedown', hideTooltip, true);
+          view.dom.removeEventListener('click', hideTooltip, true);
+        }
+      };
+    },
     state: {
       init(_, state) {
         return build(state.doc);
@@ -542,11 +610,18 @@ function wikilinkDecorationPlugin(bridge: WikilinkBridge): Plugin {
         return decorationPluginKey.getState(state);
       },
       handleClick(_view, _pos, event) {
-        // Open-on-modifier so plain click still places the cursor
-        // (you need to be able to edit a typo'd title). Cmd on macOS,
-        // Ctrl elsewhere — same convention as VS Code "Go to definition".
+        // Ctrl/Cmd always opens. Plain left click opens when the user
+        // opts into note links behaving like ordinary navigation.
         const openModifier = event.metaKey || event.ctrlKey;
-        if (!openModifier) return false;
+        const plainClick =
+          event.button === 0 &&
+          !event.metaKey &&
+          !event.ctrlKey &&
+          !event.altKey &&
+          !event.shiftKey;
+        if (!openModifier && !(plainClick && options.openOnClick())) {
+          return false;
+        }
         const target = event.target;
         if (!(target instanceof Element)) return false;
         const linkEl = target.closest('.wikilink');
@@ -592,9 +667,12 @@ function wikilinkDecorationPlugin(bridge: WikilinkBridge): Plugin {
  * might want to click. The trigger plugin is the only one that needs
  * the per-editor bridge.
  */
-export function wikilinkPlugins(bridge: WikilinkBridge) {
+export function wikilinkPlugins(
+  bridge: WikilinkBridge,
+  options: WikilinkPluginOptions
+) {
   return [
     $prose(() => wikilinkTriggerPlugin(bridge)),
-    $prose(() => wikilinkDecorationPlugin(bridge))
+    $prose(() => wikilinkDecorationPlugin(bridge, options))
   ];
 }

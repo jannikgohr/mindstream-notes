@@ -562,6 +562,10 @@
     "editor.math": { "label": "Mathe (KaTeX)" },
     "editor.mermaid": { "label": "Mermaid-Diagramme" },
     "editor.wikilinks": { "label": "Wikilinks [[...]]" },
+    "editor.wikilinkOpenOnClick": {
+      "label": "Wikilinks mit Linksklick öffnen",
+      "description": "Öffnet Notizlinks mit einem normalen Klick. Deaktiviere dies, um den Cursor in Notizlinks zu setzen und sie mit Strg/Cmd-Klick zu öffnen."
+    },
     "editor.footnotes": { "label": "Fußnoten" },
     "editor.freeform.penMode": {
       "label": "Stift-Modus",

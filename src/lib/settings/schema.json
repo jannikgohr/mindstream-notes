@@ -241,6 +241,13 @@
               "default": true
             },
             {
+              "id": "editor.wikilinkOpenOnClick",
+              "scope": "V",
+              "type": "toggle",
+              "default": true,
+              "showIf": { "id": "editor.wikilinks", "equals": true }
+            },
+            {
               "id": "editor.footnotes",
               "scope": "V",
               "type": "toggle",
