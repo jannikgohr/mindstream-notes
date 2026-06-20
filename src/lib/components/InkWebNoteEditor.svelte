@@ -7,10 +7,11 @@
     Eraser,
     LassoSelect,
     Monitor,
-    MousePointer2,
     MoonStar,
     Palette,
     PenLine,
+    Pointer,
+    PointerOff,
     PocketKnife,
     Redo2,
     Scissors,
@@ -3176,27 +3177,29 @@
                 role="menuitemcheckbox"
                 class="flex h-8 w-full items-center justify-between gap-3 rounded-sm px-2 text-left text-sm hover:bg-accent hover:text-accent-foreground"
                 aria-checked={fingerDrawingAllowed}
+                title={tUi('ink.toolbar.fingerDrawing')}
+                aria-label={tUi('ink.toolbar.fingerDrawing')}
                 onclick={toggleFingerDrawing}
               >
                 <span>{tUi('ink.toolbar.fingerDrawing')}</span>
-                <MousePointer2
-                  class="size-4 {fingerDrawingAllowed
-                    ? 'opacity-100'
-                    : 'opacity-35'}"
-                  aria-hidden="true"
-                />
+                <span class="flex items-center text-muted-foreground">
+                  {#if fingerDrawingAllowed}
+                    <Pointer class="size-4" aria-hidden="true" />
+                  {:else}
+                    <PointerOff class="size-4" aria-hidden="true" />
+                  {/if}
+                </span>
               </button>
               <button
                 type="button"
                 role="menuitem"
                 class="flex h-8 w-full items-center justify-between gap-3 rounded-sm px-2 text-left text-sm hover:bg-accent hover:text-accent-foreground"
+                title={`${tUi('ink.toolbar.pageTheme')}: ${tValue('editor.ink.pageTheme', pageThemeMode)}`}
+                aria-label={`${tUi('ink.toolbar.pageTheme')}: ${tValue('editor.ink.pageTheme', pageThemeMode)}`}
                 onclick={cyclePageTheme}
               >
                 <span>{tUi('ink.toolbar.pageTheme')}</span>
-                <span class="flex items-center gap-1.5 text-muted-foreground">
-                  <span class="text-xs">
-                    {tValue('editor.ink.pageTheme', pageThemeMode)}
-                  </span>
+                <span class="flex items-center text-muted-foreground">
                   {#if pageThemeMode === 'dark'}
                     <MoonStar class="size-4" aria-hidden="true" />
                   {:else if pageThemeMode === 'system'}
