@@ -32,6 +32,7 @@
     X
   } from '@lucide/svelte';
   import type { Component } from 'svelte';
+  import { tooltip } from '$lib/actions/tooltip';
   import { Button } from '$lib/components/ui/button';
   import { tUi } from '$lib/settings/i18n.svelte';
 
@@ -211,9 +212,9 @@
   <button
     type="button"
     class="flex size-5 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-muted aria-pressed:bg-primary/15 aria-pressed:text-primary"
+    use:tooltip={label}
     aria-pressed={active}
     aria-label={label}
-    title={label}
     onclick={() => onToggle?.()}
   >
     <Icon class="size-3.5" aria-hidden="true" />

@@ -21,6 +21,7 @@
     Undo2
   } from '@lucide/svelte';
   import { mode } from 'mode-watcher';
+  import { tooltip } from '$lib/actions/tooltip';
   import {
     Toolbar,
     ToolbarButton,
@@ -3032,7 +3033,7 @@
                   class={`grid size-8 place-items-center rounded-md border border-border transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${activeSwatch ? 'ring-2 ring-ring' : ''}`}
                   aria-label={`${tUi('ink.toolbar.colorPreset')} ${index + 1}`}
                   aria-checked={activeSwatch}
-                  title={`${tUi('ink.toolbar.colorPreset')} ${index + 1}`}
+                  use:tooltip={`${tUi('ink.toolbar.colorPreset')} ${index + 1}`}
                   onclick={() => selectPresetColor(swatch)}
                 >
                   <span
@@ -3050,7 +3051,7 @@
             >
               <label
                 class="relative grid size-7 shrink-0 cursor-pointer place-items-center rounded-md border border-border bg-background shadow-sm focus-within:ring-2 focus-within:ring-ring"
-                title={tUi('ink.toolbar.color')}
+                use:tooltip={tUi('ink.toolbar.color')}
               >
                 <span
                   class="size-5 rounded-sm border border-black/15"
@@ -3081,7 +3082,7 @@
             <div
               class="mt-2 rounded-md px-2 py-1.5"
               aria-label={`${tUi('ink.toolbar.brushSize')}: ${brushSizeText}`}
-              title={`${tUi('ink.toolbar.brushSize')}: ${brushSizeText}`}
+              use:tooltip={`${tUi('ink.toolbar.brushSize')}: ${brushSizeText}`}
             >
               <div class="mb-1 flex items-center justify-between gap-3">
                 <span class="text-xs text-muted-foreground">
@@ -3104,7 +3105,7 @@
                 <input
                   class="h-2 min-w-0 flex-1 accent-primary"
                   aria-label={tUi('ink.toolbar.brushSize')}
-                  title={tUi('ink.toolbar.brushSize')}
+                  use:tooltip={tUi('ink.toolbar.brushSize')}
                   type="range"
                   min="0.5"
                   max="12"

@@ -21,6 +21,7 @@
     Wifi,
     WifiOff
   } from '@lucide/svelte';
+  import { tooltip } from '$lib/actions/tooltip';
   import { ui } from '$lib/state.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { getNoteStatus } from '$lib/stores/note-status.svelte';
@@ -37,7 +38,7 @@
     {#if status.collabOnline}
       <span
         class="inline-flex"
-        title={tUi('editor.status.live')}
+        use:tooltip={tUi('editor.status.live')}
         aria-label={tUi('editor.status.live')}
       >
         <Wifi class="size-3.5" aria-hidden="true" />
@@ -45,7 +46,7 @@
     {:else}
       <span
         class="inline-flex"
-        title={tUi('editor.status.offline')}
+        use:tooltip={tUi('editor.status.offline')}
         aria-label={tUi('editor.status.offline')}
       >
         <WifiOff class="size-3.5" aria-hidden="true" />
@@ -59,7 +60,7 @@
          metadata. -->
     <span
       class="inline-flex text-destructive"
-      title={tUi('editor.status.readonly')}
+      use:tooltip={tUi('editor.status.readonly')}
       aria-label={tUi('editor.status.readonly')}
     >
       <Trash2 class="size-3.5" aria-hidden="true" />
@@ -67,7 +68,7 @@
   {:else if status.savingState === 'saving'}
     <span
       class="inline-flex"
-      title={tUi('editor.status.saving')}
+      use:tooltip={tUi('editor.status.saving')}
       aria-label={tUi('editor.status.saving')}
     >
       <Loader2 class="size-3.5 animate-spin" aria-hidden="true" />
@@ -75,7 +76,7 @@
   {:else if status.savingState === 'pending'}
     <span
       class="inline-flex"
-      title={tUi('editor.status.editing')}
+      use:tooltip={tUi('editor.status.editing')}
       aria-label={tUi('editor.status.editing')}
     >
       <Pencil class="size-3.5" aria-hidden="true" />
@@ -83,7 +84,7 @@
   {:else if status.savingState === 'saved'}
     <span
       class="inline-flex"
-      title={tUi('editor.status.saved')}
+      use:tooltip={tUi('editor.status.saved')}
       aria-label={tUi('editor.status.saved')}
     >
       <Check class="size-3.5" aria-hidden="true" />
@@ -91,7 +92,7 @@
   {:else if status.savingState === 'error'}
     <span
       class="inline-flex text-destructive"
-      title={tUi('editor.status.error')}
+      use:tooltip={tUi('editor.status.error')}
       aria-label={tUi('editor.status.error')}
     >
       <AlertCircle class="size-3.5" aria-hidden="true" />

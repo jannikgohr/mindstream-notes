@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Download, X } from '@lucide/svelte';
+  import { tooltip } from '$lib/actions/tooltip';
   import { Button } from '$lib/components/ui/button';
   import { dismissNotification, openNotification } from './store.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
@@ -40,7 +41,7 @@
     <button
       type="button"
       class="rounded-md p-1 text-muted-foreground transition-colors hover:bg-background hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      title={tUi('notifications.dismiss')}
+      use:tooltip={tUi('notifications.dismiss')}
       aria-label={tUi('notifications.dismiss')}
       onclick={dismiss}
     >

@@ -143,6 +143,35 @@ body {
   background-color: oklch(from var(--primary) l c h / 0.25);
 }
 
+.ms-tooltip {
+  position: fixed;
+  z-index: 2147483647;
+  max-width: min(22rem, calc(100vw - 16px));
+  padding: 0.3125rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--popover);
+  color: var(--popover-foreground);
+  box-shadow:
+    0 10px 30px rgb(0 0 0 / 0.18),
+    0 2px 8px rgb(0 0 0 / 0.12);
+  font-size: 0.75rem;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(-1px) scale(0.98);
+  transform-origin: center;
+  transition:
+    opacity 90ms ease,
+    transform 90ms ease;
+}
+
+.ms-tooltip-visible {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
 /* dockview theme bridge — map dockview's CSS vars onto our shadcn palette
  * so tabs and panel chrome adopt the active theme. */
 .dockview-theme-bridge {

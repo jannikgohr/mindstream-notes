@@ -9,6 +9,7 @@
    * ambient shim) can still resolve them.
    */
   import { cn } from '$lib/utils';
+  import { tooltip } from '$lib/actions/tooltip';
   import { buttonVariants, type ButtonProps } from './button-variants';
 
   let {
@@ -18,6 +19,7 @@
     ref = $bindable(null),
     href = undefined,
     type = 'button',
+    title = undefined,
     children,
     ...restProps
   }: ButtonProps = $props();
@@ -26,6 +28,7 @@
 {#if href}
   <a
     bind:this={ref}
+    use:tooltip={title}
     class={cn(buttonVariants({ variant, size }), className)}
     {href}
     {...restProps}
@@ -35,6 +38,7 @@
 {:else}
   <button
     bind:this={ref}
+    use:tooltip={title}
     class={cn(buttonVariants({ variant, size }), className)}
     {type}
     {...restProps}

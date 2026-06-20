@@ -12,6 +12,7 @@
 
   import { onDestroy } from 'svelte';
   import { X } from '@lucide/svelte';
+  import { tooltip } from '$lib/actions/tooltip';
   import { Button } from '$lib/components/ui/button';
   import { tUi } from '$lib/settings/i18n.svelte';
   import type { FlatOutlineItem } from './outline';
@@ -241,7 +242,7 @@
             disabled={entry.pageIndex == null}
             onclick={() =>
               entry.pageIndex != null && onJump(entry.pageIndex + 1)}
-            title={entry.title}
+            use:tooltip={entry.title}
           >
             <span class="truncate">{entry.title}</span>
           </button>
