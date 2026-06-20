@@ -877,11 +877,11 @@ body.dv-tab-dragging .freeform-canvas-host * {
 /* -------------------------------------------------------------------------
  * Wikilinks
  *
- * Decoration-only styling (no schema change). The `$lib/editor/plugins/
- * wikilink` decoration plugin wraps every `[[Title]]` span with a
- * `.wikilink` class so it reads as a hyperlink in the editor view. The
- * markdown source itself is still plain text — the syntax round-trips
- * through commonmark unchanged.
+ * The `$lib/editor/plugins/wikilink` plugin decorates app note links
+ * (`[Title](mindstream://note/id)`) with a `.wikilink` class so they read
+ * like Obsidian-style note links in the editor. Legacy literal
+ * `[[Title]]` spans are still decorated too, but only ID-backed links get
+ * generated visual brackets.
  *
  * Cmd/Ctrl+click opens; plain click places the caret (so typos in the
  * title are still editable). The cursor swap on the modifier press
@@ -897,6 +897,14 @@ body.dv-tab-dragging .freeform-canvas-host * {
 }
 .wikilink:hover {
   text-decoration-color: hsl(var(--primary) / 0.8);
+}
+.wikilink-note-link::before {
+  content: '[[';
+  opacity: 0.65;
+}
+.wikilink-note-link::after {
+  content: ']]';
+  opacity: 0.65;
 }
 /* Modifier held → switch to pointer to signal "this is now a link". */
 .ProseMirror:has(.wikilink:hover):where([data-meta-pressed]) .wikilink:hover,

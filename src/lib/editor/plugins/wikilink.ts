@@ -1,6 +1,6 @@
 /**
- * Wikilinks — `[[Note Title]]` references that pop up a note picker as
- * the user types and decorate already-typed links as clickable.
+ * Wikilinks — Obsidian-style `[[Note Title]]` editing affordances backed by
+ * standard markdown links: `[Note Title](mindstream://note/<id>)`.
  *
  * Three concerns in one file because they share state and the surface
  * area is small:
@@ -12,16 +12,13 @@
  *      plain `[[` case both reach the same trigger because we only
  *      look at what's in the doc, not what the user typed.
  *
- *   2. **Decoration plugin** — scans the doc for `[[ ... ]]` spans and
- *      wraps each one in a `.wikilink` inline decoration. The
- *      markdown itself stays as `[[Title]]` (commonmark serialises it
- *      verbatim) — the decoration is purely visual, so reload + sync
- *      both round-trip without any schema change.
+ *   2. **Decoration plugin** — decorates ID-backed note links so they read
+ *      like `[[Title]]` in the editor. Legacy literal `[[Title]]` spans are
+ *      still styled and clickable as a compatibility fallback.
  *
- *   3. **Click handler** — Cmd/Ctrl+click on a `.wikilink` resolves the
- *      title against the note tree and dispatches `requestOpenNote`.
- *      Plain click is left to ProseMirror so the user can still place
- *      the cursor inside a wikilink to edit it.
+ *   3. **Click handler** — Cmd/Ctrl+click on a `.wikilink` opens by stable
+ *      note ID when present, falling back to title resolution only for
+ *      legacy literal wikilinks. Plain click is left to ProseMirror.
  *
  * The trigger plugin and the popup component share a `WikilinkBridge`
  * object that NoteEditor creates per editor instance. The bridge is how
@@ -31,7 +28,12 @@
  * fight over a single popup.
  */
 
-import { Plugin, PluginKey, type EditorState } from '@milkdown/kit/prose/state';
+import {
+  Plugin,
+  PluginKey,
+  TextSelection,
+  type EditorState
+} from '@milkdown/kit/prose/state';
 import { Decoration, DecorationSet } from '@milkdown/kit/prose/view';
 import type { EditorView } from '@milkdown/kit/prose/view';
 import { $prose } from '@milkdown/kit/utils';
@@ -47,7 +49,30 @@ import type { WikilinkBridge } from './wikilink-bridge.svelte';
 export type { WikilinkBridge } from './wikilink-bridge.svelte';
 export { createWikilinkBridge } from './wikilink-bridge.svelte';
 
-/* --- Title → noteId resolution -------------------------------------------- */
+/* --- Note link resolution -------------------------------------------------- */
+
+const NOTE_LINK_PREFIX = 'mindstream://note/';
+
+export function noteHref(noteId: string): string {
+  return `${NOTE_LINK_PREFIX}${encodeURIComponent(noteId)}`;
+}
+
+function parseNoteHref(href: unknown): string | null {
+  if (typeof href !== 'string') return null;
+  if (!href.startsWith(NOTE_LINK_PREFIX)) return null;
+  const raw = href.slice(NOTE_LINK_PREFIX.length);
+  if (!raw) return null;
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
+function resolveNoteTitleById(id: string, fallback: string): string {
+  const title = tree.notesById[id]?.title.trim();
+  return title || fallback;
+}
 
 /**
  * Find a note by exact title (case-insensitive). Excludes trashed notes
@@ -248,7 +273,7 @@ function wikilinkTriggerPlugin(bridge: WikilinkBridge): Plugin<TriggerState> {
     }
   }
 
-  function insert(title: string) {
+  function insert(note: { id: string; title: string }) {
     if (!viewRef) return;
     const view = viewRef;
     const trigger = triggerPluginKey.getState(view.state);
@@ -259,8 +284,24 @@ function wikilinkTriggerPlugin(bridge: WikilinkBridge): Plugin<TriggerState> {
     }
     const cursor = view.state.selection.from;
     const replaceTo = findInsertionReplaceTo(view.state, start, cursor);
-    const replacement = `[[${title}]]`;
-    const tr = view.state.tr.insertText(replacement, start, replaceTo);
+    const label = note.title.trim() || 'Untitled';
+    const linkType = view.state.schema.marks.link;
+    if (!linkType) {
+      const tr = view.state.tr.insertText(label, start, replaceTo);
+      tr.setMeta(triggerPluginKey, { close: true });
+      view.dispatch(tr);
+      view.focus();
+      close();
+      return;
+    }
+    const linkMark = linkType.create({
+      href: noteHref(note.id),
+      title: null
+    });
+    const linkText = view.state.schema.text(label, [linkMark]);
+    const tr = view.state.tr.replaceWith(start, replaceTo, linkText);
+    tr.setSelection(TextSelection.create(tr.doc, start + label.length));
+    tr.setStoredMarks([]);
     tr.setMeta(triggerPluginKey, { close: true });
     view.dispatch(tr);
     view.focus();
@@ -451,18 +492,35 @@ function wikilinkDecorationPlugin(bridge: WikilinkBridge): Plugin {
     doc.descendants((node, pos) => {
       if (!node.isText || !node.text) return;
       const text = node.text;
+      const noteLinkMark = node.marks.find((mark) =>
+        parseNoteHref(mark.attrs.href)
+      );
+      const noteId = parseNoteHref(noteLinkMark?.attrs.href);
+      if (noteId) {
+        const title = resolveNoteTitleById(noteId, text.trim() || text);
+        decos.push(
+          Decoration.inline(pos, pos + text.length, {
+            class: 'wikilink wikilink-note-link',
+            'data-note-id': noteId,
+            'data-wikilink-title': title
+          })
+        );
+        return;
+      }
+
       let m: RegExpExecArray | null;
       WIKILINK_RE.lastIndex = 0;
       while ((m = WIKILINK_RE.exec(text)) !== null) {
         const from = pos + m.index;
         const to = from + m[0].length;
         const title = m[1].trim();
-        decos.push(
-          Decoration.inline(from, to, {
-            class: 'wikilink',
-            'data-wikilink-title': title
-          })
-        );
+        const id = resolveNoteIdByTitle(title);
+        const attrs: Record<string, string> = {
+          class: 'wikilink wikilink-legacy',
+          'data-wikilink-title': title
+        };
+        if (id) attrs['data-note-id'] = id;
+        decos.push(Decoration.inline(from, to, attrs));
       }
     });
     return DecorationSet.create(doc, decos);
@@ -493,6 +551,17 @@ function wikilinkDecorationPlugin(bridge: WikilinkBridge): Plugin {
         if (!(target instanceof Element)) return false;
         const linkEl = target.closest('.wikilink');
         if (!linkEl) return false;
+        const noteId = linkEl.getAttribute('data-note-id');
+        if (
+          noteId &&
+          tree.notesById[noteId] &&
+          !tree.notesById[noteId].trashed
+        ) {
+          event.preventDefault();
+          bridge.cancel();
+          requestOpenNote(noteId);
+          return true;
+        }
         const title = linkEl.getAttribute('data-wikilink-title');
         if (!title) return false;
         const id = resolveNoteIdByTitle(title);

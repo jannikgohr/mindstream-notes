@@ -126,7 +126,7 @@
       const idx = untrack(() => bridge.state.highlight);
       const picked = list[idx] ?? list[0];
       if (picked) {
-        bridge.insert(picked.title);
+        bridge.insert({ id: picked.id, title: picked.title });
       } else {
         bridge.cancel();
       }
@@ -284,7 +284,7 @@
               // Don't yank focus from the editor — the trigger plugin's
               // doc state would close the menu on blur otherwise.
               e.preventDefault();
-              bridge.insert(note.title);
+              bridge.insert({ id: note.id, title: note.title });
             }}
             onmouseenter={() => (bridge.state.highlight = i)}
           >
