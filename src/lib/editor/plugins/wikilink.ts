@@ -756,6 +756,39 @@ function deleteInsideLinkBoundary(
   return null;
 }
 
+// Outside the link, treat it as one atomic object: a plain Backspace sitting at
+// its right edge, or a plain Delete sitting at its left edge, removes the whole
+// link in one stroke instead of nibbling the outermost character — which reads
+// as confusing when the caret isn't even in link-editing mode. Word-wise
+// deletes (Ctrl/Alt/Meta) fall through to the existing handling.
+function removeAdjacentNoteLink(
+  view: EditorView,
+  event: KeyboardEvent,
+  boundary: LinkBoundaryMode | null
+): boolean {
+  if (!boundary || boundary.mode !== 'outside') return false;
+  if (event.ctrlKey || event.metaKey || event.altKey) return false;
+  const { state } = view;
+  const { selection } = state;
+  if (!(selection instanceof TextSelection) || !selection.empty) return false;
+  const pos = selection.from;
+
+  let range: NoteLinkTextRange | undefined;
+  if (event.key === 'Backspace' && boundary.side === 'end') {
+    range = noteLinkTextRanges(state).find((r) => r.to === pos);
+  } else if (event.key === 'Delete' && boundary.side === 'start') {
+    range = noteLinkTextRanges(state).find((r) => r.from === pos);
+  }
+  if (!range) return false;
+
+  event.preventDefault();
+  const tr = state.tr.delete(range.from, range.to);
+  tr.setSelection(TextSelection.create(tr.doc, tr.mapping.map(range.from, -1)));
+  tr.setStoredMarks(marksWithoutLink(state));
+  view.dispatch(tr);
+  return true;
+}
+
 function insertLinkBoundaryText(
   view: EditorView,
   pos: number,
@@ -956,6 +989,29 @@ function wikilinkDecorationPlugin(
     setActiveBoundaryLinkEdit(view, null);
   }
 
+  // Both link-edit pins (`pendingEmptyNoteLink`, `activeBoundaryLinkEdit`) name
+  // a single doc position that's only meaningful while the caret rests on it.
+  // Structural edits we don't drive — a Backspace that merges lines, an Enter
+  // that splits one — move the caret through ProseMirror's default handlers,
+  // leaving a pin stranded at a stale position. A stranded pin later
+  // "resurrects" link editing and splices a link mark into unrelated text,
+  // producing a broken link. So on every state update drop any pin that no
+  // longer coincides with an empty caret. Our own handlers re-pin right after
+  // dispatching, so this never clears a still-valid edit.
+  function validateLinkEditState(view: EditorView): void {
+    const { selection } = view.state;
+    const caret =
+      selection instanceof TextSelection && selection.empty
+        ? selection.from
+        : null;
+    if (pendingEmptyNoteLink && pendingEmptyNoteLink.pos !== caret) {
+      pendingEmptyNoteLink = null;
+    }
+    if (activeBoundaryLinkEdit && activeBoundaryLinkEdit.pos !== caret) {
+      activeBoundaryLinkEdit = null;
+    }
+  }
+
   function build(
     doc: Parameters<typeof DecorationSet.create>[0]
   ): DecorationSet {
@@ -1020,6 +1076,7 @@ function wikilinkDecorationPlugin(
 
       return {
         update(view) {
+          validateLinkEditState(view);
           syncBoundaryMode(view);
         },
         destroy() {
@@ -1147,6 +1204,10 @@ function wikilinkDecorationPlugin(
       },
       handleKeyDown(view, event) {
         if (event.key === 'Backspace' || event.key === 'Delete') {
+          if (removeAdjacentNoteLink(view, event, boundaryMode(view))) {
+            clearLinkEditState(view);
+            return true;
+          }
           if (wholeNoteLinkDeletion(view.state, event)) {
             event.preventDefault();
             pendingEmptyNoteLink = deleteNoteLinkText(view, event);
