@@ -573,6 +573,10 @@
     "editor.math": { "label": "KaTeX math" },
     "editor.mermaid": { "label": "Mermaid diagrams" },
     "editor.wikilinks": { "label": "Wikilinks [[...]]" },
+    "editor.wikilinkOpenOnClick": {
+      "label": "Open wikilinks with left click",
+      "description": "Open note links with a normal click. Turn this off to place the caret inside note links and use Ctrl/Cmd-click to open them."
+    },
     "editor.footnotes": { "label": "Footnotes" },
     "editor.freeform.penMode": {
       "label": "Stylus / pen mode",

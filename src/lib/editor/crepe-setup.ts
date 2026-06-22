@@ -65,6 +65,8 @@ export interface CrepeSetupOptions {
    * receive open/close/highlight signals.
    */
   wikilinksEnabled: boolean;
+  /** True when plain left-click should follow note links. */
+  wikilinkOpenOnClick: () => boolean;
   wikilinkBridge: WikilinkBridge | null;
   /**
    * Drives Crepe's ImageBlock feature. The bridge persists dropped /
@@ -151,7 +153,9 @@ export function buildCrepe(opts: CrepeSetupOptions): Crepe {
     // wikilinkPlugins returns [trigger, decoration] — the trigger
     // owns the menu open/close state and key handling; the decoration
     // runs independently to style existing links as clickable.
-    for (const p of wikilinkPlugins(opts.wikilinkBridge)) {
+    for (const p of wikilinkPlugins(opts.wikilinkBridge, {
+      openOnClick: opts.wikilinkOpenOnClick
+    })) {
       crepe.editor.use(p);
     }
   }
