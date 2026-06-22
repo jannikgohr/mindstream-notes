@@ -1,6 +1,6 @@
 [package]
 name = "mindstream-notes"
-version = "0.1.9"
+version = "0.1.10"
 description = "Local-first modern markdown-based E2EE collaborative note-taking app"
 authors = ["Jannik Gohr"]
 edition = "2021"
