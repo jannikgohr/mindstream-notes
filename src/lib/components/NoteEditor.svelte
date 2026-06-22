@@ -36,13 +36,13 @@
     createWikilinkBridge,
     createMarkdownSearchBridge
   } from '$lib/editor/plugins';
+  import { MARKDOWN_ACTIONS } from '$lib/hotkeys/commands';
   import {
     registerEditor,
     unregisterEditor,
-    MARKDOWN_ACTIONS,
     SEARCH_ACTIVE_NOTE_COMMAND,
     type EditorListener
-  } from '$lib/hotkeys';
+  } from '$lib/hotkeys/bus.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
   import FindBar from './FindBar.svelte';
   import EditorToolbar from './editor-toolbar/EditorToolbar.svelte';

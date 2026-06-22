@@ -108,7 +108,7 @@
     unregisterEditor,
     SEARCH_ACTIVE_NOTE_COMMAND,
     type EditorListener
-  } from '$lib/hotkeys';
+  } from '$lib/hotkeys/bus.svelte';
   import { alert } from './confirm-dialog.svelte';
 
   interface Props {

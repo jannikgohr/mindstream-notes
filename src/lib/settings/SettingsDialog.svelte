@@ -15,14 +15,14 @@
   import { i18n, tLabel, tUi } from './i18n.svelte';
   import type { Category, Setting } from './types';
   import {
-    displayBinding,
-    getBinding,
     groupedCommands,
     isGlobalShortcutCommand,
     isGlobalShortcutOnlyCommand,
     type CommandGroup,
     type CommandDefinition
-  } from '$lib/hotkeys';
+  } from '$lib/hotkeys/commands';
+  import { displayBinding } from '$lib/hotkeys/format';
+  import { getBinding } from '$lib/hotkeys/store.svelte';
 
   let activeCategoryId = $state<string>(SCHEMA.categories[0]?.id ?? '');
   let query = $state('');

@@ -15,7 +15,8 @@
   import type { Component } from 'svelte';
   import { Portal } from 'bits-ui';
   import { tUi } from '$lib/settings/i18n.svelte';
-  import { ariaKeyShortcut, displayBinding, getBinding } from '$lib/hotkeys';
+  import { ariaKeyShortcut, displayBinding } from '$lib/hotkeys/format';
+  import { getBinding } from '$lib/hotkeys/store.svelte';
 
   export interface MenuItem {
     kind: 'item';

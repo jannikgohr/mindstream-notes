@@ -60,7 +60,7 @@
     registerEditor,
     unregisterEditor,
     type EditorListener
-  } from '$lib/hotkeys';
+  } from '$lib/hotkeys/bus.svelte';
 
   interface Props {
     noteId: string;

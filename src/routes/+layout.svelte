@@ -17,16 +17,20 @@
   import ShortcutHelpDialog from '$lib/components/ShortcutHelpDialog.svelte';
   import SearchDialog from '$lib/search/SearchDialog.svelte';
   import {
-    displayBinding,
-    getBinding,
-    globalShortcutAccelerator,
     HOTKEY_COMMANDS,
-    initHotkeys,
-    isGlobalShortcutCommand,
+    isGlobalShortcutCommand
+  } from '$lib/hotkeys/commands';
+  import { getBinding } from '$lib/hotkeys/store.svelte';
+  import { initHotkeys } from '$lib/hotkeys/manager.svelte';
+  import {
+    displayBinding,
+    globalShortcutAccelerator,
+    tauriAccelerator
+  } from '$lib/hotkeys/format';
+  import {
     syncGlobalShortcuts,
-    tauriAccelerator,
     teardownGlobalShortcuts
-  } from '$lib/hotkeys';
+  } from '$lib/hotkeys/global.svelte';
 
   let { children } = $props();
 

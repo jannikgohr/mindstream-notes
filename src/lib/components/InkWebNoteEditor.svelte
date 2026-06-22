@@ -76,7 +76,7 @@
     registerEditor,
     unregisterEditor,
     type EditorListener
-  } from '$lib/hotkeys';
+  } from '$lib/hotkeys/bus.svelte';
   import { tree } from '$lib/stores/tree.svelte';
   import { InkWebCollabProvider } from '$lib/sync/ink-web-collab-provider';
   import {

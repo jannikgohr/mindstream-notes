@@ -27,27 +27,30 @@
   import { Pencil, RotateCcw, XCircle } from '@lucide/svelte';
   import { tooltip } from '$lib/actions/tooltip';
   import { Button } from '$lib/components/ui/button';
+  import { bindingFromEvent } from '$lib/hotkeys/manager.svelte';
   import {
-    bindingFromEvent,
-    canonicalize,
     displayBinding,
-    findCommandByBinding,
-    getBinding,
-    globalShortcutSupportReason,
+    globalShortcutSupportReason
+  } from '$lib/hotkeys/format';
+  import {
     groupedCommands,
-    HotkeyBindingConflictError,
     HOTKEY_COMMANDS,
     isGlobalShortcutCommand,
     isGlobalShortcutOnlyCommand,
-    isCustomized,
-    isMac,
-    parseBinding,
-    resetBinding,
-    setBinding,
-    wellKnownConflict,
     type CommandGroup,
     type CommandDefinition
-  } from '$lib/hotkeys';
+  } from '$lib/hotkeys/commands';
+  import {
+    findCommandByBinding,
+    getBinding,
+    HotkeyBindingConflictError,
+    isCustomized,
+    resetBinding,
+    setBinding
+  } from '$lib/hotkeys/store.svelte';
+  import { canonicalize, parseBinding } from '$lib/hotkeys/parse';
+  import { wellKnownConflict } from '$lib/hotkeys/collisions';
+  import { isMac } from '$lib/hotkeys/platform';
   import { confirm } from '$lib/components/confirm-dialog.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { getSettingValue } from '$lib/settings/store.svelte';

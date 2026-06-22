@@ -24,14 +24,13 @@
   import { Dialog } from 'bits-ui';
   import { Keyboard, Search, X } from '@lucide/svelte';
   import {
-    closeShortcutHelp,
-    displayBinding,
-    getBinding,
     groupedCommands,
     isGlobalShortcutOnlyCommand,
-    shortcutHelp,
     type CommandDefinition
-  } from '$lib/hotkeys';
+  } from '$lib/hotkeys/commands';
+  import { displayBinding } from '$lib/hotkeys/format';
+  import { getBinding } from '$lib/hotkeys/store.svelte';
+  import { closeShortcutHelp, shortcutHelp } from '$lib/hotkeys/help.svelte';
   import { getSettingValue } from '$lib/settings/store.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
 

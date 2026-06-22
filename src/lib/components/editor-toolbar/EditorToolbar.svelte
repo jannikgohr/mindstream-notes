@@ -27,13 +27,10 @@
   import { cn } from '$lib/utils';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { getSettingValue } from '$lib/settings/store.svelte';
-  import {
-    ariaKeyShortcut,
-    commandById,
-    displayBinding,
-    emitCommand,
-    getBinding
-  } from '$lib/hotkeys';
+  import { commandById } from '$lib/hotkeys/commands';
+  import { emitCommand } from '$lib/hotkeys/bus.svelte';
+  import { ariaKeyShortcut, displayBinding } from '$lib/hotkeys/format';
+  import { getBinding } from '$lib/hotkeys/store.svelte';
   import {
     TOOLBAR_ITEMS,
     type ToolbarItem,
