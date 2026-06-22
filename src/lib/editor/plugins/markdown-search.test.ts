@@ -10,8 +10,10 @@ import { describe, expect, it } from 'vitest';
 import { Schema, type Node as ProseNode } from '@milkdown/kit/prose/model';
 import {
   applyPreservedCase,
+  collectNoteLinkRanges,
   DEFAULT_SEARCH_OPTIONS,
   findMatches,
+  snapRangeToNoteLinks,
   type SearchOptions
 } from './markdown-search';
 
@@ -31,7 +33,10 @@ const schema = new Schema({
     text: { group: 'inline' }
   },
   marks: {
-    strong: {}
+    strong: {},
+    // Stand-in for the note-link mark: a link whose href uses the
+    // `mindstream://note/` scheme that `parseNoteHref` recognises.
+    link: { attrs: { href: {} } }
   }
 });
 
@@ -44,6 +49,11 @@ const { doc, paragraph, heading, atom } = {
 };
 const text = (value: string, strong = false) =>
   schema.text(value, strong ? [schema.mark('strong')] : []);
+/** A text node carrying a note-link mark for the given note id. */
+const noteLink = (value: string, noteId = 'abc') =>
+  schema.text(value, [
+    schema.mark('link', { href: `mindstream://note/${noteId}` })
+  ]);
 
 /** The substring at a match's range, for a readable assertion. */
 function sliceAt(node: ProseNode, match: { from: number; to: number }) {
@@ -168,5 +178,50 @@ describe('applyPreservedCase', () => {
 
   it('leaves the replacement untouched for mixed-case sources', () => {
     expect(applyPreservedCase('fOo', 'bar')).toBe('bar');
+  });
+});
+
+describe('note-link highlight snapping', () => {
+  it('collects an id-backed note link as one range, merging adjacent nodes', () => {
+    // "Test " + bold "Note", both carrying the same note-link mark.
+    const node = doc(
+      paragraph(
+        text('see '),
+        noteLink('Test '),
+        schema.text('Note', [
+          schema.mark('link', { href: 'mindstream://note/abc' }),
+          schema.mark('strong')
+        ])
+      )
+    );
+    const ranges = collectNoteLinkRanges(node);
+    expect(ranges).toHaveLength(1);
+    expect(sliceAt(node, ranges[0])).toBe('Test Note');
+  });
+
+  it('ignores plain links that are not note links', () => {
+    const node = doc(
+      paragraph(
+        schema.text('site', [schema.mark('link', { href: 'https://x.test' })])
+      )
+    );
+    expect(collectNoteLinkRanges(node)).toEqual([]);
+  });
+
+  it('grows a match inside a note link to cover the whole link', () => {
+    const node = doc(paragraph(text('see '), noteLink('Test Note')));
+    const linkRanges = collectNoteLinkRanges(node);
+    // "Test" inside the link → snaps out to the full "Test Note" span so the
+    // highlight never splits the .wikilink-note-link bracket pseudo-elements.
+    const match = findMatches(node, 'Test')[0];
+    const snapped = snapRangeToNoteLinks(match, linkRanges);
+    expect(sliceAt(node, snapped)).toBe('Test Note');
+  });
+
+  it('leaves a match outside any note link unchanged', () => {
+    const node = doc(paragraph(text('see '), noteLink('Test Note')));
+    const linkRanges = collectNoteLinkRanges(node);
+    const match = findMatches(node, 'see')[0];
+    expect(snapRangeToNoteLinks(match, linkRanges)).toEqual(match);
   });
 });

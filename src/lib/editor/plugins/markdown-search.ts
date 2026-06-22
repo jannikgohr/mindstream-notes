@@ -31,6 +31,7 @@ import { Decoration, DecorationSet } from '@milkdown/kit/prose/view';
 import type { EditorView } from '@milkdown/kit/prose/view';
 import type { Node as ProseNode } from '@milkdown/kit/prose/model';
 import { $prose } from '@milkdown/kit/utils';
+import { parseNoteHref } from './wikilink';
 import type { MarkdownSearchBridge } from './markdown-search-bridge.svelte';
 
 export type {
@@ -194,18 +195,67 @@ export function findMatches(
   return matches;
 }
 
+/**
+ * Contiguous ranges covered by an id-backed note-link mark
+ * (`mindstream://note/…`), with adjacent same-href text nodes merged into
+ * one range. These links render their `[[`/`]]` as CSS pseudo-elements on a
+ * single `.wikilink-note-link` span, so a highlight that splits the span
+ * would repeat the brackets mid-link (`[[Test]][[ Note]]`). Legacy
+ * `[[Title]]` links keep literal brackets in their text and don't have this
+ * problem, so they're intentionally excluded.
+ */
+export function collectNoteLinkRanges(doc: ProseNode): SearchMatch[] {
+  const ranges: { from: number; to: number; href: string }[] = [];
+  doc.descendants((node, pos) => {
+    if (!node.isText || !node.text) return;
+    const mark = node.marks.find((m) => parseNoteHref(m.attrs.href));
+    const href = mark?.attrs.href;
+    if (typeof href !== 'string') return;
+    const last = ranges[ranges.length - 1];
+    if (last && last.href === href && last.to === pos) {
+      last.to = pos + node.text.length;
+    } else {
+      ranges.push({ from: pos, to: pos + node.text.length, href });
+    }
+  });
+  return ranges.map(({ from, to }) => ({ from, to }));
+}
+
+/**
+ * Grow a match range so it fully covers any note link it touches — the
+ * highlight then lands on the whole `.wikilink-note-link` span instead of
+ * carving it in two (which would duplicate the bracket pseudo-elements).
+ */
+export function snapRangeToNoteLinks(
+  match: SearchMatch,
+  linkRanges: SearchMatch[]
+): SearchMatch {
+  let { from, to } = match;
+  for (const link of linkRanges) {
+    if (link.from < to && link.to > from) {
+      if (link.from < from) from = link.from;
+      if (link.to > to) to = link.to;
+    }
+  }
+  return { from, to };
+}
+
 function buildDecorations(
   doc: ProseNode,
   matches: SearchMatch[],
   activeIndex: number
 ): DecorationSet {
   if (matches.length === 0) return DecorationSet.empty;
-  const decos = matches.map((match, i) =>
-    Decoration.inline(match.from, match.to, {
+  const linkRanges = collectNoteLinkRanges(doc);
+  const decos = matches.map((match, i) => {
+    const range = linkRanges.length
+      ? snapRangeToNoteLinks(match, linkRanges)
+      : match;
+    return Decoration.inline(range.from, range.to, {
       class:
         i === activeIndex ? 'search-match search-match-active' : 'search-match'
-    })
-  );
+    });
+  });
   return DecorationSet.create(doc, decos);
 }
 
