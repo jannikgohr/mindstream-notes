@@ -3342,7 +3342,7 @@
                 role="menuitemcheckbox"
                 class="flex h-8 w-full items-center justify-between gap-3 rounded-sm px-2 text-left text-sm hover:bg-accent hover:text-accent-foreground"
                 aria-checked={fingerDrawingAllowed}
-                title={tUi('ink.toolbar.fingerDrawing')}
+                use:tooltip={tUi('ink.toolbar.fingerDrawing')}
                 aria-label={tUi('ink.toolbar.fingerDrawing')}
                 onclick={toggleFingerDrawing}
               >
@@ -3359,7 +3359,7 @@
                 type="button"
                 role="menuitem"
                 class="flex h-8 w-full items-center justify-between gap-3 rounded-sm px-2 text-left text-sm hover:bg-accent hover:text-accent-foreground"
-                title={`${tUi('ink.toolbar.pageTheme')}: ${tValue('editor.ink.pageTheme', pageThemeMode)}`}
+                use:tooltip={`${tUi('ink.toolbar.pageTheme')}: ${tValue('editor.ink.pageTheme', pageThemeMode)}`}
                 aria-label={`${tUi('ink.toolbar.pageTheme')}: ${tValue('editor.ink.pageTheme', pageThemeMode)}`}
                 onclick={cyclePageTheme}
               >
@@ -3378,7 +3378,7 @@
                 type="button"
                 role="menuitem"
                 class="flex h-8 w-full items-center justify-between gap-3 rounded-sm px-2 text-left text-sm hover:bg-accent hover:text-accent-foreground"
-                title={`${tUi('ink.toolbar.pageBackground')}: ${tValue('editor.ink.pageBackground', pageBackground)}`}
+                use:tooltip={`${tUi('ink.toolbar.pageBackground')}: ${tValue('editor.ink.pageBackground', pageBackground)}`}
                 aria-label={`${tUi('ink.toolbar.pageBackground')}: ${tValue('editor.ink.pageBackground', pageBackground)}`}
                 onclick={cyclePageBackground}
               >
