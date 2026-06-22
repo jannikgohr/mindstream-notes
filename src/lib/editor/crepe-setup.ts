@@ -27,9 +27,11 @@ import { tUi } from '$lib/settings/i18n.svelte';
 import {
   addMermaidMenuItem,
   autoPair,
+  markdownSearchPlugins,
   mermaidLanguageDescription,
   renderMermaidPreview,
   wikilinkPlugins,
+  type MarkdownSearchBridge,
   type WikilinkBridge
 } from './plugins';
 
@@ -68,6 +70,14 @@ export interface CrepeSetupOptions {
   /** True when plain left-click should follow note links. */
   wikilinkOpenOnClick: () => boolean;
   wikilinkBridge: WikilinkBridge | null;
+  /**
+   * Per-editor bridge for in-document find & replace. The host
+   * (`NoteEditor`) creates it, drives the shared `FindBar` from its
+   * reactive state, and the registered search plugin reports match
+   * counts back through it. Always registered — find is core editor
+   * behaviour, not a gated feature.
+   */
+  searchBridge: MarkdownSearchBridge;
   /**
    * Drives Crepe's ImageBlock feature. The bridge persists dropped /
    * pasted images into the encrypted SQLite assets table and resolves
@@ -135,6 +145,14 @@ export function buildCrepe(opts: CrepeSetupOptions): Crepe {
   });
 
   crepe.editor.use(collab);
+
+  // In-document find & replace. Registered unconditionally — it only does
+  // work once the host feeds it a query via the bridge — and before the
+  // listener so its decorations are in place for the first paint.
+  for (const p of markdownSearchPlugins(opts.searchBridge)) {
+    crepe.editor.use(p);
+  }
+
   // The listener plugin gives EditorToolbar a single hook to refresh
   // its mark-active state (Bold/Italic icons) on every transaction —
   // selectionUpdated and updated cover cursor moves, typing, remote

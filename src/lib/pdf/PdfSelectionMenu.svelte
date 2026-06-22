@@ -12,6 +12,7 @@
    */
 
   import { Highlighter, MessageSquarePlus } from '@lucide/svelte';
+  import { tooltip } from '$lib/actions/tooltip';
   import { tUi } from '$lib/settings/i18n.svelte';
 
   interface Props {
@@ -48,8 +49,8 @@
   <button
     type="button"
     class="item"
+    use:tooltip={tUi('pdf.selection.highlight')}
     aria-label={tUi('pdf.selection.highlight')}
-    title={tUi('pdf.selection.highlight')}
     onclick={onHighlight}
   >
     <Highlighter aria-hidden="true" />
@@ -58,8 +59,8 @@
   <button
     type="button"
     class="item"
+    use:tooltip={tUi('pdf.selection.comment')}
     aria-label={tUi('pdf.selection.comment')}
-    title={tUi('pdf.selection.comment')}
     onclick={onComment}
   >
     <MessageSquarePlus aria-hidden="true" />

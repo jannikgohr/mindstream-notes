@@ -12,6 +12,7 @@
    */
 
   import { MessageSquarePlus, Trash2 } from '@lucide/svelte';
+  import { tooltip } from '$lib/actions/tooltip';
   import { tUi } from '$lib/settings/i18n.svelte';
 
   interface Props {
@@ -60,8 +61,8 @@
     <button
       type="button"
       class="item"
+      use:tooltip={tUi('pdf.annotation.addComment')}
       aria-label={tUi('pdf.annotation.addComment')}
-      title={tUi('pdf.annotation.addComment')}
       onclick={onAddComment}
     >
       <MessageSquarePlus aria-hidden="true" />
@@ -90,8 +91,8 @@
   <button
     type="button"
     class="item item-danger"
+    use:tooltip={tUi('pdf.annotation.delete')}
     aria-label={tUi('pdf.annotation.delete')}
-    title={tUi('pdf.annotation.delete')}
     onclick={onDelete}
   >
     <Trash2 aria-hidden="true" />

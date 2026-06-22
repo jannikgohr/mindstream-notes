@@ -23,6 +23,7 @@
     ListSortAscending,
     ListSortDescending
   } from '@lucide/svelte';
+  import { tooltip } from '$lib/actions/tooltip';
   import ContextMenu from '$lib/components/ContextMenu.svelte';
   import type { MenuItem } from '$lib/components/context-menu-types';
   import {
@@ -161,8 +162,8 @@
       ? 'border border-border bg-background'
       : ''}"
     onclick={openStrategyMenu}
+    use:tooltip={`${strategyLabel} · ${tUi('sort.switch')}`}
     aria-label={tUi('sort.switch')}
-    title={`${strategyLabel} · ${tUi('sort.switch')}`}
   >
     {#if strategy === 'alphabetical'}
       {#if direction === 'asc'}
@@ -203,8 +204,8 @@
       type="button"
       class="flex items-center justify-center px-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       onclick={toggleDirection}
+      use:tooltip={directionTooltip}
       aria-label={directionTooltip}
-      title={directionTooltip}
     >
       <!--
         Single ArrowUpDown icon — shows both arrows side-by-side. On a
@@ -226,8 +227,8 @@
       type="button"
       class="flex min-w-0 items-center gap-1.5 px-2.5 transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       onclick={openStrategyMenu}
+      use:tooltip={tUi('sort.switch')}
       aria-label={tUi('sort.switch')}
-      title={tUi('sort.switch')}
     >
       <span bind:this={labelEl} class="truncate">{strategyLabel}</span>
     </button>

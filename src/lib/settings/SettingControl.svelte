@@ -6,6 +6,7 @@
    * binding plumbing happens in one place.
    */
   import { Loader2 } from '@lucide/svelte';
+  import { tooltip } from '$lib/actions/tooltip';
   import { Button } from '$lib/components/ui/button';
   import { authSession } from '$lib/api/auth.svelte';
   import {
@@ -90,7 +91,7 @@
       {#if modified}
         <span
           class="inline-block size-1.5 rounded-full bg-primary"
-          title={tUi('modified')}
+          use:tooltip={tUi('modified')}
           aria-label={tUi('modified')}
         ></span>
       {/if}
@@ -112,12 +113,15 @@
       {@const s = setting as SelectSetting}
       <div class="mt-2 flex flex-wrap gap-1.5">
         {#each s.options as opt (opt)}
+          <!--
+            No tooltip here: a tooltip would only ever be wanted while the
+            button is disabled (lockedBySession), but disabled controls
+            receive no pointer/focus events so it could never show. The
+            same hint is already rendered as the visible paragraph below.
+          -->
           <button
             type="button"
             disabled={lockedBySession}
-            title={lockedBySession
-              ? 'Sign out to change server type.'
-              : undefined}
             class="rounded-md border border-border px-3 py-1 text-xs transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-transparent {value ===
             opt
               ? 'border-ring bg-accent text-accent-foreground'
@@ -304,7 +308,7 @@
       <button
         type="button"
         class="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-wait disabled:opacity-60"
-        title={tUi('reset')}
+        use:tooltip={tUi('reset')}
         aria-label={tUi('reset')}
         disabled={pending}
         onclick={reset}

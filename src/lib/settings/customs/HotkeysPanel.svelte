@@ -25,6 +25,7 @@
    *     confirm.
    */
   import { Pencil, RotateCcw, XCircle } from '@lucide/svelte';
+  import { tooltip } from '$lib/actions/tooltip';
   import { Button } from '$lib/components/ui/button';
   import {
     bindingFromEvent,
@@ -556,7 +557,7 @@
                 {#if customized}
                   <span
                     class="inline-block size-1.5 rounded-full bg-primary"
-                    title={tUi('modified')}
+                    use:tooltip={tUi('modified')}
                     aria-label={tUi('modified')}
                   ></span>
                 {/if}
@@ -626,7 +627,7 @@
                     -->
                       <span
                         class="max-w-[16rem] text-xs text-amber-600 dark:text-amber-500"
-                        title={tUi('hotkeys.osConflict.tooltip')}
+                        use:tooltip={tUi('hotkeys.osConflict.tooltip')}
                       >
                         {tUi('hotkeys.osConflict.label')}: {osConflictReason}
                       </span>
@@ -640,7 +641,7 @@
                     -->
                       <span
                         class="max-w-[18rem] text-xs text-muted-foreground"
-                        title={tUi('hotkeys.macAltHint.tooltip')}
+                        use:tooltip={tUi('hotkeys.macAltHint.tooltip')}
                       >
                         {tUi('hotkeys.macAltHint.label')}
                       </span>
@@ -670,7 +671,7 @@
                       type="button"
                       class="flex h-7 min-w-[7rem] items-center justify-center rounded-md border border-input bg-background px-2 font-mono text-xs transition-colors hover:border-ring hover:bg-accent"
                       onclick={() => startRecording(cmd)}
-                      title={tUi('hotkeys.editChip.tooltip')}
+                      use:tooltip={tUi('hotkeys.editChip.tooltip')}
                       aria-label={tUi('hotkeys.editChip.aria')}
                     >
                       {#if display}
@@ -685,7 +686,7 @@
                       type="button"
                       class="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                       onclick={() => startRecording(cmd)}
-                      title={tUi('hotkeys.edit')}
+                      use:tooltip={tUi('hotkeys.edit')}
                       aria-label={tUi('hotkeys.edit')}
                     >
                       <Pencil class="size-3.5" />
@@ -695,7 +696,7 @@
                         type="button"
                         class="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                         onclick={() => unset(cmd)}
-                        title={tUi('hotkeys.unsetAction')}
+                        use:tooltip={tUi('hotkeys.unsetAction')}
                         aria-label={tUi('hotkeys.unsetAction')}
                       >
                         <XCircle class="size-3.5" />
@@ -706,7 +707,7 @@
                         type="button"
                         class="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                         onclick={() => reset(cmd)}
-                        title={tUi('reset')}
+                        use:tooltip={tUi('reset')}
                         aria-label={tUi('reset')}
                       >
                         <RotateCcw class="size-3.5" />

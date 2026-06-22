@@ -17,6 +17,7 @@
   } from '@lucide/svelte';
   import FavouriteStar from './FavouriteStar.svelte';
   import { noteKindIcon } from './note-kind-icon';
+  import { tooltip } from '$lib/actions/tooltip';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import { Separator } from '$lib/components/ui/separator';
@@ -792,9 +793,9 @@
           ? 'border-primary bg-primary text-primary-foreground'
           : 'border-border bg-background text-muted-foreground hover:bg-accent hover:text-foreground'}"
         class:source-chip-active={active}
+        use:tooltip={active ? undefined : label}
         aria-current={active ? 'page' : undefined}
         aria-label={label}
-        title={active ? undefined : label}
         onclick={() => onSourceChange?.(item.id)}
       >
         <Icon class="size-3.5 shrink-0" />
@@ -978,9 +979,9 @@
             ? 'opacity-100'
             : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100'}"
           onclick={() => void setNoteFavourite(node.id, !fav)}
+          use:tooltip={fav ? tUi('favourite.remove') : tUi('favourite.add')}
           aria-pressed={fav}
           aria-label={fav ? tUi('favourite.remove') : tUi('favourite.add')}
-          title={fav ? tUi('favourite.remove') : tUi('favourite.add')}
         >
           <FavouriteStar size={14} favourited={fav} />
         </button>

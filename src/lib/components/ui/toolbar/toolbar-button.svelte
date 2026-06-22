@@ -5,11 +5,11 @@
    * with a 16px icon (the Button base forces `[&_svg]:size-4`), `ghost` until
    * `active`, then filled (`secondary`).
    *
-   * Pass-through: all native button attributes (`onclick`, `disabled`,
-   * `title`, `aria-*`) and `bind:ref` flow straight to the underlying button,
-   * so callers keep full control of behaviour and accessibility. `aria-pressed`
-   * is intentionally NOT derived from `active` — only genuine toggle buttons
-   * should expose it, so callers set it explicitly.
+   * Pass-through: button attributes (`onclick`, `disabled`, `title`,
+   * `aria-*`) and `bind:ref` flow to the underlying Button. `title` is
+   * rendered by the shared tooltip action there instead of the native browser
+   * tooltip. `aria-pressed` is intentionally NOT derived from `active` — only
+   * genuine toggle buttons should expose it, so callers set it explicitly.
    */
   import type { Snippet } from 'svelte';
   import { Button } from '$lib/components/ui/button';

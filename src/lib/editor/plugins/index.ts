@@ -27,3 +27,9 @@ export {
   wikilinkPlugins,
   type WikilinkBridge
 } from './wikilink';
+export {
+  createMarkdownSearchBridge,
+  markdownSearchPlugins,
+  type MarkdownSearchBridge,
+  type MarkdownSearchOptions
+} from './markdown-search';

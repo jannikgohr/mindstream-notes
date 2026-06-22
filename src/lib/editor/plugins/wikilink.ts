@@ -59,7 +59,7 @@ export function noteHref(noteId: string): string {
   return `${NOTE_LINK_PREFIX}${encodeURIComponent(noteId)}`;
 }
 
-function parseNoteHref(href: unknown): string | null {
+export function parseNoteHref(href: unknown): string | null {
   if (typeof href !== 'string') return null;
   if (!href.startsWith(NOTE_LINK_PREFIX)) return null;
   const raw = href.slice(NOTE_LINK_PREFIX.length);
