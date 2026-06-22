@@ -11,18 +11,9 @@
    * silently mounting `NoteEditor` and corrupting the body on save.
    */
   import { onMount } from 'svelte';
-  import NoteEditor from '$lib/components/NoteEditor.svelte';
-  import FreeformNoteEditor from '$lib/components/FreeformNoteEditor.svelte';
-  import DrawingNoteEditor from '$lib/components/DrawingNoteEditor.svelte';
-  import PdfNoteViewer from '$lib/components/PdfNoteViewer.svelte';
-  import UnknownNoteKindError from '$lib/components/UnknownNoteKindError.svelte';
+  import NoteKindRenderer from '$lib/components/NoteKindRenderer.svelte';
   import WindowControls from '$lib/components/WindowControls.svelte';
-  import {
-    isKnownNoteKind,
-    loadNote,
-    openNoteWindow,
-    type NoteKind
-  } from '$lib/api';
+  import { loadNote, openNoteWindow, type NoteKind } from '$lib/api';
   import { tree } from '$lib/stores/tree.svelte';
   import { subscribeOpenNoteRequest } from '$lib/stores/open-note-intent.svelte';
 
@@ -92,21 +83,8 @@
         Note <code class="mx-1 rounded bg-muted px-1.5 py-0.5">{noteId}</code>
         couldn't be found in the database.
       </div>
-    {:else if noteKind === 'freeform'}
-      <FreeformNoteEditor {noteId} />
-    {:else if noteKind === 'ink'}
-      <DrawingNoteEditor {noteId} />
-    {:else if noteKind === 'pdf'}
-      <PdfNoteViewer {noteId} />
-    {:else if noteKind === 'markdown'}
-      <NoteEditor {noteId} />
-    {:else if !isKnownNoteKind(noteKind ?? undefined)}
-      <UnknownNoteKindError {noteId} />
     {:else}
-      <!-- Defensive: a future known kind that we added to the union
-           but haven't wired a dispatch for. Treat as unknown so we
-           never silently render the wrong editor. -->
-      <UnknownNoteKindError {noteId} />
+      <NoteKindRenderer {noteId} {noteKind} />
     {/if}
   </main>
 </div>

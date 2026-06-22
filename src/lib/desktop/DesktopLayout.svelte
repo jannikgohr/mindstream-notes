@@ -16,15 +16,10 @@
     TabPartInitParameters,
     DockviewGroupPanel
   } from 'dockview-core';
-  import { DefaultTab } from 'dockview-core';
   import TopBar from './DesktopTopBar.svelte';
   import FileExplorer from '$lib/components/FileExplorer.svelte';
   import MetadataPanel from '$lib/components/MetadataPanel.svelte';
-  import NoteEditor from '$lib/components/NoteEditor.svelte';
-  import FreeformNoteEditor from '$lib/components/FreeformNoteEditor.svelte';
-  import DrawingNoteEditor from '$lib/components/DrawingNoteEditor.svelte';
-  import PdfNoteViewer from '$lib/components/PdfNoteViewer.svelte';
-  import UnknownNoteKindError from '$lib/components/UnknownNoteKindError.svelte';
+  import NoteKindRenderer from '$lib/components/NoteKindRenderer.svelte';
   import ResizeHandle from '$lib/components/ResizeHandle.svelte';
   import SettingsDialog from '$lib/settings/SettingsDialog.svelte';
   import { PopoutHeaderAction } from './dockview-popout-action';
@@ -107,9 +102,11 @@
     // Svelte 5 mount wrapper and the legacy class/functional definitions from
     // the WebStorm ambient module shim.
     private Component: ComponentType<any> | Component<any, any, any>;
+    private noteKind: string | null;
 
-    constructor(Component: any) {
+    constructor(Component: any, noteKind: string | null = null) {
       this.Component = Component;
+      this.noteKind = noteKind;
     }
 
     get element(): HTMLElement {
@@ -126,7 +123,7 @@
       // while safely passing the verified noteId down to the target layout.
       this.instance = mount(this.Component as Component<any>, {
         target: this.el,
-        props: { noteId }
+        props: { noteId, noteKind: this.noteKind }
       });
     }
 
@@ -138,39 +135,40 @@
     }
   }
 
-  class DockviewTabRenderer extends DefaultTab {
-    init(parameters: TabPartInitParameters): void {
-      super.init(parameters);
-      this.element.dataset.dockPanelId = parameters.api.id;
-    }
-  }
-
   async function setupDockview() {
     if (!dockHost) return;
-    const { DockviewComponent } = await import('dockview-core');
+    const { DockviewComponent, DefaultTab } = await import('dockview-core');
 
     const component = new DockviewComponent(dockHost, {
       createComponent: (options) => {
         switch (options.name) {
           case 'noteEditor':
-            return new SvelteRenderer(NoteEditor);
+            return new SvelteRenderer(NoteKindRenderer, 'markdown');
           case 'freeformNote':
-            return new SvelteRenderer(FreeformNoteEditor);
+            return new SvelteRenderer(NoteKindRenderer, 'freeform');
           case 'inkNote':
-            return new SvelteRenderer(DrawingNoteEditor);
+            return new SvelteRenderer(NoteKindRenderer, 'ink');
           case 'pdfNote':
-            return new SvelteRenderer(PdfNoteViewer);
+            return new SvelteRenderer(NoteKindRenderer, 'pdf');
           case 'unknownNoteKind':
-            return new SvelteRenderer(UnknownNoteKindError);
+            return new SvelteRenderer(NoteKindRenderer, null);
           default:
             // Unknown renderer names must not fall back to markdown. A
             // binary/canvas note rendered in the text editor risks accidental
             // corruption on save.
-            return new SvelteRenderer(UnknownNoteKindError);
+            return new SvelteRenderer(NoteKindRenderer, null);
         }
       },
       defaultTabComponent: 'noteTab',
-      createTabComponent: () => new DockviewTabRenderer(),
+      createTabComponent: () => {
+        const tab = new DefaultTab();
+        const init = tab.init.bind(tab);
+        tab.init = (parameters: TabPartInitParameters) => {
+          init(parameters);
+          tab.element.dataset.dockPanelId = parameters.api.id;
+        };
+        return tab;
+      },
       theme: {
         name: 'bridge',
         className: 'dockview-theme-bridge',

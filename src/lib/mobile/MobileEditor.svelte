@@ -10,11 +10,7 @@
   import { Button } from '$lib/components/ui/button';
   import NoteStatusIcons from '$lib/desktop/NoteStatusIcons.svelte';
   import MetadataPanel from '$lib/components/MetadataPanel.svelte';
-  import NoteEditor from '$lib/components/NoteEditor.svelte';
-  import FreeformNoteEditor from '$lib/components/FreeformNoteEditor.svelte';
-  import DrawingNoteEditor from '$lib/components/DrawingNoteEditor.svelte';
-  import PdfNoteViewer from '$lib/components/PdfNoteViewer.svelte';
-  import UnknownNoteKindError from '$lib/components/UnknownNoteKindError.svelte';
+  import NoteKindRenderer from '$lib/components/NoteKindRenderer.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { tree } from '$lib/stores/tree.svelte';
   import { ui } from '$lib/state.svelte';
@@ -100,20 +96,8 @@
            post-create loadTree, but a deep-link / restore-on-launch
            could race the initial hydration. -->
       <p class="p-6 text-center text-sm text-muted-foreground">Loading note…</p>
-    {:else if note.note_kind === 'freeform'}
-      <FreeformNoteEditor {noteId} />
-    {:else if note.note_kind === 'ink'}
-      <DrawingNoteEditor {noteId} />
-    {:else if note.note_kind === 'pdf'}
-      <PdfNoteViewer {noteId} />
-    {:else if note.note_kind === 'markdown'}
-      <NoteEditor {noteId} />
     {:else}
-      <!-- Schema we don't recognise (a newer-app-version peer pushed
-           a row with a new kind). Refuse rather than silently
-           rendering NoteEditor — saving would overwrite the body
-           with markdown and lose the original content. -->
-      <UnknownNoteKindError {noteId} />
+      <NoteKindRenderer {noteId} noteKind={note.note_kind} />
     {/if}
   </main>
 </div>

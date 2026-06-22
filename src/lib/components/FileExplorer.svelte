@@ -8,11 +8,8 @@
     FolderOpen,
     FolderPlus,
     FileUp,
-    Home,
     PencilRuler,
     FilePlus2,
-    Share2,
-    Star,
     Trash2
   } from '@lucide/svelte';
   import FavouriteStar from './FavouriteStar.svelte';
@@ -23,7 +20,6 @@
   import { Separator } from '$lib/components/ui/separator';
   import ContextMenu from './ContextMenu.svelte';
   import type { MenuItem } from './context-menu-types';
-  import type { IconComponent } from '$lib/settings/icons';
   import { alert, confirm } from './confirm-dialog.svelte';
   import SortControl from './SortControl.svelte';
   import { sortTree } from '$lib/sort';
@@ -48,7 +44,6 @@
   import { setSortDirection, setSortStrategy, ui } from '$lib/state.svelte';
   import { i18n, tUi } from '$lib/settings/i18n.svelte';
   import type { TreeNode } from '$lib/api';
-  import { exportersForNote } from '$lib/note-exporters';
   import {
     collectionIsUnderTrash,
     nodesForDesktopSource,
@@ -56,6 +51,19 @@
     noteIsUnderTrash,
     type DesktopNoteSource
   } from '$lib/stores/note-source.svelte';
+  import {
+    FILE_EXPLORER_SOURCES,
+    defaultDraftText,
+    dragPayloadFromTransfer,
+    draftKindToNoteKind,
+    emptyStateMessageForSource,
+    nodeKey,
+    type Draft,
+    type DraftKind,
+    type Drag,
+    type MenuTarget,
+    type Rename
+  } from './file-explorer-helpers';
 
   interface Props {
     source?: DesktopNoteSource;
@@ -73,33 +81,6 @@
     onOpenNoteBelow,
     onOpenInNewWindow
   }: Props = $props();
-
-  const SOURCES: {
-    id: DesktopNoteSource;
-    labelKey: string;
-    icon: IconComponent;
-  }[] = [
-    {
-      id: 'home',
-      labelKey: 'nav.home',
-      icon: Home as unknown as IconComponent
-    },
-    {
-      id: 'favourites',
-      labelKey: 'nav.favourite',
-      icon: Star as unknown as IconComponent
-    },
-    {
-      id: 'shared',
-      labelKey: 'nav.shared',
-      icon: Share2 as unknown as IconComponent
-    },
-    {
-      id: 'trash',
-      labelKey: 'nav.trash',
-      icon: Trash2 as unknown as IconComponent
-    }
-  ];
 
   let expanded = $state<Record<string, boolean>>({});
 
@@ -129,18 +110,6 @@
   // native ink note. They share the draft / commit code path because
   // the only difference at the data layer is the note_kind we pass to
   // createNoteIn; the UX (inline input for the title) is identical.
-  type DraftKind = 'note' | 'folder' | 'drawing' | 'ink';
-  type Draft = {
-    kind: DraftKind;
-    parentId: string | null;
-    text: string;
-  };
-  type Rename = {
-    kind: 'note' | 'folder';
-    id: string;
-    new_name: string;
-  };
-
   let draft = $state<Draft | null>(null);
   let rename = $state<Rename | null>(null);
   let nameInput = $state<HTMLInputElement | null>(null);
@@ -165,15 +134,7 @@
   function startDraft(kind: DraftKind, parentId: string | null) {
     if (!canCreate) return;
     if (parentId) expanded[parentId] = true;
-    const defaultText =
-      kind === 'folder'
-        ? 'Untitled folder'
-        : kind === 'drawing'
-          ? 'Untitled drawing canvas'
-          : kind === 'ink'
-            ? 'Untitled handwritten note'
-            : 'Untitled';
-    draft = { kind, parentId, text: defaultText };
+    draft = { kind, parentId, text: defaultDraftText(kind) };
   }
   function startPdfImport(parentId: string | null) {
     if (!canCreate) return;
@@ -202,12 +163,9 @@
     }
     const { kind, parentId } = draft;
     draft = null;
-    if (kind === 'note' || kind === 'drawing' || kind === 'ink') {
-      const id = await createNoteIn(
-        parentId,
-        text,
-        kind === 'drawing' ? 'freeform' : kind === 'ink' ? 'ink' : 'markdown'
-      );
+    const noteKind = draftKindToNoteKind(kind);
+    if (noteKind) {
+      const id = await createNoteIn(parentId, text, noteKind);
       onOpenNote(id);
     } else {
       await createCollectionIn(parentId, text);
@@ -266,32 +224,34 @@
   }
 
   // ---------- Context menu ----------
-  type MenuTarget =
-    | { kind: 'note'; id: string }
-    | { kind: 'folder'; id: string }
-    | { kind: 'root' };
-
   let menuOpen = $state(false);
   let menuX = $state(0);
   let menuY = $state(0);
   let menuTarget = $state<MenuTarget | null>(null);
+  let currentMenuItems = $state<(MenuItem | 'separator')[]>([]);
+  let menuToken = 0;
 
-  function openMenu(e: MouseEvent, target: MenuTarget) {
+  async function openMenu(e: MouseEvent, target: MenuTarget) {
     e.preventDefault();
     e.stopPropagation();
+    const token = ++menuToken;
     const items =
       target.kind === 'root' && !canCreate && source !== 'trash'
         ? []
-        : menuItemsForTarget(target);
+        : await menuItemsForTarget(target);
+    if (token !== menuToken) return;
     if (items.length === 0) return;
     menuX = e.clientX;
     menuY = e.clientY;
     menuTarget = target;
+    currentMenuItems = items;
     menuOpen = true;
   }
   function closeMenu() {
+    menuToken += 1;
     menuOpen = false;
     menuTarget = null;
+    currentMenuItems = [];
   }
 
   async function runNoteExporter(
@@ -329,7 +289,9 @@
     }
   }
 
-  function menuItemsForTarget(target: MenuTarget): (MenuItem | 'separator')[] {
+  async function menuItemsForTarget(
+    target: MenuTarget
+  ): Promise<(MenuItem | 'separator')[]> {
     if (target.kind === 'note') {
       const id = target.id;
       const note = tree.notesById[id];
@@ -383,7 +345,10 @@
           onSelect: () => onOpenInNewWindow(id)
         });
       }
-      const exporters = exportersForNote(note);
+      const exporters =
+        note?.note_kind === 'ink' || note?.note_kind === 'pdf'
+          ? (await import('$lib/note-exporters')).exportersForNote(note)
+          : [];
       if (exporters.length > 0) {
         items.push('separator', {
           label: 'Export',
@@ -515,17 +480,7 @@
     ];
   }
 
-  function menuItems(): (MenuItem | 'separator')[] {
-    if (!menuTarget) return [];
-    return menuItemsForTarget(menuTarget);
-  }
-
   // ---------- Drag and drop ----------
-  type Drag =
-    | { kind: 'note'; id: string }
-    | { kind: 'folder'; id: string }
-    | null;
-
   let drag = $state<Drag>(null);
   let dragOver = $state<string | null>(null);
 
@@ -581,12 +536,7 @@
     dragOver = null;
   }
   function readPayload(e: DragEvent): Drag {
-    if (!e.dataTransfer) return null;
-    const noteId = e.dataTransfer.getData('application/x-note-id');
-    if (noteId) return { kind: 'note', id: noteId };
-    const folderId = e.dataTransfer.getData('application/x-folder-id');
-    if (folderId) return { kind: 'folder', id: folderId };
-    return null;
+    return dragPayloadFromTransfer(e.dataTransfer);
   }
   async function onDropOnFolder(e: DragEvent, targetFolderId: string) {
     e.preventDefault();
@@ -612,21 +562,8 @@
   function toggleFolder(id: string) {
     expanded[id] = !expanded[id];
   }
-  function nodeKey(n: TreeNode): string {
-    return n.kind === 'folder' ? `f:${n.id}` : `n:${n.id}`;
-  }
-
   function emptyStateMessage(): string {
-    switch (source) {
-      case 'favourites':
-        return 'Favourite notes will appear here.';
-      case 'shared':
-        return 'Shared folders will appear here.';
-      case 'trash':
-        return 'Trash is empty.';
-      case 'home':
-        return tUi('fileTree.emptyRoot');
-    }
+    return emptyStateMessageForSource(source, tUi('fileTree.emptyRoot'));
   }
 
   function updateSourceChipCollapse() {
@@ -783,7 +720,7 @@
       e.stopPropagation();
     }}
   >
-    {#each SOURCES as item (item.id)}
+    {#each FILE_EXPLORER_SOURCES as item (item.id)}
       {@const active = source === item.id}
       {@const Icon = item.icon}
       {@const label = tUi(item.labelKey)}
@@ -991,7 +928,12 @@
 {/snippet}
 
 {#if menuOpen}
-  <ContextMenu x={menuX} y={menuY} items={menuItems()} onClose={closeMenu} />
+  <ContextMenu
+    x={menuX}
+    y={menuY}
+    items={currentMenuItems}
+    onClose={closeMenu}
+  />
 {/if}
 
 <style>
