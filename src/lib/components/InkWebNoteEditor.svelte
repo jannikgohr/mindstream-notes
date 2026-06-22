@@ -83,11 +83,77 @@
     DEFAULT_COLOR,
     DEFAULT_WIDTH,
     InkDocument,
-    type InkStrokeInput,
     type StrokeBounds,
-    type StrokeStylePatch,
-    type StrokeTransform
+    type StrokeStylePatch
   } from '$lib/ink/document';
+  import {
+    argbToColorHex,
+    base64ToBytes,
+    colorHexToArgb,
+    cssColor,
+    displayColor,
+    ERASER_RADIUS,
+    frameFromBounds,
+    identityTransform,
+    INK_COLOR_SETTING,
+    INK_COLOR_SWATCHES,
+    INK_FINGER_SETTING,
+    INK_PAGE_BACKGROUND_COLOR_SETTING,
+    INK_PAGE_BACKGROUND_SETTING,
+    INK_PAGE_THEME_SETTING,
+    INK_QUICK_ZOOMS,
+    INK_TOOL_SETTING,
+    INK_WIDTH_SETTING,
+    INK_ZOOM_DISPLAY_SCALE,
+    INK_ZOOM_STEP,
+    MAX_ZOOM_FACTOR,
+    normalizeColorHex,
+    normalizeInkPageBackground,
+    normalizeInkPageTheme,
+    normalizeInkTool,
+    normalizeInkWidth,
+    PAGE_FILL_LIGHT,
+    PAGE_GRID_STEP,
+    PAGE_PATTERN_DOT_ALPHA,
+    PAGE_PATTERN_LINE_ALPHA,
+    PAGE_RULE_STEP,
+    pointInPolygon,
+    POINTER_BUTTON_SECONDARY,
+    POINTER_BUTTON_STYLUS_PRIMARY,
+    POINTER_BUTTON_STYLUS_SECONDARY,
+    pressureWidth,
+    RESIZE_SNAPSHOT_RESTORE_SUPPRESS_MS,
+    resizeTransform,
+    rotationTransform,
+    sanitizePressure,
+    SAVE_DEBOUNCE_MS,
+    SELECTION_HANDLE_HIT_RADIUS_PX,
+    SELECTION_HANDLE_RADIUS_PX,
+    SELECTION_PASTE_OFFSET_PX,
+    SELECTION_ROTATE_GAP_PX,
+    selectionCenter,
+    TOOL_PREVIEW_DASH,
+    transformIsIdentity,
+    transformPoint,
+    transformedPoints,
+    transformSelectionFrame,
+    translationTransform,
+    type AndroidStylusEraserPayload,
+    type InkClipboardStroke,
+    type PageBackgroundMode,
+    type PageThemeMode,
+    type PointerMode,
+    type QueuedEraserSample,
+    type SelectionFrame,
+    type SelectionHandle,
+    type SelectionInteraction,
+    type StrokeTransform,
+    type ToolMode,
+    type ToolPreview,
+    type TouchGestureState,
+    type TouchPointer,
+    type WebInkHandleInstance
+  } from '$lib/ink/editor-helpers';
   import {
     DEFAULT_PAGE_GAP,
     containsPagePoint,
@@ -106,114 +172,6 @@
   }
 
   let { noteId, ariaLabel }: Props = $props();
-
-  const SAVE_DEBOUNCE_MS = 800;
-  const ERASER_RADIUS = 10;
-  const PAGE_FILL_LIGHT = 0xffffffff;
-  // Page-background pattern (dots / ruled lines / grid). The user-chosen
-  // RGB is drawn at a fixed low alpha so it stays subtle, then run
-  // through `displayColor` whose dark-mode invert turns it into a faint
-  // light pattern on the dark page. Spacings are in ink-document units
-  // (the A4 page is 1190×1684; ~28u ≈ 5mm).
-  const PAGE_GRID_STEP = 28;
-  const PAGE_RULE_STEP = 48;
-  const PAGE_PATTERN_LINE_ALPHA = 0x1f;
-  const PAGE_PATTERN_DOT_ALPHA = 0x59;
-  const TOOL_PREVIEW_DASH = [5, 4];
-  const MAX_ZOOM_FACTOR = 6;
-  const INK_ZOOM_DISPLAY_SCALE = 2;
-  const INK_ZOOM_STEP = 1.2;
-  const RESIZE_SNAPSHOT_RESTORE_SUPPRESS_MS = 350;
-  const INK_QUICK_ZOOMS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
-  const INK_COLOR_SWATCHES = [
-    '#111827',
-    '#dc2626',
-    '#2563eb',
-    '#16a34a',
-    '#f59e0b',
-    '#7c3aed'
-  ];
-  const POINTER_BUTTON_SECONDARY = 2;
-  const POINTER_BUTTON_STYLUS_PRIMARY = 32;
-  const POINTER_BUTTON_STYLUS_SECONDARY = 64;
-  const SELECTION_HANDLE_RADIUS_PX = 7;
-  const SELECTION_HANDLE_HIT_RADIUS_PX = 22;
-  const SELECTION_ROTATE_GAP_PX = 30;
-  const SELECTION_PASTE_OFFSET_PX = 24;
-
-  const INK_TOOL_SETTING = 'editor.ink.tool';
-  const INK_COLOR_SETTING = 'editor.ink.color';
-  const INK_WIDTH_SETTING = 'editor.ink.width';
-  const INK_FINGER_SETTING = 'editor.ink.fingerDrawing';
-  const INK_PAGE_THEME_SETTING = 'editor.ink.pageTheme';
-  const INK_PAGE_BACKGROUND_SETTING = 'editor.ink.pageBackground';
-  const INK_PAGE_BACKGROUND_COLOR_SETTING = 'editor.ink.pageBackgroundColor';
-
-  type ToolMode = 'pen' | 'eraser' | 'lasso';
-  type PageThemeMode = 'light' | 'dark' | 'system';
-  type PageBackgroundMode = 'clear' | 'points' | 'lines' | 'grid';
-  type AndroidStylusEraserAction = 'down' | 'move' | 'up' | 'cancel';
-  type AndroidStylusEraserPoint = {
-    x: number;
-    y: number;
-    pressure?: number;
-  };
-  type AndroidStylusEraserPayload = {
-    action: AndroidStylusEraserAction;
-    points: AndroidStylusEraserPoint[];
-  };
-  type QueuedEraserSample = {
-    point: InkPoint;
-    hits: Set<string>;
-  };
-  type ToolPreview = {
-    point: InkPoint;
-    erasing: boolean;
-    lassoing: boolean;
-    pointerType: string;
-  };
-  type PointerMode =
-    | 'draw'
-    | 'erase'
-    | 'lasso'
-    | 'moveSelection'
-    | 'pan'
-    | 'touchGesture';
-  type SelectionHandle = 'nw' | 'ne' | 'se' | 'sw' | 'rotate';
-  type SelectionFrame = Record<
-    Exclude<SelectionHandle, 'rotate'>,
-    { x: number; y: number }
-  >;
-  type SelectionInteraction =
-    | { kind: 'move'; start: InkPoint }
-    | {
-        kind: 'resize';
-        handle: Exclude<SelectionHandle, 'rotate'>;
-        anchor: { x: number; y: number };
-        startCorner: { x: number; y: number };
-      }
-    | {
-        kind: 'rotate';
-        center: { x: number; y: number };
-        startAngle: number;
-      };
-  type InkClipboardStroke = InkStrokeInput;
-  type TouchPointer = {
-    clientX: number;
-    clientY: number;
-    x: number;
-    y: number;
-  };
-  type TouchGestureState = {
-    centerX: number;
-    centerY: number;
-    distance: number;
-  };
-  type WebInkHandleInstance = {
-    encode_state_vector: () => Uint8Array;
-    encode_diff_for_state_vector: (stateVector: Uint8Array) => Uint8Array;
-    apply_remote_update: (update: Uint8Array) => boolean;
-  };
 
   let hostEl = $state<HTMLDivElement | null>(null);
   let canvasHostEl = $state<HTMLDivElement | null>(null);
@@ -1134,10 +1092,11 @@
       ctx.stroke();
     } else if (shouldDrawPenToolPreview()) {
       const radius = Math.max(2, (width * view.scale) / 2);
-      const previewColor = displayColor(colorArgb);
-      ctx.strokeStyle = cssColor(previewColor);
+      const previewColor = displayColor(colorArgb, pageDark);
+      ctx.strokeStyle = cssColor(previewColor, cssColorCache);
       ctx.fillStyle = cssColor(
-        (0x33000000 | (previewColor & 0x00ffffff)) >>> 0
+        (0x33000000 | (previewColor & 0x00ffffff)) >>> 0,
+        cssColorCache
       );
       ctx.beginPath();
       ctx.arc(center.x, center.y, radius, 0, Math.PI * 2);
@@ -1201,97 +1160,11 @@
     }
   }
 
-  function pressureWidth(pressure: number): number {
-    return 0.25 + 0.75 * Math.min(1, Math.max(0, pressure));
-  }
-
-  function identityTransform(): StrokeTransform {
-    return { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0, widthScale: 1 };
-  }
-
-  function translationTransform(dx: number, dy: number): StrokeTransform {
-    return { a: 1, b: 0, c: 0, d: 1, e: dx, f: dy, widthScale: 1 };
-  }
-
-  function transformIsIdentity(transform: StrokeTransform): boolean {
-    return (
-      Math.abs(transform.a - 1) < 0.0001 &&
-      Math.abs(transform.b) < 0.0001 &&
-      Math.abs(transform.c) < 0.0001 &&
-      Math.abs(transform.d - 1) < 0.0001 &&
-      Math.abs(transform.e) < 0.001 &&
-      Math.abs(transform.f) < 0.001 &&
-      Math.abs(transform.widthScale - 1) < 0.0001
-    );
-  }
-
   function currentSelectionTransform(): StrokeTransform {
     if (!transformIsIdentity(selectionTransformPreview)) {
       return selectionTransformPreview;
     }
     return translationTransform(selectionDragOffset.x, selectionDragOffset.y);
-  }
-
-  function transformPoint(
-    point: { x: number; y: number },
-    transform: StrokeTransform
-  ): { x: number; y: number } {
-    return {
-      x: point.x * transform.a + point.y * transform.c + transform.e,
-      y: point.x * transform.b + point.y * transform.d + transform.f
-    };
-  }
-
-  function resizeTransform(
-    anchor: { x: number; y: number },
-    startCorner: { x: number; y: number },
-    current: { x: number; y: number }
-  ): StrokeTransform {
-    const minScale = 0.08;
-    const sxBase = startCorner.x - anchor.x;
-    const syBase = startCorner.y - anchor.y;
-    const rawSx =
-      Math.abs(sxBase) < 0.001 ? 1 : (current.x - anchor.x) / sxBase;
-    const rawSy =
-      Math.abs(syBase) < 0.001 ? 1 : (current.y - anchor.y) / syBase;
-    const sx = Math.max(minScale, rawSx);
-    const sy = Math.max(minScale, rawSy);
-    return {
-      a: sx,
-      b: 0,
-      c: 0,
-      d: sy,
-      e: anchor.x - anchor.x * sx,
-      f: anchor.y - anchor.y * sy,
-      widthScale: Math.sqrt(Math.max(minScale * minScale, sx * sy))
-    };
-  }
-
-  function rotationTransform(
-    center: { x: number; y: number },
-    angle: number
-  ): StrokeTransform {
-    const cos = Math.cos(angle);
-    const sin = Math.sin(angle);
-    return {
-      a: cos,
-      b: sin,
-      c: -sin,
-      d: cos,
-      e: center.x - center.x * cos + center.y * sin,
-      f: center.y - center.x * sin - center.y * cos,
-      widthScale: 1
-    };
-  }
-
-  function transformedPoints(
-    points: InkPoint[],
-    transform: StrokeTransform
-  ): InkPoint[] {
-    return points.map((point) => ({
-      ...transformPoint(point, transform),
-      pressure: point.pressure
-    }));
   }
 
   function selectionBounds(): StrokeBounds | null {
@@ -1312,27 +1185,6 @@
     return out;
   }
 
-  function frameFromBounds(bounds: StrokeBounds): SelectionFrame {
-    return {
-      nw: { x: bounds.minX, y: bounds.minY },
-      ne: { x: bounds.maxX, y: bounds.minY },
-      se: { x: bounds.maxX, y: bounds.maxY },
-      sw: { x: bounds.minX, y: bounds.maxY }
-    };
-  }
-
-  function transformSelectionFrame(
-    frame: SelectionFrame,
-    transform: StrokeTransform
-  ): SelectionFrame {
-    return {
-      nw: transformPoint(frame.nw, transform),
-      ne: transformPoint(frame.ne, transform),
-      se: transformPoint(frame.se, transform),
-      sw: transformPoint(frame.sw, transform)
-    };
-  }
-
   function baseSelectionFrame(): SelectionFrame | null {
     if (selectionFrame) return selectionFrame;
     const bounds = selectionBounds();
@@ -1343,13 +1195,6 @@
     const frame = baseSelectionFrame();
     if (!frame) return null;
     return transformSelectionFrame(frame, currentSelectionTransform());
-  }
-
-  function selectionCenter(frame: SelectionFrame): { x: number; y: number } {
-    return {
-      x: (frame.nw.x + frame.ne.x + frame.se.x + frame.sw.x) * 0.25,
-      y: (frame.nw.y + frame.ne.y + frame.se.y + frame.sw.y) * 0.25
-    };
   }
 
   function selectionContainsPoint(point: { x: number; y: number }): boolean {
@@ -1419,22 +1264,6 @@
       }
     }
     return null;
-  }
-
-  function pointInPolygon(
-    point: { x: number; y: number },
-    polygon: Array<{ x: number; y: number }>
-  ): boolean {
-    let inside = false;
-    for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-      const a = polygon[i];
-      const b = polygon[j];
-      const intersects =
-        a.y > point.y !== b.y > point.y &&
-        point.x < ((b.x - a.x) * (point.y - a.y)) / (b.y - a.y) + a.x;
-      if (intersects) inside = !inside;
-    }
-    return inside;
   }
 
   function drawSelectionOverlay(ctx: CanvasRenderingContext2D) {
@@ -2698,116 +2527,8 @@
     }
   }
 
-  function normalizeInkTool(value: unknown): ToolMode {
-    if (value === 'eraser' || value === 'lasso') return value;
-    return 'pen';
-  }
-
-  function normalizeInkPageTheme(value: unknown): PageThemeMode {
-    if (value === 'system') return 'system';
-    if (value === 'dark') return 'dark';
-    return 'light';
-  }
-
-  function normalizeInkPageBackground(value: unknown): PageBackgroundMode {
-    if (value === 'points' || value === 'lines' || value === 'grid') {
-      return value;
-    }
-    return 'clear';
-  }
-
-  function normalizeInkWidth(value: unknown): number {
-    const n = typeof value === 'number' ? value : Number(value);
-    return Number.isFinite(n) ? Math.min(12, Math.max(0.5, n)) : DEFAULT_WIDTH;
-  }
-
-  function normalizeColorHex(value: unknown): string | null {
-    if (typeof value !== 'string') return null;
-    const raw = value.trim();
-    const hex = raw.startsWith('#') ? raw.slice(1) : raw;
-    if (/^[0-9a-fA-F]{3}$/.test(hex)) {
-      return `#${hex
-        .split('')
-        .map((c) => c + c)
-        .join('')
-        .toLowerCase()}`;
-    }
-    if (/^[0-9a-fA-F]{6}$/.test(hex)) return `#${hex.toLowerCase()}`;
-    return null;
-  }
-
-  function colorHexToArgb(value: unknown): number {
-    const raw = typeof value === 'string' ? value : '#000000';
-    const hex = raw.startsWith('#') ? raw.slice(1) : raw;
-    const expanded =
-      hex.length === 3
-        ? hex
-            .split('')
-            .map((c) => c + c)
-            .join('')
-        : hex.slice(0, 6);
-    const rgb = Number.parseInt(expanded.padEnd(6, '0'), 16);
-    return (0xff000000 | (Number.isFinite(rgb) ? rgb : 0)) >>> 0;
-  }
-
-  function argbToColorHex(argb: number): string {
-    return `#${(argb & 0x00ffffff).toString(16).padStart(6, '0')}`;
-  }
-
   function displayCssColor(argb: number): string {
-    return cssColor(displayColor(argb));
-  }
-
-  function cssColor(argb: number): string {
-    const key = argb >>> 0;
-    const cached = cssColorCache.get(key);
-    if (cached) return cached;
-    const a = ((argb >>> 24) & 0xff) / 255;
-    const r = (argb >>> 16) & 0xff;
-    const g = (argb >>> 8) & 0xff;
-    const b = argb & 0xff;
-    const value = `rgba(${r}, ${g}, ${b}, ${a})`;
-    cssColorCache.set(key, value);
-    return value;
-  }
-
-  // Mirrors Excalidraw's dark-mode color transform: the CSS filter
-  // `invert(93%) hue-rotate(180deg)` applied mathematically per ARGB,
-  // so red stays red and blue stays blue but lightness is flipped.
-  // invert(93%) gives R' = 0.93 - 0.86·R; the 180° hue rotation uses
-  // the YIQ-like matrix from the CSS filter-effects spec, which (at
-  // θ=180°) reduces to row sums of 1, so greys round-trip cleanly.
-  function displayColor(argb: number): number {
-    if (!pageDark) return argb >>> 0;
-    const alpha = argb & 0xff000000;
-    const ir = 0.93 - 0.86 * (((argb >>> 16) & 0xff) / 255);
-    const ig = 0.93 - 0.86 * (((argb >>> 8) & 0xff) / 255);
-    const ib = 0.93 - 0.86 * ((argb & 0xff) / 255);
-    const r = clampUnit(-0.574 * ir + 1.43 * ig + 0.144 * ib);
-    const g = clampUnit(0.426 * ir + 0.43 * ig + 0.144 * ib);
-    const b = clampUnit(0.426 * ir + 1.43 * ig - 0.856 * ib);
-    const R = Math.round(r * 255);
-    const G = Math.round(g * 255);
-    const B = Math.round(b * 255);
-    return (alpha | (R << 16) | (G << 8) | B) >>> 0;
-  }
-
-  function clampUnit(value: number): number {
-    return value < 0 ? 0 : value > 1 ? 1 : value;
-  }
-
-  function sanitizePressure(value: number): number {
-    if (!Number.isFinite(value) || value <= 0) return 1;
-    return Math.min(1, value);
-  }
-
-  function base64ToBytes(b64: string): Uint8Array {
-    const standard = b64.replace(/-/g, '+').replace(/_/g, '/');
-    const padded = standard + '='.repeat((4 - (standard.length % 4)) % 4);
-    const bin = atob(padded);
-    const out = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-    return out;
+    return cssColor(displayColor(argb, pageDark), cssColorCache);
   }
 
   onMount(async () => {

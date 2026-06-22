@@ -49,7 +49,6 @@
     PAGE_SCROLL_PADDING_Y,
     PAGE_SCROLLER_CLASS,
     PAGE_SCROLLER_SCROLLBAR_CLASS,
-    PAGE_COLUMN_CLASS,
     PAGE_SURFACE_CLASS
   } from '$lib/layout/page-layout';
   import PageOverlayScrollbar from '$lib/layout/page-overlay-scrollbar.svelte';
@@ -109,107 +108,49 @@
     SEARCH_ACTIVE_NOTE_COMMAND,
     type EditorListener
   } from '$lib/hotkeys/bus.svelte';
+  import {
+    ANNOTATION_COLORS,
+    buildPdfAnnotation,
+    clampZoom,
+    clonePdfFormValue,
+    COMMENT_COLOR,
+    DRAW_KICKOFF_DELAY_MS,
+    HIGHLIGHT_COLOR,
+    INK_COLOR,
+    INK_WIDTH,
+    isCommentLikeAnnotation,
+    LOCAL_ORIGIN,
+    MAX_CANVAS_DIM,
+    MAX_CANVAS_PIXELS,
+    pdfAssetIdFromBody,
+    PDF_PAGE_COLUMN_CLASS,
+    PDF_TO_CSS_UNITS,
+    QUICK_ZOOMS,
+    RENDER_DROP_DELAY_MS,
+    RENDER_ROOT_MARGIN,
+    SAVE_DEBOUNCE_MS,
+    SEARCH_DEBOUNCE_MS,
+    SIGNATURE_COLOR,
+    type PageSize,
+    type PdfAnnotationStorage,
+    type PdfDocument,
+    type PdfJs,
+    type PdfLink,
+    type PdfPageView,
+    type PdfTool,
+    type PdfViewport,
+    type PdfViewer,
+    type RenderParams,
+    type ZoomAnchor,
+    type ZoomMode,
+    ZOOM_STEP
+  } from '$lib/pdf/viewer-helpers';
   import { alert } from './confirm-dialog.svelte';
 
   interface Props {
     noteId: string;
   }
   let { noteId }: Props = $props();
-
-  type PdfJs = typeof import('pdfjs-dist');
-  type PdfViewer = typeof import('pdfjs-dist/web/pdf_viewer.mjs');
-  type PdfDocument = Awaited<ReturnType<PdfJs['getDocument']>['promise']>;
-  type PdfPageView = InstanceType<PdfViewer['PDFPageView']>;
-  type PdfAnnotationStorage = PdfDocument['annotationStorage'];
-  type ZoomMode = 'fixed' | 'fit-width';
-  type PdfTool =
-    | 'select'
-    | 'highlight'
-    | 'comment'
-    | 'pen'
-    | 'signature'
-    | 'delete';
-  type RenderParams = {
-    pageNumber: number;
-    version: number;
-    zoom: number;
-    zoomMode: ZoomMode;
-    width: number;
-    height: number;
-    annotationVersion: number;
-    activeTool: PdfTool;
-    areaMode: boolean;
-    selectedAnnotationId: string | null;
-    shouldRender: boolean;
-    invalidation: number;
-    searchVersion: number;
-  };
-  type PageSize = { width: number; height: number };
-  type ZoomAnchor = {
-    pageNumber: number;
-    xRatio: number;
-    yRatio: number;
-  };
-  type PdfViewport = ReturnType<
-    Awaited<ReturnType<PdfDocument['getPage']>>['getViewport']
-  >;
-  type PdfLink = {
-    rect: number[];
-    url?: string;
-    dest?: string | unknown[] | null;
-  };
-
-  const MIN_ZOOM = 0.5;
-  const MAX_ZOOM = 4;
-  const ZOOM_STEP = 1.2;
-  const QUICK_ZOOMS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
-  const PDF_PAGE_COLUMN_CLASS = `${PAGE_COLUMN_CLASS} pdf-page-column`;
-  const PDF_TO_CSS_UNITS = 96 / 72;
-  // Browser canvases have hard size limits; a Letter/A4 page rendered at the
-  // top of our zoom range (MAX_ZOOM, ×devicePixelRatio) stays comfortably
-  // under these, so the page renders at full resolution across the whole zoom
-  // range instead of getting downscaled to a blurry CSS upscale. See the
-  // PDFPageView options below for why we set these explicitly.
-  const MAX_CANVAS_DIM = 16384;
-  const MAX_CANVAS_PIXELS = 2 ** 25;
-  const SAVE_DEBOUNCE_MS = 800;
-  const SEARCH_DEBOUNCE_MS = 220;
-  const HIGHLIGHT_COLOR = '#facc15';
-  const COMMENT_COLOR = '#3b82f6';
-  const SIGNATURE_COLOR = '#111827';
-  const INK_COLOR = '#111827';
-  const INK_WIDTH = 2.25;
-  // Swatches offered for the highlight and pen tools.
-  const ANNOTATION_COLORS = [
-    '#facc15',
-    '#fb923c',
-    '#f87171',
-    '#4ade80',
-    '#60a5fa',
-    '#c084fc',
-    '#111827'
-  ];
-  // Transaction origin tagging local annotation edits, so the Yjs
-  // UndoManager captures only our own changes and never undoes a peer's
-  // edit or a sync merge (both applied with a different origin).
-  const LOCAL_ORIGIN = Symbol('pdf-local-change');
-  // Pages within the viewport ± one viewport's worth above/below get a real
-  // canvas; everything else stays as a sized placeholder. Picked so smooth
-  // scrolling rarely catches a placeholder mid-screen, while a 500-page PDF
-  // still holds at most ~5 canvases instead of 500.
-  const RENDER_ROOT_MARGIN = '100% 0%';
-  // Grace period before a page leaves renderSet — covers the gap between
-  // "scrolled past" and "scrolled back to" so scrubbing doesn't churn the
-  // pageview lifecycle.
-  const RENDER_DROP_DELAY_MS = 200;
-  // Settle delay before kicking off a render for a page that just entered
-  // the render band. Fast-scroll page transitions enter & leave within
-  // milliseconds — without this delay, doc.getPage() calls pile up on
-  // PDF.js's single worker thread (those calls are NOT cancellable; only
-  // the subsequent pageView.draw() is). Already-rendered visible pages
-  // skip this delay on zoom/resize so their preview-scaled canvas doesn't
-  // linger blurry.
-  const DRAW_KICKOFF_DELAY_MS = 80;
 
   let hostEl = $state<HTMLDivElement | null>(null);
   let container = $state<HTMLDivElement | null>(null);
@@ -385,25 +326,9 @@
     });
   });
 
-  function pdfAssetIdFromBody(body: string): string | null {
-    const trimmed = body.trim();
-    if (!trimmed) return null;
-    if (trimmed.startsWith('asset_')) return trimmed;
-    try {
-      const parsed = JSON.parse(trimmed) as { pdfAssetId?: unknown };
-      return typeof parsed.pdfAssetId === 'string' ? parsed.pdfAssetId : null;
-    } catch {
-      return null;
-    }
-  }
-
   function bumpRenderVersion() {
     renderVersionCounter += 1;
     renderVersion = renderVersionCounter;
-  }
-
-  function clampZoom(value: number): number {
-    return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, value));
   }
 
   function appendSignature(signature: PdfSignatureSnapshot) {
@@ -477,17 +402,6 @@
     else fn();
   }
 
-  function clonePdfFormValue(value: unknown): PdfFormValue | null {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) {
-      return null;
-    }
-    try {
-      return JSON.parse(JSON.stringify(value)) as PdfFormValue;
-    } catch {
-      return null;
-    }
-  }
-
   function applyStoredFormValuesToPdfStorage() {
     if (!pdfDoc || !formValuesMap) return;
     const storage = pdfDoc.annotationStorage;
@@ -528,30 +442,30 @@
   ): string | null {
     const map = annotationsMap;
     if (!map || isTrashed) return null;
-    const rects = Array.isArray(rect) ? rect : [rect];
     const now = new Date().toISOString();
     const id = crypto.randomUUID();
     runLocal(() => {
-      map.set(id, {
+      map.set(
         id,
-        type,
-        pageIndex,
-        rects,
-        color:
-          type === 'highlight'
-            ? highlightColor
-            : type === 'comment'
-              ? COMMENT_COLOR
-              : type === 'ink'
-                ? inkColor
-                : SIGNATURE_COLOR,
-        opacity: type === 'highlight' ? 0.32 : type === 'comment' ? 0.18 : 1,
-        authorId: localAuthorId,
-        createdAt: now,
-        updatedAt: now,
-        body,
-        ...extras
-      });
+        buildPdfAnnotation({
+          id,
+          type,
+          pageIndex,
+          color:
+            type === 'highlight'
+              ? highlightColor
+              : type === 'comment'
+                ? COMMENT_COLOR
+                : type === 'ink'
+                  ? inkColor
+                  : SIGNATURE_COLOR,
+          authorId: localAuthorId,
+          now,
+          rect,
+          body,
+          extras
+        })
+      );
     });
     selectedAnnotationId = id;
     if (type === 'comment') {
@@ -559,17 +473,6 @@
       commentDraftFocusId = id;
     }
     return id;
-  }
-
-  function isCommentLikeAnnotation(annotation: PdfAnnotation): boolean {
-    // A highlight is "comment-like" once it carries a body string — even
-    // an empty one, which is the pending state of a just-created text
-    // comment (select text → Comment). `undefined` body = a plain
-    // highlight, which stays out of the comments sidebar.
-    return (
-      annotation.type === 'comment' ||
-      (annotation.type === 'highlight' && typeof annotation.body === 'string')
-    );
   }
 
   function deleteAnnotation(id: string) {
