@@ -926,26 +926,75 @@ body.dv-tab-dragging .freeform-canvas-host * {
 /* -------------------------------------------------------------------------
  * Wikilinks
  *
- * Decoration-only styling (no schema change). The `$lib/editor/plugins/
- * wikilink` decoration plugin wraps every `[[Title]]` span with a
- * `.wikilink` class so it reads as a hyperlink in the editor view. The
- * markdown source itself is still plain text — the syntax round-trips
- * through commonmark unchanged.
+ * The `$lib/editor/plugins/wikilink` plugin decorates app note links
+ * (`[Title](mindstream://note/id)`) with a `.wikilink` class so they read
+ * like Obsidian-style note links in the editor. Legacy literal
+ * `[[Title]]` spans are still decorated too, but only ID-backed links get
+ * generated visual brackets.
  *
- * Cmd/Ctrl+click opens; plain click places the caret (so typos in the
- * title are still editable). The cursor swap on the modifier press
- * gives the visual cue.
+ * Plain click can open when enabled in Settings -> Editor -> Markdown;
+ * Cmd/Ctrl+click always opens. When plain click is disabled, it places
+ * the caret so the link text is still editable.
  * ------------------------------------------------------------------------- */
 
 .wikilink {
-  color: hsl(var(--primary));
+  color: var(--primary);
   text-decoration: underline;
-  text-decoration-color: hsl(var(--primary) / 0.4);
+  text-decoration-color: color-mix(in oklch, var(--primary), transparent 55%);
   text-underline-offset: 2px;
   cursor: text;
 }
 .wikilink:hover {
-  text-decoration-color: hsl(var(--primary) / 0.8);
+  text-decoration-color: color-mix(in oklch, var(--primary), transparent 20%);
+}
+.wikilink-note-link {
+  padding: 0 0.15em;
+  border-radius: 4px;
+  background: color-mix(in oklch, var(--primary), transparent 88%);
+  color: var(--primary);
+  text-decoration: none;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+.wikilink-note-link:hover {
+  background: color-mix(in oklch, var(--primary), transparent 82%);
+}
+.wikilink-open-on-click .wikilink-note-link {
+  cursor: pointer;
+}
+.wikilink-note-link::before {
+  content: '[[';
+  color: color-mix(in oklch, var(--primary), transparent 35%);
+}
+.wikilink-note-link::after {
+  content: ']]';
+  color: color-mix(in oklch, var(--primary), transparent 35%);
+}
+.ProseMirror.wikilink-boundary-inside .prosemirror-virtual-cursor {
+  --prosemirror-virtual-cursor-color: var(--primary);
+  border-left-width: 3px;
+  filter: drop-shadow(
+    0 0 3px color-mix(in oklch, var(--primary), transparent 35%)
+  );
+}
+.ProseMirror.wikilink-boundary-outside .prosemirror-virtual-cursor {
+  --prosemirror-virtual-cursor-color: var(--muted-foreground);
+  opacity: 0.75;
+}
+.ProseMirror.wikilink-boundary-outside.wikilink-boundary-end
+  .prosemirror-virtual-cursor {
+  transform: translateX(var(--wikilink-bracket-offset, 0.7em));
+}
+.ProseMirror.wikilink-boundary-outside.wikilink-boundary-start
+  .prosemirror-virtual-cursor {
+  transform: translateX(calc(-1 * var(--wikilink-bracket-offset, 0.7em)));
+}
+/* Crepe's stock link editor exposes the internal note ID. Note links have
+ * their own editor behavior, so keep the generic URL tooltip out of sight. */
+.milkdown .milkdown-link-preview:has(.link-display[href^='mindstream://note/']),
+.milkdown .milkdown-link-edit:has(input[value^='mindstream://note/']) {
+  display: none !important;
+  pointer-events: none !important;
 }
 /* Modifier held → switch to pointer to signal "this is now a link". */
 .ProseMirror:has(.wikilink:hover):where([data-meta-pressed]) .wikilink:hover,

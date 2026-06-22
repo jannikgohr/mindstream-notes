@@ -199,6 +199,7 @@
     "hotkeys.command.editor.ink.redo": "Wiederholen",
     "hotkeys.command.editor.ink.toggleFingerDrawing": "Fingerzeichnen umschalten",
     "hotkeys.command.editor.ink.togglePageTheme": "Seitendesign umschalten",
+    "hotkeys.command.editor.ink.togglePageBackground": "Seitenhintergrund umschalten",
     "hotkeys.command.editor.ink.clear": "Handschriftliche Notiz leeren",
     "hotkeys.command.editor.pdf.select": "Auswählen",
     "hotkeys.command.editor.pdf.highlight": "Hervorheben",
@@ -283,8 +284,9 @@
     "ink.toolbar.zoom": "Zoom wählen",
     "ink.toolbar.fitWidth": "Breite anpassen",
     "ink.toolbar.settings": "Ink-Einstellungen",
-    "ink.toolbar.fingerDrawing": "Fingerzeichnen umschalten",
-    "ink.toolbar.pageTheme": "Seitendesign umschalten",
+    "ink.toolbar.fingerDrawing": "Fingerzeichnen",
+    "ink.toolbar.pageTheme": "Seitendesign",
+    "ink.toolbar.pageBackground": "Seitenhintergrund",
     "ink.toolbar.clear": "Handschriftliche Notiz leeren",
     "ink.toolbar.selectionActions": "Auswahlaktionen",
     "ink.toolbar.cutSelected": "Ausgewählte Tinte ausschneiden",
@@ -568,6 +570,10 @@
     "editor.math": { "label": "Mathe (KaTeX)" },
     "editor.mermaid": { "label": "Mermaid-Diagramme" },
     "editor.wikilinks": { "label": "Wikilinks [[...]]" },
+    "editor.wikilinkOpenOnClick": {
+      "label": "Wikilinks mit Linksklick öffnen",
+      "description": "Öffnet Notizlinks mit einem normalen Klick. Deaktiviere dies, um den Cursor in Notizlinks zu setzen und sie mit Strg/Cmd-Klick zu öffnen."
+    },
     "editor.footnotes": { "label": "Fußnoten" },
     "editor.freeform.penMode": {
       "label": "Stift-Modus",
@@ -583,6 +589,14 @@
     "editor.ink.pageTheme": {
       "label": "Ink-Seitendesign",
       "description": "Legt fest, ob handschriftliche Seiten hell, dunkel bleiben oder dem App-Design folgen."
+    },
+    "editor.ink.pageBackground": {
+      "label": "Ink-Seitenhintergrund",
+      "description": "Hintergrundmuster für handschriftliche Seiten."
+    },
+    "editor.ink.pageBackgroundColor": {
+      "label": "Ink-Seitenhintergrundfarbe",
+      "description": "Farbe des Seitenhintergrundmusters. Wird mit geringer Deckkraft angewendet, damit es dezent bleibt."
     },
     "editor.autoSave": { "label": "Auto-Speichern" },
     "hotkeys.panel": { "label": "Tastaturkürzel" },
@@ -630,6 +644,10 @@
     "editor.ink.tool.lasso": "Lasso-Auswahl",
     "editor.ink.pageTheme.light": "Hell",
     "editor.ink.pageTheme.dark": "Dunkel",
-    "editor.ink.pageTheme.system": "App-Design folgen"
+    "editor.ink.pageTheme.system": "App-Design folgen",
+    "editor.ink.pageBackground.clear": "Leer",
+    "editor.ink.pageBackground.points": "Punkte",
+    "editor.ink.pageBackground.lines": "Linien",
+    "editor.ink.pageBackground.grid": "Raster"
   }
 }

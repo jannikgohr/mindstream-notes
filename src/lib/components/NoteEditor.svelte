@@ -86,6 +86,10 @@
   const wikilinksEnabled = $derived(
     (getSettingValue('editor.wikilinks') as boolean | undefined) ?? true
   );
+  const wikilinkOpenOnClick = $derived(
+    (getSettingValue('editor.wikilinkOpenOnClick') as boolean | undefined) ??
+      true
+  );
 
   // Per-editor bridge between the wikilink trigger plugin and the
   // WikilinkMenu popup. Created up-front (cheap; just a $state object)
@@ -276,6 +280,7 @@
         autoPairEnabled,
         mermaidEnabled,
         wikilinksEnabled,
+        wikilinkOpenOnClick: () => wikilinkOpenOnClick,
         wikilinkBridge,
         searchBridge,
         assetBridge
@@ -897,6 +902,7 @@
       bind:this={host}
       class="mx-auto max-w-3xl"
       class:mobile-editor={mobile}
+      class:wikilink-open-on-click={wikilinkOpenOnClick}
     ></div>
   </div>
 </div>

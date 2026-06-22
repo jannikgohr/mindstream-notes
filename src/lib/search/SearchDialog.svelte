@@ -15,14 +15,10 @@
   import { onDestroy, tick } from 'svelte';
   import { Dialog } from 'bits-ui';
   import { Folder, Search as SearchIcon, X } from '@lucide/svelte';
-  import {
-    searchNotes,
-    TRASH_ID,
-    type Collection,
-    type SearchHit
-  } from '$lib/api';
+  import { searchNotes, type SearchHit } from '$lib/api';
   import { splitByRanges } from '$lib/api/search-matcher';
   import { noteKindIcon } from '$lib/components/note-kind-icon';
+  import { folderPathLabel } from '$lib/notes/folder-path';
   import { requestOpenNote } from '$lib/stores/open-note-intent.svelte';
   import { tree } from '$lib/stores/tree.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
@@ -146,33 +142,8 @@
     // Esc is handled by bits-ui Dialog automatically.
   }
 
-  /** Resolve the folder chain (root → leaf) for a note's parent. */
-  function folderPath(parentId: string | null): Collection[] {
-    if (!parentId) return [];
-    const out: Collection[] = [];
-    let cur: string | null = parentId;
-    const seen = new Set<string>();
-    while (cur !== null && !seen.has(cur)) {
-      seen.add(cur);
-      const col: Collection | undefined = tree.collectionsById[cur];
-      if (!col) break;
-      out.push(col);
-      cur = col.parent_collection_id;
-    }
-    return out.reverse();
-  }
-
   function pathLabel(parentId: string | null): string {
-    const path = folderPath(parentId);
-    if (path.length === 0) return '';
-    // Hide the trash root from the label — the dialog already filters
-    // trashed notes out of the result set on the Rust side, but a
-    // restored note whose folder still sits in trash would otherwise
-    // show "Trash / …" here.
-    return path
-      .filter((c) => c.id !== TRASH_ID)
-      .map((c) => c.name)
-      .join(' / ');
+    return folderPathLabel(parentId, tree.collectionsById);
   }
 </script>
 

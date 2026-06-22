@@ -127,6 +127,7 @@ export interface DrawingToolbarSettingsPayload {
   width: number;
   fingerDrawingAllowed: boolean;
   pageThemeMode: 'light' | 'dark' | 'system';
+  pageBackground: 'clear' | 'points' | 'lines' | 'grid';
 }
 
 export interface DrawingToolbarSettings {
@@ -135,4 +136,5 @@ export interface DrawingToolbarSettings {
   width?: number | null;
   fingerDrawingAllowed?: boolean | null;
   pageThemeMode?: 'light' | 'dark' | 'system' | null;
+  pageBackground?: 'clear' | 'points' | 'lines' | 'grid' | null;
 }

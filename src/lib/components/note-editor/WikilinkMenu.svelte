@@ -33,7 +33,9 @@
     size,
     type VirtualElement
   } from '@floating-ui/dom';
+  import { Folder } from '@lucide/svelte';
   import { noteKindIcon } from '$lib/components/note-kind-icon';
+  import { folderPathLabel } from '$lib/notes/folder-path';
   import { tree } from '$lib/stores/tree.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
   import type {
@@ -59,6 +61,8 @@
     title: string;
     /** Discriminator for the per-row icon (see noteKindIcon). */
     note_kind: string;
+    path: string;
+    duplicateTitle: boolean;
   }
 
   /**
@@ -72,10 +76,16 @@
     if (!bridge.state.open) return [];
     const q = bridge.state.query.trim().toLowerCase();
     const all = Object.values(tree.notesById).filter((n) => !n.trashed);
+    const titleCounts = new Map<string, number>();
+    for (const n of all) {
+      const key = n.title.trim().toLowerCase();
+      titleCounts.set(key, (titleCounts.get(key) ?? 0) + 1);
+    }
     let scored: Array<{
       id: string;
       title: string;
       note_kind: string;
+      parent_collection_id: string | null;
       rank: number;
     }> = [];
     if (!q) {
@@ -83,6 +93,7 @@
         id: n.id,
         title: n.title,
         note_kind: n.note_kind,
+        parent_collection_id: n.parent_collection_id,
         rank: 0
       }));
       scored.sort((a, b) => {
@@ -96,13 +107,26 @@
         const idx = t.indexOf(q);
         if (idx < 0) continue;
         const rank = idx === 0 ? 0 : idx + t.length / 1000;
-        scored.push({ id: n.id, title: n.title, note_kind: n.note_kind, rank });
+        scored.push({
+          id: n.id,
+          title: n.title,
+          note_kind: n.note_kind,
+          parent_collection_id: n.parent_collection_id,
+          rank
+        });
       }
       scored.sort((a, b) => a.rank - b.rank);
     }
-    return scored
-      .slice(0, MAX_RESULTS)
-      .map(({ id, title, note_kind }) => ({ id, title, note_kind }));
+    return scored.slice(0, MAX_RESULTS).map((note) => {
+      const key = note.title.trim().toLowerCase();
+      return {
+        id: note.id,
+        title: note.title,
+        note_kind: note.note_kind,
+        path: folderPathLabel(note.parent_collection_id, tree.collectionsById),
+        duplicateTitle: (titleCounts.get(key) ?? 0) > 1
+      };
+    });
   });
 
   // Keep the plugin's highlight inside the visible range. Triggered
@@ -126,7 +150,7 @@
       const idx = untrack(() => bridge.state.highlight);
       const picked = list[idx] ?? list[0];
       if (picked) {
-        bridge.insert(picked.title);
+        bridge.insert({ id: picked.id, title: picked.title });
       } else {
         bridge.cancel();
       }
@@ -152,6 +176,8 @@
 
   let popupEl = $state<HTMLDivElement | null>(null);
   let listEl = $state<HTMLDivElement | null>(null);
+  let positioned = $state(false);
+  let positionRun = 0;
 
   /**
    * `computePosition` is async; we re-call it whenever the menu state
@@ -198,8 +224,13 @@
     const rect = bridge.state.caretRect;
     // Re-run on query change because the caret moves as the user types.
     void bridge.state.query;
+    positionRun += 1;
+    positioned = false;
     if (!open || !rect || !popupEl) return;
-    void reposition(rect, popupEl);
+    const run = positionRun;
+    void reposition(rect, popupEl).then(() => {
+      if (run === positionRun && bridge.state.open) positioned = true;
+    });
   });
 
   // Recompute on viewport resize / scroll — the caret rect we stored is
@@ -212,7 +243,13 @@
     if (!bridge.state.open) return;
     const onResize = () => {
       const rect = bridge.state.caretRect;
-      if (rect && popupEl) void reposition(rect, popupEl);
+      if (rect && popupEl) {
+        const run = ++positionRun;
+        positioned = false;
+        void reposition(rect, popupEl).then(() => {
+          if (run === positionRun && bridge.state.open) positioned = true;
+        });
+      }
     };
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
@@ -231,7 +268,7 @@
   });
 </script>
 
-{#if bridge.state.open}
+{#if bridge.state.open && bridge.state.caretRect}
   <!--
     Portaled to <body> so dockview's panel transforms can't capture our
     position:fixed (which is why the menu was drifting). role=listbox:
@@ -241,7 +278,9 @@
   <div
     use:portal
     bind:this={popupEl}
-    class="wikilink-menu fixed z-50 flex flex-col overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-lg"
+    class="wikilink-menu fixed z-50 flex flex-col overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-lg {positioned
+      ? ''
+      : 'invisible pointer-events-none'}"
     style="width: 280px;"
     role="listbox"
     aria-label={tUi('editor.wikilink.menu.label')}
@@ -258,23 +297,37 @@
         {#each candidates as note, i (note.id)}
           {@const active = i === bridge.state.highlight}
           {@const Icon = noteKindIcon(note.note_kind)}
+          {@const path =
+            note.path ||
+            (note.duplicateTitle ? tUi('metadata.folder.root') : '')}
           <button
             type="button"
             role="option"
             aria-selected={active}
-            class="flex w-full items-center gap-3 rounded-md px-3 py-2 text-left text-sm font-medium transition-colors {active
+            class="flex w-full items-start gap-3 rounded-md px-3 py-2 text-left text-sm transition-colors {active
               ? 'bg-accent text-accent-foreground'
               : 'hover:bg-accent/60'}"
             onpointerdown={(e) => {
               // Don't yank focus from the editor — the trigger plugin's
               // doc state would close the menu on blur otherwise.
               e.preventDefault();
-              bridge.insert(note.title);
+              bridge.insert({ id: note.id, title: note.title });
             }}
             onmouseenter={() => (bridge.state.highlight = i)}
           >
-            <Icon class="size-4 shrink-0 opacity-60" aria-hidden="true" />
-            <span class="truncate">{note.title}</span>
+            <Icon
+              class="mt-0.5 size-4 shrink-0 opacity-60"
+              aria-hidden="true"
+            />
+            <span class="min-w-0 flex-1">
+              <span class="block truncate font-medium">{note.title}</span>
+              {#if path}
+                <span class="mt-0.5 flex items-center gap-1 text-xs opacity-70">
+                  <Folder class="size-3 shrink-0" aria-hidden="true" />
+                  <span class="truncate">{path}</span>
+                </span>
+              {/if}
+            </span>
           </button>
         {/each}
       </div>

@@ -47,12 +47,12 @@ export interface WikilinkBridge {
     highlight: number;
   };
   /**
-   * Popup calls this to commit a selection by title. Plugin replaces
-   * the `[[query` (and a trailing `]]` if auto-paired) with
-   * `[[title]]`, places the cursor after, and closes the menu.
+   * Popup calls this to commit a selected note. Plugin replaces the
+   * `[[query` (and a trailing `]]` if auto-paired) with an ID-backed
+   * markdown link mark, places the cursor after it, and closes the menu.
    * Wired by the plugin via `setHandlers`.
    */
-  insert(title: string): void;
+  insert(note: { id: string; title: string }): void;
   /** Closes the menu without inserting. Wired by the plugin. */
   cancel(): void;
   /** Plugin invokes when the user presses Enter inside the editor while
@@ -60,7 +60,7 @@ export interface WikilinkBridge {
   commitFromPopup(): void;
   /** Plugin → bridge wiring (called once when the plugin attaches). */
   setHandlers(handlers: {
-    insert: (title: string) => void;
+    insert: (note: { id: string; title: string }) => void;
     cancel: () => void;
   }): void;
   /** Popup → bridge wiring (called when the popup mounts). */
@@ -77,13 +77,13 @@ export function createWikilinkBridge(): WikilinkBridge {
 
   // Stub callables so both sides can call through without null checks
   // even before the other side has wired up. Replaced via the setters.
-  let insertFn: (title: string) => void = () => {};
+  let insertFn: (note: { id: string; title: string }) => void = () => {};
   let cancelFn: () => void = () => {};
   let commitFn: () => void = () => {};
 
   return {
     state,
-    insert: (title) => insertFn(title),
+    insert: (note) => insertFn(note),
     cancel: () => cancelFn(),
     commitFromPopup: () => commitFn(),
     setHandlers(handlers) {
