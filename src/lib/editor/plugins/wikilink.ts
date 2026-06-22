@@ -35,6 +35,7 @@ import {
   TextSelection,
   type EditorState
 } from '@milkdown/kit/prose/state';
+import type { Mark } from '@milkdown/kit/prose/model';
 import { Decoration, DecorationSet } from '@milkdown/kit/prose/view';
 import type { EditorView } from '@milkdown/kit/prose/view';
 import { $prose } from '@milkdown/kit/utils';
@@ -521,10 +522,394 @@ interface WikilinkPluginOptions {
   openOnClick: () => boolean;
 }
 
+interface NoteLinkTextRange {
+  from: number;
+  to: number;
+  href: string;
+  mark: Mark;
+}
+
+interface LinkBoundaryEdit {
+  pos: number;
+  mark: Mark;
+}
+
+interface LinkBoundaryMode {
+  mode: 'inside' | 'outside';
+  side: 'start' | 'end';
+}
+
+function noteLinkTextRanges(state: EditorState): NoteLinkTextRange[] {
+  const ranges: NoteLinkTextRange[] = [];
+  state.doc.descendants((node, pos) => {
+    if (!node.isText || !node.text) return;
+    const mark = node.marks.find((mark) => parseNoteHref(mark.attrs.href));
+    if (!mark) return;
+    const href = mark?.attrs.href;
+    if (typeof href !== 'string') return;
+
+    const last = ranges[ranges.length - 1];
+    if (last && last.href === href && last.to === pos && last.mark.eq(mark)) {
+      last.to = pos + node.text.length;
+    } else {
+      ranges.push({ from: pos, to: pos + node.text.length, href, mark });
+    }
+  });
+  return ranges;
+}
+
+function noteLinkDeletionRange(
+  state: EditorState,
+  event: KeyboardEvent
+): { from: number; to: number } | null {
+  const { selection } = state;
+  if (!(selection instanceof TextSelection)) return null;
+  if (!selection.empty) return { from: selection.from, to: selection.to };
+  const pos = selection.from;
+
+  if (event.key === 'Backspace') {
+    if (pos === 0) return null;
+    if (!event.ctrlKey && !event.metaKey && !event.altKey) {
+      return { from: pos - 1, to: pos };
+    }
+    const $from = selection.$from;
+    if (!$from.parent.isTextblock) return null;
+    const offset = $from.parentOffset;
+    if (offset === 0) return null;
+    const text = $from.parent.textBetween(
+      0,
+      $from.parent.content.size,
+      '\n',
+      '\n'
+    );
+    let start = offset;
+    while (start > 0 && /\s/.test(text[start - 1])) start -= 1;
+    while (start > 0 && !/\s/.test(text[start - 1])) start -= 1;
+    return { from: $from.start() + start, to: pos };
+  }
+
+  if (event.key === 'Delete') {
+    if (!event.ctrlKey && !event.metaKey && !event.altKey) {
+      return pos < state.doc.content.size ? { from: pos, to: pos + 1 } : null;
+    }
+    const $from = selection.$from;
+    if (!$from.parent.isTextblock) return null;
+    const offset = $from.parentOffset;
+    const text = $from.parent.textBetween(
+      0,
+      $from.parent.content.size,
+      '\n',
+      '\n'
+    );
+    if (offset >= text.length) return null;
+    let end = offset;
+    while (end < text.length && /\s/.test(text[end])) end += 1;
+    while (end < text.length && !/\s/.test(text[end])) end += 1;
+    return { from: pos, to: $from.start() + end };
+  }
+
+  return null;
+}
+
+function wholeNoteLinkDeletion(
+  state: EditorState,
+  event: KeyboardEvent
+): { from: number; to: number; mark: Mark } | null {
+  const deletion = noteLinkDeletionRange(state, event);
+  if (!deletion || deletion.from >= deletion.to) return null;
+
+  const range = noteLinkTextRanges(state).find(
+    (range) =>
+      deletion.from <= range.from &&
+      deletion.to >= range.to &&
+      deletion.from < range.to &&
+      deletion.to > range.from
+  );
+  if (!range) return null;
+
+  return { from: deletion.from, to: deletion.to, mark: range.mark };
+}
+
+function linkMarkType(state: EditorState) {
+  return state.schema.marks.link ?? null;
+}
+
+function linkMarkIn(marks: readonly Mark[], state: EditorState): Mark | null {
+  const type = linkMarkType(state);
+  if (!type) return null;
+  return marks.find((mark) => mark.type === type) ?? null;
+}
+
+function activeMarks(state: EditorState): readonly Mark[] {
+  return state.storedMarks ?? state.selection.$from.marks();
+}
+
+function marksWithoutLink(state: EditorState): Mark[] {
+  const type = linkMarkType(state);
+  if (!type) return [...activeMarks(state)];
+  return activeMarks(state).filter((mark) => mark.type !== type);
+}
+
+function marksWithLink(state: EditorState, mark: Mark): Mark[] {
+  return [...mark.addToSet(marksWithoutLink(state))];
+}
+
+function exactStoredLinkMark(state: EditorState, mark: Mark): Mark | null {
+  return state.storedMarks?.find((stored) => stored.eq(mark)) ?? null;
+}
+
+function activeLinkMark(state: EditorState, mark: Mark): Mark | null {
+  return activeMarks(state).find((active) => active.eq(mark)) ?? null;
+}
+
+function hasActiveLinkMark(state: EditorState): boolean {
+  return !!linkMarkIn(activeMarks(state), state);
+}
+
+function textNodeLinkMarkAtBoundary(
+  state: EditorState,
+  pos: number,
+  side: 'before' | 'after'
+): Mark | null {
+  const $pos = state.doc.resolve(pos);
+  const node = side === 'before' ? $pos.nodeBefore : $pos.nodeAfter;
+  if (!node?.isText) return null;
+  return linkMarkIn(node.marks, state);
+}
+
+function trailingBoundaryLinkMark(
+  state: EditorState,
+  pos: number
+): Mark | null {
+  const before = textNodeLinkMarkAtBoundary(state, pos, 'before');
+  if (!before) return null;
+  const after = textNodeLinkMarkAtBoundary(state, pos, 'after');
+  return after?.eq(before) ? null : before;
+}
+
+function leadingBoundaryLinkMark(state: EditorState, pos: number): Mark | null {
+  const after = textNodeLinkMarkAtBoundary(state, pos, 'after');
+  if (!after) return null;
+  const before = textNodeLinkMarkAtBoundary(state, pos, 'before');
+  return before?.eq(after) ? null : after;
+}
+
+function boundaryEditMatches(
+  edit: LinkBoundaryEdit | null,
+  pos: number,
+  mark: Mark | null
+): boolean {
+  return !!edit && !!mark && edit.pos === pos && edit.mark.eq(mark);
+}
+
+function boundaryEditAt(edit: LinkBoundaryEdit | null, pos: number): boolean {
+  return !!edit && edit.pos === pos;
+}
+
+function deleteNoteLinkText(
+  view: EditorView,
+  event: KeyboardEvent
+): LinkBoundaryEdit | null {
+  const deletion = wholeNoteLinkDeletion(view.state, event);
+  if (!deletion) return null;
+
+  const tr = view.state.tr.delete(deletion.from, deletion.to);
+  const mappedPos = tr.mapping.map(deletion.from, -1);
+  tr.setSelection(TextSelection.create(tr.doc, mappedPos));
+  tr.setStoredMarks(marksWithLink(view.state, deletion.mark));
+  view.dispatch(tr);
+  return { pos: mappedPos, mark: deletion.mark };
+}
+
+function insertLinkBoundaryText(
+  view: EditorView,
+  pos: number,
+  text: string,
+  mark: Mark
+): number | null {
+  if (!text) return null;
+  const marks = marksWithLink(view.state, mark);
+  const textNode = view.state.schema.text(text, marks);
+  const tr = view.state.tr.replaceWith(pos, pos, textNode);
+  tr.setSelection(TextSelection.create(tr.doc, pos + text.length));
+  tr.setStoredMarks(marks);
+  view.dispatch(tr);
+  return pos + text.length;
+}
+
+function shouldTypeOutsideLinkBoundary(
+  state: EditorState,
+  pos: number
+): boolean {
+  const boundaryMark =
+    trailingBoundaryLinkMark(state, pos) ?? leadingBoundaryLinkMark(state, pos);
+  if (!boundaryMark) return false;
+  if (hasActiveLinkMark(state)) return false;
+  return !exactStoredLinkMark(state, boundaryMark);
+}
+
+function typeOutsideLinkBoundary(
+  view: EditorView,
+  from: number,
+  to: number,
+  text: string
+): boolean {
+  if (from !== to || !shouldTypeOutsideLinkBoundary(view.state, from)) {
+    return false;
+  }
+
+  const type = linkMarkType(view.state);
+  const tr = view.state.tr.insertText(text, from, to);
+  if (type) tr.removeMark(from, from + text.length, type);
+  tr.setStoredMarks(marksWithoutLink(view.state));
+  view.dispatch(tr);
+  return true;
+}
+
+function toggleLinkBoundaryEditing(
+  view: EditorView,
+  event: KeyboardEvent,
+  activeBoundaryEdit: LinkBoundaryEdit | null
+): LinkBoundaryEdit | 'exit' | null {
+  if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return null;
+  const { state } = view;
+  const { selection } = state;
+  if (!(selection instanceof TextSelection) || !selection.empty) return null;
+
+  const pos = selection.from;
+  const trailing = trailingBoundaryLinkMark(state, pos);
+  const leading = leadingBoundaryLinkMark(state, pos);
+  const activeTrailing = boundaryEditMatches(activeBoundaryEdit, pos, trailing);
+  const activeLeading = boundaryEditMatches(activeBoundaryEdit, pos, leading);
+  const activeAtBoundary = boundaryEditAt(activeBoundaryEdit, pos);
+  const exitMark =
+    (event.key === 'ArrowRight' &&
+      trailing &&
+      (activeAtBoundary ||
+        activeTrailing ||
+        activeLinkMark(state, trailing))) ||
+    (event.key === 'ArrowLeft' &&
+      leading &&
+      (activeAtBoundary || activeLeading || activeLinkMark(state, leading)));
+  if (exitMark) {
+    event.preventDefault();
+    view.dispatch(state.tr.setStoredMarks(marksWithoutLink(state)));
+    return 'exit';
+  }
+
+  const enterMark =
+    (event.key === 'ArrowLeft' &&
+    trailing &&
+    !activeTrailing &&
+    !exactStoredLinkMark(state, trailing)
+      ? trailing
+      : null) ??
+    (event.key === 'ArrowRight' &&
+    leading &&
+    !activeLeading &&
+    !exactStoredLinkMark(state, leading)
+      ? leading
+      : null);
+  if (!enterMark) return null;
+
+  event.preventDefault();
+  view.dispatch(state.tr.setStoredMarks(marksWithLink(state, enterMark)));
+  return { pos, mark: enterMark };
+}
+
+function clearLinkBoundaryEditingSoon(view: EditorView, pos: number): void {
+  window.setTimeout(() => {
+    if (view.isDestroyed) return;
+    const { state } = view;
+    const { selection } = state;
+    if (!(selection instanceof TextSelection) || !selection.empty) return;
+    if (selection.from !== pos) return;
+    if (
+      !trailingBoundaryLinkMark(state, pos) &&
+      !leadingBoundaryLinkMark(state, pos)
+    ) {
+      return;
+    }
+    view.dispatch(state.tr.setStoredMarks(marksWithoutLink(state)));
+  }, 0);
+}
+
 function wikilinkDecorationPlugin(
   bridge: WikilinkBridge,
   options: WikilinkPluginOptions
 ): Plugin {
+  let pendingEmptyNoteLink: LinkBoundaryEdit | null = null;
+  let activeBoundaryLinkEdit: LinkBoundaryEdit | null = null;
+
+  function boundaryMode(view: EditorView): LinkBoundaryMode | null {
+    const { state } = view;
+    const { selection } = state;
+    if (!(selection instanceof TextSelection) || !selection.empty) return null;
+    const pos = selection.from;
+
+    if (pendingEmptyNoteLink?.pos === pos) {
+      return { mode: 'inside', side: 'end' };
+    }
+
+    const trailing = trailingBoundaryLinkMark(state, pos);
+    const leading = leadingBoundaryLinkMark(state, pos);
+    const boundaryMark = trailing ?? leading;
+    if (!boundaryMark) return null;
+
+    const side = trailing ? 'end' : 'start';
+
+    if (boundaryEditAt(activeBoundaryLinkEdit, pos)) {
+      return { mode: 'inside', side };
+    }
+    if (boundaryEditMatches(activeBoundaryLinkEdit, pos, boundaryMark))
+      return { mode: 'inside', side };
+    if (hasActiveLinkMark(state)) return { mode: 'inside', side };
+    return {
+      mode: exactStoredLinkMark(state, boundaryMark) ? 'inside' : 'outside',
+      side
+    };
+  }
+
+  function syncBoundaryMode(view: EditorView): void {
+    const boundary = boundaryMode(view);
+    view.dom.classList.toggle(
+      'wikilink-boundary-inside',
+      boundary?.mode === 'inside'
+    );
+    view.dom.classList.toggle(
+      'wikilink-boundary-outside',
+      boundary?.mode === 'outside'
+    );
+    view.dom.classList.toggle(
+      'wikilink-boundary-start',
+      boundary?.side === 'start'
+    );
+    view.dom.classList.toggle(
+      'wikilink-boundary-end',
+      boundary?.side === 'end'
+    );
+    if (boundary) {
+      view.dom.dataset.wikilinkBoundary = boundary.mode;
+      view.dom.dataset.wikilinkBoundarySide = boundary.side;
+    } else {
+      delete view.dom.dataset.wikilinkBoundary;
+      delete view.dom.dataset.wikilinkBoundarySide;
+    }
+  }
+
+  function setActiveBoundaryLinkEdit(
+    view: EditorView,
+    edit: LinkBoundaryEdit | null
+  ): void {
+    activeBoundaryLinkEdit = edit;
+    syncBoundaryMode(view);
+  }
+
+  function clearLinkEditState(view: EditorView): void {
+    pendingEmptyNoteLink = null;
+    setActiveBoundaryLinkEdit(view, null);
+  }
+
   function build(
     doc: Parameters<typeof DecorationSet.create>[0]
   ): DecorationSet {
@@ -588,11 +973,22 @@ function wikilinkDecorationPlugin(
       view.dom.addEventListener('click', hideTooltip, true);
 
       return {
+        update(view) {
+          syncBoundaryMode(view);
+        },
         destroy() {
           view.dom.removeEventListener('mousemove', suppressHoverTooltip, true);
           view.dom.removeEventListener('mouseover', suppressHoverTooltip, true);
           view.dom.removeEventListener('mousedown', hideTooltip, true);
           view.dom.removeEventListener('click', hideTooltip, true);
+          view.dom.classList.remove(
+            'wikilink-boundary-inside',
+            'wikilink-boundary-outside',
+            'wikilink-boundary-start',
+            'wikilink-boundary-end'
+          );
+          delete view.dom.dataset.wikilinkBoundary;
+          delete view.dom.dataset.wikilinkBoundarySide;
         }
       };
     },
@@ -609,7 +1005,63 @@ function wikilinkDecorationPlugin(
       decorations(state) {
         return decorationPluginKey.getState(state);
       },
-      handleClick(_view, _pos, event) {
+      handleTextInput(view, from, to, text) {
+        if (
+          activeBoundaryLinkEdit &&
+          from === to &&
+          from === activeBoundaryLinkEdit.pos
+        ) {
+          const nextPos = insertLinkBoundaryText(
+            view,
+            from,
+            text,
+            activeBoundaryLinkEdit.mark
+          );
+          if (nextPos !== null) {
+            pendingEmptyNoteLink = null;
+            setActiveBoundaryLinkEdit(view, {
+              pos: nextPos,
+              mark: activeBoundaryLinkEdit.mark
+            });
+            return true;
+          }
+        }
+
+        if (
+          pendingEmptyNoteLink &&
+          from === to &&
+          from === pendingEmptyNoteLink.pos
+        ) {
+          const nextPos = insertLinkBoundaryText(
+            view,
+            from,
+            text,
+            pendingEmptyNoteLink.mark
+          );
+          const mark = pendingEmptyNoteLink.mark;
+          pendingEmptyNoteLink = null;
+          if (nextPos !== null) {
+            setActiveBoundaryLinkEdit(view, { pos: nextPos, mark });
+            return true;
+          }
+        }
+
+        pendingEmptyNoteLink = null;
+        const typedOutside = typeOutsideLinkBoundary(view, from, to, text);
+        if (typedOutside) setActiveBoundaryLinkEdit(view, null);
+        return typedOutside;
+      },
+      handleClick(view, pos, event) {
+        clearLinkEditState(view);
+        if (
+          !event.metaKey &&
+          !event.ctrlKey &&
+          !event.altKey &&
+          !event.shiftKey
+        ) {
+          clearLinkBoundaryEditingSoon(view, pos);
+        }
+
         // Ctrl/Cmd always opens. Plain left click opens when the user
         // opts into note links behaving like ordinary navigation.
         const openModifier = event.metaKey || event.ctrlKey;
@@ -650,6 +1102,31 @@ function wikilinkDecorationPlugin(
         bridge.cancel();
         requestOpenNote(id);
         return true;
+      },
+      handleKeyDown(view, event) {
+        if (event.key === 'Backspace' || event.key === 'Delete') {
+          if (!wholeNoteLinkDeletion(view.state, event)) return false;
+          event.preventDefault();
+          pendingEmptyNoteLink = deleteNoteLinkText(view, event);
+          setActiveBoundaryLinkEdit(view, null);
+          syncBoundaryMode(view);
+          return !!pendingEmptyNoteLink;
+        }
+
+        const toggled = toggleLinkBoundaryEditing(
+          view,
+          event,
+          activeBoundaryLinkEdit
+        );
+        if (toggled) {
+          pendingEmptyNoteLink = null;
+          setActiveBoundaryLinkEdit(view, toggled === 'exit' ? null : toggled);
+          return true;
+        }
+        if (event.key.startsWith('Arrow')) {
+          clearLinkEditState(view);
+        }
+        return false;
       }
     }
   });

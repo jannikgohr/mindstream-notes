@@ -921,6 +921,21 @@ body.dv-tab-dragging .freeform-canvas-host * {
   content: ']]';
   color: color-mix(in oklch, var(--primary), transparent 35%);
 }
+.ProseMirror.wikilink-boundary-inside .prosemirror-virtual-cursor {
+  --prosemirror-virtual-cursor-color: var(--primary);
+  border-left-width: 3px;
+  filter: drop-shadow(
+    0 0 3px color-mix(in oklch, var(--primary), transparent 35%)
+  );
+}
+.ProseMirror.wikilink-boundary-outside .prosemirror-virtual-cursor {
+  --prosemirror-virtual-cursor-color: var(--muted-foreground);
+  opacity: 0.75;
+}
+.ProseMirror.wikilink-boundary-outside.wikilink-boundary-end
+  .prosemirror-virtual-cursor {
+  transform: translateX(1.05em);
+}
 /* Crepe's stock link editor exposes the internal note ID. Note links have
  * their own editor behavior, so keep the generic URL tooltip out of sight. */
 .milkdown .milkdown-link-preview:has(.link-display[href^='mindstream://note/']),
