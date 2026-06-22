@@ -658,14 +658,6 @@ function exactStoredLinkMark(state: EditorState, mark: Mark): Mark | null {
   return state.storedMarks?.find((stored) => stored.eq(mark)) ?? null;
 }
 
-function activeLinkMark(state: EditorState, mark: Mark): Mark | null {
-  return activeMarks(state).find((active) => active.eq(mark)) ?? null;
-}
-
-function hasActiveLinkMark(state: EditorState): boolean {
-  return !!linkMarkIn(activeMarks(state), state);
-}
-
 function textNodeLinkMarkAtBoundary(
   state: EditorState,
   pos: number,
@@ -721,6 +713,49 @@ function deleteNoteLinkText(
   return { pos: mappedPos, mark: deletion.mark };
 }
 
+// Delete one character while staying in boundary editing: Backspace eats the
+// link character to the left (right-side editing), Delete the one to the right
+// (left-side editing). Keeps the link mark stored and tracks the new caret so
+// the caret doesn't pop "outside" the moment the link loses its last edge
+// character. Returns null when the deletion would leave the link text (let the
+// default handler — or the whole-link path — take over instead).
+function deleteInsideLinkBoundary(
+  view: EditorView,
+  event: KeyboardEvent,
+  edit: LinkBoundaryEdit
+): LinkBoundaryEdit | null {
+  const { state } = view;
+  const { selection } = state;
+  if (!(selection instanceof TextSelection) || !selection.empty) return null;
+  if (event.ctrlKey || event.metaKey || event.altKey) return null;
+  const pos = selection.from;
+  if (pos !== edit.pos) return null;
+
+  if (event.key === 'Backspace') {
+    if (pos === 0) return null;
+    const before = textNodeLinkMarkAtBoundary(state, pos, 'before');
+    if (!before?.eq(edit.mark)) return null;
+    const nextPos = pos - 1;
+    const tr = state.tr.delete(nextPos, pos);
+    tr.setSelection(TextSelection.create(tr.doc, nextPos));
+    tr.setStoredMarks(marksWithLink(state, edit.mark));
+    view.dispatch(tr);
+    return { pos: nextPos, mark: edit.mark };
+  }
+
+  if (event.key === 'Delete') {
+    const after = textNodeLinkMarkAtBoundary(state, pos, 'after');
+    if (!after?.eq(edit.mark)) return null;
+    const tr = state.tr.delete(pos, pos + 1);
+    tr.setSelection(TextSelection.create(tr.doc, pos));
+    tr.setStoredMarks(marksWithLink(state, edit.mark));
+    view.dispatch(tr);
+    return { pos, mark: edit.mark };
+  }
+
+  return null;
+}
+
 function insertLinkBoundaryText(
   view: EditorView,
   pos: number,
@@ -744,7 +779,6 @@ function shouldTypeOutsideLinkBoundary(
   const boundaryMark =
     trailingBoundaryLinkMark(state, pos) ?? leadingBoundaryLinkMark(state, pos);
   if (!boundaryMark) return false;
-  if (hasActiveLinkMark(state)) return false;
   return !exactStoredLinkMark(state, boundaryMark);
 }
 
@@ -787,10 +821,12 @@ function toggleLinkBoundaryEditing(
       trailing &&
       (activeAtBoundary ||
         activeTrailing ||
-        activeLinkMark(state, trailing))) ||
+        exactStoredLinkMark(state, trailing))) ||
     (event.key === 'ArrowLeft' &&
       leading &&
-      (activeAtBoundary || activeLeading || activeLinkMark(state, leading)));
+      (activeAtBoundary ||
+        activeLeading ||
+        exactStoredLinkMark(state, leading)));
   if (exitMark) {
     event.preventDefault();
     view.dispatch(state.tr.setStoredMarks(marksWithoutLink(state)));
@@ -817,29 +853,39 @@ function toggleLinkBoundaryEditing(
   return { pos, mark: enterMark };
 }
 
-function clearLinkBoundaryEditingSoon(view: EditorView, pos: number): void {
-  window.setTimeout(() => {
-    if (view.isDestroyed) return;
-    const { state } = view;
-    const { selection } = state;
-    if (!(selection instanceof TextSelection) || !selection.empty) return;
-    if (selection.from !== pos) return;
-    if (
-      !trailingBoundaryLinkMark(state, pos) &&
-      !leadingBoundaryLinkMark(state, pos)
-    ) {
-      return;
-    }
-    view.dispatch(state.tr.setStoredMarks(marksWithoutLink(state)));
-  }, 0);
-}
-
 function wikilinkDecorationPlugin(
   bridge: WikilinkBridge,
   options: WikilinkPluginOptions
 ): Plugin {
   let pendingEmptyNoteLink: LinkBoundaryEdit | null = null;
   let activeBoundaryLinkEdit: LinkBoundaryEdit | null = null;
+  let measuredBracketFontSize: string | null = null;
+
+  // The `[[`/`]]` brackets are CSS pseudo-elements, so the virtual cursor at a
+  // boundary renders just inside them. When the caret is "outside" the link we
+  // nudge it clear of the brackets so typing flows from the cursor instead of
+  // dropping a character behind it. Measure the real bracket width (the font is
+  // a variable, so a fixed em can't line up) and publish it as a CSS variable.
+  function updateBracketOffset(view: EditorView): void {
+    const fontSize = window.getComputedStyle(view.dom).fontSize;
+    if (fontSize === measuredBracketFontSize) return;
+
+    const probe = document.createElement('span');
+    probe.textContent = ']]';
+    probe.style.position = 'absolute';
+    probe.style.visibility = 'hidden';
+    probe.style.whiteSpace = 'pre';
+    probe.style.pointerEvents = 'none';
+    view.dom.appendChild(probe);
+    const bracketWidth = probe.getBoundingClientRect().width;
+    probe.remove();
+
+    // `.wikilink-note-link` pads each side by 0.15em; clear that too.
+    const offset = bracketWidth + parseFloat(fontSize) * 0.15;
+    if (!Number.isFinite(offset) || offset <= 0) return;
+    view.dom.style.setProperty('--wikilink-bracket-offset', `${offset}px`);
+    measuredBracketFontSize = fontSize;
+  }
 
   function boundaryMode(view: EditorView): LinkBoundaryMode | null {
     const { state } = view;
@@ -863,7 +909,6 @@ function wikilinkDecorationPlugin(
     }
     if (boundaryEditMatches(activeBoundaryLinkEdit, pos, boundaryMark))
       return { mode: 'inside', side };
-    if (hasActiveLinkMark(state)) return { mode: 'inside', side };
     return {
       mode: exactStoredLinkMark(state, boundaryMark) ? 'inside' : 'outside',
       side
@@ -872,6 +917,7 @@ function wikilinkDecorationPlugin(
 
   function syncBoundaryMode(view: EditorView): void {
     const boundary = boundaryMode(view);
+    if (boundary?.mode === 'outside') updateBracketOffset(view);
     view.dom.classList.toggle(
       'wikilink-boundary-inside',
       boundary?.mode === 'inside'
@@ -1051,16 +1097,12 @@ function wikilinkDecorationPlugin(
         if (typedOutside) setActiveBoundaryLinkEdit(view, null);
         return typedOutside;
       },
-      handleClick(view, pos, event) {
+      handleClick(view, _pos, event) {
+        // Clicking never enters link-text editing; the caret lands "outside"
+        // the link on either side. Editing is opt-in via arrow keys, which
+        // keeps left/right click behavior identical regardless of where the
+        // link sits in the line.
         clearLinkEditState(view);
-        if (
-          !event.metaKey &&
-          !event.ctrlKey &&
-          !event.altKey &&
-          !event.shiftKey
-        ) {
-          clearLinkBoundaryEditingSoon(view, pos);
-        }
 
         // Ctrl/Cmd always opens. Plain left click opens when the user
         // opts into note links behaving like ordinary navigation.
@@ -1105,12 +1147,27 @@ function wikilinkDecorationPlugin(
       },
       handleKeyDown(view, event) {
         if (event.key === 'Backspace' || event.key === 'Delete') {
-          if (!wholeNoteLinkDeletion(view.state, event)) return false;
-          event.preventDefault();
-          pendingEmptyNoteLink = deleteNoteLinkText(view, event);
-          setActiveBoundaryLinkEdit(view, null);
-          syncBoundaryMode(view);
-          return !!pendingEmptyNoteLink;
+          if (wholeNoteLinkDeletion(view.state, event)) {
+            event.preventDefault();
+            pendingEmptyNoteLink = deleteNoteLinkText(view, event);
+            setActiveBoundaryLinkEdit(view, null);
+            syncBoundaryMode(view);
+            return !!pendingEmptyNoteLink;
+          }
+          if (activeBoundaryLinkEdit) {
+            const next = deleteInsideLinkBoundary(
+              view,
+              event,
+              activeBoundaryLinkEdit
+            );
+            if (next) {
+              event.preventDefault();
+              pendingEmptyNoteLink = null;
+              setActiveBoundaryLinkEdit(view, next);
+              return true;
+            }
+          }
+          return false;
         }
 
         const toggled = toggleLinkBoundaryEditing(

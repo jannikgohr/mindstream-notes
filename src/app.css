@@ -934,7 +934,11 @@ body.dv-tab-dragging .freeform-canvas-host * {
 }
 .ProseMirror.wikilink-boundary-outside.wikilink-boundary-end
   .prosemirror-virtual-cursor {
-  transform: translateX(1.05em);
+  transform: translateX(var(--wikilink-bracket-offset, 0.7em));
+}
+.ProseMirror.wikilink-boundary-outside.wikilink-boundary-start
+  .prosemirror-virtual-cursor {
+  transform: translateX(calc(-1 * var(--wikilink-bracket-offset, 0.7em)));
 }
 /* Crepe's stock link editor exposes the internal note ID. Note links have
  * their own editor behavior, so keep the generic URL tooltip out of sight. */
