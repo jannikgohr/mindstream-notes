@@ -131,6 +131,9 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN:                       ${{ secrets.GITHUB_TOKEN }}
+          # The frontend bundle can exceed Node's default ~2 GB heap on
+          # macOS runners while Tauri runs `beforeBuildCommand`.
+          NODE_OPTIONS:                       --max-old-space-size=4096
           # Updater signing — see Settings → Secrets above. tauri-action
           # injects these into `tauri build` automatically; the pubkey
           # in tauri.conf.json must be the matching .pub file.
