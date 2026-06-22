@@ -172,6 +172,26 @@ body {
   transform: translateY(0) scale(1);
 }
 
+/* Honour both the OS preference and the in-app `appearance.reduceMotion`
+ * toggle (mirrored onto `html.reduce-motion`): drop the fade/scale so the
+ * tooltip appears instantly instead of animating. */
+@media (prefers-reduced-motion: reduce) {
+  .ms-tooltip {
+    transition: none;
+    transform: none;
+  }
+  .ms-tooltip-visible {
+    transform: none;
+  }
+}
+.reduce-motion .ms-tooltip {
+  transition: none;
+  transform: none;
+}
+.reduce-motion .ms-tooltip-visible {
+  transform: none;
+}
+
 /* dockview theme bridge — map dockview's CSS vars onto our shadcn palette
  * so tabs and panel chrome adopt the active theme. */
 .dockview-theme-bridge {

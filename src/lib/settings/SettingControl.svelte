@@ -113,12 +113,15 @@
       {@const s = setting as SelectSetting}
       <div class="mt-2 flex flex-wrap gap-1.5">
         {#each s.options as opt (opt)}
+          <!--
+            No tooltip here: a tooltip would only ever be wanted while the
+            button is disabled (lockedBySession), but disabled controls
+            receive no pointer/focus events so it could never show. The
+            same hint is already rendered as the visible paragraph below.
+          -->
           <button
             type="button"
             disabled={lockedBySession}
-            use:tooltip={lockedBySession
-              ? 'Sign out to change server type.'
-              : undefined}
             class="rounded-md border border-border px-3 py-1 text-xs transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-transparent {value ===
             opt
               ? 'border-ring bg-accent text-accent-foreground'
