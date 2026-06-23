@@ -17,7 +17,7 @@
     DockviewGroupPanel
   } from 'dockview-core';
   import TopBar from './DesktopTopBar.svelte';
-  import FileExplorer from '$lib/components/FileExplorer.svelte';
+  import LazyFileExplorer from '$lib/components/LazyFileExplorer.svelte';
   import LazyMetadataPanel from '$lib/components/LazyMetadataPanel.svelte';
   import NoteKindRenderer from '$lib/components/NoteKindRenderer.svelte';
   import ResizeHandle from '$lib/components/ResizeHandle.svelte';
@@ -819,7 +819,7 @@
         class="shrink-0 border-r border-border"
         style="width: {ui.leftSidebarWidth}px;"
       >
-        <FileExplorer
+        <LazyFileExplorer
           source={desktopNoteSource.active}
           onSourceChange={setDesktopNoteSource}
           {onOpenNote}
