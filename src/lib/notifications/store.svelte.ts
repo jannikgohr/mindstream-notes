@@ -1,7 +1,6 @@
-import { isTauri } from '$lib/api';
+import { isTauri } from '$lib/api/core';
 import { isMobile } from '$lib/platform';
 import { getSettingValue } from '$lib/settings/store.svelte';
-import { checkForAvailableUpdate, installAvailableUpdate } from '$lib/updater';
 import type { AppNotification, NotificationKind } from './types';
 
 interface NotificationState {
@@ -53,6 +52,8 @@ export async function scanForUpdateNotifications(force = false): Promise<void> {
   checkedForUpdatesThisSession = true;
   notificationState.updateScanPending = true;
   try {
+    const { checkForAvailableUpdate, installAvailableUpdate } =
+      await import('$lib/updater');
     const available = await checkForAvailableUpdate();
     if (!available) {
       clearNotificationsByKind('update');

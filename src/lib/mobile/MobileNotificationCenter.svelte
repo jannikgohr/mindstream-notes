@@ -8,10 +8,7 @@
     notificationState,
     scanForUpdateNotifications
   } from '$lib/notifications/store.svelte';
-  import {
-    FALLBACK_NOTIFICATION_WIDGET,
-    NOTIFICATION_WIDGETS
-  } from '$lib/notifications/widgets';
+  import LazyNotificationWidget from '$lib/notifications/LazyNotificationWidget.svelte';
 
   let open = $state(false);
 
@@ -79,10 +76,7 @@
         {:else}
           <div class="space-y-1">
             {#each notificationState.items as notification (notification.id)}
-              {@const Widget =
-                NOTIFICATION_WIDGETS[notification.widgetType] ??
-                FALLBACK_NOTIFICATION_WIDGET}
-              <Widget {notification} onClose={close} />
+              <LazyNotificationWidget {notification} onClose={close} />
             {/each}
           </div>
         {/if}
