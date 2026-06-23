@@ -11,20 +11,16 @@
 
 import type { Component } from 'svelte';
 import { setMode } from 'mode-watcher';
-import {
-  enable as enableAutostart,
-  isEnabled as isEnabledAutostart,
-  disable as disableAutostart
-} from '@tauri-apps/plugin-autostart';
+import type * as autostartPlugin from '@tauri-apps/plugin-autostart';
 import {
   getCloseToTray,
   getDesktopLanguage,
   getStartInTray,
-  isTauri,
   setCloseToTray,
   setDesktopLanguage,
   setStartInTray
-} from '$lib/api';
+} from '$lib/api/desktop-settings';
+import { isTauri } from '$lib/api/core';
 import { isMobile } from '$lib/platform';
 import {
   setLeftSidebarWidth,
@@ -34,10 +30,6 @@ import {
 } from '$lib/state.svelte';
 import { setLanguage, tUi } from './i18n.svelte';
 import type { SortStrategy } from '$lib/sort';
-import SignInForm from './customs/SignInForm.svelte';
-import HotkeysPanel from './customs/HotkeysPanel.svelte';
-import { DATA_ACTIONS } from './actions/data';
-import { checkForUpdatesInteractively } from '$lib/updater';
 // Vite resolves JSON imports at build time (tsconfig has resolveJsonModule),
 // so the version values below get inlined into the bundle. No runtime cost,
 // no risk of drift between the About panel and what's actually installed.
@@ -46,6 +38,7 @@ import pkg from '../../../package.json';
 export interface Binding {
   get: () => Promise<unknown>;
   set: (value: unknown) => Promise<void>;
+  hydrate?: 'startup' | 'on-demand';
 }
 
 /**
@@ -58,14 +51,23 @@ export interface Binding {
  */
 const autostartAvailable = () => isTauri() && !isMobile();
 
+function loadAutostart(): Promise<typeof autostartPlugin> {
+  return import('@tauri-apps/plugin-autostart');
+}
+
 export const SETTING_BINDINGS: Record<string, Binding> = {
   'general.startOnLogin': {
-    get: async () =>
-      autostartAvailable() ? await isEnabledAutostart() : false,
+    hydrate: 'on-demand',
+    get: async () => {
+      if (!autostartAvailable()) return false;
+      const { isEnabled } = await loadAutostart();
+      return await isEnabled();
+    },
     set: async (v) => {
       if (!autostartAvailable()) return;
-      if (v) await enableAutostart();
-      else await disableAutostart();
+      const { enable, disable } = await loadAutostart();
+      if (v) await enable();
+      else await disable();
     }
   },
   'general.closeToTray': {
@@ -82,9 +84,10 @@ export const SETTING_BINDINGS: Record<string, Binding> = {
     set: async (v) => {
       if (!isTauri() || isMobile()) return;
       await setStartInTray(v === true);
-      if (await isEnabledAutostart()) {
-        await disableAutostart();
-        await enableAutostart();
+      const { isEnabled, enable, disable } = await loadAutostart();
+      if (await isEnabled()) {
+        await disable();
+        await enable();
       }
     }
   },
@@ -145,17 +148,45 @@ export const SETTING_BINDINGS: Record<string, Binding> = {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyComponent = Component<any>;
+export type CustomComponentLoader = () => Promise<AnyComponent>;
 
 /** Components rendered in place of a generic control. */
-export const CUSTOM_COMPONENTS: Record<string, AnyComponent> = {
-  'sign-in-form': SignInForm as unknown as AnyComponent,
-  'hotkeys-panel': HotkeysPanel as unknown as AnyComponent
+export const CUSTOM_COMPONENT_LOADERS: Record<string, CustomComponentLoader> = {
+  'sign-in-form': () =>
+    import('./customs/SignInForm.svelte').then(
+      (mod) => mod.default as unknown as AnyComponent
+    ),
+  'hotkeys-panel': () =>
+    import('./customs/HotkeysPanel.svelte').then(
+      (mod) => mod.default as unknown as AnyComponent
+    )
 };
+
+type DataActionId =
+  | 'open-data-folder'
+  | 'empty-trash'
+  | 'backup-now'
+  | 'restore-backup'
+  | 'export-vault'
+  | 'import-notes';
+
+async function runDataAction(id: DataActionId) {
+  const { DATA_ACTIONS } = await import('./actions/data');
+  return await DATA_ACTIONS[id]?.();
+}
 
 /** Handlers for button-type settings. */
 export const SETTING_ACTIONS: Record<string, () => void | Promise<void>> = {
-  ...DATA_ACTIONS,
-  'check-updates': checkForUpdatesInteractively
+  'open-data-folder': () => runDataAction('open-data-folder'),
+  'empty-trash': () => runDataAction('empty-trash'),
+  'backup-now': () => runDataAction('backup-now'),
+  'restore-backup': () => runDataAction('restore-backup'),
+  'export-vault': () => runDataAction('export-vault'),
+  'import-notes': () => runDataAction('import-notes'),
+  'check-updates': async () => {
+    const { checkForUpdatesInteractively } = await import('$lib/updater');
+    await checkForUpdatesInteractively();
+  }
 };
 
 /**

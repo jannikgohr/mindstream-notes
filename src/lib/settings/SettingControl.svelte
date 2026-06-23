@@ -5,6 +5,7 @@
    * multiline / custom). Reads/writes through the store so all the
    * binding plumbing happens in one place.
    */
+  import type { Component } from 'svelte';
   import { Loader2 } from '@lucide/svelte';
   import { tooltip } from '$lib/actions/tooltip';
   import { Button } from '$lib/components/ui/button';
@@ -17,7 +18,7 @@
     resetSettingValue
   } from './store.svelte';
   import {
-    CUSTOM_COMPONENTS,
+    CUSTOM_COMPONENT_LOADERS,
     INFO_VALUES,
     SETTING_ACTIONS
   } from './registry.svelte';
@@ -82,6 +83,37 @@
   // Reset on `change` (pointerup / keyboard step commit) so the store and
   // the visible label converge on the same value.
   let sliderDrag = $state<number | null>(null);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let customComponent = $state<Component<any> | null>(null);
+  let customComponentId = $state<string | null>(null);
+  let customLoadToken = 0;
+
+  $effect(() => {
+    const id = setting.type === 'custom' ? setting.customId : null;
+    customComponent = null;
+    customComponentId = id;
+
+    if (!id) return;
+    const loader = CUSTOM_COMPONENT_LOADERS[id];
+    if (!loader) return;
+
+    const token = ++customLoadToken;
+    void loader()
+      .then((component) => {
+        if (token === customLoadToken) customComponent = component;
+      })
+      .catch((err) => {
+        if (token === customLoadToken) {
+          console.error('[settings] failed to load custom component', id, err);
+        }
+      });
+
+    return () => {
+      customLoadToken++;
+      customComponent = null;
+    };
+  });
 </script>
 
 <div class="grid grid-cols-[1fr_auto] items-start gap-x-4 gap-y-2 py-3">
@@ -159,10 +191,14 @@
       </div>
     {:else if setting.type === 'custom'}
       {@const s = setting as CustomSetting}
-      {@const C = CUSTOM_COMPONENTS[s.customId ?? '']}
+      {@const C = customComponent}
       <div class="mt-2">
         {#if C}
           <C {searchQuery} />
+        {:else if customComponentId && CUSTOM_COMPONENT_LOADERS[customComponentId]}
+          <div class="flex items-center text-xs text-muted-foreground">
+            <Loader2 class="size-3 animate-spin" aria-label="Loading" />
+          </div>
         {:else}
           <p class="text-xs text-destructive">
             Missing custom component: {s.customId}

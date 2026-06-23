@@ -10,12 +10,12 @@
  *
  *   2. **Bindings** (registry.svelte.ts) — for settings whose source of
  *      truth lives elsewhere (Tauri autostart, mode-watcher, sidebar UI
- *      state, …). On startup we hydrate the cache from each binding's
- *      `get()`; writes go through `setSettingValue`, which optimistically
- *      updates the cache, awaits `binding.set()`, then re-reads to pick
- *      up whatever the source decided was the canonical value (autostart,
- *      for example, may silently fall back to `false` if the OS denies the
- *      permission).
+ *      state, …). On startup we hydrate only bindings needed outside the
+ *      dialog; on-demand bindings refresh when Settings opens. Writes go
+ *      through `setSettingValue`, which optimistically updates the cache,
+ *      awaits `binding.set()`, then re-reads to pick up whatever the source
+ *      decided was the canonical value (autostart, for example, may silently
+ *      fall back to `false` if the OS denies the permission).
  *
  * Pending writes are tracked so the UI can show a spinner — important for
  * the autostart toggle, which round-trips through Tauri IPC and isn't
@@ -70,13 +70,16 @@ export const settings = $state<SettingsState>({
 });
 
 /**
- * Pull every binding-backed setting into the cache. Errors are logged and
+ * Pull binding-backed settings into the cache. Errors are logged and
  * swallowed so one busted binding (e.g. the autostart plugin missing on a
  * stripped-down build) doesn't poison the rest of the dialog.
  */
-export async function hydrateSettings(): Promise<void> {
+export async function hydrateSettings(
+  scope: 'startup' | 'all' = 'startup'
+): Promise<void> {
   await Promise.all(
     Object.entries(SETTING_BINDINGS).map(async ([id, binding]) => {
+      if (scope === 'startup' && binding.hydrate === 'on-demand') return;
       try {
         settings.values[id] = await binding.get();
       } catch (err) {
@@ -103,7 +106,7 @@ export async function refreshSetting(id: string): Promise<void> {
 
 // Kick off the initial hydration once at import time. Components shouldn't
 // have to await this — they'll re-render when the cache populates.
-void hydrateSettings();
+void hydrateSettings('startup');
 
 /**
  * Synchronous read: returns the cached value, falling back to the schema
@@ -232,7 +235,7 @@ export function openSettings() {
   // Refresh binding-backed values so the panel reflects any out-of-band
   // changes (autostart toggled from the OS, theme switched in another
   // window, …). Fire-and-forget — the cache update is reactive.
-  void hydrateSettings();
+  void hydrateSettings('all');
   settingsDialog.open = true;
 }
 export function closeSettings() {
