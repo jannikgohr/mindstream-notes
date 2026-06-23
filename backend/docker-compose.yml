@@ -19,11 +19,21 @@
 # container port 80. For local dev without a proxy,
 # docker-compose.override.yml publishes nginx on ${NGINX_PORT:-8080}.
 
+# Cap container logs so the json-file driver can't fill the host disk on
+# a small VPS. ~30 MB max per container (10 MB × 3 rotated files); older
+# lines roll off. Shared by every service via the *default-logging alias.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   nginx:
     build: ./nginx
     container_name: mindstream-nginx
     restart: always
+    logging: *default-logging
     depends_on:
       - yjs-relay
       - excalidraw-room
@@ -39,6 +49,7 @@ services:
     build: ./yjs-relay
     container_name: mindstream-yjs-relay
     restart: always
+    logging: *default-logging
     environment:
       - HOST=0.0.0.0
       - PORT=1234
@@ -49,6 +60,7 @@ services:
     build: ./excalidraw-room
     container_name: mindstream-excalidraw-room
     restart: always
+    logging: *default-logging
     environment:
       - NODE_ENV=production
       - PORT=80
@@ -65,6 +77,7 @@ services:
     image: victorrds/etebase:0.14.2-alpine
     container_name: mindstream-etebase
     restart: always
+    logging: *default-logging
     depends_on:
       postgres:
         condition: service_healthy
@@ -96,6 +109,7 @@ services:
     image: postgres:16-alpine
     container_name: mindstream-postgres
     restart: always
+    logging: *default-logging
     environment:
       - POSTGRES_DB=${POSTGRES_DB:-etebase}
       - POSTGRES_USER=${POSTGRES_USER:-etebase}
