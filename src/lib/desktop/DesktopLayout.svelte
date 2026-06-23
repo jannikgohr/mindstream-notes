@@ -21,7 +21,7 @@
   import MetadataPanel from '$lib/components/MetadataPanel.svelte';
   import NoteKindRenderer from '$lib/components/NoteKindRenderer.svelte';
   import ResizeHandle from '$lib/components/ResizeHandle.svelte';
-  import SettingsDialog from '$lib/settings/SettingsDialog.svelte';
+  import LazySettingsDialog from '$lib/settings/LazySettingsDialog.svelte';
   import { PopoutHeaderAction } from './dockview-popout-action';
   import {
     ensureTabDragPin,
@@ -862,4 +862,4 @@
   </div>
 </div>
 
-<SettingsDialog />
+<LazySettingsDialog />

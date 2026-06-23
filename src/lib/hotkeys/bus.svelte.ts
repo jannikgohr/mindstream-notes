@@ -49,7 +49,7 @@ import type {
   CommandDefinition,
   EditorCommand,
   GlobalCommand
-} from './commands';
+} from './catalogue';
 import type { EditorKind } from './types';
 
 /**

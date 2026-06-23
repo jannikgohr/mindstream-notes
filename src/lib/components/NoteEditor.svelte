@@ -36,7 +36,7 @@
     createWikilinkBridge,
     createMarkdownSearchBridge
   } from '$lib/editor/plugins';
-  import { MARKDOWN_ACTIONS } from '$lib/hotkeys/commands';
+  import { MARKDOWN_ACTIONS } from '$lib/hotkeys/markdown-actions';
   import {
     registerEditor,
     unregisterEditor,

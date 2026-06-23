@@ -1,0 +1,125 @@
+<script lang="ts">
+  import { confirmQueue } from './confirm-dialog.svelte';
+  import { exportResultQueue } from './export-result-dialog.svelte';
+  import { importChoiceQueue } from './import-choice-dialog.svelte';
+  import { shortcutHelp } from '$lib/hotkeys/help.svelte';
+  import { searchDialog } from '$lib/search/store.svelte';
+  import { updaterProgress } from '$lib/updater/progress.svelte';
+
+  let ConfirmDialog = $state<any | null>(null);
+  let ExportResultDialog = $state<any | null>(null);
+  let ImportChoiceDialog = $state<any | null>(null);
+  let UpdaterProgressDialog = $state<any | null>(null);
+  let ShortcutHelpDialog = $state<any | null>(null);
+  let SearchDialog = $state<any | null>(null);
+
+  let confirmToken = 0;
+  let exportToken = 0;
+  let importToken = 0;
+  let updaterToken = 0;
+  let shortcutToken = 0;
+  let searchToken = 0;
+
+  $effect(() => {
+    const active = confirmQueue.items.length > 0;
+    const token = ++confirmToken;
+    if (!active) {
+      ConfirmDialog = null;
+      return;
+    }
+    void import('./ConfirmDialog.svelte').then((mod) => {
+      if (token === confirmToken && confirmQueue.items.length > 0) {
+        ConfirmDialog = mod.default;
+      }
+    });
+  });
+
+  $effect(() => {
+    const active = importChoiceQueue.items.length > 0;
+    const token = ++importToken;
+    if (!active) {
+      ImportChoiceDialog = null;
+      return;
+    }
+    void import('./ImportChoiceDialog.svelte').then((mod) => {
+      if (token === importToken && importChoiceQueue.items.length > 0) {
+        ImportChoiceDialog = mod.default;
+      }
+    });
+  });
+
+  $effect(() => {
+    const active = exportResultQueue.items.length > 0;
+    const token = ++exportToken;
+    if (!active) {
+      ExportResultDialog = null;
+      return;
+    }
+    void import('./ExportResultDialog.svelte').then((mod) => {
+      if (token === exportToken && exportResultQueue.items.length > 0) {
+        ExportResultDialog = mod.default;
+      }
+    });
+  });
+
+  $effect(() => {
+    const active = updaterProgress.active;
+    const token = ++updaterToken;
+    if (!active) {
+      UpdaterProgressDialog = null;
+      return;
+    }
+    void import('$lib/updater/ProgressDialog.svelte').then((mod) => {
+      if (token === updaterToken && updaterProgress.active) {
+        UpdaterProgressDialog = mod.default;
+      }
+    });
+  });
+
+  $effect(() => {
+    const active = shortcutHelp.open;
+    const token = ++shortcutToken;
+    if (!active) {
+      ShortcutHelpDialog = null;
+      return;
+    }
+    void import('./ShortcutHelpDialog.svelte').then((mod) => {
+      if (token === shortcutToken && shortcutHelp.open) {
+        ShortcutHelpDialog = mod.default;
+      }
+    });
+  });
+
+  $effect(() => {
+    const active = searchDialog.open;
+    const token = ++searchToken;
+    if (!active) {
+      SearchDialog = null;
+      return;
+    }
+    void import('$lib/search/SearchDialog.svelte').then((mod) => {
+      if (token === searchToken && searchDialog.open) {
+        SearchDialog = mod.default;
+      }
+    });
+  });
+</script>
+
+{#if ConfirmDialog}
+  <ConfirmDialog />
+{/if}
+{#if ImportChoiceDialog}
+  <ImportChoiceDialog />
+{/if}
+{#if ExportResultDialog}
+  <ExportResultDialog />
+{/if}
+{#if UpdaterProgressDialog}
+  <UpdaterProgressDialog />
+{/if}
+{#if ShortcutHelpDialog}
+  <ShortcutHelpDialog />
+{/if}
+{#if SearchDialog}
+  <SearchDialog />
+{/if}

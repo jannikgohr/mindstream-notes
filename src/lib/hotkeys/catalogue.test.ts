@@ -30,9 +30,9 @@ import {
   groupedCommands,
   HOTKEY_COMMANDS,
   isGlobalShortcutCommand,
-  isGlobalShortcutOnlyCommand,
-  MARKDOWN_ACTIONS
-} from './commands';
+  isGlobalShortcutOnlyCommand
+} from './catalogue';
+import { MARKDOWN_ACTIONS } from './markdown-actions';
 import { parseBinding } from './parse';
 
 describe('catalogue consistency', () => {

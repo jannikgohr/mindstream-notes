@@ -38,7 +38,7 @@ import {
   HOTKEY_COMMANDS,
   isGlobalShortcutOnlyCommand,
   type CommandDefinition
-} from './commands';
+} from './catalogue';
 import {
   getBinding,
   hotkeys,

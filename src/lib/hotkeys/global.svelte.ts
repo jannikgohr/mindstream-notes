@@ -4,7 +4,7 @@ import {
   commandById,
   isGlobalShortcutCommand,
   type CommandDefinition
-} from './commands';
+} from './catalogue';
 
 export interface GlobalShortcutRegistration {
   commandId: string;

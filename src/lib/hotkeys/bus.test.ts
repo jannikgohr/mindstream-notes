@@ -19,7 +19,7 @@ import {
   SEARCH_ACTIVE_NOTE_COMMAND,
   type EditorListener
 } from './bus.svelte';
-import { COMMAND_BY_ID } from './commands';
+import { COMMAND_BY_ID } from './catalogue';
 import { settingsDialog, closeSettings } from '$lib/settings/store.svelte';
 
 const owned: EditorListener[] = [];

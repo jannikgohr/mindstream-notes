@@ -34,7 +34,7 @@
   import MobileFab, { type FabAction } from './MobileFab.svelte';
   import MobileBottomNav from './MobileBottomNav.svelte';
   import MobileEditor from './MobileEditor.svelte';
-  import MobileSettingsDialog from './MobileSettingsDialog.svelte';
+  import LazyMobileSettingsDialog from './LazyMobileSettingsDialog.svelte';
   import NameInputSheet from './NameInputSheet.svelte';
   import {
     createCollectionIn,
@@ -253,7 +253,7 @@
   />
 {/if}
 
-<MobileSettingsDialog />
+<LazyMobileSettingsDialog />
 
 <input
   bind:this={pdfInput}
