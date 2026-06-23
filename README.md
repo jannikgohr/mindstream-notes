@@ -23,7 +23,7 @@ The project is still under active development. Expect sharp edges, but the core 
 - Rust for persistence, sync, and Tauri commands.
 - Svelte canvas + Pointer Events for the ink editor, with an Android-only Kotlin `CanvasFrontBufferedRenderer` overlay for live-stroke latency.
 - Yjs/yrs for CRDT document state.
-- Vitest and Cargo tests for the current test suite.
+- Vitest (unit) and Playwright (end-to-end) for the frontend, Cargo for the Rust backend; line coverage from both sides is published to Codecov.
 
 ## Repository Layout
 
@@ -59,6 +59,23 @@ Run the main checks:
 ```shell
 pnpm check
 pnpm test
+```
+
+Measure coverage (frontend with the v8 provider, backend with
+`cargo-llvm-cov`):
+
+```shell
+pnpm test:coverage        # writes coverage/ (text + lcov)
+pnpm test:coverage:rust   # writes src-tauri/lcov.info (needs cargo-llvm-cov)
+```
+
+Run the end-to-end suite. Playwright builds the SPA and drives it in
+browser-fallback mode (the in-memory mock store backs every API call, so
+no Tauri or Rust build is required):
+
+```shell
+pnpm test:e2e             # headless
+pnpm test:e2e:ui          # interactive runner
 ```
 
 For full platform setup, packaging commands, Android notes, and Rust quality gates, see [docs/BUILDING.md](docs/BUILDING.md).
