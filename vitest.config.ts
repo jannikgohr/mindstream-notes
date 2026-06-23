@@ -34,6 +34,25 @@ export default defineConfig({
   test: {
     environment: 'happy-dom',
     include: ['src/**/*.{test,spec}.ts'],
-    globals: false
+    globals: false,
+    coverage: {
+      provider: 'v8',
+      // text for the local terminal summary, json-summary + lcov for CI
+      // (lcov feeds coverage services; json-summary drives the PR comment).
+      reporter: ['text', 'json-summary', 'lcov'],
+      reportsDirectory: './coverage',
+      include: ['src/**/*.{ts,svelte}'],
+      // Exclude non-logic and hard-to-unit-test surfaces so the percentage
+      // reflects code we can meaningfully cover. Route handlers, generated
+      // types, and barrel/test files don't carry testable branching.
+      exclude: [
+        'src/**/*.{test,spec}.ts',
+        'src/**/*.d.ts',
+        'src/**/index.ts',
+        'src/app.d.ts',
+        'src/routes/**',
+        'src/**/*.stories.*'
+      ]
+    }
   }
 });
