@@ -21,7 +21,7 @@ import {
   setBinding
 } from './store.svelte';
 import { settings } from '$lib/settings/store.svelte';
-import { COMMAND_BY_ID } from './commands';
+import { COMMAND_BY_ID } from './catalogue';
 
 const BOLD = 'editor.markdown.bold';
 const ITALIC = 'editor.markdown.italic';

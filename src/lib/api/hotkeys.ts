@@ -1,4 +1,4 @@
-import { invokeOrFallback } from './index';
+import { invokeOrFallback } from './core';
 
 export interface NativeHotkeyDisplay {
   commandId: string;

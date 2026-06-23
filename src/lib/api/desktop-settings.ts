@@ -1,4 +1,4 @@
-import { invokeOrFallback } from './index';
+import { invokeOrFallback } from './core';
 
 export function getCloseToTray(): Promise<boolean> {
   return invokeOrFallback<boolean>('get_close_to_tray', undefined, () => false);

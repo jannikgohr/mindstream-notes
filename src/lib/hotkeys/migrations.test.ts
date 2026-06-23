@@ -15,7 +15,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { applyMigrations, MIGRATIONS } from './migrations';
-import { COMMAND_BY_ID } from './commands';
+import { COMMAND_BY_ID } from './catalogue';
 
 describe('applyMigrations', () => {
   it('moves the old key to the new one when only the old exists', () => {

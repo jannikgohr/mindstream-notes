@@ -1,10 +1,11 @@
-import { isTauri, syncNativeGlobalShortcuts } from '$lib/api';
+import { isTauri } from '$lib/api/core';
+import { syncNativeGlobalShortcuts } from '$lib/api/hotkeys';
 import { isMobile } from '$lib/platform';
 import {
   commandById,
   isGlobalShortcutCommand,
   type CommandDefinition
-} from './commands';
+} from './catalogue';
 
 export interface GlobalShortcutRegistration {
   commandId: string;

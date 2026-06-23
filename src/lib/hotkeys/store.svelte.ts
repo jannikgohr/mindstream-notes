@@ -50,7 +50,7 @@ import {
   COMMAND_BY_ID,
   HOTKEY_COMMANDS,
   type CommandDefinition
-} from './commands';
+} from './catalogue';
 
 /** Settings-store key for a given command id. The `'hotkey.'` prefix
  *  keeps these clearly distinct from regular settings (`'editor.'`,

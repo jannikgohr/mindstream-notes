@@ -6,7 +6,7 @@
  */
 
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
-import { isTauri } from './index';
+import { isTauri } from './core';
 import {
   type DockviewApi,
   type IDockviewGroupPanel,

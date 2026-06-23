@@ -4,22 +4,14 @@
   import { ModeWatcher, mode } from 'mode-watcher';
   import { getSettingValue, isModified } from '$lib/settings/store.svelte';
   import { applyAccentColor, clearAccentColor } from '$lib/settings/accent';
-  import {
-    invokeOrFallback,
-    setNativeHotkeyDisplays,
-    setTrashRetention,
-    sweepTrashRetention
-  } from '$lib/api';
-  import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
-  import ExportResultDialog from '$lib/components/ExportResultDialog.svelte';
-  import ImportChoiceDialog from '$lib/components/ImportChoiceDialog.svelte';
-  import UpdaterProgressDialog from '$lib/updater/ProgressDialog.svelte';
-  import ShortcutHelpDialog from '$lib/components/ShortcutHelpDialog.svelte';
-  import SearchDialog from '$lib/search/SearchDialog.svelte';
+  import { invokeOrFallback } from '$lib/api/core';
+  import { setNativeHotkeyDisplays } from '$lib/api/hotkeys';
+  import { setTrashRetention, sweepTrashRetention } from '$lib/api/data';
+  import LazyRootSingletons from '$lib/components/LazyRootSingletons.svelte';
   import {
     HOTKEY_COMMANDS,
     isGlobalShortcutCommand
-  } from '$lib/hotkeys/commands';
+  } from '$lib/hotkeys/catalogue';
   import { getBinding } from '$lib/hotkeys/store.svelte';
   import { initHotkeys } from '$lib/hotkeys/manager.svelte';
   import {
@@ -175,8 +167,8 @@
         // store is stale. The hourly scheduler tick can't see the
         // store, so reload from here — cheap when nothing changed.
         if (purged > 0) {
-          const { loadTree } = await import('$lib/stores/tree.svelte');
-          await loadTree();
+          const { refreshTree } = await import('$lib/stores/tree-refresh');
+          await refreshTree();
         }
       })
       .catch((err) => {
@@ -214,32 +206,6 @@
   {@render children()}
 </div>
 
-<!-- Singleton confirm-dialog instance: lives at the root so any
-     caller anywhere in the tree can `await confirm(...)` without
-     stashing its own component. -->
-<ConfirmDialog />
-
-<!-- Singleton three-way import-choice dialog. Driven by
-     `pickImportChoice()` in the sibling .svelte.ts; mounting here
-     means the registry's `import-notes` action can pop it without
-     stashing its own component. -->
-<ImportChoiceDialog />
-
-<!-- Singleton export-result summary. Driven by `showExportResult()`
-     in the sibling .svelte.ts — the export-vault settings action
-     pops it once the Rust walk finishes. -->
-<ExportResultDialog />
-
-<!-- Singleton updater progress dialog. Driven by the helpers in
-     $lib/updater/progress.svelte.ts — mounting it here means anything
-     that drives that state gets the dialog for free, no per-call wiring. -->
-<UpdaterProgressDialog />
-
-<!-- Shortcut cheat-sheet overlay. Triggered by `global.showShortcutHelp`
-     (Shift+? by default) and `openShortcutHelp()` from anywhere. -->
-<ShortcutHelpDialog />
-
-<!-- Joplin-style global note search. Driven by the searchDialog store —
-     desktop top-bar button, mobile top-bar button, and the
-     `global.openSearch` hotkey all flip it open. -->
-<SearchDialog />
+<!-- Lazy singleton host: imports each dialog/search component only when
+     its tiny queue/open-state store says it is actually needed. -->
+<LazyRootSingletons />

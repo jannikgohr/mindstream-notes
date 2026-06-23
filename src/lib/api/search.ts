@@ -7,7 +7,7 @@
  * mock note store so the dialog stays usable in dev.
  */
 
-import { invokeOrFallback } from './index';
+import { invokeOrFallback } from './core';
 import { mockApi } from './mock-store';
 import type { NoteSummary } from './notes';
 

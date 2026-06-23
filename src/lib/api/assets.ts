@@ -11,7 +11,7 @@
  * gets pushed automatically.
  */
 
-import { invokeOrFallback } from './index';
+import { invokeOrFallback } from './core';
 import { mockApi } from './mock-store';
 import type { Note } from './notes';
 

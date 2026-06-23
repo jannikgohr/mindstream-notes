@@ -39,7 +39,7 @@
     isGlobalShortcutOnlyCommand,
     type CommandGroup,
     type CommandDefinition
-  } from '$lib/hotkeys/commands';
+  } from '$lib/hotkeys/catalogue';
   import {
     findCommandByBinding,
     getBinding,

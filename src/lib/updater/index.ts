@@ -1,5 +1,4 @@
 import { check } from '@tauri-apps/plugin-updater';
-import { relaunch } from '@tauri-apps/plugin-process';
 import { getPlatform } from '$lib/platform';
 import { isAppImageInstall, isTauri } from '$lib/api';
 import { alert, confirm } from '$lib/components/confirm-dialog.svelte';
@@ -13,6 +12,11 @@ import {
 import pkg from '../../../package.json';
 
 type Update = NonNullable<Awaited<ReturnType<typeof check>>>;
+
+async function relaunchApp() {
+  const { relaunch } = await import('@tauri-apps/plugin-process');
+  await relaunch();
+}
 
 export interface AvailableUpdate {
   update: Update;
@@ -131,7 +135,7 @@ export async function installAvailableUpdate(
     confirmLabel: tUi('updater.restart'),
     cancelLabel: tUi('updater.later')
   });
-  if (restartNow) await relaunch();
+  if (restartNow) await relaunchApp();
 }
 
 export async function checkForUpdatesInteractively(): Promise<void> {

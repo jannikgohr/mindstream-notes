@@ -27,7 +27,7 @@
     groupedCommands,
     isGlobalShortcutOnlyCommand,
     type CommandDefinition
-  } from '$lib/hotkeys/commands';
+  } from '$lib/hotkeys/catalogue';
   import { displayBinding } from '$lib/hotkeys/format';
   import { getBinding } from '$lib/hotkeys/store.svelte';
   import { closeShortcutHelp, shortcutHelp } from '$lib/hotkeys/help.svelte';
