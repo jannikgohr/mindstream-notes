@@ -1,0 +1,16 @@
+# Local development overrides.
+#
+# `docker compose` auto-merges this file when it's present, so a bare
+# `docker compose up` in this directory publishes the nginx edge on a
+# host port and you can hit the whole stack at http://localhost:8080
+# with no reverse proxy in front.
+#
+# Deploy tooling (Dokploy, CI, `docker compose -f docker-compose.yml …`)
+# names docker-compose.yml explicitly and never loads this file, so in
+# production nginx stays unpublished and the reverse proxy routes
+# PUBLIC_HOST to it on container port 80 instead.
+
+services:
+  nginx:
+    ports:
+      - "${NGINX_PORT:-8080}:80"
