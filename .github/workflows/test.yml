@@ -1,6 +1,11 @@
-# CI for every push / PR. Two parallel job groups:
-#   - js   : svelte-check + vitest + vite build, on all three desktop OSes.
-#   - rust : `cargo test` for the desktop target on all three desktop OSes.
+# CI for every push / PR. Three parallel job groups:
+#   - js       : svelte-check + vitest + vite build, on all three desktop OSes.
+#   - rust     : `cargo test` for the desktop target on all three desktop OSes.
+#   - coverage : single-OS (Linux) run that measures vitest (v8) and cargo
+#                (llvm-cov) line coverage and publishes both to Codecov so the
+#                score / badge / PR comment stay current. Kept separate from the
+#                matrix jobs because coverage instrumentation is slower and only
+#                needs to run once.
 #
 # Android isn't tested here — its build matrix lives in release.yml because
 # it needs the NDK (~1.5 GB) and a signing keystore. If you want Android
@@ -99,3 +104,68 @@ jobs:
       - name: cargo test
         working-directory: src-tauri
         run: cargo test --locked
+
+  # Coverage runs once on Linux and uploads two lcov reports to Codecov,
+  # tagged with `flags` so the service tracks the frontend and Rust
+  # backend percentages independently. Non-blocking: a Codecov hiccup
+  # shouldn't fail the build (fail_ci_if_error: false).
+  coverage:
+    name: Coverage (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libsoup-3.0-dev \
+            libgtk-3-dev \
+            librsvg2-dev \
+            libayatana-appindicator3-dev \
+            libssl-dev \
+            build-essential curl wget file
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - uses: taiki-e/install-action@cargo-llvm-cov
+
+      - run: pnpm install --frozen-lockfile
+
+      # Frontend: vitest with the v8 provider emits coverage/lcov.info.
+      - name: JS coverage
+        run: pnpm test:coverage
+
+      # Backend: cargo-llvm-cov emits src-tauri/lcov.info.
+      - name: Rust coverage
+        working-directory: src-tauri
+        run: cargo llvm-cov --locked --lcov --output-path lcov.info
+
+      - name: Upload frontend coverage
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./coverage/lcov.info
+          flags: frontend
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Upload backend coverage
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./src-tauri/lcov.info
+          flags: backend
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}

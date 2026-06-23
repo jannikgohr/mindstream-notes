@@ -1,5 +1,7 @@
 # Mindstream Notes
 
+[![codecov](https://codecov.io/gh/jannikgohr/mindstream-notes/branch/main/graph/badge.svg)](https://codecov.io/gh/jannikgohr/mindstream-notes)
+
 Mindstream Notes is a local-first note-taking app built with Tauri, Svelte, Rust, and Yjs. It is designed around fast desktop note workflows, markdown editing, local persistence, optional encrypted sync, and native ink support for handwritten notes.
 
 The project is still under active development. Expect sharp edges, but the core shape is already in place: a desktop app shell, a markdown editor, a note tree, local storage, CRDT-backed document state, and a Yjs-backed ink canvas.
