@@ -1,4 +1,4 @@
-# CI for every push / PR. Three parallel job groups:
+# CI for every push / PR. Four parallel job groups:
 #   - js       : svelte-check + vitest + vite build, on all three desktop OSes.
 #   - rust     : `cargo test` for the desktop target on all three desktop OSes.
 #   - coverage : single-OS (Linux) run that measures vitest (v8) and cargo
@@ -6,6 +6,9 @@
 #                score / badge / PR comment stay current. Kept separate from the
 #                matrix jobs because coverage instrumentation is slower and only
 #                needs to run once.
+#   - e2e      : Playwright drives the SvelteKit SPA (browser-fallback mode,
+#                mock store) on Linux to cover the Svelte components unit tests
+#                can't reach.
 #
 # Android isn't tested here — its build matrix lives in release.yml because
 # it needs the NDK (~1.5 GB) and a signing keystore. If you want Android
@@ -169,3 +172,39 @@ jobs:
           flags: backend
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
+
+  # End-to-end: Playwright builds the SvelteKit SPA and drives it through
+  # `vite preview` in browser-fallback mode (no Tauri, no Rust — the
+  # in-memory mock store backs every API call). Linux-only; the suite is
+  # platform-agnostic so one OS is enough.
+  e2e:
+    name: E2E (Playwright)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run Playwright tests
+        run: pnpm test:e2e
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+
+      - name: Upload Playwright report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report
+          retention-days: 7
