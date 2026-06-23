@@ -1,9 +1,5 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import DesktopLayout from '$lib/desktop/DesktopLayout.svelte';
-  import MobileLayout from '$lib/mobile/MobileLayout.svelte';
-  import SingleNoteWindow from '$lib/desktop/SingleNoteWindow.svelte';
-  import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
   import { isMobile } from '$lib/platform';
 
   /**
@@ -21,15 +17,19 @@
    */
   let mode = $state<'mobile' | 'popout' | 'desktop' | null>(null);
   let popoutNoteId = $state<string | null>(null);
+  let Shell = $state<any | null>(null);
 
-  onMount(() => {
+  onMount(async () => {
     if (isMobile()) {
       mode = 'mobile';
+      Shell = (await import('$lib/mobile/MobileLayout.svelte')).default;
       return;
     }
 
     let id: string | null = null;
     try {
+      const { getCurrentWebviewWindow } =
+        await import('@tauri-apps/api/webviewWindow');
       const label = getCurrentWebviewWindow().label;
       if (label.startsWith('note_')) id = label;
     } catch {
@@ -51,18 +51,20 @@
     if (id) {
       popoutNoteId = id;
       mode = 'popout';
+      Shell = (await import('$lib/desktop/SingleNoteWindow.svelte')).default;
     } else {
       mode = 'desktop';
+      Shell = (await import('$lib/desktop/DesktopLayout.svelte')).default;
     }
   });
 </script>
 
-{#if mode === null}
+{#if mode === null || Shell === null}
   <!-- One frame of empty before we decide which shell to render. -->
 {:else if mode === 'mobile'}
-  <MobileLayout />
+  <Shell />
 {:else if mode === 'popout' && popoutNoteId}
-  <SingleNoteWindow noteId={popoutNoteId} />
+  <Shell noteId={popoutNoteId} />
 {:else}
-  <DesktopLayout />
+  <Shell />
 {/if}

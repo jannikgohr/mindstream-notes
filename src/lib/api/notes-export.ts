@@ -9,7 +9,7 @@
  */
 
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
-import { isTauri } from './index';
+import { isTauri } from './core';
 
 export async function pickExportDir(): Promise<string | null> {
   if (!isTauri()) return null;

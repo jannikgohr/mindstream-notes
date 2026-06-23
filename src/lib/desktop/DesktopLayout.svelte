@@ -18,7 +18,7 @@
   } from 'dockview-core';
   import TopBar from './DesktopTopBar.svelte';
   import FileExplorer from '$lib/components/FileExplorer.svelte';
-  import MetadataPanel from '$lib/components/MetadataPanel.svelte';
+  import LazyMetadataPanel from '$lib/components/LazyMetadataPanel.svelte';
   import NoteKindRenderer from '$lib/components/NoteKindRenderer.svelte';
   import ResizeHandle from '$lib/components/ResizeHandle.svelte';
   import LazySettingsDialog from '$lib/settings/LazySettingsDialog.svelte';
@@ -856,7 +856,7 @@
         class="shrink-0 border-l border-border"
         style="width: {ui.rightSidebarWidth}px;"
       >
-        <MetadataPanel />
+        <LazyMetadataPanel />
       </div>
     {/if}
   </div>

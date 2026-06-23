@@ -9,7 +9,7 @@
  * a Blob + `<a download>` anchor — works in any modern browser.
  */
 
-import { invokeOrFallback, isTauri } from './index';
+import { invokeOrFallback, isTauri } from './core';
 
 export interface SavePdfExportArgs {
   /** Suggested filename pre-filled into the dialog (no extension stripped). */

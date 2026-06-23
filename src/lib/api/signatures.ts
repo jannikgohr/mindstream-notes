@@ -9,7 +9,7 @@
  * library into this synced store on first run.
  */
 
-import { invokeOrFallback } from './index';
+import { invokeOrFallback } from './core';
 import { mockApi } from './mock-store';
 
 export interface SignatureRecord {

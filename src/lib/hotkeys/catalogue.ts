@@ -79,30 +79,12 @@ export type CommandDefinition = GlobalCommand | EditorCommand;
 
 type RootNoteKind = 'markdown' | 'freeform' | 'ink';
 
-function rootNoteTitle(kind: RootNoteKind): string {
-  switch (kind) {
-    case 'freeform':
-      return 'Untitled drawing canvas';
-    case 'ink':
-      return 'Untitled handwritten note';
-    case 'markdown':
-      return 'Untitled';
-  }
-}
-
-async function createRootNote(kind: RootNoteKind) {
-  const [{ createNoteIn }, { requestOpenNote }] = await Promise.all([
-    import('$lib/stores/tree.svelte'),
-    import('$lib/stores/open-note-intent.svelte')
-  ]);
-  const id = await createNoteIn(null, rootNoteTitle(kind), kind);
-  requestOpenNote(id);
-}
-
 function runCreateRootNote(kind: RootNoteKind) {
-  void createRootNote(kind).catch((err) => {
-    console.error('[hotkeys] failed to create note', kind, err);
-  });
+  void import('./create-root-note')
+    .then(({ createRootNote }) => createRootNote(kind))
+    .catch((err) => {
+      console.error('[hotkeys] failed to create note', kind, err);
+    });
 }
 
 const ADD_TAG_HOTKEY_EVENT = 'mindstream:hotkeys:add-tag';
@@ -116,7 +98,9 @@ function requestAddTag() {
 }
 
 function runShowApp() {
-  void import('$lib/api').then(({ focusMainWindow }) => focusMainWindow());
+  void import('$lib/api/window').then(({ focusMainWindow }) =>
+    focusMainWindow()
+  );
 }
 
 export const GLOBAL_SHORTCUT_COMMAND_IDS = [

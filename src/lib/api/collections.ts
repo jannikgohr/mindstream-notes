@@ -2,7 +2,7 @@
  * Collections (folders) API. Mirror of src-tauri/src/collections/mod.rs.
  */
 
-import { invokeOrFallback } from './index';
+import { invokeOrFallback } from './core';
 import { mockApi } from './mock-store';
 
 export interface Collection {

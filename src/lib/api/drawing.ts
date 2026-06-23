@@ -7,7 +7,7 @@
  * on Android and are silent no-ops on desktop.
  */
 
-import { invokeOrFallback } from './index';
+import { invokeOrFallback } from './core';
 import { mockApi } from './mock-store';
 
 export function drawingShowLiveInkOverlay(): Promise<void> {

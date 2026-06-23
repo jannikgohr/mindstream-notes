@@ -4,12 +4,9 @@
   import { ModeWatcher, mode } from 'mode-watcher';
   import { getSettingValue, isModified } from '$lib/settings/store.svelte';
   import { applyAccentColor, clearAccentColor } from '$lib/settings/accent';
-  import {
-    invokeOrFallback,
-    setNativeHotkeyDisplays,
-    setTrashRetention,
-    sweepTrashRetention
-  } from '$lib/api';
+  import { invokeOrFallback } from '$lib/api/core';
+  import { setNativeHotkeyDisplays } from '$lib/api/hotkeys';
+  import { setTrashRetention, sweepTrashRetention } from '$lib/api/data';
   import LazyRootSingletons from '$lib/components/LazyRootSingletons.svelte';
   import {
     HOTKEY_COMMANDS,
@@ -170,8 +167,8 @@
         // store is stale. The hourly scheduler tick can't see the
         // store, so reload from here — cheap when nothing changed.
         if (purged > 0) {
-          const { loadTree } = await import('$lib/stores/tree.svelte');
-          await loadTree();
+          const { refreshTree } = await import('$lib/stores/tree-refresh');
+          await refreshTree();
         }
       })
       .catch((err) => {

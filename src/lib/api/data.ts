@@ -11,7 +11,7 @@
  */
 
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
-import { isTauri } from './index';
+import { isTauri } from './core';
 
 export interface TrashCounts {
   notes: number;

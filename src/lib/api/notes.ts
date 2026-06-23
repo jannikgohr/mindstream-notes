@@ -5,7 +5,7 @@
  * fetches the full note + body on demand. Soft-delete via trash_note.
  */
 
-import { invokeOrFallback } from './index';
+import { invokeOrFallback } from './core';
 import { mockApi } from './mock-store';
 
 /**

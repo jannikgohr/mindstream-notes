@@ -1,4 +1,5 @@
-import { isTauri, syncNativeGlobalShortcuts } from '$lib/api';
+import { isTauri } from '$lib/api/core';
+import { syncNativeGlobalShortcuts } from '$lib/api/hotkeys';
 import { isMobile } from '$lib/platform';
 import {
   commandById,

@@ -9,7 +9,7 @@
   import FavouriteStar from '$lib/components/FavouriteStar.svelte';
   import { Button } from '$lib/components/ui/button';
   import NoteStatusIcons from '$lib/desktop/NoteStatusIcons.svelte';
-  import MetadataPanel from '$lib/components/MetadataPanel.svelte';
+  import LazyMetadataPanel from '$lib/components/LazyMetadataPanel.svelte';
   import NoteKindRenderer from '$lib/components/NoteKindRenderer.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { tree } from '$lib/stores/tree.svelte';
@@ -132,7 +132,7 @@
       </Button>
     </header>
     <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-      <MetadataPanel />
+      <LazyMetadataPanel />
     </div>
   </div>
 {/if}

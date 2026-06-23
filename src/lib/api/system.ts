@@ -8,7 +8,7 @@
  */
 
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
-import { isTauri } from './index';
+import { isTauri } from './core';
 
 /**
  * True when the running binary was launched as an AppImage (i.e. the
