@@ -44,6 +44,15 @@ services:
     # without a proxy gets a published port via docker-compose.override.yml.
     expose:
       - "80"
+    healthcheck:
+      # busybox wget ships in nginx:alpine; hit the local /healthz.
+      test:
+        - CMD-SHELL
+        - wget -q -O /dev/null http://127.0.0.1/healthz
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   yjs-relay:
     build: ./yjs-relay
@@ -55,6 +64,16 @@ services:
       - PORT=1234
     expose:
       - "1234"
+    healthcheck:
+      # node:22-slim has no wget/curl, but it has node — a TCP connect to
+      # the WS port confirms uWS is listening (it speaks WS, not plain HTTP).
+      test:
+        - CMD-SHELL
+        - node -e "require('net').connect(1234,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   excalidraw-room:
     build: ./excalidraw-room
@@ -68,6 +87,16 @@ services:
       - CORS_ORIGIN=${PUBLIC_ORIGIN:-http://localhost:8080}
     expose:
       - "80"
+    healthcheck:
+      # socket.io serves a real HTTP handshake at /socket.io/; a 200 here
+      # means the room server is up. busybox wget ships in node:20-alpine.
+      test:
+        - CMD-SHELL
+        - wget -q -O /dev/null 'http://127.0.0.1:80/socket.io/?EIO=4&transport=polling'
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
   etebase:
     # victorrds/etebase is the most widely-used community image of the
@@ -104,6 +133,18 @@ services:
       - etebase_data:/data
     expose:
       - "3735"
+    healthcheck:
+      # A GET to / would 400 unless the Host is in ALLOWED_HOSTS, so probe
+      # liveness with a TCP connect to uvicorn via the image's python
+      # (try python3 too in case the bare `python` symlink is absent).
+      # start_period is generous: Django runs migrations on every boot.
+      test:
+        - CMD-SHELL
+        - PY=$(command -v python || command -v python3); "$PY" -c "import socket,sys; s=socket.socket(); s.settimeout(3); sys.exit(s.connect_ex(('127.0.0.1',3735)))"
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
 
   postgres:
     image: postgres:16-alpine
