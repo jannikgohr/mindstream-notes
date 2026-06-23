@@ -10,11 +10,14 @@
 #
 # Usage from this directory:
 #   cp .env.example .env
-#   # edit .env — at minimum set POSTGRES_PASSWORD and ETEBASE_ALLOWED_HOSTS
+#   # edit .env — at minimum set POSTGRES_PASSWORD and PUBLIC_HOST
 #   docker compose up -d --build
 #
-# Plain HTTP only. Put your TLS-terminating proxy (Caddy, Cloudflare,
-# nginx, ...) in front of NGINX_PORT.
+# Plain HTTP only. The nginx edge publishes no host port here; put your
+# TLS-terminating reverse proxy (Dokploy/Traefik, Caddy, Cloudflare, …)
+# in front and route the public hostname to the nginx service on
+# container port 80. For local dev without a proxy,
+# docker-compose.override.yml publishes nginx on ${NGINX_PORT:-8080}.
 
 services:
   nginx:
@@ -25,8 +28,12 @@ services:
       - yjs-relay
       - excalidraw-room
       - etebase
-    ports:
-      - "${NGINX_PORT:-8080}:80"
+    # No host port published on purpose. Behind a reverse proxy
+    # (Dokploy/Traefik, Caddy, …) attach PUBLIC_HOST to this service on
+    # container port 80 and let the proxy terminate TLS. Local dev
+    # without a proxy gets a published port via docker-compose.override.yml.
+    expose:
+      - "80"
 
   yjs-relay:
     build: ./yjs-relay
@@ -45,7 +52,8 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=80
-      - CORS_ORIGIN=${EXCALIDRAW_CORS_ORIGIN:-*}
+      # Same public origin the client loads from — see PUBLIC_ORIGIN in .env.
+      - CORS_ORIGIN=${PUBLIC_ORIGIN:-http://localhost:8080}
     expose:
       - "80"
 
@@ -74,7 +82,8 @@ services:
       # the line is gone. Or set ETEBASE_SUPER_PASS in .env if you want
       # to pin it (less safe; it stays in the env).
       - SUPER_PASS=${ETEBASE_SUPER_PASS:-}
-      - ALLOWED_HOSTS=${ETEBASE_ALLOWED_HOSTS:-*}
+      # Drives both ALLOWED_HOSTS and CSRF_TRUSTED_ORIGINS in the image.
+      - ALLOWED_HOSTS=${PUBLIC_HOST:-localhost}
     volumes:
       # /data holds etebase-server.ini, secret.txt, and the media dir
       # (user-uploaded blobs). Keep this volume around — losing it
