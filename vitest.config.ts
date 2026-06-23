@@ -14,7 +14,12 @@ export default defineConfig({
   resolve: {
     alias: {
       $lib: path.resolve('./src/lib'),
-      '$lib/*': path.resolve('./src/lib/*')
+      '$lib/*': path.resolve('./src/lib/*'),
+      // SvelteKit's `$app/*` virtual modules don't exist under the plain
+      // Svelte plugin vitest uses, so any source importing them fails to
+      // resolve at transform time. Point them at test stubs; tests that
+      // care about the calls override with `vi.mock`.
+      '$app/navigation': path.resolve('./test/stubs/app-navigation.ts')
     },
     // Some Svelte ecosystem packages (e.g. `mode-watcher`) only declare a
     // `svelte` export condition — no `import`/`default` fallback. Vitest's
