@@ -193,6 +193,17 @@ body {
   transform: none;
 }
 
+.reduce-motion,
+.reduce-motion * {
+  scroll-behavior: auto !important;
+}
+
+.reduce-motion [data-state='open'],
+.reduce-motion [data-state='closed'] {
+  animation: none !important;
+  transition: none !important;
+}
+
 /* dockview theme bridge — map dockview's CSS vars onto our shadcn palette
  * so tabs and panel chrome adopt the active theme. */
 .dockview-theme-bridge {
@@ -236,6 +247,11 @@ body {
    */
   --dv-overlay-z-index: 10000;
   color: var(--foreground);
+}
+
+.reduce-motion .dockview-theme-bridge {
+  --dv-transition-duration: 0ms;
+  --dv-active-sash-transition-duration: 0s;
 }
 
 /* Dockview's split-panel hairline is a pseudo-element on the following
@@ -288,6 +304,18 @@ body {
     padding var(--dv-transition-duration, 200ms) ease-out,
     margin var(--dv-transition-duration, 200ms) ease-out,
     opacity var(--dv-transition-duration, 200ms) ease-out;
+}
+
+.reduce-motion .dockview-theme-bridge .dv-tabs-container > .dv-tab,
+.reduce-motion
+  .dockview-theme-bridge
+  .dv-tabs-container
+  > .dv-tab.dv-tab--shifting,
+.reduce-motion
+  .dockview-theme-bridge
+  .dv-tabs-container
+  > .dv-tab.dv-tab--dragging {
+  transition: none !important;
 }
 
 .dv-tab-ghost-drag::after {
@@ -1095,6 +1123,17 @@ body.dv-tab-dragging .freeform-canvas-host * {
   transform: none !important;
   transition: none !important;
   animation: none !important;
+}
+
+.reduce-motion .updater-indeterminate {
+  width: 100% !important;
+  opacity: 0.3;
+  transform: none !important;
+  animation: none !important;
+}
+
+.reduce-motion .transition-\[width\] {
+  transition: none !important;
 }
 
 /*

@@ -154,6 +154,9 @@
 
   let hostEl = $state<HTMLDivElement | null>(null);
   let container = $state<HTMLDivElement | null>(null);
+  const reduceMotion = $derived(
+    getSettingValue('appearance.reduceMotion') === true
+  );
   let pdfDoc = $state<PdfDocument | null>(null);
   let pageNumbers = $state<number[]>([]);
   let loading = $state(true);
@@ -904,7 +907,7 @@
       target?.scrollIntoView({
         block: 'center',
         inline: 'center',
-        behavior: 'smooth'
+        behavior: reduceMotion ? 'auto' : 'smooth'
       });
     });
   }
@@ -944,7 +947,7 @@
       container.scrollTo({
         top,
         left: left ?? container.scrollLeft,
-        behavior
+        behavior: reduceMotion ? 'auto' : behavior
       });
     }
     // Don't set activePageNumber eagerly. The IntersectionObserver advances it
@@ -1104,7 +1107,10 @@
       const el = container?.querySelector<HTMLElement>(
         `[data-search-match-id="${CSS.escape(match.id)}"]`
       );
-      el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      el?.scrollIntoView({
+        block: 'center',
+        behavior: reduceMotion ? 'auto' : 'smooth'
+      });
     });
   }
 
