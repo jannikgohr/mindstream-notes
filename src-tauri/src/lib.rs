@@ -294,6 +294,7 @@ pub fn run() {
             auth::etebase_login,
             auth::etebase_logout,
             auth::etebase_session,
+            auth::check_etebase_server_url,
             // Sync
             sync::sync_now,
             sync::note_room_info,

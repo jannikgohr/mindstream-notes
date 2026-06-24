@@ -21,9 +21,10 @@
    * never persist it.
    */
   import { Button } from '$lib/components/ui/button';
-  import { LogOut, Loader2, RefreshCw } from '@lucide/svelte';
+  import { CheckCircle2, LogOut, Loader2, RefreshCw } from '@lucide/svelte';
   import {
     authSession,
+    checkEtebaseServerUrl,
     etebaseLogin,
     etebaseLogout,
     refreshAuthSession,
@@ -31,6 +32,7 @@
   } from '$lib/api/auth.svelte';
   import { type SyncReport } from '$lib/api/sync';
   import { normalizeServerUrl } from '$lib/api/server-urls';
+  import { upsertNotification } from '$lib/notifications/store.svelte';
   import { runSync } from '$lib/sync/runner';
   import {
     getSettingValue,
@@ -48,6 +50,9 @@
   let error = $state<string | null>(null);
   let syncing = $state(false);
   let lastReport = $state<SyncReport | null>(null);
+  let checkingUrl = $state(false);
+  let checkUrlStatus = $state<string | null>(null);
+  let checkUrlOk = $state(false);
 
   const serverType = $derived(
     (getSettingValue('account.serverType') as string | undefined) ??
@@ -98,6 +103,16 @@
         username: username.trim(),
         password
       });
+      upsertNotification({
+        id: `auth:signin:${Date.now()}`,
+        kind: 'generic',
+        widgetType: 'generic',
+        createdAt: Date.now(),
+        data: {
+          title: 'Signed in',
+          message: `Connected to ${serverType === 'self-hosted' ? normalizedUrl : MANAGED_SERVER_URL}`
+        }
+      });
       password = '';
       username = '';
       // Persist the cleaned-up URL back so the next time the user
@@ -128,6 +143,16 @@
     error = null;
     try {
       await etebaseLogout();
+      upsertNotification({
+        id: `auth:signout:${Date.now()}`,
+        kind: 'generic',
+        widgetType: 'generic',
+        createdAt: Date.now(),
+        data: {
+          title: 'Signed out',
+          message: 'Your local session was cleared.'
+        }
+      });
       lastReport = null;
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
@@ -174,7 +199,36 @@
    *  setSettingValue and reads back through the same derived store. */
   function onServerUrlInput(event: Event): void {
     const target = event.currentTarget as HTMLInputElement;
+    checkUrlStatus = null;
+    checkUrlOk = false;
     void setSettingValue('account.serverUrl', target.value);
+  }
+
+  async function checkUrl() {
+    if (
+      checkingUrl ||
+      serverType !== 'self-hosted' ||
+      !serverUrlValidation.url ||
+      serverUrlValidation.error
+    ) {
+      return;
+    }
+    checkingUrl = true;
+    error = null;
+    checkUrlStatus = null;
+    checkUrlOk = false;
+    try {
+      const result = await checkEtebaseServerUrl(serverUrlValidation.url);
+      checkUrlOk = result.ok;
+      checkUrlStatus = result.ok
+        ? `Server replied at ${result.url}`
+        : `Health check returned HTTP ${result.status} at ${result.url}`;
+    } catch (err) {
+      checkUrlStatus = null;
+      error = err instanceof Error ? err.message : String(err);
+    } finally {
+      checkingUrl = false;
+    }
   }
 </script>
 
@@ -241,16 +295,35 @@
       {#if serverType === 'self-hosted'}
         <label class="grid gap-1">
           <span class="text-xs text-muted-foreground">Server URL</span>
-          <input
-            type="url"
-            inputmode="url"
-            autocomplete="url"
-            value={serverUrlInput}
-            oninput={onServerUrlInput}
-            placeholder="https://collab.example.com"
-            disabled={busy}
-            class="h-8 rounded-md border border-input bg-background px-2 font-mono text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
-          />
+          <div class="flex gap-2">
+            <input
+              type="url"
+              inputmode="url"
+              autocomplete="url"
+              value={serverUrlInput}
+              oninput={onServerUrlInput}
+              placeholder="https://collab.example.com"
+              disabled={busy}
+              class="h-8 min-w-0 flex-1 rounded-md border border-input bg-background px-2 font-mono text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+            />
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              onclick={checkUrl}
+              disabled={busy ||
+                checkingUrl ||
+                !serverUrlValidation.url ||
+                serverUrlValidation.error !== null}
+            >
+              {#if checkingUrl}
+                <Loader2 class="mr-1.5 size-3.5 animate-spin" />
+                Checking…
+              {:else}
+                Check URL
+              {/if}
+            </Button>
+          </div>
         </label>
       {:else if serverType === 'managed'}
         <div class="grid gap-1">
@@ -301,6 +374,19 @@
           <span class="text-xs text-muted-foreground"
             >Enter your server URL above first.</span
           >
+        {:else if serverType === 'self-hosted' && checkUrlStatus}
+          <span
+            class="inline-flex items-center gap-1 text-xs {checkUrlOk
+              ? 'text-muted-foreground'
+              : 'text-destructive'}"
+          >
+            <CheckCircle2
+              class="size-3.5 {checkUrlOk
+                ? 'text-primary'
+                : 'text-destructive'}"
+            />
+            {checkUrlStatus}
+          </span>
         {/if}
       </div>
     </form>

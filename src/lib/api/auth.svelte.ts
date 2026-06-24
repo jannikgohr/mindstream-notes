@@ -25,6 +25,12 @@ export interface SessionInfo {
   server_url: string;
 }
 
+export interface ServerCheckResult {
+  ok: boolean;
+  status: number;
+  url: string;
+}
+
 /**
  * Pub/sub for session-state transitions. Login + logout both dispatch
  * a 'change' event after the Rust side completes; long-lived consumers
@@ -125,4 +131,15 @@ export async function etebaseLogout(): Promise<void> {
 export async function etebaseSession(): Promise<SessionInfo | null> {
   if (!isTauri()) return null;
   return await tauriInvoke<SessionInfo | null>('etebase_session');
+}
+
+export async function checkEtebaseServerUrl(
+  serverUrl: string
+): Promise<ServerCheckResult> {
+  if (!isTauri()) {
+    return { ok: true, status: 200, url: serverUrl };
+  }
+  return await tauriInvoke<ServerCheckResult>('check_etebase_server_url', {
+    serverUrl
+  });
 }
