@@ -1,9 +1,8 @@
 <script lang="ts">
   /**
-   * Icon-only status chips rendered in the dockview right-header,
-   * sitting just left of the popout button. Shows the active note's
-   * live-collab connection + save state. Tooltips are translated via
-   * `tUi()`.
+   * Icon-only status chips rendered in editor chrome. Desktop dockview
+   * passes the active note id for each tab group; mobile passes the
+   * single open note id. Tooltips are translated via `tUi()`.
    *
    * Mounted into dockview's plain-DOM `PopoutHeaderAction` element via
    * Svelte 5's `mount()` — see dockview-popout-action.ts.
@@ -22,15 +21,20 @@
     WifiOff
   } from '@lucide/svelte';
   import { tooltip } from '$lib/actions/tooltip';
-  import { ui } from '$lib/state.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { getNoteStatus } from '$lib/stores/note-status.svelte';
+
+  interface Props {
+    noteId?: string | null;
+  }
+
+  let { noteId = null }: Props = $props();
 
   // Reading via the getter inside a $derived lets each field still
   // track reactively — getNoteStatus returns either the live entry or
   // the EMPTY constant, both of which are plain objects whose field
   // reads Svelte 5 tracks under the runes.
-  const status = $derived(getNoteStatus(ui.activeNoteId));
+  const status = $derived(getNoteStatus(noteId));
 </script>
 
 <div class="flex items-center gap-1.5 px-1 text-muted-foreground">

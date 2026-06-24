@@ -60,7 +60,7 @@
            handler can't accidentally fire against a different note if
            ui.activeNoteId changes between render and click. -->
       {@const currentNoteId = noteId}
-      <NoteStatusIcons />
+      <NoteStatusIcons {noteId} />
       <span class="mx-1 h-5 w-px shrink-0 bg-border" aria-hidden="true"></span>
       <Button
         variant="ghost"

@@ -1,18 +1,15 @@
 /**
  * Per-note "what's happening with this editor right now" status —
  * collab connection, saving state, trashed flag. Editors mirror their
- * own reactive state into this store; the dockview right-header reads
- * the entry keyed by `ui.activeNoteId` and renders icon-only chips
- * next to the popout button.
+ * own reactive state into this store; chrome surfaces read entries by
+ * note id and render icon-only chips next to the popout button /
+ * mobile title.
  *
  * Why a global store and not editor-local state: dockview's right-
  * header renderer is one instance per tab GROUP (not per panel), and
  * the icons need to reflect whichever panel is currently active in
- * that group. Threading per-panel state through `IGroupHeaderProps`
- * would require live subscription plumbing on each panel-activation
- * event. A keyed store is the same plumbing every other
- * "active-panel-cares-about-this" widget in the app already uses (see
- * MetadataPanel).
+ * that group. A keyed store lets the group header hand over just a
+ * note id while each editor continues owning its own status lifecycle.
  *
  * Entries are written by each editor's onMount/effect and cleared in
  * onDestroy so closing a panel removes its row.
