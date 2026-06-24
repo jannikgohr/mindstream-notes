@@ -37,11 +37,19 @@ pub mod tray;
 use std::borrow::Cow;
 
 use tauri::Manager;
+#[cfg(desktop)]
+use tauri_plugin_window_state::{StateFlags, WindowExt};
 
 use crate::db::{migrations, Db};
 
 #[cfg(desktop)]
 const AUTOSTART_ARG: &str = "--mindstream-autostart";
+#[cfg(desktop)]
+const WINDOW_STATE_FLAGS: StateFlags = StateFlags::SIZE
+    .union(StateFlags::POSITION)
+    .union(StateFlags::MAXIMIZED)
+    .union(StateFlags::DECORATIONS)
+    .union(StateFlags::FULLSCREEN);
 
 /// Pick a platform credential store and register it with keyring-core
 /// so subsequent `Entry::new(...)` calls in `auth::*` know where to
@@ -161,10 +169,8 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(
             tauri_plugin_window_state::Builder::new()
-                .with_state_flags(
-                    tauri_plugin_window_state::StateFlags::all()
-                        - tauri_plugin_window_state::StateFlags::VISIBLE,
-                )
+                .with_state_flags(WINDOW_STATE_FLAGS)
+                .skip_initial_state("main")
                 .build(),
         )
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -239,6 +245,9 @@ pub fn run() {
 
             #[cfg(desktop)]
             if let Some(window) = app.get_webview_window("main") {
+                if let Err(err) = window.restore_state(WINDOW_STATE_FLAGS) {
+                    log::warn!("[window-state] restore main window: {err}");
+                }
                 if was_started_by_autostart()
                     && desktop_settings::should_start_in_tray(app.handle())
                 {
