@@ -61,12 +61,14 @@ pnpm check
 pnpm test
 ```
 
-Measure coverage (frontend with the v8 provider, backend with
-`cargo-llvm-cov`):
+Measure coverage. Both sides gate the **logic layer** at 80% line coverage
+(frontend with the v8 provider, backend with `cargo-llvm-cov`); integration
+surfaces — the Tauri IPC boundary, network sync, native dialogs, editor/canvas
+frameworks — are excluded from the metric and covered by e2e instead:
 
 ```shell
-pnpm test:coverage        # writes coverage/ (text + lcov)
-pnpm test:coverage:rust   # writes src-tauri/lcov.info (needs cargo-llvm-cov)
+pnpm test:coverage        # frontend; writes coverage/ (text + lcov), enforces 80%
+pnpm test:coverage:rust   # backend; enforces 80% (needs cargo-llvm-cov)
 ```
 
 Run the end-to-end suite. Playwright builds the SPA and drives it in
@@ -77,6 +79,11 @@ no Tauri or Rust build is required):
 pnpm test:e2e             # headless
 pnpm test:e2e:ui          # interactive runner
 ```
+
+The Playwright suite covers the pure-UI journeys today;
+[docs/e2e-flows.md](docs/e2e-flows.md) defines the deeper flows (critical user
+journeys, IPC-heavy operations, and cross-restart state persistence) that need
+the packaged Tauri app rather than the browser fallback.
 
 For full platform setup, packaging commands, Android notes, and Rust quality gates, see [docs/BUILDING.md](docs/BUILDING.md).
 
