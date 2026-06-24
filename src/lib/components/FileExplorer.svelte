@@ -116,6 +116,8 @@
   let pdfInput = $state<HTMLInputElement | null>(null);
   let pdfImportParentId = $state<string | null>(null);
   let emptyTrashPending = $state(false);
+  let emptyTrashAnimation = $state(0);
+  let emptyTrashParticleCount = $state(0);
   let sourceChipRow = $state<HTMLElement | null>(null);
   let sourceChipsCollapsed = $state(false);
   let expandedSourceChipWidth = 0;
@@ -282,7 +284,12 @@
     ) {
       emptyTrashPending = true;
       try {
-        await emptyTrash();
+        const removed = await emptyTrash();
+        const removedCount = removed.notes + removed.folders;
+        if (removedCount > 0) {
+          emptyTrashParticleCount = Math.min(removedCount, 6);
+          emptyTrashAnimation += 1;
+        }
       } finally {
         emptyTrashPending = false;
       }
@@ -702,8 +709,22 @@
         disabled={trashItemCount === 0 || emptyTrashPending}
         title="Empty trash"
         aria-label="Empty trash"
-        class="h-7 shrink-0 px-2 text-xs text-destructive hover:text-destructive"
+        class="relative h-7 shrink-0 overflow-hidden px-2 text-xs text-destructive hover:text-destructive"
       >
+        {#if emptyTrashAnimation > 0}
+          {#key emptyTrashAnimation}
+            <span class="trash-suck-particles" aria-hidden="true">
+              {#each Array.from({ length: emptyTrashParticleCount }) as _, i}
+                <span
+                  class="trash-suck-particle"
+                  style="--i: {i}; --x: {(i -
+                    (emptyTrashParticleCount - 1) / 2) *
+                    5}px;"
+                ></span>
+              {/each}
+            </span>
+          {/key}
+        {/if}
         <Trash2 class="size-3.5" />
         Empty
       </Button>
@@ -952,5 +973,48 @@
   .source-chip-row-collapsed .source-chip.source-chip-active {
     min-width: 0;
     flex: 1 1 auto;
+  }
+
+  .trash-suck-particles {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+  }
+
+  .trash-suck-particle {
+    position: absolute;
+    left: calc(50% + var(--x));
+    top: 70%;
+    width: 3px;
+    height: 3px;
+    border-radius: 999px;
+    background: currentColor;
+    opacity: 0;
+    animation: trash-suck 520ms cubic-bezier(0.2, 0.85, 0.25, 1) forwards;
+    animation-delay: calc(var(--i) * 35ms);
+  }
+
+  @keyframes trash-suck {
+    0% {
+      opacity: 0;
+      transform: translate(-18px, -8px) scale(0.9);
+    }
+    20% {
+      opacity: 0.8;
+    }
+    100% {
+      opacity: 0;
+      transform: translate(0, -1px) scale(0.15);
+    }
+  }
+
+  :global(.reduce-motion) .trash-suck-particle {
+    animation: none;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .trash-suck-particle {
+      animation: none;
+    }
   }
 </style>
