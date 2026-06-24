@@ -48,7 +48,13 @@
   // matters in tests; we drop it intentionally here.
   onMount(() => {
     initHotkeys();
+    const blockTouchZoom = (event: WheelEvent) => {
+      if (!event.ctrlKey) return;
+      event.preventDefault();
+    };
+    window.addEventListener('wheel', blockTouchZoom, { passive: false });
     return () => {
+      window.removeEventListener('wheel', blockTouchZoom);
       void teardownGlobalShortcuts();
     };
   });
