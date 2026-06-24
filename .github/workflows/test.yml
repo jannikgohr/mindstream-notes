@@ -152,10 +152,11 @@ jobs:
       - name: JS coverage
         run: pnpm test:coverage
 
-      # Backend: cargo-llvm-cov emits src-tauri/lcov.info.
+      # Backend: cargo-llvm-cov emits src-tauri/lcov.info. The helper applies
+      # the shared ignore-regex (integration/IPC/network/UI surfaces) and
+      # fails the job if line coverage drops below 80%.
       - name: Rust coverage
-        working-directory: src-tauri
-        run: cargo llvm-cov --locked --lcov --output-path lcov.info
+        run: node src-tauri/scripts/rust-coverage.mjs --lcov --output-path lcov.info
 
       - name: Upload frontend coverage
         uses: codecov/codecov-action@v5

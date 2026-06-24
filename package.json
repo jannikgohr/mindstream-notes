@@ -20,7 +20,7 @@
     "test:e2e:ui": "playwright test --ui",
     "verify": "pnpm check && pnpm test && pnpm build",
     "verify:rust": "cd src-tauri && cargo test",
-    "test:coverage:rust": "cd src-tauri && cargo llvm-cov --lcov --output-path lcov.info",
+    "test:coverage:rust": "node src-tauri/scripts/rust-coverage.mjs",
     "format": "pnpm run format:web && pnpm run format:rust",
     "format:check": "pnpm run format:web:check && pnpm run format:rust:check",
     "format:web": "node src-tauri/scripts/format-web.mjs",
