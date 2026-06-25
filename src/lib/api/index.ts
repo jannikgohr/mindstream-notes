@@ -20,6 +20,7 @@ export * from './auth.svelte';
 export * from './sync';
 export * from './system';
 export * from './desktop-settings';
+export * from './profiles';
 export * from './hotkeys';
 export * from './server-urls';
 export { pickExportDir, writeExportFile } from './notes-export';
