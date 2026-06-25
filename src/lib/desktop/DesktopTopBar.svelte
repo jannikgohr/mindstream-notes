@@ -4,6 +4,7 @@
   import { Button } from '$lib/components/ui/button';
   import { Separator } from '$lib/components/ui/separator';
   import ThemeToggle from '$lib/components/ThemeToggle.svelte';
+  import VaultSwitcher from '$lib/components/VaultSwitcher.svelte';
   import WindowControls from '$lib/components/WindowControls.svelte';
   import NotificationCenter from '$lib/notifications/NotificationCenter.svelte';
   import { ui, toggleLeftSidebar, toggleRightSidebar } from '$lib/state.svelte';
@@ -32,6 +33,9 @@
   >
     Mindstream Notes
   </span>
+
+  <Separator orientation="vertical" class="mx-1 h-5" />
+  <VaultSwitcher />
 
   <div data-tauri-drag-region class="flex-1"></div>
 
