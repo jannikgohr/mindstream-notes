@@ -204,18 +204,24 @@ pub fn run() {
 
             // Resolve the active profile directory and register it in
             // state *before* anything reaches for `paths::app_data_dir`.
-            // The index lives at the fixed OS root; on upgrade from the
-            // pre-profiles layout the legacy vault is migrated into a
-            // "default" profile first so notes aren't orphaned.
+            // A gated env override (e2e isolation seam) bypasses the
+            // index entirely; otherwise the index at the fixed OS root
+            // decides, migrating a pre-profiles vault into a "default"
+            // profile first so notes aren't orphaned.
             let app_data_root =
                 paths::app_data_root(app.handle()).expect("could not resolve app_data_dir");
-            if let Err(e) = profiles::migrate_legacy_if_needed(&app_data_root) {
-                log::error!("[profiles] legacy migration failed: {e}");
-            }
-            let index =
-                profiles::load_or_init(&app_data_root).expect("could not read profiles index");
-            let active_id = index.active.clone();
-            let app_data = profiles::profile_dir(&app_data_root, &active_id);
+            let (active_id, app_data) = match profiles::dir_override() {
+                Some(over) => over,
+                None => {
+                    if let Err(e) = profiles::migrate_legacy_if_needed(&app_data_root) {
+                        log::error!("[profiles] legacy migration failed: {e}");
+                    }
+                    let index = profiles::load_or_init(&app_data_root)
+                        .expect("could not read profiles index");
+                    let dir = profiles::profile_dir(&app_data_root, &index.active);
+                    (index.active, dir)
+                }
+            };
             log::info!("[boot] active profile = {active_id}");
             app.manage(paths::ActiveProfile {
                 id: active_id,

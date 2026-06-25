@@ -203,6 +203,11 @@ _is_ the restart.
   `backend/` compose stack) or a mock, and tag these tests so they can be
   skipped when no server is available.
 - **Restart flows (§3):** the test harness must be able to quit and relaunch
-  the same data directory; point the app at a temp `APPDATA`/`app_data_dir`
-  per test so runs are isolated and the restart picks up the same on-disk
-  state.
+  the same data directory. Set the `MINDSTREAM_PROFILE_DIR` env var to a temp
+  directory per test so runs are isolated and a restart picks up the same
+  on-disk state; optionally set `MINDSTREAM_PROFILE_ID` to namespace that
+  run's keyring entry. This override is the active-profile seam in
+  `src-tauri/src/profiles.rs` (`dir_override`); it bypasses the profiles
+  index entirely. It is gated to dev builds (`debug_assertions`) and to
+  release builds compiled with `--features e2e-data-dir`, so a shipped
+  production binary can never be redirected by a stray env var.

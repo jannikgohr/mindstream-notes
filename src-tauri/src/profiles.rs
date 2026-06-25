@@ -16,12 +16,22 @@
 //! `mindstream.db` (and its siblings) into a `"default"` profile so no
 //! one's notes get orphaned.
 
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::{AppError, AppResult};
+
+/// Env var pointing the active profile dir at an arbitrary path — the
+/// e2e/test isolation seam. Honored only when [`dir_override_allowed`].
+pub const PROFILE_DIR_ENV: &str = "MINDSTREAM_PROFILE_DIR";
+/// Optional companion to [`PROFILE_DIR_ENV`] setting the profile id (and
+/// hence the keyring namespace). Defaults to a non-"default" id so an
+/// overridden run gets its own isolated keyring entry out of the box.
+pub const PROFILE_ID_ENV: &str = "MINDSTREAM_PROFILE_ID";
+const OVERRIDE_DEFAULT_ID: &str = "e2e";
 
 /// Id of the profile the legacy single vault migrates into. Kept as a
 /// readable literal (not a uuid) because it doubles as the keyring
@@ -173,6 +183,52 @@ pub fn migrate_legacy_if_needed(root: &Path) -> AppResult<bool> {
     Ok(true)
 }
 
+/// Whether the data-dir env override is permitted in this build. Dev
+/// builds (`debug_assertions`) and builds compiled with the
+/// `e2e-data-dir` feature allow it; a production release build does not,
+/// so a stray env var can never redirect a real user's vault.
+pub fn dir_override_allowed() -> bool {
+    cfg!(debug_assertions) || cfg!(feature = "e2e-data-dir")
+}
+
+/// Pure core of [`dir_override`]: given the raw env values and whether
+/// the build gate is open, decide the overriding `(id, dir)`. `None`
+/// means "no override — fall back to the index". Factored out so the
+/// gating + defaulting logic is unit-testable without touching process
+/// env or build cfg.
+fn override_from_env(
+    dir_env: Option<OsString>,
+    id_env: Option<String>,
+    allowed: bool,
+) -> Option<(String, PathBuf)> {
+    if !allowed {
+        return None;
+    }
+    let dir = dir_env.filter(|v| !v.is_empty())?;
+    let id = id_env
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| OVERRIDE_DEFAULT_ID.to_string());
+    Some((id, PathBuf::from(dir)))
+}
+
+/// Resolve a gated env-var override of the active profile directory.
+/// Returns `Some((id, dir))` to bypass the index entirely (used by the
+/// e2e harness to isolate each run), or `None` to use the on-disk index.
+pub fn dir_override() -> Option<(String, PathBuf)> {
+    let over = override_from_env(
+        std::env::var_os(PROFILE_DIR_ENV),
+        std::env::var(PROFILE_ID_ENV).ok(),
+        dir_override_allowed(),
+    );
+    if let Some((id, dir)) = &over {
+        log::info!(
+            "[profiles] data-dir override active: profile '{id}' -> {}",
+            dir.display()
+        );
+    }
+    over
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -264,6 +320,39 @@ mod tests {
             .join("mindstream.db")
             .exists());
         fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn override_ignored_when_gate_closed() {
+        // Even with the env var set, a production build (gate closed)
+        // must never redirect the data dir.
+        let over = override_from_env(Some(OsString::from("/tmp/x")), None, false);
+        assert_eq!(over, None);
+    }
+
+    #[test]
+    fn override_uses_default_id_when_only_dir_set() {
+        let over = override_from_env(Some(OsString::from("/tmp/x")), None, true);
+        assert_eq!(
+            over,
+            Some((OVERRIDE_DEFAULT_ID.to_string(), PathBuf::from("/tmp/x")))
+        );
+    }
+
+    #[test]
+    fn override_honors_explicit_id() {
+        let over = override_from_env(
+            Some(OsString::from("/tmp/x")),
+            Some("work".to_string()),
+            true,
+        );
+        assert_eq!(over, Some(("work".to_string(), PathBuf::from("/tmp/x"))));
+    }
+
+    #[test]
+    fn override_absent_when_dir_unset_or_empty() {
+        assert_eq!(override_from_env(None, None, true), None);
+        assert_eq!(override_from_env(Some(OsString::new()), None, true), None);
     }
 
     #[test]
