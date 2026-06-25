@@ -229,6 +229,86 @@ pub fn dir_override() -> Option<(String, PathBuf)> {
     over
 }
 
+// ---------- Lifecycle (create / switch) ----------
+
+/// Add a new profile to the index and create its directory. The id is a
+/// fresh uuid (names stay free-form and collision-free); the name is
+/// trimmed and must be non-empty. Does **not** change the active
+/// profile — the caller switches separately. Returns the new profile.
+pub fn add_profile(root: &Path, name: &str) -> AppResult<Profile> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(AppError::InvalidArg("vault name cannot be empty".into()));
+    }
+    let mut index = load_or_init(root)?;
+    let profile = Profile {
+        id: uuid::Uuid::new_v4().to_string(),
+        name: name.to_string(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+    };
+    fs::create_dir_all(profile_dir(root, &profile.id))?;
+    index.profiles.push(profile.clone());
+    save(root, &index)?;
+    log::info!(
+        "[profiles] created vault '{}' ({})",
+        profile.name,
+        profile.id
+    );
+    Ok(profile)
+}
+
+/// Mark `id` as the active profile. Errors if no such profile exists so
+/// a stale id can't strand boot on a missing directory. The switch only
+/// takes effect on the next launch — the caller relaunches.
+pub fn set_active(root: &Path, id: &str) -> AppResult<()> {
+    let mut index = load_or_init(root)?;
+    if !index.profiles.iter().any(|p| p.id == id) {
+        return Err(AppError::NotFound(format!("unknown vault: {id}")));
+    }
+    index.active = id.to_string();
+    save(root, &index)?;
+    log::info!("[profiles] active vault set to {id} (effective next launch)");
+    Ok(())
+}
+
+// ---------- Tauri commands ----------
+
+/// What the frontend renders: the list of profiles plus the **live**
+/// active id (read from `ActiveProfile` state, so it stays correct even
+/// when an env override diverges from the on-disk index).
+#[derive(Debug, Clone, Serialize)]
+pub struct ProfilesView {
+    pub active: String,
+    pub profiles: Vec<Profile>,
+}
+
+#[tauri::command]
+pub fn list_profiles(app: tauri::AppHandle) -> Result<ProfilesView, String> {
+    use tauri::Manager;
+    let root = crate::paths::app_data_root(&app).map_err(String::from)?;
+    let index = load_or_init(&root).map_err(String::from)?;
+    let active = app
+        .try_state::<crate::paths::ActiveProfile>()
+        .map(|p| p.id.clone())
+        .unwrap_or(index.active);
+    Ok(ProfilesView {
+        active,
+        profiles: index.profiles,
+    })
+}
+
+#[tauri::command]
+pub fn create_profile(app: tauri::AppHandle, name: String) -> Result<Profile, String> {
+    let root = crate::paths::app_data_root(&app).map_err(String::from)?;
+    add_profile(&root, &name).map_err(String::from)
+}
+
+#[tauri::command]
+pub fn switch_profile(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    let root = crate::paths::app_data_root(&app).map_err(String::from)?;
+    set_active(&root, &id).map_err(String::from)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -353,6 +433,49 @@ mod tests {
     fn override_absent_when_dir_unset_or_empty() {
         assert_eq!(override_from_env(None, None, true), None);
         assert_eq!(override_from_env(Some(OsString::new()), None, true), None);
+    }
+
+    #[test]
+    fn add_profile_appends_persists_and_creates_dir() {
+        let root = tmp_root();
+        let created = add_profile(&root, "  Work  ").unwrap();
+        assert_eq!(created.name, "Work", "name is trimmed");
+        assert!(!created.id.is_empty());
+        assert!(profile_dir(&root, &created.id).exists());
+
+        // Persisted: a fresh load sees default + the new one.
+        let index = load(&root).unwrap().unwrap();
+        assert_eq!(index.profiles.len(), 2);
+        assert!(index.profiles.iter().any(|p| p.id == created.id));
+        // Creating does not change the active profile.
+        assert_eq!(index.active, DEFAULT_PROFILE_ID);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn add_profile_rejects_blank_name() {
+        let root = tmp_root();
+        assert!(add_profile(&root, "   ").is_err());
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn set_active_switches_known_profile_and_persists() {
+        let root = tmp_root();
+        let created = add_profile(&root, "Work").unwrap();
+        set_active(&root, &created.id).unwrap();
+        assert_eq!(load(&root).unwrap().unwrap().active, created.id);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn set_active_rejects_unknown_profile() {
+        let root = tmp_root();
+        load_or_init(&root).unwrap();
+        assert!(set_active(&root, "does-not-exist").is_err());
+        // Active is untouched.
+        assert_eq!(load(&root).unwrap().unwrap().active, DEFAULT_PROFILE_ID);
+        fs::remove_dir_all(&root).ok();
     }
 
     #[test]

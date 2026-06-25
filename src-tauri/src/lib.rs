@@ -313,6 +313,10 @@ pub fn run() {
             signatures::list_signatures,
             signatures::save_signature,
             signatures::delete_signature,
+            // Profiles (vaults)
+            profiles::list_profiles,
+            profiles::create_profile,
+            profiles::switch_profile,
             // Auth (Etebase)
             auth::etebase_login,
             auth::etebase_logout,
