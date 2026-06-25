@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { composeTree } from './tree';
+import { composeTree, loadTree } from './tree';
 import { TRASH_ID } from './index';
 import type { Collection } from './collections';
 import type { NoteSummary } from './notes';
@@ -90,5 +90,26 @@ describe('composeTree', () => {
     if (trash?.kind !== 'folder') return; // narrow
     expect(trash.children).toHaveLength(1);
     expect(trash.children[0].id).toBe('n1');
+  });
+
+  it('surfaces a note with a missing parent at the root', () => {
+    const result = composeTree([], [note('n1', 'ghost-folder', 'orphan')]);
+    expect(result.tree.some((n) => n.kind === 'note' && n.id === 'n1')).toBe(
+      true
+    );
+  });
+});
+
+describe('loadTree', () => {
+  it('weaves the browser-fallback collections and notes into a tree', async () => {
+    const result = await loadTree();
+    expect(Array.isArray(result.tree)).toBe(true);
+    expect(Object.keys(result.notesById).length).toBeGreaterThan(0);
+    expect(Object.keys(result.collectionsById).length).toBeGreaterThan(0);
+    // The auto-added trash folder is always present.
+    expect(
+      result.collectionsById[TRASH_ID] ??
+        result.tree.some((n) => n.id === TRASH_ID)
+    ).toBeTruthy();
   });
 });
