@@ -170,6 +170,11 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_updater::Builder::new().build())
+        // Powers the relaunch-into-new-vault switch and the
+        // restore-relaunch flow (frontend calls `relaunch()` from
+        // @tauri-apps/plugin-process). Desktop-only; gated by
+        // `process:allow-restart` in the desktop capability.
+        .plugin(tauri_plugin_process::init())
         .on_window_event(|window, event| {
             if window.label() == "main" {
                 match event {
@@ -196,11 +201,6 @@ pub fn run() {
     app_handle
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
-        // Powers the relaunch-into-new-vault switch and the
-        // restore-relaunch flow (frontend calls `relaunch()` from
-        // @tauri-apps/plugin-process). Gated by `process:allow-restart`
-        // in the desktop capability.
-        .plugin(tauri_plugin_process::init())
         .register_uri_scheme_protocol("mindstream", serve_asset_bytes)
         .setup(|app| {
             // Register a credential store before any auth code can hit
