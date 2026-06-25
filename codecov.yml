@@ -1,0 +1,42 @@
+# Codecov configuration. Two independent coverage streams are uploaded
+# from the `coverage` job in .github/workflows/test.yml:
+#
+#   - frontend : vitest (v8) over src/**/*.{ts,svelte}
+#   - backend  : cargo-llvm-cov over src-tauri/src
+#
+# Coverage is informational while it ramps up, so the status checks are
+# set to `informational: true` — they post the score and trend on each PR
+# but never fail the build. Tighten (drop `informational`, set a target)
+# once the percentage has stabilised.
+
+coverage:
+  status:
+    project:
+      default:
+        informational: true
+      frontend:
+        informational: true
+        flags:
+          - frontend
+      backend:
+        informational: true
+        flags:
+          - backend
+    patch:
+      default:
+        informational: true
+
+flag_management:
+  default_rules:
+    carryforward: true
+  individual_flags:
+    - name: frontend
+      paths:
+        - src/
+    - name: backend
+      paths:
+        - src-tauri/src/
+
+comment:
+  layout: 'reach, diff, flags, files'
+  require_changes: false

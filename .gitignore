@@ -2,6 +2,15 @@ node_modules
 /.svelte-kit
 /build
 /dist
+/coverage
+/src-tauri/coverage
+/src-tauri/lcov.info
+
+# Playwright
+/test-results
+/playwright-report
+/blob-report
+/playwright/.cache
 .DS_Store
 .env
 .env.*

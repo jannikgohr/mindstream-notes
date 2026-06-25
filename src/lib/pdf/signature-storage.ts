@@ -16,10 +16,10 @@
 import {
   listSignatures,
   saveSignature as apiSaveSignature,
-  deleteSignature as apiDeleteSignature,
-  type SignatureRecord
+  deleteSignature as apiDeleteSignature
 } from '$lib/api/signatures';
 import type { PdfSignatureSnapshot } from './types';
+import { recordToSnapshot, snapshotToData } from './signature-codec';
 
 // Pre-sync localStorage keys. v1 stored a single signature under
 // LEGACY_SINGLE_KEY; a later migration moved it into an array under
@@ -28,29 +28,9 @@ import type { PdfSignatureSnapshot } from './types';
 const LEGACY_ARRAY_KEY = 'mindstream.pdf.signatures.v1';
 const LEGACY_SINGLE_KEY = 'mindstream.pdf.signature.v1';
 
-function recordToSnapshot(rec: SignatureRecord): PdfSignatureSnapshot | null {
-  try {
-    const geom = JSON.parse(rec.data) as Omit<PdfSignatureSnapshot, 'id'>;
-    if (!Array.isArray(geom?.strokes) || geom.strokes.length === 0) return null;
-    return {
-      id: rec.id,
-      width: geom.width,
-      height: geom.height,
-      strokes: geom.strokes
-    };
-  } catch {
-    return null;
-  }
-}
-
-function snapshotToData(sig: PdfSignatureSnapshot): string {
-  const { id: _id, ...geom } = sig;
-  return JSON.stringify(geom);
-}
-
 /** Defensive read of the old localStorage shapes, mirroring the previous
  *  loader: skips entries without strokes, fills in a missing id. */
-function readLegacySnapshots(): PdfSignatureSnapshot[] {
+export function readLegacySnapshots(): PdfSignatureSnapshot[] {
   if (typeof localStorage === 'undefined') return [];
   const out: PdfSignatureSnapshot[] = [];
   try {
