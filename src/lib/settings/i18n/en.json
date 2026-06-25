@@ -12,6 +12,8 @@
     "vault.switch.confirm.title": "Switch vault?",
     "vault.switch.confirm.message": "Mindstream Notes will restart to open “{name}”.",
     "vault.switch.confirm.button": "Switch & restart",
+    "vault.switch.devRestart.title": "Vault switched",
+    "vault.switch.devRestart.message": "Now using “{name}”. Restart the app to load it — auto-restart is disabled while running the dev server.",
     "vault.switch.failed.title": "Couldn't switch vault",
     "vault.switch.failed.message": "Switching the vault failed: {error}",
     "title": "Settings",

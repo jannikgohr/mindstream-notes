@@ -52,9 +52,22 @@
     newName = '';
   }
 
-  /** Relaunch into the freshly-selected vault (no-op outside Tauri). */
-  async function relaunchApp() {
+  /**
+   * Apply a completed switch. A packaged build relaunches into the new
+   * vault. Under `tauri dev` the Tauri CLI owns the process *and* the
+   * Vite dev server, so a relaunched instance is torn straight back down
+   * (window flashes open then closes) — there's no app-side fix for that,
+   * so we tell the user to restart manually instead. No-op outside Tauri.
+   */
+  async function finishSwitch(name: string) {
     if (!isTauri()) return;
+    if (import.meta.env.DEV) {
+      await alert({
+        title: tUi('vault.switch.devRestart.title'),
+        message: tUi('vault.switch.devRestart.message').replace('{name}', name)
+      });
+      return;
+    }
     const { relaunch } = await import('@tauri-apps/plugin-process');
     await relaunch();
   }
@@ -74,7 +87,7 @@
     try {
       await switchProfile(id);
       close();
-      await relaunchApp();
+      await finishSwitch(name);
     } catch (err) {
       console.error('[vault] switch failed', err);
       await alert({
@@ -102,7 +115,8 @@
     busy = true;
     try {
       const profile = await createProfile(name);
-      // Switching into the new vault re-confirms + relaunches.
+      // Switching into the new vault re-confirms, then relaunches
+      // (packaged) or prompts a manual restart (dev).
       busy = false;
       await confirmAndSwitch(profile.id, profile.name);
     } catch (err) {

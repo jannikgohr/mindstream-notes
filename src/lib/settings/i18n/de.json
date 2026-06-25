@@ -12,6 +12,8 @@
     "vault.switch.confirm.title": "Tresor wechseln?",
     "vault.switch.confirm.message": "Mindstream Notes wird neu gestartet, um „{name}“ zu öffnen.",
     "vault.switch.confirm.button": "Wechseln & neu starten",
+    "vault.switch.devRestart.title": "Tresor gewechselt",
+    "vault.switch.devRestart.message": "„{name}“ ist jetzt aktiv. Starte die App neu, um ihn zu laden – der automatische Neustart ist während des Dev-Servers deaktiviert.",
     "vault.switch.failed.title": "Tresor konnte nicht gewechselt werden",
     "vault.switch.failed.message": "Das Wechseln des Tresors ist fehlgeschlagen: {error}",
     "title": "Einstellungen",
