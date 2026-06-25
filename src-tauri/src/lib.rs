@@ -196,6 +196,11 @@ pub fn run() {
     app_handle
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
+        // Powers the relaunch-into-new-vault switch and the
+        // restore-relaunch flow (frontend calls `relaunch()` from
+        // @tauri-apps/plugin-process). Gated by `process:allow-restart`
+        // in the desktop capability.
+        .plugin(tauri_plugin_process::init())
         .register_uri_scheme_protocol("mindstream", serve_asset_bytes)
         .setup(|app| {
             // Register a credential store before any auth code can hit
