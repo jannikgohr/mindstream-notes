@@ -27,6 +27,7 @@ pub mod notes;
 pub mod notes_export;
 pub mod paths;
 pub mod pdf_export;
+pub mod profiles;
 pub mod search;
 pub mod serde_helpers;
 pub mod signatures;
@@ -203,13 +204,21 @@ pub fn run() {
 
             // Resolve the active profile directory and register it in
             // state *before* anything reaches for `paths::app_data_dir`.
-            // For now this is the OS app-data root itself (single-vault
-            // behaviour); the profiles index resolves a per-profile
-            // subdirectory in a later step.
-            let app_data =
+            // The index lives at the fixed OS root; on upgrade from the
+            // pre-profiles layout the legacy vault is migrated into a
+            // "default" profile first so notes aren't orphaned.
+            let app_data_root =
                 paths::app_data_root(app.handle()).expect("could not resolve app_data_dir");
+            if let Err(e) = profiles::migrate_legacy_if_needed(&app_data_root) {
+                log::error!("[profiles] legacy migration failed: {e}");
+            }
+            let index =
+                profiles::load_or_init(&app_data_root).expect("could not read profiles index");
+            let active_id = index.active.clone();
+            let app_data = profiles::profile_dir(&app_data_root, &active_id);
+            log::info!("[boot] active profile = {active_id}");
             app.manage(paths::ActiveProfile {
-                id: "default".to_string(),
+                id: active_id,
                 dir: app_data.clone(),
             });
 
