@@ -25,6 +25,7 @@ pub mod hotkeys;
 pub mod i18n;
 pub mod notes;
 pub mod notes_export;
+pub mod paths;
 pub mod pdf_export;
 pub mod search;
 pub mod serde_helpers;
@@ -200,10 +201,17 @@ pub fn run() {
             // it — Entry::new() returns Error::NoDefaultStore otherwise.
             init_keyring();
 
-            let app_data = app
-                .path()
-                .app_data_dir()
-                .expect("could not resolve app_data_dir");
+            // Resolve the active profile directory and register it in
+            // state *before* anything reaches for `paths::app_data_dir`.
+            // For now this is the OS app-data root itself (single-vault
+            // behaviour); the profiles index resolves a per-profile
+            // subdirectory in a later step.
+            let app_data =
+                paths::app_data_root(app.handle()).expect("could not resolve app_data_dir");
+            app.manage(paths::ActiveProfile {
+                id: "default".to_string(),
+                dir: app_data.clone(),
+            });
 
             // Apply any pending restore the user staged in a previous
             // session BEFORE opening the live DB. If the sentinel

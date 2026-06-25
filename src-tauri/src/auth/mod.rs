@@ -57,10 +57,7 @@ pub struct SessionInfo {
 }
 
 fn session_path(app: &AppHandle) -> AppResult<PathBuf> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| AppError::InvalidArg(format!("app_data_dir: {e}")))?;
+    let dir = crate::paths::app_data_dir(app)?;
     fs::create_dir_all(&dir)?;
     Ok(dir.join(SESSION_FILENAME))
 }

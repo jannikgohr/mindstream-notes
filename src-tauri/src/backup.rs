@@ -107,11 +107,7 @@ pub struct BackupReport {
 /// actually lands; we don't pre-create here because the dialog's
 /// `defaultPath` works whether the directory exists or not.
 fn default_backup_dir(app: &AppHandle) -> AppResult<PathBuf> {
-    Ok(app
-        .path()
-        .app_data_dir()
-        .map_err(|e| AppError::InvalidArg(format!("app_data_dir: {e}")))?
-        .join("backups"))
+    Ok(crate::paths::app_data_dir(app)?.join("backups"))
 }
 
 /// Path-safe suggested filename — `T<HH-MM-SS>` (hyphens, not colons)
@@ -182,10 +178,7 @@ fn run_backup(
     // same drive as the live DB so VACUUM INTO is fast, separated from
     // the user's chosen output dir so it stays clean. We delete the
     // staging file at the end regardless of outcome.
-    let staging_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| AppError::InvalidArg(format!("app_data_dir: {e}")))?
+    let staging_dir = crate::paths::app_data_dir(app)?
         .join("backups")
         .join(".staging");
     fs::create_dir_all(&staging_dir)?;
@@ -599,10 +592,7 @@ pub fn import_restore(
     token: String,
     same_account: bool,
 ) -> Result<RestoreStaged, String> {
-    let app_data = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("app_data_dir: {e}"))?;
+    let app_data = crate::paths::app_data_dir(&app).map_err(|e| e.to_string())?;
     let staged = imports_staging_root(&app)
         .map_err(|e| e.to_string())?
         .join(&token)
@@ -1007,10 +997,7 @@ fn merge_into(live: &mut Connection, backup: &Connection) -> AppResult<MergeRepo
 }
 
 fn imports_staging_root(app: &AppHandle) -> AppResult<PathBuf> {
-    let root = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| AppError::InvalidArg(format!("app_data_dir: {e}")))?
+    let root = crate::paths::app_data_dir(app)?
         .join("imports")
         .join(".staging");
     fs::create_dir_all(&root)?;
@@ -1031,7 +1018,7 @@ fn sweep_staging_root(root: &Path) {
 /// timestamped safety copy. Errors are logged but non-fatal so a
 /// botched restore doesn't keep the app from booting at all.
 pub fn apply_pending_restore_if_any(app: &AppHandle) {
-    let Ok(app_data) = app.path().app_data_dir() else {
+    let Ok(app_data) = crate::paths::app_data_dir(app) else {
         return;
     };
     let sentinel = app_data.join(SENTINEL_FILE);
