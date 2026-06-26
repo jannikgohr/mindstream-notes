@@ -14,7 +14,8 @@
     IContentRenderer,
     GroupPanelPartInitParameters,
     TabPartInitParameters,
-    DockviewGroupPanel
+    DockviewGroupPanel,
+    DockviewTheme
   } from 'dockview-core';
   import TopBar from './DesktopTopBar.svelte';
   import LazyFileExplorer from '$lib/components/LazyFileExplorer.svelte';
@@ -43,6 +44,7 @@
     ui
   } from '$lib/state.svelte';
   import { loadTree, tree } from '$lib/stores/tree.svelte';
+  import { getSettingValue } from '$lib/settings/store.svelte';
   import { loadProfiles, profilesState } from '$lib/stores/profiles.svelte';
   import {
     desktopNoteSource,
@@ -63,6 +65,15 @@
     group: DockviewGroupPanel;
     index: number;
   } | null = null;
+  const reduceMotion = $derived(
+    getSettingValue('appearance.reduceMotion') === true
+  );
+  const dockviewTheme = $derived<DockviewTheme>({
+    name: 'bridge',
+    className: 'dockview-theme-bridge',
+    tabAnimation: reduceMotion ? 'default' : 'smooth',
+    dndTabIndicator: 'line'
+  });
   type NotePanelComponent =
     | 'noteEditor'
     | 'freeformNote'
@@ -195,12 +206,7 @@
         };
         return tab;
       },
-      theme: {
-        name: 'bridge',
-        className: 'dockview-theme-bridge',
-        tabAnimation: 'smooth',
-        dndTabIndicator: 'line'
-      },
+      theme: dockviewTheme,
       disableFloatingGroups: false,
       disableDnd: false,
       // Pointer-driven tab drags avoid Chromium/Tauri's native HTML5 drag
@@ -901,6 +907,10 @@
     requestAnimationFrame(() => {
       window.dispatchEvent(new Event('resize'));
     });
+  });
+
+  $effect(() => {
+    dock?.updateOptions({ theme: dockviewTheme });
   });
 
   // Keep open editor tab titles in sync with the file tree. This catches

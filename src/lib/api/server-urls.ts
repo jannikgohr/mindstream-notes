@@ -32,7 +32,7 @@
  */
 
 export interface ServerUrlValidation {
-  /** Canonical origin-form URL (no trailing slash, no path/query/hash).
+  /** Canonical base URL (no trailing slash, no query/hash).
    *  Empty when the input was empty or failed to parse. */
   url: string;
   /** Human-readable reason the input couldn't be parsed. `null` when
@@ -51,9 +51,10 @@ const ALLOWED_PROTOCOLS = new Set(['http:', 'https:']);
  *   "  notes.example.com  "         → "https://notes.example.com"
  *   "notes.example.com"             → "https://notes.example.com"
  *   "http://localhost:8080/"        → "http://localhost:8080"
- *   "https://collab.example.com/x"  → "https://collab.example.com"
- *                                     (path/query/hash discarded — we
- *                                     own the path prefixes downstream)
+ *   "https://collab.example.com/x"  → "https://collab.example.com/x"
+ *                                     (path kept for reverse-proxy
+ *                                     subpath installs; query/hash
+ *                                     discarded)
  *
  * Rejected:
  *
@@ -91,19 +92,21 @@ export function normalizeServerUrl(raw: string): ServerUrlValidation {
     return { url: '', error: 'URL must include a hostname' };
   }
 
-  // origin = scheme + host + (port if non-default). No trailing slash,
-  // no path/query/hash — that's exactly the canonical form we want.
-  return { url: parsed.origin, error: null };
+  parsed.search = '';
+  parsed.hash = '';
+
+  let url = parsed.toString();
+  if (url.endsWith('/')) url = url.slice(0, -1);
+  return { url, error: null };
 }
 
 /** WebSocket URL for the yjs-relay (markdown + PDF collab). */
 export function getYjsRelayUrl(serverUrl: string): string {
   const { url } = normalizeServerUrl(serverUrl);
   if (!url) return '';
-  // url is always an origin (scheme://host[:port]); URL() will accept it.
   const u = new URL(url);
   u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:';
-  u.pathname = '/yjs';
+  u.pathname = joinPath(u.pathname, 'yjs');
   return u.toString();
 }
 
@@ -112,4 +115,17 @@ export function getYjsRelayUrl(serverUrl: string): string {
  *  the bare origin. */
 export function getExcalidrawRoomUrl(serverUrl: string): string {
   return normalizeServerUrl(serverUrl).url;
+}
+
+export function getServerHealthUrl(serverUrl: string): string {
+  const { url } = normalizeServerUrl(serverUrl);
+  if (!url) return '';
+  const u = new URL(url);
+  u.pathname = joinPath(u.pathname, 'healthz');
+  return u.toString();
+}
+
+function joinPath(basePath: string, segment: string): string {
+  const normalized = basePath === '/' ? '' : basePath.replace(/\/+$/, '');
+  return `${normalized}/${segment}`;
 }

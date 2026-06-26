@@ -50,7 +50,13 @@
   onMount(() => {
     void loadProfiles();
     initHotkeys();
+    const blockTouchZoom = (event: WheelEvent) => {
+      if (!event.ctrlKey) return;
+      event.preventDefault();
+    };
+    window.addEventListener('wheel', blockTouchZoom, { passive: false });
     return () => {
+      window.removeEventListener('wheel', blockTouchZoom);
       void teardownGlobalShortcuts();
     };
   });

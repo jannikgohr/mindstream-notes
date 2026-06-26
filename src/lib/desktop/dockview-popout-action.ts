@@ -17,9 +17,10 @@ import NoteStatusIcons from './NoteStatusIcons.svelte';
  * removes the source tab so the note isn't open in two places at once.
  *
  * The element is a flex row of:
- *   1. A Svelte-mounted `<NoteStatusIcons>` component that reads the
- *      active note's collab + save state from the per-note status
- *      store and renders icon-only chips with translated tooltips.
+ *   1. A Svelte-mounted `<NoteStatusIcons>` component keyed to this
+ *      group's active panel. Each dock group therefore shows its own
+ *      active note's collab + save state instead of mirroring the
+ *      app-global active note.
  *   2. The popout button (plain DOM, predates the Svelte mount).
  *
  * Hybrid is intentional — the button's behaviour ties to the group's
@@ -34,6 +35,8 @@ export class PopoutHeaderAction implements IHeaderActionsRenderer {
   private readonly dock: DockviewApi | null;
   private currentGroup: IDockviewGroupPanel | null = null;
   private statusInstance: ReturnType<typeof mount> | null = null;
+  private statusNoteId: string | null = null;
+  private activePanelListener: { dispose: () => void } | null = null;
 
   constructor(dock: DockviewApi | null) {
     this.dock = dock;
@@ -45,7 +48,6 @@ export class PopoutHeaderAction implements IHeaderActionsRenderer {
     // component owns its own styling/spacing; we don't add any here.
     this.statusMount = document.createElement('div');
     this.el.appendChild(this.statusMount);
-    this.statusInstance = mount(NoteStatusIcons, { target: this.statusMount });
 
     this.btn = document.createElement('button');
     this.btn.type = 'button';
@@ -77,7 +79,32 @@ export class PopoutHeaderAction implements IHeaderActionsRenderer {
   }
 
   init(params: IGroupHeaderProps): void {
+    this.activePanelListener?.dispose();
     this.currentGroup = params.group;
+    this.activePanelListener = params.group.api.onDidActivePanelChange((e) => {
+      this.setStatusNoteId(this.noteIdForPanel(e.panel));
+    });
+    this.setStatusNoteId(this.noteIdForPanel(params.group.activePanel));
+  }
+
+  private noteIdForPanel(
+    panel: IDockviewGroupPanel['activePanel']
+  ): string | null {
+    const params = panel?.params as { noteId?: string } | undefined;
+    return params?.noteId ?? null;
+  }
+
+  private setStatusNoteId(noteId: string | null): void {
+    if (this.statusNoteId === noteId) return;
+    this.statusNoteId = noteId;
+    if (this.statusInstance) {
+      unmount(this.statusInstance);
+      this.statusInstance = null;
+    }
+    this.statusInstance = mount(NoteStatusIcons, {
+      target: this.statusMount,
+      props: { noteId }
+    });
   }
 
   private onClick = () => {
@@ -92,6 +119,8 @@ export class PopoutHeaderAction implements IHeaderActionsRenderer {
 
   dispose(): void {
     this.btn.removeEventListener('click', this.onClick);
+    this.activePanelListener?.dispose();
+    this.activePanelListener = null;
     if (this.statusInstance) {
       unmount(this.statusInstance);
       this.statusInstance = null;

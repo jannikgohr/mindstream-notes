@@ -18,7 +18,7 @@
   import { Star } from '@jis3r/icons';
 
   interface Props {
-    /** Current favourite state. The animation fires on every flip. */
+    /** Current favourite state. The animation fires when a note is favourited. */
     favourited: boolean;
     size?: number;
     class?: string;
@@ -48,6 +48,10 @@
     }
     if (previous === favourited) return;
     previous = favourited;
+    if (!favourited) {
+      animate = false;
+      return;
+    }
     animate = true;
     // Matches the jis3r Star's internal 600 ms keyframe + a small
     // tail so the class is still on when CSS sees it.

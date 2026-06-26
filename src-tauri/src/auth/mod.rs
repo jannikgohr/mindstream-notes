@@ -16,10 +16,12 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use etebase::utils::{from_base64, randombytes, to_base64};
 use etebase::{Account, Client};
 use keyring_core::Entry;
+use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
@@ -54,6 +56,13 @@ pub struct LoginArgs {
 pub struct SessionInfo {
     pub username: String,
     pub server_url: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ServerCheckResult {
+    pub ok: bool,
+    pub status: u16,
+    pub url: String,
 }
 
 fn session_path(app: &AppHandle) -> AppResult<PathBuf> {
@@ -112,6 +121,24 @@ fn resolve_server_url(args: &LoginArgs) -> AppResult<String> {
             "unknown server type: {other}"
         ))),
     }
+}
+
+fn health_url(server_url: &str) -> AppResult<Url> {
+    let mut url =
+        Url::parse(server_url).map_err(|e| AppError::InvalidArg(format!("server URL: {e}")))?;
+    if url.scheme() != "http" && url.scheme() != "https" {
+        return Err(AppError::InvalidArg(
+            "server URL must use http:// or https://".into(),
+        ));
+    }
+    url.set_query(None);
+    url.set_fragment(None);
+    if !url.path().ends_with('/') {
+        let path = format!("{}/", url.path());
+        url.set_path(&path);
+    }
+    url.join("healthz")
+        .map_err(|e| AppError::InvalidArg(format!("health URL: {e}")))
 }
 
 fn read_stored(path: &Path) -> AppResult<Option<StoredSession>> {
@@ -368,6 +395,26 @@ pub async fn etebase_session(app: AppHandle) -> Result<Option<SessionInfo>, Stri
         username: stored.username,
         server_url: stored.server_url,
     }))
+}
+
+#[tauri::command]
+pub async fn check_etebase_server_url(server_url: String) -> Result<ServerCheckResult, String> {
+    let url = health_url(&server_url).map_err(String::from)?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(8))
+        .build()
+        .map_err(|e| format!("server check client: {e}"))?;
+    let response = client
+        .get(url.clone())
+        .send()
+        .await
+        .map_err(|e| format!("server check failed: {e}"))?;
+    let status = response.status();
+    Ok(ServerCheckResult {
+        ok: status.is_success(),
+        status: status.as_u16(),
+        url: url.to_string(),
+    })
 }
 
 #[cfg(test)]

@@ -269,6 +269,9 @@
   const pageDark = $derived(
     pageThemeMode === 'dark' || (pageThemeMode === 'system' && $mode === 'dark')
   );
+  const toolbarThemeClass = $derived(
+    pageDark ? 'ink-toolbar-theme-dark' : 'ink-toolbar-theme-light'
+  );
   const colorHex = $derived(argbToColorHex(colorArgb));
   const inkZoomLabel = $derived.by(() => {
     void zoomUiVersion;
@@ -3144,7 +3147,7 @@
   {#if mobileToolbar}
     <div
       bind:this={toolbarEl}
-      class="pointer-events-auto absolute left-3 top-3 z-30"
+      class="pointer-events-auto absolute left-3 top-3 z-30 {toolbarThemeClass}"
     >
       {@render inkToolbar(
         false,
@@ -3152,7 +3155,7 @@
       )}
     </div>
   {:else}
-    <div bind:this={toolbarEl} class="shrink-0">
+    <div bind:this={toolbarEl} class="shrink-0 {toolbarThemeClass}">
       {@render inkToolbar(
         true,
         'shrink-0 border-b border-border bg-background'
@@ -3189,7 +3192,7 @@
 
   {#if !mobileToolbar}
     <div
-      class="absolute bottom-3 left-3 z-20"
+      class="absolute bottom-3 left-3 z-20 {toolbarThemeClass}"
       role="toolbar"
       aria-label={tUi('ink.toolbar.zoom')}
     >
@@ -3213,3 +3216,49 @@
     </div>
   {/if}
 </div>
+
+<style>
+  .ink-toolbar-theme-light {
+    --background: oklch(0.9846 0.002 247.84);
+    --foreground: oklch(0.145 0 0);
+    --card: oklch(1 0 0);
+    --card-foreground: oklch(0.145 0 0);
+    --popover: oklch(1 0 0);
+    --popover-foreground: oklch(0.145 0 0);
+    --primary: oklch(0.205 0 0);
+    --primary-foreground: oklch(0.985 0 0);
+    --secondary: oklch(0.97 0 0);
+    --secondary-foreground: oklch(0.205 0 0);
+    --muted: oklch(0.97 0 0);
+    --muted-foreground: oklch(0.556 0 0);
+    --accent: oklch(0.97 0 0);
+    --accent-foreground: oklch(0.205 0 0);
+    --destructive: oklch(0.577 0.245 27.325);
+    --destructive-foreground: oklch(0.985 0 0);
+    --border: oklch(0.922 0 0);
+    --input: oklch(0.922 0 0);
+    --ring: oklch(0.708 0 0);
+  }
+
+  .ink-toolbar-theme-dark {
+    --background: oklch(0.1735 0.002 286.18);
+    --foreground: oklch(0.985 0 0);
+    --card: oklch(0.18 0 0);
+    --card-foreground: oklch(0.985 0 0);
+    --popover: oklch(0.18 0 0);
+    --popover-foreground: oklch(0.985 0 0);
+    --primary: oklch(0.985 0 0);
+    --primary-foreground: oklch(0.205 0 0);
+    --secondary: oklch(0.269 0 0);
+    --secondary-foreground: oklch(0.985 0 0);
+    --muted: oklch(0.269 0 0);
+    --muted-foreground: oklch(0.708 0 0);
+    --accent: oklch(0.269 0 0);
+    --accent-foreground: oklch(0.985 0 0);
+    --destructive: oklch(0.396 0.141 25.723);
+    --destructive-foreground: oklch(0.985 0 0);
+    --border: oklch(0.269 0 0);
+    --input: oklch(0.269 0 0);
+    --ring: oklch(0.439 0 0);
+  }
+</style>

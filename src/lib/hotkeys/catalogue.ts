@@ -220,12 +220,10 @@ export const HOTKEY_COMMANDS: CommandDefinition[] = [
     id: 'global.showShortcutHelp',
     scope: 'global',
     labelKey: 'hotkeys.command.global.showShortcutHelp',
-    // Shift+? — Gmail / GitHub / Notion convention for "show shortcuts".
-    // The user types `?` (which already requires Shift on most layouts);
-    // the matcher's strict modifier check requires us to encode the
-    // shift explicitly so the chord doesn't accidentally fire on
-    // layouts where `?` is produced without Shift.
-    defaultBinding: 'shift+?',
+    // Ctrl+Shift+? keeps the familiar help mnemonic without stealing
+    // the literal question mark from layouts where `?` already needs
+    // Shift (German: Shift+ß).
+    defaultBinding: 'ctrl+shift+?',
     run: () => openShortcutHelp()
   },
   {

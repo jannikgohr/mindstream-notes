@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   getExcalidrawRoomUrl,
+  getServerHealthUrl,
   getYjsRelayUrl,
   normalizeServerUrl
 } from './server-urls';
@@ -18,9 +19,9 @@ describe('getYjsRelayUrl', () => {
     );
   });
 
-  it('strips trailing path / query / hash from the input', () => {
+  it('keeps a configured subpath and appends /yjs beneath it', () => {
     expect(getYjsRelayUrl('https://collab.example.com/something?x=1#h')).toBe(
-      'wss://collab.example.com/yjs'
+      'wss://collab.example.com/something/yjs'
     );
   });
 
@@ -38,9 +39,9 @@ describe('getYjsRelayUrl', () => {
 });
 
 describe('getExcalidrawRoomUrl', () => {
-  it('returns the origin of an https URL', () => {
+  it('returns the configured base path of an https URL', () => {
     expect(getExcalidrawRoomUrl('https://collab.example.com/some/path')).toBe(
-      'https://collab.example.com'
+      'https://collab.example.com/some/path'
     );
   });
 
@@ -96,14 +97,14 @@ describe('normalizeServerUrl', () => {
     });
   });
 
-  it('strips trailing slash, path, query, and hash', () => {
+  it('strips trailing slash, query, and hash while preserving path', () => {
     expect(normalizeServerUrl('https://collab.example.com/')).toEqual({
       url: 'https://collab.example.com',
       error: null
     });
     expect(
       normalizeServerUrl('https://collab.example.com/some/path?x=1#h')
-    ).toEqual({ url: 'https://collab.example.com', error: null });
+    ).toEqual({ url: 'https://collab.example.com/some/path', error: null });
   });
 
   it('trims surrounding whitespace', () => {
@@ -126,5 +127,19 @@ describe('normalizeServerUrl', () => {
     const r = normalizeServerUrl('not a url');
     expect(r.url).toBe('');
     expect(r.error).toBeTruthy();
+  });
+});
+
+describe('getServerHealthUrl', () => {
+  it('appends /healthz at the origin', () => {
+    expect(getServerHealthUrl('https://collab.example.com')).toBe(
+      'https://collab.example.com/healthz'
+    );
+  });
+
+  it('appends /healthz beneath a configured subpath', () => {
+    expect(getServerHealthUrl('https://collab.example.com/mindstream')).toBe(
+      'https://collab.example.com/mindstream/healthz'
+    );
   });
 });
