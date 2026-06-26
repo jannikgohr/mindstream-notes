@@ -87,6 +87,9 @@ importers:
         specifier: ^13.6.30
         version: 13.6.30
     devDependencies:
+      '@codemirror/language':
+        specifier: 6.12.3
+        version: 6.12.3
       '@commitlint/cli':
         specifier: ^21.0.1
         version: 21.0.1(@types/node@22.19.17)(conventional-commits-parser@6.4.0)(typescript@5.9.3)
@@ -144,6 +147,12 @@ importers:
       prettier-plugin-svelte:
         specifier: ^4.1.0
         version: 4.1.0(prettier@3.8.3)(svelte@5.55.5)
+      prosemirror-model:
+        specifier: 1.25.4
+        version: 1.25.4
+      prosemirror-state:
+        specifier: 1.4.4
+        version: 1.4.4
       svelte:
         specifier: ^5.16.0
         version: 5.55.5
@@ -2608,6 +2617,7 @@ packages:
   git-raw-commits@5.0.1:
     resolution: {integrity: sha512-Y+csSm2GD/PCSh6Isd/WiMjNAydu0VBiG9J7EdQsNA5P9uXvLayqjmTsNlK5Gs9IhblFZqOU0yid5Il5JPoLiQ==}
     engines: {node: '>=18'}
+    deprecated: Deprecated and no longer maintained. Use @conventional-changelog/git-client instead.
     hasBin: true
 
   glob-parent@5.1.2:
