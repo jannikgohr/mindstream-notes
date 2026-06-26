@@ -271,6 +271,61 @@ pub fn set_active(root: &Path, id: &str) -> AppResult<()> {
     Ok(())
 }
 
+/// Change a profile's display name (the on-disk id/dir never changes).
+/// Trims and rejects an empty name; errors if `id` is unknown. Returns
+/// the updated profile. Renaming the active vault is fine — it's only a
+/// label, so no relaunch is needed.
+pub fn set_name(root: &Path, id: &str, name: &str) -> AppResult<Profile> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(AppError::InvalidArg("vault name cannot be empty".into()));
+    }
+    let mut index = load_or_init(root)?;
+    let profile = index
+        .profiles
+        .iter_mut()
+        .find(|p| p.id == id)
+        .ok_or_else(|| AppError::NotFound(format!("unknown vault: {id}")))?;
+    profile.name = name.to_string();
+    let updated = profile.clone();
+    save(root, &index)?;
+    log::info!("[profiles] renamed vault {id} to '{}'", updated.name);
+    Ok(updated)
+}
+
+/// Permanently delete a profile: drop it from the index, then remove its
+/// on-disk directory (notes DB, session, settings — everything).
+///
+/// Guards: refuses to delete the currently-loaded vault (`active_id` —
+/// the running process has its DB open from there) and the last
+/// remaining vault, so there's always something to boot into. The index
+/// entry is removed before the files so a crash mid-delete leaves an
+/// orphaned directory (harmless) rather than an index pointing at
+/// missing data.
+pub fn delete(root: &Path, id: &str, active_id: &str) -> AppResult<()> {
+    if id == active_id {
+        return Err(AppError::InvalidArg(
+            "cannot delete the active vault — switch to another vault first".into(),
+        ));
+    }
+    let mut index = load_or_init(root)?;
+    if !index.profiles.iter().any(|p| p.id == id) {
+        return Err(AppError::NotFound(format!("unknown vault: {id}")));
+    }
+    if index.profiles.len() <= 1 {
+        return Err(AppError::InvalidArg("cannot delete the last vault".into()));
+    }
+    index.profiles.retain(|p| p.id != id);
+    save(root, &index)?;
+
+    let dir = profile_dir(root, id);
+    if dir.exists() {
+        fs::remove_dir_all(&dir)?;
+    }
+    log::info!("[profiles] deleted vault {id}");
+    Ok(())
+}
+
 // ---------- Tauri commands ----------
 
 /// What the frontend renders: the list of profiles plus the **live**
@@ -307,6 +362,27 @@ pub fn create_profile(app: tauri::AppHandle, name: String) -> Result<Profile, St
 pub fn switch_profile(app: tauri::AppHandle, id: String) -> Result<(), String> {
     let root = crate::paths::app_data_root(&app).map_err(String::from)?;
     set_active(&root, &id).map_err(String::from)
+}
+
+#[tauri::command]
+pub fn rename_profile(app: tauri::AppHandle, id: String, name: String) -> Result<Profile, String> {
+    let root = crate::paths::app_data_root(&app).map_err(String::from)?;
+    set_name(&root, &id, &name).map_err(String::from)
+}
+
+#[tauri::command]
+pub fn delete_profile(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    use tauri::Manager;
+    let root = crate::paths::app_data_root(&app).map_err(String::from)?;
+    let active = app
+        .try_state::<crate::paths::ActiveProfile>()
+        .map(|p| p.id.clone())
+        .unwrap_or_else(|| DEFAULT_PROFILE_ID.to_string());
+    delete(&root, &id, &active).map_err(String::from)?;
+    // Best-effort: drop the deleted vault's keyring session so no stale
+    // credential lingers after its files are gone.
+    crate::auth::forget_profile_keyring(&id);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -475,6 +551,79 @@ mod tests {
         assert!(set_active(&root, "does-not-exist").is_err());
         // Active is untouched.
         assert_eq!(load(&root).unwrap().unwrap().active, DEFAULT_PROFILE_ID);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn set_name_renames_and_persists() {
+        let root = tmp_root();
+        let created = add_profile(&root, "Work").unwrap();
+        let renamed = set_name(&root, &created.id, "  Job  ").unwrap();
+        assert_eq!(renamed.name, "Job", "name is trimmed");
+        assert_eq!(renamed.id, created.id, "id is unchanged");
+        let index = load(&root).unwrap().unwrap();
+        assert_eq!(
+            index
+                .profiles
+                .iter()
+                .find(|p| p.id == created.id)
+                .unwrap()
+                .name,
+            "Job"
+        );
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn set_name_rejects_blank_or_unknown() {
+        let root = tmp_root();
+        let created = add_profile(&root, "Work").unwrap();
+        assert!(set_name(&root, &created.id, "  ").is_err());
+        assert!(set_name(&root, "nope", "Name").is_err());
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn delete_removes_entry_and_dir() {
+        let root = tmp_root();
+        let created = add_profile(&root, "Work").unwrap();
+        let dir = profile_dir(&root, &created.id);
+        assert!(dir.exists());
+
+        // active is "default", so deleting the new one is allowed.
+        delete(&root, &created.id, DEFAULT_PROFILE_ID).unwrap();
+
+        let index = load(&root).unwrap().unwrap();
+        assert!(!index.profiles.iter().any(|p| p.id == created.id));
+        assert!(!dir.exists(), "the vault directory is removed");
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn delete_rejects_active_vault() {
+        let root = tmp_root();
+        let created = add_profile(&root, "Work").unwrap();
+        // Pretend the new vault is the loaded one.
+        assert!(delete(&root, &created.id, &created.id).is_err());
+        assert!(load(&root)
+            .unwrap()
+            .unwrap()
+            .profiles
+            .iter()
+            .any(|p| p.id == created.id));
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn delete_rejects_last_and_unknown() {
+        let root = tmp_root();
+        load_or_init(&root).unwrap();
+        // Only "default" exists, and it's not active here — still refused
+        // because it's the last one.
+        assert!(delete(&root, DEFAULT_PROFILE_ID, "some-other-active").is_err());
+        // Unknown id with >1 vault present.
+        add_profile(&root, "Work").unwrap();
+        assert!(delete(&root, "nope", DEFAULT_PROFILE_ID).is_err());
         fs::remove_dir_all(&root).ok();
     }
 

@@ -89,6 +89,16 @@ fn keyring_entry(account: &str) -> AppResult<Entry> {
     Entry::new(KEYRING_SERVICE, account).map_err(|e| AppError::InvalidArg(format!("keyring: {e}")))
 }
 
+/// Best-effort removal of a profile's stored Etebase session key. Called
+/// when a vault is deleted so its credential doesn't outlive its data.
+/// Silent on any failure — the entry may simply not exist (the vault was
+/// never signed in).
+pub fn forget_profile_keyring(profile_id: &str) {
+    if let Ok(entry) = keyring_entry(&keyring_account_name(profile_id)) {
+        let _ = entry.delete_credential();
+    }
+}
+
 fn resolve_server_url(args: &LoginArgs) -> AppResult<String> {
     match args.server_type.as_str() {
         "managed" => Ok(MANAGED_SERVER_URL.to_string()),

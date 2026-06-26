@@ -322,6 +322,8 @@ pub fn run() {
             profiles::list_profiles,
             profiles::create_profile,
             profiles::switch_profile,
+            profiles::rename_profile,
+            profiles::delete_profile,
             // Auth (Etebase)
             auth::etebase_login,
             auth::etebase_logout,
