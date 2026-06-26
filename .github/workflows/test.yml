@@ -115,6 +115,8 @@ jobs:
   coverage:
     name: Coverage (Linux)
     runs-on: ubuntu-latest
+    env:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
@@ -158,21 +160,27 @@ jobs:
       - name: Rust coverage
         run: node src-tauri/scripts/rust-coverage.mjs --lcov --output-path lcov.info
 
+      - name: Note skipped Codecov upload
+        if: ${{ env.CODECOV_TOKEN == '' }}
+        run: echo "::notice::Skipping Codecov upload because CODECOV_TOKEN is not configured."
+
       - name: Upload frontend coverage
+        if: ${{ env.CODECOV_TOKEN != '' }}
         uses: codecov/codecov-action@v5
         with:
           files: ./coverage/lcov.info
           flags: frontend
           fail_ci_if_error: false
-          token: ${{ secrets.CODECOV_TOKEN }}
+          token: ${{ env.CODECOV_TOKEN }}
 
       - name: Upload backend coverage
+        if: ${{ env.CODECOV_TOKEN != '' }}
         uses: codecov/codecov-action@v5
         with:
           files: ./src-tauri/lcov.info
           flags: backend
           fail_ci_if_error: false
-          token: ${{ secrets.CODECOV_TOKEN }}
+          token: ${{ env.CODECOV_TOKEN }}
 
   # End-to-end: Playwright builds the SvelteKit SPA and drives it through
   # `vite preview` in browser-fallback mode (no Tauri, no Rust — the
