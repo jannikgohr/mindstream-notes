@@ -48,3 +48,15 @@ export function createProfile(name: string): Promise<Profile> {
 export function switchProfile(id: string): Promise<void> {
   return invokeOrFallback<void>('switch_profile', { id }, () => undefined);
 }
+
+export function renameProfile(id: string, name: string): Promise<Profile> {
+  return invokeOrFallback<Profile>('rename_profile', { id, name }, () => ({
+    id,
+    name: name.trim(),
+    created_at: ''
+  }));
+}
+
+export function deleteProfile(id: string): Promise<void> {
+  return invokeOrFallback<void>('delete_profile', { id }, () => undefined);
+}

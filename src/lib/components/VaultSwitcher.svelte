@@ -17,12 +17,18 @@
    */
   import { onMount } from 'svelte';
   import { Vault } from '@jis3r/icons';
-  import { Check, Plus } from '@lucide/svelte';
+  import { Check, Pencil, Plus, Trash2 } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import { confirm, alert } from '$lib/components/confirm-dialog.svelte';
   import { isTauri } from '$lib/api';
-  import { createProfile, switchProfile } from '$lib/api/profiles';
+  import {
+    createProfile,
+    switchProfile,
+    renameProfile,
+    deleteProfile
+  } from '$lib/api/profiles';
+  import type { Profile } from '$lib/api/profiles';
   import {
     profilesState,
     loadProfiles,
@@ -35,8 +41,11 @@
   let creating = $state(false);
   let busy = $state(false);
   let newName = $state('');
+  let renamingId = $state<string | null>(null);
+  let renameValue = $state('');
   let root: HTMLDivElement | null = $state(null);
   let createInput: HTMLInputElement | null = $state(null);
+  let renameInput: HTMLInputElement | null = $state(null);
 
   const current = $derived(currentProfile());
   const currentName = $derived(current?.name ?? tUi('vault.unknown'));
@@ -50,6 +59,8 @@
     open = false;
     creating = false;
     newName = '';
+    renamingId = null;
+    renameValue = '';
   }
 
   /**
@@ -104,9 +115,80 @@
 
   function startCreate() {
     creating = true;
+    renamingId = null;
     newName = '';
     // Focus the field once it renders.
     queueMicrotask(() => createInput?.focus());
+  }
+
+  function startRename(profile: Profile) {
+    creating = false;
+    renamingId = profile.id;
+    renameValue = profile.name;
+    queueMicrotask(() => renameInput?.select());
+  }
+
+  async function submitRename() {
+    const id = renamingId;
+    const name = renameValue.trim();
+    if (!id || !name || busy) return;
+    busy = true;
+    try {
+      await renameProfile(id, name);
+      renamingId = null;
+      await loadProfiles();
+    } catch (err) {
+      console.error('[vault] rename failed', err);
+      await alert({
+        title: tUi('vault.rename.failed.title'),
+        message: tUi('vault.rename.failed.message').replace(
+          '{error}',
+          String(err)
+        )
+      });
+    } finally {
+      busy = false;
+    }
+  }
+
+  function onRenameKeydown(event: KeyboardEvent) {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      void submitRename();
+    } else if (event.key === 'Escape') {
+      event.stopPropagation();
+      renamingId = null;
+    }
+  }
+
+  async function confirmAndDelete(profile: Profile) {
+    if (busy) return;
+    const confirmed = await confirm({
+      title: tUi('vault.delete.confirm.title'),
+      message: tUi('vault.delete.confirm.message').replace(
+        '{name}',
+        profile.name
+      ),
+      confirmLabel: tUi('vault.delete.confirm.button'),
+      destructive: true
+    });
+    if (!confirmed) return;
+    busy = true;
+    try {
+      await deleteProfile(profile.id);
+      await loadProfiles();
+    } catch (err) {
+      console.error('[vault] delete failed', err);
+      await alert({
+        title: tUi('vault.delete.failed.title'),
+        message: tUi('vault.delete.failed.message').replace(
+          '{error}',
+          String(err)
+        )
+      });
+    } finally {
+      busy = false;
+    }
   }
 
   async function submitCreate() {
@@ -199,19 +281,68 @@
 
       <div class="max-h-80 overflow-y-auto p-1">
         {#each profilesState.profiles as profile (profile.id)}
-          <button
-            type="button"
-            class="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent hover:text-accent-foreground"
-            disabled={busy}
-            onclick={() => confirmAndSwitch(profile.id, profile.name)}
-          >
-            <span class="flex size-4 shrink-0 items-center justify-center">
-              {#if profile.id === profilesState.active}
-                <Check class="size-4" />
-              {/if}
-            </span>
-            <span class="truncate">{profile.name}</span>
-          </button>
+          {#if renamingId === profile.id}
+            <div class="flex items-center gap-1 p-1">
+              <Input
+                bind:ref={renameInput}
+                bind:value={renameValue}
+                class="h-7 text-sm"
+                disabled={busy}
+                onkeydown={onRenameKeydown}
+              />
+              <Button
+                variant="default"
+                size="sm"
+                class="h-7"
+                disabled={busy || renameValue.trim() === ''}
+                onclick={submitRename}
+              >
+                {tUi('vault.rename.save')}
+              </Button>
+            </div>
+          {:else}
+            <div
+              class="flex items-center rounded-sm hover:bg-accent hover:text-accent-foreground"
+            >
+              <button
+                type="button"
+                class="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left text-sm"
+                disabled={busy}
+                onclick={() => confirmAndSwitch(profile.id, profile.name)}
+              >
+                <span class="flex size-4 shrink-0 items-center justify-center">
+                  {#if profile.id === profilesState.active}
+                    <Check class="size-4" />
+                  {/if}
+                </span>
+                <span class="truncate">{profile.name}</span>
+              </button>
+              <div class="flex shrink-0 items-center gap-0.5 pr-1">
+                <button
+                  type="button"
+                  class="rounded-sm p-1 text-muted-foreground hover:text-foreground"
+                  title={tUi('vault.rename')}
+                  aria-label={tUi('vault.rename')}
+                  disabled={busy}
+                  onclick={() => startRename(profile)}
+                >
+                  <Pencil class="size-3.5" />
+                </button>
+                {#if profile.id !== profilesState.active}
+                  <button
+                    type="button"
+                    class="rounded-sm p-1 text-muted-foreground hover:text-destructive"
+                    title={tUi('vault.delete')}
+                    aria-label={tUi('vault.delete')}
+                    disabled={busy}
+                    onclick={() => confirmAndDelete(profile)}
+                  >
+                    <Trash2 class="size-3.5" />
+                  </button>
+                {/if}
+              </div>
+            </div>
+          {/if}
         {/each}
       </div>
 
