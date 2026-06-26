@@ -13,6 +13,7 @@ import {
   openSettings,
   resetSettingValue,
   setSettingValue,
+  setSettingsVaultId,
   settings,
   settingsDialog
 } from './store.svelte';
@@ -35,6 +36,9 @@ beforeEach(() => {
     configurable: true
   });
   for (const key of Object.keys(settings.values)) delete settings.values[key];
+  localStorage.clear();
+  setSettingsVaultId('default');
+  for (const key of Object.keys(settings.values)) delete settings.values[key];
   settings.pending.clear();
 });
 
@@ -44,6 +48,19 @@ describe('schema flattening', () => {
     for (const s of ALL_SETTINGS) {
       expect(BY_ID[s.id]).toBe(s);
     }
+  });
+
+  it('uses only vault and device scopes', () => {
+    for (const s of ALL_SETTINGS) {
+      expect(['V', 'D']).toContain(s.scope);
+    }
+  });
+
+  it('keeps account settings vault-scoped', () => {
+    expect(BY_ID['account.serverType'].scope).toBe('V');
+    expect(BY_ID['account.signInForm'].scope).toBe('V');
+    expect(BY_ID['account.syncEnabled'].scope).toBe('V');
+    expect(BY_ID['account.syncInterval'].scope).toBe('V');
   });
 });
 
@@ -72,6 +89,36 @@ describe('setSettingValue / resetSettingValue', () => {
     await setSettingValue(def.id, 'changed');
     await resetSettingValue(def.id);
     expect(getSettingValue(def.id)).toEqual(def.default);
+  });
+
+  it('keeps vault-scoped account settings separate per vault', async () => {
+    await setSettingValue('account.serverType', 'self-hosted');
+    await setSettingValue('account.serverUrl', 'https://one.example');
+
+    setSettingsVaultId('work');
+    expect(getSettingValue('account.serverType')).toBe('local-only');
+    expect(getSettingValue('account.serverUrl')).toBeUndefined();
+
+    await setSettingValue('account.serverType', 'managed');
+
+    setSettingsVaultId('default');
+    expect(getSettingValue('account.serverType')).toBe('self-hosted');
+    expect(getSettingValue('account.serverUrl')).toBe('https://one.example');
+
+    setSettingsVaultId('work');
+    expect(getSettingValue('account.serverType')).toBe('managed');
+    expect(getSettingValue('account.serverUrl')).toBeUndefined();
+  });
+
+  it('keeps device-scoped settings shared across vaults', async () => {
+    await setSettingValue('appearance.reduceMotion', true);
+
+    setSettingsVaultId('work');
+    expect(getSettingValue('appearance.reduceMotion')).toBe(true);
+
+    await setSettingValue('custom.deviceKey', 'shared');
+    setSettingsVaultId('default');
+    expect(getSettingValue('custom.deviceKey')).toBe('shared');
   });
 });
 

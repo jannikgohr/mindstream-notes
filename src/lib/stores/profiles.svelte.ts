@@ -9,6 +9,7 @@
  */
 
 import { listProfiles, type Profile } from '$lib/api/profiles';
+import { setSettingsVaultId } from '$lib/settings/store.svelte';
 
 interface ProfilesState {
   /** The vault loaded by this running process. */
@@ -43,6 +44,7 @@ export async function loadProfiles(): Promise<void> {
         profilesState.indexActive = view.index_active;
         profilesState.profiles = view.profiles;
         profilesState.loaded = true;
+        setSettingsVaultId(view.active);
       })
       .catch((err) => {
         console.warn('[profiles] load failed', err);
