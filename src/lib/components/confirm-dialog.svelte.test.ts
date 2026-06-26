@@ -27,6 +27,11 @@ describe('confirm', () => {
     void confirm({ title: 'second' });
     expect(confirmQueue.items.map((i) => i.title)).toEqual(['first', 'second']);
   });
+
+  it('carries confirmDelaySeconds through to the queued item', () => {
+    void confirm({ title: 'Delete vault?', confirmDelaySeconds: 3 });
+    expect(confirmQueue.items[0].confirmDelaySeconds).toBe(3);
+  });
 });
 
 describe('alert', () => {

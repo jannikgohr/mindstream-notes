@@ -11,8 +11,8 @@
 
 import type { PlatformFilter } from '$lib/platform';
 
-/** Where the setting is persisted. G = global, V = per-vault, D = per-device. */
-export type SettingScope = 'G' | 'V' | 'D';
+/** Where the setting is persisted. V = per-vault, D = per-device. */
+export type SettingScope = 'V' | 'D';
 
 export type SettingType =
   | 'toggle'
