@@ -8,6 +8,7 @@ describe('profiles api fallback (non-Tauri)', () => {
   it('listProfiles returns a single active default vault', async () => {
     const view = await listProfiles();
     expect(view.active).toBe('default');
+    expect(view.index_active).toBe('default');
     expect(view.profiles).toHaveLength(1);
     expect(view.profiles[0].id).toBe('default');
   });

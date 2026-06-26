@@ -97,6 +97,7 @@
     busy = true;
     try {
       await switchProfile(id);
+      await loadProfiles();
       close();
       await finishSwitch(name);
     } catch (err) {
@@ -126,6 +127,13 @@
     renamingId = profile.id;
     renameValue = profile.name;
     queueMicrotask(() => renameInput?.select());
+  }
+
+  function canDeleteProfile(profile: Profile) {
+    return (
+      profile.id !== profilesState.active &&
+      profile.id !== profilesState.indexActive
+    );
   }
 
   async function submitRename() {
@@ -162,7 +170,7 @@
   }
 
   async function confirmAndDelete(profile: Profile) {
-    if (busy) return;
+    if (busy || !canDeleteProfile(profile)) return;
     const confirmed = await confirm({
       title: tUi('vault.delete.confirm.title'),
       message: tUi('vault.delete.confirm.message').replace(
@@ -198,10 +206,20 @@
     busy = true;
     try {
       const profile = await createProfile(name);
-      // Switching into the new vault re-confirms, then relaunches
-      // (packaged) or prompts a manual restart (dev).
       busy = false;
-      await confirmAndSwitch(profile.id, profile.name);
+      if (import.meta.env.DEV) {
+        // Dev can't relaunch into the new vault (see finishSwitch), so
+        // instead of a dead-end switch prompt we just refresh the list
+        // and keep the menu open — the new vault appears immediately and
+        // the user can switch when they next restart.
+        creating = false;
+        newName = '';
+        await loadProfiles();
+      } else {
+        // Packaged: switch into the new vault, which re-confirms and
+        // relaunches.
+        await confirmAndSwitch(profile.id, profile.name);
+      }
     } catch (err) {
       console.error('[vault] create failed', err);
       busy = false;
@@ -329,7 +347,7 @@
                 >
                   <Pencil class="size-3.5" />
                 </button>
-                {#if profile.id !== profilesState.active}
+                {#if canDeleteProfile(profile)}
                   <button
                     type="button"
                     class="rounded-sm p-1 text-muted-foreground hover:text-destructive"

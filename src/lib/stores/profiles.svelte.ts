@@ -11,7 +11,10 @@
 import { listProfiles, type Profile } from '$lib/api/profiles';
 
 interface ProfilesState {
+  /** The vault loaded by this running process. */
   active: string;
+  /** The vault `profiles.json` will load on the next launch. */
+  indexActive: string;
   profiles: Profile[];
   /** Has the index been read at least once? */
   loaded: boolean;
@@ -19,6 +22,7 @@ interface ProfilesState {
 
 export const profilesState = $state<ProfilesState>({
   active: 'default',
+  indexActive: 'default',
   profiles: [],
   loaded: false
 });
@@ -36,6 +40,7 @@ export async function loadProfiles(): Promise<void> {
     loadPromise = listProfiles()
       .then((view) => {
         profilesState.active = view.active;
+        profilesState.indexActive = view.index_active;
         profilesState.profiles = view.profiles;
         profilesState.loaded = true;
       })

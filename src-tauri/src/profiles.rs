@@ -303,12 +303,12 @@ pub fn set_name(root: &Path, id: &str, name: &str) -> AppResult<Profile> {
 /// orphaned directory (harmless) rather than an index pointing at
 /// missing data.
 pub fn delete(root: &Path, id: &str, active_id: &str) -> AppResult<()> {
-    if id == active_id {
+    let mut index = load_or_init(root)?;
+    if id == active_id || id == index.active {
         return Err(AppError::InvalidArg(
             "cannot delete the active vault — switch to another vault first".into(),
         ));
     }
-    let mut index = load_or_init(root)?;
     if !index.profiles.iter().any(|p| p.id == id) {
         return Err(AppError::NotFound(format!("unknown vault: {id}")));
     }
@@ -328,12 +328,14 @@ pub fn delete(root: &Path, id: &str, active_id: &str) -> AppResult<()> {
 
 // ---------- Tauri commands ----------
 
-/// What the frontend renders: the list of profiles plus the **live**
+/// What the frontend renders: the list of profiles plus both the **live**
 /// active id (read from `ActiveProfile` state, so it stays correct even
-/// when an env override diverges from the on-disk index).
+/// when an env override diverges from the on-disk index) and the active
+/// id persisted in `profiles.json`.
 #[derive(Debug, Clone, Serialize)]
 pub struct ProfilesView {
     pub active: String,
+    pub index_active: String,
     pub profiles: Vec<Profile>,
 }
 
@@ -345,9 +347,10 @@ pub fn list_profiles(app: tauri::AppHandle) -> Result<ProfilesView, String> {
     let active = app
         .try_state::<crate::paths::ActiveProfile>()
         .map(|p| p.id.clone())
-        .unwrap_or(index.active);
+        .unwrap_or_else(|| index.active.clone());
     Ok(ProfilesView {
         active,
+        index_active: index.active,
         profiles: index.profiles,
     })
 }
@@ -605,6 +608,24 @@ mod tests {
         let created = add_profile(&root, "Work").unwrap();
         // Pretend the new vault is the loaded one.
         assert!(delete(&root, &created.id, &created.id).is_err());
+        assert!(load(&root)
+            .unwrap()
+            .unwrap()
+            .profiles
+            .iter()
+            .any(|p| p.id == created.id));
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn delete_rejects_index_active_vault() {
+        let root = tmp_root();
+        let created = add_profile(&root, "Work").unwrap();
+        set_active(&root, &created.id).unwrap();
+
+        // The app may still be running from "default" in dev mode, but
+        // profiles.json already says "Work" is the next active vault.
+        assert!(delete(&root, &created.id, DEFAULT_PROFILE_ID).is_err());
         assert!(load(&root)
             .unwrap()
             .unwrap()

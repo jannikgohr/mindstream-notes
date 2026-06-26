@@ -11,9 +11,10 @@ export interface Profile {
   created_at: string;
 }
 
-/** Mirrors `profiles::ProfilesView` — the list plus the live active id. */
+/** Mirrors `profiles::ProfilesView` — the list plus live and persisted active ids. */
 export interface ProfilesView {
   active: string;
+  index_active: string;
   profiles: Profile[];
 }
 
@@ -25,6 +26,7 @@ export interface ProfilesView {
 function fallbackView(): ProfilesView {
   return {
     active: 'default',
+    index_active: 'default',
     profiles: [{ id: 'default', name: 'Default', created_at: '' }]
   };
 }
