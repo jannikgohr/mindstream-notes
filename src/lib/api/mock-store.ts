@@ -27,6 +27,8 @@ import { mockSearchNotes } from './search-matcher';
 const collections: Collection[] = [];
 const notes = new Map<string, Note>();
 const assets = new Map<string, Asset>();
+/** Derived, local-only extracted text for PDF notes (mirrors notes.pdf_text). */
+const pdfTexts = new Map<string, string>();
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -248,9 +250,9 @@ export const mockApi = {
       .filter((n) => !n.trashed)
       .map((n) => ({
         ...n,
-        // Strip body off the hit-emitted summary — the dialog reads
-        // from the snippet field instead, matching the Rust shape.
-        body: n.body,
+        // For PDF notes the body is just a JSON asset pointer; the searchable
+        // text lives in the derived pdf_text index (mirrors the Rust side).
+        body: n.note_kind === 'pdf' ? (pdfTexts.get(n.id) ?? '') : n.body,
         tags: n.tags
       }));
     const hits = mockSearchNotes(pool, query);
@@ -301,6 +303,22 @@ export const mockApi = {
     note.body = JSON.stringify({ pdfAssetId: asset.id });
     notes.set(note.id, note);
     return { ...note };
+  },
+  async setPdfText(noteId: string, text: string): Promise<void> {
+    const n = notes.get(noteId);
+    // Idempotent + PDF-only, mirroring the Rust `pdf_text IS NULL` guard.
+    if (n?.note_kind === 'pdf' && !pdfTexts.has(noteId)) {
+      pdfTexts.set(noteId, text);
+    }
+  },
+  async pdfNotesMissingText(): Promise<string[]> {
+    return [...notes.values()]
+      .filter((n) => n.note_kind === 'pdf' && !n.trashed && !pdfTexts.has(n.id))
+      .map((n) => n.id);
+  },
+  async pdfNoteNeedsText(noteId: string): Promise<boolean> {
+    const n = notes.get(noteId);
+    return n?.note_kind === 'pdf' && !pdfTexts.has(noteId);
   },
   async listSignatures(): Promise<SignatureRecord[]> {
     return loadMockSignatures();

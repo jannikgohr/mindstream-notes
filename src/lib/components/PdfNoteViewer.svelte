@@ -38,9 +38,12 @@
     loadNote,
     noteRoomInfo,
     onSessionChange,
-    saveNote as apiSaveNote
+    pdfNoteNeedsText,
+    saveNote as apiSaveNote,
+    setPdfText
   } from '$lib/api';
   import { listen } from '$lib/api/events';
+  import { extractTextFromDocument } from '$lib/pdf/extract-text';
   import { base64ToBytes } from '$lib/editor/base64';
   import { pickCursorColor } from '$lib/editor/cursor-color';
   import { isMobile } from '$lib/platform';
@@ -2023,6 +2026,19 @@
       void loadFlatOutline(pdfDoc).then((items) => {
         outline = items;
       });
+      // Index this PDF's text for cross-note search if it isn't already
+      // (covers PDFs synced in from another device / imported before the
+      // feature). Reuses the open document, runs off the render path, and is
+      // best-effort — the background sweep retries on failure.
+      void (async () => {
+        try {
+          if (pdfDoc && (await pdfNoteNeedsText(noteId))) {
+            await setPdfText(noteId, await extractTextFromDocument(pdfDoc));
+          }
+        } catch (err) {
+          console.debug('[PdfNoteViewer] text indexing failed', err);
+        }
+      })();
       loading = false;
       savingState = 'saved';
       saveReady = true;

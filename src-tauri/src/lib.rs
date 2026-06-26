@@ -27,6 +27,7 @@ pub mod notes;
 pub mod notes_export;
 pub mod paths;
 pub mod pdf_export;
+pub mod pdf_text;
 pub mod profiles;
 pub mod search;
 pub mod serde_helpers;
@@ -319,6 +320,10 @@ pub fn run() {
             notes::purge_note,
             // Search
             search::search_notes,
+            // PDF searchable-text index (derived, local-only)
+            pdf_text::set_pdf_text,
+            pdf_text::pdf_notes_missing_text,
+            pdf_text::pdf_note_needs_text,
             // Assets (freeform drawing attachments)
             assets::upload_drawing_asset,
             assets::fetch_drawing_asset,

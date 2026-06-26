@@ -37,6 +37,7 @@
   } from '$lib/api';
   import { clearSavedLayout, loadSavedLayout, saveLayout } from '$lib/api';
   import { sanitizeDockBlob } from '$lib/desktop/dock-layout-restore';
+  import { startPdfSearchIndexing } from '$lib/pdf/search-index-backfill';
   import { listen } from '$lib/api/events';
   import {
     setActiveNote,
@@ -253,6 +254,10 @@
       pendingTrayNoteId = null;
       void openNote(id);
     }
+
+    // Backfill PDF search text for any un-indexed PDFs (synced-in / pre-feature)
+    // in the background so their content becomes searchable without opening them.
+    startPdfSearchIndexing();
   }
 
   function pickInitialNote(): string | null {

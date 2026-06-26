@@ -14,6 +14,8 @@ const deleteCollectionMock = vi.fn();
 const emptyTrashCmdMock = vi.fn();
 const loadTreeMock = vi.fn();
 const runSyncMock = vi.fn();
+const setPdfTextMock = vi.fn();
+const extractPdfTextMock = vi.fn();
 
 vi.mock('$lib/api', () => ({
   saveNote: (...args: unknown[]) => saveNoteMock(...args),
@@ -21,6 +23,7 @@ vi.mock('$lib/api', () => ({
   createNote: (...args: unknown[]) => createNoteMock(...args),
   createCollection: (...args: unknown[]) => createCollectionMock(...args),
   importPdfNote: (...args: unknown[]) => importPdfNoteMock(...args),
+  setPdfText: (...args: unknown[]) => setPdfTextMock(...args),
   trashNote: (...args: unknown[]) => trashNoteMock(...args),
   restoreNote: (...args: unknown[]) => restoreNoteMock(...args),
   purgeNote: (...args: unknown[]) => purgeNoteMock(...args),
@@ -32,6 +35,11 @@ vi.mock('$lib/api', () => ({
 
 vi.mock('$lib/sync/runner', () => ({
   runSync: (...args: unknown[]) => runSyncMock(...args)
+}));
+
+// pdf.js text extraction pulls in the worker bundle — stub it.
+vi.mock('$lib/pdf/extract-text', () => ({
+  extractPdfText: (...args: unknown[]) => extractPdfTextMock(...args)
 }));
 
 // Avoid pulling state.svelte (which depends on browser localStorage etc.)
@@ -97,6 +105,8 @@ beforeEach(() => {
   deleteCollectionMock.mockReset().mockResolvedValue(undefined);
   createCollectionMock.mockReset().mockResolvedValue({ id: 'coll_new' });
   importPdfNoteMock.mockReset().mockResolvedValue({ id: 'note_pdf' });
+  setPdfTextMock.mockReset().mockResolvedValue(undefined);
+  extractPdfTextMock.mockReset().mockResolvedValue('extracted pdf text');
   emptyTrashCmdMock.mockReset().mockResolvedValue({ notes: 2, folders: 1 });
   runSyncMock.mockReset().mockResolvedValue(undefined);
   createNoteMock.mockResolvedValue({ id: 'note_new', pushed: true });
@@ -212,6 +222,22 @@ describe('createNoteIn / importPdfIn', () => {
       expect.objectContaining({ title: 'My Doc' })
     );
     expect(id).toBe('note_pdf');
+  });
+
+  it('indexes the imported PDF text for search', async () => {
+    const file = new File([new Uint8Array([1, 2, 3])], 'Paper.pdf', {
+      type: 'application/pdf'
+    });
+    await importPdfIn(null, file);
+    // Extraction + persistence run off the import path (fire-and-forget), so
+    // let the microtask queue drain before asserting.
+    await vi.waitFor(() => {
+      expect(extractPdfTextMock).toHaveBeenCalled();
+      expect(setPdfTextMock).toHaveBeenCalledWith(
+        'note_pdf',
+        'extracted pdf text'
+      );
+    });
   });
 });
 

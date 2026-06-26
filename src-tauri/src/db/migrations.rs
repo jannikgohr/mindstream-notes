@@ -337,6 +337,25 @@ const MIGRATIONS: &[Migration] = &[
             CREATE INDEX idx_signatures_etebase_uid ON signatures(etebase_uid) WHERE etebase_uid IS NOT NULL;
         "#,
     },
+    Migration {
+        to: 13,
+        // Cached, searchable plain text for PDF notes. A PDF note's bytes are
+        // immutable (editing means creating a new note), so the extracted text
+        // is derived data that never needs invalidating — we compute it once
+        // (frontend pdf.js) and store it here so the cross-note search can hit
+        // PDF content the same way it hits a markdown body.
+        //
+        // NULL  = not yet indexed (drives the background backfill sweep).
+        // ''    = indexed but empty (e.g. a scanned/image-only PDF).
+        //
+        // Deliberately LOCAL/derived: it is NOT part of the note sync payload
+        // (see NotePayload in sync/mod.rs). Every device reproduces it from the
+        // PDF bytes it already syncs, so populating it never dirties the note
+        // and never triggers a push.
+        sql: r#"
+            ALTER TABLE notes ADD COLUMN pdf_text TEXT;
+        "#,
+    },
 ];
 
 pub fn run(conn: &mut Connection) -> AppResult<()> {

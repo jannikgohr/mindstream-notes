@@ -211,6 +211,27 @@ describe('mock-store assets', () => {
     const asset = await mockApi.fetchDrawingAsset(body.pdfAssetId);
     expect(asset.mime_type).toBe('application/pdf');
   });
+
+  it('makes PDF content searchable only once indexed via setPdfText', async () => {
+    const note = await mockApi.importPdfNote({
+      title: 'Spec',
+      parent_collection_id: null,
+      bytes: [37, 80, 68, 70]
+    });
+
+    // Un-indexed: it's listed as missing, needs text, and content isn't found.
+    expect(await mockApi.pdfNotesMissingText()).toContain(note.id);
+    expect(await mockApi.pdfNoteNeedsText(note.id)).toBe(true);
+    expect(await mockApi.searchNotes('photosynthesis')).toEqual([]);
+
+    await mockApi.setPdfText(note.id, 'all about photosynthesis');
+
+    // Indexed: no longer missing, and the content is now searchable.
+    expect(await mockApi.pdfNotesMissingText()).not.toContain(note.id);
+    expect(await mockApi.pdfNoteNeedsText(note.id)).toBe(false);
+    const hits = await mockApi.searchNotes('photosynthesis');
+    expect(hits.map((h) => h.note.id)).toContain(note.id);
+  });
 });
 
 describe('mock-store signatures', () => {

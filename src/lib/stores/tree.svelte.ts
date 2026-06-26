@@ -16,6 +16,7 @@ import { TRASH_ID } from '$lib/api';
 import { ui } from '$lib/state.svelte';
 import { getSettingValue } from '$lib/settings/store.svelte';
 import { runSync } from '$lib/sync/runner';
+import { extractPdfText } from '$lib/pdf/extract-text';
 
 interface TreeState {
   tree: TreeNode[];
@@ -95,7 +96,8 @@ export async function importPdfIn(
   parentId: string | null,
   file: File
 ): Promise<string> {
-  const bytes = Array.from(new Uint8Array(await file.arrayBuffer()));
+  const raw = new Uint8Array(await file.arrayBuffer());
+  const bytes = Array.from(raw);
   const title = file.name.replace(/\.pdf$/i, '').trim() || 'Untitled PDF';
   const note = await api.importPdfNote({
     parent_collection_id: parentId,
@@ -103,6 +105,17 @@ export async function importPdfIn(
     bytes
   });
   await loadTree();
+  // Index the PDF's text for cross-note search. Derived/local-only, so it
+  // runs off the import path and failures are non-fatal (the background
+  // sweep retries un-indexed PDFs later).
+  void (async () => {
+    try {
+      const text = await extractPdfText(raw);
+      await api.setPdfText(note.id, text);
+    } catch (err) {
+      console.debug('[tree] pdf text extraction failed', err);
+    }
+  })();
   void (async () => {
     try {
       await runSync();

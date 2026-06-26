@@ -10,6 +10,7 @@
 export * from './core';
 export * from './notes';
 export * from './search';
+export * from './pdf-text';
 export * from './assets';
 export * from './collections';
 export * from './drawing';

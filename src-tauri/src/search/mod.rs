@@ -57,7 +57,7 @@ pub fn search(conn: &Connection, query: &str) -> AppResult<Vec<SearchHit>> {
 
     let mut stmt = conn.prepare(
         "SELECT id, parent_collection_id, title, position, created, modified,
-                trashed_at, favourite, etebase_uid, note_kind, body
+                trashed_at, favourite, etebase_uid, note_kind, body, pdf_text
          FROM notes
          WHERE trashed_at IS NULL",
     )?;
@@ -65,6 +65,17 @@ pub fn search(conn: &Connection, query: &str) -> AppResult<Vec<SearchHit>> {
         let trashed_at: Option<String> = row.get("trashed_at")?;
         let favourite: i64 = row.get("favourite")?;
         let etebase_uid: Option<String> = row.get("etebase_uid")?;
+        let note_kind: String = row.get("note_kind")?;
+        // For PDF notes the `body` column is only a JSON asset pointer; the
+        // searchable text lives in `pdf_text` (extracted from the PDF, NULL
+        // until indexed). Substitute it so the matcher/snippet never sees the
+        // pointer and PDF content becomes searchable.
+        let searchable_body = if note_kind == "pdf" {
+            row.get::<_, Option<String>>("pdf_text")?
+                .unwrap_or_default()
+        } else {
+            row.get::<_, String>("body")?
+        };
         Ok((
             NoteSummary {
                 id: row.get("id")?,
@@ -77,9 +88,9 @@ pub fn search(conn: &Connection, query: &str) -> AppResult<Vec<SearchHit>> {
                 trashed: trashed_at.is_some(),
                 favourite: favourite != 0,
                 pushed: etebase_uid.is_some(),
-                note_kind: row.get("note_kind")?,
+                note_kind,
             },
-            row.get::<_, String>("body")?,
+            searchable_body,
         ))
     })?;
 
@@ -426,5 +437,69 @@ mod tests {
         db.with_conn(|c| crate::notes::trash(c, &id)).unwrap();
         let hits = db.with_conn(|c| search(c, "keyword")).unwrap();
         assert!(hits.is_empty());
+    }
+
+    /// PDF note: `body` is a JSON asset pointer; searchable text comes from
+    /// the indexed `pdf_text` column instead.
+    fn seed_pdf_note(db: &Db, title: &str, pdf_text: Option<&str>) -> String {
+        let id = db
+            .with_conn(|c| {
+                create(
+                    c,
+                    CreateNote {
+                        title: Some(title.into()),
+                        body: Some(r#"{"pdfAssetId":"asset_abc"}"#.into()),
+                        parent_collection_id: None,
+                        note_kind: Some("pdf".into()),
+                    },
+                )
+            })
+            .unwrap()
+            .summary
+            .id;
+        if let Some(text) = pdf_text {
+            db.with_conn(|c| crate::pdf_text::store_text(c, &id, text))
+                .unwrap();
+        }
+        id
+    }
+
+    #[test]
+    fn pdf_content_is_searchable_via_pdf_text() {
+        let db = open_memory_for_tests();
+        let id = seed_pdf_note(
+            &db,
+            "Quarterly Report",
+            Some("the mitochondria is the powerhouse"),
+        );
+        let hits = db.with_conn(|c| search(c, "mitochondria")).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].note.id, id);
+        assert!(hits[0].snippet.to_lowercase().contains("mitochondria"));
+        assert!(!hits[0].snippet_matches.is_empty());
+    }
+
+    #[test]
+    fn pdf_asset_pointer_is_not_matched() {
+        // The JSON body pointer must never produce hits — searching its keys
+        // (a latent bug before pdf_text) returns nothing.
+        let db = open_memory_for_tests();
+        seed_pdf_note(&db, "Report", Some("real content here"));
+        assert!(db
+            .with_conn(|c| search(c, "pdfAssetId"))
+            .unwrap()
+            .is_empty());
+        assert!(db.with_conn(|c| search(c, "asset_abc")).unwrap().is_empty());
+    }
+
+    #[test]
+    fn unindexed_pdf_matches_title_only() {
+        // pdf_text NULL → content isn't searchable yet, but the title still is.
+        let db = open_memory_for_tests();
+        let id = seed_pdf_note(&db, "Invoice draft", None);
+        assert!(db.with_conn(|c| search(c, "content")).unwrap().is_empty());
+        let by_title = db.with_conn(|c| search(c, "invoice")).unwrap();
+        assert_eq!(by_title.len(), 1);
+        assert_eq!(by_title[0].note.id, id);
     }
 }
