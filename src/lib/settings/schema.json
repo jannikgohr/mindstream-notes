@@ -10,20 +10,20 @@
           "settings": [
             {
               "id": "account.serverType",
-              "scope": "G",
+              "scope": "V",
               "type": "radio",
               "default": "local-only",
               "options": ["managed", "self-hosted", "local-only"]
             },
             {
               "id": "account.managedUnavailable",
-              "scope": "G",
+              "scope": "V",
               "type": "info",
               "showIf": { "id": "account.serverType", "equals": "managed" }
             },
             {
               "id": "account.signInForm",
-              "scope": "G",
+              "scope": "V",
               "type": "custom",
               "customId": "sign-in-form",
               "showIf": {
@@ -161,7 +161,7 @@
           "settings": [
             {
               "id": "appearance.sortStrategy",
-              "scope": "V",
+              "scope": "D",
               "type": "radio",
               "default": "alphabetical",
               "options": ["alphabetical", "modified", "created"]
@@ -471,8 +471,8 @@
         {
           "id": "about.version",
           "settings": [
-            { "id": "about.appVersion", "scope": "G", "type": "info" },
-            { "id": "about.tauriVersion", "scope": "G", "type": "info" },
+            { "id": "about.appVersion", "scope": "D", "type": "info" },
+            { "id": "about.tauriVersion", "scope": "D", "type": "info" },
             {
               "id": "about.scanForUpdates",
               "scope": "D",
@@ -482,7 +482,7 @@
             },
             {
               "id": "about.checkUpdates",
-              "scope": "G",
+              "scope": "D",
               "type": "button",
               "actionId": "check-updates"
             }

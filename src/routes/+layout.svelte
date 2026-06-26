@@ -23,6 +23,7 @@
     syncGlobalShortcuts,
     teardownGlobalShortcuts
   } from '$lib/hotkeys/global.svelte';
+  import { loadProfiles } from '$lib/stores/profiles.svelte';
 
   let { children } = $props();
 
@@ -47,6 +48,7 @@
   // root layout ever remounts (HMR, route swap). Returned teardown only
   // matters in tests; we drop it intentionally here.
   onMount(() => {
+    void loadProfiles();
     initHotkeys();
     const blockTouchZoom = (event: WheelEvent) => {
       if (!event.ctrlKey) return;

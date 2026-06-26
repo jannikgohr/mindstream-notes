@@ -66,17 +66,46 @@ pub struct ServerCheckResult {
 }
 
 fn session_path(app: &AppHandle) -> AppResult<PathBuf> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| AppError::InvalidArg(format!("app_data_dir: {e}")))?;
+    let dir = crate::paths::app_data_dir(app)?;
     fs::create_dir_all(&dir)?;
     Ok(dir.join(SESSION_FILENAME))
 }
 
-fn keyring_entry() -> AppResult<Entry> {
-    Entry::new(KEYRING_SERVICE, KEYRING_ACCOUNT)
-        .map_err(|e| AppError::InvalidArg(format!("keyring: {e}")))
+/// Keyring account key for a profile. The `"default"` profile keeps the
+/// historical un-namespaced key so an existing session survives the
+/// upgrade to the profiles layout; every other profile namespaces with
+/// its id so each has its own isolated Etebase credentials.
+fn keyring_account_name(profile_id: &str) -> String {
+    if profile_id == crate::profiles::DEFAULT_PROFILE_ID {
+        KEYRING_ACCOUNT.to_string()
+    } else {
+        format!("{KEYRING_ACCOUNT}::{profile_id}")
+    }
+}
+
+/// Resolve the keyring account key for the currently-active profile.
+/// Falls back to the default (un-namespaced) key if profile state isn't
+/// managed yet — matches the boot fallback in [`crate::paths`].
+fn active_keyring_account(app: &AppHandle) -> String {
+    let id = app
+        .try_state::<crate::paths::ActiveProfile>()
+        .map(|p| p.id.clone())
+        .unwrap_or_else(|| crate::profiles::DEFAULT_PROFILE_ID.to_string());
+    keyring_account_name(&id)
+}
+
+fn keyring_entry(account: &str) -> AppResult<Entry> {
+    Entry::new(KEYRING_SERVICE, account).map_err(|e| AppError::InvalidArg(format!("keyring: {e}")))
+}
+
+/// Best-effort removal of a profile's stored Etebase session key. Called
+/// when a vault is deleted so its credential doesn't outlive its data.
+/// Silent on any failure — the entry may simply not exist (the vault was
+/// never signed in).
+pub fn forget_profile_keyring(profile_id: &str) {
+    if let Ok(entry) = keyring_entry(&keyring_account_name(profile_id)) {
+        let _ = entry.delete_credential();
+    }
 }
 
 fn resolve_server_url(args: &LoginArgs) -> AppResult<String> {
@@ -122,8 +151,8 @@ fn read_stored(path: &Path) -> AppResult<Option<StoredSession>> {
     Ok(Some(stored))
 }
 
-fn restore_account(stored: &StoredSession) -> AppResult<Account> {
-    let key_b64 = keyring_entry()?
+fn restore_account(stored: &StoredSession, keyring_account: &str) -> AppResult<Account> {
+    let key_b64 = keyring_entry(keyring_account)?
         .get_password()
         .map_err(|e| AppError::InvalidArg(format!("keyring read: {e}")))?;
     let key =
@@ -134,9 +163,9 @@ fn restore_account(stored: &StoredSession) -> AppResult<Account> {
         .map_err(|e| AppError::InvalidArg(format!("etebase restore: {e}")))
 }
 
-fn clear_local_state(path: &Path) {
+fn clear_local_state(path: &Path, keyring_account: &str) {
     let _ = fs::remove_file(path);
-    if let Ok(entry) = keyring_entry() {
+    if let Ok(entry) = keyring_entry(keyring_account) {
         let _ = entry.delete_credential();
     }
 }
@@ -225,7 +254,8 @@ pub fn try_restore(app: &AppHandle) -> AppResult<Option<Account>> {
     let Some(stored) = read_stored(&path)? else {
         return Ok(None);
     };
-    Ok(Some(restore_account(&stored)?))
+    let account = active_keyring_account(app);
+    Ok(Some(restore_account(&stored, &account)?))
 }
 
 /// Cheap presence check: true iff both halves of a session — the on-disk
@@ -242,7 +272,7 @@ pub fn has_session(app: &AppHandle) -> bool {
     if !path.exists() {
         return false;
     }
-    let Ok(entry) = keyring_entry() else {
+    let Ok(entry) = keyring_entry(&active_keyring_account(app)) else {
         return false;
     };
     entry.get_password().is_ok()
@@ -252,6 +282,7 @@ pub fn has_session(app: &AppHandle) -> bool {
 pub async fn etebase_login(args: LoginArgs, app: AppHandle) -> Result<SessionInfo, String> {
     let server_url = resolve_server_url(&args).map_err(String::from)?;
     let path = session_path(&app).map_err(String::from)?;
+    let keyring_account = active_keyring_account(&app);
 
     let username = args.username.clone();
     let password = args.password;
@@ -278,7 +309,7 @@ pub async fn etebase_login(args: LoginArgs, app: AppHandle) -> Result<SessionInf
     .map_err(|e| format!("login task: {e}"))??;
     let key_b64 = to_base64(&key).map_err(|e| format!("encode key: {e}"))?;
 
-    keyring_entry()
+    keyring_entry(&keyring_account)
         .map_err(String::from)?
         .set_password(&key_b64)
         .map_err(|e| format!("keyring write: {e}"))?;
@@ -291,7 +322,7 @@ pub async fn etebase_login(args: LoginArgs, app: AppHandle) -> Result<SessionInf
     let bytes = serde_json::to_vec(&stored).map_err(|e| e.to_string())?;
     if let Err(e) = fs::write(&path, bytes) {
         // Roll back the keyring write so we don't leave half a session behind.
-        if let Ok(entry) = keyring_entry() {
+        if let Ok(entry) = keyring_entry(&keyring_account) {
             let _ = entry.delete_credential();
         }
         return Err(format!("write session: {e}"));
@@ -307,6 +338,7 @@ pub async fn etebase_login(args: LoginArgs, app: AppHandle) -> Result<SessionInf
 pub async fn etebase_logout(app: AppHandle) -> Result<(), String> {
     let path = session_path(&app).map_err(String::from)?;
     let stored = read_stored(&path).map_err(String::from)?;
+    let keyring_account = active_keyring_account(&app);
 
     if let Some(stored) = stored {
         // Both `restore_account` and `account.logout()` end up
@@ -320,8 +352,10 @@ pub async fn etebase_logout(app: AppHandle) -> Result<(), String> {
         // Best-effort: if restore or logout fails (offline, key missing,
         // server gone) we still wipe local state below — that's the
         // user's clear intent.
+        let keyring_account = keyring_account.clone();
         let _ = tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
-            let account = restore_account(&stored).map_err(|e| format!("restore session: {e}"))?;
+            let account = restore_account(&stored, &keyring_account)
+                .map_err(|e| format!("restore session: {e}"))?;
             account.logout().map_err(|e| format!("logout: {e}"))?;
             Ok(())
         })
@@ -333,7 +367,7 @@ pub async fn etebase_logout(app: AppHandle) -> Result<(), String> {
     // directly from etebase each time a note is opened, so logging out
     // (which deletes the keyring entry below) makes those fetches fail
     // immediately and the editor falls back to single-device mode.
-    clear_local_state(&path);
+    clear_local_state(&path, &keyring_account);
 
     // Drop sync cursors after the session file is gone, so a crash here
     // leaves the user in a "no session, no cursors" state rather than
@@ -478,6 +512,23 @@ mod tests {
             Ok(())
         })
         .unwrap();
+    }
+
+    #[test]
+    fn default_profile_keeps_unnamespaced_keyring_key() {
+        // Back-compat: a migrated single-vault install must keep finding
+        // its existing keyring entry, so the default profile maps to the
+        // historical un-namespaced account key.
+        assert_eq!(keyring_account_name("default"), KEYRING_ACCOUNT);
+    }
+
+    #[test]
+    fn non_default_profiles_namespace_the_keyring_key() {
+        assert_eq!(
+            keyring_account_name("work"),
+            format!("{KEYRING_ACCOUNT}::work")
+        );
+        assert_ne!(keyring_account_name("work"), keyring_account_name("home"));
     }
 
     #[test]

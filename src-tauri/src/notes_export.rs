@@ -179,4 +179,20 @@ mod tests {
         assert_eq!(body, b"hello");
         fs::remove_dir_all(&tmp).ok();
     }
+
+    #[test]
+    fn write_file_command_writes_and_rejects_traversal() {
+        let tmp =
+            std::env::temp_dir().join(format!("ms-notes-export-cmd-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&tmp).unwrap();
+        let root = tmp.to_str().unwrap().to_string();
+
+        notes_export_write_file(root.clone(), "sub/file.md".into(), b"body".to_vec()).unwrap();
+        assert_eq!(fs::read(tmp.join("sub/file.md")).unwrap(), b"body");
+
+        let err = notes_export_write_file(root, "../escape.md".into(), b"x".to_vec()).unwrap_err();
+        assert!(err.contains("escapes export root"));
+
+        fs::remove_dir_all(&tmp).ok();
+    }
 }

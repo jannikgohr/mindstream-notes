@@ -20,6 +20,13 @@ export interface ConfirmOptions {
   /** Renders the confirm button with the destructive (red) variant. */
   destructive?: boolean;
   /**
+   * Seconds to keep the confirm button disabled after the dialog opens,
+   * with a live countdown in its label. A speed-bump for irreversible
+   * actions (e.g. deleting a vault) so the user can't reflexively
+   * confirm. Ignored for `infoOnly` dialogs.
+   */
+  confirmDelaySeconds?: number;
+  /**
    * Info-only dialog: shows a single dismiss button instead of the
    * confirm/cancel pair. Use `alert()` rather than setting this flag
    * directly — it returns Promise<void> for caller convenience and

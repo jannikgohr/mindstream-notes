@@ -41,9 +41,7 @@ pub struct TrashCounts {
 /// created it on first launch.
 #[tauri::command]
 pub fn open_data_folder(app: AppHandle) -> Result<(), String> {
-    let dir = app
-        .path()
-        .app_data_dir()
+    let dir = crate::paths::app_data_dir(&app)
         .map_err(|e| format!("could not resolve app data dir: {e}"))?;
     let path_str = dir
         .to_str()

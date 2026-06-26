@@ -17,6 +17,27 @@
   // next one — if any — slides into place.
   const current = $derived(confirmQueue.items[0] ?? null);
 
+  // Seconds left before the confirm button unlocks. 0 = enabled. Reset
+  // and re-armed whenever the dialog at the head of the queue changes.
+  let countdown = $state(0);
+
+  $effect(() => {
+    const item = current;
+    countdown = 0;
+    if (!item || item.infoOnly) return;
+    const secs = item.confirmDelaySeconds ?? 0;
+    if (secs <= 0) return;
+    countdown = secs;
+    const handle = setInterval(() => {
+      countdown -= 1;
+      if (countdown <= 0) {
+        countdown = 0;
+        clearInterval(handle);
+      }
+    }, 1000);
+    return () => clearInterval(handle);
+  });
+
   function resolveWith(answer: boolean) {
     const item = confirmQueue.items[0];
     if (!item) return;
@@ -79,13 +100,19 @@
                 </Button>
               {/snippet}
             </AlertDialog.Cancel>
-            <AlertDialog.Action onclick={() => resolveWith(true)}>
+            <AlertDialog.Action
+              disabled={countdown > 0}
+              onclick={() => resolveWith(true)}
+            >
               {#snippet child({ props })}
                 <Button
                   variant={current.destructive ? 'destructive' : 'default'}
                   {...props}
+                  disabled={countdown > 0}
                 >
-                  {current.confirmLabel ?? 'Confirm'}
+                  {countdown > 0
+                    ? `${current.confirmLabel ?? 'Confirm'} (${countdown})`
+                    : (current.confirmLabel ?? 'Confirm')}
                 </Button>
               {/snippet}
             </AlertDialog.Action>

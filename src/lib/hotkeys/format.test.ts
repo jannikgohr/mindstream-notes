@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ariaKeyShortcut,
+  displayBinding,
   globalShortcutAccelerator,
   globalShortcutSupportReason,
   tauriAccelerator
@@ -94,5 +96,39 @@ describe('globalShortcutAccelerator', () => {
   it('returns null for unsupported keys so +layout skips registration', () => {
     expect(globalShortcutAccelerator('mod+alt+ö')).toBeNull();
     expect(globalShortcutAccelerator(null)).toBeNull();
+  });
+});
+
+describe('displayBinding', () => {
+  // The test env reports a non-mac platform → Ctrl+… rendering.
+  it('renders mod as Ctrl and upper-cases the key', () => {
+    expect(displayBinding('mod+b')).toBe('Ctrl+B');
+  });
+
+  it('orders alt and shift before the key', () => {
+    expect(displayBinding('mod+shift+k')).toBe('Ctrl+Shift+K');
+  });
+
+  it('maps named keys to glyphs', () => {
+    expect(displayBinding('mod+arrowup')).toBe('Ctrl+↑');
+  });
+
+  it('returns empty string for null/invalid input', () => {
+    expect(displayBinding(null)).toBe('');
+    expect(displayBinding('garbage')).toBe('');
+  });
+});
+
+describe('ariaKeyShortcut', () => {
+  it('uses ARIA-named modifiers and keys', () => {
+    expect(ariaKeyShortcut('mod+b')).toBe('Control+B');
+    expect(ariaKeyShortcut('mod+shift+arrowdown')).toBe(
+      'Control+Shift+ArrowDown'
+    );
+  });
+
+  it('returns empty string for null/unparseable input', () => {
+    expect(ariaKeyShortcut(null)).toBe('');
+    expect(ariaKeyShortcut('garbage')).toBe('');
   });
 });

@@ -12,6 +12,15 @@ repository = "https://github.com/jannikgohr/mindstream-notes"
 name = "mindstream_notes_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+# Permit the MINDSTREAM_PROFILE_DIR env override of the active profile
+# directory in a *release* build. Dev (debug_assertions) builds always
+# allow it; production release builds do NOT unless this feature is
+# enabled. The e2e harness builds the binary with `--features
+# e2e-data-dir` so each run can be isolated to a temp directory, while a
+# shipped release can never be redirected by a stray env var.
+e2e-data-dir = []
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -64,6 +73,7 @@ strip = true
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-autostart = "2"
+tauri-plugin-process = "2"
 tauri-plugin-global-shortcut = "2.3.2"
 tauri-plugin-window-state = "2.4.1"
 tauri-plugin-updater = "2.10.1"

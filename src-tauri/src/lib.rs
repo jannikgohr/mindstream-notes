@@ -25,7 +25,9 @@ pub mod hotkeys;
 pub mod i18n;
 pub mod notes;
 pub mod notes_export;
+pub mod paths;
 pub mod pdf_export;
+pub mod profiles;
 pub mod search;
 pub mod serde_helpers;
 pub mod signatures;
@@ -174,6 +176,11 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_updater::Builder::new().build())
+        // Powers the relaunch-into-new-vault switch and the
+        // restore-relaunch flow (frontend calls `relaunch()` from
+        // @tauri-apps/plugin-process). Desktop-only; gated by
+        // `process:allow-restart` in the desktop capability.
+        .plugin(tauri_plugin_process::init())
         .on_window_event(|window, event| {
             if window.label() == "main" {
                 match event {
@@ -206,10 +213,31 @@ pub fn run() {
             // it — Entry::new() returns Error::NoDefaultStore otherwise.
             init_keyring();
 
-            let app_data = app
-                .path()
-                .app_data_dir()
-                .expect("could not resolve app_data_dir");
+            // Resolve the active profile directory and register it in
+            // state *before* anything reaches for `paths::app_data_dir`.
+            // A gated env override (e2e isolation seam) bypasses the
+            // index entirely; otherwise the index at the fixed OS root
+            // decides, migrating a pre-profiles vault into a "default"
+            // profile first so notes aren't orphaned.
+            let app_data_root =
+                paths::app_data_root(app.handle()).expect("could not resolve app_data_dir");
+            let (active_id, app_data) = match profiles::dir_override() {
+                Some(over) => over,
+                None => {
+                    if let Err(e) = profiles::migrate_legacy_if_needed(&app_data_root) {
+                        log::error!("[profiles] legacy migration failed: {e}");
+                    }
+                    let index = profiles::load_or_init(&app_data_root)
+                        .expect("could not read profiles index");
+                    let dir = profiles::profile_dir(&app_data_root, &index.active);
+                    (index.active, dir)
+                }
+            };
+            log::info!("[boot] active profile = {active_id}");
+            app.manage(paths::ActiveProfile {
+                id: active_id,
+                dir: app_data.clone(),
+            });
 
             // Apply any pending restore the user staged in a previous
             // session BEFORE opening the live DB. If the sentinel
@@ -299,6 +327,12 @@ pub fn run() {
             signatures::list_signatures,
             signatures::save_signature,
             signatures::delete_signature,
+            // Profiles (vaults)
+            profiles::list_profiles,
+            profiles::create_profile,
+            profiles::switch_profile,
+            profiles::rename_profile,
+            profiles::delete_profile,
             // Auth (Etebase)
             auth::etebase_login,
             auth::etebase_logout,

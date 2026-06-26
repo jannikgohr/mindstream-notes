@@ -8,6 +8,7 @@
     "autostart:allow-disable",
     "autostart:allow-is-enabled",
     "window-state:default",
-    "updater:default"
+    "updater:default",
+    "process:allow-restart"
   ]
 }

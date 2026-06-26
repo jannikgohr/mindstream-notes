@@ -64,3 +64,64 @@ pub fn open_memory_for_tests() -> Db {
     migrations::run(&mut conn).expect("migrations");
     Db(std::sync::Mutex::new(conn))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn open_creates_the_db_file_and_runs_migrations() {
+        let dir = std::env::temp_dir().join(format!("ms-db-open-{}", uuid::Uuid::new_v4()));
+        // Nested path so the create_dir_all(parent) branch runs.
+        let path = dir.join("nested").join("mindstream.db");
+        let db = Db::open(&path).expect("open db");
+        assert!(path.exists(), "db file created");
+
+        // Migrations ran: the notes table exists and foreign keys are on.
+        db.with_conn(|c| {
+            let n: i64 = c
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='notes'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(n, 1);
+            let fk: i64 = c
+                .query_row("PRAGMA foreign_keys", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(fk, 1);
+            Ok(())
+        })
+        .unwrap();
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn with_conn_mut_supports_transactions() {
+        let db = open_memory_for_tests();
+        db.with_conn_mut(|c| {
+            let tx = c.transaction()?;
+            tx.execute(
+                "INSERT INTO collections (id, name, parent_collection_id, created, modified)
+                 VALUES ('c1', 'Folder', NULL, '2025-01-01', '2025-01-01')",
+                [],
+            )?;
+            tx.commit()?;
+            Ok(())
+        })
+        .unwrap();
+
+        let count: i64 = db
+            .with_conn(|c| {
+                Ok(
+                    c.query_row("SELECT COUNT(*) FROM collections WHERE id='c1'", [], |r| {
+                        r.get(0)
+                    })?,
+                )
+            })
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+}

@@ -3,12 +3,17 @@
  *
  * Two storage layers sit behind a single reactive map:
  *
- *   1. **Local-first cache** — every value (including binding-backed ones)
+ *   1. **Scoped persistence** — vault settings (`scope: 'V'`) are stored
+ *      under a per-vault key; device settings (`scope: 'D'`) stay in the
+ *      existing app/device key. Account dynamic values such as
+ *      `account.serverUrl` are also vault-scoped by prefix.
+ *
+ *   2. **Local-first cache** — every value (including binding-backed ones)
  *      lives in `settings.values`. Reads are synchronous so consumers like
  *      `sort.ts`, `tree.svelte.ts`, the dialog's `isVisible` / `isModified`
  *      helpers, and any `$derived` chain can stay simple.
  *
- *   2. **Bindings** (registry.svelte.ts) — for settings whose source of
+ *   3. **Bindings** (registry.svelte.ts) — for settings whose source of
  *      truth lives elsewhere (Tauri autostart, mode-watcher, sidebar UI
  *      state, …). On startup we hydrate only bindings needed outside the
  *      dialog; on-demand bindings refresh when Settings opens. Writes go
@@ -28,7 +33,9 @@ import { SETTING_BINDINGS } from './registry.svelte';
 import { matchesPlatformFilter } from '$lib/platform';
 import type { Category, Section, SettingsSchema, Setting } from './types';
 
-const STORAGE_KEY = 'notes-app:settings:v1';
+const DEVICE_STORAGE_KEY = 'notes-app:settings:v1';
+const VAULT_STORAGE_KEY_PREFIX = 'notes-app:settings:v1:vault:';
+const DEFAULT_VAULT_ID = 'default';
 
 export const SCHEMA = schemaData as unknown as SettingsSchema;
 
@@ -48,14 +55,53 @@ export const BY_ID: Record<string, Setting> = Object.fromEntries(
   ALL_SETTINGS.map((s) => [s.id, s])
 );
 
-function loadRaw(): Record<string, unknown> {
+let activeSettingsVaultId = DEFAULT_VAULT_ID;
+
+function vaultStorageKey(vaultId: string): string {
+  return `${VAULT_STORAGE_KEY_PREFIX}${vaultId}`;
+}
+
+function scopeForId(id: string): 'V' | 'D' {
+  const def = BY_ID[id];
+  if (def) return def.scope;
+  // The sign-in form owns account.serverUrl dynamically, outside schema.json.
+  if (id.startsWith('account.')) return 'V';
+  return 'D';
+}
+
+function readStorage(key: string): Record<string, unknown> | null {
   if (typeof localStorage === 'undefined') return {};
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as Record<string, unknown>) : null;
   } catch {
-    return {};
+    return null;
   }
+}
+
+function pickScoped(
+  raw: Record<string, unknown> | null | undefined,
+  scope: 'V' | 'D'
+): Record<string, unknown> {
+  const picked: Record<string, unknown> = {};
+  for (const [id, value] of Object.entries(raw ?? {})) {
+    if (scopeForId(id) === scope) picked[id] = value;
+  }
+  return picked;
+}
+
+function loadRaw(vaultId = activeSettingsVaultId): Record<string, unknown> {
+  const deviceRaw = readStorage(DEVICE_STORAGE_KEY);
+  const vaultRaw = readStorage(vaultStorageKey(vaultId));
+  // Back-compat: the old single settings key contained both device and
+  // vault values. Seed the default vault from it until a scoped vault key
+  // exists; new/non-default vaults start from schema defaults.
+  const legacyVaultRaw =
+    vaultRaw === null && vaultId === DEFAULT_VAULT_ID ? deviceRaw : null;
+  return {
+    ...pickScoped(deviceRaw, 'D'),
+    ...pickScoped(vaultRaw ?? legacyVaultRaw, 'V')
+  };
 }
 
 interface SettingsState {
@@ -65,9 +111,18 @@ interface SettingsState {
 }
 
 export const settings = $state<SettingsState>({
-  values: loadRaw(),
+  values: loadRaw(activeSettingsVaultId),
   pending: new SvelteSet<string>()
 });
+
+export function setSettingsVaultId(id: string): void {
+  const next = id || DEFAULT_VAULT_ID;
+  if (next === activeSettingsVaultId) return;
+  persistNow();
+  activeSettingsVaultId = next;
+  settings.values = loadRaw(activeSettingsVaultId);
+  void hydrateSettings('startup');
+}
 
 /**
  * Pull binding-backed settings into the cache. Errors are logged and
@@ -177,20 +232,34 @@ let persistTimer: ReturnType<typeof setTimeout> | null = null;
 function persist() {
   if (persistTimer) clearTimeout(persistTimer);
   persistTimer = setTimeout(() => {
-    if (typeof localStorage === 'undefined') return;
-    try {
-      // Don't persist binding-backed values — their source is canonical and
-      // we'd just be shadowing it with a stale snapshot.
-      const persisted: Record<string, unknown> = {};
-      for (const [id, v] of Object.entries(settings.values)) {
-        if (id in SETTING_BINDINGS) continue;
-        persisted[id] = v;
-      }
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(persisted));
-    } catch (err) {
-      console.warn('[settings] save failed', err);
-    }
+    persistNow();
   }, 150);
+}
+
+function persistNow() {
+  if (typeof localStorage === 'undefined') return;
+  if (persistTimer) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+  }
+  try {
+    // Don't persist binding-backed values — their source is canonical and
+    // we'd just be shadowing it with a stale snapshot.
+    const device: Record<string, unknown> = {};
+    const vault: Record<string, unknown> = {};
+    for (const [id, value] of Object.entries(settings.values)) {
+      if (id in SETTING_BINDINGS) continue;
+      if (scopeForId(id) === 'V') vault[id] = value;
+      else device[id] = value;
+    }
+    localStorage.setItem(DEVICE_STORAGE_KEY, JSON.stringify(device));
+    localStorage.setItem(
+      vaultStorageKey(activeSettingsVaultId),
+      JSON.stringify(vault)
+    );
+  } catch (err) {
+    console.warn('[settings] save failed', err);
+  }
 }
 
 /** True if the current value differs from the schema default. */

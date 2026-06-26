@@ -33,9 +33,7 @@ pub struct DesktopSettings {
 
 impl DesktopSettings {
     pub fn load(app: &App) -> Self {
-        let path = app
-            .path()
-            .app_data_dir()
+        let path = crate::paths::app_data_dir(app)
             .expect("could not resolve app_data_dir")
             .join(SETTINGS_FILE);
         let file = fs::read_to_string(&path)

@@ -107,11 +107,7 @@ pub struct BackupReport {
 /// actually lands; we don't pre-create here because the dialog's
 /// `defaultPath` works whether the directory exists or not.
 fn default_backup_dir(app: &AppHandle) -> AppResult<PathBuf> {
-    Ok(app
-        .path()
-        .app_data_dir()
-        .map_err(|e| AppError::InvalidArg(format!("app_data_dir: {e}")))?
-        .join("backups"))
+    Ok(crate::paths::app_data_dir(app)?.join("backups"))
 }
 
 /// Path-safe suggested filename — `T<HH-MM-SS>` (hyphens, not colons)
@@ -182,10 +178,7 @@ fn run_backup(
     // same drive as the live DB so VACUUM INTO is fast, separated from
     // the user's chosen output dir so it stays clean. We delete the
     // staging file at the end regardless of outcome.
-    let staging_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| AppError::InvalidArg(format!("app_data_dir: {e}")))?
+    let staging_dir = crate::paths::app_data_dir(app)?
         .join("backups")
         .join(".staging");
     fs::create_dir_all(&staging_dir)?;
@@ -599,10 +592,7 @@ pub fn import_restore(
     token: String,
     same_account: bool,
 ) -> Result<RestoreStaged, String> {
-    let app_data = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("app_data_dir: {e}"))?;
+    let app_data = crate::paths::app_data_dir(&app).map_err(|e| e.to_string())?;
     let staged = imports_staging_root(&app)
         .map_err(|e| e.to_string())?
         .join(&token)
@@ -1007,10 +997,7 @@ fn merge_into(live: &mut Connection, backup: &Connection) -> AppResult<MergeRepo
 }
 
 fn imports_staging_root(app: &AppHandle) -> AppResult<PathBuf> {
-    let root = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| AppError::InvalidArg(format!("app_data_dir: {e}")))?
+    let root = crate::paths::app_data_dir(app)?
         .join("imports")
         .join(".staging");
     fs::create_dir_all(&root)?;
@@ -1031,7 +1018,7 @@ fn sweep_staging_root(root: &Path) {
 /// timestamped safety copy. Errors are logged but non-fatal so a
 /// botched restore doesn't keep the app from booting at all.
 pub fn apply_pending_restore_if_any(app: &AppHandle) {
-    let Ok(app_data) = app.path().app_data_dir() else {
+    let Ok(app_data) = crate::paths::app_data_dir(app) else {
         return;
     };
     let sentinel = app_data.join(SENTINEL_FILE);
@@ -1285,6 +1272,111 @@ mod tests {
         assert_eq!(db_bytes, b"SQLite fake content for zip roundtrip");
 
         fs::remove_dir_all(&tmp_dir).ok();
+    }
+
+    fn sample_manifest() -> Manifest {
+        Manifest {
+            format_version: MANIFEST_FORMAT_VERSION,
+            app_version: "0.0.0-test".into(),
+            schema_version: 11,
+            created_at: "2026-06-10T00:00:00+00:00".into(),
+            account_present_at_export: false,
+            account: None,
+            contents: Contents {
+                db_filename: DB_ENTRY_NAME.into(),
+                counts: Counts {
+                    notes: 1,
+                    folders: 1,
+                    assets_bytes: 0,
+                },
+            },
+        }
+    }
+
+    #[test]
+    fn extract_zip_into_recovers_manifest_and_db_bytes() {
+        let tmp = std::env::temp_dir().join(format!("ms-extract-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&tmp).unwrap();
+        let db_src = tmp.join("source.db");
+        let zip = tmp.join("backup.zip");
+        fs::write(&db_src, b"db-bytes-here").unwrap();
+        write_zip(&zip, &sample_manifest(), &db_src).unwrap();
+
+        let out_dir = tmp.join("extracted");
+        let db_target = out_dir.join("restored.db");
+        let manifest = extract_zip_into(&zip, &out_dir, &db_target).unwrap();
+
+        assert_eq!(manifest.contents.counts.notes, 1);
+        assert_eq!(fs::read(&db_target).unwrap(), b"db-bytes-here");
+
+        fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn extract_zip_into_rejects_a_zip_without_a_manifest() {
+        let tmp = std::env::temp_dir().join(format!("ms-extract-bad-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&tmp).unwrap();
+        let zip_path = tmp.join("empty.zip");
+        {
+            let file = fs::File::create(&zip_path).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            let opts: zip::write::FileOptions<()> = zip::write::FileOptions::default();
+            zip.start_file("unrelated.txt", opts).unwrap();
+            zip.write_all(b"nope").unwrap();
+            zip.finish().unwrap();
+        }
+        let err = extract_zip_into(&zip_path, &tmp.join("out"), &tmp.join("out/db")).unwrap_err();
+        assert!(format!("{err}").contains("manifest"));
+        fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn with_extra_extension_appends_a_suffix() {
+        let p = Path::new("/tmp/backup.zip");
+        assert_eq!(
+            with_extra_extension(p, "tmp"),
+            Path::new("/tmp/backup.zip.tmp")
+        );
+    }
+
+    #[test]
+    fn sweep_staging_root_removes_every_child() {
+        let root = std::env::temp_dir().join(format!("ms-sweep-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(root.join("a")).unwrap();
+        fs::create_dir_all(root.join("b")).unwrap();
+        fs::write(root.join("a/file.txt"), b"x").unwrap();
+
+        sweep_staging_root(&root);
+
+        let remaining = fs::read_dir(&root).unwrap().count();
+        assert_eq!(remaining, 0);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn apply_pending_restore_swaps_db_and_saves_a_safety_copy() {
+        let app_data = std::env::temp_dir().join(format!("ms-restore-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&app_data).unwrap();
+        let live = app_data.join("mindstream.db");
+        let pending = app_data.join(PENDING_DB_FILE);
+        let sentinel = app_data.join(SENTINEL_FILE);
+        fs::write(&live, b"old").unwrap();
+        fs::write(&pending, b"new").unwrap();
+        fs::write(&sentinel, b"").unwrap();
+
+        apply_pending_restore(&app_data, &pending, &sentinel).unwrap();
+
+        assert_eq!(fs::read(&live).unwrap(), b"new", "pending DB is now live");
+        assert!(!pending.exists(), "pending consumed");
+        assert!(!sentinel.exists(), "sentinel cleared");
+        let safety = fs::read_dir(&app_data).unwrap().flatten().any(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .starts_with("mindstream-pre-restore-")
+        });
+        assert!(safety, "a timestamped safety copy of the old DB was made");
+
+        fs::remove_dir_all(&app_data).ok();
     }
 
     #[test]

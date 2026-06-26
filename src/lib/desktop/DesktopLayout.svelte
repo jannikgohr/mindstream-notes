@@ -45,6 +45,7 @@
   } from '$lib/state.svelte';
   import { loadTree, tree } from '$lib/stores/tree.svelte';
   import { getSettingValue } from '$lib/settings/store.svelte';
+  import { loadProfiles, profilesState } from '$lib/stores/profiles.svelte';
   import {
     desktopNoteSource,
     setDesktopNoteSource
@@ -57,6 +58,7 @@
   let lastActiveGroup: DockviewGroupPanel | null = null;
   const openPanels = new Map<string, IDockviewPanel>();
   let saveLayoutTimer: ReturnType<typeof setTimeout> | null = null;
+  let layoutPersistenceReady = false;
   let pendingTrayNoteId: string | null = null;
   let pointerDraggedPanel: IDockviewPanel | null = null;
   let pointerTabDropTarget: {
@@ -78,6 +80,30 @@
     | 'inkNote'
     | 'pdfNote'
     | 'unknownNoteKind';
+  type SavedDockPanel = {
+    component?: string;
+    title?: string;
+    params?: { noteId?: string };
+  };
+  type SavedDockGroup = {
+    views?: unknown;
+    activeView?: unknown;
+    [key: string]: unknown;
+  };
+  type SavedDockNode = {
+    type?: unknown;
+    data?: unknown;
+    [key: string]: unknown;
+  };
+  type SavedDockBlob = {
+    grid?: { root?: unknown; [key: string]: unknown };
+    panels: Record<string, SavedDockPanel>;
+    activeGroup?: unknown;
+    floatingGroups?: unknown;
+    popoutGroups?: unknown;
+    edgeGroups?: unknown;
+    [key: string]: unknown;
+  };
 
   function componentForNoteKind(
     kind: string | null | undefined
@@ -231,12 +257,16 @@
       markDragging();
     });
 
+    await loadProfiles();
     if (!tree.ready) await loadTree();
 
     const restored = tryRestoreLayout();
+    layoutPersistenceReady = true;
     if (!restored) {
       const first = pickInitialNote();
       if (first) void openNote(first);
+    } else {
+      schedulePersist();
     }
 
     lastActiveGroup = dock.activeGroup ?? lastActiveGroup;
@@ -255,16 +285,18 @@
 
   function tryRestoreLayout(): boolean {
     if (!dock) return false;
-    const saved = loadSavedLayout();
+    const vaultId = profilesState.active;
+    const saved = loadSavedLayout(vaultId);
     if (!saved || !saved.dock) return false;
     try {
       const sanitized = sanitizeDockBlob(saved.dock);
       if (!sanitized) {
-        clearSavedLayout();
+        clearSavedLayout(vaultId);
         return false;
       }
       const api = dock as unknown as { fromJSON: (s: unknown) => void };
       api.fromJSON(sanitized);
+      openPanels.clear();
       for (const panel of dock.panels) {
         const noteId = (panel.params as { noteId?: string } | undefined)
           ?.noteId;
@@ -277,42 +309,163 @@
       return openPanels.size > 0;
     } catch (err) {
       console.warn('[layout] restore failed, falling back', err);
-      clearSavedLayout();
+      clearSavedLayout(vaultId);
       return false;
     }
   }
 
   function sanitizeDockBlob(blob: unknown): unknown | null {
     try {
-      const json = blob as {
-        panels?: Record<
-          string,
-          { component?: string; params?: { noteId?: string } }
-        >;
-      };
-      const panels = json.panels ?? {};
-      for (const p of Object.values(panels)) {
+      const json = cloneDockBlob(blob);
+      if (!json) return null;
+      const panels = json.panels;
+      const validPanelIds = new Set<string>();
+      let kept = 0;
+      for (const [panelId, p] of Object.entries(panels)) {
         const noteId = p?.params?.noteId;
-        if (noteId && !(noteId in tree.notesById)) {
-          return null;
+        if (!noteId || !(noteId in tree.notesById)) {
+          delete panels[panelId];
+          continue;
         }
-        if (noteId) {
-          p.component = componentForNoteKind(tree.notesById[noteId].note_kind);
-        }
+        const note = tree.notesById[noteId];
+        p.component = componentForNoteKind(note.note_kind);
+        p.title = note.title;
+        validPanelIds.add(panelId);
+        kept += 1;
       }
-      return blob;
+      if (kept === 0) return null;
+      if (json.grid) {
+        json.grid.root = pruneDockNode(json.grid.root, validPanelIds);
+        if (!json.grid.root) return null;
+      }
+      json.floatingGroups = pruneGroupArray(json.floatingGroups, validPanelIds);
+      json.popoutGroups = pruneGroupArray(json.popoutGroups, validPanelIds);
+      json.edgeGroups = pruneEdgeGroups(json.edgeGroups, validPanelIds);
+      return json;
     } catch {
       return null;
     }
   }
 
+  function cloneDockBlob(blob: unknown): SavedDockBlob | null {
+    if (!blob || typeof blob !== 'object') return null;
+    const cloned = JSON.parse(JSON.stringify(blob)) as SavedDockBlob;
+    if (!cloned || typeof cloned !== 'object') return null;
+    if (
+      !cloned.panels ||
+      typeof cloned.panels !== 'object' ||
+      Array.isArray(cloned.panels)
+    ) {
+      return null;
+    }
+    return cloned;
+  }
+
+  function isSavedDockGroup(value: unknown): value is SavedDockGroup {
+    return !!value && typeof value === 'object' && !Array.isArray(value);
+  }
+
+  function pruneDockGroup(
+    group: unknown,
+    validPanelIds: Set<string>
+  ): SavedDockGroup | null {
+    if (!isSavedDockGroup(group) || !Array.isArray(group.views)) return null;
+    const views = group.views.filter(
+      (id): id is string => typeof id === 'string' && validPanelIds.has(id)
+    );
+    if (views.length === 0) return null;
+    group.views = views;
+    if (
+      typeof group.activeView !== 'string' ||
+      !views.includes(group.activeView)
+    ) {
+      group.activeView = views[0];
+    }
+    return group;
+  }
+
+  function pruneDockNode(
+    node: unknown,
+    validPanelIds: Set<string>
+  ): SavedDockNode | null {
+    if (!node || typeof node !== 'object' || Array.isArray(node)) return null;
+    const current = node as SavedDockNode;
+    if (current.type === 'leaf') {
+      const group = pruneDockGroup(current.data, validPanelIds);
+      if (!group) return null;
+      current.data = group;
+      return current;
+    }
+    if (current.type === 'branch' && Array.isArray(current.data)) {
+      const children = current.data
+        .map((child) => pruneDockNode(child, validPanelIds))
+        .filter((child): child is SavedDockNode => child !== null);
+      if (children.length === 0) return null;
+      if (children.length === 1) return children[0];
+      current.data = children;
+      return current;
+    }
+    return null;
+  }
+
+  function pruneGroupArray(
+    groups: unknown,
+    validPanelIds: Set<string>
+  ): unknown[] | undefined {
+    if (!Array.isArray(groups)) return undefined;
+    const pruned = groups
+      .map((entry) => {
+        if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+          return null;
+        }
+        const record = entry as { data?: unknown };
+        const data = pruneDockGroup(record.data, validPanelIds);
+        if (!data) return null;
+        record.data = data;
+        return record;
+      })
+      .filter((entry): entry is Record<string, unknown> => entry !== null);
+    return pruned.length > 0 ? pruned : undefined;
+  }
+
+  function pruneEdgeGroups(
+    edgeGroups: unknown,
+    validPanelIds: Set<string>
+  ): unknown {
+    if (
+      !edgeGroups ||
+      typeof edgeGroups !== 'object' ||
+      Array.isArray(edgeGroups)
+    ) {
+      return undefined;
+    }
+    const pruned: Record<string, unknown> = {};
+    for (const [position, entry] of Object.entries(edgeGroups)) {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+      const record = entry as { group?: unknown };
+      if (!record.group) {
+        pruned[position] = record;
+        continue;
+      }
+      const group = pruneDockGroup(record.group, validPanelIds);
+      if (!group) continue;
+      record.group = group;
+      pruned[position] = record;
+    }
+    return Object.keys(pruned).length > 0 ? pruned : undefined;
+  }
+
   function schedulePersist() {
-    if (!dock) return;
+    if (!dock || !layoutPersistenceReady) return;
     if (saveLayoutTimer) clearTimeout(saveLayoutTimer);
     saveLayoutTimer = setTimeout(() => {
       try {
         const json = (dock as unknown as { toJSON: () => unknown }).toJSON();
-        saveLayout(json, dock?.activePanel?.params?.noteId ?? null);
+        saveLayout(
+          profilesState.active,
+          json,
+          dock?.activePanel?.params?.noteId ?? null
+        );
       } catch (err) {
         console.warn('[layout] save failed', err);
       }
