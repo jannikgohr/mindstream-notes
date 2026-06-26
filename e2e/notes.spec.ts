@@ -32,10 +32,8 @@ test('creates a new folder from the toolbar', async ({ page }) => {
   const name = `Folder ${Date.now()}`;
 
   await page.getByRole('button', { name: 'New folder', exact: true }).click();
-  const draft = page
-    .getByRole('textbox')
-    .filter({ hasNot: page.locator('[type="file"]') })
-    .last();
+  const draft = page.getByRole('textbox', { name: 'New folder', exact: true });
+  await expect(draft).toBeFocused();
   await draft.fill(name);
   await draft.press('Enter');
 
