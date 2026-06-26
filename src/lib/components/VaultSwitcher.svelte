@@ -170,7 +170,8 @@
         profile.name
       ),
       confirmLabel: tUi('vault.delete.confirm.button'),
-      destructive: true
+      destructive: true,
+      confirmDelaySeconds: 3
     });
     if (!confirmed) return;
     busy = true;
