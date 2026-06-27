@@ -12,7 +12,7 @@
  * editors mount and unmount (a note must be open to apply a restore as ops).
  */
 
-import { SvelteSet } from 'svelte/reactivity';
+import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 
 export interface NoteHistoryApi {
   /** Apply `markdown` to the live doc as collaborative edits (a restore). */
@@ -25,6 +25,23 @@ const registry = new Map<string, NoteHistoryApi>();
 
 /** Note ids with a live editor bridge — reactive for the sidebar. */
 export const registeredNotes = new SvelteSet<string>();
+
+/**
+ * Per-note capture counter. The editor bumps it after persisting a version so
+ * an open History panel re-lists live (the capture happens in the editor, the
+ * list in the sidebar — without this they're disconnected). Reactive.
+ */
+const epochs = new SvelteMap<string, number>();
+
+/** Reactive read of a note's capture epoch — depend on this to auto-refresh. */
+export function noteHistoryEpoch(noteId: string): number {
+  return epochs.get(noteId) ?? 0;
+}
+
+/** Signal that a version was just captured for `noteId`. */
+export function bumpNoteHistory(noteId: string): void {
+  epochs.set(noteId, (epochs.get(noteId) ?? 0) + 1);
+}
 
 /** Register the open editor for `noteId`. Returns an unsubscribe for onDestroy. */
 export function registerNoteHistory(

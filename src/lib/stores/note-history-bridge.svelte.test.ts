@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  bumpNoteHistory,
   getNoteHistory,
+  noteHistoryEpoch,
   registerNoteHistory,
   registeredNotes
 } from './note-history-bridge.svelte';
@@ -26,5 +28,13 @@ describe('note-history-bridge', () => {
     offFirst(); // late teardown of the first instance must be a no-op
     expect(getNoteHistory('n2')).toBe(second);
     expect(registeredNotes.has('n2')).toBe(true);
+  });
+
+  it('bumps a per-note epoch so the sidebar can react to captures', () => {
+    const before = noteHistoryEpoch('n3');
+    bumpNoteHistory('n3');
+    expect(noteHistoryEpoch('n3')).toBe(before + 1);
+    // Independent per note.
+    expect(noteHistoryEpoch('other')).toBe(0);
   });
 });

@@ -19,6 +19,7 @@
   import { tUi } from '$lib/settings/i18n.svelte';
   import {
     getNoteHistory,
+    noteHistoryEpoch,
     registeredNotes
   } from '$lib/stores/note-history-bridge.svelte';
 
@@ -54,11 +55,19 @@
     }
   }
 
-  // Reload whenever the active note changes; leave the detail view.
+  // Reset the detail view when the active note changes (but not on a capture,
+  // so a version landing while you inspect a diff doesn't yank you out).
   $effect(() => {
-    const id = noteId;
+    void noteId;
     detail = null;
-    void id;
+  });
+
+  // (Re)load the list when the note changes or a version is captured for it.
+  // The epoch dependency is what makes baseline-on-open and idle/close captures
+  // appear in an already-open panel without a reopen.
+  $effect(() => {
+    void noteId;
+    void noteHistoryEpoch(noteId);
     void refresh();
   });
 

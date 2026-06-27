@@ -17,7 +17,10 @@
     type VersionAction
   } from '$lib/api';
   import { tree } from '$lib/stores/tree.svelte';
-  import { registerNoteHistory } from '$lib/stores/note-history-bridge.svelte';
+  import {
+    bumpNoteHistory,
+    registerNoteHistory
+  } from '$lib/stores/note-history-bridge.svelte';
   import {
     setNoteStatus,
     clearNoteStatus
@@ -450,6 +453,12 @@
         revert: (markdown) => applyMarkdownTemplate(markdown),
         currentMarkdown: () => (getMarkdown ? getMarkdown() : '')
       });
+
+      // Snapshot a baseline on open so a note that's never edited still starts
+      // its timeline (the backend promotes the first version to 'created' and
+      // dedups, so reopening unchanged content is a no-op). This does NOT mark
+      // the session dirty — it's the loaded state, not a user edit.
+      void captureHistoryVersion('edited');
     } catch (err) {
       loadError = err instanceof Error ? err.message : String(err);
       loading = false;
@@ -745,7 +754,15 @@
     if (!getMarkdown) return;
     historyDirty = false;
     try {
-      await captureNoteVersion(noteId, 'markdown', action, getMarkdown());
+      const created = await captureNoteVersion(
+        noteId,
+        'markdown',
+        action,
+        getMarkdown()
+      );
+      // Only nudge the sidebar when a version was actually written (a no-op
+      // dedup returns null and shouldn't trigger a re-list).
+      if (created) bumpNoteHistory(noteId);
     } catch (err) {
       console.debug('[NoteEditor] history capture failed', err);
     }
