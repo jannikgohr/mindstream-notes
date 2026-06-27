@@ -90,6 +90,31 @@ function versionMagnitude(
   return { added, removed };
 }
 
+/**
+ * Approximate non-whitespace character churn (the "tokens" fallback magnitude).
+ * Multiset diff over raw-markdown non-whitespace chars; the real delta is a
+ * sequence diff in content_stats.rs.
+ */
+function tokenMagnitude(
+  oldMd: string,
+  newMd: string
+): { added: number; removed: number } {
+  const counts = (s: string): Map<string, number> => {
+    const m = new Map<string, number>();
+    for (const ch of s) {
+      if (!/\s/.test(ch)) m.set(ch, (m.get(ch) ?? 0) + 1);
+    }
+    return m;
+  };
+  const a = counts(oldMd);
+  const b = counts(newMd);
+  let added = 0;
+  let removed = 0;
+  for (const [ch, n] of b) added += Math.max(0, n - (a.get(ch) ?? 0));
+  for (const [ch, n] of a) removed += Math.max(0, n - (b.get(ch) ?? 0));
+  return { added, removed };
+}
+
 (function seed() {
   const t = nowIso();
   const work: Collection = {
@@ -389,6 +414,7 @@ export const mockApi = {
     const effAction: VersionAction = latest ? action : 'created';
     const prev = latest?.body ?? '';
     const { added, removed } = versionMagnitude(prev, markdown);
+    const tok = tokenMagnitude(prev, markdown);
     const ref_created =
       effAction === 'reverted' && refVersionId
         ? (noteVersions.find((v) => v.id === refVersionId)?.created ?? null)
@@ -404,6 +430,8 @@ export const mockApi = {
       ref_created,
       words_added: added,
       words_removed: removed,
+      tokens_added: tok.added,
+      tokens_removed: tok.removed,
       size: markdown.length,
       body: markdown,
       _seq: versionSeq++

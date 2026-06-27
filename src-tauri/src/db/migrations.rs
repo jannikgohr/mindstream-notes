@@ -399,6 +399,18 @@ const MIGRATIONS: &[Migration] = &[
             CREATE INDEX idx_note_versions_note ON note_versions(note_id, created DESC);
         "#,
     },
+    Migration {
+        to: 15,
+        // Fallback "tokens" magnitude for note versions: the count of
+        // non-whitespace characters added/removed vs the previous snapshot.
+        // Edits that change no words (formatting, punctuation, code/URL/HTML)
+        // still get an informative figure; whitespace-only edits leave these 0
+        // and the UI shows a qualitative label instead. See content_stats.rs.
+        sql: r#"
+            ALTER TABLE note_versions ADD COLUMN tokens_added   INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE note_versions ADD COLUMN tokens_removed INTEGER NOT NULL DEFAULT 0;
+        "#,
+    },
 ];
 
 pub fn run(conn: &mut Connection) -> AppResult<()> {

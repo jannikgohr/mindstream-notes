@@ -207,6 +207,8 @@
     "history.action.reverted": "Reverted to version from {date}",
     "history.action.revertedGeneric": "Restored an earlier version",
     "history.magnitude": "+{added} / −{removed} words",
+    "history.magnitudeTokens": "+{added} / −{removed} tokens",
+    "history.magnitudeMinor": "Whitespace",
     "history.diff.added": "added",
     "history.diff.removed": "removed",
     "history.diff.identical": "No differences from the current note.",

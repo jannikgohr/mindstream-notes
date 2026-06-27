@@ -28,6 +28,12 @@ export interface VersionSummary {
   ref_created: string | null;
   words_added: number;
   words_removed: number;
+  /**
+   * Fallback magnitude for word-neutral edits: non-whitespace characters
+   * added/removed vs the previous snapshot (formatting, punctuation, …).
+   */
+  tokens_added: number;
+  tokens_removed: number;
   /** Uncompressed markdown byte length. */
   size: number;
 }

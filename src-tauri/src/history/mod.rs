@@ -22,7 +22,7 @@ use flate2::Compression;
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 
-use crate::content_stats::word_delta;
+use crate::content_stats::{token_delta, word_delta};
 use crate::db::Db;
 use crate::error::{AppError, AppResult};
 
@@ -47,6 +47,10 @@ pub struct VersionSummary {
     pub ref_created: Option<String>,
     pub words_added: i64,
     pub words_removed: i64,
+    /// Fallback magnitude for word-neutral edits: non-whitespace characters
+    /// added/removed vs the previous snapshot (formatting, punctuation, …).
+    pub tokens_added: i64,
+    pub tokens_removed: i64,
     /// Uncompressed markdown byte length.
     pub size: i64,
 }
@@ -83,6 +87,8 @@ fn row_to_summary(r: &Row<'_>) -> rusqlite::Result<VersionSummary> {
         ref_created: r.get("ref_created")?,
         words_added: r.get("words_added")?,
         words_removed: r.get("words_removed")?,
+        tokens_added: r.get("tokens_added")?,
+        tokens_removed: r.get("tokens_removed")?,
         size: r.get("size")?,
     })
 }
@@ -121,6 +127,7 @@ pub fn capture(
     // The first snapshot of a note is its creation point.
     let action = if latest.is_none() { "created" } else { action };
     let (words_added, words_removed) = word_delta(&prev_md, markdown);
+    let (tokens_added, tokens_removed) = token_delta(&prev_md, markdown);
 
     // Denormalise the restore target's timestamp so the label outlives it.
     let ref_created: Option<String> = if action == "reverted" {
@@ -146,8 +153,9 @@ pub fn capture(
     conn.execute(
         "INSERT INTO note_versions
             (id, note_id, created, note_kind, action, label, ref_version_id,
-             ref_created, words_added, words_removed, body, size)
-         VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7, ?8, ?9, ?10, ?11)",
+             ref_created, words_added, words_removed, tokens_added,
+             tokens_removed, body, size)
+         VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         params![
             id,
             note_id,
@@ -158,6 +166,8 @@ pub fn capture(
             ref_created,
             words_added,
             words_removed,
+            tokens_added,
+            tokens_removed,
             compressed,
             size,
         ],
@@ -176,6 +186,8 @@ pub fn capture(
         ref_created,
         words_added,
         words_removed,
+        tokens_added,
+        tokens_removed,
         size,
     }))
 }
@@ -197,7 +209,8 @@ fn enforce_cap(conn: &Connection, note_id: &str) -> AppResult<()> {
 pub fn list(conn: &Connection, note_id: &str) -> AppResult<Vec<VersionSummary>> {
     let mut stmt = conn.prepare(
         "SELECT id, note_id, created, note_kind, action, label, ref_version_id,
-                ref_created, words_added, words_removed, size
+                ref_created, words_added, words_removed, tokens_added,
+                tokens_removed, size
          FROM note_versions WHERE note_id = ?1
          ORDER BY created DESC, rowid DESC",
     )?;
@@ -210,7 +223,8 @@ pub fn load(conn: &Connection, version_id: &str) -> AppResult<Version> {
     let row = conn
         .query_row(
             "SELECT id, note_id, created, note_kind, action, label, ref_version_id,
-                    ref_created, words_added, words_removed, size, body
+                    ref_created, words_added, words_removed, tokens_added,
+                    tokens_removed, size, body
              FROM note_versions WHERE id = ?1",
             params![version_id],
             |r| Ok((row_to_summary(r)?, r.get::<_, Vec<u8>>("body")?)),
@@ -341,6 +355,17 @@ mod tests {
             "unchanged snapshot must not create a version"
         );
         assert_eq!(db.with_conn(|c| list(c, &note)).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn formatting_only_edit_has_tokens_but_no_words() {
+        let db = open_memory_for_tests();
+        let note = make_note(&db);
+        cap(&db, &note, "edited", None, "hello world");
+        let v = cap(&db, &note, "edited", None, "**hello** world").unwrap();
+        assert_eq!((v.words_added, v.words_removed), (0, 0));
+        assert_eq!(v.tokens_added, 4); // four '*'
+        assert_eq!(v.tokens_removed, 0);
     }
 
     #[test]

@@ -323,6 +323,28 @@ describe('mock-store note history', () => {
     expect(list).toHaveLength(2);
   });
 
+  it('falls back to a token delta for word-neutral edits', async () => {
+    const id = await freshNote();
+    await mockApi.captureNoteVersion(
+      id,
+      'markdown',
+      'edited',
+      'hello world',
+      null
+    );
+    const v = await mockApi.captureNoteVersion(
+      id,
+      'markdown',
+      'edited',
+      '**hello** world',
+      null
+    );
+    expect(v?.words_added).toBe(0);
+    expect(v?.words_removed).toBe(0);
+    expect(v?.tokens_added).toBe(4); // four '*'
+    expect(v?.tokens_removed).toBe(0);
+  });
+
   it('loads a version body and denormalises a revert target', async () => {
     const id = await freshNote();
     const target = await mockApi.captureNoteVersion(

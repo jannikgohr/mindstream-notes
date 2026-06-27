@@ -171,11 +171,21 @@
     return tUi('history.action.edited');
   }
 
+  // Tiered magnitude: real words → visible non-whitespace "tokens" (formatting,
+  // punctuation, …) → a label for word-neutral, whitespace-only edits. A fresh
+  // empty note ('created' with nothing) just shows its action, no magnitude.
   function magnitude(v: VersionSummary): string {
-    if (v.words_added === 0 && v.words_removed === 0) return '';
-    return tUi('history.magnitude')
-      .replace('{added}', String(v.words_added))
-      .replace('{removed}', String(v.words_removed));
+    if (v.words_added !== 0 || v.words_removed !== 0) {
+      return tUi('history.magnitude')
+        .replace('{added}', String(v.words_added))
+        .replace('{removed}', String(v.words_removed));
+    }
+    if (v.tokens_added !== 0 || v.tokens_removed !== 0) {
+      return tUi('history.magnitudeTokens')
+        .replace('{added}', String(v.tokens_added))
+        .replace('{removed}', String(v.tokens_removed));
+    }
+    return v.action === 'created' ? '' : tUi('history.magnitudeMinor');
   }
 </script>
 

@@ -91,6 +91,27 @@ pub fn word_delta(old_md: &str, new_md: &str) -> (i64, i64) {
     (added, removed)
 }
 
+/// Non-whitespace character delta `(added, removed)` between two raw markdown
+/// snapshots. The fallback "tokens" magnitude for edits that change no words
+/// (formatting, punctuation, code/URL/HTML). Whitespace is skipped so the
+/// figure always reflects a *visible* change — an edit that only touches
+/// whitespace yields `(0, 0)` and the UI falls back to a qualitative label.
+pub fn token_delta(old_md: &str, new_md: &str) -> (i64, i64) {
+    let diff = TextDiff::from_chars(old_md, new_md);
+    let (mut added, mut removed) = (0i64, 0i64);
+    for change in diff.iter_all_changes() {
+        if change.value().trim().is_empty() {
+            continue;
+        }
+        match change.tag() {
+            ChangeTag::Insert => added += 1,
+            ChangeTag::Delete => removed += 1,
+            ChangeTag::Equal => {}
+        }
+    }
+    (added, removed)
+}
+
 /// Absolute word count for a note, from its DB content. PDF notes count the
 /// extracted `pdf_text` (already plain, 0 until indexed); others strip markdown.
 pub fn note_word_count_inner(conn: &Connection, note_id: &str) -> AppResult<i64> {
@@ -159,7 +180,7 @@ mod tests {
         assert_eq!(count_words(&markdown_to_plain("line one<br />line two")), 4);
         let md = "<div class=\"x\">hello</div> <!-- note --> world";
         assert_eq!(count_words(&markdown_to_plain(md)), 2); // hello, world
-        // A bare comparison in prose isn't a tag.
+                                                            // A bare comparison in prose isn't a tag.
         assert_eq!(count_words(&markdown_to_plain("if a < b then")), 4);
     }
 
@@ -176,6 +197,18 @@ mod tests {
     fn delta_tracks_word_churn() {
         let (added, removed) = word_delta("alpha beta gamma", "alpha delta gamma epsilon");
         assert_eq!((added, removed), (2, 1)); // +delta +epsilon, -beta
+    }
+
+    #[test]
+    fn token_delta_counts_visible_chars_ignoring_whitespace() {
+        // Formatting-only edit: no word change, four visible '*' added.
+        assert_eq!(word_delta("hello world", "**hello** world"), (0, 0));
+        assert_eq!(token_delta("hello world", "**hello** world"), (4, 0));
+        // A punctuation edit that doesn't cross a word boundary.
+        assert_eq!(token_delta("done", "done!"), (1, 0));
+        // Whitespace-only edits contribute no visible tokens.
+        assert_eq!(token_delta("a b", "a  b"), (0, 0));
+        assert_eq!(token_delta("para", "para\n\n"), (0, 0));
     }
 
     #[test]

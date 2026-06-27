@@ -107,6 +107,8 @@
     "history.action.reverted": "Auf Version vom {date} zurückgesetzt",
     "history.action.revertedGeneric": "Frühere Version wiederhergestellt",
     "history.magnitude": "+{added} / −{removed} Wörter",
+    "history.magnitudeTokens": "+{added} / −{removed} Tokens",
+    "history.magnitudeMinor": "Leerraum",
     "history.diff.added": "hinzugefügt",
     "history.diff.removed": "entfernt",
     "history.diff.identical": "Keine Unterschiede zur aktuellen Notiz.",
