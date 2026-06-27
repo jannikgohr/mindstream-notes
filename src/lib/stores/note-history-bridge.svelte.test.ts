@@ -7,7 +7,11 @@ import {
   registeredNotes
 } from './note-history-bridge.svelte';
 
-const api = () => ({ revert: vi.fn(), currentMarkdown: () => 'md' });
+const api = () => ({
+  revert: vi.fn(),
+  currentMarkdown: () => 'md',
+  snapshotNow: vi.fn().mockResolvedValue(undefined)
+});
 
 describe('note-history-bridge', () => {
   it('registers, exposes the api, and marks the note as available', () => {

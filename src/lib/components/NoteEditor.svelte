@@ -451,7 +451,8 @@
       // which can't reach the live editor (and its Yjs doc) by props.
       unregisterHistory = registerNoteHistory(noteId, {
         revert: (markdown) => applyMarkdownTemplate(markdown),
-        currentMarkdown: () => (getMarkdown ? getMarkdown() : '')
+        currentMarkdown: () => (getMarkdown ? getMarkdown() : ''),
+        snapshotNow: () => snapshotHistoryNow()
       });
 
       // Snapshot a baseline on open so a note that's never edited still starts
@@ -737,6 +738,20 @@
     } catch (err) {
       console.error('[NoteEditor] applyTemplate (restore) failed', err);
     }
+  }
+
+  /**
+   * Capture the current state immediately (deduped) and reset the idle timer.
+   * Invoked by the History panel's refresh button — an explicit refresh should
+   * also snapshot what the user is currently looking at, and clearing the
+   * pending idle timer means the next auto-capture is measured from now.
+   */
+  async function snapshotHistoryNow() {
+    if (historyTimer) {
+      clearTimeout(historyTimer);
+      historyTimer = null;
+    }
+    await captureHistoryVersion('edited');
   }
 
   /** Debounced capture of a history version once the user pauses editing. */

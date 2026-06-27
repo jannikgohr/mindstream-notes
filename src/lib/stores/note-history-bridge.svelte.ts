@@ -19,6 +19,12 @@ export interface NoteHistoryApi {
   revert: (markdown: string) => void;
   /** The editor's current markdown, for diffing against a version. */
   currentMarkdown: () => string;
+  /**
+   * Capture a version of the current editor state right now (deduped) and reset
+   * the idle-capture timer. Used by the History panel's refresh button so an
+   * explicit refresh also snapshots what the user is looking at.
+   */
+  snapshotNow: () => Promise<void>;
 }
 
 const registry = new Map<string, NoteHistoryApi>();

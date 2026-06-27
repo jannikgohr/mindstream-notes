@@ -31,6 +31,10 @@
   let versions = $state<VersionSummary[]>([]);
   let loading = $state(false);
   let restoring = $state(false);
+  // Drives the refresh-button spin. Kept on for at least one full rotation
+  // (Tailwind animate-spin is a 1s period) even when data returns sooner.
+  let spinning = $state(false);
+  const MIN_SPIN_MS = 1000;
   // The version being inspected (detail view) with both texts for the diff.
   let detail = $state<{
     summary: VersionSummary;
@@ -52,6 +56,26 @@
       versions = [];
     } finally {
       loading = false;
+    }
+  }
+
+  /**
+   * Refresh button: snapshot the live editor (the user likely wants the current
+   * state captured too), then re-list. Spins for at least one full rotation.
+   */
+  async function refreshClicked() {
+    if (spinning) return;
+    spinning = true;
+    const start = Date.now();
+    try {
+      await getNoteHistory(noteId)?.snapshotNow();
+      await refresh();
+    } finally {
+      const remaining = MIN_SPIN_MS - (Date.now() - start);
+      if (remaining > 0) {
+        await new Promise((resolve) => setTimeout(resolve, remaining));
+      }
+      spinning = false;
     }
   }
 
@@ -166,12 +190,12 @@
       <button
         type="button"
         class="rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
-        onclick={() => void refresh()}
-        disabled={loading}
+        onclick={() => void refreshClicked()}
+        disabled={spinning}
         aria-label={tUi('history.refresh')}
         title={tUi('history.refresh')}
       >
-        <RefreshCw class="size-3.5 {loading ? 'animate-spin' : ''}" />
+        <RefreshCw class="size-3.5 {spinning ? 'animate-spin' : ''}" />
       </button>
     {/if}
   </div>
