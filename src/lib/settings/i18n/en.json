@@ -216,6 +216,11 @@
     "history.diff.added": "added",
     "history.diff.removed": "removed",
     "history.diff.identical": "No differences from the current note.",
+    "history.diffFailed": "Couldn't render the visual diff for this version.",
+    "history.modal.title": "Note history",
+    "history.modal.currentTab": "Current note",
+    "history.modal.diffTab": "Diff",
+    "history.modal.oldTab": "Version from {date}",
 
     "tags.label": "Tags",
     "tags.add": "Add",

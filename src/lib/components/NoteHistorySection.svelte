@@ -15,8 +15,10 @@
     type VersionSummary
   } from '$lib/api';
   import MarkdownDiff from '$lib/components/MarkdownDiff.svelte';
+  import NoteHistoryModal from '$lib/components/NoteHistoryModal.svelte';
   import { confirm } from '$lib/components/confirm-dialog.svelte';
   import { formatNoteDateTime } from '$lib/date-time';
+  import { isMobile } from '$lib/platform';
   import { tUi } from '$lib/settings/i18n.svelte';
   import {
     getNoteHistory,
@@ -36,11 +38,17 @@
   // (Tailwind animate-spin is a 1s period) even when data returns sooner.
   let spinning = $state(false);
   const MIN_SPIN_MS = 1000;
-  // The version being inspected (detail view) with both texts for the diff.
+  // Mobile inspects a version in an inline detail view; desktop opens a modal.
   let detail = $state<{
     summary: VersionSummary;
     body: string;
     current: string;
+  } | null>(null);
+  // Desktop modal state (the version being inspected + both markdown texts).
+  let modal = $state<{
+    summary: VersionSummary;
+    oldMarkdown: string;
+    currentMarkdown: string;
   } | null>(null);
 
   // A live editor must be open to apply a restore (it flows through the Yjs
@@ -85,6 +93,7 @@
   $effect(() => {
     void noteId;
     detail = null;
+    modal = null;
   });
 
   // (Re)load the list when the note changes or a version is captured for it.
@@ -113,37 +122,35 @@
         loadNoteVersion(summary.id),
         currentMarkdown()
       ]);
-      detail = { summary, body: full.body, current };
+      // Desktop: rich modal (current / diff / old tabs). Mobile: inline detail.
+      if (isMobile()) {
+        detail = { summary, body: full.body, current };
+      } else {
+        modal = { summary, oldMarkdown: full.body, currentMarkdown: current };
+      }
     } catch (err) {
       console.warn('[history] open version failed', err);
     }
   }
 
-  async function restore() {
-    const target = detail?.summary;
+  /**
+   * Apply a restore: snapshot the current state (so the restore is undoable),
+   * replace the live doc with the target version via the editor bridge, and
+   * record a 'reverted' version pointing at the target. Returns whether it ran.
+   */
+  async function applyRestore(target: VersionSummary): Promise<boolean> {
     const bridge = getNoteHistory(noteId);
-    if (!target || !bridge || restoring) return;
-    const ok = await confirm({
-      title: tUi('history.restoreConfirmTitle'),
-      message: tUi('history.restoreConfirmBody'),
-      confirmLabel: tUi('history.restoreConfirmAction'),
-      cancelLabel: tUi('history.restoreConfirmCancel')
-    });
-    if (!ok) return;
+    if (!bridge || restoring) return false;
     restoring = true;
     try {
       const full = await loadNoteVersion(target.id);
-      // Safety: snapshot the current state so the restore is itself undoable
-      // (deduped if it's already the latest version).
       await captureNoteVersion(
         noteId,
         'markdown',
         'edited',
         bridge.currentMarkdown()
       );
-      // Apply as collaborative edits → persists + syncs like any edit.
       bridge.revert(full.body);
-      // Record the restore, referencing the target for the "Reverted to" label.
       await captureNoteVersion(
         noteId,
         'markdown',
@@ -151,13 +158,35 @@
         full.body,
         target.id
       );
-      detail = null;
       await refresh();
+      return true;
     } catch (err) {
       console.error('[history] restore failed', err);
+      return false;
     } finally {
       restoring = false;
     }
+  }
+
+  // Inline (mobile) restore — confirm first, since there are no modal buttons.
+  async function restore() {
+    const target = detail?.summary;
+    if (!target) return;
+    const ok = await confirm({
+      title: tUi('history.restoreConfirmTitle'),
+      message: tUi('history.restoreConfirmBody'),
+      confirmLabel: tUi('history.restoreConfirmAction'),
+      cancelLabel: tUi('history.restoreConfirmCancel')
+    });
+    if (!ok) return;
+    if (await applyRestore(target)) detail = null;
+  }
+
+  // Modal (desktop) restore — the modal's Restore button is the confirmation.
+  async function modalRestore() {
+    const target = modal?.summary;
+    if (!target) return;
+    if (await applyRestore(target)) modal = null;
   }
 
   function actionIcon(action: string) {
@@ -281,3 +310,14 @@
     </ul>
   {/if}
 </section>
+
+{#if modal}
+  <NoteHistoryModal
+    created={modal.summary.created}
+    oldMarkdown={modal.oldMarkdown}
+    currentMarkdown={modal.currentMarkdown}
+    {restoring}
+    onClose={() => (modal = null)}
+    onRestore={() => void modalRestore()}
+  />
+{/if}

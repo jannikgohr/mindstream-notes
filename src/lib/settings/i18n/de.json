@@ -116,6 +116,11 @@
     "history.diff.added": "hinzugefügt",
     "history.diff.removed": "entfernt",
     "history.diff.identical": "Keine Unterschiede zur aktuellen Notiz.",
+    "history.diffFailed": "Die visuelle Differenz für diese Version konnte nicht dargestellt werden.",
+    "history.modal.title": "Notizverlauf",
+    "history.modal.currentTab": "Aktuelle Notiz",
+    "history.modal.diffTab": "Differenz",
+    "history.modal.oldTab": "Version vom {date}",
 
     "tags.label": "Tags",
     "tags.add": "Hinzufügen",

@@ -61,6 +61,21 @@ export default defineConfig({
     react({ include: /\.tsx$/ })
   ],
 
+  resolve: {
+    // `@milkdown/plugin-diff` pins its `@milkdown/*` deps to 7.21.x, which pnpm
+    // installs nested alongside the editor's 7.20.x. Two copies of @milkdown/ctx
+    // / core mean two ProseMirror-plugin/context identities, so the diff plugin
+    // wouldn't share the editor's context. Force a single instance of each so
+    // the plugin runs against the same context the editor uses.
+    dedupe: [
+      '@milkdown/ctx',
+      '@milkdown/core',
+      '@milkdown/utils',
+      '@milkdown/transformer',
+      '@milkdown/prose'
+    ]
+  },
+
   // Vite options tailored for Tauri development.
   clearScreen: false,
   server: {
