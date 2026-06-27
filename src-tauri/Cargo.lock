@@ -2614,6 +2614,7 @@ dependencies = [
  "chrono",
  "dbus-secret-service-keyring-store",
  "etebase",
+ "flate2",
  "jni 0.21.1",
  "keyring-core",
  "log",

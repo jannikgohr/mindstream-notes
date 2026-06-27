@@ -170,9 +170,9 @@
     "favourite.add": "Add to favourites",
     "favourite.remove": "Remove from favourites",
 
+    "noteSidebar.title": "Details",
+    "noteSidebar.open": "Show note details",
     "metadata.organization": "Organization",
-    "metadata.title": "Metadata",
-    "metadata.open": "Show note metadata",
     "metadata.folder": "Folder",
     "metadata.folder.root": "Root",
     "metadata.type": "Type",
@@ -182,7 +182,7 @@
     "metadata.type.pdf": "PDF note",
     "metadata.type.unknown": "Unknown note",
     "metadata.type.unknownNamed": "{kind} note",
-    "metadata.history": "History",
+    "metadata.dates": "Dates",
     "metadata.created": "Created",
     "metadata.modified": "Modified",
     "metadata.content": "Content",
@@ -194,6 +194,22 @@
     "metadata.attachments.one": "{count} file",
     "metadata.attachments.other": "{count} files",
     "metadata.noNote": "No note selected.",
+
+    "history.title": "History",
+    "history.refresh": "Refresh history",
+    "history.back": "Back",
+    "history.loading": "Loading…",
+    "history.empty": "No earlier versions yet. Edits are saved automatically as you work.",
+    "history.restore": "Restore this version",
+    "history.restoreUnavailable": "Open the note to restore a version.",
+    "history.action.created": "Note created",
+    "history.action.edited": "Edited",
+    "history.action.reverted": "Reverted to version from {date}",
+    "history.action.revertedGeneric": "Restored an earlier version",
+    "history.magnitude": "+{added} / −{removed} words",
+    "history.diff.added": "added",
+    "history.diff.removed": "removed",
+    "history.diff.identical": "No differences from the current note.",
 
     "tags.label": "Tags",
     "tags.add": "Add",
@@ -563,6 +579,7 @@
     "hotkeys.list": { "label": "Shortcuts" },
     "data.database": { "label": "Database" },
     "data.trash": { "label": "Trash" },
+    "data.history": { "label": "Edit history" },
     "data.backup": { "label": "Backup, import & export" },
     "language.locale": { "label": "Language" },
     "about.version": { "label": "Version" }
@@ -644,6 +661,10 @@
     "data.openFolder": { "label": "Open data folder" },
     "data.useTrash": { "label": "Use trash on delete" },
     "data.trashRetentionDays": { "label": "Trash retention" },
+    "data.historyRetentionDays": {
+      "label": "Keep edit history for",
+      "description": "How long automatically-saved note versions are kept on this device. History is local and never synced."
+    },
     "data.emptyTrash": { "label": "Empty trash now" },
     "data.backupNow": { "label": "Back up now" },
     "data.restoreBackup": {
@@ -702,6 +723,11 @@
     "data.trashRetentionDays.30": "30 days",
     "data.trashRetentionDays.90": "90 days",
     "data.trashRetentionDays.forever": "Forever",
+    "data.historyRetentionDays.7": "7 days",
+    "data.historyRetentionDays.30": "30 days",
+    "data.historyRetentionDays.90": "90 days",
+    "data.historyRetentionDays.365": "1 year",
+    "data.historyRetentionDays.forever": "Forever",
     "language.code.en": "English",
     "language.code.de": "Deutsch"
   }

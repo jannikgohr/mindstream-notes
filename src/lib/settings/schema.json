@@ -443,6 +443,18 @@
               "actionId": "import-notes"
             }
           ]
+        },
+        {
+          "id": "data.history",
+          "settings": [
+            {
+              "id": "data.historyRetentionDays",
+              "scope": "V",
+              "type": "select",
+              "default": "90",
+              "options": ["7", "30", "90", "365", "forever"]
+            }
+          ]
         }
       ]
     },

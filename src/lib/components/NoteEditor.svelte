@@ -12,9 +12,12 @@
     noteRoomInfo,
     etebaseSession,
     getYjsRelayUrl,
-    onSessionChange
+    onSessionChange,
+    captureNoteVersion,
+    type VersionAction
   } from '$lib/api';
   import { tree } from '$lib/stores/tree.svelte';
+  import { registerNoteHistory } from '$lib/stores/note-history-bridge.svelte';
   import {
     setNoteStatus,
     clearNoteStatus
@@ -162,6 +165,16 @@
   // see the long comment around the yDoc 'update' hook below.
   let getMarkdown: (() => string) | null = null;
   let yDocUpdateHandler: (() => void) | null = null;
+
+  // --- Note history (local, automatic versioning) ---------------------------
+  // A version is captured after the user pauses editing (idle debounce) and on
+  // teardown, so the timeline tracks meaningful pauses rather than keystrokes.
+  // The backend dedups identical snapshots and promotes the first to 'created'.
+  const HISTORY_IDLE_MS = 3 * 60 * 1000;
+  let historyTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Edits have landed since the last capture (so teardown should flush one). */
+  let historyDirty = false;
+  let unregisterHistory: (() => void) | null = null;
   // Gate yDoc 'update' events from triggering saves until we've finished
   // hydrating the doc + binding the editor. Otherwise the initial template
   // population would schedule a phantom save 800ms after open.
@@ -379,6 +392,7 @@
       yDocUpdateHandler = () => {
         if (!saveReady) return;
         scheduleSave();
+        scheduleHistoryCapture();
       };
       localYDoc.on('update', yDocUpdateHandler);
       saveReady = true;
@@ -429,6 +443,13 @@
 
       crepeReady = true;
       loading = false;
+
+      // Expose restore + current-markdown to the History sidebar section,
+      // which can't reach the live editor (and its Yjs doc) by props.
+      unregisterHistory = registerNoteHistory(noteId, {
+        revert: (markdown) => applyMarkdownTemplate(markdown),
+        currentMarkdown: () => (getMarkdown ? getMarkdown() : '')
+      });
     } catch (err) {
       loadError = err instanceof Error ? err.message : String(err);
       loading = false;
@@ -615,6 +636,16 @@
 
   onDestroy(() => {
     if (saveTimer) clearTimeout(saveTimer);
+    // Flush a final history version for edits made since the last capture,
+    // while the editor (and getMarkdown) is still alive. Fire-and-forget —
+    // the backend dedups, so a no-op close is harmless.
+    if (historyTimer) {
+      clearTimeout(historyTimer);
+      historyTimer = null;
+    }
+    if (historyDirty) void captureHistoryVersion('edited');
+    unregisterHistory?.();
+    unregisterHistory = null;
     if (editorListener) {
       unregisterEditor(editorListener);
       editorListener = null;
@@ -680,6 +711,45 @@
     if (!crepeReady || !crepe) return;
     crepe.setReadonly(isTrashed);
   });
+
+  /**
+   * Apply `markdown` to the live document as collaborative edits. The collab
+   * service diffs the current doc against the template and emits y-prosemirror
+   * ops (the `() => true` condition forces the apply even on a non-empty doc).
+   * Those ops trigger the normal save + broadcast path, so a restore converges
+   * across devices like any other edit. Used by the History sidebar's Restore.
+   */
+  function applyMarkdownTemplate(markdown: string) {
+    if (!crepe || isTrashed) return;
+    try {
+      crepe.editor.action((ctx) => {
+        ctx.get(collabServiceCtx).applyTemplate(markdown, () => true);
+      });
+    } catch (err) {
+      console.error('[NoteEditor] applyTemplate (restore) failed', err);
+    }
+  }
+
+  /** Debounced capture of a history version once the user pauses editing. */
+  function scheduleHistoryCapture() {
+    if (isTrashed) return;
+    historyDirty = true;
+    if (historyTimer) clearTimeout(historyTimer);
+    historyTimer = setTimeout(() => {
+      historyTimer = null;
+      void captureHistoryVersion('edited');
+    }, HISTORY_IDLE_MS);
+  }
+
+  async function captureHistoryVersion(action: VersionAction) {
+    if (!getMarkdown) return;
+    historyDirty = false;
+    try {
+      await captureNoteVersion(noteId, 'markdown', action, getMarkdown());
+    } catch (err) {
+      console.debug('[NoteEditor] history capture failed', err);
+    }
+  }
 
   function scheduleSave() {
     // setReadonly(true) already prevents user input, but yDoc 'update' can

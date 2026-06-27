@@ -266,3 +266,91 @@ describe('mock-store signatures', () => {
     expect(list.map((s) => s.id)).toEqual(['sig2']);
   });
 });
+
+describe('mock-store note history', () => {
+  async function freshNote(): Promise<string> {
+    const note = await mockApi.createNote({
+      title: 'History note',
+      parent_collection_id: null,
+      note_kind: 'markdown'
+    });
+    return note.id;
+  }
+
+  it('promotes the first version to created and dedups unchanged content', async () => {
+    const id = await freshNote();
+    const first = await mockApi.captureNoteVersion(
+      id,
+      'markdown',
+      'edited',
+      'hello world',
+      null
+    );
+    expect(first?.action).toBe('created');
+    expect(first?.words_added).toBe(2);
+
+    const dup = await mockApi.captureNoteVersion(
+      id,
+      'markdown',
+      'edited',
+      'hello world',
+      null
+    );
+    expect(dup).toBeNull();
+    expect((await mockApi.listNoteVersions(id)).length).toBe(1);
+  });
+
+  it('records magnitude and lists newest first', async () => {
+    const id = await freshNote();
+    await mockApi.captureNoteVersion(
+      id,
+      'markdown',
+      'edited',
+      'alpha beta',
+      null
+    );
+    const v2 = await mockApi.captureNoteVersion(
+      id,
+      'markdown',
+      'edited',
+      'alpha gamma delta',
+      null
+    );
+    expect(v2?.words_added).toBe(2); // gamma, delta
+    expect(v2?.words_removed).toBe(1); // beta
+    const list = await mockApi.listNoteVersions(id);
+    expect(list[0].id).toBe(v2?.id); // newest first
+    expect(list).toHaveLength(2);
+  });
+
+  it('loads a version body and denormalises a revert target', async () => {
+    const id = await freshNote();
+    const target = await mockApi.captureNoteVersion(
+      id,
+      'markdown',
+      'edited',
+      'original text',
+      null
+    );
+    await mockApi.captureNoteVersion(
+      id,
+      'markdown',
+      'edited',
+      'changed text',
+      null
+    );
+    const loaded = await mockApi.loadNoteVersion(target!.id);
+    expect(loaded.body).toBe('original text');
+
+    const reverted = await mockApi.captureNoteVersion(
+      id,
+      'markdown',
+      'reverted',
+      'original text',
+      target!.id
+    );
+    expect(reverted?.action).toBe('reverted');
+    expect(reverted?.ref_version_id).toBe(target!.id);
+    expect(reverted?.ref_created).toBe(target!.created);
+  });
+});

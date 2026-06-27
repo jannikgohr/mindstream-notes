@@ -45,6 +45,7 @@
   } from '$lib/stores/tree.svelte';
   import { subscribeOpenNoteRequest } from '$lib/stores/open-note-intent.svelte';
   import { startPdfSearchIndexing } from '$lib/pdf/search-index-backfill';
+  import { pruneHistoryOnStartup } from '$lib/history/retention';
   import { tUi } from '$lib/settings/i18n.svelte';
   import {
     installMobileHistoryNav,
@@ -62,6 +63,8 @@
     // Backfill PDF search text for un-indexed PDFs in the background so their
     // content is searchable without opening each one (see search-index-backfill).
     startPdfSearchIndexing();
+    // Sweep note history past the user's retention window.
+    void pruneHistoryOnStartup();
     // Install the browser-history shim so the Android system back
     // button pops into our `setMobileScreen('home')` path instead of
     // falling through WryActivity's `super.onBackPressed()` (which

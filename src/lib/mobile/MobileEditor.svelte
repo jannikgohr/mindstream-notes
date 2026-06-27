@@ -9,7 +9,7 @@
   import FavouriteStar from '$lib/components/FavouriteStar.svelte';
   import { Button } from '$lib/components/ui/button';
   import NoteStatusIcons from '$lib/desktop/NoteStatusIcons.svelte';
-  import LazyMetadataPanel from '$lib/components/LazyMetadataPanel.svelte';
+  import LazyNoteSidebar from '$lib/components/LazyNoteSidebar.svelte';
   import NoteKindRenderer from '$lib/components/NoteKindRenderer.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { tree } from '$lib/stores/tree.svelte';
@@ -76,8 +76,8 @@
         variant="ghost"
         size="icon"
         onclick={() => (metadataOpen = true)}
-        aria-label={tUi('metadata.open')}
-        title={tUi('metadata.open')}
+        aria-label={tUi('noteSidebar.open')}
+        title={tUi('noteSidebar.open')}
       >
         <Info class="size-5" />
       </Button>
@@ -119,7 +119,7 @@
       class="flex h-12 shrink-0 items-center justify-between border-b border-border px-3"
     >
       <h2 id="mobile-metadata-title" class="truncate text-sm font-semibold">
-        {tUi('metadata.title')}
+        {tUi('noteSidebar.title')}
       </h2>
       <Button
         variant="ghost"
@@ -132,7 +132,7 @@
       </Button>
     </header>
     <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-      <LazyMetadataPanel />
+      <LazyNoteSidebar />
     </div>
   </div>
 {/if}

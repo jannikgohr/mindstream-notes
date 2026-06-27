@@ -22,6 +22,7 @@ import type { Asset, UploadAssetInput } from './assets';
 import type { ImportPdfNoteInput } from './assets';
 import type { SearchHit } from './search';
 import type { SaveSignatureInput, SignatureRecord } from './signatures';
+import type { Version, VersionAction, VersionSummary } from './history';
 import { mockSearchNotes } from './search-matcher';
 
 const collections: Collection[] = [];
@@ -29,12 +30,18 @@ const notes = new Map<string, Note>();
 const assets = new Map<string, Asset>();
 /** Derived, local-only extracted text for PDF notes (mirrors notes.pdf_text). */
 const pdfTexts = new Map<string, string>();
+/** Local, automatic note history (mirrors note_versions). */
+interface MockVersion extends Version {
+  _seq: number;
+}
+const noteVersions: MockVersion[] = [];
+let versionSeq = 0;
 
 function nowIso(): string {
   return new Date().toISOString();
 }
 
-function randId(prefix: 'note' | 'coll' | 'asset'): string {
+function randId(prefix: 'note' | 'coll' | 'asset' | 'ver'): string {
   return `${prefix}_${crypto.randomUUID?.() ?? Math.random().toString(36).slice(2)}`;
 }
 
@@ -46,6 +53,35 @@ function summary(n: Note): NoteSummary {
 
 function maxPosition(arr: { position: number }[]): number {
   return arr.reduce((m, x) => Math.max(m, x.position), -1);
+}
+
+function stripVersion(v: MockVersion): VersionSummary {
+  const { body: _b, _seq: _s, ...summary } = v;
+  return summary;
+}
+
+/**
+ * Approximate word churn between two markdown snapshots (multiset diff). The
+ * Rust side uses `similar`; this is close enough for the browser fallback.
+ */
+function versionMagnitude(
+  oldMd: string,
+  newMd: string
+): { added: number; removed: number } {
+  const counts = (s: string): Map<string, number> => {
+    const m = new Map<string, number>();
+    for (const w of s.split(/\s+/).filter(Boolean)) {
+      m.set(w, (m.get(w) ?? 0) + 1);
+    }
+    return m;
+  };
+  const a = counts(oldMd);
+  const b = counts(newMd);
+  let added = 0;
+  let removed = 0;
+  for (const [w, n] of b) added += Math.max(0, n - (a.get(w) ?? 0));
+  for (const [w, n] of a) removed += Math.max(0, n - (b.get(w) ?? 0));
+  return { added, removed };
 }
 
 (function seed() {
@@ -319,6 +355,85 @@ export const mockApi = {
   async pdfNoteNeedsText(noteId: string): Promise<boolean> {
     const n = notes.get(noteId);
     return n?.note_kind === 'pdf' && !pdfTexts.has(noteId);
+  },
+
+  // ---- Note history ----
+  async captureNoteVersion(
+    noteId: string,
+    noteKind: string,
+    action: VersionAction,
+    markdown: string,
+    refVersionId: string | null
+  ): Promise<VersionSummary | null> {
+    const forNote = noteVersions
+      .filter((v) => v.note_id === noteId)
+      .sort((a, b) => b._seq - a._seq);
+    const latest = forNote[0];
+    // Dedup: unchanged content never creates a version.
+    if (latest && latest.body === markdown) return null;
+    // First snapshot is the note's creation point.
+    const effAction: VersionAction = latest ? action : 'created';
+    const prev = latest?.body ?? '';
+    const { added, removed } = versionMagnitude(prev, markdown);
+    const ref_created =
+      effAction === 'reverted' && refVersionId
+        ? (noteVersions.find((v) => v.id === refVersionId)?.created ?? null)
+        : null;
+    const v: MockVersion = {
+      id: randId('ver'),
+      note_id: noteId,
+      created: nowIso(),
+      note_kind: noteKind,
+      action: effAction,
+      label: null,
+      ref_version_id: refVersionId,
+      ref_created,
+      words_added: added,
+      words_removed: removed,
+      size: markdown.length,
+      body: markdown,
+      _seq: versionSeq++
+    };
+    noteVersions.push(v);
+    // Safety cap: keep the newest 200 for this note.
+    const kept = new Set(
+      noteVersions
+        .filter((x) => x.note_id === noteId)
+        .sort((a, b) => b._seq - a._seq)
+        .slice(0, 200)
+        .map((x) => x.id)
+    );
+    for (let i = noteVersions.length - 1; i >= 0; i--) {
+      const x = noteVersions[i];
+      if (x.note_id === noteId && !kept.has(x.id)) noteVersions.splice(i, 1);
+    }
+    return stripVersion(v);
+  },
+  async listNoteVersions(noteId: string): Promise<VersionSummary[]> {
+    return noteVersions
+      .filter((v) => v.note_id === noteId)
+      .sort((a, b) => b._seq - a._seq)
+      .map(stripVersion);
+  },
+  async loadNoteVersion(versionId: string): Promise<Version> {
+    const v = noteVersions.find((x) => x.id === versionId);
+    if (!v) throw new Error(`note version ${versionId} not found`);
+    const { _seq: _s, ...rest } = v;
+    return { ...rest };
+  },
+  async pruneNoteVersions(retentionDays: number | null): Promise<number> {
+    if (retentionDays === null) return 0;
+    const cutoff = new Date(
+      Date.now() - retentionDays * 24 * 60 * 60 * 1000
+    ).toISOString();
+    let removed = 0;
+    for (let i = noteVersions.length - 1; i >= 0; i--) {
+      if (noteVersions[i].created < cutoff) {
+        noteVersions.splice(i, 1);
+        removed++;
+      }
+    }
+    return removed;
   },
   async listSignatures(): Promise<SignatureRecord[]> {
     return loadMockSignatures();

@@ -64,6 +64,10 @@ tokio = { version = "1.52.3", features = ["time", "sync"] }
 # can peek inside with any unzip tool.
 zip = "8.6.0"
 
+# Single-blob DEFLATE for compacted note-history markdown snapshots
+# (see src/history/mod.rs). Markdown compresses ~4×.
+flate2 = "1"
+
 [profile.release]
 panic = "abort"
 codegen-units = 1

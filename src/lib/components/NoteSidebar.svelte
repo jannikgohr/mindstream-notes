@@ -2,6 +2,7 @@
   import { CalendarPlus, Edit3, Folder, Paperclip, Tag } from '@lucide/svelte';
   import FavouriteStar from './FavouriteStar.svelte';
   import TagsSection from '$lib/components/TagsSection.svelte';
+  import NoteHistorySection from '$lib/components/NoteHistorySection.svelte';
   import {
     fetchDrawingAsset,
     loadNote,
@@ -52,7 +53,6 @@
   );
 
   // TODO: Render author once notes expose ownership/user attribution metadata.
-  // TODO: Render saved versions once note version history is modeled.
 
   let noteBody = $state('');
   let noteText = $state('');
@@ -344,7 +344,7 @@
           <h4
             class="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground"
           >
-            {tUi('metadata.history')}
+            {tUi('metadata.dates')}
           </h4>
           <dl class="border-y border-border">
             <div
@@ -433,6 +433,12 @@
         <div class="mt-5 border-t border-border pt-5">
           <TagsSection noteId={note.id} />
         </div>
+
+        {#if note.note_kind === 'markdown'}
+          <div class="mt-5 border-t border-border pt-5">
+            <NoteHistorySection noteId={note.id} />
+          </div>
+        {/if}
       </section>
     {:else}
       <p

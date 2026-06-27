@@ -356,6 +356,49 @@ const MIGRATIONS: &[Migration] = &[
             ALTER TABLE notes ADD COLUMN pdf_text TEXT;
         "#,
     },
+    Migration {
+        to: 14,
+        // Local, automatic note edit history (see src/history/mod.rs). Each
+        // row is a point-in-time snapshot of a note's rendered markdown,
+        // DEFLATE-compressed. Deliberately LOCAL/derived: no etebase columns,
+        // never synced — every device keeps its own timeline, and a *restore*
+        // converges across devices because it's applied as a normal CRDT edit
+        // (not by replaying an old yrs_state, which would be a no-op).
+        //
+        //   action       why this version exists: 'created' | 'edited' |
+        //                'reverted' (room for 'imported' | 'manual' later).
+        //   label        reserved for future user-named bookmarks/tags.
+        //   ref_version_id / ref_created
+        //                for a 'reverted' version, the restore target's id and
+        //                timestamp; the timestamp is denormalised so the
+        //                "Reverted to {date}" label still renders after the
+        //                target itself ages out of retention.
+        //   words_added / words_removed
+        //                magnitude vs the previous snapshot (computed at
+        //                capture with `similar`), for the "+N / −M words" label.
+        //   body         DEFLATE-compressed UTF-8 markdown snapshot.
+        //   size         uncompressed markdown byte length (for stats/quota).
+        //
+        // `yrs_state` snapshots for non-markdown kinds are a future migration;
+        // markdown is canonical content here (payload schema v2 `body`).
+        sql: r#"
+            CREATE TABLE note_versions (
+                id             TEXT PRIMARY KEY,
+                note_id        TEXT NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+                created        TEXT NOT NULL,
+                note_kind      TEXT NOT NULL,
+                action         TEXT NOT NULL DEFAULT 'edited',
+                label          TEXT,
+                ref_version_id TEXT,
+                ref_created    TEXT,
+                words_added    INTEGER NOT NULL DEFAULT 0,
+                words_removed  INTEGER NOT NULL DEFAULT 0,
+                body           BLOB NOT NULL,
+                size           INTEGER NOT NULL
+            );
+            CREATE INDEX idx_note_versions_note ON note_versions(note_id, created DESC);
+        "#,
+    },
 ];
 
 pub fn run(conn: &mut Connection) -> AppResult<()> {
