@@ -202,6 +202,10 @@
     "history.empty": "No earlier versions yet. Edits are saved automatically as you work.",
     "history.restore": "Restore this version",
     "history.restoreUnavailable": "Open the note to restore a version.",
+    "history.restoreConfirmTitle": "Restore this version?",
+    "history.restoreConfirmBody": "This replaces the note's current content with this version. You can undo it by restoring the snapshot taken just before.",
+    "history.restoreConfirmAction": "Restore",
+    "history.restoreConfirmCancel": "Cancel",
     "history.action.created": "Note created",
     "history.action.edited": "Edited",
     "history.action.reverted": "Reverted to version from {date}",
@@ -582,6 +586,7 @@
     "data.database": { "label": "Database" },
     "data.trash": { "label": "Trash" },
     "data.history": { "label": "Edit history" },
+    "data.historyAdvanced": { "label": "Advanced" },
     "data.backup": { "label": "Backup, import & export" },
     "language.locale": { "label": "Language" },
     "about.version": { "label": "Version" }
@@ -666,6 +671,14 @@
     "data.historyRetentionDays": {
       "label": "Keep edit history for",
       "description": "How long automatically-saved note versions are kept on this device. History is local and never synced."
+    },
+    "data.historyIdleSeconds": {
+      "label": "Snapshot after a pause",
+      "description": "How long after you stop typing a history version is saved."
+    },
+    "data.historyTokenThreshold": {
+      "label": "Snapshot after this many changes",
+      "description": "Save a version once this many visible characters change since the last one, so long editing sessions without a pause still get versions."
     },
     "data.emptyTrash": { "label": "Empty trash now" },
     "data.backupNow": { "label": "Back up now" },

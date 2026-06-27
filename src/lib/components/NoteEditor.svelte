@@ -170,13 +170,21 @@
   let yDocUpdateHandler: (() => void) | null = null;
 
   // --- Note history (local, automatic versioning) ---------------------------
-  // A version is captured after the user pauses editing (idle debounce) and on
-  // teardown, so the timeline tracks meaningful pauses rather than keystrokes.
-  // The backend dedups identical snapshots and promotes the first to 'created'.
-  const HISTORY_IDLE_MS = 3 * 60 * 1000;
+  // A version is captured after the user pauses editing (idle debounce), once
+  // enough visible characters change since the last snapshot (so long
+  // uninterrupted sessions still get versions), and on teardown. Both the idle
+  // delay and the character threshold are user-configurable (advanced data
+  // settings); these are the fallback defaults. The backend dedups identical
+  // snapshots and promotes the first to 'created'.
+  const HISTORY_IDLE_DEFAULT_S = 180;
+  const HISTORY_TOKENS_DEFAULT = 200;
   let historyTimer: ReturnType<typeof setTimeout> | null = null;
   /** Edits have landed since the last capture (so teardown should flush one). */
   let historyDirty = false;
+  /** Non-whitespace char count of the last captured snapshot (threshold base). */
+  let lastSnapshotTokens = 0;
+  /** Throttle for the (serializing) token-threshold check. */
+  let lastTokenCheck = 0;
   let unregisterHistory: (() => void) | null = null;
   // Gate yDoc 'update' events from triggering saves until we've finished
   // hydrating the doc + binding the editor. Otherwise the initial template
@@ -754,26 +762,67 @@
     await captureHistoryVersion('edited');
   }
 
-  /** Debounced capture of a history version once the user pauses editing. */
+  function nonWhitespaceCount(s: string): number {
+    return s.replace(/\s+/g, '').length;
+  }
+
+  /** Configured idle delay (ms) before an auto-snapshot; default 3 min. */
+  function historyIdleMs(): number {
+    const v = Number(getSettingValue('data.historyIdleSeconds'));
+    return (Number.isFinite(v) && v > 0 ? v : HISTORY_IDLE_DEFAULT_S) * 1000;
+  }
+
+  /** Configured number of changed visible chars that forces a snapshot. */
+  function historyTokenThreshold(): number {
+    const v = Number(getSettingValue('data.historyTokenThreshold'));
+    return Number.isFinite(v) && v > 0 ? v : HISTORY_TOKENS_DEFAULT;
+  }
+
+  /**
+   * Called on every editor change. Arms the idle-debounce snapshot, and — so a
+   * long uninterrupted session still gets versions — snapshots immediately once
+   * the configured number of visible characters has changed since the last one.
+   * The (serializing) token check is throttled so fast typing doesn't re-render
+   * markdown on every keystroke.
+   */
   function scheduleHistoryCapture() {
     if (isTrashed) return;
     historyDirty = true;
+
+    const now = Date.now();
+    if (getMarkdown && now - lastTokenCheck >= 750) {
+      lastTokenCheck = now;
+      const tokens = nonWhitespaceCount(getMarkdown());
+      if (Math.abs(tokens - lastSnapshotTokens) >= historyTokenThreshold()) {
+        if (historyTimer) {
+          clearTimeout(historyTimer);
+          historyTimer = null;
+        }
+        void captureHistoryVersion('edited');
+        return;
+      }
+    }
+
     if (historyTimer) clearTimeout(historyTimer);
     historyTimer = setTimeout(() => {
       historyTimer = null;
       void captureHistoryVersion('edited');
-    }, HISTORY_IDLE_MS);
+    }, historyIdleMs());
   }
 
   async function captureHistoryVersion(action: VersionAction) {
     if (!getMarkdown) return;
     historyDirty = false;
+    const markdown = getMarkdown();
+    // Reset the token-threshold baseline to the snapshot we're taking (even on
+    // a no-op dedup the content is now the baseline, so we don't re-fire).
+    lastSnapshotTokens = nonWhitespaceCount(markdown);
     try {
       const created = await captureNoteVersion(
         noteId,
         'markdown',
         action,
-        getMarkdown()
+        markdown
       );
       // Only nudge the sidebar when a version was actually written (a no-op
       // dedup returns null and shouldn't trigger a re-list).

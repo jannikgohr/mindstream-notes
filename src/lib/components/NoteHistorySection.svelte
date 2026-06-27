@@ -15,6 +15,7 @@
     type VersionSummary
   } from '$lib/api';
   import MarkdownDiff from '$lib/components/MarkdownDiff.svelte';
+  import { confirm } from '$lib/components/confirm-dialog.svelte';
   import { formatNoteDateTime } from '$lib/date-time';
   import { tUi } from '$lib/settings/i18n.svelte';
   import {
@@ -122,6 +123,13 @@
     const target = detail?.summary;
     const bridge = getNoteHistory(noteId);
     if (!target || !bridge || restoring) return;
+    const ok = await confirm({
+      title: tUi('history.restoreConfirmTitle'),
+      message: tUi('history.restoreConfirmBody'),
+      confirmLabel: tUi('history.restoreConfirmAction'),
+      cancelLabel: tUi('history.restoreConfirmCancel')
+    });
+    if (!ok) return;
     restoring = true;
     try {
       const full = await loadNoteVersion(target.id);

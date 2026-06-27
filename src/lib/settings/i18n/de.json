@@ -102,6 +102,10 @@
     "history.empty": "Noch keine früheren Versionen. Änderungen werden beim Arbeiten automatisch gespeichert.",
     "history.restore": "Diese Version wiederherstellen",
     "history.restoreUnavailable": "Öffne die Notiz, um eine Version wiederherzustellen.",
+    "history.restoreConfirmTitle": "Diese Version wiederherstellen?",
+    "history.restoreConfirmBody": "Der aktuelle Inhalt der Notiz wird durch diese Version ersetzt. Du kannst es rückgängig machen, indem du die unmittelbar zuvor erstellte Version wiederherstellst.",
+    "history.restoreConfirmAction": "Wiederherstellen",
+    "history.restoreConfirmCancel": "Abbrechen",
     "history.action.created": "Notiz erstellt",
     "history.action.edited": "Bearbeitet",
     "history.action.reverted": "Auf Version vom {date} zurückgesetzt",
@@ -573,6 +577,7 @@
     "data.database": { "label": "Datenbank" },
     "data.trash": { "label": "Papierkorb" },
     "data.history": { "label": "Bearbeitungsverlauf" },
+    "data.historyAdvanced": { "label": "Erweitert" },
     "data.backup": { "label": "Sicherung, Import & Export" },
     "language.locale": { "label": "Sprache" },
     "about.version": { "label": "Version" }
@@ -654,6 +659,14 @@
     "data.historyRetentionDays": {
       "label": "Bearbeitungsverlauf behalten für",
       "description": "Wie lange automatisch gespeicherte Notizversionen auf diesem Gerät aufbewahrt werden. Der Verlauf ist lokal und wird nie synchronisiert."
+    },
+    "data.historyIdleSeconds": {
+      "label": "Version nach einer Pause",
+      "description": "Wie lange nach dem Aufhören mit dem Tippen eine Verlaufsversion gespeichert wird."
+    },
+    "data.historyTokenThreshold": {
+      "label": "Version nach so vielen Änderungen",
+      "description": "Speichert eine Version, sobald so viele sichtbare Zeichen seit der letzten geändert wurden – damit auch lange Sitzungen ohne Pause Versionen erhalten."
     },
     "data.emptyTrash": { "label": "Papierkorb jetzt leeren" },
     "data.backupNow": { "label": "Jetzt sichern" },
