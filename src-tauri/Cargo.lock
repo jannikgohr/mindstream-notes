@@ -2619,6 +2619,7 @@ dependencies = [
  "keyring-core",
  "log",
  "ndk-context",
+ "regex",
  "reqwest 0.12.28",
  "rmp-serde",
  "rusqlite",

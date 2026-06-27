@@ -4,14 +4,13 @@
   import TagsSection from '$lib/components/TagsSection.svelte';
   import NoteHistorySection from '$lib/components/NoteHistorySection.svelte';
   import {
-    fetchDrawingAsset,
     loadNote,
+    noteWordCount,
     type Collection,
     type NoteSummary
   } from '$lib/api';
   import { noteKindIcon } from '$lib/components/note-kind-icon';
   import { formatNoteDateTime } from '$lib/date-time';
-  import { extractPdfText } from '$lib/pdf/extract-text';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { ui } from '$lib/state.svelte';
   import { setNoteFavourite, tree } from '$lib/stores/tree.svelte';
@@ -54,8 +53,11 @@
 
   // TODO: Render author once notes expose ownership/user attribution metadata.
 
+  // Body is loaded only for the link/attachment regexes; the word count comes
+  // from Rust (note_word_count) so it shares one definition with the History
+  // delta and never re-derives note content in JS.
   let noteBody = $state('');
-  let noteText = $state('');
+  let wordCount = $state(0);
   let contentLoading = $state(false);
   const showContentStats = $derived(
     note ? hasContentStats(note.note_kind) : false
@@ -70,7 +72,7 @@
       (!hasContentStats(note.note_kind) && !canHaveAttachments(note.note_kind))
     ) {
       noteBody = '';
-      noteText = '';
+      wordCount = 0;
       contentLoading = false;
       return;
     }
@@ -79,21 +81,21 @@
     const id = note.id;
     void note.modified;
     contentLoading = true;
-    loadNote(id)
-      .then(async (loaded) => {
-        const body = loaded.body ?? '';
-        const text =
-          loaded.note_kind === 'pdf' ? await pdfTextForMetadata(body) : body;
+    Promise.all([
+      noteWordCount(id),
+      loadNote(id).then((loaded) => loaded.body ?? '')
+    ])
+      .then(([words, body]) => {
         if (!cancelled && ui.activeNoteId === id) {
+          wordCount = words;
           noteBody = body;
-          noteText = text;
         }
       })
       .catch((err) => {
-        console.warn('[metadata] failed to load note content stats', err);
+        console.warn('[sidebar] failed to load note content stats', err);
         if (!cancelled && ui.activeNoteId === id) {
+          wordCount = 0;
           noteBody = '';
-          noteText = '';
         }
       })
       .finally(() => {
@@ -108,7 +110,7 @@
   });
 
   const contentStats = $derived.by(() =>
-    analyzeContent(noteBody, noteText, note?.note_kind ?? null)
+    analyzeContent(noteBody, wordCount, note?.note_kind ?? null)
   );
 
   function noteKindLabel(kind: string | null | undefined): string {
@@ -136,72 +138,20 @@
     return kind === 'markdown' || kind === 'freeform' || kind === 'pdf';
   }
 
-  async function pdfTextForMetadata(body: string): Promise<string> {
-    const assetId = pdfAssetIdFromBody(body);
-    if (!assetId) return '';
-    try {
-      const asset = await fetchDrawingAsset(assetId);
-      if (asset.mime_type !== 'application/pdf') return '';
-      return await extractPdfText(new Uint8Array(asset.bytes));
-    } catch (err) {
-      console.warn('[metadata] failed to extract PDF text', err);
-      return '';
-    }
-  }
-
-  function pdfAssetIdFromBody(body: string): string | null {
-    const trimmed = body.trim();
-    if (!trimmed) return null;
-    if (trimmed.startsWith('asset_')) return trimmed;
-    try {
-      const parsed = JSON.parse(trimmed) as { pdfAssetId?: unknown };
-      return typeof parsed.pdfAssetId === 'string' ? parsed.pdfAssetId : null;
-    } catch {
-      return null;
-    }
-  }
-
+  // `words` is the canonical count from Rust; links/attachments are still
+  // derived in JS from the body (the lookbehind link rule has no Rust regex
+  // equivalent yet). PDF notes only ever have attachments.
   function analyzeContent(
     body: string,
-    text: string,
+    words: number,
     kind: string | null | undefined
   ) {
-    const attachments = extractAssetIds(body).length;
-    if (kind === 'pdf') {
-      const words = countWords(text);
-      return {
-        words,
-        readMinutes: words === 0 ? 0 : Math.max(1, Math.ceil(words / 200)),
-        links: 0,
-        attachments
-      };
-    }
-
-    const plain = plainTextForStats(text);
-    const words = countWords(plain);
-    const links = countLinks(body);
     return {
       words,
       readMinutes: words === 0 ? 0 : Math.max(1, Math.ceil(words / 200)),
-      links,
-      attachments
+      links: kind === 'pdf' ? 0 : countLinks(body),
+      attachments: extractAssetIds(body).length
     };
-  }
-
-  function countWords(text: string): number {
-    return text.match(/[\p{L}\p{N}]+(?:['’_-][\p{L}\p{N}]+)*/gu)?.length ?? 0;
-  }
-
-  function plainTextForStats(body: string): string {
-    return body
-      .replace(/```[\s\S]*?```/g, ' ')
-      .replace(/`[^`]*`/g, ' ')
-      .replace(/!\[[^\]]*]\([^)]*\)/g, ' ')
-      .replace(/\[[^\]]*]\([^)]*\)/g, (match) => {
-        const label = match.match(/\[([^\]]*)]/)?.[1];
-        return label ?? ' ';
-      })
-      .replace(/[#>*_~|[\](){}:]/g, ' ');
   }
 
   function countLinks(body: string): number {

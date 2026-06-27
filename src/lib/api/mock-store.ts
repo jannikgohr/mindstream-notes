@@ -24,6 +24,11 @@ import type { SearchHit } from './search';
 import type { SaveSignatureInput, SignatureRecord } from './signatures';
 import type { Version, VersionAction, VersionSummary } from './history';
 import { mockSearchNotes } from './search-matcher';
+import {
+  countWords,
+  markdownToPlain,
+  wordTokens
+} from '$lib/content-stats/word-count';
 
 const collections: Collection[] = [];
 const notes = new Map<string, Note>();
@@ -61,8 +66,9 @@ function stripVersion(v: MockVersion): VersionSummary {
 }
 
 /**
- * Approximate word churn between two markdown snapshots (multiset diff). The
- * Rust side uses `similar`; this is close enough for the browser fallback.
+ * Approximate word churn between two markdown snapshots (multiset diff over the
+ * same plain-word tokens the Rust side counts). Close enough for the browser
+ * fallback; the real delta is computed in content_stats.rs.
  */
 function versionMagnitude(
   oldMd: string,
@@ -70,7 +76,7 @@ function versionMagnitude(
 ): { added: number; removed: number } {
   const counts = (s: string): Map<string, number> => {
     const m = new Map<string, number>();
-    for (const w of s.split(/\s+/).filter(Boolean)) {
+    for (const w of wordTokens(markdownToPlain(s))) {
       m.set(w, (m.get(w) ?? 0) + 1);
     }
     return m;
@@ -355,6 +361,14 @@ export const mockApi = {
   async pdfNoteNeedsText(noteId: string): Promise<boolean> {
     const n = notes.get(noteId);
     return n?.note_kind === 'pdf' && !pdfTexts.has(noteId);
+  },
+
+  // ---- Content stats ----
+  async noteWordCount(noteId: string): Promise<number> {
+    const n = notes.get(noteId);
+    if (!n) return 0;
+    if (n.note_kind === 'pdf') return countWords(pdfTexts.get(noteId) ?? '');
+    return countWords(markdownToPlain(n.body));
   },
 
   // ---- Note history ----

@@ -68,6 +68,10 @@ zip = "8.6.0"
 # (see src/history/mod.rs). Markdown compresses ~4×.
 flate2 = "1"
 
+# Markdown-noise stripping for the canonical word count (see
+# src/content_stats.rs), shared by the sidebar stat and the history delta.
+regex = "1"
+
 [profile.release]
 panic = "abort"
 codegen-units = 1

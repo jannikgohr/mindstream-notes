@@ -21,8 +21,8 @@ use flate2::write::DeflateEncoder;
 use flate2::Compression;
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
-use similar::{ChangeTag, TextDiff};
 
+use crate::content_stats::word_delta;
 use crate::db::Db;
 use crate::error::{AppError, AppResult};
 
@@ -69,24 +69,6 @@ fn decompress(bytes: &[u8]) -> AppResult<String> {
     let mut out = String::new();
     DeflateDecoder::new(bytes).read_to_string(&mut out)?;
     Ok(out)
-}
-
-/// Count word tokens inserted vs removed between two snapshots. Whitespace-only
-/// tokens don't count so the figure tracks real word churn.
-fn word_magnitude(old: &str, new: &str) -> (i64, i64) {
-    let diff = TextDiff::from_words(old, new);
-    let (mut added, mut removed) = (0i64, 0i64);
-    for change in diff.iter_all_changes() {
-        if change.value().trim().is_empty() {
-            continue;
-        }
-        match change.tag() {
-            ChangeTag::Insert => added += 1,
-            ChangeTag::Delete => removed += 1,
-            ChangeTag::Equal => {}
-        }
-    }
-    (added, removed)
 }
 
 fn row_to_summary(r: &Row<'_>) -> rusqlite::Result<VersionSummary> {
@@ -138,7 +120,7 @@ pub fn capture(
 
     // The first snapshot of a note is its creation point.
     let action = if latest.is_none() { "created" } else { action };
-    let (words_added, words_removed) = word_magnitude(&prev_md, markdown);
+    let (words_added, words_removed) = word_delta(&prev_md, markdown);
 
     // Denormalise the restore target's timestamp so the label outlives it.
     let ref_created: Option<String> = if action == "reverted" {
