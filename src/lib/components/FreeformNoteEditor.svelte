@@ -73,8 +73,7 @@
   } from '$lib/history/snapshot';
   import {
     readSceneFromYDoc,
-    replaceSceneInYDoc,
-    writeCurrentSceneToYDoc
+    replaceSceneInYDoc
   } from '$lib/freeform/excalidraw-yjs';
 
   interface Props {
@@ -348,8 +347,6 @@
         restoreSnapshot: (snapshot) => restoreFreeformSnapshot(snapshot),
         snapshotNow: () => snapshotHistoryNow()
       });
-
-      void captureHistoryVersion('edited');
     } catch (err) {
       loadError = err instanceof Error ? err.message : String(err);
       loading = false;
@@ -519,14 +516,6 @@
 
   function currentFreeformSnapshot(): string {
     if (!yDoc) return serializeYjsSnapshot('freeform', new Uint8Array());
-    if (excalidrawApi) {
-      capturingHistorySnapshot = true;
-      try {
-        writeCurrentSceneToYDoc(yDoc, excalidrawApi);
-      } finally {
-        capturingHistorySnapshot = false;
-      }
-    }
     return serializeYjsSnapshot('freeform', Y.encodeStateAsUpdate(yDoc));
   }
 
@@ -539,9 +528,14 @@
     if (parsed.bytes.byteLength > 0) {
       Y.applyUpdate(snapshotDoc, parsed.bytes);
     }
-    const snapshot = readSceneFromYDoc(snapshotDoc);
-    replaceSceneInYDoc(yDoc, snapshot);
-    snapshotDoc.destroy();
+    try {
+      const snapshot = readSceneFromYDoc(snapshotDoc);
+      capturingHistorySnapshot = true;
+      replaceSceneInYDoc(yDoc, snapshot);
+    } finally {
+      capturingHistorySnapshot = false;
+      snapshotDoc.destroy();
+    }
   }
 
   async function snapshotHistoryNow() {
@@ -549,6 +543,7 @@
       clearTimeout(historyTimer);
       historyTimer = null;
     }
+    if (!historyDirty) return;
     await captureHistoryVersion('edited');
   }
 
@@ -569,6 +564,7 @@
 
   async function captureHistoryVersion(action: VersionAction) {
     if (!yDoc) return;
+    if (action === 'edited' && !historyDirty) return;
     historyDirty = false;
     const snapshot = currentFreeformSnapshot();
     try {

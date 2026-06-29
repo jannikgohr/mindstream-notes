@@ -126,8 +126,20 @@ pub fn capture(
 
     // The first snapshot of a note is its creation point.
     let action = if latest.is_none() { "created" } else { action };
-    let (words_added, words_removed) = word_delta(&prev_md, markdown);
-    let (tokens_added, tokens_removed) = token_delta(&prev_md, markdown);
+    let (words_added, words_removed, tokens_added, tokens_removed) = if note_kind == "markdown" {
+        let (words_added, words_removed) = word_delta(&prev_md, markdown);
+        let (tokens_added, tokens_removed) = token_delta(&prev_md, markdown);
+        (words_added, words_removed, tokens_added, tokens_removed)
+    } else {
+        // Non-markdown snapshots are encoded binary payloads. Running the
+        // markdown word/char diff over a large base64 Yjs envelope can stall
+        // the app for seconds or minutes, so use a cheap size delta instead.
+        let prev_len = prev_md.len() as i64;
+        let next_len = markdown.len() as i64;
+        let tokens_added = (next_len - prev_len).max(0);
+        let tokens_removed = (prev_len - next_len).max(0);
+        (0, 0, tokens_added, tokens_removed)
+    };
 
     // Denormalise the restore target's timestamp so the label outlives it.
     let ref_created: Option<String> = if action == "reverted" {
@@ -366,6 +378,25 @@ mod tests {
         assert_eq!((v.words_added, v.words_removed), (0, 0));
         assert_eq!(v.tokens_added, 4); // four '*'
         assert_eq!(v.tokens_removed, 0);
+    }
+
+    #[test]
+    fn non_markdown_capture_uses_size_delta_without_text_diff() {
+        let db = open_memory_for_tests();
+        let note = make_note(&db);
+        let first = db
+            .with_conn(|c| capture(c, &note, "freeform", "edited", None, "abc"))
+            .unwrap()
+            .unwrap();
+        assert_eq!((first.words_added, first.words_removed), (0, 0));
+        assert_eq!((first.tokens_added, first.tokens_removed), (3, 0));
+
+        let second = db
+            .with_conn(|c| capture(c, &note, "freeform", "edited", None, "a"))
+            .unwrap()
+            .unwrap();
+        assert_eq!((second.words_added, second.words_removed), (0, 0));
+        assert_eq!((second.tokens_added, second.tokens_removed), (0, 2));
     }
 
     #[test]

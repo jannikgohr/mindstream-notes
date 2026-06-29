@@ -634,6 +634,7 @@
       clearTimeout(historyTimer);
       historyTimer = null;
     }
+    if (!historyDirty) return;
     await captureHistoryVersion('edited');
   }
 
@@ -654,6 +655,7 @@
 
   async function captureHistoryVersion(action: VersionAction) {
     if (!doc) return;
+    if (action === 'edited' && !historyDirty) return;
     historyDirty = false;
     try {
       const created = await captureNoteVersion(
@@ -674,8 +676,8 @@
 
   function applyDocumentMutations(updates: Uint8Array[]) {
     refreshFromDoc();
-    if (!restoringHistorySnapshot) scheduleHistoryCapture();
     if (updates.length > 0) {
+      if (!restoringHistorySnapshot) scheduleHistoryCapture();
       queueSaveUpdates(updates);
     }
     for (const update of updates) {
@@ -2648,7 +2650,6 @@
       restoreSnapshot: (snapshot) => restoreInkSnapshot(snapshot),
       snapshotNow: () => snapshotHistoryNow()
     });
-    void captureHistoryVersion('edited');
     const afterTickAt = performance.now();
     if (isAndroid()) {
       // Push the initial bounds BEFORE showing the overlay so Kotlin

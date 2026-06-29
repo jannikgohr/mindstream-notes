@@ -413,8 +413,17 @@ export const mockApi = {
     // First snapshot is the note's creation point.
     const effAction: VersionAction = latest ? action : 'created';
     const prev = latest?.body ?? '';
-    const { added, removed } = versionMagnitude(prev, markdown);
-    const tok = tokenMagnitude(prev, markdown);
+    const magnitude =
+      noteKind === 'markdown'
+        ? versionMagnitude(prev, markdown)
+        : { added: 0, removed: 0 };
+    const tok =
+      noteKind === 'markdown'
+        ? tokenMagnitude(prev, markdown)
+        : {
+            added: Math.max(0, markdown.length - prev.length),
+            removed: Math.max(0, prev.length - markdown.length)
+          };
     const ref_created =
       effAction === 'reverted' && refVersionId
         ? (noteVersions.find((v) => v.id === refVersionId)?.created ?? null)
@@ -428,8 +437,8 @@ export const mockApi = {
       label: null,
       ref_version_id: refVersionId,
       ref_created,
-      words_added: added,
-      words_removed: removed,
+      words_added: magnitude.added,
+      words_removed: magnitude.removed,
       tokens_added: tok.added,
       tokens_removed: tok.removed,
       size: markdown.length,

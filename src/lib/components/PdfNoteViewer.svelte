@@ -1207,6 +1207,7 @@
       clearTimeout(historyTimer);
       historyTimer = null;
     }
+    if (!historyDirty) return;
     await captureHistoryVersion('edited');
   }
 
@@ -1227,6 +1228,7 @@
 
   async function captureHistoryVersion(action: VersionAction) {
     if (!yDoc) return;
+    if (action === 'edited' && !historyDirty) return;
     historyDirty = false;
     try {
       const created = await captureNoteVersion(
@@ -2164,7 +2166,6 @@
         restoreSnapshot: (snapshot) => restorePdfSnapshot(snapshot),
         snapshotNow: () => snapshotHistoryNow()
       });
-      void captureHistoryVersion('edited');
       await tick();
       bumpRenderVersion();
 
