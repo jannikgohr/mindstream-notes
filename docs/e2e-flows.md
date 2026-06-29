@@ -20,12 +20,20 @@ categories that justify an end-to-end test rather than a unit test.
 
 The existing `e2e/` Playwright suite runs the SvelteKit SPA in
 **browser-fallback mode** (the in-memory mock store backs every API call), so
-it already covers the pure-UI journeys (app shell, search dialog, note/folder
-creation, source switching). The flows below need something the fallback
+it already covers the pure-UI journeys: app shell, search dialog, note/folder
+creation, source switching, the **note-history sidebar** (capture / restore /
+Undo, `note-history.spec.ts`), the **markdown editor round-trip** (create →
+edit → reopen, `editor-roundtrip.spec.ts`), and the **trash lifecycle** (trash
+→ restore → empty → single-item purge, `tree-lifecycle.spec.ts` +
+`tree-operations.spec.ts`). The flows below need something the fallback
 can't give: a real Rust backend, a real disk, a real network peer, or a real
 app restart. Implementing them means driving the **packaged Tauri app** (e.g.
 WebDriver via `tauri-driver` + a headless display, or a Tauri test harness),
 not just `vite preview`.
+
+Several P1/P2 flows below already have a **browser-fallback (T2) slice**
+landed — noted inline as "**T2 today:**" — with the real-backend half left as
+the T3/T4 work.
 
 Priority: **P1** = core, ship-blocking; **P2** = important; **P3** = nice to
 have.
@@ -46,6 +54,10 @@ The absolute core workflows. If one of these breaks, the app is broken.
   content survives.
 - **Proves:** the editor↔CRDT↔DB round-trip and that body/markdown
   serialisation is lossless.
+- **T2 today:** `editor-roundtrip.spec.ts` covers the create → edit (heading
+  input rule + body) → switch-away → reopen journey against the mock store,
+  proving markdown survives serialise → persist → reload. The real
+  `save_note` IPC + SQLite + the CRDT layer remain the T3 case.
 
 ### 1.2 Export the vault to disk (P1)
 
@@ -89,6 +101,11 @@ The absolute core workflows. If one of these breaks, the app is broken.
   gone.
 - **Proves:** the soft-delete lifecycle and that `trashed_at` is set/cleared
   on every path (see the `feedback_trashed_at_populated` invariant).
+- **T2 today:** `tree-lifecycle.spec.ts` (trash → restore → empty-trash) and
+  `tree-operations.spec.ts` (single-item "Delete permanently" purge) cover the
+  UI lifecycle against the mock store. The `trashed_at` column semantics, the
+  real `trash_note`/`restore`/`purge` IPC, and the startup retention sweep
+  (3.3) remain the T3 cases.
 
 ### 1.6 Ink / drawing note round-trip (P2)
 
