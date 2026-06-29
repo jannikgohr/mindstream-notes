@@ -208,6 +208,7 @@
     "history.restoreConfirmCancel": "Cancel",
     "history.restored": "Restored to an earlier version.",
     "history.undo": "Undo",
+    "history.undoDismiss": "Dismiss",
     "history.previewUnavailable": "Visual preview is not available for this note type yet. You can still restore this version.",
     "history.action.created": "Note created",
     "history.action.edited": "Edited",

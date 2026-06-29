@@ -44,6 +44,39 @@ export function noteHistoryEpoch(noteId: string): number {
   return epochs.get(noteId) ?? 0;
 }
 
+/** The payload needed to undo a just-applied restore: re-apply this body. */
+export interface RestoreUndo {
+  /** Pre-restore snapshot — markdown text or a base64 Yjs envelope. */
+  body: string;
+  /** The checkpoint version this body was captured as, if one was created. */
+  checkpointId: string | null;
+}
+
+/**
+ * Pending "undo the restore" affordance, keyed by note. Lives here rather than
+ * in the History panel's component state so it survives the panel remounting —
+ * a tree/sync refresh rebuilds `notesById` a few seconds after a restore's
+ * save, which would otherwise wipe a component-local banner mid-view. There's
+ * no timer: it persists until the user undoes it, closes it, starts another
+ * restore, or the app reloads. Reactive.
+ */
+const restoreUndos = new SvelteMap<string, RestoreUndo>();
+
+/** Reactive read of a note's pending restore-undo, or null if none. */
+export function noteRestoreUndo(noteId: string): RestoreUndo | null {
+  return restoreUndos.get(noteId) ?? null;
+}
+
+/** Arm the restore-undo affordance for `noteId`. */
+export function setRestoreUndo(noteId: string, undo: RestoreUndo): void {
+  restoreUndos.set(noteId, undo);
+}
+
+/** Clear a note's pending restore-undo (undone, dismissed, or consumed). */
+export function clearRestoreUndo(noteId: string): void {
+  restoreUndos.delete(noteId);
+}
+
 /** Signal that a version was just captured for `noteId`. */
 export function bumpNoteHistory(noteId: string): void {
   epochs.set(noteId, (epochs.get(noteId) ?? 0) + 1);

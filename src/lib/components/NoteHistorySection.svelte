@@ -5,7 +5,8 @@
     Pencil,
     RefreshCw,
     RotateCcw,
-    Undo2
+    Undo2,
+    X
   } from '@lucide/svelte';
   import {
     captureNoteVersion,
@@ -22,9 +23,12 @@
   import { isMobile } from '$lib/platform';
   import { tUi } from '$lib/settings/i18n.svelte';
   import {
+    clearRestoreUndo,
     getNoteHistory,
     noteHistoryEpoch,
-    registeredNotes
+    noteRestoreUndo,
+    registeredNotes,
+    setRestoreUndo
   } from '$lib/stores/note-history-bridge.svelte';
 
   interface Props {
@@ -176,7 +180,10 @@
         target.id
       );
       await refresh();
-      showUndo(preRestoreBody, checkpoint?.id ?? null);
+      setRestoreUndo(noteId, {
+        body: preRestoreBody,
+        checkpointId: checkpoint?.id ?? null
+      });
       return true;
     } catch (err) {
       console.error('[history] restore failed', err);
@@ -186,28 +193,12 @@
     }
   }
 
-  // One-shot "undo the restore" affordance. Re-applying the pre-restore body is
-  // itself a normal restore, so it's collab- and sync-safe like any other.
-  const UNDO_VISIBLE_MS = 12000;
-  let pendingUndo = $state<{
-    body: string;
-    checkpointId: string | null;
-  } | null>(null);
-  let undoTimer: ReturnType<typeof setTimeout> | null = null;
-
-  function showUndo(body: string, checkpointId: string | null) {
-    pendingUndo = { body, checkpointId };
-    if (undoTimer) clearTimeout(undoTimer);
-    undoTimer = setTimeout(dismissUndo, UNDO_VISIBLE_MS);
-  }
-
-  function dismissUndo() {
-    if (undoTimer) {
-      clearTimeout(undoTimer);
-      undoTimer = null;
-    }
-    pendingUndo = null;
-  }
+  // "Undo the restore" affordance. Kept in the per-note bridge store (not local
+  // state) so it survives the panel remounting — a tree/sync refresh rebuilds
+  // notesById a few seconds after a restore's save, which would otherwise wipe
+  // a component-local banner mid-view. No timer: it persists until the user
+  // undoes it, closes it, starts another restore, or the app reloads.
+  const pendingUndo = $derived(noteRestoreUndo(noteId));
 
   async function undoRestore() {
     const target = pendingUndo;
@@ -228,16 +219,9 @@
       console.error('[history] undo restore failed', err);
     } finally {
       restoring = false;
-      dismissUndo();
+      clearRestoreUndo(noteId);
     }
   }
-
-  // Drop the Undo affordance when the note changes or the panel unmounts.
-  $effect(() => {
-    void noteId;
-    dismissUndo();
-  });
-  $effect(() => () => dismissUndo());
 
   // Inline (mobile) restore — confirm first, since there are no modal buttons.
   async function restore() {
@@ -338,6 +322,15 @@
       >
         <Undo2 class="size-3.5" />
         {tUi('history.undo')}
+      </button>
+      <button
+        type="button"
+        class="shrink-0 rounded p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        onclick={() => clearRestoreUndo(noteId)}
+        aria-label={tUi('history.undoDismiss')}
+        title={tUi('history.undoDismiss')}
+      >
+        <X class="size-3.5" />
       </button>
     </div>
   {/if}

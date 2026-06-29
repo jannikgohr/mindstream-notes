@@ -108,6 +108,7 @@
     "history.restoreConfirmCancel": "Abbrechen",
     "history.restored": "Frühere Version wiederhergestellt.",
     "history.undo": "Rückgängig",
+    "history.undoDismiss": "Schließen",
     "history.previewUnavailable": "Für diesen Notiztyp ist noch keine visuelle Vorschau verfügbar. Du kannst diese Version trotzdem wiederherstellen.",
     "history.action.created": "Notiz erstellt",
     "history.action.edited": "Bearbeitet",
