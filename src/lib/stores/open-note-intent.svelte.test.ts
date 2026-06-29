@@ -20,11 +20,17 @@ describe('open-note intent bus', () => {
   });
 
   it('stops calling a handler after it unsubscribes', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const handler = vi.fn();
     const off = subscribeOpenNoteRequest(handler);
     off();
-    requestOpenNote('n1');
+    expect(requestOpenNote('n1')).toBe(false);
     expect(handler).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      '[open-note-intent] no subscriber; nothing handled request for',
+      'n1'
+    );
+    warn.mockRestore();
   });
 
   it('returns false and warns when nothing is subscribed', () => {

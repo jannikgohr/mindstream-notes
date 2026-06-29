@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const getSettingValueMock = vi.fn();
 const pruneNoteVersionsMock = vi.fn();
@@ -15,6 +15,11 @@ import { historyRetentionDays, pruneHistoryOnStartup } from './retention';
 beforeEach(() => {
   getSettingValueMock.mockReset();
   pruneNoteVersionsMock.mockReset().mockResolvedValue(0);
+  vi.spyOn(console, 'debug').mockImplementation(() => {});
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe('historyRetentionDays', () => {
@@ -47,5 +52,9 @@ describe('pruneHistoryOnStartup', () => {
     pruneNoteVersionsMock.mockRejectedValueOnce(new Error('boom'));
     await expect(pruneHistoryOnStartup()).resolves.toBeUndefined();
     expect(pruneNoteVersionsMock).toHaveBeenCalledWith(null);
+    expect(console.debug).toHaveBeenCalledWith(
+      '[history] retention sweep failed',
+      expect.any(Error)
+    );
   });
 });
