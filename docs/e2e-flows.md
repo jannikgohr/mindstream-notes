@@ -12,6 +12,12 @@ Those surfaces are the e2e backlog. This document **defines** the flows worth
 covering (it does not implement them). They are grouped by the three
 categories that justify an end-to-end test rather than a unit test.
 
+> **See also:** [e2e-strategy.md](e2e-strategy.md) for _how_ to run these
+> against a real Tauri backend and the mindstream-server stack (the test tiers,
+> the backend harness, the collaboration matrix), and
+> [known-limitations.md](known-limitations.md) for the by-design behaviours
+> several of these flows are meant to pin down.
+
 The existing `e2e/` Playwright suite runs the SvelteKit SPA in
 **browser-fallback mode** (the in-memory mock store backs every API call), so
 it already covers the pure-UI journeys (app shell, search dialog, note/folder
