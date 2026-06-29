@@ -16,7 +16,9 @@
    * from the 7.20/7.21 split), fall back to a message rather than break.
    */
   import { onDestroy, onMount } from 'svelte';
+  import { Info } from '@lucide/svelte';
   import { Crepe } from '@milkdown/crepe';
+  import { editorViewCtx } from '@milkdown/kit/core';
   import { $prose as proseFactory } from '@milkdown/kit/utils';
   import { callCommand } from '@milkdown/kit/utils';
   import { Plugin, PluginKey } from '@milkdown/kit/prose/state';
@@ -37,6 +39,8 @@
   let host = $state<HTMLDivElement | null>(null);
   let crepe: Crepe | null = null;
   let failed = $state(false);
+  // True once we've confirmed the two versions produced no changes.
+  let identical = $state(false);
 
   /**
    * Reads the changeset the diff plugin computed (old editor doc → current) and
@@ -102,6 +106,14 @@
       instance.editor.action(
         callCommand(startDiffReviewCmd.key as never, newMarkdown)
       );
+      // After the command runs, inspect the computed changeset so we can tell
+      // the user when the two versions are identical.
+      instance.editor.action((ctx) => {
+        const view = ctx.get(editorViewCtx);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const ds = diffPluginKey.getState(view.state) as any;
+        identical = !ds || !ds.changes || ds.changes.length === 0;
+      });
     } catch (err) {
       console.error('[history] diff render failed', err);
       failed = true;
@@ -114,11 +126,22 @@
   });
 </script>
 
-{#if failed}
-  <p class="p-4 text-sm text-muted-foreground">{tUi('history.diffFailed')}</p>
-{/if}
-<div
-  bind:this={host}
-  class="milkdown-diff h-full overflow-y-auto"
-  class:hidden={failed}
-></div>
+<div class="flex h-full flex-col">
+  {#if failed}
+    <p class="p-4 text-sm text-muted-foreground">{tUi('history.diffFailed')}</p>
+  {/if}
+  {#if identical && !failed}
+    <div
+      class="mb-2 flex items-center gap-2 rounded-md border border-border bg-muted/50 px-3 py-2 text-xs text-muted-foreground"
+      role="status"
+    >
+      <Info class="size-4 shrink-0 text-primary" aria-hidden="true" />
+      <span class="leading-4">{tUi('history.diff.identical')}</span>
+    </div>
+  {/if}
+  <div
+    bind:this={host}
+    class="milkdown-diff min-h-0 flex-1 overflow-y-auto"
+    class:hidden={failed}
+  ></div>
+</div>
