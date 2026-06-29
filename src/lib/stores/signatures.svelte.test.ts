@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PdfSignatureSnapshot } from '$lib/pdf/types';
+import * as mod from './signatures.svelte';
 
 const {
   loadReusableSignatures,
@@ -17,9 +18,6 @@ vi.mock('$lib/pdf/signature-storage', () => ({
   deleteReusableSignature
 }));
 
-type Mod = typeof import('./signatures.svelte');
-let mod: Mod;
-
 const sig = (id: string): PdfSignatureSnapshot => ({
   id,
   width: 10,
@@ -27,12 +25,12 @@ const sig = (id: string): PdfSignatureSnapshot => ({
   strokes: [{ id: 's', color: '#000', width: 1, points: [] }]
 });
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeEach(() => {
+  mod.signatureLibrary.signatures = [];
+  mod.signatureLibrary.loaded = false;
   loadReusableSignatures.mockReset().mockResolvedValue([sig('a')]);
   saveReusableSignature.mockReset().mockResolvedValue(undefined);
   deleteReusableSignature.mockReset().mockResolvedValue(undefined);
-  mod = await import('./signatures.svelte');
 });
 
 describe('ensureSignaturesLoaded', () => {

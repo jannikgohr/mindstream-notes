@@ -35,6 +35,7 @@ const YJS_ELEMENTS_KEY = 'excalidraw:elements';
 const YJS_FILES_KEY = 'excalidraw:files';
 const LOCAL_ORIGIN = 'excalidraw-local';
 const MIGRATION_ORIGIN = 'excalidraw-migration';
+const HISTORY_RESTORE_ORIGIN = 'excalidraw-history-restore';
 const WRITE_THROTTLE_MS = 180;
 
 // Scene-level Excalidraw settings that all collaborators should see.
@@ -261,6 +262,47 @@ function writeSceneToYDoc(
       fMap.delete(id);
     }
   }, LOCAL_ORIGIN);
+}
+
+export function writeCurrentSceneToYDoc(
+  yDoc: Y.Doc,
+  api: ExcalidrawImperativeAPI
+): void {
+  writeSceneToYDoc(
+    yDoc,
+    api.getSceneElements(),
+    api.getAppState(),
+    api.getFiles()
+  );
+}
+
+export function replaceSceneInYDoc(
+  yDoc: Y.Doc,
+  snapshot: ExcalidrawSceneSnapshot
+): void {
+  const meta = metaMap(yDoc);
+  const eMap = elementsMap(yDoc);
+  const fMap = filesMap(yDoc);
+
+  yDoc.transact(() => {
+    for (const key of Array.from(meta.keys())) meta.delete(key);
+    for (const key of Array.from(eMap.keys())) eMap.delete(key);
+    for (const key of Array.from(fMap.keys())) fMap.delete(key);
+
+    meta.set('version', 2);
+    meta.set(
+      'elementOrder',
+      snapshot.elements.map((element) => element.id)
+    );
+    meta.set('appState', cloneJson(snapshot.appState));
+
+    for (const element of snapshot.elements) {
+      eMap.set(element.id, cloneJson(element));
+    }
+    for (const [id, file] of Object.entries(snapshot.files)) {
+      fMap.set(id, cloneJson(file));
+    }
+  }, HISTORY_RESTORE_ORIGIN);
 }
 
 export function bindExcalidrawToLocalYDoc({

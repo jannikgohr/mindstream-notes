@@ -11,6 +11,8 @@ export * from './core';
 export * from './notes';
 export * from './search';
 export * from './pdf-text';
+export * from './history';
+export * from './content-stats';
 export * from './assets';
 export * from './collections';
 export * from './drawing';

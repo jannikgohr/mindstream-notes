@@ -234,18 +234,37 @@
                 ? sec.settings.filter((s) => isVisible(s) && settingMatches(s))
                 : []}
               {#if visibleSettings.length > 0}
-                <div class="mt-5">
-                  <h3
-                    class="border-b border-border pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
-                  >
-                    {tLabel('sections', sec.id)}
-                  </h3>
-                  <div class="divide-y divide-border">
-                    {#each visibleSettings as s (s.id)}
-                      <SettingControl setting={s} searchQuery={query} />
-                    {/each}
+                {#if sec.advanced && !lowerQuery}
+                  <details class="group mt-5">
+                    <summary
+                      class="flex cursor-pointer list-none items-center gap-1 border-b border-border pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground"
+                    >
+                      <span
+                        class="transition-transform group-open:rotate-90"
+                        aria-hidden="true">›</span
+                      >
+                      {tLabel('sections', sec.id)}
+                    </summary>
+                    <div class="divide-y divide-border">
+                      {#each visibleSettings as s (s.id)}
+                        <SettingControl setting={s} searchQuery={query} />
+                      {/each}
+                    </div>
+                  </details>
+                {:else}
+                  <div class="mt-5">
+                    <h3
+                      class="border-b border-border pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+                    >
+                      {tLabel('sections', sec.id)}
+                    </h3>
+                    <div class="divide-y divide-border">
+                      {#each visibleSettings as s (s.id)}
+                        <SettingControl setting={s} searchQuery={query} />
+                      {/each}
+                    </div>
                   </div>
-                </div>
+                {/if}
               {/if}
             {/each}
           {/if}

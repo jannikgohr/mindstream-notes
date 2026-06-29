@@ -30,6 +30,7 @@ tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+base64 = "0.22"
 log = "0.4"
 urlencoding = "2"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
@@ -63,6 +64,14 @@ tokio = { version = "1.52.3", features = ["time", "sync"] }
 # on — SQLite DBs compress 3-5×, and the standard format means users
 # can peek inside with any unzip tool.
 zip = "8.6.0"
+
+# Single-blob DEFLATE for compacted note-history markdown snapshots
+# (see src/history/mod.rs). Markdown compresses ~4×.
+flate2 = "1"
+
+# Markdown-noise stripping for the canonical word count (see
+# src/content_stats.rs), shared by the sidebar stat and the history delta.
+regex = "1"
 
 [profile.release]
 panic = "abort"

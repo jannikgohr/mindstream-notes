@@ -70,9 +70,9 @@
     "favourite.add": "Zu Favoriten hinzufügen",
     "favourite.remove": "Aus Favoriten entfernen",
 
+    "noteSidebar.title": "Details",
+    "noteSidebar.open": "Notizdetails anzeigen",
     "metadata.organization": "Organisation",
-    "metadata.title": "Metadaten",
-    "metadata.open": "Notizmetadaten anzeigen",
     "metadata.folder": "Ordner",
     "metadata.folder.root": "Stamm",
     "metadata.type": "Typ",
@@ -82,7 +82,7 @@
     "metadata.type.pdf": "PDF-Notiz",
     "metadata.type.unknown": "Unbekannte Notiz",
     "metadata.type.unknownNamed": "{kind}-Notiz",
-    "metadata.history": "Verlauf",
+    "metadata.dates": "Daten",
     "metadata.created": "Erstellt",
     "metadata.modified": "Geändert",
     "metadata.content": "Inhalt",
@@ -94,6 +94,45 @@
     "metadata.attachments.one": "{count} Datei",
     "metadata.attachments.other": "{count} Dateien",
     "metadata.noNote": "Keine Notiz ausgewählt.",
+
+    "history.title": "Verlauf",
+    "history.refresh": "Verlauf aktualisieren",
+    "history.back": "Zurück",
+    "history.loading": "Wird geladen…",
+    "history.empty": "Noch keine früheren Versionen. Änderungen werden beim Arbeiten automatisch gespeichert.",
+    "history.showAll": "Alle anzeigen ({count})",
+    "history.showLess": "Weniger anzeigen",
+    "history.restore": "Diese Version wiederherstellen",
+    "history.restoreUnavailable": "Öffne die Notiz, um eine Version wiederherzustellen.",
+    "history.restoreConfirmTitle": "Diese Version wiederherstellen?",
+    "history.restoreConfirmBody": "Der aktuelle Inhalt der Notiz wird durch diese Version ersetzt. Du kannst es rückgängig machen, indem du die unmittelbar zuvor erstellte Version wiederherstellst.",
+    "history.restoreConfirmAction": "Wiederherstellen",
+    "history.restoreConfirmCancel": "Abbrechen",
+    "history.collabRestoreTitle": "Wiederherstellen, während andere bearbeiten?",
+    "history.collabRestoreBody": "Andere bearbeiten diese Notiz gerade live. Beim Wiederherstellen wird der gemeinsame Inhalt für alle ersetzt – deine aktuelle Version wird vorher im Verlauf gesichert. Fortfahren?",
+    "history.restored": "Frühere Version wiederhergestellt.",
+    "history.undo": "Rückgängig",
+    "history.undoDismiss": "Schließen",
+    "history.previewUnavailable": "Für diesen Notiztyp ist noch keine visuelle Vorschau verfügbar. Du kannst diese Version trotzdem wiederherstellen.",
+    "history.action.created": "Notiz erstellt",
+    "history.action.edited": "Bearbeitet",
+    "history.action.reverted": "Auf Version vom {date} zurückgesetzt",
+    "history.action.revertedGeneric": "Frühere Version wiederhergestellt",
+    "history.magnitude": "+{added} / −{removed} Wörter",
+    "history.magnitudeTokens": "+{added} / −{removed} Tokens",
+    "history.magnitudeMinor": "Leerraum",
+    "history.magnitudeChanged": "Geändert",
+    "history.diff.added": "hinzugefügt",
+    "history.diff.removed": "entfernt",
+    "history.diff.legend": "Legende zur Differenz",
+    "history.diff.legendInsertion": "Grün = Einfügung",
+    "history.diff.legendDeletion": "Rot = Löschung",
+    "history.diff.identical": "Keine Unterschiede zur aktuellen Notiz.",
+    "history.diffFailed": "Die visuelle Differenz für diese Version konnte nicht dargestellt werden.",
+    "history.modal.title": "Notizverlauf",
+    "history.modal.currentTab": "Aktuelle Notiz",
+    "history.modal.diffTab": "Differenz",
+    "history.modal.oldTab": "Version vom {date}",
 
     "tags.label": "Tags",
     "tags.add": "Hinzufügen",
@@ -554,6 +593,8 @@
     "hotkeys.list": { "label": "Tastenkürzel" },
     "data.database": { "label": "Datenbank" },
     "data.trash": { "label": "Papierkorb" },
+    "data.history": { "label": "Bearbeitungsverlauf" },
+    "data.historyAdvanced": { "label": "Erweitert" },
     "data.backup": { "label": "Sicherung, Import & Export" },
     "language.locale": { "label": "Sprache" },
     "about.version": { "label": "Version" }
@@ -632,6 +673,18 @@
     "editor.autoSaveDebounce": { "label": "Auto-Speichern-Verzögerung" },
     "data.useTrash": { "label": "Papierkorb verwenden" },
     "data.trashRetentionDays": { "label": "Papierkorb-Aufbewahrung" },
+    "data.historyRetentionDays": {
+      "label": "Bearbeitungsverlauf behalten für",
+      "description": "Wie lange automatisch gespeicherte Notizversionen auf diesem Gerät aufbewahrt werden. Der Verlauf ist lokal und wird nie synchronisiert."
+    },
+    "data.historyIdleSeconds": {
+      "label": "Version nach einer Pause",
+      "description": "Wie lange nach dem Aufhören mit dem Tippen eine Verlaufsversion gespeichert wird."
+    },
+    "data.historyTokenThreshold": {
+      "label": "Version nach so vielen Änderungen",
+      "description": "Speichert eine Version, sobald so viele sichtbare Zeichen seit der letzten geändert wurden – damit auch lange Sitzungen ohne Pause Versionen erhalten."
+    },
     "data.emptyTrash": { "label": "Papierkorb jetzt leeren" },
     "data.backupNow": { "label": "Jetzt sichern" },
     "data.restoreBackup": {
@@ -673,6 +726,11 @@
     "editor.ink.pageBackground.clear": "Leer",
     "editor.ink.pageBackground.points": "Punkte",
     "editor.ink.pageBackground.lines": "Linien",
-    "editor.ink.pageBackground.grid": "Raster"
+    "editor.ink.pageBackground.grid": "Raster",
+    "data.historyRetentionDays.7": "7 Tage",
+    "data.historyRetentionDays.30": "30 Tage",
+    "data.historyRetentionDays.90": "90 Tage",
+    "data.historyRetentionDays.365": "1 Jahr",
+    "data.historyRetentionDays.forever": "Für immer"
   }
 }

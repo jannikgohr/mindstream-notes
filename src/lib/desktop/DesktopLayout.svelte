@@ -19,7 +19,7 @@
   } from 'dockview-core';
   import TopBar from './DesktopTopBar.svelte';
   import LazyFileExplorer from '$lib/components/LazyFileExplorer.svelte';
-  import LazyMetadataPanel from '$lib/components/LazyMetadataPanel.svelte';
+  import LazyNoteSidebar from '$lib/components/LazyNoteSidebar.svelte';
   import NoteKindRenderer from '$lib/components/NoteKindRenderer.svelte';
   import ResizeHandle from '$lib/components/ResizeHandle.svelte';
   import LazySettingsDialog from '$lib/settings/LazySettingsDialog.svelte';
@@ -38,6 +38,7 @@
   import { clearSavedLayout, loadSavedLayout, saveLayout } from '$lib/api';
   import { sanitizeDockBlob } from '$lib/desktop/dock-layout-restore';
   import { startPdfSearchIndexing } from '$lib/pdf/search-index-backfill';
+  import { pruneHistoryOnStartup } from '$lib/history/retention';
   import { listen } from '$lib/api/events';
   import {
     setActiveNote,
@@ -258,6 +259,8 @@
     // Backfill PDF search text for any un-indexed PDFs (synced-in / pre-feature)
     // in the background so their content becomes searchable without opening them.
     startPdfSearchIndexing();
+    // Sweep note history past the user's retention window.
+    void pruneHistoryOnStartup();
   }
 
   function pickInitialNote(): string | null {
@@ -652,7 +655,17 @@
   }
 
   onMount(() => {
-    void tick().then(setupDockview);
+    // Load the tree independently of the dockview bootstrap. The two used to
+    // be coupled (loadTree lived inside setupDockview), so any failure or
+    // early-return in the UI setup — e.g. a flaky `import('dockview-core')`
+    // during a Vite dev rebuild — left the sidebar stuck on "Loading…"
+    // forever. Data loading must not be hostage to UI bootstrap.
+    void loadTree();
+    // setupDockview awaits the same tree (idempotent if already loaded) before
+    // restoring panels. Surface any rejection instead of letting `void` eat it.
+    void tick()
+      .then(setupDockview)
+      .catch((err) => console.error('[layout] setupDockview failed', err));
     const onResize = () => {};
     window.addEventListener('resize', onResize);
     // Wikilink clicks (inside an editor) and any other intent source
@@ -867,7 +880,7 @@
         class="shrink-0 border-l border-border"
         style="width: {ui.rightSidebarWidth}px;"
       >
-        <LazyMetadataPanel />
+        <LazyNoteSidebar />
       </div>
     {/if}
   </div>

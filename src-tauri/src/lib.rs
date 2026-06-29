@@ -15,12 +15,14 @@ pub mod assets;
 pub mod auth;
 pub mod backup;
 pub mod collections;
+pub mod content_stats;
 pub mod data;
 pub mod db;
 #[cfg(desktop)]
 pub mod desktop_settings;
 pub mod drawing;
 pub mod error;
+pub mod history;
 pub mod hotkeys;
 pub mod i18n;
 pub mod notes;
@@ -324,6 +326,14 @@ pub fn run() {
             pdf_text::set_pdf_text,
             pdf_text::pdf_notes_missing_text,
             pdf_text::pdf_note_needs_text,
+            // Note history (local, automatic versioning)
+            history::capture_note_version,
+            history::capture_current_note_version,
+            history::list_note_versions,
+            history::load_note_version,
+            history::prune_note_versions,
+            // Content stats (canonical word count, from DB content)
+            content_stats::note_word_count,
             // Assets (freeform drawing attachments)
             assets::upload_drawing_asset,
             assets::fetch_drawing_asset,

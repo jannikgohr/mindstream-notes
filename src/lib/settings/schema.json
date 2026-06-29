@@ -443,6 +443,43 @@
               "actionId": "import-notes"
             }
           ]
+        },
+        {
+          "id": "data.history",
+          "settings": [
+            {
+              "id": "data.historyRetentionDays",
+              "scope": "V",
+              "type": "select",
+              "default": "90",
+              "options": ["7", "30", "90", "365", "forever"]
+            }
+          ]
+        },
+        {
+          "id": "data.historyAdvanced",
+          "advanced": true,
+          "settings": [
+            {
+              "id": "data.historyIdleSeconds",
+              "scope": "V",
+              "type": "slider",
+              "default": 180,
+              "min": 30,
+              "max": 600,
+              "step": 30,
+              "unit": "s"
+            },
+            {
+              "id": "data.historyTokenThreshold",
+              "scope": "V",
+              "type": "slider",
+              "default": 200,
+              "min": 50,
+              "max": 2000,
+              "step": 50
+            }
+          ]
         }
       ]
     },

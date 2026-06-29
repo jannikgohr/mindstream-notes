@@ -266,3 +266,138 @@ describe('mock-store signatures', () => {
     expect(list.map((s) => s.id)).toEqual(['sig2']);
   });
 });
+
+describe('mock-store note history', () => {
+  async function freshNote(): Promise<string> {
+    const note = await mockApi.createNote({
+      title: 'History note',
+      parent_collection_id: null,
+      note_kind: 'markdown'
+    });
+    return note.id;
+  }
+
+  it('promotes the first version to created and dedups unchanged content', async () => {
+    const id = await freshNote();
+    const first = await mockApi.captureNoteVersion(
+      id,
+      'markdown',
+      'edited',
+      'hello world',
+      null
+    );
+    expect(first?.action).toBe('created');
+    expect(first?.words_added).toBe(2);
+
+    const dup = await mockApi.captureNoteVersion(
+      id,
+      'markdown',
+      'edited',
+      'hello world',
+      null
+    );
+    expect(dup).toBeNull();
+    expect((await mockApi.listNoteVersions(id)).length).toBe(1);
+  });
+
+  it('records magnitude and lists newest first', async () => {
+    const id = await freshNote();
+    await mockApi.captureNoteVersion(
+      id,
+      'markdown',
+      'edited',
+      'alpha beta',
+      null
+    );
+    const v2 = await mockApi.captureNoteVersion(
+      id,
+      'markdown',
+      'edited',
+      'alpha gamma delta',
+      null
+    );
+    expect(v2?.words_added).toBe(2); // gamma, delta
+    expect(v2?.words_removed).toBe(1); // beta
+    const list = await mockApi.listNoteVersions(id);
+    expect(list[0].id).toBe(v2?.id); // newest first
+    expect(list).toHaveLength(2);
+  });
+
+  it('falls back to a token delta for word-neutral edits', async () => {
+    const id = await freshNote();
+    await mockApi.captureNoteVersion(
+      id,
+      'markdown',
+      'edited',
+      'hello world',
+      null
+    );
+    const v = await mockApi.captureNoteVersion(
+      id,
+      'markdown',
+      'edited',
+      '**hello** world',
+      null
+    );
+    expect(v?.words_added).toBe(0);
+    expect(v?.words_removed).toBe(0);
+    expect(v?.tokens_added).toBe(4); // four '*'
+    expect(v?.tokens_removed).toBe(0);
+  });
+
+  it('captures the saved state for non-markdown notes', async () => {
+    const note = await mockApi.createNote({
+      title: 'Canvas',
+      parent_collection_id: null,
+      note_kind: 'freeform'
+    });
+    await mockApi.saveNote({ id: note.id, yrs_state: [1, 2, 3] });
+
+    const version = await mockApi.captureCurrentNoteVersion(
+      note.id,
+      'edited',
+      null
+    );
+    expect(version?.note_kind).toBe('freeform');
+    expect(version?.words_added).toBe(0);
+    expect(version?.tokens_added).toBeGreaterThan(0);
+
+    const loaded = await mockApi.loadNoteVersion(version!.id);
+    expect(JSON.parse(loaded.body)).toMatchObject({
+      marker: 'mindstream-history-snapshot',
+      noteKind: 'freeform',
+      payloadKind: 'yjs-update'
+    });
+  });
+
+  it('loads a version body and denormalises a revert target', async () => {
+    const id = await freshNote();
+    const target = await mockApi.captureNoteVersion(
+      id,
+      'markdown',
+      'edited',
+      'original text',
+      null
+    );
+    await mockApi.captureNoteVersion(
+      id,
+      'markdown',
+      'edited',
+      'changed text',
+      null
+    );
+    const loaded = await mockApi.loadNoteVersion(target!.id);
+    expect(loaded.body).toBe('original text');
+
+    const reverted = await mockApi.captureNoteVersion(
+      id,
+      'markdown',
+      'reverted',
+      'original text',
+      target!.id
+    );
+    expect(reverted?.action).toBe('reverted');
+    expect(reverted?.ref_version_id).toBe(target!.id);
+    expect(reverted?.ref_created).toBe(target!.created);
+  });
+});

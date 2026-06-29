@@ -39,7 +39,9 @@
     saveNote as apiSaveNote,
     TRASH_ID,
     noteRoomInfo,
-    onSessionChange
+    onSessionChange,
+    captureCurrentNoteVersion,
+    type VersionAction
   } from '$lib/api';
   import { tree } from '$lib/stores/tree.svelte';
   import {
@@ -61,6 +63,18 @@
     unregisterEditor,
     type EditorListener
   } from '$lib/hotkeys/bus.svelte';
+  import {
+    bumpNoteHistory,
+    registerNoteHistory
+  } from '$lib/stores/note-history-bridge.svelte';
+  import {
+    parseHistorySnapshot,
+    serializeYjsSnapshot
+  } from '$lib/history/snapshot';
+  import {
+    readSceneFromYDoc,
+    replaceSceneInYDoc
+  } from '$lib/freeform/excalidraw-yjs';
 
   interface Props {
     noteId: string;
@@ -69,6 +83,7 @@
 
   /** Debounce window for save scheduling — same as NoteEditor. */
   const SAVE_DEBOUNCE_MS = 800;
+  const HISTORY_IDLE_DEFAULT_S = 180;
 
   /** Mount point for the React island. dockview gives us the full panel;
    *  the island fills it via `position: absolute; inset: 0`. */
@@ -85,6 +100,16 @@
   let collabConfigured = $state(false);
 
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
+  let historyTimer: ReturnType<typeof setTimeout> | null = null;
+  let historyDirty = false;
+  // Excalidraw bumps element version nonces when it re-imports a scene on
+  // mount, which flushes a benign LOCAL_ORIGIN write to the Y.Doc. Without a
+  // gate that churn marks the note dirty and snapshots a "no-edit" version on
+  // the next close/remount. A real edit is always preceded by a pointer or key
+  // interaction on the canvas, so only arm history capture once that happens.
+  let canvasInteracted = false;
+  let capturingHistorySnapshot = false;
+  let unregisterHistory: (() => void) | null = null;
   let savingState = $state<'idle' | 'pending' | 'saving' | 'saved' | 'error'>(
     'idle'
   );
@@ -265,6 +290,10 @@
       yDocUpdateHandler = () => {
         if (!saveReady) return;
         scheduleSave();
+        // Skip mount-time normalization churn — only genuine edits (preceded
+        // by a canvas interaction) belong in history.
+        if (!capturingHistorySnapshot && canvasInteracted)
+          scheduleHistoryCapture();
       };
       localYDoc.on('update', yDocUpdateHandler);
       saveReady = true;
@@ -321,6 +350,12 @@
         };
         registerEditor(editorListener);
       }
+
+      unregisterHistory = registerNoteHistory(noteId, {
+        currentSnapshot: () => currentFreeformSnapshot(),
+        restoreSnapshot: (snapshot) => restoreFreeformSnapshot(snapshot),
+        snapshotNow: () => snapshotHistoryNow()
+      });
     } catch (err) {
       loadError = err instanceof Error ? err.message : String(err);
       loading = false;
@@ -338,6 +373,23 @@
     const onFocusIn = () => registerEditor(listener);
     mountEl.addEventListener('focusin', onFocusIn);
     return () => mountEl?.removeEventListener('focusin', onFocusIn);
+  });
+
+  // Arm history capture on the first real interaction with the canvas, so the
+  // mount-time scene-normalization write never snapshots a no-edit version.
+  // Capture phase so we see the event before Excalidraw can stop it.
+  $effect(() => {
+    if (!mountEl) return;
+    const el = mountEl;
+    const onInteract = () => {
+      canvasInteracted = true;
+    };
+    el.addEventListener('pointerdown', onInteract, true);
+    el.addEventListener('keydown', onInteract, true);
+    return () => {
+      el.removeEventListener('pointerdown', onInteract, true);
+      el.removeEventListener('keydown', onInteract, true);
+    };
   });
 
   // Re-render the island whenever any prop Excalidraw cares about flips —
@@ -434,6 +486,13 @@
 
   onDestroy(() => {
     if (saveTimer) clearTimeout(saveTimer);
+    if (historyTimer) {
+      clearTimeout(historyTimer);
+      historyTimer = null;
+    }
+    if (historyDirty) void captureHistoryVersion('edited');
+    unregisterHistory?.();
+    unregisterHistory = null;
     if (editorListener) {
       unregisterEditor(editorListener);
       editorListener = null;
@@ -481,37 +540,99 @@
 
   // ---- Save (debounced) ----
 
+  function currentFreeformSnapshot(): string {
+    if (!yDoc) return serializeYjsSnapshot('freeform', new Uint8Array());
+    return serializeYjsSnapshot('freeform', Y.encodeStateAsUpdate(yDoc));
+  }
+
+  function restoreFreeformSnapshot(body: string): void {
+    if (!yDoc) return;
+    const parsed = parseHistorySnapshot(body, 'freeform');
+    if (parsed.noteKind !== 'freeform') return;
+
+    const snapshotDoc = new Y.Doc();
+    if (parsed.bytes.byteLength > 0) {
+      Y.applyUpdate(snapshotDoc, parsed.bytes);
+    }
+    try {
+      const snapshot = readSceneFromYDoc(snapshotDoc);
+      capturingHistorySnapshot = true;
+      replaceSceneInYDoc(yDoc, snapshot);
+    } finally {
+      capturingHistorySnapshot = false;
+      snapshotDoc.destroy();
+    }
+  }
+
+  async function snapshotHistoryNow() {
+    if (historyTimer) {
+      clearTimeout(historyTimer);
+      historyTimer = null;
+    }
+    if (!historyDirty) return;
+    await captureHistoryVersion('edited');
+  }
+
+  function historyIdleMs(): number {
+    const v = Number(getSettingValue('data.historyIdleSeconds'));
+    return (Number.isFinite(v) && v > 0 ? v : HISTORY_IDLE_DEFAULT_S) * 1000;
+  }
+
+  function scheduleHistoryCapture() {
+    if (isTrashed) return;
+    historyDirty = true;
+    if (historyTimer) clearTimeout(historyTimer);
+    historyTimer = setTimeout(() => {
+      historyTimer = null;
+      void captureHistoryVersion('edited');
+    }, historyIdleMs());
+  }
+
+  async function captureHistoryVersion(action: VersionAction) {
+    if (!yDoc) return;
+    if (action === 'edited' && !historyDirty) return;
+    historyDirty = false;
+    try {
+      const created = await captureCurrentNoteVersion(noteId, action);
+      if (created) bumpNoteHistory(noteId);
+    } catch (err) {
+      console.debug('[FreeformNoteEditor] history capture failed', err);
+    }
+  }
+
+  async function flushSave() {
+    if (saveTimer) {
+      clearTimeout(saveTimer);
+      saveTimer = null;
+    }
+    if (!yDoc || isTrashed) return;
+    try {
+      savingState = 'saving';
+      const yrsState = Array.from(Y.encodeStateAsUpdate(yDoc));
+      await apiSaveNote({
+        id: noteId,
+        body: '',
+        yrs_state: yrsState
+      });
+      const existing = tree.notesById[noteId];
+      if (existing) {
+        tree.notesById[noteId] = {
+          ...existing,
+          modified: new Date().toISOString()
+        };
+      }
+      savingState = 'saved';
+    } catch (err) {
+      savingState = 'error';
+      console.error('[FreeformNoteEditor] save failed', err);
+    }
+  }
+
   function scheduleSave() {
     if (isTrashed) return;
     savingState = 'pending';
     if (saveTimer) clearTimeout(saveTimer);
-    saveTimer = setTimeout(async () => {
-      try {
-        savingState = 'saving';
-        const yrsState = yDoc
-          ? Array.from(Y.encodeStateAsUpdate(yDoc))
-          : undefined;
-        // body stays empty for freeform notes — there's no markdown
-        // snapshot to render server-side. Future: OCR text could land
-        // here for full-text search.
-        await apiSaveNote({
-          id: noteId,
-          body: '',
-          yrs_state: yrsState
-        });
-        const existing = tree.notesById[noteId];
-        if (existing) {
-          tree.notesById[noteId] = {
-            ...existing,
-            modified: new Date().toISOString()
-          };
-        }
-        savingState = 'saved';
-      } catch (err) {
-        savingState = 'error';
-        console.error('[FreeformNoteEditor] save failed', err);
-      }
-    }, SAVE_DEBOUNCE_MS);
+    saveTimer = setTimeout(() => void flushSave(), SAVE_DEBOUNCE_MS);
   }
 
   function base64ToBytes(b64: string): Uint8Array {

@@ -129,6 +129,12 @@ export interface Section {
   id: string;
   /** Same semantics as Setting.platforms — hides the entire section. */
   platforms?: PlatformFilter[];
+  /**
+   * Render the section collapsed behind a disclosure (for advanced/rarely-
+   * touched tuning knobs). Auto-expands while a search query is active so
+   * matches stay visible.
+   */
+  advanced?: boolean;
   settings: Setting[];
 }
 

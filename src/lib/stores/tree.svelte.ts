@@ -37,8 +37,21 @@ export const tree = $state<TreeState>({
   ready: false
 });
 
+// Coalesces concurrent callers onto a single in-flight fetch. Startup fires
+// loadTree() from onMount and again from the dockview bootstrap; without this
+// they'd race two fetches whose assignments could interleave.
+let inFlight: Promise<void> | null = null;
+
 /** Reload the tree + summaries from Rust. Idempotent. */
-export async function loadTree(): Promise<void> {
+export function loadTree(): Promise<void> {
+  if (inFlight) return inFlight;
+  inFlight = doLoadTree().finally(() => {
+    inFlight = null;
+  });
+  return inFlight;
+}
+
+async function doLoadTree(): Promise<void> {
   tree.loading = true;
   tree.error = null;
   try {
@@ -46,11 +59,15 @@ export async function loadTree(): Promise<void> {
     tree.tree = result.tree;
     tree.notesById = result.notesById;
     tree.collectionsById = result.collectionsById;
-    tree.ready = true;
   } catch (err) {
     tree.error = err instanceof Error ? err.message : String(err);
     console.error('[tree] loadTree failed', err);
   } finally {
+    // `ready` means "a load attempt has completed", not "succeeded" — so a
+    // failed load drops out of the loading state and lets the UI surface
+    // tree.error instead of an eternal spinner. Callers that need success
+    // should check tree.error.
+    tree.ready = true;
     tree.loading = false;
   }
 }

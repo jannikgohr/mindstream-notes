@@ -1146,3 +1146,48 @@ body.dv-tab-dragging .freeform-canvas-host * {
 .fav-filled svg {
   fill: currentColor;
 }
+
+/*
+ * Note-history diff decorations (see MilkdownDiffView.svelte). The diff view
+ * renders the OLD snapshot read-only and overlays the changes against the
+ * current note: removed text struck through in red, added text shown inline
+ * in green. Colours use translucent tints so they read in light and dark.
+ */
+.milkdown-diff .diff-del {
+  text-decoration: line-through;
+  text-decoration-color: rgb(239 68 68 / 0.7);
+  color: rgb(239 68 68 / 0.9);
+  background: rgb(239 68 68 / 0.1);
+}
+.milkdown-diff .diff-ins {
+  color: rgb(16 185 129);
+  background: rgb(16 185 129 / 0.13);
+  border-radius: 0.125rem;
+  padding: 0 0.1em;
+}
+.milkdown-diff .diff-ins-block {
+  display: block;
+  margin: 0.5rem 0;
+  padding: 0.25rem;
+}
+.milkdown-diff .diff-ins-block table {
+  border-collapse: collapse;
+  table-layout: fixed;
+  width: 100%;
+}
+.milkdown-diff .diff-ins-block th,
+.milkdown-diff .diff-ins-block td {
+  border: 1px solid var(--border);
+  padding: 0.5rem 0.75rem;
+  vertical-align: top;
+}
+.milkdown-diff table.diff-del-block,
+.milkdown-diff .diff-del-block table {
+  background: rgb(239 68 68 / 0.08);
+}
+.milkdown-diff table.diff-del-block th,
+.milkdown-diff table.diff-del-block td,
+.milkdown-diff .diff-del-cell {
+  border-color: rgb(239 68 68 / 0.45);
+  background: rgb(239 68 68 / 0.08);
+}

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
   check,
@@ -48,6 +48,12 @@ beforeEach(() => {
   alert.mockReset().mockResolvedValue(undefined);
   confirm.mockReset().mockResolvedValue(false);
   relaunch.mockReset().mockResolvedValue(undefined);
+  vi.spyOn(console, 'error').mockImplementation(() => {});
+  vi.spyOn(console, 'info').mockImplementation(() => {});
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe('checkForAvailableUpdate', () => {
@@ -69,6 +75,10 @@ describe('checkForAvailableUpdate', () => {
   it('returns null and can alert when the check throws', async () => {
     check.mockRejectedValue(new Error('network'));
     expect(await checkForAvailableUpdate({ alertOnError: true })).toBeNull();
+    expect(console.error).toHaveBeenCalledWith(
+      '[updater] check failed',
+      expect.any(Error)
+    );
     expect(alert).toHaveBeenCalledOnce();
   });
 
@@ -83,6 +93,9 @@ describe('checkForAvailableUpdate', () => {
     const available = await checkForAvailableUpdate();
     expect(available?.version).toBe('2.0.0');
     expect(available?.currentVersion).toBeTruthy();
+    expect(console.info).toHaveBeenCalledWith(
+      '[updater] available: 2.0.0 (current 0.1.10)'
+    );
   });
 });
 
@@ -114,6 +127,12 @@ describe('installAvailableUpdate', () => {
     await installAvailableUpdate(available(dl));
 
     expect(dl).toHaveBeenCalledOnce();
+    expect(console.info).toHaveBeenCalledWith(
+      '[updater] downloading 100 bytes'
+    );
+    expect(console.info).toHaveBeenCalledWith(
+      '[updater] download finished, installing'
+    );
     expect(relaunch).not.toHaveBeenCalled();
   });
 
@@ -127,6 +146,10 @@ describe('installAvailableUpdate', () => {
     confirm.mockResolvedValueOnce(true);
     const dl = vi.fn().mockRejectedValue(new Error('install failed'));
     await installAvailableUpdate(available(dl));
+    expect(console.error).toHaveBeenCalledWith(
+      '[updater] install failed',
+      expect.any(Error)
+    );
     expect(alert).toHaveBeenCalledOnce();
     expect(relaunch).not.toHaveBeenCalled();
   });

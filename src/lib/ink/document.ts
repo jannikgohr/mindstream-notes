@@ -470,6 +470,17 @@ export class InkDocument {
     });
   }
 
+  /**
+   * Drop the local undo/redo stacks. Used after a history-version restore so
+   * the coarse "replace the whole page" restore doesn't sit on the per-stroke
+   * undo stack (a restore is reversed through history, not Ctrl+Z). Mirrors how
+   * `applyRemoteUpdate` clears history when a peer's edit lands.
+   */
+  resetUndoHistory(): void {
+    this.undo.length = 0;
+    this.redo.length = 0;
+  }
+
   private recordOp(op: UndoOp): void {
     this.undo.push(op);
     this.redo.length = 0;
