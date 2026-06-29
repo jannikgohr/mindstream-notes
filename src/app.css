@@ -1146,3 +1146,22 @@ body.dv-tab-dragging .freeform-canvas-host * {
 .fav-filled svg {
   fill: currentColor;
 }
+
+/*
+ * Note-history diff decorations (see MilkdownDiffView.svelte). The diff view
+ * renders the OLD snapshot read-only and overlays the changes against the
+ * current note: removed text struck through in red, added text shown inline
+ * in green. Colours use translucent tints so they read in light and dark.
+ */
+.milkdown-diff .diff-del {
+  text-decoration: line-through;
+  text-decoration-color: rgb(239 68 68 / 0.7);
+  color: rgb(239 68 68 / 0.9);
+  background: rgb(239 68 68 / 0.1);
+}
+.milkdown-diff .diff-ins {
+  color: rgb(16 185 129);
+  background: rgb(16 185 129 / 0.13);
+  border-radius: 0.125rem;
+  padding: 0 0.1em;
+}

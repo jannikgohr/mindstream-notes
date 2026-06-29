@@ -1,20 +1,31 @@
 <script lang="ts">
   /**
-   * Rendered-prose diff for the history modal, via `@milkdown/plugin-diff`.
+   * Rendered-prose diff for the history modal.
    *
-   * We render the OLD snapshot in a read-only Crepe, register the diff plugin,
-   * then run `startDiffReviewCmd(currentMarkdown)` so the plugin decorates the
-   * document with the changes between old → current (insertions/deletions). We
-   * deliberately expose no accept/reject affordances — this is a read-only view.
+   * `@milkdown/plugin-diff` is headless — it *computes* a changeset and exposes
+   * accept/reject commands, but renders nothing. So we drive it read-only:
+   *   1. load the OLD snapshot into a Crepe editor,
+   *   2. register the diff plugin + our own decoration plugin,
+   *   3. run `startDiffReviewCmd(currentMarkdown)` — which parses the current
+   *      note (at command time, when the editor context is ready) and stores
+   *      the changeset in the diff plugin's state,
+   *   4. our decoration plugin reads that state and draws deletions (struck
+   *      through) and insertions (the added text, highlighted) inline.
    *
-   * Defensive on purpose: the diff plugin (7.21.x) runs against this app's
-   * Milkdown 7.20.x, so if a runtime context mismatch surfaces we catch it and
-   * show a fallback message instead of breaking the modal.
+   * Defensive: if the diff pipeline throws (e.g. a Milkdown context mismatch
+   * from the 7.20/7.21 split), fall back to a message rather than break.
    */
   import { onDestroy, onMount } from 'svelte';
   import { Crepe } from '@milkdown/crepe';
-  import { diff, startDiffReviewCmd } from '@milkdown/plugin-diff';
+  import { $prose as proseFactory } from '@milkdown/kit/utils';
   import { callCommand } from '@milkdown/kit/utils';
+  import { Plugin, PluginKey } from '@milkdown/kit/prose/state';
+  import { Decoration, DecorationSet } from '@milkdown/kit/prose/view';
+  import {
+    diff,
+    diffPluginKey,
+    startDiffReviewCmd
+  } from '@milkdown/plugin-diff';
   import { tUi } from '$lib/settings/i18n.svelte';
 
   interface Props {
@@ -27,19 +38,67 @@
   let crepe: Crepe | null = null;
   let failed = $state(false);
 
+  /**
+   * Reads the changeset the diff plugin computed (old editor doc → current) and
+   * renders it: `diff-del` over removed ranges, a `diff-ins` widget carrying
+   * the added text at each insertion point. No ctx access — it only reads the
+   * diff plugin's state — so it's safe to build at setup time.
+   */
+  function diffDecorationsPlugin() {
+    return proseFactory(() => {
+      return new Plugin({
+        key: new PluginKey('history-diff-decorations'),
+        props: {
+          decorations(state) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const ds = diffPluginKey.getState(state) as any;
+            if (!ds) return null;
+            const decos: Decoration[] = [];
+            for (const ch of ds.changes) {
+              if (ch.toA > ch.fromA) {
+                decos.push(
+                  Decoration.inline(ch.fromA, ch.toA, { class: 'diff-del' })
+                );
+              }
+              if (ch.toB > ch.fromB) {
+                const text = ds.newDoc.textBetween(ch.fromB, ch.toB, ' ', ' ');
+                if (text) {
+                  decos.push(
+                    Decoration.widget(
+                      ch.toA,
+                      () => {
+                        const el = document.createElement('span');
+                        el.className = 'diff-ins';
+                        el.textContent = text;
+                        return el;
+                      },
+                      { side: 1 }
+                    )
+                  );
+                }
+              }
+            }
+            return DecorationSet.create(state.doc, decos);
+          }
+        }
+      });
+    });
+  }
+
   onMount(async () => {
     if (!host) return;
     try {
       const instance = new Crepe({ root: host, defaultValue: oldMarkdown });
-      // `diff` / the command key are typed against plugin-diff's nested
-      // @milkdown/ctx (7.21.x), which is a different type identity than the
-      // editor's (7.20.x). Vite's resolve.dedupe collapses them to one runtime
-      // instance, so these casts are sound — the nominal type split is the only
-      // thing TS sees.
+      // Casts: these are typed against plugin-diff's nested @milkdown/ctx
+      // (7.21), a different nominal type than the editor's (7.20). Vite's
+      // resolve.dedupe collapses them to one runtime instance.
       instance.editor.use(diff as never);
+      instance.editor.use(diffDecorationsPlugin() as never);
       crepe = instance;
       await instance.create();
       instance.setReadonly(true);
+      // Parses `newMarkdown` and stores the changeset in the diff plugin state,
+      // which the decoration plugin above then draws.
       instance.editor.action(
         callCommand(startDiffReviewCmd.key as never, newMarkdown)
       );
