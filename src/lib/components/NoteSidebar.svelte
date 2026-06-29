@@ -3,6 +3,7 @@
   import FavouriteStar from './FavouriteStar.svelte';
   import TagsSection from '$lib/components/TagsSection.svelte';
   import NoteHistorySection from '$lib/components/NoteHistorySection.svelte';
+  import PageOverlayScrollbar from '$lib/layout/page-overlay-scrollbar.svelte';
   import {
     loadNote,
     noteWordCount,
@@ -20,6 +21,7 @@
   const note = $derived(
     ui.activeNoteId ? tree.notesById[ui.activeNoteId] : null
   );
+  let metadataScroller = $state<HTMLDivElement | null>(null);
 
   /**
    * Walk parent_collection_id from leaf to root and return the chain in
@@ -214,8 +216,11 @@
   </dl>
 {/snippet}
 
-<aside class="flex h-full w-full min-w-0 flex-col bg-card text-sm">
-  <div class="flex-1 overflow-y-auto p-3">
+<aside class="relative flex h-full w-full min-w-0 flex-col bg-card text-sm">
+  <div
+    bind:this={metadataScroller}
+    class="scrollbar-none flex-1 overflow-y-auto p-3"
+  >
     {#if note}
       {@const NoteIcon = noteKindIcon(note.note_kind)}
       <section
@@ -398,4 +403,5 @@
       </p>
     {/if}
   </div>
+  <PageOverlayScrollbar target={metadataScroller} />
 </aside>
