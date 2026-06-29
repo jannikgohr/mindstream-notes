@@ -102,6 +102,12 @@
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
   let historyTimer: ReturnType<typeof setTimeout> | null = null;
   let historyDirty = false;
+  // Excalidraw bumps element version nonces when it re-imports a scene on
+  // mount, which flushes a benign LOCAL_ORIGIN write to the Y.Doc. Without a
+  // gate that churn marks the note dirty and snapshots a "no-edit" version on
+  // the next close/remount. A real edit is always preceded by a pointer or key
+  // interaction on the canvas, so only arm history capture once that happens.
+  let canvasInteracted = false;
   let capturingHistorySnapshot = false;
   let unregisterHistory: (() => void) | null = null;
   let savingState = $state<'idle' | 'pending' | 'saving' | 'saved' | 'error'>(
@@ -284,7 +290,10 @@
       yDocUpdateHandler = () => {
         if (!saveReady) return;
         scheduleSave();
-        if (!capturingHistorySnapshot) scheduleHistoryCapture();
+        // Skip mount-time normalization churn — only genuine edits (preceded
+        // by a canvas interaction) belong in history.
+        if (!capturingHistorySnapshot && canvasInteracted)
+          scheduleHistoryCapture();
       };
       localYDoc.on('update', yDocUpdateHandler);
       saveReady = true;
@@ -364,6 +373,23 @@
     const onFocusIn = () => registerEditor(listener);
     mountEl.addEventListener('focusin', onFocusIn);
     return () => mountEl?.removeEventListener('focusin', onFocusIn);
+  });
+
+  // Arm history capture on the first real interaction with the canvas, so the
+  // mount-time scene-normalization write never snapshots a no-edit version.
+  // Capture phase so we see the event before Excalidraw can stop it.
+  $effect(() => {
+    if (!mountEl) return;
+    const el = mountEl;
+    const onInteract = () => {
+      canvasInteracted = true;
+    };
+    el.addEventListener('pointerdown', onInteract, true);
+    el.addEventListener('keydown', onInteract, true);
+    return () => {
+      el.removeEventListener('pointerdown', onInteract, true);
+      el.removeEventListener('keydown', onInteract, true);
+    };
   });
 
   // Re-render the island whenever any prop Excalidraw cares about flips —
