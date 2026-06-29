@@ -1,0 +1,20 @@
+{
+  "comment": "Standalone tsconfig for the wdio (tauri-driver) real-app e2e tier. Not part of `pnpm check`; resolves once the opt-in @wdio/* devDependencies in README.md are installed.",
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "types": [
+      "node",
+      "@wdio/globals/types",
+      "@wdio/mocha-framework",
+      "expect-webdriverio"
+    ],
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true
+  },
+  "include": ["**/*.ts"]
+}

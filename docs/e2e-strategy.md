@@ -81,6 +81,10 @@ test harness lands:
 
 ## 3. The real-app harness (T3/T4)
 
+> Scaffolded in [`e2e-app/`](../e2e-app/) — wdio + tauri-driver config, the
+> gating/seam helpers, and faithful spec skeletons. The rest of this section is
+> what that harness implements (and what still needs finishing).
+
 Drive the **packaged Tauri binary** with `tauri-driver` (WebDriver) under a
 headless display (`xvfb` on Linux CI). Build it with `--features e2e-data-dir`
 so the test seams below work in a release binary.
@@ -187,8 +191,12 @@ Tracked here so the strategy isn't mistaken for working infrastructure:
 - [x] **Health gating landed** (§2.2): `e2e-backend/backend-health.spec.ts` +
       `playwright.backend.config.ts`, run via `pnpm test:e2e:backend`, gated on
       `MINDSTREAM_E2E_BACKEND`. This is the only T4-adjacent piece runnable today.
-- [ ] No `tauri-driver` harness wired yet (T3/T4 backlog per
-      [e2e-flows.md](e2e-flows.md)).
+- [~] **`tauri-driver` harness scaffolded** in [`e2e-app/`](../e2e-app/) (wdio
+  config, capability gating, the `MINDSTREAM_PROFILE_DIR` restart seam, and
+  faithful T3/T4 spec skeletons), run via `pnpm test:e2e:app`. Not yet
+  validated against a real binary, and still needs: two-client multiremote
+  (T4), a native-dialog stub, and `trashed_at` backdating — see
+  [`e2e-app/README.md`](../e2e-app/README.md).
 - [ ] No automated test-account provisioning against Etebase (§2.1).
 - [ ] No test hook to inject the server URL / a pre-authenticated session (§3).
 - [x] **`peerCount` bridge method landed** for the awareness-based editors

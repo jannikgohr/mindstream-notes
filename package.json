@@ -19,6 +19,7 @@
     "test:e2e": "svelte-kit sync && playwright test",
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:backend": "playwright test --config playwright.backend.config.ts",
+    "test:e2e:app": "wdio run e2e-app/wdio.conf.ts",
     "verify": "pnpm check && pnpm test && pnpm build",
     "verify:rust": "cd src-tauri && cargo test",
     "test:coverage:rust": "node src-tauri/scripts/rust-coverage.mjs",
