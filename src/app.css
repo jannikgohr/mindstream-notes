@@ -1165,3 +1165,19 @@ body.dv-tab-dragging .freeform-canvas-host * {
   border-radius: 0.125rem;
   padding: 0 0.1em;
 }
+.milkdown-diff .diff-ins-block {
+  display: block;
+  margin: 0.5rem 0;
+  padding: 0.25rem;
+}
+.milkdown-diff .diff-ins-block table {
+  border-collapse: collapse;
+  table-layout: fixed;
+  width: 100%;
+}
+.milkdown-diff .diff-ins-block th,
+.milkdown-diff .diff-ins-block td {
+  border: 1px solid var(--border);
+  padding: 0.5rem 0.75rem;
+  vertical-align: top;
+}

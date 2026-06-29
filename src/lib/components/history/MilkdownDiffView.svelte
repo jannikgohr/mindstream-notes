@@ -21,6 +21,7 @@
   import { editorViewCtx } from '@milkdown/kit/core';
   import { $prose as proseFactory } from '@milkdown/kit/utils';
   import { callCommand } from '@milkdown/kit/utils';
+  import { DOMSerializer, type Slice } from '@milkdown/kit/prose/model';
   import { Plugin, PluginKey } from '@milkdown/kit/prose/state';
   import { Decoration, DecorationSet } from '@milkdown/kit/prose/view';
   import {
@@ -42,11 +43,28 @@
   // True once we've confirmed the two versions produced no changes.
   let identical = $state(false);
 
+  function isClosedStructuralInsertion(slice: Slice) {
+    if (slice.openStart !== 0 || slice.openEnd !== 0) return false;
+
+    let hasStructuralNode = false;
+    slice.content.descendants((node) => {
+      if (node.isBlock || node.type.name.startsWith('table')) {
+        hasStructuralNode = true;
+        return false;
+      }
+
+      return undefined;
+    });
+
+    return hasStructuralNode;
+  }
+
   /**
    * Reads the changeset the diff plugin computed (old editor doc → current) and
-   * renders it: `diff-del` over removed ranges, a `diff-ins` widget carrying
-   * the added text at each insertion point. No ctx access — it only reads the
-   * diff plugin's state — so it's safe to build at setup time.
+   * renders it: `diff-del` over removed ranges, `diff-ins` inline widgets for
+   * text edits, and DOM-serialized structural widgets for inserted blocks such
+   * as whole tables. No ctx access — it only reads the diff plugin's state —
+   * so it's safe to build at setup time.
    */
   function diffDecorationsPlugin() {
     return proseFactory(() => {
@@ -65,12 +83,26 @@
                 );
               }
               if (ch.toB > ch.fromB) {
+                const slice = ds.newDoc.slice(ch.fromB, ch.toB);
+                const isStructural = isClosedStructuralInsertion(slice);
                 const text = ds.newDoc.textBetween(ch.fromB, ch.toB, ' ', ' ');
-                if (text) {
+                if (isStructural || text) {
                   decos.push(
                     Decoration.widget(
                       ch.toA,
                       () => {
+                        if (isStructural) {
+                          const el = document.createElement('div');
+                          el.className = 'diff-ins diff-ins-block';
+                          el.contentEditable = 'false';
+                          el.appendChild(
+                            DOMSerializer.fromSchema(
+                              state.schema
+                            ).serializeFragment(slice.content, { document })
+                          );
+                          return el;
+                        }
+
                         const el = document.createElement('span');
                         el.className = 'diff-ins';
                         el.textContent = text;
