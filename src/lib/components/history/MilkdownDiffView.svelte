@@ -4,13 +4,17 @@
    *
    * `@milkdown/plugin-diff` is headless — it *computes* a changeset and exposes
    * accept/reject commands, but renders nothing. So we drive it read-only:
-   *   1. load the OLD snapshot into a Crepe editor,
+   *   1. load the CURRENT note into a Crepe editor,
    *   2. register the diff plugin + our own decoration plugin,
-   *   3. run `startDiffReviewCmd(currentMarkdown)` — which parses the current
+   *   3. run `startDiffReviewCmd(snapshotMarkdown)` — which parses the selected
    *      note (at command time, when the editor context is ready) and stores
    *      the changeset in the diff plugin's state,
    *   4. our decoration plugin reads that state and draws deletions (struck
    *      through) and insertions (the added text, highlighted) inline.
+   *
+   * The direction is intentionally restore-oriented: red is content the restore
+   * would remove from the current note, green is content the selected snapshot
+   * would add.
    *
    * Defensive: if the diff pipeline throws (e.g. a Milkdown context mismatch
    * from the 7.20/7.21 split), fall back to a message rather than break.
@@ -32,10 +36,10 @@
   import { tUi } from '$lib/settings/i18n.svelte';
 
   interface Props {
-    oldMarkdown: string;
-    newMarkdown: string;
+    currentMarkdown: string;
+    snapshotMarkdown: string;
   }
-  let { oldMarkdown, newMarkdown }: Props = $props();
+  let { currentMarkdown, snapshotMarkdown }: Props = $props();
 
   let host = $state<HTMLDivElement | null>(null);
   let crepe: Crepe | null = null;
@@ -60,11 +64,11 @@
   }
 
   /**
-   * Reads the changeset the diff plugin computed (old editor doc → current) and
-   * renders it: `diff-del` over removed ranges, `diff-ins` inline widgets for
-   * text edits, and DOM-serialized structural widgets for inserted blocks such
-   * as whole tables. No ctx access — it only reads the diff plugin's state —
-   * so it's safe to build at setup time.
+   * Reads the changeset the diff plugin computed (current editor doc → selected
+   * snapshot) and renders it: `diff-del` over removed ranges, `diff-ins` inline
+   * widgets for text edits, and DOM-serialized structural widgets for inserted
+   * blocks such as whole tables. No ctx access — it only reads the diff plugin's
+   * state — so it's safe to build at setup time.
    */
   function diffDecorationsPlugin() {
     return proseFactory(() => {
@@ -150,7 +154,7 @@
   onMount(async () => {
     if (!host) return;
     try {
-      const instance = new Crepe({ root: host, defaultValue: oldMarkdown });
+      const instance = new Crepe({ root: host, defaultValue: currentMarkdown });
       // Casts: these are typed against plugin-diff's nested @milkdown/ctx
       // (7.21), a different nominal type than the editor's (7.20). Vite's
       // resolve.dedupe collapses them to one runtime instance.
@@ -159,10 +163,10 @@
       crepe = instance;
       await instance.create();
       instance.setReadonly(true);
-      // Parses `newMarkdown` and stores the changeset in the diff plugin state,
-      // which the decoration plugin above then draws.
+      // Parses `snapshotMarkdown` and stores the changeset in the diff plugin
+      // state, which the decoration plugin above then draws.
       instance.editor.action(
-        callCommand(startDiffReviewCmd.key as never, newMarkdown)
+        callCommand(startDiffReviewCmd.key as never, snapshotMarkdown)
       );
       // After the command runs, inspect the computed changeset so we can tell
       // the user when the two versions are identical.
@@ -187,6 +191,23 @@
 <div class="flex h-full flex-col">
   {#if failed}
     <p class="p-4 text-sm text-muted-foreground">{tUi('history.diffFailed')}</p>
+  {/if}
+  {#if !failed}
+    <div
+      class="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground"
+      aria-label={tUi('history.diff.legend')}
+    >
+      <span class="inline-flex items-center gap-1.5">
+        <span class="size-2 rounded-sm bg-emerald-500/70" aria-hidden="true"
+        ></span>
+        {tUi('history.diff.legendInsertion')}
+      </span>
+      <span class="inline-flex items-center gap-1.5">
+        <span class="size-2 rounded-sm bg-rose-500/70" aria-hidden="true"
+        ></span>
+        {tUi('history.diff.legendDeletion')}
+      </span>
+    </div>
   {/if}
   {#if identical && !failed}
     <div

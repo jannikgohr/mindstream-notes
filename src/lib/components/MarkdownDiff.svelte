@@ -3,14 +3,14 @@
   import { tUi } from '$lib/settings/i18n.svelte';
 
   interface Props {
-    /** The older snapshot (the selected version). */
-    oldText: string;
-    /** The current note content. */
-    newText: string;
+    /** Source text for the comparison. */
+    fromText: string;
+    /** Target text for the comparison. */
+    toText: string;
   }
-  let { oldText, newText }: Props = $props();
+  let { fromText, toText }: Props = $props();
 
-  const ops = $derived<DiffOp[]>(lineDiff(oldText, newText));
+  const ops = $derived<DiffOp[]>(lineDiff(fromText, toText));
   const stats = $derived(diffStats(ops));
 
   function symbol(type: DiffOp['type']): string {

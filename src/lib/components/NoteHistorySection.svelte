@@ -263,7 +263,7 @@
       </span>
     </div>
 
-    <MarkdownDiff oldText={d.body} newText={d.current} />
+    <MarkdownDiff fromText={d.current} toText={d.body} />
 
     <button
       type="button"

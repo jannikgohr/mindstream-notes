@@ -86,7 +86,10 @@
           </Tabs.Content>
           <Tabs.Content value="diff" class="h-full focus:outline-none">
             {#if tab === 'diff'}
-              <MilkdownDiffView {oldMarkdown} newMarkdown={currentMarkdown} />
+              <MilkdownDiffView
+                {currentMarkdown}
+                snapshotMarkdown={oldMarkdown}
+              />
             {/if}
           </Tabs.Content>
           <Tabs.Content value="old" class="h-full focus:outline-none">
