@@ -52,8 +52,10 @@
     onSessionChange,
     isTauri,
     TRASH_ID,
+    captureNoteVersion,
     type DrawingToolbarSettings,
-    type DrawingToolbarSettingsPayload
+    type DrawingToolbarSettingsPayload,
+    type VersionAction
   } from '$lib/api';
   import { isAndroid, isMobile } from '$lib/platform';
   import {
@@ -79,6 +81,14 @@
   } from '$lib/hotkeys/bus.svelte';
   import { tree } from '$lib/stores/tree.svelte';
   import { InkWebCollabProvider } from '$lib/sync/ink-web-collab-provider';
+  import {
+    bumpNoteHistory,
+    registerNoteHistory
+  } from '$lib/stores/note-history-bridge.svelte';
+  import {
+    parseHistorySnapshot,
+    serializeYjsSnapshot
+  } from '$lib/history/snapshot';
   import {
     DEFAULT_COLOR,
     DEFAULT_WIDTH,
@@ -187,6 +197,10 @@
   let fullscreenAcquired = false;
   let immersiveInkModeActive = false;
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
+  let historyTimer: ReturnType<typeof setTimeout> | null = null;
+  let historyDirty = false;
+  let restoringHistorySnapshot = false;
+  let unregisterHistory: (() => void) | null = null;
   let pendingState: number[] | null = null;
   let pendingSaveUpdates: Uint8Array[] = [];
   let saveDirty = false;
@@ -585,12 +599,82 @@
     scheduleSave();
   }
 
+  function currentInkSnapshot(): string {
+    return serializeYjsSnapshot('ink', doc?.encode() ?? new Uint8Array());
+  }
+
+  function restoreInkSnapshot(body: string): void {
+    const parsed = parseHistorySnapshot(body, 'ink');
+    if (parsed.noteKind !== 'ink' || !doc) return;
+
+    const snapshotDoc = InkDocument.fromBytes(parsed.bytes);
+    const snapshotStrokes = snapshotDoc.visibleStrokes().map((stroke) => ({
+      color: stroke.color,
+      width: stroke.width,
+      points: stroke.points
+    }));
+
+    const updates: Uint8Array[] = [];
+    const { update: clearUpdate } = doc.clearAll();
+    if (clearUpdate) updates.push(clearUpdate);
+    const { update: addUpdate } = doc.addStrokes(snapshotStrokes);
+    if (addUpdate) updates.push(addUpdate);
+    snapshotDoc.doc.destroy();
+
+    restoringHistorySnapshot = true;
+    try {
+      applyDocumentMutations(updates);
+    } finally {
+      restoringHistorySnapshot = false;
+    }
+  }
+
+  async function snapshotHistoryNow() {
+    if (historyTimer) {
+      clearTimeout(historyTimer);
+      historyTimer = null;
+    }
+    await captureHistoryVersion('edited');
+  }
+
+  function historyIdleMs(): number {
+    const v = Number(getSettingValue('data.historyIdleSeconds'));
+    return (Number.isFinite(v) && v > 0 ? v : 180) * 1000;
+  }
+
+  function scheduleHistoryCapture() {
+    if (isTrashed) return;
+    historyDirty = true;
+    if (historyTimer) clearTimeout(historyTimer);
+    historyTimer = setTimeout(() => {
+      historyTimer = null;
+      void captureHistoryVersion('edited');
+    }, historyIdleMs());
+  }
+
+  async function captureHistoryVersion(action: VersionAction) {
+    if (!doc) return;
+    historyDirty = false;
+    try {
+      const created = await captureNoteVersion(
+        noteId,
+        'ink',
+        action,
+        currentInkSnapshot()
+      );
+      if (created) bumpNoteHistory(noteId);
+    } catch (err) {
+      console.debug('[InkWebNoteEditor] history capture failed', err);
+    }
+  }
+
   function applyDocumentMutation(update: Uint8Array | null) {
     applyDocumentMutations(update ? [update] : []);
   }
 
   function applyDocumentMutations(updates: Uint8Array[]) {
     refreshFromDoc();
+    if (!restoringHistorySnapshot) scheduleHistoryCapture();
     if (updates.length > 0) {
       queueSaveUpdates(updates);
     }
@@ -2559,6 +2643,12 @@
       };
       registerEditor(editorListener);
     }
+    unregisterHistory = registerNoteHistory(noteId, {
+      currentSnapshot: () => currentInkSnapshot(),
+      restoreSnapshot: (snapshot) => restoreInkSnapshot(snapshot),
+      snapshotNow: () => snapshotHistoryNow()
+    });
+    void captureHistoryVersion('edited');
     const afterTickAt = performance.now();
     if (isAndroid()) {
       // Push the initial bounds BEFORE showing the overlay so Kotlin
@@ -2686,6 +2776,13 @@
     }
     flushQueuedEraserSamples();
     clearSaveTimer();
+    if (historyTimer) {
+      clearTimeout(historyTimer);
+      historyTimer = null;
+    }
+    if (historyDirty) void captureHistoryVersion('edited');
+    unregisterHistory?.();
+    unregisterHistory = null;
     void flushPendingState();
     if (editorListener) {
       unregisterEditor(editorListener);

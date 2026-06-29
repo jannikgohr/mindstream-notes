@@ -39,8 +39,10 @@
     noteRoomInfo,
     onSessionChange,
     pdfNoteNeedsText,
+    captureNoteVersion,
     saveNote as apiSaveNote,
-    setPdfText
+    setPdfText,
+    type VersionAction
   } from '$lib/api';
   import { listen } from '$lib/api/events';
   import { extractTextFromDocument } from '$lib/pdf/extract-text';
@@ -101,6 +103,14 @@
   } from '$lib/pdf/types';
   import { CollabProvider } from '$lib/sync/collab-provider';
   import { tree } from '$lib/stores/tree.svelte';
+  import {
+    bumpNoteHistory,
+    registerNoteHistory
+  } from '$lib/stores/note-history-bridge.svelte';
+  import {
+    parseHistorySnapshot,
+    serializeYjsSnapshot
+  } from '$lib/history/snapshot';
   import {
     clearNoteStatus,
     setNoteStatus
@@ -275,6 +285,10 @@
   > | null = null;
   let saveReady = false;
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
+  let historyTimer: ReturnType<typeof setTimeout> | null = null;
+  let historyDirty = false;
+  let restoringHistorySnapshot = false;
+  let unregisterHistory: (() => void) | null = null;
   let unsubSync: (() => void) | null = null;
   let unsubSession: (() => void) | null = null;
   let editorListener: EditorListener | null = null;
@@ -1125,6 +1139,108 @@
     focusMatch(activeMatchIndex - 1);
   }
 
+  function cloneYMapValue<T>(value: T): T {
+    return JSON.parse(JSON.stringify(value)) as T;
+  }
+
+  function replaceYMapValues<T>(target: Y.Map<T>, source: Y.Map<T>) {
+    const sourceKeys = new Set(source.keys());
+    for (const key of Array.from(target.keys())) {
+      if (!sourceKeys.has(key)) target.delete(key);
+    }
+    for (const [key, value] of source) {
+      target.set(key, cloneYMapValue(value));
+    }
+  }
+
+  function currentPdfSnapshot(): string {
+    return serializeYjsSnapshot(
+      'pdf',
+      yDoc ? Y.encodeStateAsUpdate(yDoc) : new Uint8Array()
+    );
+  }
+
+  function restorePdfSnapshot(body: string): void {
+    const parsed = parseHistorySnapshot(body, 'pdf');
+    if (
+      parsed.noteKind !== 'pdf' ||
+      !yDoc ||
+      !annotationsMap ||
+      !formValuesMap
+    ) {
+      return;
+    }
+    const targetAnnotations = annotationsMap;
+    const targetFormValues = formValuesMap;
+
+    const snapshotDoc = new Y.Doc();
+    try {
+      if (parsed.bytes.length > 0) {
+        Y.applyUpdate(snapshotDoc, parsed.bytes);
+      }
+      const snapshotAnnotations =
+        snapshotDoc.getMap<PdfAnnotation>(PDF_ANNOTATIONS_MAP);
+      const snapshotFormValues =
+        snapshotDoc.getMap<PdfFormValue>(PDF_FORM_VALUES_MAP);
+
+      restoringHistorySnapshot = true;
+      yDoc.transact(() => {
+        replaceYMapValues(targetAnnotations, snapshotAnnotations);
+        replaceYMapValues(targetFormValues, snapshotFormValues);
+      }, LOCAL_ORIGIN);
+      if (
+        selectedAnnotationId &&
+        !targetAnnotations.has(selectedAnnotationId)
+      ) {
+        selectedAnnotationId = null;
+      }
+      applyStoredFormValuesToPdfStorage();
+      bumpRenderVersion();
+    } finally {
+      restoringHistorySnapshot = false;
+      snapshotDoc.destroy();
+    }
+  }
+
+  async function snapshotHistoryNow() {
+    if (historyTimer) {
+      clearTimeout(historyTimer);
+      historyTimer = null;
+    }
+    await captureHistoryVersion('edited');
+  }
+
+  function historyIdleMs(): number {
+    const v = Number(getSettingValue('data.historyIdleSeconds'));
+    return (Number.isFinite(v) && v > 0 ? v : 180) * 1000;
+  }
+
+  function scheduleHistoryCapture() {
+    if (isTrashed) return;
+    historyDirty = true;
+    if (historyTimer) clearTimeout(historyTimer);
+    historyTimer = setTimeout(() => {
+      historyTimer = null;
+      void captureHistoryVersion('edited');
+    }, historyIdleMs());
+  }
+
+  async function captureHistoryVersion(action: VersionAction) {
+    if (!yDoc) return;
+    historyDirty = false;
+    try {
+      const created = await captureNoteVersion(
+        noteId,
+        'pdf',
+        action,
+        currentPdfSnapshot()
+      );
+      if (created) bumpNoteHistory(noteId);
+    } catch (err) {
+      console.debug('[PdfNoteViewer] history capture failed', err);
+    }
+  }
+
   function scheduleSave() {
     if (isTrashed || !saveReady) return;
     savingState = 'pending';
@@ -1953,6 +2069,7 @@
       syncAnnotationsFromYDoc();
       yDocUpdateHandler = () => {
         syncAnnotationsFromYDoc();
+        if (!restoringHistorySnapshot) scheduleHistoryCapture();
         scheduleSave();
       };
       localYDoc.on('update', yDocUpdateHandler);
@@ -2042,6 +2159,12 @@
       loading = false;
       savingState = 'saved';
       saveReady = true;
+      unregisterHistory = registerNoteHistory(noteId, {
+        currentSnapshot: () => currentPdfSnapshot(),
+        restoreSnapshot: (snapshot) => restorePdfSnapshot(snapshot),
+        snapshotNow: () => snapshotHistoryNow()
+      });
+      void captureHistoryVersion('edited');
       await tick();
       bumpRenderVersion();
 
@@ -2129,6 +2252,13 @@
     if (saveTimer) {
       void flushSave();
     }
+    if (historyTimer) {
+      clearTimeout(historyTimer);
+      historyTimer = null;
+    }
+    if (historyDirty) void captureHistoryVersion('edited');
+    unregisterHistory?.();
+    unregisterHistory = null;
     saveReady = false;
     if (searchDebounceTimer) {
       clearTimeout(searchDebounceTimer);

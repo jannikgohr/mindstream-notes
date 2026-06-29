@@ -24,6 +24,30 @@ describe('history snapshot codec', () => {
     }
   });
 
+  it('round-trips yjs update snapshots for ink notes', () => {
+    const bytes = new Uint8Array([4, 5, 6]);
+    const encoded = serializeYjsSnapshot('ink', bytes);
+    const parsed = parseHistorySnapshot(encoded, 'ink');
+
+    expect(parsed.noteKind).toBe('ink');
+    expect(parsed.payloadKind).toBe('yjs-update');
+    if (parsed.payloadKind === 'yjs-update') {
+      expect(Array.from(parsed.bytes)).toEqual([4, 5, 6]);
+    }
+  });
+
+  it('round-trips yjs update snapshots for PDF notes', () => {
+    const bytes = new Uint8Array([7, 8, 9]);
+    const encoded = serializeYjsSnapshot('pdf', bytes);
+    const parsed = parseHistorySnapshot(encoded, 'pdf');
+
+    expect(parsed.noteKind).toBe('pdf');
+    expect(parsed.payloadKind).toBe('yjs-update');
+    if (parsed.payloadKind === 'yjs-update') {
+      expect(Array.from(parsed.bytes)).toEqual([7, 8, 9]);
+    }
+  });
+
   it('treats invalid non-markdown payloads as empty snapshots', () => {
     const parsed = parseHistorySnapshot('not-json', 'freeform');
 
