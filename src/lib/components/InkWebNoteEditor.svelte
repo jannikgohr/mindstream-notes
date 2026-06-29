@@ -621,6 +621,10 @@
     if (addUpdate) updates.push(addUpdate);
     snapshotDoc.doc.destroy();
 
+    // A restore is reversed through history (the Undo affordance), not the
+    // per-stroke undo stack — so drop the ops the clear/add just recorded.
+    doc.resetUndoHistory();
+
     restoringHistorySnapshot = true;
     try {
       applyDocumentMutations(updates);

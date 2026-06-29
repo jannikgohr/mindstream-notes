@@ -74,6 +74,12 @@ export const ANNOTATION_COLORS = [
   '#111827'
 ];
 export const LOCAL_ORIGIN = Symbol('pdf-local-change');
+/**
+ * Origin tag for a history-version restore. Deliberately distinct from
+ * `LOCAL_ORIGIN` so the UndoManager (which tracks only `LOCAL_ORIGIN`) ignores
+ * it — a restore is reversed through history, not the per-edit Ctrl+Z stack.
+ */
+export const HISTORY_RESTORE_ORIGIN = Symbol('pdf-history-restore');
 export const RENDER_ROOT_MARGIN = '100% 0%';
 export const RENDER_DROP_DELAY_MS = 200;
 export const DRAW_KICKOFF_DELAY_MS = 80;

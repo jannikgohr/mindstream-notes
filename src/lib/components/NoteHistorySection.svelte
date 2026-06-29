@@ -144,9 +144,12 @@
   }
 
   /**
-   * Apply a restore: snapshot the current state (so the restore is undoable),
-   * replace the live doc with the target version via the editor bridge, and
-   * record a 'reverted' version pointing at the target. Returns whether it ran.
+   * Apply a restore, identically for every note kind:
+   *   1. capture the live pre-restore state as a version (so it's never lost),
+   *   2. replace the live doc with the target version via the editor bridge,
+   *   3. record a 'reverted' version pointing at the target,
+   *   4. offer a one-click Undo back to the pre-restore state.
+   * Returns whether it ran.
    */
   async function applyRestore(target: VersionSummary): Promise<boolean> {
     const bridge = getNoteHistory(noteId);
@@ -154,16 +157,16 @@
     restoring = true;
     try {
       const full = await loadNoteVersion(target.id);
-      if (noteKind === 'markdown') {
-        await captureNoteVersion(
-          noteId,
-          noteKind,
-          'edited',
-          await bridge.currentSnapshot()
-        );
-      } else {
-        await bridge.snapshotNow();
-      }
+      // The editor's snapshot is symmetrical with restoreSnapshot for every
+      // kind (markdown text, or the base64 Yjs envelope), so it doubles as the
+      // checkpoint body and the Undo payload.
+      const preRestoreBody = await bridge.currentSnapshot();
+      const checkpoint = await captureNoteVersion(
+        noteId,
+        noteKind,
+        'edited',
+        preRestoreBody
+      );
       await bridge.restoreSnapshot(full.body);
       await captureNoteVersion(
         noteId,
@@ -173,6 +176,7 @@
         target.id
       );
       await refresh();
+      showUndo(preRestoreBody, checkpoint?.id ?? null);
       return true;
     } catch (err) {
       console.error('[history] restore failed', err);
@@ -181,6 +185,59 @@
       restoring = false;
     }
   }
+
+  // One-shot "undo the restore" affordance. Re-applying the pre-restore body is
+  // itself a normal restore, so it's collab- and sync-safe like any other.
+  const UNDO_VISIBLE_MS = 12000;
+  let pendingUndo = $state<{
+    body: string;
+    checkpointId: string | null;
+  } | null>(null);
+  let undoTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function showUndo(body: string, checkpointId: string | null) {
+    pendingUndo = { body, checkpointId };
+    if (undoTimer) clearTimeout(undoTimer);
+    undoTimer = setTimeout(dismissUndo, UNDO_VISIBLE_MS);
+  }
+
+  function dismissUndo() {
+    if (undoTimer) {
+      clearTimeout(undoTimer);
+      undoTimer = null;
+    }
+    pendingUndo = null;
+  }
+
+  async function undoRestore() {
+    const target = pendingUndo;
+    const bridge = getNoteHistory(noteId);
+    if (!target || !bridge || restoring) return;
+    restoring = true;
+    try {
+      await bridge.restoreSnapshot(target.body);
+      await captureNoteVersion(
+        noteId,
+        noteKind,
+        'reverted',
+        target.body,
+        target.checkpointId
+      );
+      await refresh();
+    } catch (err) {
+      console.error('[history] undo restore failed', err);
+    } finally {
+      restoring = false;
+      dismissUndo();
+    }
+  }
+
+  // Drop the Undo affordance when the note changes or the panel unmounts.
+  $effect(() => {
+    void noteId;
+    dismissUndo();
+  });
+  $effect(() => () => dismissUndo());
 
   // Inline (mobile) restore — confirm first, since there are no modal buttons.
   async function restore() {
@@ -263,6 +320,27 @@
       </button>
     {/if}
   </div>
+
+  {#if pendingUndo}
+    <div
+      class="mb-2 flex items-center gap-2 rounded-md border border-border bg-muted/50 px-2.5 py-1.5 text-xs"
+      role="status"
+    >
+      <RotateCcw class="size-3.5 shrink-0 text-muted-foreground" />
+      <span class="min-w-0 flex-1 truncate text-muted-foreground">
+        {tUi('history.restored')}
+      </span>
+      <button
+        type="button"
+        class="inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-50"
+        onclick={() => void undoRestore()}
+        disabled={!canRestore || restoring}
+      >
+        <Undo2 class="size-3.5" />
+        {tUi('history.undo')}
+      </button>
+    </div>
+  {/if}
 
   {#if detail}
     {@const d = detail}

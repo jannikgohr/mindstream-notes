@@ -129,6 +129,7 @@
     COMMENT_COLOR,
     DRAW_KICKOFF_DELAY_MS,
     HIGHLIGHT_COLOR,
+    HISTORY_RESTORE_ORIGIN,
     INK_COLOR,
     INK_WIDTH,
     isCommentLikeAnnotation,
@@ -1184,10 +1185,12 @@
         snapshotDoc.getMap<PdfFormValue>(PDF_FORM_VALUES_MAP);
 
       restoringHistorySnapshot = true;
+      // HISTORY_RESTORE_ORIGIN (not LOCAL_ORIGIN) keeps the restore off the
+      // UndoManager — undoing a restore goes through history, not Ctrl+Z.
       yDoc.transact(() => {
         replaceYMapValues(targetAnnotations, snapshotAnnotations);
         replaceYMapValues(targetFormValues, snapshotFormValues);
-      }, LOCAL_ORIGIN);
+      }, HISTORY_RESTORE_ORIGIN);
       if (
         selectedAnnotationId &&
         !targetAnnotations.has(selectedAnnotationId)
@@ -2071,7 +2074,14 @@
       };
       localYDoc.on('update', yDocUpdateHandler);
       formValuesObserver = (_event, transaction) => {
-        if (transaction.origin === LOCAL_ORIGIN) return;
+        // Skip our own writes: LOCAL_ORIGIN edits and HISTORY_RESTORE_ORIGIN
+        // restores both already push form values into PDF storage explicitly.
+        if (
+          transaction.origin === LOCAL_ORIGIN ||
+          transaction.origin === HISTORY_RESTORE_ORIGIN
+        ) {
+          return;
+        }
         applyStoredFormValuesToPdfStorage();
         bumpRenderVersion();
       };
