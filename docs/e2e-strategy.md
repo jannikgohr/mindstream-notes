@@ -68,7 +68,9 @@ test harness lands:
 2. **Health gating.** Block tests until the stack is ready: nginx `/healthz`,
    a TCP connect to yjs-relay `:1234`, the excalidraw-room socket.io handshake,
    and Etebase accepting connections (the compose healthchecks already encode
-   each probe — reuse them).
+   each probe — reuse them). **Landed:** `e2e-backend/backend-health.spec.ts`
+   probes all four through the single nginx edge (run with
+   `MINDSTREAM_E2E_BACKEND=1 pnpm test:e2e:backend`; see §6/§7).
 3. **Isolation & teardown.** A disposable Postgres volume per run (or per-run
    collections plus cleanup) so state never leaks between runs.
 4. **Capability tag.** Gate T4 specs behind an env flag (e.g.
@@ -178,6 +180,9 @@ specs run locally on demand and skip when the stack isn't up.
 
 Tracked here so the strategy isn't mistaken for working infrastructure:
 
+- [x] **Health gating landed** (§2.2): `e2e-backend/backend-health.spec.ts` +
+      `playwright.backend.config.ts`, run via `pnpm test:e2e:backend`, gated on
+      `MINDSTREAM_E2E_BACKEND`. This is the only T4-adjacent piece runnable today.
 - [ ] No `tauri-driver` harness wired yet (T3/T4 backlog per
       [e2e-flows.md](e2e-flows.md)).
 - [ ] No automated test-account provisioning against Etebase (§2.1).
