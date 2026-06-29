@@ -328,6 +328,7 @@ pub fn run() {
             pdf_text::pdf_note_needs_text,
             // Note history (local, automatic versioning)
             history::capture_note_version,
+            history::capture_current_note_version,
             history::list_note_versions,
             history::load_note_version,
             history::prune_note_versions,

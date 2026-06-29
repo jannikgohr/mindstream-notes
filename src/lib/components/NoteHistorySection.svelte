@@ -40,6 +40,7 @@
   // (Tailwind animate-spin is a 1s period) even when data returns sooner.
   let spinning = $state(false);
   const MIN_SPIN_MS = 1000;
+  let refreshSeq = 0;
   // Mobile inspects a version in an inline detail view; desktop opens a modal.
   let detail = $state<{
     summary: VersionSummary;
@@ -60,14 +61,16 @@
   const canRestore = $derived(registeredNotes.has(noteId));
 
   async function refresh() {
+    const seq = ++refreshSeq;
     loading = true;
     try {
-      versions = await listNoteVersions(noteId);
+      const next = await listNoteVersions(noteId);
+      if (seq === refreshSeq) versions = next;
     } catch (err) {
       console.warn('[history] list failed', err);
-      versions = [];
+      if (seq === refreshSeq) versions = [];
     } finally {
-      loading = false;
+      if (seq === refreshSeq) loading = false;
     }
   }
 
@@ -75,20 +78,22 @@
    * Refresh button: snapshot the live editor (the user likely wants the current
    * state captured too), then re-list. Spins for at least one full rotation.
    */
-  async function refreshClicked() {
+  function refreshClicked() {
     if (spinning) return;
     spinning = true;
     const start = Date.now();
-    try {
-      await getNoteHistory(noteId)?.snapshotNow();
-      await refresh();
-    } finally {
-      const remaining = MIN_SPIN_MS - (Date.now() - start);
-      if (remaining > 0) {
-        await new Promise((resolve) => setTimeout(resolve, remaining));
+    void (async () => {
+      try {
+        await getNoteHistory(noteId)?.snapshotNow();
+        await refresh();
+      } finally {
+        const remaining = MIN_SPIN_MS - (Date.now() - start);
+        if (remaining > 0) {
+          await new Promise((resolve) => setTimeout(resolve, remaining));
+        }
+        spinning = false;
       }
-      spinning = false;
-    }
+    })();
   }
 
   // Reset the detail view when the active note changes (but not on a capture,
@@ -124,15 +129,13 @@
 
   async function open(summary: VersionSummary) {
     try {
-      const [full, current] = await Promise.all([
-        loadNoteVersion(summary.id),
-        currentSnapshot()
-      ]);
+      const full = await loadNoteVersion(summary.id);
       // Desktop markdown: rich modal (current / diff / old tabs). Mobile and
       // non-markdown kinds: inline detail.
       if (isMobile() || noteKind !== 'markdown') {
-        detail = { summary, body: full.body, current };
+        detail = { summary, body: full.body, current: '' };
       } else {
+        const current = await currentSnapshot();
         modal = { summary, oldMarkdown: full.body, currentMarkdown: current };
       }
     } catch (err) {
@@ -151,12 +154,16 @@
     restoring = true;
     try {
       const full = await loadNoteVersion(target.id);
-      await captureNoteVersion(
-        noteId,
-        noteKind,
-        'edited',
-        await bridge.currentSnapshot()
-      );
+      if (noteKind === 'markdown') {
+        await captureNoteVersion(
+          noteId,
+          noteKind,
+          'edited',
+          await bridge.currentSnapshot()
+        );
+      } else {
+        await bridge.snapshotNow();
+      }
       await bridge.restoreSnapshot(full.body);
       await captureNoteVersion(
         noteId,

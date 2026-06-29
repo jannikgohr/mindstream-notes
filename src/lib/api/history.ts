@@ -69,6 +69,23 @@ export function captureNoteVersion(
   );
 }
 
+/**
+ * Capture the note's latest saved state on the backend. For non-markdown notes
+ * this avoids encoding a large live Yjs document on the UI thread; editors
+ * should flush their normal save path first.
+ */
+export function captureCurrentNoteVersion(
+  noteId: string,
+  action: VersionAction,
+  refVersionId: string | null = null
+): Promise<VersionSummary | null> {
+  return invokeOrFallback<VersionSummary | null>(
+    'capture_current_note_version',
+    { noteId, action, refVersionId },
+    () => mockApi.captureCurrentNoteVersion(noteId, action, refVersionId)
+  );
+}
+
 export function listNoteVersions(noteId: string): Promise<VersionSummary[]> {
   return invokeOrFallback<VersionSummary[]>(
     'list_note_versions',

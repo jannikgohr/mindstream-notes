@@ -15,12 +15,14 @@
 
 use std::io::{Read, Write};
 
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use chrono::Utc;
 use flate2::read::DeflateDecoder;
 use flate2::write::DeflateEncoder;
 use flate2::Compression;
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Manager};
 
 use crate::content_stats::{token_delta, word_delta};
 use crate::db::Db;
@@ -29,6 +31,7 @@ use crate::error::{AppError, AppResult};
 /// Hard cap on versions kept per note, independent of the time-based retention
 /// setting — a safety valve against pathological churn within the window.
 const MAX_VERSIONS_PER_NOTE: i64 = 200;
+const SNAPSHOT_MARKER: &str = "mindstream-history-snapshot";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VersionSummary {
@@ -73,6 +76,43 @@ fn decompress(bytes: &[u8]) -> AppResult<String> {
     let mut out = String::new();
     DeflateDecoder::new(bytes).read_to_string(&mut out)?;
     Ok(out)
+}
+
+fn serialize_yjs_snapshot(note_kind: &str, bytes: &[u8]) -> AppResult<String> {
+    Ok(serde_json::json!({
+        "marker": SNAPSHOT_MARKER,
+        "version": 1,
+        "noteKind": note_kind,
+        "payloadKind": "yjs-update",
+        "encoding": "base64",
+        "data": BASE64_STANDARD.encode(bytes),
+    })
+    .to_string())
+}
+
+fn current_note_snapshot(conn: &Connection, note_id: &str) -> AppResult<(String, String)> {
+    let row = conn
+        .query_row(
+            "SELECT note_kind, body, yrs_state FROM notes WHERE id = ?1",
+            params![note_id],
+            |r| {
+                Ok((
+                    r.get::<_, String>("note_kind")?,
+                    r.get::<_, String>("body")?,
+                    r.get::<_, Option<Vec<u8>>>("yrs_state")?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((note_kind, body, yrs_state)) = row else {
+        return Err(AppError::NotFound(format!("note {note_id}")));
+    };
+    let snapshot = if note_kind == "markdown" {
+        body
+    } else {
+        serialize_yjs_snapshot(&note_kind, &yrs_state.unwrap_or_default())?
+    };
+    Ok((note_kind, snapshot))
 }
 
 fn row_to_summary(r: &Row<'_>) -> rusqlite::Result<VersionSummary> {
@@ -268,47 +308,93 @@ pub fn prune(conn: &Connection, retention_days: Option<u32>) -> AppResult<usize>
 // ---------- Tauri commands ----------
 
 #[tauri::command]
-pub fn capture_note_version(
-    db: tauri::State<'_, Db>,
+pub async fn capture_note_version(
+    app: AppHandle,
     note_id: String,
     note_kind: String,
     action: String,
     ref_version_id: Option<String>,
     markdown: String,
 ) -> Result<Option<VersionSummary>, String> {
-    db.with_conn(|c| {
-        capture(
-            c,
-            &note_id,
-            &note_kind,
-            &action,
-            ref_version_id.as_deref(),
-            &markdown,
-        )
+    tauri::async_runtime::spawn_blocking(move || -> Result<Option<VersionSummary>, String> {
+        let db = app.state::<Db>();
+        db.with_conn(|c| {
+            capture(
+                c,
+                &note_id,
+                &note_kind,
+                &action,
+                ref_version_id.as_deref(),
+                &markdown,
+            )
+        })
+        .map_err(Into::into)
     })
-    .map_err(Into::into)
+    .await
+    .map_err(|e| format!("history capture task: {e}"))?
 }
 
 #[tauri::command]
-pub fn list_note_versions(
-    db: tauri::State<'_, Db>,
+pub async fn capture_current_note_version(
+    app: AppHandle,
+    note_id: String,
+    action: String,
+    ref_version_id: Option<String>,
+) -> Result<Option<VersionSummary>, String> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<Option<VersionSummary>, String> {
+        let db = app.state::<Db>();
+        db.with_conn(|c| {
+            let (note_kind, snapshot) = current_note_snapshot(c, &note_id)?;
+            capture(
+                c,
+                &note_id,
+                &note_kind,
+                &action,
+                ref_version_id.as_deref(),
+                &snapshot,
+            )
+        })
+        .map_err(Into::into)
+    })
+    .await
+    .map_err(|e| format!("history current capture task: {e}"))?
+}
+
+#[tauri::command]
+pub async fn list_note_versions(
+    app: AppHandle,
     note_id: String,
 ) -> Result<Vec<VersionSummary>, String> {
-    db.with_conn(|c| list(c, &note_id)).map_err(Into::into)
+    tauri::async_runtime::spawn_blocking(move || -> Result<Vec<VersionSummary>, String> {
+        let db = app.state::<Db>();
+        db.with_conn(|c| list(c, &note_id)).map_err(Into::into)
+    })
+    .await
+    .map_err(|e| format!("history list task: {e}"))?
 }
 
 #[tauri::command]
-pub fn load_note_version(db: tauri::State<'_, Db>, version_id: String) -> Result<Version, String> {
-    db.with_conn(|c| load(c, &version_id)).map_err(Into::into)
+pub async fn load_note_version(app: AppHandle, version_id: String) -> Result<Version, String> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<Version, String> {
+        let db = app.state::<Db>();
+        db.with_conn(|c| load(c, &version_id)).map_err(Into::into)
+    })
+    .await
+    .map_err(|e| format!("history load task: {e}"))?
 }
 
 #[tauri::command]
-pub fn prune_note_versions(
-    db: tauri::State<'_, Db>,
+pub async fn prune_note_versions(
+    app: AppHandle,
     retention_days: Option<u32>,
 ) -> Result<usize, String> {
-    db.with_conn(|c| prune(c, retention_days))
-        .map_err(Into::into)
+    tauri::async_runtime::spawn_blocking(move || -> Result<usize, String> {
+        let db = app.state::<Db>();
+        db.with_conn(|c| prune(c, retention_days))
+            .map_err(Into::into)
+    })
+    .await
+    .map_err(|e| format!("history prune task: {e}"))?
 }
 
 #[cfg(test)]
@@ -397,6 +483,47 @@ mod tests {
             .unwrap();
         assert_eq!((second.words_added, second.words_removed), (0, 0));
         assert_eq!((second.tokens_added, second.tokens_removed), (0, 2));
+    }
+
+    #[test]
+    fn current_non_markdown_snapshot_wraps_saved_yrs_state() {
+        let db = open_memory_for_tests();
+        let note = db
+            .with_conn(|c| {
+                create(
+                    c,
+                    CreateNote {
+                        title: Some("Canvas".into()),
+                        body: Some(String::new()),
+                        parent_collection_id: None,
+                        note_kind: Some("freeform".into()),
+                    },
+                )
+            })
+            .unwrap()
+            .summary
+            .id;
+        db.with_conn(|c| {
+            c.execute(
+                "UPDATE notes SET yrs_state = ?2 WHERE id = ?1",
+                rusqlite::params![&note, vec![1u8, 2, 3]],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+        let (kind, snapshot) = db
+            .with_conn(|c| current_note_snapshot(c, &note))
+            .expect("snapshot");
+        let parsed: serde_json::Value = serde_json::from_str(&snapshot).unwrap();
+        assert_eq!(kind, "freeform");
+        assert_eq!(parsed["marker"], SNAPSHOT_MARKER);
+        assert_eq!(parsed["noteKind"], "freeform");
+        assert_eq!(parsed["payloadKind"], "yjs-update");
+        assert_eq!(
+            parsed["data"],
+            base64::Engine::encode(&BASE64_STANDARD, [1u8, 2, 3])
+        );
     }
 
     #[test]

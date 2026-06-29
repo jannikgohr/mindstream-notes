@@ -2611,6 +2611,7 @@ dependencies = [
  "android-native-keyring-store",
  "android_logger 0.14.1",
  "apple-native-keyring-store",
+ "base64 0.22.1",
  "chrono",
  "dbus-secret-service-keyring-store",
  "etebase",

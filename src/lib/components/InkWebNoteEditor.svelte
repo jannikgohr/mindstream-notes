@@ -52,7 +52,7 @@
     onSessionChange,
     isTauri,
     TRASH_ID,
-    captureNoteVersion,
+    captureCurrentNoteVersion,
     type DrawingToolbarSettings,
     type DrawingToolbarSettingsPayload,
     type VersionAction
@@ -658,12 +658,7 @@
     if (action === 'edited' && !historyDirty) return;
     historyDirty = false;
     try {
-      const created = await captureNoteVersion(
-        noteId,
-        'ink',
-        action,
-        currentInkSnapshot()
-      );
+      const created = await captureCurrentNoteVersion(noteId, action);
       if (created) bumpNoteHistory(noteId);
     } catch (err) {
       console.debug('[InkWebNoteEditor] history capture failed', err);

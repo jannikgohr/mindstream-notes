@@ -20,9 +20,9 @@ export interface NoteHistoryApi {
   /** The editor's current snapshot, for diffing and undoable restore capture. */
   currentSnapshot: () => string | Promise<string>;
   /**
-   * Capture a version of the current editor state right now (deduped) and reset
-   * the idle-capture timer. Used by the History panel's refresh button so an
-   * explicit refresh also snapshots what the user is looking at.
+   * Ask the editor to capture pending history work now (deduped) and reset the
+   * idle-capture timer. Binary editors may capture the latest saved state so
+   * refresh never forces a large live Yjs encode on the UI thread.
    */
   snapshotNow: () => Promise<void>;
 }

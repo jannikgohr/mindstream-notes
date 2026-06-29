@@ -40,7 +40,7 @@
     TRASH_ID,
     noteRoomInfo,
     onSessionChange,
-    captureNoteVersion,
+    captureCurrentNoteVersion,
     type VersionAction
   } from '$lib/api';
   import { tree } from '$lib/stores/tree.svelte';
@@ -566,17 +566,39 @@
     if (!yDoc) return;
     if (action === 'edited' && !historyDirty) return;
     historyDirty = false;
-    const snapshot = currentFreeformSnapshot();
     try {
-      const created = await captureNoteVersion(
-        noteId,
-        'freeform',
-        action,
-        snapshot
-      );
+      const created = await captureCurrentNoteVersion(noteId, action);
       if (created) bumpNoteHistory(noteId);
     } catch (err) {
       console.debug('[FreeformNoteEditor] history capture failed', err);
+    }
+  }
+
+  async function flushSave() {
+    if (saveTimer) {
+      clearTimeout(saveTimer);
+      saveTimer = null;
+    }
+    if (!yDoc || isTrashed) return;
+    try {
+      savingState = 'saving';
+      const yrsState = Array.from(Y.encodeStateAsUpdate(yDoc));
+      await apiSaveNote({
+        id: noteId,
+        body: '',
+        yrs_state: yrsState
+      });
+      const existing = tree.notesById[noteId];
+      if (existing) {
+        tree.notesById[noteId] = {
+          ...existing,
+          modified: new Date().toISOString()
+        };
+      }
+      savingState = 'saved';
+    } catch (err) {
+      savingState = 'error';
+      console.error('[FreeformNoteEditor] save failed', err);
     }
   }
 
@@ -584,33 +606,7 @@
     if (isTrashed) return;
     savingState = 'pending';
     if (saveTimer) clearTimeout(saveTimer);
-    saveTimer = setTimeout(async () => {
-      try {
-        savingState = 'saving';
-        const yrsState = yDoc
-          ? Array.from(Y.encodeStateAsUpdate(yDoc))
-          : undefined;
-        // body stays empty for freeform notes — there's no markdown
-        // snapshot to render server-side. Future: OCR text could land
-        // here for full-text search.
-        await apiSaveNote({
-          id: noteId,
-          body: '',
-          yrs_state: yrsState
-        });
-        const existing = tree.notesById[noteId];
-        if (existing) {
-          tree.notesById[noteId] = {
-            ...existing,
-            modified: new Date().toISOString()
-          };
-        }
-        savingState = 'saved';
-      } catch (err) {
-        savingState = 'error';
-        console.error('[FreeformNoteEditor] save failed', err);
-      }
-    }, SAVE_DEBOUNCE_MS);
+    saveTimer = setTimeout(() => void flushSave(), SAVE_DEBOUNCE_MS);
   }
 
   function base64ToBytes(b64: string): Uint8Array {

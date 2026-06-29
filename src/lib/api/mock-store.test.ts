@@ -345,6 +345,31 @@ describe('mock-store note history', () => {
     expect(v?.tokens_removed).toBe(0);
   });
 
+  it('captures the saved state for non-markdown notes', async () => {
+    const note = await mockApi.createNote({
+      title: 'Canvas',
+      parent_collection_id: null,
+      note_kind: 'freeform'
+    });
+    await mockApi.saveNote({ id: note.id, yrs_state: [1, 2, 3] });
+
+    const version = await mockApi.captureCurrentNoteVersion(
+      note.id,
+      'edited',
+      null
+    );
+    expect(version?.note_kind).toBe('freeform');
+    expect(version?.words_added).toBe(0);
+    expect(version?.tokens_added).toBeGreaterThan(0);
+
+    const loaded = await mockApi.loadNoteVersion(version!.id);
+    expect(JSON.parse(loaded.body)).toMatchObject({
+      marker: 'mindstream-history-snapshot',
+      noteKind: 'freeform',
+      payloadKind: 'yjs-update'
+    });
+  });
+
   it('loads a version body and denormalises a revert target', async () => {
     const id = await freshNote();
     const target = await mockApi.captureNoteVersion(

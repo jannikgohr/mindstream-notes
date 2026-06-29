@@ -39,7 +39,7 @@
     noteRoomInfo,
     onSessionChange,
     pdfNoteNeedsText,
-    captureNoteVersion,
+    captureCurrentNoteVersion,
     saveNote as apiSaveNote,
     setPdfText,
     type VersionAction
@@ -1231,12 +1231,7 @@
     if (action === 'edited' && !historyDirty) return;
     historyDirty = false;
     try {
-      const created = await captureNoteVersion(
-        noteId,
-        'pdf',
-        action,
-        currentPdfSnapshot()
-      );
+      const created = await captureCurrentNoteVersion(noteId, action);
       if (created) bumpNoteHistory(noteId);
     } catch (err) {
       console.debug('[PdfNoteViewer] history capture failed', err);
