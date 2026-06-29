@@ -151,9 +151,13 @@ assertion is the regression guard for the _history-is-per-device_ limitation.
 
 ## 5. Scenarios for planned features (write alongside the feature)
 
-- **Collab confirmation prompt.** Once `peerCount` is plumbed through the bridge:
-  with a second client present, a restore shows the confirmation; solo editing
-  does not prompt. (T4 — needs two clients + presence.)
+- **Collab confirmation prompt.** `peerCount` is now plumbed through the bridge
+  for the awareness-based editors (markdown/PDF) and checked in
+  `NoteHistorySection.applyRestore`: with a second client present, a restore
+  shows the confirmation; solo editing does not prompt. The T4 spec asserts both
+  per kind — including that ink/freeform do **not** prompt yet (their providers
+  don't report presence; see [known-limitations.md](known-limitations.md)).
+  (T4 — needs two clients + presence.)
 - **User profiles / multi-vault.** Switching the active profile isolates history
   and data; a restart picks up the active profile. The `MINDSTREAM_PROFILE_DIR`
   seam already underpins this — these tests exercise the in-app switch on top of
@@ -187,5 +191,7 @@ Tracked here so the strategy isn't mistaken for working infrastructure:
       [e2e-flows.md](e2e-flows.md)).
 - [ ] No automated test-account provisioning against Etebase (§2.1).
 - [ ] No test hook to inject the server URL / a pre-authenticated session (§3).
-- [ ] `peerCount` bridge method not implemented — blocks the collab-confirmation
-      tests and the feature itself (see [known-limitations.md](known-limitations.md)).
+- [x] **`peerCount` bridge method landed** for the awareness-based editors
+      (markdown/PDF) and the collab-confirmation prompt is wired in
+      `NoteHistorySection`. Remaining: ink/freeform presence and the T4 spec that
+      exercises the prompt (see [known-limitations.md](known-limitations.md)).
