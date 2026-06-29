@@ -43,7 +43,7 @@
   // True once we've confirmed the two versions produced no changes.
   let identical = $state(false);
 
-  function isClosedStructuralInsertion(slice: Slice) {
+  function isClosedStructuralSlice(slice: Slice) {
     if (slice.openStart !== 0 || slice.openEnd !== 0) return false;
 
     let hasStructuralNode = false;
@@ -78,13 +78,39 @@
             const decos: Decoration[] = [];
             for (const ch of ds.changes) {
               if (ch.toA > ch.fromA) {
+                const slice = state.doc.slice(ch.fromA, ch.toA);
+                const isStructural = isClosedStructuralSlice(slice);
+                if (isStructural) {
+                  state.doc.nodesBetween(ch.fromA, ch.toA, (node, pos) => {
+                    const to = pos + node.nodeSize;
+                    if (pos < ch.fromA || to > ch.toA) return undefined;
+
+                    if (node.type.name === 'table') {
+                      decos.push(
+                        Decoration.node(pos, to, { class: 'diff-del-block' })
+                      );
+                      return undefined;
+                    }
+
+                    if (
+                      node.type.name === 'table_cell' ||
+                      node.type.name === 'table_header'
+                    ) {
+                      decos.push(
+                        Decoration.node(pos, to, { class: 'diff-del-cell' })
+                      );
+                    }
+
+                    return undefined;
+                  });
+                }
                 decos.push(
                   Decoration.inline(ch.fromA, ch.toA, { class: 'diff-del' })
                 );
               }
               if (ch.toB > ch.fromB) {
                 const slice = ds.newDoc.slice(ch.fromB, ch.toB);
-                const isStructural = isClosedStructuralInsertion(slice);
+                const isStructural = isClosedStructuralSlice(slice);
                 const text = ds.newDoc.textBetween(ch.fromB, ch.toB, ' ', ' ');
                 if (isStructural || text) {
                   decos.push(

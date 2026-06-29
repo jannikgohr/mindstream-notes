@@ -1181,3 +1181,13 @@ body.dv-tab-dragging .freeform-canvas-host * {
   padding: 0.5rem 0.75rem;
   vertical-align: top;
 }
+.milkdown-diff table.diff-del-block,
+.milkdown-diff .diff-del-block table {
+  background: rgb(239 68 68 / 0.08);
+}
+.milkdown-diff table.diff-del-block th,
+.milkdown-diff table.diff-del-block td,
+.milkdown-diff .diff-del-cell {
+  border-color: rgb(239 68 68 / 0.45);
+  background: rgb(239 68 68 / 0.08);
+}
