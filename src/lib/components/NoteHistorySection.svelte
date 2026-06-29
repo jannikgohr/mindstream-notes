@@ -158,6 +158,18 @@
   async function applyRestore(target: VersionSummary): Promise<boolean> {
     const bridge = getNoteHistory(noteId);
     if (!bridge || restoring) return false;
+    // A restore propagates live to everyone in the room. If others are editing
+    // right now, make overwriting their view a deliberate, acknowledged choice.
+    if ((bridge.peerCount?.() ?? 0) > 0) {
+      const ok = await confirm({
+        title: tUi('history.collabRestoreTitle'),
+        message: tUi('history.collabRestoreBody'),
+        confirmLabel: tUi('history.restoreConfirmAction'),
+        cancelLabel: tUi('history.restoreConfirmCancel'),
+        destructive: true
+      });
+      if (!ok) return false;
+    }
     restoring = true;
     try {
       const full = await loadNoteVersion(target.id);

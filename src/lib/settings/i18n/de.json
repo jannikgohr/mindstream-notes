@@ -106,6 +106,8 @@
     "history.restoreConfirmBody": "Der aktuelle Inhalt der Notiz wird durch diese Version ersetzt. Du kannst es rückgängig machen, indem du die unmittelbar zuvor erstellte Version wiederherstellst.",
     "history.restoreConfirmAction": "Wiederherstellen",
     "history.restoreConfirmCancel": "Abbrechen",
+    "history.collabRestoreTitle": "Wiederherstellen, während andere bearbeiten?",
+    "history.collabRestoreBody": "Andere bearbeiten diese Notiz gerade live. Beim Wiederherstellen wird der gemeinsame Inhalt für alle ersetzt – deine aktuelle Version wird vorher im Verlauf gesichert. Fortfahren?",
     "history.restored": "Frühere Version wiederhergestellt.",
     "history.undo": "Rückgängig",
     "history.undoDismiss": "Schließen",

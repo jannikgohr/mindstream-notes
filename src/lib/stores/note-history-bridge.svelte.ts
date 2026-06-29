@@ -25,6 +25,13 @@ export interface NoteHistoryApi {
    * refresh never forces a large live Yjs encode on the UI thread.
    */
   snapshotNow: () => Promise<void>;
+  /**
+   * Number of other collaborators currently editing this note live, used to
+   * warn before a restore overwrites shared content. Optional: editors without
+   * live presence (ink, freeform) omit it, and a restore there proceeds without
+   * a collab prompt. Returns 0 when synced but alone.
+   */
+  peerCount?: () => number;
 }
 
 const registry = new Map<string, NoteHistoryApi>();

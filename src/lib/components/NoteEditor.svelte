@@ -36,6 +36,7 @@
   import { listen } from '$lib/api/events';
   import { buildCrepe } from '$lib/editor/crepe-setup';
   import { ensureDropIndicatorAlignment } from '$lib/editor/drop-indicator-align';
+  import { otherPeerCount } from '$lib/editor/awareness-presence';
   import { pickCursorColor } from '$lib/editor/cursor-color';
   import { base64ToBytes } from '$lib/editor/base64';
   import {
@@ -460,7 +461,8 @@
       unregisterHistory = registerNoteHistory(noteId, {
         restoreSnapshot: (markdown) => applyMarkdownTemplate(markdown),
         currentSnapshot: () => (getMarkdown ? getMarkdown() : ''),
-        snapshotNow: () => snapshotHistoryNow()
+        snapshotNow: () => snapshotHistoryNow(),
+        peerCount: () => otherPeerCount(awareness)
       });
 
       // Snapshot a baseline on open so a note that's never edited still starts

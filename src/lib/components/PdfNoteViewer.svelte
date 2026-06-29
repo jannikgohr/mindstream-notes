@@ -47,6 +47,7 @@
   import { listen } from '$lib/api/events';
   import { extractTextFromDocument } from '$lib/pdf/extract-text';
   import { base64ToBytes } from '$lib/editor/base64';
+  import { otherPeerCount } from '$lib/editor/awareness-presence';
   import { pickCursorColor } from '$lib/editor/cursor-color';
   import { isMobile } from '$lib/platform';
   import {
@@ -2169,7 +2170,8 @@
       unregisterHistory = registerNoteHistory(noteId, {
         currentSnapshot: () => currentPdfSnapshot(),
         restoreSnapshot: (snapshot) => restorePdfSnapshot(snapshot),
-        snapshotNow: () => snapshotHistoryNow()
+        snapshotNow: () => snapshotHistoryNow(),
+        peerCount: () => otherPeerCount(awareness)
       });
       await tick();
       bumpRenderVersion();

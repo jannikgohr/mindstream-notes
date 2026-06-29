@@ -206,6 +206,8 @@
     "history.restoreConfirmBody": "This replaces the note's current content with this version. You can undo it by restoring the snapshot taken just before.",
     "history.restoreConfirmAction": "Restore",
     "history.restoreConfirmCancel": "Cancel",
+    "history.collabRestoreTitle": "Restore while others are editing?",
+    "history.collabRestoreBody": "Other people are editing this note live. Restoring replaces the shared content for everyone — your current version is saved to history first. Continue?",
     "history.restored": "Restored to an earlier version.",
     "history.undo": "Undo",
     "history.undoDismiss": "Dismiss",
