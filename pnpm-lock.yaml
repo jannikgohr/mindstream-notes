@@ -20,9 +20,15 @@ importers:
       '@lucide/svelte':
         specifier: ^1.20.0
         version: 1.20.0(svelte@5.55.5)
+      '@milkdown/core':
+        specifier: 7.20.0
+        version: 7.20.0
       '@milkdown/crepe':
         specifier: ^7.20.0
         version: 7.20.0(prosemirror-model@1.25.4)(prosemirror-state@1.4.4)(prosemirror-view@1.41.8)(typescript@5.9.3)
+      '@milkdown/ctx':
+        specifier: 7.20.0
+        version: 7.20.0
       '@milkdown/kit':
         specifier: ^7.20.0
         version: 7.20.0(@codemirror/language@6.12.3)(@codemirror/state@6.6.0)(@codemirror/view@6.41.1)(typescript@5.9.3)
@@ -32,6 +38,15 @@ importers:
       '@milkdown/plugin-diff':
         specifier: ^7.20.0
         version: 7.21.2
+      '@milkdown/prose':
+        specifier: 7.20.0
+        version: 7.20.0
+      '@milkdown/transformer':
+        specifier: 7.20.0
+        version: 7.20.0
+      '@milkdown/utils':
+        specifier: 7.20.0
+        version: 7.20.0
       '@tauri-apps/api':
         specifier: ^2.11.0
         version: 2.11.0

@@ -93,6 +93,19 @@ describe('InkDocument', () => {
     expect(doc.visibleStrokes()).toHaveLength(1);
   });
 
+  it('clears undo and redo stacks after a history restore', () => {
+    const doc = new InkDocument();
+    doc.beginStroke(DEFAULT_COLOR, DEFAULT_WIDTH);
+    doc.pushPoint(1, 1, 1);
+    doc.endStroke();
+    doc.undoLast();
+
+    doc.resetUndoHistory();
+
+    expect(doc.undoLast().value).toBe(false);
+    expect(doc.redoLast().value).toBe(false);
+  });
+
   it('records eraser drags as one undoable operation', () => {
     const doc = new InkDocument();
     doc.beginStroke(DEFAULT_COLOR, DEFAULT_WIDTH);

@@ -1,10 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   bumpNoteHistory,
+  clearRestoreUndo,
   getNoteHistory,
   noteHistoryEpoch,
+  noteRestoreUndo,
   registerNoteHistory,
-  registeredNotes
+  registeredNotes,
+  setRestoreUndo
 } from './note-history-bridge.svelte';
 
 const api = () => ({
@@ -40,5 +43,20 @@ describe('note-history-bridge', () => {
     expect(noteHistoryEpoch('n3')).toBe(before + 1);
     // Independent per note.
     expect(noteHistoryEpoch('other')).toBe(0);
+  });
+
+  it('stores and clears pending restore undo state per note', () => {
+    expect(noteRestoreUndo('n4')).toBeNull();
+
+    setRestoreUndo('n4', { body: 'before restore', checkpointId: 'ver_1' });
+
+    expect(noteRestoreUndo('n4')).toEqual({
+      body: 'before restore',
+      checkpointId: 'ver_1'
+    });
+    expect(noteRestoreUndo('other')).toBeNull();
+
+    clearRestoreUndo('n4');
+    expect(noteRestoreUndo('n4')).toBeNull();
   });
 });
