@@ -774,13 +774,13 @@
     ondragleave={onDragLeave}
     ondrop={onDropOnRoot}
   >
-    {#if !tree.ready}
-      <p class="px-2 py-3 text-xs text-muted-foreground">
-        {tUi('fileTree.loading')}
-      </p>
-    {:else if tree.error}
+    {#if tree.error}
       <p class="px-2 py-3 text-xs text-destructive">
         {tUi('fileTree.error')}: {tree.error}
+      </p>
+    {:else if !tree.ready}
+      <p class="px-2 py-3 text-xs text-muted-foreground">
+        {tUi('fileTree.loading')}
       </p>
     {:else if sourceNodes.length === 0 && !draft}
       <p class="px-2 py-3 text-xs text-muted-foreground">

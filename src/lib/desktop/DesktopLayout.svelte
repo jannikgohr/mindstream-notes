@@ -655,7 +655,17 @@
   }
 
   onMount(() => {
-    void tick().then(setupDockview);
+    // Load the tree independently of the dockview bootstrap. The two used to
+    // be coupled (loadTree lived inside setupDockview), so any failure or
+    // early-return in the UI setup — e.g. a flaky `import('dockview-core')`
+    // during a Vite dev rebuild — left the sidebar stuck on "Loading…"
+    // forever. Data loading must not be hostage to UI bootstrap.
+    void loadTree();
+    // setupDockview awaits the same tree (idempotent if already loaded) before
+    // restoring panels. Surface any rejection instead of letting `void` eat it.
+    void tick()
+      .then(setupDockview)
+      .catch((err) => console.error('[layout] setupDockview failed', err));
     const onResize = () => {};
     window.addEventListener('resize', onResize);
     // Wikilink clicks (inside an editor) and any other intent source

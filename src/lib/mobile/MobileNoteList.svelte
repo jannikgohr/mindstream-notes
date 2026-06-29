@@ -371,12 +371,12 @@
   class:fab-space={reserveFabSpace}
   class="mobile-note-list flex-1 overflow-y-auto px-3 pt-3"
 >
-  {#if !tree.ready}
-    <p class="px-1 py-2 text-sm text-muted-foreground">Loading…</p>
-  {:else if tree.error}
+  {#if tree.error}
     <p class="px-1 py-2 text-sm text-destructive">
       Couldn't load notes: {tree.error}
     </p>
+  {:else if !tree.ready}
+    <p class="px-1 py-2 text-sm text-muted-foreground">Loading…</p>
   {:else}
     {#if showTrashRootActions && !trashRootEmpty}
       <div class="mb-3 flex justify-start">
