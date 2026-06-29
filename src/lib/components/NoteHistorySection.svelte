@@ -45,6 +45,14 @@
   let spinning = $state(false);
   const MIN_SPIN_MS = 1000;
   let refreshSeq = 0;
+  // Collapse long histories to the most recent few; reveal the rest on demand.
+  // The full list is already loaded (one listNoteVersions call), so this is
+  // purely presentational.
+  const COLLAPSED_COUNT = 5;
+  let showAllVersions = $state(false);
+  const visibleVersions = $derived(
+    showAllVersions ? versions : versions.slice(0, COLLAPSED_COUNT)
+  );
   // Mobile inspects a version in an inline detail view; desktop opens a modal.
   let detail = $state<{
     summary: VersionSummary;
@@ -107,6 +115,7 @@
     void noteKind;
     detail = null;
     modal = null;
+    showAllVersions = false;
   });
 
   // (Re)load the list when the note changes or a version is captured for it.
@@ -234,6 +243,20 @@
       clearRestoreUndo(noteId);
     }
   }
+
+  // Free the previous note's pending-undo body when the user actually switches
+  // notes. A spurious remount (tree/sync refresh) is a fresh component instance
+  // where lastUndoNoteId starts null, so it never clears — the affordance still
+  // survives that. This bounds restoreUndos to roughly the note in view, since
+  // a held body can be a multi-MB base64 envelope.
+  let lastUndoNoteId: string | null = null;
+  $effect(() => {
+    const id = noteId;
+    if (lastUndoNoteId !== null && lastUndoNoteId !== id) {
+      clearRestoreUndo(lastUndoNoteId);
+    }
+    lastUndoNoteId = id;
+  });
 
   // Inline (mobile) restore — confirm first, since there are no modal buttons.
   async function restore() {
@@ -393,7 +416,7 @@
     </p>
   {:else}
     <ul class="space-y-1">
-      {#each versions as v (v.id)}
+      {#each visibleVersions as v (v.id)}
         {@const Icon = actionIcon(v.action)}
         <li>
           <button
@@ -416,6 +439,17 @@
         </li>
       {/each}
     </ul>
+    {#if versions.length > COLLAPSED_COUNT}
+      <button
+        type="button"
+        class="mt-1 w-full rounded px-2 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        onclick={() => (showAllVersions = !showAllVersions)}
+      >
+        {showAllVersions
+          ? tUi('history.showLess')
+          : tUi('history.showAll').replace('{count}', String(versions.length))}
+      </button>
+    {/if}
   {/if}
 </section>
 

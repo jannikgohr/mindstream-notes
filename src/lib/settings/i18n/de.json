@@ -100,6 +100,8 @@
     "history.back": "Zurück",
     "history.loading": "Wird geladen…",
     "history.empty": "Noch keine früheren Versionen. Änderungen werden beim Arbeiten automatisch gespeichert.",
+    "history.showAll": "Alle anzeigen ({count})",
+    "history.showLess": "Weniger anzeigen",
     "history.restore": "Diese Version wiederherstellen",
     "history.restoreUnavailable": "Öffne die Notiz, um eine Version wiederherzustellen.",
     "history.restoreConfirmTitle": "Diese Version wiederherstellen?",

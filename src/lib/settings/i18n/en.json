@@ -200,6 +200,8 @@
     "history.back": "Back",
     "history.loading": "Loading…",
     "history.empty": "No earlier versions yet. Edits are saved automatically as you work.",
+    "history.showAll": "Show all ({count})",
+    "history.showLess": "Show less",
     "history.restore": "Restore this version",
     "history.restoreUnavailable": "Open the note to restore a version.",
     "history.restoreConfirmTitle": "Restore this version?",
