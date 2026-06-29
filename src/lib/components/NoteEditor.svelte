@@ -458,8 +458,8 @@
       // Expose restore + current-markdown to the History sidebar section,
       // which can't reach the live editor (and its Yjs doc) by props.
       unregisterHistory = registerNoteHistory(noteId, {
-        revert: (markdown) => applyMarkdownTemplate(markdown),
-        currentMarkdown: () => (getMarkdown ? getMarkdown() : ''),
+        restoreSnapshot: (markdown) => applyMarkdownTemplate(markdown),
+        currentSnapshot: () => (getMarkdown ? getMarkdown() : ''),
         snapshotNow: () => snapshotHistoryNow()
       });
 

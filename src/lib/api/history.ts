@@ -1,11 +1,11 @@
 /**
  * Note history API. Mirror of src-tauri/src/history/mod.rs.
  *
- * History is a local, automatic per-note timeline of compressed markdown
- * snapshots — never synced (each device keeps its own), but a *restore*
- * converges across devices because the editor applies it as a normal CRDT
- * edit. Capture is driven from the editor (idle debounce + on close + on
- * create/restore); the backend dedups and caps.
+ * History is a local, automatic per-note timeline of compressed snapshots —
+ * never synced (each device keeps its own), but a *restore* converges across
+ * devices because the editor applies it as normal current note state. Capture
+ * is driven from the editor (idle debounce + on close + on create/restore);
+ * the backend dedups and caps.
  */
 
 import { invokeOrFallback } from './core';
@@ -34,17 +34,17 @@ export interface VersionSummary {
    */
   tokens_added: number;
   tokens_removed: number;
-  /** Uncompressed markdown byte length. */
+  /** Uncompressed snapshot byte length. */
   size: number;
 }
 
 export interface Version extends VersionSummary {
-  /** Decompressed markdown snapshot. */
+  /** Decompressed snapshot payload. Markdown is raw text; other kinds may wrap. */
   body: string;
 }
 
 /**
- * Capture a snapshot of `markdown` for a note. Returns the new version, or
+ * Capture a snapshot payload for a note. Returns the new version, or
  * `null` when it was a no-op (unchanged since the last version). The backend
  * promotes a note's first version to `action: 'created'`.
  */
@@ -52,18 +52,18 @@ export function captureNoteVersion(
   noteId: string,
   noteKind: string,
   action: VersionAction,
-  markdown: string,
+  snapshot: string,
   refVersionId: string | null = null
 ): Promise<VersionSummary | null> {
   return invokeOrFallback<VersionSummary | null>(
     'capture_note_version',
-    { noteId, noteKind, action, refVersionId, markdown },
+    { noteId, noteKind, action, refVersionId, markdown: snapshot },
     () =>
       mockApi.captureNoteVersion(
         noteId,
         noteKind,
         action,
-        markdown,
+        snapshot,
         refVersionId
       )
   );

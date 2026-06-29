@@ -389,9 +389,9 @@
           <TagsSection noteId={note.id} />
         </div>
 
-        {#if note.note_kind === 'markdown'}
+        {#if note.note_kind === 'markdown' || note.note_kind === 'freeform'}
           <div class="mt-5 border-t border-border pt-5">
-            <NoteHistorySection noteId={note.id} />
+            <NoteHistorySection noteId={note.id} noteKind={note.note_kind} />
           </div>
         {/if}
       </section>

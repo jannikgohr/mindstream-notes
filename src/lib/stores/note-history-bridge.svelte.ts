@@ -5,8 +5,8 @@
  * Yjs doc / collab service) is a separate component it can't reach by props.
  * The existing focus-based editor bus (`registerEditor` / `EditorListener`)
  * only routes parameter-less command ids, but a restore needs to *hand the
- * editor the target markdown* and *read the editor's current markdown* for the
- * diff. So this is a tiny per-note registry of those two callbacks.
+ * editor the target snapshot* and *read the editor's current snapshot* for the
+ * diff/undo checkpoint. So this is a tiny per-note registry of those callbacks.
  *
  * `registeredNotes` is reactive so the sidebar can enable/disable Restore as
  * editors mount and unmount (a note must be open to apply a restore as ops).
@@ -15,10 +15,10 @@
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 
 export interface NoteHistoryApi {
-  /** Apply `markdown` to the live doc as collaborative edits (a restore). */
-  revert: (markdown: string) => void;
-  /** The editor's current markdown, for diffing against a version. */
-  currentMarkdown: () => string;
+  /** Apply a snapshot to the live doc as normal editable state (a restore). */
+  restoreSnapshot: (snapshot: string) => void | Promise<void>;
+  /** The editor's current snapshot, for diffing and undoable restore capture. */
+  currentSnapshot: () => string | Promise<string>;
   /**
    * Capture a version of the current editor state right now (deduped) and reset
    * the idle-capture timer. Used by the History panel's refresh button so an

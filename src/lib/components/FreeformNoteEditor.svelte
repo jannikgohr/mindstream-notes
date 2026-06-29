@@ -39,7 +39,9 @@
     saveNote as apiSaveNote,
     TRASH_ID,
     noteRoomInfo,
-    onSessionChange
+    onSessionChange,
+    captureNoteVersion,
+    type VersionAction
   } from '$lib/api';
   import { tree } from '$lib/stores/tree.svelte';
   import {
@@ -61,6 +63,19 @@
     unregisterEditor,
     type EditorListener
   } from '$lib/hotkeys/bus.svelte';
+  import {
+    bumpNoteHistory,
+    registerNoteHistory
+  } from '$lib/stores/note-history-bridge.svelte';
+  import {
+    parseHistorySnapshot,
+    serializeYjsSnapshot
+  } from '$lib/history/snapshot';
+  import {
+    readSceneFromYDoc,
+    replaceSceneInYDoc,
+    writeCurrentSceneToYDoc
+  } from '$lib/freeform/excalidraw-yjs';
 
   interface Props {
     noteId: string;
@@ -69,6 +84,7 @@
 
   /** Debounce window for save scheduling — same as NoteEditor. */
   const SAVE_DEBOUNCE_MS = 800;
+  const HISTORY_IDLE_DEFAULT_S = 180;
 
   /** Mount point for the React island. dockview gives us the full panel;
    *  the island fills it via `position: absolute; inset: 0`. */
@@ -85,6 +101,10 @@
   let collabConfigured = $state(false);
 
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
+  let historyTimer: ReturnType<typeof setTimeout> | null = null;
+  let historyDirty = false;
+  let capturingHistorySnapshot = false;
+  let unregisterHistory: (() => void) | null = null;
   let savingState = $state<'idle' | 'pending' | 'saving' | 'saved' | 'error'>(
     'idle'
   );
@@ -265,6 +285,7 @@
       yDocUpdateHandler = () => {
         if (!saveReady) return;
         scheduleSave();
+        if (!capturingHistorySnapshot) scheduleHistoryCapture();
       };
       localYDoc.on('update', yDocUpdateHandler);
       saveReady = true;
@@ -321,6 +342,14 @@
         };
         registerEditor(editorListener);
       }
+
+      unregisterHistory = registerNoteHistory(noteId, {
+        currentSnapshot: () => currentFreeformSnapshot(),
+        restoreSnapshot: (snapshot) => restoreFreeformSnapshot(snapshot),
+        snapshotNow: () => snapshotHistoryNow()
+      });
+
+      void captureHistoryVersion('edited');
     } catch (err) {
       loadError = err instanceof Error ? err.message : String(err);
       loading = false;
@@ -434,6 +463,13 @@
 
   onDestroy(() => {
     if (saveTimer) clearTimeout(saveTimer);
+    if (historyTimer) {
+      clearTimeout(historyTimer);
+      historyTimer = null;
+    }
+    if (historyDirty) void captureHistoryVersion('edited');
+    unregisterHistory?.();
+    unregisterHistory = null;
     if (editorListener) {
       unregisterEditor(editorListener);
       editorListener = null;
@@ -480,6 +516,73 @@
   });
 
   // ---- Save (debounced) ----
+
+  function currentFreeformSnapshot(): string {
+    if (!yDoc) return serializeYjsSnapshot('freeform', new Uint8Array());
+    if (excalidrawApi) {
+      capturingHistorySnapshot = true;
+      try {
+        writeCurrentSceneToYDoc(yDoc, excalidrawApi);
+      } finally {
+        capturingHistorySnapshot = false;
+      }
+    }
+    return serializeYjsSnapshot('freeform', Y.encodeStateAsUpdate(yDoc));
+  }
+
+  function restoreFreeformSnapshot(body: string): void {
+    if (!yDoc) return;
+    const parsed = parseHistorySnapshot(body, 'freeform');
+    if (parsed.noteKind !== 'freeform') return;
+
+    const snapshotDoc = new Y.Doc();
+    if (parsed.bytes.byteLength > 0) {
+      Y.applyUpdate(snapshotDoc, parsed.bytes);
+    }
+    const snapshot = readSceneFromYDoc(snapshotDoc);
+    replaceSceneInYDoc(yDoc, snapshot);
+    snapshotDoc.destroy();
+  }
+
+  async function snapshotHistoryNow() {
+    if (historyTimer) {
+      clearTimeout(historyTimer);
+      historyTimer = null;
+    }
+    await captureHistoryVersion('edited');
+  }
+
+  function historyIdleMs(): number {
+    const v = Number(getSettingValue('data.historyIdleSeconds'));
+    return (Number.isFinite(v) && v > 0 ? v : HISTORY_IDLE_DEFAULT_S) * 1000;
+  }
+
+  function scheduleHistoryCapture() {
+    if (isTrashed) return;
+    historyDirty = true;
+    if (historyTimer) clearTimeout(historyTimer);
+    historyTimer = setTimeout(() => {
+      historyTimer = null;
+      void captureHistoryVersion('edited');
+    }, historyIdleMs());
+  }
+
+  async function captureHistoryVersion(action: VersionAction) {
+    if (!yDoc) return;
+    historyDirty = false;
+    const snapshot = currentFreeformSnapshot();
+    try {
+      const created = await captureNoteVersion(
+        noteId,
+        'freeform',
+        action,
+        snapshot
+      );
+      if (created) bumpNoteHistory(noteId);
+    } catch (err) {
+      console.debug('[FreeformNoteEditor] history capture failed', err);
+    }
+  }
 
   function scheduleSave() {
     if (isTrashed) return;

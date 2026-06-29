@@ -12,6 +12,7 @@
     listNoteVersions,
     loadNote,
     loadNoteVersion,
+    type NoteKind,
     type VersionSummary
   } from '$lib/api';
   import MarkdownDiff from '$lib/components/MarkdownDiff.svelte';
@@ -28,8 +29,9 @@
 
   interface Props {
     noteId: string;
+    noteKind: NoteKind;
   }
-  let { noteId }: Props = $props();
+  let { noteId, noteKind }: Props = $props();
 
   let versions = $state<VersionSummary[]>([]);
   let loading = $state(false);
@@ -44,7 +46,8 @@
     body: string;
     current: string;
   } | null>(null);
-  // Desktop modal state (the version being inspected + both markdown texts).
+  // Desktop modal state (markdown only: the version being inspected + both
+  // markdown texts).
   let modal = $state<{
     summary: VersionSummary;
     oldMarkdown: string;
@@ -92,6 +95,7 @@
   // so a version landing while you inspect a diff doesn't yank you out).
   $effect(() => {
     void noteId;
+    void noteKind;
     detail = null;
     modal = null;
   });
@@ -101,16 +105,18 @@
   // appear in an already-open panel without a reopen.
   $effect(() => {
     void noteId;
+    void noteKind;
     void noteHistoryEpoch(noteId);
     void refresh();
   });
 
-  async function currentMarkdown(): Promise<string> {
+  async function currentSnapshot(): Promise<string> {
     const bridge = getNoteHistory(noteId);
-    if (bridge) return bridge.currentMarkdown();
-    // Note isn't open in an editor here — fall back to the saved body.
+    if (bridge) return await bridge.currentSnapshot();
+    // Note isn't open in an editor here — fall back to the saved body/state.
     try {
-      return (await loadNote(noteId)).body ?? '';
+      const note = await loadNote(noteId);
+      return noteKind === 'markdown' ? (note.body ?? '') : '';
     } catch {
       return '';
     }
@@ -120,10 +126,11 @@
     try {
       const [full, current] = await Promise.all([
         loadNoteVersion(summary.id),
-        currentMarkdown()
+        currentSnapshot()
       ]);
-      // Desktop: rich modal (current / diff / old tabs). Mobile: inline detail.
-      if (isMobile()) {
+      // Desktop markdown: rich modal (current / diff / old tabs). Mobile and
+      // non-markdown kinds: inline detail.
+      if (isMobile() || noteKind !== 'markdown') {
         detail = { summary, body: full.body, current };
       } else {
         modal = { summary, oldMarkdown: full.body, currentMarkdown: current };
@@ -146,14 +153,14 @@
       const full = await loadNoteVersion(target.id);
       await captureNoteVersion(
         noteId,
-        'markdown',
+        noteKind,
         'edited',
-        bridge.currentMarkdown()
+        await bridge.currentSnapshot()
       );
-      bridge.revert(full.body);
+      await bridge.restoreSnapshot(full.body);
       await captureNoteVersion(
         noteId,
-        'markdown',
+        noteKind,
         'reverted',
         full.body,
         target.id
@@ -212,6 +219,9 @@
   // punctuation, …) → a label for word-neutral, whitespace-only edits. A fresh
   // empty note ('created' with nothing) just shows its action, no magnitude.
   function magnitude(v: VersionSummary): string {
+    if (v.note_kind !== 'markdown') {
+      return v.action === 'created' ? '' : tUi('history.magnitudeChanged');
+    }
     if (v.words_added !== 0 || v.words_removed !== 0) {
       return tUi('history.magnitude')
         .replace('{added}', String(v.words_added))
@@ -263,7 +273,15 @@
       </span>
     </div>
 
-    <MarkdownDiff fromText={d.current} toText={d.body} />
+    {#if noteKind === 'markdown'}
+      <MarkdownDiff fromText={d.current} toText={d.body} />
+    {:else}
+      <p
+        class="rounded-md border border-border bg-muted/40 p-3 text-xs text-muted-foreground"
+      >
+        {tUi('history.previewUnavailable')}
+      </p>
+    {/if}
 
     <button
       type="button"

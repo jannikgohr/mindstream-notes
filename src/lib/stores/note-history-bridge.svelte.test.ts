@@ -8,8 +8,8 @@ import {
 } from './note-history-bridge.svelte';
 
 const api = () => ({
-  revert: vi.fn(),
-  currentMarkdown: () => 'md',
+  restoreSnapshot: vi.fn(),
+  currentSnapshot: () => 'snapshot',
   snapshotNow: vi.fn().mockResolvedValue(undefined)
 });
 
