@@ -66,6 +66,15 @@
     "fileTree.error": "Notizen konnten nicht geladen werden",
     "fileTree.emptyRoot": "Noch keine Notizen. Rechtsklick zum Anlegen.",
     "fileTree.emptyFolder": "Leer",
+    "fileTree.delete": "Notiz löschen",
+    "fileTree.delete.cancel": "Abbrechen",
+    "fileTree.deleteFallback": "diese Notiz",
+    "fileTree.deleteTrash.title": "Notiz in den Papierkorb verschieben?",
+    "fileTree.deleteTrash.message": "\"{title}\" wird in den Papierkorb verschoben. Du kannst sie später wiederherstellen.",
+    "fileTree.deleteTrash.confirm": "In Papierkorb verschieben",
+    "fileTree.deletePermanently.title": "Notiz endgültig löschen?",
+    "fileTree.deletePermanently.message": "\"{title}\" wird endgültig gelöscht. Das kann nicht rückgängig gemacht werden.",
+    "fileTree.deletePermanently.confirm": "Löschen",
 
     "favourite.add": "Zu Favoriten hinzufügen",
     "favourite.remove": "Aus Favoriten entfernen",
@@ -94,6 +103,8 @@
     "metadata.attachments.one": "{count} Datei",
     "metadata.attachments.other": "{count} Dateien",
     "metadata.noNote": "Keine Notiz ausgewählt.",
+    "desktop.emptyState.title": "Keine Notiz geöffnet",
+    "desktop.emptyState.message": "Öffne links im Explorer eine Notiz, um mit dem Bearbeiten zu beginnen.",
 
     "history.title": "Verlauf",
     "history.refresh": "Verlauf aktualisieren",
@@ -322,6 +333,7 @@
     "editor.wikilink.menu.label": "Notiz verlinken",
     "editor.wikilink.menu.empty": "Keine Treffer — weiter tippen, um einen neuen Link einzufügen",
     "editor.popout": "In neuem Fenster öffnen",
+    "editor.popin": "Zurück andocken",
 
     "editor.unknownKind.title": "Diese Notiz kann nicht geöffnet werden",
     "editor.unknownKind.message": "Diese Notiz wurde mit einem Editor-Typ erstellt, den diese App-Version nicht unterstützt. Aktualisiere auf die neueste Version, um sie zu öffnen. Der Inhalt der Notiz ist sicher — er wurde nicht verändert.",
@@ -676,7 +688,6 @@
       "description": "Anwendungsweite Tastenkürzel auch auslösen, wenn Mindstream Notes im Hintergrund ist. Formatierungs-Tastenkürzel bleiben auf die App beschränkt."
     },
     "editor.autoSaveDebounce": { "label": "Auto-Speichern-Verzögerung" },
-    "data.useTrash": { "label": "Papierkorb verwenden" },
     "data.trashRetentionDays": { "label": "Papierkorb-Aufbewahrung" },
     "data.historyRetentionDays": {
       "label": "Bearbeitungsverlauf behalten für",

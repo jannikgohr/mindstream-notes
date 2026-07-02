@@ -407,14 +407,14 @@ export const HOTKEY_COMMANDS: CommandDefinition[] = [
     scope: 'editor',
     editorKind: 'ink',
     labelKey: 'hotkeys.command.editor.ink.undo',
-    defaultBinding: null
+    defaultBinding: 'mod+z'
   },
   {
     id: 'editor.ink.redo',
     scope: 'editor',
     editorKind: 'ink',
     labelKey: 'hotkeys.command.editor.ink.redo',
-    defaultBinding: null
+    defaultBinding: 'mod+shift+z'
   },
   {
     id: 'editor.ink.toggleFingerDrawing',
@@ -493,14 +493,14 @@ export const HOTKEY_COMMANDS: CommandDefinition[] = [
     scope: 'editor',
     editorKind: 'pdf',
     labelKey: 'hotkeys.command.editor.pdf.undo',
-    defaultBinding: null
+    defaultBinding: 'mod+z'
   },
   {
     id: 'editor.pdf.redo',
     scope: 'editor',
     editorKind: 'pdf',
     labelKey: 'hotkeys.command.editor.pdf.redo',
-    defaultBinding: null
+    defaultBinding: 'mod+shift+z'
   },
   {
     id: 'editor.pdf.toggleComments',

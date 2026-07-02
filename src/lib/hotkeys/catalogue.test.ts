@@ -34,6 +34,7 @@ import {
 } from './catalogue';
 import { MARKDOWN_ACTIONS } from './markdown-actions';
 import { parseBinding } from './parse';
+import { commandsCanCollide } from './store.svelte';
 
 describe('catalogue consistency', () => {
   it('every markdown command has a registered action', () => {
@@ -145,22 +146,23 @@ describe('catalogue consistency', () => {
     expect(commandById('')).toBeNull();
   });
 
-  it('no two commands ship the same default binding', () => {
-    // Conflicting defaults would mean the first matching command in
-    // `findMatchingCommand`'s iteration wins, and the second is
-    // effectively dead on a fresh install. The user could only reach
-    // the second by rebinding it manually. Catalogue authors should
-    // pick non-overlapping defaults.
-    const byBinding = new Map<string, string[]>();
-    for (const cmd of HOTKEY_COMMANDS) {
-      if (!cmd.defaultBinding) continue;
-      const list = byBinding.get(cmd.defaultBinding) ?? [];
-      list.push(cmd.id);
-      byBinding.set(cmd.defaultBinding, list);
-    }
+  it('only ships shared defaults where the commands cannot collide', () => {
+    // Editor commands of different kinds are allowed to share a
+    // shortcut if the manager routes the chord by the active note
+    // type. Anything else would mean one command dead-keys another on
+    // a fresh install.
     const collisions: string[] = [];
-    for (const [binding, ids] of byBinding) {
-      if (ids.length > 1) collisions.push(`${binding} → ${ids.join(', ')}`);
+    for (let i = 0; i < HOTKEY_COMMANDS.length; i += 1) {
+      const a = HOTKEY_COMMANDS[i];
+      if (!a.defaultBinding) continue;
+      for (let j = i + 1; j < HOTKEY_COMMANDS.length; j += 1) {
+        const b = HOTKEY_COMMANDS[j];
+        if (!b.defaultBinding) continue;
+        if (a.defaultBinding !== b.defaultBinding) continue;
+        if (commandsCanCollide(a, b)) {
+          collisions.push(`${a.id} ↔ ${b.id} @ ${a.defaultBinding}`);
+        }
+      }
     }
     expect(collisions).toEqual([]);
   });
@@ -197,8 +199,6 @@ describe('catalogue consistency', () => {
     const inkIds = [
       'editor.ink.pen',
       'editor.ink.eraser',
-      'editor.ink.undo',
-      'editor.ink.redo',
       'editor.ink.toggleFingerDrawing',
       'editor.ink.togglePageTheme',
       'editor.ink.togglePageBackground',
@@ -215,6 +215,19 @@ describe('catalogue consistency', () => {
     }
   });
 
+  it('ships ink undo and redo with the shared editor defaults', () => {
+    expect(commandById('editor.ink.undo')).toMatchObject({
+      scope: 'editor',
+      editorKind: 'ink',
+      defaultBinding: 'mod+z'
+    });
+    expect(commandById('editor.ink.redo')).toMatchObject({
+      scope: 'editor',
+      editorKind: 'ink',
+      defaultBinding: 'mod+shift+z'
+    });
+  });
+
   it('ships pdf toolbar actions unset by default', () => {
     const pdfIds = [
       'editor.pdf.select',
@@ -223,8 +236,6 @@ describe('catalogue consistency', () => {
       'editor.pdf.pen',
       'editor.pdf.signature',
       'editor.pdf.deleteAnnotation',
-      'editor.pdf.undo',
-      'editor.pdf.redo',
       'editor.pdf.toggleComments',
       'editor.pdf.toggleNavigator',
       'editor.pdf.previousPage',
@@ -243,5 +254,18 @@ describe('catalogue consistency', () => {
         defaultBinding: null
       });
     }
+  });
+
+  it('ships pdf undo and redo with the shared editor defaults', () => {
+    expect(commandById('editor.pdf.undo')).toMatchObject({
+      scope: 'editor',
+      editorKind: 'pdf',
+      defaultBinding: 'mod+z'
+    });
+    expect(commandById('editor.pdf.redo')).toMatchObject({
+      scope: 'editor',
+      editorKind: 'pdf',
+      defaultBinding: 'mod+shift+z'
+    });
   });
 });

@@ -70,7 +70,7 @@
       {title}
     </span>
     <div data-tauri-drag-region class="flex-1"></div>
-    <WindowControls />
+    <WindowControls mode="popout" />
   </header>
 
   <main class="min-h-0 flex-1 overflow-hidden fullscreen-note">

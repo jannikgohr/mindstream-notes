@@ -166,6 +166,15 @@
     "fileTree.error": "Couldn't load notes",
     "fileTree.emptyRoot": "No notes yet. Right-click here to create one.",
     "fileTree.emptyFolder": "Empty",
+    "fileTree.delete": "Delete note",
+    "fileTree.delete.cancel": "Cancel",
+    "fileTree.deleteFallback": "this note",
+    "fileTree.deleteTrash.title": "Move note to trash?",
+    "fileTree.deleteTrash.message": "\"{title}\" will be moved to Trash. You can restore it later.",
+    "fileTree.deleteTrash.confirm": "Move to trash",
+    "fileTree.deletePermanently.title": "Delete note permanently?",
+    "fileTree.deletePermanently.message": "\"{title}\" will be deleted permanently. This cannot be undone.",
+    "fileTree.deletePermanently.confirm": "Delete",
 
     "favourite.add": "Add to favourites",
     "favourite.remove": "Remove from favourites",
@@ -194,6 +203,8 @@
     "metadata.attachments.one": "{count} file",
     "metadata.attachments.other": "{count} files",
     "metadata.noNote": "No note selected.",
+    "desktop.emptyState.title": "No note open",
+    "desktop.emptyState.message": "Open a note from the explorer to start editing.",
 
     "history.title": "History",
     "history.refresh": "Refresh history",
@@ -422,6 +433,7 @@
     "editor.wikilink.menu.label": "Link to note",
     "editor.wikilink.menu.empty": "No notes match — keep typing to insert a new link",
     "editor.popout": "Open in new window",
+    "editor.popin": "Pop in",
 
     "editor.unknownKind.title": "Can't open this note",
     "editor.unknownKind.message": "This note was created with an editor type this version of the app doesn't support. Update to the latest version to open it. The note's content is safe — it hasn't been changed.",
@@ -688,7 +700,6 @@
     },
     "editor.autoSaveDebounce": { "label": "Auto-save debounce" },
     "data.openFolder": { "label": "Open data folder" },
-    "data.useTrash": { "label": "Use trash on delete" },
     "data.trashRetentionDays": { "label": "Trash retention" },
     "data.historyRetentionDays": {
       "label": "Keep edit history for",

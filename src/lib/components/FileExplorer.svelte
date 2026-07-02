@@ -118,6 +118,7 @@
   let emptyTrashPending = $state(false);
   let emptyTrashAnimation = $state(0);
   let emptyTrashParticleCount = $state(0);
+  let deleteConfirmId = $state<string | null>(null);
   let sourceChipRow = $state<HTMLElement | null>(null);
   let sourceChipsCollapsed = $state(false);
   let expandedSourceChipWidth = 0;
@@ -294,6 +295,30 @@
         emptyTrashPending = false;
       }
     }
+  }
+
+  function startDelete(id: string) {
+    deleteConfirmId = id;
+  }
+
+  function cancelDelete() {
+    deleteConfirmId = null;
+  }
+
+  async function commitDelete(id: string) {
+    const note = tree.notesById[id];
+    deleteConfirmId = null;
+    const confirmed = await confirm({
+      title: tUi('fileTree.deleteTrash.title'),
+      message: tUi('fileTree.deleteTrash.message').replace(
+        '{title}',
+        note?.title ?? tUi('fileTree.deleteFallback')
+      ),
+      confirmLabel: tUi('fileTree.deleteTrash.confirm'),
+      destructive: true
+    });
+    if (!confirmed) return;
+    await trashNote(id);
   }
 
   async function menuItemsForTarget(
@@ -899,6 +924,10 @@
     {@const inTrash =
       source === 'trash' ||
       (note ? noteIsUnderTrash(note, tree.collectionsById) : false)}
+    {@const canDelete =
+      !inTrash &&
+      source !== 'shared' &&
+      (note ? !noteIsUnderShared(note, tree.collectionsById) : true)}
     {@const kind = note?.note_kind}
     {@const NoteIcon = noteKindIcon(kind)}
     <!-- Row uses a flex container so the favourite-toggle button can
@@ -943,6 +972,41 @@
         >
           <FavouriteStar size={14} favourited={fav} />
         </button>
+      {/if}
+      {#if canDelete}
+        {#if deleteConfirmId === node.id}
+          <div class="flex shrink-0 items-center gap-1 pl-1">
+            <Button
+              variant="destructive"
+              size="sm"
+              class="h-7 px-2 text-xs"
+              onclick={() => void commitDelete(node.id)}
+            >
+              {tUi('fileTree.deleteTrash.confirm')}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              class="h-7 px-2 text-xs"
+              onclick={cancelDelete}
+            >
+              {tUi('fileTree.delete.cancel')}
+            </Button>
+          </div>
+        {:else}
+          <button
+            type="button"
+            class="shrink-0 rounded p-1 text-muted-foreground transition-opacity hover:text-destructive {deleteConfirmId ===
+            node.id
+              ? 'opacity-100'
+              : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100'}"
+            onclick={() => startDelete(node.id)}
+            use:tooltip={tUi('fileTree.delete')}
+            aria-label={tUi('fileTree.delete')}
+          >
+            <Trash2 size={14} />
+          </button>
+        {/if}
       {/if}
     </div>
   {/if}

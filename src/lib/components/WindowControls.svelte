@@ -11,8 +11,9 @@
    * shell without a try/catch at every callsite.
    */
   import { onMount } from 'svelte';
-  import { Copy, Minus, Square, X } from '@lucide/svelte';
+  import { ArrowLeftToLine, Copy, Minus, Square, X } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
+  import { tUi } from '$lib/settings/i18n.svelte';
 
   type WindowApi = {
     minimize: () => Promise<void>;
@@ -21,9 +22,14 @@
     isMaximized: () => Promise<boolean>;
   };
 
+  interface Props {
+    mode?: 'main' | 'popout';
+  }
+
   let appWindow = $state<WindowApi | null>(null);
   let isMaximized = $state(false);
   let unlistenResize: (() => void) | null = null;
+  let { mode = 'main' }: Props = $props();
 
   onMount(() => {
     void setup();
@@ -53,6 +59,10 @@
       console.warn('[WindowControls] Tauri window API unavailable', err);
     }
   }
+
+  function handlePopIn() {
+    void appWindow?.close();
+  }
 </script>
 
 {#if appWindow}
@@ -78,14 +88,26 @@
       <Square class="size-4" />
     {/if}
   </Button>
-  <Button
-    variant="ghost"
-    size="icon"
-    class="hover:bg-destructive hover:text-destructive-foreground"
-    onclick={() => appWindow?.close()}
-    title="Close"
-    aria-label="Close"
-  >
-    <X class="size-4" />
-  </Button>
+  {#if mode === 'popout'}
+    <Button
+      variant="ghost"
+      size="icon"
+      onclick={handlePopIn}
+      title={tUi('editor.popin')}
+      aria-label={tUi('editor.popin')}
+    >
+      <ArrowLeftToLine class="size-4" />
+    </Button>
+  {:else}
+    <Button
+      variant="ghost"
+      size="icon"
+      class="hover:bg-destructive hover:text-destructive-foreground"
+      onclick={() => appWindow?.close()}
+      title="Close"
+      aria-label="Close"
+    >
+      <X class="size-4" />
+    </Button>
+  {/if}
 {/if}
