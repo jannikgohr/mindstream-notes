@@ -250,10 +250,15 @@ export function addMermaidMenuItem(builder: SlashMenuBuilder, label: string) {
  * the descriptor when the user picks it from the dropdown and crashes if
  * `support` is missing.
  *
- * `token: () => null` is the minimal StreamParser — every character is
- * emitted as a plain text token. That's all we need: the diagram is
- * rendered below the code via `renderMermaidPreview`, so highlighting
- * the source itself adds nothing.
+ * The token function MUST advance the stream: CodeMirror's readToken
+ * throws "Stream parser failed to advance stream." if ten calls in a
+ * row leave the position unchanged, and that exception fires on every
+ * highlight pass — which broke typing inside mermaid blocks entirely.
+ * `skipToEnd()` consumes the whole line as one untagged token: no
+ * highlighting (none exists upstream — see Milkdown discussion #1479),
+ * but a well-behaved parser. The diagram is rendered below the code
+ * via `renderMermaidPreview`, so highlighting the source itself adds
+ * nothing anyway.
  *
  * Display name is `Mermaid` (capitalised) so it reads well in the
  * picker; alias `mmd` covers the conventional file extension. The
@@ -261,7 +266,10 @@ export function addMermaidMenuItem(builder: SlashMenuBuilder, label: string) {
  */
 const mermaidStreamLanguage = StreamLanguage.define({
   name: MERMAID_LANG,
-  token: () => null
+  token: (stream) => {
+    stream.skipToEnd();
+    return null;
+  }
 });
 
 export const mermaidLanguageDescription = LanguageDescription.of({
