@@ -72,7 +72,7 @@ fn compress(md: &str) -> AppResult<Vec<u8>> {
     Ok(enc.finish()?)
 }
 
-fn decompress(bytes: &[u8]) -> AppResult<String> {
+pub(crate) fn decompress_snapshot(bytes: &[u8]) -> AppResult<String> {
     let mut out = String::new();
     DeflateDecoder::new(bytes).read_to_string(&mut out)?;
     Ok(out)
@@ -306,7 +306,7 @@ pub fn capture(
 ) -> AppResult<Option<VersionSummary>> {
     let prev_md = latest_version_blob(conn, note_id)?
         .as_deref()
-        .map(decompress)
+        .map(decompress_snapshot)
         .transpose()?;
     let Some(prepared) = prepare_version(
         prev_md,
@@ -336,7 +336,7 @@ fn capture_off_lock(
     let prev_md = db
         .with_conn(|c| latest_version_blob(c, note_id))?
         .as_deref()
-        .map(decompress)
+        .map(decompress_snapshot)
         .transpose()?;
     let Some(prepared) = prepare_version(
         prev_md,
@@ -362,6 +362,7 @@ fn enforce_cap(conn: &Connection, note_id: &str) -> AppResult<()> {
          )",
         params![note_id, MAX_VERSIONS_PER_NOTE],
     )?;
+    crate::assets::purge_unreferenced_markdown_assets(conn, note_id)?;
     Ok(())
 }
 
@@ -393,7 +394,7 @@ pub fn load(conn: &Connection, version_id: &str) -> AppResult<Version> {
     match row {
         Some((summary, blob)) => Ok(Version {
             summary,
-            body: decompress(&blob)?,
+            body: decompress_snapshot(&blob)?,
         }),
         None => Err(AppError::NotFound(format!("note version {version_id}"))),
     }
@@ -406,10 +407,21 @@ pub fn prune(conn: &Connection, retention_days: Option<u32>) -> AppResult<usize>
         return Ok(0);
     };
     let cutoff = (Utc::now() - chrono::Duration::days(days as i64)).to_rfc3339();
+    let affected_note_ids = {
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT note_id FROM note_versions
+             WHERE created < ?1 AND note_kind = 'markdown'",
+        )?;
+        let rows = stmt.query_map(params![cutoff], |r| r.get::<_, String>(0))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
     let removed = conn.execute(
         "DELETE FROM note_versions WHERE created < ?1",
         params![cutoff],
     )?;
+    for note_id in affected_note_ids {
+        crate::assets::purge_unreferenced_markdown_assets(conn, &note_id)?;
+    }
     Ok(removed)
 }
 

@@ -10,7 +10,11 @@
 //! implementation lives in the follow-up slice. For now uploads land
 //! locally with `dirty = 1` so when sync ships nothing needs migrating.
 
+use std::collections::HashMap;
+use std::sync::OnceLock;
+
 use chrono::Utc;
+use regex::Regex;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -163,6 +167,96 @@ pub fn load(conn: &Connection, id: &str) -> AppResult<Asset> {
     }
 }
 
+fn asset_url_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"asset:mindstream/([A-Za-z0-9_-]+)").unwrap())
+}
+
+fn count_asset_refs(body: &str, counts: &mut HashMap<String, usize>) {
+    for captures in asset_url_re().captures_iter(body) {
+        if let Some(id) = captures.get(1) {
+            *counts.entry(id.as_str().to_string()).or_default() += 1;
+        }
+    }
+    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(body) {
+        if let Some(id) = parsed.get("pdfAssetId").and_then(|v| v.as_str()) {
+            *counts.entry(id.to_string()).or_default() += 1;
+        }
+    }
+}
+
+pub(crate) fn asset_reference_counts(
+    conn: &Connection,
+    note_id: &str,
+) -> AppResult<HashMap<String, usize>> {
+    let mut counts = HashMap::new();
+    let current: Option<(String, String)> = conn
+        .query_row(
+            "SELECT note_kind, body FROM notes WHERE id = ?1",
+            params![note_id],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+        )
+        .optional()?;
+    let Some((note_kind, body)) = current else {
+        return Ok(counts);
+    };
+    count_asset_refs(&body, &mut counts);
+
+    if note_kind != "markdown" {
+        return Ok(counts);
+    }
+
+    let mut stmt = conn.prepare(
+        "SELECT body FROM note_versions
+         WHERE note_id = ?1 AND note_kind = 'markdown'",
+    )?;
+    let rows = stmt.query_map(params![note_id], |r| r.get::<_, Vec<u8>>(0))?;
+    for row in rows {
+        let snapshot = crate::history::decompress_snapshot(&row?)?;
+        count_asset_refs(&snapshot, &mut counts);
+    }
+    Ok(counts)
+}
+
+pub(crate) fn purge_unreferenced_markdown_assets(
+    conn: &Connection,
+    note_id: &str,
+) -> AppResult<usize> {
+    let note_kind: Option<String> = conn
+        .query_row(
+            "SELECT note_kind FROM notes WHERE id = ?1",
+            params![note_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if note_kind.as_deref() != Some("markdown") {
+        return Ok(0);
+    }
+
+    let refs = asset_reference_counts(conn, note_id)?;
+    let mut stmt = conn.prepare(
+        "SELECT id, etebase_uid FROM assets
+         WHERE owning_note_id = ?1",
+    )?;
+    let rows = stmt.query_map(params![note_id], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
+    })?;
+    let assets = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(stmt);
+
+    let mut removed = 0usize;
+    for (asset_id, etebase_uid) in assets {
+        if refs.contains_key(&asset_id) {
+            continue;
+        }
+        if let Some(uid) = etebase_uid {
+            crate::sync::queue_tombstone(conn, "asset", &uid)?;
+        }
+        removed += conn.execute("DELETE FROM assets WHERE id = ?1", params![asset_id])?;
+    }
+    Ok(removed)
+}
+
 // ---------- Tauri commands ----------
 
 #[tauri::command]
@@ -185,7 +279,7 @@ pub fn import_pdf_note(db: tauri::State<'_, Db>, input: ImportPdfNote) -> Result
 mod tests {
     use super::*;
     use crate::db::open_memory_for_tests;
-    use crate::notes::{create as create_note, CreateNote};
+    use crate::notes::{create as create_note, update as update_note, CreateNote, UpdateNote};
 
     fn make_note(db: &Db) -> String {
         db.with_conn(|c| {
@@ -196,6 +290,23 @@ mod tests {
                     body: None,
                     parent_collection_id: None,
                     note_kind: Some("freeform".into()),
+                },
+            )
+        })
+        .unwrap()
+        .summary
+        .id
+    }
+
+    fn make_markdown_note(db: &Db) -> String {
+        db.with_conn(|c| {
+            create_note(
+                c,
+                CreateNote {
+                    title: Some("Markdown".into()),
+                    body: Some(String::new()),
+                    parent_collection_id: None,
+                    note_kind: Some("markdown".into()),
                 },
             )
         })
@@ -314,5 +425,121 @@ mod tests {
         assert_eq!(asset.summary.owning_note_id, note.summary.id);
         assert_eq!(asset.summary.mime_type, "application/pdf");
         assert_eq!(asset.bytes, pdf_bytes);
+    }
+
+    #[test]
+    fn markdown_cleanup_deletes_unreferenced_asset_without_history_ref() {
+        let db = open_memory_for_tests();
+        let note_id = make_markdown_note(&db);
+        let asset = db
+            .with_conn(|c| {
+                upload(
+                    c,
+                    UploadAsset {
+                        owning_note_id: note_id.clone(),
+                        mime_type: "image/png".into(),
+                        bytes: vec![1, 2, 3],
+                    },
+                )
+            })
+            .unwrap();
+
+        db.with_conn_mut(|c| {
+            update_note(
+                c,
+                UpdateNote {
+                    id: note_id.clone(),
+                    title: None,
+                    body: Some(format!("![](asset:mindstream/{})", asset.summary.id)),
+                    parent_collection_id: None,
+                    position: None,
+                    tags: None,
+                    yrs_state: None,
+                    favourite: None,
+                },
+            )
+        })
+        .unwrap();
+        db.with_conn_mut(|c| {
+            update_note(
+                c,
+                UpdateNote {
+                    id: note_id.clone(),
+                    title: None,
+                    body: Some("removed".into()),
+                    parent_collection_id: None,
+                    position: None,
+                    tags: None,
+                    yrs_state: None,
+                    favourite: None,
+                },
+            )
+        })
+        .unwrap();
+
+        let res = db.with_conn(|c| load(c, &asset.summary.id));
+        assert!(res.is_err(), "asset with no live/history refs is deleted");
+    }
+
+    #[test]
+    fn markdown_cleanup_keeps_history_referenced_asset_until_history_pruned() {
+        let db = open_memory_for_tests();
+        let note_id = make_markdown_note(&db);
+        let asset = db
+            .with_conn(|c| {
+                upload(
+                    c,
+                    UploadAsset {
+                        owning_note_id: note_id.clone(),
+                        mime_type: "image/png".into(),
+                        bytes: vec![1, 2, 3],
+                    },
+                )
+            })
+            .unwrap();
+        let body = format!("![](asset:mindstream/{})", asset.summary.id);
+        let version = db
+            .with_conn(|c| crate::history::capture(c, &note_id, "markdown", "edited", None, &body))
+            .unwrap()
+            .unwrap();
+
+        db.with_conn_mut(|c| {
+            update_note(
+                c,
+                UpdateNote {
+                    id: note_id.clone(),
+                    title: None,
+                    body: Some("removed".into()),
+                    parent_collection_id: None,
+                    position: None,
+                    tags: None,
+                    yrs_state: None,
+                    favourite: None,
+                },
+            )
+        })
+        .unwrap();
+        assert!(
+            db.with_conn(|c| load(c, &asset.summary.id)).is_ok(),
+            "history snapshot keeps the asset alive"
+        );
+
+        let old = (Utc::now() - chrono::Duration::days(100)).to_rfc3339();
+        db.with_conn(|c| {
+            c.execute(
+                "UPDATE note_versions SET created = ?2 WHERE id = ?1",
+                params![version.id, old],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        db.with_conn(|c| crate::history::prune(c, Some(90)))
+            .unwrap();
+
+        let res = db.with_conn(|c| load(c, &asset.summary.id));
+        assert!(
+            res.is_err(),
+            "asset is deleted once the last history reference is pruned"
+        );
     }
 }
