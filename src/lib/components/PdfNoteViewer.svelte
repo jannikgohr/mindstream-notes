@@ -124,7 +124,9 @@
     type EditorListener
   } from '$lib/hotkeys/bus.svelte';
   import {
+    ANNOTATION_CLICK_SLOP_PX,
     ANNOTATION_COLORS,
+    annotationIdAtPoint,
     buildPdfAnnotation,
     clampZoom,
     clonePdfFormValue,
@@ -2337,6 +2339,10 @@
     // Link annotations for this page (external URLs + internal jumps),
     // fetched once per draw and overlaid as clickable anchors.
     let currentLinks: PdfLink[] = [];
+    // Tears down the text-mode click-to-select listeners installed by
+    // renderAppAnnotations (they live on the page element, which
+    // outlives each annotation layer).
+    let textModeClickCleanup: (() => void) | null = null;
     // Register the in-flight-cancel hook so the renderObserver can pre-empt
     // this page's render the instant the page leaves the band — even if
     // the DOM teardown is still inside its 200 ms grace window. Three
@@ -2529,6 +2535,13 @@
           current.activeTool === 'comment') &&
           !current.areaMode);
       layer.style.pointerEvents = textMode || isTrashed ? 'none' : 'auto';
+      // In text mode the annotation nodes themselves are also
+      // pointer-transparent — otherwise a highlight sitting on top of
+      // the text layer would swallow the drag and make its own text
+      // unselectable. Clicking an annotation still works: a plain click
+      // (no drag, no resulting selection) is hit-tested against the
+      // rendered rects below.
+      const nodesInterceptPointer = !textMode;
       pageEl.append(layer);
 
       const pageAnnotations = annotations.filter(
@@ -2574,6 +2587,7 @@
             '--annotation-opacity',
             `${annotation.opacity}`
           );
+          if (!nodesInterceptPointer) node.style.pointerEvents = 'none';
           node.title = annotation.body || node.getAttribute('aria-label') || '';
           if (annotation.type === 'signature' && annotation.signature) {
             const svg = document.createElementNS(
@@ -2655,6 +2669,47 @@
           });
           layer.append(node);
         }
+      }
+
+      // Click-to-select for text mode: with the annotation nodes
+      // pointer-transparent, discriminate click from drag on the page
+      // itself. A press that travels less than the slop and leaves no
+      // text selection behind selects the annotation under the pointer;
+      // anything else is a selection drag and stays untouched.
+      textModeClickCleanup?.();
+      textModeClickCleanup = null;
+      if (textMode && !isTrashed) {
+        const controller = new AbortController();
+        let downPoint: { x: number; y: number } | null = null;
+        pageEl.addEventListener(
+          'pointerdown',
+          (event) => {
+            downPoint =
+              event.button === 0
+                ? { x: event.clientX, y: event.clientY }
+                : null;
+          },
+          { signal: controller.signal }
+        );
+        pageEl.addEventListener(
+          'pointerup',
+          (event) => {
+            const start = downPoint;
+            downPoint = null;
+            if (!start) return;
+            const travel = Math.hypot(
+              event.clientX - start.x,
+              event.clientY - start.y
+            );
+            if (travel > ANNOTATION_CLICK_SLOP_PX) return;
+            const selection = window.getSelection();
+            if (selection && !selection.isCollapsed) return;
+            const id = annotationIdAtPoint(layer, event.clientX, event.clientY);
+            if (id) selectAnnotation(id);
+          },
+          { signal: controller.signal }
+        );
+        textModeClickCleanup = () => controller.abort();
       }
 
       if (current.activeTool === 'pen') {
@@ -2876,6 +2931,8 @@
 
     function teardownPageView() {
       clearPendingPageView();
+      textModeClickCleanup?.();
+      textModeClickCleanup = null;
       destroyPageView(pageView);
       pageView = null;
       activeLayer = null;

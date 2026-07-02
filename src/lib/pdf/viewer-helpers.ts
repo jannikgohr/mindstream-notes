@@ -147,3 +147,39 @@ export function isCommentLikeAnnotation(annotation: PdfAnnotation): boolean {
     (annotation.type === 'highlight' && typeof annotation.body === 'string')
   );
 }
+
+/**
+ * Max pointer travel (px) between pointerdown and pointerup for the
+ * gesture to still count as a click on an annotation rather than the
+ * start of a text-selection drag.
+ */
+export const ANNOTATION_CLICK_SLOP_PX = 5;
+
+/**
+ * Topmost `.pdf-app-annotation` under a client point. Used by the
+ * text-aware tools, where the annotation nodes are pointer-transparent
+ * (so drags select the text beneath them) and plain clicks are
+ * hit-tested against the rendered rects instead. Later siblings paint
+ * on top, so the last match wins.
+ */
+export function annotationIdAtPoint(
+  layer: Element,
+  clientX: number,
+  clientY: number
+): string | null {
+  let hit: string | null = null;
+  for (const node of layer.querySelectorAll<HTMLElement>(
+    '.pdf-app-annotation'
+  )) {
+    const rect = node.getBoundingClientRect();
+    if (
+      clientX >= rect.left &&
+      clientX <= rect.right &&
+      clientY >= rect.top &&
+      clientY <= rect.bottom
+    ) {
+      hit = node.dataset.annotationId ?? hit;
+    }
+  }
+  return hit;
+}
