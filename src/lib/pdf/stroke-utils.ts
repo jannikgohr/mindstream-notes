@@ -44,6 +44,27 @@ export function strokeBounds(points: PdfStrokePoint[], padding = 0): PdfRect {
   };
 }
 
+/** A copy of the stroke with every point shifted by `(dx, dy)`. */
+export function translateStroke(
+  stroke: PdfInkStroke,
+  dx: number,
+  dy: number
+): PdfInkStroke {
+  return {
+    ...stroke,
+    points: stroke.points.map((point) => ({
+      ...point,
+      x: point.x + dx,
+      y: point.y + dy
+    }))
+  };
+}
+
+/** A copy of the rect shifted by `(dx, dy)`. */
+export function translateRect(rect: PdfRect, dx: number, dy: number): PdfRect {
+  return { ...rect, x: rect.x + dx, y: rect.y + dy };
+}
+
 /** Deep-copy an ink stroke so the result shares no references with the input. */
 export function cloneInkStroke(stroke: PdfInkStroke): PdfInkStroke {
   return {
