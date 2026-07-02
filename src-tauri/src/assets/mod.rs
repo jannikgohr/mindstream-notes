@@ -442,12 +442,11 @@ mod tests {
             )
         });
 
-        match res {
-            Err(AppError::InvalidArg(message)) => {
-                assert!(message.contains("PDF file is empty"))
-            }
-            other => panic!("expected InvalidArg, got {other:?}"),
-        }
+        let err = res.expect_err("empty PDF import should fail");
+        assert!(matches!(
+            err,
+            AppError::InvalidArg(message) if message.contains("PDF file is empty")
+        ));
     }
 
     #[test]
