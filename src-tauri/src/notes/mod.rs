@@ -853,6 +853,70 @@ mod tests {
     }
 
     #[test]
+    fn save_yrs_state_accepts_empty_update_for_fresh_note() {
+        let db = open_memory_for_tests();
+        let n = db
+            .with_conn(|c| {
+                create(
+                    c,
+                    CreateNote {
+                        title: Some("Ink".into()),
+                        body: None,
+                        parent_collection_id: None,
+                        note_kind: Some("ink".into()),
+                    },
+                )
+            })
+            .unwrap();
+
+        db.with_conn_mut(|c| save_yrs_state(c, &n.summary.id, &[]))
+            .unwrap();
+
+        assert!(db
+            .with_conn(|c| load_yrs_state(c, &n.summary.id))
+            .unwrap()
+            .is_empty());
+        assert_eq!(dirty_flag(&db, &n.summary.id), 1);
+    }
+
+    #[test]
+    fn save_yrs_state_keeps_existing_state_when_incoming_bytes_are_empty() {
+        let db = open_memory_for_tests();
+        let n = db
+            .with_conn(|c| {
+                create(
+                    c,
+                    CreateNote {
+                        title: Some("Ink".into()),
+                        body: None,
+                        parent_collection_id: None,
+                        note_kind: Some("ink".into()),
+                    },
+                )
+            })
+            .unwrap();
+
+        let base = crate::sync::yrs_doc::init_with_markdown("base");
+        let edit = crate::sync::yrs_doc::apply_local_edit(&base, "base", "base A");
+        db.with_conn_mut(|c| save_yrs_state(c, &n.summary.id, &edit))
+            .unwrap();
+        db.with_conn_mut(|c| save_yrs_state(c, &n.summary.id, &[]))
+            .unwrap();
+
+        let merged = db.with_conn(|c| load_yrs_state(c, &n.summary.id)).unwrap();
+        let merged_text = crate::sync::yrs_doc::to_markdown(&merged);
+        assert!(merged_text.contains('A'));
+        assert_eq!(dirty_flag(&db, &n.summary.id), 1);
+    }
+
+    #[test]
+    fn load_yrs_state_returns_empty_for_missing_note() {
+        let db = open_memory_for_tests();
+        let state = db.with_conn(|c| load_yrs_state(c, "missing-note")).unwrap();
+        assert!(state.is_empty());
+    }
+
+    #[test]
     fn body_edit_re_marks_dirty_and_updates_yrs_state() {
         let db = open_memory_for_tests();
         let n = empty_note(&db, None);

@@ -19,6 +19,12 @@ describe('sliceStrokeByCircles', () => {
     expect(result.fragments).toEqual([line()]);
   });
 
+  it('returns the original points when the stroke is too short', () => {
+    const result = sliceStrokeByCircles([p(0, 0)], []);
+    expect(result.changed).toBe(false);
+    expect(result.fragments).toEqual([[p(0, 0)]]);
+  });
+
   it('splits a line into two fragments when erased in the middle', () => {
     const circles: EraserCircle[] = [{ x: 50, y: 0, r: 10 }];
     const result = sliceStrokeByCircles(line(), circles);
@@ -43,6 +49,15 @@ describe('sliceStrokeByCircles', () => {
   it('removes the whole stroke when fully covered', () => {
     const circles: EraserCircle[] = [{ x: 50, y: 0, r: 200 }];
     const result = sliceStrokeByCircles(line(), circles);
+    expect(result.changed).toBe(true);
+    expect(result.fragments).toHaveLength(0);
+  });
+
+  it('treats a zero-length segment as covered when the point is inside', () => {
+    const result = sliceStrokeByCircles(
+      [p(50, 0), p(50, 0)],
+      [{ x: 50, y: 0, r: 5 }]
+    );
     expect(result.changed).toBe(true);
     expect(result.fragments).toHaveLength(0);
   });
@@ -77,5 +92,17 @@ describe('sliceStrokeByCircles', () => {
     const result = sliceStrokeByCircles(line(), circles);
     expect(result.changed).toBe(true);
     expect(result.fragments).toHaveLength(3);
+  });
+
+  it('merges overlapping covered intervals before splitting fragments', () => {
+    const circles: EraserCircle[] = [
+      { x: 30, y: 0, r: 15 },
+      { x: 40, y: 0, r: 15 }
+    ];
+    const result = sliceStrokeByCircles(line(), circles);
+    expect(result.changed).toBe(true);
+    expect(result.fragments).toHaveLength(2);
+    expect(result.fragments[0][1].x).toBeCloseTo(15);
+    expect(result.fragments[1][0].x).toBeCloseTo(55);
   });
 });
