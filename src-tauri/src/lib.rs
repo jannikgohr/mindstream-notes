@@ -188,6 +188,7 @@ pub fn run() {
         .enable_macos_default_menu(false)
         .on_menu_event(native_menu::handle_menu_event)
         .on_window_event(|window, event| {
+            #[cfg(target_os = "macos")]
             if matches!(
                 event,
                 tauri::WindowEvent::Focused(_) | tauri::WindowEvent::Destroyed
@@ -282,7 +283,7 @@ pub fn run() {
             #[cfg(desktop)]
             app.manage(desktop_settings::DesktopSettings::load(app));
 
-            #[cfg(desktop)]
+            #[cfg(target_os = "macos")]
             native_menu::init(app)?;
 
             #[cfg(desktop)]
