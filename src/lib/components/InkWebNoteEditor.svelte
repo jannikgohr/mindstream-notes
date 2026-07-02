@@ -78,6 +78,8 @@
   import {
     registerEditor,
     unregisterEditor,
+    APP_REDO_COMMAND,
+    APP_UNDO_COMMAND,
     type EditorListener
   } from '$lib/hotkeys/bus.svelte';
   import { tree } from '$lib/stores/tree.svelte';
@@ -2644,9 +2646,11 @@
         setTool('lasso');
         return true;
       case 'editor.ink.undo':
+      case APP_UNDO_COMMAND:
         undo();
         return true;
       case 'editor.ink.redo':
+      case APP_REDO_COMMAND:
         redo();
         return true;
       case 'editor.ink.toggleFingerDrawing':

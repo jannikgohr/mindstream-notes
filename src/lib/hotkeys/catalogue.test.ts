@@ -34,6 +34,7 @@ import {
 } from './catalogue';
 import { MARKDOWN_ACTIONS } from './markdown-actions';
 import { parseBinding } from './parse';
+import { commandsCanCollide } from './store.svelte';
 
 describe('catalogue consistency', () => {
   it('every markdown command has a registered action', () => {
@@ -48,11 +49,17 @@ describe('catalogue consistency', () => {
     expect(missing).toEqual([]);
   });
 
-  it('every markdown action maps to a real command', () => {
+  it('every markdown action maps to a real command or shared alias', () => {
     // The reverse drift: a renamed command leaves a stale
     // MARKDOWN_ACTIONS entry that's unreachable but loads / takes up
-    // bundle space. Catching it means the table truly mirrors the
-    // catalogue.
+    // bundle space. Shared undo/redo aliases are allowed because the
+    // app-level command ids intentionally fan out to the active editor.
+    const allowedAliases = new Set([
+      'app.undo',
+      'app.redo',
+      'editor.markdown.undo',
+      'editor.markdown.redo'
+    ]);
     const markdownIds = new Set(
       HOTKEY_COMMANDS.filter(
         (c) => c.scope === 'editor' && c.editorKind === 'markdown'
@@ -60,7 +67,7 @@ describe('catalogue consistency', () => {
     );
     const stale: string[] = [];
     for (const id of Object.keys(MARKDOWN_ACTIONS)) {
-      if (!markdownIds.has(id)) stale.push(id);
+      if (!markdownIds.has(id) && !allowedAliases.has(id)) stale.push(id);
     }
     expect(stale).toEqual([]);
   });
@@ -145,22 +152,23 @@ describe('catalogue consistency', () => {
     expect(commandById('')).toBeNull();
   });
 
-  it('no two commands ship the same default binding', () => {
-    // Conflicting defaults would mean the first matching command in
-    // `findMatchingCommand`'s iteration wins, and the second is
-    // effectively dead on a fresh install. The user could only reach
-    // the second by rebinding it manually. Catalogue authors should
-    // pick non-overlapping defaults.
-    const byBinding = new Map<string, string[]>();
-    for (const cmd of HOTKEY_COMMANDS) {
-      if (!cmd.defaultBinding) continue;
-      const list = byBinding.get(cmd.defaultBinding) ?? [];
-      list.push(cmd.id);
-      byBinding.set(cmd.defaultBinding, list);
-    }
+  it('only ships shared defaults where the commands cannot collide', () => {
+    // Editor commands of different kinds are allowed to share a
+    // shortcut if the manager routes the chord by the active note
+    // type. Anything else would mean one command dead-keys another on
+    // a fresh install.
     const collisions: string[] = [];
-    for (const [binding, ids] of byBinding) {
-      if (ids.length > 1) collisions.push(`${binding} → ${ids.join(', ')}`);
+    for (let i = 0; i < HOTKEY_COMMANDS.length; i += 1) {
+      const a = HOTKEY_COMMANDS[i];
+      if (!a.defaultBinding) continue;
+      for (let j = i + 1; j < HOTKEY_COMMANDS.length; j += 1) {
+        const b = HOTKEY_COMMANDS[j];
+        if (!b.defaultBinding) continue;
+        if (a.defaultBinding !== b.defaultBinding) continue;
+        if (commandsCanCollide(a, b)) {
+          collisions.push(`${a.id} ↔ ${b.id} @ ${a.defaultBinding}`);
+        }
+      }
     }
     expect(collisions).toEqual([]);
   });
@@ -197,8 +205,6 @@ describe('catalogue consistency', () => {
     const inkIds = [
       'editor.ink.pen',
       'editor.ink.eraser',
-      'editor.ink.undo',
-      'editor.ink.redo',
       'editor.ink.toggleFingerDrawing',
       'editor.ink.togglePageTheme',
       'editor.ink.togglePageBackground',
@@ -223,8 +229,6 @@ describe('catalogue consistency', () => {
       'editor.pdf.pen',
       'editor.pdf.signature',
       'editor.pdf.deleteAnnotation',
-      'editor.pdf.undo',
-      'editor.pdf.redo',
       'editor.pdf.toggleComments',
       'editor.pdf.toggleNavigator',
       'editor.pdf.previousPage',
@@ -243,5 +247,16 @@ describe('catalogue consistency', () => {
         defaultBinding: null
       });
     }
+  });
+
+  it('ships app-level undo and redo with the shared editor defaults', () => {
+    expect(commandById('global.undo')).toMatchObject({
+      scope: 'global',
+      defaultBinding: 'mod+z'
+    });
+    expect(commandById('global.redo')).toMatchObject({
+      scope: 'global',
+      defaultBinding: 'mod+shift+z'
+    });
   });
 });

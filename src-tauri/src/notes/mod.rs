@@ -366,9 +366,7 @@ pub fn update(conn: &mut Connection, input: UpdateNote) -> AppResult<Note> {
         // Mirror of the collection path: stamp `trashed_at` when the note
         // moves into the trash, clear it on the way out. The soft-delete
         // path in `notes::trash` keeps its own behaviour (writes
-        // `trashed_at` without moving) — that's a separate flow used when
-        // `data.useTrash` is off and the user wants the row to disappear
-        // outright.
+        // `trashed_at` without moving) for direct-trash operations.
         crate::collections::stamp_trashed_at_on_parent_change(
             &tx,
             "notes",

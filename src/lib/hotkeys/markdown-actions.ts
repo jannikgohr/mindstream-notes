@@ -16,6 +16,7 @@ import {
   redo as proseRedo,
   undo as proseUndo
 } from '@milkdown/kit/prose/history';
+import { APP_REDO_COMMAND, APP_UNDO_COMMAND } from './bus.svelte';
 import {
   applyListAction,
   insertImageBlock,
@@ -131,6 +132,8 @@ const turnIntoCodeBlock = (ctx: Ctx) => {
  * authored together and can't drift.
  */
 export const MARKDOWN_ACTIONS: Record<string, (ctx: Ctx) => void> = {
+  [APP_UNDO_COMMAND]: undo,
+  [APP_REDO_COMMAND]: redo,
   'editor.markdown.undo': undo,
   'editor.markdown.redo': redo,
   'editor.markdown.bold': toggleBold,
