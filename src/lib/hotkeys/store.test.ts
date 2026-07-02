@@ -31,6 +31,8 @@ const PDF_PEN = 'editor.pdf.pen';
 const OPEN_SETTINGS = 'global.openSettings';
 const NEW_MARKDOWN_NOTE = 'global.newMarkdownNote';
 const SHOW_SHORTCUT_HELP = 'global.showShortcutHelp';
+const GLOBAL_UNDO = 'global.undo';
+const GLOBAL_REDO = 'global.redo';
 
 afterEach(() => {
   // In-memory map: wipe all overrides so the next test starts on
@@ -365,5 +367,21 @@ describe('store.hydrateBindingsFromSettings', () => {
     settings.values[`hotkey.${BOLD}`] = 'Shift+Mod+B';
     hydrateBindingsFromSettings();
     expect(getBinding(BOLD)).toBe('mod+shift+b');
+  });
+
+  it('migrates old per-editor undo bindings to the shared app binding', () => {
+    settings.values['hotkey.editor.ink.undo'] = 'mod+j';
+    settings.values['hotkey.editor.pdf.undo'] = 'mod+k';
+    hydrateBindingsFromSettings();
+    expect(getBinding(GLOBAL_UNDO)).toBe('mod+j');
+    expect(settings.values['hotkey.editor.ink.undo']).toBeUndefined();
+    expect(settings.values['hotkey.editor.pdf.undo']).toBeUndefined();
+  });
+
+  it('migrates old per-editor redo bindings to the shared app binding', () => {
+    settings.values['hotkey.editor.markdown.redo'] = 'mod+l';
+    hydrateBindingsFromSettings();
+    expect(getBinding(GLOBAL_REDO)).toBe('mod+l');
+    expect(settings.values['hotkey.editor.markdown.redo']).toBeUndefined();
   });
 });

@@ -190,4 +190,43 @@ mod tests {
         assert_eq!(tags(&merged_ab), tags(&merged_ba));
         assert_eq!(tags(&merged_ab), s(&["keep", "new"]));
     }
+
+    #[test]
+    fn empty_states_and_tag_lists_are_canonicalised() {
+        assert!(tags(&[]).is_empty());
+
+        let state = init(&s(&[" work ", "", "urgent", "work"]));
+        assert_eq!(tags(&state), s(&["urgent", "work"]));
+    }
+
+    #[test]
+    fn merge_or_resolve_handles_legacy_and_empty_states() {
+        let local_state = init(&s(&["local"]));
+        let remote_state = init(&s(&["remote"]));
+
+        let (kept_state, kept_tags) =
+            merge_or_resolve(&local_state, &s(&["local"]), &[], &s(&["remote"]), true);
+        assert_eq!(kept_state, local_state);
+        assert_eq!(kept_tags, s(&["local"]));
+
+        let (updated_state, updated_tags) =
+            merge_or_resolve(&local_state, &s(&["local"]), &[], &s(&["remote"]), false);
+        assert_eq!(updated_tags, s(&["remote"]));
+        assert_eq!(tags(&updated_state), s(&["remote"]));
+
+        let (remote_only_state, remote_only_tags) =
+            merge_or_resolve(&[], &s(&["local"]), &remote_state, &s(&["remote"]), false);
+        assert_eq!(remote_only_state, remote_state);
+        assert_eq!(remote_only_tags, s(&["remote"]));
+
+        let (local_seeded_state, local_seeded_tags) =
+            merge_or_resolve(&[], &s(&["local"]), &[], &s(&["remote"]), true);
+        assert_eq!(local_seeded_tags, s(&["local"]));
+        assert_eq!(tags(&local_seeded_state), s(&["local"]));
+
+        let (remote_seeded_state, remote_seeded_tags) =
+            merge_or_resolve(&[], &s(&["local"]), &[], &s(&["remote"]), false);
+        assert_eq!(remote_seeded_tags, s(&["remote"]));
+        assert_eq!(tags(&remote_seeded_state), s(&["remote"]));
+    }
 }

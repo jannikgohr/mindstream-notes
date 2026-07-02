@@ -18,6 +18,7 @@
   import { tree } from '$lib/stores/tree.svelte';
   import { subscribeOpenNoteRequest } from '$lib/stores/open-note-intent.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
+  import { setActiveNote } from '$lib/state.svelte';
   import {
     initWindowChrome,
     windowChrome
@@ -36,17 +37,27 @@
   // is immutable for the panel's lifetime).
   let noteKind = $state<NoteKind | string | null>(null);
 
-  onMount(async () => {
+  onMount(() => {
     initWindowChrome();
-    try {
-      const note = await loadNote(noteId);
-      title = note.title;
-      noteKind = note.note_kind;
-      exists = true;
-    } catch (err) {
-      console.warn('[popout] note not found', noteId, err);
-      exists = false;
-    }
+    setActiveNote(noteId);
+    let cancelled = false;
+    void (async () => {
+      try {
+        const note = await loadNote(noteId);
+        if (cancelled) return;
+        title = note.title;
+        noteKind = note.note_kind;
+        exists = true;
+      } catch (err) {
+        if (cancelled) return;
+        console.warn('[popout] note not found', noteId, err);
+        exists = false;
+      }
+    })();
+    return () => {
+      cancelled = true;
+      setActiveNote(null);
+    };
   });
 
   // A wikilink click inside this popout dispatches through the
@@ -92,7 +103,7 @@
         {title}
       </span>
       <div data-tauri-drag-region class="flex-1"></div>
-      <WindowControls />
+      <WindowControls mode="popout" />
     </header>
   {:else}
     <header

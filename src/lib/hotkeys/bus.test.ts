@@ -16,7 +16,10 @@ import {
   activeEditor,
   emitCommand,
   searchActiveNote,
+  runActiveEditorCommand,
   SEARCH_ACTIVE_NOTE_COMMAND,
+  APP_REDO_COMMAND,
+  APP_UNDO_COMMAND,
   type EditorListener
 } from './bus.svelte';
 import { COMMAND_BY_ID } from './catalogue';
@@ -196,6 +199,51 @@ describe('bus.emitCommand', () => {
   });
 });
 
+describe('bus.runActiveEditorCommand', () => {
+  it('routes shared app-level editor commands to the active editor', () => {
+    const onCommand = vi.fn(() => true);
+    track(makeListener('markdown', onCommand));
+    expect(runActiveEditorCommand(APP_UNDO_COMMAND)).toBe(true);
+    expect(onCommand).toHaveBeenCalledWith(APP_UNDO_COMMAND);
+  });
+
+  it('routes shared app-level editor commands to the active note, not the focus-stack top', () => {
+    const pdfHandled = vi.fn(() => true);
+    track(makeListener('pdf', pdfHandled, 'note-pdf'));
+    const mdHandled = vi.fn(() => true);
+    track(makeListener('markdown', mdHandled, 'note-md'));
+    expect(activeEditor()?.noteId).toBe('note-md');
+
+    expect(runActiveEditorCommand(APP_UNDO_COMMAND, 'note-pdf')).toBe(true);
+    expect(pdfHandled).toHaveBeenCalledWith(APP_UNDO_COMMAND);
+    expect(mdHandled).not.toHaveBeenCalled();
+  });
+
+  it('does not fall back to a stale editor when the active note is null', () => {
+    const onCommand = vi.fn(() => true);
+    track(makeListener('markdown', onCommand, 'note-md'));
+    expect(runActiveEditorCommand(APP_REDO_COMMAND, null)).toBe(false);
+    expect(onCommand).not.toHaveBeenCalled();
+  });
+
+  it('returns false when no editor is registered', () => {
+    expect(runActiveEditorCommand(APP_REDO_COMMAND)).toBe(false);
+  });
+
+  it('catches listener exceptions and reports unhandled', () => {
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    track(
+      makeListener('markdown', () => {
+        throw new Error('app command boom');
+      })
+    );
+
+    expect(runActiveEditorCommand(APP_UNDO_COMMAND)).toBe(false);
+    expect(consoleSpy).toHaveBeenCalled();
+    consoleSpy.mockRestore();
+  });
+});
+
 describe('bus.searchActiveNote', () => {
   it('routes to the editor for the active note, not the focus-stack top', () => {
     // The PDF note is open but its tab was switched to without clicking
@@ -219,6 +267,20 @@ describe('bus.searchActiveNote', () => {
     expect(handled).toHaveBeenCalledWith(SEARCH_ACTIVE_NOTE_COMMAND);
   });
 
+  it('does not fall back to a stale editor when the active note is null', () => {
+    const handled = vi.fn(() => true);
+    track(makeListener('markdown', handled, 'note-md'));
+    expect(searchActiveNote(null)).toBe(false);
+    expect(handled).not.toHaveBeenCalled();
+  });
+
+  it('does not fall back to a stale editor when the active note editor is missing', () => {
+    const handled = vi.fn(() => true);
+    track(makeListener('markdown', handled, 'note-md'));
+    expect(searchActiveNote('note-pdf')).toBe(false);
+    expect(handled).not.toHaveBeenCalled();
+  });
+
   it('returns false when the target editor does not handle find', () => {
     // Lets the global command fall through to the browser's own find
     // instead of swallowing the keystroke for nothing.
@@ -228,6 +290,23 @@ describe('bus.searchActiveNote', () => {
 
   it('returns false when no editor is registered', () => {
     expect(searchActiveNote('whatever')).toBe(false);
+  });
+
+  it('catches listener exceptions and reports unhandled', () => {
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    track(
+      makeListener(
+        'markdown',
+        () => {
+          throw new Error('search boom');
+        },
+        'note-md'
+      )
+    );
+
+    expect(searchActiveNote('note-md')).toBe(false);
+    expect(consoleSpy).toHaveBeenCalled();
+    consoleSpy.mockRestore();
   });
 
   it('the global command falls through when find is unhandled', () => {

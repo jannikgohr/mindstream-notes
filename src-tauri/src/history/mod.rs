@@ -646,6 +646,27 @@ mod tests {
     }
 
     #[test]
+    fn current_markdown_snapshot_keeps_body_verbatim() {
+        let db = open_memory_for_tests();
+        let note = make_note(&db);
+
+        let (kind, snapshot) = db
+            .with_conn(|c| current_note_snapshot(c, &note))
+            .expect("snapshot");
+
+        assert_eq!(kind, "markdown");
+        assert_eq!(snapshot, "hello");
+    }
+
+    #[test]
+    fn missing_note_snapshot_reports_not_found() {
+        let db = open_memory_for_tests();
+
+        let res = db.with_conn(|c| read_note_raw(c, "missing-note"));
+        assert!(matches!(res, Err(AppError::NotFound(_))));
+    }
+
+    #[test]
     fn magnitude_counts_word_churn() {
         let db = open_memory_for_tests();
         let note = make_note(&db);

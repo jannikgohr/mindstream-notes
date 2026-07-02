@@ -366,9 +366,7 @@ pub fn update(conn: &mut Connection, input: UpdateNote) -> AppResult<Note> {
         // Mirror of the collection path: stamp `trashed_at` when the note
         // moves into the trash, clear it on the way out. The soft-delete
         // path in `notes::trash` keeps its own behaviour (writes
-        // `trashed_at` without moving) — that's a separate flow used when
-        // `data.useTrash` is off and the user wants the row to disappear
-        // outright.
+        // `trashed_at` without moving) for direct-trash operations.
         crate::collections::stamp_trashed_at_on_parent_change(
             &tx,
             "notes",
@@ -850,6 +848,70 @@ mod tests {
         assert!(merged_text.contains('A'), "lost edit_a in merged state");
         assert!(merged_text.contains('B'), "lost edit_b in merged state");
         assert_eq!(dirty_flag(&db, &n.summary.id), 1);
+    }
+
+    #[test]
+    fn save_yrs_state_accepts_empty_update_for_fresh_note() {
+        let db = open_memory_for_tests();
+        let n = db
+            .with_conn(|c| {
+                create(
+                    c,
+                    CreateNote {
+                        title: Some("Ink".into()),
+                        body: None,
+                        parent_collection_id: None,
+                        note_kind: Some("ink".into()),
+                    },
+                )
+            })
+            .unwrap();
+
+        db.with_conn_mut(|c| save_yrs_state(c, &n.summary.id, &[]))
+            .unwrap();
+
+        assert!(db
+            .with_conn(|c| load_yrs_state(c, &n.summary.id))
+            .unwrap()
+            .is_empty());
+        assert_eq!(dirty_flag(&db, &n.summary.id), 1);
+    }
+
+    #[test]
+    fn save_yrs_state_keeps_existing_state_when_incoming_bytes_are_empty() {
+        let db = open_memory_for_tests();
+        let n = db
+            .with_conn(|c| {
+                create(
+                    c,
+                    CreateNote {
+                        title: Some("Ink".into()),
+                        body: None,
+                        parent_collection_id: None,
+                        note_kind: Some("ink".into()),
+                    },
+                )
+            })
+            .unwrap();
+
+        let base = crate::sync::yrs_doc::init_with_markdown("base");
+        let edit = crate::sync::yrs_doc::apply_local_edit(&base, "base", "base A");
+        db.with_conn_mut(|c| save_yrs_state(c, &n.summary.id, &edit))
+            .unwrap();
+        db.with_conn_mut(|c| save_yrs_state(c, &n.summary.id, &[]))
+            .unwrap();
+
+        let merged = db.with_conn(|c| load_yrs_state(c, &n.summary.id)).unwrap();
+        let merged_text = crate::sync::yrs_doc::to_markdown(&merged);
+        assert!(merged_text.contains('A'));
+        assert_eq!(dirty_flag(&db, &n.summary.id), 1);
+    }
+
+    #[test]
+    fn load_yrs_state_returns_empty_for_missing_note() {
+        let db = open_memory_for_tests();
+        let state = db.with_conn(|c| load_yrs_state(c, "missing-note")).unwrap();
+        assert!(state.is_empty());
     }
 
     #[test]

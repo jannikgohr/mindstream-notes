@@ -123,6 +123,8 @@
     registerEditor,
     unregisterEditor,
     SEARCH_ACTIVE_NOTE_COMMAND,
+    APP_REDO_COMMAND,
+    APP_UNDO_COMMAND,
     type EditorListener
   } from '$lib/hotkeys/bus.svelte';
   import {
@@ -1352,9 +1354,11 @@
         if (!isTrashed) setTool('delete');
         return true;
       case 'editor.pdf.undo':
+      case APP_UNDO_COMMAND:
         if (!isTrashed) undo();
         return true;
       case 'editor.pdf.redo':
+      case APP_REDO_COMMAND:
         if (!isTrashed) redo();
         return true;
       case 'editor.pdf.toggleComments':
