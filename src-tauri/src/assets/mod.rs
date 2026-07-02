@@ -428,6 +428,79 @@ mod tests {
     }
 
     #[test]
+    fn import_pdf_rejects_empty_bytes() {
+        let db = open_memory_for_tests();
+
+        let res = db.with_conn(|c| {
+            import_pdf_note_inner(
+                c,
+                ImportPdfNote {
+                    title: Some("Empty".into()),
+                    parent_collection_id: None,
+                    bytes: vec![],
+                },
+            )
+        });
+
+        match res {
+            Err(AppError::InvalidArg(message)) => {
+                assert!(message.contains("PDF file is empty"))
+            }
+            other => panic!("expected InvalidArg, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn asset_reference_counts_reads_pdf_asset_id_from_json_body() {
+        let db = open_memory_for_tests();
+        let note = db
+            .with_conn(|c| {
+                import_pdf_note_inner(
+                    c,
+                    ImportPdfNote {
+                        title: Some("Paper".into()),
+                        parent_collection_id: None,
+                        bytes: b"%PDF-1.7\n%mindstream-test\n".to_vec(),
+                    },
+                )
+            })
+            .unwrap();
+
+        let pointer: serde_json::Value = serde_json::from_str(&note.body).unwrap();
+        let asset_id = pointer["pdfAssetId"].as_str().unwrap();
+
+        let refs = db
+            .with_conn(|c| asset_reference_counts(c, &note.summary.id))
+            .unwrap();
+        assert_eq!(refs.get(asset_id), Some(&1));
+    }
+
+    #[test]
+    fn purge_unreferenced_markdown_assets_is_noop_for_non_markdown_notes() {
+        let db = open_memory_for_tests();
+        let note_id = make_note(&db);
+        let asset = db
+            .with_conn(|c| {
+                upload(
+                    c,
+                    UploadAsset {
+                        owning_note_id: note_id.clone(),
+                        mime_type: "image/png".into(),
+                        bytes: vec![1, 2, 3],
+                    },
+                )
+            })
+            .unwrap();
+
+        let removed = db
+            .with_conn(|c| purge_unreferenced_markdown_assets(c, &note_id))
+            .unwrap();
+
+        assert_eq!(removed, 0);
+        assert!(db.with_conn(|c| load(c, &asset.summary.id)).is_ok());
+    }
+
+    #[test]
     fn markdown_cleanup_deletes_unreferenced_asset_without_history_ref() {
         let db = open_memory_for_tests();
         let note_id = make_markdown_note(&db);
