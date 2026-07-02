@@ -7,7 +7,6 @@ const updateCollectionMock = vi.fn();
 const createNoteMock = vi.fn();
 const createCollectionMock = vi.fn();
 const importPdfNoteMock = vi.fn();
-const trashNoteMock = vi.fn();
 const restoreNoteMock = vi.fn();
 const purgeNoteMock = vi.fn();
 const deleteCollectionMock = vi.fn();
@@ -24,7 +23,6 @@ vi.mock('$lib/api', () => ({
   createCollection: (...args: unknown[]) => createCollectionMock(...args),
   importPdfNote: (...args: unknown[]) => importPdfNoteMock(...args),
   setPdfText: (...args: unknown[]) => setPdfTextMock(...args),
-  trashNote: (...args: unknown[]) => trashNoteMock(...args),
   restoreNote: (...args: unknown[]) => restoreNoteMock(...args),
   purgeNote: (...args: unknown[]) => purgeNoteMock(...args),
   deleteCollection: (...args: unknown[]) => deleteCollectionMock(...args),
@@ -45,12 +43,6 @@ vi.mock('$lib/pdf/extract-text', () => ({
 // Avoid pulling state.svelte (which depends on browser localStorage etc.)
 vi.mock('$lib/state.svelte', () => ({
   ui: { activeNoteId: null }
-}));
-
-// settings/store.svelte transitively imports mode-watcher; stub the surface
-// the tree store reads from it instead of trying to resolve the real thing.
-vi.mock('$lib/settings/store.svelte', () => ({
-  getSettingValue: () => false // useTrash off → trashNote does hard delete
 }));
 
 import {
@@ -99,7 +91,6 @@ beforeEach(() => {
   saveNoteMock.mockReset().mockResolvedValue(undefined);
   updateCollectionMock.mockReset().mockResolvedValue(undefined);
   createNoteMock.mockReset().mockResolvedValue(undefined);
-  trashNoteMock.mockReset().mockResolvedValue(undefined);
   restoreNoteMock.mockReset().mockResolvedValue(undefined);
   purgeNoteMock.mockReset().mockResolvedValue(undefined);
   deleteCollectionMock.mockReset().mockResolvedValue(undefined);
@@ -161,10 +152,13 @@ describe('moveCollectionTo', () => {
   });
 });
 
-describe('trashNote (useTrash off via mocked setting)', () => {
-  it('falls through to api.trashNote', async () => {
+describe('trashNote', () => {
+  it('moves the note to the trash collection', async () => {
     await trashNote('note_x');
-    expect(trashNoteMock).toHaveBeenCalledWith('note_x');
+    expect(saveNoteMock).toHaveBeenCalledWith({
+      id: 'note_x',
+      parent_collection_id: 'trash'
+    });
   });
 });
 
@@ -293,9 +287,12 @@ describe('collection mutations', () => {
     });
   });
 
-  it('trashCollection hard-deletes when useTrash is off', async () => {
+  it('trashCollection moves the folder to trash', async () => {
     await trashCollection('coll_1');
-    expect(deleteCollectionMock).toHaveBeenCalledWith('coll_1');
+    expect(updateCollectionMock).toHaveBeenCalledWith({
+      id: 'coll_1',
+      parent_collection_id: 'trash'
+    });
   });
 
   it('restoreCollection moves it to root', async () => {

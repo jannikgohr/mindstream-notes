@@ -306,18 +306,7 @@
   }
 
   async function commitDelete(id: string) {
-    const note = tree.notesById[id];
     deleteConfirmId = null;
-    const confirmed = await confirm({
-      title: tUi('fileTree.deleteTrash.title'),
-      message: tUi('fileTree.deleteTrash.message').replace(
-        '{title}',
-        note?.title ?? tUi('fileTree.deleteFallback')
-      ),
-      confirmLabel: tUi('fileTree.deleteTrash.confirm'),
-      destructive: true
-    });
-    if (!confirmed) return;
     await trashNote(id);
   }
 

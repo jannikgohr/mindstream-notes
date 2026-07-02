@@ -299,8 +299,7 @@ pub fn run() {
 
             // Trash retention sweep — same setup pattern. Starts
             // disabled until the JS settings effect hands over the
-            // restored `data.trashRetentionDays` value (and confirms
-            // `data.useTrash` is on).
+            // restored `data.trashRetentionDays` value.
             app.manage(data::TrashRetentionScheduler::new());
             data::spawn_retention_sweep(app.handle().clone());
 

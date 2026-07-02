@@ -10,8 +10,8 @@
 //!   - `set_trash_retention` / `sweep_trash_retention` — periodic and
 //!     on-demand retention sweep. The scheduler is a tokio loop modelled
 //!     on `sync::scheduler` (same enable/disable atomic pattern); the
-//!     JS settings effect feeds it the current `data.useTrash` /
-//!     `data.trashRetentionDays` values whenever they change.
+//!     JS settings effect feeds it the current `data.trashRetentionDays`
+//!     value whenever it changes.
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Duration;
@@ -408,8 +408,7 @@ fn sweep(conn: &mut Connection, days: u32) -> AppResult<u32> {
 // ---------- Retention commands ----------
 
 /// Tell the scheduler what the current retention is. `days = 0`
-/// disables it (used both for the "forever" option and the case where
-/// `data.useTrash` is off so there's no trash to age out).
+/// disables it (used for the "forever" option).
 #[tauri::command]
 pub fn set_trash_retention(scheduler: tauri::State<'_, TrashRetentionScheduler>, days: u32) {
     scheduler.enabled.store(days > 0, Ordering::Relaxed);
@@ -651,12 +650,9 @@ mod tests {
     }
 
     #[test]
-    fn soft_delete_via_notes_trash_sets_trashed_at() {
-        // The `useTrash = false` branch in the JS layer goes through
-        // `notes::trash` rather than reparenting. That path predates
-        // the retention sweep, but it already populates `trashed_at`
-        // and the retention rule applies to it too — assert it here so
-        // a future refactor that removes the write surfaces in tests.
+    fn trash_via_notes_trash_sets_trashed_at() {
+        // Direct trashing keeps the row in place and stamps
+        // `trashed_at`, so the retention sweep can age it out later.
         let db = open_memory_for_tests();
         let id = make_note(&db, None);
         assert!(trashed_at_of_note(&db, &id).is_none());

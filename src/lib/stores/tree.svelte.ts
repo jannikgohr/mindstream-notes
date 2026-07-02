@@ -13,8 +13,6 @@
 import * as api from '$lib/api';
 import type { Collection, NoteKind, NoteSummary, TreeNode } from '$lib/api';
 import { TRASH_ID } from '$lib/api';
-import { ui } from '$lib/state.svelte';
-import { getSettingValue } from '$lib/settings/store.svelte';
 import { runSync } from '$lib/sync/runner';
 import { extractPdfText } from '$lib/pdf/extract-text';
 
@@ -159,20 +157,9 @@ export async function renameNote(id: string, title: string): Promise<void> {
   patchNodeName(tree.tree, id, title);
 }
 
-/**
- * Trash a note. With `data.useTrash` enabled the note moves to the special
- * trash collection (still in the tree, just under "Trash"). Without it,
- * the note is soft-deleted via `trashed_at` and disappears from listings.
- */
+/** Move a note into the special trash collection. */
 export async function trashNote(id: string): Promise<void> {
-  if (getSettingValue('data.useTrash')) {
-    await moveNoteTo(id, TRASH_ID);
-  } else {
-    await api.trashNote(id);
-    delete tree.notesById[id];
-    removeNoteNode(tree.tree, id);
-    if (ui.activeNoteId === id) ui.activeNoteId = null;
-  }
+  await moveNoteTo(id, TRASH_ID);
 }
 
 export async function moveNoteTo(
@@ -330,17 +317,9 @@ export async function moveCollectionTo(
   await loadTree();
 }
 
-/**
- * Trash a folder. Same semantics as trashNote: move to trash when the
- * setting is enabled, hard-delete otherwise.
- */
+/** Move a folder into the special trash collection. */
 export async function trashCollection(id: string): Promise<void> {
-  if (getSettingValue('data.useTrash')) {
-    await moveCollectionTo(id, TRASH_ID);
-  } else {
-    await api.deleteCollection(id);
-    await loadTree();
-  }
+  await moveCollectionTo(id, TRASH_ID);
 }
 
 // ---------- Trash actions (operate on items already inside trash) ----------
@@ -391,16 +370,4 @@ function patchNodeName(nodes: TreeNode[], id: string, name: string): void {
       patchNodeName(n.children, id, name);
     }
   }
-}
-
-function removeNoteNode(nodes: TreeNode[], id: string): boolean {
-  for (let i = 0; i < nodes.length; i++) {
-    const n = nodes[i];
-    if (n.kind === 'note' && n.id === id) {
-      nodes.splice(i, 1);
-      return true;
-    }
-    if (n.kind === 'folder' && removeNoteNode(n.children, id)) return true;
-  }
-  return false;
 }

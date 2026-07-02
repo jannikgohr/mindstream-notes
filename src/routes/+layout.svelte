@@ -152,8 +152,7 @@
   // (see src-tauri/src/data.rs). This effect mirrors the
   // `set_sync_schedule` pattern above: translate the user's settings
   // choice ("forever" / "7" / "30" / "90") into a day count and push
-  // it to the scheduler. `data.useTrash = false` also disables — no
-  // trash, nothing to age out.
+  // it to the scheduler.
   //
   // We also fire a one-shot `sweepTrashRetention` whenever the value
   // changes, so the first sweep doesn't have to wait up to an hour
@@ -166,11 +165,10 @@
     forever: 0
   };
   $effect(() => {
-    const useTrash = getSettingValue('data.useTrash') !== false;
     const choice =
       (getSettingValue('data.trashRetentionDays') as string | undefined) ??
       '30';
-    const days = useTrash ? (RETENTION_DAYS[choice] ?? 0) : 0;
+    const days = RETENTION_DAYS[choice] ?? 0;
     void setTrashRetention(days);
     void sweepTrashRetention(days)
       .then(async (purged) => {
