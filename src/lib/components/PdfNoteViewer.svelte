@@ -59,6 +59,7 @@
   } from '$lib/layout/page-layout';
   import PageOverlayScrollbar from '$lib/layout/page-overlay-scrollbar.svelte';
   import { getSettingValue } from '$lib/settings/store.svelte';
+  import { prefersReducedMotion } from '$lib/reduce-motion.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { exportAnnotatedPdfNote } from '$lib/note-exporters/pdf';
   import FindBar from '$lib/components/FindBar.svelte';
@@ -169,9 +170,7 @@
 
   let hostEl = $state<HTMLDivElement | null>(null);
   let container = $state<HTMLDivElement | null>(null);
-  const reduceMotion = $derived(
-    getSettingValue('appearance.reduceMotion') === true
-  );
+  const reduceMotion = $derived(prefersReducedMotion());
   let pdfDoc = $state<PdfDocument | null>(null);
   let pageNumbers = $state<number[]>([]);
   let loading = $state(true);

@@ -47,7 +47,7 @@
     ui
   } from '$lib/state.svelte';
   import { loadTree, tree } from '$lib/stores/tree.svelte';
-  import { getSettingValue } from '$lib/settings/store.svelte';
+  import { prefersReducedMotion } from '$lib/reduce-motion.svelte';
   import { loadProfiles, profilesState } from '$lib/stores/profiles.svelte';
   import {
     desktopNoteSource,
@@ -68,9 +68,7 @@
     group: DockviewGroupPanel;
     index: number;
   } | null = null;
-  const reduceMotion = $derived(
-    getSettingValue('appearance.reduceMotion') === true
-  );
+  const reduceMotion = $derived(prefersReducedMotion());
   const dockviewTheme = $derived<DockviewTheme>({
     name: 'bridge',
     className: 'dockview-theme-bridge',

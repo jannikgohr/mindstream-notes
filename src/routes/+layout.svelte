@@ -3,6 +3,7 @@
   import { onMount } from 'svelte';
   import { ModeWatcher, mode } from 'mode-watcher';
   import { getSettingValue, isModified } from '$lib/settings/store.svelte';
+  import { prefersReducedMotion } from '$lib/reduce-motion.svelte';
   import { applyAccentColor, clearAccentColor } from '$lib/settings/accent';
   import { invokeOrFallback } from '$lib/api/core';
   import { setNativeHotkeyDisplays } from '$lib/api/hotkeys';
@@ -95,16 +96,18 @@
     }
   });
 
-  // Mirror `appearance.reduceMotion` onto `html.reduce-motion` so any
-  // animation in the app can opt out with a simple `.reduce-motion &`
-  // CSS selector — same shape as the dark-mode plumbing in app.html.
-  // The OS-level `prefers-reduced-motion` media query is honoured
-  // separately by the same CSS rules; this effect just makes the
-  // in-app toggle actually do something across the rest of the UI.
+  // Mirror the resolved reduce-motion preference onto
+  // `html.reduce-motion` so any animation in the app can opt out with a
+  // simple `.reduce-motion &` CSS selector — same shape as the dark-mode
+  // plumbing in app.html. `prefersReducedMotion()` folds the OS-level
+  // `prefers-reduced-motion` media query into the tri-state app setting,
+  // so this class is the only motion gate CSS needs to look at.
   $effect(() => {
     if (typeof document === 'undefined') return;
-    const on = getSettingValue('appearance.reduceMotion') === true;
-    document.documentElement.classList.toggle('reduce-motion', on);
+    document.documentElement.classList.toggle(
+      'reduce-motion',
+      prefersReducedMotion()
+    );
   });
 
   $effect(() => {

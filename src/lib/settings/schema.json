@@ -117,8 +117,9 @@
             {
               "id": "appearance.reduceMotion",
               "scope": "D",
-              "type": "toggle",
-              "default": false
+              "type": "radio",
+              "default": "system",
+              "options": ["on", "off", "system"]
             }
           ]
         },
