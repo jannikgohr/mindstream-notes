@@ -120,6 +120,14 @@
               "type": "radio",
               "default": "system",
               "options": ["on", "off", "system"]
+            },
+            {
+              "id": "appearance.customWindowDecorations",
+              "scope": "D",
+              "type": "toggle",
+              "default": true,
+              "defaultByPlatform": { "macos": false },
+              "platforms": ["desktop"]
             }
           ]
         },

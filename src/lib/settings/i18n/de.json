@@ -621,6 +621,10 @@
     "appearance.accent": { "label": "Akzentfarbe" },
     "appearance.density": { "label": "Dichte" },
     "appearance.reduceMotion": { "label": "Animationen reduzieren" },
+    "appearance.customWindowDecorations": {
+      "label": "Eigene Titelleiste verwenden",
+      "description": "Zeichnet Mindstreams eigene Fenstersteuerung statt der Titelleiste des Betriebssystems."
+    },
     "appearance.uiFontSize": { "label": "UI-Schriftgröße" },
     "appearance.editorFontSize": { "label": "Editor-Schriftgröße" },
     "appearance.lineHeight": { "label": "Zeilenhöhe" },

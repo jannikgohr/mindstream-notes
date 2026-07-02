@@ -49,6 +49,11 @@ interface SettingBase {
    * `"mobile"`); mixing both is fine. Omitted/empty ⇒ all platforms.
    */
   platforms?: PlatformFilter[];
+  /**
+   * Platform-specific defaults. Exact platform entries win over broad
+   * groups, and `default` remains the fallback.
+   */
+  defaultByPlatform?: Partial<Record<PlatformFilter, unknown>>;
   /** Lookup key into the custom-component registry (only when type='custom'). */
   customId?: string;
   /** Lookup key into the action registry (only when type='button'). */

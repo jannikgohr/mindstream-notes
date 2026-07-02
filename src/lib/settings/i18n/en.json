@@ -632,6 +632,10 @@
     "appearance.accent": { "label": "Accent colour" },
     "appearance.density": { "label": "UI density" },
     "appearance.reduceMotion": { "label": "Reduce motion" },
+    "appearance.customWindowDecorations": {
+      "label": "Use custom title bar",
+      "description": "Draw Mindstream's own window controls instead of using the operating system title bar."
+    },
     "appearance.uiFontSize": { "label": "UI font size" },
     "appearance.editorFontSize": { "label": "Editor font size" },
     "appearance.lineHeight": { "label": "Line height" },
