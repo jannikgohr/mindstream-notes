@@ -15,6 +15,14 @@ import type { RasterImage } from './signature-trace';
  */
 export const IMPORT_MAX_DIMENSION = 1000;
 
+/**
+ * Cap for the initial decode, deliberately above the trace cap: paper
+ * detection (paper-detect.ts) crops to the sheet first, and the crop
+ * should still have real pixels left after the perspective warp. The
+ * whole-frame fallback downscales to IMPORT_MAX_DIMENSION afterwards.
+ */
+export const IMPORT_DECODE_MAX_DIMENSION = 2000;
+
 function drawToRaster(
   source: CanvasImageSource,
   srcWidth: number,

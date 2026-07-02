@@ -59,6 +59,13 @@ export interface TraceSignatureOptions {
   minComponentSize?: number;
   /** Douglas-Peucker tolerance in source-image pixels. */
   simplifyTolerance?: number;
+  /**
+   * Ink components touching the frame border are dropped when thicker
+   * than this (max inscribed L∞ radius, px) — fingers holding the
+   * paper, table edges. Pen strokes stay far below any sane value.
+   * Defaults relative to image size; pass 0 to disable.
+   */
+  borderBlobThickness?: number;
 }
 
 export interface TracedSignature {
@@ -192,6 +199,108 @@ export function removeSpecks(mask: BinaryMask, minSize: number): BinaryMask {
       }
     }
     if (component.length < minSize) {
+      for (const idx of component) data[idx] = 0;
+    }
+  }
+  return { width, height, data };
+}
+
+/* --- Step 4b: border-object rejection ------------------------------------------ */
+
+/**
+ * Chessboard (L∞) distance of every ink pixel to the nearest background
+ * pixel, two-pass. Out-of-frame counts as ink, so an object clipped by
+ * the frame edge keeps its full measured thickness.
+ */
+export function distanceTransform(mask: BinaryMask): Uint16Array {
+  const { width, height, data } = mask;
+  const INF = 0xffff;
+  const dist = new Uint16Array(data.length);
+  for (let i = 0; i < data.length; i++) dist[i] = data[i] ? INF : 0;
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = y * width + x;
+      if (!dist[idx]) continue;
+      let d = dist[idx];
+      if (x > 0) d = Math.min(d, dist[idx - 1] + 1);
+      if (y > 0) {
+        d = Math.min(d, dist[idx - width] + 1);
+        if (x > 0) d = Math.min(d, dist[idx - width - 1] + 1);
+        if (x < width - 1) d = Math.min(d, dist[idx - width + 1] + 1);
+      }
+      dist[idx] = d;
+    }
+  }
+  for (let y = height - 1; y >= 0; y--) {
+    for (let x = width - 1; x >= 0; x--) {
+      const idx = y * width + x;
+      if (!dist[idx]) continue;
+      let d = dist[idx];
+      if (x < width - 1) d = Math.min(d, dist[idx + 1] + 1);
+      if (y < height - 1) {
+        d = Math.min(d, dist[idx + width] + 1);
+        if (x < width - 1) d = Math.min(d, dist[idx + width + 1] + 1);
+        if (x > 0) d = Math.min(d, dist[idx + width - 1] + 1);
+      }
+      dist[idx] = d;
+    }
+  }
+  return dist;
+}
+
+/**
+ * Drop ink components that touch the frame border AND are thicker than
+ * `maxThickness` (max inscribed L∞ radius). Pen strokes are thin
+ * everywhere; fingers holding the paper, table edges, and other clutter
+ * reaching in from outside are fat blobs — this removes them without
+ * any appearance modelling, so it's independent of skin tone and
+ * lighting. Interior blobs are never touched: only things that enter
+ * from the frame edge qualify.
+ */
+export function removeBorderBlobs(
+  mask: BinaryMask,
+  maxThickness: number
+): BinaryMask {
+  const { width, height } = mask;
+  const data = Uint8Array.from(mask.data);
+  const dist = distanceTransform(mask);
+  const seen = new Uint8Array(data.length);
+  const stack: number[] = [];
+  const component: number[] = [];
+
+  for (let start = 0; start < data.length; start++) {
+    if (!data[start] || seen[start]) continue;
+    stack.length = 0;
+    component.length = 0;
+    stack.push(start);
+    seen[start] = 1;
+    let touchesBorder = false;
+    let thickness = 0;
+    while (stack.length) {
+      const idx = stack.pop()!;
+      component.push(idx);
+      if (dist[idx] > thickness) thickness = dist[idx];
+      const x = idx % width;
+      const y = (idx - x) / width;
+      if (x === 0 || y === 0 || x === width - 1 || y === height - 1) {
+        touchesBorder = true;
+      }
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+          const nIdx = ny * width + nx;
+          if (data[nIdx] && !seen[nIdx]) {
+            seen[nIdx] = 1;
+            stack.push(nIdx);
+          }
+        }
+      }
+    }
+    if (touchesBorder && thickness > maxThickness) {
       for (const idx of component) data[idx] = 0;
     }
   }
@@ -460,6 +569,13 @@ function defaultMinComponentSize(width: number, height: number): number {
   return Math.max(8, Math.round((width * height) / 20000));
 }
 
+// ~2% of the shorter side: at a 1000px trace a marker stroke's half-
+// width is ~7px while a finger's is ~35px, so 20px separates them with
+// margin on both sides.
+function defaultBorderBlobThickness(width: number, height: number): number {
+  return Math.max(6, Math.round(Math.min(width, height) * 0.02));
+}
+
 /**
  * Run the whole pipeline. `strokes` is empty when no ink survives
  * thresholding + despeckling (blank page, threshold too aggressive) —
@@ -472,11 +588,18 @@ export function traceSignature(
   const gray = luminance(image);
   const threshold = options.threshold ?? otsuThreshold(gray);
   const mask = binarize(gray, image.width, image.height, threshold);
-  const cleaned = removeSpecks(
+  const despeckled = removeSpecks(
     mask,
     options.minComponentSize ??
       defaultMinComponentSize(image.width, image.height)
   );
+  const borderThickness =
+    options.borderBlobThickness ??
+    defaultBorderBlobThickness(image.width, image.height);
+  const cleaned =
+    borderThickness > 0
+      ? removeBorderBlobs(despeckled, borderThickness)
+      : despeckled;
   const skeleton = thin(cleaned);
   const tolerance = options.simplifyTolerance ?? 1.2;
   const polylines = traceSkeleton(skeleton)

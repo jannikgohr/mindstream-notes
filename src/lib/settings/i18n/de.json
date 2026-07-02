@@ -382,6 +382,8 @@
     "pdf.signature.import.empty": "Keine Tinte erkannt — passe die Schwelle an oder nimm das Foto neu auf.",
     "pdf.signature.import.cameraError": "Kamera nicht verfügbar — wähle stattdessen eine Bilddatei.",
     "pdf.signature.import.decodeError": "Bilddatei konnte nicht gelesen werden.",
+    "pdf.signature.import.paperCrop": "Auf erkanntes Papier zuschneiden",
+    "pdf.signature.import.holdHint": "Halte das Papier flach und greife es am Rand.",
     "pdf.signature.import.cancel": "Abbrechen",
     "pdf.signature.import.save": "Speichern",
     "pdf.page.caption": "Seite {page}/{total}",

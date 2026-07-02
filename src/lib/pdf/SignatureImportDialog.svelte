@@ -11,6 +11,13 @@
    * desktop we try a live getUserMedia preview first and fall back to
    * the capture input if the camera is unavailable or denied.
    *
+   * Paper scan: every acquired photo runs through paper detection
+   * (paper-detect.ts). When a sheet is found it is perspective-corrected
+   * and the trace runs on the rectified crop — full resolution budget on
+   * the paper. The live camera preview overlays the detected quad as
+   * capture guidance, and the adjust view offers a crop on/off toggle so
+   * a false detection never blocks the user.
+   *
    * Reset behaviour mirrors SignaturePadDialog: every open starts from
    * the source picker with no leftover photo or stream.
    */
@@ -26,10 +33,18 @@
     type TracedSignature
   } from './signature-trace';
   import {
+    detectPaperQuad,
+    downscaleRaster,
+    rectifyPaper,
+    type PaperQuad
+  } from './paper-detect';
+  import {
     openCameraStream,
     rasterFromBlob,
     rasterFromVideo,
-    stopCameraStream
+    stopCameraStream,
+    IMPORT_DECODE_MAX_DIMENSION,
+    IMPORT_MAX_DIMENSION
   } from './signature-import-image';
   import type { PdfSignatureSnapshot } from './types';
 
@@ -42,8 +57,15 @@
 
   type Mode = 'pick' | 'camera' | 'adjust';
 
+  /** Working width for the throttled live-preview paper detection. */
+  const LIVE_DETECT_WIDTH = 320;
+
   let mode = $state<Mode>('pick');
-  let raster = $state<RasterImage | null>(null);
+  // Two trace sources per photo: the rectified paper crop (when a paper
+  // was detected) and the plain downscaled frame. `paperCrop` picks.
+  let wholeFrameRaster = $state<RasterImage | null>(null);
+  let rectifiedRaster = $state<RasterImage | null>(null);
+  let paperCrop = $state(true);
   let traced = $state<TracedSignature | null>(null);
   let cameraError = $state(false);
   let decodeError = $state(false);
@@ -53,7 +75,38 @@
   let captureInput = $state<HTMLInputElement | null>(null);
   let retraceTimer: ReturnType<typeof setTimeout> | null = null;
 
+  // Live capture guidance: last detected quad in preview-frame coords.
+  let liveQuad = $state<PaperQuad | null>(null);
+  let liveFrame = $state<{ width: number; height: number } | null>(null);
+  let detectTimer: ReturnType<typeof setInterval> | null = null;
+  let detecting = false;
+
+  function stopLiveDetection() {
+    if (detectTimer) clearInterval(detectTimer);
+    detectTimer = null;
+    liveQuad = null;
+    liveFrame = null;
+  }
+
+  function startLiveDetection() {
+    stopLiveDetection();
+    detectTimer = setInterval(() => {
+      if (detecting || !videoEl || !videoEl.videoWidth) return;
+      detecting = true;
+      try {
+        const frame = rasterFromVideo(videoEl, LIVE_DETECT_WIDTH);
+        liveQuad = detectPaperQuad(frame);
+        liveFrame = { width: frame.width, height: frame.height };
+      } catch {
+        liveQuad = null;
+      } finally {
+        detecting = false;
+      }
+    }, 250);
+  }
+
   function closeCamera() {
+    stopLiveDetection();
     stopCameraStream(stream);
     stream = null;
   }
@@ -63,7 +116,9 @@
     if (retraceTimer) clearTimeout(retraceTimer);
     retraceTimer = null;
     mode = 'pick';
-    raster = null;
+    wholeFrameRaster = null;
+    rectifiedRaster = null;
+    paperCrop = true;
     traced = null;
     cameraError = false;
     decodeError = false;
@@ -85,14 +140,34 @@
       void videoEl.play().catch(() => {
         /* autoplay rejection surfaces as a black preview; capture still works */
       });
+      startLiveDetection();
+      return () => stopLiveDetection();
     }
   });
 
+  function activeTraceRaster(): RasterImage | null {
+    return paperCrop && rectifiedRaster ? rectifiedRaster : wholeFrameRaster;
+  }
+
   function processRaster(image: RasterImage) {
-    raster = image;
+    // Photos are decoded above the trace cap so the paper crop keeps
+    // real resolution; the whole-frame fallback downscales as before.
+    const quad = detectPaperQuad(image);
+    rectifiedRaster = quad ? rectifyPaper(image, quad) : null;
+    paperCrop = rectifiedRaster !== null;
+    wholeFrameRaster = downscaleRaster(image, IMPORT_MAX_DIMENSION);
     // Fresh photo → fresh automatic threshold.
-    traced = traceSignature(image);
+    traced = traceSignature(activeTraceRaster()!);
     mode = 'adjust';
+  }
+
+  function togglePaperCrop(event: Event) {
+    paperCrop = (event.currentTarget as HTMLInputElement).checked;
+    if (retraceTimer) clearTimeout(retraceTimer);
+    retraceTimer = null;
+    const raster = activeTraceRaster();
+    // Different pixels → recompute the automatic threshold.
+    if (raster) traced = traceSignature(raster);
   }
 
   async function onFilePicked(event: Event) {
@@ -102,7 +177,7 @@
     if (!file) return;
     decodeError = false;
     try {
-      processRaster(await rasterFromBlob(file));
+      processRaster(await rasterFromBlob(file, IMPORT_DECODE_MAX_DIMENSION));
     } catch {
       decodeError = true;
     }
@@ -127,8 +202,10 @@
   function captureFrame() {
     if (!videoEl) return;
     try {
-      const image = rasterFromVideo(videoEl);
+      const image = rasterFromVideo(videoEl, IMPORT_DECODE_MAX_DIMENSION);
       closeCamera();
+      // The capture re-runs detection on the full-resolution frame; the
+      // preview quad is guidance only.
       processRaster(image);
     } catch {
       /* no frame yet — user can press capture again */
@@ -139,7 +216,8 @@
     closeCamera();
     mode = 'pick';
     traced = null;
-    raster = null;
+    wholeFrameRaster = null;
+    rectifiedRaster = null;
   }
 
   function onThresholdInput(event: Event) {
@@ -149,6 +227,7 @@
     // adjustment, too slow for every pixel of a slider drag.
     retraceTimer = setTimeout(() => {
       retraceTimer = null;
+      const raster = activeTraceRaster();
       if (raster) traced = traceSignature(raster, { threshold: value });
     }, 120);
   }
@@ -226,14 +305,38 @@
             </p>
           {/if}
         {:else if mode === 'camera'}
-          <!-- svelte-ignore a11y_media_has_caption — live camera preview -->
-          <video
-            bind:this={videoEl}
-            autoplay
-            playsinline
-            muted
-            class="aspect-video w-full rounded-md border border-input bg-black object-cover"
-          ></video>
+          <div class="relative">
+            <!-- svelte-ignore a11y_media_has_caption — live camera preview -->
+            <!-- object-contain (not cover) so the quad overlay below can
+                 use the same letterboxing and line up with the frame. -->
+            <video
+              bind:this={videoEl}
+              autoplay
+              playsinline
+              muted
+              class="aspect-video w-full rounded-md border border-input bg-black object-contain"
+            ></video>
+            {#if liveQuad && liveFrame}
+              <svg
+                aria-hidden="true"
+                class="pointer-events-none absolute inset-0 h-full w-full"
+                viewBox="0 0 {liveFrame.width} {liveFrame.height}"
+                preserveAspectRatio="xMidYMid meet"
+              >
+                <polygon
+                  points={liveQuad.map((p) => `${p.x},${p.y}`).join(' ')}
+                  fill="var(--primary)"
+                  fill-opacity="0.08"
+                  stroke="var(--primary)"
+                  stroke-width="2.5"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            {/if}
+          </div>
+          <p class="mt-2 text-xs text-muted-foreground">
+            {tUi('pdf.signature.import.holdHint')}
+          </p>
         {:else if traced}
           <svg
             role="img"
@@ -272,6 +375,18 @@
               class="flex-1"
             />
           </label>
+          {#if rectifiedRaster}
+            <label class="mt-2 flex items-center gap-2 text-xs">
+              <input
+                type="checkbox"
+                checked={paperCrop}
+                onchange={togglePaperCrop}
+              />
+              <span class="text-muted-foreground">
+                {tUi('pdf.signature.import.paperCrop')}
+              </span>
+            </label>
+          {/if}
         {/if}
       </div>
 

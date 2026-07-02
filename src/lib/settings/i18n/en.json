@@ -482,6 +482,8 @@
     "pdf.signature.import.empty": "No ink detected — adjust the threshold or retake the photo.",
     "pdf.signature.import.cameraError": "Camera unavailable — choose an image file instead.",
     "pdf.signature.import.decodeError": "Couldn't read that image file.",
+    "pdf.signature.import.paperCrop": "Crop to detected paper",
+    "pdf.signature.import.holdHint": "Hold the paper flat and grip it by the edges.",
     "pdf.signature.import.cancel": "Cancel",
     "pdf.signature.import.save": "Save",
     "pdf.page.caption": "Page {page}/{total}",

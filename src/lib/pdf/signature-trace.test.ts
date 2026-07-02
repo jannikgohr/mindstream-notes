@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest';
 import type { PdfStrokePoint } from './types';
 import {
   binarize,
+  distanceTransform,
   fitToPad,
   luminance,
   otsuThreshold,
+  removeBorderBlobs,
   removeSpecks,
   simplifyPolyline,
   thin,
@@ -131,6 +133,72 @@ describe('removeSpecks', () => {
   it('counts diagonal pixels as one 8-connected component', () => {
     const mask = maskFromAscii(['#..', '.#.', '..#']);
     expect(inkCount(removeSpecks(mask, 3))).toBe(3);
+  });
+});
+
+describe('distanceTransform', () => {
+  it('measures L∞ distance to the nearest background pixel', () => {
+    const mask = maskFromAscii(['.....', '.###.', '.###.', '.###.', '.....']);
+    const dist = distanceTransform(mask);
+    expect(dist[2 * 5 + 2]).toBe(2); // centre of the 3×3 block
+    expect(dist[1 * 5 + 1]).toBe(1); // block corner
+    expect(dist[0]).toBe(0); // background
+  });
+
+  it('treats out-of-frame as ink, keeping clipped objects thick', () => {
+    // A 3-row slab along the top border: nearest background is below it,
+    // not the frame edge above.
+    const mask = maskFromAscii(['#####', '#####', '#####', '.....']);
+    const dist = distanceTransform(mask);
+    expect(dist[0 * 5 + 2]).toBe(3);
+    expect(dist[2 * 5 + 2]).toBe(1);
+  });
+});
+
+describe('removeBorderBlobs', () => {
+  it('removes a thick blob entering from the border, keeps a thin stroke', () => {
+    const mask = maskFromAscii([
+      '######......',
+      '######......',
+      '######......',
+      '######......',
+      '............',
+      '...######...',
+      '............'
+    ]);
+    const cleaned = removeBorderBlobs(mask, 2);
+    expect(maskToAscii(cleaned)).toEqual([
+      '............',
+      '............',
+      '............',
+      '............',
+      '............',
+      '...######...',
+      '............'
+    ]);
+  });
+
+  it('keeps a thick blob that does not touch the border', () => {
+    const mask = maskFromAscii([
+      '.........',
+      '..#####..',
+      '..#####..',
+      '..#####..',
+      '..#####..',
+      '..#####..',
+      '.........'
+    ]);
+    expect(inkCount(removeBorderBlobs(mask, 2))).toBe(25);
+  });
+
+  it('keeps a thin stroke that touches the border', () => {
+    const mask = maskFromAscii([
+      '#........',
+      '.#.......',
+      '..#......',
+      '...##....'
+    ]);
+    expect(inkCount(removeBorderBlobs(mask, 2))).toBe(5);
   });
 });
 
@@ -309,6 +377,32 @@ describe('traceSignature (end to end)', () => {
     const blank = Array.from({ length: 12 }, () => '.'.repeat(24));
     const result = traceSignature(rasterFromAscii(blank));
     expect(result.strokes).toEqual([]);
+  });
+
+  it('drops a finger-like blob at the border but keeps the signature', () => {
+    // Thin zig-zag stroke in the middle, fat slab hanging off the left
+    // border (a finger gripping the paper). The slab is wide enough that
+    // thinning leaves a traceable line, so the disabled-rejection control
+    // proves the slab was removed by the rejection and not lost earlier.
+    const rows = [
+      '########............',
+      '########..##........',
+      '########....##......',
+      '########......##....',
+      '....................'
+    ];
+    const withFinger = traceSignature(rasterFromAscii(rows), {
+      minComponentSize: 4,
+      borderBlobThickness: 1
+    });
+    expect(withFinger.strokes).toHaveLength(1);
+
+    // Same scene with rejection disabled traces the slab too.
+    const kept = traceSignature(rasterFromAscii(rows), {
+      minComponentSize: 4,
+      borderBlobThickness: 0
+    });
+    expect(kept.strokes.length).toBeGreaterThan(1);
   });
 
   it('respects an explicit threshold override', () => {
