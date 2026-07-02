@@ -3,6 +3,7 @@
   import { onDestroy, onMount, tick } from 'svelte';
   import {
     AlignJustify,
+    CircleDashed,
     ClipboardPaste,
     Copy,
     Eraser,
@@ -2112,8 +2113,8 @@
     queuedEraserSamples = [];
     const radius = eraserRadiusForWidth(width);
 
-    if (eraserMode === 'partial') {
-      // True eraser: cut the strokes the swipe crosses into surviving pieces.
+    if (eraserMode === 'pixel') {
+      // Pixel eraser: cut the strokes the swipe crosses into surviving pieces.
       const { value, update } = doc.sliceAtMany(
         samples.map((sample) => sample.point),
         radius
@@ -2176,7 +2177,7 @@
   function finishEraseDrag(hits: Set<string>) {
     if (!doc) return;
     flushQueuedEraserSamples();
-    if (eraserMode === 'partial') {
+    if (eraserMode === 'pixel') {
       doc.finishSliceErase(sliceAddedIds, sliceRemovedIds);
       sliceAddedIds.clear();
       sliceRemovedIds.clear();
@@ -2467,10 +2468,10 @@
     updateLiveInkOverlayStyle();
   }
 
-  // Toggle the eraser between whole-stroke and partial (true) erasing.
+  // Toggle the eraser between whole-stroke and pixel (erase-parts) erasing.
   // Persisted directly (it is not part of the mobile toolbar payload).
   function cycleEraserMode() {
-    eraserMode = eraserMode === 'stroke' ? 'partial' : 'stroke';
+    eraserMode = eraserMode === 'stroke' ? 'pixel' : 'stroke';
     void setSettingValue(INK_ERASER_MODE_SETTING, eraserMode).catch((err) => {
       console.warn('[ink-canvas-toolbar] failed to save eraser mode', err);
     });
@@ -3222,8 +3223,8 @@
                   class="flex items-center gap-1.5 text-xs text-muted-foreground"
                 >
                   <span>{tValue('editor.ink.eraserMode', eraserMode)}</span>
-                  {#if eraserMode === 'partial'}
-                    <Scissors class="size-4" aria-hidden="true" />
+                  {#if eraserMode === 'pixel'}
+                    <CircleDashed class="size-4" aria-hidden="true" />
                   {:else}
                     <Eraser class="size-4" aria-hidden="true" />
                   {/if}

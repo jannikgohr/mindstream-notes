@@ -299,7 +299,7 @@
               "scope": "D",
               "type": "select",
               "default": "stroke",
-              "options": ["stroke", "partial"]
+              "options": ["stroke", "pixel"]
             },
             {
               "id": "editor.ink.fingerDrawing",

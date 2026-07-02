@@ -60,9 +60,10 @@ export type ToolMode = 'pen' | 'eraser' | 'lasso';
 /**
  * How the eraser removes ink:
  *  - `stroke`: delete whole strokes the eraser touches (the default).
- *  - `partial`: cut strokes and keep the parts outside the eraser.
+ *  - `pixel`: cut strokes and keep the parts outside the eraser (OneNote /
+ *    Samsung Notes call this a "pixel" eraser).
  */
-export type EraserMode = 'stroke' | 'partial';
+export type EraserMode = 'stroke' | 'pixel';
 export type PageThemeMode = 'light' | 'dark' | 'system';
 export type PageBackgroundMode = 'clear' | 'points' | 'lines' | 'grid';
 export type AndroidStylusEraserAction = 'down' | 'move' | 'up' | 'cancel';
@@ -134,7 +135,7 @@ export function normalizeInkTool(value: unknown): ToolMode {
 }
 
 export function normalizeInkEraserMode(value: unknown): EraserMode {
-  return value === 'partial' ? 'partial' : 'stroke';
+  return value === 'pixel' ? 'pixel' : 'stroke';
 }
 
 /** Eraser hit radius (page units) for the current brush width. */

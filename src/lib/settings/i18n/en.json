@@ -662,7 +662,7 @@
     "editor.ink.width": { "label": "Brush size" },
     "editor.ink.eraserMode": {
       "label": "Eraser mode",
-      "description": "Stroke erases whole strokes; partial erases only the parts you drag over. Brush size sets the eraser thickness."
+      "description": "Stroke erases whole strokes; pixel erases only the parts you drag over. Brush size sets the eraser thickness."
     },
     "editor.ink.fingerDrawing": {
       "label": "Draw with fingers",
@@ -752,8 +752,8 @@
     "editor.ink.tool.pen": "Pen",
     "editor.ink.tool.eraser": "Eraser",
     "editor.ink.tool.lasso": "Lasso select",
-    "editor.ink.eraserMode.stroke": "Stroke",
-    "editor.ink.eraserMode.partial": "Partial",
+    "editor.ink.eraserMode.stroke": "Stroke eraser",
+    "editor.ink.eraserMode.pixel": "Pixel eraser",
     "editor.ink.pageTheme.light": "Light",
     "editor.ink.pageTheme.dark": "Dark",
     "editor.ink.pageTheme.system": "Follow app theme",

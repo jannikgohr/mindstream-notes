@@ -651,7 +651,7 @@
     "editor.ink.width": { "label": "Pinselgröße" },
     "editor.ink.eraserMode": {
       "label": "Radiermodus",
-      "description": "Strich radiert ganze Striche; Teilweise radiert nur die überstrichenen Bereiche. Die Pinselgröße bestimmt die Radiererbreite."
+      "description": "Strich radiert ganze Striche; Pixel radiert nur die überstrichenen Bereiche. Die Pinselgröße bestimmt die Radiererbreite."
     },
     "editor.ink.fingerDrawing": {
       "label": "Mit Fingern zeichnen",
@@ -728,8 +728,8 @@
     "editor.ink.tool.pen": "Stift",
     "editor.ink.tool.eraser": "Radierer",
     "editor.ink.tool.lasso": "Lasso-Auswahl",
-    "editor.ink.eraserMode.stroke": "Strich",
-    "editor.ink.eraserMode.partial": "Teilweise",
+    "editor.ink.eraserMode.stroke": "Strich-Radierer",
+    "editor.ink.eraserMode.pixel": "Pixel-Radierer",
     "editor.ink.pageTheme.light": "Hell",
     "editor.ink.pageTheme.dark": "Dunkel",
     "editor.ink.pageTheme.system": "App-Design folgen",
