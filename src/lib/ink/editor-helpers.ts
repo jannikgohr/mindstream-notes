@@ -9,7 +9,15 @@ import type { InkPoint } from './page';
 export type { StrokeTransform };
 
 export const SAVE_DEBOUNCE_MS = 800;
+/**
+ * Legacy fixed eraser radius, kept as the reference point for the
+ * width-derived radius: the default brush width (4) maps back to it.
+ */
 export const ERASER_RADIUS = 10;
+/** Smallest eraser radius, so a thin brush still erases usefully. */
+export const ERASER_MIN_RADIUS = 5;
+/** Eraser radius per unit of brush width (4 × 2.5 = the legacy 10). */
+export const ERASER_RADIUS_PER_WIDTH = 2.5;
 export const PAGE_FILL_LIGHT = 0xffffffff;
 export const PAGE_GRID_STEP = 28;
 export const PAGE_RULE_STEP = 48;
@@ -41,6 +49,7 @@ export const SELECTION_PASTE_OFFSET_PX = 24;
 export const INK_TOOL_SETTING = 'editor.ink.tool';
 export const INK_COLOR_SETTING = 'editor.ink.color';
 export const INK_WIDTH_SETTING = 'editor.ink.width';
+export const INK_ERASER_MODE_SETTING = 'editor.ink.eraserMode';
 export const INK_FINGER_SETTING = 'editor.ink.fingerDrawing';
 export const INK_PAGE_THEME_SETTING = 'editor.ink.pageTheme';
 export const INK_PAGE_BACKGROUND_SETTING = 'editor.ink.pageBackground';
@@ -48,6 +57,12 @@ export const INK_PAGE_BACKGROUND_COLOR_SETTING =
   'editor.ink.pageBackgroundColor';
 
 export type ToolMode = 'pen' | 'eraser' | 'lasso';
+/**
+ * How the eraser removes ink:
+ *  - `stroke`: delete whole strokes the eraser touches (the default).
+ *  - `partial`: cut strokes and keep the parts outside the eraser.
+ */
+export type EraserMode = 'stroke' | 'partial';
 export type PageThemeMode = 'light' | 'dark' | 'system';
 export type PageBackgroundMode = 'clear' | 'points' | 'lines' | 'grid';
 export type AndroidStylusEraserAction = 'down' | 'move' | 'up' | 'cancel';
@@ -116,6 +131,17 @@ export type WebInkHandleInstance = {
 export function normalizeInkTool(value: unknown): ToolMode {
   if (value === 'eraser' || value === 'lasso') return value;
   return 'pen';
+}
+
+export function normalizeInkEraserMode(value: unknown): EraserMode {
+  return value === 'partial' ? 'partial' : 'stroke';
+}
+
+/** Eraser hit radius (page units) for the current brush width. */
+export function eraserRadiusForWidth(width: unknown): number {
+  const n = typeof width === 'number' ? width : Number(width);
+  const safe = Number.isFinite(n) ? n : DEFAULT_WIDTH;
+  return Math.max(ERASER_MIN_RADIUS, safe * ERASER_RADIUS_PER_WIDTH);
 }
 
 export function normalizeInkPageTheme(value: unknown): PageThemeMode {

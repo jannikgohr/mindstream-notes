@@ -295,6 +295,13 @@
               "unit": "pu"
             },
             {
+              "id": "editor.ink.eraserMode",
+              "scope": "D",
+              "type": "select",
+              "default": "stroke",
+              "options": ["stroke", "partial"]
+            },
+            {
               "id": "editor.ink.fingerDrawing",
               "scope": "D",
               "type": "toggle",

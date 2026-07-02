@@ -102,11 +102,12 @@
     colorHexToArgb,
     cssColor,
     displayColor,
-    ERASER_RADIUS,
+    eraserRadiusForWidth,
     frameFromBounds,
     identityTransform,
     INK_COLOR_SETTING,
     INK_COLOR_SWATCHES,
+    INK_ERASER_MODE_SETTING,
     INK_FINGER_SETTING,
     INK_PAGE_BACKGROUND_COLOR_SETTING,
     INK_PAGE_BACKGROUND_SETTING,
@@ -118,6 +119,7 @@
     INK_ZOOM_STEP,
     MAX_ZOOM_FACTOR,
     normalizeColorHex,
+    normalizeInkEraserMode,
     normalizeInkPageBackground,
     normalizeInkPageTheme,
     normalizeInkTool,
@@ -149,6 +151,7 @@
     transformSelectionFrame,
     translationTransform,
     type AndroidStylusEraserPayload,
+    type EraserMode,
     type InkClipboardStroke,
     type PageBackgroundMode,
     type PageThemeMode,
@@ -225,6 +228,7 @@
   let zoomUiVersion = $state(0);
 
   let tool = $state<ToolMode>('pen');
+  let eraserMode = $state<EraserMode>('stroke');
   let colorArgb = $state(DEFAULT_COLOR);
   let colorInputText = $state('#000000');
   // While the OS colour picker streams `input` events (dragging the
@@ -253,6 +257,11 @@
   let undoDepth = $state(0);
   let redoDepth = $state(0);
   let eraserHits = new Set<string>();
+  // Partial-eraser drag session: every fragment created and every stroke
+  // tombstoned, so the whole swipe commits as one undo step (see
+  // flushQueuedEraserSamples / finishEraseDrag).
+  const sliceAddedIds = new Set<string>();
+  const sliceRemovedIds = new Set<string>();
   let androidStylusEraserHits = new Set<string>();
   let androidStylusEraserActive = false;
   let pointerMode: PointerMode | null = null;
@@ -350,6 +359,9 @@
 
   $effect(() => {
     tool = normalizeInkTool(getSettingValue(INK_TOOL_SETTING));
+    eraserMode = normalizeInkEraserMode(
+      getSettingValue(INK_ERASER_MODE_SETTING)
+    );
     colorArgb = colorHexToArgb(getSettingValue(INK_COLOR_SETTING));
     width = normalizeInkWidth(getSettingValue(INK_WIDTH_SETTING));
     fingerDrawingAllowed = hasSettingValue(INK_FINGER_SETTING)
@@ -1149,7 +1161,7 @@
     ctx.save();
     ctx.lineWidth = 1;
     if (toolPreview.erasing) {
-      const radius = Math.max(4, ERASER_RADIUS * view.scale);
+      const radius = Math.max(4, eraserRadiusForWidth(width) * view.scale);
       ctx.setLineDash(TOOL_PREVIEW_DASH);
       ctx.beginPath();
       ctx.arc(center.x, center.y, radius, 0, Math.PI * 2);
@@ -1517,9 +1529,7 @@
       cancelActiveStroke();
       inFlight = [];
     } else if (pointerMode === 'erase' && doc) {
-      flushQueuedEraserSamples();
-      doc.finishEraserDrag(eraserHits);
-      syncHistoryState();
+      finishEraseDrag(eraserHits);
     } else if (pointerMode === 'lasso') {
       lassoPoints = [];
       selectedStrokeIds = [];
@@ -1623,7 +1633,7 @@
       pointerMode = 'erase';
       selectedStrokeIds = [];
       selectionFrame = null;
-      eraserHits.clear();
+      beginEraseSession(eraserHits);
       eraseFromEvent(event);
       return;
     }
@@ -1712,7 +1722,7 @@
       pointerMode = 'erase';
       selectedStrokeIds = [];
       selectionFrame = null;
-      eraserHits.clear();
+      beginEraseSession(eraserHits);
       updateToolPreview(event);
       eraseFromEvent(event);
       return;
@@ -1791,9 +1801,7 @@
     event.preventDefault();
     if (cancelled) {
       if (pointerMode === 'erase' && doc) {
-        flushQueuedEraserSamples();
-        doc.finishEraserDrag(eraserHits);
-        syncHistoryState();
+        finishEraseDrag(eraserHits);
       } else if (pointerMode === 'lasso') {
         lassoPoints = [];
         selectedStrokeIds = [];
@@ -1815,9 +1823,7 @@
       }
       finishActiveStroke();
     } else if (pointerMode === 'erase' && doc) {
-      flushQueuedEraserSamples();
-      doc.finishEraserDrag(eraserHits);
-      syncHistoryState();
+      finishEraseDrag(eraserHits);
     } else if (pointerMode === 'lasso') {
       finishLasso();
     } else if (pointerMode === 'moveSelection') {
@@ -2071,7 +2077,7 @@
       resetPointer();
     }
     if (detail.action === 'down' || !androidStylusEraserActive) {
-      androidStylusEraserHits.clear();
+      beginEraseSession(androidStylusEraserHits);
       androidStylusEraserActive = true;
     }
 
@@ -2082,9 +2088,7 @@
     }
 
     if (detail.action === 'up' || detail.action === 'cancel') {
-      flushQueuedEraserSamples();
-      doc.finishEraserDrag(androidStylusEraserHits);
-      syncHistoryState();
+      finishEraseDrag(androidStylusEraserHits);
       androidStylusEraserHits.clear();
       androidStylusEraserActive = false;
       if (pointerMode === 'erase') {
@@ -2104,8 +2108,27 @@
       return;
     }
 
+    const samples = queuedEraserSamples;
+    queuedEraserSamples = [];
+    const radius = eraserRadiusForWidth(width);
+
+    if (eraserMode === 'partial') {
+      // True eraser: cut the strokes the swipe crosses into surviving pieces.
+      const { value, update } = doc.sliceAtMany(
+        samples.map((sample) => sample.point),
+        radius
+      );
+      if (value.removed.length === 0 && value.added.length === 0) return;
+      for (const id of value.added) sliceAddedIds.add(id);
+      for (const id of value.removed) sliceRemovedIds.add(id);
+      if (update) applyDocumentMutations([update]);
+      return;
+    }
+
+    // Stroke eraser: tombstone whole strokes, grouped by their per-drag
+    // hit set so a stroke is only removed once.
     const grouped = new Map<Set<string>, InkPoint[]>();
-    for (const sample of queuedEraserSamples) {
+    for (const sample of samples) {
       const group = grouped.get(sample.hits);
       if (group) {
         group.push(sample.point);
@@ -2113,16 +2136,11 @@
         grouped.set(sample.hits, [sample.point]);
       }
     }
-    queuedEraserSamples = [];
 
     const updates: Uint8Array[] = [];
     let erasedAny = false;
     for (const [hits, points] of grouped) {
-      const { value: erased, update } = doc.eraseAtMany(
-        points,
-        ERASER_RADIUS,
-        hits
-      );
+      const { value: erased, update } = doc.eraseAtMany(points, radius, hits);
       if (erased.length === 0) continue;
       erasedAny = true;
       for (const id of erased) {
@@ -2144,6 +2162,28 @@
       eraserFrame = null;
     }
     queuedEraserSamples = [];
+  }
+
+  // Reset the per-drag erase accumulators (both eraser modes) so the next
+  // swipe starts clean.
+  function beginEraseSession(hits: Set<string>) {
+    hits.clear();
+    sliceAddedIds.clear();
+    sliceRemovedIds.clear();
+  }
+
+  // Commit an erase drag as one undo step, dispatching on the active mode.
+  function finishEraseDrag(hits: Set<string>) {
+    if (!doc) return;
+    flushQueuedEraserSamples();
+    if (eraserMode === 'partial') {
+      doc.finishSliceErase(sliceAddedIds, sliceRemovedIds);
+      sliceAddedIds.clear();
+      sliceRemovedIds.clear();
+    } else {
+      doc.finishEraserDrag(hits);
+    }
+    syncHistoryState();
   }
 
   function resetPointer() {
@@ -2425,6 +2465,15 @@
     fingerDrawingAllowed = !fingerDrawingAllowed;
     emitToolbarSettings();
     updateLiveInkOverlayStyle();
+  }
+
+  // Toggle the eraser between whole-stroke and partial (true) erasing.
+  // Persisted directly (it is not part of the mobile toolbar payload).
+  function cycleEraserMode() {
+    eraserMode = eraserMode === 'stroke' ? 'partial' : 'stroke';
+    void setSettingValue(INK_ERASER_MODE_SETTING, eraserMode).catch((err) => {
+      console.warn('[ink-canvas-toolbar] failed to save eraser mode', err);
+    });
   }
 
   // Cycle Light → Dark → Follow app theme → Light, matching the
@@ -3160,6 +3209,26 @@
               class="absolute right-0 top-full z-50 mt-1 min-w-52 rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-lg"
               aria-label={tUi('ink.toolbar.settings')}
             >
+              <button
+                type="button"
+                role="menuitem"
+                class="flex h-8 w-full items-center justify-between gap-3 rounded-sm px-2 text-left text-sm hover:bg-accent hover:text-accent-foreground"
+                use:tooltip={`${tUi('ink.toolbar.eraserMode')}: ${tValue('editor.ink.eraserMode', eraserMode)}`}
+                aria-label={`${tUi('ink.toolbar.eraserMode')}: ${tValue('editor.ink.eraserMode', eraserMode)}`}
+                onclick={cycleEraserMode}
+              >
+                <span>{tUi('ink.toolbar.eraserMode')}</span>
+                <span
+                  class="flex items-center gap-1.5 text-xs text-muted-foreground"
+                >
+                  <span>{tValue('editor.ink.eraserMode', eraserMode)}</span>
+                  {#if eraserMode === 'partial'}
+                    <Scissors class="size-4" aria-hidden="true" />
+                  {:else}
+                    <Eraser class="size-4" aria-hidden="true" />
+                  {/if}
+                </span>
+              </button>
               <button
                 type="button"
                 role="menuitemcheckbox"

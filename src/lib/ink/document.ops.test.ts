@@ -51,6 +51,46 @@ describe('eraseAt', () => {
   });
 });
 
+describe('sliceAtMany (partial eraser)', () => {
+  it('splits a stroke into two fragments, dropping the crossed portion', () => {
+    const [doc] = docWithStroke(0, 0, 100, 0);
+    const { value } = doc.sliceAtMany([{ x: 50, y: 0 }], 10);
+    expect(value.removed).toHaveLength(1);
+    expect(value.added).toHaveLength(2);
+    expect(doc.visibleStrokeCount()).toBe(2);
+    const xs = doc
+      .visibleStrokes()
+      .flatMap((stroke) => stroke.points.map((point) => point.x));
+    // Nothing survives inside the erased band around x=50.
+    expect(Math.max(...xs.filter((x) => x < 50))).toBeCloseTo(40);
+    expect(Math.min(...xs.filter((x) => x > 50))).toBeCloseTo(60);
+  });
+
+  it('leaves strokes the eraser misses untouched', () => {
+    const [doc] = docWithStroke(0, 0, 100, 0);
+    const { value } = doc.sliceAtMany([{ x: 50, y: 500 }], 10);
+    expect(value.removed).toHaveLength(0);
+    expect(value.added).toHaveLength(0);
+    expect(doc.visibleStrokeCount()).toBe(1);
+  });
+
+  it('undoes and redoes a partial-erase drag as a single step', () => {
+    const [doc] = docWithStroke(0, 0, 100, 0);
+    const { value } = doc.sliceAtMany([{ x: 50, y: 0 }], 10);
+    doc.finishSliceErase(value.added, value.removed);
+    expect(doc.visibleStrokeCount()).toBe(2);
+
+    doc.undoLast();
+    // Original restored, both fragments gone.
+    expect(doc.visibleStrokeCount()).toBe(1);
+    expect(doc.visibleStrokes()[0].points).toHaveLength(2);
+
+    doc.redoLast();
+    // Fragments back, original erased again.
+    expect(doc.visibleStrokeCount()).toBe(2);
+  });
+});
+
 describe('translate / transform / style', () => {
   it('translates a stroke', () => {
     const [doc, id] = docWithStroke(0, 0, 10, 0);
