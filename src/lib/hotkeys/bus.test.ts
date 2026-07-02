@@ -207,6 +207,25 @@ describe('bus.runActiveEditorCommand', () => {
     expect(onCommand).toHaveBeenCalledWith(APP_UNDO_COMMAND);
   });
 
+  it('routes shared app-level editor commands to the active note, not the focus-stack top', () => {
+    const pdfHandled = vi.fn(() => true);
+    track(makeListener('pdf', pdfHandled, 'note-pdf'));
+    const mdHandled = vi.fn(() => true);
+    track(makeListener('markdown', mdHandled, 'note-md'));
+    expect(activeEditor()?.noteId).toBe('note-md');
+
+    expect(runActiveEditorCommand(APP_UNDO_COMMAND, 'note-pdf')).toBe(true);
+    expect(pdfHandled).toHaveBeenCalledWith(APP_UNDO_COMMAND);
+    expect(mdHandled).not.toHaveBeenCalled();
+  });
+
+  it('does not fall back to a stale editor when the active note is null', () => {
+    const onCommand = vi.fn(() => true);
+    track(makeListener('markdown', onCommand, 'note-md'));
+    expect(runActiveEditorCommand(APP_REDO_COMMAND, null)).toBe(false);
+    expect(onCommand).not.toHaveBeenCalled();
+  });
+
   it('returns false when no editor is registered', () => {
     expect(runActiveEditorCommand(APP_REDO_COMMAND)).toBe(false);
   });
@@ -233,6 +252,20 @@ describe('bus.searchActiveNote', () => {
     track(makeListener('pdf', handled, 'note-pdf'));
     expect(searchActiveNote()).toBe(true);
     expect(handled).toHaveBeenCalledWith(SEARCH_ACTIVE_NOTE_COMMAND);
+  });
+
+  it('does not fall back to a stale editor when the active note is null', () => {
+    const handled = vi.fn(() => true);
+    track(makeListener('markdown', handled, 'note-md'));
+    expect(searchActiveNote(null)).toBe(false);
+    expect(handled).not.toHaveBeenCalled();
+  });
+
+  it('does not fall back to a stale editor when the active note editor is missing', () => {
+    const handled = vi.fn(() => true);
+    track(makeListener('markdown', handled, 'note-md'));
+    expect(searchActiveNote('note-pdf')).toBe(false);
+    expect(handled).not.toHaveBeenCalled();
   });
 
   it('returns false when the target editor does not handle find', () => {

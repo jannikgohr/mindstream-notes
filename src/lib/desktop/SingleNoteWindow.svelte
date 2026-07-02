@@ -16,6 +16,7 @@
   import { loadNote, openNoteWindow, type NoteKind } from '$lib/api';
   import { tree } from '$lib/stores/tree.svelte';
   import { subscribeOpenNoteRequest } from '$lib/stores/open-note-intent.svelte';
+  import { setActiveNote } from '$lib/state.svelte';
 
   interface Props {
     noteId: string;
@@ -30,16 +31,26 @@
   // is immutable for the panel's lifetime).
   let noteKind = $state<NoteKind | string | null>(null);
 
-  onMount(async () => {
-    try {
-      const note = await loadNote(noteId);
-      title = note.title;
-      noteKind = note.note_kind;
-      exists = true;
-    } catch (err) {
-      console.warn('[popout] note not found', noteId, err);
-      exists = false;
-    }
+  onMount(() => {
+    setActiveNote(noteId);
+    let cancelled = false;
+    void (async () => {
+      try {
+        const note = await loadNote(noteId);
+        if (cancelled) return;
+        title = note.title;
+        noteKind = note.note_kind;
+        exists = true;
+      } catch (err) {
+        if (cancelled) return;
+        console.warn('[popout] note not found', noteId, err);
+        exists = false;
+      }
+    })();
+    return () => {
+      cancelled = true;
+      setActiveNote(null);
+    };
   });
 
   // A wikilink click inside this popout dispatches through the

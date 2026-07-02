@@ -25,9 +25,10 @@ import {
 } from './bus.svelte';
 import { hotkeys } from './store.svelte';
 import type { EditorKind } from './types';
+import { setActiveNote } from '$lib/state.svelte';
 
 let teardownHotkeys: (() => void) | null = null;
-let listener: EditorListener | null = null;
+let listeners: EditorListener[] = [];
 
 /** Mac vs non-Mac decides whether `mod` resolves to metaKey or ctrlKey.
  *  Tests target the Windows/Linux path because that's where the digit
@@ -41,18 +42,21 @@ function forceWindowsModKey() {
 }
 
 function registerMarkdownListener(
-  onCommand: EditorListener['onCommand']
+  onCommand: EditorListener['onCommand'],
+  noteId?: string
 ): HTMLElement {
-  return registerEditorListener('markdown', onCommand);
+  return registerEditorListener('markdown', onCommand, noteId);
 }
 
 function registerEditorListener(
   kind: EditorKind,
-  onCommand: EditorListener['onCommand']
+  onCommand: EditorListener['onCommand'],
+  noteId?: string
 ): HTMLElement {
   const host = document.createElement('div');
   document.body.appendChild(host);
-  listener = { kind, host, onCommand };
+  const listener: EditorListener = { kind, host, noteId, onCommand };
+  listeners.push(listener);
   registerEditor(listener);
   return host;
 }
@@ -68,13 +72,14 @@ function press(init: KeyboardEventInit, target?: EventTarget) {
 }
 
 afterEach(() => {
-  if (listener) {
+  for (const listener of listeners) {
     unregisterEditor(listener);
     listener.host.remove();
-    listener = null;
   }
+  listeners = [];
   teardownHotkeys?.();
   teardownHotkeys = null;
+  setActiveNote(null);
   // Wipe any binding overrides so default-driven tests aren't
   // contaminated by a previous test's setup.
   for (const key of Object.keys(hotkeys.bindings)) {
@@ -98,7 +103,8 @@ describe('initHotkeys — match and dispatch', () => {
   it('dispatches shared app undo/redo shortcuts to the active editor', () => {
     forceWindowsModKey();
     const onCommand = vi.fn(() => true);
-    registerMarkdownListener(onCommand);
+    registerMarkdownListener(onCommand, 'note-md');
+    setActiveNote('note-md');
     teardownHotkeys = initHotkeys();
 
     const undoEvent = press({ key: 'z', code: 'KeyZ', ctrlKey: true });
@@ -114,6 +120,35 @@ describe('initHotkeys — match and dispatch', () => {
     });
     expect(onCommand).toHaveBeenCalledWith(APP_REDO_COMMAND);
     expect(redoEvent.defaultPrevented).toBe(true);
+  });
+
+  it('dispatches shared app undo/redo shortcuts only to the active note editor', () => {
+    forceWindowsModKey();
+    const pdfCommand = vi.fn(() => true);
+    registerEditorListener('pdf', pdfCommand, 'note-pdf');
+    const staleMarkdownCommand = vi.fn(() => true);
+    registerMarkdownListener(staleMarkdownCommand, 'note-md');
+    setActiveNote('note-pdf');
+    teardownHotkeys = initHotkeys();
+
+    const event = press({ key: 'z', code: 'KeyZ', ctrlKey: true });
+
+    expect(pdfCommand).toHaveBeenCalledWith(APP_UNDO_COMMAND);
+    expect(staleMarkdownCommand).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it('does not dispatch shared app undo/redo shortcuts when no note is active', () => {
+    forceWindowsModKey();
+    const onCommand = vi.fn(() => true);
+    registerMarkdownListener(onCommand, 'note-md');
+    setActiveNote(null);
+    teardownHotkeys = initHotkeys();
+
+    const event = press({ key: 'z', code: 'KeyZ', ctrlKey: true });
+
+    expect(onCommand).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
   });
 
   it('matches shifted number-row defaults when the layout emits a symbol', () => {
@@ -230,7 +265,12 @@ describe('initHotkeys — fall-through cases', () => {
     forceWindowsModKey();
     const host = document.createElement('div');
     document.body.appendChild(host);
-    listener = { kind: 'freeform', host, onCommand: () => true };
+    const listener: EditorListener = {
+      kind: 'freeform',
+      host,
+      onCommand: () => true
+    };
+    listeners.push(listener);
     registerEditor(listener);
     teardownHotkeys = initHotkeys();
 
@@ -305,7 +345,12 @@ describe('initHotkeys — unset and Crepe-native suppression', () => {
     forceWindowsModKey();
     const host = document.createElement('div');
     document.body.appendChild(host);
-    listener = { kind: 'freeform', host, onCommand: () => true };
+    const listener: EditorListener = {
+      kind: 'freeform',
+      host,
+      onCommand: () => true
+    };
+    listeners.push(listener);
     registerEditor(listener);
     teardownHotkeys = initHotkeys();
     hotkeys.bindings['editor.markdown.bold'] = 'mod+j';

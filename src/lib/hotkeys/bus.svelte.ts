@@ -157,10 +157,10 @@ function editorForNote(noteId: string): EditorListener | null {
  * Ask the editor for the active note to open in-document search. Backs
  * the global `searchActiveNote` command's `run()`.
  *
- * Targets the editor whose `noteId` matches the app's active note first,
- * falling back to the focus-stack top — so it works even when the note
- * was opened or tab-switched without the user clicking into the content
- * (which is what leaves the focus stack pointing at a stale editor).
+ * Targets the editor whose `noteId` matches the app's active note. If a
+ * caller deliberately omits `noteId`, we fall back to the focus-stack
+ * top for older non-app callers; if it passes `null` or a stale id, we
+ * do nothing so app-level shortcuts cannot affect the wrong note.
  *
  * Returns `true` only when an editor actually handled it. The caller
  * (the global command via `emitCommand`) uses that to decide whether to
@@ -173,7 +173,12 @@ function editorForNote(noteId: string): EditorListener | null {
  * module only type-imports the catalogue.
  */
 export function searchActiveNote(noteId?: string | null): boolean {
-  const target = (noteId ? editorForNote(noteId) : null) ?? activeEditor();
+  const target =
+    noteId === undefined
+      ? activeEditor()
+      : noteId
+        ? editorForNote(noteId)
+        : null;
   if (!target) return false;
   try {
     return target.onCommand(SEARCH_ACTIVE_NOTE_COMMAND) !== false;
@@ -184,13 +189,23 @@ export function searchActiveNote(noteId?: string | null): boolean {
 }
 
 /**
- * Route an app-level editor command to the active editor.
+ * Route an app-level editor command to the active note's editor.
  *
  * Used by commands that are intentionally shared across note kinds
  * (undo / redo) so the settings UI only exposes one binding each.
+ * When `noteId` is provided, we only target that note; this avoids
+ * tab switches dispatching into a stale focused editor.
  */
-export function runActiveEditorCommand(commandId: string): boolean {
-  const target = activeEditor();
+export function runActiveEditorCommand(
+  commandId: string,
+  noteId?: string | null
+): boolean {
+  const target =
+    noteId === undefined
+      ? activeEditor()
+      : noteId
+        ? editorForNote(noteId)
+        : null;
   if (!target) return false;
   try {
     return target.onCommand(commandId) !== false;

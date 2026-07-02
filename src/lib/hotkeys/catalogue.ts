@@ -205,14 +205,14 @@ export const HOTKEY_COMMANDS: CommandDefinition[] = [
     scope: 'global',
     labelKey: 'hotkeys.command.global.undo',
     defaultBinding: 'mod+z',
-    run: () => runActiveEditorCommand(APP_UNDO_COMMAND)
+    run: () => runActiveEditorCommand(APP_UNDO_COMMAND, ui.activeNoteId)
   },
   {
     id: 'global.redo',
     scope: 'global',
     labelKey: 'hotkeys.command.global.redo',
     defaultBinding: 'mod+shift+z',
-    run: () => runActiveEditorCommand(APP_REDO_COMMAND)
+    run: () => runActiveEditorCommand(APP_REDO_COMMAND, ui.activeNoteId)
   },
   {
     id: 'global.toggleNoteOverview',
