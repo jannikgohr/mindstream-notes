@@ -16,7 +16,7 @@
    */
 
   import { untrack } from 'svelte';
-  import { Check, Plus, Trash2 } from '@lucide/svelte';
+  import { Camera, Check, Plus, Trash2 } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { strokePointsAttr } from './stroke-utils';
@@ -30,6 +30,7 @@
     onSelect: (id: string) => void;
     onDelete: (id: string) => void;
     onAddNew: () => void;
+    onImport: () => void;
     onClose: () => void;
   }
   let {
@@ -40,6 +41,7 @@
     onSelect,
     onDelete,
     onAddNew,
+    onImport,
     onClose
   }: Props = $props();
 
@@ -171,6 +173,15 @@
     >
       <Plus class="size-3.5 shrink-0" aria-hidden="true" />
       <span>{tUi('pdf.signature.add')}</span>
+    </button>
+    <button
+      type="button"
+      role="menuitem"
+      class="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left transition-colors hover:bg-accent hover:text-accent-foreground"
+      onclick={onImport}
+    >
+      <Camera class="size-3.5 shrink-0" aria-hidden="true" />
+      <span>{tUi('pdf.signature.import')}</span>
     </button>
   </div>
 {/if}

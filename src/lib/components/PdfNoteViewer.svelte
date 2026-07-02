@@ -68,6 +68,7 @@
   import PdfAnnotationMenu from '$lib/pdf/PdfAnnotationMenu.svelte';
   import PdfSelectionMenu from '$lib/pdf/PdfSelectionMenu.svelte';
   import SignaturePadDialog from '$lib/pdf/SignaturePadDialog.svelte';
+  import SignatureImportDialog from '$lib/pdf/SignatureImportDialog.svelte';
   import SignaturePicker from '$lib/pdf/SignaturePicker.svelte';
   import {
     loadFlatOutline,
@@ -234,6 +235,7 @@
   const savedSignatures = $derived(signatureLibrary.signatures);
   let activeSignatureId = $state<string | null>(null);
   let signatureDialogOpen = $state(false);
+  let signatureImportOpen = $state(false);
   let signaturePickerOpen = $state(false);
   let signatureButton = $state<HTMLButtonElement | null>(null);
   let savingState = $state<'idle' | 'pending' | 'saving' | 'saved' | 'error'>(
@@ -407,17 +409,26 @@
 
   function openSignaturePad() {
     signaturePickerOpen = false;
+    signatureImportOpen = false;
     signatureDialogOpen = true;
+  }
+
+  function openSignatureImport() {
+    signaturePickerOpen = false;
+    signatureDialogOpen = false;
+    signatureImportOpen = true;
   }
 
   function handleSignatureSaved(signature: PdfSignatureSnapshot) {
     appendSignature(signature);
     signatureDialogOpen = false;
+    signatureImportOpen = false;
     activeTool = 'signature';
   }
 
   function handleSignatureCancelled() {
     signatureDialogOpen = false;
+    signatureImportOpen = false;
     if (savedSignatures.length === 0) activeTool = 'select';
   }
 
@@ -3729,6 +3740,13 @@
       open={signatureDialogOpen}
       onCancel={handleSignatureCancelled}
       onSave={handleSignatureSaved}
+      onImport={openSignatureImport}
+    />
+
+    <SignatureImportDialog
+      open={signatureImportOpen}
+      onCancel={handleSignatureCancelled}
+      onSave={handleSignatureSaved}
     />
 
     <SignaturePicker
@@ -3739,6 +3757,7 @@
       onSelect={selectSignature}
       onDelete={deleteSignature}
       onAddNew={openSignaturePad}
+      onImport={openSignatureImport}
       onClose={() => (signaturePickerOpen = false)}
     />
   {/if}
