@@ -16,6 +16,7 @@
  */
 
 export { autoPair } from './auto-pair';
+export { installBlockHandleGuard } from './block-handle-guard';
 export {
   addMermaidMenuItem,
   mermaidLanguageDescription,
