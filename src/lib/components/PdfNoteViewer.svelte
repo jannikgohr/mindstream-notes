@@ -90,7 +90,9 @@
   import {
     cloneSignatureSnapshot,
     strokeBounds,
-    strokePointsAttr
+    strokePointsAttr,
+    translateRect,
+    translateStroke
   } from '$lib/pdf/stroke-utils';
   import {
     PDF_ANNOTATIONS_MAP,
@@ -516,6 +518,27 @@
         updatedAt: new Date().toISOString()
       });
     });
+  }
+
+  /** Shift an ink/signature annotation by a PDF-space delta (drag to move). */
+  function moveAnnotation(id: string, dx: number, dy: number) {
+    const map = annotationsMap;
+    if (isTrashed || !map || (dx === 0 && dy === 0)) return;
+    const existing = map.get(id);
+    if (!existing) return;
+    const rects = existing.rects.map((rect) => translateRect(rect, dx, dy));
+    const strokes = existing.strokes?.map((stroke) =>
+      translateStroke(stroke, dx, dy)
+    );
+    runLocal(() => {
+      map.set(id, {
+        ...existing,
+        rects,
+        ...(strokes ? { strokes } : {}),
+        updatedAt: new Date().toISOString()
+      });
+    });
+    selectedAnnotationId = id;
   }
 
   function undo() {
@@ -2544,6 +2567,59 @@
       const nodesInterceptPointer = !textMode;
       pageEl.append(layer);
 
+      // Grab-and-drag an ink/signature node. A press that never travels past
+      // the click slop just selects; a real drag translates the node live
+      // (cheap CSS transform) and commits the PDF-space delta on release.
+      function attachMoveHandler(node: HTMLElement, annotation: PdfAnnotation) {
+        node.addEventListener('pointerdown', (event) => {
+          if (event.button !== 0) return;
+          event.preventDefault();
+          event.stopPropagation();
+          const pageRect = pageEl!.getBoundingClientRect();
+          const [pdfStartX, pdfStartY] = viewport!.convertToPdfPoint(
+            event.clientX - pageRect.left,
+            event.clientY - pageRect.top
+          );
+          const startClientX = event.clientX;
+          const startClientY = event.clientY;
+          let moving = false;
+          node.setPointerCapture?.(event.pointerId);
+
+          const onMove = (moveEvent: PointerEvent) => {
+            const dxPx = moveEvent.clientX - startClientX;
+            const dyPx = moveEvent.clientY - startClientY;
+            if (!moving && Math.hypot(dxPx, dyPx) <= ANNOTATION_CLICK_SLOP_PX) {
+              return;
+            }
+            moving = true;
+            node.classList.add('pdf-app-annotation-moving');
+            node.style.transform = `translate(${dxPx}px, ${dyPx}px)`;
+          };
+          const onUp = (upEvent: PointerEvent) => {
+            node.removeEventListener('pointermove', onMove);
+            node.removeEventListener('pointerup', onUp);
+            node.releasePointerCapture?.(upEvent.pointerId);
+            node.classList.remove('pdf-app-annotation-moving');
+            node.style.transform = '';
+            if (!moving) {
+              selectAnnotation(annotation.id);
+              return;
+            }
+            const [pdfEndX, pdfEndY] = viewport!.convertToPdfPoint(
+              upEvent.clientX - pageRect.left,
+              upEvent.clientY - pageRect.top
+            );
+            moveAnnotation(
+              annotation.id,
+              pdfEndX - pdfStartX,
+              pdfEndY - pdfStartY
+            );
+          };
+          node.addEventListener('pointermove', onMove);
+          node.addEventListener('pointerup', onUp);
+        });
+      }
+
       const pageAnnotations = annotations.filter(
         (annotation) => annotation.pageIndex === current.pageNumber - 1
       );
@@ -2648,12 +2724,16 @@
             }
             node.append(svg);
           }
-          if (current.activeTool === 'delete') {
-            node.addEventListener('pointerdown', (event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              activateAnnotation(annotation);
-            });
+          // Ink and signatures float above the page, so in select mode the
+          // user can grab and drag them to reposition. Highlights/comments
+          // stay anchored to the text they mark and are not movable.
+          const movable =
+            !isTrashed &&
+            (annotation.type === 'ink' || annotation.type === 'signature');
+          if (textMode && movable) {
+            node.style.pointerEvents = 'auto';
+            node.classList.add('pdf-app-annotation-movable');
+            attachMoveHandler(node, annotation);
           } else {
             node.addEventListener('pointerdown', (event) => {
               event.preventDefault();
@@ -3954,6 +4034,16 @@
     inset: 0;
     overflow: visible;
     pointer-events: none;
+  }
+
+  /* Ink/signature nodes are draggable in select mode. */
+  :global(.pdf-page-host .pdf-app-annotation-movable) {
+    cursor: grab;
+  }
+
+  :global(.pdf-page-host .pdf-app-annotation-moving) {
+    cursor: grabbing;
+    z-index: 4;
   }
 
   :global(.pdf-page-host .pdf-app-annotation-preview) {

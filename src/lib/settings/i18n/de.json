@@ -334,6 +334,7 @@
     "ink.toolbar.label": "Ink-Steuerung",
     "ink.toolbar.pen": "Stift",
     "ink.toolbar.eraser": "Radierer",
+    "ink.toolbar.eraserMode": "Radiermodus",
     "ink.toolbar.lasso": "Lasso-Auswahl",
     "ink.toolbar.style": "Ink-Stil",
     "ink.toolbar.color": "Ink-Farbe",
@@ -648,6 +649,10 @@
     "editor.ink.tool": { "label": "Letztes Ink-Werkzeug" },
     "editor.ink.color": { "label": "Ink-Farbe" },
     "editor.ink.width": { "label": "Pinselgröße" },
+    "editor.ink.eraserMode": {
+      "label": "Radiermodus",
+      "description": "Strich radiert ganze Striche; Pixel radiert nur die überstrichenen Bereiche. Die Pinselgröße bestimmt die Radiererbreite."
+    },
     "editor.ink.fingerDrawing": {
       "label": "Mit Fingern zeichnen",
       "description": "Erlaubt Zeichnen mit Finger- oder Touch-Eingabe statt nur Verschieben und Zoomen."
@@ -723,6 +728,8 @@
     "editor.ink.tool.pen": "Stift",
     "editor.ink.tool.eraser": "Radierer",
     "editor.ink.tool.lasso": "Lasso-Auswahl",
+    "editor.ink.eraserMode.stroke": "Strich-Radierer",
+    "editor.ink.eraserMode.pixel": "Pixel-Radierer",
     "editor.ink.pageTheme.light": "Hell",
     "editor.ink.pageTheme.dark": "Dunkel",
     "editor.ink.pageTheme.system": "App-Design folgen",

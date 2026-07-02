@@ -434,6 +434,7 @@
     "ink.toolbar.label": "Ink controls",
     "ink.toolbar.pen": "Pen",
     "ink.toolbar.eraser": "Eraser",
+    "ink.toolbar.eraserMode": "Eraser mode",
     "ink.toolbar.lasso": "Lasso select",
     "ink.toolbar.style": "Ink style",
     "ink.toolbar.color": "Ink colour",
@@ -659,6 +660,10 @@
     "editor.ink.tool": { "label": "Last ink tool" },
     "editor.ink.color": { "label": "Ink colour" },
     "editor.ink.width": { "label": "Brush size" },
+    "editor.ink.eraserMode": {
+      "label": "Eraser mode",
+      "description": "Stroke erases whole strokes; pixel erases only the parts you drag over. Brush size sets the eraser thickness."
+    },
     "editor.ink.fingerDrawing": {
       "label": "Draw with fingers",
       "description": "Allow finger or touch input to draw instead of only panning and zooming."
@@ -747,6 +752,8 @@
     "editor.ink.tool.pen": "Pen",
     "editor.ink.tool.eraser": "Eraser",
     "editor.ink.tool.lasso": "Lasso select",
+    "editor.ink.eraserMode.stroke": "Stroke eraser",
+    "editor.ink.eraserMode.pixel": "Pixel eraser",
     "editor.ink.pageTheme.light": "Light",
     "editor.ink.pageTheme.dark": "Dark",
     "editor.ink.pageTheme.system": "Follow app theme",
