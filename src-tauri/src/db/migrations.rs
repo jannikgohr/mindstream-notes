@@ -411,6 +411,18 @@ const MIGRATIONS: &[Migration] = &[
             ALTER TABLE note_versions ADD COLUMN tokens_removed INTEGER NOT NULL DEFAULT 0;
         "#,
     },
+    Migration {
+        to: 16,
+        // CRDT-backed note tags. The existing note_tags table remains the
+        // query/index-friendly projection used by list/search/export; this
+        // blob is the mergeable source that crosses the sync payload.
+        //
+        // Backfilled lazily from note_tags on the next local tag edit or sync
+        // apply so migration stays cheap even for large vaults.
+        sql: r#"
+            ALTER TABLE notes ADD COLUMN tags_state BLOB;
+        "#,
+    },
 ];
 
 pub fn run(conn: &mut Connection) -> AppResult<()> {

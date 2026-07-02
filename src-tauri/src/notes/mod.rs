@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::db::Db;
 use crate::error::{AppError, AppResult};
 use crate::serde_helpers::double_option;
-use crate::sync::yrs_doc;
+use crate::sync::{tags_crdt, yrs_doc};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NoteSummary {
@@ -384,6 +384,15 @@ pub fn update(conn: &mut Connection, input: UpdateNote) -> AppResult<Note> {
         )?;
     }
     if let Some(tags) = &input.tags {
+        let old_tags = load_tags(&tx, &input.id)?;
+        let old_tags_state: Vec<u8> = tx
+            .query_row(
+                "SELECT tags_state FROM notes WHERE id = ?1",
+                params![input.id],
+                |r| r.get::<_, Option<Vec<u8>>>(0),
+            )?
+            .unwrap_or_default();
+        let tags_state = tags_crdt::apply_full_list(&old_tags_state, &old_tags, tags);
         tx.execute(
             "DELETE FROM note_tags WHERE note_id = ?1",
             params![input.id],
@@ -392,12 +401,20 @@ pub fn update(conn: &mut Connection, input: UpdateNote) -> AppResult<Note> {
         for tag in tags {
             stmt.execute(params![input.id, tag])?;
         }
+        drop(stmt);
+        tx.execute(
+            "UPDATE notes SET tags_state = ?1, modified = ?2 WHERE id = ?3",
+            params![tags_state, now, input.id],
+        )?;
     }
     if let Some(fav) = input.favourite {
         tx.execute(
             "UPDATE notes SET favourite = ?1, modified = ?2 WHERE id = ?3",
             params![fav as i64, now, input.id],
         )?;
+    }
+    if input.body.is_some() {
+        crate::assets::purge_unreferenced_markdown_assets(&tx, &input.id)?;
     }
 
     // Any update is a sync candidate. Doing this once at the end keeps the
