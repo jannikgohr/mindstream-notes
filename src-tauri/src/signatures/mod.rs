@@ -110,7 +110,7 @@ pub fn delete(conn: &Connection, id: &str) -> AppResult<()> {
 
 #[tauri::command]
 pub fn list_signatures(db: tauri::State<'_, Db>) -> Result<Vec<SignatureRecord>, String> {
-    db.with_conn(|c| list(c)).map_err(Into::into)
+    db.with_conn(list).map_err(Into::into)
 }
 
 #[tauri::command]
