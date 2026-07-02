@@ -28,6 +28,7 @@ import {
   addMermaidMenuItem,
   autoPair,
   installBlockHandleGuard,
+  installSelectionToolbarAutoHide,
   markdownSearchPlugins,
   mermaidLanguageDescription,
   renderMermaidPreview,
@@ -100,6 +101,11 @@ export function buildCrepe(opts: CrepeSetupOptions): Crepe {
   // over the hover handle). Document-level and idempotent, so multiple
   // editors share one guard.
   installBlockHandleGuard(opts.host.ownerDocument);
+
+  // Hide the selection toolbar when the user clicks outside the editor
+  // — Crepe only re-evaluates it on transactions, so it otherwise
+  // lingers (and eats the next click under it).
+  installSelectionToolbarAutoHide(opts.host);
 
   const features: Partial<Record<CrepeFeature, boolean>> = {};
   if (opts.mobile) features[Crepe.Feature.BlockEdit] = false;
