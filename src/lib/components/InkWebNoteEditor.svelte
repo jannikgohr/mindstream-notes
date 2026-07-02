@@ -283,8 +283,10 @@
   const pageDark = $derived(
     pageThemeMode === 'dark' || (pageThemeMode === 'system' && $mode === 'dark')
   );
+  // The toolbar is app chrome, so it follows the app theme — not the
+  // page theme, which only governs the drawing surface (`pageDark`).
   const toolbarThemeClass = $derived(
-    pageDark ? 'ink-toolbar-theme-dark' : 'ink-toolbar-theme-light'
+    $mode === 'dark' ? 'ink-toolbar-theme-dark' : 'ink-toolbar-theme-light'
   );
   const colorHex = $derived(argbToColorHex(colorArgb));
   const inkZoomLabel = $derived.by(() => {
