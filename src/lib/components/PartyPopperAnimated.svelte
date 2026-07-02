@@ -7,10 +7,10 @@
    * path-draw + scale) as CSS keyframes triggered by the `animate`
    * prop.
    *
-   * Tied to the in-app `appearance.reduceMotion` toggle via the
-   * `.reduce-motion` class on `html` (wired in `src/routes/+layout.svelte`)
-   * and the OS-level `prefers-reduced-motion` media query — both
-   * disable the animation entirely.
+   * Tied to the resolved reduce-motion preference (app setting folded
+   * with the OS `prefers-reduced-motion` query — see
+   * `src/lib/reduce-motion.svelte.ts`) via the `.reduce-motion` class
+   * on `html`, which disables the animation entirely.
    */
 
   interface Props {

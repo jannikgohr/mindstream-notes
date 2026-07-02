@@ -27,6 +27,8 @@ import { tUi } from '$lib/settings/i18n.svelte';
 import {
   addMermaidMenuItem,
   autoPair,
+  installBlockHandleGuard,
+  installSelectionToolbarAutoHide,
   markdownSearchPlugins,
   mermaidLanguageDescription,
   renderMermaidPreview,
@@ -94,6 +96,17 @@ export interface CrepeSetupOptions {
  * teardown via `crepe.destroy()`.
  */
 export function buildCrepe(opts: CrepeSetupOptions): Crepe {
+  // Keep the block-handle "+" button from firing on a pointerup whose
+  // gesture started elsewhere (e.g. releasing a text-selection drag
+  // over the hover handle). Document-level and idempotent, so multiple
+  // editors share one guard.
+  installBlockHandleGuard(opts.host.ownerDocument);
+
+  // Hide the selection toolbar when the user clicks outside the editor
+  // — Crepe only re-evaluates it on transactions, so it otherwise
+  // lingers (and eats the next click under it).
+  installSelectionToolbarAutoHide(opts.host);
+
   const features: Partial<Record<CrepeFeature, boolean>> = {};
   if (opts.mobile) features[Crepe.Feature.BlockEdit] = false;
   if (!opts.mathEnabled) features[Crepe.Feature.Latex] = false;

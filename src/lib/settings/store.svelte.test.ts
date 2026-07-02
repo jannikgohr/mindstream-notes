@@ -111,10 +111,10 @@ describe('setSettingValue / resetSettingValue', () => {
   });
 
   it('keeps device-scoped settings shared across vaults', async () => {
-    await setSettingValue('appearance.reduceMotion', true);
+    await setSettingValue('appearance.reduceMotion', 'on');
 
     setSettingsVaultId('work');
-    expect(getSettingValue('appearance.reduceMotion')).toBe(true);
+    expect(getSettingValue('appearance.reduceMotion')).toBe('on');
 
     await setSettingValue('custom.deviceKey', 'shared');
     setSettingsVaultId('default');

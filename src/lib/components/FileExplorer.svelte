@@ -1008,13 +1008,9 @@
     }
   }
 
+  /* `html.reduce-motion` already folds in the OS preference — see
+   * src/lib/reduce-motion.svelte.ts. */
   :global(.reduce-motion) .trash-suck-particle {
     animation: none;
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .trash-suck-particle {
-      animation: none;
-    }
   }
 </style>
