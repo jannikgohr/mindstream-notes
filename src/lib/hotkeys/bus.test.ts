@@ -229,6 +229,19 @@ describe('bus.runActiveEditorCommand', () => {
   it('returns false when no editor is registered', () => {
     expect(runActiveEditorCommand(APP_REDO_COMMAND)).toBe(false);
   });
+
+  it('catches listener exceptions and reports unhandled', () => {
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    track(
+      makeListener('markdown', () => {
+        throw new Error('app command boom');
+      })
+    );
+
+    expect(runActiveEditorCommand(APP_UNDO_COMMAND)).toBe(false);
+    expect(consoleSpy).toHaveBeenCalled();
+    consoleSpy.mockRestore();
+  });
 });
 
 describe('bus.searchActiveNote', () => {
@@ -277,6 +290,23 @@ describe('bus.searchActiveNote', () => {
 
   it('returns false when no editor is registered', () => {
     expect(searchActiveNote('whatever')).toBe(false);
+  });
+
+  it('catches listener exceptions and reports unhandled', () => {
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    track(
+      makeListener(
+        'markdown',
+        () => {
+          throw new Error('search boom');
+        },
+        'note-md'
+      )
+    );
+
+    expect(searchActiveNote('note-md')).toBe(false);
+    expect(consoleSpy).toHaveBeenCalled();
+    consoleSpy.mockRestore();
   });
 
   it('the global command falls through when find is unhandled', () => {
