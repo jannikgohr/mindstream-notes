@@ -209,6 +209,7 @@ pub fn set_desktop_language(
 ) -> Result<(), String> {
     settings.set_language_code(&code);
     settings.save()?;
+    crate::native_menu::set_language(&app);
     crate::tray::set_language(&app, &settings.language_code());
     Ok(())
 }

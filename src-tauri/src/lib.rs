@@ -25,6 +25,8 @@ pub mod error;
 pub mod history;
 pub mod hotkeys;
 pub mod i18n;
+#[cfg(desktop)]
+pub mod native_menu;
 pub mod notes;
 pub mod notes_export;
 pub mod paths;
@@ -183,7 +185,15 @@ pub fn run() {
         // @tauri-apps/plugin-process). Desktop-only; gated by
         // `process:allow-restart` in the desktop capability.
         .plugin(tauri_plugin_process::init())
+        .enable_macos_default_menu(false)
+        .on_menu_event(native_menu::handle_menu_event)
         .on_window_event(|window, event| {
+            if matches!(
+                event,
+                tauri::WindowEvent::Focused(_) | tauri::WindowEvent::Destroyed
+            ) {
+                native_menu::refresh_window_menu(window.app_handle());
+            }
             if window.label() == "main" {
                 match event {
                     tauri::WindowEvent::CloseRequested { api, .. } => {
@@ -271,6 +281,9 @@ pub fn run() {
 
             #[cfg(desktop)]
             app.manage(desktop_settings::DesktopSettings::load(app));
+
+            #[cfg(desktop)]
+            native_menu::init(app)?;
 
             #[cfg(desktop)]
             tray::init(app)?;
