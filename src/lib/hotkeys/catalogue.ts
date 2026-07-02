@@ -37,7 +37,12 @@
 
 import { openSettings } from '$lib/settings/store.svelte';
 import { openSearch } from '$lib/search/store.svelte';
-import { searchActiveNote } from './bus.svelte';
+import {
+  APP_REDO_COMMAND,
+  APP_UNDO_COMMAND,
+  runActiveEditorCommand,
+  searchActiveNote
+} from './bus.svelte';
 import { openShortcutHelp } from './help.svelte';
 import {
   openRightSidebar,
@@ -196,6 +201,20 @@ export const HOTKEY_COMMANDS: CommandDefinition[] = [
     run: () => searchActiveNote(ui.activeNoteId)
   },
   {
+    id: 'global.undo',
+    scope: 'global',
+    labelKey: 'hotkeys.command.global.undo',
+    defaultBinding: 'mod+z',
+    run: () => runActiveEditorCommand(APP_UNDO_COMMAND)
+  },
+  {
+    id: 'global.redo',
+    scope: 'global',
+    labelKey: 'hotkeys.command.global.redo',
+    defaultBinding: 'mod+shift+z',
+    run: () => runActiveEditorCommand(APP_REDO_COMMAND)
+  },
+  {
     id: 'global.toggleNoteOverview',
     scope: 'global',
     labelKey: 'hotkeys.command.global.toggleNoteOverview',
@@ -235,24 +254,6 @@ export const HOTKEY_COMMANDS: CommandDefinition[] = [
   },
 
   // --- Markdown editor ------------------------------------------------------
-  {
-    id: 'editor.markdown.undo',
-    scope: 'editor',
-    editorKind: 'markdown',
-    labelKey: 'hotkeys.command.editor.markdown.undo',
-    defaultBinding: 'mod+z'
-  },
-  {
-    id: 'editor.markdown.redo',
-    scope: 'editor',
-    editorKind: 'markdown',
-    labelKey: 'hotkeys.command.editor.markdown.redo',
-    // Mod+Shift+Z is the universal redo on macOS and works on
-    // Windows/Linux too. We deliberately do NOT ship Ctrl+Y as a second
-    // default — the user can add it from settings if they want, and
-    // sticking to a single default keeps the conflict surface clean.
-    defaultBinding: 'mod+shift+z'
-  },
   {
     id: 'editor.markdown.bold',
     scope: 'editor',
@@ -403,20 +404,6 @@ export const HOTKEY_COMMANDS: CommandDefinition[] = [
     defaultBinding: null
   },
   {
-    id: 'editor.ink.undo',
-    scope: 'editor',
-    editorKind: 'ink',
-    labelKey: 'hotkeys.command.editor.ink.undo',
-    defaultBinding: 'mod+z'
-  },
-  {
-    id: 'editor.ink.redo',
-    scope: 'editor',
-    editorKind: 'ink',
-    labelKey: 'hotkeys.command.editor.ink.redo',
-    defaultBinding: 'mod+shift+z'
-  },
-  {
     id: 'editor.ink.toggleFingerDrawing',
     scope: 'editor',
     editorKind: 'ink',
@@ -487,20 +474,6 @@ export const HOTKEY_COMMANDS: CommandDefinition[] = [
     editorKind: 'pdf',
     labelKey: 'hotkeys.command.editor.pdf.deleteAnnotation',
     defaultBinding: null
-  },
-  {
-    id: 'editor.pdf.undo',
-    scope: 'editor',
-    editorKind: 'pdf',
-    labelKey: 'hotkeys.command.editor.pdf.undo',
-    defaultBinding: 'mod+z'
-  },
-  {
-    id: 'editor.pdf.redo',
-    scope: 'editor',
-    editorKind: 'pdf',
-    labelKey: 'hotkeys.command.editor.pdf.redo',
-    defaultBinding: 'mod+shift+z'
   },
   {
     id: 'editor.pdf.toggleComments',

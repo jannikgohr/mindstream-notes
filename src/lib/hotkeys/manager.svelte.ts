@@ -44,7 +44,12 @@ import {
   hotkeys,
   hydrateBindingsFromSettings
 } from './store.svelte';
-import { activeEditor, emitCommand } from './bus.svelte';
+import {
+  APP_REDO_COMMAND,
+  APP_UNDO_COMMAND,
+  activeEditor,
+  emitCommand
+} from './bus.svelte';
 import { isMac } from './platform';
 import type { Chord } from './types';
 
@@ -254,8 +259,8 @@ function isBrowserFindChord(e: KeyboardEvent): boolean {
 const CREPE_NATIVE_CHORDS: Record<string, string> = {
   'mod+b': 'editor.markdown.bold',
   'mod+i': 'editor.markdown.italic',
-  'mod+z': 'editor.markdown.undo',
-  'mod+shift+z': 'editor.markdown.redo'
+  'mod+z': APP_UNDO_COMMAND,
+  'mod+shift+z': APP_REDO_COMMAND
 };
 
 /**

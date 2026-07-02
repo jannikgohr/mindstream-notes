@@ -49,11 +49,17 @@ describe('catalogue consistency', () => {
     expect(missing).toEqual([]);
   });
 
-  it('every markdown action maps to a real command', () => {
+  it('every markdown action maps to a real command or shared alias', () => {
     // The reverse drift: a renamed command leaves a stale
     // MARKDOWN_ACTIONS entry that's unreachable but loads / takes up
-    // bundle space. Catching it means the table truly mirrors the
-    // catalogue.
+    // bundle space. Shared undo/redo aliases are allowed because the
+    // app-level command ids intentionally fan out to the active editor.
+    const allowedAliases = new Set([
+      'app.undo',
+      'app.redo',
+      'editor.markdown.undo',
+      'editor.markdown.redo'
+    ]);
     const markdownIds = new Set(
       HOTKEY_COMMANDS.filter(
         (c) => c.scope === 'editor' && c.editorKind === 'markdown'
@@ -61,7 +67,7 @@ describe('catalogue consistency', () => {
     );
     const stale: string[] = [];
     for (const id of Object.keys(MARKDOWN_ACTIONS)) {
-      if (!markdownIds.has(id)) stale.push(id);
+      if (!markdownIds.has(id) && !allowedAliases.has(id)) stale.push(id);
     }
     expect(stale).toEqual([]);
   });
@@ -215,19 +221,6 @@ describe('catalogue consistency', () => {
     }
   });
 
-  it('ships ink undo and redo with the shared editor defaults', () => {
-    expect(commandById('editor.ink.undo')).toMatchObject({
-      scope: 'editor',
-      editorKind: 'ink',
-      defaultBinding: 'mod+z'
-    });
-    expect(commandById('editor.ink.redo')).toMatchObject({
-      scope: 'editor',
-      editorKind: 'ink',
-      defaultBinding: 'mod+shift+z'
-    });
-  });
-
   it('ships pdf toolbar actions unset by default', () => {
     const pdfIds = [
       'editor.pdf.select',
@@ -256,15 +249,13 @@ describe('catalogue consistency', () => {
     }
   });
 
-  it('ships pdf undo and redo with the shared editor defaults', () => {
-    expect(commandById('editor.pdf.undo')).toMatchObject({
-      scope: 'editor',
-      editorKind: 'pdf',
+  it('ships app-level undo and redo with the shared editor defaults', () => {
+    expect(commandById('global.undo')).toMatchObject({
+      scope: 'global',
       defaultBinding: 'mod+z'
     });
-    expect(commandById('editor.pdf.redo')).toMatchObject({
-      scope: 'editor',
-      editorKind: 'pdf',
+    expect(commandById('global.redo')).toMatchObject({
+      scope: 'global',
       defaultBinding: 'mod+shift+z'
     });
   });

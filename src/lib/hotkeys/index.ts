@@ -13,7 +13,10 @@ export {
   emitCommand,
   activeEditor,
   searchActiveNote,
+  runActiveEditorCommand,
   SEARCH_ACTIVE_NOTE_COMMAND,
+  APP_UNDO_COMMAND,
+  APP_REDO_COMMAND,
   type EditorListener
 } from './bus.svelte';
 

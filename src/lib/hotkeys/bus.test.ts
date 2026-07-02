@@ -16,7 +16,10 @@ import {
   activeEditor,
   emitCommand,
   searchActiveNote,
+  runActiveEditorCommand,
   SEARCH_ACTIVE_NOTE_COMMAND,
+  APP_REDO_COMMAND,
+  APP_UNDO_COMMAND,
   type EditorListener
 } from './bus.svelte';
 import { COMMAND_BY_ID } from './catalogue';
@@ -193,6 +196,19 @@ describe('bus.emitCommand', () => {
       expect(consoleSpy).toHaveBeenCalled();
       consoleSpy.mockRestore();
     });
+  });
+});
+
+describe('bus.runActiveEditorCommand', () => {
+  it('routes shared app-level editor commands to the active editor', () => {
+    const onCommand = vi.fn(() => true);
+    track(makeListener('markdown', onCommand));
+    expect(runActiveEditorCommand(APP_UNDO_COMMAND)).toBe(true);
+    expect(onCommand).toHaveBeenCalledWith(APP_UNDO_COMMAND);
+  });
+
+  it('returns false when no editor is registered', () => {
+    expect(runActiveEditorCommand(APP_REDO_COMMAND)).toBe(false);
   });
 });
 

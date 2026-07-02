@@ -19,6 +19,8 @@ import { initHotkeys } from './manager.svelte';
 import {
   registerEditor,
   unregisterEditor,
+  APP_REDO_COMMAND,
+  APP_UNDO_COMMAND,
   type EditorListener
 } from './bus.svelte';
 import { hotkeys } from './store.svelte';
@@ -91,6 +93,27 @@ describe('initHotkeys — match and dispatch', () => {
 
     expect(onCommand).toHaveBeenCalledWith('editor.markdown.bold');
     expect(event.defaultPrevented).toBe(true);
+  });
+
+  it('dispatches shared app undo/redo shortcuts to the active editor', () => {
+    forceWindowsModKey();
+    const onCommand = vi.fn(() => true);
+    registerMarkdownListener(onCommand);
+    teardownHotkeys = initHotkeys();
+
+    const undoEvent = press({ key: 'z', code: 'KeyZ', ctrlKey: true });
+    expect(onCommand).toHaveBeenCalledWith(APP_UNDO_COMMAND);
+    expect(undoEvent.defaultPrevented).toBe(true);
+
+    onCommand.mockClear();
+    const redoEvent = press({
+      key: 'z',
+      code: 'KeyZ',
+      ctrlKey: true,
+      shiftKey: true
+    });
+    expect(onCommand).toHaveBeenCalledWith(APP_REDO_COMMAND);
+    expect(redoEvent.defaultPrevented).toBe(true);
   });
 
   it('matches shifted number-row defaults when the layout emits a symbol', () => {
@@ -244,18 +267,18 @@ describe('initHotkeys — unset and Crepe-native suppression', () => {
   });
 
   it('suppresses a Crepe-native chord whose command has been remapped', () => {
-    // Bold remapped to mod+j. Press mod+b: no command fires (bold
-    // is now on mod+j), but the manager preventDefaults so Crepe's
-    // built-in mod+b → toggleStrong doesn't run either. The point
-    // of "remap" is that the old chord truly no longer does the
-    // old thing.
+    // Undo remapped to mod+j. Press mod+z: no command fires
+    // (undo is now on mod+j), but the manager preventDefaults so
+    // Crepe's built-in undo doesn't run either. The point of
+    // "remap" is that the old chord truly no longer does the old
+    // thing.
     forceWindowsModKey();
     const onCommand = vi.fn(() => true);
     registerMarkdownListener(onCommand);
     teardownHotkeys = initHotkeys();
-    hotkeys.bindings['editor.markdown.bold'] = 'mod+j';
+    hotkeys.bindings['global.undo'] = 'mod+j';
 
-    const event = press({ key: 'b', code: 'KeyB', ctrlKey: true });
+    const event = press({ key: 'z', code: 'KeyZ', ctrlKey: true });
 
     expect(onCommand).not.toHaveBeenCalled();
     expect(event.defaultPrevented).toBe(true);
@@ -266,9 +289,9 @@ describe('initHotkeys — unset and Crepe-native suppression', () => {
     const onCommand = vi.fn(() => true);
     registerMarkdownListener(onCommand);
     teardownHotkeys = initHotkeys();
-    hotkeys.bindings['editor.markdown.bold'] = null;
+    hotkeys.bindings['global.undo'] = null;
 
-    const event = press({ key: 'b', code: 'KeyB', ctrlKey: true });
+    const event = press({ key: 'z', code: 'KeyZ', ctrlKey: true });
 
     expect(onCommand).not.toHaveBeenCalled();
     expect(event.defaultPrevented).toBe(true);

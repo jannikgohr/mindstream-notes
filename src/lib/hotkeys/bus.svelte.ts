@@ -81,6 +81,10 @@ export interface EditorListener {
   onCommand: (commandId: string) => boolean | void;
 }
 
+/** App-level editor command ids that route to whichever editor is active. */
+export const APP_UNDO_COMMAND = 'app.undo';
+export const APP_REDO_COMMAND = 'app.redo';
+
 /** Stack of registered editor listeners. TOP = most recently focused;
  *  the bus dispatches editor commands here. We use a stack instead of a
  *  single slot so two open notes (dockview split, popout window) can
@@ -175,6 +179,23 @@ export function searchActiveNote(noteId?: string | null): boolean {
     return target.onCommand(SEARCH_ACTIVE_NOTE_COMMAND) !== false;
   } catch (err) {
     console.error('[hotkeys] searchActiveNote threw', err);
+    return false;
+  }
+}
+
+/**
+ * Route an app-level editor command to the active editor.
+ *
+ * Used by commands that are intentionally shared across note kinds
+ * (undo / redo) so the settings UI only exposes one binding each.
+ */
+export function runActiveEditorCommand(commandId: string): boolean {
+  const target = activeEditor();
+  if (!target) return false;
+  try {
+    return target.onCommand(commandId) !== false;
+  } catch (err) {
+    console.error('[hotkeys] runActiveEditorCommand threw', commandId, err);
     return false;
   }
 }
