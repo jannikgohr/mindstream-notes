@@ -18,7 +18,7 @@
 
   import { Button } from '$lib/components/ui/button';
   import { tUi } from '$lib/settings/i18n.svelte';
-  import { strokePointsAttr } from './stroke-utils';
+  import SignatureStrokes from './SignatureStrokes.svelte';
   import {
     SIGNATURE_PAD_HEIGHT,
     SIGNATURE_PAD_WIDTH,
@@ -165,26 +165,7 @@
           onpointerup={finishStroke}
           onpointercancel={finishStroke}
         >
-          {#each strokes as stroke (stroke.id)}
-            <polyline
-              points={strokePointsAttr(stroke.points)}
-              fill="none"
-              stroke={stroke.color}
-              stroke-width={stroke.width}
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            />
-          {/each}
-          {#if draft}
-            <polyline
-              points={strokePointsAttr(draft.points)}
-              fill="none"
-              stroke={draft.color}
-              stroke-width={draft.width}
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            />
-          {/if}
+          <SignatureStrokes strokes={draft ? [...strokes, draft] : strokes} />
         </svg>
       </div>
 

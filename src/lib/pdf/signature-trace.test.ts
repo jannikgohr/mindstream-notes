@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { PdfStrokePoint } from './types';
 import {
+  attachMeasuredWidths,
   binarize,
   distanceTransform,
   fitToPad,
@@ -14,6 +15,7 @@ import {
   traceSkeleton,
   SIGNATURE_PAD_HEIGHT,
   SIGNATURE_PAD_WIDTH,
+  SIGNATURE_STROKE_WIDTH,
   type BinaryMask,
   type RasterImage
 } from './signature-trace';
@@ -297,7 +299,61 @@ describe('simplifyPolyline', () => {
   });
 });
 
+describe('attachMeasuredWidths', () => {
+  it('samples the local ink width along the skeleton and smooths it', () => {
+    // 5-tall block on the left, 1-tall tail on the right; skeleton runs
+    // along the middle row.
+    const mask = maskFromAscii([
+      '#####.....',
+      '#####.....',
+      '##########',
+      '#####.....',
+      '#####.....'
+    ]);
+    const line: PdfStrokePoint[] = Array.from({ length: 10 }, (_, x) => ({
+      x,
+      y: 2
+    }));
+    const [withWidths] = attachMeasuredWidths([line], mask);
+    // Thick end reads wider than the thin tail.
+    expect(withWidths[0].pressure!).toBeGreaterThan(
+      withWidths[9].pressure! * 1.5
+    );
+    // The tail is a 1px line → measured width ~1 (smoothing may blend
+    // slightly near the block).
+    expect(withWidths[9].pressure!).toBeLessThan(2);
+  });
+});
+
 describe('fitToPad', () => {
+  it('converts measured source widths into stroke width + relative pressure', () => {
+    const [stroke] = fitToPad([
+      [
+        { x: 0, y: 0, pressure: 3 },
+        { x: 100, y: 0, pressure: 1.5 },
+        { x: 100, y: 50, pressure: 1.5 }
+      ]
+    ]);
+    // Mean measured width 2 src px; fit scale for a 100×50 box into the
+    // pad's 400×148 inner box is min(4, 2.96) = 2.96.
+    const scale = (SIGNATURE_PAD_HEIGHT - 20) / 50;
+    expect(stroke.width).toBeCloseTo(2 * scale, 5);
+    expect(stroke.points[0].pressure).toBeCloseTo(1.5, 5);
+    expect(stroke.points[1].pressure).toBeCloseTo(0.75, 5);
+    expect(stroke.points[2].pressure).toBeCloseTo(0.75, 5);
+  });
+
+  it('keeps the uniform pad styling when points carry no measurement', () => {
+    const [stroke] = fitToPad([
+      [
+        { x: 0, y: 0 },
+        { x: 100, y: 50 }
+      ]
+    ]);
+    expect(stroke.width).toBe(SIGNATURE_STROKE_WIDTH);
+    expect(stroke.points.every((p) => p.pressure === 1)).toBe(true);
+  });
+
   it('scales uniformly, centres, and stays inside the pad box', () => {
     const strokes = fitToPad([
       [
@@ -377,6 +433,32 @@ describe('traceSignature (end to end)', () => {
     const blank = Array.from({ length: 12 }, () => '.'.repeat(24));
     const result = traceSignature(rasterFromAscii(blank));
     expect(result.strokes).toEqual([]);
+  });
+
+  it('captures a taper as decreasing per-point pressure', () => {
+    // Wedge: 7px tall at the left shrinking to 1px at the right.
+    const width = 36;
+    const rows = Array.from({ length: 9 }, (_, y) =>
+      Array.from({ length: width }, (_, x) => {
+        const half = 3 * (1 - x / (width - 1));
+        return x < width - 2 && Math.abs(y - 4) <= half + 0.5 ? '#' : '.';
+      }).join('')
+    );
+    const result = traceSignature(rasterFromAscii(rows), {
+      minComponentSize: 4,
+      borderBlobThickness: 0
+    });
+    expect(result.strokes).toHaveLength(1);
+    const points = result.strokes[0].points;
+    const first = points[0];
+    const last = points[points.length - 1];
+    // Thick end left, thin end right (or reversed walk order — compare
+    // by x position).
+    const [thick, thin] = first.x < last.x ? [first, last] : [last, first];
+    expect(thick.pressure!).toBeGreaterThan(thin.pressure! * 1.5);
+    // Mean-relative convention: pressures straddle 1.
+    expect(thick.pressure!).toBeGreaterThan(1);
+    expect(thin.pressure!).toBeLessThan(1);
   });
 
   it('drops a finger-like blob at the border but keeps the signature', () => {

@@ -19,7 +19,7 @@
   import { Camera, Check, Plus, Trash2 } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import { tUi } from '$lib/settings/i18n.svelte';
-  import { strokePointsAttr } from './stroke-utils';
+  import SignatureStrokes from './SignatureStrokes.svelte';
   import type { PdfSignatureSnapshot } from './types';
 
   interface Props {
@@ -139,16 +139,7 @@
               viewBox="0 0 {signature.width} {signature.height}"
               preserveAspectRatio="xMidYMid meet"
             >
-              {#each signature.strokes as stroke (stroke.id)}
-                <polyline
-                  points={strokePointsAttr(stroke.points)}
-                  fill="none"
-                  stroke={stroke.color}
-                  stroke-width={stroke.width}
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                />
-              {/each}
+              <SignatureStrokes strokes={signature.strokes} />
             </svg>
           </button>
           <Button

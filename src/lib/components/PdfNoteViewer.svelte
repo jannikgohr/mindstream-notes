@@ -91,6 +91,7 @@
   import {
     cloneSignatureSnapshot,
     strokeBounds,
+    strokeOutlinePath,
     strokePointsAttr,
     translateRect,
     translateStroke
@@ -2692,17 +2693,16 @@
             svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
             svg.classList.add('pdf-app-stroke-svg');
             for (const stroke of annotation.signature.strokes) {
-              const polyline = document.createElementNS(
+              // Filled outline path (variable width via point pressure)
+              // — same rendering as SignatureStrokes.svelte.
+              const path = document.createElementNS(
                 'http://www.w3.org/2000/svg',
-                'polyline'
+                'path'
               );
-              polyline.setAttribute('points', strokePointsAttr(stroke.points));
-              polyline.setAttribute('fill', 'none');
-              polyline.setAttribute('stroke', stroke.color);
-              polyline.setAttribute('stroke-width', `${stroke.width}`);
-              polyline.setAttribute('stroke-linecap', 'round');
-              polyline.setAttribute('stroke-linejoin', 'round');
-              svg.append(polyline);
+              path.setAttribute('d', strokeOutlinePath(stroke));
+              path.setAttribute('fill', stroke.color);
+              path.setAttribute('stroke', 'none');
+              svg.append(path);
             }
             node.append(svg);
           } else if (annotation.type === 'ink' && annotation.strokes) {

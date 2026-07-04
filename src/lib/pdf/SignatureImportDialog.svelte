@@ -22,11 +22,11 @@
    * the source picker with no leftover photo or stream.
    */
 
-  import { Camera, ImageUp, RefreshCw } from '@lucide/svelte';
+  import { Camera, Crop, ImageUp, RefreshCw } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { isAndroid } from '$lib/platform';
-  import { strokePointsAttr } from './stroke-utils';
+  import SignatureStrokes from './SignatureStrokes.svelte';
   import {
     traceSignature,
     type RasterImage,
@@ -35,8 +35,10 @@
   import {
     detectPaperQuad,
     downscaleRaster,
+    orderQuad,
     rectifyPaper,
-    type PaperQuad
+    type PaperQuad,
+    type QuadPoint
   } from './paper-detect';
   import {
     openCameraStream,
@@ -55,17 +57,27 @@
   }
   let { open, onCancel, onSave }: Props = $props();
 
-  type Mode = 'pick' | 'camera' | 'adjust';
+  type Mode = 'pick' | 'camera' | 'adjust' | 'crop';
 
   /** Working width for the throttled live-preview paper detection. */
   const LIVE_DETECT_WIDTH = 320;
 
   let mode = $state<Mode>('pick');
   // Two trace sources per photo: the rectified paper crop (when a paper
-  // was detected) and the plain downscaled frame. `paperCrop` picks.
+  // was detected or the user set one manually) and the plain downscaled
+  // frame. `paperCrop` picks.
   let wholeFrameRaster = $state<RasterImage | null>(null);
   let rectifiedRaster = $state<RasterImage | null>(null);
   let paperCrop = $state(true);
+  // Full-resolution decode kept for the manual crop editor: re-warping
+  // with user-adjusted corners must sample the original, not a crop.
+  let sourceRaster = $state<RasterImage | null>(null);
+  let detectedQuad = $state<PaperQuad | null>(null);
+  /** Corners being edited in crop mode (source-image pixels). */
+  let editedQuad = $state<QuadPoint[] | null>(null);
+  let cropCanvas = $state<HTMLCanvasElement | null>(null);
+  let cropSvg = $state<SVGSVGElement | null>(null);
+  let dragIndex = $state<number | null>(null);
   let traced = $state<TracedSignature | null>(null);
   let cameraError = $state(false);
   let decodeError = $state(false);
@@ -119,6 +131,10 @@
     wholeFrameRaster = null;
     rectifiedRaster = null;
     paperCrop = true;
+    sourceRaster = null;
+    detectedQuad = null;
+    editedQuad = null;
+    dragIndex = null;
     traced = null;
     cameraError = false;
     decodeError = false;
@@ -152,8 +168,10 @@
   function processRaster(image: RasterImage) {
     // Photos are decoded above the trace cap so the paper crop keeps
     // real resolution; the whole-frame fallback downscales as before.
-    const quad = detectPaperQuad(image);
-    rectifiedRaster = quad ? rectifyPaper(image, quad) : null;
+    sourceRaster = image;
+    detectedQuad = detectPaperQuad(image);
+    editedQuad = null;
+    rectifiedRaster = detectedQuad ? rectifyPaper(image, detectedQuad) : null;
     paperCrop = rectifiedRaster !== null;
     wholeFrameRaster = downscaleRaster(image, IMPORT_MAX_DIMENSION);
     // Fresh photo → fresh automatic threshold.
@@ -169,6 +187,123 @@
     // Different pixels → recompute the automatic threshold.
     if (raster) traced = traceSignature(raster);
   }
+
+  /* --- Manual crop editor -------------------------------------------- */
+
+  /** Starting quad when nothing was detected: an 8%-inset frame. */
+  function defaultQuad(raster: RasterImage): QuadPoint[] {
+    const mx = raster.width * 0.08;
+    const my = raster.height * 0.08;
+    return [
+      { x: mx, y: my },
+      { x: raster.width - mx, y: my },
+      { x: raster.width - mx, y: raster.height - my },
+      { x: mx, y: raster.height - my }
+    ];
+  }
+
+  function openCropEditor() {
+    if (!sourceRaster) return;
+    if (!editedQuad) {
+      editedQuad = (detectedQuad ?? defaultQuad(sourceRaster)).map((p) => ({
+        ...p
+      }));
+    }
+    mode = 'crop';
+  }
+
+  function resetCropQuad() {
+    if (!sourceRaster) return;
+    editedQuad = (detectedQuad ?? defaultQuad(sourceRaster)).map((p) => ({
+      ...p
+    }));
+  }
+
+  function applyCrop() {
+    if (!sourceRaster || !editedQuad || editedQuad.length !== 4) return;
+    // The user placed these corners deliberately — no automatic inset.
+    rectifiedRaster = rectifyPaper(sourceRaster, orderQuad(editedQuad), {
+      inset: 0
+    });
+    paperCrop = true;
+    traced = traceSignature(rectifiedRaster);
+    mode = 'adjust';
+  }
+
+  function closeCropEditor() {
+    dragIndex = null;
+    mode = 'adjust';
+  }
+
+  /** Pointer position in source-image pixels. The overlay SVG covers
+   *  the canvas exactly (same aspect, preserveAspectRatio none), so the
+   *  mapping is a plain linear scale of the bounding rect. */
+  function cropPointFromEvent(event: PointerEvent): QuadPoint | null {
+    if (!cropSvg || !sourceRaster) return null;
+    const rect = cropSvg.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return null;
+    const x = ((event.clientX - rect.left) / rect.width) * sourceRaster.width;
+    const y = ((event.clientY - rect.top) / rect.height) * sourceRaster.height;
+    return {
+      x: Math.min(sourceRaster.width, Math.max(0, x)),
+      y: Math.min(sourceRaster.height, Math.max(0, y))
+    };
+  }
+
+  function onHandleDown(event: PointerEvent, index: number) {
+    event.preventDefault();
+    try {
+      (event.currentTarget as Element).setPointerCapture(event.pointerId);
+    } catch {
+      /* capture is best-effort — dragging still works while the pointer
+         stays over the editor */
+    }
+    dragIndex = index;
+  }
+
+  function onHandleMove(event: PointerEvent) {
+    if (dragIndex === null || !editedQuad) return;
+    const point = cropPointFromEvent(event);
+    if (!point) return;
+    editedQuad = editedQuad.map((p, i) => (i === dragIndex ? point : p));
+  }
+
+  function onHandleUp() {
+    dragIndex = null;
+  }
+
+  // Paint the source photo whenever the crop editor becomes visible.
+  $effect(() => {
+    if (mode !== 'crop' || !cropCanvas || !sourceRaster) return;
+    cropCanvas.width = sourceRaster.width;
+    cropCanvas.height = sourceRaster.height;
+    const ctx = cropCanvas.getContext('2d');
+    // Copy: ImageData wants a Uint8ClampedArray backed by a plain
+    // ArrayBuffer, which the RasterImage type doesn't guarantee.
+    ctx?.putImageData(
+      new ImageData(
+        new Uint8ClampedArray(sourceRaster.data),
+        sourceRaster.width,
+        sourceRaster.height
+      ),
+      0,
+      0
+    );
+  });
+
+  const cropHandleRadius = $derived(
+    sourceRaster ? Math.max(sourceRaster.width, sourceRaster.height) * 0.018 : 8
+  );
+  const cropQuadPoints = $derived(
+    editedQuad ? editedQuad.map((p) => `${p.x},${p.y}`).join(' ') : ''
+  );
+  /** Even-odd shade: whole frame minus the quad. */
+  const cropShadePath = $derived(
+    sourceRaster && editedQuad
+      ? `M0 0 H${sourceRaster.width} V${sourceRaster.height} H0 Z ` +
+          `M${editedQuad.map((p) => `${p.x} ${p.y}`).join(' L')} Z`
+      : ''
+  );
 
   async function onFilePicked(event: Event) {
     const input = event.currentTarget as HTMLInputElement;
@@ -337,6 +472,59 @@
           <p class="mt-2 text-xs text-muted-foreground">
             {tUi('pdf.signature.import.holdHint')}
           </p>
+        {:else if mode === 'crop'}
+          <div class="relative mx-auto w-fit">
+            <canvas
+              bind:this={cropCanvas}
+              class="block max-h-[55vh] max-w-full rounded-md border border-input"
+            ></canvas>
+            {#if sourceRaster && editedQuad}
+              <!-- svelte-ignore a11y_no_static_element_interactions —
+                   pointer-driven corner dragging; move/up live on the svg
+                   so fast drags don't escape the handle. -->
+              <svg
+                bind:this={cropSvg}
+                class="absolute inset-0 h-full w-full touch-none"
+                viewBox="0 0 {sourceRaster.width} {sourceRaster.height}"
+                preserveAspectRatio="none"
+                onpointermove={onHandleMove}
+                onpointerup={onHandleUp}
+                onpointercancel={onHandleUp}
+              >
+                <path
+                  d={cropShadePath}
+                  fill="black"
+                  fill-opacity="0.4"
+                  fill-rule="evenodd"
+                  pointer-events="none"
+                />
+                <polygon
+                  points={cropQuadPoints}
+                  fill="none"
+                  stroke="var(--primary)"
+                  stroke-width={cropHandleRadius / 3}
+                  stroke-linejoin="round"
+                  pointer-events="none"
+                />
+                {#each editedQuad as corner, i (i)}
+                  <circle
+                    cx={corner.x}
+                    cy={corner.y}
+                    r={cropHandleRadius}
+                    fill="var(--primary)"
+                    fill-opacity="0.9"
+                    stroke="white"
+                    stroke-width={cropHandleRadius / 4}
+                    class="cursor-move"
+                    onpointerdown={(e) => onHandleDown(e, i)}
+                  />
+                {/each}
+              </svg>
+            {/if}
+          </div>
+          <p class="mt-2 text-xs text-muted-foreground">
+            {tUi('pdf.signature.import.cropHint')}
+          </p>
         {:else if traced}
           <svg
             role="img"
@@ -345,16 +533,7 @@
             viewBox="0 0 {traced.width} {traced.height}"
             preserveAspectRatio="xMidYMid meet"
           >
-            {#each traced.strokes as stroke (stroke.id)}
-              <polyline
-                points={strokePointsAttr(stroke.points)}
-                fill="none"
-                stroke={stroke.color}
-                stroke-width={stroke.width}
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              />
-            {/each}
+            <SignatureStrokes strokes={traced.strokes} />
           </svg>
           {#if traced.strokes.length === 0}
             <p class="mt-2 text-xs text-muted-foreground">
@@ -375,18 +554,33 @@
               class="flex-1"
             />
           </label>
-          {#if rectifiedRaster}
-            <label class="mt-2 flex items-center gap-2 text-xs">
-              <input
-                type="checkbox"
-                checked={paperCrop}
-                onchange={togglePaperCrop}
-              />
-              <span class="text-muted-foreground">
-                {tUi('pdf.signature.import.paperCrop')}
-              </span>
-            </label>
-          {/if}
+          <div class="mt-2 flex items-center justify-between gap-2">
+            {#if rectifiedRaster}
+              <label class="flex items-center gap-2 text-xs">
+                <input
+                  type="checkbox"
+                  checked={paperCrop}
+                  onchange={togglePaperCrop}
+                />
+                <span class="text-muted-foreground">
+                  {tUi('pdf.signature.import.paperCrop')}
+                </span>
+              </label>
+            {:else}
+              <div></div>
+            {/if}
+            {#if sourceRaster}
+              <Button
+                variant="ghost"
+                size="sm"
+                class="h-7 gap-1 px-2 text-xs"
+                onclick={openCropEditor}
+              >
+                <Crop class="size-3.5" aria-hidden="true" />
+                {tUi('pdf.signature.import.adjustCrop')}
+              </Button>
+            {/if}
+          </div>
         {/if}
       </div>
 
@@ -405,6 +599,28 @@
           <Button size="sm" class="h-7 px-2 text-xs" onclick={captureFrame}>
             {tUi('pdf.signature.import.capture')}
           </Button>
+        {:else if mode === 'crop'}
+          <Button
+            variant="ghost"
+            size="sm"
+            class="h-7 px-2 text-xs"
+            onclick={closeCropEditor}
+          >
+            {tUi('pdf.signature.import.back')}
+          </Button>
+          <div class="flex items-center gap-1">
+            <Button
+              variant="ghost"
+              size="sm"
+              class="h-7 px-2 text-xs"
+              onclick={resetCropQuad}
+            >
+              {tUi('pdf.signature.import.cropReset')}
+            </Button>
+            <Button size="sm" class="h-7 px-2 text-xs" onclick={applyCrop}>
+              {tUi('pdf.signature.import.cropApply')}
+            </Button>
+          </div>
         {:else if mode === 'adjust'}
           <Button
             variant="ghost"
