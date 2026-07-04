@@ -86,6 +86,7 @@
   let fileInput = $state<HTMLInputElement | null>(null);
   let captureInput = $state<HTMLInputElement | null>(null);
   let retraceTimer: ReturnType<typeof setTimeout> | null = null;
+  let cameraRequestId = 0;
 
   // Live capture guidance: last detected quad in preview-frame coords.
   let liveQuad = $state<PaperQuad | null>(null);
@@ -118,6 +119,7 @@
   }
 
   function closeCamera() {
+    cameraRequestId += 1;
     stopLiveDetection();
     stopCameraStream(stream);
     stream = null;
@@ -326,11 +328,17 @@
       captureInput?.click();
       return;
     }
+    const requestId = (cameraRequestId += 1);
     try {
-      stream = await openCameraStream();
+      const nextStream = await openCameraStream();
+      if (requestId !== cameraRequestId || !open) {
+        stopCameraStream(nextStream);
+        return;
+      }
+      stream = nextStream;
       mode = 'camera';
     } catch {
-      cameraError = true;
+      if (requestId === cameraRequestId && open) cameraError = true;
     }
   }
 

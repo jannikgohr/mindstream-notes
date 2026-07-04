@@ -11,6 +11,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { PDFArray, PDFDict, PDFDocument, PDFName, PDFString } from 'pdf-lib';
+import { inflateSync } from 'node:zlib';
 import { exportAnnotatedPdf } from './export-annotated-pdf';
 import type { PdfAnnotation } from './types';
 
@@ -162,6 +163,47 @@ describe('exportAnnotatedPdf', () => {
     // pad (420, 168) -> bottom-right -> (rect.x + rect.width, rect.y) = (280, 100)
     expect(nums[2]).toBeCloseTo(280);
     expect(nums[3]).toBeCloseTo(100);
+  });
+
+  it('adds a filled appearance stream for variable-width signatures', async () => {
+    const source = await makeBlankPdfBytes();
+    const out = await exportAnnotatedPdf(source, [
+      annotation({
+        type: 'signature',
+        rects: [{ x: 100, y: 100, width: 180, height: 60 }],
+        signature: {
+          id: 'sig-1',
+          width: 420,
+          height: 168,
+          strokes: [
+            {
+              id: 'pad-s1',
+              color: '#111827',
+              width: 6,
+              points: [
+                { x: 20, y: 80, pressure: 1.6 },
+                { x: 140, y: 40, pressure: 1.2 },
+                { x: 260, y: 100, pressure: 0.7 },
+                { x: 400, y: 70, pressure: 0.4 }
+              ]
+            }
+          ]
+        }
+      })
+    ]);
+
+    const doc = await PDFDocument.load(out);
+    const annots = await readPageAnnots(out);
+    const ap = annots[0].get(PDFName.of('AP'));
+    expect(ap).toBeInstanceOf(PDFDict);
+    const normalRef = (ap as PDFDict).get(PDFName.of('N'));
+    const normal = doc.context.lookup(normalRef);
+    const contents = inflateSync(
+      (normal as unknown as { getContents: () => Uint8Array }).getContents()
+    ).toString('utf8');
+    expect(contents).toContain(' rg');
+    expect(contents).toContain(' c');
+    expect(contents).toContain('f');
   });
 
   it('skips annotations that fall outside the page range', async () => {

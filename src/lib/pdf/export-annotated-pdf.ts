@@ -9,7 +9,8 @@
  *   comment    -> /Subtype /Square     (rect outline + /Contents body)
  *   ink        -> /Subtype /Ink        (PDF ink polylines)
  *   signature  -> /Subtype /Ink        (pad-local strokes mapped into
- *                                       the placement rect)
+ *                                       the placement rect, with a filled
+ *                                       appearance stream for variable width)
  *
  * Coordinates: our model already stores points in PDF user space
  * (origin bottom-left, Y up) — see PdfNoteViewer's use of
@@ -22,6 +23,7 @@ import type {
   PdfRect,
   PdfSignatureSnapshot
 } from './types';
+import { strokeOutlinePath } from './stroke-utils';
 
 const ANNOT_FLAG_PRINT = 4;
 
@@ -120,6 +122,9 @@ function annotationIsLive(annotation: PdfAnnotation): boolean {
 }
 
 type PdfLibModule = typeof import('pdf-lib');
+type PdfContext = Awaited<
+  ReturnType<PdfLibModule['PDFDocument']['load']>
+>['context'];
 
 function buildHighlight(annotation: PdfAnnotation, lib: PdfLibModule) {
   const [r, g, b] = hexToRgb(annotation.color);
@@ -188,21 +193,140 @@ function buildInk(annotation: PdfAnnotation, lib: PdfLibModule) {
   return dict;
 }
 
-function buildSignature(annotation: PdfAnnotation, lib: PdfLibModule) {
+function pdfNumber(value: number): string {
+  return Number.isFinite(value) ? value.toFixed(3).replace(/\.?0+$/, '') : '0';
+}
+
+function signaturePointToAppearance(
+  point: { x: number; y: number },
+  signature: PdfSignatureSnapshot,
+  placement: PdfRect
+): { x: number; y: number } {
+  const sx = placement.width / Math.max(1, signature.width);
+  const sy = placement.height / Math.max(1, signature.height);
+  return {
+    x: point.x * sx,
+    y: placement.height - point.y * sy
+  };
+}
+
+function quadraticToCubic(
+  start: { x: number; y: number },
+  control: { x: number; y: number },
+  end: { x: number; y: number }
+): string {
+  const c1 = {
+    x: start.x + (2 / 3) * (control.x - start.x),
+    y: start.y + (2 / 3) * (control.y - start.y)
+  };
+  const c2 = {
+    x: end.x + (2 / 3) * (control.x - end.x),
+    y: end.y + (2 / 3) * (control.y - end.y)
+  };
+  return `${pdfNumber(c1.x)} ${pdfNumber(c1.y)} ${pdfNumber(c2.x)} ${pdfNumber(c2.y)} ${pdfNumber(end.x)} ${pdfNumber(end.y)} c`;
+}
+
+function signatureStrokeAppearancePath(
+  stroke: PdfInkStroke,
+  signature: PdfSignatureSnapshot,
+  placement: PdfRect
+): string {
+  const svgPath = strokeOutlinePath(stroke);
+  const tokens = svgPath.match(/[A-Za-z]|-?\d+(?:\.\d+)?/g) ?? [];
+  if (tokens.length < 6 || tokens[0] !== 'M') return '';
+
+  let index = 1;
+  const readPoint = () => {
+    const x = Number(tokens[index++]);
+    const y = Number(tokens[index++]);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    return signaturePointToAppearance({ x, y }, signature, placement);
+  };
+
+  let current = readPoint();
+  if (!current || tokens[index++] !== 'Q') return '';
+  const commands = [`${pdfNumber(current.x)} ${pdfNumber(current.y)} m`];
+
+  while (index < tokens.length) {
+    if (tokens[index] === 'Z') break;
+    const control = readPoint();
+    const end = readPoint();
+    if (!control || !end) return '';
+    commands.push(quadraticToCubic(current, control, end));
+    current = end;
+  }
+
+  commands.push('f');
+  return commands.join('\n');
+}
+
+function buildSignatureAppearanceRef(
+  signature: PdfSignatureSnapshot,
+  placement: PdfRect,
+  opacity: number,
+  context: PdfContext
+): unknown | null {
+  const commands: string[] = ['q', '/GS0 gs'];
+  for (const stroke of signature.strokes) {
+    const path = signatureStrokeAppearancePath(stroke, signature, placement);
+    if (!path) continue;
+    const [r, g, b] = hexToRgb(stroke.color);
+    commands.push(`${pdfNumber(r)} ${pdfNumber(g)} ${pdfNumber(b)} rg`, path);
+  }
+  if (commands.length === 2) return null;
+  commands.push('Q');
+
+  const stream = context.flateStream(commands.join('\n'), {
+    Type: 'XObject',
+    Subtype: 'Form',
+    BBox: [0, 0, placement.width, placement.height],
+    Resources: {
+      ExtGState: {
+        GS0: {
+          ca: opacity,
+          CA: opacity
+        }
+      }
+    }
+  });
+  return context.register(stream);
+}
+
+function buildSignature(
+  annotation: PdfAnnotation,
+  lib: PdfLibModule,
+  context: PdfContext
+) {
   if (!annotation.signature) return null;
   const placement = unionRects(annotation.rects);
   const strokes = mapSignatureToPlacement(annotation.signature, placement);
-  return buildInk(
-    {
-      ...annotation,
-      // The signature's authoritative ink lives under .signature; pretend
-      // it's a regular ink annotation for the dict builder.
-      strokes,
-      // Keep the placement rect, not the source pad rect.
-      rects: [placement]
-    },
-    lib
+  const inkList = inkListFromStrokes(strokes);
+  if (inkList.length === 0) return null;
+  const [r, g, b] = hexToRgb(strokes[0].color || annotation.color);
+  const width = strokes[0]?.width ?? 1.5;
+  const dict: Record<string, unknown> = {
+    Type: 'Annot',
+    Subtype: 'Ink',
+    Rect: rectArray(placement),
+    InkList: inkList,
+    C: [r, g, b],
+    CA: annotation.opacity,
+    F: ANNOT_FLAG_PRINT,
+    BS: { Type: 'Border', W: width },
+    T: lib.PDFHexString.fromText(annotation.authorId),
+    M: lib.PDFString.of(toPdfDate(annotation.updatedAt))
+  };
+  const appearanceRef = buildSignatureAppearanceRef(
+    annotation.signature,
+    placement,
+    annotation.opacity,
+    context
   );
+  if (appearanceRef) dict.AP = { N: appearanceRef };
+  if (annotation.body) {
+    dict.Contents = lib.PDFHexString.fromText(annotation.body);
+  }
+  return dict;
 }
 
 function toPdfDate(iso: string): string {
@@ -220,7 +344,8 @@ function toPdfDate(iso: string): string {
 
 function buildAnnotationDict(
   annotation: PdfAnnotation,
-  lib: PdfLibModule
+  lib: PdfLibModule,
+  context: PdfContext
 ): Record<string, unknown> | null {
   switch (annotation.type) {
     case 'highlight':
@@ -230,7 +355,7 @@ function buildAnnotationDict(
     case 'ink':
       return buildInk(annotation, lib);
     case 'signature':
-      return buildSignature(annotation, lib);
+      return buildSignature(annotation, lib, context);
     default:
       return null;
   }
@@ -261,7 +386,7 @@ export async function exportAnnotatedPdf(
     if (!annotationIsLive(annotation)) continue;
     if (annotation.pageIndex < 0 || annotation.pageIndex >= pages.length)
       continue;
-    const dict = buildAnnotationDict(annotation, lib);
+    const dict = buildAnnotationDict(annotation, lib, context);
     if (!dict) continue;
     // pdf-lib types `obj` as accepting a recursive Literal shape, which
     // isn't an exported type — Record<string, unknown> is structurally
