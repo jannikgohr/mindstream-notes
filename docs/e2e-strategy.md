@@ -92,6 +92,11 @@ so the test seams below work in a release binary.
 - **Native dialogs.** File/folder pickers (export, import, PDF import) can't be
   clicked over WebDriver — stub or pre-seed the path via a test hook rather than
   driving the OS widget.
+- **macOS native shell checks.** Native menu-bar, Dock, and window-decoration
+  flows must run on a macOS runner or a real tester machine. Linux `xvfb`
+  can prove Tauri IPC flows, but it cannot prove App menu semantics, traffic
+  lights, Dock reopen behaviour, or focused-window routing through the macOS
+  menu bar.
 - **Server URL / session injection.** For T4, prefer seeding the server URL (and
   ideally a pre-authenticated Etebase session blob + key) into the profile dir
   before launch over typing into Settings each run. If no such hook exists yet,

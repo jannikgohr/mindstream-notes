@@ -91,6 +91,8 @@ export default defineConfig({
         'src/lib/api/auth.svelte.ts',
         'src/lib/api/collections.ts',
         'src/lib/assets/bridge.ts',
+        'src/lib/native-menu.svelte.ts',
+        'src/lib/window/decorations.svelte.ts',
         'src/lib/window/fullscreen.ts',
         'src/lib/tauri.ts',
         'src/hooks.client.ts',

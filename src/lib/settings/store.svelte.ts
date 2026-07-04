@@ -30,7 +30,7 @@
 import { SvelteSet } from 'svelte/reactivity';
 import schemaData from './schema.json';
 import { SETTING_BINDINGS } from './registry.svelte';
-import { matchesPlatformFilter } from '$lib/platform';
+import { getPlatform, matchesPlatformFilter } from '$lib/platform';
 import type { Category, Section, SettingsSchema, Setting } from './types';
 
 const DEVICE_STORAGE_KEY = 'notes-app:settings:v1';
@@ -54,6 +54,24 @@ export const ALL_SETTINGS: Setting[] = (() => {
 export const BY_ID: Record<string, Setting> = Object.fromEntries(
   ALL_SETTINGS.map((s) => [s.id, s])
 );
+
+export function defaultForSetting(def: Setting): unknown {
+  const platformDefaults = def.defaultByPlatform;
+  const current = getPlatform();
+  if (platformDefaults && current) {
+    if (current in platformDefaults) return platformDefaults[current];
+    if (
+      ['windows', 'macos', 'linux', 'freebsd'].includes(current) &&
+      'desktop' in platformDefaults
+    ) {
+      return platformDefaults.desktop;
+    }
+    if (['android', 'ios'].includes(current) && 'mobile' in platformDefaults) {
+      return platformDefaults.mobile;
+    }
+  }
+  return 'default' in def ? def.default : undefined;
+}
 
 let activeSettingsVaultId = DEFAULT_VAULT_ID;
 
@@ -172,7 +190,7 @@ void hydrateSettings('startup');
 export function getSettingValue(id: string): unknown {
   if (id in settings.values) return settings.values[id];
   const def = BY_ID[id];
-  return def && 'default' in def ? def.default : undefined;
+  return def ? defaultForSetting(def) : undefined;
 }
 
 /** True when a value was explicitly loaded/saved, not just schema-defaulted. */
@@ -220,8 +238,8 @@ export async function setSettingValue(
 export async function resetSettingValue(id: string): Promise<void> {
   const def = BY_ID[id];
   if (!def) return;
-  if ('default' in def) {
-    await setSettingValue(id, def.default);
+  if ('default' in def || def.defaultByPlatform) {
+    await setSettingValue(id, defaultForSetting(def));
     return;
   }
   delete settings.values[id];
@@ -266,8 +284,7 @@ function persistNow() {
 export function isModified(id: string): boolean {
   const def = BY_ID[id];
   if (!def) return false;
-  if (!('default' in def)) return false;
-  return getSettingValue(id) !== def.default;
+  return getSettingValue(id) !== defaultForSetting(def);
 }
 
 /** True while a binding write for this id is in flight. */

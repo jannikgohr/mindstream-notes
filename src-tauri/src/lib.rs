@@ -25,6 +25,8 @@ pub mod error;
 pub mod history;
 pub mod hotkeys;
 pub mod i18n;
+#[cfg(desktop)]
+pub mod native_menu;
 pub mod notes;
 pub mod notes_export;
 pub mod paths;
@@ -53,7 +55,6 @@ const AUTOSTART_ARG: &str = "--mindstream-autostart";
 const WINDOW_STATE_FLAGS: StateFlags = StateFlags::SIZE
     .union(StateFlags::POSITION)
     .union(StateFlags::MAXIMIZED)
-    .union(StateFlags::DECORATIONS)
     .union(StateFlags::FULLSCREEN);
 
 /// Pick a platform credential store and register it with keyring-core
@@ -184,12 +185,23 @@ pub fn run() {
         // @tauri-apps/plugin-process). Desktop-only; gated by
         // `process:allow-restart` in the desktop capability.
         .plugin(tauri_plugin_process::init())
+        .enable_macos_default_menu(false)
+        .on_menu_event(native_menu::handle_menu_event)
         .on_window_event(|window, event| {
+            #[cfg(target_os = "macos")]
+            if matches!(
+                event,
+                tauri::WindowEvent::Focused(_) | tauri::WindowEvent::Destroyed
+            ) {
+                native_menu::refresh_window_menu(window.app_handle());
+            }
             if window.label() == "main" {
                 match event {
                     tauri::WindowEvent::CloseRequested { api, .. } => {
                         let app_handle = window.app_handle();
-                        if desktop_settings::should_close_to_tray(app_handle) {
+                        if desktop_settings::should_close_to_tray(app_handle)
+                            || cfg!(target_os = "macos")
+                        {
                             api.prevent_close();
                             let _ = window.hide();
                             return;
@@ -271,6 +283,9 @@ pub fn run() {
             #[cfg(desktop)]
             app.manage(desktop_settings::DesktopSettings::load(app));
 
+            #[cfg(target_os = "macos")]
+            native_menu::init(app)?;
+
             #[cfg(desktop)]
             tray::init(app)?;
 
@@ -278,6 +293,12 @@ pub fn run() {
             if let Some(window) = app.get_webview_window("main") {
                 if let Err(err) = window.restore_state(WINDOW_STATE_FLAGS) {
                     log::warn!("[window-state] restore main window: {err}");
+                }
+                if let Err(err) = desktop_settings::apply_window_decorations(
+                    app.handle(),
+                    desktop_settings::should_use_custom_window_decorations(app.handle()),
+                ) {
+                    log::warn!("[window] apply decorations: {err}");
                 }
                 if was_started_by_autostart()
                     && desktop_settings::should_start_in_tray(app.handle())
@@ -392,6 +413,10 @@ pub fn run() {
             #[cfg(desktop)]
             desktop_settings::set_start_in_tray,
             #[cfg(desktop)]
+            desktop_settings::get_custom_window_decorations,
+            #[cfg(desktop)]
+            desktop_settings::set_custom_window_decorations,
+            #[cfg(desktop)]
             desktop_settings::get_desktop_language,
             #[cfg(desktop)]
             desktop_settings::set_desktop_language,
@@ -408,8 +433,16 @@ pub fn run() {
             drawing::drawing_set_control_bounds,
             drawing::drawing_set_document_bounds,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            #[cfg(not(target_os = "macos"))]
+            let _ = (app, event);
+            #[cfg(target_os = "macos")]
+            if matches!(event, tauri::RunEvent::Reopen { .. }) {
+                crate::tray::focus_main_window(app);
+            }
+        });
 }
 
 #[cfg(desktop)]

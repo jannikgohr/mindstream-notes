@@ -150,6 +150,24 @@ back. The value is proving the whole frontend↔Rust↔frontend chain.
   the edit appears in the other; toggle offline → assert reconnect converges.
 - **Proves:** the y-protocols transport + awareness + reconnection.
 
+### 2.6 macOS native menu and window chrome (P2)
+
+- **Why e2e:** the native menu (`native_menu.rs`) and frontend listener bridge
+  (`native-menu.svelte.ts`) only have meaning when Tauri owns the real macOS
+  menu bar, focused windows, accelerators, Dock activation, and native window
+  decorations. Unit tests cover the pure command-id/default mapping; this flow
+  proves the platform integration excluded from coverage.
+- **Steps:** launch the packaged macOS app -> confirm native decorations are the
+  default -> toggle custom window decorations and relaunch if required -> use
+  File menu commands to create each note kind and import a PDF -> use Edit menu
+  undo/redo/cut/copy/paste/select-all in markdown, ink/PDF where supported, and
+  normal inputs -> use View menu sidebar/metadata/search/theme commands -> open
+  note popout windows and switch between them from the Window menu -> close the
+  main window and reopen it from the Dock.
+- **Proves:** Rust menu item ids route to the focused webview, frontend commands
+  enter the existing hotkey bus once, native/default window chrome state matches
+  settings, and macOS close/Dock/window switching behaviour feels native.
+
 ---
 
 ## 3. State persistence across restart

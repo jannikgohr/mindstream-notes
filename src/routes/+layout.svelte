@@ -24,6 +24,7 @@
     syncGlobalShortcuts,
     teardownGlobalShortcuts
   } from '$lib/hotkeys/global.svelte';
+  import { initNativeMenuCommands } from '$lib/native-menu.svelte';
   import { loadProfiles } from '$lib/stores/profiles.svelte';
 
   let { children } = $props();
@@ -51,6 +52,7 @@
   onMount(() => {
     void loadProfiles();
     initHotkeys();
+    initNativeMenuCommands();
     const blockTouchZoom = (event: WheelEvent) => {
       if (!event.ctrlKey) return;
       event.preventDefault();
