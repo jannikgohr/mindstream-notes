@@ -512,20 +512,33 @@ export function removeBorderBlobs(
 export const FAINT_COMPONENT_RATIO = 0.35;
 
 /**
+ * A component's darkness is the contrast of its darkest pixels — the
+ * 85th percentile, not the median. Hysteresis grows every stroke a
+ * soft low-contrast halo, and a thin stroke is mostly perimeter, so
+ * halo pixels can outnumber its core; a median would read the whole
+ * stroke as pale and delete it. The core percentile is immune to that
+ * dilution while still ignoring the odd extra-dark outlier pixel, and
+ * noise stays separable because a paper-grain speck has no dark core
+ * at any percentile.
+ */
+const CORE_DARKNESS_PERCENTILE = 0.85;
+
+/**
  * Drop components that are far *lighter* than the frame's actual ink.
  *
  * At high sensitivity the threshold accepts anything a few percent
  * darker than the local paper level, which lets paper grain, sensor
  * noise, and JPEG artifacts through as speckles — often grown past the
  * size-based despeckle limit by hysteresis. Size can't separate them
- * from an i-dot, but darkness can: each component's darkness is its
- * median contrast against the local paper level, and the frame's
- * reference darkness is the ink-pixel-weighted median of those (the
- * signature holds most of the ink pixels, so the reference is the
- * signature's own ink level). Components below `ratio` × reference are
- * noise riding on a much darker signature. A uniformly faint pencil
- * signature IS the reference — nothing is dropped when there is no
- * darker ink to compare against.
+ * from an i-dot, but darkness can: each component's darkness is the
+ * core contrast of its pixels against the local paper level (see
+ * CORE_DARKNESS_PERCENTILE), and the frame's reference darkness is the
+ * ink-pixel-weighted median of those (the signature holds most of the
+ * ink pixels, so the reference is the signature's own ink level).
+ * Components below `ratio` × reference are noise riding on a much
+ * darker signature. A uniformly faint pencil signature IS the
+ * reference — nothing is dropped when there is no darker ink to
+ * compare against.
  */
 export function removeFaintComponents(
   mask: BinaryMask,
@@ -572,10 +585,11 @@ export function removeFaintComponents(
       return mean > 0 ? Math.max(0, (mean - signal[idx]) / mean) : 0;
     });
     contrasts.sort((a, b) => a - b);
-    components.push({
-      pixels,
-      darkness: contrasts[Math.floor(contrasts.length / 2)]
-    });
+    const core = Math.min(
+      contrasts.length - 1,
+      Math.floor(contrasts.length * CORE_DARKNESS_PERCENTILE)
+    );
+    components.push({ pixels, darkness: contrasts[core] });
   }
   if (components.length === 0) return { width, height, data };
 

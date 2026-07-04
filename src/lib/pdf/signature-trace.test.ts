@@ -346,6 +346,39 @@ describe('removeFaintComponents', () => {
     const { mask, signal } = boldPlusSpecks();
     expect(inkCount(removeFaintComponents(mask, signal, 0))).toBe(16);
   });
+
+  it('keeps a thin stroke whose mask is mostly soft halo', () => {
+    // A fast thin stroke after hysteresis growth: 5 dark core pixels
+    // (100) wrapped in 10 barely-dark halo pixels (235), next to a bold
+    // 14-px stroke (30). The halo majority drags the thin component's
+    // MEDIAN contrast to noise level — the core percentile must see
+    // through that and keep the stroke.
+    const width = 30;
+    const height = 7;
+    const isBold = (x: number, y: number) => y === 3 && x >= 2 && x <= 15;
+    const isCore = (x: number, y: number) => x === 22 && y >= 1 && y <= 5;
+    const isHalo = (x: number, y: number) =>
+      (x === 21 || x === 23) && y >= 1 && y <= 5;
+    const signal = new Uint8Array(width * height);
+    const maskData = new Uint8Array(width * height);
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const i = y * width + x;
+        signal[i] = isBold(x, y)
+          ? 30
+          : isCore(x, y)
+            ? 100
+            : isHalo(x, y)
+              ? 235
+              : 255;
+        maskData[i] = isBold(x, y) || isCore(x, y) || isHalo(x, y) ? 1 : 0;
+      }
+    }
+    const mask: BinaryMask = { width, height, data: maskData };
+    const cleaned = removeFaintComponents(mask, signal);
+    // The whole thin stroke survives, halo included.
+    expect(inkCount(cleaned)).toBe(29);
+  });
 });
 
 describe('removeSpecks', () => {
