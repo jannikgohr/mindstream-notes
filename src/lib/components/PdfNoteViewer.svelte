@@ -2692,17 +2692,31 @@
             );
             svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
             svg.classList.add('pdf-app-stroke-svg');
-            for (const stroke of annotation.signature.strokes) {
-              // Filled outline path (variable width via point pressure)
-              // — same rendering as SignatureStrokes.svelte.
-              const path = document.createElementNS(
+            if (annotation.signature.image?.dataUrl) {
+              const image = document.createElementNS(
                 'http://www.w3.org/2000/svg',
-                'path'
+                'image'
               );
-              path.setAttribute('d', strokeOutlinePath(stroke));
-              path.setAttribute('fill', stroke.color);
-              path.setAttribute('stroke', 'none');
-              svg.append(path);
+              image.setAttribute('href', annotation.signature.image.dataUrl);
+              image.setAttribute('x', '0');
+              image.setAttribute('y', '0');
+              image.setAttribute('width', `${annotation.signature.width}`);
+              image.setAttribute('height', `${annotation.signature.height}`);
+              image.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+              svg.append(image);
+            } else {
+              for (const stroke of annotation.signature.strokes) {
+                // Filled outline path (variable width via point pressure)
+                // — same rendering as SignatureStrokes.svelte.
+                const path = document.createElementNS(
+                  'http://www.w3.org/2000/svg',
+                  'path'
+                );
+                path.setAttribute('d', strokeOutlinePath(stroke));
+                path.setAttribute('fill', stroke.color);
+                path.setAttribute('stroke', 'none');
+                svg.append(path);
+              }
             }
             node.append(svg);
           } else if (annotation.type === 'ink' && annotation.strokes) {

@@ -45,10 +45,11 @@
     rasterFromBlob,
     rasterFromVideo,
     stopCameraStream,
+    transparentSignatureImageFromRaster,
     IMPORT_DECODE_MAX_DIMENSION,
     IMPORT_MAX_DIMENSION
   } from './signature-import-image';
-  import type { PdfSignatureSnapshot } from './types';
+  import type { PdfSignatureImage, PdfSignatureSnapshot } from './types';
 
   interface Props {
     open: boolean;
@@ -79,6 +80,7 @@
   let cropSvg = $state<SVGSVGElement | null>(null);
   let dragIndex = $state<number | null>(null);
   let traced = $state<TracedSignature | null>(null);
+  let signatureImage = $state<PdfSignatureImage | null>(null);
   let cameraError = $state(false);
   let decodeError = $state(false);
   let stream: MediaStream | null = null;
@@ -138,6 +140,7 @@
     editedQuad = null;
     dragIndex = null;
     traced = null;
+    signatureImage = null;
     cameraError = false;
     decodeError = false;
   }
@@ -167,6 +170,21 @@
     return paperCrop && rectifiedRaster ? rectifiedRaster : wholeFrameRaster;
   }
 
+  function traceRaster(
+    raster: RasterImage,
+    sensitivity?: number
+  ): TracedSignature {
+    const next = traceSignature(
+      raster,
+      typeof sensitivity === 'number' ? { sensitivity } : {}
+    );
+    signatureImage =
+      transparentSignatureImageFromRaster(raster, {
+        sensitivity: next.sensitivity
+      }) ?? null;
+    return next;
+  }
+
   function processRaster(image: RasterImage) {
     // Photos are decoded above the trace cap so the paper crop keeps
     // real resolution; the whole-frame fallback downscales as before.
@@ -177,7 +195,7 @@
     paperCrop = rectifiedRaster !== null;
     wholeFrameRaster = downscaleRaster(image, IMPORT_MAX_DIMENSION);
     // Fresh photo → fresh automatic threshold.
-    traced = traceSignature(activeTraceRaster()!);
+    traced = traceRaster(activeTraceRaster()!);
     mode = 'adjust';
   }
 
@@ -187,7 +205,7 @@
     retraceTimer = null;
     const raster = activeTraceRaster();
     // Different pixels → recompute the automatic threshold.
-    if (raster) traced = traceSignature(raster);
+    if (raster) traced = traceRaster(raster);
   }
 
   /* --- Manual crop editor -------------------------------------------- */
@@ -228,7 +246,7 @@
       inset: 0
     });
     paperCrop = true;
-    traced = traceSignature(rectifiedRaster);
+    traced = traceRaster(rectifiedRaster);
     mode = 'adjust';
   }
 
@@ -359,6 +377,7 @@
     closeCamera();
     mode = 'pick';
     traced = null;
+    signatureImage = null;
     wholeFrameRaster = null;
     rectifiedRaster = null;
   }
@@ -371,7 +390,7 @@
     retraceTimer = setTimeout(() => {
       retraceTimer = null;
       const raster = activeTraceRaster();
-      if (raster) traced = traceSignature(raster, { sensitivity: value / 100 });
+      if (raster) traced = traceRaster(raster, value / 100);
     }, 120);
   }
 
@@ -381,7 +400,8 @@
       id: crypto.randomUUID(),
       width: traced.width,
       height: traced.height,
-      strokes: traced.strokes
+      strokes: traced.strokes,
+      ...(signatureImage ? { image: signatureImage } : {})
     });
   }
 </script>
@@ -541,7 +561,12 @@
             viewBox="0 0 {traced.width} {traced.height}"
             preserveAspectRatio="xMidYMid meet"
           >
-            <SignatureStrokes strokes={traced.strokes} />
+            <SignatureStrokes
+              strokes={traced.strokes}
+              image={signatureImage ?? undefined}
+              width={traced.width}
+              height={traced.height}
+            />
           </svg>
           {#if traced.strokes.length === 0}
             <p class="mt-2 text-xs text-muted-foreground">

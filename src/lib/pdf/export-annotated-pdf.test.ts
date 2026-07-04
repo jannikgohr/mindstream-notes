@@ -15,6 +15,9 @@ import { inflateSync } from 'node:zlib';
 import { exportAnnotatedPdf } from './export-annotated-pdf';
 import type { PdfAnnotation } from './types';
 
+const PNG_DATA_URL =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+
 async function makeBlankPdfBytes(pageCount = 1): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
   for (let i = 0; i < pageCount; i++) {
@@ -204,6 +207,47 @@ describe('exportAnnotatedPdf', () => {
     expect(contents).toContain(' rg');
     expect(contents).toContain(' c');
     expect(contents).toContain('f');
+  });
+
+  it('uses the transparent PNG appearance when a scanned signature has one', async () => {
+    const source = await makeBlankPdfBytes();
+    const out = await exportAnnotatedPdf(source, [
+      annotation({
+        type: 'signature',
+        rects: [{ x: 100, y: 100, width: 180, height: 60 }],
+        signature: {
+          id: 'sig-1',
+          width: 420,
+          height: 168,
+          image: {
+            dataUrl: PNG_DATA_URL,
+            width: 420,
+            height: 168,
+            mimeType: 'image/png'
+          },
+          strokes: [
+            {
+              id: 'pad-s1',
+              color: '#111827',
+              width: 3,
+              points: [
+                { x: 0, y: 0 },
+                { x: 420, y: 168 }
+              ]
+            }
+          ]
+        }
+      })
+    ]);
+
+    const doc = await PDFDocument.load(out);
+    const annots = await readPageAnnots(out);
+    const ap = annots[0].get(PDFName.of('AP')) as PDFDict;
+    const normal = doc.context.lookup(ap.get(PDFName.of('N')));
+    const contents = inflateSync(
+      (normal as unknown as { getContents: () => Uint8Array }).getContents()
+    ).toString('utf8');
+    expect(contents).toContain('/Im0 Do');
   });
 
   it('skips annotations that fall outside the page range', async () => {

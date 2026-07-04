@@ -137,6 +137,7 @@ export function cloneSignatureSnapshot(
     id: signature.id,
     width: signature.width,
     height: signature.height,
-    strokes: signature.strokes.map(cloneInkStroke)
+    strokes: signature.strokes.map(cloneInkStroke),
+    ...(signature.image ? { image: { ...signature.image } } : {})
   };
 }

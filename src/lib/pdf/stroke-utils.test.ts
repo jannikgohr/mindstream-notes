@@ -156,11 +156,18 @@ describe('cloneSignatureSnapshot', () => {
       id: 'sig',
       width: 100,
       height: 50,
-      strokes: [stroke()]
+      strokes: [stroke()],
+      image: {
+        dataUrl: 'data:image/png;base64,abc',
+        width: 100,
+        height: 50,
+        mimeType: 'image/png' as const
+      }
     };
     const clone = cloneSignatureSnapshot(original);
     expect(clone).toEqual(original);
     expect(clone.strokes[0]).not.toBe(original.strokes[0]);
     expect(clone.strokes[0].points[0]).not.toBe(original.strokes[0].points[0]);
+    expect(clone.image).not.toBe(original.image);
   });
 });

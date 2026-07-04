@@ -139,7 +139,12 @@
               viewBox="0 0 {signature.width} {signature.height}"
               preserveAspectRatio="xMidYMid meet"
             >
-              <SignatureStrokes strokes={signature.strokes} />
+              <SignatureStrokes
+                strokes={signature.strokes}
+                image={signature.image}
+                width={signature.width}
+                height={signature.height}
+              />
             </svg>
           </button>
           <Button

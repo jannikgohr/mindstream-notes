@@ -27,8 +27,8 @@ export const SIGNATURE_PAD_HEIGHT = 168;
 export const SIGNATURE_STROKE_COLOR = '#111827';
 export const SIGNATURE_STROKE_WIDTH = 3.5;
 
-/** Breathing room inside the pad box when fitting traced strokes. */
-const PAD_MARGIN = 10;
+/** Breathing room inside the pad box when fitting traced strokes/images. */
+export const SIGNATURE_PAD_MARGIN = 10;
 
 /* --- Types ------------------------------------------------------------------ */
 
@@ -78,6 +78,11 @@ export interface TracedSignature {
   height: number;
   strokes: PdfInkStroke[];
   /** The sensitivity actually applied — seeds the UI slider. */
+  sensitivity: number;
+}
+
+export interface SignatureMask {
+  mask: BinaryMask;
   sensitivity: number;
 }
 
@@ -665,8 +670,8 @@ export function fitToPad(polylines: PdfStrokePoint[][]): PdfInkStroke[] {
   }
   const srcW = Math.max(1e-6, maxX - minX);
   const srcH = Math.max(1e-6, maxY - minY);
-  const boxW = SIGNATURE_PAD_WIDTH - PAD_MARGIN * 2;
-  const boxH = SIGNATURE_PAD_HEIGHT - PAD_MARGIN * 2;
+  const boxW = SIGNATURE_PAD_WIDTH - SIGNATURE_PAD_MARGIN * 2;
+  const boxH = SIGNATURE_PAD_HEIGHT - SIGNATURE_PAD_MARGIN * 2;
   const scale = Math.min(boxW / srcW, boxH / srcH);
   const offsetX = (SIGNATURE_PAD_WIDTH - srcW * scale) / 2;
   const offsetY = (SIGNATURE_PAD_HEIGHT - srcH * scale) / 2;
@@ -716,15 +721,10 @@ function defaultBorderBlobThickness(width: number, height: number): number {
   return Math.max(6, Math.round(Math.min(width, height) * 0.02));
 }
 
-/**
- * Run the whole pipeline. `strokes` is empty when no ink survives
- * thresholding + despeckling (blank page, threshold too aggressive) —
- * callers surface that instead of saving an empty signature.
- */
-export function traceSignature(
+export function extractSignatureMask(
   image: RasterImage,
   options: TraceSignatureOptions = {}
-): TracedSignature {
+): SignatureMask {
   const sensitivity = Math.min(1, Math.max(0, options.sensitivity ?? 0.5));
   const mask = binarizeAdaptive(
     inkSignal(image),
@@ -740,10 +740,25 @@ export function traceSignature(
   const borderThickness =
     options.borderBlobThickness ??
     defaultBorderBlobThickness(image.width, image.height);
-  const cleaned =
-    borderThickness > 0
-      ? removeBorderBlobs(despeckled, borderThickness)
-      : despeckled;
+  return {
+    mask:
+      borderThickness > 0
+        ? removeBorderBlobs(despeckled, borderThickness)
+        : despeckled,
+    sensitivity
+  };
+}
+
+/**
+ * Run the whole pipeline. `strokes` is empty when no ink survives
+ * thresholding + despeckling (blank page, threshold too aggressive) —
+ * callers surface that instead of saving an empty signature.
+ */
+export function traceSignature(
+  image: RasterImage,
+  options: TraceSignatureOptions = {}
+): TracedSignature {
+  const { mask: cleaned, sensitivity } = extractSignatureMask(image, options);
   const skeleton = thin(cleaned);
   const tolerance = options.simplifyTolerance ?? 1.2;
   // Widths are sampled on the pre-thinning mask while the points still

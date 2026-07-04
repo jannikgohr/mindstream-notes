@@ -122,9 +122,8 @@ function annotationIsLive(annotation: PdfAnnotation): boolean {
 }
 
 type PdfLibModule = typeof import('pdf-lib');
-type PdfContext = Awaited<
-  ReturnType<PdfLibModule['PDFDocument']['load']>
->['context'];
+type PdfDocument = Awaited<ReturnType<PdfLibModule['PDFDocument']['load']>>;
+type PdfContext = PdfDocument['context'];
 
 function buildHighlight(annotation: PdfAnnotation, lib: PdfLibModule) {
   const [r, g, b] = hexToRgb(annotation.color);
@@ -260,7 +259,48 @@ function signatureStrokeAppearancePath(
   return commands.join('\n');
 }
 
-function buildSignatureAppearanceRef(
+async function buildSignatureImageAppearanceRef(
+  image: PdfSignatureSnapshot['image'],
+  placement: PdfRect,
+  opacity: number,
+  out: PdfDocument,
+  context: PdfContext
+): Promise<unknown | null> {
+  if (!image?.dataUrl || image.mimeType !== 'image/png') return null;
+  try {
+    const png = await out.embedPng(image.dataUrl);
+    const stream = context.flateStream(
+      [
+        'q',
+        '/GS0 gs',
+        `${pdfNumber(placement.width)} 0 0 ${pdfNumber(placement.height)} 0 0 cm`,
+        '/Im0 Do',
+        'Q'
+      ].join('\n'),
+      {
+        Type: 'XObject',
+        Subtype: 'Form',
+        BBox: [0, 0, placement.width, placement.height],
+        Resources: {
+          XObject: {
+            Im0: png.ref
+          },
+          ExtGState: {
+            GS0: {
+              ca: opacity,
+              CA: opacity
+            }
+          }
+        }
+      }
+    );
+    return context.register(stream);
+  } catch {
+    return null;
+  }
+}
+
+function buildSignatureStrokeAppearanceRef(
   signature: PdfSignatureSnapshot,
   placement: PdfRect,
   opacity: number,
@@ -292,11 +332,12 @@ function buildSignatureAppearanceRef(
   return context.register(stream);
 }
 
-function buildSignature(
+async function buildSignature(
   annotation: PdfAnnotation,
   lib: PdfLibModule,
+  out: PdfDocument,
   context: PdfContext
-) {
+): Promise<Record<string, unknown> | null> {
   if (!annotation.signature) return null;
   const placement = unionRects(annotation.rects);
   const strokes = mapSignatureToPlacement(annotation.signature, placement);
@@ -316,12 +357,20 @@ function buildSignature(
     T: lib.PDFHexString.fromText(annotation.authorId),
     M: lib.PDFString.of(toPdfDate(annotation.updatedAt))
   };
-  const appearanceRef = buildSignatureAppearanceRef(
-    annotation.signature,
-    placement,
-    annotation.opacity,
-    context
-  );
+  const appearanceRef =
+    (await buildSignatureImageAppearanceRef(
+      annotation.signature.image,
+      placement,
+      annotation.opacity,
+      out,
+      context
+    )) ??
+    buildSignatureStrokeAppearanceRef(
+      annotation.signature,
+      placement,
+      annotation.opacity,
+      context
+    );
   if (appearanceRef) dict.AP = { N: appearanceRef };
   if (annotation.body) {
     dict.Contents = lib.PDFHexString.fromText(annotation.body);
@@ -342,11 +391,12 @@ function toPdfDate(iso: string): string {
   );
 }
 
-function buildAnnotationDict(
+async function buildAnnotationDict(
   annotation: PdfAnnotation,
   lib: PdfLibModule,
-  context: PdfContext
-): Record<string, unknown> | null {
+  context: PdfContext,
+  out: PdfDocument
+): Promise<Record<string, unknown> | null> {
   switch (annotation.type) {
     case 'highlight':
       return buildHighlight(annotation, lib);
@@ -355,7 +405,7 @@ function buildAnnotationDict(
     case 'ink':
       return buildInk(annotation, lib);
     case 'signature':
-      return buildSignature(annotation, lib, context);
+      return buildSignature(annotation, lib, out, context);
     default:
       return null;
   }
@@ -386,7 +436,7 @@ export async function exportAnnotatedPdf(
     if (!annotationIsLive(annotation)) continue;
     if (annotation.pageIndex < 0 || annotation.pageIndex >= pages.length)
       continue;
-    const dict = buildAnnotationDict(annotation, lib, context);
+    const dict = await buildAnnotationDict(annotation, lib, context, out);
     if (!dict) continue;
     // pdf-lib types `obj` as accepting a recursive Literal shape, which
     // isn't an exported type — Record<string, unknown> is structurally
