@@ -53,6 +53,11 @@ describe('native menu command mapping', () => {
     expect(undoRedoActionForNativeMenuCommand('cut')).toBeNull();
   });
 
+  it('ignores unknown theme and undo/redo commands', () => {
+    expect(themeModeForNativeMenuCommand('theme-high-contrast')).toBeNull();
+    expect(undoRedoActionForNativeMenuCommand('history')).toBeNull();
+  });
+
   it.each([
     ['markdown', 'undo', 'editor.markdown.undo'],
     ['markdown', 'redo', 'editor.markdown.redo'],

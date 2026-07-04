@@ -55,7 +55,7 @@ export const BY_ID: Record<string, Setting> = Object.fromEntries(
   ALL_SETTINGS.map((s) => [s.id, s])
 );
 
-function defaultForSetting(def: Setting): unknown {
+export function defaultForSetting(def: Setting): unknown {
   const platformDefaults = def.defaultByPlatform;
   const current = getPlatform();
   if (platformDefaults && current) {

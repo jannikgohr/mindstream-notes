@@ -109,8 +109,9 @@ pub fn delete(conn: &Connection, id: &str) -> AppResult<()> {
 // ---------- Tauri commands ----------
 
 #[tauri::command]
+#[allow(clippy::redundant_closure)]
 pub fn list_signatures(db: tauri::State<'_, Db>) -> Result<Vec<SignatureRecord>, String> {
-    db.with_conn(list).map_err(Into::into)
+    db.with_conn(|c| list(c)).map_err(Into::into)
 }
 
 #[tauri::command]

@@ -3,6 +3,7 @@ import {
   ALL_SETTINGS,
   BY_ID,
   closeSettings,
+  defaultForSetting,
   getSettingValue,
   hasSettingValue,
   isCategoryVisible,
@@ -76,6 +77,63 @@ describe('getSettingValue / hasSettingValue', () => {
     expect(getSettingValue(first.id)).toEqual(first.default);
     expect(hasSettingValue(first.id)).toBe(false);
   });
+
+  it('uses platform-specific defaults when the current platform matches', () => {
+    Object.defineProperty(window.navigator, 'userAgent', {
+      value: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
+      configurable: true
+    });
+
+    expect(getSettingValue('appearance.customWindowDecorations')).toBe(false);
+    expect(hasSettingValue('appearance.customWindowDecorations')).toBe(false);
+  });
+
+  it('falls back to the base default when no platform-specific default matches', () => {
+    expect(getSettingValue('appearance.customWindowDecorations')).toBe(true);
+  });
+
+  it('supports grouped desktop platform defaults', () => {
+    expect(
+      defaultForSetting(
+        setting({
+          default: 'fallback',
+          defaultByPlatform: { desktop: 'desktop-default' }
+        })
+      )
+    ).toBe('desktop-default');
+  });
+
+  it('supports grouped mobile platform defaults', () => {
+    Object.defineProperty(window.navigator, 'userAgent', {
+      value: 'Mozilla/5.0 (Linux; Android 16; Pixel)',
+      configurable: true
+    });
+
+    expect(
+      defaultForSetting(
+        setting({
+          default: 'fallback',
+          defaultByPlatform: { mobile: 'mobile-default' }
+        })
+      )
+    ).toBe('mobile-default');
+  });
+
+  it('ignores platform defaults when the current platform is unknown', () => {
+    Object.defineProperty(window.navigator, 'userAgent', {
+      value: 'UnknownOS/1.0',
+      configurable: true
+    });
+
+    expect(
+      defaultForSetting(
+        setting({
+          default: 'fallback',
+          defaultByPlatform: { desktop: 'desktop-default' }
+        })
+      )
+    ).toBe('fallback');
+  });
 });
 
 describe('setSettingValue / resetSettingValue', () => {
@@ -89,6 +147,22 @@ describe('setSettingValue / resetSettingValue', () => {
     await setSettingValue(def.id, 'changed');
     await resetSettingValue(def.id);
     expect(getSettingValue(def.id)).toEqual(def.default);
+  });
+
+  it('resets platform-defaulted settings back to the current platform default', async () => {
+    Object.defineProperty(window.navigator, 'userAgent', {
+      value: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
+      configurable: true
+    });
+
+    // This assertion is about resetSettingValue's platform-default logic, not
+    // the binding write path. setSettingValue() re-reads the off-Tauri binding,
+    // which canonicalizes macOS back to false immediately.
+    settings.values['appearance.customWindowDecorations'] = true;
+    expect(getSettingValue('appearance.customWindowDecorations')).toBe(true);
+
+    await resetSettingValue('appearance.customWindowDecorations');
+    expect(getSettingValue('appearance.customWindowDecorations')).toBe(false);
   });
 
   it('keeps vault-scoped account settings separate per vault', async () => {
@@ -134,6 +208,17 @@ describe('isModified', () => {
 
   it('is false for an unknown id', () => {
     expect(isModified('nope.nope')).toBe(false);
+  });
+
+  it('compares against platform-specific defaults', () => {
+    Object.defineProperty(window.navigator, 'userAgent', {
+      value: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
+      configurable: true
+    });
+
+    expect(isModified('appearance.customWindowDecorations')).toBe(false);
+    settings.values['appearance.customWindowDecorations'] = true;
+    expect(isModified('appearance.customWindowDecorations')).toBe(true);
   });
 });
 
