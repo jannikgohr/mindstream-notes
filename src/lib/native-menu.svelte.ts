@@ -4,9 +4,15 @@ import { setMode } from 'mode-watcher';
 import { isTauri } from '$lib/api/core';
 import { commandById } from '$lib/hotkeys/catalogue';
 import { activeEditor, emitCommand } from '$lib/hotkeys/bus.svelte';
-import type { EditorKind } from '$lib/hotkeys/types';
 import { requestOpenNote } from '$lib/stores/open-note-intent.svelte';
 import { importPdfIn } from '$lib/stores/tree.svelte';
+import {
+  documentEditCommandForNativeMenuCommand,
+  hotkeyCommandForNativeMenuCommand,
+  themeModeForNativeMenuCommand,
+  undoRedoActionForNativeMenuCommand,
+  undoRedoCommandId
+} from '$lib/native-menu-commands';
 
 const NATIVE_MENU_COMMAND_EVENT = 'native-menu-command';
 
@@ -41,64 +47,36 @@ async function isCurrentWindowFocused(): Promise<boolean> {
 }
 
 async function runNativeMenuCommand(command: string): Promise<void> {
-  switch (command) {
-    case 'open-settings':
-      emitHotkeyCommand('global.openSettings');
-      return;
-    case 'new-markdown-note':
-      emitHotkeyCommand('global.newMarkdownNote');
-      return;
-    case 'new-drawing':
-      emitHotkeyCommand('global.newDrawing');
-      return;
-    case 'new-ink-note':
-      emitHotkeyCommand('global.newInkNote');
-      return;
-    case 'import-pdf':
-      await importPdfFromPicker();
-      return;
-    case 'undo':
-      runUndoRedo('undo');
-      return;
-    case 'redo':
-      runUndoRedo('redo');
-      return;
-    case 'cut':
-      runDocumentEditCommand('cut');
-      return;
-    case 'copy':
-      runDocumentEditCommand('copy');
-      return;
-    case 'paste':
-      runDocumentEditCommand('paste');
-      return;
-    case 'select-all':
-      runDocumentEditCommand('selectAll');
-      return;
-    case 'toggle-sidebar':
-      emitHotkeyCommand('global.toggleNoteOverview');
-      return;
-    case 'toggle-metadata':
-      emitHotkeyCommand('global.toggleNoteMetadata');
-      return;
-    case 'search-notes':
-      emitHotkeyCommand('global.openSearch');
-      return;
-    case 'theme-light':
-      setMode('light');
-      return;
-    case 'theme-dark':
-      setMode('dark');
-      return;
-    case 'theme-system':
-      setMode('system');
-      return;
-    case 'show-keyboard-shortcuts':
-      emitHotkeyCommand('global.showShortcutHelp');
-      return;
-    default:
-      console.warn('[native-menu] unknown command', command);
+  const hotkeyCommand = hotkeyCommandForNativeMenuCommand(command);
+  if (hotkeyCommand) {
+    emitHotkeyCommand(hotkeyCommand);
+    return;
   }
+
+  const themeMode = themeModeForNativeMenuCommand(command);
+  if (themeMode) {
+    setMode(themeMode);
+    return;
+  }
+
+  const editCommand = documentEditCommandForNativeMenuCommand(command);
+  if (editCommand) {
+    runDocumentEditCommand(editCommand);
+    return;
+  }
+
+  const undoRedoAction = undoRedoActionForNativeMenuCommand(command);
+  if (undoRedoAction) {
+    runUndoRedo(undoRedoAction);
+    return;
+  }
+
+  if (command === 'import-pdf') {
+    await importPdfFromPicker();
+    return;
+  }
+
+  console.warn('[native-menu] unknown command', command);
 }
 
 function emitHotkeyCommand(commandId: string): boolean {
@@ -117,23 +95,6 @@ function runUndoRedo(action: 'undo' | 'redo'): void {
     if (commandId && emitHotkeyCommand(commandId)) return;
   }
   runDocumentEditCommand(action);
-}
-
-function undoRedoCommandId(
-  kind: EditorKind,
-  action: 'undo' | 'redo'
-): string | null {
-  switch (kind) {
-    case 'markdown':
-      return `editor.markdown.${action}`;
-    case 'ink':
-      return `editor.ink.${action}`;
-    case 'pdf':
-      return `editor.pdf.${action}`;
-    case 'freeform':
-    case 'drawing':
-      return null;
-  }
 }
 
 function runDocumentEditCommand(command: string): void {

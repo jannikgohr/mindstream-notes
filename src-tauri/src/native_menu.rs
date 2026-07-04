@@ -469,3 +469,51 @@ impl NativeMenuLabels {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn command_for_item_maps_frontend_commands() {
+        let cases = [
+            (ID_SETTINGS, "open-settings"),
+            (ID_NEW_NOTE, "new-markdown-note"),
+            (ID_NEW_DRAWING, "new-drawing"),
+            (ID_NEW_INK, "new-ink-note"),
+            (ID_IMPORT_PDF, "import-pdf"),
+            (ID_UNDO, "undo"),
+            (ID_REDO, "redo"),
+            (ID_CUT, "cut"),
+            (ID_COPY, "copy"),
+            (ID_PASTE, "paste"),
+            (ID_SELECT_ALL, "select-all"),
+            (ID_TOGGLE_SIDEBAR, "toggle-sidebar"),
+            (ID_TOGGLE_METADATA, "toggle-metadata"),
+            (ID_SEARCH_NOTES, "search-notes"),
+            (ID_THEME_LIGHT, "theme-light"),
+            (ID_THEME_DARK, "theme-dark"),
+            (ID_THEME_SYSTEM, "theme-system"),
+            (ID_SHOW_SHORTCUTS, "show-keyboard-shortcuts"),
+        ];
+
+        for (item_id, command) in cases {
+            assert_eq!(command_for_item(item_id), Some(command));
+        }
+    }
+
+    #[test]
+    fn command_for_item_leaves_rust_owned_menu_items_in_rust() {
+        assert_eq!(command_for_item(ID_QUIT), None);
+        assert_eq!(command_for_item(ID_CLOSE_WINDOW), None);
+        assert_eq!(command_for_item(ID_MAIN_WINDOW), None);
+        assert_eq!(command_for_item("native:window:note-123"), None);
+        assert_eq!(command_for_item("native:unknown"), None);
+    }
+
+    #[test]
+    fn window_item_prefix_matches_window_focus_ids() {
+        assert_eq!(WINDOW_ITEM_PREFIX, "native:window:");
+        assert!(format!("{WINDOW_ITEM_PREFIX}note-123").starts_with(WINDOW_ITEM_PREFIX));
+    }
+}

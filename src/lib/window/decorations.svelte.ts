@@ -2,13 +2,15 @@ import { getCustomWindowDecorations } from '$lib/api/desktop-settings';
 import { isTauri } from '$lib/api/core';
 import { getPlatform } from '$lib/platform';
 import { settings } from '$lib/settings/store.svelte';
-
-const CUSTOM_WINDOW_DECORATIONS_CHANGED_EVENT =
-  'custom-window-decorations-changed';
-const SETTING_ID = 'appearance.customWindowDecorations';
+import {
+  CUSTOM_WINDOW_DECORATIONS_CHANGED_EVENT,
+  CUSTOM_WINDOW_DECORATIONS_SETTING_ID,
+  customWindowDecorationsFromEventPayload,
+  defaultCustomWindowDecorations
+} from './chrome-preferences';
 
 export const windowChrome = $state({
-  customDecorations: getPlatform() !== 'macos'
+  customDecorations: defaultCustomWindowDecorations(getPlatform())
 });
 
 let initialized = false;
@@ -18,7 +20,8 @@ export function initWindowChrome(): void {
   initialized = true;
 
   if (!isTauri()) {
-    windowChrome.customDecorations = getPlatform() !== 'macos';
+    windowChrome.customDecorations =
+      defaultCustomWindowDecorations(getPlatform());
     return;
   }
 
@@ -33,7 +36,9 @@ export function initWindowChrome(): void {
   void import('@tauri-apps/api/event')
     .then(({ listen }) =>
       listen<boolean>(CUSTOM_WINDOW_DECORATIONS_CHANGED_EVENT, (event) => {
-        setCustomDecorations(event.payload === true);
+        setCustomDecorations(
+          customWindowDecorationsFromEventPayload(event.payload)
+        );
       })
     )
     .catch((err) => {
@@ -43,5 +48,5 @@ export function initWindowChrome(): void {
 
 function setCustomDecorations(value: boolean): void {
   windowChrome.customDecorations = value;
-  settings.values[SETTING_ID] = value;
+  settings.values[CUSTOM_WINDOW_DECORATIONS_SETTING_ID] = value;
 }
