@@ -378,7 +378,7 @@
     "pdf.signature.import.capture": "Aufnehmen",
     "pdf.signature.import.back": "Zurück",
     "pdf.signature.import.retake": "Neu aufnehmen",
-    "pdf.signature.import.threshold": "Erkennungsschwelle",
+    "pdf.signature.import.threshold": "Tinten-Empfindlichkeit",
     "pdf.signature.import.empty": "Keine Tinte erkannt — passe die Schwelle an oder nimm das Foto neu auf.",
     "pdf.signature.import.cameraError": "Kamera nicht verfügbar — wähle stattdessen eine Bilddatei.",
     "pdf.signature.import.decodeError": "Bilddatei konnte nicht gelesen werden.",

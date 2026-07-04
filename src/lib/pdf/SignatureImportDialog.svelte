@@ -355,7 +355,7 @@
     rectifiedRaster = null;
   }
 
-  function onThresholdInput(event: Event) {
+  function onSensitivityInput(event: Event) {
     const value = Number((event.currentTarget as HTMLInputElement).value);
     if (retraceTimer) clearTimeout(retraceTimer);
     // Debounce: retracing a 1000px photo takes tens of ms — fine per
@@ -363,7 +363,7 @@
     retraceTimer = setTimeout(() => {
       retraceTimer = null;
       const raster = activeTraceRaster();
-      if (raster) traced = traceSignature(raster, { threshold: value });
+      if (raster) traced = traceSignature(raster, { sensitivity: value / 100 });
     }, 120);
   }
 
@@ -547,10 +547,10 @@
             <input
               type="range"
               min="0"
-              max="255"
+              max="100"
               step="1"
-              value={traced.threshold}
-              oninput={onThresholdInput}
+              value={Math.round(traced.sensitivity * 100)}
+              oninput={onSensitivityInput}
               class="flex-1"
             />
           </label>

@@ -2,9 +2,10 @@ import { describe, expect, it } from 'vitest';
 import type { PdfStrokePoint } from './types';
 import {
   attachMeasuredWidths,
-  binarize,
+  binarizeAdaptive,
   distanceTransform,
   fitToPad,
+  inkSignal,
   luminance,
   otsuThreshold,
   removeBorderBlobs,
@@ -103,19 +104,90 @@ describe('otsuThreshold', () => {
   });
 });
 
-describe('binarize', () => {
-  it('marks dark pixels as ink', () => {
-    const img = rasterFromAscii(['#..', '.#.']);
-    const mask = binarize(luminance(img), 3, 2, 127);
-    expect(Array.from(mask.data)).toEqual([1, 0, 0, 0, 1, 0]);
+describe('inkSignal', () => {
+  it('reads coloured ink as dark via the minimum channel', () => {
+    // Blue ballpoint: bright in B, dark in R. Luminance (G-weighted)
+    // washes it out; the min channel keeps the ink/paper contrast.
+    const bluePen: RasterImage = {
+      width: 1,
+      height: 1,
+      data: new Uint8ClampedArray([50, 60, 160, 255])
+    };
+    expect(inkSignal(bluePen)[0]).toBe(50);
+    expect(luminance(bluePen)[0]).toBeGreaterThan(65);
   });
 
-  it('auto-inverts light-on-dark input', () => {
-    // White signature stroke on a black background: the dark side is
-    // the majority, so the mask must flip to keep ink the minority.
-    const img = rasterFromAscii(['###', '#.#', '###']);
-    const mask = binarize(luminance(img), 3, 3, 127);
-    expect(Array.from(mask.data)).toEqual([0, 0, 0, 0, 1, 0, 0, 0, 0]);
+  it('composites transparency over white', () => {
+    const img: RasterImage = {
+      width: 1,
+      height: 1,
+      data: new Uint8ClampedArray([0, 0, 0, 0])
+    };
+    expect(inkSignal(img)[0]).toBe(255);
+  });
+});
+
+describe('binarizeAdaptive', () => {
+  /** Grayscale RasterImage from a per-pixel brightness function. */
+  function shadedRaster(
+    width: number,
+    height: number,
+    value: (x: number, y: number) => number
+  ): RasterImage {
+    const data = new Uint8ClampedArray(width * height * 4);
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const v = value(x, y);
+        const o = (y * width + x) * 4;
+        data[o] = v;
+        data[o + 1] = v;
+        data[o + 2] = v;
+        data[o + 3] = 255;
+      }
+    }
+    return { width, height, data };
+  }
+
+  it('marks pixels darker than their surroundings as ink', () => {
+    const img = rasterFromAscii(['........', '..###...', '........']);
+    const mask = binarizeAdaptive(inkSignal(img), 8, 3, 0.5);
+    expect(inkCount(mask)).toBe(3);
+    expect(mask.data[1 * 8 + 2]).toBe(1);
+    expect(mask.data[1 * 8 + 3]).toBe(1);
+    expect(mask.data[1 * 8 + 4]).toBe(1);
+  });
+
+  it('finds no ink on a flat field', () => {
+    const img = shadedRaster(30, 20, () => 180);
+    expect(inkCount(binarizeAdaptive(inkSignal(img), 30, 20, 0.5))).toBe(0);
+  });
+
+  it('survives an illumination gradient that defeats any global cutoff', () => {
+    // Paper brightness ramps 120 → 230 left to right; two marks sit 60
+    // below their LOCAL paper level. The bright side's ink (~152) is
+    // brighter than the dark side's paper (120), so no single global
+    // threshold can capture both marks without eating the shaded paper
+    // — the badly-lit-room failure. Local contrast separates them.
+    const marks = [
+      { x: 20, y: 20, r: 4 },
+      { x: 100, y: 20, r: 4 }
+    ];
+    const paperAt = (x: number) => 120 + (110 * x) / 119;
+    const img = shadedRaster(120, 40, (x, y) => {
+      for (const m of marks) {
+        if (Math.hypot(x - m.x, y - m.y) < m.r) return paperAt(x) - 60;
+      }
+      return paperAt(x);
+    });
+    const mask = binarizeAdaptive(inkSignal(img), 120, 40, 0.5);
+    // Both mark centres are ink…
+    expect(mask.data[20 * 120 + 20]).toBe(1);
+    expect(mask.data[20 * 120 + 100]).toBe(1);
+    // …and the paper is not, even at its darkest.
+    expect(mask.data[20 * 120 + 2]).toBe(0);
+    expect(mask.data[2 * 120 + 60]).toBe(0);
+    // Nothing beyond the two marks (plus soft edges) got picked up.
+    expect(inkCount(mask)).toBeLessThan(150);
   });
 });
 
@@ -424,9 +496,8 @@ describe('traceSignature (end to end)', () => {
         expect(p.y).toBeLessThanOrEqual(SIGNATURE_PAD_HEIGHT);
       }
     }
-    // Otsu on a black/white image lands between the two levels.
-    expect(result.threshold).toBeGreaterThanOrEqual(0);
-    expect(result.threshold).toBeLessThan(255);
+    // The applied sensitivity is echoed back to seed the UI slider.
+    expect(result.sensitivity).toBe(0.5);
   });
 
   it('returns zero strokes for a blank page', () => {
@@ -487,9 +558,9 @@ describe('traceSignature (end to end)', () => {
     expect(kept.strokes.length).toBeGreaterThan(1);
   });
 
-  it('respects an explicit threshold override', () => {
-    // Mid-gray ink (128): invisible with a low threshold, ink with a
-    // high one.
+  it('picks up faint ink only at higher sensitivity', () => {
+    // Pale pencil (220 on white 255): ~13% local contrast — below the
+    // default 16% requirement, above the 2% at full sensitivity.
     const img: RasterImage = {
       width: 8,
       height: 3,
@@ -497,14 +568,14 @@ describe('traceSignature (end to end)', () => {
     };
     for (let x = 1; x < 7; x++) {
       const o = (1 * 8 + x) * 4;
-      img.data[o] = 128;
-      img.data[o + 1] = 128;
-      img.data[o + 2] = 128;
+      img.data[o] = 220;
+      img.data[o + 1] = 220;
+      img.data[o + 2] = 220;
     }
-    const low = traceSignature(img, { threshold: 60, minComponentSize: 2 });
-    const high = traceSignature(img, { threshold: 200, minComponentSize: 2 });
-    expect(low.strokes).toEqual([]);
-    expect(low.threshold).toBe(60);
-    expect(high.strokes.length).toBeGreaterThan(0);
+    const dim = traceSignature(img, { sensitivity: 0.5, minComponentSize: 2 });
+    const keen = traceSignature(img, { sensitivity: 1, minComponentSize: 2 });
+    expect(dim.strokes).toEqual([]);
+    expect(dim.sensitivity).toBe(0.5);
+    expect(keen.strokes.length).toBeGreaterThan(0);
   });
 });

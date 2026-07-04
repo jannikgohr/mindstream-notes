@@ -478,7 +478,7 @@
     "pdf.signature.import.capture": "Capture",
     "pdf.signature.import.back": "Back",
     "pdf.signature.import.retake": "Retake",
-    "pdf.signature.import.threshold": "Ink threshold",
+    "pdf.signature.import.threshold": "Ink sensitivity",
     "pdf.signature.import.empty": "No ink detected — adjust the threshold or retake the photo.",
     "pdf.signature.import.cameraError": "Camera unavailable — choose an image file instead.",
     "pdf.signature.import.decodeError": "Couldn't read that image file.",

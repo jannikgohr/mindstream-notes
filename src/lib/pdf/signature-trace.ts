@@ -6,12 +6,14 @@
  * points (camera capture and image file import), which differ only in
  * how they produce the input raster (see signature-import-image.ts).
  *
- * Pipeline: RGBA raster → luminance → threshold (Otsu by default,
- * user-adjustable) → speck removal → Zhang-Suen thinning → skeleton
- * walk into polylines → Douglas-Peucker simplification → uniform fit
- * into the signature pad's coordinate space. The output is the same
- * stroke geometry the drawing pad produces, so everything downstream
- * (picker previews, placement, PDF /Ink export, sync) works unchanged.
+ * Pipeline: RGBA raster → ink signal (min channel, so coloured pens
+ * keep contrast) → local-mean adaptive threshold (immune to lighting
+ * gradients; user-adjustable sensitivity) → speck removal → Zhang-Suen
+ * thinning → skeleton walk into polylines → Douglas-Peucker
+ * simplification → uniform fit into the signature pad's coordinate
+ * space. The output is the same stroke geometry the drawing pad
+ * produces, so everything downstream (picker previews, placement, PDF
+ * /Ink export, sync) works unchanged.
  */
 
 import type { PdfInkStroke, PdfStrokePoint } from './types';
@@ -46,11 +48,13 @@ export interface BinaryMask {
 
 export interface TraceSignatureOptions {
   /**
-   * Luminance cutoff 0–255; pixels darker than this count as ink.
-   * Defaults to Otsu's automatic threshold. The UI slider feeds this
-   * back in when the user overrides the automatic pick.
+   * Ink pickup sensitivity, 0–1 (default 0.5). Sets how much darker
+   * than its local surroundings a pixel must be to count as ink: low
+   * values keep only bold, high-contrast strokes; high values pick up
+   * faint pencil and pale ballpoint. The UI slider feeds this back in
+   * when the user overrides the default.
    */
-  threshold?: number;
+  sensitivity?: number;
   /**
    * Connected components smaller than this many pixels are treated as
    * dust / paper grain and dropped. Defaults to a size relative to the
@@ -73,15 +77,15 @@ export interface TracedSignature {
   width: number;
   height: number;
   strokes: PdfInkStroke[];
-  /** The threshold actually applied — seeds the UI slider. */
-  threshold: number;
+  /** The sensitivity actually applied — seeds the UI slider. */
+  sensitivity: number;
 }
 
-/* --- Step 1: luminance ------------------------------------------------------ */
+/* --- Step 1: ink signal ------------------------------------------------------ */
 
 /**
  * Per-pixel luminance 0–255, with alpha composited over white (photos
- * are opaque, but pasted PNGs may not be).
+ * are opaque, but pasted PNGs may not be). Used by paper detection.
  */
 export function luminance(image: RasterImage): Uint8Array {
   const { data } = image;
@@ -93,6 +97,26 @@ export function luminance(image: RasterImage): Uint8Array {
     const g = data[o + 1] * a + 255 * (1 - a);
     const b = data[o + 2] * a + 255 * (1 - a);
     out[i] = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
+  }
+  return out;
+}
+
+/**
+ * Per-pixel ink signal 0–255: the *minimum* colour channel, alpha
+ * composited over white. Coloured inks are dark in at least one channel
+ * — blue ballpoint is bright in B but very dark in R — so the minimum
+ * gives far better ink/paper contrast than luminance (which weights G
+ * heavily and washes blue ink out), while paper stays bright in all
+ * three channels and black ink is unaffected.
+ */
+export function inkSignal(image: RasterImage): Uint8Array {
+  const { data } = image;
+  const out = new Uint8Array(image.width * image.height);
+  for (let i = 0; i < out.length; i++) {
+    const o = i * 4;
+    const a = data[o + 3] / 255;
+    const min = Math.min(data[o], data[o + 1], data[o + 2]);
+    out[i] = Math.round(min * a + 255 * (1 - a));
   }
   return out;
 }
@@ -133,28 +157,75 @@ export function otsuThreshold(gray: Uint8Array): number {
   return best;
 }
 
-/* --- Step 3: binarize -------------------------------------------------------- */
+/* --- Step 3: adaptive binarize -------------------------------------------------- */
 
 /**
- * Ink mask: pixels at or below the threshold. If that selects more than
- * half the frame the photo is light-on-dark (or the threshold landed in
- * the paper), so invert — a signature is always the minority of pixels.
+ * Contrast a pixel must show against its local mean to count as ink,
+ * derived from the sensitivity knob: sensitivity 0 → 30% darker
+ * (only bold strokes), 0.5 → 16%, 1 → 2% (faint pencil).
  */
-export function binarize(
-  gray: Uint8Array,
+function requiredContrast(sensitivity: number): number {
+  const s = Math.min(1, Math.max(0, sensitivity));
+  return 0.3 - 0.28 * s;
+}
+
+/**
+ * Local-mean adaptive ink mask: a pixel is ink when it is at least
+ * `requiredContrast` darker than the mean of its surrounding window
+ * (computed in O(n) via an integral image). Unlike a single global
+ * cutoff, this is immune to illumination gradients across the paper —
+ * the classic badly-lit-room failure where any global threshold either
+ * eats the shaded paper or drops the highlighted ink. The window is
+ * sized well above the widest pen stroke so stroke interiors still see
+ * mostly-paper surroundings and don't hollow out.
+ *
+ * Keeps the global path's polarity safeguard: if more than half the
+ * frame reads as ink the mask is inverted — ink is always the minority.
+ */
+export function binarizeAdaptive(
+  signal: Uint8Array,
   width: number,
   height: number,
-  threshold: number
+  sensitivity: number
 ): BinaryMask {
-  const data = new Uint8Array(gray.length);
-  let ink = 0;
-  for (let i = 0; i < gray.length; i++) {
-    if (gray[i] <= threshold) {
-      data[i] = 1;
-      ink += 1;
+  const contrast = requiredContrast(sensitivity);
+  // Half-window; full window ≈ min dimension / 6, comfortably wider
+  // than any pen stroke at trace resolution.
+  const half = Math.max(12, Math.round(Math.min(width, height) / 12));
+
+  // Integral image with a zero row/column of padding.
+  const iw = width + 1;
+  const integral = new Float64Array(iw * (height + 1));
+  for (let y = 0; y < height; y++) {
+    let rowSum = 0;
+    for (let x = 0; x < width; x++) {
+      rowSum += signal[y * width + x];
+      integral[(y + 1) * iw + (x + 1)] = integral[y * iw + (x + 1)] + rowSum;
     }
   }
-  if (ink > gray.length / 2) {
+
+  const data = new Uint8Array(signal.length);
+  let ink = 0;
+  for (let y = 0; y < height; y++) {
+    const y0 = Math.max(0, y - half);
+    const y1 = Math.min(height - 1, y + half);
+    for (let x = 0; x < width; x++) {
+      const x0 = Math.max(0, x - half);
+      const x1 = Math.min(width - 1, x + half);
+      const area = (x1 - x0 + 1) * (y1 - y0 + 1);
+      const sum =
+        integral[(y1 + 1) * iw + (x1 + 1)] -
+        integral[y0 * iw + (x1 + 1)] -
+        integral[(y1 + 1) * iw + x0] +
+        integral[y0 * iw + x0];
+      const mean = sum / area;
+      if (signal[y * width + x] < mean * (1 - contrast)) {
+        data[y * width + x] = 1;
+        ink += 1;
+      }
+    }
+  }
+  if (ink > signal.length / 2) {
     for (let i = 0; i < data.length; i++) data[i] ^= 1;
   }
   return { width, height, data };
@@ -654,9 +725,13 @@ export function traceSignature(
   image: RasterImage,
   options: TraceSignatureOptions = {}
 ): TracedSignature {
-  const gray = luminance(image);
-  const threshold = options.threshold ?? otsuThreshold(gray);
-  const mask = binarize(gray, image.width, image.height, threshold);
+  const sensitivity = Math.min(1, Math.max(0, options.sensitivity ?? 0.5));
+  const mask = binarizeAdaptive(
+    inkSignal(image),
+    image.width,
+    image.height,
+    sensitivity
+  );
   const despeckled = removeSpecks(
     mask,
     options.minComponentSize ??
@@ -682,6 +757,6 @@ export function traceSignature(
     width: SIGNATURE_PAD_WIDTH,
     height: SIGNATURE_PAD_HEIGHT,
     strokes: fitToPad(polylines),
-    threshold
+    sensitivity
   };
 }
