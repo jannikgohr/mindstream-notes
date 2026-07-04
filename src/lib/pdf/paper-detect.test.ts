@@ -23,11 +23,23 @@ function renderScene(
   opts: {
     marks?: Array<{ x: number; y: number; r: number }>;
     fingers?: Array<{ x: number; y: number; r: number }>;
+    /** Bright, chromatic circles — a hand gripping the paper. */
+    hands?: Array<{ x: number; y: number; r: number }>;
     paperLevel?: number;
+    /** Overrides paperLevel with an RGB colour (e.g. a yellow note). */
+    paperColor?: [number, number, number];
     sceneLevel?: number;
   } = {}
 ): RasterImage {
-  const { marks = [], fingers = [], paperLevel = 230, sceneLevel = 45 } = opts;
+  const {
+    marks = [],
+    fingers = [],
+    hands = [],
+    paperLevel = 230,
+    paperColor,
+    sceneLevel = 45
+  } = opts;
+  const HAND_COLOR: [number, number, number] = [205, 150, 118];
   const data = new Uint8ClampedArray(width * height * 4);
   const inQuad = (px: number, py: number, q: QuadPoint[]): boolean => {
     let sign = 0;
@@ -45,20 +57,25 @@ function renderScene(
   };
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
-      let v = sceneLevel;
+      let rgb: [number, number, number] = [sceneLevel, sceneLevel, sceneLevel];
       if (paper && inQuad(x, y, paper)) {
-        v = paperLevel;
+        rgb = paperColor ?? [paperLevel, paperLevel, paperLevel];
         for (const mark of marks) {
-          if (Math.hypot(x - mark.x, y - mark.y) < mark.r) v = 20;
+          if (Math.hypot(x - mark.x, y - mark.y) < mark.r) rgb = [20, 20, 20];
         }
       }
       for (const finger of fingers) {
-        if (Math.hypot(x - finger.x, y - finger.y) < finger.r) v = 90;
+        if (Math.hypot(x - finger.x, y - finger.y) < finger.r) {
+          rgb = [90, 90, 90];
+        }
+      }
+      for (const hand of hands) {
+        if (Math.hypot(x - hand.x, y - hand.y) < hand.r) rgb = HAND_COLOR;
       }
       const o = (y * width + x) * 4;
-      data[o] = v;
-      data[o + 1] = v;
-      data[o + 2] = v;
+      data[o] = rgb[0];
+      data[o + 1] = rgb[1];
+      data[o + 2] = rgb[2];
       data[o + 3] = 255;
     }
   }
@@ -163,6 +180,43 @@ describe('detectPaperQuad', () => {
     const quad = detectPaperQuad(scene);
     expect(quad).not.toBeNull();
     expect(cornerError(quad!, paper)).toBeLessThan(12);
+  });
+
+  // A full hand like a real photo: palm outside the paper reaching the
+  // frame edge, fingers and thumb overlapping the paper's right edge.
+  // Skin clears the Otsu brightness split against a dark room but is
+  // strongly chromatic — the strict saturation pass keeps it out.
+  const gripHands = [
+    { x: 600, y: 300, r: 95 },
+    { x: 545, y: 240, r: 55 },
+    { x: 500, y: 280, r: 40 },
+    { x: 560, y: 350, r: 55 }
+  ];
+
+  it('excludes a bright hand gripping the paper edge', () => {
+    const scene = renderScene(640, 480, paper, { hands: gripHands });
+    const quad = detectPaperQuad(scene);
+    expect(quad).not.toBeNull();
+    expect(cornerError(quad!, paper)).toBeLessThan(14);
+  });
+
+  it('needs the saturation mask for that — brightness alone wraps the hand', () => {
+    // Guards the regression test above against becoming vacuous: on the
+    // same scene, a disabled saturation ceiling reproduces the merged
+    // paper+hand quad (or fails detection outright).
+    const scene = renderScene(640, 480, paper, { hands: gripHands });
+    const quad = detectPaperQuad(scene, { maxSaturation: 1 });
+    const error = quad ? cornerError(quad, paper) : Infinity;
+    expect(error).toBeGreaterThan(50);
+  });
+
+  it('falls back to brightness-only detection for coloured paper', () => {
+    const scene = renderScene(640, 480, paper, {
+      paperColor: [225, 205, 70] // sticky-note yellow, saturation ~0.7
+    });
+    const quad = detectPaperQuad(scene);
+    expect(quad).not.toBeNull();
+    expect(cornerError(quad!, paper)).toBeLessThan(8);
   });
 
   it('returns null when there is no paper', () => {

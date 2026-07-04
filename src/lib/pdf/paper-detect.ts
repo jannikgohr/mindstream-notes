@@ -9,12 +9,18 @@
  * perspective warp) and runs without any DOM, so this module is fully
  * unit-testable.
  *
- * Detection strategy: threshold on brightness, take the largest bright
- * region, and fit the maximum-area quadrilateral to its convex hull.
- * The hull is what makes fingers holding the paper tolerable — a finger
- * crossing the edge bites a concavity into the region, and the hull
- * bridges straight over it. Solidity (region area / hull area) is the
- * sanity check that the bright blob is actually paper-shaped.
+ * Detection strategy: paper is *bright and achromatic*. The strict pass
+ * masks pixels that clear the Otsu brightness split AND have low colour
+ * saturation — that split is what keeps a hand holding the paper out of
+ * the region: skin of any tone is strongly chromatic while white paper
+ * is not, so this needs no skin model and is exposure-robust (saturation
+ * is chroma relative to brightness). Coloured paper fails the strict
+ * pass, so a brightness-only fallback pass preserves the old behaviour
+ * for it. The largest region's convex hull gets the maximum-area
+ * quadrilateral fitted; the hull is what makes remaining occlusions
+ * tolerable — a finger crossing the edge bites a concavity into the
+ * region, and the hull bridges straight over it. Solidity (region area
+ * / hull area) is the sanity check that the blob is paper-shaped.
  *
  * Fails soft: `detectPaperQuad` returns null whenever the scene doesn't
  * contain a convincing paper (no bright region, too small, fills the
@@ -22,7 +28,8 @@
  * behaviour.
  */
 
-import { Image, fromMask, getPerspectiveWarp } from 'image-js';
+import { Image, Mask, fromMask, getPerspectiveWarp } from 'image-js';
+import { luminance, otsuThreshold } from './signature-trace';
 import type { RasterImage } from './signature-trace';
 
 export interface QuadPoint {
@@ -42,6 +49,12 @@ export interface DetectPaperOptions {
   maxAreaFraction?: number;
   /** Reject regions whose shape is not paper-like (area / hull area). */
   minSolidity?: number;
+  /**
+   * Saturation ceiling for the strict "achromatic paper" pass, 0–1
+   * (chroma / max channel). Warm indoor light tints white paper to
+   * ~0.15–0.22; skin sits at ~0.35+.
+   */
+  maxSaturation?: number;
 }
 
 export interface RectifyPaperOptions {
@@ -57,7 +70,11 @@ export interface RectifyPaperOptions {
 const DEFAULT_WORKING_WIDTH = 320;
 const DEFAULT_MIN_AREA_FRACTION = 0.15;
 const DEFAULT_MAX_AREA_FRACTION = 0.95;
-const DEFAULT_MIN_SOLIDITY = 0.8;
+// Loose enough that a hand occluding a corner (excluded from the region
+// by the saturation mask, bridged by the hull) still passes, while
+// genuinely non-quadrilateral shapes (an L is ~0.5) are rejected.
+const DEFAULT_MIN_SOLIDITY = 0.72;
+const DEFAULT_MAX_SATURATION = 0.28;
 const DEFAULT_INSET = 0.03;
 const DEFAULT_RECTIFY_MAX_DIM = 1200;
 
@@ -179,6 +196,54 @@ export function maxAreaQuad(hull: QuadPoint[]): PaperQuad | null {
 
 /* --- Detection ------------------------------------------------------------------ */
 
+interface QuadSearchLimits {
+  minAreaFraction: number;
+  maxAreaFraction: number;
+  minSolidity: number;
+}
+
+/**
+ * Largest region of `maskData` → convex hull → max-area quad, with the
+ * paper-plausibility checks. Working-scale coordinates.
+ */
+function quadFromMask(
+  maskData: Uint8Array,
+  width: number,
+  height: number,
+  limits: QuadSearchLimits
+): PaperQuad | null {
+  const rois = fromMask(new Mask(width, height, { data: maskData })).getRois({
+    kind: 'white'
+  });
+  if (rois.length === 0) return null;
+
+  let roi = rois[0];
+  for (const candidate of rois) {
+    if (candidate.surface > roi.surface) roi = candidate;
+  }
+
+  const frameArea = width * height;
+  if (roi.surface < limits.minAreaFraction * frameArea) return null;
+  if (roi.surface > limits.maxAreaFraction * frameArea) return null;
+
+  // Hull points come back relative to the ROI's bounding box.
+  const hull: QuadPoint[] = roi.convexHull.points.map((p) => ({
+    x: p.column + roi.origin.column,
+    y: p.row + roi.origin.row
+  }));
+  const hullArea = polygonArea(hull);
+  if (hullArea <= 0) return null;
+  if (roi.surface / hullArea < limits.minSolidity) return null;
+
+  const quad = maxAreaQuad(hull);
+  if (!quad) return null;
+  // The quad must explain the hull — a degenerate fit means the region
+  // wasn't quadrilateral to begin with.
+  if (polygonArea(quad) < 0.8 * hullArea) return null;
+
+  return quad;
+}
+
 /**
  * Find the paper in a photo. Returns the corner quad in source-image
  * coordinates, or null when no convincing paper region exists.
@@ -188,47 +253,53 @@ export function detectPaperQuad(
   options: DetectPaperOptions = {}
 ): PaperQuad | null {
   const workingWidth = options.workingWidth ?? DEFAULT_WORKING_WIDTH;
-  const minAreaFraction = options.minAreaFraction ?? DEFAULT_MIN_AREA_FRACTION;
-  const maxAreaFraction = options.maxAreaFraction ?? DEFAULT_MAX_AREA_FRACTION;
-  const minSolidity = options.minSolidity ?? DEFAULT_MIN_SOLIDITY;
+  const maxSaturation = options.maxSaturation ?? DEFAULT_MAX_SATURATION;
+  const limits: QuadSearchLimits = {
+    minAreaFraction: options.minAreaFraction ?? DEFAULT_MIN_AREA_FRACTION,
+    maxAreaFraction: options.maxAreaFraction ?? DEFAULT_MAX_AREA_FRACTION,
+    minSolidity: options.minSolidity ?? DEFAULT_MIN_SOLIDITY
+  };
 
   let img = toIjsImage(raster);
   if (img.width > workingWidth) {
     img = img.resize({ width: workingWidth });
   }
   const scaleBack = raster.width / img.width;
+  const working = toRaster(img);
+  const { width, height } = working;
 
-  // Otsu split on brightness; the paper is the bright side. A busy or
-  // bright background can defeat this (white desk under white paper) —
-  // the sanity checks below turn those into a null rather than a bogus
-  // crop, and the caller falls back to the whole frame.
-  const mask = img.grey().threshold();
-  const rois = fromMask(mask).getRois({ kind: 'white' });
-  if (rois.length === 0) return null;
+  // Otsu split on brightness; the paper is on the bright side. A busy
+  // or bright background can defeat this (white desk under white paper)
+  // — the sanity checks in quadFromMask turn those into a null rather
+  // than a bogus crop, and the caller falls back to the whole frame.
+  const gray = luminance(working);
+  const brightCutoff = otsuThreshold(gray);
 
-  let roi = rois[0];
-  for (const candidate of rois) {
-    if (candidate.surface > roi.surface) roi = candidate;
+  // Strict pass: bright AND achromatic. This is what keeps a hand
+  // gripping the paper out of the region — skin is bright enough to
+  // pass Otsu against a dark room but far more saturated than paper.
+  const strict = new Uint8Array(width * height);
+  const loose = new Uint8Array(width * height);
+  for (let i = 0; i < strict.length; i++) {
+    if (gray[i] <= brightCutoff) continue;
+    loose[i] = 1;
+    const o = i * 4;
+    const r = working.data[o];
+    const g = working.data[o + 1];
+    const b = working.data[o + 2];
+    const max = Math.max(r, g, b);
+    const saturation = max === 0 ? 0 : (max - Math.min(r, g, b)) / max;
+    if (saturation <= maxSaturation) strict[i] = 1;
   }
 
-  const frameArea = img.width * img.height;
-  if (roi.surface < minAreaFraction * frameArea) return null;
-  if (roi.surface > maxAreaFraction * frameArea) return null;
-
-  // Hull points come back relative to the ROI's bounding box.
-  const hull: QuadPoint[] = roi.convexHull.points.map((p) => ({
-    x: p.column + roi.origin.column,
-    y: p.row + roi.origin.row
-  }));
-  const hullArea = polygonArea(hull);
-  if (hullArea <= 0) return null;
-  if (roi.surface / hullArea < minSolidity) return null;
-
-  const quad = maxAreaQuad(hull);
+  // Coloured paper fails the strict pass entirely; fall back to the
+  // brightness-only mask so it still gets detected (a hand holding
+  // *coloured* paper merges again, but that's the pre-chroma behaviour
+  // and the manual crop editor covers it).
+  const quad =
+    quadFromMask(strict, width, height, limits) ??
+    quadFromMask(loose, width, height, limits);
   if (!quad) return null;
-  // The quad must explain the hull — a degenerate fit means the bright
-  // region wasn't quadrilateral to begin with.
-  if (polygonArea(quad) < 0.8 * hullArea) return null;
 
   return orderQuad(
     quad.map((p) => ({ x: p.x * scaleBack, y: p.y * scaleBack }))
