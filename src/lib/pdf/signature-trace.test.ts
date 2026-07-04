@@ -3,6 +3,7 @@ import type { PdfStrokePoint } from './types';
 import {
   attachMeasuredWidths,
   binarizeAdaptive,
+  bridgeSmallGaps,
   computeInkAlpha,
   distanceTransform,
   fitToPad,
@@ -220,6 +221,48 @@ describe('binarizeAdaptive', () => {
   });
 });
 
+describe('bridgeSmallGaps', () => {
+  it('connects dotted ink islands across 1-2 px gaps', () => {
+    // Vertical dotted stroke: dots at y=1, y=4, y=7 (gaps of 2).
+    const mask = maskFromAscii([
+      '...',
+      '.#.',
+      '...',
+      '...',
+      '.#.',
+      '...',
+      '...',
+      '.#.',
+      '...'
+    ]);
+    const bridged = bridgeSmallGaps(mask);
+    expect(maskToAscii(bridged)).toEqual([
+      '...',
+      '.#.',
+      '.#.',
+      '.#.',
+      '.#.',
+      '.#.',
+      '.#.',
+      '.#.',
+      '...'
+    ]);
+  });
+
+  it('leaves islands beyond the bridge distance separate', () => {
+    const mask = maskFromAscii(['#...#....#']);
+    const bridged = bridgeSmallGaps(mask);
+    // 4-px gap: untouched either side.
+    expect(maskToAscii(bridged)).toEqual(['#...#....#']);
+  });
+
+  it('does not mutate its input', () => {
+    const mask = maskFromAscii(['#..#']);
+    bridgeSmallGaps(mask);
+    expect(maskToAscii(mask)).toEqual(['#..#']);
+  });
+});
+
 describe('computeInkAlpha', () => {
   function shadedRaster(
     width: number,
@@ -264,6 +307,19 @@ describe('computeInkAlpha', () => {
     expect(alpha[row + 6]).toBeLessThan(alpha[row + 5]);
     // Plain paper stays fully transparent.
     expect(alpha[row + 10]).toBe(0);
+  });
+
+  it('keeps every mask pixel at least faintly visible', () => {
+    // A bridged gap pixel is mask ink at paper brightness — the alpha
+    // floor must keep it from rendering as a hole in the stroke.
+    const img = shadedRaster(12, 3, (x, y) =>
+      y === 1 && (x === 3 || x === 6) ? 0 : 255
+    );
+    const signal = inkSignal(img);
+    const mask = bridgeSmallGaps(binarizeAdaptive(signal, 12, 3, 0.5));
+    expect(mask.data[1 * 12 + 4]).toBe(1); // gap pixel, value 255
+    const alpha = computeInkAlpha(signal, mask, 0.5);
+    expect(alpha[1 * 12 + 4]).toBeGreaterThanOrEqual(64);
   });
 
   it('keeps dark pixels outside the mask transparent (despeckled noise)', () => {
@@ -727,11 +783,13 @@ describe('traceSignature (end to end)', () => {
     // border (a finger gripping the paper). The slab is wide enough that
     // thinning leaves a traceable line, so the disabled-rejection control
     // proves the slab was removed by the rejection and not lost earlier.
+    // The zig-zag starts beyond bridging distance of the slab so the
+    // two stay separate components in both variants.
     const rows = [
       '########............',
-      '########..##........',
       '########....##......',
       '########......##....',
+      '########........##..',
       '....................'
     ];
     const withFinger = traceSignature(rasterFromAscii(rows), {

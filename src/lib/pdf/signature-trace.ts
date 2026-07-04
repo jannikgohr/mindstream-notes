@@ -193,6 +193,16 @@ function requiredContrast(sensitivity: number): number {
 const WEAK_CONTRAST_RATIO = 0.5;
 
 /**
+ * Ink pixels within this L∞ distance of each other get the gap between
+ * them filled (see bridgeSmallGaps). A thin fast stroke photographs as
+ * a dotted line — ink islands split by 1–2 px of near-paper — and
+ * 8-connected growth stops at every gap, leaving the stroke
+ * fragmented. Distance 3 chains across those dots while staying far
+ * too short-ranged to connect separate letters.
+ */
+const BRIDGE_MAX_DISTANCE = 3;
+
+/**
  * Per-pixel mean of the surrounding window (the local paper-brightness
  * estimate the adaptive threshold and the edge alpha both compare
  * against), computed in O(n) via an integral image.
@@ -301,6 +311,58 @@ export function binarizeAdaptive(
 }
 
 /**
+ * Fill 1–2 px paper gaps between nearby ink pixels: for every pair of
+ * ink pixels within BRIDGE_MAX_DISTANCE (L∞) of each other, the line
+ * between them becomes ink. A thin fast stroke photographs as a dotted
+ * line of ink islands; thresholding keeps the islands but the stroke
+ * stays fragmented — visually broken and traced as many stub
+ * polylines. Purely geometric on the already-thresholded mask, so
+ * unlike growing the hysteresis reach it cannot crawl through
+ * sub-threshold paper grain. Runs before despeckling so re-connected
+ * fragments are judged (size, darkness) as the one stroke they are.
+ */
+export function bridgeSmallGaps(
+  mask: BinaryMask,
+  maxDistance: number = BRIDGE_MAX_DISTANCE
+): BinaryMask {
+  const { width, height } = mask;
+  const data = Uint8Array.from(mask.data);
+  const fills: number[] = [];
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (!mask.data[y * width + x]) continue;
+      // Forward half of the neighbourhood only — pairs are symmetric.
+      for (let dy = 0; dy <= maxDistance; dy++) {
+        for (let dx = dy === 0 ? 2 : -maxDistance; dx <= maxDistance; dx++) {
+          const steps = Math.max(Math.abs(dx), Math.abs(dy));
+          if (steps < 2) continue;
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+          if (!mask.data[ny * width + nx]) continue;
+          for (let t = 1; t < steps; t++) {
+            const fx = x + Math.round((dx * t) / steps);
+            const fy = y + Math.round((dy * t) / steps);
+            fills.push(fy * width + fx);
+          }
+        }
+      }
+    }
+  }
+  for (const idx of fills) data[idx] = 1;
+  return { width, height, data };
+}
+
+/**
+ * Coverage floor for pixels the mask accepted as ink. Bridged gap
+ * pixels and barely-weak edge pixels can be nearly paper-bright, and a
+ * purely signal-derived alpha would render them invisible — leaving a
+ * detected stroke looking broken. Any pixel the pipeline decided IS
+ * ink stays at least faintly visible.
+ */
+const MIN_MASK_ALPHA = 64;
+
+/**
  * Antialiased per-pixel ink coverage (0–255) for rendering the mask as
  * a bitmap. A photographed stroke edge is physically a blend of ink and
  * paper, and the pixel's darkness encodes the blend ratio — so instead
@@ -345,7 +407,8 @@ export function computeInkAlpha(
         alpha[idx] = data[idx] ? 255 : 0;
       } else {
         const a = (t0 - signal[idx]) / (t0 - t1);
-        alpha[idx] = Math.round(255 * Math.min(1, Math.max(0, a)));
+        const scaled = Math.round(255 * Math.min(1, Math.max(0, a)));
+        alpha[idx] = data[idx] ? Math.max(MIN_MASK_ALPHA, scaled) : scaled;
       }
     }
   }
@@ -551,6 +614,7 @@ export function removeFaintComponents(
   const means = localMeans(signal, width, height);
   const seen = new Uint8Array(data.length);
   const stack: number[] = [];
+  const allContrasts: number[] = [];
 
   interface Component {
     pixels: number[];
@@ -584,6 +648,7 @@ export function removeFaintComponents(
       const mean = means[idx];
       return mean > 0 ? Math.max(0, (mean - signal[idx]) / mean) : 0;
     });
+    for (const c of contrasts) allContrasts.push(c);
     contrasts.sort((a, b) => a - b);
     const core = Math.min(
       contrasts.length - 1,
@@ -593,21 +658,20 @@ export function removeFaintComponents(
   }
   if (components.length === 0) return { width, height, data };
 
-  // Reference = darkness of the component containing the median ink
-  // pixel (components ordered dark → light): what "this frame's ink"
-  // looks like, immune to both a swarm of light specks and a single
-  // dark dust fleck.
-  const ordered = components.slice().sort((a, b) => b.darkness - a.darkness);
-  const totalInk = components.reduce((s, c) => s + c.pixels.length, 0);
-  let acc = 0;
-  let reference = ordered[0].darkness;
-  for (const c of ordered) {
-    acc += c.pixels.length;
-    if (acc >= totalInk / 2) {
-      reference = c.darkness;
-      break;
-    }
-  }
+  // Reference = the 95th-percentile contrast over ALL ink pixels: what
+  // "this frame's darkest real ink" looks like. Per-pixel rather than
+  // per-component because at permissive thresholds noise pixels (and
+  // even noise components, once grain clumps) can OUTNUMBER the
+  // signature — any component-weighted average would land inside the
+  // noise and bless all of it. The signature's core pixels are the
+  // darkest population in the frame, so the top twentieth reads them
+  // even when they are a small minority; a lone dark dust fleck is
+  // too few pixels to move a percentile.
+  allContrasts.sort((a, b) => a - b);
+  const reference =
+    allContrasts[
+      Math.min(allContrasts.length - 1, Math.floor(allContrasts.length * 0.95))
+    ];
 
   for (const c of components) {
     if (c.darkness < reference * ratio) {
@@ -962,21 +1026,23 @@ export function extractSignatureMask(
   const sensitivity = Math.min(1, Math.max(0, options.sensitivity ?? 0.5));
   const signal = inkSignal(image);
   const mask = binarizeAdaptive(signal, image.width, image.height, sensitivity);
-  const despeckled = removeSpecks(
-    mask,
-    options.minComponentSize ??
-      defaultMinComponentSize(image.width, image.height)
-  );
+  // Border clutter goes first so bridging can never attach the
+  // signature to a finger/table blob and lose both to the rejection;
+  // bridging precedes despeckling so a dotted stroke is size-judged as
+  // the one stroke it is, not as disposable fragments.
   const borderThickness =
     options.borderBlobThickness ??
     defaultBorderBlobThickness(image.width, image.height);
   const deblobbed =
-    borderThickness > 0
-      ? removeBorderBlobs(despeckled, borderThickness)
-      : despeckled;
+    borderThickness > 0 ? removeBorderBlobs(mask, borderThickness) : mask;
+  const despeckled = removeSpecks(
+    bridgeSmallGaps(deblobbed),
+    options.minComponentSize ??
+      defaultMinComponentSize(image.width, image.height)
+  );
   return {
     mask: removeFaintComponents(
-      deblobbed,
+      despeckled,
       signal,
       options.faintComponentRatio ?? FAINT_COMPONENT_RATIO
     ),
