@@ -3,6 +3,7 @@ import type { PdfStrokePoint } from './types';
 import {
   attachMeasuredWidths,
   binarizeAdaptive,
+  computeInkAlpha,
   distanceTransform,
   fitToPad,
   inkSignal,
@@ -188,6 +189,93 @@ describe('binarizeAdaptive', () => {
     expect(mask.data[2 * 120 + 60]).toBe(0);
     // Nothing beyond the two marks (plus soft edges) got picked up.
     expect(inkCount(mask)).toBeLessThan(150);
+  });
+
+  // Hysteresis: value 200 on this scene is ~14% below the local mean —
+  // under the 16% strong requirement at sensitivity 0.5, over the 8%
+  // weak one — so it counts as ink exactly when it touches strong ink.
+  it('accepts a weak edge pixel attached to strong ink', () => {
+    const img = shadedRaster(12, 3, (x, y) =>
+      y === 1 && x >= 2 && x <= 4 ? 0 : y === 1 && x === 5 ? 200 : 255
+    );
+    const mask = binarizeAdaptive(inkSignal(img), 12, 3, 0.5);
+    expect(mask.data[1 * 12 + 5]).toBe(1);
+    expect(inkCount(mask)).toBe(4);
+  });
+
+  it('rejects the same weak pixel when detached from strong ink', () => {
+    const img = shadedRaster(12, 3, (x, y) =>
+      y === 1 && x >= 2 && x <= 4 ? 0 : y === 1 && x === 6 ? 200 : 255
+    );
+    const mask = binarizeAdaptive(inkSignal(img), 12, 3, 0.5);
+    expect(mask.data[1 * 12 + 6]).toBe(0);
+    expect(inkCount(mask)).toBe(3);
+  });
+
+  it('finds nothing when only weak pixels exist (no seed to grow from)', () => {
+    // 220 on white is ~13% contrast: weak but never strong at s=0.5.
+    const img = shadedRaster(12, 3, (x, y) => (y === 1 && x === 5 ? 220 : 255));
+    expect(inkCount(binarizeAdaptive(inkSignal(img), 12, 3, 0.5))).toBe(0);
+  });
+});
+
+describe('computeInkAlpha', () => {
+  function shadedRaster(
+    width: number,
+    height: number,
+    value: (x: number, y: number) => number
+  ): RasterImage {
+    const data = new Uint8ClampedArray(width * height * 4);
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const v = value(x, y);
+        const o = (y * width + x) * 4;
+        data[o] = v;
+        data[o + 1] = v;
+        data[o + 2] = v;
+        data[o + 3] = 255;
+      }
+    }
+    return { width, height, data };
+  }
+
+  it('grades coverage from opaque core through soft edge and halo to paper', () => {
+    // Stroke core 0, in-mask edge 200, out-of-mask halo 225, paper 255.
+    const img = shadedRaster(12, 3, (x, y) => {
+      if (y !== 1) return 255;
+      if (x >= 2 && x <= 4) return 0;
+      if (x === 5) return 200;
+      if (x === 6) return 225;
+      return 255;
+    });
+    const signal = inkSignal(img);
+    const mask = binarizeAdaptive(signal, 12, 3, 0.5);
+    const alpha = computeInkAlpha(signal, mask, 0.5);
+    const row = 1 * 12;
+    // Core is fully opaque.
+    expect(alpha[row + 3]).toBe(255);
+    // The hysteresis-accepted edge pixel gets partial coverage…
+    expect(alpha[row + 5]).toBeGreaterThan(0);
+    expect(alpha[row + 5]).toBeLessThan(255);
+    // …and the 1-px halo a fainter one still (it is not in the mask).
+    expect(mask.data[row + 6]).toBe(0);
+    expect(alpha[row + 6]).toBeGreaterThan(0);
+    expect(alpha[row + 6]).toBeLessThan(alpha[row + 5]);
+    // Plain paper stays fully transparent.
+    expect(alpha[row + 10]).toBe(0);
+  });
+
+  it('keeps dark pixels outside the mask transparent (despeckled noise)', () => {
+    // A pitch-black isolated speck: removed from the mask, so it must
+    // not reappear through the alpha plane.
+    const img = shadedRaster(12, 3, (x, y) =>
+      y === 1 && ((x >= 2 && x <= 4) || x === 10) ? 0 : 255
+    );
+    const signal = inkSignal(img);
+    const cleaned = removeSpecks(binarizeAdaptive(signal, 12, 3, 0.5), 2);
+    const alpha = computeInkAlpha(signal, cleaned, 0.5);
+    expect(alpha[1 * 12 + 10]).toBe(0);
+    expect(alpha[1 * 12 + 3]).toBe(255);
   });
 });
 

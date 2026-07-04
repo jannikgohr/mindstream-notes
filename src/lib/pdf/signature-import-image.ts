@@ -7,7 +7,9 @@
  */
 
 import {
+  computeInkAlpha,
   extractSignatureMask,
+  inkSignal,
   SIGNATURE_PAD_HEIGHT,
   SIGNATURE_PAD_MARGIN,
   SIGNATURE_PAD_WIDTH,
@@ -99,6 +101,7 @@ export function stopCameraStream(stream: MediaStream | null): void {
   stream?.getTracks().forEach((track) => track.stop());
 }
 
+/** Bounding box of the non-zero entries of a mask or alpha plane. */
 function maskBounds(mask: Uint8Array, width: number, height: number) {
   let minX = Infinity;
   let minY = Infinity;
@@ -140,8 +143,12 @@ export function transparentSignatureImageFromRaster(
   raster: RasterImage,
   options: TraceSignatureOptions = {}
 ): PdfSignatureImage | null {
-  const { mask } = extractSignatureMask(raster, options);
-  const bounds = maskBounds(mask.data, mask.width, mask.height);
+  const { mask, sensitivity } = extractSignatureMask(raster, options);
+  // Antialiased coverage read off the photo itself: edge pixels are
+  // ink/paper blends and get matching partial alpha instead of the
+  // choppy all-or-nothing stencil the binary mask would give.
+  const alpha = computeInkAlpha(inkSignal(raster), mask, sensitivity);
+  const bounds = maskBounds(alpha, mask.width, mask.height);
   if (!bounds) return null;
 
   const sourceWidth = bounds.maxX - bounds.minX + 1;
@@ -159,12 +166,13 @@ export function transparentSignatureImageFromRaster(
   for (let y = 0; y < sourceHeight; y++) {
     for (let x = 0; x < sourceWidth; x++) {
       const maskIndex = (bounds.minY + y) * mask.width + bounds.minX + x;
-      if (!mask.data[maskIndex]) continue;
+      const coverage = alpha[maskIndex];
+      if (!coverage) continue;
       const out = (y * sourceWidth + x) * 4;
       sourceImage.data[out] = r;
       sourceImage.data[out + 1] = g;
       sourceImage.data[out + 2] = b;
-      sourceImage.data[out + 3] = 255;
+      sourceImage.data[out + 3] = coverage;
     }
   }
   sourceCtx.putImageData(sourceImage, 0, 0);

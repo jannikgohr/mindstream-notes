@@ -7,8 +7,10 @@
  * how they produce the input raster (see signature-import-image.ts).
  *
  * Pipeline: RGBA raster → ink signal (min channel, so coloured pens
- * keep contrast) → local-mean adaptive threshold (immune to lighting
- * gradients; user-adjustable sensitivity) → speck removal → Zhang-Suen
+ * keep contrast) → local-mean adaptive threshold with hysteresis
+ * (immune to lighting gradients; user-adjustable sensitivity; edge
+ * pixels join at half the contrast when connected to confident ink) →
+ * speck removal → Zhang-Suen
  * thinning → skeleton walk into polylines → Douglas-Peucker
  * simplification → uniform fit into the signature pad's coordinate
  * space. The output is the same stroke geometry the drawing pad
@@ -175,25 +177,24 @@ function requiredContrast(sensitivity: number): number {
 }
 
 /**
- * Local-mean adaptive ink mask: a pixel is ink when it is at least
- * `requiredContrast` darker than the mean of its surrounding window
- * (computed in O(n) via an integral image). Unlike a single global
- * cutoff, this is immune to illumination gradients across the paper —
- * the classic badly-lit-room failure where any global threshold either
- * eats the shaded paper or drops the highlighted ink. The window is
- * sized well above the widest pen stroke so stroke interiors still see
- * mostly-paper surroundings and don't hollow out.
- *
- * Keeps the global path's polarity safeguard: if more than half the
- * frame reads as ink the mask is inverted — ink is always the minority.
+ * Hysteresis: a pixel connected to already-accepted ink only needs this
+ * fraction of the full contrast. Stroke edges are photographed as
+ * ink/paper blends that hover just under the strong cutoff — accepting
+ * them when (and only when) they touch confident ink fills the choppy
+ * boundary without letting isolated paper noise in.
  */
-export function binarizeAdaptive(
+const WEAK_CONTRAST_RATIO = 0.5;
+
+/**
+ * Per-pixel mean of the surrounding window (the local paper-brightness
+ * estimate the adaptive threshold and the edge alpha both compare
+ * against), computed in O(n) via an integral image.
+ */
+export function localMeans(
   signal: Uint8Array,
   width: number,
-  height: number,
-  sensitivity: number
-): BinaryMask {
-  const contrast = requiredContrast(sensitivity);
+  height: number
+): Float32Array {
   // Half-window; full window ≈ min dimension / 6, comfortably wider
   // than any pen stroke at trace resolution.
   const half = Math.max(12, Math.round(Math.min(width, height) / 12));
@@ -209,8 +210,7 @@ export function binarizeAdaptive(
     }
   }
 
-  const data = new Uint8Array(signal.length);
-  let ink = 0;
+  const means = new Float32Array(signal.length);
   for (let y = 0; y < height; y++) {
     const y0 = Math.max(0, y - half);
     const y1 = Math.min(height - 1, y + half);
@@ -223,17 +223,126 @@ export function binarizeAdaptive(
         integral[y0 * iw + (x1 + 1)] -
         integral[(y1 + 1) * iw + x0] +
         integral[y0 * iw + x0];
-      const mean = sum / area;
-      if (signal[y * width + x] < mean * (1 - contrast)) {
-        data[y * width + x] = 1;
+      means[y * width + x] = sum / area;
+    }
+  }
+  return means;
+}
+
+/**
+ * Local-mean adaptive ink mask with hysteresis: a pixel is ink when it
+ * is at least `requiredContrast` darker than the mean of its
+ * surrounding window, OR at least half that contrast darker while
+ * 8-connected to accepted ink (Canny-style dual threshold). The strong
+ * cutoff decides *which* marks are ink; the weak cutoff then grows each
+ * mark into its blurred photographic edge, so stroke boundaries come
+ * out smooth instead of choppy and faint mid-stroke segments stay
+ * attached. Isolated weak pixels — paper grain, shadows — never reach a
+ * strong seed and are dropped. Unlike a single global cutoff, the local
+ * mean is immune to illumination gradients across the paper — the
+ * classic badly-lit-room failure where any global threshold either eats
+ * the shaded paper or drops the highlighted ink. The window is sized
+ * well above the widest pen stroke so stroke interiors still see
+ * mostly-paper surroundings and don't hollow out.
+ *
+ * Keeps the global path's polarity safeguard: if more than half the
+ * frame reads as ink the mask is inverted — ink is always the minority.
+ */
+export function binarizeAdaptive(
+  signal: Uint8Array,
+  width: number,
+  height: number,
+  sensitivity: number
+): BinaryMask {
+  const strong = requiredContrast(sensitivity);
+  const weak = strong * WEAK_CONTRAST_RATIO;
+  const means = localMeans(signal, width, height);
+
+  const data = new Uint8Array(signal.length);
+  const stack: number[] = [];
+  let ink = 0;
+  for (let i = 0; i < signal.length; i++) {
+    if (signal[i] < means[i] * (1 - strong)) {
+      data[i] = 1;
+      ink += 1;
+      stack.push(i);
+    }
+  }
+  // Flood from the strong seeds through weak-threshold pixels.
+  while (stack.length) {
+    const idx = stack.pop()!;
+    const x = idx % width;
+    const y = (idx - x) / width;
+    for (const [dx, dy] of NEIGHBOURS) {
+      const nx = x + dx;
+      const ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+      const nIdx = ny * width + nx;
+      if (data[nIdx]) continue;
+      if (signal[nIdx] < means[nIdx] * (1 - weak)) {
+        data[nIdx] = 1;
         ink += 1;
+        stack.push(nIdx);
       }
     }
   }
+
   if (ink > signal.length / 2) {
     for (let i = 0; i < data.length; i++) data[i] ^= 1;
   }
   return { width, height, data };
+}
+
+/**
+ * Antialiased per-pixel ink coverage (0–255) for rendering the mask as
+ * a bitmap. A photographed stroke edge is physically a blend of ink and
+ * paper, and the pixel's darkness encodes the blend ratio — so instead
+ * of synthesising smoothness by blurring the binary mask, the alpha is
+ * read off the signal itself: full opacity at the strong contrast
+ * cutoff, fading linearly to zero at the local paper level. Only mask
+ * pixels and their 1-px halo participate — everything else stays fully
+ * transparent regardless of darkness (despeckled text, shadows), which
+ * is safe because 8-connected components can't sit within 1 px of each
+ * other without having been one component.
+ */
+export function computeInkAlpha(
+  signal: Uint8Array,
+  mask: BinaryMask,
+  sensitivity: number
+): Uint8Array {
+  const { width, height, data } = mask;
+  const strong = requiredContrast(sensitivity);
+  const means = localMeans(signal, width, height);
+
+  const alpha = new Uint8Array(data.length);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = y * width + x;
+      let eligible = data[idx] === 1;
+      if (!eligible) {
+        for (const [dx, dy] of NEIGHBOURS) {
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+          if (data[ny * width + nx]) {
+            eligible = true;
+            break;
+          }
+        }
+      }
+      if (!eligible) continue;
+      const t0 = means[idx]; // alpha 0 at the local paper level
+      const t1 = means[idx] * (1 - strong); // alpha 255 at the strong cutoff
+      if (t0 - t1 < 1) {
+        // Degenerate ramp (near-max sensitivity) → binary coverage.
+        alpha[idx] = data[idx] ? 255 : 0;
+      } else {
+        const a = (t0 - signal[idx]) / (t0 - t1);
+        alpha[idx] = Math.round(255 * Math.min(1, Math.max(0, a)));
+      }
+    }
+  }
+  return alpha;
 }
 
 /* --- Step 4: speck removal --------------------------------------------------- */
