@@ -10,6 +10,7 @@ import {
   luminance,
   otsuThreshold,
   removeBorderBlobs,
+  removeFaintComponents,
   removeSpecks,
   simplifyPolyline,
   thin,
@@ -276,6 +277,74 @@ describe('computeInkAlpha', () => {
     const alpha = computeInkAlpha(signal, cleaned, 0.5);
     expect(alpha[1 * 12 + 10]).toBe(0);
     expect(alpha[1 * 12 + 3]).toBe(255);
+  });
+});
+
+describe('removeFaintComponents', () => {
+  /** Signal plane from a per-pixel value function. */
+  function signalOf(
+    width: number,
+    height: number,
+    value: (x: number, y: number) => number
+  ): Uint8Array {
+    const out = new Uint8Array(width * height);
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        out[y * width + x] = value(x, y);
+      }
+    }
+    return out;
+  }
+
+  // Bold stroke (value 30) plus a pale speckle pair (240) — the kind of
+  // paper grain a high-sensitivity threshold lets through.
+  const boldPlusSpecks = () => {
+    const width = 30;
+    const height = 5;
+    const isStroke = (x: number, y: number) => y === 2 && x >= 2 && x <= 15;
+    const isSpeck = (x: number, y: number) => y === 2 && (x === 25 || x === 26);
+    const signal = signalOf(width, height, (x, y) =>
+      isStroke(x, y) ? 30 : isSpeck(x, y) ? 240 : 255
+    );
+    const mask: BinaryMask = {
+      width,
+      height,
+      data: signalOf(width, height, (x, y) =>
+        isStroke(x, y) || isSpeck(x, y) ? 1 : 0
+      )
+    };
+    return { mask, signal };
+  };
+
+  it('drops pale specks next to much darker ink, keeps the ink', () => {
+    const { mask, signal } = boldPlusSpecks();
+    const cleaned = removeFaintComponents(mask, signal);
+    expect(cleaned.data[2 * 30 + 25]).toBe(0);
+    expect(cleaned.data[2 * 30 + 26]).toBe(0);
+    expect(inkCount(cleaned)).toBe(14);
+    // Input untouched.
+    expect(inkCount(mask)).toBe(16);
+  });
+
+  it('keeps everything when the whole frame is uniformly faint pencil', () => {
+    // A light line and its separate dot: no darker ink exists to make
+    // either look like noise, so both survive.
+    const width = 30;
+    const height = 5;
+    const isInk = (x: number, y: number) =>
+      y === 2 && ((x >= 2 && x <= 8) || x === 20 || x === 21);
+    const signal = signalOf(width, height, (x, y) => (isInk(x, y) ? 220 : 255));
+    const mask: BinaryMask = {
+      width,
+      height,
+      data: signalOf(width, height, (x, y) => (isInk(x, y) ? 1 : 0))
+    };
+    expect(inkCount(removeFaintComponents(mask, signal))).toBe(9);
+  });
+
+  it('is disabled by a zero ratio', () => {
+    const { mask, signal } = boldPlusSpecks();
+    expect(inkCount(removeFaintComponents(mask, signal, 0))).toBe(16);
   });
 });
 

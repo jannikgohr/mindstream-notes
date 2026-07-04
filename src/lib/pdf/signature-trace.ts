@@ -10,7 +10,7 @@
  * keep contrast) → local-mean adaptive threshold with hysteresis
  * (immune to lighting gradients; user-adjustable sensitivity; edge
  * pixels join at half the contrast when connected to confident ink) →
- * speck removal → Zhang-Suen
+ * speck removal (size, border blobs, relative darkness) → Zhang-Suen
  * thinning → skeleton walk into polylines → Douglas-Peucker
  * simplification → uniform fit into the signature pad's coordinate
  * space. The output is the same stroke geometry the drawing pad
@@ -72,6 +72,13 @@ export interface TraceSignatureOptions {
    * Defaults relative to image size; pass 0 to disable.
    */
   borderBlobThickness?: number;
+  /**
+   * Components whose median darkness falls below this fraction of the
+   * frame's reference ink darkness are dropped as paper noise (see
+   * removeFaintComponents). Defaults to FAINT_COMPONENT_RATIO; pass 0
+   * to disable.
+   */
+  faintComponentRatio?: number;
 }
 
 export interface TracedSignature {
@@ -492,6 +499,110 @@ export function removeBorderBlobs(
   return { width, height, data };
 }
 
+/* --- Step 4c: relative-darkness filtering ---------------------------------------- */
+
+/**
+ * A component must reach this fraction of the frame's reference ink
+ * darkness to survive. Real pen ink sits at 60–90% contrast against
+ * paper while the grain/noise that clears a permissive threshold sits
+ * at 2–8%, so the ratio has a wide safe band; 0.35 keeps genuinely
+ * light strokes (same pen, lighter pressure) while still separating
+ * noise from faint pencil.
+ */
+export const FAINT_COMPONENT_RATIO = 0.35;
+
+/**
+ * Drop components that are far *lighter* than the frame's actual ink.
+ *
+ * At high sensitivity the threshold accepts anything a few percent
+ * darker than the local paper level, which lets paper grain, sensor
+ * noise, and JPEG artifacts through as speckles — often grown past the
+ * size-based despeckle limit by hysteresis. Size can't separate them
+ * from an i-dot, but darkness can: each component's darkness is its
+ * median contrast against the local paper level, and the frame's
+ * reference darkness is the ink-pixel-weighted median of those (the
+ * signature holds most of the ink pixels, so the reference is the
+ * signature's own ink level). Components below `ratio` × reference are
+ * noise riding on a much darker signature. A uniformly faint pencil
+ * signature IS the reference — nothing is dropped when there is no
+ * darker ink to compare against.
+ */
+export function removeFaintComponents(
+  mask: BinaryMask,
+  signal: Uint8Array,
+  ratio: number = FAINT_COMPONENT_RATIO
+): BinaryMask {
+  const { width, height } = mask;
+  const data = Uint8Array.from(mask.data);
+  if (ratio <= 0) return { width, height, data };
+  const means = localMeans(signal, width, height);
+  const seen = new Uint8Array(data.length);
+  const stack: number[] = [];
+
+  interface Component {
+    pixels: number[];
+    darkness: number;
+  }
+  const components: Component[] = [];
+
+  for (let start = 0; start < data.length; start++) {
+    if (!data[start] || seen[start]) continue;
+    stack.length = 0;
+    stack.push(start);
+    seen[start] = 1;
+    const pixels: number[] = [];
+    while (stack.length) {
+      const idx = stack.pop()!;
+      pixels.push(idx);
+      const x = idx % width;
+      const y = (idx - x) / width;
+      for (const [dx, dy] of NEIGHBOURS) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+        const nIdx = ny * width + nx;
+        if (data[nIdx] && !seen[nIdx]) {
+          seen[nIdx] = 1;
+          stack.push(nIdx);
+        }
+      }
+    }
+    const contrasts = pixels.map((idx) => {
+      const mean = means[idx];
+      return mean > 0 ? Math.max(0, (mean - signal[idx]) / mean) : 0;
+    });
+    contrasts.sort((a, b) => a - b);
+    components.push({
+      pixels,
+      darkness: contrasts[Math.floor(contrasts.length / 2)]
+    });
+  }
+  if (components.length === 0) return { width, height, data };
+
+  // Reference = darkness of the component containing the median ink
+  // pixel (components ordered dark → light): what "this frame's ink"
+  // looks like, immune to both a swarm of light specks and a single
+  // dark dust fleck.
+  const ordered = components.slice().sort((a, b) => b.darkness - a.darkness);
+  const totalInk = components.reduce((s, c) => s + c.pixels.length, 0);
+  let acc = 0;
+  let reference = ordered[0].darkness;
+  for (const c of ordered) {
+    acc += c.pixels.length;
+    if (acc >= totalInk / 2) {
+      reference = c.darkness;
+      break;
+    }
+  }
+
+  for (const c of components) {
+    if (c.darkness < reference * ratio) {
+      for (const idx of c.pixels) data[idx] = 0;
+    }
+  }
+  return { width, height, data };
+}
+
 /* --- Step 5: Zhang-Suen thinning ---------------------------------------------- */
 
 /**
@@ -835,12 +946,8 @@ export function extractSignatureMask(
   options: TraceSignatureOptions = {}
 ): SignatureMask {
   const sensitivity = Math.min(1, Math.max(0, options.sensitivity ?? 0.5));
-  const mask = binarizeAdaptive(
-    inkSignal(image),
-    image.width,
-    image.height,
-    sensitivity
-  );
+  const signal = inkSignal(image);
+  const mask = binarizeAdaptive(signal, image.width, image.height, sensitivity);
   const despeckled = removeSpecks(
     mask,
     options.minComponentSize ??
@@ -849,11 +956,16 @@ export function extractSignatureMask(
   const borderThickness =
     options.borderBlobThickness ??
     defaultBorderBlobThickness(image.width, image.height);
+  const deblobbed =
+    borderThickness > 0
+      ? removeBorderBlobs(despeckled, borderThickness)
+      : despeckled;
   return {
-    mask:
-      borderThickness > 0
-        ? removeBorderBlobs(despeckled, borderThickness)
-        : despeckled,
+    mask: removeFaintComponents(
+      deblobbed,
+      signal,
+      options.faintComponentRatio ?? FAINT_COMPONENT_RATIO
+    ),
     sensitivity
   };
 }
