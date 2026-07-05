@@ -32,7 +32,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write   # needed to create the release + upload assets
+  contents: write # needed to create the release + upload assets
 
 jobs:
   # Single job that creates the draft release so the matrix builds below
@@ -82,9 +82,12 @@ jobs:
       matrix:
         include:
           # Universal .dmg covers both Apple Silicon + Intel from one
-          # build, at the cost of ~2x compile time. Both rust targets are
-          # added below for tauri-action to find.
-          - os: macos-latest
+          # build, at the cost of ~2x compile time. Pin macOS 15 because
+          # macos-latest moved to macOS 26 arm64 after the last successful
+          # release, where Tauri's universal build started failing while
+          # executing Rust build-script binaries.
+          # Both rust targets are added below for tauri-action to find.
+          - os: macos-15
             args: '--target universal-apple-darwin'
             rust-targets: 'aarch64-apple-darwin,x86_64-apple-darwin'
           - os: ubuntu-latest
@@ -130,14 +133,14 @@ jobs:
       - name: Build, sign, and upload
         uses: tauri-apps/tauri-action@v0
         env:
-          GITHUB_TOKEN:                       ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # The frontend bundle can exceed Node's default ~2 GB heap on
           # macOS runners while Tauri runs `beforeBuildCommand`.
-          NODE_OPTIONS:                       --max-old-space-size=4096
+          NODE_OPTIONS: --max-old-space-size=4096
           # Updater signing — see Settings → Secrets above. tauri-action
           # injects these into `tauri build` automatically; the pubkey
           # in tauri.conf.json must be the matching .pub file.
-          TAURI_SIGNING_PRIVATE_KEY:          ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           releaseId: ${{ needs.create-release.outputs.release_id }}
@@ -201,10 +204,10 @@ jobs:
       # doesn't end up in any uploaded artifact.
       - name: Provision Android signing
         env:
-          KEYSTORE_B64:       ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD:  ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          KEY_ALIAS:          ${{ secrets.ANDROID_KEY_ALIAS }}
-          KEY_PASSWORD:       ${{ secrets.ANDROID_KEY_PASSWORD }}
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           set -euo pipefail
           KEYSTORE_PATH="$RUNNER_TEMP/upload-keystore.jks"
@@ -222,7 +225,7 @@ jobs:
 
       - name: Build APK + AAB
         env:
-          TAURI_SIGNING_PRIVATE_KEY:          ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: pnpm tauri android build --apk --aab
 
@@ -272,8 +275,8 @@ jobs:
       - name: Assemble latest.json from release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG:      ${{ steps.tag.outputs.tag }}
-          REPO:     ${{ github.repository }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
 
@@ -388,8 +391,8 @@ jobs:
       - name: Upload latest.json to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG:      ${{ steps.tag.outputs.tag }}
-          REPO:     ${{ github.repository }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          REPO: ${{ github.repository }}
         # --clobber so re-runs of this job (e.g. after a Windows-only
         # retry) refresh the manifest in place instead of failing on
         # "asset already exists".
