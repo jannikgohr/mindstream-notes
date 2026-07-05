@@ -153,6 +153,20 @@ describe('polygonArea / orderQuad / maxAreaQuad', () => {
     const quad = maxAreaQuad(hull)!;
     expect(cornerError(quad, corners)).toBe(0);
   });
+
+  it('prunes oversized hulls and still finds a near-maximal quad', () => {
+    // 80 points on a circle — beyond the O(n⁴) search cap, so the hull
+    // is subsampled. The best inscribed quad of a circle is the square
+    // with area 2r²; the pruned search must stay close to that.
+    const r = 100;
+    const hull = Array.from({ length: 80 }, (_, i) => {
+      const t = (2 * Math.PI * i) / 80;
+      return { x: r * Math.cos(t), y: r * Math.sin(t) };
+    });
+    const quad = maxAreaQuad(hull);
+    expect(quad).not.toBeNull();
+    expect(polygonArea(quad!)).toBeGreaterThan(1.9 * r * r);
+  });
 });
 
 describe('detectPaperQuad', () => {
@@ -428,6 +442,13 @@ describe('downscaleRaster', () => {
     const small = downscaleRaster(raster, 200);
     expect(small.width).toBe(200);
     expect(Math.abs(small.height - 100)).toBeLessThanOrEqual(1);
+  });
+
+  it('caps by height for portrait rasters', () => {
+    const raster = renderScene(400, 800, null);
+    const small = downscaleRaster(raster, 200);
+    expect(small.height).toBe(200);
+    expect(Math.abs(small.width - 100)).toBeLessThanOrEqual(1);
   });
 
   it('returns the input untouched when already small enough', () => {

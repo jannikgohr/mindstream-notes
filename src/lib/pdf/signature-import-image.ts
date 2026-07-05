@@ -11,12 +11,17 @@ import {
   extractSignatureMask,
   inkSignal,
   SIGNATURE_PAD_HEIGHT,
-  SIGNATURE_PAD_MARGIN,
   SIGNATURE_PAD_WIDTH,
   SIGNATURE_STROKE_COLOR,
   type RasterImage,
   type TraceSignatureOptions
 } from './signature-trace';
+import {
+  inkBounds,
+  padPlacement,
+  parseHexColor,
+  renderInkPixels
+} from './signature-image-render';
 import type { PdfSignatureImage } from './types';
 
 /**
@@ -101,43 +106,14 @@ export function stopCameraStream(stream: MediaStream | null): void {
   stream?.getTracks().forEach((track) => track.stop());
 }
 
-/** Bounding box of the non-zero entries of a mask or alpha plane. */
-function maskBounds(mask: Uint8Array, width: number, height: number) {
-  let minX = Infinity;
-  let minY = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  for (let i = 0; i < mask.length; i++) {
-    if (!mask[i]) continue;
-    const x = i % width;
-    const y = (i - x) / width;
-    minX = Math.min(minX, x);
-    minY = Math.min(minY, y);
-    maxX = Math.max(maxX, x);
-    maxY = Math.max(maxY, y);
-  }
-  if (!Number.isFinite(minX)) return null;
-  return { minX, minY, maxX, maxY };
-}
-
-function parseHexColor(hex: string): [number, number, number] {
-  const v = hex.replace('#', '');
-  if (v.length !== 6) return [17, 24, 39];
-  const r = parseInt(v.slice(0, 2), 16);
-  const g = parseInt(v.slice(2, 4), 16);
-  const b = parseInt(v.slice(4, 6), 16);
-  if (Number.isNaN(r) || Number.isNaN(g) || Number.isNaN(b)) {
-    return [17, 24, 39];
-  }
-  return [r, g, b];
-}
-
 /**
  * Build the high-fidelity representation for imported signatures: a
  * transparent PNG in signature-pad space. Strokes are still stored as a
  * compatibility fallback, but scanned imports render/export from this
  * bitmap so small threshold details do not get distorted by vector
- * skeletonisation.
+ * skeletonisation. The decisions live in pure modules (signature-trace,
+ * signature-image-render); this function only moves pixels through
+ * canvases to reach a PNG data URL.
  */
 export function transparentSignatureImageFromRaster(
   raster: RasterImage,
@@ -148,44 +124,30 @@ export function transparentSignatureImageFromRaster(
   // ink/paper blends and get matching partial alpha instead of the
   // choppy all-or-nothing stencil the binary mask would give.
   const alpha = computeInkAlpha(inkSignal(raster), mask, sensitivity);
-  const bounds = maskBounds(alpha, mask.width, mask.height);
+  const bounds = inkBounds(alpha, mask.width);
   if (!bounds) return null;
 
-  const sourceWidth = bounds.maxX - bounds.minX + 1;
-  const sourceHeight = bounds.maxY - bounds.minY + 1;
+  const ink = renderInkPixels(
+    alpha,
+    mask.width,
+    bounds,
+    parseHexColor(SIGNATURE_STROKE_COLOR)
+  );
   const sourceCanvas = document.createElement('canvas');
-  sourceCanvas.width = sourceWidth;
-  sourceCanvas.height = sourceHeight;
+  sourceCanvas.width = ink.width;
+  sourceCanvas.height = ink.height;
   const sourceCtx = sourceCanvas.getContext('2d', {
     willReadFrequently: true
   });
   if (!sourceCtx) return null;
-
-  const [r, g, b] = parseHexColor(SIGNATURE_STROKE_COLOR);
-  const sourceImage = sourceCtx.createImageData(sourceWidth, sourceHeight);
-  for (let y = 0; y < sourceHeight; y++) {
-    for (let x = 0; x < sourceWidth; x++) {
-      const maskIndex = (bounds.minY + y) * mask.width + bounds.minX + x;
-      const coverage = alpha[maskIndex];
-      if (!coverage) continue;
-      const out = (y * sourceWidth + x) * 4;
-      sourceImage.data[out] = r;
-      sourceImage.data[out + 1] = g;
-      sourceImage.data[out + 2] = b;
-      sourceImage.data[out + 3] = coverage;
-    }
-  }
-  sourceCtx.putImageData(sourceImage, 0, 0);
-
-  const scale = Math.min(
-    (SIGNATURE_PAD_WIDTH - SIGNATURE_PAD_MARGIN * 2) / sourceWidth,
-    (SIGNATURE_PAD_HEIGHT - SIGNATURE_PAD_MARGIN * 2) / sourceHeight
+  // Copy: ImageData wants a Uint8ClampedArray over a plain ArrayBuffer.
+  sourceCtx.putImageData(
+    new ImageData(new Uint8ClampedArray(ink.data), ink.width, ink.height),
+    0,
+    0
   );
-  const width = Math.max(1, Math.round(sourceWidth * scale));
-  const height = Math.max(1, Math.round(sourceHeight * scale));
-  const x = Math.round((SIGNATURE_PAD_WIDTH - width) / 2);
-  const y = Math.round((SIGNATURE_PAD_HEIGHT - height) / 2);
 
+  const placement = padPlacement(ink.width, ink.height);
   const canvas = document.createElement('canvas');
   // 2x backing pixels keep exports crisp while the logical signature
   // size remains the same 420x168 pad used by old stroke snapshots.
@@ -195,7 +157,13 @@ export function transparentSignatureImageFromRaster(
   if (!ctx) return null;
   ctx.imageSmoothingEnabled = true;
   ctx.setTransform(2, 0, 0, 2, 0, 0);
-  ctx.drawImage(sourceCanvas, x, y, width, height);
+  ctx.drawImage(
+    sourceCanvas,
+    placement.x,
+    placement.y,
+    placement.width,
+    placement.height
+  );
 
   return {
     dataUrl: canvas.toDataURL('image/png'),

@@ -250,6 +250,95 @@ describe('exportAnnotatedPdf', () => {
     expect(contents).toContain('/Im0 Do');
   });
 
+  it('writes Contents for ink and signature annotations with a body', async () => {
+    const source = await makeBlankPdfBytes();
+    const strokes = [
+      {
+        id: 's1',
+        color: '#111827',
+        width: 2,
+        points: [
+          { x: 100, y: 100 },
+          { x: 200, y: 110 }
+        ]
+      }
+    ];
+    const out = await exportAnnotatedPdf(source, [
+      annotation({ type: 'ink', body: 'ink note', strokes }),
+      annotation({
+        type: 'signature',
+        body: 'signed here',
+        signature: { id: 'sig-1', width: 420, height: 168, strokes }
+      })
+    ]);
+    const annots = await readPageAnnots(out);
+    expect(annots).toHaveLength(2);
+    for (const dict of annots) {
+      expect(dict.get(PDFName.of('Contents'))).toBeDefined();
+    }
+  });
+
+  it('falls back to the stroke appearance when the PNG cannot be embedded', async () => {
+    const source = await makeBlankPdfBytes();
+    const out = await exportAnnotatedPdf(source, [
+      annotation({
+        type: 'signature',
+        rects: [{ x: 100, y: 100, width: 180, height: 60 }],
+        signature: {
+          id: 'sig-1',
+          width: 420,
+          height: 168,
+          image: {
+            dataUrl: 'data:image/png;base64,not-actually-a-png',
+            width: 420,
+            height: 168,
+            mimeType: 'image/png'
+          },
+          strokes: [
+            {
+              id: 'pad-s1',
+              color: '#111827',
+              width: 3,
+              points: [
+                { x: 0, y: 0 },
+                { x: 420, y: 168 }
+              ]
+            }
+          ]
+        }
+      })
+    ]);
+    const doc = await PDFDocument.load(out);
+    const annots = await readPageAnnots(out);
+    const ap = annots[0].get(PDFName.of('AP')) as PDFDict;
+    const normal = doc.context.lookup(ap.get(PDFName.of('N')));
+    const contents = inflateSync(
+      (normal as unknown as { getContents: () => Uint8Array }).getContents()
+    ).toString('utf8');
+    // Vector fallback, not the (unembeddable) image.
+    expect(contents).not.toContain('/Im0 Do');
+    expect(contents).toContain(' rg');
+  });
+
+  it('writes a well-formed date even for an unparseable timestamp', async () => {
+    const source = await makeBlankPdfBytes();
+    const out = await exportAnnotatedPdf(source, [
+      annotation({ updatedAt: 'not-a-date' })
+    ]);
+    const annots = await readPageAnnots(out);
+    const m = annots[0].get(PDFName.of('M'));
+    expect(m).toBeInstanceOf(PDFString);
+    expect((m as PDFString).asString()).toMatch(/^D:\d{14}Z$/);
+  });
+
+  it('skips annotations of unknown type', async () => {
+    const source = await makeBlankPdfBytes();
+    const out = await exportAnnotatedPdf(source, [
+      annotation({ type: 'sticker' as PdfAnnotation['type'] })
+    ]);
+    expect(await readPageAnnots(out)).toHaveLength(0);
+  });
+
   it('skips annotations that fall outside the page range', async () => {
     const source = await makeBlankPdfBytes(2);
     const out = await exportAnnotatedPdf(source, [

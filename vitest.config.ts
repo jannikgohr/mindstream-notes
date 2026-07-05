@@ -114,6 +114,13 @@ export default defineConfig({
         'src/lib/note-exporters/pdf.ts',
         'src/lib/pdf/extract-text.ts',
 
+        // Camera/canvas plumbing for the signature photo import: every
+        // function is a thin wrapper over getUserMedia, createImageBitmap,
+        // or 2D-canvas APIs that don't rasterise under happy-dom. All
+        // decisions live in the pure, unit-tested modules it delegates to
+        // (signature-trace, signature-image-render, paper-detect).
+        'src/lib/pdf/signature-import-image.ts',
+
         // Pure presentation data (icon maps, tailwind-variants, type tables).
         'src/lib/settings/icons.ts',
         'src/lib/components/ui/**',

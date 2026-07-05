@@ -219,6 +219,16 @@ describe('binarizeAdaptive', () => {
     const img = shadedRaster(12, 3, (x, y) => (y === 1 && x === 5 ? 220 : 255));
     expect(inkCount(binarizeAdaptive(inkSignal(img), 12, 3, 0.5))).toBe(0);
   });
+
+  it('inverts the mask when most of the frame reads as ink', () => {
+    // Inverted-polarity capture (light ink on dark paper, a negative):
+    // 60% of the frame is dark. Ink must always be the minority, so the
+    // safeguard flips the mask — the bright minority becomes the ink.
+    const img = shadedRaster(20, 20, (x) => (x < 12 ? 60 : 250));
+    const mask = binarizeAdaptive(inkSignal(img), 20, 20, 0.5);
+    expect(mask.data[10 * 20 + 5]).toBe(0); // dark majority: not ink
+    expect(mask.data[10 * 20 + 16]).toBe(1); // bright minority: ink
+  });
 });
 
 describe('bridgeSmallGaps', () => {
@@ -320,6 +330,23 @@ describe('computeInkAlpha', () => {
     expect(mask.data[1 * 12 + 4]).toBe(1); // gap pixel, value 255
     const alpha = computeInkAlpha(signal, mask, 0.5);
     expect(alpha[1 * 12 + 4]).toBeGreaterThanOrEqual(64);
+  });
+
+  it('degrades to binary coverage when the ramp collapses', () => {
+    // Dim scene at max sensitivity: the paper level (~29) times the 2%
+    // strong contrast leaves less than one grey level of ramp — alpha
+    // must fall back to mask membership instead of dividing by ~zero.
+    const img = shadedRaster(8, 3, (x, y) => (y === 1 && x === 3 ? 0 : 30));
+    const signal = inkSignal(img);
+    const mask: BinaryMask = {
+      width: 8,
+      height: 3,
+      data: new Uint8Array(24)
+    };
+    mask.data[1 * 8 + 3] = 1;
+    const alpha = computeInkAlpha(signal, mask, 1);
+    expect(alpha[1 * 8 + 3]).toBe(255); // mask pixel: opaque
+    expect(alpha[1 * 8 + 4]).toBe(0); // eligible halo pixel: transparent
   });
 
   it('keeps dark pixels outside the mask transparent (despeckled noise)', () => {
@@ -614,6 +641,14 @@ describe('simplifyPolyline', () => {
       1.2
     );
     expect(simplified).toEqual(line([0, 0], [3, 3]));
+  });
+
+  it('keeps the far point of a closed loop despite a zero-length chord', () => {
+    // First and last points coincide (a closed loop), so the chord has
+    // zero length — distance falls back to point distance from the
+    // shared endpoint instead of dividing by zero.
+    const simplified = simplifyPolyline(line([0, 0], [3, 4], [0, 0]), 1);
+    expect(simplified).toEqual(line([0, 0], [3, 4], [0, 0]));
   });
 });
 
