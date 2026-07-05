@@ -22,7 +22,7 @@
    * the source picker with no leftover photo or stream.
    */
 
-  import { Camera, Crop, ImageUp, RefreshCw } from '@lucide/svelte';
+  import { Camera, Crop, ImageUp, RefreshCw, RotateCw } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { isAndroid } from '$lib/platform';
@@ -37,6 +37,7 @@
     downscaleRaster,
     orderQuad,
     rectifyPaper,
+    rotateRaster90,
     type PaperQuad,
     type QuadPoint
   } from './paper-detect';
@@ -185,7 +186,7 @@
     return next;
   }
 
-  function processRaster(image: RasterImage) {
+  function processRaster(image: RasterImage, sensitivity?: number) {
     // Photos are decoded above the trace cap so the paper crop keeps
     // real resolution; the whole-frame fallback downscales as before.
     sourceRaster = image;
@@ -194,9 +195,20 @@
     rectifiedRaster = detectedQuad ? rectifyPaper(image, detectedQuad) : null;
     paperCrop = rectifiedRaster !== null;
     wholeFrameRaster = downscaleRaster(image, IMPORT_MAX_DIMENSION);
-    // Fresh photo → fresh automatic threshold.
-    traced = traceRaster(activeTraceRaster()!);
+    // Fresh photo → fresh automatic threshold (rotation passes the
+    // user's adjusted sensitivity through — same ink, same threshold).
+    traced = traceRaster(activeTraceRaster()!, sensitivity);
     mode = 'adjust';
+  }
+
+  function rotatePhoto() {
+    if (!sourceRaster) return;
+    if (retraceTimer) clearTimeout(retraceTimer);
+    retraceTimer = null;
+    // Re-run the whole pipeline: the paper quad, rectified crop, and
+    // manual crop corners all live in source coordinates and would be
+    // stale after rotation.
+    processRaster(rotateRaster90(sourceRaster), traced?.sensitivity);
   }
 
   function togglePaperCrop(event: Event) {
@@ -603,15 +615,26 @@
               <div></div>
             {/if}
             {#if sourceRaster}
-              <Button
-                variant="ghost"
-                size="sm"
-                class="h-7 gap-1 px-2 text-xs"
-                onclick={openCropEditor}
-              >
-                <Crop class="size-3.5" aria-hidden="true" />
-                {tUi('pdf.signature.import.adjustCrop')}
-              </Button>
+              <div class="flex items-center gap-1">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  class="h-7 gap-1 px-2 text-xs"
+                  onclick={rotatePhoto}
+                >
+                  <RotateCw class="size-3.5" aria-hidden="true" />
+                  {tUi('pdf.signature.import.rotate')}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  class="h-7 gap-1 px-2 text-xs"
+                  onclick={openCropEditor}
+                >
+                  <Crop class="size-3.5" aria-hidden="true" />
+                  {tUi('pdf.signature.import.adjustCrop')}
+                </Button>
+              </div>
             {/if}
           </div>
         {/if}

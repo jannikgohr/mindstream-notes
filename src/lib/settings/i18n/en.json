@@ -485,6 +485,7 @@
     "pdf.signature.import.paperCrop": "Crop to detected paper",
     "pdf.signature.import.holdHint": "Hold the paper flat and grip it by the edges.",
     "pdf.signature.import.adjustCrop": "Adjust crop",
+    "pdf.signature.import.rotate": "Rotate",
     "pdf.signature.import.cropHint": "Drag the corners to match the paper.",
     "pdf.signature.import.cropApply": "Apply",
     "pdf.signature.import.cropReset": "Reset",

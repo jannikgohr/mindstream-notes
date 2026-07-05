@@ -7,6 +7,7 @@ import {
   orderQuad,
   polygonArea,
   rectifyPaper,
+  rotateRaster90,
   type PaperQuad,
   type QuadPoint
 } from './paper-detect';
@@ -382,6 +383,42 @@ describe('rectifyPaper', () => {
     const out = rectifyPaper(scene, detectPaperQuad(scene)!, { maxDim: 800 });
     // 400×200 paper → 2:1 output (inset applies to both axes equally).
     expect(out.width / out.height).toBeCloseTo(2, 1);
+  });
+});
+
+describe('rotateRaster90', () => {
+  /** 1px-per-value raster; red channel carries the value. */
+  const rasterOf = (width: number, height: number, values: number[]) => {
+    const data = new Uint8ClampedArray(width * height * 4);
+    values.forEach((v, i) => {
+      data[i * 4] = v;
+      data[i * 4 + 3] = 255;
+    });
+    return { width, height, data };
+  };
+  const redChannel = (raster: RasterImage) =>
+    Array.from({ length: raster.width * raster.height }, (_, i) =>
+      Number(raster.data[i * 4])
+    );
+
+  it('rotates 90° clockwise and swaps dimensions', () => {
+    // 3×2 grid:      rotated clockwise → 2×3:
+    //   1 2 3          4 1
+    //   4 5 6          5 2
+    //                  6 3
+    const rotated = rotateRaster90(rasterOf(3, 2, [1, 2, 3, 4, 5, 6]));
+    expect(rotated.width).toBe(2);
+    expect(rotated.height).toBe(3);
+    expect(redChannel(rotated)).toEqual([4, 1, 5, 2, 6, 3]);
+  });
+
+  it('returns to the original after four rotations', () => {
+    const original = rasterOf(3, 2, [1, 2, 3, 4, 5, 6]);
+    let raster: RasterImage = original;
+    for (let i = 0; i < 4; i++) raster = rotateRaster90(raster);
+    expect(raster.width).toBe(3);
+    expect(raster.height).toBe(2);
+    expect(redChannel(raster)).toEqual(redChannel(original));
   });
 });
 

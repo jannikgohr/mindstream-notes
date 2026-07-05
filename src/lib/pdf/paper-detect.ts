@@ -151,6 +151,28 @@ export function downscaleRaster(
   return toRaster(resized);
 }
 
+/**
+ * Rotate a raster 90° clockwise (sideways phone photo → upright).
+ * Pure pixel shuffle — no resampling, no quality loss, so repeated
+ * presses cycle through all four orientations losslessly.
+ */
+export function rotateRaster90(raster: RasterImage): RasterImage {
+  const { width, height, data } = raster;
+  const out = new Uint8ClampedArray(data.length);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const src = (y * width + x) * 4;
+      // (x, y) lands at (height - 1 - y, x) in the height×width output.
+      const dst = (x * height + (height - 1 - y)) * 4;
+      out[dst] = data[src];
+      out[dst + 1] = data[src + 1];
+      out[dst + 2] = data[src + 2];
+      out[dst + 3] = data[src + 3];
+    }
+  }
+  return { width: height, height: width, data: out };
+}
+
 /* --- Geometry helpers --------------------------------------------------------- */
 
 /** Shoelace area of a polygon whose vertices are in cyclic order. */
