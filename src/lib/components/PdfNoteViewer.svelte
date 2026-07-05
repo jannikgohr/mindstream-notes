@@ -68,6 +68,7 @@
   import PdfAnnotationMenu from '$lib/pdf/PdfAnnotationMenu.svelte';
   import PdfSelectionMenu from '$lib/pdf/PdfSelectionMenu.svelte';
   import SignaturePadDialog from '$lib/pdf/SignaturePadDialog.svelte';
+  import SignatureImportDialog from '$lib/pdf/SignatureImportDialog.svelte';
   import SignaturePicker from '$lib/pdf/SignaturePicker.svelte';
   import {
     loadFlatOutline,
@@ -90,6 +91,7 @@
   import {
     cloneSignatureSnapshot,
     strokeBounds,
+    strokeOutlinePath,
     strokePointsAttr,
     translateRect,
     translateStroke
@@ -234,6 +236,7 @@
   const savedSignatures = $derived(signatureLibrary.signatures);
   let activeSignatureId = $state<string | null>(null);
   let signatureDialogOpen = $state(false);
+  let signatureImportOpen = $state(false);
   let signaturePickerOpen = $state(false);
   let signatureButton = $state<HTMLButtonElement | null>(null);
   let savingState = $state<'idle' | 'pending' | 'saving' | 'saved' | 'error'>(
@@ -407,17 +410,26 @@
 
   function openSignaturePad() {
     signaturePickerOpen = false;
+    signatureImportOpen = false;
     signatureDialogOpen = true;
+  }
+
+  function openSignatureImport() {
+    signaturePickerOpen = false;
+    signatureDialogOpen = false;
+    signatureImportOpen = true;
   }
 
   function handleSignatureSaved(signature: PdfSignatureSnapshot) {
     appendSignature(signature);
     signatureDialogOpen = false;
+    signatureImportOpen = false;
     activeTool = 'signature';
   }
 
   function handleSignatureCancelled() {
     signatureDialogOpen = false;
+    signatureImportOpen = false;
     if (savedSignatures.length === 0) activeTool = 'select';
   }
 
@@ -2680,18 +2692,31 @@
             );
             svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
             svg.classList.add('pdf-app-stroke-svg');
-            for (const stroke of annotation.signature.strokes) {
-              const polyline = document.createElementNS(
+            if (annotation.signature.image?.dataUrl) {
+              const image = document.createElementNS(
                 'http://www.w3.org/2000/svg',
-                'polyline'
+                'image'
               );
-              polyline.setAttribute('points', strokePointsAttr(stroke.points));
-              polyline.setAttribute('fill', 'none');
-              polyline.setAttribute('stroke', stroke.color);
-              polyline.setAttribute('stroke-width', `${stroke.width}`);
-              polyline.setAttribute('stroke-linecap', 'round');
-              polyline.setAttribute('stroke-linejoin', 'round');
-              svg.append(polyline);
+              image.setAttribute('href', annotation.signature.image.dataUrl);
+              image.setAttribute('x', '0');
+              image.setAttribute('y', '0');
+              image.setAttribute('width', `${annotation.signature.width}`);
+              image.setAttribute('height', `${annotation.signature.height}`);
+              image.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+              svg.append(image);
+            } else {
+              for (const stroke of annotation.signature.strokes) {
+                // Filled outline path (variable width via point pressure)
+                // — same rendering as SignatureStrokes.svelte.
+                const path = document.createElementNS(
+                  'http://www.w3.org/2000/svg',
+                  'path'
+                );
+                path.setAttribute('d', strokeOutlinePath(stroke));
+                path.setAttribute('fill', stroke.color);
+                path.setAttribute('stroke', 'none');
+                svg.append(path);
+              }
             }
             node.append(svg);
           } else if (annotation.type === 'ink' && annotation.strokes) {
@@ -3729,6 +3754,13 @@
       open={signatureDialogOpen}
       onCancel={handleSignatureCancelled}
       onSave={handleSignatureSaved}
+      onImport={openSignatureImport}
+    />
+
+    <SignatureImportDialog
+      open={signatureImportOpen}
+      onCancel={handleSignatureCancelled}
+      onSave={handleSignatureSaved}
     />
 
     <SignaturePicker
@@ -3739,6 +3771,7 @@
       onSelect={selectSignature}
       onDelete={deleteSignature}
       onAddNew={openSignaturePad}
+      onImport={openSignatureImport}
       onClose={() => (signaturePickerOpen = false)}
     />
   {/if}
@@ -4011,12 +4044,6 @@
   }
 
   :global(.pdf-page-host .pdf-app-annotation-signature) {
-    border: 1px solid transparent;
-    border-bottom-color: color-mix(
-      in srgb,
-      var(--annotation-color) 70%,
-      transparent
-    );
     background: rgb(255 255 255 / 0.54);
     padding: 3px 6px;
   }

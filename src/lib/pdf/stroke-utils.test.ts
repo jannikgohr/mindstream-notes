@@ -3,11 +3,12 @@ import {
   cloneInkStroke,
   cloneSignatureSnapshot,
   strokeBounds,
+  strokeOutlinePath,
   strokePointsAttr,
   translateRect,
   translateStroke
 } from './stroke-utils';
-import type { PdfInkStroke } from './types';
+import type { PdfInkStroke, PdfStrokePoint } from './types';
 
 const stroke = (): PdfInkStroke => ({
   id: 's1',
@@ -26,6 +27,76 @@ describe('strokePointsAttr', () => {
 
   it('returns an empty string for no points', () => {
     expect(strokePointsAttr([])).toBe('');
+  });
+});
+
+describe('strokeOutlinePath', () => {
+  const line = (pressures: Array<number | undefined>): PdfStrokePoint[] =>
+    pressures.map((pressure, i) => ({ x: i * 20, y: 0, pressure }));
+
+  it('produces a closed filled path', () => {
+    const d = strokeOutlinePath({ width: 4, points: line([1, 1, 1, 1]) });
+    expect(d.startsWith('M ')).toBe(true);
+    expect(d.endsWith('Z')).toBe(true);
+  });
+
+  it('normalises uniform pressure to the nominal width', () => {
+    // A constant mouse pressure of 0.5 must render exactly like
+    // pressure 1 — old saved signatures keep their appearance.
+    const full = strokeOutlinePath({ width: 4, points: line([1, 1, 1, 1]) });
+    const mouse = strokeOutlinePath({
+      width: 4,
+      points: line([0.5, 0.5, 0.5, 0.5])
+    });
+    const missing = strokeOutlinePath({
+      width: 4,
+      points: line([undefined, undefined, undefined, undefined])
+    });
+    expect(mouse).toBe(full);
+    expect(missing).toBe(full);
+  });
+
+  it('renders varying pressure differently from uniform pressure', () => {
+    const uniform = strokeOutlinePath({ width: 4, points: line([1, 1, 1, 1]) });
+    const tapered = strokeOutlinePath({
+      width: 4,
+      points: line([1.6, 1.2, 0.8, 0.4])
+    });
+    expect(tapered).not.toBe(uniform);
+  });
+
+  it('widens the outline where pressure is higher', () => {
+    // Horizontal stroke: outline y-extent near the thick end must beat
+    // the thin end. Parse coordinates back out of the path string.
+    const d = strokeOutlinePath({
+      width: 10,
+      points: line([1.5, 1.5, 0.5, 0.5])
+    });
+    const coords = d
+      .match(/-?\d+(\.\d+)?/g)!
+      .map(Number)
+      .reduce<Array<[number, number]>>((acc, n, i, arr) => {
+        if (i % 2 === 0 && i + 1 < arr.length) acc.push([n, arr[i + 1]]);
+        return acc;
+      }, []);
+    const spread = (filter: (x: number) => boolean) => {
+      const ys = coords.filter(([x]) => filter(x)).map(([, y]) => y);
+      return Math.max(...ys) - Math.min(...ys);
+    };
+    expect(spread((x) => x < 15)).toBeGreaterThan(spread((x) => x > 45));
+  });
+
+  it('returns an empty string for empty input', () => {
+    expect(strokeOutlinePath({ width: 4, points: [] })).toBe('');
+  });
+
+  it('falls back to nominal pressure when every point has zero pressure', () => {
+    const d = strokeOutlinePath({
+      width: 4,
+      points: line([0, 0, 0, 0])
+    });
+    expect(d.startsWith('M ')).toBe(true);
+    expect(d.endsWith('Z')).toBe(true);
   });
 });
 
@@ -94,11 +165,28 @@ describe('cloneSignatureSnapshot', () => {
       id: 'sig',
       width: 100,
       height: 50,
-      strokes: [stroke()]
+      strokes: [stroke()],
+      image: {
+        dataUrl: 'data:image/png;base64,abc',
+        width: 100,
+        height: 50,
+        mimeType: 'image/png' as const
+      }
     };
     const clone = cloneSignatureSnapshot(original);
     expect(clone).toEqual(original);
     expect(clone.strokes[0]).not.toBe(original.strokes[0]);
     expect(clone.strokes[0].points[0]).not.toBe(original.strokes[0].points[0]);
+    expect(clone.image).not.toBe(original.image);
+  });
+
+  it('omits the optional image when cloning a stroke-only signature', () => {
+    const original = {
+      id: 'sig',
+      width: 100,
+      height: 50,
+      strokes: [stroke()]
+    };
+    expect(cloneSignatureSnapshot(original)).not.toHaveProperty('image');
   });
 });

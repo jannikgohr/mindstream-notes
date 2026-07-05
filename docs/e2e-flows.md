@@ -126,7 +126,24 @@ back. The value is proving the whole frontend↔Rust↔frontend chain.
   re-opens.
 - **Proves:** asset IPC + pdf.js render + the annotation→PDF pipeline.
 
-### 2.3 Full-text search against the Rust matcher (P2)
+### 2.3 Signature photo import → place → export (P2)
+
+- **Why e2e:** photo signature import crosses surfaces unit tests cannot
+  faithfully exercise: OS camera/file capture, `createImageBitmap`, real
+  canvas rasterisation, live preview frame capture, pointer-driven manual crop
+  handles, pdf.js placement, and the final annotated-PDF export.
+- **Steps:** import a PDF → open the signature picker → choose **Import from
+  photo** → exercise both a picked image and, where available, camera capture →
+  confirm paper auto-crop can be toggled → adjust the manual crop handles →
+  save the signature → place it on the PDF → export the annotated PDF → reopen
+  the output and assert the transparent signature image appears at the chosen
+  placement.
+- **Proves:** the DOM acquisition layer in `signature-import-image.ts`, the
+  `SignatureImportDialog.svelte` source/crop/adjust states, scanned-signature
+  image persistence in saved signatures, placement in `PdfNoteViewer.svelte`,
+  and the image appearance path in `exportAnnotatedPdf`.
+
+### 2.4 Full-text search against the Rust matcher (P2)
 
 - **Why e2e:** the production search runs in Rust (`search/mod.rs`); the TS
   `search-matcher.ts` is only the browser-fallback mirror (unit-tested).
@@ -135,13 +152,13 @@ back. The value is proving the whole frontend↔Rust↔frontend chain.
 - **Proves:** the two matchers stay behaviourally aligned (AND semantics,
   scoring, snippet windows).
 
-### 2.4 Open vault folder / reveal in OS file manager (P3)
+### 2.5 Open vault folder / reveal in OS file manager (P3)
 
 - **Steps:** **Settings → Data → Open data folder** → assert the shell opens
   the correct path (mock/intercept the shell call).
 - **Proves:** the `open_data_folder`/`open_with_shell` command shims.
 
-### 2.5 Live collaboration between two windows (P3)
+### 2.6 Live collaboration between two windows (P3)
 
 - **Why e2e:** the collab providers (`sync/collab-provider.ts`,
   `ink-web-collab-provider.ts`) and the Etebase room plumbing are network
@@ -150,7 +167,7 @@ back. The value is proving the whole frontend↔Rust↔frontend chain.
   the edit appears in the other; toggle offline → assert reconnect converges.
 - **Proves:** the y-protocols transport + awareness + reconnection.
 
-### 2.6 macOS native menu and window chrome (P2)
+### 2.7 macOS native menu and window chrome (P2)
 
 - **Why e2e:** the native menu (`native_menu.rs`) and frontend listener bridge
   (`native-menu.svelte.ts`) only have meaning when Tauri owns the real macOS

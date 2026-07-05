@@ -6,7 +6,31 @@
  */
 
 import type { SignatureRecord } from '$lib/api/signatures';
-import type { PdfSignatureSnapshot } from './types';
+import type { PdfSignatureImage, PdfSignatureSnapshot } from './types';
+
+function normaliseImage(value: unknown): PdfSignatureImage | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const image = value as Partial<PdfSignatureImage>;
+  if (
+    image.mimeType !== 'image/png' ||
+    typeof image.dataUrl !== 'string' ||
+    !image.dataUrl.startsWith('data:image/png;base64,') ||
+    typeof image.width !== 'number' ||
+    typeof image.height !== 'number' ||
+    !Number.isFinite(image.width) ||
+    !Number.isFinite(image.height) ||
+    image.width <= 0 ||
+    image.height <= 0
+  ) {
+    return undefined;
+  }
+  return {
+    dataUrl: image.dataUrl,
+    width: image.width,
+    height: image.height,
+    mimeType: 'image/png'
+  };
+}
 
 /**
  * Decode a record's JSON payload into a UI snapshot. Returns null when the
@@ -18,11 +42,13 @@ export function recordToSnapshot(
   try {
     const geom = JSON.parse(rec.data) as Omit<PdfSignatureSnapshot, 'id'>;
     if (!Array.isArray(geom?.strokes) || geom.strokes.length === 0) return null;
+    const image = normaliseImage(geom.image);
     return {
       id: rec.id,
       width: geom.width,
       height: geom.height,
-      strokes: geom.strokes
+      strokes: geom.strokes,
+      ...(image ? { image } : {})
     };
   } catch {
     return null;

@@ -3,6 +3,9 @@ import { recordToSnapshot, snapshotToData } from './signature-codec';
 import type { SignatureRecord } from '$lib/api/signatures';
 import type { PdfSignatureSnapshot } from './types';
 
+const PNG_DATA_URL =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+
 const record = (data: string): SignatureRecord => ({
   id: 'sig1',
   data,
@@ -24,6 +27,45 @@ describe('recordToSnapshot', () => {
       width: 200,
       height: 80,
       strokes: [{ id: 's1', color: '#000', width: 2, points: [{ x: 0, y: 0 }] }]
+    });
+    expect(recordToSnapshot(record(data))).toEqual(snapshot());
+  });
+
+  it('preserves a valid transparent image payload', () => {
+    const data = JSON.stringify({
+      width: 200,
+      height: 80,
+      strokes: [
+        { id: 's1', color: '#000', width: 2, points: [{ x: 0, y: 0 }] }
+      ],
+      image: {
+        dataUrl: PNG_DATA_URL,
+        width: 200,
+        height: 80,
+        mimeType: 'image/png'
+      }
+    });
+    expect(recordToSnapshot(record(data))?.image).toEqual({
+      dataUrl: PNG_DATA_URL,
+      width: 200,
+      height: 80,
+      mimeType: 'image/png'
+    });
+  });
+
+  it('drops malformed image payloads but keeps the stroke fallback', () => {
+    const data = JSON.stringify({
+      width: 200,
+      height: 80,
+      strokes: [
+        { id: 's1', color: '#000', width: 2, points: [{ x: 0, y: 0 }] }
+      ],
+      image: {
+        dataUrl: 'https://example.invalid/sig.png',
+        width: 200,
+        height: 80,
+        mimeType: 'image/png'
+      }
     });
     expect(recordToSnapshot(record(data))).toEqual(snapshot());
   });
