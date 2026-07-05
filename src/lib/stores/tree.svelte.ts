@@ -11,7 +11,13 @@
  */
 
 import * as api from '$lib/api';
-import type { Collection, NoteKind, NoteSummary, TreeNode } from '$lib/api';
+import type {
+  Collection,
+  NoteKind,
+  NoteSummary,
+  TreeItemRef,
+  TreeNode
+} from '$lib/api';
 import { TRASH_ID } from '$lib/api';
 import { runSync } from '$lib/sync/runner';
 import { extractPdfText } from '$lib/pdf/extract-text';
@@ -170,6 +176,15 @@ export async function moveNoteTo(
   await loadTree();
 }
 
+export async function moveManyTo(
+  items: TreeItemRef[],
+  targetCollectionId: string | null
+): Promise<api.BatchCounts> {
+  const result = await api.moveMany(items, targetCollectionId);
+  await loadTree();
+  return result;
+}
+
 export async function setNoteBody(id: string, body: string): Promise<void> {
   await api.saveNote({ id, body });
   const existing = tree.notesById[id];
@@ -322,6 +337,14 @@ export async function trashCollection(id: string): Promise<void> {
   await moveCollectionTo(id, TRASH_ID);
 }
 
+export async function trashMany(
+  items: TreeItemRef[]
+): Promise<api.BatchCounts> {
+  const result = await api.trashMany(items);
+  await loadTree();
+  return result;
+}
+
 // ---------- Trash actions (operate on items already inside trash) ----------
 
 /** Move a trashed note back to root. */
@@ -344,6 +367,22 @@ export async function restoreCollection(id: string): Promise<void> {
 export async function purgeCollection(id: string): Promise<void> {
   await api.deleteCollection(id);
   await loadTree();
+}
+
+export async function restoreMany(
+  items: TreeItemRef[]
+): Promise<api.BatchCounts> {
+  const result = await api.restoreMany(items);
+  await loadTree();
+  return result;
+}
+
+export async function purgeMany(
+  items: TreeItemRef[]
+): Promise<api.BatchCounts> {
+  const result = await api.purgeMany(items);
+  await loadTree();
+  return result;
 }
 
 /**

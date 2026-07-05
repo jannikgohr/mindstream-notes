@@ -2,11 +2,18 @@ import { describe, expect, it } from 'vitest';
 import {
   defaultDraftText,
   dragPayloadFromTransfer,
+  dragItemsForStart,
   draftKindToNoteKind,
   emptyStateMessageForSource,
   FILE_EXPLORER_SOURCES,
+  itemFromSelectionKey,
   nodeKey,
-  type DraftKind
+  selectionKeyForItem,
+  selectionRange,
+  updateSelectionForClick,
+  visibleSelectionKeys,
+  type DraftKind,
+  type SelectionKey
 } from './file-explorer-helpers';
 import type { TreeNode } from '$lib/api';
 
@@ -34,6 +41,137 @@ describe('nodeKey', () => {
     const note = { kind: 'note', id: '2' } as TreeNode;
     expect(nodeKey(folder)).toBe('f:1');
     expect(nodeKey(note)).toBe('n:2');
+  });
+});
+
+describe('selection helpers', () => {
+  const treeNodes: TreeNode[] = [
+    {
+      kind: 'folder',
+      id: 'a',
+      name: 'A',
+      position: 0,
+      parent_collection_id: null,
+      children: [
+        {
+          kind: 'note',
+          id: 'a1',
+          name: 'A1',
+          position: 0,
+          parent_collection_id: 'a'
+        },
+        {
+          kind: 'folder',
+          id: 'b',
+          name: 'B',
+          position: 1,
+          parent_collection_id: 'a',
+          children: [
+            {
+              kind: 'note',
+              id: 'b1',
+              name: 'B1',
+              position: 0,
+              parent_collection_id: 'b'
+            }
+          ]
+        }
+      ]
+    },
+    {
+      kind: 'note',
+      id: 'root',
+      name: 'Root',
+      position: 1,
+      parent_collection_id: null
+    }
+  ];
+
+  it('converts between selection keys and item refs', () => {
+    expect(selectionKeyForItem({ kind: 'folder', id: 'a' })).toBe('f:a');
+    expect(selectionKeyForItem({ kind: 'note', id: 'n' })).toBe('n:n');
+    expect(itemFromSelectionKey('f:a')).toEqual({ kind: 'folder', id: 'a' });
+    expect(itemFromSelectionKey('n:n')).toEqual({ kind: 'note', id: 'n' });
+  });
+
+  it('flattens only visible tree rows', () => {
+    expect(visibleSelectionKeys(treeNodes, {})).toEqual(['f:a', 'n:root']);
+    expect(visibleSelectionKeys(treeNodes, { a: true })).toEqual([
+      'f:a',
+      'n:a1',
+      'f:b',
+      'n:root'
+    ]);
+    expect(visibleSelectionKeys(treeNodes, { a: true, b: true })).toEqual([
+      'f:a',
+      'n:a1',
+      'f:b',
+      'n:b1',
+      'n:root'
+    ]);
+  });
+
+  it('computes ranges in either direction', () => {
+    const visible: SelectionKey[] = ['f:a', 'n:a1', 'f:b', 'n:root'];
+    expect(selectionRange(visible, 'f:a', 'f:b')).toEqual([
+      'f:a',
+      'n:a1',
+      'f:b'
+    ]);
+    expect(selectionRange(visible, 'n:root', 'n:a1')).toEqual([
+      'n:a1',
+      'f:b',
+      'n:root'
+    ]);
+  });
+
+  it('updates selection for plain, toggle, and range clicks', () => {
+    const visible: SelectionKey[] = ['f:a', 'n:a1', 'f:b', 'n:root'];
+    expect(
+      updateSelectionForClick([], 'f:a', visible, null, {
+        toggle: false,
+        range: false
+      })
+    ).toEqual({ selected: ['f:a'], anchor: 'f:a' });
+
+    expect(
+      updateSelectionForClick(['f:a'], 'n:a1', visible, 'f:a', {
+        toggle: true,
+        range: false
+      })
+    ).toEqual({ selected: ['f:a', 'n:a1'], anchor: 'n:a1' });
+
+    expect(
+      updateSelectionForClick(['f:a'], 'f:b', visible, 'f:a', {
+        toggle: false,
+        range: true
+      })
+    ).toEqual({ selected: ['f:a', 'n:a1', 'f:b'], anchor: 'f:a' });
+  });
+
+  it('adds a range when ctrl/cmd is combined with shift', () => {
+    const visible: SelectionKey[] = ['f:a', 'n:a1', 'f:b', 'n:root'];
+    expect(
+      updateSelectionForClick(['n:root'], 'f:b', visible, 'f:a', {
+        toggle: true,
+        range: true
+      })
+    ).toEqual({
+      selected: ['n:root', 'f:a', 'n:a1', 'f:b'],
+      anchor: 'f:a'
+    });
+  });
+
+  it('drags the selected set only when drag starts on a selected item', () => {
+    expect(
+      dragItemsForStart({ kind: 'note', id: 'b' }, ['n:a', 'f:folder'])
+    ).toEqual([{ kind: 'note', id: 'b' }]);
+    expect(
+      dragItemsForStart({ kind: 'note', id: 'a' }, ['n:a', 'f:folder'])
+    ).toEqual([
+      { kind: 'note', id: 'a' },
+      { kind: 'folder', id: 'folder' }
+    ]);
   });
 });
 
@@ -91,6 +229,22 @@ describe('dragPayloadFromTransfer', () => {
   it('reads a folder id when present', () => {
     const t = transfer({ 'application/x-folder-id': 'f1' });
     expect(dragPayloadFromTransfer(t)).toEqual({ kind: 'folder', id: 'f1' });
+  });
+
+  it('reads a multi-item tree payload when present', () => {
+    const items = [
+      { kind: 'folder', id: 'f1' },
+      { kind: 'note', id: 'n1' }
+    ];
+    const t = transfer({
+      'application/x-tree-items': JSON.stringify(items),
+      'application/x-note-id': 'legacy'
+    });
+    expect(dragPayloadFromTransfer(t)).toEqual({
+      kind: 'folder',
+      id: 'f1',
+      items
+    });
   });
 
   it('prefers a note id over a folder id', () => {

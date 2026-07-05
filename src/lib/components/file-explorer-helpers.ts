@@ -21,9 +21,25 @@ export type MenuTarget =
   | { kind: 'folder'; id: string }
   | { kind: 'root' };
 
-export type Drag =
+export type TreeItemRef =
   | { kind: 'note'; id: string }
-  | { kind: 'folder'; id: string }
+  | { kind: 'folder'; id: string };
+
+export type SelectionKey = `n:${string}` | `f:${string}`;
+
+export interface SelectionClickModifiers {
+  toggle: boolean;
+  range: boolean;
+}
+
+export interface SelectionClickResult {
+  selected: SelectionKey[];
+  anchor: SelectionKey;
+}
+
+export type Drag =
+  | { kind: 'note'; id: string; items?: TreeItemRef[] }
+  | { kind: 'folder'; id: string; items?: TreeItemRef[] }
   | null;
 
 export const FILE_EXPLORER_SOURCES: {
@@ -83,6 +99,106 @@ export function nodeKey(n: TreeNode): string {
   return n.kind === 'folder' ? `f:${n.id}` : `n:${n.id}`;
 }
 
+export function selectionKeyForItem(item: TreeItemRef): SelectionKey {
+  return item.kind === 'folder' ? `f:${item.id}` : `n:${item.id}`;
+}
+
+export function itemFromSelectionKey(key: SelectionKey): TreeItemRef {
+  const [prefix, ...rest] = key.split(':');
+  const id = rest.join(':');
+  return prefix === 'f' ? { kind: 'folder', id } : { kind: 'note', id };
+}
+
+export function itemFromNode(node: TreeNode): TreeItemRef {
+  return { kind: node.kind, id: node.id };
+}
+
+export function visibleSelectionKeys(
+  nodes: TreeNode[],
+  expanded: Record<string, boolean>
+): SelectionKey[] {
+  const keys: SelectionKey[] = [];
+  for (const node of nodes) {
+    keys.push(nodeKey(node) as SelectionKey);
+    if (node.kind === 'folder' && expanded[node.id]) {
+      keys.push(...visibleSelectionKeys(node.children, expanded));
+    }
+  }
+  return keys;
+}
+
+export function updateSelectionForClick(
+  current: SelectionKey[],
+  clicked: SelectionKey,
+  visibleKeys: SelectionKey[],
+  anchor: SelectionKey | null,
+  modifiers: SelectionClickModifiers
+): SelectionClickResult {
+  if (modifiers.range) {
+    const range = selectionRange(visibleKeys, anchor ?? clicked, clicked);
+    if (modifiers.toggle) {
+      return {
+        selected: mergeSelection(current, range),
+        anchor: anchor ?? clicked
+      };
+    }
+    return { selected: range, anchor: anchor ?? clicked };
+  }
+
+  if (modifiers.toggle) {
+    return {
+      selected: toggleSelection(current, clicked),
+      anchor: clicked
+    };
+  }
+
+  return { selected: [clicked], anchor: clicked };
+}
+
+export function selectionRange(
+  visibleKeys: SelectionKey[],
+  from: SelectionKey,
+  to: SelectionKey
+): SelectionKey[] {
+  const fromIndex = visibleKeys.indexOf(from);
+  const toIndex = visibleKeys.indexOf(to);
+  if (fromIndex === -1 || toIndex === -1) return [to];
+  const start = Math.min(fromIndex, toIndex);
+  const end = Math.max(fromIndex, toIndex);
+  return visibleKeys.slice(start, end + 1);
+}
+
+export function toggleSelection(
+  current: SelectionKey[],
+  key: SelectionKey
+): SelectionKey[] {
+  if (current.includes(key)) return current.filter((item) => item !== key);
+  return [...current, key];
+}
+
+export function mergeSelection(
+  current: SelectionKey[],
+  next: SelectionKey[]
+): SelectionKey[] {
+  const selected = new Set(current);
+  for (const key of next) selected.add(key);
+  return [...selected];
+}
+
+export function selectedItemsFromKeys(keys: SelectionKey[]): TreeItemRef[] {
+  return keys.map(itemFromSelectionKey);
+}
+
+export function dragItemsForStart(
+  item: TreeItemRef,
+  selectedKeys: SelectionKey[]
+): TreeItemRef[] {
+  const key = selectionKeyForItem(item);
+  if (!selectedKeys.includes(key)) return [item];
+  const items = selectedItemsFromKeys(selectedKeys);
+  return items.length > 0 ? items : [item];
+}
+
 export function emptyStateMessageForSource(
   source: DesktopNoteSource,
   emptyRootLabel: string
@@ -103,6 +219,18 @@ export function dragPayloadFromTransfer(
   dataTransfer: DataTransfer | null
 ): Drag {
   if (!dataTransfer) return null;
+  const treeItems = dataTransfer.getData('application/x-tree-items');
+  if (treeItems) {
+    try {
+      const items = JSON.parse(treeItems) as TreeItemRef[];
+      const first = items[0];
+      if (first?.kind === 'note' || first?.kind === 'folder') {
+        return { ...first, items };
+      }
+    } catch {
+      // Fall back to legacy single-item payloads below.
+    }
+  }
   const noteId = dataTransfer.getData('application/x-note-id');
   if (noteId) return { kind: 'note', id: noteId };
   const folderId = dataTransfer.getData('application/x-folder-id');

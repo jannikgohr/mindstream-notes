@@ -29,15 +29,19 @@
     createNoteIn,
     emptyTrash,
     importPdfIn,
+    moveManyTo,
     moveCollectionTo,
     moveNoteTo,
+    purgeMany as purgeManyItems,
     purgeCollection,
     purgeNote,
     renameCollection,
     renameNote,
+    restoreMany as restoreManyItems,
     restoreCollection,
     restoreNote,
     setNoteFavourite,
+    trashMany as trashManyItems,
     trashCollection,
     trashNote
   } from '$lib/stores/tree.svelte';
@@ -57,12 +61,19 @@
     dragPayloadFromTransfer,
     draftKindToNoteKind,
     emptyStateMessageForSource,
+    dragItemsForStart,
     nodeKey,
+    selectedItemsFromKeys,
+    selectionKeyForItem,
+    updateSelectionForClick,
+    visibleSelectionKeys,
     type Draft,
     type DraftKind,
     type Drag,
     type MenuTarget,
-    type Rename
+    type Rename,
+    type SelectionKey,
+    type TreeItemRef
   } from './file-explorer-helpers';
 
   interface Props {
@@ -125,6 +136,12 @@
   let toolbarRow = $state<HTMLElement | null>(null);
   let sortControlCollapsed = $state(false);
   let expandedToolbarWidth = 0;
+  let selectedKeys = $state<SelectionKey[]>([]);
+  let selectionAnchor = $state<SelectionKey | null>(null);
+
+  const selectedKeySet = $derived(new Set(selectedKeys));
+  const selectedCount = $derived(selectedKeys.length);
+  let selectedSource = $state<DesktopNoteSource | null>(null);
 
   $effect(() => {
     if (!nameInput) return;
@@ -132,6 +149,17 @@
       nameInput?.focus();
       nameInput?.select();
     });
+  });
+
+  $effect(() => {
+    if (selectedSource === null) {
+      selectedSource = source;
+      return;
+    }
+    if (selectedSource === source) return;
+    selectedSource = source;
+    selectedKeys = [];
+    selectionAnchor = null;
   });
 
   function startDraft(kind: DraftKind, parentId: string | null) {
@@ -237,11 +265,15 @@
   async function openMenu(e: MouseEvent, target: MenuTarget) {
     e.preventDefault();
     e.stopPropagation();
+    selectTargetForContextMenu(target);
     const token = ++menuToken;
+    const batchItems = selectedItemsForTarget(target);
     const items =
-      target.kind === 'root' && !canCreate && source !== 'trash'
-        ? []
-        : await menuItemsForTarget(target);
+      batchItems.length > 1
+        ? await menuItemsForBatch(batchItems)
+        : target.kind === 'root' && !canCreate && source !== 'trash'
+          ? []
+          : await menuItemsForTarget(target);
     if (token !== menuToken) return;
     if (items.length === 0) return;
     menuX = e.clientX;
@@ -308,6 +340,103 @@
   async function commitDelete(id: string) {
     deleteConfirmId = null;
     await trashNote(id);
+  }
+
+  function selectNodeFromClick(e: MouseEvent, node: TreeNode): boolean {
+    const key = nodeKey(node) as SelectionKey;
+    const result = updateSelectionForClick(
+      selectedKeys,
+      key,
+      visibleSelectionKeys(sourceNodes, expanded),
+      selectionAnchor,
+      {
+        toggle: e.ctrlKey || e.metaKey,
+        range: e.shiftKey
+      }
+    );
+    selectedKeys = result.selected;
+    selectionAnchor = result.anchor;
+    return e.ctrlKey || e.metaKey || e.shiftKey;
+  }
+
+  function selectTargetForContextMenu(target: MenuTarget) {
+    if (target.kind === 'root') return;
+    const key = selectionKeyForItem(target);
+    if (selectedKeySet.has(key)) return;
+    selectedKeys = [key];
+    selectionAnchor = key;
+  }
+
+  function selectedItemsForTarget(target: MenuTarget): TreeItemRef[] {
+    if (target.kind === 'root') return [];
+    const key = selectionKeyForItem(target);
+    if (selectedKeySet.has(key) && selectedCount > 1) {
+      return selectedItemsFromKeys(selectedKeys);
+    }
+    return [target];
+  }
+
+  function batchLabel(items: TreeItemRef[]): string {
+    return `${items.length} item${items.length === 1 ? '' : 's'}`;
+  }
+
+  async function menuItemsForBatch(
+    items: TreeItemRef[]
+  ): Promise<(MenuItem | 'separator')[]> {
+    if (items.length <= 1) return [];
+    const label = batchLabel(items);
+
+    if (source === 'trash') {
+      return [
+        {
+          label: `Restore ${label}`,
+          onSelect: () => void restoreManyItems(items)
+        },
+        {
+          label: `Delete ${label} permanently`,
+          destructive: true,
+          onSelect: async () => {
+            if (
+              await confirm({
+                title: 'Delete permanently',
+                message: `${label} will be removed. This cannot be undone.`,
+                confirmLabel: 'Delete',
+                destructive: true
+              })
+            ) {
+              void purgeManyItems(items);
+            }
+          }
+        }
+      ];
+    }
+
+    if (!canReorganize) return [];
+
+    return [
+      {
+        label: `Move ${label} to root`,
+        onSelect: () => void moveManyTo(items, null)
+      },
+      'separator',
+      {
+        label: `Delete ${label}`,
+        shortcut: 'Del',
+        destructive: true,
+        onSelect: async () => {
+          if (
+            await confirm({
+              title: `Delete ${label}`,
+              message: `${label} will be moved to trash.`,
+              confirmLabel: 'Delete',
+              destructive: true
+            })
+          ) {
+            void trashManyItems(items);
+          }
+        }
+      }
+    ];
   }
 
   async function menuItemsForTarget(
@@ -505,22 +634,35 @@
   let drag = $state<Drag>(null);
   let dragOver = $state<string | null>(null);
 
+  function setDragPayload(e: DragEvent, item: TreeItemRef): Drag {
+    if (!e.dataTransfer) return null;
+    const items = dragItemsForStart(item, selectedKeys);
+    const key = selectionKeyForItem(item);
+    if (!selectedKeySet.has(key)) {
+      selectedKeys = [key];
+      selectionAnchor = key;
+    }
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('application/x-tree-items', JSON.stringify(items));
+    if (item.kind === 'note') {
+      e.dataTransfer.setData('application/x-note-id', item.id);
+    } else {
+      e.dataTransfer.setData('application/x-folder-id', item.id);
+    }
+    e.dataTransfer.setData('text/plain', item.id);
+    return { ...item, items };
+  }
+
   function onNoteDragStart(e: DragEvent, noteId: string) {
     if (!canReorganize) return;
     if (!e.dataTransfer) return;
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('application/x-note-id', noteId);
-    e.dataTransfer.setData('text/plain', noteId);
-    drag = { kind: 'note', id: noteId };
+    drag = setDragPayload(e, { kind: 'note', id: noteId });
   }
   function onFolderDragStart(e: DragEvent, folderId: string) {
     if (!canReorganize) return;
     if (!e.dataTransfer) return;
     e.stopPropagation();
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('application/x-folder-id', folderId);
-    e.dataTransfer.setData('text/plain', folderId);
-    drag = { kind: 'folder', id: folderId };
+    drag = setDragPayload(e, { kind: 'folder', id: folderId });
   }
   function onDragEnd() {
     drag = null;
@@ -529,7 +671,10 @@
   function canDropOnFolder(targetFolderId: string | null): boolean {
     if (!canReorganize) return false;
     if (!drag) return true;
-    return !(drag.kind === 'folder' && targetFolderId === drag.id);
+    const items = drag.items ?? [drag];
+    return !items.some(
+      (item) => item.kind === 'folder' && targetFolderId === item.id
+    );
   }
   function onDragOverFolder(e: DragEvent, folderId: string) {
     if (!e.dataTransfer) return;
@@ -559,6 +704,10 @@
   function readPayload(e: DragEvent): Drag {
     return dragPayloadFromTransfer(e.dataTransfer);
   }
+  function payloadItems(payload: Drag): TreeItemRef[] {
+    if (!payload) return [];
+    return payload.items ?? [{ kind: payload.kind, id: payload.id }];
+  }
   async function onDropOnFolder(e: DragEvent, targetFolderId: string) {
     e.preventDefault();
     e.stopPropagation();
@@ -566,8 +715,7 @@
     dragOver = null;
     drag = null;
     if (!payload) return;
-    if (payload.kind === 'note') await moveNoteTo(payload.id, targetFolderId);
-    else await moveCollectionTo(payload.id, targetFolderId);
+    await moveManyTo(payloadItems(payload), targetFolderId);
   }
   async function onDropOnRoot(e: DragEvent) {
     if (!canReorganize) return;
@@ -576,8 +724,7 @@
     dragOver = null;
     drag = null;
     if (!payload) return;
-    if (payload.kind === 'note') await moveNoteTo(payload.id, null);
-    else await moveCollectionTo(payload.id, null);
+    await moveManyTo(payloadItems(payload), null);
   }
 
   function toggleFolder(id: string) {
@@ -864,15 +1011,19 @@
 {#snippet renderNode(node: TreeNode)}
   {#if node.kind === 'folder'}
     {@const isOver = dragOver === `f:${node.id}`}
+    {@const isSelected = selectedKeySet.has(nodeKey(node) as SelectionKey)}
     {@const renaming =
       rename && rename.kind === 'folder' && rename.id === node.id}
     <button
       type="button"
       draggable={canReorganize}
       class="flex w-full items-center gap-1 rounded-md px-2 py-1 text-left hover:bg-accent hover:text-accent-foreground"
-      class:bg-accent={isOver}
+      class:bg-accent={isOver || isSelected}
       class:opacity-60={drag?.kind === 'folder' && drag.id === node.id}
-      onclick={() => toggleFolder(node.id)}
+      onclick={(e) => {
+        const modified = selectNodeFromClick(e, node);
+        if (!modified) toggleFolder(node.id);
+      }}
       oncontextmenu={(e) => openMenu(e, { kind: 'folder', id: node.id })}
       ondragstart={(e) => onFolderDragStart(e, node.id)}
       ondragend={onDragEnd}
@@ -906,6 +1057,7 @@
     {/if}
   {:else}
     {@const isOver = dragOver === `n:${node.id}`}
+    {@const isSelected = selectedKeySet.has(nodeKey(node) as SelectionKey)}
     {@const renaming =
       rename && rename.kind === 'note' && rename.id === node.id}
     {@const note = tree.notesById[node.id]}
@@ -928,7 +1080,7 @@
       role="group"
       draggable={canReorganize}
       class="group flex w-full items-center gap-0.5 rounded-md pr-1 hover:bg-accent hover:text-accent-foreground"
-      class:bg-accent={isOver}
+      class:bg-accent={isOver || isSelected}
       class:opacity-60={drag?.kind === 'note' && drag.id === node.id}
       ondragstart={(e) => onNoteDragStart(e, node.id)}
       ondragend={onDragEnd}
@@ -938,7 +1090,10 @@
       <button
         type="button"
         class="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1 text-left"
-        onclick={() => onOpenNote(node.id)}
+        onclick={(e) => {
+          const modified = selectNodeFromClick(e, node);
+          if (!modified) onOpenNote(node.id);
+        }}
         oncontextmenu={(e) => openMenu(e, { kind: 'note', id: node.id })}
       >
         <NoteIcon class="size-3.5 shrink-0 text-muted-foreground" />
