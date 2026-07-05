@@ -200,14 +200,17 @@ describe('detectPaperQuad', () => {
     expect(cornerError(quad!, paper)).toBeLessThan(14);
   });
 
-  it('needs the saturation mask for that — brightness alone wraps the hand', () => {
-    // Guards the regression test above against becoming vacuous: on the
-    // same scene, a disabled saturation ceiling reproduces the merged
-    // paper+hand quad (or fails detection outright).
+  it('recovers the paper even without the saturation mask (edge path)', () => {
+    // With the saturation ceiling disabled the region pass merges
+    // paper+hand into one bright blob — historically a wildly wrong
+    // quad. The perimeter-support score rejects that blob (its bulged
+    // sides lie on no straight edge) and the Hough edge path recovers
+    // the true outline instead. Slightly less precise than the strict
+    // pass, which is why the region path keeps its saturation mask.
     const scene = renderScene(640, 480, paper, { hands: gripHands });
     const quad = detectPaperQuad(scene, { maxSaturation: 1 });
-    const error = quad ? cornerError(quad, paper) : Infinity;
-    expect(error).toBeGreaterThan(50);
+    expect(quad).not.toBeNull();
+    expect(cornerError(quad!, paper)).toBeLessThan(25);
   });
 
   it('falls back to brightness-only detection for coloured paper', () => {
@@ -217,6 +220,62 @@ describe('detectPaperQuad', () => {
     const quad = detectPaperQuad(scene);
     expect(quad).not.toBeNull();
     expect(cornerError(quad!, paper)).toBeLessThan(8);
+  });
+
+  it('finds white paper on a white desk via the edge path', () => {
+    // The classic region-pass failure: desk (200) and paper (215) are
+    // both on the bright side of any Otsu split, and a soft shadow
+    // darkens the right of the frame so the split follows the room
+    // lighting instead of the sheet. What remains of the paper is its
+    // hairline edge seam (185) — only the gradient/Hough path reads it.
+    const paper = [
+      { x: 120, y: 80 },
+      { x: 480, y: 90 },
+      { x: 470, y: 360 },
+      { x: 110, y: 340 }
+    ];
+    const cx = paper.reduce((s, p) => s + p.x, 0) / 4;
+    const cy = paper.reduce((s, p) => s + p.y, 0) / 4;
+    const grow = (f: number) =>
+      paper.map((p) => ({
+        x: cx + (p.x - cx) * f,
+        y: cy + (p.y - cy) * f
+      }));
+    const outer = grow(1.02);
+    const inQuad = (px: number, py: number, q: QuadPoint[]): boolean => {
+      let sign = 0;
+      for (let i = 0; i < q.length; i++) {
+        const a = q[i];
+        const b = q[(i + 1) % q.length];
+        const cross = (b.x - a.x) * (py - a.y) - (b.y - a.y) * (px - a.x);
+        if (cross !== 0) {
+          const s = Math.sign(cross);
+          if (sign === 0) sign = s;
+          else if (s !== sign) return false;
+        }
+      }
+      return true;
+    };
+    const width = 640;
+    const height = 480;
+    const data = new Uint8ClampedArray(width * height * 4);
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        let level = 200; // desk
+        // Soft shadow ramp over the frame's right side.
+        if (x > 500) level = Math.max(130, 200 - (x - 500) * 0.5);
+        if (inQuad(x, y, outer)) level = 185; // paper-edge seam
+        if (inQuad(x, y, paper)) level = 215; // paper
+        const o = (y * width + x) * 4;
+        data[o] = level;
+        data[o + 1] = level;
+        data[o + 2] = level;
+        data[o + 3] = 255;
+      }
+    }
+    const quad = detectPaperQuad({ width, height, data });
+    expect(quad).not.toBeNull();
+    expect(cornerError(quad!, paper)).toBeLessThan(16);
   });
 
   it('returns null when there is no paper', () => {
@@ -243,8 +302,12 @@ describe('detectPaperQuad', () => {
     expect(detectPaperQuad(renderScene(640, 480, full))).toBeNull();
   });
 
-  it('returns null for a non-quadrilateral bright shape', () => {
-    // L-shaped bright region: low solidity vs its hull.
+  it('crops a rectangular part out of an L-shaped bright region', () => {
+    // An L (e.g. two overlapping sheets, or paper beside a lit strip)
+    // is not a quad: the region pass rejects it on solidity, and
+    // historically detection returned null. The edge path now finds the
+    // largest clean rectangle inside it — either bar of the L is an
+    // acceptable, fully edge-supported crop.
     const scene = renderScene(640, 480, null);
     for (let y = 40; y < 440; y++) {
       for (let x = 40; x < 600; x++) {
@@ -256,7 +319,25 @@ describe('detectPaperQuad', () => {
         scene.data[o + 2] = 230;
       }
     }
-    expect(detectPaperQuad(scene)).toBeNull();
+    const quad = detectPaperQuad(scene);
+    expect(quad).not.toBeNull();
+    const verticalBar = [
+      { x: 40, y: 40 },
+      { x: 200, y: 40 },
+      { x: 200, y: 440 },
+      { x: 40, y: 440 }
+    ];
+    const horizontalBar = [
+      { x: 40, y: 320 },
+      { x: 600, y: 320 },
+      { x: 600, y: 440 },
+      { x: 40, y: 440 }
+    ];
+    const error = Math.min(
+      cornerError(quad!, verticalBar),
+      cornerError(quad!, horizontalBar)
+    );
+    expect(error).toBeLessThan(25);
   });
 });
 
