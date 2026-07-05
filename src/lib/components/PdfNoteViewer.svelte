@@ -4044,12 +4044,6 @@
   }
 
   :global(.pdf-page-host .pdf-app-annotation-signature) {
-    border: 1px solid transparent;
-    border-bottom-color: color-mix(
-      in srgb,
-      var(--annotation-color) 70%,
-      transparent
-    );
     background: rgb(255 255 255 / 0.54);
     padding: 3px 6px;
   }
