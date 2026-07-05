@@ -89,6 +89,15 @@ describe('strokeOutlinePath', () => {
   it('returns an empty string for empty input', () => {
     expect(strokeOutlinePath({ width: 4, points: [] })).toBe('');
   });
+
+  it('falls back to nominal pressure when every point has zero pressure', () => {
+    const d = strokeOutlinePath({
+      width: 4,
+      points: line([0, 0, 0, 0])
+    });
+    expect(d.startsWith('M ')).toBe(true);
+    expect(d.endsWith('Z')).toBe(true);
+  });
 });
 
 describe('strokeBounds', () => {
@@ -169,5 +178,15 @@ describe('cloneSignatureSnapshot', () => {
     expect(clone.strokes[0]).not.toBe(original.strokes[0]);
     expect(clone.strokes[0].points[0]).not.toBe(original.strokes[0].points[0]);
     expect(clone.image).not.toBe(original.image);
+  });
+
+  it('omits the optional image when cloning a stroke-only signature', () => {
+    const original = {
+      id: 'sig',
+      width: 100,
+      height: 50,
+      strokes: [stroke()]
+    };
+    expect(cloneSignatureSnapshot(original)).not.toHaveProperty('image');
   });
 });

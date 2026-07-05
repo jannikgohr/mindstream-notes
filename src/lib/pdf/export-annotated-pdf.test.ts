@@ -57,6 +57,11 @@ async function readPageAnnots(bytes: Uint8Array, pageIndex = 0) {
   });
 }
 
+function arrayNumbers(value: unknown): number[] {
+  expect(value).toBeInstanceOf(PDFArray);
+  return (value as PDFArray).asArray().map((n) => Number(n.toString()));
+}
+
 describe('exportAnnotatedPdf', () => {
   it('returns a parseable PDF when no annotations are present', async () => {
     const source = await makeBlankPdfBytes();
@@ -94,6 +99,16 @@ describe('exportAnnotatedPdf', () => {
     const annots = await readPageAnnots(out);
     expect(annots).toHaveLength(1);
     expect(annots[0].get(PDFName.of('Subtype'))).toEqual(PDFName.of('Square'));
+  });
+
+  it('falls back to black and a zero rect for malformed comment geometry', async () => {
+    const source = await makeBlankPdfBytes();
+    const out = await exportAnnotatedPdf(source, [
+      annotation({ type: 'comment', color: '#bad', rects: [] })
+    ]);
+    const [dict] = await readPageAnnots(out);
+    expect(arrayNumbers(dict.get(PDFName.of('C')))).toEqual([0, 0, 0]);
+    expect(arrayNumbers(dict.get(PDFName.of('Rect')))).toEqual([0, 0, 0, 0]);
   });
 
   it('writes an /Ink annotation with an InkList for pen strokes', async () => {
@@ -276,6 +291,37 @@ describe('exportAnnotatedPdf', () => {
     for (const dict of annots) {
       expect(dict.get(PDFName.of('Contents'))).toBeDefined();
     }
+  });
+
+  it('skips ink and signature annotations without exportable strokes', async () => {
+    const source = await makeBlankPdfBytes();
+    const out = await exportAnnotatedPdf(source, [
+      annotation({ type: 'ink', strokes: undefined }),
+      annotation({
+        type: 'ink',
+        strokes: [
+          { id: 's1', color: '#111827', width: 2, points: [{ x: 1, y: 1 }] }
+        ]
+      }),
+      annotation({ type: 'signature', signature: undefined }),
+      annotation({
+        type: 'signature',
+        signature: {
+          id: 'sig-1',
+          width: 420,
+          height: 168,
+          strokes: [
+            {
+              id: 'pad-s1',
+              color: '#111827',
+              width: 3,
+              points: [{ x: 0, y: 0 }]
+            }
+          ]
+        }
+      })
+    ]);
+    expect(await readPageAnnots(out)).toHaveLength(0);
   });
 
   it('falls back to the stroke appearance when the PNG cannot be embedded', async () => {
