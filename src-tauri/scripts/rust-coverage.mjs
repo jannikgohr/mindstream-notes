@@ -8,9 +8,9 @@
 // Scope mirrors the frontend's coverage scoping (vitest.config.ts): the
 // unit metric covers the *logic* layer. Excluded files are integration /
 // IPC / UI surfaces proven by e2e and manual testing rather than unit
-// tests — Tauri entry/builder glue (lib, main), the system tray UI,
-// global-shortcut + desktop-settings + drawing command shims, the PDF
-// render pipeline, the Etebase network sync engine (sync/{mod,repair,
+// tests — Tauri entry/builder glue (lib, main), the system tray and native
+// menu UI, global-shortcut + desktop-settings + drawing command shims, the
+// PDF render pipeline, the Etebase network sync engine (sync/{mod,repair,
 // scheduler}) and network/keyring auth (auth/mod), plus the trivial
 // system/error/i18n shims and the migration runner.
 
@@ -22,7 +22,7 @@ const IGNORE_REGEX = [
   'sync[/\\\\](mod|repair|scheduler)\\.rs$',
   'auth[/\\\\]mod\\.rs$',
   'drawing[/\\\\]mod\\.rs$',
-  '(tray|hotkeys|desktop_settings|pdf_export|system|error|i18n)\\.rs$',
+  '(tray|native_menu|hotkeys|desktop_settings|pdf_export|system|error|i18n)\\.rs$',
   '(lib|main)\\.rs$',
   'migrations\\.rs$'
 ].join('|');

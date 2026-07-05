@@ -24,6 +24,24 @@ export function setStartInTray(value: boolean): Promise<void> {
   );
 }
 
+export function getCustomWindowDecorations(): Promise<boolean> {
+  return invokeOrFallback<boolean>(
+    'get_custom_window_decorations',
+    undefined,
+    () =>
+      typeof navigator === 'undefined' ||
+      !/mac os x|macintosh/i.test(navigator.userAgent)
+  );
+}
+
+export function setCustomWindowDecorations(value: boolean): Promise<void> {
+  return invokeOrFallback<void>(
+    'set_custom_window_decorations',
+    { value },
+    () => undefined
+  );
+}
+
 export function getDesktopLanguage(): Promise<string> {
   return invokeOrFallback<string>(
     'get_desktop_language',

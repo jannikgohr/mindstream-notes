@@ -7,6 +7,7 @@
 
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { isTauri } from './core';
+import { getCustomWindowDecorations } from './desktop-settings';
 import {
   type DockviewApi,
   type IDockviewGroupPanel,
@@ -108,6 +109,7 @@ export async function openNoteWindow(
     return;
   }
 
+  const customWindowDecorations = await getCustomWindowDecorations();
   const win = new WebviewWindow(id, {
     title,
     width: 900,
@@ -116,7 +118,7 @@ export async function openNoteWindow(
     minHeight: 420,
     center: true,
     resizable: true,
-    decorations: false,
+    decorations: !customWindowDecorations,
     dragDropEnabled: false,
     // Match the active theme so the popout's first paint isn't a white flash.
     backgroundColor: themedWindowBackground()
