@@ -130,6 +130,7 @@
   let emptyTrashAnimation = $state(0);
   let emptyTrashParticleCount = $state(0);
   let deleteConfirmId = $state<string | null>(null);
+  let explorerRoot = $state<HTMLElement | null>(null);
   let sourceChipRow = $state<HTMLElement | null>(null);
   let sourceChipsCollapsed = $state(false);
   let expandedSourceChipWidth = 0;
@@ -143,6 +144,17 @@
   const selectedKeySet = $derived(new Set(selectedKeys));
   const selectedCount = $derived(selectedKeys.length);
   let selectedSource = $state<DesktopNoteSource | null>(null);
+
+  function clearFileTreeInteractionState(blurFocusedControl = false) {
+    selectedKeys = [];
+    selectionAnchor = null;
+    activeKey = null;
+    if (!blurFocusedControl || !explorerRoot) return;
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && explorerRoot.contains(active)) {
+      active.blur();
+    }
+  }
 
   $effect(() => {
     if (!nameInput) return;
@@ -159,9 +171,7 @@
     }
     if (selectedSource === source) return;
     selectedSource = source;
-    selectedKeys = [];
-    selectionAnchor = null;
-    activeKey = null;
+    clearFileTreeInteractionState();
   });
 
   function startDraft(kind: DraftKind, parentId: string | null) {
@@ -740,6 +750,13 @@
     return emptyStateMessageForSource(source, tUi('fileTree.emptyRoot'));
   }
 
+  function onTreePointerDown(e: PointerEvent) {
+    const target = e.target;
+    if (!(target instanceof Element)) return;
+    if (target.closest('[data-file-tree-node], button, input')) return;
+    clearFileTreeInteractionState(true);
+  }
+
   function updateSourceChipCollapse() {
     if (!sourceChipRow) return;
     if (!sourceChipsCollapsed) {
@@ -763,8 +780,17 @@
     const toolbarObserver = new ResizeObserver(() =>
       updateSortControlCollapse()
     );
+    const onDocumentPointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (explorerRoot?.contains(target)) return;
+      clearFileTreeInteractionState(true);
+    };
     if (sourceChipRow) sourceObserver.observe(sourceChipRow);
     if (toolbarRow) toolbarObserver.observe(toolbarRow);
+    document.addEventListener('pointerdown', onDocumentPointerDown, {
+      capture: true
+    });
     requestAnimationFrame(() => {
       updateSourceChipCollapse();
       updateSortControlCollapse();
@@ -772,6 +798,9 @@
     return () => {
       sourceObserver.disconnect();
       toolbarObserver.disconnect();
+      document.removeEventListener('pointerdown', onDocumentPointerDown, {
+        capture: true
+      });
     };
   });
 
@@ -796,6 +825,7 @@
 </script>
 
 <aside
+  bind:this={explorerRoot}
   class="flex h-full w-full flex-col bg-card text-sm"
   oncontextmenu={(e) => openMenu(e, { kind: 'root' })}
 >
@@ -940,6 +970,7 @@
     ondragover={onDragOverRoot}
     ondragleave={onDragLeave}
     ondrop={onDropOnRoot}
+    onpointerdown={onTreePointerDown}
   >
     {#if tree.error}
       <p class="px-2 py-3 text-xs text-destructive">
@@ -1021,6 +1052,7 @@
     {@const renaming =
       rename && rename.kind === 'folder' && rename.id === node.id}
     <button
+      data-file-tree-node
       type="button"
       draggable={canReorganize}
       class="flex w-full items-center gap-1 rounded-md px-2 py-1 text-left ring-offset-background hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
@@ -1083,6 +1115,7 @@
          start a drag from either side; only the main button responds
          to click + contextmenu. -->
     <div
+      data-file-tree-node
       role="group"
       draggable={canReorganize}
       class="file-tree-note-row group flex w-full items-center gap-0.5 rounded-md pr-1 hover:bg-accent hover:text-accent-foreground"
