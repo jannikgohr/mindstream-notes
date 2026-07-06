@@ -128,37 +128,112 @@ describe('selection helpers', () => {
   it('updates selection for plain, toggle, and range clicks', () => {
     const visible: SelectionKey[] = ['f:a', 'n:a1', 'f:b', 'n:root'];
     expect(
-      updateSelectionForClick([], 'f:a', visible, null, {
+      updateSelectionForClick([], 'f:a', visible, null, null, {
         toggle: false,
         range: false
       })
-    ).toEqual({ selected: ['f:a'], anchor: 'f:a' });
+    ).toEqual({ selected: [], anchor: null, active: 'f:a' });
 
     expect(
-      updateSelectionForClick(['f:a'], 'n:a1', visible, 'f:a', {
+      updateSelectionForClick([], 'n:a1', visible, null, 'f:a', {
         toggle: true,
         range: false
       })
-    ).toEqual({ selected: ['f:a', 'n:a1'], anchor: 'n:a1' });
+    ).toEqual({ selected: ['n:a1'], anchor: 'n:a1', active: 'n:a1' });
 
     expect(
-      updateSelectionForClick(['f:a'], 'f:b', visible, 'f:a', {
+      updateSelectionForClick(['n:a1'], 'f:b', visible, 'n:a1', 'n:a1', {
+        toggle: true,
+        range: false
+      })
+    ).toEqual({ selected: ['n:a1', 'f:b'], anchor: 'f:b', active: 'f:b' });
+
+    expect(
+      updateSelectionForClick([], 'f:b', visible, null, 'f:a', {
         toggle: false,
         range: true
       })
-    ).toEqual({ selected: ['f:a', 'n:a1', 'f:b'], anchor: 'f:a' });
+    ).toEqual({
+      selected: ['f:a', 'n:a1', 'f:b'],
+      anchor: 'f:a',
+      active: 'f:b'
+    });
   });
 
   it('adds a range when ctrl/cmd is combined with shift', () => {
     const visible: SelectionKey[] = ['f:a', 'n:a1', 'f:b', 'n:root'];
     expect(
-      updateSelectionForClick(['n:root'], 'f:b', visible, 'f:a', {
+      updateSelectionForClick(['n:root'], 'f:b', visible, 'f:a', 'n:root', {
         toggle: true,
         range: true
       })
     ).toEqual({
       selected: ['n:root', 'f:a', 'n:a1', 'f:b'],
-      anchor: 'f:a'
+      anchor: 'f:a',
+      active: 'f:b'
+    });
+  });
+
+  it('does not add the plain-clicked active item to the first ctrl/cmd click', () => {
+    const visible: SelectionKey[] = ['f:a', 'n:a1', 'f:b', 'n:root'];
+    const plain = updateSelectionForClick([], 'f:a', visible, null, null, {
+      toggle: false,
+      range: false
+    });
+
+    expect(
+      updateSelectionForClick(
+        plain.selected,
+        'n:root',
+        visible,
+        plain.anchor,
+        plain.active,
+        {
+          toggle: true,
+          range: false
+        }
+      )
+    ).toEqual({
+      selected: ['n:root'],
+      anchor: 'n:root',
+      active: 'n:root'
+    });
+  });
+
+  it('clears the batch when ctrl/cmd toggles the only selected item off', () => {
+    const visible: SelectionKey[] = ['f:a', 'n:a1', 'f:b', 'n:root'];
+
+    expect(
+      updateSelectionForClick(['n:a1'], 'n:a1', visible, 'n:a1', 'n:a1', {
+        toggle: true,
+        range: false
+      })
+    ).toEqual({
+      selected: [],
+      anchor: null,
+      active: 'n:a1'
+    });
+  });
+
+  it('clears an existing batch on plain click while keeping the clicked item active', () => {
+    const visible: SelectionKey[] = ['f:a', 'n:a1', 'f:b', 'n:root'];
+
+    expect(
+      updateSelectionForClick(
+        ['n:a1', 'f:b'],
+        'n:root',
+        visible,
+        'f:b',
+        'f:b',
+        {
+          toggle: false,
+          range: false
+        }
+      )
+    ).toEqual({
+      selected: [],
+      anchor: null,
+      active: 'n:root'
     });
   });
 

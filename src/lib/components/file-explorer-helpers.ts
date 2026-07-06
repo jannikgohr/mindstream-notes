@@ -34,7 +34,8 @@ export interface SelectionClickModifiers {
 
 export interface SelectionClickResult {
   selected: SelectionKey[];
-  anchor: SelectionKey;
+  anchor: SelectionKey | null;
+  active: SelectionKey;
 }
 
 export type Drag =
@@ -132,27 +133,33 @@ export function updateSelectionForClick(
   clicked: SelectionKey,
   visibleKeys: SelectionKey[],
   anchor: SelectionKey | null,
+  active: SelectionKey | null,
   modifiers: SelectionClickModifiers
 ): SelectionClickResult {
   if (modifiers.range) {
-    const range = selectionRange(visibleKeys, anchor ?? clicked, clicked);
+    const rangeStart = anchor ?? active ?? clicked;
+    const range = selectionRange(visibleKeys, rangeStart, clicked);
     if (modifiers.toggle) {
       return {
         selected: mergeSelection(current, range),
-        anchor: anchor ?? clicked
+        anchor: rangeStart,
+        active: clicked
       };
     }
-    return { selected: range, anchor: anchor ?? clicked };
+    return { selected: range, anchor: rangeStart, active: clicked };
   }
 
   if (modifiers.toggle) {
+    const selected =
+      current.length === 0 ? [clicked] : toggleSelection(current, clicked);
     return {
-      selected: toggleSelection(current, clicked),
-      anchor: clicked
+      selected,
+      anchor: selected.length > 0 ? clicked : null,
+      active: clicked
     };
   }
 
-  return { selected: [clicked], anchor: clicked };
+  return { selected: [], anchor: null, active: clicked };
 }
 
 export function selectionRange(

@@ -138,6 +138,7 @@
   let expandedToolbarWidth = 0;
   let selectedKeys = $state<SelectionKey[]>([]);
   let selectionAnchor = $state<SelectionKey | null>(null);
+  let activeKey = $state<SelectionKey | null>(null);
 
   const selectedKeySet = $derived(new Set(selectedKeys));
   const selectedCount = $derived(selectedKeys.length);
@@ -160,6 +161,7 @@
     selectedSource = source;
     selectedKeys = [];
     selectionAnchor = null;
+    activeKey = null;
   });
 
   function startDraft(kind: DraftKind, parentId: string | null) {
@@ -349,6 +351,7 @@
       key,
       visibleSelectionKeys(sourceNodes, expanded),
       selectionAnchor,
+      activeKey,
       {
         toggle: e.ctrlKey || e.metaKey,
         range: e.shiftKey
@@ -356,6 +359,7 @@
     );
     selectedKeys = result.selected;
     selectionAnchor = result.anchor;
+    activeKey = result.active;
     return e.ctrlKey || e.metaKey || e.shiftKey;
   }
 
@@ -365,6 +369,7 @@
     if (selectedKeySet.has(key)) return;
     selectedKeys = [key];
     selectionAnchor = key;
+    activeKey = key;
   }
 
   function selectedItemsForTarget(target: MenuTarget): TreeItemRef[] {
@@ -641,6 +646,7 @@
     if (!selectedKeySet.has(key)) {
       selectedKeys = [key];
       selectionAnchor = key;
+      activeKey = key;
     }
     e.dataTransfer.effectAllowed = 'move';
     e.dataTransfer.setData('application/x-tree-items', JSON.stringify(items));
