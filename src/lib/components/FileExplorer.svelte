@@ -1017,7 +1017,7 @@
     <button
       type="button"
       draggable={canReorganize}
-      class="flex w-full items-center gap-1 rounded-md px-2 py-1 text-left hover:bg-accent hover:text-accent-foreground"
+      class="flex w-full items-center gap-1 rounded-md px-2 py-1 text-left ring-offset-background hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
       class:bg-accent={isOver || isSelected}
       class:opacity-60={drag?.kind === 'folder' && drag.id === node.id}
       onclick={(e) => {
@@ -1079,7 +1079,7 @@
     <div
       role="group"
       draggable={canReorganize}
-      class="group flex w-full items-center gap-0.5 rounded-md pr-1 hover:bg-accent hover:text-accent-foreground"
+      class="file-tree-note-row group flex w-full items-center gap-0.5 rounded-md pr-1 hover:bg-accent hover:text-accent-foreground"
       class:bg-accent={isOver || isSelected}
       class:opacity-60={drag?.kind === 'note' && drag.id === node.id}
       ondragstart={(e) => onNoteDragStart(e, node.id)}
@@ -1089,7 +1089,7 @@
     >
       <button
         type="button"
-        class="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1 text-left"
+        class="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1 text-left focus-visible:outline-none"
         onclick={(e) => {
           const modified = selectNodeFromClick(e, node);
           if (!modified) onOpenNote(node.id);
@@ -1181,6 +1181,11 @@
   .source-chip-row-collapsed .source-chip.source-chip-active {
     min-width: 0;
     flex: 1 1 auto;
+  }
+
+  .file-tree-note-row:has(:focus-visible) {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
   }
 
   .trash-suck-particles {
