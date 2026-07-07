@@ -31,6 +31,7 @@
   import MobileBreadcrumb from './MobileBreadcrumb.svelte';
   import MobileToolbar from './MobileToolbar.svelte';
   import MobileNoteList from './MobileNoteList.svelte';
+  import { mobileBatchSelection } from './state.svelte';
   import MobileFab, { type FabAction } from './MobileFab.svelte';
   import MobileBottomNav from './MobileBottomNav.svelte';
   import MobileEditor from './MobileEditor.svelte';
@@ -195,7 +196,9 @@
   // creating notes makes sense (favourites is a virtual filter, trash
   // is read-only, shared has no model yet).
   const fabVisible = $derived(
-    mobileState.view === 'home' && mobileState.screen === 'home'
+    mobileState.view === 'home' &&
+      mobileState.screen === 'home' &&
+      !mobileBatchSelection.active
   );
 
   const showHome = $derived(mobileState.screen === 'home');

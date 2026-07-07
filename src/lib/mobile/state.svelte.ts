@@ -31,6 +31,15 @@ export type MobileView = 'home' | 'shared' | 'favourite' | 'trash';
 
 export type DisplayMode = 'list' | 'grid';
 
+export type MobileBatchItem =
+  | { kind: 'note'; id: string }
+  | { kind: 'folder'; id: string };
+
+interface MobileBatchSelectionState {
+  active: boolean;
+  items: MobileBatchItem[];
+}
+
 interface MobileState {
   screen: MobileScreen;
   view: MobileView;
@@ -58,6 +67,49 @@ export const mobileState = $state<MobileState>({
   displayMode: loadDisplayMode(),
   fabExpanded: false
 });
+
+export const mobileBatchSelection = $state<MobileBatchSelectionState>({
+  active: false,
+  items: []
+});
+
+export function mobileBatchKey(item: MobileBatchItem): string {
+  return `${item.kind}:${item.id}`;
+}
+
+export function isMobileBatchSelected(item: MobileBatchItem): boolean {
+  const key = mobileBatchKey(item);
+  return mobileBatchSelection.items.some(
+    (selected) => mobileBatchKey(selected) === key
+  );
+}
+
+export function setMobileBatchSelection(items: MobileBatchItem[]) {
+  const seen = new Set<string>();
+  mobileBatchSelection.active = true;
+  mobileBatchSelection.items = items.filter((item) => {
+    const key = mobileBatchKey(item);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+export function toggleMobileBatchItem(item: MobileBatchItem) {
+  const key = mobileBatchKey(item);
+  if (isMobileBatchSelected(item)) {
+    mobileBatchSelection.items = mobileBatchSelection.items.filter(
+      (selected) => mobileBatchKey(selected) !== key
+    );
+  } else {
+    setMobileBatchSelection([...mobileBatchSelection.items, item]);
+  }
+}
+
+export function clearMobileBatchSelection() {
+  mobileBatchSelection.active = false;
+  mobileBatchSelection.items = [];
+}
 
 /**
  * Backend-backed read. Returns the `favourite` field from the note
@@ -115,6 +167,7 @@ export async function migrateLegacyFavourites(): Promise<void> {
 export function setMobileScreen(screen: MobileScreen) {
   mobileState.screen = screen;
   if (screen === 'home') mobileState.fabExpanded = false;
+  if (screen === 'editor') clearMobileBatchSelection();
 }
 
 // ---------- Browser-history-backed navigation ----------
@@ -173,6 +226,7 @@ export function installMobileHistoryNav(): () => void {
  * new entry, matching the existing `openNote` semantics.
  */
 export function navigateToEditor(noteId: string) {
+  clearMobileBatchSelection();
   setActiveNote(noteId);
   setMobileScreen('editor');
   if (typeof window !== 'undefined') {
@@ -209,6 +263,7 @@ export function setMobileView(view: MobileView) {
     // the view's root rather than inside whatever folder they last
     // browsed in the previous bucket.
     mobileState.currentFolderId = null;
+    clearMobileBatchSelection();
   }
   mobileState.view = view;
   mobileState.fabExpanded = false;
@@ -216,6 +271,7 @@ export function setMobileView(view: MobileView) {
 
 export function setCurrentFolder(id: string | null) {
   mobileState.currentFolderId = id;
+  clearMobileBatchSelection();
 }
 
 export function setDisplayMode(mode: DisplayMode) {

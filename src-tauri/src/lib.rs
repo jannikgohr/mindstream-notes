@@ -40,6 +40,7 @@ pub mod sync;
 pub mod system;
 #[cfg(desktop)]
 pub mod tray;
+pub mod tree_batch;
 
 use std::borrow::Cow;
 
@@ -340,6 +341,10 @@ pub fn run() {
             notes::trash_note,
             notes::restore_note,
             notes::purge_note,
+            tree_batch::move_many,
+            tree_batch::trash_many,
+            tree_batch::restore_many,
+            tree_batch::purge_many,
             // Search
             search::search_notes,
             // PDF searchable-text index (derived, local-only)

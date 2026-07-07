@@ -13,7 +13,16 @@
    * yet, so it just shows an explanatory empty state. Wire a real filter
    * in here when collab metadata lands.
    */
-  import { Folder, Loader2, MoreVertical, Trash2 } from '@lucide/svelte';
+  import {
+    Circle,
+    CircleCheck,
+    Folder,
+    FolderInput,
+    Loader2,
+    MoreVertical,
+    Trash2,
+    X
+  } from '@lucide/svelte';
   import FavouriteStar from '$lib/components/FavouriteStar.svelte';
   import type { NoteSummary, TreeNode } from '$lib/api';
   import { TRASH_ID } from '$lib/api';
@@ -21,13 +30,17 @@
   import {
     emptyTrash as emptyTrashStore,
     moveCollectionTo,
+    moveManyTo,
     moveNoteTo,
+    purgeMany as purgeManyItems,
     purgeCollection,
     purgeNote,
     renameCollection,
     renameNote,
+    restoreMany as restoreManyItems,
     restoreCollection,
     restoreNote,
+    trashMany as trashManyItems,
     trashCollection,
     trashNote,
     tree
@@ -40,10 +53,16 @@
   import MoveToSheet, { type MoveTarget } from './MoveToSheet.svelte';
   import NameInputSheet from './NameInputSheet.svelte';
   import {
+    clearMobileBatchSelection,
     isFavourite,
+    isMobileBatchSelected,
+    mobileBatchSelection,
     mobileState,
     setCurrentFolder,
-    toggleFavourite
+    setMobileBatchSelection,
+    toggleFavourite,
+    toggleMobileBatchItem,
+    type MobileBatchItem
   } from './state.svelte';
 
   interface Props {
@@ -147,6 +166,15 @@
   // desktop share the Rust-backed scorer). The list itself stays a plain
   // tree view; the top-bar's search pill opens the dialog.
   const visible = $derived<TreeNode[]>(nodes);
+  const visibleItems = $derived<MobileBatchItem[]>(
+    visible.map((node) => ({ kind: node.kind, id: node.id }))
+  );
+  const batchMode = $derived(mobileBatchSelection.active);
+  const hasBatchSelection = $derived(mobileBatchSelection.items.length > 0);
+  const allVisibleSelected = $derived(
+    visibleItems.length > 0 &&
+      visibleItems.every((item) => isMobileBatchSelected(item))
+  );
   const showTrashRootActions = $derived(
     mobileState.view === 'trash' && mobileState.currentFolderId === null
   );
@@ -168,6 +196,62 @@
   function handleNodeTap(node: TreeNode) {
     if (node.kind === 'folder') setCurrentFolder(node.id);
     else onOpenNote(node.id);
+  }
+
+  function itemForNode(node: TreeNode): MobileBatchItem {
+    return { kind: node.kind, id: node.id };
+  }
+
+  function selectNode(node: TreeNode) {
+    const item = itemForNode(node);
+    if (batchMode) {
+      if (!isMobileBatchSelected(item)) {
+        setMobileBatchSelection([...mobileBatchSelection.items, item]);
+      }
+    } else {
+      setMobileBatchSelection([item]);
+    }
+  }
+
+  function toggleNodeSelection(node: TreeNode) {
+    toggleMobileBatchItem(itemForNode(node));
+  }
+
+  function toggleVisibleSelection() {
+    if (allVisibleSelected) setMobileBatchSelection([]);
+    else setMobileBatchSelection(visibleItems);
+  }
+
+  let longPressTimer: ReturnType<typeof setTimeout> | null = null;
+  let suppressNextTap = false;
+
+  function clearLongPressTimer() {
+    if (!longPressTimer) return;
+    clearTimeout(longPressTimer);
+    longPressTimer = null;
+  }
+
+  function beginLongPress(e: PointerEvent, node: TreeNode) {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    clearLongPressTimer();
+    longPressTimer = setTimeout(() => {
+      suppressNextTap = true;
+      selectNode(node);
+      longPressTimer = null;
+    }, 500);
+  }
+
+  function cancelLongPress() {
+    clearLongPressTimer();
+  }
+
+  function handleNodePress(node: TreeNode) {
+    if (suppressNextTap) {
+      suppressNextTap = false;
+      return;
+    }
+    if (batchMode) toggleNodeSelection(node);
+    else handleNodeTap(node);
   }
 
   function emptyStateMessage(): string {
@@ -260,12 +344,33 @@
     };
   }
 
+  function startBatchMove() {
+    if (mobileBatchSelection.items.length === 0) return;
+    if (mobileState.view === 'trash') {
+      void restoreManyItems([...mobileBatchSelection.items]).then(() =>
+        clearMobileBatchSelection()
+      );
+      return;
+    }
+    moveTarget = {
+      kind: 'batch',
+      items: [...mobileBatchSelection.items],
+      currentParent: null
+    };
+  }
+
   async function commitMove(destination: string | null) {
     const t = moveTarget;
     moveTarget = null;
     if (!t) return;
-    if (t.kind === 'note') await moveNoteTo(t.id, destination);
-    else await moveCollectionTo(t.id, destination);
+    if (t.kind === 'batch') {
+      await moveManyTo(t.items, destination);
+      clearMobileBatchSelection();
+    } else if (t.kind === 'note') {
+      await moveNoteTo(t.id, destination);
+    } else {
+      await moveCollectionTo(t.id, destination);
+    }
   }
 
   async function startTrash(t: NodeRef) {
@@ -304,6 +409,28 @@
     else void purgeCollection(t.id);
   }
 
+  async function startBatchDelete() {
+    const items = [...mobileBatchSelection.items];
+    const count = items.length;
+    if (count === 0) return;
+    const inTrash = mobileState.view === 'trash';
+    if (
+      !(await confirm({
+        title: inTrash ? 'Delete permanently' : 'Move to trash',
+        message: inTrash
+          ? `${count} item(s) will be removed. This cannot be undone.`
+          : `${count} item(s) will move to the trash. You can restore them from there later.`,
+        confirmLabel: inTrash ? 'Delete' : 'Move to trash',
+        destructive: true
+      }))
+    ) {
+      return;
+    }
+    if (inTrash) await purgeManyItems(items);
+    else await trashManyItems(items);
+    clearMobileBatchSelection();
+  }
+
   async function startEmptyTrash() {
     if (emptyTrashPending || trashRootEmpty) return;
     if (
@@ -340,11 +467,17 @@
   function menuItems(): (MenuItem | 'separator')[] {
     const t = menuTarget;
     if (!t) return [];
+    const selectItem: MenuItem = {
+      label: isMobileBatchSelected(t) ? 'Unselect' : 'Select',
+      onSelect: () => toggleMobileBatchItem(t)
+    };
     // Inside the trash bucket the only meaningful actions are
     // restoring the item or purging it; rename / move-to don't apply
     // until something is rescued back out of the trash.
     if (mobileState.view === 'trash') {
       return [
+        selectItem,
+        'separator',
         { label: 'Restore', onSelect: () => startRestore(t) },
         'separator',
         {
@@ -355,6 +488,8 @@
       ];
     }
     return [
+      selectItem,
+      'separator',
       { label: 'Rename', onSelect: () => startRename(t) },
       { label: 'Move to…', onSelect: () => startMove(t) },
       'separator',
@@ -369,6 +504,7 @@
 
 <div
   class:fab-space={reserveFabSpace}
+  class:batch-space={batchMode}
   class="mobile-note-list flex-1 overflow-y-auto px-3 pt-3"
 >
   {#if tree.error}
@@ -378,7 +514,33 @@
   {:else if !tree.ready}
     <p class="px-1 py-2 text-sm text-muted-foreground">Loading…</p>
   {:else}
-    {#if showTrashRootActions && !trashRootEmpty}
+    {#if batchMode}
+      <div
+        class="sticky top-0 z-20 mb-3 flex items-center gap-2 rounded-md border border-border bg-card/95 px-3 py-2 shadow-sm backdrop-blur"
+      >
+        <span class="min-w-0 flex-1 truncate text-sm font-semibold">
+          {mobileBatchSelection.items.length} selected
+        </span>
+        <button
+          type="button"
+          class="shrink-0 rounded-md px-2 py-1 text-xs font-medium text-primary hover:bg-accent"
+          onclick={toggleVisibleSelection}
+        >
+          {allVisibleSelected ? 'Unselect all' : 'Select all'}
+        </button>
+        <button
+          type="button"
+          class="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+          onclick={clearMobileBatchSelection}
+          aria-label="Cancel selection"
+          title="Cancel"
+        >
+          <X class="size-4" />
+        </button>
+      </div>
+    {/if}
+
+    {#if !batchMode && showTrashRootActions && !trashRootEmpty}
       <div class="mb-3 flex justify-start">
         <button
           type="button"
@@ -406,24 +568,37 @@
       <div class="grid grid-cols-2 gap-2">
         {#each visible as node (node.kind + ':' + node.id)}
           {@const fav = node.kind === 'note' && isFavourite(node.id)}
+          {@const selected = isMobileBatchSelected(itemForNode(node))}
           {@const noteKind =
             node.kind === 'note' ? tree.notesById[node.id]?.note_kind : null}
           <!-- Wrapper is a div so the favourite-toggle button can sit inside
              alongside the primary tap target without nesting <button>s. -->
           <div
             class="relative h-32 rounded-lg border border-border bg-card shadow-sm"
+            class:ring-2={selected}
+            class:ring-ring={selected}
           >
             <button
               type="button"
               class="flex h-full w-full flex-col items-start gap-1.5 rounded-lg p-3 pr-9 text-left hover:bg-accent/50"
-              onclick={() => handleNodeTap(node)}
+              onclick={() => handleNodePress(node)}
+              onpointerdown={(e) => beginLongPress(e, node)}
+              onpointerup={cancelLongPress}
+              onpointerleave={cancelLongPress}
+              onpointercancel={cancelLongPress}
+              oncontextmenu={(e) => e.preventDefault()}
             >
-              {#if node.kind === 'folder'}
-                <Folder class="size-5 text-muted-foreground" />
-              {:else}
-                {@const Icon = noteKindIcon(noteKind)}
-                <Icon class="size-5 text-muted-foreground" />
-              {/if}
+              <span class="flex items-center gap-1.5">
+                {#if batchMode}
+                  {@render selectionToggle(node, selected)}
+                {/if}
+                {#if node.kind === 'folder'}
+                  <Folder class="size-5 text-muted-foreground" />
+                {:else}
+                  {@const Icon = noteKindIcon(noteKind)}
+                  <Icon class="size-5 text-muted-foreground" />
+                {/if}
+              </span>
               <span class="line-clamp-2 text-sm font-medium">{node.name}</span>
               {#if node.kind === 'note'}
                 <span class="mt-auto text-[10px] text-muted-foreground">
@@ -431,34 +606,36 @@
                 </span>
               {/if}
             </button>
-            <div
-              class="absolute right-1 top-1 flex flex-col items-center gap-0.5"
-            >
-              {#if node.kind === 'note'}
+            {#if !batchMode}
+              <div
+                class="absolute right-1 top-1 flex flex-col items-center gap-0.5"
+              >
+                {#if node.kind === 'note'}
+                  <button
+                    type="button"
+                    class="rounded p-1 text-muted-foreground hover:text-foreground"
+                    onclick={() => toggleFavourite(node.id)}
+                    aria-pressed={fav}
+                    aria-label={fav
+                      ? 'Remove from favourites'
+                      : 'Add to favourites'}
+                    title={fav ? 'Remove from favourites' : 'Add to favourites'}
+                  >
+                    <FavouriteStar size={16} favourited={fav} />
+                  </button>
+                {/if}
                 <button
                   type="button"
                   class="rounded p-1 text-muted-foreground hover:text-foreground"
-                  onclick={() => toggleFavourite(node.id)}
-                  aria-pressed={fav}
-                  aria-label={fav
-                    ? 'Remove from favourites'
-                    : 'Add to favourites'}
-                  title={fav ? 'Remove from favourites' : 'Add to favourites'}
+                  onclick={(e) =>
+                    openContextMenu(e, { kind: node.kind, id: node.id })}
+                  aria-label="More actions"
+                  title="More actions"
                 >
-                  <FavouriteStar size={16} favourited={fav} />
+                  <MoreVertical class="size-4" />
                 </button>
-              {/if}
-              <button
-                type="button"
-                class="rounded p-1 text-muted-foreground hover:text-foreground"
-                onclick={(e) =>
-                  openContextMenu(e, { kind: node.kind, id: node.id })}
-                aria-label="More actions"
-                title="More actions"
-              >
-                <MoreVertical class="size-4" />
-              </button>
-            </div>
+              </div>
+            {/if}
           </div>
         {/each}
       </div>
@@ -466,13 +643,25 @@
       <ul class="flex flex-col">
         {#each visible as node (node.kind + ':' + node.id)}
           {@const fav = node.kind === 'note' && isFavourite(node.id)}
+          {@const selected = isMobileBatchSelected(itemForNode(node))}
           {@const noteKind =
             node.kind === 'note' ? tree.notesById[node.id]?.note_kind : null}
-          <li class="flex w-full items-center gap-1">
+          <li
+            class="flex w-full items-center gap-1 rounded-md"
+            class:bg-accent={selected}
+          >
+            {#if batchMode}
+              {@render selectionToggle(node, selected, 'ml-1 shrink-0')}
+            {/if}
             <button
               type="button"
               class="flex min-w-0 flex-1 items-center gap-3 rounded-md px-2 py-2.5 text-left hover:bg-accent"
-              onclick={() => handleNodeTap(node)}
+              onclick={() => handleNodePress(node)}
+              onpointerdown={(e) => beginLongPress(e, node)}
+              onpointerup={cancelLongPress}
+              onpointerleave={cancelLongPress}
+              onpointercancel={cancelLongPress}
+              oncontextmenu={(e) => e.preventDefault()}
             >
               {#if node.kind === 'folder'}
                 <Folder class="size-5 shrink-0 text-muted-foreground" />
@@ -489,7 +678,7 @@
                 {/if}
               </span>
             </button>
-            {#if node.kind === 'note'}
+            {#if !batchMode && node.kind === 'note'}
               <button
                 type="button"
                 class="shrink-0 rounded p-2 text-muted-foreground hover:text-foreground"
@@ -503,22 +692,70 @@
                 <FavouriteStar size={16} favourited={fav} />
               </button>
             {/if}
-            <button
-              type="button"
-              class="shrink-0 rounded p-2 text-muted-foreground hover:text-foreground"
-              onclick={(e) =>
-                openContextMenu(e, { kind: node.kind, id: node.id })}
-              aria-label="More actions"
-              title="More actions"
-            >
-              <MoreVertical class="size-4" />
-            </button>
+            {#if !batchMode}
+              <button
+                type="button"
+                class="shrink-0 rounded p-2 text-muted-foreground hover:text-foreground"
+                onclick={(e) =>
+                  openContextMenu(e, { kind: node.kind, id: node.id })}
+                aria-label="More actions"
+                title="More actions"
+              >
+                <MoreVertical class="size-4" />
+              </button>
+            {/if}
           </li>
         {/each}
       </ul>
     {/if}
   {/if}
 </div>
+
+{#if batchMode}
+  <div
+    class="mobile-batch-actions fixed inset-x-0 z-40 flex items-center gap-2 border-y border-border bg-card shadow-2xl"
+  >
+    <button
+      type="button"
+      class="inline-flex h-11 flex-1 items-center justify-center gap-2 rounded-md border border-border bg-background px-3 text-sm font-semibold hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+      onclick={startBatchMove}
+      disabled={!hasBatchSelection}
+    >
+      <FolderInput class="size-4" />
+      {mobileState.view === 'trash' ? 'Restore' : 'Move to…'}
+    </button>
+    <button
+      type="button"
+      class="inline-flex h-11 flex-1 items-center justify-center gap-2 rounded-md bg-destructive px-3 text-sm font-semibold text-destructive-foreground hover:bg-destructive/90 disabled:cursor-not-allowed disabled:opacity-50"
+      onclick={() => void startBatchDelete()}
+      disabled={!hasBatchSelection}
+    >
+      <Trash2 class="size-4" />
+      Delete
+    </button>
+  </div>
+{/if}
+
+{#snippet selectionToggle(node: TreeNode, selected: boolean, extraClass = '')}
+  <button
+    type="button"
+    class="mobile-select-checkbox text-muted-foreground {extraClass}"
+    class:selected
+    role="checkbox"
+    aria-checked={selected}
+    aria-label={selected ? `Unselect ${node.name}` : `Select ${node.name}`}
+    onclick={(e) => {
+      e.stopPropagation();
+      toggleNodeSelection(node);
+    }}
+  >
+    {#if selected}
+      <CircleCheck class="size-5" strokeWidth={2.4} />
+    {:else}
+      <Circle class="size-5" strokeWidth={2.4} />
+    {/if}
+  </button>
+{/snippet}
 
 {#if menuOpen}
   <ContextMenu
@@ -562,5 +799,36 @@
      */
     padding-bottom: 9.5rem;
     scroll-padding-bottom: 9.5rem;
+  }
+
+  .mobile-note-list.batch-space {
+    padding-bottom: 9.5rem;
+    scroll-padding-bottom: 9.5rem;
+  }
+
+  .mobile-batch-actions {
+    bottom: calc(env(safe-area-inset-bottom) + 3.25rem);
+    padding: 0.75rem calc(0.75rem + env(safe-area-inset-right)) 0.75rem
+      calc(0.75rem + env(safe-area-inset-left));
+  }
+
+  .mobile-select-checkbox {
+    display: inline-flex;
+    width: 1.5rem;
+    height: 1.5rem;
+    align-items: center;
+    justify-content: center;
+    border-radius: 9999px;
+    background: var(--card);
+    transition:
+      color 120ms ease,
+      box-shadow 120ms ease;
+  }
+
+  .mobile-select-checkbox:focus-visible {
+    outline: none;
+    box-shadow:
+      0 0 0 2px hsl(var(--background)),
+      0 0 0 4px hsl(var(--ring));
   }
 </style>

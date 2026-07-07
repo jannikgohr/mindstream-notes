@@ -16,17 +16,23 @@ vi.mock('$lib/stores/tree.svelte', () => ({ tree, setNoteFavourite }));
 
 import {
   collapseFab,
+  clearMobileBatchSelection,
   installMobileHistoryNav,
   isFavourite,
+  isMobileBatchSelected,
   migrateLegacyFavourites,
+  mobileBatchSelection,
+  mobileBatchKey,
   mobileState,
   navigateBack,
   navigateToEditor,
   setCurrentFolder,
+  setMobileBatchSelection,
   setDisplayMode,
   setMobileScreen,
   setMobileView,
   toggleFabExpanded,
+  toggleMobileBatchItem,
   toggleFavourite
 } from './state.svelte';
 
@@ -40,6 +46,7 @@ beforeEach(() => {
   mobileState.view = 'home';
   mobileState.currentFolderId = null;
   mobileState.fabExpanded = false;
+  clearMobileBatchSelection();
 });
 
 describe('screen + fab', () => {
@@ -64,23 +71,76 @@ describe('screen + fab', () => {
 describe('view + folder', () => {
   it('setMobileView resets the drilled folder when switching buckets', () => {
     mobileState.currentFolderId = 'folder-1';
+    setMobileBatchSelection([{ kind: 'note', id: 'n1' }]);
     setMobileView('favourite');
     expect(mobileState.view).toBe('favourite');
     expect(mobileState.currentFolderId).toBeNull();
+    expect(mobileBatchSelection.active).toBe(false);
+    expect(mobileBatchSelection.items).toEqual([]);
   });
 
   it('setMobileView keeps the folder when the view is unchanged', () => {
     setCurrentFolder('folder-1');
+    setMobileBatchSelection([{ kind: 'note', id: 'n1' }]);
     mobileState.view = 'home';
     setMobileView('home');
     expect(mobileState.currentFolderId).toBe('folder-1');
+    expect(mobileBatchSelection.active).toBe(true);
+    expect(mobileBatchSelection.items).toEqual([{ kind: 'note', id: 'n1' }]);
   });
 
   it('setCurrentFolder updates the drill-down target', () => {
+    setMobileBatchSelection([{ kind: 'folder', id: 'f1' }]);
     setCurrentFolder('abc');
     expect(mobileState.currentFolderId).toBe('abc');
+    expect(mobileBatchSelection.active).toBe(false);
+    expect(mobileBatchSelection.items).toEqual([]);
     setCurrentFolder(null);
     expect(mobileState.currentFolderId).toBeNull();
+  });
+});
+
+describe('batch selection', () => {
+  it('keys, de-dupes, toggles and clears selected items', () => {
+    expect(mobileBatchKey({ kind: 'note', id: 'n1' })).toBe('note:n1');
+    setMobileBatchSelection([
+      { kind: 'note', id: 'n1' },
+      { kind: 'note', id: 'n1' },
+      { kind: 'folder', id: 'f1' }
+    ]);
+    expect(mobileBatchSelection.active).toBe(true);
+    expect(mobileBatchSelection.items).toEqual([
+      { kind: 'note', id: 'n1' },
+      { kind: 'folder', id: 'f1' }
+    ]);
+    expect(isMobileBatchSelected({ kind: 'note', id: 'n1' })).toBe(true);
+
+    toggleMobileBatchItem({ kind: 'note', id: 'n1' });
+    expect(mobileBatchSelection.items).toEqual([{ kind: 'folder', id: 'f1' }]);
+
+    toggleMobileBatchItem({ kind: 'note', id: 'n2' });
+    expect(mobileBatchSelection.items).toEqual([
+      { kind: 'folder', id: 'f1' },
+      { kind: 'note', id: 'n2' }
+    ]);
+
+    clearMobileBatchSelection();
+    expect(mobileBatchSelection.active).toBe(false);
+    expect(mobileBatchSelection.items).toEqual([]);
+  });
+
+  it('stays active when the last selected item is toggled off', () => {
+    setMobileBatchSelection([{ kind: 'note', id: 'n1' }]);
+    toggleMobileBatchItem({ kind: 'note', id: 'n1' });
+    expect(mobileBatchSelection.active).toBe(true);
+    expect(mobileBatchSelection.items).toEqual([]);
+  });
+
+  it('opening the editor clears batch selection', () => {
+    setMobileBatchSelection([{ kind: 'note', id: 'n1' }]);
+    navigateToEditor('n1');
+    expect(mobileBatchSelection.active).toBe(false);
+    expect(mobileBatchSelection.items).toEqual([]);
   });
 });
 

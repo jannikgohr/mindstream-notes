@@ -23,13 +23,20 @@
   import { TRASH_ID } from '$lib/api';
   import type { Collection } from '$lib/api';
   import { tree } from '$lib/stores/tree.svelte';
+  import type { MobileBatchItem } from './state.svelte';
 
-  export interface MoveTarget {
-    kind: 'note' | 'folder';
-    id: string;
-    /** Current parent id of the item being moved — disabled in the tree. */
-    currentParent: string | null;
-  }
+  export type MoveTarget =
+    | {
+        kind: 'note' | 'folder';
+        id: string;
+        /** Current parent id of the item being moved — disabled in the tree. */
+        currentParent: string | null;
+      }
+    | {
+        kind: 'batch';
+        items: MobileBatchItem[];
+        currentParent: null;
+      };
 
   interface Props {
     target: MoveTarget;
@@ -69,6 +76,14 @@
 
   const forbidden = $derived.by<Set<string>>(() => {
     if (target.kind === 'folder') return descendants(target.id);
+    if (target.kind === 'batch') {
+      const out = new Set<string>();
+      for (const item of target.items) {
+        if (item.kind !== 'folder') continue;
+        for (const id of descendants(item.id)) out.add(id);
+      }
+      return out;
+    }
     return new Set();
   });
 
