@@ -76,6 +76,71 @@ export default defineConfig({
     ]
   },
 
+  // Pre-bundle deps Vite would otherwise discover mid-session. It doesn't
+  // follow every `import()` (lazy note editors, PDF viewer, Excalidraw,
+  // dockview) or the Tauri-only API modules, so it finds them as features
+  // activate and reloads the page to re-optimise. On the Android WebView
+  // that reload aborts in-flight dynamic imports and white-screens; listing
+  // them here folds everything into the first pass. Keep in sync as new
+  // heavy / `import()`ed deps are added.
+  optimizeDeps: {
+    include: [
+      // Markdown editor — lazy via components/note-editor/lazy-components.ts
+      '@milkdown/crepe',
+      '@milkdown/plugin-collab',
+      '@milkdown/plugin-diff',
+      '@milkdown/kit/core',
+      '@milkdown/kit/utils',
+      '@milkdown/kit/plugin/listener',
+      '@milkdown/kit/plugin/history',
+      '@milkdown/kit/preset/commonmark',
+      '@milkdown/kit/preset/gfm',
+      '@milkdown/kit/component/image-block',
+      '@milkdown/kit/prose/commands',
+      '@milkdown/kit/prose/history',
+      '@milkdown/kit/prose/model',
+      '@milkdown/kit/prose/state',
+      '@milkdown/kit/prose/view',
+      '@codemirror/language',
+      'mermaid',
+      // Collab sync — Yjs doc + awareness + transport
+      'yjs',
+      'y-protocols/awareness',
+      'socket.io-client',
+      // PDF viewing + export — lazy via pdf/*.ts and notes-export/*
+      'pdfjs-dist',
+      'pdfjs-dist/web/pdf_viewer.mjs',
+      'pdf-lib',
+      // Excalidraw freeform island + ink/drawing — lazy via *NoteEditor.svelte
+      'react',
+      'react-dom',
+      'react-dom/client',
+      '@excalidraw/excalidraw',
+      'perfect-freehand',
+      'image-js',
+      // Desktop dockview shell — lazy via DesktopLayout.svelte
+      'dockview-core',
+      // Tauri API + plugins — dynamically imported, so only loaded under Tauri
+      '@tauri-apps/api/core',
+      '@tauri-apps/api/event',
+      '@tauri-apps/api/window',
+      '@tauri-apps/api/webviewWindow',
+      '@tauri-apps/plugin-autostart',
+      '@tauri-apps/plugin-process',
+      '@tauri-apps/plugin-updater',
+      '@tauri-apps/plugin-shell',
+      // Core UI libs — pulled in across the shell; list them so they land in
+      // the first pass instead of trickling in over the first few reloads.
+      '@lucide/svelte',
+      '@jis3r/icons',
+      'bits-ui',
+      '@floating-ui/dom',
+      'mode-watcher',
+      'tailwind-merge',
+      'tailwind-variants'
+    ]
+  },
+
   // Vite options tailored for Tauri development.
   clearScreen: false,
   server: {
