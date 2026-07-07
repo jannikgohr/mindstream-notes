@@ -7,9 +7,12 @@ import {
   emptyStateMessageForSource,
   FILE_EXPLORER_SOURCES,
   itemFromSelectionKey,
+  mergeSelection,
   nodeKey,
+  selectedItemsFromKeys,
   selectionKeyForItem,
   selectionRange,
+  toggleSelection,
   updateSelectionForClick,
   visibleSelectionKeys,
   type DraftKind,
@@ -92,6 +95,14 @@ describe('selection helpers', () => {
     expect(selectionKeyForItem({ kind: 'note', id: 'n' })).toBe('n:n');
     expect(itemFromSelectionKey('f:a')).toEqual({ kind: 'folder', id: 'a' });
     expect(itemFromSelectionKey('n:n')).toEqual({ kind: 'note', id: 'n' });
+    expect(itemFromSelectionKey('n:id:with:colon')).toEqual({
+      kind: 'note',
+      id: 'id:with:colon'
+    });
+    expect(selectedItemsFromKeys(['f:a', 'n:n'])).toEqual([
+      { kind: 'folder', id: 'a' },
+      { kind: 'note', id: 'n' }
+    ]);
   });
 
   it('flattens only visible tree rows', () => {
@@ -121,6 +132,16 @@ describe('selection helpers', () => {
     expect(selectionRange(visible, 'n:root', 'n:a1')).toEqual([
       'n:a1',
       'f:b',
+      'n:root'
+    ]);
+    expect(selectionRange(visible, 'f:missing', 'n:root')).toEqual(['n:root']);
+  });
+
+  it('toggles and merges selections without duplicating keys', () => {
+    expect(toggleSelection(['f:a'], 'f:a')).toEqual([]);
+    expect(toggleSelection(['f:a'], 'n:root')).toEqual(['f:a', 'n:root']);
+    expect(mergeSelection(['f:a'], ['f:a', 'n:root'])).toEqual([
+      'f:a',
       'n:root'
     ]);
   });
@@ -319,6 +340,17 @@ describe('dragPayloadFromTransfer', () => {
       kind: 'folder',
       id: 'f1',
       items
+    });
+  });
+
+  it('falls back to legacy payloads when tree-items JSON is malformed', () => {
+    const t = transfer({
+      'application/x-tree-items': '{not json',
+      'application/x-folder-id': 'fallback-folder'
+    });
+    expect(dragPayloadFromTransfer(t)).toEqual({
+      kind: 'folder',
+      id: 'fallback-folder'
     });
   });
 

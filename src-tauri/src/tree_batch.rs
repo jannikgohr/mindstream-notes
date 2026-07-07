@@ -436,6 +436,123 @@ mod tests {
     }
 
     #[test]
+    fn move_many_rejects_missing_target_collection() {
+        let db = open_memory_for_tests();
+        let note = note(&db, None);
+
+        let err = db
+            .with_conn_mut(|conn| {
+                move_many_items(
+                    conn,
+                    vec![TreeItemRef::Note {
+                        id: note.summary.id.clone(),
+                    }],
+                    Some("missing-target".to_string()),
+                )
+            })
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("collection missing-target"));
+    }
+
+    #[test]
+    fn move_many_rejects_moving_the_trash_collection() {
+        let db = open_memory_for_tests();
+        let target = collection(&db, "Target", None);
+
+        let err = db
+            .with_conn_mut(|conn| {
+                move_many_items(
+                    conn,
+                    vec![TreeItemRef::Folder {
+                        id: TRASH_ID.to_string(),
+                    }],
+                    Some(target.id.clone()),
+                )
+            })
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("trash collection"));
+    }
+
+    #[test]
+    fn move_many_deduplicates_repeated_items() {
+        let db = open_memory_for_tests();
+        let target = collection(&db, "Target", None);
+        let note = note(&db, None);
+
+        let counts = db
+            .with_conn_mut(|conn| {
+                move_many_items(
+                    conn,
+                    vec![
+                        TreeItemRef::Note {
+                            id: note.summary.id.clone(),
+                        },
+                        TreeItemRef::Note {
+                            id: note.summary.id.clone(),
+                        },
+                    ],
+                    Some(target.id.clone()),
+                )
+            })
+            .unwrap();
+
+        assert_eq!(
+            counts,
+            BatchCounts {
+                notes: 1,
+                folders: 0
+            }
+        );
+    }
+
+    #[test]
+    fn move_many_restores_items_to_root() {
+        let db = open_memory_for_tests();
+        let folder = collection(&db, "Folder", Some(TRASH_ID.to_string()));
+        let note = note(&db, Some(TRASH_ID.to_string()));
+
+        let counts = db
+            .with_conn_mut(|conn| {
+                move_many_items(
+                    conn,
+                    vec![
+                        TreeItemRef::Folder {
+                            id: folder.id.clone(),
+                        },
+                        TreeItemRef::Note {
+                            id: note.summary.id.clone(),
+                        },
+                    ],
+                    None,
+                )
+            })
+            .unwrap();
+
+        assert_eq!(
+            counts,
+            BatchCounts {
+                notes: 1,
+                folders: 1
+            }
+        );
+        let folder_parent = db
+            .with_conn(|conn| collections::get(conn, &folder.id))
+            .unwrap()
+            .parent_collection_id;
+        let note_parent = db
+            .with_conn(|conn| notes::load(conn, &note.summary.id))
+            .unwrap()
+            .summary
+            .parent_collection_id;
+        assert!(folder_parent.is_none());
+        assert!(note_parent.is_none());
+    }
+
+    #[test]
     fn purge_many_removes_mixed_items() {
         let db = open_memory_for_tests();
         let folder = collection(&db, "Folder", None);
