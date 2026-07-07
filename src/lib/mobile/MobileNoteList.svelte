@@ -578,33 +578,9 @@
             class:ring-2={selected}
             class:ring-ring={selected}
           >
-            {#if batchMode}
-              <button
-                type="button"
-                class="mobile-select-checkbox absolute left-2 top-2 z-10 text-muted-foreground"
-                class:selected
-                role="checkbox"
-                aria-checked={selected}
-                aria-label={selected
-                  ? `Unselect ${node.name}`
-                  : `Select ${node.name}`}
-                onclick={(e) => {
-                  e.stopPropagation();
-                  toggleNodeSelection(node);
-                }}
-              >
-                {#if selected}
-                  <CircleCheck class="size-5" strokeWidth={2.4} />
-                {:else}
-                  <Circle class="size-5" strokeWidth={2.4} />
-                {/if}
-              </button>
-            {/if}
             <button
               type="button"
-              class="flex h-full w-full flex-col items-start gap-1.5 rounded-lg p-3 pr-9 text-left hover:bg-accent/50 {batchMode
-                ? 'pt-8'
-                : ''}"
+              class="flex h-full w-full flex-col items-start gap-1.5 rounded-lg p-3 pr-9 text-left hover:bg-accent/50"
               onclick={() => handleNodePress(node)}
               onpointerdown={(e) => beginLongPress(e, node)}
               onpointerup={cancelLongPress}
@@ -612,12 +588,17 @@
               onpointercancel={cancelLongPress}
               oncontextmenu={(e) => e.preventDefault()}
             >
-              {#if node.kind === 'folder'}
-                <Folder class="size-5 text-muted-foreground" />
-              {:else}
-                {@const Icon = noteKindIcon(noteKind)}
-                <Icon class="size-5 text-muted-foreground" />
-              {/if}
+              <span class="flex items-center gap-1.5">
+                {#if batchMode}
+                  {@render selectionToggle(node, selected)}
+                {/if}
+                {#if node.kind === 'folder'}
+                  <Folder class="size-5 text-muted-foreground" />
+                {:else}
+                  {@const Icon = noteKindIcon(noteKind)}
+                  <Icon class="size-5 text-muted-foreground" />
+                {/if}
+              </span>
               <span class="line-clamp-2 text-sm font-medium">{node.name}</span>
               {#if node.kind === 'note'}
                 <span class="mt-auto text-[10px] text-muted-foreground">
@@ -670,26 +651,7 @@
             class:bg-accent={selected}
           >
             {#if batchMode}
-              <button
-                type="button"
-                class="mobile-select-checkbox ml-1 shrink-0 text-muted-foreground"
-                class:selected
-                role="checkbox"
-                aria-checked={selected}
-                aria-label={selected
-                  ? `Unselect ${node.name}`
-                  : `Select ${node.name}`}
-                onclick={(e) => {
-                  e.stopPropagation();
-                  toggleNodeSelection(node);
-                }}
-              >
-                {#if selected}
-                  <CircleCheck class="size-5" strokeWidth={2.4} />
-                {:else}
-                  <Circle class="size-5" strokeWidth={2.4} />
-                {/if}
-              </button>
+              {@render selectionToggle(node, selected, 'ml-1 shrink-0')}
             {/if}
             <button
               type="button"
@@ -773,6 +735,27 @@
     </button>
   </div>
 {/if}
+
+{#snippet selectionToggle(node: TreeNode, selected: boolean, extraClass = '')}
+  <button
+    type="button"
+    class="mobile-select-checkbox text-muted-foreground {extraClass}"
+    class:selected
+    role="checkbox"
+    aria-checked={selected}
+    aria-label={selected ? `Unselect ${node.name}` : `Select ${node.name}`}
+    onclick={(e) => {
+      e.stopPropagation();
+      toggleNodeSelection(node);
+    }}
+  >
+    {#if selected}
+      <CircleCheck class="size-5" strokeWidth={2.4} />
+    {:else}
+      <Circle class="size-5" strokeWidth={2.4} />
+    {/if}
+  </button>
+{/snippet}
 
 {#if menuOpen}
   <ContextMenu
