@@ -36,6 +36,7 @@ export type MobileBatchItem =
   | { kind: 'folder'; id: string };
 
 interface MobileBatchSelectionState {
+  active: boolean;
   items: MobileBatchItem[];
 }
 
@@ -68,6 +69,7 @@ export const mobileState = $state<MobileState>({
 });
 
 export const mobileBatchSelection = $state<MobileBatchSelectionState>({
+  active: false,
   items: []
 });
 
@@ -84,6 +86,7 @@ export function isMobileBatchSelected(item: MobileBatchItem): boolean {
 
 export function setMobileBatchSelection(items: MobileBatchItem[]) {
   const seen = new Set<string>();
+  mobileBatchSelection.active = true;
   mobileBatchSelection.items = items.filter((item) => {
     const key = mobileBatchKey(item);
     if (seen.has(key)) return false;
@@ -104,6 +107,7 @@ export function toggleMobileBatchItem(item: MobileBatchItem) {
 }
 
 export function clearMobileBatchSelection() {
+  mobileBatchSelection.active = false;
   mobileBatchSelection.items = [];
 }
 

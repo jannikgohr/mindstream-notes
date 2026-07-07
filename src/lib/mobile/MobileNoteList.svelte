@@ -167,7 +167,8 @@
   const visibleItems = $derived<MobileBatchItem[]>(
     visible.map((node) => ({ kind: node.kind, id: node.id }))
   );
-  const batchMode = $derived(mobileBatchSelection.items.length > 0);
+  const batchMode = $derived(mobileBatchSelection.active);
+  const hasBatchSelection = $derived(mobileBatchSelection.items.length > 0);
   const allVisibleSelected = $derived(
     visibleItems.length > 0 &&
       visibleItems.every((item) => isMobileBatchSelected(item))
@@ -215,7 +216,7 @@
   }
 
   function toggleVisibleSelection() {
-    if (allVisibleSelected) clearMobileBatchSelection();
+    if (allVisibleSelected) setMobileBatchSelection([]);
     else setMobileBatchSelection(visibleItems);
   }
 
@@ -728,20 +729,22 @@
 
 {#if batchMode}
   <div
-    class="safe-bottom safe-x fixed inset-x-0 bottom-0 z-40 flex items-center gap-2 border-t border-border bg-card p-3 shadow-2xl"
+    class="safe-x mobile-batch-actions fixed inset-x-0 z-40 flex items-center gap-2 border-y border-border bg-card p-3 shadow-2xl"
   >
     <button
       type="button"
-      class="inline-flex h-11 flex-1 items-center justify-center gap-2 rounded-md border border-border bg-background px-3 text-sm font-semibold hover:bg-accent"
+      class="inline-flex h-11 flex-1 items-center justify-center gap-2 rounded-md border border-border bg-background px-3 text-sm font-semibold hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
       onclick={startBatchMove}
+      disabled={!hasBatchSelection}
     >
       <FolderInput class="size-4" />
       {mobileState.view === 'trash' ? 'Restore' : 'Move to…'}
     </button>
     <button
       type="button"
-      class="inline-flex h-11 flex-1 items-center justify-center gap-2 rounded-md bg-destructive px-3 text-sm font-semibold text-destructive-foreground hover:bg-destructive/90"
+      class="inline-flex h-11 flex-1 items-center justify-center gap-2 rounded-md bg-destructive px-3 text-sm font-semibold text-destructive-foreground hover:bg-destructive/90 disabled:cursor-not-allowed disabled:opacity-50"
       onclick={() => void startBatchDelete()}
+      disabled={!hasBatchSelection}
     >
       <Trash2 class="size-4" />
       Delete
@@ -794,7 +797,11 @@
   }
 
   .mobile-note-list.batch-space {
-    padding-bottom: 5.5rem;
-    scroll-padding-bottom: 5.5rem;
+    padding-bottom: 9.5rem;
+    scroll-padding-bottom: 9.5rem;
+  }
+
+  .mobile-batch-actions {
+    bottom: calc(env(safe-area-inset-bottom) + 3.25rem);
   }
 </style>

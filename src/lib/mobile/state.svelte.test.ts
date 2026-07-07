@@ -75,6 +75,7 @@ describe('view + folder', () => {
     setMobileView('favourite');
     expect(mobileState.view).toBe('favourite');
     expect(mobileState.currentFolderId).toBeNull();
+    expect(mobileBatchSelection.active).toBe(false);
     expect(mobileBatchSelection.items).toEqual([]);
   });
 
@@ -84,6 +85,7 @@ describe('view + folder', () => {
     mobileState.view = 'home';
     setMobileView('home');
     expect(mobileState.currentFolderId).toBe('folder-1');
+    expect(mobileBatchSelection.active).toBe(true);
     expect(mobileBatchSelection.items).toEqual([{ kind: 'note', id: 'n1' }]);
   });
 
@@ -91,6 +93,7 @@ describe('view + folder', () => {
     setMobileBatchSelection([{ kind: 'folder', id: 'f1' }]);
     setCurrentFolder('abc');
     expect(mobileState.currentFolderId).toBe('abc');
+    expect(mobileBatchSelection.active).toBe(false);
     expect(mobileBatchSelection.items).toEqual([]);
     setCurrentFolder(null);
     expect(mobileState.currentFolderId).toBeNull();
@@ -105,6 +108,7 @@ describe('batch selection', () => {
       { kind: 'note', id: 'n1' },
       { kind: 'folder', id: 'f1' }
     ]);
+    expect(mobileBatchSelection.active).toBe(true);
     expect(mobileBatchSelection.items).toEqual([
       { kind: 'note', id: 'n1' },
       { kind: 'folder', id: 'f1' }
@@ -121,12 +125,21 @@ describe('batch selection', () => {
     ]);
 
     clearMobileBatchSelection();
+    expect(mobileBatchSelection.active).toBe(false);
+    expect(mobileBatchSelection.items).toEqual([]);
+  });
+
+  it('stays active when the last selected item is toggled off', () => {
+    setMobileBatchSelection([{ kind: 'note', id: 'n1' }]);
+    toggleMobileBatchItem({ kind: 'note', id: 'n1' });
+    expect(mobileBatchSelection.active).toBe(true);
     expect(mobileBatchSelection.items).toEqual([]);
   });
 
   it('opening the editor clears batch selection', () => {
     setMobileBatchSelection([{ kind: 'note', id: 'n1' }]);
     navigateToEditor('n1');
+    expect(mobileBatchSelection.active).toBe(false);
     expect(mobileBatchSelection.items).toEqual([]);
   });
 });

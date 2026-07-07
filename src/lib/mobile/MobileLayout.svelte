@@ -198,11 +198,10 @@
   const fabVisible = $derived(
     mobileState.view === 'home' &&
       mobileState.screen === 'home' &&
-      mobileBatchSelection.items.length === 0
+      !mobileBatchSelection.active
   );
 
   const showHome = $derived(mobileState.screen === 'home');
-  const batchMode = $derived(mobileBatchSelection.items.length > 0);
 </script>
 
 <div class="safe-x flex h-full w-full flex-col">
@@ -220,11 +219,9 @@
       {/if}
     </div>
 
-    {#if !batchMode}
-      <div class="safe-bottom shrink-0 bg-card">
-        <MobileBottomNav />
-      </div>
-    {/if}
+    <div class="safe-bottom shrink-0 bg-card">
+      <MobileBottomNav />
+    </div>
   {:else}
     <div class="safe-top safe-bottom flex h-full w-full flex-col">
       <MobileEditor />
