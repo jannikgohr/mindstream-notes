@@ -264,6 +264,12 @@
     "search.hint": "↑↓ to navigate · ↵ to open · Esc to close",
     "settings.open": "Open settings",
 
+    "options.open": "Open menu",
+    "options.title": "Menu",
+    "options.settings": "Settings",
+    "options.notifications": "Notifications",
+    "options.vaults": "Vaults",
+
     "notifications.open": "Open notifications",
     "notifications.title": "Notifications",
     "notifications.empty": "No notifications right now.",

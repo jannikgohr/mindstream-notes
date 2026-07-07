@@ -164,6 +164,12 @@
     "search.hint": "↑↓ zum Navigieren · ↵ zum Öffnen · Esc zum Schließen",
     "settings.open": "Einstellungen öffnen",
 
+    "options.open": "Menü öffnen",
+    "options.title": "Menü",
+    "options.settings": "Einstellungen",
+    "options.notifications": "Benachrichtigungen",
+    "options.vaults": "Tresore",
+
     "notifications.open": "Benachrichtigungen öffnen",
     "notifications.title": "Benachrichtigungen",
     "notifications.empty": "Derzeit keine Benachrichtigungen.",

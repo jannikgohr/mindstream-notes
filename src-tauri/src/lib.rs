@@ -11,6 +11,7 @@
 //! Frontend talks to Rust through the `@tauri-apps/api`'s `invoke()`; the
 //! TS bridge lives under `src/lib/api/`.
 
+pub mod app_restart;
 pub mod assets;
 pub mod auth;
 pub mod backup;
@@ -373,6 +374,10 @@ pub fn run() {
             profiles::switch_profile,
             profiles::rename_profile,
             profiles::delete_profile,
+            // Native app restart — mobile vault switch reboots into the
+            // newly-activated vault (desktop relaunches from JS instead).
+            #[cfg(target_os = "android")]
+            app_restart::restart_app,
             // Auth (Etebase)
             auth::etebase_login,
             auth::etebase_logout,
