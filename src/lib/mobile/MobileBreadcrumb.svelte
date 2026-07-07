@@ -13,7 +13,7 @@
    */
   import { Home, ChevronRight } from '@lucide/svelte';
   import { tree } from '$lib/stores/tree.svelte';
-  import type { Collection } from '$lib/api';
+  import { TRASH_ID, type Collection } from '$lib/api';
   import { tUi } from '$lib/settings/i18n.svelte';
   import {
     mobileState,
@@ -43,7 +43,10 @@
       chain.unshift(c);
       id = c.parent_collection_id;
     }
-    for (const c of chain) out.push({ id: c.id, label: c.name });
+    for (const c of chain) {
+      if (mobileState.view === 'trash' && c.id === TRASH_ID) continue;
+      out.push({ id: c.id, label: c.name });
+    }
     return out;
   });
 </script>
