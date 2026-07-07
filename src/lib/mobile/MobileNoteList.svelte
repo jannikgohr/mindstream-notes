@@ -14,6 +14,7 @@
    * in here when collab metadata lands.
    */
   import {
+    Check,
     Folder,
     FolderInput,
     Loader2,
@@ -577,16 +578,24 @@
             class:ring-ring={selected}
           >
             {#if batchMode}
-              <input
-                type="checkbox"
-                class="absolute left-2 top-2 z-10 size-5 rounded border-border accent-primary"
-                checked={selected}
+              <button
+                type="button"
+                class="mobile-select-checkbox absolute left-2 top-2 z-10"
+                class:selected
+                role="checkbox"
+                aria-checked={selected}
                 aria-label={selected
                   ? `Unselect ${node.name}`
                   : `Select ${node.name}`}
-                onclick={(e) => e.stopPropagation()}
-                onchange={() => toggleNodeSelection(node)}
-              />
+                onclick={(e) => {
+                  e.stopPropagation();
+                  toggleNodeSelection(node);
+                }}
+              >
+                {#if selected}
+                  <Check class="size-3.5" strokeWidth={3} />
+                {/if}
+              </button>
             {/if}
             <button
               type="button"
@@ -658,16 +667,24 @@
             class:bg-accent={selected}
           >
             {#if batchMode}
-              <input
-                type="checkbox"
-                class="ml-1 size-5 shrink-0 rounded border-border accent-primary"
-                checked={selected}
+              <button
+                type="button"
+                class="mobile-select-checkbox ml-1 shrink-0"
+                class:selected
+                role="checkbox"
+                aria-checked={selected}
                 aria-label={selected
                   ? `Unselect ${node.name}`
                   : `Select ${node.name}`}
-                onclick={(e) => e.stopPropagation()}
-                onchange={() => toggleNodeSelection(node)}
-              />
+                onclick={(e) => {
+                  e.stopPropagation();
+                  toggleNodeSelection(node);
+                }}
+              >
+                {#if selected}
+                  <Check class="size-3.5" strokeWidth={3} />
+                {/if}
+              </button>
             {/if}
             <button
               type="button"
@@ -729,7 +746,7 @@
 
 {#if batchMode}
   <div
-    class="safe-x mobile-batch-actions fixed inset-x-0 z-40 flex items-center gap-2 border-y border-border bg-card p-3 shadow-2xl"
+    class="mobile-batch-actions fixed inset-x-0 z-40 flex items-center gap-2 border-y border-border bg-card shadow-2xl"
   >
     <button
       type="button"
@@ -803,5 +820,35 @@
 
   .mobile-batch-actions {
     bottom: calc(env(safe-area-inset-bottom) + 3.25rem);
+    padding: 0.75rem calc(0.75rem + env(safe-area-inset-right)) 0.75rem
+      calc(0.75rem + env(safe-area-inset-left));
+  }
+
+  .mobile-select-checkbox {
+    display: inline-flex;
+    width: 1.25rem;
+    height: 1.25rem;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid hsl(var(--border));
+    border-radius: 0.25rem;
+    background: hsl(var(--background));
+    color: hsl(var(--primary-foreground));
+    transition:
+      background-color 120ms ease,
+      border-color 120ms ease,
+      box-shadow 120ms ease;
+  }
+
+  .mobile-select-checkbox.selected {
+    border-color: hsl(var(--primary));
+    background: hsl(var(--primary));
+  }
+
+  .mobile-select-checkbox:focus-visible {
+    outline: none;
+    box-shadow:
+      0 0 0 2px hsl(var(--background)),
+      0 0 0 4px hsl(var(--ring));
   }
 </style>
