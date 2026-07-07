@@ -68,7 +68,10 @@
     -->
     {#if isLast}
       <span
-        class="flex min-w-0 items-center gap-1 rounded px-1 py-0.5 font-medium text-foreground"
+        class="flex min-w-0 items-center gap-1 rounded py-0.5 font-medium text-foreground"
+        class:px-1={!isRoot}
+        class:pl-2={isRoot}
+        class:pr-1={isRoot}
         aria-current="page"
       >
         {#if isRoot}
@@ -79,7 +82,10 @@
     {:else}
       <button
         type="button"
-        class="flex min-w-0 items-center gap-1 rounded px-1 py-0.5 hover:bg-accent hover:text-accent-foreground"
+        class="flex min-w-0 items-center gap-1 rounded py-0.5 hover:bg-accent hover:text-accent-foreground"
+        class:px-1={!isRoot}
+        class:pl-2={isRoot}
+        class:pr-1={isRoot}
         onclick={() => setCurrentFolder(seg.id)}
       >
         {#if isRoot}
