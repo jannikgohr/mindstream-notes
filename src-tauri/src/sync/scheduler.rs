@@ -30,7 +30,9 @@ use tokio::sync::{Mutex, MutexGuard};
 use crate::auth;
 use crate::db::Db;
 
-use super::{catch_blocking_panic, run, SyncCompletedEvent, SYNC_COMPLETED_EVENT};
+use super::{
+    catch_blocking_panic, preflight_reachable, run, SyncCompletedEvent, SYNC_COMPLETED_EVENT,
+};
 
 /// Default tick interval (seconds) before the JS side hydrates the
 /// schedule from settings. 30s matches the previous JS `'live'`
@@ -116,6 +118,14 @@ pub fn spawn(app: AppHandle) {
 /// no difference between scheduler-triggered and user-triggered
 /// syncs.
 async fn tick(app: &AppHandle) -> Result<(), String> {
+    // Reachability preflight. When the server is unreachable the probe
+    // emits a one-shot `sync-unreachable` notification; skip the tick
+    // quietly rather than logging a hard failure (and firing doomed
+    // requests) every cycle while offline.
+    if !preflight_reachable(app).await {
+        return Ok(());
+    }
+
     let app_for_blocking = app.clone();
     let delta = tauri::async_runtime::spawn_blocking(move || {
         catch_blocking_panic("sync-scheduler", || {

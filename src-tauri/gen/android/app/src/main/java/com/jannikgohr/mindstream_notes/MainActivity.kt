@@ -18,6 +18,11 @@ class MainActivity : TauriActivity() {
     // init covers both. Don't reorder — Tauri's super.onCreate is the
     // boundary after which Rust code starts running.
     Keyring.initializeNdkContext(this.applicationContext)
+    // Stash the app context (and trigger AppRestart's static init, which
+    // caches its JNI class) so the mobile vault switch can reboot the
+    // process via the native restart bridge. Order-independent of the
+    // Rust runtime — it only needs loadLibrary, which its init block does.
+    AppRestart.init(this.applicationContext)
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
   }

@@ -23,3 +23,19 @@ export async function isAppImageInstall(): Promise<boolean> {
   if (!isTauri()) return false;
   return await tauriInvoke<boolean>('is_appimage_install');
 }
+
+/**
+ * Reboot the app process via the native Android restart bridge (see
+ * src-tauri/src/app_restart.rs). Used by the mobile vault switch to
+ * reload into the newly-activated vault — desktop relaunches through
+ * `@tauri-apps/plugin-process` instead and never calls this.
+ *
+ * The `restart_app` command only exists on Android, so on any other
+ * target (desktop, browser dev) the invoke rejects; callers treat that
+ * as "couldn't restart automatically" and fall back to a manual-relaunch
+ * notice. A successful call never resolves — the process is killed.
+ */
+export async function restartApp(): Promise<void> {
+  if (!isTauri()) return;
+  await tauriInvoke<void>('restart_app');
+}

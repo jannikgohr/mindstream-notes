@@ -17,6 +17,7 @@ vi.mock('$lib/stores/tree.svelte', () => ({ tree, setNoteFavourite }));
 import {
   collapseFab,
   clearMobileBatchSelection,
+  closeNavOverlay,
   installMobileHistoryNav,
   isFavourite,
   isMobileBatchSelected,
@@ -26,6 +27,7 @@ import {
   mobileState,
   navigateBack,
   navigateToEditor,
+  openNavOverlay,
   setCurrentFolder,
   setMobileBatchSelection,
   setDisplayMode,
@@ -217,6 +219,77 @@ describe('history navigation', () => {
     // Second install while one is active is a no-op cleanup.
     const noop = installMobileHistoryNav();
     expect(typeof noop).toBe('function');
+    cleanup();
+  });
+});
+
+describe('nav overlays', () => {
+  it('openNavOverlay records a history entry', () => {
+    const cleanup = installMobileHistoryNav();
+    openNavOverlay('settings', vi.fn());
+    expect(pushState).toHaveBeenCalledWith('', {});
+    cleanup();
+  });
+
+  it('the system back button dismisses the top overlay and leaves the base screen', () => {
+    const cleanup = installMobileHistoryNav();
+    mobileState.screen = 'editor';
+    const close = vi.fn();
+    openNavOverlay('settings', close);
+
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    expect(close).toHaveBeenCalledTimes(1);
+    // Only the overlay was dismissed — the editor underneath stays put.
+    expect(mobileState.screen).toBe('editor');
+    cleanup();
+  });
+
+  it('a UI-initiated close reclaims the history entry and swallows the resulting pop', () => {
+    const cleanup = installMobileHistoryNav();
+    mobileState.screen = 'editor';
+    const back = vi.spyOn(window.history, 'back').mockImplementation(() => {});
+    const close = vi.fn();
+    openNavOverlay('vault', close);
+
+    // The surface closed itself (X / backdrop) and reports it:
+    closeNavOverlay('vault');
+    expect(back).toHaveBeenCalledTimes(1);
+
+    // The bookkeeping pop must neither re-run close() nor reset the screen.
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    expect(close).not.toHaveBeenCalled();
+    expect(mobileState.screen).toBe('editor');
+
+    back.mockRestore();
+    cleanup();
+  });
+
+  it('closeNavOverlay for an already-popped overlay is a no-op', () => {
+    const cleanup = installMobileHistoryNav();
+    const back = vi.spyOn(window.history, 'back').mockImplementation(() => {});
+    openNavOverlay('settings', vi.fn());
+
+    // System back pops it off the stack…
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    // …so a late UI close must not touch history again.
+    closeNavOverlay('settings');
+    expect(back).not.toHaveBeenCalled();
+
+    back.mockRestore();
+    cleanup();
+  });
+
+  it('back falls through to editor→home once every overlay is dismissed', () => {
+    const cleanup = installMobileHistoryNav();
+    mobileState.screen = 'editor';
+    openNavOverlay('notifications', vi.fn());
+
+    // First back closes the overlay (editor preserved)…
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    expect(mobileState.screen).toBe('editor');
+    // …the next returns home.
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    expect(mobileState.screen).toBe('home');
     cleanup();
   });
 });

@@ -264,10 +264,18 @@
     "search.hint": "↑↓ to navigate · ↵ to open · Esc to close",
     "settings.open": "Open settings",
 
+    "options.open": "Open menu",
+    "options.title": "Menu",
+    "options.settings": "Settings",
+    "options.notifications": "Notifications",
+    "options.vaults": "Vaults",
+
     "notifications.open": "Open notifications",
     "notifications.title": "Notifications",
     "notifications.empty": "No notifications right now.",
     "notifications.dismiss": "Dismiss notification",
+    "notifications.sync.offline.title": "Can't reach your sync server",
+    "notifications.sync.offline.message": "Sync is paused — {server} isn't responding. Check your connection or VPN, then tap to retry.",
     "notifications.update.title": "Update available",
     "notifications.update.message": "Mindstream Notes {to} is available. You're on {from}.",
 

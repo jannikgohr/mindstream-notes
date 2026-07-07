@@ -178,11 +178,13 @@ export function setMobileScreen(screen: MobileScreen) {
 // `Activity.finish()` whenever `webView.canGoBack()` is false, and
 // without history entries it always was.
 //
-// Fix: push a history entry every time the user navigates from home
-// to an editor, and treat any popstate as "go back to home". The
-// nav is currently 1-level (home ↔ editor) so we don't need to read
-// state off the popstate event — any pop means we're coming back
-// from an editor.
+// The nav is now a small stack: a base level (home ↔ editor, driven by
+// `mobileState.screen`) with zero or more dismissible **overlays** on
+// top (the options menu's settings / notifications / vault surfaces).
+// Every level owns one browser-history entry, so the Android system
+// back button pops them one at a time — closing the top overlay first,
+// then editor→home, and only then falling through to the activity's
+// own back handler (which finishes the app).
 //
 // Why SvelteKit's `pushState` and not `window.history.pushState`:
 // SvelteKit wraps the history API to drive its own client-side
@@ -195,9 +197,66 @@ export function setMobileScreen(screen: MobileScreen) {
 
 let historyInstalled = false;
 
+/** A dismissible full-screen surface stacked above the base nav. */
+interface NavOverlay {
+  id: string;
+  close: () => void;
+}
+
+// The live overlay stack, innermost (base) → outermost (topmost). Not
+// reactive: it's control-flow bookkeeping, read only by the popstate
+// handler and the open/close helpers.
+let overlayStack: NavOverlay[] = [];
+
+// True while the popstate handler is invoking an overlay's `close()`.
+// Its `onOpenChange`/close button then calls `closeNavOverlay`, and this
+// flag tells that call the history entry is already being consumed by
+// the pop — so it must NOT issue its own `history.back()`.
+let poppingOverlayFromHistory = false;
+
+// True for the single popstate that a UI-initiated `closeNavOverlay`
+// fires via `history.back()` to reclaim the overlay's dangling history
+// entry. That pop is pure bookkeeping — the overlay is already closed —
+// so the handler swallows it instead of treating it as a real "back".
+let suppressNextPop = false;
+
 /**
- * Install the popstate listener. Safe to call multiple times —
- * only installs once. Designed to run from `MobileLayout.onMount`.
+ * Open a dismissible overlay as a new nav level: record a history entry
+ * and register `close` so the system back button (or another overlay
+ * opening) can dismiss it. `close` must actually hide the surface (flip
+ * its `open` flag) — it runs when the entry is popped.
+ *
+ * Pair every `openNavOverlay` with a `closeNavOverlay(id)` from the
+ * surface's own dismissal path (X button, backdrop, Escape) so a
+ * UI-driven close keeps the history in lockstep.
+ */
+export function openNavOverlay(id: string, close: () => void): void {
+  if (typeof window === 'undefined') return;
+  overlayStack.push({ id, close });
+  pushState('', {});
+}
+
+/**
+ * Remove an overlay from the stack in response to it being dismissed by
+ * its own UI. When this isn't already running inside a history pop, it
+ * reclaims the dangling history entry with `history.back()` (swallowed
+ * by `suppressNextPop`) so the browser depth matches the stack. No-op if
+ * the overlay was already popped (e.g. the system back button closed
+ * it), which keeps double-dismissal idempotent.
+ */
+export function closeNavOverlay(id: string): void {
+  const idx = overlayStack.findIndex((o) => o.id === id);
+  if (idx === -1) return;
+  overlayStack.splice(idx, 1);
+  if (!poppingOverlayFromHistory && typeof window !== 'undefined') {
+    suppressNextPop = true;
+    window.history.back();
+  }
+}
+
+/**
+ * Install the popstate listener. Safe to call multiple times — only
+ * installs once. Designed to run from `MobileLayout.onMount`.
  */
 export function installMobileHistoryNav(): () => void {
   if (typeof window === 'undefined') return () => {};
@@ -205,16 +264,35 @@ export function installMobileHistoryNav(): () => void {
   historyInstalled = true;
 
   const onPopState = () => {
-    // 1-level nav: any pop means we're coming back from an
-    // editor screen. If we ever add deeper nesting (modal /
-    // settings / multi-step flows) on mobile, track the current
-    // depth in pushState's state object and dispatch per-pop.
+    // The bookkeeping pop from a UI-initiated overlay close — already
+    // handled, so consume it without touching nav state.
+    if (suppressNextPop) {
+      suppressNextPop = false;
+      return;
+    }
+    // Topmost overlay first: dismiss it and stop, leaving the base
+    // screen (home or editor) untouched underneath.
+    if (overlayStack.length > 0) {
+      const top = overlayStack.pop()!;
+      poppingOverlayFromHistory = true;
+      try {
+        top.close();
+      } finally {
+        poppingOverlayFromHistory = false;
+      }
+      return;
+    }
+    // No overlays: the base nav is 1-level (home ↔ editor), so any pop
+    // here means we're coming back from an editor screen.
     setMobileScreen('home');
   };
   window.addEventListener('popstate', onPopState);
   return () => {
     window.removeEventListener('popstate', onPopState);
     historyInstalled = false;
+    overlayStack = [];
+    poppingOverlayFromHistory = false;
+    suppressNextPop = false;
   };
 }
 
