@@ -14,7 +14,8 @@
    * in here when collab metadata lands.
    */
   import {
-    Check,
+    Circle,
+    CircleCheck,
     Folder,
     FolderInput,
     Loader2,
@@ -580,7 +581,7 @@
             {#if batchMode}
               <button
                 type="button"
-                class="mobile-select-checkbox absolute left-2 top-2 z-10"
+                class="mobile-select-checkbox absolute left-2 top-2 z-10 text-muted-foreground"
                 class:selected
                 role="checkbox"
                 aria-checked={selected}
@@ -593,7 +594,9 @@
                 }}
               >
                 {#if selected}
-                  <Check class="size-3.5" strokeWidth={3} />
+                  <CircleCheck class="size-5" strokeWidth={2.4} />
+                {:else}
+                  <Circle class="size-5" strokeWidth={2.4} />
                 {/if}
               </button>
             {/if}
@@ -669,7 +672,7 @@
             {#if batchMode}
               <button
                 type="button"
-                class="mobile-select-checkbox ml-1 shrink-0"
+                class="mobile-select-checkbox ml-1 shrink-0 text-muted-foreground"
                 class:selected
                 role="checkbox"
                 aria-checked={selected}
@@ -682,7 +685,9 @@
                 }}
               >
                 {#if selected}
-                  <Check class="size-3.5" strokeWidth={3} />
+                  <CircleCheck class="size-5" strokeWidth={2.4} />
+                {:else}
+                  <Circle class="size-5" strokeWidth={2.4} />
                 {/if}
               </button>
             {/if}
@@ -826,23 +831,15 @@
 
   .mobile-select-checkbox {
     display: inline-flex;
-    width: 1.25rem;
-    height: 1.25rem;
+    width: 1.5rem;
+    height: 1.5rem;
     align-items: center;
     justify-content: center;
-    border: 1px solid hsl(var(--border));
-    border-radius: 0.25rem;
-    background: hsl(var(--background));
-    color: hsl(var(--primary-foreground));
+    border-radius: 9999px;
+    background: var(--card);
     transition:
-      background-color 120ms ease,
-      border-color 120ms ease,
+      color 120ms ease,
       box-shadow 120ms ease;
-  }
-
-  .mobile-select-checkbox.selected {
-    border-color: hsl(var(--primary));
-    background: hsl(var(--primary));
   }
 
   .mobile-select-checkbox:focus-visible {
