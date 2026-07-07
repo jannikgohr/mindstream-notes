@@ -31,6 +31,7 @@
   import MobileBreadcrumb from './MobileBreadcrumb.svelte';
   import MobileToolbar from './MobileToolbar.svelte';
   import MobileNoteList from './MobileNoteList.svelte';
+  import { mobileBatchSelection } from './state.svelte';
   import MobileFab, { type FabAction } from './MobileFab.svelte';
   import MobileBottomNav from './MobileBottomNav.svelte';
   import MobileEditor from './MobileEditor.svelte';
@@ -195,10 +196,13 @@
   // creating notes makes sense (favourites is a virtual filter, trash
   // is read-only, shared has no model yet).
   const fabVisible = $derived(
-    mobileState.view === 'home' && mobileState.screen === 'home'
+    mobileState.view === 'home' &&
+      mobileState.screen === 'home' &&
+      mobileBatchSelection.items.length === 0
   );
 
   const showHome = $derived(mobileState.screen === 'home');
+  const batchMode = $derived(mobileBatchSelection.items.length > 0);
 </script>
 
 <div class="safe-x flex h-full w-full flex-col">
@@ -216,9 +220,11 @@
       {/if}
     </div>
 
-    <div class="safe-bottom shrink-0 bg-card">
-      <MobileBottomNav />
-    </div>
+    {#if !batchMode}
+      <div class="safe-bottom shrink-0 bg-card">
+        <MobileBottomNav />
+      </div>
+    {/if}
   {:else}
     <div class="safe-top safe-bottom flex h-full w-full flex-col">
       <MobileEditor />
