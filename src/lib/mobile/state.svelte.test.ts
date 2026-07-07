@@ -203,6 +203,40 @@ describe('history navigation', () => {
     expect(pushState).toHaveBeenCalledWith('', {});
   });
 
+  it('walks the editor note stack back through a followed-link chain', () => {
+    const cleanup = installMobileHistoryNav();
+    // home → n1 → n2 → n3 (each hop is a wikilink follow).
+    navigateToEditor('n1');
+    navigateToEditor('n2');
+    navigateToEditor('n3');
+    setActiveNote.mockClear();
+
+    // Back surfaces the previous note and stays in the editor…
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    expect(setActiveNote).toHaveBeenLastCalledWith('n2');
+    expect(mobileState.screen).toBe('editor');
+
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    expect(setActiveNote).toHaveBeenLastCalledWith('n1');
+    expect(mobileState.screen).toBe('editor');
+
+    // …and only the final pop returns to the note list.
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    expect(mobileState.screen).toBe('home');
+    cleanup();
+  });
+
+  it('reinstalling the history nav clears a leftover note stack', () => {
+    installMobileHistoryNav()();
+    // A fresh mount must not inherit the previous shell's stack: a pop
+    // with an empty stack goes straight home.
+    const cleanup = installMobileHistoryNav();
+    mobileState.screen = 'editor';
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    expect(mobileState.screen).toBe('home');
+    cleanup();
+  });
+
   it('navigateBack delegates to window.history.back', () => {
     const back = vi.spyOn(window.history, 'back').mockImplementation(() => {});
     navigateBack();

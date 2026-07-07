@@ -178,9 +178,10 @@ export function setMobileScreen(screen: MobileScreen) {
 // `Activity.finish()` whenever `webView.canGoBack()` is false, and
 // without history entries it always was.
 //
-// The nav is now a small stack: a base level (home ↔ editor, driven by
-// `mobileState.screen`) with zero or more dismissible **overlays** on
-// top (the options menu's settings / notifications / vault surfaces).
+// The nav is now a small stack: a base level (home, then one entry per
+// note opened via `navigateToEditor` — see `editorStack`) with zero or
+// more dismissible **overlays** on top (the options menu's settings /
+// notifications / vault surfaces).
 // Every level owns one browser-history entry, so the Android system
 // back button pops them one at a time — closing the top overlay first,
 // then editor→home, and only then falling through to the activity's
@@ -207,6 +208,17 @@ interface NavOverlay {
 // reactive: it's control-flow bookkeeping, read only by the popstate
 // handler and the open/close helpers.
 let overlayStack: NavOverlay[] = [];
+
+// The editor's note back-stack, oldest → newest. Each `navigateToEditor`
+// (opening from the list, following a wikilink, jumping from search)
+// pushes both a browser-history entry and one entry here, so the two
+// stay index-for-index aligned. A base-level back pop walks this stack:
+// it surfaces the previous note when one remains, and only falls through
+// to home once the stack is empty. That makes the Android system back
+// button retrace a chain of followed links (n3 → n2 → n1 → home) instead
+// of collapsing straight to the note list. Not reactive — the active
+// note is mirrored into `ui.activeNoteId` via setActiveNote.
+let editorStack: string[] = [];
 
 // True while the popstate handler is invoking an overlay's `close()`.
 // Its `onOpenChange`/close button then calls `closeNavOverlay`, and this
@@ -262,6 +274,8 @@ export function installMobileHistoryNav(): () => void {
   if (typeof window === 'undefined') return () => {};
   if (historyInstalled) return () => {};
   historyInstalled = true;
+  // Fresh mount = fresh nav; drop any note stack left by a prior shell.
+  editorStack = [];
 
   const onPopState = () => {
     // The bookkeeping pop from a UI-initiated overlay close — already
@@ -282,8 +296,18 @@ export function installMobileHistoryNav(): () => void {
       }
       return;
     }
-    // No overlays: the base nav is 1-level (home ↔ editor), so any pop
-    // here means we're coming back from an editor screen.
+    // No overlays: walk the editor note stack. Pop the current note; if
+    // an earlier one remains (a followed-link chain), surface it and stay
+    // in the editor. Only once the stack drains do we fall through to the
+    // home note list.
+    if (editorStack.length > 0) {
+      editorStack.pop();
+      const previous = editorStack[editorStack.length - 1];
+      if (previous !== undefined) {
+        setActiveNote(previous);
+        return;
+      }
+    }
     setMobileScreen('home');
   };
   window.addEventListener('popstate', onPopState);
@@ -291,6 +315,7 @@ export function installMobileHistoryNav(): () => void {
     window.removeEventListener('popstate', onPopState);
     historyInstalled = false;
     overlayStack = [];
+    editorStack = [];
     poppingOverlayFromHistory = false;
     suppressNextPop = false;
   };
@@ -307,12 +332,15 @@ export function navigateToEditor(noteId: string) {
   clearMobileBatchSelection();
   setActiveNote(noteId);
   setMobileScreen('editor');
+  // Record the note on the back-stack so a system-back pop can retrace
+  // the chain. Kept in lockstep with the pushState below: one history
+  // entry per stack entry.
+  editorStack.push(noteId);
   if (typeof window !== 'undefined') {
     // Empty URL = keep the current SvelteKit route (we're not
-    // route-navigating, just recording a history entry our
-    // popstate handler can pop). Empty state object because the
-    // popstate handler doesn't currently read it — we only track
-    // 1-level nav.
+    // route-navigating, just recording a history entry our popstate
+    // handler can pop). The popstate handler reads editorStack rather
+    // than the state object, so the object stays empty.
     pushState('', {});
   }
 }
