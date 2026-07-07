@@ -25,6 +25,7 @@ export {
 } from './mermaid';
 export {
   createWikilinkBridge,
+  parseNoteHref,
   resolveNoteIdByTitle,
   wikilinkPlugins,
   type WikilinkBridge

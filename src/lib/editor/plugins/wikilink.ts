@@ -1128,10 +1128,25 @@ export function wikilinkDecorationPlugin(
         hideNativeNoteLinkTooltipsSoon();
       };
 
+      // Note links render as real `<a href="mindstream://note/…">`
+      // anchors. `handleClick` preventDefaults on the paths where it
+      // opens the note, but its early returns (note not resolved, plain
+      // click with open-on-click off) don't — leaving the browser to
+      // follow the href. On the Android WebView that navigates the whole
+      // page to the unresolvable custom scheme and white-screens the app.
+      // Cancel the default navigation for every note-link anchor here,
+      // unconditionally and in the capture phase (before the anchor's own
+      // default action). preventDefault only stops the navigation; it
+      // doesn't stop `handleClick` from still running to open the note.
+      const preventNoteLinkNavigation = (event: MouseEvent) => {
+        if (closestNoteLinkElement(event.target)) event.preventDefault();
+      };
+
       view.dom.addEventListener('mousemove', suppressHoverTooltip, true);
       view.dom.addEventListener('mouseover', suppressHoverTooltip, true);
       view.dom.addEventListener('mousedown', hideTooltip, true);
       view.dom.addEventListener('click', hideTooltip, true);
+      view.dom.addEventListener('click', preventNoteLinkNavigation, true);
 
       return {
         update(view) {
@@ -1143,6 +1158,11 @@ export function wikilinkDecorationPlugin(
           view.dom.removeEventListener('mouseover', suppressHoverTooltip, true);
           view.dom.removeEventListener('mousedown', hideTooltip, true);
           view.dom.removeEventListener('click', hideTooltip, true);
+          view.dom.removeEventListener(
+            'click',
+            preventNoteLinkNavigation,
+            true
+          );
           view.dom.classList.remove(
             'wikilink-boundary-inside',
             'wikilink-boundary-outside',
