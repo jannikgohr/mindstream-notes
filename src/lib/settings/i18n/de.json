@@ -174,6 +174,8 @@
     "notifications.title": "Benachrichtigungen",
     "notifications.empty": "Derzeit keine Benachrichtigungen.",
     "notifications.dismiss": "Benachrichtigung ausblenden",
+    "notifications.sync.offline.title": "Sync-Server nicht erreichbar",
+    "notifications.sync.offline.message": "Die Synchronisierung pausiert — {server} antwortet nicht. Prüfe deine Verbindung oder dein VPN und tippe zum erneuten Versuch.",
     "notifications.update.title": "Update verfügbar",
     "notifications.update.message": "Mindstream Notes {to} ist verfügbar. Du nutzt {from}.",
 

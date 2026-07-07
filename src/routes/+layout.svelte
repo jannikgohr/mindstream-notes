@@ -26,6 +26,7 @@
   } from '$lib/hotkeys/global.svelte';
   import { initNativeMenuCommands } from '$lib/native-menu.svelte';
   import { loadProfiles } from '$lib/stores/profiles.svelte';
+  import { installSyncStatusBridge } from '$lib/notifications/sync-status';
 
   let { children } = $props();
 
@@ -53,6 +54,9 @@
     void loadProfiles();
     initHotkeys();
     initNativeMenuCommands();
+    // Surface a notification when Rust reports the sync server is
+    // unreachable (and clear it on the next successful sync).
+    const teardownSyncStatus = installSyncStatusBridge();
     const blockTouchZoom = (event: WheelEvent) => {
       if (!event.ctrlKey) return;
       event.preventDefault();
@@ -60,6 +64,7 @@
     window.addEventListener('wheel', blockTouchZoom, { passive: false });
     return () => {
       window.removeEventListener('wheel', blockTouchZoom);
+      teardownSyncStatus();
       void teardownGlobalShortcuts();
     };
   });

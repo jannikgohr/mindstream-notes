@@ -263,6 +263,59 @@ pub struct SyncCompletedEvent {
 
 pub const SYNC_COMPLETED_EVENT: &str = "sync-completed";
 
+/// Emitted when the pre-sync reachability probe fails — the active
+/// vault's server didn't answer. The JS side turns this into a single
+/// "can't reach your sync server" notification.
+pub const SYNC_UNREACHABLE_EVENT: &str = "sync-unreachable";
+
+/// Payload for [`SYNC_UNREACHABLE_EVENT`]: the server we couldn't reach
+/// and the transport error detail (for logs / the notification body).
+#[derive(Debug, Clone, Serialize)]
+pub struct SyncUnreachableEvent {
+    pub server_url: String,
+    pub detail: String,
+}
+
+/// Pre-sync reachability guard shared by `sync_now` and the scheduler
+/// tick. Returns `true` to proceed with the sync; `false` to skip it
+/// because the active vault's server didn't answer — in which case a
+/// [`SYNC_UNREACHABLE_EVENT`] has already been emitted so the UI shows
+/// one clear offline notification instead of letting `run` fan out into
+/// a storm of failing requests (cached-collection fetch + list × 4
+/// kinds).
+///
+/// Signed-out installs return `true`; `run`'s `try_restore` then no-ops
+/// exactly as before. An error *reading* the session (not a transport
+/// failure) also returns `true`, so a genuine session problem still
+/// surfaces through the normal path instead of being masked as "offline".
+async fn preflight_reachable(app: &AppHandle) -> bool {
+    let info = match auth::read_session_info(app) {
+        Ok(Some(info)) => info,
+        Ok(None) => return true,
+        Err(e) => {
+            log::warn!("[sync] preflight: could not read session info: {e}");
+            return true;
+        }
+    };
+    match auth::probe_server_reachable(&info.server_url).await {
+        Ok(()) => true,
+        Err(detail) => {
+            log::warn!(
+                "[sync] server unreachable, skipping sync: {} ({detail})",
+                info.server_url
+            );
+            let event = SyncUnreachableEvent {
+                server_url: info.server_url,
+                detail,
+            };
+            if let Err(e) = app.emit(SYNC_UNREACHABLE_EVENT, &event) {
+                log::warn!("[sync] failed to emit {SYNC_UNREACHABLE_EVENT}: {e}");
+            }
+            false
+        }
+    }
+}
+
 // ---------- Tauri command ----------
 
 #[tauri::command]
@@ -273,6 +326,14 @@ pub async fn sync_now(app: AppHandle) -> Result<SyncReport, String> {
     // scheduler tick's worth of wait — typically <1s of no-op pulls.
     let scheduler_state = app.state::<scheduler::SyncScheduler>();
     let _guard = scheduler_state.acquire_in_flight().await;
+
+    // Check the server is reachable before doing anything. On failure the
+    // probe emits `sync-unreachable` (one clear offline notification);
+    // bail out rather than fanning out into a storm of failing requests.
+    if !preflight_reachable(&app).await {
+        return Err("sync server unreachable".to_string());
+    }
+
     let app_for_blocking = app.clone();
     let delta = tauri::async_runtime::spawn_blocking(move || -> Result<SyncDelta, String> {
         catch_blocking_panic("sync", || {

@@ -28,6 +28,13 @@ export interface SyncCompletedPayload {
 export type TauriEvents = {
   'fullscreen-note': { noteId: string; title: string };
   'sync-completed': SyncCompletedPayload;
+  /**
+   * Fired from Rust when the pre-sync reachability probe fails — the
+   * active vault's server didn't answer. The notification bridge turns
+   * this into a single "can't reach your sync server" notification.
+   * Mirrors `sync::SYNC_UNREACHABLE_EVENT`.
+   */
+  'sync-unreachable': { server_url: string; detail: string };
   'tray-note-created': { note_id: string };
   'show-app': null;
   /**

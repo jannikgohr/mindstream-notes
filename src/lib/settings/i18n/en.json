@@ -274,6 +274,8 @@
     "notifications.title": "Notifications",
     "notifications.empty": "No notifications right now.",
     "notifications.dismiss": "Dismiss notification",
+    "notifications.sync.offline.title": "Can't reach your sync server",
+    "notifications.sync.offline.message": "Sync is paused — {server} isn't responding. Check your connection or VPN, then tap to retry.",
     "notifications.update.title": "Update available",
     "notifications.update.message": "Mindstream Notes {to} is available. You're on {from}.",
 

@@ -1,6 +1,10 @@
 import type { Component } from 'svelte';
 
-export type NotificationKind = 'update' | 'collaboration-invite' | 'generic';
+export type NotificationKind =
+  | 'update'
+  | 'collaboration-invite'
+  | 'generic'
+  | 'sync-offline';
 export type NotificationWidgetType =
   | 'update'
   | 'collaboration-invite'
