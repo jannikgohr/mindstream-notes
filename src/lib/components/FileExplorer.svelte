@@ -838,9 +838,6 @@
       direction={ui.sortDirection}
       onStrategyChange={setSortStrategy}
       onDirectionChange={setSortDirection}
-      onLabelOverflowChange={(overflowing) => {
-        if (overflowing) sortControlCollapsed = true;
-      }}
       variant="ghost"
       compact
       collapsed={sortControlCollapsed}
