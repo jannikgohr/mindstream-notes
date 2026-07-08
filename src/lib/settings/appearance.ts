@@ -26,7 +26,7 @@ function clamp(value: unknown, min: number, max: number, fallback: number) {
  */
 export function applyUiFontSize(px: unknown): void {
   if (typeof document === 'undefined') return;
-  const size = clamp(px, 12, 18, 14);
+  const size = clamp(px, 12, 18, 16);
   document.documentElement.style.setProperty('--ui-font-size', `${size}px`);
 }
 
@@ -36,15 +36,24 @@ export function applyUiFontSize(px: unknown): void {
  * is unitless so it tracks whatever font size is in effect. app.css applies
  * both to the ProseMirror content — headings/blocks inside scale relative to
  * the body size through their own em-based rules.
+ *
+ * `lineHeight` is nullable: pass `null` (the caller does this while the
+ * setting is at its default) to clear the var so the ProseMirror rule falls
+ * back to `normal`, reproducing Crepe's native line spacing rather than
+ * forcing a numeric ratio on users who never touched the slider.
  */
 export function applyEditorTypography(px: unknown, lineHeight: unknown): void {
   if (typeof document === 'undefined') return;
   const root = document.documentElement;
   root.style.setProperty('--editor-font-size', `${clamp(px, 12, 24, 16)}px`);
-  root.style.setProperty(
-    '--editor-line-height',
-    `${clamp(lineHeight, 1.2, 2, 1.6)}`
-  );
+  if (lineHeight == null) {
+    root.style.removeProperty('--editor-line-height');
+  } else {
+    root.style.setProperty(
+      '--editor-line-height',
+      `${clamp(lineHeight, 1.2, 2, 1.6)}`
+    );
+  }
 }
 
 const DENSITIES = ['compact', 'cozy', 'roomy'] as const;

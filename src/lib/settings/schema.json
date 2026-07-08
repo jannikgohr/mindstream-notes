@@ -138,7 +138,7 @@
               "id": "appearance.uiFontSize",
               "scope": "V",
               "type": "slider",
-              "default": 14,
+              "default": 16,
               "min": 12,
               "max": 18,
               "step": 1,

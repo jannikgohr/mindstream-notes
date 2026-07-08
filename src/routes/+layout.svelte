@@ -116,11 +116,17 @@
   });
 
   // Appearance → editor body text size + line height. Written to CSS vars
-  // that app.css applies to the ProseMirror content.
+  // that app.css applies to the ProseMirror content. Line height is left
+  // unset (→ CSS `normal`, Crepe's native spacing) until the user actually
+  // picks a value, so the default look is unchanged; font size is safe to
+  // apply always because its default (16px) equals the inherited baseline.
   $effect(() => {
+    const lineHeight = isModified('appearance.lineHeight')
+      ? getSettingValue('appearance.lineHeight')
+      : null;
     applyEditorTypography(
       getSettingValue('appearance.editorFontSize'),
-      getSettingValue('appearance.lineHeight')
+      lineHeight
     );
   });
 

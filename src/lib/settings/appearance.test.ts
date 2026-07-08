@@ -31,7 +31,7 @@ describe('applyUiFontSize', () => {
     applyUiFontSize('15');
     expect(root().style.getPropertyValue('--ui-font-size')).toBe('15px');
     applyUiFontSize('nonsense');
-    expect(root().style.getPropertyValue('--ui-font-size')).toBe('14px');
+    expect(root().style.getPropertyValue('--ui-font-size')).toBe('16px');
   });
 });
 
@@ -51,10 +51,18 @@ describe('applyEditorTypography', () => {
     expect(root().style.getPropertyValue('--editor-line-height')).toBe('1.2');
   });
 
-  it('falls back to defaults for non-numeric input', () => {
-    applyEditorTypography('x', 'y');
+  it('falls back to the default font size for non-numeric input', () => {
+    applyEditorTypography('x', 1.6);
     expect(root().style.getPropertyValue('--editor-font-size')).toBe('16px');
-    expect(root().style.getPropertyValue('--editor-line-height')).toBe('1.6');
+  });
+
+  it('clears the line-height var when passed null so CSS falls back to normal', () => {
+    applyEditorTypography(18, 1.8);
+    expect(root().style.getPropertyValue('--editor-line-height')).toBe('1.8');
+    applyEditorTypography(18, null);
+    expect(root().style.getPropertyValue('--editor-line-height')).toBe('');
+    // font size is still applied even when line height is cleared
+    expect(root().style.getPropertyValue('--editor-font-size')).toBe('18px');
   });
 });
 
