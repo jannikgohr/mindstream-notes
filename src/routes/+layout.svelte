@@ -5,6 +5,7 @@
   import { getSettingValue, isModified } from '$lib/settings/store.svelte';
   import { prefersReducedMotion } from '$lib/reduce-motion.svelte';
   import { applyAccentColor, clearAccentColor } from '$lib/settings/accent';
+  import { applyUiFontSize } from '$lib/settings/appearance';
   import { invokeOrFallback } from '$lib/api/core';
   import { setNativeHotkeyDisplays } from '$lib/api/hotkeys';
   import { setTrashRetention, sweepTrashRetention } from '$lib/api/data';
@@ -101,6 +102,13 @@
     } else {
       clearAccentColor();
     }
+  });
+
+  // Appearance → UI font size. Writes --ui-font-size (the rem base for the
+  // whole chrome). Unlike accent, applying at the default is safe, so this
+  // runs unconditionally and stays the single source of truth for the slider.
+  $effect(() => {
+    applyUiFontSize(getSettingValue('appearance.uiFontSize'));
   });
 
   // Mirror the resolved reduce-motion preference onto

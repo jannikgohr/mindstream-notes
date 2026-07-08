@@ -50,6 +50,22 @@
    * desktop / SSR / WebViews without visualViewport support, and gives
    * IDE linters something to resolve `var(--app-h)` against. */
   --app-h: 100%;
+  /* Appearance → Typography. `--ui-font-size` drives the root font-size
+   * (see the html rule below), so the whole rem-based chrome scales with
+   * it; `--editor-font-size` / `--editor-line-height` size the editor body
+   * text independently. Defaults mirror the schema so first paint is
+   * correct before appearance.ts runs; the setters in that module update
+   * these live when the user drags the sliders. */
+  --ui-font-size: 14px;
+  --editor-font-size: 16px;
+  --editor-line-height: 1.6;
+}
+
+/* Root font-size is the rem base for the entire UI; the Appearance → UI
+ * font size slider writes --ui-font-size to scale it. Kept off the `html,
+ * body` block below so the height/overflow rules there stay focused. */
+html {
+  font-size: var(--ui-font-size);
 }
 
 .dark {
