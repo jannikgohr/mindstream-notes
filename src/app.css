@@ -50,6 +50,25 @@
    * desktop / SSR / WebViews without visualViewport support, and gives
    * IDE linters something to resolve `var(--app-h)` against. */
   --app-h: 100%;
+  /* Appearance → Typography. `--ui-font-size` drives the root font-size
+   * (see the html rule below), so the whole rem-based chrome scales with
+   * it; `--editor-font-size` sizes the editor body text independently.
+   * Defaults reproduce the pre-setting rendering — 16px root (the browser
+   * default the app used before these sliders existed) and 16px editor
+   * body text (Crepe sets no size, so it inherited the 16px root). Line
+   * height is deliberately NOT defaulted here: unset, the ProseMirror rule
+   * below falls back to `normal`, matching Crepe's native line spacing;
+   * appearance.ts only writes --editor-line-height once the user changes
+   * the slider. */
+  --ui-font-size: 16px;
+  --editor-font-size: 16px;
+}
+
+/* Root font-size is the rem base for the entire UI; the Appearance → UI
+ * font size slider writes --ui-font-size to scale it. Kept off the `html,
+ * body` block below so the height/overflow rules there stay focused. */
+html {
+  font-size: var(--ui-font-size);
 }
 
 .dark {
@@ -618,6 +637,54 @@ body.dv-tab-dragging
 
 .milkdown {
   padding: 1.25rem 5px;
+}
+
+/* Appearance → Typography: editor body text size + line height.
+ *
+ * Crepe hardcodes px font-sizes and line-heights on every block element
+ * (see @milkdown/crepe reset.css), each more specific than a rule on
+ * .ProseMirror alone — so setting the container size isn't enough, the
+ * paragraphs stay pinned at 16px. We re-declare those blocks here in `em`
+ * relative to --editor-font-size, so the whole editor scales off the one
+ * variable. The ratios reproduce Crepe's defaults exactly at the 16px
+ * default (42/16 = 2.625em, 36/16 = 2.25em, …), so the at-rest look is
+ * unchanged; app.css imports Crepe first, so these equal-specificity
+ * rules win on source order.
+ *
+ * Body text line height honours the user's --editor-line-height (unset →
+ * Crepe's native 1.5 = 24px/16px); headings keep their own design-tuned
+ * proportional line heights so the slider only affects prose spacing. */
+.milkdown .ProseMirror {
+  font-size: var(--editor-font-size);
+  line-height: var(--editor-line-height, 1.5);
+}
+.milkdown .ProseMirror p {
+  font-size: 1em;
+  line-height: var(--editor-line-height, 1.5);
+}
+.milkdown .ProseMirror h1 {
+  font-size: 2.625em;
+  line-height: 1.19;
+}
+.milkdown .ProseMirror h2 {
+  font-size: 2.25em;
+  line-height: 1.222;
+}
+.milkdown .ProseMirror h3 {
+  font-size: 2em;
+  line-height: 1.25;
+}
+.milkdown .ProseMirror h4 {
+  font-size: 1.75em;
+  line-height: 1.286;
+}
+.milkdown .ProseMirror h5 {
+  font-size: 1.5em;
+  line-height: 1.333;
+}
+.milkdown .ProseMirror h6 {
+  font-size: 1.125em;
+  line-height: 1.556;
 }
 
 /*

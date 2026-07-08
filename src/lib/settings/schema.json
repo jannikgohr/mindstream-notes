@@ -108,13 +108,6 @@
               "default": "#0a0a0a"
             },
             {
-              "id": "appearance.density",
-              "scope": "V",
-              "type": "select",
-              "default": "cozy",
-              "options": ["compact", "cozy", "roomy"]
-            },
-            {
               "id": "appearance.reduceMotion",
               "scope": "D",
               "type": "radio",
@@ -138,7 +131,7 @@
               "id": "appearance.uiFontSize",
               "scope": "V",
               "type": "slider",
-              "default": 14,
+              "default": 16,
               "min": 12,
               "max": 18,
               "step": 1,

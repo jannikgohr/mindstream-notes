@@ -1,0 +1,62 @@
+import { afterEach, describe, expect, it } from 'vitest';
+import { applyEditorTypography, applyUiFontSize } from './appearance';
+
+const root = () => document.documentElement;
+
+afterEach(() => {
+  root().style.removeProperty('--ui-font-size');
+  root().style.removeProperty('--editor-font-size');
+  root().style.removeProperty('--editor-line-height');
+});
+
+describe('applyUiFontSize', () => {
+  it('writes the clamped size to --ui-font-size in px', () => {
+    applyUiFontSize(16);
+    expect(root().style.getPropertyValue('--ui-font-size')).toBe('16px');
+  });
+
+  it('clamps out-of-range values to the schema bounds (12–18)', () => {
+    applyUiFontSize(4);
+    expect(root().style.getPropertyValue('--ui-font-size')).toBe('12px');
+    applyUiFontSize(99);
+    expect(root().style.getPropertyValue('--ui-font-size')).toBe('18px');
+  });
+
+  it('coerces numeric strings and falls back to the default for garbage', () => {
+    applyUiFontSize('15');
+    expect(root().style.getPropertyValue('--ui-font-size')).toBe('15px');
+    applyUiFontSize('nonsense');
+    expect(root().style.getPropertyValue('--ui-font-size')).toBe('16px');
+  });
+});
+
+describe('applyEditorTypography', () => {
+  it('writes editor font size (px) and unitless line height', () => {
+    applyEditorTypography(20, 1.8);
+    expect(root().style.getPropertyValue('--editor-font-size')).toBe('20px');
+    expect(root().style.getPropertyValue('--editor-line-height')).toBe('1.8');
+  });
+
+  it('clamps both values to their schema bounds', () => {
+    applyEditorTypography(2, 5);
+    expect(root().style.getPropertyValue('--editor-font-size')).toBe('12px');
+    expect(root().style.getPropertyValue('--editor-line-height')).toBe('2');
+    applyEditorTypography(99, 0.1);
+    expect(root().style.getPropertyValue('--editor-font-size')).toBe('24px');
+    expect(root().style.getPropertyValue('--editor-line-height')).toBe('1.2');
+  });
+
+  it('falls back to the default font size for non-numeric input', () => {
+    applyEditorTypography('x', 1.6);
+    expect(root().style.getPropertyValue('--editor-font-size')).toBe('16px');
+  });
+
+  it('clears the line-height var when passed null so CSS falls back to normal', () => {
+    applyEditorTypography(18, 1.8);
+    expect(root().style.getPropertyValue('--editor-line-height')).toBe('1.8');
+    applyEditorTypography(18, null);
+    expect(root().style.getPropertyValue('--editor-line-height')).toBe('');
+    // font size is still applied even when line height is cleared
+    expect(root().style.getPropertyValue('--editor-font-size')).toBe('18px');
+  });
+});

@@ -5,6 +5,10 @@
   import { getSettingValue, isModified } from '$lib/settings/store.svelte';
   import { prefersReducedMotion } from '$lib/reduce-motion.svelte';
   import { applyAccentColor, clearAccentColor } from '$lib/settings/accent';
+  import {
+    applyEditorTypography,
+    applyUiFontSize
+  } from '$lib/settings/appearance';
   import { invokeOrFallback } from '$lib/api/core';
   import { setNativeHotkeyDisplays } from '$lib/api/hotkeys';
   import { setTrashRetention, sweepTrashRetention } from '$lib/api/data';
@@ -101,6 +105,28 @@
     } else {
       clearAccentColor();
     }
+  });
+
+  // Appearance → UI font size. Writes --ui-font-size (the rem base for the
+  // whole chrome). Unlike accent, applying at the default is safe, so this
+  // runs unconditionally and stays the single source of truth for the slider.
+  $effect(() => {
+    applyUiFontSize(getSettingValue('appearance.uiFontSize'));
+  });
+
+  // Appearance → editor body text size + line height. Written to CSS vars
+  // that app.css applies to the ProseMirror content. Line height is left
+  // unset (→ Crepe's native 1.5) until the user actually picks a value, so
+  // the default look is unchanged; font size is safe to apply always
+  // because its default (16px) equals Crepe's own paragraph size.
+  $effect(() => {
+    const lineHeight = isModified('appearance.lineHeight')
+      ? getSettingValue('appearance.lineHeight')
+      : null;
+    applyEditorTypography(
+      getSettingValue('appearance.editorFontSize'),
+      lineHeight
+    );
   });
 
   // Mirror the resolved reduce-motion preference onto

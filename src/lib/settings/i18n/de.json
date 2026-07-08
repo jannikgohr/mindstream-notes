@@ -688,7 +688,6 @@
     },
     "appearance.mode": { "label": "Modus" },
     "appearance.accent": { "label": "Akzentfarbe" },
-    "appearance.density": { "label": "Dichte" },
     "appearance.reduceMotion": { "label": "Animationen reduzieren" },
     "appearance.customWindowDecorations": {
       "label": "Eigene Titelleiste verwenden",

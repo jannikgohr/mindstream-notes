@@ -868,7 +868,7 @@
       <ResizeHandle
         side="left"
         value={ui.leftSidebarWidth}
-        min={220}
+        min={245}
         max={500}
         onChange={setLeftSidebarWidth}
       />
