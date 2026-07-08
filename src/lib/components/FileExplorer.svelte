@@ -1217,10 +1217,9 @@
     display: none;
   }
 
-  .source-chip-row-collapsed .source-chip.source-chip-active {
-    min-width: 0;
-    flex: 1 1 auto;
-  }
+  /* Active chip stays content-sized in the collapsed row — it keeps its
+   * base `shrink-0` width just like every chip does in the expanded form,
+   * rather than stretching to eat the leftover space. */
 
   .file-tree-note-row:has(:focus-visible) {
     outline: 2px solid var(--ring);
