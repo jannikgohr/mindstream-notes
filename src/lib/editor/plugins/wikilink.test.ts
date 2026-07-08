@@ -191,3 +191,25 @@ describe('wikilink boundary editing at the start of the display name', () => {
     expect(linkedText(view)).toBe('xyTitle');
   });
 });
+
+describe('note-link navigation guard', () => {
+  // On the Android WebView, following a `mindstream://note/…` anchor
+  // white-screens the app. The capture-phase guard must cancel the
+  // default navigation for note-link clicks regardless of whether the
+  // note is opened.
+  it('cancels the default navigation for a note-link anchor click', () => {
+    const view = makeView(makeDoc('ab', 'Title', 'cd'));
+    const anchor = view.dom.querySelector('a[href]');
+    expect(anchor).not.toBeNull();
+    const event = new MouseEvent('click', { bubbles: true, cancelable: true });
+    anchor!.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it('leaves clicks that miss a note link navigable', () => {
+    const view = makeView(makeDoc('ab', 'Title', 'cd'));
+    const event = new MouseEvent('click', { bubbles: true, cancelable: true });
+    view.dom.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
+  });
+});

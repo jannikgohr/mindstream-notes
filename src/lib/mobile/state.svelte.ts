@@ -178,13 +178,16 @@ export function setMobileScreen(screen: MobileScreen) {
 // `Activity.finish()` whenever `webView.canGoBack()` is false, and
 // without history entries it always was.
 //
-// The nav is now a small stack: a base level (home ↔ editor, driven by
-// `mobileState.screen`) with zero or more dismissible **overlays** on
-// top (the options menu's settings / notifications / vault surfaces).
+// The nav is now a small stack: a base level (the home browser and the
+// editor, whose forward navigations — opening a note, following a
+// wikilink, drilling into a folder, switching bucket — each push a
+// `backStack` snapshot) with zero or more dismissible **overlays** on top
+// (the options menu's settings / notifications / vault surfaces).
 // Every level owns one browser-history entry, so the Android system
 // back button pops them one at a time — closing the top overlay first,
-// then editor→home, and only then falling through to the activity's
-// own back handler (which finishes the app).
+// then walking the base back-stack (note chain / folders / buckets), and
+// only then falling through to the activity's own back handler (which
+// finishes the app).
 //
 // Why SvelteKit's `pushState` and not `window.history.pushState`:
 // SvelteKit wraps the history API to drive its own client-side
@@ -208,17 +211,77 @@ interface NavOverlay {
 // handler and the open/close helpers.
 let overlayStack: NavOverlay[] = [];
 
+// A snapshot of the base-level nav state — either a home screen browsing
+// a bucket + folder, or the editor showing a note. The base back-stack is
+// a list of these, oldest → newest.
+type BaseSnapshot =
+  | { screen: 'home'; view: MobileView; folderId: string | null }
+  | { screen: 'editor'; noteId: string };
+
+// The base-level back-stack, oldest → newest: the states to restore as
+// the system back button walks backwards. `currentBase` is the live state
+// NOT on the stack. Every forward navigation — opening a note (incl. a
+// wikilink follow), drilling into a folder, switching bucket — pushes the
+// state it's *leaving* here and a matching browser-history entry, so the
+// two stay index-for-index aligned. A base-level back pop restores the top
+// snapshot: the previous note in a followed-link chain, the parent folder,
+// the previous bucket — and only falls through to the activity's own back
+// handler (which finishes the app) once the stack is empty. Not reactive:
+// restores are mirrored into mobileState / ui via the setters below.
+let backStack: BaseSnapshot[] = [];
+let currentBase: BaseSnapshot = {
+  screen: 'home',
+  view: 'home',
+  folderId: null
+};
+
+/**
+ * Record the current base state on the back-stack and push a matching
+ * history entry, in preparation for moving to `next`. Call this from
+ * every forward base-level navigation, then apply `next` to mobileState.
+ * Keeps `backStack.length` equal to the pushed-history depth so a popstate
+ * pops exactly one level.
+ */
+function pushBase(next: BaseSnapshot): void {
+  backStack.push(currentBase);
+  currentBase = next;
+  if (typeof window !== 'undefined') {
+    // Empty URL = keep the current SvelteKit route (we're not
+    // route-navigating, just recording a history entry the popstate
+    // handler can pop). The handler reads backStack, so the state object
+    // stays empty.
+    pushState('', {});
+  }
+}
+
+/** Apply a popped snapshot back onto mobileState / the active note. */
+function restoreBase(snapshot: BaseSnapshot): void {
+  currentBase = snapshot;
+  clearMobileBatchSelection();
+  if (snapshot.screen === 'editor') {
+    setActiveNote(snapshot.noteId);
+    setMobileScreen('editor');
+  } else {
+    mobileState.view = snapshot.view;
+    mobileState.currentFolderId = snapshot.folderId;
+    setMobileScreen('home');
+  }
+}
+
 // True while the popstate handler is invoking an overlay's `close()`.
 // Its `onOpenChange`/close button then calls `closeNavOverlay`, and this
 // flag tells that call the history entry is already being consumed by
 // the pop — so it must NOT issue its own `history.back()`.
 let poppingOverlayFromHistory = false;
 
-// True for the single popstate that a UI-initiated `closeNavOverlay`
-// fires via `history.back()` to reclaim the overlay's dangling history
-// entry. That pop is pure bookkeeping — the overlay is already closed —
-// so the handler swallows it instead of treating it as a real "back".
-let suppressNextPop = false;
+// How many upcoming popstates are bookkeeping pops that a UI-initiated
+// `closeNavOverlay` fired via `history.back()` to reclaim a dangling
+// history entry. Those pops are pure bookkeeping — the overlay is already
+// closed — so the handler swallows one per count instead of treating it
+// as a real "back". A counter (not a bool) because nested overlays can be
+// dismissed in the same tick (e.g. closing settings while drilled into a
+// category collapses both levels at once), firing more than one reclaim.
+let pendingReclaimPops = 0;
 
 /**
  * Open a dismissible overlay as a new nav level: record a history entry
@@ -249,7 +312,7 @@ export function closeNavOverlay(id: string): void {
   if (idx === -1) return;
   overlayStack.splice(idx, 1);
   if (!poppingOverlayFromHistory && typeof window !== 'undefined') {
-    suppressNextPop = true;
+    pendingReclaimPops += 1;
     window.history.back();
   }
 }
@@ -262,12 +325,17 @@ export function installMobileHistoryNav(): () => void {
   if (typeof window === 'undefined') return () => {};
   if (historyInstalled) return () => {};
   historyInstalled = true;
+  // Fresh mount = fresh nav; drop any base stack left by a prior shell and
+  // reset the live state to the home root.
+  backStack = [];
+  currentBase = { screen: 'home', view: 'home', folderId: null };
 
   const onPopState = () => {
-    // The bookkeeping pop from a UI-initiated overlay close — already
-    // handled, so consume it without touching nav state.
-    if (suppressNextPop) {
-      suppressNextPop = false;
+    // A bookkeeping pop from a UI-initiated overlay close — already
+    // handled, so consume it (one per pending reclaim) without touching
+    // nav state.
+    if (pendingReclaimPops > 0) {
+      pendingReclaimPops -= 1;
       return;
     }
     // Topmost overlay first: dismiss it and stop, leaving the base
@@ -282,8 +350,14 @@ export function installMobileHistoryNav(): () => void {
       }
       return;
     }
-    // No overlays: the base nav is 1-level (home ↔ editor), so any pop
-    // here means we're coming back from an editor screen.
+    // No overlays: walk the base-nav stack. Restore the previous base
+    // state — the earlier note in a followed-link chain, the parent
+    // folder, the previous bucket. Only once the stack drains do we fall
+    // back to the home root.
+    if (backStack.length > 0) {
+      restoreBase(backStack.pop()!);
+      return;
+    }
     setMobileScreen('home');
   };
   window.addEventListener('popstate', onPopState);
@@ -291,8 +365,10 @@ export function installMobileHistoryNav(): () => void {
     window.removeEventListener('popstate', onPopState);
     historyInstalled = false;
     overlayStack = [];
+    backStack = [];
+    currentBase = { screen: 'home', view: 'home', folderId: null };
     poppingOverlayFromHistory = false;
-    suppressNextPop = false;
+    pendingReclaimPops = 0;
   };
 }
 
@@ -304,17 +380,12 @@ export function installMobileHistoryNav(): () => void {
  * new entry, matching the existing `openNote` semantics.
  */
 export function navigateToEditor(noteId: string) {
+  // Record where we were (home+folder, or the previous note) so a
+  // system-back pop restores it, then switch to the note.
+  pushBase({ screen: 'editor', noteId });
   clearMobileBatchSelection();
   setActiveNote(noteId);
   setMobileScreen('editor');
-  if (typeof window !== 'undefined') {
-    // Empty URL = keep the current SvelteKit route (we're not
-    // route-navigating, just recording a history entry our
-    // popstate handler can pop). Empty state object because the
-    // popstate handler doesn't currently read it — we only track
-    // 1-level nav.
-    pushState('', {});
-  }
 }
 
 /**
@@ -337,9 +408,11 @@ export function navigateBack() {
 
 export function setMobileView(view: MobileView) {
   if (mobileState.view !== view) {
-    // Drop folder drill-down when switching buckets so the user lands at
-    // the view's root rather than inside whatever folder they last
-    // browsed in the previous bucket.
+    // Switching buckets is a forward nav: record the current bucket+folder
+    // so back returns to it, then land at the new bucket's root (drop the
+    // folder drill-down so the user doesn't stay inside a folder from the
+    // previous bucket).
+    pushBase({ screen: 'home', view, folderId: null });
     mobileState.currentFolderId = null;
     clearMobileBatchSelection();
   }
@@ -348,6 +421,14 @@ export function setMobileView(view: MobileView) {
 }
 
 export function setCurrentFolder(id: string | null) {
+  if (id === mobileState.currentFolderId) {
+    clearMobileBatchSelection();
+    return;
+  }
+  // Drilling into a subfolder or jumping via the breadcrumb is a forward
+  // nav: record the current folder so the system back button steps back
+  // out one level at a time.
+  pushBase({ screen: 'home', view: mobileState.view, folderId: id });
   mobileState.currentFolderId = id;
   clearMobileBatchSelection();
 }

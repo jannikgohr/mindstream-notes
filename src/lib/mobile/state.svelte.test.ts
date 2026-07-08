@@ -203,6 +203,83 @@ describe('history navigation', () => {
     expect(pushState).toHaveBeenCalledWith('', {});
   });
 
+  it('walks the editor note stack back through a followed-link chain', () => {
+    const cleanup = installMobileHistoryNav();
+    // home → n1 → n2 → n3 (each hop is a wikilink follow).
+    navigateToEditor('n1');
+    navigateToEditor('n2');
+    navigateToEditor('n3');
+    setActiveNote.mockClear();
+
+    // Back surfaces the previous note and stays in the editor…
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    expect(setActiveNote).toHaveBeenLastCalledWith('n2');
+    expect(mobileState.screen).toBe('editor');
+
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    expect(setActiveNote).toHaveBeenLastCalledWith('n1');
+    expect(mobileState.screen).toBe('editor');
+
+    // …and only the final pop returns to the note list.
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    expect(mobileState.screen).toBe('home');
+    cleanup();
+  });
+
+  it('walks folder drill-downs back out one level at a time', () => {
+    const cleanup = installMobileHistoryNav();
+    // root → folderA → folderB.
+    setCurrentFolder('folderA');
+    setCurrentFolder('folderB');
+    expect(mobileState.currentFolderId).toBe('folderB');
+
+    // Back steps to the parent folder, staying on the home screen…
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    expect(mobileState.currentFolderId).toBe('folderA');
+    expect(mobileState.screen).toBe('home');
+
+    // …then to the view root.
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    expect(mobileState.currentFolderId).toBeNull();
+    cleanup();
+  });
+
+  it('returns to the drilled folder when backing out of a note opened inside it', () => {
+    const cleanup = installMobileHistoryNav();
+    setCurrentFolder('folderA');
+    navigateToEditor('n1');
+    expect(mobileState.screen).toBe('editor');
+
+    // Back from the note lands back in the folder it was opened from,
+    // not the view root.
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    expect(mobileState.screen).toBe('home');
+    expect(mobileState.currentFolderId).toBe('folderA');
+    cleanup();
+  });
+
+  it('backs out of a bucket switch to the previous bucket', () => {
+    const cleanup = installMobileHistoryNav();
+    setMobileView('favourite');
+    expect(mobileState.view).toBe('favourite');
+
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    expect(mobileState.view).toBe('home');
+    expect(mobileState.currentFolderId).toBeNull();
+    cleanup();
+  });
+
+  it('reinstalling the history nav clears a leftover note stack', () => {
+    installMobileHistoryNav()();
+    // A fresh mount must not inherit the previous shell's stack: a pop
+    // with an empty stack goes straight home.
+    const cleanup = installMobileHistoryNav();
+    mobileState.screen = 'editor';
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    expect(mobileState.screen).toBe('home');
+    cleanup();
+  });
+
   it('navigateBack delegates to window.history.back', () => {
     const back = vi.spyOn(window.history, 'back').mockImplementation(() => {});
     navigateBack();
@@ -290,6 +367,53 @@ describe('nav overlays', () => {
     // …the next returns home.
     window.dispatchEvent(new PopStateEvent('popstate'));
     expect(mobileState.screen).toBe('home');
+    cleanup();
+  });
+
+  it('system back pops nested overlays one level at a time', () => {
+    const cleanup = installMobileHistoryNav();
+    mobileState.screen = 'editor';
+    // e.g. settings open (outer), then drilled into a category (inner).
+    const closeOuter = vi.fn();
+    const closeInner = vi.fn();
+    openNavOverlay('settings', closeOuter);
+    openNavOverlay('settings-category', closeInner);
+
+    // First back dismisses only the inner level (detail → overview)…
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    expect(closeInner).toHaveBeenCalledTimes(1);
+    expect(closeOuter).not.toHaveBeenCalled();
+    // …the second closes the outer level, editor still underneath.
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    expect(closeOuter).toHaveBeenCalledTimes(1);
+    expect(mobileState.screen).toBe('editor');
+    cleanup();
+  });
+
+  it('swallows one pop per overlay when nested overlays are UI-closed together', () => {
+    const cleanup = installMobileHistoryNav();
+    mobileState.screen = 'editor';
+    const back = vi.spyOn(window.history, 'back').mockImplementation(() => {});
+    const closeOuter = vi.fn();
+    const closeInner = vi.fn();
+    openNavOverlay('settings', closeOuter);
+    openNavOverlay('settings-category', closeInner);
+
+    // Both levels dismissed by their own UI in the same tick (closing
+    // settings while drilled into a category collapses both at once).
+    closeNavOverlay('settings-category');
+    closeNavOverlay('settings');
+    expect(back).toHaveBeenCalledTimes(2);
+
+    // Both bookkeeping pops must be swallowed — neither re-runs a close()
+    // nor leaks into the base screen underneath.
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    expect(closeOuter).not.toHaveBeenCalled();
+    expect(closeInner).not.toHaveBeenCalled();
+    expect(mobileState.screen).toBe('editor');
+
+    back.mockRestore();
     cleanup();
   });
 });

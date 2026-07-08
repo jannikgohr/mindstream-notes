@@ -36,6 +36,7 @@ import {
   type MarkdownSearchBridge,
   type WikilinkBridge
 } from './plugins';
+import { useNoteLinkHrefNeutralizer } from './note-link-schema';
 
 export interface CrepeSetupOptions {
   /** Mount point; Crepe owns the DOM under it. */
@@ -156,6 +157,11 @@ export function buildCrepe(opts: CrepeSetupOptions): Crepe {
         : {})
     }
   });
+
+  // Note-link anchors must not carry a navigable `mindstream://` href, or
+  // tapping one white-screens the Android WebView — see the helper for the
+  // full rationale. Registered before create() builds the schema.
+  useNoteLinkHrefNeutralizer(crepe.editor);
 
   crepe.editor.use(collab);
 
