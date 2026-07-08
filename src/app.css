@@ -636,6 +636,15 @@ body.dv-tab-dragging
   padding: 1.25rem 5px;
 }
 
+/* Appearance → Typography: editor body text size + line height. The vars
+ * default in :root and are updated live by appearance.ts. Scoped to the
+ * ProseMirror content so only note body text is affected — the surrounding
+ * chrome follows the UI font size instead. */
+.milkdown .ProseMirror {
+  font-size: var(--editor-font-size);
+  line-height: var(--editor-line-height);
+}
+
 /*
  * Only show the drop indicator for editor-initiated block drags. The upstream
  * prosemirror-drop-indicator binds its `dragover` handler to the whole editor

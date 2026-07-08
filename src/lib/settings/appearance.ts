@@ -29,3 +29,20 @@ export function applyUiFontSize(px: unknown): void {
   const size = clamp(px, 12, 18, 14);
   document.documentElement.style.setProperty('--ui-font-size', `${size}px`);
 }
+
+/**
+ * Editor body text is sized in absolute px (via `--editor-font-size`) rather
+ * than rem so it stays fixed regardless of the UI font-size zoom; line height
+ * is unitless so it tracks whatever font size is in effect. app.css applies
+ * both to the ProseMirror content — headings/blocks inside scale relative to
+ * the body size through their own em-based rules.
+ */
+export function applyEditorTypography(px: unknown, lineHeight: unknown): void {
+  if (typeof document === 'undefined') return;
+  const root = document.documentElement;
+  root.style.setProperty('--editor-font-size', `${clamp(px, 12, 24, 16)}px`);
+  root.style.setProperty(
+    '--editor-line-height',
+    `${clamp(lineHeight, 1.2, 2, 1.6)}`
+  );
+}

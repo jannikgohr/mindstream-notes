@@ -5,7 +5,10 @@
   import { getSettingValue, isModified } from '$lib/settings/store.svelte';
   import { prefersReducedMotion } from '$lib/reduce-motion.svelte';
   import { applyAccentColor, clearAccentColor } from '$lib/settings/accent';
-  import { applyUiFontSize } from '$lib/settings/appearance';
+  import {
+    applyEditorTypography,
+    applyUiFontSize
+  } from '$lib/settings/appearance';
   import { invokeOrFallback } from '$lib/api/core';
   import { setNativeHotkeyDisplays } from '$lib/api/hotkeys';
   import { setTrashRetention, sweepTrashRetention } from '$lib/api/data';
@@ -109,6 +112,15 @@
   // runs unconditionally and stays the single source of truth for the slider.
   $effect(() => {
     applyUiFontSize(getSettingValue('appearance.uiFontSize'));
+  });
+
+  // Appearance → editor body text size + line height. Written to CSS vars
+  // that app.css applies to the ProseMirror content.
+  $effect(() => {
+    applyEditorTypography(
+      getSettingValue('appearance.editorFontSize'),
+      getSettingValue('appearance.lineHeight')
+    );
   });
 
   // Mirror the resolved reduce-motion preference onto

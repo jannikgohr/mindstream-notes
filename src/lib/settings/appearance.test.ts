@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { applyUiFontSize } from './appearance';
+import { applyEditorTypography, applyUiFontSize } from './appearance';
 
 const root = () => document.documentElement;
 
 afterEach(() => {
   root().style.removeProperty('--ui-font-size');
+  root().style.removeProperty('--editor-font-size');
+  root().style.removeProperty('--editor-line-height');
 });
 
 describe('applyUiFontSize', () => {
@@ -25,5 +27,28 @@ describe('applyUiFontSize', () => {
     expect(root().style.getPropertyValue('--ui-font-size')).toBe('15px');
     applyUiFontSize('nonsense');
     expect(root().style.getPropertyValue('--ui-font-size')).toBe('14px');
+  });
+});
+
+describe('applyEditorTypography', () => {
+  it('writes editor font size (px) and unitless line height', () => {
+    applyEditorTypography(20, 1.8);
+    expect(root().style.getPropertyValue('--editor-font-size')).toBe('20px');
+    expect(root().style.getPropertyValue('--editor-line-height')).toBe('1.8');
+  });
+
+  it('clamps both values to their schema bounds', () => {
+    applyEditorTypography(2, 5);
+    expect(root().style.getPropertyValue('--editor-font-size')).toBe('12px');
+    expect(root().style.getPropertyValue('--editor-line-height')).toBe('2');
+    applyEditorTypography(99, 0.1);
+    expect(root().style.getPropertyValue('--editor-font-size')).toBe('24px');
+    expect(root().style.getPropertyValue('--editor-line-height')).toBe('1.2');
+  });
+
+  it('falls back to defaults for non-numeric input', () => {
+    applyEditorTypography('x', 'y');
+    expect(root().style.getPropertyValue('--editor-font-size')).toBe('16px');
+    expect(root().style.getPropertyValue('--editor-line-height')).toBe('1.6');
   });
 });
