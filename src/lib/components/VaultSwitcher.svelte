@@ -2,11 +2,10 @@
   /**
    * Top-bar vault (profile) switcher. Sits right of the app title.
    *
-   * Hover: the jis3r Vault icon animates (driven by the `animate` prop —
-   * we control it from the button's hover/open state rather than the
-   * library's built-in mouseenter so the whole control, including the
-   * revealed name label, drives one animation) and the current vault
-   * name slides into view.
+   * The current vault name is always shown next to the icon. The jis3r
+   * Vault icon animates only while the menu is open (i.e. on click) —
+   * driven by the `animate` prop from the `open` state rather than the
+   * library's built-in mouseenter, so hovering the top bar stays quiet.
    *
    * Click: opens a dropdown (same outside-pointerdown + Escape pattern as
    * NotificationCenter) listing every vault with the active one checked.
@@ -37,7 +36,6 @@
   import { tUi } from '$lib/settings/i18n.svelte';
 
   let open = $state(false);
-  let hovered = $state(false);
   let creating = $state(false);
   let busy = $state(false);
   let newName = $state('');
@@ -276,16 +274,12 @@
     size="sm"
     class="h-7 gap-1.5 px-2"
     onclick={toggle}
-    onmouseenter={() => (hovered = true)}
-    onmouseleave={() => (hovered = false)}
     title={currentName}
     aria-label={tUi('vault.switch')}
     aria-expanded={open}
   >
-    <Vault size={16} animate={hovered || open} />
-    <span class="vault-name {hovered || open ? 'is-shown' : ''}">
-      {currentName}
-    </span>
+    <Vault size={16} animate={open} />
+    <span class="vault-name">{currentName}</span>
   </Button>
 
   {#if open}
@@ -403,19 +397,13 @@
 </div>
 
 <style>
-  /* Current-vault name reveals on hover / when the menu is open. */
+  /* Current-vault name is always shown. Capped with an ellipsis so a very
+   * long name can't push the rest of the top bar out of the window. */
   .vault-name {
     display: inline-block;
-    max-width: 0;
+    max-width: 12rem;
     overflow: hidden;
     white-space: nowrap;
-    opacity: 0;
-    transition:
-      max-width 0.2s ease,
-      opacity 0.2s ease;
-  }
-  .vault-name.is-shown {
-    max-width: 9rem;
-    opacity: 1;
+    text-overflow: ellipsis;
   }
 </style>
