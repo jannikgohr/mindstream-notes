@@ -639,15 +639,52 @@ body.dv-tab-dragging
   padding: 1.25rem 5px;
 }
 
-/* Appearance → Typography: editor body text size + line height. The vars
- * default in :root and are updated live by appearance.ts. Scoped to the
- * ProseMirror content so only note body text is affected — the surrounding
- * chrome follows the UI font size instead. */
+/* Appearance → Typography: editor body text size + line height.
+ *
+ * Crepe hardcodes px font-sizes and line-heights on every block element
+ * (see @milkdown/crepe reset.css), each more specific than a rule on
+ * .ProseMirror alone — so setting the container size isn't enough, the
+ * paragraphs stay pinned at 16px. We re-declare those blocks here in `em`
+ * relative to --editor-font-size, so the whole editor scales off the one
+ * variable. The ratios reproduce Crepe's defaults exactly at the 16px
+ * default (42/16 = 2.625em, 36/16 = 2.25em, …), so the at-rest look is
+ * unchanged; app.css imports Crepe first, so these equal-specificity
+ * rules win on source order.
+ *
+ * Body text line height honours the user's --editor-line-height (unset →
+ * Crepe's native 1.5 = 24px/16px); headings keep their own design-tuned
+ * proportional line heights so the slider only affects prose spacing. */
 .milkdown .ProseMirror {
   font-size: var(--editor-font-size);
-  /* `normal` fallback = Crepe's native line spacing; only overridden once
-   * the user picks a line height (appearance.ts writes the var then). */
-  line-height: var(--editor-line-height, normal);
+  line-height: var(--editor-line-height, 1.5);
+}
+.milkdown .ProseMirror p {
+  font-size: 1em;
+  line-height: var(--editor-line-height, 1.5);
+}
+.milkdown .ProseMirror h1 {
+  font-size: 2.625em;
+  line-height: 1.19;
+}
+.milkdown .ProseMirror h2 {
+  font-size: 2.25em;
+  line-height: 1.222;
+}
+.milkdown .ProseMirror h3 {
+  font-size: 2em;
+  line-height: 1.25;
+}
+.milkdown .ProseMirror h4 {
+  font-size: 1.75em;
+  line-height: 1.286;
+}
+.milkdown .ProseMirror h5 {
+  font-size: 1.5em;
+  line-height: 1.333;
+}
+.milkdown .ProseMirror h6 {
+  font-size: 1.125em;
+  line-height: 1.556;
 }
 
 /*

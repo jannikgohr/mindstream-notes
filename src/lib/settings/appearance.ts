@@ -39,8 +39,8 @@ export function applyUiFontSize(px: unknown): void {
  *
  * `lineHeight` is nullable: pass `null` (the caller does this while the
  * setting is at its default) to clear the var so the ProseMirror rule falls
- * back to `normal`, reproducing Crepe's native line spacing rather than
- * forcing a numeric ratio on users who never touched the slider.
+ * back to Crepe's native 1.5, rather than forcing a numeric ratio on users
+ * who never touched the slider.
  */
 export function applyEditorTypography(px: unknown, lineHeight: unknown): void {
   if (typeof document === 'undefined') return;
