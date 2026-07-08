@@ -6,6 +6,7 @@
   import { prefersReducedMotion } from '$lib/reduce-motion.svelte';
   import { applyAccentColor, clearAccentColor } from '$lib/settings/accent';
   import {
+    applyDensity,
     applyEditorTypography,
     applyUiFontSize
   } from '$lib/settings/appearance';
@@ -121,6 +122,12 @@
       getSettingValue('appearance.editorFontSize'),
       getSettingValue('appearance.lineHeight')
     );
+  });
+
+  // Appearance → UI density. Sets html[data-density]; app.css remaps the
+  // file-tree row-padding var per choice.
+  $effect(() => {
+    applyDensity(getSettingValue('appearance.density'));
   });
 
   // Mirror the resolved reduce-motion preference onto

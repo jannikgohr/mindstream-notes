@@ -1055,7 +1055,7 @@
       data-file-tree-node
       type="button"
       draggable={canReorganize}
-      class="flex w-full items-center gap-1 rounded-md px-2 py-1 text-left ring-offset-background hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+      class="flex w-full items-center gap-1 rounded-md px-2 py-[var(--tree-row-pad-y)] text-left ring-offset-background hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
       class:bg-accent={isOver || isSelected}
       class:opacity-60={drag?.kind === 'folder' && drag.id === node.id}
       onclick={(e) => {
@@ -1128,7 +1128,7 @@
     >
       <button
         type="button"
-        class="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1 text-left focus-visible:outline-none"
+        class="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-[var(--tree-row-pad-y)] text-left focus-visible:outline-none"
         onclick={(e) => {
           const modified = selectNodeFromClick(e, node);
           if (!modified) onOpenNote(node.id);
