@@ -626,6 +626,106 @@ mod tests {
     }
 
     #[test]
+    fn startup_sweep_is_noop_when_asset_still_referenced() {
+        let db = open_memory_for_tests();
+        let note_id = make_markdown_note(&db);
+        let asset = db
+            .with_conn(|c| {
+                upload(
+                    c,
+                    UploadAsset {
+                        owning_note_id: note_id.clone(),
+                        mime_type: "image/png".into(),
+                        bytes: vec![1, 2, 3],
+                    },
+                )
+            })
+            .unwrap();
+        let body = format!("![](asset:mindstream/{})", asset.summary.id);
+
+        db.with_conn_mut(|c| {
+            update_note(
+                c,
+                UpdateNote {
+                    id: note_id.clone(),
+                    title: None,
+                    body: Some(body),
+                    parent_collection_id: None,
+                    position: None,
+                    tags: None,
+                    yrs_state: None,
+                    favourite: None,
+                },
+            )
+        })
+        .unwrap();
+
+        let removed = db
+            .with_conn(|c| sweep_unreferenced_markdown_assets_inner(c))
+            .unwrap();
+
+        assert_eq!(
+            removed, 0,
+            "a still-referenced asset must survive the sweep"
+        );
+        let res = db.with_conn(|c| load(c, &asset.summary.id));
+        assert!(res.is_ok(), "referenced asset must not be deleted");
+    }
+
+    #[test]
+    fn startup_sweep_aggregates_across_multiple_markdown_notes() {
+        let db = open_memory_for_tests();
+
+        // Two independent markdown notes, each with its own orphaned asset,
+        // so the sweep has to iterate every note and sum the removals.
+        let mut assets = Vec::new();
+        for _ in 0..2 {
+            let note_id = make_markdown_note(&db);
+            let asset = db
+                .with_conn(|c| {
+                    upload(
+                        c,
+                        UploadAsset {
+                            owning_note_id: note_id.clone(),
+                            mime_type: "image/png".into(),
+                            bytes: vec![1, 2, 3],
+                        },
+                    )
+                })
+                .unwrap();
+            db.with_conn_mut(|c| {
+                update_note(
+                    c,
+                    UpdateNote {
+                        id: note_id.clone(),
+                        title: None,
+                        body: Some("removed".into()),
+                        parent_collection_id: None,
+                        position: None,
+                        tags: None,
+                        yrs_state: None,
+                        favourite: None,
+                    },
+                )
+            })
+            .unwrap();
+            assets.push(asset.summary.id);
+        }
+
+        let removed = db
+            .with_conn(|c| sweep_unreferenced_markdown_assets_inner(c))
+            .unwrap();
+
+        assert_eq!(removed, 2, "sweep should sum removals across all notes");
+        for id in assets {
+            assert!(
+                db.with_conn(|c| load(c, &id)).is_err(),
+                "each note's orphaned asset should be gone"
+            );
+        }
+    }
+
+    #[test]
     fn markdown_cleanup_keeps_history_referenced_asset_until_history_pruned() {
         let db = open_memory_for_tests();
         let note_id = make_markdown_note(&db);

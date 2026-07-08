@@ -220,7 +220,23 @@ _is_ the restart.
 - **Proves:** the retention scheduler + `sweep` cascade (the SQL `sweep` is
   unit-tested; the boot wiring is not).
 
-### 3.4 Sign-in session survives restart (P3)
+### 3.4 Unreferenced markdown assets swept on startup (P2)
+
+- **Why e2e:** the markdown asset sweep runs on boot from the history
+  retention pass (`retention.ts` → `sweep_unreferenced_markdown_assets` IPC →
+  `sweepUnreferencedMarkdownAssetsInner`). The SQL sweep and the frontend
+  orchestration are unit-tested (`assets/mod.rs`, `retention.test.ts`), but the
+  `#[tauri::command]` wrapper + real `State<Db>` + boot wiring need a live app —
+  the command is `invokeOrFallback`, so browser-fallback mode no-ops it.
+- **Steps:** in a markdown note, insert an embedded image asset → delete it from
+  the body and save (the asset lingers so editor undo still works) → assert the
+  asset is still on disk → relaunch → assert the startup sweep purged it; in a
+  second note keep an embedded asset referenced → relaunch → assert it survived.
+- **Proves:** the deferred-cleanup contract — normal saves keep unreferenced
+  assets reachable, and the boot sweep reclaims only the ones with no live or
+  history reference (see `startup_sweep_*` unit tests for the SQL half).
+
+### 3.5 Sign-in session survives restart (P3)
 
 - **Why e2e:** the Etebase session blob is written to disk and its key to the
   OS keyring (`auth/mod.rs`, excluded — network + keyring).
