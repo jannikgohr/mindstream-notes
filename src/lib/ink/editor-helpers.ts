@@ -23,6 +23,7 @@ export const PAGE_GRID_STEP = 28;
 export const PAGE_RULE_STEP = 48;
 export const PAGE_PATTERN_LINE_ALPHA = 0x1f;
 export const PAGE_PATTERN_DOT_ALPHA = 0x59;
+export const PAGE_PATTERN_OPACITY_DEFAULT = 100;
 export const TOOL_PREVIEW_DASH = [5, 4];
 export const MAX_ZOOM_FACTOR = 6;
 export const INK_ZOOM_DISPLAY_SCALE = 2;
@@ -55,6 +56,8 @@ export const INK_PAGE_THEME_SETTING = 'editor.ink.pageTheme';
 export const INK_PAGE_BACKGROUND_SETTING = 'editor.ink.pageBackground';
 export const INK_PAGE_BACKGROUND_COLOR_SETTING =
   'editor.ink.pageBackgroundColor';
+export const INK_PAGE_BACKGROUND_OPACITY_SETTING =
+  'editor.ink.pageBackgroundOpacity';
 
 export type ToolMode = 'pen' | 'eraser' | 'lasso';
 /**
@@ -156,6 +159,28 @@ export function normalizeInkPageBackground(value: unknown): PageBackgroundMode {
     return value;
   }
   return 'clear';
+}
+
+export function normalizeInkPageBackgroundOpacity(value: unknown): number {
+  const n = typeof value === 'number' ? value : Number(value);
+  const percent = Number.isFinite(n) ? n : PAGE_PATTERN_OPACITY_DEFAULT;
+  return Math.min(1, Math.max(0, percent / 100));
+}
+
+export function centeredPatternPositions(
+  start: number,
+  end: number,
+  step: number
+): number[] {
+  const length = end - start;
+  if (!Number.isFinite(length) || !Number.isFinite(step) || length <= 0) {
+    return [];
+  }
+  if (step <= 0 || step > length) return [];
+  const count = Math.floor(length / step);
+  if (count <= 0) return [];
+  const margin = (length - (count - 1) * step) / 2;
+  return Array.from({ length: count }, (_, i) => start + margin + i * step);
 }
 
 export function normalizeInkWidth(value: unknown): number {

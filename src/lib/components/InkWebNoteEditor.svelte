@@ -102,6 +102,7 @@
   import {
     argbToColorHex,
     base64ToBytes,
+    centeredPatternPositions,
     colorHexToArgb,
     cssColor,
     displayColor,
@@ -113,6 +114,7 @@
     INK_ERASER_MODE_SETTING,
     INK_FINGER_SETTING,
     INK_PAGE_BACKGROUND_COLOR_SETTING,
+    INK_PAGE_BACKGROUND_OPACITY_SETTING,
     INK_PAGE_BACKGROUND_SETTING,
     INK_PAGE_THEME_SETTING,
     INK_QUICK_ZOOMS,
@@ -124,6 +126,7 @@
     normalizeColorHex,
     normalizeInkEraserMode,
     normalizeInkPageBackground,
+    normalizeInkPageBackgroundOpacity,
     normalizeInkPageTheme,
     normalizeInkTool,
     normalizeInkWidth,
@@ -247,6 +250,7 @@
   let pageBackground = $state<PageBackgroundMode>('clear');
   // The pattern's RGB only (0xRRGGBB); alpha is applied per pattern kind.
   let pageBackgroundColorRgb = $state(0x334155);
+  let pageBackgroundOpacity = $state(1);
   let strokeCount = $state(0);
   let selectedStrokeIds = $state<string[]>([]);
   let selectionClipboard = $state<InkClipboardStroke[]>([]);
@@ -379,6 +383,9 @@
     pageBackgroundColorRgb =
       colorHexToArgb(getSettingValue(INK_PAGE_BACKGROUND_COLOR_SETTING)) &
       0x00ffffff;
+    pageBackgroundOpacity = normalizeInkPageBackgroundOpacity(
+      getSettingValue(INK_PAGE_BACKGROUND_OPACITY_SETTING)
+    );
   });
 
   $effect(() => {
@@ -396,6 +403,7 @@
     pageDark;
     pageBackground;
     pageBackgroundColorRgb;
+    pageBackgroundOpacity;
     selectionColorPreview;
     scheduleDraw();
   });
@@ -1104,12 +1112,19 @@
     if (pageBackground === 'points') {
       const step = PAGE_GRID_STEP * scale;
       if (step >= 3) {
+        const alpha = Math.round(
+          PAGE_PATTERN_DOT_ALPHA * pageBackgroundOpacity
+        );
+        if (alpha <= 0) {
+          ctx.restore();
+          return;
+        }
         const radius = Math.max(0.8, Math.min(1.6, 1.1 * scale * 2));
         ctx.fillStyle = displayCssColor(
-          ((PAGE_PATTERN_DOT_ALPHA << 24) | pageBackgroundColorRgb) >>> 0
+          ((alpha << 24) | pageBackgroundColorRgb) >>> 0
         );
-        for (let y = a.y + step; y < b.y; y += step) {
-          for (let x = a.x + step; x < b.x; x += step) {
+        for (const y of centeredPatternPositions(a.y, b.y, step)) {
+          for (const x of centeredPatternPositions(a.x, b.x, step)) {
             ctx.beginPath();
             ctx.arc(x, y, radius, 0, Math.PI * 2);
             ctx.fill();
@@ -1120,19 +1135,26 @@
       const stepY =
         (pageBackground === 'lines' ? PAGE_RULE_STEP : PAGE_GRID_STEP) * scale;
       if (stepY >= 3) {
+        const alpha = Math.round(
+          PAGE_PATTERN_LINE_ALPHA * pageBackgroundOpacity
+        );
+        if (alpha <= 0) {
+          ctx.restore();
+          return;
+        }
         ctx.strokeStyle = displayCssColor(
-          ((PAGE_PATTERN_LINE_ALPHA << 24) | pageBackgroundColorRgb) >>> 0
+          ((alpha << 24) | pageBackgroundColorRgb) >>> 0
         );
         ctx.lineWidth = 1;
         ctx.beginPath();
-        for (let y = a.y + stepY; y < b.y; y += stepY) {
+        for (const y of centeredPatternPositions(a.y, b.y, stepY)) {
           const py = Math.round(y) + 0.5;
           ctx.moveTo(a.x, py);
           ctx.lineTo(b.x, py);
         }
         if (pageBackground === 'grid') {
           const stepX = PAGE_GRID_STEP * scale;
-          for (let x = a.x + stepX; x < b.x; x += stepX) {
+          for (const x of centeredPatternPositions(a.x, b.x, stepX)) {
             const px = Math.round(x) + 0.5;
             ctx.moveTo(px, a.y);
             ctx.lineTo(px, b.y);
