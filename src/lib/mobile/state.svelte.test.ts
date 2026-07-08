@@ -326,4 +326,51 @@ describe('nav overlays', () => {
     expect(mobileState.screen).toBe('home');
     cleanup();
   });
+
+  it('system back pops nested overlays one level at a time', () => {
+    const cleanup = installMobileHistoryNav();
+    mobileState.screen = 'editor';
+    // e.g. settings open (outer), then drilled into a category (inner).
+    const closeOuter = vi.fn();
+    const closeInner = vi.fn();
+    openNavOverlay('settings', closeOuter);
+    openNavOverlay('settings-category', closeInner);
+
+    // First back dismisses only the inner level (detail → overview)…
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    expect(closeInner).toHaveBeenCalledTimes(1);
+    expect(closeOuter).not.toHaveBeenCalled();
+    // …the second closes the outer level, editor still underneath.
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    expect(closeOuter).toHaveBeenCalledTimes(1);
+    expect(mobileState.screen).toBe('editor');
+    cleanup();
+  });
+
+  it('swallows one pop per overlay when nested overlays are UI-closed together', () => {
+    const cleanup = installMobileHistoryNav();
+    mobileState.screen = 'editor';
+    const back = vi.spyOn(window.history, 'back').mockImplementation(() => {});
+    const closeOuter = vi.fn();
+    const closeInner = vi.fn();
+    openNavOverlay('settings', closeOuter);
+    openNavOverlay('settings-category', closeInner);
+
+    // Both levels dismissed by their own UI in the same tick (closing
+    // settings while drilled into a category collapses both at once).
+    closeNavOverlay('settings-category');
+    closeNavOverlay('settings');
+    expect(back).toHaveBeenCalledTimes(2);
+
+    // Both bookkeeping pops must be swallowed — neither re-runs a close()
+    // nor leaks into the base screen underneath.
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    expect(closeOuter).not.toHaveBeenCalled();
+    expect(closeInner).not.toHaveBeenCalled();
+    expect(mobileState.screen).toBe('editor');
+
+    back.mockRestore();
+    cleanup();
+  });
 });

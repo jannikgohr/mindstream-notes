@@ -226,11 +226,14 @@ let editorStack: string[] = [];
 // the pop — so it must NOT issue its own `history.back()`.
 let poppingOverlayFromHistory = false;
 
-// True for the single popstate that a UI-initiated `closeNavOverlay`
-// fires via `history.back()` to reclaim the overlay's dangling history
-// entry. That pop is pure bookkeeping — the overlay is already closed —
-// so the handler swallows it instead of treating it as a real "back".
-let suppressNextPop = false;
+// How many upcoming popstates are bookkeeping pops that a UI-initiated
+// `closeNavOverlay` fired via `history.back()` to reclaim a dangling
+// history entry. Those pops are pure bookkeeping — the overlay is already
+// closed — so the handler swallows one per count instead of treating it
+// as a real "back". A counter (not a bool) because nested overlays can be
+// dismissed in the same tick (e.g. closing settings while drilled into a
+// category collapses both levels at once), firing more than one reclaim.
+let pendingReclaimPops = 0;
 
 /**
  * Open a dismissible overlay as a new nav level: record a history entry
@@ -261,7 +264,7 @@ export function closeNavOverlay(id: string): void {
   if (idx === -1) return;
   overlayStack.splice(idx, 1);
   if (!poppingOverlayFromHistory && typeof window !== 'undefined') {
-    suppressNextPop = true;
+    pendingReclaimPops += 1;
     window.history.back();
   }
 }
@@ -278,10 +281,11 @@ export function installMobileHistoryNav(): () => void {
   editorStack = [];
 
   const onPopState = () => {
-    // The bookkeeping pop from a UI-initiated overlay close — already
-    // handled, so consume it without touching nav state.
-    if (suppressNextPop) {
-      suppressNextPop = false;
+    // A bookkeeping pop from a UI-initiated overlay close — already
+    // handled, so consume it (one per pending reclaim) without touching
+    // nav state.
+    if (pendingReclaimPops > 0) {
+      pendingReclaimPops -= 1;
       return;
     }
     // Topmost overlay first: dismiss it and stop, leaving the base
@@ -317,7 +321,7 @@ export function installMobileHistoryNav(): () => void {
     overlayStack = [];
     editorStack = [];
     poppingOverlayFromHistory = false;
-    suppressNextPop = false;
+    pendingReclaimPops = 0;
   };
 }
 

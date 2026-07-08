@@ -29,6 +29,7 @@
   import { FALLBACK_ICON, SETTINGS_ICONS } from '$lib/settings/icons';
   import { tLabel, tUi } from '$lib/settings/i18n.svelte';
   import type { Category, Setting } from '$lib/settings/types';
+  import { closeNavOverlay, openNavOverlay } from './state.svelte';
 
   let activeCategoryId = $state<string | null>(null);
 
@@ -45,6 +46,28 @@
   /** Reset to the category list whenever the dialog closes. */
   $effect(() => {
     if (!settingsDialog.open) activeCategoryId = null;
+  });
+
+  // Give the category-detail view its own nav-stack level so the Android
+  // system back button steps detail → overview before closing settings
+  // (the whole settings subsystem's single entry is owned by
+  // MobileOptionsMenu; this stacks one more on top). `navHeld` is a
+  // non-reactive mirror so the effect acquires / releases the entry
+  // exactly once per drill-in↔out. Popping it (system back) runs the
+  // close handler, which clears activeCategoryId; the in-header back arrow
+  // clears it directly and the effect then reclaims the entry via
+  // closeNavOverlay — keeping browser history in lockstep either way.
+  const CATEGORY_NAV_ID = 'mobile-settings-category';
+  let categoryNavHeld = false;
+  $effect(() => {
+    const drilledIn = settingsDialog.open && activeCategoryId !== null;
+    if (drilledIn && !categoryNavHeld) {
+      categoryNavHeld = true;
+      openNavOverlay(CATEGORY_NAV_ID, () => (activeCategoryId = null));
+    } else if (!drilledIn && categoryNavHeld) {
+      categoryNavHeld = false;
+      closeNavOverlay(CATEGORY_NAV_ID);
+    }
   });
 
   function categoryIcon(name: string | undefined) {
