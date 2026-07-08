@@ -47,6 +47,10 @@
     ],
     "resources": {
       "infoplist/": ""
+    },
+    "macOS": {
+      "entitlements": "./Entitlements.plist",
+      "infoPlist": "./Info.plist"
     }
   },
   "plugins": {
