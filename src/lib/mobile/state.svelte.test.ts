@@ -226,6 +226,49 @@ describe('history navigation', () => {
     cleanup();
   });
 
+  it('walks folder drill-downs back out one level at a time', () => {
+    const cleanup = installMobileHistoryNav();
+    // root → folderA → folderB.
+    setCurrentFolder('folderA');
+    setCurrentFolder('folderB');
+    expect(mobileState.currentFolderId).toBe('folderB');
+
+    // Back steps to the parent folder, staying on the home screen…
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    expect(mobileState.currentFolderId).toBe('folderA');
+    expect(mobileState.screen).toBe('home');
+
+    // …then to the view root.
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    expect(mobileState.currentFolderId).toBeNull();
+    cleanup();
+  });
+
+  it('returns to the drilled folder when backing out of a note opened inside it', () => {
+    const cleanup = installMobileHistoryNav();
+    setCurrentFolder('folderA');
+    navigateToEditor('n1');
+    expect(mobileState.screen).toBe('editor');
+
+    // Back from the note lands back in the folder it was opened from,
+    // not the view root.
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    expect(mobileState.screen).toBe('home');
+    expect(mobileState.currentFolderId).toBe('folderA');
+    cleanup();
+  });
+
+  it('backs out of a bucket switch to the previous bucket', () => {
+    const cleanup = installMobileHistoryNav();
+    setMobileView('favourite');
+    expect(mobileState.view).toBe('favourite');
+
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    expect(mobileState.view).toBe('home');
+    expect(mobileState.currentFolderId).toBeNull();
+    cleanup();
+  });
+
   it('reinstalling the history nav clears a leftover note stack', () => {
     installMobileHistoryNav()();
     // A fresh mount must not inherit the previous shell's stack: a pop
