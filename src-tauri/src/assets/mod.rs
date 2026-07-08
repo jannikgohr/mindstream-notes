@@ -257,6 +257,23 @@ pub(crate) fn purge_unreferenced_markdown_assets(
     Ok(removed)
 }
 
+pub(crate) fn sweep_unreferenced_markdown_assets_inner(conn: &Connection) -> AppResult<usize> {
+    let note_ids = {
+        let mut stmt = conn.prepare(
+            "SELECT id FROM notes
+             WHERE note_kind = 'markdown'",
+        )?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+
+    let mut removed = 0usize;
+    for note_id in note_ids {
+        removed += purge_unreferenced_markdown_assets(conn, &note_id)?;
+    }
+    Ok(removed)
+}
+
 // ---------- Tauri commands ----------
 
 #[tauri::command]
@@ -272,6 +289,12 @@ pub fn fetch_drawing_asset(db: tauri::State<'_, Db>, id: String) -> Result<Asset
 #[tauri::command]
 pub fn import_pdf_note(db: tauri::State<'_, Db>, input: ImportPdfNote) -> Result<Note, String> {
     db.with_conn(|c| import_pdf_note_inner(c, input))
+        .map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn sweep_unreferenced_markdown_assets(db: tauri::State<'_, Db>) -> Result<usize, String> {
+    db.with_conn(sweep_unreferenced_markdown_assets_inner)
         .map_err(Into::into)
 }
 
@@ -500,7 +523,7 @@ mod tests {
     }
 
     #[test]
-    fn markdown_cleanup_deletes_unreferenced_asset_without_history_ref() {
+    fn markdown_update_keeps_unreferenced_asset_for_editor_undo() {
         let db = open_memory_for_tests();
         let note_id = make_markdown_note(&db);
         let asset = db
@@ -550,7 +573,156 @@ mod tests {
         .unwrap();
 
         let res = db.with_conn(|c| load(c, &asset.summary.id));
-        assert!(res.is_err(), "asset with no live/history refs is deleted");
+        assert!(
+            res.is_ok(),
+            "normal saves must not delete an asset still reachable from editor undo"
+        );
+    }
+
+    #[test]
+    fn startup_sweep_deletes_unreferenced_asset_without_history_ref() {
+        let db = open_memory_for_tests();
+        let note_id = make_markdown_note(&db);
+        let asset = db
+            .with_conn(|c| {
+                upload(
+                    c,
+                    UploadAsset {
+                        owning_note_id: note_id.clone(),
+                        mime_type: "image/png".into(),
+                        bytes: vec![1, 2, 3],
+                    },
+                )
+            })
+            .unwrap();
+
+        db.with_conn_mut(|c| {
+            update_note(
+                c,
+                UpdateNote {
+                    id: note_id.clone(),
+                    title: None,
+                    body: Some("removed".into()),
+                    parent_collection_id: None,
+                    position: None,
+                    tags: None,
+                    yrs_state: None,
+                    favourite: None,
+                },
+            )
+        })
+        .unwrap();
+
+        let removed = db
+            .with_conn(|c| sweep_unreferenced_markdown_assets_inner(c))
+            .unwrap();
+
+        assert_eq!(removed, 1);
+        let res = db.with_conn(|c| load(c, &asset.summary.id));
+        assert!(
+            res.is_err(),
+            "startup sweep deletes assets with no live/history refs"
+        );
+    }
+
+    #[test]
+    fn startup_sweep_is_noop_when_asset_still_referenced() {
+        let db = open_memory_for_tests();
+        let note_id = make_markdown_note(&db);
+        let asset = db
+            .with_conn(|c| {
+                upload(
+                    c,
+                    UploadAsset {
+                        owning_note_id: note_id.clone(),
+                        mime_type: "image/png".into(),
+                        bytes: vec![1, 2, 3],
+                    },
+                )
+            })
+            .unwrap();
+        let body = format!("![](asset:mindstream/{})", asset.summary.id);
+
+        db.with_conn_mut(|c| {
+            update_note(
+                c,
+                UpdateNote {
+                    id: note_id.clone(),
+                    title: None,
+                    body: Some(body),
+                    parent_collection_id: None,
+                    position: None,
+                    tags: None,
+                    yrs_state: None,
+                    favourite: None,
+                },
+            )
+        })
+        .unwrap();
+
+        let removed = db
+            .with_conn(|c| sweep_unreferenced_markdown_assets_inner(c))
+            .unwrap();
+
+        assert_eq!(
+            removed, 0,
+            "a still-referenced asset must survive the sweep"
+        );
+        let res = db.with_conn(|c| load(c, &asset.summary.id));
+        assert!(res.is_ok(), "referenced asset must not be deleted");
+    }
+
+    #[test]
+    fn startup_sweep_aggregates_across_multiple_markdown_notes() {
+        let db = open_memory_for_tests();
+
+        // Two independent markdown notes, each with its own orphaned asset,
+        // so the sweep has to iterate every note and sum the removals.
+        let mut assets = Vec::new();
+        for _ in 0..2 {
+            let note_id = make_markdown_note(&db);
+            let asset = db
+                .with_conn(|c| {
+                    upload(
+                        c,
+                        UploadAsset {
+                            owning_note_id: note_id.clone(),
+                            mime_type: "image/png".into(),
+                            bytes: vec![1, 2, 3],
+                        },
+                    )
+                })
+                .unwrap();
+            db.with_conn_mut(|c| {
+                update_note(
+                    c,
+                    UpdateNote {
+                        id: note_id.clone(),
+                        title: None,
+                        body: Some("removed".into()),
+                        parent_collection_id: None,
+                        position: None,
+                        tags: None,
+                        yrs_state: None,
+                        favourite: None,
+                    },
+                )
+            })
+            .unwrap();
+            assets.push(asset.summary.id);
+        }
+
+        let removed = db
+            .with_conn(|c| sweep_unreferenced_markdown_assets_inner(c))
+            .unwrap();
+
+        assert_eq!(removed, 2, "sweep should sum removals across all notes");
+        for id in assets {
+            assert!(
+                db.with_conn(|c| load(c, &id)).is_err(),
+                "each note's orphaned asset should be gone"
+            );
+        }
     }
 
     #[test]
@@ -606,6 +778,8 @@ mod tests {
         })
         .unwrap();
         db.with_conn(|c| crate::history::prune(c, Some(90)))
+            .unwrap();
+        db.with_conn(|c| sweep_unreferenced_markdown_assets_inner(c))
             .unwrap();
 
         let res = db.with_conn(|c| load(c, &asset.summary.id));

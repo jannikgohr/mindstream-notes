@@ -364,6 +364,7 @@ pub fn run() {
             assets::upload_drawing_asset,
             assets::fetch_drawing_asset,
             assets::import_pdf_note,
+            assets::sweep_unreferenced_markdown_assets,
             // Signatures (reusable, synced signature library)
             signatures::list_signatures,
             signatures::save_signature,

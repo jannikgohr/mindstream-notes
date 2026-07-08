@@ -742,6 +742,10 @@
       "label": "Ink-Seitenhintergrundfarbe",
       "description": "Farbe des Seitenhintergrundmusters. Wird mit geringer Deckkraft angewendet, damit es dezent bleibt."
     },
+    "editor.ink.pageBackgroundOpacity": {
+      "label": "Deckkraft des Ink-Seitenhintergrunds",
+      "description": "Transparenz des Hintergrundmusters handschriftlicher Seiten."
+    },
     "editor.autoSave": { "label": "Auto-Speichern" },
     "hotkeys.panel": { "label": "Tastaturkürzel" },
     "hotkeys.globalShortcuts": {

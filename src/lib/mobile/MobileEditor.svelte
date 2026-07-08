@@ -110,7 +110,7 @@
     onclick={() => (metadataOpen = false)}
   ></button>
   <div
-    class="safe-bottom safe-x fixed inset-x-0 bottom-0 z-50 flex max-h-[85vh] min-h-[45vh] flex-col overflow-hidden rounded-t-xl border border-border bg-card shadow-2xl"
+    class="safe-bottom safe-x fixed inset-x-0 bottom-0 z-50 flex h-[85dvh] max-h-[85vh] min-h-[45vh] flex-col overflow-hidden rounded-t-xl border border-border bg-card shadow-2xl"
     role="dialog"
     aria-modal="true"
     aria-labelledby="mobile-metadata-title"
@@ -131,7 +131,7 @@
         <X class="size-5" />
       </Button>
     </header>
-    <div class="min-h-0 flex-1 overscroll-contain">
+    <div class="h-full min-h-0 flex-1 overflow-hidden overscroll-contain">
       <LazyNoteSidebar />
     </div>
   </div>

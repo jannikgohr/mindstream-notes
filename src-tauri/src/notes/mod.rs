@@ -411,10 +411,6 @@ pub fn update(conn: &mut Connection, input: UpdateNote) -> AppResult<Note> {
             params![fav as i64, now, input.id],
         )?;
     }
-    if input.body.is_some() {
-        crate::assets::purge_unreferenced_markdown_assets(&tx, &input.id)?;
-    }
-
     // Any update is a sync candidate. Doing this once at the end keeps the
     // per-field UPDATEs above unchanged and avoids a half-marked row if one
     // of them no-ops (e.g. UpdateNote with everything None).

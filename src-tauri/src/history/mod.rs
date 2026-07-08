@@ -362,7 +362,6 @@ fn enforce_cap(conn: &Connection, note_id: &str) -> AppResult<()> {
          )",
         params![note_id, MAX_VERSIONS_PER_NOTE],
     )?;
-    crate::assets::purge_unreferenced_markdown_assets(conn, note_id)?;
     Ok(())
 }
 
@@ -407,21 +406,10 @@ pub fn prune(conn: &Connection, retention_days: Option<u32>) -> AppResult<usize>
         return Ok(0);
     };
     let cutoff = (Utc::now() - chrono::Duration::days(days as i64)).to_rfc3339();
-    let affected_note_ids = {
-        let mut stmt = conn.prepare(
-            "SELECT DISTINCT note_id FROM note_versions
-             WHERE created < ?1 AND note_kind = 'markdown'",
-        )?;
-        let rows = stmt.query_map(params![cutoff], |r| r.get::<_, String>(0))?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()?
-    };
     let removed = conn.execute(
         "DELETE FROM note_versions WHERE created < ?1",
         params![cutoff],
     )?;
-    for note_id in affected_note_ids {
-        crate::assets::purge_unreferenced_markdown_assets(conn, &note_id)?;
-    }
     Ok(removed)
 }
 

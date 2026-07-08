@@ -96,10 +96,21 @@ export async function openCameraStream(): Promise<MediaStream> {
   if (!navigator.mediaDevices?.getUserMedia) {
     throw new Error('Camera API unavailable');
   }
-  return navigator.mediaDevices.getUserMedia({
-    video: { facingMode: 'environment' },
-    audio: false
-  });
+  try {
+    return await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment' },
+      audio: false
+    });
+  } catch (err) {
+    try {
+      return await navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: false
+      });
+    } catch {
+      throw err;
+    }
+  }
 }
 
 export function stopCameraStream(stream: MediaStream | null): void {
