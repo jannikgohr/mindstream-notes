@@ -197,7 +197,7 @@
 </script>
 
 {#snippet attachmentsRow()}
-  <dl class="border-y border-border">
+  <dl class="border-t border-border">
     <div
       class="flex min-w-0 items-center justify-between gap-3 border-b border-border py-2 last:border-b-0"
     >
