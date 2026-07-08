@@ -1,9 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import {
-  applyDensity,
-  applyEditorTypography,
-  applyUiFontSize
-} from './appearance';
+import { applyEditorTypography, applyUiFontSize } from './appearance';
 
 const root = () => document.documentElement;
 
@@ -11,7 +7,6 @@ afterEach(() => {
   root().style.removeProperty('--ui-font-size');
   root().style.removeProperty('--editor-font-size');
   root().style.removeProperty('--editor-line-height');
-  delete root().dataset.density;
 });
 
 describe('applyUiFontSize', () => {
@@ -63,19 +58,5 @@ describe('applyEditorTypography', () => {
     expect(root().style.getPropertyValue('--editor-line-height')).toBe('');
     // font size is still applied even when line height is cleared
     expect(root().style.getPropertyValue('--editor-font-size')).toBe('18px');
-  });
-});
-
-describe('applyDensity', () => {
-  it('reflects a valid density onto html[data-density]', () => {
-    for (const d of ['compact', 'cozy', 'roomy']) {
-      applyDensity(d);
-      expect(root().dataset.density).toBe(d);
-    }
-  });
-
-  it('falls back to cozy for an unknown value', () => {
-    applyDensity('ultra');
-    expect(root().dataset.density).toBe('cozy');
   });
 });

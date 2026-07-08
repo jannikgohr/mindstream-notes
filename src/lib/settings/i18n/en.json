@@ -699,7 +699,6 @@
     },
     "appearance.mode": { "label": "Mode" },
     "appearance.accent": { "label": "Accent colour" },
-    "appearance.density": { "label": "UI density" },
     "appearance.reduceMotion": { "label": "Reduce motion" },
     "appearance.customWindowDecorations": {
       "label": "Use custom title bar",
@@ -813,9 +812,6 @@
     "appearance.reduceMotion.on": "On",
     "appearance.reduceMotion.off": "Off",
     "appearance.reduceMotion.system": "Match system",
-    "appearance.density.compact": "Compact",
-    "appearance.density.cozy": "Cozy",
-    "appearance.density.roomy": "Roomy",
     "appearance.sortStrategy.alphabetical": "Alphabetical",
     "appearance.sortStrategy.modified": "Recently modified",
     "appearance.sortStrategy.created": "Recently created",

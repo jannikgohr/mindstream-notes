@@ -55,20 +55,3 @@ export function applyEditorTypography(px: unknown, lineHeight: unknown): void {
     );
   }
 }
-
-const DENSITIES = ['compact', 'cozy', 'roomy'] as const;
-type Density = (typeof DENSITIES)[number];
-
-/**
- * UI density tunes the vertical rhythm of dense list surfaces (the file
- * tree) by exposing the choice as `html[data-density]`; app.css maps each
- * value onto the row-padding var. Unknown values fall back to `cozy`, the
- * schema default.
- */
-export function applyDensity(density: unknown): void {
-  if (typeof document === 'undefined') return;
-  const value: Density = DENSITIES.includes(density as Density)
-    ? (density as Density)
-    : 'cozy';
-  document.documentElement.dataset.density = value;
-}

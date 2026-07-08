@@ -62,19 +62,6 @@
    * the slider. */
   --ui-font-size: 16px;
   --editor-font-size: 16px;
-  /* Appearance → UI density. Vertical padding for file-tree rows; the
-   * default matches the previous hardcoded py-1 (0.25rem = "cozy").
-   * appearance.ts sets html[data-density], and the rules below remap this
-   * var for the compact / roomy choices. */
-  --tree-row-pad-y: 0.25rem;
-}
-
-:root[data-density='compact'] {
-  --tree-row-pad-y: 0.125rem;
-}
-
-:root[data-density='roomy'] {
-  --tree-row-pad-y: 0.4375rem;
 }
 
 /* Root font-size is the rem base for the entire UI; the Appearance → UI
