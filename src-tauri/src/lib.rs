@@ -36,6 +36,7 @@ pub mod pdf_text;
 pub mod profiles;
 pub mod search;
 pub mod serde_helpers;
+pub mod sharing;
 pub mod signatures;
 pub mod sync;
 pub mod system;
@@ -388,6 +389,12 @@ pub fn run() {
             sync::sync_now,
             sync::note_room_info,
             sync::scheduler::set_sync_schedule,
+            // Sharing
+            sharing::list_collection_invitations,
+            sharing::accept_collection_invitation,
+            sharing::reject_collection_invitation,
+            sharing::get_collection_share_state,
+            sharing::invite_collection,
             // One-shot recovery for items the pre-fix etebase encoder
             // bug left corrupt on the server. Invoke from dev tools.
             sync::repair::audit_corrupt_remote_items,

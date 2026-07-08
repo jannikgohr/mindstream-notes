@@ -423,6 +423,25 @@ const MIGRATIONS: &[Migration] = &[
             ALTER TABLE notes ADD COLUMN tags_state BLOB;
         "#,
     },
+    Migration {
+        to: 17,
+        // Local projection of collection sharing state. Etebase sharing
+        // operates on remote Collections, while Mindstream folders are local
+        // rows that currently sync as Items inside a single folders
+        // Collection. These fields give the UI a stable place to render
+        // "shared with me" roots and "shared by me" indicators while the
+        // sync layer grows true per-folder remote-collection support.
+        sql: r#"
+            ALTER TABLE collections ADD COLUMN share_id TEXT;
+            ALTER TABLE collections ADD COLUMN shared_role TEXT;
+            ALTER TABLE collections ADD COLUMN shared_owner TEXT;
+            ALTER TABLE collections ADD COLUMN shared_by_me INTEGER NOT NULL DEFAULT 0;
+
+            CREATE INDEX idx_collections_share_id ON collections(share_id) WHERE share_id IS NOT NULL;
+            CREATE INDEX idx_collections_shared_role ON collections(shared_role) WHERE shared_role IS NOT NULL;
+            CREATE INDEX idx_collections_shared_by_me ON collections(shared_by_me) WHERE shared_by_me = 1;
+        "#,
+    },
 ];
 
 pub fn run(conn: &mut Connection) -> AppResult<()> {

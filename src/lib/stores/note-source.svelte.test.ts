@@ -5,6 +5,7 @@ import {
   childrenOf,
   collectionIsSharedOrUnderShared,
   collectionIsSharedRoot,
+  collectionIsSharedWithMe,
   collectionIsUnder,
   collectionIsUnderTrash,
   noteIsUnderShared,
@@ -17,6 +18,7 @@ type SharedMeta = {
   is_shared?: boolean;
   shared_role?: string | null;
   share_id?: string | null;
+  shared_by_me?: boolean;
 };
 
 const collection = (
@@ -174,6 +176,15 @@ describe('shared detection', () => {
     }
   });
 
+  it('does not treat collections shared by me as shared-with-me roots', () => {
+    const c = collection('mine', null, {
+      share_id: 'remote-coll',
+      shared_by_me: true
+    });
+    expect(collectionIsSharedWithMe(c)).toBe(false);
+    expect(collectionIsSharedRoot(c, byId([c]))).toBe(false);
+  });
+
   it('collectionIsSharedOrUnderShared walks ancestors', () => {
     const root = collection('root', null, { shared: true });
     const child = collection('child', 'root');
@@ -215,10 +226,18 @@ describe('nodesForDesktopSource', () => {
 
   it('shared returns only shared root folders', () => {
     const cols = byId([
-      collection('shared', null, { shared: true }),
+      collection('shared', null, { shared_role: 'read_write' }),
+      collection('sharedByMe', null, {
+        share_id: 'remote-coll',
+        shared_by_me: true
+      }),
       collection('personal')
     ]);
-    const tree = [folderNode('shared'), folderNode('personal')];
+    const tree = [
+      folderNode('shared'),
+      folderNode('sharedByMe'),
+      folderNode('personal')
+    ];
     const out = nodesForDesktopSource('shared', tree, {}, cols);
     expect(out.map((n) => n.id)).toEqual(['shared']);
   });

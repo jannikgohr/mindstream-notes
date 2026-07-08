@@ -77,3 +77,33 @@ export async function scanForUpdateNotifications(force = false): Promise<void> {
     notificationState.updateScanPending = false;
   }
 }
+
+export async function scanForCollectionInviteNotifications(): Promise<void> {
+  if (!isTauri()) return;
+  try {
+    const { listCollectionInvitations } = await import('$lib/api/sharing');
+    const invitations = await listCollectionInvitations();
+    const liveIds = new Set(
+      invitations.map((invitation) => `collaboration-invite:${invitation.id}`)
+    );
+    notificationState.items = notificationState.items.filter(
+      (item) => item.kind !== 'collaboration-invite' || liveIds.has(item.id)
+    );
+    for (const invitation of invitations) {
+      upsertNotification({
+        id: `collaboration-invite:${invitation.id}`,
+        kind: 'collaboration-invite',
+        widgetType: 'collaboration-invite',
+        createdAt: Date.now(),
+        data: {
+          invitationId: invitation.id,
+          senderUsername: invitation.sender_username,
+          collectionUid: invitation.collection_uid,
+          accessLevel: invitation.access_level
+        }
+      });
+    }
+  } catch (err) {
+    console.debug('[notifications] collection invite scan failed', err);
+  }
+}

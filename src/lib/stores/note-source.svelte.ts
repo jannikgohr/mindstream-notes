@@ -71,7 +71,7 @@ export function collectionIsSharedRoot(
   collectionsById: Record<string, Collection>
 ): boolean {
   return (
-    isSharedCollection(collection) &&
+    collectionIsSharedWithMe(collection) &&
     !collectionHasSharedAncestor(collection, collectionsById)
   );
 }
@@ -86,7 +86,7 @@ export function collectionIsSharedOrUnderShared(
     seen.add(current);
     const collection = collectionsById[current];
     if (!collection) return false;
-    if (isSharedCollection(collection)) return true;
+    if (collectionIsSharedWithMe(collection)) return true;
     current = collection.parent_collection_id;
   }
   return false;
@@ -112,25 +112,31 @@ function collectionHasSharedAncestor(
     seen.add(parent);
     const current = collectionsById[parent];
     if (!current) return false;
-    if (isSharedCollection(current)) return true;
+    if (collectionIsSharedWithMe(current)) return true;
     parent = current.parent_collection_id;
   }
   return false;
 }
 
-function isSharedCollection(collection: Collection): boolean {
+export function collectionIsSharedWithMe(collection: Collection): boolean {
   const meta = collection as Collection & {
     shared?: boolean;
     is_shared?: boolean;
     shared_role?: string | null;
     share_id?: string | null;
+    shared_by_me?: boolean | null;
   };
+  if (meta.shared_by_me === true) return false;
   return (
     meta.shared === true ||
     meta.is_shared === true ||
     !!meta.shared_role ||
     !!meta.share_id
   );
+}
+
+export function collectionIsSharedByMe(collection: Collection): boolean {
+  return collection.shared_by_me === true;
 }
 
 export function nodesForDesktopSource(

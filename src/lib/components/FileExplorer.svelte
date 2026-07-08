@@ -10,6 +10,7 @@
     FileUp,
     PencilRuler,
     FilePlus2,
+    Share2,
     Trash2
   } from '@lucide/svelte';
   import FavouriteStar from './FavouriteStar.svelte';
@@ -49,12 +50,14 @@
   import { i18n, tUi } from '$lib/settings/i18n.svelte';
   import type { TreeNode } from '$lib/api';
   import {
+    collectionIsSharedByMe,
     collectionIsUnderTrash,
     nodesForDesktopSource,
     noteIsUnderShared,
     noteIsUnderTrash,
     type DesktopNoteSource
   } from '$lib/stores/note-source.svelte';
+  import { openCollectionShareDialog } from './share-dialog.svelte';
   import {
     FILE_EXPLORER_SOURCES,
     defaultDraftText,
@@ -607,6 +610,10 @@
           label: 'Move to root',
           onSelect: () => void moveCollectionTo(id, null)
         },
+        {
+          label: tUi('sharing.menu.shareFolder'),
+          onSelect: () => openCollectionShareDialog(id)
+        },
         'separator',
         {
           label: 'Delete',
@@ -1048,6 +1055,8 @@
     {@const isSelected = selectedKeySet.has(nodeKey(node) as SelectionKey)}
     {@const renaming =
       rename && rename.kind === 'folder' && rename.id === node.id}
+    {@const folder = tree.collectionsById[node.id]}
+    {@const sharedByMe = folder ? collectionIsSharedByMe(folder) : false}
     <button
       data-file-tree-node
       type="button"
@@ -1078,6 +1087,12 @@
         {@render renderRenameInput()}
       {:else}
         <span class="truncate">{node.name}</span>
+        {#if sharedByMe}
+          <Share2
+            class="ml-auto size-3.5 shrink-0 text-primary"
+            aria-label={tUi('nav.shared')}
+          />
+        {/if}
       {/if}
     </button>
     {#if expanded[node.id]}

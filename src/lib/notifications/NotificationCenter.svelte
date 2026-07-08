@@ -6,6 +6,7 @@
   import { tUi } from '$lib/settings/i18n.svelte';
   import {
     notificationState,
+    scanForCollectionInviteNotifications,
     scanForUpdateNotifications
   } from './store.svelte';
   import LazyNotificationWidget from './LazyNotificationWidget.svelte';
@@ -39,6 +40,7 @@
 
   onMount(() => {
     void scanForUpdateNotifications();
+    void scanForCollectionInviteNotifications();
     document.addEventListener('pointerdown', handleDocumentPointerDown, true);
     document.addEventListener('keydown', handleKeydown);
     return () => {

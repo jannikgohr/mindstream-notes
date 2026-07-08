@@ -18,6 +18,10 @@ pub struct Collection {
     pub position: i64,
     pub created: String,
     pub modified: String,
+    pub share_id: Option<String>,
+    pub shared_role: Option<String>,
+    pub shared_owner: Option<String>,
+    pub shared_by_me: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -85,12 +89,17 @@ fn row_to_collection(row: &rusqlite::Row<'_>) -> rusqlite::Result<Collection> {
         position: row.get("position")?,
         created: row.get("created")?,
         modified: row.get("modified")?,
+        share_id: row.get("share_id")?,
+        shared_role: row.get("shared_role")?,
+        shared_owner: row.get("shared_owner")?,
+        shared_by_me: row.get::<_, i64>("shared_by_me")? != 0,
     })
 }
 
 pub fn list(conn: &Connection) -> AppResult<Vec<Collection>> {
     let mut stmt = conn.prepare(
-        "SELECT id, parent_collection_id, name, position, created, modified
+        "SELECT id, parent_collection_id, name, position, created, modified,
+                share_id, shared_role, shared_owner, shared_by_me
          FROM collections
          ORDER BY parent_collection_id IS NOT NULL, parent_collection_id, position, name",
     )?;
@@ -128,7 +137,8 @@ pub fn create(conn: &Connection, input: CreateCollection) -> AppResult<Collectio
 
 pub fn get(conn: &Connection, id: &str) -> AppResult<Collection> {
     conn.query_row(
-        "SELECT id, parent_collection_id, name, position, created, modified
+        "SELECT id, parent_collection_id, name, position, created, modified,
+                share_id, shared_role, shared_owner, shared_by_me
          FROM collections WHERE id = ?1",
         params![id],
         row_to_collection,

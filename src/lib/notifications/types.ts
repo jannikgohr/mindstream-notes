@@ -24,6 +24,13 @@ export interface UpdateNotificationData {
   currentVersion: string;
 }
 
+export interface CollaborationInviteNotificationData {
+  invitationId: string;
+  senderUsername: string | null;
+  collectionUid: string;
+  accessLevel: 'read_only' | 'read_write' | 'admin';
+}
+
 export interface NotificationWidgetProps {
   notification: AppNotification;
   onClose?: () => void;
