@@ -11,15 +11,18 @@
 // tests — Tauri entry/builder glue (lib, main), the system tray and native
 // menu UI, global-shortcut + desktop-settings + drawing command shims, the
 // PDF render pipeline, the Etebase network sync engine (sync/{mod,repair,
-// scheduler}) and network/keyring auth (auth/mod), plus the trivial
-// system/error/i18n shims and the migration runner.
+// scheduler,scopes}) and collection-sharing command layer (sharing) and
+// network/keyring auth (auth/mod), plus the trivial system/error/i18n shims
+// and the migration runner. The pure helpers in these files still have unit
+// tests that run; they're just not part of the line-coverage denominator.
 
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const IGNORE_REGEX = [
-  'sync[/\\\\](mod|repair|scheduler)\\.rs$',
+  'sync[/\\\\](mod|repair|scheduler|scopes)\\.rs$',
+  'sharing\\.rs$',
   'auth[/\\\\]mod\\.rs$',
   'drawing[/\\\\]mod\\.rs$',
   '(tray|native_menu|hotkeys|desktop_settings|pdf_export|system|error|i18n)\\.rs$',
