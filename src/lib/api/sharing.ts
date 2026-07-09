@@ -8,6 +8,7 @@ export interface CollectionInvitation {
   sender_username: string | null;
   collection_uid: string;
   access_level: CollectionShareAccessLevel;
+  collection_type: string | null;
 }
 
 export interface InviteCollectionInput {

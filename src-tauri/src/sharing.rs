@@ -7,7 +7,7 @@
 //! can represent one remote Collection per shared folder/subtree.
 
 use chrono::Utc;
-use etebase::{Account, CollectionAccessLevel, FetchOptions, SignedInvitation};
+use etebase::{Account, CollectionAccessLevel, FetchOptions, InvitationPreview, SignedInvitation};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
@@ -40,6 +40,7 @@ pub struct CollectionInvitation {
     pub sender_username: Option<String>,
     pub collection_uid: String,
     pub access_level: ShareAccessLevel,
+    pub collection_type: Option<String>,
 }
 
 impl From<&SignedInvitation> for CollectionInvitation {
@@ -50,6 +51,20 @@ impl From<&SignedInvitation> for CollectionInvitation {
             sender_username: invitation.sender_username().map(str::to_string),
             collection_uid: invitation.collection().to_string(),
             access_level: invitation.access_level().into(),
+            collection_type: None,
+        }
+    }
+}
+
+impl From<InvitationPreview> for CollectionInvitation {
+    fn from(preview: InvitationPreview) -> Self {
+        Self {
+            id: preview.uid().to_string(),
+            username: preview.username().to_string(),
+            sender_username: preview.sender_username().map(str::to_string),
+            collection_uid: preview.collection_uid().to_string(),
+            access_level: preview.access_level().into(),
+            collection_type: Some(preview.collection_type().to_string()),
         }
     }
 }
@@ -169,7 +184,12 @@ fn list_all_incoming(
         let page = manager
             .list_incoming(Some(&options))
             .map_err(|e| AppError::InvalidArg(format!("list incoming invitations: {e}")))?;
-        out.extend(page.data().iter().map(CollectionInvitation::from));
+        out.extend(page.data().iter().map(|invitation| {
+            manager
+                .preview(invitation)
+                .map(CollectionInvitation::from)
+                .unwrap_or_else(|_| CollectionInvitation::from(invitation))
+        }));
         if page.done() {
             break;
         }
