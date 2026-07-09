@@ -16,7 +16,7 @@
 //! can't wedge the user's own vault sync.
 
 use etebase::managers::CollectionManager;
-use etebase::{Collection, FetchOptions};
+use etebase::{Collection, CollectionAccessLevel, FetchOptions};
 
 use crate::db::Db;
 use crate::error::{AppError, AppResult};
@@ -99,13 +99,22 @@ fn sync_one_scope(
         return Ok(());
     };
 
+    // A read-only recipient can't upload into the scope's collections. Pushing
+    // anyway fails server-side and leaves the locally-edited row `dirty`, so
+    // every later sync retries the doomed push forever. When we only have read
+    // access, pull the scope but never push it. The part collections are all
+    // invited at the same level, so the folders collection is representative.
+    let writable = !matches!(folders_col.access_level(), CollectionAccessLevel::ReadOnly);
+
     // Folders first so notes can resolve parents; assets last so their owning
     // notes exist — same ordering rationale as the vault sync.
     let folders_im = cm
         .item_manager(&folders_col)
         .map_err(|e| AppError::InvalidArg(format!("item_manager(scope folders): {e}")))?;
     pull_scope_folders(db, &folders_im, scope, &mut delta.report)?;
-    push_folders(db, &folders_im, &mut delta.report, Some(scope))?;
+    if writable {
+        push_folders(db, &folders_im, &mut delta.report, Some(scope))?;
+    }
 
     let notes_im = cm
         .item_manager(&notes_col)
@@ -117,7 +126,9 @@ fn sync_one_scope(
         &mut delta.report,
         &mut delta.notes_pulled_ids,
     )?;
-    push_notes(db, &notes_im, &mut delta.report, Some(scope))?;
+    if writable {
+        push_notes(db, &notes_im, &mut delta.report, Some(scope))?;
+    }
 
     let assets_im = cm
         .item_manager(&assets_col)
@@ -129,7 +140,9 @@ fn sync_one_scope(
         &mut delta.report,
         &mut delta.assets_pulled_ids,
     )?;
-    push_assets(db, &assets_im, &mut delta.report, Some(scope))?;
+    if writable {
+        push_assets(db, &assets_im, &mut delta.report, Some(scope))?;
+    }
 
     Ok(())
 }
