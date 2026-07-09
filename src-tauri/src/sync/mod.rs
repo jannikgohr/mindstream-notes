@@ -22,6 +22,7 @@
 
 pub mod repair;
 pub mod scheduler;
+pub mod scopes;
 pub mod tags_crdt;
 pub mod yrs_doc;
 
@@ -395,7 +396,7 @@ fn run(db: &Db, account: &Account) -> AppResult<SyncDelta> {
         .item_manager(&folders_col)
         .map_err(|e| AppError::InvalidArg(format!("item_manager(folders): {e}")))?;
     pull_folders(db, &folders_im, &mut delta.report)?;
-    push_folders(db, &folders_im, &mut delta.report)?;
+    push_folders(db, &folders_im, &mut delta.report, None)?;
 
     let notes_col = ensure_collection(db, &cm, KIND_NOTES, COLLECTION_TYPE_NOTES)?;
     let notes_im = cm
@@ -407,7 +408,7 @@ fn run(db: &Db, account: &Account) -> AppResult<SyncDelta> {
         &mut delta.report,
         &mut delta.notes_pulled_ids,
     )?;
-    push_notes(db, &notes_im, &mut delta.report)?;
+    push_notes(db, &notes_im, &mut delta.report, None)?;
 
     // Assets last so notes — and the FK target rows they need — are
     // already in place when apply_asset tries to upsert. If a brand-new
@@ -427,7 +428,7 @@ fn run(db: &Db, account: &Account) -> AppResult<SyncDelta> {
         &mut delta.report,
         &mut delta.assets_pulled_ids,
     )?;
-    push_assets(db, &assets_im, &mut delta.report)?;
+    push_assets(db, &assets_im, &mut delta.report, None)?;
 
     // Signatures are user-global (no FK back to notes), so order relative
     // to the others doesn't matter — apply_signature never orphans.
@@ -437,6 +438,13 @@ fn run(db: &Db, account: &Account) -> AppResult<SyncDelta> {
         .map_err(|e| AppError::InvalidArg(format!("item_manager(signatures): {e}")))?;
     pull_signatures(db, &signatures_im, &mut delta.report)?;
     push_signatures(db, &signatures_im, &mut delta.report)?;
+
+    // Shared scopes sync into their own per-scope collections. Isolated from
+    // the vault sync above: a failure here (a malformed manifest, a scope we
+    // can't reach) is logged and must never break the user's own vault sync.
+    if let Err(e) = scopes::sync_scopes(db, &cm, &mut delta) {
+        log::error!("[sync] scoped sync failed (vault sync unaffected): {e}");
+    }
 
     Ok(delta)
 }
@@ -558,7 +566,7 @@ fn pull_folders_once(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppR
             .list(Some(&opts))
             .map_err(|e| AppError::InvalidArg(format!("list folders: {e}")))?;
         for item in resp.data() {
-            match apply_folder(db, item) {
+            match apply_folder(db, item, None) {
                 Ok(Some(payload)) => applied.push(payload),
                 Ok(None) => {}
                 Err(err) if is_corrupt_remote_content(&err) => {
@@ -635,7 +643,7 @@ fn pull_notes_once(
             .list(Some(&opts))
             .map_err(|e| AppError::InvalidArg(format!("list notes: {e}")))?;
         for item in resp.data() {
-            match apply_note(db, item) {
+            match apply_note(db, item, None) {
                 Ok(Some(id)) => applied_ids.push(id),
                 Ok(None) => {}
                 Err(err) if is_corrupt_remote_content(&err) => {
@@ -720,7 +728,7 @@ fn pull_assets_once(
             .list(Some(&opts))
             .map_err(|e| AppError::InvalidArg(format!("list assets: {e}")))?;
         for item in resp.data() {
-            match apply_asset(db, item) {
+            match apply_asset(db, item, None) {
                 Ok(ApplyAssetOutcome::Applied(id)) => {
                     report.assets_pulled += 1;
                     applied_ids.push(id);
@@ -777,7 +785,7 @@ enum ApplyAssetOutcome {
 
 /// Apply one pulled asset item to local SQLite. Returns the outcome so
 /// the caller can decide whether to advance the stoken (orphans pin it).
-fn apply_asset(db: &Db, item: &Item) -> AppResult<ApplyAssetOutcome> {
+fn apply_asset(db: &Db, item: &Item, scope: Option<&str>) -> AppResult<ApplyAssetOutcome> {
     if item.is_deleted() {
         db.with_conn(|c| {
             c.execute(
@@ -840,8 +848,8 @@ fn apply_asset(db: &Db, item: &Item) -> AppResult<ApplyAssetOutcome> {
                 "UPDATE assets
                  SET owning_note_id = ?1, mime_type = ?2, bytes = ?3,
                      size = ?4, modified = ?5, etebase_uid = ?6,
-                     etebase_etag = ?7, dirty = 0
-                 WHERE id = ?8",
+                     etebase_etag = ?7, dirty = 0, share_scope_id = ?8
+                 WHERE id = ?9",
                 params![
                     payload.owning_note_id,
                     payload.mime_type,
@@ -850,6 +858,7 @@ fn apply_asset(db: &Db, item: &Item) -> AppResult<ApplyAssetOutcome> {
                     payload.modified,
                     uid,
                     etag,
+                    scope,
                     payload.id,
                 ],
             )?;
@@ -857,8 +866,8 @@ fn apply_asset(db: &Db, item: &Item) -> AppResult<ApplyAssetOutcome> {
             tx.execute(
                 "INSERT INTO assets(id, owning_note_id, mime_type, bytes,
                                     size, created, modified, etebase_uid,
-                                    etebase_etag, dirty)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0)",
+                                    etebase_etag, dirty, share_scope_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, ?10)",
                 params![
                     payload.id,
                     payload.owning_note_id,
@@ -869,6 +878,7 @@ fn apply_asset(db: &Db, item: &Item) -> AppResult<ApplyAssetOutcome> {
                     payload.modified,
                     uid,
                     etag,
+                    scope,
                 ],
             )?;
         }
@@ -1012,7 +1022,7 @@ fn apply_signature(db: &Db, item: &Item) -> AppResult<bool> {
 /// Returns `Some(payload)` if we wrote a row (so `pull_folders` can
 /// queue it for the repair pass), `None` for deletes and missing-
 /// content items where there's nothing to re-link.
-fn apply_folder(db: &Db, item: &Item) -> AppResult<Option<FolderPayload>> {
+fn apply_folder(db: &Db, item: &Item, scope: Option<&str>) -> AppResult<Option<FolderPayload>> {
     if item.is_deleted() {
         // Server-side delete: drop our row if we have one matched by uid.
         db.with_conn(|c| {
@@ -1054,8 +1064,8 @@ fn apply_folder(db: &Db, item: &Item) -> AppResult<Option<FolderPayload>> {
             c.execute(
                 "UPDATE collections
                  SET parent_collection_id = ?1, name = ?2, position = ?3, modified = ?4,
-                     etebase_uid = ?5, etebase_etag = ?6, dirty = 0
-                 WHERE id = ?7",
+                     etebase_uid = ?5, etebase_etag = ?6, dirty = 0, share_scope_id = ?7
+                 WHERE id = ?8",
                 params![
                     resolved_parent,
                     payload.name,
@@ -1063,14 +1073,16 @@ fn apply_folder(db: &Db, item: &Item) -> AppResult<Option<FolderPayload>> {
                     now,
                     item.uid(),
                     etag,
+                    scope,
                     payload.id,
                 ],
             )?;
         } else {
             c.execute(
                 "INSERT INTO collections (id, parent_collection_id, name, position,
-                                           created, modified, etebase_uid, etebase_etag, dirty)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6, ?7, 0)",
+                                           created, modified, etebase_uid, etebase_etag, dirty,
+                                           share_scope_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6, ?7, 0, ?8)",
                 params![
                     payload.id,
                     resolved_parent,
@@ -1079,6 +1091,7 @@ fn apply_folder(db: &Db, item: &Item) -> AppResult<Option<FolderPayload>> {
                     now,
                     item.uid(),
                     etag,
+                    scope,
                 ],
             )?;
         }
@@ -1165,7 +1178,7 @@ struct LocalNoteState {
 /// `sync-completed` event payload — open editors merge the new
 /// yrs_state into their live Y.Doc instead of going stale. Returns None
 /// for deletes (no live editor to refresh) and missing-content items.
-fn apply_note(db: &Db, item: &Item) -> AppResult<Option<String>> {
+fn apply_note(db: &Db, item: &Item, scope: Option<&str>) -> AppResult<Option<String>> {
     if item.is_deleted() {
         db.with_conn(|c| {
             c.execute(
@@ -1185,7 +1198,7 @@ fn apply_note(db: &Db, item: &Item) -> AppResult<Option<String>> {
     let payload: NotePayload = rmp_serde::from_slice(&raw)
         .map_err(|e| AppError::InvalidArg(format!("note msgpack: {e}")))?;
     let etag = item.etag().to_string();
-    apply_note_payload(db, &payload, item.uid(), &etag)
+    apply_note_payload(db, &payload, item.uid(), &etag, scope)
 }
 
 /// Apply a decoded note payload to local SQLite. Split out from `apply_note`
@@ -1196,6 +1209,7 @@ fn apply_note_payload(
     payload: &NotePayload,
     uid: &str,
     etag: &str,
+    scope: Option<&str>,
 ) -> AppResult<Option<String>> {
     db.with_conn_mut(|c| {
         let tx = c.transaction()?;
@@ -1345,8 +1359,8 @@ fn apply_note_payload(
                      modified = ?5, trashed_at = ?6, yrs_state = ?7,
                      etebase_uid = ?8, etebase_etag = ?9, dirty = ?10,
                      payload_schema = ?11, favourite = ?12, note_kind = ?13,
-                     tags_state = ?14
-                 WHERE id = ?15",
+                     tags_state = ?14, share_scope_id = ?15
+                 WHERE id = ?16",
                 params![
                     final_parent,
                     final_title,
@@ -1362,6 +1376,7 @@ fn apply_note_payload(
                     final_favourite,
                     final_note_kind,
                     final_tags_state,
+                    scope,
                     payload.id,
                 ],
             )?;
@@ -1370,8 +1385,9 @@ fn apply_note_payload(
                 "INSERT INTO notes (id, parent_collection_id, title, body, position,
                                     created, modified, trashed_at, yrs_state,
                                     etebase_uid, etebase_etag, dirty,
-                                    payload_schema, favourite, note_kind, tags_state)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                                    payload_schema, favourite, note_kind, tags_state,
+                                    share_scope_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
                 params![
                     payload.id,
                     final_parent,
@@ -1388,6 +1404,7 @@ fn apply_note_payload(
                     final_favourite,
                     final_note_kind,
                     final_tags_state,
+                    scope,
                 ],
             )?;
         }
@@ -1410,10 +1427,15 @@ fn apply_note_payload(
 
 // ---------- Push ----------
 
-fn push_folders(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult<()> {
-    let dirty = load_dirty_folders(db)?;
+fn push_folders(
+    db: &Db,
+    im: &ItemManager,
+    report: &mut SyncReport,
+    scope: Option<&str>,
+) -> AppResult<()> {
+    let dirty = load_dirty_folders(db, scope)?;
     if dirty.is_empty() {
-        return drain_tombstones(db, im, "folder");
+        return drain_tombstones(db, im, "folder", scope);
     }
 
     // Build (Item, payload, local_id) tuples for each dirty row.
@@ -1472,13 +1494,18 @@ fn push_folders(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult
     })?;
     report.folders_pushed += pushed;
 
-    drain_tombstones(db, im, "folder")
+    drain_tombstones(db, im, "folder", scope)
 }
 
-fn push_notes(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult<()> {
-    let dirty = load_dirty_notes(db)?;
+fn push_notes(
+    db: &Db,
+    im: &ItemManager,
+    report: &mut SyncReport,
+    scope: Option<&str>,
+) -> AppResult<()> {
+    let dirty = load_dirty_notes(db, scope)?;
     if dirty.is_empty() {
-        return drain_tombstones(db, im, "note");
+        return drain_tombstones(db, im, "note", scope);
     }
 
     let mut prepared: Vec<(Item, String)> = Vec::with_capacity(dirty.len());
@@ -1578,7 +1605,7 @@ fn push_notes(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult<(
     })?;
     report.notes_pushed += pushed;
 
-    drain_tombstones(db, im, "note")
+    drain_tombstones(db, im, "note", scope)
 }
 
 /// Upload dirty asset rows to the assets Etebase collection.
@@ -1591,10 +1618,15 @@ fn push_notes(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult<(
 ///
 /// Drains the asset tombstone queue at the end — entries are added by
 /// notes::purge when a freeform note with synced assets gets purged.
-fn push_assets(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult<()> {
-    let dirty = load_dirty_assets(db)?;
+fn push_assets(
+    db: &Db,
+    im: &ItemManager,
+    report: &mut SyncReport,
+    scope: Option<&str>,
+) -> AppResult<()> {
+    let dirty = load_dirty_assets(db, scope)?;
     if dirty.is_empty() {
-        return drain_tombstones(db, im, "asset");
+        return drain_tombstones(db, im, "asset", scope);
     }
 
     let mut prepared: Vec<(Item, String)> = Vec::with_capacity(dirty.len());
@@ -1657,7 +1689,7 @@ fn push_assets(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult<
     })?;
     report.assets_pushed += pushed;
 
-    drain_tombstones(db, im, "asset")
+    drain_tombstones(db, im, "asset", scope)
 }
 
 /// Push dirty signatures as per-signature items, then drain the signature
@@ -1667,7 +1699,7 @@ fn push_assets(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult<
 fn push_signatures(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult<()> {
     let dirty = load_dirty_signatures(db)?;
     if dirty.is_empty() {
-        return drain_tombstones(db, im, "signature");
+        return drain_tombstones(db, im, "signature", None);
     }
 
     let mut prepared: Vec<(Item, String)> = Vec::with_capacity(dirty.len());
@@ -1724,7 +1756,7 @@ fn push_signatures(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppRes
     })?;
     report.signatures_pushed += pushed;
 
-    drain_tombstones(db, im, "signature")
+    drain_tombstones(db, im, "signature", None)
 }
 
 /// Try a transaction; on `Error::Conflict`, refetch the colliding items,
@@ -1812,11 +1844,32 @@ fn refetch_and_remerge(im: &ItemManager, items: &mut [Item]) -> Result<(), Eteba
     Ok(())
 }
 
-fn drain_tombstones(db: &Db, im: &ItemManager, kind: &str) -> AppResult<()> {
+/// Drain queued deletes for `kind` against the collection `im` is bound to.
+/// `scope` selects which tombstones belong here: `None` = the vault-wide
+/// collection (`share_scope_id IS NULL`), `Some(id)` = that share scope's
+/// collection. Routing by scope keeps a scoped delete from being fired at the
+/// vault collection (where its uid doesn't exist) and vice versa.
+fn drain_tombstones(db: &Db, im: &ItemManager, kind: &str, scope: Option<&str>) -> AppResult<()> {
     let uids: Vec<String> = db.with_conn(|c| {
-        let mut stmt = c.prepare("SELECT etebase_uid FROM tombstones WHERE kind = ?1")?;
-        let rows = stmt.query_map(params![kind], |r| r.get::<_, String>(0))?;
-        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        let rows = match scope {
+            None => {
+                let mut stmt = c.prepare(
+                    "SELECT etebase_uid FROM tombstones
+                     WHERE kind = ?1 AND share_scope_id IS NULL",
+                )?;
+                let rows = stmt.query_map(params![kind], |r| r.get::<_, String>(0))?;
+                rows.collect::<rusqlite::Result<Vec<_>>>()?
+            }
+            Some(id) => {
+                let mut stmt = c.prepare(
+                    "SELECT etebase_uid FROM tombstones
+                     WHERE kind = ?1 AND share_scope_id = ?2",
+                )?;
+                let rows = stmt.query_map(params![kind, id], |r| r.get::<_, String>(0))?;
+                rows.collect::<rusqlite::Result<Vec<_>>>()?
+            }
+        };
+        Ok(rows)
     })?;
     if uids.is_empty() {
         return Ok(());
@@ -1884,14 +1937,18 @@ fn load_tags_for_note(conn: &Connection, note_id: &str) -> AppResult<Vec<String>
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
-fn load_dirty_folders(db: &Db) -> AppResult<Vec<DirtyFolder>> {
+fn load_dirty_folders(db: &Db, scope: Option<&str>) -> AppResult<Vec<DirtyFolder>> {
     db.with_conn(|c| {
-        // The 'trash' built-in is local-only; never push it.
+        // The 'trash' built-in is local-only; never push it. The scope
+        // predicate routes each row to its home collection: a NULL `scope`
+        // matches only unscoped (vault) rows, a scope id matches only that
+        // scope's rows.
         let mut stmt = c.prepare(
             "SELECT id, parent_collection_id, name, position, etebase_uid
-             FROM collections WHERE dirty = 1 AND id <> 'trash'",
+             FROM collections WHERE dirty = 1 AND id <> 'trash'
+               AND ((?1 IS NULL AND share_scope_id IS NULL) OR share_scope_id = ?1)",
         )?;
-        let rows = stmt.query_map([], |r| {
+        let rows = stmt.query_map(params![scope], |r| {
             Ok(DirtyFolder {
                 id: r.get(0)?,
                 parent_collection_id: r.get(1)?,
@@ -1904,14 +1961,15 @@ fn load_dirty_folders(db: &Db) -> AppResult<Vec<DirtyFolder>> {
     })
 }
 
-fn load_dirty_notes(db: &Db) -> AppResult<Vec<DirtyNote>> {
+fn load_dirty_notes(db: &Db, scope: Option<&str>) -> AppResult<Vec<DirtyNote>> {
     let rows: Vec<DirtyNote> = db.with_conn(|c| {
         let mut stmt = c.prepare(
             "SELECT id, parent_collection_id, title, position, trashed_at,
                     yrs_state, etebase_uid, body, favourite, note_kind, tags_state
-             FROM notes WHERE dirty = 1",
+             FROM notes WHERE dirty = 1
+               AND ((?1 IS NULL AND share_scope_id IS NULL) OR share_scope_id = ?1)",
         )?;
-        let rows = stmt.query_map([], |r| {
+        let rows = stmt.query_map(params![scope], |r| {
             Ok(DirtyNote {
                 id: r.get(0)?,
                 parent_collection_id: r.get(1)?,
@@ -1965,14 +2023,15 @@ struct DirtyAsset {
     etebase_uid: Option<String>,
 }
 
-fn load_dirty_assets(db: &Db) -> AppResult<Vec<DirtyAsset>> {
+fn load_dirty_assets(db: &Db, scope: Option<&str>) -> AppResult<Vec<DirtyAsset>> {
     db.with_conn(|c| {
         let mut stmt = c.prepare(
             "SELECT id, owning_note_id, mime_type, bytes, size,
                     created, modified, etebase_uid
-             FROM assets WHERE dirty = 1",
+             FROM assets WHERE dirty = 1
+               AND ((?1 IS NULL AND share_scope_id IS NULL) OR share_scope_id = ?1)",
         )?;
-        let rows = stmt.query_map([], |r| {
+        let rows = stmt.query_map(params![scope], |r| {
             Ok(DirtyAsset {
                 id: r.get(0)?,
                 owning_note_id: r.get(1)?,
@@ -2164,13 +2223,37 @@ pub async fn note_room_info(
 }
 
 // Public helper used by notes/collections after a purge: queue server-side
-// delete on the next sync. Caller already removed the local row.
+// delete on the next sync. Caller queues BEFORE removing the local row, so the
+// row is still present here — we read its `share_scope_id` to route the delete
+// to the scope's collection (or the vault-wide one when NULL). See
+// `drain_tombstones`.
 pub fn queue_tombstone(conn: &Connection, kind: &str, etebase_uid: &str) -> AppResult<()> {
+    let share_scope_id = match kind {
+        "folder" => scope_of(conn, "collections", etebase_uid)?,
+        "note" => scope_of(conn, "notes", etebase_uid)?,
+        "asset" => scope_of(conn, "assets", etebase_uid)?,
+        _ => None,
+    };
     conn.execute(
-        "INSERT OR IGNORE INTO tombstones (kind, etebase_uid, queued_at) VALUES (?1, ?2, ?3)",
-        params![kind, etebase_uid, Utc::now().to_rfc3339()],
+        "INSERT OR IGNORE INTO tombstones (kind, etebase_uid, queued_at, share_scope_id)
+         VALUES (?1, ?2, ?3, ?4)",
+        params![kind, etebase_uid, Utc::now().to_rfc3339(), share_scope_id],
     )?;
     Ok(())
+}
+
+/// Read the `share_scope_id` of the row that owns `etebase_uid` in `table`
+/// (a crate-internal constant at every call site). `None` when the row is
+/// already gone or unscoped.
+fn scope_of(conn: &Connection, table: &str, etebase_uid: &str) -> AppResult<Option<String>> {
+    Ok(conn
+        .query_row(
+            &format!("SELECT share_scope_id FROM {table} WHERE etebase_uid = ?1"),
+            params![etebase_uid],
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten())
 }
 
 #[cfg(test)]
@@ -2226,7 +2309,7 @@ mod tests {
 
         // Stale remote: not trashed, parent stripped to root.
         let remote = remote_note("note_x", None, None);
-        apply_note_payload(&db, &remote, "uid_x", "etag_new").unwrap();
+        apply_note_payload(&db, &remote, "uid_x", "etag_new", None).unwrap();
 
         let (trashed_at, parent, dirty, title): (Option<String>, Option<String>, i64, String) = db
             .with_conn(|c| {
@@ -2274,7 +2357,7 @@ mod tests {
         .unwrap();
 
         let remote = remote_note("note_y", None, Some("2026-06-10T00:00:00Z"));
-        apply_note_payload(&db, &remote, "uid_y", "etag_new").unwrap();
+        apply_note_payload(&db, &remote, "uid_y", "etag_new", None).unwrap();
 
         let (title, trashed_at): (String, Option<String>) = db
             .with_conn(|c| {
@@ -2321,7 +2404,7 @@ mod tests {
         let mut remote = remote_note("note_tags", None, None);
         remote.tags = vec!["remote".into()];
         remote.tags_state = tags_crdt::init(&remote.tags);
-        apply_note_payload(&db, &remote, "uid_tags", "etag_new").unwrap();
+        apply_note_payload(&db, &remote, "uid_tags", "etag_new", None).unwrap();
 
         let (title, dirty): (String, i64) = db
             .with_conn(|c| {

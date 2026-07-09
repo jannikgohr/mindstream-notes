@@ -329,18 +329,25 @@ sender/access fallback, `build_share_manifest`, migration 18) are unit-tested in
 - **Proves:** `unbundled_invitations` still reach the UI so non-manifest shares
   aren't silently dropped.
 
-### 4.7 Shared subtree content converges (P1 — BLOCKED on scoped sync routing)
+### 4.7 Shared subtree content converges (P1)
 
-- **Status:** cannot pass yet. Outgoing creation is scaffolding-only — the
-  shared folder's notes/assets are **not** routed into the scope's part
-  collections, so an accepted share is an empty folder for the recipient. Write
-  this flow alongside the sync-routing slice (the `share_scope_id` seam from
-  migration 18).
-- **Steps (once routing lands):** A shares a folder containing notes + an
-  embedded image → B accepts → assert B sees the notes and the asset renders →
-  A adds a note in the shared folder → B pulls → assert it appears.
-- **Proves:** scope-tagged rows push into the scope collections and the
-  recipient's assets resolve (no "partial media unavailable" state).
+- **Why e2e:** scoped sync routing (`sync::scopes`) re-homes a shared folder's
+  subtree into the scope's collections and pulls it on the recipient — a live
+  two-account, real-Etebase round-trip with no unit coverage beyond the
+  `migrate_subtree_into_scope` detach logic.
+- **Steps:** A shares a folder containing notes + an embedded image → B accepts
+  → after a sync, assert B sees the folder's notes and the asset renders → A
+  adds a note in the shared folder, re-invites (or, once scope inheritance
+  lands, just adds it) → B pulls → assert it appears. If B has read-write, an
+  edit in B converges back to A.
+- **Proves:** scope-tagged rows migrate out of the vault into the scope
+  collections (owner side) and land on the recipient with assets resolving (no
+  "partial media unavailable" state).
+- **Watch for:** the shared root arriving under B's tree root via orphan-reparent
+  (the sender's parent id doesn't exist on B); a note added to the shared folder
+  _after_ the share not appearing until a re-invite (scope inheritance on
+  create/move is a known follow-up); a read-only recipient's local edit looping
+  as a failed scope push.
 
 ---
 

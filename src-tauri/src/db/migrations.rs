@@ -464,6 +464,17 @@ const MIGRATIONS: &[Migration] = &[
             CREATE INDEX idx_assets_share_scope      ON assets(share_scope_id)      WHERE share_scope_id IS NOT NULL;
         "#,
     },
+    Migration {
+        to: 19,
+        // Route a queued server-side delete to the right Etebase collection.
+        // A tombstone for a row that belonged to a shared scope must be
+        // applied against that scope's collection, not the vault-wide one, so
+        // we record the row's `share_scope_id` (NULL = vault-wide, which is
+        // every existing tombstone). See sync::queue_tombstone / drain_tombstones.
+        sql: r#"
+            ALTER TABLE tombstones ADD COLUMN share_scope_id TEXT;
+        "#,
+    },
 ];
 
 pub fn run(conn: &mut Connection) -> AppResult<()> {

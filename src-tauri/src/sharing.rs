@@ -7,10 +7,14 @@
 //! into manifest-backed bundles (list/accept/decline); `invite_collection`
 //! creates the scope collections + manifest and invites the recipient.
 //!
-//! NOTE: the shared subtree's notes/assets are not yet routed into the scope's
-//! part collections — that sync-routing slice keys off the `share_scope_id`
-//! column (migration 18). Until it lands, a shared folder syncs its contents
-//! through the vault-wide collections, so a recipient's scope is empty.
+//! Sharing a folder re-homes its subtree into the scope's collections: every
+//! folder/note/asset under the root is stamped with `share_scope_id` and
+//! detached from the vault-wide collections (see `migrate_subtree_into_scope`),
+//! and `sync::scopes` then pushes/pulls each scope's dedicated collections so a
+//! recipient receives the real content. Known gap: a note created or moved into
+//! a shared folder *after* the share exists isn't stamped until the next
+//! `invite_collection` re-runs the migration — scope inheritance on create/move
+//! is a follow-up.
 
 use std::collections::{HashMap, HashSet};
 
@@ -295,33 +299,11 @@ pub async fn accept_share_bundle(
             })?;
         }
 
-        // Anchor the local "shared with me" root on the folders collection and
-        // name it after the manifest. Notes/asset collections carry no folder
-        // rows, so they aren't projected here — the scoped sync routing pulls
-        // their contents in a later slice.
-        if let Some(folders_ref) = preview
-            .manifest
-            .collections
-            .iter()
-            .find(|collection| collection.part == ShareScopePart::Folders)
-        {
-            let folder_invitation =
-                invitation_by_collection.get(folders_ref.collection_uid.as_str());
-            let role = folder_invitation
-                .map(|invitation| invitation.access_level)
-                .unwrap_or(ShareAccessLevel::ReadOnly);
-            let owner = preview
-                .manifest
-                .owner_username
-                .clone()
-                .or_else(|| folder_invitation.and_then(|inv| inv.sender_username.clone()));
-            let name = preview.manifest.name.clone();
-            let collection_uid = folders_ref.collection_uid.clone();
-            let db = app.state::<Db>();
-            db.with_conn(|conn| {
-                record_accepted_share(conn, &collection_uid, role, owner.as_deref(), Some(&name))
-            })?;
-        }
+        // No local placeholder: the scoped sync pulls the real shared subtree
+        // (the sender's own folder/note ids, stamped with this scope) into the
+        // tree on the next sync, and the orphan-reparent pass lands the shared
+        // root at the tree root. Creating a placeholder here would collide with
+        // that real root once it arrives.
 
         Ok::<(), AppError>(())
     })
@@ -569,22 +551,28 @@ pub async fn invite_collection(
         invite_to_collection(&inv_manager, &scope.notes, recipient, &pubkey, level)?;
         invite_to_collection(&inv_manager, &scope.assets, recipient, &pubkey, level)?;
 
-        // Local projection: only when we created the scope. Tags the root folder
-        // shared-by-me and anchors the scope. Populating the scope collections
-        // with the subtree's notes/assets is the sync-routing slice.
-        if created {
-            let folders_uid = scope.folders.uid().to_string();
-            db.with_conn(|conn| {
+        // Route the shared subtree into the scope's collections: stamp every
+        // folder/note/asset under the root with the scope id and detach it from
+        // the vault-wide collections (tombstone the old vault item, clear the
+        // uid, mark dirty) so the next sync re-homes it. Run on every invite so
+        // content added since the first share is picked up when someone new is
+        // added. On the very first share also record the shared-by-me root.
+        let folders_uid = scope.folders.uid().to_string();
+        let scope_id = scope.share_scope_id.clone();
+        db.with_conn(|conn| {
+            migrate_subtree_into_scope(conn, &collection_id, &scope_id)?;
+            if created {
                 record_outgoing_share(
                     conn,
                     &collection_id,
-                    &scope.share_scope_id,
+                    &scope_id,
                     &folders_uid,
                     access_level,
                     owner_username.as_deref(),
-                )
-            })?;
-        }
+                )?;
+            }
+            Ok::<(), AppError>(())
+        })?;
 
         db.with_conn(|conn| local_share_state(conn, &collection_id))
     })
@@ -900,6 +888,79 @@ fn record_outgoing_share(
         ],
     )?;
     Ok(())
+}
+
+/// Re-home a shared folder subtree into its scope collections.
+///
+/// For every folder under `root_folder_id` (inclusive) and every note/asset
+/// beneath them: queue a vault-side delete for anything already pushed (done
+/// first, while `share_scope_id` is still NULL so `queue_tombstone` routes it
+/// to the vault collection), then stamp the scope, clear `etebase_uid`, and
+/// mark dirty so the next sync creates it fresh in the scope collection. This
+/// is the "one home" migration — a scoped row lives only in its scope
+/// collection. Idempotent: rows already re-homed have no `etebase_uid` and so
+/// queue no tombstone.
+///
+/// Known gap: a note created or moved into the folder *after* a share exists
+/// isn't stamped until the next `invite_collection` call re-runs this. Inheriting
+/// the scope on create/move is a follow-up.
+fn migrate_subtree_into_scope(
+    conn: &Connection,
+    root_folder_id: &str,
+    share_scope_id: &str,
+) -> AppResult<()> {
+    const SUBTREE_CTE: &str = "WITH RECURSIVE subtree(id) AS (
+            SELECT ?1
+            UNION ALL
+            SELECT c.id FROM collections c JOIN subtree s ON c.parent_collection_id = s.id
+        )";
+
+    // 1. Queue vault tombstones for already-pushed rows before we stamp/detach.
+    let folder_uids = collect_uids(
+        conn,
+        &format!("{SUBTREE_CTE} SELECT etebase_uid FROM collections WHERE id IN (SELECT id FROM subtree) AND etebase_uid IS NOT NULL"),
+        root_folder_id,
+    )?;
+    for uid in &folder_uids {
+        crate::sync::queue_tombstone(conn, "folder", uid)?;
+    }
+    let note_uids = collect_uids(
+        conn,
+        &format!("{SUBTREE_CTE} SELECT etebase_uid FROM notes WHERE parent_collection_id IN (SELECT id FROM subtree) AND etebase_uid IS NOT NULL"),
+        root_folder_id,
+    )?;
+    for uid in &note_uids {
+        crate::sync::queue_tombstone(conn, "note", uid)?;
+    }
+    let asset_uids = collect_uids(
+        conn,
+        &format!("{SUBTREE_CTE} SELECT a.etebase_uid FROM assets a JOIN notes n ON a.owning_note_id = n.id WHERE n.parent_collection_id IN (SELECT id FROM subtree) AND a.etebase_uid IS NOT NULL"),
+        root_folder_id,
+    )?;
+    for uid in &asset_uids {
+        crate::sync::queue_tombstone(conn, "asset", uid)?;
+    }
+
+    // 2. Stamp the scope, detach from the vault, and mark dirty.
+    conn.execute(
+        &format!("{SUBTREE_CTE} UPDATE collections SET share_scope_id = ?2, etebase_uid = NULL, dirty = 1 WHERE id IN (SELECT id FROM subtree)"),
+        params![root_folder_id, share_scope_id],
+    )?;
+    conn.execute(
+        &format!("{SUBTREE_CTE} UPDATE notes SET share_scope_id = ?2, etebase_uid = NULL, dirty = 1 WHERE parent_collection_id IN (SELECT id FROM subtree)"),
+        params![root_folder_id, share_scope_id],
+    )?;
+    conn.execute(
+        &format!("{SUBTREE_CTE} UPDATE assets SET share_scope_id = ?2, etebase_uid = NULL, dirty = 1 WHERE owning_note_id IN (SELECT n.id FROM notes n WHERE n.parent_collection_id IN (SELECT id FROM subtree))"),
+        params![root_folder_id, share_scope_id],
+    )?;
+    Ok(())
+}
+
+fn collect_uids(conn: &Connection, sql: &str, root_folder_id: &str) -> AppResult<Vec<String>> {
+    let mut stmt = conn.prepare(sql)?;
+    let rows = stmt.query_map(params![root_folder_id], |r| r.get::<_, String>(0))?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
 fn restore_required(app: &AppHandle) -> AppResult<Account> {
@@ -1432,6 +1493,83 @@ mod tests {
                 && part.collection_uid.is_none()
                 && part.invitation.is_none()
         }));
+    }
+
+    #[test]
+    fn migrate_subtree_into_scope_stamps_detaches_and_tombstones() {
+        let db = crate::db::open_memory_for_tests();
+        db.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO collections(id, parent_collection_id, name, position, created, modified, etebase_uid, dirty)
+                 VALUES ('root', NULL, 'Root', 0, 't', 't', 'vault_root', 0)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO collections(id, parent_collection_id, name, position, created, modified, etebase_uid, dirty)
+                 VALUES ('child', 'root', 'Child', 0, 't', 't', 'vault_child', 0)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO notes(id, parent_collection_id, title, body, position, created, modified, etebase_uid, dirty)
+                 VALUES ('n1', 'child', 'N1', '', 0, 't', 't', 'vault_n1', 0)",
+                [],
+            )?;
+            // n2 was never pushed (no etebase_uid) — it must still get stamped
+            // but queue no tombstone.
+            conn.execute(
+                "INSERT INTO notes(id, parent_collection_id, title, body, position, created, modified, dirty)
+                 VALUES ('n2', 'root', 'N2', '', 0, 't', 't', 0)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO assets(id, owning_note_id, mime_type, bytes, size, created, modified, etebase_uid, dirty)
+                 VALUES ('a1', 'n1', 'image/png', x'00', 1, 't', 't', 'vault_a1', 0)",
+                [],
+            )?;
+            Ok::<(), AppError>(())
+        })
+        .unwrap();
+
+        db.with_conn(|conn| migrate_subtree_into_scope(conn, "root", "scope_1"))
+            .unwrap();
+
+        db.with_conn(|conn| {
+            for (table, id) in [
+                ("collections", "root"),
+                ("collections", "child"),
+                ("notes", "n1"),
+                ("notes", "n2"),
+                ("assets", "a1"),
+            ] {
+                let (scope, uid, dirty): (Option<String>, Option<String>, i64) = conn.query_row(
+                    &format!(
+                        "SELECT share_scope_id, etebase_uid, dirty FROM {table} WHERE id = ?1"
+                    ),
+                    params![id],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )?;
+                assert_eq!(scope.as_deref(), Some("scope_1"), "{table} {id} scope");
+                assert!(uid.is_none(), "{table} {id} etebase_uid must be detached");
+                assert_eq!(dirty, 1, "{table} {id} must be dirty");
+            }
+
+            // Only the four already-pushed rows get a tombstone, all routed to
+            // the vault (share_scope_id NULL) so the old vault items are deleted.
+            let mut stmt = conn.prepare(
+                "SELECT etebase_uid, share_scope_id FROM tombstones ORDER BY etebase_uid",
+            )?;
+            let rows: Vec<(String, Option<String>)> = stmt
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            let uids: Vec<&str> = rows.iter().map(|(u, _)| u.as_str()).collect();
+            assert_eq!(uids, ["vault_a1", "vault_child", "vault_n1", "vault_root"]);
+            assert!(
+                rows.iter().all(|(_, scope)| scope.is_none()),
+                "migration tombstones must route to the vault collection"
+            );
+            Ok::<(), AppError>(())
+        })
+        .unwrap();
     }
 
     #[test]
