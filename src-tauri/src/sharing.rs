@@ -1069,7 +1069,17 @@ fn collect_share_manifests(
 
     let mut previews: Vec<ShareManifestPreview> = by_collection.into_values().collect();
     if let Some(me) = current_username {
-        previews.retain(|preview| preview.manifest.owner_username.as_deref() != Some(me));
+        // Case-insensitive to match the self-invite guard in `invite_collection`:
+        // Etebase treats usernames case-insensitively, so an exact compare would
+        // let a sender's own share resurface as an incoming bundle when the
+        // manifest's stored casing differs from the signed-in username.
+        previews.retain(|preview| {
+            preview
+                .manifest
+                .owner_username
+                .as_deref()
+                .is_none_or(|owner| !owner.eq_ignore_ascii_case(me))
+        });
     }
     Ok(previews)
 }
