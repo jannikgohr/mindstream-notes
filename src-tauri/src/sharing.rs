@@ -1,10 +1,16 @@
 //! Collection sharing command layer.
 //!
-//! Etebase shares remote Collections, while Mindstream's visible folders are
-//! SQLite rows synced as Items inside the single `mindstream.folders`
-//! Collection. Incoming invitations can be listed/accepted/rejected today.
-//! Outgoing per-folder invites are deliberately guarded until the sync model
-//! can represent one remote Collection per shared folder/subtree.
+//! Etebase shares remote Collections. A shared folder scope is one manifest
+//! collection (`mindstream.share_manifest`, whose content is the manifest JSON)
+//! plus three required part collections — `mindstream.folders`,
+//! `mindstream.notes`, `mindstream.assets`. Incoming invitations are grouped
+//! into manifest-backed bundles (list/accept/decline); `invite_collection`
+//! creates the scope collections + manifest and invites the recipient.
+//!
+//! NOTE: the shared subtree's notes/assets are not yet routed into the scope's
+//! part collections — that sync-routing slice keys off the `share_scope_id`
+//! column (migration 18). Until it lands, a shared folder syncs its contents
+//! through the vault-wide collections, so a recipient's scope is empty.
 
 use std::collections::{HashMap, HashSet};
 
