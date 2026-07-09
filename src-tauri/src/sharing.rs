@@ -957,6 +957,8 @@ fn migrate_subtree_into_scope(
     Ok(())
 }
 
+// `sql` is always a crate-internal literal built from `SUBTREE_CTE` above (no
+// user input in the query text); `root_folder_id` is bound as a parameter.
 fn collect_uids(conn: &Connection, sql: &str, root_folder_id: &str) -> AppResult<Vec<String>> {
     let mut stmt = conn.prepare(sql)?;
     let rows = stmt.query_map(params![root_folder_id], |r| r.get::<_, String>(0))?;
