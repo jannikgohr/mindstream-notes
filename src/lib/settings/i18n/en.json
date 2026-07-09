@@ -282,6 +282,8 @@
     "notifications.invite.senderFallback": "Someone",
     "notifications.invite.accept": "Accept",
     "notifications.invite.decline": "Decline",
+    "notifications.shareBundle.title": "{sender} shared “{name}”",
+    "notifications.shareBundle.incomplete": "This share is incomplete and can't be accepted yet — ask the sender to resend it.",
 
     "sharing.access.readOnly": "Can view",
     "sharing.access.readWrite": "Can edit",

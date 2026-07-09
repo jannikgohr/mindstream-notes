@@ -81,15 +81,46 @@ export async function scanForUpdateNotifications(force = false): Promise<void> {
 export async function scanForCollectionInviteNotifications(): Promise<void> {
   if (!isTauri()) return;
   try {
-    const { listCollectionInvitations } = await import('$lib/api/sharing');
-    const invitations = await listCollectionInvitations();
-    const liveIds = new Set(
-      invitations.map((invitation) => `collaboration-invite:${invitation.id}`)
+    const { listIncomingShareBundles } = await import('$lib/api/sharing');
+    const { bundles, unbundled_invitations } = await listIncomingShareBundles();
+
+    // Manifest-backed shares surface as a single bundle notification; any
+    // invitation that isn't part of a manifest scope still shows as a lone
+    // collaboration-invite. Reconcile both kinds against what's live so
+    // accepted/declined ones disappear.
+    const liveBundleIds = new Set(
+      bundles.map((bundle) => `share-bundle:${bundle.manifest_collection_uid}`)
     );
-    notificationState.items = notificationState.items.filter(
-      (item) => item.kind !== 'collaboration-invite' || liveIds.has(item.id)
+    const liveInviteIds = new Set(
+      unbundled_invitations.map(
+        (invitation) => `collaboration-invite:${invitation.id}`
+      )
     );
-    for (const invitation of invitations) {
+    notificationState.items = notificationState.items.filter((item) => {
+      if (item.kind === 'share-bundle') return liveBundleIds.has(item.id);
+      if (item.kind === 'collaboration-invite')
+        return liveInviteIds.has(item.id);
+      return true;
+    });
+
+    for (const bundle of bundles) {
+      upsertNotification({
+        id: `share-bundle:${bundle.manifest_collection_uid}`,
+        kind: 'share-bundle',
+        widgetType: 'share-bundle',
+        createdAt: Date.now(),
+        data: {
+          manifestCollectionUid: bundle.manifest_collection_uid,
+          name: bundle.name,
+          senderUsername: bundle.sender_username,
+          accessLevel: bundle.access_level,
+          complete: bundle.complete,
+          warnings: bundle.warnings
+        }
+      });
+    }
+
+    for (const invitation of unbundled_invitations) {
       upsertNotification({
         id: `collaboration-invite:${invitation.id}`,
         kind: 'collaboration-invite',

@@ -3,11 +3,13 @@ import type { Component } from 'svelte';
 export type NotificationKind =
   | 'update'
   | 'collaboration-invite'
+  | 'share-bundle'
   | 'generic'
   | 'sync-offline';
 export type NotificationWidgetType =
   | 'update'
   | 'collaboration-invite'
+  | 'share-bundle'
   | 'generic';
 
 export interface AppNotification<TData = unknown> {
@@ -29,6 +31,15 @@ export interface CollaborationInviteNotificationData {
   senderUsername: string | null;
   collectionUid: string;
   accessLevel: 'read_only' | 'read_write' | 'admin';
+}
+
+export interface ShareBundleNotificationData {
+  manifestCollectionUid: string;
+  name: string;
+  senderUsername: string | null;
+  accessLevel: 'read_only' | 'read_write' | 'admin' | null;
+  complete: boolean;
+  warnings: string[];
 }
 
 export interface NotificationWidgetProps {

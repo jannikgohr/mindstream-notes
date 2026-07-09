@@ -21,5 +21,9 @@ export const NOTIFICATION_WIDGET_LOADERS: Record<
   'collaboration-invite': () =>
     import('./CollaborationInviteNotificationWidget.svelte').then(
       (mod) => mod.default as unknown as NotificationWidgetComponent
+    ),
+  'share-bundle': () =>
+    import('./ShareBundleNotificationWidget.svelte').then(
+      (mod) => mod.default as unknown as NotificationWidgetComponent
     )
 };

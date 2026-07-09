@@ -182,6 +182,8 @@
     "notifications.invite.senderFallback": "Jemand",
     "notifications.invite.accept": "Annehmen",
     "notifications.invite.decline": "Ablehnen",
+    "notifications.shareBundle.title": "{sender} hat „{name}“ geteilt",
+    "notifications.shareBundle.incomplete": "Diese Freigabe ist unvollständig und kann noch nicht angenommen werden — bitte den Absender, sie erneut zu senden.",
 
     "sharing.access.readOnly": "Nur ansehen",
     "sharing.access.readWrite": "Bearbeiten",
