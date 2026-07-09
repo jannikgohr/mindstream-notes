@@ -947,6 +947,11 @@ fn record_outgoing_share(
 /// Known gap: a note created or moved into the folder *after* a share exists
 /// isn't stamped until the next `invite_collection` call re-runs this. Inheriting
 /// the scope on create/move is a follow-up.
+///
+/// Transient window: this is a detach-then-repush, so a *second* owner device
+/// that syncs after the vault delete lands but before it becomes a reachable
+/// scope member briefly sees the subtree empty. It self-heals once the device
+/// joins the scope and pulls the re-homed rows; no data is lost.
 fn migrate_subtree_into_scope(
     conn: &Connection,
     root_folder_id: &str,
