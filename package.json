@@ -27,8 +27,6 @@
     "format:web:check": "node src-tauri/scripts/format-web.mjs --check",
     "format:rust": "node src-tauri/scripts/format-rust.mjs",
     "format:rust:check": "node src-tauri/scripts/format-rust.mjs --check",
-    "setup-android-cargo": "node src-tauri/scripts/setup-android-cargo.mjs",
-    "postinstall": "pnpm run setup-android-cargo",
     "prepare": "husky"
   },
   "lint-staged": {

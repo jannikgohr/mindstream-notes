@@ -11,9 +11,7 @@
 #                can't reach.
 #
 # Android isn't tested here — its build matrix lives in release.yml because
-# it needs the NDK (~1.5 GB) and a signing keystore. If you want Android
-# smoke-checks on PR, add a `cargo check --target aarch64-linux-android`
-# job that reuses the libsodium prebuilts under src-tauri/prebuilt-binaries.
+# it needs the NDK (~1.5 GB) and a signing keystore.
 
 name: Test
 
@@ -47,9 +45,6 @@ jobs:
           node-version: 20
           cache: pnpm
 
-      # `pnpm install` runs the postinstall that generates
-      # src-tauri/.cargo/config.toml. On non-Android hosts it just prints a
-      # warning (the libsodium prebuilts aren't needed), which is fine.
       - run: pnpm install --frozen-lockfile
 
       - run: pnpm check
@@ -99,9 +94,6 @@ jobs:
           node-version: 20
           cache: pnpm
 
-      # postinstall generates .cargo/config.toml; without it the
-      # [target.*-linux-android.sodium] sections are missing but desktop
-      # targets don't care.
       - run: pnpm install --frozen-lockfile
 
       - name: cargo test
