@@ -11,6 +11,35 @@ export interface CollectionInvitation {
   collection_type: string | null;
 }
 
+export type ShareScopePart = 'folders' | 'notes' | 'assets';
+
+export interface IncomingShareBundlePart {
+  part: ShareScopePart;
+  collection_uid: string | null;
+  expected_collection_type: string;
+  required: boolean;
+  invitation: CollectionInvitation | null;
+}
+
+export interface IncomingShareBundle {
+  manifest_invitation_id: string;
+  manifest_collection_uid: string;
+  share_scope_id: string;
+  name: string;
+  root_folder_id: string;
+  owner_username: string | null;
+  sender_username: string | null;
+  access_level: CollectionShareAccessLevel | null;
+  complete: boolean;
+  parts: IncomingShareBundlePart[];
+  warnings: string[];
+}
+
+export interface IncomingShareInvitations {
+  bundles: IncomingShareBundle[];
+  unbundled_invitations: CollectionInvitation[];
+}
+
 export interface InviteCollectionInput {
   collection_id: string;
   username: string;
@@ -37,6 +66,14 @@ export function listCollectionInvitations(): Promise<CollectionInvitation[]> {
     'list_collection_invitations',
     undefined,
     async () => []
+  );
+}
+
+export function listIncomingShareBundles(): Promise<IncomingShareInvitations> {
+  return invokeOrFallback<IncomingShareInvitations>(
+    'list_incoming_share_bundles',
+    undefined,
+    async () => ({ bundles: [], unbundled_invitations: [] })
   );
 }
 

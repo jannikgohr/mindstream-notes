@@ -391,6 +391,7 @@ pub fn run() {
             sync::scheduler::set_sync_schedule,
             // Sharing
             sharing::list_collection_invitations,
+            sharing::list_incoming_share_bundles,
             sharing::accept_collection_invitation,
             sharing::reject_collection_invitation,
             sharing::get_collection_share_state,

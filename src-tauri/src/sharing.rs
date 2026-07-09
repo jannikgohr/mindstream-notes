@@ -9,7 +9,10 @@
 use std::collections::{HashMap, HashSet};
 
 use chrono::Utc;
-use etebase::{Account, CollectionAccessLevel, FetchOptions, InvitationPreview, SignedInvitation};
+use etebase::managers::{CollectionInvitationManager, CollectionManager};
+use etebase::{
+    Account, Collection, CollectionAccessLevel, FetchOptions, InvitationPreview, SignedInvitation,
+};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
@@ -194,6 +197,36 @@ pub async fn list_collection_invitations(
     .map_err(|e| format!("list collection invitations task: {e}"))?
 }
 
+/// List incoming share invitations grouped into manifest-backed bundles.
+///
+/// Under the "auto-accept manifest only" policy this transparently accepts
+/// every pending `mindstream.share_manifest` invitation so its manifest can be
+/// decoded, then returns one bundle per share scope (folders + notes + assets)
+/// plus any invitations that aren't part of a manifest scope. Accepting a
+/// manifest grants access only to that metadata-only collection; the folder /
+/// notes / asset collections it references stay pending until the user accepts
+/// the bundle.
+#[tauri::command]
+pub async fn list_incoming_share_bundles(
+    app: AppHandle,
+) -> Result<IncomingShareInvitations, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let account = restore_required(&app)?;
+        let inv_manager = account
+            .invitation_manager()
+            .map_err(|e| AppError::InvalidArg(format!("invitation_manager: {e}")))?;
+        let cm = account
+            .collection_manager()
+            .map_err(|e| AppError::InvalidArg(format!("collection_manager: {e}")))?;
+        let invitations = list_all_incoming(&inv_manager)?;
+        let manifests = collect_share_manifests(&inv_manager, &cm, &invitations)?;
+        Ok::<_, AppError>(bundle_incoming_share_invitations(invitations, manifests))
+    })
+    .await
+    .map_err(|e| format!("list incoming share bundles task: {e}"))?
+    .map_err(Into::into)
+}
+
 #[tauri::command]
 pub async fn accept_collection_invitation(app: AppHandle, id: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -285,6 +318,113 @@ fn list_all_incoming(
         iterator = Some(next);
     }
     Ok(out)
+}
+
+/// Gather the manifests backing the current incoming invitations.
+///
+/// Two sources, merged so a bundle survives past the first scan:
+///   * pending `share_manifest` invitations — accepted here (first sight) so
+///     the manifest collection becomes fetchable, and
+///   * manifest collections accepted on a previous scan, which no longer show
+///     up as invitations and so are read straight from the collection list.
+///
+/// Accepting is idempotent from the caller's perspective: a decode/network
+/// failure for one manifest is logged and skipped rather than failing the whole
+/// listing, so a single malformed share can't hide every other bundle.
+fn collect_share_manifests(
+    inv_manager: &CollectionInvitationManager,
+    cm: &CollectionManager,
+    invitations: &[CollectionInvitation],
+) -> AppResult<Vec<ShareManifestPreview>> {
+    // Keyed by manifest collection uid so the two sources can't produce a
+    // duplicate bundle for the same scope.
+    let mut by_collection: HashMap<String, ShareManifestPreview> = HashMap::new();
+
+    for invitation in invitations {
+        if invitation.collection_type.as_deref() != Some(COLLECTION_TYPE_SHARE_MANIFEST) {
+            continue;
+        }
+        match accept_and_decode_manifest(inv_manager, cm, &invitation.id) {
+            Ok(Some(preview)) => {
+                by_collection.insert(preview.manifest_collection_uid.clone(), preview);
+            }
+            Ok(None) => {}
+            Err(e) => log::warn!("[sharing] manifest invite {} skipped: {e}", invitation.id),
+        }
+    }
+
+    match cm.list(COLLECTION_TYPE_SHARE_MANIFEST, None) {
+        Ok(list) => {
+            for col in list.data() {
+                if col.is_deleted() {
+                    continue;
+                }
+                let uid = col.uid().to_string();
+                if by_collection.contains_key(&uid) {
+                    continue;
+                }
+                match decode_manifest(col) {
+                    // No pending invitation for an already-accepted manifest, so
+                    // the manifest collection uid stands in as the id. The
+                    // bundle still surfaces sender/access by falling back to a
+                    // referenced part invitation (see build_incoming_share_bundle).
+                    Ok(manifest) => {
+                        by_collection.insert(
+                            uid.clone(),
+                            ShareManifestPreview {
+                                invitation_id: uid.clone(),
+                                manifest_collection_uid: uid,
+                                manifest,
+                            },
+                        );
+                    }
+                    Err(e) => log::warn!("[sharing] accepted manifest {uid} skipped: {e}"),
+                }
+            }
+        }
+        Err(e) => log::warn!("[sharing] list manifest collections failed: {e}"),
+    }
+
+    Ok(by_collection.into_values().collect())
+}
+
+/// Accept a pending manifest invitation and decode its manifest content.
+/// Returns `Ok(None)` when the invitation vanished (already handled) or the
+/// collection was deleted server-side.
+fn accept_and_decode_manifest(
+    inv_manager: &CollectionInvitationManager,
+    cm: &CollectionManager,
+    invitation_id: &str,
+) -> AppResult<Option<ShareManifestPreview>> {
+    let Some(invitation) = find_incoming_invitation(inv_manager, invitation_id)? else {
+        return Ok(None);
+    };
+    inv_manager
+        .accept(&invitation)
+        .map_err(|e| AppError::InvalidArg(format!("accept manifest invitation: {e}")))?;
+    let col_uid = invitation.collection().to_string();
+    let col = cm
+        .fetch(&col_uid, None)
+        .map_err(|e| AppError::InvalidArg(format!("fetch manifest collection: {e}")))?;
+    if col.is_deleted() {
+        return Ok(None);
+    }
+    let manifest = decode_manifest(&col)?;
+    Ok(Some(ShareManifestPreview {
+        invitation_id: invitation_id.to_string(),
+        manifest_collection_uid: col_uid,
+        manifest,
+    }))
+}
+
+/// A manifest is stored as the manifest collection's own JSON content (not as
+/// items inside it), so decoding is content-bytes → serde_json.
+fn decode_manifest(col: &Collection) -> AppResult<ShareManifest> {
+    let raw = col
+        .content()
+        .map_err(|e| AppError::InvalidArg(format!("manifest content: {e}")))?;
+    serde_json::from_slice(&raw)
+        .map_err(|e| AppError::InvalidArg(format!("decode manifest json: {e}")))
 }
 
 pub fn bundle_incoming_share_invitations(
@@ -410,6 +550,18 @@ fn build_incoming_share_bundle(
         });
     }
 
+    // The manifest invitation carries sender/access, but once it's been
+    // auto-accepted it's gone from the incoming list — fall back to a
+    // referenced part invitation, which shares the same sender and (by our
+    // share-creation policy) the same access level.
+    let fallback_invitation = parts.iter().find_map(|part| part.invitation.as_ref());
+    let sender_username = manifest_invitation
+        .and_then(|invitation| invitation.sender_username.clone())
+        .or_else(|| fallback_invitation.and_then(|invitation| invitation.sender_username.clone()));
+    let access_level = manifest_invitation
+        .map(|invitation| invitation.access_level)
+        .or_else(|| fallback_invitation.map(|invitation| invitation.access_level));
+
     IncomingShareBundle {
         manifest_invitation_id: preview.invitation_id,
         manifest_collection_uid: preview.manifest_collection_uid,
@@ -417,9 +569,8 @@ fn build_incoming_share_bundle(
         name: manifest.name,
         root_folder_id: manifest.root_folder_id,
         owner_username: manifest.owner_username,
-        sender_username: manifest_invitation
-            .and_then(|invitation| invitation.sender_username.clone()),
-        access_level: manifest_invitation.map(|invitation| invitation.access_level),
+        sender_username,
+        access_level,
         complete,
         parts,
         warnings,
@@ -650,6 +801,41 @@ mod tests {
                 && part.collection_uid.is_none()
                 && part.invitation.is_none()
         }));
+    }
+
+    #[test]
+    fn accepted_manifest_falls_back_to_part_invitation_for_sender_and_access() {
+        // Mirrors a second scan: the manifest has been auto-accepted so its
+        // invitation is gone, but the part invitations are still pending. The
+        // bundle must still show sender/access, drawn from a part invitation.
+        let invitations = vec![
+            invitation(
+                "invite_folders",
+                "col_folders",
+                COLLECTION_TYPE_SHARE_FOLDERS,
+            ),
+            invitation("invite_notes", "col_notes", COLLECTION_TYPE_SHARE_NOTES),
+            invitation("invite_assets", "col_assets", COLLECTION_TYPE_SHARE_ASSETS),
+        ];
+        // Synthetic id == manifest collection uid (no pending manifest invite).
+        let mut preview = manifest_preview(vec![
+            collection_ref(ShareScopePart::Folders, "col_folders"),
+            collection_ref(ShareScopePart::Notes, "col_notes"),
+            collection_ref(ShareScopePart::Assets, "col_assets"),
+        ]);
+        preview.invitation_id = preview.manifest_collection_uid.clone();
+
+        let result = bundle_incoming_share_invitations(invitations, vec![preview]);
+
+        assert_eq!(result.bundles.len(), 1);
+        let bundle = &result.bundles[0];
+        assert!(bundle.complete, "{:?}", bundle.warnings);
+        assert_eq!(bundle.sender_username.as_deref(), Some("sender"));
+        assert_eq!(bundle.access_level, Some(ShareAccessLevel::ReadWrite));
+        assert!(
+            result.unbundled_invitations.is_empty(),
+            "part invites must stay bundled even without a manifest invitation"
+        );
     }
 
     #[test]
