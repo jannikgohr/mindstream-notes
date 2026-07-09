@@ -248,6 +248,102 @@ _is_ the restart.
 
 ---
 
+## 4. Collection sharing (multi-account)
+
+Manifest-backed collection sharing (`sharing.rs`, `api/sharing.ts`, the
+notification widgets). Every command here is Etebase network IO — excluded from
+unit coverage — and the meaningful flows need **two distinct accounts** (a
+sender and a recipient), which is a stronger requirement than the §2.6 collab
+matrix's "same account, two devices". The pure pieces (manifest bundling,
+sender/access fallback, `build_share_manifest`, migration 18) are unit-tested in
+`sharing.rs`; everything below is the wire round-trip those tests can't reach.
+
+> A shared folder scope is one `mindstream.share_manifest` collection (its
+> content is the manifest JSON) plus three required part collections —
+> `mindstream.folders`, `mindstream.notes`, `mindstream.assets`. See the
+> `src-tauri/src/sharing.rs` module doc for the model.
+
+### 4.1 Outgoing share creation (P1)
+
+- **Why e2e:** `invite_collection` creates the four scope collections, writes
+  the manifest as the manifest collection's content, resolves the recipient's
+  public key (`fetch_user_profile`), and sends four `invite`s — all live
+  Etebase calls with no unit coverage.
+- **Steps:** account A → right-click a folder → **Share folder…** → enter B's
+  username + a permission → invite → assert the call succeeds, the dialog shows
+  no error, and the local folder is now flagged shared-by-me in the tree.
+- **Proves:** the create-collections → write-manifest → invite chain, and that
+  an unknown recipient username fails **before** any collections are created
+  (pubkey lookup is first).
+
+### 4.2 Incoming share shows as one bundle, not N invites (P1)
+
+- **Why e2e:** `list_incoming_share_bundles` transparently accepts the pending
+  manifest invite, fetches + decodes the manifest, and groups the part invites;
+  the scan then upserts a single `share-bundle` notification. Proving "one
+  notification, not four" is the whole point of the manifest model.
+- **Steps:** after 4.1, account B opens Notifications → assert exactly one
+  `share-bundle` entry showing A's username + the folder name (not separate
+  manifest/folders/notes/assets invites).
+- **Proves:** manifest auto-accept + decode + bundling end to end, and that the
+  referenced part invites are hidden from the raw invite list.
+
+### 4.3 Accept a share bundle (P1)
+
+- **Why e2e:** `accept_share_bundle` accepts every referenced part invite and
+  projects a local shared root anchored on the folders collection.
+- **Steps:** account B accepts the 4.2 bundle → assert the notification clears,
+  the shared root folder appears in B's tree named after the manifest, and a
+  rescan does not resurrect the bundle.
+- **Proves:** bundled accept + `record_accepted_share` local projection + the
+  scan reconciliation that drops accepted bundles.
+
+### 4.4 Decline a share bundle (P2)
+
+- **Why e2e:** `decline_share_bundle` rejects the pending part invites **and**
+  leaves the auto-accepted manifest collection, so the transparent accept is
+  fully undone and the bundle must not reappear on the next scan.
+- **Steps:** send a second share to B → B declines → assert the notification
+  clears, no shared folder is added, and a rescan (which re-lists manifest
+  collections) does **not** bring the bundle back.
+- **Proves:** the leave-manifest cleanup — the regression guard that a declined
+  share doesn't loop back because its manifest collection was still a member.
+
+### 4.5 Incomplete bundle can't be accepted (P2)
+
+- **Why e2e:** a bundle missing a required part (esp. `assets`) is marked
+  `complete: false`; the widget disables **Accept** and shows the incomplete
+  warning. Needs a manifest whose part invite is missing/revoked.
+- **Steps:** construct a share missing one required part invite (e.g. cancel the
+  assets invite server-side after creation) → assert B's `share-bundle`
+  notification shows the incomplete message and Accept is disabled while Decline
+  stays available.
+- **Proves:** the `complete`/`warnings` plumbing from `bundle_incoming_share_invitations`
+  through to the widget's disabled-accept guard.
+
+### 4.6 Non-manifest invitation still surfaces (P3)
+
+- **Steps:** invite B directly to a lone collection whose type isn't part of a
+  manifest scope → assert it shows as a single `collaboration-invite`
+  notification (the legacy widget), independent of the bundle path.
+- **Proves:** `unbundled_invitations` still reach the UI so non-manifest shares
+  aren't silently dropped.
+
+### 4.7 Shared subtree content converges (P1 — BLOCKED on scoped sync routing)
+
+- **Status:** cannot pass yet. Outgoing creation is scaffolding-only — the
+  shared folder's notes/assets are **not** routed into the scope's part
+  collections, so an accepted share is an empty folder for the recipient. Write
+  this flow alongside the sync-routing slice (the `share_scope_id` seam from
+  migration 18).
+- **Steps (once routing lands):** A shares a folder containing notes + an
+  embedded image → B accepts → assert B sees the notes and the asset renders →
+  A adds a note in the shared folder → B pulls → assert it appears.
+- **Proves:** scope-tagged rows push into the scope collections and the
+  recipient's assets resolve (no "partial media unavailable" state).
+
+---
+
 ## Implementation notes
 
 - **Harness:** these need the real app, so drive the packaged Tauri binary
@@ -256,9 +352,14 @@ _is_ the restart.
 - **Native dialogs:** file/folder pickers (export, import, open-folder) must
   be stubbed or pre-seeded — WebDriver can't click an OS dialog. Prefer a test
   hook that injects the path over driving the native widget.
-- **Network flows (2.5, 3.4):** stand up a disposable Etebase server (the
+- **Network flows (§2.6, §3.5, §4):** stand up a disposable Etebase server (the
   `backend/` compose stack) or a mock, and tag these tests so they can be
   skipped when no server is available.
+- **Two-account flows (§4 sharing):** unlike the §2.6 collab matrix (one account
+  on two devices), the sharing flows need **two distinct Etebase users** — a
+  sender and a recipient — plus a way to script an invite between them. See
+  [e2e-strategy.md](e2e-strategy.md) §2.1 for the account-provisioning
+  requirement this adds.
 - **Restart flows (§3):** the test harness must be able to quit and relaunch
   the same data directory. Set the `MINDSTREAM_PROFILE_DIR` env var to a temp
   directory per test so runs are isolated and a restart picks up the same

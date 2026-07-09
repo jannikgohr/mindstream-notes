@@ -64,7 +64,11 @@ test harness lands:
    Either script account creation against the Etebase admin/signup API, or
    pre-seed one fixture account and namespace per-run data by collection. The
    superuser password is printed once on first boot
-   (`docker compose logs etebase | grep -i password`).
+   (`docker compose logs etebase | grep -i password`). **Collection sharing
+   (§5, [e2e-flows.md](e2e-flows.md) §4) needs two _distinct_ users** — a sender
+   and a recipient whose public key the sender resolves via
+   `fetch_user_profile` — so the shared-collection namespacing trick isn't
+   enough there; those runs must provision two real accounts.
 2. **Health gating.** Block tests until the stack is ready: nginx `/healthz`,
    a TCP connect to yjs-relay `:1234`, the excalidraw-room socket.io handshake,
    and Etebase accepting connections (the compose healthchecks already encode
@@ -161,6 +165,19 @@ assertion is the regression guard for the _history-is-per-device_ limitation.
   and data; a restart picks up the active profile. The `MINDSTREAM_PROFILE_DIR`
   seam already underpins this — these tests exercise the in-app switch on top of
   it. (T3 for isolation; restart assertion as in §4.)
+- **Collection sharing (manifest bundles).** The catalogue is
+  [e2e-flows.md](e2e-flows.md) §4. **All T4** — every flow is Etebase network IO
+  and the meaningful ones need two distinct accounts (sender + recipient, §2.1).
+  Provision two apps (two profile dirs) signed into two different test users on
+  the same backend, then drive: sender creates a share (4.1) → recipient sees
+  **one** `share-bundle` notification, not four raw invites (4.2) → accept adds
+  the shared root and doesn't re-appear on rescan (4.3) → a separate share, when
+  declined, leaves the manifest collection and does **not** loop back (4.4). The
+  incomplete-bundle guard (4.5) needs a share with a required part invite
+  revoked server-side. **4.7 (shared content actually converges) is blocked
+  until scoped sync routing lands** — write it alongside that slice, keyed on the
+  `share_scope_id` seam (migration 18); until then an accepted share is an empty
+  folder by design, so assert exactly that as the current-behaviour guard.
 
 ---
 
