@@ -442,6 +442,28 @@ const MIGRATIONS: &[Migration] = &[
             CREATE INDEX idx_collections_shared_by_me ON collections(shared_by_me) WHERE shared_by_me = 1;
         "#,
     },
+    Migration {
+        to: 18,
+        // Share-scope tag for manifest-backed collection sharing. Every folder,
+        // note and asset row belonging to a shared scope carries the scope's
+        // `share_scope_id` (matching the manifest's field). NULL = private/
+        // vault-local, which is every existing row.
+        //
+        // The seam the sync layer routes on: a row with a non-NULL
+        // `share_scope_id` pushes into that scope's dedicated folders/notes/
+        // assets Etebase collection instead of the single vault-wide one. The
+        // routing itself is a later slice; this migration only adds the column
+        // so outgoing-share creation can stamp the shared subtree up front.
+        sql: r#"
+            ALTER TABLE collections ADD COLUMN share_scope_id TEXT;
+            ALTER TABLE notes       ADD COLUMN share_scope_id TEXT;
+            ALTER TABLE assets      ADD COLUMN share_scope_id TEXT;
+
+            CREATE INDEX idx_collections_share_scope ON collections(share_scope_id) WHERE share_scope_id IS NOT NULL;
+            CREATE INDEX idx_notes_share_scope       ON notes(share_scope_id)       WHERE share_scope_id IS NOT NULL;
+            CREATE INDEX idx_assets_share_scope      ON assets(share_scope_id)      WHERE share_scope_id IS NOT NULL;
+        "#,
+    },
 ];
 
 pub fn run(conn: &mut Connection) -> AppResult<()> {

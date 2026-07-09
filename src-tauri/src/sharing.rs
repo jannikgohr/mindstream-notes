@@ -11,7 +11,8 @@ use std::collections::{HashMap, HashSet};
 use chrono::Utc;
 use etebase::managers::{CollectionInvitationManager, CollectionManager};
 use etebase::{
-    Account, Collection, CollectionAccessLevel, FetchOptions, InvitationPreview, SignedInvitation,
+    Account, Collection, CollectionAccessLevel, FetchOptions, InvitationPreview, ItemMetadata,
+    SignedInvitation,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -39,6 +40,16 @@ impl From<CollectionAccessLevel> for ShareAccessLevel {
             CollectionAccessLevel::ReadOnly => Self::ReadOnly,
             CollectionAccessLevel::ReadWrite => Self::ReadWrite,
             CollectionAccessLevel::Admin => Self::Admin,
+        }
+    }
+}
+
+impl From<ShareAccessLevel> for CollectionAccessLevel {
+    fn from(value: ShareAccessLevel) -> Self {
+        match value {
+            ShareAccessLevel::ReadOnly => Self::ReadOnly,
+            ShareAccessLevel::ReadWrite => Self::ReadWrite,
+            ShareAccessLevel::Admin => Self::Admin,
         }
     }
 }
@@ -455,9 +466,217 @@ pub async fn invite_collection(
     app: AppHandle,
     input: InviteCollectionInput,
 ) -> Result<CollectionShareState, String> {
-    let _ = app;
-    let _ = (&input.collection_id, &input.username, input.access_level);
-    Err("Per-folder Etebase sharing is not available yet. This vault currently syncs folders as items inside one Etebase folders collection, so sending this invite would grant access to more than the selected folder.".into())
+    tauri::async_runtime::spawn_blocking(move || {
+        let InviteCollectionInput {
+            collection_id,
+            username,
+            access_level,
+        } = input;
+
+        // Validate the target folder locally first — cheap, and avoids creating
+        // remote collections for a bogus or un-shareable id.
+        let db = app.state::<Db>();
+        let folder = db.with_conn(|conn| crate::collections::get(conn, &collection_id))?;
+        if collection_id == crate::collections::TRASH_ID {
+            return Err(AppError::InvalidArg(
+                "the trash collection cannot be shared".into(),
+            ));
+        }
+
+        let account = restore_required(&app)?;
+        let owner_username = crate::auth::read_session_info(&app)?.map(|info| info.username);
+        let inv_manager = account
+            .invitation_manager()
+            .map_err(|e| AppError::InvalidArg(format!("invitation_manager: {e}")))?;
+        let cm = account
+            .collection_manager()
+            .map_err(|e| AppError::InvalidArg(format!("collection_manager: {e}")))?;
+
+        // Resolve the recipient's public key up front so an unknown username
+        // fails before any collections are created.
+        let profile = inv_manager
+            .fetch_user_profile(&username)
+            .map_err(|e| AppError::InvalidArg(format!("fetch recipient profile: {e}")))?;
+        let pubkey = profile.pubkey().to_vec();
+
+        let share_scope_id = format!("scope_{}", uuid::Uuid::new_v4());
+
+        // One dedicated collection per part, plus the manifest collection whose
+        // content is the manifest JSON tying them together.
+        let folders_col = create_share_collection(
+            &cm,
+            COLLECTION_TYPE_SHARE_FOLDERS,
+            &format!("{} — folders", folder.name),
+            &[],
+        )?;
+        let notes_col = create_share_collection(
+            &cm,
+            COLLECTION_TYPE_SHARE_NOTES,
+            &format!("{} — notes", folder.name),
+            &[],
+        )?;
+        let assets_col = create_share_collection(
+            &cm,
+            COLLECTION_TYPE_SHARE_ASSETS,
+            &format!("{} — assets", folder.name),
+            &[],
+        )?;
+
+        let manifest = build_share_manifest(
+            &share_scope_id,
+            &folder.name,
+            &collection_id,
+            owner_username.as_deref(),
+            folders_col.uid(),
+            notes_col.uid(),
+            assets_col.uid(),
+        );
+        let manifest_json = serde_json::to_vec(&manifest)
+            .map_err(|e| AppError::InvalidArg(format!("encode manifest: {e}")))?;
+        let manifest_col = create_share_collection(
+            &cm,
+            COLLECTION_TYPE_SHARE_MANIFEST,
+            &format!("{} — share", folder.name),
+            &manifest_json,
+        )?;
+
+        // Invite the recipient: part collections at the requested level, the
+        // manifest read-only (recipients read it, they don't edit it).
+        let level: CollectionAccessLevel = access_level.into();
+        invite_to_collection(
+            &inv_manager,
+            &manifest_col,
+            &username,
+            &pubkey,
+            CollectionAccessLevel::ReadOnly,
+        )?;
+        invite_to_collection(&inv_manager, &folders_col, &username, &pubkey, level)?;
+        invite_to_collection(&inv_manager, &notes_col, &username, &pubkey, level)?;
+        invite_to_collection(&inv_manager, &assets_col, &username, &pubkey, level)?;
+
+        // Local projection: tag the shared subtree's root and mark it shared by
+        // me. Populating the scope's collections with the subtree's notes and
+        // assets is the sync-routing slice; this only records the scope so the
+        // tree can show a "shared" indicator immediately.
+        let folders_uid = folders_col.uid().to_string();
+        db.with_conn(|conn| {
+            record_outgoing_share(
+                conn,
+                &collection_id,
+                &share_scope_id,
+                &folders_uid,
+                access_level,
+                owner_username.as_deref(),
+            )
+        })?;
+
+        db.with_conn(|conn| local_share_state(conn, &collection_id))
+    })
+    .await
+    .map_err(|e| format!("invite collection task: {e}"))?
+    .map_err(Into::into)
+}
+
+/// Create + upload one collection for a share scope. `content` is empty for the
+/// part collections and the manifest JSON for the manifest collection.
+fn create_share_collection(
+    cm: &CollectionManager,
+    collection_type: &str,
+    name: &str,
+    content: &[u8],
+) -> AppResult<Collection> {
+    let mut meta = ItemMetadata::new();
+    meta.set_name(Some(name))
+        .set_mtime(Some(Utc::now().timestamp_millis()));
+    let col = cm
+        .create(collection_type, &meta, content)
+        .map_err(|e| AppError::InvalidArg(format!("create {collection_type}: {e}")))?;
+    cm.upload(&col, None)
+        .map_err(|e| AppError::InvalidArg(format!("upload {collection_type}: {e}")))?;
+    Ok(col)
+}
+
+fn invite_to_collection(
+    inv_manager: &CollectionInvitationManager,
+    collection: &Collection,
+    username: &str,
+    pubkey: &[u8],
+    access_level: CollectionAccessLevel,
+) -> AppResult<()> {
+    inv_manager
+        .invite(collection, username, pubkey, access_level)
+        .map_err(|e| {
+            AppError::InvalidArg(format!("invite {username} to {}: {e}", collection.uid()))
+        })
+}
+
+/// Build the manifest that ties a scope's three part collections together. Pure
+/// so it can be unit-tested without a server.
+fn build_share_manifest(
+    share_scope_id: &str,
+    name: &str,
+    root_folder_id: &str,
+    owner_username: Option<&str>,
+    folders_uid: &str,
+    notes_uid: &str,
+    assets_uid: &str,
+) -> ShareManifest {
+    ShareManifest {
+        schema: 1,
+        share_scope_id: share_scope_id.to_string(),
+        name: name.to_string(),
+        root_folder_id: root_folder_id.to_string(),
+        owner_username: owner_username.map(str::to_string),
+        collections: vec![
+            ShareManifestCollectionRef {
+                part: ShareScopePart::Folders,
+                collection_uid: folders_uid.to_string(),
+                required: true,
+            },
+            ShareManifestCollectionRef {
+                part: ShareScopePart::Notes,
+                collection_uid: notes_uid.to_string(),
+                required: true,
+            },
+            ShareManifestCollectionRef {
+                part: ShareScopePart::Assets,
+                collection_uid: assets_uid.to_string(),
+                required: true,
+            },
+        ],
+    }
+}
+
+/// Stamp the local root folder as shared-by-me and anchor the scope on it.
+fn record_outgoing_share(
+    conn: &Connection,
+    collection_id: &str,
+    share_scope_id: &str,
+    folders_uid: &str,
+    role: ShareAccessLevel,
+    owner: Option<&str>,
+) -> AppResult<()> {
+    let now = Utc::now().to_rfc3339();
+    let role_db = share_access_level_to_db(role);
+    conn.execute(
+        "UPDATE collections
+            SET share_scope_id = ?1,
+                share_id = ?2,
+                shared_role = ?3,
+                shared_owner = ?4,
+                shared_by_me = 1,
+                modified = ?5
+          WHERE id = ?6",
+        params![
+            share_scope_id,
+            folders_uid,
+            role_db,
+            owner,
+            now,
+            collection_id
+        ],
+    )?;
+    Ok(())
 }
 
 fn restore_required(app: &AppHandle) -> AppResult<Account> {
@@ -980,6 +1199,42 @@ mod tests {
                 && part.collection_uid.is_none()
                 && part.invitation.is_none()
         }));
+    }
+
+    #[test]
+    fn build_share_manifest_lists_three_required_parts() {
+        let manifest = build_share_manifest(
+            "scope_1",
+            "Project X",
+            "coll_root",
+            Some("alice"),
+            "col_folders",
+            "col_notes",
+            "col_assets",
+        );
+
+        assert_eq!(manifest.schema, 1);
+        assert_eq!(manifest.share_scope_id, "scope_1");
+        assert_eq!(manifest.root_folder_id, "coll_root");
+        assert_eq!(manifest.owner_username.as_deref(), Some("alice"));
+        assert_eq!(manifest.collections.len(), 3);
+        for part in [
+            ShareScopePart::Folders,
+            ShareScopePart::Notes,
+            ShareScopePart::Assets,
+        ] {
+            let entry = manifest
+                .collections
+                .iter()
+                .find(|collection| collection.part == part)
+                .unwrap_or_else(|| panic!("missing {part:?} ref"));
+            assert!(entry.required, "{part:?} must be required");
+        }
+
+        // Round-trips through the same JSON the receiver's decode_manifest reads.
+        let json = serde_json::to_vec(&manifest).unwrap();
+        let decoded: ShareManifest = serde_json::from_slice(&json).unwrap();
+        assert_eq!(decoded, manifest);
     }
 
     #[test]
