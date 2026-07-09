@@ -21,6 +21,7 @@ function bundle(overrides: Record<string, unknown> = {}) {
   return {
     manifest_invitation_id: 'invite_manifest',
     manifest_collection_uid: 'col_manifest',
+    pending: false,
     share_scope_id: 'scope_1',
     name: 'Project X',
     root_folder_id: 'folder_root',
@@ -73,6 +74,23 @@ describe('scanForCollectionInviteNotifications', () => {
       senderUsername: 'alice',
       accessLevel: 'read_write',
       complete: true
+    });
+  });
+
+  it('surfaces an unaccepted (pending) share with no name yet', async () => {
+    listIncomingShareBundles.mockResolvedValue({
+      bundles: [bundle({ pending: true, name: null, share_scope_id: null })],
+      unbundled_invitations: []
+    });
+
+    await scanForCollectionInviteNotifications();
+
+    expect(notificationState.items).toHaveLength(1);
+    expect(notificationState.items[0].data).toMatchObject({
+      manifestCollectionUid: 'col_manifest',
+      pending: true,
+      name: null,
+      senderUsername: 'alice'
     });
   });
 

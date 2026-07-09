@@ -30,14 +30,22 @@
           : null
   );
 
+  const senderLabel = $derived(
+    notification.data.senderUsername ??
+      tUi('notifications.invite.senderFallback')
+  );
+
+  // A pending bundle hasn't been accepted, so its name is unknown — show the
+  // generic "wants to share" title until the user accepts and the name loads.
   const title = $derived(
-    tUi('notifications.shareBundle.title')
-      .replace(
-        '{sender}',
-        notification.data.senderUsername ??
-          tUi('notifications.invite.senderFallback')
-      )
-      .replace('{name}', notification.data.name)
+    notification.data.pending || notification.data.name === null
+      ? tUi('notifications.shareBundle.pendingTitle').replace(
+          '{sender}',
+          senderLabel
+        )
+      : tUi('notifications.shareBundle.title')
+          .replace('{sender}', senderLabel)
+          .replace('{name}', notification.data.name)
   );
 
   async function accept(event: MouseEvent) {
@@ -85,6 +93,11 @@
       <p class="text-sm font-medium">{title}</p>
       {#if accessLabel}
         <p class="mt-0.5 text-xs text-muted-foreground">{accessLabel}</p>
+      {/if}
+      {#if notification.data.pending}
+        <p class="mt-0.5 text-xs text-muted-foreground">
+          {tUi('notifications.shareBundle.pendingHint')}
+        </p>
       {/if}
       {#if !notification.data.complete}
         <p class="mt-1 text-xs text-destructive">

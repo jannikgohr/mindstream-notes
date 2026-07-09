@@ -283,6 +283,8 @@
     "notifications.invite.accept": "Accept",
     "notifications.invite.decline": "Decline",
     "notifications.shareBundle.title": "{sender} shared “{name}”",
+    "notifications.shareBundle.pendingTitle": "{sender} wants to share a folder with you",
+    "notifications.shareBundle.pendingHint": "Accept to see what's inside.",
     "notifications.shareBundle.incomplete": "This share is incomplete and can't be accepted yet — ask the sender to resend it.",
 
     "sharing.access.readOnly": "Can view",

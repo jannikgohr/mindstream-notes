@@ -112,6 +112,7 @@ export async function scanForCollectionInviteNotifications(): Promise<void> {
         data: {
           manifestCollectionUid: bundle.manifest_collection_uid,
           name: bundle.name,
+          pending: bundle.pending,
           senderUsername: bundle.sender_username,
           accessLevel: bundle.access_level,
           complete: bundle.complete,
