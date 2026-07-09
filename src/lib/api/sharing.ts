@@ -24,9 +24,13 @@ export interface IncomingShareBundlePart {
 export interface IncomingShareBundle {
   manifest_invitation_id: string;
   manifest_collection_uid: string;
-  share_scope_id: string;
-  name: string;
-  root_folder_id: string;
+  // True while the manifest invitation is unaccepted: the scan reads it by
+  // non-mutating preview only, so name/share_scope_id/root_folder_id/parts are
+  // unknown until the user accepts. Accept/decline still work by uid.
+  pending: boolean;
+  share_scope_id: string | null;
+  name: string | null;
+  root_folder_id: string | null;
   owner_username: string | null;
   sender_username: string | null;
   access_level: CollectionShareAccessLevel | null;

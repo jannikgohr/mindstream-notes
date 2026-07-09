@@ -183,6 +183,8 @@
     "notifications.invite.accept": "Annehmen",
     "notifications.invite.decline": "Ablehnen",
     "notifications.shareBundle.title": "{sender} hat „{name}“ geteilt",
+    "notifications.shareBundle.pendingTitle": "{sender} möchte einen Ordner mit dir teilen",
+    "notifications.shareBundle.pendingHint": "Annehmen, um den Inhalt zu sehen.",
     "notifications.shareBundle.incomplete": "Diese Freigabe ist unvollständig und kann noch nicht angenommen werden — bitte den Absender, sie erneut zu senden.",
 
     "sharing.access.readOnly": "Nur ansehen",

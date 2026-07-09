@@ -179,9 +179,14 @@ pub struct IncomingShareInvitations {
 pub struct IncomingShareBundle {
     pub manifest_invitation_id: String,
     pub manifest_collection_uid: String,
-    pub share_scope_id: String,
-    pub name: String,
-    pub root_folder_id: String,
+    /// `true` while the manifest invitation is still pending — the scan hasn't
+    /// accepted it (that only happens on explicit `accept_share_bundle`), so its
+    /// content is unread and `name`/`share_scope_id`/`root_folder_id`/`parts`
+    /// are unknown. The share can still be accepted or declined by uid.
+    pub pending: bool,
+    pub share_scope_id: Option<String>,
+    pub name: Option<String>,
+    pub root_folder_id: Option<String>,
     pub owner_username: Option<String>,
     pub sender_username: Option<String>,
     pub access_level: Option<ShareAccessLevel>,
@@ -203,6 +208,20 @@ fn default_manifest_collection_required() -> bool {
     true
 }
 
+/// True for any of the four share-scope collection types (manifest + parts).
+/// These are internal to a bundle and never surface as standalone invites.
+fn is_share_scope_collection_type(collection_type: Option<&str>) -> bool {
+    matches!(
+        collection_type,
+        Some(
+            COLLECTION_TYPE_SHARE_MANIFEST
+                | COLLECTION_TYPE_SHARE_FOLDERS
+                | COLLECTION_TYPE_SHARE_NOTES
+                | COLLECTION_TYPE_SHARE_ASSETS
+        )
+    )
+}
+
 #[tauri::command]
 pub async fn list_collection_invitations(
     app: AppHandle,
@@ -220,13 +239,13 @@ pub async fn list_collection_invitations(
 
 /// List incoming share invitations grouped into manifest-backed bundles.
 ///
-/// Under the "auto-accept manifest only" policy this transparently accepts
-/// every pending `mindstream.share_manifest` invitation so its manifest can be
-/// decoded, then returns one bundle per share scope (folders + notes + assets)
-/// plus any invitations that aren't part of a manifest scope. Accepting a
-/// manifest grants access only to that metadata-only collection; the folder /
-/// notes / asset collections it references stay pending until the user accepts
-/// the bundle.
+/// Read-only: unlike an accept, this never mutates server state. Pending
+/// `mindstream.share_manifest` invitations are surfaced from their non-mutating
+/// `preview` (sender + access, but no name/parts — that lives in the manifest
+/// content, which requires membership). A share the user has already accepted
+/// is a member collection, so its manifest is read straight from the collection
+/// list with full detail. The metadata-only manifest is only accepted when the
+/// user explicitly accepts the bundle (see `accept_share_bundle`).
 #[tauri::command]
 pub async fn list_incoming_share_bundles(
     app: AppHandle,
@@ -241,23 +260,24 @@ pub async fn list_incoming_share_bundles(
             .map_err(|e| AppError::InvalidArg(format!("collection_manager: {e}")))?;
         let me = crate::auth::read_session_info(&app)?.map(|info| info.username);
         let invitations = list_all_incoming(&inv_manager)?;
-        let manifests = collect_share_manifests(&inv_manager, &cm, &invitations, me.as_deref())?;
-        Ok::<_, AppError>(bundle_incoming_share_invitations(invitations, manifests))
+        let opened = collect_opened_manifests(&cm, me.as_deref())?;
+        Ok::<_, AppError>(assemble_incoming_share_bundles(invitations, opened))
     })
     .await
     .map_err(|e| format!("list incoming share bundles task: {e}"))?
     .map_err(Into::into)
 }
 
-/// Accept a whole share bundle: accept every referenced folders/notes/assets
-/// invitation that's still pending and project the shared root locally.
+/// Accept a whole share bundle: accept the metadata-only manifest invitation (if
+/// it's still pending — this is the consented moment its content is first read),
+/// then accept every referenced folders/notes/assets invitation still pending.
 ///
-/// The bundle is re-derived server-side from `manifest_collection_uid` rather
-/// than trusting client-passed invitation ids, so a stale UI can't accept
-/// invitations the manifest doesn't actually reference. Etebase has no
-/// cross-collection transaction, so this is best-effort ordered: a failure on
-/// one part surfaces as an error, but parts accepted before it stay accepted
-/// (re-running the accept is idempotent — already-accepted parts are skipped).
+/// The parts are re-derived server-side from the manifest content rather than
+/// trusting client-passed invitation ids, so a stale UI can't accept invitations
+/// the manifest doesn't actually reference. Etebase has no cross-collection
+/// transaction, so this is best-effort ordered: a failure on one part surfaces as
+/// an error, but parts accepted before it stay accepted (re-running the accept is
+/// idempotent — the manifest and already-accepted parts are skipped).
 #[tauri::command]
 pub async fn accept_share_bundle(
     app: AppHandle,
@@ -271,20 +291,43 @@ pub async fn accept_share_bundle(
         let cm = account
             .collection_manager()
             .map_err(|e| AppError::InvalidArg(format!("collection_manager: {e}")))?;
-        let me = crate::auth::read_session_info(&app)?.map(|info| info.username);
-        let invitations = list_all_incoming(&inv_manager)?;
-        let manifests = collect_share_manifests(&inv_manager, &cm, &invitations, me.as_deref())?;
-        let preview = manifests
-            .iter()
-            .find(|m| m.manifest_collection_uid == manifest_collection_uid)
-            .ok_or_else(|| AppError::NotFound(format!("share bundle {manifest_collection_uid}")))?;
 
-        let invitation_by_collection: HashMap<&str, &CollectionInvitation> = invitations
+        // Accept the manifest invitation first if it hasn't been accepted yet —
+        // reading its content below requires membership. Idempotent: once
+        // accepted it's gone from the incoming list and we skip straight to the
+        // fetch.
+        let incoming = list_all_incoming(&inv_manager)?;
+        if let Some(pending_manifest) = incoming.iter().find(|invitation| {
+            invitation.collection_uid == manifest_collection_uid
+                && invitation.collection_type.as_deref() == Some(COLLECTION_TYPE_SHARE_MANIFEST)
+        }) {
+            if let Some(signed) = find_incoming_invitation(&inv_manager, &pending_manifest.id)? {
+                inv_manager.accept(&signed).map_err(|e| {
+                    AppError::InvalidArg(format!("accept manifest invitation: {e}"))
+                })?;
+            }
+        }
+
+        // Read the manifest content (now a member) and accept the parts it lists.
+        let col = cm
+            .fetch(&manifest_collection_uid, None)
+            .map_err(|e| AppError::InvalidArg(format!("fetch manifest collection: {e}")))?;
+        if col.is_deleted() {
+            return Err(AppError::NotFound(format!(
+                "share bundle {manifest_collection_uid}"
+            )));
+        }
+        let manifest = decode_manifest(&col)?;
+
+        // Re-list: the manifest invitation just accepted is gone, and this gives
+        // fresh ids for the still-pending part invitations.
+        let incoming = list_all_incoming(&inv_manager)?;
+        let invitation_by_collection: HashMap<&str, &CollectionInvitation> = incoming
             .iter()
             .map(|invitation| (invitation.collection_uid.as_str(), invitation))
             .collect();
 
-        for collection_ref in &preview.manifest.collections {
+        for collection_ref in &manifest.collections {
             let Some(part_invitation) =
                 invitation_by_collection.get(collection_ref.collection_uid.as_str())
             else {
@@ -998,121 +1041,99 @@ fn list_all_incoming(
     Ok(out)
 }
 
-/// Gather the manifests backing the current incoming invitations.
+/// The manifests the account is already a member of — its "opened" shares —
+/// read straight from the collection list. Nothing is accepted here: a manifest
+/// only becomes a member collection once the user has explicitly accepted its
+/// bundle, so the passive scan never mutates server state.
 ///
-/// Two sources, merged so a bundle survives past the first scan:
-///   * pending `share_manifest` invitations — accepted here (first sight) so
-///     the manifest collection becomes fetchable, and
-///   * manifest collections accepted on a previous scan, which no longer show
-///     up as invitations and so are read straight from the collection list.
+/// A decode failure for one manifest is logged and skipped rather than failing
+/// the whole listing, so a single malformed share can't hide every other one.
 ///
-/// Accepting is idempotent from the caller's perspective: a decode/network
-/// failure for one manifest is logged and skipped rather than failing the whole
-/// listing, so a single malformed share can't hide every other bundle.
-///
-/// `current_username` is the signed-in user: manifests they own are dropped so
-/// a sender never sees their own outgoing shares surface as incoming bundles
-/// (they're a member of the manifest collections they created, so `cm.list`
-/// returns them).
-fn collect_share_manifests(
-    inv_manager: &CollectionInvitationManager,
+/// `current_username` is the signed-in user: manifests they own are dropped so a
+/// sender never sees their own outgoing shares surface as incoming bundles
+/// (they're a member of the manifest collections they created). Case-insensitive
+/// to match the self-invite guard in `invite_collection`.
+fn collect_opened_manifests(
     cm: &CollectionManager,
-    invitations: &[CollectionInvitation],
     current_username: Option<&str>,
 ) -> AppResult<Vec<ShareManifestPreview>> {
-    // Keyed by manifest collection uid so the two sources can't produce a
-    // duplicate bundle for the same scope.
-    let mut by_collection: HashMap<String, ShareManifestPreview> = HashMap::new();
+    let list = match cm.list(COLLECTION_TYPE_SHARE_MANIFEST, None) {
+        Ok(list) => list,
+        Err(e) => {
+            log::warn!("[sharing] list manifest collections failed: {e}");
+            return Ok(Vec::new());
+        }
+    };
 
-    for invitation in invitations {
-        if invitation.collection_type.as_deref() != Some(COLLECTION_TYPE_SHARE_MANIFEST) {
+    let mut previews = Vec::new();
+    for col in list.data() {
+        if col.is_deleted() {
             continue;
         }
-        match accept_and_decode_manifest(inv_manager, cm, &invitation.id) {
-            Ok(Some(preview)) => {
-                by_collection.insert(preview.manifest_collection_uid.clone(), preview);
+        let uid = col.uid().to_string();
+        let manifest = match decode_manifest(col) {
+            Ok(manifest) => manifest,
+            Err(e) => {
+                log::warn!("[sharing] accepted manifest {uid} skipped: {e}");
+                continue;
             }
-            Ok(None) => {}
-            Err(e) => log::warn!("[sharing] manifest invite {} skipped: {e}", invitation.id),
-        }
-    }
-
-    match cm.list(COLLECTION_TYPE_SHARE_MANIFEST, None) {
-        Ok(list) => {
-            for col in list.data() {
-                if col.is_deleted() {
-                    continue;
-                }
-                let uid = col.uid().to_string();
-                if by_collection.contains_key(&uid) {
-                    continue;
-                }
-                match decode_manifest(col) {
-                    // No pending invitation for an already-accepted manifest, so
-                    // the manifest collection uid stands in as the id. The
-                    // bundle still surfaces sender/access by falling back to a
-                    // referenced part invitation (see build_incoming_share_bundle).
-                    Ok(manifest) => {
-                        by_collection.insert(
-                            uid.clone(),
-                            ShareManifestPreview {
-                                invitation_id: uid.clone(),
-                                manifest_collection_uid: uid,
-                                manifest,
-                            },
-                        );
-                    }
-                    Err(e) => log::warn!("[sharing] accepted manifest {uid} skipped: {e}"),
-                }
-            }
-        }
-        Err(e) => log::warn!("[sharing] list manifest collections failed: {e}"),
-    }
-
-    let mut previews: Vec<ShareManifestPreview> = by_collection.into_values().collect();
-    if let Some(me) = current_username {
-        // Case-insensitive to match the self-invite guard in `invite_collection`:
-        // Etebase treats usernames case-insensitively, so an exact compare would
-        // let a sender's own share resurface as an incoming bundle when the
-        // manifest's stored casing differs from the signed-in username.
-        previews.retain(|preview| {
-            preview
-                .manifest
+        };
+        let owned_by_me = current_username.is_some_and(|me| {
+            manifest
                 .owner_username
                 .as_deref()
-                .is_none_or(|owner| !owner.eq_ignore_ascii_case(me))
+                .is_some_and(|owner| owner.eq_ignore_ascii_case(me))
+        });
+        if owned_by_me {
+            continue;
+        }
+        // No pending invitation for an already-accepted manifest, so the
+        // manifest collection uid stands in as the id. The bundle still surfaces
+        // sender/access by falling back to a referenced part invitation (see
+        // build_incoming_share_bundle).
+        previews.push(ShareManifestPreview {
+            invitation_id: uid.clone(),
+            manifest_collection_uid: uid,
+            manifest,
         });
     }
     Ok(previews)
 }
 
-/// Accept a pending manifest invitation and decode its manifest content.
-/// Returns `Ok(None)` when the invitation vanished (already handled) or the
-/// collection was deleted server-side.
-fn accept_and_decode_manifest(
-    inv_manager: &CollectionInvitationManager,
-    cm: &CollectionManager,
-    invitation_id: &str,
-) -> AppResult<Option<ShareManifestPreview>> {
-    let Some(invitation) = find_incoming_invitation(inv_manager, invitation_id)? else {
-        return Ok(None);
-    };
-    inv_manager
-        .accept(&invitation)
-        .map_err(|e| AppError::InvalidArg(format!("accept manifest invitation: {e}")))?;
-    let col_uid = invitation.collection().to_string();
-    let col = cm
-        .fetch(&col_uid, None)
-        .map_err(|e| AppError::InvalidArg(format!("fetch manifest collection: {e}")))?;
-    if col.is_deleted() {
-        return Ok(None);
-    }
-    let manifest = decode_manifest(&col)?;
-    Ok(Some(ShareManifestPreview {
-        invitation_id: invitation_id.to_string(),
-        manifest_collection_uid: col_uid,
-        manifest,
-    }))
+/// Assemble the incoming-share view from the raw invitations and the manifests
+/// the account has already opened (accepted, so readable in full).
+///
+///   * opened manifests → rich bundles (name, parts) via
+///     `bundle_incoming_share_invitations`, minus any whose parts are all
+///     accepted already (nothing left to do — stops fully-accepted shares from
+///     lingering as notifications).
+///   * pending manifest invitations (a `share_manifest` invite we haven't
+///     accepted, so not among the opened manifests) → lightweight preview
+///     bundles the user can accept or decline without content being read.
+pub fn assemble_incoming_share_bundles(
+    invitations: Vec<CollectionInvitation>,
+    opened: Vec<ShareManifestPreview>,
+) -> IncomingShareInvitations {
+    let opened_uids: HashSet<&str> = opened
+        .iter()
+        .map(|preview| preview.manifest_collection_uid.as_str())
+        .collect();
+
+    let pending_bundles: Vec<IncomingShareBundle> = invitations
+        .iter()
+        .filter(|invitation| {
+            invitation.collection_type.as_deref() == Some(COLLECTION_TYPE_SHARE_MANIFEST)
+                && !opened_uids.contains(invitation.collection_uid.as_str())
+        })
+        .map(pending_bundle_from_invitation)
+        .collect();
+
+    let mut result = bundle_incoming_share_invitations(invitations, opened);
+    result
+        .bundles
+        .retain(|bundle| bundle.parts.iter().any(|part| part.invitation.is_some()));
+    result.bundles.extend(pending_bundles);
+    result
 }
 
 /// A manifest is stored as the manifest collection's own JSON content (not as
@@ -1171,9 +1192,11 @@ pub fn bundle_incoming_share_invitations(
         .filter(|invitation| {
             !referenced_collection_uids.contains(invitation.collection_uid.as_str())
         })
-        .filter(|invitation| {
-            invitation.collection_type.as_deref() != Some(COLLECTION_TYPE_SHARE_MANIFEST)
-        })
+        // Share-scope collection types are internal plumbing and only make sense
+        // inside a bundle. Drop them from the lone-invite list so the parts of an
+        // unopened manifest (whose content we haven't read, so they aren't in
+        // `referenced_collection_uids`) don't surface as standalone invites.
+        .filter(|invitation| !is_share_scope_collection_type(invitation.collection_type.as_deref()))
         .cloned()
         .collect();
 
@@ -1263,15 +1286,38 @@ fn build_incoming_share_bundle(
     IncomingShareBundle {
         manifest_invitation_id: preview.invitation_id,
         manifest_collection_uid: preview.manifest_collection_uid,
-        share_scope_id: manifest.share_scope_id,
-        name: manifest.name,
-        root_folder_id: manifest.root_folder_id,
+        pending: false,
+        share_scope_id: Some(manifest.share_scope_id),
+        name: Some(manifest.name),
+        root_folder_id: Some(manifest.root_folder_id),
         owner_username: manifest.owner_username,
         sender_username,
         access_level,
         complete,
         parts,
         warnings,
+    }
+}
+
+/// Build a lightweight bundle for a manifest invitation the scan has *not*
+/// accepted. Preview metadata (sender, access, manifest collection uid) is all
+/// we have without membership, so the name and parts stay unknown until the
+/// user explicitly accepts. `complete` is `true` so the UI can offer accept —
+/// accepting reads the manifest content and pulls in whatever parts it lists.
+fn pending_bundle_from_invitation(invitation: &CollectionInvitation) -> IncomingShareBundle {
+    IncomingShareBundle {
+        manifest_invitation_id: invitation.id.clone(),
+        manifest_collection_uid: invitation.collection_uid.clone(),
+        pending: true,
+        share_scope_id: None,
+        name: None,
+        root_folder_id: None,
+        owner_username: None,
+        sender_username: invitation.sender_username.clone(),
+        access_level: Some(invitation.access_level),
+        complete: true,
+        parts: Vec::new(),
+        warnings: Vec::new(),
     }
 }
 
@@ -1460,7 +1506,9 @@ mod tests {
         assert_eq!(result.bundles.len(), 1);
         let bundle = &result.bundles[0];
         assert!(bundle.complete, "{:?}", bundle.warnings);
-        assert_eq!(bundle.share_scope_id, "scope_root");
+        assert!(!bundle.pending);
+        assert_eq!(bundle.share_scope_id.as_deref(), Some("scope_root"));
+        assert_eq!(bundle.name.as_deref(), Some("Shared project"));
         assert_eq!(bundle.sender_username.as_deref(), Some("sender"));
         assert_eq!(bundle.parts.len(), 3);
         assert!(bundle.parts.iter().any(|part| {
@@ -1703,5 +1751,84 @@ mod tests {
         let result = bundle_incoming_share_invitations(invitations, manifests);
 
         assert_eq!(result.unbundled_invitations, vec![standalone]);
+    }
+
+    #[test]
+    fn unopened_manifest_surfaces_as_pending_bundle_and_hides_its_parts() {
+        // The scan hasn't accepted the manifest (no opened manifests), so the
+        // manifest invite becomes a pending preview bundle and its part invites
+        // stay hidden rather than leaking as lone collaboration invites.
+        let invitations = vec![
+            invitation(
+                "invite_manifest",
+                "col_manifest",
+                COLLECTION_TYPE_SHARE_MANIFEST,
+            ),
+            invitation(
+                "invite_folders",
+                "col_folders",
+                COLLECTION_TYPE_SHARE_FOLDERS,
+            ),
+            invitation("invite_notes", "col_notes", COLLECTION_TYPE_SHARE_NOTES),
+            invitation("invite_assets", "col_assets", COLLECTION_TYPE_SHARE_ASSETS),
+        ];
+
+        let result = assemble_incoming_share_bundles(invitations, Vec::new());
+
+        assert!(result.unbundled_invitations.is_empty());
+        assert_eq!(result.bundles.len(), 1);
+        let bundle = &result.bundles[0];
+        assert!(bundle.pending);
+        assert_eq!(bundle.manifest_collection_uid, "col_manifest");
+        assert_eq!(bundle.sender_username.as_deref(), Some("sender"));
+        assert_eq!(bundle.access_level, Some(ShareAccessLevel::ReadWrite));
+        assert!(bundle.name.is_none());
+        assert!(bundle.parts.is_empty());
+        // Accept is still offered for a pending bundle.
+        assert!(bundle.complete);
+    }
+
+    #[test]
+    fn opened_manifest_with_all_parts_accepted_stops_showing() {
+        // Manifest opened (member), and every part accepted (no pending part
+        // invites): the share is fully accepted, so it must not linger.
+        let opened = vec![manifest_preview(vec![
+            collection_ref(ShareScopePart::Folders, "col_folders"),
+            collection_ref(ShareScopePart::Notes, "col_notes"),
+            collection_ref(ShareScopePart::Assets, "col_assets"),
+        ])];
+
+        let result = assemble_incoming_share_bundles(Vec::new(), opened);
+
+        assert!(result.bundles.is_empty());
+        assert!(result.unbundled_invitations.is_empty());
+    }
+
+    #[test]
+    fn opened_manifest_with_pending_parts_still_shows_to_finish_accept() {
+        // Manifest opened but the part invites are still pending (a resumed,
+        // partially-accepted share): keep showing so the user can finish.
+        let invitations = vec![
+            invitation(
+                "invite_folders",
+                "col_folders",
+                COLLECTION_TYPE_SHARE_FOLDERS,
+            ),
+            invitation("invite_notes", "col_notes", COLLECTION_TYPE_SHARE_NOTES),
+            invitation("invite_assets", "col_assets", COLLECTION_TYPE_SHARE_ASSETS),
+        ];
+        let opened = vec![manifest_preview(vec![
+            collection_ref(ShareScopePart::Folders, "col_folders"),
+            collection_ref(ShareScopePart::Notes, "col_notes"),
+            collection_ref(ShareScopePart::Assets, "col_assets"),
+        ])];
+
+        let result = assemble_incoming_share_bundles(invitations, opened);
+
+        assert_eq!(result.bundles.len(), 1);
+        let bundle = &result.bundles[0];
+        assert!(!bundle.pending);
+        assert_eq!(bundle.name.as_deref(), Some("Shared project"));
+        assert!(bundle.complete, "{:?}", bundle.warnings);
     }
 }

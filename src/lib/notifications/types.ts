@@ -35,7 +35,10 @@ export interface CollaborationInviteNotificationData {
 
 export interface ShareBundleNotificationData {
   manifestCollectionUid: string;
-  name: string;
+  // Null until the user accepts the manifest — its content (and thus the share
+  // name) is only readable once they're a member. `pending` marks that state.
+  name: string | null;
+  pending: boolean;
   senderUsername: string | null;
   accessLevel: 'read_only' | 'read_write' | 'admin' | null;
   complete: boolean;
