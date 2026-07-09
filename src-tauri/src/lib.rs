@@ -392,6 +392,8 @@ pub fn run() {
             // Sharing
             sharing::list_collection_invitations,
             sharing::list_incoming_share_bundles,
+            sharing::accept_share_bundle,
+            sharing::decline_share_bundle,
             sharing::accept_collection_invitation,
             sharing::reject_collection_invitation,
             sharing::get_collection_share_state,

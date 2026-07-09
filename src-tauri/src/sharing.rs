@@ -227,6 +227,175 @@ pub async fn list_incoming_share_bundles(
     .map_err(Into::into)
 }
 
+/// Accept a whole share bundle: accept every referenced folders/notes/assets
+/// invitation that's still pending and project the shared root locally.
+///
+/// The bundle is re-derived server-side from `manifest_collection_uid` rather
+/// than trusting client-passed invitation ids, so a stale UI can't accept
+/// invitations the manifest doesn't actually reference. Etebase has no
+/// cross-collection transaction, so this is best-effort ordered: a failure on
+/// one part surfaces as an error, but parts accepted before it stay accepted
+/// (re-running the accept is idempotent — already-accepted parts are skipped).
+#[tauri::command]
+pub async fn accept_share_bundle(
+    app: AppHandle,
+    manifest_collection_uid: String,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let account = restore_required(&app)?;
+        let inv_manager = account
+            .invitation_manager()
+            .map_err(|e| AppError::InvalidArg(format!("invitation_manager: {e}")))?;
+        let cm = account
+            .collection_manager()
+            .map_err(|e| AppError::InvalidArg(format!("collection_manager: {e}")))?;
+        let invitations = list_all_incoming(&inv_manager)?;
+        let manifests = collect_share_manifests(&inv_manager, &cm, &invitations)?;
+        let preview = manifests
+            .iter()
+            .find(|m| m.manifest_collection_uid == manifest_collection_uid)
+            .ok_or_else(|| AppError::NotFound(format!("share bundle {manifest_collection_uid}")))?;
+
+        let invitation_by_collection: HashMap<&str, &CollectionInvitation> = invitations
+            .iter()
+            .map(|invitation| (invitation.collection_uid.as_str(), invitation))
+            .collect();
+
+        for collection_ref in &preview.manifest.collections {
+            let Some(part_invitation) =
+                invitation_by_collection.get(collection_ref.collection_uid.as_str())
+            else {
+                // Already accepted (gone from the incoming list) — nothing to do.
+                continue;
+            };
+            let Some(signed) = find_incoming_invitation(&inv_manager, &part_invitation.id)? else {
+                continue;
+            };
+            inv_manager.accept(&signed).map_err(|e| {
+                AppError::InvalidArg(format!("accept {:?} invitation: {e}", collection_ref.part))
+            })?;
+        }
+
+        // Anchor the local "shared with me" root on the folders collection and
+        // name it after the manifest. Notes/asset collections carry no folder
+        // rows, so they aren't projected here — the scoped sync routing pulls
+        // their contents in a later slice.
+        if let Some(folders_ref) = preview
+            .manifest
+            .collections
+            .iter()
+            .find(|collection| collection.part == ShareScopePart::Folders)
+        {
+            let folder_invitation =
+                invitation_by_collection.get(folders_ref.collection_uid.as_str());
+            let role = folder_invitation
+                .map(|invitation| invitation.access_level)
+                .unwrap_or(ShareAccessLevel::ReadOnly);
+            let owner = preview
+                .manifest
+                .owner_username
+                .clone()
+                .or_else(|| folder_invitation.and_then(|inv| inv.sender_username.clone()));
+            let name = preview.manifest.name.clone();
+            let collection_uid = folders_ref.collection_uid.clone();
+            let db = app.state::<Db>();
+            db.with_conn(|conn| {
+                record_accepted_share(conn, &collection_uid, role, owner.as_deref(), Some(&name))
+            })?;
+        }
+
+        Ok::<(), AppError>(())
+    })
+    .await
+    .map_err(|e| format!("accept share bundle task: {e}"))?
+    .map_err(Into::into)
+}
+
+/// Decline a share bundle: reject every still-pending referenced invitation and
+/// leave the auto-accepted manifest collection so the transparent accept is
+/// fully undone and the bundle stops reappearing on the next scan.
+#[tauri::command]
+pub async fn decline_share_bundle(
+    app: AppHandle,
+    manifest_collection_uid: String,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let account = restore_required(&app)?;
+        let inv_manager = account
+            .invitation_manager()
+            .map_err(|e| AppError::InvalidArg(format!("invitation_manager: {e}")))?;
+        let cm = account
+            .collection_manager()
+            .map_err(|e| AppError::InvalidArg(format!("collection_manager: {e}")))?;
+
+        // Read the manifest straight from its (already-accepted) collection so
+        // decline has no accept side effect. If it isn't fetchable the manifest
+        // invitation may still be pending — reject that and stop.
+        let col = match cm.fetch(&manifest_collection_uid, None) {
+            Ok(col) if !col.is_deleted() => col,
+            other => {
+                if let Err(e) = other {
+                    log::warn!(
+                        "[sharing] fetch manifest {manifest_collection_uid} to decline: {e}"
+                    );
+                }
+                let invitations = list_all_incoming(&inv_manager)?;
+                if let Some(pending_manifest) = invitations.iter().find(|invitation| {
+                    invitation.collection_uid == manifest_collection_uid
+                        && invitation.collection_type.as_deref()
+                            == Some(COLLECTION_TYPE_SHARE_MANIFEST)
+                }) {
+                    if let Some(signed) =
+                        find_incoming_invitation(&inv_manager, &pending_manifest.id)?
+                    {
+                        inv_manager.reject(&signed).map_err(|e| {
+                            AppError::InvalidArg(format!("reject manifest invitation: {e}"))
+                        })?;
+                    }
+                }
+                return Ok(());
+            }
+        };
+        let manifest = decode_manifest(&col)?;
+
+        let invitations = list_all_incoming(&inv_manager)?;
+        let invitation_by_collection: HashMap<&str, &CollectionInvitation> = invitations
+            .iter()
+            .map(|invitation| (invitation.collection_uid.as_str(), invitation))
+            .collect();
+
+        for collection_ref in &manifest.collections {
+            let Some(part_invitation) =
+                invitation_by_collection.get(collection_ref.collection_uid.as_str())
+            else {
+                continue;
+            };
+            if let Some(signed) = find_incoming_invitation(&inv_manager, &part_invitation.id)? {
+                inv_manager.reject(&signed).map_err(|e| {
+                    AppError::InvalidArg(format!(
+                        "reject {:?} invitation: {e}",
+                        collection_ref.part
+                    ))
+                })?;
+            }
+        }
+
+        // Leave the manifest collection last; a failure here is non-fatal (the
+        // part invitations are already rejected) but is worth surfacing in logs.
+        let member_manager = cm
+            .member_manager(&col)
+            .map_err(|e| AppError::InvalidArg(format!("member_manager: {e}")))?;
+        if let Err(e) = member_manager.leave() {
+            log::warn!("[sharing] leave manifest collection {manifest_collection_uid}: {e}");
+        }
+
+        Ok::<(), AppError>(())
+    })
+    .await
+    .map_err(|e| format!("decline share bundle task: {e}"))?
+    .map_err(Into::into)
+}
+
 #[tauri::command]
 pub async fn accept_collection_invitation(app: AppHandle, id: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -241,7 +410,11 @@ pub async fn accept_collection_invitation(app: AppHandle, id: String) -> Result<
             .map_err(|e| AppError::InvalidArg(format!("accept invitation: {e}")))?;
 
         let db = app.state::<Db>();
-        db.with_conn(|conn| record_accepted_share(conn, &invitation))?;
+        let role: ShareAccessLevel = invitation.access_level().into();
+        let owner = invitation.sender_username();
+        db.with_conn(|conn| {
+            record_accepted_share(conn, invitation.collection(), role, owner, None)
+        })?;
         Ok::<(), AppError>(())
     })
     .await
@@ -600,10 +773,23 @@ fn find_incoming_invitation(
     }
 }
 
-fn record_accepted_share(conn: &Connection, invitation: &SignedInvitation) -> AppResult<()> {
+/// Project an accepted remote share onto the local `collections` table: update
+/// the row already anchored to `collection_uid`, or insert a placeholder shared
+/// root so the folder shows up in "shared with me" before the scoped sync pulls
+/// its real contents.
+///
+/// `name_override` lets a manifest bundle name the root after the share (e.g.
+/// "Project X") instead of the generic "sender's shared collection" fallback
+/// used by a bare single-collection accept.
+fn record_accepted_share(
+    conn: &Connection,
+    collection_uid: &str,
+    role: ShareAccessLevel,
+    owner: Option<&str>,
+    name_override: Option<&str>,
+) -> AppResult<()> {
     let now = Utc::now().to_rfc3339();
-    let role = share_access_level_to_db(invitation.access_level().into());
-    let owner = invitation.sender_username();
+    let role_db = share_access_level_to_db(role);
     let changed = conn.execute(
         "UPDATE collections
             SET shared_role = ?1,
@@ -611,7 +797,7 @@ fn record_accepted_share(conn: &Connection, invitation: &SignedInvitation) -> Ap
                 shared_by_me = 0,
                 modified = ?3
           WHERE share_id = ?4",
-        params![role, owner, now, invitation.collection()],
+        params![role_db, owner, now, collection_uid],
     )?;
     if changed > 0 {
         return Ok(());
@@ -628,8 +814,9 @@ fn record_accepted_share(conn: &Connection, invitation: &SignedInvitation) -> Ap
         .unwrap_or(-1)
         + 1;
     let id = format!("coll_{}", uuid::Uuid::new_v4());
-    let name = owner
-        .map(|sender| format!("{sender}'s shared collection"))
+    let name = name_override
+        .map(str::to_string)
+        .or_else(|| owner.map(|sender| format!("{sender}'s shared collection")))
         .unwrap_or_else(|| "Shared collection".to_string());
     conn.execute(
         "INSERT INTO collections(
@@ -637,15 +824,7 @@ fn record_accepted_share(conn: &Connection, invitation: &SignedInvitation) -> Ap
             dirty, share_id, shared_role, shared_owner, shared_by_me
          )
          VALUES (?1, NULL, ?2, ?3, ?4, ?4, 0, ?5, ?6, ?7, 0)",
-        params![
-            id,
-            name,
-            position,
-            now,
-            invitation.collection(),
-            role,
-            owner,
-        ],
+        params![id, name, position, now, collection_uid, role_db, owner],
     )?;
     Ok(())
 }

@@ -77,6 +77,26 @@ export function listIncomingShareBundles(): Promise<IncomingShareInvitations> {
   );
 }
 
+export function acceptShareBundle(
+  manifestCollectionUid: string
+): Promise<void> {
+  return invokeOrFallback<void>(
+    'accept_share_bundle',
+    { manifestCollectionUid },
+    async () => undefined
+  );
+}
+
+export function declineShareBundle(
+  manifestCollectionUid: string
+): Promise<void> {
+  return invokeOrFallback<void>(
+    'decline_share_bundle',
+    { manifestCollectionUid },
+    async () => undefined
+  );
+}
+
 export function acceptCollectionInvitation(id: string): Promise<void> {
   return invokeOrFallback<void>(
     'accept_collection_invitation',
