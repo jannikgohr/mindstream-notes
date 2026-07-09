@@ -235,8 +235,9 @@ pub async fn list_incoming_share_bundles(
         let cm = account
             .collection_manager()
             .map_err(|e| AppError::InvalidArg(format!("collection_manager: {e}")))?;
+        let me = crate::auth::read_session_info(&app)?.map(|info| info.username);
         let invitations = list_all_incoming(&inv_manager)?;
-        let manifests = collect_share_manifests(&inv_manager, &cm, &invitations)?;
+        let manifests = collect_share_manifests(&inv_manager, &cm, &invitations, me.as_deref())?;
         Ok::<_, AppError>(bundle_incoming_share_invitations(invitations, manifests))
     })
     .await
@@ -266,8 +267,9 @@ pub async fn accept_share_bundle(
         let cm = account
             .collection_manager()
             .map_err(|e| AppError::InvalidArg(format!("collection_manager: {e}")))?;
+        let me = crate::auth::read_session_info(&app)?.map(|info| info.username);
         let invitations = list_all_incoming(&inv_manager)?;
-        let manifests = collect_share_manifests(&inv_manager, &cm, &invitations)?;
+        let manifests = collect_share_manifests(&inv_manager, &cm, &invitations, me.as_deref())?;
         let preview = manifests
             .iter()
             .find(|m| m.manifest_collection_uid == manifest_collection_uid)
@@ -491,6 +493,37 @@ pub async fn invite_collection(
 
         let account = restore_required(&app)?;
         let owner_username = crate::auth::read_session_info(&app)?.map(|info| info.username);
+
+        // Block self-invite before touching the network — Etebase would let you
+        // invite yourself, producing a bundle you can't meaningfully accept.
+        let recipient = username.trim();
+        if recipient.is_empty() {
+            return Err(AppError::InvalidArg(
+                "a recipient username is required".into(),
+            ));
+        }
+        if owner_username
+            .as_deref()
+            .is_some_and(|me| me.eq_ignore_ascii_case(recipient))
+        {
+            return Err(AppError::InvalidArg(
+                "you can't share a folder with yourself".into(),
+            ));
+        }
+
+        // Read the folder's existing scope tag separately (it isn't on the
+        // public Collection struct) so a re-share reuses that scope.
+        let existing_scope_id: Option<String> = db.with_conn(|conn| {
+            Ok(conn
+                .query_row(
+                    "SELECT share_scope_id FROM collections WHERE id = ?1",
+                    params![collection_id],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .optional()?
+                .flatten())
+        })?;
+
         let inv_manager = account
             .invitation_manager()
             .map_err(|e| AppError::InvalidArg(format!("invitation_manager: {e}")))?;
@@ -501,86 +534,270 @@ pub async fn invite_collection(
         // Resolve the recipient's public key up front so an unknown username
         // fails before any collections are created.
         let profile = inv_manager
-            .fetch_user_profile(&username)
-            .map_err(|e| AppError::InvalidArg(format!("fetch recipient profile: {e}")))?;
+            .fetch_user_profile(recipient)
+            .map_err(|e| profile_lookup_error(recipient, e))?;
         let pubkey = profile.pubkey().to_vec();
 
-        let share_scope_id = format!("scope_{}", uuid::Uuid::new_v4());
-
-        // One dedicated collection per part, plus the manifest collection whose
-        // content is the manifest JSON tying them together.
-        let folders_col = create_share_collection(
+        // Reuse the folder's scope if it already has one so re-sharing adds a
+        // member rather than spawning a duplicate scope; otherwise create it.
+        let (scope, created) = resolve_or_create_scope(
             &cm,
-            COLLECTION_TYPE_SHARE_FOLDERS,
-            &format!("{} — folders", folder.name),
-            &[],
-        )?;
-        let notes_col = create_share_collection(
-            &cm,
-            COLLECTION_TYPE_SHARE_NOTES,
-            &format!("{} — notes", folder.name),
-            &[],
-        )?;
-        let assets_col = create_share_collection(
-            &cm,
-            COLLECTION_TYPE_SHARE_ASSETS,
-            &format!("{} — assets", folder.name),
-            &[],
-        )?;
-
-        let manifest = build_share_manifest(
-            &share_scope_id,
-            &folder.name,
-            &collection_id,
+            &folder,
+            existing_scope_id.as_deref(),
             owner_username.as_deref(),
-            folders_col.uid(),
-            notes_col.uid(),
-            assets_col.uid(),
-        );
-        let manifest_json = serde_json::to_vec(&manifest)
-            .map_err(|e| AppError::InvalidArg(format!("encode manifest: {e}")))?;
-        let manifest_col = create_share_collection(
-            &cm,
-            COLLECTION_TYPE_SHARE_MANIFEST,
-            &format!("{} — share", folder.name),
-            &manifest_json,
         )?;
+
+        // Refuse a duplicate: the recipient already has a pending invite to, or
+        // membership in, this scope.
+        if recipient_already_on_scope(&inv_manager, &cm, &scope, recipient)? {
+            return Err(AppError::InvalidArg(format!(
+                "{recipient} has already been invited to this folder"
+            )));
+        }
 
         // Invite the recipient: part collections at the requested level, the
         // manifest read-only (recipients read it, they don't edit it).
         let level: CollectionAccessLevel = access_level.into();
         invite_to_collection(
             &inv_manager,
-            &manifest_col,
-            &username,
+            &scope.manifest,
+            recipient,
             &pubkey,
             CollectionAccessLevel::ReadOnly,
         )?;
-        invite_to_collection(&inv_manager, &folders_col, &username, &pubkey, level)?;
-        invite_to_collection(&inv_manager, &notes_col, &username, &pubkey, level)?;
-        invite_to_collection(&inv_manager, &assets_col, &username, &pubkey, level)?;
+        invite_to_collection(&inv_manager, &scope.folders, recipient, &pubkey, level)?;
+        invite_to_collection(&inv_manager, &scope.notes, recipient, &pubkey, level)?;
+        invite_to_collection(&inv_manager, &scope.assets, recipient, &pubkey, level)?;
 
-        // Local projection: tag the shared subtree's root and mark it shared by
-        // me. Populating the scope's collections with the subtree's notes and
-        // assets is the sync-routing slice; this only records the scope so the
-        // tree can show a "shared" indicator immediately.
-        let folders_uid = folders_col.uid().to_string();
-        db.with_conn(|conn| {
-            record_outgoing_share(
-                conn,
-                &collection_id,
-                &share_scope_id,
-                &folders_uid,
-                access_level,
-                owner_username.as_deref(),
-            )
-        })?;
+        // Local projection: only when we created the scope. Tags the root folder
+        // shared-by-me and anchors the scope. Populating the scope collections
+        // with the subtree's notes/assets is the sync-routing slice.
+        if created {
+            let folders_uid = scope.folders.uid().to_string();
+            db.with_conn(|conn| {
+                record_outgoing_share(
+                    conn,
+                    &collection_id,
+                    &scope.share_scope_id,
+                    &folders_uid,
+                    access_level,
+                    owner_username.as_deref(),
+                )
+            })?;
+        }
 
         db.with_conn(|conn| local_share_state(conn, &collection_id))
     })
     .await
     .map_err(|e| format!("invite collection task: {e}"))?
     .map_err(Into::into)
+}
+
+/// The four collections that make up one share scope.
+struct ScopeCollections {
+    manifest: Collection,
+    folders: Collection,
+    notes: Collection,
+    assets: Collection,
+    share_scope_id: String,
+}
+
+/// Reuse the folder's existing scope (so re-sharing adds a member) or create a
+/// fresh one. The `bool` is `true` when a new scope was created.
+fn resolve_or_create_scope(
+    cm: &CollectionManager,
+    folder: &crate::collections::Collection,
+    existing_scope_id: Option<&str>,
+    owner_username: Option<&str>,
+) -> AppResult<(ScopeCollections, bool)> {
+    if let Some(scope_id) = existing_scope_id {
+        if let Some(scope) = find_existing_scope(cm, scope_id)? {
+            return Ok((scope, false));
+        }
+        log::warn!(
+            "[sharing] folder {} tagged scope {scope_id} but its manifest is gone; creating a fresh scope",
+            folder.id
+        );
+    }
+    Ok((create_new_scope(cm, folder, owner_username)?, true))
+}
+
+/// Find the scope whose manifest carries `share_scope_id` and fetch its four
+/// collections. Returns `None` if no manifest matches (e.g. deleted server-side).
+fn find_existing_scope(
+    cm: &CollectionManager,
+    share_scope_id: &str,
+) -> AppResult<Option<ScopeCollections>> {
+    let list = cm
+        .list(COLLECTION_TYPE_SHARE_MANIFEST, None)
+        .map_err(|e| AppError::InvalidArg(format!("list manifest collections: {e}")))?;
+    for col in list.data() {
+        if col.is_deleted() {
+            continue;
+        }
+        let manifest = match decode_manifest(col) {
+            Ok(manifest) => manifest,
+            Err(_) => continue,
+        };
+        if manifest.share_scope_id != share_scope_id {
+            continue;
+        }
+        let folders = fetch_scope_part(cm, &manifest, ShareScopePart::Folders)?;
+        let notes = fetch_scope_part(cm, &manifest, ShareScopePart::Notes)?;
+        let assets = fetch_scope_part(cm, &manifest, ShareScopePart::Assets)?;
+        return Ok(Some(ScopeCollections {
+            manifest: col.clone(),
+            folders,
+            notes,
+            assets,
+            share_scope_id: manifest.share_scope_id,
+        }));
+    }
+    Ok(None)
+}
+
+fn fetch_scope_part(
+    cm: &CollectionManager,
+    manifest: &ShareManifest,
+    part: ShareScopePart,
+) -> AppResult<Collection> {
+    let uid = manifest
+        .collections
+        .iter()
+        .find(|collection| collection.part == part)
+        .map(|collection| collection.collection_uid.as_str())
+        .ok_or_else(|| AppError::InvalidArg(format!("manifest missing {part:?} collection")))?;
+    cm.fetch(uid, None)
+        .map_err(|e| AppError::InvalidArg(format!("fetch {part:?} collection: {e}")))
+}
+
+/// Create + upload the three part collections and the manifest collection that
+/// ties them together.
+fn create_new_scope(
+    cm: &CollectionManager,
+    folder: &crate::collections::Collection,
+    owner_username: Option<&str>,
+) -> AppResult<ScopeCollections> {
+    let share_scope_id = format!("scope_{}", uuid::Uuid::new_v4());
+    let folders = create_share_collection(
+        cm,
+        COLLECTION_TYPE_SHARE_FOLDERS,
+        &format!("{} — folders", folder.name),
+        &[],
+    )?;
+    let notes = create_share_collection(
+        cm,
+        COLLECTION_TYPE_SHARE_NOTES,
+        &format!("{} — notes", folder.name),
+        &[],
+    )?;
+    let assets = create_share_collection(
+        cm,
+        COLLECTION_TYPE_SHARE_ASSETS,
+        &format!("{} — assets", folder.name),
+        &[],
+    )?;
+    let manifest = build_share_manifest(
+        &share_scope_id,
+        &folder.name,
+        &folder.id,
+        owner_username,
+        folders.uid(),
+        notes.uid(),
+        assets.uid(),
+    );
+    let manifest_json = serde_json::to_vec(&manifest)
+        .map_err(|e| AppError::InvalidArg(format!("encode manifest: {e}")))?;
+    let manifest_col = create_share_collection(
+        cm,
+        COLLECTION_TYPE_SHARE_MANIFEST,
+        &format!("{} — share", folder.name),
+        &manifest_json,
+    )?;
+    Ok(ScopeCollections {
+        manifest: manifest_col,
+        folders,
+        notes,
+        assets,
+        share_scope_id,
+    })
+}
+
+/// True if `username` already has a pending invite to, or is a member of, this
+/// scope — checked against the scope's collections so it never blocks an invite
+/// to the same user for a *different* folder.
+fn recipient_already_on_scope(
+    inv_manager: &CollectionInvitationManager,
+    cm: &CollectionManager,
+    scope: &ScopeCollections,
+    username: &str,
+) -> AppResult<bool> {
+    let scope_uids = [
+        scope.manifest.uid(),
+        scope.folders.uid(),
+        scope.notes.uid(),
+        scope.assets.uid(),
+    ];
+
+    let mut iterator: Option<String> = None;
+    loop {
+        let options = FetchOptions::new().limit(100).iterator(iterator.as_deref());
+        let page = inv_manager
+            .list_outgoing(Some(&options))
+            .map_err(|e| AppError::InvalidArg(format!("list outgoing invitations: {e}")))?;
+        for invitation in page.data() {
+            if invitation.username() == username && scope_uids.contains(&invitation.collection()) {
+                return Ok(true);
+            }
+        }
+        if page.done() {
+            break;
+        }
+        match page.iterator().map(str::to_string) {
+            Some(next) => iterator = Some(next),
+            None => break,
+        }
+    }
+
+    // Already-accepted members share the same three part collections; the
+    // folders collection is enough to detect them.
+    let member_manager = cm
+        .member_manager(&scope.folders)
+        .map_err(|e| AppError::InvalidArg(format!("member_manager: {e}")))?;
+    let mut iterator: Option<String> = None;
+    loop {
+        let options = FetchOptions::new().limit(100).iterator(iterator.as_deref());
+        let page = member_manager
+            .list(Some(&options))
+            .map_err(|e| AppError::InvalidArg(format!("list members: {e}")))?;
+        for member in page.data() {
+            if member.username() == username {
+                return Ok(true);
+            }
+        }
+        if page.done() {
+            break;
+        }
+        match page.iterator().map(str::to_string) {
+            Some(next) => iterator = Some(next),
+            None => break,
+        }
+    }
+
+    Ok(false)
+}
+
+/// Turn Etebase's opaque profile-lookup failure into an actionable message. A
+/// brand-new account has no published `UserInfo` until it has signed in once.
+fn profile_lookup_error(username: &str, err: impl std::fmt::Display) -> AppError {
+    let raw = err.to_string();
+    if raw.contains("matching query does not exist") {
+        AppError::InvalidArg(format!(
+            "No user named “{username}” was found. Check the spelling — a brand-new account must sign in once before it can be invited."
+        ))
+    } else {
+        AppError::InvalidArg(format!("fetch recipient profile: {raw}"))
+    }
 }
 
 /// Create + upload one collection for a share scope. `content` is empty for the
@@ -729,10 +946,16 @@ fn list_all_incoming(
 /// Accepting is idempotent from the caller's perspective: a decode/network
 /// failure for one manifest is logged and skipped rather than failing the whole
 /// listing, so a single malformed share can't hide every other bundle.
+///
+/// `current_username` is the signed-in user: manifests they own are dropped so
+/// a sender never sees their own outgoing shares surface as incoming bundles
+/// (they're a member of the manifest collections they created, so `cm.list`
+/// returns them).
 fn collect_share_manifests(
     inv_manager: &CollectionInvitationManager,
     cm: &CollectionManager,
     invitations: &[CollectionInvitation],
+    current_username: Option<&str>,
 ) -> AppResult<Vec<ShareManifestPreview>> {
     // Keyed by manifest collection uid so the two sources can't produce a
     // duplicate bundle for the same scope.
@@ -783,7 +1006,11 @@ fn collect_share_manifests(
         Err(e) => log::warn!("[sharing] list manifest collections failed: {e}"),
     }
 
-    Ok(by_collection.into_values().collect())
+    let mut previews: Vec<ShareManifestPreview> = by_collection.into_values().collect();
+    if let Some(me) = current_username {
+        previews.retain(|preview| preview.manifest.owner_username.as_deref() != Some(me));
+    }
+    Ok(previews)
 }
 
 /// Accept a pending manifest invitation and decode its manifest content.
@@ -1205,6 +1432,27 @@ mod tests {
                 && part.collection_uid.is_none()
                 && part.invitation.is_none()
         }));
+    }
+
+    #[test]
+    fn profile_lookup_error_is_friendly_for_missing_user() {
+        let friendly = profile_lookup_error("bob", "UserInfo matching query does not exist.");
+        let AppError::InvalidArg(message) = friendly else {
+            panic!("expected InvalidArg");
+        };
+        assert!(message.contains("bob"), "{message}");
+        assert!(message.contains("sign in once"), "{message}");
+        assert!(
+            !message.contains("matching query"),
+            "raw etebase text should not leak: {message}"
+        );
+
+        // Unrelated errors keep their detail for debugging.
+        let other = profile_lookup_error("bob", "network unreachable");
+        let AppError::InvalidArg(message) = other else {
+            panic!("expected InvalidArg");
+        };
+        assert!(message.contains("network unreachable"), "{message}");
     }
 
     #[test]
