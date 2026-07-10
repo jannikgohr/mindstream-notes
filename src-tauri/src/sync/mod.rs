@@ -129,6 +129,38 @@ fn mark_local_by_remote_uid_dirty(db: &Db, kind: &str, etebase_uid: &str) -> App
     })
 }
 
+/// Apply a server-side deletion of `etebase_uid` in `table`.
+///
+/// Edit-wins-over-delete: a row with unpushed local edits (`dirty = 1`) is
+/// never destroyed by a remote tombstone. Instead we *detach* it — drop the
+/// server identity (`etebase_uid`/`etebase_etag`) but keep the row and its
+/// dirty flag — so the next push re-homes it. This makes re-home
+/// non-destructive: when a shared folder's items are tombstoned out of the
+/// vault and recreated in a scope, a device holding offline edits detaches its
+/// vault copy here, then the scope pull reclaims that same row by stable `id`
+/// and CRDT-merges the edits in (see `apply_note_payload`). It also turns a
+/// genuine delete-vs-offline-edit conflict into a resurrection of the edited
+/// copy rather than a silent loss. A clean row is a real delete and is removed.
+///
+/// `table` is always a crate-internal literal ("notes"/"collections"/
+/// "assets"), never user input, so the format! is injection-safe.
+fn apply_remote_delete(conn: &Connection, table: &str, etebase_uid: &str) -> AppResult<()> {
+    let detached = conn.execute(
+        &format!(
+            "UPDATE {table} SET etebase_uid = NULL, etebase_etag = NULL
+             WHERE etebase_uid = ?1 AND dirty = 1"
+        ),
+        params![etebase_uid],
+    )?;
+    if detached == 0 {
+        conn.execute(
+            &format!("DELETE FROM {table} WHERE etebase_uid = ?1"),
+            params![etebase_uid],
+        )?;
+    }
+    Ok(())
+}
+
 /// What ends up in `Item::content` for a note. We keep our own `id`
 /// (the local SQLite UUID) inside the payload so we can correlate
 /// pulled items back to existing local rows even if the etebase_uid
@@ -390,61 +422,70 @@ fn run(db: &Db, account: &Account) -> AppResult<SyncDelta> {
         .collection_manager()
         .map_err(|e| AppError::InvalidArg(format!("collection_manager: {e}")))?;
 
-    // Folders first so notes' parent_folder_id can resolve on pull.
+    // Item managers for the four vault collections. Set up all of them up
+    // front so the sync runs in three ordered phases: pull everything, sync
+    // scopes, then push everything.
     let folders_col = ensure_collection(db, &cm, KIND_FOLDERS, COLLECTION_TYPE_FOLDERS)?;
     let folders_im = cm
         .item_manager(&folders_col)
         .map_err(|e| AppError::InvalidArg(format!("item_manager(folders): {e}")))?;
-    pull_folders(db, &folders_im, &mut delta.report)?;
-    push_folders(db, &folders_im, &mut delta.report, None)?;
-
     let notes_col = ensure_collection(db, &cm, KIND_NOTES, COLLECTION_TYPE_NOTES)?;
     let notes_im = cm
         .item_manager(&notes_col)
         .map_err(|e| AppError::InvalidArg(format!("item_manager(notes): {e}")))?;
+    let assets_col = ensure_collection(db, &cm, KIND_ASSETS, COLLECTION_TYPE_ASSETS)?;
+    let assets_im = cm
+        .item_manager(&assets_col)
+        .map_err(|e| AppError::InvalidArg(format!("item_manager(assets): {e}")))?;
+    let signatures_col = ensure_collection(db, &cm, KIND_SIGNATURES, COLLECTION_TYPE_SIGNATURES)?;
+    let signatures_im = cm
+        .item_manager(&signatures_col)
+        .map_err(|e| AppError::InvalidArg(format!("item_manager(signatures): {e}")))?;
+
+    // --- Pull phase ---
+    // Folders first so notes' parent_folder_id can resolve; assets last so
+    // notes — and the FK target rows they need — are already in place when
+    // apply_asset tries to upsert. If a brand-new remote note + its asset land
+    // in the same sync, the note pull populates it, then the asset pull
+    // resolves the FK cleanly. The narrow race where a remote creates a note
+    // *between* our notes pull and our assets pull is handled inside
+    // apply_asset (it skips orphan assets and leaves the stoken unadvanced so
+    // the next sync retries). Signatures are user-global (no FK back to
+    // notes), so their order doesn't matter.
+    pull_folders(db, &folders_im, &mut delta.report)?;
     pull_notes(
         db,
         &notes_im,
         &mut delta.report,
         &mut delta.notes_pulled_ids,
     )?;
-    push_notes(db, &notes_im, &mut delta.report, None)?;
-
-    // Assets last so notes — and the FK target rows they need — are
-    // already in place when apply_asset tries to upsert. If a brand-new
-    // remote note + its asset land in the same sync, the pull above
-    // populates the note, then this pulls the asset and the FK resolves
-    // cleanly. The narrow race window where a remote creates a note
-    // *between* our notes pull and our assets pull is handled inside
-    // apply_asset (it skips orphan assets and leaves the stoken
-    // unadvanced so the next sync retries).
-    let assets_col = ensure_collection(db, &cm, KIND_ASSETS, COLLECTION_TYPE_ASSETS)?;
-    let assets_im = cm
-        .item_manager(&assets_col)
-        .map_err(|e| AppError::InvalidArg(format!("item_manager(assets): {e}")))?;
     pull_assets(
         db,
         &assets_im,
         &mut delta.report,
         &mut delta.assets_pulled_ids,
     )?;
-    push_assets(db, &assets_im, &mut delta.report, None)?;
-
-    // Signatures are user-global (no FK back to notes), so order relative
-    // to the others doesn't matter — apply_signature never orphans.
-    let signatures_col = ensure_collection(db, &cm, KIND_SIGNATURES, COLLECTION_TYPE_SIGNATURES)?;
-    let signatures_im = cm
-        .item_manager(&signatures_col)
-        .map_err(|e| AppError::InvalidArg(format!("item_manager(signatures): {e}")))?;
     pull_signatures(db, &signatures_im, &mut delta.report)?;
-    push_signatures(db, &signatures_im, &mut delta.report)?;
 
-    // Shared scopes sync into their own per-scope collections. Isolated from
-    // the vault sync above: a failure here (a malformed manifest, a scope we
-    // can't reach) is logged and must never break the user's own vault sync.
+    // --- Scope sync ---
+    // Runs between the vault pull and the vault push on purpose. A shared
+    // subtree's items are tombstoned out of the vault and recreated in a
+    // scope; a device holding offline edits *detaches* its vault copy during
+    // the pull above (see `apply_remote_delete`) rather than deleting it. This
+    // scope sync then reclaims that row by stable `id` and stamps its scope,
+    // so the vault push below skips it — without this ordering the push would
+    // resurrect the detached row as an orphan vault copy. Isolated from the
+    // vault sync: a failure here (malformed manifest, unreachable scope) is
+    // logged and must never break the user's own vault sync.
     if let Err(e) = scopes::sync_scopes(db, &cm, &mut delta) {
         log::error!("[sync] scoped sync failed (vault sync unaffected): {e}");
     }
+
+    // --- Push phase ---
+    push_folders(db, &folders_im, &mut delta.report, None)?;
+    push_notes(db, &notes_im, &mut delta.report, None)?;
+    push_assets(db, &assets_im, &mut delta.report, None)?;
+    push_signatures(db, &signatures_im, &mut delta.report)?;
 
     Ok(delta)
 }
@@ -787,13 +828,7 @@ enum ApplyAssetOutcome {
 /// the caller can decide whether to advance the stoken (orphans pin it).
 fn apply_asset(db: &Db, item: &Item, scope: Option<&str>) -> AppResult<ApplyAssetOutcome> {
     if item.is_deleted() {
-        db.with_conn(|c| {
-            c.execute(
-                "DELETE FROM assets WHERE etebase_uid = ?1",
-                params![item.uid()],
-            )?;
-            Ok(())
-        })?;
+        db.with_conn(|c| apply_remote_delete(c, "assets", item.uid()))?;
         return Ok(ApplyAssetOutcome::Skipped);
     }
     if item.is_missing_content() {
@@ -1024,14 +1059,9 @@ fn apply_signature(db: &Db, item: &Item) -> AppResult<bool> {
 /// content items where there's nothing to re-link.
 fn apply_folder(db: &Db, item: &Item, scope: Option<&str>) -> AppResult<Option<FolderPayload>> {
     if item.is_deleted() {
-        // Server-side delete: drop our row if we have one matched by uid.
-        db.with_conn(|c| {
-            c.execute(
-                "DELETE FROM collections WHERE etebase_uid = ?1",
-                params![item.uid()],
-            )?;
-            Ok(())
-        })?;
+        // Server-side delete: drop our row if we have one matched by uid,
+        // unless it has unpushed edits — see `apply_remote_delete`.
+        db.with_conn(|c| apply_remote_delete(c, "collections", item.uid()))?;
         return Ok(None);
     }
     if item.is_missing_content() {
@@ -1180,13 +1210,7 @@ struct LocalNoteState {
 /// for deletes (no live editor to refresh) and missing-content items.
 fn apply_note(db: &Db, item: &Item, scope: Option<&str>) -> AppResult<Option<String>> {
     if item.is_deleted() {
-        db.with_conn(|c| {
-            c.execute(
-                "DELETE FROM notes WHERE etebase_uid = ?1",
-                params![item.uid()],
-            )?;
-            Ok(())
-        })?;
+        db.with_conn(|c| apply_remote_delete(c, "notes", item.uid()))?;
         return Ok(None);
     }
     if item.is_missing_content() {
@@ -2464,5 +2488,156 @@ mod tests {
         assert!(!is_bad_stoken_error(&not_found));
         assert!(!is_bad_stoken_error(&bare));
         assert!(!is_bad_stoken_error(&prose));
+    }
+
+    #[test]
+    fn apply_remote_delete_removes_a_clean_row() {
+        // No unpushed edits: a remote tombstone is a genuine delete.
+        let db = open_memory_for_tests();
+        db.with_conn(|c| {
+            c.execute(
+                "INSERT INTO notes(id, parent_collection_id, title, body, position,
+                                   created, modified, trashed_at, yrs_state,
+                                   etebase_uid, etebase_etag, dirty, payload_schema,
+                                   favourite, note_kind)
+                 VALUES ('n_clean', NULL, 'T', '', 0, 't', 't', NULL, NULL,
+                         'uid_clean', 'etag', 0, 2, 0, 'markdown')",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+        db.with_conn(|c| apply_remote_delete(c, "notes", "uid_clean"))
+            .unwrap();
+
+        let count: i64 = db
+            .with_conn(|c| {
+                Ok(
+                    c.query_row("SELECT COUNT(*) FROM notes WHERE id = 'n_clean'", [], |r| {
+                        r.get(0)
+                    })?,
+                )
+            })
+            .unwrap();
+        assert_eq!(count, 0, "a clean row is a real delete and is removed");
+    }
+
+    #[test]
+    fn apply_remote_delete_detaches_a_dirty_row() {
+        // Edit-wins-over-delete: an unpushed edit must survive a remote
+        // tombstone, detached from the server identity but kept dirty.
+        let db = open_memory_for_tests();
+        db.with_conn(|c| {
+            c.execute(
+                "INSERT INTO notes(id, parent_collection_id, title, body, position,
+                                   created, modified, trashed_at, yrs_state,
+                                   etebase_uid, etebase_etag, dirty, payload_schema,
+                                   favourite, note_kind)
+                 VALUES ('n_dirty', NULL, 'Local edit', '', 0, 't', 't', NULL, NULL,
+                         'uid_dirty', 'etag', 1, 2, 0, 'markdown')",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+        db.with_conn(|c| apply_remote_delete(c, "notes", "uid_dirty"))
+            .unwrap();
+
+        let (uid, etag, dirty, title): (Option<String>, Option<String>, i64, String) = db
+            .with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT etebase_uid, etebase_etag, dirty, title
+                     FROM notes WHERE id = 'n_dirty'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                )?)
+            })
+            .unwrap();
+        assert!(uid.is_none(), "detached row drops its server uid");
+        assert!(etag.is_none(), "detached row drops its etag");
+        assert_eq!(dirty, 1, "row stays dirty so it re-homes on the next push");
+        assert_eq!(
+            title, "Local edit",
+            "the unpushed edit is preserved, not destroyed"
+        );
+    }
+
+    #[test]
+    fn rehome_detaches_then_scope_pull_reclaims_with_local_edits() {
+        // The A/B offline-merge scenario: device A has an unpushed edit to a
+        // note in a folder that device B just shared. B's re-home tombstones
+        // the vault copy and recreates it in the scope. A must detach (not
+        // delete) on the tombstone, then reclaim the same row by stable `id`
+        // when the scope copy arrives — keeping A's edit and stamping the scope
+        // (which makes the vault push skip it, so no orphan copy is created).
+        let db = open_memory_for_tests();
+        db.with_conn(|c| {
+            c.execute(
+                "INSERT INTO collections(id, parent_collection_id, name, position,
+                                         created, modified, dirty)
+                 VALUES ('folder_f', NULL, 'F', 0, 't', 't', 0)",
+                [],
+            )?;
+            c.execute(
+                "INSERT INTO notes(id, parent_collection_id, title, body, position,
+                                   created, modified, trashed_at, yrs_state,
+                                   etebase_uid, etebase_etag, dirty, payload_schema,
+                                   favourite, note_kind)
+                 VALUES ('note_n', 'folder_f', 'A offline title', '', 0, 't', 't', NULL,
+                         NULL, 'uid_vault', 'etag_old', 1, 2, 0, 'markdown')",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+        // 1. Vault tombstone from B's re-home: detach, don't delete.
+        db.with_conn(|c| apply_remote_delete(c, "notes", "uid_vault"))
+            .unwrap();
+        let survived: i64 = db
+            .with_conn(|c| {
+                Ok(
+                    c.query_row("SELECT COUNT(*) FROM notes WHERE id = 'note_n'", [], |r| {
+                        r.get(0)
+                    })?,
+                )
+            })
+            .unwrap();
+        assert_eq!(survived, 1, "A's dirty note survives the re-home tombstone");
+
+        // 2. Scope copy of the same note arrives (B's content, new uid, scope).
+        let remote = remote_note("note_n", Some("folder_f"), None);
+        apply_note_payload(&db, &remote, "uid_scope", "etag_scope", Some("scope_1")).unwrap();
+
+        let (scope, uid, dirty, title): (Option<String>, Option<String>, i64, String) = db
+            .with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT share_scope_id, etebase_uid, dirty, title
+                     FROM notes WHERE id = 'note_n'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(
+            scope.as_deref(),
+            Some("scope_1"),
+            "the note is re-homed into the scope"
+        );
+        assert_eq!(
+            uid.as_deref(),
+            Some("uid_scope"),
+            "the note now carries the scope uid"
+        );
+        assert_eq!(
+            dirty, 1,
+            "A's unpushed edit stays dirty to push into the scope"
+        );
+        assert_eq!(
+            title, "A offline title",
+            "A's offline edit is preserved over B's copy"
+        );
     }
 }
