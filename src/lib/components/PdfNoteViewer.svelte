@@ -352,7 +352,9 @@
       collabConfigured,
       collabOnline,
       savingState: error ? 'error' : loading ? 'idle' : savingState,
-      isTrashed
+      isTrashed,
+      // View-only share scope isn't enforced in the PDF viewer yet.
+      readOnly: false
     });
   });
 

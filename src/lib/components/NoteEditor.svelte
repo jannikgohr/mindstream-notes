@@ -17,6 +17,7 @@
     type VersionAction
   } from '$lib/api';
   import { tree } from '$lib/stores/tree.svelte';
+  import { collectionScopeIsReadOnly } from '$lib/stores/note-source.svelte';
   import {
     bumpNoteHistory,
     registerNoteHistory
@@ -55,6 +56,7 @@
   import EditorToolbar from './editor-toolbar/EditorToolbar.svelte';
   import MobileEditorToolbar from './editor-toolbar/MobileEditorToolbar.svelte';
   import TrashBanner from './note-editor/TrashBanner.svelte';
+  import ViewOnlyBanner from './note-editor/ViewOnlyBanner.svelte';
   import WikilinkMenu from './note-editor/WikilinkMenu.svelte';
 
   interface Props {
@@ -233,6 +235,26 @@
     if (n.trashed === true) return true;
     return ancestorIsTrash(n.parent_collection_id);
   });
+
+  // The note sits in a folder shared *with* this user at read-only access.
+  // Like `isTrashed`, this locks the editor — but for a different reason and
+  // with a different (neutral) banner. Gated on tree.ready to avoid flashing
+  // the banner before the initial tree hydration resolves the share role.
+  const isReadOnlyScope = $derived.by(() => {
+    if (!tree.ready) return false;
+    const n = tree.notesById[noteId];
+    if (!n) return false;
+    return collectionScopeIsReadOnly(
+      n.parent_collection_id,
+      tree.collectionsById
+    );
+  });
+
+  // Anything that should disable editing. Trashed keeps its own banner and save
+  // semantics; the read-only scope reuses the same input lock (setReadonly,
+  // hidden toolbar, no replace) so a viewer can't type into content they can't
+  // push.
+  const isReadOnly = $derived(isTrashed || isReadOnlyScope);
 
   onMount(async () => {
     if (!host) return;
@@ -720,13 +742,14 @@
     crepeReady = false;
   });
 
-  // Push the trashed state into Crepe whenever either side changes.
+  // Push the read-only state into Crepe whenever either side changes.
   // Re-runs when crepeReady flips (handles the initial-state case for a
-  // note that was already trashed when the tab opened) and when isTrashed
-  // changes (remote pull, or local restore from another window).
+  // note that was already trashed / in a view-only share when the tab
+  // opened) and when the lock changes (remote pull, local restore from
+  // another window, or a share's access level changing under us).
   $effect(() => {
     if (!crepeReady || !crepe) return;
-    crepe.setReadonly(isTrashed);
+    crepe.setReadonly(isReadOnly);
   });
 
   /**
@@ -737,7 +760,7 @@
    * across devices like any other edit. Used by the History sidebar's Restore.
    */
   function applyMarkdownTemplate(markdown: string) {
-    if (!crepe || isTrashed) return;
+    if (!crepe || isReadOnly) return;
     try {
       crepe.editor.action((ctx) => {
         ctx.get(collabServiceCtx).applyTemplate(markdown, () => true);
@@ -785,7 +808,7 @@
    * markdown on every keystroke.
    */
   function scheduleHistoryCapture() {
-    if (isTrashed) return;
+    if (isReadOnly) return;
     historyDirty = true;
 
     const now = Date.now();
@@ -834,9 +857,9 @@
   function scheduleSave() {
     // setReadonly(true) already prevents user input, but yDoc 'update' can
     // still fire from programmatic mutations or remote edits arriving on
-    // a note that just got trashed elsewhere. Drop those silently rather
-    // than persisting an edit to a trashed note.
-    if (isTrashed) return;
+    // a note that just got trashed (or shared read-only) elsewhere. Drop
+    // those silently rather than persisting an edit we can't push anyway.
+    if (isReadOnly) return;
     // Honour the user's auto-save toggle. We still cancel any in-flight
     // debounce so a setting flip mid-debounce doesn't fire one last save
     // after the user turned it off. yrs_state continues to mutate locally
@@ -954,26 +977,27 @@
   }
 
   function doReplaceCurrent() {
-    if (isTrashed) return;
+    if (isReadOnly) return;
     searchBridge.replaceCurrent(replaceValue);
   }
 
   function doReplaceAll() {
-    if (isTrashed) return;
+    if (isReadOnly) return;
     searchBridge.replaceAll(replaceValue);
   }
 
   // Desktop toolbar visibility is a per-device toggle (default on). The
   // settings.values read makes this $derived re-evaluate when the user flips
-  // the toggle live. Trashed notes hide the toolbar too — it'd be misleading
-  // to show formatting buttons over a read-only banner.
+  // the toggle live. Read-only notes (trashed or view-only share) hide the
+  // toolbar too — it'd be misleading to show formatting buttons over a
+  // read-only banner.
   const desktopToolbarEnabled = $derived(
     (settings.values['editor.desktopToolbar'] ?? true) as boolean
   );
   const showDesktopToolbar = $derived(
-    !mobile && crepeReady && !isTrashed && desktopToolbarEnabled
+    !mobile && crepeReady && !isReadOnly && desktopToolbarEnabled
   );
-  const showMobileToolbar = $derived(mobile && crepeReady && !isTrashed);
+  const showMobileToolbar = $derived(mobile && crepeReady && !isReadOnly);
 
   // Mirror our reactive status into the global per-note store so the
   // dockview right-header (NoteStatusIcons.svelte) can render the
@@ -985,7 +1009,8 @@
       collabConfigured,
       collabOnline,
       savingState,
-      isTrashed
+      isTrashed,
+      readOnly: isReadOnlyScope
     });
   });
 </script>
@@ -1001,12 +1026,14 @@
   {/if}
   {#if isTrashed}
     <TrashBanner />
+  {:else if isReadOnlyScope}
+    <ViewOnlyBanner />
   {/if}
   {#if searchOpen}
     <!--
-      Replace is gated on !isTrashed: a read-only (trashed) note can still
-      be searched, but the bar then collapses to find-only because the
-      replace callbacks are omitted.
+      Replace is gated on !isReadOnly: a read-only note (trashed or a
+      view-only share) can still be searched, but the bar then collapses to
+      find-only because the replace callbacks are omitted.
     -->
     <FindBar
       bind:this={searchBar}
@@ -1025,12 +1052,12 @@
       onToggleMatchCase={toggleMatchCase}
       onToggleWholeWord={toggleWholeWord}
       onToggleRegex={toggleRegex}
-      replaceValue={isTrashed ? undefined : replaceValue}
-      onReplaceInput={isTrashed ? undefined : handleReplaceInput}
-      onReplace={isTrashed ? undefined : doReplaceCurrent}
-      onReplaceAll={isTrashed ? undefined : doReplaceAll}
+      replaceValue={isReadOnly ? undefined : replaceValue}
+      onReplaceInput={isReadOnly ? undefined : handleReplaceInput}
+      onReplace={isReadOnly ? undefined : doReplaceCurrent}
+      onReplaceAll={isReadOnly ? undefined : doReplaceAll}
       preserveCase={searchOptions.preserveCase}
-      onTogglePreserveCase={isTrashed ? undefined : togglePreserveCase}
+      onTogglePreserveCase={isReadOnly ? undefined : togglePreserveCase}
     />
   {/if}
   <!--
