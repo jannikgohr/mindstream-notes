@@ -349,6 +349,65 @@ sender/access fallback, `build_share_manifest`, migration 18) are unit-tested in
   create/move is a known follow-up); a read-only recipient's local edit looping
   as a failed scope push.
 
+### 4.8 Offline note edit survives a re-home (P1)
+
+- **Why e2e:** the non-destructive re-home is the reason the tombstone path
+  _detaches_ a dirty row instead of deleting it, and the sync runs in
+  pull → scope → push phases so the detached row is reclaimed by stable `id`
+  before the vault push could resurrect it (`apply_remote_delete` + the phased
+  `run()` in `sync/mod.rs`). The `apply_note_payload` merge and the detach are
+  unit-tested in isolation, but the full "vault tombstone then scope pull in one
+  networked sync, no orphan left behind" round-trip needs two real devices.
+- **Steps:** the owner signs in on device A and device B, both holding folder F.
+  Take A **offline** and edit a note in F (leave it unpushed, `dirty=1`). On B,
+  **Share folder…** F with a second account (this re-homes F into a scope). Bring
+  A back **online** and let it sync.
+- **Proves:** A's offline edit is **merged** into the scope copy (CRDT body
+  merge), not silently dropped; F ends up in the scope on A; and **no orphan
+  vault copy** of the note is left on the server (which would flip-flop the note
+  between vault and scope on every device).
+- **Watch for:** a duplicate note appearing on any device (orphan resurrection —
+  the exact failure the phase ordering prevents); the edit surviving on A but
+  lost on the second account (merge didn't reach the scope push); the note
+  briefly showing with no server identity (`etebase_uid = NULL`) if A is killed
+  mid-sync between the detach and the push — harmless, the next sync re-homes it.
+
+### 4.9 Offline folder rename survives a re-home (P2)
+
+- **Why e2e:** folder metadata is last-write-wins, not a CRDT, so
+  `apply_folder_payload` preserves local name/parent/position when the row is
+  dirty (mirroring the note path) and returns `None` so `repair_folder_parents`
+  can't reattach it from the remote payload. Unit-tested for the single-row
+  decision; the cross-device ordering is not.
+- **Steps:** owner on A + B, both holding folder F. A **offline**, rename F (or a
+  subfolder of F). B **shares** F. A back **online**, sync.
+- **Proves:** A's offline rename is kept (the folder is re-homed into the scope
+  without reverting to the remote name), stays dirty, and pushes the rename into
+  the scope.
+- **Watch for:** the rename reverting to the pre-share name (LWW clobber — the
+  regression this guards); a folder **moved to root offline** during the same
+  window getting reattached under its old parent by the repair pass (the
+  `keep_local_meta → return None` guard is meant to prevent this — worth an
+  explicit case).
+
+### 4.10 Edit-wins-over-delete conflict (P2)
+
+- **Why e2e:** the detach-on-dirty rule also changes the genuine
+  delete-vs-offline-edit conflict from "delete wins" to "edit wins": a locally
+  edited row resurrects rather than being destroyed by a remote tombstone. This
+  is a deliberate cross-device behaviour, only observable with two peers.
+- **Steps:** owner on A + B, same note N (not shared — plain vault). A
+  **offline**, edit N (unpushed). On B, **delete** N and let it sync. Bring A
+  **online**.
+- **Proves:** N is **resurrected** with A's edit and reappears on B after B's
+  next pull (edit wins, no silent loss). A clean (unedited) note deleted on B
+  stays deleted on A (the control case).
+- **Watch for:** the resurrection failing to propagate back to B (A re-created it
+  with a new uid; B must pull it as a new note); **signatures** are intentionally
+  _not_ covered by edit-wins — they still hard-delete on a tombstone
+  (`apply_signature`), so don't expect a deleted-but-edited signature to
+  resurrect.
+
 ---
 
 ## Implementation notes
