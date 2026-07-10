@@ -290,13 +290,20 @@ sender/access fallback, `build_share_manifest`, migration 18) are unit-tested in
 
 ### 4.3 Accept a share bundle (P1)
 
-- **Why e2e:** `accept_share_bundle` accepts every referenced part invite and
-  projects a local shared root anchored on the folders collection.
-- **Steps:** account B accepts the 4.2 bundle → assert the notification clears,
-  the shared root folder appears in B's tree named after the manifest, and a
-  rescan does not resurrect the bundle.
-- **Proves:** bundled accept + `record_accepted_share` local projection + the
-  scan reconciliation that drops accepted bundles.
+- **Why e2e:** `accept_share_bundle` accepts every referenced part invite but
+  creates **no** local placeholder — the shared root only materialises on the
+  next scoped sync, which pulls the real folder and (via `project_shared_root`)
+  stamps it shared-with-me so it lands under "shared with me" rather than Home.
+- **Steps:** account B accepts the 4.2 bundle → assert the notification clears →
+  after a sync, assert the shared root folder appears **in B's shared view**
+  (not Home) named after the manifest, and a rescan does not resurrect the
+  bundle.
+- **Proves:** bundled accept + the scope-pull projection that marks the root
+  shared (regression guard for the root landing in Home) + the scan
+  reconciliation that drops accepted bundles.
+- **Watch for:** the root showing in Home with no `shared_role`/`share_id` (the
+  projection didn't run); a read-only recipient whose root or contents stay
+  empty after the first sync.
 
 ### 4.4 Decline a share bundle (P2)
 
