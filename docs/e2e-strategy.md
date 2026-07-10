@@ -68,7 +68,7 @@ test harness lands:
 2. **Health gating.** Block tests until the stack is ready: nginx `/healthz`,
    a TCP connect to yjs-relay `:1234`, the excalidraw-room socket.io handshake,
    and Etebase accepting connections (the compose healthchecks already encode
-   each probe — reuse them). **Landed:** `e2e-backend/backend-health.spec.ts`
+   each probe — reuse them). **Landed:** `e2e/backend/backend-health.spec.ts`
    probes all four through the single nginx edge (run with
    `MINDSTREAM_E2E_BACKEND=1 pnpm test:e2e:backend`; see §6/§7).
 3. **Isolation & teardown.** A disposable Postgres volume per run (or per-run
@@ -81,7 +81,7 @@ test harness lands:
 
 ## 3. The real-app harness (T3/T4)
 
-> Scaffolded in [`e2e-app/`](../e2e-app/) — wdio + tauri-driver config, the
+> Scaffolded in [`e2e/app/`](../e2e/app/) — wdio + tauri-driver config, the
 > gating/seam helpers, and faithful spec skeletons. The rest of this section is
 > what that harness implements (and what still needs finishing).
 
@@ -180,12 +180,12 @@ assertion is the regression guard for the _history-is-per-device_ limitation.
 
 ## 6. Suggested CI shape
 
-| Job          | Tier | When               | Needs                                    |
-| ------------ | ---- | ------------------ | ---------------------------------------- |
-| `unit`       | T1   | every push         | nothing                                  |
-| `e2e-web`    | T2   | every push         | Node only                                |
-| `e2e-app`    | T3   | every push (or PR) | packaged binary + `tauri-driver` + xvfb  |
-| `e2e-collab` | T4   | nightly / labelled | the above **+** `backend/` compose stack |
+| Job           | Tier | When               | Needs                                    |
+| ------------- | ---- | ------------------ | ---------------------------------------- |
+| `unit`        | T1   | every push         | nothing                                  |
+| `e2e-browser` | T2   | every push         | Node only                                |
+| `e2e-app`     | T3   | every push (or PR) | packaged binary + `tauri-driver` + xvfb  |
+| `e2e-collab`  | T4   | nightly / labelled | the above **+** `backend/` compose stack |
 
 Keep T4 off the every-push path: it's the slowest and the only tier that needs
 Docker and a network peer. Tagging it (`MINDSTREAM_E2E_BACKEND`) lets the same
@@ -197,15 +197,15 @@ specs run locally on demand and skip when the stack isn't up.
 
 Tracked here so the strategy isn't mistaken for working infrastructure:
 
-- [x] **Health gating landed** (§2.2): `e2e-backend/backend-health.spec.ts` +
-      `playwright.backend.config.ts`, run via `pnpm test:e2e:backend`, gated on
+- [x] **Health gating landed** (§2.2): `e2e/backend/backend-health.spec.ts` +
+      `e2e/backend/playwright.config.ts`, run via `pnpm test:e2e:backend`, gated on
       `MINDSTREAM_E2E_BACKEND`. This is the only T4-adjacent piece runnable today.
-- [~] **`tauri-driver` harness scaffolded** in [`e2e-app/`](../e2e-app/) (wdio
+- [~] **`tauri-driver` harness scaffolded** in [`e2e/app/`](../e2e/app/) (wdio
   config, capability gating, the `MINDSTREAM_PROFILE_DIR` restart seam, and
   faithful T3/T4 spec skeletons), run via `pnpm test:e2e:app`. Not yet
   validated against a real binary, and still needs: two-client multiremote
   (T4), a native-dialog stub, and `trashed_at` backdating — see
-  [`e2e-app/README.md`](../e2e-app/README.md).
+  [`e2e/app/README.md`](../e2e/app/README.md).
 - [ ] No automated test-account provisioning against Etebase (§2.1).
 - [ ] No test hook to inject the server URL / a pre-authenticated session (§3).
 - [x] **`peerCount` bridge method landed** for the awareness-based editors

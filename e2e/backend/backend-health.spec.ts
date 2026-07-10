@@ -17,7 +17,7 @@ import { expect, test } from '@playwright/test';
  *   /            → etebase           (encrypted storage + auth)
  *
  * Gated behind MINDSTREAM_E2E_BACKEND so `pnpm test:e2e:backend` skips cleanly
- * when the stack isn't running. See playwright.backend.config.ts to run it.
+ * when the stack isn't running. See e2e/backend/playwright.config.ts to run it.
  */
 
 const ENABLED = !!process.env.MINDSTREAM_E2E_BACKEND;

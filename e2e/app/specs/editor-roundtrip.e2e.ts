@@ -1,7 +1,7 @@
 /**
  * T3 — flow 1.1: create → edit → reopen a markdown note against the real
  * editor↔CRDT↔SQLite stack (the browser-fallback slice is
- * e2e/editor-roundtrip.spec.ts). Adds the restart that only the real app can
+ * e2e/browser/editor-roundtrip.spec.ts). Adds the restart that only the real app can
  * prove: content written through save_note survives a quit/relaunch.
  */
 

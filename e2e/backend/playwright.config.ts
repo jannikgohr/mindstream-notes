@@ -4,11 +4,11 @@ import { defineConfig } from '@playwright/test';
  * Local-only Playwright config for tests that probe a **real** mindstream-server
  * backend (the `backend/` Docker Compose stack), not the browser-fallback SPA.
  *
- * It is deliberately separate from playwright.config.ts:
+ * It is deliberately separate from the browser-fallback Playwright config:
  *   - it has **no** `webServer` — these tests never build or serve the SPA,
  *     they talk to the running stack over HTTP/WebSocket;
- *   - its `testDir` is `e2e-backend/`, so the default `pnpm test:e2e` run and
- *     CI never pick these specs up.
+ *   - it lives in `e2e/backend/`, so the default `pnpm test:e2e` run and CI
+ *     never pick these specs up.
  *
  * The suite is gated behind `MINDSTREAM_E2E_BACKEND` (set inside the specs), so
  * `pnpm test:e2e:backend` skips cleanly when the stack isn't up. To run it:
@@ -21,7 +21,7 @@ import { defineConfig } from '@playwright/test';
  */
 
 export default defineConfig({
-  testDir: './e2e-backend',
+  testDir: './',
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: 0,

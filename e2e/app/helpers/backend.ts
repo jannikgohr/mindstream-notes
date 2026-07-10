@@ -3,7 +3,7 @@
  * their `before` hook so they fail fast (with a clear message) if the stack
  * isn't actually up, rather than timing out mid-test.
  *
- * This is the runtime cousin of e2e-backend/backend-health.spec.ts (which is
+ * This is the runtime cousin of e2e/backend/backend-health.spec.ts (which is
  * the standalone, Playwright-driven health probe). Here we only need a quick
  * "is the edge answering?" check before driving two app clients against it.
  */

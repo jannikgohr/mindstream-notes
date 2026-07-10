@@ -7,6 +7,7 @@ const patterns = [
   'src/**/*.{js,ts,svelte,json,html,css,md}',
   '*.{js,ts,mjs,cjs,json,md,html,css}',
   'docs/**/*.{js,ts,mjs,cjs,json,md,html,css}',
+  'e2e/**/*.{js,ts,mjs,cjs,json,md,html,css}',
   'backend/**/*.{js,ts,mjs,cjs,json,md,html,css}'
 ];
 

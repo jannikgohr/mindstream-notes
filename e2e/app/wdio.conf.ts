@@ -4,7 +4,7 @@
  * docs/e2e-strategy.md §3; it is intentionally separate from the Playwright
  * browser-fallback suite and never runs in the default `pnpm test:e2e`.
  *
- * Requires the opt-in toolchain (see e2e-app/README.md):
+ * Requires the opt-in toolchain (see e2e/app/README.md):
  *   - cargo: `tauri-driver` (and a platform webdriver: msedgedriver on Windows,
  *     WebKitWebDriver on Linux)
  *   - npm:   @wdio/cli @wdio/local-runner @wdio/mocha-framework @wdio/spec-reporter
@@ -18,7 +18,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const repoRoot = resolve(here, '..');
+const repoRoot = resolve(here, '../..');
 
 // The cargo-built (not bundled/installer) binary. Cargo names it after the
 // package, `mindstream-notes`; on Windows it carries the .exe suffix.

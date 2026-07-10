@@ -1,17 +1,15 @@
 # Real-app e2e (T3) + collaboration (T4)
 
 This directory drives the **packaged Tauri binary** over WebDriver
-(`tauri-driver`) — the T3/T4 tiers in [../docs/e2e-strategy.md](../docs/e2e-strategy.md).
-It is separate from the Playwright browser-fallback suite in `../e2e/` and
+(`tauri-driver`) — the T3/T4 tiers in
+[e2e-strategy.md](../../docs/e2e-strategy.md).
+It is separate from the Playwright browser-fallback suite in `../browser/` and
 **never runs in the default `pnpm test:e2e` or in CI**.
 
-> **Status: scaffold.** The harness, config, and faithful spec skeletons are in
-> place and gated to skip cleanly, but they have **not been run against a real
-> binary** — they require the opt-in toolchain below plus a built app (and, for
-> T4, the backend stack). Treat the spec bodies as the documented assertions to
-> validate once the environment exists; several carry `TODO`s where an
-> environment-specific seam (native-dialog stub, multiremote two-client setup,
-> `trashed_at` backdating) still has to be wired.
+> **Status:** The T3 harness runs against the packaged app when the opt-in
+> toolchain below is installed. T4 and native-dialog flows still skip cleanly
+> until their environment-specific seams are wired: multiremote two-client
+> setup, a native-dialog stub, and `trashed_at` backdating.
 
 ## What's here
 
@@ -31,7 +29,7 @@ isolation/restart seam, and the accessible-name selectors (the same names the
 Playwright T2 specs use — the identical SvelteKit UI renders inside the
 WebView). `helpers/backend.ts` is the T4 backend-readiness gate.
 
-## Toolchain (opt-in — intentionally not in the lockfile)
+## Toolchain
 
 ```sh
 # Rust: the WebDriver bridge + a platform webdriver
@@ -43,9 +41,7 @@ cargo install tauri-driver
 # Verify Linux WebKitWebDriver is installed:
 #   which WebKitWebDriver
 
-# npm: the wdio runner (add as devDependencies when you wire this into CI)
-pnpm add -D @wdio/cli @wdio/local-runner @wdio/mocha-framework \
-            @wdio/spec-reporter @wdio/globals expect-webdriverio tsx
+# npm: the wdio runner dependencies are installed through pnpm install.
 ```
 
 ## Run
@@ -56,7 +52,7 @@ pnpm add -D @wdio/cli @wdio/local-runner @wdio/mocha-framework \
 MINDSTREAM_E2E_APP=1 pnpm test:e2e:app
 
 # T4 (collaboration) also needs the backend stack up:
-#   cd ../backend && docker compose up -d --build
+#   cd backend && docker compose up -d --build
 MINDSTREAM_E2E_APP=1 MINDSTREAM_E2E_BACKEND=1 pnpm test:e2e:app
 ```
 
