@@ -1428,7 +1428,7 @@ fn local_share_state(conn: &Connection, collection_id: &str) -> AppResult<Collec
     .ok_or_else(|| AppError::NotFound(format!("collection {collection_id}")))
 }
 
-fn share_access_level_to_db(value: ShareAccessLevel) -> &'static str {
+pub(crate) fn share_access_level_to_db(value: ShareAccessLevel) -> &'static str {
     match value {
         ShareAccessLevel::ReadOnly => "read_only",
         ShareAccessLevel::ReadWrite => "read_write",

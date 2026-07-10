@@ -17,10 +17,14 @@
 
 use etebase::managers::CollectionManager;
 use etebase::{Collection, CollectionAccessLevel, FetchOptions};
+use rusqlite::params;
 
 use crate::db::Db;
 use crate::error::{AppError, AppResult};
-use crate::sharing::{ShareManifest, ShareScopePart, COLLECTION_TYPE_SHARE_MANIFEST};
+use crate::sharing::{
+    share_access_level_to_db, ShareAccessLevel, ShareManifest, ShareScopePart,
+    COLLECTION_TYPE_SHARE_MANIFEST,
+};
 
 use super::{
     apply_asset, apply_folder, apply_note, is_corrupt_remote_content, load_stoken, push_assets,
@@ -112,6 +116,13 @@ fn sync_one_scope(
         .item_manager(&folders_col)
         .map_err(|e| AppError::InvalidArg(format!("item_manager(scope folders): {e}")))?;
     pull_scope_folders(db, &folders_im, scope, &mut delta.report)?;
+    // Mark the scope's root folder as shared-with-me so it lands in the "shared
+    // with me" view instead of Home. The folder itself arrives via the pull
+    // above carrying only placement metadata (name/parent/position) — the share
+    // membership (owner, role, share_id) lives in the manifest, so we project it
+    // onto the local row here. Guarded to skip the owner's own row (shared_by_me
+    // = 1), whose stamp is authoritative.
+    project_shared_root(db, manifest, folders_col.access_level(), folders_uid)?;
     if writable {
         push_folders(db, &folders_im, &mut delta.report, Some(scope))?;
     }
@@ -145,6 +156,39 @@ fn sync_one_scope(
     }
 
     Ok(())
+}
+
+/// Project the manifest's share membership onto the local root folder row so a
+/// recipient's shared folder shows up under "shared with me" (the frontend keys
+/// that off `shared_role` / `share_id`) rather than in their private Home tree.
+///
+/// The scope pull only carries a folder's placement metadata, never the share
+/// membership, so without this a freshly pulled shared root has no `shared_role`
+/// and is indistinguishable from a personal folder. Idempotent, and the
+/// `shared_by_me = 0` guard leaves the *owner's* own root (which carries the
+/// authoritative `shared_by_me = 1` stamp) untouched when the owner syncs their
+/// own scope.
+fn project_shared_root(
+    db: &Db,
+    manifest: &ShareManifest,
+    access_level: CollectionAccessLevel,
+    folders_uid: &str,
+) -> AppResult<()> {
+    let role_db = share_access_level_to_db(ShareAccessLevel::from(access_level));
+    db.with_conn(|conn| {
+        conn.execute(
+            "UPDATE collections
+                SET shared_owner = ?1, shared_role = ?2, share_id = ?3
+              WHERE id = ?4 AND COALESCE(shared_by_me, 0) = 0",
+            params![
+                manifest.owner_username,
+                role_db,
+                folders_uid,
+                manifest.root_folder_id,
+            ],
+        )?;
+        Ok(())
+    })
 }
 
 fn pull_scope_folders(
@@ -264,4 +308,104 @@ fn pull_scope_assets(
         save_stoken(db, &stoken_key, new_stoken.as_deref())?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::open_memory_for_tests;
+
+    fn manifest(root_folder_id: &str, owner: Option<&str>) -> ShareManifest {
+        ShareManifest {
+            schema: 1,
+            share_scope_id: "scope_1".into(),
+            name: "Shared".into(),
+            root_folder_id: root_folder_id.into(),
+            owner_username: owner.map(str::to_string),
+            collections: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn project_shared_root_marks_recipient_root_as_shared() {
+        // A folder pulled from the scope carries only placement metadata; the
+        // projection stamps the manifest's share membership so it lands in
+        // "shared with me" rather than Home.
+        let db = open_memory_for_tests();
+        db.with_conn(|c| {
+            c.execute(
+                "INSERT INTO collections(id, parent_collection_id, name, position,
+                                         created, modified, dirty, share_scope_id)
+                 VALUES ('folder_root', NULL, 'Shared', 0, 't', 't', 0, 'scope_1')",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+        project_shared_root(
+            &db,
+            &manifest("folder_root", Some("alice")),
+            CollectionAccessLevel::ReadOnly,
+            "folders_uid",
+        )
+        .unwrap();
+
+        let (owner, role, share_id, by_me): (Option<String>, Option<String>, Option<String>, i64) =
+            db.with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT shared_owner, shared_role, share_id, shared_by_me
+                       FROM collections WHERE id = 'folder_root'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(owner.as_deref(), Some("alice"));
+        assert_eq!(role.as_deref(), Some("read_only"));
+        assert_eq!(share_id.as_deref(), Some("folders_uid"));
+        assert_eq!(by_me, 0);
+    }
+
+    #[test]
+    fn project_shared_root_leaves_owner_row_untouched() {
+        // The owner runs scope sync on their own scope too. Their root already
+        // carries the authoritative shared_by_me=1 stamp and must not be
+        // downgraded to a shared-with-me projection.
+        let db = open_memory_for_tests();
+        db.with_conn(|c| {
+            c.execute(
+                "INSERT INTO collections(id, parent_collection_id, name, position,
+                                         created, modified, dirty, share_scope_id,
+                                         shared_by_me, shared_role, shared_owner)
+                 VALUES ('folder_root', NULL, 'Shared', 0, 't', 't', 0, 'scope_1',
+                         1, 'admin', 'alice')",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+        project_shared_root(
+            &db,
+            &manifest("folder_root", Some("bob")),
+            CollectionAccessLevel::ReadOnly,
+            "folders_uid",
+        )
+        .unwrap();
+
+        let (owner, role, by_me): (Option<String>, Option<String>, i64) = db
+            .with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT shared_owner, shared_role, shared_by_me
+                       FROM collections WHERE id = 'folder_root'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(by_me, 1, "owner's shared_by_me stamp is preserved");
+        assert_eq!(owner.as_deref(), Some("alice"), "owner metadata untouched");
+        assert_eq!(role.as_deref(), Some("admin"));
+    }
 }
