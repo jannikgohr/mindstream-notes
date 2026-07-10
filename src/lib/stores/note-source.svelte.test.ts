@@ -8,6 +8,7 @@ import {
   collectionIsSharedWithMe,
   collectionIsUnder,
   collectionIsUnderTrash,
+  collectionScopeIsReadOnly,
   noteIsUnderShared,
   noteIsUnderTrash,
   nodesForDesktopSource
@@ -198,6 +199,44 @@ describe('shared detection', () => {
     const cols = byId([root]);
     expect(noteIsUnderShared(note('n', 'root'), cols)).toBe(true);
     expect(noteIsUnderShared(note('n', null), cols)).toBe(false);
+  });
+});
+
+describe('collectionScopeIsReadOnly', () => {
+  it('is true for a note under a read-only shared root', () => {
+    const root = collection('root', null, { shared_role: 'read_only' });
+    const child = collection('child', 'root');
+    const cols = byId([root, child]);
+    expect(collectionScopeIsReadOnly('child', cols)).toBe(true);
+    expect(collectionScopeIsReadOnly('root', cols)).toBe(true);
+  });
+
+  it('is false when the nearest shared root grants write access', () => {
+    const root = collection('root', null, { shared_role: 'read_write' });
+    const child = collection('child', 'root');
+    const cols = byId([root, child]);
+    expect(collectionScopeIsReadOnly('child', cols)).toBe(false);
+  });
+
+  it('ignores a folder shared by me even if it is read_only downstream', () => {
+    const mine = collection('mine', null, {
+      share_id: 'remote-coll',
+      shared_by_me: true,
+      shared_role: 'read_only'
+    });
+    const cols = byId([mine]);
+    expect(collectionScopeIsReadOnly('mine', cols)).toBe(false);
+  });
+
+  it('is false for a personal note and for null', () => {
+    const cols = byId([collection('personal')]);
+    expect(collectionScopeIsReadOnly('personal', cols)).toBe(false);
+    expect(collectionScopeIsReadOnly(null, cols)).toBe(false);
+  });
+
+  it('terminates on a cycle instead of looping forever', () => {
+    const cyclic = byId([collection('a', 'b'), collection('b', 'a')]);
+    expect(collectionScopeIsReadOnly('a', cyclic)).toBe(false);
   });
 });
 

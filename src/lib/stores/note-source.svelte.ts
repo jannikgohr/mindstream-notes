@@ -92,6 +92,33 @@ export function collectionIsSharedOrUnderShared(
   return false;
 }
 
+/**
+ * True when the folder at `collectionId` sits inside (or is) a folder shared
+ * *with* the current user at read-only access. The share role is stamped only
+ * on the shared root — descendant folders pulled into the scope carry just
+ * placement metadata — so we walk ancestors to the first shared-with-me folder
+ * and read its `shared_role`. Editors use this to lock input in a view-only
+ * scope, mirroring the trash lock. A shared-by-me folder is never read-only for
+ * its owner (`collectionIsSharedWithMe` already excludes those).
+ */
+export function collectionScopeIsReadOnly(
+  collectionId: string | null,
+  collectionsById: Record<string, Collection>
+): boolean {
+  let current = collectionId;
+  const seen = new Set<string>();
+  while (current && !seen.has(current)) {
+    seen.add(current);
+    const collection = collectionsById[current];
+    if (!collection) return false;
+    if (collectionIsSharedWithMe(collection)) {
+      return collection.shared_role === 'read_only';
+    }
+    current = collection.parent_collection_id;
+  }
+  return false;
+}
+
 export function noteIsUnderShared(
   note: NoteSummary,
   collectionsById: Record<string, Collection>
