@@ -72,7 +72,7 @@ fn compress(md: &str) -> AppResult<Vec<u8>> {
     Ok(enc.finish()?)
 }
 
-fn decompress(bytes: &[u8]) -> AppResult<String> {
+pub(crate) fn decompress_snapshot(bytes: &[u8]) -> AppResult<String> {
     let mut out = String::new();
     DeflateDecoder::new(bytes).read_to_string(&mut out)?;
     Ok(out)
@@ -306,7 +306,7 @@ pub fn capture(
 ) -> AppResult<Option<VersionSummary>> {
     let prev_md = latest_version_blob(conn, note_id)?
         .as_deref()
-        .map(decompress)
+        .map(decompress_snapshot)
         .transpose()?;
     let Some(prepared) = prepare_version(
         prev_md,
@@ -336,7 +336,7 @@ fn capture_off_lock(
     let prev_md = db
         .with_conn(|c| latest_version_blob(c, note_id))?
         .as_deref()
-        .map(decompress)
+        .map(decompress_snapshot)
         .transpose()?;
     let Some(prepared) = prepare_version(
         prev_md,
@@ -393,7 +393,7 @@ pub fn load(conn: &Connection, version_id: &str) -> AppResult<Version> {
     match row {
         Some((summary, blob)) => Ok(Version {
             summary,
-            body: decompress(&blob)?,
+            body: decompress_snapshot(&blob)?,
         }),
         None => Err(AppError::NotFound(format!("note version {version_id}"))),
     }
@@ -631,6 +631,27 @@ mod tests {
             parsed["data"],
             base64::Engine::encode(&BASE64_STANDARD, [1u8, 2, 3])
         );
+    }
+
+    #[test]
+    fn current_markdown_snapshot_keeps_body_verbatim() {
+        let db = open_memory_for_tests();
+        let note = make_note(&db);
+
+        let (kind, snapshot) = db
+            .with_conn(|c| current_note_snapshot(c, &note))
+            .expect("snapshot");
+
+        assert_eq!(kind, "markdown");
+        assert_eq!(snapshot, "hello");
+    }
+
+    #[test]
+    fn missing_note_snapshot_reports_not_found() {
+        let db = open_memory_for_tests();
+
+        let res = db.with_conn(|c| read_note_raw(c, "missing-note"));
+        assert!(matches!(res, Err(AppError::NotFound(_))));
     }
 
     #[test]

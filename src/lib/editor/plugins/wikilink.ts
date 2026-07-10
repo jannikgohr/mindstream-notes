@@ -518,7 +518,7 @@ function hideNativeNoteLinkTooltipsSoon(): void {
  */
 const WIKILINK_RE = /\[\[([^[\]\n]+?)]]/g;
 
-interface WikilinkPluginOptions {
+export interface WikilinkPluginOptions {
   openOnClick: () => boolean;
 }
 
@@ -886,7 +886,66 @@ function toggleLinkBoundaryEditing(
   return { pos, mark: enterMark };
 }
 
-function wikilinkDecorationPlugin(
+// Arrow movement that stays within the link text: when the caret steps
+// onto the display name's first or last position *from inside*, keep
+// link editing active by pinning the boundary it lands on. Without
+// this, the default caret move clears the stored marks, the boundary
+// reads as "outside", and the next character falls out of the link —
+// which felt like being kicked out of editing mid-word.
+function arrowWithinLinkText(
+  view: EditorView,
+  event: KeyboardEvent,
+  activeEdit: LinkBoundaryEdit | null
+): LinkBoundaryEdit | null {
+  if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return null;
+  if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) {
+    return null;
+  }
+  const { state } = view;
+  const { selection } = state;
+  if (!(selection instanceof TextSelection) || !selection.empty) return null;
+  const pos = selection.from;
+  const forward = event.key === 'ArrowRight';
+
+  // The character the caret is about to step over must be link text…
+  const stepOver = textNodeLinkMarkAtBoundary(
+    state,
+    pos,
+    forward ? 'after' : 'before'
+  );
+  if (!stepOver) return null;
+  // …and the caret must already be inside the link: either the other
+  // neighbour carries the same mark, or this position is an active
+  // boundary edit / stored-mark entry (covers one-character links).
+  const behind = textNodeLinkMarkAtBoundary(
+    state,
+    pos,
+    forward ? 'before' : 'after'
+  );
+  const inside =
+    behind?.eq(stepOver) ||
+    boundaryEditAt(activeEdit, pos) ||
+    !!exactStoredLinkMark(state, stepOver);
+  if (!inside) return null;
+
+  // Only the landing position at the display name's edge needs a pin —
+  // strictly-inside positions keep the mark through ProseMirror's
+  // default marks() resolution.
+  const target = forward ? pos + 1 : pos - 1;
+  const boundaryMark = forward
+    ? trailingBoundaryLinkMark(state, target)
+    : leadingBoundaryLinkMark(state, target);
+  if (!boundaryMark?.eq(stepOver)) return null;
+
+  const tr = state.tr.setSelection(TextSelection.create(state.doc, target));
+  tr.setStoredMarks(marksWithLink(state, boundaryMark));
+  view.dispatch(tr);
+  return { pos: target, mark: boundaryMark };
+}
+
+// Exported for tests: the boundary-editing state machine needs a real
+// EditorView to exercise, and the $prose wrapper requires a Milkdown ctx.
+export function wikilinkDecorationPlugin(
   bridge: WikilinkBridge,
   options: WikilinkPluginOptions
 ): Plugin {
@@ -1069,10 +1128,25 @@ function wikilinkDecorationPlugin(
         hideNativeNoteLinkTooltipsSoon();
       };
 
+      // Note links render as real `<a href="mindstream://note/…">`
+      // anchors. `handleClick` preventDefaults on the paths where it
+      // opens the note, but its early returns (note not resolved, plain
+      // click with open-on-click off) don't — leaving the browser to
+      // follow the href. On the Android WebView that navigates the whole
+      // page to the unresolvable custom scheme and white-screens the app.
+      // Cancel the default navigation for every note-link anchor here,
+      // unconditionally and in the capture phase (before the anchor's own
+      // default action). preventDefault only stops the navigation; it
+      // doesn't stop `handleClick` from still running to open the note.
+      const preventNoteLinkNavigation = (event: MouseEvent) => {
+        if (closestNoteLinkElement(event.target)) event.preventDefault();
+      };
+
       view.dom.addEventListener('mousemove', suppressHoverTooltip, true);
       view.dom.addEventListener('mouseover', suppressHoverTooltip, true);
       view.dom.addEventListener('mousedown', hideTooltip, true);
       view.dom.addEventListener('click', hideTooltip, true);
+      view.dom.addEventListener('click', preventNoteLinkNavigation, true);
 
       return {
         update(view) {
@@ -1084,6 +1158,11 @@ function wikilinkDecorationPlugin(
           view.dom.removeEventListener('mouseover', suppressHoverTooltip, true);
           view.dom.removeEventListener('mousedown', hideTooltip, true);
           view.dom.removeEventListener('click', hideTooltip, true);
+          view.dom.removeEventListener(
+            'click',
+            preventNoteLinkNavigation,
+            true
+          );
           view.dom.classList.remove(
             'wikilink-boundary-inside',
             'wikilink-boundary-outside',
@@ -1114,18 +1193,16 @@ function wikilinkDecorationPlugin(
           from === to &&
           from === activeBoundaryLinkEdit.pos
         ) {
-          const nextPos = insertLinkBoundaryText(
-            view,
-            from,
-            text,
-            activeBoundaryLinkEdit.mark
-          );
+          // Capture the mark before dispatching: insertLinkBoundaryText
+          // moves the caret, which makes validateLinkEditState (run from
+          // the view-update hook during dispatch) null the pin. Reading
+          // it afterwards used to throw, abort the re-pin, and dump the
+          // very next character outside the link.
+          const mark = activeBoundaryLinkEdit.mark;
+          const nextPos = insertLinkBoundaryText(view, from, text, mark);
           if (nextPos !== null) {
             pendingEmptyNoteLink = null;
-            setActiveBoundaryLinkEdit(view, {
-              pos: nextPos,
-              mark: activeBoundaryLinkEdit.mark
-            });
+            setActiveBoundaryLinkEdit(view, { pos: nextPos, mark });
             return true;
           }
         }
@@ -1135,13 +1212,9 @@ function wikilinkDecorationPlugin(
           from === to &&
           from === pendingEmptyNoteLink.pos
         ) {
-          const nextPos = insertLinkBoundaryText(
-            view,
-            from,
-            text,
-            pendingEmptyNoteLink.mark
-          );
+          // Same capture-before-dispatch dance as above.
           const mark = pendingEmptyNoteLink.mark;
+          const nextPos = insertLinkBoundaryText(view, from, text, mark);
           pendingEmptyNoteLink = null;
           if (nextPos !== null) {
             setActiveBoundaryLinkEdit(view, { pos: nextPos, mark });
@@ -1239,6 +1312,17 @@ function wikilinkDecorationPlugin(
         if (toggled) {
           pendingEmptyNoteLink = null;
           setActiveBoundaryLinkEdit(view, toggled === 'exit' ? null : toggled);
+          return true;
+        }
+        const arrowed = arrowWithinLinkText(
+          view,
+          event,
+          activeBoundaryLinkEdit
+        );
+        if (arrowed) {
+          event.preventDefault();
+          pendingEmptyNoteLink = null;
+          setActiveBoundaryLinkEdit(view, arrowed);
           return true;
         }
         if (event.key.startsWith('Arrow')) {

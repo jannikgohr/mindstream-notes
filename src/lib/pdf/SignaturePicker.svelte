@@ -16,10 +16,10 @@
    */
 
   import { untrack } from 'svelte';
-  import { Check, Plus, Trash2 } from '@lucide/svelte';
+  import { Camera, Check, Plus, Trash2 } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import { tUi } from '$lib/settings/i18n.svelte';
-  import { strokePointsAttr } from './stroke-utils';
+  import SignatureStrokes from './SignatureStrokes.svelte';
   import type { PdfSignatureSnapshot } from './types';
 
   interface Props {
@@ -30,6 +30,7 @@
     onSelect: (id: string) => void;
     onDelete: (id: string) => void;
     onAddNew: () => void;
+    onImport: () => void;
     onClose: () => void;
   }
   let {
@@ -40,6 +41,7 @@
     onSelect,
     onDelete,
     onAddNew,
+    onImport,
     onClose
   }: Props = $props();
 
@@ -137,16 +139,12 @@
               viewBox="0 0 {signature.width} {signature.height}"
               preserveAspectRatio="xMidYMid meet"
             >
-              {#each signature.strokes as stroke (stroke.id)}
-                <polyline
-                  points={strokePointsAttr(stroke.points)}
-                  fill="none"
-                  stroke={stroke.color}
-                  stroke-width={stroke.width}
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                />
-              {/each}
+              <SignatureStrokes
+                strokes={signature.strokes}
+                image={signature.image}
+                width={signature.width}
+                height={signature.height}
+              />
             </svg>
           </button>
           <Button
@@ -171,6 +169,15 @@
     >
       <Plus class="size-3.5 shrink-0" aria-hidden="true" />
       <span>{tUi('pdf.signature.add')}</span>
+    </button>
+    <button
+      type="button"
+      role="menuitem"
+      class="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left transition-colors hover:bg-accent hover:text-accent-foreground"
+      onclick={onImport}
+    >
+      <Camera class="size-3.5 shrink-0" aria-hidden="true" />
+      <span>{tUi('pdf.signature.import')}</span>
     </button>
   </div>
 {/if}

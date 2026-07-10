@@ -32,17 +32,13 @@
   } from './export-result-dialog.svelte';
   import { openFolder } from '$lib/api';
   import { tUi } from '$lib/settings/i18n.svelte';
-  import { getSettingValue } from '$lib/settings/store.svelte';
+  import { prefersReducedMotion } from '$lib/reduce-motion.svelte';
   import type { Component } from 'svelte';
 
-  // Mirror the in-app `appearance.reduceMotion` toggle. The CSS in
-  // `app.css` already disables the OS-level case via media query; this
-  // covers the one place we trigger animation programmatically
-  // (the header-icon one-shot), so the toggle in Settings actually
-  // suppresses it.
-  const reduceMotion = $derived(
-    getSettingValue('appearance.reduceMotion') === true
-  );
+  // Covers the one place we trigger animation programmatically (the
+  // header-icon one-shot); the CSS side is gated on `html.reduce-motion`,
+  // which resolves to the same value.
+  const reduceMotion = $derived(prefersReducedMotion());
 
   type IconComponent = Component<{ class?: string }>;
 

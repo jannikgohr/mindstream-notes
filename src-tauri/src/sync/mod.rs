@@ -22,6 +22,7 @@
 
 pub mod repair;
 pub mod scheduler;
+pub mod tags_crdt;
 pub mod yrs_doc;
 
 use std::any::Any;
@@ -149,6 +150,8 @@ struct NotePayload {
     title: String,
     position: i64,
     tags: Vec<String>,
+    #[serde(default, with = "serde_bytes")]
+    tags_state: Vec<u8>,
     /// RFC3339; None means not trashed.
     trashed_at: Option<String>,
     /// yrs-encoded Doc state — see sync/yrs_doc.rs.
@@ -260,6 +263,59 @@ pub struct SyncCompletedEvent {
 
 pub const SYNC_COMPLETED_EVENT: &str = "sync-completed";
 
+/// Emitted when the pre-sync reachability probe fails — the active
+/// vault's server didn't answer. The JS side turns this into a single
+/// "can't reach your sync server" notification.
+pub const SYNC_UNREACHABLE_EVENT: &str = "sync-unreachable";
+
+/// Payload for [`SYNC_UNREACHABLE_EVENT`]: the server we couldn't reach
+/// and the transport error detail (for logs / the notification body).
+#[derive(Debug, Clone, Serialize)]
+pub struct SyncUnreachableEvent {
+    pub server_url: String,
+    pub detail: String,
+}
+
+/// Pre-sync reachability guard shared by `sync_now` and the scheduler
+/// tick. Returns `true` to proceed with the sync; `false` to skip it
+/// because the active vault's server didn't answer — in which case a
+/// [`SYNC_UNREACHABLE_EVENT`] has already been emitted so the UI shows
+/// one clear offline notification instead of letting `run` fan out into
+/// a storm of failing requests (cached-collection fetch + list × 4
+/// kinds).
+///
+/// Signed-out installs return `true`; `run`'s `try_restore` then no-ops
+/// exactly as before. An error *reading* the session (not a transport
+/// failure) also returns `true`, so a genuine session problem still
+/// surfaces through the normal path instead of being masked as "offline".
+async fn preflight_reachable(app: &AppHandle) -> bool {
+    let info = match auth::read_session_info(app) {
+        Ok(Some(info)) => info,
+        Ok(None) => return true,
+        Err(e) => {
+            log::warn!("[sync] preflight: could not read session info: {e}");
+            return true;
+        }
+    };
+    match auth::probe_server_reachable(&info.server_url).await {
+        Ok(()) => true,
+        Err(detail) => {
+            log::warn!(
+                "[sync] server unreachable, skipping sync: {} ({detail})",
+                info.server_url
+            );
+            let event = SyncUnreachableEvent {
+                server_url: info.server_url,
+                detail,
+            };
+            if let Err(e) = app.emit(SYNC_UNREACHABLE_EVENT, &event) {
+                log::warn!("[sync] failed to emit {SYNC_UNREACHABLE_EVENT}: {e}");
+            }
+            false
+        }
+    }
+}
+
 // ---------- Tauri command ----------
 
 #[tauri::command]
@@ -270,6 +326,14 @@ pub async fn sync_now(app: AppHandle) -> Result<SyncReport, String> {
     // scheduler tick's worth of wait — typically <1s of no-op pulls.
     let scheduler_state = app.state::<scheduler::SyncScheduler>();
     let _guard = scheduler_state.acquire_in_flight().await;
+
+    // Check the server is reachable before doing anything. On failure the
+    // probe emits `sync-unreachable` (one clear offline notification);
+    // bail out rather than fanning out into a storm of failing requests.
+    if !preflight_reachable(&app).await {
+        return Err("sync server unreachable".to_string());
+    }
+
     let app_for_blocking = app.clone();
     let delta = tauri::async_runtime::spawn_blocking(move || -> Result<SyncDelta, String> {
         catch_blocking_panic("sync", || {
@@ -1093,6 +1157,7 @@ struct LocalNoteState {
     position: i64,
     favourite: i64,
     note_kind: String,
+    tags_state: Vec<u8>,
 }
 
 /// Apply one pulled note item. Returns Some(note_id) when a row was
@@ -1140,7 +1205,7 @@ fn apply_note_payload(
         let existing: Option<LocalNoteState> = tx
             .query_row(
                 "SELECT yrs_state, dirty, payload_schema, parent_collection_id,
-                        trashed_at, title, position, favourite, note_kind
+                        trashed_at, title, position, favourite, note_kind, tags_state
                  FROM notes WHERE id = ?1",
                 params![payload.id],
                 |r| {
@@ -1154,10 +1219,16 @@ fn apply_note_payload(
                         position: r.get(6)?,
                         favourite: r.get(7)?,
                         note_kind: r.get(8)?,
+                        tags_state: r.get::<_, Option<Vec<u8>>>(9)?.unwrap_or_default(),
                     })
                 },
             )
             .optional()?;
+        let local_tags = if existing.is_some() {
+            load_tags_for_note(&tx, &payload.id)?
+        } else {
+            Vec::new()
+        };
 
         let incoming_schema = payload.schema as i64;
         let (merged_state, dirty_after) = match &existing {
@@ -1245,9 +1316,26 @@ fn apply_note_payload(
         } else {
             payload.note_kind.clone()
         };
+        let (final_tags_state, final_tags) = match &existing {
+            Some(local) => tags_crdt::merge_or_resolve(
+                &local.tags_state,
+                &local_tags,
+                &payload.tags_state,
+                &payload.tags,
+                keep_local_meta,
+            ),
+            None => {
+                tags_crdt::merge_or_resolve(&[], &[], &payload.tags_state, &payload.tags, false)
+            }
+        };
         // Keep dirty=1 when we preserved local metadata so the next push sends
         // it to the server; otherwise follow the body-merge's dirty decision.
-        let final_dirty = if keep_local_meta { 1 } else { dirty_after };
+        let tags_need_push = payload.tags_state.is_empty() || final_tags != payload.tags;
+        let final_dirty = if keep_local_meta || tags_need_push {
+            1
+        } else {
+            dirty_after
+        };
 
         let exists = existing.is_some();
         if exists {
@@ -1256,8 +1344,9 @@ fn apply_note_payload(
                  SET parent_collection_id = ?1, title = ?2, body = ?3, position = ?4,
                      modified = ?5, trashed_at = ?6, yrs_state = ?7,
                      etebase_uid = ?8, etebase_etag = ?9, dirty = ?10,
-                     payload_schema = ?11, favourite = ?12, note_kind = ?13
-                 WHERE id = ?14",
+                     payload_schema = ?11, favourite = ?12, note_kind = ?13,
+                     tags_state = ?14
+                 WHERE id = ?15",
                 params![
                     final_parent,
                     final_title,
@@ -1272,6 +1361,7 @@ fn apply_note_payload(
                     incoming_schema,
                     final_favourite,
                     final_note_kind,
+                    final_tags_state,
                     payload.id,
                 ],
             )?;
@@ -1280,8 +1370,8 @@ fn apply_note_payload(
                 "INSERT INTO notes (id, parent_collection_id, title, body, position,
                                     created, modified, trashed_at, yrs_state,
                                     etebase_uid, etebase_etag, dirty,
-                                    payload_schema, favourite, note_kind)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7, ?8, ?9, ?10, 0, ?11, ?12, ?13)",
+                                    payload_schema, favourite, note_kind, tags_state)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
                 params![
                     payload.id,
                     final_parent,
@@ -1293,25 +1383,25 @@ fn apply_note_payload(
                     merged_state,
                     uid,
                     etag,
+                    final_dirty,
                     incoming_schema,
                     final_favourite,
                     final_note_kind,
+                    final_tags_state,
                 ],
             )?;
         }
 
-        // Refresh tags table in one shot — but not when we're keeping local
-        // metadata, since tags are part of that unpushed local state.
-        if !keep_local_meta {
-            tx.execute(
-                "DELETE FROM note_tags WHERE note_id = ?1",
-                params![payload.id],
-            )?;
-            let mut stmt = tx.prepare("INSERT INTO note_tags(note_id, tag) VALUES (?1, ?2)")?;
-            for tag in &payload.tags {
-                stmt.execute(params![payload.id, tag])?;
-            }
+        // Refresh the query-friendly projection from the CRDT-visible tags.
+        tx.execute(
+            "DELETE FROM note_tags WHERE note_id = ?1",
+            params![payload.id],
+        )?;
+        let mut stmt = tx.prepare("INSERT INTO note_tags(note_id, tag) VALUES (?1, ?2)")?;
+        for tag in &final_tags {
+            stmt.execute(params![payload.id, tag])?;
         }
+        drop(stmt);
 
         tx.commit()?;
         Ok(Some(payload.id.clone()))
@@ -1426,6 +1516,7 @@ fn push_notes(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult<(
             title: row.title.clone(),
             position: row.position,
             tags: row.tags.clone(),
+            tags_state: row.tags_state.clone(),
             trashed_at: row.trashed_at.clone(),
             yrs_state: row.yrs_state.clone(),
             body: row.body.clone(),
@@ -1455,6 +1546,7 @@ fn push_notes(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult<(
     }
 
     let local_ids: Vec<String> = prepared.iter().map(|(_, id)| id.clone()).collect();
+    let local_tag_states: Vec<Vec<u8>> = dirty.iter().map(|row| row.tags_state.clone()).collect();
     let mut items: Vec<Item> = prepared.into_iter().map(|(i, _)| i).collect();
     transact_or_resolve(im, &mut items, &mut report.conflicts_resolved)
         .map_err(|e| AppError::InvalidArg(format!("transaction notes: {e}")))?;
@@ -1462,13 +1554,23 @@ fn push_notes(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppResult<(
     let pushed = items.len();
     db.with_conn_mut(|c| {
         let tx = c.transaction()?;
-        for (item, local_id) in items.iter().zip(local_ids.iter()) {
+        for ((item, local_id), tags_state) in items
+            .iter()
+            .zip(local_ids.iter())
+            .zip(local_tag_states.iter())
+        {
             tx.execute(
                 "UPDATE notes
                  SET etebase_uid = ?1, etebase_etag = ?2, dirty = 0,
-                     payload_schema = ?3
-                 WHERE id = ?4",
-                params![item.uid(), item.etag(), PAYLOAD_SCHEMA as i64, local_id,],
+                     payload_schema = ?3, tags_state = ?4
+                 WHERE id = ?5",
+                params![
+                    item.uid(),
+                    item.etag(),
+                    PAYLOAD_SCHEMA as i64,
+                    tags_state,
+                    local_id,
+                ],
             )?;
         }
         tx.commit()?;
@@ -1679,6 +1781,18 @@ fn refetch_and_remerge(im: &ItemManager, items: &mut [Item]) -> Result<(), Eteba
             if let Ok(mut local_payload) = rmp_serde::from_slice::<NotePayload>(&local_bytes) {
                 local_payload.yrs_state =
                     yrs_doc::merge_remote(&local_payload.yrs_state, &server_payload.yrs_state);
+                let local_tags_state = if local_payload.tags_state.is_empty() {
+                    tags_crdt::init(&local_payload.tags)
+                } else {
+                    local_payload.tags_state.clone()
+                };
+                let server_tags_state = if server_payload.tags_state.is_empty() {
+                    tags_crdt::init(&server_payload.tags)
+                } else {
+                    server_payload.tags_state
+                };
+                local_payload.tags_state = tags_crdt::merge(&local_tags_state, &server_tags_state);
+                local_payload.tags = tags_crdt::tags(&local_payload.tags_state);
                 let merged = rmp_serde::to_vec_named(&local_payload)
                     .map_err(|e| EtebaseError::Generic(format!("re-encode merged note: {e}")))?;
                 *item = im.fetch(server.uid(), None)?;
@@ -1761,6 +1875,13 @@ struct DirtyNote {
     body: String,
     favourite: bool,
     note_kind: String,
+    tags_state: Vec<u8>,
+}
+
+fn load_tags_for_note(conn: &Connection, note_id: &str) -> AppResult<Vec<String>> {
+    let mut stmt = conn.prepare("SELECT tag FROM note_tags WHERE note_id = ?1 ORDER BY tag")?;
+    let rows = stmt.query_map(params![note_id], |r| r.get::<_, String>(0))?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
 fn load_dirty_folders(db: &Db) -> AppResult<Vec<DirtyFolder>> {
@@ -1787,7 +1908,7 @@ fn load_dirty_notes(db: &Db) -> AppResult<Vec<DirtyNote>> {
     let rows: Vec<DirtyNote> = db.with_conn(|c| {
         let mut stmt = c.prepare(
             "SELECT id, parent_collection_id, title, position, trashed_at,
-                    yrs_state, etebase_uid, body, favourite, note_kind
+                    yrs_state, etebase_uid, body, favourite, note_kind, tags_state
              FROM notes WHERE dirty = 1",
         )?;
         let rows = stmt.query_map([], |r| {
@@ -1803,6 +1924,7 @@ fn load_dirty_notes(db: &Db) -> AppResult<Vec<DirtyNote>> {
                 body: r.get(7)?,
                 favourite: r.get::<_, i64>(8)? != 0,
                 note_kind: r.get(9)?,
+                tags_state: r.get::<_, Option<Vec<u8>>>(10)?.unwrap_or_default(),
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -1824,6 +1946,9 @@ fn load_dirty_notes(db: &Db) -> AppResult<Vec<DirtyNote>> {
         .into_iter()
         .map(|mut n| {
             n.tags = by_id.remove(&n.id).unwrap_or_default();
+            if n.tags_state.is_empty() {
+                n.tags_state = tags_crdt::init(&n.tags);
+            }
             n
         })
         .collect())
@@ -2061,6 +2186,7 @@ mod tests {
             title: "Remote Title".into(),
             position: 0,
             tags: vec![],
+            tags_state: vec![],
             trashed_at: trashed_at.map(str::to_string),
             yrs_state: vec![],
             body: String::new(),
@@ -2167,6 +2293,51 @@ mod tests {
             trashed_at.is_some(),
             "a remote-side trash applies to a clean local row"
         );
+    }
+
+    #[test]
+    fn apply_note_merges_tag_crdts_even_when_local_metadata_is_dirty() {
+        let db = open_memory_for_tests();
+        let local_tags = vec!["local".to_string()];
+        let local_state = tags_crdt::init(&local_tags);
+        db.with_conn(|c| {
+            c.execute(
+                "INSERT INTO notes(id, parent_collection_id, title, body, position,
+                                   created, modified, trashed_at, yrs_state,
+                                   etebase_uid, etebase_etag, dirty, payload_schema,
+                                   favourite, note_kind, tags_state)
+                 VALUES ('note_tags', NULL, 'Local Title', '', 0, 't', 't', NULL, NULL,
+                         'uid_tags', 'etag_old', 1, 2, 0, 'markdown', ?1)",
+                params![local_state],
+            )?;
+            c.execute(
+                "INSERT INTO note_tags(note_id, tag) VALUES ('note_tags', 'local')",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+        let mut remote = remote_note("note_tags", None, None);
+        remote.tags = vec!["remote".into()];
+        remote.tags_state = tags_crdt::init(&remote.tags);
+        apply_note_payload(&db, &remote, "uid_tags", "etag_new").unwrap();
+
+        let (title, dirty): (String, i64) = db
+            .with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT title, dirty FROM notes WHERE id = 'note_tags'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?)
+            })
+            .unwrap();
+        let tags = db
+            .with_conn(|c| load_tags_for_note(c, "note_tags"))
+            .unwrap();
+        assert_eq!(title, "Local Title");
+        assert_eq!(dirty, 1, "merged tags must push back to the server");
+        assert_eq!(tags, vec!["local".to_string(), "remote".to_string()]);
     }
 
     #[test]

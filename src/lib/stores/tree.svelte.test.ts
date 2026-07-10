@@ -7,7 +7,10 @@ const updateCollectionMock = vi.fn();
 const createNoteMock = vi.fn();
 const createCollectionMock = vi.fn();
 const importPdfNoteMock = vi.fn();
-const trashNoteMock = vi.fn();
+const moveManyMock = vi.fn();
+const trashManyMock = vi.fn();
+const restoreManyMock = vi.fn();
+const purgeManyMock = vi.fn();
 const restoreNoteMock = vi.fn();
 const purgeNoteMock = vi.fn();
 const deleteCollectionMock = vi.fn();
@@ -23,8 +26,11 @@ vi.mock('$lib/api', () => ({
   createNote: (...args: unknown[]) => createNoteMock(...args),
   createCollection: (...args: unknown[]) => createCollectionMock(...args),
   importPdfNote: (...args: unknown[]) => importPdfNoteMock(...args),
+  moveMany: (...args: unknown[]) => moveManyMock(...args),
+  trashMany: (...args: unknown[]) => trashManyMock(...args),
+  restoreMany: (...args: unknown[]) => restoreManyMock(...args),
+  purgeMany: (...args: unknown[]) => purgeManyMock(...args),
   setPdfText: (...args: unknown[]) => setPdfTextMock(...args),
-  trashNote: (...args: unknown[]) => trashNoteMock(...args),
   restoreNote: (...args: unknown[]) => restoreNoteMock(...args),
   purgeNote: (...args: unknown[]) => purgeNoteMock(...args),
   deleteCollection: (...args: unknown[]) => deleteCollectionMock(...args),
@@ -47,12 +53,6 @@ vi.mock('$lib/state.svelte', () => ({
   ui: { activeNoteId: null }
 }));
 
-// settings/store.svelte transitively imports mode-watcher; stub the surface
-// the tree store reads from it instead of trying to resolve the real thing.
-vi.mock('$lib/settings/store.svelte', () => ({
-  getSettingValue: () => false // useTrash off → trashNote does hard delete
-}));
-
 import {
   addNoteTag,
   allTagsInUse,
@@ -60,20 +60,24 @@ import {
   createNoteIn,
   emptyTrash,
   importPdfIn,
+  moveManyTo,
   moveCollectionTo,
   moveNoteTo,
   normalizeTagPath,
+  purgeMany,
   purgeCollection,
   purgeNote,
   removeNoteTag,
   renameCollection,
   renameNote,
+  restoreMany,
   restoreCollection,
   restoreNote,
   setNoteBody,
   setNoteFavourite,
   setNoteTags,
   tree,
+  trashMany,
   trashCollection,
   trashNote
 } from './tree.svelte';
@@ -99,7 +103,10 @@ beforeEach(() => {
   saveNoteMock.mockReset().mockResolvedValue(undefined);
   updateCollectionMock.mockReset().mockResolvedValue(undefined);
   createNoteMock.mockReset().mockResolvedValue(undefined);
-  trashNoteMock.mockReset().mockResolvedValue(undefined);
+  moveManyMock.mockReset().mockResolvedValue({ notes: 1, folders: 1 });
+  trashManyMock.mockReset().mockResolvedValue({ notes: 2, folders: 0 });
+  restoreManyMock.mockReset().mockResolvedValue({ notes: 0, folders: 2 });
+  purgeManyMock.mockReset().mockResolvedValue({ notes: 3, folders: 4 });
   restoreNoteMock.mockReset().mockResolvedValue(undefined);
   purgeNoteMock.mockReset().mockResolvedValue(undefined);
   deleteCollectionMock.mockReset().mockResolvedValue(undefined);
@@ -161,10 +168,48 @@ describe('moveCollectionTo', () => {
   });
 });
 
-describe('trashNote (useTrash off via mocked setting)', () => {
-  it('falls through to api.trashNote', async () => {
+describe('batch tree mutations', () => {
+  const items = [
+    { kind: 'note' as const, id: 'note_1' },
+    { kind: 'folder' as const, id: 'coll_1' }
+  ];
+
+  it('moveManyTo calls the API, reloads the tree and returns counts', async () => {
+    const counts = await moveManyTo(items, 'target');
+    expect(moveManyMock).toHaveBeenCalledWith(items, 'target');
+    expect(loadTreeMock).toHaveBeenCalled();
+    expect(counts).toEqual({ notes: 1, folders: 1 });
+  });
+
+  it('trashMany calls the API, reloads the tree and returns counts', async () => {
+    const counts = await trashMany(items);
+    expect(trashManyMock).toHaveBeenCalledWith(items);
+    expect(loadTreeMock).toHaveBeenCalled();
+    expect(counts).toEqual({ notes: 2, folders: 0 });
+  });
+
+  it('restoreMany calls the API, reloads the tree and returns counts', async () => {
+    const counts = await restoreMany(items);
+    expect(restoreManyMock).toHaveBeenCalledWith(items);
+    expect(loadTreeMock).toHaveBeenCalled();
+    expect(counts).toEqual({ notes: 0, folders: 2 });
+  });
+
+  it('purgeMany calls the API, reloads the tree and returns counts', async () => {
+    const counts = await purgeMany(items);
+    expect(purgeManyMock).toHaveBeenCalledWith(items);
+    expect(loadTreeMock).toHaveBeenCalled();
+    expect(counts).toEqual({ notes: 3, folders: 4 });
+  });
+});
+
+describe('trashNote', () => {
+  it('moves the note to the trash collection', async () => {
     await trashNote('note_x');
-    expect(trashNoteMock).toHaveBeenCalledWith('note_x');
+    expect(saveNoteMock).toHaveBeenCalledWith({
+      id: 'note_x',
+      parent_collection_id: 'trash'
+    });
   });
 });
 
@@ -293,9 +338,12 @@ describe('collection mutations', () => {
     });
   });
 
-  it('trashCollection hard-deletes when useTrash is off', async () => {
+  it('trashCollection moves the folder to trash', async () => {
     await trashCollection('coll_1');
-    expect(deleteCollectionMock).toHaveBeenCalledWith('coll_1');
+    expect(updateCollectionMock).toHaveBeenCalledWith({
+      id: 'coll_1',
+      parent_collection_id: 'trash'
+    });
   });
 
   it('restoreCollection moves it to root', async () => {

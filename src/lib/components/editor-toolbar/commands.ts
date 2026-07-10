@@ -650,7 +650,7 @@ export const TOOLBAR_ITEMS: ToolbarItem[] = [
     labelKey: 'editor.toolbar.undo',
     icon: Undo2,
     action: undo,
-    hotkeyId: 'editor.markdown.undo'
+    hotkeyId: 'global.undo'
   },
   {
     kind: 'leaf',
@@ -658,7 +658,7 @@ export const TOOLBAR_ITEMS: ToolbarItem[] = [
     labelKey: 'editor.toolbar.redo',
     icon: Redo2,
     action: redo,
-    hotkeyId: 'editor.markdown.redo'
+    hotkeyId: 'global.redo'
   },
   {
     kind: 'leaf',

@@ -16,6 +16,8 @@
  */
 
 export { autoPair } from './auto-pair';
+export { installBlockHandleGuard } from './block-handle-guard';
+export { installSelectionToolbarAutoHide } from './selection-toolbar';
 export {
   addMermaidMenuItem,
   mermaidLanguageDescription,
@@ -23,6 +25,7 @@ export {
 } from './mermaid';
 export {
   createWikilinkBridge,
+  parseNoteHref,
   resolveNoteIdByTitle,
   wikilinkPlugins,
   type WikilinkBridge

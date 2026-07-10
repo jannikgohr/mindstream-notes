@@ -49,6 +49,7 @@
     clearNoteStatus
   } from '$lib/stores/note-status.svelte';
   import { getSettingValue } from '$lib/settings/store.svelte';
+  import { prefersReducedMotion } from '$lib/reduce-motion.svelte';
   import {
     ExcalidrawRoomClient,
     deriveExcalidrawKey
@@ -185,16 +186,14 @@
     return 'auto';
   });
 
-  /** Whether to cut editor animation cost. We honour the existing
-   *  app-wide `appearance.reduceMotion` toggle AND default to true on
+  /** Whether to cut editor animation cost. We honour the app-wide
+   *  resolved reduce-motion preference AND default to true on
    *  mobile, where the Android WebView's compositor is the bottleneck
    *  during stroke rendering and incidental motion costs frame budget.
    *  `mobile` is set in onMount, so this reads false on initial render
    *  even on Android — that's fine, the [reduceMotion] effect re-runs
    *  once `mobile` flips. */
-  const reduceMotion = $derived(
-    Boolean(getSettingValue('appearance.reduceMotion')) || mobile
-  );
+  const reduceMotion = $derived(prefersReducedMotion() || mobile);
 
   // ---- Mount ----
 

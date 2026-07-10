@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { parseHistorySnapshot, serializeYjsSnapshot } from './snapshot';
+import {
+  historySnapshotSize,
+  parseHistorySnapshot,
+  serializeYjsSnapshot
+} from './snapshot';
 
 describe('history snapshot codec', () => {
   it('keeps markdown snapshots as raw text', () => {
@@ -56,5 +60,10 @@ describe('history snapshot codec', () => {
     if (parsed.payloadKind === 'yjs-update') {
       expect(parsed.bytes.byteLength).toBe(0);
     }
+  });
+
+  it('measures snapshot size using Blob semantics', () => {
+    const body = 'mindstream';
+    expect(historySnapshotSize(body)).toBe(new Blob([body]).size);
   });
 });

@@ -3,7 +3,7 @@
  *
  * Signatures sync across the user's devices via Etebase (one item per
  * signature). `data` is opaque JSON — the geometry of a
- * `PdfSignatureSnapshot` minus its `id` (`{ width, height, strokes[] }`).
+ * `PdfSignatureSnapshot` minus its `id` (`{ width, height, strokes[], image? }`).
  * The snapshot <-> record (de)serialisation lives in
  * $lib/pdf/signature-storage, which also migrates the old localStorage
  * library into this synced store on first run.

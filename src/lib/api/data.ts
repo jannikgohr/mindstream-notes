@@ -46,8 +46,8 @@ export async function emptyTrash(): Promise<TrashCounts> {
 
 /**
  * Tell the Rust scheduler the current retention preference.
- * `days = 0` disables the sweep (used for both the "Forever" option
- * and `data.useTrash = false`). No-op outside Tauri.
+ * `days = 0` disables the sweep (used for the "Forever" option).
+ * No-op outside Tauri.
  */
 export async function setTrashRetention(days: number): Promise<void> {
   if (!isTauri()) return;

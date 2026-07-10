@@ -2,12 +2,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const getSettingValueMock = vi.fn();
 const pruneNoteVersionsMock = vi.fn();
+const sweepUnreferencedMarkdownAssetsMock = vi.fn();
 
 vi.mock('$lib/settings/store.svelte', () => ({
   getSettingValue: (...a: unknown[]) => getSettingValueMock(...a)
 }));
 vi.mock('$lib/api', () => ({
-  pruneNoteVersions: (...a: unknown[]) => pruneNoteVersionsMock(...a)
+  pruneNoteVersions: (...a: unknown[]) => pruneNoteVersionsMock(...a),
+  sweepUnreferencedMarkdownAssets: (...a: unknown[]) =>
+    sweepUnreferencedMarkdownAssetsMock(...a)
 }));
 
 import { historyRetentionDays, pruneHistoryOnStartup } from './retention';
@@ -15,6 +18,7 @@ import { historyRetentionDays, pruneHistoryOnStartup } from './retention';
 beforeEach(() => {
   getSettingValueMock.mockReset();
   pruneNoteVersionsMock.mockReset().mockResolvedValue(0);
+  sweepUnreferencedMarkdownAssetsMock.mockReset().mockResolvedValue(0);
   vi.spyOn(console, 'debug').mockImplementation(() => {});
 });
 
@@ -45,6 +49,7 @@ describe('pruneHistoryOnStartup', () => {
     getSettingValueMock.mockReturnValue('30');
     await pruneHistoryOnStartup();
     expect(pruneNoteVersionsMock).toHaveBeenCalledWith(30);
+    expect(sweepUnreferencedMarkdownAssetsMock).toHaveBeenCalledOnce();
   });
 
   it('passes null for forever and swallows errors', async () => {

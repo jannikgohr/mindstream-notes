@@ -17,7 +17,14 @@
    */
 
   import { Button } from '$lib/components/ui/button';
-  import { strokePointsAttr } from './stroke-utils';
+  import { tUi } from '$lib/settings/i18n.svelte';
+  import SignatureStrokes from './SignatureStrokes.svelte';
+  import {
+    SIGNATURE_PAD_HEIGHT,
+    SIGNATURE_PAD_WIDTH,
+    SIGNATURE_STROKE_COLOR,
+    SIGNATURE_STROKE_WIDTH
+  } from './signature-trace';
   import type {
     PdfInkStroke,
     PdfSignatureSnapshot,
@@ -28,13 +35,19 @@
     open: boolean;
     onCancel: () => void;
     onSave: (signature: PdfSignatureSnapshot) => void;
+    /** Optional "import from photo instead" switch — the pad is the
+     *  entry point when the library is empty, so it offers the photo
+     *  path too. */
+    onImport?: () => void;
   }
-  let { open, onCancel, onSave }: Props = $props();
+  let { open, onCancel, onSave, onImport }: Props = $props();
 
-  const PAD_WIDTH = 420;
-  const PAD_HEIGHT = 168;
-  const STROKE_COLOR = '#111827';
-  const STROKE_WIDTH = 3.5;
+  // Shared with the photo-import pipeline so drawn and imported
+  // signatures live in the same coordinate space.
+  const PAD_WIDTH = SIGNATURE_PAD_WIDTH;
+  const PAD_HEIGHT = SIGNATURE_PAD_HEIGHT;
+  const STROKE_COLOR = SIGNATURE_STROKE_COLOR;
+  const STROKE_WIDTH = SIGNATURE_STROKE_WIDTH;
 
   let strokes = $state<PdfInkStroke[]>([]);
   let draft = $state<PdfInkStroke | null>(null);
@@ -152,41 +165,34 @@
           onpointerup={finishStroke}
           onpointercancel={finishStroke}
         >
-          {#each strokes as stroke (stroke.id)}
-            <polyline
-              points={strokePointsAttr(stroke.points)}
-              fill="none"
-              stroke={stroke.color}
-              stroke-width={stroke.width}
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            />
-          {/each}
-          {#if draft}
-            <polyline
-              points={strokePointsAttr(draft.points)}
-              fill="none"
-              stroke={draft.color}
-              stroke-width={draft.width}
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            />
-          {/if}
+          <SignatureStrokes strokes={draft ? [...strokes, draft] : strokes} />
         </svg>
       </div>
 
       <div
         class="flex h-10 items-center justify-between border-t border-border px-3"
       >
-        <Button
-          variant="ghost"
-          size="sm"
-          class="h-7 px-2 text-xs"
-          onclick={clearPad}
-          disabled={strokes.length === 0 && !draft}
-        >
-          Clear
-        </Button>
+        <div class="flex items-center gap-1">
+          <Button
+            variant="ghost"
+            size="sm"
+            class="h-7 px-2 text-xs"
+            onclick={clearPad}
+            disabled={strokes.length === 0 && !draft}
+          >
+            Clear
+          </Button>
+          {#if onImport}
+            <Button
+              variant="ghost"
+              size="sm"
+              class="h-7 px-2 text-xs"
+              onclick={onImport}
+            >
+              {tUi('pdf.signature.import')}
+            </Button>
+          {/if}
+        </div>
         <Button
           size="sm"
           class="h-7 px-2 text-xs"

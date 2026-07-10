@@ -254,8 +254,8 @@ function isBrowserFindChord(e: KeyboardEvent): boolean {
 const CREPE_NATIVE_CHORDS: Record<string, string> = {
   'mod+b': 'editor.markdown.bold',
   'mod+i': 'editor.markdown.italic',
-  'mod+z': 'editor.markdown.undo',
-  'mod+shift+z': 'editor.markdown.redo'
+  'mod+z': 'global.undo',
+  'mod+shift+z': 'global.redo'
 };
 
 /**

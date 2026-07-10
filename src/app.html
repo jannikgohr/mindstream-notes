@@ -25,6 +25,30 @@
       })();
     </script>
     <script>
+      // Resolve reduce-motion before paint, mirroring the logic in
+      // src/lib/reduce-motion.svelte.ts: the app setting ('on'/'off')
+      // wins, 'system' (or the legacy boolean false) follows the OS
+      // preference. +layout.svelte keeps the class in sync afterwards.
+      (function () {
+        try {
+          var stored = localStorage.getItem('notes-app:settings:v1');
+          var setting = stored
+            ? JSON.parse(stored)['appearance.reduceMotion']
+            : undefined;
+          var reduced;
+          if (setting === 'on' || setting === true) reduced = true;
+          else if (setting === 'off') reduced = false;
+          else
+            reduced =
+              window.matchMedia &&
+              window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+          document.documentElement.classList.toggle('reduce-motion', reduced);
+        } catch (_) {
+          /* no-op */
+        }
+      })();
+    </script>
+    <script>
       /*
        * No-op stubs for React Fast Refresh globals.
        *

@@ -65,3 +65,11 @@ export function importPdfNote(input: ImportPdfNoteInput): Promise<Note> {
     mockApi.importPdfNote(input)
   );
 }
+
+export function sweepUnreferencedMarkdownAssets(): Promise<number> {
+  return invokeOrFallback<number>(
+    'sweep_unreferenced_markdown_assets',
+    {},
+    () => Promise.resolve(0)
+  );
+}

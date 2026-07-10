@@ -3,7 +3,12 @@
   import { onMount } from 'svelte';
   import { ModeWatcher, mode } from 'mode-watcher';
   import { getSettingValue, isModified } from '$lib/settings/store.svelte';
+  import { prefersReducedMotion } from '$lib/reduce-motion.svelte';
   import { applyAccentColor, clearAccentColor } from '$lib/settings/accent';
+  import {
+    applyEditorTypography,
+    applyUiFontSize
+  } from '$lib/settings/appearance';
   import { invokeOrFallback } from '$lib/api/core';
   import { setNativeHotkeyDisplays } from '$lib/api/hotkeys';
   import { setTrashRetention, sweepTrashRetention } from '$lib/api/data';
@@ -23,7 +28,9 @@
     syncGlobalShortcuts,
     teardownGlobalShortcuts
   } from '$lib/hotkeys/global.svelte';
+  import { initNativeMenuCommands } from '$lib/native-menu.svelte';
   import { loadProfiles } from '$lib/stores/profiles.svelte';
+  import { installSyncStatusBridge } from '$lib/notifications/sync-status';
 
   let { children } = $props();
 
@@ -50,6 +57,10 @@
   onMount(() => {
     void loadProfiles();
     initHotkeys();
+    initNativeMenuCommands();
+    // Surface a notification when Rust reports the sync server is
+    // unreachable (and clear it on the next successful sync).
+    const teardownSyncStatus = installSyncStatusBridge();
     const blockTouchZoom = (event: WheelEvent) => {
       if (!event.ctrlKey) return;
       event.preventDefault();
@@ -57,6 +68,7 @@
     window.addEventListener('wheel', blockTouchZoom, { passive: false });
     return () => {
       window.removeEventListener('wheel', blockTouchZoom);
+      teardownSyncStatus();
       void teardownGlobalShortcuts();
     };
   });
@@ -95,16 +107,40 @@
     }
   });
 
-  // Mirror `appearance.reduceMotion` onto `html.reduce-motion` so any
-  // animation in the app can opt out with a simple `.reduce-motion &`
-  // CSS selector — same shape as the dark-mode plumbing in app.html.
-  // The OS-level `prefers-reduced-motion` media query is honoured
-  // separately by the same CSS rules; this effect just makes the
-  // in-app toggle actually do something across the rest of the UI.
+  // Appearance → UI font size. Writes --ui-font-size (the rem base for the
+  // whole chrome). Unlike accent, applying at the default is safe, so this
+  // runs unconditionally and stays the single source of truth for the slider.
+  $effect(() => {
+    applyUiFontSize(getSettingValue('appearance.uiFontSize'));
+  });
+
+  // Appearance → editor body text size + line height. Written to CSS vars
+  // that app.css applies to the ProseMirror content. Line height is left
+  // unset (→ Crepe's native 1.5) until the user actually picks a value, so
+  // the default look is unchanged; font size is safe to apply always
+  // because its default (16px) equals Crepe's own paragraph size.
+  $effect(() => {
+    const lineHeight = isModified('appearance.lineHeight')
+      ? getSettingValue('appearance.lineHeight')
+      : null;
+    applyEditorTypography(
+      getSettingValue('appearance.editorFontSize'),
+      lineHeight
+    );
+  });
+
+  // Mirror the resolved reduce-motion preference onto
+  // `html.reduce-motion` so any animation in the app can opt out with a
+  // simple `.reduce-motion &` CSS selector — same shape as the dark-mode
+  // plumbing in app.html. `prefersReducedMotion()` folds the OS-level
+  // `prefers-reduced-motion` media query into the tri-state app setting,
+  // so this class is the only motion gate CSS needs to look at.
   $effect(() => {
     if (typeof document === 'undefined') return;
-    const on = getSettingValue('appearance.reduceMotion') === true;
-    document.documentElement.classList.toggle('reduce-motion', on);
+    document.documentElement.classList.toggle(
+      'reduce-motion',
+      prefersReducedMotion()
+    );
   });
 
   $effect(() => {
@@ -149,8 +185,7 @@
   // (see src-tauri/src/data.rs). This effect mirrors the
   // `set_sync_schedule` pattern above: translate the user's settings
   // choice ("forever" / "7" / "30" / "90") into a day count and push
-  // it to the scheduler. `data.useTrash = false` also disables — no
-  // trash, nothing to age out.
+  // it to the scheduler.
   //
   // We also fire a one-shot `sweepTrashRetention` whenever the value
   // changes, so the first sweep doesn't have to wait up to an hour
@@ -163,11 +198,10 @@
     forever: 0
   };
   $effect(() => {
-    const useTrash = getSettingValue('data.useTrash') !== false;
     const choice =
       (getSettingValue('data.trashRetentionDays') as string | undefined) ??
       '30';
-    const days = useTrash ? (RETENTION_DAYS[choice] ?? 0) : 0;
+    const days = RETENTION_DAYS[choice] ?? 0;
     void setTrashRetention(days);
     void sweepTrashRetention(days)
       .then(async (purged) => {

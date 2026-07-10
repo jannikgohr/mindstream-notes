@@ -4,7 +4,7 @@
  * on app start (see the desktop/mobile layout mounts).
  */
 
-import { pruneNoteVersions } from '$lib/api';
+import { pruneNoteVersions, sweepUnreferencedMarkdownAssets } from '$lib/api';
 import { getSettingValue } from '$lib/settings/store.svelte';
 
 /**
@@ -22,6 +22,7 @@ export function historyRetentionDays(): number | null {
 export async function pruneHistoryOnStartup(): Promise<void> {
   try {
     await pruneNoteVersions(historyRetentionDays());
+    await sweepUnreferencedMarkdownAssets();
   } catch (err) {
     console.debug('[history] retention sweep failed', err);
   }

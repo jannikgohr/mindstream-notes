@@ -143,7 +143,24 @@ back. The value is proving the whole frontend↔Rust↔frontend chain.
   re-opens.
 - **Proves:** asset IPC + pdf.js render + the annotation→PDF pipeline.
 
-### 2.3 Full-text search against the Rust matcher (P2)
+### 2.3 Signature photo import → place → export (P2)
+
+- **Why e2e:** photo signature import crosses surfaces unit tests cannot
+  faithfully exercise: OS camera/file capture, `createImageBitmap`, real
+  canvas rasterisation, live preview frame capture, pointer-driven manual crop
+  handles, pdf.js placement, and the final annotated-PDF export.
+- **Steps:** import a PDF → open the signature picker → choose **Import from
+  photo** → exercise both a picked image and, where available, camera capture →
+  confirm paper auto-crop can be toggled → adjust the manual crop handles →
+  save the signature → place it on the PDF → export the annotated PDF → reopen
+  the output and assert the transparent signature image appears at the chosen
+  placement.
+- **Proves:** the DOM acquisition layer in `signature-import-image.ts`, the
+  `SignatureImportDialog.svelte` source/crop/adjust states, scanned-signature
+  image persistence in saved signatures, placement in `PdfNoteViewer.svelte`,
+  and the image appearance path in `exportAnnotatedPdf`.
+
+### 2.4 Full-text search against the Rust matcher (P2)
 
 - **Why e2e:** the production search runs in Rust (`search/mod.rs`); the TS
   `search-matcher.ts` is only the browser-fallback mirror (unit-tested).
@@ -152,13 +169,13 @@ back. The value is proving the whole frontend↔Rust↔frontend chain.
 - **Proves:** the two matchers stay behaviourally aligned (AND semantics,
   scoring, snippet windows).
 
-### 2.4 Open vault folder / reveal in OS file manager (P3)
+### 2.5 Open vault folder / reveal in OS file manager (P3)
 
 - **Steps:** **Settings → Data → Open data folder** → assert the shell opens
   the correct path (mock/intercept the shell call).
 - **Proves:** the `open_data_folder`/`open_with_shell` command shims.
 
-### 2.5 Live collaboration between two windows (P3)
+### 2.6 Live collaboration between two windows (P3)
 
 - **Why e2e:** the collab providers (`sync/collab-provider.ts`,
   `ink-web-collab-provider.ts`) and the Etebase room plumbing are network
@@ -166,6 +183,24 @@ back. The value is proving the whole frontend↔Rust↔frontend chain.
 - **Steps:** open the same note in two windows/clients → type in one → assert
   the edit appears in the other; toggle offline → assert reconnect converges.
 - **Proves:** the y-protocols transport + awareness + reconnection.
+
+### 2.7 macOS native menu and window chrome (P2)
+
+- **Why e2e:** the native menu (`native_menu.rs`) and frontend listener bridge
+  (`native-menu.svelte.ts`) only have meaning when Tauri owns the real macOS
+  menu bar, focused windows, accelerators, Dock activation, and native window
+  decorations. Unit tests cover the pure command-id/default mapping; this flow
+  proves the platform integration excluded from coverage.
+- **Steps:** launch the packaged macOS app -> confirm native decorations are the
+  default -> toggle custom window decorations and relaunch if required -> use
+  File menu commands to create each note kind and import a PDF -> use Edit menu
+  undo/redo/cut/copy/paste/select-all in markdown, ink/PDF where supported, and
+  normal inputs -> use View menu sidebar/metadata/search/theme commands -> open
+  note popout windows and switch between them from the Window menu -> close the
+  main window and reopen it from the Dock.
+- **Proves:** Rust menu item ids route to the focused webview, frontend commands
+  enter the existing hotkey bus once, native/default window chrome state matches
+  settings, and macOS close/Dock/window switching behaviour feels native.
 
 ---
 
@@ -202,7 +237,23 @@ _is_ the restart.
 - **Proves:** the retention scheduler + `sweep` cascade (the SQL `sweep` is
   unit-tested; the boot wiring is not).
 
-### 3.4 Sign-in session survives restart (P3)
+### 3.4 Unreferenced markdown assets swept on startup (P2)
+
+- **Why e2e:** the markdown asset sweep runs on boot from the history
+  retention pass (`retention.ts` → `sweep_unreferenced_markdown_assets` IPC →
+  `sweepUnreferencedMarkdownAssetsInner`). The SQL sweep and the frontend
+  orchestration are unit-tested (`assets/mod.rs`, `retention.test.ts`), but the
+  `#[tauri::command]` wrapper + real `State<Db>` + boot wiring need a live app —
+  the command is `invokeOrFallback`, so browser-fallback mode no-ops it.
+- **Steps:** in a markdown note, insert an embedded image asset → delete it from
+  the body and save (the asset lingers so editor undo still works) → assert the
+  asset is still on disk → relaunch → assert the startup sweep purged it; in a
+  second note keep an embedded asset referenced → relaunch → assert it survived.
+- **Proves:** the deferred-cleanup contract — normal saves keep unreferenced
+  assets reachable, and the boot sweep reclaims only the ones with no live or
+  history reference (see `startup_sweep_*` unit tests for the SQL half).
+
+### 3.5 Sign-in session survives restart (P3)
 
 - **Why e2e:** the Etebase session blob is written to disk and its key to the
   OS keyring (`auth/mod.rs`, excluded — network + keyring).

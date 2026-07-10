@@ -33,6 +33,10 @@ const KEYRING_ACCOUNT: &str = "etebase-session-key";
 const SESSION_FILENAME: &str = "etebase.session";
 const CLIENT_NAME: &str = "mindstream-notes";
 const MANAGED_SERVER_URL: &str = "https://api.etebase.com/";
+/// Timeout for the pre-sync reachability probe. Short: it only proves the
+/// connection can be opened, and a doomed sync shouldn't stall behind a
+/// long connect timeout every scheduler tick while offline.
+const REACHABILITY_TIMEOUT_SECS: u64 = 6;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct StoredSession {
@@ -395,6 +399,27 @@ pub async fn etebase_session(app: AppHandle) -> Result<Option<SessionInfo>, Stri
         username: stored.username,
         server_url: stored.server_url,
     }))
+}
+
+/// Probe whether `server_url` accepts connections at all. Any HTTP
+/// response — even a 4xx/5xx — counts as reachable; only a transport
+/// failure (DNS, connect, TLS, timeout) returns `Err`. Used as a
+/// pre-sync guard so an unreachable self-hosted / VPN-gated server
+/// surfaces as one clear "offline" signal instead of a storm of failed
+/// sync requests. Hits the same `/healthz` path as
+/// [`check_etebase_server_url`], unauthenticated, with a short timeout.
+pub async fn probe_server_reachable(server_url: &str) -> Result<(), String> {
+    let url = health_url(server_url).map_err(|e| e.to_string())?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(REACHABILITY_TIMEOUT_SECS))
+        .build()
+        .map_err(|e| format!("reachability client: {e}"))?;
+    client
+        .get(url)
+        .send()
+        .await
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

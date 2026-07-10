@@ -108,17 +108,19 @@
               "default": "#0a0a0a"
             },
             {
-              "id": "appearance.density",
-              "scope": "V",
-              "type": "select",
-              "default": "cozy",
-              "options": ["compact", "cozy", "roomy"]
-            },
-            {
               "id": "appearance.reduceMotion",
               "scope": "D",
+              "type": "radio",
+              "default": "system",
+              "options": ["on", "off", "system"]
+            },
+            {
+              "id": "appearance.customWindowDecorations",
+              "scope": "D",
               "type": "toggle",
-              "default": false
+              "default": true,
+              "defaultByPlatform": { "macos": false },
+              "platforms": ["desktop"]
             }
           ]
         },
@@ -129,7 +131,7 @@
               "id": "appearance.uiFontSize",
               "scope": "V",
               "type": "slider",
-              "default": 14,
+              "default": 16,
               "min": 12,
               "max": 18,
               "step": 1,
@@ -294,6 +296,13 @@
               "unit": "pu"
             },
             {
+              "id": "editor.ink.eraserMode",
+              "scope": "D",
+              "type": "select",
+              "default": "stroke",
+              "options": ["stroke", "pixel"]
+            },
+            {
               "id": "editor.ink.fingerDrawing",
               "scope": "D",
               "type": "toggle",
@@ -318,6 +327,20 @@
               "scope": "D",
               "type": "color",
               "default": "#334155",
+              "showIf": {
+                "id": "editor.ink.pageBackground",
+                "notEquals": "clear"
+              }
+            },
+            {
+              "id": "editor.ink.pageBackgroundOpacity",
+              "scope": "D",
+              "type": "slider",
+              "default": 100,
+              "min": 0,
+              "max": 100,
+              "step": 5,
+              "unit": "%",
               "showIf": {
                 "id": "editor.ink.pageBackground",
                 "notEquals": "clear"
@@ -393,18 +416,11 @@
           "id": "data.trash",
           "settings": [
             {
-              "id": "data.useTrash",
-              "scope": "V",
-              "type": "toggle",
-              "default": true
-            },
-            {
               "id": "data.trashRetentionDays",
               "scope": "V",
               "type": "select",
               "default": "30",
-              "options": ["7", "30", "90", "forever"],
-              "showIf": { "id": "data.useTrash", "equals": true }
+              "options": ["7", "30", "90", "forever"]
             },
             {
               "id": "data.emptyTrash",

@@ -1,5 +1,6 @@
 import * as Y from 'yjs';
 import { pointToSegmentDistanceSq, type InkPoint } from '$lib/ink/page';
+import { sliceStrokeByCircles, type EraserCircle } from '$lib/ink/stroke-slice';
 
 const STROKES_KEY = 'strokes';
 const FIELD_ID = 'id';
@@ -52,6 +53,15 @@ export type UndoOp =
   | { kind: 'strokeAdded'; id: string }
   | { kind: 'strokesAdded'; ids: string[] }
   | { kind: 'eraserDrag'; ids: string[] }
+  | {
+      kind: 'strokeSlice';
+      // Original strokes tombstoned by the partial eraser.
+      removedOriginals: string[];
+      // Every fragment stroke created during the drag (intermediate + final).
+      addedFragments: string[];
+      // Fragments still visible when the drag ended (added minus re-erased).
+      finalFragments: string[];
+    }
   | { kind: 'clearAll'; ids: string[] }
   | { kind: 'selectionDelete'; ids: string[] }
   | { kind: 'selectionMove'; ids: string[]; dx: number; dy: number }
@@ -448,6 +458,101 @@ export class InkDocument {
     if (unique.length > 0) {
       this.recordOp({ kind: 'eraserDrag', ids: unique });
     }
+  }
+
+  /**
+   * Partial ("true") eraser: for every stroke the eraser passes over, remove
+   * the covered portions and replace the stroke with the surviving fragments.
+   * Records no undo op (call `finishSliceErase` once at the end of the drag,
+   * mirroring `eraseAtMany` + `finishEraserDrag`) so a swipe undoes as one
+   * step. Returns the ids tombstoned and the fragment ids created this batch.
+   */
+  sliceAtMany(
+    points: Array<{ x: number; y: number }>,
+    radius: number
+  ): MutationResult<{ removed: string[]; added: string[] }> {
+    const empty = { value: { removed: [], added: [] }, update: null };
+    if (!(radius > 0)) return empty;
+    const circles: EraserCircle[] = [];
+    for (const point of points) {
+      if (Number.isFinite(point.x) && Number.isFinite(point.y)) {
+        circles.push({ x: point.x, y: point.y, r: radius });
+      }
+    }
+    if (circles.length === 0) return empty;
+
+    // Strokes whose path the eraser actually touches this batch.
+    const targets = new Map<string, StrokeMeta>();
+    for (const circle of circles) {
+      for (const meta of this.strokeMetasAtPoint(circle, radius)) {
+        if (targets.has(meta.id)) continue;
+        if (strokeHitAt(meta, circle, radius)) targets.set(meta.id, meta);
+      }
+    }
+    if (targets.size === 0) return empty;
+
+    return this.transactLocalUpdate(() => {
+      const removed: string[] = [];
+      const added: string[] = [];
+      const strokeMaps = this.ensureStrokeMapCache();
+      for (const [id, meta] of targets) {
+        const map = strokeMaps.get(id);
+        if (!map || map.get(FIELD_TOMBSTONED) === true) continue;
+        const { changed, fragments } = sliceStrokeByCircles(
+          meta.points,
+          circles
+        );
+        if (!changed) continue;
+        map.set(FIELD_TOMBSTONED, true);
+        removed.push(id);
+        for (const fragment of fragments) {
+          const points = sanitizedPoints(fragment);
+          if (points.length < 2) continue;
+          const newId = `stroke_${randomId()}`;
+          const newMap = new Y.Map<unknown>();
+          newMap.set(FIELD_ID, newId);
+          newMap.set(FIELD_TOMBSTONED, false);
+          newMap.set(
+            FIELD_PAYLOAD,
+            encodePayloadV2({
+              color: meta.color,
+              width: meta.width,
+              points
+            })
+          );
+          this.strokes.push([newMap]);
+          strokeMaps.set(newId, newMap);
+          added.push(newId);
+        }
+      }
+      if (removed.length > 0 || added.length > 0) {
+        this.invalidateVisibleStrokeCache();
+      }
+      return { removed, added };
+    });
+  }
+
+  /**
+   * Close out a partial-erase drag as a single undo step. `added` is every
+   * fragment created during the drag, `removed` every stroke tombstoned.
+   * Fragments that were themselves re-erased mid-drag are added-and-removed
+   * and must not reappear on redo, so they are excluded from `finalFragments`.
+   */
+  finishSliceErase(added: Iterable<string>, removed: Iterable<string>): void {
+    const addedSet = new Set(added);
+    const removedSet = new Set(removed);
+    const removedOriginals = [...removedSet]
+      .filter((id) => !addedSet.has(id))
+      .sort();
+    const addedFragments = [...addedSet].sort();
+    const finalFragments = addedFragments.filter((id) => !removedSet.has(id));
+    if (removedOriginals.length === 0 && addedFragments.length === 0) return;
+    this.recordOp({
+      kind: 'strokeSlice',
+      removedOriginals,
+      addedFragments,
+      finalFragments
+    });
   }
 
   undoLast(): MutationResult<boolean> {
@@ -942,6 +1047,11 @@ function applyUndoOp(doc: InkDocument, op: UndoOp): void {
     case 'selectionDelete':
       doc.setStrokesTombstoned(op.ids, false);
       break;
+    case 'strokeSlice':
+      // Restore the originals and drop every fragment the drag produced.
+      doc.setStrokesTombstoned(op.removedOriginals, false);
+      doc.setStrokesTombstoned(op.addedFragments, true);
+      break;
     case 'selectionMove':
       doc.translateStrokeSet(new Set(op.ids), -op.dx, -op.dy);
       break;
@@ -966,6 +1076,11 @@ function applyRedoOp(doc: InkDocument, op: UndoOp): void {
     case 'clearAll':
     case 'selectionDelete':
       doc.setStrokesTombstoned(op.ids, true);
+      break;
+    case 'strokeSlice':
+      // Re-erase the originals and bring back only the surviving fragments.
+      doc.setStrokesTombstoned(op.removedOriginals, true);
+      doc.setStrokesTombstoned(op.finalFragments, false);
       break;
     case 'selectionMove':
       doc.translateStrokeSet(new Set(op.ids), op.dx, op.dy);

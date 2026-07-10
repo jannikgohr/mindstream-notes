@@ -55,13 +55,20 @@
   });
 
   // Keep the menu inside the viewport.
+  const viewportInset = 8;
   let safeX = $derived.by(() => {
     if (typeof window === 'undefined') return x;
-    return Math.min(x, window.innerWidth - 220);
+    return Math.max(
+      viewportInset,
+      Math.min(x, window.innerWidth - 200 - viewportInset)
+    );
   });
   let safeY = $derived.by(() => {
     if (typeof window === 'undefined') return y;
-    return Math.min(y, window.innerHeight - items.length * 32 - 16);
+    return Math.max(
+      viewportInset,
+      Math.min(y, window.innerHeight - items.length * 32 - viewportInset)
+    );
   });
   let submenuOpensLeft = $derived.by(() => {
     if (typeof window === 'undefined') return false;

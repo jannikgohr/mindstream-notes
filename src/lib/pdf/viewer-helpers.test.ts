@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  annotationIdAtPoint,
   buildPdfAnnotation,
   clampZoom,
   clonePdfFormValue,
@@ -162,5 +163,109 @@ describe('isCommentLikeAnnotation', () => {
 
   it('treats ink as not comment-like', () => {
     expect(isCommentLikeAnnotation(make('ink'))).toBe(false);
+  });
+});
+
+describe('annotationIdAtPoint', () => {
+  function layerWith(
+    nodes: Array<{
+      id: string;
+      left: number;
+      top: number;
+      width: number;
+      height: number;
+    }>
+  ): HTMLElement {
+    const layer = document.createElement('div');
+    for (const spec of nodes) {
+      const node = document.createElement('div');
+      node.className = 'pdf-app-annotation';
+      node.dataset.annotationId = spec.id;
+      node.getBoundingClientRect = () =>
+        ({
+          left: spec.left,
+          top: spec.top,
+          right: spec.left + spec.width,
+          bottom: spec.top + spec.height,
+          width: spec.width,
+          height: spec.height,
+          x: spec.left,
+          y: spec.top,
+          toJSON: () => ({})
+        }) as DOMRect;
+      layer.append(node);
+    }
+    return layer;
+  }
+
+  it('returns null when nothing is under the point', () => {
+    const layer = layerWith([
+      { id: 'a', left: 0, top: 0, width: 10, height: 10 }
+    ]);
+    expect(annotationIdAtPoint(layer, 50, 50)).toBeNull();
+  });
+
+  it('finds the annotation whose rect contains the point', () => {
+    const layer = layerWith([
+      { id: 'a', left: 0, top: 0, width: 10, height: 10 },
+      { id: 'b', left: 20, top: 20, width: 10, height: 10 }
+    ]);
+    expect(annotationIdAtPoint(layer, 25, 25)).toBe('b');
+    expect(annotationIdAtPoint(layer, 5, 5)).toBe('a');
+  });
+
+  it('prefers the topmost (last-rendered) annotation when rects overlap', () => {
+    const layer = layerWith([
+      { id: 'below', left: 0, top: 0, width: 20, height: 20 },
+      { id: 'above', left: 5, top: 5, width: 20, height: 20 }
+    ]);
+    expect(annotationIdAtPoint(layer, 10, 10)).toBe('above');
+  });
+
+  it('keeps the previous hit when a later node has no annotation id', () => {
+    const layer = document.createElement('div');
+
+    const below = document.createElement('div');
+    below.className = 'pdf-app-annotation';
+    below.dataset.annotationId = 'kept';
+    below.getBoundingClientRect = () =>
+      ({
+        left: 0,
+        top: 0,
+        right: 20,
+        bottom: 20,
+        width: 20,
+        height: 20,
+        x: 0,
+        y: 0,
+        toJSON: () => ({})
+      }) as DOMRect;
+
+    const above = document.createElement('div');
+    above.className = 'pdf-app-annotation';
+    above.getBoundingClientRect = () =>
+      ({
+        left: 5,
+        top: 5,
+        right: 25,
+        bottom: 25,
+        width: 20,
+        height: 20,
+        x: 5,
+        y: 5,
+        toJSON: () => ({})
+      }) as DOMRect;
+
+    layer.append(below, above);
+
+    expect(annotationIdAtPoint(layer, 10, 10)).toBe('kept');
+  });
+
+  it('treats rect edges as inside', () => {
+    const layer = layerWith([
+      { id: 'a', left: 10, top: 10, width: 10, height: 10 }
+    ]);
+    expect(annotationIdAtPoint(layer, 10, 10)).toBe('a');
+    expect(annotationIdAtPoint(layer, 20, 20)).toBe('a');
   });
 });

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
 import {
   DEFAULT_COLOR,
@@ -234,6 +234,111 @@ describe('InkDocument', () => {
     expect(new Set(ids)).toEqual(new Set([inside, crossing]));
   });
 
+  it('selects strokes that lie exactly on a lasso edge', () => {
+    const doc = new InkDocument();
+    doc.beginStroke(DEFAULT_COLOR, DEFAULT_WIDTH);
+    doc.pushPoint(-10, 0, 1);
+    doc.pushPoint(110, 0, 1);
+    const edge = doc.endStroke().value;
+    if (!edge) throw new Error('expected committed stroke');
+
+    const ids = doc.strokeIdsInLasso([
+      { x: 0, y: 0 },
+      { x: 100, y: 0 },
+      { x: 100, y: 20 },
+      { x: 0, y: 20 }
+    ]);
+
+    expect(ids).toContain(edge);
+  });
+
+  it('returns no lasso hits when the polygon misses every stroke', () => {
+    const doc = new InkDocument();
+    doc.beginStroke(DEFAULT_COLOR, DEFAULT_WIDTH);
+    doc.pushPoint(10, 10, 1);
+    doc.pushPoint(15, 10, 1);
+    doc.endStroke();
+
+    expect(
+      doc.strokeIdsInLasso([
+        { x: 0, y: 0 },
+        { x: 20, y: 0 },
+        { x: 20, y: 5 },
+        { x: 5, y: 5 },
+        { x: 5, y: 20 },
+        { x: 0, y: 20 }
+      ])
+    ).toEqual([]);
+  });
+
+  it('returns an empty update when the eraser misses every stroke', () => {
+    const doc = new InkDocument();
+    doc.beginStroke(DEFAULT_COLOR, DEFAULT_WIDTH);
+    doc.pushPoint(100, 100, 1);
+    doc.pushPoint(110, 100, 1);
+    doc.endStroke();
+
+    expect(doc.eraseAt({ x: 0, y: 0 }, 5).value).toEqual([]);
+    expect(doc.visibleStrokes()).toHaveLength(1);
+  });
+
+  it('keeps selection styling as a no-op when the stroke already matches', () => {
+    const doc = new InkDocument();
+    doc.beginStroke(DEFAULT_COLOR, 4);
+    doc.pushPoint(0, 0, 1);
+    doc.pushPoint(10, 0, 1);
+    const first = doc.endStroke().value;
+    if (!first) throw new Error('expected committed stroke');
+
+    expect(
+      doc.styleStrokes([first], { color: DEFAULT_COLOR, width: 4 }).value
+    ).toEqual([]);
+  });
+
+  it('returns no hit when a point stays inside a stroke bounds box but away from every segment', () => {
+    const strokes = [
+      {
+        id: 'stroke_box',
+        color: DEFAULT_COLOR,
+        width: DEFAULT_WIDTH,
+        points: [
+          { x: 0, y: 0, pressure: 1 },
+          { x: 10, y: 0, pressure: 1 },
+          { x: 10, y: 10, pressure: 1 }
+        ],
+        bounds: {
+          minX: 0,
+          minY: 0,
+          maxX: 10,
+          maxY: 10
+        }
+      }
+    ];
+
+    expect(strokesHitAt(strokes, { x: 5, y: 5 }, 1)).toEqual([]);
+  });
+
+  it('treats an empty decoded stroke as zero-sized bounds', () => {
+    const ydoc = new Y.Doc();
+    const strokes = ydoc.getArray<Y.Map<unknown>>('strokes');
+    const stroke = new Y.Map<unknown>();
+    stroke.set('id', 'stroke_empty');
+    stroke.set('tombstoned', false);
+    stroke.set('payload', buildPayload(0xff112233, 2.5, [], []));
+    strokes.push([stroke]);
+
+    const doc = InkDocument.fromBytes(Y.encodeStateAsUpdate(ydoc));
+    const [decoded] = doc.visibleStrokes();
+
+    expect(decoded.bounds).toEqual({
+      minX: 0,
+      minY: 0,
+      maxX: 0,
+      maxY: 0
+    });
+    expect(doc.contentMaxY()).toBe(0);
+  });
+
   it('deletes selected strokes as one undoable operation', () => {
     const doc = new InkDocument();
     doc.beginStroke(DEFAULT_COLOR, DEFAULT_WIDTH);
@@ -417,6 +522,79 @@ describe('InkDocument', () => {
       { x: 3, y: 4, pressure: 1 }
     ]);
   });
+
+  it('drops malformed v1 and v2 payloads instead of decoding garbage', () => {
+    const ydoc = new Y.Doc();
+    const strokes = ydoc.getArray<Y.Map<unknown>>('strokes');
+
+    for (const [id, payload] of [
+      ['stroke_bad_v1', new Uint8Array([1, 0, 0, 0, 0, 1, 0, 0, 0])],
+      ['stroke_bad_v2', new Uint8Array([2, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0])]
+    ] as const) {
+      const stroke = new Y.Map<unknown>();
+      stroke.set('id', id);
+      stroke.set('tombstoned', false);
+      stroke.set('payload', payload);
+      strokes.push([stroke]);
+    }
+
+    const doc = InkDocument.fromBytes(Y.encodeStateAsUpdate(ydoc));
+    expect(doc.visibleStrokes()).toEqual([]);
+  });
+
+  it('decodes legacy v1 payloads and ignores unknown payload versions', () => {
+    const ydoc = new Y.Doc();
+    const strokes = ydoc.getArray<Y.Map<unknown>>('strokes');
+
+    const legacy = new Y.Map<unknown>();
+    legacy.set('id', 'stroke_legacy');
+    legacy.set('tombstoned', false);
+    legacy.set(
+      'payload',
+      buildLegacyPayload(0xff112233, [{ x: 1, y: 2, pressure: 0.5 }])
+    );
+    strokes.push([legacy]);
+
+    const unknown = new Y.Map<unknown>();
+    unknown.set('id', 'stroke_unknown');
+    unknown.set('tombstoned', false);
+    unknown.set('payload', new Uint8Array([99, 1, 2, 3, 4]));
+    strokes.push([unknown]);
+
+    const doc = InkDocument.fromBytes(Y.encodeStateAsUpdate(ydoc));
+    const [decoded] = doc.visibleStrokes();
+
+    expect(doc.visibleStrokes()).toHaveLength(1);
+    expect(decoded).toMatchObject({
+      id: 'stroke_legacy',
+      color: 0xff112233,
+      width: DEFAULT_WIDTH,
+      points: [{ x: 1, y: 2, pressure: 0.5 }]
+    });
+  });
+
+  it('falls back to a non-UUID stroke id when crypto.randomUUID is unavailable', async () => {
+    const originalCrypto = globalThis.crypto;
+    const fallbackCrypto = {
+      getRandomValues: originalCrypto.getRandomValues.bind(originalCrypto)
+    } as Crypto;
+
+    vi.resetModules();
+    vi.stubGlobal('crypto', fallbackCrypto);
+
+    try {
+      const { InkDocument: ReloadedInkDocument } = await import('./document');
+      const doc = new ReloadedInkDocument();
+      doc.beginStroke(DEFAULT_COLOR, DEFAULT_WIDTH);
+      doc.pushPoint(0, 0, 1);
+      const { value: id } = doc.endStroke();
+
+      expect(id).toMatch(/^stroke_[0-9a-z]+_[0-9a-z]+$/);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.resetModules();
+    }
+  });
 });
 
 describe('ink page helpers', () => {
@@ -485,6 +663,32 @@ function buildPayload(
   }
   for (const p of pressures) {
     view.setFloat32(offset, p, true);
+    offset += 4;
+  }
+  return new Uint8Array(out);
+}
+
+function buildLegacyPayload(
+  color: number,
+  points: Array<{ x: number; y: number; pressure: number }>
+): Uint8Array {
+  const out = new ArrayBuffer(9 + points.length * 12);
+  const view = new DataView(out);
+  let offset = 0;
+  view.setUint8(offset, 1);
+  offset += 1;
+  view.setUint32(offset, color, true);
+  offset += 4;
+  view.setUint32(offset, points.length, true);
+  offset += 4;
+  for (const point of points) {
+    view.setFloat32(offset, point.x, true);
+    offset += 4;
+    view.setFloat32(offset, point.y, true);
+    offset += 4;
+  }
+  for (const point of points) {
+    view.setFloat32(offset, point.pressure, true);
     offset += 4;
   }
   return new Uint8Array(out);

@@ -55,7 +55,6 @@
      */
     compact?: boolean;
     collapsed?: boolean;
-    onLabelOverflowChange?: (overflowing: boolean) => void;
   }
   let {
     strategy,
@@ -65,8 +64,7 @@
     iconClass = 'size-3.5',
     variant = 'outlined',
     compact = false,
-    collapsed = false,
-    onLabelOverflowChange
+    collapsed = false
   }: Props = $props();
 
   const strategyLabel = $derived.by(() => {
@@ -84,7 +82,6 @@
   let menuX = $state(0);
   let menuY = $state(0);
   let menuTriggerEl = $state<HTMLElement | null>(null);
-  let labelEl = $state<HTMLSpanElement | null>(null);
 
   function toggleDirection() {
     onDirectionChange(direction === 'asc' ? 'desc' : 'asc');
@@ -131,26 +128,6 @@
       onSelect: () => onStrategyChange(opt.id as SortStrategy)
     }));
   }
-
-  function reportLabelOverflow() {
-    if (!labelEl || collapsed) return;
-    onLabelOverflowChange?.(labelEl.scrollWidth > labelEl.clientWidth + 1);
-  }
-
-  $effect(() => {
-    void strategyLabel;
-    void collapsed;
-    void labelEl;
-    requestAnimationFrame(reportLabelOverflow);
-  });
-
-  $effect(() => {
-    if (!labelEl || collapsed) return;
-    const observer = new ResizeObserver(() => reportLabelOverflow());
-    observer.observe(labelEl);
-    requestAnimationFrame(reportLabelOverflow);
-    return () => observer.disconnect();
-  });
 </script>
 
 {#if collapsed}
@@ -192,7 +169,7 @@
   </button>
 {:else}
   <div
-    class="inline-flex min-w-0 select-none items-stretch overflow-hidden rounded-md text-xs {compact
+    class="inline-flex shrink-0 select-none items-stretch overflow-hidden rounded-md text-xs {compact
       ? 'h-7'
       : 'h-8'} {variant === 'outlined'
       ? 'border border-border bg-background'
@@ -225,12 +202,12 @@
 
     <button
       type="button"
-      class="flex min-w-0 items-center gap-1.5 px-2.5 transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      class="flex items-center gap-1.5 px-2.5 transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       onclick={openStrategyMenu}
       use:tooltip={tUi('sort.switch')}
       aria-label={tUi('sort.switch')}
     >
-      <span bind:this={labelEl} class="truncate">{strategyLabel}</span>
+      <span class="whitespace-nowrap">{strategyLabel}</span>
     </button>
   </div>
 {/if}

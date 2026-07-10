@@ -27,6 +27,8 @@ import { tUi } from '$lib/settings/i18n.svelte';
 import {
   addMermaidMenuItem,
   autoPair,
+  installBlockHandleGuard,
+  installSelectionToolbarAutoHide,
   markdownSearchPlugins,
   mermaidLanguageDescription,
   renderMermaidPreview,
@@ -34,6 +36,7 @@ import {
   type MarkdownSearchBridge,
   type WikilinkBridge
 } from './plugins';
+import { useNoteLinkHrefNeutralizer } from './note-link-schema';
 
 export interface CrepeSetupOptions {
   /** Mount point; Crepe owns the DOM under it. */
@@ -94,6 +97,17 @@ export interface CrepeSetupOptions {
  * teardown via `crepe.destroy()`.
  */
 export function buildCrepe(opts: CrepeSetupOptions): Crepe {
+  // Keep the block-handle "+" button from firing on a pointerup whose
+  // gesture started elsewhere (e.g. releasing a text-selection drag
+  // over the hover handle). Document-level and idempotent, so multiple
+  // editors share one guard.
+  installBlockHandleGuard(opts.host.ownerDocument);
+
+  // Hide the selection toolbar when the user clicks outside the editor
+  // — Crepe only re-evaluates it on transactions, so it otherwise
+  // lingers (and eats the next click under it).
+  installSelectionToolbarAutoHide(opts.host);
+
   const features: Partial<Record<CrepeFeature, boolean>> = {};
   if (opts.mobile) features[Crepe.Feature.BlockEdit] = false;
   if (!opts.mathEnabled) features[Crepe.Feature.Latex] = false;
@@ -143,6 +157,11 @@ export function buildCrepe(opts: CrepeSetupOptions): Crepe {
         : {})
     }
   });
+
+  // Note-link anchors must not carry a navigable `mindstream://` href, or
+  // tapping one white-screens the Android WebView — see the helper for the
+  // full rationale. Registered before create() builds the schema.
+  useNoteLinkHrefNeutralizer(crepe.editor);
 
   crepe.editor.use(collab);
 

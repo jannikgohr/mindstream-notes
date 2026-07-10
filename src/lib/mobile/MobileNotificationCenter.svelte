@@ -1,8 +1,15 @@
 <script lang="ts">
+  /**
+   * Mobile notification centre — a full-screen surface driven by the
+   * unified options menu (MobileOptionsMenu), which owns the trigger,
+   * the unread indicator and the nav-stack entry. This component is just
+   * the controlled sheet: `open` shows it, and any dismissal (X button,
+   * backdrop, Escape) reports back through `onClose` so the menu can
+   * collapse the surface and sync the history stack.
+   */
   import { onMount } from 'svelte';
   import { Dialog } from 'bits-ui';
-  import { Bell, Loader2, X } from '@lucide/svelte';
-  import { Button } from '$lib/components/ui/button';
+  import { X } from '@lucide/svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
   import {
     notificationState,
@@ -10,45 +17,20 @@
   } from '$lib/notifications/store.svelte';
   import LazyNotificationWidget from '$lib/notifications/LazyNotificationWidget.svelte';
 
-  let open = $state(false);
-
-  const notificationCount = $derived(notificationState.items.length);
-  const countLabel = $derived(
-    notificationCount > 99 ? '99+' : notificationCount
-  );
-
-  function close() {
-    open = false;
-  }
+  let { open = false, onClose }: { open?: boolean; onClose: () => void } =
+    $props();
 
   onMount(() => {
     void scanForUpdateNotifications();
   });
 </script>
 
-<Dialog.Root bind:open>
-  <Button
-    variant="ghost"
-    onclick={() => (open = true)}
-    title={tUi('notifications.open')}
-    aria-label={tUi('notifications.open')}
-    aria-expanded={open}
-    class="relative size-12 shrink-0 rounded-full border border-input p-0 [&_svg]:size-8"
-  >
-    {#if notificationState.updateScanPending}
-      <Loader2 class="animate-spin" strokeWidth={1} />
-    {:else}
-      <Bell strokeWidth={1} />
-    {/if}
-    {#if notificationCount > 0}
-      <span
-        class="absolute right-1 top-1 min-w-4 rounded-full bg-primary px-1 text-[10px] font-semibold leading-4 text-primary-foreground"
-      >
-        {countLabel}
-      </span>
-    {/if}
-  </Button>
-
+<Dialog.Root
+  {open}
+  onOpenChange={(o: boolean) => {
+    if (!o) onClose();
+  }}
+>
   <Dialog.Portal>
     <Dialog.Content
       class="safe-top safe-bottom safe-x fixed inset-0 z-50 flex flex-col bg-background text-foreground focus:outline-none"
@@ -76,7 +58,10 @@
         {:else}
           <div class="space-y-1">
             {#each notificationState.items as notification (notification.id)}
-              <LazyNotificationWidget {notification} onClose={close} />
+              <LazyNotificationWidget
+                {notification}
+                onClose={() => onClose()}
+              />
             {/each}
           </div>
         {/if}

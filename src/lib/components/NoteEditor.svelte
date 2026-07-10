@@ -215,16 +215,13 @@
   }
 
   // "Trashed" has four shapes the editor needs to recognise:
-  //   1. data.useTrash = true (default) — the note is moved into the
-  //      special 'trash' collection, but trashed_at stays NULL.
+  //   1. The note is moved into the special 'trash' collection, but
+  //      trashed_at stays NULL.
   //   2. The note's *containing folder* (or any ancestor folder) is in
   //      trash. The note's own parent_collection_id doesn't change in
   //      this case — only an ancestor walk catches it.
-  //   3. data.useTrash = false — trashed_at is set AND trashNote() in
-  //      tree.svelte.ts removes the row from notesById, so the entry
-  //      is just gone from the local tree.
-  //   4. The note has been purged remotely while the tab is still open —
-  //      same "missing from tree" signature as (3). We treat it as
+  //   3. The note has been purged remotely while the tab is still open —
+  //      same "missing from tree" signature as (2). We treat it as
   //      trashed read-only too, which is safer than letting the user
   //      keep typing into a save that'll fail.
   // Gated on tree.ready so we don't flash the banner during the brief

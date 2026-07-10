@@ -59,6 +59,7 @@
   } from '$lib/layout/page-layout';
   import PageOverlayScrollbar from '$lib/layout/page-overlay-scrollbar.svelte';
   import { getSettingValue } from '$lib/settings/store.svelte';
+  import { prefersReducedMotion } from '$lib/reduce-motion.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { exportAnnotatedPdfNote } from '$lib/note-exporters/pdf';
   import FindBar from '$lib/components/FindBar.svelte';
@@ -67,6 +68,7 @@
   import PdfAnnotationMenu from '$lib/pdf/PdfAnnotationMenu.svelte';
   import PdfSelectionMenu from '$lib/pdf/PdfSelectionMenu.svelte';
   import SignaturePadDialog from '$lib/pdf/SignaturePadDialog.svelte';
+  import SignatureImportDialog from '$lib/pdf/SignatureImportDialog.svelte';
   import SignaturePicker from '$lib/pdf/SignaturePicker.svelte';
   import {
     loadFlatOutline,
@@ -89,7 +91,10 @@
   import {
     cloneSignatureSnapshot,
     strokeBounds,
-    strokePointsAttr
+    strokeOutlinePath,
+    strokePointsAttr,
+    translateRect,
+    translateStroke
   } from '$lib/pdf/stroke-utils';
   import {
     PDF_ANNOTATIONS_MAP,
@@ -120,10 +125,14 @@
     registerEditor,
     unregisterEditor,
     SEARCH_ACTIVE_NOTE_COMMAND,
+    APP_REDO_COMMAND,
+    APP_UNDO_COMMAND,
     type EditorListener
   } from '$lib/hotkeys/bus.svelte';
   import {
+    ANNOTATION_CLICK_SLOP_PX,
     ANNOTATION_COLORS,
+    annotationIdAtPoint,
     buildPdfAnnotation,
     clampZoom,
     clonePdfFormValue,
@@ -169,9 +178,7 @@
 
   let hostEl = $state<HTMLDivElement | null>(null);
   let container = $state<HTMLDivElement | null>(null);
-  const reduceMotion = $derived(
-    getSettingValue('appearance.reduceMotion') === true
-  );
+  const reduceMotion = $derived(prefersReducedMotion());
   let pdfDoc = $state<PdfDocument | null>(null);
   let pageNumbers = $state<number[]>([]);
   let loading = $state(true);
@@ -229,6 +236,7 @@
   const savedSignatures = $derived(signatureLibrary.signatures);
   let activeSignatureId = $state<string | null>(null);
   let signatureDialogOpen = $state(false);
+  let signatureImportOpen = $state(false);
   let signaturePickerOpen = $state(false);
   let signatureButton = $state<HTMLButtonElement | null>(null);
   let savingState = $state<'idle' | 'pending' | 'saving' | 'saved' | 'error'>(
@@ -402,17 +410,26 @@
 
   function openSignaturePad() {
     signaturePickerOpen = false;
+    signatureImportOpen = false;
     signatureDialogOpen = true;
+  }
+
+  function openSignatureImport() {
+    signaturePickerOpen = false;
+    signatureDialogOpen = false;
+    signatureImportOpen = true;
   }
 
   function handleSignatureSaved(signature: PdfSignatureSnapshot) {
     appendSignature(signature);
     signatureDialogOpen = false;
+    signatureImportOpen = false;
     activeTool = 'signature';
   }
 
   function handleSignatureCancelled() {
     signatureDialogOpen = false;
+    signatureImportOpen = false;
     if (savedSignatures.length === 0) activeTool = 'select';
   }
 
@@ -515,6 +532,27 @@
         updatedAt: new Date().toISOString()
       });
     });
+  }
+
+  /** Shift an ink/signature annotation by a PDF-space delta (drag to move). */
+  function moveAnnotation(id: string, dx: number, dy: number) {
+    const map = annotationsMap;
+    if (isTrashed || !map || (dx === 0 && dy === 0)) return;
+    const existing = map.get(id);
+    if (!existing) return;
+    const rects = existing.rects.map((rect) => translateRect(rect, dx, dy));
+    const strokes = existing.strokes?.map((stroke) =>
+      translateStroke(stroke, dx, dy)
+    );
+    runLocal(() => {
+      map.set(id, {
+        ...existing,
+        rects,
+        ...(strokes ? { strokes } : {}),
+        updatedAt: new Date().toISOString()
+      });
+    });
+    selectedAnnotationId = id;
   }
 
   function undo() {
@@ -1328,9 +1366,11 @@
         if (!isTrashed) setTool('delete');
         return true;
       case 'editor.pdf.undo':
+      case APP_UNDO_COMMAND:
         if (!isTrashed) undo();
         return true;
       case 'editor.pdf.redo':
+      case APP_REDO_COMMAND:
         if (!isTrashed) redo();
         return true;
       case 'editor.pdf.toggleComments':
@@ -2338,6 +2378,10 @@
     // Link annotations for this page (external URLs + internal jumps),
     // fetched once per draw and overlaid as clickable anchors.
     let currentLinks: PdfLink[] = [];
+    // Tears down the text-mode click-to-select listeners installed by
+    // renderAppAnnotations (they live on the page element, which
+    // outlives each annotation layer).
+    let textModeClickCleanup: (() => void) | null = null;
     // Register the in-flight-cancel hook so the renderObserver can pre-empt
     // this page's render the instant the page leaves the band — even if
     // the DOM teardown is still inside its 200 ms grace window. Three
@@ -2530,7 +2574,67 @@
           current.activeTool === 'comment') &&
           !current.areaMode);
       layer.style.pointerEvents = textMode || isTrashed ? 'none' : 'auto';
+      // In text mode the annotation nodes themselves are also
+      // pointer-transparent — otherwise a highlight sitting on top of
+      // the text layer would swallow the drag and make its own text
+      // unselectable. Clicking an annotation still works: a plain click
+      // (no drag, no resulting selection) is hit-tested against the
+      // rendered rects below.
+      const nodesInterceptPointer = !textMode;
       pageEl.append(layer);
+
+      // Grab-and-drag an ink/signature node. A press that never travels past
+      // the click slop just selects; a real drag translates the node live
+      // (cheap CSS transform) and commits the PDF-space delta on release.
+      function attachMoveHandler(node: HTMLElement, annotation: PdfAnnotation) {
+        node.addEventListener('pointerdown', (event) => {
+          if (event.button !== 0) return;
+          event.preventDefault();
+          event.stopPropagation();
+          const pageRect = pageEl!.getBoundingClientRect();
+          const [pdfStartX, pdfStartY] = viewport!.convertToPdfPoint(
+            event.clientX - pageRect.left,
+            event.clientY - pageRect.top
+          );
+          const startClientX = event.clientX;
+          const startClientY = event.clientY;
+          let moving = false;
+          node.setPointerCapture?.(event.pointerId);
+
+          const onMove = (moveEvent: PointerEvent) => {
+            const dxPx = moveEvent.clientX - startClientX;
+            const dyPx = moveEvent.clientY - startClientY;
+            if (!moving && Math.hypot(dxPx, dyPx) <= ANNOTATION_CLICK_SLOP_PX) {
+              return;
+            }
+            moving = true;
+            node.classList.add('pdf-app-annotation-moving');
+            node.style.transform = `translate(${dxPx}px, ${dyPx}px)`;
+          };
+          const onUp = (upEvent: PointerEvent) => {
+            node.removeEventListener('pointermove', onMove);
+            node.removeEventListener('pointerup', onUp);
+            node.releasePointerCapture?.(upEvent.pointerId);
+            node.classList.remove('pdf-app-annotation-moving');
+            node.style.transform = '';
+            if (!moving) {
+              selectAnnotation(annotation.id);
+              return;
+            }
+            const [pdfEndX, pdfEndY] = viewport!.convertToPdfPoint(
+              upEvent.clientX - pageRect.left,
+              upEvent.clientY - pageRect.top
+            );
+            moveAnnotation(
+              annotation.id,
+              pdfEndX - pdfStartX,
+              pdfEndY - pdfStartY
+            );
+          };
+          node.addEventListener('pointermove', onMove);
+          node.addEventListener('pointerup', onUp);
+        });
+      }
 
       const pageAnnotations = annotations.filter(
         (annotation) => annotation.pageIndex === current.pageNumber - 1
@@ -2575,6 +2679,7 @@
             '--annotation-opacity',
             `${annotation.opacity}`
           );
+          if (!nodesInterceptPointer) node.style.pointerEvents = 'none';
           node.title = annotation.body || node.getAttribute('aria-label') || '';
           if (annotation.type === 'signature' && annotation.signature) {
             const svg = document.createElementNS(
@@ -2587,18 +2692,31 @@
             );
             svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
             svg.classList.add('pdf-app-stroke-svg');
-            for (const stroke of annotation.signature.strokes) {
-              const polyline = document.createElementNS(
+            if (annotation.signature.image?.dataUrl) {
+              const image = document.createElementNS(
                 'http://www.w3.org/2000/svg',
-                'polyline'
+                'image'
               );
-              polyline.setAttribute('points', strokePointsAttr(stroke.points));
-              polyline.setAttribute('fill', 'none');
-              polyline.setAttribute('stroke', stroke.color);
-              polyline.setAttribute('stroke-width', `${stroke.width}`);
-              polyline.setAttribute('stroke-linecap', 'round');
-              polyline.setAttribute('stroke-linejoin', 'round');
-              svg.append(polyline);
+              image.setAttribute('href', annotation.signature.image.dataUrl);
+              image.setAttribute('x', '0');
+              image.setAttribute('y', '0');
+              image.setAttribute('width', `${annotation.signature.width}`);
+              image.setAttribute('height', `${annotation.signature.height}`);
+              image.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+              svg.append(image);
+            } else {
+              for (const stroke of annotation.signature.strokes) {
+                // Filled outline path (variable width via point pressure)
+                // — same rendering as SignatureStrokes.svelte.
+                const path = document.createElementNS(
+                  'http://www.w3.org/2000/svg',
+                  'path'
+                );
+                path.setAttribute('d', strokeOutlinePath(stroke));
+                path.setAttribute('fill', stroke.color);
+                path.setAttribute('stroke', 'none');
+                svg.append(path);
+              }
             }
             node.append(svg);
           } else if (annotation.type === 'ink' && annotation.strokes) {
@@ -2635,12 +2753,16 @@
             }
             node.append(svg);
           }
-          if (current.activeTool === 'delete') {
-            node.addEventListener('pointerdown', (event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              activateAnnotation(annotation);
-            });
+          // Ink and signatures float above the page, so in select mode the
+          // user can grab and drag them to reposition. Highlights/comments
+          // stay anchored to the text they mark and are not movable.
+          const movable =
+            !isTrashed &&
+            (annotation.type === 'ink' || annotation.type === 'signature');
+          if (textMode && movable) {
+            node.style.pointerEvents = 'auto';
+            node.classList.add('pdf-app-annotation-movable');
+            attachMoveHandler(node, annotation);
           } else {
             node.addEventListener('pointerdown', (event) => {
               event.preventDefault();
@@ -2656,6 +2778,47 @@
           });
           layer.append(node);
         }
+      }
+
+      // Click-to-select for text mode: with the annotation nodes
+      // pointer-transparent, discriminate click from drag on the page
+      // itself. A press that travels less than the slop and leaves no
+      // text selection behind selects the annotation under the pointer;
+      // anything else is a selection drag and stays untouched.
+      textModeClickCleanup?.();
+      textModeClickCleanup = null;
+      if (textMode && !isTrashed) {
+        const controller = new AbortController();
+        let downPoint: { x: number; y: number } | null = null;
+        pageEl.addEventListener(
+          'pointerdown',
+          (event) => {
+            downPoint =
+              event.button === 0
+                ? { x: event.clientX, y: event.clientY }
+                : null;
+          },
+          { signal: controller.signal }
+        );
+        pageEl.addEventListener(
+          'pointerup',
+          (event) => {
+            const start = downPoint;
+            downPoint = null;
+            if (!start) return;
+            const travel = Math.hypot(
+              event.clientX - start.x,
+              event.clientY - start.y
+            );
+            if (travel > ANNOTATION_CLICK_SLOP_PX) return;
+            const selection = window.getSelection();
+            if (selection && !selection.isCollapsed) return;
+            const id = annotationIdAtPoint(layer, event.clientX, event.clientY);
+            if (id) selectAnnotation(id);
+          },
+          { signal: controller.signal }
+        );
+        textModeClickCleanup = () => controller.abort();
       }
 
       if (current.activeTool === 'pen') {
@@ -2877,6 +3040,8 @@
 
     function teardownPageView() {
       clearPendingPageView();
+      textModeClickCleanup?.();
+      textModeClickCleanup = null;
       destroyPageView(pageView);
       pageView = null;
       activeLayer = null;
@@ -3589,6 +3754,13 @@
       open={signatureDialogOpen}
       onCancel={handleSignatureCancelled}
       onSave={handleSignatureSaved}
+      onImport={openSignatureImport}
+    />
+
+    <SignatureImportDialog
+      open={signatureImportOpen}
+      onCancel={handleSignatureCancelled}
+      onSave={handleSignatureSaved}
     />
 
     <SignaturePicker
@@ -3599,6 +3771,7 @@
       onSelect={selectSignature}
       onDelete={deleteSignature}
       onAddNew={openSignaturePad}
+      onImport={openSignatureImport}
       onClose={() => (signaturePickerOpen = false)}
     />
   {/if}
@@ -3871,12 +4044,6 @@
   }
 
   :global(.pdf-page-host .pdf-app-annotation-signature) {
-    border: 1px solid transparent;
-    border-bottom-color: color-mix(
-      in srgb,
-      var(--annotation-color) 70%,
-      transparent
-    );
     background: rgb(255 255 255 / 0.54);
     padding: 3px 6px;
   }
@@ -3898,6 +4065,16 @@
     inset: 0;
     overflow: visible;
     pointer-events: none;
+  }
+
+  /* Ink/signature nodes are draggable in select mode. */
+  :global(.pdf-page-host .pdf-app-annotation-movable) {
+    cursor: grab;
+  }
+
+  :global(.pdf-page-host .pdf-app-annotation-moving) {
+    cursor: grabbing;
+    z-index: 4;
   }
 
   :global(.pdf-page-host .pdf-app-annotation-preview) {

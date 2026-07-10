@@ -14,14 +14,16 @@ import { setMode } from 'mode-watcher';
 import type * as autostartPlugin from '@tauri-apps/plugin-autostart';
 import {
   getCloseToTray,
+  getCustomWindowDecorations,
   getDesktopLanguage,
   getStartInTray,
   setCloseToTray,
+  setCustomWindowDecorations,
   setDesktopLanguage,
   setStartInTray
 } from '$lib/api/desktop-settings';
 import { isTauri } from '$lib/api/core';
-import { isMobile } from '$lib/platform';
+import { getPlatform, isMobile } from '$lib/platform';
 import {
   setLeftSidebarWidth,
   setRightSidebarWidth,
@@ -89,6 +91,16 @@ export const SETTING_BINDINGS: Record<string, Binding> = {
         await disable();
         await enable();
       }
+    }
+  },
+  'appearance.customWindowDecorations': {
+    get: async () =>
+      isTauri() && !isMobile()
+        ? await getCustomWindowDecorations()
+        : getPlatform() !== 'macos',
+    set: async (v) => {
+      if (!isTauri() || isMobile()) return;
+      await setCustomWindowDecorations(v === true);
     }
   },
   'appearance.mode': {

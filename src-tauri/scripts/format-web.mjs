@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 
 const patterns = [
   'src/**/*.{js,ts,svelte,json,html,css,md}',
+  'src-tauri/scripts/**/*.{js,ts,mjs,cjs,json,md,html,css}',
   '*.{js,ts,mjs,cjs,json,md,html,css}',
   'docs/**/*.{js,ts,mjs,cjs,json,md,html,css}',
   'e2e/**/*.{js,ts,mjs,cjs,json,md,html,css}',

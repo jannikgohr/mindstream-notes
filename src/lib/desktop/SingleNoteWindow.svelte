@@ -1,9 +1,8 @@
 <script lang="ts">
   /**
-   * Standalone Tauri window that renders one note. The popout's window is
-   * spawned with decorations: false (matching the main window), so this
-   * component owns the title bar — drag region in the centre, custom min/
-   * max/close trio on the right.
+   * Standalone Tauri window that renders one note. In custom-titlebar mode
+   * this component owns the draggable title bar; in native-decoration mode
+   * the OS owns window controls and this renders only the pop-in affordance.
    *
    * Dispatch mirrors DesktopLayout.openNote: load the note, then route
    * to the editor matching its `note_kind`. Unknown kinds (e.g. from a
@@ -11,11 +10,19 @@
    * silently mounting `NoteEditor` and corrupting the body on save.
    */
   import { onMount } from 'svelte';
+  import { ArrowLeftToLine } from '@lucide/svelte';
+  import { Button } from '$lib/components/ui/button';
   import NoteKindRenderer from '$lib/components/NoteKindRenderer.svelte';
   import WindowControls from '$lib/components/WindowControls.svelte';
   import { loadNote, openNoteWindow, type NoteKind } from '$lib/api';
   import { tree } from '$lib/stores/tree.svelte';
   import { subscribeOpenNoteRequest } from '$lib/stores/open-note-intent.svelte';
+  import { tUi } from '$lib/settings/i18n.svelte';
+  import { setActiveNote } from '$lib/state.svelte';
+  import {
+    initWindowChrome,
+    windowChrome
+  } from '$lib/window/decorations.svelte';
 
   interface Props {
     noteId: string;
@@ -30,16 +37,27 @@
   // is immutable for the panel's lifetime).
   let noteKind = $state<NoteKind | string | null>(null);
 
-  onMount(async () => {
-    try {
-      const note = await loadNote(noteId);
-      title = note.title;
-      noteKind = note.note_kind;
-      exists = true;
-    } catch (err) {
-      console.warn('[popout] note not found', noteId, err);
-      exists = false;
-    }
+  onMount(() => {
+    initWindowChrome();
+    setActiveNote(noteId);
+    let cancelled = false;
+    void (async () => {
+      try {
+        const note = await loadNote(noteId);
+        if (cancelled) return;
+        title = note.title;
+        noteKind = note.note_kind;
+        exists = true;
+      } catch (err) {
+        if (cancelled) return;
+        console.warn('[popout] note not found', noteId, err);
+        exists = false;
+      }
+    })();
+    return () => {
+      cancelled = true;
+      setActiveNote(null);
+    };
   });
 
   // A wikilink click inside this popout dispatches through the
@@ -54,24 +72,58 @@
       void openNoteWindow(id, target?.title ?? 'Note', null, null);
     });
   });
+
+  async function closeCurrentWindow() {
+    if (typeof window === 'undefined') return;
+    if (!('__TAURI_INTERNALS__' in window)) {
+      window.close();
+      return;
+    }
+    try {
+      const mod = await import('@tauri-apps/api/window');
+      await mod.getCurrentWindow().close();
+    } catch (err) {
+      console.warn('[popout] close failed', err);
+    }
+  }
 </script>
 
 <div class="flex h-full w-full flex-col bg-background text-foreground">
-  <!-- Frameless title bar. data-tauri-drag-region on the wrapping header
-       lets the user drag the window from any non-button area. -->
-  <header
-    data-tauri-drag-region
-    class="flex h-9 shrink-0 select-none items-center gap-1 border-b border-border bg-card px-2"
-  >
-    <span
+  {#if windowChrome.customDecorations}
+    <!-- Frameless title bar. data-tauri-drag-region on the wrapping header
+         lets the user drag the window from any non-button area. -->
+    <header
       data-tauri-drag-region
-      class="ml-2 truncate text-xs font-medium text-muted-foreground"
+      class="flex h-9 shrink-0 select-none items-center gap-1 border-b border-border bg-card px-2"
     >
-      {title}
-    </span>
-    <div data-tauri-drag-region class="flex-1"></div>
-    <WindowControls />
-  </header>
+      <span
+        data-tauri-drag-region
+        class="ml-2 truncate text-xs font-medium text-muted-foreground"
+      >
+        {title}
+      </span>
+      <div data-tauri-drag-region class="flex-1"></div>
+      <WindowControls mode="popout" />
+    </header>
+  {:else}
+    <header
+      class="flex h-9 shrink-0 select-none items-center gap-1 border-b border-border bg-card px-2"
+    >
+      <span class="ml-2 truncate text-xs font-medium text-muted-foreground">
+        {title}
+      </span>
+      <div class="flex-1"></div>
+      <Button
+        variant="ghost"
+        size="icon"
+        onclick={closeCurrentWindow}
+        title={tUi('editor.popin')}
+        aria-label={tUi('editor.popin')}
+      >
+        <ArrowLeftToLine class="size-4" />
+      </Button>
+    </header>
+  {/if}
 
   <main class="min-h-0 flex-1 overflow-hidden fullscreen-note">
     {#if exists === null}

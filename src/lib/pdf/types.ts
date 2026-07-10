@@ -26,11 +26,19 @@ export type PdfInkStroke = {
   width: number;
 };
 
+export type PdfSignatureImage = {
+  dataUrl: string;
+  width: number;
+  height: number;
+  mimeType: 'image/png';
+};
+
 export type PdfSignatureSnapshot = {
   id: string;
   width: number;
   height: number;
   strokes: PdfInkStroke[];
+  image?: PdfSignatureImage;
 };
 
 /**

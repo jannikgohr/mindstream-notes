@@ -94,7 +94,7 @@ describe('checkForAvailableUpdate', () => {
     expect(available?.version).toBe('2.0.0');
     expect(available?.currentVersion).toBeTruthy();
     expect(console.info).toHaveBeenCalledWith(
-      '[updater] available: 2.0.0 (current 0.1.10)'
+      `[updater] available: 2.0.0 (current ${available?.currentVersion})`
     );
   });
 });

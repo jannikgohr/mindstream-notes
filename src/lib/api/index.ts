@@ -15,6 +15,7 @@ export * from './history';
 export * from './content-stats';
 export * from './assets';
 export * from './collections';
+export * from './tree-batch';
 export * from './drawing';
 export * from './tree';
 export * from './layout';

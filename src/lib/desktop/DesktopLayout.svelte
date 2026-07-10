@@ -17,6 +17,7 @@
     DockviewGroupPanel,
     DockviewTheme
   } from 'dockview-core';
+  import { FileText } from '@lucide/svelte';
   import TopBar from './DesktopTopBar.svelte';
   import LazyFileExplorer from '$lib/components/LazyFileExplorer.svelte';
   import LazyNoteSidebar from '$lib/components/LazyNoteSidebar.svelte';
@@ -47,8 +48,9 @@
     ui
   } from '$lib/state.svelte';
   import { loadTree, tree } from '$lib/stores/tree.svelte';
-  import { getSettingValue } from '$lib/settings/store.svelte';
+  import { prefersReducedMotion } from '$lib/reduce-motion.svelte';
   import { loadProfiles, profilesState } from '$lib/stores/profiles.svelte';
+  import { tUi } from '$lib/settings/i18n.svelte';
   import {
     desktopNoteSource,
     setDesktopNoteSource
@@ -60,6 +62,8 @@
   let dock: DockviewApi | null = null;
   let lastActiveGroup: DockviewGroupPanel | null = null;
   const openPanels = new Map<string, IDockviewPanel>();
+  let openPanelCount = $state(0);
+  let layoutReady = $state(false);
   let saveLayoutTimer: ReturnType<typeof setTimeout> | null = null;
   let layoutPersistenceReady = false;
   let pendingTrayNoteId: string | null = null;
@@ -68,9 +72,7 @@
     group: DockviewGroupPanel;
     index: number;
   } | null = null;
-  const reduceMotion = $derived(
-    getSettingValue('appearance.reduceMotion') === true
-  );
+  const reduceMotion = $derived(prefersReducedMotion());
   const dockviewTheme = $derived<DockviewTheme>({
     name: 'bridge',
     className: 'dockview-theme-bridge',
@@ -199,9 +201,9 @@
     dock = component.api;
 
     dock.onDidActivePanelChange((panel) => {
-      if (panel?.params && typeof panel.params.noteId === 'string') {
-        setActiveNote(panel.params.noteId);
-      }
+      setActiveNote(
+        (panel?.params as { noteId?: string } | undefined)?.noteId ?? null
+      );
       schedulePersist();
     });
     dock.onDidActiveGroupChange((group) => {
@@ -210,11 +212,17 @@
     dock.onDidRemovePanel((panel) => {
       const noteId = (panel.params as { noteId?: string } | undefined)?.noteId;
       if (noteId) openPanels.delete(noteId);
+      openPanelCount = openPanels.size;
+      setActiveNote(
+        (dock?.activePanel?.params as { noteId?: string } | undefined)
+          ?.noteId ?? null
+      );
       schedulePersist();
     });
     dock.onDidAddPanel((panel) => {
       const noteId = (panel.params as { noteId?: string } | undefined)?.noteId;
       if (noteId) openPanels.set(noteId, panel);
+      openPanelCount = openPanels.size;
       schedulePersist();
     });
     dock.onDidLayoutChange(() => schedulePersist());
@@ -256,6 +264,8 @@
       void openNote(id);
     }
 
+    layoutReady = true;
+
     // Backfill PDF search text for any un-indexed PDFs (synced-in / pre-feature)
     // in the background so their content becomes searchable without opening them.
     startPdfSearchIndexing();
@@ -294,10 +304,12 @@
           ?.noteId;
         if (noteId) openPanels.set(noteId, panel);
       }
+      openPanelCount = openPanels.size;
       if (saved.activeNoteId) {
         const p = openPanels.get(saved.activeNoteId);
         p?.api.setActive();
       }
+      layoutReady = true;
       return openPanels.size > 0;
     } catch (err) {
       console.warn('[layout] restore failed, falling back', err);
@@ -379,6 +391,7 @@
     });
 
     openPanels.set(id, panel);
+    openPanelCount = openPanels.size;
     setActiveNote(id);
   }
 
@@ -855,17 +868,36 @@
       <ResizeHandle
         side="left"
         value={ui.leftSidebarWidth}
-        min={220}
+        min={245}
         max={500}
         onChange={setLeftSidebarWidth}
       />
     {/if}
 
     <main class="min-w-0 flex-1">
-      <div
-        bind:this={dockHost}
-        class="dockview-theme-bridge h-full w-full"
-      ></div>
+      <div class="relative h-full w-full">
+        <div
+          bind:this={dockHost}
+          class="dockview-theme-bridge h-full w-full"
+        ></div>
+        {#if layoutReady && openPanelCount === 0}
+          <div
+            class="pointer-events-none absolute inset-0 flex items-center justify-center p-6"
+          >
+            <section
+              class="pointer-events-auto max-w-md rounded-2xl border border-border bg-card/95 px-6 py-7 text-center shadow-lg backdrop-blur"
+            >
+              <FileText class="mx-auto size-8 text-muted-foreground" />
+              <h2 class="mt-4 text-lg font-semibold">
+                {tUi('desktop.emptyState.title')}
+              </h2>
+              <p class="mt-2 text-sm text-muted-foreground">
+                {tUi('desktop.emptyState.message')}
+              </p>
+            </section>
+          </div>
+        {/if}
+      </div>
     </main>
 
     {#if ui.rightSidebarOpen}

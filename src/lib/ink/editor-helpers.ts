@@ -9,12 +9,21 @@ import type { InkPoint } from './page';
 export type { StrokeTransform };
 
 export const SAVE_DEBOUNCE_MS = 800;
+/**
+ * Legacy fixed eraser radius, kept as the reference point for the
+ * width-derived radius: the default brush width (4) maps back to it.
+ */
 export const ERASER_RADIUS = 10;
+/** Smallest eraser radius, so a thin brush still erases usefully. */
+export const ERASER_MIN_RADIUS = 5;
+/** Eraser radius per unit of brush width (4 × 2.5 = the legacy 10). */
+export const ERASER_RADIUS_PER_WIDTH = 2.5;
 export const PAGE_FILL_LIGHT = 0xffffffff;
 export const PAGE_GRID_STEP = 28;
 export const PAGE_RULE_STEP = 48;
 export const PAGE_PATTERN_LINE_ALPHA = 0x1f;
 export const PAGE_PATTERN_DOT_ALPHA = 0x59;
+export const PAGE_PATTERN_OPACITY_DEFAULT = 100;
 export const TOOL_PREVIEW_DASH = [5, 4];
 export const MAX_ZOOM_FACTOR = 6;
 export const INK_ZOOM_DISPLAY_SCALE = 2;
@@ -41,13 +50,23 @@ export const SELECTION_PASTE_OFFSET_PX = 24;
 export const INK_TOOL_SETTING = 'editor.ink.tool';
 export const INK_COLOR_SETTING = 'editor.ink.color';
 export const INK_WIDTH_SETTING = 'editor.ink.width';
+export const INK_ERASER_MODE_SETTING = 'editor.ink.eraserMode';
 export const INK_FINGER_SETTING = 'editor.ink.fingerDrawing';
 export const INK_PAGE_THEME_SETTING = 'editor.ink.pageTheme';
 export const INK_PAGE_BACKGROUND_SETTING = 'editor.ink.pageBackground';
 export const INK_PAGE_BACKGROUND_COLOR_SETTING =
   'editor.ink.pageBackgroundColor';
+export const INK_PAGE_BACKGROUND_OPACITY_SETTING =
+  'editor.ink.pageBackgroundOpacity';
 
 export type ToolMode = 'pen' | 'eraser' | 'lasso';
+/**
+ * How the eraser removes ink:
+ *  - `stroke`: delete whole strokes the eraser touches (the default).
+ *  - `pixel`: cut strokes and keep the parts outside the eraser (OneNote /
+ *    Samsung Notes call this a "pixel" eraser).
+ */
+export type EraserMode = 'stroke' | 'pixel';
 export type PageThemeMode = 'light' | 'dark' | 'system';
 export type PageBackgroundMode = 'clear' | 'points' | 'lines' | 'grid';
 export type AndroidStylusEraserAction = 'down' | 'move' | 'up' | 'cancel';
@@ -118,6 +137,17 @@ export function normalizeInkTool(value: unknown): ToolMode {
   return 'pen';
 }
 
+export function normalizeInkEraserMode(value: unknown): EraserMode {
+  return value === 'pixel' ? 'pixel' : 'stroke';
+}
+
+/** Eraser hit radius (page units) for the current brush width. */
+export function eraserRadiusForWidth(width: unknown): number {
+  const n = typeof width === 'number' ? width : Number(width);
+  const safe = Number.isFinite(n) ? n : DEFAULT_WIDTH;
+  return Math.max(ERASER_MIN_RADIUS, safe * ERASER_RADIUS_PER_WIDTH);
+}
+
 export function normalizeInkPageTheme(value: unknown): PageThemeMode {
   if (value === 'system') return 'system';
   if (value === 'dark') return 'dark';
@@ -129,6 +159,28 @@ export function normalizeInkPageBackground(value: unknown): PageBackgroundMode {
     return value;
   }
   return 'clear';
+}
+
+export function normalizeInkPageBackgroundOpacity(value: unknown): number {
+  const n = typeof value === 'number' ? value : Number(value);
+  const percent = Number.isFinite(n) ? n : PAGE_PATTERN_OPACITY_DEFAULT;
+  return Math.min(1, Math.max(0, percent / 100));
+}
+
+export function centeredPatternPositions(
+  start: number,
+  end: number,
+  step: number
+): number[] {
+  const length = end - start;
+  if (!Number.isFinite(length) || !Number.isFinite(step) || length <= 0) {
+    return [];
+  }
+  if (step <= 0 || step > length) return [];
+  const count = Math.floor(length / step);
+  if (count <= 0) return [];
+  const margin = (length - (count - 1) * step) / 2;
+  return Array.from({ length: count }, (_, i) => start + margin + i * step);
 }
 
 export function normalizeInkWidth(value: unknown): number {

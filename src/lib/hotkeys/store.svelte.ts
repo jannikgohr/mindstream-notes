@@ -60,6 +60,35 @@ function settingKey(commandId: string): string {
   return `hotkey.${commandId}`;
 }
 
+function migrateSharedUndoRedoBindings(values: Record<string, unknown>): void {
+  const groups: Array<{ target: string; sources: string[] }> = [
+    {
+      target: 'global.undo',
+      sources: ['editor.markdown.undo', 'editor.ink.undo', 'editor.pdf.undo']
+    },
+    {
+      target: 'global.redo',
+      sources: ['editor.markdown.redo', 'editor.ink.redo', 'editor.pdf.redo']
+    }
+  ];
+
+  for (const { target, sources } of groups) {
+    const targetKey = settingKey(target);
+    if (!(targetKey in values)) {
+      for (const source of sources) {
+        const sourceKey = settingKey(source);
+        if (sourceKey in values) {
+          values[targetKey] = values[sourceKey];
+          break;
+        }
+      }
+    }
+    for (const source of sources) {
+      delete values[settingKey(source)];
+    }
+  }
+}
+
 /**
  * The reactive binding map. Same shape as the i18n.bundle pattern:
  * a single `$state` object, mutated in place, read by the entire app.
@@ -101,6 +130,8 @@ export function hydrateBindingsFromSettings(): void {
   // load, but if a future caller triggers hydration mid-circular-load
   // we'd rather skip than throw "not iterable".
   if (!Array.isArray(HOTKEY_COMMANDS)) return;
+
+  migrateSharedUndoRedoBindings(settings.values);
 
   // Walk the rename table BEFORE the main hydrate so renamed
   // commands inherit their old `settings.values` entry. Without
