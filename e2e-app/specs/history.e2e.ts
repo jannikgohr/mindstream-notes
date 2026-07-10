@@ -7,24 +7,32 @@
  * Run: MINDSTREAM_E2E_APP=1 pnpm test:e2e:app
  */
 
-import { browser, expect } from '@wdio/globals';
+import { expect } from '@wdio/globals';
 import {
   byName,
+  clickName,
+  insertText,
+  pressElementKey,
   requireAppE2E,
   restartApp,
+  setElementValue,
   waitForShell
 } from '../helpers/harness.js';
 
-async function openSeededMarkdownNote(): Promise<void> {
-  await byName('Personal').click();
-  await byName('Ideas').click();
-  await expect(byName('Markdown note')).toBeDisplayed();
+async function createHistoryNote(): Promise<string> {
+  const title = `History ${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  await clickName('New note');
+  const draft = $('input[placeholder="New note"]');
+  await draft.waitForDisplayed();
+  await setElementValue(draft, title);
+  await pressElementKey(draft, 'Enter');
+  await expect(byName(title)).toBeDisplayed();
+  await clickName(title);
+  return title;
 }
 
 async function typeInEditor(text: string): Promise<void> {
-  const editor = $('.ProseMirror');
-  await editor.click();
-  await browser.keys(text.split(''));
+  await insertText($('.ProseMirror'), text);
 }
 
 describe('T3 note history', function () {
@@ -37,70 +45,69 @@ describe('T3 note history', function () {
   });
 
   it('captures a baseline "created" version on open', async () => {
-    await openSeededMarkdownNote();
+    await createHistoryNote();
     await expect(byName('Note created')).toBeDisplayed();
   });
 
   it('restores an older version and the pre-restore checkpoint exists', async () => {
-    await openSeededMarkdownNote();
+    await createHistoryNote();
     await expect(byName('Note created')).toBeDisplayed();
 
     await typeInEditor(' a meaningful change to restore away from');
-    await byName('Refresh history').click();
+    await clickName('Refresh history');
     await expect(byName('Edited')).toBeDisplayed();
 
     // Restore the baseline; a 'reverted' entry plus the pre-restore checkpoint
     // ('edited') should both land.
-    await byName('Note created').click();
-    await byName('Restore this version').click();
+    await clickName('Note created');
+    await clickName('Restore this version');
 
     await expect(byName('Restored to an earlier version.')).toBeDisplayed();
   });
 
   it('Undo survives a tree/sync refresh (bridge-store regression)', async () => {
-    await openSeededMarkdownNote();
+    await createHistoryNote();
     await typeInEditor(' change for undo-survival');
-    await byName('Refresh history').click();
-    await byName('Note created').click();
-    await byName('Restore this version').click();
+    await clickName('Refresh history');
+    await clickName('Note created');
+    await clickName('Restore this version');
 
     const banner = byName('Restored to an earlier version.');
     await expect(banner).toBeDisplayed();
 
     // A tree refresh rebuilds notesById; the per-note bridge store must keep
     // the Undo affordance alive (a component-local banner would be wiped).
-    await byName('Refresh history').click();
+    await clickName('Refresh history');
     await expect(banner).toBeDisplayed();
     await expect(byName('Undo')).toBeEnabled();
   });
 
   it('Ctrl+Z does not revert a restore (editor-undo isolation)', async () => {
-    await openSeededMarkdownNote();
+    await createHistoryNote();
     await typeInEditor(' isolation check body text');
-    await byName('Refresh history').click();
-    await byName('Note created').click();
-    await byName('Restore this version').click();
+    await clickName('Refresh history');
+    await clickName('Note created');
+    await clickName('Restore this version');
     await expect(byName('Restored to an earlier version.')).toBeDisplayed();
 
     const before = await $('.ProseMirror').getText();
-    await $('.ProseMirror').click();
-    await browser.keys(['Control', 'z']);
+    await pressElementKey($('.ProseMirror'), 'z', { ctrlKey: true });
     // The restore is never on the editor's native undo stack, so the content
     // is unchanged by Ctrl+Z.
     await expect($('.ProseMirror')).toHaveText(before);
   });
 
   it('versions and reverted labels persist across a restart', async () => {
-    await openSeededMarkdownNote();
+    const title = await createHistoryNote();
     await typeInEditor(' persisted change');
-    await byName('Refresh history').click();
-    await byName('Note created').click();
-    await byName('Restore this version').click();
+    await clickName('Refresh history');
+    await clickName('Note created');
+    await clickName('Restore this version');
     await expect(byName('Restored to an earlier version.')).toBeDisplayed();
 
     await restartApp();
     await waitForShell();
-    await openSeededMarkdownNote();
+    await clickName(title);
 
     // The denormalised history (created + edited + reverted) survived the
     // quit/relaunch against the same profile dir.

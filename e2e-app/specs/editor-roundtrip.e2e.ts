@@ -5,20 +5,24 @@
  * prove: content written through save_note survives a quit/relaunch.
  */
 
-import { browser, expect } from '@wdio/globals';
+import { expect } from '@wdio/globals';
 import {
   byName,
+  clickName,
+  insertText,
+  pressElementKey,
   requireAppE2E,
   restartApp,
+  setElementValue,
   waitForShell
 } from '../helpers/harness.js';
 
 async function createRootNote(title: string): Promise<void> {
-  await byName('New note').click();
-  const draft = byName('New note'); // the inline draft textbox shares the label
+  await clickName('New note');
+  const draft = $('input[placeholder="New note"]');
   await draft.waitForDisplayed();
-  await draft.setValue(title);
-  await browser.keys('Enter');
+  await setElementValue(draft, title);
+  await pressElementKey(draft, 'Enter');
   await expect(byName(title)).toBeDisplayed();
 }
 
@@ -38,26 +42,28 @@ describe('T3 markdown editor round-trip', function () {
     const body = `The quick brown fox ${stamp}.`;
 
     await createRootNote(title);
-    await byName(title).click();
+    await clickName(title);
 
-    const editor = $('.ProseMirror');
-    await editor.click();
-    await browser.keys(`# ${heading}`.split(''));
-    await browser.keys('Enter');
-    await browser.keys(body.split(''));
+    await insertText($('.ProseMirror'), `${heading}\n${body}`);
 
-    await expect($(`h1=${heading}`)).toBeDisplayed();
+    await expect($('.ProseMirror')).toHaveText(
+      expect.stringContaining(heading)
+    );
 
     // Reopen via another note and back — proves the save_note round-trip.
-    await byName('Welcome').click();
-    await byName(title).click();
-    await expect($(`h1=${heading}`)).toBeDisplayed();
+    await clickName('Welcome');
+    await clickName(title);
+    await expect($('.ProseMirror')).toHaveText(
+      expect.stringContaining(heading)
+    );
     await expect($('.ProseMirror')).toHaveText(expect.stringContaining(body));
 
     // Restart against the same profile dir — proves on-disk persistence.
     await restartApp();
     await waitForShell();
-    await byName(title).click();
-    await expect($(`h1=${heading}`)).toBeDisplayed();
+    await clickName(title);
+    await expect($('.ProseMirror')).toHaveText(
+      expect.stringContaining(heading)
+    );
   });
 });

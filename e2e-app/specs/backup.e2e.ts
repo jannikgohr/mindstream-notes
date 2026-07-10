@@ -11,6 +11,7 @@
 import { expect } from '@wdio/globals';
 import {
   byName,
+  clickName,
   requireDialogHook,
   restartApp,
   waitForShell
@@ -47,7 +48,7 @@ describe('T3 backup export / import', function () {
   it('merges a backup, deduping by id (1.4)', async () => {
     // Import → Merge → assert only rows whose ids don't already exist are added,
     // orphaned parents rerouted to root, and the merge-result dialog counts.
-    await byName('Home').click();
+    await clickName('Home');
     // TODO: drive Settings → Data → Import → Merge with a seeded path.
     expect(true).toBe(true);
   });

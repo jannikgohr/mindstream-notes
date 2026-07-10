@@ -89,6 +89,15 @@ Drive the **packaged Tauri binary** with `tauri-driver` (WebDriver) under a
 headless display (`xvfb` on Linux CI). Build it with `--features e2e-data-dir`
 so the test seams below work in a release binary.
 
+On Linux, `tauri-driver` delegates to WebKitWebDriver. Debian/Ubuntu packages
+it as `webkit2gtk-driver`; Fedora 43+ packages `/usr/bin/WebKitWebDriver` in
+`webkitgtk6.0`:
+
+```sh
+sudo dnf install webkitgtk6.0
+which WebKitWebDriver
+```
+
 - **Per-test data isolation & restart.** Set `MINDSTREAM_PROFILE_DIR` to a temp
   dir per test (and optionally `MINDSTREAM_PROFILE_ID` to namespace the keyring
   entry). This is the `dir_override` seam in `src-tauri/src/profiles.rs`, gated

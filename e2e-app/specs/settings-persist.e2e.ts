@@ -7,6 +7,7 @@
 import { expect } from '@wdio/globals';
 import {
   byName,
+  clickElement,
   requireAppE2E,
   restartApp,
   waitForShell
@@ -25,7 +26,7 @@ describe('T3 settings persistence', function () {
     // The theme button's accessible name encodes the current + next mode.
     const themeButton = $('button[aria-label^="Theme:"]');
     const before = await themeButton.getAttribute('aria-label');
-    await themeButton.click();
+    await clickElement(themeButton);
     const after = await themeButton.getAttribute('aria-label');
     expect(after).not.toBe(before);
 

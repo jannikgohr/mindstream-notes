@@ -37,7 +37,11 @@ WebView). `helpers/backend.ts` is the T4 backend-readiness gate.
 # Rust: the WebDriver bridge + a platform webdriver
 cargo install tauri-driver
 #   Windows: install msedgedriver matching your WebView2 (Edge) version
-#   Linux:   apt-get install webkit2gtk-driver  (provides WebKitWebDriver)
+#   Debian/Ubuntu: apt-get install webkit2gtk-driver
+#   Fedora 43+:    dnf install webkitgtk6.0
+#
+# Verify Linux WebKitWebDriver is installed:
+#   which WebKitWebDriver
 
 # npm: the wdio runner (add as devDependencies when you wire this into CI)
 pnpm add -D @wdio/cli @wdio/local-runner @wdio/mocha-framework \

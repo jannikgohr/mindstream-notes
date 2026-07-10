@@ -6,21 +6,27 @@
  * the boot-time retention sweep, which only a restart can exercise.
  */
 
-import { browser, expect } from '@wdio/globals';
+import { expect } from '@wdio/globals';
 import {
   byName,
+  clickElement,
+  clickMenuItem,
+  clickName,
+  pressElementKey,
   requireAppE2E,
   restartApp,
+  setElementValue,
+  treeItem,
   waitForShell
 } from '../helpers/harness.js';
 
 async function createRootNote(title: string): Promise<void> {
-  await byName('New note').click();
-  const draft = byName('New note');
+  await clickName('New note');
+  const draft = $('input[placeholder="New note"]');
   await draft.waitForDisplayed();
-  await draft.setValue(title);
-  await browser.keys('Enter');
-  await expect(byName(title)).toBeDisplayed();
+  await setElementValue(draft, title);
+  await pressElementKey(draft, 'Enter');
+  await expect(treeItem(title)).toBeDisplayed();
 }
 
 describe('T3 trash lifecycle + retention', function () {
@@ -36,17 +42,18 @@ describe('T3 trash lifecycle + retention', function () {
     const title = `Trash ${Date.now()}`;
     await createRootNote(title);
 
-    await byName(title).click({ button: 'right' });
-    await byName('Delete').click();
-    await expect(byName(title)).not.toBeDisplayed();
+    await clickElement(treeItem(title), { button: 'right' });
+    await clickMenuItem('Delete');
+    await expect(treeItem(title)).not.toBeDisplayed();
 
-    await byName('Trash').click();
-    await expect(byName(title)).toBeDisplayed();
+    await clickName('Trash');
+    await expect(treeItem(title)).toBeDisplayed();
 
-    await byName(title).click({ button: 'right' });
-    await byName('Restore').click();
-    await byName('Home').click();
-    await expect(byName(title)).toBeDisplayed();
+    await clickElement(treeItem(title), { button: 'right' });
+    await clickMenuItem('Restore');
+    await expect(treeItem(title)).not.toBeDisplayed();
+    await clickName('Home');
+    await expect(treeItem(title)).toBeDisplayed();
   });
 
   it('sweeps items past the retention window on startup (3.3)', async () => {
@@ -56,13 +63,13 @@ describe('T3 trash lifecycle + retention', function () {
     // trashed item *survives* a restart — which is the half we can drive today.
     const fresh = `Fresh ${Date.now()}`;
     await createRootNote(fresh);
-    await byName(fresh).click({ button: 'right' });
-    await byName('Delete').click();
+    await clickElement(treeItem(fresh), { button: 'right' });
+    await clickMenuItem('Delete');
 
     await restartApp();
     await waitForShell();
-    await byName('Trash').click();
-    await expect(byName(fresh)).toBeDisplayed();
+    await clickName('Trash');
+    await expect(treeItem(fresh)).toBeDisplayed();
 
     // TODO: backdate trashed_at via a test hook and assert the aged item was
     // purged by spawn_retention_sweep on boot (docs/e2e-flows.md 3.3).

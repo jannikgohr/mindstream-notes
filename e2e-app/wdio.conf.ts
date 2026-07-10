@@ -39,6 +39,11 @@ const tauriDriverPath = join(
   process.platform === 'win32' ? 'tauri-driver.exe' : 'tauri-driver'
 );
 
+const buildEnv = {
+  ...process.env,
+  NODE_OPTIONS: process.env.NODE_OPTIONS ?? '--max-old-space-size=4096'
+};
+
 // A single profile dir for the whole run; specs that assert restart-persistence
 // relaunch against this same dir. Set fresh per run so state never leaks.
 const runProfileDir = join(
@@ -50,33 +55,36 @@ let tauriDriver: ChildProcess | undefined;
 
 export const config: WebdriverIO.Config = {
   runner: 'local',
+  hostname: '127.0.0.1',
+  port: 4444,
   specs: [join(here, 'specs', '**', '*.e2e.ts')],
   maxInstances: 1,
   capabilities: [
     {
+      maxInstances: 1,
       // tauri-driver reads this to launch the app under WebDriver.
-      'tauri:options': { application },
-      // The app process inherits the driver's env (set in beforeSession),
-      // which is how MINDSTREAM_PROFILE_DIR reaches it.
-      browserName: 'wry'
+      'tauri:options': { application }
     } as WebdriverIO.Capabilities
   ],
-  logLevel: 'info',
+  logLevel: 'warn',
   framework: 'mocha',
   reporters: ['spec'],
   mochaOpts: { ui: 'bdd', timeout: 120_000 },
 
-  // Build the binary with the e2e-data-dir feature so the profile-dir override
-  // works in a release build. Skip with MINDSTREAM_E2E_SKIP_BUILD=1 to iterate.
+  // Build through the Tauri CLI, not plain Cargo. The CLI runs the frontend
+  // build and injects the production asset config; direct `cargo build` leaves
+  // the binary pointing at the dev server, which renders as a blank webview
+  // when Vite is not running. Skip with MINDSTREAM_E2E_SKIP_BUILD=1 only after
+  // a successful Tauri CLI build.
   onPrepare: () => {
     if (process.env.MINDSTREAM_E2E_SKIP_BUILD === '1') return;
     const res = spawnSync(
-      'cargo',
-      ['build', '--release', '--features', 'e2e-data-dir'],
-      { cwd: join(repoRoot, 'src-tauri'), stdio: 'inherit' }
+      'pnpm',
+      ['tauri', 'build', '--no-bundle', '--features', 'e2e-data-dir'],
+      { cwd: repoRoot, stdio: 'inherit', env: buildEnv }
     );
     if (res.status !== 0) {
-      throw new Error('cargo build (--features e2e-data-dir) failed');
+      throw new Error('tauri build (--features e2e-data-dir) failed');
     }
   },
 

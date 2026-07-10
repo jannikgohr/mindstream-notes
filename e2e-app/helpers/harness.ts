@@ -89,6 +89,144 @@ export function allByName(name: string): ChainablePromiseArray {
   return $$(`aria/${name}`);
 }
 
+export function treeItem(name: string): ChainablePromiseElement {
+  return byName('File tree').$(`aria/${name}`);
+}
+
+export async function clickElement(
+  element: ChainablePromiseElement,
+  opts: { button?: 'left' | 'right' } = {}
+): Promise<void> {
+  const resolved = await element;
+  await resolved.waitForDisplayed({ timeout: 30_000 });
+  await browser.execute(
+    (el: HTMLElement, button: 'left' | 'right') => {
+      el.scrollIntoView({ block: 'center', inline: 'center' });
+      const rect = el.getBoundingClientRect();
+      const clientX = rect.left + rect.width / 2;
+      const clientY = rect.top + rect.height / 2;
+      const base = {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        clientX,
+        clientY,
+        button: button === 'right' ? 2 : 0,
+        buttons: button === 'right' ? 2 : 1
+      };
+
+      el.focus?.();
+      if (button === 'right') {
+        el.dispatchEvent(new MouseEvent('mousedown', base));
+        el.dispatchEvent(new MouseEvent('mouseup', { ...base, buttons: 0 }));
+        el.dispatchEvent(new MouseEvent('contextmenu', base));
+        return;
+      }
+
+      el.dispatchEvent(new MouseEvent('mousedown', base));
+      el.dispatchEvent(new MouseEvent('mouseup', { ...base, buttons: 0 }));
+      el.click();
+    },
+    resolved,
+    opts.button ?? 'left'
+  );
+}
+
+export async function setElementValue(
+  element: ChainablePromiseElement,
+  value: string
+): Promise<void> {
+  const resolved = await element;
+  await resolved.waitForDisplayed({ timeout: 30_000 });
+  await browser.execute(
+    (el: HTMLElement, next: string) => {
+      const input = el as HTMLInputElement | HTMLTextAreaElement;
+      input.scrollIntoView({ block: 'center', inline: 'center' });
+      input.focus();
+      input.value = next;
+      input.dispatchEvent(
+        new InputEvent('input', { bubbles: true, data: next })
+      );
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    },
+    resolved,
+    value
+  );
+}
+
+export async function pressElementKey(
+  element: ChainablePromiseElement,
+  key: string,
+  opts: { ctrlKey?: boolean } = {}
+): Promise<void> {
+  const resolved = await element;
+  await resolved.waitForDisplayed({ timeout: 30_000 });
+  await browser.execute(
+    (el: HTMLElement, pressed: string, ctrlKey: boolean) => {
+      el.focus?.();
+      const init = {
+        key: pressed,
+        code: pressed,
+        bubbles: true,
+        cancelable: true,
+        ctrlKey
+      };
+      el.dispatchEvent(new KeyboardEvent('keydown', init));
+      el.dispatchEvent(new KeyboardEvent('keyup', init));
+    },
+    resolved,
+    key,
+    opts.ctrlKey === true
+  );
+}
+
+export async function insertText(
+  element: ChainablePromiseElement,
+  text: string
+): Promise<void> {
+  const resolved = await element;
+  await clickElement(resolved);
+  await browser.execute(
+    (el: HTMLElement, value: string) => {
+      el.focus();
+      const selection = window.getSelection();
+      if (selection) {
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        range.collapse(false);
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
+      document.execCommand('insertText', false, value);
+      el.dispatchEvent(
+        new InputEvent('input', {
+          bubbles: true,
+          inputType: 'insertText',
+          data: value
+        })
+      );
+    },
+    resolved,
+    text
+  );
+}
+
+export async function clickName(
+  name: string,
+  opts: { button?: 'left' | 'right' } = {}
+): Promise<void> {
+  await clickElement(byName(name), opts);
+}
+
+export async function clickMenuItem(label: string): Promise<void> {
+  const escaped = label.replace(/"/g, '\\"');
+  await clickElement(
+    $(
+      `//button[@role="menuitem" and .//*[normalize-space(text())="${escaped}"]]`
+    )
+  );
+}
+
 /** Wait for the seeded shell to hydrate (the Welcome note in the tree). */
 export async function waitForShell(): Promise<void> {
   await byName('Welcome').waitForDisplayed({ timeout: 30_000 });
