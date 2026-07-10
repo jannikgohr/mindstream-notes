@@ -9,12 +9,12 @@
 //!
 //! Sharing a folder re-homes its subtree into the scope's collections: every
 //! folder/note/asset under the root is stamped with `share_scope_id` and
-//! detached from the vault-wide collections (see `migrate_subtree_into_scope`),
-//! and `sync::scopes` then pushes/pulls each scope's dedicated collections so a
-//! recipient receives the real content. Known gap: a note created or moved into
-//! a shared folder *after* the share exists isn't stamped until the next
-//! `invite_collection` re-runs the migration — scope inheritance on create/move
-//! is a follow-up.
+//! detached from the vault-wide collections (see `rehome_folder_subtree`), and
+//! `sync::scopes` then pushes/pulls each scope's dedicated collections so a
+//! recipient receives the real content. Items created or moved into a shared
+//! folder *after* the share exists inherit the scope at create/move time
+//! (`collection_scope` lookups in `collections`/`notes`/`assets`), so they no
+//! longer wait for the next `invite_collection` to be re-homed.
 
 use std::collections::{HashMap, HashSet};
 
@@ -603,7 +603,7 @@ pub async fn invite_collection(
         let folders_uid = scope.folders.uid().to_string();
         let scope_id = scope.share_scope_id.clone();
         db.with_conn(|conn| {
-            migrate_subtree_into_scope(conn, &collection_id, &scope_id)?;
+            rehome_folder_subtree(conn, &collection_id, Some(&scope_id))?;
             if created {
                 record_outgoing_share(
                     conn,
@@ -933,29 +933,32 @@ fn record_outgoing_share(
     Ok(())
 }
 
-/// Re-home a shared folder subtree into its scope collections.
+/// Re-home a folder subtree into `target_scope` (`None` = the vault).
 ///
 /// For every folder under `root_folder_id` (inclusive) and every note/asset
-/// beneath them: queue a vault-side delete for anything already pushed (done
-/// first, while `share_scope_id` is still NULL so `queue_tombstone` routes it
-/// to the vault collection), then stamp the scope, clear `etebase_uid`, and
-/// mark dirty so the next sync creates it fresh in the scope collection. This
-/// is the "one home" migration — a scoped row lives only in its scope
-/// collection. Idempotent: rows already re-homed have no `etebase_uid` and so
-/// queue no tombstone.
+/// beneath them: queue a delete for anything already pushed (done first, so
+/// `queue_tombstone` reads each row's *current* `share_scope_id` and routes the
+/// delete to the collection the row currently lives in — the vault when the
+/// subtree was unscoped, or the source scope when moving between shares), then
+/// stamp the target scope, clear `etebase_uid`, and mark dirty so the next sync
+/// creates it fresh in the target collection. This is the "one home" model — a
+/// row lives only in its scope collection. Idempotent: rows already at the
+/// target have no `etebase_uid` and so queue no tombstone.
 ///
-/// Known gap: a note created or moved into the folder *after* a share exists
-/// isn't stamped until the next `invite_collection` call re-runs this. Inheriting
-/// the scope on create/move is a follow-up.
+/// Callers must only invoke this when the scope actually changes; it always
+/// detaches + repushes, which is wasted churn when source == target. Callers
+/// must also skip folders that are themselves a share anchor (`share_id` set) —
+/// a share root's scope is defined by the share, not by where it sits in the
+/// owner's tree, so moving it around must not strip the scope.
 ///
 /// Transient window: this is a detach-then-repush, so a *second* owner device
-/// that syncs after the vault delete lands but before it becomes a reachable
-/// scope member briefly sees the subtree empty. It self-heals once the device
-/// joins the scope and pulls the re-homed rows; no data is lost.
-fn migrate_subtree_into_scope(
+/// that syncs after the source delete lands but before the row becomes a
+/// reachable member of the target scope briefly sees the subtree empty. It
+/// self-heals once the device pulls the re-homed rows; no data is lost.
+pub(crate) fn rehome_folder_subtree(
     conn: &Connection,
     root_folder_id: &str,
-    share_scope_id: &str,
+    target_scope: Option<&str>,
 ) -> AppResult<()> {
     const SUBTREE_CTE: &str = "WITH RECURSIVE subtree(id) AS (
             SELECT ?1
@@ -963,7 +966,8 @@ fn migrate_subtree_into_scope(
             SELECT c.id FROM collections c JOIN subtree s ON c.parent_collection_id = s.id
         )";
 
-    // 1. Queue vault tombstones for already-pushed rows before we stamp/detach.
+    // 1. Queue tombstones for already-pushed rows before we stamp/detach, so
+    //    each delete routes to the row's current (source) scope collection.
     let folder_uids = collect_uids(
         conn,
         &format!("{SUBTREE_CTE} SELECT etebase_uid FROM collections WHERE id IN (SELECT id FROM subtree) AND etebase_uid IS NOT NULL"),
@@ -989,20 +993,106 @@ fn migrate_subtree_into_scope(
         crate::sync::queue_tombstone(conn, "asset", uid)?;
     }
 
-    // 2. Stamp the scope, detach from the vault, and mark dirty.
+    // 2. Stamp the target scope, detach from the source, and mark dirty.
     conn.execute(
         &format!("{SUBTREE_CTE} UPDATE collections SET share_scope_id = ?2, etebase_uid = NULL, dirty = 1 WHERE id IN (SELECT id FROM subtree)"),
-        params![root_folder_id, share_scope_id],
+        params![root_folder_id, target_scope],
     )?;
     conn.execute(
         &format!("{SUBTREE_CTE} UPDATE notes SET share_scope_id = ?2, etebase_uid = NULL, dirty = 1 WHERE parent_collection_id IN (SELECT id FROM subtree)"),
-        params![root_folder_id, share_scope_id],
+        params![root_folder_id, target_scope],
     )?;
     conn.execute(
         &format!("{SUBTREE_CTE} UPDATE assets SET share_scope_id = ?2, etebase_uid = NULL, dirty = 1 WHERE owning_note_id IN (SELECT n.id FROM notes n WHERE n.parent_collection_id IN (SELECT id FROM subtree))"),
-        params![root_folder_id, share_scope_id],
+        params![root_folder_id, target_scope],
     )?;
     Ok(())
+}
+
+/// Re-home a single note (and its assets) into `target_scope` (`None` = the
+/// vault). The note-level analogue of [`rehome_folder_subtree`], for a note that
+/// crosses a share boundary without its folder moving (e.g. dragged out of a
+/// shared folder into the vault). Same tombstone-in-current-scope-then-restamp
+/// ordering; same caller contract (only invoke on an actual scope change).
+pub(crate) fn rehome_note_subtree(
+    conn: &Connection,
+    note_id: &str,
+    target_scope: Option<&str>,
+) -> AppResult<()> {
+    if let Some(uid) = conn
+        .query_row(
+            "SELECT etebase_uid FROM notes WHERE id = ?1",
+            params![note_id],
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten()
+    {
+        crate::sync::queue_tombstone(conn, "note", &uid)?;
+    }
+    let asset_uids: Vec<String> = {
+        let mut stmt = conn.prepare(
+            "SELECT etebase_uid FROM assets WHERE owning_note_id = ?1 AND etebase_uid IS NOT NULL",
+        )?;
+        let rows = stmt.query_map(params![note_id], |r| r.get::<_, String>(0))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    for uid in &asset_uids {
+        crate::sync::queue_tombstone(conn, "asset", uid)?;
+    }
+
+    conn.execute(
+        "UPDATE notes SET share_scope_id = ?2, etebase_uid = NULL, dirty = 1 WHERE id = ?1",
+        params![note_id, target_scope],
+    )?;
+    conn.execute(
+        "UPDATE assets SET share_scope_id = ?2, etebase_uid = NULL, dirty = 1 WHERE owning_note_id = ?1",
+        params![note_id, target_scope],
+    )?;
+    Ok(())
+}
+
+/// The share scope a folder currently belongs to (`None` = the vault). Used to
+/// inherit a parent's scope on create and to detect scope changes on move.
+pub(crate) fn collection_scope(conn: &Connection, id: &str) -> AppResult<Option<String>> {
+    Ok(conn
+        .query_row(
+            "SELECT share_scope_id FROM collections WHERE id = ?1",
+            params![id],
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten())
+}
+
+/// The share scope a note currently belongs to (`None` = the vault). Mirror of
+/// [`collection_scope`] for the note move + asset-inherit paths.
+pub(crate) fn note_scope(conn: &Connection, id: &str) -> AppResult<Option<String>> {
+    Ok(conn
+        .query_row(
+            "SELECT share_scope_id FROM notes WHERE id = ?1",
+            params![id],
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten())
+}
+
+/// Whether a folder is a share anchor — the root of a share, whose scope is
+/// fixed by the share itself rather than inherited from its parent. Both the
+/// owner (`record_outgoing_share`) and recipient (`project_shared_root`) stamp
+/// `share_id` on the root only; descendants carry `share_scope_id` but no
+/// `share_id`. Callers use this to skip re-homing a share root on move.
+pub(crate) fn is_share_anchor(conn: &Connection, id: &str) -> AppResult<bool> {
+    Ok(conn
+        .query_row(
+            "SELECT share_id FROM collections WHERE id = ?1",
+            params![id],
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten()
+        .is_some())
 }
 
 // `sql` is always a crate-internal literal built from `SUBTREE_CTE` above (no
@@ -1561,7 +1651,7 @@ mod tests {
     }
 
     #[test]
-    fn migrate_subtree_into_scope_stamps_detaches_and_tombstones() {
+    fn rehome_folder_subtree_stamps_detaches_and_tombstones() {
         let db = crate::db::open_memory_for_tests();
         db.with_conn(|conn| {
             conn.execute(
@@ -1595,7 +1685,7 @@ mod tests {
         })
         .unwrap();
 
-        db.with_conn(|conn| migrate_subtree_into_scope(conn, "root", "scope_1"))
+        db.with_conn(|conn| rehome_folder_subtree(conn, "root", Some("scope_1")))
             .unwrap();
 
         db.with_conn(|conn| {

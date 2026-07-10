@@ -143,6 +143,26 @@ fn move_note(
         return Err(AppError::NotFound(format!("note {id}")));
     }
     collections::stamp_trashed_at_on_parent_change(conn, "notes", id, target_collection_id, now)?;
+    rehome_note_if_scope_changed(conn, id, target_collection_id)?;
+    Ok(())
+}
+
+/// Re-home a note (and its assets) when a batch move crosses a share-scope
+/// boundary. Mirrors the single-note path in `notes::update` — the batch path
+/// writes its own reparent SQL, so it needs the same scope-follow logic.
+fn rehome_note_if_scope_changed(
+    conn: &Connection,
+    id: &str,
+    target_collection_id: Option<&str>,
+) -> AppResult<()> {
+    let new_scope = match target_collection_id {
+        Some(parent) => crate::sharing::collection_scope(conn, parent)?,
+        None => None,
+    };
+    let old_scope = crate::sharing::note_scope(conn, id)?;
+    if new_scope != old_scope {
+        crate::sharing::rehome_note_subtree(conn, id, new_scope.as_deref())?;
+    }
     Ok(())
 }
 
@@ -168,6 +188,18 @@ fn move_folder(
         target_collection_id,
         now,
     )?;
+    // Follow the destination's scope, unless this folder is itself a share
+    // anchor (its scope is fixed by the share). Mirrors `collections::update`.
+    if !crate::sharing::is_share_anchor(conn, id)? {
+        let new_scope = match target_collection_id {
+            Some(parent) => crate::sharing::collection_scope(conn, parent)?,
+            None => None,
+        };
+        let old_scope = crate::sharing::collection_scope(conn, id)?;
+        if new_scope != old_scope {
+            crate::sharing::rehome_folder_subtree(conn, id, new_scope.as_deref())?;
+        }
+    }
     Ok(())
 }
 
@@ -619,5 +651,66 @@ mod tests {
             )
         })
         .unwrap()
+    }
+
+    fn scope_of(db: &Db, table: &str, id: &str) -> Option<String> {
+        db.with_conn(|c| {
+            Ok(c.query_row(
+                &format!("SELECT share_scope_id FROM {table} WHERE id = ?1"),
+                params![id],
+                |r| r.get::<_, Option<String>>(0),
+            )?)
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn batch_move_into_a_share_rehomes_note_and_folder_subtree() {
+        let db = open_memory_for_tests();
+        let shared = collection(&db, "Shared", None);
+        // Mark the destination as a share root (scope + anchor).
+        db.with_conn(|c| {
+            crate::sharing::rehome_folder_subtree(c, &shared.id, Some("scope_1"))?;
+            c.execute(
+                "UPDATE collections SET share_id = 'folders_uid', shared_by_me = 1 WHERE id = ?1",
+                params![shared.id],
+            )?;
+            Ok::<(), AppError>(())
+        })
+        .unwrap();
+
+        let folder = collection(&db, "Folder", None);
+        let nested = collection(&db, "Nested", Some(folder.id.clone()));
+        let loose = note(&db, None);
+
+        db.with_conn_mut(|c| {
+            move_many_items(
+                c,
+                vec![
+                    TreeItemRef::Folder {
+                        id: folder.id.clone(),
+                    },
+                    TreeItemRef::Note {
+                        id: loose.summary.id.clone(),
+                    },
+                ],
+                Some(shared.id.clone()),
+            )
+        })
+        .unwrap();
+
+        assert_eq!(
+            scope_of(&db, "collections", &folder.id).as_deref(),
+            Some("scope_1")
+        );
+        assert_eq!(
+            scope_of(&db, "collections", &nested.id).as_deref(),
+            Some("scope_1"),
+            "batch move must re-home the whole folder subtree"
+        );
+        assert_eq!(
+            scope_of(&db, "notes", &loose.summary.id).as_deref(),
+            Some("scope_1")
+        );
     }
 }
