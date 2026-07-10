@@ -1072,8 +1072,37 @@ fn apply_folder(db: &Db, item: &Item, scope: Option<&str>) -> AppResult<Option<F
         .map_err(|e| AppError::InvalidArg(format!("folder content: {e}")))?;
     let payload: FolderPayload = rmp_serde::from_slice(&raw)
         .map_err(|e| AppError::InvalidArg(format!("folder msgpack: {e}")))?;
-    let now = Utc::now().to_rfc3339();
     let etag = item.etag().to_string();
+    apply_folder_payload(db, payload, item.uid(), &etag, scope)
+}
+
+/// Apply a decoded folder payload to local SQLite. Split out from
+/// `apply_folder` so the local-vs-remote metadata logic can be unit-tested
+/// without constructing an etebase `Item`.
+fn apply_folder_payload(
+    db: &Db,
+    payload: FolderPayload,
+    uid: &str,
+    etag: &str,
+    scope: Option<&str>,
+) -> AppResult<Option<FolderPayload>> {
+    let now = Utc::now().to_rfc3339();
+
+    // Folder metadata (parent / name / position) is last-write-wins, not a
+    // CRDT. When the local row has unpushed edits (dirty), a pull must NOT
+    // overwrite that metadata with the remote's older copy — otherwise an
+    // offline rename / move / reorder silently reverts. Mirrors the note
+    // metadata-preservation path in `apply_note_payload`.
+    let existing_dirty: Option<i64> = db.with_conn(|c| {
+        Ok(c.query_row(
+            "SELECT dirty FROM collections WHERE id = ?1",
+            params![payload.id],
+            |r| r.get(0),
+        )
+        .optional()?)
+    })?;
+    let keep_local_meta = matches!(existing_dirty, Some(dirty) if dirty != 0);
+
     db.with_conn(|c| {
         // Defensive: if the payload's parent folder isn't in collections
         // yet (subfolder arrived before its parent in this pull, or the
@@ -1082,52 +1111,67 @@ fn apply_folder(db: &Db, item: &Item, scope: Option<&str>) -> AppResult<Option<F
         // Without this, the INSERT would hit a FOREIGN KEY violation and
         // abort the entire sync.
         let resolved_parent = resolve_parent_id(c, payload.parent_folder_id.as_deref())?;
-        let exists: bool = c
-            .query_row(
-                "SELECT 1 FROM collections WHERE id = ?1",
-                params![payload.id],
-                |_| Ok(true),
-            )
-            .optional()?
-            .unwrap_or(false);
-        if exists {
-            c.execute(
-                "UPDATE collections
-                 SET parent_collection_id = ?1, name = ?2, position = ?3, modified = ?4,
-                     etebase_uid = ?5, etebase_etag = ?6, dirty = 0, share_scope_id = ?7
-                 WHERE id = ?8",
-                params![
-                    resolved_parent,
-                    payload.name,
-                    payload.position,
-                    now,
-                    item.uid(),
-                    etag,
-                    scope,
-                    payload.id,
-                ],
-            )?;
-        } else {
-            c.execute(
-                "INSERT INTO collections (id, parent_collection_id, name, position,
-                                           created, modified, etebase_uid, etebase_etag, dirty,
-                                           share_scope_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6, ?7, 0, ?8)",
-                params![
-                    payload.id,
-                    resolved_parent,
-                    payload.name,
-                    payload.position,
-                    now,
-                    item.uid(),
-                    etag,
-                    scope,
-                ],
-            )?;
+        match existing_dirty {
+            Some(_) if keep_local_meta => {
+                // Keep the local metadata; only (re)stamp the server identity
+                // and scope, forcing dirty=1 so the next push reconciles. This
+                // is what makes an offline rename survive a re-home: the row is
+                // reclaimed into its scope without losing the local name.
+                c.execute(
+                    "UPDATE collections
+                     SET etebase_uid = ?1, etebase_etag = ?2, dirty = 1, share_scope_id = ?3
+                     WHERE id = ?4",
+                    params![uid, etag, scope, payload.id],
+                )?;
+            }
+            Some(_) => {
+                c.execute(
+                    "UPDATE collections
+                     SET parent_collection_id = ?1, name = ?2, position = ?3, modified = ?4,
+                         etebase_uid = ?5, etebase_etag = ?6, dirty = 0, share_scope_id = ?7
+                     WHERE id = ?8",
+                    params![
+                        resolved_parent,
+                        payload.name,
+                        payload.position,
+                        now,
+                        uid,
+                        etag,
+                        scope,
+                        payload.id,
+                    ],
+                )?;
+            }
+            None => {
+                c.execute(
+                    "INSERT INTO collections (id, parent_collection_id, name, position,
+                                               created, modified, etebase_uid, etebase_etag, dirty,
+                                               share_scope_id)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6, ?7, 0, ?8)",
+                    params![
+                        payload.id,
+                        resolved_parent,
+                        payload.name,
+                        payload.position,
+                        now,
+                        uid,
+                        etag,
+                        scope,
+                    ],
+                )?;
+            }
         }
         Ok(())
     })?;
-    Ok(Some(payload))
+
+    // When we preserved local metadata, the local parent is authoritative —
+    // return None so `repair_folder_parents` won't reattach it from the remote
+    // payload (a folder moved to root offline must stay at root).
+    if keep_local_meta {
+        Ok(None)
+    } else {
+        Ok(Some(payload))
+    }
 }
 
 /// Returns the parent id unchanged if a collection with that id exists
@@ -2488,6 +2532,90 @@ mod tests {
         assert!(!is_bad_stoken_error(&not_found));
         assert!(!is_bad_stoken_error(&bare));
         assert!(!is_bad_stoken_error(&prose));
+    }
+
+    fn remote_folder(id: &str, parent: Option<&str>, name: &str) -> FolderPayload {
+        FolderPayload {
+            schema: 1,
+            id: id.into(),
+            parent_folder_id: parent.map(str::to_string),
+            name: name.into(),
+            position: 0,
+        }
+    }
+
+    #[test]
+    fn apply_folder_keeps_local_metadata_when_dirty() {
+        // An offline folder rename (dirty=1) must not revert to the remote's
+        // older name on pull — mirrors the note metadata-preservation path.
+        let db = open_memory_for_tests();
+        db.with_conn(|c| {
+            c.execute(
+                "INSERT INTO collections(id, parent_collection_id, name, position,
+                                         created, modified, etebase_uid, etebase_etag, dirty)
+                 VALUES ('folder_r', NULL, 'Local Name', 0, 't', 't', 'uid_r', 'etag_old', 1)",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+        let remote = remote_folder("folder_r", None, "Remote Name");
+        let repaired =
+            apply_folder_payload(&db, remote, "uid_r", "etag_new", Some("scope_1")).unwrap();
+        assert!(
+            repaired.is_none(),
+            "a dirty folder keeps local parent; skip the parent-repair pass"
+        );
+
+        let (name, dirty, scope): (String, i64, Option<String>) = db
+            .with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT name, dirty, share_scope_id FROM collections WHERE id = 'folder_r'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(name, "Local Name", "offline rename is preserved");
+        assert_eq!(dirty, 1, "row stays dirty so the rename pushes next sync");
+        assert_eq!(
+            scope.as_deref(),
+            Some("scope_1"),
+            "the folder is still re-homed into the scope"
+        );
+    }
+
+    #[test]
+    fn apply_folder_takes_remote_metadata_when_clean() {
+        let db = open_memory_for_tests();
+        db.with_conn(|c| {
+            c.execute(
+                "INSERT INTO collections(id, parent_collection_id, name, position,
+                                         created, modified, etebase_uid, etebase_etag, dirty)
+                 VALUES ('folder_c', NULL, 'Old', 0, 't', 't', 'uid_c', 'etag_old', 0)",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+        let remote = remote_folder("folder_c", None, "Renamed Remotely");
+        apply_folder_payload(&db, remote, "uid_c", "etag_new", None).unwrap();
+
+        let name: String = db
+            .with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT name FROM collections WHERE id = 'folder_c'",
+                    [],
+                    |r| r.get(0),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(
+            name, "Renamed Remotely",
+            "a clean folder takes remote metadata"
+        );
     }
 
     #[test]
