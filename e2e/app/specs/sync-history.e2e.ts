@@ -8,22 +8,102 @@
  * (docs/known-limitations.md) — the timeline is local; only content converges.
  */
 
-import { assertBackendReady } from '../helpers/backend.js';
-import { requireBackendE2E } from '../helpers/harness.js';
+import { expect } from '@wdio/globals';
+
+import { provisionTwoAccounts } from '../helpers/accounts.js';
+import { assertBackendReady, backendUrl } from '../helpers/backend.js';
+import {
+  clientHelpers,
+  loginClient,
+  requireBackendE2E,
+  syncClient,
+  type ClientHelpers
+} from '../helpers/harness.js';
+
+declare const browserA: WebdriverIO.Browser;
+declare const browserB: WebdriverIO.Browser;
 
 describe('T4 per-device history (sync negative assertion)', function () {
+  let A: ClientHelpers;
+  let B: ClientHelpers;
+
   before(async function () {
     requireBackendE2E(this);
     await assertBackendReady();
-    // TODO: two devices (two profile dirs) on the same account; seed a shared
-    // note. Sequential, not concurrent — A pushes, then B pulls.
+
+    const server = backendUrl();
+    const accounts = await provisionTwoAccounts(server);
+    const sharedAccount = accounts.sender;
+
+    await Promise.all([
+      loginClient(browserA, {
+        serverUrl: server,
+        username: sharedAccount.username,
+        password: sharedAccount.password
+      }),
+      loginClient(browserB, {
+        serverUrl: server,
+        username: sharedAccount.username,
+        password: sharedAccount.password
+      })
+    ]);
+
+    A = clientHelpers(browserA);
+    B = clientHelpers(browserB);
   });
 
   it('B converges on content but has no reverted entry for A’s restore', async () => {
-    // On A: edit, restore an older version, let it push.
-    // On B: pull, then:
-    //   - assert the note content equals A's restored content;
-    //   - assert B's History has NO 'reverted' entry referencing A's restore.
-    // TODO: multiremote + sync trigger.
+    const title = `Sync history ${Date.now()}`;
+    const changedText = `changed before restore ${Date.now()}`;
+
+    await A.newRootNote(title);
+    await A.click(title);
+    await A.insertText(browserA.$('.ProseMirror'), changedText);
+    await A.click('Refresh history');
+    await expect(browserA.$('.ProseMirror')).toHaveText(
+      expect.stringContaining(changedText)
+    );
+
+    await syncClient(browserA);
+    await syncClient(browserB);
+
+    await B.treeItem(title).waitForDisplayed({ timeout: 30_000 });
+    await B.click(title);
+    await expect(browserB.$('.ProseMirror')).toHaveText(
+      expect.stringContaining(changedText)
+    );
+
+    // Unmount B's editor before A restores so this remains a sequential
+    // push/pull sync test, not the live-collab propagation path.
+    await B.click('Welcome');
+
+    await A.click('Note created');
+    await A.click('Restore this version');
+    await expect(A.byName('Restored to an earlier version.')).toBeDisplayed();
+    const restoredText = await browserA.$('.ProseMirror').getText();
+
+    await syncClient(browserA);
+    await syncClient(browserB);
+
+    await B.click(title);
+    await browserB.waitUntil(
+      async () => {
+        const text = await browserB.$('.ProseMirror').getText();
+        return text === restoredText && !text.includes(changedText);
+      },
+      {
+        timeout: 30_000,
+        timeoutMsg: 'browserB did not converge on browserA restored content'
+      }
+    );
+
+    await expect(
+      B.byName('Restored to an earlier version.')
+    ).not.toBeDisplayed();
+    await expect(
+      browserB.$(
+        '//*[contains(normalize-space(.), "Reverted to version from")]'
+      )
+    ).not.toBeDisplayed();
   });
 });
