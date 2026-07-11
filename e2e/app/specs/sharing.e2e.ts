@@ -26,31 +26,81 @@
  *   - view-only editor banner:  ui.editor.viewonly.banner
  */
 
+import { provisionTwoAccounts, type TwoAccounts } from '../helpers/accounts.js';
 import { assertBackendReady, backendUrl } from '../helpers/backend.js';
-import { requireBackendE2E } from '../helpers/harness.js';
+import { loginClient, requireBackendE2E } from '../helpers/harness.js';
+
+// wdio multiremote exposes each capability key as a global browser instance.
+// `browserA` = sender (device A), `browserB` = recipient (device B). See
+// e2e/app/wdio.multiremote.conf.ts.
+declare const browserA: WebdriverIO.Browser;
+declare const browserB: WebdriverIO.Browser;
 
 describe('T4 collection sharing (manifest bundles)', function () {
+  // The two distinct accounts this whole suite hinges on — provisioned once,
+  // then each client is signed into one of them. `sender` shares; `recipient`
+  // receives. Available to every spec body below.
+  let accounts: TwoAccounts;
+
   before(async function () {
     requireBackendE2E(this);
     await assertBackendReady();
-    // TODO(two-account harness): provision two distinct Etebase users on the
-    // same backend and sign each app (two profile dirs) into one of them.
-    // Prefer seeding a pre-authenticated session blob + the server URL into
-    // each profile dir over driving the Account UI each run (§3). Expose the
-    // two sessions as `browserA` (sender) and `browserB` (recipient) via wdio
-    // multiremote. `fetch_user_profile` must be able to resolve B's pubkey from
-    // A, so both accounts must be real signups, not a shared-collection trick.
-    void backendUrl;
+    const server = backendUrl();
+
+    // Two real Etebase signups (not a shared-collection trick) so the sender
+    // can resolve the recipient's pubkey via fetch_user_profile. Requires the
+    // test stack's AUTO_SIGNUP=true (pnpm backend:test:up).
+    accounts = await provisionTwoAccounts(server);
+
+    // Sign each client into its own account through the Account UI (no global
+    // Tauri IPC available in the WebView).
+    await Promise.all([
+      loginClient(browserA, {
+        serverUrl: server,
+        username: accounts.sender.username,
+        password: accounts.sender.password
+      }),
+      loginClient(browserB, {
+        serverUrl: server,
+        username: accounts.recipient.username,
+        password: accounts.recipient.password
+      })
+    ]);
   });
 
   // --- 4.1 Outgoing share creation (P1) ---
   it('A shares a folder → invite succeeds and folder flags shared-by-me', async () => {
-    // A: seed a folder with a note → right-click it → "Share folder…" →
-    // fill "User" with B's username → pick a "Permission" → "Invite".
-    // Assert: the dialog shows no error and the folder now renders shared-by-me
-    // in A's tree (the shared badge). Also assert an UNKNOWN username fails
-    // BEFORE any scope collections are created — pubkey lookup is first.
-    // TODO: multiremote + two accounts.
+    const a = browserA;
+    const folderName = 'Shared Project';
+
+    // Seed a folder with a note on A. "New folder" creates a draft with an
+    // editable name; New note adds a child.
+    // TODO(per-instance tree helper): the byName/treeItem/clickMenuItem helpers
+    // in harness.ts are global-scoped and fan out to BOTH clients under
+    // multiremote — they need `client`-scoped variants before this seed +
+    // right-click can be driven. Until then this body drives only the share
+    // dialog (confirmed labels) against a folder assumed present.
+
+    // Right-click the folder → "Share folder…" opens the dialog.
+    const folder = await a.$('aria/File tree').$(`aria/${folderName}`);
+    await folder.waitForDisplayed({ timeout: 30_000 });
+    await folder.click({ button: 'right' });
+    await a.$('aria/Share folder…').click();
+
+    // Fill "User" with B's real username, pick "Can edit", then "Invite".
+    await a.$('aria/User').setValue(accounts.recipient.username);
+    await a.$('aria/Permission').click();
+    await a.$('aria/Can edit').click();
+    await a.$('aria/Invite').click();
+
+    // Success: the dialog closes without an error and the folder now carries
+    // the shared-by-me badge in A's tree.
+    // TODO: assert the shared badge once its accessible name is confirmed.
+
+    // Negative: an UNKNOWN username must fail at the pubkey lookup, BEFORE any
+    // scope collections are created.
+    // TODO: re-open the dialog, enter a random username, assert the invite
+    // errors and no scope collection was created.
   });
 
   // --- 4.2 Incoming share shows as one bundle, not N invites (P1) ---
