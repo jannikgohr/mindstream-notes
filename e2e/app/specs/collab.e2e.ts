@@ -3,49 +3,108 @@
  * note") and flow 2.5. Two app instances (two profile dirs) signed into the
  * same test account, both open on the same note in a shared collection.
  *
- * Needs the backend stack (MINDSTREAM_E2E_BACKEND=1) AND a two-client wdio
- * setup. A single tauri-driver session can't host two apps, so the real wiring
- * is wdio **multiremote** (two capabilities → `browserA` / `browserB`) or two
- * driver processes; that lives in a dedicated multiremote config. This spec is
- * the faithful scenario skeleton — gated to skip until that harness lands.
+ * Needs the backend stack (MINDSTREAM_E2E_BACKEND=1) AND the two-client wdio
+ * multiremote setup (`browserA` / `browserB`).
  */
 
+import { expect } from '@wdio/globals';
+
+import { provisionTwoAccounts } from '../helpers/accounts.js';
 import { assertBackendReady, backendUrl } from '../helpers/backend.js';
-import { requireBackendE2E } from '../helpers/harness.js';
+import {
+  clientHelpers,
+  loginClient,
+  requireBackendE2E,
+  syncClient,
+  type ClientHelpers
+} from '../helpers/harness.js';
+
+declare const browserA: WebdriverIO.Browser;
+declare const browserB: WebdriverIO.Browser;
 
 describe('T4 collaboration matrix', function () {
+  let A: ClientHelpers;
+  let B: ClientHelpers;
+  let noteTitle: string;
+  let baselineText: string;
+
   before(async function () {
     requireBackendE2E(this);
     await assertBackendReady();
-    // TODO: sign both clients into the same test account at backendUrl(),
-    // seed a shared collection + note, and open it in A and B. Prefer seeding a
-    // pre-authenticated session blob into each profile dir over driving the
-    // Account UI each run (e2e-strategy.md §3).
-    void backendUrl;
+
+    const server = backendUrl();
+    const accounts = await provisionTwoAccounts(server);
+    const sharedAccount = accounts.sender;
+
+    await Promise.all([
+      loginClient(browserA, {
+        serverUrl: server,
+        username: sharedAccount.username,
+        password: sharedAccount.password
+      }),
+      loginClient(browserB, {
+        serverUrl: server,
+        username: sharedAccount.username,
+        password: sharedAccount.password
+      })
+    ]);
+
+    A = clientHelpers(browserA);
+    B = clientHelpers(browserB);
+
+    noteTitle = `Collab ${Date.now()}`;
+    baselineText = `Baseline synced body ${Date.now()}`;
+
+    await A.newRootNote(noteTitle);
+    await A.click(noteTitle);
+    await A.insertText(browserA.$('.ProseMirror'), baselineText);
+
+    await syncClient(browserA);
+    await syncClient(browserB);
+
+    await B.treeItem(noteTitle).waitForDisplayed({ timeout: 30_000 });
+    await Promise.all([A.click(noteTitle), B.click(noteTitle)]);
+    await expect(browserB.$('.ProseMirror')).toHaveText(
+      expect.stringContaining(baselineText)
+    );
   });
 
   it('edit in A propagates to B', async () => {
-    // type in browserA's editor → assert browserB's editor converges.
-    // TODO: multiremote.
+    const liveText = ` live edit ${Date.now()}`;
+
+    await A.insertText(browserA.$('.ProseMirror'), liveText);
+
+    await browserB.waitUntil(
+      async () => {
+        const text = await browserB.$('.ProseMirror').getText();
+        return text.includes(liveText);
+      },
+      {
+        timeout: 30_000,
+        timeoutMsg: 'browserB did not receive browserA live edit'
+      }
+    );
   });
 
-  it('restore in A converges B on the restored content', async () => {
+  it('restore in A converges B on the restored content', async function () {
     // restore an older version in A → B's live content matches.
-    // TODO: multiremote.
+    this.skip();
   });
 
-  it('concurrent edit survives a restore as an orphan (pins the limitation)', async () => {
+  it('concurrent edit survives a restore as an orphan (pins the limitation)', async function () {
     // A restores while B holds an unsynced edit → assert the DOCUMENTED merge
     // outcome (B's addition survives as an orphan; markdown merges at
     // boundaries). This guards against a *change* in the non-transactional
-    // restore behaviour — see docs/known-limitations.md. TODO: multiremote.
+    // restore behaviour — see docs/known-limitations.md.
+    this.skip();
   });
 
-  it('undo of the restore in A converges B back', async () => {
-    // TODO: multiremote.
+  it('undo of the restore in A converges B back', async function () {
+    this.skip();
   });
 
-  it('offline edits on both sides converge on reconnect', async () => {
-    // toggle A offline, edit both, reconnect → assert convergence. TODO.
+  it('offline edits on both sides converge on reconnect', async function () {
+    // toggle A offline, edit both, reconnect → assert convergence.
+    this.skip();
   });
 });

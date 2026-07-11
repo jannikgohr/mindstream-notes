@@ -274,6 +274,16 @@ export async function loginClient(
   await h.click('Open settings');
   await h.click('Account & Sync');
   await h.click('Self-hosted');
+
+  if (await h.isDisplayed(input.username)) {
+    await h.click('Close');
+    return;
+  }
+  if (await h.isDisplayed('Log out')) {
+    await h.click('Log out');
+    await h.byName('Sign in').waitForDisplayed({ timeout: 30_000 });
+  }
+
   await h.setValue('Server URL', input.serverUrl);
   await h.setValue('Username or email', input.username);
   await h.setValue('Password', input.password);
@@ -283,6 +293,21 @@ export async function loginClient(
   await client
     .$(`aria/${input.username}`)
     .waitForDisplayed({ timeout: 60_000 });
+  await h.click('Close');
+}
+
+/** Run one manual sync through Settings → Account & Sync for a single client. */
+export async function syncClient(client: WebdriverIO.Browser): Promise<void> {
+  const h = clientHelpers(client);
+  await h.click('Open settings');
+  await h.click('Account & Sync');
+  await h.click('Self-hosted');
+  await h.click('Sync now');
+  await client.waitUntil(() => h.isDisplayed('Sync now', 1_000), {
+    timeout: 60_000,
+    timeoutMsg: 'sync did not return to idle'
+  });
+  await h.click('Close');
 }
 
 /**
@@ -304,6 +329,7 @@ export async function loginClient(
 export interface ClientHelpers {
   byName(name: string): ChainablePromiseElement;
   allByName(name: string): ChainablePromiseArray;
+  isDisplayed(name: string, timeout?: number): Promise<boolean>;
   treeItem(name: string): ChainablePromiseElement;
   click(name: string, opts?: { button?: 'left' | 'right' }): Promise<void>;
   clickElement(
@@ -311,6 +337,7 @@ export interface ClientHelpers {
     opts?: { button?: 'left' | 'right' }
   ): Promise<void>;
   setValue(name: string, value: string): Promise<void>;
+  insertText(element: ChainablePromiseElement, text: string): Promise<void>;
   pressKey(
     element: ChainablePromiseElement,
     key: string,
@@ -318,6 +345,7 @@ export interface ClientHelpers {
   ): Promise<void>;
   clickMenuItem(label: string): Promise<void>;
   openNotifications(): Promise<void>;
+  newRootNote(name: string): Promise<void>;
   newRootFolder(name: string): Promise<void>;
   newNoteInFolder(folder: string, note: string): Promise<void>;
 }
@@ -327,6 +355,17 @@ export function clientHelpers(client: WebdriverIO.Browser): ClientHelpers {
   const allByName = (name: string) => client.$$(`aria/${name}`);
   const treeItem = (name: string) =>
     client.$('aria/File tree').$(`aria/${name}`);
+  const isDisplayed = async (
+    name: string,
+    timeout = 1_000
+  ): Promise<boolean> => {
+    try {
+      await byName(name).waitForDisplayed({ timeout });
+      return true;
+    } catch {
+      return false;
+    }
+  };
 
   const clickElement = async (
     element: ChainablePromiseElement,
@@ -421,6 +460,37 @@ export function clientHelpers(client: WebdriverIO.Browser): ClientHelpers {
     );
   };
 
+  const insertText = async (
+    element: ChainablePromiseElement,
+    text: string
+  ): Promise<void> => {
+    const resolved = await element;
+    await clickElement(resolved);
+    await client.execute(
+      (el: HTMLElement, value: string) => {
+        el.focus();
+        const selection = window.getSelection();
+        if (selection) {
+          const range = document.createRange();
+          range.selectNodeContents(el);
+          range.collapse(false);
+          selection.removeAllRanges();
+          selection.addRange(range);
+        }
+        document.execCommand('insertText', false, value);
+        el.dispatchEvent(
+          new InputEvent('input', {
+            bubbles: true,
+            inputType: 'insertText',
+            data: value
+          })
+        );
+      },
+      resolved,
+      text
+    );
+  };
+
   const clickMenuItem = async (label: string): Promise<void> => {
     const escaped = label.replace(/"/g, '\\"');
     await clickElement(
@@ -448,6 +518,11 @@ export function clientHelpers(client: WebdriverIO.Browser): ClientHelpers {
     await commitDraft('New folder', name);
   };
 
+  const newRootNote = async (name: string): Promise<void> => {
+    await click('New note');
+    await commitDraft('New note', name);
+  };
+
   const newNoteInFolder = async (
     folder: string,
     note: string
@@ -460,13 +535,16 @@ export function clientHelpers(client: WebdriverIO.Browser): ClientHelpers {
   return {
     byName,
     allByName,
+    isDisplayed,
     treeItem,
     click,
     clickElement,
     setValue,
+    insertText,
     pressKey,
     clickMenuItem,
     openNotifications,
+    newRootNote,
     newRootFolder,
     newNoteInFolder
   };
