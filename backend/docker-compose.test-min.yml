@@ -1,0 +1,34 @@
+# Mindstream Notes — build-free, sharing-only variant of the T4 test overlay.
+#
+# The T4 sharing flows (docs/e2e-flows.md §4) only exercise etebase (auth +
+# encrypted collections). etebase and its postgres backing store are both
+# PULLED images, so this overlay publishes etebase directly on the test port
+# and skips the nginx edge plus the yjs-relay / excalidraw-room BUILD services
+# entirely.
+#
+# Bring it up with `pnpm backend:test:up:min`, which runs `up -d etebase`: only
+# etebase and its postgres dependency start, NOTHING is built, and the stack
+# comes up even when the Docker bridge has no outbound internet (a build would
+# need it to `apk add`; this doesn't). Use the full `pnpm backend:test:up` when
+# you also need live collaboration (yjs-relay / excalidraw-room) — which the
+# sharing suite does not.
+#
+# Same caveats as docker-compose.test.yml: AUTO_SIGNUP opens signup and the
+# .env.test credentials are throwaway. NEVER load this for a real deployment.
+
+services:
+  etebase:
+    container_name: mindstream-test-etebase
+    environment:
+      # Opens the signup endpoint the two-account provisioning helper calls;
+      # default upstream is create_user_blocked. Test stack only.
+      - AUTO_SIGNUP=true
+    # With no nginx here to own the host port and proxy / → etebase:3735, we
+    # publish etebase's API port directly on the same test port the app and the
+    # provisioning helper target (http://localhost:${NGINX_PORT}). Django's
+    # ALLOWED_HOSTS=localhost still matches — it ignores the port.
+    ports:
+      - '${NGINX_PORT:-18080}:3735'
+
+  postgres:
+    container_name: mindstream-test-postgres
