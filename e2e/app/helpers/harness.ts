@@ -231,3 +231,55 @@ export async function clickMenuItem(label: string): Promise<void> {
 export async function waitForShell(): Promise<void> {
   await byName('Welcome').waitForDisplayed({ timeout: 30_000 });
 }
+
+/** Credentials for driving the Settings → Account sign-in form. */
+export interface LoginInput {
+  serverUrl: string;
+  username: string;
+  password: string;
+}
+
+/**
+ * Sign one client into a self-hosted server through the Settings → Account UI
+ * — the real user flow, since `withGlobalTauri` is off so we can't invoke the
+ * `etebase_login` IPC directly from the WebView.
+ *
+ * Scoped to a SINGLE `client` (a wdio instance) on purpose: under multiremote
+ * the global `$`/`byName` fan out to every browser, but each client signs into
+ * its own account, so every query and click here goes through `client`.
+ *
+ * Accessible names are taken verbatim from src/lib/settings (the label-wrapped
+ * inputs in SignInForm.svelte and the section labels in i18n/en.json):
+ *   "Open settings" → "Account & Sync" → "Self-hosted" →
+ *   "Server URL" / "Username or email" / "Password" → "Sign in".
+ *
+ * NOTE: written to the confirmed labels but not yet validated against a live
+ * app session — see e2e/app/README.md ("Not yet validated end-to-end").
+ */
+export async function loginClient(
+  client: WebdriverIO.Browser,
+  input: LoginInput
+): Promise<void> {
+  const aria = (name: string) => client.$(`aria/${name}`);
+  const clickAria = async (name: string) => {
+    const el = await aria(name);
+    await el.waitForDisplayed({ timeout: 30_000 });
+    await el.click();
+  };
+  const fillAria = async (name: string, value: string) => {
+    const el = await aria(name);
+    await el.waitForDisplayed({ timeout: 30_000 });
+    await el.setValue(value);
+  };
+
+  await clickAria('Open settings');
+  await clickAria('Account & Sync');
+  await clickAria('Self-hosted');
+  await fillAria('Server URL', input.serverUrl);
+  await fillAria('Username or email', input.username);
+  await fillAria('Password', input.password);
+  await clickAria('Sign in');
+
+  // The signed-in card renders the username once the Rust login resolves.
+  await aria(input.username).waitForDisplayed({ timeout: 60_000 });
+}
