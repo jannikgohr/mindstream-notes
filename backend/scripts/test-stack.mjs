@@ -4,7 +4,11 @@
  * `pnpm backend:test:*` scripts work on Linux, macOS and Windows.
  *
  * Commands:
- *   up      build + start the stack detached, then print how to reach it
+ *   up      build + start the full stack detached, then print how to reach it
+ *   up:min  start ONLY etebase + postgres (both pulled images) for the sharing
+ *           suite — no image builds, so it works even when the Docker bridge
+ *           has no outbound internet. Skips the nginx edge and the yjs/
+ *           excalidraw build services (docker-compose.test-min.yml).
  *   down    stop + remove the containers (keeps volumes)
  *   reset   `down -v` (wipe volumes) then a fresh `up` — a clean slate
  *   logs    tail a service, e.g. `... logs etebase`
@@ -26,17 +30,24 @@ const backendDir = resolve(scriptDir, '..');
 const PROJECT = 'mindstream-test';
 const NGINX_PORT = process.env.NGINX_PORT ?? '18080';
 
-const composeArgs = [
-  'compose',
-  '-f',
-  join(backendDir, 'docker-compose.yml'),
-  '-f',
-  join(backendDir, 'docker-compose.test.yml'),
-  '--env-file',
-  join(backendDir, '.env.test'),
-  '-p',
-  PROJECT
-];
+function composeArgsFor(overlay) {
+  return [
+    'compose',
+    '-f',
+    join(backendDir, 'docker-compose.yml'),
+    '-f',
+    join(backendDir, overlay),
+    '--env-file',
+    join(backendDir, '.env.test'),
+    '-p',
+    PROJECT
+  ];
+}
+
+const composeArgs = composeArgsFor('docker-compose.test.yml');
+// Build-free sharing-only overlay: publishes etebase directly, no build
+// services. `up -d etebase` starts only etebase + its postgres dependency.
+const minComposeArgs = composeArgsFor('docker-compose.test-min.yml');
 
 function needsSudo() {
   if (process.platform !== 'linux') return false;
@@ -76,6 +87,13 @@ switch (command) {
     docker([...composeArgs, 'up', '-d', '--build', ...rest]);
     printReachInfo();
     break;
+  case 'up:min':
+    // Only etebase (+ its postgres dependency). Both are pulled images, so no
+    // `--build` — this is the whole point: it comes up without container
+    // internet. Any extra args (e.g. a service name) still pass through.
+    docker([...minComposeArgs, 'up', '-d', 'etebase', ...rest]);
+    printReachInfo();
+    break;
   case 'down':
     docker([...composeArgs, 'down', ...rest]);
     break;
@@ -93,7 +111,7 @@ switch (command) {
   default:
     console.error(
       `[test-stack] unknown command: ${command ?? '(none)'}\n` +
-        'Usage: node backend/scripts/test-stack.mjs <up|down|reset|logs|status>'
+        'Usage: node backend/scripts/test-stack.mjs <up|up:min|down|reset|logs|status>'
     );
     process.exit(1);
 }

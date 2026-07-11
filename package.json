@@ -22,6 +22,7 @@
     "test:e2e:app": "wdio run e2e/app/wdio.conf.ts",
     "test:e2e:app:multi": "wdio run e2e/app/wdio.multiremote.conf.ts",
     "backend:test:up": "node backend/scripts/test-stack.mjs up",
+    "backend:test:up:min": "node backend/scripts/test-stack.mjs up:min",
     "backend:test:down": "node backend/scripts/test-stack.mjs down",
     "backend:test:reset": "node backend/scripts/test-stack.mjs reset",
     "backend:test:logs": "node backend/scripts/test-stack.mjs logs",

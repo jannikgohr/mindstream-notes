@@ -49,15 +49,25 @@ bit — **`AUTO_SIGNUP=true`**, since Etebase blocks signup by default and the
 two-account provisioning needs the signup endpoint open.
 
 ```sh
-pnpm backend:test:up       # build + start on http://localhost:18080
+pnpm backend:test:up       # build + start FULL stack on http://localhost:18080
+pnpm backend:test:up:min   # sharing-only: etebase + postgres, NO image builds
 pnpm backend:test:reset    # wipe volumes + restart (clean slate)
 pnpm backend:test:down     # stop + remove
 ```
 
+`up:min` is for the **sharing** suite, which only talks to etebase. It layers
+`docker-compose.test-min.yml` to publish etebase directly on 18080 and starts
+just `etebase` + its `postgres` dependency — both **pulled** images, so nothing
+builds. Use it when the Docker bridge can't reach the internet (a common
+Fedora/firewalld or IPv6-only-link symptom: image _pulls_ work but in-container
+`apk add` during a build fails with `DNS: transient error`). The full `up`
+additionally builds nginx/yjs-relay/excalidraw-room, which live collaboration
+(`collab.e2e.ts`) needs but sharing does not.
+
 The wrapper auto-prefixes `sudo` on a rootful Linux daemon; set
 `MINDSTREAM_DOCKER_NO_SUDO=1` for rootless/Docker-Desktop setups (macOS and
 Windows never use sudo). It runs alongside a dev stack on 8080 without
-clashing. **Never deploy this overlay** — `AUTO_SIGNUP` opens registration
+clashing. **Never deploy either overlay** — `AUTO_SIGNUP` opens registration
 to anyone who can reach the server.
 
 ## Go to production
