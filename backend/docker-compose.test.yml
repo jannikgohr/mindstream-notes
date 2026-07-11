@@ -1,0 +1,46 @@
+# Mindstream Notes — disposable T4 test stack overlay.
+#
+# Layers on top of docker-compose.yml to give the e2e suite an ISOLATED,
+# throwaway backend that will never collide with a dev/prod stack:
+#
+#   - distinct container names (mindstream-test-*), so a running dev stack
+#     (mindstream-*) keeps its containers;
+#   - its own project name + named volumes (via `-p mindstream-test`), so
+#     data is namespaced and `down -v` wipes it clean between runs;
+#   - a separate host port (NGINX_PORT, default 18080), so both stacks can
+#     run side by side;
+#   - AUTO_SIGNUP=true on etebase, which the SDK-driven two-account
+#     provisioning (docs/e2e-strategy.md §2.1) depends on — signup is
+#     blocked by default upstream (create_user_blocked).
+#
+# NEVER load this file for a real deployment: AUTO_SIGNUP lets anyone with
+# access to the server register, and the credentials in .env.test are
+# throwaway. Bring it up only through `pnpm backend:test:up` (or the
+# explicit `docker compose -f docker-compose.yml -f docker-compose.test.yml
+# --env-file .env.test -p mindstream-test up`), which never touches the
+# production compose file.
+
+services:
+  nginx:
+    container_name: mindstream-test-nginx
+    # The base file publishes no host port (a reverse proxy owns that in
+    # prod). For local e2e we publish one directly on a test-only port.
+    ports:
+      - '${NGINX_PORT:-18080}:80'
+
+  yjs-relay:
+    container_name: mindstream-test-yjs-relay
+
+  excalidraw-room:
+    container_name: mindstream-test-excalidraw-room
+
+  etebase:
+    container_name: mindstream-test-etebase
+    environment:
+      # THE line that makes T4 sharing possible: opens the signup endpoint
+      # (POST /api/v1/authentication/signup/) the provisioning helper calls.
+      # Default upstream is create_user_blocked. Test stack only.
+      - AUTO_SIGNUP=true
+
+  postgres:
+    container_name: mindstream-test-postgres
