@@ -38,6 +38,28 @@ In the app: **Settings → Account**
 That single URL covers all three services — the client appends the
 collab WebSocket paths itself.
 
+## Disposable test stack (e2e T4)
+
+The e2e sharing/collaboration specs (docs/e2e-strategy.md §2.1, T4) need an
+**isolated** backend they can provision throwaway accounts against.
+`docker-compose.test.yml` overlays this one to provide it: distinct
+`mindstream-test-*` container names, its own project/volumes, a separate
+host port (**18080**), pinned throwaway creds (`.env.test`), and — the key
+bit — **`AUTO_SIGNUP=true`**, since Etebase blocks signup by default and the
+two-account provisioning needs the signup endpoint open.
+
+```sh
+pnpm backend:test:up       # build + start on http://localhost:18080
+pnpm backend:test:reset    # wipe volumes + restart (clean slate)
+pnpm backend:test:down     # stop + remove
+```
+
+The wrapper auto-prefixes `sudo` on a rootful Linux daemon; set
+`MINDSTREAM_DOCKER_NO_SUDO=1` for rootless/Docker-Desktop setups (macOS and
+Windows never use sudo). It runs alongside a dev stack on 8080 without
+clashing. **Never deploy this overlay** — `AUTO_SIGNUP` opens registration
+to anyone who can reach the server.
+
 ## Go to production
 
 Edit `.env`:

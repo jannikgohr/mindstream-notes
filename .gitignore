@@ -16,6 +16,9 @@ node_modules
 .env
 .env.*
 !.env.example
+# Committed on purpose: throwaway, deterministic creds for the disposable
+# T4 test stack (backend/docker-compose.test.yml). Local-only, never prod.
+!backend/.env.test
 
 # Tauri
 /src-tauri/target
