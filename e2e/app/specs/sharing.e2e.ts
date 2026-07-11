@@ -71,18 +71,16 @@ describe('T4 collection sharing (manifest bundles)', function () {
 
     // Sign each client into its own account through the Account UI (no global
     // Tauri IPC available in the WebView).
-    await Promise.all([
-      loginClient(browserA, {
-        serverUrl: server,
-        username: accounts.sender.username,
-        password: accounts.sender.password
-      }),
-      loginClient(browserB, {
-        serverUrl: server,
-        username: accounts.recipient.username,
-        password: accounts.recipient.password
-      })
-    ]);
+    await loginClient(browserA, {
+      serverUrl: server,
+      username: accounts.sender.username,
+      password: accounts.sender.password
+    });
+    await loginClient(browserB, {
+      serverUrl: server,
+      username: accounts.recipient.username,
+      password: accounts.recipient.password
+    });
 
     A = clientHelpers(browserA);
     B = clientHelpers(browserB);

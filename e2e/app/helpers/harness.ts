@@ -245,6 +245,29 @@ export interface LoginInput {
   password: string;
 }
 
+async function closeSettingsDialog(client: WebdriverIO.Browser): Promise<void> {
+  await client.execute(() => {
+    const dialog = Array.from(
+      document.querySelectorAll<HTMLElement>('[role="dialog"]')
+    ).find((candidate) => candidate.innerText.includes('Settings'));
+    const close = dialog?.querySelector<HTMLButtonElement>(
+      'button[aria-label="Close"]'
+    );
+    if (!close) throw new Error('missing Settings close button');
+    close.click();
+  });
+}
+
+async function selectSelfHosted(client: WebdriverIO.Browser): Promise<void> {
+  await client.execute(() => {
+    const button = Array.from(document.querySelectorAll('button')).find(
+      (candidate) => candidate.textContent?.trim() === 'Self-hosted'
+    ) as HTMLButtonElement | undefined;
+    if (!button) throw new Error('missing Self-hosted server type button');
+    button.click();
+  });
+}
+
 /**
  * Sign one client into a self-hosted server through the Settings → Account UI
  * — the real user flow, since `withGlobalTauri` is off so we can't invoke the
@@ -273,27 +296,115 @@ export async function loginClient(
 
   await h.click('Open settings');
   await h.click('Account & Sync');
-  await h.click('Self-hosted');
+  await selectSelfHosted(client);
 
   if (await h.isDisplayed(input.username)) {
-    await h.click('Close');
+    await closeSettingsDialog(client);
     return;
   }
   if (await h.isDisplayed('Log out')) {
     await h.click('Log out');
     await h.byName('Sign in').waitForDisplayed({ timeout: 30_000 });
+    await selectSelfHosted(client);
   }
 
-  await h.setValue('Server URL', input.serverUrl);
-  await h.setValue('Username or email', input.username);
-  await h.setValue('Password', input.password);
-  await h.click('Sign in');
+  await client.waitUntil(
+    () =>
+      client.execute(() => {
+        const inputByLabel = (labelText: string) =>
+          document.querySelector(`input[aria-label="${labelText}"]`) ??
+          Array.from(document.querySelectorAll('label'))
+            .find((label) => label.textContent?.includes(labelText))
+            ?.querySelector('input');
+        return inputByLabel('Server URL') !== null;
+      }),
+    {
+      timeout: 30_000,
+      timeoutMsg: 'self-hosted sign-in form did not render'
+    }
+  );
+
+  await client.execute((formInput: LoginInput) => {
+    const setInput = (label: string, value: string) => {
+      const input =
+        document.querySelector<HTMLInputElement>(
+          `input[aria-label="${label}"]`
+        ) ??
+        (Array.from(document.querySelectorAll('label'))
+          .find((candidate) => candidate.textContent?.includes(label))
+          ?.querySelector('input') as HTMLInputElement | null);
+      if (!input) throw new Error(`missing sign-in input: ${label}`);
+      input.scrollIntoView({ block: 'center', inline: 'center' });
+      input.focus();
+      input.value = value;
+      input.dispatchEvent(
+        new InputEvent('input', {
+          bubbles: true,
+          inputType: 'insertReplacementText',
+          data: value
+        })
+      );
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+
+    setInput('Server URL', formInput.serverUrl);
+    setInput('Username or email', formInput.username);
+    setInput('Password', formInput.password);
+  }, input);
+
+  await client.waitUntil(
+    () =>
+      client.execute(() => {
+        const button = Array.from(document.querySelectorAll('button')).find(
+          (candidate) => candidate.textContent?.trim() === 'Sign in'
+        ) as HTMLButtonElement | undefined;
+        return button !== undefined && !button.disabled;
+      }),
+    {
+      timeout: 30_000,
+      timeoutMsg: 'sign-in button did not enable after filling credentials'
+    }
+  );
+
+  await client.execute(() => {
+    const button = Array.from(document.querySelectorAll('button')).find(
+      (candidate) => candidate.textContent?.trim() === 'Sign in'
+    ) as HTMLButtonElement | undefined;
+    if (!button) throw new Error('missing Sign in button');
+    button.click();
+  });
 
   // The signed-in card renders the username once the Rust login resolves.
-  await client
-    .$(`aria/${input.username}`)
-    .waitForDisplayed({ timeout: 60_000 });
-  await h.click('Close');
+  try {
+    await client
+      .$(`aria/${input.username}`)
+      .waitForDisplayed({ timeout: 60_000 });
+  } catch (err) {
+    const state = await client.execute(() => {
+      const value = (label: string) =>
+        document.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)
+          ?.value ??
+        (
+          Array.from(document.querySelectorAll('label'))
+            .find((candidate) => candidate.textContent?.includes(label))
+            ?.querySelector('input') as HTMLInputElement | null
+        )?.value ??
+        null;
+      const text = document.body.innerText;
+      return {
+        serverUrl: value('Server URL'),
+        username: value('Username or email'),
+        hasPassword: (value('Password') ?? '').length > 0,
+        visibleText: text.slice(0, 2_000)
+      };
+    });
+    throw new Error(
+      `login did not reach signed-in state for ${input.username}: ${String(
+        err
+      )}\n${JSON.stringify(state, null, 2)}`
+    );
+  }
+  await closeSettingsDialog(client);
 }
 
 /** Run one manual sync through Settings → Account & Sync for a single client. */
@@ -301,13 +412,13 @@ export async function syncClient(client: WebdriverIO.Browser): Promise<void> {
   const h = clientHelpers(client);
   await h.click('Open settings');
   await h.click('Account & Sync');
-  await h.click('Self-hosted');
+  await selectSelfHosted(client);
   await h.click('Sync now');
   await client.waitUntil(() => h.isDisplayed('Sync now', 1_000), {
     timeout: 60_000,
     timeoutMsg: 'sync did not return to idle'
   });
-  await h.click('Close');
+  await closeSettingsDialog(client);
 }
 
 /**
@@ -502,14 +613,66 @@ export function clientHelpers(client: WebdriverIO.Browser): ClientHelpers {
 
   const openNotifications = () => click('Open notifications');
 
-  // Draft-input flow: a toolbar/context-menu action opens an inline <input>
-  // whose accessible name is its placeholder; fill it and press Enter to commit.
+  // Draft-input flow: a toolbar/context-menu action opens an inline <input>.
+  // Prefer the placeholder because older packaged binaries may not expose the
+  // draft as the expected accessible name under WebKit.
   const commitDraft = async (
     placeholder: string,
     value: string
   ): Promise<void> => {
-    await setValue(placeholder, value);
-    await pressKey(byName(placeholder), 'Enter');
+    await client.waitUntil(
+      () =>
+        client.execute(
+          (draftPlaceholder: string) =>
+            Array.from(document.querySelectorAll('input')).some(
+              (input) => input.placeholder === draftPlaceholder
+            ),
+          placeholder
+        ),
+      {
+        timeout: 30_000,
+        timeoutMsg: `draft input did not render: ${placeholder}`
+      }
+    );
+
+    await client.execute(
+      (draftPlaceholder: string, next: string) => {
+        const input = Array.from(
+          document.querySelectorAll<HTMLInputElement>('input')
+        ).find((candidate) => candidate.placeholder === draftPlaceholder);
+        if (!input) throw new Error(`missing draft input: ${draftPlaceholder}`);
+        input.scrollIntoView({ block: 'center', inline: 'center' });
+        input.focus();
+        input.value = next;
+        input.dispatchEvent(
+          new InputEvent('input', {
+            bubbles: true,
+            inputType: 'insertReplacementText',
+            data: next
+          })
+        );
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        input.dispatchEvent(
+          new KeyboardEvent('keydown', {
+            key: 'Enter',
+            code: 'Enter',
+            bubbles: true,
+            cancelable: true
+          })
+        );
+        input.dispatchEvent(
+          new KeyboardEvent('keyup', {
+            key: 'Enter',
+            code: 'Enter',
+            bubbles: true,
+            cancelable: true
+          })
+        );
+        input.blur();
+      },
+      placeholder,
+      value
+    );
     await treeItem(value).waitForDisplayed({ timeout: 30_000 });
   };
 

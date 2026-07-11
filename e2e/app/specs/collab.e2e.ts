@@ -36,18 +36,16 @@ describe('T4 collaboration matrix', function () {
     const accounts = await provisionTwoAccounts(server);
     const sharedAccount = accounts.sender;
 
-    await Promise.all([
-      loginClient(browserA, {
-        serverUrl: server,
-        username: sharedAccount.username,
-        password: sharedAccount.password
-      }),
-      loginClient(browserB, {
-        serverUrl: server,
-        username: sharedAccount.username,
-        password: sharedAccount.password
-      })
-    ]);
+    await loginClient(browserA, {
+      serverUrl: server,
+      username: sharedAccount.username,
+      password: sharedAccount.password
+    });
+    await loginClient(browserB, {
+      serverUrl: server,
+      username: sharedAccount.username,
+      password: sharedAccount.password
+    });
 
     A = clientHelpers(browserA);
     B = clientHelpers(browserB);

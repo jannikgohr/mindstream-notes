@@ -57,6 +57,7 @@ const buildEnv = {
 interface ClientProc {
   port: number;
   nativePort: number;
+  profileId: string;
   profileDir: string;
   driver?: ChildProcess;
 }
@@ -65,11 +66,13 @@ const clients: Record<'browserA' | 'browserB', ClientProc> = {
   browserA: {
     port: 4444,
     nativePort: 4445,
+    profileId: 'e2e-a',
     profileDir: mkdtempSync(join(tmpdir(), 'mindstream-e2e-a-'))
   },
   browserB: {
     port: 4446,
     nativePort: 4447,
+    profileId: 'e2e-b',
     profileDir: mkdtempSync(join(tmpdir(), 'mindstream-e2e-b-'))
   }
 };
@@ -81,8 +84,13 @@ function spawnDriver(client: ClientProc): ChildProcess {
     {
       stdio: [null, process.stdout, process.stderr],
       // The launched app reads its data dir from here — this is what makes
-      // the two clients distinct users' devices.
-      env: { ...process.env, MINDSTREAM_PROFILE_DIR: client.profileDir }
+      // the two clients distinct users' devices. The profile id namespaces the
+      // OS keyring entry; without it both clients default to `e2e`.
+      env: {
+        ...process.env,
+        MINDSTREAM_PROFILE_DIR: client.profileDir,
+        MINDSTREAM_PROFILE_ID: client.profileId
+      }
     }
   );
 }
