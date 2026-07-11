@@ -300,6 +300,7 @@
               type="url"
               inputmode="url"
               autocomplete="url"
+              aria-label="Server URL"
               value={serverUrlInput}
               oninput={onServerUrlInput}
               placeholder="https://collab.example.com"
@@ -341,6 +342,7 @@
         <input
           type="text"
           autocomplete="username"
+          aria-label="Username or email"
           bind:value={username}
           placeholder="you@example.com"
           disabled={busy}
@@ -352,6 +354,7 @@
         <input
           type="password"
           autocomplete="current-password"
+          aria-label="Password"
           bind:value={password}
           disabled={busy}
           class="h-8 rounded-md border border-input bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
