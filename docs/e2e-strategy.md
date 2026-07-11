@@ -193,10 +193,13 @@ assertion is the regression guard for the _history-is-per-device_ limitation.
   the shared root and doesn't re-appear on rescan (4.3) → a separate share, when
   declined, leaves the manifest collection and does **not** loop back (4.4). The
   incomplete-bundle guard (4.5) needs a share with a required part invite
-  revoked server-side. **4.7 (shared content actually converges) is blocked
-  until scoped sync routing lands** — write it alongside that slice, keyed on the
-  `share_scope_id` seam (migration 18); until then an accepted share is an empty
-  folder by design, so assert exactly that as the current-behaviour guard.
+  revoked server-side. **4.7 (shared content converges) is now unblocked** —
+  scoped sync routing plus scope inheritance on create/move landed (keyed on the
+  `share_scope_id` seam, migration 18), so a note added to or moved into a shared
+  folder syncs to the recipient without a re-invite, and one moved out is
+  re-homed back to the vault. Assert those convergence outcomes (not the old
+  "empty folder by design" guard). The scaffolded spec is
+  [`e2e/app/specs/sharing.e2e.ts`](../e2e/app/specs/sharing.e2e.ts).
 
 ---
 
