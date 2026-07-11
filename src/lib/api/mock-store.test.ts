@@ -133,6 +133,108 @@ describe('mock-store notes', () => {
     expect((await mockApi.loadNote(n.id)).trashed).toBe(false);
   });
 
+  it('marks notes under Trash descendants as trashed and counts them recursively', async () => {
+    const before = await mockApi.trashCounts();
+    const folder = await mockApi.createCollection({
+      name: `Trash folder ${Date.now()}`,
+      parent_collection_id: 'trash'
+    });
+    const child = await mockApi.createCollection({
+      name: 'Nested trash folder',
+      parent_collection_id: folder.id
+    });
+    const direct = await mockApi.createNote({
+      title: 'direct trash child',
+      parent_collection_id: 'trash'
+    });
+    const nested = await mockApi.createNote({
+      title: 'nested trash child',
+      parent_collection_id: child.id
+    });
+    const moved = await mockApi.createNote({ title: 'move me to trash' });
+
+    expect(direct.trashed).toBe(true);
+    expect(nested.trashed).toBe(true);
+    expect(
+      (await mockApi.saveNote({ id: moved.id, parent_collection_id: child.id }))
+        .trashed
+    ).toBe(true);
+    expect(
+      (await mockApi.saveNote({ id: moved.id, parent_collection_id: null }))
+        .trashed
+    ).toBe(false);
+
+    const after = await mockApi.trashCounts();
+    expect(after).toEqual({
+      folders: before.folders + 2,
+      notes: before.notes + 2
+    });
+  });
+
+  it('treats collection cycles outside Trash as not trashed', async () => {
+    const folder = await mockApi.createCollection({ name: 'Cyclic folder' });
+    await mockApi.updateCollection({
+      id: folder.id,
+      parent_collection_id: folder.id
+    });
+
+    const note = await mockApi.createNote({
+      title: 'cycle child',
+      parent_collection_id: folder.id
+    });
+
+    expect(note.trashed).toBe(false);
+  });
+
+  it('restores notes from Trash descendants back to root', async () => {
+    const folder = await mockApi.createCollection({
+      name: 'Restorable trash folder',
+      parent_collection_id: 'trash'
+    });
+    const note = await mockApi.createNote({
+      title: 'restore from nested trash',
+      parent_collection_id: folder.id
+    });
+
+    expect(note.trashed).toBe(true);
+    await mockApi.restoreNote(note.id);
+
+    const restored = await mockApi.loadNote(note.id);
+    expect(restored.trashed).toBe(false);
+    expect(restored.parent_collection_id).toBeNull();
+  });
+
+  it('empties Trash by purging direct and nested notes and folders', async () => {
+    const folder = await mockApi.createCollection({
+      name: 'Empty me',
+      parent_collection_id: 'trash'
+    });
+    const child = await mockApi.createCollection({
+      name: 'Empty me too',
+      parent_collection_id: folder.id
+    });
+    const direct = await mockApi.createNote({
+      title: 'purged direct',
+      parent_collection_id: 'trash'
+    });
+    const nested = await mockApi.createNote({
+      title: 'purged nested',
+      parent_collection_id: child.id
+    });
+
+    const counts = await mockApi.emptyTrash();
+
+    expect(counts.notes).toBeGreaterThanOrEqual(2);
+    expect(counts.folders).toBeGreaterThanOrEqual(2);
+    await expect(mockApi.loadNote(direct.id)).rejects.toThrow(/not found/);
+    await expect(mockApi.loadNote(nested.id)).rejects.toThrow(/not found/);
+    const remainingCollections = await mockApi.listCollections();
+    expect(
+      remainingCollections.find((c) => c.id === folder.id)
+    ).toBeUndefined();
+    expect(remainingCollections.find((c) => c.id === child.id)).toBeUndefined();
+  });
+
   it('purges a note permanently', async () => {
     const n = await mockApi.createNote({ title: 'gone' });
     await mockApi.purgeNote(n.id);
