@@ -96,11 +96,11 @@ test('empties trash after confirmation', async ({ page }) => {
   await expect(treeItem(page, second)).toBeVisible();
 
   await page.getByRole('button', { name: 'Empty trash', exact: true }).click();
+  const confirmDialog = page.getByRole('alertdialog');
   await expect(
-    page.getByRole('heading', { name: 'Empty trash' })
+    confirmDialog.getByRole('heading', { name: 'Empty trash', exact: true })
   ).toBeVisible();
-  await page
-    .getByRole('alertdialog')
+  await confirmDialog
     .getByRole('button', { name: 'Empty trash', exact: true })
     .click();
 
