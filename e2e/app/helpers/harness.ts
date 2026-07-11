@@ -260,28 +260,23 @@ export async function loginClient(
   client: WebdriverIO.Browser,
   input: LoginInput
 ): Promise<void> {
-  const aria = (name: string) => client.$(`aria/${name}`);
-  const clickAria = async (name: string) => {
-    const el = await aria(name);
-    await el.waitForDisplayed({ timeout: 30_000 });
-    await el.click();
-  };
-  const fillAria = async (name: string, value: string) => {
-    const el = await aria(name);
-    await el.waitForDisplayed({ timeout: 30_000 });
-    await el.setValue(value);
-  };
+  // Route every interaction through the execute-based helpers: WebKitWebDriver
+  // (Linux `wry`) rejects the native `element/click` and send-keys commands with
+  // "unsupported operation", so clicks/fills must be synthesized as DOM events.
+  const h = clientHelpers(client);
 
-  await clickAria('Open settings');
-  await clickAria('Account & Sync');
-  await clickAria('Self-hosted');
-  await fillAria('Server URL', input.serverUrl);
-  await fillAria('Username or email', input.username);
-  await fillAria('Password', input.password);
-  await clickAria('Sign in');
+  await h.click('Open settings');
+  await h.click('Account & Sync');
+  await h.click('Self-hosted');
+  await h.setValue('Server URL', input.serverUrl);
+  await h.setValue('Username or email', input.username);
+  await h.setValue('Password', input.password);
+  await h.click('Sign in');
 
   // The signed-in card renders the username once the Rust login resolves.
-  await aria(input.username).waitForDisplayed({ timeout: 60_000 });
+  await client
+    .$(`aria/${input.username}`)
+    .waitForDisplayed({ timeout: 60_000 });
 }
 
 /**
