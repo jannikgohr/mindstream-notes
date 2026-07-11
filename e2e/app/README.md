@@ -61,18 +61,29 @@ Without `MINDSTREAM_E2E_APP=1`, every spec skips. The T4 specs additionally
 require `MINDSTREAM_E2E_BACKEND=1`; the dialog-driven backup specs require
 `MINDSTREAM_E2E_DIALOG_HOOK=1` once that Rust seam exists.
 
+## Two-client (T4) harness
+
+- **Multiremote config landed:** `wdio.multiremote.conf.ts` spawns **two**
+  tauri-driver processes (ports 4444/4445 and 4446/4447), each launching the app
+  against its own `MINDSTREAM_PROFILE_DIR`, and drives them as `browserA` /
+  `browserB`. Run with `pnpm test:e2e:app:multi` (backend up + the T4 env flags).
+- **Two-account provisioning landed:** `helpers/accounts.ts`
+  (`provisionTwoAccounts`) signs up a distinct sender + recipient via the
+  `etebase` JS SDK — real signups so the sender resolves the recipient's pubkey
+  via `fetch_user_profile`. Needs the test stack's `AUTO_SIGNUP=true`
+  (`pnpm backend:test:up`); Etebase blocks signup by default.
+- **Not yet validated end-to-end.** Both pieces compile and the SDK initializes,
+  but no run against a live two-app + backend session has been recorded yet —
+  that needs the stack up, a display (xvfb on CI), and the built binary.
+
 ## Open seams (see e2e-strategy.md §7)
 
-- **Two-client (T4):** a single tauri-driver session hosts one app. The matrix
-  specs need wdio **multiremote** (two capabilities) or two driver processes —
-  add a `wdio.multiremote.conf.ts` alongside this config.
 - **Native dialogs:** export/import/PDF pickers can't be clicked over WebDriver;
   they need a Rust-side hook to pre-seed the path. `requireDialogHook` keeps
   those specs skipped until then.
 - **`trashed_at` backdating:** the retention-sweep spec needs a hook to age an
   item past the retention window.
-- **Two distinct accounts (sharing, T4):** `sharing.e2e.ts` needs a sender and a
-  recipient — two real Etebase signups on the same backend, not one account on
-  two devices (the sender must resolve the recipient's pubkey via
-  `fetch_user_profile`). Needs the two-account provisioning seam in
-  e2e-strategy.md §2.1 on top of multiremote.
+- **Session injection (optimization):** specs currently log each client in
+  through the app's own `etebase_login` (drives Account UI / IPC). Seeding a
+  pre-authenticated session blob into each profile dir (e2e-strategy.md §3) would
+  skip that per run but needs a Rust-side hook.

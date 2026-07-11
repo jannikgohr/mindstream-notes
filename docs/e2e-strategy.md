@@ -228,11 +228,20 @@ Tracked here so the strategy isn't mistaken for working infrastructure:
 - [~] **`tauri-driver` harness scaffolded** in [`e2e/app/`](../e2e/app/) (wdio
   config, capability gating, the `MINDSTREAM_PROFILE_DIR` restart seam, and
   faithful T3/T4 spec skeletons), run via `pnpm test:e2e:app`. Not yet
-  validated against a real binary, and still needs: two-client multiremote
-  (T4), a native-dialog stub, and `trashed_at` backdating — see
-  [`e2e/app/README.md`](../e2e/app/README.md).
-- [ ] No automated test-account provisioning against Etebase (§2.1).
-- [ ] No test hook to inject the server URL / a pre-authenticated session (§3).
+  validated against a real binary, and still needs: a native-dialog stub and
+  `trashed_at` backdating — see [`e2e/app/README.md`](../e2e/app/README.md).
+- [~] **Two-client multiremote landed** (§5): `e2e/app/wdio.multiremote.conf.ts`
+  spawns two tauri-driver processes → `browserA`/`browserB`, run via
+  `pnpm test:e2e:app:multi`. Compiles; not yet validated against a live session.
+- [x] **Disposable test stack landed** (§2.1): `backend/docker-compose.test.yml`
+  - `.env.test` + `pnpm backend:test:{up,down,reset}` give an isolated backend
+    with `AUTO_SIGNUP=true` on a separate port (18080).
+- [~] **Test-account provisioning landed** (§2.1): `e2e/app/helpers/accounts.ts`
+  (`provisionTwoAccounts`) signs up two distinct users via the `etebase` JS SDK.
+  Requires the test stack's `AUTO_SIGNUP=true`. Not yet validated against a live
+  signup.
+- [ ] No test hook to inject a pre-authenticated session blob (§3) — specs log in
+      via the app's own `etebase_login` for now.
 - [x] **`peerCount` bridge method landed** for the awareness-based editors
       (markdown/PDF) and the collab-confirmation prompt is wired in
       `NoteHistorySection`. Remaining: ink/freeform presence and the T4 spec that
