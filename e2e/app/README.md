@@ -8,9 +8,11 @@ It is separate from the Playwright browser-fallback suite in `../browser/` and
 
 > **Status:** The T3 harness runs against the packaged app when the opt-in
 > toolchain below is installed. The T4 multiremote harness and two-account
-> provisioning have been validated against the disposable stack, but most T4
-> spec bodies are still skeletons. Native-dialog flows still skip cleanly until
-> their Rust-side path-injection seam is wired.
+> provisioning have been validated against the disposable stack. T4 now has
+> real assertions for markdown live-edit propagation, per-device history sync,
+> markdown restore confirmation, and sharing flows 4.1–4.4; the remaining T4
+> backlog is marked pending. Native-dialog flows still skip cleanly until their
+> Rust-side path-injection seam is wired.
 
 ## What's here
 
@@ -21,10 +23,10 @@ It is separate from the Playwright browser-fallback suite in `../browser/` and
 | `specs/trash-retention.e2e.ts`  | T3   | flow 1.5 + 3.3 (retention sweep on boot)                               |
 | `specs/settings-persist.e2e.ts` | T3   | flow 3.1 / 3.2                                                         |
 | `specs/backup.e2e.ts`           | T3   | flows 1.2 / 1.3 / 1.4 (needs a native-dialog hook)                     |
-| `specs/collab.e2e.ts`           | T4   | the two-client collaboration matrix + flow 2.5                         |
+| `specs/collab.e2e.ts`           | T4   | markdown live-edit propagation; remaining matrix cases pending         |
 | `specs/sync-history.e2e.ts`     | T4   | per-device-history negative assertion                                  |
-| `specs/collab-confirm.e2e.ts`   | T4   | the collab confirmation prompt (§5)                                    |
-| `specs/sharing.e2e.ts`          | T4   | collection sharing flows 4.1–4.10 (two distinct accounts)              |
+| `specs/collab-confirm.e2e.ts`   | T4   | markdown restore prompt + solo no-prompt; ink/freeform pending         |
+| `specs/sharing.e2e.ts`          | T4   | collection sharing flows 4.1–4.4; 4.5–4.10 pending                     |
 
 `helpers/harness.ts` owns the capability gating, the `MINDSTREAM_PROFILE_DIR`
 isolation/restart seam, and the accessible-name selectors (the same names the
@@ -77,8 +79,8 @@ seam exists.
   (`pnpm backend:test:up`); Etebase blocks signup by default.
 - **Validated live:** the two tauri-driver processes launch independently
   against the disposable stack and can be driven as `browserA` / `browserB`.
-  Several T4 spec bodies are still TODO-only, so a passing run is not yet full
-  collaboration coverage.
+  Remaining T4 backlog tests are marked pending rather than passing as empty
+  bodies, so a run's pass count reflects implemented coverage.
 
 ## Open seams (see e2e-strategy.md §7)
 
