@@ -57,7 +57,13 @@ export const config: WebdriverIO.Config = {
   runner: 'local',
   hostname: '127.0.0.1',
   port: 4444,
-  specs: [join(here, 'specs', '**', '*.e2e.ts')],
+  specs: [
+    join(here, 'specs', 'backup.e2e.ts'),
+    join(here, 'specs', 'editor-roundtrip.e2e.ts'),
+    join(here, 'specs', 'history.e2e.ts'),
+    join(here, 'specs', 'settings-persist.e2e.ts'),
+    join(here, 'specs', 'trash-retention.e2e.ts')
+  ],
   maxInstances: 1,
   capabilities: [
     {
