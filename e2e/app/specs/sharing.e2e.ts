@@ -6,12 +6,16 @@
  * That is a stronger requirement than the collab.e2e.ts matrix (one account,
  * two devices): these must provision two real users on the same backend.
  *
- * Like collab.e2e.ts this is the faithful scenario skeleton. It is gated to
- * skip until the two-client seam lands (wdio multiremote → `browserA`/`browserB`
- * or two driver processes) plus two-account provisioning against Etebase
- * (e2e-strategy.md §2.1, §7). The bodies document exactly what each real spec
- * must drive and assert so they can be filled in against that harness without
- * re-deriving the flow.
+ * Like collab.e2e.ts this is gated to skip until the two-client seam runs (wdio
+ * multiremote → `browserA`/`browserB`, two driver processes) plus two-account
+ * provisioning against Etebase (e2e-strategy.md §2.1, §7).
+ *
+ * Status: flows 4.1–4.4 are IMPLEMENTED against confirmed accessible names and
+ * the per-client `clientHelpers` factory (harness.ts) — not yet validated on a
+ * live two-app + backend session. 4.5–4.10 stay documented skeletons: each needs
+ * a seam that doesn't exist yet — server-side part-invite cancellation (4.5), a
+ * lone non-manifest invite path (4.6), move-UI automation + asset embedding
+ * (4.7/4.7b), and an offline/network toggle hook (4.8–4.10).
  *
  * Accessible names referenced below (from src/lib/settings/i18n/en.json, the
  * same names the SvelteKit UI renders inside the WebView):
