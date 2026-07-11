@@ -23,6 +23,7 @@ It is separate from the Playwright browser-fallback suite in `../browser/` and
 | `specs/collab.e2e.ts`           | T4   | the two-client collaboration matrix + flow 2.5                         |
 | `specs/sync-history.e2e.ts`     | T4   | per-device-history negative assertion                                  |
 | `specs/collab-confirm.e2e.ts`   | T4   | the collab confirmation prompt (§5)                                    |
+| `specs/sharing.e2e.ts`          | T4   | collection sharing flows 4.1–4.10 (two distinct accounts)              |
 
 `helpers/harness.ts` owns the capability gating, the `MINDSTREAM_PROFILE_DIR`
 isolation/restart seam, and the accessible-name selectors (the same names the
@@ -70,3 +71,8 @@ require `MINDSTREAM_E2E_BACKEND=1`; the dialog-driven backup specs require
   those specs skipped until then.
 - **`trashed_at` backdating:** the retention-sweep spec needs a hook to age an
   item past the retention window.
+- **Two distinct accounts (sharing, T4):** `sharing.e2e.ts` needs a sender and a
+  recipient — two real Etebase signups on the same backend, not one account on
+  two devices (the sender must resolve the recipient's pubkey via
+  `fetch_user_profile`). Needs the two-account provisioning seam in
+  e2e-strategy.md §2.1 on top of multiremote.

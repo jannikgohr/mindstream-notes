@@ -361,17 +361,20 @@ sender/access fallback, `build_share_manifest`, migration 18) are unit-tested in
   `migrate_subtree_into_scope` detach logic.
 - **Steps:** A shares a folder containing notes + an embedded image → B accepts
   → after a sync, assert B sees the folder's notes and the asset renders → A
-  adds a note in the shared folder, re-invites (or, once scope inheritance
-  lands, just adds it) → B pulls → assert it appears. If B has read-write, an
-  edit in B converges back to A.
+  adds a note (and a sub-folder + note) in the shared folder — no re-invite
+  needed, scope inheritance on create landed — and moves an existing vault note
+  into it → B pulls → assert they all appear. If B has read-write, an edit in B
+  converges back to A.
 - **Proves:** scope-tagged rows migrate out of the vault into the scope
   collections (owner side) and land on the recipient with assets resolving (no
-  "partial media unavailable" state).
+  "partial media unavailable" state); items created inside or moved into the
+  shared subtree inherit its `share_scope_id` and sync without a re-invite.
 - **Watch for:** the shared root arriving under B's tree root via orphan-reparent
-  (the sender's parent id doesn't exist on B); a note added to the shared folder
-  _after_ the share not appearing until a re-invite (scope inheritance on
-  create/move is a known follow-up); a read-only recipient's local edit looping
-  as a failed scope push.
+  (the sender's parent id doesn't exist on B); a note **moved out** of the shared
+  folder still showing on B (it must be re-homed back to the vault — its scope
+  copy tombstoned); moving the share **root** within the vault losing its scope
+  (the share-anchor guard must keep it); a read-only recipient's local edit
+  looping as a failed scope push.
 
 ### 4.8 Offline note edit survives a re-home (P1)
 
