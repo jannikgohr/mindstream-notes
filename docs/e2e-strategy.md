@@ -72,7 +72,9 @@ test harness lands:
 2. **Health gating.** Block tests until the stack is ready: nginx `/healthz`,
    a TCP connect to yjs-relay `:1234`, the excalidraw-room socket.io handshake,
    and Etebase accepting connections (the compose healthchecks already encode
-   each probe — reuse them).
+   each probe — reuse them). **Landed:** `e2e/backend/backend-health.spec.ts`
+   probes all four through the single nginx edge (run with
+   `MINDSTREAM_E2E_BACKEND=1 pnpm test:e2e:backend`; see §6/§7).
 3. **Isolation & teardown.** A disposable Postgres volume per run (or per-run
    collections plus cleanup) so state never leaks between runs.
 4. **Capability tag.** Gate T4 specs behind an env flag (e.g.
@@ -83,9 +85,22 @@ test harness lands:
 
 ## 3. The real-app harness (T3/T4)
 
+> Scaffolded in [`e2e/app/`](../e2e/app/) — wdio + tauri-driver config, the
+> gating/seam helpers, and faithful spec skeletons. The rest of this section is
+> what that harness implements (and what still needs finishing).
+
 Drive the **packaged Tauri binary** with `tauri-driver` (WebDriver) under a
 headless display (`xvfb` on Linux CI). Build it with `--features e2e-data-dir`
 so the test seams below work in a release binary.
+
+On Linux, `tauri-driver` delegates to WebKitWebDriver. Debian/Ubuntu packages
+it as `webkit2gtk-driver`; Fedora 43+ packages `/usr/bin/WebKitWebDriver` in
+`webkitgtk6.0`:
+
+```sh
+sudo dnf install webkitgtk6.0
+which WebKitWebDriver
+```
 
 - **Per-test data isolation & restart.** Set `MINDSTREAM_PROFILE_DIR` to a temp
   dir per test (and optionally `MINDSTREAM_PROFILE_ID` to namespace the keyring
@@ -158,9 +173,13 @@ assertion is the regression guard for the _history-is-per-device_ limitation.
 
 ## 5. Scenarios for planned features (write alongside the feature)
 
-- **Collab confirmation prompt.** Once `peerCount` is plumbed through the bridge:
-  with a second client present, a restore shows the confirmation; solo editing
-  does not prompt. (T4 — needs two clients + presence.)
+- **Collab confirmation prompt.** `peerCount` is now plumbed through the bridge
+  for the awareness-based editors (markdown/PDF) and checked in
+  `NoteHistorySection.applyRestore`: with a second client present, a restore
+  shows the confirmation; solo editing does not prompt. The T4 spec asserts both
+  per kind — including that ink/freeform do **not** prompt yet (their providers
+  don't report presence; see [known-limitations.md](known-limitations.md)).
+  (T4 — needs two clients + presence.)
 - **User profiles / multi-vault.** Switching the active profile isolates history
   and data; a restart picks up the active profile. The `MINDSTREAM_PROFILE_DIR`
   seam already underpins this — these tests exercise the in-app switch on top of
@@ -183,12 +202,12 @@ assertion is the regression guard for the _history-is-per-device_ limitation.
 
 ## 6. Suggested CI shape
 
-| Job          | Tier | When               | Needs                                    |
-| ------------ | ---- | ------------------ | ---------------------------------------- |
-| `unit`       | T1   | every push         | nothing                                  |
-| `e2e-web`    | T2   | every push         | Node only                                |
-| `e2e-app`    | T3   | every push (or PR) | packaged binary + `tauri-driver` + xvfb  |
-| `e2e-collab` | T4   | nightly / labelled | the above **+** `backend/` compose stack |
+| Job           | Tier | When               | Needs                                    |
+| ------------- | ---- | ------------------ | ---------------------------------------- |
+| `unit`        | T1   | every push         | nothing                                  |
+| `e2e-browser` | T2   | every push         | Node only                                |
+| `e2e-app`     | T3   | every push (or PR) | packaged binary + `tauri-driver` + xvfb  |
+| `e2e-collab`  | T4   | nightly / labelled | the above **+** `backend/` compose stack |
 
 Keep T4 off the every-push path: it's the slowest and the only tier that needs
 Docker and a network peer. Tagging it (`MINDSTREAM_E2E_BACKEND`) lets the same
@@ -200,9 +219,18 @@ specs run locally on demand and skip when the stack isn't up.
 
 Tracked here so the strategy isn't mistaken for working infrastructure:
 
-- [ ] No `tauri-driver` harness wired yet (T3/T4 backlog per
-      [e2e-flows.md](e2e-flows.md)).
+- [x] **Health gating landed** (§2.2): `e2e/backend/backend-health.spec.ts` +
+      `e2e/backend/playwright.config.ts`, run via `pnpm test:e2e:backend`, gated on
+      `MINDSTREAM_E2E_BACKEND`. This is the only T4-adjacent piece runnable today.
+- [~] **`tauri-driver` harness scaffolded** in [`e2e/app/`](../e2e/app/) (wdio
+  config, capability gating, the `MINDSTREAM_PROFILE_DIR` restart seam, and
+  faithful T3/T4 spec skeletons), run via `pnpm test:e2e:app`. Not yet
+  validated against a real binary, and still needs: two-client multiremote
+  (T4), a native-dialog stub, and `trashed_at` backdating — see
+  [`e2e/app/README.md`](../e2e/app/README.md).
 - [ ] No automated test-account provisioning against Etebase (§2.1).
 - [ ] No test hook to inject the server URL / a pre-authenticated session (§3).
-- [ ] `peerCount` bridge method not implemented — blocks the collab-confirmation
-      tests and the feature itself (see [known-limitations.md](known-limitations.md)).
+- [x] **`peerCount` bridge method landed** for the awareness-based editors
+      (markdown/PDF) and the collab-confirmation prompt is wired in
+      `NoteHistorySection`. Remaining: ink/freeform presence and the T4 spec that
+      exercises the prompt (see [known-limitations.md](known-limitations.md)).

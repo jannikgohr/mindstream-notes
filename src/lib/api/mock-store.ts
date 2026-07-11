@@ -33,6 +33,7 @@ import {
 const collections: Collection[] = [];
 const notes = new Map<string, Note>();
 const assets = new Map<string, Asset>();
+const TRASH_ID = 'trash';
 /** Derived, local-only extracted text for PDF notes (mirrors notes.pdf_text). */
 const pdfTexts = new Map<string, string>();
 /** Local, automatic note history (mirrors note_versions). */
@@ -75,6 +76,42 @@ function summary(n: Note): NoteSummary {
 
 function maxPosition(arr: { position: number }[]): number {
   return arr.reduce((m, x) => Math.max(m, x.position), -1);
+}
+
+function collectionIsUnderTrash(id: string | null | undefined): boolean {
+  let current = id ?? null;
+  const seen = new Set<string>();
+  while (current) {
+    if (current === TRASH_ID) return true;
+    if (seen.has(current)) return false;
+    seen.add(current);
+    current =
+      collections.find((c) => c.id === current)?.parent_collection_id ?? null;
+  }
+  return false;
+}
+
+function refreshNoteTrashFlag(note: Note): void {
+  note.trashed = collectionIsUnderTrash(note.parent_collection_id);
+}
+
+function trashDescendantCollectionIds(): Set<string> {
+  const ids = new Set<string>();
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const c of collections) {
+      if (c.id === TRASH_ID || ids.has(c.id)) continue;
+      if (
+        c.parent_collection_id === TRASH_ID ||
+        ids.has(c.parent_collection_id ?? '')
+      ) {
+        ids.add(c.id);
+        changed = true;
+      }
+    }
+  }
+  return ids;
 }
 
 function stripVersion(v: MockVersion): VersionSummary {
@@ -159,7 +196,7 @@ function tokenMagnitude(
     shared_by_me: false
   };
   const trash: Collection = {
-    id: 'trash',
+    id: TRASH_ID,
     parent_collection_id: null,
     name: 'Trash',
     position: 9999999,
@@ -301,7 +338,7 @@ export const mockApi = {
       created: t,
       modified: t,
       tags: [],
-      trashed: false,
+      trashed: collectionIsUnderTrash(input.parent_collection_id),
       favourite: false,
       pushed: false,
       note_kind: input.note_kind ?? 'markdown',
@@ -316,8 +353,10 @@ export const mockApi = {
     if (!n) throw new Error(`note ${input.id} not found`);
     if (input.title !== undefined) n.title = input.title;
     if (input.body !== undefined) n.body = input.body;
-    if (input.parent_collection_id !== undefined)
+    if (input.parent_collection_id !== undefined) {
       n.parent_collection_id = input.parent_collection_id;
+      refreshNoteTrashFlag(n);
+    }
     if (input.position !== undefined) n.position = input.position;
     if (input.tags !== undefined) n.tags = [...input.tags];
     if (input.favourite !== undefined) n.favourite = input.favourite;
@@ -334,6 +373,9 @@ export const mockApi = {
     const n = notes.get(id);
     if (!n) throw new Error(`note ${id} not found`);
     n.trashed = false;
+    if (collectionIsUnderTrash(n.parent_collection_id)) {
+      n.parent_collection_id = null;
+    }
     n.modified = nowIso();
   },
   async purgeNote(id: string): Promise<void> {
@@ -537,6 +579,32 @@ export const mockApi = {
       }
     }
     return removed;
+  },
+  async trashCounts() {
+    const folderIds = trashDescendantCollectionIds();
+    const noteCount = [...notes.values()].filter(
+      (n) =>
+        n.parent_collection_id === TRASH_ID ||
+        folderIds.has(n.parent_collection_id ?? '')
+    ).length;
+    return { notes: noteCount, folders: folderIds.size };
+  },
+  async emptyTrash() {
+    const counts = await this.trashCounts();
+    const folderIds = trashDescendantCollectionIds();
+    for (const [id, note] of [...notes]) {
+      if (
+        note.parent_collection_id === TRASH_ID ||
+        folderIds.has(note.parent_collection_id ?? '')
+      ) {
+        await this.purgeNote(id);
+      }
+    }
+    for (let i = collections.length - 1; i >= 0; i--) {
+      const id = collections[i].id;
+      if (folderIds.has(id)) collections.splice(i, 1);
+    }
+    return counts;
   },
   async listSignatures(): Promise<SignatureRecord[]> {
     return loadMockSignatures();

@@ -130,20 +130,26 @@ pool) if this ever becomes a bottleneck.
 
 ## Planned / not yet implemented
 
-### Collab confirmation prompt before restore — _planned_
+### Collab confirmation prompt before restore — _partially implemented_
 
-Restoring currently overwrites the shared document for everyone connected,
-silently. The intended behaviour is a confirmation when other clients are
-present: _"This note is open by others. Restoring replaces the shared content
-for everyone. Continue?"_, with solo editing left frictionless.
+A restore overwrites the shared document for everyone connected. To make that
+deliberate, the restore now shows a confirmation when other clients are present
+(_"Other people are editing this note live. Restoring replaces the shared
+content for everyone… Continue?"_), with solo editing left frictionless. It is
+wired through an optional `peerCount()` method on the `NoteHistoryApi` bridge
+(`note-history-bridge.svelte.ts`), checked in `NoteHistorySection.applyRestore`.
 
-Blocked on **presence plumbing**: the three editors use three different collab
-layers — `CollabProvider.awareness` (markdown/PDF), `InkWebCollabProvider`
-(ink), `ExcalidrawRoomClient` (freeform) — and `RoomInfo` carries no peer count.
-Delivering this means adding a `peerCount` (or `hasPeers`) method to the
-`NoteHistoryApi` bridge, implemented per editor against its own presence source.
-Until then there is no guard, which is why the _non-transactional restore_
-limitation above is currently user-visible.
+The remaining gap is **per-editor presence**. The three editors use three
+different collab layers — `CollabProvider.awareness` (markdown/PDF),
+`InkWebCollabProvider` (ink), `ExcalidrawRoomClient` (freeform) — and only the
+awareness-based ones report a count today: markdown (`NoteEditor`) and PDF
+(`PdfNoteViewer`) register `peerCount: () => otherPeerCount(awareness)`. Ink
+(`InkWebNoteEditor`) and freeform (`FreeformNoteEditor`) do **not** register
+`peerCount`, so for those two kinds the count falls back to `0` and a restore
+still overwrites collaborators silently. Closing it means plumbing presence from
+`InkWebCollabProvider` and `ExcalidrawRoomClient` into the bridge — which is why
+the _non-transactional restore_ limitation above is still user-visible for ink
+and freeform.
 
 ### User profiles / multi-vault — _planned_
 
