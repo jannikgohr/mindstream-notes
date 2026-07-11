@@ -145,7 +145,9 @@ export async function setElementValue(
       const input = (
         el.matches('input, textarea, select')
           ? el
-          : (el.querySelector('input, textarea, select') ?? el)
+          : (el.querySelector('input, textarea, select') ??
+            el.closest('label')?.querySelector('input, textarea, select') ??
+            el)
       ) as HTMLInputElement | HTMLTextAreaElement;
       input.scrollIntoView({ block: 'center', inline: 'center' });
       input.focus();
@@ -544,7 +546,9 @@ export function clientHelpers(client: WebdriverIO.Browser): ClientHelpers {
         const input = (
           el.matches('input, textarea, select')
             ? el
-            : (el.querySelector('input, textarea, select') ?? el)
+            : (el.querySelector('input, textarea, select') ??
+              el.closest('label')?.querySelector('input, textarea, select') ??
+              el)
         ) as HTMLInputElement | HTMLTextAreaElement;
         input.scrollIntoView({ block: 'center', inline: 'center' });
         input.focus();
