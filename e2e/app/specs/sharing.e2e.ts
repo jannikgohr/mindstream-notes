@@ -201,18 +201,20 @@ describe('T4 collection sharing (manifest bundles)', function () {
   });
 
   // --- 4.5 Incomplete bundle can't be accepted (P2) ---
-  it('an incomplete bundle disables Accept and shows the incomplete warning', async () => {
+  it('an incomplete bundle disables Accept and shows the incomplete warning', async function () {
     // Construct a share missing one required part invite (e.g. cancel the
     // assets invite server-side after creation). Assert B's bundle notification
     // shows the incomplete message (ui.notifications.shareBundle.incomplete),
-    // Accept is disabled, and Decline stays available. TODO.
+    // Accept is disabled, and Decline stays available.
+    this.skip();
   });
 
   // --- 4.6 Non-manifest invitation still surfaces (P3) ---
-  it('a lone non-manifest collection invite shows as a legacy collaboration-invite', async () => {
+  it('a lone non-manifest collection invite shows as a legacy collaboration-invite', async function () {
     // Invite B directly to a lone collection whose type isn't part of a
     // manifest scope. Assert it shows as a single collaboration-invite
-    // notification ("{A} invited you"), independent of the bundle path. TODO.
+    // notification ("{A} invited you"), independent of the bundle path.
+    this.skip();
   });
 
   // --- 4.7 Shared subtree content converges (P1) ---
@@ -220,7 +222,7 @@ describe('T4 collection sharing (manifest bundles)', function () {
   // inheritance on create + re-home on move landed on this branch, so a note
   // ADDED to the shared folder after the share should converge WITHOUT a
   // re-invite. Assert exactly that (no longer "known follow-up").
-  it('shared notes + assets converge, and post-share additions inherit the scope', async () => {
+  it('shared notes + assets converge, and post-share additions inherit the scope', async function () {
     // A shares a folder containing notes + an embedded image → B accepts → after
     // a sync B sees the notes and the asset RENDERS (no "partial media
     // unavailable"). Then A ADDS a note (and a sub-folder + note) inside the
@@ -229,45 +231,50 @@ describe('T4 collection sharing (manifest bundles)', function () {
     // create + re-home on move). If B has read-write, an edit in B converges
     // back to A. Watch for: the shared root arriving under B's tree root via
     // orphan-reparent; a read-only recipient's local edit looping as a failed
-    // scope push. TODO.
+    // scope push.
+    this.skip();
   });
 
   // --- 4.7b Move out of a shared folder re-homes back to the vault (P2) ---
-  it('moving a note out of the shared folder removes it from the recipient', async () => {
+  it('moving a note out of the shared folder removes it from the recipient', async function () {
     // Complements the create/move fix from the other direction: A moves a note
     // OUT of the shared folder into a personal (vault) folder. Assert B no
     // longer sees it after a sync (the row was re-homed out of the scope: its
     // scope copy tombstoned, re-created in the vault). Moving the share ROOT
-    // itself within the vault must KEEP its scope (share-anchor guard). TODO.
+    // itself within the vault must KEEP its scope (share-anchor guard).
+    this.skip();
   });
 
   // --- 4.8 Offline note edit survives a re-home (P1) ---
-  it("A's offline note edit is merged into the scope, no orphan vault copy", async () => {
+  it("A's offline note edit is merged into the scope, no orphan vault copy", async function () {
     // Owner signed in on A and B, both holding folder F. Take A OFFLINE and edit
     // a note in F (leave it unpushed, dirty=1). On B, "Share folder…" F with a
     // second account (re-homes F into a scope). Bring A back ONLINE and sync.
     // Assert: A's edit is MERGED into the scope copy (CRDT body merge), F ends
     // up in the scope on A, and NO orphan vault copy is left on the server
     // (which would flip-flop the note between vault and scope). Watch for a
-    // duplicate note on any device (orphan resurrection). TODO.
+    // duplicate note on any device (orphan resurrection).
+    this.skip();
   });
 
   // --- 4.9 Offline folder rename survives a re-home (P2) ---
-  it("A's offline folder rename survives the re-home (no LWW clobber)", async () => {
+  it("A's offline folder rename survives the re-home (no LWW clobber)", async function () {
     // Owner on A + B, both holding F. A OFFLINE, rename F (or a subfolder). B
     // SHARES F. A back ONLINE, sync. Assert A's offline rename is KEPT (not
     // reverted to the remote name), stays dirty, and pushes into the scope.
     // Also cover a folder MOVED to root offline in the same window: it must not
-    // get reattached under its old parent by the repair pass. TODO.
+    // get reattached under its old parent by the repair pass.
+    this.skip();
   });
 
   // --- 4.10 Edit-wins-over-delete conflict (P2) ---
-  it('a locally edited note resurrects over a remote delete (edit wins)', async () => {
+  it('a locally edited note resurrects over a remote delete (edit wins)', async function () {
     // Owner on A + B, same PLAIN vault note N (not shared). A OFFLINE, edit N
     // (unpushed). On B, delete N and let it sync. Bring A ONLINE. Assert N is
     // RESURRECTED with A's edit and reappears on B after B's next pull. A clean
     // (unedited) note deleted on B stays deleted on A (control case). Note:
     // signatures are intentionally NOT covered by edit-wins — they hard-delete
-    // on a tombstone. TODO.
+    // on a tombstone.
+    this.skip();
   });
 });
