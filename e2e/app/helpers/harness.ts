@@ -283,3 +283,182 @@ export async function loginClient(
   // The signed-in card renders the username once the Rust login resolves.
   await aria(input.username).waitForDisplayed({ timeout: 60_000 });
 }
+
+/**
+ * Per-instance versions of the global `aria/` helpers, bound to ONE wdio client.
+ *
+ * The module-level `byName`/`treeItem`/`clickElement`/`clickMenuItem` above use
+ * the global `$`/`browser`, which under wdio **multiremote** fan out to *every*
+ * client at once. In the T4 two-client suites each browser is a distinct user's
+ * device, so every query and click must target a single client — that's what
+ * this factory provides. It mirrors the global helpers verbatim (same DOM-event
+ * synthesis, same accessible-name strategy) but routes them through `client`.
+ *
+ * The tree-seed helpers (`newRootFolder`, `newNoteInFolder`) drive the same UI
+ * flow the browser-fallback T2 specs validate in e2e/browser/tree-operations
+ * .spec.ts: the toolbar "New folder"/"New note" buttons and the folder context
+ * menu's "New folder inside"/"New note in folder" items, each opening an inline
+ * draft input whose accessible name is its placeholder ("New folder"/"New note").
+ */
+export interface ClientHelpers {
+  byName(name: string): ChainablePromiseElement;
+  allByName(name: string): ChainablePromiseArray;
+  treeItem(name: string): ChainablePromiseElement;
+  click(name: string, opts?: { button?: 'left' | 'right' }): Promise<void>;
+  clickElement(
+    element: ChainablePromiseElement,
+    opts?: { button?: 'left' | 'right' }
+  ): Promise<void>;
+  setValue(name: string, value: string): Promise<void>;
+  pressKey(
+    element: ChainablePromiseElement,
+    key: string,
+    opts?: { ctrlKey?: boolean }
+  ): Promise<void>;
+  clickMenuItem(label: string): Promise<void>;
+  openNotifications(): Promise<void>;
+  newRootFolder(name: string): Promise<void>;
+  newNoteInFolder(folder: string, note: string): Promise<void>;
+}
+
+export function clientHelpers(client: WebdriverIO.Browser): ClientHelpers {
+  const byName = (name: string) => client.$(`aria/${name}`);
+  const allByName = (name: string) => client.$$(`aria/${name}`);
+  const treeItem = (name: string) =>
+    client.$('aria/File tree').$(`aria/${name}`);
+
+  const clickElement = async (
+    element: ChainablePromiseElement,
+    opts: { button?: 'left' | 'right' } = {}
+  ): Promise<void> => {
+    const resolved = await element;
+    await resolved.waitForDisplayed({ timeout: 30_000 });
+    await client.execute(
+      (el: HTMLElement, button: 'left' | 'right') => {
+        el.scrollIntoView({ block: 'center', inline: 'center' });
+        const rect = el.getBoundingClientRect();
+        const clientX = rect.left + rect.width / 2;
+        const clientY = rect.top + rect.height / 2;
+        const base = {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+          clientX,
+          clientY,
+          button: button === 'right' ? 2 : 0,
+          buttons: button === 'right' ? 2 : 1
+        };
+        el.focus?.();
+        if (button === 'right') {
+          el.dispatchEvent(new MouseEvent('mousedown', base));
+          el.dispatchEvent(new MouseEvent('mouseup', { ...base, buttons: 0 }));
+          el.dispatchEvent(new MouseEvent('contextmenu', base));
+          return;
+        }
+        el.dispatchEvent(new MouseEvent('mousedown', base));
+        el.dispatchEvent(new MouseEvent('mouseup', { ...base, buttons: 0 }));
+        el.click();
+      },
+      resolved,
+      opts.button ?? 'left'
+    );
+  };
+
+  const click = (name: string, opts: { button?: 'left' | 'right' } = {}) =>
+    clickElement(byName(name), opts);
+
+  const setValue = async (name: string, value: string): Promise<void> => {
+    const resolved = await byName(name);
+    await resolved.waitForDisplayed({ timeout: 30_000 });
+    await client.execute(
+      (el: HTMLElement, next: string) => {
+        const input = el as HTMLInputElement | HTMLTextAreaElement;
+        input.scrollIntoView({ block: 'center', inline: 'center' });
+        input.focus();
+        input.value = next;
+        input.dispatchEvent(
+          new InputEvent('input', { bubbles: true, data: next })
+        );
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+      },
+      resolved,
+      value
+    );
+  };
+
+  const pressKey = async (
+    element: ChainablePromiseElement,
+    key: string,
+    opts: { ctrlKey?: boolean } = {}
+  ): Promise<void> => {
+    const resolved = await element;
+    await resolved.waitForDisplayed({ timeout: 30_000 });
+    await client.execute(
+      (el: HTMLElement, pressed: string, ctrlKey: boolean) => {
+        el.focus?.();
+        const init = {
+          key: pressed,
+          code: pressed,
+          bubbles: true,
+          cancelable: true,
+          ctrlKey
+        };
+        el.dispatchEvent(new KeyboardEvent('keydown', init));
+        el.dispatchEvent(new KeyboardEvent('keyup', init));
+      },
+      resolved,
+      key,
+      opts.ctrlKey === true
+    );
+  };
+
+  const clickMenuItem = async (label: string): Promise<void> => {
+    const escaped = label.replace(/"/g, '\\"');
+    await clickElement(
+      client.$(
+        `//button[@role="menuitem" and .//*[normalize-space(text())="${escaped}"]]`
+      )
+    );
+  };
+
+  const openNotifications = () => click('Open notifications');
+
+  // Draft-input flow: a toolbar/context-menu action opens an inline <input>
+  // whose accessible name is its placeholder; fill it and press Enter to commit.
+  const commitDraft = async (
+    placeholder: string,
+    value: string
+  ): Promise<void> => {
+    await setValue(placeholder, value);
+    await pressKey(byName(placeholder), 'Enter');
+    await treeItem(value).waitForDisplayed({ timeout: 30_000 });
+  };
+
+  const newRootFolder = async (name: string): Promise<void> => {
+    await click('New folder');
+    await commitDraft('New folder', name);
+  };
+
+  const newNoteInFolder = async (
+    folder: string,
+    note: string
+  ): Promise<void> => {
+    await clickElement(treeItem(folder), { button: 'right' });
+    await clickMenuItem('New note in folder');
+    await commitDraft('New note', note);
+  };
+
+  return {
+    byName,
+    allByName,
+    treeItem,
+    click,
+    clickElement,
+    setValue,
+    pressKey,
+    clickMenuItem,
+    openNotifications,
+    newRootFolder,
+    newNoteInFolder
+  };
+}
