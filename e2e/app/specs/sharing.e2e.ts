@@ -166,13 +166,34 @@ describe('T4 collection sharing (manifest bundles)', function () {
     await expect(B.treeItem(SHARED_FOLDER)).not.toBeDisplayed();
   });
 
+  const SECOND_FOLDER = 'Second Share';
+
   // --- 4.4 Decline a share bundle (P2) ---
   it('B declines a second bundle → it does not loop back on rescan', async () => {
-    // A sends a second share to B → B declines. Assert the notification clears,
-    // no shared folder is added, and a rescan (which re-lists manifest
-    // collections) does NOT bring the bundle back — the regression guard that
-    // decline leaves the auto-accepted manifest collection so it can't reappear.
-    // TODO.
+    // A seeds and shares a SECOND folder to B.
+    await A.newRootFolder(SECOND_FOLDER);
+    await A.clickElement(A.treeItem(SECOND_FOLDER), { button: 'right' });
+    await A.clickMenuItem('Share folder…');
+    await A.setValue('User', accounts.recipient.username);
+    await A.click('Permission');
+    await A.click('Can edit');
+    await A.click('Invite');
+
+    // B sees the (pending) bundle and declines it.
+    await B.openNotifications();
+    await expect(B.byName(pendingBundleTitle())).toBeDisplayed();
+    await B.click('Decline');
+    await expect(B.byName(pendingBundleTitle())).not.toBeDisplayed();
+
+    // No shared folder is added under "Shared".
+    await B.click('Shared');
+    await expect(B.treeItem(SECOND_FOLDER)).not.toBeDisplayed();
+
+    // Regression guard: a rescan (reopening the center re-lists manifest
+    // collections) must NOT resurrect the declined bundle. Decline leaves the
+    // auto-accepted manifest collection behind precisely so it can't reappear.
+    await B.openNotifications();
+    await expect(B.byName(pendingBundleTitle())).not.toBeDisplayed();
   });
 
   // --- 4.5 Incomplete bundle can't be accepted (P2) ---
