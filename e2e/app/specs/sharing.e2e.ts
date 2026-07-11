@@ -26,9 +26,16 @@
  *   - view-only editor banner:  ui.editor.viewonly.banner
  */
 
+import { expect } from '@wdio/globals';
+
 import { provisionTwoAccounts, type TwoAccounts } from '../helpers/accounts.js';
 import { assertBackendReady, backendUrl } from '../helpers/backend.js';
-import { loginClient, requireBackendE2E } from '../helpers/harness.js';
+import {
+  clientHelpers,
+  loginClient,
+  requireBackendE2E,
+  type ClientHelpers
+} from '../helpers/harness.js';
 
 // wdio multiremote exposes each capability key as a global browser instance.
 // `browserA` = sender (device A), `browserB` = recipient (device B). See
@@ -41,6 +48,12 @@ describe('T4 collection sharing (manifest bundles)', function () {
   // then each client is signed into one of them. `sender` shares; `recipient`
   // receives. Available to every spec body below.
   let accounts: TwoAccounts;
+
+  // Per-client helpers bound to a single browser. The global `aria/` helpers in
+  // harness.ts fan out to BOTH browsers under multiremote, so every seed/click
+  // in the bodies below goes through `A` (sender) or `B` (recipient).
+  let A: ClientHelpers;
+  let B: ClientHelpers;
 
   before(async function () {
     requireBackendE2E(this);
@@ -66,59 +79,91 @@ describe('T4 collection sharing (manifest bundles)', function () {
         password: accounts.recipient.password
       })
     ]);
+
+    A = clientHelpers(browserA);
+    B = clientHelpers(browserB);
   });
+
+  // The folder A seeds in 4.1 and shares to B; later flows assume it exists.
+  const SHARED_FOLDER = 'Shared Project';
+  const SHARED_NOTE = 'Kickoff';
 
   // --- 4.1 Outgoing share creation (P1) ---
   it('A shares a folder → invite succeeds and folder flags shared-by-me', async () => {
-    const a = browserA;
-    const folderName = 'Shared Project';
-
-    // Seed a folder with a note on A. "New folder" creates a draft with an
-    // editable name; New note adds a child.
-    // TODO(per-instance tree helper): the byName/treeItem/clickMenuItem helpers
-    // in harness.ts are global-scoped and fan out to BOTH clients under
-    // multiremote — they need `client`-scoped variants before this seed +
-    // right-click can be driven. Until then this body drives only the share
-    // dialog (confirmed labels) against a folder assumed present.
+    // Seed a folder with a note on A via the validated draft-input flow
+    // (toolbar "New folder" → inline draft; folder context menu "New note in
+    // folder" → inline draft). See e2e/browser/tree-operations.spec.ts.
+    await A.newRootFolder(SHARED_FOLDER);
+    await A.newNoteInFolder(SHARED_FOLDER, SHARED_NOTE);
 
     // Right-click the folder → "Share folder…" opens the dialog.
-    const folder = await a.$('aria/File tree').$(`aria/${folderName}`);
-    await folder.waitForDisplayed({ timeout: 30_000 });
-    await folder.click({ button: 'right' });
-    await a.$('aria/Share folder…').click();
+    await A.clickElement(A.treeItem(SHARED_FOLDER), { button: 'right' });
+    await A.clickMenuItem('Share folder…');
 
     // Fill "User" with B's real username, pick "Can edit", then "Invite".
-    await a.$('aria/User').setValue(accounts.recipient.username);
-    await a.$('aria/Permission').click();
-    await a.$('aria/Can edit').click();
-    await a.$('aria/Invite').click();
+    await A.setValue('User', accounts.recipient.username);
+    await A.click('Permission');
+    await A.click('Can edit');
+    await A.click('Invite');
 
-    // Success: the dialog closes without an error and the folder now carries
-    // the shared-by-me badge in A's tree.
-    // TODO: assert the shared badge once its accessible name is confirmed.
+    // Success: the dialog closes and the folder now carries the shared-by-me
+    // badge — a Share2 icon whose accessible name is "Shared" (nav.shared),
+    // rendered inside the folder's tree row (FileExplorer.svelte).
+    await expect(A.treeItem(SHARED_FOLDER).$('aria/Shared')).toBeDisplayed();
 
     // Negative: an UNKNOWN username must fail at the pubkey lookup, BEFORE any
     // scope collections are created.
-    // TODO: re-open the dialog, enter a random username, assert the invite
-    // errors and no scope collection was created.
+    await A.clickElement(A.treeItem(SHARED_FOLDER), { button: 'right' });
+    await A.clickMenuItem('Share folder…');
+    await A.setValue('User', `nobody-${Date.now()}`);
+    await A.click('Invite');
+    // fetch_user_profile can't resolve the pubkey → the dialog surfaces an
+    // error and stays open (Invite still present). It must NOT silently create
+    // scope collections.
+    await expect(A.byName('Invite')).toBeDisplayed();
+    await A.click('Cancel');
   });
+
+  // Before accept the bundle name is unknown, so the widget shows the generic
+  // "wants to share" pending title (ShareBundleNotificationWidget.svelte).
+  const pendingBundleTitle = () =>
+    `${accounts.sender.username} wants to share a folder with you`;
+  // A lone non-manifest collection invite would surface as this legacy title
+  // instead — its presence here would mean the raw part-invites leaked.
+  const legacyInviteTitle = () => `${accounts.sender.username} invited you`;
 
   // --- 4.2 Incoming share shows as one bundle, not N invites (P1) ---
   it('B sees exactly one share-bundle notification, not four raw invites', async () => {
-    // After 4.1, B opens Notifications. Assert exactly one bundle entry titled
-    // "{A} shared “{folder}”" (pending variant before accept) — NOT separate
-    // manifest/folders/notes/assets invites. The referenced part invites are
-    // hidden from the raw invite list. TODO.
+    // Opening the center triggers scanForCollectionInviteNotifications, which
+    // collapses the manifest/folders/notes/assets part-invites into one bundle.
+    await B.openNotifications();
+
+    // Exactly one bundle entry, shown as the pending "wants to share" title...
+    await expect(B.byName(pendingBundleTitle())).toBeDisplayed();
+    await expect(B.allByName(pendingBundleTitle())).toBeElementsArrayOfSize(1);
+
+    // ...and NONE of the referenced part-invites leaked as legacy collaboration
+    // invites (they're hidden from the raw invite list).
+    await expect(B.allByName(legacyInviteTitle())).toBeElementsArrayOfSize(0);
   });
 
   // --- 4.3 Accept a share bundle (P1) ---
   it('B accepts the bundle → shared root lands under "Shared", not Home', async () => {
-    // B accepts the bundle → the notification clears. After a scoped sync the
-    // shared root folder appears under the "Shared" section (shared_role +
-    // share_id set), NOT in Home. A rescan must NOT resurrect the bundle.
-    // Watch for: root in Home with no shared_role/share_id (projection didn't
-    // run); a read-only recipient whose contents stay empty after first sync.
-    // TODO.
+    // Accept the (only) bundle → the notification dismisses and a scoped sync
+    // pulls the shared root in.
+    await B.click('Accept');
+    await expect(B.byName(pendingBundleTitle())).not.toBeDisplayed();
+
+    // The shared root lands under the "Shared" source, NOT Home. Switch to the
+    // "Shared" chip and assert the folder (and its seeded note) appear there.
+    await B.click('Shared');
+    await expect(B.treeItem(SHARED_FOLDER)).toBeDisplayed();
+    await expect(B.treeItem(SHARED_NOTE)).toBeDisplayed();
+
+    // Regression guard: the shared root must NOT show up in Home (that would
+    // mean the "Shared" projection didn't run — shared_role/share_id unset).
+    await B.click('Home');
+    await expect(B.treeItem(SHARED_FOLDER)).not.toBeDisplayed();
   });
 
   // --- 4.4 Decline a share bundle (P2) ---
