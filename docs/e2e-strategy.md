@@ -86,8 +86,9 @@ test harness lands:
 ## 3. The real-app harness (T3/T4)
 
 > Scaffolded in [`e2e/app/`](../e2e/app/) — wdio + tauri-driver config, the
-> gating/seam helpers, and faithful spec skeletons. The rest of this section is
-> what that harness implements (and what still needs finishing).
+> gating/seam helpers, implemented smoke coverage, and pending scenario markers.
+> The rest of this section is what that harness implements (and what still needs
+> finishing).
 
 Drive the **packaged Tauri binary** with `tauri-driver` (WebDriver) under a
 headless display (`xvfb` on Linux CI). Build it with `--features e2e-data-dir`
