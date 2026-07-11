@@ -140,7 +140,13 @@ export async function setElementValue(
   await resolved.waitForDisplayed({ timeout: 30_000 });
   await browser.execute(
     (el: HTMLElement, next: string) => {
-      const input = el as HTMLInputElement | HTMLTextAreaElement;
+      // See clientHelpers.setValue: label-wrapped inputs mean `aria/<name>` can
+      // resolve to the <label>, so target the real control before assigning.
+      const input = (
+        el.matches('input, textarea, select')
+          ? el
+          : (el.querySelector('input, textarea, select') ?? el)
+      ) as HTMLInputElement | HTMLTextAreaElement;
       input.scrollIntoView({ block: 'center', inline: 'center' });
       input.focus();
       input.value = next;
@@ -367,7 +373,15 @@ export function clientHelpers(client: WebdriverIO.Browser): ClientHelpers {
     await resolved.waitForDisplayed({ timeout: 30_000 });
     await client.execute(
       (el: HTMLElement, next: string) => {
-        const input = el as HTMLInputElement | HTMLTextAreaElement;
+        // The app wraps inputs in a <label> whose text supplies the accessible
+        // name, so `aria/<name>` can resolve to the <label>/<span>, not the
+        // control. Drill down to the actual field before assigning its value —
+        // setting `.value` on a <label> is a silent no-op.
+        const input = (
+          el.matches('input, textarea, select')
+            ? el
+            : (el.querySelector('input, textarea, select') ?? el)
+        ) as HTMLInputElement | HTMLTextAreaElement;
         input.scrollIntoView({ block: 'center', inline: 'center' });
         input.focus();
         input.value = next;

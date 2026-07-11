@@ -18,6 +18,8 @@
  */
 
 import { randomBytes } from 'node:crypto';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import * as Etebase from 'etebase';
 
 /** Credentials the app logs in with — never a live session, just the inputs. */
@@ -75,16 +77,89 @@ export async function signupAccount(
 }
 
 /**
- * Provision a fresh sender + recipient on `serverUrl` and return their
- * credentials. Both share one run token so they're obviously a pair in logs.
+ * On-disk cache of provisioned accounts, keyed by server URL, so repeat runs
+ * against the same (un-reset) stack reuse the same users instead of signing up
+ * a fresh pair every time — signups are the slow part and the server keeps them
+ * until it's torn down. Gitignored (throwaway local creds). Set
+ * `MINDSTREAM_E2E_FRESH_ACCOUNTS=1` to bypass the cache and force new signups.
  */
-export async function provisionTwoAccounts(
-  serverUrl: string
-): Promise<TwoAccounts> {
+const CACHE_FILE = fileURLToPath(
+  new URL('./.t4-accounts.json', import.meta.url)
+);
+
+type AccountsCache = Record<string, TwoAccounts>;
+
+function readCache(): AccountsCache {
+  try {
+    return JSON.parse(readFileSync(CACHE_FILE, 'utf8')) as AccountsCache;
+  } catch {
+    return {};
+  }
+}
+
+function writeCache(cache: AccountsCache): void {
+  try {
+    writeFileSync(CACHE_FILE, `${JSON.stringify(cache, null, 2)}\n`);
+  } catch (err) {
+    // Non-fatal: a missing cache just means the next run re-provisions.
+    console.warn('[e2e] could not persist account cache:', err);
+  }
+}
+
+/**
+ * Whether a cached account still logs in against `serverUrl`. Returns false if
+ * the stack was reset (the user no longer exists) so the caller re-provisions.
+ */
+async function accountUsable(
+  serverUrl: string,
+  account: TestAccount
+): Promise<boolean> {
+  await Etebase.ready;
+  try {
+    const etebase = await Etebase.Account.login(
+      account.username,
+      account.password,
+      serverUrl
+    );
+    await etebase.logout();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function provisionFreshPair(serverUrl: string): Promise<TwoAccounts> {
   const token = runToken();
   const sender = makeAccount('sender', token);
   const recipient = makeAccount('recipient', token);
   await signupAccount(serverUrl, sender);
   await signupAccount(serverUrl, recipient);
   return { sender, recipient };
+}
+
+/**
+ * Return a sender + recipient pair for `serverUrl`. Reuses cached accounts when
+ * they still log in (so the suite can be re-run repeatedly without the human /
+ * a server restart); otherwise signs up a fresh pair and caches it. Both share
+ * one run token so they're obviously a pair in logs.
+ */
+export async function provisionTwoAccounts(
+  serverUrl: string
+): Promise<TwoAccounts> {
+  const forceFresh = process.env.MINDSTREAM_E2E_FRESH_ACCOUNTS === '1';
+  const cache = readCache();
+  const cached = cache[serverUrl];
+
+  if (!forceFresh && cached) {
+    const [senderOk, recipientOk] = await Promise.all([
+      accountUsable(serverUrl, cached.sender),
+      accountUsable(serverUrl, cached.recipient)
+    ]);
+    if (senderOk && recipientOk) return cached;
+  }
+
+  const fresh = await provisionFreshPair(serverUrl);
+  cache[serverUrl] = fresh;
+  writeCache(cache);
+  return fresh;
 }

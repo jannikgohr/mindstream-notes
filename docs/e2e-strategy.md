@@ -230,19 +230,53 @@ Tracked here so the strategy isn't mistaken for working infrastructure:
   faithful T3/T4 spec skeletons), run via `pnpm test:e2e:app`. Not yet
   validated against a real binary, and still needs: a native-dialog stub and
   `trashed_at` backdating — see [`e2e/app/README.md`](../e2e/app/README.md).
-- [~] **Two-client multiremote landed** (§5): `e2e/app/wdio.multiremote.conf.ts`
-  spawns two tauri-driver processes → `browserA`/`browserB`, run via
-  `pnpm test:e2e:app:multi`. Compiles; not yet validated against a live session.
+- [x] **Two-client multiremote validated** (§5): `e2e/app/wdio.multiremote.conf.ts`
+      spawns two tauri-driver processes → `browserA`/`browserB`, run via
+      `pnpm test:e2e:app:multi`. Confirmed live: both packaged apps launch and are
+      driven independently against the disposable stack.
 - [x] **Disposable test stack landed** (§2.1): `backend/docker-compose.test.yml`
   - `.env.test` + `pnpm backend:test:{up,down,reset}` give an isolated backend
     with `AUTO_SIGNUP=true` on a separate port (18080).
-- [~] **Test-account provisioning landed** (§2.1): `e2e/app/helpers/accounts.ts`
-  (`provisionTwoAccounts`) signs up two distinct users via the `etebase` JS SDK.
-  Requires the test stack's `AUTO_SIGNUP=true`. Not yet validated against a live
-  signup.
+- [x] **Test-account provisioning validated** (§2.1): `e2e/app/helpers/accounts.ts`
+      (`provisionTwoAccounts`) signs up two distinct users via the `etebase` JS SDK
+      and caches them (gitignored `.t4-accounts.json`) so re-runs reuse the pair
+      until the stack is reset. Confirmed live against `AUTO_SIGNUP=true`. Set
+      `MINDSTREAM_E2E_FRESH_ACCOUNTS=1` to force a fresh pair.
 - [ ] No test hook to inject a pre-authenticated session blob (§3) — specs log in
       via the app's own `etebase_login` for now.
 - [x] **`peerCount` bridge method landed** for the awareness-based editors
       (markdown/PDF) and the collab-confirmation prompt is wired in
       `NoteHistorySection`. Remaining: ink/freeform presence and the T4 spec that
       exercises the prompt (see [known-limitations.md](known-limitations.md)).
+
+## 8. Findings from live T4 runs
+
+Observations from actually running `pnpm test:e2e:app:multi` against the
+disposable stack. These are **harness/tooling gotchas**, not app bugs — the app
+behaved correctly in each case; the WebDriver layer needed adapting. Logged here
+so they aren't rediscovered.
+
+- **WebKitWebDriver (Linux `wry`) rejects native input commands.** `element/click`
+  and send-keys come back as `unsupported operation`. Every interaction must be
+  synthesized as DOM events via `browser.execute` / `client.execute` — this is
+  why `harness.ts` clicks by dispatching `mousedown`/`mouseup`/`click` and fills
+  by assigning `.value` + dispatching `input`/`change`. Any new helper must go
+  through `execute`, never `el.click()` / `el.setValue()`. (macOS/Windows
+  WebViews may accept the native path, but the synthesized path is portable.)
+- **Label-wrapped inputs resolve `aria/<name>` to the `<label>`, not the field.**
+  The Settings sign-in inputs are `<label><span>Server URL</span><input/></label>`
+  (SignInForm.svelte) with no explicit `aria-label` on the control, so the
+  accessible name attaches to the wrapping `<label>`. `client.$('aria/Server URL')`
+  returned the label and `.value =` on it was a silent no-op — the symptom was
+  "navigated to the form but filled nothing". `setValue` now drills to a
+  descendant `input, textarea, select` before assigning. Not an app bug, but a
+  mild a11y smell: adding `aria-label`/`id`+`for` to these controls would make
+  them unambiguous for assistive tech and tooling alike.
+- **Multiremote fans globals out to both clients.** The module-level `aria/`
+  helpers act on every browser at once; per-client work must go through
+  `clientHelpers(client)` (or the client instance directly). `loginClient` runs
+  under `Promise.all`, so an error in either client surfaces as `Promise.all
+(index N)`.
+- **`collab.e2e.ts` "5 passing" is not coverage.** Those bodies are still empty
+  skeletons (they finish in tens of ms with no WebDriver traffic), so they pass
+  trivially even with the backend up. Don't read them as validation.
