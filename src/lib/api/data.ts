@@ -12,6 +12,7 @@
 
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import { isTauri } from './core';
+import { mockApi } from './mock-store';
 
 export interface TrashCounts {
   notes: number;
@@ -34,12 +35,12 @@ export async function openFolder(path: string): Promise<void> {
 }
 
 export async function trashCounts(): Promise<TrashCounts> {
-  if (!isTauri()) return { notes: 0, folders: 0 };
+  if (!isTauri()) return await mockApi.trashCounts();
   return await tauriInvoke<TrashCounts>('trash_counts');
 }
 
 export async function emptyTrash(): Promise<TrashCounts> {
-  if (!isTauri()) return { notes: 0, folders: 0 };
+  if (!isTauri()) return await mockApi.emptyTrash();
   return await tauriInvoke<TrashCounts>('empty_trash');
 }
 
