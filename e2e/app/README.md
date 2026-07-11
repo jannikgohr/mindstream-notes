@@ -7,9 +7,10 @@ It is separate from the Playwright browser-fallback suite in `../browser/` and
 **never runs in the default `pnpm test:e2e` or in CI**.
 
 > **Status:** The T3 harness runs against the packaged app when the opt-in
-> toolchain below is installed. T4 and native-dialog flows still skip cleanly
-> until their environment-specific seams are wired: multiremote two-client
-> setup, a native-dialog stub, and `trashed_at` backdating.
+> toolchain below is installed. The T4 multiremote harness and two-account
+> provisioning have been validated against the disposable stack, but most T4
+> spec bodies are still skeletons. Native-dialog flows still skip cleanly until
+> their Rust-side path-injection seam is wired.
 
 ## What's here
 
@@ -52,14 +53,16 @@ cargo install tauri-driver
 # set MINDSTREAM_E2E_SKIP_BUILD=1 to reuse a build while iterating.
 MINDSTREAM_E2E_APP=1 pnpm test:e2e:app
 
-# T4 (collaboration) also needs the backend stack up:
-#   cd backend && docker compose up -d --build
-MINDSTREAM_E2E_APP=1 MINDSTREAM_E2E_BACKEND=1 pnpm test:e2e:app
+# T4 (collaboration) also needs the disposable backend stack up:
+pnpm backend:test:up
+MINDSTREAM_E2E_APP=1 MINDSTREAM_E2E_BACKEND=1 \
+  MINDSTREAM_E2E_BACKEND_URL=http://localhost:18080 pnpm test:e2e:app:multi
 ```
 
-Without `MINDSTREAM_E2E_APP=1`, every spec skips. The T4 specs additionally
-require `MINDSTREAM_E2E_BACKEND=1`; the dialog-driven backup specs require
-`MINDSTREAM_E2E_DIALOG_HOOK=1` once that Rust seam exists.
+Without `MINDSTREAM_E2E_APP=1`, every spec skips. The T4 specs run through the
+multiremote config and additionally require `MINDSTREAM_E2E_BACKEND=1`; the
+dialog-driven backup specs require `MINDSTREAM_E2E_DIALOG_HOOK=1` once that Rust
+seam exists.
 
 ## Two-client (T4) harness
 
@@ -72,9 +75,10 @@ require `MINDSTREAM_E2E_BACKEND=1`; the dialog-driven backup specs require
   `etebase` JS SDK — real signups so the sender resolves the recipient's pubkey
   via `fetch_user_profile`. Needs the test stack's `AUTO_SIGNUP=true`
   (`pnpm backend:test:up`); Etebase blocks signup by default.
-- **Not yet validated end-to-end.** Both pieces compile and the SDK initializes,
-  but no run against a live two-app + backend session has been recorded yet —
-  that needs the stack up, a display (xvfb on CI), and the built binary.
+- **Validated live:** the two tauri-driver processes launch independently
+  against the disposable stack and can be driven as `browserA` / `browserB`.
+  Several T4 spec bodies are still TODO-only, so a passing run is not yet full
+  collaboration coverage.
 
 ## Open seams (see e2e-strategy.md §7)
 
