@@ -227,9 +227,10 @@ Tracked here so the strategy isn't mistaken for working infrastructure:
       `MINDSTREAM_E2E_BACKEND`. This is the only T4-adjacent piece runnable today.
 - [~] **`tauri-driver` harness scaffolded** in [`e2e/app/`](../e2e/app/) (wdio
   config, capability gating, the `MINDSTREAM_PROFILE_DIR` restart seam, and
-  faithful T3/T4 spec skeletons), run via `pnpm test:e2e:app`. Not yet
-  validated against a real binary, and still needs: a native-dialog stub and
-  `trashed_at` backdating — see [`e2e/app/README.md`](../e2e/app/README.md).
+  focused T3/T4 specs), run via `pnpm test:e2e:app` for T3 and
+  `pnpm test:e2e:app:multi` for T4. Still needs: a native-dialog stub,
+  `trashed_at` backdating, and the remaining pending T4 scenario bodies — see
+  [`e2e/app/README.md`](../e2e/app/README.md).
 - [x] **Two-client multiremote validated** (§5): `e2e/app/wdio.multiremote.conf.ts`
       spawns two tauri-driver processes → `browserA`/`browserB`, run via
       `pnpm test:e2e:app:multi`. Confirmed live: both packaged apps launch and are
@@ -244,10 +245,14 @@ Tracked here so the strategy isn't mistaken for working infrastructure:
       `MINDSTREAM_E2E_FRESH_ACCOUNTS=1` to force a fresh pair.
 - [ ] No test hook to inject a pre-authenticated session blob (§3) — specs log in
       via the app's own `etebase_login` for now.
-- [x] **`peerCount` bridge method landed** for the awareness-based editors
-      (markdown/PDF) and the collab-confirmation prompt is wired in
-      `NoteHistorySection`. Remaining: ink/freeform presence and the T4 spec that
-      exercises the prompt (see [known-limitations.md](known-limitations.md)).
+- [x] **First T4 app assertions landed**: `collab.e2e.ts` covers markdown
+      live-edit propagation between two same-account clients; `sync-history.e2e.ts`
+      covers the per-device-history negative assertion; `collab-confirm.e2e.ts`
+      covers the markdown presence prompt and solo no-prompt path.
+- [~] **`peerCount` bridge method landed** for the awareness-based editors
+  (markdown/PDF) and the collab-confirmation prompt is wired in
+  `NoteHistorySection`. Remaining: ink/freeform presence plus their T4
+  prompt assertions (see [known-limitations.md](known-limitations.md)).
 
 ## 8. Findings from live T4 runs
 
@@ -277,6 +282,8 @@ so they aren't rediscovered.
   `clientHelpers(client)` (or the client instance directly). `loginClient` runs
   under `Promise.all`, so an error in either client surfaces as `Promise.all
 (index N)`.
-- **`collab.e2e.ts` "5 passing" is not coverage.** Those bodies are still empty
-  skeletons (they finish in tens of ms with no WebDriver traffic), so they pass
-  trivially even with the backend up. Don't read them as validation.
+- **Pending tests are intentional backlog, not passing coverage.** The T4 specs
+  now mark unimplemented scenarios with `this.skip()` instead of empty bodies.
+  Current implemented app assertions cover markdown live-edit propagation,
+  sequential sync of restored content without remote history, markdown restore
+  confirmation with a peer, solo no-prompt restore, and sharing flows 4.1–4.4.
