@@ -14,6 +14,7 @@ import { provisionTwoAccounts } from '../helpers/accounts.js';
 import { assertBackendReady, backendUrl } from '../helpers/backend.js';
 import {
   clientHelpers,
+  clickLastButtonText,
   loginClient,
   requireBackendE2E,
   syncClient,
@@ -77,6 +78,21 @@ describe('T4 per-device history (sync negative assertion)', function () {
 
     await A.click('Note created');
     await A.click('Restore this version');
+    await browserA.waitUntil(
+      async () =>
+        (await A.isDisplayed('Restored to an earlier version.', 500)) ||
+        (await A.isDisplayed('Restore while others are editing?', 500)),
+      {
+        timeout: 30_000,
+        timeoutMsg: 'restore did not complete or show the collab prompt'
+      }
+    );
+    if (await A.isDisplayed('Restore while others are editing?', 500)) {
+      // B has navigated away from the note, but awareness can lag briefly. The
+      // prompt behavior is covered in collab-confirm; this spec cares about the
+      // sequential sync result and remote history staying device-local.
+      await clickLastButtonText(browserA, 'Restore');
+    }
     await expect(A.byName('Restored to an earlier version.')).toBeDisplayed();
     const restoredText = await browserA.$('.ProseMirror').getText();
 

@@ -12,6 +12,7 @@ import { provisionTwoAccounts } from '../helpers/accounts.js';
 import { assertBackendReady, backendUrl } from '../helpers/backend.js';
 import {
   clientHelpers,
+  clickLastButtonText,
   loginClient,
   requireBackendE2E,
   syncClient,
@@ -20,20 +21,6 @@ import {
 
 declare const browserA: WebdriverIO.Browser;
 declare const browserB: WebdriverIO.Browser;
-
-async function clickLastButtonText(
-  client: WebdriverIO.Browser,
-  label: string
-): Promise<void> {
-  await client.execute((text: string) => {
-    const buttons = Array.from(document.querySelectorAll('button')).filter(
-      (button) => button.textContent?.trim() === text
-    );
-    const button = buttons.at(-1) as HTMLButtonElement | undefined;
-    if (!button) throw new Error(`button not found: ${text}`);
-    button.click();
-  }, label);
-}
 
 describe('T4 collab confirmation prompt', function () {
   let A: ClientHelpers;

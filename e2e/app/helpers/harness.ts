@@ -233,6 +233,20 @@ export async function clickMenuItem(label: string): Promise<void> {
   );
 }
 
+export async function clickLastButtonText(
+  client: WebdriverIO.Browser,
+  label: string
+): Promise<void> {
+  await client.execute((text: string) => {
+    const buttons = Array.from(document.querySelectorAll('button')).filter(
+      (button) => button.textContent?.trim() === text
+    );
+    const button = buttons.at(-1) as HTMLButtonElement | undefined;
+    if (!button) throw new Error(`button not found: ${text}`);
+    button.click();
+  }, label);
+}
+
 /** Wait for the seeded shell to hydrate (the Welcome note in the tree). */
 export async function waitForShell(): Promise<void> {
   await byName('Welcome').waitForDisplayed({ timeout: 30_000 });
