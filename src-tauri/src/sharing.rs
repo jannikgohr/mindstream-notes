@@ -1574,6 +1574,36 @@ mod tests {
     }
 
     #[test]
+    fn share_access_level_db_mapping_round_trips() {
+        // Misrouting these strings silently downgrades or elevates a share's
+        // permission (read_only recipients that can't push, read_write ones
+        // locked out of editing), so pin the exact db spelling and the round
+        // trip both ways.
+        for (level, db) in [
+            (ShareAccessLevel::ReadOnly, "read_only"),
+            (ShareAccessLevel::ReadWrite, "read_write"),
+            (ShareAccessLevel::Admin, "admin"),
+        ] {
+            assert_eq!(share_access_level_to_db(level), db);
+            assert_eq!(share_access_level_from_db(db), Some(level));
+        }
+        assert_eq!(share_access_level_from_db("editor"), None);
+        assert_eq!(share_access_level_from_db(""), None);
+    }
+
+    #[test]
+    fn share_access_level_collection_access_round_trips() {
+        for level in [
+            ShareAccessLevel::ReadOnly,
+            ShareAccessLevel::ReadWrite,
+            ShareAccessLevel::Admin,
+        ] {
+            let collection: CollectionAccessLevel = level.into();
+            assert_eq!(ShareAccessLevel::from(collection), level);
+        }
+    }
+
+    #[test]
     fn manifest_bundle_hides_referenced_invites_and_requires_assets() {
         let invitations = vec![
             invitation(

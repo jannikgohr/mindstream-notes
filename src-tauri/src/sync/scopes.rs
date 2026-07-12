@@ -326,6 +326,39 @@ mod tests {
         }
     }
 
+    fn part_ref(part: ShareScopePart, uid: &str) -> crate::sharing::ShareManifestCollectionRef {
+        crate::sharing::ShareManifestCollectionRef {
+            part,
+            collection_uid: uid.into(),
+            required: true,
+        }
+    }
+
+    #[test]
+    fn part_uid_resolves_each_part_and_reports_missing() {
+        let mut m = manifest("folder_root", Some("alice"));
+        m.collections = vec![
+            part_ref(ShareScopePart::Folders, "folders_col"),
+            part_ref(ShareScopePart::Notes, "notes_col"),
+        ];
+
+        assert_eq!(part_uid(&m, ShareScopePart::Folders), Some("folders_col"));
+        assert_eq!(part_uid(&m, ShareScopePart::Notes), Some("notes_col"));
+        // The assets part isn't listed, so it resolves to None — this is the
+        // exact condition sync_one_scope uses to skip an incomplete scope.
+        assert_eq!(part_uid(&m, ShareScopePart::Assets), None);
+    }
+
+    #[test]
+    fn part_uid_returns_first_match_for_duplicate_parts() {
+        let mut m = manifest("folder_root", None);
+        m.collections = vec![
+            part_ref(ShareScopePart::Folders, "first"),
+            part_ref(ShareScopePart::Folders, "second"),
+        ];
+        assert_eq!(part_uid(&m, ShareScopePart::Folders), Some("first"));
+    }
+
     #[test]
     fn project_shared_root_marks_recipient_root_as_shared() {
         // A folder pulled from the scope carries only placement metadata; the
