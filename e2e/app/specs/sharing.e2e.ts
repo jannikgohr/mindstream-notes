@@ -12,11 +12,11 @@
  *
  * Status: flows 4.1–4.4, the core 4.7 subtree convergence path, and 4.7b
  * move-out re-home are IMPLEMENTED and validated against the live two-app +
- * backend session. 4.5–4.6 and 4.8–4.10 stay documented skeletons: each needs
+ * backend session. 4.5–4.6 and 4.8–4.9 stay documented skeletons: each needs
  * a seam that doesn't exist yet — server-side part-invite cancellation (4.5), a
  * lone non-manifest invite path (4.6), move-UI automation + asset embedding
  * render assertions (4.7 asset UI), and an offline/network toggle hook
- * (4.8–4.10).
+ * (4.8–4.9). Plain-vault 4.10 lives in sync-history.e2e.ts.
  *
  * Accessible names referenced below (from src/lib/settings/i18n/en.json, the
  * same names the SvelteKit UI renders inside the WebView):
@@ -602,17 +602,6 @@ describe('T4 collection sharing (manifest bundles)', function () {
     // reverted to the remote name), stays dirty, and pushes into the scope.
     // Also cover a folder MOVED to root offline in the same window: it must not
     // get reattached under its old parent by the repair pass.
-    this.skip();
-  });
-
-  // --- 4.10 Edit-wins-over-delete conflict (P2) ---
-  it('a locally edited note resurrects over a remote delete (edit wins)', async function () {
-    // Owner on A + B, same PLAIN vault note N (not shared). A OFFLINE, edit N
-    // (unpushed). On B, delete N and let it sync. Bring A ONLINE. Assert N is
-    // RESURRECTED with A's edit and reappears on B after B's next pull. A clean
-    // (unedited) note deleted on B stays deleted on A (control case). Note:
-    // signatures are intentionally NOT covered by edit-wins — they hard-delete
-    // on a tombstone.
     this.skip();
   });
 });

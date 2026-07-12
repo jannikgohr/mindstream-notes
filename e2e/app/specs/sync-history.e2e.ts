@@ -24,6 +24,130 @@ import {
 declare const browserA: WebdriverIO.Browser;
 declare const browserB: WebdriverIO.Browser;
 
+interface NoteRow {
+  id: string;
+  title: string;
+  body?: string;
+}
+
+async function invokeTauri<T>(
+  client: WebdriverIO.Browser,
+  command: string,
+  args?: Record<string, unknown>
+): Promise<T> {
+  return client.execute(
+    async (cmd: string, invokeArgs: Record<string, unknown> | undefined) => {
+      const tauri = window as unknown as {
+        __TAURI_INTERNALS__?: {
+          invoke?: <R>(
+            command: string,
+            args?: Record<string, unknown>
+          ) => Promise<R>;
+        };
+      };
+      const invoke = tauri.__TAURI_INTERNALS__?.invoke;
+      if (!invoke) throw new Error('Tauri invoke is not exposed in WebView');
+      return invoke(cmd, invokeArgs);
+    },
+    command,
+    args
+  ) as Promise<T>;
+}
+
+async function createNoteFixture(
+  client: WebdriverIO.Browser,
+  title: string,
+  body: string
+): Promise<NoteRow> {
+  return invokeTauri<NoteRow>(client, 'create_note', {
+    input: {
+      title,
+      body,
+      parent_collection_id: null,
+      note_kind: 'markdown'
+    }
+  });
+}
+
+async function loadNoteFixture(
+  client: WebdriverIO.Browser,
+  id: string
+): Promise<NoteRow> {
+  return invokeTauri<NoteRow>(client, 'load_note', { id });
+}
+
+async function saveNoteBodyFixture(
+  client: WebdriverIO.Browser,
+  id: string,
+  body: string
+): Promise<NoteRow> {
+  return invokeTauri<NoteRow>(client, 'save_note', {
+    input: { id, body }
+  });
+}
+
+async function purgeNoteFixture(
+  client: WebdriverIO.Browser,
+  id: string
+): Promise<void> {
+  await invokeTauri(client, 'purge_note', { id });
+}
+
+async function noteMissingFixture(
+  client: WebdriverIO.Browser,
+  id: string
+): Promise<boolean> {
+  return client.execute(async (noteId: string) => {
+    const tauri = window as unknown as {
+      __TAURI_INTERNALS__?: {
+        invoke?: <R>(
+          command: string,
+          args?: Record<string, unknown>
+        ) => Promise<R>;
+      };
+    };
+    const invoke = tauri.__TAURI_INTERNALS__?.invoke;
+    if (!invoke) throw new Error('Tauri invoke is not exposed in WebView');
+    try {
+      await invoke('load_note', { id: noteId });
+      return false;
+    } catch {
+      return true;
+    }
+  }, id);
+}
+
+async function expectNoteBodyContains(
+  client: WebdriverIO.Browser,
+  noteId: string,
+  text: string
+): Promise<void> {
+  await client.waitUntil(
+    async () => {
+      try {
+        const note = await loadNoteFixture(client, noteId);
+        return note.body?.includes(text) === true;
+      } catch {
+        return false;
+      }
+    },
+    {
+      timeout: 60_000,
+      timeoutMsg: `note ${noteId} did not contain expected text: ${text}`
+    }
+  );
+}
+
+async function expectNoteMissing(
+  client: WebdriverIO.Browser,
+  noteId: string
+): Promise<void> {
+  await client.waitUntil(async () => noteMissingFixture(client, noteId), {
+    timeout: 60_000,
+    timeoutMsg: `note ${noteId} was still present`
+  });
+}
+
 describe('T4 per-device history (sync negative assertion)', function () {
   let A: ClientHelpers;
   let B: ClientHelpers;
@@ -119,5 +243,43 @@ describe('T4 per-device history (sync negative assertion)', function () {
         '//*[contains(normalize-space(.), "Reverted to version from")]'
       )
     ).not.toBeDisplayed();
+  });
+
+  it('keeps an unpushed local edit over a remote delete', async () => {
+    const dirtyTitle = `Edit wins ${Date.now()}`;
+    const baseline = `baseline ${Date.now()}`;
+    const localEdit = `local edit survives ${Date.now()}`;
+
+    const dirtyNote = await createNoteFixture(browserA, dirtyTitle, baseline);
+    await syncClient(browserA);
+    await syncClient(browserB);
+    await expectNoteBodyContains(browserB, dirtyNote.id, baseline);
+
+    await saveNoteBodyFixture(browserA, dirtyNote.id, localEdit);
+    await expectNoteBodyContains(browserA, dirtyNote.id, localEdit);
+
+    await purgeNoteFixture(browserB, dirtyNote.id);
+    await syncClient(browserB);
+
+    await syncClient(browserA);
+    await expectNoteBodyContains(browserA, dirtyNote.id, localEdit);
+
+    await syncClient(browserB);
+    await expectNoteBodyContains(browserB, dirtyNote.id, localEdit);
+
+    const cleanTitle = `Delete wins ${Date.now()}`;
+    const cleanNote = await createNoteFixture(
+      browserA,
+      cleanTitle,
+      `clean body ${Date.now()}`
+    );
+    await syncClient(browserA);
+    await syncClient(browserB);
+    await loadNoteFixture(browserB, cleanNote.id);
+
+    await purgeNoteFixture(browserB, cleanNote.id);
+    await syncClient(browserB);
+    await syncClient(browserA);
+    await expectNoteMissing(browserA, cleanNote.id);
   });
 });

@@ -250,9 +250,11 @@ Tracked here so the strategy isn't mistaken for working infrastructure:
 - [x] **First T4 app assertions landed**: `sync-history.e2e.ts` covers the
       per-device-history negative assertion; `sharing.e2e.ts` covers manifest
       bundle flows 4.1–4.4, the core 4.7 subtree/asset convergence path, and
-      4.7b move-out re-home; `collab.e2e.ts` and `collab-confirm.e2e.ts` keep
-      the live relay / peer prompt cases as pending markers until the packaged
-      WebKit harness has a deterministic readiness signal.
+      4.7b move-out re-home; `sync-history.e2e.ts` also covers 4.10
+      edit-wins-over-delete for plain vault notes; `collab.e2e.ts` and
+      `collab-confirm.e2e.ts` keep the live relay / peer prompt cases as pending
+      markers until the packaged WebKit harness has a deterministic readiness
+      signal.
 - [~] **`peerCount` bridge method landed** for the awareness-based editors
   (markdown/PDF) and the collab-confirmation prompt is wired in
   `NoteHistorySection`. Remaining: ink/freeform presence plus their T4
@@ -290,7 +292,8 @@ so they aren't rediscovered.
   now mark unimplemented scenarios with `this.skip()` instead of empty bodies.
   Current validated app assertions cover sequential sync of restored content
   without remote history, solo no-prompt restore, sharing flows 4.1–4.4, the
-  core 4.7 subtree/asset convergence path, and 4.7b move-out re-home. Markdown
-  live-edit propagation and restore confirmation with a peer remain pending
-  because the packaged WebKit harness can observe content sync in some runs but
-  does not reliably expose a deterministic Yjs/awareness readiness signal yet.
+  core 4.7 subtree/asset convergence path, 4.7b move-out re-home, and 4.10
+  edit-wins-over-delete for plain vault notes. Markdown live-edit propagation
+  and restore confirmation with a peer remain pending because the packaged
+  WebKit harness can observe content sync in some runs but does not reliably
+  expose a deterministic Yjs/awareness readiness signal yet.

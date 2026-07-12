@@ -26,9 +26,9 @@ It is separate from the Playwright browser-fallback suite in `../browser/` and
 | `specs/settings-persist.e2e.ts` | T3   | flow 3.1 / 3.2                                                         |
 | `specs/backup.e2e.ts`           | T3   | flows 1.2 / 1.3 / 1.4 (needs a native-dialog hook)                     |
 | `specs/collab.e2e.ts`           | T4   | markdown live-edit propagation pending on deterministic relay hook     |
-| `specs/sync-history.e2e.ts`     | T4   | per-device-history negative assertion                                  |
+| `specs/sync-history.e2e.ts`     | T4   | per-device-history negative assertion; 4.10 edit-wins-over-delete      |
 | `specs/collab-confirm.e2e.ts`   | T4   | solo no-prompt; peer prompt + ink/freeform pending                     |
-| `specs/sharing.e2e.ts`          | T4   | collection sharing flows 4.1–4.4 + 4.7/4.7b; 4.5/4.6/4.8–4.10 pending  |
+| `specs/sharing.e2e.ts`          | T4   | collection sharing flows 4.1–4.4 + 4.7/4.7b; 4.5/4.6/4.8–4.9 pending   |
 
 `helpers/harness.ts` owns the capability gating, the `MINDSTREAM_PROFILE_DIR`
 isolation/restart seam, and the accessible-name selectors (the same names the
