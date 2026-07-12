@@ -281,6 +281,65 @@ describe('nodesForDesktopSource', () => {
     expect(out.map((n) => n.id)).toEqual(['shared']);
   });
 
+  it('shared finds a shared root nested under a personal folder', () => {
+    const cols = byId([
+      collection('parent'),
+      collection('sharedChild', 'parent', { shared_role: 'read_write' })
+    ]);
+    const tree = [
+      folderNode('parent', [folderNode('sharedChild', [], 'parent')])
+    ];
+    const out = nodesForDesktopSource('shared', tree, {}, cols);
+    expect(out.map((n) => n.id)).toEqual(['sharedChild']);
+  });
+
+  it('shared excludes a shared root that lives under trash', () => {
+    const cols = byId([
+      collection(TRASH_ID),
+      collection('sharedDeleted', TRASH_ID, { shared_role: 'read_write' })
+    ]);
+    const tree = [
+      folderNode(TRASH_ID, [folderNode('sharedDeleted', [], TRASH_ID)])
+    ];
+    const out = nodesForDesktopSource('shared', tree, {}, cols);
+    expect(out.map((n) => n.id)).toEqual([]);
+  });
+
+  it('home hides shared-with-me roots but keeps personal and shared-by-me folders', () => {
+    const cols = byId([
+      collection('sharedWithMe', null, { shared_role: 'read_write' }),
+      collection('mine', null, { share_id: 'remote-coll', shared_by_me: true }),
+      collection('personal')
+    ]);
+    const tree = [
+      folderNode('sharedWithMe'),
+      folderNode('mine'),
+      folderNode('personal')
+    ];
+    const out = nodesForDesktopSource('home', tree, {}, cols);
+    expect(out.map((n) => n.id)).toEqual(['mine', 'personal']);
+  });
+
+  it('home prunes a shared root nested inside a personal folder', () => {
+    const cols = byId([
+      collection('parent'),
+      collection('sharedChild', 'parent', { shared_role: 'read_write' }),
+      collection('plainChild', 'parent')
+    ]);
+    const tree = [
+      folderNode('parent', [
+        folderNode('sharedChild', [], 'parent'),
+        folderNode('plainChild', [], 'parent')
+      ])
+    ];
+    const out = nodesForDesktopSource('home', tree, {}, cols);
+    expect(out.map((n) => n.id)).toEqual(['parent']);
+    const parent = out[0];
+    const childIds =
+      parent.kind === 'folder' ? parent.children.map((c) => c.id) : [];
+    expect(childIds).toEqual(['plainChild']);
+  });
+
   it('trash surfaces folders under trash plus soft-deleted notes', () => {
     const cols = byId([
       collection(TRASH_ID),
