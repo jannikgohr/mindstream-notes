@@ -14,6 +14,7 @@ import {
   requireAppE2E,
   restartApp,
   setElementValue,
+  waitForSaved,
   waitForShell
 } from '../helpers/harness.js';
 
@@ -49,6 +50,7 @@ describe('T3 markdown editor round-trip', function () {
     await expect($('.ProseMirror')).toHaveText(
       expect.stringContaining(heading)
     );
+    await waitForSaved();
 
     // Reopen via another note and back — proves the save_note round-trip.
     await clickName('Welcome');

@@ -19,7 +19,7 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { mkdtempSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -34,6 +34,7 @@ const application = join(
   'release',
   binaryName
 );
+const tauriScript = join(repoRoot, 'src-tauri', 'scripts', 'tauri.mjs');
 
 const tauriDriverPath = join(
   homedir(),
@@ -41,10 +42,24 @@ const tauriDriverPath = join(
   'bin',
   process.platform === 'win32' ? 'tauri-driver.exe' : 'tauri-driver'
 );
+const pathEnvKey =
+  Object.keys(process.env).find((key) => key.toLowerCase() === 'path') ??
+  'PATH';
+const nodeBinDir = dirname(process.execPath);
+const inheritedPath = process.env[pathEnvKey];
 
 const buildEnv = {
   ...process.env,
-  NODE_OPTIONS: process.env.NODE_OPTIONS ?? '--max-old-space-size=4096'
+  [pathEnvKey]: inheritedPath
+    ? `${nodeBinDir}${delimiter}${inheritedPath}`
+    : nodeBinDir,
+  NODE_OPTIONS: process.env.NODE_OPTIONS ?? '--max-old-space-size=4096',
+  // pnpm 11 auto-runs `pnpm install` before scripts when it thinks
+  // node_modules is stale. The app E2E build is non-interactive, so keep the
+  // dependency install as an explicit developer/CI step instead of letting this
+  // hook try to purge node_modules.
+  pnpm_config_verify_deps_before_run:
+    process.env.pnpm_config_verify_deps_before_run ?? 'false'
 };
 
 /**
@@ -136,8 +151,8 @@ export const config: WebdriverIO.Config = {
   onPrepare: () => {
     if (process.env.MINDSTREAM_E2E_SKIP_BUILD === '1') return;
     const res = spawnSync(
-      'pnpm',
-      ['tauri', 'build', '--no-bundle', '--features', 'e2e-data-dir'],
+      process.execPath,
+      [tauriScript, 'build', '--no-bundle', '--features', 'e2e-data-dir'],
       { cwd: repoRoot, stdio: 'inherit', env: buildEnv }
     );
     if (res.status !== 0) {
