@@ -193,13 +193,13 @@ assertion is the regression guard for the _history-is-per-device_ limitation.
   **one** `share-bundle` notification, not four raw invites (4.2) → accept adds
   the shared root and doesn't re-appear on rescan (4.3) → a separate share, when
   declined, leaves the manifest collection and does **not** loop back (4.4). The
-  incomplete-bundle guard (4.5) needs a share with a required part invite
-  revoked server-side. **4.7 (shared content converges) is now unblocked** —
-  scoped sync routing plus scope inheritance on create/move landed (keyed on the
-  `share_scope_id` seam, migration 18), so a note added to or moved into a shared
-  folder syncs to the recipient without a re-invite, and one moved out is
-  re-homed back to the vault. Assert those convergence outcomes (not the old
-  "empty folder by design" guard). The scaffolded spec is
+  core 4.7 assertion creates notes/folders/assets under the accepted share,
+  moves an existing vault note into it, asserts B pulls all of them without a
+  re-invite, and verifies a read-write recipient edit syncs back to A. Remaining
+  4.7 coverage: render the synced markdown asset in the editor UI instead of
+  only fetching the asset bytes through the app API. The incomplete-bundle guard
+  (4.5) needs a share with a required part invite revoked server-side. The
+  scaffolded spec is
   [`e2e/app/specs/sharing.e2e.ts`](../e2e/app/specs/sharing.e2e.ts).
 
 ---
@@ -248,9 +248,10 @@ Tracked here so the strategy isn't mistaken for working infrastructure:
       via the app's own `etebase_login` for now.
 - [x] **First T4 app assertions landed**: `sync-history.e2e.ts` covers the
       per-device-history negative assertion; `sharing.e2e.ts` covers manifest
-      bundle flows 4.1–4.4; `collab.e2e.ts` and `collab-confirm.e2e.ts` keep the
-      live relay / peer prompt cases as pending markers until the packaged
-      WebKit harness has a deterministic readiness signal.
+      bundle flows 4.1–4.4 and the core 4.7 subtree/asset convergence path;
+      `collab.e2e.ts` and `collab-confirm.e2e.ts` keep the live relay / peer
+      prompt cases as pending markers until the packaged WebKit harness has a
+      deterministic readiness signal.
 - [~] **`peerCount` bridge method landed** for the awareness-based editors
   (markdown/PDF) and the collab-confirmation prompt is wired in
   `NoteHistorySection`. Remaining: ink/freeform presence plus their T4
@@ -287,8 +288,8 @@ so they aren't rediscovered.
 - **Pending tests are intentional backlog, not passing coverage.** The T4 specs
   now mark unimplemented scenarios with `this.skip()` instead of empty bodies.
   Current validated app assertions cover sequential sync of restored content
-  without remote history, solo no-prompt restore, and sharing flows 4.1–4.4.
-  Markdown live-edit propagation and restore confirmation with a peer remain
-  pending because the packaged WebKit harness can observe content sync in some
-  runs but does not reliably expose a deterministic Yjs/awareness readiness
-  signal yet.
+  without remote history, solo no-prompt restore, sharing flows 4.1–4.4, and the
+  core 4.7 subtree/asset convergence path. Markdown live-edit propagation and
+  restore confirmation with a peer remain pending because the packaged WebKit
+  harness can observe content sync in some runs but does not reliably expose a
+  deterministic Yjs/awareness readiness signal yet.

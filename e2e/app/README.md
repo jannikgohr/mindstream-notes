@@ -9,7 +9,8 @@ It is separate from the Playwright browser-fallback suite in `../browser/` and
 > **Status:** The T3 harness runs against the packaged app when the opt-in
 > toolchain below is installed. The T4 multiremote harness and two-account
 > provisioning have been validated against the disposable stack. T4 now has
-> validated assertions for per-device history sync and sharing flows 4.1–4.4.
+> validated assertions for per-device history sync and sharing flows 4.1–4.4
+> plus the core 4.7 subtree/asset convergence path.
 > Markdown live-edit propagation and restore-with-peer confirmation are marked
 > pending until the packaged WebKit harness has a deterministic Yjs
 > presence/relay hook. Native-dialog flows still skip cleanly until their
@@ -27,7 +28,7 @@ It is separate from the Playwright browser-fallback suite in `../browser/` and
 | `specs/collab.e2e.ts`           | T4   | markdown live-edit propagation pending on deterministic relay hook     |
 | `specs/sync-history.e2e.ts`     | T4   | per-device-history negative assertion                                  |
 | `specs/collab-confirm.e2e.ts`   | T4   | solo no-prompt; peer prompt + ink/freeform pending                     |
-| `specs/sharing.e2e.ts`          | T4   | collection sharing flows 4.1–4.4; 4.5–4.10 pending                     |
+| `specs/sharing.e2e.ts`          | T4   | collection sharing flows 4.1–4.4 + core 4.7; 4.5/4.6/4.7b–4.10 pending |
 
 `helpers/harness.ts` owns the capability gating, the `MINDSTREAM_PROFILE_DIR`
 isolation/restart seam, and the accessible-name selectors (the same names the
