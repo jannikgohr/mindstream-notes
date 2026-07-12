@@ -246,10 +246,11 @@ Tracked here so the strategy isn't mistaken for working infrastructure:
       `MINDSTREAM_E2E_FRESH_ACCOUNTS=1` to force a fresh pair.
 - [ ] No test hook to inject a pre-authenticated session blob (§3) — specs log in
       via the app's own `etebase_login` for now.
-- [x] **First T4 app assertions landed**: `collab.e2e.ts` covers markdown
-      live-edit propagation between two same-account clients; `sync-history.e2e.ts`
-      covers the per-device-history negative assertion; `collab-confirm.e2e.ts`
-      covers the markdown presence prompt and solo no-prompt path.
+- [x] **First T4 app assertions landed**: `sync-history.e2e.ts` covers the
+      per-device-history negative assertion; `sharing.e2e.ts` covers manifest
+      bundle flows 4.1–4.4; `collab.e2e.ts` and `collab-confirm.e2e.ts` keep the
+      live relay / peer prompt cases as pending markers until the packaged
+      WebKit harness has a deterministic readiness signal.
 - [~] **`peerCount` bridge method landed** for the awareness-based editors
   (markdown/PDF) and the collab-confirmation prompt is wired in
   `NoteHistorySection`. Remaining: ink/freeform presence plus their T4
@@ -285,6 +286,9 @@ so they aren't rediscovered.
 (index N)`.
 - **Pending tests are intentional backlog, not passing coverage.** The T4 specs
   now mark unimplemented scenarios with `this.skip()` instead of empty bodies.
-  Current implemented app assertions cover markdown live-edit propagation,
-  sequential sync of restored content without remote history, markdown restore
-  confirmation with a peer, solo no-prompt restore, and sharing flows 4.1–4.4.
+  Current validated app assertions cover sequential sync of restored content
+  without remote history, solo no-prompt restore, and sharing flows 4.1–4.4.
+  Markdown live-edit propagation and restore confirmation with a peer remain
+  pending because the packaged WebKit harness can observe content sync in some
+  runs but does not reliably expose a deterministic Yjs/awareness readiness
+  signal yet.

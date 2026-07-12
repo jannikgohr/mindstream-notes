@@ -9,9 +9,10 @@ It is separate from the Playwright browser-fallback suite in `../browser/` and
 > **Status:** The T3 harness runs against the packaged app when the opt-in
 > toolchain below is installed. The T4 multiremote harness and two-account
 > provisioning have been validated against the disposable stack. T4 now has
-> real assertions for markdown live-edit propagation, per-device history sync,
-> markdown restore confirmation, and sharing flows 4.1–4.4; the remaining T4
-> backlog is marked pending. Native-dialog flows still skip cleanly until their
+> validated assertions for per-device history sync and sharing flows 4.1–4.4.
+> Markdown live-edit propagation and restore-with-peer confirmation are marked
+> pending until the packaged WebKit harness has a deterministic Yjs
+> presence/relay hook. Native-dialog flows still skip cleanly until their
 > Rust-side path-injection seam is wired.
 
 ## What's here
@@ -23,9 +24,9 @@ It is separate from the Playwright browser-fallback suite in `../browser/` and
 | `specs/trash-retention.e2e.ts`  | T3   | flow 1.5 + 3.3 (retention sweep on boot)                               |
 | `specs/settings-persist.e2e.ts` | T3   | flow 3.1 / 3.2                                                         |
 | `specs/backup.e2e.ts`           | T3   | flows 1.2 / 1.3 / 1.4 (needs a native-dialog hook)                     |
-| `specs/collab.e2e.ts`           | T4   | markdown live-edit propagation; remaining matrix cases pending         |
+| `specs/collab.e2e.ts`           | T4   | markdown live-edit propagation pending on deterministic relay hook     |
 | `specs/sync-history.e2e.ts`     | T4   | per-device-history negative assertion                                  |
-| `specs/collab-confirm.e2e.ts`   | T4   | markdown restore prompt + solo no-prompt; ink/freeform pending         |
+| `specs/collab-confirm.e2e.ts`   | T4   | solo no-prompt; peer prompt + ink/freeform pending                     |
 | `specs/sharing.e2e.ts`          | T4   | collection sharing flows 4.1–4.4; 4.5–4.10 pending                     |
 
 `helpers/harness.ts` owns the capability gating, the `MINDSTREAM_PROFILE_DIR`
