@@ -10,9 +10,9 @@
  * multiremote → `browserA`/`browserB`, two driver processes) plus two-account
  * provisioning against Etebase (e2e-strategy.md §2.1, §7).
  *
- * Status: flows 4.1–4.4 and the core 4.7 subtree convergence path are
- * IMPLEMENTED and validated against the live two-app + backend session. 4.5–4.10
- * stay documented skeletons: each needs
+ * Status: flows 4.1–4.4, the core 4.7 subtree convergence path, and 4.7b
+ * move-out re-home are IMPLEMENTED and validated against the live two-app +
+ * backend session. 4.5–4.6 and 4.8–4.10 stay documented skeletons: each needs
  * a seam that doesn't exist yet — server-side part-invite cancellation (4.5), a
  * lone non-manifest invite path (4.6), move-UI automation + asset embedding
  * render assertions (4.7 asset UI), and an offline/network toggle hook
@@ -336,6 +336,12 @@ describe('T4 collection sharing (manifest bundles)', function () {
   // The folder A seeds in 4.1 and shares to B; later flows assume it exists.
   const RUN_ID = Date.now();
   const SHARED_FOLDER = `Shared Project ${RUN_ID}`;
+  let noteToMoveOut:
+    | {
+        id: string;
+        title: string;
+      }
+    | undefined;
 
   // --- 4.1 Outgoing share creation (P1) ---
   it('A shares a folder → invite succeeds and folder flags shared-by-me', async () => {
@@ -508,6 +514,7 @@ describe('T4 collection sharing (manifest bundles)', function () {
       null
     );
     await moveNoteFixture(browserA, movedNote.id, sharedId);
+    noteToMoveOut = { id: movedNote.id, title: movedNoteTitle };
 
     const assetNote = await createNoteFixture(
       browserA,
@@ -556,12 +563,24 @@ describe('T4 collection sharing (manifest bundles)', function () {
 
   // --- 4.7b Move out of a shared folder re-homes back to the vault (P2) ---
   it('moving a note out of the shared folder removes it from the recipient', async function () {
-    // Complements the create/move fix from the other direction: A moves a note
-    // OUT of the shared folder into a personal (vault) folder. Assert B no
-    // longer sees it after a sync (the row was re-homed out of the scope: its
-    // scope copy tombstoned, re-created in the vault). Moving the share ROOT
-    // itself within the vault must KEEP its scope (share-anchor guard).
-    this.skip();
+    if (!noteToMoveOut) {
+      throw new Error('4.7b requires the 4.7 shared note fixture');
+    }
+
+    await moveNoteFixture(browserA, noteToMoveOut.id, null);
+    const ownerNote = await loadNoteFixture(browserA, noteToMoveOut.id);
+    expect(ownerNote.parent_collection_id).toBeNull();
+
+    await syncClient(browserA);
+
+    await browserB.reloadSession();
+    await browserB.$('aria/Welcome').waitForDisplayed({ timeout: 30_000 });
+    B = clientHelpers(browserB);
+    await syncClient(browserB);
+    await selectTreeSource(browserB, 'Shared');
+    await B.click(SHARED_FOLDER);
+
+    await expect(B.treeItem(noteToMoveOut.title)).not.toBeDisplayed();
   });
 
   // --- 4.8 Offline note edit survives a re-home (P1) ---
