@@ -25,6 +25,8 @@ struct DesktopSettingsFile {
     custom_window_decorations: Option<bool>,
     #[serde(default = "default_language_code")]
     language_code: String,
+    #[serde(default = "default_theme_mode")]
+    theme_mode: String,
 }
 
 pub struct DesktopSettings {
@@ -32,6 +34,7 @@ pub struct DesktopSettings {
     start_in_tray: AtomicBool,
     custom_window_decorations: AtomicBool,
     language_code: Mutex<String>,
+    theme_mode: Mutex<String>,
     path: PathBuf,
 }
 
@@ -54,6 +57,7 @@ impl DesktopSettings {
             language_code: Mutex::new(
                 i18n::normalize_language_code(&file.language_code).to_string(),
             ),
+            theme_mode: Mutex::new(normalize_theme_mode(&file.theme_mode).to_string()),
             path,
         }
     }
@@ -96,6 +100,19 @@ impl DesktopSettings {
         }
     }
 
+    pub fn theme_mode(&self) -> String {
+        self.theme_mode
+            .lock()
+            .map(|mode| mode.clone())
+            .unwrap_or_else(|_| default_theme_mode())
+    }
+
+    fn set_theme_mode(&self, value: &str) {
+        if let Ok(mut mode) = self.theme_mode.lock() {
+            *mode = normalize_theme_mode(value).to_string();
+        }
+    }
+
     fn save(&self) -> Result<(), String> {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent).map_err(|e| format!("create settings dir: {e}"))?;
@@ -105,6 +122,7 @@ impl DesktopSettings {
             start_in_tray: self.start_in_tray(),
             custom_window_decorations: Some(self.custom_window_decorations()),
             language_code: self.language_code(),
+            theme_mode: self.theme_mode(),
         };
         let json = serde_json::to_string_pretty(&file)
             .map_err(|e| format!("serialize desktop settings: {e}"))?;
@@ -114,6 +132,17 @@ impl DesktopSettings {
 
 fn default_language_code() -> String {
     "en".to_string()
+}
+
+fn default_theme_mode() -> String {
+    "system".to_string()
+}
+
+fn normalize_theme_mode(value: &str) -> &str {
+    match value {
+        "light" | "dark" | "system" => value,
+        _ => "system",
+    }
 }
 
 pub fn default_custom_window_decorations() -> bool {
@@ -213,4 +242,18 @@ pub fn set_desktop_language(
     crate::native_menu::set_language(&app);
     crate::tray::set_language(&app, &settings.language_code());
     Ok(())
+}
+
+#[tauri::command]
+pub fn get_desktop_theme_mode(settings: State<'_, DesktopSettings>) -> String {
+    settings.theme_mode()
+}
+
+#[tauri::command]
+pub fn set_desktop_theme_mode(
+    settings: State<'_, DesktopSettings>,
+    mode: String,
+) -> Result<(), String> {
+    settings.set_theme_mode(&mode);
+    settings.save()
 }
