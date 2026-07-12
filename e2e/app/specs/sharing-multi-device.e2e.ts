@@ -194,7 +194,7 @@ async function syncUntil(
   predicate: () => Promise<boolean>,
   opts: { source?: WebdriverIO.Browser; rounds?: number } = {}
 ): Promise<boolean> {
-  const rounds = opts.rounds ?? 5;
+  const rounds = opts.rounds ?? 8;
   for (let round = 0; round < rounds; round += 1) {
     if (opts.source) await syncClient(opts.source);
     await syncClient(target);
@@ -319,16 +319,39 @@ describe('T4 collection sharing across the owner’s two devices', function () {
     await assertBackendReady();
     const server = backendUrl();
 
-    // One sender + one recipient account. A1 and A2 both sign into the sender;
-    // that's the whole point — two devices, one account.
+    // One sender + one recipient account, both brand-new (no server-side vault
+    // yet). A1 and A2 both sign into the sender; that's the whole point — two
+    // devices, one account.
     process.env.MINDSTREAM_E2E_FRESH_ACCOUNTS = '1';
     accounts = await provisionTwoAccounts(server);
 
+    // Bring A1 up ALONE and let it publish the account's vault Etebase
+    // collection before any other device signs in. Sync defaults to
+    // "live"/enabled, so two fresh devices signing in together would both
+    // auto-sync and hit `ensure_collection`'s create-if-none path, each minting
+    // its OWN vault collection — a permanent split-brain no pull loop can
+    // reconcile. Seeding + syncing on A1 first means A2 ADOPTS the existing
+    // vault instead of racing to create a second one.
     await loginClient(browserA1, {
       serverUrl: server,
       username: accounts.sender.username,
       password: accounts.sender.password
     });
+    A1 = clientHelpers(browserA1);
+
+    await A1.newRootFolder(SHARED_FOLDER);
+    sharedFolderIdA1 = await findCollectionId(browserA1, SHARED_FOLDER);
+    const note = await createNoteFixture(
+      browserA1,
+      NOTE_TITLE,
+      INITIAL_BODY,
+      sharedFolderIdA1
+    );
+    sharedNoteId = note.id;
+    await syncClient(browserA1);
+
+    // Only now bring up A2 (same account) and B (recipient); both adopt the
+    // vault A1 just published rather than racing to create their own.
     await loginClient(browserA2, {
       serverUrl: server,
       username: accounts.sender.username,
@@ -339,31 +362,19 @@ describe('T4 collection sharing across the owner’s two devices', function () {
       username: accounts.recipient.username,
       password: accounts.recipient.password
     });
-
-    A1 = clientHelpers(browserA1);
     A2 = clientHelpers(browserA2);
     B = clientHelpers(browserB);
   });
 
-  // --- Baseline: the same account's vault reaches both devices ---
-  it('A1 seeds a folder + note that converge on A2 (same-account vault sync)', async () => {
-    await A1.newRootFolder(SHARED_FOLDER);
-    sharedFolderIdA1 = await findCollectionId(browserA1, SHARED_FOLDER);
-    const note = await createNoteFixture(
-      browserA1,
-      NOTE_TITLE,
-      INITIAL_BODY,
-      sharedFolderIdA1
-    );
-    sharedNoteId = note.id;
-
-    // Both devices stay on the shell they logged into (no reload before the
-    // first sync, per the proven sync-history recipe). Assert convergence at the
-    // DB layer FIRST — a passing note-body check proves the folder + note reached
-    // A2's store — then check the tree projection, so a failure separates "data
-    // never synced" from "synced but didn't render". `syncUntil` re-pushes A1 and
-    // re-pulls A2 across several rounds because under this tier's memory pressure
-    // one round often finishes before the data has crossed the wire.
+  // --- Baseline: the same account's vault reaches the second device ---
+  it('A1’s seeded folder + note converge on A2 (same-account vault sync)', async () => {
+    // A1 published the vault (folder + note) in `before`; A2 adopts it on first
+    // sync. Assert convergence at the DB layer FIRST — a passing note-body check
+    // proves the folder + note reached A2's store — then check the tree
+    // projection, so a failure separates "data never synced" from "synced but
+    // didn't render". `syncUntil` re-pulls A2 across several rounds because under
+    // this tier's memory pressure one round often finishes before the data has
+    // crossed the wire.
     const converged = await syncUntil(
       browserA2,
       () => noteBodyContains(browserA2, sharedNoteId, INITIAL_BODY),
@@ -449,9 +460,36 @@ describe('T4 collection sharing across the owner’s two devices', function () {
 
   // --- Recipient sanity: the share (with the pre-share edit) reaches B ---
   it('B accepts the bundle and receives the folder, note and pre-share edit', async () => {
+    // The bundle notification appears only after B's notification center scans
+    // the server-side invites on mount. Under this tier's load the first scan can
+    // race the invite's arrival, so reload + reopen until the Accept action is
+    // present rather than clicking a button that isn't there yet.
     B = await reloadShell(browserB);
-    await B.openNotifications();
+    const inviteVisible = async (): Promise<boolean> => {
+      await B.openNotifications();
+      return B.isDisplayed('Accept', 2_000);
+    };
+    let sawInvite = await inviteVisible();
+    for (let attempt = 0; attempt < 5 && !sawInvite; attempt += 1) {
+      B = await reloadShell(browserB);
+      sawInvite = await inviteVisible();
+    }
+    expect(sawInvite).toBe(true);
+
     await B.click('Accept');
+
+    // Confirm the accept actually registered before reloading. Accept kicks off
+    // a scoped sync that joins B to the share's collections; reloading before it
+    // lands discards the pending action and B never joins (ends up with only its
+    // own vault). The bundle's pending title clearing is the signal it took.
+    const pendingTitle = `${accounts.sender.username} wants to share a folder with you`;
+    await browserB.waitUntil(
+      async () => !(await B.isDisplayed(pendingTitle, 500)),
+      {
+        timeout: 60_000,
+        timeoutMsg: 'share bundle did not clear after Accept'
+      }
+    );
     B = await reloadShell(browserB);
 
     // Drive re-syncs until the shared content (with A1's pre-share edit) lands in
@@ -459,7 +497,7 @@ describe('T4 collection sharing across the owner’s two devices', function () {
     const received = await syncUntil(
       browserB,
       () => noteBodyContains(browserB, sharedNoteId, PRE_SHARE_EDIT),
-      { source: browserA1 }
+      { source: browserA1, rounds: 12 }
     );
     expect(received).toBe(true);
 

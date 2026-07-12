@@ -430,6 +430,22 @@ export async function syncClient(client: WebdriverIO.Browser): Promise<void> {
   await h.click('Account & Sync');
   await selectSelfHosted(client);
   await h.click('Sync now');
+
+  // Confirm the sync actually STARTED before waiting for it to return to idle.
+  // The button's accessible name flips "Sync now" → "Syncing…" → "Sync now"
+  // (SignInForm.svelte). Svelte re-renders a tick after the click, so the very
+  // next idle check can match the pre-render "Sync now" frame and return
+  // immediately — the sync is never awaited. Under this tier's load that race
+  // fires often enough that a whole `syncUntil` round becomes a no-op and
+  // convergence never happens. Gate on the "Syncing…" state first so every call
+  // performs a real, completed sync. A sync fast enough to finish before
+  // "Syncing…" paints a frame already converged, so tolerate that timeout.
+  await client
+    .waitUntil(() => h.isDisplayed('Syncing…', 500), {
+      timeout: 10_000,
+      timeoutMsg: 'sync did not start'
+    })
+    .catch(() => undefined);
   await client.waitUntil(() => h.isDisplayed('Sync now', 1_000), {
     timeout: 60_000,
     timeoutMsg: 'sync did not return to idle'
