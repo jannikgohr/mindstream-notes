@@ -132,8 +132,12 @@ async fn tick(app: &AppHandle) -> Result<(), String> {
             let account = auth::try_restore(&app_for_blocking)
                 .map_err(|e| format!("restore session: {e}"))?
                 .ok_or_else(|| "not signed in".to_string())?;
+            let self_username = auth::read_session_info(&app_for_blocking)
+                .ok()
+                .flatten()
+                .map(|info| info.username);
             let db = app_for_blocking.state::<Db>();
-            run(&db, &account).map_err(|e| e.to_string())
+            run(&db, &account, self_username.as_deref()).map_err(|e| e.to_string())
         })
     })
     .await
