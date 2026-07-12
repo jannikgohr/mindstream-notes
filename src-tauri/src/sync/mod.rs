@@ -1241,6 +1241,7 @@ struct LocalNoteState {
     parent_collection_id: Option<String>,
     trashed_at: Option<String>,
     title: String,
+    body: String,
     position: i64,
     favourite: i64,
     note_kind: String,
@@ -1287,7 +1288,7 @@ fn apply_note_payload(
         let existing: Option<LocalNoteState> = tx
             .query_row(
                 "SELECT yrs_state, dirty, payload_schema, parent_collection_id,
-                        trashed_at, title, position, favourite, note_kind, tags_state
+                        trashed_at, title, body, position, favourite, note_kind, tags_state
                  FROM notes WHERE id = ?1",
                 params![payload.id],
                 |r| {
@@ -1298,10 +1299,11 @@ fn apply_note_payload(
                         parent_collection_id: r.get(3)?,
                         trashed_at: r.get(4)?,
                         title: r.get(5)?,
-                        position: r.get(6)?,
-                        favourite: r.get(7)?,
-                        note_kind: r.get(8)?,
-                        tags_state: r.get::<_, Option<Vec<u8>>>(9)?.unwrap_or_default(),
+                        body: r.get(6)?,
+                        position: r.get(7)?,
+                        favourite: r.get(8)?,
+                        note_kind: r.get(9)?,
+                        tags_state: r.get::<_, Option<Vec<u8>>>(10)?.unwrap_or_default(),
                     })
                 },
             )
@@ -1342,9 +1344,20 @@ fn apply_note_payload(
         let keep_local_meta = existing.as_ref().is_some_and(|l| l.dirty != 0);
         // For v2 payloads the remote ships the rendered markdown alongside
         // the prosemirror state — Rust can't render markdown from XmlFragment.
-        // For v1 we still have the Rust-side Y.Text → markdown helper.
+        // If this row has unpushed local edits, keep the local rendered body
+        // through the pull-before-push cycle; otherwise the next push would
+        // upload the stale remote body even though the merged Yjs state still
+        // contains the local edit. For v1 we still have the Rust-side Y.Text →
+        // markdown helper.
         let body = if payload.schema >= 2 {
-            payload.body.clone()
+            if keep_local_meta {
+                existing
+                    .as_ref()
+                    .map(|local| local.body.clone())
+                    .unwrap_or_else(|| payload.body.clone())
+            } else {
+                payload.body.clone()
+            }
         } else {
             yrs_doc::to_markdown(&merged_state)
         };
@@ -2489,6 +2502,45 @@ mod tests {
         assert_eq!(title, "Local Title");
         assert_eq!(dirty, 1, "merged tags must push back to the server");
         assert_eq!(tags, vec!["local".to_string(), "remote".to_string()]);
+    }
+
+    #[test]
+    fn apply_note_keeps_dirty_v2_rendered_body() {
+        // A scoped sync pulls before it pushes. For v2 markdown rows Rust cannot
+        // render the merged XmlFragment back to markdown, so a dirty local row
+        // must keep its rendered body through that pull; otherwise the later
+        // push uploads the stale remote body and loses the local edit.
+        let db = open_memory_for_tests();
+        db.with_conn(|c| {
+            c.execute(
+                "INSERT INTO notes(id, parent_collection_id, title, body, position,
+                                   created, modified, trashed_at, yrs_state,
+                                   etebase_uid, etebase_etag, dirty, payload_schema,
+                                   favourite, note_kind)
+                 VALUES ('note_body', NULL, 'Local Title', 'local rendered body', 0,
+                         't', 't', NULL, NULL, 'uid_body', 'etag_old', 1, 2,
+                         0, 'markdown')",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+        let mut remote = remote_note("note_body", None, None);
+        remote.body = "stale remote body".into();
+        apply_note_payload(&db, &remote, "uid_body", "etag_new", Some("scope_1")).unwrap();
+
+        let (body, dirty): (String, i64) = db
+            .with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT body, dirty FROM notes WHERE id = 'note_body'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(body, "local rendered body");
+        assert_eq!(dirty, 1, "local body must still push after the pull");
     }
 
     #[test]
