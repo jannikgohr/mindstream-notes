@@ -21,6 +21,7 @@
     "test:e2e:backend": "playwright test --config e2e/backend/playwright.config.ts",
     "test:e2e:app": "wdio run e2e/app/wdio.conf.ts",
     "test:e2e:app:multi": "wdio run e2e/app/wdio.multiremote.conf.ts",
+    "test:e2e:app:multi:a2": "wdio run e2e/app/wdio.multiremote.a2.conf.ts",
     "backend:test:up": "node backend/scripts/test-stack.mjs up",
     "backend:test:up:min": "node backend/scripts/test-stack.mjs up:min",
     "backend:test:down": "node backend/scripts/test-stack.mjs down",

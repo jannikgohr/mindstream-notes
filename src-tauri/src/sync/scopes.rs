@@ -35,7 +35,12 @@ use super::{
 /// Sync every share scope the account is a member of. Enumerated from the
 /// manifest collections; a scope we can't fully reach (e.g. a manifest whose
 /// invite was accepted but whose part collections weren't) is skipped.
-pub fn sync_scopes(db: &Db, cm: &CollectionManager, delta: &mut SyncDelta) -> AppResult<()> {
+pub fn sync_scopes(
+    db: &Db,
+    cm: &CollectionManager,
+    delta: &mut SyncDelta,
+    self_username: Option<&str>,
+) -> AppResult<()> {
     let list = cm
         .list(COLLECTION_TYPE_SHARE_MANIFEST, None)
         .map_err(|e| AppError::InvalidArg(format!("list manifest collections: {e}")))?;
@@ -53,7 +58,7 @@ pub fn sync_scopes(db: &Db, cm: &CollectionManager, delta: &mut SyncDelta) -> Ap
                 continue;
             }
         };
-        if let Err(e) = sync_one_scope(db, cm, &manifest, delta) {
+        if let Err(e) = sync_one_scope(db, cm, &manifest, delta, self_username) {
             log::warn!("[sync] scope {} sync failed: {e}", manifest.share_scope_id);
         }
     }
@@ -81,6 +86,7 @@ fn sync_one_scope(
     cm: &CollectionManager,
     manifest: &ShareManifest,
     delta: &mut SyncDelta,
+    self_username: Option<&str>,
 ) -> AppResult<()> {
     let scope = manifest.share_scope_id.as_str();
     let (Some(folders_uid), Some(notes_uid), Some(assets_uid)) = (
@@ -120,9 +126,16 @@ fn sync_one_scope(
     // with me" view instead of Home. The folder itself arrives via the pull
     // above carrying only placement metadata (name/parent/position) — the share
     // membership (owner, role, share_id) lives in the manifest, so we project it
-    // onto the local row here. Guarded to skip the owner's own row (shared_by_me
-    // = 1), whose stamp is authoritative.
-    project_shared_root(db, manifest, folders_col.access_level(), folders_uid)?;
+    // onto the local row here. The owner's *other* device stamps shared_by_me
+    // instead so the folder stays in Home; a recipient's row is left alone if it
+    // already carries the authoritative shared_by_me = 1.
+    project_shared_root(
+        db,
+        manifest,
+        folders_col.access_level(),
+        folders_uid,
+        self_username,
+    )?;
     if writable {
         push_folders(db, &folders_im, &mut delta.report, Some(scope))?;
     }
@@ -164,29 +177,59 @@ fn sync_one_scope(
 ///
 /// The scope pull only carries a folder's placement metadata, never the share
 /// membership, so without this a freshly pulled shared root has no `shared_role`
-/// and is indistinguishable from a personal folder. Idempotent, and the
-/// `shared_by_me = 0` guard leaves the *owner's* own root (which carries the
-/// authoritative `shared_by_me = 1` stamp) untouched when the owner syncs their
-/// own scope.
+/// and is indistinguishable from a personal folder.
+///
+/// Two distinct cases, keyed on whether the syncing account is the scope owner:
+///
+/// - **Owner's own device.** `shared_by_me = 1` is stamped only on the device
+///   that initiated the share (`record_outgoing_share`); the owner's *other*
+///   devices pull the same scope but arrive with `shared_by_me = 0`, so the
+///   recipient projection would mis-file the folder under "shared with me". We
+///   instead mirror the `shared_by_me = 1` stamp here, keeping the folder in
+///   Home with the shared-by-me badge — `collectionIsSharedWithMe`
+///   short-circuits to false whenever `shared_by_me` is set.
+///
+/// - **Recipient's device.** Stamp the share membership. The
+///   `COALESCE(shared_by_me, 0) = 0` guard is retained here so a row that
+///   already carries an authoritative `shared_by_me = 1` (e.g. the owner's first
+///   device) is never downgraded.
 fn project_shared_root(
     db: &Db,
     manifest: &ShareManifest,
     access_level: CollectionAccessLevel,
     folders_uid: &str,
+    self_username: Option<&str>,
 ) -> AppResult<()> {
     let role_db = share_access_level_to_db(ShareAccessLevel::from(access_level));
+    let owner_device =
+        manifest.owner_username.is_some() && manifest.owner_username.as_deref() == self_username;
     db.with_conn(|conn| {
-        conn.execute(
-            "UPDATE collections
-                SET shared_owner = ?1, shared_role = ?2, share_id = ?3
-              WHERE id = ?4 AND COALESCE(shared_by_me, 0) = 0",
-            params![
-                manifest.owner_username,
-                role_db,
-                folders_uid,
-                manifest.root_folder_id,
-            ],
-        )?;
+        if owner_device {
+            conn.execute(
+                "UPDATE collections
+                    SET shared_owner = ?1, shared_role = ?2, share_id = ?3,
+                        shared_by_me = 1
+                  WHERE id = ?4",
+                params![
+                    manifest.owner_username,
+                    role_db,
+                    folders_uid,
+                    manifest.root_folder_id,
+                ],
+            )?;
+        } else {
+            conn.execute(
+                "UPDATE collections
+                    SET shared_owner = ?1, shared_role = ?2, share_id = ?3
+                  WHERE id = ?4 AND COALESCE(shared_by_me, 0) = 0",
+                params![
+                    manifest.owner_username,
+                    role_db,
+                    folders_uid,
+                    manifest.root_folder_id,
+                ],
+            )?;
+        }
         Ok(())
     })
 }
@@ -376,11 +419,13 @@ mod tests {
         })
         .unwrap();
 
+        // Syncing account ("bob") is not the scope owner ("alice") → recipient.
         project_shared_root(
             &db,
             &manifest("folder_root", Some("alice")),
             CollectionAccessLevel::ReadOnly,
             "folders_uid",
+            Some("bob"),
         )
         .unwrap();
 
@@ -419,11 +464,14 @@ mod tests {
         })
         .unwrap();
 
+        // Recipient device ("bob" ≠ owner) whose row already carries the
+        // authoritative shared_by_me = 1 — the guard must leave it untouched.
         project_shared_root(
             &db,
-            &manifest("folder_root", Some("bob")),
+            &manifest("folder_root", Some("carol")),
             CollectionAccessLevel::ReadOnly,
             "folders_uid",
+            Some("bob"),
         )
         .unwrap();
 
@@ -440,5 +488,49 @@ mod tests {
         assert_eq!(by_me, 1, "owner's shared_by_me stamp is preserved");
         assert_eq!(owner.as_deref(), Some("alice"), "owner metadata untouched");
         assert_eq!(role.as_deref(), Some("admin"));
+    }
+
+    #[test]
+    fn project_shared_root_stamps_owner_second_device() {
+        // The owner shares from device A1 (which stamps shared_by_me = 1) and
+        // syncs the same scope on device A2, which pulls the root with
+        // shared_by_me = 0. Because the syncing account matches the manifest
+        // owner, A2 must also be stamped shared_by_me = 1 so the folder stays in
+        // Home with the shared-by-me badge instead of falling under
+        // "shared with me".
+        let db = open_memory_for_tests();
+        db.with_conn(|c| {
+            c.execute(
+                "INSERT INTO collections(id, parent_collection_id, name, position,
+                                         created, modified, dirty, share_scope_id)
+                 VALUES ('folder_root', NULL, 'Shared', 0, 't', 't', 0, 'scope_1')",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+        project_shared_root(
+            &db,
+            &manifest("folder_root", Some("alice")),
+            CollectionAccessLevel::Admin,
+            "folders_uid",
+            Some("alice"),
+        )
+        .unwrap();
+
+        let (owner, share_id, by_me): (Option<String>, Option<String>, i64) = db
+            .with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT shared_owner, share_id, shared_by_me
+                       FROM collections WHERE id = 'folder_root'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(by_me, 1, "owner's other device is stamped shared_by_me");
+        assert_eq!(owner.as_deref(), Some("alice"));
+        assert_eq!(share_id.as_deref(), Some("folders_uid"));
     }
 }
