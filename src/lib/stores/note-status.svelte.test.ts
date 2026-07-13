@@ -12,6 +12,7 @@ const status = (over: Partial<NoteStatus> = {}): NoteStatus => ({
   collabOnline: false,
   savingState: 'idle',
   isTrashed: false,
+  readOnly: false,
   ...over
 });
 

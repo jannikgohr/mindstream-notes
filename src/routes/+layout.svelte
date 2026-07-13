@@ -2,7 +2,12 @@
   import '../app.css';
   import { onMount } from 'svelte';
   import { ModeWatcher, mode } from 'mode-watcher';
-  import { getSettingValue, isModified } from '$lib/settings/store.svelte';
+  import {
+    getSettingValue,
+    isModified,
+    setSettingValue
+  } from '$lib/settings/store.svelte';
+  import { authSession, serverTypeForSession } from '$lib/api/auth.svelte';
   import { prefersReducedMotion } from '$lib/reduce-motion.svelte';
   import { applyAccentColor, clearAccentColor } from '$lib/settings/accent';
   import {
@@ -29,7 +34,7 @@
     teardownGlobalShortcuts
   } from '$lib/hotkeys/global.svelte';
   import { initNativeMenuCommands } from '$lib/native-menu.svelte';
-  import { loadProfiles } from '$lib/stores/profiles.svelte';
+  import { loadProfiles, profilesState } from '$lib/stores/profiles.svelte';
   import { installSyncStatusBridge } from '$lib/notifications/sync-status';
 
   let { children } = $props();
@@ -91,6 +96,22 @@
     '5m': 300,
     '15m': 900
   };
+
+  // Repair account.serverType from the live Etebase session. That setting is
+  // vault-scoped in web storage, which can be lost (cleared cache, a fresh
+  // WebView profile) while the on-disk session survives. When that happens the
+  // account panel falls back to its "local-only" default — hiding the signed-in
+  // card + Sync and, because the server-type radios lock while signed in,
+  // leaving no way back. The session's resolved server_url is the source of
+  // truth, so restore the type from it whenever a session exists but the setting
+  // has decayed to local-only. Gated on profilesState.loaded so the vault-scoped
+  // settings are already bound to the right key before we write.
+  $effect(() => {
+    const session = authSession.current;
+    if (!session || !profilesState.loaded) return;
+    if (getSettingValue('account.serverType') !== 'local-only') return;
+    void setSettingValue('account.serverType', serverTypeForSession(session));
+  });
 
   // Re-apply the accent colour whenever the user changes it (or on
   // first mount, since $effect runs once for the initial values). The

@@ -652,7 +652,9 @@
       collabConfigured,
       collabOnline,
       savingState,
-      isTrashed
+      isTrashed,
+      // View-only share scope isn't enforced in the freeform editor yet.
+      readOnly: false
     });
   });
 </script>

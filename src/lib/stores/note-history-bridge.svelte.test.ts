@@ -3,6 +3,7 @@ import {
   bumpNoteHistory,
   clearRestoreUndo,
   getNoteHistory,
+  installNoteHistoryE2EDiagnostics,
   noteHistoryEpoch,
   noteRestoreUndo,
   registerNoteHistory,
@@ -58,5 +59,29 @@ describe('note-history-bridge', () => {
 
     clearRestoreUndo('n4');
     expect(noteRestoreUndo('n4')).toBeNull();
+  });
+
+  it('installs E2E diagnostics for peer count and collab pause control', async () => {
+    const setCollabPaused = vi.fn().mockResolvedValue(undefined);
+    const off = registerNoteHistory('n5', {
+      ...api(),
+      peerCount: () => 2,
+      setCollabPaused
+    });
+    const target: Pick<Window, '__mindstreamE2E'> = {};
+
+    installNoteHistoryE2EDiagnostics(target);
+
+    expect(target.__mindstreamE2E?.notePeerCount('n5')).toBe(2);
+    expect(target.__mindstreamE2E?.notePeerCount('missing')).toBe(0);
+
+    await target.__mindstreamE2E?.setNoteCollabPaused('n5', true);
+    expect(setCollabPaused).toHaveBeenCalledWith(true);
+
+    await expect(
+      target.__mindstreamE2E?.setNoteCollabPaused('missing', false)
+    ).rejects.toThrow('note missing has no collab pause hook');
+
+    off();
   });
 });

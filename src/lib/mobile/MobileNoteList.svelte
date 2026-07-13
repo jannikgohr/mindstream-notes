@@ -9,9 +9,8 @@
    * standard rename / move / delete trio (delete becomes permanent purge
    * inside the trash bucket so users can empty things manually).
    *
-   * "Shared" is a placeholder bucket — there's no per-note shared flag
-   * yet, so it just shows an explanatory empty state. Wire a real filter
-   * in here when collab metadata lands.
+   * Shared folders use the same source filter as desktop so accepted
+   * collection shares appear in the mobile Shared bucket too.
    */
   import {
     Circle,
@@ -47,6 +46,7 @@
   } from '$lib/stores/tree.svelte';
   import { ui } from '$lib/state.svelte';
   import { sortTree } from '$lib/sort';
+  import { nodesForDesktopSource } from '$lib/stores/note-source.svelte';
   import ContextMenu from '$lib/components/ContextMenu.svelte';
   import type { MenuItem } from '$lib/components/context-menu-types';
   import { alert, confirm } from '$lib/components/confirm-dialog.svelte';
@@ -148,18 +148,25 @@
     }
 
     if (view === 'shared') {
-      // No shared-note metadata in the model yet — return empty so the
-      // empty-state copy explains it.
-      return [];
+      const sharedRoots = nodesForDesktopSource(
+        'shared',
+        sortedTree,
+        tree.notesById,
+        tree.collectionsById
+      );
+      return folderId === null
+        ? sharedRoots
+        : childrenOf(folderId, sharedRoots);
     }
 
-    // view === 'home' — skip the trash folder at the root.
-    if (folderId === null) {
-      return sortedTree.filter(
-        (n) => !(n.kind === 'folder' && n.id === TRASH_ID)
-      );
-    }
-    return childrenOf(folderId, sortedTree);
+    // view === 'home' — skip trash and shared-with-me roots.
+    const homeRoots = nodesForDesktopSource(
+      'home',
+      sortedTree,
+      tree.notesById,
+      tree.collectionsById
+    );
+    return folderId === null ? homeRoots : childrenOf(folderId, homeRoots);
   });
 
   // Free-text search lives in the global SearchDialog now (mobile and
@@ -257,7 +264,7 @@
   function emptyStateMessage(): string {
     switch (mobileState.view) {
       case 'shared':
-        return 'Shared notes will appear here once you collaborate with someone.';
+        return 'Shared folders will appear here once you collaborate with someone.';
       case 'favourite':
         return 'Tap the star on a note to add it to your favourites.';
       case 'trash':

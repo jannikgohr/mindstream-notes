@@ -273,10 +273,17 @@ pub fn create(conn: &Connection, input: CreateNote) -> AppResult<Note> {
         } else {
             None
         };
+    // Inherit the parent folder's share scope so a note created inside a shared
+    // folder is routed into that scope's collection (and pulled by recipients)
+    // rather than the vault. Root / vault parent → NULL, i.e. vault-local.
+    let share_scope_id = match input.parent_collection_id.as_deref() {
+        Some(parent) => crate::sharing::collection_scope(conn, parent)?,
+        None => None,
+    };
     conn.execute(
         "INSERT INTO notes(id, parent_collection_id, title, body, position,
-                            created, modified, dirty, note_kind, trashed_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, 1, ?7, ?8)",
+                            created, modified, dirty, note_kind, trashed_at, share_scope_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, 1, ?7, ?8, ?9)",
         params![
             id,
             input.parent_collection_id,
@@ -286,6 +293,7 @@ pub fn create(conn: &Connection, input: CreateNote) -> AppResult<Note> {
             now,
             note_kind,
             trashed_at,
+            share_scope_id,
         ],
     )?;
     load(conn, &id)
@@ -374,6 +382,17 @@ pub fn update(conn: &mut Connection, input: UpdateNote) -> AppResult<Note> {
             parent.as_deref(),
             &now,
         )?;
+        // Re-home the note (and its assets) if the move crossed a share-scope
+        // boundary — same reasoning as the collection move path. A note is
+        // never a share anchor, so no anchor guard is needed here.
+        let new_scope = match parent.as_deref() {
+            Some(parent_id) => crate::sharing::collection_scope(&tx, parent_id)?,
+            None => None,
+        };
+        let old_scope = crate::sharing::note_scope(&tx, &input.id)?;
+        if new_scope != old_scope {
+            crate::sharing::rehome_note_subtree(&tx, &input.id, new_scope.as_deref())?;
+        }
     }
     if let Some(position) = input.position {
         tx.execute(
@@ -1084,5 +1103,138 @@ mod tests {
             .with_conn(|c| Ok(c.query_row("SELECT COUNT(*) FROM assets", [], |r| r.get(0))?))
             .unwrap();
         assert_eq!(any_assets_left, 0, "FK cascade should wipe asset rows");
+    }
+
+    fn note_scope(db: &Db, id: &str) -> Option<String> {
+        db.with_conn(|c| crate::sharing::note_scope(c, id)).unwrap()
+    }
+
+    /// Create a folder already stamped with `scope` (the note paths only read a
+    /// parent's `share_scope_id`, so the full share-root marking isn't needed).
+    fn scoped_folder(db: &Db, name: &str, scope: &str) -> String {
+        let folder = db
+            .with_conn(|c| {
+                create_collection(
+                    c,
+                    CreateCollection {
+                        name: name.into(),
+                        parent_collection_id: None,
+                    },
+                )
+            })
+            .unwrap();
+        db.with_conn(|c| {
+            c.execute(
+                "UPDATE collections SET share_scope_id = ?1 WHERE id = ?2",
+                params![scope, folder.id],
+            )?;
+            Ok::<(), AppError>(())
+        })
+        .unwrap();
+        folder.id
+    }
+
+    fn move_note(db: &Db, id: &str, parent: Option<&str>) {
+        db.with_conn_mut(|c| {
+            update(
+                c,
+                UpdateNote {
+                    id: id.into(),
+                    title: None,
+                    body: None,
+                    parent_collection_id: Some(parent.map(str::to_string)),
+                    position: None,
+                    tags: None,
+                    yrs_state: None,
+                    favourite: None,
+                },
+            )
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn create_note_inherits_parent_share_scope() {
+        let db = open_memory_for_tests();
+        let folder = scoped_folder(&db, "Shared", "scope_1");
+        let scoped = empty_note(&db, Some(folder));
+        let vault = empty_note(&db, None);
+
+        assert_eq!(
+            note_scope(&db, &scoped.summary.id).as_deref(),
+            Some("scope_1")
+        );
+        assert_eq!(note_scope(&db, &vault.summary.id), None);
+    }
+
+    #[test]
+    fn moving_a_note_into_a_share_rehomes_it() {
+        let db = open_memory_for_tests();
+        let folder = scoped_folder(&db, "Shared", "scope_1");
+        let note = empty_note(&db, None);
+        assert_eq!(note_scope(&db, &note.summary.id), None);
+
+        move_note(&db, &note.summary.id, Some(&folder));
+        assert_eq!(
+            note_scope(&db, &note.summary.id).as_deref(),
+            Some("scope_1")
+        );
+    }
+
+    #[test]
+    fn moving_a_note_out_of_a_share_rehomes_note_and_assets_and_tombstones() {
+        let db = open_memory_for_tests();
+        let folder = scoped_folder(&db, "Shared", "scope_1");
+        let note = empty_note(&db, Some(folder));
+        // Simulate a note + asset that were already pushed into the scope
+        // collection, so leaving the scope must tombstone them there.
+        db.with_conn(|c| {
+            c.execute(
+                "UPDATE notes SET etebase_uid = 'scope_note', share_scope_id = 'scope_1' WHERE id = ?1",
+                params![note.summary.id],
+            )?;
+            c.execute(
+                "INSERT INTO assets(id, owning_note_id, mime_type, bytes, size, created, modified, etebase_uid, share_scope_id, dirty)
+                 VALUES ('a1', ?1, 'image/png', x'00', 1, 't', 't', 'scope_asset', 'scope_1', 0)",
+                params![note.summary.id],
+            )?;
+            Ok::<(), AppError>(())
+        })
+        .unwrap();
+
+        move_note(&db, &note.summary.id, None);
+
+        // Both note and asset re-home to the vault (NULL scope) and detach.
+        assert_eq!(note_scope(&db, &note.summary.id), None);
+        let (asset_scope, asset_uid): (Option<String>, Option<String>) = db
+            .with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT share_scope_id, etebase_uid FROM assets WHERE id = 'a1'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(asset_scope, None);
+        assert!(asset_uid.is_none(), "asset must detach from its scope uid");
+
+        // Deletes for the old scope copies are queued against scope_1.
+        let tombstones: Vec<(String, Option<String>)> = db
+            .with_conn(|c| {
+                let mut stmt = c.prepare(
+                    "SELECT etebase_uid, share_scope_id FROM tombstones ORDER BY etebase_uid",
+                )?;
+                let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+                Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+            })
+            .unwrap();
+        assert_eq!(
+            tombstones,
+            vec![
+                ("scope_asset".to_string(), Some("scope_1".to_string())),
+                ("scope_note".to_string(), Some("scope_1".to_string())),
+            ],
+            "leaving a scope must delete the note + asset in that scope"
+        );
     }
 }

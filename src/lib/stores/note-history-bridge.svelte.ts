@@ -32,6 +32,8 @@ export interface NoteHistoryApi {
    * a collab prompt. Returns 0 when synced but alone.
    */
   peerCount?: () => number;
+  /** E2E-only: disconnect/reconnect the live collab provider for this editor. */
+  setCollabPaused?: (paused: boolean) => void | Promise<void>;
 }
 
 const registry = new Map<string, NoteHistoryApi>();
@@ -108,4 +110,36 @@ export function registerNoteHistory(
 
 export function getNoteHistory(noteId: string): NoteHistoryApi | null {
   return registry.get(noteId) ?? null;
+}
+
+declare global {
+  interface Window {
+    __mindstreamE2E?: {
+      notePeerCount(noteId: string): number;
+      setNoteCollabPaused(noteId: string, paused: boolean): Promise<void>;
+    };
+  }
+}
+
+export function installNoteHistoryE2EDiagnostics(
+  target: Pick<Window, '__mindstreamE2E'>
+): void {
+  target.__mindstreamE2E = {
+    notePeerCount(noteId: string): number {
+      return getNoteHistory(noteId)?.peerCount?.() ?? 0;
+    },
+    async setNoteCollabPaused(noteId: string, paused: boolean): Promise<void> {
+      const setPaused = getNoteHistory(noteId)?.setCollabPaused;
+      if (!setPaused)
+        throw new Error(`note ${noteId} has no collab pause hook`);
+      await setPaused(paused);
+    }
+  };
+}
+
+if (
+  typeof window !== 'undefined' &&
+  import.meta.env.VITE_MINDSTREAM_E2E === '1'
+) {
+  installNoteHistoryE2EDiagnostics(window);
 }

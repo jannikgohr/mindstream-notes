@@ -265,6 +265,178 @@ _is_ the restart.
 
 ---
 
+## 4. Collection sharing (multi-account)
+
+Manifest-backed collection sharing (`sharing.rs`, `api/sharing.ts`, the
+notification widgets). Every command here is Etebase network IO — excluded from
+unit coverage — and the meaningful flows need **two distinct accounts** (a
+sender and a recipient), which is a stronger requirement than the §2.6 collab
+matrix's "same account, two devices". The pure pieces (manifest bundling,
+sender/access fallback, `build_share_manifest`, migration 18) are unit-tested in
+`sharing.rs`; everything below is the wire round-trip those tests can't reach.
+
+> A shared folder scope is one `mindstream.share_manifest` collection (its
+> content is the manifest JSON) plus three required part collections —
+> `mindstream.folders`, `mindstream.notes`, `mindstream.assets`. See the
+> `src-tauri/src/sharing.rs` module doc for the model.
+
+### 4.1 Outgoing share creation (P1)
+
+- **Why e2e:** `invite_collection` creates the four scope collections, writes
+  the manifest as the manifest collection's content, resolves the recipient's
+  public key (`fetch_user_profile`), and sends four `invite`s — all live
+  Etebase calls with no unit coverage.
+- **Steps:** account A → right-click a folder → **Share folder…** → enter B's
+  username + a permission → invite → assert the call succeeds, the dialog shows
+  no error, and the local folder is now flagged shared-by-me in the tree.
+- **Proves:** the create-collections → write-manifest → invite chain, and that
+  an unknown recipient username fails **before** any collections are created
+  (pubkey lookup is first).
+
+### 4.2 Incoming share shows as one bundle, not N invites (P1)
+
+- **Why e2e:** `list_incoming_share_bundles` transparently accepts the pending
+  manifest invite, fetches + decodes the manifest, and groups the part invites;
+  the scan then upserts a single `share-bundle` notification. Proving "one
+  notification, not four" is the whole point of the manifest model.
+- **Steps:** after 4.1, account B opens Notifications → assert exactly one
+  `share-bundle` entry showing A's username + the folder name (not separate
+  manifest/folders/notes/assets invites).
+- **Proves:** manifest auto-accept + decode + bundling end to end, and that the
+  referenced part invites are hidden from the raw invite list.
+
+### 4.3 Accept a share bundle (P1)
+
+- **Why e2e:** `accept_share_bundle` accepts every referenced part invite but
+  creates **no** local placeholder — the shared root only materialises on the
+  next scoped sync, which pulls the real folder and (via `project_shared_root`)
+  stamps it shared-with-me so it lands under "shared with me" rather than Home.
+- **Steps:** account B accepts the 4.2 bundle → assert the notification clears →
+  after a sync, assert the shared root folder appears **in B's shared view**
+  (not Home) named after the manifest, and a rescan does not resurrect the
+  bundle.
+- **Proves:** bundled accept + the scope-pull projection that marks the root
+  shared (regression guard for the root landing in Home) + the scan
+  reconciliation that drops accepted bundles.
+- **Watch for:** the root showing in Home with no `shared_role`/`share_id` (the
+  projection didn't run); a read-only recipient whose root or contents stay
+  empty after the first sync.
+
+### 4.4 Decline a share bundle (P2)
+
+- **Why e2e:** `decline_share_bundle` rejects the pending part invites **and**
+  leaves the auto-accepted manifest collection, so the transparent accept is
+  fully undone and the bundle must not reappear on the next scan.
+- **Steps:** send a second share to B → B declines → assert the notification
+  clears, no shared folder is added, and a rescan (which re-lists manifest
+  collections) does **not** bring the bundle back.
+- **Proves:** the leave-manifest cleanup — the regression guard that a declined
+  share doesn't loop back because its manifest collection was still a member.
+
+### 4.5 Incomplete bundle can't be accepted (P2)
+
+- **Why e2e:** a bundle missing a required part (esp. `assets`) is marked
+  `complete: false`; the widget disables **Accept** and shows the incomplete
+  warning. Needs a manifest whose part invite is missing/revoked.
+- **Steps:** construct a share missing one required part invite (e.g. cancel the
+  assets invite server-side after creation) → assert B's `share-bundle`
+  notification shows the incomplete message and Accept is disabled while Decline
+  stays available.
+- **Proves:** the `complete`/`warnings` plumbing from `bundle_incoming_share_invitations`
+  through to the widget's disabled-accept guard.
+
+### 4.6 Non-manifest invitation still surfaces (P3)
+
+- **Steps:** invite B directly to a lone collection whose type isn't part of a
+  manifest scope → assert it shows as a single `collaboration-invite`
+  notification (the legacy widget), independent of the bundle path.
+- **Proves:** `unbundled_invitations` still reach the UI so non-manifest shares
+  aren't silently dropped.
+
+### 4.7 Shared subtree content converges (P1)
+
+- **Why e2e:** scoped sync routing (`sync::scopes`) re-homes a shared folder's
+  subtree into the scope's collections and pulls it on the recipient — a live
+  two-account, real-Etebase round-trip with no unit coverage beyond the
+  `migrate_subtree_into_scope` detach logic.
+- **Steps:** A shares a folder containing notes + an embedded image → B accepts
+  → after a sync, assert B sees the folder's notes and the asset renders → A
+  adds a note (and a sub-folder + note) in the shared folder — no re-invite
+  needed, scope inheritance on create landed — and moves an existing vault note
+  into it → B pulls → assert they all appear. If B has read-write, an edit in B
+  converges back to A.
+- **Proves:** scope-tagged rows migrate out of the vault into the scope
+  collections (owner side) and land on the recipient with assets resolving (no
+  "partial media unavailable" state); items created inside or moved into the
+  shared subtree inherit its `share_scope_id` and sync without a re-invite.
+- **Watch for:** the shared root arriving under B's tree root via orphan-reparent
+  (the sender's parent id doesn't exist on B); a note **moved out** of the shared
+  folder still showing on B (it must be re-homed back to the vault — its scope
+  copy tombstoned); moving the share **root** within the vault losing its scope
+  (the share-anchor guard must keep it); a read-only recipient's local edit
+  looping as a failed scope push.
+
+### 4.8 Offline note edit survives a re-home (P1)
+
+- **Why e2e:** the non-destructive re-home is the reason the tombstone path
+  _detaches_ a dirty row instead of deleting it, and the sync runs in
+  pull → scope → push phases so the detached row is reclaimed by stable `id`
+  before the vault push could resurrect it (`apply_remote_delete` + the phased
+  `run()` in `sync/mod.rs`). The `apply_note_payload` merge and the detach are
+  unit-tested in isolation, but the full "vault tombstone then scope pull in one
+  networked sync, no orphan left behind" round-trip needs two real devices.
+- **Steps:** the owner signs in on device A and device B, both holding folder F.
+  Take A **offline** and edit a note in F (leave it unpushed, `dirty=1`). On B,
+  **Share folder…** F with a second account (this re-homes F into a scope). Bring
+  A back **online** and let it sync.
+- **Proves:** A's offline edit is **merged** into the scope copy (CRDT body
+  merge), not silently dropped; F ends up in the scope on A; and **no orphan
+  vault copy** of the note is left on the server (which would flip-flop the note
+  between vault and scope on every device).
+- **Watch for:** a duplicate note appearing on any device (orphan resurrection —
+  the exact failure the phase ordering prevents); the edit surviving on A but
+  lost on the second account (merge didn't reach the scope push); the note
+  briefly showing with no server identity (`etebase_uid = NULL`) if A is killed
+  mid-sync between the detach and the push — harmless, the next sync re-homes it.
+
+### 4.9 Offline folder rename survives a re-home (P2)
+
+- **Why e2e:** folder metadata is last-write-wins, not a CRDT, so
+  `apply_folder_payload` preserves local name/parent/position when the row is
+  dirty (mirroring the note path) and returns `None` so `repair_folder_parents`
+  can't reattach it from the remote payload. Unit-tested for the single-row
+  decision; the cross-device ordering is not.
+- **Steps:** owner on A + B, both holding folder F. A **offline**, rename F (or a
+  subfolder of F). B **shares** F. A back **online**, sync.
+- **Proves:** A's offline rename is kept (the folder is re-homed into the scope
+  without reverting to the remote name), stays dirty, and pushes the rename into
+  the scope.
+- **Watch for:** the rename reverting to the pre-share name (LWW clobber — the
+  regression this guards); a folder **moved to root offline** during the same
+  window getting reattached under its old parent by the repair pass (the
+  `keep_local_meta → return None` guard is meant to prevent this — worth an
+  explicit case).
+
+### 4.10 Edit-wins-over-delete conflict (P2)
+
+- **Why e2e:** the detach-on-dirty rule also changes the genuine
+  delete-vs-offline-edit conflict from "delete wins" to "edit wins": a locally
+  edited row resurrects rather than being destroyed by a remote tombstone. This
+  is a deliberate cross-device behaviour, only observable with two peers.
+- **Steps:** owner on A + B, same note N (not shared — plain vault). A
+  **offline**, edit N (unpushed). On B, **delete** N and let it sync. Bring A
+  **online**.
+- **Proves:** N is **resurrected** with A's edit and reappears on B after B's
+  next pull (edit wins, no silent loss). A clean (unedited) note deleted on B
+  stays deleted on A (the control case).
+- **Watch for:** the resurrection failing to propagate back to B (A re-created it
+  with a new uid; B must pull it as a new note); **signatures** are intentionally
+  _not_ covered by edit-wins — they still hard-delete on a tombstone
+  (`apply_signature`), so don't expect a deleted-but-edited signature to
+  resurrect.
+
+---
+
 ## Implementation notes
 
 - **Harness:** these need the real app, so drive the packaged Tauri binary
@@ -273,9 +445,14 @@ _is_ the restart.
 - **Native dialogs:** file/folder pickers (export, import, open-folder) must
   be stubbed or pre-seeded — WebDriver can't click an OS dialog. Prefer a test
   hook that injects the path over driving the native widget.
-- **Network flows (2.5, 3.4):** stand up a disposable Etebase server (the
+- **Network flows (§2.6, §3.5, §4):** stand up a disposable Etebase server (the
   `backend/` compose stack) or a mock, and tag these tests so they can be
   skipped when no server is available.
+- **Two-account flows (§4 sharing):** unlike the §2.6 collab matrix (one account
+  on two devices), the sharing flows need **two distinct Etebase users** — a
+  sender and a recipient — plus a way to script an invite between them. See
+  [e2e-strategy.md](e2e-strategy.md) §2.1 for the account-provisioning
+  requirement this adds.
 - **Restart flows (§3):** the test harness must be able to quit and relaunch
   the same data directory. Set the `MINDSTREAM_PROFILE_DIR` env var to a temp
   directory per test so runs are isolated and a restart picks up the same

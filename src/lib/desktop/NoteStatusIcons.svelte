@@ -14,6 +14,7 @@
   import {
     AlertCircle,
     Check,
+    Eye,
     Loader2,
     Pencil,
     Trash2,
@@ -68,6 +69,16 @@
       aria-label={tUi('editor.status.readonly')}
     >
       <Trash2 class="size-3.5" aria-hidden="true" />
+    </span>
+  {:else if status.readOnly}
+    <!-- View-only shared scope: same "don't flicker through Saving"
+         reasoning as trash, but the affordance is an eye, not a bin. -->
+    <span
+      class="inline-flex"
+      use:tooltip={tUi('editor.status.viewonly')}
+      aria-label={tUi('editor.status.viewonly')}
+    >
+      <Eye class="size-3.5" aria-hidden="true" />
     </span>
   {:else if status.savingState === 'saving'}
     <span

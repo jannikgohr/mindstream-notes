@@ -5,6 +5,7 @@
   import { shortcutHelp } from '$lib/hotkeys/help.svelte';
   import { searchDialog } from '$lib/search/store.svelte';
   import { updaterProgress } from '$lib/updater/progress.svelte';
+  import { shareDialog } from './share-dialog.svelte';
 
   let ConfirmDialog = $state<any | null>(null);
   let ExportResultDialog = $state<any | null>(null);
@@ -12,6 +13,7 @@
   let UpdaterProgressDialog = $state<any | null>(null);
   let ShortcutHelpDialog = $state<any | null>(null);
   let SearchDialog = $state<any | null>(null);
+  let ShareCollectionDialog = $state<any | null>(null);
 
   let confirmToken = 0;
   let exportToken = 0;
@@ -19,6 +21,7 @@
   let updaterToken = 0;
   let shortcutToken = 0;
   let searchToken = 0;
+  let shareToken = 0;
 
   $effect(() => {
     const active = confirmQueue.items.length > 0;
@@ -103,6 +106,20 @@
       }
     });
   });
+
+  $effect(() => {
+    const active = shareDialog.collectionId !== null;
+    const token = ++shareToken;
+    if (!active) {
+      ShareCollectionDialog = null;
+      return;
+    }
+    void import('./ShareCollectionDialog.svelte').then((mod) => {
+      if (token === shareToken && shareDialog.collectionId !== null) {
+        ShareCollectionDialog = mod.default;
+      }
+    });
+  });
 </script>
 
 {#if ConfirmDialog}
@@ -122,4 +139,7 @@
 {/if}
 {#if SearchDialog}
   <SearchDialog />
+{/if}
+{#if ShareCollectionDialog}
+  <ShareCollectionDialog />
 {/if}

@@ -71,7 +71,7 @@ export function collectionIsSharedRoot(
   collectionsById: Record<string, Collection>
 ): boolean {
   return (
-    isSharedCollection(collection) &&
+    collectionIsSharedWithMe(collection) &&
     !collectionHasSharedAncestor(collection, collectionsById)
   );
 }
@@ -86,7 +86,34 @@ export function collectionIsSharedOrUnderShared(
     seen.add(current);
     const collection = collectionsById[current];
     if (!collection) return false;
-    if (isSharedCollection(collection)) return true;
+    if (collectionIsSharedWithMe(collection)) return true;
+    current = collection.parent_collection_id;
+  }
+  return false;
+}
+
+/**
+ * True when the folder at `collectionId` sits inside (or is) a folder shared
+ * *with* the current user at read-only access. The share role is stamped only
+ * on the shared root — descendant folders pulled into the scope carry just
+ * placement metadata — so we walk ancestors to the first shared-with-me folder
+ * and read its `shared_role`. Editors use this to lock input in a view-only
+ * scope, mirroring the trash lock. A shared-by-me folder is never read-only for
+ * its owner (`collectionIsSharedWithMe` already excludes those).
+ */
+export function collectionScopeIsReadOnly(
+  collectionId: string | null,
+  collectionsById: Record<string, Collection>
+): boolean {
+  let current = collectionId;
+  const seen = new Set<string>();
+  while (current && !seen.has(current)) {
+    seen.add(current);
+    const collection = collectionsById[current];
+    if (!collection) return false;
+    if (collectionIsSharedWithMe(collection)) {
+      return collection.shared_role === 'read_only';
+    }
     current = collection.parent_collection_id;
   }
   return false;
@@ -112,25 +139,31 @@ function collectionHasSharedAncestor(
     seen.add(parent);
     const current = collectionsById[parent];
     if (!current) return false;
-    if (isSharedCollection(current)) return true;
+    if (collectionIsSharedWithMe(current)) return true;
     parent = current.parent_collection_id;
   }
   return false;
 }
 
-function isSharedCollection(collection: Collection): boolean {
+export function collectionIsSharedWithMe(collection: Collection): boolean {
   const meta = collection as Collection & {
     shared?: boolean;
     is_shared?: boolean;
     shared_role?: string | null;
     share_id?: string | null;
+    shared_by_me?: boolean | null;
   };
+  if (meta.shared_by_me === true) return false;
   return (
     meta.shared === true ||
     meta.is_shared === true ||
     !!meta.shared_role ||
     !!meta.share_id
   );
+}
+
+export function collectionIsSharedByMe(collection: Collection): boolean {
+  return collection.shared_by_me === true;
 }
 
 export function nodesForDesktopSource(

@@ -36,6 +36,7 @@ pub mod pdf_text;
 pub mod profiles;
 pub mod search;
 pub mod serde_helpers;
+pub mod sharing;
 pub mod signatures;
 pub mod sync;
 pub mod system;
@@ -388,6 +389,21 @@ pub fn run() {
             sync::sync_now,
             sync::note_room_info,
             sync::scheduler::set_sync_schedule,
+            // Sharing
+            sharing::list_collection_invitations,
+            sharing::list_incoming_share_bundles,
+            sharing::accept_share_bundle,
+            sharing::decline_share_bundle,
+            sharing::accept_collection_invitation,
+            sharing::reject_collection_invitation,
+            sharing::get_collection_share_state,
+            sharing::invite_collection,
+            #[cfg(feature = "e2e-data-dir")]
+            sharing::e2e_create_standalone_collection_invite,
+            #[cfg(feature = "e2e-data-dir")]
+            sharing::e2e_create_incomplete_share_bundle,
+            #[cfg(feature = "e2e-data-dir")]
+            sharing::e2e_accept_share_manifest_only,
             // One-shot recovery for items the pre-fix etebase encoder
             // bug left corrupt on the server. Invoke from dev tools.
             sync::repair::audit_corrupt_remote_items,
@@ -431,6 +447,10 @@ pub fn run() {
             desktop_settings::get_desktop_language,
             #[cfg(desktop)]
             desktop_settings::set_desktop_language,
+            #[cfg(desktop)]
+            desktop_settings::get_desktop_theme_mode,
+            #[cfg(desktop)]
+            desktop_settings::set_desktop_theme_mode,
             // Ink note bridge — save + Android live-ink overlay control
             // plane. The overlay commands are no-ops on desktop.
             drawing::drawing_save_ink_state,

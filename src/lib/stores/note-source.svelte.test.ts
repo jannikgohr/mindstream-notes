@@ -5,8 +5,10 @@ import {
   childrenOf,
   collectionIsSharedOrUnderShared,
   collectionIsSharedRoot,
+  collectionIsSharedWithMe,
   collectionIsUnder,
   collectionIsUnderTrash,
+  collectionScopeIsReadOnly,
   noteIsUnderShared,
   noteIsUnderTrash,
   nodesForDesktopSource
@@ -17,6 +19,7 @@ type SharedMeta = {
   is_shared?: boolean;
   shared_role?: string | null;
   share_id?: string | null;
+  shared_by_me?: boolean;
 };
 
 const collection = (
@@ -174,6 +177,15 @@ describe('shared detection', () => {
     }
   });
 
+  it('does not treat collections shared by me as shared-with-me roots', () => {
+    const c = collection('mine', null, {
+      share_id: 'remote-coll',
+      shared_by_me: true
+    });
+    expect(collectionIsSharedWithMe(c)).toBe(false);
+    expect(collectionIsSharedRoot(c, byId([c]))).toBe(false);
+  });
+
   it('collectionIsSharedOrUnderShared walks ancestors', () => {
     const root = collection('root', null, { shared: true });
     const child = collection('child', 'root');
@@ -187,6 +199,44 @@ describe('shared detection', () => {
     const cols = byId([root]);
     expect(noteIsUnderShared(note('n', 'root'), cols)).toBe(true);
     expect(noteIsUnderShared(note('n', null), cols)).toBe(false);
+  });
+});
+
+describe('collectionScopeIsReadOnly', () => {
+  it('is true for a note under a read-only shared root', () => {
+    const root = collection('root', null, { shared_role: 'read_only' });
+    const child = collection('child', 'root');
+    const cols = byId([root, child]);
+    expect(collectionScopeIsReadOnly('child', cols)).toBe(true);
+    expect(collectionScopeIsReadOnly('root', cols)).toBe(true);
+  });
+
+  it('is false when the nearest shared root grants write access', () => {
+    const root = collection('root', null, { shared_role: 'read_write' });
+    const child = collection('child', 'root');
+    const cols = byId([root, child]);
+    expect(collectionScopeIsReadOnly('child', cols)).toBe(false);
+  });
+
+  it('ignores a folder shared by me even if it is read_only downstream', () => {
+    const mine = collection('mine', null, {
+      share_id: 'remote-coll',
+      shared_by_me: true,
+      shared_role: 'read_only'
+    });
+    const cols = byId([mine]);
+    expect(collectionScopeIsReadOnly('mine', cols)).toBe(false);
+  });
+
+  it('is false for a personal note and for null', () => {
+    const cols = byId([collection('personal')]);
+    expect(collectionScopeIsReadOnly('personal', cols)).toBe(false);
+    expect(collectionScopeIsReadOnly(null, cols)).toBe(false);
+  });
+
+  it('terminates on a cycle instead of looping forever', () => {
+    const cyclic = byId([collection('a', 'b'), collection('b', 'a')]);
+    expect(collectionScopeIsReadOnly('a', cyclic)).toBe(false);
   });
 });
 
@@ -215,12 +265,79 @@ describe('nodesForDesktopSource', () => {
 
   it('shared returns only shared root folders', () => {
     const cols = byId([
-      collection('shared', null, { shared: true }),
+      collection('shared', null, { shared_role: 'read_write' }),
+      collection('sharedByMe', null, {
+        share_id: 'remote-coll',
+        shared_by_me: true
+      }),
       collection('personal')
     ]);
-    const tree = [folderNode('shared'), folderNode('personal')];
+    const tree = [
+      folderNode('shared'),
+      folderNode('sharedByMe'),
+      folderNode('personal')
+    ];
     const out = nodesForDesktopSource('shared', tree, {}, cols);
     expect(out.map((n) => n.id)).toEqual(['shared']);
+  });
+
+  it('shared finds a shared root nested under a personal folder', () => {
+    const cols = byId([
+      collection('parent'),
+      collection('sharedChild', 'parent', { shared_role: 'read_write' })
+    ]);
+    const tree = [
+      folderNode('parent', [folderNode('sharedChild', [], 'parent')])
+    ];
+    const out = nodesForDesktopSource('shared', tree, {}, cols);
+    expect(out.map((n) => n.id)).toEqual(['sharedChild']);
+  });
+
+  it('shared excludes a shared root that lives under trash', () => {
+    const cols = byId([
+      collection(TRASH_ID),
+      collection('sharedDeleted', TRASH_ID, { shared_role: 'read_write' })
+    ]);
+    const tree = [
+      folderNode(TRASH_ID, [folderNode('sharedDeleted', [], TRASH_ID)])
+    ];
+    const out = nodesForDesktopSource('shared', tree, {}, cols);
+    expect(out.map((n) => n.id)).toEqual([]);
+  });
+
+  it('home hides shared-with-me roots but keeps personal and shared-by-me folders', () => {
+    const cols = byId([
+      collection('sharedWithMe', null, { shared_role: 'read_write' }),
+      collection('mine', null, { share_id: 'remote-coll', shared_by_me: true }),
+      collection('personal')
+    ]);
+    const tree = [
+      folderNode('sharedWithMe'),
+      folderNode('mine'),
+      folderNode('personal')
+    ];
+    const out = nodesForDesktopSource('home', tree, {}, cols);
+    expect(out.map((n) => n.id)).toEqual(['mine', 'personal']);
+  });
+
+  it('home prunes a shared root nested inside a personal folder', () => {
+    const cols = byId([
+      collection('parent'),
+      collection('sharedChild', 'parent', { shared_role: 'read_write' }),
+      collection('plainChild', 'parent')
+    ]);
+    const tree = [
+      folderNode('parent', [
+        folderNode('sharedChild', [], 'parent'),
+        folderNode('plainChild', [], 'parent')
+      ])
+    ];
+    const out = nodesForDesktopSource('home', tree, {}, cols);
+    expect(out.map((n) => n.id)).toEqual(['parent']);
+    const parent = out[0];
+    const childIds =
+      parent.kind === 'folder' ? parent.children.map((c) => c.id) : [];
+    expect(childIds).toEqual(['plainChild']);
   });
 
   it('trash surfaces folders under trash plus soft-deleted notes', () => {

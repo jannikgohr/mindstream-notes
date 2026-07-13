@@ -108,11 +108,17 @@
     })();
   }
 
-  // Reset the detail view when the active note changes (but not on a capture,
-  // so a version landing while you inspect a diff doesn't yank you out).
+  // Reset the inspection views when the active note actually changes — but not
+  // on a mere reactive re-run. A background loadTree (autosave/sync) replaces
+  // tree.notesById wholesale, which re-fires this effect even though noteId is
+  // unchanged; without the guard that would wipe an open compare modal / detail
+  // view mid-inspection (the very thing the "not on a capture" note intends to
+  // avoid). Mirrors the lastUndoNoteId guard below.
+  let lastResetNoteId: string | null = null;
   $effect(() => {
-    void noteId;
-    void noteKind;
+    const id = noteId;
+    if (lastResetNoteId === id) return;
+    lastResetNoteId = id;
     detail = null;
     modal = null;
     showAllVersions = false;
