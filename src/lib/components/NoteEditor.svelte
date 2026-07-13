@@ -171,7 +171,14 @@
   // read the live markdown without going through the listener plugin —
   // see the long comment around the yDoc 'update' hook below.
   let getMarkdown: (() => string) | null = null;
-  let yDocUpdateHandler: (() => void) | null = null;
+  let yDocUpdateHandler:
+    | ((update: Uint8Array, origin: unknown) => void)
+    | null = null;
+  /** Transaction origin tag for a yrs_state re-applied by handleSyncCompleted.
+   *  That state was just read from SQLite, so it's already persisted — the
+   *  update handler uses this to skip the redundant re-save (which would only
+   *  re-mark the row dirty and re-push it). */
+  const REMOTE_SYNC_ORIGIN = Symbol('mindstream:sync-completed-merge');
 
   // --- Note history (local, automatic versioning) ---------------------------
   // A version is captured after the user pauses editing (idle debounce), once
@@ -419,17 +426,27 @@
       });
 
       // Hook yDoc updates AFTER bind/applyTemplate/connect so the initial
-      // fragment population doesn't trip a phantom save. From here on, every
-      // doc mutation — whether a local keystroke (via y-prosemirror's
-      // ySyncPlugin) or a remote edit applied by the CollabProvider —
-      // schedules a debounced save. We don't go through the listener
-      // plugin's `markdownUpdated` because it filters out transactions with
-      // `addToHistory === false`, which is exactly what y-prosemirror sets
-      // on remote-applied syncs — i.e. peer edits would update the visible
-      // editor but never reach SQLite until the local user typed.
-      yDocUpdateHandler = () => {
+      // fragment population doesn't trip a phantom save. From here on, a doc
+      // mutation — a local keystroke (via y-prosemirror's ySyncPlugin) or a
+      // peer edit applied by the CollabProvider — schedules a debounced save.
+      // The one exception is a state re-applied by handleSyncCompleted
+      // (REMOTE_SYNC_ORIGIN): it's already on disk, so it skips the save (see
+      // below). We don't go through the listener plugin's `markdownUpdated`
+      // because it filters out transactions with `addToHistory === false`,
+      // which is exactly what y-prosemirror sets on remote-applied syncs — i.e.
+      // peer edits would update the visible editor but never reach SQLite until
+      // the local user typed.
+      yDocUpdateHandler = (_update, origin) => {
         if (!saveReady) return;
-        scheduleSave();
+        // handleSyncCompleted re-applies the note's freshly-pulled yrs_state to
+        // keep the open editor's live doc current. That state was just read
+        // from SQLite, so it's already persisted — re-saving it only re-marks
+        // the row dirty and re-pushes it, ping-ponging with the peer (and
+        // amplifying any transient divergence into duplicated content under a
+        // slow/lagging sync). Skip the save for that origin; the doc and DB
+        // already agree. Peer edits arriving over the live relay carry a
+        // different origin and still save, so they persist locally as before.
+        if (origin !== REMOTE_SYNC_ORIGIN) scheduleSave();
         scheduleHistoryCapture();
       };
       localYDoc.on('update', yDocUpdateHandler);
@@ -597,7 +614,14 @@
       try {
         const fresh = await loadNote(noteId);
         if (yDoc && fresh.yrs_state.length > 0) {
-          Y.applyUpdate(yDoc, new Uint8Array(fresh.yrs_state));
+          // Tag the origin so yDocUpdateHandler skips the redundant re-save:
+          // these bytes came straight from SQLite, so the row is already
+          // up to date and pushing it again would only ping-pong with the peer.
+          Y.applyUpdate(
+            yDoc,
+            new Uint8Array(fresh.yrs_state),
+            REMOTE_SYNC_ORIGIN
+          );
         }
       } catch (err) {
         console.warn('[NoteEditor] sync-completed note merge failed', err);

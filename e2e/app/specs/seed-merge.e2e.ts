@@ -43,6 +43,7 @@ const SEED_SPRINT = 'seed_sprint';
 const SEED_IDEAS = 'seed_ideas';
 const SPRINT_CANARY = 'Carry-over from last sprint';
 const IDEAS_CANARY = 'Backlinks panel';
+const WELCOME_CANARY = 'local-first';
 
 async function noteBody(
   client: WebdriverIO.Browser,
@@ -202,13 +203,50 @@ describe('T4 seeded-note convergence (same account, two devices)', function () {
     ).toBe(1);
   });
 
-  // Both devices editing the SAME seed through the LIVE markdown editor and
-  // converging via sequential sync is blocked by a separate, pre-existing bug:
-  // with the note open on both, handleSyncCompleted re-applies each pulled
-  // update into the live y-prosemirror doc and re-saves, which snowballs into
-  // dozens of random-client rewrites (the seed body ends up duplicated N times)
-  // — independent of the seed origin (the two SAVED states still merge to a
-  // single copy; verified by the JS unit test). Pending a fix to that
-  // live-editor + sequential-sync feedback loop.
-  it.skip('both devices editing the same seed in the live editor converge without duplication', () => {});
+  it('both devices editing the same seed in the live editor converge without duplication', async () => {
+    const markerA = `LIVEEDITA${Date.now()}`;
+    const markerB = `LIVEEDITB${Date.now()}`;
+
+    await A.click('Welcome');
+    await browserA.$('.ProseMirror').waitForDisplayed({ timeout: 30_000 });
+    await A.insertText(browserA.$('.ProseMirror'), ` ${markerA}`);
+    await browserA.waitUntil(
+      async () => (await noteBody(browserA, 'seed_welcome')).includes(markerA),
+      { timeout: 30_000, timeoutMsg: 'A live edit did not autosave' }
+    );
+
+    await B.click('Welcome');
+    await browserB.$('.ProseMirror').waitForDisplayed({ timeout: 30_000 });
+    await B.insertText(browserB.$('.ProseMirror'), ` ${markerB}`);
+    await browserB.waitUntil(
+      async () => (await noteBody(browserB, 'seed_welcome')).includes(markerB),
+      { timeout: 30_000, timeoutMsg: 'B live edit did not autosave' }
+    );
+
+    // Drive several sync rounds with BOTH editors still open — the live-collab
+    // path (handleSyncCompleted re-applying each pulled state) must converge
+    // both markers onto both devices while the seed body stays a single copy.
+    // Re-applying an already-persisted state must not re-push it, or a slow sync
+    // would ping-pong the two docs into duplicated content.
+    const converged = await syncUntil(async () => {
+      const a = await noteBody(browserA, 'seed_welcome');
+      const b = await noteBody(browserB, 'seed_welcome');
+      return (
+        a.includes(markerA) &&
+        a.includes(markerB) &&
+        b.includes(markerA) &&
+        b.includes(markerB)
+      );
+    });
+    expect(converged).toBe(true);
+
+    const finalA = await noteBody(browserA, 'seed_welcome');
+    const finalB = await noteBody(browserB, 'seed_welcome');
+    expect(countOccurrences(finalA, WELCOME_CANARY)).toBe(1);
+    expect(countOccurrences(finalB, WELCOME_CANARY)).toBe(1);
+    expect(finalA).toContain(markerA);
+    expect(finalA).toContain(markerB);
+    expect(finalB).toContain(markerA);
+    expect(finalB).toContain(markerB);
+  });
 });
