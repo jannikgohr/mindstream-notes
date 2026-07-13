@@ -22,18 +22,65 @@ import {
 declare const browserA: WebdriverIO.Browser;
 declare const browserB: WebdriverIO.Browser;
 
+declare global {
+  interface Window {
+    __mindstreamE2E?: {
+      notePeerCount(noteId: string): number;
+    };
+  }
+}
+
+interface NoteSummary {
+  id: string;
+  title: string;
+}
+
+async function listNotes(client: WebdriverIO.Browser): Promise<NoteSummary[]> {
+  return client.execute(async () => {
+    const tauri = window as unknown as {
+      __TAURI_INTERNALS__?: {
+        invoke?: <R>(
+          command: string,
+          args?: Record<string, unknown>
+        ) => Promise<R>;
+      };
+    };
+    const invoke = tauri.__TAURI_INTERNALS__?.invoke;
+    if (!invoke) throw new Error('Tauri invoke is not exposed in WebView');
+    return invoke<NoteSummary[]>('list_notes', { includeTrashed: false });
+  });
+}
+
+async function findNoteId(
+  client: WebdriverIO.Browser,
+  title: string
+): Promise<string> {
+  const notes = await listNotes(client);
+  const note = notes.find((candidate) => candidate.title === title);
+  if (!note) throw new Error(`note not found: ${title}`);
+  return note.id;
+}
+
+async function notePeerCount(
+  client: WebdriverIO.Browser,
+  noteId: string
+): Promise<number> {
+  return client.execute((id: string) => {
+    const e2e = window.__mindstreamE2E;
+    if (!e2e) throw new Error('missing e2e diagnostics');
+    return e2e.notePeerCount(id);
+  }, noteId);
+}
+
 describe('T4 collaboration matrix', function () {
   let A: ClientHelpers;
   let B: ClientHelpers;
   let noteTitle: string;
   let baselineText: string;
+  let noteId: string;
 
   before(async function () {
     requireBackendE2E(this);
-    // The packaged WebKit harness does not reliably establish a bidirectional
-    // Yjs live room yet. Keep the whole matrix pending so setup cannot fail a
-    // run that has no active assertions.
-    this.skip();
 
     await assertBackendReady();
 
@@ -66,18 +113,21 @@ describe('T4 collaboration matrix', function () {
     await syncClient(browserB);
 
     await B.treeItem(noteTitle).waitForDisplayed({ timeout: 30_000 });
+    noteId = await findNoteId(browserA, noteTitle);
     await Promise.all([A.click(noteTitle), B.click(noteTitle)]);
     await expect(browserB.$('.ProseMirror')).toHaveText(
       expect.stringContaining(baselineText)
     );
+    await browserA.waitUntil(
+      async () => (await notePeerCount(browserA, noteId)) > 0,
+      {
+        timeout: 60_000,
+        timeoutMsg: 'browserA did not observe browserB as a live peer'
+      }
+    );
   });
 
   it('edit in A propagates to B', async function () {
-    // The packaged WebKit harness does not reliably establish bidirectional
-    // Yjs live propagation yet. The sequential sync path is covered in
-    // sync-history; keep this pending until there is a deterministic relay hook.
-    this.skip();
-
     const liveText = ` live edit ${Date.now()}`;
 
     await A.insertText(browserA.$('.ProseMirror'), liveText);
