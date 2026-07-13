@@ -77,3 +77,65 @@ export async function scanForUpdateNotifications(force = false): Promise<void> {
     notificationState.updateScanPending = false;
   }
 }
+
+export async function scanForCollectionInviteNotifications(): Promise<void> {
+  if (!isTauri()) return;
+  try {
+    const { listIncomingShareBundles } = await import('$lib/api/sharing');
+    const { bundles, unbundled_invitations } = await listIncomingShareBundles();
+
+    // Manifest-backed shares surface as a single bundle notification; any
+    // invitation that isn't part of a manifest scope still shows as a lone
+    // collaboration-invite. Reconcile both kinds against what's live so
+    // accepted/declined ones disappear.
+    const liveBundleIds = new Set(
+      bundles.map((bundle) => `share-bundle:${bundle.manifest_collection_uid}`)
+    );
+    const liveInviteIds = new Set(
+      unbundled_invitations.map(
+        (invitation) => `collaboration-invite:${invitation.id}`
+      )
+    );
+    notificationState.items = notificationState.items.filter((item) => {
+      if (item.kind === 'share-bundle') return liveBundleIds.has(item.id);
+      if (item.kind === 'collaboration-invite')
+        return liveInviteIds.has(item.id);
+      return true;
+    });
+
+    for (const bundle of bundles) {
+      upsertNotification({
+        id: `share-bundle:${bundle.manifest_collection_uid}`,
+        kind: 'share-bundle',
+        widgetType: 'share-bundle',
+        createdAt: Date.now(),
+        data: {
+          manifestCollectionUid: bundle.manifest_collection_uid,
+          name: bundle.name,
+          pending: bundle.pending,
+          senderUsername: bundle.sender_username,
+          accessLevel: bundle.access_level,
+          complete: bundle.complete,
+          warnings: bundle.warnings
+        }
+      });
+    }
+
+    for (const invitation of unbundled_invitations) {
+      upsertNotification({
+        id: `collaboration-invite:${invitation.id}`,
+        kind: 'collaboration-invite',
+        widgetType: 'collaboration-invite',
+        createdAt: Date.now(),
+        data: {
+          invitationId: invitation.id,
+          senderUsername: invitation.sender_username,
+          collectionUid: invitation.collection_uid,
+          accessLevel: invitation.access_level
+        }
+      });
+    }
+  } catch (err) {
+    console.debug('[notifications] collection invite scan failed', err);
+  }
+}

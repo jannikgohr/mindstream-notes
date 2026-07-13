@@ -17,6 +17,7 @@
     type VersionAction
   } from '$lib/api';
   import { tree } from '$lib/stores/tree.svelte';
+  import { collectionScopeIsReadOnly } from '$lib/stores/note-source.svelte';
   import {
     bumpNoteHistory,
     registerNoteHistory
@@ -35,6 +36,7 @@
   } from '$lib/assets/bridge';
   import { listen } from '$lib/api/events';
   import { buildCrepe } from '$lib/editor/crepe-setup';
+  import { seedDeterministicTemplate } from '$lib/editor/seed-template';
   import { ensureDropIndicatorAlignment } from '$lib/editor/drop-indicator-align';
   import { otherPeerCount } from '$lib/editor/awareness-presence';
   import { pickCursorColor } from '$lib/editor/cursor-color';
@@ -55,6 +57,7 @@
   import EditorToolbar from './editor-toolbar/EditorToolbar.svelte';
   import MobileEditorToolbar from './editor-toolbar/MobileEditorToolbar.svelte';
   import TrashBanner from './note-editor/TrashBanner.svelte';
+  import ViewOnlyBanner from './note-editor/ViewOnlyBanner.svelte';
   import WikilinkMenu from './note-editor/WikilinkMenu.svelte';
 
   interface Props {
@@ -168,7 +171,14 @@
   // read the live markdown without going through the listener plugin —
   // see the long comment around the yDoc 'update' hook below.
   let getMarkdown: (() => string) | null = null;
-  let yDocUpdateHandler: (() => void) | null = null;
+  let yDocUpdateHandler:
+    | ((update: Uint8Array, origin: unknown) => void)
+    | null = null;
+  /** Transaction origin tag for a yrs_state re-applied by handleSyncCompleted.
+   *  That state was just read from SQLite, so it's already persisted — the
+   *  update handler uses this to skip the redundant re-save (which would only
+   *  re-mark the row dirty and re-push it). */
+  const REMOTE_SYNC_ORIGIN = Symbol('mindstream:sync-completed-merge');
 
   // --- Note history (local, automatic versioning) ---------------------------
   // A version is captured after the user pauses editing (idle debounce), once
@@ -233,6 +243,26 @@
     if (n.trashed === true) return true;
     return ancestorIsTrash(n.parent_collection_id);
   });
+
+  // The note sits in a folder shared *with* this user at read-only access.
+  // Like `isTrashed`, this locks the editor — but for a different reason and
+  // with a different (neutral) banner. Gated on tree.ready to avoid flashing
+  // the banner before the initial tree hydration resolves the share role.
+  const isReadOnlyScope = $derived.by(() => {
+    if (!tree.ready) return false;
+    const n = tree.notesById[noteId];
+    if (!n) return false;
+    return collectionScopeIsReadOnly(
+      n.parent_collection_id,
+      tree.collectionsById
+    );
+  });
+
+  // Anything that should disable editing. Trashed keeps its own banner and save
+  // semantics; the read-only scope reuses the same input lock (setReadonly,
+  // hidden toolbar, no replace) so a viewer can't type into content they can't
+  // push.
+  const isReadOnly = $derived(isTrashed || isReadOnlyScope);
 
   onMount(async () => {
     if (!host) return;
@@ -379,8 +409,14 @@
         cs.bindDoc(yDoc!);
         if (awareness) cs.setAwareness(awareness);
         if (!hydratedFragment) {
-          // Empty doc → seed the fragment from the markdown body.
-          cs.applyTemplate(note.body);
+          // Empty doc → seed the fragment from the markdown body. Use a
+          // DETERMINISTIC origin (fixed client id) instead of cs.applyTemplate,
+          // whose throwaway doc gets a random client id: seeded/demo notes are
+          // created independently on every device, so a random origin makes a
+          // merge stack both copies and duplicate the body. A shared origin
+          // collapses to one; live edits still diverge on the live doc's own
+          // client id. See $lib/editor/seed-template.
+          seedDeterministicTemplate(ctx, yDoc!, note.body);
         }
         cs.connect();
 
@@ -390,17 +426,27 @@
       });
 
       // Hook yDoc updates AFTER bind/applyTemplate/connect so the initial
-      // fragment population doesn't trip a phantom save. From here on, every
-      // doc mutation — whether a local keystroke (via y-prosemirror's
-      // ySyncPlugin) or a remote edit applied by the CollabProvider —
-      // schedules a debounced save. We don't go through the listener
-      // plugin's `markdownUpdated` because it filters out transactions with
-      // `addToHistory === false`, which is exactly what y-prosemirror sets
-      // on remote-applied syncs — i.e. peer edits would update the visible
-      // editor but never reach SQLite until the local user typed.
-      yDocUpdateHandler = () => {
+      // fragment population doesn't trip a phantom save. From here on, a doc
+      // mutation — a local keystroke (via y-prosemirror's ySyncPlugin) or a
+      // peer edit applied by the CollabProvider — schedules a debounced save.
+      // The one exception is a state re-applied by handleSyncCompleted
+      // (REMOTE_SYNC_ORIGIN): it's already on disk, so it skips the save (see
+      // below). We don't go through the listener plugin's `markdownUpdated`
+      // because it filters out transactions with `addToHistory === false`,
+      // which is exactly what y-prosemirror sets on remote-applied syncs — i.e.
+      // peer edits would update the visible editor but never reach SQLite until
+      // the local user typed.
+      yDocUpdateHandler = (_update, origin) => {
         if (!saveReady) return;
-        scheduleSave();
+        // handleSyncCompleted re-applies the note's freshly-pulled yrs_state to
+        // keep the open editor's live doc current. That state was just read
+        // from SQLite, so it's already persisted — re-saving it only re-marks
+        // the row dirty and re-pushes it, ping-ponging with the peer (and
+        // amplifying any transient divergence into duplicated content under a
+        // slow/lagging sync). Skip the save for that origin; the doc and DB
+        // already agree. Peer edits arriving over the live relay carry a
+        // different origin and still save, so they persist locally as before.
+        if (origin !== REMOTE_SYNC_ORIGIN) scheduleSave();
         scheduleHistoryCapture();
       };
       localYDoc.on('update', yDocUpdateHandler);
@@ -459,7 +505,8 @@
         restoreSnapshot: (markdown) => applyMarkdownTemplate(markdown),
         currentSnapshot: () => (getMarkdown ? getMarkdown() : ''),
         snapshotNow: () => snapshotHistoryNow(),
-        peerCount: () => otherPeerCount(awareness)
+        peerCount: () => otherPeerCount(awareness),
+        setCollabPaused: (paused) => setE2eCollabPaused(paused)
       });
 
       // Snapshot a baseline on open so a note that's never edited still starts
@@ -489,6 +536,7 @@
   // repeat for no reason.
   let lastSeenPushed = false;
   let collabReady = false;
+  let e2eCollabPaused = false;
 
   $effect(() => {
     const pushed = tree.notesById[noteId]?.pushed ?? false;
@@ -511,6 +559,7 @@
       collabOnline = false;
     }
     collabConfigured = false;
+    if (e2eCollabPaused) return;
 
     // Derived from the single account.serverUrl setting: nginx routes
     // /yjs to the yjs-relay upstream (see backend/nginx/nginx.conf).
@@ -537,6 +586,20 @@
     } catch (err) {
       console.debug('[NoteEditor] collab provider init failed', err);
     }
+  }
+
+  async function setE2eCollabPaused(paused: boolean): Promise<void> {
+    e2eCollabPaused = paused;
+    if (paused) {
+      if (provider) {
+        provider.destroy();
+        provider = null;
+      }
+      collabOnline = false;
+      collabConfigured = false;
+      return;
+    }
+    await setupCollabProvider();
   }
 
   /**
@@ -568,7 +631,14 @@
       try {
         const fresh = await loadNote(noteId);
         if (yDoc && fresh.yrs_state.length > 0) {
-          Y.applyUpdate(yDoc, new Uint8Array(fresh.yrs_state));
+          // Tag the origin so yDocUpdateHandler skips the redundant re-save:
+          // these bytes came straight from SQLite, so the row is already
+          // up to date and pushing it again would only ping-pong with the peer.
+          Y.applyUpdate(
+            yDoc,
+            new Uint8Array(fresh.yrs_state),
+            REMOTE_SYNC_ORIGIN
+          );
         }
       } catch (err) {
         console.warn('[NoteEditor] sync-completed note merge failed', err);
@@ -652,7 +722,13 @@
   });
 
   onDestroy(() => {
-    if (saveTimer) clearTimeout(saveTimer);
+    if (saveTimer) {
+      clearTimeout(saveTimer);
+      saveTimer = null;
+      void persistCurrentNote({ updateStatus: false }).catch((err) => {
+        console.error('[NoteEditor] final save failed', err);
+      });
+    }
     // Flush a final history version for edits made since the last capture,
     // while the editor (and getMarkdown) is still alive. Fire-and-forget —
     // the backend dedups, so a no-op close is harmless.
@@ -720,13 +796,14 @@
     crepeReady = false;
   });
 
-  // Push the trashed state into Crepe whenever either side changes.
+  // Push the read-only state into Crepe whenever either side changes.
   // Re-runs when crepeReady flips (handles the initial-state case for a
-  // note that was already trashed when the tab opened) and when isTrashed
-  // changes (remote pull, or local restore from another window).
+  // note that was already trashed / in a view-only share when the tab
+  // opened) and when the lock changes (remote pull, local restore from
+  // another window, or a share's access level changing under us).
   $effect(() => {
     if (!crepeReady || !crepe) return;
-    crepe.setReadonly(isTrashed);
+    crepe.setReadonly(isReadOnly);
   });
 
   /**
@@ -737,7 +814,7 @@
    * across devices like any other edit. Used by the History sidebar's Restore.
    */
   function applyMarkdownTemplate(markdown: string) {
-    if (!crepe || isTrashed) return;
+    if (!crepe || isReadOnly) return;
     try {
       crepe.editor.action((ctx) => {
         ctx.get(collabServiceCtx).applyTemplate(markdown, () => true);
@@ -785,7 +862,7 @@
    * markdown on every keystroke.
    */
   function scheduleHistoryCapture() {
-    if (isTrashed) return;
+    if (isReadOnly) return;
     historyDirty = true;
 
     const now = Date.now();
@@ -834,9 +911,9 @@
   function scheduleSave() {
     // setReadonly(true) already prevents user input, but yDoc 'update' can
     // still fire from programmatic mutations or remote edits arriving on
-    // a note that just got trashed elsewhere. Drop those silently rather
-    // than persisting an edit to a trashed note.
-    if (isTrashed) return;
+    // a note that just got trashed (or shared read-only) elsewhere. Drop
+    // those silently rather than persisting an edit we can't push anyway.
+    if (isReadOnly) return;
     // Honour the user's auto-save toggle. We still cancel any in-flight
     // debounce so a setting flip mid-debounce doesn't fire one last save
     // after the user turned it off. yrs_state continues to mutate locally
@@ -855,41 +932,42 @@
     saveTimer = setTimeout(async () => {
       try {
         savingState = 'saving';
-        // Capture the markdown + y-doc state *now*, after the user has
-        // stopped typing for saveDebounceMs. Pulling markdown via the
-        // live serializer (instead of via the listener plugin) means
-        // remote-applied edits — which y-prosemirror dispatches with
-        // `addToHistory: false` and which the listener therefore ignores
-        // — are still reflected in the body we save. Array.from is
-        // necessary because Tauri serialises Uint8Array as an empty
-        // object via JSON.stringify.
-        const rawMarkdown = getMarkdown ? getMarkdown() : '';
-        // Trim trailing whitespace per-line on the way to disk. We don't
-        // mutate the live editor doc — that would jump the caret and
-        // broadcast a no-op edit to peers; we only sanitise the snapshot
-        // we hand to Rust.
-        const markdown = trimTrailingOnSave
-          ? rawMarkdown.replace(/[ \t]+$/gm, '')
-          : rawMarkdown;
-        const yrsState = yDoc
-          ? Array.from(Y.encodeStateAsUpdate(yDoc))
-          : undefined;
-        await apiSaveNote({ id: noteId, body: markdown, yrs_state: yrsState });
-        // Mirror the new modified timestamp in the local cache so the
-        // metadata panel reflects the save without a tree refetch.
-        const existing = tree.notesById[noteId];
-        if (existing) {
-          tree.notesById[noteId] = {
-            ...existing,
-            modified: new Date().toISOString()
-          };
-        }
-        savingState = 'saved';
+        await persistCurrentNote();
       } catch (err) {
         savingState = 'error';
         console.error('[NoteEditor] save failed', err);
       }
     }, saveDebounceMs);
+  }
+
+  async function persistCurrentNote(
+    opts: { updateStatus?: boolean } = {}
+  ): Promise<void> {
+    const updateStatus = opts.updateStatus ?? true;
+    // Capture the markdown + y-doc state synchronously while the editor still
+    // exists. This also lets onDestroy flush a pending debounce before Crepe
+    // tears down the ProseMirror/Yjs state.
+    const rawMarkdown = getMarkdown ? getMarkdown() : '';
+    // Trim trailing whitespace per-line on the way to disk. We don't mutate
+    // the live editor doc — that would jump the caret and broadcast a no-op
+    // edit to peers; we only sanitise the snapshot we hand to Rust.
+    const markdown = trimTrailingOnSave
+      ? rawMarkdown.replace(/[ \t]+$/gm, '')
+      : rawMarkdown;
+    // Array.from is necessary because Tauri serialises Uint8Array as an empty
+    // object via JSON.stringify.
+    const yrsState = yDoc ? Array.from(Y.encodeStateAsUpdate(yDoc)) : undefined;
+    await apiSaveNote({ id: noteId, body: markdown, yrs_state: yrsState });
+    // Mirror the new modified timestamp in the local cache so the metadata
+    // panel reflects the save without a tree refetch.
+    const existing = tree.notesById[noteId];
+    if (existing) {
+      tree.notesById[noteId] = {
+        ...existing,
+        modified: new Date().toISOString()
+      };
+    }
+    if (updateStatus) savingState = 'saved';
   }
 
   // --- In-document find & replace -------------------------------------------
@@ -954,26 +1032,27 @@
   }
 
   function doReplaceCurrent() {
-    if (isTrashed) return;
+    if (isReadOnly) return;
     searchBridge.replaceCurrent(replaceValue);
   }
 
   function doReplaceAll() {
-    if (isTrashed) return;
+    if (isReadOnly) return;
     searchBridge.replaceAll(replaceValue);
   }
 
   // Desktop toolbar visibility is a per-device toggle (default on). The
   // settings.values read makes this $derived re-evaluate when the user flips
-  // the toggle live. Trashed notes hide the toolbar too — it'd be misleading
-  // to show formatting buttons over a read-only banner.
+  // the toggle live. Read-only notes (trashed or view-only share) hide the
+  // toolbar too — it'd be misleading to show formatting buttons over a
+  // read-only banner.
   const desktopToolbarEnabled = $derived(
     (settings.values['editor.desktopToolbar'] ?? true) as boolean
   );
   const showDesktopToolbar = $derived(
-    !mobile && crepeReady && !isTrashed && desktopToolbarEnabled
+    !mobile && crepeReady && !isReadOnly && desktopToolbarEnabled
   );
-  const showMobileToolbar = $derived(mobile && crepeReady && !isTrashed);
+  const showMobileToolbar = $derived(mobile && crepeReady && !isReadOnly);
 
   // Mirror our reactive status into the global per-note store so the
   // dockview right-header (NoteStatusIcons.svelte) can render the
@@ -985,7 +1064,8 @@
       collabConfigured,
       collabOnline,
       savingState,
-      isTrashed
+      isTrashed,
+      readOnly: isReadOnlyScope
     });
   });
 </script>
@@ -1001,12 +1081,14 @@
   {/if}
   {#if isTrashed}
     <TrashBanner />
+  {:else if isReadOnlyScope}
+    <ViewOnlyBanner />
   {/if}
   {#if searchOpen}
     <!--
-      Replace is gated on !isTrashed: a read-only (trashed) note can still
-      be searched, but the bar then collapses to find-only because the
-      replace callbacks are omitted.
+      Replace is gated on !isReadOnly: a read-only note (trashed or a
+      view-only share) can still be searched, but the bar then collapses to
+      find-only because the replace callbacks are omitted.
     -->
     <FindBar
       bind:this={searchBar}
@@ -1025,12 +1107,12 @@
       onToggleMatchCase={toggleMatchCase}
       onToggleWholeWord={toggleWholeWord}
       onToggleRegex={toggleRegex}
-      replaceValue={isTrashed ? undefined : replaceValue}
-      onReplaceInput={isTrashed ? undefined : handleReplaceInput}
-      onReplace={isTrashed ? undefined : doReplaceCurrent}
-      onReplaceAll={isTrashed ? undefined : doReplaceAll}
+      replaceValue={isReadOnly ? undefined : replaceValue}
+      onReplaceInput={isReadOnly ? undefined : handleReplaceInput}
+      onReplace={isReadOnly ? undefined : doReplaceCurrent}
+      onReplaceAll={isReadOnly ? undefined : doReplaceAll}
       preserveCase={searchOptions.preserveCase}
-      onTogglePreserveCase={isTrashed ? undefined : togglePreserveCase}
+      onTogglePreserveCase={isReadOnly ? undefined : togglePreserveCase}
     />
   {/if}
   <!--

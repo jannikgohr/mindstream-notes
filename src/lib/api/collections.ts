@@ -12,6 +12,10 @@ export interface Collection {
   position: number;
   created: string;
   modified: string;
+  share_id?: string | null;
+  shared_role?: string | null;
+  shared_owner?: string | null;
+  shared_by_me?: boolean;
 }
 
 export interface CreateCollectionInput {

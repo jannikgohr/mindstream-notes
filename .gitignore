@@ -1,4 +1,5 @@
 node_modules
+/.pnpm-store
 /.svelte-kit
 /build
 /dist
@@ -15,6 +16,13 @@ node_modules
 .env
 .env.*
 !.env.example
+# Committed on purpose: throwaway, deterministic creds for the disposable
+# T4 test stack (backend/docker-compose.test.yml). Local-only, never prod.
+!backend/.env.test
+
+# Cached T4 e2e account credentials (throwaway signups on the local test
+# stack, reused across runs — see e2e/app/helpers/accounts.ts).
+/e2e/app/helpers/.t4-accounts.json
 
 # Tauri
 /src-tauri/target

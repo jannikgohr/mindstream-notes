@@ -18,6 +18,10 @@ pub struct Collection {
     pub position: i64,
     pub created: String,
     pub modified: String,
+    pub share_id: Option<String>,
+    pub shared_role: Option<String>,
+    pub shared_owner: Option<String>,
+    pub shared_by_me: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -85,12 +89,17 @@ fn row_to_collection(row: &rusqlite::Row<'_>) -> rusqlite::Result<Collection> {
         position: row.get("position")?,
         created: row.get("created")?,
         modified: row.get("modified")?,
+        share_id: row.get("share_id")?,
+        shared_role: row.get("shared_role")?,
+        shared_owner: row.get("shared_owner")?,
+        shared_by_me: row.get::<_, i64>("shared_by_me")? != 0,
     })
 }
 
 pub fn list(conn: &Connection) -> AppResult<Vec<Collection>> {
     let mut stmt = conn.prepare(
-        "SELECT id, parent_collection_id, name, position, created, modified
+        "SELECT id, parent_collection_id, name, position, created, modified,
+                share_id, shared_role, shared_owner, shared_by_me
          FROM collections
          ORDER BY parent_collection_id IS NOT NULL, parent_collection_id, position, name",
     )?;
@@ -110,10 +119,17 @@ pub fn create(conn: &Connection, input: CreateCollection) -> AppResult<Collectio
     } else {
         None
     };
+    // Inherit the parent's share scope so a folder created inside a shared
+    // subtree is routed into that scope's collection (and pulled by recipients)
+    // rather than the vault. Root / vault parent → NULL, i.e. vault-local.
+    let share_scope_id = match input.parent_collection_id.as_deref() {
+        Some(parent) => crate::sharing::collection_scope(conn, parent)?,
+        None => None,
+    };
     // dirty defaults to 1 in the schema; row will be picked up by the next sync push.
     conn.execute(
-        "INSERT INTO collections(id, parent_collection_id, name, position, created, modified, trashed_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6)",
+        "INSERT INTO collections(id, parent_collection_id, name, position, created, modified, trashed_at, share_scope_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6, ?7)",
         params![
             id,
             input.parent_collection_id,
@@ -121,6 +137,7 @@ pub fn create(conn: &Connection, input: CreateCollection) -> AppResult<Collectio
             position,
             now,
             trashed_at,
+            share_scope_id,
         ],
     )?;
     get(conn, &id)
@@ -128,7 +145,8 @@ pub fn create(conn: &Connection, input: CreateCollection) -> AppResult<Collectio
 
 pub fn get(conn: &Connection, id: &str) -> AppResult<Collection> {
     conn.query_row(
-        "SELECT id, parent_collection_id, name, position, created, modified
+        "SELECT id, parent_collection_id, name, position, created, modified,
+                share_id, shared_role, shared_owner, shared_by_me
          FROM collections WHERE id = ?1",
         params![id],
         row_to_collection,
@@ -175,6 +193,22 @@ pub fn update(conn: &Connection, input: UpdateCollection) -> AppResult<Collectio
         // too — `trashed_at` is the dedicated "when did this enter trash"
         // stamp the sweep needs.
         stamp_trashed_at_on_parent_change(conn, "collections", &input.id, parent.as_deref(), &now)?;
+        // Re-home the subtree if the move crossed a share-scope boundary: the
+        // destination's scope wins (NULL for a root / vault parent). Skip when
+        // the moved folder is itself a share anchor — a share root's scope is
+        // fixed by the share, so relocating it in the owner's tree must not
+        // strip it. Only act on an actual change so an in-scope reorder doesn't
+        // needlessly detach + repush every descendant.
+        if !crate::sharing::is_share_anchor(conn, &input.id)? {
+            let new_scope = match parent.as_deref() {
+                Some(parent_id) => crate::sharing::collection_scope(conn, parent_id)?,
+                None => None,
+            };
+            let old_scope = crate::sharing::collection_scope(conn, &input.id)?;
+            if new_scope != old_scope {
+                crate::sharing::rehome_folder_subtree(conn, &input.id, new_scope.as_deref())?;
+            }
+        }
     }
     if let Some(position) = input.position {
         conn.execute(
@@ -513,5 +547,135 @@ mod tests {
             )
         });
         assert!(res.is_err(), "moving the trash collection must be rejected");
+    }
+
+    fn scope_of(db: &Db, id: &str) -> Option<String> {
+        db.with_conn(|c| crate::sharing::collection_scope(c, id))
+            .unwrap()
+    }
+
+    /// Turn an existing folder into a share root: stamp the scope + the
+    /// `share_id` anchor the same way `record_outgoing_share` does, and re-home
+    /// its (currently empty) subtree so it lives in the scope.
+    fn make_share_root(db: &Db, id: &str, scope: &str) {
+        db.with_conn(|c| {
+            crate::sharing::rehome_folder_subtree(c, id, Some(scope))?;
+            c.execute(
+                "UPDATE collections SET share_id = ?1, shared_by_me = 1 WHERE id = ?2",
+                params!["folders_uid", id],
+            )?;
+            Ok::<(), AppError>(())
+        })
+        .unwrap();
+    }
+
+    fn move_under(db: &Db, id: &str, parent: Option<&str>) {
+        db.with_conn(|c| {
+            update(
+                c,
+                UpdateCollection {
+                    id: id.into(),
+                    name: None,
+                    parent_collection_id: Some(parent.map(str::to_string)),
+                    position: None,
+                },
+            )
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn create_inherits_parent_share_scope() {
+        let db = open_memory_for_tests();
+        let shared = create_root(&db, "Shared");
+        make_share_root(&db, &shared.id, "scope_1");
+
+        // A folder created inside the shared root inherits its scope; one created
+        // at the vault root stays unscoped.
+        let child = db
+            .with_conn(|c| {
+                create(
+                    c,
+                    CreateCollection {
+                        name: "Child".into(),
+                        parent_collection_id: Some(shared.id.clone()),
+                    },
+                )
+            })
+            .unwrap();
+        let vault = create_root(&db, "Vault");
+
+        assert_eq!(scope_of(&db, &child.id).as_deref(), Some("scope_1"));
+        assert_eq!(scope_of(&db, &vault.id), None);
+    }
+
+    #[test]
+    fn moving_a_folder_into_a_share_rehomes_the_subtree() {
+        let db = open_memory_for_tests();
+        let shared = create_root(&db, "Shared");
+        make_share_root(&db, &shared.id, "scope_1");
+
+        // A vault folder with a nested child, moved under the shared root.
+        let folder = create_root(&db, "Folder");
+        let nested = db
+            .with_conn(|c| {
+                create(
+                    c,
+                    CreateCollection {
+                        name: "Nested".into(),
+                        parent_collection_id: Some(folder.id.clone()),
+                    },
+                )
+            })
+            .unwrap();
+
+        move_under(&db, &folder.id, Some(&shared.id));
+
+        assert_eq!(scope_of(&db, &folder.id).as_deref(), Some("scope_1"));
+        assert_eq!(
+            scope_of(&db, &nested.id).as_deref(),
+            Some("scope_1"),
+            "the whole moved subtree should be re-homed"
+        );
+    }
+
+    #[test]
+    fn moving_a_folder_out_of_a_share_rehomes_to_the_vault() {
+        let db = open_memory_for_tests();
+        let shared = create_root(&db, "Shared");
+        make_share_root(&db, &shared.id, "scope_1");
+        let child = db
+            .with_conn(|c| {
+                create(
+                    c,
+                    CreateCollection {
+                        name: "Child".into(),
+                        parent_collection_id: Some(shared.id.clone()),
+                    },
+                )
+            })
+            .unwrap();
+        assert_eq!(scope_of(&db, &child.id).as_deref(), Some("scope_1"));
+
+        // Drag the child out to the vault root — it leaves the scope.
+        move_under(&db, &child.id, None);
+        assert_eq!(scope_of(&db, &child.id), None);
+    }
+
+    #[test]
+    fn moving_a_share_root_within_the_vault_keeps_its_scope() {
+        let db = open_memory_for_tests();
+        let shared = create_root(&db, "Shared");
+        make_share_root(&db, &shared.id, "scope_1");
+        let other = create_root(&db, "Other"); // unscoped vault folder
+
+        // Relocating the share root under a personal folder must not strip the
+        // share — the anchor guard skips the re-home.
+        move_under(&db, &shared.id, Some(&other.id));
+        assert_eq!(
+            scope_of(&db, &shared.id).as_deref(),
+            Some("scope_1"),
+            "a share root must keep its scope when moved in the owner's tree"
+        );
     }
 }

@@ -177,7 +177,11 @@ function tokenMagnitude(
     name: 'Work',
     position: 0,
     created: t,
-    modified: t
+    modified: t,
+    share_id: null,
+    shared_role: null,
+    shared_owner: null,
+    shared_by_me: false
   };
   const personal: Collection = {
     id: 'coll_seed_personal',
@@ -185,7 +189,11 @@ function tokenMagnitude(
     name: 'Personal',
     position: 1,
     created: t,
-    modified: t
+    modified: t,
+    share_id: null,
+    shared_role: null,
+    shared_owner: null,
+    shared_by_me: false
   };
   const trash: Collection = {
     id: TRASH_ID,
@@ -193,7 +201,11 @@ function tokenMagnitude(
     name: 'Trash',
     position: 9999999,
     created: t,
-    modified: t
+    modified: t,
+    share_id: null,
+    shared_role: null,
+    shared_owner: null,
+    shared_by_me: false
   };
   collections.push(work, personal, trash);
 
@@ -266,7 +278,11 @@ export const mockApi = {
       name: input.name,
       position: maxPosition(siblings) + 1,
       created: t,
-      modified: t
+      modified: t,
+      share_id: null,
+      shared_role: null,
+      shared_owner: null,
+      shared_by_me: false
     };
     collections.push(c);
     return c;

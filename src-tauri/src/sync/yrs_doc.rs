@@ -36,6 +36,33 @@ pub fn init_with_markdown(md: &str) -> Vec<u8> {
     encode_state(&doc)
 }
 
+/// Client id every seeded note's origin op is stamped with. `Doc::new()`
+/// mints a *random* client id per call, so two fresh devices that seed the
+/// same demo note would each tag their "insert seed text" op with a
+/// different client — and a CRDT merge keeps both, duplicating the content
+/// (see `independent_inits_of_same_seed_duplicate_on_merge`). Pinning the
+/// origin to a fixed client id makes every device produce the *identical*
+/// base operation, so the merge collapses them into one. Regular edits keep
+/// their own random client (a loaded Doc mints a fresh one), so this only
+/// affects the shared demo baseline, never later divergent edits.
+const SEED_ORIGIN_CLIENT_ID: u64 = 1;
+
+/// Deterministic origin state for a seeded/demo note: the same input
+/// markdown always yields byte-identical bytes, because both the client id
+/// (`SEED_ORIGIN_CLIENT_ID`) and the single insert op are fixed. Two devices
+/// that seed the same note therefore share one origin operation, so merging
+/// their copies keeps the seed text exactly once while still preserving each
+/// device's own later edits.
+pub fn init_seed_state(md: &str) -> Vec<u8> {
+    let doc = Doc::with_client_id(SEED_ORIGIN_CLIENT_ID);
+    let text = doc.get_or_insert_text(TEXT_KEY);
+    {
+        let mut txn = doc.transact_mut();
+        text.insert(&mut txn, 0, md);
+    }
+    encode_state(&doc)
+}
+
 /// Apply a "full body changed" local edit. We diff `old_md` → `new_md`
 /// at character granularity and replay each insert/delete against the
 /// Y.Text, which is what the editor would have produced if it had been
@@ -158,6 +185,58 @@ mod tests {
         // We don't require byte-equality (encoding can differ), only that
         // the rendered text is identical.
         assert_eq!(to_markdown(&next), "same");
+    }
+
+    #[test]
+    fn independent_inits_of_same_seed_duplicate_on_merge() {
+        // Reproduces the seeded-note bug: two devices each build their OWN Doc
+        // from the same seed markdown. `init_with_markdown` uses `Doc::new()`,
+        // which mints a *random* client id, so each "insert seed text" op is a
+        // distinct operation. Merging keeps both → the content repeats.
+        let device_a = init_with_markdown("Welcome");
+        let device_b = init_with_markdown("Welcome");
+        let merged = merge_remote(&device_a, &device_b);
+        assert_eq!(
+            to_markdown(&merged),
+            "WelcomeWelcome",
+            "independent inits duplicate the seed text on merge"
+        );
+    }
+
+    #[test]
+    fn seed_state_is_deterministic_across_calls() {
+        // The whole point of the seed origin: same input → byte-identical
+        // output, so two devices seeding the same demo note share one op.
+        assert_eq!(init_seed_state("Welcome"), init_seed_state("Welcome"));
+        assert_eq!(to_markdown(&init_seed_state("Welcome")), "Welcome");
+        // Different content still differs.
+        assert_ne!(init_seed_state("Welcome"), init_seed_state("Ideas"));
+    }
+
+    #[test]
+    fn shared_seed_origin_dedups_but_keeps_both_edits() {
+        // Two devices start from the SAME deterministic seed origin, then edit
+        // independently. Merging must keep the seed text ONCE (shared base op)
+        // while preserving each device's own edit — the fix for the seeded-note
+        // duplication.
+        let seed = init_seed_state("Welcome");
+        let device_a = apply_local_edit(&seed, "Welcome", "Welcome, from A");
+        let device_b = apply_local_edit(&seed, "Welcome", "B says Welcome");
+
+        let merged_ab = merge_remote(&device_a, &device_b);
+        let merged_ba = merge_remote(&device_b, &device_a);
+        assert_eq!(to_markdown(&merged_ab), to_markdown(&merged_ba));
+
+        let md = to_markdown(&merged_ab);
+        // Seed word appears exactly once (no "WelcomeWelcome" doubling)...
+        assert_eq!(
+            md.matches("Welcome").count(),
+            1,
+            "seed text duplicated: {md}"
+        );
+        // ...and both devices' edits survive the merge.
+        assert!(md.contains("from A"), "device A edit lost: {md}");
+        assert!(md.contains("B says"), "device B edit lost: {md}");
     }
 
     #[test]

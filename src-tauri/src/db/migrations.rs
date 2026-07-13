@@ -423,6 +423,81 @@ const MIGRATIONS: &[Migration] = &[
             ALTER TABLE notes ADD COLUMN tags_state BLOB;
         "#,
     },
+    Migration {
+        to: 17,
+        // Local projection of collection sharing state. Etebase sharing
+        // operates on remote Collections, while Mindstream folders are local
+        // rows that currently sync as Items inside a single folders
+        // Collection. These fields give the UI a stable place to render
+        // "shared with me" roots and "shared by me" indicators while the
+        // sync layer grows true per-folder remote-collection support.
+        sql: r#"
+            ALTER TABLE collections ADD COLUMN share_id TEXT;
+            ALTER TABLE collections ADD COLUMN shared_role TEXT;
+            ALTER TABLE collections ADD COLUMN shared_owner TEXT;
+            ALTER TABLE collections ADD COLUMN shared_by_me INTEGER NOT NULL DEFAULT 0;
+
+            CREATE INDEX idx_collections_share_id ON collections(share_id) WHERE share_id IS NOT NULL;
+            CREATE INDEX idx_collections_shared_role ON collections(shared_role) WHERE shared_role IS NOT NULL;
+            CREATE INDEX idx_collections_shared_by_me ON collections(shared_by_me) WHERE shared_by_me = 1;
+        "#,
+    },
+    Migration {
+        to: 18,
+        // Share-scope tag for manifest-backed collection sharing. Every folder,
+        // note and asset row belonging to a shared scope carries the scope's
+        // `share_scope_id` (matching the manifest's field). NULL = private/
+        // vault-local, which is every existing row.
+        //
+        // The seam the sync layer routes on: a row with a non-NULL
+        // `share_scope_id` pushes into that scope's dedicated folders/notes/
+        // assets Etebase collection instead of the single vault-wide one. The
+        // routing itself is a later slice; this migration only adds the column
+        // so outgoing-share creation can stamp the shared subtree up front.
+        sql: r#"
+            ALTER TABLE collections ADD COLUMN share_scope_id TEXT;
+            ALTER TABLE notes       ADD COLUMN share_scope_id TEXT;
+            ALTER TABLE assets      ADD COLUMN share_scope_id TEXT;
+
+            CREATE INDEX idx_collections_share_scope ON collections(share_scope_id) WHERE share_scope_id IS NOT NULL;
+            CREATE INDEX idx_notes_share_scope       ON notes(share_scope_id)       WHERE share_scope_id IS NOT NULL;
+            CREATE INDEX idx_assets_share_scope      ON assets(share_scope_id)      WHERE share_scope_id IS NOT NULL;
+        "#,
+    },
+    Migration {
+        to: 19,
+        // Route a queued server-side delete to the right Etebase collection.
+        // A tombstone for a row that belonged to a shared scope must be
+        // applied against that scope's collection, not the vault-wide one, so
+        // we record the row's `share_scope_id` (NULL = vault-wide, which is
+        // every existing tombstone). See sync::queue_tombstone / drain_tombstones.
+        sql: r#"
+            ALTER TABLE tombstones ADD COLUMN share_scope_id TEXT;
+        "#,
+    },
+    Migration {
+        to: 20,
+        // Bounded reconcile window for the vault singleton collections.
+        //
+        // Two brand-new devices on the same account auto-sync concurrently
+        // on first launch. Both hit `ensure_collection`'s create path before
+        // either has published, so each mints its OWN random-uid Etebase
+        // collection for the same singleton (notes/folders/assets/signatures)
+        // — a permanent split-brain the cache-first fast path can never
+        // reconcile, because neither device ever re-lists.
+        //
+        // `reconcile_passes_left` arms a short window during which each sync
+        // lists the account's collections of that type and converges on the
+        // lexicographically-smallest live uid (a deterministic winner every
+        // device agrees on), migrating its rows off any loser. The counter
+        // decrements on a stable pass and re-arms on create/migrate, so once
+        // devices agree for a few consecutive syncs we disarm and revert to
+        // the cheap cache fast path. Default 3 covers the setup window for
+        // rows that predate this migration.
+        sql: r#"
+            ALTER TABLE sync_state ADD COLUMN reconcile_passes_left INTEGER NOT NULL DEFAULT 3;
+        "#,
+    },
 ];
 
 pub fn run(conn: &mut Connection) -> AppResult<()> {
@@ -461,10 +536,17 @@ pub fn was_freshly_created(conn: &Connection) -> AppResult<bool> {
 }
 
 /// Insert demo content so the app isn't empty on first launch.
+///
+/// Seed rows use *deterministic* ids (`seed_work`, `seed_welcome`, …) rather
+/// than random uuids. Sync's join key is the app-level row id (embedded in the
+/// encrypted payload), so two fresh devices on the same account must seed the
+/// same ids or their identical demo content would sync as duplicate rows that
+/// no reconcile can collapse. Fixed ids make the seeds merge by id on first
+/// sync. Existing installs keep whatever random ids they already seeded.
 pub fn seed(conn: &Connection) -> AppResult<()> {
     let now = chrono::Utc::now().to_rfc3339();
-    let work_id = format!("coll_{}", uuid::Uuid::new_v4());
-    let personal_id = format!("coll_{}", uuid::Uuid::new_v4());
+    let work_id = "seed_work";
+    let personal_id = "seed_personal";
     conn.execute(
         "INSERT INTO collections(id, parent_collection_id, name, position, created, modified)
          VALUES (?1, NULL, ?2, 0, ?3, ?3)",
@@ -476,20 +558,22 @@ pub fn seed(conn: &Connection) -> AppResult<()> {
         params![personal_id, "Personal", now],
     )?;
 
-    insert_note(conn, "Welcome", WELCOME_BODY, None, 0, &now)?;
+    insert_note(conn, "seed_welcome", "Welcome", WELCOME_BODY, None, 0, &now)?;
     insert_note(
         conn,
+        "seed_sprint",
         "Sprint planning",
         "# Sprint planning\n\n## Agenda\n\n1. Carry-over from last sprint\n2. Capacity check\n3. Commit\n",
-        Some(&work_id),
+        Some(work_id),
         0,
         &now,
     )?;
     insert_note(
         conn,
+        "seed_ideas",
         "Ideas",
         "# Ideas\n\n- Try a graph view\n- Backlinks panel\n- Daily notes\n",
-        Some(&personal_id),
+        Some(personal_id),
         0,
         &now,
     )?;
@@ -499,19 +583,100 @@ pub fn seed(conn: &Connection) -> AppResult<()> {
 
 fn insert_note(
     conn: &Connection,
+    id: &str,
     title: &str,
     body: &str,
     parent: Option<&str>,
     position: i64,
     now: &str,
 ) -> AppResult<()> {
-    let id = format!("note_{}", uuid::Uuid::new_v4());
+    // Give every seeded note a DETERMINISTIC origin yrs_state (v1 Y.Text
+    // "body", so payload_schema stays 1 — the column default). Because the
+    // bytes are identical on every device, two fresh devices on the same
+    // account share one origin op: a CRDT merge collapses the seed text
+    // instead of stacking each device's own "insert seed text" into a
+    // duplicated body. Later per-device edits still diverge normally (they
+    // mint their own client id off the loaded doc) and merge on top of the
+    // shared base. See crate::sync::yrs_doc::init_seed_state.
+    let yrs_state = crate::sync::yrs_doc::init_seed_state(body);
     conn.execute(
-        "INSERT INTO notes(id, parent_collection_id, title, body, position, created, modified)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
-        params![id, parent, title, body, position, now],
+        "INSERT INTO notes(id, parent_collection_id, title, body, position, created, modified, yrs_state)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7)",
+        params![id, parent, title, body, position, now, yrs_state],
     )?;
     Ok(())
 }
 
 const WELCOME_BODY: &str = "# Welcome\n\nThis is a **local-first** note-taking boilerplate built on Tauri v2, SvelteKit\n(SPA mode), Svelte 5 runes, dockview, and Milkdown's Crepe editor.\n\n- The left sidebar is the file tree\n- The right sidebar shows metadata for the active note\n- The middle area is a `dockview` instance — drag tabs to split panes\n\n> Notes now live in a SQLite database under your app data folder.\n";
+
+#[cfg(test)]
+mod seed_tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    fn seeded_conn() -> Connection {
+        let mut conn = Connection::open_in_memory().expect("in-memory db");
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        run(&mut conn).expect("migrations");
+        seed(&conn).expect("seed");
+        conn
+    }
+
+    #[test]
+    fn seeded_notes_carry_a_deterministic_origin_yrs_state() {
+        let conn = seeded_conn();
+        // Every seeded note gets a v1 origin state whose bytes are exactly what
+        // init_seed_state(body) produces — i.e. deterministic across devices.
+        let mut stmt = conn
+            .prepare("SELECT body, yrs_state, payload_schema FROM notes")
+            .unwrap();
+        let rows: Vec<(String, Option<Vec<u8>>, i64)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert!(!rows.is_empty(), "seed should insert notes");
+        for (body, yrs_state, schema) in rows {
+            let state = yrs_state.expect("seeded note has yrs_state");
+            assert!(!state.is_empty(), "seeded yrs_state is non-empty");
+            // Deterministic: recomputing from the body yields identical bytes.
+            assert_eq!(
+                state,
+                crate::sync::yrs_doc::init_seed_state(&body),
+                "seeded yrs_state must equal the deterministic origin"
+            );
+            // v1 Y.Text "body" doc → the state renders back to the body.
+            assert_eq!(crate::sync::yrs_doc::to_markdown(&state), body);
+            // Stays on the v1 payload schema (column default).
+            assert_eq!(schema, 1);
+        }
+    }
+
+    #[test]
+    fn two_devices_seed_identical_bytes_so_a_merge_keeps_content_once() {
+        // Simulate two fresh devices seeding the same account: identical origin
+        // bytes mean a CRDT merge is a no-op — the seed content stays single.
+        let device_a = seeded_conn();
+        let device_b = seeded_conn();
+
+        let welcome = |conn: &Connection| -> Vec<u8> {
+            conn.query_row(
+                "SELECT yrs_state FROM notes WHERE id = 'seed_welcome'",
+                [],
+                |r| r.get::<_, Option<Vec<u8>>>(0),
+            )
+            .unwrap()
+            .unwrap()
+        };
+        let a = welcome(&device_a);
+        let b = welcome(&device_b);
+        assert_eq!(a, b, "two devices seed byte-identical origin state");
+
+        let merged = crate::sync::yrs_doc::merge_remote(&a, &b);
+        assert_eq!(
+            crate::sync::yrs_doc::to_markdown(&merged),
+            crate::sync::yrs_doc::to_markdown(&a),
+            "merging two identical seed origins must not duplicate content"
+        );
+    }
+}

@@ -30,13 +30,18 @@ export interface NoteStatus {
   /** Note is in the trash (directly or via a trashed ancestor). The
    *  icon stack collapses to a single read-only chip. */
   isTrashed: boolean;
+  /** Note lives in a folder shared *with* the user at read-only access.
+   *  The editor is locked (like trash) but the affordance is a view-only
+   *  chip, not a trash chip. */
+  readOnly: boolean;
 }
 
 const EMPTY: NoteStatus = {
   collabConfigured: false,
   collabOnline: false,
   savingState: 'idle',
-  isTrashed: false
+  isTrashed: false,
+  readOnly: false
 };
 
 export const noteStatus = $state<Record<string, NoteStatus>>({});

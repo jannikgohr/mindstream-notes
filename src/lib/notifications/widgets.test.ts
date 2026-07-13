@@ -8,6 +8,12 @@ vi.mock('./GenericNotificationWidget.svelte', () => ({
 vi.mock('./UpdateNotificationWidget.svelte', () => ({
   default: 'UpdateWidget'
 }));
+vi.mock('./CollaborationInviteNotificationWidget.svelte', () => ({
+  default: 'InviteWidget'
+}));
+vi.mock('./ShareBundleNotificationWidget.svelte', () => ({
+  default: 'ShareBundleWidget'
+}));
 
 import {
   FALLBACK_NOTIFICATION_WIDGET_LOADER,
@@ -17,7 +23,9 @@ import {
 describe('NOTIFICATION_WIDGET_LOADERS', () => {
   it('registers a loader for the generic and update widget types', () => {
     expect(Object.keys(NOTIFICATION_WIDGET_LOADERS).sort()).toEqual([
+      'collaboration-invite',
       'generic',
+      'share-bundle',
       'update'
     ]);
     for (const loader of Object.values(NOTIFICATION_WIDGET_LOADERS)) {
@@ -33,6 +41,12 @@ describe('NOTIFICATION_WIDGET_LOADERS', () => {
 
   it('resolves each loader to its widget component default export', async () => {
     expect(await NOTIFICATION_WIDGET_LOADERS.generic()).toBe('GenericWidget');
+    expect(await NOTIFICATION_WIDGET_LOADERS['collaboration-invite']()).toBe(
+      'InviteWidget'
+    );
+    expect(await NOTIFICATION_WIDGET_LOADERS['share-bundle']()).toBe(
+      'ShareBundleWidget'
+    );
     expect(await NOTIFICATION_WIDGET_LOADERS.update()).toBe('UpdateWidget');
   });
 });

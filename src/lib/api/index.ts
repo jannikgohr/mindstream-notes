@@ -27,6 +27,7 @@ export * from './desktop-settings';
 export * from './profiles';
 export * from './hotkeys';
 export * from './server-urls';
+export * from './sharing';
 export { pickExportDir, writeExportFile } from './notes-export';
 export {
   openDataFolder,

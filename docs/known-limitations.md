@@ -34,12 +34,13 @@ resolved per-field by the CRDT. Concretely:
 - A collaborator's element/stroke added concurrently (not yet seen by the
   restorer) is **not** in the restorer's delete set, so it survives the restore
   as an orphan — you get the restored scene _plus_ stray content.
-- For markdown, replacing the entire document while a peer is typing produces a
-  messy text merge at the edit boundaries.
+- For markdown, the whole-template replacement can overwrite a paused peer's
+  concurrent text edit. Connected peers get a warning prompt before restore, but
+  a disconnected/paused collaborator may simply converge to the restored body.
 
 It always converges (no divergence/corruption), but it is not a clean
-transactional swap. The planned mitigation is the **collab confirmation prompt**
-(see _Planned_ below), which warns before overwriting a note others are editing.
+transactional swap. The **collab confirmation prompt** (see below) mitigates the
+connected-peer case by warning before overwriting a note others are editing.
 
 ### History is per-device, not synced — _by design_
 
@@ -82,6 +83,37 @@ after a restore. Undoing a restore goes through History / the Undo affordance,
 not `Ctrl+Z`. Documented here so it isn't "fixed" back into the undo stack.
 
 ---
+
+## Sync & sharing
+
+### A remote delete never destroys an unpushed local edit — _by design_
+
+When a pull delivers a tombstone for a row that has unpushed local edits
+(`dirty = 1`), the sync does **not** delete it. Instead it _detaches_ the row —
+drops the server identity (`etebase_uid`/`etebase_etag`) but keeps the row and
+its edits — and lets the next push re-home it (`apply_remote_delete` in
+`src-tauri/src/sync/mod.rs`). Two consequences, both intentional:
+
+- **Re-home is non-destructive.** Sharing a folder tombstones its items out of
+  the vault and recreates them in a scope collection. A device holding an offline
+  edit detaches its vault copy on the tombstone, then the scope pull reclaims the
+  same row by stable `id` and CRDT-merges the edit in. The sync runs in
+  pull → scope → push phases so the reclaim happens before the vault push, which
+  otherwise would resurrect the detached row as an orphan.
+- **Edit wins over delete.** A genuine "B deletes note N while A edited it
+  offline" conflict resolves by **resurrecting** A's edited copy, not by honouring
+  the delete. This is the safe default (never silently lose unpushed work), but it
+  means a delete is not guaranteed to stick if another device was concurrently
+  editing offline. There is no way to distinguish "I meant to delete" from a
+  re-home at the receiving end.
+
+A **clean** (non-dirty) row is still a real delete. **Signatures** are excluded —
+they hard-delete on a tombstone regardless of dirty state.
+
+Known asymmetry: note bodies are CRDT-merged, but note/folder _metadata_
+(title, parent, trash, rename) is last-write-wins — preserved when dirty, but
+not merged. A concurrent offline rename on two devices resolves last-writer-wins,
+not by combining.
 
 ## Persistence & backend
 

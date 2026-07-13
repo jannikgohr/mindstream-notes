@@ -352,7 +352,9 @@
       collabConfigured,
       collabOnline,
       savingState,
-      isTrashed
+      isTrashed,
+      // View-only share scope isn't enforced in the ink editor yet.
+      readOnly: false
     });
   });
 

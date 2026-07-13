@@ -101,10 +101,15 @@ pub fn upload_with_id(conn: &Connection, id: String, input: UploadAsset) -> AppR
     let now = Utc::now().to_rfc3339();
     let size = input.bytes.len() as i64;
 
+    // Inherit the owning note's share scope so an image dropped into a shared
+    // note is routed into that scope's asset collection (and pulled by
+    // recipients) rather than the vault.
+    let share_scope_id = crate::sharing::note_scope(conn, &input.owning_note_id)?;
+
     conn.execute(
         "INSERT INTO assets(id, owning_note_id, mime_type, bytes, size,
-                            created, modified)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+                            created, modified, share_scope_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7)",
         params![
             id,
             input.owning_note_id,
@@ -112,6 +117,7 @@ pub fn upload_with_id(conn: &Connection, id: String, input: UploadAsset) -> AppR
             input.bytes,
             size,
             now,
+            share_scope_id,
         ],
     )?;
     load(conn, &id)
@@ -787,5 +793,44 @@ mod tests {
             res.is_err(),
             "asset is deleted once the last history reference is pruned"
         );
+    }
+
+    #[test]
+    fn upload_inherits_owning_note_share_scope() {
+        let db = open_memory_for_tests();
+        let note_id = make_markdown_note(&db);
+        // Put the note into a share scope, as create-time inheritance would.
+        db.with_conn(|c| {
+            c.execute(
+                "UPDATE notes SET share_scope_id = 'scope_1' WHERE id = ?1",
+                params![note_id],
+            )?;
+            Ok::<(), AppError>(())
+        })
+        .unwrap();
+
+        let asset = db
+            .with_conn(|c| {
+                upload(
+                    c,
+                    UploadAsset {
+                        owning_note_id: note_id.clone(),
+                        mime_type: "image/png".into(),
+                        bytes: vec![0x00],
+                    },
+                )
+            })
+            .unwrap();
+
+        let scope: Option<String> = db
+            .with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT share_scope_id FROM assets WHERE id = ?1",
+                    params![asset.summary.id],
+                    |r| r.get(0),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(scope.as_deref(), Some("scope_1"));
     }
 }
