@@ -10,13 +10,13 @@
  * multiremote → `browserA`/`browserB`, two driver processes) plus two-account
  * provisioning against Etebase (e2e-strategy.md §2.1, §7).
  *
- * Status: flows 4.1–4.4, the core 4.7 subtree convergence path, and 4.7b
+ * Status: flows 4.1–4.4, 4.6, the core 4.7 subtree convergence path, and 4.7b
  * move-out re-home are IMPLEMENTED and validated against the live two-app +
- * backend session. 4.5–4.6 and 4.8–4.9 stay documented skeletons: each needs
- * a seam that doesn't exist yet — server-side part-invite cancellation (4.5), a
- * lone non-manifest invite path (4.6), move-UI automation + asset embedding
- * render assertions (4.7 asset UI), and an offline/network toggle hook
- * (4.8–4.9). Plain-vault 4.10 lives in sync-history.e2e.ts.
+ * backend session. 4.5 and 4.8–4.9 stay documented skeletons: each needs a seam
+ * that doesn't exist yet — server-side part-invite cancellation (4.5), move-UI
+ * automation + asset embedding render assertions (4.7 asset UI), and an
+ * offline/network toggle hook (4.8–4.9). Plain-vault 4.10 lives in
+ * sync-history.e2e.ts.
  *
  * Accessible names referenced below (from src/lib/settings/i18n/en.json, the
  * same names the SvelteKit UI renders inside the WebView):
@@ -478,11 +478,24 @@ describe('T4 collection sharing (manifest bundles)', function () {
   });
 
   // --- 4.6 Non-manifest invitation still surfaces (P3) ---
-  it('a lone non-manifest collection invite shows as a legacy collaboration-invite', async function () {
-    // Invite B directly to a lone collection whose type isn't part of a
-    // manifest scope. Assert it shows as a single collaboration-invite
-    // notification ("{A} invited you"), independent of the bundle path.
-    this.skip();
+  it('a lone non-manifest collection invite shows as a legacy collaboration-invite', async () => {
+    await invokeTauri(browserA, 'e2e_create_standalone_collection_invite', {
+      input: {
+        username: accounts.recipient.username,
+        collection_type: `mindstream.e2e.legacy.${RUN_ID}`,
+        name: `Legacy standalone ${RUN_ID}`,
+        access_level: 'read_write'
+      }
+    });
+
+    await browserB.reloadSession();
+    await browserB.$('aria/Welcome').waitForDisplayed({ timeout: 30_000 });
+    B = clientHelpers(browserB);
+
+    await B.openNotifications();
+    await expect(B.byName(legacyInviteTitle())).toBeDisplayed();
+    await expect(B.allByName(legacyInviteTitle())).toBeElementsArrayOfSize(1);
+    await expect(B.allByName(pendingBundleTitle())).toBeElementsArrayOfSize(0);
   });
 
   // --- 4.7 Shared subtree content converges (P1) ---
