@@ -27,6 +27,7 @@ declare global {
   interface Window {
     __mindstreamE2E?: {
       notePeerCount(noteId: string): number;
+      setNoteCollabPaused(noteId: string, paused: boolean): Promise<void>;
     };
   }
 }
@@ -89,6 +90,32 @@ async function waitForPeer(client: WebdriverIO.Browser, noteId: string) {
       timeout: 60_000,
       timeoutMsg: 'browserA did not observe browserB as a live peer'
     }
+  );
+}
+
+async function waitForNoPeer(client: WebdriverIO.Browser, noteId: string) {
+  await client.waitUntil(
+    async () => (await notePeerCount(client, noteId)) === 0,
+    {
+      timeout: 60_000,
+      timeoutMsg: 'client still observed a live peer after collab pause'
+    }
+  );
+}
+
+async function setNoteCollabPaused(
+  client: WebdriverIO.Browser,
+  noteId: string,
+  paused: boolean
+): Promise<void> {
+  await client.execute(
+    async (id: string, nextPaused: boolean) => {
+      const e2e = window.__mindstreamE2E;
+      if (!e2e) throw new Error('missing e2e diagnostics');
+      await e2e.setNoteCollabPaused(id, nextPaused);
+    },
+    noteId,
+    paused
   );
 }
 
@@ -161,6 +188,7 @@ async function prepareRestorableLiveMarkdownNote(
   baseText: string;
   changedText: string;
   restoreTargetLabel: 'Note created' | 'Edited';
+  noteId: string;
 }> {
   const title = `Collab restore ${Date.now()}`;
   const baseText = `Restore baseline ${Date.now()}`;
@@ -200,15 +228,17 @@ async function prepareRestorableLiveMarkdownNote(
     }
   );
 
-  return { baseText, changedText, restoreTargetLabel };
+  return { baseText, changedText, restoreTargetLabel, noteId };
 }
 
 async function restoreFromHistoryTarget(
   A: ClientHelpers,
-  restoreTargetLabel: string
+  restoreTargetLabel: string,
+  options: { expectPrompt?: boolean } = {}
 ): Promise<void> {
   await A.click(restoreTargetLabel);
   await A.click('Restore this version');
+  if (options.expectPrompt === false) return;
   await expect(A.byName('Restore while others are editing?')).toBeDisplayed();
   await clickLastButtonText(browserA, 'Restore');
 }
@@ -296,12 +326,51 @@ describe('T4 collaboration matrix', function () {
     );
   });
 
-  it('concurrent edit survives a restore as an orphan (pins the limitation)', async function () {
-    // A restores while B holds an unsynced edit → assert the DOCUMENTED merge
-    // outcome (B's addition survives as an orphan; markdown merges at
-    // boundaries). This guards against a *change* in the non-transactional
-    // restore behaviour — see docs/known-limitations.md.
-    this.skip();
+  it('restore overrides a paused concurrent markdown edit (pins the limitation)', async function () {
+    const { baseText, changedText, restoreTargetLabel, noteId } =
+      await prepareRestorableLiveMarkdownNote(A, B);
+    const concurrentText = ` concurrent offline edit ${Date.now()}`;
+
+    await setNoteCollabPaused(browserB, noteId, true);
+    await waitForNoPeer(browserA, noteId);
+    await B.insertText(browserB.$('.ProseMirror'), concurrentText);
+    await expect(browserB.$('.ProseMirror')).toHaveText(
+      expect.stringContaining(concurrentText)
+    );
+
+    await restoreFromHistoryTarget(A, restoreTargetLabel, {
+      expectPrompt: false
+    });
+    await browserA.waitUntil(
+      async () => {
+        const text = await browserA.$('.ProseMirror').getText();
+        return text.includes(baseText) && !text.includes(changedText);
+      },
+      {
+        timeout: 30_000,
+        timeoutMsg: 'browserA did not restore while B was paused'
+      }
+    );
+
+    await setNoteCollabPaused(browserB, noteId, false);
+
+    for (const client of [browserA, browserB]) {
+      await client.waitUntil(
+        async () => {
+          const text = await client.$('.ProseMirror').getText();
+          return (
+            text.includes(baseText) &&
+            !text.includes(concurrentText) &&
+            !text.includes(changedText)
+          );
+        },
+        {
+          timeout: 60_000,
+          timeoutMsg:
+            'paused concurrent markdown edit did not converge to restore result'
+        }
+      );
+    }
   });
 
   it('undo of the restore in A converges B back', async function () {
@@ -335,7 +404,56 @@ describe('T4 collaboration matrix', function () {
   });
 
   it('offline edits on both sides converge on reconnect', async function () {
-    // toggle A offline, edit both, reconnect → assert convergence.
-    this.skip();
+    const title = `Collab offline ${Date.now()}`;
+    const baseText = `Offline baseline ${Date.now()}`;
+    const offlineAText = ` offline A ${Date.now()}`;
+    const onlineBText = ` online B ${Date.now()}`;
+
+    await A.newRootNote(title);
+    await A.click(title);
+    const offlineNoteId = await findNoteId(browserA, title);
+    await A.insertText(browserA.$('.ProseMirror'), baseText);
+
+    await syncClient(browserA);
+    await syncClient(browserB);
+
+    await B.treeItem(title).waitForDisplayed({ timeout: 30_000 });
+    await Promise.all([A.click(title), B.click(title)]);
+    await expect(browserB.$('.ProseMirror')).toHaveText(
+      expect.stringContaining(baseText)
+    );
+    await waitForPeer(browserA, offlineNoteId);
+
+    await setNoteCollabPaused(browserA, offlineNoteId, true);
+    await waitForNoPeer(browserB, offlineNoteId);
+
+    await A.insertText(browserA.$('.ProseMirror'), offlineAText);
+    await B.insertText(browserB.$('.ProseMirror'), onlineBText);
+
+    await expect(browserA.$('.ProseMirror')).toHaveText(
+      expect.stringContaining(offlineAText)
+    );
+    await expect(browserB.$('.ProseMirror')).toHaveText(
+      expect.stringContaining(onlineBText)
+    );
+
+    await setNoteCollabPaused(browserA, offlineNoteId, false);
+
+    for (const client of [browserA, browserB]) {
+      await client.waitUntil(
+        async () => {
+          const text = await client.$('.ProseMirror').getText();
+          return (
+            text.includes(baseText) &&
+            text.includes(offlineAText) &&
+            text.includes(onlineBText)
+          );
+        },
+        {
+          timeout: 60_000,
+          timeoutMsg: 'offline edits did not converge after reconnect'
+        }
+      );
+    }
   });
 });

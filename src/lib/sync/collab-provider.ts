@@ -179,6 +179,13 @@ export class CollabProvider {
       // the room can compute a diff and ship us their newer ops.
       const sv = Y.encodeStateVector(this.opts.doc);
       void this.send(FRAME_SYNC_STEP_1, sv);
+      // Also publish our current state. If this client edited while
+      // disconnected, peers already in the room won't have sent us a fresh
+      // sync_step_1, so the normal request/reply half would only pull their
+      // edits into us. Yjs updates are idempotent, making this safe on ordinary
+      // reconnects and necessary for offline edits to converge both ways.
+      const update = Y.encodeStateAsUpdate(this.opts.doc);
+      void this.send(FRAME_SYNC_STEP_2, update);
       // Announce our awareness so peers' cursor list shows us joining.
       const local = encodeAwarenessUpdate(this.opts.awareness, [
         this.opts.awareness.clientID

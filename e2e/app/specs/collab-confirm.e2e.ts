@@ -26,6 +26,7 @@ declare global {
   interface Window {
     __mindstreamE2E?: {
       notePeerCount(noteId: string): number;
+      setNoteCollabPaused(noteId: string, paused: boolean): Promise<void>;
     };
   }
 }

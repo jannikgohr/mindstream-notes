@@ -505,7 +505,8 @@
         restoreSnapshot: (markdown) => applyMarkdownTemplate(markdown),
         currentSnapshot: () => (getMarkdown ? getMarkdown() : ''),
         snapshotNow: () => snapshotHistoryNow(),
-        peerCount: () => otherPeerCount(awareness)
+        peerCount: () => otherPeerCount(awareness),
+        setCollabPaused: (paused) => setE2eCollabPaused(paused)
       });
 
       // Snapshot a baseline on open so a note that's never edited still starts
@@ -535,6 +536,7 @@
   // repeat for no reason.
   let lastSeenPushed = false;
   let collabReady = false;
+  let e2eCollabPaused = false;
 
   $effect(() => {
     const pushed = tree.notesById[noteId]?.pushed ?? false;
@@ -557,6 +559,7 @@
       collabOnline = false;
     }
     collabConfigured = false;
+    if (e2eCollabPaused) return;
 
     // Derived from the single account.serverUrl setting: nginx routes
     // /yjs to the yjs-relay upstream (see backend/nginx/nginx.conf).
@@ -583,6 +586,20 @@
     } catch (err) {
       console.debug('[NoteEditor] collab provider init failed', err);
     }
+  }
+
+  async function setE2eCollabPaused(paused: boolean): Promise<void> {
+    e2eCollabPaused = paused;
+    if (paused) {
+      if (provider) {
+        provider.destroy();
+        provider = null;
+      }
+      collabOnline = false;
+      collabConfigured = false;
+      return;
+    }
+    await setupCollabProvider();
   }
 
   /**

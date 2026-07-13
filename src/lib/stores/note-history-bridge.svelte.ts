@@ -32,6 +32,8 @@ export interface NoteHistoryApi {
    * a collab prompt. Returns 0 when synced but alone.
    */
   peerCount?: () => number;
+  /** E2E-only: disconnect/reconnect the live collab provider for this editor. */
+  setCollabPaused?: (paused: boolean) => void | Promise<void>;
 }
 
 const registry = new Map<string, NoteHistoryApi>();
@@ -114,6 +116,7 @@ declare global {
   interface Window {
     __mindstreamE2E?: {
       notePeerCount(noteId: string): number;
+      setNoteCollabPaused(noteId: string, paused: boolean): Promise<void>;
     };
   }
 }
@@ -125,6 +128,12 @@ if (
   window.__mindstreamE2E = {
     notePeerCount(noteId: string): number {
       return getNoteHistory(noteId)?.peerCount?.() ?? 0;
+    },
+    async setNoteCollabPaused(noteId: string, paused: boolean): Promise<void> {
+      const setPaused = getNoteHistory(noteId)?.setCollabPaused;
+      if (!setPaused)
+        throw new Error(`note ${noteId} has no collab pause hook`);
+      await setPaused(paused);
     }
   };
 }
