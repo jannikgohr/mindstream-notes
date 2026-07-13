@@ -57,3 +57,27 @@ export function setDesktopLanguage(code: string): Promise<void> {
     () => undefined
   );
 }
+
+export function getDesktopThemeMode(): Promise<'light' | 'dark' | 'system'> {
+  return invokeOrFallback<'light' | 'dark' | 'system'>(
+    'get_desktop_theme_mode',
+    undefined,
+    () =>
+      (typeof localStorage === 'undefined'
+        ? 'system'
+        : (localStorage.getItem('mode-watcher-mode') ?? 'system')) as
+        | 'light'
+        | 'dark'
+        | 'system'
+  );
+}
+
+export function setDesktopThemeMode(
+  mode: 'light' | 'dark' | 'system'
+): Promise<void> {
+  return invokeOrFallback<void>(
+    'set_desktop_theme_mode',
+    { mode },
+    () => undefined
+  );
+}

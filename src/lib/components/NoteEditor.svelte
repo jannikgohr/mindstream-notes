@@ -674,7 +674,13 @@
   });
 
   onDestroy(() => {
-    if (saveTimer) clearTimeout(saveTimer);
+    if (saveTimer) {
+      clearTimeout(saveTimer);
+      saveTimer = null;
+      void persistCurrentNote({ updateStatus: false }).catch((err) => {
+        console.error('[NoteEditor] final save failed', err);
+      });
+    }
     // Flush a final history version for edits made since the last capture,
     // while the editor (and getMarkdown) is still alive. Fire-and-forget —
     // the backend dedups, so a no-op close is harmless.
@@ -878,41 +884,42 @@
     saveTimer = setTimeout(async () => {
       try {
         savingState = 'saving';
-        // Capture the markdown + y-doc state *now*, after the user has
-        // stopped typing for saveDebounceMs. Pulling markdown via the
-        // live serializer (instead of via the listener plugin) means
-        // remote-applied edits — which y-prosemirror dispatches with
-        // `addToHistory: false` and which the listener therefore ignores
-        // — are still reflected in the body we save. Array.from is
-        // necessary because Tauri serialises Uint8Array as an empty
-        // object via JSON.stringify.
-        const rawMarkdown = getMarkdown ? getMarkdown() : '';
-        // Trim trailing whitespace per-line on the way to disk. We don't
-        // mutate the live editor doc — that would jump the caret and
-        // broadcast a no-op edit to peers; we only sanitise the snapshot
-        // we hand to Rust.
-        const markdown = trimTrailingOnSave
-          ? rawMarkdown.replace(/[ \t]+$/gm, '')
-          : rawMarkdown;
-        const yrsState = yDoc
-          ? Array.from(Y.encodeStateAsUpdate(yDoc))
-          : undefined;
-        await apiSaveNote({ id: noteId, body: markdown, yrs_state: yrsState });
-        // Mirror the new modified timestamp in the local cache so the
-        // metadata panel reflects the save without a tree refetch.
-        const existing = tree.notesById[noteId];
-        if (existing) {
-          tree.notesById[noteId] = {
-            ...existing,
-            modified: new Date().toISOString()
-          };
-        }
-        savingState = 'saved';
+        await persistCurrentNote();
       } catch (err) {
         savingState = 'error';
         console.error('[NoteEditor] save failed', err);
       }
     }, saveDebounceMs);
+  }
+
+  async function persistCurrentNote(
+    opts: { updateStatus?: boolean } = {}
+  ): Promise<void> {
+    const updateStatus = opts.updateStatus ?? true;
+    // Capture the markdown + y-doc state synchronously while the editor still
+    // exists. This also lets onDestroy flush a pending debounce before Crepe
+    // tears down the ProseMirror/Yjs state.
+    const rawMarkdown = getMarkdown ? getMarkdown() : '';
+    // Trim trailing whitespace per-line on the way to disk. We don't mutate
+    // the live editor doc — that would jump the caret and broadcast a no-op
+    // edit to peers; we only sanitise the snapshot we hand to Rust.
+    const markdown = trimTrailingOnSave
+      ? rawMarkdown.replace(/[ \t]+$/gm, '')
+      : rawMarkdown;
+    // Array.from is necessary because Tauri serialises Uint8Array as an empty
+    // object via JSON.stringify.
+    const yrsState = yDoc ? Array.from(Y.encodeStateAsUpdate(yDoc)) : undefined;
+    await apiSaveNote({ id: noteId, body: markdown, yrs_state: yrsState });
+    // Mirror the new modified timestamp in the local cache so the metadata
+    // panel reflects the save without a tree refetch.
+    const existing = tree.notesById[noteId];
+    if (existing) {
+      tree.notesById[noteId] = {
+        ...existing,
+        modified: new Date().toISOString()
+      };
+    }
+    if (updateStatus) savingState = 'saved';
   }
 
   // --- In-document find & replace -------------------------------------------

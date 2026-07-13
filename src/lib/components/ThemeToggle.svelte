@@ -1,7 +1,8 @@
 <script lang="ts">
   import { Monitor, Moon, Sun } from '@lucide/svelte';
-  import { setMode, userPrefersMode } from 'mode-watcher';
+  import { userPrefersMode } from 'mode-watcher';
   import { Button } from '$lib/components/ui/button';
+  import { setSettingValue } from '$lib/settings/store.svelte';
 
   /**
    * Three-way theme cycle: Light → Dark → System → Light.
@@ -15,7 +16,7 @@
     const current = $userPrefersMode ?? 'system';
     const next =
       current === 'light' ? 'dark' : current === 'dark' ? 'system' : 'light';
-    setMode(next);
+    void setSettingValue('appearance.mode', next);
   }
 
   const tooltip = $derived.by(() => {
