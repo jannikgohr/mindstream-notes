@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
  * It is deliberately separate from the browser-fallback Playwright config:
  *   - it has **no** `webServer` — these tests never build or serve the SPA,
  *     they talk to the running stack over HTTP/WebSocket;
- *   - it lives in `e2e/backend/`, so the default `pnpm test:e2e` run and CI
+ *   - it lives in `e2e-tests/backend/`, so the default `pnpm test:e2e` run and CI
  *     never pick these specs up.
  *
  * The suite is gated behind `MINDSTREAM_E2E_BACKEND` (set inside the specs), so

@@ -4,7 +4,7 @@
  * docs/e2e-strategy.md §3; it is intentionally separate from the Playwright
  * browser-fallback suite and never runs in the default `pnpm test:e2e`.
  *
- * Requires the opt-in toolchain (see e2e/app/README.md):
+ * Requires the opt-in toolchain (see e2e-tests/app/README.md):
  *   - cargo: `tauri-driver` (and a platform webdriver: msedgedriver on Windows,
  *     WebKitWebDriver on Linux)
  *   - npm:   @wdio/cli @wdio/local-runner @wdio/mocha-framework @wdio/spec-reporter

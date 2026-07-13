@@ -18,7 +18,7 @@ categories that justify an end-to-end test rather than a unit test.
 > [known-limitations.md](known-limitations.md) for the by-design behaviours
 > several of these flows are meant to pin down.
 
-The existing `e2e/browser/` Playwright suite runs the SvelteKit SPA in
+The existing `e2e-tests/browser/` Playwright suite runs the SvelteKit SPA in
 **browser-fallback mode** (the in-memory mock store backs every API call), so
 it already covers the pure-UI journeys: app shell, search dialog, note/folder
 creation, source switching, the **note-history sidebar** (capture / restore /

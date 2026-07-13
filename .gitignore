@@ -14,8 +14,8 @@ node_modules
 !backend/.env.test
 
 # Cached T4 e2e account credentials (throwaway signups on the local test
-# stack, reused across runs — see e2e/app/helpers/accounts.ts).
-/e2e/app/helpers/.t4-accounts.json
+# stack, reused across runs — see e2e-tests/app/helpers/accounts.ts).
+/e2e-tests/app/helpers/.t4-accounts.json
 
 # Tauri
 /src-tauri/target
