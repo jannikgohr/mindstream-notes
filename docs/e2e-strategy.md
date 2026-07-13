@@ -157,9 +157,10 @@ open on the same note in a shared collection:
 2. **Restore propagation.** Restore in A → B converges on the restored content.
 3. **Concurrency (pins the limitation).** A restores while B holds a concurrent,
    not-yet-synced edit → assert the **documented** merge outcome (B's concurrent
-   addition survives as an orphan; markdown merges at boundaries). This test
-   exists specifically to catch a _change_ in the non-transactional-restore
-   behaviour, not to assert it's clean.
+   object/stroke additions survive as orphans; markdown currently converges to
+   the restored body and may overwrite a paused text edit). This test exists
+   specifically to catch a _change_ in the non-transactional-restore behaviour,
+   not to assert it's clean.
 4. **Undo propagation.** Undo the restore in A → B converges back.
 5. **Offline / reconnect.** Toggle A offline, edit both, reconnect → assert
    convergence.

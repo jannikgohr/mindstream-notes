@@ -34,12 +34,13 @@ resolved per-field by the CRDT. Concretely:
 - A collaborator's element/stroke added concurrently (not yet seen by the
   restorer) is **not** in the restorer's delete set, so it survives the restore
   as an orphan — you get the restored scene _plus_ stray content.
-- For markdown, replacing the entire document while a peer is typing produces a
-  messy text merge at the edit boundaries.
+- For markdown, the whole-template replacement can overwrite a paused peer's
+  concurrent text edit. Connected peers get a warning prompt before restore, but
+  a disconnected/paused collaborator may simply converge to the restored body.
 
 It always converges (no divergence/corruption), but it is not a clean
-transactional swap. The planned mitigation is the **collab confirmation prompt**
-(see _Planned_ below), which warns before overwriting a note others are editing.
+transactional swap. The **collab confirmation prompt** (see below) mitigates the
+connected-peer case by warning before overwriting a note others are editing.
 
 ### History is per-device, not synced — _by design_
 
