@@ -325,20 +325,36 @@ describe('T4 collection sharing across the owner’s two devices', function () {
     process.env.MINDSTREAM_E2E_FRESH_ACCOUNTS = '1';
     accounts = await provisionTwoAccounts(server);
 
-    // Bring A1 up ALONE and let it publish the account's vault Etebase
-    // collection before any other device signs in. Sync defaults to
-    // "live"/enabled, so two fresh devices signing in together would both
-    // auto-sync and hit `ensure_collection`'s create-if-none path, each minting
-    // its OWN vault collection — a permanent split-brain no pull loop can
-    // reconcile. Seeding + syncing on A1 first means A2 ADOPTS the existing
-    // vault instead of racing to create a second one.
-    await loginClient(browserA1, {
-      serverUrl: server,
-      username: accounts.sender.username,
-      password: accounts.sender.password
-    });
+    // Bring all three devices up CONCURRENTLY. Sync defaults to "live"/enabled,
+    // so A1 and A2 both auto-sync on mount and race in `ensure_collection`:
+    // each fresh device can mint its own vault Etebase collection for the same
+    // singleton. This used to be a permanent split-brain, worked around here by
+    // serializing bring-up. The reconcile window (sync fix) now converges both
+    // devices onto the lexicographically-smallest collection, so we exercise
+    // the real concurrent-bring-up path instead of masking it.
+    await Promise.all([
+      loginClient(browserA1, {
+        serverUrl: server,
+        username: accounts.sender.username,
+        password: accounts.sender.password
+      }),
+      loginClient(browserA2, {
+        serverUrl: server,
+        username: accounts.sender.username,
+        password: accounts.sender.password
+      }),
+      loginClient(browserB, {
+        serverUrl: server,
+        username: accounts.recipient.username,
+        password: accounts.recipient.password
+      })
+    ]);
     A1 = clientHelpers(browserA1);
+    A2 = clientHelpers(browserA2);
+    B = clientHelpers(browserB);
 
+    // A1 seeds the folder + note the suite shares. A2 adopts it by stable app
+    // id once the vault collections reconcile.
     await A1.newRootFolder(SHARED_FOLDER);
     sharedFolderIdA1 = await findCollectionId(browserA1, SHARED_FOLDER);
     const note = await createNoteFixture(
@@ -349,21 +365,6 @@ describe('T4 collection sharing across the owner’s two devices', function () {
     );
     sharedNoteId = note.id;
     await syncClient(browserA1);
-
-    // Only now bring up A2 (same account) and B (recipient); both adopt the
-    // vault A1 just published rather than racing to create their own.
-    await loginClient(browserA2, {
-      serverUrl: server,
-      username: accounts.sender.username,
-      password: accounts.sender.password
-    });
-    await loginClient(browserB, {
-      serverUrl: server,
-      username: accounts.recipient.username,
-      password: accounts.recipient.password
-    });
-    A2 = clientHelpers(browserA2);
-    B = clientHelpers(browserB);
   });
 
   // --- Baseline: the same account's vault reaches the second device ---
