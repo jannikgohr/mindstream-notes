@@ -475,6 +475,29 @@ const MIGRATIONS: &[Migration] = &[
             ALTER TABLE tombstones ADD COLUMN share_scope_id TEXT;
         "#,
     },
+    Migration {
+        to: 20,
+        // Bounded reconcile window for the vault singleton collections.
+        //
+        // Two brand-new devices on the same account auto-sync concurrently
+        // on first launch. Both hit `ensure_collection`'s create path before
+        // either has published, so each mints its OWN random-uid Etebase
+        // collection for the same singleton (notes/folders/assets/signatures)
+        // — a permanent split-brain the cache-first fast path can never
+        // reconcile, because neither device ever re-lists.
+        //
+        // `reconcile_passes_left` arms a short window during which each sync
+        // lists the account's collections of that type and converges on the
+        // lexicographically-smallest live uid (a deterministic winner every
+        // device agrees on), migrating its rows off any loser. The counter
+        // decrements on a stable pass and re-arms on create/migrate, so once
+        // devices agree for a few consecutive syncs we disarm and revert to
+        // the cheap cache fast path. Default 3 covers the setup window for
+        // rows that predate this migration.
+        sql: r#"
+            ALTER TABLE sync_state ADD COLUMN reconcile_passes_left INTEGER NOT NULL DEFAULT 3;
+        "#,
+    },
 ];
 
 pub fn run(conn: &mut Connection) -> AppResult<()> {
@@ -513,10 +536,17 @@ pub fn was_freshly_created(conn: &Connection) -> AppResult<bool> {
 }
 
 /// Insert demo content so the app isn't empty on first launch.
+///
+/// Seed rows use *deterministic* ids (`seed_work`, `seed_welcome`, …) rather
+/// than random uuids. Sync's join key is the app-level row id (embedded in the
+/// encrypted payload), so two fresh devices on the same account must seed the
+/// same ids or their identical demo content would sync as duplicate rows that
+/// no reconcile can collapse. Fixed ids make the seeds merge by id on first
+/// sync. Existing installs keep whatever random ids they already seeded.
 pub fn seed(conn: &Connection) -> AppResult<()> {
     let now = chrono::Utc::now().to_rfc3339();
-    let work_id = format!("coll_{}", uuid::Uuid::new_v4());
-    let personal_id = format!("coll_{}", uuid::Uuid::new_v4());
+    let work_id = "seed_work";
+    let personal_id = "seed_personal";
     conn.execute(
         "INSERT INTO collections(id, parent_collection_id, name, position, created, modified)
          VALUES (?1, NULL, ?2, 0, ?3, ?3)",
@@ -528,20 +558,22 @@ pub fn seed(conn: &Connection) -> AppResult<()> {
         params![personal_id, "Personal", now],
     )?;
 
-    insert_note(conn, "Welcome", WELCOME_BODY, None, 0, &now)?;
+    insert_note(conn, "seed_welcome", "Welcome", WELCOME_BODY, None, 0, &now)?;
     insert_note(
         conn,
+        "seed_sprint",
         "Sprint planning",
         "# Sprint planning\n\n## Agenda\n\n1. Carry-over from last sprint\n2. Capacity check\n3. Commit\n",
-        Some(&work_id),
+        Some(work_id),
         0,
         &now,
     )?;
     insert_note(
         conn,
+        "seed_ideas",
         "Ideas",
         "# Ideas\n\n- Try a graph view\n- Backlinks panel\n- Daily notes\n",
-        Some(&personal_id),
+        Some(personal_id),
         0,
         &now,
     )?;
@@ -551,13 +583,13 @@ pub fn seed(conn: &Connection) -> AppResult<()> {
 
 fn insert_note(
     conn: &Connection,
+    id: &str,
     title: &str,
     body: &str,
     parent: Option<&str>,
     position: i64,
     now: &str,
 ) -> AppResult<()> {
-    let id = format!("note_{}", uuid::Uuid::new_v4());
     conn.execute(
         "INSERT INTO notes(id, parent_collection_id, title, body, position, created, modified)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",

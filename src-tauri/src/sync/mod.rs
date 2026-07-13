@@ -494,48 +494,76 @@ fn run(db: &Db, account: &Account, self_username: Option<&str>) -> AppResult<Syn
     Ok(delta)
 }
 
+/// How many consecutive stable syncs (winner == cached) we require before
+/// disarming the reconcile window and reverting to the cache fast path. Each
+/// create/migrate re-arms to this value. Three passes at the "live" 30s
+/// cadence is ~90s — comfortably longer than the concurrent first-sync window
+/// where two fresh devices could otherwise cement a split-brain.
+const RECONCILE_PASSES: i64 = 3;
+
 /// Find the Etebase Collection of `collection_type` that we previously
-/// created, or create one. Cached in `sync_state` so we don't re-list on
-/// every sync.
+/// created, or create one, keeping the account's devices converged on a
+/// single collection per singleton `kind`.
+///
+/// Cache-first once *disarmed*: a cached uid that still fetches is returned
+/// without listing, so steady-state sync stays cheap.
+///
+/// While *armed* (`reconcile_passes_left > 0`) — the window after any
+/// create/migrate, and the few syncs after this migration lands — we list the
+/// account's collections of this type and converge on the lexicographically
+/// smallest live uid. That min is a deterministic winner every device computes
+/// identically, so two fresh devices that each created their own collection in
+/// the first-sync race both adopt the same one; the loser migrates its rows
+/// over (see `switch_to_collection`) and the abandoned collection is simply
+/// left orphaned server-side. A stable pass decrements the counter; reaching
+/// zero disarms.
 fn ensure_collection(
     db: &Db,
     cm: &CollectionManager,
     kind: &str,
     collection_type: &str,
 ) -> AppResult<Collection> {
-    let cached_uid: Option<String> = db.with_conn(|c| {
-        Ok(c.query_row(
-            "SELECT etebase_collection_uid FROM sync_state WHERE kind = ?1",
-            params![kind],
-            |r| r.get::<_, Option<String>>(0),
-        )
-        .optional()?
-        .flatten())
-    })?;
+    let (cached_uid, passes_left) = load_collection_state(db, kind)?;
 
-    if let Some(uid) = cached_uid {
-        match cm.fetch(&uid, None) {
-            Ok(col) => return Ok(col),
-            Err(e) => log::warn!("[sync] cached collection {uid} for {kind} unfetchable: {e}"),
+    // Disarmed fast path: trust the cache exactly like before. Only fall
+    // through to the (re)listing path if the cached collection can't be
+    // fetched — a cache miss must not silently mint a duplicate.
+    if passes_left == 0 {
+        if let Some(uid) = &cached_uid {
+            match cm.fetch(uid, None) {
+                Ok(col) => return Ok(col),
+                Err(e) => log::warn!("[sync] cached collection {uid} for {kind} unfetchable: {e}"),
+            }
         }
     }
 
-    // Look for an existing one of the right type before creating, so two
-    // installs of the same account don't end up with duplicate collections.
     let list = cm
         .list(collection_type, None)
         .map_err(|e| AppError::InvalidArg(format!("list {collection_type}: {e}")))?;
-    if let Some(existing) = list.data().iter().find(|c| !c.is_deleted()) {
-        let uid = existing.uid().to_string();
-        save_collection_uid(db, kind, &uid)?;
-        // We found it but the borrowed value is in `list`; refetch a clean
-        // owned Collection via the manager so we can return it.
-        let owned = cm
-            .fetch(&uid, None)
-            .map_err(|e| AppError::InvalidArg(format!("fetch existing {collection_type}: {e}")))?;
-        return Ok(owned);
+    let winner_uid = list
+        .data()
+        .iter()
+        .filter(|c| !c.is_deleted())
+        .map(|c| c.uid().to_string())
+        .min();
+
+    if let Some(winner) = winner_uid {
+        if cached_uid.as_deref() == Some(winner.as_str()) {
+            // Stable this pass — count down toward disarm.
+            set_reconcile_passes(db, kind, passes_left.saturating_sub(1))?;
+        } else {
+            // Adopt/migrate onto the winner and re-arm the window. On a fresh
+            // device this is the harmless "adopt existing" case (rows are
+            // already dirty with NULL item uids); on a loser it re-homes rows
+            // off the duplicate collection.
+            switch_to_collection(db, kind, &winner)?;
+        }
+        return cm
+            .fetch(&winner, None)
+            .map_err(|e| AppError::InvalidArg(format!("fetch {collection_type}: {e}")));
     }
 
+    // None exist yet — create, upload, arm the window.
     let mut meta = ItemMetadata::new();
     meta.set_name(Some(match kind {
         KIND_NOTES => "Mindstream Notes",
@@ -554,15 +582,92 @@ fn ensure_collection(
     Ok(col)
 }
 
-fn save_collection_uid(db: &Db, kind: &str, uid: &str) -> AppResult<()> {
+/// Read the cached collection uid and remaining reconcile passes for `kind`.
+/// A missing row means "never synced this kind" → armed (RECONCILE_PASSES) so
+/// the first sync goes through the listing/converge path.
+fn load_collection_state(db: &Db, kind: &str) -> AppResult<(Option<String>, i64)> {
+    db.with_conn(|c| {
+        Ok(c.query_row(
+            "SELECT etebase_collection_uid, reconcile_passes_left
+             FROM sync_state WHERE kind = ?1",
+            params![kind],
+            |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, i64>(1)?)),
+        )
+        .optional()?
+        .unwrap_or((None, RECONCILE_PASSES)))
+    })
+}
+
+fn set_reconcile_passes(db: &Db, kind: &str, passes: i64) -> AppResult<()> {
     db.with_conn(|c| {
         c.execute(
-            "INSERT INTO sync_state (kind, etebase_collection_uid, stoken) VALUES (?1, ?2, NULL)
-             ON CONFLICT(kind) DO UPDATE SET etebase_collection_uid = excluded.etebase_collection_uid",
-            params![kind, uid],
+            "UPDATE sync_state SET reconcile_passes_left = ?1 WHERE kind = ?2",
+            params![passes, kind],
         )?;
         Ok(())
     })
+}
+
+/// Point `kind`'s cache at a newly created collection and arm the reconcile
+/// window. Resets stoken because a new collection uid invalidates the old
+/// pull cursor.
+fn save_collection_uid(db: &Db, kind: &str, uid: &str) -> AppResult<()> {
+    db.with_conn(|c| {
+        c.execute(
+            "INSERT INTO sync_state (kind, etebase_collection_uid, stoken, reconcile_passes_left)
+             VALUES (?1, ?2, NULL, ?3)
+             ON CONFLICT(kind) DO UPDATE SET
+                etebase_collection_uid = excluded.etebase_collection_uid,
+                stoken = NULL,
+                reconcile_passes_left = excluded.reconcile_passes_left",
+            params![kind, uid, RECONCILE_PASSES],
+        )?;
+        Ok(())
+    })
+}
+
+/// Migrate this device onto the reconcile winner for `kind`. Points the cache
+/// at `winner_uid`, clears the stale pull cursor, re-arms the window, and
+/// routes every vault row of this kind back through push's create path against
+/// the winner by clearing its old collection-scoped item uid/etag and marking
+/// it dirty. The winner already holds the surviving copies; rows converge by
+/// their stable app id on the next pull, and rows only this device had are
+/// re-created in the winner. Scoped (shared) rows keep their own routing and
+/// the local-only 'trash' folder is never pushed.
+fn switch_to_collection(db: &Db, kind: &str, winner_uid: &str) -> AppResult<()> {
+    db.with_conn(|c| {
+        c.execute(
+            "INSERT INTO sync_state (kind, etebase_collection_uid, stoken, reconcile_passes_left)
+             VALUES (?1, ?2, NULL, ?3)
+             ON CONFLICT(kind) DO UPDATE SET
+                etebase_collection_uid = excluded.etebase_collection_uid,
+                stoken = NULL,
+                reconcile_passes_left = excluded.reconcile_passes_left",
+            params![kind, winner_uid, RECONCILE_PASSES],
+        )?;
+        let sql = match kind {
+            KIND_NOTES => {
+                "UPDATE notes SET dirty = 1, etebase_uid = NULL, etebase_etag = NULL
+                 WHERE share_scope_id IS NULL"
+            }
+            KIND_FOLDERS => {
+                "UPDATE collections SET dirty = 1, etebase_uid = NULL, etebase_etag = NULL
+                 WHERE share_scope_id IS NULL AND id != 'trash'"
+            }
+            KIND_ASSETS => {
+                "UPDATE assets SET dirty = 1, etebase_uid = NULL, etebase_etag = NULL
+                 WHERE share_scope_id IS NULL"
+            }
+            KIND_SIGNATURES => {
+                "UPDATE signatures SET dirty = 1, etebase_uid = NULL, etebase_etag = NULL"
+            }
+            _ => return Ok(()),
+        };
+        c.execute(sql, [])?;
+        Ok(())
+    })?;
+    log::info!("[sync] {kind} reconciled onto collection {winner_uid}");
+    Ok(())
 }
 
 // ---------- Pull ----------
@@ -2822,6 +2927,141 @@ mod tests {
         assert_eq!(
             title, "A offline title",
             "A's offline edit is preserved over B's copy"
+        );
+    }
+
+    #[test]
+    fn switch_to_collection_rehomes_vault_rows_only() {
+        // The reconcile "loser" migrates onto the winner: its vault rows get
+        // dirtied with their old collection-scoped item uid/etag cleared (so
+        // push re-creates them in the winner), while scoped rows and the
+        // local-only 'trash' folder are left untouched. The cache repoints and
+        // the pull cursor resets.
+        let db = open_memory_for_tests();
+        db.with_conn(|c| {
+            // Pre-existing cache pointing at the loser collection with a stoken.
+            c.execute(
+                "INSERT INTO sync_state (kind, etebase_collection_uid, stoken, reconcile_passes_left)
+                 VALUES ('notes', 'loser_uid', 'stok_old', 1)",
+                [],
+            )?;
+            // Vault note synced to the loser collection.
+            c.execute(
+                "INSERT INTO notes(id, title, body, position, created, modified,
+                                   etebase_uid, etebase_etag, dirty, note_kind)
+                 VALUES ('note_vault', 'V', '', 0, 't', 't', 'item_v', 'etag_v', 0, 'markdown')",
+                [],
+            )?;
+            // Scoped (shared) note — must keep its own routing.
+            c.execute(
+                "INSERT INTO notes(id, title, body, position, created, modified,
+                                   etebase_uid, etebase_etag, dirty, note_kind, share_scope_id)
+                 VALUES ('note_scoped', 'S', '', 0, 't', 't', 'item_s', 'etag_s', 0, 'markdown', 'scope_1')",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+        switch_to_collection(&db, KIND_NOTES, "winner_uid").unwrap();
+
+        let (uid, stoken, passes): (Option<String>, Option<String>, i64) = db
+            .with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT etebase_collection_uid, stoken, reconcile_passes_left
+                     FROM sync_state WHERE kind = 'notes'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(
+            uid.as_deref(),
+            Some("winner_uid"),
+            "cache repoints to winner"
+        );
+        assert_eq!(stoken, None, "stale pull cursor is cleared");
+        assert_eq!(passes, RECONCILE_PASSES, "window re-arms on migrate");
+
+        let (v_uid, v_etag, v_dirty): (Option<String>, Option<String>, i64) = db
+            .with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT etebase_uid, etebase_etag, dirty FROM notes WHERE id = 'note_vault'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(v_uid, None, "vault row's loser item uid is cleared");
+        assert_eq!(v_etag, None, "vault row's loser etag is cleared");
+        assert_eq!(
+            v_dirty, 1,
+            "vault row is dirtied to re-create in the winner"
+        );
+
+        let (s_uid, s_dirty): (Option<String>, i64) = db
+            .with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT etebase_uid, dirty FROM notes WHERE id = 'note_scoped'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(
+            s_uid.as_deref(),
+            Some("item_s"),
+            "scoped row keeps its routing"
+        );
+        assert_eq!(s_dirty, 0, "scoped row is not touched by a vault reconcile");
+    }
+
+    #[test]
+    fn switch_to_collection_leaves_trash_folder_local() {
+        // The built-in 'trash' folder is a local construct (dirty=0, never
+        // pushed). A folders reconcile must not dirty it or clear anything.
+        let db = open_memory_for_tests();
+        db.with_conn(|c| {
+            c.execute(
+                "INSERT INTO sync_state (kind, etebase_collection_uid, stoken, reconcile_passes_left)
+                 VALUES ('folders', 'loser_uid', NULL, 1)",
+                [],
+            )?;
+            c.execute(
+                "INSERT INTO collections(id, parent_collection_id, name, position,
+                                         created, modified, etebase_uid, etebase_etag, dirty)
+                 VALUES ('coll_real', NULL, 'Real', 0, 't', 't', 'item_r', 'etag_r', 0)",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+        switch_to_collection(&db, KIND_FOLDERS, "winner_uid").unwrap();
+
+        let trash_dirty: i64 = db
+            .with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT dirty FROM collections WHERE id = 'trash'",
+                    [],
+                    |r| r.get(0),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(trash_dirty, 0, "trash stays local-only, never re-homed");
+
+        let real_dirty: i64 = db
+            .with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT dirty FROM collections WHERE id = 'coll_real'",
+                    [],
+                    |r| r.get(0),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(
+            real_dirty, 1,
+            "a real vault folder is re-homed onto the winner"
         );
     }
 }
