@@ -509,4 +509,57 @@ describe('T4 collection sharing across the owner’s two devices', function () {
     await expectNoteBodyContains(browserB, sharedNoteId, INITIAL_BODY);
     await expectNoteBodyContains(browserB, sharedNoteId, PRE_SHARE_EDIT);
   });
+
+  // --- 4.9 Offline folder rename survives a re-home (docs/e2e-flows.md §4.9) ---
+  it("A1's unpushed folder rename survives the re-home into a scope", async () => {
+    // A fresh folder pushed to the vault, then renamed locally and NOT re-synced
+    // — the same "unpushed at share time" precondition the offline case needs
+    // (no true network-offline toggle exists yet, see the note on the 4.8 `it`).
+    // Sharing it re-homes the subtree into a scope (migrate_subtree_into_scope
+    // clears the vault etebase_uid + tombstones the old row). The risk this
+    // guards: the rename is a dirty last-write-wins metadata change, so the
+    // re-home + scope push must KEEP the new name, not revert to the server's
+    // pre-rename copy (nor resurrect an orphan vault folder under the old name).
+    const RENAME_ORIG = `Rename Origin ${RUN_ID}`;
+    const RENAME_NEW = `Renamed Offline ${RUN_ID}`;
+
+    const folder = await invokeTauri<CollectionRow>(
+      browserA1,
+      'create_collection',
+      { input: { name: RENAME_ORIG, parent_collection_id: null } }
+    );
+    // Push the folder to the vault under its original name first.
+    await syncClient(browserA1);
+
+    // Rename locally and DON'T sync — the rename is now dirty/unpushed.
+    await invokeTauri(browserA1, 'update_collection', {
+      input: { id: folder.id, name: RENAME_NEW }
+    });
+
+    // Share the (renamed) folder → re-homes it into a scope.
+    await invokeTauri(browserA1, 'invite_collection', {
+      input: {
+        collection_id: folder.id,
+        username: accounts.recipient.username,
+        access_level: 'read_write'
+      }
+    });
+
+    // Drive several sync rounds; the new name must hold (never flip back to the
+    // pre-rename server copy) rather than trusting a single post-share sync.
+    const nameHeld = await syncUntil(browserA1, async () => {
+      const cols = await listCollections(browserA1);
+      const row = cols.find((c) => c.id === folder.id);
+      return row?.name === RENAME_NEW;
+    });
+    expect(nameHeld).toBe(true);
+
+    // Exactly one folder with that id — no orphan vault copy resurrected.
+    const cols = await listCollections(browserA1);
+    const matches = cols.filter((c) => c.id === folder.id);
+    expect(matches).toHaveLength(1);
+    expect(matches[0].name).toBe(RENAME_NEW);
+    // And the pre-rename name is gone from the tree entirely.
+    expect(cols.some((c) => c.name === RENAME_ORIG)).toBe(false);
+  });
 });
