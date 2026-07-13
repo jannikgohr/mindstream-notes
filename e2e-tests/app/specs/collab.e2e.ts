@@ -1,5 +1,5 @@
 /**
- * T4 — the collaboration matrix (docs/e2e-strategy.md §4, "two clients, shared
+ * T4 — the collaboration matrix (docs/e2e/flows.md, "two clients, shared
  * note") and flow 2.5. Two app instances (two profile dirs) signed into the
  * same test account, both open on the same note in a shared collection.
  *

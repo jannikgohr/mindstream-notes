@@ -7,8 +7,9 @@ reason. Each entry notes whether it's **by design**, a **known limitation**, or
 **planned**, and points at the code that owns the behaviour.
 
 The end-to-end coverage for these surfaces (and the planned fixes) is laid out
-in [e2e-strategy.md](e2e-strategy.md) and catalogued in
-[e2e-flows.md](e2e-flows.md).
+in [e2e/strategy.md](e2e/strategy.md) and catalogued in
+[e2e/flows.md](e2e/flows.md). To run the suites, see
+[e2e-tests/README.md](../e2e-tests/README.md).
 
 ---
 

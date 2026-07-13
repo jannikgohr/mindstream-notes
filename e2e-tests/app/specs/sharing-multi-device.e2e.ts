@@ -8,7 +8,7 @@
  *
  *   1. Offline-style edit before the share is not lost — a note edited on A1 and
  *      left unpushed (dirty) at the moment F is shared must survive the re-home
- *      into the scope and converge to the recipient (docs/e2e-flows.md §4.8,
+ *      into the scope and converge to the recipient (docs/e2e/flows.md §4.8,
  *      approximated here without a true network-offline toggle — see the note on
  *      the relevant `it`).
  *   2. The shared-by-me indicator shows on BOTH of A's devices — A2 must learn
@@ -400,7 +400,7 @@ describe('T4 collection sharing across the owner’s two devices', function () {
   it('an unpushed edit made before the share is not lost when A1 shares the folder', async () => {
     // Edit the note on A1 and DO NOT sync — the row is now dirty/unpushed, the
     // same precondition as an edit made while offline. A true network-offline
-    // toggle (docs/e2e-flows.md §4.8) doesn't exist yet; leaving the edit
+    // toggle (docs/e2e/flows.md §4.8) doesn't exist yet; leaving the edit
     // unpushed reproduces the crux: the local edit must merge into the scope
     // rather than be clobbered when the folder re-homes on share.
     await saveNoteBodyFixture(
@@ -518,7 +518,7 @@ describe('T4 collection sharing across the owner’s two devices', function () {
     await expectNoteBodyContains(browserB, sharedNoteId, PRE_SHARE_EDIT);
   });
 
-  // --- 4.9 Offline folder rename survives a re-home (docs/e2e-flows.md §4.9) ---
+  // --- 4.9 Offline folder rename survives a re-home (docs/e2e/flows.md §4.9) ---
   it("A1's unpushed folder rename survives the re-home into a scope", async () => {
     // A fresh folder pushed to the vault, then renamed locally and NOT re-synced
     // — the same "unpushed at share time" precondition the offline case needs

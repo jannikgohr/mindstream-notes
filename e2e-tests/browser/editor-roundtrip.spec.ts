@@ -1,7 +1,7 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 
 /**
- * Flow 1.1 (docs/e2e-flows.md): create → edit → reopen a markdown note.
+ * Flow 1.1 (docs/e2e/flows.md): create → edit → reopen a markdown note.
  *
  * Browser-fallback (T2): the Milkdown editor serialises to markdown and the
  * in-memory mock store persists the body, so switching away from a note and

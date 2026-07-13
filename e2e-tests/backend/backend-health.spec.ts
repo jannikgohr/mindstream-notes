@@ -4,7 +4,7 @@ import { URL } from 'node:url';
 import { expect, test } from '@playwright/test';
 
 /**
- * Local-only health gating for the mindstream-server stack (docs/e2e-strategy.md
+ * Local-only health gating for the mindstream-server stack (docs/e2e/backend-stack.md
  * §2.2). These are the probes that must pass before the (not-yet-built) T4
  * collaboration specs can run against a real backend, so they double as a quick
  * "is my stack actually up and routed correctly?" smoke test.

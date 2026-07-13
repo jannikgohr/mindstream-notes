@@ -1,6 +1,6 @@
 /**
  * T3 — note history against the real backend (Rust history table + SQLite).
- * Implements docs/e2e-strategy.md §4 (T3). The browser-fallback slice of this
+ * Implements docs/e2e/flows.md (T3). The browser-fallback slice of this
  * lives in e2e-tests/browser/note-history.spec.ts; here the value is the *real* capture /
  * restore / undo round-trip and that it survives an app restart.
  *

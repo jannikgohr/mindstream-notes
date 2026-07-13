@@ -15,7 +15,7 @@
  *
  * NOTE: this harness is a scaffold. The profile-dir + restart seam is wired to
  * the documented env override, but two things still need a real environment to
- * finish and validate (tracked in docs/e2e-strategy.md §3 / §7):
+ * finish and validate (tracked in docs/e2e/harness.md):
  *   - per-spec profile-dir injection requires respawning tauri-driver with new
  *     env (see `freshProfileDir` / wdio.conf `beforeSession`);
  *   - native file dialogs need a Rust-side test hook — `requireDialogHook`
@@ -36,7 +36,7 @@ export const BACKEND_E2E = process.env.MINDSTREAM_E2E_BACKEND === '1';
 
 /**
  * Native-dialog test hook (export/import/PDF pickers). Not yet implemented on
- * the Rust side — see e2e-strategy.md §3. Flip on via env once a hook exists so
+ * the Rust side — see docs/e2e/harness.md. Flip on via env once a hook exists so
  * the backup/PDF specs stop self-skipping.
  */
 export const DIALOG_HOOK = process.env.MINDSTREAM_E2E_DIALOG_HOOK === '1';

@@ -1,5 +1,5 @@
 /**
- * T4 — sync, two devices, sequential (docs/e2e-strategy.md §4, last block).
+ * T4 — sync, two devices, sequential (docs/e2e/flows.md, last block).
  * Device A edits/restores → push → Device B pulls → assert the **content**
  * matches AND that B has **no `reverted` timeline entry** for A's restore.
  *

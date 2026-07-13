@@ -1,5 +1,5 @@
 /**
- * T4 — the collab confirmation prompt before restore (docs/e2e-strategy.md §5).
+ * T4 — the collab confirmation prompt before restore (docs/e2e/status.md).
  * `peerCount` is now plumbed for the awareness-based editors (markdown / PDF),
  * so with a second client present a restore must show the confirmation, and
  * solo editing must not. Ink / freeform don't report presence yet, so this also

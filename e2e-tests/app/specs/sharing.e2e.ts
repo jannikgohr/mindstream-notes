@@ -1,6 +1,6 @@
 /**
- * T4 — collection sharing (manifest bundles), docs/e2e-flows.md §4 and
- * e2e-strategy.md §5. Every flow here is Etebase network IO with no unit
+ * T4 — collection sharing (manifest bundles), docs/e2e/flows.md §4.
+ * Every flow here is Etebase network IO with no unit
  * coverage, and the meaningful ones need **two distinct accounts** — a sender
  * (A) and a recipient (B) whose public key A resolves via `fetch_user_profile`.
  * That is a stronger requirement than the collab.e2e.ts matrix (one account,
@@ -8,7 +8,7 @@
  *
  * Like collab.e2e.ts this is gated to skip until the two-client seam runs (wdio
  * multiremote → `browserA`/`browserB`, two driver processes) plus two-account
- * provisioning against Etebase (e2e-strategy.md §2.1, §7).
+ * provisioning against Etebase (docs/e2e/backend-stack.md).
  *
  * Status: flows 4.1–4.6, the core 4.7 subtree convergence path, and 4.7b
  * move-out re-home are IMPLEMENTED and validated against the live two-app +
