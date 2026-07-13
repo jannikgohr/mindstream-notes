@@ -122,6 +122,20 @@ pub struct E2eStandaloneInviteResult {
     pub collection_uid: String,
 }
 
+#[cfg(feature = "e2e-data-dir")]
+#[derive(Debug, Clone, Deserialize)]
+pub struct E2eIncompleteBundleInput {
+    pub username: String,
+    pub name: String,
+    pub access_level: ShareAccessLevel,
+}
+
+#[cfg(feature = "e2e-data-dir")]
+#[derive(Debug, Clone, Serialize)]
+pub struct E2eIncompleteBundleResult {
+    pub manifest_collection_uid: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct CollectionMember {
     pub username: String,
@@ -695,6 +709,133 @@ pub async fn e2e_create_standalone_collection_invite(
     })
     .await
     .map_err(|e| format!("create standalone invite task: {e}"))?
+    .map_err(Into::into)
+}
+
+#[cfg(feature = "e2e-data-dir")]
+#[tauri::command]
+pub async fn e2e_create_incomplete_share_bundle(
+    app: AppHandle,
+    input: E2eIncompleteBundleInput,
+) -> Result<E2eIncompleteBundleResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let E2eIncompleteBundleInput {
+            username,
+            name,
+            access_level,
+        } = input;
+
+        let recipient = username.trim();
+        if recipient.is_empty() {
+            return Err(AppError::InvalidArg(
+                "a recipient username is required".into(),
+            ));
+        }
+
+        let account = restore_required(&app)?;
+        let owner_username = crate::auth::read_session_info(&app)?.map(|info| info.username);
+        let inv_manager = account
+            .invitation_manager()
+            .map_err(|e| AppError::InvalidArg(format!("invitation_manager: {e}")))?;
+        let cm = account
+            .collection_manager()
+            .map_err(|e| AppError::InvalidArg(format!("collection_manager: {e}")))?;
+        let profile = inv_manager
+            .fetch_user_profile(recipient)
+            .map_err(|e| profile_lookup_error(recipient, e))?;
+        let pubkey = profile.pubkey().to_vec();
+
+        let folders = create_share_collection(
+            &cm,
+            COLLECTION_TYPE_SHARE_FOLDERS,
+            &format!("{name} — folders"),
+            &[],
+        )?;
+        let notes = create_share_collection(
+            &cm,
+            COLLECTION_TYPE_SHARE_NOTES,
+            &format!("{name} — notes"),
+            &[],
+        )?;
+        let assets = create_share_collection(
+            &cm,
+            COLLECTION_TYPE_SHARE_ASSETS,
+            &format!("{name} — assets"),
+            &[],
+        )?;
+        let share_scope_id = format!("scope_{}", uuid::Uuid::new_v4());
+        let root_folder_id = format!("e2e_incomplete_root_{}", uuid::Uuid::new_v4());
+        let manifest = build_share_manifest(
+            &share_scope_id,
+            &name,
+            &root_folder_id,
+            owner_username.as_deref(),
+            folders.uid(),
+            notes.uid(),
+            assets.uid(),
+        );
+        let manifest_json = serde_json::to_vec(&manifest)
+            .map_err(|e| AppError::InvalidArg(format!("encode manifest: {e}")))?;
+        let manifest_col = create_share_collection(
+            &cm,
+            COLLECTION_TYPE_SHARE_MANIFEST,
+            &format!("{name} — share"),
+            &manifest_json,
+        )?;
+
+        let level: CollectionAccessLevel = access_level.into();
+        invite_to_collection(
+            &inv_manager,
+            &manifest_col,
+            recipient,
+            &pubkey,
+            CollectionAccessLevel::ReadOnly,
+        )?;
+        invite_to_collection(&inv_manager, &folders, recipient, &pubkey, level)?;
+        invite_to_collection(&inv_manager, &notes, recipient, &pubkey, level)?;
+
+        Ok::<_, AppError>(E2eIncompleteBundleResult {
+            manifest_collection_uid: manifest_col.uid().to_string(),
+        })
+    })
+    .await
+    .map_err(|e| format!("create incomplete share bundle task: {e}"))?
+    .map_err(Into::into)
+}
+
+#[cfg(feature = "e2e-data-dir")]
+#[tauri::command]
+pub async fn e2e_accept_share_manifest_only(
+    app: AppHandle,
+    manifest_collection_uid: String,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let account = restore_required(&app)?;
+        let inv_manager = account
+            .invitation_manager()
+            .map_err(|e| AppError::InvalidArg(format!("invitation_manager: {e}")))?;
+        let incoming = list_all_incoming(&inv_manager)?;
+        let Some(pending_manifest) = incoming.iter().find(|invitation| {
+            invitation.collection_uid == manifest_collection_uid
+                && invitation.collection_type.as_deref() == Some(COLLECTION_TYPE_SHARE_MANIFEST)
+        }) else {
+            return Err(AppError::NotFound(format!(
+                "manifest invitation for {manifest_collection_uid}"
+            )));
+        };
+        let Some(signed) = find_incoming_invitation(&inv_manager, &pending_manifest.id)? else {
+            return Err(AppError::NotFound(format!(
+                "manifest invitation {}",
+                pending_manifest.id
+            )));
+        };
+        inv_manager
+            .accept(&signed)
+            .map_err(|e| AppError::InvalidArg(format!("accept manifest invitation: {e}")))?;
+        Ok::<(), AppError>(())
+    })
+    .await
+    .map_err(|e| format!("accept share manifest task: {e}"))?
     .map_err(Into::into)
 }
 

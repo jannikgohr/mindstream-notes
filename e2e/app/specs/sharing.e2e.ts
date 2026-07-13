@@ -10,13 +10,12 @@
  * multiremote → `browserA`/`browserB`, two driver processes) plus two-account
  * provisioning against Etebase (e2e-strategy.md §2.1, §7).
  *
- * Status: flows 4.1–4.4, 4.6, the core 4.7 subtree convergence path, and 4.7b
+ * Status: flows 4.1–4.6, the core 4.7 subtree convergence path, and 4.7b
  * move-out re-home are IMPLEMENTED and validated against the live two-app +
- * backend session. 4.5 and 4.8–4.9 stay documented skeletons: each needs a seam
- * that doesn't exist yet — server-side part-invite cancellation (4.5), move-UI
- * automation + asset embedding render assertions (4.7 asset UI), and an
- * offline/network toggle hook (4.8–4.9). Plain-vault 4.10 lives in
- * sync-history.e2e.ts.
+ * backend session. 4.8–4.9 stay documented skeletons: each needs a seam that
+ * doesn't exist yet — move-UI automation + asset embedding render assertions
+ * (4.7 asset UI), and an offline/network toggle hook (4.8–4.9). Plain-vault
+ * 4.10 lives in sync-history.e2e.ts.
  *
  * Accessible names referenced below (from src/lib/settings/i18n/en.json, the
  * same names the SvelteKit UI renders inside the WebView):
@@ -150,6 +149,17 @@ interface NoteRow {
 interface AssetRow {
   id: string;
   bytes: number[];
+}
+
+interface IncomingShareBundleFixture {
+  name: string | null;
+  pending: boolean;
+  complete: boolean;
+  warnings: string[];
+  parts: Array<{
+    expected_collection_type: string;
+    invitation: unknown | null;
+  }>;
 }
 
 async function invokeTauri<T>(
@@ -435,6 +445,7 @@ describe('T4 collection sharing (manifest bundles)', function () {
   });
 
   const SECOND_FOLDER = `Second Share ${RUN_ID}`;
+  const INCOMPLETE_FOLDER = `Incomplete Share ${RUN_ID}`;
 
   // --- 4.4 Decline a share bundle (P2) ---
   it('B declines a second bundle → it does not loop back on rescan', async () => {
@@ -469,12 +480,103 @@ describe('T4 collection sharing (manifest bundles)', function () {
   });
 
   // --- 4.5 Incomplete bundle can't be accepted (P2) ---
-  it('an incomplete bundle disables Accept and shows the incomplete warning', async function () {
-    // Construct a share missing one required part invite (e.g. cancel the
-    // assets invite server-side after creation). Assert B's bundle notification
-    // shows the incomplete message (ui.notifications.shareBundle.incomplete),
-    // Accept is disabled, and Decline stays available.
-    this.skip();
+  it('an incomplete bundle disables Accept and shows the incomplete warning', async () => {
+    const bundle = await invokeTauri<{ manifest_collection_uid: string }>(
+      browserA,
+      'e2e_create_incomplete_share_bundle',
+      {
+        input: {
+          username: accounts.recipient.username,
+          name: INCOMPLETE_FOLDER,
+          access_level: 'read_write'
+        }
+      }
+    );
+
+    await browserB.reloadSession();
+    await browserB.$('aria/Welcome').waitForDisplayed({ timeout: 30_000 });
+    B = clientHelpers(browserB);
+    await invokeTauri(browserB, 'e2e_accept_share_manifest_only', {
+      manifestCollectionUid: bundle.manifest_collection_uid
+    });
+
+    await browserB.reloadSession();
+    await browserB.$('aria/Welcome').waitForDisplayed({ timeout: 30_000 });
+    B = clientHelpers(browserB);
+
+    const incoming = await invokeTauri<{
+      bundles: IncomingShareBundleFixture[];
+    }>(browserB, 'list_incoming_share_bundles');
+    const incompleteBundle = incoming.bundles.find(
+      (candidate) => candidate.name === INCOMPLETE_FOLDER
+    );
+    expect(incompleteBundle).toBeDefined();
+    expect(incompleteBundle?.pending).toBe(false);
+    expect(incompleteBundle?.complete).toBe(false);
+    expect(
+      incompleteBundle?.parts.find(
+        (part) => part.expected_collection_type === 'mindstream.assets'
+      )?.invitation
+    ).toBeNull();
+    expect(incompleteBundle?.warnings.join('\n')).toContain(
+      'missing invitation for required Assets collection'
+    );
+
+    await B.openNotifications();
+    await browserB.waitUntil(
+      () =>
+        browserB.execute((name: string) => {
+          const item = Array.from(
+            document.querySelectorAll<HTMLElement>('div.rounded-md')
+          ).find((candidate) => candidate.textContent?.includes(name));
+          if (!item) {
+            return false;
+          }
+          const text = item.textContent ?? '';
+          const buttons = Array.from(item.querySelectorAll('button'));
+          const buttonState = (label: string) => {
+            const button = buttons.find(
+              (candidate) => candidate.textContent?.trim() === label
+            );
+            return button ? { found: true, disabled: button.disabled } : null;
+          };
+          const accept = buttonState('Accept');
+          const decline = buttonState('Decline');
+          return (
+            text.includes('This share is incomplete') &&
+            accept?.disabled === true &&
+            decline?.disabled === false
+          );
+        }, INCOMPLETE_FOLDER),
+      {
+        timeout: 30_000,
+        timeoutMsg: 'incomplete share bundle widget did not render'
+      }
+    );
+    const state = await browserB.execute((name: string) => {
+      const item = Array.from(
+        document.querySelectorAll<HTMLElement>('div.rounded-md')
+      ).find((candidate) => candidate.textContent?.includes(name));
+      if (!item) throw new Error('incomplete share notification not found');
+      const text = item.textContent ?? '';
+      const buttons = Array.from(item.querySelectorAll('button'));
+      const buttonState = (label: string) => {
+        const button = buttons.find(
+          (candidate) => candidate.textContent?.trim() === label
+        );
+        if (!button) throw new Error(`missing ${label} button`);
+        return button.disabled;
+      };
+      return {
+        hasWarning: text.includes('This share is incomplete'),
+        acceptDisabled: buttonState('Accept'),
+        declineDisabled: buttonState('Decline')
+      };
+    }, INCOMPLETE_FOLDER);
+
+    expect(state.hasWarning).toBe(true);
+    expect(state.acceptDisabled).toBe(true);
+    expect(state.declineDisabled).toBe(false);
   });
 
   // --- 4.6 Non-manifest invitation still surfaces (P3) ---
