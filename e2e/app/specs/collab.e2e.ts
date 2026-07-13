@@ -13,6 +13,7 @@ import { provisionTwoAccounts } from '../helpers/accounts.js';
 import { assertBackendReady, backendUrl } from '../helpers/backend.js';
 import {
   clientHelpers,
+  clickLastButtonText,
   loginClient,
   requireBackendE2E,
   syncClient,
@@ -33,6 +34,15 @@ declare global {
 interface NoteSummary {
   id: string;
   title: string;
+}
+
+interface VersionSummary {
+  id: string;
+  action: 'created' | 'edited' | 'reverted';
+}
+
+interface Version extends VersionSummary {
+  body: string;
 }
 
 async function listNotes(client: WebdriverIO.Browser): Promise<NoteSummary[]> {
@@ -70,6 +80,78 @@ async function notePeerCount(
     if (!e2e) throw new Error('missing e2e diagnostics');
     return e2e.notePeerCount(id);
   }, noteId);
+}
+
+async function waitForPeer(client: WebdriverIO.Browser, noteId: string) {
+  await client.waitUntil(
+    async () => (await notePeerCount(client, noteId)) > 0,
+    {
+      timeout: 60_000,
+      timeoutMsg: 'browserA did not observe browserB as a live peer'
+    }
+  );
+}
+
+async function captureMarkdownVersion(
+  client: WebdriverIO.Browser,
+  noteId: string,
+  markdown: string
+): Promise<void> {
+  await client.execute(
+    async (id: string, snapshot: string) => {
+      const tauri = window as unknown as {
+        __TAURI_INTERNALS__?: {
+          invoke?: <R>(
+            command: string,
+            args?: Record<string, unknown>
+          ) => Promise<R>;
+        };
+      };
+      const invoke = tauri.__TAURI_INTERNALS__?.invoke;
+      if (!invoke) throw new Error('Tauri invoke is not exposed in WebView');
+      await invoke('capture_note_version', {
+        noteId: id,
+        noteKind: 'markdown',
+        action: 'edited',
+        refVersionId: null,
+        markdown: snapshot
+      });
+    },
+    noteId,
+    markdown
+  );
+}
+
+async function restoreLabelForSnapshot(
+  client: WebdriverIO.Browser,
+  noteId: string,
+  snapshot: string
+): Promise<'Note created' | 'Edited'> {
+  const versions = await client.execute(async (id: string) => {
+    const tauri = window as unknown as {
+      __TAURI_INTERNALS__?: {
+        invoke?: <R>(
+          command: string,
+          args?: Record<string, unknown>
+        ) => Promise<R>;
+      };
+    };
+    const invoke = tauri.__TAURI_INTERNALS__?.invoke;
+    if (!invoke) throw new Error('Tauri invoke is not exposed in WebView');
+    const summaries = await invoke<VersionSummary[]>('list_note_versions', {
+      noteId: id
+    });
+    const loaded: Version[] = [];
+    for (const summary of summaries) {
+      loaded.push(
+        await invoke<Version>('load_note_version', { versionId: summary.id })
+      );
+    }
+    return loaded;
+  }, noteId);
+  const version = versions.find((candidate) => candidate.body === snapshot);
+  if (!version) throw new Error('baseline history snapshot not found');
+  return version.action === 'created' ? 'Note created' : 'Edited';
 }
 
 describe('T4 collaboration matrix', function () {
@@ -118,13 +200,7 @@ describe('T4 collaboration matrix', function () {
     await expect(browserB.$('.ProseMirror')).toHaveText(
       expect.stringContaining(baselineText)
     );
-    await browserA.waitUntil(
-      async () => (await notePeerCount(browserA, noteId)) > 0,
-      {
-        timeout: 60_000,
-        timeoutMsg: 'browserA did not observe browserB as a live peer'
-      }
-    );
+    await waitForPeer(browserA, noteId);
   });
 
   it('edit in A propagates to B', async function () {
@@ -145,8 +221,59 @@ describe('T4 collaboration matrix', function () {
   });
 
   it('restore in A converges B on the restored content', async function () {
-    // restore an older version in A → B's live content matches.
-    this.skip();
+    const title = `Collab restore ${Date.now()}`;
+    const baseText = `Restore baseline ${Date.now()}`;
+    const changedText = ` live change before restore ${Date.now()}`;
+
+    await A.newRootNote(title);
+    await A.click(title);
+    const restoreNoteId = await findNoteId(browserA, title);
+    await A.insertText(browserA.$('.ProseMirror'), baseText);
+    await A.click('Refresh history');
+    await captureMarkdownVersion(browserA, restoreNoteId, baseText);
+    const restoreTargetLabel = await restoreLabelForSnapshot(
+      browserA,
+      restoreNoteId,
+      baseText
+    );
+
+    await syncClient(browserA);
+    await syncClient(browserB);
+
+    await B.treeItem(title).waitForDisplayed({ timeout: 30_000 });
+    await Promise.all([A.click(title), B.click(title)]);
+    await expect(browserB.$('.ProseMirror')).toHaveText(
+      expect.stringContaining(baseText)
+    );
+    await waitForPeer(browserA, restoreNoteId);
+
+    await A.insertText(browserA.$('.ProseMirror'), changedText);
+    await browserB.waitUntil(
+      async () => {
+        const text = await browserB.$('.ProseMirror').getText();
+        return text.includes(changedText);
+      },
+      {
+        timeout: 30_000,
+        timeoutMsg: 'browserB did not receive the pre-restore live edit'
+      }
+    );
+
+    await A.click(restoreTargetLabel);
+    await A.click('Restore this version');
+    await expect(A.byName('Restore while others are editing?')).toBeDisplayed();
+    await clickLastButtonText(browserA, 'Restore');
+
+    await browserB.waitUntil(
+      async () => {
+        const text = await browserB.$('.ProseMirror').getText();
+        return text.includes(baseText) && !text.includes(changedText);
+      },
+      {
+        timeout: 30_000,
+        timeoutMsg: 'browserB did not converge on restored content'
+      }
+    );
   });
 
   it('concurrent edit survives a restore as an orphan (pins the limitation)', async function () {
