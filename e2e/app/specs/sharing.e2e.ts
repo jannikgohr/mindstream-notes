@@ -12,10 +12,9 @@
  *
  * Status: flows 4.1–4.6, the core 4.7 subtree convergence path, and 4.7b
  * move-out re-home are IMPLEMENTED and validated against the live two-app +
- * backend session. 4.8–4.9 stay documented skeletons: each needs a seam that
- * doesn't exist yet — move-UI automation + asset embedding render assertions
- * (4.7 asset UI), and an offline/network toggle hook (4.8–4.9). Plain-vault
- * 4.10 lives in sync-history.e2e.ts.
+ * backend session. The owner-second-device 4.8–4.9 re-home cases live in
+ * sharing-multi-device.e2e.ts because they require A1 + A2 + recipient B.
+ * Plain-vault 4.10 lives in sync-history.e2e.ts.
  *
  * Accessible names referenced below (from src/lib/settings/i18n/en.json, the
  * same names the SvelteKit UI renders inside the WebView):
@@ -713,25 +712,6 @@ describe('T4 collection sharing (manifest bundles)', function () {
     await expect(B.treeItem(noteToMoveOut.title)).not.toBeDisplayed();
   });
 
-  // --- 4.8 Offline note edit survives a re-home (P1) ---
-  it("A's offline note edit is merged into the scope, no orphan vault copy", async function () {
-    // Owner signed in on A and B, both holding folder F. Take A OFFLINE and edit
-    // a note in F (leave it unpushed, dirty=1). On B, "Share folder…" F with a
-    // second account (re-homes F into a scope). Bring A back ONLINE and sync.
-    // Assert: A's edit is MERGED into the scope copy (CRDT body merge), F ends
-    // up in the scope on A, and NO orphan vault copy is left on the server
-    // (which would flip-flop the note between vault and scope). Watch for a
-    // duplicate note on any device (orphan resurrection).
-    this.skip();
-  });
-
-  // --- 4.9 Offline folder rename survives a re-home (P2) ---
-  it("A's offline folder rename survives the re-home (no LWW clobber)", async function () {
-    // Owner on A + B, both holding F. A OFFLINE, rename F (or a subfolder). B
-    // SHARES F. A back ONLINE, sync. Assert A's offline rename is KEPT (not
-    // reverted to the remote name), stays dirty, and pushes into the scope.
-    // Also cover a folder MOVED to root offline in the same window: it must not
-    // get reattached under its old parent by the repair pass.
-    this.skip();
-  });
+  // 4.8–4.9 require an owner second device (A2) and are covered by
+  // sharing-multi-device.e2e.ts under test:e2e:app:multi:a2.
 });
