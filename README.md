@@ -84,9 +84,11 @@ pnpm test:e2e:ui          # interactive runner
 The Playwright suite covers the pure-UI journeys today;
 [docs/e2e/flows.md](docs/e2e/flows.md) defines the deeper flows (critical user
 journeys, IPC-heavy operations, and cross-restart state persistence) that need
-the packaged Tauri app rather than the browser fallback.
+the packaged Tauri app rather than the browser fallback. To run those deeper
+suites (T3/T4), see [e2e-tests/README.md](e2e-tests/README.md).
 
-For full platform setup, packaging commands, Android notes, and Rust quality gates, see [docs/BUILDING.md](docs/BUILDING.md).
+For per-OS setup (Windows, Ubuntu, Fedora), packaging commands, Android notes,
+and Rust quality gates, see [docs/BUILDING.md](docs/BUILDING.md).
 
 ## License
 

@@ -8,6 +8,10 @@ two-client specifics are in [e2e-tests/app/README.md](../../e2e-tests/app/README
 
 ## Toolchain
 
+These tiers build and drive the packaged binary, so you first need the base
+app-build toolchain (Rust + your OS's Tauri system deps) from
+[docs/BUILDING.md](../BUILDING.md). On top of that:
+
 ```sh
 cargo install tauri-driver          # the WebDriver bridge
 

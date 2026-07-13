@@ -11,7 +11,16 @@ prerequisites (a packaged app build, a backend stack) aren't present.
 | `app/` single (T3)     | `pnpm test:e2e:app`       | the `tauri-driver` toolchain      |
 | `app/` two-client (T4) | `pnpm test:e2e:app:multi` | the toolchain **+** backend stack |
 
-First time only: `pnpm install`.
+## Prerequisites
+
+- **Browser suite (T2):** `pnpm install` — nothing else.
+- **Real-app suites (T3/T4):** also the app-build toolchain (Rust + your OS's
+  Tauri system deps — [docs/BUILDING.md](../docs/BUILDING.md)) **and** the
+  `tauri-driver` toolchain
+  ([docs/e2e/harness.md](../docs/e2e/harness.md#toolchain)). T3/T4 build the
+  packaged binary, so the full app toolchain is required, not just Node.
+- **T4 only:** a running Docker backend stack
+  ([backend/README.md](../backend/README.md)).
 
 ## Browser suite (T2) — the default
 
