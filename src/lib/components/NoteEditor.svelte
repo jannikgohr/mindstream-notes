@@ -36,6 +36,7 @@
   } from '$lib/assets/bridge';
   import { listen } from '$lib/api/events';
   import { buildCrepe } from '$lib/editor/crepe-setup';
+  import { seedDeterministicTemplate } from '$lib/editor/seed-template';
   import { ensureDropIndicatorAlignment } from '$lib/editor/drop-indicator-align';
   import { otherPeerCount } from '$lib/editor/awareness-presence';
   import { pickCursorColor } from '$lib/editor/cursor-color';
@@ -401,8 +402,14 @@
         cs.bindDoc(yDoc!);
         if (awareness) cs.setAwareness(awareness);
         if (!hydratedFragment) {
-          // Empty doc → seed the fragment from the markdown body.
-          cs.applyTemplate(note.body);
+          // Empty doc → seed the fragment from the markdown body. Use a
+          // DETERMINISTIC origin (fixed client id) instead of cs.applyTemplate,
+          // whose throwaway doc gets a random client id: seeded/demo notes are
+          // created independently on every device, so a random origin makes a
+          // merge stack both copies and duplicate the body. A shared origin
+          // collapses to one; live edits still diverge on the live doc's own
+          // client id. See $lib/editor/seed-template.
+          seedDeterministicTemplate(ctx, yDoc!, note.body);
         }
         cs.connect();
 
