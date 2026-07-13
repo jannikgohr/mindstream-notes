@@ -77,11 +77,12 @@ export async function signupAccount(
 }
 
 /**
- * On-disk cache of provisioned accounts, keyed by server URL, so repeat runs
- * against the same (un-reset) stack reuse the same users instead of signing up
- * a fresh pair every time — signups are the slow part and the server keeps them
- * until it's torn down. Gitignored (throwaway local creds). Set
- * `MINDSTREAM_E2E_FRESH_ACCOUNTS=1` to bypass the cache and force new signups.
+ * Optional on-disk cache of provisioned accounts, keyed by server URL, for
+ * local iteration where speed matters more than isolation. The default is a
+ * fresh pair per call because remote Etebase state (vault collections, share
+ * invites, notification bundles, seed edits) survives as long as the test
+ * stack volume does. Gitignored (throwaway local creds). Set
+ * `MINDSTREAM_E2E_REUSE_ACCOUNTS=1` to opt into the cache.
  */
 const CACHE_FILE = fileURLToPath(
   new URL('./.t4-accounts.json', import.meta.url)
@@ -138,19 +139,21 @@ async function provisionFreshPair(serverUrl: string): Promise<TwoAccounts> {
 }
 
 /**
- * Return a sender + recipient pair for `serverUrl`. Reuses cached accounts when
- * they still log in (so the suite can be re-run repeatedly without the human /
- * a server restart); otherwise signs up a fresh pair and caches it. Both share
- * one run token so they're obviously a pair in logs.
+ * Return a sender + recipient pair for `serverUrl`. By default this signs up a
+ * fresh pair every time so suites do not inherit server-side state from an
+ * earlier suite or an old still-running test stack. With
+ * `MINDSTREAM_E2E_REUSE_ACCOUNTS=1`, cached accounts are reused when they still
+ * log in, and a fresh pair is persisted otherwise. Both accounts share one run
+ * token so they're obviously a pair in logs.
  */
 export async function provisionTwoAccounts(
   serverUrl: string
 ): Promise<TwoAccounts> {
-  const forceFresh = process.env.MINDSTREAM_E2E_FRESH_ACCOUNTS === '1';
+  const reuseAccounts = process.env.MINDSTREAM_E2E_REUSE_ACCOUNTS === '1';
   const cache = readCache();
   const cached = cache[serverUrl];
 
-  if (!forceFresh && cached) {
+  if (reuseAccounts && cached) {
     const [senderOk, recipientOk] = await Promise.all([
       accountUsable(serverUrl, cached.sender),
       accountUsable(serverUrl, cached.recipient)
@@ -159,7 +162,9 @@ export async function provisionTwoAccounts(
   }
 
   const fresh = await provisionFreshPair(serverUrl);
-  cache[serverUrl] = fresh;
-  writeCache(cache);
+  if (reuseAccounts) {
+    cache[serverUrl] = fresh;
+    writeCache(cache);
+  }
   return fresh;
 }

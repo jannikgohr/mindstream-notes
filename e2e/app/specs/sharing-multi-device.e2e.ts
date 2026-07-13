@@ -91,14 +91,17 @@ async function listCollections(
   return invokeTauri<CollectionRow[]>(client, 'list_collections');
 }
 
-async function findCollectionId(
+async function createCollectionFixture(
   client: WebdriverIO.Browser,
-  name: string
-): Promise<string> {
-  const collections = await listCollections(client);
-  const collection = collections.find((candidate) => candidate.name === name);
-  if (!collection) throw new Error(`collection not found: ${name}`);
-  return collection.id;
+  name: string,
+  parentCollectionId: string | null
+): Promise<CollectionRow> {
+  return invokeTauri<CollectionRow>(client, 'create_collection', {
+    input: {
+      name,
+      parent_collection_id: parentCollectionId
+    }
+  });
 }
 
 async function createNoteFixture(
@@ -322,7 +325,6 @@ describe('T4 collection sharing across the owner’s two devices', function () {
     // One sender + one recipient account, both brand-new (no server-side vault
     // yet). A1 and A2 both sign into the sender; that's the whole point — two
     // devices, one account.
-    process.env.MINDSTREAM_E2E_FRESH_ACCOUNTS = '1';
     accounts = await provisionTwoAccounts(server);
 
     // Bring all three devices up CONCURRENTLY. Sync defaults to "live"/enabled,
@@ -353,10 +355,16 @@ describe('T4 collection sharing across the owner’s two devices', function () {
     A2 = clientHelpers(browserA2);
     B = clientHelpers(browserB);
 
-    // A1 seeds the folder + note the suite shares. A2 adopts it by stable app
-    // id once the vault collections reconcile.
-    await A1.newRootFolder(SHARED_FOLDER);
-    sharedFolderIdA1 = await findCollectionId(browserA1, SHARED_FOLDER);
+    // A1 seeds the folder + note the suite shares. Keep this setup at the IPC
+    // layer: with three fresh WebViews booting, a UI toolbar click here can
+    // time out at the WebDriver transport before the assertions even begin.
+    // The sharing flow itself below still drives the real context-menu UI.
+    const folder = await createCollectionFixture(
+      browserA1,
+      SHARED_FOLDER,
+      null
+    );
+    sharedFolderIdA1 = folder.id;
     const note = await createNoteFixture(
       browserA1,
       NOTE_TITLE,
