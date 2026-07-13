@@ -398,6 +398,8 @@ pub fn run() {
             sharing::reject_collection_invitation,
             sharing::get_collection_share_state,
             sharing::invite_collection,
+            #[cfg(feature = "e2e-data-dir")]
+            sharing::e2e_create_standalone_collection_invite,
             // One-shot recovery for items the pre-fix etebase encoder
             // bug left corrupt on the server. Invoke from dev tools.
             sync::repair::audit_corrupt_remote_items,

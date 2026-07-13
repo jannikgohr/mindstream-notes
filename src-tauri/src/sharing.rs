@@ -107,6 +107,21 @@ pub struct InviteCollectionInput {
     pub access_level: ShareAccessLevel,
 }
 
+#[cfg(feature = "e2e-data-dir")]
+#[derive(Debug, Clone, Deserialize)]
+pub struct E2eStandaloneInviteInput {
+    pub username: String,
+    pub collection_type: String,
+    pub name: String,
+    pub access_level: ShareAccessLevel,
+}
+
+#[cfg(feature = "e2e-data-dir")]
+#[derive(Debug, Clone, Serialize)]
+pub struct E2eStandaloneInviteResult {
+    pub collection_uid: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct CollectionMember {
     pub username: String,
@@ -621,6 +636,65 @@ pub async fn invite_collection(
     })
     .await
     .map_err(|e| format!("invite collection task: {e}"))?
+    .map_err(Into::into)
+}
+
+#[cfg(feature = "e2e-data-dir")]
+#[tauri::command]
+pub async fn e2e_create_standalone_collection_invite(
+    app: AppHandle,
+    input: E2eStandaloneInviteInput,
+) -> Result<E2eStandaloneInviteResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let E2eStandaloneInviteInput {
+            username,
+            collection_type,
+            name,
+            access_level,
+        } = input;
+
+        let recipient = username.trim();
+        if recipient.is_empty() {
+            return Err(AppError::InvalidArg(
+                "a recipient username is required".into(),
+            ));
+        }
+        if collection_type.trim().is_empty() {
+            return Err(AppError::InvalidArg("a collection type is required".into()));
+        }
+        if is_share_scope_collection_type(Some(collection_type.trim())) {
+            return Err(AppError::InvalidArg(
+                "standalone invites must not use share-scope collection types".into(),
+            ));
+        }
+
+        let account = restore_required(&app)?;
+        let inv_manager = account
+            .invitation_manager()
+            .map_err(|e| AppError::InvalidArg(format!("invitation_manager: {e}")))?;
+        let cm = account
+            .collection_manager()
+            .map_err(|e| AppError::InvalidArg(format!("collection_manager: {e}")))?;
+        let profile = inv_manager
+            .fetch_user_profile(recipient)
+            .map_err(|e| profile_lookup_error(recipient, e))?;
+        let pubkey = profile.pubkey().to_vec();
+
+        let collection = create_share_collection(&cm, &collection_type, &name, &[])?;
+        invite_to_collection(
+            &inv_manager,
+            &collection,
+            recipient,
+            &pubkey,
+            access_level.into(),
+        )?;
+
+        Ok::<_, AppError>(E2eStandaloneInviteResult {
+            collection_uid: collection.uid().to_string(),
+        })
+    })
+    .await
+    .map_err(|e| format!("create standalone invite task: {e}"))?
     .map_err(Into::into)
 }
 
