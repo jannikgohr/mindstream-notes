@@ -493,6 +493,8 @@ export interface ClientHelpers {
   clickMenuItem(label: string): Promise<void>;
   openNotifications(): Promise<void>;
   newRootNote(name: string): Promise<void>;
+  newRootDrawing(name: string): Promise<void>;
+  newRootInk(name: string): Promise<void>;
   newRootFolder(name: string): Promise<void>;
   newNoteInFolder(folder: string, note: string): Promise<void>;
 }
@@ -724,6 +726,16 @@ export function clientHelpers(client: WebdriverIO.Browser): ClientHelpers {
     await commitDraft('New note', name);
   };
 
+  const newRootDrawing = async (name: string): Promise<void> => {
+    await click('New drawing canvas');
+    await commitDraft('New drawing canvas', name);
+  };
+
+  const newRootInk = async (name: string): Promise<void> => {
+    await click('New handwritten note');
+    await commitDraft('New handwritten note', name);
+  };
+
   const newNoteInFolder = async (
     folder: string,
     note: string
@@ -746,6 +758,8 @@ export function clientHelpers(client: WebdriverIO.Browser): ClientHelpers {
     clickMenuItem,
     openNotifications,
     newRootNote,
+    newRootDrawing,
+    newRootInk,
     newRootFolder,
     newNoteInFolder
   };
