@@ -51,7 +51,7 @@ export default defineConfig({
       include: ['src/**/*.ts'],
       // The unit-coverage metric measures the *logic* layer. Three classes
       // of code are deliberately out of scope here because they're proven by
-      // end-to-end tests instead of unit tests (see e2e/ and docs/e2e-flows.md):
+      // end-to-end tests instead of unit tests (see e2e/ and docs/e2e/flows.md):
       //
       //   1. UI components (*.svelte) — rendered and driven by Playwright.
       //   2. Tauri IPC wrappers (api/* thin `invoke` shells, window/system/

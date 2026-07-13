@@ -12,11 +12,11 @@ Those surfaces are the e2e backlog. This document **defines** the flows worth
 covering (it does not implement them). They are grouped by the three
 categories that justify an end-to-end test rather than a unit test.
 
-> **See also:** [e2e-strategy.md](e2e-strategy.md) for _how_ to run these
-> against a real Tauri backend and the mindstream-server stack (the test tiers,
-> the backend harness, the collaboration matrix), and
-> [known-limitations.md](known-limitations.md) for the by-design behaviours
-> several of these flows are meant to pin down.
+> **See also:** [strategy.md](strategy.md) for the test tiers, [harness.md](harness.md)
+> and [backend-stack.md](backend-stack.md) for _how_ to run these against a real
+> Tauri backend and the mindstream-server stack, [status.md](status.md) for what's
+> implemented, and [known-limitations.md](../known-limitations.md) for the
+> by-design behaviours several of these flows are meant to pin down.
 
 The existing `e2e-tests/browser/` Playwright suite runs the SvelteKit SPA in
 **browser-fallback mode** (the in-memory mock store backs every API call), so
@@ -451,7 +451,7 @@ sender/access fallback, `build_share_manifest`, migration 18) are unit-tested in
 - **Two-account flows (§4 sharing):** unlike the §2.6 collab matrix (one account
   on two devices), the sharing flows need **two distinct Etebase users** — a
   sender and a recipient — plus a way to script an invite between them. See
-  [e2e-strategy.md](e2e-strategy.md) §2.1 for the account-provisioning
+  [backend-stack.md](backend-stack.md) for the account-provisioning
   requirement this adds.
 - **Restart flows (§3):** the test harness must be able to quit and relaunch
   the same data directory. Set the `MINDSTREAM_PROFILE_DIR` env var to a temp

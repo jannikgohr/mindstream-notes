@@ -1,6 +1,6 @@
 /**
  * WebdriverIO **multiremote** config for the T4 two-client tier — the seam the
- * collaboration + sharing specs (docs/e2e-strategy.md §5, §7) need but the
+ * collaboration + sharing specs (docs/e2e/status.md) need but the
  * single-client wdio.conf.ts can't provide. A single `tauri-driver` process
  * hosts exactly one app, so two clients means **two** tauri-driver processes on
  * distinct ports, each launching the app against its own MINDSTREAM_PROFILE_DIR.

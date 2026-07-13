@@ -2,7 +2,7 @@
  * T3 — flows 1.2 / 1.3 / 1.4: export the vault, then import it (restore +
  * merge). These drive **native file dialogs** (save / open pickers), which
  * WebDriver cannot click, so they are gated behind `requireDialogHook` until a
- * Rust-side test seam exists to pre-seed the path (docs/e2e-strategy.md §3, an
+ * Rust-side test seam exists to pre-seed the path (docs/e2e/harness.md, an
  * open gap). The SQL merge logic itself is unit-tested in backup.rs; this tier
  * proves the orchestration through real IPC + filesystem (+ a real restart for
  * restore).

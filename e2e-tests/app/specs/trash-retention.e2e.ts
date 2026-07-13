@@ -72,6 +72,6 @@ describe('T3 trash lifecycle + retention', function () {
     await expect(treeItem(fresh)).toBeDisplayed();
 
     // TODO: backdate trashed_at via a test hook and assert the aged item was
-    // purged by spawn_retention_sweep on boot (docs/e2e-flows.md 3.3).
+    // purged by spawn_retention_sweep on boot (docs/e2e/flows.md 3.3).
   });
 });

@@ -11,7 +11,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
  *
  * The *durability* of these versions — surviving a real app restart, through
  * the Rust history table and SQLite — is deliberately a T3 (tauri-driver)
- * concern; see docs/e2e-strategy.md §4. This file proves the UI wiring only.
+ * concern; see docs/e2e/flows.md. This file proves the UI wiring only.
  */
 
 async function boot(page: Page) {

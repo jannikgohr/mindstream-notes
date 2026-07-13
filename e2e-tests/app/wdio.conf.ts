@@ -1,7 +1,7 @@
 /**
  * WebDriverIO config for the real-app (T3/T4) tier — drives the packaged Tauri
  * binary through `tauri-driver`. This is the documented harness from
- * docs/e2e-strategy.md §3; it is intentionally separate from the Playwright
+ * docs/e2e/harness.md; it is intentionally separate from the Playwright
  * browser-fallback suite and never runs in the default `pnpm test:e2e`.
  *
  * Requires the opt-in toolchain (see e2e-tests/app/README.md):

@@ -1,6 +1,6 @@
 # Mindstream Notes — build-free, sharing-only variant of the T4 test overlay.
 #
-# The T4 sharing flows (docs/e2e-flows.md §4) only exercise etebase (auth +
+# The T4 sharing flows (docs/e2e/flows.md §4) only exercise etebase (auth +
 # encrypted collections). etebase and its postgres backing store are both
 # PULLED images, so this overlay publishes etebase directly on the test port
 # and skips the nginx edge plus the yjs-relay / excalidraw-room BUILD services

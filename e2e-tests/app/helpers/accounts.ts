@@ -1,5 +1,5 @@
 /**
- * Two-account provisioning for the T4 sharing specs (docs/e2e-strategy.md
+ * Two-account provisioning for the T4 sharing specs (docs/e2e/backend-stack.md
  * §2.1). Collection sharing needs two **distinct** Etebase users — a sender
  * whose `fetch_user_profile` resolves the recipient's public key — so the
  * one-account/two-device trick the collab matrix uses isn't enough here.
