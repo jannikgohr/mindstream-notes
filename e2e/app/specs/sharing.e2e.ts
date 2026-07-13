@@ -406,11 +406,27 @@ describe('T4 collection sharing (manifest bundles)', function () {
     await browserB.reloadSession();
     await browserB.$('aria/Welcome').waitForDisplayed({ timeout: 30_000 });
     B = clientHelpers(browserB);
-    await syncClient(browserB);
 
-    // The shared root lands under the "Shared" source, NOT Home. Switch to the
-    // "Shared" chip and assert the folder (and its seeded note) appear there.
+    // Accept kicks off a scoped sync that joins B to the share's collections.
+    // Reloading immediately after can outrun that join, and under this tier's
+    // memory pressure a single push/pull round often finishes before the shared
+    // root has crossed the wire. Re-sync (re-pushing A as well as re-pulling B)
+    // until the folder lands under the "Shared" source, rather than trusting one
+    // post-accept sync.
     await selectTreeSource(browserB, 'Shared');
+    await browserB.waitUntil(
+      async () => {
+        await syncClient(browserA);
+        await syncClient(browserB);
+        return B.isDisplayed(SHARED_FOLDER, 1_000);
+      },
+      {
+        timeout: 180_000,
+        timeoutMsg: 'shared root did not land under "Shared" after accept'
+      }
+    );
+
+    // The shared root lands under the "Shared" source, NOT Home.
     await expect(B.treeItem(SHARED_FOLDER)).toBeDisplayed();
 
     // Regression guard: the shared root must NOT show up in Home (that would
