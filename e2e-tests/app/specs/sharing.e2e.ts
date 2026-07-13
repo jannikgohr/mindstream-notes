@@ -43,7 +43,7 @@ import {
 
 // wdio multiremote exposes each capability key as a global browser instance.
 // `browserA` = sender (device A), `browserB` = recipient (device B). See
-// e2e/app/wdio.multiremote.conf.ts.
+// e2e-tests/app/wdio.multiremote.conf.ts.
 declare const browserA: WebdriverIO.Browser;
 declare const browserB: WebdriverIO.Browser;
 

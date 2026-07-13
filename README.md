@@ -31,7 +31,7 @@ The project is still under active development. Expect sharp edges, but the core 
 src/                    Svelte app, UI components, stores, editor code
 src-tauri/              Tauri app, Rust backend, persistence, sync
 backend/yjs-collab/     Experimental Yjs collaboration server pieces
-e2e/                    Browser, backend, and real-app end-to-end suites
+e2e-tests/              Browser, backend, and real-app end-to-end suites
 docs/                   Architecture notes and build documentation
 ```
 

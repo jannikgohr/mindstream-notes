@@ -303,7 +303,7 @@ async function selectSelfHosted(client: WebdriverIO.Browser): Promise<void> {
  *   "Server URL" / "Username or email" / "Password" → "Sign in".
  *
  * NOTE: written to the confirmed labels but not yet validated against a live
- * app session — see e2e/app/README.md ("Not yet validated end-to-end").
+ * app session — see e2e-tests/app/README.md ("Not yet validated end-to-end").
  */
 export async function loginClient(
   client: WebdriverIO.Browser,
@@ -468,7 +468,7 @@ export async function syncClient(client: WebdriverIO.Browser): Promise<void> {
  * synthesis, same accessible-name strategy) but routes them through `client`.
  *
  * The tree-seed helpers (`newRootFolder`, `newNoteInFolder`) drive the same UI
- * flow the browser-fallback T2 specs validate in e2e/browser/tree-operations
+ * flow the browser-fallback T2 specs validate in e2e-tests/browser/tree-operations
  * .spec.ts: the toolbar "New folder"/"New note" buttons and the folder context
  * menu's "New folder inside"/"New note in folder" items, each opening an inline
  * draft input whose accessible name is its placeholder ("New folder"/"New note").

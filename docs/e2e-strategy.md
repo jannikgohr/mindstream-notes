@@ -72,7 +72,7 @@ test harness lands:
 2. **Health gating.** Block tests until the stack is ready: nginx `/healthz`,
    a TCP connect to yjs-relay `:1234`, the excalidraw-room socket.io handshake,
    and Etebase accepting connections (the compose healthchecks already encode
-   each probe — reuse them). **Landed:** `e2e/backend/backend-health.spec.ts`
+   each probe — reuse them). **Landed:** `e2e-tests/backend/backend-health.spec.ts`
    probes all four through the single nginx edge (run with
    `MINDSTREAM_E2E_BACKEND=1 pnpm test:e2e:backend`; see §6/§7).
 3. **Isolation & teardown.** A disposable Postgres volume per run (or per-run
@@ -85,7 +85,7 @@ test harness lands:
 
 ## 3. The real-app harness (T3/T4)
 
-> Scaffolded in [`e2e/app/`](../e2e/app/) — wdio + tauri-driver config, the
+> Scaffolded in [`e2e-tests/app/`](../e2e-tests/app/) — wdio + tauri-driver config, the
 > gating/seam helpers, implemented smoke coverage, and pending scenario markers.
 > The rest of this section is what that harness implements (and what still needs
 > finishing).
@@ -202,7 +202,7 @@ assertion is the regression guard for the _history-is-per-device_ limitation.
   the editor UI instead of only fetching the asset bytes through the app API.
   The incomplete-bundle guard (4.5) needs a share with a required part invite
   revoked server-side. The scaffolded spec is
-  [`e2e/app/specs/sharing.e2e.ts`](../e2e/app/specs/sharing.e2e.ts).
+  [`e2e-tests/app/specs/sharing.e2e.ts`](../e2e-tests/app/specs/sharing.e2e.ts).
 
 ---
 
@@ -225,23 +225,23 @@ specs run locally on demand and skip when the stack isn't up.
 
 Tracked here so the strategy isn't mistaken for working infrastructure:
 
-- [x] **Health gating landed** (§2.2): `e2e/backend/backend-health.spec.ts` +
-      `e2e/backend/playwright.config.ts`, run via `pnpm test:e2e:backend`, gated on
+- [x] **Health gating landed** (§2.2): `e2e-tests/backend/backend-health.spec.ts` +
+      `e2e-tests/backend/playwright.config.ts`, run via `pnpm test:e2e:backend`, gated on
       `MINDSTREAM_E2E_BACKEND`. This is the only T4-adjacent piece runnable today.
-- [~] **`tauri-driver` harness scaffolded** in [`e2e/app/`](../e2e/app/) (wdio
+- [~] **`tauri-driver` harness scaffolded** in [`e2e-tests/app/`](../e2e-tests/app/) (wdio
   config, capability gating, the `MINDSTREAM_PROFILE_DIR` restart seam, and
   focused T3/T4 specs), run via `pnpm test:e2e:app` for T3 and
   `pnpm test:e2e:app:multi` for T4. Still needs: a native-dialog stub,
   `trashed_at` backdating, and the remaining pending T4 scenario bodies — see
-  [`e2e/app/README.md`](../e2e/app/README.md).
-- [x] **Two-client multiremote validated** (§5): `e2e/app/wdio.multiremote.conf.ts`
+  [`e2e-tests/app/README.md`](../e2e-tests/app/README.md).
+- [x] **Two-client multiremote validated** (§5): `e2e-tests/app/wdio.multiremote.conf.ts`
       spawns two tauri-driver processes → `browserA`/`browserB`, run via
       `pnpm test:e2e:app:multi`. Confirmed live: both packaged apps launch and are
       driven independently against the disposable stack.
 - [x] **Disposable test stack landed** (§2.1): `backend/docker-compose.test.yml`
   - `.env.test` + `pnpm backend:test:{up,down,reset}` give an isolated backend
     with `AUTO_SIGNUP=true` on a separate port (18080).
-- [x] **Test-account provisioning validated** (§2.1): `e2e/app/helpers/accounts.ts`
+- [x] **Test-account provisioning validated** (§2.1): `e2e-tests/app/helpers/accounts.ts`
       (`provisionTwoAccounts`) signs up two distinct users via the `etebase` JS SDK.
       It provisions a fresh pair by default so suites do not inherit remote vault,
       invite, notification, or seed-note state from an old still-running stack.

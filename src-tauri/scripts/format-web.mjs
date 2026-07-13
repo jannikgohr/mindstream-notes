@@ -8,7 +8,7 @@ const patterns = [
   'src-tauri/scripts/**/*.{js,ts,mjs,cjs,json,md,html,css}',
   '*.{js,ts,mjs,cjs,json,md,html,css}',
   'docs/**/*.{js,ts,mjs,cjs,json,md,html,css}',
-  'e2e/**/*.{js,ts,mjs,cjs,json,md,html,css}',
+  'e2e-tests/**/*.{js,ts,mjs,cjs,json,md,html,css}',
   'backend/**/*.{js,ts,mjs,cjs,json,md,html,css}'
 ];
 
