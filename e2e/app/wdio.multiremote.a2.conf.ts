@@ -60,6 +60,7 @@ const buildEnv = {
     ? `${nodeBinDir}${delimiter}${inheritedPath}`
     : nodeBinDir,
   NODE_OPTIONS: process.env.NODE_OPTIONS ?? '--max-old-space-size=4096',
+  VITE_MINDSTREAM_E2E: '1',
   // pnpm 11 auto-runs `pnpm install` before scripts when it thinks
   // node_modules is stale. The app E2E build is non-interactive, so keep the
   // dependency install as an explicit developer/CI step instead of letting this

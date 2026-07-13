@@ -22,6 +22,56 @@ import {
 declare const browserA: WebdriverIO.Browser;
 declare const browserB: WebdriverIO.Browser;
 
+declare global {
+  interface Window {
+    __mindstreamE2E?: {
+      notePeerCount(noteId: string): number;
+    };
+  }
+}
+
+interface NoteSummary {
+  id: string;
+  title: string;
+}
+
+async function listNotes(client: WebdriverIO.Browser): Promise<NoteSummary[]> {
+  return client.execute(async () => {
+    const tauri = window as unknown as {
+      __TAURI_INTERNALS__?: {
+        invoke?: <R>(
+          command: string,
+          args?: Record<string, unknown>
+        ) => Promise<R>;
+      };
+    };
+    const invoke = tauri.__TAURI_INTERNALS__?.invoke;
+    if (!invoke) throw new Error('Tauri invoke is not exposed in WebView');
+    return invoke<NoteSummary[]>('list_notes', { includeTrashed: false });
+  });
+}
+
+async function findNoteId(
+  client: WebdriverIO.Browser,
+  title: string
+): Promise<string> {
+  const notes = await listNotes(client);
+  const note = notes.find((candidate) => candidate.title === title);
+  if (!note) throw new Error(`note not found: ${title}`);
+  return note.id;
+}
+
+async function notePeerCount(
+  client: WebdriverIO.Browser,
+  noteId: string
+): Promise<number> {
+  return client.execute((id: string) => {
+    const e2e = window.__mindstreamE2E;
+    if (!e2e) throw new Error('missing e2e diagnostics');
+    return e2e.notePeerCount(id);
+  }, noteId);
+}
+
 describe('T4 collab confirmation prompt', function () {
   let A: ClientHelpers;
   let B: ClientHelpers;
@@ -50,11 +100,6 @@ describe('T4 collab confirmation prompt', function () {
   });
 
   it('prompts on restore when a second client is present (markdown/PDF)', async function () {
-    // The packaged WebKit harness can sync document content here, but the
-    // awareness peer-count signal is not stable enough to assert the prompt yet.
-    // Keep this pending until the app exposes a deterministic presence hook.
-    this.skip();
-
     const title = `Confirm shared ${Date.now()}`;
     const changedText = `restore prompt body ${Date.now()}`;
 
@@ -67,9 +112,17 @@ describe('T4 collab confirmation prompt', function () {
     await syncClient(browserB);
 
     await B.treeItem(title).waitForDisplayed({ timeout: 30_000 });
+    const noteId = await findNoteId(browserA, title);
     await Promise.all([A.click(title), B.click(title)]);
     await expect(browserB.$('.ProseMirror')).toHaveText(
       expect.stringContaining(changedText)
+    );
+    await browserA.waitUntil(
+      async () => (await notePeerCount(browserA, noteId)) > 0,
+      {
+        timeout: 60_000,
+        timeoutMsg: 'browserA did not observe browserB as a live peer'
+      }
     );
 
     await A.click('Note created');
