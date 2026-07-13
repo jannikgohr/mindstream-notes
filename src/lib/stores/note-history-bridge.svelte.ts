@@ -109,3 +109,22 @@ export function registerNoteHistory(
 export function getNoteHistory(noteId: string): NoteHistoryApi | null {
   return registry.get(noteId) ?? null;
 }
+
+declare global {
+  interface Window {
+    __mindstreamE2E?: {
+      notePeerCount(noteId: string): number;
+    };
+  }
+}
+
+if (
+  typeof window !== 'undefined' &&
+  import.meta.env.VITE_MINDSTREAM_E2E === '1'
+) {
+  window.__mindstreamE2E = {
+    notePeerCount(noteId: string): number {
+      return getNoteHistory(noteId)?.peerCount?.() ?? 0;
+    }
+  };
+}
