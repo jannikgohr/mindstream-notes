@@ -290,12 +290,10 @@ so they aren't rediscovered.
   `clientHelpers(client)` (or the client instance directly). `loginClient` runs
   under `Promise.all`, so an error in either client surfaces as `Promise.all
 (index N)`.
-- **Pending tests are intentional backlog, not passing coverage.** The T4 specs
-  now mark unimplemented scenarios with `this.skip()` instead of empty bodies.
-  Current validated app assertions cover sequential sync of restored content
-  without remote history, solo no-prompt restore, sharing flows 4.1–4.4, the
-  core 4.7 subtree/asset convergence path, 4.7b move-out re-home, and 4.10
-  edit-wins-over-delete for plain vault notes. Markdown live-edit propagation
-  and restore confirmation with a peer remain pending because the packaged
-  WebKit harness can observe content sync in some runs but does not reliably
-  expose a deterministic Yjs/awareness readiness signal yet.
+- **Skips are environment gates, not hidden passing coverage.** The T4 specs now
+  keep implemented scenarios active. Current validated app assertions cover
+  collab propagation, restore convergence, restore confirmation, reconnect
+  convergence, sharing flows 4.1–4.7b, the owner-second-device 4.8–4.9 re-home
+  cases in `sharing-multi-device.e2e.ts`, and 4.10 edit-wins-over-delete for
+  plain vault notes. Remaining skips are limited to harness gates for packaged
+  app/backend/native-dialog availability.
