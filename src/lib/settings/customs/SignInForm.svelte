@@ -28,6 +28,7 @@
     etebaseLogin,
     etebaseLogout,
     refreshAuthSession,
+    MANAGED_SERVER_URL,
     type ServerType
   } from '$lib/api/auth.svelte';
   import { type SyncReport } from '$lib/api/sync';
@@ -39,10 +40,6 @@
     setSettingValue,
     settingsDialog
   } from '../store.svelte';
-
-  /** What "managed" mode is bound to. Mirrors MANAGED_SERVER_URL in
-   *  src-tauri/src/auth/mod.rs — keep both in sync when changing. */
-  const MANAGED_SERVER_URL = 'https://api.mindstream-notes.invalid/';
 
   let username = $state('');
   let password = $state('');
