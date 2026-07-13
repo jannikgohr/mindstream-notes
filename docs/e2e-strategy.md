@@ -241,10 +241,11 @@ Tracked here so the strategy isn't mistaken for working infrastructure:
   - `.env.test` + `pnpm backend:test:{up,down,reset}` give an isolated backend
     with `AUTO_SIGNUP=true` on a separate port (18080).
 - [x] **Test-account provisioning validated** (§2.1): `e2e/app/helpers/accounts.ts`
-      (`provisionTwoAccounts`) signs up two distinct users via the `etebase` JS SDK
-      and caches them (gitignored `.t4-accounts.json`) so re-runs reuse the pair
-      until the stack is reset. Confirmed live against `AUTO_SIGNUP=true`. Set
-      `MINDSTREAM_E2E_FRESH_ACCOUNTS=1` to force a fresh pair.
+      (`provisionTwoAccounts`) signs up two distinct users via the `etebase` JS SDK.
+      It provisions a fresh pair by default so suites do not inherit remote vault,
+      invite, notification, or seed-note state from an old still-running stack.
+      Set `MINDSTREAM_E2E_REUSE_ACCOUNTS=1` to opt into the gitignored
+      `.t4-accounts.json` cache while iterating locally.
 - [ ] No test hook to inject a pre-authenticated session blob (§3) — specs log in
       via the app's own `etebase_login` for now.
 - [x] **First T4 app assertions landed**: `sync-history.e2e.ts` covers the

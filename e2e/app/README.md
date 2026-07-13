@@ -78,7 +78,9 @@ seam exists.
   (`provisionTwoAccounts`) signs up a distinct sender + recipient via the
   `etebase` JS SDK — real signups so the sender resolves the recipient's pubkey
   via `fetch_user_profile`. Needs the test stack's `AUTO_SIGNUP=true`
-  (`pnpm backend:test:up`); Etebase blocks signup by default.
+  (`pnpm backend:test:up`); Etebase blocks signup by default. Fresh accounts are
+  the default for isolation; set `MINDSTREAM_E2E_REUSE_ACCOUNTS=1` only for
+  local reruns where reusing dirty server state is acceptable.
 - **Validated live:** the two tauri-driver processes launch independently
   against the disposable stack and can be driven as `browserA` / `browserB`.
   Remaining T4 backlog tests are marked pending rather than passing as empty

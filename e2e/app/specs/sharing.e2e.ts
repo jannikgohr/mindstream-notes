@@ -313,7 +313,6 @@ describe('T4 collection sharing (manifest bundles)', function () {
     // Two real Etebase signups (not a shared-collection trick) so the sender
     // can resolve the recipient's pubkey via fetch_user_profile. Requires the
     // test stack's AUTO_SIGNUP=true (pnpm backend:test:up).
-    process.env.MINDSTREAM_E2E_FRESH_ACCOUNTS = '1';
     accounts = await provisionTwoAccounts(server);
 
     // Sign each client into its own account through the Account UI (no global
