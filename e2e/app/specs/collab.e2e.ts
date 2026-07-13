@@ -154,6 +154,65 @@ async function restoreLabelForSnapshot(
   return version.action === 'created' ? 'Note created' : 'Edited';
 }
 
+async function prepareRestorableLiveMarkdownNote(
+  A: ClientHelpers,
+  B: ClientHelpers
+): Promise<{
+  baseText: string;
+  changedText: string;
+  restoreTargetLabel: 'Note created' | 'Edited';
+}> {
+  const title = `Collab restore ${Date.now()}`;
+  const baseText = `Restore baseline ${Date.now()}`;
+  const changedText = ` live change before restore ${Date.now()}`;
+
+  await A.newRootNote(title);
+  await A.click(title);
+  const noteId = await findNoteId(browserA, title);
+  await A.insertText(browserA.$('.ProseMirror'), baseText);
+  await A.click('Refresh history');
+  await captureMarkdownVersion(browserA, noteId, baseText);
+  const restoreTargetLabel = await restoreLabelForSnapshot(
+    browserA,
+    noteId,
+    baseText
+  );
+
+  await syncClient(browserA);
+  await syncClient(browserB);
+
+  await B.treeItem(title).waitForDisplayed({ timeout: 30_000 });
+  await Promise.all([A.click(title), B.click(title)]);
+  await expect(browserB.$('.ProseMirror')).toHaveText(
+    expect.stringContaining(baseText)
+  );
+  await waitForPeer(browserA, noteId);
+
+  await A.insertText(browserA.$('.ProseMirror'), changedText);
+  await browserB.waitUntil(
+    async () => {
+      const text = await browserB.$('.ProseMirror').getText();
+      return text.includes(changedText);
+    },
+    {
+      timeout: 30_000,
+      timeoutMsg: 'browserB did not receive the pre-restore live edit'
+    }
+  );
+
+  return { baseText, changedText, restoreTargetLabel };
+}
+
+async function restoreFromHistoryTarget(
+  A: ClientHelpers,
+  restoreTargetLabel: string
+): Promise<void> {
+  await A.click(restoreTargetLabel);
+  await A.click('Restore this version');
+  await expect(A.byName('Restore while others are editing?')).toBeDisplayed();
+  await clickLastButtonText(browserA, 'Restore');
+}
+
 describe('T4 collaboration matrix', function () {
   let A: ClientHelpers;
   let B: ClientHelpers;
@@ -221,48 +280,9 @@ describe('T4 collaboration matrix', function () {
   });
 
   it('restore in A converges B on the restored content', async function () {
-    const title = `Collab restore ${Date.now()}`;
-    const baseText = `Restore baseline ${Date.now()}`;
-    const changedText = ` live change before restore ${Date.now()}`;
-
-    await A.newRootNote(title);
-    await A.click(title);
-    const restoreNoteId = await findNoteId(browserA, title);
-    await A.insertText(browserA.$('.ProseMirror'), baseText);
-    await A.click('Refresh history');
-    await captureMarkdownVersion(browserA, restoreNoteId, baseText);
-    const restoreTargetLabel = await restoreLabelForSnapshot(
-      browserA,
-      restoreNoteId,
-      baseText
-    );
-
-    await syncClient(browserA);
-    await syncClient(browserB);
-
-    await B.treeItem(title).waitForDisplayed({ timeout: 30_000 });
-    await Promise.all([A.click(title), B.click(title)]);
-    await expect(browserB.$('.ProseMirror')).toHaveText(
-      expect.stringContaining(baseText)
-    );
-    await waitForPeer(browserA, restoreNoteId);
-
-    await A.insertText(browserA.$('.ProseMirror'), changedText);
-    await browserB.waitUntil(
-      async () => {
-        const text = await browserB.$('.ProseMirror').getText();
-        return text.includes(changedText);
-      },
-      {
-        timeout: 30_000,
-        timeoutMsg: 'browserB did not receive the pre-restore live edit'
-      }
-    );
-
-    await A.click(restoreTargetLabel);
-    await A.click('Restore this version');
-    await expect(A.byName('Restore while others are editing?')).toBeDisplayed();
-    await clickLastButtonText(browserA, 'Restore');
+    const { baseText, changedText, restoreTargetLabel } =
+      await prepareRestorableLiveMarkdownNote(A, B);
+    await restoreFromHistoryTarget(A, restoreTargetLabel);
 
     await browserB.waitUntil(
       async () => {
@@ -285,7 +305,33 @@ describe('T4 collaboration matrix', function () {
   });
 
   it('undo of the restore in A converges B back', async function () {
-    this.skip();
+    const { baseText, changedText, restoreTargetLabel } =
+      await prepareRestorableLiveMarkdownNote(A, B);
+    await restoreFromHistoryTarget(A, restoreTargetLabel);
+
+    await browserB.waitUntil(
+      async () => {
+        const text = await browserB.$('.ProseMirror').getText();
+        return text.includes(baseText) && !text.includes(changedText);
+      },
+      {
+        timeout: 30_000,
+        timeoutMsg: 'browserB did not converge before undoing the restore'
+      }
+    );
+
+    await clickLastButtonText(browserA, 'Undo');
+
+    await browserB.waitUntil(
+      async () => {
+        const text = await browserB.$('.ProseMirror').getText();
+        return text.includes(changedText);
+      },
+      {
+        timeout: 30_000,
+        timeoutMsg: 'browserB did not converge after undoing the restore'
+      }
+    );
   });
 
   it('offline edits on both sides converge on reconnect', async function () {
