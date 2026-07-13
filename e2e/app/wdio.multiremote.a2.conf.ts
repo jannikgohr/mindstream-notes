@@ -125,6 +125,7 @@ export const config: WebdriverIO.Config = {
   runner: 'local',
   specs: [join(here, 'specs', 'sharing-multi-device.e2e.ts')],
   maxInstances: 1,
+  outputDir: join(repoRoot, '.output', 'wdio', 'multi-a2'),
   // Multiremote: an OBJECT keyed by instance name, each with its own connection
   // (port → its tauri-driver) plus capabilities. Cast as the two-client config
   // does — the multiremote object shape isn't the standalone array type.

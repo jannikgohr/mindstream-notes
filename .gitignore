@@ -1,16 +1,9 @@
 node_modules
 /.pnpm-store
-/.svelte-kit
-/build
+/.output
 /dist
-/coverage
-/src-tauri/coverage
-/src-tauri/lcov.info
 
 # Playwright
-/test-results
-/playwright-report
-/blob-report
 /playwright/.cache
 .DS_Store
 .env

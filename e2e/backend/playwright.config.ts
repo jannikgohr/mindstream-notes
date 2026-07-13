@@ -1,4 +1,6 @@
 import { defineConfig } from '@playwright/test';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 /**
  * Local-only Playwright config for tests that probe a **real** mindstream-server
@@ -20,12 +22,25 @@ import { defineConfig } from '@playwright/test';
  * Point at a non-default edge with MINDSTREAM_E2E_BACKEND_URL.
  */
 
+const here = dirname(fileURLToPath(import.meta.url));
+const repoRoot = resolve(here, '../..');
+
 export default defineConfig({
   testDir: './',
+  outputDir: resolve(repoRoot, '.output/test-results/backend'),
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: 0,
-  reporter: 'list',
+  reporter: [
+    ['list'],
+    [
+      'html',
+      {
+        open: 'never',
+        outputFolder: resolve(repoRoot, '.output/playwright-report/backend')
+      }
+    ]
+  ],
   expect: { timeout: 10_000 },
   // No browser/`webServer`: every spec here uses the `request` fixture or
   // raw Node sockets against the live stack.
