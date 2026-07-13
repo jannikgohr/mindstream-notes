@@ -16,10 +16,12 @@ import {
   getCloseToTray,
   getCustomWindowDecorations,
   getDesktopLanguage,
+  getDesktopThemeMode,
   getStartInTray,
   setCloseToTray,
   setCustomWindowDecorations,
   setDesktopLanguage,
+  setDesktopThemeMode,
   setStartInTray
 } from '$lib/api/desktop-settings';
 import { isTauri } from '$lib/api/core';
@@ -105,12 +107,22 @@ export const SETTING_BINDINGS: Record<string, Binding> = {
   },
   'appearance.mode': {
     get: async () => {
+      if (isTauri() && !isMobile()) {
+        const mode = await getDesktopThemeMode();
+        localStorage.setItem('mode-watcher-mode', mode);
+        setMode(mode);
+        return mode;
+      }
       // mode-watcher writes/reads from localStorage; mirror its key here so
       // the radio reflects whatever the user's last choice was.
       if (typeof localStorage === 'undefined') return 'system';
       return localStorage.getItem('mode-watcher-mode') ?? 'system';
     },
-    set: async (v) => setMode(v as 'light' | 'dark' | 'system')
+    set: async (v) => {
+      const mode = v as 'light' | 'dark' | 'system';
+      setMode(mode);
+      if (isTauri() && !isMobile()) await setDesktopThemeMode(mode);
+    }
   },
   'appearance.sortStrategy': {
     get: async () => ui.sortStrategy,

@@ -254,6 +254,10 @@ export async function waitForShell(): Promise<void> {
   await byName('Welcome').waitForDisplayed({ timeout: 30_000 });
 }
 
+export async function waitForSaved(): Promise<void> {
+  await byName('Saved').waitForDisplayed({ timeout: 30_000 });
+}
+
 /** Credentials for driving the Settings → Account sign-in form. */
 export interface LoginInput {
   serverUrl: string;

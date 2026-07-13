@@ -441,6 +441,10 @@ pub fn run() {
             desktop_settings::get_desktop_language,
             #[cfg(desktop)]
             desktop_settings::set_desktop_language,
+            #[cfg(desktop)]
+            desktop_settings::get_desktop_theme_mode,
+            #[cfg(desktop)]
+            desktop_settings::set_desktop_theme_mode,
             // Ink note bridge — save + Android live-ink overlay control
             // plane. The overlay commands are no-ops on desktop.
             drawing::drawing_save_ink_state,
