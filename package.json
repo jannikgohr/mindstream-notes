@@ -39,11 +39,6 @@
     "format:rust:check": "node src-tauri/scripts/format-rust.mjs --check",
     "prepare": "husky"
   },
-  "lint-staged": {
-    "*.{js,ts,mjs,cjs,svelte,json,html,css,md}": [
-      "prettier --check"
-    ]
-  },
   "devDependencies": {
     "@codemirror/language": "6.12.3",
     "@commitlint/cli": "^21.0.1",

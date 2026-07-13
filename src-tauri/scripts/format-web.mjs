@@ -14,7 +14,14 @@ const patterns = [
 
 const check = process.argv.includes('--check');
 
-const args = [check ? '--check' : '--write', ...patterns];
+const args = [
+  check ? '--check' : '--write',
+  '--config',
+  '.config/prettier/.prettierrc.json',
+  '--ignore-path',
+  '.config/prettier/.prettierignore',
+  ...patterns
+];
 
 // Resolve prettier's bin script through require.resolve and run it
 // with the current Node binary. We deliberately bypass the
