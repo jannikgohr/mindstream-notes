@@ -12,6 +12,10 @@ import { isTauri } from './core';
 
 export type ServerType = 'managed' | 'self-hosted';
 
+/** The fixed endpoint "managed" mode talks to. Mirrors MANAGED_SERVER_URL in
+ *  src-tauri/src/auth/mod.rs — keep both in sync when changing. */
+export const MANAGED_SERVER_URL = 'https://api.mindstream-notes.invalid/';
+
 export interface LoginInput {
   serverType: ServerType;
   serverUrl?: string;
@@ -131,6 +135,22 @@ export async function etebaseLogout(): Promise<void> {
 export async function etebaseSession(): Promise<SessionInfo | null> {
   if (!isTauri()) return null;
   return await tauriInvoke<SessionInfo | null>('etebase_session');
+}
+
+/**
+ * Which server type a live session implies, derived from its resolved
+ * server URL. The on-disk Etebase session is the source of truth for
+ * "where am I connected"; the vault-scoped `account.serverType` setting
+ * can be lost (cleared web storage, a fresh WebView profile) while the
+ * session survives, so this lets the account UI recover from the session
+ * alone instead of decaying to "local-only" and stranding a signed-in
+ * user with the server-type radios locked.
+ */
+export function serverTypeForSession(session: SessionInfo): ServerType {
+  const strip = (url: string) => url.replace(/\/+$/, '');
+  return strip(session.server_url) === strip(MANAGED_SERVER_URL)
+    ? 'managed'
+    : 'self-hosted';
 }
 
 export async function checkEtebaseServerUrl(
