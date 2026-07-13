@@ -4,9 +4,9 @@
  * Vitest uses the plain Svelte plugin (not @sveltejs/kit/vite), so the
  * `$app/*` virtual modules don't exist during transform and any source
  * file importing them fails to resolve before a `vi.mock` factory can run.
- * vitest.config.ts aliases `$app/navigation` to this file so those imports
- * resolve; individual tests still `vi.mock('$app/navigation', …)` when they
- * need to assert on the calls.
+ * vitest.config.ts aliases `$app/navigation` here so those imports resolve;
+ * individual tests still `vi.mock('$app/navigation', …)` when they need to
+ * assert on the calls.
  */
 
 export function pushState(..._args: unknown[]): void {}

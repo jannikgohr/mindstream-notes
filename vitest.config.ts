@@ -19,7 +19,9 @@ export default defineConfig({
       // Svelte plugin vitest uses, so any source importing them fails to
       // resolve at transform time. Point them at test stubs; tests that
       // care about the calls override with `vi.mock`.
-      '$app/navigation': path.resolve('./test/stubs/app-navigation.ts')
+      '$app/navigation': path.resolve(
+        './.config/vitest/stubs/app-navigation.ts'
+      )
     },
     // Some Svelte ecosystem packages (e.g. `mode-watcher`) only declare a
     // `svelte` export condition — no `import`/`default` fallback. Vitest's
