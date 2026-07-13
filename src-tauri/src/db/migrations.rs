@@ -590,12 +590,93 @@ fn insert_note(
     position: i64,
     now: &str,
 ) -> AppResult<()> {
+    // Give every seeded note a DETERMINISTIC origin yrs_state (v1 Y.Text
+    // "body", so payload_schema stays 1 — the column default). Because the
+    // bytes are identical on every device, two fresh devices on the same
+    // account share one origin op: a CRDT merge collapses the seed text
+    // instead of stacking each device's own "insert seed text" into a
+    // duplicated body. Later per-device edits still diverge normally (they
+    // mint their own client id off the loaded doc) and merge on top of the
+    // shared base. See crate::sync::yrs_doc::init_seed_state.
+    let yrs_state = crate::sync::yrs_doc::init_seed_state(body);
     conn.execute(
-        "INSERT INTO notes(id, parent_collection_id, title, body, position, created, modified)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
-        params![id, parent, title, body, position, now],
+        "INSERT INTO notes(id, parent_collection_id, title, body, position, created, modified, yrs_state)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7)",
+        params![id, parent, title, body, position, now, yrs_state],
     )?;
     Ok(())
 }
 
 const WELCOME_BODY: &str = "# Welcome\n\nThis is a **local-first** note-taking boilerplate built on Tauri v2, SvelteKit\n(SPA mode), Svelte 5 runes, dockview, and Milkdown's Crepe editor.\n\n- The left sidebar is the file tree\n- The right sidebar shows metadata for the active note\n- The middle area is a `dockview` instance — drag tabs to split panes\n\n> Notes now live in a SQLite database under your app data folder.\n";
+
+#[cfg(test)]
+mod seed_tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    fn seeded_conn() -> Connection {
+        let mut conn = Connection::open_in_memory().expect("in-memory db");
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        run(&mut conn).expect("migrations");
+        seed(&conn).expect("seed");
+        conn
+    }
+
+    #[test]
+    fn seeded_notes_carry_a_deterministic_origin_yrs_state() {
+        let conn = seeded_conn();
+        // Every seeded note gets a v1 origin state whose bytes are exactly what
+        // init_seed_state(body) produces — i.e. deterministic across devices.
+        let mut stmt = conn
+            .prepare("SELECT body, yrs_state, payload_schema FROM notes")
+            .unwrap();
+        let rows: Vec<(String, Option<Vec<u8>>, i64)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert!(!rows.is_empty(), "seed should insert notes");
+        for (body, yrs_state, schema) in rows {
+            let state = yrs_state.expect("seeded note has yrs_state");
+            assert!(!state.is_empty(), "seeded yrs_state is non-empty");
+            // Deterministic: recomputing from the body yields identical bytes.
+            assert_eq!(
+                state,
+                crate::sync::yrs_doc::init_seed_state(&body),
+                "seeded yrs_state must equal the deterministic origin"
+            );
+            // v1 Y.Text "body" doc → the state renders back to the body.
+            assert_eq!(crate::sync::yrs_doc::to_markdown(&state), body);
+            // Stays on the v1 payload schema (column default).
+            assert_eq!(schema, 1);
+        }
+    }
+
+    #[test]
+    fn two_devices_seed_identical_bytes_so_a_merge_keeps_content_once() {
+        // Simulate two fresh devices seeding the same account: identical origin
+        // bytes mean a CRDT merge is a no-op — the seed content stays single.
+        let device_a = seeded_conn();
+        let device_b = seeded_conn();
+
+        let welcome = |conn: &Connection| -> Vec<u8> {
+            conn.query_row(
+                "SELECT yrs_state FROM notes WHERE id = 'seed_welcome'",
+                [],
+                |r| r.get::<_, Option<Vec<u8>>>(0),
+            )
+            .unwrap()
+            .unwrap()
+        };
+        let a = welcome(&device_a);
+        let b = welcome(&device_b);
+        assert_eq!(a, b, "two devices seed byte-identical origin state");
+
+        let merged = crate::sync::yrs_doc::merge_remote(&a, &b);
+        assert_eq!(
+            crate::sync::yrs_doc::to_markdown(&merged),
+            crate::sync::yrs_doc::to_markdown(&a),
+            "merging two identical seed origins must not duplicate content"
+        );
+    }
+}
