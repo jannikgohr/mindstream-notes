@@ -117,7 +117,8 @@ export const config: WebdriverIO.Config = {
     join(here, 'specs', 'collab-confirm.e2e.ts'),
     join(here, 'specs', 'sharing.e2e.ts'),
     join(here, 'specs', 'collab.e2e.ts'),
-    join(here, 'specs', 'sync-history.e2e.ts')
+    join(here, 'specs', 'sync-history.e2e.ts'),
+    join(here, 'specs', 'seed-merge.e2e.ts')
   ],
   maxInstances: 1,
   // Multiremote: an OBJECT (not an array) keyed by instance name. Each entry
