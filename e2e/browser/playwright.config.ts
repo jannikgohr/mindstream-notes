@@ -1,4 +1,6 @@
 import { defineConfig, devices } from '@playwright/test';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 /**
  * Playwright drives the SvelteKit frontend in its **browser-fallback**
@@ -23,14 +25,28 @@ import { defineConfig, devices } from '@playwright/test';
  */
 
 const PORT = 1440;
+const here = dirname(fileURLToPath(import.meta.url));
+const repoRoot = resolve(here, '../..');
 
 export default defineConfig({
   testDir: './',
+  outputDir: resolve(repoRoot, '.output/test-results/browser'),
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
   workers: process.env.CI ? 1 : undefined,
-  reporter: process.env.CI ? [['github'], ['html', { open: 'never' }]] : 'list',
+  reporter: process.env.CI
+    ? [
+        ['github'],
+        [
+          'html',
+          {
+            open: 'never',
+            outputFolder: resolve(repoRoot, '.output/playwright-report/browser')
+          }
+        ]
+      ]
+    : 'list',
   expect: { timeout: 10_000 },
   use: {
     baseURL: `http://localhost:${PORT}`,

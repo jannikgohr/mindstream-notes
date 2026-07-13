@@ -142,15 +142,15 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # Frontend: vitest with the v8 provider emits coverage/lcov.info.
+      # Frontend: vitest with the v8 provider emits .output/coverage/frontend/lcov.info.
       - name: JS coverage
         run: pnpm test:coverage
 
-      # Backend: cargo-llvm-cov emits src-tauri/lcov.info. The helper applies
+      # Backend: cargo-llvm-cov emits .output/coverage/rust/lcov.info. The helper applies
       # the shared ignore-regex (integration/IPC/network/UI surfaces) and
       # fails the job if line coverage drops below 80%.
       - name: Rust coverage
-        run: node src-tauri/scripts/rust-coverage.mjs --lcov --output-path lcov.info
+        run: node src-tauri/scripts/rust-coverage.mjs --lcov --output-path ../.output/coverage/rust/lcov.info
 
       - name: Note skipped Codecov upload
         if: ${{ env.CODECOV_TOKEN == '' }}
@@ -160,7 +160,7 @@ jobs:
         if: ${{ env.CODECOV_TOKEN != '' }}
         uses: codecov/codecov-action@v5
         with:
-          files: ./coverage/lcov.info
+          files: ./.output/coverage/frontend/lcov.info
           flags: frontend
           fail_ci_if_error: false
           token: ${{ env.CODECOV_TOKEN }}
@@ -169,7 +169,7 @@ jobs:
         if: ${{ env.CODECOV_TOKEN != '' }}
         uses: codecov/codecov-action@v5
         with:
-          files: ./src-tauri/lcov.info
+          files: ./.output/coverage/rust/lcov.info
           flags: backend
           fail_ci_if_error: false
           token: ${{ env.CODECOV_TOKEN }}
@@ -207,5 +207,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report
-          path: playwright-report
+          path: .output/playwright-report/browser
           retention-days: 7

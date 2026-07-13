@@ -122,6 +122,7 @@ export const config: WebdriverIO.Config = {
     join(here, 'specs', 'seed-merge.e2e.ts')
   ],
   maxInstances: 1,
+  outputDir: join(repoRoot, '.output', 'wdio', 'multi'),
   // Multiremote: an OBJECT (not an array) keyed by instance name. Each entry
   // carries its own connection (port → its tauri-driver) plus capabilities.
   // `WebdriverIO.Config['capabilities']` is typed as the standalone array, so

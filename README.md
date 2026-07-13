@@ -68,7 +68,7 @@ surfaces — the Tauri IPC boundary, network sync, native dialogs, editor/canvas
 frameworks — are excluded from the metric and covered by e2e instead:
 
 ```shell
-pnpm test:coverage        # frontend; writes coverage/ (text + lcov), enforces 80%
+pnpm test:coverage        # frontend; writes .output/coverage/frontend, enforces 80%
 pnpm test:coverage:rust   # backend; enforces 80% (needs cargo-llvm-cov)
 ```
 

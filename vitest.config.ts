@@ -45,7 +45,7 @@ export default defineConfig({
       // text for the local terminal summary, json-summary + lcov for CI
       // (lcov feeds coverage services; json-summary drives the PR comment).
       reporter: ['text', 'json-summary', 'lcov'],
-      reportsDirectory: './coverage',
+      reportsDirectory: './.output/coverage/frontend',
       include: ['src/**/*.ts'],
       // The unit-coverage metric measures the *logic* layer. Three classes
       // of code are deliberately out of scope here because they're proven by

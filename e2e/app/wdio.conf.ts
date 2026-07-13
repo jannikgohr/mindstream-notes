@@ -81,6 +81,7 @@ export const config: WebdriverIO.Config = {
     join(here, 'specs', 'trash-retention.e2e.ts')
   ],
   maxInstances: 1,
+  outputDir: join(repoRoot, '.output', 'wdio', 'single'),
   capabilities: [
     {
       maxInstances: 1,

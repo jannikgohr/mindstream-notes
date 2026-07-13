@@ -1,7 +1,6 @@
 # Build artefacts
-build/
+/.output/
 dist/
-.svelte-kit/
 
 # Generated WASM bindings
 src/lib/ink-web/pkg/
@@ -16,9 +15,6 @@ src-tauri/target/
 src-tauri/Cargo.lock
 **/target/
 crates/**/Cargo.lock
-
-# Test snapshots / coverage
-coverage/
 
 # IDE / OS
 .vscode/
