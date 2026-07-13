@@ -121,11 +121,10 @@ declare global {
   }
 }
 
-if (
-  typeof window !== 'undefined' &&
-  import.meta.env.VITE_MINDSTREAM_E2E === '1'
-) {
-  window.__mindstreamE2E = {
+export function installNoteHistoryE2EDiagnostics(
+  target: Pick<Window, '__mindstreamE2E'>
+): void {
+  target.__mindstreamE2E = {
     notePeerCount(noteId: string): number {
       return getNoteHistory(noteId)?.peerCount?.() ?? 0;
     },
@@ -136,4 +135,11 @@ if (
       await setPaused(paused);
     }
   };
+}
+
+if (
+  typeof window !== 'undefined' &&
+  import.meta.env.VITE_MINDSTREAM_E2E === '1'
+) {
+  installNoteHistoryE2EDiagnostics(window);
 }
