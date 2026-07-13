@@ -400,6 +400,10 @@ pub fn run() {
             sharing::invite_collection,
             #[cfg(feature = "e2e-data-dir")]
             sharing::e2e_create_standalone_collection_invite,
+            #[cfg(feature = "e2e-data-dir")]
+            sharing::e2e_create_incomplete_share_bundle,
+            #[cfg(feature = "e2e-data-dir")]
+            sharing::e2e_accept_share_manifest_only,
             // One-shot recovery for items the pre-fix etebase encoder
             // bug left corrupt on the server. Invoke from dev tools.
             sync::repair::audit_corrupt_remote_items,
