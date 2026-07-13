@@ -255,11 +255,11 @@ describe('T4 per-device history (sync negative assertion)', function () {
     await syncClient(browserB);
     await expectNoteBodyContains(browserB, dirtyNote.id, baseline);
 
-    await saveNoteBodyFixture(browserA, dirtyNote.id, localEdit);
-    await expectNoteBodyContains(browserA, dirtyNote.id, localEdit);
-
     await purgeNoteFixture(browserB, dirtyNote.id);
     await syncClient(browserB);
+
+    await saveNoteBodyFixture(browserA, dirtyNote.id, localEdit);
+    await expectNoteBodyContains(browserA, dirtyNote.id, localEdit);
 
     await syncClient(browserA);
     await expectNoteBodyContains(browserA, dirtyNote.id, localEdit);
