@@ -1,4 +1,6 @@
-# CI for every push / PR. Four parallel job groups:
+# CI for every push / PR. Five parallel job groups:
+#   - format   : `prettier --check` on the web + docs sources
+#                (pnpm format:web:check), Linux — fails on formatting drift.
 #   - js       : svelte-check + vitest + vite build, on all three desktop OSes.
 #   - rust     : `cargo test` for the desktop target on all three desktop OSes.
 #   - coverage : single-OS (Linux) run that measures vitest (v8) and cargo
@@ -209,3 +211,25 @@ jobs:
           name: playwright-report
           path: .output/playwright-report/browser
           retention-days: 7
+
+  # Formatting gate: `prettier --check` over the web + docs sources (the same
+  # `pnpm format:web:check` the husky pre-commit hook runs locally). Catches
+  # formatting drift — including broken/unformatted Markdown docs — in CI rather
+  # than relying on the hook alone. Linux-only; formatting is platform-agnostic.
+  format:
+    name: Prettier (web + docs)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm format:web:check
