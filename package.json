@@ -40,7 +40,6 @@
     "prepare": "husky"
   },
   "devDependencies": {
-    "@codemirror/language": "6.12.3",
     "@commitlint/cli": "^21.0.1",
     "@commitlint/config-conventional": "^21.0.1",
     "@playwright/test": "^1.61.1",
@@ -79,9 +78,15 @@
     "vitest": "^2.1.0"
   },
   "dependencies": {
+    "@codemirror/commands": "6.10.4",
+    "@codemirror/lang-markdown": "6.5.0",
+    "@codemirror/language": "6.12.3",
+    "@codemirror/state": "6.7.0",
+    "@codemirror/view": "6.43.4",
     "@excalidraw/excalidraw": "^0.18.1",
     "@floating-ui/dom": "^1.7.6",
     "@jis3r/icons": "^2.7.0",
+    "@lezer/highlight": "1.2.3",
     "@lucide/svelte": "^1.20.0",
     "@milkdown/core": "^7.21.2",
     "@milkdown/crepe": "^7.21.2",

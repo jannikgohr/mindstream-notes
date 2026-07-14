@@ -353,6 +353,7 @@
     "hotkeys.command.editor.pdf.zoomIn": "Vergrößern",
 
     "editor.toolbar.label": "Formatierung",
+    "editor.mode.label": "Editor-Ansichtsmodus",
     "editor.toolbar.undo": "Rückgängig",
     "editor.toolbar.redo": "Wiederholen",
     "editor.toolbar.bold": "Fett",
@@ -828,6 +829,9 @@
     "appearance.sortStrategy.created": "Zuletzt erstellt",
     "language.code.en": "English",
     "language.code.de": "Deutsch",
+    "editor.defaultMode.wysiwyg": "WYSIWYG",
+    "editor.defaultMode.source": "Quelltext",
+    "editor.defaultMode.split": "Geteilt",
     "editor.freeform.penMode.auto": "Automatisch erkennen (empfohlen)",
     "editor.freeform.penMode.always": "Immer aktiv",
     "editor.freeform.penMode.off": "Aus",

@@ -41,6 +41,14 @@
 
   interface Props {
     crepe: Crepe | null;
+    /**
+     * Which editor surface the buttons act on. When `'source'` the note is
+     * showing raw markdown: commands route through the bus to the source
+     * editor's text transforms (nothing to change here), but the ProseMirror
+     * mark active-state is meaningless, so we skip computing it and never fall
+     * back to `crepe.editor.action` (which would mutate the hidden WYSIWYG doc).
+     */
+    activeSurface?: 'wysiwyg' | 'source';
     menuPlacement?: 'top' | 'bottom';
     /** Extra classes merged onto the outer bar (e.g. the desktop variant
      *  adds `border-b border-border bg-background`; the mobile variant
@@ -70,6 +78,7 @@
   }
   let {
     crepe,
+    activeSurface = 'wysiwyg',
     menuPlacement = 'bottom',
     class: className = '',
     fitContent = false,
@@ -196,7 +205,12 @@
           item.hotkeyId
         );
     }
-    if (!handled) crepe.editor.action(item.action);
+    // Never run the ProseMirror action directly while the source surface is
+    // active — the bus already routed (or intentionally dropped) the command
+    // for the raw-markdown editor; falling back here would mutate the hidden
+    // WYSIWYG doc out from under the user.
+    if (!handled && activeSurface !== 'source')
+      crepe.editor.action(item.action);
     // Recompute manually as well as via the listener. Mark toggles on an
     // empty selection only mutate `state.storedMarks` — doc and selection
     // are unchanged — so neither selectionUpdated nor updated would fire,
@@ -215,6 +229,12 @@
 
   function recomputeActive() {
     if (!crepe) return;
+    // Source surface: ProseMirror marks don't reflect the raw-text caret, so
+    // there's no meaningful toggled state to show.
+    if (activeSurface === 'source') {
+      activeMap = {};
+      return;
+    }
     crepe.editor.action((ctx) => {
       const next: Record<string, boolean> = {};
       // Compute predicates only for items we'll actually render — no
@@ -257,6 +277,14 @@
     return () => {
       cancelled = true;
     };
+  });
+
+  // Recompute when the active surface flips (source clears the toggled state;
+  // returning to WYSIWYG restores it) — the listener subscription above only
+  // fires on editor transactions, which a surface switch isn't.
+  $effect(() => {
+    void activeSurface;
+    recomputeActive();
   });
 
   function toggleGroup(item: ToolbarGroup, btn: HTMLElement | null) {
