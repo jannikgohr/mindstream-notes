@@ -32,8 +32,10 @@ import {
   markdownSearchPlugins,
   mermaidLanguageDescription,
   renderMermaidPreview,
+  userMentionPlugins,
   wikilinkPlugins,
   type MarkdownSearchBridge,
+  type UserMentionBridge,
   type WikilinkBridge
 } from './plugins';
 import { useNoteLinkHrefNeutralizer } from './note-link-schema';
@@ -73,6 +75,15 @@ export interface CrepeSetupOptions {
   /** True when plain left-click should follow note links. */
   wikilinkOpenOnClick: () => boolean;
   wikilinkBridge: WikilinkBridge | null;
+  /**
+   * User mentions: `@username` autocomplete + self-highlighting. When enabled,
+   * the caller MUST pass a freshly-created `UserMentionBridge` (per-editor menu
+   * state the popup component also reads) and a `currentUsername` getter (whose
+   * mention gets the "self" highlight).
+   */
+  userMentionsEnabled: boolean;
+  userMentionBridge: UserMentionBridge | null;
+  currentUsername: () => string | null;
   /**
    * Per-editor bridge for in-document find & replace. The host
    * (`NoteEditor`) creates it, drives the shared `FindBar` from its
@@ -192,6 +203,15 @@ export function buildCrepe(opts: CrepeSetupOptions): Crepe {
     // runs independently to style existing links as clickable.
     for (const p of wikilinkPlugins(opts.wikilinkBridge, {
       openOnClick: opts.wikilinkOpenOnClick
+    })) {
+      crepe.editor.use(p);
+    }
+  }
+  // User mentions — same pattern as wikilinks: a trigger plugin owns the menu,
+  // the decoration plugin styles committed mentions (and the "self" one).
+  if (opts.userMentionsEnabled && opts.userMentionBridge) {
+    for (const p of userMentionPlugins(opts.userMentionBridge, {
+      currentUsername: opts.currentUsername
     })) {
       crepe.editor.use(p);
     }

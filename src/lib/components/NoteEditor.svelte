@@ -11,13 +11,19 @@
     TRASH_ID,
     noteRoomInfo,
     etebaseSession,
+    authSession,
     getYjsRelayUrl,
     onSessionChange,
     captureNoteVersion,
+    getCollectionShareState,
     type VersionAction
   } from '$lib/api';
   import { tree } from '$lib/stores/tree.svelte';
-  import { collectionScopeIsReadOnly } from '$lib/stores/note-source.svelte';
+  import {
+    collectionScopeIsReadOnly,
+    collectionIsSharedWithMe,
+    collectionIsSharedByMe
+  } from '$lib/stores/note-source.svelte';
   import {
     bumpNoteHistory,
     registerNoteHistory
@@ -43,7 +49,10 @@
   import { base64ToBytes } from '$lib/editor/base64';
   import {
     createWikilinkBridge,
-    createMarkdownSearchBridge
+    createMarkdownSearchBridge,
+    createUserMentionBridge,
+    refreshMentionDecorations,
+    type MentionUser
   } from '$lib/editor/plugins';
   import { MARKDOWN_ACTIONS } from '$lib/hotkeys/markdown-actions';
   import {
@@ -59,6 +68,7 @@
   import TrashBanner from './note-editor/TrashBanner.svelte';
   import ViewOnlyBanner from './note-editor/ViewOnlyBanner.svelte';
   import WikilinkMenu from './note-editor/WikilinkMenu.svelte';
+  import UserMentionMenu from './note-editor/UserMentionMenu.svelte';
 
   interface Props {
     noteId: string;
@@ -100,12 +110,22 @@
     (getSettingValue('editor.wikilinkOpenOnClick') as boolean | undefined) ??
       true
   );
+  const userMentionsEnabled = $derived(
+    (getSettingValue('editor.userMentions') as boolean | undefined) ?? true
+  );
 
   // Per-editor bridge between the wikilink trigger plugin and the
   // WikilinkMenu popup. Created up-front (cheap; just a $state object)
   // so the popup template never has to defend against `bridge == null`
   // — if wikilinks are off, the plugin simply never opens it.
   const wikilinkBridge = createWikilinkBridge();
+
+  // Per-editor bridge for `@username` mentions. Same up-front-creation
+  // rationale as the wikilink bridge. Unlike wikilinks (candidates read
+  // synchronously from the tree), the mention candidate list — "who can view
+  // this note" — is resolved asynchronously below and written to
+  // `userMentionBridge.state.users`.
+  const userMentionBridge = createUserMentionBridge();
 
   // Per-editor find & replace bridge. The search prose plugin (registered
   // in crepe-setup) reports match counts through `searchBridge.state`; the
@@ -264,6 +284,92 @@
   // push.
   const isReadOnly = $derived(isTrashed || isReadOnlyScope);
 
+  /**
+   * The nearest ancestor collection (or the note's own folder) that carries a
+   * share — the "share scope". Its members are the people who can view the
+   * note. Returns null for a purely personal note (candidate list is then just
+   * yourself). Cycle-guarded like the trash walk above.
+   */
+  function findShareScopeCollectionId(parentId: string | null): string | null {
+    let current = parentId;
+    const seen = new Set<string>();
+    while (current && !seen.has(current)) {
+      seen.add(current);
+      const c = tree.collectionsById[current];
+      if (!c) return null;
+      if (collectionIsSharedWithMe(c) || collectionIsSharedByMe(c)) {
+        return current;
+      }
+      current = c.parent_collection_id;
+    }
+    return null;
+  }
+
+  // Resolve "who can view this note" for the mention dropdown: yourself, plus —
+  // when the note lives in a shared scope — the scope's owner and members. The
+  // share state is an async backend call, so we write the result into the
+  // bridge and (once resolved) nudge the decoration plugin to re-evaluate the
+  // "self" highlight on any mentions that rendered before the session/list was
+  // known. Reads authSession + tree so it re-runs on sign-in/out and moves.
+  $effect(() => {
+    const me = authSession.current?.username ?? null;
+    const selfOnly: MentionUser[] = me
+      ? [{ username: me, accessLevel: null, isSelf: true }]
+      : [];
+    const note = tree.notesById[noteId];
+    const scopeId = note
+      ? findShareScopeCollectionId(note.parent_collection_id)
+      : null;
+
+    if (!scopeId) {
+      userMentionBridge.state.users = selfOnly;
+      return;
+    }
+
+    let cancelled = false;
+    void getCollectionShareState(scopeId)
+      .then((share) => {
+        if (cancelled) return;
+        const users: MentionUser[] = [];
+        const seen = new Set<string>();
+        const add = (
+          username: string | null,
+          accessLevel: MentionUser['accessLevel']
+        ) => {
+          const name = username?.trim();
+          if (!name) return;
+          const key = name.toLowerCase();
+          if (seen.has(key)) return;
+          seen.add(key);
+          users.push({
+            username: name,
+            accessLevel,
+            isSelf: me !== null && me.toLowerCase() === key
+          });
+        };
+        add(me, null); // self first
+        add(share.shared_owner, null);
+        for (const member of share.members)
+          add(member.username, member.access_level);
+        userMentionBridge.state.users = users;
+        if (crepe) {
+          try {
+            crepe.editor.action((ctx) =>
+              refreshMentionDecorations(ctx.get(editorViewCtx))
+            );
+          } catch {
+            // Editor not fully materialised yet; the next doc change rebuilds.
+          }
+        }
+      })
+      .catch(() => {
+        if (!cancelled) userMentionBridge.state.users = selfOnly;
+      });
+    return () => {
+      cancelled = true;
+    };
+  });
+
   onMount(async () => {
     if (!host) return;
     try {
@@ -334,6 +440,9 @@
         wikilinksEnabled,
         wikilinkOpenOnClick: () => wikilinkOpenOnClick,
         wikilinkBridge,
+        userMentionsEnabled,
+        userMentionBridge,
+        currentUsername: () => authSession.current?.username ?? null,
         searchBridge,
         assetBridge
       });
@@ -1152,3 +1261,9 @@
   in the tree unconditionally costs ~0 when the setting is off.
 -->
 <WikilinkMenu bridge={wikilinkBridge} />
+
+<!--
+  User-mention popup — same portal/position:fixed story as WikilinkMenu, and
+  likewise gated by `bridge.state.open` so it costs ~0 when mentions are off.
+-->
+<UserMentionMenu bridge={userMentionBridge} />
