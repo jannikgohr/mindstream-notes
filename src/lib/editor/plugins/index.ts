@@ -31,6 +31,16 @@ export {
   type WikilinkBridge
 } from './wikilink';
 export {
+  createUserMentionBridge,
+  parseUserHref,
+  refreshMentionDecorations,
+  userHref,
+  userMentionPlugins,
+  type UserMentionBridge,
+  type UserMentionPluginOptions
+} from './user-mention';
+export type { MentionUser } from './user-mention-bridge.svelte';
+export {
   createMarkdownSearchBridge,
   markdownSearchPlugins,
   type MarkdownSearchBridge,

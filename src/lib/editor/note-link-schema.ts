@@ -19,7 +19,7 @@
 
 import type { Editor } from '@milkdown/kit/core';
 import { linkAttr, linkSchema } from '@milkdown/kit/preset/commonmark';
-import { parseNoteHref } from './plugins';
+import { parseNoteHref, parseUserHref } from './plugins';
 
 /**
  * Register the schema override on a Milkdown editor. Must run before
@@ -39,7 +39,13 @@ export function useNoteLinkHrefNeutralizer(editor: Editor): void {
             ...schemaCtx.get(linkAttr.key)(mark),
             ...mark.attrs
           };
-          if (parseNoteHref(mark.attrs.href)) {
+          // Note links and user mentions both use internal `mindstream://`
+          // schemes that must never render as a navigable href (see the file
+          // header). Stash the original and drop `href` for both.
+          if (
+            parseNoteHref(mark.attrs.href) ||
+            parseUserHref(mark.attrs.href)
+          ) {
             attrs['data-note-href'] = attrs.href;
             delete attrs.href;
           }

@@ -393,6 +393,9 @@
     "editor.menu.mermaid": "Mermaid-Diagramm",
     "editor.wikilink.menu.label": "Notiz verlinken",
     "editor.wikilink.menu.empty": "Keine Treffer — weiter tippen, um einen neuen Link einzufügen",
+    "editor.userMention.menu.label": "Jemanden erwähnen",
+    "editor.userMention.menu.empty": "Niemand mit Zugriff zum Erwähnen",
+    "editor.userMention.self": "du",
     "editor.popout": "In neuem Fenster öffnen",
     "editor.popin": "Zurück andocken",
 
@@ -736,6 +739,10 @@
     "editor.wikilinkOpenOnClick": {
       "label": "Wikilinks mit Linksklick öffnen",
       "description": "Öffnet Notizlinks mit einem normalen Klick. Deaktiviere dies, um den Cursor in Notizlinks zu setzen und sie mit Strg/Cmd-Klick zu öffnen."
+    },
+    "editor.userMentions": {
+      "label": "Benutzererwähnungen @",
+      "description": "Tippe @, um jemanden zu erwähnen, der die Notiz sehen kann. Eine Erwähnung von dir wird hervorgehoben."
     },
     "editor.footnotes": { "label": "Fußnoten" },
     "editor.freeform.penMode": {

@@ -1094,6 +1094,48 @@ body.dv-tab-dragging .freeform-canvas-host * {
 }
 
 /* -------------------------------------------------------------------------
+ * User mentions
+ *
+ * The `$lib/editor/plugins/user-mention` plugin decorates text carrying a
+ * `mindstream://user/<username>` link mark with `.user-mention`. The `@`
+ * lives in the mention's own label text (`@username`), so — unlike wikilinks
+ * — there are no generated bracket pseudo-elements. A mention of the signed-in
+ * user also gets `.user-mention-self` for a stronger, unmistakable highlight.
+ * ------------------------------------------------------------------------- */
+
+.user-mention {
+  padding: 0 0.2em;
+  border-radius: 4px;
+  background: color-mix(in oklch, var(--primary), transparent 90%);
+  color: var(--primary);
+  font-weight: 500;
+  text-decoration: none;
+  cursor: text;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+.user-mention:hover {
+  background: color-mix(in oklch, var(--primary), transparent 84%);
+}
+/* You. Warmer, higher-contrast chip so a mention of yourself stands out at a
+ * glance from mentions of other people. */
+.user-mention-self {
+  background: color-mix(in oklch, var(--primary), transparent 74%);
+  color: var(--primary-foreground);
+  font-weight: 600;
+}
+.user-mention-self:hover {
+  background: color-mix(in oklch, var(--primary), transparent 66%);
+}
+/* Keep Crepe's stock link tooltip out of sight for mentions — the internal
+ * user scheme leaks otherwise (mirrors the note-link rule above). */
+.milkdown .milkdown-link-preview:has(.link-display[href^='mindstream://user/']),
+.milkdown .milkdown-link-edit:has(input[value^='mindstream://user/']) {
+  display: none !important;
+  pointer-events: none !important;
+}
+
+/* -------------------------------------------------------------------------
  * Find & replace highlights
  *
  * Inline decorations from `$lib/editor/plugins/markdown-search` wrap every

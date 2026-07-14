@@ -250,6 +250,12 @@
               "showIf": { "id": "editor.wikilinks", "equals": true }
             },
             {
+              "id": "editor.userMentions",
+              "scope": "V",
+              "type": "toggle",
+              "default": true
+            },
+            {
               "id": "editor.footnotes",
               "scope": "V",
               "type": "toggle",

@@ -493,6 +493,9 @@
     "editor.menu.mermaid": "Mermaid diagram",
     "editor.wikilink.menu.label": "Link to note",
     "editor.wikilink.menu.empty": "No notes match — keep typing to insert a new link",
+    "editor.userMention.menu.label": "Mention someone",
+    "editor.userMention.menu.empty": "No one with access to mention",
+    "editor.userMention.self": "you",
     "editor.popout": "Open in new window",
     "editor.popin": "Pop in",
 
@@ -747,6 +750,10 @@
     "editor.wikilinkOpenOnClick": {
       "label": "Open wikilinks with left click",
       "description": "Open note links with a normal click. Turn this off to place the caret inside note links and use Ctrl/Cmd-click to open them."
+    },
+    "editor.userMentions": {
+      "label": "User mentions @",
+      "description": "Type @ to mention someone who can view the note. A mention of you is highlighted."
     },
     "editor.footnotes": { "label": "Footnotes" },
     "editor.freeform.penMode": {
