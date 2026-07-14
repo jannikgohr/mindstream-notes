@@ -92,6 +92,11 @@ For how the app fits together (frontend, IPC, Rust, sync, sharing), see
 Fedora), packaging commands, Android notes, and Rust quality gates, see
 [docs/BUILDING.md](docs/BUILDING.md).
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for branch/commit conventions (commits
+require a scope), the git hooks, and the local quality gates.
+
 ## License
 
 Mindstream Notes is licensed under either of:
