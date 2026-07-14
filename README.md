@@ -87,8 +87,10 @@ journeys, IPC-heavy operations, and cross-restart state persistence) that need
 the packaged Tauri app rather than the browser fallback. To run those deeper
 suites (T3/T4), see [e2e-tests/README.md](e2e-tests/README.md).
 
-For per-OS setup (Windows, Ubuntu, Fedora), packaging commands, Android notes,
-and Rust quality gates, see [docs/BUILDING.md](docs/BUILDING.md).
+For how the app fits together (frontend, IPC, Rust, sync, sharing), see
+[docs/architecture.md](docs/architecture.md). For per-OS setup (Windows, Ubuntu,
+Fedora), packaging commands, Android notes, and Rust quality gates, see
+[docs/BUILDING.md](docs/BUILDING.md).
 
 ## License
 
