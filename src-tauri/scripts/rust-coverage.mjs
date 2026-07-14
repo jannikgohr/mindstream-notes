@@ -17,6 +17,7 @@
 // tests that run; they're just not part of the line-coverage denominator.
 
 import { spawnSync } from 'node:child_process';
+import { mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
@@ -36,6 +37,15 @@ const srcTauri = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 // or `--summary-only` locally). Default to a text summary.
 const passthrough = process.argv.slice(2);
 const reportArgs = passthrough.length > 0 ? passthrough : ['--summary-only'];
+const outputPathIndex = reportArgs.indexOf('--output-path');
+if (outputPathIndex !== -1 && reportArgs[outputPathIndex + 1]) {
+  mkdirSync(
+    path.dirname(path.resolve(srcTauri, reportArgs[outputPathIndex + 1])),
+    {
+      recursive: true
+    }
+  );
+}
 
 const args = [
   'llvm-cov',

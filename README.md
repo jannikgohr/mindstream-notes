@@ -31,7 +31,7 @@ The project is still under active development. Expect sharp edges, but the core 
 src/                    Svelte app, UI components, stores, editor code
 src-tauri/              Tauri app, Rust backend, persistence, sync
 backend/yjs-collab/     Experimental Yjs collaboration server pieces
-e2e/                    Browser, backend, and real-app end-to-end suites
+e2e-tests/              Browser, backend, and real-app end-to-end suites
 docs/                   Architecture notes and build documentation
 ```
 
@@ -68,7 +68,7 @@ surfaces — the Tauri IPC boundary, network sync, native dialogs, editor/canvas
 frameworks — are excluded from the metric and covered by e2e instead:
 
 ```shell
-pnpm test:coverage        # frontend; writes coverage/ (text + lcov), enforces 80%
+pnpm test:coverage        # frontend; writes .output/coverage/frontend, enforces 80%
 pnpm test:coverage:rust   # backend; enforces 80% (needs cargo-llvm-cov)
 ```
 
@@ -82,11 +82,20 @@ pnpm test:e2e:ui          # interactive runner
 ```
 
 The Playwright suite covers the pure-UI journeys today;
-[docs/e2e-flows.md](docs/e2e-flows.md) defines the deeper flows (critical user
+[docs/e2e/flows.md](docs/e2e/flows.md) defines the deeper flows (critical user
 journeys, IPC-heavy operations, and cross-restart state persistence) that need
-the packaged Tauri app rather than the browser fallback.
+the packaged Tauri app rather than the browser fallback. To run those deeper
+suites (T3/T4), see [e2e-tests/README.md](e2e-tests/README.md).
 
-For full platform setup, packaging commands, Android notes, and Rust quality gates, see [docs/BUILDING.md](docs/BUILDING.md).
+For how the app fits together (frontend, IPC, Rust, sync, sharing), see
+[docs/architecture.md](docs/architecture.md). For per-OS setup (Windows, Ubuntu,
+Fedora), packaging commands, Android notes, and Rust quality gates, see
+[docs/BUILDING.md](docs/BUILDING.md).
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for branch/commit conventions (commits
+require a scope), the git hooks, and the local quality gates.
 
 ## License
 

@@ -10,7 +10,7 @@
 #   - a separate host port (NGINX_PORT, default 18080), so both stacks can
 #     run side by side;
 #   - AUTO_SIGNUP=true on etebase, which the SDK-driven two-account
-#     provisioning (docs/e2e-strategy.md §2.1) depends on — signup is
+#     provisioning (docs/e2e/backend-stack.md) depends on — signup is
 #     blocked by default upstream (create_user_blocked).
 #
 # NEVER load this file for a real deployment: AUTO_SIGNUP lets anyone with

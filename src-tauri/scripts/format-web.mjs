@@ -8,13 +8,20 @@ const patterns = [
   'src-tauri/scripts/**/*.{js,ts,mjs,cjs,json,md,html,css}',
   '*.{js,ts,mjs,cjs,json,md,html,css}',
   'docs/**/*.{js,ts,mjs,cjs,json,md,html,css}',
-  'e2e/**/*.{js,ts,mjs,cjs,json,md,html,css}',
+  'e2e-tests/**/*.{js,ts,mjs,cjs,json,md,html,css}',
   'backend/**/*.{js,ts,mjs,cjs,json,md,html,css}'
 ];
 
 const check = process.argv.includes('--check');
 
-const args = [check ? '--check' : '--write', ...patterns];
+const args = [
+  check ? '--check' : '--write',
+  '--config',
+  '.config/prettier/.prettierrc.json',
+  '--ignore-path',
+  '.config/prettier/.prettierignore',
+  ...patterns
+];
 
 // Resolve prettier's bin script through require.resolve and run it
 // with the current Node binary. We deliberately bypass the

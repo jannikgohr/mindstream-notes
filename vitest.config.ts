@@ -19,7 +19,9 @@ export default defineConfig({
       // Svelte plugin vitest uses, so any source importing them fails to
       // resolve at transform time. Point them at test stubs; tests that
       // care about the calls override with `vi.mock`.
-      '$app/navigation': path.resolve('./test/stubs/app-navigation.ts')
+      '$app/navigation': path.resolve(
+        './.config/vitest/stubs/app-navigation.ts'
+      )
     },
     // Some Svelte ecosystem packages (e.g. `mode-watcher`) only declare a
     // `svelte` export condition — no `import`/`default` fallback. Vitest's
@@ -45,11 +47,11 @@ export default defineConfig({
       // text for the local terminal summary, json-summary + lcov for CI
       // (lcov feeds coverage services; json-summary drives the PR comment).
       reporter: ['text', 'json-summary', 'lcov'],
-      reportsDirectory: './coverage',
+      reportsDirectory: './.output/coverage/frontend',
       include: ['src/**/*.ts'],
       // The unit-coverage metric measures the *logic* layer. Three classes
       // of code are deliberately out of scope here because they're proven by
-      // end-to-end tests instead of unit tests (see e2e/ and docs/e2e-flows.md):
+      // end-to-end tests instead of unit tests (see e2e/ and docs/e2e/flows.md):
       //
       //   1. UI components (*.svelte) — rendered and driven by Playwright.
       //   2. Tauri IPC wrappers (api/* thin `invoke` shells, window/system/

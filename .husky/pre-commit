@@ -1,2 +1,2 @@
-pnpm exec lint-staged
+pnpm exec lint-staged --config .config/lint-staged.config.cjs
 pnpm run format:rust:check

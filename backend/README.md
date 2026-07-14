@@ -40,7 +40,7 @@ collab WebSocket paths itself.
 
 ## Disposable test stack (e2e T4)
 
-The e2e sharing/collaboration specs (docs/e2e-strategy.md §2.1, T4) need an
+The e2e sharing/collaboration specs (docs/e2e/backend-stack.md, T4) need an
 **isolated** backend they can provision throwaway accounts against.
 `docker-compose.test.yml` overlays this one to provide it: distinct
 `mindstream-test-*` container names, its own project/volumes, a separate
