@@ -4,12 +4,70 @@ This document collects setup, build, and verification notes that are too detaile
 
 ## Prerequisites
 
-- Node.js and pnpm.
-- Rust with the stable toolchain.
-- The Tauri 2 platform prerequisites for your operating system.
-- Java 21 for Android builds.
+Every platform needs:
 
-On minimal Linux systems, install and enable a Secret Service provider such as `gnome-keyring`, or run KeePassXC with Secret Service enabled. Some crypto dependencies may also require OpenSSL development libraries or the Perl build tooling used by OpenSSL builds.
+- **Node.js 20+** and **pnpm** (`corepack enable`, or `npm i -g pnpm`).
+- **Rust**, stable toolchain, via [rustup](https://rustup.rs).
+- The **Tauri 2 system dependencies** for your OS — see the per-OS setup below.
+- **Java 21** — only for Android builds.
+
+Then install the JS dependencies once with `pnpm install`.
+
+### Windows
+
+- **Microsoft C++ Build Tools** — install the "Desktop development with C++"
+  workload (the standalone Build Tools installer is enough; full Visual Studio
+  is not required). This provides the MSVC linker Rust needs.
+- **WebView2 runtime** — preinstalled on Windows 11 and current Windows 10;
+  otherwise install the Evergreen bootstrapper from Microsoft.
+- **Rust** via `rustup` (defaults to the `x86_64-pc-windows-msvc` toolchain,
+  which is what you want).
+
+No extra system packages are needed beyond those.
+
+### Ubuntu / Debian
+
+```sh
+sudo apt-get update
+sudo apt-get install -y \
+  libwebkit2gtk-4.1-dev \
+  libsoup-3.0-dev \
+  libgtk-3-dev \
+  librsvg2-dev \
+  libayatana-appindicator3-dev \
+  libssl-dev \
+  build-essential curl wget file
+```
+
+This is the same list CI installs. On minimal/headless installs also add a
+Secret Service provider so the OS keyring works:
+`sudo apt-get install gnome-keyring` (or run KeePassXC with Secret Service
+enabled).
+
+### Fedora
+
+```sh
+sudo dnf install \
+  webkit2gtk4.1-devel \
+  libsoup3-devel \
+  gtk3-devel \
+  librsvg2-devel \
+  libappindicator-gtk3-devel \
+  openssl-devel \
+  curl wget file
+sudo dnf group install "c-development"
+```
+
+Add a Secret Service provider (`sudo dnf install gnome-keyring`, or KeePassXC)
+on minimal installs so the OS keyring works.
+
+### Running the tests
+
+`pnpm test` and the browser e2e suite (`pnpm test:e2e`) need nothing beyond the
+above. The **real-app e2e tiers (T3/T4)** need extra tooling — `tauri-driver`
+plus a platform webdriver, and for T4 a Docker backend stack. See
+[e2e-tests/README.md](../e2e-tests/README.md) for how to run them and
+[e2e/harness.md](e2e/harness.md#toolchain) for the toolchain.
 
 ## Development
 

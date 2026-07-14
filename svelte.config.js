@@ -12,12 +12,13 @@ const config = {
   preprocess: vitePreprocess(),
   kit: {
     adapter: adapter({
-      pages: 'build',
-      assets: 'build',
+      pages: '.output/build',
+      assets: '.output/build',
       fallback: 'index.html',
       precompress: false,
       strict: true
     }),
+    outDir: '.output/svelte-kit',
     alias: {
       $lib: 'src/lib',
       '$lib/*': 'src/lib/*'
@@ -26,7 +27,7 @@ const config = {
       /*
        * Pull our .tsx files (the React/Excalidraw island under
        * src/lib/freeform/) into SvelteKit's generated
-       * .svelte-kit/tsconfig.json. The default include globs
+       * .output/svelte-kit/tsconfig.json. The default include globs
        * only `*.js`, `*.ts`, and `*.svelte`, so without this hook
        * editors (WebStorm, VS Code) report
        *   "File is not included in any tsconfig.json"
@@ -40,7 +41,7 @@ const config = {
        * .svelte / .ts coverage.
        */
       config: (cfg) => {
-        const tsxGlob = '../src/**/*.tsx';
+        const tsxGlob = '../../src/**/*.tsx';
         if (Array.isArray(cfg.include) && !cfg.include.includes(tsxGlob)) {
           cfg.include.push(tsxGlob);
         }
