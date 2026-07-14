@@ -453,6 +453,7 @@
     "hotkeys.command.editor.pdf.zoomIn": "Zoom in",
 
     "editor.toolbar.label": "Formatting",
+    "editor.mode.label": "Editor view mode",
     "editor.toolbar.undo": "Undo",
     "editor.toolbar.redo": "Redo",
     "editor.toolbar.bold": "Bold",
