@@ -18,6 +18,7 @@
 
 import { Crepe, type CrepeFeature } from '@milkdown/crepe';
 import { remarkStringifyOptionsCtx } from '@milkdown/kit/core';
+import { remarkPreserveEmptyLinePlugin } from '@milkdown/kit/preset/commonmark';
 import { collab } from '@milkdown/plugin-collab';
 // Imported via the kit subpath rather than `@milkdown/plugin-listener`
 // directly — keeps us from declaring a transitive dep that's already
@@ -207,6 +208,26 @@ export function buildCrepe(opts: CrepeSetupOptions): Crepe {
       ]
     }));
   });
+
+  // Drop Milkdown's "preserve empty line" plugin.
+  //
+  // It round-trips an EMPTY PARAGRAPH through markdown by serializing it to a
+  // literal `<br />` (preset-commonmark serializes `content.size === 0` →
+  // `state.addNode('html', …, '<br />')`) and stripping that html node back out
+  // on parse. That hack is invisible while WYSIWYG is the only surface, but it
+  // leaks badly now that the raw markdown is editable:
+  //
+  //   - pressing Enter a few times in WYSIWYG litters the Source pane with
+  //     `<br />` noise that isn't really markdown, and
+  //   - deleting it in Source doesn't stick when a peer is in WYSIWYG: their
+  //     editor re-creates the empty paragraph, which re-emits `<br />` over
+  //     collab, so the line break "comes back" every time it's removed.
+  //
+  // Markdown has no representation for a stray empty paragraph, so we let it
+  // go rather than smuggle HTML into the document. Trade-off: blank paragraphs
+  // added in WYSIWYG for spacing no longer survive a round-trip — the same
+  // behaviour as other markdown-backed editors.
+  crepe.editor.remove(remarkPreserveEmptyLinePlugin);
 
   crepe.editor.use(collab);
 
