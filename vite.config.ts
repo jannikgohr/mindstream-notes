@@ -103,9 +103,20 @@ export default defineConfig({
       '@milkdown/kit/prose/view',
       '@codemirror/language',
       'mermaid',
+      // Raw-markdown Source editor (CodeMirror 6) — reached through the lazy
+      // note editor via editor/source/SourceEditor.svelte, so Vite only
+      // discovers these once a note is opened in Source/Split.
+      '@codemirror/state',
+      '@codemirror/view',
+      '@codemirror/commands',
+      '@codemirror/lang-markdown',
+      '@lezer/highlight',
       // Collab sync — Yjs doc + awareness + transport
       'yjs',
       'y-protocols/awareness',
+      // y-prosemirror: the sync binding's position mapping is read directly by
+      // editor/source/source-presence.ts to place peer markers.
+      'y-prosemirror',
       'socket.io-client',
       // PDF viewing + export — lazy via pdf/*.ts and notes-export/*
       'pdfjs-dist',
