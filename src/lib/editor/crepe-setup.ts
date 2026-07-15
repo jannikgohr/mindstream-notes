@@ -31,8 +31,10 @@ import {
   autoPair,
   installBlockHandleGuard,
   installSelectionToolbarAutoHide,
+  isEmptyParagraph,
   markdownSearchPlugins,
   mermaidLanguageDescription,
+  preserveBlankLines,
   renderMermaidPreview,
   userMentionPlugins,
   wikilinkPlugins,
@@ -196,15 +198,23 @@ export function buildCrepe(opts: CrepeSetupOptions): Crepe {
       ruleRepetition: 3,
       ruleSpaces: false,
       incrementListMarker: true,
-      // `join` decides how many blank lines go between two siblings. Returning
-      // 0 for the children of a list forces TIGHT lists regardless of the
-      // mdast `spread` flag Crepe sets — this is what kills the blank line
-      // between bullet items. Only sibling *items* are affected; blocks nested
-      // inside an item (parent `listItem`) fall through to the default, so a
-      // multi-paragraph item still breaks correctly. `undefined` = no opinion.
+      // `join` decides how many blank lines go between two siblings (a return
+      // of n emits n blank lines; `undefined` = no opinion, use the default 1).
       join: [
-        (_left: unknown, _right: unknown, parent: { type?: string }) =>
-          parent?.type === 'list' ? 0 : undefined
+        (left: unknown, _right: unknown, parent: { type?: string }) => {
+          // Tight lists: 0 blank lines between a list's items, regardless of
+          // the mdast `spread` flag Crepe sets. Only sibling *items* are
+          // affected; blocks nested inside an item (parent `listItem`) fall
+          // through to the default, so a multi-paragraph item still breaks.
+          if (parent?.type === 'list') return 0;
+          // Empty paragraphs are how we carry blank lines (see
+          // plugins/blank-lines.ts). Each one already renders as an empty
+          // string, so the default separator around it would double-count:
+          // suppressing the blank line AFTER one makes k empty paragraphs emit
+          // exactly k + 1 blank lines — the inverse of the parse plugin.
+          if (isEmptyParagraph(left)) return 0;
+          return undefined;
+        }
       ]
     }));
   });
@@ -223,11 +233,11 @@ export function buildCrepe(opts: CrepeSetupOptions): Crepe {
   //     editor re-creates the empty paragraph, which re-emits `<br />` over
   //     collab, so the line break "comes back" every time it's removed.
   //
-  // Markdown has no representation for a stray empty paragraph, so we let it
-  // go rather than smuggle HTML into the document. Trade-off: blank paragraphs
-  // added in WYSIWYG for spacing no longer survive a round-trip — the same
-  // behaviour as other markdown-backed editors.
+  // We replace it with `preserveBlankLines` below, which carries the same
+  // information symmetrically in the blank lines themselves (k empty
+  // paragraphs <-> k + 1 blank lines) instead of smuggling HTML into the doc.
   crepe.editor.remove(remarkPreserveEmptyLinePlugin);
+  crepe.editor.use(preserveBlankLines);
 
   crepe.editor.use(collab);
 
