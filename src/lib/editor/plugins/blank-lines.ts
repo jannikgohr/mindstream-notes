@@ -78,11 +78,31 @@ function restoreBlankLines(node: MdastNode): void {
   node.children = out;
 }
 
+/**
+ * Trailing blank lines have no following sibling, so `restoreBlankLines` can't
+ * see them — the gap is only visible in the raw source. Read it off the text:
+ * one trailing newline is the ordinary end-of-file, and every extra one is an
+ * empty paragraph, keeping the same k <-> k + 1 mapping used between blocks.
+ * Without this, empty lines added at the END of a document are dropped on the
+ * next round-trip.
+ */
+function restoreTrailingBlankLines(root: MdastNode, text: string): void {
+  if (!Array.isArray(root.children) || root.children.length === 0) return;
+  const trailingNewlines = /\n*$/.exec(text)?.[0].length ?? 0;
+  const count = Math.max(trailingNewlines - 1, 0);
+  for (let n = 0; n < count; n++) {
+    root.children.push({ type: 'paragraph', children: [] });
+  }
+}
+
 /** Remark plugin: rebuild empty paragraphs from runs of blank lines. Runs on
- *  parse (Milkdown calls `remark.runSync` on the parsed tree). */
+ *  parse (Milkdown calls `remark.runSync(tree, markdown)`, so `file`
+ *  stringifies back to the original source). */
 export const preserveBlankLines = $remark(
   'mindstream-preserve-blank-lines',
-  () => () => (tree: unknown) => {
-    restoreBlankLines(tree as MdastNode);
+  () => () => (tree: unknown, file: unknown) => {
+    const root = tree as MdastNode;
+    restoreBlankLines(root);
+    restoreTrailingBlankLines(root, String(file));
   }
 );
