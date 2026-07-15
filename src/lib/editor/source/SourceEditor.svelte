@@ -202,21 +202,44 @@
   });
 
   /**
-   * Replace the whole document with `text` as a document-originated change.
-   * No-op when the text already matches (avoids resetting the selection and
-   * fighting the user's caret during Split editing). Best-effort caret
-   * preservation by clamping the previous selection into the new length.
+   * Reconcile the document to `text` as a document-originated change.
+   *
+   * No-op when the text already matches. Otherwise we compute a MINIMAL diff
+   * (shared prefix + suffix, replace only the middle) rather than replacing the
+   * whole document. A full replace would reset the caret and scroll position on
+   * every reconcile / remote echo; a localized change lets CodeMirror map the
+   * existing selection through it, so the caret and viewport stay put.
    */
   export function setText(text: string): void {
     if (!view) return;
     const current = view.state.doc.toString();
     if (current === text) return;
-    const prev = view.state.selection.main;
-    const anchor = Math.min(prev.anchor, text.length);
-    const head = Math.min(prev.head, text.length);
+    const curLen = current.length;
+    const nextLen = text.length;
+    // Longest common prefix.
+    let start = 0;
+    const maxStart = Math.min(curLen, nextLen);
+    while (
+      start < maxStart &&
+      current.charCodeAt(start) === text.charCodeAt(start)
+    ) {
+      start++;
+    }
+    // Longest common suffix (not overlapping the prefix).
+    let endCur = curLen;
+    let endNext = nextLen;
+    while (
+      endCur > start &&
+      endNext > start &&
+      current.charCodeAt(endCur - 1) === text.charCodeAt(endNext - 1)
+    ) {
+      endCur--;
+      endNext--;
+    }
     view.dispatch({
-      changes: { from: 0, to: current.length, insert: text },
-      selection: { anchor, head },
+      // No explicit selection: CodeMirror maps the current selection through
+      // this localized change, preserving the caret.
+      changes: { from: start, to: endCur, insert: text.slice(start, endNext) },
       annotations: External.of(true)
     });
   }
