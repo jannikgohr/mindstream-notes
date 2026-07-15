@@ -430,6 +430,7 @@
     "hotkeys.command.editor.markdown.table": "Table",
     "hotkeys.command.editor.markdown.math": "Math",
     "hotkeys.command.editor.markdown.mermaidDiagram": "Mermaid diagram",
+    "hotkeys.command.editor.markdown.cycleViewMode": "Cycle editor view mode",
     "hotkeys.command.editor.ink.pen": "Pen",
     "hotkeys.command.editor.ink.eraser": "Eraser",
     "hotkeys.command.editor.ink.lasso": "Lasso select",

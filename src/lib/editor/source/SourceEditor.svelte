@@ -41,6 +41,11 @@
   } from '@codemirror/language';
   import { markdown } from '@codemirror/lang-markdown';
   import { tags as t } from '@lezer/highlight';
+  import {
+    sourcePresence,
+    setSourcePresence,
+    type PeerPresence
+  } from './source-presence-extension';
 
   interface Props {
     /** Read once on mount to seed the document with the current markdown. */
@@ -143,6 +148,7 @@
         indentUnit.of(' '.repeat(tabSize)),
         EditorState.tabSize.of(tabSize)
       ]),
+      sourcePresence(),
       EditorView.updateListener.of((u) => {
         if (!u.docChanged) return;
         // Skip document-originated (External) syncs — only real user edits
@@ -213,6 +219,12 @@
       selection: { anchor, head },
       annotations: External.of(true)
     });
+  }
+
+  /** Replace the remote-collaborator presence markers (from NoteEditor, which
+   *  decodes the awareness cursors to source lines). */
+  export function setPresence(presence: PeerPresence[]): void {
+    view?.dispatch({ effects: setSourcePresence.of(presence) });
   }
 
   export function focus(): void {
