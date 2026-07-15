@@ -189,14 +189,14 @@
   let sourceEditor = $state<{
     setText: (text: string) => void;
     setPresence: (presence: PeerPresence[]) => void;
+    flush: () => void;
     focus: () => void;
     getView: () => CmEditorView | null;
   } | null>(null);
-  // Re-entrancy guard for the doc<->source mirror: 'source' while a source edit
-  // is being applied to the doc, so the resulting doc update doesn't echo back
-  // and clobber the caret. Plain let — no reactivity needed.
-  let applyingFrom: 'source' | null = null;
   let sourceSyncTimer: ReturnType<typeof setTimeout> | null = null;
+  // Tracks the previous active surface so we can detect a source→WYSIWYG
+  // hand-off and reconcile the source view to the canonical document then.
+  let prevActiveSurface: 'wysiwyg' | 'source' = 'wysiwyg';
   // --- Source presence (Phase 2) --------------------------------------------
   // Peers' cursors are decoded to source lines and pushed into the source
   // editor. The block→line table is cached against the PM doc identity so
@@ -636,11 +636,19 @@
         // different origin and still save, so they persist locally as before.
         if (origin !== REMOTE_SYNC_ORIGIN) scheduleSave();
         scheduleHistoryCapture();
-        // Mirror the doc into the source editor when it's visible — unless this
-        // very update originated from a source edit (that would echo back into
-        // CodeMirror and fight the caret).
-        if (viewMode !== 'wysiwyg' && applyingFrom !== 'source') {
-          scheduleSourceSync();
+        // Mirror the doc into the source editor when it's visible — but
+        // ORIGIN-GATED. While the user is editing the source pane, we must not
+        // push our OWN edit's normalized round-trip back over their text
+        // (Milkdown reformats in-progress markdown — e.g. empty list items —
+        // and that would fight the caret). Remote peers' edits (applied by the
+        // CollabProvider or a background-sync merge) ARE still pushed, so the
+        // source stays convergent — which is also what keeps the next
+        // source→doc overwrite from clobbering those remote changes.
+        if (viewMode !== 'wysiwyg') {
+          const isRemote =
+            (provider !== null && origin === provider) ||
+            origin === REMOTE_SYNC_ORIGIN;
+          if (isRemote || activeSurface !== 'source') scheduleSourceSync();
         }
         // Positions and the block→line table shift with the doc, so remote
         // presence markers need re-mapping.
@@ -1035,12 +1043,27 @@
     crepe.setReadonly(isReadOnly);
   });
 
-  // Show/clear source presence when the active surface or view mode changes —
-  // only the surface being used renders peer markers.
+  // React to the active surface / view mode changing.
   $effect(() => {
-    void activeSurface;
-    void viewMode;
+    const surface = activeSurface;
+    const mode = viewMode;
     void crepeReady;
+    // Source → WYSIWYG hand-off (Split): reconcile the source view to the
+    // canonical document now. Per the "only overwrite source on WYSIWYG
+    // interaction / close" rule, we don't overwrite the source pane while it's
+    // the active surface; leaving it is when we resync. Flush any pending
+    // source edit first so trailing keystrokes reach the doc before we
+    // re-serialize it back.
+    if (
+      mode === 'split' &&
+      surface === 'wysiwyg' &&
+      prevActiveSurface === 'source'
+    ) {
+      sourceEditor?.flush();
+      scheduleSourceSync();
+    }
+    prevActiveSurface = surface;
+    // Only the surface being used renders peer markers.
     scheduleSourcePresence();
   });
 
@@ -1087,17 +1110,14 @@
 
   /**
    * A genuine edit in the raw-source editor. Feed it into the live doc through
-   * the same collab applyTemplate path history-restore uses, guarding the
-   * re-entrant doc update so it doesn't bounce back into the source editor.
+   * the same collab applyTemplate path history-restore uses. The doc update this
+   * triggers is local-origin, so the origin gate in yDocUpdateHandler skips the
+   * echo back into the source editor (it would fight the caret) while still
+   * echoing remote peers' edits.
    */
   function handleSourceInput(markdown: string) {
     if (isReadOnly) return;
-    applyingFrom = 'source';
-    try {
-      applyMarkdownTemplate(markdown);
-    } finally {
-      applyingFrom = null;
-    }
+    applyMarkdownTemplate(markdown);
   }
 
   /** Debounced doc → source refresh: serialize the live doc and push it into
