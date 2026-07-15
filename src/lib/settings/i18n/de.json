@@ -330,6 +330,7 @@
     "hotkeys.command.editor.markdown.table": "Tabelle",
     "hotkeys.command.editor.markdown.math": "Mathematik",
     "hotkeys.command.editor.markdown.mermaidDiagram": "Mermaid-Diagramm",
+    "hotkeys.command.editor.markdown.cycleViewMode": "Editor-Ansichtsmodus wechseln",
     "hotkeys.command.editor.ink.pen": "Stift",
     "hotkeys.command.editor.ink.eraser": "Radierer",
     "hotkeys.command.editor.ink.lasso": "Lasso-Auswahl",

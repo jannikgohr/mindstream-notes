@@ -1,8 +1,9 @@
 <script lang="ts">
   /**
-   * Segmented control for switching a single note between WYSIWYG, Source and
-   * Split. Purely presentational — it reports the chosen mode through `onSelect`
-   * and NoteEditor owns the state (seeded from the `editor.defaultMode` setting).
+   * Single button that cycles the note's editor surface
+   * WYSIWYG → Source → Split → WYSIWYG. It shows the CURRENT mode's icon (like
+   * the theme toggle) and advances on click. NoteEditor owns the state; the
+   * same cycle is also reachable via the `editor.markdown.cycleViewMode` hotkey.
    */
   import { FileText, Code, Columns2 } from '@lucide/svelte';
   import type { Component } from 'svelte';
@@ -12,35 +13,23 @@
 
   interface Props {
     value: EditorViewMode;
-    onSelect: (mode: EditorViewMode) => void;
+    /** Advance to the next view mode. */
+    onCycle: () => void;
   }
-  let { value, onSelect }: Props = $props();
+  let { value, onCycle }: Props = $props();
 
-  // Labels reuse the `editor.defaultMode` setting's value translations.
-  const modes: { id: EditorViewMode; icon: Component }[] = [
-    { id: 'wysiwyg', icon: FileText },
-    { id: 'source', icon: Code },
-    { id: 'split', icon: Columns2 }
-  ];
-  const label = (id: EditorViewMode) => tValue('editor.defaultMode', id);
+  const icons: Record<EditorViewMode, Component> = {
+    wysiwyg: FileText,
+    source: Code,
+    split: Columns2
+  };
+  const Icon = $derived(icons[value]);
+  // e.g. "Editor view mode: Split" — current state; clicking advances.
+  const title = $derived(
+    `${tUi('editor.mode.label')}: ${tValue('editor.defaultMode', value)}`
+  );
 </script>
 
-<div
-  class="flex items-center gap-0.5"
-  role="group"
-  aria-label={tUi('editor.mode.label')}
->
-  {#each modes as mode (mode.id)}
-    {@const Icon = mode.icon}
-    <ToolbarButton
-      holdFocus
-      active={value === mode.id}
-      aria-pressed={value === mode.id}
-      title={label(mode.id)}
-      aria-label={label(mode.id)}
-      onclick={() => onSelect(mode.id)}
-    >
-      <Icon aria-hidden="true" />
-    </ToolbarButton>
-  {/each}
-</div>
+<ToolbarButton holdFocus {title} aria-label={title} onclick={onCycle}>
+  <Icon aria-hidden="true" />
+</ToolbarButton>
