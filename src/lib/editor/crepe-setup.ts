@@ -17,6 +17,7 @@
  */
 
 import { Crepe, type CrepeFeature } from '@milkdown/crepe';
+import { remarkStringifyOptionsCtx } from '@milkdown/kit/core';
 import { collab } from '@milkdown/plugin-collab';
 // Imported via the kit subpath rather than `@milkdown/plugin-listener`
 // directly — keeps us from declaring a transitive dep that's already
@@ -173,6 +174,39 @@ export function buildCrepe(opts: CrepeSetupOptions): Crepe {
   // tapping one white-screens the Android WebView — see the helper for the
   // full rationale. Registered before create() builds the schema.
   useNoteLinkHrefNeutralizer(crepe.editor);
+
+  // Serializer style. `getMarkdown()` output feeds the raw Source editor, the
+  // saved note body, history diffs and exports, so a clean, conventional and
+  // STABLE style matters everywhere. Milkdown's defaults are inconsistent
+  // (`*` bullets, tab-indented list continuation) and, worse, it serializes
+  // bullet lists LOOSE — a blank line between every item — while ordered lists
+  // come out tight. We pin a tidy CommonMark style and force tight lists.
+  //
+  // `ctx.update` spreads the previous value so Milkdown's internal `handlers` /
+  // `encode` entries are preserved.
+  crepe.editor.config((ctx) => {
+    ctx.update(remarkStringifyOptionsCtx, (prev) => ({
+      ...prev,
+      bullet: '-' as const,
+      bulletOrdered: '.' as const,
+      listItemIndent: 'one' as const,
+      fences: true,
+      rule: '-' as const,
+      ruleRepetition: 3,
+      ruleSpaces: false,
+      incrementListMarker: true,
+      // `join` decides how many blank lines go between two siblings. Returning
+      // 0 for the children of a list forces TIGHT lists regardless of the
+      // mdast `spread` flag Crepe sets — this is what kills the blank line
+      // between bullet items. Only sibling *items* are affected; blocks nested
+      // inside an item (parent `listItem`) fall through to the default, so a
+      // multi-paragraph item still breaks correctly. `undefined` = no opinion.
+      join: [
+        (_left: unknown, _right: unknown, parent: { type?: string }) =>
+          parent?.type === 'list' ? 0 : undefined
+      ]
+    }));
+  });
 
   crepe.editor.use(collab);
 
