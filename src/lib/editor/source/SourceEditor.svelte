@@ -227,6 +227,15 @@
     view?.dispatch({ effects: setSourcePresence.of(presence) });
   }
 
+  /** Immediately flush a pending debounced edit to the doc (e.g. when the user
+   *  hands off to the WYSIWYG pane) so no trailing keystrokes are lost. */
+  export function flush(): void {
+    if (!inputTimer) return;
+    clearTimeout(inputTimer);
+    inputTimer = null;
+    if (view) onInput(view.state.doc.toString());
+  }
+
   export function focus(): void {
     view?.focus();
   }
