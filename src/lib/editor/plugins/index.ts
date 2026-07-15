@@ -16,6 +16,7 @@
  */
 
 export { autoPair } from './auto-pair';
+export { isEmptyParagraph, preserveBlankLines } from './blank-lines';
 export { installBlockHandleGuard } from './block-handle-guard';
 export { installSelectionToolbarAutoHide } from './selection-toolbar';
 export {
