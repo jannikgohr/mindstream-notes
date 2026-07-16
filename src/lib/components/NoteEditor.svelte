@@ -1,7 +1,13 @@
 <script lang="ts">
   import { onDestroy, onMount, tick } from 'svelte';
   import { Crepe } from '@milkdown/crepe';
-  import { editorViewCtx, serializerCtx, schemaCtx } from '@milkdown/kit/core';
+  import {
+    editorViewCtx,
+    serializerCtx,
+    schemaCtx,
+    parserCtx,
+    getDoc
+  } from '@milkdown/kit/core';
   import { collabServiceCtx } from '@milkdown/plugin-collab';
   import * as Y from 'yjs';
   import { Awareness } from 'y-protocols/awareness';
@@ -42,6 +48,7 @@
   } from '$lib/assets/bridge';
   import { listen } from '$lib/api/events';
   import { buildCrepe } from '$lib/editor/crepe-setup';
+  import { minimalDocDiff } from '$lib/editor/doc-diff';
   import { seedDeterministicTemplate } from '$lib/editor/seed-template';
   import { ensureDropIndicatorAlignment } from '$lib/editor/drop-indicator-align';
   import { otherPeerCount } from '$lib/editor/awareness-presence';
@@ -719,7 +726,7 @@
       // Expose restore + current-markdown to the History sidebar section,
       // which can't reach the live editor (and its Yjs doc) by props.
       unregisterHistory = registerNoteHistory(noteId, {
-        restoreSnapshot: (markdown) => applyMarkdownTemplate(markdown),
+        restoreSnapshot: (markdown) => applyMarkdown(markdown),
         currentSnapshot: () => (getMarkdown ? getMarkdown() : ''),
         snapshotNow: () => snapshotHistoryNow(),
         peerCount: () => otherPeerCount(awareness),
@@ -1068,20 +1075,35 @@
   });
 
   /**
-   * Apply `markdown` to the live document as collaborative edits. The collab
-   * service diffs the current doc against the template and emits y-prosemirror
-   * ops (the `() => true` condition forces the apply even on a non-empty doc).
-   * Those ops trigger the normal save + broadcast path, so a restore converges
-   * across devices like any other edit. Used by the History sidebar's Restore.
+   * Apply `markdown` to the live document as collaborative edits, touching only
+   * what actually changed.
+   *
+   * Deliberately NOT `collabService.applyTemplate`: that deletes the entire
+   * XmlFragment and merges a freshly-built throwaway Y.Doc, so every call
+   * tombstones the whole document and appends a complete new copy. The source
+   * editor calls this on every debounce tick, which would balloon the
+   * append-only `yrs_state` (and the bytes we broadcast) by a full copy per
+   * keystroke, and would wipe any concurrent peer edit. `minimalDocDiff` gives
+   * us one small step instead, which y-prosemirror turns into Yjs ops
+   * proportional to the real edit — and an unchanged document produces NO
+   * transaction at all, so a no-op sync costs nothing.
+   *
+   * The resulting ops still ride the normal save + broadcast path, so History's
+   * Restore converges across devices like any other edit.
    */
-  function applyMarkdownTemplate(markdown: string) {
+  function applyMarkdown(markdown: string) {
     if (!crepe || isReadOnly) return;
     try {
       crepe.editor.action((ctx) => {
-        ctx.get(collabServiceCtx).applyTemplate(markdown, () => true);
+        const view = ctx.get(editorViewCtx);
+        const next = getDoc(markdown, ctx.get(parserCtx), ctx.get(schemaCtx));
+        if (!next) return;
+        const diff = minimalDocDiff(view.state.doc, next);
+        if (!diff) return; // identical → emit nothing
+        view.dispatch(view.state.tr.replace(diff.from, diff.to, diff.slice));
       });
     } catch (err) {
-      console.error('[NoteEditor] applyTemplate (restore) failed', err);
+      console.error('[NoteEditor] applyMarkdown failed', err);
     }
   }
 
@@ -1117,7 +1139,7 @@
    */
   function handleSourceInput(markdown: string) {
     if (isReadOnly) return;
-    applyMarkdownTemplate(markdown);
+    applyMarkdown(markdown);
   }
 
   /** Debounced doc → source refresh: serialize the live doc and push it into
