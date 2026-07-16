@@ -27,7 +27,7 @@
 import { $remark } from '@milkdown/kit/utils';
 
 /** Minimal structural shape we need from an mdast node. */
-interface MdastNode {
+export interface MdastNode {
   type: string;
   children?: MdastNode[];
   position?: {
@@ -95,14 +95,23 @@ function restoreTrailingBlankLines(root: MdastNode, text: string): void {
   }
 }
 
+/**
+ * The whole parse-side transform: rebuild empty paragraphs from blank-line runs
+ * between siblings AND from the trailing run at the end of `text`. Exported
+ * (and mutating `tree` in place, mdast-transform style) so it can be unit
+ * tested against hand-built trees without booting an editor.
+ */
+export function restoreEmptyParagraphs(tree: MdastNode, text: string): void {
+  restoreBlankLines(tree);
+  restoreTrailingBlankLines(tree, text);
+}
+
 /** Remark plugin: rebuild empty paragraphs from runs of blank lines. Runs on
  *  parse (Milkdown calls `remark.runSync(tree, markdown)`, so `file`
  *  stringifies back to the original source). */
 export const preserveBlankLines = $remark(
   'mindstream-preserve-blank-lines',
   () => () => (tree: unknown, file: unknown) => {
-    const root = tree as MdastNode;
-    restoreBlankLines(root);
-    restoreTrailingBlankLines(root, String(file));
+    restoreEmptyParagraphs(tree as MdastNode, String(file));
   }
 );
