@@ -118,6 +118,18 @@ pub fn spawn(app: AppHandle) {
 /// no difference between scheduler-triggered and user-triggered
 /// syncs.
 async fn tick(app: &AppHandle) -> Result<(), String> {
+    // Signed out is an ordinary resting state — a local-only vault never
+    // has a session — not a failure worth logging every cycle. The JS side
+    // gates the schedule on the session too, but this is the authoritative
+    // check: a sign-out races the settings effect, and `enabled` is
+    // process-wide state that outlives any one window.
+    //
+    // Checked ahead of the reachability probe so a signed-out install
+    // isn't pinging the server on every tick for a sync it can't run.
+    if !auth::has_session(app) {
+        return Ok(());
+    }
+
     // Reachability preflight. When the server is unreachable the probe
     // emits a one-shot `sync-unreachable` notification; skip the tick
     // quietly rather than logging a hard failure (and firing doomed

@@ -14,26 +14,24 @@
   let loadToken = 0;
   let destroyed = false;
 
-  /**
-   * The kind, memoized by VALUE.
-   *
-   * Reading the `noteKind` prop straight from the effect below re-runs it
-   * whenever the prop EXPRESSION re-evaluates, not only when the kind actually
-   * changes — and `MobileEditor` passes `note.note_kind`, where `note` is
-   * derived from the tree store and is replaced by a fresh object on every save
-   * and every sync. That made the effect null `LoadedComponent` and remount the
-   * whole editor for a kind that was still 'markdown', which on mobile became a
-   * self-sustaining loop: the remounted NoteEditor writes to the tree on mount,
-   * which re-fires this effect, roughly twice a second. It also reset any
-   * per-note editor state (e.g. the view mode) each time round.
-   *
-   * A `$derived` only notifies when its value differs, so the effect now runs
-   * once per genuine kind change. `DesktopLayout` was never affected — it
-   * passes a string literal per panel type.
-   */
-  const kind = $derived(noteKind);
+  // Both props are funnelled through $derived so the effect below re-runs on
+  // *value* changes only. A caller may read `noteKind` off a live note object
+  // — MobileEditor passes `note.note_kind` straight out of `tree.notesById` —
+  // and every autosave replaces that object wholesale. Reading the prop from
+  // inside the effect would subscribe it to the object's identity, so each
+  // save would re-run it, null out LoadedComponent, and remount the editor,
+  // stealing focus mid-keystroke. $derived compares with === and stops the
+  // propagation when the kind string is unchanged.
+  //
+  // `noteId` is a dependency too: the lazy editors resolve their note once in
+  // onMount and never react to the prop changing, so switching notes has to
+  // remount even when both are the same kind.
+  const currentNoteId = $derived(noteId);
+  const currentKind = $derived(noteKind);
 
   $effect(() => {
+    void currentNoteId;
+    const kind = currentKind;
     const token = ++loadToken;
     LoadedComponent = null;
     loadError = null;
