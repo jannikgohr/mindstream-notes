@@ -29,8 +29,11 @@
 
   interface Props {
     crepe: Crepe | null;
+    /** Which surface the buttons act on — forwarded to EditorToolbar, which
+     *  skips ProseMirror mark state (and the crepe fallback) for 'source'. */
+    activeSurface?: 'wysiwyg' | 'source';
   }
-  let { crepe }: Props = $props();
+  let { crepe, activeSurface = 'wysiwyg' }: Props = $props();
 
   /** Gap between the pill and the keyboard (or screen edge). */
   const FLOAT_GAP_PX = 12;
@@ -98,6 +101,7 @@
   <div bind:this={host} class="max-w-full">
     <EditorToolbar
       {crepe}
+      {activeSurface}
       menuPlacement="top"
       fitContent
       class="pointer-events-auto overflow-hidden rounded-full border border-border bg-popover/95 shadow-lg backdrop-blur"

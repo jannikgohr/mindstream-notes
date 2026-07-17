@@ -67,8 +67,10 @@
   import { SOURCE_ACTIONS } from '$lib/editor/source/source-actions';
   import {
     coerceViewMode,
+    nextViewMode,
     type EditorViewMode
   } from '$lib/editor/source/view-mode';
+  import { splitAvailable } from '$lib/editor/source/split-available.svelte';
   import {
     blockLineStarts,
     computeSourcePresence
@@ -191,9 +193,11 @@
   // isMobile() reads navigator.userAgent — unavailable during SSR.
   let mobile = $state(false);
   // --- View mode (WYSIWYG / Source / Split) ---------------------------------
-  // Seeded from the editor.defaultMode setting in onMount (mobile forces
-  // WYSIWYG). Crepe stays mounted as the Yjs authority in every mode; the
-  // source editor is a CodeMirror reflection kept in sync below.
+  // Seeded from the editor.defaultMode setting in onMount. All three modes are
+  // available on every platform; only Split carries a constraint, and it's a
+  // viewport-width one rather than a mobile one (see view-mode.ts). Crepe stays
+  // mounted as the Yjs authority in every mode; the source editor is a
+  // CodeMirror reflection kept in sync below.
   let viewMode = $state<EditorViewMode>('wysiwyg');
   // Which surface last had focus — drives toolbar/hotkey routing (WYSIWYG runs
   // ProseMirror commands, Source runs markdown text transforms). In Split it
@@ -450,9 +454,10 @@
     if (!host) return;
     try {
       mobile = isMobile();
-      viewMode = mobile
-        ? 'wysiwyg'
-        : coerceViewMode(getSettingValue('editor.defaultMode'));
+      viewMode = coerceViewMode(
+        getSettingValue('editor.defaultMode'),
+        splitAvailable()
+      );
       activeSurface = 'wysiwyg';
       const note = await loadNote(noteId);
       if (!host) return; // unmounted while awaiting
@@ -567,9 +572,8 @@
               return true;
             }
             // Cycle the editor surface. Handled before the source branch so it
-            // works from either pane; no-op on mobile (single WYSIWYG surface).
+            // works from either pane.
             if (id === 'editor.markdown.cycleViewMode') {
-              if (mobile) return false;
               cycleViewMode();
               return true;
             }
@@ -1069,6 +1073,18 @@
     crepe.setReadonly(isReadOnly);
   });
 
+  // The viewport shrank under an open Split pane (window resized, tablet
+  // rotated to portrait). Fall back to the pane the user was last in, so their
+  // work stays in front of them instead of jumping to the other surface. Only
+  // the live view mode changes — `editor.defaultMode` is vault-scoped and
+  // writing to it here would clobber the preference on the user's other
+  // devices.
+  $effect(() => {
+    if (viewMode === 'split' && !splitAvailable()) {
+      selectViewMode(activeSurface);
+    }
+  });
+
   // React to the active surface / view mode changing.
   $effect(() => {
     const surface = activeSurface;
@@ -1130,11 +1146,13 @@
    * Switch this note's editor surface. WYSIWYG/Source set the active surface
    * directly; Split keeps whatever pane was last used. Focus follows the new
    * surface after the DOM updates.
+   *
+   * On a viewport too narrow for Split the cycle is just WYSIWYG ↔ Source —
+   * `nextViewMode` drops it, so the toggle never lands on a mode the user
+   * can't use.
    */
   function cycleViewMode() {
-    const order: EditorViewMode[] = ['wysiwyg', 'source', 'split'];
-    const next = order[(order.indexOf(viewMode) + 1) % order.length];
-    selectViewMode(next);
+    selectViewMode(nextViewMode(viewMode, splitAvailable()));
   }
 
   function selectViewMode(mode: EditorViewMode) {
@@ -1462,10 +1480,14 @@
   );
   const showMobileToolbar = $derived(mobile && crepeReady && !isReadOnly);
 
-  // The desktop editor header (mode toggle + optional toolbar) shows whenever
-  // the desktop editor is interactive — including read-only notes, where the
-  // toggle still lets you view the raw source.
-  const showEditorHeader = $derived(!mobile && crepeReady);
+  // The editor header (mode toggle + optional desktop toolbar) shows whenever
+  // the editor is interactive — including read-only notes, where the toggle
+  // still lets you view the raw source.
+  //
+  // Mobile gets it too, holding the mode toggle alone: formatting there lives
+  // in the floating pill, but the pill is hidden on read-only notes and is
+  // already crowded, so the toggle belongs in the header on both platforms.
+  const showEditorHeader = $derived(crepeReady);
 
   // Mirror our reactive status into the global per-note store so the
   // dockview right-header (NoteStatusIcons.svelte) can render the
@@ -1608,7 +1630,11 @@
 </div>
 
 {#if showMobileToolbar}
-  <MobileEditorToolbar {crepe} />
+  <!-- activeSurface routes the buttons to the surface the user is actually in:
+       in Source the same command ids run the markdown text transforms via the
+       bus. Without it the pill would run ProseMirror commands against the
+       hidden WYSIWYG doc while the user edits raw markdown. -->
+  <MobileEditorToolbar {crepe} {activeSurface} />
 {/if}
 
 <!--

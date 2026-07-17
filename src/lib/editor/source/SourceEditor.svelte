@@ -141,6 +141,17 @@
     '.cm-content': {
       fontFamily: 'var(--font-mono, ui-monospace, monospace)',
       padding: '1rem 1.25rem',
+      // Clear the phone's notch / rounded corners (landscape especially),
+      // mirroring what app.css does for the WYSIWYG pane. env() collapses to
+      // 0 everywhere else, so the 1.25rem base still wins on desktop.
+      paddingLeft: 'max(1.25rem, env(safe-area-inset-left))',
+      paddingRight: 'max(1.25rem, env(safe-area-inset-right))',
+      // Reserve room for the floating mobile toolbar so the caret on the last
+      // line can't end up behind it. MobileEditorToolbar publishes the height
+      // on documentElement while it's mounted; app.css defines the variable as
+      // 0px at :root, so desktop (and read-only mobile, where the pill is
+      // hidden) is unaffected without needing to know the platform here.
+      paddingBottom: 'calc(1rem + var(--mobile-toolbar-height, 0px))',
       caretColor: 'var(--foreground)'
     },
     '.cm-scroller': { lineHeight: '1.6' },
