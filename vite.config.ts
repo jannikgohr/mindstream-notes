@@ -103,8 +103,13 @@ export default defineConfig({
       '@milkdown/kit/prose/view',
       '@codemirror/language',
       'mermaid',
-      // Collab sync — Yjs doc + awareness + transport
+      // Collab sync — Yjs doc + awareness + transport, plus the ProseMirror
+      // binding. y-prosemirror is reached two lazy hops in (the NoteEditor
+      // import() → editor/seed-template.ts, and @milkdown/plugin-collab's
+      // peer), so without it here the first markdown note a user opens
+      // triggers the re-optimise reload this whole list exists to avoid.
       'yjs',
+      'y-prosemirror',
       'y-protocols/awareness',
       'socket.io-client',
       // PDF viewing + export — lazy via pdf/*.ts and notes-export/*

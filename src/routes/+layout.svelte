@@ -248,8 +248,18 @@
     // also disables the loop. Either way we still send the
     // current interval so flipping enabled back on later picks up
     // the right cadence immediately.
+    //
+    // A live session is a precondition: signed out there's nothing to sync
+    // with, and leaving the loop enabled just means the Rust tick gives up
+    // ("not signed in") on every cycle. Reading authSession here re-runs
+    // the effect on login/logout, so the schedule tracks the session. It
+    // stays null until the first refreshAuthSession() resolves, which also
+    // keeps us from enabling the loop before we know the session state.
+    const signedIn = authSession.current !== null;
     const enabled =
-      getSettingValue('account.syncEnabled') === true && interval !== 'manual';
+      signedIn &&
+      getSettingValue('account.syncEnabled') === true &&
+      interval !== 'manual';
     const seconds = INTERVAL_SECS[interval] ?? 60;
     void invokeOrFallback<void>(
       'set_sync_schedule',
