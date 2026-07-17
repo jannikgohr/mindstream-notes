@@ -42,6 +42,13 @@
   import { markdown } from '@codemirror/lang-markdown';
   import { tags as t } from '@lezer/highlight';
   import {
+    sourceAutoPair,
+    sourceUserMention,
+    sourceWikilink
+  } from '$lib/editor/plugins';
+  import type { WikilinkBridge } from '$lib/editor/plugins/wikilink-bridge.svelte';
+  import type { UserMentionBridge } from '$lib/editor/plugins/user-mention-bridge.svelte';
+  import {
     sourcePresence,
     setSourcePresence,
     type PeerPresence
@@ -61,6 +68,21 @@
     /** Fired when the source editor gains focus — NoteEditor uses it to mark
      *  the source pane as the active surface for toolbar/hotkey routing. */
     onFocusSurface?: () => void;
+    /** `editor.autoPair` — auto-close brackets. Reactive. */
+    autoPairEnabled?: boolean;
+    /**
+     * `editor.wikilinks` — the `[[` note picker. Reactive. Enabling it
+     * requires `wikilinkBridge`: that's what carries the menu state the popup
+     * component reads. It MUST be this pane's own bridge, distinct from the
+     * WYSIWYG editor's — in Split mode both surfaces are live and a bridge
+     * holds one set of commit handlers (see `$lib/editor/plugins/source/typeahead`).
+     */
+    wikilinksEnabled?: boolean;
+    wikilinkBridge?: WikilinkBridge | null;
+    /** `editor.userMentions` — the `@` user picker. Same bridge contract as
+     *  wikilinks above. Reactive. */
+    userMentionsEnabled?: boolean;
+    userMentionBridge?: UserMentionBridge | null;
   }
   let {
     getInitialText,
@@ -68,7 +90,12 @@
     tabSize = 2,
     placeholderText = '',
     onInput,
-    onFocusSurface
+    onFocusSurface,
+    autoPairEnabled = false,
+    wikilinksEnabled = false,
+    wikilinkBridge = null,
+    userMentionsEnabled = false,
+    userMentionBridge = null
   }: Props = $props();
 
   let host: HTMLDivElement | null = $state(null);
@@ -80,6 +107,7 @@
 
   const readonlyComp = new Compartment();
   const tabComp = new Compartment();
+  const featureComp = new Compartment();
 
   let inputTimer: ReturnType<typeof setTimeout> | null = null;
   const INPUT_DEBOUNCE_MS = 150;
@@ -130,6 +158,29 @@
     '.cm-placeholder': { color: 'var(--muted-foreground)' }
   });
 
+  /**
+   * The local plugins from `$lib/editor/plugins/source`, each gated by its own
+   * setting — the same toggles that gate the matching Milkdown plugins in
+   * `$lib/editor/crepe-setup.ts`. Skipped entirely (not just no-op'd) when off,
+   * so their handlers don't run on every keystroke.
+   *
+   * Unlike Crepe — whose features can't be flipped after `create()` short of
+   * rebuilding the editor, so its toggles only apply on the next note open —
+   * CodeMirror reconfigures live, so these take effect the moment the user
+   * changes the setting.
+   */
+  function featureExtensions(): Extension[] {
+    const ext: Extension[] = [];
+    if (autoPairEnabled) ext.push(sourceAutoPair());
+    if (wikilinksEnabled && wikilinkBridge) {
+      ext.push(sourceWikilink(wikilinkBridge));
+    }
+    if (userMentionsEnabled && userMentionBridge) {
+      ext.push(sourceUserMention(userMentionBridge));
+    }
+    return ext;
+  }
+
   function baseExtensions(): Extension[] {
     return [
       lineNumbers(),
@@ -148,6 +199,7 @@
         indentUnit.of(' '.repeat(tabSize)),
         EditorState.tabSize.of(tabSize)
       ]),
+      featureComp.of(featureExtensions()),
       sourcePresence(),
       EditorView.updateListener.of((u) => {
         if (!u.docChanged) return;
@@ -199,6 +251,15 @@
         EditorState.tabSize.of(tabSize)
       ])
     });
+  });
+  // Re-read every gate so a flip of any one of them reconfigures the set.
+  $effect(() => {
+    void autoPairEnabled;
+    void wikilinksEnabled;
+    void wikilinkBridge;
+    void userMentionsEnabled;
+    void userMentionBridge;
+    view?.dispatch({ effects: featureComp.reconfigure(featureExtensions()) });
   });
 
   /**

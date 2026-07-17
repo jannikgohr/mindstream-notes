@@ -41,35 +41,23 @@ import type { EditorView } from '@milkdown/kit/prose/view';
 import { $prose } from '@milkdown/kit/utils';
 import { requestOpenNote } from '$lib/stores/open-note-intent.svelte';
 import { tree } from '$lib/stores/tree.svelte';
-import type { WikilinkBridge } from './wikilink-bridge.svelte';
+import { noteHref, parseNoteHref } from '../wikilink-href';
+import type { WikilinkBridge } from '../wikilink-bridge.svelte';
 
 // Re-export so consumers can still get everything wikilink-related
 // through this one module — the bridge factory lives in its own
 // .svelte.ts because Svelte's compiler treats the `$` prefix as
 // reserved in .svelte.ts files, which would block this file's
 // `import { $prose } from '@milkdown/kit/utils'`.
-export type { WikilinkBridge } from './wikilink-bridge.svelte';
-export { createWikilinkBridge } from './wikilink-bridge.svelte';
+export type { WikilinkBridge } from '../wikilink-bridge.svelte';
+export { createWikilinkBridge } from '../wikilink-bridge.svelte';
 
 /* --- Note link resolution -------------------------------------------------- */
 
-const NOTE_LINK_PREFIX = 'mindstream://note/';
-
-export function noteHref(noteId: string): string {
-  return `${NOTE_LINK_PREFIX}${encodeURIComponent(noteId)}`;
-}
-
-export function parseNoteHref(href: unknown): string | null {
-  if (typeof href !== 'string') return null;
-  if (!href.startsWith(NOTE_LINK_PREFIX)) return null;
-  const raw = href.slice(NOTE_LINK_PREFIX.length);
-  if (!raw) return null;
-  try {
-    return decodeURIComponent(raw);
-  } catch {
-    return raw;
-  }
-}
+// The href format itself is shared with the source-mode plugin (and the
+// render-time neutralizer), so it lives at the plugins root. Re-exported
+// here so wikilink consumers can still reach everything through this module.
+export { noteHref, parseNoteHref } from '../wikilink-href';
 
 function resolveNoteTitleById(id: string, fallback: string): string {
   const title = tree.notesById[id]?.title.trim();
