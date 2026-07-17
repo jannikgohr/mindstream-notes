@@ -630,7 +630,7 @@ export const insertMath = (ctx: Ctx) => {
 };
 export const insertMermaid = (ctx: Ctx) => {
   // Same recipe as `insertMath` but with `language: 'mermaid'`, which
-  // the renderPreview hook in `$lib/editor/plugins/mermaid.ts` picks up
+  // the renderPreview hook in `$lib/editor/plugins/prose/mermaid.ts` picks up
   // to render the diagram below the source. Always present in the
   // toolbar (matching the math convention) regardless of the
   // `editor.mermaid` setting — clicking it with the renderer off still

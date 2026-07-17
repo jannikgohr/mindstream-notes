@@ -151,6 +151,17 @@
   // `userMentionBridge.state.users`.
   const userMentionBridge = createUserMentionBridge();
 
+  // The same two bridges again, for the SOURCE pane's copies of those plugins.
+  //
+  // Per-surface rather than shared because a bridge holds exactly ONE set of
+  // commit handlers, wired by whichever plugin attached last — and in Split
+  // mode both editors are live at once, so a shared bridge would let the
+  // source pane's plugin steal the WYSIWYG pane's commits (or vice versa).
+  // Two bridges keeps each pane's menu wired to the pane it belongs to; only
+  // the focused surface ever opens one, so the user still sees a single menu.
+  const sourceWikilinkBridge = createWikilinkBridge();
+  const sourceUserMentionBridge = createUserMentionBridge();
+
   // Per-editor find & replace bridge. The search prose plugin (registered
   // in crepe-setup) reports match counts through `searchBridge.state`; the
   // FindBar below drives it via the handler functions. See the
@@ -362,10 +373,18 @@
     return null;
   }
 
+  /** Candidates are a property of the note, not of a surface — both panes'
+   *  mention menus offer the same people, so every resolution path feeds both
+   *  bridges. */
+  function setMentionCandidates(users: MentionUser[]) {
+    userMentionBridge.state.users = users;
+    sourceUserMentionBridge.state.users = users;
+  }
+
   // Resolve "who can view this note" for the mention dropdown: yourself, plus —
   // when the note lives in a shared scope — the scope's owner and members. The
   // share state is an async backend call, so we write the result into the
-  // bridge and (once resolved) nudge the decoration plugin to re-evaluate the
+  // bridges and (once resolved) nudge the decoration plugin to re-evaluate the
   // "self" highlight on any mentions that rendered before the session/list was
   // known. Reads authSession + tree so it re-runs on sign-in/out and moves.
   $effect(() => {
@@ -379,7 +398,7 @@
       : null;
 
     if (!scopeId) {
-      userMentionBridge.state.users = selfOnly;
+      setMentionCandidates(selfOnly);
       return;
     }
 
@@ -408,7 +427,7 @@
         add(share.shared_owner, null);
         for (const member of share.members)
           add(member.username, member.access_level);
-        userMentionBridge.state.users = users;
+        setMentionCandidates(users);
         if (crepe) {
           try {
             crepe.editor.action((ctx) =>
@@ -420,7 +439,7 @@
         }
       })
       .catch(() => {
-        if (!cancelled) userMentionBridge.state.users = selfOnly;
+        if (!cancelled) setMentionCandidates(selfOnly);
       });
     return () => {
       cancelled = true;
@@ -1560,6 +1579,11 @@
             readonly={isReadOnly}
             tabSize={sourceTabSize}
             onInput={handleSourceInput}
+            {autoPairEnabled}
+            {wikilinksEnabled}
+            wikilinkBridge={sourceWikilinkBridge}
+            {userMentionsEnabled}
+            userMentionBridge={sourceUserMentionBridge}
           />
         </div>
       {/if}
@@ -1602,3 +1626,13 @@
   likewise gated by `bridge.state.open` so it costs ~0 when mentions are off.
 -->
 <UserMentionMenu bridge={userMentionBridge} />
+
+<!--
+  The same two popups again for the Source pane, on its own bridges (see the
+  `sourceWikilinkBridge` declaration for why the surfaces can't share one).
+  Only the focused pane's plugin ever opens its menu, so even in Split — where
+  all four of these are mounted — the user sees at most one at a time. Each
+  costs ~0 while closed, same as the WYSIWYG pair.
+-->
+<WikilinkMenu bridge={sourceWikilinkBridge} />
+<UserMentionMenu bridge={sourceUserMentionBridge} />
