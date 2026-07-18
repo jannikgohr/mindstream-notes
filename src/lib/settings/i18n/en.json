@@ -654,7 +654,8 @@
     "editor.kanban.deleteListTitle": "Delete list?",
     "editor.kanban.deleteListBody": "Delete the list “{list}” and its {count} card(s)? This cannot be undone.",
     "editor.kanban.deleteListConfirm": "Delete list",
-    "editor.kanban.deleteListCancel": "Cancel"
+    "editor.kanban.deleteListCancel": "Cancel",
+    "editor.kanban.listMenu": "List options"
   },
   "categories": {
     "account": {

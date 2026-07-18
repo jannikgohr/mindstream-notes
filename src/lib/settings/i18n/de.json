@@ -654,7 +654,8 @@
     "editor.kanban.deleteListTitle": "Liste löschen?",
     "editor.kanban.deleteListBody": "Die Liste „{list}“ und ihre {count} Karte(n) löschen? Dies kann nicht rückgängig gemacht werden.",
     "editor.kanban.deleteListConfirm": "Liste löschen",
-    "editor.kanban.deleteListCancel": "Abbrechen"
+    "editor.kanban.deleteListCancel": "Abbrechen",
+    "editor.kanban.listMenu": "Listenoptionen"
   },
   "categories": {
     "account": {
