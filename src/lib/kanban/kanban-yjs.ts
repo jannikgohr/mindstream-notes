@@ -256,6 +256,35 @@ export function removeCardFromYDoc(
   }, origin);
 }
 
+/**
+ * Remove a column by id. SVAR has no delete-column action, so column removal is
+ * driven by the app's own UI. `deleteCards` also drops every card in that
+ * column (walked back-to-front so indices stay valid); pass false to keep the
+ * cards (the caller is responsible for re-homing them first).
+ */
+export function removeColumnFromYDoc(
+  doc: Y.Doc,
+  id: string,
+  deleteCards: boolean,
+  origin: unknown = KANBAN_LOCAL_ORIGIN
+): void {
+  const cols = columnsArray(doc);
+  const cards = cardsArray(doc);
+  doc.transact(() => {
+    for (let i = cols.length - 1; i >= 0; i--) {
+      if (cols.get(i).get('id') === id) {
+        cols.delete(i, 1);
+        break;
+      }
+    }
+    if (deleteCards) {
+      for (let i = cards.length - 1; i >= 0; i--) {
+        if (cards.get(i).get('column') === id) cards.delete(i, 1);
+      }
+    }
+  }, origin);
+}
+
 function reconcileColumns(
   doc: Y.Doc,
   columns: KanbanColumnData[],

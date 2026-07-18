@@ -646,7 +646,15 @@
     "editor.kanban.linkedNote": "Verknüpfte Notiz",
     "editor.kanban.loading": "Board wird geladen …",
     "editor.kanban.untitled": "Ohne Titel",
-    "fileTree.newKanban": "Neues Kanban-Board"
+    "fileTree.newKanban": "Neues Kanban-Board",
+    "editor.kanban.newList": "Neue Liste",
+    "editor.kanban.addList": "Liste hinzufügen",
+    "editor.kanban.renameList": "Liste umbenennen",
+    "editor.kanban.deleteList": "Liste löschen",
+    "editor.kanban.deleteListTitle": "Liste löschen?",
+    "editor.kanban.deleteListBody": "Die Liste „{list}“ und ihre {count} Karte(n) löschen? Dies kann nicht rückgängig gemacht werden.",
+    "editor.kanban.deleteListConfirm": "Liste löschen",
+    "editor.kanban.deleteListCancel": "Abbrechen"
   },
   "categories": {
     "account": {

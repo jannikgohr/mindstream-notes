@@ -25,6 +25,7 @@
   import * as Y from 'yjs';
   import { Awareness } from 'y-protocols/awareness';
   import { mode } from 'mode-watcher';
+  import { Plus, Trash2 } from '@lucide/svelte';
   import {
     Kanban,
     Editor,
@@ -49,6 +50,7 @@
   import { tree } from '$lib/stores/tree.svelte';
   import { getSettingValue } from '$lib/settings/store.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
+  import { confirm } from '$lib/components/confirm-dialog.svelte';
   import { CollabProvider } from '$lib/sync/collab-provider';
   import { base64ToBytes } from '$lib/editor/base64';
   import { pickCursorColor } from '$lib/editor/cursor-color';
@@ -75,11 +77,13 @@
     observeBoard,
     readBoardFromYDoc,
     removeCardFromYDoc,
+    removeColumnFromYDoc,
     seedDefaultBoard,
     upsertBoardIntoYDoc,
     writeBoardToYDoc,
     type KanbanBoard,
-    type KanbanCardData
+    type KanbanCardData,
+    type KanbanColumnData
   } from '$lib/kanban/kanban-yjs';
 
   interface Props {
@@ -167,7 +171,9 @@
     priority: { data: getPriorityOptions() },
     progress: true,
     deadline: true,
-    users: userOptions.length > 0 ? { data: userOptions } : false
+    users: userOptions.length > 0 ? { data: userOptions } : false,
+    // Per-card ⋯ menu: Edit / Duplicate / Delete (handled by SVAR's ContextMenu).
+    menu: true
   });
 
   // getEditorItems drives the card-detail form. Append a "linked note" field —
@@ -270,6 +276,20 @@
 
   function handleInit(kanbanApi: KanbanInstanceApi): void {
     api = kanbanApi;
+    // SVAR's card editor saves via `update-card` with the FULL card snapshot it
+    // captured when the editor opened (`card: { ...ev.values }`). If the card
+    // was dragged to another column/position while the editor stayed open, that
+    // snapshot carries the stale `column`/`order`, and the patch would move the
+    // card back. Position only ever changes through `move-card`, so strip those
+    // fields from every `update-card` patch.
+    kanbanApi.intercept('update-card', (ev: unknown) => {
+      const card = (ev as { card?: Record<string, unknown> } | undefined)?.card;
+      if (card) {
+        delete card.column;
+        delete card.order;
+      }
+      return true;
+    });
     for (const action of UPSERT_ACTIONS) {
       kanbanApi.on(action, () => syncFromWidget());
     }
@@ -281,6 +301,58 @@
       if (id != null) removeCardFromYDoc(yDoc, String(id), KANBAN_LOCAL_ORIGIN);
       syncFromWidget();
     });
+  }
+
+  // ---- Column (list) management ----
+  // SVAR exposes only update-column (rename/collapse), no add/remove. These
+  // write straight to the Yjs columns array and then rebuild the widget props
+  // (a deliberate structural change, so re-init churn is fine). Column edits
+  // upsert additively; a column leaves the doc only via removeColumnFromYDoc.
+  function addColumn(): void {
+    if (!yDoc || isTrashed) return;
+    const maxOrder = board.columns.reduce((m, c) => Math.max(m, c.order), -1);
+    const column: KanbanColumnData = {
+      id: crypto.randomUUID(),
+      label: tUi('editor.kanban.newList'),
+      order: maxOrder + 1
+    };
+    upsertBoardIntoYDoc(yDoc, { columns: [column], cards: [] });
+    board = readBoardFromYDoc(yDoc);
+  }
+
+  function renameColumn(id: string, label: string): void {
+    if (!yDoc || isTrashed) return;
+    const existing = board.columns.find((c) => c.id === id);
+    if (!existing) return;
+    const next = label.trim() || existing.label;
+    if (next === existing.label) return;
+    upsertBoardIntoYDoc(yDoc, {
+      columns: [{ ...existing, label: next }],
+      cards: []
+    });
+    board = readBoardFromYDoc(yDoc);
+  }
+
+  async function removeColumn(id: string): Promise<void> {
+    if (!yDoc || isTrashed) return;
+    const column = board.columns.find((c) => c.id === id);
+    if (!column) return;
+    if (board.columns.length <= 1) return; // keep at least one list
+    const cardCount = board.cards.filter((c) => c.column === id).length;
+    if (cardCount > 0) {
+      const ok = await confirm({
+        title: tUi('editor.kanban.deleteListTitle'),
+        message: tUi('editor.kanban.deleteListBody')
+          .replace('{list}', column.label)
+          .replace('{count}', String(cardCount)),
+        confirmLabel: tUi('editor.kanban.deleteListConfirm'),
+        cancelLabel: tUi('editor.kanban.deleteListCancel'),
+        destructive: true
+      });
+      if (!ok || !yDoc) return;
+    }
+    removeColumnFromYDoc(yDoc, id, true);
+    board = readBoardFromYDoc(yDoc);
   }
 
   // ---- Save ----
@@ -599,17 +671,154 @@
     {/if}
     <div class="relative min-h-0 flex-1">
       <ThemeComponent>
-        <Kanban
-          cards={board.cards}
-          columns={board.columns}
-          card={cardShape}
-          readonly={isTrashed}
-          init={handleInit}
-        />
-        {#if api && !isTrashed}
-          <Editor {api} items={editorItems} />
-        {/if}
+        <div class="kanban-scope flex flex-col">
+          {#if !isTrashed}
+            <div class="kanban-lists-bar">
+              {#each board.columns as col (col.id)}
+                <div class="kanban-list-chip">
+                  <input
+                    class="kanban-list-name"
+                    value={col.label}
+                    aria-label={tUi('editor.kanban.renameList')}
+                    onchange={(e) =>
+                      renameColumn(col.id, e.currentTarget.value)}
+                    onkeydown={(e) => {
+                      if (e.key === 'Enter') e.currentTarget.blur();
+                    }}
+                  />
+                  <button
+                    type="button"
+                    class="kanban-list-remove"
+                    aria-label={tUi('editor.kanban.deleteList')}
+                    title={tUi('editor.kanban.deleteList')}
+                    disabled={board.columns.length <= 1}
+                    onclick={() => void removeColumn(col.id)}
+                  >
+                    <Trash2 class="size-3.5" />
+                  </button>
+                </div>
+              {/each}
+              <button type="button" class="kanban-list-add" onclick={addColumn}>
+                <Plus class="size-3.5" />
+                {tUi('editor.kanban.addList')}
+              </button>
+            </div>
+          {/if}
+          <div class="relative min-h-0 flex-1">
+            <Kanban
+              cards={board.cards}
+              columns={board.columns}
+              card={cardShape}
+              readonly={isTrashed}
+              init={handleInit}
+            />
+            {#if api && !isTrashed}
+              <Editor {api} items={editorItems} />
+            {/if}
+          </div>
+        </div>
       </ThemeComponent>
     </div>
   {/if}
 </div>
+
+<style>
+  /* Re-skin the SVAR widget with the app's design tokens so the board matches
+     the rest of the UI in both light and dark. The app tokens (--card,
+     --muted, …) already switch with the theme, so a single set of overrides
+     covers both modes. Set on an inner wrapper (a closer ancestor than SVAR's
+     .wx-*-theme div) so these win regardless of stylesheet order. Several
+     kanban vars are hardcoded hex in the SVAR theme, so they're listed
+     explicitly rather than relying on the base-var derivations. */
+  .kanban-scope {
+    height: 100%;
+    width: 100%;
+
+    /* base palette */
+    --wx-background: var(--card);
+    --wx-background-alt: var(--muted);
+    --wx-background-hover: var(--accent);
+    --wx-border-color: var(--border);
+    --wx-color-font: var(--foreground);
+    --wx-color-font-alt: var(--muted-foreground);
+    --wx-color-primary: var(--primary);
+    --wx-color-link: var(--primary);
+
+    /* kanban surfaces (hardcoded in the SVAR theme — override directly) */
+    --wx-kanban-bg: var(--background);
+    --wx-kanban-column-bg: var(--muted);
+    --wx-kanban-card-bg: var(--card);
+    --wx-kanban-tag-bg: var(--accent);
+    --wx-kanban-avatar-bg: var(--muted);
+    --wx-kanban-border-color: var(--border);
+    --wx-kanban-progress-bg: var(--muted);
+    --wx-kanban-progress-fill: var(--primary);
+    --wx-kanban-card-shadow: 0 1px 2px rgb(0 0 0 / 0.08);
+  }
+
+  /* List-management bar (add / rename / remove columns). */
+  .kanban-lists-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid var(--border);
+    background: var(--background);
+  }
+  .kanban-list-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.125rem;
+    border: 1px solid var(--border);
+    border-radius: 0.375rem;
+    background: var(--card);
+    padding-right: 0.125rem;
+  }
+  .kanban-list-name {
+    width: 8rem;
+    min-width: 4rem;
+    max-width: 12rem;
+    border: none;
+    background: transparent;
+    padding: 0.25rem 0.5rem;
+    font-size: 0.75rem;
+    color: var(--foreground);
+    border-radius: 0.375rem;
+  }
+  .kanban-list-name:focus {
+    outline: 2px solid var(--ring);
+    outline-offset: -1px;
+  }
+  .kanban-list-remove {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.25rem;
+    border-radius: 0.25rem;
+    color: var(--muted-foreground);
+  }
+  .kanban-list-remove:hover:not(:disabled) {
+    background: var(--accent);
+    color: var(--destructive);
+  }
+  .kanban-list-remove:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  .kanban-list-add {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.25rem 0.5rem;
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: var(--muted-foreground);
+    border: 1px dashed var(--border);
+    border-radius: 0.375rem;
+  }
+  .kanban-list-add:hover {
+    background: var(--accent);
+    color: var(--foreground);
+  }
+</style>

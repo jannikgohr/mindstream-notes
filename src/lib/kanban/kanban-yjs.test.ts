@@ -9,6 +9,7 @@ import {
   observeBoard,
   readBoardFromYDoc,
   removeCardFromYDoc,
+  removeColumnFromYDoc,
   seedDefaultBoard,
   upsertBoardIntoYDoc,
   writeBoardToYDoc,
@@ -136,6 +137,23 @@ describe('kanban-yjs additive live-editing (data-loss guard)', () => {
     // Removing an unknown id is a harmless no-op.
     removeCardFromYDoc(doc, 'nope');
     expect(readBoardFromYDoc(doc).cards.map((c) => c.id)).toEqual(['c2']);
+  });
+
+  it('removeColumnFromYDoc drops the column and, opt-in, its cards', () => {
+    const doc = new Y.Doc();
+    writeBoardToYDoc(doc, sampleBoard()); // cols: todo, done; c1@todo, c2@done
+    // Keep cards: only the column row goes; the (now orphaned) card stays.
+    removeColumnFromYDoc(doc, 'done', false);
+    let read = readBoardFromYDoc(doc);
+    expect(read.columns.map((c) => c.id)).toEqual(['todo']);
+    expect(read.cards.map((c) => c.id).sort()).toEqual(['c1', 'c2']);
+
+    // Delete cards too: the column and every card in it are removed.
+    removeColumnFromYDoc(doc, 'todo', true);
+    read = readBoardFromYDoc(doc);
+    expect(read.columns).toEqual([]);
+    // c1 was in todo (removed); c2 was in done (already column-less) — untouched.
+    expect(read.cards.map((c) => c.id)).toEqual(['c2']);
   });
 });
 
