@@ -15,13 +15,25 @@
     closeCollectionShareDialog,
     shareDialog
   } from './share-dialog.svelte';
+  import { parseRecipients } from './share-recipients';
+  import { pushToast } from './toast.svelte';
+
+  interface InviteFailure {
+    username: string;
+    reason: string;
+  }
 
   let username = $state('');
   let accessLevel = $state<CollectionShareAccessLevel>('read_write');
   let pending = $state(false);
   let loading = $state(false);
   let error = $state<string | null>(null);
+  /** Per-recipient invite failures from the last submit (best-effort batch:
+   *  the valid recipients still get invited, these are the ones that didn't). */
+  let failures = $state<InviteFailure[]>([]);
   let shareState = $state<CollectionShareState | null>(null);
+
+  const recipients = $derived(parseRecipients(username));
 
   const collectionId = $derived(shareDialog.collectionId);
   const collection = $derived(
@@ -41,24 +53,62 @@
     }
   }
 
+  /**
+   * Invite every recipient in the field (comma-separated) at the chosen access
+   * level. Best-effort: each invite is independent, so a typo in one name never
+   * blocks the others — the backend already resolves each recipient's profile
+   * before creating anything, so an unknown username fails that one invite
+   * without leaving a broken share behind.
+   *
+   * On completion: a success toast names everyone invited, the field is
+   * rewritten to hold only the names that FAILED (so the user can fix and
+   * resubmit without retyping the whole list), and those failures are listed
+   * inline with the backend's reason for each.
+   */
   async function submit(event: SubmitEvent) {
     event.preventDefault();
-    if (!collectionId || !username.trim()) return;
+    const targets = recipients;
+    if (!collectionId || targets.length === 0) return;
+
     pending = true;
     error = null;
-    try {
-      shareState = await inviteCollection({
-        collection_id: collectionId,
-        username: username.trim(),
-        access_level: accessLevel
-      });
-      username = '';
-      await loadTree();
-    } catch (err) {
-      error = err instanceof Error ? err.message : String(err);
-    } finally {
-      pending = false;
+    failures = [];
+
+    const invited: string[] = [];
+    const failed: InviteFailure[] = [];
+    let latest: CollectionShareState | null = null;
+
+    for (const recipient of targets) {
+      try {
+        latest = await inviteCollection({
+          collection_id: collectionId,
+          username: recipient,
+          access_level: accessLevel
+        });
+        invited.push(recipient);
+      } catch (err) {
+        failed.push({
+          username: recipient,
+          reason: err instanceof Error ? err.message : String(err)
+        });
+      }
     }
+
+    // Only a successful invite mutates the share (new member, re-homed subtree),
+    // so refresh the tree and members list only when at least one landed.
+    if (latest) shareState = latest;
+    if (invited.length > 0) {
+      await loadTree();
+      pushToast(
+        tUi('sharing.toast.invited').replace('{names}', invited.join(', ')),
+        { variant: 'success' }
+      );
+    }
+
+    failures = failed;
+    // Keep the failed names for a quick retry; clear the field on a clean run.
+    username = failed.map((f) => f.username).join(', ');
+    pending = false;
   }
 
   function accessLabel(level: CollectionShareAccessLevel): string {
@@ -118,10 +168,13 @@
           >
           <Input
             bind:value={username}
-            autocomplete="username"
+            autocomplete="off"
             placeholder={tUi('sharing.dialog.userPlaceholder')}
             class="h-8"
           />
+          <span class="block text-xs text-muted-foreground">
+            {tUi('sharing.dialog.userHint')}
+          </span>
         </label>
 
         <label class="block space-y-1.5">
@@ -147,6 +200,23 @@
           </p>
         {/if}
 
+        {#if failures.length > 0}
+          <div
+            class="space-y-1 rounded-md border border-destructive/30 bg-destructive/10 px-2 py-1.5 text-xs text-destructive"
+          >
+            <p class="font-medium">
+              {tUi('sharing.dialog.inviteFailedHeading')}
+            </p>
+            <ul class="space-y-0.5">
+              {#each failures as failure (failure.username)}
+                <li>
+                  <span class="font-medium">{failure.username}</span> — {failure.reason}
+                </li>
+              {/each}
+            </ul>
+          </div>
+        {/if}
+
         <div class="flex items-center justify-end gap-2">
           <Button
             type="button"
@@ -159,7 +229,7 @@
           <Button
             size="sm"
             type="submit"
-            disabled={pending || !username.trim()}
+            disabled={pending || recipients.length === 0}
           >
             {tUi('sharing.dialog.invite')}
           </Button>
