@@ -97,6 +97,7 @@
     "@milkdown/prose": "^7.21.2",
     "@milkdown/transformer": "^7.21.2",
     "@milkdown/utils": "^7.21.2",
+    "@svar-ui/svelte-kanban": "^2.6.0",
     "@tauri-apps/api": "^2.11.0",
     "@tauri-apps/plugin-autostart": "~2",
     "@tauri-apps/plugin-process": "^2.3.1",

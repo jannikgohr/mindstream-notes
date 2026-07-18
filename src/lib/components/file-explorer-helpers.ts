@@ -3,7 +3,7 @@ import type { NoteKind, TreeNode } from '$lib/api';
 import type { IconComponent } from '$lib/settings/icons';
 import type { DesktopNoteSource } from '$lib/stores/note-source.svelte';
 
-export type DraftKind = 'note' | 'folder' | 'drawing' | 'ink';
+export type DraftKind = 'note' | 'folder' | 'drawing' | 'ink' | 'kanban';
 export type Draft = {
   kind: DraftKind;
   parentId: string | null;
@@ -78,6 +78,8 @@ export function defaultDraftText(kind: DraftKind): string {
       return 'Untitled drawing canvas';
     case 'ink':
       return 'Untitled handwritten note';
+    case 'kanban':
+      return 'Untitled board';
     case 'note':
       return 'Untitled';
   }
@@ -89,6 +91,8 @@ export function draftKindToNoteKind(kind: DraftKind): NoteKind | null {
       return 'freeform';
     case 'ink':
       return 'ink';
+    case 'kanban':
+      return 'kanban';
     case 'note':
       return 'markdown';
     case 'folder':

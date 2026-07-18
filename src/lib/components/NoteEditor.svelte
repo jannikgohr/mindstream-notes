@@ -21,15 +21,11 @@
     getYjsRelayUrl,
     onSessionChange,
     captureNoteVersion,
-    getCollectionShareState,
     type VersionAction
   } from '$lib/api';
   import { tree } from '$lib/stores/tree.svelte';
-  import {
-    collectionScopeIsReadOnly,
-    collectionIsSharedWithMe,
-    collectionIsSharedByMe
-  } from '$lib/stores/note-source.svelte';
+  import { collectionScopeIsReadOnly } from '$lib/stores/note-source.svelte';
+  import { resolveShareScopeUsers } from '$lib/notes/share-users';
   import {
     bumpNoteHistory,
     registerNoteHistory
@@ -356,27 +352,6 @@
   // push.
   const isReadOnly = $derived(isTrashed || isReadOnlyScope);
 
-  /**
-   * The nearest ancestor collection (or the note's own folder) that carries a
-   * share — the "share scope". Its members are the people who can view the
-   * note. Returns null for a purely personal note (candidate list is then just
-   * yourself). Cycle-guarded like the trash walk above.
-   */
-  function findShareScopeCollectionId(parentId: string | null): string | null {
-    let current = parentId;
-    const seen = new Set<string>();
-    while (current && !seen.has(current)) {
-      seen.add(current);
-      const c = tree.collectionsById[current];
-      if (!c) return null;
-      if (collectionIsSharedWithMe(c) || collectionIsSharedByMe(c)) {
-        return current;
-      }
-      current = c.parent_collection_id;
-    }
-    return null;
-  }
-
   /** Candidates are a property of the note, not of a surface — both panes'
    *  mention menus offer the same people, so every resolution path feeds both
    *  bridges. */
@@ -385,66 +360,34 @@
     sourceUserMentionBridge.state.users = users;
   }
 
-  // Resolve "who can view this note" for the mention dropdown: yourself, plus —
-  // when the note lives in a shared scope — the scope's owner and members. The
-  // share state is an async backend call, so we write the result into the
-  // bridges and (once resolved) nudge the decoration plugin to re-evaluate the
-  // "self" highlight on any mentions that rendered before the session/list was
-  // known. Reads authSession + tree so it re-runs on sign-in/out and moves.
+  // Resolve "who can view this note" for the mention dropdown (see
+  // `$lib/notes/share-users`): yourself, plus — when the note lives in a shared
+  // scope — the scope's owner and members. The share state is an async backend
+  // call, so we write the result into the bridges and (once resolved) nudge the
+  // decoration plugin to re-evaluate the "self" highlight on any mentions that
+  // rendered before the session/list was known. Reads authSession + tree so it
+  // re-runs on sign-in/out and moves.
   $effect(() => {
     const me = authSession.current?.username ?? null;
-    const selfOnly: MentionUser[] = me
-      ? [{ username: me, accessLevel: null, isSelf: true }]
-      : [];
     const note = tree.notesById[noteId];
-    const scopeId = note
-      ? findShareScopeCollectionId(note.parent_collection_id)
-      : null;
-
-    if (!scopeId) {
-      setMentionCandidates(selfOnly);
-      return;
-    }
-
     let cancelled = false;
-    void getCollectionShareState(scopeId)
-      .then((share) => {
-        if (cancelled) return;
-        const users: MentionUser[] = [];
-        const seen = new Set<string>();
-        const add = (
-          username: string | null,
-          accessLevel: MentionUser['accessLevel']
-        ) => {
-          const name = username?.trim();
-          if (!name) return;
-          const key = name.toLowerCase();
-          if (seen.has(key)) return;
-          seen.add(key);
-          users.push({
-            username: name,
-            accessLevel,
-            isSelf: me !== null && me.toLowerCase() === key
-          });
-        };
-        add(me, null); // self first
-        add(share.shared_owner, null);
-        for (const member of share.members)
-          add(member.username, member.access_level);
-        setMentionCandidates(users);
-        if (crepe) {
-          try {
-            crepe.editor.action((ctx) =>
-              refreshMentionDecorations(ctx.get(editorViewCtx))
-            );
-          } catch {
-            // Editor not fully materialised yet; the next doc change rebuilds.
-          }
+    void resolveShareScopeUsers(
+      note?.parent_collection_id ?? null,
+      tree.collectionsById,
+      me
+    ).then((users) => {
+      if (cancelled) return;
+      setMentionCandidates(users);
+      if (crepe) {
+        try {
+          crepe.editor.action((ctx) =>
+            refreshMentionDecorations(ctx.get(editorViewCtx))
+          );
+        } catch {
+          // Editor not fully materialised yet; the next doc change rebuilds.
         }
-      })
-      .catch(() => {
-        if (!cancelled) setMentionCandidates(selfOnly);
-      });
+      }
+    });
     return () => {
       cancelled = true;
     };

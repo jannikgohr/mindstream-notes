@@ -34,9 +34,7 @@
     "modified": "Modified",
     "empty": "No settings match your search.",
     "saving": "Saving…",
-
     "account.managedUnavailable": "Not available yet — pick \"Self-hosted\" to use your own server.",
-
     "data.openFolder.failed.title": "Couldn't open the data folder",
     "data.openFolder.failed.message": "{error}",
     "data.emptyTrash.confirm.title": "Empty trash",
@@ -66,7 +64,6 @@
     "data.result.chip.folders.one": "Folder",
     "data.result.chip.folders.other": "Folders",
     "data.result.chip.attachments.label": "Attachments",
-
     "data.import.title": "Import Mindstream Notes backup",
     "data.import.description": "From Mindstream Notes {version}, created {createdAt}.",
     "data.import.column.backup": "Backup",
@@ -136,7 +133,6 @@
     "data.exportVault.chip.errors.status": "Failed",
     "data.exportVault.failed.title": "Couldn't export notes",
     "data.exportVault.failed.message": "{error}",
-
     "sort.label": "Sort",
     "sort.ascending": "Sort ascending",
     "sort.descending": "Sort descending",
@@ -144,17 +140,14 @@
     "sort.strategy.alphabetical": "Alphabetical",
     "sort.strategy.modified": "Recently modified",
     "sort.strategy.created": "Recently created",
-
     "display.mode": "Display mode",
     "display.list": "List view",
     "display.grid": "Grid view",
-
     "breadcrumb.label": "Folder path",
     "breadcrumb.root.home": "Notes",
     "breadcrumb.root.shared": "Shared",
     "breadcrumb.root.favourite": "Favourites",
     "breadcrumb.root.trash": "Trash",
-
     "fileTree.title": "Explorer",
     "fileTree.tree": "File tree",
     "fileTree.newNote": "New note",
@@ -172,10 +165,8 @@
     "fileTree.deletePermanently.title": "Delete note permanently?",
     "fileTree.deletePermanently.message": "\"{title}\" will be deleted permanently. This cannot be undone.",
     "fileTree.deletePermanently.confirm": "Delete",
-
     "favourite.add": "Add to favourites",
     "favourite.remove": "Remove from favourites",
-
     "noteSidebar.title": "Details",
     "noteSidebar.open": "Show note details",
     "metadata.organization": "Organization",
@@ -202,7 +193,6 @@
     "metadata.noNote": "No note selected.",
     "desktop.emptyState.title": "No note open",
     "desktop.emptyState.message": "Open a note from the explorer to start editing.",
-
     "history.title": "History",
     "history.refresh": "Refresh history",
     "history.back": "Back",
@@ -241,7 +231,6 @@
     "history.modal.currentTab": "Current note",
     "history.modal.diffTab": "Diff",
     "history.modal.oldTab": "Version from {date}",
-
     "tags.label": "Tags",
     "tags.add": "Add",
     "tags.remove": "Remove tag {tag}",
@@ -254,7 +243,6 @@
     "tags.onNote": "on note",
     "tags.expand": "Expand",
     "tags.collapse": "Collapse",
-
     "search.notes.placeholder": "Search notes",
     "search.notes.label": "Search notes",
     "search.open": "Search notes",
@@ -263,13 +251,11 @@
     "search.close": "Close search",
     "search.hint": "↑↓ to navigate · ↵ to open · Esc to close",
     "settings.open": "Open settings",
-
     "options.open": "Open menu",
     "options.title": "Menu",
     "options.settings": "Settings",
     "options.notifications": "Notifications",
     "options.vaults": "Vaults",
-
     "notifications.open": "Open notifications",
     "notifications.title": "Notifications",
     "notifications.empty": "No notifications right now.",
@@ -286,7 +272,6 @@
     "notifications.shareBundle.pendingTitle": "{sender} wants to share a folder with you",
     "notifications.shareBundle.pendingHint": "Accept to see what's inside.",
     "notifications.shareBundle.incomplete": "This share is incomplete and can't be accepted yet — ask the sender to resend it.",
-
     "sharing.access.readOnly": "Can view",
     "sharing.access.readWrite": "Can edit",
     "sharing.access.admin": "Admin",
@@ -303,15 +288,12 @@
     "sharing.dialog.people": "People",
     "sharing.dialog.onlyYou": "Only you.",
     "sharing.toast.invited": "Invited {names}",
-
     "toast.regionLabel": "Status messages",
-
     "tray.newNote": "New note",
     "tray.newDrawing": "New drawing canvas",
     "tray.newInk": "New handwritten note",
     "tray.newDiagram": "New diagram",
     "tray.quit": "Quit",
-
     "nativeMenu.app.about": "About Mindstream Notes",
     "nativeMenu.app.settings": "Settings…",
     "nativeMenu.app.services": "Services",
@@ -347,13 +329,11 @@
     "nativeMenu.window.main": "Mindstream Notes",
     "nativeMenu.help": "Help",
     "nativeMenu.help.keyboardShortcuts": "Keyboard Shortcuts",
-
     "nav.primary": "Primary",
     "nav.home": "Home",
     "nav.shared": "Shared",
     "nav.favourite": "Favourites",
     "nav.trash": "Trash",
-
     "fab.newNote": "New note",
     "fab.newDrawing": "New drawing canvas",
     "fab.newInk": "New handwritten note",
@@ -364,7 +344,6 @@
     "fab.placeholder.inkTitle": "Handwritten note title",
     "fab.placeholder.folderName": "Folder name",
     "fab.submit.create": "Create",
-
     "hotkeys.group.global": "Application",
     "hotkeys.group.globalShortcuts": "Global shortcuts",
     "hotkeys.group.editor.markdown": "Markdown editor",
@@ -403,7 +382,6 @@
     "hotkeys.search.placeholder": "Search shortcuts…",
     "hotkeys.search.label": "Search keyboard shortcuts",
     "hotkeys.search.empty": "No shortcuts match your search.",
-
     "hotkeys.command.global.newMarkdownNote": "New Markdown note",
     "hotkeys.command.global.newDrawing": "New drawing canvas",
     "hotkeys.command.global.newInkNote": "New handwritten note",
@@ -457,7 +435,6 @@
     "hotkeys.command.editor.pdf.zoomOut": "Zoom out",
     "hotkeys.command.editor.pdf.toggleZoomMenu": "Choose zoom",
     "hotkeys.command.editor.pdf.zoomIn": "Zoom in",
-
     "editor.toolbar.label": "Formatting",
     "editor.mode.label": "Editor view mode",
     "editor.toolbar.undo": "Undo",
@@ -483,7 +460,6 @@
     "editor.toolbar.advanced.math": "Math",
     "editor.toolbar.advanced.mermaid": "Mermaid diagram",
     "editor.toolbar.more": "More",
-
     "editor.status.live": "Live collab connected",
     "editor.status.offline": "Live collab disconnected — reconnecting",
     "editor.status.editing": "Editing…",
@@ -505,12 +481,10 @@
     "editor.userMention.self": "you",
     "editor.popout": "Open in new window",
     "editor.popin": "Pop in",
-
     "editor.unknownKind.title": "Can't open this note",
     "editor.unknownKind.message": "This note was created with an editor type this version of the app doesn't support. Update to the latest version to open it. The note's content is safe — it hasn't been changed.",
     "editor.unknownKind.titleLabel": "Note",
     "editor.unknownKind.kindLabel": "Editor type",
-
     "editor.ink.desktopNativeWindowTitle": "Handwritten note opened in a native window",
     "editor.ink.desktopNativeWindowMessage": "Draw in the separate ink window while the desktop bridge is being embedded into the editor panel.",
     "editor.ink.desktopPanelLabel": "Handwritten note canvas",
@@ -544,7 +518,6 @@
     "ink.toolbar.clearConfirm.title": "Clear handwritten note?",
     "ink.toolbar.clearConfirm.message": "This removes every stroke from this handwritten note. You can undo it while the note stays open.",
     "ink.toolbar.clearConfirm.button": "Clear handwritten note",
-
     "pdf.signature.menuLabel": "Signatures",
     "pdf.signature.add": "Add new signature",
     "pdf.signature.delete": "Delete signature",
@@ -632,7 +605,6 @@
     "pdf.comments.resolve": "Resolve",
     "pdf.comments.resolved": "Resolved",
     "pdf.comments.delete": "Delete comment",
-
     "find.placeholder": "Find in document",
     "find.count": "{index} of {total}",
     "find.noResults": "No results",
@@ -648,7 +620,6 @@
     "find.wholeWord": "Match whole word",
     "find.useRegex": "Use regular expression",
     "find.preserveCase": "Preserve case",
-
     "updater.checkFailed.title": "Couldn't check for updates",
     "updater.checkFailed.message": "We weren't able to reach the update server. Check your internet connection and try again.",
     "updater.upToDate.title": "You're up to date",
@@ -667,19 +638,32 @@
     "updater.progress.downloading": "Downloading update…",
     "updater.progress.installing": "Installing…",
     "updater.unsupportedLinux.title": "In-app update not available",
-    "updater.unsupportedLinux.message": "Mindstream Notes was installed from a system package (rpm / deb), which can only be updated through your distribution. Download the latest version from https://github.com/jannikgohr/mindstream-notes/releases/latest and reinstall, or use the AppImage build for in-app updates."
+    "updater.unsupportedLinux.message": "Mindstream Notes was installed from a system package (rpm / deb), which can only be updated through your distribution. Download the latest version from https://github.com/jannikgohr/mindstream-notes/releases/latest and reinstall, or use the AppImage build for in-app updates.",
+    "nav.create.kanban": "New Kanban board",
+    "nav.create.kanbanInFolder": "New Kanban board in folder",
+    "fab.newKanban": "New Kanban board",
+    "fab.placeholder.kanbanTitle": "Kanban board title",
+    "editor.kanban.linkedNote": "Linked note",
+    "editor.kanban.loading": "Loading board…",
+    "editor.kanban.untitled": "Untitled",
+    "fileTree.newKanban": "New Kanban board"
   },
   "categories": {
     "account": {
       "label": "Account & Sync",
       "description": "Connect to a managed or self-hosted server, manage devices and sync."
     },
-    "general": { "label": "General" },
+    "general": {
+      "label": "General"
+    },
     "appearance": {
       "label": "Appearance",
       "description": "Theme, typography, file-tree look."
     },
-    "editor": { "label": "Editor", "description": "How notes feel to write." },
+    "editor": {
+      "label": "Editor",
+      "description": "How notes feel to write."
+    },
     "hotkeys": {
       "label": "Hotkeys",
       "description": "Customise keyboard shortcuts for actions across the app and editors."
@@ -688,41 +672,99 @@
       "label": "Data & Backup",
       "description": "Trash, backup, import/export."
     },
-    "language": { "label": "Language" },
-    "about": { "label": "About" }
+    "language": {
+      "label": "Language"
+    },
+    "about": {
+      "label": "About"
+    }
   },
   "sections": {
-    "account.server": { "label": "Server" },
-    "account.sync": { "label": "Sync" },
-    "general.behavior": { "label": "Behaviour" },
-    "appearance.theme": { "label": "Theme" },
-    "appearance.typography": { "label": "Typography" },
-    "appearance.fileTree": { "label": "File tree" },
-    "editor.input": { "label": "Input" },
-    "editor.markdown": { "label": "Markdown features" },
-    "editor.freeform": { "label": "Drawing canvas" },
-    "editor.ink": { "label": "Ink toolbar" },
-    "editor.autosave": { "label": "Auto-save" },
-    "hotkeys.list": { "label": "Shortcuts" },
-    "data.database": { "label": "Database" },
-    "data.trash": { "label": "Trash" },
-    "data.history": { "label": "Edit history" },
-    "data.historyAdvanced": { "label": "Advanced" },
-    "data.backup": { "label": "Backup, import & export" },
-    "language.locale": { "label": "Language" },
-    "about.version": { "label": "Version" }
+    "account.server": {
+      "label": "Server"
+    },
+    "account.sync": {
+      "label": "Sync"
+    },
+    "general.behavior": {
+      "label": "Behaviour"
+    },
+    "appearance.theme": {
+      "label": "Theme"
+    },
+    "appearance.typography": {
+      "label": "Typography"
+    },
+    "appearance.fileTree": {
+      "label": "File tree"
+    },
+    "editor.input": {
+      "label": "Input"
+    },
+    "editor.markdown": {
+      "label": "Markdown features"
+    },
+    "editor.freeform": {
+      "label": "Drawing canvas"
+    },
+    "editor.ink": {
+      "label": "Ink toolbar"
+    },
+    "editor.autosave": {
+      "label": "Auto-save"
+    },
+    "hotkeys.list": {
+      "label": "Shortcuts"
+    },
+    "data.database": {
+      "label": "Database"
+    },
+    "data.trash": {
+      "label": "Trash"
+    },
+    "data.history": {
+      "label": "Edit history"
+    },
+    "data.historyAdvanced": {
+      "label": "Advanced"
+    },
+    "data.backup": {
+      "label": "Backup, import & export"
+    },
+    "language.locale": {
+      "label": "Language"
+    },
+    "about.version": {
+      "label": "Version"
+    },
+    "editor.noteTypes": {
+      "label": "Note types",
+      "description": "Choose which kinds of notes appear in the create menus. Turn off the ones you do not use to keep things tidy."
+    }
   },
   "settings": {
     "account.serverType": {
       "label": "Server type",
       "description": "Where your notes live."
     },
-    "account.managedUnavailable": { "label": "Managed mode" },
-    "account.signInForm": { "label": "Sign in" },
-    "account.syncEnabled": { "label": "Enable sync" },
-    "account.syncInterval": { "label": "Sync frequency" },
-    "account.conflict": { "label": "Conflict resolution" },
-    "general.startOnLogin": { "label": "Start on login" },
+    "account.managedUnavailable": {
+      "label": "Managed mode"
+    },
+    "account.signInForm": {
+      "label": "Sign in"
+    },
+    "account.syncEnabled": {
+      "label": "Enable sync"
+    },
+    "account.syncInterval": {
+      "label": "Sync frequency"
+    },
+    "account.conflict": {
+      "label": "Conflict resolution"
+    },
+    "general.startOnLogin": {
+      "label": "Start on login"
+    },
     "general.closeToTray": {
       "label": "Close to system tray",
       "description": "Hide the main window instead of quitting when you close it."
@@ -731,29 +773,59 @@
       "label": "Start in system tray",
       "description": "When launched by your system at login, start hidden in the tray instead of opening the window."
     },
-    "appearance.mode": { "label": "Mode" },
-    "appearance.accent": { "label": "Accent colour" },
-    "appearance.reduceMotion": { "label": "Reduce motion" },
+    "appearance.mode": {
+      "label": "Mode"
+    },
+    "appearance.accent": {
+      "label": "Accent colour"
+    },
+    "appearance.reduceMotion": {
+      "label": "Reduce motion"
+    },
     "appearance.customWindowDecorations": {
       "label": "Use custom title bar",
       "description": "Draw Mindstream's own window controls instead of using the operating system title bar."
     },
-    "appearance.uiFontSize": { "label": "UI font size" },
-    "appearance.editorFontSize": { "label": "Editor font size" },
-    "appearance.lineHeight": { "label": "Line height" },
-    "appearance.sortStrategy": { "label": "File tree sort" },
-    "appearance.foldersFirst": { "label": "Folders first" },
-    "editor.defaultMode": { "label": "Default mode" },
-    "editor.tabSize": { "label": "Tab size" },
-    "editor.autoPair": { "label": "Auto-pair brackets" },
-    "editor.trimTrailing": { "label": "Trim trailing whitespace on save" },
+    "appearance.uiFontSize": {
+      "label": "UI font size"
+    },
+    "appearance.editorFontSize": {
+      "label": "Editor font size"
+    },
+    "appearance.lineHeight": {
+      "label": "Line height"
+    },
+    "appearance.sortStrategy": {
+      "label": "File tree sort"
+    },
+    "appearance.foldersFirst": {
+      "label": "Folders first"
+    },
+    "editor.defaultMode": {
+      "label": "Default mode"
+    },
+    "editor.tabSize": {
+      "label": "Tab size"
+    },
+    "editor.autoPair": {
+      "label": "Auto-pair brackets"
+    },
+    "editor.trimTrailing": {
+      "label": "Trim trailing whitespace on save"
+    },
     "editor.desktopToolbar": {
       "label": "Show formatting toolbar",
       "description": "Adds an icon toolbar above each note for quick formatting."
     },
-    "editor.math": { "label": "KaTeX math" },
-    "editor.mermaid": { "label": "Mermaid diagrams" },
-    "editor.wikilinks": { "label": "Wikilinks [[...]]" },
+    "editor.math": {
+      "label": "KaTeX math"
+    },
+    "editor.mermaid": {
+      "label": "Mermaid diagrams"
+    },
+    "editor.wikilinks": {
+      "label": "Wikilinks [[...]]"
+    },
     "editor.wikilinkOpenOnClick": {
       "label": "Open wikilinks with left click",
       "description": "Open note links with a normal click. Turn this off to place the caret inside note links and use Ctrl/Cmd-click to open them."
@@ -762,14 +834,22 @@
       "label": "User mentions @",
       "description": "Type @ to mention someone who can view the note. A mention of you is highlighted."
     },
-    "editor.footnotes": { "label": "Footnotes" },
+    "editor.footnotes": {
+      "label": "Footnotes"
+    },
     "editor.freeform.penMode": {
       "label": "Stylus / pen mode",
       "description": "When on, only stylus input draws — finger touches pan and zoom. Helps prevent stray marks from your palm on tablets."
     },
-    "editor.ink.tool": { "label": "Last ink tool" },
-    "editor.ink.color": { "label": "Ink colour" },
-    "editor.ink.width": { "label": "Brush size" },
+    "editor.ink.tool": {
+      "label": "Last ink tool"
+    },
+    "editor.ink.color": {
+      "label": "Ink colour"
+    },
+    "editor.ink.width": {
+      "label": "Brush size"
+    },
     "editor.ink.eraserMode": {
       "label": "Eraser mode",
       "description": "Stroke erases whole strokes; pixel erases only the parts you drag over. Brush size sets the eraser thickness."
@@ -794,15 +874,25 @@
       "label": "Ink page background opacity",
       "description": "Transparency of the handwritten page background pattern."
     },
-    "editor.autoSave": { "label": "Auto-save" },
-    "hotkeys.panel": { "label": "Keyboard shortcuts" },
+    "editor.autoSave": {
+      "label": "Auto-save"
+    },
+    "hotkeys.panel": {
+      "label": "Keyboard shortcuts"
+    },
     "hotkeys.globalShortcuts": {
       "label": "Enable global shortcuts",
       "description": "Let application-level shortcuts fire while Mindstream Notes is in the background. Editor formatting shortcuts stay in-app only."
     },
-    "editor.autoSaveDebounce": { "label": "Auto-save debounce" },
-    "data.openFolder": { "label": "Open data folder" },
-    "data.trashRetentionDays": { "label": "Trash retention" },
+    "editor.autoSaveDebounce": {
+      "label": "Auto-save debounce"
+    },
+    "data.openFolder": {
+      "label": "Open data folder"
+    },
+    "data.trashRetentionDays": {
+      "label": "Trash retention"
+    },
     "data.historyRetentionDays": {
       "label": "Keep edit history for",
       "description": "How long automatically-saved note versions are kept on this device. History is local and never synced."
@@ -815,25 +905,51 @@
       "label": "Snapshot after this many changes",
       "description": "Save a version once this many visible characters change since the last one, so long editing sessions without a pause still get versions."
     },
-    "data.emptyTrash": { "label": "Empty trash now" },
-    "data.backupNow": { "label": "Back up now" },
+    "data.emptyTrash": {
+      "label": "Empty trash now"
+    },
+    "data.backupNow": {
+      "label": "Back up now"
+    },
     "data.restoreBackup": {
       "label": "Restore from backup",
       "description": "Open a Mindstream Notes backup zip and either replace your current vault or merge missing items in."
     },
-    "data.exportVault": { "label": "Export vault" },
+    "data.exportVault": {
+      "label": "Export vault"
+    },
     "data.importNotes": {
       "label": "Import notes",
       "description": "Import notes from external sources like Markdown files or Obsidian vaults. Coming soon."
     },
-    "language.code": { "label": "Display language" },
-    "about.appVersion": { "label": "App version" },
-    "about.tauriVersion": { "label": "Component versions" },
+    "language.code": {
+      "label": "Display language"
+    },
+    "about.appVersion": {
+      "label": "App version"
+    },
+    "about.tauriVersion": {
+      "label": "Component versions"
+    },
     "about.scanForUpdates": {
       "label": "Scan for updates",
       "description": "Check for a new Mindstream Notes version when the desktop app starts and show it as a notification."
     },
-    "about.checkUpdates": { "label": "Check for updates" }
+    "about.checkUpdates": {
+      "label": "Check for updates"
+    },
+    "editor.noteTypes.freeform": {
+      "label": "Drawing canvases"
+    },
+    "editor.noteTypes.ink": {
+      "label": "Handwritten notes"
+    },
+    "editor.noteTypes.pdf": {
+      "label": "PDF documents"
+    },
+    "editor.noteTypes.kanban": {
+      "label": "Kanban boards"
+    }
   },
   "values": {
     "account.serverType.managed": "Managed",

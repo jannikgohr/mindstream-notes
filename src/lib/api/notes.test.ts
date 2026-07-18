@@ -26,6 +26,11 @@ describe('isKnownNoteKind', () => {
     expect(isKnownNoteKind(null)).toBe(false);
     expect(isKnownNoteKind(undefined)).toBe(false);
   });
+
+  it('includes the kanban board kind', () => {
+    expect(KNOWN_NOTE_KINDS).toContain('kanban');
+    expect(isKnownNoteKind('kanban')).toBe(true);
+  });
 });
 
 describe('notes API (browser fallback)', () => {

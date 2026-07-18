@@ -84,6 +84,7 @@ export function undoRedoCommandId(
       return `editor.pdf.${action}`;
     case 'freeform':
     case 'drawing':
+    case 'kanban':
       return null;
   }
 }
