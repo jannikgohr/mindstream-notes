@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import { EditorSelection, EditorState } from '@codemirror/state';
+import { history } from '@codemirror/commands';
+import { EditorView } from '@codemirror/view';
+import { APP_REDO_COMMAND, APP_UNDO_COMMAND } from '$lib/hotkeys/bus.svelte';
 import {
+  SOURCE_ACTIONS,
   applyHeading,
   insertBlock,
   toggleInlineMarker,
@@ -144,5 +149,116 @@ describe('insertBlock', () => {
     expect(apply(doc, edit)).toBe('text\n$$\n\n$$');
     // insertPos 4 (line end) + lead '\n' (1) + caretOffset 3 = 8
     expect(edit.selection).toEqual({ anchor: 8, head: 8 });
+  });
+});
+
+/* --- SOURCE_ACTIONS driving a live CodeMirror view ------------------------ */
+
+/**
+ * The `SOURCE_ACTIONS` glue applies the pure transforms above to a real
+ * `EditorView` (and defers undo/redo to CodeMirror's history). These drive the
+ * actual map so the thin dispatch layer — not just the string transforms — is
+ * exercised end to end.
+ */
+function view(doc: string, anchor = 0, head = anchor): EditorView {
+  return new EditorView({
+    parent: document.body,
+    state: EditorState.create({
+      doc,
+      selection: EditorSelection.range(anchor, head),
+      extensions: [history()]
+    })
+  });
+}
+
+function run(v: EditorView, command: string) {
+  const action = SOURCE_ACTIONS[command];
+  if (!action) throw new Error(`no source action for ${command}`);
+  action(v);
+}
+
+describe('SOURCE_ACTIONS', () => {
+  it('bold wraps the selection', () => {
+    const v = view('hello world', 0, 5);
+    run(v, 'editor.markdown.bold');
+    expect(v.state.doc.toString()).toBe('**hello** world');
+    v.destroy();
+  });
+
+  it('italic wraps the selection', () => {
+    const v = view('word', 0, 4);
+    run(v, 'editor.markdown.italic');
+    expect(v.state.doc.toString()).toBe('*word*');
+    v.destroy();
+  });
+
+  it('h2 prefixes the caret line', () => {
+    const v = view('Title', 0);
+    run(v, 'editor.markdown.h2');
+    expect(v.state.doc.toString()).toBe('## Title');
+    v.destroy();
+  });
+
+  it('paragraph strips an existing heading', () => {
+    const v = view('### Title', 0);
+    run(v, 'editor.markdown.paragraph');
+    expect(v.state.doc.toString()).toBe('Title');
+    v.destroy();
+  });
+
+  it('bulletList adds a bullet prefix', () => {
+    const v = view('item', 0);
+    run(v, 'editor.markdown.bulletList');
+    expect(v.state.doc.toString()).toBe('- item');
+    v.destroy();
+  });
+
+  it('taskList adds a checkbox prefix', () => {
+    const v = view('todo', 0);
+    run(v, 'editor.markdown.taskList');
+    expect(v.state.doc.toString()).toBe('- [ ] todo');
+    v.destroy();
+  });
+
+  it('codeBlock inserts the fence and drops the caret inside', () => {
+    const v = view('', 0);
+    run(v, 'editor.markdown.codeBlock');
+    expect(v.state.doc.toString()).toBe('```\n\n```');
+    // Caret lands on the empty middle line (offset 4: after "```\n").
+    expect(v.state.selection.main.head).toBe(4);
+    v.destroy();
+  });
+
+  it('imageBlock inserts the snippet with the caret in the alt text', () => {
+    const v = view('', 0);
+    run(v, 'editor.markdown.imageBlock');
+    expect(v.state.doc.toString()).toBe('![]()');
+    expect(v.state.selection.main.head).toBe(2); // between the brackets
+    v.destroy();
+  });
+
+  it('undo/redo defer to CodeMirror history (via the app-level commands)', () => {
+    const v = view('start', 5);
+    run(v, 'editor.markdown.bold'); // some undoable change
+    expect(v.state.doc.toString()).not.toBe('start');
+
+    run(v, APP_UNDO_COMMAND);
+    expect(v.state.doc.toString()).toBe('start');
+
+    run(v, APP_REDO_COMMAND);
+    expect(v.state.doc.toString()).not.toBe('start');
+    v.destroy();
+  });
+
+  it('exposes both the app-level and editor.markdown undo/redo ids', () => {
+    // All four keys resolve to a callable — the table mirrors MARKDOWN_ACTIONS.
+    for (const id of [
+      APP_UNDO_COMMAND,
+      APP_REDO_COMMAND,
+      'editor.markdown.undo',
+      'editor.markdown.redo'
+    ]) {
+      expect(typeof SOURCE_ACTIONS[id]).toBe('function');
+    }
   });
 });
