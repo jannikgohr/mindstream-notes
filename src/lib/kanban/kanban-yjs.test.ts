@@ -8,7 +8,9 @@ import {
   isLocalOnly,
   observeBoard,
   readBoardFromYDoc,
+  removeCardFromYDoc,
   seedDefaultBoard,
+  upsertBoardIntoYDoc,
   writeBoardToYDoc,
   type KanbanBoard
 } from './kanban-yjs';
@@ -88,6 +90,52 @@ describe('kanban-yjs round-trip', () => {
     expect(c1.label).toBe('First (edited)');
     // Cleared field (description) is gone after the edit.
     expect(c1.description).toBeUndefined();
+  });
+});
+
+describe('kanban-yjs additive live-editing (data-loss guard)', () => {
+  it('upsert does NOT delete doc cards missing from a partial snapshot', () => {
+    // The live editor's widget snapshot can be transiently incomplete (e.g.
+    // right after a remote re-init). Upserting that partial view must never
+    // drop the cards it happens to omit — that was the data-loss bug.
+    const doc = new Y.Doc();
+    writeBoardToYDoc(doc, sampleBoard()); // doc has c1, c2
+    upsertBoardIntoYDoc(doc, {
+      columns: [],
+      cards: [{ id: 'c1', label: 'First (edited)', column: 'todo', order: 0 }]
+    });
+    const ids = readBoardFromYDoc(doc)
+      .cards.map((c) => c.id)
+      .sort();
+    // c2 survives even though the snapshot omitted it.
+    expect(ids).toEqual(['c1', 'c2']);
+    expect(readBoardFromYDoc(doc).cards.find((c) => c.id === 'c1')?.label).toBe(
+      'First (edited)'
+    );
+  });
+
+  it('upsert adds a brand-new card without touching the rest', () => {
+    const doc = new Y.Doc();
+    writeBoardToYDoc(doc, sampleBoard());
+    upsertBoardIntoYDoc(doc, {
+      columns: [],
+      cards: [{ id: 'c3', label: 'Third', column: 'todo', order: 2 }]
+    });
+    expect(
+      readBoardFromYDoc(doc)
+        .cards.map((c) => c.id)
+        .sort()
+    ).toEqual(['c1', 'c2', 'c3']);
+  });
+
+  it('removeCardFromYDoc deletes exactly one card by id', () => {
+    const doc = new Y.Doc();
+    writeBoardToYDoc(doc, sampleBoard());
+    removeCardFromYDoc(doc, 'c1');
+    expect(readBoardFromYDoc(doc).cards.map((c) => c.id)).toEqual(['c2']);
+    // Removing an unknown id is a harmless no-op.
+    removeCardFromYDoc(doc, 'nope');
+    expect(readBoardFromYDoc(doc).cards.map((c) => c.id)).toEqual(['c2']);
   });
 });
 

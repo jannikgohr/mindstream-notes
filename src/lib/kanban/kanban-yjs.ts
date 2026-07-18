@@ -201,22 +201,66 @@ function indexById(arr: Y.Array<Y.Map<unknown>>): Map<string, Y.Map<unknown>> {
 
 /**
  * Reconcile the whole board into the Y.Doc: upsert changed fields on existing
- * items (matched by id), append new items, drop removed ones, and rewrite the
- * `order` fields from array position. All inside one transaction tagged
- * `origin` so the observer can tell local writes from remote ones.
+ * items (matched by id), append new items, and rewrite `order`. When
+ * `prune` is true (the default) it also DROPS doc items not present in `board`
+ * — a full replace, used for the default-board seed, a history-snapshot
+ * restore, and tests.
+ *
+ * The live editor must NOT prune. Pruning deletes any card the passed board
+ * omits, and the widget snapshot can be transiently incomplete (e.g. right
+ * after the widget re-inits from a remote merge, before an in-flight local
+ * action is folded in). A prune in that window would delete real cards from the
+ * doc and autosave the loss. The live path uses {@link upsertBoardIntoYDoc}
+ * (additive) plus {@link removeCardFromYDoc} for explicit deletes instead, so a
+ * card only ever leaves the doc on a genuine user delete.
  */
 export function writeBoardToYDoc(
   doc: Y.Doc,
   board: KanbanBoard,
-  origin: unknown = KANBAN_LOCAL_ORIGIN
+  origin: unknown = KANBAN_LOCAL_ORIGIN,
+  prune = true
 ): void {
   doc.transact(() => {
-    reconcileColumns(doc, board.columns);
-    reconcileCards(doc, board.cards);
+    reconcileColumns(doc, board.columns, prune);
+    reconcileCards(doc, board.cards, prune);
   }, origin);
 }
 
-function reconcileColumns(doc: Y.Doc, columns: KanbanColumnData[]): void {
+/**
+ * Additive board write for the live editor: upsert every column/card the widget
+ * currently has, never delete. Safe to call with a partial/stale snapshot — the
+ * worst case is a field update lands one action late, never data loss.
+ */
+export function upsertBoardIntoYDoc(
+  doc: Y.Doc,
+  board: KanbanBoard,
+  origin: unknown = KANBAN_LOCAL_ORIGIN
+): void {
+  writeBoardToYDoc(doc, board, origin, false);
+}
+
+/** Remove a single card by id — the only way the live editor deletes a card. */
+export function removeCardFromYDoc(
+  doc: Y.Doc,
+  id: string,
+  origin: unknown = KANBAN_LOCAL_ORIGIN
+): void {
+  const arr = cardsArray(doc);
+  doc.transact(() => {
+    for (let i = arr.length - 1; i >= 0; i--) {
+      if (arr.get(i).get('id') === id) {
+        arr.delete(i, 1);
+        break;
+      }
+    }
+  }, origin);
+}
+
+function reconcileColumns(
+  doc: Y.Doc,
+  columns: KanbanColumnData[],
+  prune: boolean
+): void {
   const arr = columnsArray(doc);
   const existing = indexById(arr);
   const desiredIds = new Set(columns.map((c) => c.id));
@@ -237,6 +281,7 @@ function reconcileColumns(doc: Y.Doc, columns: KanbanColumnData[]): void {
     }
   }
 
+  if (!prune) return;
   // Delete removed columns, walking back-to-front so indices stay valid.
   for (let i = arr.length - 1; i >= 0; i--) {
     const id = arr.get(i).get('id');
@@ -244,7 +289,11 @@ function reconcileColumns(doc: Y.Doc, columns: KanbanColumnData[]): void {
   }
 }
 
-function reconcileCards(doc: Y.Doc, cards: KanbanCardData[]): void {
+function reconcileCards(
+  doc: Y.Doc,
+  cards: KanbanCardData[],
+  prune: boolean
+): void {
   const arr = cardsArray(doc);
   const existing = indexById(arr);
   const desiredIds = new Set(cards.map((c) => c.id));
@@ -267,6 +316,7 @@ function reconcileCards(doc: Y.Doc, cards: KanbanCardData[]): void {
     }
   }
 
+  if (!prune) return;
   for (let i = arr.length - 1; i >= 0; i--) {
     const id = arr.get(i).get('id');
     if (typeof id === 'string' && !desiredIds.has(id)) arr.delete(i, 1);
