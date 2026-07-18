@@ -20,7 +20,8 @@
   import {
     CUSTOM_COMPONENT_LOADERS,
     INFO_VALUES,
-    SETTING_ACTIONS
+    SETTING_ACTIONS,
+    SETTING_OPTION_FILTERS
   } from './registry.svelte';
   import { tDescription, tLabel, tUi, tValue } from './i18n.svelte';
   import SettingSelect from './SettingSelect.svelte';
@@ -46,6 +47,25 @@
   const value = $derived(getSettingValue(setting.id));
   const modified = $derived(isModified(setting.id));
   const pending = $derived(isPending(setting.id));
+
+  /**
+   * The choices to render for a select/radio/multi-select, minus any the
+   * feature has withheld for the current runtime state (see
+   * SETTING_OPTION_FILTERS). `$derived` so a predicate reading reactive state
+   * — e.g. viewport width gating the editor's Split mode — re-renders the row
+   * when that changes.
+   *
+   * A withheld option that is nonetheless the stored value stays stored and
+   * simply renders unselected: the filter governs what you can PICK here, not
+   * what the setting is. That matters for vault-scoped settings, where
+   * silently rewriting the value would clobber the choice on another device.
+   */
+  const visibleOptions = $derived.by<string[]>(() => {
+    const opts = (setting as SelectSetting).options;
+    if (!Array.isArray(opts)) return [];
+    const filter = SETTING_OPTION_FILTERS[setting.id];
+    return filter ? opts.filter(filter) : opts;
+  });
 
   /** Lock the server-type radio while a session is live. Changing the
    *  server type out from under an authenticated session would put the
@@ -144,7 +164,7 @@
     {#if setting.type === 'radio'}
       {@const s = setting as SelectSetting}
       <div class="mt-2 flex flex-wrap gap-1.5">
-        {#each s.options as opt (opt)}
+        {#each visibleOptions as opt (opt)}
           <!--
             No tooltip here: a tooltip would only ever be wanted while the
             button is disabled (lockedBySession), but disabled controls
@@ -172,7 +192,7 @@
     {:else if setting.type === 'multi-select'}
       {@const s = setting as MultiSelectSetting}
       <div class="mt-2 flex flex-wrap gap-1.5">
-        {#each s.options as opt (opt)}
+        {#each visibleOptions as opt (opt)}
           {@const arr = (
             Array.isArray(value) ? (value as string[]) : []
           ) as string[]}
@@ -298,7 +318,7 @@
       <SettingSelect
         settingId={s.id}
         value={(value as string | undefined) ?? ''}
-        options={s.options}
+        options={visibleOptions}
         onChange={commit}
         ariaLabel={label}
       />

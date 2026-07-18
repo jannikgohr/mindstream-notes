@@ -1,7 +1,13 @@
 <script lang="ts">
   import { onDestroy, onMount, tick } from 'svelte';
   import { Crepe } from '@milkdown/crepe';
-  import { editorViewCtx, serializerCtx } from '@milkdown/kit/core';
+  import {
+    editorViewCtx,
+    serializerCtx,
+    schemaCtx,
+    parserCtx,
+    getDoc
+  } from '@milkdown/kit/core';
   import { collabServiceCtx } from '@milkdown/plugin-collab';
   import * as Y from 'yjs';
   import { Awareness } from 'y-protocols/awareness';
@@ -42,6 +48,7 @@
   } from '$lib/assets/bridge';
   import { listen } from '$lib/api/events';
   import { buildCrepe } from '$lib/editor/crepe-setup';
+  import { minimalDocDiff } from '$lib/editor/doc-diff';
   import { seedDeterministicTemplate } from '$lib/editor/seed-template';
   import { ensureDropIndicatorAlignment } from '$lib/editor/drop-indicator-align';
   import { otherPeerCount } from '$lib/editor/awareness-presence';
@@ -55,6 +62,21 @@
     type MentionUser
   } from '$lib/editor/plugins';
   import { MARKDOWN_ACTIONS } from '$lib/hotkeys/markdown-actions';
+  import SourceEditor from '$lib/editor/source/SourceEditor.svelte';
+  import EditorModeToggle from '$lib/editor/source/EditorModeToggle.svelte';
+  import { SOURCE_ACTIONS } from '$lib/editor/source/source-actions';
+  import {
+    coerceViewMode,
+    nextViewMode,
+    type EditorViewMode
+  } from '$lib/editor/source/view-mode';
+  import { splitAvailable } from '$lib/editor/source/split-available.svelte';
+  import {
+    blockLineStarts,
+    computeSourcePresence
+  } from '$lib/editor/source/source-presence';
+  import type { PeerPresence } from '$lib/editor/source/source-presence-extension';
+  import type { EditorView as CmEditorView } from '@codemirror/view';
   import {
     registerEditor,
     unregisterEditor,
@@ -113,6 +135,10 @@
   const userMentionsEnabled = $derived(
     (getSettingValue('editor.userMentions') as boolean | undefined) ?? true
   );
+  const sourceTabSize = $derived.by(() => {
+    const v = Number(getSettingValue('editor.tabSize'));
+    return Number.isFinite(v) && v > 0 ? Math.min(8, v) : 2;
+  });
 
   // Per-editor bridge between the wikilink trigger plugin and the
   // WikilinkMenu popup. Created up-front (cheap; just a $state object)
@@ -126,6 +152,17 @@
   // this note" — is resolved asynchronously below and written to
   // `userMentionBridge.state.users`.
   const userMentionBridge = createUserMentionBridge();
+
+  // The same two bridges again, for the SOURCE pane's copies of those plugins.
+  //
+  // Per-surface rather than shared because a bridge holds exactly ONE set of
+  // commit handlers, wired by whichever plugin attached last — and in Split
+  // mode both editors are live at once, so a shared bridge would let the
+  // source pane's plugin steal the WYSIWYG pane's commits (or vice versa).
+  // Two bridges keeps each pane's menu wired to the pane it belongs to; only
+  // the focused surface ever opens one, so the user still sees a single menu.
+  const sourceWikilinkBridge = createWikilinkBridge();
+  const sourceUserMentionBridge = createUserMentionBridge();
 
   // Per-editor find & replace bridge. The search prose plugin (registered
   // in crepe-setup) reports match counts through `searchBridge.state`; the
@@ -155,6 +192,41 @@
   // horizontal padding on small screens. Resolved in onMount because
   // isMobile() reads navigator.userAgent — unavailable during SSR.
   let mobile = $state(false);
+  // --- View mode (WYSIWYG / Source / Split) ---------------------------------
+  // Seeded from the editor.defaultMode setting in onMount. All three modes are
+  // available on every platform; only Split carries a constraint, and it's a
+  // viewport-width one rather than a mobile one (see view-mode.ts). Crepe stays
+  // mounted as the Yjs authority in every mode; the source editor is a
+  // CodeMirror reflection kept in sync below.
+  let viewMode = $state<EditorViewMode>('wysiwyg');
+  // Which surface last had focus — drives toolbar/hotkey routing (WYSIWYG runs
+  // ProseMirror commands, Source runs markdown text transforms). In Split it
+  // tracks the pane the user last interacted with.
+  let activeSurface = $state<'wysiwyg' | 'source'>('wysiwyg');
+  // Wrapper around BOTH panes, registered as the command-bus listener host so
+  // the hotkey manager treats the source editor's contenteditable as part of
+  // this editor (otherwise its keystrokes would be filtered as blocked input).
+  let editorRegionEl: HTMLDivElement | null = $state(null);
+  // Imperative handle to the source editor (null unless the source pane is up).
+  let sourceEditor = $state<{
+    setText: (text: string) => void;
+    setPresence: (presence: PeerPresence[]) => void;
+    flush: () => void;
+    focus: () => void;
+    getView: () => CmEditorView | null;
+  } | null>(null);
+  let sourceSyncTimer: ReturnType<typeof setTimeout> | null = null;
+  // Tracks the previous active surface so we can detect a source→WYSIWYG
+  // hand-off and reconcile the source view to the canonical document then.
+  let prevActiveSurface: 'wysiwyg' | 'source' = 'wysiwyg';
+  // --- Source presence (Phase 2) --------------------------------------------
+  // Peers' cursors are decoded to source lines and pushed into the source
+  // editor. The block→line table is cached against the PM doc identity so
+  // awareness-only changes (peers moving) don't re-serialize the whole doc.
+  let presenceTimer: ReturnType<typeof setTimeout> | null = null;
+  let presenceCacheDoc: unknown = null;
+  let presenceLineStarts: number[] = [];
+  let awarenessChangeHandler: (() => void) | null = null;
   let yDoc: Y.Doc | null = null;
   let awareness: Awareness | null = null;
   let provider: CollabProvider | null = null;
@@ -305,10 +377,18 @@
     return null;
   }
 
+  /** Candidates are a property of the note, not of a surface — both panes'
+   *  mention menus offer the same people, so every resolution path feeds both
+   *  bridges. */
+  function setMentionCandidates(users: MentionUser[]) {
+    userMentionBridge.state.users = users;
+    sourceUserMentionBridge.state.users = users;
+  }
+
   // Resolve "who can view this note" for the mention dropdown: yourself, plus —
   // when the note lives in a shared scope — the scope's owner and members. The
   // share state is an async backend call, so we write the result into the
-  // bridge and (once resolved) nudge the decoration plugin to re-evaluate the
+  // bridges and (once resolved) nudge the decoration plugin to re-evaluate the
   // "self" highlight on any mentions that rendered before the session/list was
   // known. Reads authSession + tree so it re-runs on sign-in/out and moves.
   $effect(() => {
@@ -322,7 +402,7 @@
       : null;
 
     if (!scopeId) {
-      userMentionBridge.state.users = selfOnly;
+      setMentionCandidates(selfOnly);
       return;
     }
 
@@ -351,7 +431,7 @@
         add(share.shared_owner, null);
         for (const member of share.members)
           add(member.username, member.access_level);
-        userMentionBridge.state.users = users;
+        setMentionCandidates(users);
         if (crepe) {
           try {
             crepe.editor.action((ctx) =>
@@ -363,7 +443,7 @@
         }
       })
       .catch(() => {
-        if (!cancelled) userMentionBridge.state.users = selfOnly;
+        if (!cancelled) setMentionCandidates(selfOnly);
       });
     return () => {
       cancelled = true;
@@ -374,6 +454,11 @@
     if (!host) return;
     try {
       mobile = isMobile();
+      viewMode = coerceViewMode(
+        getSettingValue('editor.defaultMode'),
+        splitAvailable()
+      );
+      activeSurface = 'wysiwyg';
       const note = await loadNote(noteId);
       if (!host) return; // unmounted while awaiting
 
@@ -476,7 +561,7 @@
         const activeCrepe = crepe;
         editorListener = {
           kind: 'markdown',
-          host,
+          host: editorRegionEl ?? host,
           noteId,
           onCommand: (id: string) => {
             // Editor-agnostic "find in this note" broadcast — open the
@@ -485,6 +570,30 @@
             if (id === SEARCH_ACTIVE_NOTE_COMMAND) {
               openSearch();
               return true;
+            }
+            // Cycle the editor surface. Handled before the source branch so it
+            // works from either pane.
+            if (id === 'editor.markdown.cycleViewMode') {
+              cycleViewMode();
+              return true;
+            }
+            // Source surface active → run the markdown *text* transform on the
+            // CodeMirror view instead of the ProseMirror command. The same
+            // command ids drive both surfaces (see SOURCE_ACTIONS), so the
+            // shared toolbar and hotkeys "just work" against the raw source.
+            if (activeSurface === 'source') {
+              const view = sourceEditor?.getView() ?? null;
+              const srcAction = view ? SOURCE_ACTIONS[id] : undefined;
+              if (view && srcAction) {
+                try {
+                  srcAction(view);
+                  return true;
+                } catch (err) {
+                  console.error('[NoteEditor] source command threw', id, err);
+                  return false;
+                }
+              }
+              return false;
             }
             const action = MARKDOWN_ACTIONS[id];
             // A missing markdown action for an `editor.markdown.*` id is
@@ -557,9 +666,38 @@
         // different origin and still save, so they persist locally as before.
         if (origin !== REMOTE_SYNC_ORIGIN) scheduleSave();
         scheduleHistoryCapture();
+        // Mirror the doc into the source editor when it's visible — but
+        // ORIGIN-GATED. While the user is editing the source pane, we must not
+        // push our OWN edit's normalized round-trip back over their text
+        // (Milkdown reformats in-progress markdown — e.g. empty list items —
+        // and that would fight the caret). Remote peers' edits (applied by the
+        // CollabProvider or a background-sync merge) ARE still pushed, so the
+        // source stays convergent — which is also what keeps the next
+        // source→doc overwrite from clobbering those remote changes.
+        if (viewMode !== 'wysiwyg') {
+          const isRemote =
+            (provider !== null && origin === provider) ||
+            origin === REMOTE_SYNC_ORIGIN;
+          if (isRemote || activeSurface !== 'source') scheduleSourceSync();
+        }
+        // Positions and the block→line table shift with the doc, so remote
+        // presence markers need re-mapping.
+        scheduleSourcePresence();
       };
       localYDoc.on('update', yDocUpdateHandler);
       saveReady = true;
+      // If the note opened directly in Source/Split, the source editor mounted
+      // before Crepe bound (getMarkdown was null then) — seed it now.
+      if (viewMode !== 'wysiwyg' && sourceEditor && getMarkdown) {
+        sourceEditor.setText(getMarkdown());
+      }
+
+      // Refresh source presence whenever a peer's cursor moves / they join or
+      // leave. The refresh self-gates on the active surface and clears markers
+      // when the source pane isn't in use.
+      awarenessChangeHandler = () => scheduleSourcePresence();
+      localAwareness.on('change', awarenessChangeHandler);
+      scheduleSourcePresence();
 
       // Live collab is opt-in: a relay URL must be configured AND the
       // user has to have a live etebase session AND the note has to
@@ -611,7 +749,7 @@
       // Expose restore + current-markdown to the History sidebar section,
       // which can't reach the live editor (and its Yjs doc) by props.
       unregisterHistory = registerNoteHistory(noteId, {
-        restoreSnapshot: (markdown) => applyMarkdownTemplate(markdown),
+        restoreSnapshot: (markdown) => applyMarkdown(markdown),
         currentSnapshot: () => (getMarkdown ? getMarkdown() : ''),
         snapshotNow: () => snapshotHistoryNow(),
         peerCount: () => otherPeerCount(awareness),
@@ -819,15 +957,22 @@
    * in or it unmounts.
    */
   $effect(() => {
-    if (!host || !editorListener) return;
+    if (!editorRegionEl || !editorListener) return;
+    const region = editorRegionEl;
     const listener = editorListener;
-    const onFocusIn = () => {
+    const onFocusIn = (e: FocusEvent) => {
       // registerEditor is the "re-promote" path too: if the listener
       // is already registered it gets moved to the top of the stack.
       registerEditor(listener);
+      // Track which pane the user is in so the shared toolbar and hotkeys
+      // target it. The region wraps both panes; anything inside the Crepe
+      // host is the WYSIWYG surface, everything else is the source editor.
+      const target = e.target as Node | null;
+      activeSurface =
+        host && target && host.contains(target) ? 'wysiwyg' : 'source';
     };
-    host.addEventListener('focusin', onFocusIn);
-    return () => host?.removeEventListener('focusin', onFocusIn);
+    region.addEventListener('focusin', onFocusIn);
+    return () => region.removeEventListener('focusin', onFocusIn);
   });
 
   onDestroy(() => {
@@ -846,6 +991,19 @@
       historyTimer = null;
     }
     if (historyDirty) void captureHistoryVersion('edited');
+    if (sourceSyncTimer) {
+      clearTimeout(sourceSyncTimer);
+      sourceSyncTimer = null;
+    }
+    if (presenceTimer) {
+      clearTimeout(presenceTimer);
+      presenceTimer = null;
+    }
+    if (awareness && awarenessChangeHandler) {
+      awareness.off('change', awarenessChangeHandler);
+    }
+    awarenessChangeHandler = null;
+    presenceCacheDoc = null;
     unregisterHistory?.();
     unregisterHistory = null;
     if (editorListener) {
@@ -915,21 +1073,180 @@
     crepe.setReadonly(isReadOnly);
   });
 
+  // The viewport shrank under an open Split pane (window resized, tablet
+  // rotated to portrait). Fall back to the pane the user was last in, so their
+  // work stays in front of them instead of jumping to the other surface. Only
+  // the live view mode changes — `editor.defaultMode` is vault-scoped and
+  // writing to it here would clobber the preference on the user's other
+  // devices.
+  $effect(() => {
+    if (viewMode === 'split' && !splitAvailable()) {
+      selectViewMode(activeSurface);
+    }
+  });
+
+  // React to the active surface / view mode changing.
+  $effect(() => {
+    const surface = activeSurface;
+    const mode = viewMode;
+    void crepeReady;
+    // Source → WYSIWYG hand-off (Split): reconcile the source view to the
+    // canonical document now. Per the "only overwrite source on WYSIWYG
+    // interaction / close" rule, we don't overwrite the source pane while it's
+    // the active surface; leaving it is when we resync. Flush any pending
+    // source edit first so trailing keystrokes reach the doc before we
+    // re-serialize it back.
+    if (
+      mode === 'split' &&
+      surface === 'wysiwyg' &&
+      prevActiveSurface === 'source'
+    ) {
+      sourceEditor?.flush();
+      scheduleSourceSync();
+    }
+    prevActiveSurface = surface;
+    // Only the surface being used renders peer markers.
+    scheduleSourcePresence();
+  });
+
   /**
-   * Apply `markdown` to the live document as collaborative edits. The collab
-   * service diffs the current doc against the template and emits y-prosemirror
-   * ops (the `() => true` condition forces the apply even on a non-empty doc).
-   * Those ops trigger the normal save + broadcast path, so a restore converges
-   * across devices like any other edit. Used by the History sidebar's Restore.
+   * Apply `markdown` to the live document as collaborative edits, touching only
+   * what actually changed.
+   *
+   * Deliberately NOT `collabService.applyTemplate`: that deletes the entire
+   * XmlFragment and merges a freshly-built throwaway Y.Doc, so every call
+   * tombstones the whole document and appends a complete new copy. The source
+   * editor calls this on every debounce tick, which would balloon the
+   * append-only `yrs_state` (and the bytes we broadcast) by a full copy per
+   * keystroke, and would wipe any concurrent peer edit. `minimalDocDiff` gives
+   * us one small step instead, which y-prosemirror turns into Yjs ops
+   * proportional to the real edit — and an unchanged document produces NO
+   * transaction at all, so a no-op sync costs nothing.
+   *
+   * The resulting ops still ride the normal save + broadcast path, so History's
+   * Restore converges across devices like any other edit.
    */
-  function applyMarkdownTemplate(markdown: string) {
+  function applyMarkdown(markdown: string) {
     if (!crepe || isReadOnly) return;
     try {
       crepe.editor.action((ctx) => {
-        ctx.get(collabServiceCtx).applyTemplate(markdown, () => true);
+        const view = ctx.get(editorViewCtx);
+        const next = getDoc(markdown, ctx.get(parserCtx), ctx.get(schemaCtx));
+        if (!next) return;
+        const diff = minimalDocDiff(view.state.doc, next);
+        if (!diff) return; // identical → emit nothing
+        view.dispatch(view.state.tr.replace(diff.from, diff.to, diff.slice));
       });
     } catch (err) {
-      console.error('[NoteEditor] applyTemplate (restore) failed', err);
+      console.error('[NoteEditor] applyMarkdown failed', err);
+    }
+  }
+
+  /**
+   * Switch this note's editor surface. WYSIWYG/Source set the active surface
+   * directly; Split keeps whatever pane was last used. Focus follows the new
+   * surface after the DOM updates.
+   *
+   * On a viewport too narrow for Split the cycle is just WYSIWYG ↔ Source —
+   * `nextViewMode` drops it, so the toggle never lands on a mode the user
+   * can't use.
+   */
+  function cycleViewMode() {
+    selectViewMode(nextViewMode(viewMode, splitAvailable()));
+  }
+
+  function selectViewMode(mode: EditorViewMode) {
+    if (mode === viewMode) return;
+    viewMode = mode;
+    if (mode === 'wysiwyg') activeSurface = 'wysiwyg';
+    else if (mode === 'source') activeSurface = 'source';
+    void tick().then(() => {
+      if (mode === 'wysiwyg') focusEditorView();
+      else if (mode === 'source') sourceEditor?.focus();
+      // Split: leave focus where the user put it.
+    });
+  }
+
+  /**
+   * A genuine edit in the raw-source editor. Feed it into the live doc through
+   * the same collab applyTemplate path history-restore uses. The doc update this
+   * triggers is local-origin, so the origin gate in yDocUpdateHandler skips the
+   * echo back into the source editor (it would fight the caret) while still
+   * echoing remote peers' edits.
+   */
+  function handleSourceInput(markdown: string) {
+    if (isReadOnly) return;
+    applyMarkdown(markdown);
+  }
+
+  /** Debounced doc → source refresh: serialize the live doc and push it into
+   *  the source editor (a no-op when the text is unchanged). */
+  function scheduleSourceSync() {
+    if (sourceSyncTimer) clearTimeout(sourceSyncTimer);
+    sourceSyncTimer = setTimeout(() => {
+      sourceSyncTimer = null;
+      if (getMarkdown && sourceEditor) sourceEditor.setText(getMarkdown());
+    }, 120);
+  }
+
+  /** Coalesced trigger for a source-presence refresh — awareness 'change'
+   *  events can fire rapidly while peers type. */
+  function scheduleSourcePresence() {
+    if (presenceTimer) return;
+    presenceTimer = setTimeout(() => {
+      presenceTimer = null;
+      refreshSourcePresence();
+    }, 80);
+  }
+
+  /**
+   * Decode peers' cursors to source lines and push them into the source editor.
+   * Only the active source surface shows markers (per the one-side-at-a-time
+   * decision); every other state clears them. The block→line table is rebuilt
+   * only when the ProseMirror doc identity changes.
+   */
+  function refreshSourcePresence() {
+    const editor = sourceEditor;
+    if (!editor) return;
+    if (
+      !crepe ||
+      viewMode === 'wysiwyg' ||
+      activeSurface !== 'source' ||
+      !awareness
+    ) {
+      editor.setPresence([]);
+      return;
+    }
+    const aware = awareness;
+    try {
+      crepe.editor.action((ctx) => {
+        const view = ctx.get(editorViewCtx);
+        if (view.state.doc !== presenceCacheDoc) {
+          const serializer = ctx.get(serializerCtx);
+          const schema = ctx.get(schemaCtx);
+          const blocks: string[] = [];
+          view.state.doc.forEach((block) => {
+            try {
+              // Trim the serializer's trailing newline so each block's line
+              // count reflects only its own content (blockLineStarts adds the
+              // blank separator between blocks itself).
+              const md = serializer(
+                schema.topNodeType.create(null, block)
+              ).replace(/\n+$/, '');
+              blocks.push(md);
+            } catch {
+              blocks.push('');
+            }
+          });
+          presenceLineStarts = blockLineStarts(blocks);
+          presenceCacheDoc = view.state.doc;
+        }
+        editor.setPresence(
+          computeSourcePresence(view, aware, presenceLineStarts)
+        );
+      });
+    } catch (err) {
+      console.debug('[NoteEditor] source presence refresh failed', err);
     }
   }
 
@@ -1163,6 +1480,15 @@
   );
   const showMobileToolbar = $derived(mobile && crepeReady && !isReadOnly);
 
+  // The editor header (mode toggle + optional desktop toolbar) shows whenever
+  // the editor is interactive — including read-only notes, where the toggle
+  // still lets you view the raw source.
+  //
+  // Mobile gets it too, holding the mode toggle alone: formatting there lives
+  // in the floating pill, but the pill is hidden on read-only notes and is
+  // already crowded, so the toggle belongs in the header on both platforms.
+  const showEditorHeader = $derived(crepeReady);
+
   // Mirror our reactive status into the global per-note store so the
   // dockview right-header (NoteStatusIcons.svelte) can render the
   // icons next to the popout button. Re-runs whenever any of the
@@ -1180,13 +1506,23 @@
 </script>
 
 <div class="flex h-full w-full flex-col">
-  {#if showDesktopToolbar}
-    <EditorToolbar
-      {crepe}
-      menuPlacement="bottom"
-      dense
-      class="border-b border-border bg-background"
-    />
+  {#if showEditorHeader}
+    <div
+      class="flex items-center gap-1 border-b border-border bg-background pr-1"
+    >
+      <div class="min-w-0 flex-1">
+        {#if showDesktopToolbar}
+          <EditorToolbar
+            {crepe}
+            {activeSurface}
+            menuPlacement="bottom"
+            dense
+            class="bg-background"
+          />
+        {/if}
+      </div>
+      <EditorModeToggle value={viewMode} onCycle={cycleViewMode} />
+    </div>
   {/if}
   {#if isTrashed}
     <TrashBanner />
@@ -1231,25 +1567,74 @@
     especially on mobile where focused content can tempt the webview to
     scroll the document body to "fix" it.
   -->
-  <div class="themed-scrollbar relative min-h-0 w-full flex-1 overflow-y-auto">
+  <div
+    bind:this={editorRegionEl}
+    class="relative min-h-0 w-full flex-1 overflow-hidden"
+    class:source-surface-active={activeSurface === 'source' &&
+      viewMode !== 'wysiwyg'}
+  >
     {#if loading}
-      <p class="px-6 py-4 text-sm text-muted-foreground">Loading note…</p>
+      <p
+        class="absolute left-0 top-0 z-10 px-6 py-4 text-sm text-muted-foreground"
+      >
+        Loading note…
+      </p>
     {:else if loadError}
-      <p class="px-6 py-4 text-sm text-destructive">
+      <p class="absolute left-0 top-0 z-10 px-6 py-4 text-sm text-destructive">
         Couldn't load note: {loadError}
       </p>
     {/if}
-    <div
-      bind:this={host}
-      class="mx-auto max-w-3xl"
-      class:mobile-editor={mobile}
-      class:wikilink-open-on-click={wikilinkOpenOnClick}
-    ></div>
+    <div class="flex h-full w-full">
+      <!--
+        Source pane: raw-markdown CodeMirror mirror of the same doc. On the
+        LEFT in Split (convention: source left, rendered right).
+      -->
+      {#if viewMode !== 'wysiwyg'}
+        <div
+          class="h-full overflow-hidden {viewMode === 'split'
+            ? 'w-1/2 border-r border-border'
+            : 'w-full'}"
+        >
+          <SourceEditor
+            bind:this={sourceEditor}
+            getInitialText={() => (getMarkdown ? getMarkdown() : '')}
+            readonly={isReadOnly}
+            tabSize={sourceTabSize}
+            onInput={handleSourceInput}
+            {autoPairEnabled}
+            {wikilinksEnabled}
+            wikilinkBridge={sourceWikilinkBridge}
+            {userMentionsEnabled}
+            userMentionBridge={sourceUserMentionBridge}
+          />
+        </div>
+      {/if}
+      <!--
+        WYSIWYG pane: always mounted — Crepe is the Yjs authority in every mode.
+        Hidden in Source-only mode, half-width (right) in Split.
+      -->
+      <div
+        class="themed-scrollbar h-full overflow-y-auto {viewMode === 'source'
+          ? 'hidden'
+          : ''} {viewMode === 'split' ? 'w-1/2' : 'w-full'}"
+      >
+        <div
+          bind:this={host}
+          class="mx-auto max-w-3xl"
+          class:mobile-editor={mobile}
+          class:wikilink-open-on-click={wikilinkOpenOnClick}
+        ></div>
+      </div>
+    </div>
   </div>
 </div>
 
 {#if showMobileToolbar}
-  <MobileEditorToolbar {crepe} />
+  <!-- activeSurface routes the buttons to the surface the user is actually in:
+       in Source the same command ids run the markdown text transforms via the
+       bus. Without it the pill would run ProseMirror commands against the
+       hidden WYSIWYG doc while the user edits raw markdown. -->
+  <MobileEditorToolbar {crepe} {activeSurface} />
 {/if}
 
 <!--
@@ -1267,3 +1652,13 @@
   likewise gated by `bridge.state.open` so it costs ~0 when mentions are off.
 -->
 <UserMentionMenu bridge={userMentionBridge} />
+
+<!--
+  The same two popups again for the Source pane, on its own bridges (see the
+  `sourceWikilinkBridge` declaration for why the surfaces can't share one).
+  Only the focused pane's plugin ever opens its menu, so even in Split — where
+  all four of these are mounted — the user sees at most one at a time. Each
+  costs ~0 while closed, same as the WYSIWYG pair.
+-->
+<WikilinkMenu bridge={sourceWikilinkBridge} />
+<UserMentionMenu bridge={sourceUserMentionBridge} />

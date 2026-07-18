@@ -25,6 +25,7 @@ import {
   setStartInTray
 } from '$lib/api/desktop-settings';
 import { isTauri } from '$lib/api/core';
+import { splitAvailable } from '$lib/editor/source/split-available.svelte';
 import { getPlatform, isMobile } from '$lib/platform';
 import {
   setLeftSidebarWidth,
@@ -242,4 +243,29 @@ export const INFO_VALUES: Record<string, () => string> = {
   // here (rather than as a hardcoded string in the schema) so the
   // text routes through tUi and stays translatable.
   'account.managedUnavailable': () => tUi('account.managedUnavailable')
+};
+
+/**
+ * Per-option availability for select/radio settings whose choices depend on
+ * runtime state the schema can't express.
+ *
+ * The schema's `platforms` filter is per-SETTING — it hides the whole control —
+ * and these predicates are the per-OPTION equivalent. Kept as a side-table for
+ * the same reason the bindings are: the rule belongs to the feature, not to the
+ * settings dialog, and `SettingControl` stays generic instead of accumulating
+ * `if (setting.id === …)` branches.
+ *
+ * Predicates are evaluated during render, so any reactive state they read is
+ * tracked — an option can appear and disappear live.
+ */
+export const SETTING_OPTION_FILTERS: Record<
+  string,
+  (option: string) => boolean
+> = {
+  // Split needs the width for two side-by-side panes; below the threshold it
+  // isn't offered at all. Deliberately hides the option WITHOUT rewriting a
+  // stored `split` — the setting is vault-scoped, so a value chosen on a
+  // desktop rides along to the phone and must survive the trip. NoteEditor
+  // coerces at the point of use instead.
+  'editor.defaultMode': (option) => option !== 'split' || splitAvailable()
 };

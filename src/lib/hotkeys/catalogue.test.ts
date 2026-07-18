@@ -41,9 +41,16 @@ describe('catalogue consistency', () => {
     // Forgotten MARKDOWN_ACTIONS entries become `[NoteEditor] unknown
     // markdown command id` warnings at first press, which is exactly
     // when the user notices. Surface it before merge instead.
+    //
+    // Exempt: view/UI commands that NoteEditor.onCommand handles directly
+    // (they mutate component state, not the ProseMirror doc, so they have no
+    // MARKDOWN_ACTIONS ctx-action — and onCommand catches them before the
+    // MARKDOWN_ACTIONS lookup, so they never hit the unknown-command warning).
+    const editorHandledIds = new Set(['editor.markdown.cycleViewMode']);
     const missing: string[] = [];
     for (const cmd of HOTKEY_COMMANDS) {
       if (cmd.scope !== 'editor' || cmd.editorKind !== 'markdown') continue;
+      if (editorHandledIds.has(cmd.id)) continue;
       if (!(cmd.id in MARKDOWN_ACTIONS)) missing.push(cmd.id);
     }
     expect(missing).toEqual([]);

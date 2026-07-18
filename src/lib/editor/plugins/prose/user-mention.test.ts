@@ -16,7 +16,7 @@ import {
   userMentionDecorationPlugin,
   userMentionPlugins
 } from './user-mention';
-import type { UserMentionBridge } from './user-mention-bridge.svelte';
+import type { UserMentionBridge } from '../user-mention-bridge.svelte';
 
 const schema = new Schema({
   nodes: {

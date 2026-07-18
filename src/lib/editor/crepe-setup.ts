@@ -17,6 +17,8 @@
  */
 
 import { Crepe, type CrepeFeature } from '@milkdown/crepe';
+import { remarkStringifyOptionsCtx } from '@milkdown/kit/core';
+import { remarkPreserveEmptyLinePlugin } from '@milkdown/kit/preset/commonmark';
 import { collab } from '@milkdown/plugin-collab';
 // Imported via the kit subpath rather than `@milkdown/plugin-listener`
 // directly — keeps us from declaring a transitive dep that's already
@@ -29,8 +31,10 @@ import {
   autoPair,
   installBlockHandleGuard,
   installSelectionToolbarAutoHide,
+  isEmptyParagraph,
   markdownSearchPlugins,
   mermaidLanguageDescription,
+  preserveBlankLines,
   renderMermaidPreview,
   userMentionPlugins,
   wikilinkPlugins,
@@ -173,6 +177,67 @@ export function buildCrepe(opts: CrepeSetupOptions): Crepe {
   // tapping one white-screens the Android WebView — see the helper for the
   // full rationale. Registered before create() builds the schema.
   useNoteLinkHrefNeutralizer(crepe.editor);
+
+  // Serializer style. `getMarkdown()` output feeds the raw Source editor, the
+  // saved note body, history diffs and exports, so a clean, conventional and
+  // STABLE style matters everywhere. Milkdown's defaults are inconsistent
+  // (`*` bullets, tab-indented list continuation) and, worse, it serializes
+  // bullet lists LOOSE — a blank line between every item — while ordered lists
+  // come out tight. We pin a tidy CommonMark style and force tight lists.
+  //
+  // `ctx.update` spreads the previous value so Milkdown's internal `handlers` /
+  // `encode` entries are preserved.
+  crepe.editor.config((ctx) => {
+    ctx.update(remarkStringifyOptionsCtx, (prev) => ({
+      ...prev,
+      bullet: '-' as const,
+      bulletOrdered: '.' as const,
+      listItemIndent: 'one' as const,
+      fences: true,
+      rule: '-' as const,
+      ruleRepetition: 3,
+      ruleSpaces: false,
+      incrementListMarker: true,
+      // `join` decides how many blank lines go between two siblings (a return
+      // of n emits n blank lines; `undefined` = no opinion, use the default 1).
+      join: [
+        (left: unknown, _right: unknown, parent: { type?: string }) => {
+          // Tight lists: 0 blank lines between a list's items, regardless of
+          // the mdast `spread` flag Crepe sets. Only sibling *items* are
+          // affected; blocks nested inside an item (parent `listItem`) fall
+          // through to the default, so a multi-paragraph item still breaks.
+          if (parent?.type === 'list') return 0;
+          // Empty paragraphs are how we carry blank lines (see
+          // plugins/blank-lines.ts). Each one already renders as an empty
+          // string, so the default separator around it would double-count:
+          // suppressing the blank line AFTER one makes k empty paragraphs emit
+          // exactly k + 1 blank lines — the inverse of the parse plugin.
+          if (isEmptyParagraph(left)) return 0;
+          return undefined;
+        }
+      ]
+    }));
+  });
+
+  // Drop Milkdown's "preserve empty line" plugin.
+  //
+  // It round-trips an EMPTY PARAGRAPH through markdown by serializing it to a
+  // literal `<br />` (preset-commonmark serializes `content.size === 0` →
+  // `state.addNode('html', …, '<br />')`) and stripping that html node back out
+  // on parse. That hack is invisible while WYSIWYG is the only surface, but it
+  // leaks badly now that the raw markdown is editable:
+  //
+  //   - pressing Enter a few times in WYSIWYG litters the Source pane with
+  //     `<br />` noise that isn't really markdown, and
+  //   - deleting it in Source doesn't stick when a peer is in WYSIWYG: their
+  //     editor re-creates the empty paragraph, which re-emits `<br />` over
+  //     collab, so the line break "comes back" every time it's removed.
+  //
+  // We replace it with `preserveBlankLines` below, which carries the same
+  // information symmetrically in the blank lines themselves (k empty
+  // paragraphs <-> k + 1 blank lines) instead of smuggling HTML into the doc.
+  crepe.editor.remove(remarkPreserveEmptyLinePlugin);
+  crepe.editor.use(preserveBlankLines);
 
   crepe.editor.use(collab);
 

@@ -103,11 +103,21 @@ export default defineConfig({
       '@milkdown/kit/prose/view',
       '@codemirror/language',
       'mermaid',
+      // Raw-markdown Source editor (CodeMirror 6) — reached through the lazy
+      // note editor via editor/source/SourceEditor.svelte, so Vite only
+      // discovers these once a note is opened in Source/Split.
+      '@codemirror/state',
+      '@codemirror/view',
+      '@codemirror/commands',
+      '@codemirror/lang-markdown',
+      '@lezer/highlight',
       // Collab sync — Yjs doc + awareness + transport, plus the ProseMirror
       // binding. y-prosemirror is reached two lazy hops in (the NoteEditor
       // import() → editor/seed-template.ts, and @milkdown/plugin-collab's
       // peer), so without it here the first markdown note a user opens
-      // triggers the re-optimise reload this whole list exists to avoid.
+      // triggers the re-optimise reload this whole list exists to avoid. Its
+      // position mapping is also read directly by editor/source/source-presence.ts
+      // to place peer markers in the Source view.
       'yjs',
       'y-prosemirror',
       'y-protocols/awareness',

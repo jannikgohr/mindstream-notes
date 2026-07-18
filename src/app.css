@@ -635,6 +635,14 @@ body.dv-tab-dragging
   color: var(--foreground);
 }
 
+/* Presence renders only on the surface being used: when the raw-source pane is
+ * the active surface (Split), hide the WYSIWYG peer carets/selections so the two
+ * panes don't both show presence at once. Source-side markers are gated in JS. */
+.source-surface-active .ProseMirror-yjs-cursor,
+.source-surface-active .ProseMirror-yjs-selection {
+  display: none !important;
+}
+
 .milkdown {
   padding: 1.25rem 5px;
 }
