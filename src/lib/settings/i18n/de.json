@@ -645,6 +645,7 @@
     "fab.placeholder.kanbanTitle": "Titel des Kanban-Boards",
     "editor.kanban.linkedNote": "Verknüpfte Notiz",
     "editor.kanban.loading": "Board wird geladen …",
+    "editor.kanban.toolbar": "Kanban-Board-Werkzeugleiste",
     "editor.kanban.untitled": "Ohne Titel",
     "fileTree.newKanban": "Neues Kanban-Board",
     "editor.kanban.newList": "Neue Liste",
