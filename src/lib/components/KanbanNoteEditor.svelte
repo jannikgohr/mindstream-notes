@@ -25,10 +25,11 @@
   import * as Y from 'yjs';
   import { Awareness } from 'y-protocols/awareness';
   import { mode } from 'mode-watcher';
-  import { Plus, Trash2 } from '@lucide/svelte';
+  import { Ellipsis, Pencil, Plus, Trash2 } from '@lucide/svelte';
   import {
     Kanban,
     Editor,
+    ContextMenu as KanbanCardMenu,
     Willow,
     WillowDark,
     getEditorItems,
@@ -51,6 +52,8 @@
   import { getSettingValue } from '$lib/settings/store.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { confirm } from '$lib/components/confirm-dialog.svelte';
+  import AppContextMenu from '$lib/components/ContextMenu.svelte';
+  import type { MenuItem } from '$lib/components/context-menu-types';
   import { CollabProvider } from '$lib/sync/collab-provider';
   import { base64ToBytes } from '$lib/editor/base64';
   import { pickCursorColor } from '$lib/editor/cursor-color';
@@ -171,9 +174,9 @@
     priority: { data: getPriorityOptions() },
     progress: true,
     deadline: true,
-    users: userOptions.length > 0 ? { data: userOptions } : false,
-    // Per-card ⋯ menu: Edit / Duplicate / Delete (handled by SVAR's ContextMenu).
-    menu: true
+    users: userOptions.length > 0 ? { data: userOptions } : false
+    // No `menu` button: the Edit/Duplicate/Delete menu opens on right-click
+    // (see <KanbanCardMenu> + the board's oncontextmenu below).
   });
 
   // getEditorItems drives the card-detail form. Append a "linked note" field —
@@ -308,6 +311,16 @@
   // write straight to the Yjs columns array and then rebuild the widget props
   // (a deliberate structural change, so re-init churn is fine). Column edits
   // upsert additively; a column leaves the doc only via removeColumnFromYDoc.
+  // Right-click card menu (SVAR ContextMenu instance) + list ⋯ menu / inline
+  // rename state. `listMenu` holds the open list's id and the cursor anchor for
+  // the app context menu; `renamingListId` is the list currently showing an
+  // inline rename input.
+  let cardMenu = $state<{
+    show: (ev: Event, id: string | number) => void;
+  } | null>(null);
+  let listMenu = $state<{ id: string; x: number; y: number } | null>(null);
+  let renamingListId = $state<string | null>(null);
+
   function addColumn(): void {
     if (!yDoc || isTrashed) return;
     const maxOrder = board.columns.reduce((m, c) => Math.max(m, c.order), -1);
@@ -318,6 +331,63 @@
     };
     upsertBoardIntoYDoc(yDoc, { columns: [column], cards: [] });
     board = readBoardFromYDoc(yDoc);
+    // Drop straight into inline rename so the user can name it immediately.
+    renamingListId = column.id;
+  }
+
+  function openListMenu(e: MouseEvent, id: string): void {
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    listMenu = { id, x: rect.left, y: rect.bottom + 4 };
+  }
+
+  function openCardMenu(e: MouseEvent): void {
+    if (!cardMenu || isTrashed) return;
+    const target = e.target instanceof Element ? e.target : null;
+    const cardEl = target?.closest<HTMLElement>('.wx-card[data-id]');
+    const id = cardEl?.dataset.id;
+    if (!id) return;
+    e.preventDefault();
+    e.stopPropagation();
+    cardMenu.show(e, id);
+  }
+
+  const listMenuItems = $derived<(MenuItem | 'separator')[]>(
+    listMenu
+      ? [
+          {
+            label: tUi('editor.kanban.renameList'),
+            icon: Pencil,
+            onSelect: () => startRenameList(listMenu!.id)
+          },
+          {
+            label: tUi('editor.kanban.deleteList'),
+            icon: Trash2,
+            destructive: true,
+            disabled: board.columns.length <= 1,
+            onSelect: () => void removeColumn(listMenu!.id)
+          }
+        ]
+      : []
+  );
+
+  function startRenameList(id: string): void {
+    listMenu = null;
+    renamingListId = id;
+  }
+
+  function commitRenameList(id: string, value: string): void {
+    if (renamingListId === id) renamingListId = null;
+    renameColumn(id, value);
+  }
+
+  function cancelRenameList(): void {
+    renamingListId = null;
+  }
+
+  // Autofocus + select the rename input when it appears (mirrors note rename).
+  function focusRenameInput(node: HTMLInputElement) {
+    node.focus();
+    node.select();
   }
 
   function renameColumn(id: string, label: string): void {
@@ -676,35 +746,52 @@
             <div class="kanban-lists-bar">
               {#each board.columns as col (col.id)}
                 <div class="kanban-list-chip">
-                  <input
-                    class="kanban-list-name"
-                    value={col.label}
-                    aria-label={tUi('editor.kanban.renameList')}
-                    onchange={(e) =>
-                      renameColumn(col.id, e.currentTarget.value)}
-                    onkeydown={(e) => {
-                      if (e.key === 'Enter') e.currentTarget.blur();
-                    }}
-                  />
-                  <button
-                    type="button"
-                    class="kanban-list-remove"
-                    aria-label={tUi('editor.kanban.deleteList')}
-                    title={tUi('editor.kanban.deleteList')}
-                    disabled={board.columns.length <= 1}
-                    onclick={() => void removeColumn(col.id)}
-                  >
-                    <Trash2 class="size-3.5" />
-                  </button>
+                  {#if renamingListId === col.id}
+                    <input
+                      class="kanban-list-name"
+                      value={col.label}
+                      aria-label={tUi('editor.kanban.renameList')}
+                      use:focusRenameInput
+                      onblur={(e) =>
+                        commitRenameList(col.id, e.currentTarget.value)}
+                      onkeydown={(e) => {
+                        if (e.key === 'Enter') e.currentTarget.blur();
+                        else if (e.key === 'Escape') cancelRenameList();
+                      }}
+                    />
+                  {:else}
+                    <span class="kanban-list-label" title={col.label}
+                      >{col.label}</span
+                    >
+                    <button
+                      type="button"
+                      class="kanban-list-menu-btn"
+                      aria-label={tUi('editor.kanban.listMenu')}
+                      title={tUi('editor.kanban.listMenu')}
+                      onclick={(e) => openListMenu(e, col.id)}
+                    >
+                      <Ellipsis class="size-3.5" />
+                    </button>
+                  {/if}
                 </div>
               {/each}
-              <button type="button" class="kanban-list-add" onclick={addColumn}>
-                <Plus class="size-3.5" />
-                {tUi('editor.kanban.addList')}
+              <button
+                type="button"
+                class="kanban-list-add"
+                aria-label={tUi('editor.kanban.addList')}
+                title={tUi('editor.kanban.addList')}
+                onclick={addColumn}
+              >
+                <Plus class="size-4" />
               </button>
             </div>
           {/if}
-          <div class="relative min-h-0 flex-1">
+          <!-- Right-click a card to open the Edit/Duplicate/Delete menu. -->
+          <div
+            class="relative min-h-0 flex-1"
+            role="presentation"
+            oncontextmenu={openCardMenu}
+          >
             <Kanban
               cards={board.cards}
               columns={board.columns}
@@ -716,9 +803,18 @@
               <Editor {api} items={editorItems} />
             {/if}
           </div>
+          <KanbanCardMenu {api} bind:this={cardMenu} />
         </div>
       </ThemeComponent>
     </div>
+    {#if listMenu}
+      <AppContextMenu
+        x={listMenu.x}
+        y={listMenu.y}
+        items={listMenuItems}
+        onClose={() => (listMenu = null)}
+      />
+    {/if}
   {/if}
 </div>
 
@@ -773,15 +869,24 @@
     border: 1px solid var(--border);
     border-radius: 0.375rem;
     background: var(--card);
+    padding-left: 0.5rem;
     padding-right: 0.125rem;
   }
+  .kanban-list-label {
+    max-width: 12rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.75rem;
+    color: var(--foreground);
+  }
   .kanban-list-name {
-    width: 8rem;
+    width: 9rem;
     min-width: 4rem;
     max-width: 12rem;
     border: none;
     background: transparent;
-    padding: 0.25rem 0.5rem;
+    padding: 0.25rem 0.375rem;
     font-size: 0.75rem;
     color: var(--foreground);
     border-radius: 0.375rem;
@@ -790,7 +895,7 @@
     outline: 2px solid var(--ring);
     outline-offset: -1px;
   }
-  .kanban-list-remove {
+  .kanban-list-menu-btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -798,21 +903,15 @@
     border-radius: 0.25rem;
     color: var(--muted-foreground);
   }
-  .kanban-list-remove:hover:not(:disabled) {
+  .kanban-list-menu-btn:hover {
     background: var(--accent);
-    color: var(--destructive);
-  }
-  .kanban-list-remove:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
+    color: var(--foreground);
   }
   .kanban-list-add {
     display: inline-flex;
     align-items: center;
-    gap: 0.25rem;
-    padding: 0.25rem 0.5rem;
-    font-size: 0.75rem;
-    font-weight: 500;
+    justify-content: center;
+    padding: 0.25rem;
     color: var(--muted-foreground);
     border: 1px dashed var(--border);
     border-radius: 0.375rem;
@@ -820,5 +919,45 @@
   .kanban-list-add:hover {
     background: var(--accent);
     color: var(--foreground);
+  }
+
+  /* Match the app's thin themed scrollbars on the SVAR scroll containers
+     (see .themed-scrollbar in app.css) instead of the thick OS default. */
+  :global(.kanban-scope .wx-board),
+  :global(.kanban-scope .wx-scroll-board),
+  :global(.kanban-scope .wx-column-cards),
+  :global(.kanban-scope .wx-scroll) {
+    scrollbar-width: thin;
+    scrollbar-color: oklch(from var(--foreground) l c h / 0.3) transparent;
+  }
+  :global(.kanban-scope .wx-board)::-webkit-scrollbar,
+  :global(.kanban-scope .wx-scroll-board)::-webkit-scrollbar,
+  :global(.kanban-scope .wx-column-cards)::-webkit-scrollbar,
+  :global(.kanban-scope .wx-scroll)::-webkit-scrollbar {
+    width: 12px;
+    height: 12px;
+  }
+  :global(.kanban-scope .wx-board)::-webkit-scrollbar-track,
+  :global(.kanban-scope .wx-scroll-board)::-webkit-scrollbar-track,
+  :global(.kanban-scope .wx-column-cards)::-webkit-scrollbar-track,
+  :global(.kanban-scope .wx-scroll)::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  :global(.kanban-scope .wx-board)::-webkit-scrollbar-thumb,
+  :global(.kanban-scope .wx-scroll-board)::-webkit-scrollbar-thumb,
+  :global(.kanban-scope .wx-column-cards)::-webkit-scrollbar-thumb,
+  :global(.kanban-scope .wx-scroll)::-webkit-scrollbar-thumb {
+    background: oklch(from var(--foreground) l c h / 0.22);
+    background-clip: content-box;
+    border: 3px solid transparent;
+    border-radius: 8px;
+    transition: background-color 120ms;
+  }
+  :global(.kanban-scope .wx-board)::-webkit-scrollbar-thumb:hover,
+  :global(.kanban-scope .wx-scroll-board)::-webkit-scrollbar-thumb:hover,
+  :global(.kanban-scope .wx-column-cards)::-webkit-scrollbar-thumb:hover,
+  :global(.kanban-scope .wx-scroll)::-webkit-scrollbar-thumb:hover {
+    background: oklch(from var(--foreground) l c h / 0.45);
+    background-clip: content-box;
   }
 </style>
