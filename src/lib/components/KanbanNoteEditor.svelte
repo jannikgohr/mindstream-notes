@@ -74,7 +74,9 @@
     isLocalOnly,
     observeBoard,
     readBoardFromYDoc,
+    removeCardFromYDoc,
     seedDefaultBoard,
+    upsertBoardIntoYDoc,
     writeBoardToYDoc,
     type KanbanBoard,
     type KanbanCardData
@@ -246,39 +248,39 @@
     return { columns, cards };
   }
 
-  function reconcile(): void {
+  // Push the widget's current cards/columns into the doc *additively* — this
+  // never deletes, so a transient or stale widget snapshot can't drop a card.
+  // Runs synchronously inside the action handler (the store has already applied
+  // the action by the time our `on` handler fires), so the local edit is in the
+  // doc before any remote merge can rebuild the widget from it — closing the
+  // race that would otherwise wipe an in-flight edit.
+  function syncFromWidget(): void {
     if (!yDoc || !api || isTrashed) return;
-    writeBoardToYDoc(yDoc, boardFromApi(), KANBAN_LOCAL_ORIGIN);
+    upsertBoardIntoYDoc(yDoc, boardFromApi(), KANBAN_LOCAL_ORIGIN);
   }
 
-  // Coalesce the reconcile and defer it to a microtask so the widget's store has
-  // finished applying the action before we read `api.getState()` — independent
-  // of where `on` sits in the event-bus chain relative to the store reducer.
-  let reconcileQueued = false;
-  function scheduleReconcile(): void {
-    if (reconcileQueued) return;
-    reconcileQueued = true;
-    queueMicrotask(() => {
-      reconcileQueued = false;
-      reconcile();
-    });
-  }
-
-  /** Widget actions that mutate persisted board state. */
-  const MUTATING_ACTIONS = [
+  /** Additive edits keep every card; only an explicit delete removes one. */
+  const UPSERT_ACTIONS = [
     'add-card',
     'update-card',
     'move-card',
-    'delete-card',
     'duplicate-card',
     'update-column'
   ] as const;
 
   function handleInit(kanbanApi: KanbanInstanceApi): void {
     api = kanbanApi;
-    for (const action of MUTATING_ACTIONS) {
-      kanbanApi.on(action, () => scheduleReconcile());
+    for (const action of UPSERT_ACTIONS) {
+      kanbanApi.on(action, () => syncFromWidget());
     }
+    // Deletion is the one path that removes a card from the doc. Use the action
+    // payload's id (not a state diff) so it's exact regardless of timing.
+    kanbanApi.on('delete-card', (ev: unknown) => {
+      if (!yDoc || isTrashed) return;
+      const id = (ev as { id?: string | number | null } | undefined)?.id;
+      if (id != null) removeCardFromYDoc(yDoc, String(id), KANBAN_LOCAL_ORIGIN);
+      syncFromWidget();
+    });
   }
 
   // ---- Save ----
