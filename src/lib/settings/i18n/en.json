@@ -646,7 +646,15 @@
     "editor.kanban.linkedNote": "Linked note",
     "editor.kanban.loading": "Loading board…",
     "editor.kanban.untitled": "Untitled",
-    "fileTree.newKanban": "New Kanban board"
+    "fileTree.newKanban": "New Kanban board",
+    "editor.kanban.newList": "New list",
+    "editor.kanban.addList": "Add list",
+    "editor.kanban.renameList": "Rename list",
+    "editor.kanban.deleteList": "Delete list",
+    "editor.kanban.deleteListTitle": "Delete list?",
+    "editor.kanban.deleteListBody": "Delete the list “{list}” and its {count} card(s)? This cannot be undone.",
+    "editor.kanban.deleteListConfirm": "Delete list",
+    "editor.kanban.deleteListCancel": "Cancel"
   },
   "categories": {
     "account": {
