@@ -380,6 +380,15 @@ export const HOTKEY_COMMANDS: CommandDefinition[] = [
     labelKey: 'hotkeys.command.editor.markdown.mermaidDiagram',
     defaultBinding: null
   },
+  {
+    // Cycles the note's editor surface WYSIWYG → Source → Split → WYSIWYG.
+    // No default binding yet — opt-in via the hotkeys settings.
+    id: 'editor.markdown.cycleViewMode',
+    scope: 'editor',
+    editorKind: 'markdown',
+    labelKey: 'hotkeys.command.editor.markdown.cycleViewMode',
+    defaultBinding: null
+  },
 
   // --- Ink editor -----------------------------------------------------------
   {

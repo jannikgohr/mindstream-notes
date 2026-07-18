@@ -38,33 +38,20 @@ import type { Mark } from '@milkdown/kit/prose/model';
 import { Decoration, DecorationSet } from '@milkdown/kit/prose/view';
 import type { EditorView } from '@milkdown/kit/prose/view';
 import { $prose } from '@milkdown/kit/utils';
-import type { UserMentionBridge } from './user-mention-bridge.svelte';
+import { parseUserHref, userHref } from '../user-mention-href';
+import type { UserMentionBridge } from '../user-mention-bridge.svelte';
 
 // Re-export so consumers can reach everything mention-related through this one
 // module — the bridge factory lives in its own `.svelte.ts` (Svelte reserves
 // the `$` prefix there, which would block this file's `$prose` import).
-export type { UserMentionBridge } from './user-mention-bridge.svelte';
-export { createUserMentionBridge } from './user-mention-bridge.svelte';
+export type { UserMentionBridge } from '../user-mention-bridge.svelte';
+export { createUserMentionBridge } from '../user-mention-bridge.svelte';
 
 /* --- User link resolution -------------------------------------------------- */
 
-const USER_LINK_PREFIX = 'mindstream://user/';
-
-export function userHref(username: string): string {
-  return `${USER_LINK_PREFIX}${encodeURIComponent(username)}`;
-}
-
-export function parseUserHref(href: unknown): string | null {
-  if (typeof href !== 'string') return null;
-  if (!href.startsWith(USER_LINK_PREFIX)) return null;
-  const raw = href.slice(USER_LINK_PREFIX.length);
-  if (!raw) return null;
-  try {
-    return decodeURIComponent(raw);
-  } catch {
-    return raw;
-  }
-}
+// Shared with the source-mode plugin — see `../user-mention-href`. Re-exported
+// so mention consumers can still reach everything through this module.
+export { parseUserHref, userHref } from '../user-mention-href';
 
 export interface UserMentionPluginOptions {
   /** The signed-in user's username, or null when signed out. */
