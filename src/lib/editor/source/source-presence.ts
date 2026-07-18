@@ -39,18 +39,47 @@ export function blockLineStarts(blocks: string[]): number[] {
   return starts;
 }
 
-/** y-prosemirror only accepts 6-digit RGB; fall back to its default otherwise. */
-function normalizeColor(color: unknown): string {
+/** y-prosemirror only accepts 6-digit RGB; fall back to its default otherwise.
+ *  Exported for unit tests. */
+export function normalizeColor(color: unknown): string {
   return typeof color === 'string' && /^#[0-9a-fA-F]{6}$/.test(color)
     ? color
     : '#ffa500';
 }
 
-/** Index of the top-level block containing `pos`, clamped to the doc. */
-function topBlockIndexAt(doc: EditorView['state']['doc'], pos: number): number {
+/** Index of the top-level block containing `pos`, clamped to the doc.
+ *  Exported for unit tests. */
+export function topBlockIndexAt(
+  doc: EditorView['state']['doc'],
+  pos: number
+): number {
   const clamped = Math.max(0, Math.min(pos, doc.content.size));
   const $pos = doc.resolve(clamped);
   return Math.min(Math.max($pos.index(0), 0), Math.max(doc.childCount - 1, 0));
+}
+
+/**
+ * Turn a decoded absolute caret position into a source-line marker — the pure
+ * half of the presence decode, split out so it can be unit-tested without a
+ * live y-prosemirror binding (which is what supplies `head`). Maps `head` to
+ * its top-level block, then to that block's source line, and fills in the
+ * peer's display name/colour with defaults.
+ */
+export function peerLineMarker(
+  doc: EditorView['state']['doc'],
+  head: number,
+  clientId: number,
+  user: { name?: string; color?: string } | undefined,
+  lineStarts: number[]
+): PeerPresence {
+  const maxPos = Math.max(doc.content.size - 1, 0);
+  const idx = topBlockIndexAt(doc, Math.min(head, maxPos));
+  return {
+    clientId,
+    name: user?.name?.trim() || `User ${clientId}`,
+    color: normalizeColor(user?.color),
+    line: lineStarts[idx] ?? 0
+  };
 }
 
 /**
@@ -79,7 +108,6 @@ export function computeSourcePresence(
   const doc = ystate.doc as Y.Doc;
   const type = ystate.type;
   const mapping = ystate.binding.mapping;
-  const maxPos = Math.max(view.state.doc.content.size - 1, 0);
 
   const out: PeerPresence[] = [];
   awareness.getStates().forEach((aw, clientId) => {
@@ -100,15 +128,8 @@ export function computeSourcePresence(
     }
     if (head == null) return;
 
-    const idx = topBlockIndexAt(view.state.doc, Math.min(head, maxPos));
-    const user =
-      (aw as { user?: { name?: string; color?: string } }).user ?? {};
-    out.push({
-      clientId,
-      name: user.name?.trim() || `User ${clientId}`,
-      color: normalizeColor(user.color),
-      line: lineStarts[idx] ?? 0
-    });
+    const user = (aw as { user?: { name?: string; color?: string } }).user;
+    out.push(peerLineMarker(view.state.doc, head, clientId, user, lineStarts));
   });
   return out;
 }
