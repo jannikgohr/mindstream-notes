@@ -194,12 +194,17 @@
     "sharing.dialog.title": "{name} teilen",
     "sharing.dialog.folderFallback": "Ordner",
     "sharing.dialog.userLabel": "Benutzer",
-    "sharing.dialog.userPlaceholder": "Benutzername",
+    "sharing.dialog.userPlaceholder": "Benutzername, Benutzername",
+    "sharing.dialog.userHint": "Mehrere Benutzer mit Kommas trennen.",
     "sharing.dialog.permissionLabel": "Berechtigung",
     "sharing.dialog.cancel": "Abbrechen",
     "sharing.dialog.invite": "Einladen",
+    "sharing.dialog.inviteFailedHeading": "Einladung nicht möglich:",
     "sharing.dialog.people": "Personen",
     "sharing.dialog.onlyYou": "Nur du.",
+    "sharing.toast.invited": "{names} eingeladen",
+
+    "toast.regionLabel": "Statusmeldungen",
 
     "tray.newNote": "Neue Notiz",
     "tray.newDrawing": "Neue Zeichenfläche",

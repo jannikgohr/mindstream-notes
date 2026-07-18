@@ -6,6 +6,7 @@
   import { searchDialog } from '$lib/search/store.svelte';
   import { updaterProgress } from '$lib/updater/progress.svelte';
   import { shareDialog } from './share-dialog.svelte';
+  import { toasts } from './toast.svelte';
 
   let ConfirmDialog = $state<any | null>(null);
   let ExportResultDialog = $state<any | null>(null);
@@ -14,6 +15,7 @@
   let ShortcutHelpDialog = $state<any | null>(null);
   let SearchDialog = $state<any | null>(null);
   let ShareCollectionDialog = $state<any | null>(null);
+  let ToastHost = $state<any | null>(null);
 
   let confirmToken = 0;
   let exportToken = 0;
@@ -22,6 +24,7 @@
   let shortcutToken = 0;
   let searchToken = 0;
   let shareToken = 0;
+  let toastToken = 0;
 
   $effect(() => {
     const active = confirmQueue.items.length > 0;
@@ -120,6 +123,22 @@
       }
     });
   });
+
+  $effect(() => {
+    const active = toasts.items.length > 0;
+    const token = ++toastToken;
+    if (!active) {
+      // Keep the host mounted through the fade-out of the last toast: unmounting
+      // the moment the array empties would cut its exit transition. The store
+      // has already removed the item, so an empty host renders nothing.
+      return;
+    }
+    void import('./ToastHost.svelte').then((mod) => {
+      if (token === toastToken && toasts.items.length > 0) {
+        ToastHost = mod.default;
+      }
+    });
+  });
 </script>
 
 {#if ConfirmDialog}
@@ -142,4 +161,7 @@
 {/if}
 {#if ShareCollectionDialog}
   <ShareCollectionDialog />
+{/if}
+{#if ToastHost}
+  <ToastHost />
 {/if}
