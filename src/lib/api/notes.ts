@@ -21,8 +21,10 @@ import { mockApi } from './mock-store';
  *              shows a placeholder until Phase 2 lands.
  *   pdf      — imported PDF binary stored as an app-owned asset, with
  *              yrs_state reserved for collaborative annotations.
+ *   kanban   — SVAR Kanban board whose columns/cards live directly in the
+ *              note's Y.Doc (yrs_state), synced like any collaborative doc.
  */
-export type NoteKind = 'markdown' | 'freeform' | 'ink' | 'pdf';
+export type NoteKind = 'markdown' | 'freeform' | 'ink' | 'pdf' | 'kanban';
 
 /**
  * The full set of editor kinds this app version knows how to render.
@@ -36,7 +38,13 @@ export type NoteKind = 'markdown' | 'freeform' | 'ink' | 'pdf';
  * matching `default_note_kind` / supported list in
  * src-tauri/src/notes/mod.rs.
  */
-export const KNOWN_NOTE_KINDS = ['markdown', 'freeform', 'ink', 'pdf'] as const;
+export const KNOWN_NOTE_KINDS = [
+  'markdown',
+  'freeform',
+  'ink',
+  'pdf',
+  'kanban'
+] as const;
 
 /** Narrows an arbitrary string (e.g. from a remote-synced row) into
  *  the typed `NoteKind` union. */

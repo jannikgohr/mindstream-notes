@@ -28,7 +28,8 @@ import {
   FileQuestion,
   FileText,
   FileType2,
-  PencilRuler
+  PencilRuler,
+  SquareKanban
 } from '@lucide/svelte';
 import { isKnownNoteKind } from '$lib/api/notes';
 import type { IconComponent } from '$lib/settings/icons';
@@ -40,6 +41,7 @@ const FILE_TEXT = FileText as unknown as IconComponent;
 const PENCIL_RULER = PencilRuler as unknown as IconComponent;
 const FEATHER = Feather as unknown as IconComponent;
 const FILE_TYPE_2 = FileType2 as unknown as IconComponent;
+const SQUARE_KANBAN = SquareKanban as unknown as IconComponent;
 const FILE_QUESTION = FileQuestion as unknown as IconComponent;
 
 /**
@@ -60,6 +62,8 @@ export function noteKindIcon(kind: string | null | undefined): IconComponent {
       return FEATHER;
     case 'pdf':
       return FILE_TYPE_2;
+    case 'kanban':
+      return SQUARE_KANBAN;
     default:
       return FILE_QUESTION;
   }

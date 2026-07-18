@@ -67,4 +67,10 @@ export type CommandScope = 'global' | 'editor';
  * settings UI can group commands by editor type even before they have
  * any commands of their own.
  */
-export type EditorKind = 'markdown' | 'freeform' | 'drawing' | 'ink' | 'pdf';
+export type EditorKind =
+  | 'markdown'
+  | 'freeform'
+  | 'drawing'
+  | 'ink'
+  | 'pdf'
+  | 'kanban';

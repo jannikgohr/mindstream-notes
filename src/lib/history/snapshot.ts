@@ -18,7 +18,7 @@ export type ParsedHistorySnapshot =
       text: string;
     }
   | {
-      noteKind: 'freeform' | 'ink' | 'pdf';
+      noteKind: 'freeform' | 'ink' | 'pdf' | 'kanban';
       payloadKind: 'yjs-update';
       bytes: Uint8Array;
     };
@@ -39,7 +39,7 @@ export function base64ToBytes(base64: string): Uint8Array {
 }
 
 export function serializeYjsSnapshot(
-  noteKind: 'freeform' | 'ink' | 'pdf',
+  noteKind: 'freeform' | 'ink' | 'pdf' | 'kanban',
   bytes: Uint8Array | number[]
 ): string {
   const envelope: SnapshotEnvelopeV1 = {

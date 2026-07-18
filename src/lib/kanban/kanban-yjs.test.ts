@@ -1,0 +1,184 @@
+import { describe, expect, it, vi } from 'vitest';
+import * as Y from 'yjs';
+import {
+  KANBAN_LOCAL_ORIGIN,
+  boardToPlainText,
+  defaultColumns,
+  isBoardEmpty,
+  isLocalOnly,
+  observeBoard,
+  readBoardFromYDoc,
+  seedDefaultBoard,
+  writeBoardToYDoc,
+  type KanbanBoard
+} from './kanban-yjs';
+
+function sampleBoard(): KanbanBoard {
+  return {
+    columns: [
+      { id: 'todo', label: 'To Do', order: 0 },
+      { id: 'done', label: 'Done', order: 1 }
+    ],
+    cards: [
+      {
+        id: 'c1',
+        label: 'First',
+        column: 'todo',
+        description: 'do the thing',
+        priority: 2,
+        users: ['alice'],
+        deadline: new Date('2026-01-02T00:00:00.000Z'),
+        order: 0
+      },
+      { id: 'c2', label: 'Second', column: 'done', order: 1 }
+    ]
+  };
+}
+
+describe('kanban-yjs round-trip', () => {
+  it('writes a board and reads it back unchanged', () => {
+    const doc = new Y.Doc();
+    const board = sampleBoard();
+    writeBoardToYDoc(doc, board);
+    const read = readBoardFromYDoc(doc);
+
+    expect(read.columns).toEqual(board.columns);
+    expect(read.cards).toHaveLength(2);
+    const c1 = read.cards.find((c) => c.id === 'c1')!;
+    expect(c1.label).toBe('First');
+    expect(c1.description).toBe('do the thing');
+    expect(c1.priority).toBe(2);
+    expect(c1.users).toEqual(['alice']);
+    // Deadline serialises to ISO and hydrates back to an equal Date.
+    expect(c1.deadline).toBeInstanceOf(Date);
+    expect(c1.deadline?.toISOString()).toBe('2026-01-02T00:00:00.000Z');
+  });
+
+  it('sorts by order and tiebreaks by id', () => {
+    const doc = new Y.Doc();
+    writeBoardToYDoc(doc, {
+      columns: [],
+      cards: [
+        { id: 'b', label: 'B', column: 'todo', order: 5 },
+        { id: 'a', label: 'A', column: 'todo', order: 5 },
+        { id: 'c', label: 'C', column: 'todo', order: 1 }
+      ]
+    });
+    expect(readBoardFromYDoc(doc).cards.map((c) => c.id)).toEqual([
+      'c',
+      'a',
+      'b'
+    ]);
+  });
+
+  it('upserts changed fields, adds new cards and drops removed ones', () => {
+    const doc = new Y.Doc();
+    writeBoardToYDoc(doc, sampleBoard());
+    writeBoardToYDoc(doc, {
+      columns: [{ id: 'todo', label: 'Backlog', order: 0 }],
+      cards: [
+        { id: 'c1', label: 'First (edited)', column: 'todo', order: 0 },
+        { id: 'c3', label: 'Third', column: 'todo', order: 1 }
+      ]
+    });
+    const read = readBoardFromYDoc(doc);
+    expect(read.columns).toEqual([{ id: 'todo', label: 'Backlog', order: 0 }]);
+    expect(read.cards.map((c) => c.id)).toEqual(['c1', 'c3']);
+    const c1 = read.cards.find((c) => c.id === 'c1')!;
+    expect(c1.label).toBe('First (edited)');
+    // Cleared field (description) is gone after the edit.
+    expect(c1.description).toBeUndefined();
+  });
+});
+
+describe('kanban-yjs seeding', () => {
+  it('seeds default columns into an empty doc only', () => {
+    const doc = new Y.Doc();
+    expect(isBoardEmpty(doc)).toBe(true);
+    seedDefaultBoard(doc);
+    expect(readBoardFromYDoc(doc).columns).toEqual(defaultColumns());
+
+    // Second seed is a no-op — doesn't duplicate or reset.
+    writeBoardToYDoc(doc, {
+      ...readBoardFromYDoc(doc),
+      cards: [{ id: 'x', label: 'X', column: 'todo', order: 0 }]
+    });
+    seedDefaultBoard(doc);
+    expect(readBoardFromYDoc(doc).cards).toHaveLength(1);
+  });
+});
+
+describe('kanban-yjs echo guard', () => {
+  it('flags local/seed writes and not cross-doc updates', () => {
+    const doc = new Y.Doc();
+    const events: Y.YEvent<Y.AbstractType<unknown>>[][] = [];
+    const stop = observeBoard(doc, (e) => events.push(e));
+
+    // Local write → observer sees only local-origin events.
+    writeBoardToYDoc(doc, sampleBoard(), KANBAN_LOCAL_ORIGIN);
+    expect(events).toHaveLength(1);
+    expect(isLocalOnly(events[0])).toBe(true);
+
+    // A remote update applied from a peer doc is NOT local-only, so the editor
+    // would rebuild the widget props off it.
+    const peer = new Y.Doc();
+    writeBoardToYDoc(peer, {
+      columns: [],
+      cards: [{ id: 'remote', label: 'Remote', column: 'todo', order: 0 }]
+    });
+    Y.applyUpdate(doc, Y.encodeStateAsUpdate(peer));
+    expect(events).toHaveLength(2);
+    expect(isLocalOnly(events[1])).toBe(false);
+
+    stop();
+  });
+
+  it('a controlled editor would not duplicate a card on remote merge', () => {
+    // Simulate the editor: local doc owns a card; a peer adds another; merge.
+    const local = new Y.Doc();
+    writeBoardToYDoc(local, {
+      columns: defaultColumns(),
+      cards: [{ id: 'c1', label: 'Local', column: 'todo', order: 0 }]
+    });
+    const peer = new Y.Doc();
+    Y.applyUpdate(peer, Y.encodeStateAsUpdate(local));
+    writeBoardToYDoc(peer, {
+      ...readBoardFromYDoc(peer),
+      cards: [
+        ...readBoardFromYDoc(peer).cards,
+        { id: 'c2', label: 'Peer', column: 'doing', order: 1 }
+      ]
+    });
+    // Bidirectional merge — the CRDT converges without duplicating c1.
+    Y.applyUpdate(local, Y.encodeStateAsUpdate(peer));
+    Y.applyUpdate(peer, Y.encodeStateAsUpdate(local));
+    const ids = readBoardFromYDoc(local)
+      .cards.map((c) => c.id)
+      .sort();
+    expect(ids).toEqual(['c1', 'c2']);
+  });
+});
+
+describe('boardToPlainText', () => {
+  it('projects column and card text for search indexing', () => {
+    const text = boardToPlainText(sampleBoard());
+    expect(text).toContain('## To Do');
+    expect(text).toContain('## Done');
+    expect(text).toContain('First (To Do)');
+    expect(text).toContain('do the thing');
+    expect(text).toContain('Second (Done)');
+  });
+});
+
+describe('kanban-yjs no-op writes', () => {
+  it('does not emit a transaction when nothing changes', () => {
+    const doc = new Y.Doc();
+    writeBoardToYDoc(doc, sampleBoard());
+    const observer = vi.fn();
+    const stop = observeBoard(doc, observer);
+    // Writing the identical board again should produce zero CRDT ops.
+    writeBoardToYDoc(doc, readBoardFromYDoc(doc));
+    expect(observer).not.toHaveBeenCalled();
+    stop();
+  });
+});

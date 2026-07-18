@@ -25,6 +25,7 @@ describe('defaultDraftText', () => {
     expect(defaultDraftText('folder')).toBe('Untitled folder');
     expect(defaultDraftText('drawing')).toBe('Untitled drawing canvas');
     expect(defaultDraftText('ink')).toBe('Untitled handwritten note');
+    expect(defaultDraftText('kanban')).toBe('Untitled board');
     expect(defaultDraftText('note')).toBe('Untitled');
   });
 });
@@ -33,6 +34,7 @@ describe('draftKindToNoteKind', () => {
   it('maps draft kinds to note kinds, folder being null', () => {
     expect(draftKindToNoteKind('drawing')).toBe('freeform');
     expect(draftKindToNoteKind('ink')).toBe('ink');
+    expect(draftKindToNoteKind('kanban')).toBe('kanban');
     expect(draftKindToNoteKind('note')).toBe('markdown');
     expect(draftKindToNoteKind('folder')).toBeNull();
   });

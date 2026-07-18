@@ -84,6 +84,7 @@
     | 'freeformNote'
     | 'inkNote'
     | 'pdfNote'
+    | 'kanbanNote'
     | 'unknownNoteKind';
 
   function componentForNoteKind(
@@ -97,6 +98,8 @@
         return 'inkNote';
       case 'pdf':
         return 'pdfNote';
+      case 'kanban':
+        return 'kanbanNote';
       case 'markdown':
         return 'noteEditor';
     }
@@ -168,6 +171,8 @@
             return new SvelteRenderer(NoteKindRenderer, 'ink');
           case 'pdfNote':
             return new SvelteRenderer(NoteKindRenderer, 'pdf');
+          case 'kanbanNote':
+            return new SvelteRenderer(NoteKindRenderer, 'kanban');
           case 'unknownNoteKind':
             return new SvelteRenderer(NoteKindRenderer, null);
           default:
