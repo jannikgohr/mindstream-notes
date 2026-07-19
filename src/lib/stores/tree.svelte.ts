@@ -337,6 +337,16 @@ export async function trashCollection(id: string): Promise<void> {
   await moveCollectionTo(id, TRASH_ID);
 }
 
+/**
+ * Leave a folder that was shared with the current user: relinquishes membership
+ * server-side and purges the locally-pulled subtree, then refreshes the tree so
+ * the folder disappears from the "Shared" view.
+ */
+export async function leaveSharedCollection(id: string): Promise<void> {
+  await api.leaveSharedCollection(id);
+  await loadTree();
+}
+
 export async function trashMany(
   items: TreeItemRef[]
 ): Promise<api.BatchCounts> {

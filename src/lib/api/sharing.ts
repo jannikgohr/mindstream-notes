@@ -101,6 +101,19 @@ export function declineShareBundle(
   );
 }
 
+/**
+ * Leave a folder shared *with* the current user. Relinquishes membership of the
+ * scope's collections server-side and purges the locally-pulled subtree. No-op
+ * fallback in browser mode (sharing is Tauri-only).
+ */
+export function leaveSharedCollection(collectionId: string): Promise<void> {
+  return invokeOrFallback<void>(
+    'leave_shared_collection',
+    { collectionId },
+    async () => undefined
+  );
+}
+
 export function acceptCollectionInvitation(id: string): Promise<void> {
   return invokeOrFallback<void>(
     'accept_collection_invitation',
