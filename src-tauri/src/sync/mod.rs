@@ -182,6 +182,14 @@ struct NotePayload {
     parent_folder_id: Option<String>,
     title: String,
     position: i64,
+    /// Canonical note creation timestamp. Added after schema 2; older
+    /// payloads default to None and fall back to the local row / pull time.
+    #[serde(default)]
+    created: Option<String>,
+    /// Canonical note modification timestamp. Added after schema 2; older
+    /// payloads default to None and fall back to the local row / pull time.
+    #[serde(default)]
+    modified: Option<String>,
     tags: Vec<String>,
     #[serde(default, with = "serde_bytes")]
     tags_state: Vec<u8>,
@@ -219,6 +227,10 @@ struct FolderPayload {
     parent_folder_id: Option<String>,
     name: String,
     position: i64,
+    #[serde(default)]
+    created: Option<String>,
+    #[serde(default)]
+    modified: Option<String>,
 }
 
 /// Wire format for a drawing-asset Etebase Item.
@@ -1202,15 +1214,30 @@ fn apply_folder_payload(
     // overwrite that metadata with the remote's older copy — otherwise an
     // offline rename / move / reorder silently reverts. Mirrors the note
     // metadata-preservation path in `apply_note_payload`.
-    let existing_dirty: Option<i64> = db.with_conn(|c| {
+    let existing: Option<(i64, String, String)> = db.with_conn(|c| {
         Ok(c.query_row(
-            "SELECT dirty FROM collections WHERE id = ?1",
+            "SELECT dirty, created, modified FROM collections WHERE id = ?1",
             params![payload.id],
-            |r| r.get(0),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .optional()?)
     })?;
-    let keep_local_meta = matches!(existing_dirty, Some(dirty) if dirty != 0);
+    let keep_local_meta = matches!(existing, Some((dirty, _, _)) if dirty != 0);
+    let remote_created = payload
+        .created
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .unwrap_or(&now);
+    let remote_modified = payload
+        .modified
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| {
+            existing
+                .as_ref()
+                .map(|(_, _, modified)| modified.as_str())
+                .unwrap_or(&now)
+        });
 
     db.with_conn(|c| {
         // Defensive: if the payload's parent folder isn't in collections
@@ -1220,7 +1247,7 @@ fn apply_folder_payload(
         // Without this, the INSERT would hit a FOREIGN KEY violation and
         // abort the entire sync.
         let resolved_parent = resolve_parent_id(c, payload.parent_folder_id.as_deref())?;
-        match existing_dirty {
+        match existing {
             Some(_) if keep_local_meta => {
                 // Keep the local metadata; only (re)stamp the server identity
                 // and scope, forcing dirty=1 so the next push reconciles. This
@@ -1236,14 +1263,16 @@ fn apply_folder_payload(
             Some(_) => {
                 c.execute(
                     "UPDATE collections
-                     SET parent_collection_id = ?1, name = ?2, position = ?3, modified = ?4,
-                         etebase_uid = ?5, etebase_etag = ?6, dirty = 0, share_scope_id = ?7
-                     WHERE id = ?8",
+                     SET parent_collection_id = ?1, name = ?2, position = ?3,
+                         created = ?4, modified = ?5, etebase_uid = ?6,
+                         etebase_etag = ?7, dirty = 0, share_scope_id = ?8
+                     WHERE id = ?9",
                     params![
                         resolved_parent,
                         payload.name,
                         payload.position,
-                        now,
+                        remote_created,
+                        remote_modified,
                         uid,
                         etag,
                         scope,
@@ -1256,13 +1285,14 @@ fn apply_folder_payload(
                     "INSERT INTO collections (id, parent_collection_id, name, position,
                                                created, modified, etebase_uid, etebase_etag, dirty,
                                                share_scope_id)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6, ?7, 0, ?8)",
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, ?9)",
                     params![
                         payload.id,
                         resolved_parent,
                         payload.name,
                         payload.position,
-                        now,
+                        remote_created,
+                        remote_modified,
                         uid,
                         etag,
                         scope,
@@ -1347,6 +1377,8 @@ struct LocalNoteState {
     yrs_state: Vec<u8>,
     dirty: i64,
     schema: i64,
+    created: String,
+    modified: String,
     parent_collection_id: Option<String>,
     trashed_at: Option<String>,
     title: String,
@@ -1396,8 +1428,9 @@ fn apply_note_payload(
         // body, plus the LWW metadata to preserve when the row is dirty.
         let existing: Option<LocalNoteState> = tx
             .query_row(
-                "SELECT yrs_state, dirty, payload_schema, parent_collection_id,
-                        trashed_at, title, body, position, favourite, note_kind, tags_state
+                "SELECT yrs_state, dirty, payload_schema, created, modified,
+                        parent_collection_id, trashed_at, title, body, position,
+                        favourite, note_kind, tags_state
                  FROM notes WHERE id = ?1",
                 params![payload.id],
                 |r| {
@@ -1405,14 +1438,16 @@ fn apply_note_payload(
                         yrs_state: r.get::<_, Option<Vec<u8>>>(0)?.unwrap_or_default(),
                         dirty: r.get(1)?,
                         schema: r.get(2)?,
-                        parent_collection_id: r.get(3)?,
-                        trashed_at: r.get(4)?,
-                        title: r.get(5)?,
-                        body: r.get(6)?,
-                        position: r.get(7)?,
-                        favourite: r.get(8)?,
-                        note_kind: r.get(9)?,
-                        tags_state: r.get::<_, Option<Vec<u8>>>(10)?.unwrap_or_default(),
+                        created: r.get(3)?,
+                        modified: r.get(4)?,
+                        parent_collection_id: r.get(5)?,
+                        trashed_at: r.get(6)?,
+                        title: r.get(7)?,
+                        body: r.get(8)?,
+                        position: r.get(9)?,
+                        favourite: r.get(10)?,
+                        note_kind: r.get(11)?,
+                        tags_state: r.get::<_, Option<Vec<u8>>>(12)?.unwrap_or_default(),
                     })
                 },
             )
@@ -1475,7 +1510,45 @@ fn apply_note_payload(
         // the current key directly from the etebase Item each time it
         // opens a note (see note_room_info), so the server stays the
         // sole authority and nothing sensitive lands on disk.
-        let modified = Utc::now().to_rfc3339();
+        let now = Utc::now().to_rfc3339();
+        let final_created = if keep_local_meta {
+            existing
+                .as_ref()
+                .map(|l| l.created.clone())
+                .unwrap_or_else(|| {
+                    payload
+                        .created
+                        .clone()
+                        .filter(|value| !value.is_empty())
+                        .unwrap_or_else(|| now.clone())
+                })
+        } else {
+            payload
+                .created
+                .clone()
+                .filter(|value| !value.is_empty())
+                .or_else(|| existing.as_ref().map(|l| l.created.clone()))
+                .unwrap_or_else(|| now.clone())
+        };
+        let final_modified = if keep_local_meta {
+            existing
+                .as_ref()
+                .map(|l| l.modified.clone())
+                .unwrap_or_else(|| {
+                    payload
+                        .modified
+                        .clone()
+                        .filter(|value| !value.is_empty())
+                        .unwrap_or_else(|| now.clone())
+                })
+        } else {
+            payload
+                .modified
+                .clone()
+                .filter(|value| !value.is_empty())
+                .or_else(|| existing.as_ref().map(|l| l.modified.clone()))
+                .unwrap_or_else(|| now.clone())
+        };
 
         // Pick each metadata field from local (when dirty) or remote. For the
         // remote parent, resolve_parent_id does the defensive nullification of
@@ -1546,17 +1619,18 @@ fn apply_note_payload(
             tx.execute(
                 "UPDATE notes
                  SET parent_collection_id = ?1, title = ?2, body = ?3, position = ?4,
-                     modified = ?5, trashed_at = ?6, yrs_state = ?7,
-                     etebase_uid = ?8, etebase_etag = ?9, dirty = ?10,
-                     payload_schema = ?11, favourite = ?12, note_kind = ?13,
-                     tags_state = ?14, share_scope_id = ?15
-                 WHERE id = ?16",
+                     created = ?5, modified = ?6, trashed_at = ?7, yrs_state = ?8,
+                     etebase_uid = ?9, etebase_etag = ?10, dirty = ?11,
+                     payload_schema = ?12, favourite = ?13, note_kind = ?14,
+                     tags_state = ?15, share_scope_id = ?16
+                 WHERE id = ?17",
                 params![
                     final_parent,
                     final_title,
                     body,
                     final_position,
-                    modified,
+                    final_created,
+                    final_modified,
                     final_trashed_at,
                     merged_state,
                     uid,
@@ -1577,14 +1651,15 @@ fn apply_note_payload(
                                     etebase_uid, etebase_etag, dirty,
                                     payload_schema, favourite, note_kind, tags_state,
                                     share_scope_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
                 params![
                     payload.id,
                     final_parent,
                     final_title,
                     body,
                     final_position,
-                    modified,
+                    final_created,
+                    final_modified,
                     final_trashed_at,
                     merged_state,
                     uid,
@@ -1637,6 +1712,8 @@ fn push_folders(
             parent_folder_id: row.parent_collection_id.clone(),
             name: row.name.clone(),
             position: row.position,
+            created: Some(row.created.clone()),
+            modified: Some(row.modified.clone()),
         };
         let bytes = rmp_serde::to_vec_named(&payload)
             .map_err(|e| AppError::InvalidArg(format!("encode folder: {e}")))?;
@@ -1732,6 +1809,8 @@ fn push_notes(
             parent_folder_id: row.parent_collection_id.clone(),
             title: row.title.clone(),
             position: row.position,
+            created: Some(row.created.clone()),
+            modified: Some(row.modified.clone()),
             tags: row.tags.clone(),
             tags_state: row.tags_state.clone(),
             trashed_at: row.trashed_at.clone(),
@@ -2101,6 +2180,8 @@ struct DirtyFolder {
     parent_collection_id: Option<String>,
     name: String,
     position: i64,
+    created: String,
+    modified: String,
     etebase_uid: Option<String>,
 }
 
@@ -2109,6 +2190,8 @@ struct DirtyNote {
     parent_collection_id: Option<String>,
     title: String,
     position: i64,
+    created: String,
+    modified: String,
     trashed_at: Option<String>,
     yrs_state: Vec<u8>,
     etebase_uid: Option<String>,
@@ -2134,7 +2217,7 @@ fn load_dirty_folders(db: &Db, scope: Option<&str>) -> AppResult<Vec<DirtyFolder
         // matches only unscoped (vault) rows, a scope id matches only that
         // scope's rows.
         let mut stmt = c.prepare(
-            "SELECT id, parent_collection_id, name, position, etebase_uid
+            "SELECT id, parent_collection_id, name, position, created, modified, etebase_uid
              FROM collections WHERE dirty = 1 AND id <> 'trash'
                AND ((?1 IS NULL AND share_scope_id IS NULL) OR share_scope_id = ?1)",
         )?;
@@ -2144,7 +2227,9 @@ fn load_dirty_folders(db: &Db, scope: Option<&str>) -> AppResult<Vec<DirtyFolder
                 parent_collection_id: r.get(1)?,
                 name: r.get(2)?,
                 position: r.get(3)?,
-                etebase_uid: r.get(4)?,
+                created: r.get(4)?,
+                modified: r.get(5)?,
+                etebase_uid: r.get(6)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -2154,8 +2239,9 @@ fn load_dirty_folders(db: &Db, scope: Option<&str>) -> AppResult<Vec<DirtyFolder
 fn load_dirty_notes(db: &Db, scope: Option<&str>) -> AppResult<Vec<DirtyNote>> {
     let rows: Vec<DirtyNote> = db.with_conn(|c| {
         let mut stmt = c.prepare(
-            "SELECT id, parent_collection_id, title, position, trashed_at,
-                    yrs_state, etebase_uid, body, favourite, note_kind, tags_state
+            "SELECT id, parent_collection_id, title, position, created, modified,
+                    trashed_at, yrs_state, etebase_uid, body, favourite, note_kind,
+                    tags_state
              FROM notes WHERE dirty = 1
                AND ((?1 IS NULL AND share_scope_id IS NULL) OR share_scope_id = ?1)",
         )?;
@@ -2165,14 +2251,16 @@ fn load_dirty_notes(db: &Db, scope: Option<&str>) -> AppResult<Vec<DirtyNote>> {
                 parent_collection_id: r.get(1)?,
                 title: r.get(2)?,
                 position: r.get(3)?,
-                trashed_at: r.get(4)?,
-                yrs_state: r.get::<_, Option<Vec<u8>>>(5)?.unwrap_or_default(),
-                etebase_uid: r.get(6)?,
+                created: r.get(4)?,
+                modified: r.get(5)?,
+                trashed_at: r.get(6)?,
+                yrs_state: r.get::<_, Option<Vec<u8>>>(7)?.unwrap_or_default(),
+                etebase_uid: r.get(8)?,
                 tags: Vec::new(),
-                body: r.get(7)?,
-                favourite: r.get::<_, i64>(8)? != 0,
-                note_kind: r.get(9)?,
-                tags_state: r.get::<_, Option<Vec<u8>>>(10)?.unwrap_or_default(),
+                body: r.get(9)?,
+                favourite: r.get::<_, i64>(10)? != 0,
+                note_kind: r.get(11)?,
+                tags_state: r.get::<_, Option<Vec<u8>>>(12)?.unwrap_or_default(),
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -2458,6 +2546,8 @@ mod tests {
             parent_folder_id: parent.map(str::to_string),
             title: "Remote Title".into(),
             position: 0,
+            created: Some("2026-05-01T12:00:00Z".into()),
+            modified: Some("2026-05-02T12:00:00Z".into()),
             tags: vec![],
             tags_state: vec![],
             trashed_at: trashed_at.map(str::to_string),
@@ -2525,6 +2615,20 @@ mod tests {
             title, "Local Title",
             "local metadata is preserved wholesale"
         );
+        let (created, modified): (String, String) = db
+            .with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT created, modified FROM notes WHERE id = 'note_x'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(created, "t", "dirty note must keep local created date");
+        assert_eq!(
+            modified, "t",
+            "dirty note must keep local modified date until pushed"
+        );
     }
 
     #[test]
@@ -2549,12 +2653,12 @@ mod tests {
         let remote = remote_note("note_y", None, Some("2026-06-10T00:00:00Z"));
         apply_note_payload(&db, &remote, "uid_y", "etag_new", None).unwrap();
 
-        let (title, trashed_at): (String, Option<String>) = db
+        let (title, trashed_at, created, modified): (String, Option<String>, String, String) = db
             .with_conn(|c| {
                 Ok(c.query_row(
-                    "SELECT title, trashed_at FROM notes WHERE id = 'note_y'",
+                    "SELECT title, trashed_at, created, modified FROM notes WHERE id = 'note_y'",
                     [],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
                 )?)
             })
             .unwrap();
@@ -2566,6 +2670,33 @@ mod tests {
             trashed_at.is_some(),
             "a remote-side trash applies to a clean local row"
         );
+        assert_eq!(
+            created, "2026-05-01T12:00:00Z",
+            "clean row takes remote created date"
+        );
+        assert_eq!(
+            modified, "2026-05-02T12:00:00Z",
+            "clean row takes remote modified date"
+        );
+    }
+
+    #[test]
+    fn apply_note_inserts_remote_dates_for_new_rows() {
+        let db = open_memory_for_tests();
+        let remote = remote_note("note_remote_dates", None, None);
+        apply_note_payload(&db, &remote, "uid_dates", "etag_dates", None).unwrap();
+
+        let (created, modified): (String, String) = db
+            .with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT created, modified FROM notes WHERE id = 'note_remote_dates'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(created, "2026-05-01T12:00:00Z");
+        assert_eq!(modified, "2026-05-02T12:00:00Z");
     }
 
     #[test]
@@ -2702,6 +2833,8 @@ mod tests {
             parent_folder_id: parent.map(str::to_string),
             name: name.into(),
             position: 0,
+            created: Some("2026-04-01T12:00:00Z".into()),
+            modified: Some("2026-04-02T12:00:00Z".into()),
         }
     }
 
@@ -2745,6 +2878,17 @@ mod tests {
             Some("scope_1"),
             "the folder is still re-homed into the scope"
         );
+        let (created, modified): (String, String) = db
+            .with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT created, modified FROM collections WHERE id = 'folder_r'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(created, "t", "dirty folder keeps local created date");
+        assert_eq!(modified, "t", "dirty folder keeps local modified date");
     }
 
     #[test]
@@ -2764,12 +2908,12 @@ mod tests {
         let remote = remote_folder("folder_c", None, "Renamed Remotely");
         apply_folder_payload(&db, remote, "uid_c", "etag_new", None).unwrap();
 
-        let name: String = db
+        let (name, created, modified): (String, String, String) = db
             .with_conn(|c| {
                 Ok(c.query_row(
-                    "SELECT name FROM collections WHERE id = 'folder_c'",
+                    "SELECT name, created, modified FROM collections WHERE id = 'folder_c'",
                     [],
-                    |r| r.get(0),
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
                 )?)
             })
             .unwrap();
@@ -2777,6 +2921,8 @@ mod tests {
             name, "Renamed Remotely",
             "a clean folder takes remote metadata"
         );
+        assert_eq!(created, "2026-04-01T12:00:00Z");
+        assert_eq!(modified, "2026-04-02T12:00:00Z");
     }
 
     #[test]
