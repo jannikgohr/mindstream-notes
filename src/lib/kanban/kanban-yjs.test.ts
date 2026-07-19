@@ -11,6 +11,7 @@ import {
   readBoardFromYDoc,
   removeCardFromYDoc,
   removeColumnFromYDoc,
+  removeLabelFromYDoc,
   seedDefaultBoard,
   upsertBoardIntoYDoc,
   writeBoardToYDoc,
@@ -154,6 +155,17 @@ describe('kanban-yjs additive live-editing (data-loss guard)', () => {
       'blocked',
       'frontend',
       'review'
+    ]);
+  });
+
+  it('removeLabelFromYDoc deletes only the label definition', () => {
+    const doc = new Y.Doc();
+    writeBoardToYDoc(doc, sampleBoard());
+    removeLabelFromYDoc(doc, 'frontend');
+    const read = readBoardFromYDoc(doc);
+    expect(read.labels?.map((label) => label.id)).toEqual(['blocked']);
+    expect(read.cards.find((card) => card.id === 'c1')?.tags).toEqual([
+      'blocked'
     ]);
   });
 

@@ -6,6 +6,7 @@
     id: string;
     label: string;
     color?: string;
+    unused?: boolean;
   }
 
   interface Props {
@@ -15,6 +16,7 @@
     error?: boolean;
     placeholder?: string;
     oncreate?: (label: string) => KanbanLabelOption | null | undefined;
+    ondelete?: (id: string) => void;
     onchange?: (ev: { value: string[]; input?: boolean }) => void;
   }
 
@@ -25,6 +27,7 @@
     error = false,
     placeholder = tUi('editor.kanban.labelsPlaceholder'),
     oncreate,
+    ondelete,
     onchange
   }: Props = $props();
 
@@ -120,6 +123,24 @@
     emit(value.filter((item) => item !== id));
   }
 
+  function deleteUnused(option: KanbanLabelOption, event: MouseEvent): void {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!option.unused) return;
+    ondelete?.(option.id);
+    highlight = 0;
+    inputEl?.focus();
+  }
+
+  function handleResultKeydown(
+    option: KanbanLabelOption,
+    event: KeyboardEvent
+  ): void {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    add(option);
+  }
+
   function handleKeydown(event: KeyboardEvent): void {
     if (disabled) return;
     if (event.key === 'ArrowDown') {
@@ -200,13 +221,14 @@
     <div class="kanban-label-results" role="listbox">
       {#if results.length > 0}
         {#each results as option, index (option.id)}
-          <button
-            type="button"
+          <div
             class="kanban-label-result"
             class:kanban-label-result-active={index === highlight}
             role="option"
+            tabindex="0"
             aria-selected={index === highlight}
             onmouseenter={() => (highlight = index)}
+            onkeydown={(event) => handleResultKeydown(option, event)}
             onclick={() => add(option)}
           >
             <span
@@ -214,8 +236,25 @@
               style:background={option.color ?? 'var(--wx-color-primary)'}
               aria-hidden="true"
             ></span>
-            <span>{option.label}</span>
-          </button>
+            <span class="kanban-label-result-text">{option.label}</span>
+            {#if option.unused}
+              <button
+                type="button"
+                class="kanban-label-delete"
+                aria-label={tUi('editor.kanban.deleteUnusedLabel').replace(
+                  '{label}',
+                  option.label
+                )}
+                title={tUi('editor.kanban.deleteUnusedLabel').replace(
+                  '{label}',
+                  option.label
+                )}
+                onclick={(event) => deleteUnused(option, event)}
+              >
+                <X aria-hidden="true" />
+              </button>
+            {/if}
+          </div>
         {/each}
       {/if}
       {#if canCreate}
@@ -336,6 +375,12 @@
     padding: 3px 0;
   }
 
+  :global(.kanban-card-editor .kanban-label-field input),
+  :global(.kanban-card-editor .kanban-label-field input:focus) {
+    border: 0;
+    box-shadow: none;
+  }
+
   input::placeholder {
     color: var(--wx-input-placeholder-color);
   }
@@ -357,6 +402,7 @@
 
   .kanban-label-result {
     width: 100%;
+    justify-content: flex-start;
     border: 0;
     border-radius: 4px;
     background: transparent;
@@ -364,6 +410,37 @@
     cursor: pointer;
     padding: 6px 8px;
     text-align: left;
+  }
+
+  .kanban-label-result-text {
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .kanban-label-delete {
+    display: inline-flex;
+    width: 22px;
+    height: 22px;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    color: var(--wx-color-font-alt);
+  }
+
+  .kanban-label-delete:hover,
+  .kanban-label-delete:focus-visible {
+    background: color-mix(in srgb, var(--wx-color-danger) 18%, transparent);
+    color: var(--wx-color-danger);
+    outline: none;
+  }
+
+  .kanban-label-delete :global(svg) {
+    width: 13px;
+    height: 13px;
   }
 
   .kanban-label-result:hover,

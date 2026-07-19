@@ -647,6 +647,7 @@
     "editor.kanban.labelsPlaceholder": "Add labels",
     "editor.kanban.createLabel": "Create “{label}”",
     "editor.kanban.removeLabel": "Remove {label}",
+    "editor.kanban.deleteUnusedLabel": "Delete unused label {label}",
     "editor.kanban.noLabels": "No matching labels",
     "editor.kanban.linkedNote": "Linked note",
     "editor.kanban.linkedNotePlaceholder": "Search notes",

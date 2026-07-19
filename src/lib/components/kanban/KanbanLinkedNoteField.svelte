@@ -266,6 +266,12 @@
     padding-left: 0;
   }
 
+  :global(.kanban-card-editor .kanban-note-field input),
+  :global(.kanban-card-editor .kanban-note-field input:focus) {
+    border: 0;
+    box-shadow: none;
+  }
+
   input::placeholder {
     color: var(--wx-input-placeholder-color);
   }
