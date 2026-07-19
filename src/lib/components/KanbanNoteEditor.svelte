@@ -402,6 +402,20 @@
     e.stopPropagation();
   }
 
+  function closeCardEditorOnBoardClick(e: MouseEvent): void {
+    if (!api || isTrashed || e.button !== 0) return;
+    const target = e.target instanceof Element ? e.target : null;
+    if (!target) return;
+    if (
+      target.closest(
+        '.wx-card[data-id], .wx-card-row[data-kanban-card-id], .kanban-card-editor'
+      )
+    ) {
+      return;
+    }
+    api.exec('select-card', { id: null });
+  }
+
   function handleToolbarWheel(event: WheelEvent): void {
     const el = event.currentTarget as HTMLElement;
     if (el.scrollWidth <= el.clientWidth) return;
@@ -998,6 +1012,7 @@
             class="relative min-h-0 flex-1"
             role="presentation"
             oncontextmenucapture={openCardMenu}
+            onclickcapture={closeCardEditorOnBoardClick}
           >
             <Kanban
               cards={board.cards}
