@@ -250,6 +250,7 @@ pub struct ShareManifest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ShareScopeCollabInfo {
     pub notes_collection_uid: String,
+    pub assets_collection_uid: String,
     pub collab_epoch: u64,
     pub collab_salt: Vec<u8>,
 }
@@ -1619,8 +1620,12 @@ pub(crate) fn share_scope_collab_info(
         let notes_collection_uid = manifest_part_uid(&manifest, ShareScopePart::Notes)
             .ok_or_else(|| AppError::InvalidArg("manifest missing notes collection".into()))?
             .to_string();
+        let assets_collection_uid = manifest_part_uid(&manifest, ShareScopePart::Assets)
+            .ok_or_else(|| AppError::InvalidArg("manifest missing assets collection".into()))?
+            .to_string();
         return Ok(Some(ShareScopeCollabInfo {
             notes_collection_uid,
+            assets_collection_uid,
             collab_epoch: manifest.collab_epoch,
             collab_salt: manifest.collab_salt,
         }));

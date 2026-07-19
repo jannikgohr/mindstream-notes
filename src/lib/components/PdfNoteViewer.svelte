@@ -47,6 +47,10 @@
   import { listen } from '$lib/api/events';
   import { extractTextFromDocument } from '$lib/pdf/extract-text';
   import { base64ToBytes } from '$lib/editor/base64';
+  import {
+    collabAuthForRoom,
+    getOrCreateCollabSigningMaterial
+  } from '$lib/sync/collab-signing-key';
   import { otherPeerCount } from '$lib/editor/awareness-presence';
   import { pickCursorColor } from '$lib/editor/cursor-color';
   import { isMobile } from '$lib/platform';
@@ -1924,7 +1928,8 @@
     if (!yDoc || !awareness) return;
 
     try {
-      const room = await noteRoomInfo(noteId);
+      const signingMaterial = await getOrCreateCollabSigningMaterial();
+      const room = await noteRoomInfo(noteId, signingMaterial?.publicKeyB64);
       if (!room) return;
       collabConfigured = true;
       provider = new CollabProvider({
@@ -1933,6 +1938,7 @@
         keyBytes: base64ToBytes(room.key_b64),
         doc: yDoc,
         awareness,
+        auth: collabAuthForRoom(room, signingMaterial),
         onStatusChange: (online) => {
           collabOnline = online;
         }
