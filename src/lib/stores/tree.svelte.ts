@@ -347,6 +347,16 @@ export async function leaveSharedCollection(id: string): Promise<void> {
   await loadTree();
 }
 
+/**
+ * Stop sharing a folder the current user owns. The folder stays (as a personal
+ * folder); recipients lose access. Refreshes the tree so the shared-by-me badge
+ * clears.
+ */
+export async function stopSharingCollection(id: string): Promise<void> {
+  await api.stopSharingCollection(id);
+  await loadTree();
+}
+
 export async function trashMany(
   items: TreeItemRef[]
 ): Promise<api.BatchCounts> {

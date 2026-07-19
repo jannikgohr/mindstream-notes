@@ -45,10 +45,12 @@
     restoreCollection,
     restoreNote,
     setNoteFavourite,
+    stopSharingCollection,
     trashMany as trashManyItems,
     trashCollection,
     trashNote
   } from '$lib/stores/tree.svelte';
+  import { authSession } from '$lib/api/auth.svelte';
   import { setSortDirection, setSortStrategy, ui } from '$lib/state.svelte';
   import { i18n, tUi } from '$lib/settings/i18n.svelte';
   import type { TreeNode } from '$lib/api';
@@ -430,6 +432,53 @@
     }
   }
 
+  async function stopSharing(id: string) {
+    const name =
+      tree.collectionsById[id]?.name ?? tUi('sharing.dialog.folderFallback');
+    if (
+      !(await confirm({
+        title: tUi('sharing.stop.title'),
+        message: tUi('sharing.stop.message').replace('{name}', name),
+        confirmLabel: tUi('sharing.stop.confirm'),
+        destructive: true
+      }))
+    ) {
+      return;
+    }
+    try {
+      await stopSharingCollection(id);
+    } catch (err) {
+      console.error('[FileExplorer] stop sharing failed', id, err);
+      pushToast(tUi('sharing.stop.failed'), { variant: 'error' });
+    }
+  }
+
+  /**
+   * Owner-side sharing actions, grouped into their own submenu and shown only
+   * when signed in (sharing is Tauri + Etebase only). Returns `[]` when signed
+   * out so the whole group disappears.
+   */
+  function sharingMenuGroup(
+    id: string,
+    folder: (typeof tree.collectionsById)[string] | undefined
+  ): (MenuItem | 'separator')[] {
+    if (!authSession.current) return [];
+    const children: MenuItem[] = [
+      {
+        label: tUi('sharing.menu.shareFolder'),
+        onSelect: () => openCollectionShareDialog(id)
+      }
+    ];
+    if (folder && collectionIsSharedByMe(folder)) {
+      children.push({
+        label: tUi('sharing.menu.stopSharing'),
+        destructive: true,
+        onSelect: () => void stopSharing(id)
+      });
+    }
+    return [{ label: tUi('sharing.menu.group'), children }];
+  }
+
   function selectNodeFromClick(e: MouseEvent, node: TreeNode): boolean {
     const key = nodeKey(node) as SelectionKey;
     const result = updateSelectionForClick(
@@ -790,10 +839,7 @@
           label: 'Move to root',
           onSelect: () => void moveCollectionTo(id, null)
         },
-        {
-          label: tUi('sharing.menu.shareFolder'),
-          onSelect: () => openCollectionShareDialog(id)
-        },
+        ...sharingMenuGroup(id, folder),
         'separator',
         {
           label: 'Delete',
