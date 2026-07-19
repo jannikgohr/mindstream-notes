@@ -114,6 +114,20 @@ export function leaveSharedCollection(collectionId: string): Promise<void> {
   );
 }
 
+/**
+ * Stop sharing a folder the current user owns. The owner keeps the folder (it
+ * re-homes into their personal vault); the scope's collections are deleted
+ * server-side so every recipient's device removes its copy on the next sync.
+ * No-op fallback in browser mode (sharing is Tauri-only).
+ */
+export function stopSharingCollection(collectionId: string): Promise<void> {
+  return invokeOrFallback<void>(
+    'stop_sharing_collection',
+    { collectionId },
+    async () => undefined
+  );
+}
+
 export function acceptCollectionInvitation(id: string): Promise<void> {
   return invokeOrFallback<void>(
     'accept_collection_invitation',

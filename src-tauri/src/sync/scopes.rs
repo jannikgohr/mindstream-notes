@@ -62,6 +62,13 @@ pub fn sync_scopes(
             log::warn!("[sync] scope {} sync failed: {e}", manifest.share_scope_id);
         }
     }
+
+    // Reconcile shares the owner revoked (deleted the scope collections): purge
+    // any local shared-with-me root whose collections are now deleted server-side.
+    // Isolated so a failure here can't wedge the rest of the sync.
+    if let Err(e) = crate::sharing::reconcile_revoked_shares(db, cm) {
+        log::warn!("[sync] revoked-share reconcile failed: {e}");
+    }
     Ok(())
 }
 

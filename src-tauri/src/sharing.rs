@@ -672,7 +672,7 @@ pub async fn leave_shared_collection(app: AppHandle, collection_id: String) -> R
 /// a left scope stops rendering and can't be re-pushed. Mirrors the delete set of
 /// `sync::scopes::discard_read_only_scope_edits` but unconditional (leaving drops
 /// remote-authoritative rows too, not just dirty local edits).
-fn purge_local_scope(db: &Db, scope: &str) -> AppResult<()> {
+pub(crate) fn purge_local_scope(db: &Db, scope: &str) -> AppResult<()> {
     db.with_conn_mut(|conn| {
         let tx = conn.transaction()?;
         tx.execute(
@@ -767,6 +767,127 @@ fn purge_local_subtree(db: &Db, root_id: &str) -> AppResult<()> {
         tx.commit()?;
         Ok(())
     })
+}
+
+/// Reconcile shares the owner has revoked: for each folder shared *with* us that
+/// still lives locally, check whether its part collection (`share_id` = the
+/// folders collection uid) has been deleted server-side. A confirmed deletion
+/// (`is_deleted() == true`) is the owner's "stop sharing" signal, so purge the
+/// local scope. Fetch errors are transient and skipped — never purge on a mere
+/// network hiccup. Called from `sync::scopes::sync_scopes`.
+pub(crate) fn reconcile_revoked_shares(db: &Db, cm: &CollectionManager) -> AppResult<()> {
+    // (local root id, share_scope_id, share_id) for every accepted shared-with-me
+    // root that carries a resolvable server handle.
+    let roots: Vec<(String, String, String)> = db.with_conn(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT id, share_scope_id, share_id
+               FROM collections
+              WHERE COALESCE(shared_by_me, 0) = 0
+                AND share_scope_id IS NOT NULL
+                AND share_id IS NOT NULL",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    })?;
+
+    for (root_id, scope_id, share_id) in roots {
+        match cm.fetch(&share_id, None) {
+            Ok(col) if col.is_deleted() => {
+                log::info!(
+                    "[sharing] owner revoked scope {scope_id} (root {root_id}); purging locally"
+                );
+                purge_local_scope(db, &scope_id)?;
+            }
+            Ok(_) => {}
+            // Transient (offline, server blip) — leave the folder in place; a real
+            // revoke is still caught on a later sync.
+            Err(e) => log::debug!("[sharing] check share {share_id} for revoke: {e}"),
+        }
+    }
+    Ok(())
+}
+
+/// Stop sharing a folder the current user owns (`shared_by_me`). The owner keeps
+/// the folder — its subtree is re-homed back into the vault as a personal folder
+/// — while every recipient loses access: the scope's collections are deleted
+/// server-side, which each recipient's next sync reads (`is_deleted`) and
+/// reconciles by purging its local copy (see `reconcile_revoked_shares`).
+#[tauri::command]
+pub async fn stop_sharing_collection(app: AppHandle, collection_id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let account = restore_required(&app)?;
+        let db = app.state::<Db>();
+
+        let (scope_id, shared_by_me): (Option<String>, bool) = db.with_conn(|conn| {
+            Ok(conn
+                .query_row(
+                    "SELECT share_scope_id, COALESCE(shared_by_me, 0)
+                     FROM collections WHERE id = ?1",
+                    params![collection_id],
+                    |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, i64>(1)? != 0)),
+                )
+                .optional()?
+                .unwrap_or((None, false)))
+        })?;
+
+        if !shared_by_me {
+            return Err(AppError::InvalidArg(
+                "you're not sharing this folder".into(),
+            ));
+        }
+        let Some(scope_id) = scope_id else {
+            return Err(AppError::InvalidArg(
+                "this folder has no share scope to stop".into(),
+            ));
+        };
+
+        // Local first, so the owner keeps their content even if the server call
+        // below fails.
+        db.with_conn(|conn| detach_owner_share(conn, &collection_id))?;
+
+        // Revoke server-side by deleting the scope's collections — the signal
+        // recipients read to purge their copies. Best-effort: a scope already gone
+        // server-side is fine (the folder is already personal locally).
+        let cm = account
+            .collection_manager()
+            .map_err(|e| AppError::InvalidArg(format!("collection_manager: {e}")))?;
+        match find_existing_scope(&cm, &scope_id) {
+            Ok(Some(scope)) => {
+                for mut col in [scope.manifest, scope.folders, scope.notes, scope.assets] {
+                    if let Err(e) = col.delete() {
+                        log::warn!(
+                            "[sharing] mark {} deleted (scope {scope_id}): {e}",
+                            col.uid()
+                        );
+                        continue;
+                    }
+                    if let Err(e) = cm.upload(&col, None) {
+                        log::warn!(
+                            "[sharing] upload delete of {} (scope {scope_id}): {e}",
+                            col.uid()
+                        );
+                    }
+                }
+            }
+            Ok(None) => log::warn!(
+                "[sharing] scope {scope_id} already gone server-side while stopping share"
+            ),
+            Err(e) => log::warn!("[sharing] resolve scope {scope_id} to stop sharing: {e}"),
+        }
+
+        Ok::<(), AppError>(())
+    })
+    .await
+    .map_err(|e| format!("stop sharing collection task: {e}"))?
+    .map_err(Into::into)
 }
 
 #[tauri::command]
@@ -1470,6 +1591,31 @@ fn record_outgoing_share(
             now,
             collection_id
         ],
+    )?;
+    Ok(())
+}
+
+/// Reverse a share on the owner's side, locally: re-home the folder's subtree
+/// from its shared scope back into the vault (so the owner keeps the content as a
+/// personal folder) and strip the anchor's share membership columns. The caller
+/// revokes the server-side scope collections separately. Pure DB mutation, so it
+/// is unit-testable without a server.
+fn detach_owner_share(conn: &Connection, root_folder_id: &str) -> AppResult<()> {
+    // Subtree home to the vault first: tombstones the scoped rows, clears
+    // share_scope_id across the subtree, and marks dirty for the vault push.
+    rehome_folder_subtree(conn, root_folder_id, None)?;
+    // rehome only touches share_scope_id — clear the anchor's remaining share
+    // metadata so it reads as an ordinary personal folder.
+    let now = Utc::now().to_rfc3339();
+    conn.execute(
+        "UPDATE collections
+            SET shared_by_me = 0,
+                share_id = NULL,
+                shared_role = NULL,
+                shared_owner = NULL,
+                modified = ?1
+          WHERE id = ?2",
+        params![now, root_folder_id],
     )?;
     Ok(())
 }
@@ -2686,6 +2832,71 @@ mod tests {
                 |r| r.get(0),
             )?;
             assert_eq!(kept, 1, "unrelated personal folder must survive");
+            Ok::<(), AppError>(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn detach_owner_share_rehomes_to_vault_and_clears_share_metadata() {
+        // Stop-sharing's local half: an owner's shared_by_me root + subtree must
+        // come back to the vault (share_scope_id NULL, dirty, tombstoned) with the
+        // anchor's share columns cleared.
+        let db = crate::db::open_memory_for_tests();
+        db.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO collections(id, parent_collection_id, name, position, created, modified, etebase_uid, share_scope_id, share_id, shared_role, shared_owner, shared_by_me, dirty)
+                 VALUES ('root', NULL, 'Shared', 0, 't', 't', 'scope_root_uid', 'scope_1', 'folders_uid', 'read_write', 'alice', 1, 0)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO notes(id, parent_collection_id, title, body, position, created, modified, etebase_uid, share_scope_id, dirty)
+                 VALUES ('n1', 'root', 'N1', '', 0, 't', 't', 'scope_n1_uid', 'scope_1', 0)",
+                [],
+            )?;
+            Ok::<(), AppError>(())
+        })
+        .unwrap();
+
+        db.with_conn(|conn| detach_owner_share(conn, "root"))
+            .unwrap();
+
+        db.with_conn(|conn| {
+            let (scope, share_id, role, owner, by_me): (
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                i64,
+            ) = conn.query_row(
+                "SELECT share_scope_id, share_id, shared_role, shared_owner, shared_by_me
+                   FROM collections WHERE id = 'root'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )?;
+            assert!(scope.is_none(), "root scope cleared");
+            assert!(share_id.is_none(), "share_id cleared");
+            assert!(role.is_none(), "shared_role cleared");
+            assert!(owner.is_none(), "shared_owner cleared");
+            assert_eq!(by_me, 0, "shared_by_me cleared");
+
+            // Subtree note is back on the vault and marked dirty for re-push.
+            let (note_scope, note_dirty): (Option<String>, i64) = conn.query_row(
+                "SELECT share_scope_id, dirty FROM notes WHERE id = 'n1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?;
+            assert!(note_scope.is_none(), "note re-homed to vault");
+            assert_eq!(note_dirty, 1, "note dirty for vault push");
+
+            // The already-pushed rows queued a tombstone routed to their source
+            // scope so the old scoped items are deleted.
+            let tombstoned: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM tombstones WHERE etebase_uid IN ('scope_root_uid', 'scope_n1_uid')",
+                [],
+                |r| r.get(0),
+            )?;
+            assert_eq!(tombstoned, 2, "pushed rows tombstoned on detach");
             Ok::<(), AppError>(())
         })
         .unwrap();
