@@ -704,6 +704,29 @@ pub(crate) fn purge_local_scope(db: &Db, scope: &str) -> AppResult<()> {
     })
 }
 
+/// Best-effort delete of an already-fetched collection (owner revoke). Marks it
+/// deleted and uploads the tombstone; every failure is logged and swallowed — the
+/// owner's folder is already personal locally, so a failed server revoke is not
+/// fatal (recipients reconcile once the delete does land).
+fn delete_collection_best_effort(cm: &CollectionManager, mut col: Collection, scope_label: &str) {
+    if col.is_deleted() {
+        return;
+    }
+    if let Err(e) = col.delete() {
+        log::warn!(
+            "[sharing] mark {} deleted (scope {scope_label}): {e}",
+            col.uid()
+        );
+        return;
+    }
+    if let Err(e) = cm.upload(&col, None) {
+        log::warn!(
+            "[sharing] upload delete of {} (scope {scope_label}): {e}",
+            col.uid()
+        );
+    }
+}
+
 /// Best-effort `member.leave()` on one collection by uid. Any failure (fetch,
 /// member-manager, or the leave itself) is logged and swallowed — the caller
 /// relies on the local purge, not this, to actually remove the folder.
@@ -826,61 +849,77 @@ pub async fn stop_sharing_collection(app: AppHandle, collection_id: String) -> R
         let account = restore_required(&app)?;
         let db = app.state::<Db>();
 
-        let (scope_id, shared_by_me): (Option<String>, bool) = db.with_conn(|conn| {
-            Ok(conn
-                .query_row(
-                    "SELECT share_scope_id, COALESCE(shared_by_me, 0)
-                     FROM collections WHERE id = ?1",
-                    params![collection_id],
-                    |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, i64>(1)? != 0)),
-                )
-                .optional()?
-                .unwrap_or((None, false)))
-        })?;
+        // `share_scope_id` is the ideal handle, but a broken/dev-era outgoing
+        // share can be `shared_by_me` with a NULL scope while still carrying
+        // `share_id` (the folders collection uid). Never hard-error on such a
+        // folder — it must remain un-shareable-able so the owner can clean it up.
+        let (scope_id, share_id, shared_by_me): (Option<String>, Option<String>, bool) = db
+            .with_conn(|conn| {
+                Ok(conn
+                    .query_row(
+                        "SELECT share_scope_id, share_id, COALESCE(shared_by_me, 0)
+                         FROM collections WHERE id = ?1",
+                        params![collection_id],
+                        |row| {
+                            Ok((
+                                row.get::<_, Option<String>>(0)?,
+                                row.get::<_, Option<String>>(1)?,
+                                row.get::<_, i64>(2)? != 0,
+                            ))
+                        },
+                    )
+                    .optional()?
+                    .unwrap_or((None, None, false)))
+            })?;
 
-        if !shared_by_me {
+        if !shared_by_me && scope_id.is_none() && share_id.is_none() {
             return Err(AppError::InvalidArg(
                 "you're not sharing this folder".into(),
             ));
         }
-        let Some(scope_id) = scope_id else {
-            return Err(AppError::InvalidArg(
-                "this folder has no share scope to stop".into(),
-            ));
-        };
 
         // Local first, so the owner keeps their content even if the server call
-        // below fails.
+        // below fails. Handles a NULL scope (just clears the share metadata).
         db.with_conn(|conn| detach_owner_share(conn, &collection_id))?;
 
         // Revoke server-side by deleting the scope's collections — the signal
         // recipients read to purge their copies. Best-effort: a scope already gone
-        // server-side is fine (the folder is already personal locally).
+        // server-side (or a NULL-scope broken share) is fine, the folder is already
+        // personal locally. Prefer the full scope; fall back to the folders
+        // collection by `share_id` when the scope can't be resolved.
         let cm = account
             .collection_manager()
             .map_err(|e| AppError::InvalidArg(format!("collection_manager: {e}")))?;
-        match find_existing_scope(&cm, &scope_id) {
-            Ok(Some(scope)) => {
-                for mut col in [scope.manifest, scope.folders, scope.notes, scope.assets] {
-                    if let Err(e) = col.delete() {
-                        log::warn!(
-                            "[sharing] mark {} deleted (scope {scope_id}): {e}",
-                            col.uid()
-                        );
-                        continue;
+        let scope_label = scope_id.as_deref().unwrap_or("-");
+        let mut deleted_via_scope = false;
+        if let Some(scope) = scope_id.as_deref() {
+            match find_existing_scope(&cm, scope) {
+                Ok(Some(resolved)) => {
+                    for col in [
+                        resolved.manifest,
+                        resolved.folders,
+                        resolved.notes,
+                        resolved.assets,
+                    ] {
+                        delete_collection_best_effort(&cm, col, scope);
                     }
-                    if let Err(e) = cm.upload(&col, None) {
-                        log::warn!(
-                            "[sharing] upload delete of {} (scope {scope_id}): {e}",
-                            col.uid()
-                        );
+                    deleted_via_scope = true;
+                }
+                Ok(None) => log::warn!(
+                    "[sharing] scope {scope} already gone server-side while stopping share"
+                ),
+                Err(e) => log::warn!("[sharing] resolve scope {scope} to stop sharing: {e}"),
+            }
+        }
+        if !deleted_via_scope {
+            if let Some(uid) = share_id.as_deref() {
+                match cm.fetch(uid, None) {
+                    Ok(col) => delete_collection_best_effort(&cm, col, scope_label),
+                    Err(e) => {
+                        log::warn!("[sharing] fetch {uid} to delete (scope {scope_label}): {e}")
                     }
                 }
             }
-            Ok(None) => log::warn!(
-                "[sharing] scope {scope_id} already gone server-side while stopping share"
-            ),
-            Err(e) => log::warn!("[sharing] resolve scope {scope_id} to stop sharing: {e}"),
         }
 
         Ok::<(), AppError>(())
@@ -1601,11 +1640,23 @@ fn record_outgoing_share(
 /// revokes the server-side scope collections separately. Pure DB mutation, so it
 /// is unit-testable without a server.
 fn detach_owner_share(conn: &Connection, root_folder_id: &str) -> AppResult<()> {
-    // Subtree home to the vault first: tombstones the scoped rows, clears
-    // share_scope_id across the subtree, and marks dirty for the vault push.
-    rehome_folder_subtree(conn, root_folder_id, None)?;
-    // rehome only touches share_scope_id — clear the anchor's remaining share
-    // metadata so it reads as an ordinary personal folder.
+    // Only re-home when the folder is actually scoped: rehome detaches + repushes
+    // the whole subtree, which is needless churn (and tombstones vault items) if
+    // the share was already broken with a NULL scope. Either way we clear the
+    // anchor's share columns below so it reads as an ordinary personal folder.
+    let scope: Option<String> = conn
+        .query_row(
+            "SELECT share_scope_id FROM collections WHERE id = ?1",
+            params![root_folder_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten();
+    if scope.is_some() {
+        // Subtree home to the vault: tombstones the scoped rows, clears
+        // share_scope_id across the subtree, and marks dirty for the vault push.
+        rehome_folder_subtree(conn, root_folder_id, None)?;
+    }
     let now = Utc::now().to_rfc3339();
     conn.execute(
         "UPDATE collections
@@ -1613,6 +1664,7 @@ fn detach_owner_share(conn: &Connection, root_folder_id: &str) -> AppResult<()> 
                 share_id = NULL,
                 shared_role = NULL,
                 shared_owner = NULL,
+                share_scope_id = NULL,
                 modified = ?1
           WHERE id = ?2",
         params![now, root_folder_id],
@@ -2897,6 +2949,41 @@ mod tests {
                 |r| r.get(0),
             )?;
             assert_eq!(tombstoned, 2, "pushed rows tombstoned on detach");
+            Ok::<(), AppError>(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn detach_owner_share_clears_metadata_on_null_scope_without_rehome() {
+        // A broken/dev-era outgoing share: shared_by_me but NULL scope. Stopping it
+        // must still clear the share columns (so the folder becomes personal) and
+        // must NOT tombstone the already-pushed vault row (no scope to re-home).
+        let db = crate::db::open_memory_for_tests();
+        db.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO collections(id, parent_collection_id, name, position, created, modified, etebase_uid, share_id, shared_role, shared_owner, shared_by_me, dirty)
+                 VALUES ('root', NULL, 'Broken share', 0, 't', 't', 'vault_root', 'folders_uid', 'read_write', 'me', 1, 0)",
+                [],
+            )?;
+            Ok::<(), AppError>(())
+        })
+        .unwrap();
+
+        db.with_conn(|conn| detach_owner_share(conn, "root"))
+            .unwrap();
+
+        db.with_conn(|conn| {
+            let (share_id, by_me): (Option<String>, i64) = conn.query_row(
+                "SELECT share_id, shared_by_me FROM collections WHERE id = 'root'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?;
+            assert!(share_id.is_none(), "share_id cleared");
+            assert_eq!(by_me, 0, "shared_by_me cleared");
+            let tombstones: i64 =
+                conn.query_row("SELECT COUNT(*) FROM tombstones", [], |r| r.get(0))?;
+            assert_eq!(tombstones, 0, "no re-home churn on a NULL-scope share");
             Ok::<(), AppError>(())
         })
         .unwrap();
