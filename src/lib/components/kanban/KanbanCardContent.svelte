@@ -300,11 +300,16 @@
     min-width: 0;
     align-items: center;
     gap: 6px;
-    border: 1px solid var(--wx-kanban-border-color);
+    border: 1px solid
+      color-mix(
+        in srgb,
+        var(--wx-kanban-border-color) 78%,
+        var(--wx-color-primary)
+      );
     border-radius: 5px;
     background: color-mix(
       in srgb,
-      var(--wx-kanban-card-bg) 76%,
+      var(--wx-kanban-card-bg) 92%,
       var(--wx-color-primary)
     );
     color: var(--wx-color-font);
@@ -317,8 +322,16 @@
   }
 
   .kanban-card-linked-note:hover:not(:disabled) {
-    border-color: var(--wx-color-primary);
-    background: var(--wx-background-hover);
+    border-color: color-mix(
+      in srgb,
+      var(--wx-kanban-border-color) 55%,
+      var(--wx-color-primary)
+    );
+    background: color-mix(
+      in srgb,
+      var(--wx-kanban-card-bg) 86%,
+      var(--wx-color-primary)
+    );
   }
 
   .kanban-card-linked-note:disabled {
