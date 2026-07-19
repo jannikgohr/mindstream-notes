@@ -177,6 +177,7 @@
     "metadata.type.freeform": "Drawing canvas",
     "metadata.type.ink": "Handwritten note",
     "metadata.type.pdf": "PDF note",
+    "metadata.type.kanban": "Kanban note",
     "metadata.type.unknown": "Unknown note",
     "metadata.type.unknownNamed": "{kind} note",
     "metadata.dates": "Dates",

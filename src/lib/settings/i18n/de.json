@@ -79,6 +79,7 @@
     "metadata.type.freeform": "Zeichenfläche",
     "metadata.type.ink": "Handschriftliche Notiz",
     "metadata.type.pdf": "PDF-Notiz",
+    "metadata.type.kanban": "Kanban Notiz",
     "metadata.type.unknown": "Unbekannte Notiz",
     "metadata.type.unknownNamed": "{kind}-Notiz",
     "metadata.dates": "Daten",
