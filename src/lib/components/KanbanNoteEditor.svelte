@@ -48,6 +48,10 @@
     type VersionAction
   } from '$lib/api';
   import { listen } from '$lib/api/events';
+  import {
+    horizontalInsertionIndex,
+    moveItemToIndex
+  } from '$lib/actions/horizontal-reorder';
   import { tree } from '$lib/stores/tree.svelte';
   import { getSettingValue } from '$lib/settings/store.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
@@ -98,6 +102,16 @@
 
   interface Props {
     noteId: string;
+  }
+  interface ListPointerDrag {
+    id: string;
+    pointerId: number;
+    grabX: number;
+    width: number;
+    height: number;
+    top: number;
+    x: number;
+    sourceIndex: number;
   }
   let { noteId }: Props = $props();
 
@@ -339,11 +353,21 @@
   } | null>(null);
   let listMenu = $state<{ id: string; x: number; y: number } | null>(null);
   let renamingListId = $state<string | null>(null);
-  let draggingListId = $state<string | null>(null);
-  let listDropTarget = $state<{
-    id: string;
-    position: 'before' | 'after';
-  } | null>(null);
+  let listDrag = $state<ListPointerDrag | null>(null);
+  let listDropIndex = $state<number | null>(null);
+  let listDragMoved = $state(false);
+  const displayedColumns = $derived.by(() => {
+    if (!listDrag) return board.columns;
+    return moveItemToIndex(
+      board.columns,
+      listDrag.id,
+      listDropIndex ?? listDrag.sourceIndex
+    );
+  });
+  const draggedColumn = $derived.by(() => {
+    const drag = listDrag;
+    return drag ? board.columns.find((col) => col.id === drag.id) : null;
+  });
 
   function addColumn(): void {
     if (!yDoc || isTrashed) return;
@@ -452,66 +476,88 @@
     updateUndoState();
   }
 
-  function startListDrag(event: DragEvent, id: string): void {
-    if (renamingListId === id) {
-      event.preventDefault();
+  function beginListPointerDrag(event: PointerEvent, id: string): void {
+    if (event.button !== 0 || renamingListId === id || isTrashed) return;
+    const target = event.target as Element | null;
+    if (target?.closest('button,input,textarea,select,[contenteditable]')) {
       return;
     }
-    draggingListId = id;
-    listDropTarget = null;
-    event.dataTransfer?.setData('text/plain', id);
-    if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
-  }
+    const chip = event.currentTarget as HTMLElement;
+    const rect = chip.getBoundingClientRect();
+    const sourceIndex = board.columns.findIndex((col) => col.id === id);
+    if (sourceIndex < 0) return;
 
-  function dragListOver(event: DragEvent, id: string): void {
-    const sourceId =
-      draggingListId ?? event.dataTransfer?.getData('text/plain');
-    if (!sourceId || sourceId === id) return;
     event.preventDefault();
-    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
-    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
-    listDropTarget = {
+    listDrag = {
       id,
-      position: event.clientX > rect.left + rect.width / 2 ? 'after' : 'before'
+      pointerId: event.pointerId,
+      grabX: event.clientX - rect.left,
+      width: rect.width,
+      height: rect.height,
+      top: rect.top,
+      x: event.clientX,
+      sourceIndex
     };
+    listDropIndex = sourceIndex;
+    listDragMoved = false;
+    window.addEventListener('pointermove', moveListPointerDrag, true);
+    window.addEventListener('pointerup', finishListPointerDrag, true);
+    window.addEventListener('pointercancel', cancelListPointerDrag, true);
   }
 
-  function dropList(event: DragEvent, id: string): void {
-    event.preventDefault();
-    const sourceId =
-      draggingListId ?? event.dataTransfer?.getData('text/plain');
-    const position =
-      listDropTarget?.id === id ? listDropTarget.position : 'before';
-    if (sourceId && sourceId !== id) reorderColumn(sourceId, id, position);
-    endListDrag();
-  }
-
-  function endListDrag(): void {
-    draggingListId = null;
-    listDropTarget = null;
-  }
-
-  function reorderColumn(
-    sourceId: string,
-    targetId: string,
-    position: 'before' | 'after'
-  ): void {
-    if (!yDoc || isTrashed) return;
-    const columns = [...board.columns];
-    const sourceIndex = columns.findIndex((c) => c.id === sourceId);
-    const targetIndex = columns.findIndex((c) => c.id === targetId);
-    if (sourceIndex < 0 || targetIndex < 0) return;
-
-    const [moved] = columns.splice(sourceIndex, 1);
-    let insertIndex = targetIndex;
-    if (sourceIndex < targetIndex) insertIndex -= 1;
-    if (position === 'after') insertIndex += 1;
-    columns.splice(
-      Math.max(0, Math.min(insertIndex, columns.length)),
-      0,
-      moved
+  function listReorderElements(): HTMLElement[] {
+    return Array.from(
+      toolbarScrollEl?.querySelectorAll<HTMLElement>('[data-reorder-id]') ?? []
     );
+  }
 
+  function moveListPointerDrag(event: PointerEvent): void {
+    if (!listDrag || event.pointerId !== listDrag.pointerId) return;
+    event.preventDefault();
+    const toolbar = toolbarScrollEl;
+    if (toolbar) {
+      const rect = toolbar.getBoundingClientRect();
+      if (event.clientX < rect.left + 32) toolbar.scrollLeft -= 12;
+      else if (event.clientX > rect.right - 32) toolbar.scrollLeft += 12;
+    }
+
+    listDrag = { ...listDrag, x: event.clientX };
+    listDragMoved = true;
+    listDropIndex = horizontalInsertionIndex(
+      board.columns,
+      listDrag.id,
+      listReorderElements(),
+      event.clientX
+    );
+  }
+
+  function finishListPointerDrag(event: PointerEvent): void {
+    if (!listDrag || event.pointerId !== listDrag.pointerId) return;
+    event.preventDefault();
+    const drag = listDrag;
+    const dropIndex = listDropIndex ?? drag.sourceIndex;
+    cleanupListPointerDrag();
+
+    if (dropIndex === drag.sourceIndex) return;
+    commitColumnOrder(moveItemToIndex(board.columns, drag.id, dropIndex));
+  }
+
+  function cancelListPointerDrag(event: PointerEvent): void {
+    if (!listDrag || event.pointerId !== listDrag.pointerId) return;
+    cleanupListPointerDrag();
+  }
+
+  function cleanupListPointerDrag(): void {
+    window.removeEventListener('pointermove', moveListPointerDrag, true);
+    window.removeEventListener('pointerup', finishListPointerDrag, true);
+    window.removeEventListener('pointercancel', cancelListPointerDrag, true);
+    listDrag = null;
+    listDropIndex = null;
+    listDragMoved = false;
+  }
+
+  function commitColumnOrder(columns: KanbanColumnData[]): void {
+    if (!yDoc || isTrashed) return;
     upsertBoardIntoYDoc(yDoc, {
       columns: columns.map((col, order) => ({ ...col, order })),
       cards: []
@@ -818,6 +864,7 @@
   });
 
   onDestroy(() => {
+    cleanupListPointerDrag();
     if (saveTimer) {
       clearTimeout(saveTimer);
       saveTimer = null;
@@ -893,25 +940,17 @@
 
                 <ToolbarSeparator />
 
-                {#each board.columns as col (col.id)}
+                {#each displayedColumns as col (col.id)}
                   <div
                     class="kanban-list-chip"
-                    class:kanban-list-chip-dragging={draggingListId === col.id}
-                    class:kanban-list-chip-drop-before={listDropTarget?.id ===
-                      col.id && listDropTarget.position === 'before'}
-                    class:kanban-list-chip-drop-after={listDropTarget?.id ===
-                      col.id && listDropTarget.position === 'after'}
+                    class:kanban-list-chip-placeholder={listDragMoved &&
+                      listDrag?.id === col.id}
+                    data-reorder-id={col.id}
                     role="group"
                     aria-label={col.label}
-                    draggable={renamingListId !== col.id}
-                    aria-grabbed={draggingListId === col.id}
-                    ondragstart={(event) => startListDrag(event, col.id)}
-                    ondragover={(event) => dragListOver(event, col.id)}
-                    ondragleave={() => {
-                      if (listDropTarget?.id === col.id) listDropTarget = null;
-                    }}
-                    ondrop={(event) => dropList(event, col.id)}
-                    ondragend={endListDrag}
+                    aria-grabbed={listDrag?.id === col.id}
+                    onpointerdown={(event) =>
+                      beginListPointerDrag(event, col.id)}
                   >
                     {#if renamingListId === col.id}
                       <input
@@ -973,6 +1012,23 @@
         </div>
       </ThemeComponent>
     </div>
+    {#if listDrag && listDragMoved && draggedColumn}
+      <div
+        class="kanban-list-drag-ghost"
+        style:left={`${listDrag.x - listDrag.grabX}px`}
+        style:top={`${listDrag.top}px`}
+        style:width={`${listDrag.width}px`}
+        style:height={`${listDrag.height}px`}
+        aria-hidden="true"
+      >
+        <span class="kanban-list-label" title={draggedColumn.label}
+          >{draggedColumn.label}</span
+        >
+        <div class="kanban-list-ghost-menu">
+          <Ellipsis aria-hidden="true" />
+        </div>
+      </div>
+    {/if}
     {#if listMenu}
       <AppContextMenu
         x={listMenu.x}
@@ -1037,10 +1093,12 @@
     padding-left: 0.5rem;
     padding-right: 0.125rem;
     cursor: grab;
+    touch-action: none;
     transition:
       border-color 120ms,
       box-shadow 120ms,
-      opacity 120ms;
+      opacity 120ms,
+      transform 120ms;
   }
   .kanban-list-chip:active {
     cursor: grabbing;
@@ -1049,14 +1107,37 @@
     border-color: var(--ring);
     box-shadow: 0 0 0 1px var(--ring);
   }
-  .kanban-list-chip-dragging {
-    opacity: 0.55;
+  .kanban-list-chip-placeholder {
+    opacity: 0.18;
   }
-  .kanban-list-chip-drop-before {
-    box-shadow: -3px 0 0 var(--ring);
+  .kanban-list-drag-ghost {
+    position: fixed;
+    z-index: 360;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    border: 1px solid var(--ring);
+    border-radius: 0.375rem;
+    background: var(--card);
+    padding-left: 0.5rem;
+    padding-right: 0.125rem;
+    box-shadow:
+      0 0 0 1px var(--ring),
+      0 8px 20px rgb(0 0 0 / 0.18);
+    pointer-events: none;
+    will-change: left;
   }
-  .kanban-list-chip-drop-after {
-    box-shadow: 3px 0 0 var(--ring);
+  .kanban-list-ghost-menu {
+    display: inline-flex;
+    width: 2rem;
+    height: 2rem;
+    align-items: center;
+    justify-content: center;
+    color: var(--muted-foreground);
+  }
+  .kanban-list-ghost-menu :global(svg) {
+    width: 1rem;
+    height: 1rem;
   }
   .kanban-list-label {
     max-width: 12rem;
