@@ -31,11 +31,19 @@ export const KANBAN_RESTORE_ORIGIN = 'kanban-restore';
 
 const COLUMNS_KEY = 'kanban:columns';
 const CARDS_KEY = 'kanban:cards';
+const LABELS_KEY = 'kanban:labels';
 
 export interface KanbanColumnData {
   id: string;
   label: string;
   collapsed?: boolean;
+  order: number;
+}
+
+export interface KanbanLabelData {
+  id: string;
+  label: string;
+  color?: string;
   order: number;
 }
 
@@ -63,6 +71,7 @@ export interface KanbanCardData {
 export interface KanbanBoard {
   columns: KanbanColumnData[];
   cards: KanbanCardData[];
+  labels?: KanbanLabelData[];
 }
 
 /** Card fields that round-trip through the Y.Map, minus `id`/`order`. */
@@ -86,9 +95,17 @@ function cardsArray(doc: Y.Doc): Y.Array<Y.Map<unknown>> {
   return doc.getArray<Y.Map<unknown>>(CARDS_KEY);
 }
 
+function labelsArray(doc: Y.Doc): Y.Array<Y.Map<unknown>> {
+  return doc.getArray<Y.Map<unknown>>(LABELS_KEY);
+}
+
 /** True when the doc has no board yet (freshly created / never opened). */
 export function isBoardEmpty(doc: Y.Doc): boolean {
-  return columnsArray(doc).length === 0 && cardsArray(doc).length === 0;
+  return (
+    columnsArray(doc).length === 0 &&
+    cardsArray(doc).length === 0 &&
+    labelsArray(doc).length === 0
+  );
 }
 
 /** The columns a brand-new board starts with. */
@@ -165,6 +182,18 @@ function readColumn(
   };
 }
 
+function readLabel(map: Y.Map<unknown>, index: number): KanbanLabelData | null {
+  const id = map.get('id');
+  if (typeof id !== 'string') return null;
+  const orderRaw = map.get('order');
+  return {
+    id,
+    label: (map.get('label') as string) ?? '',
+    color: map.get('color') as string | undefined,
+    order: typeof orderRaw === 'number' ? orderRaw : index
+  };
+}
+
 function byOrder<T extends { order: number; id: string }>(a: T, b: T): number {
   if (a.order !== b.order) return a.order - b.order;
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
@@ -185,9 +214,15 @@ export function readBoardFromYDoc(doc: Y.Doc): KanbanBoard {
     const card = readCard(map, i);
     if (card) cards.push(card);
   });
+  const labels: KanbanLabelData[] = [];
+  labelsArray(doc).forEach((map, i) => {
+    const label = readLabel(map, i);
+    if (label) labels.push(label);
+  });
   columns.sort(byOrder);
   cards.sort(byOrder);
-  return { columns, cards };
+  labels.sort(byOrder);
+  return { columns, cards, labels };
 }
 
 function indexById(arr: Y.Array<Y.Map<unknown>>): Map<string, Y.Map<unknown>> {
@@ -223,6 +258,7 @@ export function writeBoardToYDoc(
   doc.transact(() => {
     reconcileColumns(doc, board.columns, prune);
     reconcileCards(doc, board.cards, prune);
+    reconcileLabels(doc, board.labels ?? [], prune);
   }, origin);
 }
 
@@ -246,10 +282,13 @@ export function upsertBoardIntoYDoc(
  * history restores out of the user's undo stack.
  */
 export function createKanbanUndoManager(doc: Y.Doc): Y.UndoManager {
-  return new Y.UndoManager([columnsArray(doc), cardsArray(doc)], {
-    trackedOrigins: new Set([KANBAN_LOCAL_ORIGIN]),
-    captureTimeout: 0
-  });
+  return new Y.UndoManager(
+    [columnsArray(doc), cardsArray(doc), labelsArray(doc)],
+    {
+      trackedOrigins: new Set([KANBAN_LOCAL_ORIGIN]),
+      captureTimeout: 0
+    }
+  );
 }
 
 /** Remove a single card by id — the only way the live editor deletes a card. */
@@ -365,6 +404,38 @@ function reconcileCards(
   }
 }
 
+function reconcileLabels(
+  doc: Y.Doc,
+  labels: KanbanLabelData[],
+  prune: boolean
+): void {
+  const arr = labelsArray(doc);
+  const existing = indexById(arr);
+  const desiredIds = new Set(labels.map((label) => label.id));
+
+  for (const label of labels) {
+    const map = existing.get(label.id);
+    if (map) {
+      setIfChanged(map, 'label', label.label);
+      setIfChanged(map, 'color', label.color);
+      if (map.get('order') !== label.order) map.set('order', label.order);
+    } else {
+      const created = new Y.Map<unknown>();
+      created.set('id', label.id);
+      created.set('label', label.label);
+      created.set('order', label.order);
+      if (label.color) created.set('color', label.color);
+      arr.push([created]);
+    }
+  }
+
+  if (!prune) return;
+  for (let i = arr.length - 1; i >= 0; i--) {
+    const id = arr.get(i).get('id');
+    if (typeof id === 'string' && !desiredIds.has(id)) arr.delete(i, 1);
+  }
+}
+
 /** Seed a fresh doc with the default columns (no-op if it already has data). */
 export function seedDefaultBoard(doc: Y.Doc): void {
   if (!isBoardEmpty(doc)) return;
@@ -382,6 +453,7 @@ export function seedDefaultBoard(doc: Y.Doc): void {
  */
 export function boardToPlainText(board: KanbanBoard): string {
   const colLabel = new Map(board.columns.map((c) => [c.id, c.label]));
+  const labels = new Map((board.labels ?? []).map((l) => [l.id, l.label]));
   const lines: string[] = [];
   for (const col of [...board.columns].sort(byOrder)) {
     lines.push(`## ${col.label}`);
@@ -390,6 +462,9 @@ export function boardToPlainText(board: KanbanBoard): string {
     const where = colLabel.get(card.column);
     lines.push(where ? `- ${card.label} (${where})` : `- ${card.label}`);
     if (card.description) lines.push(card.description);
+    if (card.tags?.length) {
+      lines.push(card.tags.map((id) => labels.get(id) ?? id).join(' '));
+    }
   }
   return lines.join('\n');
 }
@@ -433,8 +508,10 @@ export function observeBoard(
   };
   columnsArray(doc).observeDeep(onEvents);
   cardsArray(doc).observeDeep(onEvents);
+  labelsArray(doc).observeDeep(onEvents);
   return () => {
     columnsArray(doc).unobserveDeep(onEvents);
     cardsArray(doc).unobserveDeep(onEvents);
+    labelsArray(doc).unobserveDeep(onEvents);
   };
 }
