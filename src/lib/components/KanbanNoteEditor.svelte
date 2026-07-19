@@ -1010,7 +1010,7 @@
               <Editor {api} items={editorItems} />
             {/if}
           </div>
-          <KanbanCardMenu {api} bind:this={cardMenu} />
+          <KanbanCardMenu {api} css="kanban-card-menu" bind:this={cardMenu} />
         </div>
       </ThemeComponent>
     </div>
@@ -1163,6 +1163,44 @@
   }
   .kanban-list-name:focus {
     outline: none;
+  }
+  :global(.wx-menu.kanban-card-menu) {
+    --wx-background: var(--popover);
+    --wx-background-alt: var(--accent);
+    --wx-border-medium: 1px solid var(--border);
+    --wx-border-radius: var(--radius-md);
+    --wx-color-font: var(--popover-foreground);
+    --wx-color-font-disabled: var(--muted-foreground);
+    --wx-font-family: inherit;
+    --wx-font-size: 0.875rem;
+    --wx-font-weight: 400;
+    --wx-icon-color: var(--muted-foreground);
+    --wx-icon-size: 1rem;
+    --wx-shadow-light:
+      0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+
+    border: 1px solid var(--border);
+    color: var(--popover-foreground);
+    overflow: hidden;
+  }
+  :global(.wx-menu.kanban-card-menu .wx-option) {
+    gap: 0.5rem;
+    height: auto;
+    min-height: 2rem;
+    padding: 0.375rem 0.75rem;
+    line-height: 1.25rem;
+  }
+  :global(.wx-menu.kanban-card-menu .wx-option:hover) {
+    color: var(--accent-foreground);
+  }
+  :global(.wx-menu.kanban-card-menu .wx-value) {
+    padding: 0;
+  }
+  :global(.wx-menu.kanban-card-menu .wx-icon) {
+    margin-right: 0;
+  }
+  :global(.wx-menu.kanban-card-menu .wx-separator) {
+    border-top-color: var(--border);
   }
   /* Match the app's thin themed scrollbars on the SVAR scroll containers
      (see .themed-scrollbar in app.css) instead of the thick OS default. */
