@@ -15,6 +15,7 @@
   let ShortcutHelpDialog = $state<any | null>(null);
   let SearchDialog = $state<any | null>(null);
   let ShareCollectionDialog = $state<any | null>(null);
+  let ManageAccessDialog = $state<any | null>(null);
   let ToastHost = $state<any | null>(null);
 
   let confirmToken = 0;
@@ -24,6 +25,7 @@
   let shortcutToken = 0;
   let searchToken = 0;
   let shareToken = 0;
+  let manageToken = 0;
   let toastToken = 0;
 
   $effect(() => {
@@ -111,15 +113,39 @@
   });
 
   $effect(() => {
-    const active = shareDialog.collectionId !== null;
+    const active =
+      shareDialog.collectionId !== null && shareDialog.view === 'invite';
     const token = ++shareToken;
     if (!active) {
       ShareCollectionDialog = null;
       return;
     }
     void import('./ShareCollectionDialog.svelte').then((mod) => {
-      if (token === shareToken && shareDialog.collectionId !== null) {
+      if (
+        token === shareToken &&
+        shareDialog.collectionId !== null &&
+        shareDialog.view === 'invite'
+      ) {
         ShareCollectionDialog = mod.default;
+      }
+    });
+  });
+
+  $effect(() => {
+    const active =
+      shareDialog.collectionId !== null && shareDialog.view === 'access';
+    const token = ++manageToken;
+    if (!active) {
+      ManageAccessDialog = null;
+      return;
+    }
+    void import('./ManageAccessDialog.svelte').then((mod) => {
+      if (
+        token === manageToken &&
+        shareDialog.collectionId !== null &&
+        shareDialog.view === 'access'
+      ) {
+        ManageAccessDialog = mod.default;
       }
     });
   });
@@ -161,6 +187,9 @@
 {/if}
 {#if ShareCollectionDialog}
   <ShareCollectionDialog />
+{/if}
+{#if ManageAccessDialog}
+  <ManageAccessDialog />
 {/if}
 {#if ToastHost}
   <ToastHost />

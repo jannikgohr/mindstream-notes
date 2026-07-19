@@ -128,6 +128,44 @@ export function stopSharingCollection(collectionId: string): Promise<void> {
   );
 }
 
+/** Everyone with access to a shared folder and at what level. Empty in browser
+ *  mode (sharing is Tauri-only). */
+export function listCollectionMembers(
+  collectionId: string
+): Promise<CollectionMember[]> {
+  return invokeOrFallback<CollectionMember[]>(
+    'list_collection_members',
+    { collectionId },
+    async () => []
+  );
+}
+
+/** Change one member's access level on a folder the current user shares. */
+export function setCollectionMemberAccess(input: {
+  collection_id: string;
+  username: string;
+  access_level: CollectionShareAccessLevel;
+}): Promise<void> {
+  return invokeOrFallback<void>(
+    'set_collection_member_access',
+    { input },
+    async () => undefined
+  );
+}
+
+/** Remove one member from a folder the current user shares; their device purges
+ *  its copy on the next sync. */
+export function removeCollectionMember(input: {
+  collection_id: string;
+  username: string;
+}): Promise<void> {
+  return invokeOrFallback<void>(
+    'remove_collection_member',
+    { input },
+    async () => undefined
+  );
+}
+
 export function acceptCollectionInvitation(id: string): Promise<void> {
   return invokeOrFallback<void>(
     'accept_collection_invitation',

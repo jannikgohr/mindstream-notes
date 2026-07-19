@@ -466,15 +466,21 @@
     const children: MenuItem[] = [
       {
         label: tUi('sharing.menu.shareFolder'),
-        onSelect: () => openCollectionShareDialog(id)
+        onSelect: () => openCollectionShareDialog(id, 'invite')
       }
     ];
     if (folder && collectionIsSharedByMe(folder)) {
-      children.push({
-        label: tUi('sharing.menu.stopSharing'),
-        destructive: true,
-        onSelect: () => void stopSharing(id)
-      });
+      children.push(
+        {
+          label: tUi('sharing.menu.manageAccess'),
+          onSelect: () => openCollectionShareDialog(id, 'access')
+        },
+        {
+          label: tUi('sharing.menu.stopSharing'),
+          destructive: true,
+          onSelect: () => void stopSharing(id)
+        }
+      );
     }
     return [{ label: tUi('sharing.menu.group'), children }];
   }

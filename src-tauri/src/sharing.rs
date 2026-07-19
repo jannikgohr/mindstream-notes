@@ -792,48 +792,78 @@ fn purge_local_subtree(db: &Db, root_id: &str) -> AppResult<()> {
     })
 }
 
-/// Reconcile shares the owner has revoked: for each folder shared *with* us that
-/// still lives locally, check whether its part collection (`share_id` = the
-/// folders collection uid) has been deleted server-side. A confirmed deletion
-/// (`is_deleted() == true`) is the owner's "stop sharing" signal, so purge the
-/// local scope. Fetch errors are transient and skipped — never purge on a mere
-/// network hiccup. Called from `sync::scopes::sync_scopes`.
+/// Local accepted shared-with-me scopes that are no longer in the authoritative
+/// live-manifest set — the owner deleted the folder *or* removed this member from
+/// it. Pure so it's unit-testable.
+fn scopes_to_purge<'a>(local_scopes: &'a [String], live_scopes: &HashSet<String>) -> Vec<&'a str> {
+    local_scopes
+        .iter()
+        .filter(|scope| !live_scopes.contains(*scope))
+        .map(String::as_str)
+        .collect()
+}
+
+/// Reconcile shares the current user has lost access to — the owner either
+/// deleted the folder ("Stop sharing") or removed this member. Both cases show up
+/// the same way: the scope's manifest is no longer in the account's authoritative
+/// manifest list. So enumerate that list *fully* into a live-scope set and purge
+/// any local accepted shared-with-me scope that's missing from it.
+///
+/// Safety: this only ever purges when the manifest enumeration *succeeds* — any
+/// list error aborts before purging, so a network blip or partial page can't
+/// delete a folder. Local accepted roots exist only after a successful first
+/// pull, so there's no half-synced folder to mistake for a revocation. Called
+/// from `sync::scopes::sync_scopes`.
 pub(crate) fn reconcile_revoked_shares(db: &Db, cm: &CollectionManager) -> AppResult<()> {
-    // (local root id, share_scope_id, share_id) for every accepted shared-with-me
-    // root that carries a resolvable server handle.
-    let roots: Vec<(String, String, String)> = db.with_conn(|conn| {
+    let local_scopes: Vec<String> = db.with_conn(|conn| {
         let mut stmt = conn.prepare(
-            "SELECT id, share_scope_id, share_id
+            "SELECT share_scope_id
                FROM collections
               WHERE COALESCE(shared_by_me, 0) = 0
                 AND share_scope_id IS NOT NULL
                 AND share_id IS NOT NULL",
         )?;
         let rows = stmt
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
-            })?
+            .query_map([], |row| row.get::<_, String>(0))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     })?;
+    if local_scopes.is_empty() {
+        return Ok(());
+    }
 
-    for (root_id, scope_id, share_id) in roots {
-        match cm.fetch(&share_id, None) {
-            Ok(col) if col.is_deleted() => {
-                log::info!(
-                    "[sharing] owner revoked scope {scope_id} (root {root_id}); purging locally"
-                );
-                purge_local_scope(db, &scope_id)?;
+    // Authoritative live set: a decodable, non-deleted manifest means we still
+    // have access to that scope. Paginate fully; any error propagates and aborts
+    // (never purge on an incomplete enumeration).
+    let mut live_scopes: HashSet<String> = HashSet::new();
+    let mut stoken: Option<String> = None;
+    loop {
+        let options = FetchOptions::new().limit(100).stoken(stoken.as_deref());
+        let page = cm
+            .list(COLLECTION_TYPE_SHARE_MANIFEST, Some(&options))
+            .map_err(|e| AppError::InvalidArg(format!("list manifests for reconcile: {e}")))?;
+        for col in page.data() {
+            if col.is_deleted() {
+                continue;
             }
-            Ok(_) => {}
-            // Transient (offline, server blip) — leave the folder in place; a real
-            // revoke is still caught on a later sync.
-            Err(e) => log::debug!("[sharing] check share {share_id} for revoke: {e}"),
+            if let Ok(manifest) = decode_manifest(col) {
+                live_scopes.insert(manifest.share_scope_id);
+            }
         }
+        if page.done() {
+            break;
+        }
+        match page.stoken().map(str::to_string) {
+            Some(next) => stoken = Some(next),
+            None => break,
+        }
+    }
+
+    for scope in scopes_to_purge(&local_scopes, &live_scopes) {
+        log::info!(
+            "[sharing] scope {scope} no longer accessible (revoked/removed); purging locally"
+        );
+        purge_local_scope(db, scope)?;
     }
     Ok(())
 }
@@ -926,6 +956,179 @@ pub async fn stop_sharing_collection(app: AppHandle, collection_id: String) -> R
     })
     .await
     .map_err(|e| format!("stop sharing collection task: {e}"))?
+    .map_err(Into::into)
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SetMemberAccessInput {
+    pub collection_id: String,
+    pub username: String,
+    pub access_level: ShareAccessLevel,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RemoveMemberInput {
+    pub collection_id: String,
+    pub username: String,
+}
+
+/// The local `share_scope_id` tag for a folder, or `None` when it isn't shared.
+fn local_share_scope_id(db: &Db, collection_id: &str) -> AppResult<Option<String>> {
+    db.with_conn(|conn| {
+        Ok(conn
+            .query_row(
+                "SELECT share_scope_id FROM collections WHERE id = ?1",
+                params![collection_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten())
+    })
+}
+
+/// List everyone with access to a shared folder and at what level. Reads the
+/// membership of the scope's `folders` collection (which carries the content
+/// access level; the manifest is always read-only). Empty when the folder isn't
+/// shared or the scope can't be resolved.
+#[tauri::command]
+pub async fn list_collection_members(
+    app: AppHandle,
+    collection_id: String,
+) -> Result<Vec<CollectionMember>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let account = restore_required(&app)?;
+        let db = app.state::<Db>();
+        let Some(scope_id) = local_share_scope_id(&db, &collection_id)? else {
+            return Ok(Vec::new());
+        };
+        let cm = account
+            .collection_manager()
+            .map_err(|e| AppError::InvalidArg(format!("collection_manager: {e}")))?;
+        let Some(scope) = find_existing_scope(&cm, &scope_id)? else {
+            return Ok(Vec::new());
+        };
+        let member_manager = cm
+            .member_manager(&scope.folders)
+            .map_err(|e| AppError::InvalidArg(format!("member_manager: {e}")))?;
+        let mut members = Vec::new();
+        let mut iterator: Option<String> = None;
+        loop {
+            let options = FetchOptions::new().limit(100).iterator(iterator.as_deref());
+            let page = member_manager
+                .list(Some(&options))
+                .map_err(|e| AppError::InvalidArg(format!("list members: {e}")))?;
+            for member in page.data() {
+                members.push(CollectionMember {
+                    username: member.username().to_string(),
+                    access_level: member.access_level().into(),
+                });
+            }
+            if page.done() {
+                break;
+            }
+            match page.iterator().map(str::to_string) {
+                Some(next) => iterator = Some(next),
+                None => break,
+            }
+        }
+        Ok::<Vec<CollectionMember>, AppError>(members)
+    })
+    .await
+    .map_err(|e| format!("list collection members task: {e}"))?
+    .map_err(Into::into)
+}
+
+/// Change a member's access level on a folder the current user shares. The three
+/// part collections (folders/notes/assets) carry the content level; the manifest
+/// stays read-only. The recipient's next sync re-projects their `shared_role`
+/// from the folders collection automatically (a read-only downgrade also triggers
+/// the read-only-scope edit discard).
+#[tauri::command]
+pub async fn set_collection_member_access(
+    app: AppHandle,
+    input: SetMemberAccessInput,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let SetMemberAccessInput {
+            collection_id,
+            username,
+            access_level,
+        } = input;
+        let account = restore_required(&app)?;
+        let db = app.state::<Db>();
+        let Some(scope_id) = local_share_scope_id(&db, &collection_id)? else {
+            return Err(AppError::InvalidArg("this folder isn't shared".into()));
+        };
+        let cm = account
+            .collection_manager()
+            .map_err(|e| AppError::InvalidArg(format!("collection_manager: {e}")))?;
+        let Some(scope) = find_existing_scope(&cm, &scope_id)? else {
+            return Err(AppError::InvalidArg(
+                "this shared folder is no longer available".into(),
+            ));
+        };
+        let level: CollectionAccessLevel = access_level.into();
+        for col in [&scope.folders, &scope.notes, &scope.assets] {
+            let member_manager = cm
+                .member_manager(col)
+                .map_err(|e| AppError::InvalidArg(format!("member_manager: {e}")))?;
+            member_manager
+                .modify_access_level(&username, level)
+                .map_err(|e| AppError::InvalidArg(format!("change access for {username}: {e}")))?;
+        }
+        Ok::<(), AppError>(())
+    })
+    .await
+    .map_err(|e| format!("set collection member access task: {e}"))?
+    .map_err(Into::into)
+}
+
+/// Remove one member from a folder the current user shares. Removes them from all
+/// four scope collections so they lose the manifest and every part; the removed
+/// recipient's device purges its copy on the next sync (see
+/// `reconcile_revoked_shares`). Others keep their access.
+#[tauri::command]
+pub async fn remove_collection_member(
+    app: AppHandle,
+    input: RemoveMemberInput,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let RemoveMemberInput {
+            collection_id,
+            username,
+        } = input;
+        let account = restore_required(&app)?;
+        let db = app.state::<Db>();
+        let Some(scope_id) = local_share_scope_id(&db, &collection_id)? else {
+            return Err(AppError::InvalidArg("this folder isn't shared".into()));
+        };
+        let cm = account
+            .collection_manager()
+            .map_err(|e| AppError::InvalidArg(format!("collection_manager: {e}")))?;
+        let Some(scope) = find_existing_scope(&cm, &scope_id)? else {
+            return Err(AppError::InvalidArg(
+                "this shared folder is no longer available".into(),
+            ));
+        };
+        for col in [&scope.manifest, &scope.folders, &scope.notes, &scope.assets] {
+            let member_manager = match cm.member_manager(col) {
+                Ok(mm) => mm,
+                Err(e) => {
+                    log::warn!("[sharing] member_manager for {}: {e}", col.uid());
+                    continue;
+                }
+            };
+            if let Err(e) = member_manager.remove(&username) {
+                log::warn!(
+                    "[sharing] remove {username} from {} (scope {scope_id}): {e}",
+                    col.uid()
+                );
+            }
+        }
+        Ok::<(), AppError>(())
+    })
+    .await
+    .map_err(|e| format!("remove collection member task: {e}"))?
     .map_err(Into::into)
 }
 
@@ -2987,5 +3190,24 @@ mod tests {
             Ok::<(), AppError>(())
         })
         .unwrap();
+    }
+
+    #[test]
+    fn scopes_to_purge_flags_scopes_absent_from_live_set() {
+        let local = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+
+        // b was revoked/removed (not in the live manifest set).
+        let live: HashSet<String> = ["a", "c"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(scopes_to_purge(&local, &live), vec!["b"]);
+
+        // All still live → nothing to purge.
+        let all: HashSet<String> = ["a", "b", "c"].iter().map(|s| s.to_string()).collect();
+        assert!(scopes_to_purge(&local, &all).is_empty());
+
+        // Nothing live (e.g. every share revoked) → purge all.
+        assert_eq!(
+            scopes_to_purge(&local, &HashSet::new()),
+            vec!["a", "b", "c"]
+        );
     }
 }
