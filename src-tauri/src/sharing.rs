@@ -20,6 +20,7 @@ use std::collections::{HashMap, HashSet};
 
 use chrono::Utc;
 use etebase::managers::{CollectionInvitationManager, CollectionManager};
+use etebase::utils::randombytes;
 use etebase::{
     Account, Collection, CollectionAccessLevel, FetchOptions, InvitationPreview, ItemMetadata,
     SignedInvitation,
@@ -35,6 +36,8 @@ pub const COLLECTION_TYPE_SHARE_MANIFEST: &str = "mindstream.share_manifest";
 pub const COLLECTION_TYPE_SHARE_FOLDERS: &str = "mindstream.folders";
 pub const COLLECTION_TYPE_SHARE_NOTES: &str = "mindstream.notes";
 pub const COLLECTION_TYPE_SHARE_ASSETS: &str = "mindstream.assets";
+pub const SHARE_MANIFEST_SCHEMA: u32 = 2;
+pub const SHARE_COLLAB_SALT_BYTES: usize = 32;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -234,8 +237,21 @@ pub struct ShareManifest {
     pub root_folder_id: String,
     #[serde(default)]
     pub owner_username: Option<String>,
+    /// Rotated when a member is removed. Used to derive live-collab room ids
+    /// and passwords for all note items in this share scope.
+    #[serde(default = "default_collab_epoch")]
+    pub collab_epoch: u64,
+    #[serde(default, with = "serde_bytes")]
+    pub collab_salt: Vec<u8>,
     #[serde(default)]
     pub collections: Vec<ShareManifestCollectionRef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ShareScopeCollabInfo {
+    pub notes_collection_uid: String,
+    pub collab_epoch: u64,
+    pub collab_salt: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -290,6 +306,14 @@ pub struct IncomingShareBundlePart {
 
 fn default_manifest_collection_required() -> bool {
     true
+}
+
+fn default_collab_epoch() -> u64 {
+    1
+}
+
+fn fresh_collab_salt() -> Vec<u8> {
+    randombytes(SHARE_COLLAB_SALT_BYTES)
 }
 
 /// True for any of the four share-scope collection types (manifest + parts).
@@ -1125,6 +1149,7 @@ pub async fn remove_collection_member(
                 );
             }
         }
+        rotate_scope_collab_secret(&cm, &scope.manifest)?;
         Ok::<(), AppError>(())
     })
     .await
@@ -1569,6 +1594,38 @@ fn find_existing_scope(
     Ok(None)
 }
 
+/// Lightweight resolver for live-collab room derivation. It only needs the
+/// scope notes collection plus the manifest's rotating collab material.
+pub(crate) fn share_scope_collab_info(
+    cm: &CollectionManager,
+    share_scope_id: &str,
+) -> AppResult<Option<ShareScopeCollabInfo>> {
+    let list = cm
+        .list(COLLECTION_TYPE_SHARE_MANIFEST, None)
+        .map_err(|e| AppError::InvalidArg(format!("list manifest collections: {e}")))?;
+    for col in list.data() {
+        if col.is_deleted() {
+            continue;
+        }
+        let manifest = match decode_manifest(col) {
+            Ok(manifest) => manifest,
+            Err(_) => continue,
+        };
+        if manifest.share_scope_id != share_scope_id {
+            continue;
+        }
+        let notes_collection_uid = manifest_part_uid(&manifest, ShareScopePart::Notes)
+            .ok_or_else(|| AppError::InvalidArg("manifest missing notes collection".into()))?
+            .to_string();
+        return Ok(Some(ShareScopeCollabInfo {
+            notes_collection_uid,
+            collab_epoch: manifest.collab_epoch,
+            collab_salt: manifest.collab_salt,
+        }));
+    }
+    Ok(None)
+}
+
 /// Assert the resolved scope is structurally complete before anyone is invited:
 /// the manifest must reference all three required part collections. A fresh scope
 /// from `create_new_scope` always is, but a *reused* legacy scope
@@ -1596,14 +1653,18 @@ fn fetch_scope_part(
     manifest: &ShareManifest,
     part: ShareScopePart,
 ) -> AppResult<Collection> {
-    let uid = manifest
+    let uid = manifest_part_uid(manifest, part)
+        .ok_or_else(|| AppError::InvalidArg(format!("manifest missing {part:?} collection")))?;
+    cm.fetch(uid, None)
+        .map_err(|e| AppError::InvalidArg(format!("fetch {part:?} collection: {e}")))
+}
+
+fn manifest_part_uid(manifest: &ShareManifest, part: ShareScopePart) -> Option<&str> {
+    manifest
         .collections
         .iter()
         .find(|collection| collection.part == part)
         .map(|collection| collection.collection_uid.as_str())
-        .ok_or_else(|| AppError::InvalidArg(format!("manifest missing {part:?} collection")))?;
-    cm.fetch(uid, None)
-        .map_err(|e| AppError::InvalidArg(format!("fetch {part:?} collection: {e}")))
 }
 
 /// Create + upload the three part collections and the manifest collection that
@@ -1768,6 +1829,32 @@ fn invite_to_collection(
         })
 }
 
+fn rotate_scope_collab_secret(
+    cm: &CollectionManager,
+    manifest_col: &Collection,
+) -> AppResult<ShareManifest> {
+    let mut manifest = decode_manifest(manifest_col)?;
+    rotate_manifest_collab_secret(&mut manifest);
+    let manifest_json = serde_json::to_vec(&manifest)
+        .map_err(|e| AppError::InvalidArg(format!("encode manifest: {e}")))?;
+    let mut updated = manifest_col.clone();
+    updated
+        .set_content(&manifest_json)
+        .map_err(|e| AppError::InvalidArg(format!("update manifest content: {e}")))?;
+    cm.upload(&updated, None)
+        .map_err(|e| AppError::InvalidArg(format!("upload rotated manifest: {e}")))?;
+    Ok(manifest)
+}
+
+fn rotate_manifest_collab_secret(manifest: &mut ShareManifest) {
+    manifest.schema = SHARE_MANIFEST_SCHEMA;
+    manifest.collab_epoch = manifest
+        .collab_epoch
+        .saturating_add(1)
+        .max(default_collab_epoch());
+    manifest.collab_salt = fresh_collab_salt();
+}
+
 /// Build the manifest that ties a scope's three part collections together. Pure
 /// so it can be unit-tested without a server.
 fn build_share_manifest(
@@ -1780,11 +1867,13 @@ fn build_share_manifest(
     assets_uid: &str,
 ) -> ShareManifest {
     ShareManifest {
-        schema: 1,
+        schema: SHARE_MANIFEST_SCHEMA,
         share_scope_id: share_scope_id.to_string(),
         name: name.to_string(),
         root_folder_id: root_folder_id.to_string(),
         owner_username: owner_username.map(str::to_string),
+        collab_epoch: default_collab_epoch(),
+        collab_salt: fresh_collab_salt(),
         collections: vec![
             ShareManifestCollectionRef {
                 part: ShareScopePart::Folders,
@@ -2497,11 +2586,13 @@ mod tests {
             invitation_id: "invite_manifest".into(),
             manifest_collection_uid: "col_manifest".into(),
             manifest: ShareManifest {
-                schema: 1,
+                schema: SHARE_MANIFEST_SCHEMA,
                 share_scope_id: "scope_root".into(),
                 name: "Shared project".into(),
                 root_folder_id: "folder_root".into(),
                 owner_username: Some("sender".into()),
+                collab_epoch: 1,
+                collab_salt: vec![7; SHARE_COLLAB_SALT_BYTES],
                 collections,
             },
         }
@@ -2732,10 +2823,12 @@ mod tests {
             "col_assets",
         );
 
-        assert_eq!(manifest.schema, 1);
+        assert_eq!(manifest.schema, SHARE_MANIFEST_SCHEMA);
         assert_eq!(manifest.share_scope_id, "scope_1");
         assert_eq!(manifest.root_folder_id, "coll_root");
         assert_eq!(manifest.owner_username.as_deref(), Some("alice"));
+        assert_eq!(manifest.collab_epoch, 1);
+        assert_eq!(manifest.collab_salt.len(), SHARE_COLLAB_SALT_BYTES);
         assert_eq!(manifest.collections.len(), 3);
         for part in [
             ShareScopePart::Folders,
@@ -2754,6 +2847,21 @@ mod tests {
         let json = serde_json::to_vec(&manifest).unwrap();
         let decoded: ShareManifest = serde_json::from_slice(&json).unwrap();
         assert_eq!(decoded, manifest);
+    }
+
+    #[test]
+    fn rotate_manifest_collab_secret_increments_epoch_and_replaces_salt() {
+        let mut manifest =
+            build_share_manifest("scope_1", "Docs", "root", Some("alice"), "f", "n", "a");
+        let previous_epoch = manifest.collab_epoch;
+        let previous_salt = manifest.collab_salt.clone();
+
+        rotate_manifest_collab_secret(&mut manifest);
+
+        assert_eq!(manifest.schema, SHARE_MANIFEST_SCHEMA);
+        assert_eq!(manifest.collab_epoch, previous_epoch + 1);
+        assert_eq!(manifest.collab_salt.len(), SHARE_COLLAB_SALT_BYTES);
+        assert_ne!(manifest.collab_salt, previous_salt);
     }
 
     #[test]

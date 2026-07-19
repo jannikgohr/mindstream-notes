@@ -36,6 +36,8 @@ export interface RoomInfo {
   room_id: string;
   /** Standard base64 of the 32-byte AES-GCM key. */
   key_b64: string;
+  /** Share manifest live-collab epoch; 0 means no collection salt was applied. */
+  collab_epoch: number;
 }
 
 export async function noteRoomInfo(id: string): Promise<RoomInfo | null> {
