@@ -1134,6 +1134,7 @@ pub async fn remove_collection_member(
                 "this shared folder is no longer available".into(),
             ));
         };
+        let affected_note_ids = crate::collab_events::note_ids_for_share_scope(&db, &scope_id)?;
         for col in [&scope.manifest, &scope.folders, &scope.notes, &scope.assets] {
             let member_manager = match cm.member_manager(col) {
                 Ok(mm) => mm,
@@ -1150,6 +1151,7 @@ pub async fn remove_collection_member(
             }
         }
         rotate_scope_collab_secret(&cm, &scope.manifest)?;
+        crate::collab_events::emit_collab_credentials_changed(&app, affected_note_ids);
         Ok::<(), AppError>(())
     })
     .await

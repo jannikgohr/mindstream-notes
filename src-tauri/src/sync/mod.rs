@@ -456,6 +456,10 @@ pub async fn sync_now(app: AppHandle) -> Result<SyncReport, String> {
     if let Err(err) = app.emit(SYNC_COMPLETED_EVENT, &event) {
         log::warn!("[sync] failed to emit {SYNC_COMPLETED_EVENT}: {err}");
     }
+    crate::collab_events::emit_collab_credentials_changed(
+        &app,
+        delta.collab_credentials_changed_note_ids,
+    );
 
     Ok(delta.report)
 }
@@ -478,6 +482,10 @@ pub struct SyncDelta {
     /// editors evict matching blob URLs from their AssetBridge cache
     /// and kick the corresponding image NodeView so it re-resolves.
     pub assets_pulled_ids: Vec<String>,
+    /// Note ids whose live-collab room credentials changed because a
+    /// share-scope manifest rotated its collab epoch/salt. Open editors
+    /// reconnect their active relay clients for these notes.
+    pub collab_credentials_changed_note_ids: Vec<String>,
 }
 
 fn run(db: &Db, account: &Account, self_username: Option<&str>) -> AppResult<SyncDelta> {

@@ -137,6 +137,8 @@ fn sync_one_scope(
         return Ok(());
     };
 
+    record_scope_collab_epoch(db, manifest, delta)?;
+
     // Fetch the part collections. Any failure (not a member yet — a manifest
     // accepted but bundle not) means the scope isn't ready; skip it quietly.
     let (Ok(folders_col), Ok(notes_col), Ok(assets_col)) = (
@@ -328,6 +330,61 @@ fn scope_notes_stoken_key(scope: &str) -> String {
 
 fn scope_assets_stoken_key(scope: &str) -> String {
     format!("scope-assets:{scope}")
+}
+
+fn scope_collab_epoch_key(scope: &str) -> String {
+    format!("scope-collab-epoch:{scope}")
+}
+
+fn load_scope_collab_epoch(db: &Db, scope: &str) -> AppResult<Option<u64>> {
+    let key = scope_collab_epoch_key(scope);
+    db.with_conn(|conn| {
+        let raw: Option<String> = conn
+            .query_row(
+                "SELECT stoken FROM sync_state WHERE kind = ?1",
+                params![key],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten();
+        Ok(raw.and_then(|value| value.parse::<u64>().ok()))
+    })
+}
+
+fn save_scope_collab_epoch(db: &Db, scope: &str, epoch: u64) -> AppResult<()> {
+    let key = scope_collab_epoch_key(scope);
+    let value = epoch.to_string();
+    db.with_conn(|conn| {
+        conn.execute(
+            "INSERT INTO sync_state(kind, stoken)
+             VALUES (?1, ?2)
+             ON CONFLICT(kind) DO UPDATE SET stoken = excluded.stoken",
+            params![key, value],
+        )?;
+        Ok(())
+    })
+}
+
+fn record_scope_collab_epoch(
+    db: &Db,
+    manifest: &ShareManifest,
+    delta: &mut SyncDelta,
+) -> AppResult<()> {
+    if manifest.collab_salt.is_empty() {
+        return Ok(());
+    }
+
+    let scope = manifest.share_scope_id.as_str();
+    let previous = load_scope_collab_epoch(db, scope)?;
+    if previous == Some(manifest.collab_epoch) {
+        return Ok(());
+    }
+
+    save_scope_collab_epoch(db, scope, manifest.collab_epoch)?;
+    delta
+        .collab_credentials_changed_note_ids
+        .extend(crate::collab_events::note_ids_for_share_scope(db, scope)?);
+    Ok(())
 }
 
 /// Project the manifest's share membership onto the local root folder row so a
@@ -563,6 +620,65 @@ mod tests {
             part_ref(ShareScopePart::Folders, "second"),
         ];
         assert_eq!(part_uid(&m, ShareScopePart::Folders), Some("first"));
+    }
+
+    #[test]
+    fn record_scope_collab_epoch_marks_scope_notes_when_epoch_first_seen_or_changed() {
+        let db = open_memory_for_tests();
+        db.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO notes(id, title, body, position, created, modified, share_scope_id)
+                 VALUES ('note_b', 'B', '', 0, 't', 't', 'scope_1')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO notes(id, title, body, position, created, modified, share_scope_id)
+                 VALUES ('note_a', 'A', '', 0, 't', 't', 'scope_1')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO notes(id, title, body, position, created, modified, share_scope_id)
+                 VALUES ('other', 'Other', '', 0, 't', 't', 'scope_2')",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+        let mut m = manifest("folder_root", Some("alice"));
+        let mut delta = SyncDelta::default();
+        record_scope_collab_epoch(&db, &m, &mut delta).unwrap();
+        assert_eq!(
+            delta.collab_credentials_changed_note_ids,
+            vec!["note_a", "note_b"]
+        );
+
+        delta.collab_credentials_changed_note_ids.clear();
+        record_scope_collab_epoch(&db, &m, &mut delta).unwrap();
+        assert!(delta.collab_credentials_changed_note_ids.is_empty());
+
+        m.collab_epoch += 1;
+        record_scope_collab_epoch(&db, &m, &mut delta).unwrap();
+        assert_eq!(
+            delta.collab_credentials_changed_note_ids,
+            vec!["note_a", "note_b"]
+        );
+    }
+
+    #[test]
+    fn record_scope_collab_epoch_ignores_legacy_manifest_without_salt() {
+        let db = open_memory_for_tests();
+        let mut m = manifest("folder_root", Some("alice"));
+        m.collab_salt.clear();
+        let mut delta = SyncDelta::default();
+
+        record_scope_collab_epoch(&db, &m, &mut delta).unwrap();
+
+        assert!(delta.collab_credentials_changed_note_ids.is_empty());
+        assert_eq!(
+            load_scope_collab_epoch(&db, &m.share_scope_id).unwrap(),
+            None
+        );
     }
 
     #[test]
