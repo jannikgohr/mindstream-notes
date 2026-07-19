@@ -30,6 +30,7 @@ use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use chrono::Utc;
 use etebase::error::Error as EtebaseError;
 use etebase::managers::{CollectionManager, ItemManager};
@@ -67,6 +68,11 @@ const KIND_SIGNATURES: &str = "signatures";
 const PAYLOAD_SCHEMA: u32 = 2;
 const LIVE_COLLAB_ROOM_INFO: &[u8] = b"mindstream-live-collab-room/v1";
 const LIVE_COLLAB_KEY_INFO: &[u8] = b"mindstream-live-collab-key/v1";
+const P256_SPKI_DER_LEN: usize = 91;
+const P256_SPKI_DER_PREFIX: &[u8] = &[
+    0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x08, 0x2a,
+    0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00, 0x04,
+];
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -2640,8 +2646,10 @@ fn can_receive_live_collab_room(access_level: CollectionAccessLevel, scoped_room
 }
 
 fn valid_collab_writer_public_key(public_key_b64: &str) -> bool {
-    let len = public_key_b64.len();
-    (16..=4096).contains(&len)
+    let Ok(bytes) = BASE64_STANDARD.decode(public_key_b64) else {
+        return false;
+    };
+    bytes.len() == P256_SPKI_DER_LEN && bytes.starts_with(P256_SPKI_DER_PREFIX)
 }
 
 fn collab_writer_key_payload(item: &Item) -> AppResult<Option<CollabWriterKeyPayload>> {
@@ -3119,10 +3127,20 @@ mod tests {
     }
 
     #[test]
-    fn collab_writer_public_key_validation_accepts_reasonable_spki_b64() {
-        assert!(valid_collab_writer_public_key(&"A".repeat(120)));
+    fn collab_writer_public_key_validation_requires_p256_spki_b64() {
+        let mut der = P256_SPKI_DER_PREFIX.to_vec();
+        der.extend(1_u8..=64);
+        let key_b64 = BASE64_STANDARD.encode(&der);
+
+        assert!(valid_collab_writer_public_key(&key_b64));
         assert!(!valid_collab_writer_public_key(""));
-        assert!(!valid_collab_writer_public_key(&"A".repeat(4097)));
+        assert!(!valid_collab_writer_public_key("not base64"));
+
+        let mut wrong_prefix = der;
+        wrong_prefix[0] = 0x31;
+        assert!(!valid_collab_writer_public_key(
+            &BASE64_STANDARD.encode(wrong_prefix)
+        ));
     }
 
     #[test]
