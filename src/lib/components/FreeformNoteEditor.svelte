@@ -54,6 +54,7 @@
     ExcalidrawRoomClient,
     deriveExcalidrawKey
   } from '$lib/freeform/excalidraw-room-client';
+  import { collabCredentialsChangedForNote } from '$lib/sync/collab-credentials';
   import type { ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types';
   import { isMobile } from '$lib/platform';
   import { listen } from '$lib/api/events';
@@ -205,6 +206,7 @@
    *  the open Y.Doc via Y.applyUpdate (Yjs CRDT-safe). Asset
    *  invalidation for Excalidraw scene files lives inside the React island. */
   let unsubSync: (() => void) | null = null;
+  let unsubCollabCredentials: (() => void) | null = null;
 
   onMount(async () => {
     if (!mountEl) return;
@@ -322,6 +324,13 @@
         }
       }).then((unlisten) => {
         unsubSync = unlisten;
+      });
+      void listen('collab-credentials-changed', (payload) => {
+        if (collabCredentialsChangedForNote(payload, noteId)) {
+          void setupExcalidrawRoom();
+        }
+      }).then((unlisten) => {
+        unsubCollabCredentials = unlisten;
       });
 
       loading = false;
@@ -498,7 +507,9 @@
     }
     unsubSession?.();
     unsubSync?.();
+    unsubCollabCredentials?.();
     unsubSync = null;
+    unsubCollabCredentials = null;
     unsubSession = null;
     // Release our fullscreen ref if mobile auto-mode acquired one.
     // Ref-counted in the helper, so multiple freeform notes only flip

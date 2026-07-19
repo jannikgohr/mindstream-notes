@@ -66,6 +66,7 @@
     ToolbarSeparator
   } from '$lib/components/ui/toolbar';
   import { CollabProvider } from '$lib/sync/collab-provider';
+  import { collabCredentialsChangedForNote } from '$lib/sync/collab-credentials';
   import { base64ToBytes } from '$lib/editor/base64';
   import { pickCursorColor } from '$lib/editor/cursor-color';
   import { folderPathLabel } from '$lib/notes/folder-path';
@@ -175,6 +176,7 @@
   let stopObserve: (() => void) | null = null;
   let unsubSession: (() => void) | null = null;
   let unsubSync: (() => void) | null = null;
+  let unsubCollabCredentials: (() => void) | null = null;
   let unregisterHistory: (() => void) | null = null;
   let editorListener: EditorListener | null = $state(null);
 
@@ -972,6 +974,13 @@
       }).then((unlisten) => {
         unsubSync = unlisten;
       });
+      void listen('collab-credentials-changed', (payload) => {
+        if (collabCredentialsChangedForNote(payload, noteId)) {
+          void setupCollabProvider();
+        }
+      }).then((unlisten) => {
+        unsubCollabCredentials = unlisten;
+      });
 
       // Command-bus listener: handle app-level active-note search and displace
       // any hidden editor listener so markdown/pdf commands don't leak across
@@ -1067,6 +1076,8 @@
     stopObserve?.();
     unsubSession?.();
     unsubSync?.();
+    unsubCollabCredentials?.();
+    unsubCollabCredentials = null;
     unregisterHistory?.();
     if (editorListener) unregisterEditor(editorListener);
     provider?.destroy();
