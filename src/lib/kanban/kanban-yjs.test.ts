@@ -363,6 +363,26 @@ describe('boardToPlainText', () => {
     expect(text).toContain('do the thing');
     expect(text).toContain('Second (Done)');
   });
+
+  it('projects cards without known columns and falls back to tag ids', () => {
+    const text = boardToPlainText({
+      columns: [],
+      labels: [],
+      cards: [
+        {
+          id: 'orphan',
+          label: 'Orphaned',
+          column: 'missing',
+          tags: ['raw-tag'],
+          order: 0
+        }
+      ]
+    });
+
+    expect(text).toContain('- Orphaned');
+    expect(text).not.toContain('(missing)');
+    expect(text).toContain('raw-tag');
+  });
 });
 
 describe('kanban-yjs no-op writes', () => {

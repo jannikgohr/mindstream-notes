@@ -90,6 +90,46 @@ describe('kanban search filters', () => {
     ).toBe(false);
   });
 
+  it('rejects cards that miss individual structured filters', () => {
+    expect(
+      matchesKanbanSearchFilters(
+        card,
+        { ...EMPTY_KANBAN_SEARCH_FILTERS, columns: ['done'] },
+        lookups
+      )
+    ).toBe(false);
+    expect(
+      matchesKanbanSearchFilters(
+        { ...card, priority: undefined },
+        { ...EMPTY_KANBAN_SEARCH_FILTERS, priorities: [3] },
+        lookups
+      )
+    ).toBe(false);
+    expect(
+      matchesKanbanSearchFilters(
+        card,
+        { ...EMPTY_KANBAN_SEARCH_FILTERS, users: ['other'] },
+        lookups
+      )
+    ).toBe(false);
+    expect(
+      matchesKanbanSearchFilters(
+        { ...card, linkedNoteId: undefined },
+        { ...EMPTY_KANBAN_SEARCH_FILTERS, linkedOnly: true },
+        lookups
+      )
+    ).toBe(false);
+  });
+
+  it('falls back to ids when lookup labels are unavailable', () => {
+    expect(
+      kanbanCardSearchText(
+        { ...card, tags: ['missing-label'], linkedNoteId: 'missing-note' },
+        {}
+      )
+    ).toContain('missing-label');
+  });
+
   it('reports whether any filter is active', () => {
     expect(hasActiveKanbanSearchFilters(EMPTY_KANBAN_SEARCH_FILTERS)).toBe(
       false
@@ -103,12 +143,15 @@ describe('kanban search filters', () => {
   });
 
   it('normalizes widget cards before matching', () => {
+    const deadline = new Date('2026-02-03T00:00:00.000Z');
+
     expect(
       widgetCardToSearchCard({
         id: 42,
         label: 'Widget card',
         column: 'todo',
         priority: 2,
+        deadline,
         tags: ['ui'],
         users: ['janni'],
         linkedNoteId: 'note-1'
@@ -118,9 +161,39 @@ describe('kanban search filters', () => {
       label: 'Widget card',
       column: 'todo',
       priority: 2,
+      deadline,
       tags: ['ui'],
       users: ['janni'],
       linkedNoteId: 'note-1'
+    });
+  });
+
+  it('normalizes empty widget card fields defensively', () => {
+    expect(
+      widgetCardToSearchCard({
+        id: 'empty',
+        label: 123,
+        column: null,
+        description: false,
+        priority: 'high',
+        progress: 'none',
+        deadline: 'not-a-date',
+        tags: 'ui',
+        users: 'janni',
+        linkedNoteId: 7
+      })
+    ).toEqual({
+      id: 'empty',
+      label: '',
+      column: '',
+      description: undefined,
+      priority: undefined,
+      progress: undefined,
+      deadline: undefined,
+      tags: undefined,
+      users: undefined,
+      linkedNoteId: undefined,
+      order: 0
     });
   });
 
