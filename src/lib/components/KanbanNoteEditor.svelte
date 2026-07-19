@@ -33,7 +33,8 @@
     Willow,
     WillowDark,
     getEditorItems,
-    getPriorityOptions
+    getPriorityOptions,
+    registerEditorItem
   } from '@svar-ui/svelte-kanban';
   import type { KanbanInstanceApi, CardShape } from '@svar-ui/svelte-kanban';
   import {
@@ -67,6 +68,7 @@
   import { CollabProvider } from '$lib/sync/collab-provider';
   import { base64ToBytes } from '$lib/editor/base64';
   import { pickCursorColor } from '$lib/editor/cursor-color';
+  import { folderPathLabel } from '$lib/notes/folder-path';
   import { resolveShareScopeUsers } from '$lib/notes/share-users';
   import {
     registerEditor,
@@ -82,6 +84,13 @@
     serializeYjsSnapshot
   } from '$lib/history/snapshot';
   import TrashBanner from './note-editor/TrashBanner.svelte';
+  import KanbanCardContent from './kanban/KanbanCardContent.svelte';
+  import KanbanLabelsField, {
+    type KanbanLabelOption
+  } from './kanban/KanbanLabelsField.svelte';
+  import KanbanLinkedNoteField, {
+    type KanbanNoteOption
+  } from './kanban/KanbanLinkedNoteField.svelte';
   import {
     KANBAN_LOCAL_ORIGIN,
     KANBAN_RESTORE_ORIGIN,
@@ -97,8 +106,12 @@
     writeBoardToYDoc,
     type KanbanBoard,
     type KanbanCardData,
-    type KanbanColumnData
+    type KanbanColumnData,
+    type KanbanLabelData
   } from '$lib/kanban/kanban-yjs';
+
+  registerEditorItem('mindstream-linked-note', KanbanLinkedNoteField);
+  registerEditorItem('mindstream-labels', KanbanLabelsField);
 
   interface Props {
     noteId: string;
@@ -117,6 +130,16 @@
 
   const SAVE_DEBOUNCE_MS = 800;
   const HISTORY_IDLE_DEFAULT_S = 180;
+  const LABEL_COLORS = [
+    '#3b82f6',
+    '#22c55e',
+    '#f59e0b',
+    '#ef4444',
+    '#8b5cf6',
+    '#06b6d4',
+    '#ec4899',
+    '#64748b'
+  ];
   /** Tag applied to updates merged in from a background sync — already on
    *  disk, so they must not re-trigger a save (would ping-pong with peers). */
   const REMOTE_SYNC_ORIGIN = Symbol('mindstream:kanban-sync-merge');
@@ -182,23 +205,58 @@
     return Number.isFinite(v) && v > 0 ? v : SAVE_DEBOUNCE_MS;
   });
 
-  // ---- Card configuration (assignees + linked-note candidates) ----
+  // ---- Card configuration (assignees + linked-note candidates + labels) ----
   let userOptions = $state<{ id: string; label: string }[]>([]);
-  const noteOptions = $derived(
-    Object.values(tree.notesById)
-      .filter((n) => n.id !== noteId && !n.trashed)
-      .map((n) => ({
-        id: n.id,
-        label: n.title || tUi('editor.kanban.untitled')
-      }))
-      .sort((a, b) => a.label.localeCompare(b.label))
-  );
+  const noteOptions = $derived.by<KanbanNoteOption[]>(() => {
+    const all = Object.values(tree.notesById).filter(
+      (n) => n.id !== noteId && !n.trashed
+    );
+    const titleCounts = new Map<string, number>();
+    for (const n of all) {
+      const key = (n.title || tUi('editor.kanban.untitled'))
+        .trim()
+        .toLowerCase();
+      titleCounts.set(key, (titleCounts.get(key) ?? 0) + 1);
+    }
+    return all
+      .map((n) => {
+        const label = n.title || tUi('editor.kanban.untitled');
+        const key = label.trim().toLowerCase();
+        return {
+          id: n.id,
+          label,
+          note_kind: n.note_kind,
+          path: folderPathLabel(n.parent_collection_id, tree.collectionsById),
+          modified: n.modified,
+          duplicateTitle: (titleCounts.get(key) ?? 0) > 1
+        };
+      })
+      .sort((a, b) => a.label.localeCompare(b.label));
+  });
+
+  const labelOptions = $derived.by<KanbanLabelOption[]>(() => {
+    const labels = new Map<string, KanbanLabelOption>();
+    for (const label of board.labels ?? []) {
+      labels.set(label.id, {
+        id: label.id,
+        label: label.label,
+        color: label.color
+      });
+    }
+    for (const card of board.cards) {
+      for (const id of card.tags ?? []) {
+        if (!labels.has(id)) labels.set(id, { id, label: id });
+      }
+    }
+    return [...labels.values()].sort((a, b) => a.label.localeCompare(b.label));
+  });
 
   const cardShape = $derived<CardShape>({
     description: true,
     priority: { data: getPriorityOptions() },
     progress: true,
     deadline: true,
+    tags: labelOptions.length > 0 ? { data: labelOptions, max: 4 } : true,
     users: userOptions.length > 0 ? { data: userOptions } : false
     // No `menu` button: the Edit/Duplicate/Delete menu opens on right-click
     // (see <KanbanCardMenu> + the board's oncontextmenu below).
@@ -207,9 +265,16 @@
   // getEditorItems drives the card-detail form. Append a "linked note" field —
   // a wikilink-to-note attribute backed by the vault's note list.
   const editorItems = $derived([
-    ...getEditorItems(cardShape),
+    ...getEditorItems(cardShape).filter((item) => item.key !== 'tags'),
     {
-      comp: 'richselect',
+      comp: 'mindstream-labels',
+      key: 'tags',
+      label: tUi('editor.kanban.labels'),
+      options: labelOptions,
+      oncreate: createLabel
+    },
+    {
+      comp: 'mindstream-linked-note',
       key: 'linkedNoteId',
       label: tUi('editor.kanban.linkedNote'),
       options: noteOptions,
@@ -437,6 +502,33 @@
     undoManager.redo();
     if (yDoc) board = readBoardFromYDoc(yDoc);
     updateUndoState();
+  }
+
+  function createLabel(label: string): KanbanLabelOption | null {
+    if (!yDoc || isTrashed) return null;
+    const trimmed = label.trim();
+    if (!trimmed) return null;
+    const existing = (board.labels ?? []).find(
+      (item) => item.label.trim().toLowerCase() === trimmed.toLowerCase()
+    );
+    if (existing) {
+      return {
+        id: existing.id,
+        label: existing.label,
+        color: existing.color
+      };
+    }
+    const labels = board.labels ?? [];
+    const next: KanbanLabelData = {
+      id: crypto.randomUUID(),
+      label: trimmed,
+      color: LABEL_COLORS[labels.length % LABEL_COLORS.length],
+      order: labels.reduce((max, item) => Math.max(max, item.order), -1) + 1
+    };
+    upsertBoardIntoYDoc(yDoc, { columns: [], cards: [], labels: [next] });
+    board = readBoardFromYDoc(yDoc);
+    updateUndoState();
+    return { id: next.id, label: next.label, color: next.color };
   }
 
   const listMenuItems = $derived<(MenuItem | 'separator')[]>(
@@ -1018,6 +1110,7 @@
               cards={board.cards}
               columns={board.columns}
               card={cardShape}
+              cardContent={KanbanCardContent}
               readonly={isTrashed}
               init={handleInit}
             />

@@ -23,6 +23,10 @@ function sampleBoard(): KanbanBoard {
       { id: 'todo', label: 'To Do', order: 0 },
       { id: 'done', label: 'Done', order: 1 }
     ],
+    labels: [
+      { id: 'blocked', label: 'Blocked', color: '#ef4444', order: 0 },
+      { id: 'frontend', label: 'Frontend', color: '#3b82f6', order: 1 }
+    ],
     cards: [
       {
         id: 'c1',
@@ -30,6 +34,7 @@ function sampleBoard(): KanbanBoard {
         column: 'todo',
         description: 'do the thing',
         priority: 2,
+        tags: ['blocked'],
         users: ['alice'],
         deadline: new Date('2026-01-02T00:00:00.000Z'),
         order: 0
@@ -52,7 +57,9 @@ describe('kanban-yjs round-trip', () => {
     expect(c1.label).toBe('First');
     expect(c1.description).toBe('do the thing');
     expect(c1.priority).toBe(2);
+    expect(c1.tags).toEqual(['blocked']);
     expect(c1.users).toEqual(['alice']);
+    expect(read.labels).toEqual(board.labels);
     // Deadline serialises to ISO and hydrates back to an equal Date.
     expect(c1.deadline).toBeInstanceOf(Date);
     expect(c1.deadline?.toISOString()).toBe('2026-01-02T00:00:00.000Z');
@@ -80,6 +87,7 @@ describe('kanban-yjs round-trip', () => {
     writeBoardToYDoc(doc, sampleBoard());
     writeBoardToYDoc(doc, {
       columns: [{ id: 'todo', label: 'Backlog', order: 0 }],
+      labels: [{ id: 'urgent', label: 'Urgent', color: '#f59e0b', order: 0 }],
       cards: [
         { id: 'c1', label: 'First (edited)', column: 'todo', order: 0 },
         { id: 'c3', label: 'Third', column: 'todo', order: 1 }
@@ -87,6 +95,9 @@ describe('kanban-yjs round-trip', () => {
     });
     const read = readBoardFromYDoc(doc);
     expect(read.columns).toEqual([{ id: 'todo', label: 'Backlog', order: 0 }]);
+    expect(read.labels).toEqual([
+      { id: 'urgent', label: 'Urgent', color: '#f59e0b', order: 0 }
+    ]);
     expect(read.cards.map((c) => c.id)).toEqual(['c1', 'c3']);
     const c1 = read.cards.find((c) => c.id === 'c1')!;
     expect(c1.label).toBe('First (edited)');
@@ -128,6 +139,22 @@ describe('kanban-yjs additive live-editing (data-loss guard)', () => {
         .cards.map((c) => c.id)
         .sort()
     ).toEqual(['c1', 'c2', 'c3']);
+    expect(readBoardFromYDoc(doc).labels).toEqual(sampleBoard().labels);
+  });
+
+  it('upsert adds labels without pruning existing labels', () => {
+    const doc = new Y.Doc();
+    writeBoardToYDoc(doc, sampleBoard());
+    upsertBoardIntoYDoc(doc, {
+      columns: [],
+      cards: [],
+      labels: [{ id: 'review', label: 'Review', color: '#22c55e', order: 2 }]
+    });
+    expect(readBoardFromYDoc(doc).labels?.map((label) => label.id)).toEqual([
+      'blocked',
+      'frontend',
+      'review'
+    ]);
   });
 
   it('removeCardFromYDoc deletes exactly one card by id', () => {
@@ -175,6 +202,13 @@ describe('kanban-yjs seeding', () => {
   });
 });
 
+describe('kanban-yjs plaintext projection', () => {
+  it('indexes card label names instead of only label ids', () => {
+    const text = boardToPlainText(sampleBoard());
+    expect(text).toContain('Blocked');
+  });
+});
+
 describe('kanban-yjs community undo manager', () => {
   it('undoes and redoes local card and column edits', () => {
     const doc = new Y.Doc();
@@ -186,6 +220,7 @@ describe('kanban-yjs community undo manager', () => {
         { id: 'done', label: 'Done', order: 0 },
         { id: 'todo', label: 'To Do', order: 1 }
       ],
+      labels: [{ id: 'review', label: 'Review', color: '#22c55e', order: 2 }],
       cards: [{ id: 'c1', label: 'First edited', column: 'done', order: 0 }]
     });
 
@@ -200,6 +235,9 @@ describe('kanban-yjs community undo manager', () => {
       label: 'First edited',
       column: 'done'
     });
+    expect(readBoardFromYDoc(doc).labels?.map((label) => label.id)).toContain(
+      'review'
+    );
 
     undoManager.undo();
     expect(readBoardFromYDoc(doc).columns.map((c) => c.id)).toEqual([
@@ -212,6 +250,9 @@ describe('kanban-yjs community undo manager', () => {
       label: 'First',
       column: 'todo'
     });
+    expect(
+      readBoardFromYDoc(doc).labels?.map((label) => label.id)
+    ).not.toContain('review');
 
     undoManager.redo();
     expect(readBoardFromYDoc(doc).columns.map((c) => c.id)).toEqual([
@@ -224,6 +265,9 @@ describe('kanban-yjs community undo manager', () => {
       label: 'First edited',
       column: 'done'
     });
+    expect(readBoardFromYDoc(doc).labels?.map((label) => label.id)).toContain(
+      'review'
+    );
 
     undoManager.destroy();
   });
