@@ -23,12 +23,16 @@
      * the menu and the subsequent click immediately reopens it.
      */
     ignoreEl?: HTMLElement | null;
+    /** App-wide menus sit above editors; editor-local menus stay below
+     * top-level app popovers and dialogs. */
+    layer?: 'app' | 'editor';
     onClose: () => void;
   }
 
-  let { x, y, items, ignoreEl, onClose }: Props = $props();
+  let { x, y, items, ignoreEl, layer = 'app', onClose }: Props = $props();
   let menuEl: HTMLDivElement | null = $state(null);
   let activeSubmenu = $state<number | null>(null);
+  const layerClass = $derived(layer === 'editor' ? 'z-[250]' : 'z-350');
 
   onMount(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -86,7 +90,7 @@
 <div
   bind:this={menuEl}
   role="menu"
-  class="fixed z-350 min-w-[200px] rounded-md border border-border bg-popover py-1 text-sm text-popover-foreground shadow-lg"
+  class="fixed {layerClass} min-w-[200px] rounded-md border border-border bg-popover py-1 text-sm text-popover-foreground shadow-lg"
   style="left: {safeX}px; top: {safeY}px;"
 >
   {#each items as item, i (i)}
@@ -139,7 +143,7 @@
         {#if item.children?.length && activeSubmenu === i}
           <div
             role="menu"
-            class="absolute top-0 z-350 min-w-[200px] rounded-md border border-border bg-popover py-1 text-sm text-popover-foreground shadow-lg {submenuOpensLeft
+            class="absolute top-0 {layerClass} min-w-[200px] rounded-md border border-border bg-popover py-1 text-sm text-popover-foreground shadow-lg {submenuOpensLeft
               ? 'right-full mr-1'
               : 'left-full ml-1'}"
           >

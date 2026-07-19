@@ -1160,6 +1160,7 @@
         x={listMenu.x}
         y={listMenu.y}
         items={listMenuItems}
+        layer="editor"
         onClose={() => (listMenu = null)}
       />
     {/if}
@@ -1298,7 +1299,7 @@
   }
   .kanban-list-drag-ghost {
     position: fixed;
-    z-index: 360;
+    z-index: 250;
     display: inline-flex;
     align-items: center;
     gap: 0.25rem;
@@ -1349,8 +1350,16 @@
     outline: none;
   }
   :global(.kanban-scope .wx-sidearea:has(.kanban-card-editor)) {
+    z-index: 240;
     background: var(--background);
     color: var(--foreground);
+  }
+  :global(.kanban-scope .wx-sidearea:has(.kanban-card-editor) + .wx-overlay) {
+    z-index: 230;
+  }
+  :global(.wx-popup),
+  :global(.wx-menu.kanban-card-menu) {
+    z-index: 250;
   }
   :global(.kanban-scope .kanban-card-editor) {
     background: var(--background);
