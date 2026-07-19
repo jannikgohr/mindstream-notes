@@ -140,11 +140,11 @@
   const showSharingMetadata = $derived(
     Boolean(
       shareScope &&
-        (showShareScopeRow ||
-          authorName ||
-          permissionLabel ||
-          collaborators.length > 0 ||
-          pendingInviteCount > 0)
+      (showShareScopeRow ||
+        authorName ||
+        permissionLabel ||
+        collaborators.length > 0 ||
+        pendingInviteCount > 0)
     )
   );
   const showPendingSync = $derived(
