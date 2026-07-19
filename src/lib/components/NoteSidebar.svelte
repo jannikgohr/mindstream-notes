@@ -387,7 +387,11 @@
           </section>
         {/if}
 
-        <div class="mt-5 border-t border-border pt-5">
+        <div
+          class="mt-5 border-border"
+          class:border-t={showContentStats || showAttachments}
+          class:pt-5={showContentStats || showAttachments}
+        >
           <TagsSection noteId={note.id} />
         </div>
 
