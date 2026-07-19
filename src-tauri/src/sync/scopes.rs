@@ -17,7 +17,7 @@
 
 use etebase::managers::CollectionManager;
 use etebase::{Collection, CollectionAccessLevel, FetchOptions};
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 
 use crate::db::Db;
 use crate::error::{AppError, AppResult};
@@ -73,6 +73,27 @@ fn decode_manifest(col: &Collection) -> AppResult<ShareManifest> {
         .map_err(|e| AppError::InvalidArg(format!("decode manifest json: {e}")))
 }
 
+/// The local collection id of the shared root this account holds for `scope`, if
+/// any (a row tagged with the scope that isn't shared-by-me; the anchor — carrying
+/// `share_id` — is preferred). Best-effort, only used to make the
+/// incomplete-scope warning actionable.
+fn local_scope_root(db: &Db, scope: &str) -> Option<String> {
+    db.with_conn(|conn| {
+        Ok(conn
+            .query_row(
+                "SELECT id FROM collections
+                 WHERE share_scope_id = ?1 AND COALESCE(shared_by_me, 0) = 0
+                 ORDER BY (share_id IS NULL), id
+                 LIMIT 1",
+                params![scope],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?)
+    })
+    .ok()
+    .flatten()
+}
+
 fn part_uid(manifest: &ShareManifest, part: ShareScopePart) -> Option<&str> {
     manifest
         .collections
@@ -94,7 +115,18 @@ fn sync_one_scope(
         part_uid(manifest, ShareScopePart::Notes),
         part_uid(manifest, ShareScopePart::Assets),
     ) else {
-        log::warn!("[sync] scope {scope} manifest is missing a required part; skipping");
+        // Incomplete manifest — it can never finish syncing. Name the local root
+        // (if this account already has one accepted) so the diagnostic is
+        // actionable: the fix is to Leave it. Never auto-delete here — a folder
+        // mid-first-sync must not be mistaken for an orphan.
+        match local_scope_root(db, scope) {
+            Some(root_id) => log::warn!(
+                "[sync] shared root {root_id} (scope {scope}) is incomplete (manifest missing a required part) and can't sync; use \"Leave shared folder\" to remove it"
+            ),
+            None => log::warn!(
+                "[sync] scope {scope} manifest is missing a required part; skipping"
+            ),
+        }
         return Ok(());
     };
 
