@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { TRASH_ID } from '$lib/api';
-import type { Collection, NoteSummary, TreeNode } from '$lib/api';
+import type { Collection, NoteSummary, TreeItemRef, TreeNode } from '$lib/api';
 import {
   childrenOf,
   collectionIsSharedOrUnderShared,
@@ -9,9 +9,13 @@ import {
   collectionIsUnder,
   collectionIsUnderTrash,
   collectionScopeIsReadOnly,
+  itemSharedRootId,
   noteIsUnderShared,
   noteIsUnderTrash,
-  nodesForDesktopSource
+  nodesForDesktopSource,
+  sharedFolderIsEditable,
+  sharedMoveIsLegal,
+  sharedRootIdFor
 } from './note-source.svelte';
 
 type SharedMeta = {
@@ -353,5 +357,162 @@ describe('nodesForDesktopSource', () => {
     const ids = out.map((n) => n.id);
     expect(ids).toContain('deletedFolder');
     expect(ids).toContain('orphan');
+  });
+});
+
+describe('sharedRootIdFor', () => {
+  const cols = byId([
+    collection('root', null, { shared_role: 'read_write' }),
+    collection('child', 'root'),
+    collection('grandchild', 'child'),
+    collection('personal'),
+    collection('mine', null, { share_id: 'remote', shared_by_me: true })
+  ]);
+
+  it('returns the shared root id for a nested descendant', () => {
+    expect(sharedRootIdFor('grandchild', cols)).toBe('root');
+    expect(sharedRootIdFor('child', cols)).toBe('root');
+  });
+
+  it('returns the root itself when it is the shared anchor', () => {
+    expect(sharedRootIdFor('root', cols)).toBe('root');
+  });
+
+  it('returns null for personal folders and for null / shared-by-me', () => {
+    expect(sharedRootIdFor('personal', cols)).toBe(null);
+    expect(sharedRootIdFor(null, cols)).toBe(null);
+    expect(sharedRootIdFor('mine', cols)).toBe(null);
+  });
+
+  it('terminates on a cycle instead of looping forever', () => {
+    const cyclic = byId([collection('a', 'b'), collection('b', 'a')]);
+    expect(sharedRootIdFor('a', cyclic)).toBe(null);
+  });
+});
+
+describe('itemSharedRootId', () => {
+  const cols = byId([
+    collection('root', null, { shared_role: 'read_write' }),
+    collection('child', 'root')
+  ]);
+  const notesById = {
+    n1: note('n1', 'child'),
+    n2: note('n2', null)
+  };
+
+  it('resolves a note through its parent folder', () => {
+    expect(itemSharedRootId({ kind: 'note', id: 'n1' }, notesById, cols)).toBe(
+      'root'
+    );
+    expect(itemSharedRootId({ kind: 'note', id: 'n2' }, notesById, cols)).toBe(
+      null
+    );
+  });
+
+  it('resolves a folder through itself', () => {
+    expect(
+      itemSharedRootId({ kind: 'folder', id: 'child' }, notesById, cols)
+    ).toBe('root');
+  });
+
+  it('returns null for a missing note', () => {
+    expect(
+      itemSharedRootId({ kind: 'note', id: 'ghost' }, notesById, cols)
+    ).toBe(null);
+  });
+});
+
+describe('sharedFolderIsEditable', () => {
+  const cols = byId([
+    collection('rw', null, { shared_role: 'read_write' }),
+    collection('rwChild', 'rw'),
+    collection('admin', null, { shared_role: 'admin' }),
+    collection('ro', null, { shared_role: 'read_only' }),
+    collection('roChild', 'ro'),
+    collection('personal')
+  ]);
+
+  it('is true inside read_write and admin scopes', () => {
+    expect(sharedFolderIsEditable('rw', cols)).toBe(true);
+    expect(sharedFolderIsEditable('rwChild', cols)).toBe(true);
+    expect(sharedFolderIsEditable('admin', cols)).toBe(true);
+  });
+
+  it('is false inside read_only scopes', () => {
+    expect(sharedFolderIsEditable('ro', cols)).toBe(false);
+    expect(sharedFolderIsEditable('roChild', cols)).toBe(false);
+  });
+
+  it('is false for personal folders and null', () => {
+    expect(sharedFolderIsEditable('personal', cols)).toBe(false);
+    expect(sharedFolderIsEditable(null, cols)).toBe(false);
+  });
+});
+
+describe('sharedMoveIsLegal', () => {
+  // Two independent shared scopes plus a read-only one, each with a subfolder.
+  const cols = byId([
+    collection('a', null, { shared_role: 'read_write' }),
+    collection('aSub', 'a'),
+    collection('aDeep', 'aSub'),
+    collection('b', null, { shared_role: 'admin' }),
+    collection('bSub', 'b'),
+    collection('ro', null, { shared_role: 'read_only' }),
+    collection('roSub', 'ro'),
+    collection('personal')
+  ]);
+  const notesById = {
+    aNote: note('aNote', 'a'),
+    aSubNote: note('aSubNote', 'aSub'),
+    bNote: note('bNote', 'b')
+  };
+  const move = (items: TreeItemRef[], target: string | null) =>
+    sharedMoveIsLegal(items, target, notesById, cols);
+
+  it('allows an intra-scope move into an editable folder', () => {
+    expect(move([{ kind: 'note', id: 'aNote' }], 'aSub')).toBe(true);
+    expect(
+      move(
+        [
+          { kind: 'note', id: 'aNote' },
+          { kind: 'folder', id: 'aSub' }
+        ],
+        'a'
+      )
+    ).toBe(true);
+  });
+
+  it('rejects a cross-scope move', () => {
+    expect(move([{ kind: 'note', id: 'aNote' }], 'bSub')).toBe(false);
+    expect(move([{ kind: 'folder', id: 'aSub' }], 'b')).toBe(false);
+  });
+
+  it('rejects any move into a read-only scope', () => {
+    expect(move([{ kind: 'note', id: 'aNote' }], 'roSub')).toBe(false);
+  });
+
+  it('rejects a drop onto the shared-view root (target null)', () => {
+    expect(move([{ kind: 'note', id: 'aNote' }], null)).toBe(false);
+  });
+
+  it('rejects dropping a folder onto itself or a descendant', () => {
+    expect(move([{ kind: 'folder', id: 'aSub' }], 'aSub')).toBe(false);
+    expect(move([{ kind: 'folder', id: 'aSub' }], 'aDeep')).toBe(false);
+  });
+
+  it('blocks the whole batch when one item is in another scope', () => {
+    expect(
+      move(
+        [
+          { kind: 'note', id: 'aNote' },
+          { kind: 'note', id: 'bNote' }
+        ],
+        'aSub'
+      )
+    ).toBe(false);
+  });
+
+  it('rejects an empty selection', () => {
+    expect(move([], 'aSub')).toBe(false);
   });
 });

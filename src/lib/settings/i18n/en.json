@@ -165,6 +165,7 @@
     "fileTree.deletePermanently.title": "Delete note permanently?",
     "fileTree.deletePermanently.message": "\"{title}\" will be deleted permanently. This cannot be undone.",
     "fileTree.deletePermanently.confirm": "Delete",
+    "fileTree.move.blockedShared": "You can only move items within the same shared folder.",
     "favourite.add": "Add to favourites",
     "favourite.remove": "Remove from favourites",
     "noteSidebar.title": "Details",
