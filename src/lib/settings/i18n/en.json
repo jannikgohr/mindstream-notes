@@ -668,7 +668,17 @@
     "editor.kanban.deleteListBody": "Delete the list “{list}” and its {count} card(s)? This cannot be undone.",
     "editor.kanban.deleteListConfirm": "Delete list",
     "editor.kanban.deleteListCancel": "Cancel",
-    "editor.kanban.listMenu": "List options"
+    "editor.kanban.listMenu": "List options",
+    "editor.kanban.searchPlaceholder": "Search Kanban cards",
+    "editor.kanban.searchResults": "{count}/{total}",
+    "editor.kanban.searchClear": "Clear Kanban search",
+    "editor.kanban.searchClose": "Close Kanban search",
+    "editor.kanban.filters": "Kanban filters",
+    "editor.kanban.searchList": "List",
+    "editor.kanban.searchPriority": "Priority",
+    "editor.kanban.searchLabels": "Labels",
+    "editor.kanban.searchAssignees": "Assignees",
+    "editor.kanban.searchLinkedOnly": "Linked note"
   },
   "categories": {
     "account": {

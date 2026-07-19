@@ -668,7 +668,17 @@
     "editor.kanban.deleteListBody": "Die Liste „{list}“ und ihre {count} Karte(n) löschen? Dies kann nicht rückgängig gemacht werden.",
     "editor.kanban.deleteListConfirm": "Liste löschen",
     "editor.kanban.deleteListCancel": "Abbrechen",
-    "editor.kanban.listMenu": "Listenoptionen"
+    "editor.kanban.listMenu": "Listenoptionen",
+    "editor.kanban.searchPlaceholder": "Kanban-Karten suchen",
+    "editor.kanban.searchResults": "{count}/{total}",
+    "editor.kanban.searchClear": "Kanban-Suche zurücksetzen",
+    "editor.kanban.searchClose": "Kanban-Suche schließen",
+    "editor.kanban.filters": "Kanban-Filter",
+    "editor.kanban.searchList": "Liste",
+    "editor.kanban.searchPriority": "Priorität",
+    "editor.kanban.searchLabels": "Labels",
+    "editor.kanban.searchAssignees": "Zugewiesene",
+    "editor.kanban.searchLinkedOnly": "Verknüpfte Notiz"
   },
   "categories": {
     "account": {

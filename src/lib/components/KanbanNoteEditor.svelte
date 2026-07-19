@@ -72,6 +72,7 @@
   import { resolveShareScopeUsers } from '$lib/notes/share-users';
   import {
     registerEditor,
+    SEARCH_ACTIVE_NOTE_COMMAND,
     unregisterEditor,
     type EditorListener
   } from '$lib/hotkeys/bus.svelte';
@@ -91,6 +92,7 @@
   import KanbanLinkedNoteField, {
     type KanbanNoteOption
   } from './kanban/KanbanLinkedNoteField.svelte';
+  import KanbanSearchPanel from './kanban/KanbanSearchPanel.svelte';
   import {
     KANBAN_LOCAL_ORIGIN,
     KANBAN_RESTORE_ORIGIN,
@@ -110,6 +112,13 @@
     type KanbanColumnData,
     type KanbanLabelData
   } from '$lib/kanban/kanban-yjs';
+  import {
+    EMPTY_KANBAN_SEARCH_FILTERS,
+    hasActiveKanbanSearchFilters,
+    matchesKanbanSearchFilters,
+    type KanbanSearchFilters,
+    type KanbanSearchLookups
+  } from '$lib/kanban/kanban-search';
 
   registerEditorItem('mindstream-linked-note', KanbanLinkedNoteField);
   registerEditorItem('mindstream-labels', KanbanLabelsField);
@@ -131,6 +140,7 @@
 
   const SAVE_DEBOUNCE_MS = 800;
   const HISTORY_IDLE_DEFAULT_S = 180;
+  const KANBAN_SEARCH_FILTER_TAG = 'mindstream-kanban-search';
   const LABEL_COLORS = [
     '#3b82f6',
     '#22c55e',
@@ -157,6 +167,7 @@
   let undoManager: Y.UndoManager | null = null;
   let api = $state<KanbanInstanceApi | null>(null);
   let toolbarScrollEl = $state<HTMLDivElement | null>(null);
+  let searchPanel = $state<{ focus: () => void } | null>(null);
   /** Board props handed to the widget. Reassigned only on remote changes. */
   let board = $state<KanbanBoard>({ columns: [], cards: [] });
 
@@ -177,6 +188,10 @@
   let capturingHistory = false;
   let undoDepth = $state(0);
   let redoDepth = $state(0);
+  let searchOpen = $state(false);
+  let searchFilters = $state<KanbanSearchFilters>({
+    ...EMPTY_KANBAN_SEARCH_FILTERS
+  });
 
   // ---- Trash detection (mirrors NoteEditor / FreeformNoteEditor) ----
   function ancestorIsTrash(parentId: string | null): boolean {
@@ -292,6 +307,29 @@
   const ThemeComponent = $derived($mode === 'dark' ? WillowDark : Willow);
   const canUndo = $derived(undoDepth > 0);
   const canRedo = $derived(redoDepth > 0);
+  const priorityOptions = $derived(
+    getPriorityOptions().map((option) => ({
+      id: Number(option.id),
+      label: String(option.label)
+    }))
+  );
+  const searchLookups = $derived<KanbanSearchLookups>({
+    columns: board.columns,
+    labels: board.labels ?? [],
+    notes: noteOptions.map((note) => ({
+      id: note.id,
+      label: note.label,
+      path: note.path
+    })),
+    priorities: priorityOptions
+  });
+  const searchActive = $derived(hasActiveKanbanSearchFilters(searchFilters));
+  const searchMatchCount = $derived.by(
+    () =>
+      board.cards.filter((card) =>
+        matchesKanbanSearchFilters(card, searchFilters, searchLookups)
+      ).length
+  );
 
   function updateUndoState(): void {
     undoDepth = undoManager?.undoStack.length ?? 0;
@@ -411,6 +449,25 @@
     });
   }
 
+  $effect(() => {
+    if (!api) return;
+    const filters = searchFilters;
+    const lookups = searchLookups;
+    if (!searchActive) {
+      api.exec('filter-cards', { tag: KANBAN_SEARCH_FILTER_TAG });
+      return;
+    }
+    api.exec('filter-cards', {
+      tag: KANBAN_SEARCH_FILTER_TAG,
+      filter: (card: Record<string, unknown>) =>
+        matchesKanbanSearchFilters(
+          mapCard(card, String(card.column ?? ''), 0),
+          filters,
+          lookups
+        )
+    });
+  });
+
   // ---- Column (list) management ----
   // SVAR exposes only update-column (rename/collapse), no add/remove. These
   // write straight to the Yjs columns array and then rebuild the widget props
@@ -486,6 +543,22 @@
       return;
     }
     api.exec('select-card', { id: null });
+  }
+
+  function openKanbanSearch(): void {
+    if (isTrashed) return;
+    searchOpen = true;
+    queueMicrotask(() => searchPanel?.focus());
+  }
+
+  function closeKanbanSearch(): void {
+    searchOpen = false;
+    searchFilters = { ...EMPTY_KANBAN_SEARCH_FILTERS };
+    api?.exec('filter-cards', { tag: KANBAN_SEARCH_FILTER_TAG });
+  }
+
+  function updateKanbanSearch(filters: KanbanSearchFilters): void {
+    searchFilters = filters;
   }
 
   function handleToolbarWheel(event: WheelEvent): void {
@@ -915,13 +988,20 @@
         unsubSync = unlisten;
       });
 
-      // Command-bus listener: no kanban commands in the catalogue yet, but
-      // installing it displaces any markdown listener so editor hotkeys don't
-      // leak into a hidden markdown note (same rationale as FreeformNoteEditor).
+      // Command-bus listener: handle app-level active-note search and displace
+      // any hidden editor listener so markdown/pdf commands don't leak across
+      // panes (same rationale as the other custom note editors).
       editorListener = {
         kind: 'kanban',
         host,
-        onCommand: () => false
+        noteId,
+        onCommand: (id: string) => {
+          if (id === SEARCH_ACTIVE_NOTE_COMMAND) {
+            openKanbanSearch();
+            return true;
+          }
+          return false;
+        }
       };
       registerEditor(editorListener);
 
@@ -1114,6 +1194,20 @@
               </Toolbar>
               <ToolbarScrollbar target={toolbarScrollEl} />
             </div>
+            {#if searchOpen}
+              <KanbanSearchPanel
+                bind:this={searchPanel}
+                filters={searchFilters}
+                columns={board.columns}
+                priorities={priorityOptions}
+                labels={board.labels ?? []}
+                users={userOptions}
+                matchCount={searchMatchCount}
+                totalCount={board.cards.length}
+                onChange={updateKanbanSearch}
+                onClose={closeKanbanSearch}
+              />
+            {/if}
           {/if}
           <!-- Right-click a card to open the Edit/Duplicate/Delete menu. -->
           <div
