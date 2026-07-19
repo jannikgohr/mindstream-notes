@@ -803,7 +803,7 @@ fn pull_folders_once(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppR
             .list(Some(&opts))
             .map_err(|e| AppError::InvalidArg(format!("list folders: {e}")))?;
         for item in resp.data() {
-            match apply_folder(db, item, None) {
+            match apply_folder(db, item, None, true) {
                 Ok(Some(payload)) => applied.push(payload),
                 Ok(None) => {}
                 Err(err) if is_corrupt_remote_content(&err) => {
@@ -880,7 +880,7 @@ fn pull_notes_once(
             .list(Some(&opts))
             .map_err(|e| AppError::InvalidArg(format!("list notes: {e}")))?;
         for item in resp.data() {
-            match apply_note(db, item, None) {
+            match apply_note(db, item, None, true) {
                 Ok(Some(id)) => applied_ids.push(id),
                 Ok(None) => {}
                 Err(err) if is_corrupt_remote_content(&err) => {
@@ -1253,7 +1253,12 @@ fn apply_signature(db: &Db, item: &Item) -> AppResult<bool> {
 /// Returns `Some(payload)` if we wrote a row (so `pull_folders` can
 /// queue it for the repair pass), `None` for deletes and missing-
 /// content items where there's nothing to re-link.
-fn apply_folder(db: &Db, item: &Item, scope: Option<&str>) -> AppResult<Option<FolderPayload>> {
+fn apply_folder(
+    db: &Db,
+    item: &Item,
+    scope: Option<&str>,
+    preserve_dirty_local_edits: bool,
+) -> AppResult<Option<FolderPayload>> {
     if item.is_deleted() {
         // Server-side delete: drop our row if we have one matched by uid,
         // unless it has unpushed edits — see `apply_remote_delete`.
@@ -1269,7 +1274,14 @@ fn apply_folder(db: &Db, item: &Item, scope: Option<&str>) -> AppResult<Option<F
     let payload: FolderPayload = rmp_serde::from_slice(&raw)
         .map_err(|e| AppError::InvalidArg(format!("folder msgpack: {e}")))?;
     let etag = item.etag().to_string();
-    apply_folder_payload(db, payload, item.uid(), &etag, scope)
+    apply_folder_payload(
+        db,
+        payload,
+        item.uid(),
+        &etag,
+        scope,
+        preserve_dirty_local_edits,
+    )
 }
 
 /// Apply a decoded folder payload to local SQLite. Split out from
@@ -1281,6 +1293,7 @@ fn apply_folder_payload(
     uid: &str,
     etag: &str,
     scope: Option<&str>,
+    preserve_dirty_local_edits: bool,
 ) -> AppResult<Option<FolderPayload>> {
     let now = Utc::now().to_rfc3339();
 
@@ -1297,7 +1310,8 @@ fn apply_folder_payload(
         )
         .optional()?)
     })?;
-    let keep_local_meta = matches!(existing, Some((dirty, _, _)) if dirty != 0);
+    let keep_local_meta =
+        preserve_dirty_local_edits && matches!(existing, Some((dirty, _, _)) if dirty != 0);
     let remote_created = payload
         .created
         .as_deref()
@@ -1469,7 +1483,12 @@ struct LocalNoteState {
 /// `sync-completed` event payload — open editors merge the new
 /// yrs_state into their live Y.Doc instead of going stale. Returns None
 /// for deletes (no live editor to refresh) and missing-content items.
-fn apply_note(db: &Db, item: &Item, scope: Option<&str>) -> AppResult<Option<String>> {
+fn apply_note(
+    db: &Db,
+    item: &Item,
+    scope: Option<&str>,
+    preserve_dirty_local_edits: bool,
+) -> AppResult<Option<String>> {
     if item.is_deleted() {
         db.with_conn(|c| apply_remote_delete(c, "notes", item.uid()))?;
         return Ok(None);
@@ -1483,7 +1502,14 @@ fn apply_note(db: &Db, item: &Item, scope: Option<&str>) -> AppResult<Option<Str
     let payload: NotePayload = rmp_serde::from_slice(&raw)
         .map_err(|e| AppError::InvalidArg(format!("note msgpack: {e}")))?;
     let etag = item.etag().to_string();
-    apply_note_payload(db, &payload, item.uid(), &etag, scope)
+    apply_note_payload(
+        db,
+        &payload,
+        item.uid(),
+        &etag,
+        scope,
+        preserve_dirty_local_edits,
+    )
 }
 
 /// Apply a decoded note payload to local SQLite. Split out from `apply_note`
@@ -1495,6 +1521,7 @@ fn apply_note_payload(
     uid: &str,
     etag: &str,
     scope: Option<&str>,
+    preserve_dirty_local_edits: bool,
 ) -> AppResult<Option<String>> {
     db.with_conn_mut(|c| {
         let tx = c.transaction()?;
@@ -1534,7 +1561,12 @@ fn apply_note_payload(
         };
 
         let incoming_schema = payload.schema as i64;
+        let remote_authoritative = !preserve_dirty_local_edits;
         let (merged_state, dirty_after) = match &existing {
+            // View-only/read-only shares must discard any local state. Those
+            // local edits should be impossible in the UI; if they appear, the
+            // server copy is the only source we are allowed to keep.
+            Some(_) if remote_authoritative => (payload.yrs_state.clone(), 0),
             // Same-schema CRDT merge: this is the common case once both
             // devices are on the same payload version.
             Some(local) if !local.yrs_state.is_empty() && local.schema == incoming_schema => {
@@ -1560,7 +1592,8 @@ fn apply_note_payload(
         // pull, e.g. the full re-pull triggered by a bad_stoken reset. Keep
         // the local metadata and force dirty=1 so the next push reconciles the
         // server. The body above is still CRDT-merged regardless.
-        let keep_local_meta = existing.as_ref().is_some_and(|l| l.dirty != 0);
+        let keep_local_meta =
+            preserve_dirty_local_edits && existing.as_ref().is_some_and(|l| l.dirty != 0);
         // For v2 payloads the remote ships the rendered markdown alongside
         // the prosemirror state — Rust can't render markdown from XmlFragment.
         // If this row has unpushed local edits, keep the local rendered body
@@ -1668,7 +1701,10 @@ fn apply_note_payload(
         } else {
             payload.note_kind.clone()
         };
-        let (final_tags_state, final_tags) = match &existing {
+        let (final_tags_state, final_tags) = if remote_authoritative {
+            tags_crdt::merge_or_resolve(&[], &[], &payload.tags_state, &payload.tags, false)
+        } else {
+            match &existing {
             Some(local) => tags_crdt::merge_or_resolve(
                 &local.tags_state,
                 &local_tags,
@@ -1679,11 +1715,12 @@ fn apply_note_payload(
             None => {
                 tags_crdt::merge_or_resolve(&[], &[], &payload.tags_state, &payload.tags, false)
             }
+            }
         };
         // Keep dirty=1 when we preserved local metadata so the next push sends
         // it to the server; otherwise follow the body-merge's dirty decision.
         let tags_need_push = payload.tags_state.is_empty() || final_tags != payload.tags;
-        let final_dirty = if keep_local_meta || tags_need_push {
+        let final_dirty = if keep_local_meta || (preserve_dirty_local_edits && tags_need_push) {
             1
         } else {
             dirty_after
@@ -2470,8 +2507,10 @@ fn load_stoken(db: &Db, kind: &str) -> AppResult<Option<String>> {
 fn save_stoken(db: &Db, kind: &str, stoken: Option<&str>) -> AppResult<()> {
     db.with_conn(|c| {
         c.execute(
-            "UPDATE sync_state SET stoken = ?1 WHERE kind = ?2",
-            params![stoken, kind],
+            "INSERT INTO sync_state (kind, stoken)
+             VALUES (?1, ?2)
+             ON CONFLICT(kind) DO UPDATE SET stoken = excluded.stoken",
+            params![kind, stoken],
         )?;
         Ok(())
     })
@@ -2690,7 +2729,7 @@ mod tests {
 
         // Stale remote: not trashed, parent stripped to root.
         let remote = remote_note("note_x", None, None);
-        apply_note_payload(&db, &remote, "uid_x", "etag_new", None).unwrap();
+        apply_note_payload(&db, &remote, "uid_x", "etag_new", None, true).unwrap();
 
         let (trashed_at, parent, dirty, title): (Option<String>, Option<String>, i64, String) = db
             .with_conn(|c| {
@@ -2752,7 +2791,7 @@ mod tests {
         .unwrap();
 
         let remote = remote_note("note_y", None, Some("2026-06-10T00:00:00Z"));
-        apply_note_payload(&db, &remote, "uid_y", "etag_new", None).unwrap();
+        apply_note_payload(&db, &remote, "uid_y", "etag_new", None, true).unwrap();
 
         let (title, trashed_at, created, modified): (String, Option<String>, String, String) = db
             .with_conn(|c| {
@@ -2785,7 +2824,7 @@ mod tests {
     fn apply_note_inserts_remote_dates_for_new_rows() {
         let db = open_memory_for_tests();
         let remote = remote_note("note_remote_dates", None, None);
-        apply_note_payload(&db, &remote, "uid_dates", "etag_dates", None).unwrap();
+        apply_note_payload(&db, &remote, "uid_dates", "etag_dates", None, true).unwrap();
 
         let (created, modified): (String, String) = db
             .with_conn(|c| {
@@ -2826,7 +2865,7 @@ mod tests {
         let mut remote = remote_note("note_tags", None, None);
         remote.tags = vec!["remote".into()];
         remote.tags_state = tags_crdt::init(&remote.tags);
-        apply_note_payload(&db, &remote, "uid_tags", "etag_new", None).unwrap();
+        apply_note_payload(&db, &remote, "uid_tags", "etag_new", None, true).unwrap();
 
         let (title, dirty): (String, i64) = db
             .with_conn(|c| {
@@ -2869,7 +2908,7 @@ mod tests {
 
         let mut remote = remote_note("note_body", None, None);
         remote.body = "stale remote body".into();
-        apply_note_payload(&db, &remote, "uid_body", "etag_new", Some("scope_1")).unwrap();
+        apply_note_payload(&db, &remote, "uid_body", "etag_new", Some("scope_1"), true).unwrap();
 
         let (body, dirty): (String, i64) = db
             .with_conn(|c| {
@@ -2882,6 +2921,74 @@ mod tests {
             .unwrap();
         assert_eq!(body, "local rendered body");
         assert_eq!(dirty, 1, "local body must still push after the pull");
+    }
+
+    #[test]
+    fn apply_note_read_only_pull_discards_local_crdt_edits() {
+        let db = open_memory_for_tests();
+        let local_state = yrs_doc::init_with_markdown("local");
+        let local_tags = vec!["local".to_string()];
+        let local_tags_state = tags_crdt::init(&local_tags);
+        db.with_conn(|c| {
+            c.execute(
+                "INSERT INTO notes(id, parent_collection_id, title, body, position,
+                                   created, modified, trashed_at, yrs_state,
+                                   etebase_uid, etebase_etag, dirty, payload_schema,
+                                   favourite, note_kind, tags_state, share_scope_id)
+                 VALUES ('note_read_only', NULL, 'Local Title', 'local rendered', 0,
+                         't', 't', NULL, ?1, 'uid_ro', 'etag_old', 1, 2,
+                         1, 'markdown', ?2, 'scope_1')",
+                params![local_state, local_tags_state],
+            )?;
+            c.execute(
+                "INSERT INTO note_tags(note_id, tag) VALUES ('note_read_only', 'local')",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+        let remote_tags = vec!["remote".to_string()];
+        let remote = NotePayload {
+            schema: 2,
+            id: "note_read_only".into(),
+            parent_folder_id: None,
+            title: "Remote Title".into(),
+            position: 7,
+            created: Some("2026-05-01T12:00:00Z".into()),
+            modified: Some("2026-05-02T12:00:00Z".into()),
+            tags: remote_tags.clone(),
+            tags_state: tags_crdt::init(&remote_tags),
+            trashed_at: None,
+            yrs_state: yrs_doc::init_with_markdown("remote"),
+            body: "remote rendered".into(),
+            crypto_key: vec![],
+            favourite: false,
+            note_kind: "markdown".into(),
+        };
+
+        apply_note_payload(&db, &remote, "uid_ro", "etag_new", Some("scope_1"), false).unwrap();
+
+        let (title, body, dirty, favourite, tags_state): (String, String, i64, i64, Vec<u8>) = db
+            .with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT title, body, dirty, favourite, tags_state
+                     FROM notes WHERE id = 'note_read_only'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+                )?)
+            })
+            .unwrap();
+        let tags = db
+            .with_conn(|c| load_tags_for_note(c, "note_read_only"))
+            .unwrap();
+
+        assert_eq!(title, "Remote Title");
+        assert_eq!(body, "remote rendered");
+        assert_eq!(dirty, 0);
+        assert_eq!(favourite, 0);
+        assert_eq!(tags, remote_tags);
+        assert_eq!(tags_crdt::tags(&tags_state), remote_tags);
     }
 
     #[test]
@@ -2983,7 +3090,7 @@ mod tests {
 
         let remote = remote_folder("folder_r", None, "Remote Name");
         let repaired =
-            apply_folder_payload(&db, remote, "uid_r", "etag_new", Some("scope_1")).unwrap();
+            apply_folder_payload(&db, remote, "uid_r", "etag_new", Some("scope_1"), true).unwrap();
         assert!(
             repaired.is_none(),
             "a dirty folder keeps local parent; skip the parent-repair pass"
@@ -3033,7 +3140,7 @@ mod tests {
         .unwrap();
 
         let remote = remote_folder("folder_c", None, "Renamed Remotely");
-        apply_folder_payload(&db, remote, "uid_c", "etag_new", None).unwrap();
+        apply_folder_payload(&db, remote, "uid_c", "etag_new", None, true).unwrap();
 
         let (name, created, modified): (String, String, String) = db
             .with_conn(|c| {
@@ -3171,7 +3278,15 @@ mod tests {
 
         // 2. Scope copy of the same note arrives (B's content, new uid, scope).
         let remote = remote_note("note_n", Some("folder_f"), None);
-        apply_note_payload(&db, &remote, "uid_scope", "etag_scope", Some("scope_1")).unwrap();
+        apply_note_payload(
+            &db,
+            &remote,
+            "uid_scope",
+            "etag_scope",
+            Some("scope_1"),
+            true,
+        )
+        .unwrap();
 
         let (scope, uid, dirty, title): (Option<String>, Option<String>, i64, String) = db
             .with_conn(|c| {
