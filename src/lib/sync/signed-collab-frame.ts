@@ -20,12 +20,17 @@ function nodeBuffer(): NodeBufferShim | undefined {
 export interface CollabFrameAuth {
   roomId: string;
   collabEpoch: number;
+  authorUsername?: string;
   authorPublicKeyB64?: string;
   authorPrivateKeyPkcs8B64?: string;
-  authorizedWriterKeysB64: string[];
+  authorizedWriters: Array<{
+    username: string;
+    publicKeyB64: string;
+  }>;
 }
 
 type SigningCollabFrameAuth = CollabFrameAuth & {
+  authorUsername: string;
   authorPublicKeyB64: string;
   authorPrivateKeyPkcs8B64: string;
 };
@@ -36,6 +41,7 @@ interface SignedFrameHeader {
   r: string;
   e: number;
   a: string;
+  u: string;
 }
 
 export interface DecodedCollabFrame {
@@ -46,6 +52,7 @@ export interface DecodedCollabFrame {
 export interface SignedCollabFrameHeaderInfo {
   roomId: string;
   collabEpoch: number;
+  authorUsername: string;
   authorPublicKeyB64: string;
 }
 
@@ -155,7 +162,23 @@ export async function generateCollabSigningKeyPair(): Promise<{
 export function canSignCollabFrame(
   auth: CollabFrameAuth | undefined
 ): auth is SigningCollabFrameAuth {
-  return Boolean(auth?.authorPublicKeyB64 && auth.authorPrivateKeyPkcs8B64);
+  return Boolean(
+    auth?.authorUsername &&
+    auth.authorPublicKeyB64 &&
+    auth.authorPrivateKeyPkcs8B64 &&
+    authorizedWriter(auth, auth.authorUsername, auth.authorPublicKeyB64)
+  );
+}
+
+function authorizedWriter(
+  auth: CollabFrameAuth,
+  username: string,
+  publicKeyB64: string
+): boolean {
+  return auth.authorizedWriters.some(
+    (writer) =>
+      writer.username === username && writer.publicKeyB64 === publicKeyB64
+  );
 }
 
 export function isSignedCollabFrame(frame: Uint8Array): boolean {
@@ -174,9 +197,13 @@ export function signedCollabFrameHeader(
       textDecoder.decode(frame.subarray(headerStart, headerStart + headerLen))
     ) as SignedFrameHeader;
     if (header.v !== SIGNED_FRAME_VERSION) return null;
+    if (typeof header.r !== 'string' || typeof header.u !== 'string') {
+      return null;
+    }
     return {
       roomId: header.r,
       collabEpoch: header.e,
+      authorUsername: header.u,
       authorPublicKeyB64: header.a
     };
   } catch {
@@ -194,7 +221,7 @@ export function signedCollabFrameNeedsAuthRefresh(
     header &&
     header.roomId === auth.roomId &&
     header.collabEpoch === auth.collabEpoch &&
-    !auth.authorizedWriterKeysB64.includes(header.authorPublicKeyB64)
+    !authorizedWriter(auth, header.authorUsername, header.authorPublicKeyB64)
   );
 }
 
@@ -226,7 +253,8 @@ export async function encodeCollabFrame(
     t: type,
     r: auth.roomId,
     e: auth.collabEpoch,
-    a: auth.authorPublicKeyB64
+    a: auth.authorPublicKeyB64,
+    u: auth.authorUsername
   };
   const headerBytes = textEncoder.encode(JSON.stringify(header));
   const signingKey = await importSigningKey(auth.authorPrivateKeyPkcs8B64);
@@ -322,8 +350,9 @@ export async function decodeCollabFrame(
   }
   if (header.v !== SIGNED_FRAME_VERSION || header.r !== auth?.roomId)
     return null;
+  if (typeof header.u !== 'string') return null;
   if (header.e !== auth.collabEpoch) return null;
-  if (!auth.authorizedWriterKeysB64.includes(header.a)) return null;
+  if (!authorizedWriter(auth, header.u, header.a)) return null;
 
   const verifyKey = await importVerifyKey(header.a);
   const ok = await crypto.subtle.verify(

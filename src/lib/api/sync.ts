@@ -40,7 +40,10 @@ export interface RoomInfo {
   collab_epoch: number;
   /** Present for salted shared-folder rooms. */
   writer_auth?: {
-    authorized_writer_keys_b64: string[];
+    authorized_writers: Array<{
+      username: string;
+      public_key_b64: string;
+    }>;
   } | null;
 }
 
