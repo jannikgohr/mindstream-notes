@@ -392,12 +392,14 @@
   function openCardMenu(e: MouseEvent): void {
     if (!cardMenu || isTrashed) return;
     const target = e.target instanceof Element ? e.target : null;
-    const cardEl = target?.closest<HTMLElement>('.wx-card[data-id]');
-    const id = cardEl?.dataset.id;
+    const cardEl = target?.closest<HTMLElement>(
+      '.wx-card[data-id], .wx-card-row[data-kanban-card-id]'
+    );
+    const id = cardEl?.dataset.id ?? cardEl?.dataset.kanbanCardId;
     if (!id) return;
+    cardMenu.show(e, id);
     e.preventDefault();
     e.stopPropagation();
-    cardMenu.show(e, id);
   }
 
   function handleToolbarWheel(event: WheelEvent): void {
