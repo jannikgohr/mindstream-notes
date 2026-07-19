@@ -67,6 +67,7 @@
     "fileTree.deletePermanently.title": "Notiz endgültig löschen?",
     "fileTree.deletePermanently.message": "\"{title}\" wird endgültig gelöscht. Das kann nicht rückgängig gemacht werden.",
     "fileTree.deletePermanently.confirm": "Löschen",
+    "fileTree.move.blockedShared": "Elemente lassen sich nur innerhalb desselben geteilten Ordners verschieben.",
     "favourite.add": "Zu Favoriten hinzufügen",
     "favourite.remove": "Aus Favoriten entfernen",
     "noteSidebar.title": "Details",
