@@ -4,6 +4,7 @@ import {
   decodeCollabFrame,
   encodeCollabFrame,
   generateCollabSigningKeyPair,
+  signedCollabFrameNeedsAuthRefresh,
   type CollabFrameAuth
 } from './signed-collab-frame';
 
@@ -94,5 +95,37 @@ describe('signed collab frames', () => {
     );
 
     expect(decoded).toBeNull();
+  });
+
+  it('flags unknown signed writers for auth refresh in the same room epoch', async () => {
+    const key = await aesKey();
+    const writer = await generateCollabSigningKeyPair();
+    const frame = await encodeCollabFrame(
+      FRAME_SYNC_STEP_2,
+      new Uint8Array([1]),
+      key,
+      {
+        roomId: 'room_1',
+        collabEpoch: 1,
+        authorPublicKeyB64: writer.publicKeyB64,
+        authorPrivateKeyPkcs8B64: writer.privateKeyPkcs8B64,
+        authorizedWriterKeysB64: [writer.publicKeyB64]
+      }
+    );
+
+    expect(
+      signedCollabFrameNeedsAuthRefresh(frame, {
+        roomId: 'room_1',
+        collabEpoch: 1,
+        authorizedWriterKeysB64: []
+      })
+    ).toBe(true);
+    expect(
+      signedCollabFrameNeedsAuthRefresh(frame, {
+        roomId: 'room_2',
+        collabEpoch: 1,
+        authorizedWriterKeysB64: []
+      })
+    ).toBe(false);
   });
 });

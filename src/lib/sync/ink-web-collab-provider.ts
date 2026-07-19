@@ -11,6 +11,7 @@ import {
   canSignCollabFrame,
   decodeCollabFrame,
   encodeCollabFrame,
+  signedCollabFrameNeedsAuthRefresh,
   type CollabFrameAuth
 } from './signed-collab-frame';
 
@@ -21,6 +22,7 @@ const SIGNED_REQUIRED_TYPES = new Set([FRAME_SYNC_STEP_2]);
 
 const RECONNECT_INITIAL_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
+const AUTH_REFRESH_THROTTLE_MS = 5_000;
 
 function frameName(type: number): string {
   switch (type) {
@@ -64,6 +66,7 @@ export interface InkWebCollabProviderOptions {
   noteId: string;
   onStatusChange?: (online: boolean) => void;
   auth?: CollabFrameAuth;
+  onAuthStale?: () => void;
 }
 
 export class InkWebCollabProvider {
@@ -72,6 +75,7 @@ export class InkWebCollabProvider {
   private destroyed = false;
   private reconnectAttempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastAuthRefreshRequest = 0;
 
   constructor(private readonly opts: InkWebCollabProviderOptions) {
     console.info(
@@ -235,7 +239,10 @@ export class InkWebCollabProvider {
       );
       return;
     }
-    if (!decoded) return;
+    if (!decoded) {
+      this.maybeRequestAuthRefresh(frame);
+      return;
+    }
     const { type, payload: pt } = decoded;
     if (this.destroyed) return;
 
@@ -267,5 +274,17 @@ export class InkWebCollabProvider {
       default:
         console.warn('[ink-collab] unknown frame type', type);
     }
+  }
+
+  private maybeRequestAuthRefresh(frame: Uint8Array): void {
+    if (!signedCollabFrameNeedsAuthRefresh(frame, this.opts.auth)) return;
+    const now = Date.now();
+    if (now - this.lastAuthRefreshRequest < AUTH_REFRESH_THROTTLE_MS) return;
+    this.lastAuthRefreshRequest = now;
+    console.info(
+      '[ink-collab] refreshing writer auth note=%s',
+      this.opts.noteId
+    );
+    this.opts.onAuthStale?.();
   }
 }

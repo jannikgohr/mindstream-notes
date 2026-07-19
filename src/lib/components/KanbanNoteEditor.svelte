@@ -896,7 +896,10 @@
         keyBytes: base64ToBytes(room.key_b64),
         doc: yDoc,
         awareness,
-        auth: collabAuthForRoom(room, signingMaterial)
+        auth: collabAuthForRoom(room, signingMaterial),
+        onAuthStale: () => {
+          void setupCollabProvider();
+        }
       });
     } catch (err) {
       console.debug('[KanbanNoteEditor] collab provider init failed', err);
