@@ -27,14 +27,14 @@ pub mod tags_crdt;
 pub mod yrs_doc;
 
 use std::any::Any;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use chrono::Utc;
 use etebase::error::Error as EtebaseError;
 use etebase::managers::{CollectionManager, ItemManager};
 use etebase::utils::randombytes;
-use etebase::{Account, Collection, FetchOptions, Item, ItemMetadata};
+use etebase::{Account, Collection, CollectionAccessLevel, FetchOptions, Item, ItemMetadata};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
@@ -42,6 +42,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::auth;
 use crate::db::Db;
 use crate::error::{AppError, AppResult};
+use crate::sharing::{ShareManifest, COLLECTION_TYPE_SHARE_MANIFEST};
 
 const COLLECTION_TYPE_NOTES: &str = "mindstream.notes";
 const COLLECTION_TYPE_FOLDERS: &str = "mindstream.folders";
@@ -110,6 +111,44 @@ fn is_bad_stoken_error(err: &AppError) -> bool {
         err,
         AppError::InvalidArg(message) if message.contains("'bad_stoken'")
     )
+}
+
+fn load_share_scope_part_uids(cm: &CollectionManager) -> HashSet<String> {
+    let list = match cm.list(COLLECTION_TYPE_SHARE_MANIFEST, None) {
+        Ok(list) => list,
+        Err(e) => {
+            log::warn!("[sync] could not list share manifests before vault reconcile: {e}");
+            return HashSet::new();
+        }
+    };
+
+    let mut uids = HashSet::new();
+    for col in list.data() {
+        if col.is_deleted() {
+            continue;
+        }
+        let raw = match col.content() {
+            Ok(raw) => raw,
+            Err(e) => {
+                log::warn!("[sync] share manifest {} content failed: {e}", col.uid());
+                continue;
+            }
+        };
+        let manifest = match serde_json::from_slice::<ShareManifest>(&raw) {
+            Ok(manifest) => manifest,
+            Err(e) => {
+                log::warn!("[sync] share manifest {} decode failed: {e}", col.uid());
+                continue;
+            }
+        };
+        uids.extend(
+            manifest
+                .collections
+                .into_iter()
+                .map(|part| part.collection_uid),
+        );
+    }
+    uids
 }
 
 fn mark_local_by_remote_uid_dirty(db: &Db, kind: &str, etebase_uid: &str) -> AppResult<bool> {
@@ -437,23 +476,48 @@ fn run(db: &Db, account: &Account, self_username: Option<&str>) -> AppResult<Syn
     let cm = account
         .collection_manager()
         .map_err(|e| AppError::InvalidArg(format!("collection_manager: {e}")))?;
+    let share_scope_part_uids = load_share_scope_part_uids(&cm);
 
     // Item managers for the four vault collections. Set up all of them up
     // front so the sync runs in three ordered phases: pull everything, sync
     // scopes, then push everything.
-    let folders_col = ensure_collection(db, &cm, KIND_FOLDERS, COLLECTION_TYPE_FOLDERS)?;
+    let folders_col = ensure_collection(
+        db,
+        &cm,
+        KIND_FOLDERS,
+        COLLECTION_TYPE_FOLDERS,
+        &share_scope_part_uids,
+    )?;
     let folders_im = cm
         .item_manager(&folders_col)
         .map_err(|e| AppError::InvalidArg(format!("item_manager(folders): {e}")))?;
-    let notes_col = ensure_collection(db, &cm, KIND_NOTES, COLLECTION_TYPE_NOTES)?;
+    let notes_col = ensure_collection(
+        db,
+        &cm,
+        KIND_NOTES,
+        COLLECTION_TYPE_NOTES,
+        &share_scope_part_uids,
+    )?;
     let notes_im = cm
         .item_manager(&notes_col)
         .map_err(|e| AppError::InvalidArg(format!("item_manager(notes): {e}")))?;
-    let assets_col = ensure_collection(db, &cm, KIND_ASSETS, COLLECTION_TYPE_ASSETS)?;
+    let assets_col = ensure_collection(
+        db,
+        &cm,
+        KIND_ASSETS,
+        COLLECTION_TYPE_ASSETS,
+        &share_scope_part_uids,
+    )?;
     let assets_im = cm
         .item_manager(&assets_col)
         .map_err(|e| AppError::InvalidArg(format!("item_manager(assets): {e}")))?;
-    let signatures_col = ensure_collection(db, &cm, KIND_SIGNATURES, COLLECTION_TYPE_SIGNATURES)?;
+    let signatures_col = ensure_collection(
+        db,
+        &cm,
+        KIND_SIGNATURES,
+        COLLECTION_TYPE_SIGNATURES,
+        &share_scope_part_uids,
+    )?;
     let signatures_im = cm
         .item_manager(&signatures_col)
         .map_err(|e| AppError::InvalidArg(format!("item_manager(signatures): {e}")))?;
@@ -534,6 +598,7 @@ fn ensure_collection(
     cm: &CollectionManager,
     kind: &str,
     collection_type: &str,
+    share_scope_part_uids: &HashSet<String>,
 ) -> AppResult<Collection> {
     let (cached_uid, passes_left) = load_collection_state(db, kind)?;
 
@@ -543,7 +608,16 @@ fn ensure_collection(
     if passes_left == 0 {
         if let Some(uid) = &cached_uid {
             match cm.fetch(uid, None) {
-                Ok(col) => return Ok(col),
+                Ok(col) => {
+                    let candidate = VaultCollectionCandidate::from(&col);
+                    if usable_vault_collection(&candidate, share_scope_part_uids) {
+                        return Ok(col);
+                    }
+                    log::warn!(
+                        "[sync] cached collection {} for {kind} is not usable as a vault singleton; reconciling",
+                        col.uid()
+                    );
+                }
                 Err(e) => log::warn!("[sync] cached collection {uid} for {kind} unfetchable: {e}"),
             }
         }
@@ -555,8 +629,9 @@ fn ensure_collection(
     let winner_uid = list
         .data()
         .iter()
-        .filter(|c| !c.is_deleted())
-        .map(|c| c.uid().to_string())
+        .map(VaultCollectionCandidate::from)
+        .filter(|candidate| usable_vault_collection(candidate, share_scope_part_uids))
+        .map(|candidate| candidate.uid.to_string())
         .min();
 
     if let Some(winner) = winner_uid {
@@ -2185,6 +2260,32 @@ struct DirtyFolder {
     etebase_uid: Option<String>,
 }
 
+#[derive(Clone, Copy)]
+struct VaultCollectionCandidate<'a> {
+    uid: &'a str,
+    is_deleted: bool,
+    access_level: CollectionAccessLevel,
+}
+
+impl<'a> From<&'a Collection> for VaultCollectionCandidate<'a> {
+    fn from(collection: &'a Collection) -> Self {
+        Self {
+            uid: collection.uid(),
+            is_deleted: collection.is_deleted(),
+            access_level: collection.access_level(),
+        }
+    }
+}
+
+fn usable_vault_collection(
+    candidate: &VaultCollectionCandidate<'_>,
+    share_scope_part_uids: &HashSet<String>,
+) -> bool {
+    !candidate.is_deleted
+        && !share_scope_part_uids.contains(candidate.uid)
+        && !matches!(candidate.access_level, CollectionAccessLevel::ReadOnly)
+}
+
 struct DirtyNote {
     id: String,
     parent_collection_id: Option<String>,
@@ -2824,6 +2925,32 @@ mod tests {
         assert!(!is_bad_stoken_error(&not_found));
         assert!(!is_bad_stoken_error(&bare));
         assert!(!is_bad_stoken_error(&prose));
+    }
+
+    #[test]
+    fn usable_vault_collection_rejects_read_only_and_scope_parts() {
+        let mut scope_parts = HashSet::new();
+        scope_parts.insert("scope_folders".to_string());
+
+        let read_only = VaultCollectionCandidate {
+            uid: "external_read_only",
+            is_deleted: false,
+            access_level: CollectionAccessLevel::ReadOnly,
+        };
+        let scope_part = VaultCollectionCandidate {
+            uid: "scope_folders",
+            is_deleted: false,
+            access_level: CollectionAccessLevel::ReadWrite,
+        };
+        let vault = VaultCollectionCandidate {
+            uid: "vault_folders",
+            is_deleted: false,
+            access_level: CollectionAccessLevel::Admin,
+        };
+
+        assert!(!usable_vault_collection(&read_only, &scope_parts));
+        assert!(!usable_vault_collection(&scope_part, &scope_parts));
+        assert!(usable_vault_collection(&vault, &scope_parts));
     }
 
     fn remote_folder(id: &str, parent: Option<&str>, name: &str) -> FolderPayload {
