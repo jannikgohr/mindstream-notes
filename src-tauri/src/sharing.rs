@@ -1092,6 +1092,12 @@ pub async fn set_collection_member_access(
                 "this shared folder is no longer available".into(),
             ));
         };
+        let rotate_live_collab = access_change_requires_collab_rotation(access_level);
+        let affected_note_ids = if rotate_live_collab {
+            crate::collab_events::note_ids_for_share_scope(&db, &scope_id)?
+        } else {
+            Vec::new()
+        };
         let level: CollectionAccessLevel = access_level.into();
         for col in [&scope.folders, &scope.notes, &scope.assets] {
             let member_manager = cm
@@ -1101,11 +1107,19 @@ pub async fn set_collection_member_access(
                 .modify_access_level(&username, level)
                 .map_err(|e| AppError::InvalidArg(format!("change access for {username}: {e}")))?;
         }
+        if rotate_live_collab {
+            rotate_scope_collab_secret(&cm, &scope.manifest)?;
+            crate::collab_events::emit_collab_credentials_changed(&app, affected_note_ids);
+        }
         Ok::<(), AppError>(())
     })
     .await
     .map_err(|e| format!("set collection member access task: {e}"))?
     .map_err(Into::into)
+}
+
+fn access_change_requires_collab_rotation(access_level: ShareAccessLevel) -> bool {
+    matches!(access_level, ShareAccessLevel::ReadOnly)
 }
 
 /// Remove one member from a folder the current user shares. Removes them from all
@@ -2641,6 +2655,19 @@ mod tests {
             let collection: CollectionAccessLevel = level.into();
             assert_eq!(ShareAccessLevel::from(collection), level);
         }
+    }
+
+    #[test]
+    fn read_only_access_changes_rotate_live_collab_credentials() {
+        assert!(access_change_requires_collab_rotation(
+            ShareAccessLevel::ReadOnly
+        ));
+        assert!(!access_change_requires_collab_rotation(
+            ShareAccessLevel::ReadWrite
+        ));
+        assert!(!access_change_requires_collab_rotation(
+            ShareAccessLevel::Admin
+        ));
     }
 
     #[test]
