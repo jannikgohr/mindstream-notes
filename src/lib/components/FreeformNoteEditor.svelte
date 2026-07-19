@@ -55,6 +55,10 @@
     deriveExcalidrawKey
   } from '$lib/freeform/excalidraw-room-client';
   import { collabCredentialsChangedForNote } from '$lib/sync/collab-credentials';
+  import {
+    collabAuthForRoom,
+    getOrCreateCollabSigningMaterial
+  } from '$lib/sync/collab-signing-key';
   import type { ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types';
   import { isMobile } from '$lib/platform';
   import { listen } from '$lib/api/events';
@@ -471,7 +475,8 @@
     if (!excalidrawApi) return;
 
     try {
-      const room = await noteRoomInfo(noteId);
+      const signingMaterial = await getOrCreateCollabSigningMaterial();
+      const room = await noteRoomInfo(noteId, signingMaterial?.publicKeyB64);
       if (!room || !excalidrawApi) return;
       const keyBytes16 = await deriveExcalidrawKey(base64ToBytes(room.key_b64));
       // Re-check the api after the awaits in case the panel was
@@ -483,6 +488,7 @@
         roomId: room.room_id,
         keyBytes16,
         api: excalidrawApi,
+        auth: collabAuthForRoom(room, signingMaterial),
         onStatusChange: (online) => {
           collabOnline = online;
         }

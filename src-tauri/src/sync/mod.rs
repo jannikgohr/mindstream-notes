@@ -56,6 +56,7 @@ const COLLECTION_TYPE_SIGNATURES: &str = "mindstream.signatures";
 const ITEM_TYPE_NOTE: &str = "ms-md-note";
 const ITEM_TYPE_FOLDER: &str = "ms-md-folder";
 const ITEM_TYPE_ASSET: &str = "ms-md-asset";
+const ITEM_TYPE_COLLAB_WRITER_KEY: &str = "ms-collab-writer-key";
 const ITEM_TYPE_SIGNATURE: &str = "ms-md-signature";
 
 const KIND_NOTES: &str = "notes";
@@ -309,6 +310,18 @@ struct AssetPayload {
     size: i64,
     created: String,
     modified: String,
+}
+
+/// Public signing key a writable shared-folder member publishes into the
+/// scope's encrypted assets collection. It authorizes live-collab write frames
+/// for one collab epoch; rotating the epoch naturally retires old keys.
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+struct CollabWriterKeyPayload {
+    schema: u32,
+    share_scope_id: String,
+    collab_epoch: u64,
+    public_key_b64: String,
+    username: Option<String>,
 }
 
 /// What ends up in `Item::content` for a signature. `data` is the opaque
@@ -1037,9 +1050,21 @@ enum ApplyAssetOutcome {
     Skipped,
 }
 
+fn item_type(item: &Item) -> Option<String> {
+    item.meta()
+        .ok()
+        .and_then(|meta| meta.item_type().map(str::to_string))
+}
+
 /// Apply one pulled asset item to local SQLite. Returns the outcome so
 /// the caller can decide whether to advance the stoken (orphans pin it).
 fn apply_asset(db: &Db, item: &Item, scope: Option<&str>) -> AppResult<ApplyAssetOutcome> {
+    if item_type(item)
+        .as_deref()
+        .is_some_and(|kind| kind != ITEM_TYPE_ASSET)
+    {
+        return Ok(ApplyAssetOutcome::Skipped);
+    }
     if item.is_deleted() {
         db.with_conn(|c| apply_remote_delete(c, "assets", item.uid()))?;
         return Ok(ApplyAssetOutcome::Skipped);
@@ -2553,6 +2578,14 @@ pub struct RoomInfo {
     /// Version label from the share manifest. Zero means no scoped collab salt
     /// was applied, preserving legacy room credentials.
     pub collab_epoch: u64,
+    /// Present for salted shared-folder rooms. Clients combine this public-key
+    /// registry with their local private key to sign/verify write frames.
+    pub writer_auth: Option<RoomWriterAuth>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RoomWriterAuth {
+    pub authorized_writer_keys_b64: Vec<String>,
 }
 
 fn derive_live_collab_room(
@@ -2565,6 +2598,7 @@ fn derive_live_collab_room(
             room_id: note_uid.to_string(),
             key_b64: etebase::utils::to_base64(note_key).map_err(|e| format!("encode key: {e}"))?,
             collab_epoch: 0,
+            writer_auth: None,
         });
     };
 
@@ -2591,7 +2625,102 @@ fn derive_live_collab_room(
             .map_err(|e| format!("encode room id: {e}"))?,
         key_b64: etebase::utils::to_base64(&derived_key).map_err(|e| format!("encode key: {e}"))?,
         collab_epoch: scope.collab_epoch,
+        writer_auth: None,
     })
+}
+
+fn valid_collab_writer_public_key(public_key_b64: &str) -> bool {
+    let len = public_key_b64.len();
+    (16..=4096).contains(&len)
+}
+
+fn collab_writer_key_payload(item: &Item) -> AppResult<Option<CollabWriterKeyPayload>> {
+    if item.is_deleted() || item.is_missing_content() {
+        return Ok(None);
+    }
+    if item_type(item).as_deref() != Some(ITEM_TYPE_COLLAB_WRITER_KEY) {
+        return Ok(None);
+    }
+    let raw = item
+        .content()
+        .map_err(|e| AppError::InvalidArg(format!("writer key content: {e}")))?;
+    let payload = serde_json::from_slice::<CollabWriterKeyPayload>(&raw)
+        .map_err(|e| AppError::InvalidArg(format!("writer key json: {e}")))?;
+    Ok(Some(payload))
+}
+
+fn list_collab_writer_keys(
+    im: &ItemManager,
+    share_scope_id: &str,
+    collab_epoch: u64,
+) -> AppResult<Vec<String>> {
+    let mut keys = Vec::new();
+    let mut seen = HashSet::new();
+    let mut stoken: Option<String> = None;
+    loop {
+        let opts = FetchOptions::new().stoken(stoken.as_deref());
+        let resp = im
+            .list(Some(&opts))
+            .map_err(|e| AppError::InvalidArg(format!("list writer keys: {e}")))?;
+        for item in resp.data() {
+            let Some(payload) = collab_writer_key_payload(item)? else {
+                continue;
+            };
+            if payload.share_scope_id == share_scope_id
+                && payload.collab_epoch == collab_epoch
+                && seen.insert(payload.public_key_b64.clone())
+            {
+                keys.push(payload.public_key_b64);
+            }
+        }
+        stoken = resp.stoken().map(str::to_string).or(stoken);
+        if resp.done() {
+            break;
+        }
+    }
+    keys.sort();
+    Ok(keys)
+}
+
+fn publish_collab_writer_key(
+    im: &ItemManager,
+    share_scope_id: &str,
+    collab_epoch: u64,
+    public_key_b64: &str,
+    username: Option<&str>,
+) -> AppResult<()> {
+    if !valid_collab_writer_public_key(public_key_b64) {
+        return Ok(());
+    }
+    let existing = list_collab_writer_keys(im, share_scope_id, collab_epoch)?;
+    if existing.iter().any(|key| key == public_key_b64) {
+        return Ok(());
+    }
+
+    let payload = CollabWriterKeyPayload {
+        schema: 1,
+        share_scope_id: share_scope_id.to_string(),
+        collab_epoch,
+        public_key_b64: public_key_b64.to_string(),
+        username: username.map(str::to_string),
+    };
+    let bytes = serde_json::to_vec(&payload)
+        .map_err(|e| AppError::InvalidArg(format!("encode writer key: {e}")))?;
+    let key_hint: String = public_key_b64
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .take(12)
+        .collect();
+    let mut meta = ItemMetadata::new();
+    meta.set_item_type(Some(ITEM_TYPE_COLLAB_WRITER_KEY))
+        .set_name(Some(format!("collab-writer-key:{key_hint}")))
+        .set_mtime(Some(now_unix_ms()));
+    let item = im
+        .create(&meta, &bytes)
+        .map_err(|e| AppError::InvalidArg(format!("create writer key item: {e}")))?;
+    im.transaction([item].iter(), None)
+        .map_err(|e| AppError::InvalidArg(format!("transaction writer key: {e}")))?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -2599,6 +2728,7 @@ pub async fn note_room_info(
     app: AppHandle,
     db: tauri::State<'_, Db>,
     id: String,
+    writer_public_key_b64: Option<String>,
 ) -> Result<Option<RoomInfo>, String> {
     // Live collab is etebase-gated: no session ⇒ no room.
     if !crate::auth::has_session(&app) {
@@ -2648,6 +2778,13 @@ pub async fn note_room_info(
     let app_for_blocking = app.clone();
     tauri::async_runtime::spawn_blocking(move || -> Result<Option<RoomInfo>, String> {
         catch_blocking_panic("room_info", || {
+            let writer_public_key_b64 = writer_public_key_b64
+                .map(|key| key.trim().to_string())
+                .filter(|key| valid_collab_writer_public_key(key));
+            let username = crate::auth::read_session_info(&app_for_blocking)
+                .ok()
+                .flatten()
+                .map(|info| info.username);
             let account = match crate::auth::try_restore(&app_for_blocking)
                 .map_err(|e| format!("restore session: {e}"))?
             {
@@ -2677,6 +2814,7 @@ pub async fn note_room_info(
                     (col_uid, None)
                 }
             };
+            let scope_id_for_auth = share_scope_id.clone();
             let col = match cm.fetch(&col_uid, None) {
                 Ok(c) => c,
                 Err(e) => {
@@ -2711,7 +2849,60 @@ pub async fn note_room_info(
                 // encoding zero bytes.
                 return Ok(None);
             }
-            derive_live_collab_room(&note_uid, &payload.crypto_key, scope_collab.as_ref()).map(Some)
+            let mut room =
+                derive_live_collab_room(&note_uid, &payload.crypto_key, scope_collab.as_ref())?;
+            if let (Some(scope_id), Some(scope)) =
+                (scope_id_for_auth.as_deref(), scope_collab.as_ref())
+            {
+                let mut authorized_writer_keys_b64 = Vec::new();
+                match cm.fetch(&scope.assets_collection_uid, None) {
+                    Ok(assets_col) => {
+                        match cm.item_manager(&assets_col) {
+                            Ok(assets_im) => {
+                                let writable = !matches!(
+                                    assets_col.access_level(),
+                                    CollectionAccessLevel::ReadOnly
+                                );
+                                if writable {
+                                    if let Some(key) = writer_public_key_b64.as_deref() {
+                                        if let Err(e) = publish_collab_writer_key(
+                                            &assets_im,
+                                            scope_id,
+                                            scope.collab_epoch,
+                                            key,
+                                            username.as_deref(),
+                                        ) {
+                                            log::warn!(
+                                                "[room_info] publish writer key for scope {scope_id} failed: {e}"
+                                            );
+                                        }
+                                    }
+                                }
+                                match list_collab_writer_keys(
+                                    &assets_im,
+                                    scope_id,
+                                    scope.collab_epoch,
+                                ) {
+                                    Ok(keys) => authorized_writer_keys_b64 = keys,
+                                    Err(e) => log::warn!(
+                                        "[room_info] list writer keys for scope {scope_id} failed: {e}"
+                                    ),
+                                }
+                            }
+                            Err(e) => {
+                                log::warn!("[room_info] item_manager(scope assets): {e}");
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("[room_info] fetch scope assets collection failed: {e}");
+                    }
+                }
+                room.writer_auth = Some(RoomWriterAuth {
+                    authorized_writer_keys_b64,
+                });
+            }
+            Ok(Some(room))
         })
     })
     .await
@@ -2780,6 +2971,7 @@ mod tests {
     fn collab_info(epoch: u64, salt: &[u8]) -> ShareScopeCollabInfo {
         ShareScopeCollabInfo {
             notes_collection_uid: "scope_notes".into(),
+            assets_collection_uid: "scope_assets".into(),
             collab_epoch: epoch,
             collab_salt: salt.to_vec(),
         }
@@ -2794,6 +2986,7 @@ mod tests {
         assert_eq!(room.room_id, "note_uid");
         assert_eq!(room.key_b64, etebase::utils::to_base64(&note_key).unwrap());
         assert_eq!(room.collab_epoch, 0);
+        assert!(room.writer_auth.is_none());
     }
 
     #[test]
@@ -2815,10 +3008,34 @@ mod tests {
             etebase::utils::to_base64(&note_key).unwrap()
         );
         assert_eq!(scoped.collab_epoch, 1);
+        assert!(scoped.writer_auth.is_none());
         assert_ne!(scoped.room_id, rotated_epoch.room_id);
         assert_ne!(scoped.key_b64, rotated_epoch.key_b64);
         assert_ne!(scoped.room_id, rotated_salt.room_id);
         assert_ne!(scoped.key_b64, rotated_salt.key_b64);
+    }
+
+    #[test]
+    fn collab_writer_public_key_validation_accepts_reasonable_spki_b64() {
+        assert!(valid_collab_writer_public_key(&"A".repeat(120)));
+        assert!(!valid_collab_writer_public_key(""));
+        assert!(!valid_collab_writer_public_key(&"A".repeat(4097)));
+    }
+
+    #[test]
+    fn collab_writer_key_payload_round_trips_json() {
+        let payload = CollabWriterKeyPayload {
+            schema: 1,
+            share_scope_id: "scope_1".into(),
+            collab_epoch: 7,
+            public_key_b64: "public".into(),
+            username: Some("alice".into()),
+        };
+
+        let encoded = serde_json::to_vec(&payload).unwrap();
+        let decoded: CollabWriterKeyPayload = serde_json::from_slice(&encoded).unwrap();
+
+        assert_eq!(decoded, payload);
     }
 
     #[test]

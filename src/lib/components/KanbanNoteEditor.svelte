@@ -67,6 +67,10 @@
   } from '$lib/components/ui/toolbar';
   import { CollabProvider } from '$lib/sync/collab-provider';
   import { collabCredentialsChangedForNote } from '$lib/sync/collab-credentials';
+  import {
+    collabAuthForRoom,
+    getOrCreateCollabSigningMaterial
+  } from '$lib/sync/collab-signing-key';
   import { base64ToBytes } from '$lib/editor/base64';
   import { pickCursorColor } from '$lib/editor/cursor-color';
   import { folderPathLabel } from '$lib/notes/folder-path';
@@ -883,14 +887,16 @@
     );
     if (!collabUrl || !yDoc || !awareness) return;
     try {
-      const room = await noteRoomInfo(noteId);
+      const signingMaterial = await getOrCreateCollabSigningMaterial();
+      const room = await noteRoomInfo(noteId, signingMaterial?.publicKeyB64);
       if (!room) return;
       provider = new CollabProvider({
         url: collabUrl,
         roomId: room.room_id,
         keyBytes: base64ToBytes(room.key_b64),
         doc: yDoc,
-        awareness
+        awareness,
+        auth: collabAuthForRoom(room, signingMaterial)
       });
     } catch (err) {
       console.debug('[KanbanNoteEditor] collab provider init failed', err);

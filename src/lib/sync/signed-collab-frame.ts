@@ -152,6 +152,10 @@ export function canSignCollabFrame(
   return Boolean(auth?.authorPublicKeyB64 && auth.authorPrivateKeyPkcs8B64);
 }
 
+export function isSignedCollabFrame(frame: Uint8Array): boolean {
+  return frame[0] === SIGNED_FRAME_MARKER;
+}
+
 export async function encodeCollabFrame(
   type: number,
   payload: Uint8Array,

@@ -95,6 +95,10 @@
   import { listen } from '$lib/api/events';
   import { collabCredentialsChangedForNote } from '$lib/sync/collab-credentials';
   import {
+    collabAuthForRoom,
+    getOrCreateCollabSigningMaterial
+  } from '$lib/sync/collab-signing-key';
+  import {
     DEFAULT_COLOR,
     DEFAULT_WIDTH,
     InkDocument,
@@ -764,7 +768,8 @@
     }
 
     try {
-      const room = await noteRoomInfo(noteId);
+      const signingMaterial = await getOrCreateCollabSigningMaterial();
+      const room = await noteRoomInfo(noteId, signingMaterial?.publicKeyB64);
       if (!room) {
         console.info(
           '[ink-collab] no room note=%s (not pushed, no session, or missing key)',
@@ -779,6 +784,7 @@
         keyBytes: base64ToBytes(room.key_b64),
         handle,
         noteId,
+        auth: collabAuthForRoom(room, signingMaterial),
         onStatusChange: (online) => {
           collabOnline = online;
           console.info(

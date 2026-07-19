@@ -29,9 +29,18 @@ import { io, type Socket } from 'socket.io-client';
 import { CaptureUpdateAction } from '@excalidraw/excalidraw';
 import type { ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types';
 import type { ExcalidrawElement } from '@excalidraw/excalidraw/element/types';
+import {
+  canSignCollabFrame,
+  decodeCollabFrame,
+  encodeCollabFrame,
+  isSignedCollabFrame,
+  type CollabFrameAuth
+} from '$lib/sync/signed-collab-frame';
 
 const IV_LENGTH_BYTES = 12;
 const HKDF_INFO = new TextEncoder().encode('mindstream:excalidraw-room:v1');
+const FRAME_SCENE_UPDATE = 0x01;
+const SIGNED_REQUIRED_TYPES = new Set([FRAME_SCENE_UPDATE]);
 // Match Excalidraw's outbound throttle: drawing fires onChange dozens
 // of times per second, but the wire only needs the latest state.
 const BROADCAST_THROTTLE_MS = 50;
@@ -73,6 +82,9 @@ export interface ExcalidrawRoomClientOptions {
   api: ExcalidrawImperativeAPI;
   /** Optional UI hook for the connection status badge. */
   onStatusChange?: (online: boolean) => void;
+  /** Optional writer-key signature context. When present, scene updates
+   *  from peers must be signed by an authorized writer key. */
+  auth?: CollabFrameAuth;
 }
 
 type RemoteMessage =
@@ -217,6 +229,7 @@ export class ExcalidrawRoomClient {
     const socket = this.socket;
     const key = this.cryptoKey;
     if (!socket || !key || !socket.connected) return;
+    if (this.opts.auth && !canSignCollabFrame(this.opts.auth)) return;
     const elements = this.opts.api.getSceneElementsIncludingDeleted();
     const fingerprint = sceneFingerprint(elements);
     // Short-circuit: this is the scene we just sent (or just received
@@ -230,7 +243,11 @@ export class ExcalidrawRoomClient {
       payload: { elements }
     };
     try {
-      const { encryptedBuffer, iv } = await encryptScene(key, message);
+      const { encryptedBuffer, iv } = await encryptScene(
+        key,
+        message,
+        this.opts.auth
+      );
       socket.emit('server-broadcast', this.opts.roomId, encryptedBuffer, iv);
     } catch (err) {
       console.warn('[excalidraw-room] broadcast failed', err);
@@ -264,14 +281,32 @@ export class ExcalidrawRoomClient {
 
     let decoded: RemoteMessage;
     try {
-      const plaintext = await crypto.subtle.decrypt(
-        { name: 'AES-GCM', iv: ivBuffer },
-        key,
-        ctBuffer
-      );
-      decoded = JSON.parse(
-        new TextDecoder().decode(plaintext)
-      ) as RemoteMessage;
+      if (this.opts.auth) {
+        const frame = new Uint8Array(ctBuffer);
+        if (!isSignedCollabFrame(frame)) {
+          this.warnDecrypt('rejected unsigned scene update');
+          return;
+        }
+        const signed = await decodeCollabFrame(
+          frame,
+          key,
+          this.opts.auth,
+          SIGNED_REQUIRED_TYPES
+        );
+        if (!signed || signed.type !== FRAME_SCENE_UPDATE) return;
+        decoded = JSON.parse(
+          new TextDecoder().decode(signed.payload)
+        ) as RemoteMessage;
+      } else {
+        const plaintext = await crypto.subtle.decrypt(
+          { name: 'AES-GCM', iv: ivBuffer },
+          key,
+          ctBuffer
+        );
+        decoded = JSON.parse(
+          new TextDecoder().decode(plaintext)
+        ) as RemoteMessage;
+      }
     } catch (err) {
       // Most likely cause: a peer in the same room with a different
       // key (e.g. they opened the note before we pushed the crypto_key
@@ -379,10 +414,23 @@ function sceneFingerprint(elements: readonly ExcalidrawElement[]): string {
 
 async function encryptScene(
   key: CryptoKey,
-  message: RemoteMessage
+  message: RemoteMessage,
+  auth?: CollabFrameAuth
 ): Promise<{ encryptedBuffer: ArrayBuffer; iv: Uint8Array }> {
-  const iv = crypto.getRandomValues(new Uint8Array(IV_LENGTH_BYTES));
   const encoded = new TextEncoder().encode(JSON.stringify(message));
+  if (auth && canSignCollabFrame(auth)) {
+    const frame = await encodeCollabFrame(
+      FRAME_SCENE_UPDATE,
+      encoded,
+      key,
+      auth
+    );
+    return {
+      encryptedBuffer: new Uint8Array(frame).buffer,
+      iv: new Uint8Array(IV_LENGTH_BYTES)
+    };
+  }
+  const iv = crypto.getRandomValues(new Uint8Array(IV_LENGTH_BYTES));
   // The slice().buffer trick mirrors what collab-provider.ts does:
   // TS 5.7's BufferSource definition needs Uint8Array<ArrayBuffer>, and
   // a fresh slice satisfies it without changing runtime behavior.
