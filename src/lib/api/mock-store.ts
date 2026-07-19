@@ -359,6 +359,10 @@ export const mockApi = {
     }
     if (input.position !== undefined) n.position = input.position;
     if (input.tags !== undefined) n.tags = [...input.tags];
+    if (input.yrs_state !== undefined) {
+      n.yrs_state = [...input.yrs_state];
+      n.payload_schema = 2;
+    }
     if (input.favourite !== undefined) n.favourite = input.favourite;
     n.modified = nowIso();
     return { ...n };

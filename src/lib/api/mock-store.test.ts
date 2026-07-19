@@ -118,6 +118,19 @@ describe('mock-store notes', () => {
     expect(saved.favourite).toBe(true);
   });
 
+  it('persists saved Yjs state for collaborative note kinds', async () => {
+    const n = await mockApi.createNote({
+      title: 'Board',
+      note_kind: 'kanban'
+    });
+
+    await mockApi.saveNote({ id: n.id, yrs_state: [1, 2, 3] });
+
+    const loaded = await mockApi.loadNote(n.id);
+    expect(loaded.yrs_state).toEqual([1, 2, 3]);
+    expect(loaded.payload_schema).toBe(2);
+  });
+
   it('throws loading or saving a missing note', async () => {
     await expect(mockApi.loadNote('missing')).rejects.toThrow(/not found/);
     await expect(
