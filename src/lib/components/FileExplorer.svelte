@@ -32,6 +32,7 @@
     createNoteIn,
     emptyTrash,
     importPdfIn,
+    leaveSharedCollection,
     moveManyTo,
     moveCollectionTo,
     moveNoteTo,
@@ -408,6 +409,27 @@
     await trashNote(id);
   }
 
+  async function leaveShared(id: string) {
+    const name =
+      tree.collectionsById[id]?.name ?? tUi('sharing.dialog.folderFallback');
+    if (
+      !(await confirm({
+        title: tUi('sharing.leave.title'),
+        message: tUi('sharing.leave.message').replace('{name}', name),
+        confirmLabel: tUi('sharing.leave.confirm'),
+        destructive: true
+      }))
+    ) {
+      return;
+    }
+    try {
+      await leaveSharedCollection(id);
+    } catch (err) {
+      console.error('[FileExplorer] leave shared folder failed', id, err);
+      pushToast(tUi('sharing.leave.failed'), { variant: 'error' });
+    }
+  }
+
   function selectNodeFromClick(e: MouseEvent, node: TreeNode): boolean {
     const key = nodeKey(node) as SelectionKey;
     const result = updateSelectionForClick(
@@ -720,13 +742,25 @@
       // Shared view: an editable scope lets recipients create inside the folder
       // and (for non-anchor sub-folders) rename/delete it. The shared root anchor
       // itself is structurally read-only — create-inside only, no rename/delete/
-      // move/share. Read-only scopes get no menu.
+      // move/share — but always offers "Leave shared folder" (works at any access
+      // level, so a view-only root that would otherwise have no menu still can be
+      // left). Read-only sub-folders get no menu.
       if (source === 'shared') {
-        if (!sharedFolderIsEditable(id, tree.collectionsById)) return [];
-        const created = folderCreateMenuItems(id);
-        if (isSharedAnchor(id)) return created;
+        const editable = sharedFolderIsEditable(id, tree.collectionsById);
+        if (isSharedAnchor(id)) {
+          const items: (MenuItem | 'separator')[] = editable
+            ? [...folderCreateMenuItems(id), 'separator']
+            : [];
+          items.push({
+            label: tUi('sharing.menu.leaveFolder'),
+            destructive: true,
+            onSelect: () => void leaveShared(id)
+          });
+          return items;
+        }
+        if (!editable) return [];
         return [
-          ...created,
+          ...folderCreateMenuItems(id),
           'separator',
           {
             label: 'Rename folder…',

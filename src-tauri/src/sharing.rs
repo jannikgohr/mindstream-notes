@@ -469,6 +469,134 @@ pub async fn decline_share_bundle(
     .map_err(Into::into)
 }
 
+/// Leave a folder that was shared *with* the current user. Unlike
+/// `decline_share_bundle` (which undoes a not-yet-accepted invite), this operates
+/// on an accepted share that already lives in the tree: it relinquishes
+/// membership of the scope's manifest + part collections server-side and purges
+/// the locally-pulled scoped rows so the folder disappears. The owner and other
+/// members are unaffected; the user can be re-invited later.
+#[tauri::command]
+pub async fn leave_shared_collection(app: AppHandle, collection_id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let account = restore_required(&app)?;
+        let db = app.state::<Db>();
+
+        // Resolve the local scope tag and confirm this is a folder shared *with*
+        // us (a share we own — shared_by_me — must be managed from the owner side,
+        // not "left").
+        let (scope_id, shared_by_me): (Option<String>, bool) = db
+            .with_conn(|conn| {
+                Ok(conn
+                    .query_row(
+                        "SELECT share_scope_id, COALESCE(shared_by_me, 0)
+                         FROM collections WHERE id = ?1",
+                        params![collection_id],
+                        |row| {
+                            Ok((
+                                row.get::<_, Option<String>>(0)?,
+                                row.get::<_, i64>(1)? != 0,
+                            ))
+                        },
+                    )
+                    .optional()?
+                    .unwrap_or((None, false)))
+            })?;
+
+        let Some(scope_id) = scope_id else {
+            return Err(AppError::InvalidArg(format!(
+                "collection {collection_id} is not a shared folder"
+            )));
+        };
+        if shared_by_me {
+            return Err(AppError::InvalidArg(
+                "you own this shared folder — manage it from sharing settings instead of leaving"
+                    .into(),
+            ));
+        }
+
+        // Relinquish server-side membership of every collection in the scope. If
+        // the manifest is already gone server-side (owner unshared/deleted it) we
+        // still purge locally below, so a missing scope is non-fatal.
+        let cm = account
+            .collection_manager()
+            .map_err(|e| AppError::InvalidArg(format!("collection_manager: {e}")))?;
+        match find_existing_scope(&cm, &scope_id) {
+            Ok(Some(scope)) => {
+                for col in [&scope.manifest, &scope.folders, &scope.notes, &scope.assets] {
+                    let member_manager = match cm.member_manager(col) {
+                        Ok(mm) => mm,
+                        Err(e) => {
+                            log::warn!(
+                                "[sharing] member_manager for {} while leaving scope {scope_id}: {e}",
+                                col.uid()
+                            );
+                            continue;
+                        }
+                    };
+                    if let Err(e) = member_manager.leave() {
+                        log::warn!(
+                            "[sharing] leave collection {} for scope {scope_id}: {e}",
+                            col.uid()
+                        );
+                    }
+                }
+            }
+            Ok(None) => {
+                log::warn!(
+                    "[sharing] scope {scope_id} manifest not found server-side; purging locally only"
+                );
+            }
+            Err(e) => {
+                log::warn!("[sharing] resolve scope {scope_id} to leave: {e}; purging locally");
+            }
+        }
+
+        purge_local_scope(&db, &scope_id)?;
+
+        Ok::<(), AppError>(())
+    })
+    .await
+    .map_err(|e| format!("leave shared collection task: {e}"))?
+    .map_err(Into::into)
+}
+
+/// Delete every locally-pulled row for `scope` — the shared subtree
+/// (collections/notes/assets), its tombstones, and the per-part sync cursors — so
+/// a left scope stops rendering and can't be re-pushed. Mirrors the delete set of
+/// `sync::scopes::discard_read_only_scope_edits` but unconditional (leaving drops
+/// remote-authoritative rows too, not just dirty local edits).
+fn purge_local_scope(db: &Db, scope: &str) -> AppResult<()> {
+    db.with_conn_mut(|conn| {
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM assets WHERE share_scope_id = ?1",
+            params![scope],
+        )?;
+        tx.execute(
+            "DELETE FROM notes WHERE share_scope_id = ?1",
+            params![scope],
+        )?;
+        tx.execute(
+            "DELETE FROM collections WHERE share_scope_id = ?1",
+            params![scope],
+        )?;
+        tx.execute(
+            "DELETE FROM tombstones WHERE share_scope_id = ?1",
+            params![scope],
+        )?;
+        tx.execute(
+            "DELETE FROM sync_state WHERE kind IN (?1, ?2, ?3)",
+            params![
+                format!("scope-folders:{scope}"),
+                format!("scope-notes:{scope}"),
+                format!("scope-assets:{scope}"),
+            ],
+        )?;
+        tx.commit()?;
+        Ok(())
+    })
+}
+
 #[tauri::command]
 pub async fn accept_collection_invitation(app: AppHandle, id: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
