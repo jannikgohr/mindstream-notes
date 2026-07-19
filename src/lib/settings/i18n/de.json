@@ -34,9 +34,7 @@
     "modified": "Geändert",
     "empty": "Keine Einstellungen passen zur Suche.",
     "saving": "Wird gespeichert…",
-
     "account.managedUnavailable": "Noch nicht verfügbar — wähle \"Selbst gehostet\", um deinen eigenen Server zu nutzen.",
-
     "sort.label": "Sortierung",
     "sort.ascending": "Aufsteigend sortieren",
     "sort.descending": "Absteigend sortieren",
@@ -44,17 +42,14 @@
     "sort.strategy.alphabetical": "Alphabetisch",
     "sort.strategy.modified": "Zuletzt geändert",
     "sort.strategy.created": "Zuletzt erstellt",
-
     "display.mode": "Anzeigemodus",
     "display.list": "Listenansicht",
     "display.grid": "Rasteransicht",
-
     "breadcrumb.label": "Ordnerpfad",
     "breadcrumb.root.home": "Notizen",
     "breadcrumb.root.shared": "Geteilt",
     "breadcrumb.root.favourite": "Favoriten",
     "breadcrumb.root.trash": "Papierkorb",
-
     "fileTree.title": "Explorer",
     "fileTree.tree": "Dateibaum",
     "fileTree.newNote": "Neue Notiz",
@@ -72,10 +67,8 @@
     "fileTree.deletePermanently.title": "Notiz endgültig löschen?",
     "fileTree.deletePermanently.message": "\"{title}\" wird endgültig gelöscht. Das kann nicht rückgängig gemacht werden.",
     "fileTree.deletePermanently.confirm": "Löschen",
-
     "favourite.add": "Zu Favoriten hinzufügen",
     "favourite.remove": "Aus Favoriten entfernen",
-
     "noteSidebar.title": "Details",
     "noteSidebar.open": "Notizdetails anzeigen",
     "metadata.organization": "Organisation",
@@ -102,7 +95,6 @@
     "metadata.noNote": "Keine Notiz ausgewählt.",
     "desktop.emptyState.title": "Keine Notiz geöffnet",
     "desktop.emptyState.message": "Öffne links im Explorer eine Notiz, um mit dem Bearbeiten zu beginnen.",
-
     "history.title": "Verlauf",
     "history.refresh": "Verlauf aktualisieren",
     "history.back": "Zurück",
@@ -141,7 +133,6 @@
     "history.modal.currentTab": "Aktuelle Notiz",
     "history.modal.diffTab": "Differenz",
     "history.modal.oldTab": "Version vom {date}",
-
     "tags.label": "Tags",
     "tags.add": "Hinzufügen",
     "tags.remove": "Tag {tag} entfernen",
@@ -154,7 +145,6 @@
     "tags.onNote": "in Notiz",
     "tags.expand": "Aufklappen",
     "tags.collapse": "Zuklappen",
-
     "search.notes.placeholder": "Notizen suchen",
     "search.notes.label": "Notizen suchen",
     "search.open": "Notizen suchen",
@@ -163,13 +153,11 @@
     "search.close": "Suche schließen",
     "search.hint": "↑↓ zum Navigieren · ↵ zum Öffnen · Esc zum Schließen",
     "settings.open": "Einstellungen öffnen",
-
     "options.open": "Menü öffnen",
     "options.title": "Menü",
     "options.settings": "Einstellungen",
     "options.notifications": "Benachrichtigungen",
     "options.vaults": "Tresore",
-
     "notifications.open": "Benachrichtigungen öffnen",
     "notifications.title": "Benachrichtigungen",
     "notifications.empty": "Derzeit keine Benachrichtigungen.",
@@ -186,7 +174,6 @@
     "notifications.shareBundle.pendingTitle": "{sender} möchte einen Ordner mit dir teilen",
     "notifications.shareBundle.pendingHint": "Annehmen, um den Inhalt zu sehen.",
     "notifications.shareBundle.incomplete": "Diese Freigabe ist unvollständig und kann noch nicht angenommen werden — bitte den Absender, sie erneut zu senden.",
-
     "sharing.access.readOnly": "Nur ansehen",
     "sharing.access.readWrite": "Bearbeiten",
     "sharing.access.admin": "Admin",
@@ -203,15 +190,12 @@
     "sharing.dialog.people": "Personen",
     "sharing.dialog.onlyYou": "Nur du.",
     "sharing.toast.invited": "{names} eingeladen",
-
     "toast.regionLabel": "Statusmeldungen",
-
     "tray.newNote": "Neue Notiz",
     "tray.newDrawing": "Neue Zeichenfläche",
     "tray.newInk": "Neue handschriftliche Notiz",
     "tray.newDiagram": "Neues Diagramm",
     "tray.quit": "Beenden",
-
     "nativeMenu.app.about": "Über Mindstream Notes",
     "nativeMenu.app.settings": "Einstellungen…",
     "nativeMenu.app.services": "Dienste",
@@ -247,13 +231,11 @@
     "nativeMenu.window.main": "Mindstream Notes",
     "nativeMenu.help": "Hilfe",
     "nativeMenu.help.keyboardShortcuts": "Tastenkürzel",
-
     "nav.primary": "Hauptnavigation",
     "nav.home": "Start",
     "nav.shared": "Geteilt",
     "nav.favourite": "Favoriten",
     "nav.trash": "Papierkorb",
-
     "fab.newNote": "Neue Notiz",
     "fab.newDrawing": "Neue Zeichenfläche",
     "fab.newInk": "Neue handschriftliche Notiz",
@@ -264,7 +246,6 @@
     "fab.placeholder.inkTitle": "Titel der handschriftlichen Notiz",
     "fab.placeholder.folderName": "Ordnername",
     "fab.submit.create": "Erstellen",
-
     "hotkeys.group.global": "Anwendung",
     "hotkeys.group.globalShortcuts": "Globale Tastenkürzel",
     "hotkeys.group.editor.markdown": "Markdown-Editor",
@@ -303,7 +284,6 @@
     "hotkeys.search.placeholder": "Tastenkürzel suchen…",
     "hotkeys.search.label": "Tastenkürzel suchen",
     "hotkeys.search.empty": "Keine Tastenkürzel passen zur Suche.",
-
     "hotkeys.command.global.newMarkdownNote": "Neue Markdown-Notiz",
     "hotkeys.command.global.newDrawing": "Neue Zeichenfläche",
     "hotkeys.command.global.newInkNote": "Neue handschriftliche Notiz",
@@ -357,7 +337,6 @@
     "hotkeys.command.editor.pdf.zoomOut": "Verkleinern",
     "hotkeys.command.editor.pdf.toggleZoomMenu": "Zoom auswählen",
     "hotkeys.command.editor.pdf.zoomIn": "Vergrößern",
-
     "editor.toolbar.label": "Formatierung",
     "editor.mode.label": "Editor-Ansichtsmodus",
     "editor.toolbar.undo": "Rückgängig",
@@ -383,7 +362,6 @@
     "editor.toolbar.advanced.math": "Mathematik",
     "editor.toolbar.advanced.mermaid": "Mermaid-Diagramm",
     "editor.toolbar.more": "Mehr",
-
     "editor.status.live": "Live-Collab verbunden",
     "editor.status.offline": "Live-Collab getrennt — Verbindung wird wiederhergestellt",
     "editor.status.editing": "Wird bearbeitet…",
@@ -405,12 +383,10 @@
     "editor.userMention.self": "du",
     "editor.popout": "In neuem Fenster öffnen",
     "editor.popin": "Zurück andocken",
-
     "editor.unknownKind.title": "Diese Notiz kann nicht geöffnet werden",
     "editor.unknownKind.message": "Diese Notiz wurde mit einem Editor-Typ erstellt, den diese App-Version nicht unterstützt. Aktualisiere auf die neueste Version, um sie zu öffnen. Der Inhalt der Notiz ist sicher — er wurde nicht verändert.",
     "editor.unknownKind.titleLabel": "Notiz",
     "editor.unknownKind.kindLabel": "Editor-Typ",
-
     "editor.ink.desktopNativeWindowTitle": "Handschriftliche Notiz in einem nativen Fenster geöffnet",
     "editor.ink.desktopNativeWindowMessage": "Zeichne im separaten Tintenfenster, während die Desktop-Brücke in das Editor-Panel eingebettet wird.",
     "editor.ink.desktopPanelLabel": "Leinwand für handschriftliche Notizen",
@@ -444,7 +420,6 @@
     "ink.toolbar.clearConfirm.title": "Handschriftliche Notiz leeren?",
     "ink.toolbar.clearConfirm.message": "Dadurch werden alle Striche aus dieser handschriftlichen Notiz entfernt. Du kannst es rückgängig machen, solange die Notiz geöffnet bleibt.",
     "ink.toolbar.clearConfirm.button": "Handschriftliche Notiz leeren",
-
     "pdf.signature.menuLabel": "Signaturen",
     "pdf.signature.add": "Neue Signatur hinzufügen",
     "pdf.signature.delete": "Signatur löschen",
@@ -532,7 +507,6 @@
     "pdf.comments.resolve": "Erledigen",
     "pdf.comments.resolved": "Erledigt",
     "pdf.comments.delete": "Kommentar löschen",
-
     "find.placeholder": "Im Dokument suchen",
     "find.count": "{index} von {total}",
     "find.noResults": "Keine Treffer",
@@ -548,7 +522,6 @@
     "find.wholeWord": "Ganzes Wort suchen",
     "find.useRegex": "Regulären Ausdruck verwenden",
     "find.preserveCase": "Groß-/Kleinschreibung beibehalten",
-
     "updater.checkFailed.title": "Update-Prüfung fehlgeschlagen",
     "updater.checkFailed.message": "Der Update-Server ist nicht erreichbar. Bitte prüfe deine Internetverbindung und versuche es erneut.",
     "updater.upToDate.title": "Alles aktuell",
@@ -568,7 +541,6 @@
     "updater.progress.installing": "Wird installiert…",
     "updater.unsupportedLinux.title": "In-App-Update nicht verfügbar",
     "updater.unsupportedLinux.message": "Mindstream Notes wurde aus einem Systempaket (rpm / deb) installiert und kann nur über deine Distribution aktualisiert werden. Lade die neueste Version unter https://github.com/jannikgohr/mindstream-notes/releases/latest herunter und installiere sie neu, oder nutze die AppImage-Variante für In-App-Updates.",
-
     "data.openFolder.failed.title": "Datenordner konnte nicht geöffnet werden",
     "data.openFolder.failed.message": "{error}",
     "data.emptyTrash.confirm.title": "Papierkorb leeren",
@@ -598,7 +570,6 @@
     "data.result.chip.folders.one": "Ordner",
     "data.result.chip.folders.other": "Ordner",
     "data.result.chip.attachments.label": "Anhänge",
-
     "data.import.title": "Mindstream-Notes-Backup importieren",
     "data.import.description": "Aus Mindstream Notes {version}, erstellt am {createdAt}.",
     "data.import.column.backup": "Backup",
@@ -667,51 +638,155 @@
     "data.exportVault.chip.errors.other": "Fehler",
     "data.exportVault.chip.errors.status": "Fehlgeschlagen",
     "data.exportVault.failed.title": "Notizen konnten nicht exportiert werden",
-    "data.exportVault.failed.message": "{error}"
+    "data.exportVault.failed.message": "{error}",
+    "nav.create.kanban": "Neues Kanban-Board",
+    "nav.create.kanbanInFolder": "Neues Kanban-Board im Ordner",
+    "fab.newKanban": "Neues Kanban-Board",
+    "fab.placeholder.kanbanTitle": "Titel des Kanban-Boards",
+    "editor.kanban.labels": "Labels",
+    "editor.kanban.labelsPlaceholder": "Labels hinzufügen",
+    "editor.kanban.createLabel": "„{label}“ erstellen",
+    "editor.kanban.removeLabel": "{label} entfernen",
+    "editor.kanban.deleteUnusedLabel": "Ungenutztes Label {label} löschen",
+    "editor.kanban.noLabels": "Keine passenden Labels",
+    "editor.kanban.linkedNote": "Verknüpfte Notiz",
+    "editor.kanban.linkedNotePlaceholder": "Notizen suchen",
+    "editor.kanban.openLinkedNote": "Verknüpfte Notiz öffnen",
+    "editor.kanban.unlinkNote": "Notizverknüpfung entfernen",
+    "editor.kanban.missingLinkedNote": "Notiz fehlt",
+    "editor.kanban.noNotes": "Keine passenden Notizen",
+    "editor.kanban.duplicateNoteTitle": "Doppelter Titel",
+    "editor.kanban.loading": "Board wird geladen …",
+    "editor.kanban.toolbar": "Kanban-Board-Werkzeugleiste",
+    "editor.kanban.untitled": "Ohne Titel",
+    "fileTree.newKanban": "Neues Kanban-Board",
+    "editor.kanban.newList": "Neue Liste",
+    "editor.kanban.addList": "Liste hinzufügen",
+    "editor.kanban.renameList": "Liste umbenennen",
+    "editor.kanban.deleteList": "Liste löschen",
+    "editor.kanban.deleteListTitle": "Liste löschen?",
+    "editor.kanban.deleteListBody": "Die Liste „{list}“ und ihre {count} Karte(n) löschen? Dies kann nicht rückgängig gemacht werden.",
+    "editor.kanban.deleteListConfirm": "Liste löschen",
+    "editor.kanban.deleteListCancel": "Abbrechen",
+    "editor.kanban.listMenu": "Listenoptionen",
+    "editor.kanban.searchPlaceholder": "Kanban-Karten suchen",
+    "editor.kanban.searchResults": "{count}/{total}",
+    "editor.kanban.searchClear": "Kanban-Suche zurücksetzen",
+    "editor.kanban.searchClose": "Kanban-Suche schließen",
+    "editor.kanban.filters": "Kanban-Filter",
+    "editor.kanban.searchList": "Liste",
+    "editor.kanban.searchPriority": "Priorität",
+    "editor.kanban.searchLabels": "Labels",
+    "editor.kanban.searchAssignees": "Zugewiesene",
+    "editor.kanban.searchLinkedOnly": "Verknüpfte Notiz"
   },
   "categories": {
-    "account": { "label": "Konto & Synchronisation" },
-    "general": { "label": "Allgemein" },
-    "appearance": { "label": "Darstellung" },
-    "editor": { "label": "Editor" },
+    "account": {
+      "label": "Konto & Synchronisation"
+    },
+    "general": {
+      "label": "Allgemein"
+    },
+    "appearance": {
+      "label": "Darstellung"
+    },
+    "editor": {
+      "label": "Editor"
+    },
     "hotkeys": {
       "label": "Tastenkürzel",
       "description": "Tastenkürzel für die Anwendung und für die Editoren anpassen."
     },
-    "data": { "label": "Daten & Backup" },
-    "language": { "label": "Sprache" },
-    "about": { "label": "Über" }
+    "data": {
+      "label": "Daten & Backup"
+    },
+    "language": {
+      "label": "Sprache"
+    },
+    "about": {
+      "label": "Über"
+    }
   },
   "sections": {
-    "account.server": { "label": "Server" },
-    "account.sync": { "label": "Synchronisation" },
-    "general.behavior": { "label": "Verhalten" },
-    "appearance.theme": { "label": "Design" },
-    "appearance.typography": { "label": "Schrift" },
-    "appearance.fileTree": { "label": "Dateibaum" },
-    "editor.input": { "label": "Eingabe" },
-    "editor.markdown": { "label": "Markdown" },
-    "editor.freeform": { "label": "Zeichenfläche" },
-    "editor.ink": { "label": "Ink-Werkzeugleiste" },
-    "editor.autosave": { "label": "Auto-Speichern" },
-    "hotkeys.list": { "label": "Tastenkürzel" },
-    "data.database": { "label": "Datenbank" },
-    "data.trash": { "label": "Papierkorb" },
-    "data.history": { "label": "Bearbeitungsverlauf" },
-    "data.historyAdvanced": { "label": "Erweitert" },
-    "data.backup": { "label": "Sicherung, Import & Export" },
-    "language.locale": { "label": "Sprache" },
-    "about.version": { "label": "Version" }
+    "account.server": {
+      "label": "Server"
+    },
+    "account.sync": {
+      "label": "Synchronisation"
+    },
+    "general.behavior": {
+      "label": "Verhalten"
+    },
+    "appearance.theme": {
+      "label": "Design"
+    },
+    "appearance.typography": {
+      "label": "Schrift"
+    },
+    "appearance.fileTree": {
+      "label": "Dateibaum"
+    },
+    "editor.input": {
+      "label": "Eingabe"
+    },
+    "editor.markdown": {
+      "label": "Markdown"
+    },
+    "editor.freeform": {
+      "label": "Zeichenfläche"
+    },
+    "editor.ink": {
+      "label": "Ink-Werkzeugleiste"
+    },
+    "editor.autosave": {
+      "label": "Auto-Speichern"
+    },
+    "hotkeys.list": {
+      "label": "Tastenkürzel"
+    },
+    "data.database": {
+      "label": "Datenbank"
+    },
+    "data.trash": {
+      "label": "Papierkorb"
+    },
+    "data.history": {
+      "label": "Bearbeitungsverlauf"
+    },
+    "data.historyAdvanced": {
+      "label": "Erweitert"
+    },
+    "data.backup": {
+      "label": "Sicherung, Import & Export"
+    },
+    "language.locale": {
+      "label": "Sprache"
+    },
+    "about.version": {
+      "label": "Version"
+    },
+    "editor.noteTypes": {
+      "label": "Notiztypen",
+      "description": "Lege fest, welche Notizarten in den Erstellen-Menüs erscheinen. Deaktiviere ungenutzte, um es übersichtlich zu halten."
+    }
   },
   "settings": {
     "account.serverType": {
       "label": "Servertyp",
       "description": "Wo deine Notizen liegen."
     },
-    "account.managedUnavailable": { "label": "Verwalteter Modus" },
-    "account.signInForm": { "label": "Anmelden" },
-    "account.syncEnabled": { "label": "Synchronisation aktivieren" },
-    "general.startOnLogin": { "label": "Autostart bei Anmeldung" },
+    "account.managedUnavailable": {
+      "label": "Verwalteter Modus"
+    },
+    "account.signInForm": {
+      "label": "Anmelden"
+    },
+    "account.syncEnabled": {
+      "label": "Synchronisation aktivieren"
+    },
+    "general.startOnLogin": {
+      "label": "Autostart bei Anmeldung"
+    },
     "general.closeToTray": {
       "label": "In Systemablage schließen",
       "description": "Blendet das Hauptfenster aus, statt die App beim Schließen zu beenden."
@@ -720,29 +795,59 @@
       "label": "In Systemablage starten",
       "description": "Wenn das System die App bei der Anmeldung startet, wird sie ausgeblendet in der Systemablage geöffnet."
     },
-    "appearance.mode": { "label": "Modus" },
-    "appearance.accent": { "label": "Akzentfarbe" },
-    "appearance.reduceMotion": { "label": "Animationen reduzieren" },
+    "appearance.mode": {
+      "label": "Modus"
+    },
+    "appearance.accent": {
+      "label": "Akzentfarbe"
+    },
+    "appearance.reduceMotion": {
+      "label": "Animationen reduzieren"
+    },
     "appearance.customWindowDecorations": {
       "label": "Eigene Titelleiste verwenden",
       "description": "Zeichnet Mindstreams eigene Fenstersteuerung statt der Titelleiste des Betriebssystems."
     },
-    "appearance.uiFontSize": { "label": "UI-Schriftgröße" },
-    "appearance.editorFontSize": { "label": "Editor-Schriftgröße" },
-    "appearance.lineHeight": { "label": "Zeilenhöhe" },
-    "appearance.sortStrategy": { "label": "Dateibaum-Sortierung" },
-    "appearance.foldersFirst": { "label": "Ordner zuerst" },
-    "editor.defaultMode": { "label": "Standard-Editor" },
-    "editor.tabSize": { "label": "Tab-Breite" },
-    "editor.autoPair": { "label": "Klammern automatisch schließen" },
-    "editor.trimTrailing": { "label": "Leerzeichen am Zeilenende entfernen" },
+    "appearance.uiFontSize": {
+      "label": "UI-Schriftgröße"
+    },
+    "appearance.editorFontSize": {
+      "label": "Editor-Schriftgröße"
+    },
+    "appearance.lineHeight": {
+      "label": "Zeilenhöhe"
+    },
+    "appearance.sortStrategy": {
+      "label": "Dateibaum-Sortierung"
+    },
+    "appearance.foldersFirst": {
+      "label": "Ordner zuerst"
+    },
+    "editor.defaultMode": {
+      "label": "Standard-Editor"
+    },
+    "editor.tabSize": {
+      "label": "Tab-Breite"
+    },
+    "editor.autoPair": {
+      "label": "Klammern automatisch schließen"
+    },
+    "editor.trimTrailing": {
+      "label": "Leerzeichen am Zeilenende entfernen"
+    },
     "editor.desktopToolbar": {
       "label": "Formatierungsleiste anzeigen",
       "description": "Blendet eine Symbolleiste über jeder Notiz für schnelles Formatieren ein."
     },
-    "editor.math": { "label": "Mathe (KaTeX)" },
-    "editor.mermaid": { "label": "Mermaid-Diagramme" },
-    "editor.wikilinks": { "label": "Wikilinks [[...]]" },
+    "editor.math": {
+      "label": "Mathe (KaTeX)"
+    },
+    "editor.mermaid": {
+      "label": "Mermaid-Diagramme"
+    },
+    "editor.wikilinks": {
+      "label": "Wikilinks [[...]]"
+    },
     "editor.wikilinkOpenOnClick": {
       "label": "Wikilinks mit Linksklick öffnen",
       "description": "Öffnet Notizlinks mit einem normalen Klick. Deaktiviere dies, um den Cursor in Notizlinks zu setzen und sie mit Strg/Cmd-Klick zu öffnen."
@@ -751,14 +856,22 @@
       "label": "Benutzererwähnungen @",
       "description": "Tippe @, um jemanden zu erwähnen, der die Notiz sehen kann. Eine Erwähnung von dir wird hervorgehoben."
     },
-    "editor.footnotes": { "label": "Fußnoten" },
+    "editor.footnotes": {
+      "label": "Fußnoten"
+    },
     "editor.freeform.penMode": {
       "label": "Stift-Modus",
       "description": "Wenn aktiv, zeichnet nur der Stift — Fingertippen verschiebt und zoomt. Verhindert ungewollte Striche durch den Handballen auf Tablets."
     },
-    "editor.ink.tool": { "label": "Letztes Ink-Werkzeug" },
-    "editor.ink.color": { "label": "Ink-Farbe" },
-    "editor.ink.width": { "label": "Pinselgröße" },
+    "editor.ink.tool": {
+      "label": "Letztes Ink-Werkzeug"
+    },
+    "editor.ink.color": {
+      "label": "Ink-Farbe"
+    },
+    "editor.ink.width": {
+      "label": "Pinselgröße"
+    },
     "editor.ink.eraserMode": {
       "label": "Radiermodus",
       "description": "Strich radiert ganze Striche; Pixel radiert nur die überstrichenen Bereiche. Die Pinselgröße bestimmt die Radiererbreite."
@@ -783,14 +896,22 @@
       "label": "Deckkraft des Ink-Seitenhintergrunds",
       "description": "Transparenz des Hintergrundmusters handschriftlicher Seiten."
     },
-    "editor.autoSave": { "label": "Auto-Speichern" },
-    "hotkeys.panel": { "label": "Tastaturkürzel" },
+    "editor.autoSave": {
+      "label": "Auto-Speichern"
+    },
+    "hotkeys.panel": {
+      "label": "Tastaturkürzel"
+    },
     "hotkeys.globalShortcuts": {
       "label": "Globale Tastenkürzel aktivieren",
       "description": "Anwendungsweite Tastenkürzel auch auslösen, wenn Mindstream Notes im Hintergrund ist. Formatierungs-Tastenkürzel bleiben auf die App beschränkt."
     },
-    "editor.autoSaveDebounce": { "label": "Auto-Speichern-Verzögerung" },
-    "data.trashRetentionDays": { "label": "Papierkorb-Aufbewahrung" },
+    "editor.autoSaveDebounce": {
+      "label": "Auto-Speichern-Verzögerung"
+    },
+    "data.trashRetentionDays": {
+      "label": "Papierkorb-Aufbewahrung"
+    },
     "data.historyRetentionDays": {
       "label": "Bearbeitungsverlauf behalten für",
       "description": "Wie lange automatisch gespeicherte Notizversionen auf diesem Gerät aufbewahrt werden. Der Verlauf ist lokal und wird nie synchronisiert."
@@ -803,25 +924,51 @@
       "label": "Version nach so vielen Änderungen",
       "description": "Speichert eine Version, sobald so viele sichtbare Zeichen seit der letzten geändert wurden – damit auch lange Sitzungen ohne Pause Versionen erhalten."
     },
-    "data.emptyTrash": { "label": "Papierkorb jetzt leeren" },
-    "data.backupNow": { "label": "Jetzt sichern" },
+    "data.emptyTrash": {
+      "label": "Papierkorb jetzt leeren"
+    },
+    "data.backupNow": {
+      "label": "Jetzt sichern"
+    },
     "data.restoreBackup": {
       "label": "Aus Backup wiederherstellen",
       "description": "Öffne ein Mindstream-Notes-Backup und ersetze deinen aktuellen Datenbestand oder führe fehlende Einträge zusammen."
     },
-    "data.exportVault": { "label": "Vault exportieren" },
+    "data.exportVault": {
+      "label": "Vault exportieren"
+    },
     "data.importNotes": {
       "label": "Notizen importieren",
       "description": "Notizen aus externen Quellen wie Markdown-Dateien oder Obsidian-Vaults importieren. Folgt in Kürze."
     },
-    "language.code": { "label": "Anzeigesprache" },
-    "about.appVersion": { "label": "App-Version" },
-    "about.tauriVersion": { "label": "Komponenten-Versionen" },
+    "language.code": {
+      "label": "Anzeigesprache"
+    },
+    "about.appVersion": {
+      "label": "App-Version"
+    },
+    "about.tauriVersion": {
+      "label": "Komponenten-Versionen"
+    },
     "about.scanForUpdates": {
       "label": "Nach Updates suchen",
       "description": "Prüft beim Start der Desktop-App auf eine neue Mindstream-Notes-Version und zeigt sie als Benachrichtigung an."
     },
-    "about.checkUpdates": { "label": "Auf Updates prüfen" }
+    "about.checkUpdates": {
+      "label": "Auf Updates prüfen"
+    },
+    "editor.noteTypes.freeform": {
+      "label": "Zeichenflächen"
+    },
+    "editor.noteTypes.ink": {
+      "label": "Handschriftliche Notizen"
+    },
+    "editor.noteTypes.pdf": {
+      "label": "PDF-Dokumente"
+    },
+    "editor.noteTypes.kanban": {
+      "label": "Kanban-Boards"
+    }
   },
   "values": {
     "appearance.mode.light": "Hell",

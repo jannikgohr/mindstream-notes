@@ -12,6 +12,7 @@ const loaders = {
   freeform: () => import('$lib/components/FreeformNoteEditor.svelte'),
   ink: () => import('$lib/components/DrawingNoteEditor.svelte'),
   pdf: () => import('$lib/components/PdfNoteViewer.svelte'),
+  kanban: () => import('$lib/components/KanbanNoteEditor.svelte'),
   unknown: () => import('$lib/components/UnknownNoteKindError.svelte')
 } satisfies Record<string, ComponentLoader>;
 
@@ -25,6 +26,8 @@ export function noteKindLoader(kind: LazyNoteKind): ComponentLoader {
       return loaders.ink;
     case 'pdf':
       return loaders.pdf;
+    case 'kanban':
+      return loaders.kanban;
     default:
       return loaders.unknown;
   }

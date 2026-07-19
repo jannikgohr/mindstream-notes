@@ -133,6 +133,8 @@ export default defineConfig({
       '@excalidraw/excalidraw',
       'perfect-freehand',
       'image-js',
+      // Kanban boards
+      '@svar-ui/svelte-kanban',
       // Desktop dockview shell — lazy via DesktopLayout.svelte
       'dockview-core',
       // Tauri API + plugins — dynamically imported, so only loaded under Tauri

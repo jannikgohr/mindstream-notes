@@ -24,8 +24,10 @@
     FilePlus2,
     FileUp,
     FolderPlus,
-    PencilRuler
+    PencilRuler,
+    SquareKanban
   } from '@lucide/svelte';
+  import { noteTypeEnabled } from '$lib/notes/note-types';
   import type { IconComponent } from '$lib/settings/icons';
   import MobileTopBar from './MobileTopBar.svelte';
   import MobileBreadcrumb from './MobileBreadcrumb.svelte';
@@ -99,7 +101,9 @@
   // sheet showing; commit lives in commitCreate().
   // 'drawing' creates a drawing canvas via createNoteIn(..., 'freeform').
   // 'ink' creates a handwritten note via createNoteIn(..., 'ink').
-  let createPrompt = $state<'note' | 'drawing' | 'ink' | 'folder' | null>(null);
+  let createPrompt = $state<
+    'note' | 'drawing' | 'ink' | 'kanban' | 'folder' | null
+  >(null);
   let pdfInput = $state<HTMLInputElement | null>(null);
 
   function createNote() {
@@ -112,6 +116,10 @@
 
   function createInk() {
     createPrompt = 'ink';
+  }
+
+  function createKanban() {
+    createPrompt = 'kanban';
   }
 
   function createFolder() {
@@ -137,11 +145,22 @@
     createPrompt = null;
     if (!kind) return;
     const parent = targetParent();
-    if (kind === 'note' || kind === 'drawing' || kind === 'ink') {
+    if (
+      kind === 'note' ||
+      kind === 'drawing' ||
+      kind === 'ink' ||
+      kind === 'kanban'
+    ) {
       const id = await createNoteIn(
         parent,
         name,
-        kind === 'drawing' ? 'freeform' : kind === 'ink' ? 'ink' : 'markdown'
+        kind === 'drawing'
+          ? 'freeform'
+          : kind === 'ink'
+            ? 'ink'
+            : kind === 'kanban'
+              ? 'kanban'
+              : 'markdown'
       );
       openNote(id);
     } else {
@@ -165,30 +184,52 @@
     mobileState.view === 'trash'
       ? []
       : [
-          {
-            id: 'new-drawing',
-            label: tUi('fab.newDrawing'),
-            icon: PencilRuler as unknown as IconComponent,
-            onSelect: createDrawing
-          },
-          {
-            id: 'new-ink',
-            label: tUi('fab.newInk'),
-            icon: Feather as unknown as IconComponent,
-            onSelect: createInk
-          },
+          ...(noteTypeEnabled('freeform')
+            ? [
+                {
+                  id: 'new-drawing',
+                  label: tUi('fab.newDrawing'),
+                  icon: PencilRuler as unknown as IconComponent,
+                  onSelect: createDrawing
+                }
+              ]
+            : []),
+          ...(noteTypeEnabled('ink')
+            ? [
+                {
+                  id: 'new-ink',
+                  label: tUi('fab.newInk'),
+                  icon: Feather as unknown as IconComponent,
+                  onSelect: createInk
+                }
+              ]
+            : []),
+          ...(noteTypeEnabled('kanban')
+            ? [
+                {
+                  id: 'new-kanban',
+                  label: tUi('fab.newKanban'),
+                  icon: SquareKanban as unknown as IconComponent,
+                  onSelect: createKanban
+                }
+              ]
+            : []),
           {
             id: 'new-folder',
             label: tUi('fab.newFolder'),
             icon: FolderPlus as unknown as IconComponent,
             onSelect: createFolder
           },
-          {
-            id: 'import-pdf',
-            label: tUi('fab.importPdf'),
-            icon: FileUp as unknown as IconComponent,
-            onSelect: importPdf
-          }
+          ...(noteTypeEnabled('pdf')
+            ? [
+                {
+                  id: 'import-pdf',
+                  label: tUi('fab.importPdf'),
+                  icon: FileUp as unknown as IconComponent,
+                  onSelect: importPdf
+                }
+              ]
+            : [])
         ]
   );
 
@@ -249,6 +290,14 @@
   <NameInputSheet
     title={tUi('fab.newInk')}
     placeholder={tUi('fab.placeholder.inkTitle')}
+    submitLabel={tUi('fab.submit.create')}
+    onSubmit={(n) => void commitCreate(n)}
+    onClose={() => (createPrompt = null)}
+  />
+{:else if createPrompt === 'kanban'}
+  <NameInputSheet
+    title={tUi('fab.newKanban')}
+    placeholder={tUi('fab.placeholder.kanbanTitle')}
     submitLabel={tUi('fab.submit.create')}
     onSubmit={(n) => void commitCreate(n)}
     onClose={() => (createPrompt = null)}

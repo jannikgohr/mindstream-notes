@@ -11,10 +11,12 @@
     PencilRuler,
     FilePlus2,
     Share2,
+    SquareKanban,
     Trash2
   } from '@lucide/svelte';
   import FavouriteStar from './FavouriteStar.svelte';
   import { noteKindIcon } from './note-kind-icon';
+  import { noteTypeEnabled } from '$lib/notes/note-types';
   import { tooltip } from '$lib/actions/tooltip';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
@@ -587,15 +589,38 @@
 
       return [
         { label: 'New note in folder', onSelect: () => startDraft('note', id) },
-        {
-          label: 'New drawing canvas in folder',
-          onSelect: () => startDraft('drawing', id)
-        },
-        {
-          label: 'New handwritten note in folder',
-          onSelect: () => startDraft('ink', id)
-        },
-        { label: 'Import PDF in folder', onSelect: () => startPdfImport(id) },
+        ...(noteTypeEnabled('freeform')
+          ? [
+              {
+                label: 'New drawing canvas in folder',
+                onSelect: () => startDraft('drawing', id)
+              }
+            ]
+          : []),
+        ...(noteTypeEnabled('ink')
+          ? [
+              {
+                label: 'New handwritten note in folder',
+                onSelect: () => startDraft('ink', id)
+              }
+            ]
+          : []),
+        ...(noteTypeEnabled('pdf')
+          ? [
+              {
+                label: 'Import PDF in folder',
+                onSelect: () => startPdfImport(id)
+              }
+            ]
+          : []),
+        ...(noteTypeEnabled('kanban')
+          ? [
+              {
+                label: tUi('nav.create.kanbanInFolder'),
+                onSelect: () => startDraft('kanban', id)
+              }
+            ]
+          : []),
         {
           label: 'New folder inside',
           onSelect: () => startDraft('folder', id)
@@ -639,15 +664,33 @@
 
     return [
       { label: 'New note', onSelect: () => startDraft('note', null) },
-      {
-        label: 'New drawing canvas',
-        onSelect: () => startDraft('drawing', null)
-      },
-      {
-        label: 'New handwritten note',
-        onSelect: () => startDraft('ink', null)
-      },
-      { label: 'Import PDF', onSelect: () => startPdfImport(null) },
+      ...(noteTypeEnabled('freeform')
+        ? [
+            {
+              label: 'New drawing canvas',
+              onSelect: () => startDraft('drawing', null)
+            }
+          ]
+        : []),
+      ...(noteTypeEnabled('ink')
+        ? [
+            {
+              label: 'New handwritten note',
+              onSelect: () => startDraft('ink', null)
+            }
+          ]
+        : []),
+      ...(noteTypeEnabled('pdf')
+        ? [{ label: 'Import PDF', onSelect: () => startPdfImport(null) }]
+        : []),
+      ...(noteTypeEnabled('kanban')
+        ? [
+            {
+              label: tUi('nav.create.kanban'),
+              onSelect: () => startDraft('kanban', null)
+            }
+          ]
+        : []),
       { label: 'New folder', onSelect: () => startDraft('folder', null) }
     ];
   }
@@ -861,36 +904,54 @@
         >
           <FolderPlus class="size-3.5" />
         </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          onclick={() => startDraft('drawing', null)}
-          title={tUi('fileTree.newDrawing')}
-          aria-label={tUi('fileTree.newDrawing')}
-          class="size-7"
-        >
-          <PencilRuler class="size-3.5" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          onclick={() => startDraft('ink', null)}
-          title={tUi('fileTree.newInk')}
-          aria-label={tUi('fileTree.newInk')}
-          class="size-7"
-        >
-          <Feather class="size-3.5" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          onclick={() => startPdfImport(null)}
-          title={tUi('fileTree.importPdf')}
-          aria-label={tUi('fileTree.importPdf')}
-          class="size-7"
-        >
-          <FileUp class="size-3.5" />
-        </Button>
+        {#if noteTypeEnabled('freeform')}
+          <Button
+            variant="ghost"
+            size="icon"
+            onclick={() => startDraft('drawing', null)}
+            title={tUi('fileTree.newDrawing')}
+            aria-label={tUi('fileTree.newDrawing')}
+            class="size-7"
+          >
+            <PencilRuler class="size-3.5" />
+          </Button>
+        {/if}
+        {#if noteTypeEnabled('ink')}
+          <Button
+            variant="ghost"
+            size="icon"
+            onclick={() => startDraft('ink', null)}
+            title={tUi('fileTree.newInk')}
+            aria-label={tUi('fileTree.newInk')}
+            class="size-7"
+          >
+            <Feather class="size-3.5" />
+          </Button>
+        {/if}
+        {#if noteTypeEnabled('kanban')}
+          <Button
+            variant="ghost"
+            size="icon"
+            onclick={() => startDraft('kanban', null)}
+            title={tUi('fileTree.newKanban')}
+            aria-label={tUi('fileTree.newKanban')}
+            class="size-7"
+          >
+            <SquareKanban class="size-3.5" />
+          </Button>
+        {/if}
+        {#if noteTypeEnabled('pdf')}
+          <Button
+            variant="ghost"
+            size="icon"
+            onclick={() => startPdfImport(null)}
+            title={tUi('fileTree.importPdf')}
+            aria-label={tUi('fileTree.importPdf')}
+            class="size-7"
+          >
+            <FileUp class="size-3.5" />
+          </Button>
+        {/if}
         <Button
           variant="ghost"
           size="icon"
