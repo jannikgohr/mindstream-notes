@@ -33,6 +33,7 @@ import {
   canSignCollabFrame,
   decodeCollabFrame,
   encodeCollabFrame,
+  signedCollabFrameNeedsAuthRefresh,
   type CollabFrameAuth
 } from './signed-collab-frame';
 
@@ -43,6 +44,7 @@ const SIGNED_REQUIRED_TYPES = new Set([FRAME_SYNC_STEP_2]);
 
 const RECONNECT_INITIAL_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
+const AUTH_REFRESH_THROTTLE_MS = 5_000;
 
 /** First/last few base64 chars of the key — enough to confirm two
  *  devices imported the same secret without leaking the secret. */
@@ -84,6 +86,9 @@ export interface CollabProviderOptions {
   /** Optional writer-key signature context. When present, document updates
    *  from peers must be signed by an authorized writer key. */
   auth?: CollabFrameAuth;
+  /** Called when a signed frame for this room/epoch uses a key we don't know
+   *  yet. The editor should re-fetch room info and recreate the provider. */
+  onAuthStale?: () => void;
 }
 
 export class CollabProvider {
@@ -92,6 +97,7 @@ export class CollabProvider {
   private destroyed = false;
   private reconnectAttempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastAuthRefreshRequest = 0;
 
   private readonly docUpdateHandler: (
     update: Uint8Array,
@@ -302,7 +308,10 @@ export class CollabProvider {
       );
       return;
     }
-    if (!decoded) return;
+    if (!decoded) {
+      this.maybeRequestAuthRefresh(frame);
+      return;
+    }
     const { type, payload: pt } = decoded;
     // Mirror image of the post-await guard in send(): if the user closed
     // the note during the decrypt microtask, the doc/awareness may be
@@ -332,5 +341,14 @@ export class CollabProvider {
       default:
         console.warn('[collab] unknown frame type', type);
     }
+  }
+
+  private maybeRequestAuthRefresh(frame: Uint8Array): void {
+    if (!signedCollabFrameNeedsAuthRefresh(frame, this.opts.auth)) return;
+    const now = Date.now();
+    if (now - this.lastAuthRefreshRequest < AUTH_REFRESH_THROTTLE_MS) return;
+    this.lastAuthRefreshRequest = now;
+    console.info('[collab] refreshing writer auth room=%s', this.opts.roomId);
+    this.opts.onAuthStale?.();
   }
 }

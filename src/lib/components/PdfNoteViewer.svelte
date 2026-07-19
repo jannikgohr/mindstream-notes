@@ -1939,6 +1939,9 @@
         doc: yDoc,
         awareness,
         auth: collabAuthForRoom(room, signingMaterial),
+        onAuthStale: () => {
+          void setupCollabProvider();
+        },
         onStatusChange: (online) => {
           collabOnline = online;
         }

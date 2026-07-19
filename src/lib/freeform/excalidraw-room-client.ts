@@ -34,6 +34,7 @@ import {
   decodeCollabFrame,
   encodeCollabFrame,
   isSignedCollabFrame,
+  signedCollabFrameNeedsAuthRefresh,
   type CollabFrameAuth
 } from '$lib/sync/signed-collab-frame';
 
@@ -47,6 +48,7 @@ const BROADCAST_THROTTLE_MS = 50;
 // Cap repeated decrypt warnings so a misconfigured peer in the same
 // room can't flood the console.
 const MAX_DECRYPT_WARNINGS = 5;
+const AUTH_REFRESH_THROTTLE_MS = 5_000;
 
 /**
  * Normalise whatever Socket.IO hands us into an ArrayBuffer. The
@@ -85,6 +87,7 @@ export interface ExcalidrawRoomClientOptions {
   /** Optional writer-key signature context. When present, scene updates
    *  from peers must be signed by an authorized writer key. */
   auth?: CollabFrameAuth;
+  onAuthStale?: () => void;
 }
 
 type RemoteMessage =
@@ -118,6 +121,7 @@ export class ExcalidrawRoomClient {
    *  hasn't changed since the user put the stylus down. */
   private lastSceneFingerprint: string | null = null;
   private decryptWarningCount = 0;
+  private lastAuthRefreshRequest = 0;
   private readonly unlistenOnChange: () => void;
 
   constructor(private readonly opts: ExcalidrawRoomClientOptions) {
@@ -293,7 +297,11 @@ export class ExcalidrawRoomClient {
           this.opts.auth,
           SIGNED_REQUIRED_TYPES
         );
-        if (!signed || signed.type !== FRAME_SCENE_UPDATE) return;
+        if (!signed) {
+          this.maybeRequestAuthRefresh(frame);
+          return;
+        }
+        if (signed.type !== FRAME_SCENE_UPDATE) return;
         decoded = JSON.parse(
           new TextDecoder().decode(signed.payload)
         ) as RemoteMessage;
@@ -352,6 +360,18 @@ export class ExcalidrawRoomClient {
         ? ' (further warnings suppressed)'
         : '';
     console.warn(`[excalidraw-room] ${reason}${suffix}`);
+  }
+
+  private maybeRequestAuthRefresh(frame: Uint8Array): void {
+    if (!signedCollabFrameNeedsAuthRefresh(frame, this.opts.auth)) return;
+    const now = Date.now();
+    if (now - this.lastAuthRefreshRequest < AUTH_REFRESH_THROTTLE_MS) return;
+    this.lastAuthRefreshRequest = now;
+    console.info(
+      '[excalidraw-room] refreshing writer auth room=%s',
+      this.opts.roomId
+    );
+    this.opts.onAuthStale?.();
   }
 }
 

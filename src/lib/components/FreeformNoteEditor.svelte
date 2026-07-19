@@ -489,6 +489,9 @@
         keyBytes16,
         api: excalidrawApi,
         auth: collabAuthForRoom(room, signingMaterial),
+        onAuthStale: () => {
+          void setupExcalidrawRoom();
+        },
         onStatusChange: (online) => {
           collabOnline = online;
         }
