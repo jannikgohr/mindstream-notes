@@ -2585,7 +2585,13 @@ pub struct RoomInfo {
 
 #[derive(Debug, Serialize)]
 pub struct RoomWriterAuth {
-    pub authorized_writer_keys_b64: Vec<String>,
+    pub authorized_writers: Vec<RoomAuthorizedWriter>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct RoomAuthorizedWriter {
+    pub username: String,
+    pub public_key_b64: String,
 }
 
 fn derive_live_collab_room(
@@ -2649,12 +2655,42 @@ fn collab_writer_key_payload(item: &Item) -> AppResult<Option<CollabWriterKeyPay
     Ok(Some(payload))
 }
 
+fn writable_member_usernames(
+    collection: &Collection,
+    cm: &CollectionManager,
+) -> AppResult<HashSet<String>> {
+    let member_manager = cm
+        .member_manager(collection)
+        .map_err(|e| AppError::InvalidArg(format!("member_manager(writer auth): {e}")))?;
+    let mut writers = HashSet::new();
+    let mut iterator: Option<String> = None;
+    loop {
+        let options = FetchOptions::new().limit(100).iterator(iterator.as_deref());
+        let page = member_manager
+            .list(Some(&options))
+            .map_err(|e| AppError::InvalidArg(format!("list writer members: {e}")))?;
+        for member in page.data() {
+            if !matches!(member.access_level(), CollectionAccessLevel::ReadOnly) {
+                writers.insert(member.username().to_string());
+            }
+        }
+        if page.done() {
+            break;
+        }
+        match page.iterator().map(str::to_string) {
+            Some(next) => iterator = Some(next),
+            None => break,
+        }
+    }
+    Ok(writers)
+}
+
 fn list_collab_writer_keys(
     im: &ItemManager,
     share_scope_id: &str,
     collab_epoch: u64,
-) -> AppResult<Vec<String>> {
-    let mut keys = Vec::new();
+) -> AppResult<Vec<RoomAuthorizedWriter>> {
+    let mut writers = Vec::new();
     let mut seen = HashSet::new();
     let mut stoken: Option<String> = None;
     loop {
@@ -2666,11 +2702,16 @@ fn list_collab_writer_keys(
             let Some(payload) = collab_writer_key_payload(item)? else {
                 continue;
             };
-            if payload.share_scope_id == share_scope_id
-                && payload.collab_epoch == collab_epoch
-                && seen.insert(payload.public_key_b64.clone())
-            {
-                keys.push(payload.public_key_b64);
+            if payload.share_scope_id == share_scope_id && payload.collab_epoch == collab_epoch {
+                let Some(username) = payload.username else {
+                    continue;
+                };
+                if seen.insert((username.clone(), payload.public_key_b64.clone())) {
+                    writers.push(RoomAuthorizedWriter {
+                        username,
+                        public_key_b64: payload.public_key_b64,
+                    });
+                }
             }
         }
         stoken = resp.stoken().map(str::to_string).or(stoken);
@@ -2678,8 +2719,22 @@ fn list_collab_writer_keys(
             break;
         }
     }
-    keys.sort();
-    Ok(keys)
+    writers.sort_by(|a, b| {
+        a.username
+            .cmp(&b.username)
+            .then_with(|| a.public_key_b64.cmp(&b.public_key_b64))
+    });
+    Ok(writers)
+}
+
+fn filter_writable_collab_writers(
+    writers: Vec<RoomAuthorizedWriter>,
+    writable_usernames: &HashSet<String>,
+) -> Vec<RoomAuthorizedWriter> {
+    writers
+        .into_iter()
+        .filter(|writer| writable_usernames.contains(&writer.username))
+        .collect()
 }
 
 fn publish_collab_writer_key(
@@ -2692,8 +2747,14 @@ fn publish_collab_writer_key(
     if !valid_collab_writer_public_key(public_key_b64) {
         return Ok(());
     }
+    let Some(username) = username else {
+        return Ok(());
+    };
     let existing = list_collab_writer_keys(im, share_scope_id, collab_epoch)?;
-    if existing.iter().any(|key| key == public_key_b64) {
+    if existing
+        .iter()
+        .any(|writer| writer.username == username && writer.public_key_b64 == public_key_b64)
+    {
         return Ok(());
     }
 
@@ -2702,7 +2763,7 @@ fn publish_collab_writer_key(
         share_scope_id: share_scope_id.to_string(),
         collab_epoch,
         public_key_b64: public_key_b64.to_string(),
-        username: username.map(str::to_string),
+        username: Some(username.to_string()),
     };
     let bytes = serde_json::to_vec(&payload)
         .map_err(|e| AppError::InvalidArg(format!("encode writer key: {e}")))?;
@@ -2854,7 +2915,7 @@ pub async fn note_room_info(
             if let (Some(scope_id), Some(scope)) =
                 (scope_id_for_auth.as_deref(), scope_collab.as_ref())
             {
-                let mut authorized_writer_keys_b64 = Vec::new();
+                let mut authorized_writers = Vec::new();
                 match cm.fetch(&scope.assets_collection_uid, None) {
                     Ok(assets_col) => {
                         match cm.item_manager(&assets_col) {
@@ -2878,12 +2939,27 @@ pub async fn note_room_info(
                                         }
                                     }
                                 }
+                                let writable_usernames =
+                                    match writable_member_usernames(&assets_col, &cm) {
+                                        Ok(usernames) => usernames,
+                                        Err(e) => {
+                                            log::warn!(
+                                                "[room_info] list writable members for scope {scope_id} failed: {e}"
+                                            );
+                                            HashSet::new()
+                                        }
+                                    };
                                 match list_collab_writer_keys(
                                     &assets_im,
                                     scope_id,
                                     scope.collab_epoch,
                                 ) {
-                                    Ok(keys) => authorized_writer_keys_b64 = keys,
+                                    Ok(keys) => {
+                                        authorized_writers = filter_writable_collab_writers(
+                                            keys,
+                                            &writable_usernames,
+                                        );
+                                    }
                                     Err(e) => log::warn!(
                                         "[room_info] list writer keys for scope {scope_id} failed: {e}"
                                     ),
@@ -2899,7 +2975,7 @@ pub async fn note_room_info(
                     }
                 }
                 room.writer_auth = Some(RoomWriterAuth {
-                    authorized_writer_keys_b64,
+                    authorized_writers,
                 });
             }
             Ok(Some(room))
@@ -3036,6 +3112,29 @@ mod tests {
         let decoded: CollabWriterKeyPayload = serde_json::from_slice(&encoded).unwrap();
 
         assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn writable_collab_writer_filter_drops_read_only_usernames() {
+        let writers = vec![
+            RoomAuthorizedWriter {
+                username: "alice".into(),
+                public_key_b64: "alice_key".into(),
+            },
+            RoomAuthorizedWriter {
+                username: "bob".into(),
+                public_key_b64: "bob_key".into(),
+            },
+        ];
+        let writable_usernames = HashSet::from(["alice".to_string()]);
+
+        assert_eq!(
+            filter_writable_collab_writers(writers, &writable_usernames),
+            vec![RoomAuthorizedWriter {
+                username: "alice".into(),
+                public_key_b64: "alice_key".into(),
+            }]
+        );
     }
 
     #[test]
