@@ -1423,14 +1423,14 @@
   );
   const showMobileToolbar = $derived(mobile && crepeReady && !isReadOnly);
 
-  // The editor header (mode toggle + optional desktop toolbar) shows whenever
-  // the editor is interactive — including read-only notes, where the toggle
-  // still lets you view the raw source.
+  // The editor header (mode toggle + optional desktop toolbar) shows for
+  // editable notes. Read-only notes keep the mode toggle inline with their
+  // explanatory banner instead.
   //
   // Mobile gets it too, holding the mode toggle alone: formatting there lives
   // in the floating pill, but the pill is hidden on read-only notes and is
   // already crowded, so the toggle belongs in the header on both platforms.
-  const showEditorHeader = $derived(crepeReady);
+  const showEditorHeader = $derived(crepeReady && !isReadOnly);
 
   // Mirror our reactive status into the global per-note store so the
   // dockview right-header (NoteStatusIcons.svelte) can render the
@@ -1468,9 +1468,17 @@
     </div>
   {/if}
   {#if isTrashed}
-    <TrashBanner />
+    <TrashBanner>
+      {#if crepeReady}
+        <EditorModeToggle value={viewMode} onCycle={cycleViewMode} />
+      {/if}
+    </TrashBanner>
   {:else if isReadOnlyScope}
-    <ViewOnlyBanner />
+    <ViewOnlyBanner>
+      {#if crepeReady}
+        <EditorModeToggle value={viewMode} onCycle={cycleViewMode} />
+      {/if}
+    </ViewOnlyBanner>
   {/if}
   {#if searchOpen}
     <!--
