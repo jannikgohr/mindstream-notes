@@ -33,13 +33,23 @@
   const collection = $derived(
     collectionId ? tree.collectionsById[collectionId] : null
   );
-  // Only the owner can change levels / remove people.
-  const canManage = $derived(shareState?.shared_by_me === true);
+  // Owners and admin recipients can change levels / remove people.
+  const canManage = $derived(
+    shareState?.shared_by_me === true || shareState?.shared_role === 'admin'
+  );
   const myUsername = $derived(authSession.current?.username ?? null);
 
   function isSelf(username: string): boolean {
     return (
       myUsername !== null && username.toLowerCase() === myUsername.toLowerCase()
+    );
+  }
+
+  function isOwner(username: string): boolean {
+    return (
+      shareState?.shared_owner !== null &&
+      shareState?.shared_owner !== undefined &&
+      username.toLowerCase() === shareState.shared_owner.toLowerCase()
     );
   }
 
@@ -173,6 +183,7 @@
           <ul class="space-y-2">
             {#each members as member (member.username)}
               {@const self = isSelf(member.username)}
+              {@const owner = isOwner(member.username)}
               <li class="flex items-center gap-2 text-sm">
                 <span class="min-w-0 flex-1 truncate">
                   {member.username}
@@ -182,7 +193,7 @@
                     >
                   {/if}
                 </span>
-                {#if canManage && !self}
+                {#if canManage && !self && !owner}
                   <select
                     class="h-7 rounded-md border border-input bg-background px-1.5 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
                     value={member.access_level}
@@ -213,7 +224,9 @@
                   </button>
                 {:else}
                   <span class="shrink-0 text-xs text-muted-foreground">
-                    {accessLabel(member.access_level)}
+                    {owner
+                      ? tUi('metadata.permission.owner')
+                      : accessLabel(member.access_level)}
                   </span>
                 {/if}
               </li>

@@ -262,6 +262,14 @@ export function collectionIsSharedByMe(collection: Collection): boolean {
   return collection.shared_by_me === true;
 }
 
+export function collectionUserCanManageSharing(
+  collection: Collection
+): boolean {
+  return (
+    collectionIsSharedByMe(collection) || collection.shared_role === 'admin'
+  );
+}
+
 export function nodesForDesktopSource(
   source: DesktopNoteSource,
   sortedTree: TreeNode[],

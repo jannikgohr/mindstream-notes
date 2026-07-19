@@ -9,6 +9,7 @@ import {
   collectionIsUnder,
   collectionIsUnderTrash,
   collectionScopeIsReadOnly,
+  collectionUserCanManageSharing,
   itemSharedRootId,
   noteIsUnderShared,
   noteIsUnderTrash,
@@ -203,6 +204,35 @@ describe('shared detection', () => {
     const cols = byId([root]);
     expect(noteIsUnderShared(note('n', 'root'), cols)).toBe(true);
     expect(noteIsUnderShared(note('n', null), cols)).toBe(false);
+  });
+});
+
+describe('collectionUserCanManageSharing', () => {
+  it('allows owners and admin recipients to manage sharing', () => {
+    expect(
+      collectionUserCanManageSharing(
+        collection('mine', null, { shared_by_me: true })
+      )
+    ).toBe(true);
+    expect(
+      collectionUserCanManageSharing(
+        collection('admin', null, { shared_role: 'admin' })
+      )
+    ).toBe(true);
+  });
+
+  it('rejects read-only, read-write, and personal folders', () => {
+    expect(
+      collectionUserCanManageSharing(
+        collection('reader', null, { shared_role: 'read_only' })
+      )
+    ).toBe(false);
+    expect(
+      collectionUserCanManageSharing(
+        collection('writer', null, { shared_role: 'read_write' })
+      )
+    ).toBe(false);
+    expect(collectionUserCanManageSharing(collection('personal'))).toBe(false);
   });
 });
 
