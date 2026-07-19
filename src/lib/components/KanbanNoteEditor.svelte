@@ -1007,7 +1007,7 @@
               init={handleInit}
             />
             {#if api && !isTrashed}
-              <Editor {api} items={editorItems} />
+              <Editor {api} items={editorItems} css="kanban-card-editor" />
             {/if}
           </div>
           <KanbanCardMenu {api} css="kanban-card-menu" bind:this={cardMenu} />
@@ -1061,8 +1061,68 @@
     --wx-border-color: var(--border);
     --wx-color-font: var(--foreground);
     --wx-color-font-alt: var(--muted-foreground);
+    --wx-color-font-disabled: var(--muted-foreground);
     --wx-color-primary: var(--primary);
+    --wx-color-primary-font: var(--primary-foreground);
     --wx-color-link: var(--primary);
+    --wx-color-danger: var(--destructive);
+    --wx-color-disabled: var(--muted);
+    --wx-color-disabled-alt: var(--muted);
+    --wx-icon-color: var(--muted-foreground);
+    --wx-border: 1px solid var(--border);
+    --wx-border-light: 1px solid var(--border);
+    --wx-border-medium: 1px solid var(--border);
+    --wx-border-radius: var(--radius-md);
+    --wx-radius-major: var(--radius-md);
+    --wx-font-family: inherit;
+    --wx-font-size: 0.875rem;
+    --wx-line-height: 1.25rem;
+    --wx-font-size-md: 0.875rem;
+    --wx-line-height-md: 1.5rem;
+    --wx-font-size-hd: 1rem;
+    --wx-line-height-hd: 1.5rem;
+    --wx-font-weight: 400;
+    --wx-font-weight-md: 600;
+    --wx-font-weight-b: 700;
+    --wx-shadow-light:
+      0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+    --wx-shadow-medium: none;
+    --wx-box-shadow:
+      0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+
+    /* editor / form surfaces */
+    --wx-field-gutter: 1rem;
+    --wx-input-background: transparent;
+    --wx-input-background-disabled: var(--muted);
+    --wx-input-border: 1px solid var(--input);
+    --wx-input-border-disabled: 1px solid var(--border);
+    --wx-input-border-focus: 1px solid var(--ring);
+    --wx-input-border-radius: var(--radius-sm);
+    --wx-input-font-color: var(--foreground);
+    --wx-input-icon-color: var(--muted-foreground);
+    --wx-input-placeholder-color: var(--muted-foreground);
+    --wx-label-font-color: var(--foreground);
+    --wx-popup-background: var(--popover);
+    --wx-popup-border: 1px solid var(--border);
+    --wx-popup-border-radius: var(--radius-md);
+    --wx-popup-shadow: var(--wx-shadow-light);
+    --wx-modal-background: var(--background);
+    --wx-modal-border: 1px solid var(--border);
+    --wx-modal-border-radius: 0;
+    --wx-modal-shadow: none;
+    --wx-modal-width: 28rem;
+    --wx-button-background: var(--secondary);
+    --wx-button-border: 1px solid transparent;
+    --wx-button-border-radius: var(--radius-sm);
+    --wx-button-danger-font-color: var(--destructive-foreground);
+    --wx-button-font-color: var(--secondary-foreground);
+    --wx-button-pressed: var(--accent);
+    --wx-button-primary-pressed: var(--primary);
+    --wx-button-danger-pressed: var(--destructive);
+    --wx-button-box-shadow: none;
+    --wx-button-primary-box-shadow: none;
+    --wx-slider-background: var(--muted);
+    --wx-slider-primary: var(--primary);
 
     /* kanban surfaces (hardcoded in the SVAR theme — override directly) */
     --wx-kanban-bg: var(--background);
@@ -1163,6 +1223,68 @@
   }
   .kanban-list-name:focus {
     outline: none;
+  }
+  :global(.kanban-scope .wx-sidearea:has(.kanban-card-editor)) {
+    background: var(--background);
+    color: var(--foreground);
+  }
+  :global(.kanban-scope .kanban-card-editor) {
+    background: var(--background);
+    color: var(--foreground);
+  }
+  :global(.kanban-scope .kanban-card-editor .wx-content) {
+    background: var(--background);
+  }
+  :global(.kanban-scope .kanban-card-editor .wx-sections) {
+    margin-inline: 1.25rem;
+  }
+  :global(.kanban-scope .kanban-card-editor .wx-field) {
+    margin-bottom: 1rem;
+  }
+  :global(.kanban-scope .kanban-card-editor .wx-label) {
+    color: var(--foreground);
+  }
+  :global(.kanban-scope .kanban-card-editor input),
+  :global(.kanban-scope .kanban-card-editor textarea),
+  :global(.kanban-scope .kanban-card-editor .wx-richselect) {
+    box-shadow: none;
+    transition:
+      border-color 120ms,
+      box-shadow 120ms;
+  }
+  :global(.kanban-scope .kanban-card-editor input:focus),
+  :global(.kanban-scope .kanban-card-editor textarea:focus),
+  :global(.kanban-scope .kanban-card-editor .wx-richselect:focus) {
+    box-shadow: 0 0 0 1px var(--ring);
+  }
+  :global(.kanban-scope .kanban-card-editor .wx-editor-toolbar) {
+    padding-inline: 1.25rem;
+  }
+  :global(.kanban-scope .kanban-card-editor .wx-button.wx-icon) {
+    background: var(--accent);
+    color: var(--accent-foreground);
+  }
+  :global(.kanban-scope .kanban-card-editor .wx-button.wx-danger) {
+    background: var(--destructive);
+    color: var(--destructive-foreground);
+  }
+  :global(.wx-popup) {
+    --wx-background-hover: var(--accent);
+    --wx-input-font-family: inherit;
+    --wx-input-font-size: 0.875rem;
+    --wx-input-font-color: var(--popover-foreground);
+    --wx-input-font-weight: 400;
+    --wx-input-line-height: 1.25rem;
+    --wx-input-padding: 0.375rem 0.5rem;
+    --wx-popup-background: var(--popover);
+    --wx-popup-border: 1px solid var(--border);
+    --wx-popup-border-radius: var(--radius-md);
+    --wx-popup-shadow:
+      0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+  }
+  :global(.wx-popup .wx-list) {
+    scrollbar-width: thin;
+    scrollbar-color: oklch(from var(--foreground) l c h / 0.3) transparent;
   }
   :global(.wx-menu.kanban-card-menu) {
     --wx-background: var(--popover);
