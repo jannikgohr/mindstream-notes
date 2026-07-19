@@ -47,6 +47,7 @@
   import { minimalDocDiff } from '$lib/editor/doc-diff';
   import { seedDeterministicTemplate } from '$lib/editor/seed-template';
   import { ensureDropIndicatorAlignment } from '$lib/editor/drop-indicator-align';
+  import { collabCredentialsChangedForNote } from '$lib/sync/collab-credentials';
   import { otherPeerCount } from '$lib/editor/awareness-presence';
   import { pickCursorColor } from '$lib/editor/cursor-color';
   import { base64ToBytes } from '$lib/editor/base64';
@@ -685,6 +686,13 @@
       }).then((unlisten) => {
         unsubSync = unlisten;
       });
+      void listen('collab-credentials-changed', (payload) => {
+        if (collabCredentialsChangedForNote(payload, noteId)) {
+          void setupCollabProvider();
+        }
+      }).then((unlisten) => {
+        unsubCollabCredentials = unlisten;
+      });
 
       crepeReady = true;
       loading = false;
@@ -715,6 +723,7 @@
   /** Tauri `sync-completed` subscription. Unwrapped from a Promise<UnlistenFn>
    *  in onMount, called on destroy. Null until the listener resolves. */
   let unsubSync: (() => void) | null = null;
+  let unsubCollabCredentials: (() => void) | null = null;
 
   // Track whether the note has been pushed across reactive updates so
   // we only kick off a collab re-init when that transitions (false →
@@ -956,7 +965,9 @@
     unsubSession?.();
     unsubSession = null;
     unsubSync?.();
+    unsubCollabCredentials?.();
     unsubSync = null;
+    unsubCollabCredentials = null;
     // Drop our row from the global status store so the dockview
     // header doesn't keep showing stale icons after the panel closes.
     clearNoteStatus(noteId);

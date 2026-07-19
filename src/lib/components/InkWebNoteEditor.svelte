@@ -92,6 +92,8 @@
     parseHistorySnapshot,
     serializeYjsSnapshot
   } from '$lib/history/snapshot';
+  import { listen } from '$lib/api/events';
+  import { collabCredentialsChangedForNote } from '$lib/sync/collab-credentials';
   import {
     DEFAULT_COLOR,
     DEFAULT_WIDTH,
@@ -221,6 +223,7 @@
   let collabReady = false;
   let lastSeenPushed = false;
   let unsubSession: (() => void) | null = null;
+  let unsubCollabCredentials: (() => void) | null = null;
   let editorListener: EditorListener | null = null;
   let mobileToolbar = $state(false);
   let zoomMenuOpen = $state(false);
@@ -2810,6 +2813,13 @@
     unsubSession = onSessionChange(() => {
       void setupCollabProvider();
     });
+    void listen('collab-credentials-changed', (payload) => {
+      if (collabCredentialsChangedForNote(payload, noteId)) {
+        void setupCollabProvider();
+      }
+    }).then((unlisten) => {
+      unsubCollabCredentials = unlisten;
+    });
   });
 
   $effect(() => {
@@ -2895,7 +2905,9 @@
     disposed = true;
     collabReady = false;
     unsubSession?.();
+    unsubCollabCredentials?.();
     unsubSession = null;
+    unsubCollabCredentials = null;
     resizeObserver?.disconnect();
     resizeObserver = null;
     provider?.destroy();
