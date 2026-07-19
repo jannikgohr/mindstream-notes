@@ -2635,6 +2635,10 @@ fn derive_live_collab_room(
     })
 }
 
+fn can_receive_live_collab_room(access_level: CollectionAccessLevel, scoped_room: bool) -> bool {
+    !scoped_room || !matches!(access_level, CollectionAccessLevel::ReadOnly)
+}
+
 fn valid_collab_writer_public_key(public_key_b64: &str) -> bool {
     let len = public_key_b64.len();
     (16..=4096).contains(&len)
@@ -2883,6 +2887,9 @@ pub async fn note_room_info(
                     return Ok(None);
                 }
             };
+            if !can_receive_live_collab_room(col.access_level(), scope_collab.is_some()) {
+                return Ok(None);
+            }
             let im = cm
                 .item_manager(&col)
                 .map_err(|e| format!("item_manager: {e}"))?;
@@ -3089,6 +3096,26 @@ mod tests {
         assert_ne!(scoped.key_b64, rotated_epoch.key_b64);
         assert_ne!(scoped.room_id, rotated_salt.room_id);
         assert_ne!(scoped.key_b64, rotated_salt.key_b64);
+    }
+
+    #[test]
+    fn live_collab_rooms_are_withheld_from_read_only_shared_members() {
+        assert!(!can_receive_live_collab_room(
+            CollectionAccessLevel::ReadOnly,
+            true
+        ));
+        assert!(can_receive_live_collab_room(
+            CollectionAccessLevel::ReadWrite,
+            true
+        ));
+        assert!(can_receive_live_collab_room(
+            CollectionAccessLevel::Admin,
+            true
+        ));
+        assert!(can_receive_live_collab_room(
+            CollectionAccessLevel::ReadOnly,
+            false
+        ));
     }
 
     #[test]
