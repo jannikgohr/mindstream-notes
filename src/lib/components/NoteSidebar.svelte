@@ -84,6 +84,9 @@
   const shareScope = $derived(
     shareScopeId ? (tree.collectionsById[shareScopeId] ?? null) : null
   );
+  const showShareScopeRow = $derived(
+    Boolean(note && shareScope && shareScope.id !== note.parent_collection_id)
+  );
   let shareState = $state<CollectionShareState | null>(null);
 
   $effect(() => {
@@ -134,7 +137,16 @@
   const pendingInviteCount = $derived(
     shareState?.outgoing_invitations.length ?? 0
   );
-  const showSharingMetadata = $derived(Boolean(shareScope));
+  const showSharingMetadata = $derived(
+    Boolean(
+      shareScope &&
+        (showShareScopeRow ||
+          authorName ||
+          permissionLabel ||
+          collaborators.length > 0 ||
+          pendingInviteCount > 0)
+    )
+  );
   const showPendingSync = $derived(
     Boolean(note && authSession.current && !note.pushed)
   );
@@ -453,22 +465,24 @@
               {tUi('metadata.sharing')}
             </h4>
             <dl class="border-y border-border">
-              <div
-                class="flex min-w-0 items-center justify-between gap-3 border-b border-border py-2 last:border-b-0"
-              >
-                <dt
-                  class="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
+              {#if showShareScopeRow}
+                <div
+                  class="flex min-w-0 items-center justify-between gap-3 border-b border-border py-2 last:border-b-0"
                 >
-                  <Share2 class="size-3.5" />
-                  {tUi('metadata.sharing.scope')}
-                </dt>
-                <dd
-                  class="max-w-[9rem] truncate rounded-full bg-primary/10 px-2 py-0.5 text-right text-[11px] font-medium text-primary"
-                  title={shareScope.name}
-                >
-                  {shareScope.name}
-                </dd>
-              </div>
+                  <dt
+                    class="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
+                  >
+                    <Share2 class="size-3.5" />
+                    {tUi('metadata.sharing.scope')}
+                  </dt>
+                  <dd
+                    class="max-w-[9rem] truncate rounded-full bg-primary/10 px-2 py-0.5 text-right text-[11px] font-medium text-primary"
+                    title={shareScope.name}
+                  >
+                    {shareScope.name}
+                  </dd>
+                </div>
+              {/if}
               {#if authorName}
                 <div
                   class="flex min-w-0 items-center justify-between gap-3 border-b border-border py-2 last:border-b-0"
