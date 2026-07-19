@@ -15,6 +15,7 @@ pub mod app_restart;
 pub mod assets;
 pub mod auth;
 pub mod backup;
+pub mod collab_events;
 pub mod collections;
 pub mod content_stats;
 pub mod data;
