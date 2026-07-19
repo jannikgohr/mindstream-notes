@@ -125,6 +125,8 @@
         return tUi('metadata.type.ink');
       case 'pdf':
         return tUi('metadata.type.pdf');
+      case 'kanban':
+        return tUi('metadata.type.kanban');
       default:
         return kind
           ? tUi('metadata.type.unknownNamed').replace('{kind}', kind)
