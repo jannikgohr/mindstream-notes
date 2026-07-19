@@ -25,8 +25,8 @@ use crate::db::Db;
 use crate::error::{AppError, AppResult};
 
 use super::{
-    catch_blocking_panic, ensure_collection, scheduler, COLLECTION_TYPE_ASSETS,
-    COLLECTION_TYPE_NOTES, KIND_ASSETS, KIND_NOTES,
+    catch_blocking_panic, ensure_collection, load_share_scope_part_uids, scheduler,
+    COLLECTION_TYPE_ASSETS, COLLECTION_TYPE_NOTES, KIND_ASSETS, KIND_NOTES,
 };
 
 #[derive(Debug, Default, Serialize, Clone)]
@@ -85,16 +85,29 @@ fn audit_impl(db: &Db, account: &Account) -> AppResult<CorruptAudit> {
     let cm = account
         .collection_manager()
         .map_err(|e| AppError::InvalidArg(format!("collection_manager: {e}")))?;
+    let share_scope_part_uids = load_share_scope_part_uids(&cm);
 
     let mut audit = CorruptAudit::default();
 
-    let notes_col = ensure_collection(db, &cm, KIND_NOTES, COLLECTION_TYPE_NOTES)?;
+    let notes_col = ensure_collection(
+        db,
+        &cm,
+        KIND_NOTES,
+        COLLECTION_TYPE_NOTES,
+        &share_scope_part_uids,
+    )?;
     let notes_im = cm
         .item_manager(&notes_col)
         .map_err(|e| AppError::InvalidArg(format!("item_manager(notes): {e}")))?;
     audit.notes = scan_corrupt(&notes_im, "notes")?;
 
-    let assets_col = ensure_collection(db, &cm, KIND_ASSETS, COLLECTION_TYPE_ASSETS)?;
+    let assets_col = ensure_collection(
+        db,
+        &cm,
+        KIND_ASSETS,
+        COLLECTION_TYPE_ASSETS,
+        &share_scope_part_uids,
+    )?;
     let assets_im = cm
         .item_manager(&assets_col)
         .map_err(|e| AppError::InvalidArg(format!("item_manager(assets): {e}")))?;
@@ -241,9 +254,16 @@ fn purge_impl(
     let cm = account
         .collection_manager()
         .map_err(|e| AppError::InvalidArg(format!("collection_manager: {e}")))?;
+    let share_scope_part_uids = load_share_scope_part_uids(&cm);
 
     // --- Note: verify corrupt, then tombstone. ---
-    let notes_col = ensure_collection(db, &cm, KIND_NOTES, COLLECTION_TYPE_NOTES)?;
+    let notes_col = ensure_collection(
+        db,
+        &cm,
+        KIND_NOTES,
+        COLLECTION_TYPE_NOTES,
+        &share_scope_part_uids,
+    )?;
     let notes_im = cm
         .item_manager(&notes_col)
         .map_err(|e| AppError::InvalidArg(format!("item_manager(notes): {e}")))?;
@@ -285,7 +305,13 @@ fn purge_impl(
     }
 
     // --- Orphaned assets: scan to find matches, then tombstone in batch. ---
-    let assets_col = ensure_collection(db, &cm, KIND_ASSETS, COLLECTION_TYPE_ASSETS)?;
+    let assets_col = ensure_collection(
+        db,
+        &cm,
+        KIND_ASSETS,
+        COLLECTION_TYPE_ASSETS,
+        &share_scope_part_uids,
+    )?;
     let assets_im = cm
         .item_manager(&assets_col)
         .map_err(|e| AppError::InvalidArg(format!("item_manager(assets): {e}")))?;

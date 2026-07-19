@@ -27,14 +27,14 @@ pub mod tags_crdt;
 pub mod yrs_doc;
 
 use std::any::Any;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use chrono::Utc;
 use etebase::error::Error as EtebaseError;
 use etebase::managers::{CollectionManager, ItemManager};
 use etebase::utils::randombytes;
-use etebase::{Account, Collection, FetchOptions, Item, ItemMetadata};
+use etebase::{Account, Collection, CollectionAccessLevel, FetchOptions, Item, ItemMetadata};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
@@ -42,6 +42,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::auth;
 use crate::db::Db;
 use crate::error::{AppError, AppResult};
+use crate::sharing::{ShareManifest, COLLECTION_TYPE_SHARE_MANIFEST};
 
 const COLLECTION_TYPE_NOTES: &str = "mindstream.notes";
 const COLLECTION_TYPE_FOLDERS: &str = "mindstream.folders";
@@ -110,6 +111,44 @@ fn is_bad_stoken_error(err: &AppError) -> bool {
         err,
         AppError::InvalidArg(message) if message.contains("'bad_stoken'")
     )
+}
+
+fn load_share_scope_part_uids(cm: &CollectionManager) -> HashSet<String> {
+    let list = match cm.list(COLLECTION_TYPE_SHARE_MANIFEST, None) {
+        Ok(list) => list,
+        Err(e) => {
+            log::warn!("[sync] could not list share manifests before vault reconcile: {e}");
+            return HashSet::new();
+        }
+    };
+
+    let mut uids = HashSet::new();
+    for col in list.data() {
+        if col.is_deleted() {
+            continue;
+        }
+        let raw = match col.content() {
+            Ok(raw) => raw,
+            Err(e) => {
+                log::warn!("[sync] share manifest {} content failed: {e}", col.uid());
+                continue;
+            }
+        };
+        let manifest = match serde_json::from_slice::<ShareManifest>(&raw) {
+            Ok(manifest) => manifest,
+            Err(e) => {
+                log::warn!("[sync] share manifest {} decode failed: {e}", col.uid());
+                continue;
+            }
+        };
+        uids.extend(
+            manifest
+                .collections
+                .into_iter()
+                .map(|part| part.collection_uid),
+        );
+    }
+    uids
 }
 
 fn mark_local_by_remote_uid_dirty(db: &Db, kind: &str, etebase_uid: &str) -> AppResult<bool> {
@@ -182,6 +221,14 @@ struct NotePayload {
     parent_folder_id: Option<String>,
     title: String,
     position: i64,
+    /// Canonical note creation timestamp. Added after schema 2; older
+    /// payloads default to None and fall back to the local row / pull time.
+    #[serde(default)]
+    created: Option<String>,
+    /// Canonical note modification timestamp. Added after schema 2; older
+    /// payloads default to None and fall back to the local row / pull time.
+    #[serde(default)]
+    modified: Option<String>,
     tags: Vec<String>,
     #[serde(default, with = "serde_bytes")]
     tags_state: Vec<u8>,
@@ -219,6 +266,10 @@ struct FolderPayload {
     parent_folder_id: Option<String>,
     name: String,
     position: i64,
+    #[serde(default)]
+    created: Option<String>,
+    #[serde(default)]
+    modified: Option<String>,
 }
 
 /// Wire format for a drawing-asset Etebase Item.
@@ -425,23 +476,48 @@ fn run(db: &Db, account: &Account, self_username: Option<&str>) -> AppResult<Syn
     let cm = account
         .collection_manager()
         .map_err(|e| AppError::InvalidArg(format!("collection_manager: {e}")))?;
+    let share_scope_part_uids = load_share_scope_part_uids(&cm);
 
     // Item managers for the four vault collections. Set up all of them up
     // front so the sync runs in three ordered phases: pull everything, sync
     // scopes, then push everything.
-    let folders_col = ensure_collection(db, &cm, KIND_FOLDERS, COLLECTION_TYPE_FOLDERS)?;
+    let folders_col = ensure_collection(
+        db,
+        &cm,
+        KIND_FOLDERS,
+        COLLECTION_TYPE_FOLDERS,
+        &share_scope_part_uids,
+    )?;
     let folders_im = cm
         .item_manager(&folders_col)
         .map_err(|e| AppError::InvalidArg(format!("item_manager(folders): {e}")))?;
-    let notes_col = ensure_collection(db, &cm, KIND_NOTES, COLLECTION_TYPE_NOTES)?;
+    let notes_col = ensure_collection(
+        db,
+        &cm,
+        KIND_NOTES,
+        COLLECTION_TYPE_NOTES,
+        &share_scope_part_uids,
+    )?;
     let notes_im = cm
         .item_manager(&notes_col)
         .map_err(|e| AppError::InvalidArg(format!("item_manager(notes): {e}")))?;
-    let assets_col = ensure_collection(db, &cm, KIND_ASSETS, COLLECTION_TYPE_ASSETS)?;
+    let assets_col = ensure_collection(
+        db,
+        &cm,
+        KIND_ASSETS,
+        COLLECTION_TYPE_ASSETS,
+        &share_scope_part_uids,
+    )?;
     let assets_im = cm
         .item_manager(&assets_col)
         .map_err(|e| AppError::InvalidArg(format!("item_manager(assets): {e}")))?;
-    let signatures_col = ensure_collection(db, &cm, KIND_SIGNATURES, COLLECTION_TYPE_SIGNATURES)?;
+    let signatures_col = ensure_collection(
+        db,
+        &cm,
+        KIND_SIGNATURES,
+        COLLECTION_TYPE_SIGNATURES,
+        &share_scope_part_uids,
+    )?;
     let signatures_im = cm
         .item_manager(&signatures_col)
         .map_err(|e| AppError::InvalidArg(format!("item_manager(signatures): {e}")))?;
@@ -522,6 +598,7 @@ fn ensure_collection(
     cm: &CollectionManager,
     kind: &str,
     collection_type: &str,
+    share_scope_part_uids: &HashSet<String>,
 ) -> AppResult<Collection> {
     let (cached_uid, passes_left) = load_collection_state(db, kind)?;
 
@@ -531,7 +608,16 @@ fn ensure_collection(
     if passes_left == 0 {
         if let Some(uid) = &cached_uid {
             match cm.fetch(uid, None) {
-                Ok(col) => return Ok(col),
+                Ok(col) => {
+                    let candidate = VaultCollectionCandidate::from(&col);
+                    if usable_vault_collection(&candidate, share_scope_part_uids) {
+                        return Ok(col);
+                    }
+                    log::warn!(
+                        "[sync] cached collection {} for {kind} is not usable as a vault singleton; reconciling",
+                        col.uid()
+                    );
+                }
                 Err(e) => log::warn!("[sync] cached collection {uid} for {kind} unfetchable: {e}"),
             }
         }
@@ -543,8 +629,9 @@ fn ensure_collection(
     let winner_uid = list
         .data()
         .iter()
-        .filter(|c| !c.is_deleted())
-        .map(|c| c.uid().to_string())
+        .map(VaultCollectionCandidate::from)
+        .filter(|candidate| usable_vault_collection(candidate, share_scope_part_uids))
+        .map(|candidate| candidate.uid.to_string())
         .min();
 
     if let Some(winner) = winner_uid {
@@ -716,7 +803,7 @@ fn pull_folders_once(db: &Db, im: &ItemManager, report: &mut SyncReport) -> AppR
             .list(Some(&opts))
             .map_err(|e| AppError::InvalidArg(format!("list folders: {e}")))?;
         for item in resp.data() {
-            match apply_folder(db, item, None) {
+            match apply_folder(db, item, None, true) {
                 Ok(Some(payload)) => applied.push(payload),
                 Ok(None) => {}
                 Err(err) if is_corrupt_remote_content(&err) => {
@@ -793,7 +880,7 @@ fn pull_notes_once(
             .list(Some(&opts))
             .map_err(|e| AppError::InvalidArg(format!("list notes: {e}")))?;
         for item in resp.data() {
-            match apply_note(db, item, None) {
+            match apply_note(db, item, None, true) {
                 Ok(Some(id)) => applied_ids.push(id),
                 Ok(None) => {}
                 Err(err) if is_corrupt_remote_content(&err) => {
@@ -1166,7 +1253,12 @@ fn apply_signature(db: &Db, item: &Item) -> AppResult<bool> {
 /// Returns `Some(payload)` if we wrote a row (so `pull_folders` can
 /// queue it for the repair pass), `None` for deletes and missing-
 /// content items where there's nothing to re-link.
-fn apply_folder(db: &Db, item: &Item, scope: Option<&str>) -> AppResult<Option<FolderPayload>> {
+fn apply_folder(
+    db: &Db,
+    item: &Item,
+    scope: Option<&str>,
+    preserve_dirty_local_edits: bool,
+) -> AppResult<Option<FolderPayload>> {
     if item.is_deleted() {
         // Server-side delete: drop our row if we have one matched by uid,
         // unless it has unpushed edits — see `apply_remote_delete`.
@@ -1182,7 +1274,14 @@ fn apply_folder(db: &Db, item: &Item, scope: Option<&str>) -> AppResult<Option<F
     let payload: FolderPayload = rmp_serde::from_slice(&raw)
         .map_err(|e| AppError::InvalidArg(format!("folder msgpack: {e}")))?;
     let etag = item.etag().to_string();
-    apply_folder_payload(db, payload, item.uid(), &etag, scope)
+    apply_folder_payload(
+        db,
+        payload,
+        item.uid(),
+        &etag,
+        scope,
+        preserve_dirty_local_edits,
+    )
 }
 
 /// Apply a decoded folder payload to local SQLite. Split out from
@@ -1194,6 +1293,7 @@ fn apply_folder_payload(
     uid: &str,
     etag: &str,
     scope: Option<&str>,
+    preserve_dirty_local_edits: bool,
 ) -> AppResult<Option<FolderPayload>> {
     let now = Utc::now().to_rfc3339();
 
@@ -1202,15 +1302,31 @@ fn apply_folder_payload(
     // overwrite that metadata with the remote's older copy — otherwise an
     // offline rename / move / reorder silently reverts. Mirrors the note
     // metadata-preservation path in `apply_note_payload`.
-    let existing_dirty: Option<i64> = db.with_conn(|c| {
+    let existing: Option<(i64, String, String)> = db.with_conn(|c| {
         Ok(c.query_row(
-            "SELECT dirty FROM collections WHERE id = ?1",
+            "SELECT dirty, created, modified FROM collections WHERE id = ?1",
             params![payload.id],
-            |r| r.get(0),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .optional()?)
     })?;
-    let keep_local_meta = matches!(existing_dirty, Some(dirty) if dirty != 0);
+    let keep_local_meta =
+        preserve_dirty_local_edits && matches!(existing, Some((dirty, _, _)) if dirty != 0);
+    let remote_created = payload
+        .created
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .unwrap_or(&now);
+    let remote_modified = payload
+        .modified
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| {
+            existing
+                .as_ref()
+                .map(|(_, _, modified)| modified.as_str())
+                .unwrap_or(&now)
+        });
 
     db.with_conn(|c| {
         // Defensive: if the payload's parent folder isn't in collections
@@ -1220,7 +1336,7 @@ fn apply_folder_payload(
         // Without this, the INSERT would hit a FOREIGN KEY violation and
         // abort the entire sync.
         let resolved_parent = resolve_parent_id(c, payload.parent_folder_id.as_deref())?;
-        match existing_dirty {
+        match existing {
             Some(_) if keep_local_meta => {
                 // Keep the local metadata; only (re)stamp the server identity
                 // and scope, forcing dirty=1 so the next push reconciles. This
@@ -1236,14 +1352,16 @@ fn apply_folder_payload(
             Some(_) => {
                 c.execute(
                     "UPDATE collections
-                     SET parent_collection_id = ?1, name = ?2, position = ?3, modified = ?4,
-                         etebase_uid = ?5, etebase_etag = ?6, dirty = 0, share_scope_id = ?7
-                     WHERE id = ?8",
+                     SET parent_collection_id = ?1, name = ?2, position = ?3,
+                         created = ?4, modified = ?5, etebase_uid = ?6,
+                         etebase_etag = ?7, dirty = 0, share_scope_id = ?8
+                     WHERE id = ?9",
                     params![
                         resolved_parent,
                         payload.name,
                         payload.position,
-                        now,
+                        remote_created,
+                        remote_modified,
                         uid,
                         etag,
                         scope,
@@ -1256,13 +1374,14 @@ fn apply_folder_payload(
                     "INSERT INTO collections (id, parent_collection_id, name, position,
                                                created, modified, etebase_uid, etebase_etag, dirty,
                                                share_scope_id)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6, ?7, 0, ?8)",
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, ?9)",
                     params![
                         payload.id,
                         resolved_parent,
                         payload.name,
                         payload.position,
-                        now,
+                        remote_created,
+                        remote_modified,
                         uid,
                         etag,
                         scope,
@@ -1347,6 +1466,8 @@ struct LocalNoteState {
     yrs_state: Vec<u8>,
     dirty: i64,
     schema: i64,
+    created: String,
+    modified: String,
     parent_collection_id: Option<String>,
     trashed_at: Option<String>,
     title: String,
@@ -1362,7 +1483,12 @@ struct LocalNoteState {
 /// `sync-completed` event payload — open editors merge the new
 /// yrs_state into their live Y.Doc instead of going stale. Returns None
 /// for deletes (no live editor to refresh) and missing-content items.
-fn apply_note(db: &Db, item: &Item, scope: Option<&str>) -> AppResult<Option<String>> {
+fn apply_note(
+    db: &Db,
+    item: &Item,
+    scope: Option<&str>,
+    preserve_dirty_local_edits: bool,
+) -> AppResult<Option<String>> {
     if item.is_deleted() {
         db.with_conn(|c| apply_remote_delete(c, "notes", item.uid()))?;
         return Ok(None);
@@ -1376,7 +1502,14 @@ fn apply_note(db: &Db, item: &Item, scope: Option<&str>) -> AppResult<Option<Str
     let payload: NotePayload = rmp_serde::from_slice(&raw)
         .map_err(|e| AppError::InvalidArg(format!("note msgpack: {e}")))?;
     let etag = item.etag().to_string();
-    apply_note_payload(db, &payload, item.uid(), &etag, scope)
+    apply_note_payload(
+        db,
+        &payload,
+        item.uid(),
+        &etag,
+        scope,
+        preserve_dirty_local_edits,
+    )
 }
 
 /// Apply a decoded note payload to local SQLite. Split out from `apply_note`
@@ -1388,6 +1521,7 @@ fn apply_note_payload(
     uid: &str,
     etag: &str,
     scope: Option<&str>,
+    preserve_dirty_local_edits: bool,
 ) -> AppResult<Option<String>> {
     db.with_conn_mut(|c| {
         let tx = c.transaction()?;
@@ -1396,8 +1530,9 @@ fn apply_note_payload(
         // body, plus the LWW metadata to preserve when the row is dirty.
         let existing: Option<LocalNoteState> = tx
             .query_row(
-                "SELECT yrs_state, dirty, payload_schema, parent_collection_id,
-                        trashed_at, title, body, position, favourite, note_kind, tags_state
+                "SELECT yrs_state, dirty, payload_schema, created, modified,
+                        parent_collection_id, trashed_at, title, body, position,
+                        favourite, note_kind, tags_state
                  FROM notes WHERE id = ?1",
                 params![payload.id],
                 |r| {
@@ -1405,14 +1540,16 @@ fn apply_note_payload(
                         yrs_state: r.get::<_, Option<Vec<u8>>>(0)?.unwrap_or_default(),
                         dirty: r.get(1)?,
                         schema: r.get(2)?,
-                        parent_collection_id: r.get(3)?,
-                        trashed_at: r.get(4)?,
-                        title: r.get(5)?,
-                        body: r.get(6)?,
-                        position: r.get(7)?,
-                        favourite: r.get(8)?,
-                        note_kind: r.get(9)?,
-                        tags_state: r.get::<_, Option<Vec<u8>>>(10)?.unwrap_or_default(),
+                        created: r.get(3)?,
+                        modified: r.get(4)?,
+                        parent_collection_id: r.get(5)?,
+                        trashed_at: r.get(6)?,
+                        title: r.get(7)?,
+                        body: r.get(8)?,
+                        position: r.get(9)?,
+                        favourite: r.get(10)?,
+                        note_kind: r.get(11)?,
+                        tags_state: r.get::<_, Option<Vec<u8>>>(12)?.unwrap_or_default(),
                     })
                 },
             )
@@ -1424,7 +1561,12 @@ fn apply_note_payload(
         };
 
         let incoming_schema = payload.schema as i64;
+        let remote_authoritative = !preserve_dirty_local_edits;
         let (merged_state, dirty_after) = match &existing {
+            // View-only/read-only shares must discard any local state. Those
+            // local edits should be impossible in the UI; if they appear, the
+            // server copy is the only source we are allowed to keep.
+            Some(_) if remote_authoritative => (payload.yrs_state.clone(), 0),
             // Same-schema CRDT merge: this is the common case once both
             // devices are on the same payload version.
             Some(local) if !local.yrs_state.is_empty() && local.schema == incoming_schema => {
@@ -1450,7 +1592,8 @@ fn apply_note_payload(
         // pull, e.g. the full re-pull triggered by a bad_stoken reset. Keep
         // the local metadata and force dirty=1 so the next push reconciles the
         // server. The body above is still CRDT-merged regardless.
-        let keep_local_meta = existing.as_ref().is_some_and(|l| l.dirty != 0);
+        let keep_local_meta =
+            preserve_dirty_local_edits && existing.as_ref().is_some_and(|l| l.dirty != 0);
         // For v2 payloads the remote ships the rendered markdown alongside
         // the prosemirror state — Rust can't render markdown from XmlFragment.
         // If this row has unpushed local edits, keep the local rendered body
@@ -1475,7 +1618,45 @@ fn apply_note_payload(
         // the current key directly from the etebase Item each time it
         // opens a note (see note_room_info), so the server stays the
         // sole authority and nothing sensitive lands on disk.
-        let modified = Utc::now().to_rfc3339();
+        let now = Utc::now().to_rfc3339();
+        let final_created = if keep_local_meta {
+            existing
+                .as_ref()
+                .map(|l| l.created.clone())
+                .unwrap_or_else(|| {
+                    payload
+                        .created
+                        .clone()
+                        .filter(|value| !value.is_empty())
+                        .unwrap_or_else(|| now.clone())
+                })
+        } else {
+            payload
+                .created
+                .clone()
+                .filter(|value| !value.is_empty())
+                .or_else(|| existing.as_ref().map(|l| l.created.clone()))
+                .unwrap_or_else(|| now.clone())
+        };
+        let final_modified = if keep_local_meta {
+            existing
+                .as_ref()
+                .map(|l| l.modified.clone())
+                .unwrap_or_else(|| {
+                    payload
+                        .modified
+                        .clone()
+                        .filter(|value| !value.is_empty())
+                        .unwrap_or_else(|| now.clone())
+                })
+        } else {
+            payload
+                .modified
+                .clone()
+                .filter(|value| !value.is_empty())
+                .or_else(|| existing.as_ref().map(|l| l.modified.clone()))
+                .unwrap_or_else(|| now.clone())
+        };
 
         // Pick each metadata field from local (when dirty) or remote. For the
         // remote parent, resolve_parent_id does the defensive nullification of
@@ -1520,7 +1701,10 @@ fn apply_note_payload(
         } else {
             payload.note_kind.clone()
         };
-        let (final_tags_state, final_tags) = match &existing {
+        let (final_tags_state, final_tags) = if remote_authoritative {
+            tags_crdt::merge_or_resolve(&[], &[], &payload.tags_state, &payload.tags, false)
+        } else {
+            match &existing {
             Some(local) => tags_crdt::merge_or_resolve(
                 &local.tags_state,
                 &local_tags,
@@ -1531,11 +1715,12 @@ fn apply_note_payload(
             None => {
                 tags_crdt::merge_or_resolve(&[], &[], &payload.tags_state, &payload.tags, false)
             }
+            }
         };
         // Keep dirty=1 when we preserved local metadata so the next push sends
         // it to the server; otherwise follow the body-merge's dirty decision.
         let tags_need_push = payload.tags_state.is_empty() || final_tags != payload.tags;
-        let final_dirty = if keep_local_meta || tags_need_push {
+        let final_dirty = if keep_local_meta || (preserve_dirty_local_edits && tags_need_push) {
             1
         } else {
             dirty_after
@@ -1546,17 +1731,18 @@ fn apply_note_payload(
             tx.execute(
                 "UPDATE notes
                  SET parent_collection_id = ?1, title = ?2, body = ?3, position = ?4,
-                     modified = ?5, trashed_at = ?6, yrs_state = ?7,
-                     etebase_uid = ?8, etebase_etag = ?9, dirty = ?10,
-                     payload_schema = ?11, favourite = ?12, note_kind = ?13,
-                     tags_state = ?14, share_scope_id = ?15
-                 WHERE id = ?16",
+                     created = ?5, modified = ?6, trashed_at = ?7, yrs_state = ?8,
+                     etebase_uid = ?9, etebase_etag = ?10, dirty = ?11,
+                     payload_schema = ?12, favourite = ?13, note_kind = ?14,
+                     tags_state = ?15, share_scope_id = ?16
+                 WHERE id = ?17",
                 params![
                     final_parent,
                     final_title,
                     body,
                     final_position,
-                    modified,
+                    final_created,
+                    final_modified,
                     final_trashed_at,
                     merged_state,
                     uid,
@@ -1577,14 +1763,15 @@ fn apply_note_payload(
                                     etebase_uid, etebase_etag, dirty,
                                     payload_schema, favourite, note_kind, tags_state,
                                     share_scope_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
                 params![
                     payload.id,
                     final_parent,
                     final_title,
                     body,
                     final_position,
-                    modified,
+                    final_created,
+                    final_modified,
                     final_trashed_at,
                     merged_state,
                     uid,
@@ -1637,6 +1824,8 @@ fn push_folders(
             parent_folder_id: row.parent_collection_id.clone(),
             name: row.name.clone(),
             position: row.position,
+            created: Some(row.created.clone()),
+            modified: Some(row.modified.clone()),
         };
         let bytes = rmp_serde::to_vec_named(&payload)
             .map_err(|e| AppError::InvalidArg(format!("encode folder: {e}")))?;
@@ -1732,6 +1921,8 @@ fn push_notes(
             parent_folder_id: row.parent_collection_id.clone(),
             title: row.title.clone(),
             position: row.position,
+            created: Some(row.created.clone()),
+            modified: Some(row.modified.clone()),
             tags: row.tags.clone(),
             tags_state: row.tags_state.clone(),
             trashed_at: row.trashed_at.clone(),
@@ -2101,7 +2292,35 @@ struct DirtyFolder {
     parent_collection_id: Option<String>,
     name: String,
     position: i64,
+    created: String,
+    modified: String,
     etebase_uid: Option<String>,
+}
+
+#[derive(Clone, Copy)]
+struct VaultCollectionCandidate<'a> {
+    uid: &'a str,
+    is_deleted: bool,
+    access_level: CollectionAccessLevel,
+}
+
+impl<'a> From<&'a Collection> for VaultCollectionCandidate<'a> {
+    fn from(collection: &'a Collection) -> Self {
+        Self {
+            uid: collection.uid(),
+            is_deleted: collection.is_deleted(),
+            access_level: collection.access_level(),
+        }
+    }
+}
+
+fn usable_vault_collection(
+    candidate: &VaultCollectionCandidate<'_>,
+    share_scope_part_uids: &HashSet<String>,
+) -> bool {
+    !candidate.is_deleted
+        && !share_scope_part_uids.contains(candidate.uid)
+        && !matches!(candidate.access_level, CollectionAccessLevel::ReadOnly)
 }
 
 struct DirtyNote {
@@ -2109,6 +2328,8 @@ struct DirtyNote {
     parent_collection_id: Option<String>,
     title: String,
     position: i64,
+    created: String,
+    modified: String,
     trashed_at: Option<String>,
     yrs_state: Vec<u8>,
     etebase_uid: Option<String>,
@@ -2134,7 +2355,7 @@ fn load_dirty_folders(db: &Db, scope: Option<&str>) -> AppResult<Vec<DirtyFolder
         // matches only unscoped (vault) rows, a scope id matches only that
         // scope's rows.
         let mut stmt = c.prepare(
-            "SELECT id, parent_collection_id, name, position, etebase_uid
+            "SELECT id, parent_collection_id, name, position, created, modified, etebase_uid
              FROM collections WHERE dirty = 1 AND id <> 'trash'
                AND ((?1 IS NULL AND share_scope_id IS NULL) OR share_scope_id = ?1)",
         )?;
@@ -2144,7 +2365,9 @@ fn load_dirty_folders(db: &Db, scope: Option<&str>) -> AppResult<Vec<DirtyFolder
                 parent_collection_id: r.get(1)?,
                 name: r.get(2)?,
                 position: r.get(3)?,
-                etebase_uid: r.get(4)?,
+                created: r.get(4)?,
+                modified: r.get(5)?,
+                etebase_uid: r.get(6)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -2154,8 +2377,9 @@ fn load_dirty_folders(db: &Db, scope: Option<&str>) -> AppResult<Vec<DirtyFolder
 fn load_dirty_notes(db: &Db, scope: Option<&str>) -> AppResult<Vec<DirtyNote>> {
     let rows: Vec<DirtyNote> = db.with_conn(|c| {
         let mut stmt = c.prepare(
-            "SELECT id, parent_collection_id, title, position, trashed_at,
-                    yrs_state, etebase_uid, body, favourite, note_kind, tags_state
+            "SELECT id, parent_collection_id, title, position, created, modified,
+                    trashed_at, yrs_state, etebase_uid, body, favourite, note_kind,
+                    tags_state
              FROM notes WHERE dirty = 1
                AND ((?1 IS NULL AND share_scope_id IS NULL) OR share_scope_id = ?1)",
         )?;
@@ -2165,14 +2389,16 @@ fn load_dirty_notes(db: &Db, scope: Option<&str>) -> AppResult<Vec<DirtyNote>> {
                 parent_collection_id: r.get(1)?,
                 title: r.get(2)?,
                 position: r.get(3)?,
-                trashed_at: r.get(4)?,
-                yrs_state: r.get::<_, Option<Vec<u8>>>(5)?.unwrap_or_default(),
-                etebase_uid: r.get(6)?,
+                created: r.get(4)?,
+                modified: r.get(5)?,
+                trashed_at: r.get(6)?,
+                yrs_state: r.get::<_, Option<Vec<u8>>>(7)?.unwrap_or_default(),
+                etebase_uid: r.get(8)?,
                 tags: Vec::new(),
-                body: r.get(7)?,
-                favourite: r.get::<_, i64>(8)? != 0,
-                note_kind: r.get(9)?,
-                tags_state: r.get::<_, Option<Vec<u8>>>(10)?.unwrap_or_default(),
+                body: r.get(9)?,
+                favourite: r.get::<_, i64>(10)? != 0,
+                note_kind: r.get(11)?,
+                tags_state: r.get::<_, Option<Vec<u8>>>(12)?.unwrap_or_default(),
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -2281,8 +2507,10 @@ fn load_stoken(db: &Db, kind: &str) -> AppResult<Option<String>> {
 fn save_stoken(db: &Db, kind: &str, stoken: Option<&str>) -> AppResult<()> {
     db.with_conn(|c| {
         c.execute(
-            "UPDATE sync_state SET stoken = ?1 WHERE kind = ?2",
-            params![stoken, kind],
+            "INSERT INTO sync_state (kind, stoken)
+             VALUES (?1, ?2)
+             ON CONFLICT(kind) DO UPDATE SET stoken = excluded.stoken",
+            params![kind, stoken],
         )?;
         Ok(())
     })
@@ -2458,6 +2686,8 @@ mod tests {
             parent_folder_id: parent.map(str::to_string),
             title: "Remote Title".into(),
             position: 0,
+            created: Some("2026-05-01T12:00:00Z".into()),
+            modified: Some("2026-05-02T12:00:00Z".into()),
             tags: vec![],
             tags_state: vec![],
             trashed_at: trashed_at.map(str::to_string),
@@ -2499,7 +2729,7 @@ mod tests {
 
         // Stale remote: not trashed, parent stripped to root.
         let remote = remote_note("note_x", None, None);
-        apply_note_payload(&db, &remote, "uid_x", "etag_new", None).unwrap();
+        apply_note_payload(&db, &remote, "uid_x", "etag_new", None, true).unwrap();
 
         let (trashed_at, parent, dirty, title): (Option<String>, Option<String>, i64, String) = db
             .with_conn(|c| {
@@ -2525,6 +2755,20 @@ mod tests {
             title, "Local Title",
             "local metadata is preserved wholesale"
         );
+        let (created, modified): (String, String) = db
+            .with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT created, modified FROM notes WHERE id = 'note_x'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(created, "t", "dirty note must keep local created date");
+        assert_eq!(
+            modified, "t",
+            "dirty note must keep local modified date until pushed"
+        );
     }
 
     #[test]
@@ -2547,14 +2791,14 @@ mod tests {
         .unwrap();
 
         let remote = remote_note("note_y", None, Some("2026-06-10T00:00:00Z"));
-        apply_note_payload(&db, &remote, "uid_y", "etag_new", None).unwrap();
+        apply_note_payload(&db, &remote, "uid_y", "etag_new", None, true).unwrap();
 
-        let (title, trashed_at): (String, Option<String>) = db
+        let (title, trashed_at, created, modified): (String, Option<String>, String, String) = db
             .with_conn(|c| {
                 Ok(c.query_row(
-                    "SELECT title, trashed_at FROM notes WHERE id = 'note_y'",
+                    "SELECT title, trashed_at, created, modified FROM notes WHERE id = 'note_y'",
                     [],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
                 )?)
             })
             .unwrap();
@@ -2566,6 +2810,33 @@ mod tests {
             trashed_at.is_some(),
             "a remote-side trash applies to a clean local row"
         );
+        assert_eq!(
+            created, "2026-05-01T12:00:00Z",
+            "clean row takes remote created date"
+        );
+        assert_eq!(
+            modified, "2026-05-02T12:00:00Z",
+            "clean row takes remote modified date"
+        );
+    }
+
+    #[test]
+    fn apply_note_inserts_remote_dates_for_new_rows() {
+        let db = open_memory_for_tests();
+        let remote = remote_note("note_remote_dates", None, None);
+        apply_note_payload(&db, &remote, "uid_dates", "etag_dates", None, true).unwrap();
+
+        let (created, modified): (String, String) = db
+            .with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT created, modified FROM notes WHERE id = 'note_remote_dates'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(created, "2026-05-01T12:00:00Z");
+        assert_eq!(modified, "2026-05-02T12:00:00Z");
     }
 
     #[test]
@@ -2594,7 +2865,7 @@ mod tests {
         let mut remote = remote_note("note_tags", None, None);
         remote.tags = vec!["remote".into()];
         remote.tags_state = tags_crdt::init(&remote.tags);
-        apply_note_payload(&db, &remote, "uid_tags", "etag_new", None).unwrap();
+        apply_note_payload(&db, &remote, "uid_tags", "etag_new", None, true).unwrap();
 
         let (title, dirty): (String, i64) = db
             .with_conn(|c| {
@@ -2637,7 +2908,7 @@ mod tests {
 
         let mut remote = remote_note("note_body", None, None);
         remote.body = "stale remote body".into();
-        apply_note_payload(&db, &remote, "uid_body", "etag_new", Some("scope_1")).unwrap();
+        apply_note_payload(&db, &remote, "uid_body", "etag_new", Some("scope_1"), true).unwrap();
 
         let (body, dirty): (String, i64) = db
             .with_conn(|c| {
@@ -2650,6 +2921,74 @@ mod tests {
             .unwrap();
         assert_eq!(body, "local rendered body");
         assert_eq!(dirty, 1, "local body must still push after the pull");
+    }
+
+    #[test]
+    fn apply_note_read_only_pull_discards_local_crdt_edits() {
+        let db = open_memory_for_tests();
+        let local_state = yrs_doc::init_with_markdown("local");
+        let local_tags = vec!["local".to_string()];
+        let local_tags_state = tags_crdt::init(&local_tags);
+        db.with_conn(|c| {
+            c.execute(
+                "INSERT INTO notes(id, parent_collection_id, title, body, position,
+                                   created, modified, trashed_at, yrs_state,
+                                   etebase_uid, etebase_etag, dirty, payload_schema,
+                                   favourite, note_kind, tags_state, share_scope_id)
+                 VALUES ('note_read_only', NULL, 'Local Title', 'local rendered', 0,
+                         't', 't', NULL, ?1, 'uid_ro', 'etag_old', 1, 2,
+                         1, 'markdown', ?2, 'scope_1')",
+                params![local_state, local_tags_state],
+            )?;
+            c.execute(
+                "INSERT INTO note_tags(note_id, tag) VALUES ('note_read_only', 'local')",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+        let remote_tags = vec!["remote".to_string()];
+        let remote = NotePayload {
+            schema: 2,
+            id: "note_read_only".into(),
+            parent_folder_id: None,
+            title: "Remote Title".into(),
+            position: 7,
+            created: Some("2026-05-01T12:00:00Z".into()),
+            modified: Some("2026-05-02T12:00:00Z".into()),
+            tags: remote_tags.clone(),
+            tags_state: tags_crdt::init(&remote_tags),
+            trashed_at: None,
+            yrs_state: yrs_doc::init_with_markdown("remote"),
+            body: "remote rendered".into(),
+            crypto_key: vec![],
+            favourite: false,
+            note_kind: "markdown".into(),
+        };
+
+        apply_note_payload(&db, &remote, "uid_ro", "etag_new", Some("scope_1"), false).unwrap();
+
+        let (title, body, dirty, favourite, tags_state): (String, String, i64, i64, Vec<u8>) = db
+            .with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT title, body, dirty, favourite, tags_state
+                     FROM notes WHERE id = 'note_read_only'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+                )?)
+            })
+            .unwrap();
+        let tags = db
+            .with_conn(|c| load_tags_for_note(c, "note_read_only"))
+            .unwrap();
+
+        assert_eq!(title, "Remote Title");
+        assert_eq!(body, "remote rendered");
+        assert_eq!(dirty, 0);
+        assert_eq!(favourite, 0);
+        assert_eq!(tags, remote_tags);
+        assert_eq!(tags_crdt::tags(&tags_state), remote_tags);
     }
 
     #[test]
@@ -2695,6 +3034,32 @@ mod tests {
         assert!(!is_bad_stoken_error(&prose));
     }
 
+    #[test]
+    fn usable_vault_collection_rejects_read_only_and_scope_parts() {
+        let mut scope_parts = HashSet::new();
+        scope_parts.insert("scope_folders".to_string());
+
+        let read_only = VaultCollectionCandidate {
+            uid: "external_read_only",
+            is_deleted: false,
+            access_level: CollectionAccessLevel::ReadOnly,
+        };
+        let scope_part = VaultCollectionCandidate {
+            uid: "scope_folders",
+            is_deleted: false,
+            access_level: CollectionAccessLevel::ReadWrite,
+        };
+        let vault = VaultCollectionCandidate {
+            uid: "vault_folders",
+            is_deleted: false,
+            access_level: CollectionAccessLevel::Admin,
+        };
+
+        assert!(!usable_vault_collection(&read_only, &scope_parts));
+        assert!(!usable_vault_collection(&scope_part, &scope_parts));
+        assert!(usable_vault_collection(&vault, &scope_parts));
+    }
+
     fn remote_folder(id: &str, parent: Option<&str>, name: &str) -> FolderPayload {
         FolderPayload {
             schema: 1,
@@ -2702,6 +3067,8 @@ mod tests {
             parent_folder_id: parent.map(str::to_string),
             name: name.into(),
             position: 0,
+            created: Some("2026-04-01T12:00:00Z".into()),
+            modified: Some("2026-04-02T12:00:00Z".into()),
         }
     }
 
@@ -2723,7 +3090,7 @@ mod tests {
 
         let remote = remote_folder("folder_r", None, "Remote Name");
         let repaired =
-            apply_folder_payload(&db, remote, "uid_r", "etag_new", Some("scope_1")).unwrap();
+            apply_folder_payload(&db, remote, "uid_r", "etag_new", Some("scope_1"), true).unwrap();
         assert!(
             repaired.is_none(),
             "a dirty folder keeps local parent; skip the parent-repair pass"
@@ -2745,6 +3112,17 @@ mod tests {
             Some("scope_1"),
             "the folder is still re-homed into the scope"
         );
+        let (created, modified): (String, String) = db
+            .with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT created, modified FROM collections WHERE id = 'folder_r'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(created, "t", "dirty folder keeps local created date");
+        assert_eq!(modified, "t", "dirty folder keeps local modified date");
     }
 
     #[test]
@@ -2762,14 +3140,14 @@ mod tests {
         .unwrap();
 
         let remote = remote_folder("folder_c", None, "Renamed Remotely");
-        apply_folder_payload(&db, remote, "uid_c", "etag_new", None).unwrap();
+        apply_folder_payload(&db, remote, "uid_c", "etag_new", None, true).unwrap();
 
-        let name: String = db
+        let (name, created, modified): (String, String, String) = db
             .with_conn(|c| {
                 Ok(c.query_row(
-                    "SELECT name FROM collections WHERE id = 'folder_c'",
+                    "SELECT name, created, modified FROM collections WHERE id = 'folder_c'",
                     [],
-                    |r| r.get(0),
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
                 )?)
             })
             .unwrap();
@@ -2777,6 +3155,8 @@ mod tests {
             name, "Renamed Remotely",
             "a clean folder takes remote metadata"
         );
+        assert_eq!(created, "2026-04-01T12:00:00Z");
+        assert_eq!(modified, "2026-04-02T12:00:00Z");
     }
 
     #[test]
@@ -2898,7 +3278,15 @@ mod tests {
 
         // 2. Scope copy of the same note arrives (B's content, new uid, scope).
         let remote = remote_note("note_n", Some("folder_f"), None);
-        apply_note_payload(&db, &remote, "uid_scope", "etag_scope", Some("scope_1")).unwrap();
+        apply_note_payload(
+            &db,
+            &remote,
+            "uid_scope",
+            "etag_scope",
+            Some("scope_1"),
+            true,
+        )
+        .unwrap();
 
         let (scope, uid, dirty, title): (Option<String>, Option<String>, i64, String) = db
             .with_conn(|c| {

@@ -1,5 +1,17 @@
 <script lang="ts">
-  import { CalendarPlus, Edit3, Folder, Paperclip, Tag } from '@lucide/svelte';
+  import {
+    CalendarPlus,
+    Cloud,
+    Edit3,
+    Folder,
+    Paperclip,
+    Share2,
+    ShieldCheck,
+    Tag,
+    User,
+    UserPlus,
+    Users
+  } from '@lucide/svelte';
   import FavouriteStar from './FavouriteStar.svelte';
   import TagsSection from '$lib/components/TagsSection.svelte';
   import NoteHistorySection from '$lib/components/NoteHistorySection.svelte';
@@ -10,8 +22,16 @@
     type Collection,
     type NoteSummary
   } from '$lib/api';
+  import { authSession } from '$lib/api/auth.svelte';
+  import {
+    getCollectionShareState,
+    type CollectionMember,
+    type CollectionShareAccessLevel,
+    type CollectionShareState
+  } from '$lib/api/sharing';
   import { noteKindIcon } from '$lib/components/note-kind-icon';
   import { formatNoteDateTime } from '$lib/date-time';
+  import { findShareScopeCollectionId } from '$lib/notes/share-users';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { ui } from '$lib/state.svelte';
   import { setNoteFavourite, tree } from '$lib/stores/tree.svelte';
@@ -53,7 +73,83 @@
       : tUi('metadata.folder.root')
   );
 
-  // TODO: Render author once notes expose ownership/user attribution metadata.
+  const shareScopeId = $derived(
+    note
+      ? findShareScopeCollectionId(
+          note.parent_collection_id,
+          tree.collectionsById
+        )
+      : null
+  );
+  const shareScope = $derived(
+    shareScopeId ? (tree.collectionsById[shareScopeId] ?? null) : null
+  );
+  const showShareScopeRow = $derived(
+    Boolean(note && shareScope && shareScope.id !== note.parent_collection_id)
+  );
+  let shareState = $state<CollectionShareState | null>(null);
+
+  $effect(() => {
+    const id = shareScopeId;
+    shareState = null;
+    if (!id) return;
+
+    let cancelled = false;
+    void getCollectionShareState(id)
+      .then((state) => {
+        if (!cancelled && shareScopeId === id) shareState = state;
+      })
+      .catch((err) => {
+        console.warn('[sidebar] failed to load share metadata', err);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  });
+
+  const currentUsername = $derived(authSession.current?.username ?? null);
+  const sharedByMe = $derived(
+    shareState?.shared_by_me ?? shareScope?.shared_by_me ?? false
+  );
+  const authorName = $derived(
+    shareState?.shared_owner ??
+      shareScope?.shared_owner ??
+      (sharedByMe ? currentUsername : null)
+  );
+  const permissionLevel = $derived(
+    (shareState?.shared_role ??
+      shareScope?.shared_role ??
+      null) as CollectionShareAccessLevel | null
+  );
+  const permissionLabel = $derived(
+    sharedByMe
+      ? tUi('metadata.permission.owner')
+      : permissionLevel
+        ? accessLabel(permissionLevel)
+        : ''
+  );
+  const collaborators = $derived(
+    shareState
+      ? visibleCollaborators(shareState.members, authorName, currentUsername)
+      : []
+  );
+  const pendingInviteCount = $derived(
+    shareState?.outgoing_invitations.length ?? 0
+  );
+  const showSharingMetadata = $derived(
+    Boolean(
+      shareScope &&
+      (showShareScopeRow ||
+        authorName ||
+        permissionLabel ||
+        collaborators.length > 0 ||
+        pendingInviteCount > 0)
+    )
+  );
+  const showPendingSync = $derived(
+    Boolean(note && authSession.current && !note.pushed)
+  );
 
   // Body is loaded only for the link/attachment regexes; the word count comes
   // from Rust (note_word_count) so it shares one definition with the History
@@ -125,6 +221,8 @@
         return tUi('metadata.type.ink');
       case 'pdf':
         return tUi('metadata.type.pdf');
+      case 'kanban':
+        return tUi('metadata.type.kanban');
       default:
         return kind
           ? tUi('metadata.type.unknownNamed').replace('{kind}', kind)
@@ -192,6 +290,53 @@
     if (contentLoading) return '…';
     const key =
       count === 1 ? 'metadata.attachments.one' : 'metadata.attachments.other';
+    return tUi(key).replace('{count}', String(count));
+  }
+
+  function accessLabel(level: CollectionShareAccessLevel): string {
+    switch (level) {
+      case 'read_only':
+        return tUi('sharing.access.readOnly');
+      case 'read_write':
+        return tUi('sharing.access.readWrite');
+      case 'admin':
+        return tUi('sharing.access.admin');
+    }
+  }
+
+  function visibleCollaborators(
+    members: CollectionMember[],
+    owner: string | null,
+    me: string | null
+  ): string[] {
+    const hidden = new Set(
+      [owner, me]
+        .map((value) => value?.trim().toLowerCase())
+        .filter((value): value is string => Boolean(value))
+    );
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const member of members) {
+      const username = member.username.trim();
+      if (!username) continue;
+      const key = username.toLowerCase();
+      if (hidden.has(key) || seen.has(key)) continue;
+      seen.add(key);
+      out.push(username);
+    }
+    return out;
+  }
+
+  function compactList(values: string[]): string {
+    if (values.length <= 2) return values.join(', ');
+    return `${values.slice(0, 2).join(', ')} +${values.length - 2}`;
+  }
+
+  function pendingInvitesLabel(count: number): string {
+    const key =
+      count === 1
+        ? 'metadata.sharing.pending.one'
+        : 'metadata.sharing.pending.other';
     return tUi(key).replace('{count}', String(count));
   }
 </script>
@@ -292,8 +437,124 @@
                 <span class="truncate">{noteKindLabel(note.note_kind)}</span>
               </dd>
             </div>
+            {#if showPendingSync}
+              <div
+                class="flex min-w-0 items-center justify-between gap-3 border-b border-border py-2 last:border-b-0"
+              >
+                <dt
+                  class="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
+                >
+                  <Cloud class="size-3.5" />
+                  {tUi('metadata.sync')}
+                </dt>
+                <dd
+                  class="min-w-0 truncate text-right text-xs font-medium text-muted-foreground"
+                >
+                  {tUi('metadata.sync.pending')}
+                </dd>
+              </div>
+            {/if}
           </dl>
         </section>
+
+        {#if showSharingMetadata && shareScope}
+          <section class="mt-5">
+            <h4
+              class="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground"
+            >
+              {tUi('metadata.sharing')}
+            </h4>
+            <dl class="border-y border-border">
+              {#if showShareScopeRow}
+                <div
+                  class="flex min-w-0 items-center justify-between gap-3 border-b border-border py-2 last:border-b-0"
+                >
+                  <dt
+                    class="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
+                  >
+                    <Share2 class="size-3.5" />
+                    {tUi('metadata.sharing.scope')}
+                  </dt>
+                  <dd
+                    class="max-w-[9rem] truncate rounded-full bg-primary/10 px-2 py-0.5 text-right text-[11px] font-medium text-primary"
+                    title={shareScope.name}
+                  >
+                    {shareScope.name}
+                  </dd>
+                </div>
+              {/if}
+              {#if authorName}
+                <div
+                  class="flex min-w-0 items-center justify-between gap-3 border-b border-border py-2 last:border-b-0"
+                >
+                  <dt
+                    class="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
+                  >
+                    <User class="size-3.5" />
+                    {tUi('metadata.author')}
+                  </dt>
+                  <dd
+                    class="min-w-0 truncate text-right text-xs font-medium text-muted-foreground"
+                  >
+                    {authorName}
+                  </dd>
+                </div>
+              {/if}
+              {#if permissionLabel}
+                <div
+                  class="flex min-w-0 items-center justify-between gap-3 border-b border-border py-2 last:border-b-0"
+                >
+                  <dt
+                    class="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
+                  >
+                    <ShieldCheck class="size-3.5" />
+                    {tUi('metadata.permission')}
+                  </dt>
+                  <dd
+                    class="min-w-0 truncate text-right text-xs font-medium text-muted-foreground"
+                  >
+                    {permissionLabel}
+                  </dd>
+                </div>
+              {/if}
+              {#if collaborators.length > 0}
+                <div
+                  class="flex min-w-0 items-center justify-between gap-3 border-b border-border py-2 last:border-b-0"
+                >
+                  <dt
+                    class="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
+                  >
+                    <Users class="size-3.5" />
+                    {tUi('metadata.collaborators')}
+                  </dt>
+                  <dd
+                    class="min-w-0 truncate text-right text-xs font-medium text-muted-foreground"
+                    title={collaborators.join(', ')}
+                  >
+                    {compactList(collaborators)}
+                  </dd>
+                </div>
+              {/if}
+              {#if pendingInviteCount > 0}
+                <div
+                  class="flex min-w-0 items-center justify-between gap-3 border-b border-border py-2 last:border-b-0"
+                >
+                  <dt
+                    class="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
+                  >
+                    <UserPlus class="size-3.5" />
+                    {tUi('metadata.sharing.pending')}
+                  </dt>
+                  <dd
+                    class="min-w-0 truncate text-right text-xs font-medium text-muted-foreground"
+                  >
+                    {pendingInvitesLabel(pendingInviteCount)}
+                  </dd>
+                </div>
+              {/if}
+            </dl>
+          </section>
+        {/if}
 
         <section class="mt-5">
           <h4
@@ -385,7 +646,11 @@
           </section>
         {/if}
 
-        <div class="mt-5 border-t border-border pt-5">
+        <div
+          class="mt-5 border-border"
+          class:border-t={showContentStats || showAttachments}
+          class:pt-5={showContentStats || showAttachments}
+        >
           <TagsSection noteId={note.id} />
         </div>
 

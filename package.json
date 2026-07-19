@@ -28,7 +28,7 @@
     "backend:test:reset": "node backend/scripts/test-stack.mjs reset",
     "backend:test:logs": "node backend/scripts/test-stack.mjs logs",
     "backend:test:status": "node backend/scripts/test-stack.mjs status",
-    "verify": "pnpm check && pnpm test && pnpm build",
+    "verify": "pnpm format:check && pnpm check && pnpm test && pnpm build",
     "verify:rust": "cd src-tauri && cargo test",
     "test:coverage:rust": "node src-tauri/scripts/rust-coverage.mjs",
     "format": "pnpm run format:web && pnpm run format:rust",
