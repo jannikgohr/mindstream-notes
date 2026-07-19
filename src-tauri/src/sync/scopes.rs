@@ -116,12 +116,33 @@ fn sync_one_scope(
     // invited at the same level, so the folders collection is representative.
     let writable = !matches!(folders_col.access_level(), CollectionAccessLevel::ReadOnly);
 
+    // For view-only shares, any dirty local row is a bug or stale state from a
+    // previous bug. Discard those local mutations, rewind this scope's cursors,
+    // and let the pull below restore the remote-authoritative content.
+    let preserve_dirty_local_edits = writable;
+    if !writable {
+        let repair = discard_read_only_scope_edits(db, scope)?;
+        if repair.total() > 0 {
+            reset_scope_stokens(db, scope)?;
+            log::warn!(
+                "[sync] discarded {} local edit(s) from read-only scope {scope}; forcing remote pull",
+                repair.total()
+            );
+        }
+    }
+
     // Folders first so notes can resolve parents; assets last so their owning
     // notes exist — same ordering rationale as the vault sync.
     let folders_im = cm
         .item_manager(&folders_col)
         .map_err(|e| AppError::InvalidArg(format!("item_manager(scope folders): {e}")))?;
-    pull_scope_folders(db, &folders_im, scope, &mut delta.report)?;
+    pull_scope_folders(
+        db,
+        &folders_im,
+        scope,
+        &mut delta.report,
+        preserve_dirty_local_edits,
+    )?;
     // Mark the scope's root folder as shared-with-me so it lands in the "shared
     // with me" view instead of Home. The folder itself arrives via the pull
     // above carrying only placement metadata (name/parent/position) — the share
@@ -149,6 +170,7 @@ fn sync_one_scope(
         scope,
         &mut delta.report,
         &mut delta.notes_pulled_ids,
+        preserve_dirty_local_edits,
     )?;
     if writable {
         push_notes(db, &notes_im, &mut delta.report, Some(scope))?;
@@ -169,6 +191,104 @@ fn sync_one_scope(
     }
 
     Ok(())
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct ReadOnlyScopeRepair {
+    folders_discarded: usize,
+    folders_reset: usize,
+    notes_discarded: usize,
+    notes_reset: usize,
+    assets_discarded: usize,
+    assets_reset: usize,
+    tombstones_discarded: usize,
+}
+
+impl ReadOnlyScopeRepair {
+    fn total(self) -> usize {
+        self.folders_discarded
+            + self.folders_reset
+            + self.notes_discarded
+            + self.notes_reset
+            + self.assets_discarded
+            + self.assets_reset
+            + self.tombstones_discarded
+    }
+}
+
+fn discard_read_only_scope_edits(db: &Db, scope: &str) -> AppResult<ReadOnlyScopeRepair> {
+    db.with_conn_mut(|conn| {
+        let tx = conn.transaction()?;
+
+        let tombstones_discarded = tx.execute(
+            "DELETE FROM tombstones WHERE share_scope_id = ?1",
+            params![scope],
+        )?;
+        let assets_discarded = tx.execute(
+            "DELETE FROM assets
+             WHERE share_scope_id = ?1 AND dirty = 1 AND etebase_uid IS NULL",
+            params![scope],
+        )?;
+        let notes_discarded = tx.execute(
+            "DELETE FROM notes
+             WHERE share_scope_id = ?1 AND dirty = 1 AND etebase_uid IS NULL",
+            params![scope],
+        )?;
+        let folders_discarded = tx.execute(
+            "DELETE FROM collections
+             WHERE share_scope_id = ?1 AND dirty = 1 AND etebase_uid IS NULL",
+            params![scope],
+        )?;
+
+        let notes_reset = tx.execute(
+            "UPDATE notes
+                SET dirty = 0, yrs_state = NULL, tags_state = NULL
+              WHERE share_scope_id = ?1 AND dirty = 1",
+            params![scope],
+        )?;
+        let folders_reset = tx.execute(
+            "UPDATE collections
+                SET dirty = 0
+              WHERE share_scope_id = ?1 AND dirty = 1",
+            params![scope],
+        )?;
+        let assets_reset = tx.execute(
+            "UPDATE assets
+                SET dirty = 0
+              WHERE share_scope_id = ?1 AND dirty = 1",
+            params![scope],
+        )?;
+
+        tx.commit()?;
+        Ok(ReadOnlyScopeRepair {
+            folders_discarded,
+            folders_reset,
+            notes_discarded,
+            notes_reset,
+            assets_discarded,
+            assets_reset,
+            tombstones_discarded,
+        })
+    })
+}
+
+fn reset_scope_stokens(db: &Db, scope: &str) -> AppResult<()> {
+    save_stoken(db, &scope_folders_stoken_key(scope), None)?;
+    save_stoken(db, &scope_notes_stoken_key(scope), None)?;
+    save_stoken(db, &scope_assets_stoken_key(scope), None)?;
+    Ok(())
+}
+
+fn scope_folders_stoken_key(scope: &str) -> String {
+    format!("scope-folders:{scope}")
+}
+
+fn scope_notes_stoken_key(scope: &str) -> String {
+    format!("scope-notes:{scope}")
+}
+
+fn scope_assets_stoken_key(scope: &str) -> String {
+    format!("scope-assets:{scope}")
 }
 
 /// Project the manifest's share membership onto the local root folder row so a
@@ -239,8 +359,9 @@ fn pull_scope_folders(
     im: &etebase::managers::ItemManager,
     scope: &str,
     report: &mut SyncReport,
+    preserve_dirty_local_edits: bool,
 ) -> AppResult<()> {
-    let stoken_key = format!("scope-folders:{scope}");
+    let stoken_key = scope_folders_stoken_key(scope);
     let stoken = load_stoken(db, &stoken_key)?;
     let mut new_stoken = stoken.clone();
     let mut applied: Vec<FolderPayload> = Vec::new();
@@ -250,7 +371,7 @@ fn pull_scope_folders(
             .list(Some(&opts))
             .map_err(|e| AppError::InvalidArg(format!("list scope folders: {e}")))?;
         for item in resp.data() {
-            match apply_folder(db, item, Some(scope)) {
+            match apply_folder(db, item, Some(scope), preserve_dirty_local_edits) {
                 Ok(Some(payload)) => applied.push(payload),
                 Ok(None) => {}
                 Err(err) if is_corrupt_remote_content(&err) => {
@@ -279,8 +400,9 @@ fn pull_scope_notes(
     scope: &str,
     report: &mut SyncReport,
     applied_ids: &mut Vec<String>,
+    preserve_dirty_local_edits: bool,
 ) -> AppResult<()> {
-    let stoken_key = format!("scope-notes:{scope}");
+    let stoken_key = scope_notes_stoken_key(scope);
     let stoken = load_stoken(db, &stoken_key)?;
     let mut new_stoken = stoken.clone();
     loop {
@@ -289,7 +411,7 @@ fn pull_scope_notes(
             .list(Some(&opts))
             .map_err(|e| AppError::InvalidArg(format!("list scope notes: {e}")))?;
         for item in resp.data() {
-            match apply_note(db, item, Some(scope)) {
+            match apply_note(db, item, Some(scope), preserve_dirty_local_edits) {
                 Ok(Some(id)) => applied_ids.push(id),
                 Ok(None) => {}
                 Err(err) if is_corrupt_remote_content(&err) => {
@@ -317,7 +439,7 @@ fn pull_scope_assets(
     report: &mut SyncReport,
     applied_ids: &mut Vec<String>,
 ) -> AppResult<()> {
-    let stoken_key = format!("scope-assets:{scope}");
+    let stoken_key = scope_assets_stoken_key(scope);
     let stoken = load_stoken(db, &stoken_key)?;
     let mut new_stoken = stoken.clone();
     // An asset whose owning note hasn't been applied yet pins the stoken so the
@@ -400,6 +522,164 @@ mod tests {
             part_ref(ShareScopePart::Folders, "second"),
         ];
         assert_eq!(part_uid(&m, ShareScopePart::Folders), Some("first"));
+    }
+
+    #[test]
+    fn discard_read_only_scope_edits_removes_local_rows_and_rewinds_stokens() {
+        let db = open_memory_for_tests();
+        db.with_conn(|c| {
+            for kind in [
+                "scope-folders:scope_1",
+                "scope-notes:scope_1",
+                "scope-assets:scope_1",
+            ] {
+                c.execute(
+                    "INSERT INTO sync_state(kind, stoken) VALUES (?1, 'old-stoken')",
+                    params![kind],
+                )?;
+            }
+            c.execute(
+                "INSERT INTO collections(id, parent_collection_id, name, position,
+                                         created, modified, dirty, etebase_uid,
+                                         share_scope_id)
+                 VALUES ('remote_folder', NULL, 'Local rename', 0, 't', 't', 1,
+                         'uid_folder', 'scope_1')",
+                [],
+            )?;
+            c.execute(
+                "INSERT INTO collections(id, parent_collection_id, name, position,
+                                         created, modified, dirty, share_scope_id)
+                 VALUES ('local_folder', NULL, 'Bad local folder', 1, 't', 't', 1,
+                         'scope_1')",
+                [],
+            )?;
+            c.execute(
+                "INSERT INTO notes(id, parent_collection_id, title, body, position,
+                                   created, modified, trashed_at, yrs_state,
+                                   etebase_uid, etebase_etag, dirty, payload_schema,
+                                   favourite, note_kind, tags_state, share_scope_id)
+                 VALUES ('remote_note', NULL, 'Local title', 'local body', 0,
+                         't', 't', NULL, x'0102', 'uid_note', 'etag_note', 1, 2,
+                         1, 'markdown', x'0304', 'scope_1')",
+                [],
+            )?;
+            c.execute(
+                "INSERT INTO note_tags(note_id, tag) VALUES ('remote_note', 'local')",
+                [],
+            )?;
+            c.execute(
+                "INSERT INTO notes(id, parent_collection_id, title, body, position,
+                                   created, modified, dirty, payload_schema,
+                                   favourite, note_kind, share_scope_id)
+                 VALUES ('local_note', NULL, 'Bad local note', '', 1, 't', 't',
+                         1, 2, 0, 'markdown', 'scope_1')",
+                [],
+            )?;
+            c.execute(
+                "INSERT INTO assets(id, owning_note_id, mime_type, bytes, size,
+                                    created, modified, dirty, etebase_uid,
+                                    share_scope_id)
+                 VALUES ('remote_asset', 'remote_note', 'text/plain', x'01', 1,
+                         't', 't', 1, 'uid_asset', 'scope_1')",
+                [],
+            )?;
+            c.execute(
+                "INSERT INTO assets(id, owning_note_id, mime_type, bytes, size,
+                                    created, modified, dirty, share_scope_id)
+                 VALUES ('local_asset', 'local_note', 'text/plain', x'02', 1,
+                         't', 't', 1, 'scope_1')",
+                [],
+            )?;
+            for (kind, uid) in [
+                ("folder", "uid_folder_delete"),
+                ("note", "uid_note_delete"),
+                ("asset", "uid_asset_delete"),
+            ] {
+                c.execute(
+                    "INSERT INTO tombstones(kind, etebase_uid, queued_at, share_scope_id)
+                     VALUES (?1, ?2, 't', 'scope_1')",
+                    params![kind, uid],
+                )?;
+            }
+            Ok(())
+        })
+        .unwrap();
+
+        let repair = discard_read_only_scope_edits(&db, "scope_1").unwrap();
+        reset_scope_stokens(&db, "scope_1").unwrap();
+
+        assert_eq!(repair.folders_discarded, 1);
+        assert_eq!(repair.folders_reset, 1);
+        assert_eq!(repair.notes_discarded, 1);
+        assert_eq!(repair.notes_reset, 1);
+        assert_eq!(repair.assets_discarded, 1);
+        assert_eq!(repair.assets_reset, 1);
+        assert_eq!(repair.tombstones_discarded, 3);
+        assert_eq!(repair.total(), 9);
+
+        let (remote_folder_dirty, remote_note_dirty, remote_asset_dirty): (i64, i64, i64) = db
+            .with_conn(|c| {
+                Ok((
+                    c.query_row(
+                        "SELECT dirty FROM collections WHERE id = 'remote_folder'",
+                        [],
+                        |r| r.get(0),
+                    )?,
+                    c.query_row(
+                        "SELECT dirty FROM notes WHERE id = 'remote_note'",
+                        [],
+                        |r| r.get(0),
+                    )?,
+                    c.query_row(
+                        "SELECT dirty FROM assets WHERE id = 'remote_asset'",
+                        [],
+                        |r| r.get(0),
+                    )?,
+                ))
+            })
+            .unwrap();
+        assert_eq!(remote_folder_dirty, 0);
+        assert_eq!(remote_note_dirty, 0);
+        assert_eq!(remote_asset_dirty, 0);
+
+        let (yrs_state, tags_state): (Option<Vec<u8>>, Option<Vec<u8>>) = db
+            .with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT yrs_state, tags_state FROM notes WHERE id = 'remote_note'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?)
+            })
+            .unwrap();
+        assert!(yrs_state.is_none());
+        assert!(tags_state.is_none());
+
+        let local_count: i64 = db
+            .with_conn(|c| {
+                Ok(c.query_row(
+                    "SELECT
+                        (SELECT COUNT(*) FROM collections WHERE id = 'local_folder') +
+                        (SELECT COUNT(*) FROM notes WHERE id = 'local_note') +
+                        (SELECT COUNT(*) FROM assets WHERE id = 'local_asset') +
+                        (SELECT COUNT(*) FROM tombstones WHERE share_scope_id = 'scope_1')",
+                    [],
+                    |r| r.get(0),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(local_count, 0);
+        assert_eq!(
+            load_stoken(&db, &scope_folders_stoken_key("scope_1")).unwrap(),
+            None
+        );
+        assert_eq!(
+            load_stoken(&db, &scope_notes_stoken_key("scope_1")).unwrap(),
+            None
+        );
+        assert_eq!(
+            load_stoken(&db, &scope_assets_stoken_key("scope_1")).unwrap(),
+            None
+        );
     }
 
     #[test]
