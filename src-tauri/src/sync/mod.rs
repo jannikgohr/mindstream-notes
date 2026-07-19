@@ -35,14 +35,19 @@ use etebase::error::Error as EtebaseError;
 use etebase::managers::{CollectionManager, ItemManager};
 use etebase::utils::randombytes;
 use etebase::{Account, Collection, CollectionAccessLevel, FetchOptions, Item, ItemMetadata};
+use hkdf::Hkdf;
+use hmac::{Hmac, Mac};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use sha2::Sha256;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::auth;
 use crate::db::Db;
 use crate::error::{AppError, AppResult};
-use crate::sharing::{ShareManifest, COLLECTION_TYPE_SHARE_MANIFEST};
+use crate::sharing::{
+    share_scope_collab_info, ShareManifest, ShareScopeCollabInfo, COLLECTION_TYPE_SHARE_MANIFEST,
+};
 
 const COLLECTION_TYPE_NOTES: &str = "mindstream.notes";
 const COLLECTION_TYPE_FOLDERS: &str = "mindstream.folders";
@@ -59,6 +64,10 @@ const KIND_ASSETS: &str = "assets";
 const KIND_SIGNATURES: &str = "signatures";
 
 const PAYLOAD_SCHEMA: u32 = 2;
+const LIVE_COLLAB_ROOM_INFO: &[u8] = b"mindstream-live-collab-room/v1";
+const LIVE_COLLAB_KEY_INFO: &[u8] = b"mindstream-live-collab-key/v1";
+
+type HmacSha256 = Hmac<Sha256>;
 
 pub(super) fn catch_blocking_panic<T>(
     label: &str,
@@ -2527,11 +2536,54 @@ fn now_unix_ms() -> i64 {
 /// device and never synced).
 #[derive(Debug, Serialize)]
 pub struct RoomInfo {
-    /// The Etebase Item UID — used as the room name across devices.
+    /// The relay room. Unshared legacy notes use the Etebase Item UID; shared
+    /// notes use a manifest-salted HMAC so removal rotates the room.
     pub room_id: String,
     /// 32-byte AES-GCM secret, base64 (URL-safe) so it survives JSON IPC
     /// without ballooning into a number array.
     pub key_b64: String,
+    /// Version label from the share manifest. Zero means no scoped collab salt
+    /// was applied, preserving legacy room credentials.
+    pub collab_epoch: u64,
+}
+
+fn derive_live_collab_room(
+    note_uid: &str,
+    note_key: &[u8],
+    scope: Option<&ShareScopeCollabInfo>,
+) -> Result<RoomInfo, String> {
+    let Some(scope) = scope.filter(|scope| !scope.collab_salt.is_empty()) else {
+        return Ok(RoomInfo {
+            room_id: note_uid.to_string(),
+            key_b64: etebase::utils::to_base64(note_key).map_err(|e| format!("encode key: {e}"))?,
+            collab_epoch: 0,
+        });
+    };
+
+    let mut mac = <HmacSha256 as Mac>::new_from_slice(&scope.collab_salt)
+        .map_err(|e| format!("room hmac: {e}"))?;
+    mac.update(LIVE_COLLAB_ROOM_INFO);
+    mac.update(&scope.collab_epoch.to_be_bytes());
+    mac.update(note_uid.as_bytes());
+    let room_bytes = mac.finalize().into_bytes();
+
+    let hkdf = Hkdf::<Sha256>::new(Some(&scope.collab_salt), note_key);
+    let mut derived_key = [0_u8; 32];
+    let mut info = Vec::with_capacity(
+        LIVE_COLLAB_KEY_INFO.len() + std::mem::size_of::<u64>() + note_uid.len(),
+    );
+    info.extend_from_slice(LIVE_COLLAB_KEY_INFO);
+    info.extend_from_slice(&scope.collab_epoch.to_be_bytes());
+    info.extend_from_slice(note_uid.as_bytes());
+    hkdf.expand(&info, &mut derived_key)
+        .map_err(|e| format!("derive live-collab key: {e}"))?;
+
+    Ok(RoomInfo {
+        room_id: etebase::utils::to_base64(&room_bytes)
+            .map_err(|e| format!("encode room id: {e}"))?,
+        key_b64: etebase::utils::to_base64(&derived_key).map_err(|e| format!("encode key: {e}"))?,
+        collab_epoch: scope.collab_epoch,
+    })
 }
 
 #[tauri::command]
@@ -2545,19 +2597,23 @@ pub async fn note_room_info(
         return Ok(None);
     }
 
-    // Read just the local breadcrumbs we need: the note's item UID and
-    // the cached notes-collection UID. The actual key lives only on the
-    // etebase server now; we resolve it on demand below.
+    // Read just the local breadcrumbs we need: the note item UID, its optional
+    // share scope, and the cached vault notes-collection UID. The actual key
+    // lives only on the etebase server now; we resolve it on demand below.
     let lookups = db
         .with_conn(|c| {
-            let note_uid: Option<String> = c
+            let note_lookup: Option<(Option<String>, Option<String>)> = c
                 .query_row(
-                    "SELECT etebase_uid FROM notes WHERE id = ?1",
+                    "SELECT etebase_uid, share_scope_id FROM notes WHERE id = ?1",
                     params![&id],
-                    |r| r.get::<_, Option<String>>(0),
+                    |r| {
+                        Ok((
+                            r.get::<_, Option<String>>(0)?,
+                            r.get::<_, Option<String>>(1)?,
+                        ))
+                    },
                 )
-                .optional()?
-                .flatten();
+                .optional()?;
             let col_uid: Option<String> = c
                 .query_row(
                     "SELECT etebase_collection_uid FROM sync_state WHERE kind = ?1",
@@ -2566,16 +2622,14 @@ pub async fn note_room_info(
                 )
                 .optional()?
                 .flatten();
-            Ok::<_, AppError>((note_uid, col_uid))
+            Ok::<_, AppError>((note_lookup, col_uid))
         })
         .map_err(|e| e.to_string())?;
 
-    let Some(note_uid) = lookups.0 else {
+    let Some((Some(note_uid), share_scope_id)) = lookups.0 else {
         return Ok(None);
     };
-    let Some(col_uid) = lookups.1 else {
-        return Ok(None);
-    };
+    let vault_col_uid = lookups.1;
 
     // Restore the account + fetch the item inside spawn_blocking. The
     // etebase SDK is sync-over-reqwest::blocking, which constructs a
@@ -2595,6 +2649,26 @@ pub async fn note_room_info(
             let cm = account
                 .collection_manager()
                 .map_err(|e| format!("collection_manager: {e}"))?;
+            let (col_uid, scope_collab) = match share_scope_id.as_deref() {
+                Some(scope_id) => {
+                    let scope_collab = match share_scope_collab_info(&cm, scope_id)
+                        .map_err(|e| format!("share scope collab info: {e}"))?
+                    {
+                        Some(info) => info,
+                        None => return Ok(None),
+                    };
+                    (
+                        scope_collab.notes_collection_uid.clone(),
+                        Some(scope_collab),
+                    )
+                }
+                None => {
+                    let Some(col_uid) = vault_col_uid else {
+                        return Ok(None);
+                    };
+                    (col_uid, None)
+                }
+            };
             let col = match cm.fetch(&col_uid, None) {
                 Ok(c) => c,
                 Err(e) => {
@@ -2629,11 +2703,7 @@ pub async fn note_room_info(
                 // encoding zero bytes.
                 return Ok(None);
             }
-            Ok(Some(RoomInfo {
-                room_id: note_uid,
-                key_b64: etebase::utils::to_base64(&payload.crypto_key)
-                    .map_err(|e| format!("encode key: {e}"))?,
-            }))
+            derive_live_collab_room(&note_uid, &payload.crypto_key, scope_collab.as_ref()).map(Some)
         })
     })
     .await
@@ -2697,6 +2767,50 @@ mod tests {
             favourite: false,
             note_kind: "markdown".into(),
         }
+    }
+
+    fn collab_info(epoch: u64, salt: &[u8]) -> ShareScopeCollabInfo {
+        ShareScopeCollabInfo {
+            notes_collection_uid: "scope_notes".into(),
+            collab_epoch: epoch,
+            collab_salt: salt.to_vec(),
+        }
+    }
+
+    #[test]
+    fn derive_live_collab_room_preserves_legacy_credentials_without_scope_salt() {
+        let note_key = [3_u8; 32];
+
+        let room = derive_live_collab_room("note_uid", &note_key, None).unwrap();
+
+        assert_eq!(room.room_id, "note_uid");
+        assert_eq!(room.key_b64, etebase::utils::to_base64(&note_key).unwrap());
+        assert_eq!(room.collab_epoch, 0);
+    }
+
+    #[test]
+    fn derive_live_collab_room_uses_scope_salt_and_epoch() {
+        let note_key = [3_u8; 32];
+        let epoch_one = collab_info(1, &[9_u8; 32]);
+        let epoch_two = collab_info(2, &[9_u8; 32]);
+        let different_salt = collab_info(1, &[8_u8; 32]);
+
+        let scoped = derive_live_collab_room("note_uid", &note_key, Some(&epoch_one)).unwrap();
+        let rotated_epoch =
+            derive_live_collab_room("note_uid", &note_key, Some(&epoch_two)).unwrap();
+        let rotated_salt =
+            derive_live_collab_room("note_uid", &note_key, Some(&different_salt)).unwrap();
+
+        assert_ne!(scoped.room_id, "note_uid");
+        assert_ne!(
+            scoped.key_b64,
+            etebase::utils::to_base64(&note_key).unwrap()
+        );
+        assert_eq!(scoped.collab_epoch, 1);
+        assert_ne!(scoped.room_id, rotated_epoch.room_id);
+        assert_ne!(scoped.key_b64, rotated_epoch.key_b64);
+        assert_ne!(scoped.room_id, rotated_salt.room_id);
+        assert_ne!(scoped.key_b64, rotated_salt.key_b64);
     }
 
     #[test]

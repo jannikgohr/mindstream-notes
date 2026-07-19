@@ -521,11 +521,13 @@ mod tests {
 
     fn manifest(root_folder_id: &str, owner: Option<&str>) -> ShareManifest {
         ShareManifest {
-            schema: 1,
+            schema: crate::sharing::SHARE_MANIFEST_SCHEMA,
             share_scope_id: "scope_1".into(),
             name: "Shared".into(),
             root_folder_id: root_folder_id.into(),
             owner_username: owner.map(str::to_string),
+            collab_epoch: 1,
+            collab_salt: vec![7; crate::sharing::SHARE_COLLAB_SALT_BYTES],
             collections: Vec::new(),
         }
     }
