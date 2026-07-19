@@ -10,15 +10,24 @@
    * silently mounting `NoteEditor` and corrupting the body on save.
    */
   import { onMount } from 'svelte';
-  import { ArrowLeftToLine } from '@lucide/svelte';
+  import { ArrowLeftToLine, PanelRight } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
+  import LazyNoteSidebar from '$lib/components/LazyNoteSidebar.svelte';
   import NoteKindRenderer from '$lib/components/NoteKindRenderer.svelte';
+  import ResizeHandle from '$lib/components/ResizeHandle.svelte';
   import WindowControls from '$lib/components/WindowControls.svelte';
   import { loadNote, openNoteWindow, type NoteKind } from '$lib/api';
-  import { tree } from '$lib/stores/tree.svelte';
+  import { loadTree, tree } from '$lib/stores/tree.svelte';
   import { subscribeOpenNoteRequest } from '$lib/stores/open-note-intent.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
-  import { setActiveNote } from '$lib/state.svelte';
+  import {
+    setActiveNote,
+    setRightSidebarWidth,
+    toggleRightSidebar,
+    ui
+  } from '$lib/state.svelte';
+  import { ariaKeyShortcut, displayBinding } from '$lib/hotkeys/format';
+  import { getBinding } from '$lib/hotkeys/store.svelte';
   import {
     initWindowChrome,
     windowChrome
@@ -36,10 +45,28 @@
   // the user (the editor itself merges incoming yrs_state — its kind
   // is immutable for the panel's lifetime).
   let noteKind = $state<NoteKind | string | null>(null);
+  const metadataToggleBinding = $derived(
+    getBinding('global.toggleNoteMetadata')
+  );
+  const metadataToggleShortcut = $derived(
+    displayBinding(metadataToggleBinding)
+  );
+  const metadataToggleAriaShortcut = $derived(
+    ariaKeyShortcut(metadataToggleBinding)
+  );
+  const metadataToggleLabel = $derived(
+    ui.rightSidebarOpen ? 'Hide metadata' : 'Show metadata'
+  );
+  const metadataToggleTitle = $derived(
+    metadataToggleShortcut
+      ? `${metadataToggleLabel} (${metadataToggleShortcut})`
+      : metadataToggleLabel
+  );
 
   onMount(() => {
     initWindowChrome();
     setActiveNote(noteId);
+    void loadTree();
     let cancelled = false;
     void (async () => {
       try {
@@ -88,6 +115,20 @@
   }
 </script>
 
+{#snippet MetadataToggleButton()}
+  <Button
+    variant="ghost"
+    size="icon"
+    onclick={toggleRightSidebar}
+    title={metadataToggleTitle}
+    aria-label={metadataToggleLabel}
+    aria-keyshortcuts={metadataToggleAriaShortcut || undefined}
+    aria-pressed={ui.rightSidebarOpen}
+  >
+    <PanelRight class="size-4" />
+  </Button>
+{/snippet}
+
 <div class="flex h-full w-full flex-col bg-background text-foreground">
   {#if windowChrome.customDecorations}
     <!-- Frameless title bar. data-tauri-drag-region on the wrapping header
@@ -103,6 +144,7 @@
         {title}
       </span>
       <div data-tauri-drag-region class="flex-1"></div>
+      {@render MetadataToggleButton()}
       <WindowControls mode="popout" />
     </header>
   {:else}
@@ -113,6 +155,7 @@
         {title}
       </span>
       <div class="flex-1"></div>
+      {@render MetadataToggleButton()}
       <Button
         variant="ghost"
         size="icon"
@@ -125,18 +168,40 @@
     </header>
   {/if}
 
-  <main class="min-h-0 flex-1 overflow-hidden fullscreen-note">
-    {#if exists === null}
-      <p class="p-4 text-sm text-muted-foreground">Loading…</p>
-    {:else if !exists}
-      <div
-        class="flex h-full items-center justify-center p-6 text-sm text-muted-foreground"
-      >
-        Note <code class="mx-1 rounded bg-muted px-1.5 py-0.5">{noteId}</code>
-        couldn't be found in the database.
-      </div>
-    {:else}
-      <NoteKindRenderer {noteId} {noteKind} />
-    {/if}
+  <main class="min-h-0 flex-1 overflow-hidden">
+    <div class="flex h-full min-h-0 w-full">
+      <section class="min-w-0 flex-1 overflow-hidden fullscreen-note">
+        {#if exists === null}
+          <p class="p-4 text-sm text-muted-foreground">Loading…</p>
+        {:else if !exists}
+          <div
+            class="flex h-full items-center justify-center p-6 text-sm text-muted-foreground"
+          >
+            Note <code class="mx-1 rounded bg-muted px-1.5 py-0.5"
+              >{noteId}</code
+            >
+            couldn't be found in the database.
+          </div>
+        {:else}
+          <NoteKindRenderer {noteId} {noteKind} />
+        {/if}
+      </section>
+
+      {#if exists && ui.rightSidebarOpen}
+        <ResizeHandle
+          side="right"
+          value={ui.rightSidebarWidth}
+          min={200}
+          max={500}
+          onChange={setRightSidebarWidth}
+        />
+        <div
+          class="shrink-0 border-l border-border"
+          style="width: {ui.rightSidebarWidth}px;"
+        >
+          <LazyNoteSidebar />
+        </div>
+      {/if}
+    </div>
   </main>
 </div>
