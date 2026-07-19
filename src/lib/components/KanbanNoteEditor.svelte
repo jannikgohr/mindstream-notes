@@ -101,6 +101,7 @@
     readBoardFromYDoc,
     removeCardFromYDoc,
     removeColumnFromYDoc,
+    removeLabelFromYDoc,
     seedDefaultBoard,
     upsertBoardIntoYDoc,
     writeBoardToYDoc,
@@ -236,11 +237,16 @@
 
   const labelOptions = $derived.by<KanbanLabelOption[]>(() => {
     const labels = new Map<string, KanbanLabelOption>();
+    const usedLabelIds = new Set<string>();
+    for (const card of board.cards) {
+      for (const id of card.tags ?? []) usedLabelIds.add(id);
+    }
     for (const label of board.labels ?? []) {
       labels.set(label.id, {
         id: label.id,
         label: label.label,
-        color: label.color
+        color: label.color,
+        unused: !usedLabelIds.has(label.id)
       });
     }
     for (const card of board.cards) {
@@ -271,7 +277,8 @@
       key: 'tags',
       label: tUi('editor.kanban.labels'),
       options: labelOptions,
-      oncreate: createLabel
+      oncreate: createLabel,
+      ondelete: deleteUnusedLabel
     },
     {
       comp: 'mindstream-linked-note',
@@ -529,6 +536,15 @@
     board = readBoardFromYDoc(yDoc);
     updateUndoState();
     return { id: next.id, label: next.label, color: next.color };
+  }
+
+  function deleteUnusedLabel(id: string): void {
+    if (!yDoc || isTrashed) return;
+    const inUse = board.cards.some((card) => card.tags?.includes(id));
+    if (inUse) return;
+    removeLabelFromYDoc(yDoc, id);
+    board = readBoardFromYDoc(yDoc);
+    updateUndoState();
   }
 
   const listMenuItems = $derived<(MenuItem | 'separator')[]>(

@@ -337,6 +337,24 @@ export function removeColumnFromYDoc(
   }, origin);
 }
 
+/** Remove a board-local label definition by id. Card tag selections are left
+ *  untouched; callers should only expose this for unused labels. */
+export function removeLabelFromYDoc(
+  doc: Y.Doc,
+  id: string,
+  origin: unknown = KANBAN_LOCAL_ORIGIN
+): void {
+  const arr = labelsArray(doc);
+  doc.transact(() => {
+    for (let i = arr.length - 1; i >= 0; i--) {
+      if (arr.get(i).get('id') === id) {
+        arr.delete(i, 1);
+        break;
+      }
+    }
+  }, origin);
+}
+
 function reconcileColumns(
   doc: Y.Doc,
   columns: KanbanColumnData[],
