@@ -1151,19 +1151,12 @@ pub async fn remove_collection_member(
         };
         let affected_note_ids = crate::collab_events::note_ids_for_share_scope(&db, &scope_id)?;
         for col in [&scope.manifest, &scope.folders, &scope.notes, &scope.assets] {
-            let member_manager = match cm.member_manager(col) {
-                Ok(mm) => mm,
-                Err(e) => {
-                    log::warn!("[sharing] member_manager for {}: {e}", col.uid());
-                    continue;
-                }
-            };
-            if let Err(e) = member_manager.remove(&username) {
-                log::warn!(
-                    "[sharing] remove {username} from {} (scope {scope_id}): {e}",
-                    col.uid()
-                );
-            }
+            let member_manager = cm.member_manager(col).map_err(|e| {
+                scope_member_remove_error(&username, col.uid(), format!("member_manager: {e}"))
+            })?;
+            member_manager.remove(&username).map_err(|e| {
+                scope_member_remove_error(&username, col.uid(), format!("remove member: {e}"))
+            })?;
         }
         rotate_scope_collab_secret(&cm, &scope.manifest)?;
         crate::collab_events::emit_collab_credentials_changed(&app, affected_note_ids);
@@ -1172,6 +1165,12 @@ pub async fn remove_collection_member(
     .await
     .map_err(|e| format!("remove collection member task: {e}"))?
     .map_err(Into::into)
+}
+
+fn scope_member_remove_error(username: &str, collection_uid: &str, err: String) -> AppError {
+    AppError::InvalidArg(format!(
+        "failed to remove {username} from shared collection {collection_uid}: {err}"
+    ))
 }
 
 #[tauri::command]
@@ -2668,6 +2667,18 @@ mod tests {
         assert!(!access_change_requires_collab_rotation(
             ShareAccessLevel::Admin
         ));
+    }
+
+    #[test]
+    fn scope_member_remove_errors_are_returned_to_callers() {
+        let err = scope_member_remove_error("bob", "col_notes", "remove member: denied".into());
+        let AppError::InvalidArg(message) = err else {
+            panic!("expected InvalidArg");
+        };
+
+        assert!(message.contains("bob"), "{message}");
+        assert!(message.contains("col_notes"), "{message}");
+        assert!(message.contains("remove member: denied"), "{message}");
     }
 
     #[test]
