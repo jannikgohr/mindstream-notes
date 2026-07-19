@@ -4,6 +4,8 @@ import type {
   KanbanLabelData
 } from './kanban-yjs';
 
+export const KANBAN_SEARCH_FILTER_TAG = 'mindstream-kanban-search';
+
 export interface KanbanSearchFilters {
   query: string;
   columns: string[];
@@ -110,4 +112,59 @@ export function matchesKanbanSearchFilters(
   }
   if (filters.linkedOnly && !card.linkedNoteId) return false;
   return true;
+}
+
+export interface KanbanFilterApi {
+  exec: (
+    action: 'filter-cards',
+    payload: {
+      tag: string;
+      filter?: (card: Record<string, unknown>) => boolean;
+    }
+  ) => void;
+}
+
+export function widgetCardToSearchCard(
+  card: Record<string, unknown>
+): KanbanCardData {
+  const rawDeadline = card.deadline;
+  const deadline =
+    rawDeadline instanceof Date
+      ? rawDeadline
+      : typeof rawDeadline === 'string'
+        ? new Date(rawDeadline)
+        : undefined;
+  return {
+    id: String(card.id),
+    label: typeof card.label === 'string' ? card.label : '',
+    column: typeof card.column === 'string' ? card.column : '',
+    description:
+      typeof card.description === 'string' ? card.description : undefined,
+    priority: typeof card.priority === 'number' ? card.priority : undefined,
+    progress: typeof card.progress === 'number' ? card.progress : undefined,
+    deadline:
+      deadline && !Number.isNaN(deadline.getTime()) ? deadline : undefined,
+    tags: Array.isArray(card.tags) ? card.tags.map(String) : undefined,
+    users: Array.isArray(card.users) ? card.users.map(String) : undefined,
+    linkedNoteId:
+      typeof card.linkedNoteId === 'string' ? card.linkedNoteId : undefined,
+    order: 0
+  };
+}
+
+export function applyKanbanSearchFilter(
+  api: KanbanFilterApi,
+  filters: KanbanSearchFilters,
+  lookups: KanbanSearchLookups,
+  tag = KANBAN_SEARCH_FILTER_TAG
+): void {
+  if (!hasActiveKanbanSearchFilters(filters)) {
+    api.exec('filter-cards', { tag });
+    return;
+  }
+  api.exec('filter-cards', {
+    tag,
+    filter: (card) =>
+      matchesKanbanSearchFilters(widgetCardToSearchCard(card), filters, lookups)
+  });
 }

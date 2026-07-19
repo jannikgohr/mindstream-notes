@@ -114,7 +114,8 @@
   } from '$lib/kanban/kanban-yjs';
   import {
     EMPTY_KANBAN_SEARCH_FILTERS,
-    hasActiveKanbanSearchFilters,
+    KANBAN_SEARCH_FILTER_TAG,
+    applyKanbanSearchFilter,
     matchesKanbanSearchFilters,
     type KanbanSearchFilters,
     type KanbanSearchLookups
@@ -140,7 +141,6 @@
 
   const SAVE_DEBOUNCE_MS = 800;
   const HISTORY_IDLE_DEFAULT_S = 180;
-  const KANBAN_SEARCH_FILTER_TAG = 'mindstream-kanban-search';
   const LABEL_COLORS = [
     '#3b82f6',
     '#22c55e',
@@ -323,7 +323,6 @@
     })),
     priorities: priorityOptions
   });
-  const searchActive = $derived(hasActiveKanbanSearchFilters(searchFilters));
   const searchMatchCount = $derived.by(
     () =>
       board.cards.filter((card) =>
@@ -451,21 +450,7 @@
 
   $effect(() => {
     if (!api) return;
-    const filters = searchFilters;
-    const lookups = searchLookups;
-    if (!searchActive) {
-      api.exec('filter-cards', { tag: KANBAN_SEARCH_FILTER_TAG });
-      return;
-    }
-    api.exec('filter-cards', {
-      tag: KANBAN_SEARCH_FILTER_TAG,
-      filter: (card: Record<string, unknown>) =>
-        matchesKanbanSearchFilters(
-          mapCard(card, String(card.column ?? ''), 0),
-          filters,
-          lookups
-        )
-    });
+    applyKanbanSearchFilter(api, searchFilters, searchLookups);
   });
 
   // ---- Column (list) management ----
