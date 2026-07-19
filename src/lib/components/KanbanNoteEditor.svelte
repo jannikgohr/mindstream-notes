@@ -995,7 +995,7 @@
           <div
             class="relative min-h-0 flex-1"
             role="presentation"
-            oncontextmenu={openCardMenu}
+            oncontextmenucapture={openCardMenu}
           >
             <Kanban
               cards={board.cards}
