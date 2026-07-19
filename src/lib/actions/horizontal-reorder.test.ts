@@ -45,4 +45,20 @@ describe('horizontal reorder helpers', () => {
     expect(horizontalInsertionIndex(items, 'a', elements, 80)).toBe(1);
     expect(horizontalInsertionIndex(items, 'a', elements, 140)).toBe(2);
   });
+
+  it('skips visible items that do not have a measured element', () => {
+    const items = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
+    const elements = [element('c', 100)];
+
+    expect(horizontalInsertionIndex(items, 'a', elements, 80)).toBe(1);
+  });
+
+  it('returns a shallow copy when the source item is missing', () => {
+    const items = [{ id: 'a' }, { id: 'b' }];
+
+    const next = moveItemToIndex(items, 'missing', 0);
+
+    expect(next).toEqual(items);
+    expect(next).not.toBe(items);
+  });
 });
