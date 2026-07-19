@@ -239,6 +239,19 @@ export function upsertBoardIntoYDoc(
   writeBoardToYDoc(doc, board, origin, false);
 }
 
+/**
+ * Community-license undo/redo for the board. SVAR's built-in history is a PRO
+ * feature, so the editor tracks our own Yjs writes instead. Only local widget
+ * writes carry `KANBAN_LOCAL_ORIGIN`, which keeps remote sync merges and
+ * history restores out of the user's undo stack.
+ */
+export function createKanbanUndoManager(doc: Y.Doc): Y.UndoManager {
+  return new Y.UndoManager([columnsArray(doc), cardsArray(doc)], {
+    trackedOrigins: new Set([KANBAN_LOCAL_ORIGIN]),
+    captureTimeout: 0
+  });
+}
+
 /** Remove a single card by id — the only way the live editor deletes a card. */
 export function removeCardFromYDoc(
   doc: Y.Doc,

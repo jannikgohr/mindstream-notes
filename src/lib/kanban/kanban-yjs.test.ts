@@ -3,6 +3,7 @@ import * as Y from 'yjs';
 import {
   KANBAN_LOCAL_ORIGIN,
   boardToPlainText,
+  createKanbanUndoManager,
   defaultColumns,
   isBoardEmpty,
   isLocalOnly,
@@ -171,6 +172,78 @@ describe('kanban-yjs seeding', () => {
     });
     seedDefaultBoard(doc);
     expect(readBoardFromYDoc(doc).cards).toHaveLength(1);
+  });
+});
+
+describe('kanban-yjs community undo manager', () => {
+  it('undoes and redoes local card and column edits', () => {
+    const doc = new Y.Doc();
+    writeBoardToYDoc(doc, sampleBoard());
+    const undoManager = createKanbanUndoManager(doc);
+
+    upsertBoardIntoYDoc(doc, {
+      columns: [
+        { id: 'done', label: 'Done', order: 0 },
+        { id: 'todo', label: 'To Do', order: 1 }
+      ],
+      cards: [{ id: 'c1', label: 'First edited', column: 'done', order: 0 }]
+    });
+
+    expect(undoManager.undoStack).toHaveLength(1);
+    expect(readBoardFromYDoc(doc).columns.map((c) => c.id)).toEqual([
+      'done',
+      'todo'
+    ]);
+    expect(
+      readBoardFromYDoc(doc).cards.find((c) => c.id === 'c1')
+    ).toMatchObject({
+      label: 'First edited',
+      column: 'done'
+    });
+
+    undoManager.undo();
+    expect(readBoardFromYDoc(doc).columns.map((c) => c.id)).toEqual([
+      'todo',
+      'done'
+    ]);
+    expect(
+      readBoardFromYDoc(doc).cards.find((c) => c.id === 'c1')
+    ).toMatchObject({
+      label: 'First',
+      column: 'todo'
+    });
+
+    undoManager.redo();
+    expect(readBoardFromYDoc(doc).columns.map((c) => c.id)).toEqual([
+      'done',
+      'todo'
+    ]);
+    expect(
+      readBoardFromYDoc(doc).cards.find((c) => c.id === 'c1')
+    ).toMatchObject({
+      label: 'First edited',
+      column: 'done'
+    });
+
+    undoManager.destroy();
+  });
+
+  it('ignores remote-origin writes', () => {
+    const doc = new Y.Doc();
+    writeBoardToYDoc(doc, sampleBoard());
+    const undoManager = createKanbanUndoManager(doc);
+
+    writeBoardToYDoc(
+      doc,
+      {
+        ...sampleBoard(),
+        columns: [{ id: 'remote', label: 'Remote', order: 0 }]
+      },
+      'remote'
+    );
+
+    expect(undoManager.undoStack).toHaveLength(0);
+    undoManager.destroy();
   });
 });
 

@@ -22,7 +22,6 @@
    */
 
   import { onDestroy, onMount } from 'svelte';
-  import { readable } from 'svelte/store';
   import * as Y from 'yjs';
   import { Awareness } from 'y-protocols/awareness';
   import { mode } from 'mode-watcher';
@@ -83,6 +82,7 @@
     KANBAN_LOCAL_ORIGIN,
     KANBAN_RESTORE_ORIGIN,
     boardToPlainText,
+    createKanbanUndoManager,
     isLocalOnly,
     observeBoard,
     readBoardFromYDoc,
@@ -103,7 +103,6 @@
 
   const SAVE_DEBOUNCE_MS = 800;
   const HISTORY_IDLE_DEFAULT_S = 180;
-  const EMPTY_KANBAN_HISTORY = readable({ undo: 0, redo: 0 });
   /** Tag applied to updates merged in from a background sync — already on
    *  disk, so they must not re-trigger a save (would ping-pong with peers). */
   const REMOTE_SYNC_ORIGIN = Symbol('mindstream:kanban-sync-merge');
@@ -117,6 +116,7 @@
 
   let yDoc: Y.Doc | null = null;
   let awareness: Awareness | null = null;
+  let undoManager: Y.UndoManager | null = null;
   let api = $state<KanbanInstanceApi | null>(null);
   let toolbarScrollEl = $state<HTMLDivElement | null>(null);
   /** Board props handed to the widget. Reassigned only on remote changes. */
@@ -137,6 +137,8 @@
   let historyDirty = false;
   let interacted = false;
   let capturingHistory = false;
+  let undoDepth = $state(0);
+  let redoDepth = $state(0);
 
   // ---- Trash detection (mirrors NoteEditor / FreeformNoteEditor) ----
   function ancestorIsTrash(parentId: string | null): boolean {
@@ -202,11 +204,13 @@
   ]);
 
   const ThemeComponent = $derived($mode === 'dark' ? WillowDark : Willow);
-  const kanbanHistory = $derived(
-    api ? api.getReactiveState().history : EMPTY_KANBAN_HISTORY
-  );
-  const canUndo = $derived(Boolean($kanbanHistory.undo));
-  const canRedo = $derived(Boolean($kanbanHistory.redo));
+  const canUndo = $derived(undoDepth > 0);
+  const canRedo = $derived(redoDepth > 0);
+
+  function updateUndoState(): void {
+    undoDepth = undoManager?.undoStack.length ?? 0;
+    redoDepth = undoManager?.redoStack.length ?? 0;
+  }
 
   // ---- Widget -> Y.Doc reconciliation ----
   function mapCard(
@@ -280,6 +284,7 @@
   function syncFromWidget(): void {
     if (!yDoc || !api || isTrashed) return;
     upsertBoardIntoYDoc(yDoc, boardFromApi(), KANBAN_LOCAL_ORIGIN);
+    updateUndoState();
   }
 
   /** Additive edits keep every card; only an explicit delete removes one. */
@@ -288,9 +293,7 @@
     'update-card',
     'move-card',
     'duplicate-card',
-    'update-column',
-    'undo',
-    'redo'
+    'update-column'
   ] as const;
 
   function handleInit(kanbanApi: KanbanInstanceApi): void {
@@ -336,6 +339,11 @@
   } | null>(null);
   let listMenu = $state<{ id: string; x: number; y: number } | null>(null);
   let renamingListId = $state<string | null>(null);
+  let draggingListId = $state<string | null>(null);
+  let listDropTarget = $state<{
+    id: string;
+    position: 'before' | 'after';
+  } | null>(null);
 
   function addColumn(): void {
     if (!yDoc || isTrashed) return;
@@ -347,6 +355,7 @@
     };
     upsertBoardIntoYDoc(yDoc, { columns: [column], cards: [] });
     board = readBoardFromYDoc(yDoc);
+    updateUndoState();
     // Drop straight into inline rename so the user can name it immediately.
     renamingListId = column.id;
   }
@@ -377,13 +386,17 @@
   }
 
   function undoKanbanAction(): void {
-    if (!api || isTrashed || !canUndo) return;
-    void api.exec('undo', {});
+    if (!undoManager || isTrashed || !canUndo) return;
+    undoManager.undo();
+    if (yDoc) board = readBoardFromYDoc(yDoc);
+    updateUndoState();
   }
 
   function redoKanbanAction(): void {
-    if (!api || isTrashed || !canRedo) return;
-    void api.exec('redo', {});
+    if (!undoManager || isTrashed || !canRedo) return;
+    undoManager.redo();
+    if (yDoc) board = readBoardFromYDoc(yDoc);
+    updateUndoState();
   }
 
   const listMenuItems = $derived<(MenuItem | 'separator')[]>(
@@ -436,6 +449,75 @@
       cards: []
     });
     board = readBoardFromYDoc(yDoc);
+    updateUndoState();
+  }
+
+  function startListDrag(event: DragEvent, id: string): void {
+    if (renamingListId === id) {
+      event.preventDefault();
+      return;
+    }
+    draggingListId = id;
+    listDropTarget = null;
+    event.dataTransfer?.setData('text/plain', id);
+    if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+  }
+
+  function dragListOver(event: DragEvent, id: string): void {
+    const sourceId =
+      draggingListId ?? event.dataTransfer?.getData('text/plain');
+    if (!sourceId || sourceId === id) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    listDropTarget = {
+      id,
+      position: event.clientX > rect.left + rect.width / 2 ? 'after' : 'before'
+    };
+  }
+
+  function dropList(event: DragEvent, id: string): void {
+    event.preventDefault();
+    const sourceId =
+      draggingListId ?? event.dataTransfer?.getData('text/plain');
+    const position =
+      listDropTarget?.id === id ? listDropTarget.position : 'before';
+    if (sourceId && sourceId !== id) reorderColumn(sourceId, id, position);
+    endListDrag();
+  }
+
+  function endListDrag(): void {
+    draggingListId = null;
+    listDropTarget = null;
+  }
+
+  function reorderColumn(
+    sourceId: string,
+    targetId: string,
+    position: 'before' | 'after'
+  ): void {
+    if (!yDoc || isTrashed) return;
+    const columns = [...board.columns];
+    const sourceIndex = columns.findIndex((c) => c.id === sourceId);
+    const targetIndex = columns.findIndex((c) => c.id === targetId);
+    if (sourceIndex < 0 || targetIndex < 0) return;
+
+    const [moved] = columns.splice(sourceIndex, 1);
+    let insertIndex = targetIndex;
+    if (sourceIndex < targetIndex) insertIndex -= 1;
+    if (position === 'after') insertIndex += 1;
+    columns.splice(
+      Math.max(0, Math.min(insertIndex, columns.length)),
+      0,
+      moved
+    );
+
+    upsertBoardIntoYDoc(yDoc, {
+      columns: columns.map((col, order) => ({ ...col, order })),
+      cards: []
+    });
+    board = readBoardFromYDoc(yDoc);
+    updateUndoState();
   }
 
   async function removeColumn(id: string): Promise<void> {
@@ -458,6 +540,7 @@
     }
     removeColumnFromYDoc(yDoc, id, true);
     board = readBoardFromYDoc(yDoc);
+    updateUndoState();
   }
 
   // ---- Save ----
@@ -603,6 +686,8 @@
       // three so the user lands on a usable board. No-op for existing boards.
       seedDefaultBoard(localYDoc);
       board = readBoardFromYDoc(localYDoc);
+      undoManager = createKanbanUndoManager(localYDoc);
+      updateUndoState();
 
       const localAwareness = new Awareness(localYDoc);
       awareness = localAwareness;
@@ -752,6 +837,8 @@
     provider = null;
     awareness?.destroy();
     awareness = null;
+    undoManager?.destroy();
+    undoManager = null;
     yDoc?.destroy();
     yDoc = null;
   });
@@ -807,7 +894,25 @@
                 <ToolbarSeparator />
 
                 {#each board.columns as col (col.id)}
-                  <div class="kanban-list-chip">
+                  <div
+                    class="kanban-list-chip"
+                    class:kanban-list-chip-dragging={draggingListId === col.id}
+                    class:kanban-list-chip-drop-before={listDropTarget?.id ===
+                      col.id && listDropTarget.position === 'before'}
+                    class:kanban-list-chip-drop-after={listDropTarget?.id ===
+                      col.id && listDropTarget.position === 'after'}
+                    role="group"
+                    aria-label={col.label}
+                    draggable={renamingListId !== col.id}
+                    aria-grabbed={draggingListId === col.id}
+                    ondragstart={(event) => startListDrag(event, col.id)}
+                    ondragover={(event) => dragListOver(event, col.id)}
+                    ondragleave={() => {
+                      if (listDropTarget?.id === col.id) listDropTarget = null;
+                    }}
+                    ondrop={(event) => dropList(event, col.id)}
+                    ondragend={endListDrag}
+                  >
                     {#if renamingListId === col.id}
                       <input
                         class="kanban-list-name"
@@ -858,7 +963,6 @@
               columns={board.columns}
               card={cardShape}
               readonly={isTrashed}
-              history
               init={handleInit}
             />
             {#if api && !isTrashed}
@@ -921,6 +1025,7 @@
     background: var(--background);
   }
   .kanban-list-chip {
+    position: relative;
     display: inline-flex;
     height: 2.25rem;
     flex-shrink: 0;
@@ -931,10 +1036,27 @@
     background: var(--card);
     padding-left: 0.5rem;
     padding-right: 0.125rem;
+    cursor: grab;
+    transition:
+      border-color 120ms,
+      box-shadow 120ms,
+      opacity 120ms;
+  }
+  .kanban-list-chip:active {
+    cursor: grabbing;
   }
   .kanban-list-chip:focus-within {
     border-color: var(--ring);
     box-shadow: 0 0 0 1px var(--ring);
+  }
+  .kanban-list-chip-dragging {
+    opacity: 0.55;
+  }
+  .kanban-list-chip-drop-before {
+    box-shadow: -3px 0 0 var(--ring);
+  }
+  .kanban-list-chip-drop-after {
+    box-shadow: 3px 0 0 var(--ring);
   }
   .kanban-list-label {
     max-width: 12rem;
