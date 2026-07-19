@@ -57,6 +57,7 @@
   import {
     collectionIsSharedByMe,
     collectionIsSharedRoot,
+    collectionUserCanManageSharing,
     collectionIsUnderTrash,
     collectionScopeIsReadOnly,
     itemSharedRootId,
@@ -803,9 +804,28 @@
       if (source === 'shared') {
         const editable = sharedFolderIsEditable(id, tree.collectionsById);
         if (isSharedAnchor(id)) {
+          const canManageShare = folder
+            ? collectionUserCanManageSharing(folder)
+            : false;
           const items: (MenuItem | 'separator')[] = editable
             ? [...folderCreateMenuItems(id), 'separator']
             : [];
+          if (canManageShare) {
+            items.push({
+              label: tUi('sharing.menu.group'),
+              children: [
+                {
+                  label: tUi('sharing.menu.shareFolder'),
+                  onSelect: () => openCollectionShareDialog(id, 'invite')
+                },
+                {
+                  label: tUi('sharing.menu.manageAccess'),
+                  onSelect: () => openCollectionShareDialog(id, 'access')
+                }
+              ]
+            });
+            items.push('separator');
+          }
           items.push({
             label: tUi('sharing.menu.leaveFolder'),
             destructive: true,

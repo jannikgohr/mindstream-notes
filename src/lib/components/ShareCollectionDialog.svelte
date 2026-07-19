@@ -7,6 +7,7 @@
     type CollectionShareAccessLevel
   } from '$lib/api/sharing';
   import { loadTree, tree } from '$lib/stores/tree.svelte';
+  import { collectionUserCanManageSharing } from '$lib/stores/note-source.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
   import {
     closeCollectionShareDialog,
@@ -35,8 +36,10 @@
   const collection = $derived(
     collectionId ? tree.collectionsById[collectionId] : null
   );
-  // Once a folder is shared, offer the switch to the manage-access view.
-  const alreadyShared = $derived(collection?.shared_by_me === true);
+  // Owners and admin recipients can switch from inviting into member management.
+  const canManageSharing = $derived(
+    collection ? collectionUserCanManageSharing(collection) : false
+  );
 
   /**
    * Invite every recipient in the field (comma-separated) at the chosen access
@@ -209,7 +212,7 @@
         </div>
       </form>
 
-      {#if alreadyShared}
+      {#if canManageSharing}
         <div class="border-t border-border px-4 py-3">
           <Button
             type="button"
