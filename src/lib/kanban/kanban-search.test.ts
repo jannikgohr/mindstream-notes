@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   EMPTY_KANBAN_SEARCH_FILTERS,
+  KANBAN_SEARCH_FILTER_TAG,
+  applyKanbanSearchFilter,
   hasActiveKanbanSearchFilters,
   kanbanCardSearchText,
   matchesKanbanSearchFilters,
+  widgetCardToSearchCard,
+  type KanbanFilterApi,
   type KanbanSearchLookups
 } from './kanban-search';
 import type { KanbanCardData } from './kanban-yjs';
@@ -96,5 +100,65 @@ describe('kanban search filters', () => {
         linkedOnly: true
       })
     ).toBe(true);
+  });
+
+  it('normalizes widget cards before matching', () => {
+    expect(
+      widgetCardToSearchCard({
+        id: 42,
+        label: 'Widget card',
+        column: 'todo',
+        priority: 2,
+        tags: ['ui'],
+        users: ['janni'],
+        linkedNoteId: 'note-1'
+      })
+    ).toMatchObject({
+      id: '42',
+      label: 'Widget card',
+      column: 'todo',
+      priority: 2,
+      tags: ['ui'],
+      users: ['janni'],
+      linkedNoteId: 'note-1'
+    });
+  });
+
+  it('clears the tagged SVAR filter when no search filters are active', () => {
+    const calls: Array<Parameters<KanbanFilterApi['exec']>> = [];
+    const api: KanbanFilterApi = {
+      exec: (...args) => {
+        calls.push(args);
+      }
+    };
+
+    applyKanbanSearchFilter(api, EMPTY_KANBAN_SEARCH_FILTERS, lookups);
+
+    expect(calls).toEqual([
+      ['filter-cards', { tag: KANBAN_SEARCH_FILTER_TAG }]
+    ]);
+  });
+
+  it('installs a tagged SVAR filter predicate when search filters are active', () => {
+    const calls: Array<Parameters<KanbanFilterApi['exec']>> = [];
+    const api: KanbanFilterApi = {
+      exec: (...args) => {
+        calls.push(args);
+      }
+    };
+
+    applyKanbanSearchFilter(
+      api,
+      { ...EMPTY_KANBAN_SEARCH_FILTERS, query: 'release', linkedOnly: true },
+      lookups
+    );
+
+    expect(calls[0][0]).toBe('filter-cards');
+    expect(calls[0][1].tag).toBe(KANBAN_SEARCH_FILTER_TAG);
+    expect(calls[0][1].filter).toBeTypeOf('function');
+    expect(calls[0][1].filter?.({ ...card })).toBe(true);
+    expect(calls[0][1].filter?.({ ...card, linkedNoteId: undefined })).toBe(
+      false
+    );
   });
 });
