@@ -36,8 +36,12 @@ pub struct NoteSummary {
     pub pushed: bool,
     /// Discriminator that tells the frontend which editor component to
     /// render. Values in use today: `"markdown"` (Crepe / y-prosemirror),
-    /// `"freeform"` / `"ink"` (drawing surfaces), and `"pdf"` (PDF bytes
-    /// stored as a separate asset, annotations in yrs_state).
+    /// `"freeform"` / `"ink"` (drawing surfaces), `"pdf"` (PDF bytes
+    /// stored as a separate asset, annotations in yrs_state), and
+    /// `"kanban"` (SVAR board columns/cards stored directly in yrs_state).
+    /// The column is a free-form string — `create()` stores whatever the
+    /// frontend sends and sync round-trips it — so new kinds need no Rust
+    /// change; the frontend `KNOWN_NOTE_KINDS` list is the real gate.
     /// On the summary so the file tree / dispatch can branch without
     /// loading the full note. Serde-defaulted to "markdown" so legacy
     /// rows decoded before the column existed still parse cleanly.

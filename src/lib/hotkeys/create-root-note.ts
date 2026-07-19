@@ -1,7 +1,7 @@
 import { requestOpenNote } from '$lib/stores/open-note-intent.svelte';
 import { createNoteIn } from '$lib/stores/tree.svelte';
 
-type RootNoteKind = 'markdown' | 'freeform' | 'ink';
+type RootNoteKind = 'markdown' | 'freeform' | 'ink' | 'kanban';
 
 function rootNoteTitle(kind: RootNoteKind): string {
   switch (kind) {
@@ -9,6 +9,8 @@ function rootNoteTitle(kind: RootNoteKind): string {
       return 'Untitled drawing canvas';
     case 'ink':
       return 'Untitled handwritten note';
+    case 'kanban':
+      return 'Untitled board';
     case 'markdown':
       return 'Untitled';
   }

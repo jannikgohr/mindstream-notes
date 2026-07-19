@@ -183,6 +183,35 @@
       "icon": "pencil-line",
       "sections": [
         {
+          "id": "editor.noteTypes",
+          "settings": [
+            {
+              "id": "editor.noteTypes.freeform",
+              "scope": "V",
+              "type": "toggle",
+              "default": true
+            },
+            {
+              "id": "editor.noteTypes.ink",
+              "scope": "V",
+              "type": "toggle",
+              "default": true
+            },
+            {
+              "id": "editor.noteTypes.pdf",
+              "scope": "V",
+              "type": "toggle",
+              "default": true
+            },
+            {
+              "id": "editor.noteTypes.kanban",
+              "scope": "V",
+              "type": "toggle",
+              "default": true
+            }
+          ]
+        },
+        {
           "id": "editor.input",
           "settings": [
             {

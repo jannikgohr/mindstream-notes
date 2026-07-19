@@ -4,7 +4,8 @@ import {
   FileQuestion,
   FileText,
   FileType2,
-  PencilRuler
+  PencilRuler,
+  SquareKanban
 } from '@lucide/svelte';
 import { noteKindIcon } from './note-kind-icon';
 
@@ -19,6 +20,7 @@ describe('noteKindIcon', () => {
     expect(noteKindIcon('freeform')).toBe(PencilRuler);
     expect(noteKindIcon('ink')).toBe(Feather);
     expect(noteKindIcon('pdf')).toBe(FileType2);
+    expect(noteKindIcon('kanban')).toBe(SquareKanban);
   });
 
   it('uses FileQuestion for an unknown future kind', () => {
