@@ -14,6 +14,7 @@ import {
   signedCollabFrameNeedsAuthRefresh,
   type CollabFrameAuth
 } from './signed-collab-frame';
+import { isJoinChallenge, signJoinChallenge } from './collab-join-challenge';
 
 const FRAME_SYNC_STEP_1 = 0x00;
 const FRAME_SYNC_STEP_2 = 0x01;
@@ -23,6 +24,9 @@ const SIGNED_REQUIRED_TYPES = new Set([FRAME_SYNC_STEP_2]);
 const RECONNECT_INITIAL_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
 const AUTH_REFRESH_THROTTLE_MS = 5_000;
+/** How long to wait for the relay's join challenge before dropping the
+ *  socket. Matches $lib/sync/collab-provider. */
+const JOIN_CHALLENGE_TIMEOUT_MS = 4_000;
 
 function frameName(type: number): string {
   switch (type) {
@@ -61,6 +65,9 @@ export interface InkWebCollabHandle {
 export interface InkWebCollabProviderOptions {
   url: string;
   roomId: string;
+  /** Private half of the room's join keypair (PKCS#8 DER, base64), used to
+   *  answer the relay's challenge. See $lib/sync/collab-join-challenge. */
+  joinPrivateKeyPkcs8B64?: string;
   keyBytes: Uint8Array;
   handle: InkWebCollabHandle;
   noteId: string;
@@ -76,6 +83,9 @@ export class InkWebCollabProvider {
   private reconnectAttempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private lastAuthRefreshRequest = 0;
+  /** False until the relay's join challenge is answered. */
+  private joined = false;
+  private joinDeadlineTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private readonly opts: InkWebCollabProviderOptions) {
     console.info(
@@ -91,6 +101,7 @@ export class InkWebCollabProvider {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    this.clearJoinDeadline();
     if (this.ws) {
       try {
         this.ws.close();
@@ -145,14 +156,31 @@ export class InkWebCollabProvider {
       this.reconnectAttempt = 0;
       this.opts.onStatusChange?.(true);
       console.info('[ink-collab] open note=%s', this.opts.noteId);
-      const sv = this.opts.handle.encode_state_vector();
-      void this.send(FRAME_SYNC_STEP_1, sv);
+      if (!this.opts.joinPrivateKeyPkcs8B64) {
+        this.startSync();
+        return;
+      }
+      // Say nothing until the relay has challenged us. If none arrives,
+      // drop the socket rather than downgrade to an unauthenticated
+      // session; reconnect backoff keeps retrying.
+      this.joinDeadlineTimer = setTimeout(() => {
+        this.joinDeadlineTimer = null;
+        if (this.joined || this.destroyed) return;
+        console.warn(
+          '[ink-collab] no join challenge from relay note=%s — closing (relay too old?)',
+          this.opts.noteId
+        );
+        this.ws?.close();
+      }, JOIN_CHALLENGE_TIMEOUT_MS);
     };
     ws.onmessage = (e) => {
       void this.handleMessage(e.data);
     };
     ws.onclose = (e) => {
       this.ws = null;
+      // The next socket has to re-answer a fresh challenge.
+      this.joined = false;
+      this.clearJoinDeadline();
       this.opts.onStatusChange?.(false);
       console.info(
         '[ink-collab] close note=%s code=%d reason=%s',
@@ -216,10 +244,55 @@ export class InkWebCollabProvider {
     }
   }
 
+  private startSync(): void {
+    if (this.joined || this.destroyed) return;
+    this.joined = true;
+    const sv = this.opts.handle.encode_state_vector();
+    void this.send(FRAME_SYNC_STEP_1, sv);
+  }
+
+  private clearJoinDeadline(): void {
+    if (this.joinDeadlineTimer !== null) {
+      clearTimeout(this.joinDeadlineTimer);
+      this.joinDeadlineTimer = null;
+    }
+  }
+
+  /** Answer the relay's challenge. True means the frame was a challenge and
+   *  the caller should stop processing it. */
+  private async handleJoinChallenge(frame: Uint8Array): Promise<boolean> {
+    if (this.joined || !isJoinChallenge(frame)) return false;
+    this.clearJoinDeadline();
+    const key = this.opts.joinPrivateKeyPkcs8B64;
+    if (!key) return true;
+    const response = await signJoinChallenge(frame, this.opts.roomId, key);
+    if (this.destroyed) return true;
+    if (!response) {
+      console.warn(
+        '[ink-collab] could not answer join challenge note=%s',
+        this.opts.noteId
+      );
+      this.destroy();
+      return true;
+    }
+    const ws = this.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return true;
+    try {
+      ws.send(response);
+    } catch (err) {
+      console.warn('[ink-collab] join response send failed:', err);
+      return true;
+    }
+    console.debug('[ink-collab] joined note=%s', this.opts.noteId);
+    this.startSync();
+    return true;
+  }
+
   private async handleMessage(data: unknown): Promise<void> {
     if (!(data instanceof ArrayBuffer)) return;
     if (!this.cryptoKey) return;
     const frame = new Uint8Array(data);
+    if (await this.handleJoinChallenge(frame)) return;
 
     let decoded;
     try {
