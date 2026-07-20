@@ -653,15 +653,29 @@ Worth recording so it does not regress:
 
 ## Verifying the collab changes
 
-The join challenge, the signed-frame rules, and the key derivations are all
-covered by unit tests on both sides plus a live run against the real relay —
-see [Join challenge](#join-challenge). Two things that suite cannot reach, and
-that a T4 two-client run should confirm:
+Covered by unit tests on both sides, plus a suite of specs against the real
+stack ([`collab-relay-auth.spec.ts`](../e2e-tests/backend/collab-relay-auth.spec.ts),
+[`edge-hardening.spec.ts`](../e2e-tests/backend/edge-hardening.spec.ts)) that
+assert the properties only a live relay and a live nginx can show: an
+unauthenticated socket receives zero frames, a wrong-key signature is closed
+`1008`, a captured answer replayed onto a fresh nonce is rejected, frames never
+cross rooms, and the auth limiter sheds a burst while sync traffic and the
+capability probe stay untouched.
 
-- Two real clients still converge on a shared note, now that every frame type
-  requires a signature.
-- A personal (unshared) note still syncs live between two devices of the same
-  account, now that its room id and wire key are both derived.
+The CSP was verified by a T3 run against a packaged build: the app launched,
+rendered, edited and restarted with zero CSP violations in any spec.
+
+**Still unverified:** two-client convergence over the live relay. The T4
+`collab.e2e.ts` and `sharing.e2e.ts` specs are red, but they are red on
+`e5370f5` too — pre-existing, not fallout from this branch (see
+[e2e/status.md](e2e/status.md#currently-red--measured-2026-07-20)). Until
+those are fixed, nothing exercises "two real clients converge on a shared note
+now that every frame type requires a signature".
+
+**Worth adding**, and not yet written: a read-only member cannot write, and a
+revoked member loses access after epoch rotation. Both are T4. They are the
+difference between "the crypto is right" and "the permission model is right",
+and only the second class of bug hands a colleague data they should not have.
 
 ## Smoke-testing the CSP
 

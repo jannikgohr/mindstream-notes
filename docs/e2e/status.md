@@ -7,19 +7,41 @@ hidden passing coverage** — a run's pass count reflects implemented scenarios.
 
 ## What's landed
 
-| Spec                          | Tier | Covers                                                                 |
-| ----------------------------- | ---- | ---------------------------------------------------------------------- |
-| `editor-roundtrip.e2e.ts`     | T3   | flow 1.1 through real `save_note` + SQLite + restart                   |
-| `history.e2e.ts`              | T3   | capture / restore / Undo / editor-undo isolation / restart persistence |
-| `trash-retention.e2e.ts`      | T3   | flows 1.5 + 3.3 (retention sweep on boot)                              |
-| `settings-persist.e2e.ts`     | T3   | flows 3.1 / 3.2                                                        |
-| `sync-history.e2e.ts`         | T4   | per-device-history negative assertion; 4.10 edit-wins-over-delete      |
-| `sharing.e2e.ts`              | T4   | sharing flows 4.1–4.4 + core 4.7 subtree/asset convergence + 4.7b      |
-| `sharing-multi-device.e2e.ts` | T4   | owner-second-device 4.8–4.9 re-home cases                              |
+| Spec                          | Tier | Covers                                                                                         |
+| ----------------------------- | ---- | ---------------------------------------------------------------------------------------------- |
+| `editor-roundtrip.e2e.ts`     | T3   | flow 1.1 through real `save_note` + SQLite + restart                                           |
+| `history.e2e.ts`              | T3   | capture / restore / Undo / editor-undo isolation / restart persistence _(one red — see below)_ |
+| `trash-retention.e2e.ts`      | T3   | flows 1.5 + 3.3 (retention sweep on boot)                                                      |
+| `settings-persist.e2e.ts`     | T3   | flows 3.1 / 3.2                                                                                |
+| `sync-history.e2e.ts`         | T4   | per-device-history negative assertion; 4.10 edit-wins-over-delete                              |
+| `sharing.e2e.ts`              | T4   | sharing flows 4.1–4.4 + core 4.7 subtree/asset convergence + 4.7b _(mostly red — see below)_   |
+| `sharing-multi-device.e2e.ts` | T4   | owner-second-device 4.8–4.9 re-home cases                                                      |
 
-Validated app assertions cover collab propagation, restore convergence, restore
-confirmation, reconnect convergence, sharing 4.1–4.7b, and edit-wins-over-delete
-for plain vault notes.
+Validated app assertions cover restore convergence, reconnect convergence,
+seeded-note convergence, and edit-wins-over-delete for plain vault notes.
+
+## Currently red — measured 2026-07-20
+
+A full local run of every tier found three specs failing. All three were
+confirmed **pre-existing**, by checking out `e5370f5` (the
+`feat/collection-sharing` merge), rebuilding, and re-running: the failures
+reproduce identically there, down to the same timeout signatures. They are not
+fallout from the security-hardening branch.
+
+| Spec             | Tier | State                                                                        |
+| ---------------- | ---- | ---------------------------------------------------------------------------- |
+| `history.e2e.ts` | T3   | 4/5 pass. `Ctrl+Z does not revert a restore` fails — undo **does** revert it |
+| `sharing.e2e.ts` | T4   | 2/8 pass. The share flow times out at the "Sharing" context-menu item        |
+| `collab.e2e.ts`  | T4   | `before all` hook fails: browserA never observes browserB as a live peer     |
+
+The sharing table row above therefore describes intended coverage, not passing
+coverage. Six of its eight assertions are red, and the first failure is at the
+menu item — before a share is created — so the later failures are cascades, not
+independent bugs.
+
+`collab.e2e.ts` is listed under "What's pending" below, so its failure is
+expected; `history.e2e.ts` and `sharing.e2e.ts` are regressions against what
+this document previously claimed was validated.
 
 ## What's pending
 
