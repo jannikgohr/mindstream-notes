@@ -36,6 +36,7 @@ import {
   mermaidLanguageDescription,
   preserveBlankLines,
   renderMermaidPreview,
+  stripPastedInterBlockWhitespace,
   userMentionPlugins,
   wikilinkPlugins,
   type MarkdownSearchBridge,
@@ -238,6 +239,12 @@ export function buildCrepe(opts: CrepeSetupOptions): Crepe {
   // paragraphs <-> k + 1 blank lines) instead of smuggling HTML into the doc.
   crepe.editor.remove(remarkPreserveEmptyLinePlugin);
   crepe.editor.use(preserveBlankLines);
+
+  // Pasting something copied out of a ProseMirror editor preserves whitespace
+  // verbatim, so newlines between the clipboard HTML's block tags would land as
+  // a paragraph of spaces. Unconditional: it's a correctness fix for our own
+  // copy/paste, not a feature.
+  crepe.editor.use(stripPastedInterBlockWhitespace);
 
   crepe.editor.use(collab);
 
