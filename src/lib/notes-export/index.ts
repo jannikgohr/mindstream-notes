@@ -284,7 +284,7 @@ async function exportFreeform(
   parentDir: string,
   takenFor: (dir: string) => Set<string>
 ): Promise<AssetWriteSummary> {
-  const excalidraw = buildExcalidrawFile(note.yrs_state);
+  const excalidraw = await buildExcalidrawFile(note.yrs_state);
   if (!excalidraw) {
     // Empty doc — write an empty scene so the file still appears in
     // the export, opens cleanly, and round-trips back if re-imported.

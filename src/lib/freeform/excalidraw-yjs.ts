@@ -18,6 +18,13 @@
  * makes Yjs retain a stream of large replaced arrays and quickly turns
  * a simple stroke into a huge persisted payload. We store elements/
  * files by id, store order separately, and throttle local writes.
+ *
+ * Image bytes are deliberately NOT in here. The files map holds a
+ * `PersistedFileRef` pointing at the `assets` table (see
+ * excalidraw-files.ts) — putting megabytes of base64 in the Y.Doc would
+ * mean every sync ships the whole image again. Documents written before
+ * that change stored files inline, so the read path still tolerates the
+ * old shape and migrates it on sight.
  */
 
 import * as Y from 'yjs';
@@ -27,6 +34,11 @@ import type {
   BinaryFiles,
   ExcalidrawImperativeAPI
 } from '@excalidraw/excalidraw/types';
+import {
+  ExcalidrawFileStore,
+  isPersistedFileRef,
+  type PersistedFileRef
+} from './excalidraw-files';
 import type { ExcalidrawElement } from '@excalidraw/excalidraw/element/types';
 import { CaptureUpdateAction } from '@excalidraw/excalidraw';
 
@@ -53,12 +65,16 @@ type PersistedAppState = Pick<
 export interface ExcalidrawSceneSnapshot {
   elements: readonly ExcalidrawElement[];
   appState: Partial<PersistedAppState>;
-  files: BinaryFiles;
+  /** Asset references, not bytes. Resolve via `ExcalidrawFileStore`. */
+  storedFiles: Record<string, StoredFile>;
 }
 
 export interface BindOptions {
   yDoc: Y.Doc;
   api: ExcalidrawImperativeAPI;
+  /** Owning note for any image the user drops in — image bytes are stored
+   *  as assets against it rather than inside the scene. */
+  noteId: string;
 }
 
 export interface BindHandle {
@@ -73,7 +89,9 @@ function elementsMap(yDoc: Y.Doc): Y.Map<ExcalidrawElement> {
   return yDoc.getMap(YJS_ELEMENTS_KEY);
 }
 
-function filesMap(yDoc: Y.Doc): Y.Map<BinaryFileData> {
+type StoredFile = PersistedFileRef | BinaryFileData;
+
+function filesMap(yDoc: Y.Doc): Y.Map<StoredFile> {
   return yDoc.getMap(YJS_FILES_KEY);
 }
 
@@ -164,9 +182,9 @@ export function readSceneFromYDoc(yDoc: Y.Doc): ExcalidrawSceneSnapshot {
     elements.push(cloneJson(element));
   }
 
-  const files: BinaryFiles = {};
+  const storedFiles: Record<string, StoredFile> = {};
   for (const [id, file] of fMap.entries()) {
-    files[id] = cloneJson(file);
+    storedFiles[id] = cloneJson(file);
   }
 
   return {
@@ -174,7 +192,7 @@ export function readSceneFromYDoc(yDoc: Y.Doc): ExcalidrawSceneSnapshot {
     appState: cloneJson(
       (meta.get('appState') as Partial<PersistedAppState> | undefined) ?? {}
     ),
-    files
+    storedFiles
   };
 }
 
@@ -182,13 +200,13 @@ function writeSceneToYDoc(
   yDoc: Y.Doc,
   elements: readonly ExcalidrawElement[],
   appState: AppState,
-  files: BinaryFiles
+  fileRefs: Record<string, PersistedFileRef>
 ): void {
   const meta = metaMap(yDoc);
   const eMap = elementsMap(yDoc);
   const fMap = filesMap(yDoc);
   const nextIds = new Set(elements.map((element) => element.id));
-  const nextFileIds = new Set(Object.keys(files));
+  const nextFileIds = new Set(Object.keys(fileRefs));
   const nextOrder = elements.map((element) => element.id);
   const nextAppState = sanitizeAppState(appState);
 
@@ -219,11 +237,18 @@ function writeSceneToYDoc(
     if (!nextIds.has(id)) elementsToDelete.push(id);
   }
 
-  const filesToWrite: Array<[string, BinaryFileData]> = [];
-  for (const [id, file] of Object.entries(files)) {
+  const filesToWrite: Array<[string, PersistedFileRef]> = [];
+  for (const [id, ref] of Object.entries(fileRefs)) {
     const current = fMap.get(id);
-    if (!current || current.version !== file.version) {
-      filesToWrite.push([id, file]);
+    // Rewrite when absent, when the version moved, or when the stored value
+    // is still a legacy inline file — that last case is the migration.
+    if (
+      !current ||
+      !isPersistedFileRef(current) ||
+      current.assetId !== ref.assetId ||
+      current.version !== ref.version
+    ) {
+      filesToWrite.push([id, ref]);
     }
   }
   const filesToDelete: string[] = [];
@@ -255,8 +280,8 @@ function writeSceneToYDoc(
       eMap.delete(id);
     }
 
-    for (const [id, file] of filesToWrite) {
-      fMap.set(id, cloneJson(file));
+    for (const [id, ref] of filesToWrite) {
+      fMap.set(id, cloneJson(ref));
     }
     for (const id of filesToDelete) {
       fMap.delete(id);
@@ -264,16 +289,22 @@ function writeSceneToYDoc(
   }, LOCAL_ORIGIN);
 }
 
+/**
+ * One-shot write of whatever is on screen. Image references are carried over
+ * from what the Y.Doc already holds — this path never uploads, so a file the
+ * bound store hasn't persisted yet is left for the next bound flush.
+ */
 export function writeCurrentSceneToYDoc(
   yDoc: Y.Doc,
   api: ExcalidrawImperativeAPI
 ): void {
-  writeSceneToYDoc(
-    yDoc,
-    api.getSceneElements(),
-    api.getAppState(),
-    api.getFiles()
-  );
+  const fMap = filesMap(yDoc);
+  const refs: Record<string, PersistedFileRef> = {};
+  for (const fileId of Object.keys(api.getFiles())) {
+    const stored = fMap.get(fileId);
+    if (isPersistedFileRef(stored)) refs[fileId] = stored;
+  }
+  writeSceneToYDoc(yDoc, api.getSceneElements(), api.getAppState(), refs);
 }
 
 export function replaceSceneInYDoc(
@@ -299,7 +330,7 @@ export function replaceSceneInYDoc(
     for (const element of snapshot.elements) {
       eMap.set(element.id, cloneJson(element));
     }
-    for (const [id, file] of Object.entries(snapshot.files)) {
+    for (const [id, file] of Object.entries(snapshot.storedFiles)) {
       fMap.set(id, cloneJson(file));
     }
   }, HISTORY_RESTORE_ORIGIN);
@@ -307,10 +338,25 @@ export function replaceSceneInYDoc(
 
 export function bindExcalidrawToLocalYDoc({
   yDoc,
-  api
+  api,
+  noteId
 }: BindOptions): BindHandle {
   let applyingRemote = false;
   let destroyed = false;
+  // An upload finishing is a reason to write again: the scene didn't change,
+  // but we can now record where the bytes went.
+  const fileStore = new ExcalidrawFileStore({
+    noteId,
+    onRefsChanged: () => {
+      if (destroyed) return;
+      pending = {
+        elements: api.getSceneElements(),
+        appState: api.getAppState(),
+        files: api.getFiles()
+      };
+      scheduleFlush();
+    }
+  });
   let flushTimer: ReturnType<typeof setTimeout> | null = null;
   let lastFlush = 0;
   let pending: {
@@ -378,11 +424,33 @@ export function bindExcalidrawToLocalYDoc({
     return true;
   }
 
+  // Resolve stored references into real bytes and hand them to Excalidraw.
+  // Async, so images pop in a beat after the scene — same as any other
+  // asset-backed image in the app.
+  function loadFiles(storedFiles: Record<string, StoredFile>): void {
+    const refs: Record<string, PersistedFileRef> = {};
+    for (const [fileId, value] of Object.entries(storedFiles)) {
+      if (isPersistedFileRef(value)) refs[fileId] = value;
+    }
+    fileStore.adopt(refs);
+    void fileStore.resolve(storedFiles).then((files) => {
+      if (destroyed) return;
+      const values = Object.values(files);
+      if (values.length === 0) return;
+      applyingRemote = true;
+      try {
+        api.addFiles(values);
+      } finally {
+        applyingRemote = false;
+      }
+    });
+  }
+
   {
     const seed = readSceneFromYDoc(yDoc);
     captureEls(seed.elements);
-    captureFiles(seed.files);
     lastKnownApp = seed.appState;
+    loadFiles(seed.storedFiles);
   }
 
   function clearFlushTimer(): void {
@@ -397,9 +465,19 @@ export function bindExcalidrawToLocalYDoc({
     const { elements, appState, files } = pending;
     pending = null;
     lastFlush = Date.now();
-    writeSceneToYDoc(yDoc, elements, appState, files);
+    // Upload anything new first; refsFor skips files still in flight, and
+    // onRefsChanged schedules another flush once they land.
+    fileStore.ensureUploaded(files);
+    writeSceneToYDoc(
+      yDoc,
+      elements,
+      appState,
+      fileStore.refsFor(Object.keys(files))
+    );
     captureEls(elements);
-    captureFiles(files);
+    // Only treat files as captured once they're all persisted, so a
+    // half-uploaded scene still triggers a follow-up flush.
+    if (fileStore.hasAllRefs(files)) captureFiles(files);
     lastKnownApp = sanitizeAppState(appState);
   }
 
@@ -434,9 +512,9 @@ export function bindExcalidrawToLocalYDoc({
 
   const applyScene = () => {
     const snapshot = readSceneFromYDoc(yDoc);
+    loadFiles(snapshot.storedFiles);
     applyingRemote = true;
     try {
-      api.addFiles(Object.values(snapshot.files));
       api.updateScene({
         elements: snapshot.elements,
         appState: snapshot.appState as Pick<AppState, keyof PersistedAppState>,
@@ -446,7 +524,6 @@ export function bindExcalidrawToLocalYDoc({
       applyingRemote = false;
     }
     captureEls(snapshot.elements);
-    captureFiles(snapshot.files);
     lastKnownApp = snapshot.appState;
   };
 
@@ -479,6 +556,7 @@ export function bindExcalidrawToLocalYDoc({
       clearFlushTimer();
       unlistenPointerUp();
       unlistenEditor();
+      fileStore.destroy();
       metaMap(yDoc).unobserveDeep(observer);
       elementsMap(yDoc).unobserveDeep(observer);
       filesMap(yDoc).unobserveDeep(observer);
