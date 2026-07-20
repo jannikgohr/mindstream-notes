@@ -88,6 +88,23 @@ test.describe('nginx edge hardening', () => {
     expect(statuses).not.toContain(429);
   });
 
+  test('sets response security headers, including on its own /healthz', async ({
+    request
+  }) => {
+    // nginx only inherits server-level add_header into a location that has no
+    // add_header of its own — /healthz used to declare one for Content-Type,
+    // which silently stripped all three of these from that response.
+    for (const path of ['/healthz', '/api/v1/authentication/is_etebase/']) {
+      const res = await request.get(`${BASE}${path}`, {
+        failOnStatusCode: false
+      });
+      const headers = res.headers();
+      expect(headers['x-content-type-options'], path).toBe('nosniff');
+      expect(headers['x-frame-options'], path).toBe('DENY');
+      expect(headers['referrer-policy'], path).toBe('no-referrer');
+    }
+  });
+
   test('ignores a client-supplied X-Forwarded-Proto from an untrusted peer', async ({
     request
   }) => {
