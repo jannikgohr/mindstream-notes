@@ -100,7 +100,8 @@ function initialDataFor(
       viewModeEnabled: readOnly,
       penMode: penMode === 'always' ? true : false
     },
-    files: snapshot.files,
+    // Image bytes live in the assets table, so they arrive asynchronously
+    // via bindExcalidrawToLocalYDoc -> api.addFiles rather than here.
     scrollToContent: snapshot.elements.length > 0
   };
 }
@@ -108,7 +109,7 @@ function initialDataFor(
 export default function ExcalidrawIsland({
   yDoc,
   readOnly,
-  noteId: _noteId,
+  noteId,
   colorScheme,
   penMode,
   reduceMotion,
@@ -124,7 +125,7 @@ export default function ExcalidrawIsland({
 
   const initialData = useMemo(
     () => initialDataFor(yDoc, theme, readOnly, penMode),
-    [yDoc]
+    [yDoc, noteId]
   );
 
   useEffect(() => {
@@ -140,7 +141,7 @@ export default function ExcalidrawIsland({
     (api: ExcalidrawImperativeAPI) => {
       apiRef.current = api;
       bindRef.current?.destroy();
-      bindRef.current = bindExcalidrawToLocalYDoc({ yDoc, api });
+      bindRef.current = bindExcalidrawToLocalYDoc({ yDoc, api, noteId });
       setApiReady(true);
       onApiReadyRef.current?.(api);
     },
@@ -200,7 +201,6 @@ export default function ExcalidrawIsland({
         theme={theme}
         detectScroll={false}
         handleKeyboardGlobally={false}
-        onPaste={(data) => Boolean(data.files && Object.keys(data.files).length)}
         UIOptions={{
           canvasActions: {
             export: false,
@@ -210,7 +210,7 @@ export default function ExcalidrawIsland({
             toggleTheme: false
           },
           tools: {
-            image: false
+            image: true
           }
         }}
       />

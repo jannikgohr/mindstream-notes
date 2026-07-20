@@ -9,6 +9,7 @@
 
 import * as Y from 'yjs';
 import { readSceneFromYDoc } from '$lib/freeform/excalidraw-yjs';
+import { inlineStoredFiles } from '$lib/freeform/excalidraw-files';
 
 export interface ExcalidrawFile {
   type: 'excalidraw';
@@ -25,10 +26,14 @@ export interface ExcalidrawFile {
  * `null` if the byte array is empty (freshly-created freeform note
  * the user never drew on) — the caller can decide whether to skip
  * the file or write an empty scene.
+ *
+ * Async because image bytes live in the `assets` table, not in the scene:
+ * a `.excalidraw` file has to carry them inline or it opens elsewhere with
+ * broken images.
  */
-export function buildExcalidrawFile(
+export async function buildExcalidrawFile(
   yrsState: number[] | Uint8Array
-): ExcalidrawFile | null {
+): Promise<ExcalidrawFile | null> {
   const bytes =
     yrsState instanceof Uint8Array ? yrsState : new Uint8Array(yrsState);
   if (bytes.length === 0) return null;
@@ -58,6 +63,9 @@ export function buildExcalidrawFile(
     source: 'https://excalidraw.com',
     elements: snapshot.elements as unknown[],
     appState: snapshot.appState as Record<string, unknown>,
-    files: snapshot.files as Record<string, unknown>
+    files: (await inlineStoredFiles(snapshot.storedFiles)) as Record<
+      string,
+      unknown
+    >
   };
 }
