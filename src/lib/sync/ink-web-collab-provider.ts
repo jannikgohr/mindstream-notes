@@ -9,20 +9,51 @@
 
 import {
   canSignCollabFrame,
+  CollabReplayGuard,
   decodeCollabFrame,
   encodeCollabFrame,
   signedCollabFrameNeedsAuthRefresh,
   type CollabFrameAuth
 } from './signed-collab-frame';
+import { isJoinChallenge, signJoinChallenge } from './collab-join-challenge';
 
 const FRAME_SYNC_STEP_1 = 0x00;
 const FRAME_SYNC_STEP_2 = 0x01;
 const FRAME_AWARENESS = 0x02;
-const SIGNED_REQUIRED_TYPES = new Set([FRAME_SYNC_STEP_2]);
+/**
+ * Every frame type a shared-scope room refuses unsigned.
+ *
+ * Not just document updates: awareness carries the identity peers render, so
+ * leaving it unsigned let anyone holding the room key impersonate a
+ * collaborator's cursor — and an unsigned sync_step_1 with an empty state
+ * vector made every writer in the room encode and broadcast the whole
+ * document, which is a cheap amplification primitive.
+ *
+ * Safe to require across the board because a scoped room is withheld from
+ * read-only members entirely (`can_receive_live_collab_room` in
+ * src-tauri/src/sync/mod.rs), so everyone who can join can also sign.
+ */
+const SIGNED_REQUIRED_TYPES = new Set([
+  FRAME_SYNC_STEP_1,
+  FRAME_SYNC_STEP_2,
+  FRAME_AWARENESS
+]);
+/** Unshared rooms require no signatures — only this device holds the key. */
+const NO_SIGNED_REQUIRED_TYPES: ReadonlySet<number> = new Set();
 
 const RECONNECT_INITIAL_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
+/** Floor between auth refreshes. Doubles after each one (up to
+ *  AUTH_REFRESH_MAX_THROTTLE_MS) because a refresh can be *provoked*: any
+ *  holder of the room key can self-sign a frame with a fresh keypair and make
+ *  us re-fetch scope state from Etebase. A legitimate key rotation needs one
+ *  or two refreshes, so backing off costs nothing real while turning an
+ *  unbounded drip into a handful of requests. */
 const AUTH_REFRESH_THROTTLE_MS = 5_000;
+const AUTH_REFRESH_MAX_THROTTLE_MS = 5 * 60_000;
+/** How long to wait for the relay's join challenge before dropping the
+ *  socket. Matches $lib/sync/collab-provider. */
+const JOIN_CHALLENGE_TIMEOUT_MS = 4_000;
 
 function frameName(type: number): string {
   switch (type) {
@@ -61,11 +92,18 @@ export interface InkWebCollabHandle {
 export interface InkWebCollabProviderOptions {
   url: string;
   roomId: string;
+  /** Private half of the room's join keypair (PKCS#8 DER, base64), used to
+   *  answer the relay's challenge. See $lib/sync/collab-join-challenge. */
+  joinPrivateKeyPkcs8B64?: string;
   keyBytes: Uint8Array;
   handle: InkWebCollabHandle;
   noteId: string;
   onStatusChange?: (online: boolean) => void;
   auth?: CollabFrameAuth;
+  /** True for a shared-scope room, where document updates must carry a writer
+   *  signature. Derived from the room's collab epoch rather than from `auth`
+   *  being present, so a failed authorisation lookup fails closed. */
+  requireSignedWrites?: boolean;
   onAuthStale?: () => void;
 }
 
@@ -76,6 +114,12 @@ export class InkWebCollabProvider {
   private reconnectAttempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private lastAuthRefreshRequest = 0;
+  private authRefreshThrottleMs = AUTH_REFRESH_THROTTLE_MS;
+  /** Drops frames we've already applied, and frames too old to be live. */
+  private readonly replayGuard = new CollabReplayGuard();
+  /** False until the relay's join challenge is answered. */
+  private joined = false;
+  private joinDeadlineTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private readonly opts: InkWebCollabProviderOptions) {
     console.info(
@@ -91,6 +135,7 @@ export class InkWebCollabProvider {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    this.clearJoinDeadline();
     if (this.ws) {
       try {
         this.ws.close();
@@ -145,14 +190,31 @@ export class InkWebCollabProvider {
       this.reconnectAttempt = 0;
       this.opts.onStatusChange?.(true);
       console.info('[ink-collab] open note=%s', this.opts.noteId);
-      const sv = this.opts.handle.encode_state_vector();
-      void this.send(FRAME_SYNC_STEP_1, sv);
+      if (!this.opts.joinPrivateKeyPkcs8B64) {
+        this.startSync();
+        return;
+      }
+      // Say nothing until the relay has challenged us. If none arrives,
+      // drop the socket rather than downgrade to an unauthenticated
+      // session; reconnect backoff keeps retrying.
+      this.joinDeadlineTimer = setTimeout(() => {
+        this.joinDeadlineTimer = null;
+        if (this.joined || this.destroyed) return;
+        console.warn(
+          '[ink-collab] no join challenge from relay note=%s — closing (relay too old?)',
+          this.opts.noteId
+        );
+        this.ws?.close();
+      }, JOIN_CHALLENGE_TIMEOUT_MS);
     };
     ws.onmessage = (e) => {
       void this.handleMessage(e.data);
     };
     ws.onclose = (e) => {
       this.ws = null;
+      // The next socket has to re-answer a fresh challenge.
+      this.joined = false;
+      this.clearJoinDeadline();
       this.opts.onStatusChange?.(false);
       console.info(
         '[ink-collab] close note=%s code=%d reason=%s',
@@ -216,10 +278,62 @@ export class InkWebCollabProvider {
     }
   }
 
+  /** Which frame types this room refuses to accept unsigned. */
+  private signedRequiredTypes(): ReadonlySet<number> {
+    return this.opts.requireSignedWrites
+      ? SIGNED_REQUIRED_TYPES
+      : NO_SIGNED_REQUIRED_TYPES;
+  }
+
+  private startSync(): void {
+    if (this.joined || this.destroyed) return;
+    this.joined = true;
+    const sv = this.opts.handle.encode_state_vector();
+    void this.send(FRAME_SYNC_STEP_1, sv);
+  }
+
+  private clearJoinDeadline(): void {
+    if (this.joinDeadlineTimer !== null) {
+      clearTimeout(this.joinDeadlineTimer);
+      this.joinDeadlineTimer = null;
+    }
+  }
+
+  /** Answer the relay's challenge. True means the frame was a challenge and
+   *  the caller should stop processing it. */
+  private async handleJoinChallenge(frame: Uint8Array): Promise<boolean> {
+    if (this.joined || !isJoinChallenge(frame)) return false;
+    this.clearJoinDeadline();
+    const key = this.opts.joinPrivateKeyPkcs8B64;
+    if (!key) return true;
+    const response = await signJoinChallenge(frame, this.opts.roomId, key);
+    if (this.destroyed) return true;
+    if (!response) {
+      console.warn(
+        '[ink-collab] could not answer join challenge note=%s',
+        this.opts.noteId
+      );
+      this.destroy();
+      return true;
+    }
+    const ws = this.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return true;
+    try {
+      ws.send(response);
+    } catch (err) {
+      console.warn('[ink-collab] join response send failed:', err);
+      return true;
+    }
+    console.debug('[ink-collab] joined note=%s', this.opts.noteId);
+    this.startSync();
+    return true;
+  }
+
   private async handleMessage(data: unknown): Promise<void> {
     if (!(data instanceof ArrayBuffer)) return;
     if (!this.cryptoKey) return;
     const frame = new Uint8Array(data);
+    if (await this.handleJoinChallenge(frame)) return;
 
     let decoded;
     try {
@@ -227,7 +341,8 @@ export class InkWebCollabProvider {
         frame,
         this.cryptoKey,
         this.opts.auth,
-        SIGNED_REQUIRED_TYPES
+        this.signedRequiredTypes(),
+        this.replayGuard
       );
     } catch (err) {
       console.warn(
@@ -288,8 +403,12 @@ export class InkWebCollabProvider {
       return;
     }
     const now = Date.now();
-    if (now - this.lastAuthRefreshRequest < AUTH_REFRESH_THROTTLE_MS) return;
+    if (now - this.lastAuthRefreshRequest < this.authRefreshThrottleMs) return;
     this.lastAuthRefreshRequest = now;
+    this.authRefreshThrottleMs = Math.min(
+      AUTH_REFRESH_MAX_THROTTLE_MS,
+      this.authRefreshThrottleMs * 2
+    );
     console.info(
       '[ink-collab] refreshing writer auth note=%s',
       this.opts.noteId

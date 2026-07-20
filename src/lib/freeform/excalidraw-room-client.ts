@@ -31,6 +31,7 @@ import type { ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types';
 import type { ExcalidrawElement } from '@excalidraw/excalidraw/element/types';
 import {
   canSignCollabFrame,
+  CollabReplayGuard,
   decodeCollabFrame,
   encodeCollabFrame,
   isSignedCollabFrame,
@@ -48,7 +49,14 @@ const BROADCAST_THROTTLE_MS = 50;
 // Cap repeated decrypt warnings so a misconfigured peer in the same
 // room can't flood the console.
 const MAX_DECRYPT_WARNINGS = 5;
+/** Floor between auth refreshes. Doubles after each one (up to
+ *  AUTH_REFRESH_MAX_THROTTLE_MS) because a refresh can be *provoked*: any
+ *  holder of the room key can self-sign a frame with a fresh keypair and make
+ *  us re-fetch scope state from Etebase. A legitimate key rotation needs one
+ *  or two refreshes, so backing off costs nothing real while turning an
+ *  unbounded drip into a handful of requests. */
 const AUTH_REFRESH_THROTTLE_MS = 5_000;
+const AUTH_REFRESH_MAX_THROTTLE_MS = 5 * 60_000;
 
 /**
  * Normalise whatever Socket.IO hands us into an ArrayBuffer. The
@@ -87,6 +95,10 @@ export interface ExcalidrawRoomClientOptions {
   /** Optional writer-key signature context. When present, scene updates
    *  from peers must be signed by an authorized writer key. */
   auth?: CollabFrameAuth;
+  /** True for a shared-scope room, where scene updates must carry a writer
+   *  signature. Derived from the room's collab epoch rather than from `auth`
+   *  being present, so a failed authorisation lookup fails closed. */
+  requireSignedWrites?: boolean;
   onAuthStale?: () => void;
 }
 
@@ -122,6 +134,9 @@ export class ExcalidrawRoomClient {
   private lastSceneFingerprint: string | null = null;
   private decryptWarningCount = 0;
   private lastAuthRefreshRequest = 0;
+  private authRefreshThrottleMs = AUTH_REFRESH_THROTTLE_MS;
+  /** Drops frames we've already applied, and frames too old to be live. */
+  private readonly replayGuard = new CollabReplayGuard();
   private readonly unlistenOnChange: () => void;
 
   constructor(private readonly opts: ExcalidrawRoomClientOptions) {
@@ -285,7 +300,7 @@ export class ExcalidrawRoomClient {
 
     let decoded: RemoteMessage;
     try {
-      if (this.opts.auth) {
+      if (this.opts.requireSignedWrites) {
         const frame = new Uint8Array(ctBuffer);
         if (!isSignedCollabFrame(frame)) {
           this.warnDecrypt('rejected unsigned scene update');
@@ -295,7 +310,8 @@ export class ExcalidrawRoomClient {
           frame,
           key,
           this.opts.auth,
-          SIGNED_REQUIRED_TYPES
+          SIGNED_REQUIRED_TYPES,
+          this.replayGuard
         );
         if (!signed) {
           void this.maybeRequestAuthRefresh(frame, key);
@@ -376,8 +392,12 @@ export class ExcalidrawRoomClient {
       return;
     }
     const now = Date.now();
-    if (now - this.lastAuthRefreshRequest < AUTH_REFRESH_THROTTLE_MS) return;
+    if (now - this.lastAuthRefreshRequest < this.authRefreshThrottleMs) return;
     this.lastAuthRefreshRequest = now;
+    this.authRefreshThrottleMs = Math.min(
+      AUTH_REFRESH_MAX_THROTTLE_MS,
+      this.authRefreshThrottleMs * 2
+    );
     console.info(
       '[excalidraw-room] refreshing writer auth room=%s',
       this.opts.roomId

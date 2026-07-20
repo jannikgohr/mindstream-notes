@@ -33,6 +33,9 @@ export async function syncNow(): Promise<SyncReport> {
  * The editor falls back to single-device mode in that case.
  */
 export interface RoomInfo {
+  /** Base64 of the room's derived P-256 SPKI — the room is *named* after the
+   *  public half of its join keypair, which is what lets the relay
+   *  authenticate joins without holding a secret. */
   room_id: string;
   /** Standard base64 of the 32-byte AES-GCM key. */
   key_b64: string;
@@ -45,6 +48,9 @@ export interface RoomInfo {
       public_key_b64: string;
     }>;
   } | null;
+  /** Private half of the join keypair (PKCS#8 DER, base64), used to sign the
+   *  relay's challenge nonce. */
+  join_private_key_pkcs8_b64?: string;
 }
 
 export async function noteRoomInfo(

@@ -55,7 +55,11 @@ keyring-core = "1"
 # msgpack wire format inside Etebase item content.
 yrs = "0.26"
 hkdf = "0.12"
-hmac = "0.12"
+# Relay join challenge: we derive a deterministic P-256 keypair per room from
+# the same scope secret the room id comes from. P-256 (not Ed25519) because
+# the webview signs the challenge with WebCrypto, which supports ECDSA
+# everywhere but still has patchy Ed25519 support in WKWebView/WebView2.
+p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
 similar = "3"
 rmp-serde = "1"
 serde_bytes = "0.11"

@@ -28,12 +28,30 @@ x-logging: &default-logging
     max-size: "10m"
     max-file: "3"
 
+# Baseline container hardening shared by every service: stop a process gaining
+# capabilities through a setuid binary, and drop every Linux capability. Each
+# service re-adds only what its image actually needs (see the cap_add blocks
+# below) — verified by booting the stack and checking every container reports
+# healthy, since a missing capability fails at startup rather than subtly.
+x-hardening: &default-hardening
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+
 services:
   nginx:
     build: ./nginx
     container_name: mindstream-nginx
     restart: always
     logging: *default-logging
+    <<: *default-hardening
+    cap_add:
+      # Binds :80, then drops the workers to the nginx user.
+      - CHOWN
+      - SETGID
+      - SETUID
+      - NET_BIND_SERVICE
     depends_on:
       - yjs-relay
       - excalidraw-room
@@ -57,6 +75,7 @@ services:
     container_name: mindstream-yjs-relay
     restart: always
     logging: *default-logging
+    <<: *default-hardening
     environment:
       - HOST=0.0.0.0
       - PORT=1234
@@ -76,6 +95,10 @@ services:
     container_name: mindstream-excalidraw-room
     restart: always
     logging: *default-logging
+    <<: *default-hardening
+    cap_add:
+      # node listens on :80, which is privileged.
+      - NET_BIND_SERVICE
     environment:
       - NODE_ENV=production
       - PORT=80
@@ -101,6 +124,14 @@ services:
     container_name: mindstream-etebase
     restart: always
     logging: *default-logging
+    <<: *default-hardening
+    cap_add:
+      # The image chowns /data and drops to its app user on boot.
+      - CHOWN
+      - SETGID
+      - SETUID
+      - DAC_OVERRIDE
+      - FOWNER
     depends_on:
       postgres:
         condition: service_healthy
@@ -145,6 +176,14 @@ services:
     container_name: mindstream-postgres
     restart: always
     logging: *default-logging
+    <<: *default-hardening
+    cap_add:
+      # initdb chowns the data dir and runs as the postgres user.
+      - CHOWN
+      - SETGID
+      - SETUID
+      - DAC_OVERRIDE
+      - FOWNER
     environment:
       - POSTGRES_DB=${POSTGRES_DB:-etebase}
       - POSTGRES_USER=${POSTGRES_USER:-etebase}
