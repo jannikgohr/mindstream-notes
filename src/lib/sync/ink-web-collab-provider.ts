@@ -9,6 +9,7 @@
 
 import {
   canSignCollabFrame,
+  CollabReplayGuard,
   decodeCollabFrame,
   encodeCollabFrame,
   signedCollabFrameNeedsAuthRefresh,
@@ -19,7 +20,24 @@ import { isJoinChallenge, signJoinChallenge } from './collab-join-challenge';
 const FRAME_SYNC_STEP_1 = 0x00;
 const FRAME_SYNC_STEP_2 = 0x01;
 const FRAME_AWARENESS = 0x02;
-const SIGNED_REQUIRED_TYPES = new Set([FRAME_SYNC_STEP_2]);
+/**
+ * Every frame type a shared-scope room refuses unsigned.
+ *
+ * Not just document updates: awareness carries the identity peers render, so
+ * leaving it unsigned let anyone holding the room key impersonate a
+ * collaborator's cursor — and an unsigned sync_step_1 with an empty state
+ * vector made every writer in the room encode and broadcast the whole
+ * document, which is a cheap amplification primitive.
+ *
+ * Safe to require across the board because a scoped room is withheld from
+ * read-only members entirely (`can_receive_live_collab_room` in
+ * src-tauri/src/sync/mod.rs), so everyone who can join can also sign.
+ */
+const SIGNED_REQUIRED_TYPES = new Set([
+  FRAME_SYNC_STEP_1,
+  FRAME_SYNC_STEP_2,
+  FRAME_AWARENESS
+]);
 /** Unshared rooms require no signatures — only this device holds the key. */
 const NO_SIGNED_REQUIRED_TYPES: ReadonlySet<number> = new Set();
 
@@ -89,6 +107,8 @@ export class InkWebCollabProvider {
   private reconnectAttempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private lastAuthRefreshRequest = 0;
+  /** Drops frames we've already applied, and frames too old to be live. */
+  private readonly replayGuard = new CollabReplayGuard();
   /** False until the relay's join challenge is answered. */
   private joined = false;
   private joinDeadlineTimer: ReturnType<typeof setTimeout> | null = null;
@@ -313,7 +333,8 @@ export class InkWebCollabProvider {
         frame,
         this.cryptoKey,
         this.opts.auth,
-        this.signedRequiredTypes()
+        this.signedRequiredTypes(),
+        this.replayGuard
       );
     } catch (err) {
       console.warn(

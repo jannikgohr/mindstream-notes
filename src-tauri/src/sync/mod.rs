@@ -2662,6 +2662,29 @@ fn derive_collab_join_keypair(
     Err("derive join key: no valid scalar in 256 attempts".into())
 }
 
+/// HKDF the per-room AES-GCM wire key. `salt` is the share manifest's collab
+/// salt for a scoped room, `None` for a personal one — either way the key that
+/// goes on the wire is domain-separated from the Etebase item key it derives
+/// from.
+fn derive_live_collab_key(
+    note_uid: &str,
+    note_key: &[u8],
+    salt: Option<&[u8]>,
+    collab_epoch: u64,
+) -> Result<[u8; 32], String> {
+    let hkdf = Hkdf::<Sha256>::new(salt, note_key);
+    let mut derived_key = [0_u8; 32];
+    let mut info = Vec::with_capacity(
+        LIVE_COLLAB_KEY_INFO.len() + std::mem::size_of::<u64>() + note_uid.len(),
+    );
+    info.extend_from_slice(LIVE_COLLAB_KEY_INFO);
+    info.extend_from_slice(&collab_epoch.to_be_bytes());
+    info.extend_from_slice(note_uid.as_bytes());
+    hkdf.expand(&info, &mut derived_key)
+        .map_err(|e| format!("derive live-collab key: {e}"))?;
+    Ok(derived_key)
+}
+
 fn derive_live_collab_room(
     note_uid: &str,
     note_key: &[u8],
@@ -2674,25 +2697,27 @@ fn derive_live_collab_room(
     let Some(scope) = scope.filter(|scope| !scope.collab_salt.is_empty()) else {
         let (room_id, join_private_key_pkcs8_b64) =
             derive_collab_join_keypair(note_uid, note_key, None, 0)?;
+        // Derive the wire key rather than handing over the Etebase item key
+        // itself. Reusing one key for at-rest storage and for AES-GCM on the
+        // wire means a compromise of either context compromises both; the
+        // scoped path below has always done this properly.
+        let derived_key = derive_live_collab_key(note_uid, note_key, None, 0)?;
         return Ok(RoomInfo {
             room_id,
-            key_b64: etebase::utils::to_base64(note_key).map_err(|e| format!("encode key: {e}"))?,
+            key_b64: etebase::utils::to_base64(&derived_key)
+                .map_err(|e| format!("encode key: {e}"))?,
             collab_epoch: 0,
             writer_auth: None,
             join_private_key_pkcs8_b64,
         });
     };
 
-    let hkdf = Hkdf::<Sha256>::new(Some(&scope.collab_salt), note_key);
-    let mut derived_key = [0_u8; 32];
-    let mut info = Vec::with_capacity(
-        LIVE_COLLAB_KEY_INFO.len() + std::mem::size_of::<u64>() + note_uid.len(),
-    );
-    info.extend_from_slice(LIVE_COLLAB_KEY_INFO);
-    info.extend_from_slice(&scope.collab_epoch.to_be_bytes());
-    info.extend_from_slice(note_uid.as_bytes());
-    hkdf.expand(&info, &mut derived_key)
-        .map_err(|e| format!("derive live-collab key: {e}"))?;
+    let derived_key = derive_live_collab_key(
+        note_uid,
+        note_key,
+        Some(&scope.collab_salt),
+        scope.collab_epoch,
+    )?;
 
     let (room_id, join_private_key_pkcs8_b64) = derive_collab_join_keypair(
         note_uid,
@@ -3149,10 +3174,40 @@ mod tests {
 
         assert_ne!(room.room_id, "note_uid");
         assert!(valid_collab_writer_public_key(&room.room_id));
-        assert_eq!(room.key_b64, etebase::utils::to_base64(&note_key).unwrap());
         assert_eq!(room.collab_epoch, 0);
         assert!(room.writer_auth.is_none());
         assert!(!room.join_private_key_pkcs8_b64.is_empty());
+    }
+
+    /// Personal rooms used to put the Etebase item key straight on the wire,
+    /// so one key served both at-rest storage and AES-GCM transport.
+    #[test]
+    fn unscoped_rooms_do_not_reuse_the_item_key_on_the_wire() {
+        let note_key = [3_u8; 32];
+
+        let room = derive_live_collab_room("note_uid", &note_key, None).unwrap();
+
+        assert_ne!(room.key_b64, etebase::utils::to_base64(&note_key).unwrap());
+        // Still deterministic, or a second device couldn't join.
+        let again = derive_live_collab_room("note_uid", &note_key, None).unwrap();
+        assert_eq!(room.key_b64, again.key_b64);
+        // And still bound to the note.
+        let other = derive_live_collab_room("other_uid", &note_key, None).unwrap();
+        assert_ne!(room.key_b64, other.key_b64);
+    }
+
+    /// The join keypair and the wire key both come off the same HKDF input,
+    /// so they must be separated by their info strings.
+    #[test]
+    fn join_key_and_wire_key_are_domain_separated() {
+        let note_key = [3_u8; 32];
+
+        let wire = derive_live_collab_key("note_uid", &note_key, None, 0).unwrap();
+        let (_, join_priv) = derive_collab_join_keypair("note_uid", &note_key, None, 0).unwrap();
+
+        let wire_b64 = BASE64_STANDARD.encode(wire);
+        assert_ne!(wire_b64, join_priv);
+        assert!(!join_priv.contains(&wire_b64));
     }
 
     #[test]

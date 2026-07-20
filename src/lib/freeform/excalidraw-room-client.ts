@@ -31,6 +31,7 @@ import type { ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types';
 import type { ExcalidrawElement } from '@excalidraw/excalidraw/element/types';
 import {
   canSignCollabFrame,
+  CollabReplayGuard,
   decodeCollabFrame,
   encodeCollabFrame,
   isSignedCollabFrame,
@@ -126,6 +127,8 @@ export class ExcalidrawRoomClient {
   private lastSceneFingerprint: string | null = null;
   private decryptWarningCount = 0;
   private lastAuthRefreshRequest = 0;
+  /** Drops frames we've already applied, and frames too old to be live. */
+  private readonly replayGuard = new CollabReplayGuard();
   private readonly unlistenOnChange: () => void;
 
   constructor(private readonly opts: ExcalidrawRoomClientOptions) {
@@ -299,7 +302,8 @@ export class ExcalidrawRoomClient {
           frame,
           key,
           this.opts.auth,
-          SIGNED_REQUIRED_TYPES
+          SIGNED_REQUIRED_TYPES,
+          this.replayGuard
         );
         if (!signed) {
           void this.maybeRequestAuthRefresh(frame, key);
