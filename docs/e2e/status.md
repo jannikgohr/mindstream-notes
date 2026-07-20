@@ -7,49 +7,75 @@ hidden passing coverage** — a run's pass count reflects implemented scenarios.
 
 ## What's landed
 
-| Spec                          | Tier | Covers                                                                                         |
-| ----------------------------- | ---- | ---------------------------------------------------------------------------------------------- |
-| `editor-roundtrip.e2e.ts`     | T3   | flow 1.1 through real `save_note` + SQLite + restart                                           |
-| `history.e2e.ts`              | T3   | capture / restore / Undo / editor-undo isolation / restart persistence _(one red — see below)_ |
-| `trash-retention.e2e.ts`      | T3   | flows 1.5 + 3.3 (retention sweep on boot)                                                      |
-| `settings-persist.e2e.ts`     | T3   | flows 3.1 / 3.2                                                                                |
-| `sync-history.e2e.ts`         | T4   | per-device-history negative assertion; 4.10 edit-wins-over-delete                              |
-| `sharing.e2e.ts`              | T4   | sharing flows 4.1–4.4 + core 4.7 subtree/asset convergence + 4.7b _(mostly red — see below)_   |
-| `sharing-multi-device.e2e.ts` | T4   | owner-second-device 4.8–4.9 re-home cases                                                      |
+| Spec                          | Tier | Covers                                                                                        |
+| ----------------------------- | ---- | --------------------------------------------------------------------------------------------- |
+| `editor-roundtrip.e2e.ts`     | T3   | flow 1.1 through real `save_note` + SQLite + restart                                          |
+| `history.e2e.ts`              | T3   | capture / restore / Undo / editor-undo isolation / restart persistence                        |
+| `trash-retention.e2e.ts`      | T3   | flows 1.5 + 3.3 (retention sweep on boot)                                                     |
+| `settings-persist.e2e.ts`     | T3   | flows 3.1 / 3.2                                                                               |
+| `sync-history.e2e.ts`         | T4   | per-device-history negative assertion; 4.10 edit-wins-over-delete                             |
+| `sharing.e2e.ts`              | T4   | sharing flows 4.1–4.4 + core 4.7 subtree/asset convergence + 4.7b                             |
+| `sharing-multi-device.e2e.ts` | T4   | owner-second-device 4.8–4.9 re-home cases                                                     |
+| `collab.e2e.ts`               | T4   | live markdown propagation, restore convergence, restore-vs-paused-peer, reconnect convergence |
 
-Validated app assertions cover restore convergence, reconnect convergence,
-seeded-note convergence, and edit-wins-over-delete for plain vault notes.
+Validated app assertions cover live collab propagation, restore convergence,
+reconnect convergence, seeded-note convergence, sharing 4.1–4.7b, and
+edit-wins-over-delete for plain vault notes.
 
-## Currently red — measured 2026-07-20
+## Previously red, now fixed — 2026-07-20
 
-A full local run of every tier found three specs failing. All three were
-confirmed **pre-existing**, by checking out `e5370f5` (the
-`feat/collection-sharing` merge), rebuilding, and re-running: the failures
-reproduce identically there, down to the same timeout signatures. They are not
-fallout from the security-hardening branch.
+A full local run of every tier found three specs failing. All three are green
+again; each had a different cause, and only one was a product bug.
 
-| Spec             | Tier | State                                                                        |
-| ---------------- | ---- | ---------------------------------------------------------------------------- |
-| `history.e2e.ts` | T3   | 4/5 pass. `Ctrl+Z does not revert a restore` fails — undo **does** revert it |
-| `sharing.e2e.ts` | T4   | 2/8 pass. The share flow times out at the "Sharing" context-menu item        |
-| `collab.e2e.ts`  | T4   | `before all` hook fails: browserA never observes browserB as a live peer     |
+| Spec             | Cause                                                                                                                                                                                                                                                           |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `history.e2e.ts` | **Product bug.** A restore landed on the editor's undo stack, so Ctrl+Z rolled it back — and, since a restore is an ordinary CRDT edit, that rollback reached every connected peer. Fixed with `addToHistory: false`.                                           |
+| `sharing.e2e.ts` | **Stale selector.** The share dialog gained comma-separated multi-user invites and its label became `Users`. One stale label failed 6 of 8 assertions: the first failure left a modal open, so later tests timed out on the folder or the Sharing menu instead. |
+| `collab.e2e.ts`  | **Stale assertion**, plus contention in the `before all` hook. The assertion expected a restore to clobber a paused peer's concurrent edit — true when written, before `minimalDocDiff` narrowed a restore to the range the restorer actually diffed.           |
 
-The sharing table row above therefore describes intended coverage, not passing
-coverage. Six of its eight assertions are red, and the first failure is at the
-menu item — before a share is created — so the later failures are cascades, not
-independent bugs.
+### Residual: an intermittent launch flake in the T4 multi run
 
-`collab.e2e.ts` is listed under "What's pending" below, so its failure is
-expected; `history.e2e.ts` and `sharing.e2e.ts` are regressions against what
-this document previously claimed was validated.
+Every one of the 21 assertions across the five `wdio.multiremote.conf.ts` specs
+passes when its spec runs alone. A full five-spec run is _not_ yet reliable:
+roughly one spec per run fails in its `before all` with
+`element ("aria/Open settings") still not displayed`, and **which** spec varies
+between runs.
+
+Two things were ruled out with evidence rather than assumed:
+
+- **Not the auth rate limit.** nginx logged zero 429s across 90 auth requests
+  in a full run, so `limit_req` on the credential endpoints is not throttling
+  the harness.
+- **Not a stale SQLite lock** from the shared profile dirs. The app log shows
+  clean boots — migrations run, `empty database — seeding demo content` — with
+  no panic and no database error, on every spec.
+
+What _was_ fixed: the run used to fail 3 specs on a flat 120s mocha timeout,
+because each two-client `before all` does two Etebase signups plus two full UI
+sign-ins. Raising it to 240s for this config took the run from 14m36 to 4m30
+and from 3 failures to 1. `specFileRetries` was deliberately not added — it
+would hide exactly this kind of flake.
+
+Still open: the webview occasionally not being ready within the helper's 30s
+window at session start. Root cause unknown.
+
+Two things worth carrying forward:
+
+- **A cascading first failure hides its own cause.** Both T4 specs reported
+  timeouts several assertions downstream of the real break. Running a single
+  test in isolation (`--mochaOpts.grep`) surfaced it immediately.
+- **The relay container must match the client.** A stack rebuilt from a
+  different commit leaves the relay without the join challenge, and the client
+  then hangs waiting for one. Symptoms look like app bugs. `docker exec
+mindstream-test-yjs-relay grep -c mindstream-collab-join /app/collab-server.mjs`
+  tells you which you have.
 
 ## What's pending
 
-| Spec                    | Blocked on                                                                      |
-| ----------------------- | ------------------------------------------------------------------------------- |
-| `collab.e2e.ts`         | markdown live-edit propagation — needs a deterministic Yjs relay/readiness hook |
-| `collab-confirm.e2e.ts` | ink/freeform restore prompt — their providers don't report presence yet         |
-| `backup.e2e.ts`         | flows 1.2–1.4 — need the native-dialog path-injection hook                      |
+| Spec                    | Blocked on                                                              |
+| ----------------------- | ----------------------------------------------------------------------- |
+| `collab-confirm.e2e.ts` | ink/freeform restore prompt — their providers don't report presence yet |
+| `backup.e2e.ts`         | flows 1.2–1.4 — need the native-dialog path-injection hook              |
 
 The collab-confirmation prompt (`peerCount` in `NoteHistorySection`) is wired
 and asserted for the awareness-based editors (markdown/PDF); ink/freeform stay

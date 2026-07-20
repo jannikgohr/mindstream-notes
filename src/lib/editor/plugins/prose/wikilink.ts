@@ -525,6 +525,14 @@ interface LinkBoundaryEdit {
 interface LinkBoundaryMode {
   mode: 'inside' | 'outside';
   side: 'start' | 'end';
+  /**
+   * Is the link at this boundary an ID-backed note link? Boundary *behaviour*
+   * (typing at an edge lands outside the link, arrows opt into editing its
+   * text) applies to every link mark. The caret *translation* must not: it
+   * compensates for the generated `[[` / `]]`, which only note links draw, so
+   * applying it to a plain link renders the caret a bracket-width off.
+   */
+  noteLink: boolean;
 }
 
 function noteLinkTextRanges(state: EditorState): NoteLinkTextRange[] {
@@ -793,14 +801,35 @@ function insertLinkBoundaryText(
   return pos + text.length;
 }
 
+function boundaryLinkMark(state: EditorState, pos: number): Mark | null {
+  return (
+    trailingBoundaryLinkMark(state, pos) ?? leadingBoundaryLinkMark(state, pos)
+  );
+}
+
 function shouldTypeOutsideLinkBoundary(
   state: EditorState,
   pos: number
 ): boolean {
-  const boundaryMark =
-    trailingBoundaryLinkMark(state, pos) ?? leadingBoundaryLinkMark(state, pos);
+  const boundaryMark = boundaryLinkMark(state, pos);
   if (!boundaryMark) return false;
   return !exactStoredLinkMark(state, boundaryMark);
+}
+
+/**
+ * The boundary link the caret is inside of on *stored marks alone* — editing
+ * with no active pin. The pin is dropped whenever something moves the caret
+ * (a sibling plugin's transaction, a re-render), while the stored marks that
+ * make typing land inside the link survive. Inserting then clears those marks,
+ * so without re-pinning only the first character stays in the link.
+ */
+function storedInsideBoundaryMark(
+  state: EditorState,
+  pos: number
+): Mark | null {
+  const boundaryMark = boundaryLinkMark(state, pos);
+  if (!boundaryMark) return null;
+  return exactStoredLinkMark(state, boundaryMark);
 }
 
 function typeOutsideLinkBoundary(
@@ -941,22 +970,71 @@ export function wikilinkDecorationPlugin(
   let activeBoundaryLinkEdit: LinkBoundaryEdit | null = null;
   let measuredBracketFontSize: string | null = null;
 
+  /**
+   * The rendered `.wikilink-note-link` the caret sits at the edge of.
+   *
+   * The brackets scale with *that element's* font, which is not the editor's
+   * whenever the link lives in a heading. Probe one position into the link
+   * text — that always resolves into the link's own text node — rather than
+   * the boundary itself, which is ambiguous between the link and its
+   * neighbour.
+   */
+  function boundaryNoteLinkElement(
+    view: EditorView,
+    boundary: LinkBoundaryMode
+  ): Element | null {
+    const pos = view.state.selection.from;
+    const probePos = boundary.side === 'end' ? pos - 1 : pos + 1;
+    if (probePos < 0 || probePos > view.state.doc.content.size) return null;
+    try {
+      const { node, offset } = view.domAtPos(probePos);
+      const candidate =
+        node.nodeType === Node.TEXT_NODE
+          ? node.parentElement
+          : ((node.childNodes[offset] ??
+              node.childNodes[offset - 1] ??
+              node) as Node);
+      const element =
+        candidate?.nodeType === Node.TEXT_NODE
+          ? candidate.parentElement
+          : (candidate as Element | null);
+      return element?.closest?.('.wikilink-note-link') ?? null;
+    } catch {
+      // domAtPos throws for positions it can't resolve (mid-teardown, a doc
+      // that changed under us). No measurement is better than a wrong one.
+      return null;
+    }
+  }
+
   // The `[[`/`]]` brackets are CSS pseudo-elements, so the virtual cursor at a
   // boundary renders just inside them. When the caret is "outside" the link we
   // nudge it clear of the brackets so typing flows from the cursor instead of
   // dropping a character behind it. Measure the real bracket width (the font is
   // a variable, so a fixed em can't line up) and publish it as a CSS variable.
-  function updateBracketOffset(view: EditorView): void {
-    const fontSize = window.getComputedStyle(view.dom).fontSize;
+  //
+  // Measured against the link's own computed font, not the editor's: a wikilink
+  // in a heading renders far larger, and compensating it with the body-text
+  // bracket width left the caret short by most of a bracket.
+  function updateBracketOffset(view: EditorView, boundary: LinkBoundaryMode) {
+    const styleSource = boundaryNoteLinkElement(view, boundary) ?? view.dom;
+    const style = window.getComputedStyle(styleSource);
+    const fontSize = style.fontSize;
     if (fontSize === measuredBracketFontSize) return;
 
+    // Measured outside the editable subtree: appending into it would show up
+    // in ProseMirror's DOM observer as a content change.
     const probe = document.createElement('span');
     probe.textContent = ']]';
     probe.style.position = 'absolute';
     probe.style.visibility = 'hidden';
     probe.style.whiteSpace = 'pre';
     probe.style.pointerEvents = 'none';
-    view.dom.appendChild(probe);
+    probe.style.fontSize = fontSize;
+    probe.style.fontFamily = style.fontFamily;
+    probe.style.fontWeight = style.fontWeight;
+    probe.style.fontStyle = style.fontStyle;
+    probe.style.letterSpacing = style.letterSpacing;
+    document.body.appendChild(probe);
     const bracketWidth = probe.getBoundingClientRect().width;
     probe.remove();
 
@@ -974,7 +1052,7 @@ export function wikilinkDecorationPlugin(
     const pos = selection.from;
 
     if (pendingEmptyNoteLink?.pos === pos) {
-      return { mode: 'inside', side: 'end' };
+      return { mode: 'inside', side: 'end', noteLink: true };
     }
 
     const trailing = trailingBoundaryLinkMark(state, pos);
@@ -983,36 +1061,43 @@ export function wikilinkDecorationPlugin(
     if (!boundaryMark) return null;
 
     const side = trailing ? 'end' : 'start';
+    const noteLink = !!parseNoteHref(boundaryMark.attrs.href);
 
     if (boundaryEditAt(activeBoundaryLinkEdit, pos)) {
-      return { mode: 'inside', side };
+      return { mode: 'inside', side, noteLink };
     }
     if (boundaryEditMatches(activeBoundaryLinkEdit, pos, boundaryMark))
-      return { mode: 'inside', side };
+      return { mode: 'inside', side, noteLink };
     return {
       mode: exactStoredLinkMark(state, boundaryMark) ? 'inside' : 'outside',
-      side
+      side,
+      noteLink
     };
   }
 
   function syncBoundaryMode(view: EditorView): void {
     const boundary = boundaryMode(view);
-    if (boundary?.mode === 'outside') updateBracketOffset(view);
+    // Side classes drive the bracket compensation transform, so they follow
+    // the *note link* answer, not merely "is there a boundary here".
+    const bracketed = boundary?.noteLink === true;
+    if (bracketed && boundary?.mode === 'outside') {
+      updateBracketOffset(view, boundary);
+    }
     view.dom.classList.toggle(
       'wikilink-boundary-inside',
-      boundary?.mode === 'inside'
+      bracketed && boundary?.mode === 'inside'
     );
     view.dom.classList.toggle(
       'wikilink-boundary-outside',
-      boundary?.mode === 'outside'
+      bracketed && boundary?.mode === 'outside'
     );
     view.dom.classList.toggle(
       'wikilink-boundary-start',
-      boundary?.side === 'start'
+      bracketed && boundary?.side === 'start'
     );
     view.dom.classList.toggle(
       'wikilink-boundary-end',
-      boundary?.side === 'end'
+      bracketed && boundary?.side === 'end'
     );
     if (boundary) {
       view.dom.dataset.wikilinkBoundary = boundary.mode;
@@ -1211,6 +1296,29 @@ export function wikilinkDecorationPlugin(
         }
 
         pendingEmptyNoteLink = null;
+
+        // Inside the link on stored marks alone, with no pin to carry the run.
+        // Insert through the pinned path so the characters after this one stay
+        // in the link too, instead of only the first landing inside.
+        if (from === to && !activeBoundaryLinkEdit) {
+          const storedMark = storedInsideBoundaryMark(view.state, from);
+          if (storedMark) {
+            const nextPos = insertLinkBoundaryText(
+              view,
+              from,
+              text,
+              storedMark
+            );
+            if (nextPos !== null) {
+              setActiveBoundaryLinkEdit(view, {
+                pos: nextPos,
+                mark: storedMark
+              });
+              return true;
+            }
+          }
+        }
+
         const typedOutside = typeOutsideLinkBoundary(view, from, to, text);
         if (typedOutside) setActiveBoundaryLinkEdit(view, null);
         return typedOutside;

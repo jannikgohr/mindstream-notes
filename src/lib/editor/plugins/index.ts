@@ -51,6 +51,10 @@ export { parseUserHref, userHref } from './user-mention-href';
 export { autoPair } from './prose/auto-pair';
 export { isEmptyParagraph, preserveBlankLines } from './prose/blank-lines';
 export { installBlockHandleGuard } from './prose/block-handle-guard';
+export {
+  stripInterBlockWhitespace,
+  stripPastedInterBlockWhitespace
+} from './prose/paste-whitespace';
 export { installSelectionToolbarAutoHide } from './prose/selection-toolbar';
 export {
   addMermaidMenuItem,
