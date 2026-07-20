@@ -87,6 +87,10 @@ export interface ExcalidrawRoomClientOptions {
   /** Optional writer-key signature context. When present, scene updates
    *  from peers must be signed by an authorized writer key. */
   auth?: CollabFrameAuth;
+  /** True for a shared-scope room, where scene updates must carry a writer
+   *  signature. Derived from the room's collab epoch rather than from `auth`
+   *  being present, so a failed authorisation lookup fails closed. */
+  requireSignedWrites?: boolean;
   onAuthStale?: () => void;
 }
 
@@ -285,7 +289,7 @@ export class ExcalidrawRoomClient {
 
     let decoded: RemoteMessage;
     try {
-      if (this.opts.auth) {
+      if (this.opts.requireSignedWrites) {
         const frame = new Uint8Array(ctBuffer);
         if (!isSignedCollabFrame(frame)) {
           this.warnDecrypt('rejected unsigned scene update');

@@ -20,6 +20,8 @@ const FRAME_SYNC_STEP_1 = 0x00;
 const FRAME_SYNC_STEP_2 = 0x01;
 const FRAME_AWARENESS = 0x02;
 const SIGNED_REQUIRED_TYPES = new Set([FRAME_SYNC_STEP_2]);
+/** Unshared rooms require no signatures — only this device holds the key. */
+const NO_SIGNED_REQUIRED_TYPES: ReadonlySet<number> = new Set();
 
 const RECONNECT_INITIAL_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
@@ -73,6 +75,10 @@ export interface InkWebCollabProviderOptions {
   noteId: string;
   onStatusChange?: (online: boolean) => void;
   auth?: CollabFrameAuth;
+  /** True for a shared-scope room, where document updates must carry a writer
+   *  signature. Derived from the room's collab epoch rather than from `auth`
+   *  being present, so a failed authorisation lookup fails closed. */
+  requireSignedWrites?: boolean;
   onAuthStale?: () => void;
 }
 
@@ -244,6 +250,13 @@ export class InkWebCollabProvider {
     }
   }
 
+  /** Which frame types this room refuses to accept unsigned. */
+  private signedRequiredTypes(): ReadonlySet<number> {
+    return this.opts.requireSignedWrites
+      ? SIGNED_REQUIRED_TYPES
+      : NO_SIGNED_REQUIRED_TYPES;
+  }
+
   private startSync(): void {
     if (this.joined || this.destroyed) return;
     this.joined = true;
@@ -300,7 +313,7 @@ export class InkWebCollabProvider {
         frame,
         this.cryptoKey,
         this.opts.auth,
-        SIGNED_REQUIRED_TYPES
+        this.signedRequiredTypes()
       );
     } catch (err) {
       console.warn(

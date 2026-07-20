@@ -28,12 +28,24 @@ x-logging: &default-logging
     max-size: "10m"
     max-file: "3"
 
+# Baseline container hardening shared by every service: stop a process gaining
+# capabilities through a setuid binary. Cheap and image-agnostic.
+#
+# Deliberately NOT dropping capabilities here (`cap_drop: [ALL]`) — the right
+# set differs per image (postgres wants CHOWN/FOWNER/DAC_OVERRIDE for initdb,
+# nginx wants SETUID/SETGID to drop to its worker user) and getting it wrong
+# fails at boot, so it needs a run against the real stack first.
+x-hardening: &default-hardening
+  security_opt:
+    - no-new-privileges:true
+
 services:
   nginx:
     build: ./nginx
     container_name: mindstream-nginx
     restart: always
     logging: *default-logging
+    <<: *default-hardening
     depends_on:
       - yjs-relay
       - excalidraw-room
@@ -57,6 +69,7 @@ services:
     container_name: mindstream-yjs-relay
     restart: always
     logging: *default-logging
+    <<: *default-hardening
     environment:
       - HOST=0.0.0.0
       - PORT=1234
@@ -76,6 +89,7 @@ services:
     container_name: mindstream-excalidraw-room
     restart: always
     logging: *default-logging
+    <<: *default-hardening
     environment:
       - NODE_ENV=production
       - PORT=80
@@ -101,6 +115,7 @@ services:
     container_name: mindstream-etebase
     restart: always
     logging: *default-logging
+    <<: *default-hardening
     depends_on:
       postgres:
         condition: service_healthy
@@ -145,6 +160,7 @@ services:
     container_name: mindstream-postgres
     restart: always
     logging: *default-logging
+    <<: *default-hardening
     environment:
       - POSTGRES_DB=${POSTGRES_DB:-etebase}
       - POSTGRES_USER=${POSTGRES_USER:-etebase}

@@ -785,6 +785,7 @@
         doc: yDoc,
         awareness,
         auth: collabAuthForRoom(room, signingMaterial),
+        requireSignedWrites: room.collab_epoch > 0,
         onAuthStale: () => {
           void setupCollabProvider();
         },

@@ -229,6 +229,11 @@ them as viewers rather than trusting a self-declared identity.
 
 ### M2 — Signature enforcement fails open when `auth` is absent
 
+> **Fixed.** Enforcement is now driven by an explicit `requireSignedWrites`
+> flag (`room.collab_epoch > 0`) rather than by `auth` being truthy, so a
+> scoped room whose authorisation lookup failed rejects unsigned updates
+> instead of accepting them.
+
 **Where:** [`signed-collab-frame.ts:329`](../src/lib/sync/signed-collab-frame.ts).
 
 ```ts
@@ -253,10 +258,15 @@ This is a robustness finding, not a demonstrated bypass — it depends on whethe
 any caller can reach a scoped room with `auth` unset. That is worth tracing
 explicitly and then pinning with a test.
 
-**Suggested:** make the distinction explicit in the type rather than inferring
-it from absence — e.g. `auth: { kind: "unshared" } | { kind: "scoped", … }` —
-so a scoped room with unresolved authorization is a distinguishable state that
-rejects rather than a missing one that permits.
+**Traced before fixing:** `writer_auth` turns out to be set unconditionally for
+every scoped room (with an empty writer list when the lookup fails), so `auth`
+was undefined exactly when the room was unshared — the fail-open was not
+reachable in practice. It rested entirely on that one assignment, though, so
+the guard is now explicit rather than incidental: callers pass
+`requireSignedWrites`, `decodeCollabFrame` enforces the declared type set
+unconditionally, and unshared rooms declare an empty set. A scoped room with
+unresolved authorisation now rejects everything (fail-closed) instead of
+accepting everything. Regression tests cover both directions.
 
 ### M3 — Personal rooms reuse the item UID and item key
 
@@ -416,7 +426,14 @@ reachable directly. Worth a `real_ip_from` / trusted-proxy guard anyway.
 
 ### L4 — Container and image hardening
 
-`docker-compose.yml` sets no `read_only`, `cap_drop: [ALL]`, or
+> **Partly fixed.** `security_opt: [no-new-privileges:true]` now applies to
+> every service via a shared `x-hardening` anchor. `cap_drop` is deliberately
+> not set yet: the right capability set differs per image (postgres wants
+> CHOWN/FOWNER/DAC_OVERRIDE for initdb, nginx wants SETUID/SETGID to drop to
+> its worker user) and getting it wrong fails at boot, so it needs a run
+> against the real stack — which this review could not do.
+
+`docker-compose.yml` set no `read_only`, `cap_drop: [ALL]`, or
 `security_opt: [no-new-privileges:true]` on any service. `victorrds/etebase` is
 pinned by tag (`0.14.2-alpine`) rather than digest, so the image contents can
 change under a fixed tag. The log-size caps and the `POSTGRES_PASSWORD:?` required-
@@ -538,8 +555,9 @@ Worth recording so it does not regress:
    Excalidraw will need accommodating, but it is the control that caps
    everything else on the client.
 3. [M1](#m1--presence-and-sync-request-frames-are-unsigned) and
-   [M2](#m2--signature-enforcement-fails-open-when-auth-is-absent) — both sit in
-   code being actively changed on this branch, so they are cheapest to fix now.
+   ~~[M2](#m2--signature-enforcement-fails-open-when-auth-is-absent)~~ (done) —
+   both sit in code being actively changed on this branch, so they are cheapest
+   to fix now.
 4. ~~[H3](#h3--the-collab-relay-is-unauthenticated)~~ (done) and
    [M6](#m6--no-rate-limiting-in-front-of-etebase-auth) — backend changes,
    independent of the client work.
