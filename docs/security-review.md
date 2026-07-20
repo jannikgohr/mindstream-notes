@@ -448,8 +448,12 @@ limits above. A client can still _append_ to `X-Forwarded-For`, but nginx no
 longer believes it — the resolved `$remote_addr` comes from the trusted-proxy
 walk, so neither the limiter nor etebase's audit log can be poisoned.
 
-**Still open:** the standard security headers (HSTS, `X-Content-Type-Options`,
-`X-Frame-Options`) on proxied responses.
+**Also done:** `X-Content-Type-Options`, `X-Frame-Options` and `Referrer-Policy`
+on every response. Note the nginx inheritance rule this exposed — a location
+with its own `add_header` inherits _none_ from the server block, which had
+silently stripped all three from `/healthz`; it now uses `default_type`
+instead. No HSTS: this listener is plain HTTP behind a TLS terminator, and the
+header is only meaningful (and only safe) from the origin that terminates TLS.
 
 ---
 
@@ -506,12 +510,14 @@ reachable directly. Worth a `real_ip_from` / trusted-proxy guard anyway.
 
 ### L4 — Container and image hardening
 
-> **Partly fixed.** `security_opt: [no-new-privileges:true]` now applies to
-> every service via a shared `x-hardening` anchor. `cap_drop` is deliberately
-> not set yet: the right capability set differs per image (postgres wants
-> CHOWN/FOWNER/DAC_OVERRIDE for initdb, nginx wants SETUID/SETGID to drop to
-> its worker user) and getting it wrong fails at boot, so it needs a run
-> against the real stack — which this review could not do.
+> **Fixed.** `no-new-privileges` plus `cap_drop: [ALL]` now apply to every
+> service via a shared `x-hardening` anchor, with each image re-adding only
+> what it needs. Verified against the real stack: all five containers report
+> healthy, and nginx's `CapEff` is `0x4c1` — exactly CHOWN, SETGID, SETUID and
+> NET_BIND_SERVICE.
+>
+> Still open: the etebase image is pinned by tag rather than digest, so its
+> contents can change under a fixed tag.
 
 `docker-compose.yml` set no `read_only`, `cap_drop: [ALL]`, or
 `security_opt: [no-new-privileges:true]` on any service. `victorrds/etebase` is
@@ -645,11 +651,8 @@ Worth recording so it does not regress:
    self-declared one, and are worth designing together.
 3. [L2](#l2--auth-refresh-can-be-triggered-by-any-key-holder) — a nuisance
    amplifier, already throttled to one refresh per 5s per provider.
-4. [L4](#l4--container-and-image-hardening) — `cap_drop` per service, once it
-   can be booted against the real stack.
-5. Security headers (HSTS, `X-Frame-Options`, `X-Content-Type-Options`) on
-   nginx-proxied responses, noted under
-   [M6](#m6--no-rate-limiting-in-front-of-etebase-auth).
+4. Pin the etebase image by digest rather than tag
+   ([L4](#l4--container-and-image-hardening)).
 
 ## Verifying the collab changes
 
