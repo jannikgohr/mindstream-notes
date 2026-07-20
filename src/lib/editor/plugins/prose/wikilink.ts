@@ -801,14 +801,35 @@ function insertLinkBoundaryText(
   return pos + text.length;
 }
 
+function boundaryLinkMark(state: EditorState, pos: number): Mark | null {
+  return (
+    trailingBoundaryLinkMark(state, pos) ?? leadingBoundaryLinkMark(state, pos)
+  );
+}
+
 function shouldTypeOutsideLinkBoundary(
   state: EditorState,
   pos: number
 ): boolean {
-  const boundaryMark =
-    trailingBoundaryLinkMark(state, pos) ?? leadingBoundaryLinkMark(state, pos);
+  const boundaryMark = boundaryLinkMark(state, pos);
   if (!boundaryMark) return false;
   return !exactStoredLinkMark(state, boundaryMark);
+}
+
+/**
+ * The boundary link the caret is inside of on *stored marks alone* — editing
+ * with no active pin. The pin is dropped whenever something moves the caret
+ * (a sibling plugin's transaction, a re-render), while the stored marks that
+ * make typing land inside the link survive. Inserting then clears those marks,
+ * so without re-pinning only the first character stays in the link.
+ */
+function storedInsideBoundaryMark(
+  state: EditorState,
+  pos: number
+): Mark | null {
+  const boundaryMark = boundaryLinkMark(state, pos);
+  if (!boundaryMark) return null;
+  return exactStoredLinkMark(state, boundaryMark);
 }
 
 function typeOutsideLinkBoundary(
@@ -1224,6 +1245,29 @@ export function wikilinkDecorationPlugin(
         }
 
         pendingEmptyNoteLink = null;
+
+        // Inside the link on stored marks alone, with no pin to carry the run.
+        // Insert through the pinned path so the characters after this one stay
+        // in the link too, instead of only the first landing inside.
+        if (from === to && !activeBoundaryLinkEdit) {
+          const storedMark = storedInsideBoundaryMark(view.state, from);
+          if (storedMark) {
+            const nextPos = insertLinkBoundaryText(
+              view,
+              from,
+              text,
+              storedMark
+            );
+            if (nextPos !== null) {
+              setActiveBoundaryLinkEdit(view, {
+                pos: nextPos,
+                mark: storedMark
+              });
+              return true;
+            }
+          }
+        }
+
         const typedOutside = typeOutsideLinkBoundary(view, from, to, text);
         if (typedOutside) setActiveBoundaryLinkEdit(view, null);
         return typedOutside;
