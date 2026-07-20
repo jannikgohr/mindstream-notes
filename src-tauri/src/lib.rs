@@ -536,6 +536,39 @@ fn safe_asset_mime(stored: &str) -> &'static str {
         .unwrap_or("application/octet-stream")
 }
 
+/// Origins the app itself is served from, and the only ones allowed to read
+/// asset bytes cross-origin.
+///
+/// wry serves the webview from a different origin per platform, and the asset
+/// scheme is a *different* origin again — so freeform PNG export, which reads
+/// asset images into a canvas, needs CORS or the canvas taints and export
+/// breaks. Echoing back only these keeps that working while dropping the
+/// previous `Access-Control-Allow-Origin: *`, which let any origin running
+/// script in the webview read every asset in the vault.
+const APP_ORIGINS: &[&str] = &[
+    // macOS / Linux / iOS
+    "tauri://localhost",
+    // Windows / Android
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+];
+
+/// The `Access-Control-Allow-Origin` value to answer a request with, if any.
+/// `None` means send no CORS header at all — same-origin and `<img>` loads are
+/// unaffected either way.
+fn asset_allowed_origin(origin: Option<&str>) -> Option<&'static str> {
+    let origin = origin?;
+    if let Some(matched) = APP_ORIGINS.iter().find(|allowed| **allowed == origin) {
+        return Some(matched);
+    }
+    // `pnpm dev` serves the frontend over http; only trust it in dev builds.
+    #[cfg(debug_assertions)]
+    if origin == "http://localhost:1420" {
+        return Some("http://localhost:1420");
+    }
+    None
+}
+
 /// URI scheme handler for `mindstream://localhost/<asset_id>` (and the
 /// `http://mindstream.localhost/<asset_id>` form wry uses on
 /// Windows/Android). Looks up the asset row, streams the bytes back
@@ -566,38 +599,51 @@ fn serve_asset_bytes<R: tauri::Runtime>(
     let db = app.state::<Db>();
     let load_result = db.with_conn(|c| crate::assets::load(c, &id));
 
+    // Only the app's own origin may read these bytes cross-origin.
+    let allow_origin = asset_allowed_origin(
+        request
+            .headers()
+            .get(tauri::http::header::ORIGIN)
+            .and_then(|v| v.to_str().ok()),
+    );
+
     match load_result {
-        Ok(asset) => tauri::http::Response::builder()
-            .status(tauri::http::StatusCode::OK)
-            .header(
-                tauri::http::header::CONTENT_TYPE,
-                safe_asset_mime(&asset.summary.mime_type),
-            )
-            // Belt and braces around the allowlist: without this, a webview
-            // that content-sniffs could still decide a PNG-labelled blob is
-            // really HTML and execute it.
-            .header(tauri::http::header::X_CONTENT_TYPE_OPTIONS, "nosniff")
-            // SVG is on the allowlist because notes legitimately embed it,
-            // but an SVG *navigated to* directly is a document that can run
-            // script. `sandbox` makes the webview treat any asset document as
-            // sandboxed (no scripts, no same-origin), while leaving <img>
-            // rendering untouched.
-            .header(
-                tauri::http::header::CONTENT_SECURITY_POLICY,
-                "default-src 'none'; style-src 'unsafe-inline'; sandbox",
-            )
-            // Bytes for a given asset id never change (a new upload
-            // produces a new id), so allow long-lived caching. Sync's
-            // "fetch fresh bytes for previously-missing asset" path
-            // goes from 404 → 200 — browsers don't aggressively cache
-            // 404s, so this stays correct.
-            .header(
-                tauri::http::header::CACHE_CONTROL,
-                "public, max-age=31536000, immutable",
-            )
-            .header("Access-Control-Allow-Origin", "*")
-            .body(Cow::Owned(asset.bytes))
-            .unwrap(),
+        Ok(asset) => {
+            let mut builder = tauri::http::Response::builder()
+                .status(tauri::http::StatusCode::OK)
+                .header(
+                    tauri::http::header::CONTENT_TYPE,
+                    safe_asset_mime(&asset.summary.mime_type),
+                )
+                // Belt and braces around the allowlist: without this, a webview
+                // that content-sniffs could still decide a PNG-labelled blob is
+                // really HTML and execute it.
+                .header(tauri::http::header::X_CONTENT_TYPE_OPTIONS, "nosniff")
+                // SVG is on the allowlist because notes legitimately embed it,
+                // but an SVG *navigated to* directly is a document that can run
+                // script. `sandbox` makes the webview treat any asset document as
+                // sandboxed (no scripts, no same-origin), while leaving <img>
+                // rendering untouched.
+                .header(
+                    tauri::http::header::CONTENT_SECURITY_POLICY,
+                    "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+                )
+                // Bytes for a given asset id never change (a new upload
+                // produces a new id), so allow long-lived caching. Sync's
+                // "fetch fresh bytes for previously-missing asset" path
+                // goes from 404 → 200 — browsers don't aggressively cache
+                // 404s, so this stays correct.
+                .header(
+                    tauri::http::header::CACHE_CONTROL,
+                    "public, max-age=31536000, immutable",
+                )
+                // Responses differ by Origin, so caches must not share them.
+                .header(tauri::http::header::VARY, "Origin");
+            if let Some(origin) = allow_origin {
+                builder = builder.header(tauri::http::header::ACCESS_CONTROL_ALLOW_ORIGIN, origin);
+            }
+            builder.body(Cow::Owned(asset.bytes)).unwrap()
+        }
         Err(err) => {
             log::warn!("[asset-scheme] {id} lookup failed: {err}");
             tauri::http::Response::builder()
@@ -611,6 +657,38 @@ fn serve_asset_bytes<R: tauri::Runtime>(
 #[cfg(test)]
 mod asset_scheme_tests {
     use super::safe_asset_mime;
+
+    #[test]
+    fn echoes_only_the_app_origins() {
+        for origin in ["tauri://localhost", "http://tauri.localhost"] {
+            assert_eq!(super::asset_allowed_origin(Some(origin)), Some(origin));
+        }
+    }
+
+    /// The header used to be a blanket `*`, which let any origin running
+    /// script in the webview read every asset in the vault.
+    #[test]
+    fn refuses_foreign_and_lookalike_origins() {
+        for origin in [
+            "https://evil.example",
+            "null",
+            // Suffix/prefix games against a naive contains() check.
+            "http://tauri.localhost.evil.example",
+            "http://eviltauri.localhost",
+            "tauri://localhost.evil",
+        ] {
+            assert_eq!(
+                super::asset_allowed_origin(Some(origin)),
+                None,
+                "{origin} must not be echoed"
+            );
+        }
+    }
+
+    #[test]
+    fn sends_no_cors_header_when_there_is_no_origin() {
+        assert_eq!(super::asset_allowed_origin(None), None);
+    }
 
     #[test]
     fn passes_through_types_notes_actually_embed() {
