@@ -38,6 +38,34 @@ rest have sensible defaults.
 | `ETEBASE_SUPER_PASS` | _(auto-gen)_            | Leave blank to let the image print a random one to the logs on first boot. Pin it only if you have to.                                                                                    |
 | `NGINX_PORT`         | `8080`                  | **Local dev only.** Host port `docker-compose.override.yml` publishes nginx on. Ignored in production (deploy tooling skips the override). Keep in sync with the port in `PUBLIC_ORIGIN`. |
 
+## Collab join challenge
+
+`yjs-relay` authenticates every join. The room id is the public half of a
+P-256 keypair the client derives from the room secret, so on connect the relay
+sends a random nonce, the client signs it, and the relay verifies against the
+room id it was given in the URL. The relay holds no secret and keeps no
+per-room state — it stays the dumb broadcast hub the E2EE design assumes, but a
+room id captured from an access log is no longer enough to join.
+
+This proves _membership_, not identity: everyone in a room derives the same
+keypair, so it does not distinguish readers from writers. Write-access
+enforcement lives in the per-writer frame signatures, not here.
+
+Freeform (Excalidraw) live sync goes through `excalidraw-room`, which is built
+unmodified from upstream and has no equivalent check.
+
+**Upgrading.** There is no way to turn the challenge off — the relay always
+requires it. Room ids also change for every note, so clients and relay must
+move together: a mixed fleet lands in different rooms and won't see each
+other, and older clients can't answer the challenge at all. Plan the upgrade
+as a single step, and expect live collaboration to be unavailable for clients
+that haven't updated yet. Notes themselves are unaffected — at-rest sync
+through Etebase is a separate path.
+
+Symptoms of a mismatch: clients reconnect in a loop with close code `1008`
+(`auth failed` / `auth timeout`), or a `400 malformed room param` at upgrade
+from a client still sending an old-style room id.
+
 ## Reverse proxy & TLS
 
 The stack is plain HTTP on purpose - run a TLS-terminating reverse

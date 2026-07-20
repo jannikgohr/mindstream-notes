@@ -37,7 +37,7 @@ use etebase::managers::{CollectionManager, ItemManager};
 use etebase::utils::randombytes;
 use etebase::{Account, Collection, CollectionAccessLevel, FetchOptions, Item, ItemMetadata};
 use hkdf::Hkdf;
-use hmac::{Hmac, Mac};
+use p256::pkcs8::{EncodePrivateKey, EncodePublicKey};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
@@ -66,15 +66,13 @@ const KIND_ASSETS: &str = "assets";
 const KIND_SIGNATURES: &str = "signatures";
 
 const PAYLOAD_SCHEMA: u32 = 2;
-const LIVE_COLLAB_ROOM_INFO: &[u8] = b"mindstream-live-collab-room/v1";
 const LIVE_COLLAB_KEY_INFO: &[u8] = b"mindstream-live-collab-key/v1";
+const LIVE_COLLAB_JOIN_INFO: &[u8] = b"mindstream-live-collab-join/v1";
 const P256_SPKI_DER_LEN: usize = 91;
 const P256_SPKI_DER_PREFIX: &[u8] = &[
     0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x08, 0x2a,
     0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00, 0x04,
 ];
-
-type HmacSha256 = Hmac<Sha256>;
 
 pub(super) fn catch_blocking_panic<T>(
     label: &str,
@@ -2575,8 +2573,11 @@ fn now_unix_ms() -> i64 {
 /// device and never synced).
 #[derive(Debug, Serialize)]
 pub struct RoomInfo {
-    /// The relay room. Unshared legacy notes use the Etebase Item UID; shared
-    /// notes use a manifest-salted HMAC so removal rotates the room.
+    /// The relay room, and simultaneously the public half of the join
+    /// keypair: base64 of the P-256 SPKI DER derived from the room secret.
+    /// Naming the room after a *public* key is what lets the relay
+    /// authenticate joins without holding any secret of its own — see
+    /// [`derive_collab_join_keypair`].
     pub room_id: String,
     /// 32-byte AES-GCM secret, base64 (URL-safe) so it survives JSON IPC
     /// without ballooning into a number array.
@@ -2587,6 +2588,14 @@ pub struct RoomInfo {
     /// Present for salted shared-folder rooms. Clients combine this public-key
     /// registry with their local private key to sign/verify write frames.
     pub writer_auth: Option<RoomWriterAuth>,
+    /// Private half of the join keypair (PKCS#8 DER, base64) — the client
+    /// signs the relay's challenge nonce with it to prove it can derive the
+    /// room secret. Handed to the webview rather than kept in Rust because
+    /// re-deriving it costs an Etebase round-trip, which a reconnect loop
+    /// would turn into a fetch storm. It is strictly less sensitive than
+    /// `key_b64`, which is in the same payload and decrypts content; this one
+    /// only opens the door to a room whose traffic is already ciphertext.
+    pub join_private_key_pkcs8_b64: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -2600,26 +2609,79 @@ pub struct RoomAuthorizedWriter {
     pub public_key_b64: String,
 }
 
+/// Deterministically derive the room's join keypair from the same secret the
+/// room id comes from, returning `(spki_b64, pkcs8_b64)`.
+///
+/// The public half *becomes* the room id. That inversion is the whole trick:
+/// the relay can verify a signature against the room id it was handed in the
+/// URL, so it authenticates membership while holding no secret, no per-room
+/// state, and no knowledge of Etebase identities. Every member derives the
+/// same keypair, so this proves "I can derive this room's secret" — it says
+/// nothing about *which* member, and deliberately does not replace the
+/// per-writer frame signatures that carry authorship.
+///
+/// An HKDF block can land outside the valid scalar range `[1, n-1]`. The odds
+/// are ~2^-32, but a room that failed to derive would be silently unjoinable,
+/// so we counter-retry into the info string rather than erroring out.
+fn derive_collab_join_keypair(
+    note_uid: &str,
+    note_key: &[u8],
+    salt: Option<&[u8]>,
+    collab_epoch: u64,
+) -> Result<(String, String), String> {
+    let hkdf = Hkdf::<Sha256>::new(salt, note_key);
+    let mut info = Vec::with_capacity(
+        LIVE_COLLAB_JOIN_INFO.len() + std::mem::size_of::<u64>() + note_uid.len() + 1,
+    );
+    info.extend_from_slice(LIVE_COLLAB_JOIN_INFO);
+    info.extend_from_slice(&collab_epoch.to_be_bytes());
+    info.extend_from_slice(note_uid.as_bytes());
+    info.push(0);
+    let counter_at = info.len() - 1;
+
+    for counter in 0_u8..=u8::MAX {
+        info[counter_at] = counter;
+        let mut okm = [0_u8; 32];
+        hkdf.expand(&info, &mut okm)
+            .map_err(|e| format!("derive join key: {e}"))?;
+        let Ok(secret) = p256::SecretKey::from_slice(&okm) else {
+            continue;
+        };
+        let pkcs8 = secret
+            .to_pkcs8_der()
+            .map_err(|e| format!("encode join private key: {e}"))?;
+        let spki = secret
+            .public_key()
+            .to_public_key_der()
+            .map_err(|e| format!("encode join public key: {e}"))?;
+        return Ok((
+            BASE64_STANDARD.encode(spki.as_bytes()),
+            BASE64_STANDARD.encode(pkcs8.as_bytes()),
+        ));
+    }
+    Err("derive join key: no valid scalar in 256 attempts".into())
+}
+
 fn derive_live_collab_room(
     note_uid: &str,
     note_key: &[u8],
     scope: Option<&ShareScopeCollabInfo>,
 ) -> Result<RoomInfo, String> {
+    // Unscoped (personal) notes have no manifest salt, so the note key is the
+    // only secret available to bind the room to. They still get a derived join
+    // keypair — which also stops the room id from being the Etebase item UID,
+    // a value the server operator already stores in plaintext.
     let Some(scope) = scope.filter(|scope| !scope.collab_salt.is_empty()) else {
+        let (room_id, join_private_key_pkcs8_b64) =
+            derive_collab_join_keypair(note_uid, note_key, None, 0)?;
         return Ok(RoomInfo {
-            room_id: note_uid.to_string(),
+            room_id,
             key_b64: etebase::utils::to_base64(note_key).map_err(|e| format!("encode key: {e}"))?,
             collab_epoch: 0,
             writer_auth: None,
+            join_private_key_pkcs8_b64,
         });
     };
-
-    let mut mac = <HmacSha256 as Mac>::new_from_slice(&scope.collab_salt)
-        .map_err(|e| format!("room hmac: {e}"))?;
-    mac.update(LIVE_COLLAB_ROOM_INFO);
-    mac.update(&scope.collab_epoch.to_be_bytes());
-    mac.update(note_uid.as_bytes());
-    let room_bytes = mac.finalize().into_bytes();
 
     let hkdf = Hkdf::<Sha256>::new(Some(&scope.collab_salt), note_key);
     let mut derived_key = [0_u8; 32];
@@ -2632,12 +2694,19 @@ fn derive_live_collab_room(
     hkdf.expand(&info, &mut derived_key)
         .map_err(|e| format!("derive live-collab key: {e}"))?;
 
+    let (room_id, join_private_key_pkcs8_b64) = derive_collab_join_keypair(
+        note_uid,
+        note_key,
+        Some(&scope.collab_salt),
+        scope.collab_epoch,
+    )?;
+
     Ok(RoomInfo {
-        room_id: etebase::utils::to_base64(&room_bytes)
-            .map_err(|e| format!("encode room id: {e}"))?,
+        room_id,
         key_b64: etebase::utils::to_base64(&derived_key).map_err(|e| format!("encode key: {e}"))?,
         collab_epoch: scope.collab_epoch,
         writer_auth: None,
+        join_private_key_pkcs8_b64,
     })
 }
 
@@ -3038,6 +3107,7 @@ fn scope_of(conn: &Connection, table: &str, etebase_uid: &str) -> AppResult<Opti
 mod tests {
     use super::*;
     use crate::db::open_memory_for_tests;
+    use p256::pkcs8::DecodePrivateKey;
 
     fn remote_note(id: &str, parent: Option<&str>, trashed_at: Option<&str>) -> NotePayload {
         NotePayload {
@@ -3068,16 +3138,54 @@ mod tests {
         }
     }
 
+    /// The room id must never be the Etebase item UID: the server stores that
+    /// in plaintext, so naming the room after it hands the operator a join
+    /// credential for every personal note.
     #[test]
-    fn derive_live_collab_room_preserves_legacy_credentials_without_scope_salt() {
+    fn derive_live_collab_room_never_names_the_room_after_the_item_uid() {
         let note_key = [3_u8; 32];
 
         let room = derive_live_collab_room("note_uid", &note_key, None).unwrap();
 
-        assert_eq!(room.room_id, "note_uid");
+        assert_ne!(room.room_id, "note_uid");
+        assert!(valid_collab_writer_public_key(&room.room_id));
         assert_eq!(room.key_b64, etebase::utils::to_base64(&note_key).unwrap());
         assert_eq!(room.collab_epoch, 0);
         assert!(room.writer_auth.is_none());
+        assert!(!room.join_private_key_pkcs8_b64.is_empty());
+    }
+
+    #[test]
+    fn derive_collab_join_keypair_is_deterministic_and_separated() {
+        let note_key = [3_u8; 32];
+        let salt = [9_u8; 32];
+
+        let (pub_a, priv_a) = derive_collab_join_keypair("note_uid", &note_key, None, 0).unwrap();
+        let (pub_b, priv_b) = derive_collab_join_keypair("note_uid", &note_key, None, 0).unwrap();
+        assert_eq!(pub_a, pub_b, "same inputs must yield the same room");
+        assert_eq!(priv_a, priv_b);
+
+        // Every input that scopes a room must change the keypair, or a
+        // revoked member's derived key would still open the rotated room.
+        let other_note = derive_collab_join_keypair("other_uid", &note_key, None, 0).unwrap();
+        let other_epoch =
+            derive_collab_join_keypair("note_uid", &note_key, Some(&salt), 1).unwrap();
+        let other_salt = derive_collab_join_keypair("note_uid", &note_key, Some(&salt), 0).unwrap();
+        assert_ne!(pub_a, other_note.0);
+        assert_ne!(pub_a, other_salt.0);
+        assert_ne!(other_salt.0, other_epoch.0);
+    }
+
+    /// The public half is the room id, so it has to be exactly the P-256 SPKI
+    /// shape the relay parses — the same validation writer keys go through.
+    #[test]
+    fn derive_collab_join_keypair_emits_p256_spki() {
+        let (public_b64, private_b64) =
+            derive_collab_join_keypair("note_uid", &[3_u8; 32], None, 0).unwrap();
+
+        assert!(valid_collab_writer_public_key(&public_b64));
+        let private_der = BASE64_STANDARD.decode(&private_b64).unwrap();
+        assert!(p256::SecretKey::from_pkcs8_der(&private_der).is_ok());
     }
 
     #[test]
@@ -3097,6 +3205,10 @@ mod tests {
         assert_ne!(
             scoped.key_b64,
             etebase::utils::to_base64(&note_key).unwrap()
+        );
+        assert_ne!(
+            scoped.join_private_key_pkcs8_b64,
+            rotated_epoch.join_private_key_pkcs8_b64
         );
         assert_eq!(scoped.collab_epoch, 1);
         assert!(scoped.writer_auth.is_none());

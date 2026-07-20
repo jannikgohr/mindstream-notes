@@ -36,6 +36,7 @@ import {
   signedCollabFrameNeedsAuthRefresh,
   type CollabFrameAuth
 } from './signed-collab-frame';
+import { isJoinChallenge, signJoinChallenge } from './collab-join-challenge';
 
 const FRAME_SYNC_STEP_1 = 0x00;
 const FRAME_SYNC_STEP_2 = 0x01;
@@ -45,6 +46,10 @@ const SIGNED_REQUIRED_TYPES = new Set([FRAME_SYNC_STEP_2]);
 const RECONNECT_INITIAL_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
 const AUTH_REFRESH_THROTTLE_MS = 5_000;
+/** How long to wait for the relay's join challenge before giving up on the
+ *  socket. Well under the relay's own 10s auth deadline so a slow challenge
+ *  can still land in time. */
+const JOIN_CHALLENGE_TIMEOUT_MS = 4_000;
 
 /** First/last few base64 chars of the key — enough to confirm two
  *  devices imported the same secret without leaking the secret. */
@@ -73,8 +78,13 @@ function frameName(type: number): string {
 export interface CollabProviderOptions {
   /** wss:// URL of the relay. */
   url: string;
-  /** Room ID — we use the etebase Item UID. */
+  /** Room ID — base64 of the room's derived P-256 public key. */
   roomId: string;
+  /** Private half of the room's join keypair (PKCS#8 DER, base64). Used to
+   *  answer the relay's challenge nonce. Rust always supplies it for a real
+   *  room; absent only in tests and the browser-fallback mock, where there is
+   *  no relay to answer to. */
+  joinPrivateKeyPkcs8B64?: string;
   /** 32 raw bytes of AES-GCM key material. */
   keyBytes: Uint8Array;
   /** Live yjs document the editor is bound to. */
@@ -98,6 +108,10 @@ export class CollabProvider {
   private reconnectAttempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private lastAuthRefreshRequest = 0;
+  /** False while we're waiting for (or answering) the relay's join
+   *  challenge. Nothing is sent until it flips. */
+  private joined = false;
+  private joinDeadlineTimer: ReturnType<typeof setTimeout> | null = null;
 
   private readonly docUpdateHandler: (
     update: Uint8Array,
@@ -143,6 +157,7 @@ export class CollabProvider {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    this.clearJoinDeadline();
     this.opts.doc.off('update', this.docUpdateHandler);
     this.opts.awareness.off('update', this.awarenessUpdateHandler);
     // Drop our own awareness state so peers' cursor list immediately
@@ -191,28 +206,34 @@ export class CollabProvider {
       this.reconnectAttempt = 0;
       this.opts.onStatusChange?.(true);
       console.info('[collab] open room=%s', this.opts.roomId);
-      // Initial sync handshake: send our state vector so peers already in
-      // the room can compute a diff and ship us their newer ops.
-      const sv = Y.encodeStateVector(this.opts.doc);
-      void this.send(FRAME_SYNC_STEP_1, sv);
-      // Also publish our current state. If this client edited while
-      // disconnected, peers already in the room won't have sent us a fresh
-      // sync_step_1, so the normal request/reply half would only pull their
-      // edits into us. Yjs updates are idempotent, making this safe on ordinary
-      // reconnects and necessary for offline edits to converge both ways.
-      const update = Y.encodeStateAsUpdate(this.opts.doc);
-      void this.send(FRAME_SYNC_STEP_2, update);
-      // Announce our awareness so peers' cursor list shows us joining.
-      const local = encodeAwarenessUpdate(this.opts.awareness, [
-        this.opts.awareness.clientID
-      ]);
-      void this.send(FRAME_AWARENESS, local);
+      if (!this.opts.joinPrivateKeyPkcs8B64) {
+        // No join key to prove anything with — start straight away and let
+        // the relay reject us if it requires the challenge.
+        this.startSync();
+        return;
+      }
+      // Say nothing until the relay has challenged us. If none arrives the
+      // peer isn't a relay that authenticates joins, so drop the socket
+      // rather than downgrade to an unauthenticated session — reconnect
+      // backoff will keep retrying in case the relay is mid-upgrade.
+      this.joinDeadlineTimer = setTimeout(() => {
+        this.joinDeadlineTimer = null;
+        if (this.joined || this.destroyed) return;
+        console.warn(
+          '[collab] no join challenge from relay room=%s — closing (relay too old?)',
+          this.opts.roomId
+        );
+        this.ws?.close();
+      }, JOIN_CHALLENGE_TIMEOUT_MS);
     };
     ws.onmessage = (e) => {
       void this.handleMessage(e.data);
     };
     ws.onclose = (e) => {
       this.ws = null;
+      // The next socket has to re-answer a fresh challenge.
+      this.joined = false;
+      this.clearJoinDeadline();
       this.opts.onStatusChange?.(false);
       console.info(
         '[collab] close room=%s code=%d reason=%s',
@@ -282,10 +303,73 @@ export class CollabProvider {
     }
   }
 
+  /** Opening exchange once we're allowed to talk: state vector, our current
+   *  state, then presence. */
+  private startSync(): void {
+    if (this.joined || this.destroyed) return;
+    this.joined = true;
+    // Initial sync handshake: send our state vector so peers already in
+    // the room can compute a diff and ship us their newer ops.
+    const sv = Y.encodeStateVector(this.opts.doc);
+    void this.send(FRAME_SYNC_STEP_1, sv);
+    // Also publish our current state. If this client edited while
+    // disconnected, peers already in the room won't have sent us a fresh
+    // sync_step_1, so the normal request/reply half would only pull their
+    // edits into us. Yjs updates are idempotent, making this safe on ordinary
+    // reconnects and necessary for offline edits to converge both ways.
+    const update = Y.encodeStateAsUpdate(this.opts.doc);
+    void this.send(FRAME_SYNC_STEP_2, update);
+    // Announce our awareness so peers' cursor list shows us joining.
+    const local = encodeAwarenessUpdate(this.opts.awareness, [
+      this.opts.awareness.clientID
+    ]);
+    void this.send(FRAME_AWARENESS, local);
+  }
+
+  private clearJoinDeadline(): void {
+    if (this.joinDeadlineTimer !== null) {
+      clearTimeout(this.joinDeadlineTimer);
+      this.joinDeadlineTimer = null;
+    }
+  }
+
+  /** Answer the relay's challenge. Returns true if the frame was a challenge
+   *  and we've dealt with it — the caller should not process it further. */
+  private async handleJoinChallenge(frame: Uint8Array): Promise<boolean> {
+    if (this.joined || !isJoinChallenge(frame)) return false;
+    this.clearJoinDeadline();
+    const key = this.opts.joinPrivateKeyPkcs8B64;
+    if (!key) return true;
+    const response = await signJoinChallenge(frame, this.opts.roomId, key);
+    if (this.destroyed) return true;
+    if (!response) {
+      // Can't answer, so we'll never be let in. Reconnecting would just
+      // fail the same way — close and leave the badge offline.
+      console.warn(
+        '[collab] could not answer join challenge room=%s',
+        this.opts.roomId
+      );
+      this.destroy();
+      return true;
+    }
+    const ws = this.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return true;
+    try {
+      ws.send(response);
+    } catch (err) {
+      console.warn('[collab] join response send failed:', err);
+      return true;
+    }
+    console.debug('[collab] joined room=%s', this.opts.roomId);
+    this.startSync();
+    return true;
+  }
+
   private async handleMessage(data: unknown): Promise<void> {
     if (!(data instanceof ArrayBuffer)) return;
     if (!this.cryptoKey) return;
     const frame = new Uint8Array(data);
+    if (await this.handleJoinChallenge(frame)) return;
     let decoded;
     try {
       decoded = await decodeCollabFrame(

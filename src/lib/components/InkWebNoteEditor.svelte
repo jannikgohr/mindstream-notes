@@ -781,6 +781,7 @@
       provider = new InkWebCollabProvider({
         url: collabUrl,
         roomId: room.room_id,
+        joinPrivateKeyPkcs8B64: room.join_private_key_pkcs8_b64,
         keyBytes: base64ToBytes(room.key_b64),
         handle,
         noteId,
