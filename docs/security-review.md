@@ -94,6 +94,12 @@ Excalidraw both tend to need `blob:` and `worker-src`.
 
 ### H2 — Asset scheme reflects a remote-controlled MIME type
 
+> **Fixed**, except the CORS header. The served `Content-Type` is now narrowed
+> to an allowlist (`safe_asset_mime` in [`lib.rs`](../src-tauri/src/lib.rs)),
+> with `X-Content-Type-Options: nosniff` and a `default-src 'none'; sandbox`
+> CSP on every asset response. `Access-Control-Allow-Origin: *` is unchanged —
+> see "Still open" below.
+
 **Where:** [`src-tauri/src/lib.rs:521-535`](../src-tauri/src/lib.rs) (handler),
 [`src-tauri/src/sync/mod.rs:1128-1153`](../src-tauri/src/sync/mod.rs) and
 [`src-tauri/src/sync/scopes.rs:736-744`](../src-tauri/src/sync/scopes.rs)
@@ -126,14 +132,21 @@ confirming, but the finding stands regardless: attacker-controlled active
 content served from the app's own scheme, with permissive CORS and no sniff
 protection, is not a safe position even in the framed case.
 
-**Suggested, in order of value:**
+**Done:** the allowlist and `nosniff`, applied at the _serve_ boundary rather
+than on ingest so rows already in the database are covered without a migration.
+SVG stays allowed because notes embed it; the response CSP (`sandbox`) is what
+stops a navigated SVG executing, while leaving `<img>` rendering untouched. The
+allowlist is deliberately generous on raster formats (including HEIC/HEIF for
+Apple camera photos) — none can execute, and a narrow list would turn "user
+drags a photo in" into a broken image.
 
-1. Allowlist `mime_type` on ingest _and_ on serve — map anything unrecognised
-   to `application/octet-stream`. The app only needs a handful of image types
-   plus `application/pdf`.
-2. Add `X-Content-Type-Options: nosniff` and
-   `Content-Disposition: attachment` for non-image types.
-3. Drop `Access-Control-Allow-Origin: *`, or narrow it to the app origin.
+**Still open — `Access-Control-Allow-Origin: *`.** Removing it is not free: the
+webview page and the asset scheme are different origins, so freeform/Excalidraw
+PNG export reads asset images into a canvas and would taint it without CORS,
+breaking export. Narrowing the header to the app origin is the right fix, but
+the origin differs per platform (`tauri://localhost` vs
+`http://tauri.localhost`), so it needs echo-back-if-matching logic and
+verification on each. Left for a change that can be tested on all of them.
 
 ### H3 — The collab relay is unauthenticated
 
@@ -518,9 +531,9 @@ Worth recording so it does not regress:
 
 ## Suggested order of work
 
-1. [H2](#h2--asset-scheme-reflects-a-remote-controlled-mime-type) — smallest
-   change with the largest risk reduction; a MIME allowlist plus `nosniff` is
-   contained and testable.
+1. ~~[H2](#h2--asset-scheme-reflects-a-remote-controlled-mime-type)~~ (done,
+   bar the CORS header) — smallest change with the largest risk reduction; a
+   MIME allowlist plus `nosniff` is contained and testable.
 2. [H1](#h1--webview-csp-is-disabled) — more iteration, since pdf.js and
    Excalidraw will need accommodating, but it is the control that caps
    everything else on the client.
