@@ -140,13 +140,13 @@ allowlist is deliberately generous on raster formats (including HEIC/HEIF for
 Apple camera photos) — none can execute, and a narrow list would turn "user
 drags a photo in" into a broken image.
 
-**Still open — `Access-Control-Allow-Origin: *`.** Removing it is not free: the
-webview page and the asset scheme are different origins, so freeform/Excalidraw
-PNG export reads asset images into a canvas and would taint it without CORS,
-breaking export. Narrowing the header to the app origin is the right fix, but
-the origin differs per platform (`tauri://localhost` vs
-`http://tauri.localhost`), so it needs echo-back-if-matching logic and
-verification on each. Left for a change that can be tested on all of them.
+**Also done — CORS.** The blanket `Access-Control-Allow-Origin: *` is gone.
+The handler now echoes the request `Origin` only when it matches a known app
+origin (`tauri://localhost`, `http(s)://tauri.localhost`, plus
+`http://localhost:1420` in debug builds) and sends no CORS header otherwise,
+with `Vary: Origin` so caches don't cross-serve. Freeform PNG export keeps its
+canvas read; any other origin loses it. Worth confirming export still works on
+each platform, since the app origin differs by platform.
 
 ### H3 — The collab relay is unauthenticated
 
@@ -366,6 +366,13 @@ recorded locally at accept time, and treat more than one match for a
 
 ### M6 — No rate limiting in front of Etebase auth
 
+> **Fixed.** `limit_req` (10r/m, burst 20) now guards
+> `/api/v1/authentication/` — the real Etebase auth prefix, confirmed against
+> the etebase-rs client source — with a global `limit_conn` of 128 per client.
+> Both key off `$binary_remote_addr` **after** `real_ip` resolves the true
+> client, which was the prerequisite: behind a reverse proxy every user would
+> otherwise have shared one bucket.
+
 **Where:** [`backend/nginx/nginx.conf`](../backend/nginx/nginx.conf).
 
 The config has no `limit_req_zone`, `limit_conn_zone`, or any throttling. The
@@ -382,10 +389,15 @@ one.
 Also absent: HSTS, `X-Content-Type-Options`, `X-Frame-Options`/`frame-ancestors`
 on proxied responses.
 
-**Suggested:** add `limit_req` on the auth paths specifically and a global
-`limit_conn`. Either strip a client-supplied `X-Forwarded-For` at the edge
-(`proxy_set_header X-Forwarded-For $remote_addr`) or configure `real_ip` with an
-explicit trusted-proxy list. Add the standard security headers.
+**Done:** `real_ip` with an explicit trusted-proxy list (RFC1918 + loopback,
+which is where a container network and its edge proxy live), `real_ip_recursive
+on` so the walk stops at the first untrusted hop, plus the rate and connection
+limits above. A client can still _append_ to `X-Forwarded-For`, but nginx no
+longer believes it — the resolved `$remote_addr` comes from the trusted-proxy
+walk, so neither the limiter nor etebase's audit log can be poisoned.
+
+**Still open:** the standard security headers (HSTS, `X-Content-Type-Options`,
+`X-Frame-Options`) on proxied responses.
 
 ---
 
@@ -416,6 +428,10 @@ a real DoS, but it is an unauthenticated party steering the victim's server
 traffic.
 
 ### L3 — `X-Forwarded-Proto` is trusted unconditionally
+
+> **Fixed.** The header is now honoured only when `$realip_remote_addr` (the
+> peer _before_ real_ip rewriting) is a trusted proxy; anyone else falls back
+> to `$scheme`.
 
 The `$forwarded_proto` map ([`nginx.conf:16-19`](../backend/nginx/nginx.conf))
 falls back to `$scheme` only when the header is absent — a client that sends
@@ -558,9 +574,9 @@ Worth recording so it does not regress:
    ~~[M2](#m2--signature-enforcement-fails-open-when-auth-is-absent)~~ (done) —
    both sit in code being actively changed on this branch, so they are cheapest
    to fix now.
-4. ~~[H3](#h3--the-collab-relay-is-unauthenticated)~~ (done) and
-   [M6](#m6--no-rate-limiting-in-front-of-etebase-auth) — backend changes,
-   independent of the client work.
+4. ~~[H3](#h3--the-collab-relay-is-unauthenticated)~~ and
+   ~~[M6](#m6--no-rate-limiting-in-front-of-etebase-auth)~~ (both done) —
+   backend changes, independent of the client work.
 5. [M3](#m3--personal-rooms-reuse-the-item-uid-and-item-key),
    [M4](#m4--writer-key-username-binding-is-self-asserted),
    [M5](#m5--share-manifest-provenance-is-not-verified) — design-level, worth
