@@ -35,23 +35,23 @@ The three trust boundaries that matter throughout:
 
 ## Summary
 
-| ID                                                              | Severity                | Area            | Short                                                         |
-| --------------------------------------------------------------- | ----------------------- | --------------- | ------------------------------------------------------------- |
-| [H1](#h1--webview-csp-is-disabled)                              | High                    | Tauri client    | `csp: null` disables CSP app-wide                             |
-| [H2](#h2--asset-scheme-reflects-a-remote-controlled-mime-type)  | High                    | Tauri client    | Remote-controlled `Content-Type` on `mindstream://`           |
-| [H3](#h3--the-collab-relay-is-unauthenticated)                  | ~~High~~ **Fixed**      | Backend         | Anyone may join/publish to any relay room                     |
-| [M1](#m1--presence-and-sync-request-frames-are-unsigned)        | Medium                  | Collab protocol | Only document updates require a signature                     |
-| [M2](#m2--signature-enforcement-fails-open-when-auth-is-absent) | Medium                  | Collab protocol | Missing `auth` silently disables the signed-frame requirement |
-| [M3](#m3--personal-rooms-reuse-the-item-uid-and-item-key)       | Medium _(partly fixed)_ | Collab protocol | Unscoped rooms reuse the item key as the wire key             |
-| [M4](#m4--writer-key-username-binding-is-self-asserted)         | Medium                  | Sharing         | A writer can publish a signing key under another's username   |
-| [M5](#m5--share-manifest-provenance-is-not-verified)            | Medium                  | Sharing         | First manifest matching a scope id wins, regardless of author |
-| [M6](#m6--no-rate-limiting-in-front-of-etebase-auth)            | Medium                  | Backend         | Login endpoint is unthrottled; `X-Forwarded-For` is spoofable |
-| [L1](#l1--no-replay-protection-within-an-epoch)                 | Low                     | Collab protocol | Signed frames carry no nonce, counter, or timestamp           |
-| [L2](#l2--auth-refresh-can-be-triggered-by-any-key-holder)      | Low                     | Collab protocol | Self-signed frame forces a manifest re-fetch                  |
-| [L3](#l3--x-forwarded-proto-is-trusted-unconditionally)         | Low                     | Backend         | Client can dictate the scheme Django sees                     |
-| [L4](#l4--container-and-image-hardening)                        | Low                     | Backend         | No `cap_drop`/`no-new-privileges`; image pinned by tag        |
-| [L5](#l5--random-96-bit-ivs-under-a-long-lived-key)             | Low                     | Collab protocol | Birthday bound on IV collision                                |
-| [L6](#l6--collab-logging-is-verbose-in-production)              | Low                     | Client          | Key fingerprint and frame metadata logged unconditionally     |
+| ID                                                              | Severity             | Area            | Short                                                         |
+| --------------------------------------------------------------- | -------------------- | --------------- | ------------------------------------------------------------- |
+| [H1](#h1--webview-csp-is-disabled)                              | High                 | Tauri client    | `csp: null` disables CSP app-wide                             |
+| [H2](#h2--asset-scheme-reflects-a-remote-controlled-mime-type)  | ~~High~~ **Fixed**   | Tauri client    | Remote-controlled `Content-Type` on `mindstream://`           |
+| [H3](#h3--the-collab-relay-is-unauthenticated)                  | ~~High~~ **Fixed**   | Backend         | Anyone may join/publish to any relay room                     |
+| [M1](#m1--presence-and-sync-request-frames-are-unsigned)        | ~~Medium~~ **Fixed** | Collab protocol | Only document updates required a signature                    |
+| [M2](#m2--signature-enforcement-fails-open-when-auth-is-absent) | ~~Medium~~ **Fixed** | Collab protocol | Missing `auth` silently disabled the signed-frame requirement |
+| [M3](#m3--personal-rooms-reuse-the-item-uid-and-item-key)       | ~~Medium~~ **Fixed** | Collab protocol | Unscoped rooms reused the item UID and item key               |
+| [M4](#m4--writer-key-username-binding-is-self-asserted)         | Medium               | Sharing         | A writer can publish a signing key under another's username   |
+| [M5](#m5--share-manifest-provenance-is-not-verified)            | Medium               | Sharing         | First manifest matching a scope id wins, regardless of author |
+| [M6](#m6--no-rate-limiting-in-front-of-etebase-auth)            | ~~Medium~~ **Fixed** | Backend         | Login endpoint was unthrottled; `X-Forwarded-For` spoofable   |
+| [L1](#l1--no-replay-protection-within-an-epoch)                 | ~~Low~~ **Fixed**    | Collab protocol | Signed frames carried no nonce, counter, or timestamp         |
+| [L2](#l2--auth-refresh-can-be-triggered-by-any-key-holder)      | Low                  | Collab protocol | Self-signed frame forces a manifest re-fetch                  |
+| [L3](#l3--x-forwarded-proto-is-trusted-unconditionally)         | ~~Low~~ **Fixed**    | Backend         | Client could dictate the scheme Django sees                   |
+| [L4](#l4--container-and-image-hardening)                        | Low _(partly fixed)_ | Backend         | `cap_drop` still open; image pinned by tag                    |
+| [L5](#l5--random-96-bit-ivs-under-a-long-lived-key)             | Low _(won't fix)_    | Collab protocol | Birthday bound on IV collision                                |
+| [L6](#l6--collab-logging-is-verbose-in-production)              | Low _(won't fix)_    | Client          | Key fingerprint and frame metadata logged unconditionally     |
 
 ---
 
@@ -94,11 +94,11 @@ Excalidraw both tend to need `blob:` and `worker-src`.
 
 ### H2 — Asset scheme reflects a remote-controlled MIME type
 
-> **Fixed**, except the CORS header. The served `Content-Type` is now narrowed
-> to an allowlist (`safe_asset_mime` in [`lib.rs`](../src-tauri/src/lib.rs)),
-> with `X-Content-Type-Options: nosniff` and a `default-src 'none'; sandbox`
-> CSP on every asset response. `Access-Control-Allow-Origin: *` is unchanged —
-> see "Still open" below.
+> **Fixed.** The served `Content-Type` is narrowed to an allowlist
+> (`safe_asset_mime` in [`lib.rs`](../src-tauri/src/lib.rs)), with
+> `X-Content-Type-Options: nosniff` and a `default-src 'none'; sandbox` CSP on
+> every asset response, and the blanket `Access-Control-Allow-Origin: *` is
+> replaced by an echo of the app's own origin.
 
 **Where:** [`src-tauri/src/lib.rs:521-535`](../src-tauri/src/lib.rs) (handler),
 [`src-tauri/src/sync/mod.rs:1128-1153`](../src-tauri/src/sync/mod.rs) and
@@ -193,6 +193,16 @@ room, but not opening sockets.
 
 ### M1 — Presence and sync-request frames are unsigned
 
+> **Fixed.** `SIGNED_REQUIRED_TYPES` now covers all three frame types, not
+> just document updates. Safe to require across the board because
+> `can_receive_live_collab_room` withholds a scoped room from read-only
+> members entirely, so everyone who can join can also sign — no legitimate
+> participant loses presence.
+>
+> This closes the outsider and revoked-member vector, not writer-vs-writer
+> impersonation: a writer can still publish a key under another writer's
+> username, which is [M4](#m4--writer-key-username-binding-is-self-asserted).
+
 **Where:** [`collab-provider.ts:43`](../src/lib/sync/collab-provider.ts),
 [`ink-web-collab-provider.ts:21`](../src/lib/sync/ink-web-collab-provider.ts),
 [`excalidraw-room-client.ts:44`](../src/lib/freeform/excalidraw-room-client.ts).
@@ -222,10 +232,9 @@ Two consequences:
   the room_ encode and broadcast the entire document. One small forged frame,
   repeated, becomes sustained CPU and bandwidth load on every participant.
 
-**Suggested:** require signatures on awareness too, and either sign
-`sync_step_1` or rate-limit the reply per peer. If read-only members must be
-able to announce presence, give them a distinct viewer key so peers can render
-them as viewers rather than trusting a self-declared identity.
+**Done:** signatures required on awareness and `sync_step_1` as well. The
+read-only-viewer-key idea turned out to be unnecessary — viewers are never
+handed a scoped room in the first place.
 
 ### M2 — Signature enforcement fails open when `auth` is absent
 
@@ -270,9 +279,11 @@ accepting everything. Regression tests cover both directions.
 
 ### M3 — Personal rooms reuse the item UID and item key
 
-> **Half fixed.** The room id is no longer the Etebase item UID — every room,
-> scoped or not, is now named after a derived P-256 public key. The wire key is
-> still the raw item key; that half is open.
+> **Fixed.** The room id is no longer the Etebase item UID — every room,
+> scoped or not, is named after a derived P-256 public key — and the wire key
+> is now HKDF-derived rather than being the Etebase item key itself. Both
+> paths share one `derive_live_collab_key`, so the personal path can't drift
+> from the scoped one again.
 
 **Where:** [`sync/mod.rs`](../src-tauri/src/sync/mod.rs), `derive_live_collab_room`.
 
@@ -307,10 +318,9 @@ Two distinct issues:
   constructions. This is the failure mode key-separation hygiene exists to
   prevent, and the scoped path already shows the right pattern.
 
-**Still suggested:** derive the AES-GCM wire key for the unscoped path through
-HKDF with its own info string, instead of handing the raw Etebase item key to
-the webview. There is no reason the personal path should be weaker than the
-shared one.
+**Done:** the unscoped path runs through the same HKDF as the scoped one, with
+the epoch pinned to 0 and no salt. The personal path is no longer weaker than
+the shared one.
 
 ### M4 — Writer-key username binding is self-asserted
 
@@ -405,6 +415,13 @@ walk, so neither the limiter nor etebase's audit log can be poisoned.
 
 ### L1 — No replay protection within an epoch
 
+> **Fixed.** Signed frames now carry a sender timestamp inside the signed
+> header, and `CollabReplayGuard` drops any frame outside a 5-minute freshness
+> window or whose signature it has already seen. The signature doubles as the
+> frame's identity — every frame carries a fresh random IV that the signature
+> covers — so no extra nonce field was needed. The check runs _after_
+> signature verification, so forged frames can't evict cache entries.
+
 Signed frames bind `roomId` and `collabEpoch`
 ([`signed-collab-frame.ts:267-274`](../src/lib/sync/signed-collab-frame.ts)) but
 carry no nonce, sequence number, or timestamp. Any captured frame stays valid
@@ -457,6 +474,10 @@ variable guard are good practice already present; this is the remaining gap.
 
 ### L5 — Random 96-bit IVs under a long-lived key
 
+> **Won't fix.** Reaching the birthday bound needs ~2^32 frames under one
+> room key, which a note's editing session will never approach. Noted for
+> completeness; revisit only if key lifetimes change.
+
 `encodeCollabFrame` draws a fresh random 12-byte IV per frame
 ([`signed-collab-frame.ts:250`](../src/lib/sync/signed-collab-frame.ts)) under a
 per-note key that lives as long as the epoch. Random 96-bit IVs hit a ~2^-32
@@ -466,6 +487,11 @@ reaching that is implausible in practice — noted for completeness. A
 deterministic counter-based IV would remove the concern entirely.
 
 ### L6 — Collab logging is verbose in production
+
+> **Won't fix.** The fingerprint is 6 base64 chars of a 256-bit key and exists
+> so a user can confirm two devices imported the same secret when diagnosing
+> "live editing isn't working". Gating it behind a dev flag costs a real
+> support tool to remove ~36 bits of a key that is useless without the rest.
 
 `CollabProvider` logs a key fingerprint at construction
 ([`collab-provider.ts:131-136`](../src/lib/sync/collab-provider.ts)) plus
@@ -562,23 +588,31 @@ Worth recording so it does not regress:
   is a request to apply this same pattern to the path that skips it.
 - **The updater pins a minisign public key** and fetches over HTTPS.
 
-## Suggested order of work
+## What's left
 
-1. ~~[H2](#h2--asset-scheme-reflects-a-remote-controlled-mime-type)~~ (done,
-   bar the CORS header) — smallest change with the largest risk reduction; a
-   MIME allowlist plus `nosniff` is contained and testable.
-2. [H1](#h1--webview-csp-is-disabled) — more iteration, since pdf.js and
-   Excalidraw will need accommodating, but it is the control that caps
-   everything else on the client.
-3. [M1](#m1--presence-and-sync-request-frames-are-unsigned) and
-   ~~[M2](#m2--signature-enforcement-fails-open-when-auth-is-absent)~~ (done) —
-   both sit in code being actively changed on this branch, so they are cheapest
-   to fix now.
-4. ~~[H3](#h3--the-collab-relay-is-unauthenticated)~~ and
-   ~~[M6](#m6--no-rate-limiting-in-front-of-etebase-auth)~~ (both done) —
-   backend changes, independent of the client work.
-5. [M3](#m3--personal-rooms-reuse-the-item-uid-and-item-key),
-   [M4](#m4--writer-key-username-binding-is-self-asserted),
-   [M5](#m5--share-manifest-provenance-is-not-verified) — design-level, worth
-   thinking through together since all three are about binding cryptographic
-   material to an attested identity.
+1. [H1](#h1--webview-csp-is-disabled) — the CSP. Needs a run of the packaged
+   app to shake out what pdf.js and Excalidraw actually require, so it lands
+   with a smoke-test rather than on confidence.
+2. [M4](#m4--writer-key-username-binding-is-self-asserted) and
+   [M5](#m5--share-manifest-provenance-is-not-verified) — both are about
+   binding cryptographic material to an attested identity rather than a
+   self-declared one, and are worth designing together.
+3. [L2](#l2--auth-refresh-can-be-triggered-by-any-key-holder) — a nuisance
+   amplifier, already throttled to one refresh per 5s per provider.
+4. [L4](#l4--container-and-image-hardening) — `cap_drop` per service, once it
+   can be booted against the real stack.
+5. Security headers (HSTS, `X-Frame-Options`, `X-Content-Type-Options`) on
+   nginx-proxied responses, noted under
+   [M6](#m6--no-rate-limiting-in-front-of-etebase-auth).
+
+## Verifying the collab changes
+
+The join challenge, the signed-frame rules, and the key derivations are all
+covered by unit tests on both sides plus a live run against the real relay —
+see [Join challenge](#join-challenge). Two things that suite cannot reach, and
+that a T4 two-client run should confirm:
+
+- Two real clients still converge on a shared note, now that every frame type
+  requires a signature.
+- A personal (unshared) note still syncs live between two devices of the same
+  account, now that its room id and wire key are both derived.
