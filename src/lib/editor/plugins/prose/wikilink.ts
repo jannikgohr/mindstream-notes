@@ -970,22 +970,71 @@ export function wikilinkDecorationPlugin(
   let activeBoundaryLinkEdit: LinkBoundaryEdit | null = null;
   let measuredBracketFontSize: string | null = null;
 
+  /**
+   * The rendered `.wikilink-note-link` the caret sits at the edge of.
+   *
+   * The brackets scale with *that element's* font, which is not the editor's
+   * whenever the link lives in a heading. Probe one position into the link
+   * text — that always resolves into the link's own text node — rather than
+   * the boundary itself, which is ambiguous between the link and its
+   * neighbour.
+   */
+  function boundaryNoteLinkElement(
+    view: EditorView,
+    boundary: LinkBoundaryMode
+  ): Element | null {
+    const pos = view.state.selection.from;
+    const probePos = boundary.side === 'end' ? pos - 1 : pos + 1;
+    if (probePos < 0 || probePos > view.state.doc.content.size) return null;
+    try {
+      const { node, offset } = view.domAtPos(probePos);
+      const candidate =
+        node.nodeType === Node.TEXT_NODE
+          ? node.parentElement
+          : ((node.childNodes[offset] ??
+              node.childNodes[offset - 1] ??
+              node) as Node);
+      const element =
+        candidate?.nodeType === Node.TEXT_NODE
+          ? candidate.parentElement
+          : (candidate as Element | null);
+      return element?.closest?.('.wikilink-note-link') ?? null;
+    } catch {
+      // domAtPos throws for positions it can't resolve (mid-teardown, a doc
+      // that changed under us). No measurement is better than a wrong one.
+      return null;
+    }
+  }
+
   // The `[[`/`]]` brackets are CSS pseudo-elements, so the virtual cursor at a
   // boundary renders just inside them. When the caret is "outside" the link we
   // nudge it clear of the brackets so typing flows from the cursor instead of
   // dropping a character behind it. Measure the real bracket width (the font is
   // a variable, so a fixed em can't line up) and publish it as a CSS variable.
-  function updateBracketOffset(view: EditorView): void {
-    const fontSize = window.getComputedStyle(view.dom).fontSize;
+  //
+  // Measured against the link's own computed font, not the editor's: a wikilink
+  // in a heading renders far larger, and compensating it with the body-text
+  // bracket width left the caret short by most of a bracket.
+  function updateBracketOffset(view: EditorView, boundary: LinkBoundaryMode) {
+    const styleSource = boundaryNoteLinkElement(view, boundary) ?? view.dom;
+    const style = window.getComputedStyle(styleSource);
+    const fontSize = style.fontSize;
     if (fontSize === measuredBracketFontSize) return;
 
+    // Measured outside the editable subtree: appending into it would show up
+    // in ProseMirror's DOM observer as a content change.
     const probe = document.createElement('span');
     probe.textContent = ']]';
     probe.style.position = 'absolute';
     probe.style.visibility = 'hidden';
     probe.style.whiteSpace = 'pre';
     probe.style.pointerEvents = 'none';
-    view.dom.appendChild(probe);
+    probe.style.fontSize = fontSize;
+    probe.style.fontFamily = style.fontFamily;
+    probe.style.fontWeight = style.fontWeight;
+    probe.style.fontStyle = style.fontStyle;
+    probe.style.letterSpacing = style.letterSpacing;
+    document.body.appendChild(probe);
     const bracketWidth = probe.getBoundingClientRect().width;
     probe.remove();
 
@@ -1031,7 +1080,9 @@ export function wikilinkDecorationPlugin(
     // Side classes drive the bracket compensation transform, so they follow
     // the *note link* answer, not merely "is there a boundary here".
     const bracketed = boundary?.noteLink === true;
-    if (bracketed && boundary?.mode === 'outside') updateBracketOffset(view);
+    if (bracketed && boundary?.mode === 'outside') {
+      updateBracketOffset(view, boundary);
+    }
     view.dom.classList.toggle(
       'wikilink-boundary-inside',
       bracketed && boundary?.mode === 'inside'
