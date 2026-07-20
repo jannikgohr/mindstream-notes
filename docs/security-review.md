@@ -373,6 +373,13 @@ owner-attested rather than member-attested.
 
 ### M5 — Share manifest provenance is not verified
 
+> **Mitigated, not fully fixed.** Scope resolution no longer takes the first
+> match: it collects every manifest claiming a `share_scope_id` and refuses to
+> resolve the scope at all if there is more than one. That removes the race —
+> an impostor manifest can no longer be silently preferred — but provenance
+> itself is still unverified, so a manifest whose legitimate twin is absent
+> would still be trusted.
+
 **Where:** [`sharing.rs:1615-1647`](../src-tauri/src/sharing.rs).
 
 `share_scope_collab_info` lists every `mindstream.share_manifest` collection the
@@ -392,9 +399,13 @@ fully control — which is why this is Medium rather than High. It is still a
 confused-deputy: the code treats "a manifest exists claiming this scope" as
 "this is the manifest for this scope."
 
-**Suggested:** verify the manifest collection's owner matches the scope owner
-recorded locally at accept time, and treat more than one match for a
-`share_scope_id` as an error rather than picking one.
+**Done:** the second half — more than one match is now an error rather than a
+choice, which is what killed the race. Failing closed costs live collab for
+that folder; guessing would have cost the room key.
+
+**Still suggested:** the first half — verify the manifest collection's owner
+against the scope owner recorded locally at accept time. That is what turns
+"exactly one manifest claims this scope" into "the right one does".
 
 ### M6 — No rate limiting in front of Etebase auth
 
@@ -614,9 +625,9 @@ Worth recording so it does not regress:
 
 1. [H1](#h1--webview-csp-is-disabled) — the policy is written but unverified.
    Run [the smoke test](#smoke-testing-the-csp) on a packaged build.
-2. [M4](#m4--writer-key-username-binding-is-self-asserted) and
-   [M5](#m5--share-manifest-provenance-is-not-verified) — both are about
-   binding cryptographic material to an attested identity rather than a
+2. [M4](#m4--writer-key-username-binding-is-self-asserted) and the remaining
+   half of [M5](#m5--share-manifest-provenance-is-not-verified) — both are
+   about binding cryptographic material to an attested identity rather than a
    self-declared one, and are worth designing together.
 3. [L2](#l2--auth-refresh-can-be-triggered-by-any-key-holder) — a nuisance
    amplifier, already throttled to one refresh per 5s per provider.
