@@ -525,6 +525,14 @@ interface LinkBoundaryEdit {
 interface LinkBoundaryMode {
   mode: 'inside' | 'outside';
   side: 'start' | 'end';
+  /**
+   * Is the link at this boundary an ID-backed note link? Boundary *behaviour*
+   * (typing at an edge lands outside the link, arrows opt into editing its
+   * text) applies to every link mark. The caret *translation* must not: it
+   * compensates for the generated `[[` / `]]`, which only note links draw, so
+   * applying it to a plain link renders the caret a bracket-width off.
+   */
+  noteLink: boolean;
 }
 
 function noteLinkTextRanges(state: EditorState): NoteLinkTextRange[] {
@@ -974,7 +982,7 @@ export function wikilinkDecorationPlugin(
     const pos = selection.from;
 
     if (pendingEmptyNoteLink?.pos === pos) {
-      return { mode: 'inside', side: 'end' };
+      return { mode: 'inside', side: 'end', noteLink: true };
     }
 
     const trailing = trailingBoundaryLinkMark(state, pos);
@@ -983,36 +991,41 @@ export function wikilinkDecorationPlugin(
     if (!boundaryMark) return null;
 
     const side = trailing ? 'end' : 'start';
+    const noteLink = !!parseNoteHref(boundaryMark.attrs.href);
 
     if (boundaryEditAt(activeBoundaryLinkEdit, pos)) {
-      return { mode: 'inside', side };
+      return { mode: 'inside', side, noteLink };
     }
     if (boundaryEditMatches(activeBoundaryLinkEdit, pos, boundaryMark))
-      return { mode: 'inside', side };
+      return { mode: 'inside', side, noteLink };
     return {
       mode: exactStoredLinkMark(state, boundaryMark) ? 'inside' : 'outside',
-      side
+      side,
+      noteLink
     };
   }
 
   function syncBoundaryMode(view: EditorView): void {
     const boundary = boundaryMode(view);
-    if (boundary?.mode === 'outside') updateBracketOffset(view);
+    // Side classes drive the bracket compensation transform, so they follow
+    // the *note link* answer, not merely "is there a boundary here".
+    const bracketed = boundary?.noteLink === true;
+    if (bracketed && boundary?.mode === 'outside') updateBracketOffset(view);
     view.dom.classList.toggle(
       'wikilink-boundary-inside',
-      boundary?.mode === 'inside'
+      bracketed && boundary?.mode === 'inside'
     );
     view.dom.classList.toggle(
       'wikilink-boundary-outside',
-      boundary?.mode === 'outside'
+      bracketed && boundary?.mode === 'outside'
     );
     view.dom.classList.toggle(
       'wikilink-boundary-start',
-      boundary?.side === 'start'
+      bracketed && boundary?.side === 'start'
     );
     view.dom.classList.toggle(
       'wikilink-boundary-end',
-      boundary?.side === 'end'
+      bracketed && boundary?.side === 'end'
     );
     if (boundary) {
       view.dom.dataset.wikilinkBoundary = boundary.mode;

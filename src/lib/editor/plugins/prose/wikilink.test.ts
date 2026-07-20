@@ -192,6 +192,75 @@ describe('wikilink boundary editing at the start of the display name', () => {
   });
 });
 
+describe('plain (non-note) links', () => {
+  // Only note links draw the generated `[[` / `]]`, and the caret transform
+  // exists purely to compensate for them — applying it at the edge of an
+  // ordinary link rendered the caret a bracket-width off. The *behaviour*
+  // (typing at the edge stays out of the link) must survive unchanged.
+  const plainMark = schema.mark('link', { href: 'https://example.com' });
+
+  function makePlainLinkDoc(before = 'ab', after = 'cd'): ProseNode {
+    const children: ProseNode[] = [];
+    if (before) children.push(schema.text(before));
+    children.push(schema.text('Title', [plainMark]));
+    if (after) children.push(schema.text(after));
+    return schema.node('doc', null, [schema.node('paragraph', null, children)]);
+  }
+
+  const LINK_START = 3;
+  const LINK_END = LINK_START + 'Title'.length;
+
+  function offsetClasses(view: EditorView): string[] {
+    return [...view.dom.classList].filter((c) =>
+      c.startsWith('wikilink-boundary-')
+    );
+  }
+
+  it('does not shift the caret at either edge', () => {
+    const view = makeView(makePlainLinkDoc());
+    setCaret(view, LINK_END);
+    expect(offsetClasses(view)).toEqual([]);
+    setCaret(view, LINK_START);
+    expect(offsetClasses(view)).toEqual([]);
+  });
+
+  it('still tracks the boundary so typing behaviour is unchanged', () => {
+    const view = makeView(makePlainLinkDoc());
+    setCaret(view, LINK_END);
+    expect(view.dom.dataset.wikilinkBoundary).toBe('outside');
+    expect(view.dom.dataset.wikilinkBoundarySide).toBe('end');
+  });
+
+  it('typing after the link does not append to the link text', () => {
+    // The paste case: caret parked at the end of a freshly inserted link,
+    // nothing after it. Continuing to type must produce plain text.
+    const view = makeView(makePlainLinkDoc('ab', ''));
+    setCaret(view, LINK_END);
+    typeText(view, ' rest');
+    expect(linkedText(view)).toBe('Title');
+    expect(paragraphText(view)).toBe('abTitle rest');
+  });
+
+  it('typing before the link does not prepend to the link text', () => {
+    const view = makeView(makePlainLinkDoc('', 'cd'));
+    setCaret(view, 1);
+    typeText(view, 'zz');
+    expect(linkedText(view)).toBe('Title');
+    expect(paragraphText(view)).toBe('zzTitlecd');
+  });
+});
+
+describe('note links keep the bracket compensation', () => {
+  const LINK_END = 1 + 2 + 'Title'.length;
+
+  it('applies the offset classes at the trailing edge', () => {
+    const view = makeView(makeDoc('ab', 'Title', 'cd'));
+    setCaret(view, LINK_END);
+    expect(view.dom.classList.contains('wikilink-boundary-outside')).toBe(true);
+    expect(view.dom.classList.contains('wikilink-boundary-end')).toBe(true);
+  });
+});
+
 describe('note-link navigation guard', () => {
   // On the Android WebView, following a `mindstream://note/…` anchor
   // white-screens the app. The capture-phase guard must cancel the
