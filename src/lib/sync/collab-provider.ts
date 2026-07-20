@@ -309,7 +309,7 @@ export class CollabProvider {
       return;
     }
     if (!decoded) {
-      this.maybeRequestAuthRefresh(frame);
+      void this.maybeRequestAuthRefresh(frame);
       return;
     }
     const { type, payload: pt } = decoded;
@@ -343,8 +343,17 @@ export class CollabProvider {
     }
   }
 
-  private maybeRequestAuthRefresh(frame: Uint8Array): void {
-    if (!signedCollabFrameNeedsAuthRefresh(frame, this.opts.auth)) return;
+  private async maybeRequestAuthRefresh(frame: Uint8Array): Promise<void> {
+    if (!this.cryptoKey) return;
+    if (
+      !(await signedCollabFrameNeedsAuthRefresh(
+        frame,
+        this.cryptoKey,
+        this.opts.auth
+      ))
+    ) {
+      return;
+    }
     const now = Date.now();
     if (now - this.lastAuthRefreshRequest < AUTH_REFRESH_THROTTLE_MS) return;
     this.lastAuthRefreshRequest = now;

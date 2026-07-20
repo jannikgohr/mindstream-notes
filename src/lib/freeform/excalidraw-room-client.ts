@@ -298,7 +298,7 @@ export class ExcalidrawRoomClient {
           SIGNED_REQUIRED_TYPES
         );
         if (!signed) {
-          this.maybeRequestAuthRefresh(frame);
+          void this.maybeRequestAuthRefresh(frame, key);
           return;
         }
         if (signed.type !== FRAME_SCENE_UPDATE) return;
@@ -362,8 +362,19 @@ export class ExcalidrawRoomClient {
     console.warn(`[excalidraw-room] ${reason}${suffix}`);
   }
 
-  private maybeRequestAuthRefresh(frame: Uint8Array): void {
-    if (!signedCollabFrameNeedsAuthRefresh(frame, this.opts.auth)) return;
+  private async maybeRequestAuthRefresh(
+    frame: Uint8Array,
+    cryptoKey: CryptoKey
+  ): Promise<void> {
+    if (
+      !(await signedCollabFrameNeedsAuthRefresh(
+        frame,
+        cryptoKey,
+        this.opts.auth
+      ))
+    ) {
+      return;
+    }
     const now = Date.now();
     if (now - this.lastAuthRefreshRequest < AUTH_REFRESH_THROTTLE_MS) return;
     this.lastAuthRefreshRequest = now;

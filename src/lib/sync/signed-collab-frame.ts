@@ -56,6 +56,14 @@ export interface SignedCollabFrameHeaderInfo {
   authorPublicKeyB64: string;
 }
 
+interface SignedCollabFrameParts {
+  header: SignedFrameHeader;
+  headerBytes: Uint8Array;
+  signature: Uint8Array;
+  iv: Uint8Array;
+  ciphertext: Uint8Array;
+}
+
 function bytesToBase64(bytes: Uint8Array): string {
   const buffer = nodeBuffer();
   if (typeof btoa !== 'function' && buffer) {
@@ -188,41 +196,49 @@ export function isSignedCollabFrame(frame: Uint8Array): boolean {
 export function signedCollabFrameHeader(
   frame: Uint8Array
 ): SignedCollabFrameHeaderInfo | null {
-  if (!isSignedCollabFrame(frame) || frame.byteLength < 1 + 2) return null;
-  const headerLen = readU16(frame, 1);
-  const headerStart = 3;
-  if (frame.byteLength < headerStart + headerLen) return null;
-  try {
-    const header = JSON.parse(
-      textDecoder.decode(frame.subarray(headerStart, headerStart + headerLen))
-    ) as SignedFrameHeader;
-    if (header.v !== SIGNED_FRAME_VERSION) return null;
-    if (typeof header.r !== 'string' || typeof header.u !== 'string') {
-      return null;
-    }
-    return {
-      roomId: header.r,
-      collabEpoch: header.e,
-      authorUsername: header.u,
-      authorPublicKeyB64: header.a
-    };
-  } catch {
-    return null;
-  }
+  const parts = parseSignedCollabFrame(frame);
+  if (!parts) return null;
+  return {
+    roomId: parts.header.r,
+    collabEpoch: parts.header.e,
+    authorUsername: parts.header.u,
+    authorPublicKeyB64: parts.header.a
+  };
 }
 
-export function signedCollabFrameNeedsAuthRefresh(
+export async function signedCollabFrameNeedsAuthRefresh(
   frame: Uint8Array,
+  cryptoKey: CryptoKey,
   auth: CollabFrameAuth | undefined
-): boolean {
+): Promise<boolean> {
   if (!auth) return false;
-  const header = signedCollabFrameHeader(frame);
-  return Boolean(
-    header &&
-    header.roomId === auth.roomId &&
-    header.collabEpoch === auth.collabEpoch &&
-    !authorizedWriter(auth, header.authorUsername, header.authorPublicKeyB64)
-  );
+  const parts = parseSignedCollabFrame(frame);
+  if (!parts) return false;
+  if (parts.header.r !== auth.roomId || parts.header.e !== auth.collabEpoch) {
+    return false;
+  }
+  if (authorizedWriter(auth, parts.header.u, parts.header.a)) return false;
+
+  try {
+    const verifyKey = await importVerifyKey(parts.header.a);
+    const ok = await crypto.subtle.verify(
+      { name: 'ECDSA', hash: 'SHA-256' },
+      verifyKey,
+      arrayBuffer(parts.signature),
+      arrayBuffer(
+        signaturePayload(parts.headerBytes, parts.iv, parts.ciphertext)
+      )
+    );
+    if (!ok) return false;
+    await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: parts.iv.slice().buffer },
+      cryptoKey,
+      parts.ciphertext.slice().buffer
+    );
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export async function encodeCollabFrame(
@@ -326,7 +342,38 @@ export async function decodeCollabFrame(
     return { type, payload };
   }
 
-  if (frame.byteLength < 1 + 2) return null;
+  const parts = parseSignedCollabFrame(frame);
+  if (!parts) return null;
+  const { header, headerBytes, signature, iv, ciphertext } = parts;
+
+  if (header.v !== SIGNED_FRAME_VERSION || header.r !== auth?.roomId)
+    return null;
+  if (header.e !== auth.collabEpoch) return null;
+  if (!authorizedWriter(auth, header.u, header.a)) return null;
+
+  const verifyKey = await importVerifyKey(header.a);
+  const ok = await crypto.subtle.verify(
+    { name: 'ECDSA', hash: 'SHA-256' },
+    verifyKey,
+    arrayBuffer(signature),
+    arrayBuffer(signaturePayload(headerBytes, iv, ciphertext))
+  );
+  if (!ok) return null;
+
+  const payload = new Uint8Array(
+    await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: iv.slice().buffer },
+      cryptoKey,
+      ciphertext.slice().buffer
+    )
+  );
+  return { type: header.t, payload };
+}
+
+function parseSignedCollabFrame(
+  frame: Uint8Array
+): SignedCollabFrameParts | null {
+  if (!isSignedCollabFrame(frame) || frame.byteLength < 1 + 2) return null;
   let offset = 1;
   const headerLen = readU16(frame, offset);
   offset += 2;
@@ -348,27 +395,15 @@ export async function decodeCollabFrame(
   } catch {
     return null;
   }
-  if (header.v !== SIGNED_FRAME_VERSION || header.r !== auth?.roomId)
+  if (header.v !== SIGNED_FRAME_VERSION) return null;
+  if (
+    typeof header.t !== 'number' ||
+    typeof header.r !== 'string' ||
+    typeof header.e !== 'number' ||
+    typeof header.a !== 'string' ||
+    typeof header.u !== 'string'
+  ) {
     return null;
-  if (typeof header.u !== 'string') return null;
-  if (header.e !== auth.collabEpoch) return null;
-  if (!authorizedWriter(auth, header.u, header.a)) return null;
-
-  const verifyKey = await importVerifyKey(header.a);
-  const ok = await crypto.subtle.verify(
-    { name: 'ECDSA', hash: 'SHA-256' },
-    verifyKey,
-    arrayBuffer(signature),
-    arrayBuffer(signaturePayload(headerBytes, iv, ciphertext))
-  );
-  if (!ok) return null;
-
-  const payload = new Uint8Array(
-    await crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv: iv.slice().buffer },
-      cryptoKey,
-      ciphertext.slice().buffer
-    )
-  );
-  return { type: header.t, payload };
+  }
+  return { header, headerBytes, signature, iv, ciphertext };
 }
