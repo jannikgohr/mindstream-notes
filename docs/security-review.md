@@ -44,10 +44,10 @@ The three trust boundaries that matter throughout:
 | [M2](#m2--signature-enforcement-fails-open-when-auth-is-absent) | ~~Medium~~ **Fixed**                    | Collab protocol | Missing `auth` silently disabled the signed-frame requirement |
 | [M3](#m3--personal-rooms-reuse-the-item-uid-and-item-key)       | ~~Medium~~ **Fixed**                    | Collab protocol | Unscoped rooms reused the item UID and item key               |
 | [M4](#m4--writer-key-username-binding-is-self-asserted)         | Medium                                  | Sharing         | A writer can publish a signing key under another's username   |
-| [M5](#m5--share-manifest-provenance-is-not-verified)            | Medium                                  | Sharing         | First manifest matching a scope id wins, regardless of author |
+| [M5](#m5--share-manifest-provenance-is-not-verified)            | ~~Medium~~ **Mitigated**                | Sharing         | First manifest matching a scope id won, regardless of author  |
 | [M6](#m6--no-rate-limiting-in-front-of-etebase-auth)            | ~~Medium~~ **Fixed**                    | Backend         | Login endpoint was unthrottled; `X-Forwarded-For` spoofable   |
 | [L1](#l1--no-replay-protection-within-an-epoch)                 | ~~Low~~ **Fixed**                       | Collab protocol | Signed frames carried no nonce, counter, or timestamp         |
-| [L2](#l2--auth-refresh-can-be-triggered-by-any-key-holder)      | Low                                     | Collab protocol | Self-signed frame forces a manifest re-fetch                  |
+| [L2](#l2--auth-refresh-can-be-triggered-by-any-key-holder)      | ~~Low~~ **Mitigated**                   | Collab protocol | Self-signed frame forced a manifest re-fetch                  |
 | [L3](#l3--x-forwarded-proto-is-trusted-unconditionally)         | ~~Low~~ **Fixed**                       | Backend         | Client could dictate the scheme Django sees                   |
 | [L4](#l4--container-and-image-hardening)                        | Low _(partly fixed)_                    | Backend         | `cap_drop` still open; image pinned by tag                    |
 | [L5](#l5--random-96-bit-ivs-under-a-long-lived-key)             | Low _(won't fix)_                       | Collab protocol | Birthday bound on IV collision                                |
