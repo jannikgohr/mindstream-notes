@@ -24,7 +24,8 @@
  * same names the SvelteKit UI renders inside the WebView):
  *   - folder context menu:      "Sharing" ▸ "Share folder…"
  *                               (ui.sharing.menu.group ▸ ui.sharing.menu.shareFolder)
- *   - share dialog user field:  "User"              (ui.sharing.dialog.userLabel)
+ *   - share dialog user field:  "Users"             (ui.sharing.dialog.userLabel;
+ *                               plural since the dialog took comma-separated lists)
  *   - share dialog permission:  "Permission"        (ui.sharing.dialog.permissionLabel)
  *   - share dialog submit:      "Invite"            (ui.sharing.dialog.invite)
  *   - shared-by-me badge:       svg[aria-label="Shared"] in the folder tree row
@@ -414,7 +415,7 @@ describe('T4 collection sharing across the owner’s two devices', function () {
     await A1.clickElement(A1.treeItem(SHARED_FOLDER), { button: 'right' });
     await A1.clickMenuItem('Sharing');
     await A1.clickMenuItem('Share folder…');
-    await A1.setValue('User', accounts.recipient.username);
+    await A1.setValue('Users', accounts.recipient.username);
     await setSharePermission(browserA1, 'Can edit');
     await submitShareInvite(browserA1);
     await expectSharedByMeBadge(browserA1, SHARED_FOLDER);
