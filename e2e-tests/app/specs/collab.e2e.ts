@@ -326,7 +326,7 @@ describe('T4 collaboration matrix', function () {
     );
   });
 
-  it('restore overrides a paused concurrent markdown edit (pins the limitation)', async function () {
+  it('a paused peer keeps its concurrent edit through a restore (pins the limitation)', async function () {
     const { baseText, changedText, restoreTargetLabel, noteId } =
       await prepareRestorableLiveMarkdownNote(A, B);
     const concurrentText = ` concurrent offline edit ${Date.now()}`;
@@ -354,23 +354,38 @@ describe('T4 collaboration matrix', function () {
 
     await setNoteCollabPaused(browserB, noteId, false);
 
+    // The restored body wins over what the restorer could see, and the paused
+    // peer's edit rides along as an orphan — the same shape freeform has. It
+    // is NOT clobbered: a restore only deletes the range the restorer diffed,
+    // and B's insert was never in it. Destroying it would mean silently losing
+    // a collaborator's typing.
+    //
+    // This assertion used to expect the opposite, from when a restore replaced
+    // the whole document; `minimalDocDiff` narrowed that (d4ed7c4) and the
+    // expectation was never revisited, because this spec was marked pending.
     for (const client of [browserA, browserB]) {
       await client.waitUntil(
         async () => {
           const text = await client.$('.ProseMirror').getText();
           return (
             text.includes(baseText) &&
-            !text.includes(concurrentText) &&
+            text.includes(concurrentText) &&
             !text.includes(changedText)
           );
         },
         {
           timeout: 60_000,
           timeoutMsg:
-            'paused concurrent markdown edit did not converge to restore result'
+            'paused concurrent markdown edit did not converge on restore + orphan'
         }
       );
     }
+
+    // Convergence is already asserted above: the same content predicate holds
+    // on *both* clients. Deliberately not comparing the two rendered texts
+    // byte-for-byte — `.ProseMirror` text includes the remote caret's username
+    // decoration and the trailing-node plugin's empty paragraph, so equality
+    // there fails on presence artifacts rather than on document state.
   });
 
   it('undo of the restore in A converges B back', async function () {

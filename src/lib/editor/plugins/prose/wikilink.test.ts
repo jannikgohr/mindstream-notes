@@ -29,12 +29,13 @@ const schema = new Schema({
     text: { group: 'inline' }
   },
   marks: {
-    // Mirrors the commonmark link mark: non-inclusive, so typing at
-    // the end of the marked range does not extend it by default —
-    // that's exactly what the boundary-editing machinery works around.
+    // Mirrors @milkdown/preset-commonmark's link mark, which declares no
+    // `inclusive` — so it takes ProseMirror's default, *inclusive*. Modelling
+    // it as non-inclusive here hid real boundary bugs: the two behaviours
+    // differ in exactly the case this suite exists to pin (what happens to
+    // characters typed at the edge of a link).
     link: {
       attrs: { href: {}, title: { default: null } },
-      inclusive: false,
       toDOM: (mark) => ['a', { href: mark.attrs.href as string }, 0]
     }
   }
@@ -168,6 +169,16 @@ describe('wikilink boundary editing at the end of the display name', () => {
     expect(view.dom.dataset.wikilinkBoundary).toBe('inside');
   });
 
+  it('keeps every character inside when editing rests on stored marks alone', () => {
+    // Same no-pin state as the plain-link case: only the first character used
+    // to stay in the link.
+    const view = makeView(makeDoc('ab', 'Title', 'cd'));
+    setCaret(view, LINK_END);
+    view.dispatch(view.state.tr.setStoredMarks([linkMark]));
+    typeText(view, 'xy');
+    expect(linkedText(view)).toBe('Titlexy');
+  });
+
   it('ArrowRight at the boundary exits editing and types outside', () => {
     const view = enterEndEditing();
     pressKey(view, 'ArrowRight');
@@ -189,6 +200,113 @@ describe('wikilink boundary editing at the start of the display name', () => {
     expect(view.dom.dataset.wikilinkBoundarySide).toBe('start');
     typeText(view, 'xy');
     expect(linkedText(view)).toBe('xyTitle');
+  });
+});
+
+describe('plain (non-note) links', () => {
+  // Only note links draw the generated `[[` / `]]`, and the caret transform
+  // exists purely to compensate for them — applying it at the edge of an
+  // ordinary link rendered the caret a bracket-width off. The *behaviour*
+  // (typing at the edge stays out of the link) must survive unchanged.
+  const plainMark = schema.mark('link', { href: 'https://example.com' });
+
+  function makePlainLinkDoc(before = 'ab', after = 'cd'): ProseNode {
+    const children: ProseNode[] = [];
+    if (before) children.push(schema.text(before));
+    children.push(schema.text('Title', [plainMark]));
+    if (after) children.push(schema.text(after));
+    return schema.node('doc', null, [schema.node('paragraph', null, children)]);
+  }
+
+  const LINK_START = 3;
+  const LINK_END = LINK_START + 'Title'.length;
+
+  function offsetClasses(view: EditorView): string[] {
+    return [...view.dom.classList].filter((c) =>
+      c.startsWith('wikilink-boundary-')
+    );
+  }
+
+  it('does not shift the caret at either edge', () => {
+    const view = makeView(makePlainLinkDoc());
+    setCaret(view, LINK_END);
+    expect(offsetClasses(view)).toEqual([]);
+    setCaret(view, LINK_START);
+    expect(offsetClasses(view)).toEqual([]);
+  });
+
+  it('still tracks the boundary so typing behaviour is unchanged', () => {
+    const view = makeView(makePlainLinkDoc());
+    setCaret(view, LINK_END);
+    expect(view.dom.dataset.wikilinkBoundary).toBe('outside');
+    expect(view.dom.dataset.wikilinkBoundarySide).toBe('end');
+  });
+
+  it('typing after the link does not append to the link text', () => {
+    // The paste case: caret parked at the end of a freshly inserted link,
+    // nothing after it. Continuing to type must produce plain text.
+    const view = makeView(makePlainLinkDoc('ab', ''));
+    setCaret(view, LINK_END);
+    typeText(view, ' rest');
+    expect(linkedText(view)).toBe('Title');
+    expect(paragraphText(view)).toBe('abTitle rest');
+  });
+
+  it('typing before the link does not prepend to the link text', () => {
+    const view = makeView(makePlainLinkDoc('', 'cd'));
+    setCaret(view, 1);
+    typeText(view, 'zz');
+    expect(linkedText(view)).toBe('Title');
+    expect(paragraphText(view)).toBe('zzTitlecd');
+  });
+
+  // Same opt-in editing the note links get: ArrowLeft at the trailing edge
+  // enters link-text editing, and *every* character typed from there belongs
+  // to the link — not just the first.
+  it('keeps a burst of typing inside the link after opting in', () => {
+    const view = makeView(makePlainLinkDoc());
+    setCaret(view, LINK_END);
+    pressKey(view, 'ArrowLeft');
+    expect(view.dom.dataset.wikilinkBoundary).toBe('inside');
+    typeText(view, 'xyz');
+    expect(linkedText(view)).toBe('Titlexyz');
+    expect(paragraphText(view)).toBe('abTitlexyzcd');
+  });
+
+  // The caret can be "inside" a link on stored marks alone, with no boundary
+  // pin: the pin is dropped whenever something moves the caret (a re-render, a
+  // sibling plugin's transaction), while the stored marks survive. Typing then
+  // used to put the *first* character in the link — stored marks are still
+  // there, so nothing pushed it out — and every one after it outside, because
+  // inserting cleared the stored marks and no pin had been established.
+  it('keeps every character inside when editing rests on stored marks alone', () => {
+    const view = makeView(makePlainLinkDoc());
+    setCaret(view, LINK_END);
+    view.dispatch(view.state.tr.setStoredMarks([plainMark]));
+    typeText(view, 'xy');
+    expect(linkedText(view)).toBe('Titlexy');
+    expect(paragraphText(view)).toBe('abTitlexycd');
+  });
+
+  it('keeps typing inside when the caret reaches the end from inside', () => {
+    const view = makeView(makePlainLinkDoc());
+    setCaret(view, LINK_END - 1);
+    typeText(view, 'x');
+    expect(linkedText(view)).toBe('Titlxe');
+    pressKey(view, 'ArrowRight');
+    typeText(view, 'yz');
+    expect(linkedText(view)).toBe('Titlxeyz');
+  });
+});
+
+describe('note links keep the bracket compensation', () => {
+  const LINK_END = 1 + 2 + 'Title'.length;
+
+  it('applies the offset classes at the trailing edge', () => {
+    const view = makeView(makeDoc('ab', 'Title', 'cd'));
+    setCaret(view, LINK_END);
+    expect(view.dom.classList.contains('wikilink-boundary-outside')).toBe(true);
+    expect(view.dom.classList.contains('wikilink-boundary-end')).toBe(true);
   });
 });
 
