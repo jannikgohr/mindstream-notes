@@ -4,13 +4,38 @@ import {
   decodeCollabFrame,
   encodeCollabFrame,
   generateCollabSigningKeyPair,
+  isSignedCollabFrame,
+  signedCollabFrameHeader,
   signedCollabFrameNeedsAuthRefresh,
   type CollabFrameAuth
 } from './signed-collab-frame';
 
 const FRAME_SYNC_STEP_2 = 0x01;
+const FRAME_AWARENESS = 0x03;
 const REQUIRED = new Set([FRAME_SYNC_STEP_2]);
 const USERNAME = 'alice';
+const SIGNED_FRAME_MARKER = 0xff;
+const IV_LEN = 12;
+
+/**
+ * A structurally valid signed frame carrying an arbitrary header blob, so the
+ * parser's rejection paths can be reached with bytes a peer could actually put
+ * on the wire (the encoder can only ever produce well-formed headers).
+ */
+function frameWithRawHeader(header: string): Uint8Array {
+  const headerBytes = new TextEncoder().encode(header);
+  const frame = new Uint8Array(1 + 2 + headerBytes.byteLength + 2 + IV_LEN + 4);
+  let offset = 0;
+  frame[offset++] = SIGNED_FRAME_MARKER;
+  frame[offset++] = (headerBytes.byteLength >> 8) & 0xff;
+  frame[offset++] = headerBytes.byteLength & 0xff;
+  frame.set(headerBytes, offset);
+  offset += headerBytes.byteLength;
+  // Zero-length signature; parsing must fail before verification is reached.
+  frame[offset++] = 0;
+  frame[offset++] = 0;
+  return frame;
+}
 
 async function aesKey(fill = 7): Promise<CryptoKey> {
   return crypto.subtle.importKey(
@@ -218,5 +243,84 @@ describe('signed collab frames', () => {
     );
 
     expect(decoded).toBeNull();
+  });
+
+  it('round-trips unsigned frames for types that do not require a signature', async () => {
+    // Awareness/presence traffic stays unsigned even in a signed room, so a
+    // view-only peer's cursor still arrives.
+    const key = await aesKey();
+    const writer = await generateCollabSigningKeyPair();
+    const frame = await encodeCollabFrame(
+      FRAME_AWARENESS,
+      new Uint8Array([9, 9]),
+      key
+    );
+
+    expect(isSignedCollabFrame(frame)).toBe(false);
+
+    const decoded = await decodeCollabFrame(
+      frame,
+      key,
+      {
+        roomId: 'room_1',
+        collabEpoch: 1,
+        authorizedWriters: [
+          { username: USERNAME, publicKeyB64: writer.publicKeyB64 }
+        ]
+      },
+      REQUIRED
+    );
+
+    expect(decoded?.type).toBe(FRAME_AWARENESS);
+    expect(Array.from(decoded?.payload ?? [])).toEqual([9, 9]);
+  });
+
+  it('exposes the signing identity of a frame without decrypting it', async () => {
+    const key = await aesKey();
+    const writer = await generateCollabSigningKeyPair();
+    const frame = await encodeCollabFrame(
+      FRAME_SYNC_STEP_2,
+      new Uint8Array([1]),
+      key,
+      {
+        roomId: 'room_1',
+        collabEpoch: 4,
+        authorUsername: USERNAME,
+        authorPublicKeyB64: writer.publicKeyB64,
+        authorPrivateKeyPkcs8B64: writer.privateKeyPkcs8B64,
+        authorizedWriters: [
+          { username: USERNAME, publicKeyB64: writer.publicKeyB64 }
+        ]
+      }
+    );
+
+    expect(isSignedCollabFrame(frame)).toBe(true);
+    expect(signedCollabFrameHeader(frame)).toEqual({
+      roomId: 'room_1',
+      collabEpoch: 4,
+      authorUsername: USERNAME,
+      authorPublicKeyB64: writer.publicKeyB64
+    });
+  });
+
+  it('has no header for unsigned or malformed frames', async () => {
+    const key = await aesKey();
+    const unsigned = await encodeCollabFrame(
+      FRAME_AWARENESS,
+      new Uint8Array([1]),
+      key
+    );
+
+    expect(signedCollabFrameHeader(unsigned)).toBeNull();
+    // Header that isn't JSON at all.
+    expect(signedCollabFrameHeader(frameWithRawHeader('not json'))).toBeNull();
+    // Right version, but the typed fields a verifier relies on are missing.
+    expect(
+      signedCollabFrameHeader(frameWithRawHeader('{"v":1,"r":"room_1"}'))
+    ).toBeNull();
+    // Truncated before the header even ends.
+    expect(
+      signedCollabFrameHeader(new Uint8Array([SIGNED_FRAME_MARKER, 0x00, 0x40]))
+    ).toBeNull();
   });
 });
