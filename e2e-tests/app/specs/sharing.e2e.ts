@@ -20,7 +20,8 @@
  * same names the SvelteKit UI renders inside the WebView):
  *   - folder context menu:      "Sharing" ▸ "Share folder…"
  *                               (ui.sharing.menu.group ▸ ui.sharing.menu.shareFolder)
- *   - share dialog user field:  "User"              (ui.sharing.dialog.userLabel)
+ *   - share dialog user field:  "Users"             (ui.sharing.dialog.userLabel;
+ *                               plural since the dialog took comma-separated lists)
  *   - share dialog permission:  "Permission"        (ui.sharing.dialog.permissionLabel)
  *   - permission options:       "Can view" / "Can edit" / "Admin"
  *   - share dialog submit:      "Invite"            (ui.sharing.dialog.invite)
@@ -364,8 +365,8 @@ describe('T4 collection sharing (manifest bundles)', function () {
     await A.clickMenuItem('Sharing');
     await A.clickMenuItem('Share folder…');
 
-    // Fill "User" with B's real username, pick "Can edit", then "Invite".
-    await A.setValue('User', accounts.recipient.username);
+    // Fill "Users" with B's real username, pick "Can edit", then "Invite".
+    await A.setValue('Users', accounts.recipient.username);
     await setSharePermission(browserA, 'Can edit');
     await submitShareInvite(browserA);
 
@@ -455,7 +456,7 @@ describe('T4 collection sharing (manifest bundles)', function () {
     await A.clickElement(A.treeItem(SECOND_FOLDER), { button: 'right' });
     await A.clickMenuItem('Sharing');
     await A.clickMenuItem('Share folder…');
-    await A.setValue('User', accounts.recipient.username);
+    await A.setValue('Users', accounts.recipient.username);
     await setSharePermission(browserA, 'Can edit');
     await submitShareInvite(browserA);
     await expectSharedByMeBadge(browserA, SECOND_FOLDER);
