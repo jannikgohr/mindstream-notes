@@ -487,10 +487,59 @@ fn was_started_by_autostart() -> bool {
     std::env::args().any(|arg| arg == AUTOSTART_ARG)
 }
 
+/// MIME types we're willing to echo back into a `Content-Type`.
+///
+/// The stored `mime_type` is **not** trustworthy: local uploads take the
+/// browser's `File.type` verbatim ([`assets::upload`]), and synced rows take
+/// whatever the remote payload carried — so a user who shares a collection
+/// with you controls it. Reflecting that unchecked would let them serve
+/// arbitrary active content (`text/html`) from this app's own scheme.
+///
+/// Anything not on this list degrades to `application/octet-stream`, which the
+/// webview will download rather than render.
+/// Deliberately generous on raster formats — none of them can execute, and a
+/// too-narrow list turns "user drags a photo in" into a broken image. `image/
+/// svg+xml` is the one image type that is really a document; it stays allowed
+/// (notes embed SVG) but the response's CSP neutralises it.
+const ASSET_MIME_ALLOWLIST: &[&str] = &[
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+    "image/webp",
+    "image/avif",
+    "image/bmp",
+    // Apple platforms hand these over for camera photos.
+    "image/heic",
+    "image/heif",
+    "image/tiff",
+    "image/x-icon",
+    "image/vnd.microsoft.icon",
+    "image/svg+xml",
+    "application/pdf",
+];
+
+/// Narrow a stored MIME type to something safe to serve.
+///
+/// Parameters are dropped (`image/png; charset=x` → `image/png`) so a
+/// decorated variant can't slip past the comparison.
+fn safe_asset_mime(stored: &str) -> &'static str {
+    let base = stored
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    ASSET_MIME_ALLOWLIST
+        .iter()
+        .find(|allowed| **allowed == base)
+        .copied()
+        .unwrap_or("application/octet-stream")
+}
+
 /// URI scheme handler for `mindstream://localhost/<asset_id>` (and the
 /// `http://mindstream.localhost/<asset_id>` form wry uses on
 /// Windows/Android). Looks up the asset row, streams the bytes back
-/// with the row's MIME type.
+/// with a sanitised MIME type.
 ///
 /// Returns 404 with an empty body on any lookup failure — the
 /// markdown image just falls back to its alt text in the editor, which
@@ -520,7 +569,23 @@ fn serve_asset_bytes<R: tauri::Runtime>(
     match load_result {
         Ok(asset) => tauri::http::Response::builder()
             .status(tauri::http::StatusCode::OK)
-            .header(tauri::http::header::CONTENT_TYPE, asset.summary.mime_type)
+            .header(
+                tauri::http::header::CONTENT_TYPE,
+                safe_asset_mime(&asset.summary.mime_type),
+            )
+            // Belt and braces around the allowlist: without this, a webview
+            // that content-sniffs could still decide a PNG-labelled blob is
+            // really HTML and execute it.
+            .header(tauri::http::header::X_CONTENT_TYPE_OPTIONS, "nosniff")
+            // SVG is on the allowlist because notes legitimately embed it,
+            // but an SVG *navigated to* directly is a document that can run
+            // script. `sandbox` makes the webview treat any asset document as
+            // sandboxed (no scripts, no same-origin), while leaving <img>
+            // rendering untouched.
+            .header(
+                tauri::http::header::CONTENT_SECURITY_POLICY,
+                "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+            )
             // Bytes for a given asset id never change (a new upload
             // produces a new id), so allow long-lived caching. Sync's
             // "fetch fresh bytes for previously-missing asset" path
@@ -540,5 +605,67 @@ fn serve_asset_bytes<R: tauri::Runtime>(
                 .body(Cow::Owned(Vec::new()))
                 .unwrap()
         }
+    }
+}
+
+#[cfg(test)]
+mod asset_scheme_tests {
+    use super::safe_asset_mime;
+
+    #[test]
+    fn passes_through_types_notes_actually_embed() {
+        for mime in [
+            "image/png",
+            "image/jpeg",
+            "image/gif",
+            "image/webp",
+            "image/svg+xml",
+            "application/pdf",
+        ] {
+            assert_eq!(safe_asset_mime(mime), mime);
+        }
+    }
+
+    /// The whole point of the allowlist: a shared collection can carry an
+    /// asset row whose `mime_type` the sharer chose.
+    #[test]
+    fn active_content_types_degrade_to_octet_stream() {
+        for mime in [
+            "text/html",
+            "application/xhtml+xml",
+            "text/javascript",
+            "application/javascript",
+            "text/xml",
+            "",
+        ] {
+            assert_eq!(
+                safe_asset_mime(mime),
+                "application/octet-stream",
+                "{mime} must not be reflected"
+            );
+        }
+    }
+
+    #[test]
+    fn normalises_case_and_strips_parameters() {
+        assert_eq!(safe_asset_mime("IMAGE/PNG"), "image/png");
+        assert_eq!(safe_asset_mime("  image/png  "), "image/png");
+        assert_eq!(safe_asset_mime("image/png; charset=utf-8"), "image/png");
+        // A decorated smuggling attempt must not match on the prefix.
+        assert_eq!(
+            safe_asset_mime("text/html; x=image/png"),
+            "application/octet-stream"
+        );
+    }
+
+    /// Header injection via the stored value: the return type is a fixed
+    /// &'static str from the table, so nothing attacker-shaped reaches the
+    /// header at all.
+    #[test]
+    fn never_returns_attacker_bytes() {
+        let injected = "image/png\r\nSet-Cookie: a=b";
+        let out = safe_asset_mime(injected);
+        assert_eq!(out, "application/octet-stream");
+        assert!(!out.contains('\r') && !out.contains('\n'));
     }
 }
