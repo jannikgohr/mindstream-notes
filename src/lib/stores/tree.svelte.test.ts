@@ -16,6 +16,8 @@ const purgeNoteMock = vi.fn();
 const deleteCollectionMock = vi.fn();
 const emptyTrashCmdMock = vi.fn();
 const loadTreeMock = vi.fn();
+const leaveSharedCollectionMock = vi.fn();
+const stopSharingCollectionMock = vi.fn();
 const runSyncMock = vi.fn();
 const setPdfTextMock = vi.fn();
 const extractPdfTextMock = vi.fn();
@@ -36,6 +38,10 @@ vi.mock('$lib/api', () => ({
   deleteCollection: (...args: unknown[]) => deleteCollectionMock(...args),
   emptyTrashCmd: (...args: unknown[]) => emptyTrashCmdMock(...args),
   loadTree: (...args: unknown[]) => loadTreeMock(...args),
+  leaveSharedCollection: (...args: unknown[]) =>
+    leaveSharedCollectionMock(...args),
+  stopSharingCollection: (...args: unknown[]) =>
+    stopSharingCollectionMock(...args),
   TRASH_ID: 'trash'
 }));
 
@@ -60,6 +66,7 @@ import {
   createNoteIn,
   emptyTrash,
   importPdfIn,
+  leaveSharedCollection,
   moveManyTo,
   moveCollectionTo,
   moveNoteTo,
@@ -76,6 +83,7 @@ import {
   setNoteBody,
   setNoteFavourite,
   setNoteTags,
+  stopSharingCollection,
   tree,
   trashMany,
   trashCollection,
@@ -344,6 +352,26 @@ describe('collection mutations', () => {
       id: 'coll_1',
       parent_collection_id: 'trash'
     });
+  });
+
+  it('leaveSharedCollection leaves the share and reloads the tree', async () => {
+    // Both share-exit paths reload rather than patch local state: the backend
+    // purges a whole subtree, so the store can't reconstruct the result itself.
+    loadTreeMock.mockClear();
+
+    await leaveSharedCollection('coll_shared');
+
+    expect(leaveSharedCollectionMock).toHaveBeenCalledWith('coll_shared');
+    expect(loadTreeMock).toHaveBeenCalled();
+  });
+
+  it('stopSharingCollection revokes the share and reloads the tree', async () => {
+    loadTreeMock.mockClear();
+
+    await stopSharingCollection('coll_1');
+
+    expect(stopSharingCollectionMock).toHaveBeenCalledWith('coll_1');
+    expect(loadTreeMock).toHaveBeenCalled();
   });
 
   it('restoreCollection moves it to root', async () => {
