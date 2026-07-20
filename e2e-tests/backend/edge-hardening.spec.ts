@@ -69,6 +69,25 @@ test.describe('nginx edge hardening', () => {
     expect(statuses).not.toContain(429);
   });
 
+  test('does not throttle the non-credential auth endpoints', async ({
+    request
+  }) => {
+    // is_etebase/, logout/ and dashboard_url/ share the
+    // /api/v1/authentication/ prefix but are not a guessing surface. An
+    // earlier version of this config limited the whole prefix, which would
+    // have throttled a capability probe alongside real login attempts.
+    const statuses: number[] = [];
+    for (let i = 0; i < 40; i++) {
+      const res = await request.get(
+        `${BASE}/api/v1/authentication/is_etebase/`,
+        { failOnStatusCode: false }
+      );
+      statuses.push(res.status());
+    }
+
+    expect(statuses).not.toContain(429);
+  });
+
   test('ignores a client-supplied X-Forwarded-Proto from an untrusted peer', async ({
     request
   }) => {
