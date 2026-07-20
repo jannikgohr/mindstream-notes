@@ -346,6 +346,15 @@ the shared one.
 
 ### M4 — Writer-key username binding is self-asserted
 
+> **Open — needs a design decision, not a patch.** Checked whether a
+> server-attested identity was available to bind the key to: it is not.
+> Etebase's `ItemMetadata` carries only type/name/mtime/description/colour with
+> no author field, and items are end-to-end encrypted, so the server cannot
+> attest authorship to other members either. Closing this means the collection
+> owner counter-signing the writer roster, which needs a long-term owner
+> signing identity and a trust bootstrap at invitation-accept time — a
+> protocol change, and a breaking one.
+
 **Where:** [`sync/mod.rs:2700-2750`](../src-tauri/src/sync/mod.rs).
 
 Writer signing keys are published as ordinary items in the scope collection.
@@ -465,6 +474,11 @@ document update is a no-op. Replayed _awareness_ frames are more interesting,
 and they are unsigned anyway ([M1](#m1--presence-and-sync-request-frames-are-unsigned)).
 
 ### L2 — Auth refresh can be triggered by any key holder
+
+> **Mitigated.** The throttle now doubles after each refresh, up to 5 minutes,
+> instead of staying at a flat 5s. A legitimate key rotation needs one or two
+> refreshes so nothing real is lost, but a provoked drip decays from ~12
+> forced Etebase re-fetches a minute to a handful.
 
 `signedCollabFrameNeedsAuthRefresh`
 ([`signed-collab-frame.ts:209-242`](../src/lib/sync/signed-collab-frame.ts))

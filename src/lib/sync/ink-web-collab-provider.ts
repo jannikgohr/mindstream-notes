@@ -43,7 +43,14 @@ const NO_SIGNED_REQUIRED_TYPES: ReadonlySet<number> = new Set();
 
 const RECONNECT_INITIAL_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
+/** Floor between auth refreshes. Doubles after each one (up to
+ *  AUTH_REFRESH_MAX_THROTTLE_MS) because a refresh can be *provoked*: any
+ *  holder of the room key can self-sign a frame with a fresh keypair and make
+ *  us re-fetch scope state from Etebase. A legitimate key rotation needs one
+ *  or two refreshes, so backing off costs nothing real while turning an
+ *  unbounded drip into a handful of requests. */
 const AUTH_REFRESH_THROTTLE_MS = 5_000;
+const AUTH_REFRESH_MAX_THROTTLE_MS = 5 * 60_000;
 /** How long to wait for the relay's join challenge before dropping the
  *  socket. Matches $lib/sync/collab-provider. */
 const JOIN_CHALLENGE_TIMEOUT_MS = 4_000;
@@ -107,6 +114,7 @@ export class InkWebCollabProvider {
   private reconnectAttempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private lastAuthRefreshRequest = 0;
+  private authRefreshThrottleMs = AUTH_REFRESH_THROTTLE_MS;
   /** Drops frames we've already applied, and frames too old to be live. */
   private readonly replayGuard = new CollabReplayGuard();
   /** False until the relay's join challenge is answered. */
@@ -395,8 +403,12 @@ export class InkWebCollabProvider {
       return;
     }
     const now = Date.now();
-    if (now - this.lastAuthRefreshRequest < AUTH_REFRESH_THROTTLE_MS) return;
+    if (now - this.lastAuthRefreshRequest < this.authRefreshThrottleMs) return;
     this.lastAuthRefreshRequest = now;
+    this.authRefreshThrottleMs = Math.min(
+      AUTH_REFRESH_MAX_THROTTLE_MS,
+      this.authRefreshThrottleMs * 2
+    );
     console.info(
       '[ink-collab] refreshing writer auth note=%s',
       this.opts.noteId
