@@ -35,9 +35,13 @@ resolved per-field by the CRDT. Concretely:
 - A collaborator's element/stroke added concurrently (not yet seen by the
   restorer) is **not** in the restorer's delete set, so it survives the restore
   as an orphan — you get the restored scene _plus_ stray content.
-- For markdown, the whole-template replacement can overwrite a paused peer's
-  concurrent text edit. Connected peers get a warning prompt before restore, but
-  a disconnected/paused collaborator may simply converge to the restored body.
+- For markdown, a paused/disconnected peer's concurrent text edit **survives**
+  the restore the same way: the restore only deletes the range the restorer
+  diffed (`minimalDocDiff`), and an unseen concurrent insert was never in it.
+  You get the restored body _plus_ that edit. This used to clobber the peer's
+  text, back when a restore replaced the whole document; narrowing it to a
+  minimal diff stopped a restore from silently destroying a collaborator's
+  typing. Connected peers still get a warning prompt before a restore.
 
 It always converges (no divergence/corruption), but it is not a clean
 transactional swap. The **collab confirmation prompt** (see below) mitigates the
