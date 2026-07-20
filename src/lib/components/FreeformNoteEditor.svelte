@@ -489,6 +489,7 @@
         keyBytes16,
         api: excalidrawApi,
         auth: collabAuthForRoom(room, signingMaterial),
+        requireSignedWrites: room.collab_epoch > 0,
         onAuthStale: () => {
           void setupExcalidrawRoom();
         },

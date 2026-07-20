@@ -82,6 +82,43 @@ describe('signed collab frames', () => {
     expect(Array.from(decoded?.payload ?? [])).toEqual([1, 2, 3]);
   });
 
+  /**
+   * Regression guard for a fail-open: enforcement used to be conditional on
+   * `auth` being truthy, so a scoped room whose authorised-writer lookup came
+   * back empty would silently accept unsigned document updates from anyone
+   * holding the room key — including a read-only member.
+   */
+  it('rejects unsigned writer frames even when auth is unresolved', async () => {
+    const key = await aesKey();
+    const frame = await encodeCollabFrame(
+      FRAME_SYNC_STEP_2,
+      new Uint8Array([1]),
+      key
+    );
+
+    expect(await decodeCollabFrame(frame, key, undefined, REQUIRED)).toBeNull();
+  });
+
+  it('still accepts unsigned frames when no type is declared signed', async () => {
+    // Unshared rooms declare an empty required-set; only this device holds
+    // the key, so there is nobody to authenticate against.
+    const key = await aesKey();
+    const frame = await encodeCollabFrame(
+      FRAME_SYNC_STEP_2,
+      new Uint8Array([1]),
+      key
+    );
+
+    const decoded = await decodeCollabFrame(
+      frame,
+      key,
+      undefined,
+      new Set<number>()
+    );
+
+    expect(decoded?.type).toBe(FRAME_SYNC_STEP_2);
+  });
+
   it('rejects unsigned writer frames when writer keys are known', async () => {
     const key = await aesKey();
     const pair = await generateCollabSigningKeyPair();

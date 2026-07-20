@@ -312,7 +312,7 @@ export async function encodeCollabFrame(
 
 function signedRequired(
   type: number,
-  signedRequiredTypes: Set<number>
+  signedRequiredTypes: ReadonlySet<number>
 ): boolean {
   return signedRequiredTypes.has(type);
 }
@@ -321,12 +321,17 @@ export async function decodeCollabFrame(
   frame: Uint8Array,
   cryptoKey: CryptoKey,
   auth: CollabFrameAuth | undefined,
-  signedRequiredTypes: Set<number>
+  signedRequiredTypes: ReadonlySet<number>
 ): Promise<DecodedCollabFrame | null> {
   if (frame[0] !== SIGNED_FRAME_MARKER) {
     if (frame.byteLength < 1 + IV_LEN) return null;
     const type = frame[0];
-    if (signedRequired(type, signedRequiredTypes) && auth) {
+    // Note the absence of an `&& auth` guard. Enforcement is driven purely by
+    // the type set the caller declared: if a room requires signed writes, an
+    // unsigned frame is rejected even when we failed to resolve who the
+    // authorised writers are. Keying this off `auth` being truthy would mean
+    // a room whose authorisation lookup failed silently accepted anything.
+    if (signedRequired(type, signedRequiredTypes)) {
       console.warn('[collab] rejected unsigned writer frame type=%d', type);
       return null;
     }
