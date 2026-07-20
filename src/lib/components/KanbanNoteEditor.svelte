@@ -472,6 +472,9 @@
     show: (ev: Event, id: string | number) => void;
   } | null>(null);
   let listMenu = $state<{ id: string; x: number; y: number } | null>(null);
+  // Not reactive: read once per click to decide whether the press that produced
+  // it originated inside the card editor.
+  let pressStartedInsideCardEditor = false;
   let renamingListId = $state<string | null>(null);
   let listDrag = $state<ListPointerDrag | null>(null);
   let listDropIndex = $state<number | null>(null);
@@ -522,17 +525,28 @@
     e.stopPropagation();
   }
 
+  const CARD_EDITOR_KEEP_OPEN_SELECTOR =
+    '.wx-card[data-id], .wx-card-row[data-kanban-card-id], .kanban-card-editor';
+
+  function startsInsideCardEditor(target: EventTarget | null): boolean {
+    return (
+      target instanceof Element &&
+      target.closest(CARD_EDITOR_KEEP_OPEN_SELECTOR) !== null
+    );
+  }
+
+  // A drag that starts in the editor (selecting text) and ends on the board
+  // fires a click whose target is the common ancestor — i.e. the board. Remember
+  // where the press started so such a release doesn't close the editor.
+  function rememberCardEditorPressOrigin(e: PointerEvent): void {
+    pressStartedInsideCardEditor = startsInsideCardEditor(e.target);
+  }
+
   function closeCardEditorOnBoardClick(e: MouseEvent): void {
+    const startedInside = pressStartedInsideCardEditor;
+    pressStartedInsideCardEditor = false;
     if (!api || isTrashed || e.button !== 0) return;
-    const target = e.target instanceof Element ? e.target : null;
-    if (!target) return;
-    if (
-      target.closest(
-        '.wx-card[data-id], .wx-card-row[data-kanban-card-id], .kanban-card-editor'
-      )
-    ) {
-      return;
-    }
+    if (startedInside || startsInsideCardEditor(e.target)) return;
     api.exec('select-card', { id: null });
   }
 
@@ -1221,6 +1235,7 @@
             class="relative min-h-0 flex-1"
             role="presentation"
             oncontextmenucapture={openCardMenu}
+            onpointerdowncapture={rememberCardEditorPressOrigin}
             onclickcapture={closeCardEditorOnBoardClick}
           >
             <Kanban
