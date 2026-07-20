@@ -1100,7 +1100,19 @@
         if (!next) return;
         const diff = minimalDocDiff(view.state.doc, next);
         if (!diff) return; // identical → emit nothing
-        view.dispatch(view.state.tr.replace(diff.from, diff.to, diff.slice));
+        // Keep the restore off the editor's undo stack. Ctrl+Z is for the
+        // user's own typing; reverting a restore is History's job, via its own
+        // "Undo restore" affordance. Without this, one keystroke silently
+        // rolls back a whole restore — and, because the restore is a normal
+        // CRDT edit, that rollback propagates to every connected peer.
+        //
+        // Crepe installs Milkdown's history plugin, which wraps
+        // prosemirror-history, so `addToHistory: false` is the opt-out that
+        // matters here. (plugin-collab also installs y-prosemirror's
+        // yUndoPlugin, but nothing binds Ctrl+Z to it.)
+        const tr = view.state.tr.replace(diff.from, diff.to, diff.slice);
+        tr.setMeta('addToHistory', false);
+        view.dispatch(tr);
       });
     } catch (err) {
       console.error('[NoteEditor] applyMarkdown failed', err);
