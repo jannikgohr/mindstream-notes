@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import http from 'node:http';
 import { URL } from 'node:url';
 import { expect, test } from '@playwright/test';
+import { makeRoom } from './collab-room';
 
 /**
  * Local-only health gating for the mindstream-server stack (docs/e2e/backend-stack.md
@@ -92,7 +93,13 @@ test.describe('local backend health (mindstream-server)', () => {
   });
 
   test('yjs-relay accepts a WebSocket upgrade on /yjs', async () => {
-    const status = await wsHandshakeStatus(`${BASE}/yjs?room=health-probe`);
+    // The room id has to be a real P-256 public key: the relay rejects
+    // anything else at upgrade, because the id is what it verifies the join
+    // signature against. Auth itself is covered in collab-relay-auth.spec.ts.
+    const { room } = await makeRoom();
+    const status = await wsHandshakeStatus(
+      `${BASE}/yjs?room=${encodeURIComponent(room)}`
+    );
     expect(status).toBe(101);
   });
 
