@@ -190,7 +190,6 @@
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
   let historyTimer: ReturnType<typeof setTimeout> | null = null;
   let historyDirty = false;
-  let interacted = false;
   let capturingHistory = false;
   let undoDepth = $state(0);
   let redoDepth = $state(0);
@@ -863,19 +862,46 @@
     }
   }
 
+  /**
+   * Did this doc update come from the user editing *here*? Widget reconciles
+   * carry `KANBAN_LOCAL_ORIGIN`; undo/redo transactions carry the UndoManager
+   * itself. Everything else (the default-board seed, a history restore, collab
+   * peers, provider (re)connect state) is not a local edit and must not drive
+   * the history snapshot.
+   */
+  function isLocalEditOrigin(origin: unknown): boolean {
+    return origin === KANBAN_LOCAL_ORIGIN || origin === undoManager;
+  }
+
   function historyIdleMs(): number {
     const v = Number(getSettingValue('data.historyIdleSeconds'));
     return (Number.isFinite(v) && v > 0 ? v : HISTORY_IDLE_DEFAULT_S) * 1000;
   }
 
+  /**
+   * Arm the idle snapshot. Deliberately a *deadline*, not a debounce: an armed
+   * timer is left running rather than restarted on every subsequent update.
+   * A board's doc keeps getting updates it doesn't control (collab peers, a
+   * reconnecting provider), and restarting on those pushed the capture past
+   * the idle delay indefinitely, so the automatic snapshot never happened.
+   */
   function scheduleHistoryCapture(): void {
     if (isTrashed) return;
     historyDirty = true;
-    if (historyTimer) clearTimeout(historyTimer);
+    if (historyTimer) return;
     historyTimer = setTimeout(() => {
       historyTimer = null;
       void captureHistoryVersion('edited');
     }, historyIdleMs());
+  }
+
+  /** Manual "refresh history": capture now and restart the idle deadline. */
+  async function snapshotHistoryNow(): Promise<void> {
+    if (historyTimer) {
+      clearTimeout(historyTimer);
+      historyTimer = null;
+    }
+    await captureHistoryVersion('edited');
   }
 
   async function captureHistoryVersion(action: VersionAction): Promise<void> {
@@ -956,12 +982,15 @@
 
       // Every mutation — local reconcile writes, collab-applied peer ops, or a
       // sync merge — lands as a `Y.Doc` 'update'. One hook drives the debounced
-      // save; sync-merge updates skip it (already persisted).
+      // save; sync-merge updates skip it (already persisted). History, though,
+      // tracks only what *this* editor changed: peer/provider traffic must not
+      // arm (or keep pushing back) the idle snapshot.
       localYDoc.on('update', (_update: Uint8Array, origin: unknown) => {
         if (!saveReady) return;
         if (origin === REMOTE_SYNC_ORIGIN) return;
         scheduleSave();
-        if (!capturingHistory && interacted) scheduleHistoryCapture();
+        if (!capturingHistory && isLocalEditOrigin(origin))
+          scheduleHistoryCapture();
       });
       saveReady = true;
 
@@ -1027,7 +1056,7 @@
       unregisterHistory = registerNoteHistory(noteId, {
         currentSnapshot: () => currentSnapshot(),
         restoreSnapshot: (snapshot) => restoreSnapshot(snapshot),
-        snapshotNow: () => captureHistoryVersion('edited')
+        snapshotNow: () => snapshotHistoryNow()
       });
 
       loading = false;
@@ -1045,16 +1074,9 @@
     const listener = editorListener;
     const el = host;
     const onFocusIn = () => registerEditor(listener);
-    const onInteract = () => {
-      interacted = true;
-    };
     el.addEventListener('focusin', onFocusIn);
-    el.addEventListener('pointerdown', onInteract, true);
-    el.addEventListener('keydown', onInteract, true);
     return () => {
       el.removeEventListener('focusin', onFocusIn);
-      el.removeEventListener('pointerdown', onInteract, true);
-      el.removeEventListener('keydown', onInteract, true);
     };
   });
 
