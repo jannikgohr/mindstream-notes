@@ -36,6 +36,7 @@
   import { initNativeMenuCommands } from '$lib/native-menu.svelte';
   import { loadProfiles, profilesState } from '$lib/stores/profiles.svelte';
   import { installSyncStatusBridge } from '$lib/notifications/sync-status';
+  import { installSyncTreeRefreshBridge } from '$lib/sync/tree-refresh-bridge';
 
   let { children } = $props();
 
@@ -66,6 +67,10 @@
     // Surface a notification when Rust reports the sync server is
     // unreachable (and clear it on the next successful sync).
     const teardownSyncStatus = installSyncStatusBridge();
+    // Scheduled syncs run in Rust and only announce themselves through
+    // `sync-completed`; without this the file tree keeps showing pre-sync
+    // state until something calls runSync from the UI.
+    const teardownTreeRefresh = installSyncTreeRefreshBridge();
     const blockTouchZoom = (event: WheelEvent) => {
       if (!event.ctrlKey) return;
       event.preventDefault();
@@ -74,6 +79,7 @@
     return () => {
       window.removeEventListener('wheel', blockTouchZoom);
       teardownSyncStatus();
+      teardownTreeRefresh();
       void teardownGlobalShortcuts();
     };
   });
