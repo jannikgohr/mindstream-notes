@@ -35,29 +35,35 @@ The three trust boundaries that matter throughout:
 
 ## Summary
 
-| ID                                                              | Severity             | Area            | Short                                                         |
-| --------------------------------------------------------------- | -------------------- | --------------- | ------------------------------------------------------------- |
-| [H1](#h1--webview-csp-is-disabled)                              | High                 | Tauri client    | `csp: null` disables CSP app-wide                             |
-| [H2](#h2--asset-scheme-reflects-a-remote-controlled-mime-type)  | ~~High~~ **Fixed**   | Tauri client    | Remote-controlled `Content-Type` on `mindstream://`           |
-| [H3](#h3--the-collab-relay-is-unauthenticated)                  | ~~High~~ **Fixed**   | Backend         | Anyone may join/publish to any relay room                     |
-| [M1](#m1--presence-and-sync-request-frames-are-unsigned)        | ~~Medium~~ **Fixed** | Collab protocol | Only document updates required a signature                    |
-| [M2](#m2--signature-enforcement-fails-open-when-auth-is-absent) | ~~Medium~~ **Fixed** | Collab protocol | Missing `auth` silently disabled the signed-frame requirement |
-| [M3](#m3--personal-rooms-reuse-the-item-uid-and-item-key)       | ~~Medium~~ **Fixed** | Collab protocol | Unscoped rooms reused the item UID and item key               |
-| [M4](#m4--writer-key-username-binding-is-self-asserted)         | Medium               | Sharing         | A writer can publish a signing key under another's username   |
-| [M5](#m5--share-manifest-provenance-is-not-verified)            | Medium               | Sharing         | First manifest matching a scope id wins, regardless of author |
-| [M6](#m6--no-rate-limiting-in-front-of-etebase-auth)            | ~~Medium~~ **Fixed** | Backend         | Login endpoint was unthrottled; `X-Forwarded-For` spoofable   |
-| [L1](#l1--no-replay-protection-within-an-epoch)                 | ~~Low~~ **Fixed**    | Collab protocol | Signed frames carried no nonce, counter, or timestamp         |
-| [L2](#l2--auth-refresh-can-be-triggered-by-any-key-holder)      | Low                  | Collab protocol | Self-signed frame forces a manifest re-fetch                  |
-| [L3](#l3--x-forwarded-proto-is-trusted-unconditionally)         | ~~Low~~ **Fixed**    | Backend         | Client could dictate the scheme Django sees                   |
-| [L4](#l4--container-and-image-hardening)                        | Low _(partly fixed)_ | Backend         | `cap_drop` still open; image pinned by tag                    |
-| [L5](#l5--random-96-bit-ivs-under-a-long-lived-key)             | Low _(won't fix)_    | Collab protocol | Birthday bound on IV collision                                |
-| [L6](#l6--collab-logging-is-verbose-in-production)              | Low _(won't fix)_    | Client          | Key fingerprint and frame metadata logged unconditionally     |
+| ID                                                              | Severity                                | Area            | Short                                                         |
+| --------------------------------------------------------------- | --------------------------------------- | --------------- | ------------------------------------------------------------- |
+| [H1](#h1--webview-csp-is-disabled)                              | ~~High~~ **Fixed** _(needs smoke test)_ | Tauri client    | `csp: null` disabled CSP app-wide                             |
+| [H2](#h2--asset-scheme-reflects-a-remote-controlled-mime-type)  | ~~High~~ **Fixed**                      | Tauri client    | Remote-controlled `Content-Type` on `mindstream://`           |
+| [H3](#h3--the-collab-relay-is-unauthenticated)                  | ~~High~~ **Fixed**                      | Backend         | Anyone may join/publish to any relay room                     |
+| [M1](#m1--presence-and-sync-request-frames-are-unsigned)        | ~~Medium~~ **Fixed**                    | Collab protocol | Only document updates required a signature                    |
+| [M2](#m2--signature-enforcement-fails-open-when-auth-is-absent) | ~~Medium~~ **Fixed**                    | Collab protocol | Missing `auth` silently disabled the signed-frame requirement |
+| [M3](#m3--personal-rooms-reuse-the-item-uid-and-item-key)       | ~~Medium~~ **Fixed**                    | Collab protocol | Unscoped rooms reused the item UID and item key               |
+| [M4](#m4--writer-key-username-binding-is-self-asserted)         | Medium                                  | Sharing         | A writer can publish a signing key under another's username   |
+| [M5](#m5--share-manifest-provenance-is-not-verified)            | Medium                                  | Sharing         | First manifest matching a scope id wins, regardless of author |
+| [M6](#m6--no-rate-limiting-in-front-of-etebase-auth)            | ~~Medium~~ **Fixed**                    | Backend         | Login endpoint was unthrottled; `X-Forwarded-For` spoofable   |
+| [L1](#l1--no-replay-protection-within-an-epoch)                 | ~~Low~~ **Fixed**                       | Collab protocol | Signed frames carried no nonce, counter, or timestamp         |
+| [L2](#l2--auth-refresh-can-be-triggered-by-any-key-holder)      | Low                                     | Collab protocol | Self-signed frame forces a manifest re-fetch                  |
+| [L3](#l3--x-forwarded-proto-is-trusted-unconditionally)         | ~~Low~~ **Fixed**                       | Backend         | Client could dictate the scheme Django sees                   |
+| [L4](#l4--container-and-image-hardening)                        | Low _(partly fixed)_                    | Backend         | `cap_drop` still open; image pinned by tag                    |
+| [L5](#l5--random-96-bit-ivs-under-a-long-lived-key)             | Low _(won't fix)_                       | Collab protocol | Birthday bound on IV collision                                |
+| [L6](#l6--collab-logging-is-verbose-in-production)              | Low _(won't fix)_                       | Client          | Key fingerprint and frame metadata logged unconditionally     |
 
 ---
 
 ## High
 
 ### H1 — Webview CSP is disabled
+
+> **Policy written; needs a smoke test on a packaged build.** `csp` is set in
+> [`tauri.conf.json`](../src-tauri/tauri.conf.json). It has _not_ been verified
+> against a running app — `tauri dev` does not apply it (that is `devCsp`), so
+> it must be checked on a real `tauri build`. See
+> [Smoke-testing the CSP](#smoke-testing-the-csp).
 
 **Where:** [`src-tauri/tauri.conf.json:33`](../src-tauri/tauri.conf.json) —
 `"security": { "csp": null }`.
@@ -86,11 +92,27 @@ execute script. No `DOMPurify` is present because, as far as this review found,
 no raw-HTML sink is reachable from note content. That is a property worth
 keeping deliberately rather than accidentally.
 
-**Suggested:** set a real CSP. A restrictive starting point:
-`default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
-img-src 'self' data: blob: mindstream:; connect-src 'self' https: wss:;
-object-src 'none'; frame-ancestors 'none'`. Expect to iterate — pdf.js and
-Excalidraw both tend to need `blob:` and `worker-src`.
+**What landed**, and the two non-obvious things that shaped it:
+
+- **Tauri hashes inline scripts for you.** SvelteKit emits an inline bootstrap
+  that calls `kit.start()`, which `script-src 'self'` would block — a white
+  screen. But `map_core_assets` in `tauri-codegen` runs `inject_script_hashes`
+  over every bundled HTML file when a CSP is set, adding a `sha256-` for each
+  inline `<script>`. So no `'unsafe-inline'` is needed, and none is used —
+  which matters, because a single hash or nonce in a directive makes
+  `'unsafe-inline'` **ignored** for it.
+- **That same rule nearly broke every inline style.** Tauri also injects a
+  nonce into `<style>` elements, which would have voided the
+  `style-src 'unsafe-inline'` the UI depends on for `style="…"` attributes
+  (dockview and Excalidraw use them heavily). Hence
+  `"dangerousDisableAssetCspModification": ["style-src"]` — it stops Tauri
+  touching `style-src` only, leaving script hashing intact — plus a
+  `style-src-attr` fallback for engines that honour it.
+
+`connect-src` stays broad (`https: http: ws: wss:`) because the server URL is
+user-configured and can be any host; the value here is in `object-src 'none'`,
+`base-uri 'self'`, `form-action 'none'`, `frame-ancestors 'none'`, and keeping
+script execution to same-origin plus build-time hashes.
 
 ### H2 — Asset scheme reflects a remote-controlled MIME type
 
@@ -590,9 +612,8 @@ Worth recording so it does not regress:
 
 ## What's left
 
-1. [H1](#h1--webview-csp-is-disabled) — the CSP. Needs a run of the packaged
-   app to shake out what pdf.js and Excalidraw actually require, so it lands
-   with a smoke-test rather than on confidence.
+1. [H1](#h1--webview-csp-is-disabled) — the policy is written but unverified.
+   Run [the smoke test](#smoke-testing-the-csp) on a packaged build.
 2. [M4](#m4--writer-key-username-binding-is-self-asserted) and
    [M5](#m5--share-manifest-provenance-is-not-verified) — both are about
    binding cryptographic material to an attested identity rather than a
@@ -616,3 +637,34 @@ that a T4 two-client run should confirm:
   requires a signature.
 - A personal (unshared) note still syncs live between two devices of the same
   account, now that its room id and wire key are both derived.
+
+## Smoke-testing the CSP
+
+The policy could not be verified here. `tauri dev` does **not** apply it
+(`devCsp` governs dev), and serving the built frontend outside Tauri is a false
+negative — Tauri's build-time inline-script hashing never runs, so the app
+white-screens in a way it will not in the real bundle. It has to be a packaged
+build:
+
+```
+pnpm tauri-build
+```
+
+Then launch the bundled app, open its devtools console, and watch for
+`Refused to …` / `Content Security Policy` messages while exercising:
+
+| Area          | What to do                                    | Watch for                             |
+| ------------- | --------------------------------------------- | ------------------------------------- |
+| Boot          | Launch cold                                   | Blank window = inline script blocked  |
+| Theme         | Launch in dark mode                           | Flash of white before paint           |
+| Markdown      | Open a note, type, use the slash menu         | Editor renders and styles apply       |
+| Mermaid       | Insert a `mermaid` fence                      | Diagram renders (loads `data:` img)   |
+| PDF           | Open a PDF note, scroll, annotate             | `worker-src blob:` — blank pages      |
+| Freeform      | Open an Excalidraw note, draw, export PNG     | Canvas taint / `img-src` errors       |
+| Ink           | Open an ink note, draw                        | Canvas rendering                      |
+| Images        | Paste an image, and embed a remote `https://` | `img-src` violations                  |
+| Sync          | Sign in, sync, open live collab               | `connect-src` blocking IPC or `wss:`  |
+| Inline styles | Drag a dock panel, resize the sidebar         | Layout collapsing = `style-src` issue |
+
+If something breaks, the console names the directive — send that line and the
+fix is usually one source added to one directive.
