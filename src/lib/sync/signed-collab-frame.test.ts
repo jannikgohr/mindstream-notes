@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  CollabReplayGuard,
   decodeCollabFrame,
   encodeCollabFrame,
   generateCollabSigningKeyPair,
@@ -80,6 +81,43 @@ describe('signed collab frames', () => {
 
     expect(decoded?.type).toBe(FRAME_SYNC_STEP_2);
     expect(Array.from(decoded?.payload ?? [])).toEqual([1, 2, 3]);
+  });
+
+  /**
+   * Regression guard for a fail-open: enforcement used to be conditional on
+   * `auth` being truthy, so a scoped room whose authorised-writer lookup came
+   * back empty would silently accept unsigned document updates from anyone
+   * holding the room key — including a read-only member.
+   */
+  it('rejects unsigned writer frames even when auth is unresolved', async () => {
+    const key = await aesKey();
+    const frame = await encodeCollabFrame(
+      FRAME_SYNC_STEP_2,
+      new Uint8Array([1]),
+      key
+    );
+
+    expect(await decodeCollabFrame(frame, key, undefined, REQUIRED)).toBeNull();
+  });
+
+  it('still accepts unsigned frames when no type is declared signed', async () => {
+    // Unshared rooms declare an empty required-set; only this device holds
+    // the key, so there is nobody to authenticate against.
+    const key = await aesKey();
+    const frame = await encodeCollabFrame(
+      FRAME_SYNC_STEP_2,
+      new Uint8Array([1]),
+      key
+    );
+
+    const decoded = await decodeCollabFrame(
+      frame,
+      key,
+      undefined,
+      new Set<number>()
+    );
+
+    expect(decoded?.type).toBe(FRAME_SYNC_STEP_2);
   });
 
   it('rejects unsigned writer frames when writer keys are known', async () => {
@@ -322,5 +360,52 @@ describe('signed collab frames', () => {
     expect(
       signedCollabFrameHeader(new Uint8Array([SIGNED_FRAME_MARKER, 0x00, 0x40]))
     ).toBeNull();
+  });
+});
+
+describe('CollabReplayGuard', () => {
+  const sig = (fill: number) => new Uint8Array(64).fill(fill);
+
+  it('accepts a fresh frame once and refuses the replay', () => {
+    const guard = new CollabReplayGuard();
+    const now = Date.now();
+
+    expect(guard.accept(now, sig(1), now)).toBe(true);
+    expect(guard.accept(now, sig(1), now)).toBe(false);
+  });
+
+  it('keeps distinct frames independent', () => {
+    const guard = new CollabReplayGuard();
+    const now = Date.now();
+
+    expect(guard.accept(now, sig(1), now)).toBe(true);
+    expect(guard.accept(now, sig(2), now)).toBe(true);
+  });
+
+  it('refuses frames outside the freshness window in both directions', () => {
+    const guard = new CollabReplayGuard(60_000);
+    const now = Date.now();
+
+    // Captured long ago and re-injected.
+    expect(guard.accept(now - 120_000, sig(1), now)).toBe(false);
+    // Timestamp from the future, so it can't be parked for later replay.
+    expect(guard.accept(now + 120_000, sig(2), now)).toBe(false);
+    // Ordinary clock skew still passes.
+    expect(guard.accept(now - 30_000, sig(3), now)).toBe(true);
+  });
+
+  it('lets an entry lapse once its window passes, bounding the cache', () => {
+    const guard = new CollabReplayGuard(60_000);
+    const now = Date.now();
+
+    expect(guard.accept(now, sig(1), now)).toBe(true);
+    // Same signature far enough later: the entry has expired, but so has the
+    // frame's own freshness, so it is still refused.
+    expect(guard.accept(now, sig(1), now + 120_000)).toBe(false);
+  });
+
+  it('refuses a non-finite timestamp', () => {
+    const guard = new CollabReplayGuard();
+    expect(guard.accept(Number.NaN, sig(1))).toBe(false);
   });
 });

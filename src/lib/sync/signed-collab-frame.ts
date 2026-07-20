@@ -42,6 +42,10 @@ interface SignedFrameHeader {
   e: number;
   a: string;
   u: string;
+  /** Milliseconds since the epoch, set by the sender and covered by the
+   *  signature. Bounds how long a captured frame stays replayable, and lets
+   *  the receiver's replay cache expire entries instead of growing forever. */
+  ts: number;
 }
 
 export interface DecodedCollabFrame {
@@ -167,6 +171,47 @@ export async function generateCollabSigningKeyPair(): Promise<{
   };
 }
 
+/** How far a frame's timestamp may sit from our clock before we drop it.
+ *  Generous enough to absorb ordinary device clock skew. */
+const REPLAY_WINDOW_MS = 5 * 60_000;
+
+/**
+ * Rejects frames we've already seen, and frames too old to still be in play.
+ *
+ * Signed frames bind the room and epoch but nothing per-message, so before
+ * this a captured frame stayed valid for the life of its epoch and could be
+ * re-injected by the relay or any room peer. Yjs updates are idempotent so a
+ * replayed document update is mostly a no-op, but a replayed awareness frame
+ * resurrects a stale cursor, and neither should be possible.
+ *
+ * Identity is the signature itself: every frame carries a fresh random IV that
+ * the signature covers, so two distinct frames can't share one.
+ */
+export class CollabReplayGuard {
+  private readonly seen = new Map<string, number>();
+
+  constructor(private readonly windowMs: number = REPLAY_WINDOW_MS) {}
+
+  /** True if the frame is fresh and unseen; recording it as seen. */
+  accept(timestamp: number, signature: Uint8Array, now = Date.now()): boolean {
+    if (!Number.isFinite(timestamp)) return false;
+    if (Math.abs(now - timestamp) > this.windowMs) return false;
+
+    const key = bytesToBase64(signature);
+    const expiry = this.seen.get(key);
+    if (expiry !== undefined && expiry > now) return false;
+
+    // Sweep on write: the map only ever holds one window's worth of frames.
+    if (this.seen.size > 0) {
+      for (const [seenKey, seenExpiry] of this.seen) {
+        if (seenExpiry <= now) this.seen.delete(seenKey);
+      }
+    }
+    this.seen.set(key, now + this.windowMs);
+    return true;
+  }
+}
+
 export function canSignCollabFrame(
   auth: CollabFrameAuth | undefined
 ): auth is SigningCollabFrameAuth {
@@ -270,7 +315,8 @@ export async function encodeCollabFrame(
     r: auth.roomId,
     e: auth.collabEpoch,
     a: auth.authorPublicKeyB64,
-    u: auth.authorUsername
+    u: auth.authorUsername,
+    ts: Date.now()
   };
   const headerBytes = textEncoder.encode(JSON.stringify(header));
   const signingKey = await importSigningKey(auth.authorPrivateKeyPkcs8B64);
@@ -312,7 +358,7 @@ export async function encodeCollabFrame(
 
 function signedRequired(
   type: number,
-  signedRequiredTypes: Set<number>
+  signedRequiredTypes: ReadonlySet<number>
 ): boolean {
   return signedRequiredTypes.has(type);
 }
@@ -321,12 +367,18 @@ export async function decodeCollabFrame(
   frame: Uint8Array,
   cryptoKey: CryptoKey,
   auth: CollabFrameAuth | undefined,
-  signedRequiredTypes: Set<number>
+  signedRequiredTypes: ReadonlySet<number>,
+  replayGuard?: CollabReplayGuard
 ): Promise<DecodedCollabFrame | null> {
   if (frame[0] !== SIGNED_FRAME_MARKER) {
     if (frame.byteLength < 1 + IV_LEN) return null;
     const type = frame[0];
-    if (signedRequired(type, signedRequiredTypes) && auth) {
+    // Note the absence of an `&& auth` guard. Enforcement is driven purely by
+    // the type set the caller declared: if a room requires signed writes, an
+    // unsigned frame is rejected even when we failed to resolve who the
+    // authorised writers are. Keying this off `auth` being truthy would mean
+    // a room whose authorisation lookup failed silently accepted anything.
+    if (signedRequired(type, signedRequiredTypes)) {
       console.warn('[collab] rejected unsigned writer frame type=%d', type);
       return null;
     }
@@ -359,6 +411,13 @@ export async function decodeCollabFrame(
     arrayBuffer(signaturePayload(headerBytes, iv, ciphertext))
   );
   if (!ok) return null;
+
+  // After signature verification: an attacker must not be able to evict
+  // cache entries with frames they didn't legitimately obtain.
+  if (replayGuard && !replayGuard.accept(header.ts, signature)) {
+    console.warn('[collab] dropped replayed or stale frame type=%d', header.t);
+    return null;
+  }
 
   const payload = new Uint8Array(
     await crypto.subtle.decrypt(
@@ -401,7 +460,8 @@ function parseSignedCollabFrame(
     typeof header.r !== 'string' ||
     typeof header.e !== 'number' ||
     typeof header.a !== 'string' ||
-    typeof header.u !== 'string'
+    typeof header.u !== 'string' ||
+    typeof header.ts !== 'number'
   ) {
     return null;
   }

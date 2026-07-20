@@ -780,10 +780,12 @@
       provider = new CollabProvider({
         url: collabUrl,
         roomId: room.room_id,
+        joinPrivateKeyPkcs8B64: room.join_private_key_pkcs8_b64,
         keyBytes: base64ToBytes(room.key_b64),
         doc: yDoc,
         awareness,
         auth: collabAuthForRoom(room, signingMaterial),
+        requireSignedWrites: room.collab_epoch > 0,
         onAuthStale: () => {
           void setupCollabProvider();
         },

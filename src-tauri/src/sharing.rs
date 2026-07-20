@@ -1612,6 +1612,28 @@ fn find_existing_scope(
 
 /// Lightweight resolver for live-collab room derivation. It only needs the
 /// scope notes collection plus the manifest's rotating collab material.
+/// Pick the one manifest that owns a scope, or refuse.
+///
+/// Split out from [`share_scope_collab_info`] so the policy is testable
+/// without a live `CollectionManager`.
+fn select_scope_manifest(
+    share_scope_id: &str,
+    matches: Vec<(String, ShareManifest)>,
+) -> AppResult<Option<ShareManifest>> {
+    if matches.len() > 1 {
+        let uids: Vec<&str> = matches.iter().map(|(uid, _)| uid.as_str()).collect();
+        log::error!(
+            "[sharing] {} manifests claim scope {share_scope_id} ({}) — refusing to resolve it",
+            matches.len(),
+            uids.join(", ")
+        );
+        return Err(AppError::InvalidArg(format!(
+            "more than one share manifest claims scope {share_scope_id}; refusing to pick one"
+        )));
+    }
+    Ok(matches.into_iter().next().map(|(_, manifest)| manifest))
+}
+
 pub(crate) fn share_scope_collab_info(
     cm: &CollectionManager,
     share_scope_id: &str,
@@ -1619,6 +1641,19 @@ pub(crate) fn share_scope_collab_info(
     let list = cm
         .list(COLLECTION_TYPE_SHARE_MANIFEST, None)
         .map_err(|e| AppError::InvalidArg(format!("list manifest collections: {e}")))?;
+
+    // Collect every match rather than taking the first. A scope id is a uuid
+    // an outsider can't guess, but every *member* of a scope knows theirs —
+    // and anyone can create a collection and share it with you. So a member
+    // can offer a second manifest claiming the same scope, carrying their own
+    // collab salt and part-collection uids. Taking whichever the server
+    // happened to list first would let them choose the room key.
+    //
+    // There is exactly one manifest per scope in normal operation, so treat a
+    // second one as an attack (or corruption) and refuse to resolve the scope
+    // at all. Failing closed costs live collab for that folder; guessing
+    // costs the room.
+    let mut matches = Vec::new();
     for col in list.data() {
         if col.is_deleted() {
             continue;
@@ -1630,20 +1665,24 @@ pub(crate) fn share_scope_collab_info(
         if manifest.share_scope_id != share_scope_id {
             continue;
         }
-        let notes_collection_uid = manifest_part_uid(&manifest, ShareScopePart::Notes)
-            .ok_or_else(|| AppError::InvalidArg("manifest missing notes collection".into()))?
-            .to_string();
-        let assets_collection_uid = manifest_part_uid(&manifest, ShareScopePart::Assets)
-            .ok_or_else(|| AppError::InvalidArg("manifest missing assets collection".into()))?
-            .to_string();
-        return Ok(Some(ShareScopeCollabInfo {
-            notes_collection_uid,
-            assets_collection_uid,
-            collab_epoch: manifest.collab_epoch,
-            collab_salt: manifest.collab_salt,
-        }));
+        matches.push((col.uid().to_string(), manifest));
     }
-    Ok(None)
+
+    let Some(manifest) = select_scope_manifest(share_scope_id, matches)? else {
+        return Ok(None);
+    };
+    let notes_collection_uid = manifest_part_uid(&manifest, ShareScopePart::Notes)
+        .ok_or_else(|| AppError::InvalidArg("manifest missing notes collection".into()))?
+        .to_string();
+    let assets_collection_uid = manifest_part_uid(&manifest, ShareScopePart::Assets)
+        .ok_or_else(|| AppError::InvalidArg("manifest missing assets collection".into()))?
+        .to_string();
+    Ok(Some(ShareScopeCollabInfo {
+        notes_collection_uid,
+        assets_collection_uid,
+        collab_epoch: manifest.collab_epoch,
+        collab_salt: manifest.collab_salt,
+    }))
 }
 
 /// Assert the resolved scope is structurally complete before anyone is invited:
@@ -2599,6 +2638,60 @@ mod tests {
             access_level: ShareAccessLevel::ReadWrite,
             collection_type: Some(collection_type.to_string()),
         }
+    }
+
+    fn scope_manifest(scope: &str, salt: u8) -> ShareManifest {
+        ShareManifest {
+            schema: SHARE_MANIFEST_SCHEMA,
+            share_scope_id: scope.into(),
+            name: "Shared project".into(),
+            root_folder_id: "folder_root".into(),
+            owner_username: Some("sender".into()),
+            collab_epoch: 1,
+            collab_salt: vec![salt; SHARE_COLLAB_SALT_BYTES],
+            collections: vec![],
+        }
+    }
+
+    #[test]
+    fn select_scope_manifest_returns_the_single_match() {
+        let picked = select_scope_manifest(
+            "scope_root",
+            vec![("col_a".into(), scope_manifest("scope_root", 7))],
+        )
+        .unwrap()
+        .expect("a manifest");
+
+        assert_eq!(picked.collab_salt, vec![7; SHARE_COLLAB_SALT_BYTES]);
+    }
+
+    #[test]
+    fn select_scope_manifest_returns_none_when_nothing_claims_the_scope() {
+        assert!(select_scope_manifest("scope_root", vec![])
+            .unwrap()
+            .is_none());
+    }
+
+    /// A scope id is unguessable to an outsider, but every member of a scope
+    /// knows theirs — and anyone can create a collection and share it. A
+    /// second manifest claiming the scope would otherwise let its author
+    /// choose the collab salt, and so the live-collab room key, for everyone.
+    #[test]
+    fn select_scope_manifest_refuses_when_two_collections_claim_one_scope() {
+        let err = select_scope_manifest(
+            "scope_root",
+            vec![
+                ("col_real".into(), scope_manifest("scope_root", 7)),
+                ("col_impostor".into(), scope_manifest("scope_root", 9)),
+            ],
+        )
+        .unwrap_err();
+
+        // Must not silently resolve to either one.
+        assert!(
+            err.to_string().contains("more than one share manifest"),
+            "unexpected error: {err}"
+        );
     }
 
     fn manifest_preview(collections: Vec<ShareManifestCollectionRef>) -> ShareManifestPreview {
