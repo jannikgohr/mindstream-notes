@@ -146,7 +146,15 @@ export const config: WebdriverIO.Config = {
   logLevel: 'warn',
   framework: 'mocha',
   reporters: ['spec'],
-  mochaOpts: { ui: 'bdd', timeout: 120_000 },
+  // 4 minutes, not the single-client config's 2. Every spec here opens its
+  // `before all` with two real Etebase signups and two full UI sign-ins (one
+  // per client), and each spec file launches a fresh pair of app instances.
+  // Alone that hook finishes well inside 2 minutes; across a five-spec run the
+  // machine is loaded enough that it can cross it, and the whole file then
+  // reports as failed without a single assertion having run. The assertions
+  // themselves are unaffected — this only stops a slow setup being reported as
+  // a broken spec.
+  mochaOpts: { ui: 'bdd', timeout: 240_000 },
 
   // Same Tauri-CLI build as the single-client config: a plain `cargo build`
   // leaves the binary pointing at the dev server (blank webview). Skip with
