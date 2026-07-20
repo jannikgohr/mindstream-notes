@@ -116,6 +116,31 @@ test.describe('yjs-relay join challenge', () => {
     replay.close();
   });
 
+  test('frames never cross between rooms', async () => {
+    // Rooms are pub/sub topics keyed by the room id. If that ever regressed
+    // to a broadcast-to-all, every note's ciphertext would reach every
+    // connected client — still encrypted, but a far bigger harvest.
+    const one = await makeRoom();
+    const two = await makeRoom();
+
+    const inOne = connectPeer(BASE, one.room, (nonce) =>
+      signChallenge(one.room, one.privateKey, nonce)
+    );
+    const inTwo = connectPeer(BASE, two.room, (nonce) =>
+      signChallenge(two.room, two.privateKey, nonce)
+    );
+    await Promise.all([inOne.settled, inTwo.settled]);
+    await wait(300);
+
+    inOne.ws.send(Buffer.from([0x01, 1, 2, 3]));
+    await wait(500);
+
+    expect(inTwo.data.length).toBe(0);
+
+    inOne.close();
+    inTwo.close();
+  });
+
   test('a room id that is not a P-256 public key is refused at upgrade', async () => {
     const peer = connectPeer(BASE, 'health-probe', (nonce) => nonce);
     await peer.settled;
