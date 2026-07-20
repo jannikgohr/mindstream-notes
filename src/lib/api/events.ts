@@ -25,9 +25,20 @@ export interface SyncCompletedPayload {
   assets_pulled_ids: string[];
 }
 
+export interface CollabCredentialsChangedPayload {
+  note_ids: string[];
+}
+
 export type TauriEvents = {
   'fullscreen-note': { noteId: string; title: string };
   'sync-completed': SyncCompletedPayload;
+  /**
+   * Fired when a shared collection's live-collab epoch/salt changes.
+   * Open note editors whose note id appears here must recreate their
+   * active relay client so removed members stay stranded in the old room.
+   * Mirrors `collab_events::COLLAB_CREDENTIALS_CHANGED_EVENT`.
+   */
+  'collab-credentials-changed': CollabCredentialsChangedPayload;
   /**
    * Fired from Rust when the pre-sync reachability probe fails — the
    * active vault's server didn't answer. The notification bridge turns

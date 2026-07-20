@@ -29,14 +29,22 @@ import {
   encodeAwarenessUpdate,
   type Awareness
 } from 'y-protocols/awareness';
+import {
+  canSignCollabFrame,
+  decodeCollabFrame,
+  encodeCollabFrame,
+  signedCollabFrameNeedsAuthRefresh,
+  type CollabFrameAuth
+} from './signed-collab-frame';
 
 const FRAME_SYNC_STEP_1 = 0x00;
 const FRAME_SYNC_STEP_2 = 0x01;
 const FRAME_AWARENESS = 0x02;
-const IV_LEN = 12;
+const SIGNED_REQUIRED_TYPES = new Set([FRAME_SYNC_STEP_2]);
 
 const RECONNECT_INITIAL_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
+const AUTH_REFRESH_THROTTLE_MS = 5_000;
 
 /** First/last few base64 chars of the key — enough to confirm two
  *  devices imported the same secret without leaking the secret. */
@@ -75,6 +83,12 @@ export interface CollabProviderOptions {
   awareness: Awareness;
   /** Optional callback fired on connect / disconnect (for UI badges). */
   onStatusChange?: (online: boolean) => void;
+  /** Optional writer-key signature context. When present, document updates
+   *  from peers must be signed by an authorized writer key. */
+  auth?: CollabFrameAuth;
+  /** Called when a signed frame for this room/epoch uses a key we don't know
+   *  yet. The editor should re-fetch room info and recreate the provider. */
+  onAuthStale?: () => void;
 }
 
 export class CollabProvider {
@@ -83,6 +97,7 @@ export class CollabProvider {
   private destroyed = false;
   private reconnectAttempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastAuthRefreshRequest = 0;
 
   private readonly docUpdateHandler: (
     update: Uint8Array,
@@ -99,6 +114,7 @@ export class CollabProvider {
     // in handleMessage), preventing an echo loop.
     this.docUpdateHandler = (update, origin) => {
       if (origin === this) return;
+      if (this.opts.auth && !canSignCollabFrame(this.opts.auth)) return;
       void this.send(FRAME_SYNC_STEP_2, update);
     };
     this.awarenessUpdateHandler = ({ added, updated, removed }, origin) => {
@@ -237,23 +253,12 @@ export class CollabProvider {
       return;
     }
     if (!this.cryptoKey) return;
-    const iv = crypto.getRandomValues(new Uint8Array(IV_LEN));
-    // TS 5.7's lib.dom.d.ts narrowed BufferSource to require
-    // `Uint8Array<ArrayBuffer>` rather than the looser ArrayBufferLike.
-    // Materialise a fresh ArrayBuffer via slice() to satisfy that — at
-    // runtime any Uint8Array is a valid BufferSource, but the compiler
-    // can't see that without the copy.
-    const ct = new Uint8Array(
-      await crypto.subtle.encrypt(
-        { name: 'AES-GCM', iv: iv.slice().buffer },
-        this.cryptoKey,
-        payload.slice().buffer
-      )
+    const frame = await encodeCollabFrame(
+      type,
+      payload,
+      this.cryptoKey,
+      this.opts.auth
     );
-    const frame = new Uint8Array(1 + IV_LEN + ct.byteLength);
-    frame[0] = type;
-    frame.set(iv, 1);
-    frame.set(ct, 1 + IV_LEN);
     // Re-check the socket state: encrypt() awaited a microtask, during
     // which the user may have closed the note (provider.destroy() →
     // ws.close()). Without this guard, the post-await ws.send throws
@@ -281,18 +286,13 @@ export class CollabProvider {
     if (!(data instanceof ArrayBuffer)) return;
     if (!this.cryptoKey) return;
     const frame = new Uint8Array(data);
-    if (frame.byteLength < 1 + IV_LEN) return;
-    const type = frame[0];
-    const iv = frame.subarray(1, 1 + IV_LEN);
-    const ct = frame.subarray(1 + IV_LEN);
-    let pt: Uint8Array;
+    let decoded;
     try {
-      pt = new Uint8Array(
-        await crypto.subtle.decrypt(
-          { name: 'AES-GCM', iv: iv.slice().buffer },
-          this.cryptoKey,
-          ct.slice().buffer
-        )
+      decoded = await decodeCollabFrame(
+        frame,
+        this.cryptoKey,
+        this.opts.auth,
+        SIGNED_REQUIRED_TYPES
       );
     } catch (err) {
       // Wrong key, malformed ciphertext, or replay from a different
@@ -301,13 +301,18 @@ export class CollabProvider {
       // will keep failing and the badge will stay offline.
       console.warn(
         '[collab] decrypt failed type=%s frame=%dB room=%s — likely a key mismatch between devices',
-        frameName(type),
+        frameName(frame[0]),
         frame.byteLength,
         this.opts.roomId,
         err
       );
       return;
     }
+    if (!decoded) {
+      void this.maybeRequestAuthRefresh(frame);
+      return;
+    }
+    const { type, payload: pt } = decoded;
     // Mirror image of the post-await guard in send(): if the user closed
     // the note during the decrypt microtask, the doc/awareness may be
     // destroyed by now and applying updates would crash.
@@ -336,5 +341,23 @@ export class CollabProvider {
       default:
         console.warn('[collab] unknown frame type', type);
     }
+  }
+
+  private async maybeRequestAuthRefresh(frame: Uint8Array): Promise<void> {
+    if (!this.cryptoKey) return;
+    if (
+      !(await signedCollabFrameNeedsAuthRefresh(
+        frame,
+        this.cryptoKey,
+        this.opts.auth
+      ))
+    ) {
+      return;
+    }
+    const now = Date.now();
+    if (now - this.lastAuthRefreshRequest < AUTH_REFRESH_THROTTLE_MS) return;
+    this.lastAuthRefreshRequest = now;
+    console.info('[collab] refreshing writer auth room=%s', this.opts.roomId);
+    this.opts.onAuthStale?.();
   }
 }

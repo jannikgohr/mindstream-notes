@@ -54,9 +54,12 @@ keyring-core = "1"
 # the editor's "full body" save back into Y.Text ops, rmp-serde for the
 # msgpack wire format inside Etebase item content.
 yrs = "0.26"
+hkdf = "0.12"
+hmac = "0.12"
 similar = "3"
 rmp-serde = "1"
 serde_bytes = "0.11"
+sha2 = "0.10"
 tokio = { version = "1.52.3", features = ["time", "sync"] }
 
 # Backup format: backups are zip files containing manifest.json + the

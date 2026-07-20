@@ -36,9 +36,24 @@ export interface RoomInfo {
   room_id: string;
   /** Standard base64 of the 32-byte AES-GCM key. */
   key_b64: string;
+  /** Share manifest live-collab epoch; 0 means no collection salt was applied. */
+  collab_epoch: number;
+  /** Present for salted shared-folder rooms. */
+  writer_auth?: {
+    authorized_writers: Array<{
+      username: string;
+      public_key_b64: string;
+    }>;
+  } | null;
 }
 
-export async function noteRoomInfo(id: string): Promise<RoomInfo | null> {
+export async function noteRoomInfo(
+  id: string,
+  writerPublicKeyB64?: string
+): Promise<RoomInfo | null> {
   if (!isTauri()) return null;
-  return await tauriInvoke<RoomInfo | null>('note_room_info', { id });
+  return await tauriInvoke<RoomInfo | null>('note_room_info', {
+    id,
+    writerPublicKeyB64: writerPublicKeyB64 ?? null
+  });
 }

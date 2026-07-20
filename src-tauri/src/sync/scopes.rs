@@ -17,7 +17,7 @@
 
 use etebase::managers::CollectionManager;
 use etebase::{Collection, CollectionAccessLevel, FetchOptions};
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 
 use crate::db::Db;
 use crate::error::{AppError, AppResult};
@@ -62,6 +62,13 @@ pub fn sync_scopes(
             log::warn!("[sync] scope {} sync failed: {e}", manifest.share_scope_id);
         }
     }
+
+    // Reconcile shares the owner revoked (deleted the scope collections): purge
+    // any local shared-with-me root whose collections are now deleted server-side.
+    // Isolated so a failure here can't wedge the rest of the sync.
+    if let Err(e) = crate::sharing::reconcile_revoked_shares(db, cm) {
+        log::warn!("[sync] revoked-share reconcile failed: {e}");
+    }
     Ok(())
 }
 
@@ -71,6 +78,27 @@ fn decode_manifest(col: &Collection) -> AppResult<ShareManifest> {
         .map_err(|e| AppError::InvalidArg(format!("manifest content: {e}")))?;
     serde_json::from_slice(&raw)
         .map_err(|e| AppError::InvalidArg(format!("decode manifest json: {e}")))
+}
+
+/// The local collection id of the shared root this account holds for `scope`, if
+/// any (a row tagged with the scope that isn't shared-by-me; the anchor — carrying
+/// `share_id` — is preferred). Best-effort, only used to make the
+/// incomplete-scope warning actionable.
+fn local_scope_root(db: &Db, scope: &str) -> Option<String> {
+    db.with_conn(|conn| {
+        Ok(conn
+            .query_row(
+                "SELECT id FROM collections
+                 WHERE share_scope_id = ?1 AND COALESCE(shared_by_me, 0) = 0
+                 ORDER BY (share_id IS NULL), id
+                 LIMIT 1",
+                params![scope],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?)
+    })
+    .ok()
+    .flatten()
 }
 
 fn part_uid(manifest: &ShareManifest, part: ShareScopePart) -> Option<&str> {
@@ -94,9 +122,22 @@ fn sync_one_scope(
         part_uid(manifest, ShareScopePart::Notes),
         part_uid(manifest, ShareScopePart::Assets),
     ) else {
-        log::warn!("[sync] scope {scope} manifest is missing a required part; skipping");
+        // Incomplete manifest — it can never finish syncing. Name the local root
+        // (if this account already has one accepted) so the diagnostic is
+        // actionable: the fix is to Leave it. Never auto-delete here — a folder
+        // mid-first-sync must not be mistaken for an orphan.
+        match local_scope_root(db, scope) {
+            Some(root_id) => log::warn!(
+                "[sync] shared root {root_id} (scope {scope}) is incomplete (manifest missing a required part) and can't sync; use \"Leave shared folder\" to remove it"
+            ),
+            None => log::warn!(
+                "[sync] scope {scope} manifest is missing a required part; skipping"
+            ),
+        }
         return Ok(());
     };
+
+    record_scope_collab_epoch(db, manifest, delta)?;
 
     // Fetch the part collections. Any failure (not a member yet — a manifest
     // accepted but bundle not) means the scope isn't ready; skip it quietly.
@@ -291,6 +332,61 @@ fn scope_assets_stoken_key(scope: &str) -> String {
     format!("scope-assets:{scope}")
 }
 
+fn scope_collab_epoch_key(scope: &str) -> String {
+    format!("scope-collab-epoch:{scope}")
+}
+
+fn load_scope_collab_epoch(db: &Db, scope: &str) -> AppResult<Option<u64>> {
+    let key = scope_collab_epoch_key(scope);
+    db.with_conn(|conn| {
+        let raw: Option<String> = conn
+            .query_row(
+                "SELECT stoken FROM sync_state WHERE kind = ?1",
+                params![key],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten();
+        Ok(raw.and_then(|value| value.parse::<u64>().ok()))
+    })
+}
+
+fn save_scope_collab_epoch(db: &Db, scope: &str, epoch: u64) -> AppResult<()> {
+    let key = scope_collab_epoch_key(scope);
+    let value = epoch.to_string();
+    db.with_conn(|conn| {
+        conn.execute(
+            "INSERT INTO sync_state(kind, stoken)
+             VALUES (?1, ?2)
+             ON CONFLICT(kind) DO UPDATE SET stoken = excluded.stoken",
+            params![key, value],
+        )?;
+        Ok(())
+    })
+}
+
+fn record_scope_collab_epoch(
+    db: &Db,
+    manifest: &ShareManifest,
+    delta: &mut SyncDelta,
+) -> AppResult<()> {
+    if manifest.collab_salt.is_empty() {
+        return Ok(());
+    }
+
+    let scope = manifest.share_scope_id.as_str();
+    let previous = load_scope_collab_epoch(db, scope)?;
+    if previous == Some(manifest.collab_epoch) {
+        return Ok(());
+    }
+
+    save_scope_collab_epoch(db, scope, manifest.collab_epoch)?;
+    delta
+        .collab_credentials_changed_note_ids
+        .extend(crate::collab_events::note_ids_for_share_scope(db, scope)?);
+    Ok(())
+}
+
 /// Project the manifest's share membership onto the local root folder row so a
 /// recipient's shared folder shows up under "shared with me" (the frontend keys
 /// that off `shared_role` / `share_id`) rather than in their private Home tree.
@@ -482,11 +578,13 @@ mod tests {
 
     fn manifest(root_folder_id: &str, owner: Option<&str>) -> ShareManifest {
         ShareManifest {
-            schema: 1,
+            schema: crate::sharing::SHARE_MANIFEST_SCHEMA,
             share_scope_id: "scope_1".into(),
             name: "Shared".into(),
             root_folder_id: root_folder_id.into(),
             owner_username: owner.map(str::to_string),
+            collab_epoch: 1,
+            collab_salt: vec![7; crate::sharing::SHARE_COLLAB_SALT_BYTES],
             collections: Vec::new(),
         }
     }
@@ -522,6 +620,65 @@ mod tests {
             part_ref(ShareScopePart::Folders, "second"),
         ];
         assert_eq!(part_uid(&m, ShareScopePart::Folders), Some("first"));
+    }
+
+    #[test]
+    fn record_scope_collab_epoch_marks_scope_notes_when_epoch_first_seen_or_changed() {
+        let db = open_memory_for_tests();
+        db.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO notes(id, title, body, position, created, modified, share_scope_id)
+                 VALUES ('note_b', 'B', '', 0, 't', 't', 'scope_1')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO notes(id, title, body, position, created, modified, share_scope_id)
+                 VALUES ('note_a', 'A', '', 0, 't', 't', 'scope_1')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO notes(id, title, body, position, created, modified, share_scope_id)
+                 VALUES ('other', 'Other', '', 0, 't', 't', 'scope_2')",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+        let mut m = manifest("folder_root", Some("alice"));
+        let mut delta = SyncDelta::default();
+        record_scope_collab_epoch(&db, &m, &mut delta).unwrap();
+        assert_eq!(
+            delta.collab_credentials_changed_note_ids,
+            vec!["note_a", "note_b"]
+        );
+
+        delta.collab_credentials_changed_note_ids.clear();
+        record_scope_collab_epoch(&db, &m, &mut delta).unwrap();
+        assert!(delta.collab_credentials_changed_note_ids.is_empty());
+
+        m.collab_epoch += 1;
+        record_scope_collab_epoch(&db, &m, &mut delta).unwrap();
+        assert_eq!(
+            delta.collab_credentials_changed_note_ids,
+            vec!["note_a", "note_b"]
+        );
+    }
+
+    #[test]
+    fn record_scope_collab_epoch_ignores_legacy_manifest_without_salt() {
+        let db = open_memory_for_tests();
+        let mut m = manifest("folder_root", Some("alice"));
+        m.collab_salt.clear();
+        let mut delta = SyncDelta::default();
+
+        record_scope_collab_epoch(&db, &m, &mut delta).unwrap();
+
+        assert!(delta.collab_credentials_changed_note_ids.is_empty());
+        assert_eq!(
+            load_scope_collab_epoch(&db, &m.share_scope_id).unwrap(),
+            None
+        );
     }
 
     #[test]

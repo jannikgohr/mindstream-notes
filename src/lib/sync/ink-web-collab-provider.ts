@@ -7,13 +7,22 @@
  * encrypts, decrypts, and routes update bytes.
  */
 
+import {
+  canSignCollabFrame,
+  decodeCollabFrame,
+  encodeCollabFrame,
+  signedCollabFrameNeedsAuthRefresh,
+  type CollabFrameAuth
+} from './signed-collab-frame';
+
 const FRAME_SYNC_STEP_1 = 0x00;
 const FRAME_SYNC_STEP_2 = 0x01;
 const FRAME_AWARENESS = 0x02;
-const IV_LEN = 12;
+const SIGNED_REQUIRED_TYPES = new Set([FRAME_SYNC_STEP_2]);
 
 const RECONNECT_INITIAL_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
+const AUTH_REFRESH_THROTTLE_MS = 5_000;
 
 function frameName(type: number): string {
   switch (type) {
@@ -56,6 +65,8 @@ export interface InkWebCollabProviderOptions {
   handle: InkWebCollabHandle;
   noteId: string;
   onStatusChange?: (online: boolean) => void;
+  auth?: CollabFrameAuth;
+  onAuthStale?: () => void;
 }
 
 export class InkWebCollabProvider {
@@ -64,6 +75,7 @@ export class InkWebCollabProvider {
   private destroyed = false;
   private reconnectAttempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastAuthRefreshRequest = 0;
 
   constructor(private readonly opts: InkWebCollabProviderOptions) {
     console.info(
@@ -92,6 +104,7 @@ export class InkWebCollabProvider {
 
   sendLocalUpdate(update: Uint8Array): void {
     if (update.byteLength === 0) return;
+    if (this.opts.auth && !canSignCollabFrame(this.opts.auth)) return;
     console.debug(
       '[ink-collab] enqueue local update note=%s payload=%dB',
       this.opts.noteId,
@@ -181,18 +194,12 @@ export class InkWebCollabProvider {
     }
     if (!this.cryptoKey) return;
 
-    const iv = crypto.getRandomValues(new Uint8Array(IV_LEN));
-    const ct = new Uint8Array(
-      await crypto.subtle.encrypt(
-        { name: 'AES-GCM', iv: iv.slice().buffer },
-        this.cryptoKey,
-        payload.slice().buffer
-      )
+    const frame = await encodeCollabFrame(
+      type,
+      payload,
+      this.cryptoKey,
+      this.opts.auth
     );
-    const frame = new Uint8Array(1 + IV_LEN + ct.byteLength);
-    frame[0] = type;
-    frame.set(iv, 1);
-    frame.set(ct, 1 + IV_LEN);
     if (this.destroyed || ws.readyState !== WebSocket.OPEN) return;
 
     try {
@@ -213,30 +220,30 @@ export class InkWebCollabProvider {
     if (!(data instanceof ArrayBuffer)) return;
     if (!this.cryptoKey) return;
     const frame = new Uint8Array(data);
-    if (frame.byteLength < 1 + IV_LEN) return;
 
-    const type = frame[0];
-    const iv = frame.subarray(1, 1 + IV_LEN);
-    const ct = frame.subarray(1 + IV_LEN);
-    let pt: Uint8Array;
+    let decoded;
     try {
-      pt = new Uint8Array(
-        await crypto.subtle.decrypt(
-          { name: 'AES-GCM', iv: iv.slice().buffer },
-          this.cryptoKey,
-          ct.slice().buffer
-        )
+      decoded = await decodeCollabFrame(
+        frame,
+        this.cryptoKey,
+        this.opts.auth,
+        SIGNED_REQUIRED_TYPES
       );
     } catch (err) {
       console.warn(
         '[ink-collab] decrypt failed type=%s frame=%dB note=%s - likely a key mismatch between devices',
-        frameName(type),
+        frameName(frame[0]),
         frame.byteLength,
         this.opts.noteId,
         err
       );
       return;
     }
+    if (!decoded) {
+      void this.maybeRequestAuthRefresh(frame);
+      return;
+    }
+    const { type, payload: pt } = decoded;
     if (this.destroyed) return;
 
     console.debug(
@@ -267,5 +274,26 @@ export class InkWebCollabProvider {
       default:
         console.warn('[ink-collab] unknown frame type', type);
     }
+  }
+
+  private async maybeRequestAuthRefresh(frame: Uint8Array): Promise<void> {
+    if (!this.cryptoKey) return;
+    if (
+      !(await signedCollabFrameNeedsAuthRefresh(
+        frame,
+        this.cryptoKey,
+        this.opts.auth
+      ))
+    ) {
+      return;
+    }
+    const now = Date.now();
+    if (now - this.lastAuthRefreshRequest < AUTH_REFRESH_THROTTLE_MS) return;
+    this.lastAuthRefreshRequest = now;
+    console.info(
+      '[ink-collab] refreshing writer auth note=%s',
+      this.opts.noteId
+    );
+    this.opts.onAuthStale?.();
   }
 }

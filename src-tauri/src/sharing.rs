@@ -20,6 +20,7 @@ use std::collections::{HashMap, HashSet};
 
 use chrono::Utc;
 use etebase::managers::{CollectionInvitationManager, CollectionManager};
+use etebase::utils::randombytes;
 use etebase::{
     Account, Collection, CollectionAccessLevel, FetchOptions, InvitationPreview, ItemMetadata,
     SignedInvitation,
@@ -35,6 +36,8 @@ pub const COLLECTION_TYPE_SHARE_MANIFEST: &str = "mindstream.share_manifest";
 pub const COLLECTION_TYPE_SHARE_FOLDERS: &str = "mindstream.folders";
 pub const COLLECTION_TYPE_SHARE_NOTES: &str = "mindstream.notes";
 pub const COLLECTION_TYPE_SHARE_ASSETS: &str = "mindstream.assets";
+pub const SHARE_MANIFEST_SCHEMA: u32 = 2;
+pub const SHARE_COLLAB_SALT_BYTES: usize = 32;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -169,6 +172,61 @@ impl ShareScopePart {
             ShareScopePart::Assets => COLLECTION_TYPE_SHARE_ASSETS,
         }
     }
+
+    fn label(self) -> &'static str {
+        match self {
+            ShareScopePart::Folders => "folders",
+            ShareScopePart::Notes => "notes",
+            ShareScopePart::Assets => "assets",
+        }
+    }
+}
+
+/// The three part collections every complete share scope must carry. `assets` is
+/// permanently required so embedded images/PDFs/canvas assets never sync as
+/// broken; a manifest missing any of these can never finish syncing for a
+/// recipient (see the incomplete-bundle guards below).
+const REQUIRED_SHARE_PARTS: [ShareScopePart; 3] = [
+    ShareScopePart::Folders,
+    ShareScopePart::Notes,
+    ShareScopePart::Assets,
+];
+
+/// Required parts a manifest does not reference at all. Empty ⇒ structurally
+/// complete. Pure so both the invite-time assertion and the tests can call it;
+/// matches the missing-ref logic in `build_incoming_share_bundle`.
+fn manifest_missing_required_parts(manifest: &ShareManifest) -> Vec<ShareScopePart> {
+    REQUIRED_SHARE_PARTS
+        .into_iter()
+        .filter(|part| !manifest.collections.iter().any(|c| c.part == *part))
+        .collect()
+}
+
+/// Required parts a recipient can't satisfy: either the manifest doesn't
+/// reference the part, or it does but the referenced collection uid isn't in
+/// `satisfiable_uids` (no pending invitation for it and not already a member).
+/// Empty ⇒ the bundle is safe to accept. Pure → unit-testable without a server.
+fn unsatisfiable_required_parts(
+    manifest: &ShareManifest,
+    satisfiable_uids: &HashSet<&str>,
+) -> Vec<ShareScopePart> {
+    REQUIRED_SHARE_PARTS
+        .into_iter()
+        .filter(
+            |part| match manifest.collections.iter().find(|c| c.part == *part) {
+                None => true,
+                Some(collection) => !satisfiable_uids.contains(collection.collection_uid.as_str()),
+            },
+        )
+        .collect()
+}
+
+fn format_parts(parts: &[ShareScopePart]) -> String {
+    parts
+        .iter()
+        .map(|part| part.label())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -179,8 +237,22 @@ pub struct ShareManifest {
     pub root_folder_id: String,
     #[serde(default)]
     pub owner_username: Option<String>,
+    /// Rotated when a member is removed. Used to derive live-collab room ids
+    /// and passwords for all note items in this share scope.
+    #[serde(default = "default_collab_epoch")]
+    pub collab_epoch: u64,
+    #[serde(default, with = "serde_bytes")]
+    pub collab_salt: Vec<u8>,
     #[serde(default)]
     pub collections: Vec<ShareManifestCollectionRef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ShareScopeCollabInfo {
+    pub notes_collection_uid: String,
+    pub assets_collection_uid: String,
+    pub collab_epoch: u64,
+    pub collab_salt: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -235,6 +307,14 @@ pub struct IncomingShareBundlePart {
 
 fn default_manifest_collection_required() -> bool {
     true
+}
+
+fn default_collab_epoch() -> u64 {
+    1
+}
+
+fn fresh_collab_salt() -> Vec<u8> {
+    randombytes(SHARE_COLLAB_SALT_BYTES)
 }
 
 /// True for any of the four share-scope collection types (manifest + parts).
@@ -356,6 +436,42 @@ pub async fn accept_share_bundle(
             .map(|invitation| (invitation.collection_uid.as_str(), invitation))
             .collect();
 
+        // Refuse an incomplete bundle *before* accepting any part. A required
+        // part is satisfiable only if the manifest references it AND either a
+        // pending invitation exists for it or we're already a member of that
+        // collection (idempotent re-accept). Accepting a bundle with an
+        // unsatisfiable required part is what strands a recipient with an
+        // unsyncable, un-leavable folder — so we stop here and the bundle stays
+        // declinable.
+        let mut member_part_uids: Vec<String> = Vec::new();
+        for collection_ref in &manifest.collections {
+            let uid = collection_ref.collection_uid.as_str();
+            if invitation_by_collection.contains_key(uid) {
+                continue;
+            }
+            // No pending invitation — is it a collection we can already reach
+            // (accepted in a prior partial run)? A successful fetch means yes.
+            if cm
+                .fetch(uid, None)
+                .map(|fetched| !fetched.is_deleted())
+                .unwrap_or(false)
+            {
+                member_part_uids.push(collection_ref.collection_uid.clone());
+            }
+        }
+        let mut satisfiable_uids: HashSet<&str> =
+            invitation_by_collection.keys().copied().collect();
+        for uid in &member_part_uids {
+            satisfiable_uids.insert(uid.as_str());
+        }
+        let missing = unsatisfiable_required_parts(&manifest, &satisfiable_uids);
+        if !missing.is_empty() {
+            return Err(AppError::InvalidArg(format!(
+                "This shared folder is incomplete (missing {}); ask the owner to share it again.",
+                format_parts(&missing)
+            )));
+        }
+
         for collection_ref in &manifest.collections {
             let Some(part_invitation) =
                 invitation_by_collection.get(collection_ref.collection_uid.as_str())
@@ -467,6 +583,594 @@ pub async fn decline_share_bundle(
     .await
     .map_err(|e| format!("decline share bundle task: {e}"))?
     .map_err(Into::into)
+}
+
+/// A collection's local share metadata:
+/// `(share_scope_id, share_id, shared_role, shared_by_me)`.
+type ShareMetadataRow = (Option<String>, Option<String>, Option<String>, bool);
+
+/// Leave a folder that was shared *with* the current user. Unlike
+/// `decline_share_bundle` (which undoes a not-yet-accepted invite), this operates
+/// on an accepted share that already lives in the tree: it relinquishes
+/// membership of the scope's manifest + part collections server-side and purges
+/// the locally-pulled scoped rows so the folder disappears. The owner and other
+/// members are unaffected; the user can be re-invited later.
+#[tauri::command]
+pub async fn leave_shared_collection(app: AppHandle, collection_id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let account = restore_required(&app)?;
+        let db = app.state::<Db>();
+
+        // Read the row's share metadata. `share_scope_id` is the ideal handle,
+        // but a broken/dev-era share can lack it while still carrying `share_id`
+        // (the folders collection uid) or `shared_role` — those still mark it as
+        // shared *with* us and must remain removable. A share we own
+        // (`shared_by_me`) is managed from the owner side, not "left".
+        let row: Option<ShareMetadataRow> = db.with_conn(|conn| {
+            Ok(conn
+                .query_row(
+                    "SELECT share_scope_id, share_id, shared_role,
+                                COALESCE(shared_by_me, 0)
+                         FROM collections WHERE id = ?1",
+                    params![collection_id],
+                    |row| {
+                        Ok((
+                            row.get::<_, Option<String>>(0)?,
+                            row.get::<_, Option<String>>(1)?,
+                            row.get::<_, Option<String>>(2)?,
+                            row.get::<_, i64>(3)? != 0,
+                        ))
+                    },
+                )
+                .optional()?)
+        })?;
+
+        let Some((scope_id, share_id, shared_role, shared_by_me)) = row else {
+            return Err(AppError::NotFound(format!("collection {collection_id}")));
+        };
+        if shared_by_me {
+            return Err(AppError::InvalidArg(
+                "you own this shared folder — manage it from sharing settings instead of leaving"
+                    .into(),
+            ));
+        }
+        if scope_id.is_none() && share_id.is_none() && shared_role.is_none() {
+            return Err(AppError::InvalidArg(format!(
+                "collection {collection_id} is not a shared folder"
+            )));
+        }
+
+        // Relinquish server-side membership best-effort — every failure here is
+        // non-fatal because the local purge below is what actually removes the
+        // folder. Prefer the full scope (manifest + 3 parts); if the scope can't
+        // be resolved (incomplete/deleted server-side), fall back to leaving the
+        // folders collection directly by its uid (`share_id`).
+        let cm = account
+            .collection_manager()
+            .map_err(|e| AppError::InvalidArg(format!("collection_manager: {e}")))?;
+        let mut left_via_scope = false;
+        if let Some(scope) = scope_id.as_deref() {
+            match find_existing_scope(&cm, scope) {
+                Ok(Some(resolved)) => {
+                    for col in [
+                        &resolved.manifest,
+                        &resolved.folders,
+                        &resolved.notes,
+                        &resolved.assets,
+                    ] {
+                        leave_collection_best_effort(&cm, col.uid(), Some(scope));
+                    }
+                    left_via_scope = true;
+                }
+                Ok(None) => log::warn!(
+                    "[sharing] scope {scope} manifest not found server-side; purging locally only"
+                ),
+                Err(e) => {
+                    log::warn!("[sharing] resolve scope {scope} to leave: {e}; purging locally")
+                }
+            }
+        }
+        if !left_via_scope {
+            if let Some(uid) = share_id.as_deref() {
+                leave_collection_best_effort(&cm, uid, scope_id.as_deref());
+            }
+        }
+
+        // Always purge locally so the folder disappears in every case. The
+        // scope-keyed purge clears the pulled rows + cursors when a scope exists;
+        // the subtree purge (by collection id) is the safety net for a broken /
+        // NULL-scope share so it's removable regardless.
+        if let Some(scope) = scope_id.as_deref() {
+            purge_local_scope(&db, scope)?;
+        }
+        purge_local_subtree(&db, &collection_id)?;
+
+        Ok::<(), AppError>(())
+    })
+    .await
+    .map_err(|e| format!("leave shared collection task: {e}"))?
+    .map_err(Into::into)
+}
+
+/// Delete every locally-pulled row for `scope` — the shared subtree
+/// (collections/notes/assets), its tombstones, and the per-part sync cursors — so
+/// a left scope stops rendering and can't be re-pushed. Mirrors the delete set of
+/// `sync::scopes::discard_read_only_scope_edits` but unconditional (leaving drops
+/// remote-authoritative rows too, not just dirty local edits).
+pub(crate) fn purge_local_scope(db: &Db, scope: &str) -> AppResult<()> {
+    db.with_conn_mut(|conn| {
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM assets WHERE share_scope_id = ?1",
+            params![scope],
+        )?;
+        tx.execute(
+            "DELETE FROM notes WHERE share_scope_id = ?1",
+            params![scope],
+        )?;
+        tx.execute(
+            "DELETE FROM collections WHERE share_scope_id = ?1",
+            params![scope],
+        )?;
+        tx.execute(
+            "DELETE FROM tombstones WHERE share_scope_id = ?1",
+            params![scope],
+        )?;
+        tx.execute(
+            "DELETE FROM sync_state WHERE kind IN (?1, ?2, ?3)",
+            params![
+                format!("scope-folders:{scope}"),
+                format!("scope-notes:{scope}"),
+                format!("scope-assets:{scope}"),
+            ],
+        )?;
+        tx.commit()?;
+        Ok(())
+    })
+}
+
+/// Best-effort delete of an already-fetched collection (owner revoke). Marks it
+/// deleted and uploads the tombstone; every failure is logged and swallowed — the
+/// owner's folder is already personal locally, so a failed server revoke is not
+/// fatal (recipients reconcile once the delete does land).
+fn delete_collection_best_effort(cm: &CollectionManager, mut col: Collection, scope_label: &str) {
+    if col.is_deleted() {
+        return;
+    }
+    if let Err(e) = col.delete() {
+        log::warn!(
+            "[sharing] mark {} deleted (scope {scope_label}): {e}",
+            col.uid()
+        );
+        return;
+    }
+    if let Err(e) = cm.upload(&col, None) {
+        log::warn!(
+            "[sharing] upload delete of {} (scope {scope_label}): {e}",
+            col.uid()
+        );
+    }
+}
+
+/// Best-effort `member.leave()` on one collection by uid. Any failure (fetch,
+/// member-manager, or the leave itself) is logged and swallowed — the caller
+/// relies on the local purge, not this, to actually remove the folder.
+fn leave_collection_best_effort(cm: &CollectionManager, uid: &str, scope: Option<&str>) {
+    let scope_label = scope.unwrap_or("-");
+    let col = match cm.fetch(uid, None) {
+        Ok(col) if !col.is_deleted() => col,
+        Ok(_) => return,
+        Err(e) => {
+            log::warn!("[sharing] fetch {uid} to leave (scope {scope_label}): {e}");
+            return;
+        }
+    };
+    match cm.member_manager(&col) {
+        Ok(mm) => {
+            if let Err(e) = mm.leave() {
+                log::warn!("[sharing] leave collection {uid} (scope {scope_label}): {e}");
+            }
+        }
+        Err(e) => log::warn!("[sharing] member_manager for {uid} (scope {scope_label}): {e}"),
+    }
+}
+
+/// Delete a folder subtree locally: the root collection, its descendant
+/// collections, their notes and assets, and any tombstones queued for those
+/// rows. The reconciliation safety net for a shared root whose scope can't be
+/// resolved (a broken / incomplete / NULL-scope share) so "Leave" always removes
+/// it, independent of `share_scope_id` or FK-cascade behaviour.
+fn purge_local_subtree(db: &Db, root_id: &str) -> AppResult<()> {
+    const SUBTREE_CTE: &str = "WITH RECURSIVE subtree(id) AS (
+            SELECT ?1
+            UNION ALL
+            SELECT c.id FROM collections c JOIN subtree s ON c.parent_collection_id = s.id
+        )";
+    db.with_conn_mut(|conn| {
+        let tx = conn.transaction()?;
+        // Tombstones keyed by the etebase_uid of a row about to vanish, so a
+        // stale delete doesn't linger after the rows are gone.
+        tx.execute(
+            &format!("{SUBTREE_CTE} DELETE FROM tombstones WHERE etebase_uid IN (SELECT etebase_uid FROM collections WHERE id IN (SELECT id FROM subtree) AND etebase_uid IS NOT NULL)"),
+            params![root_id],
+        )?;
+        tx.execute(
+            &format!("{SUBTREE_CTE} DELETE FROM tombstones WHERE etebase_uid IN (SELECT etebase_uid FROM notes WHERE parent_collection_id IN (SELECT id FROM subtree) AND etebase_uid IS NOT NULL)"),
+            params![root_id],
+        )?;
+        // Rows child-first so an FK check can't trip if PRAGMA foreign_keys is on
+        // without cascade.
+        tx.execute(
+            &format!("{SUBTREE_CTE} DELETE FROM assets WHERE owning_note_id IN (SELECT id FROM notes WHERE parent_collection_id IN (SELECT id FROM subtree))"),
+            params![root_id],
+        )?;
+        tx.execute(
+            &format!("{SUBTREE_CTE} DELETE FROM notes WHERE parent_collection_id IN (SELECT id FROM subtree)"),
+            params![root_id],
+        )?;
+        tx.execute(
+            &format!("{SUBTREE_CTE} DELETE FROM collections WHERE id IN (SELECT id FROM subtree)"),
+            params![root_id],
+        )?;
+        tx.commit()?;
+        Ok(())
+    })
+}
+
+/// Local accepted shared-with-me scopes that are no longer in the authoritative
+/// live-manifest set — the owner deleted the folder *or* removed this member from
+/// it. Pure so it's unit-testable.
+fn scopes_to_purge<'a>(local_scopes: &'a [String], live_scopes: &HashSet<String>) -> Vec<&'a str> {
+    local_scopes
+        .iter()
+        .filter(|scope| !live_scopes.contains(*scope))
+        .map(String::as_str)
+        .collect()
+}
+
+/// Reconcile shares the current user has lost access to — the owner either
+/// deleted the folder ("Stop sharing") or removed this member. Both cases show up
+/// the same way: the scope's manifest is no longer in the account's authoritative
+/// manifest list. So enumerate that list *fully* into a live-scope set and purge
+/// any local accepted shared-with-me scope that's missing from it.
+///
+/// Safety: this only ever purges when the manifest enumeration *succeeds* — any
+/// list error aborts before purging, so a network blip or partial page can't
+/// delete a folder. Local accepted roots exist only after a successful first
+/// pull, so there's no half-synced folder to mistake for a revocation. Called
+/// from `sync::scopes::sync_scopes`.
+pub(crate) fn reconcile_revoked_shares(db: &Db, cm: &CollectionManager) -> AppResult<()> {
+    let local_scopes: Vec<String> = db.with_conn(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT share_scope_id
+               FROM collections
+              WHERE COALESCE(shared_by_me, 0) = 0
+                AND share_scope_id IS NOT NULL
+                AND share_id IS NOT NULL",
+        )?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    })?;
+    if local_scopes.is_empty() {
+        return Ok(());
+    }
+
+    // Authoritative live set: a decodable, non-deleted manifest means we still
+    // have access to that scope. Paginate fully; any error propagates and aborts
+    // (never purge on an incomplete enumeration).
+    let mut live_scopes: HashSet<String> = HashSet::new();
+    let mut stoken: Option<String> = None;
+    loop {
+        let options = FetchOptions::new().limit(100).stoken(stoken.as_deref());
+        let page = cm
+            .list(COLLECTION_TYPE_SHARE_MANIFEST, Some(&options))
+            .map_err(|e| AppError::InvalidArg(format!("list manifests for reconcile: {e}")))?;
+        for col in page.data() {
+            if col.is_deleted() {
+                continue;
+            }
+            if let Ok(manifest) = decode_manifest(col) {
+                live_scopes.insert(manifest.share_scope_id);
+            }
+        }
+        if page.done() {
+            break;
+        }
+        match page.stoken().map(str::to_string) {
+            Some(next) => stoken = Some(next),
+            None => break,
+        }
+    }
+
+    for scope in scopes_to_purge(&local_scopes, &live_scopes) {
+        log::info!(
+            "[sharing] scope {scope} no longer accessible (revoked/removed); purging locally"
+        );
+        purge_local_scope(db, scope)?;
+    }
+    Ok(())
+}
+
+/// Stop sharing a folder the current user owns (`shared_by_me`). The owner keeps
+/// the folder — its subtree is re-homed back into the vault as a personal folder
+/// — while every recipient loses access: the scope's collections are deleted
+/// server-side, which each recipient's next sync reads (`is_deleted`) and
+/// reconciles by purging its local copy (see `reconcile_revoked_shares`).
+#[tauri::command]
+pub async fn stop_sharing_collection(app: AppHandle, collection_id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let account = restore_required(&app)?;
+        let db = app.state::<Db>();
+
+        // `share_scope_id` is the ideal handle, but a broken/dev-era outgoing
+        // share can be `shared_by_me` with a NULL scope while still carrying
+        // `share_id` (the folders collection uid). Never hard-error on such a
+        // folder — it must remain un-shareable-able so the owner can clean it up.
+        let (scope_id, share_id, shared_by_me): (Option<String>, Option<String>, bool) = db
+            .with_conn(|conn| {
+                Ok(conn
+                    .query_row(
+                        "SELECT share_scope_id, share_id, COALESCE(shared_by_me, 0)
+                         FROM collections WHERE id = ?1",
+                        params![collection_id],
+                        |row| {
+                            Ok((
+                                row.get::<_, Option<String>>(0)?,
+                                row.get::<_, Option<String>>(1)?,
+                                row.get::<_, i64>(2)? != 0,
+                            ))
+                        },
+                    )
+                    .optional()?
+                    .unwrap_or((None, None, false)))
+            })?;
+
+        if !shared_by_me && scope_id.is_none() && share_id.is_none() {
+            return Err(AppError::InvalidArg(
+                "you're not sharing this folder".into(),
+            ));
+        }
+
+        // Local first, so the owner keeps their content even if the server call
+        // below fails. Handles a NULL scope (just clears the share metadata).
+        db.with_conn(|conn| detach_owner_share(conn, &collection_id))?;
+
+        // Revoke server-side by deleting the scope's collections — the signal
+        // recipients read to purge their copies. Best-effort: a scope already gone
+        // server-side (or a NULL-scope broken share) is fine, the folder is already
+        // personal locally. Prefer the full scope; fall back to the folders
+        // collection by `share_id` when the scope can't be resolved.
+        let cm = account
+            .collection_manager()
+            .map_err(|e| AppError::InvalidArg(format!("collection_manager: {e}")))?;
+        let scope_label = scope_id.as_deref().unwrap_or("-");
+        let mut deleted_via_scope = false;
+        if let Some(scope) = scope_id.as_deref() {
+            match find_existing_scope(&cm, scope) {
+                Ok(Some(resolved)) => {
+                    for col in [
+                        resolved.manifest,
+                        resolved.folders,
+                        resolved.notes,
+                        resolved.assets,
+                    ] {
+                        delete_collection_best_effort(&cm, col, scope);
+                    }
+                    deleted_via_scope = true;
+                }
+                Ok(None) => log::warn!(
+                    "[sharing] scope {scope} already gone server-side while stopping share"
+                ),
+                Err(e) => log::warn!("[sharing] resolve scope {scope} to stop sharing: {e}"),
+            }
+        }
+        if !deleted_via_scope {
+            if let Some(uid) = share_id.as_deref() {
+                match cm.fetch(uid, None) {
+                    Ok(col) => delete_collection_best_effort(&cm, col, scope_label),
+                    Err(e) => {
+                        log::warn!("[sharing] fetch {uid} to delete (scope {scope_label}): {e}")
+                    }
+                }
+            }
+        }
+
+        Ok::<(), AppError>(())
+    })
+    .await
+    .map_err(|e| format!("stop sharing collection task: {e}"))?
+    .map_err(Into::into)
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SetMemberAccessInput {
+    pub collection_id: String,
+    pub username: String,
+    pub access_level: ShareAccessLevel,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RemoveMemberInput {
+    pub collection_id: String,
+    pub username: String,
+}
+
+/// The local `share_scope_id` tag for a folder, or `None` when it isn't shared.
+fn local_share_scope_id(db: &Db, collection_id: &str) -> AppResult<Option<String>> {
+    db.with_conn(|conn| {
+        Ok(conn
+            .query_row(
+                "SELECT share_scope_id FROM collections WHERE id = ?1",
+                params![collection_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten())
+    })
+}
+
+/// List everyone with access to a shared folder and at what level. Reads the
+/// membership of the scope's `folders` collection (which carries the content
+/// access level; the manifest is always read-only). Empty when the folder isn't
+/// shared or the scope can't be resolved.
+#[tauri::command]
+pub async fn list_collection_members(
+    app: AppHandle,
+    collection_id: String,
+) -> Result<Vec<CollectionMember>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let account = restore_required(&app)?;
+        let db = app.state::<Db>();
+        let Some(scope_id) = local_share_scope_id(&db, &collection_id)? else {
+            return Ok(Vec::new());
+        };
+        let cm = account
+            .collection_manager()
+            .map_err(|e| AppError::InvalidArg(format!("collection_manager: {e}")))?;
+        let Some(scope) = find_existing_scope(&cm, &scope_id)? else {
+            return Ok(Vec::new());
+        };
+        let member_manager = cm
+            .member_manager(&scope.folders)
+            .map_err(|e| AppError::InvalidArg(format!("member_manager: {e}")))?;
+        let mut members = Vec::new();
+        let mut iterator: Option<String> = None;
+        loop {
+            let options = FetchOptions::new().limit(100).iterator(iterator.as_deref());
+            let page = member_manager
+                .list(Some(&options))
+                .map_err(|e| AppError::InvalidArg(format!("list members: {e}")))?;
+            for member in page.data() {
+                members.push(CollectionMember {
+                    username: member.username().to_string(),
+                    access_level: member.access_level().into(),
+                });
+            }
+            if page.done() {
+                break;
+            }
+            match page.iterator().map(str::to_string) {
+                Some(next) => iterator = Some(next),
+                None => break,
+            }
+        }
+        Ok::<Vec<CollectionMember>, AppError>(members)
+    })
+    .await
+    .map_err(|e| format!("list collection members task: {e}"))?
+    .map_err(Into::into)
+}
+
+/// Change a member's access level on a folder the current user shares. The three
+/// part collections (folders/notes/assets) carry the content level; the manifest
+/// stays read-only. The recipient's next sync re-projects their `shared_role`
+/// from the folders collection automatically (a read-only downgrade also triggers
+/// the read-only-scope edit discard).
+#[tauri::command]
+pub async fn set_collection_member_access(
+    app: AppHandle,
+    input: SetMemberAccessInput,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let SetMemberAccessInput {
+            collection_id,
+            username,
+            access_level,
+        } = input;
+        let account = restore_required(&app)?;
+        let db = app.state::<Db>();
+        let Some(scope_id) = local_share_scope_id(&db, &collection_id)? else {
+            return Err(AppError::InvalidArg("this folder isn't shared".into()));
+        };
+        let cm = account
+            .collection_manager()
+            .map_err(|e| AppError::InvalidArg(format!("collection_manager: {e}")))?;
+        let Some(scope) = find_existing_scope(&cm, &scope_id)? else {
+            return Err(AppError::InvalidArg(
+                "this shared folder is no longer available".into(),
+            ));
+        };
+        let rotate_live_collab = access_change_requires_collab_rotation(access_level);
+        let affected_note_ids = if rotate_live_collab {
+            crate::collab_events::note_ids_for_share_scope(&db, &scope_id)?
+        } else {
+            Vec::new()
+        };
+        let level: CollectionAccessLevel = access_level.into();
+        for col in [&scope.folders, &scope.notes, &scope.assets] {
+            let member_manager = cm
+                .member_manager(col)
+                .map_err(|e| AppError::InvalidArg(format!("member_manager: {e}")))?;
+            member_manager
+                .modify_access_level(&username, level)
+                .map_err(|e| AppError::InvalidArg(format!("change access for {username}: {e}")))?;
+        }
+        if rotate_live_collab {
+            rotate_scope_collab_secret(&cm, &scope.manifest)?;
+            crate::collab_events::emit_collab_credentials_changed(&app, affected_note_ids);
+        }
+        Ok::<(), AppError>(())
+    })
+    .await
+    .map_err(|e| format!("set collection member access task: {e}"))?
+    .map_err(Into::into)
+}
+
+fn access_change_requires_collab_rotation(access_level: ShareAccessLevel) -> bool {
+    matches!(access_level, ShareAccessLevel::ReadOnly)
+}
+
+/// Remove one member from a folder the current user shares. Removes them from all
+/// four scope collections so they lose the manifest and every part; the removed
+/// recipient's device purges its copy on the next sync (see
+/// `reconcile_revoked_shares`). Others keep their access.
+#[tauri::command]
+pub async fn remove_collection_member(
+    app: AppHandle,
+    input: RemoveMemberInput,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let RemoveMemberInput {
+            collection_id,
+            username,
+        } = input;
+        let account = restore_required(&app)?;
+        let db = app.state::<Db>();
+        let Some(scope_id) = local_share_scope_id(&db, &collection_id)? else {
+            return Err(AppError::InvalidArg("this folder isn't shared".into()));
+        };
+        let cm = account
+            .collection_manager()
+            .map_err(|e| AppError::InvalidArg(format!("collection_manager: {e}")))?;
+        let Some(scope) = find_existing_scope(&cm, &scope_id)? else {
+            return Err(AppError::InvalidArg(
+                "this shared folder is no longer available".into(),
+            ));
+        };
+        let affected_note_ids = crate::collab_events::note_ids_for_share_scope(&db, &scope_id)?;
+        for col in [&scope.manifest, &scope.folders, &scope.notes, &scope.assets] {
+            let member_manager = cm.member_manager(col).map_err(|e| {
+                scope_member_remove_error(&username, col.uid(), format!("member_manager: {e}"))
+            })?;
+            member_manager.remove(&username).map_err(|e| {
+                scope_member_remove_error(&username, col.uid(), format!("remove member: {e}"))
+            })?;
+        }
+        rotate_scope_collab_secret(&cm, &scope.manifest)?;
+        crate::collab_events::emit_collab_credentials_changed(&app, affected_note_ids);
+        Ok::<(), AppError>(())
+    })
+    .await
+    .map_err(|e| format!("remove collection member task: {e}"))?
+    .map_err(Into::into)
+}
+
+fn scope_member_remove_error(username: &str, collection_uid: &str, err: String) -> AppError {
+    AppError::InvalidArg(format!(
+        "failed to remove {username} from shared collection {collection_uid}: {err}"
+    ))
 }
 
 #[tauri::command]
@@ -600,6 +1304,10 @@ pub async fn invite_collection(
             existing_scope_id.as_deref(),
             owner_username.as_deref(),
         )?;
+
+        // Never invite into a structurally incomplete scope — that's exactly how
+        // a recipient ends up with an unsyncable, un-leavable folder.
+        validate_scope_complete(&scope)?;
 
         // Refuse a duplicate: the recipient already has a pending invite to, or
         // membership in, this scope.
@@ -902,19 +1610,81 @@ fn find_existing_scope(
     Ok(None)
 }
 
+/// Lightweight resolver for live-collab room derivation. It only needs the
+/// scope notes collection plus the manifest's rotating collab material.
+pub(crate) fn share_scope_collab_info(
+    cm: &CollectionManager,
+    share_scope_id: &str,
+) -> AppResult<Option<ShareScopeCollabInfo>> {
+    let list = cm
+        .list(COLLECTION_TYPE_SHARE_MANIFEST, None)
+        .map_err(|e| AppError::InvalidArg(format!("list manifest collections: {e}")))?;
+    for col in list.data() {
+        if col.is_deleted() {
+            continue;
+        }
+        let manifest = match decode_manifest(col) {
+            Ok(manifest) => manifest,
+            Err(_) => continue,
+        };
+        if manifest.share_scope_id != share_scope_id {
+            continue;
+        }
+        let notes_collection_uid = manifest_part_uid(&manifest, ShareScopePart::Notes)
+            .ok_or_else(|| AppError::InvalidArg("manifest missing notes collection".into()))?
+            .to_string();
+        let assets_collection_uid = manifest_part_uid(&manifest, ShareScopePart::Assets)
+            .ok_or_else(|| AppError::InvalidArg("manifest missing assets collection".into()))?
+            .to_string();
+        return Ok(Some(ShareScopeCollabInfo {
+            notes_collection_uid,
+            assets_collection_uid,
+            collab_epoch: manifest.collab_epoch,
+            collab_salt: manifest.collab_salt,
+        }));
+    }
+    Ok(None)
+}
+
+/// Assert the resolved scope is structurally complete before anyone is invited:
+/// the manifest must reference all three required part collections. A fresh scope
+/// from `create_new_scope` always is, but a *reused* legacy scope
+/// (`existing_scope_id` from a pre-`assets` share) might not be — inviting into
+/// it would strand the recipient with an unsyncable folder. Fail loudly instead.
+fn validate_scope_complete(scope: &ScopeCollections) -> AppResult<()> {
+    let manifest = decode_manifest(&scope.manifest)?;
+    let missing = manifest_missing_required_parts(&manifest);
+    debug_assert!(
+        missing.is_empty(),
+        "share scope {} manifest missing required parts: {missing:?}",
+        scope.share_scope_id
+    );
+    if !missing.is_empty() {
+        return Err(AppError::InvalidArg(format!(
+            "this shared folder's data is incomplete (missing {}); it can't be shared until that's repaired",
+            format_parts(&missing)
+        )));
+    }
+    Ok(())
+}
+
 fn fetch_scope_part(
     cm: &CollectionManager,
     manifest: &ShareManifest,
     part: ShareScopePart,
 ) -> AppResult<Collection> {
-    let uid = manifest
+    let uid = manifest_part_uid(manifest, part)
+        .ok_or_else(|| AppError::InvalidArg(format!("manifest missing {part:?} collection")))?;
+    cm.fetch(uid, None)
+        .map_err(|e| AppError::InvalidArg(format!("fetch {part:?} collection: {e}")))
+}
+
+fn manifest_part_uid(manifest: &ShareManifest, part: ShareScopePart) -> Option<&str> {
+    manifest
         .collections
         .iter()
         .find(|collection| collection.part == part)
         .map(|collection| collection.collection_uid.as_str())
-        .ok_or_else(|| AppError::InvalidArg(format!("manifest missing {part:?} collection")))?;
-    cm.fetch(uid, None)
-        .map_err(|e| AppError::InvalidArg(format!("fetch {part:?} collection: {e}")))
 }
 
 /// Create + upload the three part collections and the manifest collection that
@@ -1079,6 +1849,32 @@ fn invite_to_collection(
         })
 }
 
+fn rotate_scope_collab_secret(
+    cm: &CollectionManager,
+    manifest_col: &Collection,
+) -> AppResult<ShareManifest> {
+    let mut manifest = decode_manifest(manifest_col)?;
+    rotate_manifest_collab_secret(&mut manifest);
+    let manifest_json = serde_json::to_vec(&manifest)
+        .map_err(|e| AppError::InvalidArg(format!("encode manifest: {e}")))?;
+    let mut updated = manifest_col.clone();
+    updated
+        .set_content(&manifest_json)
+        .map_err(|e| AppError::InvalidArg(format!("update manifest content: {e}")))?;
+    cm.upload(&updated, None)
+        .map_err(|e| AppError::InvalidArg(format!("upload rotated manifest: {e}")))?;
+    Ok(manifest)
+}
+
+fn rotate_manifest_collab_secret(manifest: &mut ShareManifest) {
+    manifest.schema = SHARE_MANIFEST_SCHEMA;
+    manifest.collab_epoch = manifest
+        .collab_epoch
+        .saturating_add(1)
+        .max(default_collab_epoch());
+    manifest.collab_salt = fresh_collab_salt();
+}
+
 /// Build the manifest that ties a scope's three part collections together. Pure
 /// so it can be unit-tested without a server.
 fn build_share_manifest(
@@ -1091,11 +1887,13 @@ fn build_share_manifest(
     assets_uid: &str,
 ) -> ShareManifest {
     ShareManifest {
-        schema: 1,
+        schema: SHARE_MANIFEST_SCHEMA,
         share_scope_id: share_scope_id.to_string(),
         name: name.to_string(),
         root_folder_id: root_folder_id.to_string(),
         owner_username: owner_username.map(str::to_string),
+        collab_epoch: default_collab_epoch(),
+        collab_salt: fresh_collab_salt(),
         collections: vec![
             ShareManifestCollectionRef {
                 part: ShareScopePart::Folders,
@@ -1144,6 +1942,44 @@ fn record_outgoing_share(
             now,
             collection_id
         ],
+    )?;
+    Ok(())
+}
+
+/// Reverse a share on the owner's side, locally: re-home the folder's subtree
+/// from its shared scope back into the vault (so the owner keeps the content as a
+/// personal folder) and strip the anchor's share membership columns. The caller
+/// revokes the server-side scope collections separately. Pure DB mutation, so it
+/// is unit-testable without a server.
+fn detach_owner_share(conn: &Connection, root_folder_id: &str) -> AppResult<()> {
+    // Only re-home when the folder is actually scoped: rehome detaches + repushes
+    // the whole subtree, which is needless churn (and tombstones vault items) if
+    // the share was already broken with a NULL scope. Either way we clear the
+    // anchor's share columns below so it reads as an ordinary personal folder.
+    let scope: Option<String> = conn
+        .query_row(
+            "SELECT share_scope_id FROM collections WHERE id = ?1",
+            params![root_folder_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten();
+    if scope.is_some() {
+        // Subtree home to the vault: tombstones the scoped rows, clears
+        // share_scope_id across the subtree, and marks dirty for the vault push.
+        rehome_folder_subtree(conn, root_folder_id, None)?;
+    }
+    let now = Utc::now().to_rfc3339();
+    conn.execute(
+        "UPDATE collections
+            SET shared_by_me = 0,
+                share_id = NULL,
+                shared_role = NULL,
+                shared_owner = NULL,
+                share_scope_id = NULL,
+                modified = ?1
+          WHERE id = ?2",
+        params![now, root_folder_id],
     )?;
     Ok(())
 }
@@ -1770,11 +2606,13 @@ mod tests {
             invitation_id: "invite_manifest".into(),
             manifest_collection_uid: "col_manifest".into(),
             manifest: ShareManifest {
-                schema: 1,
+                schema: SHARE_MANIFEST_SCHEMA,
                 share_scope_id: "scope_root".into(),
                 name: "Shared project".into(),
                 root_folder_id: "folder_root".into(),
                 owner_username: Some("sender".into()),
+                collab_epoch: 1,
+                collab_salt: vec![7; SHARE_COLLAB_SALT_BYTES],
                 collections,
             },
         }
@@ -1816,6 +2654,31 @@ mod tests {
             let collection: CollectionAccessLevel = level.into();
             assert_eq!(ShareAccessLevel::from(collection), level);
         }
+    }
+
+    #[test]
+    fn read_only_access_changes_rotate_live_collab_credentials() {
+        assert!(access_change_requires_collab_rotation(
+            ShareAccessLevel::ReadOnly
+        ));
+        assert!(!access_change_requires_collab_rotation(
+            ShareAccessLevel::ReadWrite
+        ));
+        assert!(!access_change_requires_collab_rotation(
+            ShareAccessLevel::Admin
+        ));
+    }
+
+    #[test]
+    fn scope_member_remove_errors_are_returned_to_callers() {
+        let err = scope_member_remove_error("bob", "col_notes", "remove member: denied".into());
+        let AppError::InvalidArg(message) = err else {
+            panic!("expected InvalidArg");
+        };
+
+        assert!(message.contains("bob"), "{message}");
+        assert!(message.contains("col_notes"), "{message}");
+        assert!(message.contains("remove member: denied"), "{message}");
     }
 
     #[test]
@@ -2005,10 +2868,12 @@ mod tests {
             "col_assets",
         );
 
-        assert_eq!(manifest.schema, 1);
+        assert_eq!(manifest.schema, SHARE_MANIFEST_SCHEMA);
         assert_eq!(manifest.share_scope_id, "scope_1");
         assert_eq!(manifest.root_folder_id, "coll_root");
         assert_eq!(manifest.owner_username.as_deref(), Some("alice"));
+        assert_eq!(manifest.collab_epoch, 1);
+        assert_eq!(manifest.collab_salt.len(), SHARE_COLLAB_SALT_BYTES);
         assert_eq!(manifest.collections.len(), 3);
         for part in [
             ShareScopePart::Folders,
@@ -2027,6 +2892,21 @@ mod tests {
         let json = serde_json::to_vec(&manifest).unwrap();
         let decoded: ShareManifest = serde_json::from_slice(&json).unwrap();
         assert_eq!(decoded, manifest);
+    }
+
+    #[test]
+    fn rotate_manifest_collab_secret_increments_epoch_and_replaces_salt() {
+        let mut manifest =
+            build_share_manifest("scope_1", "Docs", "root", Some("alice"), "f", "n", "a");
+        let previous_epoch = manifest.collab_epoch;
+        let previous_salt = manifest.collab_salt.clone();
+
+        rotate_manifest_collab_secret(&mut manifest);
+
+        assert_eq!(manifest.schema, SHARE_MANIFEST_SCHEMA);
+        assert_eq!(manifest.collab_epoch, previous_epoch + 1);
+        assert_eq!(manifest.collab_salt.len(), SHARE_COLLAB_SALT_BYTES);
+        assert_ne!(manifest.collab_salt, previous_salt);
     }
 
     #[test]
@@ -2170,5 +3050,317 @@ mod tests {
         assert!(!bundle.pending);
         assert_eq!(bundle.name.as_deref(), Some("Shared project"));
         assert!(bundle.complete, "{:?}", bundle.warnings);
+    }
+
+    // ---- Incomplete-bundle guards ----
+
+    #[test]
+    fn manifest_missing_required_parts_flags_absent_parts() {
+        let full = manifest_preview(vec![
+            collection_ref(ShareScopePart::Folders, "f"),
+            collection_ref(ShareScopePart::Notes, "n"),
+            collection_ref(ShareScopePart::Assets, "a"),
+        ])
+        .manifest;
+        assert!(manifest_missing_required_parts(&full).is_empty());
+
+        let no_assets = manifest_preview(vec![
+            collection_ref(ShareScopePart::Folders, "f"),
+            collection_ref(ShareScopePart::Notes, "n"),
+        ])
+        .manifest;
+        assert_eq!(
+            manifest_missing_required_parts(&no_assets),
+            vec![ShareScopePart::Assets]
+        );
+
+        let empty = manifest_preview(vec![]).manifest;
+        assert_eq!(
+            manifest_missing_required_parts(&empty),
+            vec![
+                ShareScopePart::Folders,
+                ShareScopePart::Notes,
+                ShareScopePart::Assets
+            ]
+        );
+    }
+
+    #[test]
+    fn build_share_manifest_is_structurally_complete() {
+        // The invite-time assertion (validate_scope_complete) relies on a fresh
+        // manifest never being missing a part.
+        let manifest =
+            build_share_manifest("scope_1", "Docs", "root", Some("alice"), "f", "n", "a");
+        assert!(manifest_missing_required_parts(&manifest).is_empty());
+    }
+
+    #[test]
+    fn unsatisfiable_required_parts_detects_missing_invite_and_missing_ref() {
+        let manifest = manifest_preview(vec![
+            collection_ref(ShareScopePart::Folders, "f"),
+            collection_ref(ShareScopePart::Notes, "n"),
+            collection_ref(ShareScopePart::Assets, "a"),
+        ])
+        .manifest;
+
+        // All three referenced parts satisfiable (invitation or member) → OK.
+        let all: HashSet<&str> = ["f", "n", "a"].into_iter().collect();
+        assert!(unsatisfiable_required_parts(&manifest, &all).is_empty());
+
+        // Assets referenced but not satisfiable (no invite, not a member).
+        let missing_assets: HashSet<&str> = ["f", "n"].into_iter().collect();
+        assert_eq!(
+            unsatisfiable_required_parts(&manifest, &missing_assets),
+            vec![ShareScopePart::Assets]
+        );
+
+        // A manifest that doesn't reference assets at all is unsatisfiable even
+        // if some stray uid happens to be "satisfiable".
+        let no_ref = manifest_preview(vec![
+            collection_ref(ShareScopePart::Folders, "f"),
+            collection_ref(ShareScopePart::Notes, "n"),
+        ])
+        .manifest;
+        let stray: HashSet<&str> = ["f", "n", "a"].into_iter().collect();
+        assert_eq!(
+            unsatisfiable_required_parts(&no_ref, &stray),
+            vec![ShareScopePart::Assets]
+        );
+    }
+
+    #[test]
+    fn purge_local_scope_removes_scoped_rows_and_cursors() {
+        let db = crate::db::open_memory_for_tests();
+        db.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO collections(id, parent_collection_id, name, position, created, modified, share_scope_id, dirty)
+                 VALUES ('c', NULL, 'C', 0, 't', 't', 'scope_x', 0)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO notes(id, parent_collection_id, title, body, position, created, modified, share_scope_id, dirty)
+                 VALUES ('n', 'c', 'N', '', 0, 't', 't', 'scope_x', 0)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO assets(id, owning_note_id, mime_type, bytes, size, created, modified, share_scope_id, dirty)
+                 VALUES ('a', 'n', 'text/plain', x'00', 1, 't', 't', 'scope_x', 0)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO tombstones(kind, etebase_uid, queued_at, share_scope_id) VALUES ('note', 'u', 't', 'scope_x')",
+                [],
+            )?;
+            for kind in ["scope-folders:scope_x", "scope-notes:scope_x", "scope-assets:scope_x"] {
+                conn.execute(
+                    "INSERT INTO sync_state(kind, stoken) VALUES (?1, 's')",
+                    params![kind],
+                )?;
+            }
+            Ok::<(), AppError>(())
+        })
+        .unwrap();
+
+        purge_local_scope(&db, "scope_x").unwrap();
+
+        db.with_conn(|conn| {
+            let remaining: i64 = conn.query_row(
+                "SELECT
+                    (SELECT COUNT(*) FROM collections WHERE share_scope_id = 'scope_x') +
+                    (SELECT COUNT(*) FROM notes WHERE share_scope_id = 'scope_x') +
+                    (SELECT COUNT(*) FROM assets WHERE share_scope_id = 'scope_x') +
+                    (SELECT COUNT(*) FROM tombstones WHERE share_scope_id = 'scope_x') +
+                    (SELECT COUNT(*) FROM sync_state WHERE kind LIKE 'scope-%:scope_x')",
+                [],
+                |r| r.get(0),
+            )?;
+            assert_eq!(remaining, 0);
+            Ok::<(), AppError>(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn purge_local_subtree_removes_root_and_descendants_even_without_scope() {
+        // The reconciliation path for a broken / NULL-scope share: removal must
+        // work off the collection id alone.
+        let db = crate::db::open_memory_for_tests();
+        db.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO collections(id, parent_collection_id, name, position, created, modified, share_id, shared_role, dirty)
+                 VALUES ('root', NULL, 'Shared', 0, 't', 't', 'folders_uid', 'read_write', 0)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO collections(id, parent_collection_id, name, position, created, modified, dirty)
+                 VALUES ('child', 'root', 'Child', 0, 't', 't', 0)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO notes(id, parent_collection_id, title, body, position, created, modified, etebase_uid, dirty)
+                 VALUES ('n1', 'child', 'N1', '', 0, 't', 't', 'note_uid', 0)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO assets(id, owning_note_id, mime_type, bytes, size, created, modified, dirty)
+                 VALUES ('a1', 'n1', 'image/png', x'00', 1, 't', 't', 0)",
+                [],
+            )?;
+            // A stale tombstone keyed on the note's uid must be cleared too.
+            conn.execute(
+                "INSERT INTO tombstones(kind, etebase_uid, queued_at) VALUES ('note', 'note_uid', 't')",
+                [],
+            )?;
+            // An unrelated personal folder must survive.
+            conn.execute(
+                "INSERT INTO collections(id, parent_collection_id, name, position, created, modified, dirty)
+                 VALUES ('keep', NULL, 'Keep', 1, 't', 't', 0)",
+                [],
+            )?;
+            Ok::<(), AppError>(())
+        })
+        .unwrap();
+
+        purge_local_subtree(&db, "root").unwrap();
+
+        db.with_conn(|conn| {
+            let gone: i64 = conn.query_row(
+                "SELECT
+                    (SELECT COUNT(*) FROM collections WHERE id IN ('root', 'child')) +
+                    (SELECT COUNT(*) FROM notes WHERE id = 'n1') +
+                    (SELECT COUNT(*) FROM assets WHERE id = 'a1') +
+                    (SELECT COUNT(*) FROM tombstones WHERE etebase_uid = 'note_uid')",
+                [],
+                |r| r.get(0),
+            )?;
+            assert_eq!(gone, 0, "subtree rows + tombstone must be purged");
+            let kept: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM collections WHERE id = 'keep'",
+                [],
+                |r| r.get(0),
+            )?;
+            assert_eq!(kept, 1, "unrelated personal folder must survive");
+            Ok::<(), AppError>(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn detach_owner_share_rehomes_to_vault_and_clears_share_metadata() {
+        // Stop-sharing's local half: an owner's shared_by_me root + subtree must
+        // come back to the vault (share_scope_id NULL, dirty, tombstoned) with the
+        // anchor's share columns cleared.
+        let db = crate::db::open_memory_for_tests();
+        db.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO collections(id, parent_collection_id, name, position, created, modified, etebase_uid, share_scope_id, share_id, shared_role, shared_owner, shared_by_me, dirty)
+                 VALUES ('root', NULL, 'Shared', 0, 't', 't', 'scope_root_uid', 'scope_1', 'folders_uid', 'read_write', 'alice', 1, 0)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO notes(id, parent_collection_id, title, body, position, created, modified, etebase_uid, share_scope_id, dirty)
+                 VALUES ('n1', 'root', 'N1', '', 0, 't', 't', 'scope_n1_uid', 'scope_1', 0)",
+                [],
+            )?;
+            Ok::<(), AppError>(())
+        })
+        .unwrap();
+
+        db.with_conn(|conn| detach_owner_share(conn, "root"))
+            .unwrap();
+
+        db.with_conn(|conn| {
+            let (scope, share_id, role, owner, by_me): (
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                i64,
+            ) = conn.query_row(
+                "SELECT share_scope_id, share_id, shared_role, shared_owner, shared_by_me
+                   FROM collections WHERE id = 'root'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )?;
+            assert!(scope.is_none(), "root scope cleared");
+            assert!(share_id.is_none(), "share_id cleared");
+            assert!(role.is_none(), "shared_role cleared");
+            assert!(owner.is_none(), "shared_owner cleared");
+            assert_eq!(by_me, 0, "shared_by_me cleared");
+
+            // Subtree note is back on the vault and marked dirty for re-push.
+            let (note_scope, note_dirty): (Option<String>, i64) = conn.query_row(
+                "SELECT share_scope_id, dirty FROM notes WHERE id = 'n1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?;
+            assert!(note_scope.is_none(), "note re-homed to vault");
+            assert_eq!(note_dirty, 1, "note dirty for vault push");
+
+            // The already-pushed rows queued a tombstone routed to their source
+            // scope so the old scoped items are deleted.
+            let tombstoned: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM tombstones WHERE etebase_uid IN ('scope_root_uid', 'scope_n1_uid')",
+                [],
+                |r| r.get(0),
+            )?;
+            assert_eq!(tombstoned, 2, "pushed rows tombstoned on detach");
+            Ok::<(), AppError>(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn detach_owner_share_clears_metadata_on_null_scope_without_rehome() {
+        // A broken/dev-era outgoing share: shared_by_me but NULL scope. Stopping it
+        // must still clear the share columns (so the folder becomes personal) and
+        // must NOT tombstone the already-pushed vault row (no scope to re-home).
+        let db = crate::db::open_memory_for_tests();
+        db.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO collections(id, parent_collection_id, name, position, created, modified, etebase_uid, share_id, shared_role, shared_owner, shared_by_me, dirty)
+                 VALUES ('root', NULL, 'Broken share', 0, 't', 't', 'vault_root', 'folders_uid', 'read_write', 'me', 1, 0)",
+                [],
+            )?;
+            Ok::<(), AppError>(())
+        })
+        .unwrap();
+
+        db.with_conn(|conn| detach_owner_share(conn, "root"))
+            .unwrap();
+
+        db.with_conn(|conn| {
+            let (share_id, by_me): (Option<String>, i64) = conn.query_row(
+                "SELECT share_id, shared_by_me FROM collections WHERE id = 'root'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?;
+            assert!(share_id.is_none(), "share_id cleared");
+            assert_eq!(by_me, 0, "shared_by_me cleared");
+            let tombstones: i64 =
+                conn.query_row("SELECT COUNT(*) FROM tombstones", [], |r| r.get(0))?;
+            assert_eq!(tombstones, 0, "no re-home churn on a NULL-scope share");
+            Ok::<(), AppError>(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn scopes_to_purge_flags_scopes_absent_from_live_set() {
+        let local = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+
+        // b was revoked/removed (not in the live manifest set).
+        let live: HashSet<String> = ["a", "c"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(scopes_to_purge(&local, &live), vec!["b"]);
+
+        // All still live → nothing to purge.
+        let all: HashSet<String> = ["a", "b", "c"].iter().map(|s| s.to_string()).collect();
+        assert!(scopes_to_purge(&local, &all).is_empty());
+
+        // Nothing live (e.g. every share revoked) → purge all.
+        assert_eq!(
+            scopes_to_purge(&local, &HashSet::new()),
+            vec!["a", "b", "c"]
+        );
     }
 }

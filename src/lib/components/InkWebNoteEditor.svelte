@@ -92,6 +92,12 @@
     parseHistorySnapshot,
     serializeYjsSnapshot
   } from '$lib/history/snapshot';
+  import { listen } from '$lib/api/events';
+  import { collabCredentialsChangedForNote } from '$lib/sync/collab-credentials';
+  import {
+    collabAuthForRoom,
+    getOrCreateCollabSigningMaterial
+  } from '$lib/sync/collab-signing-key';
   import {
     DEFAULT_COLOR,
     DEFAULT_WIDTH,
@@ -221,6 +227,7 @@
   let collabReady = false;
   let lastSeenPushed = false;
   let unsubSession: (() => void) | null = null;
+  let unsubCollabCredentials: (() => void) | null = null;
   let editorListener: EditorListener | null = null;
   let mobileToolbar = $state(false);
   let zoomMenuOpen = $state(false);
@@ -761,7 +768,8 @@
     }
 
     try {
-      const room = await noteRoomInfo(noteId);
+      const signingMaterial = await getOrCreateCollabSigningMaterial();
+      const room = await noteRoomInfo(noteId, signingMaterial?.publicKeyB64);
       if (!room) {
         console.info(
           '[ink-collab] no room note=%s (not pushed, no session, or missing key)',
@@ -776,6 +784,10 @@
         keyBytes: base64ToBytes(room.key_b64),
         handle,
         noteId,
+        auth: collabAuthForRoom(room, signingMaterial),
+        onAuthStale: () => {
+          void setupCollabProvider();
+        },
         onStatusChange: (online) => {
           collabOnline = online;
           console.info(
@@ -2810,6 +2822,13 @@
     unsubSession = onSessionChange(() => {
       void setupCollabProvider();
     });
+    void listen('collab-credentials-changed', (payload) => {
+      if (collabCredentialsChangedForNote(payload, noteId)) {
+        void setupCollabProvider();
+      }
+    }).then((unlisten) => {
+      unsubCollabCredentials = unlisten;
+    });
   });
 
   $effect(() => {
@@ -2895,7 +2914,9 @@
     disposed = true;
     collabReady = false;
     unsubSession?.();
+    unsubCollabCredentials?.();
     unsubSession = null;
+    unsubCollabCredentials = null;
     resizeObserver?.disconnect();
     resizeObserver = null;
     provider?.destroy();

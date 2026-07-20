@@ -32,6 +32,7 @@
     createNoteIn,
     emptyTrash,
     importPdfIn,
+    leaveSharedCollection,
     moveManyTo,
     moveCollectionTo,
     moveNoteTo,
@@ -44,22 +45,31 @@
     restoreCollection,
     restoreNote,
     setNoteFavourite,
+    stopSharingCollection,
     trashMany as trashManyItems,
     trashCollection,
     trashNote
   } from '$lib/stores/tree.svelte';
+  import { authSession } from '$lib/api/auth.svelte';
   import { setSortDirection, setSortStrategy, ui } from '$lib/state.svelte';
   import { i18n, tUi } from '$lib/settings/i18n.svelte';
   import type { TreeNode } from '$lib/api';
   import {
     collectionIsSharedByMe,
+    collectionIsSharedRoot,
+    collectionUserCanManageSharing,
     collectionIsUnderTrash,
+    collectionScopeIsReadOnly,
+    itemSharedRootId,
     nodesForDesktopSource,
     noteIsUnderShared,
     noteIsUnderTrash,
+    sharedFolderIsEditable,
+    sharedMoveIsLegal,
     type DesktopNoteSource
   } from '$lib/stores/note-source.svelte';
   import { openCollectionShareDialog } from './share-dialog.svelte';
+  import { pushToast } from './toast.svelte';
   import {
     FILE_EXPLORER_SOURCES,
     defaultDraftText,
@@ -117,9 +127,52 @@
       tree.collectionsById
     )
   );
+  // Home-only gates: the top toolbar create buttons, the root-level draft, and
+  // the drop-to-root target. None of these apply in the Shared view (you can't
+  // create a new shared root, and a root drop = pulling an item out of its share
+  // into your vault, which is out of scope here).
   const canCreate = $derived(source === 'home');
   const canReorganize = $derived(source === 'home');
   const trashItemCount = $derived(source === 'trash' ? sourceNodes.length : 0);
+
+  // ---------- Per-scope edit capabilities (Shared view) ----------
+  // In Home everything is editable as before. In the Shared view an item is only
+  // editable when it lives inside a shared root the user received at read_write /
+  // admin (see collectionScopeIsReadOnly); read-only scopes stay locked. The
+  // shared *root anchor* itself can't be renamed/deleted/moved by a recipient —
+  // only its contents — so structural ops exclude it (collectionIsSharedRoot).
+  function sharedItemEditable(item: TreeItemRef): boolean {
+    const root = itemSharedRootId(item, tree.notesById, tree.collectionsById);
+    return !!root && !collectionScopeIsReadOnly(root, tree.collectionsById);
+  }
+  function isSharedAnchor(folderId: string): boolean {
+    const folder = tree.collectionsById[folderId];
+    return folder
+      ? collectionIsSharedRoot(folder, tree.collectionsById)
+      : false;
+  }
+  /** Can this note/folder be renamed / deleted in the current source? */
+  function itemEditable(item: TreeItemRef): boolean {
+    if (source === 'home') return true;
+    if (source !== 'shared') return false;
+    return sharedItemEditable(item);
+  }
+  /** Can this note/folder be dragged in the current source? */
+  function canDragItem(item: TreeItemRef): boolean {
+    if (source === 'home') return canReorganize;
+    if (source !== 'shared') return false;
+    if (item.kind === 'folder' && isSharedAnchor(item.id)) return false;
+    return sharedItemEditable(item);
+  }
+  /** Can a new note/folder be created inside `parentId`? */
+  function canStartDraft(parentId: string | null): boolean {
+    if (source === 'home') return true;
+    if (source !== 'shared') return false;
+    return (
+      parentId !== null &&
+      sharedFolderIsEditable(parentId, tree.collectionsById)
+    );
+  }
 
   // ---------- Inline draft entry (replaces window.prompt) ----------
   // 'note' = markdown note, 'drawing' = freeform note, 'ink' =
@@ -180,12 +233,12 @@
   });
 
   function startDraft(kind: DraftKind, parentId: string | null) {
-    if (!canCreate) return;
+    if (!canStartDraft(parentId)) return;
     if (parentId) expanded[parentId] = true;
     draft = { kind, parentId, text: defaultDraftText(kind) };
   }
   function startPdfImport(parentId: string | null) {
-    if (!canCreate) return;
+    if (!canStartDraft(parentId)) return;
     pdfImportParentId = parentId;
     if (pdfInput) pdfInput.value = '';
     pdfInput?.click();
@@ -359,6 +412,80 @@
     await trashNote(id);
   }
 
+  async function leaveShared(id: string) {
+    const name =
+      tree.collectionsById[id]?.name ?? tUi('sharing.dialog.folderFallback');
+    if (
+      !(await confirm({
+        title: tUi('sharing.leave.title'),
+        message: tUi('sharing.leave.message').replace('{name}', name),
+        confirmLabel: tUi('sharing.leave.confirm'),
+        destructive: true
+      }))
+    ) {
+      return;
+    }
+    try {
+      await leaveSharedCollection(id);
+    } catch (err) {
+      console.error('[FileExplorer] leave shared folder failed', id, err);
+      pushToast(tUi('sharing.leave.failed'), { variant: 'error' });
+    }
+  }
+
+  async function stopSharing(id: string) {
+    const name =
+      tree.collectionsById[id]?.name ?? tUi('sharing.dialog.folderFallback');
+    if (
+      !(await confirm({
+        title: tUi('sharing.stop.title'),
+        message: tUi('sharing.stop.message').replace('{name}', name),
+        confirmLabel: tUi('sharing.stop.confirm'),
+        destructive: true
+      }))
+    ) {
+      return;
+    }
+    try {
+      await stopSharingCollection(id);
+    } catch (err) {
+      console.error('[FileExplorer] stop sharing failed', id, err);
+      pushToast(tUi('sharing.stop.failed'), { variant: 'error' });
+    }
+  }
+
+  /**
+   * Owner-side sharing actions, grouped into their own submenu and shown only
+   * when signed in (sharing is Tauri + Etebase only). Returns `[]` when signed
+   * out so the whole group disappears.
+   */
+  function sharingMenuGroup(
+    id: string,
+    folder: (typeof tree.collectionsById)[string] | undefined
+  ): (MenuItem | 'separator')[] {
+    if (!authSession.current) return [];
+    const children: MenuItem[] = [
+      {
+        label: tUi('sharing.menu.shareFolder'),
+        onSelect: () => openCollectionShareDialog(id, 'invite')
+      }
+    ];
+    if (folder && collectionIsSharedByMe(folder)) {
+      children.push(
+        {
+          label: tUi('sharing.menu.manageAccess'),
+          onSelect: () => openCollectionShareDialog(id, 'access')
+        },
+        {
+          label: tUi('sharing.menu.stopSharing'),
+          destructive: true,
+          onSelect: () => void stopSharing(id)
+        }
+      );
+    }
+    return [{ label: tUi('sharing.menu.group'), children }];
+  }
+
   function selectNodeFromClick(e: MouseEvent, node: TreeNode): boolean {
     const key = nodeKey(node) as SelectionKey;
     const result = updateSelectionForClick(
@@ -431,6 +558,40 @@
       ];
     }
 
+    const deleteBatchItem: MenuItem = {
+      label: `Delete ${label}`,
+      shortcut: 'Del',
+      destructive: true,
+      onSelect: async () => {
+        if (
+          await confirm({
+            title: `Delete ${label}`,
+            message: `${label} will be moved to trash.`,
+            confirmLabel: 'Delete',
+            destructive: true
+          })
+        ) {
+          void trashManyItems(items);
+        }
+      }
+    };
+
+    // Shared view: only offer a batch action when every selected item lives in
+    // one editable shared scope. Move-within-scope stays drag-only ("Move to
+    // root" would pull items out of the share), so just Delete here.
+    if (source === 'shared') {
+      const roots = items.map((item) =>
+        itemSharedRootId(item, tree.notesById, tree.collectionsById)
+      );
+      const root = roots[0];
+      const uniformEditable =
+        !!root &&
+        roots.every((r) => r === root) &&
+        !collectionScopeIsReadOnly(root, tree.collectionsById);
+      if (!uniformEditable) return [];
+      return [deleteBatchItem];
+    }
+
     if (!canReorganize) return [];
 
     return [
@@ -439,22 +600,50 @@
         onSelect: () => void moveManyTo(items, null)
       },
       'separator',
+      deleteBatchItem
+    ];
+  }
+
+  // The "create a … inside this folder" entries, shared between the Home folder
+  // menu and the editable-shared folder menu so the two stay in lockstep.
+  function folderCreateMenuItems(id: string): MenuItem[] {
+    return [
+      { label: 'New note in folder', onSelect: () => startDraft('note', id) },
+      ...(noteTypeEnabled('freeform')
+        ? [
+            {
+              label: 'New drawing canvas in folder',
+              onSelect: () => startDraft('drawing', id)
+            }
+          ]
+        : []),
+      ...(noteTypeEnabled('ink')
+        ? [
+            {
+              label: 'New handwritten note in folder',
+              onSelect: () => startDraft('ink', id)
+            }
+          ]
+        : []),
+      ...(noteTypeEnabled('pdf')
+        ? [
+            {
+              label: 'Import PDF in folder',
+              onSelect: () => startPdfImport(id)
+            }
+          ]
+        : []),
+      ...(noteTypeEnabled('kanban')
+        ? [
+            {
+              label: tUi('nav.create.kanbanInFolder'),
+              onSelect: () => startDraft('kanban', id)
+            }
+          ]
+        : []),
       {
-        label: `Delete ${label}`,
-        shortcut: 'Del',
-        destructive: true,
-        onSelect: async () => {
-          if (
-            await confirm({
-              title: `Delete ${label}`,
-              message: `${label} will be moved to trash.`,
-              confirmLabel: 'Delete',
-              destructive: true
-            })
-          ) {
-            void trashManyItems(items);
-          }
-        }
+        label: 'New folder inside',
+        onSelect: () => startDraft('folder', id)
       }
     ];
   }
@@ -534,6 +723,27 @@
         source === 'shared' ||
         (note && noteIsUnderShared(note, tree.collectionsById))
       ) {
+        // Inside an editable shared scope, recipients can rename + delete the
+        // note (routed into the scope on the next push). "Move to root" is
+        // omitted — it would pull the note out of the share; reorganizing
+        // stays drag-only within the scope. Read-only scopes keep the
+        // open-only menu built above.
+        if (note && sharedItemEditable({ kind: 'note', id })) {
+          items.push(
+            'separator',
+            {
+              label: 'Rename…',
+              shortcut: 'F2',
+              onSelect: () => startRename('note', id, note?.title ?? 'Untitled')
+            },
+            {
+              label: 'Delete',
+              shortcut: 'Del',
+              destructive: true,
+              onSelect: () => void trashNote(id)
+            }
+          );
+        }
         return items;
       }
       items.push(
@@ -585,46 +795,66 @@
         ];
       }
 
+      // Shared view: an editable scope lets recipients create inside the folder
+      // and (for non-anchor sub-folders) rename/delete it. The shared root anchor
+      // itself is structurally read-only — create-inside only, no rename/delete/
+      // move/share — but always offers "Leave shared folder" (works at any access
+      // level, so a view-only root that would otherwise have no menu still can be
+      // left). Read-only sub-folders get no menu.
+      if (source === 'shared') {
+        const editable = sharedFolderIsEditable(id, tree.collectionsById);
+        if (isSharedAnchor(id)) {
+          const canManageShare = folder
+            ? collectionUserCanManageSharing(folder)
+            : false;
+          const items: (MenuItem | 'separator')[] = editable
+            ? [...folderCreateMenuItems(id), 'separator']
+            : [];
+          if (canManageShare) {
+            items.push({
+              label: tUi('sharing.menu.group'),
+              children: [
+                {
+                  label: tUi('sharing.menu.shareFolder'),
+                  onSelect: () => openCollectionShareDialog(id, 'invite')
+                },
+                {
+                  label: tUi('sharing.menu.manageAccess'),
+                  onSelect: () => openCollectionShareDialog(id, 'access')
+                }
+              ]
+            });
+            items.push('separator');
+          }
+          items.push({
+            label: tUi('sharing.menu.leaveFolder'),
+            destructive: true,
+            onSelect: () => void leaveShared(id)
+          });
+          return items;
+        }
+        if (!editable) return [];
+        return [
+          ...folderCreateMenuItems(id),
+          'separator',
+          {
+            label: 'Rename folder…',
+            shortcut: 'F2',
+            onSelect: () => startRename('folder', id, folder?.name ?? 'Folder')
+          },
+          {
+            label: 'Delete',
+            shortcut: 'Del',
+            destructive: true,
+            onSelect: () => void trashCollection(id)
+          }
+        ];
+      }
+
       if (!canCreate) return [];
 
       return [
-        { label: 'New note in folder', onSelect: () => startDraft('note', id) },
-        ...(noteTypeEnabled('freeform')
-          ? [
-              {
-                label: 'New drawing canvas in folder',
-                onSelect: () => startDraft('drawing', id)
-              }
-            ]
-          : []),
-        ...(noteTypeEnabled('ink')
-          ? [
-              {
-                label: 'New handwritten note in folder',
-                onSelect: () => startDraft('ink', id)
-              }
-            ]
-          : []),
-        ...(noteTypeEnabled('pdf')
-          ? [
-              {
-                label: 'Import PDF in folder',
-                onSelect: () => startPdfImport(id)
-              }
-            ]
-          : []),
-        ...(noteTypeEnabled('kanban')
-          ? [
-              {
-                label: tUi('nav.create.kanbanInFolder'),
-                onSelect: () => startDraft('kanban', id)
-              }
-            ]
-          : []),
-        {
-          label: 'New folder inside',
-          onSelect: () => startDraft('folder', id)
-        },
+        ...folderCreateMenuItems(id),
         'separator',
         {
           label: 'Rename folder…',
@@ -635,10 +865,7 @@
           label: 'Move to root',
           onSelect: () => void moveCollectionTo(id, null)
         },
-        {
-          label: tUi('sharing.menu.shareFolder'),
-          onSelect: () => openCollectionShareDialog(id)
-        },
+        ...sharingMenuGroup(id, folder),
         'separator',
         {
           label: 'Delete',
@@ -720,12 +947,12 @@
   }
 
   function onNoteDragStart(e: DragEvent, noteId: string) {
-    if (!canReorganize) return;
+    if (!canDragItem({ kind: 'note', id: noteId })) return;
     if (!e.dataTransfer) return;
     drag = setDragPayload(e, { kind: 'note', id: noteId });
   }
   function onFolderDragStart(e: DragEvent, folderId: string) {
-    if (!canReorganize) return;
+    if (!canDragItem({ kind: 'folder', id: folderId })) return;
     if (!e.dataTransfer) return;
     e.stopPropagation();
     drag = setDragPayload(e, { kind: 'folder', id: folderId });
@@ -734,16 +961,40 @@
     drag = null;
     dragOver = null;
   }
+  function draggedItems(): TreeItemRef[] {
+    if (!drag) return [];
+    return drag.items ?? [{ kind: drag.kind, id: drag.id }];
+  }
   function canDropOnFolder(targetFolderId: string | null): boolean {
+    if (source === 'shared') {
+      if (!drag) return false;
+      return sharedMoveIsLegal(
+        draggedItems(),
+        targetFolderId,
+        tree.notesById,
+        tree.collectionsById
+      );
+    }
     if (!canReorganize) return false;
     if (!drag) return true;
-    const items = drag.items ?? [drag];
-    return !items.some(
+    return !draggedItems().some(
       (item) => item.kind === 'folder' && targetFolderId === item.id
     );
   }
   function onDragOverFolder(e: DragEvent, folderId: string) {
     if (!e.dataTransfer) return;
+    // In the Shared view we still accept the dragover for our own tree drags so
+    // the drop handler can run and explain a blocked move, but the cursor
+    // reflects legality (no-drop when illegal) and only legal targets highlight.
+    if (source === 'shared') {
+      if (!drag) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const legal = canDropOnFolder(folderId);
+      e.dataTransfer.dropEffect = legal ? 'move' : 'none';
+      dragOver = legal ? `f:${folderId}` : null;
+      return;
+    }
     if (!canDropOnFolder(folderId)) return;
     e.preventDefault();
     e.stopPropagation();
@@ -781,7 +1032,22 @@
     dragOver = null;
     drag = null;
     if (!payload) return;
-    await moveManyTo(payloadItems(payload), targetFolderId);
+    const items = payloadItems(payload);
+    // Shared view: reject anything that isn't an intra-scope move into an
+    // editable folder, and tell the user why instead of silently no-oping.
+    if (
+      source === 'shared' &&
+      !sharedMoveIsLegal(
+        items,
+        targetFolderId,
+        tree.notesById,
+        tree.collectionsById
+      )
+    ) {
+      pushToast(tUi('fileTree.move.blockedShared'), { variant: 'error' });
+      return;
+    }
+    await moveManyTo(items, targetFolderId);
   }
   async function onDropOnRoot(e: DragEvent) {
     if (!canReorganize) return;
@@ -1121,7 +1387,7 @@
     <button
       data-file-tree-node
       type="button"
-      draggable={canReorganize}
+      draggable={canDragItem({ kind: 'folder', id: node.id })}
       class="flex w-full items-center gap-1 rounded-md px-2 py-1 text-left ring-offset-background hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
       class:bg-accent={isOver || isSelected}
       class:opacity-60={drag?.kind === 'folder' && drag.id === node.id}
@@ -1161,7 +1427,7 @@
         {#each node.children as child (nodeKey(child))}
           {@render renderNode(child)}
         {/each}
-        {#if canCreate && draft && draft.parentId === node.id}
+        {#if canStartDraft(node.id) && draft && draft.parentId === node.id}
           {@render renderDraft()}
         {/if}
       </div>
@@ -1176,10 +1442,7 @@
     {@const inTrash =
       source === 'trash' ||
       (note ? noteIsUnderTrash(note, tree.collectionsById) : false)}
-    {@const canDelete =
-      !inTrash &&
-      source !== 'shared' &&
-      (note ? !noteIsUnderShared(note, tree.collectionsById) : true)}
+    {@const canDelete = !inTrash && itemEditable({ kind: 'note', id: node.id })}
     {@const kind = note?.note_kind}
     {@const NoteIcon = noteKindIcon(kind)}
     <!-- Row uses a flex container so the favourite-toggle button can
@@ -1190,7 +1453,7 @@
     <div
       data-file-tree-node
       role="group"
-      draggable={canReorganize}
+      draggable={canDragItem({ kind: 'note', id: node.id })}
       class="file-tree-note-row group flex w-full items-center gap-0.5 rounded-md pr-1 hover:bg-accent hover:text-accent-foreground"
       class:bg-accent={isOver || isSelected}
       class:opacity-60={drag?.kind === 'note' && drag.id === node.id}

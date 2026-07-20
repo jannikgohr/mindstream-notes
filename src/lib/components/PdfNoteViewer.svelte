@@ -47,6 +47,10 @@
   import { listen } from '$lib/api/events';
   import { extractTextFromDocument } from '$lib/pdf/extract-text';
   import { base64ToBytes } from '$lib/editor/base64';
+  import {
+    collabAuthForRoom,
+    getOrCreateCollabSigningMaterial
+  } from '$lib/sync/collab-signing-key';
   import { otherPeerCount } from '$lib/editor/awareness-presence';
   import { pickCursorColor } from '$lib/editor/cursor-color';
   import { isMobile } from '$lib/platform';
@@ -108,6 +112,7 @@
     type PdfStrokePoint
   } from '$lib/pdf/types';
   import { CollabProvider } from '$lib/sync/collab-provider';
+  import { collabCredentialsChangedForNote } from '$lib/sync/collab-credentials';
   import { tree } from '$lib/stores/tree.svelte';
   import {
     bumpNoteHistory,
@@ -300,6 +305,7 @@
   let restoringHistorySnapshot = false;
   let unregisterHistory: (() => void) | null = null;
   let unsubSync: (() => void) | null = null;
+  let unsubCollabCredentials: (() => void) | null = null;
   let unsubSession: (() => void) | null = null;
   let editorListener: EditorListener | null = null;
   let resizeObserver: ResizeObserver | null = null;
@@ -1922,7 +1928,8 @@
     if (!yDoc || !awareness) return;
 
     try {
-      const room = await noteRoomInfo(noteId);
+      const signingMaterial = await getOrCreateCollabSigningMaterial();
+      const room = await noteRoomInfo(noteId, signingMaterial?.publicKeyB64);
       if (!room) return;
       collabConfigured = true;
       provider = new CollabProvider({
@@ -1931,6 +1938,10 @@
         keyBytes: base64ToBytes(room.key_b64),
         doc: yDoc,
         awareness,
+        auth: collabAuthForRoom(room, signingMaterial),
+        onAuthStale: () => {
+          void setupCollabProvider();
+        },
         onStatusChange: (online) => {
           collabOnline = online;
         }
@@ -2236,6 +2247,13 @@
       }).then((unlisten) => {
         unsubSync = unlisten;
       });
+      void listen('collab-credentials-changed', (payload) => {
+        if (collabCredentialsChangedForNote(payload, noteId)) {
+          void setupCollabProvider();
+        }
+      }).then((unlisten) => {
+        unsubCollabCredentials = unlisten;
+      });
 
       // Capture the initial pushed state, set up the provider once, then
       // let the $effect react only to subsequent transitions.
@@ -2324,6 +2342,8 @@
     }
     unsubSync?.();
     unsubSync = null;
+    unsubCollabCredentials?.();
+    unsubCollabCredentials = null;
     unsubSession?.();
     unsubSession = null;
     cancelAnimationFrame(horizontalCenterFrame);

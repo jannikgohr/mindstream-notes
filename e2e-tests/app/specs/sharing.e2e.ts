@@ -18,7 +18,8 @@
  *
  * Accessible names referenced below (from src/lib/settings/i18n/en.json, the
  * same names the SvelteKit UI renders inside the WebView):
- *   - folder context menu:      "Share folder…"     (ui.sharing.menu.shareFolder)
+ *   - folder context menu:      "Sharing" ▸ "Share folder…"
+ *                               (ui.sharing.menu.group ▸ ui.sharing.menu.shareFolder)
  *   - share dialog user field:  "User"              (ui.sharing.dialog.userLabel)
  *   - share dialog permission:  "Permission"        (ui.sharing.dialog.permissionLabel)
  *   - permission options:       "Can view" / "Can edit" / "Admin"
@@ -358,8 +359,9 @@ describe('T4 collection sharing (manifest bundles)', function () {
     // focus on manifest bundle creation/accept/decline.
     await A.newRootFolder(SHARED_FOLDER);
 
-    // Right-click the folder → "Share folder…" opens the dialog.
+    // Right-click the folder → "Sharing" ▸ "Share folder…" opens the dialog.
     await A.clickElement(A.treeItem(SHARED_FOLDER), { button: 'right' });
+    await A.clickMenuItem('Sharing');
     await A.clickMenuItem('Share folder…');
 
     // Fill "User" with B's real username, pick "Can edit", then "Invite".
@@ -451,6 +453,7 @@ describe('T4 collection sharing (manifest bundles)', function () {
     // A seeds and shares a SECOND folder to B.
     await A.newRootFolder(SECOND_FOLDER);
     await A.clickElement(A.treeItem(SECOND_FOLDER), { button: 'right' });
+    await A.clickMenuItem('Sharing');
     await A.clickMenuItem('Share folder…');
     await A.setValue('User', accounts.recipient.username);
     await setSharePermission(browserA, 'Can edit');

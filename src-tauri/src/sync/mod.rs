@@ -30,19 +30,25 @@ use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use chrono::Utc;
 use etebase::error::Error as EtebaseError;
 use etebase::managers::{CollectionManager, ItemManager};
 use etebase::utils::randombytes;
 use etebase::{Account, Collection, CollectionAccessLevel, FetchOptions, Item, ItemMetadata};
+use hkdf::Hkdf;
+use hmac::{Hmac, Mac};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use sha2::Sha256;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::auth;
 use crate::db::Db;
 use crate::error::{AppError, AppResult};
-use crate::sharing::{ShareManifest, COLLECTION_TYPE_SHARE_MANIFEST};
+use crate::sharing::{
+    share_scope_collab_info, ShareManifest, ShareScopeCollabInfo, COLLECTION_TYPE_SHARE_MANIFEST,
+};
 
 const COLLECTION_TYPE_NOTES: &str = "mindstream.notes";
 const COLLECTION_TYPE_FOLDERS: &str = "mindstream.folders";
@@ -51,6 +57,7 @@ const COLLECTION_TYPE_SIGNATURES: &str = "mindstream.signatures";
 const ITEM_TYPE_NOTE: &str = "ms-md-note";
 const ITEM_TYPE_FOLDER: &str = "ms-md-folder";
 const ITEM_TYPE_ASSET: &str = "ms-md-asset";
+const ITEM_TYPE_COLLAB_WRITER_KEY: &str = "ms-collab-writer-key";
 const ITEM_TYPE_SIGNATURE: &str = "ms-md-signature";
 
 const KIND_NOTES: &str = "notes";
@@ -59,6 +66,15 @@ const KIND_ASSETS: &str = "assets";
 const KIND_SIGNATURES: &str = "signatures";
 
 const PAYLOAD_SCHEMA: u32 = 2;
+const LIVE_COLLAB_ROOM_INFO: &[u8] = b"mindstream-live-collab-room/v1";
+const LIVE_COLLAB_KEY_INFO: &[u8] = b"mindstream-live-collab-key/v1";
+const P256_SPKI_DER_LEN: usize = 91;
+const P256_SPKI_DER_PREFIX: &[u8] = &[
+    0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x08, 0x2a,
+    0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00, 0x04,
+];
+
+type HmacSha256 = Hmac<Sha256>;
 
 pub(super) fn catch_blocking_panic<T>(
     label: &str,
@@ -302,6 +318,18 @@ struct AssetPayload {
     modified: String,
 }
 
+/// Public signing key a writable shared-folder member publishes into the
+/// scope's encrypted assets collection. It authorizes live-collab write frames
+/// for one collab epoch; rotating the epoch naturally retires old keys.
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+struct CollabWriterKeyPayload {
+    schema: u32,
+    share_scope_id: String,
+    collab_epoch: u64,
+    public_key_b64: String,
+    username: Option<String>,
+}
+
 /// What ends up in `Item::content` for a signature. `data` is the opaque
 /// JSON geometry blob (see signatures/mod.rs); we keep our own `id` inside
 /// so pulled items correlate back to local rows. Etebase E2E-encrypts the
@@ -447,6 +475,10 @@ pub async fn sync_now(app: AppHandle) -> Result<SyncReport, String> {
     if let Err(err) = app.emit(SYNC_COMPLETED_EVENT, &event) {
         log::warn!("[sync] failed to emit {SYNC_COMPLETED_EVENT}: {err}");
     }
+    crate::collab_events::emit_collab_credentials_changed(
+        &app,
+        delta.collab_credentials_changed_note_ids,
+    );
 
     Ok(delta.report)
 }
@@ -469,6 +501,10 @@ pub struct SyncDelta {
     /// editors evict matching blob URLs from their AssetBridge cache
     /// and kick the corresponding image NodeView so it re-resolves.
     pub assets_pulled_ids: Vec<String>,
+    /// Note ids whose live-collab room credentials changed because a
+    /// share-scope manifest rotated its collab epoch/salt. Open editors
+    /// reconnect their active relay clients for these notes.
+    pub collab_credentials_changed_note_ids: Vec<String>,
 }
 
 fn run(db: &Db, account: &Account, self_username: Option<&str>) -> AppResult<SyncDelta> {
@@ -1020,9 +1056,21 @@ enum ApplyAssetOutcome {
     Skipped,
 }
 
+fn item_type(item: &Item) -> Option<String> {
+    item.meta()
+        .ok()
+        .and_then(|meta| meta.item_type().map(str::to_string))
+}
+
 /// Apply one pulled asset item to local SQLite. Returns the outcome so
 /// the caller can decide whether to advance the stoken (orphans pin it).
 fn apply_asset(db: &Db, item: &Item, scope: Option<&str>) -> AppResult<ApplyAssetOutcome> {
+    if item_type(item)
+        .as_deref()
+        .is_some_and(|kind| kind != ITEM_TYPE_ASSET)
+    {
+        return Ok(ApplyAssetOutcome::Skipped);
+    }
     if item.is_deleted() {
         db.with_conn(|c| apply_remote_delete(c, "assets", item.uid()))?;
         return Ok(ApplyAssetOutcome::Skipped);
@@ -2527,11 +2575,225 @@ fn now_unix_ms() -> i64 {
 /// device and never synced).
 #[derive(Debug, Serialize)]
 pub struct RoomInfo {
-    /// The Etebase Item UID — used as the room name across devices.
+    /// The relay room. Unshared legacy notes use the Etebase Item UID; shared
+    /// notes use a manifest-salted HMAC so removal rotates the room.
     pub room_id: String,
     /// 32-byte AES-GCM secret, base64 (URL-safe) so it survives JSON IPC
     /// without ballooning into a number array.
     pub key_b64: String,
+    /// Version label from the share manifest. Zero means no scoped collab salt
+    /// was applied, preserving legacy room credentials.
+    pub collab_epoch: u64,
+    /// Present for salted shared-folder rooms. Clients combine this public-key
+    /// registry with their local private key to sign/verify write frames.
+    pub writer_auth: Option<RoomWriterAuth>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RoomWriterAuth {
+    pub authorized_writers: Vec<RoomAuthorizedWriter>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct RoomAuthorizedWriter {
+    pub username: String,
+    pub public_key_b64: String,
+}
+
+fn derive_live_collab_room(
+    note_uid: &str,
+    note_key: &[u8],
+    scope: Option<&ShareScopeCollabInfo>,
+) -> Result<RoomInfo, String> {
+    let Some(scope) = scope.filter(|scope| !scope.collab_salt.is_empty()) else {
+        return Ok(RoomInfo {
+            room_id: note_uid.to_string(),
+            key_b64: etebase::utils::to_base64(note_key).map_err(|e| format!("encode key: {e}"))?,
+            collab_epoch: 0,
+            writer_auth: None,
+        });
+    };
+
+    let mut mac = <HmacSha256 as Mac>::new_from_slice(&scope.collab_salt)
+        .map_err(|e| format!("room hmac: {e}"))?;
+    mac.update(LIVE_COLLAB_ROOM_INFO);
+    mac.update(&scope.collab_epoch.to_be_bytes());
+    mac.update(note_uid.as_bytes());
+    let room_bytes = mac.finalize().into_bytes();
+
+    let hkdf = Hkdf::<Sha256>::new(Some(&scope.collab_salt), note_key);
+    let mut derived_key = [0_u8; 32];
+    let mut info = Vec::with_capacity(
+        LIVE_COLLAB_KEY_INFO.len() + std::mem::size_of::<u64>() + note_uid.len(),
+    );
+    info.extend_from_slice(LIVE_COLLAB_KEY_INFO);
+    info.extend_from_slice(&scope.collab_epoch.to_be_bytes());
+    info.extend_from_slice(note_uid.as_bytes());
+    hkdf.expand(&info, &mut derived_key)
+        .map_err(|e| format!("derive live-collab key: {e}"))?;
+
+    Ok(RoomInfo {
+        room_id: etebase::utils::to_base64(&room_bytes)
+            .map_err(|e| format!("encode room id: {e}"))?,
+        key_b64: etebase::utils::to_base64(&derived_key).map_err(|e| format!("encode key: {e}"))?,
+        collab_epoch: scope.collab_epoch,
+        writer_auth: None,
+    })
+}
+
+fn can_receive_live_collab_room(access_level: CollectionAccessLevel, scoped_room: bool) -> bool {
+    !scoped_room || !matches!(access_level, CollectionAccessLevel::ReadOnly)
+}
+
+fn valid_collab_writer_public_key(public_key_b64: &str) -> bool {
+    let Ok(bytes) = BASE64_STANDARD.decode(public_key_b64) else {
+        return false;
+    };
+    bytes.len() == P256_SPKI_DER_LEN && bytes.starts_with(P256_SPKI_DER_PREFIX)
+}
+
+fn collab_writer_key_payload(item: &Item) -> AppResult<Option<CollabWriterKeyPayload>> {
+    if item.is_deleted() || item.is_missing_content() {
+        return Ok(None);
+    }
+    if item_type(item).as_deref() != Some(ITEM_TYPE_COLLAB_WRITER_KEY) {
+        return Ok(None);
+    }
+    let raw = item
+        .content()
+        .map_err(|e| AppError::InvalidArg(format!("writer key content: {e}")))?;
+    let payload = serde_json::from_slice::<CollabWriterKeyPayload>(&raw)
+        .map_err(|e| AppError::InvalidArg(format!("writer key json: {e}")))?;
+    Ok(Some(payload))
+}
+
+fn writable_member_usernames(
+    collection: &Collection,
+    cm: &CollectionManager,
+) -> AppResult<HashSet<String>> {
+    let member_manager = cm
+        .member_manager(collection)
+        .map_err(|e| AppError::InvalidArg(format!("member_manager(writer auth): {e}")))?;
+    let mut writers = HashSet::new();
+    let mut iterator: Option<String> = None;
+    loop {
+        let options = FetchOptions::new().limit(100).iterator(iterator.as_deref());
+        let page = member_manager
+            .list(Some(&options))
+            .map_err(|e| AppError::InvalidArg(format!("list writer members: {e}")))?;
+        for member in page.data() {
+            if !matches!(member.access_level(), CollectionAccessLevel::ReadOnly) {
+                writers.insert(member.username().to_string());
+            }
+        }
+        if page.done() {
+            break;
+        }
+        match page.iterator().map(str::to_string) {
+            Some(next) => iterator = Some(next),
+            None => break,
+        }
+    }
+    Ok(writers)
+}
+
+fn list_collab_writer_keys(
+    im: &ItemManager,
+    share_scope_id: &str,
+    collab_epoch: u64,
+) -> AppResult<Vec<RoomAuthorizedWriter>> {
+    let mut writers = Vec::new();
+    let mut seen = HashSet::new();
+    let mut stoken: Option<String> = None;
+    loop {
+        let opts = FetchOptions::new().stoken(stoken.as_deref());
+        let resp = im
+            .list(Some(&opts))
+            .map_err(|e| AppError::InvalidArg(format!("list writer keys: {e}")))?;
+        for item in resp.data() {
+            let Some(payload) = collab_writer_key_payload(item)? else {
+                continue;
+            };
+            if payload.share_scope_id == share_scope_id && payload.collab_epoch == collab_epoch {
+                let Some(username) = payload.username else {
+                    continue;
+                };
+                if seen.insert((username.clone(), payload.public_key_b64.clone())) {
+                    writers.push(RoomAuthorizedWriter {
+                        username,
+                        public_key_b64: payload.public_key_b64,
+                    });
+                }
+            }
+        }
+        stoken = resp.stoken().map(str::to_string).or(stoken);
+        if resp.done() {
+            break;
+        }
+    }
+    writers.sort_by(|a, b| {
+        a.username
+            .cmp(&b.username)
+            .then_with(|| a.public_key_b64.cmp(&b.public_key_b64))
+    });
+    Ok(writers)
+}
+
+fn filter_writable_collab_writers(
+    writers: Vec<RoomAuthorizedWriter>,
+    writable_usernames: &HashSet<String>,
+) -> Vec<RoomAuthorizedWriter> {
+    writers
+        .into_iter()
+        .filter(|writer| writable_usernames.contains(&writer.username))
+        .collect()
+}
+
+fn publish_collab_writer_key(
+    im: &ItemManager,
+    share_scope_id: &str,
+    collab_epoch: u64,
+    public_key_b64: &str,
+    username: Option<&str>,
+) -> AppResult<()> {
+    if !valid_collab_writer_public_key(public_key_b64) {
+        return Ok(());
+    }
+    let Some(username) = username else {
+        return Ok(());
+    };
+    let existing = list_collab_writer_keys(im, share_scope_id, collab_epoch)?;
+    if existing
+        .iter()
+        .any(|writer| writer.username == username && writer.public_key_b64 == public_key_b64)
+    {
+        return Ok(());
+    }
+
+    let payload = CollabWriterKeyPayload {
+        schema: 1,
+        share_scope_id: share_scope_id.to_string(),
+        collab_epoch,
+        public_key_b64: public_key_b64.to_string(),
+        username: Some(username.to_string()),
+    };
+    let bytes = serde_json::to_vec(&payload)
+        .map_err(|e| AppError::InvalidArg(format!("encode writer key: {e}")))?;
+    let key_hint: String = public_key_b64
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .take(12)
+        .collect();
+    let mut meta = ItemMetadata::new();
+    meta.set_item_type(Some(ITEM_TYPE_COLLAB_WRITER_KEY))
+        .set_name(Some(format!("collab-writer-key:{key_hint}")))
+        .set_mtime(Some(now_unix_ms()));
+    let item = im
+        .create(&meta, &bytes)
+        .map_err(|e| AppError::InvalidArg(format!("create writer key item: {e}")))?;
+    im.transaction([item].iter(), None)
+        .map_err(|e| AppError::InvalidArg(format!("transaction writer key: {e}")))?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -2539,25 +2801,30 @@ pub async fn note_room_info(
     app: AppHandle,
     db: tauri::State<'_, Db>,
     id: String,
+    writer_public_key_b64: Option<String>,
 ) -> Result<Option<RoomInfo>, String> {
     // Live collab is etebase-gated: no session ⇒ no room.
     if !crate::auth::has_session(&app) {
         return Ok(None);
     }
 
-    // Read just the local breadcrumbs we need: the note's item UID and
-    // the cached notes-collection UID. The actual key lives only on the
-    // etebase server now; we resolve it on demand below.
+    // Read just the local breadcrumbs we need: the note item UID, its optional
+    // share scope, and the cached vault notes-collection UID. The actual key
+    // lives only on the etebase server now; we resolve it on demand below.
     let lookups = db
         .with_conn(|c| {
-            let note_uid: Option<String> = c
+            let note_lookup: Option<(Option<String>, Option<String>)> = c
                 .query_row(
-                    "SELECT etebase_uid FROM notes WHERE id = ?1",
+                    "SELECT etebase_uid, share_scope_id FROM notes WHERE id = ?1",
                     params![&id],
-                    |r| r.get::<_, Option<String>>(0),
+                    |r| {
+                        Ok((
+                            r.get::<_, Option<String>>(0)?,
+                            r.get::<_, Option<String>>(1)?,
+                        ))
+                    },
                 )
-                .optional()?
-                .flatten();
+                .optional()?;
             let col_uid: Option<String> = c
                 .query_row(
                     "SELECT etebase_collection_uid FROM sync_state WHERE kind = ?1",
@@ -2566,16 +2833,14 @@ pub async fn note_room_info(
                 )
                 .optional()?
                 .flatten();
-            Ok::<_, AppError>((note_uid, col_uid))
+            Ok::<_, AppError>((note_lookup, col_uid))
         })
         .map_err(|e| e.to_string())?;
 
-    let Some(note_uid) = lookups.0 else {
+    let Some((Some(note_uid), share_scope_id)) = lookups.0 else {
         return Ok(None);
     };
-    let Some(col_uid) = lookups.1 else {
-        return Ok(None);
-    };
+    let vault_col_uid = lookups.1;
 
     // Restore the account + fetch the item inside spawn_blocking. The
     // etebase SDK is sync-over-reqwest::blocking, which constructs a
@@ -2586,6 +2851,13 @@ pub async fn note_room_info(
     let app_for_blocking = app.clone();
     tauri::async_runtime::spawn_blocking(move || -> Result<Option<RoomInfo>, String> {
         catch_blocking_panic("room_info", || {
+            let writer_public_key_b64 = writer_public_key_b64
+                .map(|key| key.trim().to_string())
+                .filter(|key| valid_collab_writer_public_key(key));
+            let username = crate::auth::read_session_info(&app_for_blocking)
+                .ok()
+                .flatten()
+                .map(|info| info.username);
             let account = match crate::auth::try_restore(&app_for_blocking)
                 .map_err(|e| format!("restore session: {e}"))?
             {
@@ -2595,6 +2867,27 @@ pub async fn note_room_info(
             let cm = account
                 .collection_manager()
                 .map_err(|e| format!("collection_manager: {e}"))?;
+            let (col_uid, scope_collab) = match share_scope_id.as_deref() {
+                Some(scope_id) => {
+                    let scope_collab = match share_scope_collab_info(&cm, scope_id)
+                        .map_err(|e| format!("share scope collab info: {e}"))?
+                    {
+                        Some(info) => info,
+                        None => return Ok(None),
+                    };
+                    (
+                        scope_collab.notes_collection_uid.clone(),
+                        Some(scope_collab),
+                    )
+                }
+                None => {
+                    let Some(col_uid) = vault_col_uid else {
+                        return Ok(None);
+                    };
+                    (col_uid, None)
+                }
+            };
+            let scope_id_for_auth = share_scope_id.clone();
             let col = match cm.fetch(&col_uid, None) {
                 Ok(c) => c,
                 Err(e) => {
@@ -2602,6 +2895,9 @@ pub async fn note_room_info(
                     return Ok(None);
                 }
             };
+            if !can_receive_live_collab_room(col.access_level(), scope_collab.is_some()) {
+                return Ok(None);
+            }
             let im = cm
                 .item_manager(&col)
                 .map_err(|e| format!("item_manager: {e}"))?;
@@ -2629,11 +2925,75 @@ pub async fn note_room_info(
                 // encoding zero bytes.
                 return Ok(None);
             }
-            Ok(Some(RoomInfo {
-                room_id: note_uid,
-                key_b64: etebase::utils::to_base64(&payload.crypto_key)
-                    .map_err(|e| format!("encode key: {e}"))?,
-            }))
+            let mut room =
+                derive_live_collab_room(&note_uid, &payload.crypto_key, scope_collab.as_ref())?;
+            if let (Some(scope_id), Some(scope)) =
+                (scope_id_for_auth.as_deref(), scope_collab.as_ref())
+            {
+                let mut authorized_writers = Vec::new();
+                match cm.fetch(&scope.assets_collection_uid, None) {
+                    Ok(assets_col) => {
+                        match cm.item_manager(&assets_col) {
+                            Ok(assets_im) => {
+                                let writable = !matches!(
+                                    assets_col.access_level(),
+                                    CollectionAccessLevel::ReadOnly
+                                );
+                                if writable {
+                                    if let Some(key) = writer_public_key_b64.as_deref() {
+                                        if let Err(e) = publish_collab_writer_key(
+                                            &assets_im,
+                                            scope_id,
+                                            scope.collab_epoch,
+                                            key,
+                                            username.as_deref(),
+                                        ) {
+                                            log::warn!(
+                                                "[room_info] publish writer key for scope {scope_id} failed: {e}"
+                                            );
+                                        }
+                                    }
+                                }
+                                let writable_usernames =
+                                    match writable_member_usernames(&assets_col, &cm) {
+                                        Ok(usernames) => usernames,
+                                        Err(e) => {
+                                            log::warn!(
+                                                "[room_info] list writable members for scope {scope_id} failed: {e}"
+                                            );
+                                            HashSet::new()
+                                        }
+                                    };
+                                match list_collab_writer_keys(
+                                    &assets_im,
+                                    scope_id,
+                                    scope.collab_epoch,
+                                ) {
+                                    Ok(keys) => {
+                                        authorized_writers = filter_writable_collab_writers(
+                                            keys,
+                                            &writable_usernames,
+                                        );
+                                    }
+                                    Err(e) => log::warn!(
+                                        "[room_info] list writer keys for scope {scope_id} failed: {e}"
+                                    ),
+                                }
+                            }
+                            Err(e) => {
+                                log::warn!("[room_info] item_manager(scope assets): {e}");
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("[room_info] fetch scope assets collection failed: {e}");
+                    }
+                }
+                room.writer_auth = Some(RoomWriterAuth {
+                    authorized_writers,
+                });
+            }
+            Ok(Some(room))
         })
     })
     .await
@@ -2697,6 +3057,129 @@ mod tests {
             favourite: false,
             note_kind: "markdown".into(),
         }
+    }
+
+    fn collab_info(epoch: u64, salt: &[u8]) -> ShareScopeCollabInfo {
+        ShareScopeCollabInfo {
+            notes_collection_uid: "scope_notes".into(),
+            assets_collection_uid: "scope_assets".into(),
+            collab_epoch: epoch,
+            collab_salt: salt.to_vec(),
+        }
+    }
+
+    #[test]
+    fn derive_live_collab_room_preserves_legacy_credentials_without_scope_salt() {
+        let note_key = [3_u8; 32];
+
+        let room = derive_live_collab_room("note_uid", &note_key, None).unwrap();
+
+        assert_eq!(room.room_id, "note_uid");
+        assert_eq!(room.key_b64, etebase::utils::to_base64(&note_key).unwrap());
+        assert_eq!(room.collab_epoch, 0);
+        assert!(room.writer_auth.is_none());
+    }
+
+    #[test]
+    fn derive_live_collab_room_uses_scope_salt_and_epoch() {
+        let note_key = [3_u8; 32];
+        let epoch_one = collab_info(1, &[9_u8; 32]);
+        let epoch_two = collab_info(2, &[9_u8; 32]);
+        let different_salt = collab_info(1, &[8_u8; 32]);
+
+        let scoped = derive_live_collab_room("note_uid", &note_key, Some(&epoch_one)).unwrap();
+        let rotated_epoch =
+            derive_live_collab_room("note_uid", &note_key, Some(&epoch_two)).unwrap();
+        let rotated_salt =
+            derive_live_collab_room("note_uid", &note_key, Some(&different_salt)).unwrap();
+
+        assert_ne!(scoped.room_id, "note_uid");
+        assert_ne!(
+            scoped.key_b64,
+            etebase::utils::to_base64(&note_key).unwrap()
+        );
+        assert_eq!(scoped.collab_epoch, 1);
+        assert!(scoped.writer_auth.is_none());
+        assert_ne!(scoped.room_id, rotated_epoch.room_id);
+        assert_ne!(scoped.key_b64, rotated_epoch.key_b64);
+        assert_ne!(scoped.room_id, rotated_salt.room_id);
+        assert_ne!(scoped.key_b64, rotated_salt.key_b64);
+    }
+
+    #[test]
+    fn live_collab_rooms_are_withheld_from_read_only_shared_members() {
+        assert!(!can_receive_live_collab_room(
+            CollectionAccessLevel::ReadOnly,
+            true
+        ));
+        assert!(can_receive_live_collab_room(
+            CollectionAccessLevel::ReadWrite,
+            true
+        ));
+        assert!(can_receive_live_collab_room(
+            CollectionAccessLevel::Admin,
+            true
+        ));
+        assert!(can_receive_live_collab_room(
+            CollectionAccessLevel::ReadOnly,
+            false
+        ));
+    }
+
+    #[test]
+    fn collab_writer_public_key_validation_requires_p256_spki_b64() {
+        let mut der = P256_SPKI_DER_PREFIX.to_vec();
+        der.extend(1_u8..=64);
+        let key_b64 = BASE64_STANDARD.encode(&der);
+
+        assert!(valid_collab_writer_public_key(&key_b64));
+        assert!(!valid_collab_writer_public_key(""));
+        assert!(!valid_collab_writer_public_key("not base64"));
+
+        let mut wrong_prefix = der;
+        wrong_prefix[0] = 0x31;
+        assert!(!valid_collab_writer_public_key(
+            &BASE64_STANDARD.encode(wrong_prefix)
+        ));
+    }
+
+    #[test]
+    fn collab_writer_key_payload_round_trips_json() {
+        let payload = CollabWriterKeyPayload {
+            schema: 1,
+            share_scope_id: "scope_1".into(),
+            collab_epoch: 7,
+            public_key_b64: "public".into(),
+            username: Some("alice".into()),
+        };
+
+        let encoded = serde_json::to_vec(&payload).unwrap();
+        let decoded: CollabWriterKeyPayload = serde_json::from_slice(&encoded).unwrap();
+
+        assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn writable_collab_writer_filter_drops_read_only_usernames() {
+        let writers = vec![
+            RoomAuthorizedWriter {
+                username: "alice".into(),
+                public_key_b64: "alice_key".into(),
+            },
+            RoomAuthorizedWriter {
+                username: "bob".into(),
+                public_key_b64: "bob_key".into(),
+            },
+        ];
+        let writable_usernames = HashSet::from(["alice".to_string()]);
+
+        assert_eq!(
+            filter_writable_collab_writers(writers, &writable_usernames),
+            vec![RoomAuthorizedWriter {
+                username: "alice".into(),
+                public_key_b64: "alice_key".into(),
+            }]
+        );
     }
 
     #[test]
