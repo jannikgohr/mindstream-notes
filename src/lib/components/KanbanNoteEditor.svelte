@@ -66,6 +66,11 @@
     ToolbarSeparator
   } from '$lib/components/ui/toolbar';
   import { CollabProvider } from '$lib/sync/collab-provider';
+  import { collabCredentialsChangedForNote } from '$lib/sync/collab-credentials';
+  import {
+    collabAuthForRoom,
+    getOrCreateCollabSigningMaterial
+  } from '$lib/sync/collab-signing-key';
   import { base64ToBytes } from '$lib/editor/base64';
   import { pickCursorColor } from '$lib/editor/cursor-color';
   import { folderPathLabel } from '$lib/notes/folder-path';
@@ -175,6 +180,7 @@
   let stopObserve: (() => void) | null = null;
   let unsubSession: (() => void) | null = null;
   let unsubSync: (() => void) | null = null;
+  let unsubCollabCredentials: (() => void) | null = null;
   let unregisterHistory: (() => void) | null = null;
   let editorListener: EditorListener | null = $state(null);
 
@@ -881,14 +887,19 @@
     );
     if (!collabUrl || !yDoc || !awareness) return;
     try {
-      const room = await noteRoomInfo(noteId);
+      const signingMaterial = await getOrCreateCollabSigningMaterial();
+      const room = await noteRoomInfo(noteId, signingMaterial?.publicKeyB64);
       if (!room) return;
       provider = new CollabProvider({
         url: collabUrl,
         roomId: room.room_id,
         keyBytes: base64ToBytes(room.key_b64),
         doc: yDoc,
-        awareness
+        awareness,
+        auth: collabAuthForRoom(room, signingMaterial),
+        onAuthStale: () => {
+          void setupCollabProvider();
+        }
       });
     } catch (err) {
       console.debug('[KanbanNoteEditor] collab provider init failed', err);
@@ -971,6 +982,13 @@
         }
       }).then((unlisten) => {
         unsubSync = unlisten;
+      });
+      void listen('collab-credentials-changed', (payload) => {
+        if (collabCredentialsChangedForNote(payload, noteId)) {
+          void setupCollabProvider();
+        }
+      }).then((unlisten) => {
+        unsubCollabCredentials = unlisten;
       });
 
       // Command-bus listener: handle app-level active-note search and displace
@@ -1067,6 +1085,8 @@
     stopObserve?.();
     unsubSession?.();
     unsubSync?.();
+    unsubCollabCredentials?.();
+    unsubCollabCredentials = null;
     unregisterHistory?.();
     if (editorListener) unregisterEditor(editorListener);
     provider?.destroy();

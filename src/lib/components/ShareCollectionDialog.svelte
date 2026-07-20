@@ -1,18 +1,17 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { Share2, X } from '@lucide/svelte';
+  import { Settings2, Share2, X } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import {
-    getCollectionShareState,
     inviteCollection,
-    type CollectionShareAccessLevel,
-    type CollectionShareState
+    type CollectionShareAccessLevel
   } from '$lib/api/sharing';
   import { loadTree, tree } from '$lib/stores/tree.svelte';
+  import { collectionUserCanManageSharing } from '$lib/stores/note-source.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
   import {
     closeCollectionShareDialog,
+    setShareDialogView,
     shareDialog
   } from './share-dialog.svelte';
   import { parseRecipients } from './share-recipients';
@@ -26,12 +25,10 @@
   let username = $state('');
   let accessLevel = $state<CollectionShareAccessLevel>('read_write');
   let pending = $state(false);
-  let loading = $state(false);
   let error = $state<string | null>(null);
   /** Per-recipient invite failures from the last submit (best-effort batch:
    *  the valid recipients still get invited, these are the ones that didn't). */
   let failures = $state<InviteFailure[]>([]);
-  let shareState = $state<CollectionShareState | null>(null);
 
   const recipients = $derived(parseRecipients(username));
 
@@ -39,19 +36,10 @@
   const collection = $derived(
     collectionId ? tree.collectionsById[collectionId] : null
   );
-
-  async function refresh() {
-    if (!collectionId) return;
-    loading = true;
-    error = null;
-    try {
-      shareState = await getCollectionShareState(collectionId);
-    } catch (err) {
-      error = err instanceof Error ? err.message : String(err);
-    } finally {
-      loading = false;
-    }
-  }
+  // Owners and admin recipients can switch from inviting into member management.
+  const canManageSharing = $derived(
+    collection ? collectionUserCanManageSharing(collection) : false
+  );
 
   /**
    * Invite every recipient in the field (comma-separated) at the chosen access
@@ -76,11 +64,10 @@
 
     const invited: string[] = [];
     const failed: InviteFailure[] = [];
-    let latest: CollectionShareState | null = null;
 
     for (const recipient of targets) {
       try {
-        latest = await inviteCollection({
+        await inviteCollection({
           collection_id: collectionId,
           username: recipient,
           access_level: accessLevel
@@ -95,8 +82,7 @@
     }
 
     // Only a successful invite mutates the share (new member, re-homed subtree),
-    // so refresh the tree and members list only when at least one landed.
-    if (latest) shareState = latest;
+    // so refresh the tree only when at least one landed.
     if (invited.length > 0) {
       await loadTree();
       pushToast(
@@ -110,16 +96,6 @@
     username = failed.map((f) => f.username).join(', ');
     pending = false;
   }
-
-  function accessLabel(level: CollectionShareAccessLevel): string {
-    if (level === 'admin') return tUi('sharing.access.admin');
-    if (level === 'read_write') return tUi('sharing.access.readWrite');
-    return tUi('sharing.access.readOnly');
-  }
-
-  onMount(() => {
-    void refresh();
-  });
 </script>
 
 {#if collectionId}
@@ -236,31 +212,20 @@
         </div>
       </form>
 
-      <div class="border-t border-border px-4 py-3">
-        <p class="text-xs font-medium text-muted-foreground">
-          {tUi('sharing.dialog.people')}
-        </p>
-        {#if loading}
-          <p class="mt-2 text-xs text-muted-foreground">
-            {tUi('fileTree.loading')}
-          </p>
-        {:else if shareState?.members.length}
-          <ul class="mt-2 space-y-1">
-            {#each shareState.members as member (member.username)}
-              <li class="flex items-center justify-between gap-2 text-xs">
-                <span class="truncate">{member.username}</span>
-                <span class="shrink-0 text-muted-foreground">
-                  {accessLabel(member.access_level)}
-                </span>
-              </li>
-            {/each}
-          </ul>
-        {:else}
-          <p class="mt-2 text-xs text-muted-foreground">
-            {tUi('sharing.dialog.onlyYou')}
-          </p>
-        {/if}
-      </div>
+      {#if canManageSharing}
+        <div class="border-t border-border px-4 py-3">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            class="gap-1.5"
+            onclick={() => setShareDialogView('access')}
+          >
+            <Settings2 class="size-3.5" />
+            {tUi('sharing.dialog.toManage')}
+          </Button>
+        </div>
+      {/if}
     </div>
   </div>
 {/if}

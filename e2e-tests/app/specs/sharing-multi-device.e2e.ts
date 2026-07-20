@@ -22,7 +22,8 @@
  *
  * Accessible names referenced below (from src/lib/settings/i18n/en.json, the
  * same names the SvelteKit UI renders inside the WebView):
- *   - folder context menu:      "Share folder…"     (ui.sharing.menu.shareFolder)
+ *   - folder context menu:      "Sharing" ▸ "Share folder…"
+ *                               (ui.sharing.menu.group ▸ ui.sharing.menu.shareFolder)
  *   - share dialog user field:  "User"              (ui.sharing.dialog.userLabel)
  *   - share dialog permission:  "Permission"        (ui.sharing.dialog.permissionLabel)
  *   - share dialog submit:      "Invite"            (ui.sharing.dialog.invite)
@@ -411,6 +412,7 @@ describe('T4 collection sharing across the owner’s two devices', function () {
 
     // Now share the folder with B (Can edit). This re-homes F into a scope.
     await A1.clickElement(A1.treeItem(SHARED_FOLDER), { button: 'right' });
+    await A1.clickMenuItem('Sharing');
     await A1.clickMenuItem('Share folder…');
     await A1.setValue('User', accounts.recipient.username);
     await setSharePermission(browserA1, 'Can edit');

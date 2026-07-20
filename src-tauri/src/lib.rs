@@ -15,6 +15,7 @@ pub mod app_restart;
 pub mod assets;
 pub mod auth;
 pub mod backup;
+pub mod collab_events;
 pub mod collections;
 pub mod content_stats;
 pub mod data;
@@ -394,6 +395,11 @@ pub fn run() {
             sharing::list_incoming_share_bundles,
             sharing::accept_share_bundle,
             sharing::decline_share_bundle,
+            sharing::leave_shared_collection,
+            sharing::stop_sharing_collection,
+            sharing::list_collection_members,
+            sharing::set_collection_member_access,
+            sharing::remove_collection_member,
             sharing::accept_collection_invitation,
             sharing::reject_collection_invitation,
             sharing::get_collection_share_state,

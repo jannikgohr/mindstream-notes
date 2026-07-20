@@ -2,6 +2,7 @@ import {
   TRASH_ID,
   type Collection,
   type NoteSummary,
+  type TreeItemRef,
   type TreeNode
 } from '$lib/api';
 
@@ -119,6 +120,101 @@ export function collectionScopeIsReadOnly(
   return false;
 }
 
+/**
+ * The id of the shared-with-me root that governs `collectionId`, or `null` when
+ * the collection isn't under any share the current user received. Walks ancestors
+ * (including the collection itself) to the first `collectionIsSharedWithMe`
+ * folder — that folder's id is the "scope identity" the Shared view keys move
+ * legality off. A folder shared *by* me is not a shared-with-me root, so it
+ * resolves to `null` (owner reorganizes it as a personal folder in Home).
+ */
+export function sharedRootIdFor(
+  collectionId: string | null,
+  collectionsById: Record<string, Collection>
+): string | null {
+  let current = collectionId;
+  const seen = new Set<string>();
+  while (current && !seen.has(current)) {
+    seen.add(current);
+    const collection = collectionsById[current];
+    if (!collection) return null;
+    if (collectionIsSharedWithMe(collection)) return collection.id;
+    current = collection.parent_collection_id;
+  }
+  return null;
+}
+
+/**
+ * The shared root a tree item currently lives under. A note resolves through its
+ * parent folder; a folder resolves through itself (a folder is part of its own
+ * scope). `null` means the item isn't inside any shared-with-me scope.
+ */
+export function itemSharedRootId(
+  item: TreeItemRef,
+  notesById: Record<string, NoteSummary>,
+  collectionsById: Record<string, Collection>
+): string | null {
+  if (item.kind === 'note') {
+    const note = notesById[item.id];
+    return note
+      ? sharedRootIdFor(note.parent_collection_id, collectionsById)
+      : null;
+  }
+  return sharedRootIdFor(item.id, collectionsById);
+}
+
+/**
+ * True when `folderId` sits inside a shared-with-me scope the user may edit
+ * (`read_write` / `admin`). Personal folders (no shared root) and read-only
+ * scopes both return false — this helper only answers "is this an *editable
+ * shared* target", used to gate create/move affordances in the Shared view.
+ */
+export function sharedFolderIsEditable(
+  folderId: string | null,
+  collectionsById: Record<string, Collection>
+): boolean {
+  const root = sharedRootIdFor(folderId, collectionsById);
+  if (!root) return false;
+  return !collectionScopeIsReadOnly(root, collectionsById);
+}
+
+/**
+ * Whether a batch of items may be moved onto `targetFolderId` inside the Shared
+ * view. All-or-nothing (the caller blocks the whole drop otherwise):
+ *  - the target must be an editable shared folder (not the shared-view root, not
+ *    a read-only scope);
+ *  - the target must not be one of the dragged folders nor a descendant of one
+ *    (would orphan the subtree — mirrors the Home self/descendant guard);
+ *  - every item must live in the *same* shared root as the target (intra-scope
+ *    only — cross-scope moves are a destructive delete-from-owner + create and
+ *    are rejected here).
+ */
+export function sharedMoveIsLegal(
+  items: TreeItemRef[],
+  targetFolderId: string | null,
+  notesById: Record<string, NoteSummary>,
+  collectionsById: Record<string, Collection>
+): boolean {
+  if (items.length === 0) return false;
+  if (targetFolderId === null) return false;
+  const destRoot = sharedRootIdFor(targetFolderId, collectionsById);
+  if (!destRoot || collectionScopeIsReadOnly(destRoot, collectionsById)) {
+    return false;
+  }
+  for (const item of items) {
+    if (item.kind === 'folder') {
+      if (item.id === targetFolderId) return false;
+      if (collectionIsUnder(targetFolderId, item.id, collectionsById)) {
+        return false;
+      }
+    }
+    if (itemSharedRootId(item, notesById, collectionsById) !== destRoot) {
+      return false;
+    }
+  }
+  return true;
+}
+
 export function noteIsUnderShared(
   note: NoteSummary,
   collectionsById: Record<string, Collection>
@@ -164,6 +260,14 @@ export function collectionIsSharedWithMe(collection: Collection): boolean {
 
 export function collectionIsSharedByMe(collection: Collection): boolean {
   return collection.shared_by_me === true;
+}
+
+export function collectionUserCanManageSharing(
+  collection: Collection
+): boolean {
+  return (
+    collectionIsSharedByMe(collection) || collection.shared_role === 'admin'
+  );
 }
 
 export function nodesForDesktopSource(

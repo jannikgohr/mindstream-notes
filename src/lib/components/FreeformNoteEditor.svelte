@@ -54,6 +54,11 @@
     ExcalidrawRoomClient,
     deriveExcalidrawKey
   } from '$lib/freeform/excalidraw-room-client';
+  import { collabCredentialsChangedForNote } from '$lib/sync/collab-credentials';
+  import {
+    collabAuthForRoom,
+    getOrCreateCollabSigningMaterial
+  } from '$lib/sync/collab-signing-key';
   import type { ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types';
   import { isMobile } from '$lib/platform';
   import { listen } from '$lib/api/events';
@@ -205,6 +210,7 @@
    *  the open Y.Doc via Y.applyUpdate (Yjs CRDT-safe). Asset
    *  invalidation for Excalidraw scene files lives inside the React island. */
   let unsubSync: (() => void) | null = null;
+  let unsubCollabCredentials: (() => void) | null = null;
 
   onMount(async () => {
     if (!mountEl) return;
@@ -322,6 +328,13 @@
         }
       }).then((unlisten) => {
         unsubSync = unlisten;
+      });
+      void listen('collab-credentials-changed', (payload) => {
+        if (collabCredentialsChangedForNote(payload, noteId)) {
+          void setupExcalidrawRoom();
+        }
+      }).then((unlisten) => {
+        unsubCollabCredentials = unlisten;
       });
 
       loading = false;
@@ -462,7 +475,8 @@
     if (!excalidrawApi) return;
 
     try {
-      const room = await noteRoomInfo(noteId);
+      const signingMaterial = await getOrCreateCollabSigningMaterial();
+      const room = await noteRoomInfo(noteId, signingMaterial?.publicKeyB64);
       if (!room || !excalidrawApi) return;
       const keyBytes16 = await deriveExcalidrawKey(base64ToBytes(room.key_b64));
       // Re-check the api after the awaits in case the panel was
@@ -474,6 +488,10 @@
         roomId: room.room_id,
         keyBytes16,
         api: excalidrawApi,
+        auth: collabAuthForRoom(room, signingMaterial),
+        onAuthStale: () => {
+          void setupExcalidrawRoom();
+        },
         onStatusChange: (online) => {
           collabOnline = online;
         }
@@ -498,7 +516,9 @@
     }
     unsubSession?.();
     unsubSync?.();
+    unsubCollabCredentials?.();
     unsubSync = null;
+    unsubCollabCredentials = null;
     unsubSession = null;
     // Release our fullscreen ref if mobile auto-mode acquired one.
     // Ref-counted in the helper, so multiple freeform notes only flip
