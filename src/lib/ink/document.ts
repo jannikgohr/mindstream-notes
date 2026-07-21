@@ -1,115 +1,80 @@
+/**
+ * The Yjs-backed ink document.
+ *
+ * Strokes live in a shared array of maps so concurrent edits from two
+ * devices merge instead of clobbering; tombstones (rather than removals)
+ * keep deletes commutative. This module owns that structure and the
+ * caches over it — geometry, payload encoding, transforms and undo
+ * replay each live in their own sibling module.
+ */
+
 import * as Y from 'yjs';
-import { pointToSegmentDistanceSq, type InkPoint } from '$lib/ink/page';
+import type { InkPoint } from '$lib/ink/page';
 import { sliceStrokeByCircles, type EraserCircle } from '$lib/ink/stroke-slice';
+import {
+  DEFAULT_COLOR,
+  DEFAULT_WIDTH,
+  strokeFromMeta,
+  type DecodedPayload,
+  type InProgressStroke,
+  type InkStroke,
+  type InkStrokeInput,
+  type MutationResult,
+  type StrokeBounds,
+  type StrokeMeta,
+  type StrokeSpatialIndex,
+  type StrokeStylePatch,
+  type StrokeStyleSnapshot,
+  type StrokeTransform,
+  type UndoOp
+} from './stroke-types';
+import {
+  boundsContainPoint,
+  boundsIntersect,
+  boundsOfPoints,
+  strokeHitAt,
+  strokeIntersectsLasso,
+  strokesHitAt,
+  tileCoord,
+  tileKey
+} from './stroke-geometry';
+import {
+  decodePayload,
+  encodePayloadV2,
+  randomId,
+  sanitizePressure,
+  sanitizeWidth,
+  sanitizedPoints
+} from './stroke-codec';
+import {
+  invertTransform,
+  transformIsIdentity,
+  transformPoint,
+  validTransform
+} from './stroke-transform';
+import { applyRedoOp, applyUndoOp } from './document-undo';
 
 const STROKES_KEY = 'strokes';
 const FIELD_ID = 'id';
 const FIELD_TOMBSTONED = 'tombstoned';
 const FIELD_PAYLOAD = 'payload';
-
-const PAYLOAD_VERSION_V1 = 1;
-const PAYLOAD_VERSION_V2 = 2;
 const STROKE_INDEX_TILE_SIZE = 512;
 
-export const DEFAULT_COLOR = 0xff000000;
-export const DEFAULT_WIDTH = 4;
-
-export interface InkStroke {
-  id: string;
-  color: number;
-  width: number;
-  points: InkPoint[];
-  bounds?: StrokeBounds;
-}
-
-export interface StrokeTransform {
-  a: number;
-  b: number;
-  c: number;
-  d: number;
-  e: number;
-  f: number;
-  widthScale: number;
-}
-
-export interface InkStrokeInput {
-  color: number;
-  width: number;
-  points: InkPoint[];
-}
-
-export interface StrokeStyleSnapshot {
-  id: string;
-  color: number;
-  width: number;
-}
-
-export interface StrokeStylePatch {
-  color?: number;
-  width?: number;
-}
-
-export type UndoOp =
-  | { kind: 'strokeAdded'; id: string }
-  | { kind: 'strokesAdded'; ids: string[] }
-  | { kind: 'eraserDrag'; ids: string[] }
-  | {
-      kind: 'strokeSlice';
-      // Original strokes tombstoned by the partial eraser.
-      removedOriginals: string[];
-      // Every fragment stroke created during the drag (intermediate + final).
-      addedFragments: string[];
-      // Fragments still visible when the drag ended (added minus re-erased).
-      finalFragments: string[];
-    }
-  | { kind: 'clearAll'; ids: string[] }
-  | { kind: 'selectionDelete'; ids: string[] }
-  | { kind: 'selectionMove'; ids: string[]; dx: number; dy: number }
-  | {
-      kind: 'selectionTransform';
-      ids: string[];
-      transform: StrokeTransform;
-      inverse: StrokeTransform;
-    }
-  | {
-      kind: 'selectionStyle';
-      before: StrokeStyleSnapshot[];
-      after: StrokeStyleSnapshot[];
-    };
-
-interface DecodedPayload {
-  color: number;
-  width: number;
-  points: InkPoint[];
-}
-
-export interface StrokeBounds {
-  minX: number;
-  minY: number;
-  maxX: number;
-  maxY: number;
-}
-
-interface StrokeMeta extends InkStroke {
-  bounds: StrokeBounds;
-}
-
-interface StrokeSpatialIndex {
-  tileSize: number;
-  buckets: Map<string, StrokeMeta[]>;
-  maxStrokeWidth: number;
-}
-
-interface InProgressStroke {
-  color: number;
-  width: number;
-  points: InkPoint[];
-}
-
-export interface MutationResult<T> {
-  value: T;
-  update: Uint8Array | null;
-}
+// Re-exported so existing importers keep reaching everything ink-document
+// related through this module.
+export {
+  DEFAULT_COLOR,
+  DEFAULT_WIDTH,
+  type InkStroke,
+  type InkStrokeInput,
+  type MutationResult,
+  type StrokeBounds,
+  type StrokeStylePatch,
+  type StrokeStyleSnapshot,
+  type StrokeTransform,
+  type UndoOp
+} from './stroke-types';
+export { strokesHitAt } from './stroke-geometry';
 
 export class InkDocument {
   readonly doc: Y.Doc;
@@ -861,392 +826,4 @@ export class InkDocument {
     }
     return changed;
   }
-}
-
-export function strokesHitAt(
-  strokes: InkStroke[],
-  point: { x: number; y: number },
-  radius: number
-): InkStroke[] {
-  return strokes.filter((stroke) =>
-    strokeHitAt(
-      { ...stroke, bounds: boundsOfPoints(stroke.points) },
-      point,
-      radius
-    )
-  );
-}
-
-function strokeHitAt(
-  stroke: StrokeMeta,
-  point: { x: number; y: number },
-  radius: number
-): boolean {
-  if (!boundsContainPoint(stroke.bounds, point, radius)) return false;
-  const radiusSq = radius * radius;
-  for (let i = 1; i < stroke.points.length; i += 1) {
-    if (
-      pointToSegmentDistanceSq(point, stroke.points[i - 1], stroke.points[i]) <=
-      radiusSq
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function strokeIntersectsLasso(
-  stroke: StrokeMeta,
-  lasso: Array<{ x: number; y: number }>
-): boolean {
-  if (lasso.length < 3) return false;
-  for (const point of stroke.points) {
-    if (pointInPolygon(point, lasso)) return true;
-  }
-  for (let i = 1; i < stroke.points.length; i += 1) {
-    const a = stroke.points[i - 1];
-    const b = stroke.points[i];
-    for (let j = 0; j < lasso.length; j += 1) {
-      const c = lasso[j];
-      const d = lasso[(j + 1) % lasso.length];
-      if (segmentsIntersect(a, b, c, d)) return true;
-    }
-  }
-  return false;
-}
-
-function pointInPolygon(
-  point: { x: number; y: number },
-  polygon: Array<{ x: number; y: number }>
-): boolean {
-  let inside = false;
-  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-    const a = polygon[i];
-    const b = polygon[j];
-    const intersects =
-      a.y > point.y !== b.y > point.y &&
-      point.x < ((b.x - a.x) * (point.y - a.y)) / (b.y - a.y) + a.x;
-    if (intersects) inside = !inside;
-  }
-  return inside;
-}
-
-function segmentsIntersect(
-  a: { x: number; y: number },
-  b: { x: number; y: number },
-  c: { x: number; y: number },
-  d: { x: number; y: number }
-): boolean {
-  const abC = orientation(a, b, c);
-  const abD = orientation(a, b, d);
-  const cdA = orientation(c, d, a);
-  const cdB = orientation(c, d, b);
-
-  if (abC === 0 && pointOnSegment(c, a, b)) return true;
-  if (abD === 0 && pointOnSegment(d, a, b)) return true;
-  if (cdA === 0 && pointOnSegment(a, c, d)) return true;
-  if (cdB === 0 && pointOnSegment(b, c, d)) return true;
-
-  return abC !== abD && cdA !== cdB;
-}
-
-function orientation(
-  a: { x: number; y: number },
-  b: { x: number; y: number },
-  c: { x: number; y: number }
-): -1 | 0 | 1 {
-  const value = (b.y - a.y) * (c.x - b.x) - (b.x - a.x) * (c.y - b.y);
-  if (Math.abs(value) < 1e-6) return 0;
-  return value > 0 ? 1 : -1;
-}
-
-function pointOnSegment(
-  point: { x: number; y: number },
-  a: { x: number; y: number },
-  b: { x: number; y: number }
-): boolean {
-  return (
-    point.x >= Math.min(a.x, b.x) - 1e-6 &&
-    point.x <= Math.max(a.x, b.x) + 1e-6 &&
-    point.y >= Math.min(a.y, b.y) - 1e-6 &&
-    point.y <= Math.max(a.y, b.y) + 1e-6
-  );
-}
-
-function strokeFromMeta(meta: StrokeMeta): InkStroke {
-  return {
-    id: meta.id,
-    color: meta.color,
-    width: meta.width,
-    points: meta.points,
-    bounds: meta.bounds
-  };
-}
-
-function boundsOfPoints(points: InkPoint[]): StrokeBounds {
-  let minX = Number.POSITIVE_INFINITY;
-  let minY = Number.POSITIVE_INFINITY;
-  let maxX = Number.NEGATIVE_INFINITY;
-  let maxY = Number.NEGATIVE_INFINITY;
-  for (const point of points) {
-    minX = Math.min(minX, point.x);
-    minY = Math.min(minY, point.y);
-    maxX = Math.max(maxX, point.x);
-    maxY = Math.max(maxY, point.y);
-  }
-  if (minX === Number.POSITIVE_INFINITY) {
-    return { minX: 0, minY: 0, maxX: 0, maxY: 0 };
-  }
-  return { minX, minY, maxX, maxY };
-}
-
-function boundsContainPoint(
-  bounds: StrokeBounds,
-  point: { x: number; y: number },
-  padding: number
-): boolean {
-  return (
-    point.x >= bounds.minX - padding &&
-    point.x <= bounds.maxX + padding &&
-    point.y >= bounds.minY - padding &&
-    point.y <= bounds.maxY + padding
-  );
-}
-
-function boundsIntersect(
-  a: StrokeBounds,
-  b: StrokeBounds,
-  padding: number
-): boolean {
-  return (
-    a.maxX + padding >= b.minX &&
-    a.minX - padding <= b.maxX &&
-    a.maxY + padding >= b.minY &&
-    a.minY - padding <= b.maxY
-  );
-}
-
-function tileCoord(value: number, tileSize: number): number {
-  return Math.floor(value / tileSize);
-}
-
-function tileKey(x: number, y: number): string {
-  return `${x}:${y}`;
-}
-
-function applyUndoOp(doc: InkDocument, op: UndoOp): void {
-  switch (op.kind) {
-    case 'strokeAdded':
-      doc.setStrokeTombstoned(op.id, true);
-      break;
-    case 'strokesAdded':
-      doc.setStrokesTombstoned(op.ids, true);
-      break;
-    case 'eraserDrag':
-    case 'clearAll':
-    case 'selectionDelete':
-      doc.setStrokesTombstoned(op.ids, false);
-      break;
-    case 'strokeSlice':
-      // Restore the originals and drop every fragment the drag produced.
-      doc.setStrokesTombstoned(op.removedOriginals, false);
-      doc.setStrokesTombstoned(op.addedFragments, true);
-      break;
-    case 'selectionMove':
-      doc.translateStrokeSet(new Set(op.ids), -op.dx, -op.dy);
-      break;
-    case 'selectionTransform':
-      doc.transformStrokeSet(new Set(op.ids), op.inverse);
-      break;
-    case 'selectionStyle':
-      doc.applyStrokeStyleSnapshot(op.before);
-      break;
-  }
-}
-
-function applyRedoOp(doc: InkDocument, op: UndoOp): void {
-  switch (op.kind) {
-    case 'strokeAdded':
-      doc.setStrokeTombstoned(op.id, false);
-      break;
-    case 'strokesAdded':
-      doc.setStrokesTombstoned(op.ids, false);
-      break;
-    case 'eraserDrag':
-    case 'clearAll':
-    case 'selectionDelete':
-      doc.setStrokesTombstoned(op.ids, true);
-      break;
-    case 'strokeSlice':
-      // Re-erase the originals and bring back only the surviving fragments.
-      doc.setStrokesTombstoned(op.removedOriginals, true);
-      doc.setStrokesTombstoned(op.finalFragments, false);
-      break;
-    case 'selectionMove':
-      doc.translateStrokeSet(new Set(op.ids), op.dx, op.dy);
-      break;
-    case 'selectionTransform':
-      doc.transformStrokeSet(new Set(op.ids), op.transform);
-      break;
-    case 'selectionStyle':
-      doc.applyStrokeStyleSnapshot(op.after);
-      break;
-  }
-}
-
-function validTransform(transform: StrokeTransform): boolean {
-  return (
-    Number.isFinite(transform.a) &&
-    Number.isFinite(transform.b) &&
-    Number.isFinite(transform.c) &&
-    Number.isFinite(transform.d) &&
-    Number.isFinite(transform.e) &&
-    Number.isFinite(transform.f) &&
-    Number.isFinite(transform.widthScale) &&
-    transform.widthScale > 0
-  );
-}
-
-function transformIsIdentity(transform: StrokeTransform): boolean {
-  return (
-    Math.abs(transform.a - 1) < 0.0001 &&
-    Math.abs(transform.b) < 0.0001 &&
-    Math.abs(transform.c) < 0.0001 &&
-    Math.abs(transform.d - 1) < 0.0001 &&
-    Math.abs(transform.e) < 0.001 &&
-    Math.abs(transform.f) < 0.001 &&
-    Math.abs(transform.widthScale - 1) < 0.0001
-  );
-}
-
-function invertTransform(transform: StrokeTransform): StrokeTransform | null {
-  const det = transform.a * transform.d - transform.b * transform.c;
-  if (Math.abs(det) < 1e-8) return null;
-  return {
-    a: transform.d / det,
-    b: -transform.b / det,
-    c: -transform.c / det,
-    d: transform.a / det,
-    e: (transform.c * transform.f - transform.d * transform.e) / det,
-    f: (transform.b * transform.e - transform.a * transform.f) / det,
-    widthScale: 1 / transform.widthScale
-  };
-}
-
-function transformPoint(point: InkPoint, transform: StrokeTransform): InkPoint {
-  return {
-    x: point.x * transform.a + point.y * transform.c + transform.e,
-    y: point.x * transform.b + point.y * transform.d + transform.f,
-    pressure: point.pressure
-  };
-}
-
-function sanitizedPoints(points: InkPoint[]): InkPoint[] {
-  return points
-    .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
-    .map((point) => ({
-      x: point.x,
-      y: point.y,
-      pressure: sanitizePressure(point.pressure)
-    }));
-}
-
-function encodePayloadV2(stroke: InProgressStroke): Uint8Array {
-  const out = new ArrayBuffer(13 + stroke.points.length * 12);
-  const view = new DataView(out);
-  let offset = 0;
-  view.setUint8(offset, PAYLOAD_VERSION_V2);
-  offset += 1;
-  view.setUint32(offset, stroke.color >>> 0, true);
-  offset += 4;
-  view.setFloat32(offset, stroke.width, true);
-  offset += 4;
-  view.setUint32(offset, stroke.points.length, true);
-  offset += 4;
-  for (const point of stroke.points) {
-    view.setFloat32(offset, point.x, true);
-    offset += 4;
-    view.setFloat32(offset, point.y, true);
-    offset += 4;
-  }
-  for (const point of stroke.points) {
-    view.setFloat32(offset, point.pressure, true);
-    offset += 4;
-  }
-  return new Uint8Array(out);
-}
-
-function decodePayload(bytes: Uint8Array): DecodedPayload | null {
-  if (bytes.byteLength === 0) return null;
-  switch (bytes[0]) {
-    case PAYLOAD_VERSION_V1:
-      return decodePayloadV1(bytes);
-    case PAYLOAD_VERSION_V2:
-      return decodePayloadV2(bytes);
-    default:
-      return null;
-  }
-}
-
-function decodePayloadV1(bytes: Uint8Array): DecodedPayload | null {
-  if (bytes.byteLength < 9) return null;
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const color = view.getUint32(1, true);
-  const count = view.getUint32(5, true);
-  const expected = 9 + count * 12;
-  if (bytes.byteLength !== expected) return null;
-  return decodeGeometry(view, 9, count, color, DEFAULT_WIDTH);
-}
-
-function decodePayloadV2(bytes: Uint8Array): DecodedPayload | null {
-  if (bytes.byteLength < 13) return null;
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const color = view.getUint32(1, true);
-  const width = sanitizeWidth(view.getFloat32(5, true));
-  const count = view.getUint32(9, true);
-  const expected = 13 + count * 12;
-  if (bytes.byteLength !== expected) return null;
-  return decodeGeometry(view, 13, count, color, width);
-}
-
-function decodeGeometry(
-  view: DataView,
-  offset: number,
-  count: number,
-  color: number,
-  width: number
-): DecodedPayload | null {
-  const points: InkPoint[] = [];
-  for (let i = 0; i < count; i += 1) {
-    points.push({
-      x: view.getFloat32(offset, true),
-      y: view.getFloat32(offset + 4, true),
-      pressure: 1
-    });
-    offset += 8;
-  }
-  for (let i = 0; i < count; i += 1) {
-    points[i].pressure = sanitizePressure(view.getFloat32(offset, true));
-    offset += 4;
-  }
-  return {
-    color: color >>> 0,
-    width,
-    points
-  };
-}
-
-function sanitizePressure(value: number): number {
-  return Number.isFinite(value) && value > 0 ? Math.min(1, value) : 1;
-}
-
-function sanitizeWidth(value: number): number {
-  return Number.isFinite(value) && value > 0 ? value : DEFAULT_WIDTH;
-}
-
-function randomId(): string {
-  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
-    return crypto.randomUUID();
-  }
-  return `${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
 }
