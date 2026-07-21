@@ -314,6 +314,56 @@ export async function describeClientState(
   }
 }
 
+/**
+ * `waitForDisplayed` with a diagnosis attached to the timeout.
+ *
+ * The intermittent T4 failures are all "<element> still not displayed after
+ * 30000ms" on different elements, which tells us nothing about the mechanism.
+ * On timeout this keeps polling for up to `probeMs` more and records whether
+ * the element EVER appears — the single fact that splits the theories:
+ *
+ *   - appears late  → the app is just slow (contention / render stall); the fix
+ *     is the wait strategy.
+ *   - never appears → the synthesized event was lost or the element genuinely
+ *     isn't coming; raising the timeout would not have helped.
+ *
+ * Plus an app-state + host-memory snapshot, so a "never appears" case shows
+ * whether the shell was even mounted.
+ */
+async function waitDisplayedDiagnosed(
+  client: WebdriverIO.Browser,
+  element: Awaited<ChainablePromiseElement>,
+  probeMs = 60_000
+): Promise<void> {
+  const selector = String(element.selector);
+  try {
+    await element.waitForDisplayed({ timeout: 30_000 });
+    return;
+  } catch (err) {
+    const t0 = Date.now();
+    let appearedAfterMs = -1;
+    while (Date.now() - t0 < probeMs) {
+      if (await element.isDisplayed().catch(() => false)) {
+        appearedAfterMs = 30_000 + (Date.now() - t0);
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    const verdict =
+      appearedAfterMs >= 0
+        ? `SLOW: appeared after ~${appearedAfterMs}ms`
+        : `DEAD: never appeared within ${30_000 + probeMs}ms`;
+    const state = await describeClientState(client);
+    const freeGb = (freemem() / 1024 ** 3).toFixed(1);
+    const totalGb = (totalmem() / 1024 ** 3).toFixed(1);
+    throw new Error(
+      `${err instanceof Error ? err.message : String(err)}\n` +
+        `[verdict] ${verdict} for ${selector}\n` +
+        `[host] freeMem=${freeGb}GB/${totalGb}GB\n[app state] ${state}`
+    );
+  }
+}
+
 async function selectSelfHosted(client: WebdriverIO.Browser): Promise<void> {
   await client.execute(() => {
     const button = Array.from(document.querySelectorAll('button')).find(
@@ -350,21 +400,10 @@ export async function loginClient(
   // "unsupported operation", so clicks/fills must be synthesized as DOM events.
   const h = clientHelpers(client);
 
-  // The first interaction of every T4 spec, and the one that intermittently
-  // fails with "Open settings still not displayed after 30000ms". Attach what
-  // the WebView actually contained so the failure is diagnosable instead of
-  // just a timeout.
-  try {
-    await h.click('Open settings');
-  } catch (err) {
-    const state = await describeClientState(client);
-    const freeGb = (freemem() / 1024 ** 3).toFixed(1);
-    const totalGb = (totalmem() / 1024 ** 3).toFixed(1);
-    throw new Error(
-      `${err instanceof Error ? err.message : String(err)}\n` +
-        `[host] freeMem=${freeGb}GB/${totalGb}GB\n[app state] ${state}`
-    );
-  }
+  // The first interaction of every T4 spec. Its "Open settings still not
+  // displayed" timeout — like every clickElement wait — is diagnosed centrally
+  // by waitDisplayedDiagnosed (app state + slow-vs-dead verdict).
+  await h.click('Open settings');
   await h.click('Account & Sync');
   await selectSelfHosted(client);
 
@@ -571,7 +610,7 @@ export function clientHelpers(client: WebdriverIO.Browser): ClientHelpers {
     opts: { button?: 'left' | 'right' } = {}
   ): Promise<void> => {
     const resolved = await element;
-    await resolved.waitForDisplayed({ timeout: 30_000 });
+    await waitDisplayedDiagnosed(client, resolved);
     await client.execute(
       (el: HTMLElement, button: 'left' | 'right') => {
         el.scrollIntoView({ block: 'center', inline: 'center' });
