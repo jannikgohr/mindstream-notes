@@ -22,6 +22,7 @@
    */
 
   import { onDestroy, onMount } from 'svelte';
+  import { createHistoryCapture } from '$lib/history/capture-scheduler';
   import * as Y from 'yjs';
   import { Awareness } from 'y-protocols/awareness';
   import { mode } from 'mode-watcher';
@@ -144,8 +145,20 @@
   }
   let { noteId }: Props = $props();
 
+  // A deadline, not a debounce: an armed timer is left running rather than
+  // restarted on every update. A doc keeps receiving updates it doesn't
+  // control (collab peers, a reconnecting provider), and restarting on those
+  // pushed the capture past the idle delay indefinitely.
+  const historyCapture = createHistoryCapture({
+    noteId: () => noteId,
+    label: 'KanbanNoteEditor',
+    isTrashed: () => isTrashed,
+    isReady: () => yDoc !== null,
+    mode: 'deadline',
+    snapshotNowRequiresDirty: false
+  });
+
   const SAVE_DEBOUNCE_MS = 800;
-  const HISTORY_IDLE_DEFAULT_S = 180;
   const LABEL_COLORS = [
     '#3b82f6',
     '#22c55e',
@@ -188,8 +201,6 @@
   let collabReady = false;
   let lastSeenPushed = false;
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
-  let historyTimer: ReturnType<typeof setTimeout> | null = null;
-  let historyDirty = false;
   let capturingHistory = false;
   let undoDepth = $state(0);
   let redoDepth = $state(0);
@@ -873,49 +884,6 @@
     return origin === KANBAN_LOCAL_ORIGIN || origin === undoManager;
   }
 
-  function historyIdleMs(): number {
-    const v = Number(getSettingValue('data.historyIdleSeconds'));
-    return (Number.isFinite(v) && v > 0 ? v : HISTORY_IDLE_DEFAULT_S) * 1000;
-  }
-
-  /**
-   * Arm the idle snapshot. Deliberately a *deadline*, not a debounce: an armed
-   * timer is left running rather than restarted on every subsequent update.
-   * A board's doc keeps getting updates it doesn't control (collab peers, a
-   * reconnecting provider), and restarting on those pushed the capture past
-   * the idle delay indefinitely, so the automatic snapshot never happened.
-   */
-  function scheduleHistoryCapture(): void {
-    if (isTrashed) return;
-    historyDirty = true;
-    if (historyTimer) return;
-    historyTimer = setTimeout(() => {
-      historyTimer = null;
-      void captureHistoryVersion('edited');
-    }, historyIdleMs());
-  }
-
-  /** Manual "refresh history": capture now and restart the idle deadline. */
-  async function snapshotHistoryNow(): Promise<void> {
-    if (historyTimer) {
-      clearTimeout(historyTimer);
-      historyTimer = null;
-    }
-    await captureHistoryVersion('edited');
-  }
-
-  async function captureHistoryVersion(action: VersionAction): Promise<void> {
-    if (!yDoc) return;
-    if (action === 'edited' && !historyDirty) return;
-    historyDirty = false;
-    try {
-      const created = await captureCurrentNoteVersion(noteId, action);
-      if (created) bumpNoteHistory(noteId);
-    } catch (err) {
-      console.debug('[KanbanNoteEditor] history capture failed', err);
-    }
-  }
-
   // ---- Collab provider (yjs-relay, same as markdown notes) ----
   async function setupCollabProvider(): Promise<void> {
     if (provider) {
@@ -990,7 +958,7 @@
         if (origin === REMOTE_SYNC_ORIGIN) return;
         scheduleSave();
         if (!capturingHistory && isLocalEditOrigin(origin))
-          scheduleHistoryCapture();
+          historyCapture.schedule();
       });
       saveReady = true;
 
@@ -1056,7 +1024,7 @@
       unregisterHistory = registerNoteHistory(noteId, {
         currentSnapshot: () => currentSnapshot(),
         restoreSnapshot: (snapshot) => restoreSnapshot(snapshot),
-        snapshotNow: () => snapshotHistoryNow()
+        snapshotNow: () => historyCapture.snapshotNow()
       });
 
       loading = false;
@@ -1114,10 +1082,7 @@
       clearTimeout(saveTimer);
       saveTimer = null;
     }
-    if (historyTimer) {
-      clearTimeout(historyTimer);
-      historyTimer = null;
-    }
+    historyCapture.cancel();
     // Flush a pending save synchronously-ish before teardown.
     if (saveReady && !isTrashed) void persist();
     stopObserve?.();

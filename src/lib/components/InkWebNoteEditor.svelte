@@ -1,5 +1,25 @@
 <script lang="ts">
   import * as Y from 'yjs';
+  import {
+    drawPages as paintPages,
+    drawStroke as paintStroke,
+    visiblePageBounds as paintVisiblePageBounds,
+    type InkScene
+  } from '$lib/ink/canvas-painter';
+  import {
+    clampView as viewClamp,
+    defaultView,
+    displayInkZoom,
+    fitWidthScale,
+    fitWidthView,
+    minScale as viewMinScale,
+    pageToScreen as viewPageToScreen,
+    scaleFromDisplayInkZoom,
+    screenToPage as viewScreenToPage,
+    zoomAroundPoint,
+    zoomToScale
+  } from '$lib/ink/view-transform';
+  import { createHistoryCapture } from '$lib/history/capture-scheduler';
   import { onDestroy, onMount, tick } from 'svelte';
   import {
     AlignJustify,
@@ -198,6 +218,15 @@
 
   let { noteId, ariaLabel }: Props = $props();
 
+  const historyCapture = createHistoryCapture({
+    noteId: () => noteId,
+    label: 'InkWebNoteEditor',
+    isTrashed: () => isTrashed,
+    isReady: () => doc !== null,
+    mode: 'debounce',
+    snapshotNowRequiresDirty: true
+  });
+
   let hostEl = $state<HTMLDivElement | null>(null);
   let canvasHostEl = $state<HTMLDivElement | null>(null);
   let canvasEl = $state<HTMLCanvasElement | null>(null);
@@ -212,8 +241,6 @@
   let fullscreenAcquired = false;
   let immersiveInkModeActive = false;
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
-  let historyTimer: ReturnType<typeof setTimeout> | null = null;
-  let historyDirty = false;
   let restoringHistorySnapshot = false;
   let unregisterHistory: (() => void) | null = null;
   let pendingState: number[] | null = null;
@@ -295,13 +322,10 @@
   let viewInitialized = false;
   const cssColorCache = new Map<number, string>();
   let layout = defaultLayout();
-  let view = {
-    width: 1,
-    height: 1,
-    scale: 1,
-    panX: 0,
-    panY: DEFAULT_PAGE_GAP
-  };
+  // Deliberately not $state: the canvas repaints through scheduleDraw(),
+  // and making the viewport reactive would re-run derived state on every
+  // pan frame. Mutated in place for the same reason.
+  const view = defaultView();
 
   const pageDark = $derived(
     pageThemeMode === 'dark' || (pageThemeMode === 'system' && $mode === 'dark')
@@ -318,7 +342,7 @@
   });
   const inkFitActive = $derived.by(() => {
     void zoomUiVersion;
-    return Math.abs(view.scale - fitWidthScale()) < 0.01;
+    return Math.abs(view.scale - fitWidthScale(view, layout)) < 0.01;
   });
   const brushLineHeight = $derived(Math.max(2, Math.min(12, width)));
   const brushSizeText = $derived(
@@ -667,42 +691,6 @@
     }
   }
 
-  async function snapshotHistoryNow() {
-    if (historyTimer) {
-      clearTimeout(historyTimer);
-      historyTimer = null;
-    }
-    if (!historyDirty) return;
-    await captureHistoryVersion('edited');
-  }
-
-  function historyIdleMs(): number {
-    const v = Number(getSettingValue('data.historyIdleSeconds'));
-    return (Number.isFinite(v) && v > 0 ? v : 180) * 1000;
-  }
-
-  function scheduleHistoryCapture() {
-    if (isTrashed) return;
-    historyDirty = true;
-    if (historyTimer) clearTimeout(historyTimer);
-    historyTimer = setTimeout(() => {
-      historyTimer = null;
-      void captureHistoryVersion('edited');
-    }, historyIdleMs());
-  }
-
-  async function captureHistoryVersion(action: VersionAction) {
-    if (!doc) return;
-    if (action === 'edited' && !historyDirty) return;
-    historyDirty = false;
-    try {
-      const created = await captureCurrentNoteVersion(noteId, action);
-      if (created) bumpNoteHistory(noteId);
-    } catch (err) {
-      console.debug('[InkWebNoteEditor] history capture failed', err);
-    }
-  }
-
   function applyDocumentMutation(update: Uint8Array | null) {
     applyDocumentMutations(update ? [update] : []);
   }
@@ -710,7 +698,7 @@
   function applyDocumentMutations(updates: Uint8Array[]) {
     refreshFromDoc();
     if (updates.length > 0) {
-      if (!restoringHistorySnapshot) scheduleHistoryCapture();
+      if (!restoringHistorySnapshot) historyCapture.schedule();
       queueSaveUpdates(updates);
     }
     for (const update of updates) {
@@ -807,7 +795,7 @@
 
   function resizeCanvas() {
     if (!canvasHostEl || !canvasEl) return;
-    const wasAtFitWidth = view.scale <= fitWidthScale() + 0.001;
+    const wasAtFitWidth = view.scale <= fitWidthScale(view, layout) + 0.001;
     const rect = canvasHostEl.getBoundingClientRect();
     const usableSize = rect.width > 2 && rect.height > 2;
     const dpr = window.devicePixelRatio || 1;
@@ -828,8 +816,16 @@
       fitWidth();
       viewInitialized = true;
     } else {
-      view.scale = Math.max(view.scale, nextMinScale);
-      clampView();
+      Object.assign(
+        view,
+        viewClamp(
+          { ...view, scale: Math.max(view.scale, nextMinScale) },
+          layout,
+          {
+            mobileToolbar
+          }
+        )
+      );
     }
     if (backingStoreChanged) {
       if (drawFrame !== null) {
@@ -941,64 +937,26 @@
   // scrolled/panned; zooming out below this reaches the whole-page floor
   // (minScale). Mirrors PdfNoteViewer's fit-width zoom + PAGE_FIT_MARGIN
   // gutters so both renderers frame an A4 sheet identically.
-  function fitWidthScale(): number {
-    const availableWidth = Math.max(1, view.width - PAGE_FIT_MARGIN * 2);
-    return Math.max(minScale(), availableWidth / layout.page.width);
-  }
-
-  function displayInkZoom(scale: number): number {
-    return scale * INK_ZOOM_DISPLAY_SCALE;
-  }
-
-  function scaleFromDisplayInkZoom(value: number): number {
-    return value / INK_ZOOM_DISPLAY_SCALE;
-  }
-
-  function fitWidth() {
-    view.scale = fitWidthScale();
-    view.panX = (view.width - layout.page.width * view.scale) * 0.5;
-    // Top-align the first page with the same gutter the sides get.
-    view.panY = PAGE_FIT_MARGIN;
-    clampView();
-  }
-
-  function clampView() {
-    view.scale = Math.max(view.scale, minScale());
-    const contentW = layout.page.width * view.scale;
-    const contentH =
-      (layout.page.height * layout.pageCount +
-        layout.pageGap * (layout.pageCount - 1)) *
-      view.scale;
-    if (contentW <= view.width) {
-      view.panX = (view.width - contentW) * 0.5;
-    } else {
-      view.panX = Math.min(16, Math.max(view.width - contentW - 16, view.panX));
-    }
-    const bottomMargin = Math.max(PAGE_FIT_MARGIN, layout.pageGap * view.scale);
-    const topMargin = mobileToolbar
-      ? Math.max(PAGE_FIT_TOP_MARGIN, bottomMargin)
-      : PAGE_FIT_MARGIN;
-    const minY = view.height - contentH - bottomMargin;
-    const maxY = topMargin;
-    view.panY =
-      minY <= maxY
-        ? Math.min(maxY, Math.max(minY, view.panY))
-        : (view.height - contentH) * 0.5;
+  // Viewport maths lives in ink/view-transform.ts; these bind the pure
+  // helpers to this editor's live view + layout.
+  function minScale(): number {
+    return viewMinScale(view, layout);
   }
 
   function screenToPage(x: number, y: number): InkPoint {
-    return {
-      x: (x - view.panX) / view.scale,
-      y: (y - view.panY) / view.scale,
-      pressure: 1
-    };
+    return viewScreenToPage(view, x, y);
   }
 
   function pageToScreen(p: { x: number; y: number }): { x: number; y: number } {
-    return {
-      x: p.x * view.scale + view.panX,
-      y: p.y * view.scale + view.panY
-    };
+    return viewPageToScreen(view, p);
+  }
+
+  function clampView() {
+    Object.assign(view, viewClamp(view, layout, { mobileToolbar }));
+  }
+
+  function fitWidth() {
+    Object.assign(view, fitWidthView(view, layout, { mobileToolbar }));
   }
 
   function canvasBackdropColor(): string {
@@ -1064,122 +1022,34 @@
     scheduleResizeSnapshotHide();
   }
 
-  function visiblePageBounds(): StrokeBounds {
+  /** The scene the canvas painters (ink/canvas-painter.ts) draw into. */
+  function inkScene(): InkScene {
     return {
-      minX: -view.panX / view.scale,
-      minY: -view.panY / view.scale,
-      maxX: (view.width - view.panX) / view.scale,
-      maxY: (view.height - view.panY) / view.scale
+      view,
+      layout,
+      pageDark,
+      pageBackground,
+      pageBackgroundColorRgb,
+      pageBackgroundOpacity,
+      displayCssColor
     };
   }
 
-  function drawPages(ctx: CanvasRenderingContext2D, visible: StrokeBounds) {
-    const stride = strideY(layout);
-    const firstPage = Math.max(0, Math.floor(visible.minY / stride) - 1);
-    const lastPage = Math.min(
-      layout.pageCount - 1,
-      Math.floor(visible.maxY / stride) + 1
-    );
-    for (let i = firstPage; i <= lastPage; i += 1) {
-      const rect = pageRect(layout, i);
-      if (!rect) continue;
-      const [x0, y0, x1, y1] = rect;
-      const a = pageToScreen({ x: x0, y: y0 });
-      const b = pageToScreen({ x: x1, y: y1 });
-      if (b.y < -32 || a.y > view.height + 32) continue;
-      const width = b.x - a.x;
-      const height = b.y - a.y;
-      const surface = canvasPageSurface(pageDark);
-      ctx.save();
-      ctx.shadowColor = surface.shadowColor;
-      ctx.shadowBlur = surface.shadowBlur;
-      ctx.shadowOffsetX = 0;
-      ctx.shadowOffsetY = surface.shadowOffsetY;
-      ctx.fillStyle = displayCssColor(PAGE_FILL_LIGHT);
-      ctx.fillRect(a.x, a.y, width, height);
-      ctx.restore();
-      drawPageBackground(ctx, a, b);
-      ctx.strokeStyle = surface.edgeColor;
-      ctx.lineWidth = 1;
-      ctx.strokeRect(a.x + 0.5, a.y + 0.5, width - 1, height - 1);
-    }
+  function visiblePageBounds(): StrokeBounds {
+    return paintVisiblePageBounds(view);
   }
 
-  /**
-   * Paint the selected page-background pattern (dots / ruled lines /
-   * grid) inside one page, clipped to its rect. Steps are page-unit
-   * spacings scaled to screen px and anchored to the page's top-left so
-   * the pattern is stable under pan/zoom. The pattern colour runs
-   * through `displayCssColor` so dark mode inverts it to faint light
-   * marks. Bails when zoomed out far enough that the pattern would turn
-   * into a solid wash.
-   */
-  function drawPageBackground(
+  function drawPages(ctx: CanvasRenderingContext2D, visible: StrokeBounds) {
+    paintPages(ctx, visible, inkScene());
+  }
+
+  function drawStroke(
     ctx: CanvasRenderingContext2D,
-    a: { x: number; y: number },
-    b: { x: number; y: number }
+    points: InkPoint[],
+    color: string,
+    baseWidth: number
   ) {
-    if (pageBackground === 'clear') return;
-    const scale = view.scale;
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(a.x, a.y, b.x - a.x, b.y - a.y);
-    ctx.clip();
-    if (pageBackground === 'points') {
-      const step = PAGE_GRID_STEP * scale;
-      if (step >= 3) {
-        const alpha = Math.round(
-          PAGE_PATTERN_DOT_ALPHA * pageBackgroundOpacity
-        );
-        if (alpha <= 0) {
-          ctx.restore();
-          return;
-        }
-        const radius = Math.max(0.8, Math.min(1.6, 1.1 * scale * 2));
-        ctx.fillStyle = displayCssColor(
-          ((alpha << 24) | pageBackgroundColorRgb) >>> 0
-        );
-        for (const y of centeredPatternPositions(a.y, b.y, step)) {
-          for (const x of centeredPatternPositions(a.x, b.x, step)) {
-            ctx.beginPath();
-            ctx.arc(x, y, radius, 0, Math.PI * 2);
-            ctx.fill();
-          }
-        }
-      }
-    } else {
-      const stepY =
-        (pageBackground === 'lines' ? PAGE_RULE_STEP : PAGE_GRID_STEP) * scale;
-      if (stepY >= 3) {
-        const alpha = Math.round(
-          PAGE_PATTERN_LINE_ALPHA * pageBackgroundOpacity
-        );
-        if (alpha <= 0) {
-          ctx.restore();
-          return;
-        }
-        ctx.strokeStyle = displayCssColor(
-          ((alpha << 24) | pageBackgroundColorRgb) >>> 0
-        );
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        for (const y of centeredPatternPositions(a.y, b.y, stepY)) {
-          const py = Math.round(y) + 0.5;
-          ctx.moveTo(a.x, py);
-          ctx.lineTo(b.x, py);
-        }
-        if (pageBackground === 'grid') {
-          const stepX = PAGE_GRID_STEP * scale;
-          for (const x of centeredPatternPositions(a.x, b.x, stepX)) {
-            const px = Math.round(x) + 0.5;
-            ctx.moveTo(px, a.y);
-            ctx.lineTo(px, b.y);
-          }
-        }
-        ctx.stroke();
-      }
-    }
-    ctx.restore();
+    paintStroke(ctx, points, color, baseWidth, view);
   }
 
   function drawToolPreview(ctx: CanvasRenderingContext2D) {
@@ -1252,55 +1122,6 @@
   function shouldDrawPenToolPreview(): boolean {
     if (toolPreview?.pointerType !== 'pen') return false;
     return !(isAndroid() && pointerMode === 'draw');
-  }
-
-  function drawStroke(
-    ctx: CanvasRenderingContext2D,
-    points: InkPoint[],
-    color: string,
-    baseWidth: number
-  ) {
-    if (points.length < 2) return;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.strokeStyle = color;
-    const scale = view.scale;
-    const panX = view.panX;
-    const panY = view.panY;
-    let previous = points[0];
-    let previousX = previous.x * scale + panX;
-    let previousY = previous.y * scale + panY;
-    let currentWidth = 0;
-    let pathOpen = false;
-
-    for (let i = 1; i < points.length; i += 1) {
-      const point = points[i];
-      const x = point.x * scale + panX;
-      const y = point.y * scale + panY;
-      const pressure = (previous.pressure + point.pressure) * 0.5;
-      const lineWidth = Math.max(
-        1,
-        baseWidth * scale * pressureWidth(pressure)
-      );
-      const quantizedWidth = Math.round(lineWidth * 4) / 4;
-      if (!pathOpen || quantizedWidth !== currentWidth) {
-        if (pathOpen) {
-          ctx.stroke();
-        }
-        ctx.lineWidth = quantizedWidth;
-        ctx.beginPath();
-        ctx.moveTo(previousX, previousY);
-        currentWidth = quantizedWidth;
-        pathOpen = true;
-      }
-      ctx.lineTo(x, y);
-      previous = point;
-      previousX = x;
-      previousY = y;
-    }
-    if (pathOpen) {
-      ctx.stroke();
-    }
   }
 
   function currentSelectionTransform(): StrokeTransform {
@@ -1595,15 +1416,17 @@
       touchGesture = next;
       return;
     }
-    const before = screenToPage(touchGesture.centerX, touchGesture.centerY);
     const factor = next.distance / touchGesture.distance;
-    const min = minScale();
-    view.scale = Math.min(
-      Math.max(view.scale * factor, min),
-      min * MAX_ZOOM_FACTOR
+    Object.assign(
+      view,
+      zoomAroundPoint(
+        view,
+        layout,
+        next.centerX,
+        next.centerY,
+        view.scale * factor
+      )
     );
-    view.panX = next.centerX - before.x * view.scale;
-    view.panY = next.centerY - before.y * view.scale;
     touchGesture = next;
     clampView();
     scheduleDraw();
@@ -2291,25 +2114,14 @@
   }
 
   function zoomAround(screenX: number, screenY: number, factor: number) {
-    const before = screenToPage(screenX, screenY);
-    const min = minScale();
-    view.scale = Math.min(
-      Math.max(view.scale * factor, min),
-      min * MAX_ZOOM_FACTOR
+    Object.assign(
+      view,
+      zoomAroundPoint(view, layout, screenX, screenY, view.scale * factor)
     );
-    view.panX = screenX - before.x * view.scale;
-    view.panY = screenY - before.y * view.scale;
   }
 
   function setInkZoom(value: number) {
-    const centerX = view.width * 0.5;
-    const centerY = view.height * 0.5;
-    const before = screenToPage(centerX, centerY);
-    const min = minScale();
-    view.scale = Math.min(Math.max(value, min), min * MAX_ZOOM_FACTOR);
-    view.panX = centerX - before.x * view.scale;
-    view.panY = centerY - before.y * view.scale;
-    clampView();
+    Object.assign(view, zoomToScale(view, layout, value, { mobileToolbar }));
     scheduleDraw();
     updateLiveInkOverlayStyle();
     zoomMenuOpen = false;
@@ -2404,21 +2216,6 @@
     selectedStrokeIds = value;
     applyDocumentMutation(update);
     return true;
-  }
-
-  function minScale(): number {
-    const availableWidth = Math.max(1, view.width - PAGE_FIT_MARGIN * 2);
-    const availableHeight = Math.max(
-      1,
-      view.height - PAGE_FIT_TOP_MARGIN - PAGE_FIT_MARGIN
-    );
-    return Math.max(
-      0.05,
-      Math.min(
-        availableWidth / layout.page.width,
-        availableHeight / layout.page.height
-      )
-    );
   }
 
   function setTool(next: ToolMode) {
@@ -2741,7 +2538,7 @@
     unregisterHistory = registerNoteHistory(noteId, {
       currentSnapshot: () => currentInkSnapshot(),
       restoreSnapshot: (snapshot) => restoreInkSnapshot(snapshot),
-      snapshotNow: () => snapshotHistoryNow()
+      snapshotNow: () => historyCapture.snapshotNow()
     });
     const afterTickAt = performance.now();
     if (isAndroid()) {
@@ -2877,11 +2674,8 @@
     }
     flushQueuedEraserSamples();
     clearSaveTimer();
-    if (historyTimer) {
-      clearTimeout(historyTimer);
-      historyTimer = null;
-    }
-    if (historyDirty) void captureHistoryVersion('edited');
+    historyCapture.cancel();
+    void historyCapture.capture('edited');
     unregisterHistory?.();
     unregisterHistory = null;
     void flushPendingState();

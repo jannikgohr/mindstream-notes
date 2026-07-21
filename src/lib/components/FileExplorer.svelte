@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
+  import { createMenuBuilder } from './file-explorer-menu';
   import {
     ChevronRight,
     Feather,
@@ -454,37 +455,72 @@
     }
   }
 
-  /**
-   * Owner-side sharing actions, grouped into their own submenu and shown only
-   * when signed in (sharing is Tauri + Etebase only). Returns `[]` when signed
-   * out so the whole group disappears.
-   */
-  function sharingMenuGroup(
-    id: string,
-    folder: (typeof tree.collectionsById)[string] | undefined
-  ): (MenuItem | 'separator')[] {
-    if (!authSession.current) return [];
-    const children: MenuItem[] = [
-      {
-        label: tUi('sharing.menu.shareFolder'),
-        onSelect: () => openCollectionShareDialog(id, 'invite')
-      }
-    ];
-    if (folder && collectionIsSharedByMe(folder)) {
-      children.push(
-        {
-          label: tUi('sharing.menu.manageAccess'),
-          onSelect: () => openCollectionShareDialog(id, 'access')
-        },
-        {
-          label: tUi('sharing.menu.stopSharing'),
-          destructive: true,
-          onSelect: () => void stopSharing(id)
-        }
-      );
+  const menuBuilder = createMenuBuilder({
+    get source() {
+      return source;
+    },
+    get sourceNodes() {
+      return sourceNodes;
+    },
+    get expanded() {
+      return expanded;
+    },
+    get selectedKeys() {
+      return selectedKeys;
+    },
+    get selectedKeySet() {
+      return selectedKeySet;
+    },
+    get selectedCount() {
+      return selectedCount;
+    },
+    get selectionAnchor() {
+      return selectionAnchor;
+    },
+    get activeKey() {
+      return activeKey;
+    },
+    get canCreate() {
+      return canCreate;
+    },
+    get canReorganize() {
+      return canReorganize;
+    },
+    get emptyTrashPending() {
+      return emptyTrashPending;
+    },
+    get trashItemCount() {
+      return trashItemCount;
+    },
+    get rename() {
+      return rename;
+    },
+    isSharedAnchor,
+    sharedItemEditable,
+    startDraft,
+    startPdfImport,
+    startRename,
+    startEmptyTrash,
+    leaveShared,
+    stopSharing,
+    runNoteExporter,
+    // Getters: these are props, so the menu must read whatever the
+    // explorer was handed most recently, not what it had at mount.
+    get onOpenNote() {
+      return onOpenNote;
+    },
+    get onOpenNoteRight() {
+      return onOpenNoteRight;
+    },
+    get onOpenNoteBelow() {
+      return onOpenNoteBelow;
+    },
+    get onOpenInNewWindow() {
+      return onOpenInNewWindow;
     }
-    return [{ label: tUi('sharing.menu.group'), children }];
-  }
+  });
+  const { menuItemsForTarget, menuItemsForBatch, folderCreateMenuItems } =
+    menuBuilder;
 
   function selectNodeFromClick(e: MouseEvent, node: TreeNode): boolean {
     const key = nodeKey(node) as SelectionKey;
@@ -521,405 +557,6 @@
       return selectedItemsFromKeys(selectedKeys);
     }
     return [target];
-  }
-
-  function batchLabel(items: TreeItemRef[]): string {
-    return `${items.length} item${items.length === 1 ? '' : 's'}`;
-  }
-
-  async function menuItemsForBatch(
-    items: TreeItemRef[]
-  ): Promise<(MenuItem | 'separator')[]> {
-    if (items.length <= 1) return [];
-    const label = batchLabel(items);
-
-    if (source === 'trash') {
-      return [
-        {
-          label: `Restore ${label}`,
-          onSelect: () => void restoreManyItems(items)
-        },
-        {
-          label: `Delete ${label} permanently`,
-          destructive: true,
-          onSelect: async () => {
-            if (
-              await confirm({
-                title: 'Delete permanently',
-                message: `${label} will be removed. This cannot be undone.`,
-                confirmLabel: 'Delete',
-                destructive: true
-              })
-            ) {
-              void purgeManyItems(items);
-            }
-          }
-        }
-      ];
-    }
-
-    const deleteBatchItem: MenuItem = {
-      label: `Delete ${label}`,
-      shortcut: 'Del',
-      destructive: true,
-      onSelect: async () => {
-        if (
-          await confirm({
-            title: `Delete ${label}`,
-            message: `${label} will be moved to trash.`,
-            confirmLabel: 'Delete',
-            destructive: true
-          })
-        ) {
-          void trashManyItems(items);
-        }
-      }
-    };
-
-    // Shared view: only offer a batch action when every selected item lives in
-    // one editable shared scope. Move-within-scope stays drag-only ("Move to
-    // root" would pull items out of the share), so just Delete here.
-    if (source === 'shared') {
-      const roots = items.map((item) =>
-        itemSharedRootId(item, tree.notesById, tree.collectionsById)
-      );
-      const root = roots[0];
-      const uniformEditable =
-        !!root &&
-        roots.every((r) => r === root) &&
-        !collectionScopeIsReadOnly(root, tree.collectionsById);
-      if (!uniformEditable) return [];
-      return [deleteBatchItem];
-    }
-
-    if (!canReorganize) return [];
-
-    return [
-      {
-        label: `Move ${label} to root`,
-        onSelect: () => void moveManyTo(items, null)
-      },
-      'separator',
-      deleteBatchItem
-    ];
-  }
-
-  // The "create a … inside this folder" entries, shared between the Home folder
-  // menu and the editable-shared folder menu so the two stay in lockstep.
-  function folderCreateMenuItems(id: string): MenuItem[] {
-    return [
-      { label: 'New note in folder', onSelect: () => startDraft('note', id) },
-      ...(noteTypeEnabled('freeform')
-        ? [
-            {
-              label: 'New drawing canvas in folder',
-              onSelect: () => startDraft('drawing', id)
-            }
-          ]
-        : []),
-      ...(noteTypeEnabled('ink')
-        ? [
-            {
-              label: 'New handwritten note in folder',
-              onSelect: () => startDraft('ink', id)
-            }
-          ]
-        : []),
-      ...(noteTypeEnabled('pdf')
-        ? [
-            {
-              label: 'Import PDF in folder',
-              onSelect: () => startPdfImport(id)
-            }
-          ]
-        : []),
-      ...(noteTypeEnabled('kanban')
-        ? [
-            {
-              label: tUi('nav.create.kanbanInFolder'),
-              onSelect: () => startDraft('kanban', id)
-            }
-          ]
-        : []),
-      {
-        label: 'New folder inside',
-        onSelect: () => startDraft('folder', id)
-      }
-    ];
-  }
-
-  async function menuItemsForTarget(
-    target: MenuTarget
-  ): Promise<(MenuItem | 'separator')[]> {
-    if (target.kind === 'note') {
-      const id = target.id;
-      const note = tree.notesById[id];
-
-      // Notes inside the trash get a stripped-down menu.
-      if (
-        source === 'trash' ||
-        (note && noteIsUnderTrash(note, tree.collectionsById))
-      ) {
-        return [
-          { label: 'Open', onSelect: () => onOpenNote(id) },
-          'separator',
-          { label: 'Restore', onSelect: () => void restoreNote(id) },
-          {
-            label: 'Delete permanently',
-            destructive: true,
-            onSelect: async () => {
-              if (
-                await confirm({
-                  title: 'Delete permanently',
-                  message: `"${note?.title ?? 'this note'}" will be removed. This cannot be undone.`,
-                  confirmLabel: 'Delete',
-                  destructive: true
-                })
-              ) {
-                void purgeNote(id);
-              }
-            }
-          }
-        ];
-      }
-
-      const items: (MenuItem | 'separator')[] = [
-        { label: 'Open', onSelect: () => onOpenNote(id) }
-      ];
-      if (onOpenNoteRight) {
-        items.push({
-          label: 'Open to the right',
-          onSelect: () => onOpenNoteRight(id)
-        });
-      }
-      if (onOpenNoteBelow) {
-        items.push({
-          label: 'Open below',
-          onSelect: () => onOpenNoteBelow(id)
-        });
-      }
-      if (onOpenInNewWindow) {
-        items.push({
-          label: 'Open in new window',
-          onSelect: () => onOpenInNewWindow(id)
-        });
-      }
-      const exporters =
-        note?.note_kind === 'ink' || note?.note_kind === 'pdf'
-          ? (await import('$lib/note-exporters')).exportersForNote(note)
-          : [];
-      if (exporters.length > 0) {
-        items.push('separator', {
-          label: 'Export',
-          children: exporters.map((exporter) => ({
-            id: exporter.id,
-            label: exporter.label,
-            onSelect: () =>
-              void runNoteExporter(id, exporter.label, () => exporter.run(id))
-          }))
-        });
-      }
-      if (
-        source === 'shared' ||
-        (note && noteIsUnderShared(note, tree.collectionsById))
-      ) {
-        // Inside an editable shared scope, recipients can rename + delete the
-        // note (routed into the scope on the next push). "Move to root" is
-        // omitted — it would pull the note out of the share; reorganizing
-        // stays drag-only within the scope. Read-only scopes keep the
-        // open-only menu built above.
-        if (note && sharedItemEditable({ kind: 'note', id })) {
-          items.push(
-            'separator',
-            {
-              label: 'Rename…',
-              shortcut: 'F2',
-              onSelect: () => startRename('note', id, note?.title ?? 'Untitled')
-            },
-            {
-              label: 'Delete',
-              shortcut: 'Del',
-              destructive: true,
-              onSelect: () => void trashNote(id)
-            }
-          );
-        }
-        return items;
-      }
-      items.push(
-        'separator',
-        {
-          label: 'Rename…',
-          shortcut: 'F2',
-          onSelect: () => startRename('note', id, note?.title ?? 'Untitled')
-        },
-        { label: 'Move to root', onSelect: () => void moveNoteTo(id, null) },
-        'separator',
-        {
-          label: 'Delete',
-          shortcut: 'Del',
-          destructive: true,
-          onSelect: () => void trashNote(id)
-        }
-      );
-      return items;
-    }
-
-    if (target.kind === 'folder') {
-      const id = target.id;
-      const folder = tree.collectionsById[id];
-
-      // Sub-folders inside trash — restore or purge.
-      if (
-        source === 'trash' ||
-        collectionIsUnderTrash(id, tree.collectionsById)
-      ) {
-        return [
-          { label: 'Restore', onSelect: () => void restoreCollection(id) },
-          {
-            label: 'Delete permanently',
-            destructive: true,
-            onSelect: async () => {
-              if (
-                await confirm({
-                  title: 'Delete folder permanently',
-                  message: `Folder "${folder?.name ?? 'this folder'}" and everything inside will be removed. This cannot be undone.`,
-                  confirmLabel: 'Delete',
-                  destructive: true
-                })
-              ) {
-                void purgeCollection(id);
-              }
-            }
-          }
-        ];
-      }
-
-      // Shared view: an editable scope lets recipients create inside the folder
-      // and (for non-anchor sub-folders) rename/delete it. The shared root anchor
-      // itself is structurally read-only — create-inside only, no rename/delete/
-      // move/share — but always offers "Leave shared folder" (works at any access
-      // level, so a view-only root that would otherwise have no menu still can be
-      // left). Read-only sub-folders get no menu.
-      if (source === 'shared') {
-        const editable = sharedFolderIsEditable(id, tree.collectionsById);
-        if (isSharedAnchor(id)) {
-          const canManageShare = folder
-            ? collectionUserCanManageSharing(folder)
-            : false;
-          const items: (MenuItem | 'separator')[] = editable
-            ? [...folderCreateMenuItems(id), 'separator']
-            : [];
-          if (canManageShare) {
-            items.push({
-              label: tUi('sharing.menu.group'),
-              children: [
-                {
-                  label: tUi('sharing.menu.shareFolder'),
-                  onSelect: () => openCollectionShareDialog(id, 'invite')
-                },
-                {
-                  label: tUi('sharing.menu.manageAccess'),
-                  onSelect: () => openCollectionShareDialog(id, 'access')
-                }
-              ]
-            });
-            items.push('separator');
-          }
-          items.push({
-            label: tUi('sharing.menu.leaveFolder'),
-            destructive: true,
-            onSelect: () => void leaveShared(id)
-          });
-          return items;
-        }
-        if (!editable) return [];
-        return [
-          ...folderCreateMenuItems(id),
-          'separator',
-          {
-            label: 'Rename folder…',
-            shortcut: 'F2',
-            onSelect: () => startRename('folder', id, folder?.name ?? 'Folder')
-          },
-          {
-            label: 'Delete',
-            shortcut: 'Del',
-            destructive: true,
-            onSelect: () => void trashCollection(id)
-          }
-        ];
-      }
-
-      if (!canCreate) return [];
-
-      return [
-        ...folderCreateMenuItems(id),
-        'separator',
-        {
-          label: 'Rename folder…',
-          shortcut: 'F2',
-          onSelect: () => startRename('folder', id, folder?.name ?? 'Folder')
-        },
-        {
-          label: 'Move to root',
-          onSelect: () => void moveCollectionTo(id, null)
-        },
-        ...sharingMenuGroup(id, folder),
-        'separator',
-        {
-          label: 'Delete',
-          shortcut: 'Del',
-          destructive: true,
-          onSelect: () => void trashCollection(id)
-        }
-      ];
-    }
-
-    if (source === 'trash') {
-      return [
-        {
-          label: `Empty trash (${trashItemCount})`,
-          destructive: true,
-          disabled: trashItemCount === 0 || emptyTrashPending,
-          onSelect: () => void startEmptyTrash()
-        }
-      ];
-    }
-
-    if (!canCreate) return [];
-
-    return [
-      { label: 'New note', onSelect: () => startDraft('note', null) },
-      ...(noteTypeEnabled('freeform')
-        ? [
-            {
-              label: 'New drawing canvas',
-              onSelect: () => startDraft('drawing', null)
-            }
-          ]
-        : []),
-      ...(noteTypeEnabled('ink')
-        ? [
-            {
-              label: 'New handwritten note',
-              onSelect: () => startDraft('ink', null)
-            }
-          ]
-        : []),
-      ...(noteTypeEnabled('pdf')
-        ? [{ label: 'Import PDF', onSelect: () => startPdfImport(null) }]
-        : []),
-      ...(noteTypeEnabled('kanban')
-        ? [
-            {
-              label: tUi('nav.create.kanban'),
-              onSelect: () => startDraft('kanban', null)
-            }
-          ]
-        : []),
-      { label: 'New folder', onSelect: () => startDraft('folder', null) }
-    ];
   }
 
   // ---------- Drag and drop ----------

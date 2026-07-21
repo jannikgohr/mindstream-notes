@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { PdfStrokePoint } from './types';
+import type { PdfStrokePoint } from '../types';
 import {
   attachMeasuredWidths,
   binarizeAdaptive,
@@ -22,7 +22,7 @@ import {
   SIGNATURE_STROKE_WIDTH,
   type BinaryMask,
   type RasterImage
-} from './signature-trace';
+} from './index';
 
 /** Build an RGBA raster from ASCII art: `#` = black ink, `.` = white. */
 function rasterFromAscii(rows: string[]): RasterImage {

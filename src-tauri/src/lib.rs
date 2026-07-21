@@ -388,7 +388,7 @@ pub fn run() {
             auth::check_etebase_server_url,
             // Sync
             sync::sync_now,
-            sync::note_room_info,
+            sync::collab_room::note_room_info,
             sync::scheduler::set_sync_schedule,
             // Sharing
             sharing::list_collection_invitations,
