@@ -18,8 +18,7 @@ function stroke(points: Array<[number, number]>): StrokeMeta {
     color: 0,
     width: 1,
     points: pts,
-    bounds: boundsOfPoints(pts),
-    tombstoned: false
+    bounds: boundsOfPoints(pts)
   };
 }
 
