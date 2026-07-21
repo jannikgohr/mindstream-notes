@@ -28,11 +28,9 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   appBinary as application,
-  killDriverTree,
   preflight,
   repoRoot,
-  tauriDriverPath,
-  webview2Env
+  tauriDriverPath
 } from './helpers/preflight.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -83,8 +81,7 @@ function spawnDriver(client: ClientProc): ChildProcess {
       env: {
         ...process.env,
         MINDSTREAM_PROFILE_DIR: client.profileDir,
-        MINDSTREAM_PROFILE_ID: client.profileId,
-        ...webview2Env(client.profileDir)
+        MINDSTREAM_PROFILE_ID: client.profileId
       }
     }
   );
@@ -138,7 +135,7 @@ export const config: WebdriverIO.Config = {
 
   afterSession: () => {
     for (const client of Object.values(clients)) {
-      killDriverTree(client.driver);
+      client.driver?.kill();
       client.driver = undefined;
     }
   }
