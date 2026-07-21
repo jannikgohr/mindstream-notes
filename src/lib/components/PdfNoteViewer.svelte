@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount, tick, untrack } from 'svelte';
+  import { createHistoryCapture } from '$lib/history/capture-scheduler';
   import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
   import {
     AlertCircle,
@@ -183,6 +184,15 @@
   }
   let { noteId }: Props = $props();
 
+  const historyCapture = createHistoryCapture({
+    noteId: () => noteId,
+    label: 'PdfNoteViewer',
+    isTrashed: () => isTrashed,
+    isReady: () => yDoc !== null,
+    mode: 'debounce',
+    snapshotNowRequiresDirty: true
+  });
+
   let hostEl = $state<HTMLDivElement | null>(null);
   let container = $state<HTMLDivElement | null>(null);
   const reduceMotion = $derived(prefersReducedMotion());
@@ -291,8 +301,6 @@
   > | null = null;
   let saveReady = false;
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
-  let historyTimer: ReturnType<typeof setTimeout> | null = null;
-  let historyDirty = false;
   let restoringHistorySnapshot = false;
   let unregisterHistory: (() => void) | null = null;
   let unsubSync: (() => void) | null = null;
@@ -1243,42 +1251,6 @@
     }
   }
 
-  async function snapshotHistoryNow() {
-    if (historyTimer) {
-      clearTimeout(historyTimer);
-      historyTimer = null;
-    }
-    if (!historyDirty) return;
-    await captureHistoryVersion('edited');
-  }
-
-  function historyIdleMs(): number {
-    const v = Number(getSettingValue('data.historyIdleSeconds'));
-    return (Number.isFinite(v) && v > 0 ? v : 180) * 1000;
-  }
-
-  function scheduleHistoryCapture() {
-    if (isTrashed) return;
-    historyDirty = true;
-    if (historyTimer) clearTimeout(historyTimer);
-    historyTimer = setTimeout(() => {
-      historyTimer = null;
-      void captureHistoryVersion('edited');
-    }, historyIdleMs());
-  }
-
-  async function captureHistoryVersion(action: VersionAction) {
-    if (!yDoc) return;
-    if (action === 'edited' && !historyDirty) return;
-    historyDirty = false;
-    try {
-      const created = await captureCurrentNoteVersion(noteId, action);
-      if (created) bumpNoteHistory(noteId);
-    } catch (err) {
-      console.debug('[PdfNoteViewer] history capture failed', err);
-    }
-  }
-
   function scheduleSave() {
     if (isTrashed || !saveReady) return;
     savingState = 'pending';
@@ -1824,7 +1796,7 @@
       syncAnnotationsFromYDoc();
       yDocUpdateHandler = () => {
         syncAnnotationsFromYDoc();
-        if (!restoringHistorySnapshot) scheduleHistoryCapture();
+        if (!restoringHistorySnapshot) historyCapture.schedule();
         scheduleSave();
       };
       localYDoc.on('update', yDocUpdateHandler);
@@ -1924,7 +1896,7 @@
       unregisterHistory = registerNoteHistory(noteId, {
         currentSnapshot: () => currentPdfSnapshot(),
         restoreSnapshot: (snapshot) => restorePdfSnapshot(snapshot),
-        snapshotNow: () => snapshotHistoryNow(),
+        snapshotNow: () => historyCapture.snapshotNow(),
         peerCount: () => otherPeerCount(awareness)
       });
       await tick();
@@ -2021,11 +1993,8 @@
     if (saveTimer) {
       void flushSave();
     }
-    if (historyTimer) {
-      clearTimeout(historyTimer);
-      historyTimer = null;
-    }
-    if (historyDirty) void captureHistoryVersion('edited');
+    historyCapture.cancel();
+    void historyCapture.capture('edited');
     unregisterHistory?.();
     unregisterHistory = null;
     saveReady = false;

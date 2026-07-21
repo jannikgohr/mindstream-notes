@@ -1,5 +1,6 @@
 <script lang="ts">
   import * as Y from 'yjs';
+  import { createHistoryCapture } from '$lib/history/capture-scheduler';
   import { onDestroy, onMount, tick } from 'svelte';
   import {
     AlignJustify,
@@ -198,6 +199,15 @@
 
   let { noteId, ariaLabel }: Props = $props();
 
+  const historyCapture = createHistoryCapture({
+    noteId: () => noteId,
+    label: 'InkWebNoteEditor',
+    isTrashed: () => isTrashed,
+    isReady: () => doc !== null,
+    mode: 'debounce',
+    snapshotNowRequiresDirty: true
+  });
+
   let hostEl = $state<HTMLDivElement | null>(null);
   let canvasHostEl = $state<HTMLDivElement | null>(null);
   let canvasEl = $state<HTMLCanvasElement | null>(null);
@@ -212,8 +222,6 @@
   let fullscreenAcquired = false;
   let immersiveInkModeActive = false;
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
-  let historyTimer: ReturnType<typeof setTimeout> | null = null;
-  let historyDirty = false;
   let restoringHistorySnapshot = false;
   let unregisterHistory: (() => void) | null = null;
   let pendingState: number[] | null = null;
@@ -667,42 +675,6 @@
     }
   }
 
-  async function snapshotHistoryNow() {
-    if (historyTimer) {
-      clearTimeout(historyTimer);
-      historyTimer = null;
-    }
-    if (!historyDirty) return;
-    await captureHistoryVersion('edited');
-  }
-
-  function historyIdleMs(): number {
-    const v = Number(getSettingValue('data.historyIdleSeconds'));
-    return (Number.isFinite(v) && v > 0 ? v : 180) * 1000;
-  }
-
-  function scheduleHistoryCapture() {
-    if (isTrashed) return;
-    historyDirty = true;
-    if (historyTimer) clearTimeout(historyTimer);
-    historyTimer = setTimeout(() => {
-      historyTimer = null;
-      void captureHistoryVersion('edited');
-    }, historyIdleMs());
-  }
-
-  async function captureHistoryVersion(action: VersionAction) {
-    if (!doc) return;
-    if (action === 'edited' && !historyDirty) return;
-    historyDirty = false;
-    try {
-      const created = await captureCurrentNoteVersion(noteId, action);
-      if (created) bumpNoteHistory(noteId);
-    } catch (err) {
-      console.debug('[InkWebNoteEditor] history capture failed', err);
-    }
-  }
-
   function applyDocumentMutation(update: Uint8Array | null) {
     applyDocumentMutations(update ? [update] : []);
   }
@@ -710,7 +682,7 @@
   function applyDocumentMutations(updates: Uint8Array[]) {
     refreshFromDoc();
     if (updates.length > 0) {
-      if (!restoringHistorySnapshot) scheduleHistoryCapture();
+      if (!restoringHistorySnapshot) historyCapture.schedule();
       queueSaveUpdates(updates);
     }
     for (const update of updates) {
@@ -2741,7 +2713,7 @@
     unregisterHistory = registerNoteHistory(noteId, {
       currentSnapshot: () => currentInkSnapshot(),
       restoreSnapshot: (snapshot) => restoreInkSnapshot(snapshot),
-      snapshotNow: () => snapshotHistoryNow()
+      snapshotNow: () => historyCapture.snapshotNow()
     });
     const afterTickAt = performance.now();
     if (isAndroid()) {
@@ -2877,11 +2849,8 @@
     }
     flushQueuedEraserSamples();
     clearSaveTimer();
-    if (historyTimer) {
-      clearTimeout(historyTimer);
-      historyTimer = null;
-    }
-    if (historyDirty) void captureHistoryVersion('edited');
+    historyCapture.cancel();
+    void historyCapture.capture('edited');
     unregisterHistory?.();
     unregisterHistory = null;
     void flushPendingState();
