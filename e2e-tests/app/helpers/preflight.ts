@@ -10,7 +10,7 @@
  * missing driver or a down backend before sitting through a multi-minute build.
  */
 
-import { spawnSync } from 'node:child_process';
+import { spawnSync, type ChildProcess } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { delimiter, dirname, join, resolve } from 'node:path';
@@ -120,6 +120,62 @@ export function assertAppBinaryReady(): void {
         `Re-run without MINDSTREAM_E2E_SKIP_BUILD=1 to rebuild it correctly.`
     );
   }
+}
+
+/**
+ * Kill a tauri-driver AND everything it spawned.
+ *
+ * The bug this fixes: `child.kill()` terminates only the tauri-driver PID. Its
+ * descendants — msedgedriver, the launched mindstream-notes.exe, and that app's
+ * msedgewebview2 children — are NOT reaped (Windows has no automatic process-
+ * tree teardown). Because `afterSession` runs per spec file and every client
+ * reuses one fixed profile dir for the whole run, each leaked app keeps holding
+ * that profile while the next spec launches a fresh app against the same dir.
+ * The accumulating orphans starve the next app's boot, so its JS main thread is
+ * still busy when wdio's `aria/` findElement injects its query script — the
+ * command never returns and times out at the transport layer
+ * (UND_ERR_HEADERS_TIMEOUT + tauri-driver's hyper IncompleteMessage), or, when
+ * it only lags, surfaces as "element still not displayed after 30000ms".
+ *
+ * Windows: `taskkill /T` walks the child tree; POSIX: negative pid signals the
+ * process group (tauri-driver is a group leader as a bare spawn). Best-effort —
+ * a driver that already exited makes this a no-op.
+ */
+export function killDriverTree(driver: ChildProcess | undefined): void {
+  const pid = driver?.pid;
+  if (!pid) return;
+  if (process.platform === 'win32') {
+    spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], {
+      stdio: 'ignore'
+    });
+    return;
+  }
+  try {
+    process.kill(-pid, 'SIGKILL');
+  } catch {
+    try {
+      driver?.kill('SIGKILL');
+    } catch {
+      /* already gone */
+    }
+  }
+}
+
+/**
+ * Per-client WebView2 environment.
+ *
+ * ROOT-CAUSE FIX. The app passes no explicit WebView2 user-data-folder, so
+ * every instance — both clients, and every spec's freshly launched app — shares
+ * the one default `EBWebView` folder under the app identifier. WebView2 runs a
+ * SHARED browser/renderer process pool per user-data-folder, so all these hosts
+ * contend on one pool, and its processes linger (reparented) after a host exits
+ * as the orphans that slow the next app's boot. The WebView2 loader honours
+ * `WEBVIEW2_USER_DATA_FOLDER` when the host specifies none, so pointing each
+ * client at its own folder gives it an isolated pool: no cross-instance or
+ * cross-spec contention, and the pool dies with its own app instead of leaking.
+ */
+export function webview2Env(profileDir: string): NodeJS.ProcessEnv {
+  return { WEBVIEW2_USER_DATA_FOLDER: join(profileDir, 'webview2') };
 }
 
 /** Verify tauri-driver is installed before a session tries to spawn it. */

@@ -17,9 +17,11 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   appBinary as application,
+  killDriverTree,
   preflight,
   repoRoot,
-  tauriDriverPath
+  tauriDriverPath,
+  webview2Env
 } from './helpers/preflight.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -67,11 +69,16 @@ export const config: WebdriverIO.Config = {
   beforeSession: () => {
     tauriDriver = spawn(tauriDriverPath, [], {
       stdio: [null, process.stdout, process.stderr],
-      env: { ...process.env, MINDSTREAM_PROFILE_DIR: runProfileDir }
+      env: {
+        ...process.env,
+        MINDSTREAM_PROFILE_DIR: runProfileDir,
+        ...webview2Env(runProfileDir)
+      }
     });
   },
 
   afterSession: () => {
-    tauriDriver?.kill();
+    killDriverTree(tauriDriver);
+    tauriDriver = undefined;
   }
 };
