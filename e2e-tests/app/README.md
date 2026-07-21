@@ -9,10 +9,10 @@ in CI**.
 - **Toolchain, env flags, test seams, harness gotchas** → [docs/e2e/harness.md](../../docs/e2e/harness.md)
 - **Current coverage & what's still stubbed** → [docs/e2e/status.md](../../docs/e2e/status.md)
 
-Without `MINDSTREAM_E2E_APP=1`, every spec skips. The T4 specs also require
-`MINDSTREAM_E2E_BACKEND=1` + a running [backend stack](../../docs/e2e/backend-stack.md);
-the dialog-driven backup specs require the native-dialog hook once that Rust
-seam exists.
+No capability flags to set: the wdio config you invoke decides the tier, and the
+T4 specs fail fast with a clear message if the
+[backend stack](../../docs/e2e/backend-stack.md) isn't up. Only the
+dialog-driven backup specs still self-skip, pending the native-dialog Rust seam.
 
 ## What's here
 

@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { backendUrl } from '../shared/backend-target.js';
 
 /**
  * nginx edge hardening, against the real stack.
@@ -8,8 +9,11 @@ import { expect, test } from '@playwright/test';
  * edge — so running this alongside them would fail *them*, not this. Refill is
  * 10 r/m, so allow a couple of minutes before an app suite runs.
  *
- *   MINDSTREAM_E2E_BACKEND=1 MINDSTREAM_E2E_EDGE_LIMITS=1 \
- *     MINDSTREAM_E2E_BACKEND_URL=http://localhost:18080 pnpm test:e2e:backend
+ *   MINDSTREAM_E2E_EDGE_LIMITS=1 pnpm test:e2e:backend
+ *
+ * This flag is NOT a capability gate (the stack itself is a precondition
+ * checked in global-setup.ts) — it exists because the test has a side effect on
+ * the shared stack, so opting in has to be a decision.
  *
  * Note the topology caveat: with the stack's port published directly, nginx
  * sees the Docker gateway as the client for every request, so all callers
@@ -18,17 +22,13 @@ import { expect, test } from '@playwright/test';
  * X-Forwarded-For, which is what `real_ip` in nginx.conf exists to consume.
  */
 
-const ENABLED =
-  !!process.env.MINDSTREAM_E2E_BACKEND &&
-  !!process.env.MINDSTREAM_E2E_EDGE_LIMITS;
-const BASE = (
-  process.env.MINDSTREAM_E2E_BACKEND_URL ?? 'http://localhost:8080'
-).replace(/\/$/, '');
+const ENABLED = !!process.env.MINDSTREAM_E2E_EDGE_LIMITS;
+const BASE = backendUrl();
 
 test.describe('nginx edge hardening', () => {
   test.skip(
     !ENABLED,
-    'Set MINDSTREAM_E2E_BACKEND=1 and MINDSTREAM_E2E_EDGE_LIMITS=1 to run edge limit checks (drains the auth rate-limit bucket).'
+    'Set MINDSTREAM_E2E_EDGE_LIMITS=1 to run edge limit checks (drains the auth rate-limit bucket for every suite sharing this stack).'
   );
 
   test('throttles a burst against the etebase auth endpoint', async ({

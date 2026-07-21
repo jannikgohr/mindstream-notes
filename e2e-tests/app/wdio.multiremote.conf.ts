@@ -9,59 +9,25 @@
  *
  * Run with the backend stack up:
  *   pnpm backend:test:up
- *   MINDSTREAM_E2E_APP=1 MINDSTREAM_E2E_BACKEND=1 \
- *     MINDSTREAM_E2E_BACKEND_URL=http://localhost:18080 pnpm test:e2e:app:multi
+ *   pnpm test:e2e:app:multi
  *
  * Only specs that need two clients belong here (sharing.e2e.ts, collab.e2e.ts);
  * the single-client T3 specs stay on wdio.conf.ts.
  */
 
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { mkdtempSync } from 'node:fs';
-import { homedir, tmpdir } from 'node:os';
-import { delimiter, dirname, join, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  appBinary as application,
+  preflight,
+  repoRoot,
+  tauriDriverPath
+} from './helpers/preflight.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const repoRoot = resolve(here, '../..');
-
-const binaryName =
-  process.platform === 'win32' ? 'mindstream-notes.exe' : 'mindstream-notes';
-const application = join(
-  repoRoot,
-  'src-tauri',
-  'target',
-  'release',
-  binaryName
-);
-const tauriScript = join(repoRoot, 'src-tauri', 'scripts', 'tauri.mjs');
-
-const tauriDriverPath = join(
-  homedir(),
-  '.cargo',
-  'bin',
-  process.platform === 'win32' ? 'tauri-driver.exe' : 'tauri-driver'
-);
-const pathEnvKey =
-  Object.keys(process.env).find((key) => key.toLowerCase() === 'path') ??
-  'PATH';
-const nodeBinDir = dirname(process.execPath);
-const inheritedPath = process.env[pathEnvKey];
-
-const buildEnv = {
-  ...process.env,
-  [pathEnvKey]: inheritedPath
-    ? `${nodeBinDir}${delimiter}${inheritedPath}`
-    : nodeBinDir,
-  NODE_OPTIONS: process.env.NODE_OPTIONS ?? '--max-old-space-size=4096',
-  VITE_MINDSTREAM_E2E: '1',
-  // pnpm 11 auto-runs `pnpm install` before scripts when it thinks
-  // node_modules is stale. The app E2E build is non-interactive, so keep the
-  // dependency install as an explicit developer/CI step instead of letting this
-  // hook try to purge node_modules.
-  pnpm_config_verify_deps_before_run:
-    process.env.pnpm_config_verify_deps_before_run ?? 'false'
-};
 
 /**
  * One tauri-driver process per client. `port` is what wdio connects to;
@@ -156,20 +122,10 @@ export const config: WebdriverIO.Config = {
   // a broken spec.
   mochaOpts: { ui: 'bdd', timeout: 240_000 },
 
-  // Same Tauri-CLI build as the single-client config: a plain `cargo build`
-  // leaves the binary pointing at the dev server (blank webview). Skip with
-  // MINDSTREAM_E2E_SKIP_BUILD=1 after a good build while iterating.
-  onPrepare: () => {
-    if (process.env.MINDSTREAM_E2E_SKIP_BUILD === '1') return;
-    const res = spawnSync(
-      process.execPath,
-      [tauriScript, 'build', '--no-bundle', '--features', 'e2e-data-dir'],
-      { cwd: repoRoot, stdio: 'inherit', env: buildEnv }
-    );
-    if (res.status !== 0) {
-      throw new Error('tauri build (--features e2e-data-dir) failed');
-    }
-  },
+  // Requirement checks + the Tauri CLI build (helpers/preflight.ts). T4 also
+  // requires the backend stack, so a down stack fails here — once, before the
+  // build — instead of five specs each timing out in their `before` hook.
+  onPrepare: () => preflight({ backend: true }),
 
   // Bring up both tauri-driver processes before the multiremote session opens,
   // each pinned to its own profile dir and ports.

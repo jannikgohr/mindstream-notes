@@ -35,11 +35,10 @@
 import { expect } from '@wdio/globals';
 
 import { provisionTwoAccounts, type TwoAccounts } from '../helpers/accounts.js';
-import { assertBackendReady, backendUrl } from '../helpers/backend.js';
+import { backendUrl } from '../helpers/backend.js';
 import {
   clientHelpers,
   loginClient,
-  requireBackendE2E,
   syncClient,
   type ClientHelpers
 } from '../helpers/harness.js';
@@ -320,8 +319,6 @@ describe('T4 collection sharing across the owner’s two devices', function () {
   let sharedNoteId: string;
 
   before(async function () {
-    requireBackendE2E(this);
-    await assertBackendReady();
     const server = backendUrl();
 
     // One sender + one recipient account, both brand-new (no server-side vault

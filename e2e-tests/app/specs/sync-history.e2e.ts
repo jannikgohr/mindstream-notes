@@ -11,12 +11,11 @@
 import { expect } from '@wdio/globals';
 
 import { provisionTwoAccounts } from '../helpers/accounts.js';
-import { assertBackendReady, backendUrl } from '../helpers/backend.js';
+import { backendUrl } from '../helpers/backend.js';
 import {
   clientHelpers,
   clickLastButtonText,
   loginClient,
-  requireBackendE2E,
   syncClient,
   type ClientHelpers
 } from '../helpers/harness.js';
@@ -153,9 +152,6 @@ describe('T4 per-device history (sync negative assertion)', function () {
   let B: ClientHelpers;
 
   before(async function () {
-    requireBackendE2E(this);
-    await assertBackendReady();
-
     const server = backendUrl();
     const accounts = await provisionTwoAccounts(server);
     const sharedAccount = accounts.sender;

@@ -34,25 +34,27 @@ pnpm test:e2e:ui       # interactive Playwright runner
 
 ## Backend health (T4 prerequisite)
 
-Bring up the disposable stack, then run the probe suite. Everything is gated on
-`MINDSTREAM_E2E_BACKEND`, so without the flag the specs skip.
+Bring up the disposable stack, then run the probe suite. The stack is a
+precondition: if it isn't answering, the run fails up front rather than skipping.
 
 ```sh
 pnpm backend:test:up                                    # stack on :18080
-MINDSTREAM_E2E_BACKEND=1 pnpm test:e2e:backend
+pnpm test:e2e:backend
 pnpm backend:test:down                                  # tear down when done
 ```
+
+The rate-limit specs stay opt-in behind `MINDSTREAM_E2E_EDGE_LIMITS=1` — they
+drain the auth bucket for every suite sharing the stack.
 
 See [docs/e2e/backend-stack.md](../docs/e2e/backend-stack.md).
 
 ## Real-app suite (T3, single client)
 
 Drives the **packaged Tauri binary** over WebDriver. Needs the one-time
-toolchain in [docs/e2e/harness.md](../docs/e2e/harness.md#toolchain). Every spec
-skips unless `MINDSTREAM_E2E_APP=1` is set.
+toolchain in [docs/e2e/harness.md](../docs/e2e/harness.md#toolchain).
 
 ```sh
-MINDSTREAM_E2E_APP=1 pnpm test:e2e:app
+pnpm test:e2e:app
 ```
 
 The binary is built with `--features e2e-data-dir` first; set
@@ -60,17 +62,20 @@ The binary is built with `--features e2e-data-dir` first; set
 
 ## Real-app collaboration (T4, two clients)
 
-Two app instances plus the backend stack. Bring the stack up first, then run
-with both flags and the backend URL:
+Two app instances plus the backend stack. Bring the stack up first — the specs
+default to it at `http://localhost:18080` and fail fast if it isn't answering:
 
 ```sh
 pnpm backend:test:up
-MINDSTREAM_E2E_APP=1 MINDSTREAM_E2E_BACKEND=1 \
-  MINDSTREAM_E2E_BACKEND_URL=http://localhost:18080 pnpm test:e2e:app:multi
+pnpm test:e2e:app:multi
 
 # The owner-second-device variant (three app instances):
-… pnpm test:e2e:app:multi:a2
+pnpm test:e2e:app:multi:a2
 ```
+
+Set `MINDSTREAM_E2E_BACKEND_URL` only to point at a different stack. If T4 specs
+start timing out or behaving oddly, reset the stack (`pnpm backend:test:reset`)
+— accumulated data slows sync enough to mimic real bugs.
 
 See [app/README.md](app/README.md) for the two-client harness specifics and the
 full env-flag reference in [docs/e2e/harness.md](../docs/e2e/harness.md).
