@@ -27,7 +27,7 @@
  */
 
 import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { freemem, tmpdir, totalmem } from 'node:os';
 import { join } from 'node:path';
 
 /** A Mocha test context (`this`) — enough to call `.skip()`. */
@@ -275,6 +275,45 @@ async function closeSettingsDialog(client: WebdriverIO.Browser): Promise<void> {
   });
 }
 
+/**
+ * Snapshot what the WebView actually holds, for attaching to a timeout.
+ *
+ * Distinguishes the possibilities behind "the button never appeared": a blank
+ * page (asset load failed / webview never painted), a page that rendered but
+ * boot stalled before the shell mounted, or a shell that mounted with the
+ * button under a different name. Deliberately tolerant — this runs when things
+ * are already broken, so every field degrades to a marker rather than throwing.
+ */
+export async function describeClientState(
+  client: WebdriverIO.Browser
+): Promise<string> {
+  try {
+    const state = await client.execute(() => {
+      const buttons = Array.from(document.querySelectorAll('button'))
+        .map((b) =>
+          (b.getAttribute('aria-label') ?? b.textContent ?? '').trim()
+        )
+        .filter((label) => label.length > 0);
+      return {
+        readyState: document.readyState,
+        url: location.href,
+        title: document.title,
+        bodyChars: document.body?.innerHTML.length ?? -1,
+        bodyText: (document.body?.innerText ?? '').slice(0, 200),
+        buttonCount: buttons.length,
+        buttons: buttons.slice(0, 25),
+        hasTauri: '__TAURI_INTERNALS__' in window,
+        // The app shell's own roots — present once Svelte has mounted.
+        hasAppRoot: !!document.querySelector('[data-sveltekit-hydrated], main'),
+        visibility: document.visibilityState
+      };
+    });
+    return JSON.stringify(state);
+  } catch (err) {
+    return `<unavailable: ${err instanceof Error ? err.message : String(err)}>`;
+  }
+}
+
 async function selectSelfHosted(client: WebdriverIO.Browser): Promise<void> {
   await client.execute(() => {
     const button = Array.from(document.querySelectorAll('button')).find(
@@ -311,7 +350,21 @@ export async function loginClient(
   // "unsupported operation", so clicks/fills must be synthesized as DOM events.
   const h = clientHelpers(client);
 
-  await h.click('Open settings');
+  // The first interaction of every T4 spec, and the one that intermittently
+  // fails with "Open settings still not displayed after 30000ms". Attach what
+  // the WebView actually contained so the failure is diagnosable instead of
+  // just a timeout.
+  try {
+    await h.click('Open settings');
+  } catch (err) {
+    const state = await describeClientState(client);
+    const freeGb = (freemem() / 1024 ** 3).toFixed(1);
+    const totalGb = (totalmem() / 1024 ** 3).toFixed(1);
+    throw new Error(
+      `${err instanceof Error ? err.message : String(err)}\n` +
+        `[host] freeMem=${freeGb}GB/${totalGb}GB\n[app state] ${state}`
+    );
+  }
   await h.click('Account & Sync');
   await selectSelfHosted(client);
 
