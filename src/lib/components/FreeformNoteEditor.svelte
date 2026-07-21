@@ -30,6 +30,7 @@
    */
 
   import { onDestroy, onMount, untrack } from 'svelte';
+  import { createHistoryCapture } from '$lib/history/capture-scheduler';
   import * as Y from 'yjs';
   import { Trash2 } from '@lucide/svelte';
   import { userPrefersMode } from 'mode-watcher';
@@ -87,9 +88,17 @@
   }
   let { noteId }: Props = $props();
 
+  const historyCapture = createHistoryCapture({
+    noteId: () => noteId,
+    label: 'FreeformNoteEditor',
+    isTrashed: () => isTrashed,
+    isReady: () => yDoc !== null,
+    mode: 'debounce',
+    snapshotNowRequiresDirty: true
+  });
+
   /** Debounce window for save scheduling — same as NoteEditor. */
   const SAVE_DEBOUNCE_MS = 800;
-  const HISTORY_IDLE_DEFAULT_S = 180;
 
   /** Mount point for the React island. dockview gives us the full panel;
    *  the island fills it via `position: absolute; inset: 0`. */
@@ -106,8 +115,6 @@
   let collabConfigured = $state(false);
 
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
-  let historyTimer: ReturnType<typeof setTimeout> | null = null;
-  let historyDirty = false;
   // Excalidraw bumps element version nonces when it re-imports a scene on
   // mount, which flushes a benign LOCAL_ORIGIN write to the Y.Doc. Without a
   // gate that churn marks the note dirty and snapshots a "no-edit" version on
@@ -298,7 +305,7 @@
         // Skip mount-time normalization churn — only genuine edits (preceded
         // by a canvas interaction) belong in history.
         if (!capturingHistorySnapshot && canvasInteracted)
-          scheduleHistoryCapture();
+          historyCapture.schedule();
       };
       localYDoc.on('update', yDocUpdateHandler);
       saveReady = true;
@@ -366,7 +373,7 @@
       unregisterHistory = registerNoteHistory(noteId, {
         currentSnapshot: () => currentFreeformSnapshot(),
         restoreSnapshot: (snapshot) => restoreFreeformSnapshot(snapshot),
-        snapshotNow: () => snapshotHistoryNow()
+        snapshotNow: () => historyCapture.snapshotNow()
       });
     } catch (err) {
       loadError = err instanceof Error ? err.message : String(err);
@@ -504,11 +511,8 @@
 
   onDestroy(() => {
     if (saveTimer) clearTimeout(saveTimer);
-    if (historyTimer) {
-      clearTimeout(historyTimer);
-      historyTimer = null;
-    }
-    if (historyDirty) void captureHistoryVersion('edited');
+    historyCapture.cancel();
+    void historyCapture.capture('edited');
     unregisterHistory?.();
     unregisterHistory = null;
     if (editorListener) {
@@ -581,42 +585,6 @@
     } finally {
       capturingHistorySnapshot = false;
       snapshotDoc.destroy();
-    }
-  }
-
-  async function snapshotHistoryNow() {
-    if (historyTimer) {
-      clearTimeout(historyTimer);
-      historyTimer = null;
-    }
-    if (!historyDirty) return;
-    await captureHistoryVersion('edited');
-  }
-
-  function historyIdleMs(): number {
-    const v = Number(getSettingValue('data.historyIdleSeconds'));
-    return (Number.isFinite(v) && v > 0 ? v : HISTORY_IDLE_DEFAULT_S) * 1000;
-  }
-
-  function scheduleHistoryCapture() {
-    if (isTrashed) return;
-    historyDirty = true;
-    if (historyTimer) clearTimeout(historyTimer);
-    historyTimer = setTimeout(() => {
-      historyTimer = null;
-      void captureHistoryVersion('edited');
-    }, historyIdleMs());
-  }
-
-  async function captureHistoryVersion(action: VersionAction) {
-    if (!yDoc) return;
-    if (action === 'edited' && !historyDirty) return;
-    historyDirty = false;
-    try {
-      const created = await captureCurrentNoteVersion(noteId, action);
-      if (created) bumpNoteHistory(noteId);
-    } catch (err) {
-      console.debug('[FreeformNoteEditor] history capture failed', err);
     }
   }
 
