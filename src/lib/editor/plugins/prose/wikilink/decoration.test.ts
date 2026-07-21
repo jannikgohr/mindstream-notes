@@ -15,8 +15,9 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { Schema, type Node as ProseNode } from '@milkdown/kit/prose/model';
 import { EditorState, TextSelection } from '@milkdown/kit/prose/state';
 import { EditorView } from '@milkdown/kit/prose/view';
-import { wikilinkDecorationPlugin, noteHref } from './wikilink';
-import type { WikilinkBridge } from '../wikilink-bridge.svelte';
+import { wikilinkDecorationPlugin } from './decoration';
+import { noteHref } from '../../wikilink-href';
+import type { WikilinkBridge } from '../../wikilink-bridge.svelte';
 
 const schema = new Schema({
   nodes: {
