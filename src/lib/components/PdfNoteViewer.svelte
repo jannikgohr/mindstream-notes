@@ -175,6 +175,7 @@
     ZOOM_STEP
   } from '$lib/pdf/viewer-helpers';
   import { createPageRenderer } from '$lib/pdf/page-render';
+  import { createViewerZoom } from '$lib/pdf/viewer-zoom';
   import { alert } from './confirm-dialog.svelte';
 
   interface Props {
@@ -273,17 +274,6 @@
   const textIndexCache = new Map<number, PageTextIndex>();
   let searchGeneration = 0;
   let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
-  let touchZoomPointers = new Map<
-    number,
-    { clientX: number; clientY: number }
-  >();
-  let touchZoomAnchor: ZoomAnchor | null = null;
-  let touchZoomDistance: number | null = null;
-  let touchZoomStartZoom = 1;
-  let touchZoomActive = false;
-  let zoomScrollToken = 0;
-  let horizontalCenterFrame = 0;
-  let initialHorizontalCenterDone = false;
   let pdfjsLib: PdfJs | null = null;
   let pdfViewerLib: PdfViewer | null = null;
   let yDoc: Y.Doc | null = null;
@@ -1505,327 +1495,47 @@
   const commentAnnotations = $derived(
     annotations.filter((annotation) => isCommentLikeAnnotation(annotation))
   );
-  function setFixedZoom(value: number) {
-    zoomMode = 'fixed';
-    zoom = clampZoom(value);
-    zoomMenuOpen = false;
-  }
-
-  function setFitWidthZoom() {
-    zoomMode = 'fit-width';
-    zoomMenuOpen = false;
-    scheduleHorizontalCenter();
-  }
-
-  function zoomBy(factor: number) {
-    setFixedZoom(effectiveZoom * factor);
-  }
-
-  function toggleZoomMenu() {
-    zoomMenuOpen = !zoomMenuOpen;
-  }
-
-  function pageHostForFigure(figure: HTMLElement): HTMLElement | null {
-    return figure.querySelector<HTMLElement>('.pdf-page-host');
-  }
-
-  function figureForPage(pageNumber: number): HTMLElement | null {
-    return (
-      container?.querySelector<HTMLElement>(
-        `figure[data-page-number="${pageNumber}"]`
-      ) ?? null
-    );
-  }
-
-  function clampScrollerPosition() {
-    if (!container) return;
-    const maxLeft = Math.max(0, container.scrollWidth - container.clientWidth);
-    const maxTop = Math.max(0, container.scrollHeight - container.clientHeight);
-    // Only write when actually out of range. Assigning scrollLeft/scrollTop —
-    // even to their current value — aborts any in-flight smooth scroll (e.g.
-    // the one started by scrollToPage), which is what broke page navigation.
-    const clampedLeft = Math.min(maxLeft, Math.max(0, container.scrollLeft));
-    const clampedTop = Math.min(maxTop, Math.max(0, container.scrollTop));
-    if (clampedLeft !== container.scrollLeft)
-      container.scrollLeft = clampedLeft;
-    if (clampedTop !== container.scrollTop) container.scrollTop = clampedTop;
-  }
-
-  function offsetInsideScroller(el: HTMLElement): {
-    left: number;
-    top: number;
-  } {
-    if (!container) return { left: 0, top: 0 };
-    const scrollerRect = container.getBoundingClientRect();
-    const rect = el.getBoundingClientRect();
-    return {
-      left: rect.left - scrollerRect.left + container.scrollLeft,
-      top: rect.top - scrollerRect.top + container.scrollTop
-    };
-  }
-
-  function pageFitsViewportWidth(pageHost: HTMLElement): boolean {
-    if (!container) return false;
-    return pageHost.offsetWidth + PAGE_FIT_MARGIN * 2 <= container.clientWidth;
-  }
-
-  function centeredPageScrollLeft(
-    pageHost: HTMLElement,
-    pageOffset: { left: number }
-  ): number {
-    if (!container) return 0;
-    return (
-      pageOffset.left + pageHost.offsetWidth / 2 - container.clientWidth / 2
-    );
-  }
-
-  // The scrollLeft that horizontally centers a page (or left-aligns it with a
-  // small margin when it's wider than the viewport), clamped to range. Returns
-  // null when the page isn't laid out yet.
-  function targetScrollLeftForPage(pageNumber: number): number | null {
-    if (!container) return null;
-    const figure = figureForPage(pageNumber);
-    const pageHost = figure ? pageHostForFigure(figure) : null;
-    if (!pageHost) return null;
-    const pageOffset = offsetInsideScroller(pageHost);
-    const desired = pageFitsViewportWidth(pageHost)
-      ? centeredPageScrollLeft(pageHost, pageOffset)
-      : pageOffset.left - PAGE_FIT_MARGIN;
-    const maxLeft = Math.max(0, container.scrollWidth - container.clientWidth);
-    return Math.min(maxLeft, Math.max(0, desired));
-  }
-
-  function centerPageHorizontally(pageNumber = activePageNumber): boolean {
-    if (!container) return false;
-    const left = targetScrollLeftForPage(pageNumber);
-    if (left == null) return false;
-    container.scrollLeft = left;
-    return true;
-  }
-
-  function scheduleHorizontalCenter(pageNumber = activePageNumber) {
-    cancelAnimationFrame(horizontalCenterFrame);
-    horizontalCenterFrame = requestAnimationFrame(() => {
-      centerPageHorizontally(pageNumber);
-    });
-  }
-
-  function zoomAnchorAtClientPoint(
-    clientX: number,
-    clientY: number
-  ): ZoomAnchor | null {
-    if (!container) return null;
-    const hit = document.elementFromPoint(
-      clientX,
-      clientY
-    ) as HTMLElement | null;
-    const hitFigure = hit?.closest<HTMLElement>('figure[data-page-number]');
-    const figure =
-      hitFigure && container.contains(hitFigure)
-        ? hitFigure
-        : container.querySelector<HTMLElement>(
-            `figure[data-page-number="${activePageNumber}"]`
-          );
-    if (!figure) return null;
-    const pageNumber = Number(figure.dataset.pageNumber);
-    const pageHost = pageHostForFigure(figure);
-    if (!Number.isFinite(pageNumber) || !pageHost) return null;
-    const rect = pageHost.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return null;
-    return {
-      pageNumber,
-      xRatio: Math.min(1, Math.max(0, (clientX - rect.left) / rect.width)),
-      yRatio: Math.min(1, Math.max(0, (clientY - rect.top) / rect.height))
-    };
-  }
-
-  async function zoomToAnchor(
-    nextZoom: number,
-    anchor: ZoomAnchor | null,
-    clientX: number,
-    clientY: number
-  ) {
-    if (!container) return;
-    const previous = effectiveZoom;
-    const next = clampZoom(nextZoom);
-    if (Math.abs(next - previous) < 0.001) return;
-    const token = ++zoomScrollToken;
-
-    zoomMode = 'fixed';
-    zoom = next;
-    await tick();
-    requestAnimationFrame(() => {
-      if (token !== zoomScrollToken) return;
-      if (!container) return;
-      if (!anchor) return;
-      const figure = figureForPage(anchor.pageNumber);
-      const pageHost = figure ? pageHostForFigure(figure) : null;
-      if (!pageHost) return;
-      const scrollerRect = container.getBoundingClientRect();
-      const pageOffset = offsetInsideScroller(pageHost);
-      const pointerX = clientX - scrollerRect.left;
-      const pointerY = clientY - scrollerRect.top;
-      container.scrollLeft = pageFitsViewportWidth(pageHost)
-        ? centeredPageScrollLeft(pageHost, pageOffset)
-        : pageOffset.left + anchor.xRatio * pageHost.offsetWidth - pointerX;
-      container.scrollTop =
-        pageOffset.top + anchor.yRatio * pageHost.offsetHeight - pointerY;
-      clampScrollerPosition();
-    });
-  }
-
-  async function zoomAroundClientPoint(
-    nextZoom: number,
-    clientX: number,
-    clientY: number
-  ) {
-    await zoomToAnchor(
-      nextZoom,
-      zoomAnchorAtClientPoint(clientX, clientY),
-      clientX,
-      clientY
-    );
-  }
-
-  async function zoomFromWheel(
-    deltaY: number,
-    clientX: number,
-    clientY: number
-  ) {
-    await zoomAroundClientPoint(
-      effectiveZoom * Math.exp(-deltaY * 0.001),
-      clientX,
-      clientY
-    );
-  }
-
-  function touchDistance(): number | null {
-    if (touchZoomPointers.size < 2) return null;
-    const points = Array.from(touchZoomPointers.values()).slice(0, 2);
-    return Math.hypot(
-      points[0].clientX - points[1].clientX,
-      points[0].clientY - points[1].clientY
-    );
-  }
-
-  function touchCenter(): { clientX: number; clientY: number } | null {
-    if (touchZoomPointers.size < 2) return null;
-    const points = Array.from(touchZoomPointers.values()).slice(0, 2);
-    return {
-      clientX: (points[0].clientX + points[1].clientX) * 0.5,
-      clientY: (points[0].clientY + points[1].clientY) * 0.5
-    };
-  }
-
-  function touchPinchZoom(node: HTMLElement) {
-    const captureOptions = { capture: true };
-    const moveOptions = { capture: true, passive: false };
-    const clearPointer = (id: number) => {
-      touchZoomPointers.delete(id);
-      if (touchZoomPointers.size < 2) {
-        touchZoomAnchor = null;
-        touchZoomDistance = null;
-        touchZoomStartZoom = effectiveZoom;
-        touchZoomActive = false;
-      }
-    };
-
-    const onPointerDown = (event: PointerEvent) => {
-      if (event.pointerType !== 'touch') return;
-      touchZoomPointers.set(event.pointerId, {
-        clientX: event.clientX,
-        clientY: event.clientY
-      });
-      if (touchZoomPointers.size === 2) {
-        const center = touchCenter();
-        touchZoomDistance = touchDistance();
-        touchZoomAnchor = center
-          ? zoomAnchorAtClientPoint(center.clientX, center.clientY)
-          : null;
-        touchZoomStartZoom = effectiveZoom;
-        touchZoomActive = true;
-      }
-    };
-
-    const onPointerMove = (event: PointerEvent) => {
-      if (event.pointerType !== 'touch') return;
-      if (!touchZoomPointers.has(event.pointerId)) return;
-      touchZoomPointers.set(event.pointerId, {
-        clientX: event.clientX,
-        clientY: event.clientY
-      });
-      if (!touchZoomActive || touchZoomPointers.size < 2) return;
-      const nextDistance = touchDistance();
-      const center = touchCenter();
-      if (!nextDistance || !touchZoomDistance || !center) return;
-      event.preventDefault();
-      const factor = nextDistance / touchZoomDistance;
-      void zoomToAnchor(
-        touchZoomStartZoom * factor,
-        touchZoomAnchor,
-        center.clientX,
-        center.clientY
-      );
-    };
-
-    const onPointerEnd = (event: PointerEvent) => {
-      if (event.pointerType !== 'touch') return;
-      clearPointer(event.pointerId);
-    };
-
-    node.addEventListener('pointerdown', onPointerDown, captureOptions);
-    node.addEventListener('pointermove', onPointerMove, moveOptions);
-    node.addEventListener('pointerup', onPointerEnd, captureOptions);
-    node.addEventListener('pointercancel', onPointerEnd, captureOptions);
-    node.addEventListener('lostpointercapture', onPointerEnd, captureOptions);
-    return {
-      destroy() {
-        node.removeEventListener('pointerdown', onPointerDown, captureOptions);
-        node.removeEventListener('pointermove', onPointerMove, moveOptions);
-        node.removeEventListener('pointerup', onPointerEnd, captureOptions);
-        node.removeEventListener('pointercancel', onPointerEnd, captureOptions);
-        node.removeEventListener(
-          'lostpointercapture',
-          onPointerEnd,
-          captureOptions
-        );
-        touchZoomPointers.clear();
-        touchZoomAnchor = null;
-        touchZoomDistance = null;
-        touchZoomStartZoom = effectiveZoom;
-        touchZoomActive = false;
-      }
-    };
-  }
-
-  function ctrlWheelZoom(node: HTMLElement) {
-    const onWheel = (e: WheelEvent) => {
-      if (e.ctrlKey) {
-        e.preventDefault();
-        void zoomFromWheel(e.deltaY, e.clientX, e.clientY);
-        return;
-      }
-      if (e.shiftKey) {
-        e.preventDefault();
-        node.scrollLeft += e.deltaY + e.deltaX;
-        clampScrollerPosition();
-        return;
-      }
-      if (Math.abs(e.deltaX) > 0) {
-        e.preventDefault();
-        node.scrollLeft += e.deltaX;
-        node.scrollTop += e.deltaY;
-        clampScrollerPosition();
-      }
-    };
-    node.addEventListener('wheel', onWheel, { passive: false });
-    return {
-      destroy() {
-        node.removeEventListener('wheel', onWheel);
-      }
-    };
-  }
-
+  // Zoom + horizontal panning live in their own controller (viewer-zoom.ts);
+  // the component keeps only the values it renders.
+  const viewerZoom = createViewerZoom({
+    get container() {
+      return container;
+    },
+    get activePageNumber() {
+      return activePageNumber;
+    },
+    get effectiveZoom() {
+      return effectiveZoom;
+    },
+    get zoom() {
+      return zoom;
+    },
+    set zoom(value) {
+      zoom = value;
+    },
+    get zoomMode() {
+      return zoomMode;
+    },
+    set zoomMode(value) {
+      zoomMode = value;
+    },
+    get zoomMenuOpen() {
+      return zoomMenuOpen;
+    },
+    set zoomMenuOpen(value) {
+      zoomMenuOpen = value;
+    },
+    scrollToPage
+  });
+  const {
+    setFixedZoom,
+    setFitWidthZoom,
+    zoomBy,
+    toggleZoomMenu,
+    targetScrollLeftForPage,
+    touchPinchZoom,
+    ctrlWheelZoom
+  } = viewerZoom;
   $effect(() => {
     if (!container) return;
     const node = container;
@@ -1848,23 +1558,11 @@
     void zoom;
     void zoomMode;
     if (!container || pageNumbers.length === 0) return;
-    // Re-center on zoom / size changes only. Reading activePageNumber via
-    // untrack keeps page changes (scroll-driven or via the toolbar controls)
-    // from triggering a competing scrollLeft write that would abort an
-    // in-flight smooth scroll — toolbar navigation centers the page itself.
-    const pageNumber = untrack(() => activePageNumber);
-    cancelAnimationFrame(horizontalCenterFrame);
-    horizontalCenterFrame = requestAnimationFrame(() => {
-      const figure = figureForPage(pageNumber);
-      const pageHost = figure ? pageHostForFigure(figure) : null;
-      const shouldCenter =
-        zoomMode === 'fit-width' ||
-        !initialHorizontalCenterDone ||
-        (pageHost ? pageFitsViewportWidth(pageHost) : false);
-      if (shouldCenter && centerPageHorizontally(pageNumber)) {
-        initialHorizontalCenterDone = true;
-      }
-    });
+    // Reading activePageNumber via untrack keeps page changes (scroll-driven
+    // or via the toolbar controls) from triggering a competing scrollLeft
+    // write that would abort an in-flight smooth scroll — toolbar navigation
+    // centers the page itself.
+    viewerZoom.recentreForLayoutChange(untrack(() => activePageNumber));
   });
 
   $effect(() => {
@@ -2349,7 +2047,7 @@
     unsubCollabCredentials = null;
     unsubSession?.();
     unsubSession = null;
-    cancelAnimationFrame(horizontalCenterFrame);
+    viewerZoom.cancelPendingCentring();
     resizeObserver?.disconnect();
     pageIntersectionObserver?.disconnect();
     pageIntersectionObserver = null;
