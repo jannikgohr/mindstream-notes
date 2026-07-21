@@ -1,5 +1,18 @@
 <script lang="ts">
   import * as Y from 'yjs';
+  import {
+    clampView as viewClamp,
+    defaultView,
+    displayInkZoom,
+    fitWidthScale,
+    fitWidthView,
+    minScale as viewMinScale,
+    pageToScreen as viewPageToScreen,
+    scaleFromDisplayInkZoom,
+    screenToPage as viewScreenToPage,
+    zoomAroundPoint,
+    zoomToScale
+  } from '$lib/ink/view-transform';
   import { createHistoryCapture } from '$lib/history/capture-scheduler';
   import { onDestroy, onMount, tick } from 'svelte';
   import {
@@ -303,13 +316,10 @@
   let viewInitialized = false;
   const cssColorCache = new Map<number, string>();
   let layout = defaultLayout();
-  let view = {
-    width: 1,
-    height: 1,
-    scale: 1,
-    panX: 0,
-    panY: DEFAULT_PAGE_GAP
-  };
+  // Deliberately not $state: the canvas repaints through scheduleDraw(),
+  // and making the viewport reactive would re-run derived state on every
+  // pan frame. Mutated in place for the same reason.
+  const view = defaultView();
 
   const pageDark = $derived(
     pageThemeMode === 'dark' || (pageThemeMode === 'system' && $mode === 'dark')
@@ -326,7 +336,7 @@
   });
   const inkFitActive = $derived.by(() => {
     void zoomUiVersion;
-    return Math.abs(view.scale - fitWidthScale()) < 0.01;
+    return Math.abs(view.scale - fitWidthScale(view, layout)) < 0.01;
   });
   const brushLineHeight = $derived(Math.max(2, Math.min(12, width)));
   const brushSizeText = $derived(
@@ -779,7 +789,7 @@
 
   function resizeCanvas() {
     if (!canvasHostEl || !canvasEl) return;
-    const wasAtFitWidth = view.scale <= fitWidthScale() + 0.001;
+    const wasAtFitWidth = view.scale <= fitWidthScale(view, layout) + 0.001;
     const rect = canvasHostEl.getBoundingClientRect();
     const usableSize = rect.width > 2 && rect.height > 2;
     const dpr = window.devicePixelRatio || 1;
@@ -800,8 +810,16 @@
       fitWidth();
       viewInitialized = true;
     } else {
-      view.scale = Math.max(view.scale, nextMinScale);
-      clampView();
+      Object.assign(
+        view,
+        viewClamp(
+          { ...view, scale: Math.max(view.scale, nextMinScale) },
+          layout,
+          {
+            mobileToolbar
+          }
+        )
+      );
     }
     if (backingStoreChanged) {
       if (drawFrame !== null) {
@@ -913,64 +931,26 @@
   // scrolled/panned; zooming out below this reaches the whole-page floor
   // (minScale). Mirrors PdfNoteViewer's fit-width zoom + PAGE_FIT_MARGIN
   // gutters so both renderers frame an A4 sheet identically.
-  function fitWidthScale(): number {
-    const availableWidth = Math.max(1, view.width - PAGE_FIT_MARGIN * 2);
-    return Math.max(minScale(), availableWidth / layout.page.width);
-  }
-
-  function displayInkZoom(scale: number): number {
-    return scale * INK_ZOOM_DISPLAY_SCALE;
-  }
-
-  function scaleFromDisplayInkZoom(value: number): number {
-    return value / INK_ZOOM_DISPLAY_SCALE;
-  }
-
-  function fitWidth() {
-    view.scale = fitWidthScale();
-    view.panX = (view.width - layout.page.width * view.scale) * 0.5;
-    // Top-align the first page with the same gutter the sides get.
-    view.panY = PAGE_FIT_MARGIN;
-    clampView();
-  }
-
-  function clampView() {
-    view.scale = Math.max(view.scale, minScale());
-    const contentW = layout.page.width * view.scale;
-    const contentH =
-      (layout.page.height * layout.pageCount +
-        layout.pageGap * (layout.pageCount - 1)) *
-      view.scale;
-    if (contentW <= view.width) {
-      view.panX = (view.width - contentW) * 0.5;
-    } else {
-      view.panX = Math.min(16, Math.max(view.width - contentW - 16, view.panX));
-    }
-    const bottomMargin = Math.max(PAGE_FIT_MARGIN, layout.pageGap * view.scale);
-    const topMargin = mobileToolbar
-      ? Math.max(PAGE_FIT_TOP_MARGIN, bottomMargin)
-      : PAGE_FIT_MARGIN;
-    const minY = view.height - contentH - bottomMargin;
-    const maxY = topMargin;
-    view.panY =
-      minY <= maxY
-        ? Math.min(maxY, Math.max(minY, view.panY))
-        : (view.height - contentH) * 0.5;
+  // Viewport maths lives in ink/view-transform.ts; these bind the pure
+  // helpers to this editor's live view + layout.
+  function minScale(): number {
+    return viewMinScale(view, layout);
   }
 
   function screenToPage(x: number, y: number): InkPoint {
-    return {
-      x: (x - view.panX) / view.scale,
-      y: (y - view.panY) / view.scale,
-      pressure: 1
-    };
+    return viewScreenToPage(view, x, y);
   }
 
   function pageToScreen(p: { x: number; y: number }): { x: number; y: number } {
-    return {
-      x: p.x * view.scale + view.panX,
-      y: p.y * view.scale + view.panY
-    };
+    return viewPageToScreen(view, p);
+  }
+
+  function clampView() {
+    Object.assign(view, viewClamp(view, layout, { mobileToolbar }));
+  }
+
+  function fitWidth() {
+    Object.assign(view, fitWidthView(view, layout, { mobileToolbar }));
   }
 
   function canvasBackdropColor(): string {
@@ -1567,15 +1547,17 @@
       touchGesture = next;
       return;
     }
-    const before = screenToPage(touchGesture.centerX, touchGesture.centerY);
     const factor = next.distance / touchGesture.distance;
-    const min = minScale();
-    view.scale = Math.min(
-      Math.max(view.scale * factor, min),
-      min * MAX_ZOOM_FACTOR
+    Object.assign(
+      view,
+      zoomAroundPoint(
+        view,
+        layout,
+        next.centerX,
+        next.centerY,
+        view.scale * factor
+      )
     );
-    view.panX = next.centerX - before.x * view.scale;
-    view.panY = next.centerY - before.y * view.scale;
     touchGesture = next;
     clampView();
     scheduleDraw();
@@ -2263,25 +2245,14 @@
   }
 
   function zoomAround(screenX: number, screenY: number, factor: number) {
-    const before = screenToPage(screenX, screenY);
-    const min = minScale();
-    view.scale = Math.min(
-      Math.max(view.scale * factor, min),
-      min * MAX_ZOOM_FACTOR
+    Object.assign(
+      view,
+      zoomAroundPoint(view, layout, screenX, screenY, view.scale * factor)
     );
-    view.panX = screenX - before.x * view.scale;
-    view.panY = screenY - before.y * view.scale;
   }
 
   function setInkZoom(value: number) {
-    const centerX = view.width * 0.5;
-    const centerY = view.height * 0.5;
-    const before = screenToPage(centerX, centerY);
-    const min = minScale();
-    view.scale = Math.min(Math.max(value, min), min * MAX_ZOOM_FACTOR);
-    view.panX = centerX - before.x * view.scale;
-    view.panY = centerY - before.y * view.scale;
-    clampView();
+    Object.assign(view, zoomToScale(view, layout, value, { mobileToolbar }));
     scheduleDraw();
     updateLiveInkOverlayStyle();
     zoomMenuOpen = false;
@@ -2376,21 +2347,6 @@
     selectedStrokeIds = value;
     applyDocumentMutation(update);
     return true;
-  }
-
-  function minScale(): number {
-    const availableWidth = Math.max(1, view.width - PAGE_FIT_MARGIN * 2);
-    const availableHeight = Math.max(
-      1,
-      view.height - PAGE_FIT_TOP_MARGIN - PAGE_FIT_MARGIN
-    );
-    return Math.max(
-      0.05,
-      Math.min(
-        availableWidth / layout.page.width,
-        availableHeight / layout.page.height
-      )
-    );
   }
 
   function setTool(next: ToolMode) {
