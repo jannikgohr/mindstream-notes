@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { backendUrl } from '../shared/backend-target.js';
 import { connectPeer, makeRoom, signChallenge, wait } from './collab-room';
 
 /**
@@ -15,17 +16,9 @@ import { connectPeer, makeRoom, signChallenge, wait } from './collab-room';
  * that a bad answer is dropped rather than tolerated.
  */
 
-const ENABLED = !!process.env.MINDSTREAM_E2E_BACKEND;
-const BASE = (
-  process.env.MINDSTREAM_E2E_BACKEND_URL ?? 'http://localhost:8080'
-).replace(/\/$/, '');
+const BASE = backendUrl();
 
 test.describe('yjs-relay join challenge', () => {
-  test.skip(
-    !ENABLED,
-    'Set MINDSTREAM_E2E_BACKEND=1 and bring up backend/ to run relay auth checks.'
-  );
-
   test('two members that answer the challenge exchange frames', async () => {
     const { room, privateKey } = await makeRoom();
     const a = connectPeer(BASE, room, (nonce) =>

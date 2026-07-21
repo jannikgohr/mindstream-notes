@@ -2,11 +2,15 @@
  * Shared harness for the real-app (T3) and collaboration (T4) e2e tiers.
  *
  * These tests drive the **packaged Tauri binary** over WebDriver (tauri-driver),
- * not the browser-fallback SPA. They are gated behind capability flags so the
- * suite skips cleanly when the binary / backend isn't available:
+ * not the browser-fallback SPA. Which tier runs is decided by which wdio config
+ * you invoke — `wdio.conf.ts` lists the single-client T3 specs, the multiremote
+ * configs list only the T4 ones — so there are no capability env flags to set.
  *
- *   - `MINDSTREAM_E2E_APP=1`     — the packaged app + tauri-driver are runnable
- *   - `MINDSTREAM_E2E_BACKEND=1` — the backend/ compose stack is up (T4 only)
+ * A missing backend is caught by `assertBackendReady()` (helpers/backend.ts),
+ * which every T4 spec calls first thing in its `before` hook and which fails
+ * fast with an actionable message. That is deliberately a FAILURE, not a skip:
+ * a suite that silently reports success while running nothing is worse than one
+ * that tells you the stack is down.
  *
  * The per-test isolation seam is `MINDSTREAM_PROFILE_DIR` (see
  * src-tauri/src/profiles.rs::dir_override, gated to dev builds and the
@@ -31,29 +35,22 @@ export interface Skippable {
   skip(): void;
 }
 
-export const APP_E2E = process.env.MINDSTREAM_E2E_APP === '1';
-export const BACKEND_E2E = process.env.MINDSTREAM_E2E_BACKEND === '1';
-
 /**
  * Native-dialog test hook (export/import/PDF pickers). Not yet implemented on
  * the Rust side — see docs/e2e/harness.md. Flip on via env once a hook exists so
  * the backup/PDF specs stop self-skipping.
+ *
+ * This is the app tier's one remaining flag, and unlike the removed
+ * `MINDSTREAM_E2E_APP` / `MINDSTREAM_E2E_BACKEND` it does not describe whether
+ * your environment is set up — those are now pre-flight checks that fail the
+ * run (helpers/preflight.ts). This one marks specs whose production-side hook
+ * does not exist yet, which no amount of environment setup can satisfy.
  */
 export const DIALOG_HOOK = process.env.MINDSTREAM_E2E_DIALOG_HOOK === '1';
 
-/** Skip the calling suite unless the packaged app is runnable. */
-export function requireAppE2E(ctx: Skippable): void {
-  if (!APP_E2E) ctx.skip();
-}
-
-/** Skip the calling suite unless the backend stack is up (T4). */
-export function requireBackendE2E(ctx: Skippable): void {
-  if (!APP_E2E || !BACKEND_E2E) ctx.skip();
-}
-
 /** Skip suites that drive a native file dialog until the Rust hook lands. */
 export function requireDialogHook(ctx: Skippable): void {
-  if (!APP_E2E || !DIALOG_HOOK) ctx.skip();
+  if (!DIALOG_HOOK) ctx.skip();
 }
 
 /**

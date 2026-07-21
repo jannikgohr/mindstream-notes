@@ -11,7 +11,6 @@ import {
   clickName,
   insertText,
   pressElementKey,
-  requireAppE2E,
   restartApp,
   setElementValue,
   waitForSaved,
@@ -28,10 +27,6 @@ async function createRootNote(title: string): Promise<void> {
 }
 
 describe('T3 markdown editor round-trip', function () {
-  before(function () {
-    requireAppE2E(this);
-  });
-
   beforeEach(async () => {
     await waitForShell();
   });

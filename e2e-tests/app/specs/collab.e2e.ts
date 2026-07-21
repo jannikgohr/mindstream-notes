@@ -3,19 +3,18 @@
  * note") and flow 2.5. Two app instances (two profile dirs) signed into the
  * same test account, both open on the same note in a shared collection.
  *
- * Needs the backend stack (MINDSTREAM_E2E_BACKEND=1) AND the two-client wdio
+ * Needs the backend stack up (`pnpm backend:test:up`) AND the two-client wdio
  * multiremote setup (`browserA` / `browserB`).
  */
 
 import { expect } from '@wdio/globals';
 
 import { provisionTwoAccounts } from '../helpers/accounts.js';
-import { assertBackendReady, backendUrl } from '../helpers/backend.js';
+import { backendUrl } from '../helpers/backend.js';
 import {
   clientHelpers,
   clickLastButtonText,
   loginClient,
-  requireBackendE2E,
   syncClient,
   type ClientHelpers
 } from '../helpers/harness.js';
@@ -251,10 +250,6 @@ describe('T4 collaboration matrix', function () {
   let noteId: string;
 
   before(async function () {
-    requireBackendE2E(this);
-
-    await assertBackendReady();
-
     const server = backendUrl();
     const accounts = await provisionTwoAccounts(server);
     const sharedAccount = accounts.sender;
