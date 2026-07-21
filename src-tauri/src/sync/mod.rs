@@ -20,8 +20,11 @@
 //! This is the "stoken + transaction" optimistic-concurrency pattern
 //! Etebase exposes; the CRDT does the actual conflict-free merging.
 
+mod apply;
 pub mod collab_room;
+mod collections;
 mod local_rows;
+mod payloads;
 mod pull;
 mod push;
 pub mod repair;
@@ -47,7 +50,10 @@ use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use tauri::{AppHandle, Emitter, Manager};
 
+use apply::*;
+use collections::*;
 use local_rows::*;
+use payloads::*;
 use pull::*;
 use push::*;
 
@@ -220,133 +226,6 @@ fn apply_remote_delete(conn: &Connection, table: &str, etebase_uid: &str) -> App
         )?;
     }
     Ok(())
-}
-
-/// What ends up in `Item::content` for a note. We keep our own `id`
-/// (the local SQLite UUID) inside the payload so we can correlate
-/// pulled items back to existing local rows even if the etebase_uid
-/// hasn't been persisted yet (e.g. created on another device).
-///
-/// Schema versions:
-///   * **1** — legacy. `yrs_state` is a `Y.Text "body"` blob (the old
-///     Rust-side diff path). No `body` snapshot, no `crypto_key`. Read
-///     by `apply_note` for backward compat; never written by this code.
-///   * **2** — current. `yrs_state` is a y-prosemirror `XmlFragment`
-///     update produced by the live editor. `body` is the rendered
-///     markdown snapshot (canonical for fast local reads — Rust doesn't
-///     try to render markdown from prosemirror). `crypto_key` is the
-///     AES-GCM secret used by the live collab provider.
-#[derive(Debug, Serialize, Deserialize)]
-struct NotePayload {
-    schema: u32,
-    id: String,
-    parent_folder_id: Option<String>,
-    title: String,
-    position: i64,
-    /// Canonical note creation timestamp. Added after schema 2; older
-    /// payloads default to None and fall back to the local row / pull time.
-    #[serde(default)]
-    created: Option<String>,
-    /// Canonical note modification timestamp. Added after schema 2; older
-    /// payloads default to None and fall back to the local row / pull time.
-    #[serde(default)]
-    modified: Option<String>,
-    tags: Vec<String>,
-    #[serde(default, with = "serde_bytes")]
-    tags_state: Vec<u8>,
-    /// RFC3339; None means not trashed.
-    trashed_at: Option<String>,
-    /// yrs-encoded Doc state — see sync/yrs_doc.rs.
-    #[serde(with = "serde_bytes")]
-    yrs_state: Vec<u8>,
-    /// v2: rendered markdown snapshot. Default empty for legacy decode.
-    #[serde(default)]
-    body: String,
-    /// v2: 32-byte AES-GCM key for the live collab room. Default empty
-    /// for legacy decode; absence means "no live collab for this note".
-    #[serde(default, with = "serde_bytes")]
-    crypto_key: Vec<u8>,
-    /// Favourite flag. Added without bumping the schema marker — older
-    /// clients see an unknown field (rmp-serde ignores them) and newer
-    /// clients reading older payloads get the serde default of `false`.
-    #[serde(default)]
-    favourite: bool,
-    /// Editor-kind discriminator: `"markdown"` (Crepe / y-prosemirror) or
-    /// `"freeform"` (drawing canvas). Added without bumping `schema` —
-    /// rmp-serde-named ignores unknown fields, and older clients reading
-    /// newer payloads default to "markdown" (which means they'll try to
-    /// render a freeform note in the markdown editor, but won't lose any
-    /// data — the yrs_state survives untouched).
-    #[serde(default = "crate::notes::default_note_kind")]
-    note_kind: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct FolderPayload {
-    schema: u32,
-    id: String,
-    parent_folder_id: Option<String>,
-    name: String,
-    position: i64,
-    #[serde(default)]
-    created: Option<String>,
-    #[serde(default)]
-    modified: Option<String>,
-}
-
-/// Wire format for a drawing-asset Etebase Item.
-///
-/// `id` is the same client-generated UUID the SQLite row uses and that
-/// drawing records can refer to via `mindstream-asset://<id>` — stable across
-/// devices. `etebase_uid` doesn't appear here because Etebase already
-/// owns it (it's the Item.uid()); we only need it on the local row for
-/// dirty-tracking and tombstone routing.
-///
-/// `owning_note_id` carries the FK back to the note so a fresh device
-/// can stitch pulled assets to their drawings. If the note hasn't been
-/// pulled yet (small race window between notes-pull and assets-pull),
-/// apply_asset skips the row without advancing the stoken — the next
-/// sync retries it once the note exists locally.
-///
-/// `bytes` are the raw file payload. Etebase encrypts the whole item
-/// content end-to-end with the collection key, so the relay only sees
-/// ciphertext — same E2EE story as notes.
-#[derive(Debug, Serialize, Deserialize)]
-struct AssetPayload {
-    schema: u32,
-    id: String,
-    owning_note_id: String,
-    mime_type: String,
-    #[serde(with = "serde_bytes")]
-    bytes: Vec<u8>,
-    size: i64,
-    created: String,
-    modified: String,
-}
-
-/// Public signing key a writable shared-folder member publishes into the
-/// scope's encrypted assets collection. It authorizes live-collab write frames
-/// for one collab epoch; rotating the epoch naturally retires old keys.
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
-struct CollabWriterKeyPayload {
-    schema: u32,
-    share_scope_id: String,
-    collab_epoch: u64,
-    public_key_b64: String,
-    username: Option<String>,
-}
-
-/// What ends up in `Item::content` for a signature. `data` is the opaque
-/// JSON geometry blob (see signatures/mod.rs); we keep our own `id` inside
-/// so pulled items correlate back to local rows. Etebase E2E-encrypts the
-/// whole content, same as notes/assets.
-#[derive(Debug, Serialize, Deserialize)]
-struct SignaturePayload {
-    schema: u32,
-    id: String,
-    data: String,
-    created: String,
-    modified: String,
 }
 
 /// Result reported back to the UI after a sync attempt.
@@ -610,193 +489,6 @@ fn run(db: &Db, account: &Account, self_username: Option<&str>) -> AppResult<Syn
     push_signatures(db, &signatures_im, &mut delta.report)?;
 
     Ok(delta)
-}
-
-/// How many consecutive stable syncs (winner == cached) we require before
-/// disarming the reconcile window and reverting to the cache fast path. Each
-/// create/migrate re-arms to this value. Three passes at the "live" 30s
-/// cadence is ~90s — comfortably longer than the concurrent first-sync window
-/// where two fresh devices could otherwise cement a split-brain.
-const RECONCILE_PASSES: i64 = 3;
-
-/// Find the Etebase Collection of `collection_type` that we previously
-/// created, or create one, keeping the account's devices converged on a
-/// single collection per singleton `kind`.
-///
-/// Cache-first once *disarmed*: a cached uid that still fetches is returned
-/// without listing, so steady-state sync stays cheap.
-///
-/// While *armed* (`reconcile_passes_left > 0`) — the window after any
-/// create/migrate, and the few syncs after this migration lands — we list the
-/// account's collections of this type and converge on the lexicographically
-/// smallest live uid. That min is a deterministic winner every device computes
-/// identically, so two fresh devices that each created their own collection in
-/// the first-sync race both adopt the same one; the loser migrates its rows
-/// over (see `switch_to_collection`) and the abandoned collection is simply
-/// left orphaned server-side. A stable pass decrements the counter; reaching
-/// zero disarms.
-fn ensure_collection(
-    db: &Db,
-    cm: &CollectionManager,
-    kind: &str,
-    collection_type: &str,
-    share_scope_part_uids: &HashSet<String>,
-) -> AppResult<Collection> {
-    let (cached_uid, passes_left) = load_collection_state(db, kind)?;
-
-    // Disarmed fast path: trust the cache exactly like before. Only fall
-    // through to the (re)listing path if the cached collection can't be
-    // fetched — a cache miss must not silently mint a duplicate.
-    if passes_left == 0 {
-        if let Some(uid) = &cached_uid {
-            match cm.fetch(uid, None) {
-                Ok(col) => {
-                    let candidate = VaultCollectionCandidate::from(&col);
-                    if usable_vault_collection(&candidate, share_scope_part_uids) {
-                        return Ok(col);
-                    }
-                    log::warn!(
-                        "[sync] cached collection {} for {kind} is not usable as a vault singleton; reconciling",
-                        col.uid()
-                    );
-                }
-                Err(e) => log::warn!("[sync] cached collection {uid} for {kind} unfetchable: {e}"),
-            }
-        }
-    }
-
-    let list = cm
-        .list(collection_type, None)
-        .map_err(|e| AppError::InvalidArg(format!("list {collection_type}: {e}")))?;
-    let winner_uid = list
-        .data()
-        .iter()
-        .map(VaultCollectionCandidate::from)
-        .filter(|candidate| usable_vault_collection(candidate, share_scope_part_uids))
-        .map(|candidate| candidate.uid.to_string())
-        .min();
-
-    if let Some(winner) = winner_uid {
-        if cached_uid.as_deref() == Some(winner.as_str()) {
-            // Stable this pass — count down toward disarm.
-            set_reconcile_passes(db, kind, passes_left.saturating_sub(1))?;
-        } else {
-            // Adopt/migrate onto the winner and re-arm the window. On a fresh
-            // device this is the harmless "adopt existing" case (rows are
-            // already dirty with NULL item uids); on a loser it re-homes rows
-            // off the duplicate collection.
-            switch_to_collection(db, kind, &winner)?;
-        }
-        return cm
-            .fetch(&winner, None)
-            .map_err(|e| AppError::InvalidArg(format!("fetch {collection_type}: {e}")));
-    }
-
-    // None exist yet — create, upload, arm the window.
-    let mut meta = ItemMetadata::new();
-    meta.set_name(Some(match kind {
-        KIND_NOTES => "Mindstream Notes",
-        KIND_FOLDERS => "Mindstream Folders",
-        KIND_ASSETS => "Mindstream Assets",
-        KIND_SIGNATURES => "Mindstream Signatures",
-        _ => "Mindstream",
-    }))
-    .set_mtime(Some(now_unix_ms()));
-    let col = cm
-        .create(collection_type, &meta, &[])
-        .map_err(|e| AppError::InvalidArg(format!("create {collection_type}: {e}")))?;
-    cm.upload(&col, None)
-        .map_err(|e| AppError::InvalidArg(format!("upload {collection_type}: {e}")))?;
-    save_collection_uid(db, kind, col.uid())?;
-    Ok(col)
-}
-
-/// Read the cached collection uid and remaining reconcile passes for `kind`.
-/// A missing row means "never synced this kind" → armed (RECONCILE_PASSES) so
-/// the first sync goes through the listing/converge path.
-fn load_collection_state(db: &Db, kind: &str) -> AppResult<(Option<String>, i64)> {
-    db.with_conn(|c| {
-        Ok(c.query_row(
-            "SELECT etebase_collection_uid, reconcile_passes_left
-             FROM sync_state WHERE kind = ?1",
-            params![kind],
-            |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, i64>(1)?)),
-        )
-        .optional()?
-        .unwrap_or((None, RECONCILE_PASSES)))
-    })
-}
-
-fn set_reconcile_passes(db: &Db, kind: &str, passes: i64) -> AppResult<()> {
-    db.with_conn(|c| {
-        c.execute(
-            "UPDATE sync_state SET reconcile_passes_left = ?1 WHERE kind = ?2",
-            params![passes, kind],
-        )?;
-        Ok(())
-    })
-}
-
-/// Point `kind`'s cache at a newly created collection and arm the reconcile
-/// window. Resets stoken because a new collection uid invalidates the old
-/// pull cursor.
-fn save_collection_uid(db: &Db, kind: &str, uid: &str) -> AppResult<()> {
-    db.with_conn(|c| {
-        c.execute(
-            "INSERT INTO sync_state (kind, etebase_collection_uid, stoken, reconcile_passes_left)
-             VALUES (?1, ?2, NULL, ?3)
-             ON CONFLICT(kind) DO UPDATE SET
-                etebase_collection_uid = excluded.etebase_collection_uid,
-                stoken = NULL,
-                reconcile_passes_left = excluded.reconcile_passes_left",
-            params![kind, uid, RECONCILE_PASSES],
-        )?;
-        Ok(())
-    })
-}
-
-/// Migrate this device onto the reconcile winner for `kind`. Points the cache
-/// at `winner_uid`, clears the stale pull cursor, re-arms the window, and
-/// routes every vault row of this kind back through push's create path against
-/// the winner by clearing its old collection-scoped item uid/etag and marking
-/// it dirty. The winner already holds the surviving copies; rows converge by
-/// their stable app id on the next pull, and rows only this device had are
-/// re-created in the winner. Scoped (shared) rows keep their own routing and
-/// the local-only 'trash' folder is never pushed.
-fn switch_to_collection(db: &Db, kind: &str, winner_uid: &str) -> AppResult<()> {
-    db.with_conn(|c| {
-        c.execute(
-            "INSERT INTO sync_state (kind, etebase_collection_uid, stoken, reconcile_passes_left)
-             VALUES (?1, ?2, NULL, ?3)
-             ON CONFLICT(kind) DO UPDATE SET
-                etebase_collection_uid = excluded.etebase_collection_uid,
-                stoken = NULL,
-                reconcile_passes_left = excluded.reconcile_passes_left",
-            params![kind, winner_uid, RECONCILE_PASSES],
-        )?;
-        let sql = match kind {
-            KIND_NOTES => {
-                "UPDATE notes SET dirty = 1, etebase_uid = NULL, etebase_etag = NULL
-                 WHERE share_scope_id IS NULL"
-            }
-            KIND_FOLDERS => {
-                "UPDATE collections SET dirty = 1, etebase_uid = NULL, etebase_etag = NULL
-                 WHERE share_scope_id IS NULL AND id != 'trash'"
-            }
-            KIND_ASSETS => {
-                "UPDATE assets SET dirty = 1, etebase_uid = NULL, etebase_etag = NULL
-                 WHERE share_scope_id IS NULL"
-            }
-            KIND_SIGNATURES => {
-                "UPDATE signatures SET dirty = 1, etebase_uid = NULL, etebase_etag = NULL"
-            }
-            _ => return Ok(()),
-        };
-        c.execute(sql, [])?;
-        Ok(())
-    })?;
-    log::info!("[sync] {kind} reconciled onto collection {winner_uid}");
-    Ok(())
 }
 
 fn now_unix_ms() -> i64 {
