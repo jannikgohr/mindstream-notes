@@ -1,12 +1,13 @@
-fn main() {
-    generate_i18n_bundle_list();
-    tauri_build::build()
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    generate_i18n_bundle_list()?;
+    tauri_build::build();
+    Ok(())
 }
 
-fn generate_i18n_bundle_list() {
+fn generate_i18n_bundle_list() -> Result<(), Box<dyn std::error::Error>> {
     use std::{env, fs, path::PathBuf};
 
-    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
     let i18n_dir = manifest_dir
         .join("..")
         .join("src")
@@ -38,7 +39,7 @@ fn generate_i18n_bundle_list() {
     }
     generated.push_str("];\n");
 
-    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
-    fs::write(out_dir.join("i18n_bundles.rs"), generated)
-        .expect("failed to write generated i18n bundle list");
+    let out_dir = PathBuf::from(env::var("OUT_DIR")?);
+    fs::write(out_dir.join("i18n_bundles.rs"), generated)?;
+    Ok(())
 }

@@ -4,6 +4,7 @@ import { fetchDrawingAsset, loadNote, type Note } from '$lib/api';
 import { saveAnnotatedPdf } from '$lib/api/pdf-export';
 import { exportAnnotatedPdf } from '$lib/pdf/export-annotated-pdf';
 import { sanitizePdfFilename } from '$lib/pdf/filename';
+import { pdfAssetIdFromBody } from '$lib/pdf/viewer-helpers';
 import {
   PDF_ANNOTATIONS_MAP,
   PDF_FORM_VALUES_MAP,
@@ -11,18 +12,6 @@ import {
   type PdfFormValue
 } from '$lib/pdf/types';
 import type { NoteExporter } from './types';
-
-function pdfAssetIdFromBody(body: string): string | null {
-  const trimmed = body.trim();
-  if (!trimmed) return null;
-  if (trimmed.startsWith('asset_')) return trimmed;
-  try {
-    const parsed = JSON.parse(trimmed) as { pdfAssetId?: unknown };
-    return typeof parsed.pdfAssetId === 'string' ? parsed.pdfAssetId : null;
-  } catch {
-    return null;
-  }
-}
 
 function liveAnnotationsFrom(note: Note): PdfAnnotation[] {
   const doc = new Y.Doc();

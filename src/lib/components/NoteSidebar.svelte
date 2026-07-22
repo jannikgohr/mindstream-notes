@@ -32,6 +32,7 @@
   import { noteKindIcon } from '$lib/components/note-kind-icon';
   import { formatNoteDateTime } from '$lib/date-time';
   import { findShareScopeCollectionId } from '$lib/notes/share-users';
+  import { pdfAssetIdFromBody } from '$lib/pdf/viewer-helpers';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { ui } from '$lib/state.svelte';
   import { setNoteFavourite, tree } from '$lib/stores/tree.svelte';
@@ -265,12 +266,8 @@
     for (const match of body.matchAll(/asset:mindstream\/([A-Za-z0-9_-]+)/g)) {
       ids.add(match[1]);
     }
-    try {
-      const parsed = JSON.parse(body) as { pdfAssetId?: unknown };
-      if (typeof parsed.pdfAssetId === 'string') ids.add(parsed.pdfAssetId);
-    } catch {
-      /* Non-JSON note bodies are expected. */
-    }
+    const pdfAssetId = pdfAssetIdFromBody(body);
+    if (pdfAssetId) ids.add(pdfAssetId);
     return [...ids];
   }
 

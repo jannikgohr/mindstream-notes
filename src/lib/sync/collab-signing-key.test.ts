@@ -189,5 +189,13 @@ describe('getOrCreateCollabSigningMaterial', () => {
     const afterPartial = await getOrCreateCollabSigningMaterial();
     expect(afterPartial?.publicKeyB64).toBeTruthy();
     expect(afterPartial?.privateKeyPkcs8B64).not.toBe('orphan');
+
+    window.localStorage.setItem(
+      key,
+      JSON.stringify({ publicKeyB64: 42, privateKeyPkcs8B64: 'wrong' })
+    );
+    const afterWrongTypes = await getOrCreateCollabSigningMaterial();
+    expect(afterWrongTypes?.publicKeyB64).toBeTruthy();
+    expect(afterWrongTypes?.privateKeyPkcs8B64).not.toBe('wrong');
   });
 });

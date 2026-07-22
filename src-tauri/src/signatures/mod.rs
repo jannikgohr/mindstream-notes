@@ -152,7 +152,7 @@ mod tests {
         assert_eq!(rec.id, "sig_1");
         assert!(!rec.pushed);
 
-        let all = db.with_conn(|c| list(c)).unwrap();
+        let all = db.with_conn(list).unwrap();
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].data, r#"{"width":200,"height":80,"strokes":[]}"#);
     }
@@ -164,7 +164,7 @@ mod tests {
         let second = save(&db, "sig_1", r#"{"v":2}"#);
         assert_eq!(second.created, first.created, "created is preserved");
         assert_eq!(second.data, r#"{"v":2}"#);
-        let all = db.with_conn(|c| list(c)).unwrap();
+        let all = db.with_conn(list).unwrap();
         assert_eq!(all.len(), 1, "upsert replaces, not duplicates");
     }
 
@@ -173,7 +173,7 @@ mod tests {
         let db = open_memory_for_tests();
         save(&db, "sig_1", r#"{}"#);
         db.with_conn(|c| delete(c, "sig_1")).unwrap();
-        let all = db.with_conn(|c| list(c)).unwrap();
+        let all = db.with_conn(list).unwrap();
         assert!(all.is_empty());
         let tombstones: i64 = db
             .with_conn(|c| Ok(c.query_row("SELECT COUNT(*) FROM tombstones", [], |r| r.get(0))?))
