@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
 use crate::db::Db;
-use crate::error::{AppError, AppResult};
+use crate::error::{AppError, AppResult, CommandResult};
 
 const KEYRING_SERVICE: &str = "mindstream-notes";
 const KEYRING_ACCOUNT: &str = "etebase-session-key";
@@ -283,7 +283,7 @@ pub fn has_session(app: &AppHandle) -> bool {
 }
 
 #[tauri::command]
-pub async fn etebase_login(args: LoginArgs, app: AppHandle) -> Result<SessionInfo, String> {
+pub async fn etebase_login(args: LoginArgs, app: AppHandle) -> CommandResult<SessionInfo> {
     let server_url = resolve_server_url(&args).map_err(String::from)?;
     let path = session_path(&app).map_err(String::from)?;
     let keyring_account = active_keyring_account(&app);
@@ -329,7 +329,7 @@ pub async fn etebase_login(args: LoginArgs, app: AppHandle) -> Result<SessionInf
         if let Ok(entry) = keyring_entry(&keyring_account) {
             let _ = entry.delete_credential();
         }
-        return Err(format!("write session: {e}"));
+        return Err(format!("write session: {e}").into());
     }
 
     Ok(SessionInfo {
@@ -339,7 +339,7 @@ pub async fn etebase_login(args: LoginArgs, app: AppHandle) -> Result<SessionInf
 }
 
 #[tauri::command]
-pub async fn etebase_logout(app: AppHandle) -> Result<(), String> {
+pub async fn etebase_logout(app: AppHandle) -> CommandResult<()> {
     let path = session_path(&app).map_err(String::from)?;
     let stored = read_stored(&path).map_err(String::from)?;
     let keyring_account = active_keyring_account(&app);
@@ -357,13 +357,18 @@ pub async fn etebase_logout(app: AppHandle) -> Result<(), String> {
         // server gone) we still wipe local state below — that's the
         // user's clear intent.
         let keyring_account = keyring_account.clone();
-        let _ = tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+        let logout_result = tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
             let account = restore_account(&stored, &keyring_account)
                 .map_err(|e| format!("restore session: {e}"))?;
             account.logout().map_err(|e| format!("logout: {e}"))?;
             Ok(())
         })
         .await;
+        match logout_result {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => log::warn!("[auth] remote logout failed: {err}"),
+            Err(err) => log::warn!("[auth] remote logout task failed: {err}"),
+        }
     }
 
     // Nothing key-shaped needs wiping locally: the crypto_key column
@@ -390,7 +395,7 @@ pub async fn etebase_logout(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn etebase_session(app: AppHandle) -> Result<Option<SessionInfo>, String> {
+pub async fn etebase_session(app: AppHandle) -> CommandResult<Option<SessionInfo>> {
     let path = session_path(&app).map_err(String::from)?;
     let Some(stored) = read_stored(&path).map_err(String::from)? else {
         return Ok(None);
@@ -423,7 +428,7 @@ pub async fn probe_server_reachable(server_url: &str) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn check_etebase_server_url(server_url: String) -> Result<ServerCheckResult, String> {
+pub async fn check_etebase_server_url(server_url: String) -> CommandResult<ServerCheckResult> {
     let url = health_url(&server_url).map_err(String::from)?;
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(8))

@@ -7,7 +7,7 @@ use super::*;
 pub async fn invite_collection(
     app: AppHandle,
     input: InviteCollectionInput,
-) -> Result<CollectionShareState, String> {
+) -> CommandResult<CollectionShareState> {
     tauri::async_runtime::spawn_blocking(move || {
         let InviteCollectionInput {
             collection_id,
@@ -142,7 +142,7 @@ pub async fn invite_collection(
 pub async fn e2e_create_standalone_collection_invite(
     app: AppHandle,
     input: E2eStandaloneInviteInput,
-) -> Result<E2eStandaloneInviteResult, String> {
+) -> CommandResult<E2eStandaloneInviteResult> {
     tauri::async_runtime::spawn_blocking(move || {
         let E2eStandaloneInviteInput {
             username,
@@ -201,7 +201,7 @@ pub async fn e2e_create_standalone_collection_invite(
 pub async fn e2e_create_incomplete_share_bundle(
     app: AppHandle,
     input: E2eIncompleteBundleInput,
-) -> Result<E2eIncompleteBundleResult, String> {
+) -> CommandResult<E2eIncompleteBundleResult> {
     tauri::async_runtime::spawn_blocking(move || {
         let E2eIncompleteBundleInput {
             username,
@@ -292,7 +292,7 @@ pub async fn e2e_create_incomplete_share_bundle(
 pub async fn e2e_accept_share_manifest_only(
     app: AppHandle,
     manifest_collection_uid: String,
-) -> Result<(), String> {
+) -> CommandResult<()> {
     tauri::async_runtime::spawn_blocking(move || {
         let account = restore_required(&app)?;
         let inv_manager = account
