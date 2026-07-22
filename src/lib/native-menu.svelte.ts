@@ -9,6 +9,10 @@ import { importPdfIn } from '$lib/stores/tree.svelte';
 import {
   documentEditCommandForNativeMenuCommand,
   hotkeyCommandForNativeMenuCommand,
+  isNativeMenuCommand,
+  NativeDocumentEditCommand,
+  NativeMenuCommand,
+  NativeUndoRedoAction,
   themeModeForNativeMenuCommand,
   undoRedoActionForNativeMenuCommand,
   undoRedoCommandId
@@ -17,7 +21,7 @@ import {
 const NATIVE_MENU_COMMAND_EVENT = 'native-menu-command';
 
 interface NativeMenuCommandPayload {
-  command: string;
+  command: NativeMenuCommand;
 }
 
 let initialized = false;
@@ -30,6 +34,10 @@ export function initNativeMenuCommands(): void {
   void listen<NativeMenuCommandPayload>(
     NATIVE_MENU_COMMAND_EVENT,
     async (event) => {
+      if (!isNativeMenuCommand(event.payload?.command)) {
+        console.warn('[native-menu] invalid command payload', event.payload);
+        return;
+      }
       if (!(await isCurrentWindowFocused())) return;
       await runNativeMenuCommand(event.payload.command);
     }
@@ -46,7 +54,7 @@ async function isCurrentWindowFocused(): Promise<boolean> {
   }
 }
 
-async function runNativeMenuCommand(command: string): Promise<void> {
+async function runNativeMenuCommand(command: NativeMenuCommand): Promise<void> {
   const hotkeyCommand = hotkeyCommandForNativeMenuCommand(command);
   if (hotkeyCommand) {
     emitHotkeyCommand(hotkeyCommand);
@@ -71,7 +79,7 @@ async function runNativeMenuCommand(command: string): Promise<void> {
     return;
   }
 
-  if (command === 'import-pdf') {
+  if (command === NativeMenuCommand.ImportPdf) {
     await importPdfFromPicker();
     return;
   }
@@ -88,7 +96,7 @@ function emitHotkeyCommand(commandId: string): boolean {
   return emitCommand(command);
 }
 
-function runUndoRedo(action: 'undo' | 'redo'): void {
+function runUndoRedo(action: NativeUndoRedoAction): void {
   const editor = activeEditor();
   if (editor) {
     const commandId = undoRedoCommandId(editor.kind, action);
@@ -97,7 +105,9 @@ function runUndoRedo(action: 'undo' | 'redo'): void {
   runDocumentEditCommand(action);
 }
 
-function runDocumentEditCommand(command: string): void {
+function runDocumentEditCommand(
+  command: NativeDocumentEditCommand | NativeUndoRedoAction
+): void {
   try {
     document.execCommand(command);
   } catch (err) {

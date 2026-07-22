@@ -15,6 +15,7 @@ import type {
 import type {
   CreateNoteInput,
   Note,
+  NoteKind,
   NoteSummary,
   UpdateNoteInput
 } from './notes';
@@ -478,7 +479,7 @@ export const mockApi = {
   // ---- Note history ----
   async captureNoteVersion(
     noteId: string,
-    noteKind: string,
+    noteKind: NoteKind,
     action: VersionAction,
     markdown: string,
     refVersionId: string | null

@@ -32,7 +32,30 @@ const WINDOW_ITEM_PREFIX: &str = "native:window:";
 
 #[derive(Debug, Clone, Serialize)]
 struct NativeMenuCommandPayload {
-    command: &'static str,
+    command: NativeMenuCommand,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum NativeMenuCommand {
+    OpenSettings,
+    NewMarkdownNote,
+    NewDrawing,
+    NewInkNote,
+    ImportPdf,
+    Undo,
+    Redo,
+    Cut,
+    Copy,
+    Paste,
+    SelectAll,
+    ToggleSidebar,
+    ToggleMetadata,
+    SearchNotes,
+    ThemeLight,
+    ThemeDark,
+    ThemeSystem,
+    ShowKeyboardShortcuts,
 }
 
 pub fn init(app: &App) -> tauri::Result<()> {
@@ -298,31 +321,31 @@ where
     MenuItem::with_id(app, id, text, true, accelerator)
 }
 
-fn command_for_item(item_id: &str) -> Option<&'static str> {
+fn command_for_item(item_id: &str) -> Option<NativeMenuCommand> {
     match item_id {
-        ID_SETTINGS => Some("open-settings"),
-        ID_NEW_NOTE => Some("new-markdown-note"),
-        ID_NEW_DRAWING => Some("new-drawing"),
-        ID_NEW_INK => Some("new-ink-note"),
-        ID_IMPORT_PDF => Some("import-pdf"),
-        ID_UNDO => Some("undo"),
-        ID_REDO => Some("redo"),
-        ID_CUT => Some("cut"),
-        ID_COPY => Some("copy"),
-        ID_PASTE => Some("paste"),
-        ID_SELECT_ALL => Some("select-all"),
-        ID_TOGGLE_SIDEBAR => Some("toggle-sidebar"),
-        ID_TOGGLE_METADATA => Some("toggle-metadata"),
-        ID_SEARCH_NOTES => Some("search-notes"),
-        ID_THEME_LIGHT => Some("theme-light"),
-        ID_THEME_DARK => Some("theme-dark"),
-        ID_THEME_SYSTEM => Some("theme-system"),
-        ID_SHOW_SHORTCUTS => Some("show-keyboard-shortcuts"),
+        ID_SETTINGS => Some(NativeMenuCommand::OpenSettings),
+        ID_NEW_NOTE => Some(NativeMenuCommand::NewMarkdownNote),
+        ID_NEW_DRAWING => Some(NativeMenuCommand::NewDrawing),
+        ID_NEW_INK => Some(NativeMenuCommand::NewInkNote),
+        ID_IMPORT_PDF => Some(NativeMenuCommand::ImportPdf),
+        ID_UNDO => Some(NativeMenuCommand::Undo),
+        ID_REDO => Some(NativeMenuCommand::Redo),
+        ID_CUT => Some(NativeMenuCommand::Cut),
+        ID_COPY => Some(NativeMenuCommand::Copy),
+        ID_PASTE => Some(NativeMenuCommand::Paste),
+        ID_SELECT_ALL => Some(NativeMenuCommand::SelectAll),
+        ID_TOGGLE_SIDEBAR => Some(NativeMenuCommand::ToggleSidebar),
+        ID_TOGGLE_METADATA => Some(NativeMenuCommand::ToggleMetadata),
+        ID_SEARCH_NOTES => Some(NativeMenuCommand::SearchNotes),
+        ID_THEME_LIGHT => Some(NativeMenuCommand::ThemeLight),
+        ID_THEME_DARK => Some(NativeMenuCommand::ThemeDark),
+        ID_THEME_SYSTEM => Some(NativeMenuCommand::ThemeSystem),
+        ID_SHOW_SHORTCUTS => Some(NativeMenuCommand::ShowKeyboardShortcuts),
         _ => None,
     }
 }
 
-fn emit_command_to_focused_window(app: &AppHandle, command: &'static str) {
+fn emit_command_to_focused_window(app: &AppHandle, command: NativeMenuCommand) {
     let payload = NativeMenuCommandPayload { command };
     if let Some(window) = focused_window(app) {
         if let Err(err) = app.emit_to(
@@ -330,12 +353,12 @@ fn emit_command_to_focused_window(app: &AppHandle, command: &'static str) {
             COMMAND_EVENT,
             payload,
         ) {
-            log::warn!("[native-menu] failed to emit {command}: {err}");
+            log::warn!("[native-menu] failed to emit {command:?}: {err}");
         }
         return;
     }
     if let Err(err) = app.emit_to(EventTarget::webview_window("main"), COMMAND_EVENT, payload) {
-        log::warn!("[native-menu] failed to emit {command} to main: {err}");
+        log::warn!("[native-menu] failed to emit {command:?} to main: {err}");
     }
 }
 
@@ -477,24 +500,24 @@ mod tests {
     #[test]
     fn command_for_item_maps_frontend_commands() {
         let cases = [
-            (ID_SETTINGS, "open-settings"),
-            (ID_NEW_NOTE, "new-markdown-note"),
-            (ID_NEW_DRAWING, "new-drawing"),
-            (ID_NEW_INK, "new-ink-note"),
-            (ID_IMPORT_PDF, "import-pdf"),
-            (ID_UNDO, "undo"),
-            (ID_REDO, "redo"),
-            (ID_CUT, "cut"),
-            (ID_COPY, "copy"),
-            (ID_PASTE, "paste"),
-            (ID_SELECT_ALL, "select-all"),
-            (ID_TOGGLE_SIDEBAR, "toggle-sidebar"),
-            (ID_TOGGLE_METADATA, "toggle-metadata"),
-            (ID_SEARCH_NOTES, "search-notes"),
-            (ID_THEME_LIGHT, "theme-light"),
-            (ID_THEME_DARK, "theme-dark"),
-            (ID_THEME_SYSTEM, "theme-system"),
-            (ID_SHOW_SHORTCUTS, "show-keyboard-shortcuts"),
+            (ID_SETTINGS, NativeMenuCommand::OpenSettings),
+            (ID_NEW_NOTE, NativeMenuCommand::NewMarkdownNote),
+            (ID_NEW_DRAWING, NativeMenuCommand::NewDrawing),
+            (ID_NEW_INK, NativeMenuCommand::NewInkNote),
+            (ID_IMPORT_PDF, NativeMenuCommand::ImportPdf),
+            (ID_UNDO, NativeMenuCommand::Undo),
+            (ID_REDO, NativeMenuCommand::Redo),
+            (ID_CUT, NativeMenuCommand::Cut),
+            (ID_COPY, NativeMenuCommand::Copy),
+            (ID_PASTE, NativeMenuCommand::Paste),
+            (ID_SELECT_ALL, NativeMenuCommand::SelectAll),
+            (ID_TOGGLE_SIDEBAR, NativeMenuCommand::ToggleSidebar),
+            (ID_TOGGLE_METADATA, NativeMenuCommand::ToggleMetadata),
+            (ID_SEARCH_NOTES, NativeMenuCommand::SearchNotes),
+            (ID_THEME_LIGHT, NativeMenuCommand::ThemeLight),
+            (ID_THEME_DARK, NativeMenuCommand::ThemeDark),
+            (ID_THEME_SYSTEM, NativeMenuCommand::ThemeSystem),
+            (ID_SHOW_SHORTCUTS, NativeMenuCommand::ShowKeyboardShortcuts),
         ];
 
         for (item_id, command) in cases {
