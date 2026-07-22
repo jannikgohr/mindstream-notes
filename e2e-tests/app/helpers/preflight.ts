@@ -322,6 +322,11 @@ function writeE2eConfig(profileId: string): string {
     JSON.stringify(
       {
         $schema: 'https://schema.tauri.app/config/2',
+        build: {
+          // preflight runs `pnpm build` once per suite; profile-specific Tauri
+          // builds reuse that `.output/build` instead of rebuilding Vite.
+          beforeBuildCommand: ''
+        },
         app: {
           windows: [
             {
@@ -338,7 +343,20 @@ function writeE2eConfig(profileId: string): string {
   return configPath;
 }
 
+function buildFrontend(): void {
+  const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
+  const res = spawnSync(pnpm, ['build'], {
+    cwd: repoRoot,
+    stdio: 'inherit',
+    env: buildEnv
+  });
+  if (res.status !== 0) {
+    fail('frontend build (`pnpm build`) failed');
+  }
+}
+
 function buildApp(profiles: string[]): void {
+  buildFrontend();
   for (const profile of profiles) {
     const e2eConfig = writeE2eConfig(profile);
     const targetBinary = appBinaryForProfile(profile);
