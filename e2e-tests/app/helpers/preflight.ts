@@ -11,8 +11,14 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import {
+  existsSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync
+} from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SevereServiceError } from 'webdriverio';
@@ -122,6 +128,38 @@ export function assertAppBinaryReady(): void {
   }
 }
 
+/**
+ * Delete leftover `mindstream-e2e-*` profile dirs from earlier runs.
+ *
+ * Each config mints a throwaway profile dir per client with `mkdtempSync` and
+ * nothing ever removed them, so they pile up in the temp dir indefinitely (the
+ * investigation left ~1000). The current run's dirs are seconds old — created
+ * at config module-load, just before this runs — so an age cutoff never touches
+ * them. Best-effort: a dir held open by a still-dying process just survives to
+ * the next sweep. Runs are sequential (maxInstances 1), so nothing else is
+ * using an old dir.
+ */
+export function sweepStaleProfileDirs(maxAgeMs = 30 * 60_000): void {
+  const root = tmpdir();
+  const cutoff = Date.now() - maxAgeMs;
+  let entries: string[];
+  try {
+    entries = readdirSync(root);
+  } catch {
+    return;
+  }
+  for (const name of entries) {
+    if (!name.startsWith('mindstream-e2e-')) continue;
+    const full = join(root, name);
+    try {
+      if (statSync(full).mtimeMs > cutoff) continue;
+      rmSync(full, { recursive: true, force: true });
+    } catch {
+      /* in use or already gone — next sweep gets it */
+    }
+  }
+}
+
 /** Verify tauri-driver is installed before a session tries to spawn it. */
 export function assertTauriDriver(): void {
   if (!existsSync(tauriDriverPath)) {
@@ -177,6 +215,7 @@ export async function preflight({
   /** T4 configs: require the collaboration stack to be answering. */
   backend: boolean;
 }): Promise<void> {
+  sweepStaleProfileDirs();
   assertTauriDriver();
   if (backend) {
     // assertBackendReady throws a plain Error (it is shared with the Playwright

@@ -122,6 +122,16 @@ export const config: WebdriverIO.Config = {
   // a broken spec.
   mochaOpts: { ui: 'bdd', timeout: 240_000 },
 
+  // Re-run a failed spec file once with a fresh session (new drivers + a fresh
+  // app boot). The remaining flake after the context-menu fix is a transient:
+  // a fresh WebView2 host occasionally becomes CDP-responsive too slowly under
+  // momentary machine load, so wdio's aria/ findElement (an injected page
+  // script) hangs at the transport layer or misses its 30s wait. That is not a
+  // logic failure — a clean reboot clears it — so one retry absorbs it without
+  // masking a real regression (a genuinely broken spec fails both attempts).
+  specFileRetries: 1,
+  specFileRetriesDeferred: true,
+
   // Requirement checks + the Tauri CLI build (helpers/preflight.ts). T4 also
   // requires the backend stack, so a down stack fails here — once, before the
   // build — instead of five specs each timing out in their `before` hook.

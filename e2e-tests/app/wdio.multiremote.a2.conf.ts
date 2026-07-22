@@ -123,6 +123,11 @@ export const config: WebdriverIO.Config = {
   reporters: ['spec'],
   mochaOpts: { ui: 'bdd', timeout: 120_000 },
 
+  // Retry a failed spec file once on a fresh session — same transient-boot
+  // rationale as the two-client config (see wdio.multiremote.conf.ts).
+  specFileRetries: 1,
+  specFileRetriesDeferred: true,
+
   // Requirement checks + the Tauri CLI build, same as the two-client config
   // (helpers/preflight.ts).
   onPrepare: () => preflight({ backend: true }),
