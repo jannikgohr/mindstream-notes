@@ -1,0 +1,35 @@
+# Codecov configuration.
+#
+# Coverage is informational while it ramps up, and the CI coverage job uses
+# `continue-on-error` so a sub-threshold run still uploads its lcov. Without the
+# settings below, Codecov's defaults withhold the finalized report until it sees
+# a clean CI pass — which surfaces as "Missing Head Report" on commits whose
+# coverage came from a threshold-failing (but uploaded) build.
+# See https://docs.codecov.com/docs/error-reference#missing-head-report
+codecov:
+  # Finalize and publish the report from the uploaded coverage regardless of
+  # whether every CI check passed, so a sub-threshold build still gets a head
+  # report to compare against.
+  require_ci_to_pass: false
+
+coverage:
+  status:
+    # Keep coverage advisory — a drop annotates the PR but never fails the check.
+    project:
+      default:
+        informational: true
+    patch:
+      default:
+        informational: true
+
+comment:
+  # Still post the PR comment even if the head/base report is late or missing,
+  # instead of blocking on it.
+  require_head: false
+  require_base: false
+
+# Track the frontend and backend uploads as independent flags (the CI job tags
+# each lcov upload with the matching flag).
+flag_management:
+  default_rules:
+    carryforward: true
