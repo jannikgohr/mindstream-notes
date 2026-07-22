@@ -12,6 +12,7 @@ import {
   assertNumber,
   assertRecord,
   assertString,
+  TauriCommandName,
   invokeOrFallback,
   optionalString
 } from './core';
@@ -73,7 +74,7 @@ export function captureNoteVersion(
   assertVersionAction(action, 'captureNoteVersion.action');
   assertString(snapshot, 'captureNoteVersion.snapshot');
   return invokeOrFallback<VersionSummary | null>(
-    'capture_note_version',
+    TauriCommandName.CaptureNoteVersion,
     { noteId, noteKind, action, refVersionId, markdown: snapshot },
     () =>
       mockApi.captureNoteVersion(
@@ -100,7 +101,7 @@ export function captureCurrentNoteVersion(
   assertNonEmptyString(noteId, 'captureCurrentNoteVersion.noteId');
   assertVersionAction(action, 'captureCurrentNoteVersion.action');
   return invokeOrFallback<VersionSummary | null>(
-    'capture_current_note_version',
+    TauriCommandName.CaptureCurrentNoteVersion,
     { noteId, action, refVersionId },
     () => mockApi.captureCurrentNoteVersion(noteId, action, refVersionId),
     parseOptionalVersionSummary
@@ -110,7 +111,7 @@ export function captureCurrentNoteVersion(
 export function listNoteVersions(noteId: string): Promise<VersionSummary[]> {
   assertNonEmptyString(noteId, 'listNoteVersions.noteId');
   return invokeOrFallback<VersionSummary[]>(
-    'list_note_versions',
+    TauriCommandName.ListNoteVersions,
     { noteId },
     () => mockApi.listNoteVersions(noteId),
     parseVersionSummaries
@@ -120,7 +121,7 @@ export function listNoteVersions(noteId: string): Promise<VersionSummary[]> {
 export function loadNoteVersion(versionId: string): Promise<Version> {
   assertNonEmptyString(versionId, 'loadNoteVersion.versionId');
   return invokeOrFallback<Version>(
-    'load_note_version',
+    TauriCommandName.LoadNoteVersion,
     { versionId },
     () => mockApi.loadNoteVersion(versionId),
     parseVersion
@@ -135,7 +136,7 @@ export function pruneNoteVersions(
     throw new Error('retentionDays must be null or finite');
   }
   return invokeOrFallback<number>(
-    'prune_note_versions',
+    TauriCommandName.PruneNoteVersions,
     { retentionDays },
     () => mockApi.pruneNoteVersions(retentionDays),
     (value) => assertNumber(value, 'prune_note_versions')

@@ -12,7 +12,8 @@ import {
   assertRecord,
   assertString,
   assertVoid,
-  isTauri
+  isTauri,
+  TauriCommandName
 } from './core';
 
 export interface SyncReport {
@@ -29,7 +30,7 @@ export async function syncNow(): Promise<SyncReport> {
   if (!isTauri()) {
     throw new Error('Sync is only available in the desktop app.');
   }
-  return parseSyncReport(await tauriInvoke<unknown>('sync_now'));
+  return parseSyncReport(await tauriInvoke<unknown>(TauriCommandName.SyncNow));
 }
 
 export interface SyncScheduleInput {
@@ -45,7 +46,7 @@ export async function setSyncSchedule(input: SyncScheduleInput): Promise<void> {
     intervalSecs: input.intervalSecs
   };
   assertVoid(
-    await tauriInvoke<unknown>('set_sync_schedule', args),
+    await tauriInvoke<unknown>(TauriCommandName.SetSyncSchedule, args),
     'set_sync_schedule response'
   );
 }
@@ -87,7 +88,7 @@ export async function noteRoomInfo(
   }
   if (!isTauri()) return null;
   return parseNullableRoomInfo(
-    await tauriInvoke<unknown>('note_room_info', {
+    await tauriInvoke<unknown>(TauriCommandName.NoteRoomInfo, {
       id,
       writerPublicKeyB64: writerPublicKeyB64 ?? null
     })

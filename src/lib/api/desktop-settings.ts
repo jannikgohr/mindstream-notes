@@ -2,6 +2,7 @@ import {
   assertBoolean,
   assertString,
   assertVoid,
+  TauriCommandName,
   invokeOrFallback
 } from './core';
 
@@ -27,7 +28,7 @@ function parseDesktopThemeMode(value: unknown): DesktopThemeMode {
 
 export function getCloseToTray(): Promise<boolean> {
   return invokeOrFallback<boolean>(
-    'get_close_to_tray',
+    TauriCommandName.GetCloseToTray,
     undefined,
     () => false,
     (value) => assertBoolean(value, 'get_close_to_tray')
@@ -36,7 +37,7 @@ export function getCloseToTray(): Promise<boolean> {
 
 export function setCloseToTray(value: boolean): Promise<void> {
   return invokeOrFallback<void>(
-    'set_close_to_tray',
+    TauriCommandName.SetCloseToTray,
     { value },
     () => undefined,
     (response) => assertVoid(response, 'set_close_to_tray response')
@@ -45,7 +46,7 @@ export function setCloseToTray(value: boolean): Promise<void> {
 
 export function getStartInTray(): Promise<boolean> {
   return invokeOrFallback<boolean>(
-    'get_start_in_tray',
+    TauriCommandName.GetStartInTray,
     undefined,
     () => false,
     (value) => assertBoolean(value, 'get_start_in_tray')
@@ -54,7 +55,7 @@ export function getStartInTray(): Promise<boolean> {
 
 export function setStartInTray(value: boolean): Promise<void> {
   return invokeOrFallback<void>(
-    'set_start_in_tray',
+    TauriCommandName.SetStartInTray,
     { value },
     () => undefined,
     (response) => assertVoid(response, 'set_start_in_tray response')
@@ -63,7 +64,7 @@ export function setStartInTray(value: boolean): Promise<void> {
 
 export function getCustomWindowDecorations(): Promise<boolean> {
   return invokeOrFallback<boolean>(
-    'get_custom_window_decorations',
+    TauriCommandName.GetCustomWindowDecorations,
     undefined,
     () =>
       typeof navigator === 'undefined' ||
@@ -74,7 +75,7 @@ export function getCustomWindowDecorations(): Promise<boolean> {
 
 export function setCustomWindowDecorations(value: boolean): Promise<void> {
   return invokeOrFallback<void>(
-    'set_custom_window_decorations',
+    TauriCommandName.SetCustomWindowDecorations,
     { value },
     () => undefined,
     (response) => assertVoid(response, 'set_custom_window_decorations response')
@@ -83,7 +84,7 @@ export function setCustomWindowDecorations(value: boolean): Promise<void> {
 
 export function getDesktopLanguage(): Promise<string> {
   return invokeOrFallback<string>(
-    'get_desktop_language',
+    TauriCommandName.GetDesktopLanguage,
     undefined,
     () => 'en',
     (value) => assertString(value, 'get_desktop_language')
@@ -92,7 +93,7 @@ export function getDesktopLanguage(): Promise<string> {
 
 export function setDesktopLanguage(code: string): Promise<void> {
   return invokeOrFallback<void>(
-    'set_desktop_language',
+    TauriCommandName.SetDesktopLanguage,
     { code },
     () => undefined,
     (response) => assertVoid(response, 'set_desktop_language response')
@@ -101,7 +102,7 @@ export function setDesktopLanguage(code: string): Promise<void> {
 
 export function getDesktopThemeMode(): Promise<DesktopThemeMode> {
   return invokeOrFallback<DesktopThemeMode>(
-    'get_desktop_theme_mode',
+    TauriCommandName.GetDesktopThemeMode,
     undefined,
     () =>
       parseDesktopThemeMode(
@@ -117,7 +118,7 @@ export function getDesktopThemeMode(): Promise<DesktopThemeMode> {
 export function setDesktopThemeMode(mode: DesktopThemeMode): Promise<void> {
   parseDesktopThemeMode(mode);
   return invokeOrFallback<void>(
-    'set_desktop_theme_mode',
+    TauriCommandName.SetDesktopThemeMode,
     { mode },
     () => undefined,
     (response) => assertVoid(response, 'set_desktop_theme_mode response')

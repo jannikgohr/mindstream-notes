@@ -4,6 +4,7 @@ import {
   assertString,
   assertStringArray,
   assertVoid,
+  TauriCommandName,
   invokeOrFallback,
   optionalString
 } from './core';
@@ -75,7 +76,7 @@ export interface CollectionShareState {
 
 export function listCollectionInvitations(): Promise<CollectionInvitation[]> {
   return invokeOrFallback<CollectionInvitation[]>(
-    'list_collection_invitations',
+    TauriCommandName.ListCollectionInvitations,
     undefined,
     async () => [],
     parseCollectionInvitations
@@ -84,7 +85,7 @@ export function listCollectionInvitations(): Promise<CollectionInvitation[]> {
 
 export function listIncomingShareBundles(): Promise<IncomingShareInvitations> {
   return invokeOrFallback<IncomingShareInvitations>(
-    'list_incoming_share_bundles',
+    TauriCommandName.ListIncomingShareBundles,
     undefined,
     async () => ({ bundles: [], unbundled_invitations: [] }),
     parseIncomingShareInvitations
@@ -96,7 +97,7 @@ export function acceptShareBundle(
 ): Promise<void> {
   assertRequiredString(manifestCollectionUid, 'manifestCollectionUid');
   return invokeOrFallback<void>(
-    'accept_share_bundle',
+    TauriCommandName.AcceptShareBundle,
     { manifestCollectionUid },
     async () => undefined,
     (value) => assertVoid(value, 'accept_share_bundle response')
@@ -108,7 +109,7 @@ export function declineShareBundle(
 ): Promise<void> {
   assertRequiredString(manifestCollectionUid, 'manifestCollectionUid');
   return invokeOrFallback<void>(
-    'decline_share_bundle',
+    TauriCommandName.DeclineShareBundle,
     { manifestCollectionUid },
     async () => undefined,
     (value) => assertVoid(value, 'decline_share_bundle response')
@@ -123,7 +124,7 @@ export function declineShareBundle(
 export function leaveSharedCollection(collectionId: string): Promise<void> {
   assertRequiredString(collectionId, 'collectionId');
   return invokeOrFallback<void>(
-    'leave_shared_collection',
+    TauriCommandName.LeaveSharedCollection,
     { collectionId },
     async () => undefined,
     (value) => assertVoid(value, 'leave_shared_collection response')
@@ -139,7 +140,7 @@ export function leaveSharedCollection(collectionId: string): Promise<void> {
 export function stopSharingCollection(collectionId: string): Promise<void> {
   assertRequiredString(collectionId, 'collectionId');
   return invokeOrFallback<void>(
-    'stop_sharing_collection',
+    TauriCommandName.StopSharingCollection,
     { collectionId },
     async () => undefined,
     (value) => assertVoid(value, 'stop_sharing_collection response')
@@ -153,7 +154,7 @@ export function listCollectionMembers(
 ): Promise<CollectionMember[]> {
   assertRequiredString(collectionId, 'collectionId');
   return invokeOrFallback<CollectionMember[]>(
-    'list_collection_members',
+    TauriCommandName.ListCollectionMembers,
     { collectionId },
     async () => [],
     parseCollectionMembers
@@ -170,7 +171,7 @@ export function setCollectionMemberAccess(input: {
   assertRequiredString(input.username, 'input.username');
   parseAccessLevel(input.access_level, 'input.access_level');
   return invokeOrFallback<void>(
-    'set_collection_member_access',
+    TauriCommandName.SetCollectionMemberAccess,
     { input },
     async () => undefined,
     (value) => assertVoid(value, 'set_collection_member_access response')
@@ -186,7 +187,7 @@ export function removeCollectionMember(input: {
   assertRequiredString(input.collection_id, 'input.collection_id');
   assertRequiredString(input.username, 'input.username');
   return invokeOrFallback<void>(
-    'remove_collection_member',
+    TauriCommandName.RemoveCollectionMember,
     { input },
     async () => undefined,
     (value) => assertVoid(value, 'remove_collection_member response')
@@ -196,7 +197,7 @@ export function removeCollectionMember(input: {
 export function acceptCollectionInvitation(id: string): Promise<void> {
   assertRequiredString(id, 'id');
   return invokeOrFallback<void>(
-    'accept_collection_invitation',
+    TauriCommandName.AcceptCollectionInvitation,
     { id },
     async () => undefined,
     (value) => assertVoid(value, 'accept_collection_invitation response')
@@ -206,7 +207,7 @@ export function acceptCollectionInvitation(id: string): Promise<void> {
 export function rejectCollectionInvitation(id: string): Promise<void> {
   assertRequiredString(id, 'id');
   return invokeOrFallback<void>(
-    'reject_collection_invitation',
+    TauriCommandName.RejectCollectionInvitation,
     { id },
     async () => undefined,
     (value) => assertVoid(value, 'reject_collection_invitation response')
@@ -220,7 +221,7 @@ export function inviteCollection(
   assertRequiredString(input.username, 'input.username');
   parseAccessLevel(input.access_level, 'input.access_level');
   return invokeOrFallback<CollectionShareState>(
-    'invite_collection',
+    TauriCommandName.InviteCollection,
     { input },
     async () => {
       throw new Error(
@@ -236,7 +237,7 @@ export function getCollectionShareState(
 ): Promise<CollectionShareState> {
   assertRequiredString(collectionId, 'collectionId');
   return invokeOrFallback<CollectionShareState>(
-    'get_collection_share_state',
+    TauriCommandName.GetCollectionShareState,
     { collectionId },
     async () => ({
       collection_id: collectionId,

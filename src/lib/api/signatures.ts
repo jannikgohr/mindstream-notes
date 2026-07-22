@@ -14,6 +14,7 @@ import {
   assertRecord,
   assertString,
   assertVoid,
+  TauriCommandName,
   invokeOrFallback
 } from './core';
 import { mockApi } from './mock-store';
@@ -34,7 +35,7 @@ export interface SaveSignatureInput {
 
 export function listSignatures(): Promise<SignatureRecord[]> {
   return invokeOrFallback<SignatureRecord[]>(
-    'list_signatures',
+    TauriCommandName.ListSignatures,
     undefined,
     () => mockApi.listSignatures(),
     parseSignatureRecords
@@ -45,7 +46,7 @@ export function saveSignature(
   input: SaveSignatureInput
 ): Promise<SignatureRecord> {
   return invokeOrFallback<SignatureRecord>(
-    'save_signature',
+    TauriCommandName.SaveSignature,
     { input },
     () => mockApi.saveSignature(input),
     parseSignatureRecord
@@ -54,7 +55,7 @@ export function saveSignature(
 
 export function deleteSignature(id: string): Promise<void> {
   return invokeOrFallback<void>(
-    'delete_signature',
+    TauriCommandName.DeleteSignature,
     { id },
     () => mockApi.deleteSignature(id),
     (value) => assertVoid(value, 'delete_signature response')

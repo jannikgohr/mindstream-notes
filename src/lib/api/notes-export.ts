@@ -9,12 +9,12 @@
  */
 
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
-import { assertString, assertVoid, isTauri } from './core';
+import { assertString, assertVoid, isTauri, TauriCommandName } from './core';
 
 export async function pickExportDir(): Promise<string | null> {
   if (!isTauri()) return null;
   return parseNullableString(
-    await tauriInvoke<unknown>('notes_export_pick_dir')
+    await tauriInvoke<unknown>(TauriCommandName.NotesExportPickDir)
   );
 }
 
@@ -30,7 +30,7 @@ export async function writeExportFile(
   }
   if (!isTauri()) return;
   assertVoid(
-    await tauriInvoke<unknown>('notes_export_write_file', {
+    await tauriInvoke<unknown>(TauriCommandName.NotesExportWriteFile, {
       root,
       relativePath,
       // Tauri marshalling of Vec<u8> expects a JS number array. Most

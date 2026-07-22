@@ -2,6 +2,7 @@ import {
   assertRecord,
   assertString,
   assertVoid,
+  TauriCommandName,
   invokeOrFallback
 } from './core';
 
@@ -38,7 +39,7 @@ function fallbackView(): ProfilesView {
 
 export function listProfiles(): Promise<ProfilesView> {
   return invokeOrFallback<ProfilesView>(
-    'list_profiles',
+    TauriCommandName.ListProfiles,
     undefined,
     fallbackView,
     parseProfilesView
@@ -47,7 +48,7 @@ export function listProfiles(): Promise<ProfilesView> {
 
 export function createProfile(name: string): Promise<Profile> {
   return invokeOrFallback<Profile>(
-    'create_profile',
+    TauriCommandName.CreateProfile,
     { name },
     () => ({
       id: `local-${Date.now()}`,
@@ -60,7 +61,7 @@ export function createProfile(name: string): Promise<Profile> {
 
 export function switchProfile(id: string): Promise<void> {
   return invokeOrFallback<void>(
-    'switch_profile',
+    TauriCommandName.SwitchProfile,
     { id },
     () => undefined,
     (value) => assertVoid(value, 'switch_profile response')
@@ -69,7 +70,7 @@ export function switchProfile(id: string): Promise<void> {
 
 export function renameProfile(id: string, name: string): Promise<Profile> {
   return invokeOrFallback<Profile>(
-    'rename_profile',
+    TauriCommandName.RenameProfile,
     { id, name },
     () => ({
       id,
@@ -82,7 +83,7 @@ export function renameProfile(id: string, name: string): Promise<Profile> {
 
 export function deleteProfile(id: string): Promise<void> {
   return invokeOrFallback<void>(
-    'delete_profile',
+    TauriCommandName.DeleteProfile,
     { id },
     () => undefined,
     (value) => assertVoid(value, 'delete_profile response')

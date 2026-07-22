@@ -8,6 +8,7 @@ import {
   assertRecord,
   assertString,
   assertVoid,
+  TauriCommandName,
   invokeOrFallback,
   optionalString
 } from './core';
@@ -40,7 +41,7 @@ export interface UpdateCollectionInput {
 
 export function listCollections(): Promise<Collection[]> {
   return invokeOrFallback<Collection[]>(
-    'list_collections',
+    TauriCommandName.ListCollections,
     undefined,
     () => mockApi.listCollections(),
     parseCollections
@@ -51,7 +52,7 @@ export function createCollection(
   input: CreateCollectionInput
 ): Promise<Collection> {
   return invokeOrFallback<Collection>(
-    'create_collection',
+    TauriCommandName.CreateCollection,
     { input },
     () => mockApi.createCollection(input),
     parseCollection
@@ -62,7 +63,7 @@ export function updateCollection(
   input: UpdateCollectionInput
 ): Promise<Collection> {
   return invokeOrFallback<Collection>(
-    'update_collection',
+    TauriCommandName.UpdateCollection,
     { input },
     () => mockApi.updateCollection(input),
     parseCollection
@@ -71,7 +72,7 @@ export function updateCollection(
 
 export function deleteCollection(id: string): Promise<void> {
   return invokeOrFallback<void>(
-    'delete_collection',
+    TauriCommandName.DeleteCollection,
     { id },
     () => mockApi.deleteCollection(id),
     (value) => assertVoid(value, 'delete_collection response')

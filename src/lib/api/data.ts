@@ -18,7 +18,8 @@ import {
   assertString,
   assertVoid,
   isTauri,
-  optionalString
+  optionalString,
+  TauriCommandName
 } from './core';
 import { mockApi } from './mock-store';
 
@@ -30,7 +31,7 @@ export interface TrashCounts {
 export async function openDataFolder(): Promise<void> {
   if (!isTauri()) return;
   assertVoid(
-    await tauriInvoke<unknown>('open_data_folder'),
+    await tauriInvoke<unknown>(TauriCommandName.OpenDataFolder),
     'open_data_folder response'
   );
 }
@@ -44,19 +45,23 @@ export async function openFolder(path: string): Promise<void> {
   assertRequiredString(path, 'path');
   if (!isTauri()) return;
   assertVoid(
-    await tauriInvoke<unknown>('open_folder', { path }),
+    await tauriInvoke<unknown>(TauriCommandName.OpenFolder, { path }),
     'open_folder response'
   );
 }
 
 export async function trashCounts(): Promise<TrashCounts> {
   if (!isTauri()) return await mockApi.trashCounts();
-  return parseTrashCounts(await tauriInvoke<unknown>('trash_counts'));
+  return parseTrashCounts(
+    await tauriInvoke<unknown>(TauriCommandName.TrashCounts)
+  );
 }
 
 export async function emptyTrash(): Promise<TrashCounts> {
   if (!isTauri()) return await mockApi.emptyTrash();
-  return parseTrashCounts(await tauriInvoke<unknown>('empty_trash'));
+  return parseTrashCounts(
+    await tauriInvoke<unknown>(TauriCommandName.EmptyTrash)
+  );
 }
 
 /**
@@ -68,7 +73,7 @@ export async function setTrashRetention(days: number): Promise<void> {
   assertNonNegativeInteger(days, 'days');
   if (!isTauri()) return;
   assertVoid(
-    await tauriInvoke<unknown>('set_trash_retention', { days }),
+    await tauriInvoke<unknown>(TauriCommandName.SetTrashRetention, { days }),
     'set_trash_retention response'
   );
 }
@@ -83,7 +88,7 @@ export async function sweepTrashRetention(days: number): Promise<number> {
   assertNonNegativeInteger(days, 'days');
   if (!isTauri()) return 0;
   return assertNumber(
-    await tauriInvoke<unknown>('sweep_trash_retention', { days }),
+    await tauriInvoke<unknown>(TauriCommandName.SweepTrashRetention, { days }),
     'sweep_trash_retention response'
   );
 }
@@ -110,7 +115,9 @@ export interface BackupReport {
  */
 export async function backupNow(): Promise<BackupReport | null> {
   if (!isTauri()) return null;
-  return parseNullableBackupReport(await tauriInvoke<unknown>('backup_now'));
+  return parseNullableBackupReport(
+    await tauriInvoke<unknown>(TauriCommandName.BackupNow)
+  );
 }
 
 // ---------- Backup import (Slices B/C/D) ----------
@@ -149,7 +156,9 @@ export interface MergeReport {
  */
 export async function importBegin(): Promise<ImportPreview | null> {
   if (!isTauri()) return null;
-  return parseNullableImportPreview(await tauriInvoke<unknown>('import_begin'));
+  return parseNullableImportPreview(
+    await tauriInvoke<unknown>(TauriCommandName.ImportBegin)
+  );
 }
 
 /** Drop the staging dir created by `importBegin`. Safe on stale tokens. */
@@ -157,7 +166,7 @@ export async function importCleanup(token: string): Promise<void> {
   assertRequiredString(token, 'token');
   if (!isTauri()) return;
   assertVoid(
-    await tauriInvoke<unknown>('import_cleanup', { token }),
+    await tauriInvoke<unknown>(TauriCommandName.ImportCleanup, { token }),
     'import_cleanup response'
   );
 }
@@ -177,7 +186,7 @@ export async function importRestore(
   }
   if (!isTauri()) return { restart_required: false, sanitized: !sameAccount };
   return parseRestoreStaged(
-    await tauriInvoke<unknown>('import_restore', {
+    await tauriInvoke<unknown>(TauriCommandName.ImportRestore, {
       token,
       sameAccount
     })
@@ -198,7 +207,7 @@ export async function importMerge(token: string): Promise<MergeReport> {
       notes_orphaned: 0
     };
   return parseMergeReport(
-    await tauriInvoke<unknown>('import_merge', { token })
+    await tauriInvoke<unknown>(TauriCommandName.ImportMerge, { token })
   );
 }
 
