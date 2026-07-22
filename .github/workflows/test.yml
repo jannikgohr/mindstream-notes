@@ -145,12 +145,19 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       # Frontend: vitest with the v8 provider emits .output/coverage/frontend/lcov.info.
+      # `continue-on-error` so a sub-threshold run (vitest.config.ts thresholds)
+      # still leaves the already-written lcov.info in place and lets the Codecov
+      # upload below run — coverage is published regardless of the percentage.
       - name: JS coverage
+        continue-on-error: true
         run: pnpm test:coverage
 
       # Backend: cargo-llvm-cov emits .output/coverage/rust/lcov.info. The helper applies
-      # the shared ignore-regex (integration/IPC/network/UI surfaces).
+      # the shared ignore-regex (integration/IPC/network/UI surfaces). Also
+      # non-fatal so the upload always runs even if the previous step reported low
+      # coverage.
       - name: Rust coverage
+        continue-on-error: true
         run: node src-tauri/scripts/rust-coverage.mjs --lcov --output-path ../.output/coverage/rust/lcov.info
 
       - name: Note skipped Codecov upload
