@@ -25,16 +25,18 @@ vi.mock('./extract-text', () => ({
   extractPdfText: (...a: unknown[]) => extractPdfTextMock(...a)
 }));
 
-// pdfAssetIdFromBody is a pure helper; use the real one.
-import { startPdfSearchIndexing } from './search-index-backfill';
-
 const pdfNote = (id: string, assetId: string) => ({
   id,
   body: JSON.stringify({ pdfAssetId: assetId }),
   note_kind: 'pdf'
 });
 
+async function importBackfill() {
+  return import('./search-index-backfill');
+}
+
 beforeEach(() => {
+  vi.resetModules();
   pdfNotesMissingTextMock.mockReset().mockResolvedValue([]);
   loadNoteMock.mockReset();
   fetchDrawingAssetMock.mockReset();
@@ -55,6 +57,7 @@ afterEach(() => {
 
 describe('startPdfSearchIndexing', () => {
   it('extracts and persists text for each un-indexed PDF', async () => {
+    const { startPdfSearchIndexing } = await importBackfill();
     pdfNotesMissingTextMock.mockResolvedValueOnce(['n1', 'n2']);
     loadNoteMock.mockImplementation(async (id: string) =>
       pdfNote(id, `asset_${id}`)
@@ -78,6 +81,7 @@ describe('startPdfSearchIndexing', () => {
   });
 
   it('skips assets that are not PDFs and survives per-note errors', async () => {
+    const { startPdfSearchIndexing } = await importBackfill();
     pdfNotesMissingTextMock.mockResolvedValueOnce(['bad', 'good']);
     loadNoteMock.mockImplementation(async (id: string) =>
       pdfNote(id, `asset_${id}`)
@@ -94,5 +98,25 @@ describe('startPdfSearchIndexing', () => {
       expect(setPdfTextMock).toHaveBeenCalledWith('good', 'hello pdf');
     });
     expect(setPdfTextMock).not.toHaveBeenCalledWith('bad', expect.anything());
+  });
+
+  it('logs listener registration failures and retries on the next start', async () => {
+    const { startPdfSearchIndexing } = await importBackfill();
+    const error = new Error('event bus unavailable');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    listenMock.mockRejectedValueOnce(error);
+
+    startPdfSearchIndexing();
+
+    await vi.waitFor(() => {
+      expect(warn).toHaveBeenCalledWith(
+        '[pdf-index] sync listener registration failed',
+        error
+      );
+    });
+
+    startPdfSearchIndexing();
+
+    expect(listenMock).toHaveBeenCalledTimes(2);
   });
 });

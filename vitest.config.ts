@@ -115,6 +115,8 @@ export default defineConfig({
         'src/lib/notes-export/ink-pdf.ts',
         'src/lib/note-exporters/pdf.ts',
         'src/lib/pdf/extract-text.ts',
+        'src/lib/pdf/page-overlays.ts',
+        'src/lib/pdf/page-render.ts',
 
         // Camera/canvas plumbing for the signature photo import: every
         // function is a thin wrapper over getUserMedia, createImageBitmap,

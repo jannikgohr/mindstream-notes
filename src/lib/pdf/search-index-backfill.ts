@@ -97,5 +97,8 @@ export function startPdfSearchIndexing(): void {
   listenerArmed = true;
   void listen(TauriEventName.SyncCompleted, () => {
     void sweep();
+  }).catch((err) => {
+    listenerArmed = false;
+    console.warn('[pdf-index] sync listener registration failed', err);
   });
 }

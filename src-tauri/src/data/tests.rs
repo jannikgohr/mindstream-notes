@@ -57,15 +57,15 @@ fn empty_trash_clears_direct_children() {
     let f1 = make_folder(&db, "f", Some(TRASH_ID.into()));
     let keep = make_note(&db, None);
 
-    let before = db.with_conn(|c| counts(c)).unwrap();
+    let before = db.with_conn(counts).unwrap();
     assert_eq!(before.notes, 1);
     assert_eq!(before.folders, 1);
 
-    let deleted = db.with_conn_mut(|c| empty(c)).unwrap();
+    let deleted = db.with_conn_mut(empty).unwrap();
     assert_eq!(deleted.notes, 1);
     assert_eq!(deleted.folders, 1);
 
-    let after = db.with_conn(|c| counts(c)).unwrap();
+    let after = db.with_conn(counts).unwrap();
     assert_eq!(after.notes, 0);
     assert_eq!(after.folders, 0);
 
@@ -88,12 +88,12 @@ fn empty_trash_counts_recursive_descendants() {
     let _direct = make_note(&db, Some(outer.clone()));
     move_to(&db, &outer, Some(TRASH_ID.into()));
 
-    let c = db.with_conn(|conn| counts(conn)).unwrap();
+    let c = db.with_conn(counts).unwrap();
     assert_eq!(c.folders, 2, "outer + inner");
     assert_eq!(c.notes, 2, "nested + direct");
 
-    db.with_conn_mut(|conn| empty(conn)).unwrap();
-    let after = db.with_conn(|conn| counts(conn)).unwrap();
+    db.with_conn_mut(empty).unwrap();
+    let after = db.with_conn(counts).unwrap();
     assert_eq!(after.notes, 0);
     assert_eq!(after.folders, 0);
 }
@@ -102,7 +102,7 @@ fn empty_trash_counts_recursive_descendants() {
 fn empty_trash_is_noop_when_trash_is_empty() {
     let db = open_memory_for_tests();
     let _keep = make_note(&db, None);
-    let deleted = db.with_conn_mut(|c| empty(c)).unwrap();
+    let deleted = db.with_conn_mut(empty).unwrap();
     assert_eq!(deleted.notes, 0);
     assert_eq!(deleted.folders, 0);
 }
