@@ -1,6 +1,10 @@
 {
   "language": "de",
   "ui": {
+    "boot.loading": "Wird geladen…",
+    "boot.error.title": "App konnte nicht geladen werden",
+    "boot.error.message": "Beim Starten von Mindstream Notes ist ein Fehler aufgetreten.",
+    "boot.error.reload": "Neu laden",
     "vault.title": "Tresore",
     "vault.switch": "Tresor wechseln",
     "vault.unknown": "Unbekannter Tresor",
