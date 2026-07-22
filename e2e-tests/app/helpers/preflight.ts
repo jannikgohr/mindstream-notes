@@ -105,6 +105,7 @@ export function spawnTauriDriver(
 }
 
 const tauriScript = join(repoRoot, 'src-tauri', 'scripts', 'tauri.mjs');
+const viteScript = join(repoRoot, 'node_modules', 'vite', 'bin', 'vite.js');
 
 const pathEnvKey =
   Object.keys(process.env).find((key) => key.toLowerCase() === 'path') ??
@@ -323,7 +324,7 @@ function writeE2eConfig(profileId: string): string {
       {
         $schema: 'https://schema.tauri.app/config/2',
         build: {
-          // preflight runs `pnpm build` once per suite; profile-specific Tauri
+          // preflight runs Vite once per suite; profile-specific Tauri
           // builds reuse that `.output/build` instead of rebuilding Vite.
           beforeBuildCommand: ''
         },
@@ -344,14 +345,20 @@ function writeE2eConfig(profileId: string): string {
 }
 
 function buildFrontend(): void {
-  const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
-  const res = spawnSync(pnpm, ['build'], {
+  const res = spawnSync(process.execPath, [viteScript, 'build'], {
     cwd: repoRoot,
     stdio: 'inherit',
     env: buildEnv
   });
+  if (res.error) {
+    fail(`frontend build failed to start: ${res.error.message}`);
+  }
   if (res.status !== 0) {
-    fail('frontend build (`pnpm build`) failed');
+    const reason =
+      res.status === null
+        ? `terminated by ${res.signal ?? 'unknown signal'}`
+        : `exited with status ${res.status}`;
+    fail(`frontend build (\`vite build\`) failed: ${reason}`);
   }
 }
 
