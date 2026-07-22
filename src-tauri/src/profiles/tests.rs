@@ -38,6 +38,25 @@ fn index_round_trips_through_save_and_load() {
 }
 
 #[test]
+fn load_returns_none_when_index_is_missing() {
+    let root = tmp_root();
+    assert_eq!(load(&root).unwrap(), None);
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn load_rejects_corrupt_index() {
+    let root = tmp_root();
+    fs::write(index_path(&root), b"{not json").unwrap();
+    let err = load(&root).unwrap_err();
+    assert!(
+        err.to_string().contains("profiles index corrupt"),
+        "got {err}"
+    );
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
 fn migrate_moves_legacy_vault_into_default_profile() {
     let root = tmp_root();
     // Seed a pre-profiles install: the DB trio plus siblings.
@@ -69,6 +88,28 @@ fn migrate_moves_legacy_vault_into_default_profile() {
     let index = load(&root).unwrap().unwrap();
     assert_eq!(index.active, DEFAULT_PROFILE_ID);
     assert_eq!(index.profiles.len(), 1);
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn migrate_preserves_existing_destination_entries_on_rerun() {
+    let root = tmp_root();
+    let dest = profile_dir(&root, DEFAULT_PROFILE_ID);
+    fs::create_dir_all(&dest).unwrap();
+    fs::write(root.join("mindstream.db"), b"source-db").unwrap();
+    fs::write(dest.join("mindstream.db"), b"existing-db").unwrap();
+    fs::write(root.join("notes.txt"), b"leave me").unwrap();
+
+    let migrated = migrate_legacy_if_needed(&root).unwrap();
+    assert!(migrated);
+
+    assert_eq!(
+        fs::read(dest.join("mindstream.db")).unwrap(),
+        b"existing-db"
+    );
+    assert_eq!(fs::read(root.join("mindstream.db")).unwrap(), b"source-db");
+    assert_eq!(fs::read(root.join("notes.txt")).unwrap(), b"leave me");
+    assert!(load(&root).unwrap().is_some());
     fs::remove_dir_all(&root).ok();
 }
 

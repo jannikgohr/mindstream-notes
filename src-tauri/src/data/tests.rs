@@ -109,6 +109,17 @@ fn empty_trash_is_noop_when_trash_is_empty() {
 
 // ---------- Retention sweep ----------
 
+#[test]
+fn retention_scheduler_starts_disabled() {
+    let scheduler = TrashRetentionScheduler::new();
+    assert!(!scheduler.enabled.load(Ordering::Relaxed));
+    assert_eq!(scheduler.days.load(Ordering::Relaxed), 0);
+
+    let defaulted = TrashRetentionScheduler::default();
+    assert!(!defaulted.enabled.load(Ordering::Relaxed));
+    assert_eq!(defaulted.days.load(Ordering::Relaxed), 0);
+}
+
 fn trashed_at_of_note(db: &Db, id: &str) -> Option<String> {
     db.with_conn(|c| {
         Ok(c.query_row(
@@ -334,4 +345,19 @@ fn sweep_with_zero_days_via_command_is_noop() {
     };
     assert_eq!(purged, 0);
     db.with_conn(|c| crate::notes::load(c, &id)).unwrap();
+}
+
+#[test]
+fn sweep_returns_zero_without_starting_transaction_work_when_nothing_is_old() {
+    let db = open_memory_for_tests();
+    let fresh_note = make_note(&db, Some(TRASH_ID.into()));
+    let fresh_folder = make_folder(&db, "fresh", Some(TRASH_ID.into()));
+
+    let purged = db.with_conn_mut(|c| sweep(c, 30)).unwrap();
+    assert_eq!(purged, 0);
+
+    db.with_conn(|c| crate::notes::load(c, &fresh_note))
+        .unwrap();
+    db.with_conn(|c| crate::collections::get(c, &fresh_folder))
+        .unwrap();
 }

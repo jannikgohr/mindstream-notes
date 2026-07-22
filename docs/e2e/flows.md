@@ -1,7 +1,7 @@
 # End-to-end test flows
 
 The unit suites (`vitest` for the frontend, `cargo test` for the backend)
-cover the **logic layer** and gate it at 80% line coverage. Everything they
+cover the **logic layer** and report coverage to Codecov. Everything they
 _exclude_ — see the exclude lists in `vitest.config.ts` and
 `src-tauri/scripts/rust-coverage.mjs` — is integration surface that only has
 meaning when the whole stack runs together: the Tauri IPC boundary, the
