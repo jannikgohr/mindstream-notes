@@ -164,11 +164,16 @@ jobs:
         if: ${{ env.CODECOV_TOKEN == '' }}
         run: echo "::notice::Skipping Codecov upload because CODECOV_TOKEN is not configured."
 
+      # `disable_search: true` stops codecov-action from auto-discovering every
+      # lcov.info in the workspace — without it each flag uploads BOTH the
+      # frontend and backend reports, cross-contaminating the flags. We name the
+      # single report explicitly via `files:` instead.
       - name: Upload frontend coverage
         if: ${{ env.CODECOV_TOKEN != '' }}
         uses: codecov/codecov-action@v5
         with:
           files: ./.output/coverage/frontend/lcov.info
+          disable_search: true
           flags: frontend
           fail_ci_if_error: false
           token: ${{ env.CODECOV_TOKEN }}
@@ -178,6 +183,7 @@ jobs:
         uses: codecov/codecov-action@v5
         with:
           files: ./.output/coverage/rust/lcov.info
+          disable_search: true
           flags: backend
           fail_ci_if_error: false
           token: ${{ env.CODECOV_TOKEN }}
