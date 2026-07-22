@@ -19,7 +19,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 use crate::db::Db;
-use crate::error::{AppError, AppResult};
+use crate::error::{AppError, AppResult, CommandResult};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SignatureRecord {
@@ -110,7 +110,7 @@ pub fn delete(conn: &Connection, id: &str) -> AppResult<()> {
 
 #[tauri::command]
 #[allow(clippy::redundant_closure)]
-pub fn list_signatures(db: tauri::State<'_, Db>) -> Result<Vec<SignatureRecord>, String> {
+pub fn list_signatures(db: tauri::State<'_, Db>) -> CommandResult<Vec<SignatureRecord>> {
     db.with_conn(|c| list(c)).map_err(Into::into)
 }
 
@@ -118,12 +118,12 @@ pub fn list_signatures(db: tauri::State<'_, Db>) -> Result<Vec<SignatureRecord>,
 pub fn save_signature(
     db: tauri::State<'_, Db>,
     input: SaveSignature,
-) -> Result<SignatureRecord, String> {
+) -> CommandResult<SignatureRecord> {
     db.with_conn(|c| upsert(c, input)).map_err(Into::into)
 }
 
 #[tauri::command]
-pub fn delete_signature(db: tauri::State<'_, Db>, id: String) -> Result<(), String> {
+pub fn delete_signature(db: tauri::State<'_, Db>, id: String) -> CommandResult<()> {
     db.with_conn(|c| delete(c, &id)).map_err(Into::into)
 }
 

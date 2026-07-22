@@ -14,22 +14,15 @@ pub fn import_merge(
     app: AppHandle,
     db: tauri::State<'_, Db>,
     token: String,
-) -> Result<MergeReport, String> {
-    let staged = imports_staging_root(&app)
-        .map_err(|e| e.to_string())?
-        .join(&token)
-        .join("data.db");
+) -> CommandResult<MergeReport> {
+    let staged = imports_staging_root(&app)?.join(&token).join("data.db");
     if !staged.exists() {
-        return Err(format!("staged backup '{token}' not found"));
+        return Err(format!("staged backup '{token}' not found").into());
     }
-    let backup_conn = Connection::open(&staged).map_err(|e| format!("open staged: {e}"))?;
-    let report = db
-        .with_conn_mut(|live| merge_into(live, &backup_conn))
-        .map_err(|e| e.to_string())?;
+    let backup_conn = Connection::open(&staged)?;
+    let report = db.with_conn_mut(|live| merge_into(live, &backup_conn))?;
     // Merge consumed the staged DB; drop the dir so it doesn't linger.
-    let dir = imports_staging_root(&app)
-        .map_err(|e| e.to_string())?
-        .join(&token);
+    let dir = imports_staging_root(&app)?.join(&token);
     let _ = fs::remove_dir_all(&dir);
     Ok(report)
 }
