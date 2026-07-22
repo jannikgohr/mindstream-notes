@@ -17,6 +17,7 @@ import {
   assertNumberArray,
   assertRecord,
   assertString,
+  TauriCommandName,
   invokeOrFallback
 } from './core';
 import { mockApi } from './mock-store';
@@ -57,7 +58,7 @@ export interface ImportPdfNoteInput {
 
 export function uploadDrawingAsset(input: UploadAssetInput): Promise<Asset> {
   return invokeOrFallback<Asset>(
-    'upload_drawing_asset',
+    TauriCommandName.UploadDrawingAsset,
     { input },
     () => mockApi.uploadDrawingAsset(input),
     parseAsset
@@ -66,7 +67,7 @@ export function uploadDrawingAsset(input: UploadAssetInput): Promise<Asset> {
 
 export function fetchDrawingAsset(id: string): Promise<Asset> {
   return invokeOrFallback<Asset>(
-    'fetch_drawing_asset',
+    TauriCommandName.FetchDrawingAsset,
     { id },
     () => mockApi.fetchDrawingAsset(id),
     parseAsset
@@ -75,7 +76,7 @@ export function fetchDrawingAsset(id: string): Promise<Asset> {
 
 export function importPdfNote(input: ImportPdfNoteInput): Promise<Note> {
   return invokeOrFallback<Note>(
-    'import_pdf_note',
+    TauriCommandName.ImportPdfNote,
     { input },
     () => mockApi.importPdfNote(input),
     parseNote
@@ -84,7 +85,7 @@ export function importPdfNote(input: ImportPdfNoteInput): Promise<Note> {
 
 export function sweepUnreferencedMarkdownAssets(): Promise<number> {
   return invokeOrFallback<number>(
-    'sweep_unreferenced_markdown_assets',
+    TauriCommandName.SweepUnreferencedMarkdownAssets,
     {},
     () => Promise.resolve(0),
     (value) =>

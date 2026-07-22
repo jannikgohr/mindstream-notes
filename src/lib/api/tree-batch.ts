@@ -1,4 +1,9 @@
-import { assertNumber, assertRecord, invokeOrFallback } from './core';
+import {
+  assertNumber,
+  assertRecord,
+  TauriCommandName,
+  invokeOrFallback
+} from './core';
 import { mockApi } from './mock-store';
 import { TRASH_ID } from './index';
 
@@ -16,7 +21,7 @@ export function moveMany(
   targetCollectionId: string | null
 ): Promise<BatchCounts> {
   return invokeOrFallback<BatchCounts>(
-    'move_many',
+    TauriCommandName.MoveMany,
     { items, targetCollectionId },
     () => moveManyFallback(items, targetCollectionId),
     parseBatchCounts
@@ -25,7 +30,7 @@ export function moveMany(
 
 export function trashMany(items: TreeItemRef[]): Promise<BatchCounts> {
   return invokeOrFallback<BatchCounts>(
-    'trash_many',
+    TauriCommandName.TrashMany,
     { items },
     () => moveManyFallback(items, TRASH_ID),
     parseBatchCounts
@@ -34,7 +39,7 @@ export function trashMany(items: TreeItemRef[]): Promise<BatchCounts> {
 
 export function restoreMany(items: TreeItemRef[]): Promise<BatchCounts> {
   return invokeOrFallback<BatchCounts>(
-    'restore_many',
+    TauriCommandName.RestoreMany,
     { items },
     () => moveManyFallback(items, null),
     parseBatchCounts
@@ -43,7 +48,7 @@ export function restoreMany(items: TreeItemRef[]): Promise<BatchCounts> {
 
 export function purgeMany(items: TreeItemRef[]): Promise<BatchCounts> {
   return invokeOrFallback<BatchCounts>(
-    'purge_many',
+    TauriCommandName.PurgeMany,
     { items },
     async () => {
       const counts: BatchCounts = { notes: 0, folders: 0 };

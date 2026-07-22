@@ -1,4 +1,9 @@
-import { assertString, assertVoid, invokeOrFallback } from './core';
+import {
+  assertString,
+  assertVoid,
+  TauriCommandName,
+  invokeOrFallback
+} from './core';
 import {
   nativeGlobalShortcutCommandId,
   type NativeGlobalShortcutCommandId
@@ -24,7 +29,7 @@ export function setNativeHotkeyDisplays(
   displays: NativeHotkeyDisplay[]
 ): Promise<void> {
   return invokeOrFallback<void>(
-    'set_hotkey_displays',
+    TauriCommandName.SetHotkeyDisplays,
     { displays },
     () => undefined,
     (value) => assertVoid(value, 'set_hotkey_displays response')
@@ -38,7 +43,7 @@ export function getNativeHotkeyDisplay(
     throw new Error('commandId must not be empty');
   }
   return invokeOrFallback<string | null>(
-    'get_hotkey_display',
+    TauriCommandName.GetHotkeyDisplay,
     { commandId },
     () => null,
     parseOptionalString
@@ -62,7 +67,7 @@ export function syncNativeGlobalShortcuts(
       };
     });
   return invokeOrFallback<void>(
-    'sync_global_shortcuts',
+    TauriCommandName.SyncGlobalShortcuts,
     { registrations: nativeRegistrations },
     () => undefined,
     (value) => assertVoid(value, 'sync_global_shortcuts response')

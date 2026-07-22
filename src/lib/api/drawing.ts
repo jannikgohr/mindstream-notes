@@ -7,12 +7,12 @@
  * on Android and are silent no-ops on desktop.
  */
 
-import { assertVoid, invokeOrFallback } from './core';
+import { assertVoid, TauriCommandName, invokeOrFallback } from './core';
 import { mockApi } from './mock-store';
 
 export function drawingShowLiveInkOverlay(): Promise<void> {
   return invokeOrFallback<void>(
-    'drawing_show_live_ink_overlay',
+    TauriCommandName.DrawingShowLiveInkOverlay,
     undefined,
     () => undefined,
     (value) => assertVoid(value, 'drawing_show_live_ink_overlay response')
@@ -21,7 +21,7 @@ export function drawingShowLiveInkOverlay(): Promise<void> {
 
 export function drawingHideLiveInkOverlay(): Promise<void> {
   return invokeOrFallback<void>(
-    'drawing_hide_live_ink_overlay',
+    TauriCommandName.DrawingHideLiveInkOverlay,
     undefined,
     () => undefined,
     (value) => assertVoid(value, 'drawing_hide_live_ink_overlay response')
@@ -30,7 +30,7 @@ export function drawingHideLiveInkOverlay(): Promise<void> {
 
 export function drawingEnterImmersiveInkMode(): Promise<void> {
   return invokeOrFallback<void>(
-    'drawing_enter_immersive_ink_mode',
+    TauriCommandName.DrawingEnterImmersiveInkMode,
     undefined,
     () => undefined,
     (value) => assertVoid(value, 'drawing_enter_immersive_ink_mode response')
@@ -39,7 +39,7 @@ export function drawingEnterImmersiveInkMode(): Promise<void> {
 
 export function drawingExitImmersiveInkMode(): Promise<void> {
   return invokeOrFallback<void>(
-    'drawing_exit_immersive_ink_mode',
+    TauriCommandName.DrawingExitImmersiveInkMode,
     undefined,
     () => undefined,
     (value) => assertVoid(value, 'drawing_exit_immersive_ink_mode response')
@@ -48,7 +48,7 @@ export function drawingExitImmersiveInkMode(): Promise<void> {
 
 export function drawingCancelLiveInk(): Promise<void> {
   return invokeOrFallback<void>(
-    'drawing_cancel_live_ink',
+    TauriCommandName.DrawingCancelLiveInk,
     undefined,
     () => undefined,
     (value) => assertVoid(value, 'drawing_cancel_live_ink response')
@@ -61,7 +61,7 @@ export function drawingSetLiveInkStyle(
   maxWidthPx: number
 ): Promise<void> {
   return invokeOrFallback<void>(
-    'drawing_set_live_ink_style',
+    TauriCommandName.DrawingSetLiveInkStyle,
     { colorArgb, minWidthPx, maxWidthPx },
     () => undefined,
     (value) => assertVoid(value, 'drawing_set_live_ink_style response')
@@ -72,7 +72,7 @@ export function drawingSetLiveInkFingerDrawing(
   allowed: boolean
 ): Promise<void> {
   return invokeOrFallback<void>(
-    'drawing_set_live_ink_finger_drawing',
+    TauriCommandName.DrawingSetLiveInkFingerDrawing,
     { allowed },
     () => undefined,
     (value) => assertVoid(value, 'drawing_set_live_ink_finger_drawing response')
@@ -88,7 +88,7 @@ export function drawingSetLiveInkFingerDrawing(
  */
 export function drawingSetDocumentBounds(bounds: number[]): Promise<void> {
   return invokeOrFallback<void>(
-    'drawing_set_document_bounds',
+    TauriCommandName.DrawingSetDocumentBounds,
     { bounds },
     () => undefined,
     (value) => assertVoid(value, 'drawing_set_document_bounds response')
@@ -105,7 +105,7 @@ export function drawingSetDocumentBounds(bounds: number[]): Promise<void> {
  */
 export function drawingSetControlBounds(bounds: number[]): Promise<void> {
   return invokeOrFallback<void>(
-    'drawing_set_control_bounds',
+    TauriCommandName.DrawingSetControlBounds,
     { bounds },
     () => undefined,
     (value) => assertVoid(value, 'drawing_set_control_bounds response')
@@ -122,7 +122,7 @@ export function drawingSaveInkState(
   yrsState: number[]
 ): Promise<void> {
   return invokeOrFallback<void>(
-    'drawing_save_ink_state',
+    TauriCommandName.DrawingSaveInkState,
     { noteId, yrsState },
     async () => {
       await mockApi.saveNote({ id: noteId, yrs_state: yrsState });

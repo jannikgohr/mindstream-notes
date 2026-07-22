@@ -16,13 +16,14 @@ import {
   assertBoolean,
   assertStringArray,
   assertVoid,
+  TauriCommandName,
   invokeOrFallback
 } from './core';
 import { mockApi } from './mock-store';
 
 export function setPdfText(noteId: string, text: string): Promise<void> {
   return invokeOrFallback<void>(
-    'set_pdf_text',
+    TauriCommandName.SetPdfText,
     { noteId, text },
     () => mockApi.setPdfText(noteId, text),
     (value) => assertVoid(value, 'set_pdf_text response')
@@ -31,7 +32,7 @@ export function setPdfText(noteId: string, text: string): Promise<void> {
 
 export function pdfNotesMissingText(): Promise<string[]> {
   return invokeOrFallback<string[]>(
-    'pdf_notes_missing_text',
+    TauriCommandName.PdfNotesMissingText,
     undefined,
     () => mockApi.pdfNotesMissingText(),
     (value) => assertStringArray(value, 'pdf_notes_missing_text response')
@@ -40,7 +41,7 @@ export function pdfNotesMissingText(): Promise<string[]> {
 
 export function pdfNoteNeedsText(noteId: string): Promise<boolean> {
   return invokeOrFallback<boolean>(
-    'pdf_note_needs_text',
+    TauriCommandName.PdfNoteNeedsText,
     { noteId },
     () => mockApi.pdfNoteNeedsText(noteId),
     (value) => assertBoolean(value, 'pdf_note_needs_text response')

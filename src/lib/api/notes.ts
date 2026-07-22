@@ -13,6 +13,7 @@ import {
   assertString,
   assertStringArray,
   assertVoid,
+  TauriCommandName,
   invokeOrFallback,
   optionalString
 } from './core';
@@ -150,7 +151,7 @@ export interface UpdateNoteInput {
 
 export function listNotes(includeTrashed = false): Promise<NoteSummary[]> {
   return invokeOrFallback<NoteSummary[]>(
-    'list_notes',
+    TauriCommandName.ListNotes,
     { includeTrashed },
     () => mockApi.listNotes(includeTrashed),
     parseNoteSummaries
@@ -160,7 +161,7 @@ export function listNotes(includeTrashed = false): Promise<NoteSummary[]> {
 export function loadNote(id: string): Promise<Note> {
   assertNonEmptyString(id, 'loadNote.id');
   return invokeOrFallback<Note>(
-    'load_note',
+    TauriCommandName.LoadNote,
     { id },
     () => mockApi.loadNote(id),
     parseNote
@@ -170,7 +171,7 @@ export function loadNote(id: string): Promise<Note> {
 export function createNote(input: CreateNoteInput): Promise<Note> {
   assertCreateNoteInput(input);
   return invokeOrFallback<Note>(
-    'create_note',
+    TauriCommandName.CreateNote,
     { input },
     () => mockApi.createNote(input),
     parseNote
@@ -180,7 +181,7 @@ export function createNote(input: CreateNoteInput): Promise<Note> {
 export function saveNote(input: UpdateNoteInput): Promise<Note> {
   assertUpdateNoteInput(input);
   return invokeOrFallback<Note>(
-    'save_note',
+    TauriCommandName.SaveNote,
     { input },
     () => mockApi.saveNote(input),
     parseNote
@@ -190,7 +191,7 @@ export function saveNote(input: UpdateNoteInput): Promise<Note> {
 export function trashNote(id: string): Promise<void> {
   assertNonEmptyString(id, 'trashNote.id');
   return invokeOrFallback<void>(
-    'trash_note',
+    TauriCommandName.TrashNote,
     { id },
     () => mockApi.trashNote(id),
     (value) => assertVoid(value, 'trash_note response')
@@ -200,7 +201,7 @@ export function trashNote(id: string): Promise<void> {
 export function restoreNote(id: string): Promise<void> {
   assertNonEmptyString(id, 'restoreNote.id');
   return invokeOrFallback<void>(
-    'restore_note',
+    TauriCommandName.RestoreNote,
     { id },
     () => mockApi.restoreNote(id),
     (value) => assertVoid(value, 'restore_note response')
@@ -210,7 +211,7 @@ export function restoreNote(id: string): Promise<void> {
 export function purgeNote(id: string): Promise<void> {
   assertNonEmptyString(id, 'purgeNote.id');
   return invokeOrFallback<void>(
-    'purge_note',
+    TauriCommandName.PurgeNote,
     { id },
     () => mockApi.purgeNote(id),
     (value) => assertVoid(value, 'purge_note response')

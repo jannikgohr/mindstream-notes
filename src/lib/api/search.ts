@@ -11,6 +11,7 @@ import {
   assertNumber,
   assertRecord,
   assertString,
+  TauriCommandName,
   invokeOrFallback
 } from './core';
 import { mockApi } from './mock-store';
@@ -30,7 +31,7 @@ export interface SearchHit {
 
 export function searchNotes(query: string): Promise<SearchHit[]> {
   return invokeOrFallback<SearchHit[]>(
-    'search_notes',
+    TauriCommandName.SearchNotes,
     { query },
     () => mockApi.searchNotes(query),
     parseSearchHits

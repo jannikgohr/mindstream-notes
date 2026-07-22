@@ -7,12 +7,12 @@
  * isn't shipped over IPC just to count it.
  */
 
-import { assertNumber, invokeOrFallback } from './core';
+import { assertNumber, TauriCommandName, invokeOrFallback } from './core';
 import { mockApi } from './mock-store';
 
 export function noteWordCount(noteId: string): Promise<number> {
   return invokeOrFallback<number>(
-    'note_word_count',
+    TauriCommandName.NoteWordCount,
     { noteId },
     () => mockApi.noteWordCount(noteId),
     (value) => assertNumber(value, 'note_word_count response')
