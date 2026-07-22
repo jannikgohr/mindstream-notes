@@ -293,6 +293,32 @@ pub fn run() {
             #[cfg(desktop)]
             tray::init(app)?;
 
+            // e2e ONLY: the `tauri.e2e.conf.json` build overlay empties the
+            // config `windows` array, so the auto-created "main" window is
+            // absent here. Recreate it with a per-process WebView2 data
+            // directory rooted in this instance's profile dir. Two app
+            // processes sharing one user-data-folder (the identifier default
+            // every instance falls back to) is unsupported by WebView2 and is
+            // what makes the multi-client tiers hang intermittently at boot.
+            // Production is unaffected: no overlay, so the config window is
+            // auto-created and this cfg-gated block does not compile.
+            #[cfg(all(desktop, feature = "e2e-data-dir"))]
+            {
+                tauri::WebviewWindowBuilder::new(
+                    app.handle(),
+                    "main",
+                    tauri::WebviewUrl::default(),
+                )
+                .title("Mindstream Notes")
+                .inner_size(1280.0, 820.0)
+                .min_inner_size(880.0, 560.0)
+                .decorations(false)
+                .visible(false)
+                .center()
+                .data_directory(app_data.join("webview2"))
+                .build()?;
+            }
+
             #[cfg(desktop)]
             if let Some(window) = app.get_webview_window("main") {
                 if let Err(err) = window.restore_state(WINDOW_STATE_FLAGS) {

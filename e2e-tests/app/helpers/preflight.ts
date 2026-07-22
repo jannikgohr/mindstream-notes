@@ -139,9 +139,23 @@ export function assertTauriDriver(): void {
  * is not running.
  */
 function buildApp(): void {
+  // The `--config` overlay empties the config `windows` array so the app
+  // creates "main" itself with a per-process WebView2 data directory (see
+  // src-tauri/src/lib.rs, gated to the e2e-data-dir feature). Without it every
+  // instance shares one user-data-folder, which WebView2 does not support
+  // across processes and which makes the multi-client tiers hang at boot.
+  const e2eConfig = join(repoRoot, 'src-tauri', 'tauri.e2e.conf.json');
   const res = spawnSync(
     process.execPath,
-    [tauriScript, 'build', '--no-bundle', '--features', 'e2e-data-dir'],
+    [
+      tauriScript,
+      'build',
+      '--no-bundle',
+      '--features',
+      'e2e-data-dir',
+      '--config',
+      e2eConfig
+    ],
     { cwd: repoRoot, stdio: 'inherit', env: buildEnv }
   );
   if (res.status !== 0) {
