@@ -19,7 +19,11 @@ import {
   deleteSignature as apiDeleteSignature
 } from '$lib/api/signatures';
 import type { PdfSignatureSnapshot } from './types';
-import { recordToSnapshot, snapshotToData } from './signature-codec';
+import {
+  normaliseSignatureSnapshot,
+  recordToSnapshot,
+  snapshotToData
+} from './signature-codec';
 
 // Pre-sync localStorage keys. v1 stored a single signature under
 // LEGACY_SINGLE_KEY; a later migration moved it into an array under
@@ -36,21 +40,19 @@ export function readLegacySnapshots(): PdfSignatureSnapshot[] {
   try {
     const raw = localStorage.getItem(LEGACY_ARRAY_KEY);
     if (raw) {
-      const parsed = JSON.parse(raw) as PdfSignatureSnapshot[];
+      const parsed: unknown = JSON.parse(raw);
       if (Array.isArray(parsed)) {
         for (const sig of parsed) {
-          if (Array.isArray(sig?.strokes) && sig.strokes.length > 0) {
-            out.push({ ...sig, id: sig.id ?? crypto.randomUUID() });
-          }
+          const snapshot = normaliseSignatureSnapshot(sig, crypto.randomUUID());
+          if (snapshot) out.push(snapshot);
         }
       }
     }
     const legacy = localStorage.getItem(LEGACY_SINGLE_KEY);
     if (legacy) {
-      const parsed = JSON.parse(legacy) as PdfSignatureSnapshot;
-      if (Array.isArray(parsed?.strokes) && parsed.strokes.length > 0) {
-        out.push({ ...parsed, id: parsed.id ?? crypto.randomUUID() });
-      }
+      const parsed: unknown = JSON.parse(legacy);
+      const snapshot = normaliseSignatureSnapshot(parsed, crypto.randomUUID());
+      if (snapshot) out.push(snapshot);
     }
   } catch {
     /* ignore malformed legacy data — nothing to migrate */
