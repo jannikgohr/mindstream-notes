@@ -39,6 +39,7 @@ import {
   clientHelpers,
   loginClient,
   syncClient,
+  waitForClientsReady,
   type ClientHelpers
 } from '../helpers/harness.js';
 
@@ -316,6 +317,8 @@ describe('T4 collection sharing (manifest bundles)', function () {
   let B: ClientHelpers;
 
   before(async function () {
+    await waitForClientsReady({ browserA, browserB });
+
     const server = backendUrl();
 
     // Two real Etebase signups (not a shared-collection trick) so the sender

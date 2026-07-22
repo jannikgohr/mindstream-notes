@@ -40,6 +40,7 @@ import {
   clientHelpers,
   loginClient,
   syncClient,
+  waitForClientsReady,
   type ClientHelpers
 } from '../helpers/harness.js';
 
@@ -319,6 +320,8 @@ describe('T4 collection sharing across the owner’s two devices', function () {
   let sharedNoteId: string;
 
   before(async function () {
+    await waitForClientsReady({ browserA1, browserA2, browserB });
+
     const server = backendUrl();
 
     // One sender + one recipient account, both brand-new (no server-side vault
