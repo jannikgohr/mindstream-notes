@@ -210,6 +210,32 @@ export function dragItemsForStart(
   return items.length > 0 ? items : [item];
 }
 
+function parseTreeItemRef(value: unknown): TreeItemRef | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  const item = value as { kind?: unknown; id?: unknown };
+  if (
+    (item.kind !== 'note' && item.kind !== 'folder') ||
+    typeof item.id !== 'string' ||
+    item.id.length === 0
+  ) {
+    return null;
+  }
+  return { kind: item.kind, id: item.id };
+}
+
+function parseTreeItemRefs(value: unknown): TreeItemRef[] | null {
+  if (!Array.isArray(value) || value.length === 0) return null;
+  const items: TreeItemRef[] = [];
+  for (const item of value) {
+    const parsed = parseTreeItemRef(item);
+    if (!parsed) return null;
+    items.push(parsed);
+  }
+  return items;
+}
+
 export function emptyStateMessageForSource(
   source: DesktopNoteSource,
   emptyRootLabel: string
@@ -233,9 +259,9 @@ export function dragPayloadFromTransfer(
   const treeItems = dataTransfer.getData('application/x-tree-items');
   if (treeItems) {
     try {
-      const items = JSON.parse(treeItems) as TreeItemRef[];
-      const first = items[0];
-      if (first?.kind === 'note' || first?.kind === 'folder') {
+      const items = parseTreeItemRefs(JSON.parse(treeItems));
+      const first = items?.[0];
+      if (first) {
         return { ...first, items };
       }
     } catch {

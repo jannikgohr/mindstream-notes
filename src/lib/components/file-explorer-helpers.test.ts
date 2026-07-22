@@ -356,6 +356,36 @@ describe('dragPayloadFromTransfer', () => {
     });
   });
 
+  it('falls back when a multi-item tree payload has malformed items', () => {
+    const t = transfer({
+      'application/x-tree-items': JSON.stringify([
+        { kind: 'folder', id: 'f1' },
+        { kind: 'note', id: '' }
+      ]),
+      'application/x-note-id': 'fallback-note'
+    });
+
+    expect(dragPayloadFromTransfer(t)).toEqual({
+      kind: 'note',
+      id: 'fallback-note'
+    });
+  });
+
+  it('falls back when a multi-item tree payload is not an array', () => {
+    const t = transfer({
+      'application/x-tree-items': JSON.stringify({
+        kind: 'folder',
+        id: 'f1'
+      }),
+      'application/x-folder-id': 'fallback-folder'
+    });
+
+    expect(dragPayloadFromTransfer(t)).toEqual({
+      kind: 'folder',
+      id: 'fallback-folder'
+    });
+  });
+
   it('prefers a note id over a folder id', () => {
     const t = transfer({
       'application/x-note-id': 'n1',
