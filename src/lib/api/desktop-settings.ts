@@ -1,4 +1,9 @@
-import { assertBoolean, assertString, invokeOrFallback } from './core';
+import {
+  assertBoolean,
+  assertString,
+  assertVoid,
+  invokeOrFallback
+} from './core';
 
 export enum DesktopThemeMode {
   Light = 'light',
@@ -33,7 +38,8 @@ export function setCloseToTray(value: boolean): Promise<void> {
   return invokeOrFallback<void>(
     'set_close_to_tray',
     { value },
-    () => undefined
+    () => undefined,
+    (response) => assertVoid(response, 'set_close_to_tray response')
   );
 }
 
@@ -50,7 +56,8 @@ export function setStartInTray(value: boolean): Promise<void> {
   return invokeOrFallback<void>(
     'set_start_in_tray',
     { value },
-    () => undefined
+    () => undefined,
+    (response) => assertVoid(response, 'set_start_in_tray response')
   );
 }
 
@@ -69,7 +76,8 @@ export function setCustomWindowDecorations(value: boolean): Promise<void> {
   return invokeOrFallback<void>(
     'set_custom_window_decorations',
     { value },
-    () => undefined
+    () => undefined,
+    (response) => assertVoid(response, 'set_custom_window_decorations response')
   );
 }
 
@@ -86,7 +94,8 @@ export function setDesktopLanguage(code: string): Promise<void> {
   return invokeOrFallback<void>(
     'set_desktop_language',
     { code },
-    () => undefined
+    () => undefined,
+    (response) => assertVoid(response, 'set_desktop_language response')
   );
 }
 
@@ -110,6 +119,7 @@ export function setDesktopThemeMode(mode: DesktopThemeMode): Promise<void> {
   return invokeOrFallback<void>(
     'set_desktop_theme_mode',
     { mode },
-    () => undefined
+    () => undefined,
+    (response) => assertVoid(response, 'set_desktop_theme_mode response')
   );
 }

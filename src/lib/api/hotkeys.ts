@@ -1,4 +1,4 @@
-import { invokeOrFallback } from './core';
+import { assertString, assertVoid, invokeOrFallback } from './core';
 import {
   nativeGlobalShortcutCommandId,
   type NativeGlobalShortcutCommandId
@@ -26,7 +26,8 @@ export function setNativeHotkeyDisplays(
   return invokeOrFallback<void>(
     'set_hotkey_displays',
     { displays },
-    () => undefined
+    () => undefined,
+    (value) => assertVoid(value, 'set_hotkey_displays response')
   );
 }
 
@@ -39,7 +40,8 @@ export function getNativeHotkeyDisplay(
   return invokeOrFallback<string | null>(
     'get_hotkey_display',
     { commandId },
-    () => null
+    () => null,
+    parseOptionalString
   );
 }
 
@@ -62,6 +64,12 @@ export function syncNativeGlobalShortcuts(
   return invokeOrFallback<void>(
     'sync_global_shortcuts',
     { registrations: nativeRegistrations },
-    () => undefined
+    () => undefined,
+    (value) => assertVoid(value, 'sync_global_shortcuts response')
   );
+}
+
+function parseOptionalString(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  return assertString(value, 'get_hotkey_display response');
 }
