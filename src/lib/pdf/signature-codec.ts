@@ -8,27 +8,57 @@
 import type { SignatureRecord } from '$lib/api/signatures';
 import type { PdfSignatureImage, PdfSignatureSnapshot } from './types';
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isPositiveFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
 function normaliseImage(value: unknown): PdfSignatureImage | undefined {
-  if (!value || typeof value !== 'object') return undefined;
-  const image = value as Partial<PdfSignatureImage>;
+  if (!isRecord(value)) return undefined;
   if (
-    image.mimeType !== 'image/png' ||
-    typeof image.dataUrl !== 'string' ||
-    !image.dataUrl.startsWith('data:image/png;base64,') ||
-    typeof image.width !== 'number' ||
-    typeof image.height !== 'number' ||
-    !Number.isFinite(image.width) ||
-    !Number.isFinite(image.height) ||
-    image.width <= 0 ||
-    image.height <= 0
+    value.mimeType !== 'image/png' ||
+    typeof value.dataUrl !== 'string' ||
+    !value.dataUrl.startsWith('data:image/png;base64,') ||
+    !isPositiveFiniteNumber(value.width) ||
+    !isPositiveFiniteNumber(value.height)
   ) {
     return undefined;
   }
   return {
-    dataUrl: image.dataUrl,
-    width: image.width,
-    height: image.height,
+    dataUrl: value.dataUrl,
+    width: value.width,
+    height: value.height,
     mimeType: 'image/png'
+  };
+}
+
+export function normaliseSignatureSnapshot(
+  value: unknown,
+  fallbackId?: string
+): PdfSignatureSnapshot | null {
+  if (!isRecord(value)) return null;
+  const id =
+    typeof value.id === 'string' && value.id.length > 0 ? value.id : fallbackId;
+  if (
+    !id ||
+    !isPositiveFiniteNumber(value.width) ||
+    !isPositiveFiniteNumber(value.height) ||
+    !Array.isArray(value.strokes) ||
+    value.strokes.length === 0
+  ) {
+    return null;
+  }
+
+  const image = normaliseImage(value.image);
+  return {
+    id,
+    width: value.width,
+    height: value.height,
+    strokes: value.strokes,
+    ...(image ? { image } : {})
   };
 }
 
@@ -40,16 +70,8 @@ export function recordToSnapshot(
   rec: SignatureRecord
 ): PdfSignatureSnapshot | null {
   try {
-    const geom = JSON.parse(rec.data) as Omit<PdfSignatureSnapshot, 'id'>;
-    if (!Array.isArray(geom?.strokes) || geom.strokes.length === 0) return null;
-    const image = normaliseImage(geom.image);
-    return {
-      id: rec.id,
-      width: geom.width,
-      height: geom.height,
-      strokes: geom.strokes,
-      ...(image ? { image } : {})
-    };
+    const geom: unknown = JSON.parse(rec.data);
+    return normaliseSignatureSnapshot(geom, rec.id);
   } catch {
     return null;
   }

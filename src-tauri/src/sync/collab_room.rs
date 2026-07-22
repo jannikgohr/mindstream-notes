@@ -340,7 +340,7 @@ pub async fn note_room_info(
     db: tauri::State<'_, Db>,
     id: String,
     writer_public_key_b64: Option<String>,
-) -> Result<Option<RoomInfo>, String> {
+) -> CommandResult<Option<RoomInfo>> {
     // Live collab is etebase-gated: no session ⇒ no room.
     if !crate::auth::has_session(&app) {
         return Ok(None);
@@ -387,7 +387,7 @@ pub async fn note_room_info(
     // closure returns just the encoded key + room id so no etebase-
     // owned value escapes the blocking pool.
     let app_for_blocking = app.clone();
-    tauri::async_runtime::spawn_blocking(move || -> Result<Option<RoomInfo>, String> {
+    Ok(tauri::async_runtime::spawn_blocking(move || -> Result<Option<RoomInfo>, String> {
         catch_blocking_panic("room_info", || {
             let writer_public_key_b64 = writer_public_key_b64
                 .map(|key| key.trim().to_string())
@@ -535,5 +535,5 @@ pub async fn note_room_info(
         })
     })
     .await
-    .map_err(|e| format!("note_room_info task: {e}"))?
+    .map_err(|e| format!("note_room_info task: {e}"))??)
 }

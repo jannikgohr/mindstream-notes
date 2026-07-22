@@ -18,8 +18,8 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
 use crate::db::Db;
-use crate::error::AppResult;
-use crate::notes::NoteSummary;
+use crate::error::{AppResult, CommandResult};
+use crate::notes::{NoteKind, NoteSummary};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MatchRange {
@@ -65,12 +65,12 @@ pub fn search(conn: &Connection, query: &str) -> AppResult<Vec<SearchHit>> {
         let trashed_at: Option<String> = row.get("trashed_at")?;
         let favourite: i64 = row.get("favourite")?;
         let etebase_uid: Option<String> = row.get("etebase_uid")?;
-        let note_kind: String = row.get("note_kind")?;
+        let note_kind: NoteKind = row.get("note_kind")?;
         // For PDF notes the `body` column is only a JSON asset pointer; the
         // searchable text lives in `pdf_text` (extracted from the PDF, NULL
         // until indexed). Substitute it so the matcher/snippet never sees the
         // pointer and PDF content becomes searchable.
-        let searchable_body = if note_kind == "pdf" {
+        let searchable_body = if note_kind == NoteKind::Pdf {
             row.get::<_, Option<String>>("pdf_text")?
                 .unwrap_or_default()
         } else {
@@ -309,7 +309,7 @@ fn collapse_whitespace(s: &str) -> String {
 // ---------- Tauri command ----------
 
 #[tauri::command]
-pub fn search_notes(db: tauri::State<'_, Db>, query: String) -> Result<Vec<SearchHit>, String> {
+pub fn search_notes(db: tauri::State<'_, Db>, query: String) -> CommandResult<Vec<SearchHit>> {
     db.with_conn(|c| search(c, &query)).map_err(Into::into)
 }
 

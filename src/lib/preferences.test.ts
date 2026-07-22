@@ -36,6 +36,29 @@ describe('loadPreferences', () => {
     expect(prefs.rightSidebarWidth).toBe(600);
   });
 
+  it('ignores non-numeric sidebar widths', () => {
+    localStorage.setItem(
+      KEY,
+      JSON.stringify({
+        leftSidebarWidth: 'wide',
+        rightSidebarWidth: Number.NaN
+      })
+    );
+    const prefs = loadPreferences();
+    expect(prefs.leftSidebarWidth).toBe(DEFAULT_PREFERENCES.leftSidebarWidth);
+    expect(prefs.rightSidebarWidth).toBe(DEFAULT_PREFERENCES.rightSidebarWidth);
+  });
+
+  it('ignores non-boolean sidebar open flags', () => {
+    localStorage.setItem(
+      KEY,
+      JSON.stringify({ leftSidebarOpen: 'false', rightSidebarOpen: 0 })
+    );
+    const prefs = loadPreferences();
+    expect(prefs.leftSidebarOpen).toBe(DEFAULT_PREFERENCES.leftSidebarOpen);
+    expect(prefs.rightSidebarOpen).toBe(DEFAULT_PREFERENCES.rightSidebarOpen);
+  });
+
   it('rejects invalid sort strategy / direction and uses the default', () => {
     localStorage.setItem(
       KEY,
@@ -51,6 +74,11 @@ describe('loadPreferences', () => {
     localStorage.setItem(KEY, '{not json');
     expect(loadPreferences()).toEqual(DEFAULT_PREFERENCES);
     warn.mockRestore();
+  });
+
+  it('falls back to defaults when stored JSON is not an object', () => {
+    localStorage.setItem(KEY, JSON.stringify(['modified']));
+    expect(loadPreferences()).toEqual(DEFAULT_PREFERENCES);
   });
 });
 

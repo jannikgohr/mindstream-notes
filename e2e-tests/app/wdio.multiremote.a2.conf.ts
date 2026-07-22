@@ -18,71 +18,41 @@
  *
  * Run with the backend stack up:
  *   pnpm backend:test:up
- *   MINDSTREAM_E2E_APP=1 MINDSTREAM_E2E_BACKEND=1 \
- *     MINDSTREAM_E2E_BACKEND_URL=http://localhost:18080 pnpm test:e2e:app:multi:a2
+ *   pnpm test:e2e:app:multi:a2
  */
 
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
 import { mkdtempSync } from 'node:fs';
-import { homedir, tmpdir } from 'node:os';
-import { delimiter, dirname, join, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  appBinaryForProfile,
+  preflight,
+  repoRoot,
+  spawnTauriDriver,
+  stopTauriDriverTree
+} from './helpers/preflight.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const repoRoot = resolve(here, '../..');
-
-const binaryName =
-  process.platform === 'win32' ? 'mindstream-notes.exe' : 'mindstream-notes';
-const application = join(
-  repoRoot,
-  'src-tauri',
-  'target',
-  'release',
-  binaryName
-);
-const tauriScript = join(repoRoot, 'src-tauri', 'scripts', 'tauri.mjs');
-
-const tauriDriverPath = join(
-  homedir(),
-  '.cargo',
-  'bin',
-  process.platform === 'win32' ? 'tauri-driver.exe' : 'tauri-driver'
-);
-const pathEnvKey =
-  Object.keys(process.env).find((key) => key.toLowerCase() === 'path') ??
-  'PATH';
-const nodeBinDir = dirname(process.execPath);
-const inheritedPath = process.env[pathEnvKey];
-
-const buildEnv = {
-  ...process.env,
-  [pathEnvKey]: inheritedPath
-    ? `${nodeBinDir}${delimiter}${inheritedPath}`
-    : nodeBinDir,
-  NODE_OPTIONS: process.env.NODE_OPTIONS ?? '--max-old-space-size=4096',
-  VITE_MINDSTREAM_E2E: '1',
-  // pnpm 11 auto-runs `pnpm install` before scripts when it thinks
-  // node_modules is stale. The app E2E build is non-interactive, so keep the
-  // dependency install as an explicit developer/CI step instead of letting this
-  // hook try to purge node_modules.
-  pnpm_config_verify_deps_before_run:
-    process.env.pnpm_config_verify_deps_before_run ?? 'false'
-};
 
 /**
  * One tauri-driver process per client. `port` is what wdio connects to;
  * `nativePort` is the underlying WebKitWebDriver — every value must be unique
  * across the three so the processes don't fight over a socket. `profileDir` is a
- * fresh, throwaway data dir (the `dir_override` seam, e2e-data-dir feature); the
- * `profileId` namespaces the OS keyring entry so A1 and A2 (same account, two
- * devices) each hold their own session instead of clobbering one keyring slot.
+ * fresh, throwaway data dir per spec file (the `dir_override` seam,
+ * e2e-data-dir feature); the `profileId` namespaces the OS keyring entry so A1
+ * and A2 (same account, two devices) each hold their own session instead of
+ * clobbering one keyring slot.
  */
 interface ClientProc {
   port: number;
   nativePort: number;
   profileId: string;
-  profileDir: string;
+  application: string;
+  profileDir?: string;
   driver?: ChildProcess;
+  startTimer?: ReturnType<typeof setTimeout>;
 }
 
 const clients: Record<'browserA1' | 'browserA2' | 'browserB', ClientProc> = {
@@ -90,33 +60,34 @@ const clients: Record<'browserA1' | 'browserA2' | 'browserB', ClientProc> = {
     port: 4444,
     nativePort: 4445,
     profileId: 'e2e-a1',
-    profileDir: mkdtempSync(join(tmpdir(), 'mindstream-e2e-a1-'))
+    application: appBinaryForProfile('e2e-a1')
   },
   browserA2: {
     port: 4448,
     nativePort: 4449,
     profileId: 'e2e-a2',
-    profileDir: mkdtempSync(join(tmpdir(), 'mindstream-e2e-a2-'))
+    application: appBinaryForProfile('e2e-a2')
   },
   browserB: {
     port: 4446,
     nativePort: 4447,
     profileId: 'e2e-b',
-    profileDir: mkdtempSync(join(tmpdir(), 'mindstream-e2e-b-'))
+    application: appBinaryForProfile('e2e-b')
   }
 };
 
+const DRIVER_START_STAGGER_MS = 20_000;
+
 function spawnDriver(client: ClientProc): ChildProcess {
-  return spawn(
-    tauriDriverPath,
+  client.profileDir = mkdtempSync(
+    join(tmpdir(), `mindstream-${client.profileId}-`)
+  );
+  return spawnTauriDriver(
     ['--port', String(client.port), '--native-port', String(client.nativePort)],
     {
-      stdio: [null, process.stdout, process.stderr],
-      env: {
-        ...process.env,
-        MINDSTREAM_PROFILE_DIR: client.profileDir,
-        MINDSTREAM_PROFILE_ID: client.profileId
-      }
+      ...process.env,
+      MINDSTREAM_PROFILE_DIR: client.profileDir,
+      MINDSTREAM_PROFILE_ID: client.profileId
     }
   );
 }
@@ -134,55 +105,67 @@ export const config: WebdriverIO.Config = {
       hostname: '127.0.0.1',
       port: clients.browserA1.port,
       capabilities: {
-        'tauri:options': { application }
+        'tauri:options': { application: clients.browserA1.application }
       } as WebdriverIO.Capabilities
     },
     browserA2: {
       hostname: '127.0.0.1',
       port: clients.browserA2.port,
       capabilities: {
-        'tauri:options': { application }
+        'tauri:options': { application: clients.browserA2.application }
       } as WebdriverIO.Capabilities
     },
     browserB: {
       hostname: '127.0.0.1',
       port: clients.browserB.port,
       capabilities: {
-        'tauri:options': { application }
+        'tauri:options': { application: clients.browserB.application }
       } as WebdriverIO.Capabilities
     }
   } as unknown as WebdriverIO.Config['capabilities'],
   logLevel: 'warn',
+  connectionRetryTimeout: 220_000,
+  connectionRetryCount: 220,
   framework: 'mocha',
   reporters: ['spec'],
   mochaOpts: { ui: 'bdd', timeout: 120_000 },
 
-  // Same Tauri-CLI build as the two-client config: invoke the tauri.mjs
-  // wrapper through this process's Node so it works cross-platform (a bare
-  // `spawnSync('pnpm', …)` isn't spawnable on Windows, where pnpm is a
-  // `.cmd`). Skip with MINDSTREAM_E2E_SKIP_BUILD=1 after a good build.
-  onPrepare: () => {
-    if (process.env.MINDSTREAM_E2E_SKIP_BUILD === '1') return;
-    const res = spawnSync(
-      process.execPath,
-      [tauriScript, 'build', '--no-bundle', '--features', 'e2e-data-dir'],
-      { cwd: repoRoot, stdio: 'inherit', env: buildEnv }
-    );
-    if (res.status !== 0) {
-      throw new Error('tauri build (--features e2e-data-dir) failed');
-    }
-  },
+  // Retry a failed spec file once on a fresh session — same transient-boot
+  // rationale as the two-client config (see wdio.multiremote.conf.ts).
+  specFileRetries: 1,
+  specFileRetriesDeferred: true,
+
+  // Requirement checks + the Tauri CLI build, same as the two-client config
+  // (helpers/preflight.ts).
+  onPrepare: () =>
+    preflight({
+      backend: true,
+      buildProfiles: ['e2e-a1', 'e2e-a2', 'e2e-b']
+    }),
 
   beforeSession: () => {
-    for (const client of Object.values(clients)) {
-      if (!client.driver) client.driver = spawnDriver(client);
+    for (const [index, client] of Object.values(clients).entries()) {
+      if (client.driver || client.startTimer) continue;
+      if (index === 0) {
+        client.driver = spawnDriver(client);
+      } else {
+        client.startTimer = setTimeout(() => {
+          client.driver = spawnDriver(client);
+          client.startTimer = undefined;
+        }, index * DRIVER_START_STAGGER_MS);
+      }
     }
   },
 
-  afterSession: () => {
+  afterSession: async () => {
     for (const client of Object.values(clients)) {
-      client.driver?.kill();
+      if (client.startTimer) {
+        clearTimeout(client.startTimer);
+        client.startTimer = undefined;
+      }
+      await stopTauriDriverTree(client.driver);
       client.driver = undefined;
+      client.profileDir = undefined;
     }
   }
 };

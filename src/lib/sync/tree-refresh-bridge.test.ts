@@ -17,7 +17,12 @@ vi.mock('$lib/api/core', async (importOriginal) => {
   const actual = await importOriginal<typeof import('$lib/api/core')>();
   return { ...actual, isTauri };
 });
-vi.mock('$lib/api/events', () => ({ listen }));
+vi.mock('$lib/api/events', () => ({
+  listen,
+  TauriEventName: {
+    SyncCompleted: 'sync-completed'
+  }
+}));
 vi.mock('$lib/stores/tree.svelte', () => ({ loadTree }));
 
 import { installSyncTreeRefreshBridge } from './tree-refresh-bridge';

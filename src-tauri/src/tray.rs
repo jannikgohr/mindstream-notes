@@ -6,14 +6,14 @@ use tauri::{
 };
 
 use crate::{
+    app_events::AppEvent,
     db::Db,
     desktop_settings::DesktopSettings,
+    hotkeys::GlobalShortcutCommandId,
     i18n,
-    notes::{self, CreateNote},
+    notes::{self, CreateNote, NoteKind},
 };
 
-const TRAY_NOTE_CREATED_EVENT: &str = "tray-note-created";
-const SHOW_APP_EVENT: &str = "show-app";
 const NEW_NOTE_ID: &str = "new_note";
 const NEW_DRAWING_ID: &str = "new_drawing";
 const NEW_INK_ID: &str = "new_ink";
@@ -22,10 +22,10 @@ const QUIT_ID: &str = "quit";
 
 // Tray item id -> hotkey command id. The JS side owns bindings; Rust only
 // mirrors their native accelerator strings into the tray menu.
-const TRAY_HOTKEY_COMMANDS: &[(&str, &str)] = &[
-    (NEW_NOTE_ID, "global.newMarkdownNote"),
-    (NEW_DRAWING_ID, "global.newDrawing"),
-    (NEW_INK_ID, "global.newInkNote"),
+const TRAY_HOTKEY_COMMANDS: &[(&str, GlobalShortcutCommandId)] = &[
+    (NEW_NOTE_ID, GlobalShortcutCommandId::NewMarkdownNote),
+    (NEW_DRAWING_ID, GlobalShortcutCommandId::NewDrawing),
+    (NEW_INK_ID, GlobalShortcutCommandId::NewInkNote),
 ];
 
 #[derive(Clone, Debug, Serialize)]
@@ -133,7 +133,7 @@ pub fn sync_hotkey_displays(app: &AppHandle) {
             log::warn!("[tray] no tray menu item for hotkey mapping {item_id}");
             continue;
         };
-        let accelerator = crate::hotkeys::hotkey_accelerator(app, command_id);
+        let accelerator = crate::hotkeys::hotkey_accelerator(app, command_id.hotkey_catalogue_id());
         if let Err(err) = item.set_accelerator(accelerator.as_deref()) {
             log::warn!("[tray] failed to update accelerator for {item_id}: {err}");
         }
@@ -154,9 +154,12 @@ fn handle_menu_event(app: &AppHandle, item_id: &str) {
     create_note_and_emit(app, title, body, note_kind, "tray");
 }
 
-pub(crate) fn handle_global_shortcut_command(app: &AppHandle, command_id: &str) {
-    eprintln!("[global-shortcuts] handle_global_shortcut_command command_id={command_id}");
-    if command_id == "global.showApp" {
+pub(crate) fn handle_global_shortcut_command(app: &AppHandle, command_id: GlobalShortcutCommandId) {
+    eprintln!(
+        "[global-shortcuts] handle_global_shortcut_command command_id={}",
+        command_id.hotkey_catalogue_id()
+    );
+    if command_id == GlobalShortcutCommandId::ShowApp {
         eprintln!("[global-shortcuts] global.showApp -> focus_main_window + emit show-app");
         focus_main_window(app);
         // Mirror the new-note path: the webview-side listener calls
@@ -165,7 +168,7 @@ pub(crate) fn handle_global_shortcut_command(app: &AppHandle, command_id: &str) 
         // in the global-shortcut callback thread and on Windows that
         // alone doesn't reliably defeat focus-stealing prevention when
         // the window is hidden in the tray.
-        match app.emit(SHOW_APP_EVENT, ()) {
+        match app.emit(AppEvent::ShowApp.as_str(), ()) {
             Ok(()) => eprintln!("[global-shortcuts] emitted show-app event"),
             Err(err) => eprintln!("[global-shortcuts] failed to emit show-app event: {err}"),
         }
@@ -173,7 +176,10 @@ pub(crate) fn handle_global_shortcut_command(app: &AppHandle, command_id: &str) 
     }
 
     let Some((title, body, note_kind)) = global_shortcut_template(command_id) else {
-        log::warn!("[global-shortcuts] unhandled command {command_id}");
+        log::warn!(
+            "[global-shortcuts] unhandled command {}",
+            command_id.hotkey_catalogue_id()
+        );
         return;
     };
     create_note_and_emit(app, title, body, note_kind, "global shortcut");
@@ -183,7 +189,7 @@ fn create_note_and_emit(
     app: &AppHandle,
     title: &str,
     body: Option<&str>,
-    note_kind: &str,
+    note_kind: NoteKind,
     source: &str,
 ) {
     focus_main_window(app);
@@ -196,7 +202,7 @@ fn create_note_and_emit(
                 title: Some(title.to_string()),
                 body: body.map(str::to_string),
                 parent_collection_id: None,
-                note_kind: Some(note_kind.to_string()),
+                note_kind: Some(note_kind),
             },
         )
     });
@@ -204,7 +210,7 @@ fn create_note_and_emit(
     match result {
         Ok(note) => {
             if let Err(err) = app.emit(
-                TRAY_NOTE_CREATED_EVENT,
+                AppEvent::TrayNoteCreated.as_str(),
                 TrayNoteCreatedPayload {
                     note_id: note.summary.id,
                 },
@@ -216,28 +222,32 @@ fn create_note_and_emit(
     }
 }
 
-fn note_template(item_id: &str) -> Option<(&'static str, Option<&'static str>, &'static str)> {
+fn note_template(item_id: &str) -> Option<(&'static str, Option<&'static str>, NoteKind)> {
     match item_id {
-        NEW_NOTE_ID => Some(("Untitled", None, "markdown")),
-        NEW_DRAWING_ID => Some(("Untitled drawing canvas", None, "freeform")),
-        NEW_INK_ID => Some(("Untitled handwritten note", None, "ink")),
+        NEW_NOTE_ID => Some(("Untitled", None, NoteKind::Markdown)),
+        NEW_DRAWING_ID => Some(("Untitled drawing canvas", None, NoteKind::Freeform)),
+        NEW_INK_ID => Some(("Untitled handwritten note", None, NoteKind::Ink)),
         NEW_DIAGRAM_ID => Some((
             "Untitled diagram",
             Some("```mermaid\nflowchart TD\n  A[Start] --> B[Next]\n```\n"),
-            "markdown",
+            NoteKind::Markdown,
         )),
         _ => None,
     }
 }
 
 fn global_shortcut_template(
-    command_id: &str,
-) -> Option<(&'static str, Option<&'static str>, &'static str)> {
+    command_id: GlobalShortcutCommandId,
+) -> Option<(&'static str, Option<&'static str>, NoteKind)> {
     match command_id {
-        "global.newMarkdownNote" => Some(("Untitled", None, "markdown")),
-        "global.newDrawing" => Some(("Untitled drawing canvas", None, "freeform")),
-        "global.newInkNote" => Some(("Untitled handwritten note", None, "ink")),
-        _ => None,
+        GlobalShortcutCommandId::NewMarkdownNote => Some(("Untitled", None, NoteKind::Markdown)),
+        GlobalShortcutCommandId::NewDrawing => {
+            Some(("Untitled drawing canvas", None, NoteKind::Freeform))
+        }
+        GlobalShortcutCommandId::NewInkNote => {
+            Some(("Untitled handwritten note", None, NoteKind::Ink))
+        }
+        GlobalShortcutCommandId::ShowApp => None,
     }
 }
 

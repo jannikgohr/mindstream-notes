@@ -20,8 +20,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::db::Db;
-use crate::error::{AppError, AppResult};
-use crate::notes::{self, CreateNote, Note};
+use crate::error::{AppError, AppResult, CommandResult};
+use crate::notes::{self, CreateNote, Note, NoteKind};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AssetSummary {
@@ -136,7 +136,7 @@ pub fn import_pdf_note_inner(conn: &Connection, input: ImportPdfNote) -> AppResu
             title: input.title,
             body: Some(body),
             parent_collection_id: input.parent_collection_id,
-            note_kind: Some("pdf".into()),
+            note_kind: Some(NoteKind::Pdf),
         },
     )?;
 
@@ -173,15 +173,24 @@ pub fn load(conn: &Connection, id: &str) -> AppResult<Asset> {
     }
 }
 
-fn asset_url_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"asset:mindstream/([A-Za-z0-9_-]+)").unwrap())
+fn asset_url_re() -> Option<&'static Regex> {
+    static RE: OnceLock<Option<Regex>> = OnceLock::new();
+    RE.get_or_init(|| match Regex::new(r"asset:mindstream/([A-Za-z0-9_-]+)") {
+        Ok(re) => Some(re),
+        Err(err) => {
+            log::error!("[assets] invalid asset URL regex: {err}");
+            None
+        }
+    })
+    .as_ref()
 }
 
 fn count_asset_refs(body: &str, counts: &mut HashMap<String, usize>) {
-    for captures in asset_url_re().captures_iter(body) {
-        if let Some(id) = captures.get(1) {
-            *counts.entry(id.as_str().to_string()).or_default() += 1;
+    if let Some(re) = asset_url_re() {
+        for captures in re.captures_iter(body) {
+            if let Some(id) = captures.get(1) {
+                *counts.entry(id.as_str().to_string()).or_default() += 1;
+            }
         }
     }
     if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(body) {
@@ -196,11 +205,11 @@ pub(crate) fn asset_reference_counts(
     note_id: &str,
 ) -> AppResult<HashMap<String, usize>> {
     let mut counts = HashMap::new();
-    let current: Option<(String, String)> = conn
+    let current: Option<(NoteKind, String)> = conn
         .query_row(
             "SELECT note_kind, body FROM notes WHERE id = ?1",
             params![note_id],
-            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+            |r| Ok((r.get::<_, NoteKind>(0)?, r.get::<_, String>(1)?)),
         )
         .optional()?;
     let Some((note_kind, body)) = current else {
@@ -208,7 +217,7 @@ pub(crate) fn asset_reference_counts(
     };
     count_asset_refs(&body, &mut counts);
 
-    if note_kind != "markdown" {
+    if !note_kind.is_markdown() {
         return Ok(counts);
     }
 
@@ -228,14 +237,14 @@ pub(crate) fn purge_unreferenced_markdown_assets(
     conn: &Connection,
     note_id: &str,
 ) -> AppResult<usize> {
-    let note_kind: Option<String> = conn
+    let note_kind: Option<NoteKind> = conn
         .query_row(
             "SELECT note_kind FROM notes WHERE id = ?1",
             params![note_id],
             |r| r.get(0),
         )
         .optional()?;
-    if note_kind.as_deref() != Some("markdown") {
+    if note_kind != Some(NoteKind::Markdown) {
         return Ok(0);
     }
 
@@ -283,23 +292,23 @@ pub(crate) fn sweep_unreferenced_markdown_assets_inner(conn: &Connection) -> App
 // ---------- Tauri commands ----------
 
 #[tauri::command]
-pub fn upload_drawing_asset(db: tauri::State<'_, Db>, input: UploadAsset) -> Result<Asset, String> {
+pub fn upload_drawing_asset(db: tauri::State<'_, Db>, input: UploadAsset) -> CommandResult<Asset> {
     db.with_conn(|c| upload(c, input)).map_err(Into::into)
 }
 
 #[tauri::command]
-pub fn fetch_drawing_asset(db: tauri::State<'_, Db>, id: String) -> Result<Asset, String> {
+pub fn fetch_drawing_asset(db: tauri::State<'_, Db>, id: String) -> CommandResult<Asset> {
     db.with_conn(|c| load(c, &id)).map_err(Into::into)
 }
 
 #[tauri::command]
-pub fn import_pdf_note(db: tauri::State<'_, Db>, input: ImportPdfNote) -> Result<Note, String> {
+pub fn import_pdf_note(db: tauri::State<'_, Db>, input: ImportPdfNote) -> CommandResult<Note> {
     db.with_conn(|c| import_pdf_note_inner(c, input))
         .map_err(Into::into)
 }
 
 #[tauri::command]
-pub fn sweep_unreferenced_markdown_assets(db: tauri::State<'_, Db>) -> Result<usize, String> {
+pub fn sweep_unreferenced_markdown_assets(db: tauri::State<'_, Db>) -> CommandResult<usize> {
     db.with_conn(sweep_unreferenced_markdown_assets_inner)
         .map_err(Into::into)
 }

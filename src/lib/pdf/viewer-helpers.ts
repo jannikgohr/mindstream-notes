@@ -89,8 +89,12 @@ export function pdfAssetIdFromBody(body: string): string | null {
   if (!trimmed) return null;
   if (trimmed.startsWith('asset_')) return trimmed;
   try {
-    const parsed = JSON.parse(trimmed) as { pdfAssetId?: unknown };
-    return typeof parsed.pdfAssetId === 'string' ? parsed.pdfAssetId : null;
+    const parsed: unknown = JSON.parse(trimmed);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return null;
+    }
+    const assetId = (parsed as { pdfAssetId?: unknown }).pdfAssetId;
+    return typeof assetId === 'string' ? assetId : null;
   } catch {
     return null;
   }

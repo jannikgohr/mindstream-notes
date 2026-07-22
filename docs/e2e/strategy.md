@@ -3,12 +3,11 @@
 **Just want to run the tests?** See [e2e-tests/README.md](../../e2e-tests/README.md).
 This doc is the _why_: the test tiers and how to pick one.
 
-The unit suites (`vitest`, `cargo test`) cover the logic layer at 80% line
-coverage. Everything they exclude — the Tauri IPC boundary, Etebase network
-sync, native dialogs and the file system, the editor/canvas frameworks,
-cross-restart persistence — only has meaning when the whole stack runs
-together. That integration surface is the e2e backlog, catalogued in
-[flows.md](flows.md).
+The unit suites (`vitest`, `cargo test`) cover the logic layer, with coverage
+reported to Codecov. Everything they exclude — the Tauri IPC boundary, Etebase
+network sync, native dialogs and the file system, the editor/canvas frameworks,
+cross-restart persistence — only has meaning when the whole stack runs together.
+That integration surface is the e2e backlog, catalogued in [flows.md](flows.md).
 
 Note-history made this unavoidable: version restore, the cross-device timeline,
 live-collab restore propagation, and the collab-confirmation guard are each a

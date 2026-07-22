@@ -8,7 +8,15 @@
  */
 
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
-import { isTauri } from './core';
+import {
+  assertBoolean,
+  assertNumber,
+  assertRecord,
+  assertString,
+  assertVoid,
+  TauriCommandName,
+  isTauri
+} from './core';
 
 export type ServerType = 'managed' | 'self-hosted';
 
@@ -34,6 +42,11 @@ export interface ServerCheckResult {
   status: number;
   url: string;
 }
+
+type AuthSessionState =
+  | { status: 'loading' }
+  | { status: 'signedOut' }
+  | { status: 'signedIn'; session: SessionInfo };
 
 /**
  * Pub/sub for session-state transitions. Login + logout both dispatch
@@ -75,8 +88,19 @@ function emitSessionChange() {
  * state and doesn't want to flicker.
  */
 class AuthSessionStore {
-  current = $state<SessionInfo | null>(null);
+  state = $state<AuthSessionState>({ status: 'loading' });
   initialised = $state(false);
+
+  get current(): SessionInfo | null {
+    return this.state.status === 'signedIn' ? this.state.session : null;
+  }
+
+  set current(session: SessionInfo | null) {
+    this.state =
+      session === null
+        ? { status: 'signedOut' }
+        : { status: 'signedIn', session };
+  }
 }
 
 export const authSession = new AuthSessionStore();
@@ -107,17 +131,20 @@ if (typeof window !== 'undefined') {
 }
 
 export async function etebaseLogin(input: LoginInput): Promise<SessionInfo> {
+  assertLoginInput(input);
   if (!isTauri()) {
     throw new Error('Sign-in is only available in the desktop app.');
   }
-  const session = await tauriInvoke<SessionInfo>('etebase_login', {
-    args: {
-      server_type: input.serverType,
-      server_url: input.serverUrl ?? null,
-      username: input.username,
-      password: input.password
-    }
-  });
+  const session = parseSessionInfo(
+    await tauriInvoke<unknown>(TauriCommandName.EtebaseLogin, {
+      args: {
+        server_type: input.serverType,
+        server_url: input.serverUrl ?? null,
+        username: input.username,
+        password: input.password
+      }
+    })
+  );
   authSession.current = session;
   authSession.initialised = true;
   emitSessionChange();
@@ -126,7 +153,10 @@ export async function etebaseLogin(input: LoginInput): Promise<SessionInfo> {
 
 export async function etebaseLogout(): Promise<void> {
   if (!isTauri()) return;
-  await tauriInvoke<void>('etebase_logout');
+  assertVoid(
+    await tauriInvoke<unknown>(TauriCommandName.EtebaseLogout),
+    'etebase_logout response'
+  );
   authSession.current = null;
   authSession.initialised = true;
   emitSessionChange();
@@ -134,7 +164,9 @@ export async function etebaseLogout(): Promise<void> {
 
 export async function etebaseSession(): Promise<SessionInfo | null> {
   if (!isTauri()) return null;
-  return await tauriInvoke<SessionInfo | null>('etebase_session');
+  return parseNullableSessionInfo(
+    await tauriInvoke<unknown>(TauriCommandName.EtebaseSession)
+  );
 }
 
 /**
@@ -147,6 +179,7 @@ export async function etebaseSession(): Promise<SessionInfo | null> {
  * user with the server-type radios locked.
  */
 export function serverTypeForSession(session: SessionInfo): ServerType {
+  assertRequiredString(session.server_url, 'session.server_url');
   const strip = (url: string) => url.replace(/\/+$/, '');
   return strip(session.server_url) === strip(MANAGED_SERVER_URL)
     ? 'managed'
@@ -156,10 +189,57 @@ export function serverTypeForSession(session: SessionInfo): ServerType {
 export async function checkEtebaseServerUrl(
   serverUrl: string
 ): Promise<ServerCheckResult> {
+  assertRequiredString(serverUrl, 'serverUrl');
   if (!isTauri()) {
     return { ok: true, status: 200, url: serverUrl };
   }
-  return await tauriInvoke<ServerCheckResult>('check_etebase_server_url', {
-    serverUrl
-  });
+  return parseServerCheckResult(
+    await tauriInvoke<unknown>(TauriCommandName.CheckEtebaseServerUrl, {
+      serverUrl
+    })
+  );
+}
+
+function assertLoginInput(input: LoginInput): void {
+  switch (input.serverType) {
+    case 'managed':
+      break;
+    case 'self-hosted':
+      assertRequiredString(input.serverUrl ?? '', 'input.serverUrl');
+      break;
+    default: {
+      const _exhaustive: never = input.serverType;
+      throw new Error(`input.serverType is unsupported: ${_exhaustive}`);
+    }
+  }
+  assertRequiredString(input.username, 'input.username');
+  assertRequiredString(input.password, 'input.password');
+}
+
+function assertRequiredString(value: string, context: string): void {
+  if (value.trim().length === 0) {
+    throw new Error(`${context} must be a non-empty string`);
+  }
+}
+
+function parseSessionInfo(value: unknown): SessionInfo {
+  const raw = assertRecord(value, 'session info');
+  return {
+    username: assertString(raw.username, 'session info.username'),
+    server_url: assertString(raw.server_url, 'session info.server_url')
+  };
+}
+
+function parseNullableSessionInfo(value: unknown): SessionInfo | null {
+  if (value === null || value === undefined) return null;
+  return parseSessionInfo(value);
+}
+
+function parseServerCheckResult(value: unknown): ServerCheckResult {
+  const raw = assertRecord(value, 'server check result');
+  return {
+    ok: assertBoolean(raw.ok, 'server check result.ok'),
+    status: assertNumber(raw.status, 'server check result.status'),
+    url: assertString(raw.url, 'server check result.url')
+  };
 }

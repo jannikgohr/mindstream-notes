@@ -1,6 +1,10 @@
 {
   "language": "en",
   "ui": {
+    "boot.loading": "Loading…",
+    "boot.error.title": "Couldn't load the app",
+    "boot.error.message": "Something went wrong while starting Mindstream Notes.",
+    "boot.error.reload": "Reload",
     "vault.title": "Vaults",
     "vault.switch": "Switch vault",
     "vault.unknown": "Unknown vault",

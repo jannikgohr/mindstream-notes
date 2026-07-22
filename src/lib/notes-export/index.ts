@@ -15,6 +15,7 @@
 import * as api from '$lib/api';
 import { TRASH_ID, writeExportFile } from '$lib/api';
 import type { Note, NoteSummary, Collection } from '$lib/api';
+import { pdfAssetIdFromBody } from '$lib/pdf/viewer-helpers';
 import { tree } from '$lib/stores/tree.svelte';
 import { buildExcalidrawFile } from './excalidraw';
 import { buildInkPdf } from './ink-pdf';
@@ -328,15 +329,7 @@ async function exportPdf(
   // PDF note body is a tiny JSON stub holding the asset id; the bytes
   // live on the assets table. See assets::import_pdf_note in the Rust
   // side for the schema.
-  let pdfAssetId: string | null = null;
-  try {
-    const parsed = JSON.parse(note.body) as { pdfAssetId?: string };
-    pdfAssetId = parsed.pdfAssetId ?? null;
-  } catch {
-    // Older PDF note rows (or corrupted ones) might not parse — fall
-    // through to a best-effort lookup by the note's first asset.
-    pdfAssetId = null;
-  }
+  const pdfAssetId = pdfAssetIdFromBody(note.body);
   if (!pdfAssetId) {
     console.warn(
       '[notes-export] PDF note has no pdfAssetId in body, skipping',

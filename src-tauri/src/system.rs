@@ -14,7 +14,7 @@
 //! the updater action otherwise.
 
 #[tauri::command]
-pub fn is_appimage_install() -> bool {
+pub fn is_appimage_install() -> crate::error::CommandResult<bool> {
     // AppImageLauncher / AppImage's own AppRun wrapper sets two env vars on
     // launch: `APPIMAGE` (the path to the .AppImage file itself) and
     // `APPDIR` (the temp mountpoint). Either one alone is enough proof —
@@ -24,5 +24,5 @@ pub fn is_appimage_install() -> bool {
     // Linux-only), but if they do, the env check returns false everywhere
     // except an actual AppImage launch, which is the correct conservative
     // default.
-    std::env::var_os("APPIMAGE").is_some()
+    Ok(std::env::var_os("APPIMAGE").is_some())
 }

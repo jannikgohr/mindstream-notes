@@ -25,15 +25,29 @@ The wdio runner deps come in through `pnpm install`.
 
 ## Env flags
 
-| Variable                          | Purpose                                                                |
-| --------------------------------- | ---------------------------------------------------------------------- |
-| `MINDSTREAM_E2E_APP=1`            | Enable the app suite — every spec skips without it.                    |
-| `MINDSTREAM_E2E_BACKEND=1`        | Enable the T4 (backend) specs.                                         |
-| `MINDSTREAM_E2E_BACKEND_URL`      | Backend URL for T4 (the disposable stack is `http://localhost:18080`). |
-| `MINDSTREAM_E2E_SKIP_BUILD=1`     | Reuse an existing binary instead of rebuilding.                        |
-| `MINDSTREAM_E2E_REUSE_ACCOUNTS=1` | Reuse the cached `.t4-accounts.json` instead of fresh signups.         |
-| `MINDSTREAM_PROFILE_DIR`          | Per-test data dir (the isolation/restart seam, see below).             |
-| `MINDSTREAM_PROFILE_ID`           | Namespace the run's keyring entry.                                     |
+There are no enable-flags. Which tier runs is decided by the config you invoke
+(`wdio.conf.ts` = T3, the multiremote configs = T4, `e2e-tests/backend` =
+the probe tier), and every requirement is a **pre-flight check that fails the
+run** rather than a flag that silently skips it:
+
+| Requirement                            | Checked in                          | On failure                                    |
+| -------------------------------------- | ----------------------------------- | --------------------------------------------- |
+| `tauri-driver` installed               | `helpers/preflight.ts` (onPrepare)  | names the `cargo install` to run              |
+| Backend stack answering (T4)           | same, before the build              | names `pnpm backend:test:up`                  |
+| Binary built `--features e2e-data-dir` | same, after build / on reuse        | tells you to drop `MINDSTREAM_E2E_SKIP_BUILD` |
+| Backend stack (probe tier)             | `e2e-tests/backend/global-setup.ts` | names `pnpm backend:test:up`                  |
+
+The remaining variables are behaviour switches, not gates:
+
+| Variable                          | Purpose                                                                                  |
+| --------------------------------- | ---------------------------------------------------------------------------------------- |
+| `MINDSTREAM_E2E_BACKEND_URL`      | Override the backend URL (defaults to the disposable stack's `http://localhost:18080`).  |
+| `MINDSTREAM_E2E_SKIP_BUILD=1`     | Reuse an existing binary instead of rebuilding — still verified to carry `e2e-data-dir`. |
+| `MINDSTREAM_E2E_REUSE_ACCOUNTS=1` | Reuse the cached `.t4-accounts.json` instead of fresh signups.                           |
+| `MINDSTREAM_E2E_EDGE_LIMITS=1`    | Opt into the rate-limit specs (they drain the shared auth bucket).                       |
+| `MINDSTREAM_E2E_DIALOG_HOOK=1`    | Enable specs pending the native-dialog Rust seam.                                        |
+| `MINDSTREAM_PROFILE_DIR`          | Per-test data dir (the isolation/restart seam, see below).                               |
+| `MINDSTREAM_PROFILE_ID`           | Namespace the run's keyring entry.                                                       |
 
 ## Test seams
 

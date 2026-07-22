@@ -108,12 +108,43 @@ function runShowApp() {
   );
 }
 
+export enum NativeGlobalShortcutCommandId {
+  NewMarkdownNote = 'newMarkdownNote',
+  NewDrawing = 'newDrawing',
+  NewInkNote = 'newInkNote',
+  ShowApp = 'showApp'
+}
+
 export const GLOBAL_SHORTCUT_COMMAND_IDS = [
   'global.newMarkdownNote',
   'global.newDrawing',
   'global.newInkNote',
   'global.showApp'
 ] as const;
+
+export type GlobalShortcutCommandId =
+  (typeof GLOBAL_SHORTCUT_COMMAND_IDS)[number];
+
+const NATIVE_GLOBAL_SHORTCUT_BY_COMMAND_ID: Record<
+  GlobalShortcutCommandId,
+  NativeGlobalShortcutCommandId
+> = {
+  'global.newMarkdownNote': NativeGlobalShortcutCommandId.NewMarkdownNote,
+  'global.newDrawing': NativeGlobalShortcutCommandId.NewDrawing,
+  'global.newInkNote': NativeGlobalShortcutCommandId.NewInkNote,
+  'global.showApp': NativeGlobalShortcutCommandId.ShowApp
+};
+
+export function nativeGlobalShortcutCommandId(
+  commandId: string
+): NativeGlobalShortcutCommandId {
+  if (!isGlobalShortcutCommand(commandId)) {
+    throw new Error(`Unknown global shortcut command: ${commandId}`);
+  }
+  return NATIVE_GLOBAL_SHORTCUT_BY_COMMAND_ID[
+    commandId as GlobalShortcutCommandId
+  ];
+}
 
 const GLOBAL_SHORTCUT_COMMAND_ID_SET = new Set<string>(
   GLOBAL_SHORTCUT_COMMAND_IDS

@@ -11,6 +11,7 @@
 //! Frontend talks to Rust through the `@tauri-apps/api`'s `invoke()`; the
 //! TS bridge lives under `src/lib/api/`.
 
+pub mod app_events;
 pub mod app_restart;
 pub mod assets;
 pub mod auth;
@@ -223,7 +224,7 @@ pub fn run() {
     #[cfg(not(desktop))]
     let app_handle = tauri::Builder::default();
 
-    app_handle
+    let app = app_handle
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .register_uri_scheme_protocol("mindstream", serve_asset_bytes)
@@ -238,16 +239,14 @@ pub fn run() {
             // index entirely; otherwise the index at the fixed OS root
             // decides, migrating a pre-profiles vault into a "default"
             // profile first so notes aren't orphaned.
-            let app_data_root =
-                paths::app_data_root(app.handle()).expect("could not resolve app_data_dir");
+            let app_data_root = paths::app_data_root(app.handle())?;
             let (active_id, app_data) = match profiles::dir_override() {
                 Some(over) => over,
                 None => {
                     if let Err(e) = profiles::migrate_legacy_if_needed(&app_data_root) {
                         log::error!("[profiles] legacy migration failed: {e}");
                     }
-                    let index = profiles::load_or_init(&app_data_root)
-                        .expect("could not read profiles index");
+                    let index = profiles::load_or_init(&app_data_root)?;
                     let dir = profiles::profile_dir(&app_data_root, &index.active);
                     (index.active, dir)
                 }
@@ -267,7 +266,7 @@ pub fn run() {
             let db_path = app_data.join("mindstream.db");
             log::info!("[boot] db path = {}", db_path.display());
 
-            let db = Db::open(&db_path).expect("failed to open SQLite database");
+            let db = Db::open(&db_path)?;
 
             // First-run seed.
             db.with_conn(|c| {
@@ -276,8 +275,7 @@ pub fn run() {
                     migrations::seed(c)?;
                 }
                 Ok(())
-            })
-            .expect("failed to seed database");
+            })?;
 
             app.manage(db);
             app.manage(hotkeys::NativeHotkeyDisplays::default());
@@ -285,7 +283,7 @@ pub fn run() {
             app.manage(hotkeys::DesktopGlobalShortcuts::default());
 
             #[cfg(desktop)]
-            app.manage(desktop_settings::DesktopSettings::load(app));
+            app.manage(desktop_settings::DesktopSettings::load(app)?);
 
             #[cfg(target_os = "macos")]
             native_menu::init(app)?;
@@ -470,16 +468,25 @@ pub fn run() {
             drawing::drawing_set_control_bounds,
             drawing::drawing_set_document_bounds,
         ])
-        .build(tauri::generate_context!())
-        .expect("error while building tauri application")
-        .run(|app, event| {
-            #[cfg(not(target_os = "macos"))]
-            let _ = (app, event);
-            #[cfg(target_os = "macos")]
-            if matches!(event, tauri::RunEvent::Reopen { .. }) {
-                crate::tray::focus_main_window(app);
-            }
-        });
+        .build(tauri::generate_context!());
+
+    let app = match app {
+        Ok(app) => app,
+        Err(err) => {
+            log::error!("[boot] error while building tauri application: {err}");
+            eprintln!("error while building tauri application: {err}");
+            return;
+        }
+    };
+
+    app.run(|app, event| {
+        #[cfg(not(target_os = "macos"))]
+        let _ = (app, event);
+        #[cfg(target_os = "macos")]
+        if matches!(event, tauri::RunEvent::Reopen { .. }) {
+            crate::tray::focus_main_window(app);
+        }
+    });
 }
 
 #[cfg(desktop)]
@@ -642,16 +649,27 @@ fn serve_asset_bytes<R: tauri::Runtime>(
             if let Some(origin) = allow_origin {
                 builder = builder.header(tauri::http::header::ACCESS_CONTROL_ALLOW_ORIGIN, origin);
             }
-            builder.body(Cow::Owned(asset.bytes)).unwrap()
+            match builder.body(Cow::Owned(asset.bytes)) {
+                Ok(response) => response,
+                Err(err) => {
+                    log::error!("[asset-scheme] response build failed: {err}");
+                    empty_asset_response(tauri::http::StatusCode::INTERNAL_SERVER_ERROR)
+                }
+            }
         }
         Err(err) => {
             log::warn!("[asset-scheme] {id} lookup failed: {err}");
-            tauri::http::Response::builder()
-                .status(tauri::http::StatusCode::NOT_FOUND)
-                .body(Cow::Owned(Vec::new()))
-                .unwrap()
+            empty_asset_response(tauri::http::StatusCode::NOT_FOUND)
         }
     }
+}
+
+fn empty_asset_response(
+    status: tauri::http::StatusCode,
+) -> tauri::http::Response<Cow<'static, [u8]>> {
+    let mut response = tauri::http::Response::new(Cow::Owned(Vec::new()));
+    *response.status_mut() = status;
+    response
 }
 
 #[cfg(test)]

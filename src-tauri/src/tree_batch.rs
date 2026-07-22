@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::collections::{self, TRASH_ID};
 use crate::db::Db;
-use crate::error::{AppError, AppResult};
+use crate::error::{AppError, AppResult, CommandResult};
 use crate::notes;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -317,16 +317,13 @@ pub fn move_many(
     db: tauri::State<'_, Db>,
     items: Vec<TreeItemRef>,
     target_collection_id: Option<String>,
-) -> Result<BatchCounts, String> {
+) -> CommandResult<BatchCounts> {
     db.with_conn_mut(|c| move_many_items(c, items, target_collection_id))
         .map_err(Into::into)
 }
 
 #[tauri::command]
-pub fn trash_many(
-    db: tauri::State<'_, Db>,
-    items: Vec<TreeItemRef>,
-) -> Result<BatchCounts, String> {
+pub fn trash_many(db: tauri::State<'_, Db>, items: Vec<TreeItemRef>) -> CommandResult<BatchCounts> {
     db.with_conn_mut(|c| move_many_items(c, items, Some(TRASH_ID.to_string())))
         .map_err(Into::into)
 }
@@ -335,16 +332,13 @@ pub fn trash_many(
 pub fn restore_many(
     db: tauri::State<'_, Db>,
     items: Vec<TreeItemRef>,
-) -> Result<BatchCounts, String> {
+) -> CommandResult<BatchCounts> {
     db.with_conn_mut(|c| move_many_items(c, items, None))
         .map_err(Into::into)
 }
 
 #[tauri::command]
-pub fn purge_many(
-    db: tauri::State<'_, Db>,
-    items: Vec<TreeItemRef>,
-) -> Result<BatchCounts, String> {
+pub fn purge_many(db: tauri::State<'_, Db>, items: Vec<TreeItemRef>) -> CommandResult<BatchCounts> {
     db.with_conn_mut(|c| purge_many_items(c, items))
         .map_err(Into::into)
 }

@@ -312,7 +312,7 @@ fn startup_sweep_deletes_unreferenced_asset_without_history_ref() {
     .unwrap();
 
     let removed = db
-        .with_conn(|c| sweep_unreferenced_markdown_assets_inner(c))
+        .with_conn(sweep_unreferenced_markdown_assets_inner)
         .unwrap();
 
     assert_eq!(removed, 1);
@@ -359,7 +359,7 @@ fn startup_sweep_is_noop_when_asset_still_referenced() {
     .unwrap();
 
     let removed = db
-        .with_conn(|c| sweep_unreferenced_markdown_assets_inner(c))
+        .with_conn(sweep_unreferenced_markdown_assets_inner)
         .unwrap();
 
     assert_eq!(
@@ -411,7 +411,7 @@ fn startup_sweep_aggregates_across_multiple_markdown_notes() {
     }
 
     let removed = db
-        .with_conn(|c| sweep_unreferenced_markdown_assets_inner(c))
+        .with_conn(sweep_unreferenced_markdown_assets_inner)
         .unwrap();
 
     assert_eq!(removed, 2, "sweep should sum removals across all notes");
@@ -477,7 +477,7 @@ fn markdown_cleanup_keeps_history_referenced_asset_until_history_pruned() {
     .unwrap();
     db.with_conn(|c| crate::history::prune(c, Some(90)))
         .unwrap();
-    db.with_conn(|c| sweep_unreferenced_markdown_assets_inner(c))
+    db.with_conn(sweep_unreferenced_markdown_assets_inner)
         .unwrap();
 
     let res = db.with_conn(|c| load(c, &asset.summary.id));

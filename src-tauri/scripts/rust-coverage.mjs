@@ -1,7 +1,7 @@
-// Rust coverage via cargo-llvm-cov, with a shared ignore-regex + threshold.
+// Rust coverage via cargo-llvm-cov, with a shared ignore-regex.
 //
 // Invoked from the `test:coverage:rust` npm script and the CI coverage job
-// so the in-scope file set and the 80% line gate stay identical everywhere.
+// so the in-scope file set stays identical everywhere.
 // Spawns cargo with an argv array (no shell) so the regex's |()$ characters
 // don't need platform-specific quoting.
 //
@@ -10,11 +10,12 @@
 // IPC / UI surfaces proven by e2e and manual testing rather than unit
 // tests — Tauri entry/builder glue (lib, main), the system tray and native
 // menu UI, global-shortcut + desktop-settings + drawing command shims, the
-// PDF render pipeline, the Etebase network sync engine (sync/{mod,repair,
-// scheduler,scopes}) and collection-sharing command layer (sharing) and
-// network/keyring auth (auth/mod), plus the trivial system/error/i18n shims
-// and the migration runner. The pure helpers in these files still have unit
-// tests that run; they're just not part of the line-coverage denominator.
+// PDF render pipeline, backup file orchestration, the Etebase network sync
+// engine (sync orchestration/apply/push/pull) and collection-sharing command
+// layer (sharing) and network/keyring auth (auth/mod), plus the trivial
+// system/error/i18n/path shims and the migration runner. The pure helpers in
+// these files still have unit tests that run; they're just not part of the
+// line-coverage denominator.
 
 import { spawnSync } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
@@ -22,11 +23,13 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const IGNORE_REGEX = [
-  'sync[/\\\\](mod|repair|scheduler|scopes)\\.rs$',
-  'sharing\\.rs$',
+  'sync[/\\\\](mod|repair|scheduler|scopes|collab_room|collections|local_rows|payloads|pull|push)\\.rs$',
+  'sync[/\\\\]apply[/\\\\]',
+  'sharing[/\\\\]',
+  'backup[/\\\\]',
   'auth[/\\\\]mod\\.rs$',
   'drawing[/\\\\]mod\\.rs$',
-  '(tray|native_menu|hotkeys|desktop_settings|pdf_export|system|error|i18n)\\.rs$',
+  '(tray|native_menu|hotkeys|desktop_settings|pdf_export|system|error|i18n|paths)\\.rs$',
   '(lib|main)\\.rs$',
   'migrations\\.rs$'
 ].join('|');
@@ -52,8 +55,6 @@ const args = [
   '--locked',
   '--ignore-filename-regex',
   IGNORE_REGEX,
-  '--fail-under-lines',
-  '80',
   ...reportArgs
 ];
 

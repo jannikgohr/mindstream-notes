@@ -8,16 +8,11 @@ import { expect } from '@wdio/globals';
 import {
   byName,
   clickElement,
-  requireAppE2E,
   restartApp,
   waitForShell
 } from '../helpers/harness.js';
 
 describe('T3 settings persistence', function () {
-  before(function () {
-    requireAppE2E(this);
-  });
-
   beforeEach(async () => {
     await waitForShell();
   });

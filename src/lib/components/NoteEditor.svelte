@@ -42,7 +42,7 @@
     ASSET_SCHEME,
     type AssetBridge
   } from '$lib/assets/bridge';
-  import { listen } from '$lib/api/events';
+  import { listen, TauriEventName } from '$lib/api/events';
   import { buildCrepe } from '$lib/editor/crepe-setup';
   import { minimalDocDiff } from '$lib/editor/doc-diff';
   import { seedDeterministicTemplate } from '$lib/editor/seed-template';
@@ -682,7 +682,7 @@
       //      paints the now-present bytes.
       // Both are best-effort: if the editor is mid-teardown when the
       // event fires, the no-op'd refs short-circuit safely.
-      void listen('sync-completed', (payload) => {
+      void listen(TauriEventName.SyncCompleted, (payload) => {
         handleSyncCompleted(
           payload.notes_pulled_ids,
           payload.assets_pulled_ids
@@ -690,7 +690,7 @@
       }).then((unlisten) => {
         unsubSync = unlisten;
       });
-      void listen('collab-credentials-changed', (payload) => {
+      void listen(TauriEventName.CollabCredentialsChanged, (payload) => {
         if (collabCredentialsChangedForNote(payload, noteId)) {
           void setupCollabProvider();
         }

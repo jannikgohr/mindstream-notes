@@ -54,7 +54,7 @@ fn seed_notes_and_folders(db: &Db) {
 fn read_counts_excludes_the_trash_folder() {
     let db = open_memory_for_tests();
     seed_notes_and_folders(&db);
-    let counts = db.with_conn(|c| read_counts(c)).unwrap();
+    let counts = db.with_conn(read_counts).unwrap();
     assert_eq!(counts.notes, 2);
     assert_eq!(
         counts.folders, 1,

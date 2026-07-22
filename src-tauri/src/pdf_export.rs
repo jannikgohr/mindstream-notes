@@ -15,7 +15,7 @@ use tauri::AppHandle;
 use tauri_plugin_dialog::DialogExt;
 use tokio::sync::oneshot;
 
-use crate::error::{AppError, AppResult};
+use crate::error::{AppError, AppResult, CommandResult};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -64,6 +64,6 @@ async fn save_pdf_export_inner(app: AppHandle, input: SavePdfExportInput) -> App
 }
 
 #[tauri::command]
-pub async fn save_pdf_export(app: AppHandle, input: SavePdfExportInput) -> Result<bool, String> {
+pub async fn save_pdf_export(app: AppHandle, input: SavePdfExportInput) -> CommandResult<bool> {
     save_pdf_export_inner(app, input).await.map_err(Into::into)
 }

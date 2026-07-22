@@ -17,7 +17,7 @@ pub(super) type ShareMetadataRow = (Option<String>, Option<String>, Option<Strin
 /// the locally-pulled scoped rows so the folder disappears. The owner and other
 /// members are unaffected; the user can be re-invited later.
 #[tauri::command]
-pub async fn leave_shared_collection(app: AppHandle, collection_id: String) -> Result<(), String> {
+pub async fn leave_shared_collection(app: AppHandle, collection_id: String) -> CommandResult<()> {
     tauri::async_runtime::spawn_blocking(move || {
         let account = restore_required(&app)?;
         let db = app.state::<Db>();
@@ -327,7 +327,7 @@ pub(crate) fn reconcile_revoked_shares(db: &Db, cm: &CollectionManager) -> AppRe
 /// server-side, which each recipient's next sync reads (`is_deleted`) and
 /// reconciles by purging its local copy (see `reconcile_revoked_shares`).
 #[tauri::command]
-pub async fn stop_sharing_collection(app: AppHandle, collection_id: String) -> Result<(), String> {
+pub async fn stop_sharing_collection(app: AppHandle, collection_id: String) -> CommandResult<()> {
     tauri::async_runtime::spawn_blocking(move || {
         let account = restore_required(&app)?;
         let db = app.state::<Db>();

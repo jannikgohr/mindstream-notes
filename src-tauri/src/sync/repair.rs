@@ -22,7 +22,7 @@ use etebase::{Account, FetchOptions, Item};
 
 use crate::auth;
 use crate::db::Db;
-use crate::error::{AppError, AppResult};
+use crate::error::{AppError, AppResult, CommandResult};
 
 use super::{
     catch_blocking_panic, ensure_collection, load_share_scope_part_uids, scheduler,
@@ -64,21 +64,23 @@ struct AssetPayloadLite {
 /// Walks every note + asset on the server, attempts `.content()` on
 /// each, and reports any that fail. Read-only — safe to run any time.
 #[tauri::command]
-pub async fn audit_corrupt_remote_items(app: AppHandle) -> Result<CorruptAudit, String> {
+pub async fn audit_corrupt_remote_items(app: AppHandle) -> CommandResult<CorruptAudit> {
     let scheduler_state = app.state::<scheduler::SyncScheduler>();
     let _guard = scheduler_state.acquire_in_flight().await;
     let app_for_blocking = app.clone();
-    tauri::async_runtime::spawn_blocking(move || -> Result<CorruptAudit, String> {
-        catch_blocking_panic("audit", || {
-            let account = auth::try_restore(&app_for_blocking)
-                .map_err(|e| format!("restore session: {e}"))?
-                .ok_or_else(|| "not signed in".to_string())?;
-            let db = app_for_blocking.state::<Db>();
-            audit_impl(&db, &account).map_err(|e| e.to_string())
+    Ok(
+        tauri::async_runtime::spawn_blocking(move || -> Result<CorruptAudit, String> {
+            catch_blocking_panic("audit", || {
+                let account = auth::try_restore(&app_for_blocking)
+                    .map_err(|e| format!("restore session: {e}"))?
+                    .ok_or_else(|| "not signed in".to_string())?;
+                let db = app_for_blocking.state::<Db>();
+                audit_impl(&db, &account).map_err(|e| e.to_string())
+            })
         })
-    })
-    .await
-    .map_err(|e| format!("audit task: {e}"))?
+        .await
+        .map_err(|e| format!("audit task: {e}"))??,
+    )
 }
 
 fn audit_impl(db: &Db, account: &Account) -> AppResult<CorruptAudit> {
@@ -228,21 +230,23 @@ pub async fn purge_corrupt_remote_note(
     app: AppHandle,
     etebase_uid: String,
     note_id: String,
-) -> Result<PurgeReport, String> {
+) -> CommandResult<PurgeReport> {
     let scheduler_state = app.state::<scheduler::SyncScheduler>();
     let _guard = scheduler_state.acquire_in_flight().await;
     let app_for_blocking = app.clone();
-    tauri::async_runtime::spawn_blocking(move || -> Result<PurgeReport, String> {
-        catch_blocking_panic("purge", || {
-            let account = auth::try_restore(&app_for_blocking)
-                .map_err(|e| format!("restore session: {e}"))?
-                .ok_or_else(|| "not signed in".to_string())?;
-            let db = app_for_blocking.state::<Db>();
-            purge_impl(&db, &account, &etebase_uid, &note_id).map_err(|e| e.to_string())
+    Ok(
+        tauri::async_runtime::spawn_blocking(move || -> Result<PurgeReport, String> {
+            catch_blocking_panic("purge", || {
+                let account = auth::try_restore(&app_for_blocking)
+                    .map_err(|e| format!("restore session: {e}"))?
+                    .ok_or_else(|| "not signed in".to_string())?;
+                let db = app_for_blocking.state::<Db>();
+                purge_impl(&db, &account, &etebase_uid, &note_id).map_err(|e| e.to_string())
+            })
         })
-    })
-    .await
-    .map_err(|e| format!("purge task: {e}"))?
+        .await
+        .map_err(|e| format!("purge task: {e}"))??,
+    )
 }
 
 fn purge_impl(

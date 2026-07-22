@@ -24,7 +24,7 @@ pub(super) fn suggested_filename() -> String {
 ///
 /// Mirrors the dialog-then-write pattern in `pdf_export.rs`.
 #[tauri::command]
-pub async fn backup_now(app: AppHandle) -> Result<Option<BackupReport>, String> {
+pub async fn backup_now(app: AppHandle) -> CommandResult<Option<BackupReport>> {
     backup_now_inner(app).await.map_err(Into::into)
 }
 

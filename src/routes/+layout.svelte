@@ -14,9 +14,9 @@
     applyEditorTypography,
     applyUiFontSize
   } from '$lib/settings/appearance';
-  import { invokeOrFallback } from '$lib/api/core';
   import { setNativeHotkeyDisplays } from '$lib/api/hotkeys';
   import { setTrashRetention, sweepTrashRetention } from '$lib/api/data';
+  import { setSyncSchedule } from '$lib/api/sync';
   import LazyRootSingletons from '$lib/components/LazyRootSingletons.svelte';
   import {
     HOTKEY_COMMANDS,
@@ -267,13 +267,9 @@
       getSettingValue('account.syncEnabled') === true &&
       interval !== 'manual';
     const seconds = INTERVAL_SECS[interval] ?? 60;
-    void invokeOrFallback<void>(
-      'set_sync_schedule',
-      { enabled, intervalSecs: seconds },
-      // No-op fallback when running outside Tauri (browser dev
-      // mode) — there's no Rust scheduler to talk to.
-      async () => undefined
-    );
+    // No-op fallback when running outside Tauri (browser dev mode) is handled
+    // inside the typed API wrapper.
+    void setSyncSchedule({ enabled, intervalSecs: seconds });
   });
 </script>
 

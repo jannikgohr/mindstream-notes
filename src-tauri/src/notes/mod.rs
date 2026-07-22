@@ -8,13 +8,85 @@
 //! Soft-delete via `trashed_at`; listing skips trashed unless asked.
 
 use chrono::Utc;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{
+    params,
+    types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef},
+    Connection, OptionalExtension,
+};
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 
 use crate::db::Db;
-use crate::error::{AppError, AppResult};
+use crate::error::{AppError, AppResult, CommandResult};
 use crate::serde_helpers::double_option;
 use crate::sync::{tags_crdt, yrs_doc};
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum NoteKind {
+    #[default]
+    Markdown,
+    Freeform,
+    Ink,
+    Pdf,
+    Kanban,
+}
+
+impl NoteKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Markdown => "markdown",
+            Self::Freeform => "freeform",
+            Self::Ink => "ink",
+            Self::Pdf => "pdf",
+            Self::Kanban => "kanban",
+        }
+    }
+
+    pub fn is_markdown(self) -> bool {
+        self == Self::Markdown
+    }
+}
+
+impl FromStr for NoteKind {
+    type Err = AppError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "markdown" => Ok(Self::Markdown),
+            "freeform" => Ok(Self::Freeform),
+            "ink" => Ok(Self::Ink),
+            "pdf" => Ok(Self::Pdf),
+            "kanban" => Ok(Self::Kanban),
+            _ => Err(AppError::InvalidArg(format!("unknown note kind {value}"))),
+        }
+    }
+}
+
+impl From<&str> for NoteKind {
+    fn from(value: &str) -> Self {
+        Self::from_str(value).unwrap_or(Self::Markdown)
+    }
+}
+
+impl PartialEq<&str> for NoteKind {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
+impl ToSql for NoteKind {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        Ok(ToSqlOutput::from(self.as_str().to_string()))
+    }
+}
+
+impl FromSql for NoteKind {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        let raw = value.as_str()?;
+        Self::from_str(raw).map_err(|err| FromSqlError::Other(Box::new(err)))
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NoteSummary {
@@ -34,23 +106,19 @@ pub struct NoteSummary {
     /// which only exists post-push. Doesn't track dirty-ness; a synced
     /// row with unsynced edits still reports `pushed: true`.
     pub pushed: bool,
-    /// Discriminator that tells the frontend which editor component to
-    /// render. Values in use today: `"markdown"` (Crepe / y-prosemirror),
-    /// `"freeform"` / `"ink"` (drawing surfaces), `"pdf"` (PDF bytes
-    /// stored as a separate asset, annotations in yrs_state), and
-    /// `"kanban"` (SVAR board columns/cards stored directly in yrs_state).
-    /// The column is a free-form string — `create()` stores whatever the
-    /// frontend sends and sync round-trips it — so new kinds need no Rust
-    /// change; the frontend `KNOWN_NOTE_KINDS` list is the real gate.
-    /// On the summary so the file tree / dispatch can branch without
-    /// loading the full note. Serde-defaulted to "markdown" so legacy
-    /// rows decoded before the column existed still parse cleanly.
+    /// Discriminator that tells the frontend which editor component to render.
+    /// Unknown synced kinds now fail at the DB boundary instead of being treated
+    /// as valid typed data.
     #[serde(default = "default_note_kind")]
-    pub note_kind: String,
+    pub note_kind: NoteKind,
 }
 
-pub fn default_note_kind() -> String {
-    "markdown".to_string()
+pub fn default_note_kind() -> NoteKind {
+    NoteKind::Markdown
+}
+
+pub fn default_note_kind_string() -> String {
+    default_note_kind().as_str().to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,7 +150,7 @@ pub struct CreateNote {
     /// kinds. The frontend sets this for non-markdown note variants such
     /// as drawings, ink notes, and imported PDFs.
     #[serde(default)]
-    pub note_kind: Option<String>,
+    pub note_kind: Option<NoteKind>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -537,38 +605,38 @@ fn next_position(conn: &Connection, parent: Option<&str>) -> AppResult<i64> {
 pub fn list_notes(
     db: tauri::State<'_, Db>,
     include_trashed: Option<bool>,
-) -> Result<Vec<NoteSummary>, String> {
+) -> CommandResult<Vec<NoteSummary>> {
     db.with_conn(|c| list(c, include_trashed.unwrap_or(false)))
         .map_err(Into::into)
 }
 
 #[tauri::command]
-pub fn load_note(db: tauri::State<'_, Db>, id: String) -> Result<Note, String> {
+pub fn load_note(db: tauri::State<'_, Db>, id: String) -> CommandResult<Note> {
     db.with_conn(|c| load(c, &id)).map_err(Into::into)
 }
 
 #[tauri::command]
-pub fn create_note(db: tauri::State<'_, Db>, input: CreateNote) -> Result<Note, String> {
+pub fn create_note(db: tauri::State<'_, Db>, input: CreateNote) -> CommandResult<Note> {
     db.with_conn(|c| create(c, input)).map_err(Into::into)
 }
 
 #[tauri::command]
-pub fn save_note(db: tauri::State<'_, Db>, input: UpdateNote) -> Result<Note, String> {
+pub fn save_note(db: tauri::State<'_, Db>, input: UpdateNote) -> CommandResult<Note> {
     db.with_conn_mut(|c| update(c, input)).map_err(Into::into)
 }
 
 #[tauri::command]
-pub fn trash_note(db: tauri::State<'_, Db>, id: String) -> Result<(), String> {
+pub fn trash_note(db: tauri::State<'_, Db>, id: String) -> CommandResult<()> {
     db.with_conn(|c| trash(c, &id)).map_err(Into::into)
 }
 
 #[tauri::command]
-pub fn restore_note(db: tauri::State<'_, Db>, id: String) -> Result<(), String> {
+pub fn restore_note(db: tauri::State<'_, Db>, id: String) -> CommandResult<()> {
     db.with_conn(|c| restore(c, &id)).map_err(Into::into)
 }
 
 #[tauri::command]
-pub fn purge_note(db: tauri::State<'_, Db>, id: String) -> Result<(), String> {
+pub fn purge_note(db: tauri::State<'_, Db>, id: String) -> CommandResult<()> {
     db.with_conn(|c| purge(c, &id)).map_err(Into::into)
 }
 

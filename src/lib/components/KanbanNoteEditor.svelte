@@ -49,7 +49,7 @@
     captureCurrentNoteVersion,
     type VersionAction
   } from '$lib/api';
-  import { listen } from '$lib/api/events';
+  import { listen, TauriEventName } from '$lib/api/events';
   import {
     horizontalInsertionIndex,
     moveItemToIndex
@@ -979,7 +979,7 @@
 
       // Merge freshly-synced state into the live doc (CRDT-safe). Tagged so the
       // update handler doesn't re-save what just came off disk.
-      void listen('sync-completed', async (payload) => {
+      void listen(TauriEventName.SyncCompleted, async (payload) => {
         if (!payload.notes_pulled_ids.includes(noteId) || !yDoc) return;
         try {
           const fresh = await loadNote(noteId);
@@ -996,7 +996,7 @@
       }).then((unlisten) => {
         unsubSync = unlisten;
       });
-      void listen('collab-credentials-changed', (payload) => {
+      void listen(TauriEventName.CollabCredentialsChanged, (payload) => {
         if (collabCredentialsChangedForNote(payload, noteId)) {
           void setupCollabProvider();
         }

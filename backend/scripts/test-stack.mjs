@@ -76,7 +76,10 @@ function printReachInfo() {
   console.log('[test-stack]   Signup:     AUTO_SIGNUP=true (test stack only)');
   console.log('[test-stack]   Admin user: admin / mindstream-test-admin');
   console.log(
-    `[test-stack] Health-gate it with: MINDSTREAM_E2E_BACKEND=1 MINDSTREAM_E2E_BACKEND_URL=${url} pnpm test:e2e:backend`
+    `[test-stack] Health-gate it with: pnpm test:e2e:backend` +
+      (url === 'http://localhost:18080'
+        ? ''
+        : ` (MINDSTREAM_E2E_BACKEND_URL=${url})`)
   );
 }
 

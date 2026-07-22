@@ -12,6 +12,7 @@ import {
   isSectionVisible,
   isVisible,
   openSettings,
+  parseStoredSettings,
   resetSettingValue,
   setSettingValue,
   setSettingsVaultId,
@@ -193,6 +194,28 @@ describe('setSettingValue / resetSettingValue', () => {
     await setSettingValue('custom.deviceKey', 'shared');
     setSettingsVaultId('default');
     expect(getSettingValue('custom.deviceKey')).toBe('shared');
+  });
+});
+
+describe('persisted settings parsing', () => {
+  it('accepts only object records from localStorage JSON', () => {
+    expect(parseStoredSettings('{"appearance.accent":"#abc"}')).toEqual({
+      'appearance.accent': '#abc'
+    });
+    expect(parseStoredSettings('[]')).toBeNull();
+    expect(parseStoredSettings('"appearance.accent"')).toBeNull();
+    expect(parseStoredSettings('false')).toBeNull();
+    expect(parseStoredSettings('null')).toBeNull();
+  });
+
+  it('ignores non-record vault storage when loading a vault', async () => {
+    setSettingsVaultId('work');
+    localStorage.setItem('notes-app:settings:v1:vault:default', '[]');
+
+    setSettingsVaultId('default');
+
+    expect(hasSettingValue('account.serverType')).toBe(false);
+    expect(getSettingValue('account.serverType')).toBe('local-only');
   });
 });
 

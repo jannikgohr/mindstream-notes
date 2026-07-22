@@ -26,7 +26,8 @@ use tauri::{AppHandle, Manager};
 
 use crate::content_stats::{token_delta, word_delta};
 use crate::db::Db;
-use crate::error::{AppError, AppResult};
+use crate::error::{AppError, AppResult, CommandError, CommandResult};
+use crate::notes::NoteKind;
 
 /// Hard cap on versions kept per note, independent of the time-based retention
 /// setting — a safety valve against pathological churn within the window.
@@ -38,9 +39,9 @@ pub struct VersionSummary {
     pub id: String,
     pub note_id: String,
     pub created: String,
-    pub note_kind: String,
+    pub note_kind: NoteKind,
     /// Why this version exists: `created` | `edited` | `reverted`.
-    pub action: String,
+    pub action: VersionAction,
     /// Future user-named bookmark; always None for now.
     pub label: Option<String>,
     /// For `reverted`: the restore target's version id.
@@ -56,6 +57,62 @@ pub struct VersionSummary {
     pub tokens_removed: i64,
     /// Uncompressed markdown byte length.
     pub size: i64,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum VersionAction {
+    Created,
+    #[default]
+    Edited,
+    Reverted,
+}
+
+impl VersionAction {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Created => "created",
+            Self::Edited => "edited",
+            Self::Reverted => "reverted",
+        }
+    }
+}
+
+impl From<&str> for VersionAction {
+    fn from(value: &str) -> Self {
+        match value {
+            "created" => Self::Created,
+            "reverted" => Self::Reverted,
+            _ => Self::Edited,
+        }
+    }
+}
+
+impl PartialEq<&str> for VersionAction {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
+impl rusqlite::types::ToSql for VersionAction {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        Ok(rusqlite::types::ToSqlOutput::from(
+            self.as_str().to_string(),
+        ))
+    }
+}
+
+impl rusqlite::types::FromSql for VersionAction {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        match value.as_str()? {
+            "created" => Ok(Self::Created),
+            "edited" => Ok(Self::Edited),
+            "reverted" => Ok(Self::Reverted),
+            value => Err(rusqlite::types::FromSqlError::Other(Box::new(
+                AppError::InvalidArg(format!("unknown version action {value}")),
+            ))),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,11 +135,11 @@ pub(crate) fn decompress_snapshot(bytes: &[u8]) -> AppResult<String> {
     Ok(out)
 }
 
-fn serialize_yjs_snapshot(note_kind: &str, bytes: &[u8]) -> AppResult<String> {
+fn serialize_yjs_snapshot(note_kind: NoteKind, bytes: &[u8]) -> AppResult<String> {
     Ok(serde_json::json!({
         "marker": SNAPSHOT_MARKER,
         "version": 1,
-        "noteKind": note_kind,
+        "noteKind": note_kind.as_str(),
         "payloadKind": "yjs-update",
         "encoding": "base64",
         "data": BASE64_STANDARD.encode(bytes),
@@ -92,14 +149,17 @@ fn serialize_yjs_snapshot(note_kind: &str, bytes: &[u8]) -> AppResult<String> {
 
 /// Read a note's saved fields. Lock-cheap: a single indexed lookup, no
 /// encoding — callers build the snapshot off the DB lock via `build_snapshot`.
-fn read_note_raw(conn: &Connection, note_id: &str) -> AppResult<(String, String, Option<Vec<u8>>)> {
+fn read_note_raw(
+    conn: &Connection,
+    note_id: &str,
+) -> AppResult<(NoteKind, String, Option<Vec<u8>>)> {
     let row = conn
         .query_row(
             "SELECT note_kind, body, yrs_state FROM notes WHERE id = ?1",
             params![note_id],
             |r| {
                 Ok((
-                    r.get::<_, String>("note_kind")?,
+                    r.get::<_, NoteKind>("note_kind")?,
                     r.get::<_, String>("body")?,
                     r.get::<_, Option<Vec<u8>>>("yrs_state")?,
                 ))
@@ -112,8 +172,12 @@ fn read_note_raw(conn: &Connection, note_id: &str) -> AppResult<(String, String,
 /// Build the history snapshot string for a note. Markdown keeps its body
 /// verbatim; other kinds wrap the saved Yjs state in a base64 envelope. Pure
 /// CPU work — the base64 of a large canvas must not run under the DB lock.
-fn build_snapshot(note_kind: &str, body: String, yrs_state: Option<Vec<u8>>) -> AppResult<String> {
-    if note_kind == "markdown" {
+fn build_snapshot(
+    note_kind: NoteKind,
+    body: String,
+    yrs_state: Option<Vec<u8>>,
+) -> AppResult<String> {
+    if note_kind.is_markdown() {
         Ok(body)
     } else {
         serialize_yjs_snapshot(note_kind, &yrs_state.unwrap_or_default())
@@ -121,9 +185,9 @@ fn build_snapshot(note_kind: &str, body: String, yrs_state: Option<Vec<u8>>) -> 
 }
 
 #[cfg(test)]
-fn current_note_snapshot(conn: &Connection, note_id: &str) -> AppResult<(String, String)> {
+fn current_note_snapshot(conn: &Connection, note_id: &str) -> AppResult<(NoteKind, String)> {
     let (note_kind, body, yrs_state) = read_note_raw(conn, note_id)?;
-    let snapshot = build_snapshot(&note_kind, body, yrs_state)?;
+    let snapshot = build_snapshot(note_kind, body, yrs_state)?;
     Ok((note_kind, snapshot))
 }
 
@@ -164,8 +228,8 @@ struct PreparedVersion {
     id: String,
     note_id: String,
     created: String,
-    note_kind: String,
-    action: String,
+    note_kind: NoteKind,
+    action: VersionAction,
     ref_version_id: Option<String>,
     words_added: i64,
     words_removed: i64,
@@ -182,8 +246,8 @@ struct PreparedVersion {
 fn prepare_version(
     prev_md: Option<String>,
     note_id: &str,
-    note_kind: &str,
-    action: &str,
+    note_kind: NoteKind,
+    action: VersionAction,
     ref_version_id: Option<&str>,
     markdown: &str,
 ) -> AppResult<Option<PreparedVersion>> {
@@ -196,8 +260,12 @@ fn prepare_version(
     }
 
     // The first snapshot of a note is its creation point.
-    let action = if existed { action } else { "created" };
-    let (words_added, words_removed, tokens_added, tokens_removed) = if note_kind == "markdown" {
+    let action = if existed {
+        action
+    } else {
+        VersionAction::Created
+    };
+    let (words_added, words_removed, tokens_added, tokens_removed) = if note_kind.is_markdown() {
         let (words_added, words_removed) = word_delta(&prev_md, markdown);
         let (tokens_added, tokens_removed) = token_delta(&prev_md, markdown);
         (words_added, words_removed, tokens_added, tokens_removed)
@@ -216,8 +284,8 @@ fn prepare_version(
         id: format!("ver_{}", uuid::Uuid::new_v4()),
         note_id: note_id.to_string(),
         created: Utc::now().to_rfc3339(),
-        note_kind: note_kind.to_string(),
-        action: action.to_string(),
+        note_kind,
+        action,
         ref_version_id: ref_version_id.map(str::to_string),
         words_added,
         words_removed,
@@ -232,7 +300,7 @@ fn prepare_version(
 /// lookups plus one insert. Denormalises the restore target's timestamp so a
 /// `reverted` label outlives its target being pruned.
 fn insert_prepared(conn: &Connection, prepared: PreparedVersion) -> AppResult<VersionSummary> {
-    let ref_created: Option<String> = if prepared.action == "reverted" {
+    let ref_created: Option<String> = if prepared.action == VersionAction::Reverted {
         match prepared.ref_version_id.as_deref() {
             Some(target) => conn
                 .query_row(
@@ -296,14 +364,20 @@ fn insert_prepared(conn: &Connection, prepared: PreparedVersion) -> AppResult<Ve
 /// This runs every phase under the caller's single `conn` (e.g. tests). The
 /// Tauri commands instead use [`capture_off_lock`] to keep the diff/compress
 /// off the DB lock.
-pub fn capture(
+pub fn capture<N, A>(
     conn: &Connection,
     note_id: &str,
-    note_kind: &str,
-    action: &str,
+    note_kind: N,
+    action: A,
     ref_version_id: Option<&str>,
     markdown: &str,
-) -> AppResult<Option<VersionSummary>> {
+) -> AppResult<Option<VersionSummary>>
+where
+    N: Into<NoteKind>,
+    A: Into<VersionAction>,
+{
+    let note_kind = note_kind.into();
+    let action = action.into();
     let prev_md = latest_version_blob(conn, note_id)?
         .as_deref()
         .map(decompress_snapshot)
@@ -328,8 +402,8 @@ pub fn capture(
 fn capture_off_lock(
     db: &Db,
     note_id: &str,
-    note_kind: &str,
-    action: &str,
+    note_kind: NoteKind,
+    action: VersionAction,
     ref_version_id: Option<&str>,
     markdown: &str,
 ) -> AppResult<Option<VersionSummary>> {
@@ -419,89 +493,89 @@ pub fn prune(conn: &Connection, retention_days: Option<u32>) -> AppResult<usize>
 pub async fn capture_note_version(
     app: AppHandle,
     note_id: String,
-    note_kind: String,
-    action: String,
+    note_kind: NoteKind,
+    action: VersionAction,
     ref_version_id: Option<String>,
     markdown: String,
-) -> Result<Option<VersionSummary>, String> {
-    tauri::async_runtime::spawn_blocking(move || -> Result<Option<VersionSummary>, String> {
+) -> CommandResult<Option<VersionSummary>> {
+    tauri::async_runtime::spawn_blocking(move || -> CommandResult<Option<VersionSummary>> {
         let db = app.state::<Db>();
         capture_off_lock(
             &db,
             &note_id,
-            &note_kind,
-            &action,
+            note_kind,
+            action,
             ref_version_id.as_deref(),
             &markdown,
         )
         .map_err(Into::into)
     })
     .await
-    .map_err(|e| format!("history capture task: {e}"))?
+    .map_err(|e| CommandError::task(format!("history capture task: {e}")))?
 }
 
 #[tauri::command]
 pub async fn capture_current_note_version(
     app: AppHandle,
     note_id: String,
-    action: String,
+    action: VersionAction,
     ref_version_id: Option<String>,
-) -> Result<Option<VersionSummary>, String> {
-    tauri::async_runtime::spawn_blocking(move || -> Result<Option<VersionSummary>, String> {
+) -> CommandResult<Option<VersionSummary>> {
+    tauri::async_runtime::spawn_blocking(move || -> CommandResult<Option<VersionSummary>> {
         let db = app.state::<Db>();
         // Read the saved state under the lock; build the (possibly large) base64
         // snapshot with the lock released.
         let (note_kind, body, yrs_state) = db.with_conn(|c| read_note_raw(c, &note_id))?;
-        let snapshot = build_snapshot(&note_kind, body, yrs_state)?;
+        let snapshot = build_snapshot(note_kind, body, yrs_state)?;
         capture_off_lock(
             &db,
             &note_id,
-            &note_kind,
-            &action,
+            note_kind,
+            action,
             ref_version_id.as_deref(),
             &snapshot,
         )
         .map_err(Into::into)
     })
     .await
-    .map_err(|e| format!("history current capture task: {e}"))?
+    .map_err(|e| CommandError::task(format!("history current capture task: {e}")))?
 }
 
 #[tauri::command]
 pub async fn list_note_versions(
     app: AppHandle,
     note_id: String,
-) -> Result<Vec<VersionSummary>, String> {
-    tauri::async_runtime::spawn_blocking(move || -> Result<Vec<VersionSummary>, String> {
+) -> CommandResult<Vec<VersionSummary>> {
+    tauri::async_runtime::spawn_blocking(move || -> CommandResult<Vec<VersionSummary>> {
         let db = app.state::<Db>();
         db.with_conn(|c| list(c, &note_id)).map_err(Into::into)
     })
     .await
-    .map_err(|e| format!("history list task: {e}"))?
+    .map_err(|e| CommandError::task(format!("history list task: {e}")))?
 }
 
 #[tauri::command]
-pub async fn load_note_version(app: AppHandle, version_id: String) -> Result<Version, String> {
-    tauri::async_runtime::spawn_blocking(move || -> Result<Version, String> {
+pub async fn load_note_version(app: AppHandle, version_id: String) -> CommandResult<Version> {
+    tauri::async_runtime::spawn_blocking(move || -> CommandResult<Version> {
         let db = app.state::<Db>();
         db.with_conn(|c| load(c, &version_id)).map_err(Into::into)
     })
     .await
-    .map_err(|e| format!("history load task: {e}"))?
+    .map_err(|e| CommandError::task(format!("history load task: {e}")))?
 }
 
 #[tauri::command]
 pub async fn prune_note_versions(
     app: AppHandle,
     retention_days: Option<u32>,
-) -> Result<usize, String> {
-    tauri::async_runtime::spawn_blocking(move || -> Result<usize, String> {
+) -> CommandResult<usize> {
+    tauri::async_runtime::spawn_blocking(move || -> CommandResult<usize> {
         let db = app.state::<Db>();
         db.with_conn(|c| prune(c, retention_days))
             .map_err(Into::into)
     })
     .await
-    .map_err(|e| format!("history prune task: {e}"))?
+    .map_err(|e| CommandError::task(format!("history prune task: {e}")))?
 }
 
 #[cfg(test)]

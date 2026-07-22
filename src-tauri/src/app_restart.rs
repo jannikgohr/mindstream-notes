@@ -85,6 +85,6 @@ mod android {
 /// `@tauri-apps/plugin-process` instead and never calls this.
 #[cfg(target_os = "android")]
 #[tauri::command]
-pub fn restart_app() -> Result<(), String> {
-    android::restart()
+pub fn restart_app() -> crate::error::CommandResult<()> {
+    Ok(android::restart()?)
 }

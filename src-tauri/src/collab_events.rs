@@ -2,10 +2,9 @@ use rusqlite::params;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
+use crate::app_events::AppEvent;
 use crate::db::Db;
 use crate::error::AppResult;
-
-pub const COLLAB_CREDENTIALS_CHANGED_EVENT: &str = "collab-credentials-changed";
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct CollabCredentialsChangedEvent {
@@ -49,8 +48,9 @@ pub(crate) fn emit_collab_credentials_changed(app: &AppHandle, note_ids: Vec<Str
     let Some(event) = credentials_changed_event(note_ids) else {
         return;
     };
-    if let Err(err) = app.emit(COLLAB_CREDENTIALS_CHANGED_EVENT, event) {
-        log::warn!("[collab] failed to emit {COLLAB_CREDENTIALS_CHANGED_EVENT}: {err}");
+    let event_name = AppEvent::CollabCredentialsChanged.as_str();
+    if let Err(err) = app.emit(event_name, event) {
+        log::warn!("[collab] failed to emit {event_name}: {err}");
     }
 }
 
