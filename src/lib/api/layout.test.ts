@@ -77,5 +77,30 @@ describe('dock layout persistence', () => {
         savedAt: '2026-01-01T00:00:00.000Z'
       })
     ).toBeNull();
+    expect(
+      validateSavedLayout({
+        version: 1,
+        dock,
+        activeNoteId: 'a',
+        savedAt: 'not a timestamp'
+      })
+    ).toBeNull();
+  });
+
+  it('returns a normalized saved layout without extra top-level fields', () => {
+    const saved = validateSavedLayout({
+      version: 1,
+      dock,
+      activeNoteId: null,
+      savedAt: '2026-01-01T00:00:00.000Z',
+      unexpected: true
+    });
+
+    expect(saved).toEqual({
+      version: 1,
+      dock,
+      activeNoteId: null,
+      savedAt: '2026-01-01T00:00:00.000Z'
+    });
   });
 });

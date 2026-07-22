@@ -29,14 +29,28 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
+function isIsoDateString(value: string): boolean {
+  const timestamp = Date.parse(value);
+  return (
+    Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value
+  );
+}
+
 export function validateSavedLayout(value: unknown): SavedLayout | null {
   if (!isRecord(value) || value.version !== 1) return null;
   if (!('dock' in value) || !isRecord(value.dock)) return null;
-  if (value.activeNoteId !== null && typeof value.activeNoteId !== 'string') {
+  const activeNoteId = value.activeNoteId;
+  if (activeNoteId !== null && typeof activeNoteId !== 'string') {
     return null;
   }
-  if (typeof value.savedAt !== 'string') return null;
-  return value as unknown as SavedLayout;
+  const savedAt = value.savedAt;
+  if (typeof savedAt !== 'string' || !isIsoDateString(savedAt)) return null;
+  return {
+    version: 1,
+    dock: value.dock,
+    activeNoteId,
+    savedAt
+  };
 }
 
 function readSavedLayout(key: string): SavedLayout | null {
