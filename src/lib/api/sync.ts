@@ -7,7 +7,13 @@
  */
 
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
-import { assertNumber, assertRecord, assertString, isTauri } from './core';
+import {
+  assertNumber,
+  assertRecord,
+  assertString,
+  assertVoid,
+  isTauri
+} from './core';
 
 export interface SyncReport {
   folders_pulled: number;
@@ -24,6 +30,24 @@ export async function syncNow(): Promise<SyncReport> {
     throw new Error('Sync is only available in the desktop app.');
   }
   return parseSyncReport(await tauriInvoke<unknown>('sync_now'));
+}
+
+export interface SyncScheduleInput {
+  enabled: boolean;
+  intervalSecs: number;
+}
+
+export async function setSyncSchedule(input: SyncScheduleInput): Promise<void> {
+  assertSyncScheduleInput(input);
+  if (!isTauri()) return;
+  const args = {
+    enabled: input.enabled,
+    intervalSecs: input.intervalSecs
+  };
+  assertVoid(
+    await tauriInvoke<unknown>('set_sync_schedule', args),
+    'set_sync_schedule response'
+  );
 }
 
 /**
@@ -73,6 +97,20 @@ export async function noteRoomInfo(
 function assertRequiredString(value: string, context: string): void {
   if (value.trim().length === 0) {
     throw new Error(`${context} must be a non-empty string`);
+  }
+}
+
+function assertSyncScheduleInput(input: SyncScheduleInput): void {
+  if (typeof input.enabled !== 'boolean') {
+    throw new Error('sync schedule enabled must be a boolean');
+  }
+  if (!Number.isInteger(input.intervalSecs) || input.intervalSecs < 0) {
+    throw new Error(
+      'sync schedule intervalSecs must be a non-negative integer'
+    );
+  }
+  if (input.enabled && input.intervalSecs === 0) {
+    throw new Error('enabled sync schedule requires a positive interval');
   }
 }
 
