@@ -17,7 +17,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use similar::{ChangeTag, TextDiff};
 
 use crate::db::Db;
-use crate::error::AppResult;
+use crate::error::{AppResult, CommandResult};
 
 fn word_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
@@ -140,7 +140,7 @@ pub fn note_word_count_inner(conn: &Connection, note_id: &str) -> AppResult<i64>
 }
 
 #[tauri::command]
-pub fn note_word_count(db: tauri::State<'_, Db>, note_id: String) -> Result<i64, String> {
+pub fn note_word_count(db: tauri::State<'_, Db>, note_id: String) -> CommandResult<i64> {
     db.with_conn(|c| note_word_count_inner(c, &note_id))
         .map_err(Into::into)
 }

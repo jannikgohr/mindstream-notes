@@ -23,7 +23,7 @@ use tauri_plugin_shell::ShellExt;
 
 use crate::collections::TRASH_ID;
 use crate::db::Db;
-use crate::error::AppResult;
+use crate::error::{AppResult, CommandResult};
 use crate::sync;
 
 /// Counts surfaced in the "Empty trash" confirmation dialog. Folders
@@ -40,7 +40,7 @@ pub struct TrashCounts {
 /// `app_data_dir`); the dir is guaranteed to exist because `Db::open`
 /// created it on first launch.
 #[tauri::command]
-pub fn open_data_folder(app: AppHandle) -> Result<(), String> {
+pub fn open_data_folder(app: AppHandle) -> CommandResult<()> {
     let dir = crate::paths::app_data_dir(&app)
         .map_err(|e| format!("could not resolve app data dir: {e}"))?;
     let path_str = dir
@@ -55,26 +55,27 @@ pub fn open_data_folder(app: AppHandle) -> Result<(), String> {
 /// to hand us a real on-disk path — we just forward to the shell
 /// plugin's `open`.
 #[tauri::command]
-pub fn open_folder(app: AppHandle, path: String) -> Result<(), String> {
+pub fn open_folder(app: AppHandle, path: String) -> CommandResult<()> {
     open_with_shell(&app, &path)
 }
 
-fn open_with_shell(app: &AppHandle, path: &str) -> Result<(), String> {
+fn open_with_shell(app: &AppHandle, path: &str) -> CommandResult<()> {
     // The shell plugin marks `open` as deprecated in favour of
     // tauri-plugin-opener, but we don't depend on opener yet and the
     // shell:allow-open capability is already granted. Migrate when we
     // pull opener in for the broader Data & Backup feature set.
     #[allow(deprecated)]
-    app.shell()
+    Ok(app
+        .shell()
         .open(path, None)
-        .map_err(|e| format!("could not open folder: {e}"))
+        .map_err(|e| format!("could not open folder: {e}"))?)
 }
 
 /// Notes and folders the user would lose by emptying the trash now.
 /// Recurses into subfolders — a folder in trash holding 50 notes counts
 /// the folder *and* all 50 notes.
 #[tauri::command]
-pub fn trash_counts(db: tauri::State<'_, Db>) -> Result<TrashCounts, String> {
+pub fn trash_counts(db: tauri::State<'_, Db>) -> CommandResult<TrashCounts> {
     db.with_conn(counts).map_err(Into::into)
 }
 
@@ -82,7 +83,7 @@ pub fn trash_counts(db: tauri::State<'_, Db>) -> Result<TrashCounts, String> {
 /// One transaction: gather etebase UIDs → queue tombstones for sync →
 /// DELETE. ON DELETE CASCADE on `note_tags` and `assets` does the rest.
 #[tauri::command]
-pub fn empty_trash(db: tauri::State<'_, Db>) -> Result<TrashCounts, String> {
+pub fn empty_trash(db: tauri::State<'_, Db>) -> CommandResult<TrashCounts> {
     db.with_conn_mut(empty).map_err(Into::into)
 }
 
@@ -410,16 +411,20 @@ fn sweep(conn: &mut Connection, days: u32) -> AppResult<u32> {
 /// Tell the scheduler what the current retention is. `days = 0`
 /// disables it (used for the "forever" option).
 #[tauri::command]
-pub fn set_trash_retention(scheduler: tauri::State<'_, TrashRetentionScheduler>, days: u32) {
+pub fn set_trash_retention(
+    scheduler: tauri::State<'_, TrashRetentionScheduler>,
+    days: u32,
+) -> CommandResult<()> {
     scheduler.enabled.store(days > 0, Ordering::Relaxed);
     scheduler.days.store(days, Ordering::Relaxed);
+    Ok(())
 }
 
 /// Run the sweep immediately and return how many top-level items it
 /// purged. The settings effect calls this once on startup so the user
 /// doesn't have to wait up to an hour for the first scheduled tick.
 #[tauri::command]
-pub fn sweep_trash_retention(db: tauri::State<'_, Db>, days: u32) -> Result<u32, String> {
+pub fn sweep_trash_retention(db: tauri::State<'_, Db>, days: u32) -> CommandResult<u32> {
     if days == 0 {
         return Ok(0);
     }

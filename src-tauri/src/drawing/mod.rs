@@ -13,6 +13,8 @@
 #[cfg(target_os = "android")]
 pub mod platform;
 
+use crate::error::{CommandError, CommandErrorCode, CommandResult};
+
 /// Persist an ink note state update through the same merge/write path
 /// sync uses. The editor sends Yrs/Yjs v1 update bytes; Rust merges
 /// them into the existing row's `yrs_state` and bumps `dirty`.
@@ -21,19 +23,24 @@ pub fn drawing_save_ink_state(
     db: tauri::State<'_, crate::db::Db>,
     note_id: String,
     yrs_state: Vec<u8>,
-) -> Result<(), String> {
+) -> CommandResult<()> {
     db.with_conn_mut(|c| crate::notes::save_yrs_state(c, &note_id, &yrs_state))
         .map_err(|e| format!("drawing_save_ink_state: {e}"))?
         .then_some(())
-        .ok_or_else(|| format!("drawing_save_ink_state: note {note_id} not found"))
+        .ok_or_else(|| {
+            CommandError::new(
+                CommandErrorCode::NotFound,
+                format!("drawing_save_ink_state: note {note_id} not found"),
+            )
+        })
 }
 
 #[tauri::command]
-pub fn drawing_show_live_ink_overlay() -> Result<(), String> {
+pub fn drawing_show_live_ink_overlay() -> CommandResult<()> {
     #[cfg(target_os = "android")]
     {
-        platform::android::ui::call_show_live_overlay()
-            .map_err(|e| format!("drawing_show_live_ink_overlay: {e}"))
+        Ok(platform::android::ui::call_show_live_overlay()
+            .map_err(|e| format!("drawing_show_live_ink_overlay: {e}"))?)
     }
     #[cfg(not(target_os = "android"))]
     {
@@ -42,11 +49,11 @@ pub fn drawing_show_live_ink_overlay() -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn drawing_hide_live_ink_overlay() -> Result<(), String> {
+pub fn drawing_hide_live_ink_overlay() -> CommandResult<()> {
     #[cfg(target_os = "android")]
     {
-        platform::android::ui::call_hide_live_overlay()
-            .map_err(|e| format!("drawing_hide_live_ink_overlay: {e}"))
+        Ok(platform::android::ui::call_hide_live_overlay()
+            .map_err(|e| format!("drawing_hide_live_ink_overlay: {e}"))?)
     }
     #[cfg(not(target_os = "android"))]
     {
@@ -55,11 +62,11 @@ pub fn drawing_hide_live_ink_overlay() -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn drawing_enter_immersive_ink_mode() -> Result<(), String> {
+pub fn drawing_enter_immersive_ink_mode() -> CommandResult<()> {
     #[cfg(target_os = "android")]
     {
-        platform::android::ui::call_enter_immersive_ink_mode()
-            .map_err(|e| format!("drawing_enter_immersive_ink_mode: {e}"))
+        Ok(platform::android::ui::call_enter_immersive_ink_mode()
+            .map_err(|e| format!("drawing_enter_immersive_ink_mode: {e}"))?)
     }
     #[cfg(not(target_os = "android"))]
     {
@@ -68,11 +75,11 @@ pub fn drawing_enter_immersive_ink_mode() -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn drawing_exit_immersive_ink_mode() -> Result<(), String> {
+pub fn drawing_exit_immersive_ink_mode() -> CommandResult<()> {
     #[cfg(target_os = "android")]
     {
-        platform::android::ui::call_exit_immersive_ink_mode()
-            .map_err(|e| format!("drawing_exit_immersive_ink_mode: {e}"))
+        Ok(platform::android::ui::call_exit_immersive_ink_mode()
+            .map_err(|e| format!("drawing_exit_immersive_ink_mode: {e}"))?)
     }
     #[cfg(not(target_os = "android"))]
     {
@@ -81,11 +88,11 @@ pub fn drawing_exit_immersive_ink_mode() -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn drawing_cancel_live_ink() -> Result<(), String> {
+pub fn drawing_cancel_live_ink() -> CommandResult<()> {
     #[cfg(target_os = "android")]
     {
-        platform::android::ui::call_cancel_live_ink()
-            .map_err(|e| format!("drawing_cancel_live_ink: {e}"))
+        Ok(platform::android::ui::call_cancel_live_ink()
+            .map_err(|e| format!("drawing_cancel_live_ink: {e}"))?)
     }
     #[cfg(not(target_os = "android"))]
     {
@@ -98,7 +105,7 @@ pub fn drawing_set_live_ink_style(
     color_argb: u32,
     min_width_px: f32,
     max_width_px: f32,
-) -> Result<(), String> {
+) -> CommandResult<()> {
     #[cfg(target_os = "android")]
     {
         platform::android::ui::call_set_live_ink_style(color_argb, min_width_px, max_width_px)
@@ -117,11 +124,11 @@ pub fn drawing_set_live_ink_style(
 /// surface pixels. Pass an empty list to disable painting entirely
 /// (trashed note, layout not yet computed). No-op on desktop.
 #[tauri::command]
-pub fn drawing_set_document_bounds(bounds: Vec<f32>) -> Result<(), String> {
+pub fn drawing_set_document_bounds(bounds: Vec<f32>) -> CommandResult<()> {
     #[cfg(target_os = "android")]
     {
-        platform::android::ui::call_set_document_bounds(&bounds)
-            .map_err(|e| format!("drawing_set_document_bounds: {e}"))
+        Ok(platform::android::ui::call_set_document_bounds(&bounds)
+            .map_err(|e| format!("drawing_set_document_bounds: {e}"))?)
     }
     #[cfg(not(target_os = "android"))]
     {
@@ -137,11 +144,11 @@ pub fn drawing_set_document_bounds(bounds: Vec<f32>) -> Result<(), String> {
 /// `getBoundingClientRect()` multiplied by `devicePixelRatio`. Pass
 /// an empty list to clear. No-op on desktop.
 #[tauri::command]
-pub fn drawing_set_control_bounds(bounds: Vec<f32>) -> Result<(), String> {
+pub fn drawing_set_control_bounds(bounds: Vec<f32>) -> CommandResult<()> {
     #[cfg(target_os = "android")]
     {
-        platform::android::ui::call_set_control_bounds(&bounds)
-            .map_err(|e| format!("drawing_set_control_bounds: {e}"))
+        Ok(platform::android::ui::call_set_control_bounds(&bounds)
+            .map_err(|e| format!("drawing_set_control_bounds: {e}"))?)
     }
     #[cfg(not(target_os = "android"))]
     {
@@ -151,7 +158,7 @@ pub fn drawing_set_control_bounds(bounds: Vec<f32>) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn drawing_set_live_ink_finger_drawing(allowed: bool) -> Result<(), String> {
+pub fn drawing_set_live_ink_finger_drawing(allowed: bool) -> CommandResult<()> {
     #[cfg(target_os = "android")]
     {
         platform::android::ui::call_set_finger_drawing_allowed(allowed)

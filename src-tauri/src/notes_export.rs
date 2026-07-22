@@ -21,12 +21,12 @@ use tauri_plugin_dialog::DialogExt;
 #[cfg(desktop)]
 use tokio::sync::oneshot;
 
-use crate::error::{AppError, AppResult};
+use crate::error::{AppError, AppResult, CommandResult};
 
 /// Pop a folder picker for the export destination. Returns `None` if
 /// the user cancels.
 #[tauri::command]
-pub async fn notes_export_pick_dir(app: AppHandle) -> Result<Option<String>, String> {
+pub async fn notes_export_pick_dir(app: AppHandle) -> CommandResult<Option<String>> {
     pick_dir_inner(app).await.map_err(Into::into)
 }
 
@@ -67,7 +67,7 @@ pub fn notes_export_write_file(
     root: String,
     relative_path: String,
     bytes: Vec<u8>,
-) -> Result<(), String> {
+) -> CommandResult<()> {
     write_under(&PathBuf::from(&root), &relative_path, &bytes).map_err(Into::into)
 }
 
@@ -191,7 +191,7 @@ mod tests {
         assert_eq!(fs::read(tmp.join("sub/file.md")).unwrap(), b"body");
 
         let err = notes_export_write_file(root, "../escape.md".into(), b"x".to_vec()).unwrap_err();
-        assert!(err.contains("escapes export root"));
+        assert!(err.message.contains("escapes export root"));
 
         fs::remove_dir_all(&tmp).ok();
     }

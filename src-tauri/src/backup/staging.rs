@@ -59,7 +59,7 @@ pub struct AccountDisplay {
 /// Pop the open dialog, extract+validate the picked zip, and return a
 /// preview. `None` means the user cancelled the dialog.
 #[tauri::command]
-pub async fn import_begin(app: AppHandle) -> Result<Option<ImportPreview>, String> {
+pub async fn import_begin(app: AppHandle) -> CommandResult<Option<ImportPreview>> {
     import_begin_inner(app).await.map_err(Into::into)
 }
 
@@ -227,12 +227,10 @@ pub(super) fn validate_looks_like_mindstream_db(conn: &Connection) -> AppResult<
 /// Drop the staging dir for the given token. Called when the user
 /// cancels the import-choice dialog; safe to call on a stale token.
 #[tauri::command]
-pub fn import_cleanup(app: AppHandle, token: String) -> Result<(), String> {
-    let dir = imports_staging_root(&app)
-        .map_err(|e| e.to_string())?
-        .join(&token);
+pub fn import_cleanup(app: AppHandle, token: String) -> CommandResult<()> {
+    let dir = imports_staging_root(&app)?.join(&token);
     if dir.exists() {
-        fs::remove_dir_all(&dir).map_err(|e| format!("remove staging: {e}"))?;
+        fs::remove_dir_all(&dir)?;
     }
     Ok(())
 }

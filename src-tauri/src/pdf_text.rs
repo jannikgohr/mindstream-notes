@@ -16,7 +16,7 @@
 use rusqlite::{params, Connection};
 
 use crate::db::Db;
-use crate::error::AppResult;
+use crate::error::{AppResult, CommandResult};
 
 /// Persist the extracted text for a PDF note. No-ops unless the note is a PDF
 /// note that is still un-indexed (`pdf_text IS NULL`) — the guard makes repeat
@@ -62,18 +62,18 @@ pub fn note_needs_text(conn: &Connection, note_id: &str) -> AppResult<bool> {
 // ---------- Tauri commands ----------
 
 #[tauri::command]
-pub fn set_pdf_text(db: tauri::State<'_, Db>, note_id: String, text: String) -> Result<(), String> {
+pub fn set_pdf_text(db: tauri::State<'_, Db>, note_id: String, text: String) -> CommandResult<()> {
     db.with_conn(|c| store_text(c, &note_id, &text))
         .map_err(Into::into)
 }
 
 #[tauri::command]
-pub fn pdf_notes_missing_text(db: tauri::State<'_, Db>) -> Result<Vec<String>, String> {
+pub fn pdf_notes_missing_text(db: tauri::State<'_, Db>) -> CommandResult<Vec<String>> {
     db.with_conn(notes_missing_text).map_err(Into::into)
 }
 
 #[tauri::command]
-pub fn pdf_note_needs_text(db: tauri::State<'_, Db>, note_id: String) -> Result<bool, String> {
+pub fn pdf_note_needs_text(db: tauri::State<'_, Db>, note_id: String) -> CommandResult<bool> {
     db.with_conn(|c| note_needs_text(c, &note_id))
         .map_err(Into::into)
 }

@@ -5,7 +5,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 use crate::db::Db;
-use crate::error::{AppError, AppResult};
+use crate::error::{AppError, AppResult, CommandResult};
 use crate::serde_helpers::double_option;
 
 /// Public-facing folder shape. Position is the sort index inside the
@@ -299,7 +299,7 @@ fn next_position(conn: &Connection, parent: Option<&str>) -> AppResult<i64> {
 // ---------- Tauri commands ----------
 
 #[tauri::command]
-pub fn list_collections(db: tauri::State<'_, Db>) -> Result<Vec<Collection>, String> {
+pub fn list_collections(db: tauri::State<'_, Db>) -> CommandResult<Vec<Collection>> {
     db.with_conn(list).map_err(Into::into)
 }
 
@@ -307,7 +307,7 @@ pub fn list_collections(db: tauri::State<'_, Db>) -> Result<Vec<Collection>, Str
 pub fn create_collection(
     db: tauri::State<'_, Db>,
     input: CreateCollection,
-) -> Result<Collection, String> {
+) -> CommandResult<Collection> {
     db.with_conn(|c| create(c, input)).map_err(Into::into)
 }
 
@@ -315,12 +315,12 @@ pub fn create_collection(
 pub fn update_collection(
     db: tauri::State<'_, Db>,
     input: UpdateCollection,
-) -> Result<Collection, String> {
+) -> CommandResult<Collection> {
     db.with_conn(|c| update(c, input)).map_err(Into::into)
 }
 
 #[tauri::command]
-pub fn delete_collection(db: tauri::State<'_, Db>, id: String) -> Result<(), String> {
+pub fn delete_collection(db: tauri::State<'_, Db>, id: String) -> CommandResult<()> {
     db.with_conn(|c| delete(c, &id)).map_err(Into::into)
 }
 
