@@ -87,11 +87,24 @@ function scopeForId(id: string): 'V' | 'D' {
   return 'D';
 }
 
+function isStoredSettingsRecord(
+  value: unknown
+): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+export function parseStoredSettings(
+  raw: string
+): Record<string, unknown> | null {
+  const parsed: unknown = JSON.parse(raw);
+  return isStoredSettingsRecord(parsed) ? parsed : null;
+}
+
 function readStorage(key: string): Record<string, unknown> | null {
   if (typeof localStorage === 'undefined') return {};
   try {
     const raw = localStorage.getItem(key);
-    return raw ? (JSON.parse(raw) as Record<string, unknown>) : null;
+    return raw ? parseStoredSettings(raw) : null;
   } catch {
     return null;
   }
