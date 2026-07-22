@@ -5,7 +5,18 @@
  * fetches the full note + body on demand. Soft-delete via trash_note.
  */
 
-import { invokeOrFallback } from './core';
+import {
+  assertBoolean,
+  assertNumber,
+  assertNumberArray,
+  assertRecord,
+  assertString,
+  assertStringArray,
+  assertVoid,
+  TauriCommandName,
+  invokeOrFallback,
+  optionalString
+} from './core';
 import { mockApi } from './mock-store';
 
 /**
@@ -24,7 +35,15 @@ import { mockApi } from './mock-store';
  *   kanban   — SVAR Kanban board whose columns/cards live directly in the
  *              note's Y.Doc (yrs_state), synced like any collaborative doc.
  */
-export type NoteKind = 'markdown' | 'freeform' | 'ink' | 'pdf' | 'kanban';
+export enum NoteKindEnum {
+  Markdown = 'markdown',
+  Freeform = 'freeform',
+  Ink = 'ink',
+  Pdf = 'pdf',
+  Kanban = 'kanban'
+}
+
+export type NoteKind = `${NoteKindEnum}`;
 
 /**
  * The full set of editor kinds this app version knows how to render.
@@ -39,11 +58,11 @@ export type NoteKind = 'markdown' | 'freeform' | 'ink' | 'pdf' | 'kanban';
  * src-tauri/src/notes/mod.rs.
  */
 export const KNOWN_NOTE_KINDS = [
-  'markdown',
-  'freeform',
-  'ink',
-  'pdf',
-  'kanban'
+  NoteKindEnum.Markdown,
+  NoteKindEnum.Freeform,
+  NoteKindEnum.Ink,
+  NoteKindEnum.Pdf,
+  NoteKindEnum.Kanban
 ] as const;
 
 /** Narrows an arbitrary string (e.g. from a remote-synced row) into
@@ -55,6 +74,13 @@ export function isKnownNoteKind(
     typeof kind === 'string' &&
     (KNOWN_NOTE_KINDS as readonly string[]).includes(kind)
   );
+}
+
+function assertNoteKind(value: unknown, context: string): NoteKind {
+  const kind = assertString(value, context);
+  if (!isKnownNoteKind(kind))
+    throw new Error(`${context} is not a known note kind`);
+  return kind;
 }
 
 export interface NoteSummary {
@@ -124,44 +150,71 @@ export interface UpdateNoteInput {
 }
 
 export function listNotes(includeTrashed = false): Promise<NoteSummary[]> {
-  return invokeOrFallback<NoteSummary[]>('list_notes', { includeTrashed }, () =>
-    mockApi.listNotes(includeTrashed)
+  return invokeOrFallback<NoteSummary[]>(
+    TauriCommandName.ListNotes,
+    { includeTrashed },
+    () => mockApi.listNotes(includeTrashed),
+    parseNoteSummaries
   );
 }
 
 export function loadNote(id: string): Promise<Note> {
-  return invokeOrFallback<Note>('load_note', { id }, () =>
-    mockApi.loadNote(id)
+  assertNonEmptyString(id, 'loadNote.id');
+  return invokeOrFallback<Note>(
+    TauriCommandName.LoadNote,
+    { id },
+    () => mockApi.loadNote(id),
+    parseNote
   );
 }
 
 export function createNote(input: CreateNoteInput): Promise<Note> {
-  return invokeOrFallback<Note>('create_note', { input }, () =>
-    mockApi.createNote(input)
+  assertCreateNoteInput(input);
+  return invokeOrFallback<Note>(
+    TauriCommandName.CreateNote,
+    { input },
+    () => mockApi.createNote(input),
+    parseNote
   );
 }
 
 export function saveNote(input: UpdateNoteInput): Promise<Note> {
-  return invokeOrFallback<Note>('save_note', { input }, () =>
-    mockApi.saveNote(input)
+  assertUpdateNoteInput(input);
+  return invokeOrFallback<Note>(
+    TauriCommandName.SaveNote,
+    { input },
+    () => mockApi.saveNote(input),
+    parseNote
   );
 }
 
 export function trashNote(id: string): Promise<void> {
-  return invokeOrFallback<void>('trash_note', { id }, () =>
-    mockApi.trashNote(id)
+  assertNonEmptyString(id, 'trashNote.id');
+  return invokeOrFallback<void>(
+    TauriCommandName.TrashNote,
+    { id },
+    () => mockApi.trashNote(id),
+    (value) => assertVoid(value, 'trash_note response')
   );
 }
 
 export function restoreNote(id: string): Promise<void> {
-  return invokeOrFallback<void>('restore_note', { id }, () =>
-    mockApi.restoreNote(id)
+  assertNonEmptyString(id, 'restoreNote.id');
+  return invokeOrFallback<void>(
+    TauriCommandName.RestoreNote,
+    { id },
+    () => mockApi.restoreNote(id),
+    (value) => assertVoid(value, 'restore_note response')
   );
 }
 
 export function purgeNote(id: string): Promise<void> {
-  return invokeOrFallback<void>('purge_note', { id }, () =>
-    mockApi.purgeNote(id)
+  assertNonEmptyString(id, 'purgeNote.id');
+  return invokeOrFallback<void>(
+    TauriCommandName.PurgeNote,
+    { id },
+    () => mockApi.purgeNote(id),
+    (value) => assertVoid(value, 'purge_note response')
   );
 }
 
@@ -173,4 +226,97 @@ export interface LegacyNotePayload {
   id: string;
   title: string;
   body: string;
+}
+
+function assertNonEmptyString(value: string, context: string): void {
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new Error(`${context} must be a non-empty string`);
+  }
+}
+
+function assertCreateNoteInput(input: CreateNoteInput): void {
+  if (input.title !== undefined && typeof input.title !== 'string') {
+    throw new Error('CreateNoteInput.title must be a string');
+  }
+  if (input.body !== undefined && typeof input.body !== 'string') {
+    throw new Error('CreateNoteInput.body must be a string');
+  }
+  if (
+    input.parent_collection_id !== undefined &&
+    input.parent_collection_id !== null &&
+    typeof input.parent_collection_id !== 'string'
+  ) {
+    throw new Error(
+      'CreateNoteInput.parent_collection_id must be a string or null'
+    );
+  }
+  if (input.note_kind !== undefined && !isKnownNoteKind(input.note_kind)) {
+    throw new Error('CreateNoteInput.note_kind is not a known note kind');
+  }
+}
+
+function assertUpdateNoteInput(input: UpdateNoteInput): void {
+  assertNonEmptyString(input.id, 'UpdateNoteInput.id');
+  if (input.title !== undefined && typeof input.title !== 'string') {
+    throw new Error('UpdateNoteInput.title must be a string');
+  }
+  if (input.body !== undefined && typeof input.body !== 'string') {
+    throw new Error('UpdateNoteInput.body must be a string');
+  }
+  if (
+    input.parent_collection_id !== undefined &&
+    input.parent_collection_id !== null &&
+    typeof input.parent_collection_id !== 'string'
+  ) {
+    throw new Error(
+      'UpdateNoteInput.parent_collection_id must be a string or null'
+    );
+  }
+  if (input.position !== undefined && !Number.isFinite(input.position)) {
+    throw new Error('UpdateNoteInput.position must be finite');
+  }
+  if (input.tags !== undefined && !Array.isArray(input.tags)) {
+    throw new Error('UpdateNoteInput.tags must be an array');
+  }
+  if (input.yrs_state !== undefined && !Array.isArray(input.yrs_state)) {
+    throw new Error('UpdateNoteInput.yrs_state must be an array');
+  }
+  if (input.favourite !== undefined && typeof input.favourite !== 'boolean') {
+    throw new Error('UpdateNoteInput.favourite must be a boolean');
+  }
+}
+
+export function parseNoteSummary(value: unknown): NoteSummary {
+  const raw = assertRecord(value, 'NoteSummary');
+  return {
+    id: assertString(raw.id, 'NoteSummary.id'),
+    parent_collection_id: optionalString(
+      raw.parent_collection_id,
+      'NoteSummary.parent_collection_id'
+    ),
+    title: assertString(raw.title, 'NoteSummary.title'),
+    position: assertNumber(raw.position, 'NoteSummary.position'),
+    created: assertString(raw.created, 'NoteSummary.created'),
+    modified: assertString(raw.modified, 'NoteSummary.modified'),
+    tags: assertStringArray(raw.tags, 'NoteSummary.tags'),
+    trashed: assertBoolean(raw.trashed, 'NoteSummary.trashed'),
+    favourite: assertBoolean(raw.favourite, 'NoteSummary.favourite'),
+    pushed: assertBoolean(raw.pushed, 'NoteSummary.pushed'),
+    note_kind: assertNoteKind(raw.note_kind, 'NoteSummary.note_kind')
+  };
+}
+
+export function parseNote(value: unknown): Note {
+  const raw = assertRecord(value, 'Note');
+  return {
+    ...parseNoteSummary(raw),
+    body: assertString(raw.body, 'Note.body'),
+    yrs_state: assertNumberArray(raw.yrs_state, 'Note.yrs_state'),
+    payload_schema: assertNumber(raw.payload_schema, 'Note.payload_schema')
+  };
+}
+
+function parseNoteSummaries(value: unknown): NoteSummary[] {
+  if (!Array.isArray(value)) throw new Error('NoteSummary[] must be an array');
+  return value.map(parseNoteSummary);
 }

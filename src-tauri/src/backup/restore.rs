@@ -15,14 +15,11 @@ pub fn import_restore(
     app: AppHandle,
     token: String,
     same_account: bool,
-) -> Result<RestoreStaged, String> {
-    let app_data = crate::paths::app_data_dir(&app).map_err(|e| e.to_string())?;
-    let staged = imports_staging_root(&app)
-        .map_err(|e| e.to_string())?
-        .join(&token)
-        .join("data.db");
+) -> CommandResult<RestoreStaged> {
+    let app_data = crate::paths::app_data_dir(&app)?;
+    let staged = imports_staging_root(&app)?.join(&token).join("data.db");
     if !staged.exists() {
-        return Err(format!("staged backup '{token}' not found"));
+        return Err(format!("staged backup '{token}' not found").into());
     }
     let pending_db = app_data.join(PENDING_DB_FILE);
     let sentinel = app_data.join(SENTINEL_FILE);
@@ -37,23 +34,21 @@ pub fn import_restore(
     // Sanitize on the staged file, not on the pending file, so a
     // failure here leaves no half-prepared pending in place.
     if !same_account {
-        sanitize_for_foreign_account(&staged).map_err(|e| e.to_string())?;
+        sanitize_for_foreign_account(&staged)?;
     }
 
     // Move-then-mark: the sentinel must not exist until the staged DB
     // is fully in place. Otherwise a crash between the two leaves the
     // app thinking a restore is ready when the file isn't there.
     if pending_db.exists() {
-        fs::remove_file(&pending_db).map_err(|e| format!("clear stale pending: {e}"))?;
+        fs::remove_file(&pending_db)?;
     }
-    fs::rename(&staged, &pending_db).map_err(|e| format!("stage pending: {e}"))?;
-    fs::write(&sentinel, b"pending").map_err(|e| format!("write sentinel: {e}"))?;
+    fs::rename(&staged, &pending_db)?;
+    fs::write(&sentinel, b"pending")?;
 
     // The staging dir's now empty of its data.db; drop the dir
     // entirely so a future import_begin doesn't sweep it later.
-    let dir = imports_staging_root(&app)
-        .map_err(|e| e.to_string())?
-        .join(&token);
+    let dir = imports_staging_root(&app)?.join(&token);
     let _ = fs::remove_dir_all(&dir);
 
     Ok(RestoreStaged {

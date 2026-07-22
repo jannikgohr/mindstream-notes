@@ -1,4 +1,10 @@
-import { invokeOrFallback } from './core';
+import {
+  assertRecord,
+  assertString,
+  assertVoid,
+  TauriCommandName,
+  invokeOrFallback
+} from './core';
 
 /**
  * A user vault (called a "profile" in the Rust layer). Each vault is a
@@ -33,32 +39,76 @@ function fallbackView(): ProfilesView {
 
 export function listProfiles(): Promise<ProfilesView> {
   return invokeOrFallback<ProfilesView>(
-    'list_profiles',
+    TauriCommandName.ListProfiles,
     undefined,
-    fallbackView
+    fallbackView,
+    parseProfilesView
   );
 }
 
 export function createProfile(name: string): Promise<Profile> {
-  return invokeOrFallback<Profile>('create_profile', { name }, () => ({
-    id: `local-${Date.now()}`,
-    name: name.trim(),
-    created_at: ''
-  }));
+  return invokeOrFallback<Profile>(
+    TauriCommandName.CreateProfile,
+    { name },
+    () => ({
+      id: `local-${Date.now()}`,
+      name: name.trim(),
+      created_at: ''
+    }),
+    parseProfile
+  );
 }
 
 export function switchProfile(id: string): Promise<void> {
-  return invokeOrFallback<void>('switch_profile', { id }, () => undefined);
+  return invokeOrFallback<void>(
+    TauriCommandName.SwitchProfile,
+    { id },
+    () => undefined,
+    (value) => assertVoid(value, 'switch_profile response')
+  );
 }
 
 export function renameProfile(id: string, name: string): Promise<Profile> {
-  return invokeOrFallback<Profile>('rename_profile', { id, name }, () => ({
-    id,
-    name: name.trim(),
-    created_at: ''
-  }));
+  return invokeOrFallback<Profile>(
+    TauriCommandName.RenameProfile,
+    { id, name },
+    () => ({
+      id,
+      name: name.trim(),
+      created_at: ''
+    }),
+    parseProfile
+  );
 }
 
 export function deleteProfile(id: string): Promise<void> {
-  return invokeOrFallback<void>('delete_profile', { id }, () => undefined);
+  return invokeOrFallback<void>(
+    TauriCommandName.DeleteProfile,
+    { id },
+    () => undefined,
+    (value) => assertVoid(value, 'delete_profile response')
+  );
+}
+
+function parseProfile(value: unknown): Profile {
+  const raw = assertRecord(value, 'profile');
+  return {
+    id: assertString(raw.id, 'profile.id'),
+    name: assertString(raw.name, 'profile.name'),
+    created_at: assertString(raw.created_at, 'profile.created_at')
+  };
+}
+
+function parseProfiles(value: unknown): Profile[] {
+  if (!Array.isArray(value)) throw new Error('profiles must be an array');
+  return value.map(parseProfile);
+}
+
+function parseProfilesView(value: unknown): ProfilesView {
+  const raw = assertRecord(value, 'profiles view');
+  return {
+    active: assertString(raw.active, 'profiles view.active'),
+    index_active: assertString(raw.index_active, 'profiles view.index_active'),
+    profiles: parseProfiles(raw.profiles)
+  };
 }

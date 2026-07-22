@@ -17,58 +17,83 @@ use rusqlite::{params, Connection, OptionalExtension};
 use similar::{ChangeTag, TextDiff};
 
 use crate::db::Db;
-use crate::error::AppResult;
+use crate::error::{AppResult, CommandResult};
 
-fn word_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"[\p{L}\p{N}]+(?:['’_-][\p{L}\p{N}]+)*").unwrap())
+fn cached_regex(
+    name: &str,
+    pattern: &'static str,
+    slot: &'static OnceLock<Option<Regex>>,
+) -> Option<&'static Regex> {
+    slot.get_or_init(|| match Regex::new(pattern) {
+        Ok(re) => Some(re),
+        Err(err) => {
+            log::error!("[content-stats] invalid {name} regex: {err}");
+            None
+        }
+    })
+    .as_ref()
 }
-fn fence_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"(?s)```.*?```").unwrap())
+
+fn word_re() -> Option<&'static Regex> {
+    static RE: OnceLock<Option<Regex>> = OnceLock::new();
+    cached_regex("word", r"[\p{L}\p{N}]+(?:['’_-][\p{L}\p{N}]+)*", &RE)
 }
-fn inline_code_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"`[^`]*`").unwrap())
+fn fence_re() -> Option<&'static Regex> {
+    static RE: OnceLock<Option<Regex>> = OnceLock::new();
+    cached_regex("fence", r"(?s)```.*?```", &RE)
 }
-fn html_re() -> &'static Regex {
+fn inline_code_re() -> Option<&'static Regex> {
+    static RE: OnceLock<Option<Regex>> = OnceLock::new();
+    cached_regex("inline code", r"`[^`]*`", &RE)
+}
+fn html_re() -> Option<&'static Regex> {
     // HTML comments and tags (`<br />`, `</p>`, `<div class="x">`, autolinks).
     // Without this, a tag's name/attributes leak in as "words".
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"(?s)<!--.*?-->|</?[a-zA-Z][^>]*>").unwrap())
+    static RE: OnceLock<Option<Regex>> = OnceLock::new();
+    cached_regex("HTML", r"(?s)<!--.*?-->|</?[a-zA-Z][^>]*>", &RE)
 }
-fn image_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"!\[[^\]]*\]\([^)]*\)").unwrap())
+fn image_re() -> Option<&'static Regex> {
+    static RE: OnceLock<Option<Regex>> = OnceLock::new();
+    cached_regex("image", r"!\[[^\]]*\]\([^)]*\)", &RE)
 }
-fn link_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"\[([^\]]*)\]\([^)]*\)").unwrap())
+fn link_re() -> Option<&'static Regex> {
+    static RE: OnceLock<Option<Regex>> = OnceLock::new();
+    cached_regex("link", r"\[([^\]]*)\]\([^)]*\)", &RE)
 }
-fn punct_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"[#>*_~|\[\](){}:]").unwrap())
+fn punct_re() -> Option<&'static Regex> {
+    static RE: OnceLock<Option<Regex>> = OnceLock::new();
+    cached_regex("punctuation", r"[#>*_~|\[\](){}:]", &RE)
+}
+
+fn replace_all_owned(input: String, re: Option<&Regex>, replacement: &str) -> String {
+    match re {
+        Some(re) => re.replace_all(&input, replacement).into_owned(),
+        None => input,
+    }
 }
 
 /// Strip markdown noise to plain prose (code, images, link URLs, formatting
 /// punctuation), keeping link labels. Mirrors the TS `markdownToPlain`.
 pub fn markdown_to_plain(body: &str) -> String {
-    let s = fence_re().replace_all(body, " ");
-    let s = inline_code_re().replace_all(&s, " ");
-    let s = html_re().replace_all(&s, " ");
-    let s = image_re().replace_all(&s, " ");
-    let s = link_re().replace_all(&s, "${1}");
-    let s = punct_re().replace_all(&s, " ");
-    s.into_owned()
+    let s = replace_all_owned(body.to_string(), fence_re(), " ");
+    let s = replace_all_owned(s, inline_code_re(), " ");
+    let s = replace_all_owned(s, html_re(), " ");
+    let s = replace_all_owned(s, image_re(), " ");
+    let s = replace_all_owned(s, link_re(), "${1}");
+    replace_all_owned(s, punct_re(), " ")
 }
 
 /// Count real words (Unicode letter/number groups, internal `' ’ _ -` allowed).
 pub fn count_words(text: &str) -> i64 {
-    word_re().find_iter(text).count() as i64
+    word_re()
+        .map(|re| re.find_iter(text).count() as i64)
+        .unwrap_or(0)
 }
 
 fn word_tokens(text: &str) -> Vec<&str> {
-    word_re().find_iter(text).map(|m| m.as_str()).collect()
+    word_re()
+        .map(|re| re.find_iter(text).map(|m| m.as_str()).collect())
+        .unwrap_or_default()
 }
 
 /// Real-word delta `(added, removed)` between two markdown snapshots — the same
@@ -140,7 +165,7 @@ pub fn note_word_count_inner(conn: &Connection, note_id: &str) -> AppResult<i64>
 }
 
 #[tauri::command]
-pub fn note_word_count(db: tauri::State<'_, Db>, note_id: String) -> Result<i64, String> {
+pub fn note_word_count(db: tauri::State<'_, Db>, note_id: String) -> CommandResult<i64> {
     db.with_conn(|c| note_word_count_inner(c, &note_id))
         .map_err(Into::into)
 }

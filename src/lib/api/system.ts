@@ -8,7 +8,7 @@
  */
 
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
-import { isTauri } from './core';
+import { assertBoolean, assertVoid, isTauri, TauriCommandName } from './core';
 
 /**
  * True when the running binary was launched as an AppImage (i.e. the
@@ -21,7 +21,10 @@ import { isTauri } from './core';
  */
 export async function isAppImageInstall(): Promise<boolean> {
   if (!isTauri()) return false;
-  return await tauriInvoke<boolean>('is_appimage_install');
+  return assertBoolean(
+    await tauriInvoke<unknown>(TauriCommandName.IsAppimageInstall),
+    'is_appimage_install response'
+  );
 }
 
 /**
@@ -37,5 +40,8 @@ export async function isAppImageInstall(): Promise<boolean> {
  */
 export async function restartApp(): Promise<void> {
   if (!isTauri()) return;
-  await tauriInvoke<void>('restart_app');
+  assertVoid(
+    await tauriInvoke<unknown>(TauriCommandName.RestartApp),
+    'restart_app response'
+  );
 }

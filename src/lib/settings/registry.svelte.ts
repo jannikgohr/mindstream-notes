@@ -18,6 +18,7 @@ import {
   getDesktopLanguage,
   getDesktopThemeMode,
   getStartInTray,
+  isDesktopThemeMode,
   setCloseToTray,
   setCustomWindowDecorations,
   setDesktopLanguage,
@@ -120,7 +121,10 @@ export const SETTING_BINDINGS: Record<string, Binding> = {
       return localStorage.getItem('mode-watcher-mode') ?? 'system';
     },
     set: async (v) => {
-      const mode = v as 'light' | 'dark' | 'system';
+      if (!isDesktopThemeMode(v)) {
+        throw new Error('appearance.mode must be light, dark, or system');
+      }
+      const mode = v;
       setMode(mode);
       if (isTauri() && !isMobile()) await setDesktopThemeMode(mode);
     }

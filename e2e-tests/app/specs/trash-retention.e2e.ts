@@ -13,7 +13,6 @@ import {
   clickMenuItem,
   clickName,
   pressElementKey,
-  requireAppE2E,
   restartApp,
   setElementValue,
   treeItem,
@@ -30,10 +29,6 @@ async function createRootNote(title: string): Promise<void> {
 }
 
 describe('T3 trash lifecycle + retention', function () {
-  before(function () {
-    requireAppE2E(this);
-  });
-
   beforeEach(async () => {
     await waitForShell();
   });

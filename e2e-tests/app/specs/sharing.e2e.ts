@@ -34,12 +34,12 @@
 import { expect } from '@wdio/globals';
 
 import { provisionTwoAccounts, type TwoAccounts } from '../helpers/accounts.js';
-import { assertBackendReady, backendUrl } from '../helpers/backend.js';
+import { backendUrl } from '../helpers/backend.js';
 import {
   clientHelpers,
   loginClient,
-  requireBackendE2E,
   syncClient,
+  waitForClientsReady,
   type ClientHelpers
 } from '../helpers/harness.js';
 
@@ -317,8 +317,8 @@ describe('T4 collection sharing (manifest bundles)', function () {
   let B: ClientHelpers;
 
   before(async function () {
-    requireBackendE2E(this);
-    await assertBackendReady();
+    await waitForClientsReady({ browserA, browserB });
+
     const server = backendUrl();
 
     // Two real Etebase signups (not a shared-collection trick) so the sender

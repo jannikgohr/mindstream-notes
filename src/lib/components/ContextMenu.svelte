@@ -118,8 +118,14 @@
             ? 'text-destructive hover:bg-destructive/10 hover:text-destructive'
             : ''}"
           onclick={() => {
-            if (item.children?.length)
-              activeSubmenu = activeSubmenu === i ? null : i;
+            // A parent item always OPENS its submenu — never toggles it shut.
+            // pointerenter and focus already set `activeSubmenu = i`, so a
+            // toggle here would close the submenu that a preceding focus/hover
+            // just opened (the exact ordering is event-timing dependent), which
+            // silently loses the click. Closing is owned by pointerenter on a
+            // sibling and the outside-click dismiss, so a click that reaches a
+            // parent deterministically leaves its submenu open.
+            if (item.children?.length) activeSubmenu = i;
             else invoke(item);
           }}
           onfocus={() => (activeSubmenu = item.children?.length ? i : null)}

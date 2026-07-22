@@ -2,11 +2,15 @@
  * Shared harness for the real-app (T3) and collaboration (T4) e2e tiers.
  *
  * These tests drive the **packaged Tauri binary** over WebDriver (tauri-driver),
- * not the browser-fallback SPA. They are gated behind capability flags so the
- * suite skips cleanly when the binary / backend isn't available:
+ * not the browser-fallback SPA. Which tier runs is decided by which wdio config
+ * you invoke — `wdio.conf.ts` lists the single-client T3 specs, the multiremote
+ * configs list only the T4 ones — so there are no capability env flags to set.
  *
- *   - `MINDSTREAM_E2E_APP=1`     — the packaged app + tauri-driver are runnable
- *   - `MINDSTREAM_E2E_BACKEND=1` — the backend/ compose stack is up (T4 only)
+ * A missing backend is caught by `assertBackendReady()` (helpers/backend.ts),
+ * which every T4 spec calls first thing in its `before` hook and which fails
+ * fast with an actionable message. That is deliberately a FAILURE, not a skip:
+ * a suite that silently reports success while running nothing is worse than one
+ * that tells you the stack is down.
  *
  * The per-test isolation seam is `MINDSTREAM_PROFILE_DIR` (see
  * src-tauri/src/profiles.rs::dir_override, gated to dev builds and the
@@ -23,7 +27,7 @@
  */
 
 import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { freemem, tmpdir, totalmem } from 'node:os';
 import { join } from 'node:path';
 
 /** A Mocha test context (`this`) — enough to call `.skip()`. */
@@ -31,29 +35,22 @@ export interface Skippable {
   skip(): void;
 }
 
-export const APP_E2E = process.env.MINDSTREAM_E2E_APP === '1';
-export const BACKEND_E2E = process.env.MINDSTREAM_E2E_BACKEND === '1';
-
 /**
  * Native-dialog test hook (export/import/PDF pickers). Not yet implemented on
  * the Rust side — see docs/e2e/harness.md. Flip on via env once a hook exists so
  * the backup/PDF specs stop self-skipping.
+ *
+ * This is the app tier's one remaining flag, and unlike the removed
+ * `MINDSTREAM_E2E_APP` / `MINDSTREAM_E2E_BACKEND` it does not describe whether
+ * your environment is set up — those are now pre-flight checks that fail the
+ * run (helpers/preflight.ts). This one marks specs whose production-side hook
+ * does not exist yet, which no amount of environment setup can satisfy.
  */
 export const DIALOG_HOOK = process.env.MINDSTREAM_E2E_DIALOG_HOOK === '1';
 
-/** Skip the calling suite unless the packaged app is runnable. */
-export function requireAppE2E(ctx: Skippable): void {
-  if (!APP_E2E) ctx.skip();
-}
-
-/** Skip the calling suite unless the backend stack is up (T4). */
-export function requireBackendE2E(ctx: Skippable): void {
-  if (!APP_E2E || !BACKEND_E2E) ctx.skip();
-}
-
 /** Skip suites that drive a native file dialog until the Rust hook lands. */
 export function requireDialogHook(ctx: Skippable): void {
-  if (!APP_E2E || !DIALOG_HOOK) ctx.skip();
+  if (!DIALOG_HOOK) ctx.skip();
 }
 
 /**
@@ -74,6 +71,7 @@ export function freshProfileDir(): string {
 export async function restartApp(): Promise<void> {
   // `browser` is a wdio global available inside a session.
   await browser.reloadSession();
+  await waitForClientReady(browser, 'browser:restart');
 }
 
 // ---- Accessible-name selectors (mirror the browser-fallback role queries) ----
@@ -93,10 +91,96 @@ export function treeItem(name: string): ChainablePromiseElement {
   return byName('File tree').$(`aria/${name}`);
 }
 
+export async function waitForClientReady(
+  client: WebdriverIO.Browser,
+  label = 'client',
+  timeout = 90_000
+): Promise<void> {
+  let lastState = '<not probed yet>';
+  const started = Date.now();
+  let reloadedBlankBoot = false;
+  try {
+    await client.waitUntil(
+      async () => {
+        try {
+          const state = await client.execute(() => {
+            const buttonLabels = Array.from(
+              document.querySelectorAll('button')
+            ).map(
+              (button) =>
+                button.getAttribute('aria-label') ??
+                button.textContent?.trim() ??
+                ''
+            );
+            const bodyText = document.body?.innerText ?? '';
+            return {
+              readyState: document.readyState,
+              hasTauri: '__TAURI_INTERNALS__' in window,
+              hasShellText: bodyText.includes('Mindstream Notes'),
+              buttonCount: buttonLabels.length,
+              buttonLabels: buttonLabels.filter(Boolean).slice(0, 10),
+              bodyText: bodyText.slice(0, 300),
+              bootBlank:
+                bodyText.trim().length === 0 || bodyText.trim() === 'Loading…',
+              url: window.location.href,
+              visibility: document.visibilityState
+            };
+          });
+          lastState = JSON.stringify(state);
+          if (
+            state.bootBlank &&
+            !reloadedBlankBoot &&
+            Date.now() - started > 35_000
+          ) {
+            reloadedBlankBoot = true;
+            await client.reloadSession();
+            return false;
+          }
+          return (
+            state.hasTauri &&
+            state.readyState === 'complete' &&
+            state.hasShellText &&
+            state.buttonCount > 0
+          );
+        } catch (err) {
+          lastState =
+            err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+          return false;
+        }
+      },
+      {
+        timeout,
+        interval: 1_000,
+        timeoutMsg: `${label} did not become WebDriver-ready`
+      }
+    );
+  } catch (err) {
+    throw new Error(
+      `${err instanceof Error ? err.message : String(err)} ` +
+        `within ${timeout}ms (elapsed=${Date.now() - started}ms, ` +
+        `last=${lastState})`
+    );
+  }
+}
+
+export async function waitForClientsReady(
+  clients: Record<string, WebdriverIO.Browser>,
+  timeout = 90_000
+): Promise<void> {
+  for (const [label, client] of Object.entries(clients)) {
+    await waitForClientReady(client, label, timeout);
+  }
+}
+
+async function waitForDefaultClientReady(): Promise<void> {
+  await waitForClientReady(browser, 'browser');
+}
+
 export async function clickElement(
   element: ChainablePromiseElement,
   opts: { button?: 'left' | 'right' } = {}
 ): Promise<void> {
+  await waitForDefaultClientReady();
   const resolved = await element;
   await resolved.waitForDisplayed({ timeout: 30_000 });
   await browser.execute(
@@ -136,6 +220,7 @@ export async function setElementValue(
   element: ChainablePromiseElement,
   value: string
 ): Promise<void> {
+  await waitForDefaultClientReady();
   const resolved = await element;
   await resolved.waitForDisplayed({ timeout: 30_000 });
   await browser.execute(
@@ -167,6 +252,7 @@ export async function pressElementKey(
   key: string,
   opts: { ctrlKey?: boolean } = {}
 ): Promise<void> {
+  await waitForDefaultClientReady();
   const resolved = await element;
   await resolved.waitForDisplayed({ timeout: 30_000 });
   await browser.execute(
@@ -278,6 +364,95 @@ async function closeSettingsDialog(client: WebdriverIO.Browser): Promise<void> {
   });
 }
 
+/**
+ * Snapshot what the WebView actually holds, for attaching to a timeout.
+ *
+ * Distinguishes the possibilities behind "the button never appeared": a blank
+ * page (asset load failed / webview never painted), a page that rendered but
+ * boot stalled before the shell mounted, or a shell that mounted with the
+ * button under a different name. Deliberately tolerant — this runs when things
+ * are already broken, so every field degrades to a marker rather than throwing.
+ */
+export async function describeClientState(
+  client: WebdriverIO.Browser
+): Promise<string> {
+  try {
+    const state = await client.execute(() => {
+      const buttons = Array.from(document.querySelectorAll('button'))
+        .map((b) =>
+          (b.getAttribute('aria-label') ?? b.textContent ?? '').trim()
+        )
+        .filter((label) => label.length > 0);
+      return {
+        readyState: document.readyState,
+        url: location.href,
+        title: document.title,
+        bodyChars: document.body?.innerHTML.length ?? -1,
+        bodyText: (document.body?.innerText ?? '').slice(0, 200),
+        buttonCount: buttons.length,
+        buttons: buttons.slice(0, 25),
+        hasTauri: '__TAURI_INTERNALS__' in window,
+        // The app shell's own roots — present once Svelte has mounted.
+        hasAppRoot: !!document.querySelector('[data-sveltekit-hydrated], main'),
+        visibility: document.visibilityState
+      };
+    });
+    return JSON.stringify(state);
+  } catch (err) {
+    return `<unavailable: ${err instanceof Error ? err.message : String(err)}>`;
+  }
+}
+
+/**
+ * `waitForDisplayed` with a diagnosis attached to the timeout.
+ *
+ * The intermittent T4 failures are all "<element> still not displayed after
+ * 30000ms" on different elements, which tells us nothing about the mechanism.
+ * On timeout this keeps polling for up to `probeMs` more and records whether
+ * the element EVER appears — the single fact that splits the theories:
+ *
+ *   - appears late  → the app is just slow (contention / render stall); the fix
+ *     is the wait strategy.
+ *   - never appears → the synthesized event was lost or the element genuinely
+ *     isn't coming; raising the timeout would not have helped.
+ *
+ * Plus an app-state + host-memory snapshot, so a "never appears" case shows
+ * whether the shell was even mounted.
+ */
+async function waitDisplayedDiagnosed(
+  client: WebdriverIO.Browser,
+  element: Awaited<ChainablePromiseElement>,
+  probeMs = 60_000
+): Promise<void> {
+  const selector = String(element.selector);
+  try {
+    await element.waitForDisplayed({ timeout: 30_000 });
+    return;
+  } catch (err) {
+    const t0 = Date.now();
+    let appearedAfterMs = -1;
+    while (Date.now() - t0 < probeMs) {
+      if (await element.isDisplayed().catch(() => false)) {
+        appearedAfterMs = 30_000 + (Date.now() - t0);
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    const verdict =
+      appearedAfterMs >= 0
+        ? `SLOW: appeared after ~${appearedAfterMs}ms`
+        : `DEAD: never appeared within ${30_000 + probeMs}ms`;
+    const state = await describeClientState(client);
+    const freeGb = (freemem() / 1024 ** 3).toFixed(1);
+    const totalGb = (totalmem() / 1024 ** 3).toFixed(1);
+    throw new Error(
+      `${err instanceof Error ? err.message : String(err)}\n` +
+        `[verdict] ${verdict} for ${selector}\n` +
+        `[host] freeMem=${freeGb}GB/${totalGb}GB\n[app state] ${state}`
+    );
+  }
+}
+
 async function selectSelfHosted(client: WebdriverIO.Browser): Promise<void> {
   await client.execute(() => {
     const button = Array.from(document.querySelectorAll('button')).find(
@@ -309,11 +484,16 @@ export async function loginClient(
   client: WebdriverIO.Browser,
   input: LoginInput
 ): Promise<void> {
+  await waitForClientReady(client, `login:${input.username}`);
+
   // Route every interaction through the execute-based helpers: WebKitWebDriver
   // (Linux `wry`) rejects the native `element/click` and send-keys commands with
   // "unsupported operation", so clicks/fills must be synthesized as DOM events.
   const h = clientHelpers(client);
 
+  // The first interaction of every T4 spec. Its "Open settings still not
+  // displayed" timeout — like every clickElement wait — is diagnosed centrally
+  // by waitDisplayedDiagnosed (app state + slow-vs-dead verdict).
   await h.click('Open settings');
   await h.click('Account & Sync');
   await selectSelfHosted(client);
@@ -520,8 +700,9 @@ export function clientHelpers(client: WebdriverIO.Browser): ClientHelpers {
     element: ChainablePromiseElement,
     opts: { button?: 'left' | 'right' } = {}
   ): Promise<void> => {
+    await waitForClientReady(client);
     const resolved = await element;
-    await resolved.waitForDisplayed({ timeout: 30_000 });
+    await waitDisplayedDiagnosed(client, resolved);
     await client.execute(
       (el: HTMLElement, button: 'left' | 'right') => {
         el.scrollIntoView({ block: 'center', inline: 'center' });

@@ -57,15 +57,15 @@ fn empty_trash_clears_direct_children() {
     let f1 = make_folder(&db, "f", Some(TRASH_ID.into()));
     let keep = make_note(&db, None);
 
-    let before = db.with_conn(|c| counts(c)).unwrap();
+    let before = db.with_conn(counts).unwrap();
     assert_eq!(before.notes, 1);
     assert_eq!(before.folders, 1);
 
-    let deleted = db.with_conn_mut(|c| empty(c)).unwrap();
+    let deleted = db.with_conn_mut(empty).unwrap();
     assert_eq!(deleted.notes, 1);
     assert_eq!(deleted.folders, 1);
 
-    let after = db.with_conn(|c| counts(c)).unwrap();
+    let after = db.with_conn(counts).unwrap();
     assert_eq!(after.notes, 0);
     assert_eq!(after.folders, 0);
 
@@ -88,12 +88,12 @@ fn empty_trash_counts_recursive_descendants() {
     let _direct = make_note(&db, Some(outer.clone()));
     move_to(&db, &outer, Some(TRASH_ID.into()));
 
-    let c = db.with_conn(|conn| counts(conn)).unwrap();
+    let c = db.with_conn(counts).unwrap();
     assert_eq!(c.folders, 2, "outer + inner");
     assert_eq!(c.notes, 2, "nested + direct");
 
-    db.with_conn_mut(|conn| empty(conn)).unwrap();
-    let after = db.with_conn(|conn| counts(conn)).unwrap();
+    db.with_conn_mut(empty).unwrap();
+    let after = db.with_conn(counts).unwrap();
     assert_eq!(after.notes, 0);
     assert_eq!(after.folders, 0);
 }
@@ -102,12 +102,23 @@ fn empty_trash_counts_recursive_descendants() {
 fn empty_trash_is_noop_when_trash_is_empty() {
     let db = open_memory_for_tests();
     let _keep = make_note(&db, None);
-    let deleted = db.with_conn_mut(|c| empty(c)).unwrap();
+    let deleted = db.with_conn_mut(empty).unwrap();
     assert_eq!(deleted.notes, 0);
     assert_eq!(deleted.folders, 0);
 }
 
 // ---------- Retention sweep ----------
+
+#[test]
+fn retention_scheduler_starts_disabled() {
+    let scheduler = TrashRetentionScheduler::new();
+    assert!(!scheduler.enabled.load(Ordering::Relaxed));
+    assert_eq!(scheduler.days.load(Ordering::Relaxed), 0);
+
+    let defaulted = TrashRetentionScheduler::default();
+    assert!(!defaulted.enabled.load(Ordering::Relaxed));
+    assert_eq!(defaulted.days.load(Ordering::Relaxed), 0);
+}
 
 fn trashed_at_of_note(db: &Db, id: &str) -> Option<String> {
     db.with_conn(|c| {
@@ -334,4 +345,19 @@ fn sweep_with_zero_days_via_command_is_noop() {
     };
     assert_eq!(purged, 0);
     db.with_conn(|c| crate::notes::load(c, &id)).unwrap();
+}
+
+#[test]
+fn sweep_returns_zero_without_starting_transaction_work_when_nothing_is_old() {
+    let db = open_memory_for_tests();
+    let fresh_note = make_note(&db, Some(TRASH_ID.into()));
+    let fresh_folder = make_folder(&db, "fresh", Some(TRASH_ID.into()));
+
+    let purged = db.with_conn_mut(|c| sweep(c, 30)).unwrap();
+    assert_eq!(purged, 0);
+
+    db.with_conn(|c| crate::notes::load(c, &fresh_note))
+        .unwrap();
+    db.with_conn(|c| crate::collections::get(c, &fresh_folder))
+        .unwrap();
 }

@@ -27,12 +27,12 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::{Mutex, MutexGuard};
 
+use crate::app_events::AppEvent;
 use crate::auth;
 use crate::db::Db;
+use crate::error::{CommandError, CommandErrorCode, CommandResult};
 
-use super::{
-    catch_blocking_panic, preflight_reachable, run, SyncCompletedEvent, SYNC_COMPLETED_EVENT,
-};
+use super::{catch_blocking_panic, preflight_reachable, run, SyncCompletedEvent};
 
 /// Default tick interval (seconds) before the JS side hydrates the
 /// schedule from settings. 30s matches the previous JS `'live'`
@@ -160,8 +160,9 @@ async fn tick(app: &AppHandle) -> Result<(), String> {
         notes_pulled_ids: delta.notes_pulled_ids,
         assets_pulled_ids: delta.assets_pulled_ids,
     };
-    if let Err(err) = app.emit(SYNC_COMPLETED_EVENT, &event) {
-        log::warn!("[sync-scheduler] failed to emit {SYNC_COMPLETED_EVENT}: {err}");
+    let event_name = AppEvent::SyncCompleted.as_str();
+    if let Err(err) = app.emit(event_name, &event) {
+        log::warn!("[sync-scheduler] failed to emit {event_name}: {err}");
     }
     crate::collab_events::emit_collab_credentials_changed(
         app,
@@ -173,11 +174,75 @@ async fn tick(app: &AppHandle) -> Result<(), String> {
 // ---------- Tauri commands ----------
 
 #[tauri::command]
-pub fn set_sync_schedule(scheduler: State<'_, SyncScheduler>, enabled: bool, interval_secs: u64) {
+pub fn set_sync_schedule(
+    scheduler: State<'_, SyncScheduler>,
+    enabled: bool,
+    interval_secs: u64,
+) -> CommandResult<()> {
+    apply_sync_schedule(&scheduler, enabled, interval_secs)
+}
+
+fn apply_sync_schedule(
+    scheduler: &SyncScheduler,
+    enabled: bool,
+    interval_secs: u64,
+) -> CommandResult<()> {
+    let interval = validate_sync_schedule(enabled, interval_secs)?;
     scheduler.enabled.store(enabled, Ordering::Relaxed);
-    if interval_secs > 0 {
+    if let Some(interval_secs) = interval {
         scheduler
             .interval_secs
             .store(interval_secs, Ordering::Relaxed);
+    }
+    Ok(())
+}
+
+fn validate_sync_schedule(enabled: bool, interval_secs: u64) -> CommandResult<Option<u64>> {
+    if enabled && interval_secs == 0 {
+        return Err(CommandError::new(
+            CommandErrorCode::InvalidArgument,
+            "enabled sync schedule requires a positive interval",
+        ));
+    }
+    Ok((interval_secs > 0).then_some(interval_secs))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn apply_sync_schedule_updates_enabled_state_and_interval() {
+        let scheduler = SyncScheduler::new();
+
+        apply_sync_schedule(&scheduler, true, 120).unwrap();
+
+        assert!(scheduler.enabled.load(Ordering::Relaxed));
+        assert_eq!(scheduler.interval_secs.load(Ordering::Relaxed), 120);
+    }
+
+    #[test]
+    fn disabled_zero_interval_preserves_previous_interval() {
+        let scheduler = SyncScheduler::new();
+        apply_sync_schedule(&scheduler, true, 300).unwrap();
+
+        apply_sync_schedule(&scheduler, false, 0).unwrap();
+
+        assert!(!scheduler.enabled.load(Ordering::Relaxed));
+        assert_eq!(scheduler.interval_secs.load(Ordering::Relaxed), 300);
+    }
+
+    #[test]
+    fn enabled_zero_interval_is_rejected_without_mutating_state() {
+        let scheduler = SyncScheduler::new();
+
+        let err = apply_sync_schedule(&scheduler, true, 0).unwrap_err();
+
+        assert_eq!(err.code, CommandErrorCode::InvalidArgument);
+        assert!(!scheduler.enabled.load(Ordering::Relaxed));
+        assert_eq!(
+            scheduler.interval_secs.load(Ordering::Relaxed),
+            DEFAULT_INTERVAL_SECS
+        );
     }
 }

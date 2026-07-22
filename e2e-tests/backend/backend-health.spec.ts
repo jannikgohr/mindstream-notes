@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import http from 'node:http';
 import { URL } from 'node:url';
 import { expect, test } from '@playwright/test';
+import { backendUrl } from '../shared/backend-target.js';
 import { makeRoom } from './collab-room';
 
 /**
@@ -17,14 +18,11 @@ import { makeRoom } from './collab-room';
  *   /yjs         → yjs-relay         (markdown + PDF Yjs collab)
  *   /            → etebase           (encrypted storage + auth)
  *
- * Gated behind MINDSTREAM_E2E_BACKEND so `pnpm test:e2e:backend` skips cleanly
- * when the stack isn't running. See e2e-tests/backend/playwright.config.ts to run it.
+ * The stack itself is a precondition, checked once in global-setup.ts — see
+ * e2e-tests/backend/playwright.config.ts to run this suite.
  */
 
-const ENABLED = !!process.env.MINDSTREAM_E2E_BACKEND;
-const BASE = (
-  process.env.MINDSTREAM_E2E_BACKEND_URL ?? 'http://localhost:8080'
-).replace(/\/$/, '');
+const BASE = backendUrl();
 
 /**
  * Attempt a WebSocket upgrade and resolve with the HTTP status the server
@@ -72,11 +70,6 @@ function wsHandshakeStatus(url: string, timeoutMs = 8000): Promise<number> {
 }
 
 test.describe('local backend health (mindstream-server)', () => {
-  test.skip(
-    !ENABLED,
-    'Set MINDSTREAM_E2E_BACKEND=1 and bring up backend/ (docker compose up -d) to run backend health checks.'
-  );
-
   test('nginx edge is live (/healthz)', async ({ request }) => {
     const res = await request.get(`${BASE}/healthz`);
     expect(res.status()).toBe(200);

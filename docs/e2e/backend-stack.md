@@ -18,11 +18,9 @@ pnpm backend:test:down    # stop
 pnpm backend:test:reset   # wipe the volume for a clean run
 ```
 
-Then point the T4 specs at it:
-
-```sh
-MINDSTREAM_E2E_BACKEND=1 MINDSTREAM_E2E_BACKEND_URL=http://localhost:18080 …
-```
+The T4 specs default to this stack (`http://localhost:18080`), so there is
+nothing to set — just run them. `MINDSTREAM_E2E_BACKEND_URL` overrides the
+target if you need to point at a different edge.
 
 (The full-featured `docker compose up` on port `8080` from
 [backend/README.md](../../backend/README.md) is for manual use; the tests use
@@ -35,7 +33,7 @@ single nginx edge (nginx `/healthz`, yjs-relay `:1234`, the excalidraw-room
 socket.io handshake, Etebase). Run it as a readiness check before a T4 run:
 
 ```sh
-MINDSTREAM_E2E_BACKEND=1 pnpm test:e2e:backend
+pnpm test:e2e:backend
 ```
 
 It's the only T4-adjacent piece runnable without the packaged app.

@@ -40,7 +40,7 @@
   import { sanitizeDockBlob } from '$lib/desktop/dock-layout-restore';
   import { startPdfSearchIndexing } from '$lib/pdf/search-index-backfill';
   import { pruneHistoryOnStartup } from '$lib/history/retention';
-  import { listen } from '$lib/api/events';
+  import { listen, TauriEventName } from '$lib/api/events';
   import {
     setActiveNote,
     setLeftSidebarWidth,
@@ -693,10 +693,10 @@
     const unsub = subscribeOpenNoteRequest((id) => {
       void openNote(id);
     });
-    const trayUnlisten = listen('tray-note-created', (payload) => {
+    const trayUnlisten = listen(TauriEventName.TrayNoteCreated, (payload) => {
       void openTrayCreatedNote(payload.note_id);
     });
-    const showAppUnlisten = listen('show-app', () => {
+    const showAppUnlisten = listen(TauriEventName.ShowApp, () => {
       void focusMainWindow();
     });
 

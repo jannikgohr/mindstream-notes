@@ -20,12 +20,19 @@ function storageKey(session: SessionInfo): string {
 function parseStored(value: string | null): CollabSigningMaterial | null {
   if (!value) return null;
   try {
-    const parsed = JSON.parse(value) as Partial<CollabSigningMaterial>;
-    if (parsed.publicKeyB64 && parsed.privateKeyPkcs8B64) {
+    const parsed: unknown = JSON.parse(value);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return null;
+    }
+    const record = parsed as Partial<CollabSigningMaterial>;
+    if (
+      typeof record.publicKeyB64 === 'string' &&
+      typeof record.privateKeyPkcs8B64 === 'string'
+    ) {
       return {
-        username: parsed.username ?? '',
-        publicKeyB64: parsed.publicKeyB64,
-        privateKeyPkcs8B64: parsed.privateKeyPkcs8B64
+        username: typeof record.username === 'string' ? record.username : '',
+        publicKeyB64: record.publicKeyB64,
+        privateKeyPkcs8B64: record.privateKeyPkcs8B64
       };
     }
   } catch {

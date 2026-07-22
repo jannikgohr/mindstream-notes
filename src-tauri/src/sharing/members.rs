@@ -38,7 +38,7 @@ pub(super) fn local_share_scope_id(db: &Db, collection_id: &str) -> AppResult<Op
 pub async fn list_collection_members(
     app: AppHandle,
     collection_id: String,
-) -> Result<Vec<CollectionMember>, String> {
+) -> CommandResult<Vec<CollectionMember>> {
     tauri::async_runtime::spawn_blocking(move || {
         let account = restore_required(&app)?;
         let db = app.state::<Db>();
@@ -91,7 +91,7 @@ pub async fn list_collection_members(
 pub async fn set_collection_member_access(
     app: AppHandle,
     input: SetMemberAccessInput,
-) -> Result<(), String> {
+) -> CommandResult<()> {
     tauri::async_runtime::spawn_blocking(move || {
         let SetMemberAccessInput {
             collection_id,
@@ -149,7 +149,7 @@ pub(super) fn access_change_requires_collab_rotation(access_level: ShareAccessLe
 pub async fn remove_collection_member(
     app: AppHandle,
     input: RemoveMemberInput,
-) -> Result<(), String> {
+) -> CommandResult<()> {
     tauri::async_runtime::spawn_blocking(move || {
         let RemoveMemberInput {
             collection_id,
@@ -197,7 +197,7 @@ pub(super) fn scope_member_remove_error(
 }
 
 #[tauri::command]
-pub async fn accept_collection_invitation(app: AppHandle, id: String) -> Result<(), String> {
+pub async fn accept_collection_invitation(app: AppHandle, id: String) -> CommandResult<()> {
     tauri::async_runtime::spawn_blocking(move || {
         let account = restore_required(&app)?;
         let manager = account
@@ -223,7 +223,7 @@ pub async fn accept_collection_invitation(app: AppHandle, id: String) -> Result<
 }
 
 #[tauri::command]
-pub async fn reject_collection_invitation(app: AppHandle, id: String) -> Result<(), String> {
+pub async fn reject_collection_invitation(app: AppHandle, id: String) -> CommandResult<()> {
     tauri::async_runtime::spawn_blocking(move || {
         let account = restore_required(&app)?;
         let manager = account
@@ -245,7 +245,7 @@ pub async fn reject_collection_invitation(app: AppHandle, id: String) -> Result<
 pub fn get_collection_share_state(
     db: tauri::State<'_, Db>,
     collection_id: String,
-) -> Result<CollectionShareState, String> {
+) -> CommandResult<CollectionShareState> {
     db.with_conn(|conn| local_share_state(conn, &collection_id))
         .map_err(Into::into)
 }

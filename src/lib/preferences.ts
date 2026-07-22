@@ -45,33 +45,68 @@ const VALID_SORTS = new Set<SortStrategy>([
 
 const VALID_DIRECTIONS = new Set<SortDirection>(['asc', 'desc']);
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function optionalBoolean(value: unknown, fallback: boolean): boolean {
+  return typeof value === 'boolean' ? value : fallback;
+}
+
+function optionalWidth(
+  value: unknown,
+  fallback: number,
+  min: number,
+  max: number
+): number {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? clamp(value, min, max)
+    : fallback;
+}
+
+function optionalSortStrategy(value: unknown): SortStrategy {
+  return typeof value === 'string' && VALID_SORTS.has(value as SortStrategy)
+    ? (value as SortStrategy)
+    : DEFAULT_PREFERENCES.sortStrategy;
+}
+
+function optionalSortDirection(value: unknown): SortDirection {
+  return typeof value === 'string' &&
+    VALID_DIRECTIONS.has(value as SortDirection)
+    ? (value as SortDirection)
+    : DEFAULT_PREFERENCES.sortDirection;
+}
+
 export function loadPreferences(): Preferences {
   if (!isBrowser()) return { ...DEFAULT_PREFERENCES };
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return { ...DEFAULT_PREFERENCES };
-    const parsed = JSON.parse(raw) as Partial<Preferences>;
+    const parsed = JSON.parse(raw);
+    if (!isRecord(parsed)) return { ...DEFAULT_PREFERENCES };
     return {
-      ...DEFAULT_PREFERENCES,
-      ...parsed,
-      leftSidebarWidth: clamp(
-        parsed.leftSidebarWidth ?? DEFAULT_PREFERENCES.leftSidebarWidth,
+      leftSidebarWidth: optionalWidth(
+        parsed.leftSidebarWidth,
+        DEFAULT_PREFERENCES.leftSidebarWidth,
         160,
         600
       ),
-      rightSidebarWidth: clamp(
-        parsed.rightSidebarWidth ?? DEFAULT_PREFERENCES.rightSidebarWidth,
+      rightSidebarWidth: optionalWidth(
+        parsed.rightSidebarWidth,
+        DEFAULT_PREFERENCES.rightSidebarWidth,
         180,
         600
       ),
-      sortStrategy:
-        parsed.sortStrategy && VALID_SORTS.has(parsed.sortStrategy)
-          ? parsed.sortStrategy
-          : DEFAULT_PREFERENCES.sortStrategy,
-      sortDirection:
-        parsed.sortDirection && VALID_DIRECTIONS.has(parsed.sortDirection)
-          ? parsed.sortDirection
-          : DEFAULT_PREFERENCES.sortDirection
+      leftSidebarOpen: optionalBoolean(
+        parsed.leftSidebarOpen,
+        DEFAULT_PREFERENCES.leftSidebarOpen
+      ),
+      rightSidebarOpen: optionalBoolean(
+        parsed.rightSidebarOpen,
+        DEFAULT_PREFERENCES.rightSidebarOpen
+      ),
+      sortStrategy: optionalSortStrategy(parsed.sortStrategy),
+      sortDirection: optionalSortDirection(parsed.sortDirection)
     };
   } catch (err) {
     console.warn('[preferences] load failed, using defaults', err);

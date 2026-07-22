@@ -19,7 +19,7 @@ import {
 
 describe('T3 backup export / import', function () {
   before(function () {
-    // Skips unless MINDSTREAM_E2E_APP=1 AND a dialog hook is wired.
+    // Skips unless a native-dialog hook is wired (see harness.ts).
     requireDialogHook(this);
   });
 

@@ -12,12 +12,12 @@ import { fileURLToPath } from 'node:url';
  *   - it lives in `e2e-tests/backend/`, so the default `pnpm test:e2e` run and CI
  *     never pick these specs up.
  *
- * The suite is gated behind `MINDSTREAM_E2E_BACKEND` (set inside the specs), so
- * `pnpm test:e2e:backend` skips cleanly when the stack isn't up. To run it:
+ * There is no enable-flag: `global-setup.ts` health-checks the stack and fails
+ * the run if it isn't answering, so a missing stack can't masquerade as a pass.
+ * To run it:
  *
- *   cd backend && cp .env.example .env   # set POSTGRES_PASSWORD
- *   docker compose up -d --build         # stack at http://localhost:8080
- *   cd .. && MINDSTREAM_E2E_BACKEND=1 pnpm test:e2e:backend
+ *   pnpm backend:test:up          # test stack at http://localhost:18080
+ *   pnpm test:e2e:backend
  *
  * Point at a non-default edge with MINDSTREAM_E2E_BACKEND_URL.
  */
@@ -28,6 +28,8 @@ const repoRoot = resolve(here, '../..');
 export default defineConfig({
   testDir: './',
   outputDir: resolve(repoRoot, '.output/test-results/backend'),
+  // Requirement check before any spec runs — see global-setup.ts.
+  globalSetup: resolve(here, 'global-setup.ts'),
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: 0,

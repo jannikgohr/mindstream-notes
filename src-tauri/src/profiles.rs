@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::{AppError, AppResult};
+use crate::error::{AppError, AppResult, CommandResult};
 
 /// Env var pointing the active profile dir at an arbitrary path — the
 /// e2e/test isolation seam. Honored only when [`dir_override_allowed`].
@@ -340,10 +340,10 @@ pub struct ProfilesView {
 }
 
 #[tauri::command]
-pub fn list_profiles(app: tauri::AppHandle) -> Result<ProfilesView, String> {
+pub fn list_profiles(app: tauri::AppHandle) -> CommandResult<ProfilesView> {
     use tauri::Manager;
-    let root = crate::paths::app_data_root(&app).map_err(String::from)?;
-    let index = load_or_init(&root).map_err(String::from)?;
+    let root = crate::paths::app_data_root(&app)?;
+    let index = load_or_init(&root)?;
     let active = app
         .try_state::<crate::paths::ActiveProfile>()
         .map(|p| p.id.clone())
@@ -356,32 +356,32 @@ pub fn list_profiles(app: tauri::AppHandle) -> Result<ProfilesView, String> {
 }
 
 #[tauri::command]
-pub fn create_profile(app: tauri::AppHandle, name: String) -> Result<Profile, String> {
-    let root = crate::paths::app_data_root(&app).map_err(String::from)?;
-    add_profile(&root, &name).map_err(String::from)
+pub fn create_profile(app: tauri::AppHandle, name: String) -> CommandResult<Profile> {
+    let root = crate::paths::app_data_root(&app)?;
+    Ok(add_profile(&root, &name)?)
 }
 
 #[tauri::command]
-pub fn switch_profile(app: tauri::AppHandle, id: String) -> Result<(), String> {
-    let root = crate::paths::app_data_root(&app).map_err(String::from)?;
-    set_active(&root, &id).map_err(String::from)
+pub fn switch_profile(app: tauri::AppHandle, id: String) -> CommandResult<()> {
+    let root = crate::paths::app_data_root(&app)?;
+    Ok(set_active(&root, &id)?)
 }
 
 #[tauri::command]
-pub fn rename_profile(app: tauri::AppHandle, id: String, name: String) -> Result<Profile, String> {
-    let root = crate::paths::app_data_root(&app).map_err(String::from)?;
-    set_name(&root, &id, &name).map_err(String::from)
+pub fn rename_profile(app: tauri::AppHandle, id: String, name: String) -> CommandResult<Profile> {
+    let root = crate::paths::app_data_root(&app)?;
+    Ok(set_name(&root, &id, &name)?)
 }
 
 #[tauri::command]
-pub fn delete_profile(app: tauri::AppHandle, id: String) -> Result<(), String> {
+pub fn delete_profile(app: tauri::AppHandle, id: String) -> CommandResult<()> {
     use tauri::Manager;
-    let root = crate::paths::app_data_root(&app).map_err(String::from)?;
+    let root = crate::paths::app_data_root(&app)?;
     let active = app
         .try_state::<crate::paths::ActiveProfile>()
         .map(|p| p.id.clone())
         .unwrap_or_else(|| DEFAULT_PROFILE_ID.to_string());
-    delete(&root, &id, &active).map_err(String::from)?;
+    delete(&root, &id, &active)?;
     // Best-effort: drop the deleted vault's keyring session so no stale
     // credential lingers after its files are gone.
     crate::auth::forget_profile_keyring(&id);

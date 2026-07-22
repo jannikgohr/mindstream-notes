@@ -85,6 +85,37 @@
           };
         };
     </script>
+    <script>
+      /*
+       * Last-ditch bootstrap recovery for WebView asset-loader stalls.
+       *
+       * The Svelte page has its own retry path once the app entry runs, but a
+       * stalled entry chunk means that code never mounts. This inline watchdog
+       * is deliberately tiny and bounded: if the document is complete but the
+       * body is still blank or only showing the loading placeholder after a
+       * generous delay, reload once from a fresh asset request.
+       */
+      (function () {
+        var key = 'mindstream:boot-reloads';
+        var maxReloads = 2;
+        window.setTimeout(function () {
+          try {
+            var text =
+              document.body && document.body.innerText
+                ? document.body.innerText.trim()
+                : '';
+            if (text && text !== 'Loading…') return;
+            var used = Number(sessionStorage.getItem(key) || '0');
+            if (used >= maxReloads) return;
+            sessionStorage.setItem(key, String(used + 1));
+            console.warn('[boot] app shell did not mount; reloading document');
+            location.reload();
+          } catch (_) {
+            /* no-op */
+          }
+        }, 30000);
+      })();
+    </script>
     <style>
       /*
        * Bootstrap background colours so the very first paint matches the

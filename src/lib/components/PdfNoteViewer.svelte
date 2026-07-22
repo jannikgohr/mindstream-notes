@@ -45,7 +45,7 @@
     setPdfText,
     type VersionAction
   } from '$lib/api';
-  import { listen } from '$lib/api/events';
+  import { listen, TauriEventName } from '$lib/api/events';
   import { extractTextFromDocument } from '$lib/pdf/extract-text';
   import { base64ToBytes } from '$lib/editor/base64';
   import {
@@ -1902,7 +1902,7 @@
       await tick();
       bumpRenderVersion();
 
-      void listen('sync-completed', async (payload) => {
+      void listen(TauriEventName.SyncCompleted, async (payload) => {
         // Refresh the shared signature library so signatures added/removed on
         // another device show up here (and in any other open viewer) without
         // reopening. The reconciling effect re-arms the selection if needed.
@@ -1920,7 +1920,7 @@
       }).then((unlisten) => {
         unsubSync = unlisten;
       });
-      void listen('collab-credentials-changed', (payload) => {
+      void listen(TauriEventName.CollabCredentialsChanged, (payload) => {
         if (collabCredentialsChangedForNote(payload, noteId)) {
           void setupCollabProvider();
         }

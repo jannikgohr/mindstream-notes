@@ -4,7 +4,7 @@
  * lives in e2e-tests/browser/note-history.spec.ts; here the value is the *real* capture /
  * restore / undo round-trip and that it survives an app restart.
  *
- * Run: MINDSTREAM_E2E_APP=1 pnpm test:e2e:app
+ * Run: pnpm test:e2e:app
  */
 
 import { expect } from '@wdio/globals';
@@ -13,7 +13,6 @@ import {
   clickName,
   insertText,
   pressElementKey,
-  requireAppE2E,
   restartApp,
   setElementValue,
   waitForShell
@@ -36,10 +35,6 @@ async function typeInEditor(text: string): Promise<void> {
 }
 
 describe('T3 note history', function () {
-  before(function () {
-    requireAppE2E(this);
-  });
-
   beforeEach(async () => {
     await waitForShell();
   });

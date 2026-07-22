@@ -7,7 +7,14 @@
  */
 
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
-import { isTauri } from './core';
+import {
+  assertNumber,
+  assertRecord,
+  assertString,
+  assertVoid,
+  isTauri,
+  TauriCommandName
+} from './core';
 
 export interface SyncReport {
   folders_pulled: number;
@@ -23,7 +30,25 @@ export async function syncNow(): Promise<SyncReport> {
   if (!isTauri()) {
     throw new Error('Sync is only available in the desktop app.');
   }
-  return await tauriInvoke<SyncReport>('sync_now');
+  return parseSyncReport(await tauriInvoke<unknown>(TauriCommandName.SyncNow));
+}
+
+export interface SyncScheduleInput {
+  enabled: boolean;
+  intervalSecs: number;
+}
+
+export async function setSyncSchedule(input: SyncScheduleInput): Promise<void> {
+  assertSyncScheduleInput(input);
+  if (!isTauri()) return;
+  const args = {
+    enabled: input.enabled,
+    intervalSecs: input.intervalSecs
+  };
+  assertVoid(
+    await tauriInvoke<unknown>(TauriCommandName.SetSyncSchedule, args),
+    'set_sync_schedule response'
+  );
 }
 
 /**
@@ -57,9 +82,110 @@ export async function noteRoomInfo(
   id: string,
   writerPublicKeyB64?: string
 ): Promise<RoomInfo | null> {
+  assertRequiredString(id, 'id');
+  if (writerPublicKeyB64 !== undefined) {
+    assertRequiredString(writerPublicKeyB64, 'writerPublicKeyB64');
+  }
   if (!isTauri()) return null;
-  return await tauriInvoke<RoomInfo | null>('note_room_info', {
-    id,
-    writerPublicKeyB64: writerPublicKeyB64 ?? null
-  });
+  return parseNullableRoomInfo(
+    await tauriInvoke<unknown>(TauriCommandName.NoteRoomInfo, {
+      id,
+      writerPublicKeyB64: writerPublicKeyB64 ?? null
+    })
+  );
+}
+
+function assertRequiredString(value: string, context: string): void {
+  if (value.trim().length === 0) {
+    throw new Error(`${context} must be a non-empty string`);
+  }
+}
+
+function assertSyncScheduleInput(input: SyncScheduleInput): void {
+  if (typeof input.enabled !== 'boolean') {
+    throw new Error('sync schedule enabled must be a boolean');
+  }
+  if (!Number.isInteger(input.intervalSecs) || input.intervalSecs < 0) {
+    throw new Error(
+      'sync schedule intervalSecs must be a non-negative integer'
+    );
+  }
+  if (input.enabled && input.intervalSecs === 0) {
+    throw new Error('enabled sync schedule requires a positive interval');
+  }
+}
+
+function parseSyncReport(value: unknown): SyncReport {
+  const raw = assertRecord(value, 'sync report');
+  return {
+    folders_pulled: assertNumber(
+      raw.folders_pulled,
+      'sync report.folders_pulled'
+    ),
+    folders_pushed: assertNumber(
+      raw.folders_pushed,
+      'sync report.folders_pushed'
+    ),
+    notes_pulled: assertNumber(raw.notes_pulled, 'sync report.notes_pulled'),
+    notes_pushed: assertNumber(raw.notes_pushed, 'sync report.notes_pushed'),
+    assets_pulled: assertNumber(raw.assets_pulled, 'sync report.assets_pulled'),
+    assets_pushed: assertNumber(raw.assets_pushed, 'sync report.assets_pushed'),
+    conflicts_resolved: assertNumber(
+      raw.conflicts_resolved,
+      'sync report.conflicts_resolved'
+    )
+  };
+}
+
+function parseRoomInfo(value: unknown): RoomInfo {
+  const raw = assertRecord(value, 'room info');
+  const writerAuth =
+    raw.writer_auth === null || raw.writer_auth === undefined
+      ? null
+      : parseWriterAuth(raw.writer_auth);
+  return {
+    room_id: assertString(raw.room_id, 'room info.room_id'),
+    key_b64: assertString(raw.key_b64, 'room info.key_b64'),
+    collab_epoch: assertNumber(raw.collab_epoch, 'room info.collab_epoch'),
+    writer_auth: writerAuth,
+    join_private_key_pkcs8_b64:
+      raw.join_private_key_pkcs8_b64 === undefined
+        ? undefined
+        : assertString(
+            raw.join_private_key_pkcs8_b64,
+            'room info.join_private_key_pkcs8_b64'
+          )
+  };
+}
+
+function parseNullableRoomInfo(value: unknown): RoomInfo | null {
+  if (value === null || value === undefined) return null;
+  return parseRoomInfo(value);
+}
+
+function parseWriterAuth(value: unknown): NonNullable<RoomInfo['writer_auth']> {
+  const raw = assertRecord(value, 'room info.writer_auth');
+  if (!Array.isArray(raw.authorized_writers)) {
+    throw new Error(
+      'room info.writer_auth.authorized_writers must be an array'
+    );
+  }
+  return {
+    authorized_writers: raw.authorized_writers.map((item, index) => {
+      const writer = assertRecord(
+        item,
+        `room info.writer_auth.authorized_writers[${index}]`
+      );
+      return {
+        username: assertString(
+          writer.username,
+          `room info.writer_auth.authorized_writers[${index}].username`
+        ),
+        public_key_b64: assertString(
+          writer.public_key_b64,
+          `room info.writer_auth.authorized_writers[${index}].public_key_b64`
+        )
+      };
+    })
+  };
 }

@@ -11,9 +11,17 @@
  * gets pushed automatically.
  */
 
-import { invokeOrFallback } from './core';
+import {
+  assertBoolean,
+  assertNumber,
+  assertNumberArray,
+  assertRecord,
+  assertString,
+  TauriCommandName,
+  invokeOrFallback
+} from './core';
 import { mockApi } from './mock-store';
-import type { Note } from './notes';
+import { parseNote, type Note } from './notes';
 
 export interface AssetSummary {
   id: string;
@@ -49,27 +57,52 @@ export interface ImportPdfNoteInput {
 }
 
 export function uploadDrawingAsset(input: UploadAssetInput): Promise<Asset> {
-  return invokeOrFallback<Asset>('upload_drawing_asset', { input }, () =>
-    mockApi.uploadDrawingAsset(input)
+  return invokeOrFallback<Asset>(
+    TauriCommandName.UploadDrawingAsset,
+    { input },
+    () => mockApi.uploadDrawingAsset(input),
+    parseAsset
   );
 }
 
 export function fetchDrawingAsset(id: string): Promise<Asset> {
-  return invokeOrFallback<Asset>('fetch_drawing_asset', { id }, () =>
-    mockApi.fetchDrawingAsset(id)
+  return invokeOrFallback<Asset>(
+    TauriCommandName.FetchDrawingAsset,
+    { id },
+    () => mockApi.fetchDrawingAsset(id),
+    parseAsset
   );
 }
 
 export function importPdfNote(input: ImportPdfNoteInput): Promise<Note> {
-  return invokeOrFallback<Note>('import_pdf_note', { input }, () =>
-    mockApi.importPdfNote(input)
+  return invokeOrFallback<Note>(
+    TauriCommandName.ImportPdfNote,
+    { input },
+    () => mockApi.importPdfNote(input),
+    parseNote
   );
 }
 
 export function sweepUnreferencedMarkdownAssets(): Promise<number> {
   return invokeOrFallback<number>(
-    'sweep_unreferenced_markdown_assets',
+    TauriCommandName.SweepUnreferencedMarkdownAssets,
     {},
-    () => Promise.resolve(0)
+    () => Promise.resolve(0),
+    (value) =>
+      assertNumber(value, 'sweep_unreferenced_markdown_assets response')
   );
+}
+
+function parseAsset(value: unknown): Asset {
+  const raw = assertRecord(value, 'asset');
+  return {
+    id: assertString(raw.id, 'asset.id'),
+    owning_note_id: assertString(raw.owning_note_id, 'asset.owning_note_id'),
+    mime_type: assertString(raw.mime_type, 'asset.mime_type'),
+    size: assertNumber(raw.size, 'asset.size'),
+    created: assertString(raw.created, 'asset.created'),
+    modified: assertString(raw.modified, 'asset.modified'),
+    pushed: assertBoolean(raw.pushed, 'asset.pushed'),
+    bytes: assertNumberArray(raw.bytes, 'asset.bytes')
+  };
 }

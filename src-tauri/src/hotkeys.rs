@@ -1,18 +1,32 @@
 use std::{collections::HashMap, sync::Mutex};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
+
+use crate::error::{CommandError, CommandErrorCode, CommandResult};
 
 #[cfg(desktop)]
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
-#[cfg(desktop)]
-const GLOBAL_SHORTCUT_COMMAND_IDS: &[&str] = &[
-    "global.newMarkdownNote",
-    "global.newDrawing",
-    "global.newInkNote",
-    "global.showApp",
-];
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum GlobalShortcutCommandId {
+    NewMarkdownNote,
+    NewDrawing,
+    NewInkNote,
+    ShowApp,
+}
+
+impl GlobalShortcutCommandId {
+    pub fn hotkey_catalogue_id(self) -> &'static str {
+        match self {
+            Self::NewMarkdownNote => "global.newMarkdownNote",
+            Self::NewDrawing => "global.newDrawing",
+            Self::NewInkNote => "global.newInkNote",
+            Self::ShowApp => "global.showApp",
+        }
+    }
+}
 
 #[derive(Clone, Debug, Default)]
 struct NativeHotkeyDisplay {
@@ -43,7 +57,7 @@ pub struct HotkeyDisplayUpdate {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GlobalShortcutRegistration {
-    command_id: String,
+    command_id: GlobalShortcutCommandId,
     accelerator: Option<String>,
 }
 
@@ -106,8 +120,14 @@ pub fn hotkey_accelerator(app: &AppHandle, command_id: &str) -> Option<String> {
 pub fn get_hotkey_display(
     state: State<'_, NativeHotkeyDisplays>,
     command_id: String,
-) -> Option<String> {
-    state.display(&command_id)
+) -> CommandResult<Option<String>> {
+    if command_id.trim().is_empty() {
+        return Err(CommandError::new(
+            CommandErrorCode::InvalidArgument,
+            "command_id must not be empty",
+        ));
+    }
+    Ok(state.display(&command_id))
 }
 
 #[tauri::command]
@@ -115,16 +135,11 @@ pub fn set_hotkey_displays(
     #[cfg_attr(not(desktop), allow(unused_variables))] app: AppHandle,
     state: State<'_, NativeHotkeyDisplays>,
     displays: Vec<HotkeyDisplayUpdate>,
-) -> Result<(), String> {
-    state.replace_all(displays)?;
+) -> CommandResult<()> {
+    state.replace_all(displays).map_err(CommandError::from)?;
     #[cfg(desktop)]
     crate::tray::sync_hotkey_displays(&app);
     Ok(())
-}
-
-#[cfg(desktop)]
-fn is_global_shortcut_command_id(command_id: &str) -> bool {
-    GLOBAL_SHORTCUT_COMMAND_IDS.contains(&command_id)
 }
 
 #[cfg(desktop)]
@@ -133,13 +148,13 @@ pub fn sync_global_shortcuts(
     app: AppHandle,
     state: State<'_, DesktopGlobalShortcuts>,
     registrations: Vec<GlobalShortcutRegistration>,
-) -> Result<(), String> {
+) -> CommandResult<()> {
     eprintln!(
         "[global-shortcuts] sync_global_shortcuts called with {} registration(s): {:?}",
         registrations.len(),
         registrations
             .iter()
-            .map(|r| (r.command_id.as_str(), r.accelerator.as_deref()))
+            .map(|r| (r.command_id.hotkey_catalogue_id(), r.accelerator.as_deref()))
             .collect::<Vec<_>>()
     );
 
@@ -156,59 +171,66 @@ pub fn sync_global_shortcuts(
         );
         app.global_shortcut()
             .unregister_multiple(registered.iter().map(String::as_str))
-            .map_err(|err| format!("unregister global shortcuts: {err}"))?;
+            .map_err(|err| {
+                CommandError::new(
+                    CommandErrorCode::Tauri,
+                    format!("unregister global shortcuts: {err}"),
+                )
+            })?;
         registered.clear();
     }
 
     for registration in registrations {
-        if !is_global_shortcut_command_id(&registration.command_id) {
-            eprintln!(
-                "[global-shortcuts] skipping unknown command_id={}",
-                registration.command_id
-            );
-            continue;
-        }
         let Some(accelerator) = clean_optional(registration.accelerator) else {
             eprintln!(
                 "[global-shortcuts] skipping {} — no accelerator",
-                registration.command_id
+                registration.command_id.hotkey_catalogue_id()
             );
             continue;
         };
-        let command_id = registration.command_id.clone();
-        let command_id_for_callback = command_id.clone();
+        let command_id = registration.command_id;
+        let command_id_for_callback = command_id;
         let accelerator_for_log = accelerator.clone();
         eprintln!(
             "[global-shortcuts] registering accelerator={} for command_id={}",
-            accelerator, command_id
+            accelerator,
+            command_id.hotkey_catalogue_id()
         );
         match app.global_shortcut().on_shortcut(
             accelerator.as_str(),
             move |app, _shortcut, event| {
                 eprintln!(
                     "[global-shortcuts] callback fired command_id={} state={:?}",
-                    command_id_for_callback, event.state
+                    command_id_for_callback.hotkey_catalogue_id(),
+                    event.state
                 );
                 if event.state != ShortcutState::Pressed {
                     return;
                 }
-                crate::tray::handle_global_shortcut_command(app, &command_id_for_callback);
+                crate::tray::handle_global_shortcut_command(app, command_id_for_callback);
             },
         ) {
             Ok(()) => {
                 eprintln!(
                     "[global-shortcuts] OK accelerator={} command_id={}",
-                    accelerator_for_log, command_id
+                    accelerator_for_log,
+                    command_id.hotkey_catalogue_id()
                 );
             }
             Err(err) => {
                 eprintln!(
                     "[global-shortcuts] FAILED accelerator={} command_id={} err={}",
-                    accelerator_for_log, command_id, err
+                    accelerator_for_log,
+                    command_id.hotkey_catalogue_id(),
+                    err
                 );
-                return Err(format!(
-                    "register global shortcut {} for {}: {err}",
-                    accelerator_for_log, command_id
+                return Err(CommandError::new(
+                    CommandErrorCode::Tauri,
+                    format!(
+                        "register global shortcut {} for {}: {err}",
+                        accelerator_for_log,
+                        command_id.hotkey_catalogue_id()
+                    ),
                 ));
             }
         }

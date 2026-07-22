@@ -30,7 +30,7 @@ use zip::CompressionMethod;
 use crate::auth;
 use crate::collections::TRASH_ID;
 use crate::db::{migrations, Db};
-use crate::error::{AppError, AppResult};
+use crate::error::{AppError, AppResult, CommandResult};
 
 /// Bump only when the on-disk layout becomes incompatible with older
 /// readers — adding new optional manifest fields shouldn't require it.

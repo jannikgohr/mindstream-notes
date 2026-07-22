@@ -11,7 +11,16 @@
  */
 
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
-import { isTauri } from './core';
+import {
+  assertBoolean,
+  assertNumber,
+  assertRecord,
+  assertString,
+  assertVoid,
+  isTauri,
+  optionalString,
+  TauriCommandName
+} from './core';
 import { mockApi } from './mock-store';
 
 export interface TrashCounts {
@@ -21,7 +30,10 @@ export interface TrashCounts {
 
 export async function openDataFolder(): Promise<void> {
   if (!isTauri()) return;
-  await tauriInvoke<void>('open_data_folder');
+  assertVoid(
+    await tauriInvoke<unknown>(TauriCommandName.OpenDataFolder),
+    'open_data_folder response'
+  );
 }
 
 /**
@@ -30,18 +42,26 @@ export async function openDataFolder(): Promise<void> {
  * from `pickExportDir()`, so it's already user-chosen.
  */
 export async function openFolder(path: string): Promise<void> {
+  assertRequiredString(path, 'path');
   if (!isTauri()) return;
-  await tauriInvoke<void>('open_folder', { path });
+  assertVoid(
+    await tauriInvoke<unknown>(TauriCommandName.OpenFolder, { path }),
+    'open_folder response'
+  );
 }
 
 export async function trashCounts(): Promise<TrashCounts> {
   if (!isTauri()) return await mockApi.trashCounts();
-  return await tauriInvoke<TrashCounts>('trash_counts');
+  return parseTrashCounts(
+    await tauriInvoke<unknown>(TauriCommandName.TrashCounts)
+  );
 }
 
 export async function emptyTrash(): Promise<TrashCounts> {
   if (!isTauri()) return await mockApi.emptyTrash();
-  return await tauriInvoke<TrashCounts>('empty_trash');
+  return parseTrashCounts(
+    await tauriInvoke<unknown>(TauriCommandName.EmptyTrash)
+  );
 }
 
 /**
@@ -50,8 +70,12 @@ export async function emptyTrash(): Promise<TrashCounts> {
  * No-op outside Tauri.
  */
 export async function setTrashRetention(days: number): Promise<void> {
+  assertNonNegativeInteger(days, 'days');
   if (!isTauri()) return;
-  await tauriInvoke<void>('set_trash_retention', { days });
+  assertVoid(
+    await tauriInvoke<unknown>(TauriCommandName.SetTrashRetention, { days }),
+    'set_trash_retention response'
+  );
 }
 
 /**
@@ -61,8 +85,12 @@ export async function setTrashRetention(days: number): Promise<void> {
  * first scheduled tick to fire.
  */
 export async function sweepTrashRetention(days: number): Promise<number> {
+  assertNonNegativeInteger(days, 'days');
   if (!isTauri()) return 0;
-  return await tauriInvoke<number>('sweep_trash_retention', { days });
+  return assertNumber(
+    await tauriInvoke<unknown>(TauriCommandName.SweepTrashRetention, { days }),
+    'sweep_trash_retention response'
+  );
 }
 
 // ---------- Backup export (Slice A) ----------
@@ -87,7 +115,9 @@ export interface BackupReport {
  */
 export async function backupNow(): Promise<BackupReport | null> {
   if (!isTauri()) return null;
-  return await tauriInvoke<BackupReport | null>('backup_now');
+  return parseNullableBackupReport(
+    await tauriInvoke<unknown>(TauriCommandName.BackupNow)
+  );
 }
 
 // ---------- Backup import (Slices B/C/D) ----------
@@ -126,13 +156,19 @@ export interface MergeReport {
  */
 export async function importBegin(): Promise<ImportPreview | null> {
   if (!isTauri()) return null;
-  return await tauriInvoke<ImportPreview | null>('import_begin');
+  return parseNullableImportPreview(
+    await tauriInvoke<unknown>(TauriCommandName.ImportBegin)
+  );
 }
 
 /** Drop the staging dir created by `importBegin`. Safe on stale tokens. */
 export async function importCleanup(token: string): Promise<void> {
+  assertRequiredString(token, 'token');
   if (!isTauri()) return;
-  await tauriInvoke<void>('import_cleanup', { token });
+  assertVoid(
+    await tauriInvoke<unknown>(TauriCommandName.ImportCleanup, { token }),
+    'import_cleanup response'
+  );
 }
 
 /**
@@ -144,11 +180,17 @@ export async function importRestore(
   token: string,
   sameAccount: boolean
 ): Promise<RestoreStaged> {
+  assertRequiredString(token, 'token');
+  if (typeof sameAccount !== 'boolean') {
+    throw new Error('sameAccount must be a boolean');
+  }
   if (!isTauri()) return { restart_required: false, sanitized: !sameAccount };
-  return await tauriInvoke<RestoreStaged>('import_restore', {
-    token,
-    sameAccount
-  });
+  return parseRestoreStaged(
+    await tauriInvoke<unknown>(TauriCommandName.ImportRestore, {
+      token,
+      sameAccount
+    })
+  );
 }
 
 /**
@@ -156,6 +198,7 @@ export async function importRestore(
  * live one. No restart needed. Sync metadata is always stripped.
  */
 export async function importMerge(token: string): Promise<MergeReport> {
+  assertRequiredString(token, 'token');
   if (!isTauri())
     return {
       folders_added: 0,
@@ -163,5 +206,136 @@ export async function importMerge(token: string): Promise<MergeReport> {
       assets_added: 0,
       notes_orphaned: 0
     };
-  return await tauriInvoke<MergeReport>('import_merge', { token });
+  return parseMergeReport(
+    await tauriInvoke<unknown>(TauriCommandName.ImportMerge, { token })
+  );
+}
+
+function assertRequiredString(value: string, context: string): void {
+  if (value.trim().length === 0) {
+    throw new Error(`${context} must be a non-empty string`);
+  }
+}
+
+function assertNonNegativeInteger(value: number, context: string): void {
+  if (!Number.isInteger(value) || value < 0) {
+    throw new Error(`${context} must be a non-negative integer`);
+  }
+}
+
+function parseTrashCounts(value: unknown): TrashCounts {
+  const raw = assertRecord(value, 'trash counts');
+  return {
+    notes: assertNumber(raw.notes, 'trash counts.notes'),
+    folders: assertNumber(raw.folders, 'trash counts.folders')
+  };
+}
+
+function parseBackupCounts(value: unknown, context: string): BackupCounts {
+  const raw = assertRecord(value, context);
+  return {
+    notes: assertNumber(raw.notes, `${context}.notes`),
+    folders: assertNumber(raw.folders, `${context}.folders`),
+    assets_bytes: assertNumber(raw.assets_bytes, `${context}.assets_bytes`)
+  };
+}
+
+function parseBackupReport(value: unknown): BackupReport {
+  const raw = assertRecord(value, 'backup report');
+  return {
+    destination: assertString(raw.destination, 'backup report.destination'),
+    counts: parseBackupCounts(raw.counts, 'backup report.counts'),
+    account_present: assertBoolean(
+      raw.account_present,
+      'backup report.account_present'
+    )
+  };
+}
+
+function parseNullableBackupReport(value: unknown): BackupReport | null {
+  if (value === null || value === undefined) return null;
+  return parseBackupReport(value);
+}
+
+function parseAccountDisplay(value: unknown, context: string): AccountDisplay {
+  const raw = assertRecord(value, context);
+  return {
+    username: optionalString(raw.username, `${context}.username`),
+    server_url: optionalString(raw.server_url, `${context}.server_url`)
+  };
+}
+
+function parseNullableAccountDisplay(
+  value: unknown,
+  context: string
+): AccountDisplay | null {
+  if (value === null || value === undefined) return null;
+  return parseAccountDisplay(value, context);
+}
+
+function parseImportPreview(value: unknown): ImportPreview {
+  const raw = assertRecord(value, 'import preview');
+  return {
+    token: assertString(raw.token, 'import preview.token'),
+    backup_counts: parseBackupCounts(
+      raw.backup_counts,
+      'import preview.backup_counts'
+    ),
+    current_counts: parseBackupCounts(
+      raw.current_counts,
+      'import preview.current_counts'
+    ),
+    backup_app_version: assertString(
+      raw.backup_app_version,
+      'import preview.backup_app_version'
+    ),
+    backup_created_at: assertString(
+      raw.backup_created_at,
+      'import preview.backup_created_at'
+    ),
+    same_account: assertBoolean(
+      raw.same_account,
+      'import preview.same_account'
+    ),
+    backup_account: parseNullableAccountDisplay(
+      raw.backup_account,
+      'import preview.backup_account'
+    ),
+    current_account: parseNullableAccountDisplay(
+      raw.current_account,
+      'import preview.current_account'
+    )
+  };
+}
+
+function parseNullableImportPreview(value: unknown): ImportPreview | null {
+  if (value === null || value === undefined) return null;
+  return parseImportPreview(value);
+}
+
+function parseRestoreStaged(value: unknown): RestoreStaged {
+  const raw = assertRecord(value, 'restore staged');
+  return {
+    restart_required: assertBoolean(
+      raw.restart_required,
+      'restore staged.restart_required'
+    ),
+    sanitized: assertBoolean(raw.sanitized, 'restore staged.sanitized')
+  };
+}
+
+function parseMergeReport(value: unknown): MergeReport {
+  const raw = assertRecord(value, 'merge report');
+  return {
+    folders_added: assertNumber(
+      raw.folders_added,
+      'merge report.folders_added'
+    ),
+    notes_added: assertNumber(raw.notes_added, 'merge report.notes_added'),
+    assets_added: assertNumber(raw.assets_added, 'merge report.assets_added'),
+    notes_orphaned: assertNumber(
+      raw.notes_orphaned,
+      'merge report.notes_orphaned'
+    )
+  };
 }

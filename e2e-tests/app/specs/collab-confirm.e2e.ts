@@ -9,13 +9,13 @@
 import { expect } from '@wdio/globals';
 
 import { provisionTwoAccounts } from '../helpers/accounts.js';
-import { assertBackendReady, backendUrl } from '../helpers/backend.js';
+import { backendUrl } from '../helpers/backend.js';
 import {
   clientHelpers,
   clickLastButtonText,
   loginClient,
-  requireBackendE2E,
   syncClient,
+  waitForClientsReady,
   type ClientHelpers
 } from '../helpers/harness.js';
 
@@ -124,8 +124,7 @@ describe('T4 collab confirmation prompt', function () {
   let B: ClientHelpers;
 
   before(async function () {
-    requireBackendE2E(this);
-    await assertBackendReady();
+    await waitForClientsReady({ browserA, browserB });
 
     const server = backendUrl();
     const accounts = await provisionTwoAccounts(server);

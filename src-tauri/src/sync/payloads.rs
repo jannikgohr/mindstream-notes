@@ -61,7 +61,7 @@ pub(super) struct NotePayload {
     /// newer payloads default to "markdown" (which means they'll try to
     /// render a freeform note in the markdown editor, but won't lose any
     /// data — the yrs_state survives untouched).
-    #[serde(default = "crate::notes::default_note_kind")]
+    #[serde(default = "crate::notes::default_note_kind_string")]
     pub(super) note_kind: String,
 }
 
