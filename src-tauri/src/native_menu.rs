@@ -4,9 +4,8 @@ use tauri::{
     App, AppHandle, Emitter, EventTarget, Manager,
 };
 
-use crate::{desktop_settings::DesktopSettings, i18n};
+use crate::{app_events::AppEvent, desktop_settings::DesktopSettings, i18n};
 
-const COMMAND_EVENT: &str = "native-menu-command";
 const ID_SETTINGS: &str = "native:app:settings";
 const ID_QUIT: &str = "native:app:quit";
 const ID_NEW_NOTE: &str = "native:file:new-note";
@@ -350,14 +349,18 @@ fn emit_command_to_focused_window(app: &AppHandle, command: NativeMenuCommand) {
     if let Some(window) = focused_window(app) {
         if let Err(err) = app.emit_to(
             EventTarget::webview_window(window.label()),
-            COMMAND_EVENT,
+            AppEvent::NativeMenuCommand.as_str(),
             payload,
         ) {
             log::warn!("[native-menu] failed to emit {command:?}: {err}");
         }
         return;
     }
-    if let Err(err) = app.emit_to(EventTarget::webview_window("main"), COMMAND_EVENT, payload) {
+    if let Err(err) = app.emit_to(
+        EventTarget::webview_window("main"),
+        AppEvent::NativeMenuCommand.as_str(),
+        payload,
+    ) {
         log::warn!("[native-menu] failed to emit {command:?} to main: {err}");
     }
 }

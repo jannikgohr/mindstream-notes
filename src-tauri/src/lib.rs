@@ -11,6 +11,7 @@
 //! Frontend talks to Rust through the `@tauri-apps/api`'s `invoke()`; the
 //! TS bridge lives under `src/lib/api/`.
 
+pub mod app_events;
 pub mod app_restart;
 pub mod assets;
 pub mod auth;

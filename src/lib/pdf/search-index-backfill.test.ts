@@ -15,7 +15,10 @@ vi.mock('$lib/api', () => ({
 }));
 
 vi.mock('$lib/api/events', () => ({
-  listen: (...a: unknown[]) => listenMock(...a)
+  listen: (...a: unknown[]) => listenMock(...a),
+  TauriEventName: {
+    SyncCompleted: 'sync-completed'
+  }
 }));
 
 vi.mock('./extract-text', () => ({

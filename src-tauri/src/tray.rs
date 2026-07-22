@@ -6,6 +6,7 @@ use tauri::{
 };
 
 use crate::{
+    app_events::AppEvent,
     db::Db,
     desktop_settings::DesktopSettings,
     hotkeys::GlobalShortcutCommandId,
@@ -13,8 +14,6 @@ use crate::{
     notes::{self, CreateNote, NoteKind},
 };
 
-const TRAY_NOTE_CREATED_EVENT: &str = "tray-note-created";
-const SHOW_APP_EVENT: &str = "show-app";
 const NEW_NOTE_ID: &str = "new_note";
 const NEW_DRAWING_ID: &str = "new_drawing";
 const NEW_INK_ID: &str = "new_ink";
@@ -169,7 +168,7 @@ pub(crate) fn handle_global_shortcut_command(app: &AppHandle, command_id: Global
         // in the global-shortcut callback thread and on Windows that
         // alone doesn't reliably defeat focus-stealing prevention when
         // the window is hidden in the tray.
-        match app.emit(SHOW_APP_EVENT, ()) {
+        match app.emit(AppEvent::ShowApp.as_str(), ()) {
             Ok(()) => eprintln!("[global-shortcuts] emitted show-app event"),
             Err(err) => eprintln!("[global-shortcuts] failed to emit show-app event: {err}"),
         }
@@ -211,7 +210,7 @@ fn create_note_and_emit(
     match result {
         Ok(note) => {
             if let Err(err) = app.emit(
-                TRAY_NOTE_CREATED_EVENT,
+                AppEvent::TrayNoteCreated.as_str(),
                 TrayNoteCreatedPayload {
                     note_id: note.summary.id,
                 },

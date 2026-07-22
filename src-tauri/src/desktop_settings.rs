@@ -10,11 +10,11 @@ use std::{
 use serde::{Deserialize, Serialize};
 use tauri::{App, AppHandle, Emitter, Manager, State};
 
+use crate::app_events::AppEvent;
 use crate::error::{CommandError, CommandErrorCode, CommandResult};
 use crate::i18n;
 
 const SETTINGS_FILE: &str = "desktop-settings.json";
-const CUSTOM_WINDOW_DECORATIONS_CHANGED_EVENT: &str = "custom-window-decorations-changed";
 
 #[derive(Debug, Default, Deserialize, Serialize)]
 struct DesktopSettingsFile {
@@ -228,7 +228,7 @@ pub fn set_custom_window_decorations(
     settings.set_custom_window_decorations(value);
     settings.save()?;
     apply_window_decorations(&app, value)?;
-    app.emit(CUSTOM_WINDOW_DECORATIONS_CHANGED_EVENT, value)
+    app.emit(AppEvent::CustomWindowDecorationsChanged.as_str(), value)
         .map_err(|e| {
             CommandError::new(
                 CommandErrorCode::Tauri,

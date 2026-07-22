@@ -62,7 +62,7 @@
   } from '$lib/sync/collab-signing-key';
   import type { ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types';
   import { isMobile } from '$lib/platform';
-  import { listen } from '$lib/api/events';
+  import { listen, TauriEventName } from '$lib/api/events';
   import { acquireFullscreen, releaseFullscreen } from '$lib/window/fullscreen';
   import { isTauri } from '$lib/api';
   import {
@@ -323,7 +323,7 @@
       // edits stay, pulled state converges, re-applying an already-
       // known update is a no-op. The Excalidraw island observes the
       // resulting Y.Doc changes via the bridge in excalidraw-yjs.
-      void listen('sync-completed', async (payload) => {
+      void listen(TauriEventName.SyncCompleted, async (payload) => {
         if (!payload.notes_pulled_ids.includes(noteId) || !yDoc) return;
         try {
           const fresh = await loadNote(noteId);
@@ -336,7 +336,7 @@
       }).then((unlisten) => {
         unsubSync = unlisten;
       });
-      void listen('collab-credentials-changed', (payload) => {
+      void listen(TauriEventName.CollabCredentialsChanged, (payload) => {
         if (collabCredentialsChangedForNote(payload, noteId)) {
           void setupExcalidrawRoom();
         }

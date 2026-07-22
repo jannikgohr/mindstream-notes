@@ -57,6 +57,7 @@ use payloads::*;
 use pull::*;
 use push::*;
 
+use crate::app_events::AppEvent;
 use crate::auth;
 use crate::db::Db;
 use crate::error::{AppError, AppResult, CommandResult};
@@ -258,14 +259,10 @@ pub struct SyncCompletedEvent {
     pub assets_pulled_ids: Vec<String>,
 }
 
-pub const SYNC_COMPLETED_EVENT: &str = "sync-completed";
-
 /// Emitted when the pre-sync reachability probe fails — the active
 /// vault's server didn't answer. The JS side turns this into a single
 /// "can't reach your sync server" notification.
-pub const SYNC_UNREACHABLE_EVENT: &str = "sync-unreachable";
-
-/// Payload for [`SYNC_UNREACHABLE_EVENT`]: the server we couldn't reach
+/// Payload for [`AppEvent::SyncUnreachable`]: the server we couldn't reach
 /// and the transport error detail (for logs / the notification body).
 #[derive(Debug, Clone, Serialize)]
 pub struct SyncUnreachableEvent {
@@ -276,7 +273,7 @@ pub struct SyncUnreachableEvent {
 /// Pre-sync reachability guard shared by `sync_now` and the scheduler
 /// tick. Returns `true` to proceed with the sync; `false` to skip it
 /// because the active vault's server didn't answer — in which case a
-/// [`SYNC_UNREACHABLE_EVENT`] has already been emitted so the UI shows
+/// [`AppEvent::SyncUnreachable`] has already been emitted so the UI shows
 /// one clear offline notification instead of letting `run` fan out into
 /// a storm of failing requests (cached-collection fetch + list × 4
 /// kinds).
@@ -305,8 +302,9 @@ async fn preflight_reachable(app: &AppHandle) -> bool {
                 server_url: info.server_url,
                 detail,
             };
-            if let Err(e) = app.emit(SYNC_UNREACHABLE_EVENT, &event) {
-                log::warn!("[sync] failed to emit {SYNC_UNREACHABLE_EVENT}: {e}");
+            let event_name = AppEvent::SyncUnreachable.as_str();
+            if let Err(e) = app.emit(event_name, &event) {
+                log::warn!("[sync] failed to emit {event_name}: {e}");
             }
             false
         }
@@ -357,8 +355,9 @@ pub async fn sync_now(app: AppHandle) -> CommandResult<SyncReport> {
         notes_pulled_ids: delta.notes_pulled_ids,
         assets_pulled_ids: delta.assets_pulled_ids,
     };
-    if let Err(err) = app.emit(SYNC_COMPLETED_EVENT, &event) {
-        log::warn!("[sync] failed to emit {SYNC_COMPLETED_EVENT}: {err}");
+    let event_name = AppEvent::SyncCompleted.as_str();
+    if let Err(err) = app.emit(event_name, &event) {
+        log::warn!("[sync] failed to emit {event_name}: {err}");
     }
     crate::collab_events::emit_collab_credentials_changed(
         &app,

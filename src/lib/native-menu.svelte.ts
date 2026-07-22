@@ -2,6 +2,7 @@ import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { listen } from '@tauri-apps/api/event';
 import { setMode } from 'mode-watcher';
 import { isTauri } from '$lib/api/core';
+import { TauriEventName } from '$lib/api/events';
 import { commandById } from '$lib/hotkeys/catalogue';
 import { activeEditor, emitCommand } from '$lib/hotkeys/bus.svelte';
 import { requestOpenNote } from '$lib/stores/open-note-intent.svelte';
@@ -18,8 +19,6 @@ import {
   undoRedoCommandId
 } from '$lib/native-menu-commands';
 
-const NATIVE_MENU_COMMAND_EVENT = 'native-menu-command';
-
 interface NativeMenuCommandPayload {
   command: NativeMenuCommand;
 }
@@ -32,7 +31,7 @@ export function initNativeMenuCommands(): void {
   if (!isTauri()) return;
 
   void listen<NativeMenuCommandPayload>(
-    NATIVE_MENU_COMMAND_EVENT,
+    TauriEventName.NativeMenuCommand,
     async (event) => {
       if (!isNativeMenuCommand(event.payload?.command)) {
         console.warn('[native-menu] invalid command payload', event.payload);
