@@ -10,13 +10,21 @@
  * missing driver or a down backend before sitting through a multi-minute build.
  */
 
-import { spawnSync } from 'node:child_process';
 import {
+  spawn,
+  spawnSync,
+  type ChildProcess,
+  type SpawnOptions
+} from 'node:child_process';
+import {
+  copyFileSync,
   existsSync,
+  mkdirSync,
   readdirSync,
   readFileSync,
   rmSync,
-  statSync
+  statSync,
+  writeFileSync
 } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { delimiter, dirname, join, resolve } from 'node:path';
@@ -51,8 +59,29 @@ export const appBinary = join(
   'src-tauri',
   'target',
   'release',
+  `mindstream-notes-e2e-single${exeSuffix}`
+);
+
+const cargoAppBinary = join(
+  repoRoot,
+  'src-tauri',
+  'target',
+  'release',
   `mindstream-notes${exeSuffix}`
 );
+
+const tauriConf = join(repoRoot, 'src-tauri', 'tauri.conf.json');
+
+export function appBinaryForProfile(profileId: string): string {
+  const safeProfileId = profileId.replace(/[^a-z0-9-]/gi, '-');
+  return join(
+    repoRoot,
+    'src-tauri',
+    'target',
+    'release',
+    `mindstream-notes-e2e-${safeProfileId}${exeSuffix}`
+  );
+}
 
 export const tauriDriverPath = join(
   homedir(),
@@ -60,6 +89,20 @@ export const tauriDriverPath = join(
   'bin',
   `tauri-driver${exeSuffix}`
 );
+
+export function spawnTauriDriver(
+  args: string[],
+  env: NodeJS.ProcessEnv
+): ChildProcess {
+  const options: SpawnOptions = {
+    stdio: [null, process.stdout, process.stderr],
+    env
+  };
+  if (process.platform !== 'win32') {
+    options.detached = true;
+  }
+  return spawn(tauriDriverPath, args, options);
+}
 
 const tauriScript = join(repoRoot, 'src-tauri', 'scripts', 'tauri.mjs');
 
@@ -110,17 +153,17 @@ function hasE2eFeature(binary: string): boolean {
  * share the developer's real vault instead of its own temp profile, and the
  * sharing specs' e2e-only IPC commands would not exist.
  */
-export function assertAppBinaryReady(): void {
-  if (!existsSync(appBinary)) {
+export function assertAppBinaryReady(binary = appBinary): void {
+  if (!existsSync(binary)) {
     fail(
-      `app binary not found at ${appBinary}. Drop MINDSTREAM_E2E_SKIP_BUILD ` +
+      `app binary not found at ${binary}. Drop MINDSTREAM_E2E_SKIP_BUILD ` +
         `to build it (the suite builds it for you), or run ` +
         `\`node src-tauri/scripts/tauri.mjs build --no-bundle --features e2e-data-dir\`.`
     );
   }
-  if (!hasE2eFeature(appBinary)) {
+  if (!hasE2eFeature(binary)) {
     fail(
-      `app binary at ${appBinary} was built WITHOUT \`--features e2e-data-dir\`. ` +
+      `app binary at ${binary} was built WITHOUT \`--features e2e-data-dir\`. ` +
         `MINDSTREAM_PROFILE_DIR is ignored by such a build, so the tests would ` +
         `run against your real vault instead of isolated temp profiles. ` +
         `Re-run without MINDSTREAM_E2E_SKIP_BUILD=1 to rebuild it correctly.`
@@ -170,20 +213,153 @@ export function assertTauriDriver(): void {
   }
 }
 
+function waitForExit(
+  driver: ChildProcess,
+  timeoutMs: number
+): Promise<boolean> {
+  if (driver.exitCode !== null || driver.signalCode !== null) {
+    return Promise.resolve(true);
+  }
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve(false);
+    }, timeoutMs);
+    const done = () => {
+      cleanup();
+      resolve(true);
+    };
+    const cleanup = () => {
+      clearTimeout(timer);
+      driver.off('exit', done);
+      driver.off('error', done);
+    };
+    driver.once('exit', done);
+    driver.once('error', done);
+  });
+}
+
+/**
+ * Stop tauri-driver and the native/app descendants it launched.
+ *
+ * The T3/T4 configs reuse fixed WebDriver/native ports for each fresh session.
+ * A plain `child.kill()` only signals tauri-driver itself, which can leave
+ * msedgedriver/WebView2/app descendants alive long enough for the next session
+ * to connect to a half-closing driver. That is the transport face of the flake
+ * captured as `UND_ERR_HEADERS_TIMEOUT` plus tauri-driver's
+ * `hyper::Error(IncompleteMessage)`.
+ */
+export async function stopTauriDriverTree(
+  driver: ChildProcess | undefined,
+  timeoutMs = 10_000
+): Promise<void> {
+  const pid = driver?.pid;
+  if (!driver || !pid) return;
+
+  if (process.platform === 'win32') {
+    spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], {
+      stdio: 'ignore'
+    });
+    await waitForExit(driver, timeoutMs);
+    return;
+  }
+
+  try {
+    process.kill(-pid, 'SIGTERM');
+  } catch {
+    try {
+      driver.kill('SIGTERM');
+    } catch {
+      return;
+    }
+  }
+  if (await waitForExit(driver, timeoutMs)) return;
+
+  try {
+    process.kill(-pid, 'SIGKILL');
+  } catch {
+    try {
+      driver.kill('SIGKILL');
+    } catch {
+      /* already gone */
+    }
+  }
+  await waitForExit(driver, timeoutMs);
+}
+
 /**
  * Build through the Tauri CLI, not plain Cargo. The CLI runs the frontend build
  * and injects the production asset config; a direct `cargo build` leaves the
  * binary pointing at the dev server, which renders as a blank webview when Vite
  * is not running.
+ *
+ * Multi-client suites need multiple app executables, each with a distinct
+ * WebView2 dataDirectory embedded in Tauri's configured window. Runtime
+ * MINDSTREAM_PROFILE_DIR isolates SQLite/keyring state, but Tauri's default
+ * WebView2 folder remains the fixed OS local-data path for the app identifier;
+ * two host processes sharing it can leave one renderer booted as blank/about:blank.
+ * Building config variants keeps the normal auto-created window path intact.
  */
-function buildApp(): void {
-  const res = spawnSync(
-    process.execPath,
-    [tauriScript, 'build', '--no-bundle', '--features', 'e2e-data-dir'],
-    { cwd: repoRoot, stdio: 'inherit', env: buildEnv }
+function writeE2eConfig(profileId: string): string {
+  const baseConfig = JSON.parse(readFileSync(tauriConf, 'utf8')) as {
+    app?: {
+      windows?: Array<Record<string, unknown>>;
+    };
+  };
+  const mainWindow = baseConfig.app?.windows?.find(
+    (window) => window.label === 'main'
   );
-  if (res.status !== 0) {
-    fail('tauri build (--features e2e-data-dir) failed');
+  if (!mainWindow) {
+    fail('tauri.conf.json does not define a main window');
+  }
+
+  const safeProfileId = profileId.replace(/[^a-z0-9-]/gi, '-');
+  const configDir = join(repoRoot, '.output', 'tauri-e2e');
+  mkdirSync(configDir, { recursive: true });
+  const configPath = join(configDir, `tauri.${safeProfileId}.conf.json`);
+  writeFileSync(
+    configPath,
+    JSON.stringify(
+      {
+        $schema: 'https://schema.tauri.app/config/2',
+        app: {
+          windows: [
+            {
+              ...mainWindow,
+              dataDirectory: `mindstream-e2e-webview-${safeProfileId}`
+            }
+          ]
+        }
+      },
+      null,
+      2
+    )
+  );
+  return configPath;
+}
+
+function buildApp(profiles: string[]): void {
+  for (const profile of profiles) {
+    const e2eConfig = writeE2eConfig(profile);
+    const targetBinary = appBinaryForProfile(profile);
+    const res = spawnSync(
+      process.execPath,
+      [
+        tauriScript,
+        'build',
+        '--no-bundle',
+        '--features',
+        'e2e-data-dir',
+        '--config',
+        e2eConfig
+      ],
+      { cwd: repoRoot, stdio: 'inherit', env: buildEnv }
+    );
+    if (res.status !== 0) {
+      fail(`tauri build (--features e2e-data-dir, profile ${profile}) failed`);
+    }
+    copyFileSync(cargoAppBinary, targetBinary);
+    assertAppBinaryReady(targetBinary);
   }
 }
 
@@ -196,10 +372,13 @@ function buildApp(): void {
  * save you time without silently changing what is under test.
  */
 export async function preflight({
-  backend
+  backend,
+  buildProfiles = ['single']
 }: {
   /** T4 configs: require the collaboration stack to be answering. */
   backend: boolean;
+  /** Which per-WebView2-profile app binaries this config needs. */
+  buildProfiles?: string[];
 }): Promise<void> {
   sweepStaleProfileDirs();
   assertTauriDriver();
@@ -212,11 +391,10 @@ export async function preflight({
   }
 
   if (process.env.MINDSTREAM_E2E_SKIP_BUILD === '1') {
-    assertAppBinaryReady();
+    for (const profile of buildProfiles) {
+      assertAppBinaryReady(appBinaryForProfile(profile));
+    }
     return;
   }
-  buildApp();
-  // Also verify what we just produced: a build that silently loses the feature
-  // flag is the failure this whole check exists to catch.
-  assertAppBinaryReady();
+  buildApp(buildProfiles);
 }

@@ -21,16 +21,17 @@
  *   pnpm test:e2e:app:multi:a2
  */
 
-import { spawn, type ChildProcess } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  appBinary as application,
+  appBinaryForProfile,
   preflight,
   repoRoot,
-  tauriDriverPath
+  spawnTauriDriver,
+  stopTauriDriverTree
 } from './helpers/preflight.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -39,16 +40,19 @@ const here = dirname(fileURLToPath(import.meta.url));
  * One tauri-driver process per client. `port` is what wdio connects to;
  * `nativePort` is the underlying WebKitWebDriver — every value must be unique
  * across the three so the processes don't fight over a socket. `profileDir` is a
- * fresh, throwaway data dir (the `dir_override` seam, e2e-data-dir feature); the
- * `profileId` namespaces the OS keyring entry so A1 and A2 (same account, two
- * devices) each hold their own session instead of clobbering one keyring slot.
+ * fresh, throwaway data dir per spec file (the `dir_override` seam,
+ * e2e-data-dir feature); the `profileId` namespaces the OS keyring entry so A1
+ * and A2 (same account, two devices) each hold their own session instead of
+ * clobbering one keyring slot.
  */
 interface ClientProc {
   port: number;
   nativePort: number;
   profileId: string;
-  profileDir: string;
+  application: string;
+  profileDir?: string;
   driver?: ChildProcess;
+  startTimer?: ReturnType<typeof setTimeout>;
 }
 
 const clients: Record<'browserA1' | 'browserA2' | 'browserB', ClientProc> = {
@@ -56,33 +60,34 @@ const clients: Record<'browserA1' | 'browserA2' | 'browserB', ClientProc> = {
     port: 4444,
     nativePort: 4445,
     profileId: 'e2e-a1',
-    profileDir: mkdtempSync(join(tmpdir(), 'mindstream-e2e-a1-'))
+    application: appBinaryForProfile('e2e-a1')
   },
   browserA2: {
     port: 4448,
     nativePort: 4449,
     profileId: 'e2e-a2',
-    profileDir: mkdtempSync(join(tmpdir(), 'mindstream-e2e-a2-'))
+    application: appBinaryForProfile('e2e-a2')
   },
   browserB: {
     port: 4446,
     nativePort: 4447,
     profileId: 'e2e-b',
-    profileDir: mkdtempSync(join(tmpdir(), 'mindstream-e2e-b-'))
+    application: appBinaryForProfile('e2e-b')
   }
 };
 
+const DRIVER_START_STAGGER_MS = 20_000;
+
 function spawnDriver(client: ClientProc): ChildProcess {
-  return spawn(
-    tauriDriverPath,
+  client.profileDir = mkdtempSync(
+    join(tmpdir(), `mindstream-${client.profileId}-`)
+  );
+  return spawnTauriDriver(
     ['--port', String(client.port), '--native-port', String(client.nativePort)],
     {
-      stdio: [null, process.stdout, process.stderr],
-      env: {
-        ...process.env,
-        MINDSTREAM_PROFILE_DIR: client.profileDir,
-        MINDSTREAM_PROFILE_ID: client.profileId
-      }
+      ...process.env,
+      MINDSTREAM_PROFILE_DIR: client.profileDir,
+      MINDSTREAM_PROFILE_ID: client.profileId
     }
   );
 }
@@ -100,25 +105,27 @@ export const config: WebdriverIO.Config = {
       hostname: '127.0.0.1',
       port: clients.browserA1.port,
       capabilities: {
-        'tauri:options': { application }
+        'tauri:options': { application: clients.browserA1.application }
       } as WebdriverIO.Capabilities
     },
     browserA2: {
       hostname: '127.0.0.1',
       port: clients.browserA2.port,
       capabilities: {
-        'tauri:options': { application }
+        'tauri:options': { application: clients.browserA2.application }
       } as WebdriverIO.Capabilities
     },
     browserB: {
       hostname: '127.0.0.1',
       port: clients.browserB.port,
       capabilities: {
-        'tauri:options': { application }
+        'tauri:options': { application: clients.browserB.application }
       } as WebdriverIO.Capabilities
     }
   } as unknown as WebdriverIO.Config['capabilities'],
   logLevel: 'warn',
+  connectionRetryTimeout: 220_000,
+  connectionRetryCount: 220,
   framework: 'mocha',
   reporters: ['spec'],
   mochaOpts: { ui: 'bdd', timeout: 120_000 },
@@ -130,18 +137,35 @@ export const config: WebdriverIO.Config = {
 
   // Requirement checks + the Tauri CLI build, same as the two-client config
   // (helpers/preflight.ts).
-  onPrepare: () => preflight({ backend: true }),
+  onPrepare: () =>
+    preflight({
+      backend: true,
+      buildProfiles: ['e2e-a1', 'e2e-a2', 'e2e-b']
+    }),
 
   beforeSession: () => {
-    for (const client of Object.values(clients)) {
-      if (!client.driver) client.driver = spawnDriver(client);
+    for (const [index, client] of Object.values(clients).entries()) {
+      if (client.driver || client.startTimer) continue;
+      if (index === 0) {
+        client.driver = spawnDriver(client);
+      } else {
+        client.startTimer = setTimeout(() => {
+          client.driver = spawnDriver(client);
+          client.startTimer = undefined;
+        }, index * DRIVER_START_STAGGER_MS);
+      }
     }
   },
 
-  afterSession: () => {
+  afterSession: async () => {
     for (const client of Object.values(clients)) {
-      client.driver?.kill();
+      if (client.startTimer) {
+        clearTimeout(client.startTimer);
+        client.startTimer = undefined;
+      }
+      await stopTauriDriverTree(client.driver);
       client.driver = undefined;
+      client.profileDir = undefined;
     }
   }
 };

@@ -71,6 +71,7 @@ export function freshProfileDir(): string {
 export async function restartApp(): Promise<void> {
   // `browser` is a wdio global available inside a session.
   await browser.reloadSession();
+  await waitForClientReady(browser, 'browser:restart');
 }
 
 // ---- Accessible-name selectors (mirror the browser-fallback role queries) ----
@@ -90,10 +91,96 @@ export function treeItem(name: string): ChainablePromiseElement {
   return byName('File tree').$(`aria/${name}`);
 }
 
+export async function waitForClientReady(
+  client: WebdriverIO.Browser,
+  label = 'client',
+  timeout = 90_000
+): Promise<void> {
+  let lastState = '<not probed yet>';
+  const started = Date.now();
+  let reloadedBlankBoot = false;
+  try {
+    await client.waitUntil(
+      async () => {
+        try {
+          const state = await client.execute(() => {
+            const buttonLabels = Array.from(
+              document.querySelectorAll('button')
+            ).map(
+              (button) =>
+                button.getAttribute('aria-label') ??
+                button.textContent?.trim() ??
+                ''
+            );
+            const bodyText = document.body?.innerText ?? '';
+            return {
+              readyState: document.readyState,
+              hasTauri: '__TAURI_INTERNALS__' in window,
+              hasShellText: bodyText.includes('Mindstream Notes'),
+              buttonCount: buttonLabels.length,
+              buttonLabels: buttonLabels.filter(Boolean).slice(0, 10),
+              bodyText: bodyText.slice(0, 300),
+              bootBlank:
+                bodyText.trim().length === 0 || bodyText.trim() === 'Loading…',
+              url: window.location.href,
+              visibility: document.visibilityState
+            };
+          });
+          lastState = JSON.stringify(state);
+          if (
+            state.bootBlank &&
+            !reloadedBlankBoot &&
+            Date.now() - started > 35_000
+          ) {
+            reloadedBlankBoot = true;
+            await client.reloadSession();
+            return false;
+          }
+          return (
+            state.hasTauri &&
+            state.readyState === 'complete' &&
+            state.hasShellText &&
+            state.buttonCount > 0
+          );
+        } catch (err) {
+          lastState =
+            err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+          return false;
+        }
+      },
+      {
+        timeout,
+        interval: 1_000,
+        timeoutMsg: `${label} did not become WebDriver-ready`
+      }
+    );
+  } catch (err) {
+    throw new Error(
+      `${err instanceof Error ? err.message : String(err)} ` +
+        `within ${timeout}ms (elapsed=${Date.now() - started}ms, ` +
+        `last=${lastState})`
+    );
+  }
+}
+
+export async function waitForClientsReady(
+  clients: Record<string, WebdriverIO.Browser>,
+  timeout = 90_000
+): Promise<void> {
+  for (const [label, client] of Object.entries(clients)) {
+    await waitForClientReady(client, label, timeout);
+  }
+}
+
+async function waitForDefaultClientReady(): Promise<void> {
+  await waitForClientReady(browser, 'browser');
+}
+
 export async function clickElement(
   element: ChainablePromiseElement,
   opts: { button?: 'left' | 'right' } = {}
 ): Promise<void> {
+  await waitForDefaultClientReady();
   const resolved = await element;
   await resolved.waitForDisplayed({ timeout: 30_000 });
   await browser.execute(
@@ -133,6 +220,7 @@ export async function setElementValue(
   element: ChainablePromiseElement,
   value: string
 ): Promise<void> {
+  await waitForDefaultClientReady();
   const resolved = await element;
   await resolved.waitForDisplayed({ timeout: 30_000 });
   await browser.execute(
@@ -164,6 +252,7 @@ export async function pressElementKey(
   key: string,
   opts: { ctrlKey?: boolean } = {}
 ): Promise<void> {
+  await waitForDefaultClientReady();
   const resolved = await element;
   await resolved.waitForDisplayed({ timeout: 30_000 });
   await browser.execute(
@@ -395,6 +484,8 @@ export async function loginClient(
   client: WebdriverIO.Browser,
   input: LoginInput
 ): Promise<void> {
+  await waitForClientReady(client, `login:${input.username}`);
+
   // Route every interaction through the execute-based helpers: WebKitWebDriver
   // (Linux `wry`) rejects the native `element/click` and send-keys commands with
   // "unsupported operation", so clicks/fills must be synthesized as DOM events.
@@ -609,6 +700,7 @@ export function clientHelpers(client: WebdriverIO.Browser): ClientHelpers {
     element: ChainablePromiseElement,
     opts: { button?: 'left' | 'right' } = {}
   ): Promise<void> => {
+    await waitForClientReady(client);
     const resolved = await element;
     await waitDisplayedDiagnosed(client, resolved);
     await client.execute(

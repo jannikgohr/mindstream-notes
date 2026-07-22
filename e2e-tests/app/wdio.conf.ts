@@ -12,24 +12,20 @@
  * Run with: `pnpm test:e2e:app`
  */
 
-import { spawn, type ChildProcess } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   appBinary as application,
   preflight,
   repoRoot,
-  tauriDriverPath
+  spawnTauriDriver,
+  stopTauriDriverTree
 } from './helpers/preflight.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
-
-// A single profile dir for the whole run; specs that assert restart-persistence
-// relaunch against this same dir. Set fresh per run so state never leaks.
-const runProfileDir = join(
-  process.env.TEMP ?? process.env.TMPDIR ?? '/tmp',
-  `mindstream-e2e-run-${Date.now()}`
-);
 
 let tauriDriver: ChildProcess | undefined;
 
@@ -62,16 +58,20 @@ export const config: WebdriverIO.Config = {
   // no backend.
   onPrepare: () => preflight({ backend: false }),
 
-  // Spawn tauri-driver with the run's profile dir on its env so the launched
-  // app is redirected to an isolated, throwaway data directory.
+  // Spawn tauri-driver with a fresh profile dir for this spec file. In-spec
+  // reloadSession() calls keep the same driver env, so restart-persistence
+  // assertions still relaunch against the same data directory without leaking
+  // state across unrelated specs.
   beforeSession: () => {
-    tauriDriver = spawn(tauriDriverPath, [], {
-      stdio: [null, process.stdout, process.stderr],
-      env: { ...process.env, MINDSTREAM_PROFILE_DIR: runProfileDir }
+    const runProfileDir = mkdtempSync(join(tmpdir(), 'mindstream-e2e-run-'));
+    tauriDriver = spawnTauriDriver([], {
+      ...process.env,
+      MINDSTREAM_PROFILE_DIR: runProfileDir
     });
   },
 
-  afterSession: () => {
-    tauriDriver?.kill();
+  afterSession: async () => {
+    await stopTauriDriverTree(tauriDriver);
+    tauriDriver = undefined;
   }
 };

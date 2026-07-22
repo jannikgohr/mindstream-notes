@@ -113,12 +113,14 @@
 
     let id: string | null = null;
     try {
-      const { getCurrentWebviewWindow } =
-        await import('@tauri-apps/api/webviewWindow');
+      const { getCurrentWebviewWindow } = await withTimeout(
+        import('@tauri-apps/api/webviewWindow'),
+        3000
+      );
       const label = getCurrentWebviewWindow().label;
       if (label.startsWith('note_')) id = label;
-    } catch {
-      /* Tauri API may be unavailable outside the desktop shell. */
+    } catch (err) {
+      console.warn('[boot] window label probe unavailable', err);
     }
     if (!id) {
       const params = new URLSearchParams(window.location.search);

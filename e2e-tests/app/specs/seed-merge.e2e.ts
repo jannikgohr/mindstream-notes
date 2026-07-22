@@ -30,6 +30,7 @@ import {
   clientHelpers,
   loginClient,
   syncClient,
+  waitForClientsReady,
   type ClientHelpers
 } from '../helpers/harness.js';
 
@@ -118,6 +119,8 @@ describe('T4 seeded-note convergence (same account, two devices)', function () {
   let B: ClientHelpers;
 
   before(async function () {
+    await waitForClientsReady({ browserA, browserB });
+
     const server = backendUrl();
     const accounts = await provisionTwoAccounts(server);
     const shared = accounts.sender;
