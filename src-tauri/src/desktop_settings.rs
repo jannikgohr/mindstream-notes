@@ -10,6 +10,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 use tauri::{App, AppHandle, Emitter, Manager, State};
 
+use crate::error::{CommandError, CommandErrorCode, CommandResult};
 use crate::i18n;
 
 const SETTINGS_FILE: &str = "desktop-settings.json";
@@ -25,8 +26,17 @@ struct DesktopSettingsFile {
     custom_window_decorations: Option<bool>,
     #[serde(default = "default_language_code")]
     language_code: String,
-    #[serde(default = "default_theme_mode")]
-    theme_mode: String,
+    #[serde(default)]
+    theme_mode: DesktopThemeMode,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum DesktopThemeMode {
+    Light,
+    Dark,
+    #[default]
+    System,
 }
 
 pub struct DesktopSettings {
@@ -34,7 +44,7 @@ pub struct DesktopSettings {
     start_in_tray: AtomicBool,
     custom_window_decorations: AtomicBool,
     language_code: Mutex<String>,
-    theme_mode: Mutex<String>,
+    theme_mode: Mutex<DesktopThemeMode>,
     path: PathBuf,
 }
 
@@ -57,7 +67,7 @@ impl DesktopSettings {
             language_code: Mutex::new(
                 i18n::normalize_language_code(&file.language_code).to_string(),
             ),
-            theme_mode: Mutex::new(normalize_theme_mode(&file.theme_mode).to_string()),
+            theme_mode: Mutex::new(file.theme_mode),
             path,
         }
     }
@@ -100,22 +110,21 @@ impl DesktopSettings {
         }
     }
 
-    pub fn theme_mode(&self) -> String {
-        self.theme_mode
-            .lock()
-            .map(|mode| mode.clone())
-            .unwrap_or_else(|_| default_theme_mode())
+    pub fn theme_mode(&self) -> DesktopThemeMode {
+        self.theme_mode.lock().map(|mode| *mode).unwrap_or_default()
     }
 
-    fn set_theme_mode(&self, value: &str) {
+    fn set_theme_mode(&self, value: DesktopThemeMode) {
         if let Ok(mut mode) = self.theme_mode.lock() {
-            *mode = normalize_theme_mode(value).to_string();
+            *mode = value;
         }
     }
 
-    fn save(&self) -> Result<(), String> {
+    fn save(&self) -> CommandResult<()> {
         if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent).map_err(|e| format!("create settings dir: {e}"))?;
+            fs::create_dir_all(parent).map_err(|e| {
+                CommandError::new(CommandErrorCode::Io, format!("create settings dir: {e}"))
+            })?;
         }
         let file = DesktopSettingsFile {
             close_to_tray: self.close_to_tray(),
@@ -124,25 +133,20 @@ impl DesktopSettings {
             language_code: self.language_code(),
             theme_mode: self.theme_mode(),
         };
-        let json = serde_json::to_string_pretty(&file)
-            .map_err(|e| format!("serialize desktop settings: {e}"))?;
-        fs::write(&self.path, json).map_err(|e| format!("write desktop settings: {e}"))
+        let json = serde_json::to_string_pretty(&file).map_err(|e| {
+            CommandError::new(
+                CommandErrorCode::Unknown,
+                format!("serialize desktop settings: {e}"),
+            )
+        })?;
+        fs::write(&self.path, json).map_err(|e| {
+            CommandError::new(CommandErrorCode::Io, format!("write desktop settings: {e}"))
+        })
     }
 }
 
 fn default_language_code() -> String {
     "en".to_string()
-}
-
-fn default_theme_mode() -> String {
-    "system".to_string()
-}
-
-fn normalize_theme_mode(value: &str) -> &str {
-    match value {
-        "light" | "dark" | "system" => value,
-        _ => "system",
-    }
 }
 
 pub fn default_custom_window_decorations() -> bool {
@@ -167,12 +171,15 @@ pub fn should_use_custom_window_decorations(app: &AppHandle) -> bool {
         .unwrap_or_else(default_custom_window_decorations)
 }
 
-pub fn apply_window_decorations(app: &AppHandle, custom_decorations: bool) -> Result<(), String> {
+pub fn apply_window_decorations(app: &AppHandle, custom_decorations: bool) -> CommandResult<()> {
     let native_decorations = !custom_decorations;
     for (label, window) in app.webview_windows() {
-        window
-            .set_decorations(native_decorations)
-            .map_err(|e| format!("set decorations for {label}: {e}"))?;
+        window.set_decorations(native_decorations).map_err(|e| {
+            CommandError::new(
+                CommandErrorCode::Tauri,
+                format!("set decorations for {label}: {e}"),
+            )
+        })?;
     }
     Ok(())
 }
@@ -187,7 +194,7 @@ pub fn set_close_to_tray(
     _app: AppHandle,
     settings: State<'_, DesktopSettings>,
     value: bool,
-) -> Result<(), String> {
+) -> CommandResult<()> {
     settings.set_close_to_tray(value);
     settings.save()
 }
@@ -202,7 +209,7 @@ pub fn set_start_in_tray(
     _app: AppHandle,
     settings: State<'_, DesktopSettings>,
     value: bool,
-) -> Result<(), String> {
+) -> CommandResult<()> {
     settings.set_start_in_tray(value);
     settings.save()
 }
@@ -217,12 +224,17 @@ pub fn set_custom_window_decorations(
     app: AppHandle,
     settings: State<'_, DesktopSettings>,
     value: bool,
-) -> Result<(), String> {
+) -> CommandResult<()> {
     settings.set_custom_window_decorations(value);
     settings.save()?;
     apply_window_decorations(&app, value)?;
     app.emit(CUSTOM_WINDOW_DECORATIONS_CHANGED_EVENT, value)
-        .map_err(|e| format!("emit window decorations change: {e}"))
+        .map_err(|e| {
+            CommandError::new(
+                CommandErrorCode::Tauri,
+                format!("emit window decorations change: {e}"),
+            )
+        })
 }
 
 #[tauri::command]
@@ -235,7 +247,7 @@ pub fn set_desktop_language(
     app: AppHandle,
     settings: State<'_, DesktopSettings>,
     code: String,
-) -> Result<(), String> {
+) -> CommandResult<()> {
     settings.set_language_code(&code);
     settings.save()?;
     #[cfg(target_os = "macos")]
@@ -245,15 +257,15 @@ pub fn set_desktop_language(
 }
 
 #[tauri::command]
-pub fn get_desktop_theme_mode(settings: State<'_, DesktopSettings>) -> String {
+pub fn get_desktop_theme_mode(settings: State<'_, DesktopSettings>) -> DesktopThemeMode {
     settings.theme_mode()
 }
 
 #[tauri::command]
 pub fn set_desktop_theme_mode(
     settings: State<'_, DesktopSettings>,
-    mode: String,
-) -> Result<(), String> {
-    settings.set_theme_mode(&mode);
+    mode: DesktopThemeMode,
+) -> CommandResult<()> {
+    settings.set_theme_mode(mode);
     settings.save()
 }

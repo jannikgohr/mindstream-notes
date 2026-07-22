@@ -1,73 +1,183 @@
 import type { EditorKind } from '$lib/hotkeys/types';
 
-export type ThemeMode = 'light' | 'dark' | 'system';
-export type NativeDocumentEditCommand = 'cut' | 'copy' | 'paste' | 'selectAll';
-export type NativeUndoRedoAction = 'undo' | 'redo';
+export enum NativeMenuCommand {
+  OpenSettings = 'openSettings',
+  NewMarkdownNote = 'newMarkdownNote',
+  NewDrawing = 'newDrawing',
+  NewInkNote = 'newInkNote',
+  ImportPdf = 'importPdf',
+  Undo = 'undo',
+  Redo = 'redo',
+  Cut = 'cut',
+  Copy = 'copy',
+  Paste = 'paste',
+  SelectAll = 'selectAll',
+  ToggleSidebar = 'toggleSidebar',
+  ToggleMetadata = 'toggleMetadata',
+  SearchNotes = 'searchNotes',
+  ThemeLight = 'themeLight',
+  ThemeDark = 'themeDark',
+  ThemeSystem = 'themeSystem',
+  ShowKeyboardShortcuts = 'showKeyboardShortcuts'
+}
+
+export enum ThemeMode {
+  Light = 'light',
+  Dark = 'dark',
+  System = 'system'
+}
+
+export enum NativeDocumentEditCommand {
+  Cut = 'cut',
+  Copy = 'copy',
+  Paste = 'paste',
+  SelectAll = 'selectAll'
+}
+
+export enum NativeUndoRedoAction {
+  Undo = 'undo',
+  Redo = 'redo'
+}
+
+export function isNativeMenuCommand(
+  value: unknown
+): value is NativeMenuCommand {
+  return (
+    typeof value === 'string' &&
+    (Object.values(NativeMenuCommand) as string[]).includes(value)
+  );
+}
+
+function assertNever(value: never): never {
+  throw new Error(`Unhandled native menu command: ${String(value)}`);
+}
 
 export function hotkeyCommandForNativeMenuCommand(
-  command: string
+  command: NativeMenuCommand
 ): string | null {
   switch (command) {
-    case 'open-settings':
+    case NativeMenuCommand.OpenSettings:
       return 'global.openSettings';
-    case 'new-markdown-note':
+    case NativeMenuCommand.NewMarkdownNote:
       return 'global.newMarkdownNote';
-    case 'new-drawing':
+    case NativeMenuCommand.NewDrawing:
       return 'global.newDrawing';
-    case 'new-ink-note':
+    case NativeMenuCommand.NewInkNote:
       return 'global.newInkNote';
-    case 'toggle-sidebar':
+    case NativeMenuCommand.ToggleSidebar:
       return 'global.toggleNoteOverview';
-    case 'toggle-metadata':
+    case NativeMenuCommand.ToggleMetadata:
       return 'global.toggleNoteMetadata';
-    case 'search-notes':
+    case NativeMenuCommand.SearchNotes:
       return 'global.openSearch';
-    case 'show-keyboard-shortcuts':
+    case NativeMenuCommand.ShowKeyboardShortcuts:
       return 'global.showShortcutHelp';
-    default:
+    case NativeMenuCommand.ImportPdf:
+    case NativeMenuCommand.Undo:
+    case NativeMenuCommand.Redo:
+    case NativeMenuCommand.Cut:
+    case NativeMenuCommand.Copy:
+    case NativeMenuCommand.Paste:
+    case NativeMenuCommand.SelectAll:
+    case NativeMenuCommand.ThemeLight:
+    case NativeMenuCommand.ThemeDark:
+    case NativeMenuCommand.ThemeSystem:
       return null;
+    default:
+      return assertNever(command);
   }
 }
 
 export function themeModeForNativeMenuCommand(
-  command: string
+  command: NativeMenuCommand
 ): ThemeMode | null {
   switch (command) {
-    case 'theme-light':
-      return 'light';
-    case 'theme-dark':
-      return 'dark';
-    case 'theme-system':
-      return 'system';
-    default:
+    case NativeMenuCommand.ThemeLight:
+      return ThemeMode.Light;
+    case NativeMenuCommand.ThemeDark:
+      return ThemeMode.Dark;
+    case NativeMenuCommand.ThemeSystem:
+      return ThemeMode.System;
+    case NativeMenuCommand.OpenSettings:
+    case NativeMenuCommand.NewMarkdownNote:
+    case NativeMenuCommand.NewDrawing:
+    case NativeMenuCommand.NewInkNote:
+    case NativeMenuCommand.ImportPdf:
+    case NativeMenuCommand.Undo:
+    case NativeMenuCommand.Redo:
+    case NativeMenuCommand.Cut:
+    case NativeMenuCommand.Copy:
+    case NativeMenuCommand.Paste:
+    case NativeMenuCommand.SelectAll:
+    case NativeMenuCommand.ToggleSidebar:
+    case NativeMenuCommand.ToggleMetadata:
+    case NativeMenuCommand.SearchNotes:
+    case NativeMenuCommand.ShowKeyboardShortcuts:
       return null;
+    default:
+      return assertNever(command);
   }
 }
 
 export function documentEditCommandForNativeMenuCommand(
-  command: string
+  command: NativeMenuCommand
 ): NativeDocumentEditCommand | null {
   switch (command) {
-    case 'cut':
-    case 'copy':
-    case 'paste':
-      return command;
-    case 'select-all':
-      return 'selectAll';
-    default:
+    case NativeMenuCommand.Cut:
+      return NativeDocumentEditCommand.Cut;
+    case NativeMenuCommand.Copy:
+      return NativeDocumentEditCommand.Copy;
+    case NativeMenuCommand.Paste:
+      return NativeDocumentEditCommand.Paste;
+    case NativeMenuCommand.SelectAll:
+      return NativeDocumentEditCommand.SelectAll;
+    case NativeMenuCommand.OpenSettings:
+    case NativeMenuCommand.NewMarkdownNote:
+    case NativeMenuCommand.NewDrawing:
+    case NativeMenuCommand.NewInkNote:
+    case NativeMenuCommand.ImportPdf:
+    case NativeMenuCommand.Undo:
+    case NativeMenuCommand.Redo:
+    case NativeMenuCommand.ToggleSidebar:
+    case NativeMenuCommand.ToggleMetadata:
+    case NativeMenuCommand.SearchNotes:
+    case NativeMenuCommand.ThemeLight:
+    case NativeMenuCommand.ThemeDark:
+    case NativeMenuCommand.ThemeSystem:
+    case NativeMenuCommand.ShowKeyboardShortcuts:
       return null;
+    default:
+      return assertNever(command);
   }
 }
 
 export function undoRedoActionForNativeMenuCommand(
-  command: string
+  command: NativeMenuCommand
 ): NativeUndoRedoAction | null {
   switch (command) {
-    case 'undo':
-    case 'redo':
-      return command;
-    default:
+    case NativeMenuCommand.Undo:
+      return NativeUndoRedoAction.Undo;
+    case NativeMenuCommand.Redo:
+      return NativeUndoRedoAction.Redo;
+    case NativeMenuCommand.OpenSettings:
+    case NativeMenuCommand.NewMarkdownNote:
+    case NativeMenuCommand.NewDrawing:
+    case NativeMenuCommand.NewInkNote:
+    case NativeMenuCommand.ImportPdf:
+    case NativeMenuCommand.Cut:
+    case NativeMenuCommand.Copy:
+    case NativeMenuCommand.Paste:
+    case NativeMenuCommand.SelectAll:
+    case NativeMenuCommand.ToggleSidebar:
+    case NativeMenuCommand.ToggleMetadata:
+    case NativeMenuCommand.SearchNotes:
+    case NativeMenuCommand.ThemeLight:
+    case NativeMenuCommand.ThemeDark:
+    case NativeMenuCommand.ThemeSystem:
+    case NativeMenuCommand.ShowKeyboardShortcuts:
       return null;
+    default:
+      return assertNever(command);
   }
 }
 
