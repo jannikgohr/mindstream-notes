@@ -14,7 +14,7 @@
  */
 
 import { isTauri } from '$lib/api/core';
-import { listen } from '$lib/api/events';
+import { listen, TauriEventName } from '$lib/api/events';
 import { syncNow } from '$lib/api/sync';
 import { tUi } from '$lib/settings/i18n.svelte';
 import { clearNotificationsByKind, upsertNotification } from './store.svelte';
@@ -66,10 +66,13 @@ export function clearServerUnreachable(): void {
  */
 export function installSyncStatusBridge(): () => void {
   if (!isTauri()) return () => {};
-  const unlistenUnreachable = listen('sync-unreachable', (payload) => {
-    reportServerUnreachable(payload.server_url);
-  });
-  const unlistenCompleted = listen('sync-completed', () => {
+  const unlistenUnreachable = listen(
+    TauriEventName.SyncUnreachable,
+    (payload) => {
+      reportServerUnreachable(payload.server_url);
+    }
+  );
+  const unlistenCompleted = listen(TauriEventName.SyncCompleted, () => {
     clearServerUnreachable();
   });
   return () => {

@@ -16,12 +16,12 @@
  */
 
 import { isTauri } from '$lib/api/core';
-import { listen } from '$lib/api/events';
+import { listen, TauriEventName } from '$lib/api/events';
 import { loadTree } from '$lib/stores/tree.svelte';
 
 export function installSyncTreeRefreshBridge(): () => void {
   if (!isTauri()) return () => {};
-  const unlisten = listen('sync-completed', () => {
+  const unlisten = listen(TauriEventName.SyncCompleted, () => {
     void loadTree();
   });
   return () => {

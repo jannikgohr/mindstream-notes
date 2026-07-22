@@ -19,7 +19,7 @@ import {
   pdfNotesMissingText,
   setPdfText
 } from '$lib/api';
-import { listen } from '$lib/api/events';
+import { listen, TauriEventName } from '$lib/api/events';
 import { extractPdfText } from './extract-text';
 import { pdfAssetIdFromBody } from './viewer-helpers';
 
@@ -95,7 +95,7 @@ export function startPdfSearchIndexing(): void {
   void sweep();
   if (listenerArmed) return;
   listenerArmed = true;
-  void listen('sync-completed', () => {
+  void listen(TauriEventName.SyncCompleted, () => {
     void sweep();
   });
 }

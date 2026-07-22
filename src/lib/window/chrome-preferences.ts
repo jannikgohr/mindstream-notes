@@ -1,7 +1,8 @@
 import type { Platform } from '$lib/platform';
+import { TauriEventName } from '$lib/api/events';
 
 export const CUSTOM_WINDOW_DECORATIONS_CHANGED_EVENT =
-  'custom-window-decorations-changed';
+  TauriEventName.CustomWindowDecorationsChanged;
 export const CUSTOM_WINDOW_DECORATIONS_SETTING_ID =
   'appearance.customWindowDecorations';
 

@@ -112,7 +112,7 @@
     parseHistorySnapshot,
     serializeYjsSnapshot
   } from '$lib/history/snapshot';
-  import { listen } from '$lib/api/events';
+  import { listen, TauriEventName } from '$lib/api/events';
   import { collabCredentialsChangedForNote } from '$lib/sync/collab-credentials';
   import {
     collabAuthForRoom,
@@ -2621,7 +2621,7 @@
     unsubSession = onSessionChange(() => {
       void setupCollabProvider();
     });
-    void listen('collab-credentials-changed', (payload) => {
+    void listen(TauriEventName.CollabCredentialsChanged, (payload) => {
       if (collabCredentialsChangedForNote(payload, noteId)) {
         void setupCollabProvider();
       }

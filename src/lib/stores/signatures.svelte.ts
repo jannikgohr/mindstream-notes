@@ -19,7 +19,7 @@ import {
   deleteReusableSignature
 } from '$lib/pdf/signature-storage';
 import { isTauri } from '$lib/api';
-import { emit, listen } from '$lib/api/events';
+import { emit, listen, TauriEventName } from '$lib/api/events';
 import type { PdfSignatureSnapshot } from '$lib/pdf/types';
 
 interface SignatureLibraryState {
@@ -46,7 +46,7 @@ let crossWindowWired = false;
 function wireCrossWindow() {
   if (crossWindowWired || !isTauri()) return;
   crossWindowWired = true;
-  void listen('signatures-changed', () => {
+  void listen(TauriEventName.SignaturesChanged, () => {
     void refreshSignatures();
   });
 }
@@ -55,7 +55,7 @@ function broadcastChange() {
   if (!isTauri()) return;
   // Best-effort. The sender also receives this and re-reads, which is a
   // harmless no-op (the DB already matches its optimistic state).
-  void emit('signatures-changed', null);
+  void emit(TauriEventName.SignaturesChanged, null);
 }
 
 /**

@@ -27,12 +27,11 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::{Mutex, MutexGuard};
 
+use crate::app_events::AppEvent;
 use crate::auth;
 use crate::db::Db;
 
-use super::{
-    catch_blocking_panic, preflight_reachable, run, SyncCompletedEvent, SYNC_COMPLETED_EVENT,
-};
+use super::{catch_blocking_panic, preflight_reachable, run, SyncCompletedEvent};
 
 /// Default tick interval (seconds) before the JS side hydrates the
 /// schedule from settings. 30s matches the previous JS `'live'`
@@ -160,8 +159,9 @@ async fn tick(app: &AppHandle) -> Result<(), String> {
         notes_pulled_ids: delta.notes_pulled_ids,
         assets_pulled_ids: delta.assets_pulled_ids,
     };
-    if let Err(err) = app.emit(SYNC_COMPLETED_EVENT, &event) {
-        log::warn!("[sync-scheduler] failed to emit {SYNC_COMPLETED_EVENT}: {err}");
+    let event_name = AppEvent::SyncCompleted.as_str();
+    if let Err(err) = app.emit(event_name, &event) {
+        log::warn!("[sync-scheduler] failed to emit {event_name}: {err}");
     }
     crate::collab_events::emit_collab_credentials_changed(
         app,
