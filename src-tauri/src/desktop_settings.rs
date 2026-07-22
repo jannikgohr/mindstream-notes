@@ -49,15 +49,15 @@ pub struct DesktopSettings {
 }
 
 impl DesktopSettings {
-    pub fn load(app: &App) -> Self {
+    pub fn load(app: &App) -> CommandResult<Self> {
         let path = crate::paths::app_data_dir(app)
-            .expect("could not resolve app_data_dir")
+            .map_err(CommandError::from)?
             .join(SETTINGS_FILE);
         let file = fs::read_to_string(&path)
             .ok()
             .and_then(|raw| serde_json::from_str::<DesktopSettingsFile>(&raw).ok())
             .unwrap_or_default();
-        Self {
+        Ok(Self {
             close_to_tray: AtomicBool::new(file.close_to_tray),
             start_in_tray: AtomicBool::new(file.start_in_tray),
             custom_window_decorations: AtomicBool::new(
@@ -69,7 +69,7 @@ impl DesktopSettings {
             ),
             theme_mode: Mutex::new(file.theme_mode),
             path,
-        }
+        })
     }
 
     fn close_to_tray(&self) -> bool {

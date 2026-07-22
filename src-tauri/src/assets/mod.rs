@@ -173,15 +173,24 @@ pub fn load(conn: &Connection, id: &str) -> AppResult<Asset> {
     }
 }
 
-fn asset_url_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"asset:mindstream/([A-Za-z0-9_-]+)").unwrap())
+fn asset_url_re() -> Option<&'static Regex> {
+    static RE: OnceLock<Option<Regex>> = OnceLock::new();
+    RE.get_or_init(|| match Regex::new(r"asset:mindstream/([A-Za-z0-9_-]+)") {
+        Ok(re) => Some(re),
+        Err(err) => {
+            log::error!("[assets] invalid asset URL regex: {err}");
+            None
+        }
+    })
+    .as_ref()
 }
 
 fn count_asset_refs(body: &str, counts: &mut HashMap<String, usize>) {
-    for captures in asset_url_re().captures_iter(body) {
-        if let Some(id) = captures.get(1) {
-            *counts.entry(id.as_str().to_string()).or_default() += 1;
+    if let Some(re) = asset_url_re() {
+        for captures in re.captures_iter(body) {
+            if let Some(id) = captures.get(1) {
+                *counts.entry(id.as_str().to_string()).or_default() += 1;
+            }
         }
     }
     if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(body) {

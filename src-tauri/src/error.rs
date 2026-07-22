@@ -62,6 +62,8 @@ impl fmt::Display for CommandError {
     }
 }
 
+impl std::error::Error for CommandError {}
+
 impl From<AppError> for CommandError {
     fn from(error: AppError) -> Self {
         let code = match &error {
