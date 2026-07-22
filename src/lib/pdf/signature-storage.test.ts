@@ -55,9 +55,34 @@ describe('readLegacySnapshots', () => {
     expect(out.map((s) => s.id)).toEqual(['a']);
   });
 
+  it('skips non-object and malformed legacy array entries', () => {
+    localStorage.setItem(
+      ARRAY_KEY,
+      JSON.stringify([
+        geom('a'),
+        null,
+        'bad',
+        { id: 'flat', width: 1, height: 1, strokes: [] },
+        { id: 'missing-size', strokes: [{ id: 's' }] }
+      ])
+    );
+
+    const out = mod.readLegacySnapshots();
+
+    expect(out.map((s) => s.id)).toEqual(['a']);
+  });
+
   it('reads the single-signature key', () => {
     localStorage.setItem(SINGLE_KEY, JSON.stringify(geom('solo')));
     expect(mod.readLegacySnapshots().map((s) => s.id)).toEqual(['solo']);
+  });
+
+  it('ignores a malformed single-signature shape', () => {
+    localStorage.setItem(
+      SINGLE_KEY,
+      JSON.stringify({ id: 'solo', width: 100, strokes: [{ id: 's' }] })
+    );
+    expect(mod.readLegacySnapshots()).toEqual([]);
   });
 
   it('fills in a missing id', () => {

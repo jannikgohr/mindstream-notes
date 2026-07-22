@@ -90,6 +90,30 @@ describe('recordToSnapshot', () => {
       recordToSnapshot(record(JSON.stringify({ strokes: 'nope' })))
     ).toBeNull();
   });
+
+  it('returns null when the geometry envelope is not an object', () => {
+    expect(recordToSnapshot(record('[]'))).toBeNull();
+    expect(recordToSnapshot(record('"signature"'))).toBeNull();
+    expect(recordToSnapshot(record('null'))).toBeNull();
+  });
+
+  it('returns null when dimensions are invalid', () => {
+    expect(
+      recordToSnapshot(
+        record(JSON.stringify({ width: 0, height: 1, strokes: [{}] }))
+      )
+    ).toBeNull();
+    expect(
+      recordToSnapshot(
+        record(JSON.stringify({ width: 1, height: Number.NaN, strokes: [{}] }))
+      )
+    ).toBeNull();
+    expect(
+      recordToSnapshot(
+        record(JSON.stringify({ width: '1', height: 1, strokes: [{}] }))
+      )
+    ).toBeNull();
+  });
 });
 
 describe('snapshotToData', () => {
