@@ -25,7 +25,7 @@ export async function invokeOrFallback<T>(
   command: string,
   args: Record<string, unknown> | undefined,
   fallback: () => T | Promise<T>,
-  validate: IpcValidator<T> = (value) => value as T
+  validate: IpcValidator<T>
 ): Promise<T> {
   if (!isTauri()) return await fallback();
   return validate(await tauriInvoke<unknown>(command, args));
@@ -58,6 +58,12 @@ export function assertBoolean(value: unknown, context: string): boolean {
     throw new Error(`${context} must be a boolean`);
   }
   return value;
+}
+
+export function assertVoid(value: unknown, context: string): void {
+  if (value !== null && value !== undefined) {
+    throw new Error(`${context} must not return a value`);
+  }
 }
 
 export function assertStringArray(value: unknown, context: string): string[] {

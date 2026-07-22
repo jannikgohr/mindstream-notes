@@ -7,14 +7,15 @@
  * on Android and are silent no-ops on desktop.
  */
 
-import { invokeOrFallback } from './core';
+import { assertVoid, invokeOrFallback } from './core';
 import { mockApi } from './mock-store';
 
 export function drawingShowLiveInkOverlay(): Promise<void> {
   return invokeOrFallback<void>(
     'drawing_show_live_ink_overlay',
     undefined,
-    () => undefined
+    () => undefined,
+    (value) => assertVoid(value, 'drawing_show_live_ink_overlay response')
   );
 }
 
@@ -22,7 +23,8 @@ export function drawingHideLiveInkOverlay(): Promise<void> {
   return invokeOrFallback<void>(
     'drawing_hide_live_ink_overlay',
     undefined,
-    () => undefined
+    () => undefined,
+    (value) => assertVoid(value, 'drawing_hide_live_ink_overlay response')
   );
 }
 
@@ -30,7 +32,8 @@ export function drawingEnterImmersiveInkMode(): Promise<void> {
   return invokeOrFallback<void>(
     'drawing_enter_immersive_ink_mode',
     undefined,
-    () => undefined
+    () => undefined,
+    (value) => assertVoid(value, 'drawing_enter_immersive_ink_mode response')
   );
 }
 
@@ -38,7 +41,8 @@ export function drawingExitImmersiveInkMode(): Promise<void> {
   return invokeOrFallback<void>(
     'drawing_exit_immersive_ink_mode',
     undefined,
-    () => undefined
+    () => undefined,
+    (value) => assertVoid(value, 'drawing_exit_immersive_ink_mode response')
   );
 }
 
@@ -46,7 +50,8 @@ export function drawingCancelLiveInk(): Promise<void> {
   return invokeOrFallback<void>(
     'drawing_cancel_live_ink',
     undefined,
-    () => undefined
+    () => undefined,
+    (value) => assertVoid(value, 'drawing_cancel_live_ink response')
   );
 }
 
@@ -58,7 +63,8 @@ export function drawingSetLiveInkStyle(
   return invokeOrFallback<void>(
     'drawing_set_live_ink_style',
     { colorArgb, minWidthPx, maxWidthPx },
-    () => undefined
+    () => undefined,
+    (value) => assertVoid(value, 'drawing_set_live_ink_style response')
   );
 }
 
@@ -68,7 +74,8 @@ export function drawingSetLiveInkFingerDrawing(
   return invokeOrFallback<void>(
     'drawing_set_live_ink_finger_drawing',
     { allowed },
-    () => undefined
+    () => undefined,
+    (value) => assertVoid(value, 'drawing_set_live_ink_finger_drawing response')
   );
 }
 
@@ -83,7 +90,8 @@ export function drawingSetDocumentBounds(bounds: number[]): Promise<void> {
   return invokeOrFallback<void>(
     'drawing_set_document_bounds',
     { bounds },
-    () => undefined
+    () => undefined,
+    (value) => assertVoid(value, 'drawing_set_document_bounds response')
   );
 }
 
@@ -99,7 +107,8 @@ export function drawingSetControlBounds(bounds: number[]): Promise<void> {
   return invokeOrFallback<void>(
     'drawing_set_control_bounds',
     { bounds },
-    () => undefined
+    () => undefined,
+    (value) => assertVoid(value, 'drawing_set_control_bounds response')
   );
 }
 
@@ -117,7 +126,8 @@ export function drawingSaveInkState(
     { noteId, yrsState },
     async () => {
       await mockApi.saveNote({ id: noteId, yrs_state: yrsState });
-    }
+    },
+    (value) => assertVoid(value, 'drawing_save_ink_state response')
   );
 }
 

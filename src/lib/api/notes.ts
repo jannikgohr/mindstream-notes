@@ -12,6 +12,7 @@ import {
   assertRecord,
   assertString,
   assertStringArray,
+  assertVoid,
   invokeOrFallback,
   optionalString
 } from './core';
@@ -188,22 +189,31 @@ export function saveNote(input: UpdateNoteInput): Promise<Note> {
 
 export function trashNote(id: string): Promise<void> {
   assertNonEmptyString(id, 'trashNote.id');
-  return invokeOrFallback<void>('trash_note', { id }, () =>
-    mockApi.trashNote(id)
+  return invokeOrFallback<void>(
+    'trash_note',
+    { id },
+    () => mockApi.trashNote(id),
+    (value) => assertVoid(value, 'trash_note response')
   );
 }
 
 export function restoreNote(id: string): Promise<void> {
   assertNonEmptyString(id, 'restoreNote.id');
-  return invokeOrFallback<void>('restore_note', { id }, () =>
-    mockApi.restoreNote(id)
+  return invokeOrFallback<void>(
+    'restore_note',
+    { id },
+    () => mockApi.restoreNote(id),
+    (value) => assertVoid(value, 'restore_note response')
   );
 }
 
 export function purgeNote(id: string): Promise<void> {
   assertNonEmptyString(id, 'purgeNote.id');
-  return invokeOrFallback<void>('purge_note', { id }, () =>
-    mockApi.purgeNote(id)
+  return invokeOrFallback<void>(
+    'purge_note',
+    { id },
+    () => mockApi.purgeNote(id),
+    (value) => assertVoid(value, 'purge_note response')
   );
 }
 

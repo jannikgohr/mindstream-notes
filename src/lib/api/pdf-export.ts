@@ -9,7 +9,7 @@
  * a Blob + `<a download>` anchor — works in any modern browser.
  */
 
-import { invokeOrFallback, isTauri } from './core';
+import { assertBoolean, invokeOrFallback, isTauri } from './core';
 
 export interface SavePdfExportArgs {
   /** Suggested filename pre-filled into the dialog (no extension stripped). */
@@ -40,7 +40,8 @@ export async function saveAnnotatedPdf(
         bytes: Array.from(args.bytes)
       }
     },
-    () => downloadViaAnchor(args)
+    () => downloadViaAnchor(args),
+    (value) => assertBoolean(value, 'save_pdf_export response')
   );
 }
 

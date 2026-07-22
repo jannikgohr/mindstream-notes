@@ -14,7 +14,7 @@
     applyEditorTypography,
     applyUiFontSize
   } from '$lib/settings/appearance';
-  import { invokeOrFallback } from '$lib/api/core';
+  import { assertVoid, invokeOrFallback } from '$lib/api/core';
   import { setNativeHotkeyDisplays } from '$lib/api/hotkeys';
   import { setTrashRetention, sweepTrashRetention } from '$lib/api/data';
   import LazyRootSingletons from '$lib/components/LazyRootSingletons.svelte';
@@ -272,7 +272,8 @@
       { enabled, intervalSecs: seconds },
       // No-op fallback when running outside Tauri (browser dev
       // mode) — there's no Rust scheduler to talk to.
-      async () => undefined
+      async () => undefined,
+      (value) => assertVoid(value, 'set_sync_schedule response')
     );
   });
 </script>

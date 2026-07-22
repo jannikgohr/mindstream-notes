@@ -1,4 +1,4 @@
-import { invokeOrFallback } from './core';
+import { assertNumber, assertRecord, invokeOrFallback } from './core';
 import { mockApi } from './mock-store';
 import { TRASH_ID } from './index';
 
@@ -18,36 +18,56 @@ export function moveMany(
   return invokeOrFallback<BatchCounts>(
     'move_many',
     { items, targetCollectionId },
-    () => moveManyFallback(items, targetCollectionId)
+    () => moveManyFallback(items, targetCollectionId),
+    parseBatchCounts
   );
 }
 
 export function trashMany(items: TreeItemRef[]): Promise<BatchCounts> {
-  return invokeOrFallback<BatchCounts>('trash_many', { items }, () =>
-    moveManyFallback(items, TRASH_ID)
+  return invokeOrFallback<BatchCounts>(
+    'trash_many',
+    { items },
+    () => moveManyFallback(items, TRASH_ID),
+    parseBatchCounts
   );
 }
 
 export function restoreMany(items: TreeItemRef[]): Promise<BatchCounts> {
-  return invokeOrFallback<BatchCounts>('restore_many', { items }, () =>
-    moveManyFallback(items, null)
+  return invokeOrFallback<BatchCounts>(
+    'restore_many',
+    { items },
+    () => moveManyFallback(items, null),
+    parseBatchCounts
   );
 }
 
 export function purgeMany(items: TreeItemRef[]): Promise<BatchCounts> {
-  return invokeOrFallback<BatchCounts>('purge_many', { items }, async () => {
-    const counts: BatchCounts = { notes: 0, folders: 0 };
-    for (const item of items) {
-      if (item.kind === 'note') {
-        await mockApi.purgeNote(item.id);
-        counts.notes += 1;
-      } else {
-        await mockApi.deleteCollection(item.id);
-        counts.folders += 1;
+  return invokeOrFallback<BatchCounts>(
+    'purge_many',
+    { items },
+    async () => {
+      const counts: BatchCounts = { notes: 0, folders: 0 };
+      for (const item of items) {
+        if (item.kind === 'note') {
+          await mockApi.purgeNote(item.id);
+          counts.notes += 1;
+        } else {
+          await mockApi.deleteCollection(item.id);
+          counts.folders += 1;
+        }
       }
-    }
-    return counts;
-  });
+      return counts;
+    },
+    parseBatchCounts
+  );
+}
+
+function parseBatchCounts(value: unknown): BatchCounts {
+  const raw = assertRecord(value, 'batch counts');
+  return {
+    notes: assertNumber(raw.notes, 'batch counts.notes'),
+    folders: assertNumber(raw.folders, 'batch counts.folders')
+  };
 }
 
 async function moveManyFallback(
