@@ -6,7 +6,7 @@ use super::*;
 #[tauri::command]
 pub async fn list_collection_invitations(
     app: AppHandle,
-) -> Result<Vec<CollectionInvitation>, String> {
+) -> CommandResult<Vec<CollectionInvitation>> {
     tauri::async_runtime::spawn_blocking(move || {
         let account = restore_required(&app)?;
         let manager = account
@@ -16,6 +16,7 @@ pub async fn list_collection_invitations(
     })
     .await
     .map_err(|e| format!("list collection invitations task: {e}"))?
+    .map_err(Into::into)
 }
 
 /// List incoming share invitations grouped into manifest-backed bundles.
@@ -30,7 +31,7 @@ pub async fn list_collection_invitations(
 #[tauri::command]
 pub async fn list_incoming_share_bundles(
     app: AppHandle,
-) -> Result<IncomingShareInvitations, String> {
+) -> CommandResult<IncomingShareInvitations> {
     tauri::async_runtime::spawn_blocking(move || {
         let account = restore_required(&app)?;
         let inv_manager = account
@@ -63,7 +64,7 @@ pub async fn list_incoming_share_bundles(
 pub async fn accept_share_bundle(
     app: AppHandle,
     manifest_collection_uid: String,
-) -> Result<(), String> {
+) -> CommandResult<()> {
     tauri::async_runtime::spawn_blocking(move || {
         let account = restore_required(&app)?;
         let inv_manager = account
@@ -179,7 +180,7 @@ pub async fn accept_share_bundle(
 pub async fn decline_share_bundle(
     app: AppHandle,
     manifest_collection_uid: String,
-) -> Result<(), String> {
+) -> CommandResult<()> {
     tauri::async_runtime::spawn_blocking(move || {
         let account = restore_required(&app)?;
         let inv_manager = account

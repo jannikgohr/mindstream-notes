@@ -59,7 +59,7 @@ use push::*;
 
 use crate::auth;
 use crate::db::Db;
-use crate::error::{AppError, AppResult};
+use crate::error::{AppError, AppResult, CommandResult};
 use crate::sharing::{
     share_scope_collab_info, ShareManifest, ShareScopeCollabInfo, COLLECTION_TYPE_SHARE_MANIFEST,
 };
@@ -316,7 +316,7 @@ async fn preflight_reachable(app: &AppHandle) -> bool {
 // ---------- Tauri command ----------
 
 #[tauri::command]
-pub async fn sync_now(app: AppHandle) -> Result<SyncReport, String> {
+pub async fn sync_now(app: AppHandle) -> CommandResult<SyncReport> {
     // Acquire the scheduler's in-flight lock so manual + scheduled
     // syncs serialise instead of racing to push the same dirty rows
     // or compete for the etebase stoken. The user pays at most one
@@ -328,7 +328,7 @@ pub async fn sync_now(app: AppHandle) -> Result<SyncReport, String> {
     // probe emits `sync-unreachable` (one clear offline notification);
     // bail out rather than fanning out into a storm of failing requests.
     if !preflight_reachable(&app).await {
-        return Err("sync server unreachable".to_string());
+        return Err("sync server unreachable".into());
     }
 
     let app_for_blocking = app.clone();

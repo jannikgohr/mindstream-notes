@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
 use crate::db::Db;
-use crate::error::{AppError, AppResult};
+use crate::error::{AppError, AppResult, CommandResult};
 
 pub const COLLECTION_TYPE_SHARE_MANIFEST: &str = "mindstream.share_manifest";
 pub const COLLECTION_TYPE_SHARE_FOLDERS: &str = "mindstream.folders";
