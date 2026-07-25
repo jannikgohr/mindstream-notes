@@ -1,0 +1,131 @@
+/**
+ * Public contract for the declarative plugin system.
+ *
+ * The first plugin slice is intentionally *manifest-only*: a plugin describes
+ * templates, settings, commands and localized strings as data — it never ships
+ * runnable code. Everything a plugin can do is expressed through the shapes in
+ * this file, which keeps the security model small (see docs/plugins) while the
+ * registry, permission and integrity surfaces settle.
+ *
+ * Namespacing rule that runs through the whole system: a plugin owns a stable,
+ * dotted `id` (e.g. `com.mindstream.templates.core`). Every runtime identifier
+ * derived from a plugin — settings keys, command ids, i18n keys, permission
+ * grants — is namespaced under that id so two plugins can never collide and a
+ * grant/record can always be traced back to exactly one plugin.
+ */
+
+/**
+ * Capabilities a plugin may request in its manifest. The MVP grants only the
+ * two needed to contribute + create template notes; broad `notes.read` /
+ * `notes.write` are deliberately absent — the app, not the plugin, performs the
+ * actual note write (see templates.ts).
+ */
+export type PluginPermission = 'templates.contribute' | 'notes.create';
+
+/** All permissions the current app version understands. */
+export const KNOWN_PLUGIN_PERMISSIONS: readonly PluginPermission[] = [
+  'templates.contribute',
+  'notes.create'
+];
+
+/**
+ * Localized strings a plugin contributes, keyed by locale code then by a
+ * plugin-local key. Keys are namespaced to `plugins.<pluginId>.<key>` at
+ * runtime (see plugin-i18n.ts) so they can never shadow a core app string.
+ */
+export type PluginI18nContribution = Record<string, Record<string, string>>;
+
+/** A variable a template prompts for / interpolates. */
+export interface PluginTemplateVariable {
+  /** Plugin-local slug, referenced as `{{id}}` in the templates. */
+  id: string;
+  labelKey: string;
+  type: 'text' | 'date' | 'select';
+  default?: string;
+  /** Required for `type: 'select'`; ignored otherwise. */
+  options?: string[];
+  required?: boolean;
+}
+
+/**
+ * A note template a plugin contributes. MVP renders `markdown` only; the
+ * `noteKind` field exists so the shape can widen later without a breaking
+ * change. `titleTemplate` / `bodyTemplate` use `{{variable}}` interpolation
+ * (see templates.ts) — deliberately declarative, no embedded code.
+ */
+export interface PluginNoteTemplateContribution {
+  /** Plugin-local slug; the app-wide id is `plugins.<pluginId>.<id>`. */
+  id: string;
+  labelKey: string;
+  descriptionKey?: string;
+  noteKind: 'markdown';
+  titleTemplate: string;
+  bodyTemplate: string;
+  variables?: PluginTemplateVariable[];
+}
+
+/** A single generic setting control a plugin adds under its section. */
+export interface PluginSetting {
+  /** Plugin-local slug; stored under `plugins.<pluginId>.<id>`. */
+  id: string;
+  labelKey: string;
+  descriptionKey?: string;
+  /** Reuses the app's vault/device scope model. */
+  scope: 'V' | 'D';
+  type: 'toggle' | 'select' | 'radio' | 'number' | 'slider' | 'color' | 'text';
+  default?: unknown;
+  /** Required for `select`/`radio`; option labels resolve via plugin i18n. */
+  options?: string[];
+}
+
+/** A subsection of settings a plugin adds under the "Plugins" category. */
+export interface PluginSettingsContribution {
+  /** Plugin-local slug; the app-wide section id is `plugins.<pluginId>.<sectionId>`. */
+  sectionId: string;
+  titleKey: string;
+  settings: PluginSetting[];
+}
+
+/**
+ * What a plugin command does. A closed union rather than an arbitrary callback:
+ * the app maps each variant onto an app-owned handler, so a command can never
+ * smuggle in executable behaviour. Only `createTemplateNote` exists in the MVP.
+ */
+export type PluginCommandAction = {
+  type: 'createTemplateNote';
+  /** Plugin-local template id this command creates a note from. */
+  templateId: string;
+};
+
+/** An app-local (never native/global) command a plugin contributes. */
+export interface PluginCommandContribution {
+  /** Plugin-local slug; the app-wide id is `plugin.<pluginId>.<id>`. */
+  id: string;
+  labelKey: string;
+  /** A hotkey string (e.g. `mod+alt+m`) or `null` for "no default binding". */
+  defaultBinding?: string | null;
+  action: PluginCommandAction;
+}
+
+/** The `contributes` block of a manifest. Every field is optional. */
+export interface PluginContributions {
+  i18n?: PluginI18nContribution;
+  settings?: PluginSettingsContribution[];
+  noteTemplates?: PluginNoteTemplateContribution[];
+  commands?: PluginCommandContribution[];
+}
+
+/**
+ * A plugin manifest. `runtime` is `'manifest-only'` for every MVP plugin; the
+ * `'js'` variant and `entry` field are reserved so the format doesn't need a
+ * breaking change when code execution eventually lands behind signing.
+ */
+export interface PluginManifest {
+  id: string;
+  name: string;
+  version: string;
+  runtime: 'manifest-only' | 'js';
+  entry?: string;
+  permissions: PluginPermission[];
+  contributes: PluginContributions;
+}
