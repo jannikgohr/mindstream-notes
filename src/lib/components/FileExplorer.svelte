@@ -4,6 +4,7 @@
   import {
     ChevronRight,
     Feather,
+    FileStack,
     FileText,
     Folder,
     FolderOpen,
@@ -18,6 +19,11 @@
   import FavouriteStar from './FavouriteStar.svelte';
   import { noteKindIcon } from './note-kind-icon';
   import { noteTypeEnabled } from '$lib/notes/note-types';
+  import {
+    hasPluginTemplates,
+    pluginTemplateEntries,
+    runPluginTemplate
+  } from '$lib/plugins/menu';
   import { tooltip } from '$lib/actions/tooltip';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
@@ -358,6 +364,27 @@
     menuOpen = false;
     menuTarget = null;
     currentMenuItems = [];
+  }
+
+  // Toolbar "New from template" affordance: opens the shared context menu with
+  // just the plugin template entries, anchored under the button. Reuses the
+  // same ContextMenu render path so a template creates + opens a note exactly
+  // as it does from the right-click menu. Creates at the current root (null).
+  function openTemplateMenu(e: MouseEvent) {
+    const entries = pluginTemplateEntries();
+    if (entries.length === 0) return;
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    menuToken += 1;
+    menuX = rect.left;
+    menuY = rect.bottom + 4;
+    menuTarget = { kind: 'root' };
+    currentMenuItems = entries.map((entry) => ({
+      id: `plugin-template:${entry.pluginId}:${entry.templateId}`,
+      label: entry.label,
+      onSelect: () =>
+        void runPluginTemplate(entry.pluginId, entry.templateId, null)
+    }));
+    menuOpen = true;
   }
 
   async function runNoteExporter(
@@ -853,6 +880,18 @@
             class="size-7"
           >
             <FileUp class="size-3.5" />
+          </Button>
+        {/if}
+        {#if hasPluginTemplates()}
+          <Button
+            variant="ghost"
+            size="icon"
+            onclick={openTemplateMenu}
+            title={tUi('nav.create.fromTemplate')}
+            aria-label={tUi('nav.create.fromTemplate')}
+            class="size-7"
+          >
+            <FileStack class="size-3.5" />
           </Button>
         {/if}
         <Button

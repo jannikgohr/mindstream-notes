@@ -22,12 +22,14 @@
   import {
     Feather,
     FilePlus2,
+    FileText,
     FileUp,
     FolderPlus,
     PencilRuler,
     SquareKanban
   } from '@lucide/svelte';
   import { noteTypeEnabled } from '$lib/notes/note-types';
+  import { pluginTemplateEntries, runPluginTemplate } from '$lib/plugins/menu';
   import type { IconComponent } from '$lib/settings/icons';
   import MobileTopBar from './MobileTopBar.svelte';
   import MobileBreadcrumb from './MobileBreadcrumb.svelte';
@@ -229,7 +231,20 @@
                   onSelect: importPdf
                 }
               ]
-            : [])
+            : []),
+          // Plugin templates create + open directly (auto-titled), so they
+          // skip the name sheet the built-in kinds use.
+          ...pluginTemplateEntries().map((entry) => ({
+            id: `plugin-template:${entry.pluginId}:${entry.templateId}`,
+            label: entry.label,
+            icon: FileText as unknown as IconComponent,
+            onSelect: () =>
+              void runPluginTemplate(
+                entry.pluginId,
+                entry.templateId,
+                targetParent()
+              )
+          }))
         ]
   );
 

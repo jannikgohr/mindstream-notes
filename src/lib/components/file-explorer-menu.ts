@@ -12,6 +12,7 @@
 import { Folder } from '@lucide/svelte';
 import type { MenuItem } from './context-menu-types';
 import { noteTypeEnabled } from '$lib/notes/note-types';
+import { pluginTemplateEntries, runPluginTemplate } from '$lib/plugins/menu';
 import { confirm } from './confirm-dialog.svelte';
 import {
   tree,
@@ -95,6 +96,29 @@ type RunNoteExporter = (
   label: string,
   run: () => Promise<void>
 ) => Promise<void>;
+
+/**
+ * "New from template" submenu for a create surface, or `[]` when no enabled
+ * plugin contributes a template. Shared by the Home-folder, editable-shared and
+ * root create menus so a template is offered wherever a plain "New note" is.
+ * Only added in create-allowed contexts, so it inherits their write / shared
+ * read-only gating.
+ */
+function pluginTemplateMenuItems(parentId: string | null): MenuItem[] {
+  const entries = pluginTemplateEntries();
+  if (entries.length === 0) return [];
+  return [
+    {
+      label: tUi('nav.create.fromTemplate'),
+      children: entries.map((entry) => ({
+        id: `plugin-template:${entry.pluginId}:${entry.templateId}`,
+        label: entry.label,
+        onSelect: () =>
+          void runPluginTemplate(entry.pluginId, entry.templateId, parentId)
+      }))
+    }
+  ];
+}
 
 export function createMenuBuilder(ctx: MenuBuildContext) {
   /**
@@ -250,6 +274,7 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
             }
           ]
         : []),
+      ...pluginTemplateMenuItems(id),
       {
         label: 'New folder inside',
         onSelect: () => ctx.startDraft('folder', id)
@@ -535,6 +560,7 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
             }
           ]
         : []),
+      ...pluginTemplateMenuItems(null),
       { label: 'New folder', onSelect: () => ctx.startDraft('folder', null) }
     ];
   }

@@ -682,6 +682,8 @@
     "data.exportVault.failed.message": "{error}",
     "nav.create.kanban": "Neues Kanban-Board",
     "nav.create.kanbanInFolder": "Neues Kanban-Board im Ordner",
+    "nav.create.fromTemplate": "Neu aus Vorlage",
+    "fab.fromTemplate": "Neu aus Vorlage",
     "fab.newKanban": "Neues Kanban-Board",
     "fab.placeholder.kanbanTitle": "Titel des Kanban-Boards",
     "editor.kanban.labels": "Labels",
