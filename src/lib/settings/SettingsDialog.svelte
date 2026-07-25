@@ -24,6 +24,7 @@
   import { displayBinding } from '$lib/hotkeys/format';
   import { getBinding } from '$lib/hotkeys/store.svelte';
   import { pluginSettingsCategory } from '$lib/plugins/settings-bridge';
+  import { pluginCommandLabel } from '$lib/plugins/hotkeys';
 
   // Static schema categories plus the synthetic "Plugins" category, which
   // appears only when an enabled plugin contributes settings.
@@ -107,7 +108,7 @@
     const display = displayBinding(current) || tUi('hotkeys.unset');
     return [
       cmd.id,
-      tUi(cmd.labelKey),
+      pluginCommandLabel(cmd.id) ?? tUi(cmd.labelKey),
       groupLabel,
       current ?? '',
       display,

@@ -44,6 +44,7 @@ import {
   searchActiveNote
 } from './bus.svelte';
 import { openShortcutHelp } from './help.svelte';
+import { pluginHotkeyCommands } from '$lib/plugins/hotkeys';
 import {
   openRightSidebar,
   toggleLeftSidebar,
@@ -600,7 +601,20 @@ export const COMMAND_BY_ID: Record<string, CommandDefinition> =
  * `EditorListener`, `activeEditor`, or any of the dispatch internals.
  */
 export function commandById(id: string): CommandDefinition | null {
-  return COMMAND_BY_ID[id] ?? null;
+  return (
+    COMMAND_BY_ID[id] ?? pluginHotkeyCommands().find((c) => c.id === id) ?? null
+  );
+}
+
+/**
+ * The built-in catalogue plus every enabled plugin's app-local commands.
+ * Rebuilt on each call so it reflects the live set of enabled plugins. The
+ * static `HOTKEY_COMMANDS` / `COMMAND_BY_ID` stay untouched; consumers that
+ * must include plugin commands (dispatch, binding store, settings panel) read
+ * through here instead.
+ */
+export function allHotkeyCommands(): CommandDefinition[] {
+  return [...HOTKEY_COMMANDS, ...pluginHotkeyCommands()];
 }
 
 /** Group commands for the settings UI. Order of groups itself matches
@@ -615,7 +629,9 @@ export interface CommandGroup {
 
 export function groupedCommands(): CommandGroup[] {
   const groups = new Map<string, CommandGroup>();
-  for (const cmd of HOTKEY_COMMANDS) {
+  // Include plugin commands: they're global-scope, so they fold into the
+  // existing "Global" group with no new group label needed.
+  for (const cmd of allHotkeyCommands()) {
     const editorKind = cmd.scope === 'editor' ? cmd.editorKind : null;
     const key = `${cmd.scope}:${editorKind ?? ''}`;
     let group = groups.get(key);
