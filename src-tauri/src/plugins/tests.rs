@@ -123,6 +123,28 @@ fn set_enabled_on_missing_plugin_is_not_found() {
 }
 
 #[test]
+fn reconcile_registers_discovered_plugins_and_returns_manifests() {
+    let db = open_memory_for_tests();
+    db.with_conn(|c| {
+        let discovered = vec![super::discovery::DiscoveredPlugin {
+            id: "com.a.plugin".into(),
+            version: "1.0.0".into(),
+            permissions: vec!["notes.create".into()],
+            source: SOURCE_BUILTIN.into(),
+            checksum: "hash1".into(),
+            manifest: serde_json::json!({ "id": "com.a.plugin", "name": "A" }),
+        }];
+        let views = reconcile(c, discovered)?;
+        assert_eq!(views.len(), 1);
+        assert!(views[0].record.enabled);
+        assert_eq!(views[0].record.source, SOURCE_BUILTIN);
+        assert_eq!(views[0].manifest["name"], "A");
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
 fn remove_deletes_the_record() {
     let db = open_memory_for_tests();
     db.with_conn(|c| {

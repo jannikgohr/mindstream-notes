@@ -1,12 +1,13 @@
 //! Per-profile plugin registry — durable install/enable state + integrity.
 //!
-//! The frontend owns each plugin's manifest and contributions (bundled
-//! first-party plugins ship their manifest in the JS bundle; a future
-//! third-party flow will read it from an installed package). This module is the
-//! Rust-side record of *which* plugins exist for the active profile, whether
-//! they're enabled, and the hash the user/app accepted — so the security-
-//! relevant state lives in the DB rather than in web storage that a cache clear
-//! can wipe.
+//! Plugins are discovered from disk by [`discovery`]: bundled core plugins from
+//! the app resource dir (`builtin`) and third-party plugins from the profile's
+//! app-data dir (`installed`). This module reconciles what was discovered with
+//! the durable DB record of *which* plugins exist for the active profile,
+//! whether they're enabled, and the hash the user/app accepted — so the
+//! security-relevant state lives in the DB rather than in web storage that a
+//! cache clear can wipe. The frontend receives the reconciled records + parsed
+//! manifests and registers the contributions of the enabled ones.
 //!
 //! Integrity gate: an **installed** (third-party) plugin whose manifest
 //! checksum no longer matches its `accepted_hash` is auto-disabled with a load
@@ -17,13 +18,18 @@
 use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, State};
 
 use crate::db::Db;
 use crate::error::{AppError, AppResult, CommandResult};
 
+pub mod discovery;
+
 /// Where a plugin came from. Governs the integrity gate: builtins are trusted,
 /// installed plugins must keep a matching accepted hash.
 pub const SOURCE_BUILTIN: &str = "builtin";
+/// Third-party plugins loaded from the user-writable app-data dir.
+pub const SOURCE_INSTALLED: &str = "installed";
 
 /// Durable record for one plugin in the active profile.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -43,7 +49,10 @@ pub struct PluginRecord {
     pub updated_at: String,
 }
 
-/// Frontend payload to register/refresh a plugin from its loaded manifest.
+/// Internal reconcile payload, built from a {@link discovery::DiscoveredPlugin}.
+/// NOTE: not a command input — `source` is set by the Rust discovery layer from
+/// the load location, never supplied by the frontend, so a plugin can't claim a
+/// trust level it wasn't loaded with.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpsertPlugin {
@@ -174,6 +183,44 @@ pub fn upsert(conn: &Connection, input: UpsertPlugin) -> AppResult<PluginRecord>
     require(conn, &input.id)
 }
 
+/// A discovered plugin's reconciled record plus its manifest, returned to the
+/// frontend so it can register the contributions of enabled plugins.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscoveredPluginView {
+    pub record: PluginRecord,
+    pub manifest: serde_json::Value,
+}
+
+/// Reconcile every discovered plugin with its DB record (applying the trust
+/// gate via {@link upsert}) and return the records + manifests. The `source`
+/// on each input comes from discovery (the load location), so trust is never
+/// frontend-controlled.
+pub fn reconcile(
+    conn: &Connection,
+    discovered: Vec<discovery::DiscoveredPlugin>,
+) -> AppResult<Vec<DiscoveredPluginView>> {
+    let mut views = Vec::with_capacity(discovered.len());
+    for plugin in discovered {
+        let record = upsert(
+            conn,
+            UpsertPlugin {
+                id: plugin.id,
+                version: plugin.version,
+                checksum: plugin.checksum,
+                source: plugin.source,
+                source_path: None,
+                permissions: plugin.permissions,
+            },
+        )?;
+        views.push(DiscoveredPluginView {
+            record,
+            manifest: plugin.manifest,
+        });
+    }
+    Ok(views)
+}
+
 fn set_enabled(conn: &Connection, id: &str, enabled: bool) -> AppResult<PluginRecord> {
     let now = Utc::now().to_rfc3339();
     let changed = conn.execute(
@@ -227,12 +274,22 @@ pub fn plugins_get(db: tauri::State<'_, Db>, id: String) -> CommandResult<Option
     db.with_conn(|c| get(c, &id)).map_err(Into::into)
 }
 
+/// Discover plugins from disk (core = bundled resource dir, third-party =
+/// app-data dir), reconcile them with the DB, and return records + manifests.
+/// This is the *only* path that assigns trust, and it does so from the load
+/// location — there is deliberately no command that lets the frontend declare a
+/// plugin's `source`.
 #[tauri::command]
-pub fn plugins_upsert(
-    db: tauri::State<'_, Db>,
-    input: UpsertPlugin,
-) -> CommandResult<PluginRecord> {
-    db.with_conn(|c| upsert(c, input)).map_err(Into::into)
+pub fn plugins_discover(
+    app: AppHandle,
+    db: State<'_, Db>,
+) -> CommandResult<Vec<DiscoveredPluginView>> {
+    let core_dir = discovery::core_plugins_dir(&app)?;
+    let third_party_dir = discovery::third_party_plugins_dir(&app)?;
+    discovery::ensure_third_party_dir(&third_party_dir);
+    let discovered = discovery::discover(&core_dir, &third_party_dir);
+    db.with_conn(|c| reconcile(c, discovered))
+        .map_err(Into::into)
 }
 
 #[tauri::command]

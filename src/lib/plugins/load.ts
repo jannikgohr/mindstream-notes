@@ -1,38 +1,27 @@
 /**
  * Plugin loading bootstrap.
  *
- * Registers the bundled first-party plugins at app startup. Every plugin is
- * loaded in isolation: a manifest that fails validation is recorded as that
- * plugin's load error and skipped, so a broken plugin can never take down
- * startup or another plugin (a core plan requirement).
+ * In the app (Tauri), plugins are discovered from disk by the backend
+ * (`plugins_discover`): bundled core plugins from the app resource dir and
+ * third-party plugins from the profile's app-data dir. The backend assigns each
+ * plugin's trust `source` from its load location and applies the integrity gate,
+ * then hands back the reconciled record + parsed manifest. This module registers
+ * the contributions of the enabled ones into the reactive registry.
  *
- * Enablement is decided by an injected predicate. In the running app that reads
- * a per-plugin device setting (`plugins.<id>.enabled`, default on); tests pass
- * their own predicate to stay decoupled from the settings runtime.
+ * Outside Tauri (`vite preview` / web-mobile) there is no backend and no disk
+ * discovery, so the bundled core plugin's manifest — the single canonical
+ * `core-plugins/templates/manifest.json` the app also ships as a resource — is
+ * imported directly and registered as a builtin.
+ *
+ * Every plugin loads in isolation: a manifest that fails validation is recorded
+ * as that plugin's load error and skipped, so a broken plugin can never take
+ * down startup or another plugin.
  */
 
-import { getSettingValue } from '$lib/settings/store.svelte';
-import { pluginsUpsert } from '$lib/api/plugins';
-import { BUILTIN_PLUGIN_MANIFESTS } from './builtin';
-import { checksumManifest } from './canonical';
-import {
-  pluginById,
-  recordPluginLoadError,
-  registerPlugin,
-  setPluginEnabled
-} from './registry.svelte';
-import { SOURCE_BUILTIN } from './source';
-import type { PluginManifest } from './types';
-
-/** Settings key holding a plugin's enabled flag. Absent/unset ⇒ enabled. */
-export function pluginEnabledSettingId(pluginId: string): string {
-  return `plugins.${pluginId}.enabled`;
-}
-
-/** Default enablement: on unless the user explicitly turned the plugin off. */
-export function pluginEnabledByDefault(pluginId: string): boolean {
-  return getSettingValue(pluginEnabledSettingId(pluginId)) !== false;
-}
+import { isTauri } from '$lib/api/core';
+import { pluginsDiscover, type DiscoveredPluginView } from '$lib/api/plugins';
+import templatesManifest from '../../../src-tauri/core-plugins/templates/manifest.json';
+import { recordPluginLoadError, registerPlugin } from './registry.svelte';
 
 /** Best-effort id extraction for the error path (manifest may be malformed). */
 function manifestId(manifest: unknown): string {
@@ -44,54 +33,47 @@ function manifestId(manifest: unknown): string {
 }
 
 /**
- * Register every bundled plugin. Idempotent — re-running replaces existing
- * registrations, so it is safe to call again after settings change.
+ * Register one discovered plugin. Registers with the backend's authoritative
+ * `enabled` flag so disabled plugins stay in the registry (visible in the
+ * management overview to re-enable) while contributing nothing. A backend load
+ * error (e.g. the integrity gate) is surfaced; a manifest that fails frontend
+ * validation is recorded and skipped.
  */
-export function loadBuiltinPlugins(
-  isEnabled: (pluginId: string) => boolean = pluginEnabledByDefault,
-  manifests: readonly PluginManifest[] = BUILTIN_PLUGIN_MANIFESTS
-): void {
-  for (const manifest of manifests) {
-    try {
-      registerPlugin(manifest, { enabled: isEnabled(manifest.id) });
-    } catch (err) {
-      const id = manifestId(manifest);
-      const message = err instanceof Error ? err.message : String(err);
-      recordPluginLoadError(id, message);
-      console.error('[plugins] failed to load builtin plugin', id, err);
-    }
+function applyDiscovered(view: DiscoveredPluginView): void {
+  const { record, manifest } = view;
+  try {
+    registerPlugin(manifest, { enabled: record.enabled });
+    if (record.lastLoadError)
+      recordPluginLoadError(record.id, record.lastLoadError);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    recordPluginLoadError(record.id ?? manifestId(manifest), message);
+    console.error('[plugins] failed to register plugin', record.id, err);
   }
 }
 
 /**
- * Reconcile the registered builtins with the backend registry (Tauri only —
- * the API falls back to "enabled" outside Tauri). Persists each plugin's
- * install/enable state and applies the backend's authoritative `enabled` flag
- * and any load error back onto the reactive registry, so a plugin the user
- * disabled (or one gated off by the integrity check) drops out of the merged
- * views. Runs after {@link loadBuiltinPlugins}; failures are non-fatal.
+ * Load all plugins. Idempotent — re-running replaces existing registrations, so
+ * it is safe to call again after a profile switch.
  */
-export async function syncBuiltinPluginsWithBackend(
-  manifests: readonly PluginManifest[] = BUILTIN_PLUGIN_MANIFESTS
-): Promise<void> {
-  for (const manifest of manifests) {
-    // Only reconcile plugins that registered cleanly on the frontend; a
-    // manifest that failed validation shouldn't be recorded as healthy.
-    if (!pluginById(manifest.id)) continue;
+export async function loadPlugins(): Promise<void> {
+  if (!isTauri()) {
+    // No backend discovery available: register the bundled core plugin so the
+    // example is present in the web build.
     try {
-      const record = await pluginsUpsert({
-        id: manifest.id,
-        version: manifest.version,
-        checksum: checksumManifest(manifest),
-        source: SOURCE_BUILTIN,
-        permissions: manifest.permissions
-      });
-      setPluginEnabled(manifest.id, record.enabled);
-      if (record.lastLoadError) {
-        recordPluginLoadError(manifest.id, record.lastLoadError);
-      }
+      registerPlugin(templatesManifest, { enabled: true });
     } catch (err) {
-      console.error('[plugins] backend sync failed', manifest.id, err);
+      recordPluginLoadError(
+        manifestId(templatesManifest),
+        err instanceof Error ? err.message : String(err)
+      );
     }
+    return;
+  }
+  try {
+    const views = await pluginsDiscover();
+    for (const view of views) applyDiscovered(view);
+  } catch (err) {
+    console.error('[plugins] discovery failed', err);
   }
 }

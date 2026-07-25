@@ -47,7 +47,8 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "infoplist/": ""
+      "infoplist/": "",
+      "core-plugins/": "core-plugins/"
     },
     "macOS": {
       "entitlements": "./Entitlements.plist",
