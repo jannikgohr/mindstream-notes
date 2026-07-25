@@ -37,7 +37,10 @@
   import { loadProfiles, profilesState } from '$lib/stores/profiles.svelte';
   import { installSyncStatusBridge } from '$lib/notifications/sync-status';
   import { installSyncTreeRefreshBridge } from '$lib/sync/tree-refresh-bridge';
-  import { loadBuiltinPlugins } from '$lib/plugins/load';
+  import {
+    loadBuiltinPlugins,
+    syncBuiltinPluginsWithBackend
+  } from '$lib/plugins/load';
   import { installPluginSettingsBridge } from '$lib/plugins/settings-bridge';
 
   let { children } = $props();
@@ -71,6 +74,10 @@
     // so a broken manifest is a recorded load error, not a startup crash.
     installPluginSettingsBridge();
     loadBuiltinPlugins();
+    // Reconcile with the backend registry: persists install/enable state and
+    // applies the backend's authoritative enabled flag + integrity gate. No-op
+    // outside Tauri. Fire-and-forget — the registry is reactive.
+    void syncBuiltinPluginsWithBackend();
     // Surface a notification when Rust reports the sync server is
     // unreachable (and clear it on the next successful sync).
     const teardownSyncStatus = installSyncStatusBridge();

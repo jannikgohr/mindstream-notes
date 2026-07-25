@@ -35,6 +35,7 @@ pub mod notes_export;
 pub mod paths;
 pub mod pdf_export;
 pub mod pdf_text;
+pub mod plugins;
 pub mod profiles;
 pub mod search;
 pub mod serde_helpers;
@@ -369,6 +370,15 @@ pub fn run() {
             signatures::list_signatures,
             signatures::save_signature,
             signatures::delete_signature,
+            // Plugins (per-profile registry + integrity)
+            plugins::plugins_list,
+            plugins::plugins_get,
+            plugins::plugins_upsert,
+            plugins::plugins_enable,
+            plugins::plugins_disable,
+            plugins::plugins_approve,
+            plugins::plugins_set_load_error,
+            plugins::plugins_remove,
             // Profiles (vaults)
             profiles::list_profiles,
             profiles::create_profile,
