@@ -32,14 +32,11 @@ export interface PluginRecord {
   updatedAt: string;
 }
 
-export interface UpsertPluginInput {
-  id: string;
-  version: string;
-  /** Current canonical checksum of the manifest being loaded. */
-  checksum: string;
-  source: string;
-  sourcePath?: string | null;
-  permissions: string[];
+/** A discovered plugin's reconciled record plus its raw manifest. */
+export interface DiscoveredPluginView {
+  record: PluginRecord;
+  /** Parsed manifest JSON; validated frontend-side before registering. */
+  manifest: unknown;
 }
 
 export function parsePluginRecord(value: unknown): PluginRecord {
@@ -69,21 +66,30 @@ function parsePluginRecords(value: unknown): PluginRecord[] {
   return value.map(parsePluginRecord);
 }
 
-/** Synthesize the record an upsert would produce, for the no-backend path. */
-function fallbackRecord(input: UpsertPluginInput): PluginRecord {
-  const now = new Date().toISOString();
-  return {
-    id: input.id,
-    version: input.version,
-    enabled: true,
-    source: input.source,
-    sourcePath: input.sourcePath ?? null,
-    acceptedHash: input.checksum,
-    grantedPermissions: input.permissions,
-    lastLoadError: null,
-    installedAt: now,
-    updatedAt: now
-  };
+function parseDiscoveredView(value: unknown): DiscoveredPluginView {
+  const raw = assertRecord(value, 'DiscoveredPluginView');
+  return { record: parsePluginRecord(raw.record), manifest: raw.manifest };
+}
+
+/**
+ * Discover plugins from disk and reconcile them with the durable registry. The
+ * backend owns discovery + trust (source is set from the load location), so
+ * this is how the frontend learns which plugins to register. Outside Tauri the
+ * fallback returns `[]` — the browser build loads its bundled core plugin
+ * directly (see plugins/load.ts).
+ */
+export function pluginsDiscover(): Promise<DiscoveredPluginView[]> {
+  return invokeOrFallback<DiscoveredPluginView[]>(
+    TauriCommandName.PluginsDiscover,
+    undefined,
+    () => [],
+    (value) => {
+      if (!Array.isArray(value)) {
+        throw new Error('DiscoveredPluginView[] must be an array');
+      }
+      return value.map(parseDiscoveredView);
+    }
+  );
 }
 
 export function pluginsList(): Promise<PluginRecord[]> {
@@ -101,15 +107,6 @@ export function pluginsGet(id: string): Promise<PluginRecord | null> {
     { id },
     () => null,
     (value) => (value === null ? null : parsePluginRecord(value))
-  );
-}
-
-export function pluginsUpsert(input: UpsertPluginInput): Promise<PluginRecord> {
-  return invokeOrFallback<PluginRecord>(
-    TauriCommandName.PluginsUpsert,
-    { input },
-    () => fallbackRecord(input),
-    parsePluginRecord
   );
 }
 

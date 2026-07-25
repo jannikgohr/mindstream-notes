@@ -373,7 +373,7 @@ pub fn run() {
             // Plugins (per-profile registry + integrity)
             plugins::plugins_list,
             plugins::plugins_get,
-            plugins::plugins_upsert,
+            plugins::plugins_discover,
             plugins::plugins_enable,
             plugins::plugins_disable,
             plugins::plugins_approve,

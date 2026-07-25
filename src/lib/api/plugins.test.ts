@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parsePluginRecord, pluginsList, pluginsUpsert } from './plugins';
+import { parsePluginRecord, pluginsDiscover, pluginsList } from './plugins';
 
 const RAW = {
   id: 'com.example.plugin',
@@ -34,17 +34,7 @@ describe('no-Tauri fallbacks', () => {
     await expect(pluginsList()).resolves.toEqual([]);
   });
 
-  it('pluginsUpsert synthesizes an enabled record from the input', async () => {
-    const rec = await pluginsUpsert({
-      id: 'com.example.plugin',
-      version: '2.0.0',
-      checksum: 'deadbeef',
-      source: 'builtin',
-      permissions: ['notes.create']
-    });
-    expect(rec.enabled).toBe(true);
-    expect(rec.acceptedHash).toBe('deadbeef');
-    expect(rec.version).toBe('2.0.0');
-    expect(rec.grantedPermissions).toEqual(['notes.create']);
+  it('pluginsDiscover returns an empty array (browser loads its own fallback)', async () => {
+    await expect(pluginsDiscover()).resolves.toEqual([]);
   });
 });

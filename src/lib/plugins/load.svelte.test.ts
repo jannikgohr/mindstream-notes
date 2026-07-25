@@ -1,10 +1,16 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { pluginsUpsert } = vi.hoisted(() => ({ pluginsUpsert: vi.fn() }));
-vi.mock('$lib/api/plugins', () => ({ pluginsUpsert }));
+const { isTauri, pluginsDiscover } = vi.hoisted(() => ({
+  isTauri: vi.fn(),
+  pluginsDiscover: vi.fn()
+}));
+vi.mock('$lib/api/core', async (orig) => {
+  const actual = await orig<typeof import('$lib/api/core')>();
+  return { ...actual, isTauri };
+});
+vi.mock('$lib/api/plugins', () => ({ pluginsDiscover }));
 
-import { loadBuiltinPlugins, syncBuiltinPluginsWithBackend } from './load';
-import { BUILTIN_PLUGIN_MANIFESTS } from './builtin';
+import { loadPlugins } from './load';
 import {
   allPlugins,
   enabledPlugins,
@@ -13,88 +19,105 @@ import {
   pluginTemplates,
   resetPluginRegistry
 } from './registry.svelte';
-import type { PluginManifest } from './types';
 
-afterEach(() => {
-  resetPluginRegistry();
-  pluginsUpsert.mockReset();
-});
+const CORE_ID = 'com.mindstream.templates.core';
 
-describe('loadBuiltinPlugins', () => {
-  it('registers the real bundled manifests and their contributions', () => {
-    loadBuiltinPlugins(() => true);
-    expect(allPlugins().length).toBe(BUILTIN_PLUGIN_MANIFESTS.length);
-    // The Core Templates plugin contributes at least the two markdown templates.
-    expect(pluginTemplates().length).toBeGreaterThanOrEqual(2);
-  });
+function validManifest(id = CORE_ID): Record<string, unknown> {
+  return {
+    id,
+    name: 'Core Templates',
+    version: '1.0.0',
+    runtime: 'manifest-only',
+    permissions: ['templates.contribute', 'notes.create'],
+    contributes: {
+      i18n: { en: { 'templates.meeting.name': 'Meeting' } },
+      noteTemplates: [
+        {
+          id: 'meeting',
+          labelKey: 'templates.meeting.name',
+          noteKind: 'markdown',
+          titleTemplate: '{{date}}',
+          bodyTemplate: '# {{date}}'
+        }
+      ]
+    }
+  };
+}
 
-  it('honours the enablement predicate', () => {
-    loadBuiltinPlugins(() => false);
-    expect(allPlugins().length).toBe(BUILTIN_PLUGIN_MANIFESTS.length);
-    expect(enabledPlugins()).toHaveLength(0);
-    expect(pluginTemplates()).toHaveLength(0);
-  });
-
-  it('records a load error for a broken manifest without throwing', () => {
-    const broken = [
-      { id: 'not a valid id', name: 'Broken' } as unknown as PluginManifest
-    ];
-    expect(() => loadBuiltinPlugins(() => true, broken)).not.toThrow();
-    expect(allPlugins()).toHaveLength(0);
-    expect(pluginLoadError('not a valid id')).toBeTruthy();
-  });
-
-  it('loads the healthy plugins even when one is broken', () => {
-    const mixed = [
-      ...BUILTIN_PLUGIN_MANIFESTS,
-      { id: 'bad' } as unknown as PluginManifest
-    ];
-    loadBuiltinPlugins(() => true, mixed);
-    expect(allPlugins().length).toBe(BUILTIN_PLUGIN_MANIFESTS.length);
-    expect(pluginLoadError('bad')).toBeTruthy();
-  });
-});
-
-describe('syncBuiltinPluginsWithBackend', () => {
-  const [manifest] = BUILTIN_PLUGIN_MANIFESTS;
-
-  function record(overrides: Record<string, unknown> = {}) {
-    return {
-      id: manifest.id,
-      version: manifest.version,
+function view(
+  record: Record<string, unknown> = {},
+  manifest: unknown = validManifest()
+) {
+  return {
+    record: {
+      id: CORE_ID,
+      version: '1.0.0',
       enabled: true,
-      source: 'builtin',
+      source: 'installed',
       sourcePath: null,
       acceptedHash: 'x',
-      grantedPermissions: manifest.permissions,
+      grantedPermissions: [],
       lastLoadError: null,
-      installedAt: '2026-07-25T00:00:00Z',
-      updatedAt: '2026-07-25T00:00:00Z',
-      ...overrides
-    };
-  }
+      installedAt: 't',
+      updatedAt: 't',
+      ...record
+    },
+    manifest
+  };
+}
 
-  it('applies the backend enabled flag onto the registry', async () => {
-    loadBuiltinPlugins(() => true, [manifest]);
-    expect(pluginById(manifest.id)?.enabled).toBe(true);
-    pluginsUpsert.mockResolvedValue(record({ enabled: false }));
-    await syncBuiltinPluginsWithBackend([manifest]);
-    expect(pluginById(manifest.id)?.enabled).toBe(false);
+beforeEach(() => {
+  isTauri.mockReset();
+  pluginsDiscover.mockReset();
+});
+afterEach(() => resetPluginRegistry());
+
+describe('loadPlugins — browser (no backend)', () => {
+  it('registers the bundled core plugin from its manifest', async () => {
+    isTauri.mockReturnValue(false);
+    await loadPlugins();
+    const core = pluginById(CORE_ID);
+    expect(core?.enabled).toBe(true);
+    expect(core?.manifest.name).toBe('Core Templates');
+    // The real bundled manifest ships two markdown templates.
+    expect(pluginTemplates().length).toBeGreaterThanOrEqual(2);
+    expect(pluginsDiscover).not.toHaveBeenCalled();
+  });
+});
+
+describe('loadPlugins — Tauri (backend discovery)', () => {
+  it('registers discovered enabled plugins with their contributions', async () => {
+    isTauri.mockReturnValue(true);
+    pluginsDiscover.mockResolvedValue([view({ enabled: true })]);
+    await loadPlugins();
+    expect(pluginById(CORE_ID)?.enabled).toBe(true);
+    expect(pluginTemplates()).toHaveLength(1);
+  });
+
+  it('keeps a disabled plugin registered (for the overview) but contributing nothing', async () => {
+    isTauri.mockReturnValue(true);
+    pluginsDiscover.mockResolvedValue([
+      view({ enabled: false, lastLoadError: 'manifest hash changed' })
+    ]);
+    await loadPlugins();
+    expect(allPlugins()).toHaveLength(1);
     expect(enabledPlugins()).toHaveLength(0);
+    expect(pluginTemplates()).toHaveLength(0);
+    expect(pluginLoadError(CORE_ID)).toBe('manifest hash changed');
   });
 
-  it('records a backend load error (e.g. integrity gate)', async () => {
-    loadBuiltinPlugins(() => true, [manifest]);
-    pluginsUpsert.mockResolvedValue(
-      record({ enabled: false, lastLoadError: 'hash changed' })
-    );
-    await syncBuiltinPluginsWithBackend([manifest]);
-    expect(pluginLoadError(manifest.id)).toBe('hash changed');
+  it('records an error and skips a plugin whose manifest fails validation', async () => {
+    isTauri.mockReturnValue(true);
+    pluginsDiscover.mockResolvedValue([view({}, { id: 'not a valid id' })]);
+    await loadPlugins();
+    expect(allPlugins()).toHaveLength(0);
+    expect(pluginLoadError(CORE_ID)).toBeTruthy();
   });
 
-  it('skips plugins that never registered on the frontend', async () => {
-    // Nothing loaded → nothing to reconcile, and no upsert attempted.
-    await syncBuiltinPluginsWithBackend([manifest]);
-    expect(pluginsUpsert).not.toHaveBeenCalled();
+  it('does not throw when discovery itself fails', async () => {
+    isTauri.mockReturnValue(true);
+    pluginsDiscover.mockRejectedValue(new Error('ipc boom'));
+    await expect(loadPlugins()).resolves.toBeUndefined();
+    expect(allPlugins()).toHaveLength(0);
   });
 });

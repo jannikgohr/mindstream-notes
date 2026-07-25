@@ -37,10 +37,7 @@
   import { loadProfiles, profilesState } from '$lib/stores/profiles.svelte';
   import { installSyncStatusBridge } from '$lib/notifications/sync-status';
   import { installSyncTreeRefreshBridge } from '$lib/sync/tree-refresh-bridge';
-  import {
-    loadBuiltinPlugins,
-    syncBuiltinPluginsWithBackend
-  } from '$lib/plugins/load';
+  import { loadPlugins } from '$lib/plugins/load';
   import { installPluginSettingsBridge } from '$lib/plugins/settings-bridge';
 
   let { children } = $props();
@@ -70,14 +67,12 @@
     initHotkeys();
     initNativeMenuCommands();
     // Route plugin-contributed settings through the core store + i18n before
-    // any plugin loads, then register the bundled plugins. Isolated per-plugin
-    // so a broken manifest is a recorded load error, not a startup crash.
+    // any plugin loads, then discover + register plugins from disk (backend)
+    // or the bundled fallback (browser). Isolated per-plugin so a broken
+    // manifest is a recorded load error, not a startup crash. Fire-and-forget —
+    // the registry is reactive.
     installPluginSettingsBridge();
-    loadBuiltinPlugins();
-    // Reconcile with the backend registry: persists install/enable state and
-    // applies the backend's authoritative enabled flag + integrity gate. No-op
-    // outside Tauri. Fire-and-forget — the registry is reactive.
-    void syncBuiltinPluginsWithBackend();
+    void loadPlugins();
     // Surface a notification when Rust reports the sync server is
     // unreachable (and clear it on the next successful sync).
     const teardownSyncStatus = installSyncStatusBridge();
