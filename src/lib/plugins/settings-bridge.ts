@@ -99,6 +99,23 @@ export function pluginSettingsCategory(): Category | null {
   return { id: PLUGINS_CATEGORY_ID, icon: 'puzzle', sections };
 }
 
+/**
+ * The settings sections contributed by one plugin, as core `Section`s. Empty
+ * when the plugin is disabled or contributes no settings. Used by the settings
+ * UI to render a single plugin's config in isolation.
+ */
+export function pluginSettingsSectionsFor(pluginId: string): Section[] {
+  const out: Section[] = [];
+  for (const { pluginId: owner, contribution } of pluginSettingsSections()) {
+    if (owner !== pluginId) continue;
+    out.push({
+      id: fullSectionId(owner, contribution.sectionId),
+      settings: contribution.settings.map((s) => toCoreSetting(owner, s))
+    });
+  }
+  return out;
+}
+
 /** Resolve a full plugin setting id to a core `Setting`, if it exists. */
 export function pluginSettingDef(id: string): Setting | undefined {
   const entry = settingIndex().get(id);

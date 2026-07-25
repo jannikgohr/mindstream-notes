@@ -1,7 +1,8 @@
 <script lang="ts">
   import { Dialog } from 'bits-ui';
-  import { X, Search } from '@lucide/svelte';
+  import { X, Search, ChevronRight } from '@lucide/svelte';
   import SettingControl from './SettingControl.svelte';
+  import PluginsOverview from '$lib/plugins/PluginsOverview.svelte';
   import {
     SCHEMA,
     closeSettings,
@@ -13,7 +14,7 @@
   } from './store.svelte';
   import { FALLBACK_ICON, SETTINGS_ICONS } from './icons';
   import { i18n, tLabel, tUi } from './i18n.svelte';
-  import type { Category, Setting } from './types';
+  import type { Category, Section, Setting } from './types';
   import {
     groupedCommands,
     isGlobalShortcutCommand,
@@ -23,18 +24,53 @@
   } from '$lib/hotkeys/catalogue';
   import { displayBinding } from '$lib/hotkeys/format';
   import { getBinding } from '$lib/hotkeys/store.svelte';
-  import { pluginSettingsCategory } from '$lib/plugins/settings-bridge';
+  import {
+    PLUGINS_CATEGORY_ID,
+    pluginSettingsCategory,
+    pluginSettingsSectionsFor
+  } from '$lib/plugins/settings-bridge';
   import { pluginCommandLabel } from '$lib/plugins/hotkeys';
+  import { pluginsWithSettings } from '$lib/plugins/manage.svelte';
+  import { allPlugins, pluginById } from '$lib/plugins/registry.svelte';
 
-  // Static schema categories plus the synthetic "Plugins" category, which
-  // appears only when an enabled plugin contributes settings.
-  const allCategories = $derived.by<Category[]>(() => {
-    const pluginCat = pluginSettingsCategory();
-    return pluginCat ? [...SCHEMA.categories, pluginCat] : SCHEMA.categories;
+  // The synthetic "Plugins" category appears whenever any plugin is installed
+  // (even one with no settings — it still needs a home in the management
+  // overview). Its sections are the enabled plugins' settings, if any.
+  const pluginCategory = $derived.by<Category | null>(() => {
+    if (allPlugins().length === 0) return null;
+    return {
+      id: PLUGINS_CATEGORY_ID,
+      icon: 'puzzle',
+      sections: pluginSettingsCategory()?.sections ?? []
+    };
   });
 
+  const allCategories = $derived.by<Category[]>(() =>
+    pluginCategory ? [...SCHEMA.categories, pluginCategory] : SCHEMA.categories
+  );
+
   let activeCategoryId = $state<string>(SCHEMA.categories[0]?.id ?? '');
+  // Which plugin's settings are shown while the Plugins category is active.
+  // `null` shows the management overview instead.
+  let activePluginId = $state<string | null>(null);
+  let pluginsExpanded = $state(false);
   let query = $state('');
+
+  function selectCategory(id: string): void {
+    activeCategoryId = id;
+    activePluginId = null;
+  }
+
+  function selectPluginOverview(): void {
+    activeCategoryId = PLUGINS_CATEGORY_ID;
+    activePluginId = null;
+  }
+
+  function selectPlugin(id: string): void {
+    activeCategoryId = PLUGINS_CATEGORY_ID;
+    activePluginId = id;
+    pluginsExpanded = true;
+  }
 
   const lowerQuery = $derived(query.trim().toLowerCase());
   const catalogueHotkeyGroups = groupedCommands();
@@ -162,6 +198,31 @@
       visibleCategories[0]
   );
 
+  const isPluginsCategory = $derived(
+    activeCategory?.id === PLUGINS_CATEGORY_ID
+  );
+  const showingPluginOverview = $derived(
+    isPluginsCategory && activePluginId === null
+  );
+
+  /** Sections to render in the right pane for the current selection. */
+  const sectionsToRender = $derived.by<Section[]>(() => {
+    if (!activeCategory) return [];
+    if (isPluginsCategory && activePluginId) {
+      return pluginSettingsSectionsFor(activePluginId);
+    }
+    return activeCategory.sections;
+  });
+
+  /** Heading for the right pane: plugin name when a plugin is selected. */
+  const paneHeading = $derived.by(() => {
+    if (!activeCategory) return '';
+    if (isPluginsCategory && activePluginId) {
+      return pluginById(activePluginId)?.manifest.name ?? activePluginId;
+    }
+    return tLabel('categories', activeCategory.id);
+  });
+
   function categoryIcon(name: string | undefined) {
     if (!name) return FALLBACK_ICON;
     return SETTINGS_ICONS[name] ?? FALLBACK_ICON;
@@ -218,17 +279,65 @@
           {/if}
           {#each visibleCategories as cat (cat.id)}
             {@const Icon = categoryIcon(cat.icon)}
-            {@const isActive = activeCategory?.id === cat.id}
-            <button
-              type="button"
-              onclick={() => (activeCategoryId = cat.id)}
-              class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors {isActive
-                ? 'bg-accent text-accent-foreground'
-                : 'text-foreground hover:bg-accent/60'}"
-            >
-              <Icon class="size-3.5 shrink-0 text-muted-foreground" />
-              <span class="truncate">{tLabel('categories', cat.id)}</span>
-            </button>
+            {#if cat.id === PLUGINS_CATEGORY_ID}
+              <!-- Plugins is the one expandable category: the row selects the
+                   management overview, the chevron reveals per-plugin settings. -->
+              {@const children = pluginsWithSettings()}
+              <div class="flex items-center pr-1">
+                <button
+                  type="button"
+                  onclick={selectPluginOverview}
+                  class="flex flex-1 items-center gap-2 px-3 py-2 text-left text-sm transition-colors {showingPluginOverview
+                    ? 'bg-accent text-accent-foreground'
+                    : 'text-foreground hover:bg-accent/60'}"
+                >
+                  <Icon class="size-3.5 shrink-0 text-muted-foreground" />
+                  <span class="truncate">{tLabel('categories', cat.id)}</span>
+                </button>
+                {#if children.length > 0}
+                  <button
+                    type="button"
+                    aria-label={tLabel('categories', cat.id)}
+                    aria-expanded={pluginsExpanded}
+                    onclick={() => (pluginsExpanded = !pluginsExpanded)}
+                    class="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+                  >
+                    <ChevronRight
+                      class="size-3.5 transition-transform {pluginsExpanded
+                        ? 'rotate-90'
+                        : ''}"
+                    />
+                  </button>
+                {/if}
+              </div>
+              {#if pluginsExpanded}
+                {#each children as child (child.id)}
+                  {@const childActive =
+                    isPluginsCategory && activePluginId === child.id}
+                  <button
+                    type="button"
+                    onclick={() => selectPlugin(child.id)}
+                    class="flex w-full items-center gap-2 py-1.5 pl-9 pr-3 text-left text-sm transition-colors {childActive
+                      ? 'bg-accent text-accent-foreground'
+                      : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground'}"
+                  >
+                    <span class="truncate">{child.name}</span>
+                  </button>
+                {/each}
+              {/if}
+            {:else}
+              {@const isActive = activeCategory?.id === cat.id}
+              <button
+                type="button"
+                onclick={() => selectCategory(cat.id)}
+                class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors {isActive
+                  ? 'bg-accent text-accent-foreground'
+                  : 'text-foreground hover:bg-accent/60'}"
+              >
+                <Icon class="size-3.5 shrink-0 text-muted-foreground" />
+                <span class="truncate">{tLabel('categories', cat.id)}</span>
+              </button>
+            {/if}
           {/each}
         </nav>
 
@@ -236,46 +345,52 @@
         <section class="themed-scrollbar overflow-y-auto px-6 py-5">
           {#if activeCategory}
             <h2 class="text-base font-semibold">
-              {tLabel('categories', activeCategory.id)}
+              {paneHeading}
             </h2>
-            {#each activeCategory.sections as sec (sec.id)}
-              {@const visibleSettings = isSectionVisible(sec)
-                ? sec.settings.filter((s) => isVisible(s) && settingMatches(s))
-                : []}
-              {#if visibleSettings.length > 0}
-                {#if sec.advanced && !lowerQuery}
-                  <details class="group mt-5">
-                    <summary
-                      class="flex cursor-pointer list-none items-center gap-1 border-b border-border pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground"
-                    >
-                      <span
-                        class="transition-transform group-open:rotate-90"
-                        aria-hidden="true">›</span
+            {#if showingPluginOverview}
+              <PluginsOverview />
+            {:else}
+              {#each sectionsToRender as sec (sec.id)}
+                {@const visibleSettings = isSectionVisible(sec)
+                  ? sec.settings.filter(
+                      (s) => isVisible(s) && settingMatches(s)
+                    )
+                  : []}
+                {#if visibleSettings.length > 0}
+                  {#if sec.advanced && !lowerQuery}
+                    <details class="group mt-5">
+                      <summary
+                        class="flex cursor-pointer list-none items-center gap-1 border-b border-border pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground"
                       >
-                      {tLabel('sections', sec.id)}
-                    </summary>
-                    <div class="divide-y divide-border">
-                      {#each visibleSettings as s (s.id)}
-                        <SettingControl setting={s} searchQuery={query} />
-                      {/each}
+                        <span
+                          class="transition-transform group-open:rotate-90"
+                          aria-hidden="true">›</span
+                        >
+                        {tLabel('sections', sec.id)}
+                      </summary>
+                      <div class="divide-y divide-border">
+                        {#each visibleSettings as s (s.id)}
+                          <SettingControl setting={s} searchQuery={query} />
+                        {/each}
+                      </div>
+                    </details>
+                  {:else}
+                    <div class="mt-5">
+                      <h3
+                        class="border-b border-border pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+                      >
+                        {tLabel('sections', sec.id)}
+                      </h3>
+                      <div class="divide-y divide-border">
+                        {#each visibleSettings as s (s.id)}
+                          <SettingControl setting={s} searchQuery={query} />
+                        {/each}
+                      </div>
                     </div>
-                  </details>
-                {:else}
-                  <div class="mt-5">
-                    <h3
-                      class="border-b border-border pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
-                    >
-                      {tLabel('sections', sec.id)}
-                    </h3>
-                    <div class="divide-y divide-border">
-                      {#each visibleSettings as s (s.id)}
-                        <SettingControl setting={s} searchQuery={query} />
-                      {/each}
-                    </div>
-                  </div>
+                  {/if}
                 {/if}
-              {/if}
-            {/each}
+              {/each}
+            {/if}
           {/if}
         </section>
       </div>
