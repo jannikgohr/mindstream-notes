@@ -12,8 +12,16 @@
  */
 
 import { getSettingValue } from '$lib/settings/store.svelte';
+import { pluginsUpsert } from '$lib/api/plugins';
 import { BUILTIN_PLUGIN_MANIFESTS } from './builtin';
-import { recordPluginLoadError, registerPlugin } from './registry.svelte';
+import { checksumManifest } from './canonical';
+import {
+  pluginById,
+  recordPluginLoadError,
+  registerPlugin,
+  setPluginEnabled
+} from './registry.svelte';
+import { SOURCE_BUILTIN } from './source';
 import type { PluginManifest } from './types';
 
 /** Settings key holding a plugin's enabled flag. Absent/unset ⇒ enabled. */
@@ -51,6 +59,39 @@ export function loadBuiltinPlugins(
       const message = err instanceof Error ? err.message : String(err);
       recordPluginLoadError(id, message);
       console.error('[plugins] failed to load builtin plugin', id, err);
+    }
+  }
+}
+
+/**
+ * Reconcile the registered builtins with the backend registry (Tauri only —
+ * the API falls back to "enabled" outside Tauri). Persists each plugin's
+ * install/enable state and applies the backend's authoritative `enabled` flag
+ * and any load error back onto the reactive registry, so a plugin the user
+ * disabled (or one gated off by the integrity check) drops out of the merged
+ * views. Runs after {@link loadBuiltinPlugins}; failures are non-fatal.
+ */
+export async function syncBuiltinPluginsWithBackend(
+  manifests: readonly PluginManifest[] = BUILTIN_PLUGIN_MANIFESTS
+): Promise<void> {
+  for (const manifest of manifests) {
+    // Only reconcile plugins that registered cleanly on the frontend; a
+    // manifest that failed validation shouldn't be recorded as healthy.
+    if (!pluginById(manifest.id)) continue;
+    try {
+      const record = await pluginsUpsert({
+        id: manifest.id,
+        version: manifest.version,
+        checksum: checksumManifest(manifest),
+        source: SOURCE_BUILTIN,
+        permissions: manifest.permissions
+      });
+      setPluginEnabled(manifest.id, record.enabled);
+      if (record.lastLoadError) {
+        recordPluginLoadError(manifest.id, record.lastLoadError);
+      }
+    } catch (err) {
+      console.error('[plugins] backend sync failed', manifest.id, err);
     }
   }
 }
