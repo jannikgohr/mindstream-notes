@@ -29,12 +29,32 @@
   import { FALLBACK_ICON, SETTINGS_ICONS } from '$lib/settings/icons';
   import { tLabel, tUi } from '$lib/settings/i18n.svelte';
   import type { Category, Setting } from '$lib/settings/types';
+  import PluginsOverview from '$lib/plugins/PluginsOverview.svelte';
+  import {
+    PLUGINS_CATEGORY_ID,
+    pluginSettingsCategory
+  } from '$lib/plugins/settings-bridge';
+  import { allPlugins } from '$lib/plugins/registry.svelte';
   import { closeNavOverlay, openNavOverlay } from './state.svelte';
 
   let activeCategoryId = $state<string | null>(null);
 
+  // Include the synthetic "Plugins" category whenever any plugin is installed
+  // (it hosts the management overview even for plugins with no settings).
+  const pluginCategory = $derived.by<Category | null>(() => {
+    if (allPlugins().length === 0) return null;
+    return {
+      id: PLUGINS_CATEGORY_ID,
+      icon: 'puzzle',
+      sections: pluginSettingsCategory()?.sections ?? []
+    };
+  });
+
   const visibleCategories = $derived(
-    SCHEMA.categories.filter(isCategoryVisible)
+    (pluginCategory
+      ? [...SCHEMA.categories, pluginCategory]
+      : SCHEMA.categories
+    ).filter(isCategoryVisible)
   );
 
   const activeCategory = $derived<Category | null>(
@@ -156,7 +176,10 @@
         </header>
 
         <section class="flex-1 overflow-y-auto px-4 py-4">
-          {#if visibleSettings(activeCategory).length === 0}
+          {#if activeCategory.id === PLUGINS_CATEGORY_ID}
+            <!-- Management overview first, then each enabled plugin's sections. -->
+            <PluginsOverview />
+          {:else if visibleSettings(activeCategory).length === 0}
             <p class="px-1 py-6 text-center text-sm text-muted-foreground">
               {tUi('empty')}
             </p>
