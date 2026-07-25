@@ -18,12 +18,24 @@
 
 import { requestOpenNote } from '$lib/stores/open-note-intent.svelte';
 import { createNoteIn } from '$lib/stores/tree.svelte';
+import { getSettingValue } from '$lib/settings/store.svelte';
 import { pluginById, pluginTemplate } from './registry.svelte';
 import { resolvePluginString } from './plugin-i18n';
 import type { PluginNoteTemplateContribution, PluginPermission } from './types';
 
 /** Values interpolated into a template, keyed by placeholder name. */
 export type TemplateVariables = Record<string, string>;
+
+/**
+ * App-honoured convention for template plugins: if a plugin declares a
+ * device-scoped `open-on-create` toggle, the app opens (or doesn't open) the
+ * new note in the editor accordingly. A manifest-only plugin can't act on its
+ * own settings, so the app reads this one. Absent/unset ⇒ open (the default a
+ * user expects); only an explicit `false` suppresses the open.
+ */
+export function shouldOpenOnCreate(pluginId: string): boolean {
+  return getSettingValue(`plugins.${pluginId}.open-on-create`) !== false;
+}
 
 const PLACEHOLDER_RE = /\{\{\s*([\w.-]+)\s*\}\}/g;
 
@@ -162,6 +174,6 @@ export async function createNoteFromPluginTemplate(
     variables
   );
   const id = await createNoteIn(parentId, title, ref.template.noteKind, body);
-  requestOpenNote(id);
+  if (shouldOpenOnCreate(pluginId)) requestOpenNote(id);
   return id;
 }

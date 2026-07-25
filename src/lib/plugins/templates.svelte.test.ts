@@ -1,12 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Isolate the module from the real note-creation + open-note plumbing.
-const { createNoteIn, requestOpenNote } = vi.hoisted(() => ({
+const { createNoteIn, requestOpenNote, settingValues } = vi.hoisted(() => ({
   createNoteIn: vi.fn(),
-  requestOpenNote: vi.fn()
+  requestOpenNote: vi.fn(),
+  settingValues: new Map<string, unknown>()
 }));
 vi.mock('$lib/stores/tree.svelte', () => ({ createNoteIn }));
 vi.mock('$lib/stores/open-note-intent.svelte', () => ({ requestOpenNote }));
+vi.mock('$lib/settings/store.svelte', () => ({
+  getSettingValue: (id: string) => settingValues.get(id)
+}));
 
 import { registerPlugin, resetPluginRegistry } from './registry.svelte';
 import {
@@ -52,6 +56,7 @@ function registerMeeting(
 beforeEach(() => {
   createNoteIn.mockReset().mockResolvedValue('note-1');
   requestOpenNote.mockReset();
+  settingValues.clear();
 });
 afterEach(() => resetPluginRegistry());
 
@@ -156,6 +161,21 @@ describe('createNoteFromPluginTemplate', () => {
       createNoteFromPluginTemplate(PLUGIN_ID, 'meeting', null)
     ).rejects.toThrow(/missing notes.create/);
     expect(createNoteIn).not.toHaveBeenCalled();
+  });
+
+  it('opens by default when open-on-create is unset', async () => {
+    registerMeeting();
+    await createNoteFromPluginTemplate(PLUGIN_ID, 'meeting', null);
+    expect(requestOpenNote).toHaveBeenCalledWith('note-1');
+  });
+
+  it('does not open when the plugin open-on-create toggle is false', async () => {
+    registerMeeting();
+    settingValues.set(`plugins.${PLUGIN_ID}.open-on-create`, false);
+    const id = await createNoteFromPluginTemplate(PLUGIN_ID, 'meeting', null);
+    expect(id).toBe('note-1');
+    expect(createNoteIn).toHaveBeenCalled();
+    expect(requestOpenNote).not.toHaveBeenCalled();
   });
 });
 
