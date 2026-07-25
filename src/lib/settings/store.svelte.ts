@@ -55,6 +55,27 @@ export const BY_ID: Record<string, Setting> = Object.fromEntries(
   ALL_SETTINGS.map((s) => [s.id, s])
 );
 
+/**
+ * Resolver for setting definitions that live outside the static schema —
+ * currently plugin-contributed settings, keyed `plugins.<pluginId>.<id>`. The
+ * plugins layer registers one at startup so the store can honour a plugin
+ * setting's scope + default without importing the plugins layer itself (which
+ * would couple the core store to it). Consulted only after the static schema.
+ */
+export type DynamicSettingResolver = (id: string) => Setting | undefined;
+let dynamicSettingResolver: DynamicSettingResolver | null = null;
+
+export function registerDynamicSettingResolver(
+  resolver: DynamicSettingResolver | null
+): void {
+  dynamicSettingResolver = resolver;
+}
+
+/** Static schema first, then any dynamically-registered (plugin) setting. */
+function settingDef(id: string): Setting | undefined {
+  return BY_ID[id] ?? dynamicSettingResolver?.(id);
+}
+
 export function defaultForSetting(def: Setting): unknown {
   const platformDefaults = def.defaultByPlatform;
   const current = getPlatform();
@@ -80,7 +101,7 @@ function vaultStorageKey(vaultId: string): string {
 }
 
 function scopeForId(id: string): 'V' | 'D' {
-  const def = BY_ID[id];
+  const def = settingDef(id);
   if (def) return def.scope;
   // The sign-in form owns account.serverUrl dynamically, outside schema.json.
   if (id.startsWith('account.')) return 'V';
@@ -202,7 +223,7 @@ void hydrateSettings('startup');
  */
 export function getSettingValue(id: string): unknown {
   if (id in settings.values) return settings.values[id];
-  const def = BY_ID[id];
+  const def = settingDef(id);
   return def ? defaultForSetting(def) : undefined;
 }
 
@@ -249,7 +270,7 @@ export async function setSettingValue(
 }
 
 export async function resetSettingValue(id: string): Promise<void> {
-  const def = BY_ID[id];
+  const def = settingDef(id);
   if (!def) return;
   if ('default' in def || def.defaultByPlatform) {
     await setSettingValue(id, defaultForSetting(def));
@@ -295,7 +316,7 @@ function persistNow() {
 
 /** True if the current value differs from the schema default. */
 export function isModified(id: string): boolean {
-  const def = BY_ID[id];
+  const def = settingDef(id);
   if (!def) return false;
   return getSettingValue(id) !== defaultForSetting(def);
 }

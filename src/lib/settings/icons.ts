@@ -6,6 +6,7 @@ import {
   Languages,
   Palette,
   PencilLine,
+  Puzzle,
   Settings as SettingsIcon,
   Shield,
   UserRound
@@ -29,6 +30,7 @@ export const SETTINGS_ICONS: Record<string, IconComponent> = {
   languages: Languages as unknown as IconComponent,
   palette: Palette as unknown as IconComponent,
   'pencil-line': PencilLine as unknown as IconComponent,
+  puzzle: Puzzle as unknown as IconComponent,
   shield: Shield as unknown as IconComponent,
   'user-round': UserRound as unknown as IconComponent
 };

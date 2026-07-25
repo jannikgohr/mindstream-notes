@@ -746,6 +746,10 @@
     },
     "about": {
       "label": "Über"
+    },
+    "plugins": {
+      "label": "Plugins",
+      "description": "Von installierten Plugins beigetragene Einstellungen."
     }
   },
   "sections": {

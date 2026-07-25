@@ -750,6 +750,10 @@
     },
     "about": {
       "label": "About"
+    },
+    "plugins": {
+      "label": "Plugins",
+      "description": "Settings contributed by installed plugins."
     }
   },
   "sections": {

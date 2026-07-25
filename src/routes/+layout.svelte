@@ -38,6 +38,7 @@
   import { installSyncStatusBridge } from '$lib/notifications/sync-status';
   import { installSyncTreeRefreshBridge } from '$lib/sync/tree-refresh-bridge';
   import { loadBuiltinPlugins } from '$lib/plugins/load';
+  import { installPluginSettingsBridge } from '$lib/plugins/settings-bridge';
 
   let { children } = $props();
 
@@ -65,8 +66,10 @@
     void loadProfiles();
     initHotkeys();
     initNativeMenuCommands();
-    // Register bundled plugins. Isolated per-plugin so a broken manifest is
-    // recorded as a load error rather than throwing out of startup.
+    // Route plugin-contributed settings through the core store + i18n before
+    // any plugin loads, then register the bundled plugins. Isolated per-plugin
+    // so a broken manifest is a recorded load error, not a startup crash.
+    installPluginSettingsBridge();
     loadBuiltinPlugins();
     // Surface a notification when Rust reports the sync server is
     // unreachable (and clear it on the next successful sync).
