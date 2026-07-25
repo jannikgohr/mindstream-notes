@@ -23,6 +23,14 @@
   } from '$lib/hotkeys/catalogue';
   import { displayBinding } from '$lib/hotkeys/format';
   import { getBinding } from '$lib/hotkeys/store.svelte';
+  import { pluginSettingsCategory } from '$lib/plugins/settings-bridge';
+
+  // Static schema categories plus the synthetic "Plugins" category, which
+  // appears only when an enabled plugin contributes settings.
+  const allCategories = $derived.by<Category[]>(() => {
+    const pluginCat = pluginSettingsCategory();
+    return pluginCat ? [...SCHEMA.categories, pluginCat] : SCHEMA.categories;
+  });
 
   let activeCategoryId = $state<string>(SCHEMA.categories[0]?.id ?? '');
   let query = $state('');
@@ -143,7 +151,7 @@
   }
 
   const visibleCategories = $derived.by(() => {
-    const onPlatform = SCHEMA.categories.filter(isCategoryVisible);
+    const onPlatform = allCategories.filter(isCategoryVisible);
     if (!lowerQuery) return onPlatform;
     return onPlatform.filter((c) => visibleSettingsIn(c).length > 0);
   });
