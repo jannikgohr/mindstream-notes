@@ -10,6 +10,8 @@ const RAW = {
   acceptedHash: 'abcd1234',
   grantedPermissions: ['templates.contribute', 'notes.create'],
   lastLoadError: null,
+  signer: null,
+  signatureStatus: 'unsigned',
   installedAt: '2026-07-25T00:00:00Z',
   updatedAt: '2026-07-25T00:00:00Z'
 };

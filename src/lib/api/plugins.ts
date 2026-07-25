@@ -28,6 +28,10 @@ export interface PluginRecord {
   acceptedHash: string;
   grantedPermissions: string[];
   lastLoadError: string | null;
+  /** SHA-256 fingerprint of the accepted signer's key, or null if unsigned. */
+  signer: string | null;
+  /** `'unsigned' | 'valid' | 'invalid'`. */
+  signatureStatus: string;
   installedAt: string;
   updatedAt: string;
 }
@@ -55,6 +59,11 @@ export function parsePluginRecord(value: unknown): PluginRecord {
     lastLoadError: optionalString(
       raw.lastLoadError,
       'PluginRecord.lastLoadError'
+    ),
+    signer: optionalString(raw.signer, 'PluginRecord.signer'),
+    signatureStatus: assertString(
+      raw.signatureStatus,
+      'PluginRecord.signatureStatus'
     ),
     installedAt: assertString(raw.installedAt, 'PluginRecord.installedAt'),
     updatedAt: assertString(raw.updatedAt, 'PluginRecord.updatedAt')

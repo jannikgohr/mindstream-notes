@@ -28,6 +28,7 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager};
 
+use super::signing;
 use super::{SOURCE_BUILTIN, SOURCE_INSTALLED};
 use crate::error::{AppError, AppResult};
 
@@ -39,6 +40,10 @@ pub struct DiscoveredPlugin {
     pub source: String,
     /// SHA-256 (hex) of the raw manifest.json bytes.
     pub checksum: String,
+    /// Signer fingerprint from `signature.json`, if the signature is valid.
+    pub signer: Option<String>,
+    /// `"unsigned"` | `"valid"` | `"invalid"`.
+    pub signature_status: String,
     /// The parsed manifest, passed through to the frontend for validation.
     pub manifest: serde_json::Value,
 }
@@ -78,6 +83,9 @@ pub fn ensure_third_party_dir(dir: &Path) {
 fn read_plugin(dir: &Path, source: &str) -> AppResult<DiscoveredPlugin> {
     let bytes = fs::read(dir.join("manifest.json"))?;
     let checksum = sha256_hex(&bytes);
+    // Signature is verified over the exact manifest bytes. Absent → unsigned.
+    let sig_json = fs::read(dir.join("signature.json")).ok();
+    let verification = signing::verify(&bytes, sig_json.as_deref());
     let manifest: serde_json::Value = serde_json::from_slice(&bytes)
         .map_err(|e| AppError::InvalidArg(format!("manifest.json in {}: {e}", dir.display())))?;
     let id = manifest
@@ -107,6 +115,8 @@ fn read_plugin(dir: &Path, source: &str) -> AppResult<DiscoveredPlugin> {
         permissions,
         source: source.to_string(),
         checksum,
+        signer: verification.signer,
+        signature_status: verification.status.as_str().to_string(),
         manifest,
     })
 }

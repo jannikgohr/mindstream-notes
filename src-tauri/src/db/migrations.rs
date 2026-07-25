@@ -534,6 +534,22 @@ const MIGRATIONS: &[Migration] = &[
             CREATE INDEX idx_plugins_enabled ON plugins(enabled) WHERE enabled = 1;
         "#,
     },
+    Migration {
+        to: 22,
+        // Plugin signature state (see src/plugins/signing.rs).
+        //   signer            SHA-256 fingerprint of the accepted signer's
+        //                     Ed25519 public key, pinned on approval. Only an
+        //                     update signed by the SAME key auto-approves; a
+        //                     signer change is treated as untrusted. NULL for
+        //                     unsigned plugins.
+        //   signature_status  last observed verification result of the on-disk
+        //                     signature: 'unsigned' | 'valid' | 'invalid'. Info
+        //                     for the management UI; refreshed on every discover.
+        sql: r#"
+            ALTER TABLE plugins ADD COLUMN signer TEXT;
+            ALTER TABLE plugins ADD COLUMN signature_status TEXT NOT NULL DEFAULT 'unsigned';
+        "#,
+    },
 ];
 
 pub fn run(conn: &mut Connection) -> AppResult<()> {
