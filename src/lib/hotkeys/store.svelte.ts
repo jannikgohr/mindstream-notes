@@ -47,7 +47,8 @@ import { canonicalize } from './parse';
 import { wellKnownConflict } from './collisions';
 import { applyMigrations, MIGRATIONS } from './migrations';
 import {
-  COMMAND_BY_ID,
+  allHotkeyCommands,
+  commandById,
   HOTKEY_COMMANDS,
   type CommandDefinition
 } from './catalogue';
@@ -138,7 +139,8 @@ export function hydrateBindingsFromSettings(): void {
   // this, every rename silently loses every user's custom binding.
   applyMigrations(settings.values, MIGRATIONS);
 
-  for (const cmd of HOTKEY_COMMANDS) {
+  const commands = allHotkeyCommands();
+  for (const cmd of commands) {
     const key = settingKey(cmd.id);
     if (!(key in settings.values)) {
       // No persisted override → leave the map entry absent so
@@ -165,7 +167,7 @@ export function hydrateBindingsFromSettings(): void {
   // Iterates the catalogue rather than `hotkeys.bindings` so defaults
   // are covered too — the rare case where a catalogue author picks
   // an unfortunate default chord.
-  for (const cmd of HOTKEY_COMMANDS) {
+  for (const cmd of commands) {
     const binding =
       cmd.id in hotkeys.bindings
         ? hotkeys.bindings[cmd.id]
@@ -200,7 +202,7 @@ export function hydrateBindingsFromSettings(): void {
  * other command changes.
  */
 export function getBinding(commandId: string): string | null {
-  const def = COMMAND_BY_ID[commandId];
+  const def = commandById(commandId);
   if (!def) return null;
   // Property access on the $state proxy. Tracking is per-key, so each
   // call wires up a dep on exactly this binding.
@@ -245,7 +247,7 @@ export async function setBinding(
   commandId: string,
   binding: string | null
 ): Promise<void> {
-  const def = COMMAND_BY_ID[commandId];
+  const def = commandById(commandId);
   if (!def) return;
 
   const normalized = binding === null ? null : canonicalize(binding);
@@ -267,7 +269,7 @@ export async function setBinding(
 /** Restore a command's default binding. Goes through `setBinding` so
  *  the same conflict checks apply before the default lands. */
 export async function resetBinding(commandId: string): Promise<void> {
-  const def = COMMAND_BY_ID[commandId];
+  const def = commandById(commandId);
   if (!def) return;
   await setBinding(commandId, def.defaultBinding);
 }
@@ -277,7 +279,7 @@ export async function resetBinding(commandId: string): Promise<void> {
  *  custom rows. Goes through `getBinding` so the dot's reactivity
  *  surface matches what the chip actually displays. */
 export function isCustomized(commandId: string): boolean {
-  const def = COMMAND_BY_ID[commandId];
+  const def = commandById(commandId);
   if (!def) return false;
   return getBinding(commandId) !== def.defaultBinding;
 }
@@ -296,8 +298,8 @@ export function findCommandByBinding(
   binding: string,
   commandId?: string
 ): CommandDefinition | null {
-  const command = commandId ? COMMAND_BY_ID[commandId] : null;
-  for (const cmd of HOTKEY_COMMANDS) {
+  const command = commandId ? commandById(commandId) : null;
+  for (const cmd of allHotkeyCommands()) {
     if (cmd.id === commandId) continue;
     if (command && !commandsCanCollide(command, cmd)) continue;
     if (getBinding(cmd.id) === binding) {

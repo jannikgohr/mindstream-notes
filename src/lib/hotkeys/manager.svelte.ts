@@ -35,7 +35,7 @@
 
 import { formatChord, normalizeKey, parseBinding } from './parse';
 import {
-  HOTKEY_COMMANDS,
+  allHotkeyCommands,
   isGlobalShortcutOnlyCommand,
   type CommandDefinition
 } from './catalogue';
@@ -311,7 +311,7 @@ function shouldSuppressCrepeNative(event: EventFlags): boolean {
 function findMatchingCommand(event: EventFlags): CommandDefinition | null {
   const active = activeEditor();
   let defaultMatch: CommandDefinition | null = null;
-  for (const cmd of HOTKEY_COMMANDS) {
+  for (const cmd of allHotkeyCommands()) {
     if (isGlobalShortcutOnlyCommand(cmd)) continue;
     if (cmd.scope === 'editor' && active?.kind !== cmd.editorKind) continue;
     const raw = getBinding(cmd.id);
