@@ -283,7 +283,7 @@
               <!-- Plugins is the one expandable category: the row selects the
                    management overview, the chevron reveals per-plugin settings. -->
               {@const children = pluginsWithSettings()}
-              <div class="flex items-center pr-1">
+              <div class="flex items-stretch">
                 <button
                   type="button"
                   onclick={selectPluginOverview}
@@ -300,7 +300,7 @@
                     aria-label={tLabel('categories', cat.id)}
                     aria-expanded={pluginsExpanded}
                     onclick={() => (pluginsExpanded = !pluginsExpanded)}
-                    class="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+                    class="flex shrink-0 items-center justify-center px-2.5 text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
                   >
                     <ChevronRight
                       class="size-3.5 transition-transform {pluginsExpanded
