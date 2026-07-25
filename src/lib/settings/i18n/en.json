@@ -682,6 +682,8 @@
     "updater.unsupportedLinux.message": "Mindstream Notes was installed from a system package (rpm / deb), which can only be updated through your distribution. Download the latest version from https://github.com/jannikgohr/mindstream-notes/releases/latest and reinstall, or use the AppImage build for in-app updates.",
     "nav.create.kanban": "New Kanban board",
     "nav.create.kanbanInFolder": "New Kanban board in folder",
+    "nav.create.fromTemplate": "New from template",
+    "fab.fromTemplate": "New from template",
     "fab.newKanban": "New Kanban board",
     "fab.placeholder.kanbanTitle": "Kanban board title",
     "editor.kanban.labels": "Labels",
