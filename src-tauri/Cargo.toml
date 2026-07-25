@@ -79,6 +79,7 @@ flate2 = "1"
 # Markdown-noise stripping for the canonical word count (see
 # src/content_stats.rs), shared by the sidebar stat and the history delta.
 regex = "1"
+ed25519-dalek = "3.0.0"
 
 [profile.release]
 panic = "abort"

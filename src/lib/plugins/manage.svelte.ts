@@ -39,6 +39,10 @@ export interface PluginOverviewEntry {
   enabled: boolean;
   /** Why the plugin isn't contributing, if anything (bad manifest, integrity). */
   loadError: string | null;
+  /** Signature verification result: `'unsigned' | 'valid' | 'invalid'`. */
+  signatureStatus: string;
+  /** SHA-256 fingerprint of the signer's key when signed + valid. */
+  signer: string | null;
   hasSettings: boolean;
   permissions: string[];
 }
@@ -71,6 +75,8 @@ export function pluginOverview(): PluginOverviewEntry[] {
       source: record?.source ?? SOURCE_BUILTIN,
       enabled,
       loadError: pluginLoadError(manifest.id) ?? record?.lastLoadError ?? null,
+      signatureStatus: record?.signatureStatus ?? 'unsigned',
+      signer: record?.signer ?? null,
       hasSettings: (manifest.contributes.settings ?? []).length > 0,
       permissions: manifest.permissions
     };

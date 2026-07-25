@@ -24,6 +24,7 @@ use crate::db::Db;
 use crate::error::{AppError, AppResult, CommandResult};
 
 pub mod discovery;
+pub mod signing;
 
 /// Where a plugin came from. Governs the integrity gate: builtins are trusted,
 /// installed plugins must keep a matching accepted hash.
@@ -45,6 +46,11 @@ pub struct PluginRecord {
     pub accepted_hash: String,
     pub granted_permissions: Vec<String>,
     pub last_load_error: Option<String>,
+    /// SHA-256 fingerprint of the accepted signer's public key (pinned on
+    /// approval), or `None` for unsigned plugins.
+    pub signer: Option<String>,
+    /// Last observed signature verification: `"unsigned"` | `"valid"` | `"invalid"`.
+    pub signature_status: String,
     pub installed_at: String,
     pub updated_at: String,
 }
@@ -63,6 +69,10 @@ pub struct UpsertPlugin {
     pub source: String,
     pub source_path: Option<String>,
     pub permissions: Vec<String>,
+    /// Signer fingerprint from signature verification (`None` if unsigned/invalid).
+    pub signer: Option<String>,
+    /// Signature verification result: `"unsigned"` | `"valid"` | `"invalid"`.
+    pub signature_status: String,
 }
 
 fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<PluginRecord> {
@@ -78,13 +88,15 @@ fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<PluginRecord> {
         accepted_hash: row.get("accepted_hash")?,
         granted_permissions,
         last_load_error: row.get("last_load_error")?,
+        signer: row.get("signer")?,
+        signature_status: row.get("signature_status")?,
         installed_at: row.get("installed_at")?,
         updated_at: row.get("updated_at")?,
     })
 }
 
 const SELECT_COLUMNS: &str = "id, version, enabled, source, source_path, accepted_hash, \
-     granted_permissions, last_load_error, installed_at, updated_at";
+     granted_permissions, last_load_error, signer, signature_status, installed_at, updated_at";
 
 pub fn list(conn: &Connection) -> AppResult<Vec<PluginRecord>> {
     let sql = format!("SELECT {SELECT_COLUMNS} FROM plugins ORDER BY installed_at, id");
@@ -107,12 +119,15 @@ fn require(conn: &Connection, id: &str) -> AppResult<PluginRecord> {
 /// Register a freshly-loaded plugin, or reconcile an existing record with the
 /// manifest currently being loaded.
 ///
-/// - New id → inserted enabled, accepting the current checksum + permissions.
-/// - Builtin (trusted) → always accept the current checksum; enabled state and
-///   install timestamp are preserved.
-/// - Installed with a matching accepted hash → refresh version/permissions.
-/// - Installed with a **changed** checksum → disabled with a load error, the
-///   old accepted hash retained, pending re-approval via [`approve`].
+/// - New id → inserted enabled, accepting the current checksum + signer.
+/// - Builtin (trusted by location) → always accept; enabled state + install
+///   timestamp preserved.
+/// - Installed, unchanged hash → refresh.
+/// - Installed, **changed** hash but validly signed by the SAME pinned signer →
+///   auto-approved (the update is provably from the same author).
+/// - Installed, changed hash otherwise (unsigned edit / invalid signature /
+///   different signer) → disabled with a load error, the old accepted hash +
+///   pinned signer retained, pending re-approval via [`approve`].
 pub fn upsert(conn: &Connection, input: UpsertPlugin) -> AppResult<PluginRecord> {
     let now = Utc::now().to_rfc3339();
     let permissions_json =
@@ -124,8 +139,9 @@ pub fn upsert(conn: &Connection, input: UpsertPlugin) -> AppResult<PluginRecord>
             conn.execute(
                 "INSERT INTO plugins(
                     id, version, enabled, source, source_path, accepted_hash,
-                    granted_permissions, last_load_error, installed_at, updated_at
-                 ) VALUES (?1, ?2, 1, ?3, ?4, ?5, ?6, NULL, ?7, ?7)",
+                    granted_permissions, last_load_error, signer, signature_status,
+                    installed_at, updated_at
+                 ) VALUES (?1, ?2, 1, ?3, ?4, ?5, ?6, NULL, ?7, ?8, ?9, ?9)",
                 params![
                     input.id,
                     input.version,
@@ -133,6 +149,8 @@ pub fn upsert(conn: &Connection, input: UpsertPlugin) -> AppResult<PluginRecord>
                     input.source_path,
                     input.checksum,
                     permissions_json,
+                    input.signer,
+                    input.signature_status,
                     now,
                 ],
             )?;
@@ -140,14 +158,21 @@ pub fn upsert(conn: &Connection, input: UpsertPlugin) -> AppResult<PluginRecord>
         Some(existing) => {
             let trusted = input.source == SOURCE_BUILTIN;
             let hash_matches = existing.accepted_hash == input.checksum;
-            if trusted || hash_matches {
-                // Trusted update, or an unchanged installed plugin: accept the
-                // current manifest, clear any prior error, keep enabled state.
+            let signed_valid = input.signature_status == "valid";
+            // Same author only when both are present and the fingerprints match.
+            let same_signer =
+                input.signer.is_some() && input.signer.as_deref() == existing.signer.as_deref();
+            let accept = trusted || hash_matches || (signed_valid && same_signer);
+
+            if accept {
+                // Trusted, unchanged, or a valid same-signer update: accept the
+                // current manifest + signer, clear any error, keep enabled state.
                 conn.execute(
                     "UPDATE plugins SET
                         version = ?2, source = ?3, source_path = ?4,
                         accepted_hash = ?5, granted_permissions = ?6,
-                        last_load_error = NULL, updated_at = ?7
+                        signer = ?7, signature_status = ?8,
+                        last_load_error = NULL, updated_at = ?9
                      WHERE id = ?1",
                     params![
                         input.id,
@@ -156,24 +181,36 @@ pub fn upsert(conn: &Connection, input: UpsertPlugin) -> AppResult<PluginRecord>
                         input.source_path,
                         input.checksum,
                         permissions_json,
+                        input.signer,
+                        input.signature_status,
                         now,
                     ],
                 )?;
             } else {
-                // Installed plugin whose manifest changed since approval: gate
-                // it off, keep the old accepted hash so re-approval can compare.
+                // Changed since approval and not provably the same author: gate
+                // it off. Keep the old accepted hash + pinned signer so a later
+                // legitimate re-sign by the original author auto-recovers. Update
+                // signature_status so the UI can explain why.
+                let reason = if input.signature_status == "invalid" {
+                    "plugin signature is invalid; re-approval required"
+                } else if signed_valid {
+                    "plugin is signed by a different key than approved; re-approval required"
+                } else {
+                    "manifest hash changed since it was approved; re-approval required"
+                };
                 conn.execute(
                     "UPDATE plugins SET
                         version = ?2, source = ?3, source_path = ?4,
-                        enabled = 0,
-                        last_load_error = ?5, updated_at = ?6
+                        enabled = 0, signature_status = ?5,
+                        last_load_error = ?6, updated_at = ?7
                      WHERE id = ?1",
                     params![
                         input.id,
                         input.version,
                         input.source,
                         input.source_path,
-                        "manifest hash changed since it was approved; re-approval required",
+                        input.signature_status,
+                        reason,
                         now,
                     ],
                 )?;
@@ -211,6 +248,8 @@ pub fn reconcile(
                 source: plugin.source,
                 source_path: None,
                 permissions: plugin.permissions,
+                signer: plugin.signer,
+                signature_status: plugin.signature_status,
             },
         )?;
         views.push(DiscoveredPluginView {

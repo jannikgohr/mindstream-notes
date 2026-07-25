@@ -10,6 +10,7 @@
    */
   import { onMount } from 'svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
+  import { tooltip } from '$lib/actions/tooltip';
   import {
     pluginOverview,
     refreshPluginAdmin,
@@ -28,6 +29,34 @@
       ? tUi('plugins.source.builtin')
       : tUi('plugins.source.installed');
   }
+
+  /**
+   * Signature status classes, or null to hide the chip. Only shown for
+   * third-party plugins — a Core plugin is trusted by its bundled location, not
+   * by a signature, so a signature chip there would be noise.
+   */
+  function signatureChip(
+    source: string,
+    status: string
+  ): { label: string; class: string } | null {
+    if (source === SOURCE_BUILTIN) return null;
+    if (status === 'valid') {
+      return {
+        label: tUi('plugins.signature.valid'),
+        class: 'border-emerald-500/40 text-emerald-700 dark:text-emerald-400'
+      };
+    }
+    if (status === 'invalid') {
+      return {
+        label: tUi('plugins.signature.invalid'),
+        class: 'border-destructive/40 text-destructive'
+      };
+    }
+    return {
+      label: tUi('plugins.signature.unsigned'),
+      class: 'border-border text-muted-foreground'
+    };
+  }
 </script>
 
 <div class="mt-4">
@@ -38,6 +67,7 @@
   {:else}
     <div class="divide-y divide-border">
       {#each entries as entry (entry.id)}
+        {@const sig = signatureChip(entry.source, entry.signatureStatus)}
         <div class="flex items-start justify-between gap-4 py-3">
           <div class="min-w-0">
             <div class="flex flex-wrap items-center gap-2">
@@ -50,6 +80,16 @@
               <span class="font-mono text-xs text-muted-foreground"
                 >v{entry.version}</span
               >
+              {#if sig}
+                <span
+                  class="rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide {sig.class}"
+                  use:tooltip={entry.signer
+                    ? `${sig.label} · ${entry.signer.slice(0, 16)}…`
+                    : sig.label}
+                >
+                  {sig.label}
+                </span>
+              {/if}
             </div>
             <p class="mt-0.5 truncate font-mono text-xs text-muted-foreground">
               {entry.id}

@@ -1,7 +1,13 @@
 use super::*;
 use crate::db::open_memory_for_tests;
 
-fn upsert_input(id: &str, checksum: &str, source: &str) -> UpsertPlugin {
+fn signed_input(
+    id: &str,
+    checksum: &str,
+    source: &str,
+    signer: Option<&str>,
+    signature_status: &str,
+) -> UpsertPlugin {
     UpsertPlugin {
         id: id.to_string(),
         version: "1.0.0".to_string(),
@@ -9,7 +15,13 @@ fn upsert_input(id: &str, checksum: &str, source: &str) -> UpsertPlugin {
         source: source.to_string(),
         source_path: None,
         permissions: vec!["templates.contribute".into(), "notes.create".into()],
+        signer: signer.map(String::from),
+        signature_status: signature_status.to_string(),
     }
+}
+
+fn upsert_input(id: &str, checksum: &str, source: &str) -> UpsertPlugin {
+    signed_input(id, checksum, source, None, "unsigned")
 }
 
 #[test]
@@ -123,6 +135,73 @@ fn set_enabled_on_missing_plugin_is_not_found() {
 }
 
 #[test]
+fn signed_same_signer_update_auto_approves() {
+    let db = open_memory_for_tests();
+    db.with_conn(|c| {
+        upsert(
+            c,
+            signed_input("com.a.p", "h1", "installed", Some("keyA"), "valid"),
+        )?;
+        // Changed manifest, still validly signed by the same key → accepted.
+        let rec = upsert(
+            c,
+            signed_input("com.a.p", "h2", "installed", Some("keyA"), "valid"),
+        )?;
+        assert!(rec.enabled);
+        assert_eq!(rec.accepted_hash, "h2");
+        assert_eq!(rec.signer.as_deref(), Some("keyA"));
+        assert!(rec.last_load_error.is_none());
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn signed_different_signer_update_is_gated_and_keeps_pin() {
+    let db = open_memory_for_tests();
+    db.with_conn(|c| {
+        upsert(
+            c,
+            signed_input("com.a.p", "h1", "installed", Some("keyA"), "valid"),
+        )?;
+        // Validly signed, but by a DIFFERENT key → gated; pin + hash retained.
+        let rec = upsert(
+            c,
+            signed_input("com.a.p", "h2", "installed", Some("keyB"), "valid"),
+        )?;
+        assert!(!rec.enabled);
+        assert_eq!(rec.accepted_hash, "h1");
+        assert_eq!(rec.signer.as_deref(), Some("keyA"));
+        assert!(rec.last_load_error.unwrap().contains("different key"));
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn invalid_signature_update_is_gated() {
+    let db = open_memory_for_tests();
+    db.with_conn(|c| {
+        upsert(
+            c,
+            signed_input("com.a.p", "h1", "installed", Some("keyA"), "valid"),
+        )?;
+        let rec = upsert(
+            c,
+            signed_input("com.a.p", "h2", "installed", None, "invalid"),
+        )?;
+        assert!(!rec.enabled);
+        assert!(rec
+            .last_load_error
+            .unwrap()
+            .contains("signature is invalid"));
+        assert_eq!(rec.signature_status, "invalid");
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
 fn reconcile_registers_discovered_plugins_and_returns_manifests() {
     let db = open_memory_for_tests();
     db.with_conn(|c| {
@@ -132,6 +211,8 @@ fn reconcile_registers_discovered_plugins_and_returns_manifests() {
             permissions: vec!["notes.create".into()],
             source: SOURCE_BUILTIN.into(),
             checksum: "hash1".into(),
+            signer: None,
+            signature_status: "unsigned".into(),
             manifest: serde_json::json!({ "id": "com.a.plugin", "name": "A" }),
         }];
         let views = reconcile(c, discovered)?;
