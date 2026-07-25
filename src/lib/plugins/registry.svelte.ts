@@ -20,6 +20,7 @@
  * working exactly as if that plugin weren't installed.
  */
 
+import { checksumManifest } from './canonical';
 import { validateManifest } from './validation';
 import type {
   PluginCommandContribution,
@@ -34,6 +35,12 @@ export interface RegisteredPlugin {
   manifest: PluginManifest;
   /** Disabled plugins stay registered but contribute nothing. */
   enabled: boolean;
+  /**
+   * Canonical checksum of the manifest at registration time. The seam the
+   * integrity flow compares against a stored accepted hash (see canonical.ts);
+   * also surfaced in the plugin settings UI.
+   */
+  checksum: string;
 }
 
 /** A template paired with the plugin that owns it. */
@@ -77,7 +84,8 @@ export function registerPlugin(
   const manifest = validateManifest(input);
   const registration: RegisteredPlugin = {
     manifest,
-    enabled: opts.enabled ?? true
+    enabled: opts.enabled ?? true,
+    checksum: checksumManifest(manifest)
   };
   state.plugins[manifest.id] = registration;
   delete state.loadErrors[manifest.id];

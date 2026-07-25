@@ -37,6 +37,7 @@
   import { loadProfiles, profilesState } from '$lib/stores/profiles.svelte';
   import { installSyncStatusBridge } from '$lib/notifications/sync-status';
   import { installSyncTreeRefreshBridge } from '$lib/sync/tree-refresh-bridge';
+  import { loadBuiltinPlugins } from '$lib/plugins/load';
 
   let { children } = $props();
 
@@ -64,6 +65,9 @@
     void loadProfiles();
     initHotkeys();
     initNativeMenuCommands();
+    // Register bundled plugins. Isolated per-plugin so a broken manifest is
+    // recorded as a load error rather than throwing out of startup.
+    loadBuiltinPlugins();
     // Surface a notification when Rust reports the sync server is
     // unreachable (and clear it on the next successful sync).
     const teardownSyncStatus = installSyncStatusBridge();
