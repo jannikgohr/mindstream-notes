@@ -17,6 +17,29 @@ anything inside its manifest. Dropping a copy of a built-in plugin into the
 app-data dir loads it as a gated third-party plugin, so core plugins double as
 worked examples.
 
+## First-party plugins
+
+These ship with the app (source under repo-root `plugins/`). Each documents
+itself in-app via its manifest `descriptionKey`, shown in Settings → Plugins.
+
+### Templates — `com.mindstream.templates.core`
+
+Turns the user's own notes into reusable templates; there are no premade
+templates. It contributes a **Template sources** settings section:
+
+- **Template folder** (`source-folder`, a `folder` picker) — every markdown note
+  inside the chosen folder (at any depth) becomes a template.
+- **Template tag** (`source-tag`, a `tag` picker) — every markdown note carrying
+  the chosen tag becomes a template.
+- **Open new template notes** (`open-on-create`, a toggle).
+
+Templates appear in the "New from template" menu (file-tree toolbar + mobile
+FAB). Creating one copies the source note's title + body through the `{{…}}`
+placeholder engine (so `{{date}}`, `{{uuid}}`, etc. are filled in) and the app
+writes the new note. The plugin itself holds no permissions — the app owns the
+note write and reads the two settings by convention. Disable the plugin to
+remove the "New from template" affordance entirely.
+
 ## Manifest
 
 ```jsonc
@@ -26,6 +49,7 @@ worked examples.
   "version": "1.0.0",
   "runtime": "manifest-only", // or "luau"
   "entry": "main.luau", // required iff runtime is "luau"; a plain .luau filename
+  "descriptionKey": "plugin.description", // optional i18n key; shown to the user as the plugin's docs
   "permissions": [], // see Permissions
   "contributes": {
     /* … */
