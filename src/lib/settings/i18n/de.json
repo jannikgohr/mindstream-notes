@@ -712,6 +712,8 @@
     "plugins.signature.invalid": "Ungültige Signatur",
     "plugins.signature.unsigned": "Unsigniert",
     "plugins.docs.view": "Dokumentation ansehen",
+    "plugins.docs.loading": "Dokumentation wird geladen…",
+    "plugins.docs.empty": "Keine Dokumentation verfügbar.",
     "plugins.permissions.title": "Berechtigungen",
     "plugins.permissions.none": "Keine besonderen Berechtigungen",
     "plugins.permission.templates.contribute": "Zeigt seine Vorlagen in Erstellen-Menüs",

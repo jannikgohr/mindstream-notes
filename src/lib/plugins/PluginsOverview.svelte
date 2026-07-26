@@ -7,7 +7,7 @@
    *
    * Right-side icons, left→right, each shown only when it applies:
    *   - docs (book)      — opens the read-only documentation modal (if the
-   *     plugin ships `documentationKey`);
+   *     plugin ships `contributes.documentation`);
    *   - permissions      — a popover listing what the plugin may do;
    *   - settings (gear)  — jumps to the plugin's settings pane (enabled +
    *     contributes settings; navigation supplied by the host shell);
@@ -41,6 +41,7 @@
     type PluginOverviewEntry
   } from './manage.svelte';
   import { SOURCE_BUILTIN, SOURCE_INSTALLED } from './source';
+  import type { PluginDocSection } from './types';
   import PluginDocsDialog from './PluginDocsDialog.svelte';
 
   interface Props {
@@ -57,13 +58,16 @@
 
   const entries = $derived(pluginOverview());
 
-  // Documentation modal (read-only Milkdown), opened per plugin.
+  // Documentation modal (read-only Milkdown), opened per plugin. Content is
+  // loaded lazily from the plugin's bundled .md files by the dialog itself.
   let docsOpen = $state(false);
   let docsTitle = $state('');
-  let docsMarkdown = $state('');
-  function openDocs(name: string, markdown: string) {
-    docsTitle = name;
-    docsMarkdown = markdown;
+  let docsPluginId = $state('');
+  let docsSections = $state<PluginDocSection[]>([]);
+  function openDocs(entry: PluginOverviewEntry) {
+    docsTitle = entry.name;
+    docsPluginId = entry.id;
+    docsSections = entry.documentation;
     docsOpen = true;
   }
 
@@ -187,13 +191,13 @@
           </div>
 
           <div class="flex shrink-0 items-center gap-0.5">
-            {#if entry.documentation}
+            {#if entry.documentation.length > 0}
               <button
                 type="button"
                 class={iconButton}
                 aria-label={tUi('plugins.docs.view')}
                 use:tooltip={tUi('plugins.docs.view')}
-                onclick={() => openDocs(entry.name, entry.documentation ?? '')}
+                onclick={() => openDocs(entry)}
               >
                 <BookOpen class="size-4" />
               </button>
@@ -310,5 +314,6 @@
 <PluginDocsDialog
   bind:open={docsOpen}
   title={docsTitle}
-  markdown={docsMarkdown}
+  pluginId={docsPluginId}
+  sections={docsSections}
 />

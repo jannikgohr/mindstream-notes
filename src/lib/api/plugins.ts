@@ -179,6 +179,25 @@ export function pluginsRemove(id: string): Promise<void> {
 }
 
 /**
+ * Read one of a plugin's bundled documentation files (`.md`) from its dir.
+ * Returns `null` when the file isn't present, so the caller can fall back from a
+ * missing locale variant to the base file. Tauri-only: the browser build serves
+ * bundled core-plugin docs from a build-time glob instead (see docs-loader), so
+ * the fallback here returns `null`.
+ */
+export function pluginsReadDoc(
+  id: string,
+  file: string
+): Promise<string | null> {
+  return invokeOrFallback<string | null>(
+    TauriCommandName.PluginsReadDoc,
+    { id, file },
+    () => null,
+    (value) => (value === null ? null : assertString(value, 'plugins_read_doc'))
+  );
+}
+
+/**
  * Run an enabled `luau` plugin's exported function in the sandboxed backend
  * runtime and return its JSON result. There is no browser fallback: scripted
  * plugins require the Rust runtime, so outside Tauri this rejects rather than
