@@ -21,6 +21,7 @@ import {
   pluginsDisable,
   pluginsEnable,
   pluginsList,
+  pluginsRemove,
   type PluginRecord
 } from '$lib/api/plugins';
 import { loadPlugins } from './load';
@@ -28,7 +29,8 @@ import { SOURCE_BUILTIN } from './source';
 import {
   allPlugins,
   pluginLoadError,
-  setPluginEnabled
+  setPluginEnabled,
+  unregisterPlugin
 } from './registry.svelte';
 import { resolvePluginStringOptional } from './plugin-i18n';
 
@@ -50,7 +52,11 @@ export interface PluginOverviewEntry {
   signatureStatus: string;
   /** SHA-256 fingerprint of the signer's key when signed + valid. */
   signer: string | null;
+  /** Author/publisher string from the manifest, or null when unspecified. */
+  author: string | null;
   hasSettings: boolean;
+  /** True when the plugin publishes at least one command (⇒ bindable hotkeys). */
+  hasCommands: boolean;
   permissions: string[];
 }
 
@@ -90,7 +96,9 @@ export function pluginOverview(): PluginOverviewEntry[] {
       loadError: pluginLoadError(manifest.id) ?? record?.lastLoadError ?? null,
       signatureStatus: record?.signatureStatus ?? 'unsigned',
       signer: record?.signer ?? null,
+      author: manifest.author ?? null,
       hasSettings: (manifest.contributes.settings ?? []).length > 0,
+      hasCommands: (manifest.contributes.commands ?? []).length > 0,
       permissions: manifest.permissions
     };
   });
@@ -137,5 +145,23 @@ export async function approvePluginAdmin(id: string): Promise<void> {
     return;
   }
   await loadPlugins();
+  await refreshPluginAdmin();
+}
+
+/**
+ * Uninstall a third-party plugin: delete it from disk + the durable registry
+ * (backend), then drop it from the reactive frontend registry so its row and
+ * every contribution vanish immediately. Only third-party plugins are
+ * removable — a built-in ships with the app and its "removal" would just
+ * reappear on next discovery — so the UI gates the trash affordance on source.
+ */
+export async function removePluginAdmin(id: string): Promise<void> {
+  try {
+    await pluginsRemove(id);
+  } catch (err) {
+    console.error('[plugins] failed to remove plugin', id, err);
+    return;
+  }
+  unregisterPlugin(id);
   await refreshPluginAdmin();
 }

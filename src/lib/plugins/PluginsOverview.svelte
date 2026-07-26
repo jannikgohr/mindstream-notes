@@ -1,25 +1,55 @@
 <script lang="ts">
   /**
-   * Plugin management overview — lists every installed plugin (core +
-   * third-party, enabled + disabled) with a source badge, version, an
-   * enable/disable switch, and a load-error line when the plugin isn't
-   * contributing (bad manifest / integrity gate). Shared by the desktop and
-   * mobile settings shells. Toggling is optimistic + reactive (see
-   * manage.svelte.ts) so the plugin's settings, create-menu templates and
-   * hotkeys appear/vanish live.
+   * Plugin management overview — one row per installed plugin (core +
+   * third-party, enabled + disabled), styled after Obsidian's community-plugins
+   * list: name + version + author + description on the left, a row of action
+   * icons on the right.
+   *
+   * Right-side icons, left→right, each shown only when it applies:
+   *   - docs (book)      — opens the read-only documentation modal (if the
+   *     plugin ships `documentationKey`);
+   *   - permissions      — a popover listing what the plugin may do;
+   *   - settings (gear)  — jumps to the plugin's settings pane (enabled +
+   *     contributes settings; navigation supplied by the host shell);
+   *   - hotkeys (keyboard) — jumps to the hotkeys panel (enabled + publishes
+   *     commands; desktop only — the host omits the callback on mobile);
+   *   - trash            — uninstalls a third-party plugin (behind a confirm);
+   *   - toggle           — enable/disable, or an Approve button when the
+   *     integrity gate disabled a third-party plugin.
+   *
+   * Toggling is optimistic + reactive (see manage.svelte.ts) so a plugin's
+   * settings, create-menu templates and hotkeys appear/vanish live.
    */
   import { onMount } from 'svelte';
+  import { Popover } from 'bits-ui';
+  import {
+    BookOpen,
+    Keyboard,
+    Settings as SettingsIcon,
+    Shield,
+    Trash2
+  } from '@lucide/svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { tooltip } from '$lib/actions/tooltip';
+  import { confirm } from '$lib/components/confirm-dialog.svelte';
   import {
     approvePluginAdmin,
     pluginOverview,
     refreshPluginAdmin,
-    setPluginEnabledAdmin
+    removePluginAdmin,
+    setPluginEnabledAdmin,
+    type PluginOverviewEntry
   } from './manage.svelte';
   import { SOURCE_BUILTIN, SOURCE_INSTALLED } from './source';
   import PluginDocsDialog from './PluginDocsDialog.svelte';
-  import { BookOpen } from '@lucide/svelte';
+
+  interface Props {
+    /** Jump to a plugin's own settings pane. Omit to hide the settings icon. */
+    onOpenSettings?: (id: string) => void;
+    /** Jump to the hotkeys panel for a plugin. Omit (e.g. mobile) to hide it. */
+    onOpenHotkeys?: (id: string) => void;
+  }
+  let { onOpenSettings, onOpenHotkeys }: Props = $props();
 
   onMount(() => {
     void refreshPluginAdmin();
@@ -35,6 +65,20 @@
     docsTitle = name;
     docsMarkdown = markdown;
     docsOpen = true;
+  }
+
+  /** Confirm, then uninstall a third-party plugin. */
+  async function requestDelete(entry: PluginOverviewEntry) {
+    const ok = await confirm({
+      title: tUi('plugins.delete.confirm.title'),
+      message: tUi('plugins.delete.confirm.message').replace(
+        '{name}',
+        entry.name
+      ),
+      confirmLabel: tUi('plugins.delete.confirm.confirm'),
+      destructive: true
+    });
+    if (ok) await removePluginAdmin(entry.id);
   }
 
   /** Human label for a permission id (falls back to the raw id if untranslated). */
@@ -75,6 +119,10 @@
       class: 'border-border text-muted-foreground'
     };
   }
+
+  // Shared classes for the round ghost icon buttons in the action row.
+  const iconButton =
+    'flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
 </script>
 
 <div class="mt-4">
@@ -90,18 +138,22 @@
           !entry.enabled &&
           !!entry.loadError &&
           entry.source === SOURCE_INSTALLED}
+        {@const showSettings =
+          entry.enabled && entry.hasSettings && !!onOpenSettings}
+        {@const showHotkeys =
+          entry.enabled && entry.hasCommands && !!onOpenHotkeys}
+        {@const showTrash = entry.source === SOURCE_INSTALLED}
         <div class="flex items-start justify-between gap-4 py-3">
           <div class="min-w-0">
             <div class="flex flex-wrap items-center gap-2">
-              <span class="text-sm font-medium">{entry.name}</span>
+              <span class="text-sm font-medium" use:tooltip={entry.id}>
+                {entry.name}
+              </span>
               <span
                 class="rounded border border-border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
               >
                 {sourceLabel(entry.source)}
               </span>
-              <span class="font-mono text-xs text-muted-foreground"
-                >v{entry.version}</span
-              >
               {#if sig}
                 <span
                   class="rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide {sig.class}"
@@ -113,31 +165,19 @@
                 </span>
               {/if}
             </div>
-            <p class="mt-0.5 truncate font-mono text-xs text-muted-foreground">
-              {entry.id}
+            <p class="mt-0.5 text-xs text-muted-foreground">
+              {tUi('plugins.version')}: {entry.version}
             </p>
+            {#if entry.author}
+              <p class="text-xs text-muted-foreground">
+                {tUi('plugins.author')}
+                {entry.author}
+              </p>
+            {/if}
             {#if entry.description}
               <p class="mt-1 text-xs text-muted-foreground">
                 {entry.description}
               </p>
-            {/if}
-            <p class="mt-1 text-xs text-muted-foreground">
-              {tUi('plugins.permissions.title')}:
-              {#if entry.permissions.length > 0}
-                {entry.permissions.map(permissionLabel).join(', ')}
-              {:else}
-                {tUi('plugins.permissions.none')}
-              {/if}
-            </p>
-            {#if entry.documentation}
-              <button
-                type="button"
-                onclick={() => openDocs(entry.name, entry.documentation ?? '')}
-                class="mt-1.5 inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <BookOpen class="size-3" />
-                {tUi('plugins.docs.view')}
-              </button>
             {/if}
             {#if entry.loadError}
               <p class="mt-1 text-xs text-destructive">
@@ -145,12 +185,99 @@
               </p>
             {/if}
           </div>
-          <div class="flex shrink-0 items-center gap-2">
+
+          <div class="flex shrink-0 items-center gap-0.5">
+            {#if entry.documentation}
+              <button
+                type="button"
+                class={iconButton}
+                aria-label={tUi('plugins.docs.view')}
+                use:tooltip={tUi('plugins.docs.view')}
+                onclick={() => openDocs(entry.name, entry.documentation ?? '')}
+              >
+                <BookOpen class="size-4" />
+              </button>
+            {/if}
+
+            <Popover.Root>
+              <Popover.Trigger>
+                {#snippet child({ props })}
+                  <button
+                    {...props}
+                    class={iconButton}
+                    aria-label={tUi('plugins.permissions.title')}
+                    use:tooltip={tUi('plugins.permissions.title')}
+                  >
+                    <Shield class="size-4" />
+                  </button>
+                {/snippet}
+              </Popover.Trigger>
+              <Popover.Portal>
+                <Popover.Content
+                  sideOffset={6}
+                  class="z-[400] w-64 rounded-md border border-border bg-popover p-3 text-popover-foreground shadow-md focus:outline-none"
+                >
+                  <p class="text-xs font-semibold">
+                    {tUi('plugins.permissions.title')}
+                  </p>
+                  {#if entry.permissions.length > 0}
+                    <ul
+                      class="mt-1.5 list-disc space-y-1 pl-4 text-xs text-muted-foreground"
+                    >
+                      {#each entry.permissions as perm (perm)}
+                        <li>{permissionLabel(perm)}</li>
+                      {/each}
+                    </ul>
+                  {:else}
+                    <p class="mt-1.5 text-xs text-muted-foreground">
+                      {tUi('plugins.permissions.none')}
+                    </p>
+                  {/if}
+                </Popover.Content>
+              </Popover.Portal>
+            </Popover.Root>
+
+            {#if showSettings}
+              <button
+                type="button"
+                class={iconButton}
+                aria-label={tUi('plugins.settings.open')}
+                use:tooltip={tUi('plugins.settings.open')}
+                onclick={() => onOpenSettings?.(entry.id)}
+              >
+                <SettingsIcon class="size-4" />
+              </button>
+            {/if}
+
+            {#if showHotkeys}
+              <button
+                type="button"
+                class={iconButton}
+                aria-label={tUi('plugins.hotkeys.open')}
+                use:tooltip={tUi('plugins.hotkeys.open')}
+                onclick={() => onOpenHotkeys?.(entry.id)}
+              >
+                <Keyboard class="size-4" />
+              </button>
+            {/if}
+
+            {#if showTrash}
+              <button
+                type="button"
+                class="{iconButton} hover:text-destructive"
+                aria-label={tUi('plugins.delete')}
+                use:tooltip={tUi('plugins.delete')}
+                onclick={() => void requestDelete(entry)}
+              >
+                <Trash2 class="size-4" />
+              </button>
+            {/if}
+
             {#if gated}
               <button
                 type="button"
                 onclick={() => void approvePluginAdmin(entry.id)}
-                class="rounded-md bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                class="ml-1 rounded-md bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 {tUi('plugins.manage.approve')}
               </button>
@@ -162,7 +289,7 @@
                 aria-label={tUi('plugins.manage.toggle')}
                 onclick={() =>
                   void setPluginEnabledAdmin(entry.id, !entry.enabled)}
-                class="relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 {entry.enabled
+                class="relative ml-1 inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 {entry.enabled
                   ? 'bg-primary'
                   : 'bg-input'}"
               >

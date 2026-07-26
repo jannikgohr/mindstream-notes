@@ -292,6 +292,9 @@ export function validateManifest(input: unknown): PluginManifest {
   const pluginId = m.id;
   assertNonEmptyString(pluginId, m.name, 'manifest.name');
   assertNonEmptyString(pluginId, m.version, 'manifest.version');
+  if (m.author !== undefined) {
+    assertNonEmptyString(pluginId, m.author, 'manifest.author');
+  }
   if (m.descriptionKey !== undefined) {
     assertI18nKey(pluginId, m.descriptionKey, 'manifest.descriptionKey');
   }
