@@ -2,6 +2,7 @@
   "id": "com.mindstream.templates.core",
   "name": "Templates",
   "version": "2.0.0",
+  "author": "Mindstream",
   "runtime": "manifest-only",
   "descriptionKey": "plugin.description",
   "documentationKey": "plugin.docs",

@@ -153,6 +153,13 @@ export interface PluginManifest {
   id: string;
   name: string;
   version: string;
+  /**
+   * Optional author/publisher, shown verbatim under the plugin in settings
+   * ("By <author>"). A plain display string — not translated and not an i18n
+   * key — so it reads the same in every locale, matching how plugin catalogues
+   * (Obsidian, VS Code) surface authorship.
+   */
+  author?: string;
   runtime: 'manifest-only' | 'luau';
   /** Required for `runtime: 'luau'`; a `.luau` file relative to the plugin dir. */
   entry?: string;

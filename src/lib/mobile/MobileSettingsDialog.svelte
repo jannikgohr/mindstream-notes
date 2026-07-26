@@ -32,7 +32,8 @@
   import PluginsOverview from '$lib/plugins/PluginsOverview.svelte';
   import {
     PLUGINS_CATEGORY_ID,
-    pluginSettingsCategory
+    pluginSettingsCategory,
+    pluginSettingsSectionsFor
   } from '$lib/plugins/settings-bridge';
   import { allPlugins } from '$lib/plugins/registry.svelte';
   import { closeNavOverlay, openNavOverlay } from './state.svelte';
@@ -103,6 +104,22 @@
   function categoryIcon(name: string | undefined) {
     if (!name) return FALLBACK_ICON;
     return SETTINGS_ICONS[name] ?? FALLBACK_ICON;
+  }
+
+  /**
+   * The gear on a plugin row jumps to its settings. Mobile has no separate
+   * per-plugin pane — every enabled plugin's sections already render below the
+   * overview on the same scroll — so "open settings" scrolls that plugin's
+   * first section into view.
+   */
+  function scrollToPluginSettings(id: string): void {
+    const sec = pluginSettingsSectionsFor(id)[0];
+    if (!sec) return;
+    requestAnimationFrame(() => {
+      document
+        .getElementById(`plugins-section-${sec.id}`)
+        ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
   }
 
   function visibleSettings(cat: Category): Setting[] {
@@ -188,7 +205,7 @@
         <section class="flex-1 overflow-y-auto px-4 py-4">
           {#if activeCategory.id === PLUGINS_CATEGORY_ID}
             <!-- Management overview first, then each enabled plugin's sections. -->
-            <PluginsOverview />
+            <PluginsOverview onOpenSettings={scrollToPluginSettings} />
           {:else if visibleSettings(activeCategory).length === 0}
             <p class="px-1 py-6 text-center text-sm text-muted-foreground">
               {tUi('empty')}
@@ -199,7 +216,7 @@
               ? sec.settings.filter((s) => isVisible(s))
               : []}
             {#if sectionSettings.length > 0}
-              <div class="mb-6">
+              <div class="mb-6" id="plugins-section-{sec.id}">
                 <h3
                   class="mb-2 border-b border-border pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
                 >

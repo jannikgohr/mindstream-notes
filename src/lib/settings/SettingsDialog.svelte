@@ -373,7 +373,10 @@
               </p>
             {/if}
             {#if showingPluginOverview}
-              <PluginsOverview />
+              <PluginsOverview
+                onOpenSettings={selectPlugin}
+                onOpenHotkeys={() => selectCategory('hotkeys')}
+              />
             {:else}
               {#each sectionsToRender as sec (sec.id)}
                 {@const visibleSettings = isSectionVisible(sec)
