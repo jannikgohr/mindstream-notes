@@ -9,6 +9,7 @@
 
 import { tree } from '$lib/stores/tree.svelte';
 import { allTagsInUse } from '$lib/stores/tree.svelte';
+import { TRASH_ID } from '$lib/api/index';
 import { ALL_SETTINGS, getSettingValue, setSettingValue } from './store.svelte';
 import { pluginSettingsSections } from '$lib/plugins/registry.svelte';
 import type { Collection } from '$lib/api/collections';
@@ -19,9 +20,34 @@ export interface PickerItem {
   label: string;
 }
 
+/** True when `id` is the trash folder or lives anywhere under it. */
+function isUnderTrash(id: string): boolean {
+  const byId = tree.collectionsById;
+  const seen = new Set<string>();
+  let current: string | null = id;
+  while (current && !seen.has(current)) {
+    if (current === TRASH_ID) return true;
+    seen.add(current);
+    current = byId[current]?.parent_collection_id ?? null;
+  }
+  return false;
+}
+
 /**
- * Every folder as `{ id, "Parent / Child" }`, sorted by path. The hierarchical
- * label disambiguates same-named folders (which a plain name never could).
+ * Ids of folders a picker may select: they exist and aren't trashed. A folder
+ * moved to Trash counts as deleted, so it drops out of the picker and any
+ * setting pointing at it is pruned.
+ */
+function liveFolderIds(): Set<string> {
+  return new Set(
+    Object.keys(tree.collectionsById).filter((id) => !isUnderTrash(id))
+  );
+}
+
+/**
+ * Every live folder as `{ id, "Parent / Child" }`, sorted by path. The
+ * hierarchical label disambiguates same-named folders (which a plain name never
+ * could).
  */
 export function folderOptions(): PickerItem[] {
   const byId = tree.collectionsById;
@@ -38,7 +64,7 @@ export function folderOptions(): PickerItem[] {
     }
     return parts.join(' / ');
   };
-  return Object.keys(byId)
+  return [...liveFolderIds()]
     .map((id) => ({ value: id, label: pathOf(id) }))
     .sort((a, b) => a.label.localeCompare(b.label));
 }
@@ -88,7 +114,7 @@ export function startPickerSettingPruning(): () => void {
   return $effect.root(() => {
     $effect(() => {
       if (!tree.ready) return;
-      const folders = new Set(Object.keys(tree.collectionsById));
+      const folders = liveFolderIds();
       const tags = new Set(allTagsInUse());
       for (const { id, kind } of pickerSettings()) {
         const value = getSettingValue(id);
