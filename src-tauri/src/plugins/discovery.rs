@@ -16,9 +16,11 @@
 //! whose `id` collides with a bundled core plugin is dropped entirely (the core
 //! plugin wins), so it can neither shadow nor inherit the core plugin's trust.
 //!
-//! Integrity uses SHA-256 of the raw manifest bytes: any change to an installed
-//! plugin's manifest changes the hash and re-triggers approval, and the hash
-//! can't be forged to match a previously-approved manifest.
+//! Integrity uses SHA-256 of the plugin's **package digest** (see
+//! [`signing::package_digest`]) — a document folding in a content hash of every
+//! file in the plugin dir, not just `manifest.json`. So any change to the
+//! manifest *or* a `.luau` script re-triggers approval, and the hash can't be
+//! forged to match a previously-approved package.
 
 use std::collections::HashSet;
 use std::fmt::Write as _;
@@ -79,14 +81,44 @@ pub fn ensure_third_party_dir(dir: &Path) {
     }
 }
 
-/// Read one plugin directory's `manifest.json` into a [`DiscoveredPlugin`].
+/// Recursively read every file under `dir` as `(relpath, bytes)`, with `/`
+/// separators. Order is unspecified — [`signing::package_digest`] sorts.
+fn collect_files(dir: &Path) -> AppResult<Vec<(String, Vec<u8>)>> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(cur) = stack.pop() {
+        for entry in fs::read_dir(&cur)?.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let rel = path
+                .strip_prefix(dir)
+                .map(|p| p.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_default();
+            out.push((rel, fs::read(&path)?));
+        }
+    }
+    Ok(out)
+}
+
+/// Read one plugin directory into a [`DiscoveredPlugin`]. The integrity checksum
+/// and signature both cover the whole package (manifest + code + assets) via the
+/// [`signing::package_digest`] document, not just `manifest.json`.
 fn read_plugin(dir: &Path, source: &str) -> AppResult<DiscoveredPlugin> {
-    let bytes = fs::read(dir.join("manifest.json"))?;
-    let checksum = sha256_hex(&bytes);
-    // Signature is verified over the exact manifest bytes. Absent → unsigned.
+    let files = collect_files(dir)?;
+    let digest = signing::package_digest(&files);
+    let checksum = sha256_hex(&digest);
+    // Signature is verified over the package digest. Absent → unsigned.
     let sig_json = fs::read(dir.join("signature.json")).ok();
-    let verification = signing::verify(&bytes, sig_json.as_deref());
-    let manifest: serde_json::Value = serde_json::from_slice(&bytes)
+    let verification = signing::verify(&digest, sig_json.as_deref());
+    let manifest_bytes = files
+        .iter()
+        .find(|(path, _)| path == "manifest.json")
+        .map(|(_, bytes)| bytes.as_slice())
+        .ok_or_else(|| AppError::InvalidArg(format!("no manifest.json in {}", dir.display())))?;
+    let manifest: serde_json::Value = serde_json::from_slice(manifest_bytes)
         .map_err(|e| AppError::InvalidArg(format!("manifest.json in {}: {e}", dir.display())))?;
     let id = manifest
         .get("id")
@@ -251,6 +283,21 @@ mod tests {
         write_plugin(&root, "p", "com.a.p", "");
         let before = discover_dir(&root, SOURCE_INSTALLED)[0].checksum.clone();
         write_plugin(&root, "p", "com.a.p", r#", "name": "Changed""#);
+        let after = discover_dir(&root, SOURCE_INSTALLED)[0].checksum.clone();
+        assert_ne!(before, after);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn checksum_covers_sibling_code_files() {
+        // A tampered .luau file must change the integrity checksum even though
+        // manifest.json is untouched — this is what the package digest buys.
+        let root = tmp();
+        write_plugin(&root, "p", "com.a.p", "");
+        let entry = root.join("p").join("main.luau");
+        fs::write(&entry, "return { render = function() return {} end }").unwrap();
+        let before = discover_dir(&root, SOURCE_INSTALLED)[0].checksum.clone();
+        fs::write(&entry, "return { render = function() os.exit() end }").unwrap();
         let after = discover_dir(&root, SOURCE_INSTALLED)[0].checksum.clone();
         assert_ne!(before, after);
         fs::remove_dir_all(&root).ok();
