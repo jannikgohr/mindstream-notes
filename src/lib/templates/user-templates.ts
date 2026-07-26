@@ -2,32 +2,35 @@
  * User-authored templates: ordinary notes the user designates as templates,
  * with none of the app's premade ones required.
  *
- * Two opt-in sources, both configured in Settings → General → Templates:
- *   - a **folder name** (`templates.sourceFolder`): every markdown note inside a
- *     folder with that name (at any depth) is a template;
- *   - a **tag** (`templates.sourceTag`): every markdown note carrying that tag is
- *     a template.
+ * Two opt-in sources, both configured by the **Templates plugin**
+ * (Settings → Plugins → Templates → Template sources), using the reusable
+ * `folder` and `tag` setting primitives:
+ *   - a **folder** (`source-folder`, a folder id): every markdown note inside
+ *     that folder (at any depth) is a template;
+ *   - a **tag** (`source-tag`): every markdown note carrying that tag is a
+ *     template.
  *
- * Creating a note from a user template copies the source note's body (and title)
- * through the same `{{…}}` interpolation the plugin templates use — so a user
- * template can contain `{{date}}`, `{{uuid}}`, `{{date+7d:YYYY-MM-DD}}`, etc.
- * The app performs the note write, exactly as for plugin templates.
- *
- * The premade templates are the Core Templates *plugin*; they're hidden from the
- * create menus by turning off `templates.showBuiltIn` (see [`showBuiltInTemplates`]),
- * or removed entirely by disabling that plugin in Plugin settings.
+ * Because they are folder/tag pickers, both auto-clear when their target is
+ * deleted (settings/pickers.svelte.ts). Creating a note from a user template
+ * copies the source note's body (and title) through the same `{{…}}`
+ * interpolation the plugin templates use — so a user template can contain
+ * `{{date}}`, `{{uuid}}`, `{{date+7d:YYYY-MM-DD}}`, etc. The app performs the
+ * note write, exactly as for plugin templates.
  */
 
 import { loadNote } from '$lib/api/notes';
 import { createNoteIn, tree } from '$lib/stores/tree.svelte';
 import { requestOpenNote } from '$lib/stores/open-note-intent.svelte';
 import { getSettingValue } from '$lib/settings/store.svelte';
-import { renderTemplateString } from '$lib/plugins/templates';
+import {
+  renderTemplateString,
+  shouldOpenOnCreate
+} from '$lib/plugins/templates';
 
-/** Setting keys (mirrored in settings/schema.json). */
-export const TEMPLATE_SHOW_BUILTIN = 'templates.showBuiltIn';
-export const TEMPLATE_SOURCE_FOLDER = 'templates.sourceFolder';
-export const TEMPLATE_SOURCE_TAG = 'templates.sourceTag';
+/** The Templates plugin owns the source-folder / source-tag settings. */
+export const TEMPLATES_PLUGIN_ID = 'com.mindstream.templates.core';
+const SOURCE_FOLDER_KEY = `plugins.${TEMPLATES_PLUGIN_ID}.source-folder`;
+const SOURCE_TAG_KEY = `plugins.${TEMPLATES_PLUGIN_ID}.source-tag`;
 
 /** A create-menu entry for one user template (a note acting as a template). */
 export interface UserTemplateEntry {
@@ -37,31 +40,23 @@ export interface UserTemplateEntry {
   source: 'folder' | 'tag';
 }
 
-/** Whether the app's premade (plugin) templates should appear in create menus. */
-export function showBuiltInTemplates(): boolean {
-  return getSettingValue(TEMPLATE_SHOW_BUILTIN) !== false;
-}
-
 function trimmedSetting(key: string): string {
   const value = getSettingValue(key);
   return typeof value === 'string' ? value.trim() : '';
 }
 
 /**
- * True when `collectionId` or any ancestor folder is named `name`. Walks the
+ * True when `collectionId` is `folderId` or has it as an ancestor. Walks the
  * parent chain via the tree's collection map, guarding against cycles.
  */
-function hasAncestorFolderNamed(
-  collectionId: string | null,
-  name: string
-): boolean {
+function isInFolder(collectionId: string | null, folderId: string): boolean {
   const seen = new Set<string>();
   let current = collectionId;
   while (current && !seen.has(current)) {
+    if (current === folderId) return true;
     seen.add(current);
     const folder = tree.collectionsById[current];
     if (!folder) return false;
-    if (folder.name === name) return true;
     current = folder.parent_collection_id;
   }
   return false;
@@ -74,19 +69,16 @@ function hasAncestorFolderNamed(
  * change.
  */
 export function userTemplateEntries(): UserTemplateEntry[] {
-  const folderName = trimmedSetting(TEMPLATE_SOURCE_FOLDER);
-  const tag = trimmedSetting(TEMPLATE_SOURCE_TAG);
-  if (!folderName && !tag) return [];
+  const folderId = trimmedSetting(SOURCE_FOLDER_KEY);
+  const tag = trimmedSetting(SOURCE_TAG_KEY);
+  if (!folderId && !tag) return [];
 
   const entries: UserTemplateEntry[] = [];
   for (const note of Object.values(tree.notesById)) {
     if (note.trashed || note.note_kind !== 'markdown') continue;
     let source: 'folder' | 'tag' | null = null;
     if (tag && note.tags.includes(tag)) source = 'tag';
-    else if (
-      folderName &&
-      hasAncestorFolderNamed(note.parent_collection_id, folderName)
-    ) {
+    else if (folderId && isInFolder(note.parent_collection_id, folderId)) {
       source = 'folder';
     }
     if (!source) continue;
@@ -123,6 +115,6 @@ export async function createNoteFromUserTemplate(
   const body = renderTemplateString(full.body ?? '', { title }, now);
 
   const id = await createNoteIn(parentId, title, 'markdown', body);
-  requestOpenNote(id);
+  if (shouldOpenOnCreate(TEMPLATES_PLUGIN_ID)) requestOpenNote(id);
   return id;
 }

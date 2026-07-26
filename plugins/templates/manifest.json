@@ -1,55 +1,49 @@
 {
   "id": "com.mindstream.templates.core",
-  "name": "Core Templates",
-  "version": "1.0.0",
+  "name": "Templates",
+  "version": "2.0.0",
   "runtime": "manifest-only",
-  "permissions": ["templates.contribute", "notes.create"],
+  "permissions": [],
   "contributes": {
     "i18n": {
       "en": {
-        "templates.meeting.name": "Meeting notes",
-        "templates.meeting.description": "Agenda, attendees, decisions, and follow-ups",
-        "templates.daily.name": "Daily note",
-        "templates.daily.description": "A dated page for the day's notes and tasks",
-        "settings.general.title": "Core Templates",
+        "settings.sources.title": "Template sources",
+        "settings.sourceFolder.label": "Template folder",
+        "settings.sourceFolder.description": "Every markdown note inside this folder becomes a template.",
+        "settings.sourceTag.label": "Template tag",
+        "settings.sourceTag.description": "Every markdown note carrying this tag becomes a template.",
         "settings.openOnCreate.label": "Open new template notes",
-        "settings.openOnCreate.description": "Open a note in the editor right after creating it from a template",
-        "commands.newMeeting.label": "New meeting notes"
+        "settings.openOnCreate.description": "Open a note in the editor right after creating it from a template"
       },
       "de": {
-        "templates.meeting.name": "Besprechungsnotizen",
-        "templates.meeting.description": "Agenda, Teilnehmer, Entscheidungen und Aufgaben",
-        "templates.daily.name": "Tagesnotiz",
-        "templates.daily.description": "Eine datierte Seite für Notizen und Aufgaben des Tages",
-        "settings.general.title": "Basisvorlagen",
+        "settings.sources.title": "Vorlagenquellen",
+        "settings.sourceFolder.label": "Vorlagenordner",
+        "settings.sourceFolder.description": "Jede Markdown-Notiz in diesem Ordner wird zu einer Vorlage.",
+        "settings.sourceTag.label": "Vorlagen-Tag",
+        "settings.sourceTag.description": "Jede Markdown-Notiz mit diesem Tag wird zu einer Vorlage.",
         "settings.openOnCreate.label": "Neue Vorlagennotizen öffnen",
-        "settings.openOnCreate.description": "Eine Notiz direkt nach dem Erstellen aus einer Vorlage im Editor öffnen",
-        "commands.newMeeting.label": "Neue Besprechungsnotizen"
+        "settings.openOnCreate.description": "Eine Notiz direkt nach dem Erstellen aus einer Vorlage im Editor öffnen"
       }
     },
-    "noteTemplates": [
-      {
-        "id": "meeting",
-        "labelKey": "templates.meeting.name",
-        "descriptionKey": "templates.meeting.description",
-        "noteKind": "markdown",
-        "titleTemplate": "Meeting — {{date}}",
-        "bodyTemplate": "# Meeting — {{date}}\n\n## Attendees\n\n## Agenda\n\n## Decisions\n\n## Follow-ups\n"
-      },
-      {
-        "id": "daily",
-        "labelKey": "templates.daily.name",
-        "descriptionKey": "templates.daily.description",
-        "noteKind": "markdown",
-        "titleTemplate": "{{date}}",
-        "bodyTemplate": "# {{date}}\n\n## Notes\n\n## Tasks\n\n- [ ] \n"
-      }
-    ],
     "settings": [
       {
-        "sectionId": "general",
-        "titleKey": "settings.general.title",
+        "sectionId": "sources",
+        "titleKey": "settings.sources.title",
         "settings": [
+          {
+            "id": "source-folder",
+            "labelKey": "settings.sourceFolder.label",
+            "descriptionKey": "settings.sourceFolder.description",
+            "scope": "V",
+            "type": "folder"
+          },
+          {
+            "id": "source-tag",
+            "labelKey": "settings.sourceTag.label",
+            "descriptionKey": "settings.sourceTag.description",
+            "scope": "V",
+            "type": "tag"
+          },
           {
             "id": "open-on-create",
             "labelKey": "settings.openOnCreate.label",
@@ -59,14 +53,6 @@
             "default": true
           }
         ]
-      }
-    ],
-    "commands": [
-      {
-        "id": "new-meeting",
-        "labelKey": "commands.newMeeting.label",
-        "defaultBinding": null,
-        "action": { "type": "createTemplateNote", "templateId": "meeting" }
       }
     ]
   }

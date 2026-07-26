@@ -15,7 +15,6 @@ import {
 import { createNoteFromPluginTemplate } from './templates';
 import {
   createNoteFromUserTemplate,
-  showBuiltInTemplates,
   userTemplateEntries
 } from '$lib/templates/user-templates';
 
@@ -77,19 +76,20 @@ export type TemplateMenuEntry =
   | { kind: 'user'; noteId: string; label: string; description?: string };
 
 /**
- * Every template offered in the create menus: the premade plugin templates
- * (unless the user turned them off) followed by the user's own, in that order.
+ * Every template offered in the create menus: any plugin-contributed templates
+ * followed by the user's own (folder/tag sourced), in that order.
  */
 export function templateMenuEntries(): TemplateMenuEntry[] {
-  const builtIn: TemplateMenuEntry[] = showBuiltInTemplates()
-    ? pluginTemplateEntries().map((entry) => ({ kind: 'plugin', ...entry }))
-    : [];
+  const plugin: TemplateMenuEntry[] = pluginTemplateEntries().map((entry) => ({
+    kind: 'plugin',
+    ...entry
+  }));
   const user: TemplateMenuEntry[] = userTemplateEntries().map((entry) => ({
     kind: 'user',
     noteId: entry.noteId,
     label: entry.label
   }));
-  return [...builtIn, ...user];
+  return [...plugin, ...user];
 }
 
 /** True when the create menus have at least one template to offer. */
