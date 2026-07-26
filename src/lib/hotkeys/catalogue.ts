@@ -37,6 +37,7 @@
 
 import { openSettings } from '$lib/settings/store.svelte';
 import { openSearch } from '$lib/search/store.svelte';
+import { openCommandPalette } from '$lib/command-palette/store.svelte';
 import {
   APP_REDO_COMMAND,
   APP_UNDO_COMMAND,
@@ -220,6 +221,15 @@ export const HOTKEY_COMMANDS: CommandDefinition[] = [
     // so we add Shift to disambiguate.
     defaultBinding: 'mod+shift+f',
     run: () => openSearch()
+  },
+  {
+    id: 'global.openCommandPalette',
+    scope: 'global',
+    labelKey: 'hotkeys.command.global.openCommandPalette',
+    // Mod+P — the Obsidian / Joplin command-palette convention. Unbound
+    // elsewhere in the app, so there's no collision to disambiguate.
+    defaultBinding: 'mod+p',
+    run: () => openCommandPalette()
   },
   {
     id: 'global.searchActiveNote',

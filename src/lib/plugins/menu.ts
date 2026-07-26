@@ -7,14 +7,18 @@
  * (the registry's merged view already filters disabled/unapproved plugins).
  */
 
-import { pluginTemplates } from './registry.svelte';
+import { pluginTemplate, pluginTemplates } from './registry.svelte';
 import {
   resolvePluginString,
   resolvePluginStringOptional
 } from './plugin-i18n';
-import { createNoteFromPluginTemplate } from './templates';
+import {
+  createNoteFromPluginTemplate,
+  renderPluginTemplate
+} from './templates';
 import {
   createNoteFromUserTemplate,
+  renderUserTemplateBody,
   userTemplateEntries
 } from '$lib/templates/user-templates';
 
@@ -95,6 +99,29 @@ export function templateMenuEntries(): TemplateMenuEntry[] {
 /** True when the create menus have at least one template to offer. */
 export function hasTemplateEntries(): boolean {
   return templateMenuEntries().length > 0;
+}
+
+/**
+ * The rendered markdown *body* a unified template entry produces, for inserting
+ * into an existing note (the command palette's "Insert into note" action).
+ * Placeholders (`{{date}}`, `{{title}}`, …) are interpolated exactly as for
+ * note creation — the only difference is no note is created and the title is
+ * discarded, since insertion drops content at the caret. Throws on a missing
+ * plugin template so the caller can decide how to surface it.
+ */
+export async function renderTemplateEntryBody(
+  entry: TemplateMenuEntry
+): Promise<string> {
+  if (entry.kind === 'plugin') {
+    const ref = pluginTemplate(entry.pluginId, entry.templateId);
+    if (!ref) {
+      throw new Error(
+        `No enabled template "${entry.templateId}" from plugin "${entry.pluginId}"`
+      );
+    }
+    return renderPluginTemplate(entry.pluginId, ref.template).body;
+  }
+  return renderUserTemplateBody(entry.noteId);
 }
 
 /**

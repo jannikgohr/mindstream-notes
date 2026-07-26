@@ -98,6 +98,38 @@ export function hasUserTemplates(): boolean {
 }
 
 /**
+ * Render a user template note's title + body through the same `{{…}}`
+ * interpolation the plugin templates use, without creating anything. The
+ * source note's title is rendered first so the body can reference the final
+ * `{{title}}`. Shared by note creation and the command palette's insert action.
+ */
+async function renderUserTemplate(
+  templateNoteId: string,
+  now: Date
+): Promise<{ title: string; body: string }> {
+  const summary = tree.notesById[templateNoteId];
+  const rawTitle = summary?.title ?? 'Untitled';
+  const full = await loadNote(templateNoteId);
+
+  const title = renderTemplateString(rawTitle, {}, now).trim() || rawTitle;
+  const body = renderTemplateString(full.body ?? '', { title }, now);
+  return { title, body };
+}
+
+/**
+ * The rendered body of a user template, for inserting into an existing note
+ * (the command palette's "Insert into note" action). Only the body is
+ * returned — insertion drops content at the caret and never touches the host
+ * note's title.
+ */
+export async function renderUserTemplateBody(
+  templateNoteId: string,
+  now: Date = new Date()
+): Promise<string> {
+  return (await renderUserTemplate(templateNoteId, now)).body;
+}
+
+/**
  * Create a new markdown note from a user template note and open it. The source
  * note's title + body are interpolated (`{{date}}`, `{{title}}`, …) and the new
  * note is created via the app's own `createNoteIn`. Returns the new note id.
@@ -107,13 +139,7 @@ export async function createNoteFromUserTemplate(
   parentId: string | null,
   now: Date = new Date()
 ): Promise<string> {
-  const summary = tree.notesById[templateNoteId];
-  const rawTitle = summary?.title ?? 'Untitled';
-  const full = await loadNote(templateNoteId);
-
-  const title = renderTemplateString(rawTitle, {}, now).trim() || rawTitle;
-  const body = renderTemplateString(full.body ?? '', { title }, now);
-
+  const { title, body } = await renderUserTemplate(templateNoteId, now);
   const id = await createNoteIn(parentId, title, 'markdown', body);
   if (shouldOpenOnCreate(TEMPLATES_PLUGIN_ID)) requestOpenNote(id);
   return id;
