@@ -81,6 +81,12 @@ flate2 = "1"
 regex = "1"
 ed25519-dalek = "3.0.0"
 
+# Sandboxed Luau runtime for scripted plugins (see src/plugins/luau.rs). Luau
+# (Roblox's Lua fork) is built to run untrusted scripts: its stdlib is curated
+# (no ffi, no io, no os.execute), and it exposes an interrupt hook + memory cap
+# we use to bound CPU time and memory. Runs in the backend, never the WebView.
+mlua = { version = "0.10", features = ["luau", "vendored", "serialize"] }
+
 [profile.release]
 panic = "abort"
 codegen-units = 1

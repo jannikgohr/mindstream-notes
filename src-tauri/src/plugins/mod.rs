@@ -24,6 +24,7 @@ use crate::db::Db;
 use crate::error::{AppError, AppResult, CommandResult};
 
 pub mod discovery;
+pub mod luau;
 pub mod signing;
 
 /// Where a plugin came from. Governs the integrity gate: builtins are trusted,
