@@ -44,7 +44,12 @@ function manifestName(manifest: unknown, fallback: string): string {
   return fallback;
 }
 
-/** Third-party plugins the gate disabled (changed manifest / bad signature). */
+/**
+ * Third-party plugins the gate disabled. A never-approved install has an empty
+ * `acceptedHash` (it is `'new'`); a plugin whose manifest changed since approval
+ * keeps its old accepted hash (it is `'changed'`) — the two drive different
+ * notifications.
+ */
 function gatedFromViews(views: DiscoveredPluginView[]): GatedPlugin[] {
   return views
     .filter(
@@ -55,7 +60,8 @@ function gatedFromViews(views: DiscoveredPluginView[]): GatedPlugin[] {
     )
     .map((v) => ({
       id: v.record.id,
-      name: manifestName(v.manifest, v.record.id)
+      name: manifestName(v.manifest, v.record.id),
+      reason: v.record.acceptedHash === '' ? 'new' : 'changed'
     }));
 }
 
