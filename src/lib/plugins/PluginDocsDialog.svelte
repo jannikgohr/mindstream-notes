@@ -40,11 +40,22 @@
         </Dialog.Close>
       </header>
 
-      <div class="min-h-0 overflow-y-auto px-6 py-4">
+      <div class="themed-scrollbar min-h-0 overflow-y-auto px-6 py-4">
         {#if open}
-          <ReadonlyNoteView {markdown} />
+          <div class="docs-md">
+            <ReadonlyNoteView {markdown} />
+          </div>
         {/if}
       </div>
     </Dialog.Content>
   </Dialog.Portal>
 </Dialog.Root>
+
+<style>
+  /* The reused read-only view scrolls internally with an unthemed bar; let this
+     dialog's themed-scrollbar container own the scrolling instead. */
+  .docs-md :global(.milkdown-readonly) {
+    height: auto;
+    overflow: visible;
+  }
+</style>
