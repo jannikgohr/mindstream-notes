@@ -25,15 +25,82 @@ fn upsert_input(id: &str, checksum: &str, source: &str) -> UpsertPlugin {
 }
 
 #[test]
-fn upsert_inserts_a_new_enabled_record() {
+fn new_installed_plugin_is_gated_disabled_and_unapproved() {
     let db = open_memory_for_tests();
     db.with_conn(|c| {
         let rec = upsert(c, upsert_input("com.a.plugin", "hash1", "installed"))?;
+        // Security: merely being discovered never enables a third-party plugin.
+        assert!(!rec.enabled, "a new third-party plugin must start disabled");
+        assert_eq!(rec.accepted_hash, "", "no hash is accepted until approval");
+        assert!(rec.signer.is_none(), "no signer is pinned until approval");
+        assert!(
+            rec.last_load_error.is_some(),
+            "a gate reason is recorded so the UI prompts for approval"
+        );
+        assert_eq!(rec.granted_permissions.len(), 2);
+        assert_eq!(list(c)?.len(), 1);
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn new_installed_plugin_stays_disabled_on_rediscovery() {
+    // The reported bug: dropping a plugin into the folder and restarting must
+    // not auto-enable it. Re-discovering the same (unchanged) unapproved plugin
+    // keeps it disabled — approval is the only path to enabled.
+    let db = open_memory_for_tests();
+    db.with_conn(|c| {
+        upsert(c, upsert_input("com.a.plugin", "hash1", "installed"))?;
+        let rec = upsert(c, upsert_input("com.a.plugin", "hash1", "installed"))?;
+        assert!(
+            !rec.enabled,
+            "re-discovery must not enable an unapproved plugin"
+        );
+        assert_eq!(rec.accepted_hash, "");
+        assert!(rec.last_load_error.is_some());
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn new_installed_signed_plugin_is_not_auto_approved() {
+    // Even a validly-signed third-party plugin is not trusted on sight: the
+    // signer is only pinned by the user's approval, so a re-discovery can't
+    // satisfy the same-signer auto-approve path and enable it.
+    let db = open_memory_for_tests();
+    db.with_conn(|c| {
+        upsert(
+            c,
+            signed_input("com.a.p", "h1", "installed", Some("keyA"), "valid"),
+        )?;
+        let rec = upsert(
+            c,
+            signed_input("com.a.p", "h1", "installed", Some("keyA"), "valid"),
+        )?;
+        assert!(
+            !rec.enabled,
+            "a signed but unapproved plugin stays disabled"
+        );
+        assert!(rec.signer.is_none(), "no signer pinned before approval");
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn new_builtin_plugin_is_enabled_on_discovery() {
+    // Builtins ship in the signed app bundle and are trusted by location.
+    let db = open_memory_for_tests();
+    db.with_conn(|c| {
+        let rec = upsert(
+            c,
+            upsert_input("com.mindstream.core", "hash1", SOURCE_BUILTIN),
+        )?;
         assert!(rec.enabled);
         assert_eq!(rec.accepted_hash, "hash1");
-        assert_eq!(rec.granted_permissions.len(), 2);
         assert!(rec.last_load_error.is_none());
-        assert_eq!(list(c)?.len(), 1);
         Ok(())
     })
     .unwrap();
@@ -66,6 +133,8 @@ fn installed_plugin_hash_change_disables_and_records_error() {
     let db = open_memory_for_tests();
     db.with_conn(|c| {
         upsert(c, upsert_input("com.a.plugin", "hash1", "installed"))?;
+        // Approve it at hash1 so we're testing the *approved-then-changed* gate.
+        approve(c, "com.a.plugin", "hash1", None, "unsigned")?;
         let rec = upsert(c, upsert_input("com.a.plugin", "hash2", "installed"))?;
         assert!(!rec.enabled, "changed hash disables an installed plugin");
         assert!(rec.last_load_error.is_some());
@@ -81,6 +150,7 @@ fn installed_plugin_unchanged_hash_refreshes_and_clears_error() {
     let db = open_memory_for_tests();
     db.with_conn(|c| {
         upsert(c, upsert_input("com.a.plugin", "hash1", "installed"))?;
+        approve(c, "com.a.plugin", "hash1", None, "unsigned")?;
         set_load_error(c, "com.a.plugin", Some("stale error"))?;
         let mut next = upsert_input("com.a.plugin", "hash1", "installed");
         next.version = "1.1.0".into();
@@ -145,6 +215,8 @@ fn signed_same_signer_update_auto_approves() {
             c,
             signed_input("com.a.p", "h1", "installed", Some("keyA"), "valid"),
         )?;
+        // Approve v1, pinning keyA — that's what lets a same-signer update through.
+        approve(c, "com.a.p", "h1", Some("keyA"), "valid")?;
         // Changed manifest, still validly signed by the same key → accepted.
         let rec = upsert(
             c,
@@ -167,6 +239,7 @@ fn signed_different_signer_update_is_gated_and_keeps_pin() {
             c,
             signed_input("com.a.p", "h1", "installed", Some("keyA"), "valid"),
         )?;
+        approve(c, "com.a.p", "h1", Some("keyA"), "valid")?;
         // Validly signed, but by a DIFFERENT key → gated; pin + hash retained.
         let rec = upsert(
             c,
@@ -189,6 +262,7 @@ fn invalid_signature_update_is_gated() {
             c,
             signed_input("com.a.p", "h1", "installed", Some("keyA"), "valid"),
         )?;
+        approve(c, "com.a.p", "h1", Some("keyA"), "valid")?;
         let rec = upsert(
             c,
             signed_input("com.a.p", "h2", "installed", None, "invalid"),

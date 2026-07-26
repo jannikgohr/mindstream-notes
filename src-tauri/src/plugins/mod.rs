@@ -9,11 +9,14 @@
 //! cache clear can wipe. The frontend receives the reconciled records + parsed
 //! manifests and registers the contributions of the enabled ones.
 //!
-//! Integrity gate: an **installed** (third-party) plugin whose manifest
-//! checksum no longer matches its `accepted_hash` is auto-disabled with a load
-//! error until the user re-approves it. **Builtin** plugins ship inside the
-//! signed app bundle and are trusted, so a checksum change (a shipped update)
-//! is accepted automatically.
+//! Integrity gate: a **newly-discovered installed** (third-party) plugin is
+//! never trusted on sight — it is registered *disabled and unapproved* and
+//! contributes nothing until the user explicitly approves it. Likewise, an
+//! already-approved installed plugin whose manifest checksum no longer matches
+//! its `accepted_hash` is auto-disabled with a load error until re-approved.
+//! **Builtin** plugins ship inside the signed app bundle and are trusted, so
+//! they are enabled on discovery and a checksum change (a shipped update) is
+//! accepted automatically.
 
 use std::path::Path;
 
@@ -34,6 +37,11 @@ pub mod signing;
 pub const SOURCE_BUILTIN: &str = "builtin";
 /// Third-party plugins loaded from the user-writable app-data dir.
 pub const SOURCE_INSTALLED: &str = "installed";
+
+/// Load error recorded for a newly-discovered third-party plugin that the user
+/// has not yet approved. Surfaces the "needs approval" state in the UI and keeps
+/// the plugin disabled until [`approve`] pins its hash + signer and enables it.
+const NEW_INSTALL_GATE_REASON: &str = "new third-party plugin; approve it to enable";
 
 /// Durable record for one plugin in the active profile.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -122,7 +130,12 @@ fn require(conn: &Connection, id: &str) -> AppResult<PluginRecord> {
 /// Register a freshly-loaded plugin, or reconcile an existing record with the
 /// manifest currently being loaded.
 ///
-/// - New id → inserted enabled, accepting the current checksum + signer.
+/// - New **builtin** id → inserted enabled, accepting the current checksum +
+///   signer (trusted by its bundled location).
+/// - New **installed** id → inserted DISABLED and unapproved (empty accepted
+///   hash, no pinned signer, gate load error). A third-party plugin never runs
+///   or contributes on mere discovery; the user must explicitly [`approve`] it,
+///   which is what pins its hash + signer and enables it.
 /// - Builtin (trusted by location) → always accept; enabled state + install
 ///   timestamp preserved.
 /// - Installed, unchanged hash → refresh.
@@ -138,7 +151,8 @@ pub fn upsert(conn: &Connection, input: UpsertPlugin) -> AppResult<PluginRecord>
 
     let existing = get(conn, &input.id)?;
     match existing {
-        None => {
+        None if input.source == SOURCE_BUILTIN => {
+            // Trusted by location: enabled, current checksum + signer accepted.
             conn.execute(
                 "INSERT INTO plugins(
                     id, version, enabled, source, source_path, accepted_hash,
@@ -153,6 +167,31 @@ pub fn upsert(conn: &Connection, input: UpsertPlugin) -> AppResult<PluginRecord>
                     input.checksum,
                     permissions_json,
                     input.signer,
+                    input.signature_status,
+                    now,
+                ],
+            )?;
+        }
+        None => {
+            // A brand-new third-party plugin is never trusted on discovery.
+            // Install it DISABLED and UNAPPROVED: no accepted hash and no pinned
+            // signer (both are set only by `approve`), plus a gate load error so
+            // the UI prompts for approval. This is the fix for auto-enabling a
+            // plugin merely dropped into the plugins folder — it contributes
+            // nothing and no script runs until the user approves it.
+            conn.execute(
+                "INSERT INTO plugins(
+                    id, version, enabled, source, source_path, accepted_hash,
+                    granted_permissions, last_load_error, signer, signature_status,
+                    installed_at, updated_at
+                 ) VALUES (?1, ?2, 0, ?3, ?4, '', ?5, ?6, NULL, ?7, ?8, ?8)",
+                params![
+                    input.id,
+                    input.version,
+                    input.source,
+                    input.source_path,
+                    permissions_json,
+                    NEW_INSTALL_GATE_REASON,
                     input.signature_status,
                     now,
                 ],
