@@ -325,6 +325,7 @@ pub fn run_plugin_script(
     granted: Vec<String>,
     export: &str,
     input: serde_json::Value,
+    notes: Vec<luau::NoteMeta>,
 ) -> AppResult<serde_json::Value> {
     if manifest.get("runtime").and_then(|v| v.as_str()) != Some("luau") {
         return Err(AppError::InvalidArg(
@@ -351,8 +352,50 @@ pub fn run_plugin_script(
         export: export.to_string(),
         input,
         permissions: granted,
+        notes,
         limits: luau::Limits::default(),
     })
+}
+
+/// Build the read-only note snapshot exposed via `ms.notes`. One `notes::list`
+/// plus a folder-path index over `collections::list`; excludes trashed notes.
+fn note_snapshot(conn: &Connection) -> AppResult<Vec<luau::NoteMeta>> {
+    let folders = crate::collections::list(conn)?;
+    let by_id: std::collections::HashMap<String, (String, Option<String>)> = folders
+        .into_iter()
+        .map(|c| (c.id, (c.name, c.parent_collection_id)))
+        .collect();
+    let folder_path = |mut id: Option<String>| -> String {
+        let mut parts = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        while let Some(cur) = id {
+            if !seen.insert(cur.clone()) {
+                break;
+            }
+            match by_id.get(&cur) {
+                Some((name, parent)) => {
+                    parts.push(name.clone());
+                    id = parent.clone();
+                }
+                None => break,
+            }
+        }
+        parts.reverse();
+        parts.join(" / ")
+    };
+    Ok(crate::notes::list(conn, false)?
+        .into_iter()
+        .map(|s| luau::NoteMeta {
+            id: s.id,
+            title: s.title,
+            tags: s.tags,
+            kind: s.note_kind.as_str().to_string(),
+            folder_path: folder_path(s.parent_collection_id.clone()),
+            folder_id: s.parent_collection_id,
+            created: s.created,
+            modified: s.modified,
+        })
+        .collect())
 }
 
 // ---------- Tauri commands ----------
@@ -469,8 +512,15 @@ pub async fn plugins_run_script(
     let dir = plugin.dir;
     let manifest = plugin.manifest;
     let granted = record.granted_permissions;
+    // Capture the note snapshot up front (while we hold the DB) so the blocking
+    // worker needs no DB access; empty unless the plugin holds notes.read.
+    let notes = if granted.iter().any(|p| p == "notes.read") {
+        db.with_conn(note_snapshot)?
+    } else {
+        Vec::new()
+    };
     tauri::async_runtime::spawn_blocking(move || {
-        run_plugin_script(&dir, &manifest, granted, &export, input)
+        run_plugin_script(&dir, &manifest, granted, &export, input, notes)
     })
     .await
     .map_err(|e| AppError::InvalidArg(format!("script task failed: {e}")))?

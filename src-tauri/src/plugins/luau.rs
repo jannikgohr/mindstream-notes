@@ -30,8 +30,27 @@ use std::fmt::Write as _;
 use std::time::{Duration, Instant};
 
 use mlua::{Lua, LuaSerdeExt, MultiValue, Table, Value, VmState};
+use serde::Serialize;
 
 use crate::error::{AppError, AppResult};
+
+/// Read-only metadata for one note, exposed to scripts through `ms.notes`
+/// (gated by `notes.read`). Body is deliberately omitted — the snapshot is cheap
+/// to build and copy; a body/include seam can come later. Field names are the
+/// keys a script sees on the Lua table.
+#[derive(Debug, Clone, Serialize)]
+pub struct NoteMeta {
+    pub id: String,
+    pub title: String,
+    pub tags: Vec<String>,
+    /// Editor kind (`"markdown"`, `"kanban"`, …) so a script can filter.
+    pub kind: String,
+    pub folder_id: Option<String>,
+    /// Human path of the containing folder, e.g. `"Work / Projects"`.
+    pub folder_path: String,
+    pub created: String,
+    pub modified: String,
+}
 
 /// Resource bounds for one script invocation.
 #[derive(Debug, Clone, Copy)]
@@ -65,6 +84,9 @@ pub struct ScriptRequest {
     pub input: serde_json::Value,
     /// The plugin's granted permissions — decides which `ms.*` namespaces exist.
     pub permissions: Vec<String>,
+    /// Read-only note snapshot exposed via `ms.notes` when `notes.read` is
+    /// granted. Built by the caller before the script runs; empty otherwise.
+    pub notes: Vec<NoteMeta>,
     pub limits: Limits,
 }
 
@@ -96,7 +118,8 @@ pub fn run(req: ScriptRequest) -> AppResult<serde_json::Value> {
         }
     });
 
-    install_host_api(&lua, &req.permissions).map_err(|e| map_lua(&req.chunk_name, e))?;
+    install_host_api(&lua, &req.permissions, &req.notes)
+        .map_err(|e| map_lua(&req.chunk_name, e))?;
 
     // Enter the sandbox AFTER installing the host API so `ms` is visible through
     // the read-only global view. Combined with the fresh-VM-per-call above, a
@@ -139,13 +162,18 @@ fn resolve_export(exported: &Value, export: &str) -> Option<mlua::Function> {
     }
 }
 
-/// Install the `ms.*` host API. Safe, side-effect-free helpers are always
-/// present; capability namespaces are gated on the plugin's granted permissions,
-/// so a script can only reach what its manifest asked for.
-fn install_host_api(lua: &Lua, permissions: &[String]) -> mlua::Result<()> {
+/// Install the `ms.*` host API.
+///
+/// The design goal is *general* primitives usable by any plugin, not
+/// template-specific ones: dates, JSON, markdown helpers, and (gated) read
+/// access to the vault. Safe, side-effect-free helpers are always present;
+/// capability namespaces are gated on the plugin's granted permissions, so a
+/// script can only reach what its manifest asked for.
+fn install_host_api(lua: &Lua, permissions: &[String], notes: &[NoteMeta]) -> mlua::Result<()> {
     let ms = lua.create_table()?;
+    let granted = |p: &str| permissions.iter().any(|g| g == p);
 
-    // --- Always available (no permission required) ------------------------
+    // --- Always available (pure / side-effect-free) -----------------------
     // Diagnostics: a script's log line, tagged, into the app log.
     ms.set(
         "log",
@@ -159,38 +187,313 @@ fn install_host_api(lua: &Lua, permissions: &[String]) -> mlua::Result<()> {
         "uuid",
         lua.create_function(|_, ()| Ok(uuid::Uuid::new_v4().to_string()))?,
     )?;
-    // Current instant as an RFC3339 string.
-    ms.set(
-        "now_iso",
-        lua.create_function(|_, ()| Ok(chrono::Utc::now().to_rfc3339()))?,
-    )?;
-    // Today's local date as YYYY-MM-DD, with an optional integer day offset.
-    ms.set(
-        "today",
-        lua.create_function(|_, offset_days: Option<i64>| {
-            let date = chrono::Local::now().date_naive()
-                + chrono::Duration::days(offset_days.unwrap_or(0));
-            Ok(date.format("%Y-%m-%d").to_string())
-        })?,
-    )?;
 
-    // --- Gated: templates.contribute → ms.template ------------------------
-    if permissions.iter().any(|p| p == "templates.contribute") {
-        let template = lua.create_table()?;
-        // Serialize a table to a YAML frontmatter block — the single most useful
-        // primitive for template scripts, and naturally scoped to templating.
-        template.set(
-            "frontmatter",
-            lua.create_function(|lua, tbl: Table| {
-                let json: serde_json::Value = lua.from_value(Value::Table(tbl))?;
-                frontmatter(&json).map_err(mlua::Error::runtime)
-            })?,
-        )?;
-        ms.set("template", template)?;
+    ms.set("date", date_module(lua)?)?;
+    ms.set("json", json_module(lua)?)?;
+    ms.set("md", md_module(lua)?)?;
+
+    // --- Gated: notes.read → ms.notes (read-only metadata snapshot) --------
+    if granted("notes.read") {
+        ms.set("notes", notes_module(lua, notes)?)?;
     }
 
     lua.globals().set("ms", ms)?;
     Ok(())
+}
+
+/// `ms.date`: current time + formatting + arithmetic, all in local time and
+/// using the same moment-style tokens as the frontend template engine
+/// (`YYYY-MM-DD`, `HH:mm`, `dddd`, …), so a script's dates match `{{date:…}}`.
+fn date_module(lua: &Lua) -> mlua::Result<Table> {
+    let date = lua.create_table()?;
+    // now(format?, offsetDays?) → the current local date/time, formatted.
+    date.set(
+        "now",
+        lua.create_function(|_, (fmt, offset): (Option<String>, Option<i64>)| {
+            let dt = chrono::Local::now() + chrono::Duration::days(offset.unwrap_or(0));
+            Ok(format_moment(&dt, fmt.as_deref().unwrap_or("YYYY-MM-DD")))
+        })?,
+    )?;
+    // format(input, format?) → format an RFC3339 string or epoch seconds.
+    date.set(
+        "format",
+        lua.create_function(|_, (input, fmt): (Value, Option<String>)| {
+            let dt = parse_datetime(&input).ok_or_else(|| {
+                mlua::Error::runtime(
+                    "ms.date.format: input must be an RFC3339 string or epoch seconds",
+                )
+            })?;
+            Ok(format_moment(&dt, fmt.as_deref().unwrap_or("YYYY-MM-DD")))
+        })?,
+    )?;
+    // add(input, amount, unit) → shift a date, returning RFC3339. Units:
+    // second|minute|hour|day|week|month|year (singular or plural).
+    date.set(
+        "add",
+        lua.create_function(|_, (input, amount, unit): (Value, i64, String)| {
+            let dt = parse_datetime(&input).ok_or_else(|| {
+                mlua::Error::runtime(
+                    "ms.date.add: input must be an RFC3339 string or epoch seconds",
+                )
+            })?;
+            let shifted = add_duration(dt, amount, &unit).ok_or_else(|| {
+                mlua::Error::runtime(format!("ms.date.add: unknown unit '{unit}'"))
+            })?;
+            Ok(shifted.to_rfc3339())
+        })?,
+    )?;
+    Ok(date)
+}
+
+/// `ms.json`: encode a Lua value to a JSON string and back — a general
+/// serialization primitive (config, structured data, interop).
+fn json_module(lua: &Lua) -> mlua::Result<Table> {
+    let json = lua.create_table()?;
+    json.set(
+        "encode",
+        lua.create_function(|lua, value: Value| {
+            let v: serde_json::Value = lua.from_value(value)?;
+            serde_json::to_string(&v).map_err(mlua::Error::runtime)
+        })?,
+    )?;
+    json.set(
+        "decode",
+        lua.create_function(|lua, s: String| {
+            let v: serde_json::Value = serde_json::from_str(&s).map_err(mlua::Error::runtime)?;
+            lua.to_value(&v)
+        })?,
+    )?;
+    Ok(json)
+}
+
+/// `ms.md`: markdown helpers. General enough for any plugin producing markdown.
+fn md_module(lua: &Lua) -> mlua::Result<Table> {
+    let md = lua.create_table()?;
+    // frontmatter(table) → a `---`-delimited YAML block from a table.
+    md.set(
+        "frontmatter",
+        lua.create_function(|lua, tbl: Table| {
+            let json: serde_json::Value = lua.from_value(Value::Table(tbl))?;
+            frontmatter(&json).map_err(mlua::Error::runtime)
+        })?,
+    )?;
+    Ok(md)
+}
+
+/// `ms.notes`: read-only access to the vault's note metadata (gated by
+/// `notes.read`). Built from a snapshot the caller captured before running, so
+/// it's cheap and can't stall the script.
+fn notes_module(lua: &Lua, notes: &[NoteMeta]) -> mlua::Result<Table> {
+    let ms_notes = lua.create_table()?;
+    let all: std::sync::Arc<Vec<NoteMeta>> = std::sync::Arc::new(notes.to_vec());
+
+    let all_get = all.clone();
+    ms_notes.set(
+        "all",
+        lua.create_function(move |lua, ()| lua.to_value(&*all_get))?,
+    )?;
+    let all_find = all.clone();
+    ms_notes.set(
+        "get",
+        lua.create_function(
+            move |lua, id: String| match all_find.iter().find(|n| n.id == id) {
+                Some(note) => lua.to_value(note),
+                None => Ok(Value::Nil),
+            },
+        )?,
+    )?;
+    Ok(ms_notes)
+}
+
+// English month/weekday names (moment's default locale), kept locale-independent
+// on the backend; the frontend engine localizes via Intl where it matters.
+const MONTHS: [&str; 12] = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+];
+const MONTHS_SHORT: [&str; 12] = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+const WEEKDAYS: [&str; 7] = [
+    "Sunday",
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+];
+const WEEKDAYS_SHORT: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/// Format a local datetime with moment-style tokens (`YYYY MM DD HH mm ss`,
+/// named `MMMM/MMM/dddd/ddd`, `hh h A a`, `[escaped]` literals). Unknown
+/// characters pass through. Mirrors the frontend `formatDate` token set.
+fn format_moment(dt: &chrono::DateTime<chrono::Local>, fmt: &str) -> String {
+    use chrono::{Datelike, Timelike};
+    let chars: Vec<char> = fmt.chars().collect();
+    let month0 = dt.month0() as usize;
+    let weekday0 = dt.weekday().num_days_from_sunday() as usize;
+    let h24 = dt.hour();
+    let h12 = match h24 % 12 {
+        0 => 12,
+        h => h,
+    };
+    // Tokens tried longest-first at each position.
+    const TOKENS: [&str; 21] = [
+        "YYYY", "YY", "MMMM", "MMM", "MM", "M", "DD", "D", "dddd", "ddd", "HH", "H", "hh", "h",
+        "mm", "m", "ss", "s", "A", "a", "[",
+    ];
+    let mut out = String::new();
+    let mut i = 0;
+    'outer: while i < chars.len() {
+        // `[literal]` — copy verbatim up to the next `]`.
+        if chars[i] == '[' {
+            let mut j = i + 1;
+            while j < chars.len() && chars[j] != ']' {
+                out.push(chars[j]);
+                j += 1;
+            }
+            i = if j < chars.len() { j + 1 } else { j };
+            continue;
+        }
+        for tok in TOKENS {
+            if tok == "[" {
+                continue;
+            }
+            let t: Vec<char> = tok.chars().collect();
+            if chars[i..].starts_with(&t[..]) {
+                match tok {
+                    "YYYY" => {
+                        let _ = write!(out, "{}", dt.year());
+                    }
+                    "YY" => {
+                        let _ = write!(out, "{:02}", dt.year().rem_euclid(100));
+                    }
+                    "MMMM" => out.push_str(MONTHS[month0]),
+                    "MMM" => out.push_str(MONTHS_SHORT[month0]),
+                    "MM" => {
+                        let _ = write!(out, "{:02}", month0 + 1);
+                    }
+                    "M" => {
+                        let _ = write!(out, "{}", month0 + 1);
+                    }
+                    "DD" => {
+                        let _ = write!(out, "{:02}", dt.day());
+                    }
+                    "D" => {
+                        let _ = write!(out, "{}", dt.day());
+                    }
+                    "dddd" => out.push_str(WEEKDAYS[weekday0]),
+                    "ddd" => out.push_str(WEEKDAYS_SHORT[weekday0]),
+                    "HH" => {
+                        let _ = write!(out, "{:02}", h24);
+                    }
+                    "H" => {
+                        let _ = write!(out, "{}", h24);
+                    }
+                    "hh" => {
+                        let _ = write!(out, "{:02}", h12);
+                    }
+                    "h" => {
+                        let _ = write!(out, "{}", h12);
+                    }
+                    "mm" => {
+                        let _ = write!(out, "{:02}", dt.minute());
+                    }
+                    "m" => {
+                        let _ = write!(out, "{}", dt.minute());
+                    }
+                    "ss" => {
+                        let _ = write!(out, "{:02}", dt.second());
+                    }
+                    "s" => {
+                        let _ = write!(out, "{}", dt.second());
+                    }
+                    "A" => out.push_str(if h24 < 12 { "AM" } else { "PM" }),
+                    "a" => out.push_str(if h24 < 12 { "am" } else { "pm" }),
+                    _ => {}
+                }
+                i += t.len();
+                continue 'outer;
+            }
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
+}
+
+/// Parse a Lua value (RFC3339 string or epoch seconds) into a local datetime.
+fn parse_datetime(value: &Value) -> Option<chrono::DateTime<chrono::Local>> {
+    match value {
+        Value::String(s) => chrono::DateTime::parse_from_rfc3339(&s.to_str().ok()?)
+            .ok()
+            .map(|dt| dt.with_timezone(&chrono::Local)),
+        Value::Integer(secs) => chrono::DateTime::from_timestamp(*secs as i64, 0)
+            .map(|dt| dt.with_timezone(&chrono::Local)),
+        Value::Number(secs) => chrono::DateTime::from_timestamp(*secs as i64, 0)
+            .map(|dt| dt.with_timezone(&chrono::Local)),
+        _ => None,
+    }
+}
+
+/// Shift a datetime by `amount` of `unit`. Returns `None` for an unknown unit.
+fn add_duration(
+    dt: chrono::DateTime<chrono::Local>,
+    amount: i64,
+    unit: &str,
+) -> Option<chrono::DateTime<chrono::Local>> {
+    use chrono::Duration;
+    let by = |d: Duration| Some(dt + d);
+    match unit.trim_end_matches('s') {
+        "second" => by(Duration::seconds(amount)),
+        "minute" => by(Duration::minutes(amount)),
+        "hour" => by(Duration::hours(amount)),
+        "day" => by(Duration::days(amount)),
+        "week" => by(Duration::weeks(amount)),
+        "month" => Some(add_months(dt, amount)),
+        "year" => Some(add_months(dt, amount * 12)),
+        _ => None,
+    }
+}
+
+/// Add (or subtract) whole months, clamping the day to the target month's length.
+fn add_months(dt: chrono::DateTime<chrono::Local>, months: i64) -> chrono::DateTime<chrono::Local> {
+    use chrono::{Datelike, TimeZone, Timelike};
+    let total = dt.year() as i64 * 12 + dt.month0() as i64 + months;
+    let year = total.div_euclid(12) as i32;
+    let month0 = total.rem_euclid(12) as u32;
+    let last_day = days_in_month(year, month0 + 1);
+    let day = dt.day().min(last_day);
+    chrono::Local
+        .with_ymd_and_hms(year, month0 + 1, day, dt.hour(), dt.minute(), dt.second())
+        .single()
+        .unwrap_or(dt)
+}
+
+fn days_in_month(year: i32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 {
+                29
+            } else {
+                28
+            }
+        }
+        _ => 30,
+    }
 }
 
 /// Serialize a JSON object to a `---`-delimited YAML frontmatter block. Supports
@@ -198,7 +501,7 @@ fn install_host_api(lua: &Lua, permissions: &[String]) -> mlua::Result<()> {
 fn frontmatter(value: &serde_json::Value) -> Result<String, String> {
     let obj = value
         .as_object()
-        .ok_or_else(|| "ms.template.frontmatter expects a table".to_string())?;
+        .ok_or_else(|| "ms.md.frontmatter expects a table".to_string())?;
     let mut out = String::from("---\n");
     for (key, val) in obj {
         match val {
@@ -248,7 +551,21 @@ mod tests {
             export: export.into(),
             input,
             permissions: perms.iter().map(|s| s.to_string()).collect(),
+            notes: Vec::new(),
             limits: Limits::default(),
+        }
+    }
+
+    fn note(id: &str, title: &str, tags: &[&str]) -> NoteMeta {
+        NoteMeta {
+            id: id.into(),
+            title: title.into(),
+            tags: tags.iter().map(|s| s.to_string()).collect(),
+            kind: "markdown".into(),
+            folder_id: None,
+            folder_path: String::new(),
+            created: "2026-07-26T00:00:00Z".into(),
+            modified: "2026-07-26T00:00:00Z".into(),
         }
     }
 
@@ -343,24 +660,35 @@ mod tests {
     }
 
     #[test]
-    fn host_api_is_permission_gated() {
-        let probe = "return { go = function() return { hasTemplate = ms.template ~= nil } end }";
+    fn ms_notes_is_gated_on_notes_read() {
+        let probe = "return { go = function() return { has = ms.notes ~= nil } end }";
         let without = run(req(probe, "go", serde_json::json!({}), &[])).unwrap();
-        assert_eq!(without["hasTemplate"], serde_json::json!(false));
-        let with = run(req(
-            probe,
+        assert_eq!(without["has"], serde_json::json!(false));
+        let with = run(req(probe, "go", serde_json::json!({}), &["notes.read"])).unwrap();
+        assert_eq!(with["has"], serde_json::json!(true));
+    }
+
+    #[test]
+    fn ms_notes_reads_the_snapshot() {
+        let mut r = req(
+            r#"return { go = function()
+                 local n = ms.notes.get("b")
+                 return { count = #ms.notes.all(), title = n and n.title or nil }
+               end }"#,
             "go",
             serde_json::json!({}),
-            &["templates.contribute"],
-        ))
-        .unwrap();
-        assert_eq!(with["hasTemplate"], serde_json::json!(true));
+            &["notes.read"],
+        );
+        r.notes = vec![note("a", "Alpha", &["x"]), note("b", "Beta", &["y"])];
+        let out = run(r).unwrap();
+        assert_eq!(out["count"], serde_json::json!(2));
+        assert_eq!(out["title"], serde_json::json!("Beta"));
     }
 
     #[test]
     fn safe_helpers_are_always_present() {
         let out = run(req(
-            "return { go = function() return { u = #ms.uuid(), d = ms.today() } end }",
+            "return { go = function() return { u = #ms.uuid(), d = ms.date.now() } end }",
             "go",
             serde_json::json!({}),
             &[],
@@ -371,19 +699,69 @@ mod tests {
     }
 
     #[test]
-    fn frontmatter_helper_builds_yaml() {
+    fn ms_date_formats_and_offsets() {
         let out = run(req(
             r#"return { go = function()
-                 return { fm = ms.template.frontmatter({ title = "Hi", tags = { "a", "b" } }) }
+                 local fmt = ms.date.format("2026-07-25T14:05:09Z", "YYYY/MM/DD")
+                 local plus = ms.date.format(ms.date.add("2026-07-25T00:00:00Z", 1, "month"), "YYYY-MM-DD")
+                 return { fmt = fmt, plus = plus }
                end }"#,
             "go",
             serde_json::json!({}),
-            &["templates.contribute"],
+            &[],
+        ))
+        .unwrap();
+        // Local timezone may shift the day, so assert the stable parts.
+        assert!(out["fmt"].as_str().unwrap().starts_with("2026/07/2"));
+        assert_eq!(out["plus"], serde_json::json!("2026-08-25"));
+    }
+
+    #[test]
+    fn ms_json_round_trips() {
+        let out = run(req(
+            r#"return { go = function()
+                 local decoded = ms.json.decode('{"n":3,"list":[1,2]}')
+                 return { n = decoded.n, encoded = ms.json.encode({ a = 1 }) }
+               end }"#,
+            "go",
+            serde_json::json!({}),
+            &[],
+        ))
+        .unwrap();
+        assert_eq!(out["n"], serde_json::json!(3));
+        assert_eq!(out["encoded"], serde_json::json!("{\"a\":1}"));
+    }
+
+    #[test]
+    fn frontmatter_helper_builds_yaml() {
+        let out = run(req(
+            r#"return { go = function()
+                 return { fm = ms.md.frontmatter({ title = "Hi", tags = { "a", "b" } }) }
+               end }"#,
+            "go",
+            serde_json::json!({}),
+            &[],
         ))
         .unwrap();
         let fm = out["fm"].as_str().unwrap();
         assert!(fm.starts_with("---\n"));
         assert!(fm.contains("title: \"Hi\""));
         assert!(fm.contains("  - \"a\""));
+    }
+
+    #[test]
+    fn format_moment_covers_the_token_set() {
+        use chrono::TimeZone;
+        let dt = chrono::Local
+            .with_ymd_and_hms(2026, 7, 25, 14, 5, 9)
+            .single()
+            .unwrap();
+        assert_eq!(
+            format_moment(&dt, "YYYY-MM-DD HH:mm:ss"),
+            "2026-07-25 14:05:09"
+        );
+        assert_eq!(format_moment(&dt, "dddd, MMMM D"), "Saturday, July 25");
+        assert_eq!(format_moment(&dt, "hh:mm A"), "02:05 PM");
+        assert_eq!(format_moment(&dt, "[Week] YYYY"), "Week 2026");
     }
 }

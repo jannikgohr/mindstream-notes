@@ -259,6 +259,7 @@ fn run_plugin_script_executes_luau_entry_with_input() {
         vec!["templates.contribute".into()],
         "render",
         serde_json::json!({ "name": "Hi" }),
+        Vec::new(),
     )
     .unwrap();
     assert_eq!(out["title"], serde_json::json!("Hi"));
@@ -274,6 +275,7 @@ fn run_plugin_script_refuses_a_non_luau_runtime() {
         vec![],
         "render",
         serde_json::json!({}),
+        Vec::new(),
     );
     assert!(out.is_err());
 }
