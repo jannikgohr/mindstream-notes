@@ -213,6 +213,7 @@ fn reconcile_registers_discovered_plugins_and_returns_manifests() {
             version: "1.0.0".into(),
             permissions: vec!["notes.create".into()],
             source: SOURCE_BUILTIN.into(),
+            dir: std::path::PathBuf::new(),
             checksum: "hash1".into(),
             signer: None,
             signature_status: "unsigned".into(),
@@ -238,4 +239,41 @@ fn remove_deletes_the_record() {
         Ok(())
     })
     .unwrap();
+}
+
+#[test]
+fn run_plugin_script_executes_luau_entry_with_input() {
+    let dir = std::env::temp_dir().join(format!("ms-luau-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("main.luau"),
+        "return { render = function(ctx) return { title = ctx.name } end }",
+    )
+    .unwrap();
+    let manifest = serde_json::json!({
+        "id": "com.a.luau", "runtime": "luau", "entry": "main.luau"
+    });
+    let out = run_plugin_script(
+        &dir,
+        &manifest,
+        vec!["templates.contribute".into()],
+        "render",
+        serde_json::json!({ "name": "Hi" }),
+    )
+    .unwrap();
+    assert_eq!(out["title"], serde_json::json!("Hi"));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn run_plugin_script_refuses_a_non_luau_runtime() {
+    let manifest = serde_json::json!({ "id": "x", "runtime": "manifest-only" });
+    let out = run_plugin_script(
+        &std::env::temp_dir(),
+        &manifest,
+        vec![],
+        "render",
+        serde_json::json!({}),
+    );
+    assert!(out.is_err());
 }
