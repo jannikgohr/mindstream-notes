@@ -3,10 +3,12 @@
   "name": "Templates",
   "version": "2.0.0",
   "runtime": "manifest-only",
+  "descriptionKey": "plugin.description",
   "permissions": [],
   "contributes": {
     "i18n": {
       "en": {
+        "plugin.description": "Turn your own notes into reusable templates. Pick a folder or a tag below — every markdown note inside that folder, or carrying that tag, becomes a template you can create new notes from via “New from template”. Placeholders like {{date}} and {{title}} are filled in when you use it.",
         "settings.sources.title": "Template sources",
         "settings.sourceFolder.label": "Template folder",
         "settings.sourceFolder.description": "Every markdown note inside this folder becomes a template.",
@@ -16,6 +18,7 @@
         "settings.openOnCreate.description": "Open a note in the editor right after creating it from a template"
       },
       "de": {
+        "plugin.description": "Mache deine eigenen Notizen zu wiederverwendbaren Vorlagen. Wähle unten einen Ordner oder ein Tag – jede Markdown-Notiz in diesem Ordner oder mit diesem Tag wird zu einer Vorlage, aus der du über „Neu aus Vorlage“ neue Notizen erstellst. Platzhalter wie {{date}} und {{title}} werden beim Verwenden ausgefüllt.",
         "settings.sources.title": "Vorlagenquellen",
         "settings.sourceFolder.label": "Vorlagenordner",
         "settings.sourceFolder.description": "Jede Markdown-Notiz in diesem Ordner wird zu einer Vorlage.",

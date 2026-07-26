@@ -30,6 +30,7 @@ import {
   pluginLoadError,
   setPluginEnabled
 } from './registry.svelte';
+import { resolvePluginStringOptional } from './plugin-i18n';
 
 /** One row of the management overview. */
 export interface PluginOverviewEntry {
@@ -39,6 +40,8 @@ export interface PluginOverviewEntry {
   /** `'builtin'` or `'installed'`. */
   source: string;
   enabled: boolean;
+  /** Localized one-line description (from the manifest's descriptionKey), or null. */
+  description: string | null;
   /** Why the plugin isn't contributing, if anything (bad manifest, integrity). */
   loadError: string | null;
   /** Signature verification result: `'unsigned' | 'valid' | 'invalid'`. */
@@ -76,6 +79,9 @@ export function pluginOverview(): PluginOverviewEntry[] {
       version: manifest.version,
       source: record?.source ?? SOURCE_BUILTIN,
       enabled,
+      description:
+        resolvePluginStringOptional(manifest.id, manifest.descriptionKey) ??
+        null,
       loadError: pluginLoadError(manifest.id) ?? record?.lastLoadError ?? null,
       signatureStatus: record?.signatureStatus ?? 'unsigned',
       signer: record?.signer ?? null,
