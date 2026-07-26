@@ -10,8 +10,9 @@
  *
  * Outside Tauri (`vite preview` / web-mobile) there is no backend and no disk
  * discovery, so the bundled core plugin's manifest — the single canonical
- * `core-plugins/templates/manifest.json` the app also ships as a resource — is
- * imported directly and registered as a builtin.
+ * `plugins/templates/manifest.json` (repo root; bundled into the app resource
+ * dir as `core-plugins/`) the app also ships as a resource — is imported
+ * directly and registered as a builtin.
  *
  * Every plugin loads in isolation: a manifest that fails validation is recorded
  * as that plugin's load error and skipped, so a broken plugin can never take
@@ -20,7 +21,7 @@
 
 import { isTauri } from '$lib/api/core';
 import { pluginsDiscover, type DiscoveredPluginView } from '$lib/api/plugins';
-import templatesManifest from '../../../src-tauri/core-plugins/templates/manifest.json';
+import templatesManifest from '../../../plugins/templates/manifest.json';
 import { recordPluginLoadError, registerPlugin } from './registry.svelte';
 import { reportGatedPlugins, type GatedPlugin } from './gate-notify';
 import { SOURCE_INSTALLED } from './source';
