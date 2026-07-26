@@ -19,6 +19,7 @@
 
 import {
   KNOWN_PLUGIN_PERMISSIONS,
+  type PluginDocSection,
   type PluginManifest,
   type PluginNoteTemplateContribution,
   type PluginPermission,
@@ -56,6 +57,14 @@ const I18N_KEY_RE = /^[A-Za-z0-9]+(?:[-._][A-Za-z0-9]+)*$/;
  * the plugin dir, so this is the traversal guard.
  */
 const SAFE_ENTRY_RE = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*)\.luau$/;
+/**
+ * A safe relative documentation path: one or more `/`-joined segments ending in
+ * `.md`. Each segment must start alphanumeric, so `..` (and any dot-leading
+ * segment) is rejected, as are absolute paths and backslashes. The loader joins
+ * this onto the plugin dir, so this is the traversal guard.
+ */
+const SAFE_DOC_PATH_RE =
+  /^[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)*\.md$/;
 
 const SETTING_TYPES = new Set<PluginSetting['type']>([
   'toggle',
@@ -273,6 +282,20 @@ function validateCommand(
   }
 }
 
+function validateDocSection(
+  pluginId: string,
+  d: PluginDocSection,
+  path: string
+): void {
+  assertNonEmptyString(pluginId, d?.file, `${path}.file`);
+  if (!SAFE_DOC_PATH_RE.test(d.file)) {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.file ("${d.file}") must be a safe relative .md path inside the plugin dir (no "..", absolute paths, or "\\\\")`
+    );
+  }
+}
+
 /**
  * Validate a manifest end-to-end. Returns the same object (typed) on success;
  * throws {@link PluginValidationError} on the first problem. Pure — it never
@@ -297,9 +320,6 @@ export function validateManifest(input: unknown): PluginManifest {
   }
   if (m.descriptionKey !== undefined) {
     assertI18nKey(pluginId, m.descriptionKey, 'manifest.descriptionKey');
-  }
-  if (m.documentationKey !== undefined) {
-    assertI18nKey(pluginId, m.documentationKey, 'manifest.documentationKey');
   }
 
   // Two runtimes are understood: purely-declarative `manifest-only`, and `luau`
@@ -422,6 +442,26 @@ export function validateManifest(input: unknown): PluginManifest {
       );
     }
     seenCommandIds.add(c.id);
+  }
+
+  // ---- Documentation ---------------------------------------------------
+  const documentation = contributes.documentation ?? [];
+  if (!Array.isArray(documentation)) {
+    throw new PluginValidationError(
+      pluginId,
+      'manifest.contributes.documentation must be an array'
+    );
+  }
+  const seenDocFiles = new Set<string>();
+  for (const [i, d] of documentation.entries()) {
+    validateDocSection(pluginId, d, `documentation[${i}]`);
+    if (seenDocFiles.has(d.file)) {
+      throw new PluginValidationError(
+        pluginId,
+        `duplicate documentation file "${d.file}"`
+      );
+    }
+    seenDocFiles.add(d.file);
   }
 
   // ---- i18n ------------------------------------------------------------

@@ -129,12 +129,33 @@ export interface PluginCommandContribution {
   action: PluginCommandAction;
 }
 
+/**
+ * One navigable section of a plugin's documentation, backed by a real markdown
+ * file bundled in the plugin dir (authoring long-form docs inline in JSON is
+ * miserable). Sections render in declaration order; the nav label is the file's
+ * first `# H1` (falling back to a prettified filename).
+ *
+ * Localization is by filename suffix: for `file: "docs/guide.md"` and active
+ * locale `de`, the app loads `docs/guide.de.md`, falling back to
+ * `docs/guide.md` — the same active-locale→English fallback used everywhere.
+ */
+export interface PluginDocSection {
+  /**
+   * Safe relative path (POSIX `/`) to a `.md` file inside the plugin dir. No
+   * `..`, no absolute paths, no backslashes — the loader joins it onto the
+   * plugin dir, so this is a traversal boundary (validated).
+   */
+  file: string;
+}
+
 /** The `contributes` block of a manifest. Every field is optional. */
 export interface PluginContributions {
   i18n?: PluginI18nContribution;
   settings?: PluginSettingsContribution[];
   noteTemplates?: PluginNoteTemplateContribution[];
   commands?: PluginCommandContribution[];
+  /** Ordered, file-backed documentation sections shown in the docs modal. */
+  documentation?: PluginDocSection[];
 }
 
 /**
@@ -169,12 +190,6 @@ export interface PluginManifest {
    * bundle.
    */
   descriptionKey?: string;
-  /**
-   * Optional i18n key for **long-form markdown documentation**, opened from a
-   * "View documentation" button and rendered read-only. Resolves against the
-   * plugin's own i18n bundle.
-   */
-  documentationKey?: string;
   permissions: PluginPermission[];
   contributes: PluginContributions;
 }

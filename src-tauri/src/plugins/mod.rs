@@ -372,6 +372,32 @@ fn remove_plugin_dir(third_party_dir: &Path, dir: &Path) -> AppResult<()> {
     Ok(())
 }
 
+/// Read `<dir>/<file>` where `file` is a safe relative `.md` path. Rejects any
+/// path that escapes the plugin dir (traversal / symlink), returning `None` when
+/// the file simply doesn't exist — an absent locale variant (`guide.de.md`) is
+/// expected, so the caller falls back to the base file rather than erroring.
+fn read_plugin_doc(dir: &Path, file: &str) -> AppResult<Option<String>> {
+    // Reject traversal up front (defense in depth; the manifest validator also
+    // enforces a safe relative path).
+    if file.contains("..") || file.contains('\\') || file.starts_with('/') {
+        return Err(AppError::InvalidArg(format!("unsafe doc path '{file}'")));
+    }
+    let base = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+    match dir.join(file).canonicalize() {
+        Ok(resolved) => {
+            if !resolved.starts_with(&base) {
+                return Err(AppError::InvalidArg(format!(
+                    "doc path '{file}' escapes the plugin dir"
+                )));
+            }
+            Ok(Some(std::fs::read_to_string(&resolved)?))
+        }
+        // Missing / unresolvable path → treat as absent so the caller can try
+        // the next candidate (e.g. the base file after a missing locale one).
+        Err(_) => Ok(None),
+    }
+}
+
 // ---------- Scripted (luau) execution ----------
 
 /// Load a `luau` plugin's entry script from `dir` and run its `export` function
@@ -565,6 +591,21 @@ pub fn plugins_remove(app: AppHandle, db: State<'_, Db>, id: String) -> CommandR
     }
 
     db.with_conn(|c| remove(c, &id)).map_err(Into::into)
+}
+
+/// Read one of a plugin's bundled documentation files. Trust stays
+/// location-derived (the plugin is re-located on disk); the path is guarded
+/// against traversal. Available for builtin + installed plugins regardless of
+/// enabled state — docs are read-only text with no code execution, and are
+/// legitimately viewed before a plugin is approved. `None` means the file isn't
+/// present, letting the caller fall back from a missing locale variant.
+#[tauri::command]
+pub fn plugins_read_doc(app: AppHandle, id: String, file: String) -> CommandResult<Option<String>> {
+    let core_dir = discovery::core_plugins_dir(&app)?;
+    let third_party_dir = discovery::third_party_plugins_dir(&app)?;
+    let plugin = discovery::find(&core_dir, &third_party_dir, &id)
+        .ok_or_else(|| AppError::NotFound(format!("plugin {id} not found on disk")))?;
+    read_plugin_doc(&plugin.dir, &file).map_err(Into::into)
 }
 
 /// Run a scripted plugin's entry function. The plugin is re-located on disk

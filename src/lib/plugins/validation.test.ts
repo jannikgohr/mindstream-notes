@@ -134,18 +134,47 @@ describe('validateManifest', () => {
     ).toThrow(/only valid for runtime "luau"/);
   });
 
-  it('accepts optional description/documentation keys and rejects bad ones', () => {
+  it('accepts an optional descriptionKey and rejects a bad one', () => {
     expect(
-      validateManifest(
-        validManifest({
-          descriptionKey: 'plugin.description',
-          documentationKey: 'plugin.docs'
-        })
-      ).descriptionKey
+      validateManifest(validManifest({ descriptionKey: 'plugin.description' }))
+        .descriptionKey
     ).toBe('plugin.description');
     expect(() =>
       validateManifest(validManifest({ descriptionKey: 'has spaces' }))
     ).toThrow(/manifest.descriptionKey/);
+  });
+
+  it('accepts file-backed documentation sections', () => {
+    const m = withContributes((c) => {
+      c.documentation = [
+        { file: 'docs/getting-started.md' },
+        { file: 'docs/placeholders.de.md' }
+      ];
+    });
+    const result = validateManifest(m);
+    expect(result.contributes.documentation).toHaveLength(2);
+  });
+
+  it('rejects a documentation path that escapes the plugin dir', () => {
+    for (const file of [
+      '../secret.md',
+      'docs/../../secret.md',
+      '/etc/passwd.md',
+      'docs\\win.md',
+      'docs/notes.txt'
+    ]) {
+      const m = withContributes((c) => {
+        c.documentation = [{ file }];
+      });
+      expect(() => validateManifest(m)).toThrow(/safe relative \.md path/);
+    }
+  });
+
+  it('rejects duplicate documentation files', () => {
+    const m = withContributes((c) => {
+      c.documentation = [{ file: 'docs/a.md' }, { file: 'docs/a.md' }];
+    });
+    expect(() => validateManifest(m)).toThrow(/duplicate documentation file/);
   });
 
   it('rejects unknown permissions', () => {

@@ -379,6 +379,7 @@ pub fn run() {
             plugins::plugins_approve,
             plugins::plugins_set_load_error,
             plugins::plugins_remove,
+            plugins::plugins_read_doc,
             plugins::plugins_run_script,
             // Profiles (vaults)
             profiles::list_profiles,

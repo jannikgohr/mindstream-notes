@@ -50,7 +50,6 @@ remove the "New from template" affordance entirely.
   "runtime": "manifest-only", // or "luau"
   "entry": "main.luau", // required iff runtime is "luau"; a plain .luau filename
   "descriptionKey": "plugin.description", // optional i18n key; a short one-line tagline
-  "documentationKey": "plugin.docs", // optional i18n key; long-form markdown shown read-only via a button
   "permissions": [], // see Permissions
   "contributes": {
     /* … */
@@ -74,6 +73,18 @@ is namespaced under the plugin `id`, so two plugins can never collide.
   with `{{…}}` placeholders, see below). Requires `templates.contribute`.
 - **`commands`** — app-local commands (currently `createTemplateNote`), each
   bindable to a hotkey.
+- **`documentation`** — an ordered list of real markdown files bundled in the
+  plugin, shown read-only in a navigable "View documentation" modal:
+  ```jsonc
+  "documentation": [
+    { "file": "docs/getting-started.md" },
+    { "file": "docs/placeholders.md" }
+  ]
+  ```
+  Array order is the nav order; each section's title is the file's first `# H1`.
+  Localize a section by adding a sibling with a locale suffix — `docs/getting-started.de.md`
+  is used for German, falling back to `docs/getting-started.md`. Paths are
+  relative to the plugin dir and must be safe (`.md`, no `..`).
 
 ### Placeholder syntax (declarative templates)
 
@@ -95,7 +106,8 @@ is namespaced under the plugin `id`, so two plugins can never collide.
 A manifest is rejected if it contributes something it didn't ask permission for.
 Each plugin's requested permissions are shown to the user (with friendly labels)
 in Settings → Plugins, alongside its `descriptionKey` tagline and a "View
-documentation" button that renders `documentationKey` markdown read-only.
+documentation" button that renders the `contributes.documentation` files
+read-only.
 
 ## Scripted plugins (`runtime: "luau"`)
 

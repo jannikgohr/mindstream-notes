@@ -33,6 +33,7 @@ import {
   unregisterPlugin
 } from './registry.svelte';
 import { resolvePluginStringOptional } from './plugin-i18n';
+import type { PluginDocSection } from './types';
 
 /** One row of the management overview. */
 export interface PluginOverviewEntry {
@@ -44,8 +45,12 @@ export interface PluginOverviewEntry {
   enabled: boolean;
   /** Localized one-line description (from the manifest's descriptionKey), or null. */
   description: string | null;
-  /** Localized long-form markdown docs (from documentationKey), or null. */
-  documentation: string | null;
+  /**
+   * File-backed documentation sections (from `contributes.documentation`), in
+   * order. Empty when the plugin ships no docs. Content is loaded lazily by the
+   * docs modal (see docs-loader) — this only carries the file references.
+   */
+  documentation: PluginDocSection[];
   /** Why the plugin isn't contributing, if anything (bad manifest, integrity). */
   loadError: string | null;
   /** Signature verification result: `'unsigned' | 'valid' | 'invalid'`. */
@@ -90,9 +95,7 @@ export function pluginOverview(): PluginOverviewEntry[] {
       description:
         resolvePluginStringOptional(manifest.id, manifest.descriptionKey) ??
         null,
-      documentation:
-        resolvePluginStringOptional(manifest.id, manifest.documentationKey) ??
-        null,
+      documentation: manifest.contributes.documentation ?? [],
       loadError: pluginLoadError(manifest.id) ?? record?.lastLoadError ?? null,
       signatureStatus: record?.signatureStatus ?? 'unsigned',
       signer: record?.signer ?? null,
