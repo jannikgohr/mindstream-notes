@@ -40,6 +40,8 @@ pub struct DiscoveredPlugin {
     pub version: String,
     pub permissions: Vec<String>,
     pub source: String,
+    /// The directory the plugin was read from (used to load its `.luau` entry).
+    pub dir: PathBuf,
     /// SHA-256 (hex) of the raw manifest.json bytes.
     pub checksum: String,
     /// Signer fingerprint from `signature.json`, if the signature is valid.
@@ -146,6 +148,7 @@ fn read_plugin(dir: &Path, source: &str) -> AppResult<DiscoveredPlugin> {
         version,
         permissions,
         source: source.to_string(),
+        dir: dir.to_path_buf(),
         checksum,
         signer: verification.signer,
         signature_status: verification.status.as_str().to_string(),
@@ -198,6 +201,15 @@ pub fn discover(core_dir: &Path, third_party_dir: &Path) -> Vec<DiscoveredPlugin
         plugins.push(plugin);
     }
     plugins
+}
+
+/// Find one plugin by id across the core + third-party dirs, applying the same
+/// core-wins rule as [`discover`]. Returns the [`DiscoveredPlugin`] (with its
+/// `dir`) so a caller can load the plugin's entry script.
+pub fn find(core_dir: &Path, third_party_dir: &Path, id: &str) -> Option<DiscoveredPlugin> {
+    discover(core_dir, third_party_dir)
+        .into_iter()
+        .find(|p| p.id == id)
 }
 
 #[cfg(test)]

@@ -89,6 +89,7 @@ export enum TauriCommandName {
   PluginsGet = 'plugins_get',
   PluginsList = 'plugins_list',
   PluginsRemove = 'plugins_remove',
+  PluginsRunScript = 'plugins_run_script',
   PluginsSetLoadError = 'plugins_set_load_error',
   PruneNoteVersions = 'prune_note_versions',
   PurgeCorruptRemoteNote = 'purge_corrupt_remote_note',

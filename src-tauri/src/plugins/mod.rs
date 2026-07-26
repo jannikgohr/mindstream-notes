@@ -15,6 +15,8 @@
 //! signed app bundle and are trusted, so a checksum change (a shipped update)
 //! is accepted automatically.
 
+use std::path::Path;
+
 use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -309,6 +311,50 @@ pub fn remove(conn: &Connection, id: &str) -> AppResult<()> {
     Ok(())
 }
 
+// ---------- Scripted (luau) execution ----------
+
+/// Load a `luau` plugin's entry script from `dir` and run its `export` function
+/// with `input`, under the sandbox + resource limits in [`luau`]. `manifest` is
+/// the plugin's parsed manifest (for `runtime`/`entry`/`id`); `granted` is the
+/// permission set that decides the host API surface.
+///
+/// Factored out of the command so it is unit-testable without a Tauri handle.
+pub fn run_plugin_script(
+    dir: &Path,
+    manifest: &serde_json::Value,
+    granted: Vec<String>,
+    export: &str,
+    input: serde_json::Value,
+) -> AppResult<serde_json::Value> {
+    if manifest.get("runtime").and_then(|v| v.as_str()) != Some("luau") {
+        return Err(AppError::InvalidArg(
+            "plugin does not have a luau runtime".into(),
+        ));
+    }
+    let entry = manifest
+        .get("entry")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| AppError::InvalidArg("luau plugin has no entry".into()))?;
+    // Defense in depth: the manifest validator already rejects unsafe entries,
+    // but never join an untrusted path segment without re-checking.
+    if entry.contains('/') || entry.contains('\\') || entry.contains("..") {
+        return Err(AppError::InvalidArg(format!("unsafe entry '{entry}'")));
+    }
+    let source = std::fs::read_to_string(dir.join(entry))?;
+    let id = manifest
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("plugin");
+    luau::run(luau::ScriptRequest {
+        source,
+        chunk_name: format!("{id}/{entry}"),
+        export: export.to_string(),
+        input,
+        permissions: granted,
+        limits: luau::Limits::default(),
+    })
+}
+
 // ---------- Tauri commands ----------
 
 #[tauri::command]
@@ -391,6 +437,44 @@ pub fn plugins_set_load_error(
 #[tauri::command]
 pub fn plugins_remove(db: tauri::State<'_, Db>, id: String) -> CommandResult<()> {
     db.with_conn(|c| remove(c, &id)).map_err(Into::into)
+}
+
+/// Run a scripted plugin's entry function. The plugin is re-located on disk
+/// (trust stays location-derived) and must be **enabled** in the DB — a gated or
+/// disabled plugin never executes. The script runs on a blocking worker so a
+/// long or runaway script can't stall the async runtime; its resource limits
+/// still bound it (see [`luau`]). Permissions come from the DB record, not the
+/// caller, so a script only gets the host API its manifest was granted.
+#[tauri::command]
+pub async fn plugins_run_script(
+    app: AppHandle,
+    db: State<'_, Db>,
+    id: String,
+    export: String,
+    input: serde_json::Value,
+) -> CommandResult<serde_json::Value> {
+    let core_dir = discovery::core_plugins_dir(&app)?;
+    let third_party_dir = discovery::third_party_plugins_dir(&app)?;
+
+    let record = db
+        .with_conn(|c| get(c, &id))?
+        .ok_or_else(|| AppError::NotFound(format!("plugin {id}")))?;
+    if !record.enabled {
+        return Err(AppError::InvalidArg(format!("plugin {id} is not enabled")).into());
+    }
+
+    let plugin = discovery::find(&core_dir, &third_party_dir, &id)
+        .ok_or_else(|| AppError::NotFound(format!("plugin {id} not found on disk")))?;
+
+    let dir = plugin.dir;
+    let manifest = plugin.manifest;
+    let granted = record.granted_permissions;
+    tauri::async_runtime::spawn_blocking(move || {
+        run_plugin_script(&dir, &manifest, granted, &export, input)
+    })
+    .await
+    .map_err(|e| AppError::InvalidArg(format!("script task failed: {e}")))?
+    .map_err(Into::into)
 }
 
 #[cfg(test)]

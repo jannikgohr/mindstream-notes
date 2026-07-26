@@ -177,3 +177,24 @@ export function pluginsRemove(id: string): Promise<void> {
     (value) => assertVoid(value, 'plugins_remove response')
   );
 }
+
+/**
+ * Run an enabled `luau` plugin's exported function in the sandboxed backend
+ * runtime and return its JSON result. There is no browser fallback: scripted
+ * plugins require the Rust runtime, so outside Tauri this rejects rather than
+ * pretending to run code.
+ */
+export function pluginsRunScript(
+  id: string,
+  exportName: string,
+  input: unknown
+): Promise<unknown> {
+  return invokeOrFallback<unknown>(
+    TauriCommandName.PluginsRunScript,
+    { id, export: exportName, input },
+    () => {
+      throw new Error('scripted (luau) plugins are only available in the app');
+    },
+    (value) => value
+  );
+}
