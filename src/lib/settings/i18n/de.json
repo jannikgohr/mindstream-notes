@@ -776,6 +776,9 @@
     "general.behavior": {
       "label": "Verhalten"
     },
+    "general.templates": {
+      "label": "Vorlagen"
+    },
     "appearance.theme": {
       "label": "Design"
     },
@@ -853,6 +856,18 @@
     "general.startInTray": {
       "label": "In Systemablage starten",
       "description": "Wenn das System die App bei der Anmeldung startet, wird sie ausgeblendet in der Systemablage geöffnet."
+    },
+    "templates.showBuiltIn": {
+      "label": "Integrierte Vorlagen anzeigen",
+      "description": "Die vorgefertigten Vorlagen der App in den „Neu aus Vorlage“-Menüs anzeigen. Zum Ausschalten, um nur eigene zu verwenden."
+    },
+    "templates.sourceFolder": {
+      "label": "Vorlagenordner",
+      "description": "Jede Markdown-Notiz in einem Ordner mit diesem Namen wird zu einer Vorlage."
+    },
+    "templates.sourceTag": {
+      "label": "Vorlagen-Tag",
+      "description": "Jede Markdown-Notiz mit diesem Tag wird zu einer Vorlage."
     },
     "appearance.mode": {
       "label": "Modus"

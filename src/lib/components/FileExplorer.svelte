@@ -20,9 +20,9 @@
   import { noteKindIcon } from './note-kind-icon';
   import { noteTypeEnabled } from '$lib/notes/note-types';
   import {
-    hasPluginTemplates,
-    pluginTemplateEntries,
-    runPluginTemplate
+    hasTemplateEntries,
+    templateMenuEntries,
+    runTemplateEntry
   } from '$lib/plugins/menu';
   import { tooltip } from '$lib/actions/tooltip';
   import { Button } from '$lib/components/ui/button';
@@ -371,7 +371,7 @@
   // same ContextMenu render path so a template creates + opens a note exactly
   // as it does from the right-click menu. Creates at the current root (null).
   function openTemplateMenu(e: MouseEvent) {
-    const entries = pluginTemplateEntries();
+    const entries = templateMenuEntries();
     if (entries.length === 0) return;
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     menuToken += 1;
@@ -379,10 +379,12 @@
     menuY = rect.bottom + 4;
     menuTarget = { kind: 'root' };
     currentMenuItems = entries.map((entry) => ({
-      id: `plugin-template:${entry.pluginId}:${entry.templateId}`,
+      id:
+        entry.kind === 'plugin'
+          ? `plugin-template:${entry.pluginId}:${entry.templateId}`
+          : `user-template:${entry.noteId}`,
       label: entry.label,
-      onSelect: () =>
-        void runPluginTemplate(entry.pluginId, entry.templateId, null)
+      onSelect: () => void runTemplateEntry(entry, null)
     }));
     menuOpen = true;
   }
@@ -882,7 +884,7 @@
             <FileUp class="size-3.5" />
           </Button>
         {/if}
-        {#if hasPluginTemplates()}
+        {#if hasTemplateEntries()}
           <Button
             variant="ghost"
             size="icon"
