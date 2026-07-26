@@ -29,7 +29,7 @@
     SquareKanban
   } from '@lucide/svelte';
   import { noteTypeEnabled } from '$lib/notes/note-types';
-  import { pluginTemplateEntries, runPluginTemplate } from '$lib/plugins/menu';
+  import { templateMenuEntries, runTemplateEntry } from '$lib/plugins/menu';
   import type { IconComponent } from '$lib/settings/icons';
   import MobileTopBar from './MobileTopBar.svelte';
   import MobileBreadcrumb from './MobileBreadcrumb.svelte';
@@ -232,18 +232,16 @@
                 }
               ]
             : []),
-          // Plugin templates create + open directly (auto-titled), so they
-          // skip the name sheet the built-in kinds use.
-          ...pluginTemplateEntries().map((entry) => ({
-            id: `plugin-template:${entry.pluginId}:${entry.templateId}`,
+          // Templates (premade + user) create + open directly (auto-titled), so
+          // they skip the name sheet the built-in kinds use.
+          ...templateMenuEntries().map((entry) => ({
+            id:
+              entry.kind === 'plugin'
+                ? `plugin-template:${entry.pluginId}:${entry.templateId}`
+                : `user-template:${entry.noteId}`,
             label: entry.label,
             icon: FileText as unknown as IconComponent,
-            onSelect: () =>
-              void runPluginTemplate(
-                entry.pluginId,
-                entry.templateId,
-                targetParent()
-              )
+            onSelect: () => void runTemplateEntry(entry, targetParent())
           }))
         ]
   );

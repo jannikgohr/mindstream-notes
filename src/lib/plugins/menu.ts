@@ -13,6 +13,11 @@ import {
   resolvePluginStringOptional
 } from './plugin-i18n';
 import { createNoteFromPluginTemplate } from './templates';
+import {
+  createNoteFromUserTemplate,
+  showBuiltInTemplates,
+  userTemplateEntries
+} from '$lib/templates/user-templates';
 
 /** A create-menu entry for one plugin template, labels already localized. */
 export interface PluginTemplateEntry {
@@ -58,5 +63,60 @@ export async function runPluginTemplate(
       templateId,
       err
     );
+  }
+}
+
+/**
+ * A unified create-menu entry: either a plugin-contributed template (the premade
+ * ones) or a user template (a note designated via the folder/tag sources). The
+ * menus render both from one list so a user's own templates sit alongside — or,
+ * with "Show built-in templates" off, instead of — the premade set.
+ */
+export type TemplateMenuEntry =
+  | ({ kind: 'plugin' } & PluginTemplateEntry)
+  | { kind: 'user'; noteId: string; label: string; description?: string };
+
+/**
+ * Every template offered in the create menus: the premade plugin templates
+ * (unless the user turned them off) followed by the user's own, in that order.
+ */
+export function templateMenuEntries(): TemplateMenuEntry[] {
+  const builtIn: TemplateMenuEntry[] = showBuiltInTemplates()
+    ? pluginTemplateEntries().map((entry) => ({ kind: 'plugin', ...entry }))
+    : [];
+  const user: TemplateMenuEntry[] = userTemplateEntries().map((entry) => ({
+    kind: 'user',
+    noteId: entry.noteId,
+    label: entry.label
+  }));
+  return [...builtIn, ...user];
+}
+
+/** True when the create menus have at least one template to offer. */
+export function hasTemplateEntries(): boolean {
+  return templateMenuEntries().length > 0;
+}
+
+/**
+ * Create + open a note from a unified template entry (plugin or user),
+ * swallowing failures like [`runPluginTemplate`] so a bad template never throws
+ * out of a menu handler.
+ */
+export async function runTemplateEntry(
+  entry: TemplateMenuEntry,
+  parentId: string | null
+): Promise<void> {
+  try {
+    if (entry.kind === 'plugin') {
+      await createNoteFromPluginTemplate(
+        entry.pluginId,
+        entry.templateId,
+        parentId
+      );
+    } else {
+      await createNoteFromUserTemplate(entry.noteId, parentId);
+    }
+  } catch (err) {
+    console.error('[templates] note creation failed', entry, err);
   }
 }
