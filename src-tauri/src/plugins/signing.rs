@@ -15,9 +15,11 @@
 //! tampering breaks the signature, an unsigned edit has no signer to match, and
 //! a signer change is treated as untrusted — all fall back to the gate.
 //!
-//! Manifest-only plugins have no executable files, so signing the manifest
-//! covers everything a plugin can do today. Before any code runtime (JS/WASM)
-//! lands, signing must also cover those files.
+//! The signed payload is the plugin's **package digest** (see [`package_digest`]),
+//! not just `manifest.json`: it folds in a content hash of every file in the
+//! plugin dir. So a valid signature covers the manifest AND the `.luau` code (and
+//! any assets) — tampering with a script breaks the signature exactly as editing
+//! the manifest does, which is what makes running a signed `luau` plugin safe.
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use ed25519_dalek::{Signature, VerifyingKey};
@@ -69,8 +71,8 @@ fn invalid() -> Verification {
     }
 }
 
-fn fingerprint(public_key: &[u8]) -> String {
-    let digest = Sha256::digest(public_key);
+fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
     let mut out = String::with_capacity(digest.len() * 2);
     for byte in digest {
         let _ = write!(out, "{byte:02x}");
@@ -78,9 +80,39 @@ fn fingerprint(public_key: &[u8]) -> String {
     out
 }
 
-/// Verify a plugin's signature over its raw manifest bytes. `sig_json` is the
-/// contents of `signature.json`, or `None` when absent (→ [`SignatureStatus::Unsigned`]).
-pub fn verify(manifest_bytes: &[u8], sig_json: Option<&[u8]>) -> Verification {
+fn fingerprint(public_key: &[u8]) -> String {
+    sha256_hex(public_key)
+}
+
+/// Build the canonical **package digest document** a plugin's signature covers.
+///
+/// For every file (except `signature.json`, which can't sign itself) it emits
+/// one record `"<relpath>\n<sha256-hex>\n"`, with records sorted by `relpath`.
+/// Signing this document instead of just `manifest.json` means one signature
+/// authenticates the manifest *and* every code/asset file together.
+///
+/// Paths use `/` separators and must be ASCII so this and the Node signer
+/// (`scripts/sign-plugin.mjs`) produce byte-identical documents; the same
+/// constraint the manifest already puts on plugin filenames. Pure — the caller
+/// supplies `(relpath, bytes)` pairs read from disk.
+pub fn package_digest(files: &[(String, Vec<u8>)]) -> Vec<u8> {
+    let mut records: Vec<(&str, String)> = files
+        .iter()
+        .filter(|(path, _)| path != "signature.json")
+        .map(|(path, bytes)| (path.as_str(), sha256_hex(bytes)))
+        .collect();
+    records.sort_by(|a, b| a.0.cmp(b.0));
+    let mut doc = String::new();
+    for (path, hex) in records {
+        let _ = write!(doc, "{path}\n{hex}\n");
+    }
+    doc.into_bytes()
+}
+
+/// Verify a plugin's signature over its signed payload (the [`package_digest`]
+/// document). `sig_json` is the contents of `signature.json`, or `None` when
+/// absent (→ [`SignatureStatus::Unsigned`]).
+pub fn verify(signed_payload: &[u8], sig_json: Option<&[u8]>) -> Verification {
     let Some(raw) = sig_json else {
         return Verification {
             status: SignatureStatus::Unsigned,
@@ -111,7 +143,7 @@ pub fn verify(manifest_bytes: &[u8], sig_json: Option<&[u8]>) -> Verification {
     };
     let signature = Signature::from_bytes(&sig_arr);
     // `verify_strict` rejects the small-order / malleable edge cases.
-    match verifying_key.verify_strict(manifest_bytes, &signature) {
+    match verifying_key.verify_strict(signed_payload, &signature) {
         Ok(()) => Verification {
             status: SignatureStatus::Valid,
             signer: Some(fingerprint(&key_arr)),
@@ -177,14 +209,20 @@ mod tests {
     }
 
     #[test]
-    fn verifies_a_node_produced_signature() {
-        // Cross-language regression vector: signature.json produced by
-        // scripts/sign-plugin.mjs (Node crypto Ed25519) must verify here, so the
-        // wire format (raw 32B key + 64B sig, base64) stays in lockstep.
-        let manifest = br#"{"id":"com.vector.test"}"#;
-        let json = r#"{"algorithm":"ed25519","publicKey":"xHD3gzq37esikrxNomLMrk4FfmB9EIUG0I56inynpoc=","signature":"uM8iLxZyUo0reLeQkceAYEIKBGK8fAOFty77YVxc6Hdru8VdI1AIvWyHwRQGuJsi1rB3MOZyrm0yVedCEDAFAQ=="}"#;
+    fn verifies_a_node_produced_package_signature() {
+        // Cross-language regression vector: a signature.json produced by
+        // scripts/sign-plugin.mjs over the *package digest* of these exact files
+        // must verify here. Because the signature only checks out if Rust's
+        // package_digest reproduces Node's byte-for-byte, this locks both the
+        // digest format and the Ed25519 wire format in lockstep with the signer.
+        let vector = files(&[
+            ("manifest.json", br#"{"id":"com.vector.test"}"# as &[u8]),
+            ("main.luau", b"return {}"),
+        ]);
+        let digest = package_digest(&vector);
+        let json = r#"{"algorithm":"ed25519","publicKey":"yeBWzJ6K/6SqN7KGeco1huwxA7Ja0eYA1aviH+QWx6k=","signature":"/WWWW2hOoykmGqKuSeFDJuVL/cbfn3u5cBpvvWi7DkN4Of1DZvmd3bWTCNRN+2s+MCwXNECPreMTByVVkqTvDA=="}"#;
         assert_eq!(
-            verify(manifest, Some(json.as_bytes())).status,
+            verify(&digest, Some(json.as_bytes())).status,
             SignatureStatus::Valid
         );
     }
@@ -196,5 +234,53 @@ mod tests {
             verify(b"m", Some(json.as_bytes())).status,
             SignatureStatus::Invalid
         );
+    }
+
+    fn files(pairs: &[(&str, &[u8])]) -> Vec<(String, Vec<u8>)> {
+        pairs
+            .iter()
+            .map(|(p, b)| (p.to_string(), b.to_vec()))
+            .collect()
+    }
+
+    #[test]
+    fn package_digest_is_order_independent_and_skips_signature() {
+        let a = package_digest(&files(&[
+            ("manifest.json", b"{}"),
+            ("main.luau", b"return {}"),
+            ("signature.json", b"whatever"),
+        ]));
+        // Reordered input, and the signature file present or not, must not change it.
+        let b = package_digest(&files(&[
+            ("main.luau", b"return {}"),
+            ("manifest.json", b"{}"),
+        ]));
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn package_digest_covers_code_files() {
+        let base = package_digest(&files(&[
+            ("manifest.json", b"{}"),
+            ("main.luau", b"return 1"),
+        ]));
+        let edited = package_digest(&files(&[
+            ("manifest.json", b"{}"),
+            ("main.luau", b"return 2"),
+        ]));
+        assert_ne!(base, edited, "editing a .luau file must change the digest");
+    }
+
+    #[test]
+    fn package_digest_has_the_documented_shape() {
+        // "<relpath>\n<sha256-hex>\n" per file, sorted by path. Locks the exact
+        // bytes the Node signer must reproduce.
+        let doc = package_digest(&files(&[("b.luau", b"y"), ("a.json", b"x")]));
+        let expected = format!(
+            "a.json\n{}\nb.luau\n{}\n",
+            sha256_hex(b"x"),
+            sha256_hex(b"y")
+        );
+        assert_eq!(String::from_utf8(doc).unwrap(), expected);
     }
 }
