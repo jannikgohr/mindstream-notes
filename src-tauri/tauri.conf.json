@@ -48,7 +48,7 @@
     ],
     "resources": {
       "infoplist/": "",
-      "core-plugins/": "core-plugins/"
+      "../plugins/": "core-plugins/"
     },
     "macOS": {
       "entitlements": "./Entitlements.plist",
