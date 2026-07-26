@@ -4,6 +4,7 @@
   import { importChoiceQueue } from './import-choice-dialog.svelte';
   import { shortcutHelp } from '$lib/hotkeys/help.svelte';
   import { searchDialog } from '$lib/search/store.svelte';
+  import { commandPalette } from '$lib/command-palette/store.svelte';
   import { updaterProgress } from '$lib/updater/progress.svelte';
   import { shareDialog } from './share-dialog.svelte';
   import { toasts } from './toast.svelte';
@@ -14,6 +15,7 @@
   let UpdaterProgressDialog = $state<any | null>(null);
   let ShortcutHelpDialog = $state<any | null>(null);
   let SearchDialog = $state<any | null>(null);
+  let CommandPalette = $state<any | null>(null);
   let ShareCollectionDialog = $state<any | null>(null);
   let ManageAccessDialog = $state<any | null>(null);
   let ToastHost = $state<any | null>(null);
@@ -24,6 +26,7 @@
   let updaterToken = 0;
   let shortcutToken = 0;
   let searchToken = 0;
+  let commandPaletteToken = 0;
   let shareToken = 0;
   let manageToken = 0;
   let toastToken = 0;
@@ -113,6 +116,20 @@
   });
 
   $effect(() => {
+    const active = commandPalette.open;
+    const token = ++commandPaletteToken;
+    if (!active) {
+      CommandPalette = null;
+      return;
+    }
+    void import('$lib/command-palette/CommandPalette.svelte').then((mod) => {
+      if (token === commandPaletteToken && commandPalette.open) {
+        CommandPalette = mod.default;
+      }
+    });
+  });
+
+  $effect(() => {
     const active =
       shareDialog.collectionId !== null && shareDialog.view === 'invite';
     const token = ++shareToken;
@@ -184,6 +201,9 @@
 {/if}
 {#if SearchDialog}
   <SearchDialog />
+{/if}
+{#if CommandPalette}
+  <CommandPalette />
 {/if}
 {#if ShareCollectionDialog}
   <ShareCollectionDialog />

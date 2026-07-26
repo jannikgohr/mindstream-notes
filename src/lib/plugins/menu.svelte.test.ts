@@ -11,6 +11,7 @@ import { registerPlugin, resetPluginRegistry } from './registry.svelte';
 import {
   hasPluginTemplates,
   pluginTemplateEntries,
+  renderTemplateEntryBody,
   runPluginTemplate
 } from './menu';
 
@@ -89,5 +90,32 @@ describe('runPluginTemplate', () => {
       runPluginTemplate(PLUGIN_ID, 'ghost', null)
     ).resolves.toBeUndefined();
     expect(createNoteIn).not.toHaveBeenCalled();
+  });
+});
+
+describe('renderTemplateEntryBody', () => {
+  it('renders a plugin template body with placeholders interpolated', async () => {
+    register();
+    const body = await renderTemplateEntryBody({
+      kind: 'plugin',
+      pluginId: PLUGIN_ID,
+      templateId: 'meeting',
+      label: 'Meeting notes'
+    });
+    // bodyTemplate '# {{title}}' → title 'Meeting — <date>'. No note is created.
+    expect(body).toMatch(/^# Meeting — /);
+    expect(createNoteIn).not.toHaveBeenCalled();
+  });
+
+  it('throws for an unknown plugin template', async () => {
+    register();
+    await expect(
+      renderTemplateEntryBody({
+        kind: 'plugin',
+        pluginId: PLUGIN_ID,
+        templateId: 'ghost',
+        label: 'x'
+      })
+    ).rejects.toThrow();
   });
 });
