@@ -12,11 +12,12 @@
   import { tUi } from '$lib/settings/i18n.svelte';
   import { tooltip } from '$lib/actions/tooltip';
   import {
+    approvePluginAdmin,
     pluginOverview,
     refreshPluginAdmin,
     setPluginEnabledAdmin
   } from './manage.svelte';
-  import { SOURCE_BUILTIN } from './source';
+  import { SOURCE_BUILTIN, SOURCE_INSTALLED } from './source';
 
   onMount(() => {
     void refreshPluginAdmin();
@@ -68,6 +69,10 @@
     <div class="divide-y divide-border">
       {#each entries as entry (entry.id)}
         {@const sig = signatureChip(entry.source, entry.signatureStatus)}
+        {@const gated =
+          !entry.enabled &&
+          !!entry.loadError &&
+          entry.source === SOURCE_INSTALLED}
         <div class="flex items-start justify-between gap-4 py-3">
           <div class="min-w-0">
             <div class="flex flex-wrap items-center gap-2">
@@ -100,22 +105,35 @@
               </p>
             {/if}
           </div>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={entry.enabled}
-            aria-label={tUi('plugins.manage.toggle')}
-            onclick={() => void setPluginEnabledAdmin(entry.id, !entry.enabled)}
-            class="relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 {entry.enabled
-              ? 'bg-primary'
-              : 'bg-input'}"
-          >
-            <span
-              class="pointer-events-none block size-4 rounded-full bg-background shadow-sm ring-0 transition-transform {entry.enabled
-                ? 'translate-x-4.5'
-                : 'translate-x-0.5'}"
-            ></span>
-          </button>
+          <div class="flex shrink-0 items-center gap-2">
+            {#if gated}
+              <button
+                type="button"
+                onclick={() => void approvePluginAdmin(entry.id)}
+                class="rounded-md bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                {tUi('plugins.manage.approve')}
+              </button>
+            {:else}
+              <button
+                type="button"
+                role="switch"
+                aria-checked={entry.enabled}
+                aria-label={tUi('plugins.manage.toggle')}
+                onclick={() =>
+                  void setPluginEnabledAdmin(entry.id, !entry.enabled)}
+                class="relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 {entry.enabled
+                  ? 'bg-primary'
+                  : 'bg-input'}"
+              >
+                <span
+                  class="pointer-events-none block size-4 rounded-full bg-background shadow-sm ring-0 transition-transform {entry.enabled
+                    ? 'translate-x-4.5'
+                    : 'translate-x-0.5'}"
+                ></span>
+              </button>
+            {/if}
+          </div>
         </div>
       {/each}
     </div>

@@ -17,11 +17,13 @@
 
 import { isTauri } from '$lib/api/core';
 import {
+  pluginsApprove,
   pluginsDisable,
   pluginsEnable,
   pluginsList,
   type PluginRecord
 } from '$lib/api/plugins';
+import { loadPlugins } from './load';
 import { SOURCE_BUILTIN } from './source';
 import {
   allPlugins,
@@ -109,4 +111,20 @@ export async function setPluginEnabledAdmin(
   } catch (err) {
     console.error('[plugins] failed to persist enable/disable', id, err);
   }
+}
+
+/**
+ * Re-approve a gated plugin: the backend accepts its current on-disk manifest
+ * (hash + signer), then we re-discover so it registers + enables and the gate
+ * notification refreshes.
+ */
+export async function approvePluginAdmin(id: string): Promise<void> {
+  try {
+    await pluginsApprove(id);
+  } catch (err) {
+    console.error('[plugins] failed to approve plugin', id, err);
+    return;
+  }
+  await loadPlugins();
+  await refreshPluginAdmin();
 }

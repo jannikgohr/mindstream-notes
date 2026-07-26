@@ -22,6 +22,8 @@ import { isTauri } from '$lib/api/core';
 import { pluginsDiscover, type DiscoveredPluginView } from '$lib/api/plugins';
 import templatesManifest from '../../../src-tauri/core-plugins/templates/manifest.json';
 import { recordPluginLoadError, registerPlugin } from './registry.svelte';
+import { reportGatedPlugins, type GatedPlugin } from './gate-notify';
+import { SOURCE_INSTALLED } from './source';
 
 /** Best-effort id extraction for the error path (manifest may be malformed). */
 function manifestId(manifest: unknown): string {
@@ -30,6 +32,30 @@ function manifestId(manifest: unknown): string {
     if (typeof id === 'string') return id;
   }
   return '<unknown>';
+}
+
+/** Manifest `name`, falling back to `fallback` (for notifications). */
+function manifestName(manifest: unknown, fallback: string): string {
+  if (manifest && typeof manifest === 'object' && 'name' in manifest) {
+    const name = (manifest as { name: unknown }).name;
+    if (typeof name === 'string') return name;
+  }
+  return fallback;
+}
+
+/** Third-party plugins the gate disabled (changed manifest / bad signature). */
+function gatedFromViews(views: DiscoveredPluginView[]): GatedPlugin[] {
+  return views
+    .filter(
+      (v) =>
+        !v.record.enabled &&
+        !!v.record.lastLoadError &&
+        v.record.source === SOURCE_INSTALLED
+    )
+    .map((v) => ({
+      id: v.record.id,
+      name: manifestName(v.manifest, v.record.id)
+    }));
 }
 
 /**
@@ -73,6 +99,9 @@ export async function loadPlugins(): Promise<void> {
   try {
     const views = await pluginsDiscover();
     for (const view of views) applyDiscovered(view);
+    // Surface (or clear) the "needs re-approval" notification for any
+    // third-party plugin the gate disabled.
+    reportGatedPlugins(gatedFromViews(views));
   } catch (err) {
     console.error('[plugins] discovery failed', err);
   }

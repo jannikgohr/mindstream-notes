@@ -141,13 +141,15 @@ export function pluginsDisable(id: string): Promise<PluginRecord> {
   );
 }
 
-export function pluginsApprove(
-  id: string,
-  checksum: string
-): Promise<PluginRecord> {
+/**
+ * Re-approve a gated plugin: the backend re-reads the plugin from disk and
+ * accepts its current manifest hash + signer, then enables it. There is no
+ * frontend-supplied checksum/signer — trust stays location-derived.
+ */
+export function pluginsApprove(id: string): Promise<PluginRecord> {
   return invokeOrFallback<PluginRecord>(
     TauriCommandName.PluginsApprove,
-    { id, checksum },
+    { id },
     () => {
       throw new Error('plugins_approve is unavailable outside Tauri');
     },

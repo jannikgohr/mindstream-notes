@@ -19,6 +19,7 @@ import {
   pluginTemplates,
   resetPluginRegistry
 } from './registry.svelte';
+import { notificationState } from '$lib/notifications/store.svelte';
 
 const CORE_ID = 'com.mindstream.templates.core';
 
@@ -70,7 +71,10 @@ beforeEach(() => {
   isTauri.mockReset();
   pluginsDiscover.mockReset();
 });
-afterEach(() => resetPluginRegistry());
+afterEach(() => {
+  resetPluginRegistry();
+  notificationState.items = [];
+});
 
 describe('loadPlugins — browser (no backend)', () => {
   it('registers the bundled core plugin from its manifest', async () => {
@@ -104,6 +108,10 @@ describe('loadPlugins — Tauri (backend discovery)', () => {
     expect(enabledPlugins()).toHaveLength(0);
     expect(pluginTemplates()).toHaveLength(0);
     expect(pluginLoadError(CORE_ID)).toBe('manifest hash changed');
+    // A gated third-party plugin raises the "needs re-approval" notification.
+    expect(notificationState.items.some((i) => i.kind === 'plugin-gated')).toBe(
+      true
+    );
   });
 
   it('records an error and skips a plugin whose manifest fails validation', async () => {

@@ -79,7 +79,7 @@
   <Button
     variant="ghost"
     size="icon"
-    onclick={openSettings}
+    onclick={() => openSettings()}
     title="Settings"
     aria-label="Open settings"
   >

@@ -114,10 +114,13 @@ fn approve_accepts_new_hash_enables_and_clears_error() {
         upsert(c, upsert_input("com.a.plugin", "hash1", "installed"))?;
         // Simulate a hash change that disabled the plugin.
         upsert(c, upsert_input("com.a.plugin", "hash2", "installed"))?;
-        let rec = approve(c, "com.a.plugin", "hash2")?;
+        let rec = approve(c, "com.a.plugin", "hash2", None, "unsigned")?;
         assert!(rec.enabled);
         assert_eq!(rec.accepted_hash, "hash2");
         assert!(rec.last_load_error.is_none());
+        // A subsequent unchanged discovery keeps it enabled (hash now matches).
+        let rec = upsert(c, upsert_input("com.a.plugin", "hash2", "installed"))?;
+        assert!(rec.enabled);
         Ok(())
     })
     .unwrap();

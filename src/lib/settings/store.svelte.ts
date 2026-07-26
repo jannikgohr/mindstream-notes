@@ -350,12 +350,17 @@ export function isCategoryVisible(category: Category): boolean {
 }
 
 /** Open/close state for the dialog itself. */
-export const settingsDialog = $state({ open: false });
-export function openSettings() {
+export const settingsDialog = $state<{
+  open: boolean;
+  /** A category id to jump to on open (deep-link), consumed by the dialog. */
+  requestedCategory: string | null;
+}>({ open: false, requestedCategory: null });
+export function openSettings(category?: string) {
   // Refresh binding-backed values so the panel reflects any out-of-band
   // changes (autostart toggled from the OS, theme switched in another
   // window, …). Fire-and-forget — the cache update is reactive.
   void hydrateSettings('all');
+  settingsDialog.requestedCategory = category ?? null;
   settingsDialog.open = true;
 }
 export function closeSettings() {
