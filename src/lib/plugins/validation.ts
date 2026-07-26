@@ -295,6 +295,9 @@ export function validateManifest(input: unknown): PluginManifest {
   if (m.descriptionKey !== undefined) {
     assertI18nKey(pluginId, m.descriptionKey, 'manifest.descriptionKey');
   }
+  if (m.documentationKey !== undefined) {
+    assertI18nKey(pluginId, m.documentationKey, 'manifest.documentationKey');
+  }
 
   // Two runtimes are understood: purely-declarative `manifest-only`, and `luau`
   // (a sandboxed backend script). Anything else is refused rather than loaded

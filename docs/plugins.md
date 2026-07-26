@@ -49,7 +49,8 @@ remove the "New from template" affordance entirely.
   "version": "1.0.0",
   "runtime": "manifest-only", // or "luau"
   "entry": "main.luau", // required iff runtime is "luau"; a plain .luau filename
-  "descriptionKey": "plugin.description", // optional i18n key; shown to the user as the plugin's docs
+  "descriptionKey": "plugin.description", // optional i18n key; a short one-line tagline
+  "documentationKey": "plugin.docs", // optional i18n key; long-form markdown shown read-only via a button
   "permissions": [], // see Permissions
   "contributes": {
     /* … */
@@ -92,6 +93,9 @@ is namespaced under the plugin `id`, so two plugins can never collide.
 | `notes.read`           | a `luau` script may read note metadata via `ms.notes`                                   |
 
 A manifest is rejected if it contributes something it didn't ask permission for.
+Each plugin's requested permissions are shown to the user (with friendly labels)
+in Settings → Plugins, alongside its `descriptionKey` tagline and a "View
+documentation" button that renders `documentationKey` markdown read-only.
 
 ## Scripted plugins (`runtime: "luau"`)
 

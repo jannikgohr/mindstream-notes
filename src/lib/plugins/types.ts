@@ -157,11 +157,17 @@ export interface PluginManifest {
   /** Required for `runtime: 'luau'`; a `.luau` file relative to the plugin dir. */
   entry?: string;
   /**
-   * Optional i18n key for a short, user-facing description of what the plugin
-   * does. Shown to the user in the plugin's settings panel + the overview, so a
-   * plugin documents itself. Resolves against the plugin's own i18n bundle.
+   * Optional i18n key for a **short** one-line description (a tagline) shown
+   * next to the plugin in settings. Resolves against the plugin's own i18n
+   * bundle.
    */
   descriptionKey?: string;
+  /**
+   * Optional i18n key for **long-form markdown documentation**, opened from a
+   * "View documentation" button and rendered read-only. Resolves against the
+   * plugin's own i18n bundle.
+   */
+  documentationKey?: string;
   permissions: PluginPermission[];
   contributes: PluginContributions;
 }
