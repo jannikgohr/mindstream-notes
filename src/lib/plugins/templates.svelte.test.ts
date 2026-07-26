@@ -60,6 +60,10 @@ beforeEach(() => {
 });
 afterEach(() => resetPluginRegistry());
 
+// A fixed local-time instant used everywhere date output is asserted, so the
+// expectations are stable regardless of the machine's timezone.
+const NOON = new Date(2026, 6, 25, 14, 5, 9); // Sat 25 Jul 2026, 14:05:09 local
+
 describe('renderTemplateString', () => {
   it('replaces placeholders, tolerating inner whitespace', () => {
     expect(renderTemplateString('a {{x}} {{ y }}', { x: '1', y: '2' })).toBe(
@@ -70,20 +74,65 @@ describe('renderTemplateString', () => {
   it('renders unknown placeholders as empty', () => {
     expect(renderTemplateString('[{{missing}}]', {})).toBe('[]');
   });
+
+  it('resolves built-in date bases with default formats', () => {
+    expect(renderTemplateString('{{date}}', {}, NOON)).toBe('2026-07-25');
+    expect(renderTemplateString('{{time}}', {}, NOON)).toBe('14:05');
+    expect(renderTemplateString('{{datetime}}', {}, NOON)).toBe(
+      '2026-07-25 14:05'
+    );
+  });
+
+  it('applies an explicit format to a date base', () => {
+    expect(renderTemplateString('{{date:YYYY/MM/DD}}', {}, NOON)).toBe(
+      '2026/07/25'
+    );
+    expect(renderTemplateString('{{date:dddd}}', {}, NOON, 'en')).toBe(
+      'Saturday'
+    );
+    expect(renderTemplateString('{{date:dddd}}', {}, NOON, 'de')).toBe(
+      'Samstag'
+    );
+  });
+
+  it('applies chained date offsets before formatting', () => {
+    expect(renderTemplateString('{{date+1d}}', {}, NOON)).toBe('2026-07-26');
+    expect(renderTemplateString('{{date-1M+2d:YYYY-MM-DD}}', {}, NOON)).toBe(
+      '2026-06-27'
+    );
+  });
+
+  it('applies text filters last', () => {
+    expect(renderTemplateString('{{date:dddd|upper}}', {}, NOON, 'en')).toBe(
+      'SATURDAY'
+    );
+    expect(
+      renderTemplateString('{{name|slug}}', { name: 'Hello World!' })
+    ).toBe('hello-world');
+  });
+
+  it('lets a context variable named date override the built-in', () => {
+    // Provided value wins; its format specifier is ignored, as documented.
+    expect(
+      renderTemplateString('{{date:YYYY}}', { date: 'custom' }, NOON)
+    ).toBe('custom');
+  });
+
+  it('renders {{uuid}} as a non-empty unique string', () => {
+    const out = renderTemplateString('{{uuid}}-{{uuid}}', {}, NOON);
+    const [a, b] = out.split('-');
+    expect(a).not.toBe('');
+    expect(a).not.toBe(b);
+  });
 });
 
 describe('buildTemplateContext', () => {
-  it('injects date, applies defaults, and lets provided values win', () => {
+  it('applies defaults and lets provided values win', () => {
     const t = meetingTemplate();
     t.variables = [
       { id: 'owner', labelKey: 'k', type: 'text', default: 'Nobody' }
     ];
-    const ctx = buildTemplateContext(
-      t,
-      { owner: 'Ada' },
-      new Date('2026-07-25T10:00:00Z')
-    );
-    expect(ctx.date).toBe('2026-07-25');
+    const ctx = buildTemplateContext(t, { owner: 'Ada' });
     expect(ctx.owner).toBe('Ada');
   });
 
@@ -93,6 +142,10 @@ describe('buildTemplateContext', () => {
       { id: 'owner', labelKey: 'k', type: 'text', default: 'Nobody' }
     ];
     expect(buildTemplateContext(t).owner).toBe('Nobody');
+  });
+
+  it('does not inject date (resolved at render time instead)', () => {
+    expect('date' in buildTemplateContext(meetingTemplate())).toBe(false);
   });
 });
 
@@ -180,7 +233,10 @@ describe('createNoteFromPluginTemplate', () => {
 });
 
 describe('todayIsoDate', () => {
-  it('formats as YYYY-MM-DD', () => {
-    expect(todayIsoDate(new Date('2026-01-05T23:00:00Z'))).toBe('2026-01-05');
+  it('formats the local date as YYYY-MM-DD', () => {
+    // Local-time construction so the assertion holds in any timezone. Unlike
+    // the previous UTC-based implementation, {{date}} reflects the user's own
+    // calendar day (correct for daily notes near midnight).
+    expect(todayIsoDate(new Date(2026, 0, 5, 23, 0, 0))).toBe('2026-01-05');
   });
 });

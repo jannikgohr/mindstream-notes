@@ -9,18 +9,36 @@
  * for `templates.contribute` (to be shown) and `notes.create` (to be turned
  * into a note by the app).
  *
- * Interpolation is intentionally dumb: `{{name}}` is replaced by a value from
- * the render context, `{{ name }}` with surrounding spaces works too, and an
- * unknown placeholder renders as the empty string (documented rule — a template
- * can reference an optional variable the user left blank without erroring).
- * There is no expression language and no function calls.
+ * Interpolation stays declarative — a plugin ships strings, never code — but is
+ * no longer *dumb*: a placeholder is `{{ base [offset] [:format] [|filter]* }}`
+ * (see template-format.ts). `{{name}}` is still a plain variable lookup and an
+ * unknown placeholder still renders empty (documented rule — a template can
+ * reference an optional variable the user left blank without erroring). On top
+ * of that, built-in date bases (`date`, `time`, `datetime`, `now`) support date
+ * math and moment-style formatting, `{{uuid}}` yields a fresh id, and `|filter`
+ * text transforms apply. There is still no expression language a template can
+ * script and no function calls beyond that fixed vocabulary.
+ *
+ * Precedence when resolving a placeholder's `base`: a context value (a template
+ * variable or provided value) always wins — so a user variable literally named
+ * `date` overrides the built-in, and any `:format`/offset on it is ignored. Only
+ * when `base` is *not* in the context do the built-in date/uuid bases apply.
  */
 
 import { requestOpenNote } from '$lib/stores/open-note-intent.svelte';
 import { createNoteIn } from '$lib/stores/tree.svelte';
 import { getSettingValue } from '$lib/settings/store.svelte';
+import { i18n } from '$lib/settings/i18n.svelte';
 import { pluginById, pluginTemplate } from './registry.svelte';
 import { resolvePluginString } from './plugin-i18n';
+import {
+  applyDateOffset,
+  applyFilter,
+  defaultDateFormat,
+  formatDate,
+  isDateBase,
+  parseExpr
+} from './template-format';
 import type { PluginNoteTemplateContribution, PluginPermission } from './types';
 
 /** Values interpolated into a template, keyed by placeholder name. */
@@ -37,38 +55,68 @@ export function shouldOpenOnCreate(pluginId: string): boolean {
   return getSettingValue(`plugins.${pluginId}.open-on-create`) !== false;
 }
 
-const PLACEHOLDER_RE = /\{\{\s*([\w.-]+)\s*\}\}/g;
+// Captures the inner text of a `{{ … }}` placeholder (no nested braces); the
+// grammar inside is parsed by template-format's parseExpr.
+const PLACEHOLDER_RE = /\{\{\s*([^{}]*?)\s*\}\}/g;
 
-/** Today's date as `YYYY-MM-DD`, the value of the built-in `{{date}}`. */
+/** Today's date as `YYYY-MM-DD` — the default rendering of `{{date}}`. */
 export function todayIsoDate(now: Date = new Date()): string {
-  return now.toISOString().slice(0, 10);
+  return formatDate(now, 'YYYY-MM-DD');
+}
+
+/** A fresh random id for the `{{uuid}}` built-in, with a non-crypto fallback. */
+function newUuid(): string {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+    return crypto.randomUUID();
+  }
+  return `${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}`;
 }
 
 /**
- * Replace every `{{name}}` in `template` with `context[name]`. Unknown names
- * render as an empty string. Pure and synchronous.
+ * Replace every `{{ … }}` placeholder in `template`. A context value always
+ * wins; otherwise built-in date bases (with optional offset/format) and
+ * `{{uuid}}` resolve, and an unknown base renders empty. `|filter` transforms
+ * are applied last. Pure and synchronous given `now`/`locale`.
  */
 export function renderTemplateString(
   template: string,
-  context: TemplateVariables
+  context: TemplateVariables,
+  now: Date = new Date(),
+  locale: string = i18n.language
 ): string {
-  return template.replace(PLACEHOLDER_RE, (_match, name: string) => {
-    const value = context[name];
-    return value == null ? '' : String(value);
+  return template.replace(PLACEHOLDER_RE, (_match, inner: string) => {
+    const { base, offset, format, filters } = parseExpr(inner);
+    let value: string;
+    if (base && Object.prototype.hasOwnProperty.call(context, base)) {
+      value = context[base] ?? '';
+    } else if (isDateBase(base)) {
+      value = formatDate(
+        applyDateOffset(now, offset),
+        format ?? defaultDateFormat(base),
+        locale
+      );
+    } else if (base === 'uuid') {
+      value = newUuid();
+    } else {
+      value = '';
+    }
+    for (const filter of filters) value = applyFilter(value, filter);
+    return value;
   });
 }
 
 /**
- * Build the render context for a template: built-in `date`, then each declared
- * variable's default, then the caller-provided values (which win). A variable
- * literally named `date` therefore overrides the built-in, as documented.
+ * Build the render context for a template: each declared variable's default,
+ * then the caller-provided values (which win). Date/uuid built-ins are *not*
+ * placed here — they are resolved at render time by renderTemplateString — so a
+ * variable literally named `date` (declared or provided) still overrides the
+ * built-in, as documented.
  */
 export function buildTemplateContext(
   template: PluginNoteTemplateContribution,
-  provided: TemplateVariables = {},
-  now: Date = new Date()
+  provided: TemplateVariables = {}
 ): TemplateVariables {
-  const context: TemplateVariables = { date: todayIsoDate(now) };
+  const context: TemplateVariables = {};
   for (const variable of template.variables ?? []) {
     if (variable.default !== undefined) context[variable.id] = variable.default;
   }
@@ -118,21 +166,22 @@ export function renderPluginTemplate(
   provided: TemplateVariables = {},
   now: Date = new Date()
 ): RenderedTemplate {
-  const context = buildTemplateContext(template, provided, now);
+  const context = buildTemplateContext(template, provided);
   const missing = missingRequiredVariable(template, context);
   if (missing) {
     throw new Error(
       `Template "${template.id}" requires a value for variable "${missing}"`
     );
   }
-  let title = renderTemplateString(template.titleTemplate, context).trim();
+  let title = renderTemplateString(template.titleTemplate, context, now).trim();
   if (title === '') {
     title = resolvePluginString(pluginId, template.labelKey);
   }
-  const body = renderTemplateString(template.bodyTemplate, {
-    ...context,
-    title
-  });
+  const body = renderTemplateString(
+    template.bodyTemplate,
+    { ...context, title },
+    now
+  );
   return { title, body };
 }
 
