@@ -116,15 +116,23 @@ export interface PluginContributions {
 }
 
 /**
- * A plugin manifest. `runtime` is `'manifest-only'` for every MVP plugin; the
- * `'js'` variant and `entry` field are reserved so the format doesn't need a
- * breaking change when code execution eventually lands behind signing.
+ * A plugin manifest.
+ *
+ * `runtime` selects how the plugin's contributions are produced:
+ *   - `'manifest-only'` — purely declarative; no executable code (the original
+ *     and still the default slice). Everything comes from the data above.
+ *   - `'luau'` — the plugin ships a sandboxed Luau `entry` script the Rust
+ *     backend runs to produce dynamic output (e.g. computed template
+ *     title/body). The script gets a permission-gated host API (`ms.*`); the
+ *     app, not the script, still performs any note write. `entry` is required
+ *     and must be a safe relative `.luau` filename inside the plugin dir.
  */
 export interface PluginManifest {
   id: string;
   name: string;
   version: string;
-  runtime: 'manifest-only' | 'js';
+  runtime: 'manifest-only' | 'luau';
+  /** Required for `runtime: 'luau'`; a `.luau` file relative to the plugin dir. */
   entry?: string;
   permissions: PluginPermission[];
   contributes: PluginContributions;

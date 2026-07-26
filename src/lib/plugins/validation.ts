@@ -50,6 +50,12 @@ const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
  * since these are opaque map keys, not user-facing slugs.
  */
 const I18N_KEY_RE = /^[A-Za-z0-9]+(?:[-._][A-Za-z0-9]+)*$/;
+/**
+ * A safe `luau` entry filename: a single path segment (letters/digits/`._-`)
+ * ending in `.luau`, with no separators or `..`. The backend joins this onto
+ * the plugin dir, so this is the traversal guard.
+ */
+const SAFE_ENTRY_RE = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*)\.luau$/;
 
 const SETTING_TYPES = new Set<PluginSetting['type']>([
   'toggle',
@@ -285,12 +291,31 @@ export function validateManifest(input: unknown): PluginManifest {
   assertNonEmptyString(pluginId, m.name, 'manifest.name');
   assertNonEmptyString(pluginId, m.version, 'manifest.version');
 
-  // The MVP has no code runtime, so a `js` plugin has nothing to execute it —
-  // refuse to register it rather than load a half-supported plugin.
-  if (m.runtime !== 'manifest-only') {
+  // Two runtimes are understood: purely-declarative `manifest-only`, and `luau`
+  // (a sandboxed backend script). Anything else is refused rather than loaded
+  // half-supported.
+  if (m.runtime !== 'manifest-only' && m.runtime !== 'luau') {
     throw new PluginValidationError(
       pluginId,
-      `manifest.runtime ("${String(m.runtime)}") is unsupported; only "manifest-only" plugins load in this version`
+      `manifest.runtime ("${String(m.runtime)}") is unsupported; expected "manifest-only" or "luau"`
+    );
+  }
+  if (m.runtime === 'luau') {
+    assertNonEmptyString(pluginId, m.entry, 'manifest.entry');
+    // The backend reads `<pluginDir>/<entry>`, so entry must be a safe relative
+    // filename — no separators, no traversal, and a `.luau` extension.
+    if (!SAFE_ENTRY_RE.test(m.entry)) {
+      throw new PluginValidationError(
+        pluginId,
+        `manifest.entry ("${m.entry}") must be a plain .luau filename inside the plugin dir (no "/", "\\\\" or "..")`
+      );
+    }
+  } else if (m.entry !== undefined) {
+    // A declarative plugin has nothing to run; a stray entry is a mistake worth
+    // surfacing rather than silently ignoring.
+    throw new PluginValidationError(
+      pluginId,
+      'manifest.entry is only valid for runtime "luau"'
     );
   }
 

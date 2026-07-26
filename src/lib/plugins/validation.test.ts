@@ -94,10 +94,44 @@ describe('validateManifest', () => {
     ).toThrow(PluginValidationError);
   });
 
-  it('rejects a js runtime in the MVP', () => {
+  it('rejects an unknown runtime', () => {
     expect(() =>
       validateManifest(validManifest({ runtime: 'js', entry: 'main.js' }))
-    ).toThrow(/only "manifest-only"/);
+    ).toThrow(/expected "manifest-only" or "luau"/);
+  });
+
+  it('accepts a luau runtime with a safe entry', () => {
+    const m = validateManifest(
+      validManifest({ runtime: 'luau', entry: 'main.luau' })
+    );
+    expect(m.runtime).toBe('luau');
+    expect(m.entry).toBe('main.luau');
+  });
+
+  it('requires an entry for a luau runtime', () => {
+    expect(() => validateManifest(validManifest({ runtime: 'luau' }))).toThrow(
+      /manifest.entry must be a non-empty string/
+    );
+  });
+
+  it('rejects a traversing or non-.luau entry', () => {
+    for (const entry of [
+      '../evil.luau',
+      'sub/main.luau',
+      'main.lua',
+      'main.js',
+      '.luau'
+    ]) {
+      expect(() =>
+        validateManifest(validManifest({ runtime: 'luau', entry }))
+      ).toThrow(/must be a plain \.luau filename/);
+    }
+  });
+
+  it('rejects an entry on a manifest-only runtime', () => {
+    expect(() =>
+      validateManifest(validManifest({ entry: 'main.luau' }))
+    ).toThrow(/only valid for runtime "luau"/);
   });
 
   it('rejects unknown permissions', () => {
