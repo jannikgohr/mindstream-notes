@@ -84,29 +84,6 @@
               "showIf": { "id": "general.startOnLogin", "equals": true }
             }
           ]
-        },
-        {
-          "id": "general.templates",
-          "settings": [
-            {
-              "id": "templates.showBuiltIn",
-              "scope": "V",
-              "type": "toggle",
-              "default": true
-            },
-            {
-              "id": "templates.sourceFolder",
-              "scope": "V",
-              "type": "text",
-              "default": ""
-            },
-            {
-              "id": "templates.sourceTag",
-              "scope": "V",
-              "type": "text",
-              "default": ""
-            }
-          ]
         }
       ]
     },

@@ -16,6 +16,7 @@ import {
   enabledPlugins,
   pluginById,
   pluginLoadError,
+  pluginSettingsSections,
   pluginTemplates,
   resetPluginRegistry
 } from './registry.svelte';
@@ -82,9 +83,11 @@ describe('loadPlugins — browser (no backend)', () => {
     await loadPlugins();
     const core = pluginById(CORE_ID);
     expect(core?.enabled).toBe(true);
-    expect(core?.manifest.name).toBe('Core Templates');
-    // The real bundled manifest ships two markdown templates.
-    expect(pluginTemplates().length).toBeGreaterThanOrEqual(2);
+    expect(core?.manifest.name).toBe('Templates');
+    // The bundled Templates plugin ships the folder/tag source settings, not
+    // premade note templates.
+    expect(pluginTemplates()).toHaveLength(0);
+    expect(pluginSettingsSections().length).toBeGreaterThanOrEqual(1);
     expect(pluginsDiscover).not.toHaveBeenCalled();
   });
 });

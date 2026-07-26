@@ -781,9 +781,6 @@
     "general.behavior": {
       "label": "Behaviour"
     },
-    "general.templates": {
-      "label": "Templates"
-    },
     "appearance.theme": {
       "label": "Theme"
     },
@@ -867,18 +864,6 @@
     "general.startInTray": {
       "label": "Start in system tray",
       "description": "When launched by your system at login, start hidden in the tray instead of opening the window."
-    },
-    "templates.showBuiltIn": {
-      "label": "Show built-in templates",
-      "description": "Include the app's premade templates in the “New from template” menus. Turn off to use only your own."
-    },
-    "templates.sourceFolder": {
-      "label": "Template folder",
-      "description": "Every markdown note inside a folder with this name becomes a template."
-    },
-    "templates.sourceTag": {
-      "label": "Template tag",
-      "description": "Every markdown note carrying this tag becomes a template."
     },
     "appearance.mode": {
       "label": "Mode"

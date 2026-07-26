@@ -23,23 +23,27 @@ vi.mock('$lib/stores/open-note-intent.svelte', () => ({ requestOpenNote }));
 vi.mock('$lib/settings/store.svelte', () => ({
   getSettingValue: (id: string) => settings.get(id)
 }));
-// A minimal interpolation so we can assert it runs without pulling the registry.
+// A minimal interpolation so we can assert it runs without pulling the registry,
+// plus the open-on-create convention reader.
 vi.mock('$lib/plugins/templates', () => ({
   renderTemplateString: (tpl: string, ctx: Record<string, string>) =>
     tpl.replace(/\{\{\s*(\w+)\s*\}\}/g, (_m, k) =>
       k === 'date' ? '2026-07-26' : (ctx[k] ?? '')
-    )
+    ),
+  shouldOpenOnCreate: (pluginId: string) =>
+    settings.get(`plugins.${pluginId}.open-on-create`) !== false
 }));
 
 import {
-  TEMPLATE_SHOW_BUILTIN,
-  TEMPLATE_SOURCE_FOLDER,
-  TEMPLATE_SOURCE_TAG,
+  TEMPLATES_PLUGIN_ID,
   createNoteFromUserTemplate,
   hasUserTemplates,
-  showBuiltInTemplates,
   userTemplateEntries
 } from './user-templates';
+
+const FOLDER_KEY = `plugins.${TEMPLATES_PLUGIN_ID}.source-folder`;
+const TAG_KEY = `plugins.${TEMPLATES_PLUGIN_ID}.source-tag`;
+const OPEN_KEY = `plugins.${TEMPLATES_PLUGIN_ID}.open-on-create`;
 
 function note(
   id: string,
@@ -81,8 +85,8 @@ describe('userTemplateEntries', () => {
     expect(hasUserTemplates()).toBe(false);
   });
 
-  it('includes markdown notes under a folder with the source name (nested)', () => {
-    settings.set(TEMPLATE_SOURCE_FOLDER, 'Templates');
+  it('includes markdown notes inside the source folder id (nested)', () => {
+    settings.set(FOLDER_KEY, 'root');
     state.collectionsById = {
       root: folder('root', 'Templates'),
       sub: folder('sub', 'Drafts', 'root')
@@ -97,7 +101,7 @@ describe('userTemplateEntries', () => {
   });
 
   it('includes notes carrying the source tag', () => {
-    settings.set(TEMPLATE_SOURCE_TAG, 'tpl');
+    settings.set(TAG_KEY, 'tpl');
     state.notesById = {
       a: note('a', { title: 'Tagged', tags: ['tpl', 'x'] }),
       b: note('b', { title: 'Untagged', tags: ['x'] })
@@ -108,7 +112,7 @@ describe('userTemplateEntries', () => {
   });
 
   it('excludes trashed notes and non-markdown kinds', () => {
-    settings.set(TEMPLATE_SOURCE_TAG, 'tpl');
+    settings.set(TAG_KEY, 'tpl');
     state.notesById = {
       a: note('a', { tags: ['tpl'], trashed: true }),
       b: note('b', { tags: ['tpl'], note_kind: 'kanban' }),
@@ -118,7 +122,7 @@ describe('userTemplateEntries', () => {
   });
 
   it('sorts entries by label', () => {
-    settings.set(TEMPLATE_SOURCE_TAG, 'tpl');
+    settings.set(TAG_KEY, 'tpl');
     state.notesById = {
       a: note('a', { title: 'Zebra', tags: ['tpl'] }),
       b: note('b', { title: 'Apple', tags: ['tpl'] })
@@ -127,14 +131,6 @@ describe('userTemplateEntries', () => {
       'Apple',
       'Zebra'
     ]);
-  });
-});
-
-describe('showBuiltInTemplates', () => {
-  it('defaults to true and honours an explicit false', () => {
-    expect(showBuiltInTemplates()).toBe(true);
-    settings.set(TEMPLATE_SHOW_BUILTIN, false);
-    expect(showBuiltInTemplates()).toBe(false);
   });
 });
 
@@ -153,5 +149,16 @@ describe('createNoteFromUserTemplate', () => {
       '# Daily 2026-07-26\n\n2026-07-26'
     );
     expect(requestOpenNote).toHaveBeenCalledWith('new-note');
+  });
+
+  it('respects the open-on-create toggle when creating', async () => {
+    state.notesById = { src: note('src', { title: 'T' }) };
+    loadNote.mockResolvedValue({ body: 'b' });
+    settings.set(OPEN_KEY, false);
+
+    await createNoteFromUserTemplate('src', null);
+
+    expect(createNoteIn).toHaveBeenCalled();
+    expect(requestOpenNote).not.toHaveBeenCalled();
   });
 });
