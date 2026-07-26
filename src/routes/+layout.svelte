@@ -39,6 +39,7 @@
   import { installSyncTreeRefreshBridge } from '$lib/sync/tree-refresh-bridge';
   import { loadPlugins } from '$lib/plugins/load';
   import { installPluginSettingsBridge } from '$lib/plugins/settings-bridge';
+  import { startPickerSettingPruning } from '$lib/settings/pickers.svelte';
 
   let { children } = $props();
 
@@ -73,6 +74,8 @@
     // the registry is reactive.
     installPluginSettingsBridge();
     void loadPlugins();
+    // Clear any folder/tag picker setting whose target gets deleted.
+    const stopPickerPruning = startPickerSettingPruning();
     // Surface a notification when Rust reports the sync server is
     // unreachable (and clear it on the next successful sync).
     const teardownSyncStatus = installSyncStatusBridge();
@@ -90,6 +93,7 @@
       teardownSyncStatus();
       teardownTreeRefresh();
       void teardownGlobalShortcuts();
+      stopPickerPruning();
     };
   });
 

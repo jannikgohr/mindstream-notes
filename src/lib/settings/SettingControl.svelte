@@ -25,6 +25,8 @@
   } from './registry.svelte';
   import { tDescription, tLabel, tUi, tValue } from './i18n.svelte';
   import SettingSelect from './SettingSelect.svelte';
+  import PickerSelect from './PickerSelect.svelte';
+  import { folderOptions, tagOptions } from './pickers.svelte';
   import type {
     ButtonSetting,
     CustomSetting,
@@ -320,6 +322,22 @@
         value={(value as string | undefined) ?? ''}
         options={visibleOptions}
         onChange={commit}
+        ariaLabel={label}
+      />
+    {:else if setting.type === 'folder'}
+      <PickerSelect
+        value={(value as string | undefined) ?? ''}
+        items={folderOptions()}
+        onChange={commit}
+        unsetLabel={tUi('picker.none')}
+        ariaLabel={label}
+      />
+    {:else if setting.type === 'tag'}
+      <PickerSelect
+        value={(value as string | undefined) ?? ''}
+        items={tagOptions()}
+        onChange={commit}
+        unsetLabel={tUi('picker.none')}
         ariaLabel={label}
       />
     {:else if setting.type === 'color'}

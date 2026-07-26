@@ -38,6 +38,7 @@
     "modified": "Modified",
     "empty": "No settings match your search.",
     "saving": "Saving…",
+    "picker.none": "None",
     "account.managedUnavailable": "Not available yet — pick \"Self-hosted\" to use your own server.",
     "data.openFolder.failed.title": "Couldn't open the data folder",
     "data.openFolder.failed.message": "{error}",

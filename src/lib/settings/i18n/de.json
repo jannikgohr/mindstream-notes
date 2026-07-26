@@ -38,6 +38,7 @@
     "modified": "Geändert",
     "empty": "Keine Einstellungen passen zur Suche.",
     "saving": "Wird gespeichert…",
+    "picker.none": "Keine",
     "account.managedUnavailable": "Noch nicht verfügbar — wähle \"Selbst gehostet\", um deinen eigenen Server zu nutzen.",
     "sort.label": "Sortierung",
     "sort.ascending": "Aufsteigend sortieren",
