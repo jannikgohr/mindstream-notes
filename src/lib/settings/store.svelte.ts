@@ -151,8 +151,18 @@ function loadRaw(vaultId = activeSettingsVaultId): Record<string, unknown> {
   const legacyVaultRaw =
     vaultRaw === null && vaultId === DEFAULT_VAULT_ID ? deviceRaw : null;
   return {
+    // Device bucket: only its device-scoped ids. This key historically also
+    // held vault-scoped values (pre-scoping), so it stays filtered or those
+    // would leak into every vault.
     ...pickScoped(deviceRaw, 'D'),
-    ...pickScoped(vaultRaw ?? legacyVaultRaw, 'V')
+    // Vault bucket: loaded wholesale — a value's *bucket is its scope*.
+    // `persistNow` only ever writes vault-scoped ids here, so everything present
+    // belongs to this vault. We deliberately do NOT re-derive each id's scope
+    // via `scopeForId` on read: a plugin's vault-scoped setting (e.g. the
+    // Templates folder/tag) is loaded at startup *before* its plugin registers,
+    // so `scopeForId` would misclassify it as device-scoped and drop it —
+    // silently losing the value on every restart.
+    ...(vaultRaw ?? legacyVaultRaw ?? {})
   };
 }
 

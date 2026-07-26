@@ -279,3 +279,40 @@ fn run_plugin_script_refuses_a_non_luau_runtime() {
     );
     assert!(out.is_err());
 }
+
+#[test]
+fn remove_plugin_dir_deletes_a_dir_inside_the_plugins_folder() {
+    let base = std::env::temp_dir().join(format!("ms-rm-{}", uuid::Uuid::new_v4()));
+    let plugin = base.join("com.a.plugin");
+    std::fs::create_dir_all(&plugin).unwrap();
+    std::fs::write(plugin.join("manifest.json"), "{}").unwrap();
+
+    remove_plugin_dir(&base, &plugin).unwrap();
+    assert!(!plugin.exists(), "the plugin dir should be gone");
+    std::fs::remove_dir_all(&base).ok();
+}
+
+#[test]
+fn remove_plugin_dir_refuses_a_path_outside_the_plugins_folder() {
+    let base = std::env::temp_dir().join(format!("ms-rm-{}", uuid::Uuid::new_v4()));
+    let outside = std::env::temp_dir().join(format!("ms-rm-out-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&base).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(outside.join("keep.txt"), "keep").unwrap();
+
+    let err = remove_plugin_dir(&base, &outside);
+    assert!(err.is_err(), "a dir outside the plugins folder is refused");
+    assert!(outside.exists(), "the outside dir must be left untouched");
+    std::fs::remove_dir_all(&base).ok();
+    std::fs::remove_dir_all(&outside).ok();
+}
+
+#[test]
+fn remove_plugin_dir_refuses_the_plugins_folder_itself() {
+    let base = std::env::temp_dir().join(format!("ms-rm-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&base).unwrap();
+
+    assert!(remove_plugin_dir(&base, &base).is_err());
+    assert!(base.exists());
+    std::fs::remove_dir_all(&base).ok();
+}

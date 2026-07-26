@@ -311,6 +311,28 @@ pub fn remove(conn: &Connection, id: &str) -> AppResult<()> {
     Ok(())
 }
 
+/// Delete a third-party plugin's directory, refusing anything that isn't
+/// physically inside `third_party_dir`. Both paths are canonicalized first so a
+/// `..` segment or symlink can't escape the plugins folder — defense in depth so
+/// this can never remove a builtin or unrelated directory even if handed a bad
+/// path.
+fn remove_plugin_dir(third_party_dir: &Path, dir: &Path) -> AppResult<()> {
+    let base = third_party_dir
+        .canonicalize()
+        .unwrap_or_else(|_| third_party_dir.to_path_buf());
+    let target = dir
+        .canonicalize()
+        .map_err(|e| AppError::InvalidArg(format!("plugin dir {}: {e}", dir.display())))?;
+    if target == base || !target.starts_with(&base) {
+        return Err(AppError::InvalidArg(format!(
+            "refusing to delete '{}' outside the plugins folder",
+            target.display()
+        )));
+    }
+    std::fs::remove_dir_all(&target)?;
+    Ok(())
+}
+
 // ---------- Scripted (luau) execution ----------
 
 /// Load a `luau` plugin's entry script from `dir` and run its `export` function
@@ -477,8 +499,32 @@ pub fn plugins_set_load_error(
         .map_err(Into::into)
 }
 
+/// Uninstall a plugin: delete its files from the third-party plugins dir — so it
+/// does not reappear on the next discovery — and drop its DB record. A built-in
+/// plugin can't be removed: it ships inside the signed app bundle and discovery
+/// would re-add it, so removing only its record would be a lie. The frontend
+/// hides the trash affordance for builtins; this is the backend enforcement.
 #[tauri::command]
-pub fn plugins_remove(db: tauri::State<'_, Db>, id: String) -> CommandResult<()> {
+pub fn plugins_remove(app: AppHandle, db: State<'_, Db>, id: String) -> CommandResult<()> {
+    if let Some(record) = db.with_conn(|c| get(c, &id))? {
+        if record.source == SOURCE_BUILTIN {
+            return Err(
+                AppError::InvalidArg(format!("cannot remove built-in plugin '{id}'")).into(),
+            );
+        }
+    }
+
+    // Re-locate the plugin on disk (trust stays location-derived) and delete its
+    // directory when it's a third-party install. Already gone from disk is fine —
+    // we still clear the DB record below so a stale row can't linger.
+    let core_dir = discovery::core_plugins_dir(&app)?;
+    let third_party_dir = discovery::third_party_plugins_dir(&app)?;
+    if let Some(plugin) = discovery::find(&core_dir, &third_party_dir, &id) {
+        if plugin.source == SOURCE_INSTALLED {
+            remove_plugin_dir(&third_party_dir, &plugin.dir)?;
+        }
+    }
+
     db.with_conn(|c| remove(c, &id)).map_err(Into::into)
 }
 
