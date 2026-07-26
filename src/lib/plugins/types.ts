@@ -15,17 +15,24 @@
  */
 
 /**
- * Capabilities a plugin may request in its manifest. The MVP grants only the
- * two needed to contribute + create template notes; broad `notes.read` /
- * `notes.write` are deliberately absent — the app, not the plugin, performs the
- * actual note write (see templates.ts).
+ * Capabilities a plugin may request in its manifest:
+ *   - `templates.contribute` — surface note templates in create menus;
+ *   - `notes.create` — have the app create a note from the plugin's template;
+ *   - `notes.read` — a scripted (luau) plugin may read the vault's note metadata
+ *     through `ms.notes` (see src-tauri/src/plugins/luau.rs).
+ * Broad `notes.write` stays deliberately absent — the app, not the plugin,
+ * performs the actual note write (see templates.ts).
  */
-export type PluginPermission = 'templates.contribute' | 'notes.create';
+export type PluginPermission =
+  | 'templates.contribute'
+  | 'notes.create'
+  | 'notes.read';
 
 /** All permissions the current app version understands. */
 export const KNOWN_PLUGIN_PERMISSIONS: readonly PluginPermission[] = [
   'templates.contribute',
-  'notes.create'
+  'notes.create',
+  'notes.read'
 ];
 
 /**
