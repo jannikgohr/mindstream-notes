@@ -99,6 +99,11 @@
             <p class="mt-0.5 truncate font-mono text-xs text-muted-foreground">
               {entry.id}
             </p>
+            {#if entry.description}
+              <p class="mt-1 text-xs text-muted-foreground">
+                {entry.description}
+              </p>
+            {/if}
             {#if entry.loadError}
               <p class="mt-1 text-xs text-destructive">
                 {tUi('plugins.manage.notLoaded')}: {entry.loadError}

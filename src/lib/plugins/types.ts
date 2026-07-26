@@ -156,6 +156,12 @@ export interface PluginManifest {
   runtime: 'manifest-only' | 'luau';
   /** Required for `runtime: 'luau'`; a `.luau` file relative to the plugin dir. */
   entry?: string;
+  /**
+   * Optional i18n key for a short, user-facing description of what the plugin
+   * does. Shown to the user in the plugin's settings panel + the overview, so a
+   * plugin documents itself. Resolves against the plugin's own i18n bundle.
+   */
+  descriptionKey?: string;
   permissions: PluginPermission[];
   contributes: PluginContributions;
 }

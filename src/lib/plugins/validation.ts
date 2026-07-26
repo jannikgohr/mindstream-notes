@@ -292,6 +292,9 @@ export function validateManifest(input: unknown): PluginManifest {
   const pluginId = m.id;
   assertNonEmptyString(pluginId, m.name, 'manifest.name');
   assertNonEmptyString(pluginId, m.version, 'manifest.version');
+  if (m.descriptionKey !== undefined) {
+    assertI18nKey(pluginId, m.descriptionKey, 'manifest.descriptionKey');
+  }
 
   // Two runtimes are understood: purely-declarative `manifest-only`, and `luau`
   // (a sandboxed backend script). Anything else is refused rather than loaded

@@ -32,6 +32,7 @@
   import { pluginCommandLabel } from '$lib/plugins/hotkeys';
   import { pluginsWithSettings } from '$lib/plugins/manage.svelte';
   import { allPlugins, pluginById } from '$lib/plugins/registry.svelte';
+  import { resolvePluginStringOptional } from '$lib/plugins/plugin-i18n';
 
   // The synthetic "Plugins" category appears whenever any plugin is installed
   // (even one with no settings — it still needs a home in the management
@@ -233,6 +234,15 @@
     return tLabel('categories', activeCategory.id);
   });
 
+  /** A selected plugin's own description, shown as its in-app documentation. */
+  const paneDescription = $derived.by<string | undefined>(() => {
+    if (!(isPluginsCategory && activePluginId)) return undefined;
+    return resolvePluginStringOptional(
+      activePluginId,
+      pluginById(activePluginId)?.manifest.descriptionKey
+    );
+  });
+
   function categoryIcon(name: string | undefined) {
     if (!name) return FALLBACK_ICON;
     return SETTINGS_ICONS[name] ?? FALLBACK_ICON;
@@ -357,6 +367,11 @@
             <h2 class="text-base font-semibold">
               {paneHeading}
             </h2>
+            {#if paneDescription}
+              <p class="mt-1 text-sm text-muted-foreground">
+                {paneDescription}
+              </p>
+            {/if}
             {#if showingPluginOverview}
               <PluginsOverview />
             {:else}
