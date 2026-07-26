@@ -4,11 +4,13 @@
   "version": "2.0.0",
   "runtime": "manifest-only",
   "descriptionKey": "plugin.description",
+  "documentationKey": "plugin.docs",
   "permissions": [],
   "contributes": {
     "i18n": {
       "en": {
-        "plugin.description": "Turn your own notes into reusable templates. Pick a folder or a tag below — every markdown note inside that folder, or carrying that tag, becomes a template you can create new notes from via “New from template”. Placeholders like {{date}} and {{title}} are filled in when you use it.",
+        "plugin.description": "Reusable templates from your own notes.",
+        "plugin.docs": "# Templates\n\nCreate new notes from templates you author yourself — there are no built-in templates.\n\n## Choosing template sources\n\nSet either (or both) under **Template sources**:\n\n- **Template folder** — every markdown note inside the chosen folder (at any depth) becomes a template.\n- **Template tag** — every markdown note carrying the chosen tag becomes a template.\n\nBoth are pickers; if the folder or tag is later deleted, the setting clears itself.\n\n## Using a template\n\nOpen **New from template** (the file-tree toolbar button, or the mobile create menu) and pick one. A new note is created from the source note's title and body.\n\n## Placeholders\n\nThe title and body are run through the placeholder engine, so you can write things like:\n\n- `{{date}}`, `{{time}}`, `{{datetime}}`\n- date math and formats: `{{date+7d}}`, `{{date:dddd}}`\n- `{{uuid}}`, `{{title}}`\n- filters: `{{title|slug}}`\n\n## Removing it\n\nDisable this plugin to remove the **New from template** button entirely.",
         "settings.sources.title": "Template sources",
         "settings.sourceFolder.label": "Template folder",
         "settings.sourceFolder.description": "Every markdown note inside this folder becomes a template.",
@@ -18,7 +20,8 @@
         "settings.openOnCreate.description": "Open a note in the editor right after creating it from a template"
       },
       "de": {
-        "plugin.description": "Mache deine eigenen Notizen zu wiederverwendbaren Vorlagen. Wähle unten einen Ordner oder ein Tag – jede Markdown-Notiz in diesem Ordner oder mit diesem Tag wird zu einer Vorlage, aus der du über „Neu aus Vorlage“ neue Notizen erstellst. Platzhalter wie {{date}} und {{title}} werden beim Verwenden ausgefüllt.",
+        "plugin.description": "Wiederverwendbare Vorlagen aus deinen eigenen Notizen.",
+        "plugin.docs": "# Vorlagen\n\nErstelle neue Notizen aus selbst erstellten Vorlagen – es gibt keine integrierten Vorlagen.\n\n## Vorlagenquellen wählen\n\nLege unter **Vorlagenquellen** eine (oder beide) fest:\n\n- **Vorlagenordner** – jede Markdown-Notiz im gewählten Ordner (in beliebiger Tiefe) wird zur Vorlage.\n- **Vorlagen-Tag** – jede Markdown-Notiz mit dem gewählten Tag wird zur Vorlage.\n\nBeide sind Auswahlfelder; wird der Ordner oder das Tag später gelöscht, setzt sich die Einstellung selbst zurück.\n\n## Eine Vorlage verwenden\n\nÖffne **Neu aus Vorlage** (die Schaltfläche in der Dateibaum-Leiste oder das mobile Erstellen-Menü) und wähle eine aus. Aus Titel und Inhalt der Quellnotiz wird eine neue Notiz erstellt.\n\n## Platzhalter\n\nTitel und Inhalt werden durch die Platzhalter-Engine geführt, sodass du z. B. schreiben kannst:\n\n- `{{date}}`, `{{time}}`, `{{datetime}}`\n- Datumsrechnung und -formate: `{{date+7d}}`, `{{date:dddd}}`\n- `{{uuid}}`, `{{title}}`\n- Filter: `{{title|slug}}`\n\n## Entfernen\n\nDeaktiviere dieses Plugin, um die Schaltfläche **Neu aus Vorlage** vollständig zu entfernen.",
         "settings.sources.title": "Vorlagenquellen",
         "settings.sourceFolder.label": "Vorlagenordner",
         "settings.sourceFolder.description": "Jede Markdown-Notiz in diesem Ordner wird zu einer Vorlage.",

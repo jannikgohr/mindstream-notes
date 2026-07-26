@@ -134,6 +134,20 @@ describe('validateManifest', () => {
     ).toThrow(/only valid for runtime "luau"/);
   });
 
+  it('accepts optional description/documentation keys and rejects bad ones', () => {
+    expect(
+      validateManifest(
+        validManifest({
+          descriptionKey: 'plugin.description',
+          documentationKey: 'plugin.docs'
+        })
+      ).descriptionKey
+    ).toBe('plugin.description');
+    expect(() =>
+      validateManifest(validManifest({ descriptionKey: 'has spaces' }))
+    ).toThrow(/manifest.descriptionKey/);
+  });
+
   it('rejects unknown permissions', () => {
     expect(() =>
       validateManifest(validManifest({ permissions: ['notes.write'] }))

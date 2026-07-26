@@ -18,12 +18,29 @@
     setPluginEnabledAdmin
   } from './manage.svelte';
   import { SOURCE_BUILTIN, SOURCE_INSTALLED } from './source';
+  import PluginDocsDialog from './PluginDocsDialog.svelte';
+  import { BookOpen } from '@lucide/svelte';
 
   onMount(() => {
     void refreshPluginAdmin();
   });
 
   const entries = $derived(pluginOverview());
+
+  // Documentation modal (read-only Milkdown), opened per plugin.
+  let docsOpen = $state(false);
+  let docsTitle = $state('');
+  let docsMarkdown = $state('');
+  function openDocs(name: string, markdown: string) {
+    docsTitle = name;
+    docsMarkdown = markdown;
+    docsOpen = true;
+  }
+
+  /** Human label for a permission id (falls back to the raw id if untranslated). */
+  function permissionLabel(perm: string): string {
+    return tUi(`plugins.permission.${perm}`);
+  }
 
   function sourceLabel(source: string): string {
     return source === SOURCE_BUILTIN
@@ -104,6 +121,24 @@
                 {entry.description}
               </p>
             {/if}
+            <p class="mt-1 text-xs text-muted-foreground">
+              {tUi('plugins.permissions.title')}:
+              {#if entry.permissions.length > 0}
+                {entry.permissions.map(permissionLabel).join(', ')}
+              {:else}
+                {tUi('plugins.permissions.none')}
+              {/if}
+            </p>
+            {#if entry.documentation}
+              <button
+                type="button"
+                onclick={() => openDocs(entry.name, entry.documentation ?? '')}
+                class="mt-1.5 inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <BookOpen class="size-3" />
+                {tUi('plugins.docs.view')}
+              </button>
+            {/if}
             {#if entry.loadError}
               <p class="mt-1 text-xs text-destructive">
                 {tUi('plugins.manage.notLoaded')}: {entry.loadError}
@@ -144,3 +179,9 @@
     </div>
   {/if}
 </div>
+
+<PluginDocsDialog
+  bind:open={docsOpen}
+  title={docsTitle}
+  markdown={docsMarkdown}
+/>

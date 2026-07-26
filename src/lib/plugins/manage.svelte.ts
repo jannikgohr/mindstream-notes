@@ -42,6 +42,8 @@ export interface PluginOverviewEntry {
   enabled: boolean;
   /** Localized one-line description (from the manifest's descriptionKey), or null. */
   description: string | null;
+  /** Localized long-form markdown docs (from documentationKey), or null. */
+  documentation: string | null;
   /** Why the plugin isn't contributing, if anything (bad manifest, integrity). */
   loadError: string | null;
   /** Signature verification result: `'unsigned' | 'valid' | 'invalid'`. */
@@ -81,6 +83,9 @@ export function pluginOverview(): PluginOverviewEntry[] {
       enabled,
       description:
         resolvePluginStringOptional(manifest.id, manifest.descriptionKey) ??
+        null,
+      documentation:
+        resolvePluginStringOptional(manifest.id, manifest.documentationKey) ??
         null,
       loadError: pluginLoadError(manifest.id) ?? record?.lastLoadError ?? null,
       signatureStatus: record?.signatureStatus ?? 'unsigned',
