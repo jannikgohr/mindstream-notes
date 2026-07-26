@@ -64,7 +64,9 @@ const SETTING_TYPES = new Set<PluginSetting['type']>([
   'number',
   'slider',
   'color',
-  'text'
+  'text',
+  'folder',
+  'tag'
 ]);
 const VARIABLE_TYPES = new Set<PluginTemplateVariable['type']>([
   'text',

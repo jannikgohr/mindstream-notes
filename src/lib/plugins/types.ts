@@ -72,7 +72,22 @@ export interface PluginSetting {
   descriptionKey?: string;
   /** Reuses the app's vault/device scope model. */
   scope: 'V' | 'D';
-  type: 'toggle' | 'select' | 'radio' | 'number' | 'slider' | 'color' | 'text';
+  /**
+   * Control kind. Besides the basic inputs, `folder` and `tag` are live pickers
+   * fed by the vault (the app's reusable picker primitives) — a plugin declares
+   * one and the app renders the picker + auto-clears it when the target is
+   * deleted; the stored value is a folder id / tag string.
+   */
+  type:
+    | 'toggle'
+    | 'select'
+    | 'radio'
+    | 'number'
+    | 'slider'
+    | 'color'
+    | 'text'
+    | 'folder'
+    | 'tag';
   default?: unknown;
   /** Required for `select`/`radio`; option labels resolve via plugin i18n. */
   options?: string[];
