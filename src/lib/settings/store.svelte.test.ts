@@ -217,6 +217,25 @@ describe('persisted settings parsing', () => {
     expect(hasSettingValue('account.serverType')).toBe(false);
     expect(getSettingValue('account.serverType')).toBe('local-only');
   });
+
+  it('loads a vault-scoped value whose scope is not yet resolvable', () => {
+    // A plugin's vault-scoped setting (e.g. the Templates folder/tag) is read
+    // from the vault bucket at startup before the plugin registers — so no
+    // definition exists and `scopeForId` can't classify it. It must still load:
+    // the bucket a value lives in IS its scope. Switching *to* default persists
+    // the outgoing 'work' vault, not 'default', so the injected value survives.
+    setSettingsVaultId('work');
+    localStorage.setItem(
+      'notes-app:settings:v1:vault:default',
+      JSON.stringify({ 'plugins.com.example.templates.source-folder': 'f-123' })
+    );
+
+    setSettingsVaultId('default');
+
+    expect(getSettingValue('plugins.com.example.templates.source-folder')).toBe(
+      'f-123'
+    );
+  });
 });
 
 describe('isModified', () => {
