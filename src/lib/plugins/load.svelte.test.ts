@@ -111,9 +111,29 @@ describe('loadPlugins — Tauri (backend discovery)', () => {
     expect(enabledPlugins()).toHaveLength(0);
     expect(pluginTemplates()).toHaveLength(0);
     expect(pluginLoadError(CORE_ID)).toBe('manifest hash changed');
-    // A gated third-party plugin raises the "needs re-approval" notification.
+    // A previously-approved plugin that changed (non-empty accepted hash)
+    // raises the "re-approval" notification.
     expect(notificationState.items.some((i) => i.kind === 'plugin-gated')).toBe(
       true
+    );
+  });
+
+  it('raises the separate "new plugin" notification for a never-approved install', async () => {
+    isTauri.mockReturnValue(true);
+    pluginsDiscover.mockResolvedValue([
+      view({
+        enabled: false,
+        lastLoadError: 'new third-party plugin; approve it to enable',
+        // Empty accepted hash marks it as never-approved (vs. changed).
+        acceptedHash: ''
+      })
+    ]);
+    await loadPlugins();
+    expect(notificationState.items.some((i) => i.kind === 'plugin-new')).toBe(
+      true
+    );
+    expect(notificationState.items.some((i) => i.kind === 'plugin-gated')).toBe(
+      false
     );
   });
 
