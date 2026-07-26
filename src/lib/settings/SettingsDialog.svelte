@@ -72,6 +72,16 @@
     pluginsExpanded = true;
   }
 
+  // Honor a deep-link requested via openSettings('<category>') — e.g. a
+  // notification jumping to the Plugins overview. Consumed once.
+  $effect(() => {
+    const requested = settingsDialog.requestedCategory;
+    if (requested) {
+      selectCategory(requested);
+      settingsDialog.requestedCategory = null;
+    }
+  });
+
   const lowerQuery = $derived(query.trim().toLowerCase());
   const catalogueHotkeyGroups = groupedCommands();
   const globalShortcutsEnabled = $derived(

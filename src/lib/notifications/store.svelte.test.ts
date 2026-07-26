@@ -16,10 +16,11 @@ const notif = (
 ): AppNotification => ({
   id,
   kind,
-  // widgetType is decoupled from kind (e.g. the sync-offline kind renders
-  // with the generic widget); keep the historical kind→widget mapping for
-  // the kinds that are also widget types.
-  widgetType: kind === 'sync-offline' ? 'generic' : kind,
+  // widgetType is decoupled from kind (e.g. the sync-offline / plugin-gated
+  // kinds render with the generic widget); keep the historical kind→widget
+  // mapping for the kinds that are also widget types.
+  widgetType:
+    kind === 'sync-offline' || kind === 'plugin-gated' ? 'generic' : kind,
   createdAt: Date.now(),
   data: {},
   ...extra

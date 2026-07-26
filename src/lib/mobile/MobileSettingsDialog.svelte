@@ -68,6 +68,16 @@
     if (!settingsDialog.open) activeCategoryId = null;
   });
 
+  // Honor a deep-link requested via openSettings('<category>') — e.g. a
+  // notification jumping to Plugins. Consumed once.
+  $effect(() => {
+    const requested = settingsDialog.requestedCategory;
+    if (requested) {
+      activeCategoryId = requested;
+      settingsDialog.requestedCategory = null;
+    }
+  });
+
   // Give the category-detail view its own nav-stack level so the Android
   // system back button steps detail → overview before closing settings
   // (the whole settings subsystem's single entry is owned by

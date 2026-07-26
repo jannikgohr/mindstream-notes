@@ -272,14 +272,21 @@ fn set_enabled(conn: &Connection, id: &str, enabled: bool) -> AppResult<PluginRe
     require(conn, id)
 }
 
-/// Accept the given checksum for a plugin (re-approval after a manifest change),
-/// enable it, and clear any load error.
-pub fn approve(conn: &Connection, id: &str, checksum: &str) -> AppResult<PluginRecord> {
+/// Accept the current on-disk manifest for a plugin (re-approval after a change
+/// or a new/rotated signer): pin its checksum + signer, enable it, clear the
+/// load error. Pinning the signer means the author's *next* update auto-approves.
+pub fn approve(
+    conn: &Connection,
+    id: &str,
+    checksum: &str,
+    signer: Option<&str>,
+    signature_status: &str,
+) -> AppResult<PluginRecord> {
     let now = Utc::now().to_rfc3339();
     let changed = conn.execute(
-        "UPDATE plugins SET accepted_hash = ?2, enabled = 1,
-            last_load_error = NULL, updated_at = ?3 WHERE id = ?1",
-        params![id, checksum, now],
+        "UPDATE plugins SET accepted_hash = ?2, signer = ?3, signature_status = ?4,
+            enabled = 1, last_load_error = NULL, updated_at = ?5 WHERE id = ?1",
+        params![id, checksum, signer, signature_status, now],
     )?;
     if changed == 0 {
         return Err(AppError::NotFound(format!("plugin {id}")));
@@ -343,14 +350,31 @@ pub fn plugins_disable(db: tauri::State<'_, Db>, id: String) -> CommandResult<Pl
         .map_err(Into::into)
 }
 
+/// Re-approve a gated plugin by accepting whatever is currently on disk. Trust
+/// is still location-derived (discovery re-reads the dirs); the frontend can't
+/// smuggle in a checksum or signer — they come from the on-disk manifest.
 #[tauri::command]
 pub fn plugins_approve(
-    db: tauri::State<'_, Db>,
+    app: AppHandle,
+    db: State<'_, Db>,
     id: String,
-    checksum: String,
 ) -> CommandResult<PluginRecord> {
-    db.with_conn(|c| approve(c, &id, &checksum))
-        .map_err(Into::into)
+    let core_dir = discovery::core_plugins_dir(&app)?;
+    let third_party_dir = discovery::third_party_plugins_dir(&app)?;
+    let plugin = discovery::discover(&core_dir, &third_party_dir)
+        .into_iter()
+        .find(|p| p.id == id)
+        .ok_or_else(|| AppError::NotFound(format!("plugin {id} not found on disk")))?;
+    db.with_conn(|c| {
+        approve(
+            c,
+            &plugin.id,
+            &plugin.checksum,
+            plugin.signer.as_deref(),
+            &plugin.signature_status,
+        )
+    })
+    .map_err(Into::into)
 }
 
 #[tauri::command]
