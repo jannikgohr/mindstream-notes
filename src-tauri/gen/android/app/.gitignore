@@ -4,3 +4,7 @@
 /tauri.build.gradle.kts
 /proguard-tauri.pro
 /tauri.properties
+# App resources copied into the APK assets at build time from repo-root
+# plugins/ (see src-tauri/tauri.conf.json resources). Regenerated every build;
+# the canonical source is repo-root plugins/, so never commit the copy.
+/src/main/assets/core-plugins/
