@@ -46,6 +46,7 @@ type RenderInput = {
 	title: string?,
 	body: string?,
 	now: string,
+	locale: string?,
 	vars: { [string]: any }?,
 }
 
