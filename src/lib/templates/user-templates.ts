@@ -130,17 +130,38 @@ export async function renderUserTemplateBody(
 }
 
 /**
- * Create a new markdown note from a user template note and open it. The source
- * note's title + body are interpolated (`{{date}}`, `{{title}}`, …) and the new
- * note is created via the app's own `createNoteIn`. Returns the new note id.
+ * Create a new markdown note by copying a source note — its title + body are
+ * interpolated (`{{date}}`, `{{title}}`, …) and written via the app's own
+ * `createNoteIn`. The mechanical half of "create from template": the *policy*
+ * (which note, whether to open) is the caller's. Backs the `createNoteFromNote`
+ * plugin effect and `createNoteFromUserTemplate`. Returns the new note id.
+ */
+export async function createNoteFromNote(
+  sourceNoteId: string,
+  parentId: string | null,
+  opts: { open?: boolean } = {},
+  now: Date = new Date()
+): Promise<string> {
+  const { title, body } = await renderUserTemplate(sourceNoteId, now);
+  const id = await createNoteIn(parentId, title, 'markdown', body);
+  if (opts.open ?? true) requestOpenNote(id);
+  return id;
+}
+
+/**
+ * Create a new markdown note from a user template note and open it (honouring
+ * the Templates plugin's `open-on-create` setting). Thin policy wrapper over
+ * {@link createNoteFromNote}.
  */
 export async function createNoteFromUserTemplate(
   templateNoteId: string,
   parentId: string | null,
   now: Date = new Date()
 ): Promise<string> {
-  const { title, body } = await renderUserTemplate(templateNoteId, now);
-  const id = await createNoteIn(parentId, title, 'markdown', body);
-  if (shouldOpenOnCreate(TEMPLATES_PLUGIN_ID)) requestOpenNote(id);
-  return id;
+  return createNoteFromNote(
+    templateNoteId,
+    parentId,
+    { open: shouldOpenOnCreate(TEMPLATES_PLUGIN_ID) },
+    now
+  );
 }

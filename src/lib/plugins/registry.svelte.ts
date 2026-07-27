@@ -27,7 +27,9 @@ import type {
   PluginI18nContribution,
   PluginManifest,
   PluginNoteTemplateContribution,
-  PluginSettingsContribution
+  PluginSettingsContribution,
+  PluginToolbarButton,
+  PluginToolbarLocation
 } from './types';
 
 /** A plugin known to the registry, with its runtime enabled state. */
@@ -59,6 +61,12 @@ export interface PluginSettingsSectionRef {
 export interface PluginCommandRef {
   pluginId: string;
   command: PluginCommandContribution;
+}
+
+/** A toolbar button paired with its owning plugin. */
+export interface PluginToolbarButtonRef {
+  pluginId: string;
+  button: PluginToolbarButton;
 }
 
 interface RegistryState {
@@ -181,6 +189,23 @@ export function pluginCommands(): PluginCommandRef[] {
     if (!enabled) continue;
     for (const command of manifest.contributes.commands ?? []) {
       out.push({ pluginId: manifest.id, command });
+    }
+  }
+  return out;
+}
+
+/** Toolbar buttons contributed by all enabled plugins for a given host surface,
+ *  in registration order. */
+export function pluginToolbarButtons(
+  location: PluginToolbarLocation
+): PluginToolbarButtonRef[] {
+  const out: PluginToolbarButtonRef[] = [];
+  for (const { manifest, enabled } of Object.values(state.plugins)) {
+    if (!enabled) continue;
+    for (const button of manifest.contributes.toolbar ?? []) {
+      if (button.location === location) {
+        out.push({ pluginId: manifest.id, button });
+      }
     }
   }
   return out;

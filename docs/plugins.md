@@ -33,12 +33,15 @@ templates. It contributes a **Template sources** settings section:
   the chosen tag becomes a template.
 - **Open new template notes** (`open-on-create`, a toggle).
 
-Templates appear in the "New from template" menu (file-tree toolbar + mobile
-FAB). Creating one copies the source note's title + body through the `{{…}}`
-placeholder engine (so `{{date}}`, `{{uuid}}`, etc. are filled in) and the app
-writes the new note. The plugin itself holds no permissions — the app owns the
-note write and reads the two settings by convention. Disable the plugin to
-remove the "New from template" affordance entirely.
+It is a **scripted (`luau`) plugin**: it contributes a "New from template"
+toolbar button (its own SVG icon) whose `main.luau` lists the matching notes and
+returns an `openMenu` of `createNoteFromNote` effects. The app copies the chosen
+note's title + body through the `{{…}}` placeholder engine (so `{{date}}`,
+`{{uuid}}`, etc. are filled in) and writes the new note — the script never
+writes notes itself. It holds `notes.read` (to enumerate candidate notes) and
+`notes.create`. Disable the plugin to remove the button entirely. (The button
+runs only in the desktop app, since Luau is backend-only; the command palette
+and mobile create menu list the same templates via the host.)
 
 ## Manifest
 
@@ -85,6 +88,21 @@ is namespaced under the plugin `id`, so two plugins can never collide.
   Localize a section by adding a sibling with a locale suffix — `docs/getting-started.de.md`
   is used for German, falling back to `docs/getting-started.md`. Paths are
   relative to the plugin dir and must be safe (`.md`, no `..`).
+- **`toolbar`** (`runtime: "luau"` only) — buttons the plugin adds to a host
+  toolbar (currently the file-tree toolbar). Each ships its own bundled `.svg`
+  icon (rendered as a themed monochrome mask) and runs a Luau export on click:
+  ```jsonc
+  "toolbar": [{
+    "id": "new-from-template",
+    "location": "file-tree",
+    "labelKey": "toolbar.newFromTemplate",   // plugin i18n key (tooltip)
+    "icon": "icons/templates.svg",           // safe relative .svg path
+    "action": { "type": "script", "export": "newFromTemplate" }
+  }]
+  ```
+  The export returns a **declarative effect** the app performs (see below) — so
+  one button is either a single action or a sub-menu, depending on what it
+  returns.
 
 ### Placeholder syntax (declarative templates)
 
@@ -136,7 +154,31 @@ return {
 ```
 
 For templates the app performs the note creation from the returned
-`{ title, body }` — the script never writes notes itself.
+`{ title, body }` — the script never writes notes itself. A `noteTemplate` opts
+into this by setting `"render": "<export>"` instead of static
+`titleTemplate`/`bodyTemplate`.
+
+### Effects (toolbar buttons)
+
+A toolbar button's export is called with the context table and returns a
+**declarative effect** — a closed set the app performs on the script's behalf
+(the "plugin computes, app acts" rule). The script never touches the DOM:
+
+| Effect                                                         | Does                                             |
+| -------------------------------------------------------------- | ------------------------------------------------ |
+| `{ effect = "none" }`                                          | nothing                                          |
+| `{ effect = "toast", message, kind? }`                         | show a toast (`kind` `"info"`\|`"error"`)        |
+| `{ effect = "createNote", title, body, parentId? }`            | create + open a note (needs `notes.create`)      |
+| `{ effect = "createNoteFromNote", sourceNoteId, parentId? }`   | copy a source note (interpolated) into a new one |
+| `{ effect = "insertMarkdown", markdown }`                      | insert markdown at the active note's cursor      |
+| `{ effect = "openMenu", items = {{ label, run = <effect> }} }` | show a menu; each item runs its nested effect    |
+
+Returning a terminal effect makes the button a single action; returning
+`openMenu` makes it a sub-menu. The button's `ctx` carries `{ settings, folders,
+activeNoteId, locale, now }`; combined with `ms.notes` (metadata, gated by
+`notes.read`) a script can enumerate/filter notes itself — e.g. the Templates
+plugin lists the notes in its configured folder/tag and returns a menu of
+`createNoteFromNote`.
 
 ### Host API (`ms.*`)
 

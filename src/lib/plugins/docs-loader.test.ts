@@ -2,12 +2,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
   language: 'de',
-  isTauri: vi.fn(() => true),
   readDoc: vi.fn<(id: string, file: string) => Promise<string | null>>()
 }));
 
-vi.mock('$lib/api/core', () => ({ isTauri: h.isTauri }));
-vi.mock('$lib/api/plugins', () => ({ pluginsReadDoc: h.readDoc }));
+// docs-loader reads via the shared plugin-files module; mock it directly.
+vi.mock('./plugin-files', () => ({ readPluginFile: h.readDoc }));
 vi.mock('$lib/settings/i18n.svelte', () => ({
   get i18n() {
     return { language: h.language };
@@ -23,7 +22,6 @@ import {
 
 beforeEach(() => {
   h.language = 'de';
-  h.isTauri.mockReturnValue(true);
   h.readDoc.mockReset();
 });
 

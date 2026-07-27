@@ -1,0 +1,177 @@
+/**
+ * Runs the declarative **effects** a plugin's Luau returns — the "app performs,
+ * the plugin only computes" half of the scripted-plugin contract.
+ *
+ * A toolbar button's click runs a Luau export via `plugins_run_script`; the
+ * return value is parsed into a closed {@link PluginEffect} union and executed
+ * here against app-owned primitives (note creation, insertion, a context menu,
+ * toasts). A script can only pick these effects — it never touches the DOM or
+ * does I/O itself — and note creation is gated on the plugin's `notes.create`
+ * permission, exactly like the declarative tier.
+ *
+ * The single mechanism gives a button either behaviour: return a terminal
+ * effect for a one-shot action, or `openMenu` for a sub-menu (the Templates
+ * picker enumerates its notes in Luau and returns a menu of `createNoteFromNote`).
+ */
+
+import { pluginsRunScript } from '$lib/api/plugins';
+import { createNoteIn } from '$lib/stores/tree.svelte';
+import { requestOpenNote } from '$lib/stores/open-note-intent.svelte';
+import { insertMarkdownIntoActiveNote } from '$lib/hotkeys';
+import { createNoteFromNote } from '$lib/templates/user-templates';
+import { pushToast } from '$lib/components/toast.svelte';
+import type { MenuItem } from '$lib/components/context-menu-types';
+import { buildPluginContext } from './plugin-ctx';
+import { openPluginMenu } from './plugin-menu.svelte';
+import { pluginById } from './registry.svelte';
+import type {
+  PluginEffect,
+  PluginPermission,
+  PluginToolbarButton
+} from './types';
+
+/** Viewport anchor for effects that need a position (a menu). */
+export interface EffectAnchor {
+  x: number;
+  y: number;
+}
+
+function pluginHasPermission(
+  pluginId: string,
+  permission: PluginPermission
+): boolean {
+  return (
+    pluginById(pluginId)?.manifest.permissions.includes(permission) ?? false
+  );
+}
+
+function requireCreate(pluginId: string): void {
+  if (!pluginHasPermission(pluginId, 'notes.create')) {
+    throw new Error(
+      `Plugin "${pluginId}" is not permitted to create notes (missing notes.create)`
+    );
+  }
+}
+
+/**
+ * Validate an untrusted script return value into a {@link PluginEffect}, or
+ * `null` if it isn't one we understand. Defensive: the script is sandboxed but
+ * its JSON is still untrusted, so every field is shape-checked before use, and
+ * `openMenu` items are parsed recursively.
+ */
+export function parsePluginEffect(value: unknown): PluginEffect | null {
+  if (!value || typeof value !== 'object') return null;
+  const e = value as Record<string, unknown>;
+  const parentId = typeof e.parentId === 'string' ? e.parentId : null;
+  switch (e.effect) {
+    case 'none':
+      return { effect: 'none' };
+    case 'toast':
+      if (typeof e.message !== 'string') return null;
+      return {
+        effect: 'toast',
+        message: e.message,
+        kind: e.kind === 'error' ? 'error' : 'info'
+      };
+    case 'createNote':
+      if (typeof e.title !== 'string' || typeof e.body !== 'string')
+        return null;
+      return { effect: 'createNote', title: e.title, body: e.body, parentId };
+    case 'createNoteFromNote':
+      if (typeof e.sourceNoteId !== 'string') return null;
+      return {
+        effect: 'createNoteFromNote',
+        sourceNoteId: e.sourceNoteId,
+        parentId
+      };
+    case 'insertMarkdown':
+      if (typeof e.markdown !== 'string') return null;
+      return { effect: 'insertMarkdown', markdown: e.markdown };
+    case 'openMenu': {
+      if (!Array.isArray(e.items)) return null;
+      const items = [];
+      for (const raw of e.items) {
+        if (!raw || typeof raw !== 'object') continue;
+        const label = (raw as Record<string, unknown>).label;
+        const run = parsePluginEffect((raw as Record<string, unknown>).run);
+        if (typeof label === 'string' && run) items.push({ label, run });
+      }
+      return { effect: 'openMenu', items };
+    }
+    default:
+      return null;
+  }
+}
+
+/** Perform one parsed effect. Note-creating effects require `notes.create`. */
+export async function runPluginEffect(
+  pluginId: string,
+  effect: PluginEffect,
+  anchor?: EffectAnchor
+): Promise<void> {
+  switch (effect.effect) {
+    case 'none':
+      return;
+    case 'toast':
+      pushToast(effect.message, {
+        variant: effect.kind === 'error' ? 'error' : 'info'
+      });
+      return;
+    case 'createNote': {
+      requireCreate(pluginId);
+      const id = await createNoteIn(
+        effect.parentId ?? null,
+        effect.title,
+        effect.noteKind ?? 'markdown',
+        effect.body
+      );
+      requestOpenNote(id);
+      return;
+    }
+    case 'createNoteFromNote':
+      requireCreate(pluginId);
+      await createNoteFromNote(effect.sourceNoteId, effect.parentId ?? null);
+      return;
+    case 'insertMarkdown':
+      insertMarkdownIntoActiveNote(effect.markdown);
+      return;
+    case 'openMenu': {
+      const items: MenuItem[] = effect.items.map((it) => ({
+        label: it.label,
+        onSelect: () => void runPluginEffect(pluginId, it.run, anchor)
+      }));
+      openPluginMenu(anchor?.x ?? 0, anchor?.y ?? 0, items);
+      return;
+    }
+  }
+}
+
+/**
+ * Run a toolbar button: build its context, invoke its Luau export, and perform
+ * the returned effect. Fire-and-forget (menu/toolbar handlers), so failures are
+ * logged rather than thrown out of the click handler. `anchor` positions an
+ * `openMenu` effect under the button.
+ */
+export async function runPluginButton(
+  pluginId: string,
+  button: PluginToolbarButton,
+  anchor?: EffectAnchor
+): Promise<void> {
+  try {
+    const ctx = buildPluginContext(pluginId);
+    const raw = await pluginsRunScript(pluginId, button.action.export, ctx);
+    const effect = parsePluginEffect(raw);
+    if (!effect) {
+      console.error(
+        '[plugins] toolbar button returned an invalid effect',
+        pluginId,
+        button.id,
+        raw
+      );
+      return;
+    }
+    await runPluginEffect(pluginId, effect, anchor);
+  } catch (err) {
+    console.error('[plugins] toolbar button failed', pluginId, button.id, err);
+  }
+}

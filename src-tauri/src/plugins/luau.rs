@@ -750,6 +750,38 @@ mod tests {
     }
 
     #[test]
+    fn script_builds_an_open_menu_from_notes_and_ctx() {
+        // The pattern a toolbar button uses: filter `ms.notes` by a setting from
+        // `ctx`, and return an `openMenu` effect of `createNoteFromNote` items.
+        let mut r = req(
+            r#"return { newFromTemplate = function(ctx)
+                 local items = {}
+                 for _, n in ipairs(ms.notes.all()) do
+                   if n.tags[1] == ctx.settings.tag then
+                     items[#items + 1] = {
+                       label = n.title,
+                       run = { effect = "createNoteFromNote", sourceNoteId = n.id },
+                     }
+                   end
+                 end
+                 return { effect = "openMenu", items = items }
+               end }"#,
+            "newFromTemplate",
+            serde_json::json!({ "settings": { "tag": "tpl" } }),
+            &["notes.read"],
+        );
+        r.notes = vec![note("a", "Alpha", &["tpl"]), note("b", "Beta", &["x"])];
+        let out = run(r).unwrap();
+        assert_eq!(out["effect"], serde_json::json!("openMenu"));
+        assert_eq!(out["items"].as_array().unwrap().len(), 1);
+        assert_eq!(out["items"][0]["label"], serde_json::json!("Alpha"));
+        assert_eq!(
+            out["items"][0]["run"]["effect"],
+            serde_json::json!("createNoteFromNote")
+        );
+    }
+
+    #[test]
     fn format_moment_covers_the_token_set() {
         use chrono::TimeZone;
         let dt = chrono::Local

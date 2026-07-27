@@ -177,6 +177,70 @@ describe('validateManifest', () => {
     expect(() => validateManifest(m)).toThrow(/duplicate documentation file/);
   });
 
+  // --- Toolbar buttons + Luau macros ---
+  const luauButton = {
+    id: 'new-from-template',
+    location: 'file-tree',
+    labelKey: 'toolbar.newFromTemplate',
+    icon: 'icons/templates.svg',
+    action: { type: 'script', export: 'newFromTemplate' }
+  };
+  /** A luau manifest (toolbar/render require it) with `mutate`d contributes. */
+  function luauManifest(
+    mutate: (c: Record<string, unknown>) => void
+  ): Record<string, unknown> {
+    const m = validManifest({ runtime: 'luau', entry: 'main.luau' });
+    mutate(m.contributes as Record<string, unknown>);
+    return m;
+  }
+
+  it('accepts a toolbar button on a luau plugin', () => {
+    const m = luauManifest((c) => {
+      c.toolbar = [luauButton];
+    });
+    expect(validateManifest(m).contributes.toolbar).toHaveLength(1);
+  });
+
+  it('rejects toolbar buttons on a manifest-only runtime', () => {
+    const m = withContributes((c) => {
+      c.toolbar = [luauButton];
+    });
+    expect(() => validateManifest(m)).toThrow(/require runtime "luau"/);
+  });
+
+  it('rejects a toolbar icon that is not a safe .svg path', () => {
+    for (const icon of ['../evil.svg', 'icons/logo.png', '/abs/x.svg']) {
+      const m = luauManifest((c) => {
+        c.toolbar = [{ ...luauButton, icon }];
+      });
+      expect(() => validateManifest(m)).toThrow(/safe relative .svg path/);
+    }
+  });
+
+  it('rejects an unknown toolbar location and action type', () => {
+    const badLoc = luauManifest((c) => {
+      c.toolbar = [{ ...luauButton, location: 'sidebar' }];
+    });
+    expect(() => validateManifest(badLoc)).toThrow(/toolbar location/);
+    const badAction = luauManifest((c) => {
+      c.toolbar = [{ ...luauButton, action: { type: 'open-url' } }];
+    });
+    expect(() => validateManifest(badAction)).toThrow(
+      /supported toolbar action/
+    );
+  });
+
+  it('accepts a template render export on a luau plugin, rejects it otherwise', () => {
+    const ok = luauManifest((c) => {
+      (c.noteTemplates as Record<string, unknown>[])[0].render = 'render';
+    });
+    expect(() => validateManifest(ok)).not.toThrow();
+    const bad = withContributes((c) => {
+      (c.noteTemplates as Record<string, unknown>[])[0].render = 'render';
+    });
+    expect(() => validateManifest(bad)).toThrow(/requires runtime "luau"/);
+  });
+
   it('rejects unknown permissions', () => {
     expect(() =>
       validateManifest(validManifest({ permissions: ['notes.write'] }))
