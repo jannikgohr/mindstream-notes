@@ -7,10 +7,10 @@ script when they need real logic.
 
 ## Where plugins live
 
-| Kind                    | Location                                                                         | Trust                                                           |
-| ----------------------- | -------------------------------------------------------------------------------- | --------------------------------------------------------------- |
-| First-party (bundled)   | repo-root `plugins/<name>/` → shipped in the app as the `core-plugins/` resource | `builtin` — trusted by location, ships in the signed app bundle |
-| Third-party (installed) | `<profile>/plugins/<name>/` in the app-data dir                                  | `installed` — subject to the integrity gate below               |
+| Kind                    | Location                                                                  | Trust                                                           |
+| ----------------------- | ------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| First-party (bundled)   | repo-root `plugins/<name>/` → embedded in the app binary (`include_dir!`) | `builtin` — trusted by location, ships inside the signed binary |
+| Third-party (installed) | `<profile>/plugins/<name>/` in the app-data dir                           | `installed` — subject to the integrity gate below               |
 
 Trust is decided **only by which directory a plugin was read from**, never by
 anything inside its manifest. Dropping a copy of a built-in plugin into the
@@ -34,14 +34,16 @@ templates. It contributes a **Template sources** settings section:
 - **Open new template notes** (`open-on-create`, a toggle).
 
 It is a **scripted (`luau`) plugin**: it contributes a "New from template"
-toolbar button (its own SVG icon) whose `main.luau` lists the matching notes and
-returns an `openMenu` of `createNoteFromNote` effects. The app copies the chosen
-note's title + body through the `{{…}}` placeholder engine (so `{{date}}`,
-`{{uuid}}`, etc. are filled in) and writes the new note — the script never
-writes notes itself. It holds `notes.read` (to enumerate candidate notes) and
-`notes.create`. Disable the plugin to remove the button entirely. (The button
-runs only in the desktop app, since Luau is backend-only; the command palette
-and mobile create menu list the same templates via the host.)
+toolbar button (its own SVG icon) whose `main.luau` lists the matching notes
+(`ms.notes` + the folder/tag settings) and, when one is picked, renders the
+chosen note's title + body itself — the `{{…}}` engine lives in the plugin
+(`renderTemplate`, split into `lib/template.luau` and loaded via `require`), so
+`{{date}}`, `{{uuid}}`, filters, etc. are filled in by Luau. The app only
+performs the resulting write (the script never writes notes itself). It holds
+`notes.read` and `notes.create`. Disable the plugin to remove the button
+entirely. Rendering runs in the backend, so user templates appear only in the
+app, not the web build; the toolbar button is a desktop affordance, while the
+command palette and mobile create menu offer the same templates.
 
 ## Manifest
 
@@ -129,10 +131,11 @@ read-only.
 
 ## Scripted plugins (`runtime: "luau"`)
 
-A `luau` plugin ships one Luau script (`entry`). The script runs in a **sandbox
-in the Rust backend** (never the WebView): a fresh VM per call, Luau's curated
-stdlib (no `io`, `os.execute`, `require`, or `ffi`), a memory cap, and a
-wall-clock deadline. It cannot touch the filesystem, network, or other notes
+A `luau` plugin ships one or more `.luau` files (an `entry` plus any modules it
+`require`s — see below). The script runs in a **sandbox in the Rust backend**
+(never the WebView): a fresh VM per call, Luau's curated stdlib (no `io`,
+`os.execute`, `package`, or `ffi`; `require` is plugin-scoped), a memory cap, and
+a wall-clock deadline. It cannot touch the filesystem, network, or other notes
 except through the gated host API.
 
 ### Entry contract
