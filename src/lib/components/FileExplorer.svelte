@@ -4,7 +4,6 @@
   import {
     ChevronRight,
     Feather,
-    FileStack,
     FileText,
     Folder,
     FolderOpen,
@@ -19,11 +18,10 @@
   import FavouriteStar from './FavouriteStar.svelte';
   import { noteKindIcon } from './note-kind-icon';
   import { noteTypeEnabled } from '$lib/notes/note-types';
-  import {
-    hasTemplateEntries,
-    templateMenuEntries,
-    runTemplateEntry
-  } from '$lib/plugins/menu';
+  import { pluginToolbarButtons } from '$lib/plugins/registry.svelte';
+  import { runPluginButton } from '$lib/plugins/effects';
+  import { resolvePluginString } from '$lib/plugins/plugin-i18n';
+  import PluginIcon from '$lib/plugins/PluginIcon.svelte';
   import { tooltip } from '$lib/actions/tooltip';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
@@ -366,27 +364,17 @@
     currentMenuItems = [];
   }
 
-  // Toolbar "New from template" affordance: opens the shared context menu with
-  // just the plugin template entries, anchored under the button. Reuses the
-  // same ContextMenu render path so a template creates + opens a note exactly
-  // as it does from the right-click menu. Creates at the current root (null).
-  function openTemplateMenu(e: MouseEvent) {
-    const entries = templateMenuEntries();
-    if (entries.length === 0) return;
+  /** Open a plugin toolbar button's action, anchoring any menu under it. */
+  function onPluginToolbarClick(
+    e: MouseEvent,
+    pluginId: string,
+    button: Parameters<typeof runPluginButton>[1]
+  ) {
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    menuToken += 1;
-    menuX = rect.left;
-    menuY = rect.bottom + 4;
-    menuTarget = { kind: 'root' };
-    currentMenuItems = entries.map((entry) => ({
-      id:
-        entry.kind === 'plugin'
-          ? `plugin-template:${entry.pluginId}:${entry.templateId}`
-          : `user-template:${entry.noteId}`,
-      label: entry.label,
-      onSelect: () => void runTemplateEntry(entry, null)
-    }));
-    menuOpen = true;
+    void runPluginButton(pluginId, button, {
+      x: rect.left,
+      y: rect.bottom + 4
+    });
   }
 
   async function runNoteExporter(
@@ -884,18 +872,23 @@
             <FileUp class="size-3.5" />
           </Button>
         {/if}
-        {#if hasTemplateEntries()}
+        {#each pluginToolbarButtons('file-tree') as tb (`${tb.pluginId}:${tb.button.id}`)}
+          {@const label = resolvePluginString(tb.pluginId, tb.button.labelKey)}
           <Button
             variant="ghost"
             size="icon"
-            onclick={openTemplateMenu}
-            title={tUi('nav.create.fromTemplate')}
-            aria-label={tUi('nav.create.fromTemplate')}
+            onclick={(e) => onPluginToolbarClick(e, tb.pluginId, tb.button)}
+            title={label}
+            aria-label={label}
             class="size-7"
           >
-            <FileStack class="size-3.5" />
+            <PluginIcon
+              pluginId={tb.pluginId}
+              file={tb.button.icon}
+              class="size-3.5"
+            />
           </Button>
-        {/if}
+        {/each}
         <Button
           variant="ghost"
           size="icon"
