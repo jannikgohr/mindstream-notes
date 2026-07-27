@@ -341,6 +341,44 @@ fn run_plugin_script_executes_luau_entry_with_input() {
 }
 
 #[test]
+fn templates_plugin_renders_macros_in_lua() {
+    // The embedded Templates plugin renders `{{…}}` itself (in Luau, via its
+    // required lib/template module) — proof the macro engine is plugin-owned.
+    let plugin = super::discovery::discover_builtins()
+        .into_iter()
+        .find(|p| p.id == "com.mindstream.templates.core")
+        .expect("embedded Templates plugin");
+    let out = run_plugin_script(
+        &plugin.files,
+        &plugin.manifest,
+        vec!["notes.read".into(), "notes.create".into()],
+        "renderTemplate",
+        serde_json::json!({
+            "title": "Log {{date:YYYY}}",
+            "body": "# {{title|upper}}\nid={{uuid}}\nweek={{date+7d:YYYY-MM-DD}}",
+            "now": "2026-07-25T10:00:00Z",
+        }),
+        Vec::new(),
+    )
+    .unwrap();
+    assert_eq!(out["title"], serde_json::json!("Log 2026"));
+    let body = out["body"].as_str().unwrap();
+    assert!(
+        body.starts_with("# LOG 2026\n"),
+        "title rendered then uppercased: {body}"
+    );
+    assert!(
+        body.contains("id=") && body.len() > 20,
+        "uuid interpolated: {body}"
+    );
+    // +7d from 2026-07-25 rolls into August (exact day varies with local tz).
+    assert!(
+        body.contains("week=2026-08-0"),
+        "date offset applied: {body}"
+    );
+}
+
+#[test]
 fn run_plugin_script_refuses_a_non_luau_runtime() {
     let manifest = serde_json::json!({ "id": "x", "runtime": "manifest-only" });
     let out = run_plugin_script(

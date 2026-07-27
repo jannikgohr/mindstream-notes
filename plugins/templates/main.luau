@@ -36,6 +36,19 @@ type MenuItem = {
 -- (without it, Luau pins the return type to whichever branch returns first).
 type Effect = { effect: "toast", message: string } | { effect: "openMenu", items: { MenuItem } }
 
+-- The `{{ … }}` macro engine lives in its own module, loaded via the
+-- plugin-scoped `require`.
+local template = require("./lib/template")
+
+-- What the host passes `renderTemplate`: a note's raw title/body, the "now"
+-- moment as RFC3339, and any extra `{{var}}` values.
+type RenderInput = {
+	title: string?,
+	body: string?,
+	now: string,
+	vars: { [string]: any }?,
+}
+
 -- True when `folderId` is `targetId` or has it as an ancestor (walks parents,
 -- guarding against cycles).
 local function isUnder(folderId: string, targetId: string, parentById: { [string]: string? }): boolean
@@ -117,4 +130,20 @@ local function newFromTemplate(ctx: Context): Effect
 	return { effect = "openMenu", items = items }
 end
 
-return { newFromTemplate = newFromTemplate }
+-- Render a template note's title + body through the `{{…}}` engine. The title is
+-- rendered first so the body can reference the final `{{title}}`.
+local function renderTemplate(input: RenderInput): { title: string, body: string }
+	local vars: { [string]: any } = {}
+	if input.vars ~= nil then
+		for key, value in pairs(input.vars) do
+			vars[key] = value
+		end
+	end
+	local ctx = { now = input.now, vars = vars }
+	local title = template.render(input.title or "", ctx)
+	vars.title = title
+	local body = template.render(input.body or "", ctx)
+	return { title = title, body = body }
+end
+
+return { newFromTemplate = newFromTemplate, renderTemplate = renderTemplate }
