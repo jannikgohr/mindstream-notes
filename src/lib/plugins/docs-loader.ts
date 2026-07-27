@@ -7,74 +7,15 @@
  * `de`, it tries `docs/guide.de.md` and falls back to `docs/guide.md` — the same
  * active-locale→English fallback used across the app.
  *
- * Two read paths behind one API:
- *   - **Tauri** — the backend reads the file from the plugin dir (path-guarded);
- *   - **browser build** — the bundled core plugins' docs are pulled in at build
- *     time via `import.meta.glob(..?raw)`, since there is no filesystem.
- *
- * The section's nav title is the markdown's first `# H1`, falling back to a
- * prettified filename — so authors never write title strings in the manifest.
+ * Reading + locale fallback go through the shared `readPluginFile` (Tauri
+ * backend or the browser build-time glob). The section's nav title is the
+ * markdown's first `# H1`, falling back to a prettified filename — so authors
+ * never write title strings in the manifest.
  */
 
-import { isTauri } from '$lib/api/core';
-import { pluginsReadDoc } from '$lib/api/plugins';
 import { i18n } from '$lib/settings/i18n.svelte';
+import { readPluginFile } from './plugin-files';
 import type { PluginDocSection } from './types';
-
-/* --- Browser build: bundled core-plugin docs -------------------------------
- *
- * Globs are relative to this file (src/lib/plugins/), reaching the repo-root
- * `plugins/` dir the same way load.ts imports the bundled manifest. Only the
- * bundled core plugins are present in a browser build; third-party plugins never
- * reach it (they need the Tauri filesystem).
- */
-const manifestModules = import.meta.glob<{
-  id?: string;
-  default?: { id?: string };
-}>('../../../plugins/*/manifest.json', { eager: true });
-const docModules = import.meta.glob<string>('../../../plugins/*/docs/**/*.md', {
-  query: '?raw',
-  import: 'default',
-  eager: true
-});
-
-/** Extract `<folder>` and the plugin-relative path from a globbed file path. */
-function splitPluginPath(path: string): { folder: string; rel: string } | null {
-  const m = /\/plugins\/([^/]+)\/(.+)$/.exec(path);
-  return m ? { folder: m[1], rel: m[2] } : null;
-}
-
-/** plugin id → its bundling folder name, from the globbed manifests. */
-const folderById: Record<string, string> = (() => {
-  const out: Record<string, string> = {};
-  for (const [path, mod] of Object.entries(manifestModules)) {
-    const split = splitPluginPath(path);
-    const id = mod.default?.id ?? mod.id;
-    if (split && typeof id === 'string') out[id] = split.folder;
-  }
-  return out;
-})();
-
-/** `<folder>/<relPath>` → raw markdown, from the globbed doc files. */
-const docByKey: Record<string, string> = (() => {
-  const out: Record<string, string> = {};
-  for (const [path, content] of Object.entries(docModules)) {
-    const split = splitPluginPath(path);
-    if (split) out[`${split.folder}/${split.rel}`] = content;
-  }
-  return out;
-})();
-
-/** Read one exact plugin-relative file, or `null` if absent. */
-async function readPluginFile(
-  pluginId: string,
-  rel: string
-): Promise<string | null> {
-  if (isTauri()) return pluginsReadDoc(pluginId, rel);
-  const folder = folderById[pluginId];
-  if (!folder) return null;
-  return docByKey[`${folder}/${rel}`] ?? null;
-}
 
 /** `docs/guide.md` + `de` → `docs/guide.de.md`. */
 function withLocaleSuffix(file: string, locale: string): string {

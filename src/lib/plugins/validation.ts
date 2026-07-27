@@ -19,6 +19,7 @@
 
 import {
   KNOWN_PLUGIN_PERMISSIONS,
+  PLUGIN_TOOLBAR_LOCATIONS,
   type PluginDocSection,
   type PluginManifest,
   type PluginNoteTemplateContribution,
@@ -26,7 +27,9 @@ import {
   type PluginSetting,
   type PluginSettingsContribution,
   type PluginCommandContribution,
-  type PluginTemplateVariable
+  type PluginTemplateVariable,
+  type PluginToolbarButton,
+  type PluginToolbarLocation
 } from './types';
 
 export class PluginValidationError extends Error {
@@ -65,6 +68,11 @@ const SAFE_ENTRY_RE = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*)\.luau$/;
  */
 const SAFE_DOC_PATH_RE =
   /^[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)*\.md$/;
+/** Same shape as {@link SAFE_DOC_PATH_RE} but for a bundled `.svg` icon. */
+const SAFE_SVG_PATH_RE =
+  /^[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)*\.svg$/;
+/** A Luau export name — a plain identifier looked up as `table[name]`. */
+const EXPORT_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 const SETTING_TYPES = new Set<PluginSetting['type']>([
   'toggle',
@@ -169,12 +177,24 @@ function validateTemplate(
       `${path}.noteKind ("${String(t.noteKind)}") is unsupported; only "markdown" is allowed`
     );
   }
-  assertNonEmptyString(pluginId, t?.titleTemplate, `${path}.titleTemplate`);
-  if (typeof t.bodyTemplate !== 'string') {
-    throw new PluginValidationError(
-      pluginId,
-      `${path}.bodyTemplate must be a string`
-    );
+  if (t.render !== undefined) {
+    // A Luau-computed template: the script produces title/body, so the static
+    // templates are optional. Only the export name is validated here; that it
+    // requires runtime:'luau' is checked once in validateManifest.
+    if (typeof t.render !== 'string' || !EXPORT_NAME_RE.test(t.render)) {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.render must be a Luau export name (letters, digits, underscore)`
+      );
+    }
+  } else {
+    assertNonEmptyString(pluginId, t?.titleTemplate, `${path}.titleTemplate`);
+    if (typeof t.bodyTemplate !== 'string') {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.bodyTemplate must be a string`
+      );
+    }
   }
   const seen = new Set<string>();
   for (const [i, v] of (t.variables ?? []).entries()) {
@@ -296,6 +316,49 @@ function validateDocSection(
   }
 }
 
+const TOOLBAR_LOCATIONS = new Set<PluginToolbarLocation>(
+  PLUGIN_TOOLBAR_LOCATIONS
+);
+
+function validateToolbarButton(
+  pluginId: string,
+  b: PluginToolbarButton,
+  path: string
+): void {
+  assertSlug(pluginId, b?.id, `${path}.id`);
+  if (!TOOLBAR_LOCATIONS.has(b?.location)) {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.location ("${String(b?.location)}") is not a supported toolbar location`
+    );
+  }
+  assertI18nKey(pluginId, b?.labelKey, `${path}.labelKey`);
+  assertNonEmptyString(pluginId, b?.icon, `${path}.icon`);
+  if (!SAFE_SVG_PATH_RE.test(b.icon)) {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.icon ("${b.icon}") must be a safe relative .svg path inside the plugin dir (no "..", absolute paths, or "\\\\")`
+    );
+  }
+  // The action union is closed. Today the only kind runs a Luau export; the
+  // manifest can't smuggle arbitrary behaviour, only pick this mechanism.
+  if (b?.action?.type !== 'script') {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.action.type ("${String(b?.action?.type)}") is not a supported toolbar action`
+    );
+  }
+  if (
+    typeof b.action.export !== 'string' ||
+    !EXPORT_NAME_RE.test(b.action.export)
+  ) {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.action.export must be a Luau export name (letters, digits, underscore)`
+    );
+  }
+}
+
 /**
  * Validate a manifest end-to-end. Returns the same object (typed) on success;
  * throws {@link PluginValidationError} on the first problem. Pure — it never
@@ -402,6 +465,13 @@ export function validateManifest(input: unknown): PluginManifest {
       'contributes noteTemplates but is missing the "templates.contribute" permission'
     );
   }
+  // A `render` macro is a Luau export, so it only makes sense on a luau plugin.
+  if (templates.some((t) => t.render !== undefined) && m.runtime !== 'luau') {
+    throw new PluginValidationError(
+      pluginId,
+      'a template "render" export requires runtime "luau"'
+    );
+  }
 
   // ---- Settings --------------------------------------------------------
   const settings = contributes.settings ?? [];
@@ -462,6 +532,33 @@ export function validateManifest(input: unknown): PluginManifest {
       );
     }
     seenDocFiles.add(d.file);
+  }
+
+  // ---- Toolbar buttons -------------------------------------------------
+  const toolbar = contributes.toolbar ?? [];
+  if (!Array.isArray(toolbar)) {
+    throw new PluginValidationError(
+      pluginId,
+      'manifest.contributes.toolbar must be an array'
+    );
+  }
+  const seenToolbarIds = new Set<string>();
+  for (const [i, b] of toolbar.entries()) {
+    validateToolbarButton(pluginId, b, `toolbar[${i}]`);
+    if (seenToolbarIds.has(b.id)) {
+      throw new PluginValidationError(
+        pluginId,
+        `duplicate toolbar button id "${b.id}"`
+      );
+    }
+    seenToolbarIds.add(b.id);
+  }
+  // Toolbar buttons run a Luau export on click, so they require a luau runtime.
+  if (toolbar.length > 0 && m.runtime !== 'luau') {
+    throw new PluginValidationError(
+      pluginId,
+      'contributes toolbar buttons, which run a Luau export and require runtime "luau"'
+    );
   }
 
   // ---- i18n ------------------------------------------------------------

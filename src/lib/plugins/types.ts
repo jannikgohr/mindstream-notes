@@ -69,6 +69,14 @@ export interface PluginNoteTemplateContribution {
   titleTemplate: string;
   bodyTemplate: string;
   variables?: PluginTemplateVariable[];
+  /**
+   * Optional Luau macro (`runtime: 'luau'` plugins only): the name of an
+   * exported function `render(ctx) -> { title, body }` that computes the note
+   * instead of the declarative `titleTemplate`/`bodyTemplate`. When set, the app
+   * runs the script and uses its result; the app — never the script — still
+   * performs the note write.
+   */
+  render?: string;
 }
 
 /** A single generic setting control a plugin adds under its section. */
@@ -129,6 +137,66 @@ export interface PluginCommandContribution {
   action: PluginCommandAction;
 }
 
+/** Host surfaces a plugin may place a toolbar button in. */
+export const PLUGIN_TOOLBAR_LOCATIONS = ['file-tree'] as const;
+export type PluginToolbarLocation = (typeof PLUGIN_TOOLBAR_LOCATIONS)[number];
+
+/**
+ * What a toolbar button does when clicked. A closed union so a button can only
+ * pick a host-understood mechanism, never smuggle code. Currently the sole kind
+ * runs a Luau export whose *return value* is a {@link PluginEffect} the host
+ * performs — which is what lets one button be either a single action or a
+ * sub-menu (the script decides by returning a terminal effect vs. `openMenu`).
+ */
+export type PluginToolbarAction = {
+  type: 'script';
+  /** Exported Luau function name; called with the button `ctx` on click. */
+  export: string;
+};
+
+/** A toolbar button a plugin contributes into a host surface. */
+export interface PluginToolbarButton {
+  /** Plugin-local slug; the app-wide id is `plugin.<pluginId>.<id>`. */
+  id: string;
+  location: PluginToolbarLocation;
+  /** Plugin i18n key for the tooltip / aria-label. */
+  labelKey: string;
+  /** Safe relative path to a bundled `.svg` icon (rendered themed via a mask). */
+  icon: string;
+  action: PluginToolbarAction;
+}
+
+/**
+ * A declarative effect a plugin's Luau returns for the host to perform — the
+ * plugin computes, the app acts (the runtime's "a script never writes" rule).
+ * A closed union: the host executes only these, permission-gated. `openMenu`
+ * nests effects, so a script can return a whole sub-menu of actions from one
+ * call (e.g. a template picker).
+ */
+export type PluginEffect =
+  | { effect: 'none' }
+  | { effect: 'toast'; message: string; kind?: 'info' | 'error' }
+  | {
+      effect: 'createNote';
+      title: string;
+      body: string;
+      noteKind?: 'markdown';
+      parentId?: string | null;
+    }
+  | {
+      effect: 'createNoteFromNote';
+      sourceNoteId: string;
+      parentId?: string | null;
+    }
+  | { effect: 'insertMarkdown'; markdown: string }
+  | { effect: 'openMenu'; items: PluginEffectMenuItem[] };
+
+/** One item in an `openMenu` effect: a label plus the effect to run on select. */
+export interface PluginEffectMenuItem {
+  label: string;
+  run: PluginEffect;
+}
+
 /**
  * One navigable section of a plugin's documentation, backed by a real markdown
  * file bundled in the plugin dir (authoring long-form docs inline in JSON is
@@ -156,6 +224,8 @@ export interface PluginContributions {
   commands?: PluginCommandContribution[];
   /** Ordered, file-backed documentation sections shown in the docs modal. */
   documentation?: PluginDocSection[];
+  /** Toolbar buttons the plugin places into host surfaces (file-tree, …). */
+  toolbar?: PluginToolbarButton[];
 }
 
 /**

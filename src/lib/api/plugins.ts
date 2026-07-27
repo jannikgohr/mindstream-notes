@@ -179,21 +179,22 @@ export function pluginsRemove(id: string): Promise<void> {
 }
 
 /**
- * Read one of a plugin's bundled documentation files (`.md`) from its dir.
- * Returns `null` when the file isn't present, so the caller can fall back from a
- * missing locale variant to the base file. Tauri-only: the browser build serves
- * bundled core-plugin docs from a build-time glob instead (see docs-loader), so
- * the fallback here returns `null`.
+ * Read one of a plugin's bundled text assets (`.md` docs, `.svg` icons, …) from
+ * its dir. Returns `null` when the file isn't present, so the caller can fall
+ * back from a missing locale variant to the base file. Tauri-only: the browser
+ * build serves bundled core-plugin assets from a build-time glob instead (see
+ * plugin-files.ts), so the fallback here returns `null`.
  */
-export function pluginsReadDoc(
+export function pluginsReadFile(
   id: string,
   file: string
 ): Promise<string | null> {
   return invokeOrFallback<string | null>(
-    TauriCommandName.PluginsReadDoc,
+    TauriCommandName.PluginsReadFile,
     { id, file },
     () => null,
-    (value) => (value === null ? null : assertString(value, 'plugins_read_doc'))
+    (value) =>
+      value === null ? null : assertString(value, 'plugins_read_file')
   );
 }
 

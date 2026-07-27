@@ -392,31 +392,41 @@ fn remove_plugin_dir_refuses_the_plugins_folder_itself() {
 }
 
 #[test]
-fn read_plugin_doc_reads_a_bundled_markdown_file() {
+fn read_plugin_file_reads_a_bundled_asset() {
     let dir = std::env::temp_dir().join(format!("ms-doc-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(dir.join("docs")).unwrap();
     std::fs::write(dir.join("docs/guide.md"), "# Guide\n\nHello.").unwrap();
+    std::fs::create_dir_all(dir.join("icons")).unwrap();
+    std::fs::write(dir.join("icons/x.svg"), "<svg/>").unwrap();
 
-    let out = read_plugin_doc(&dir, "docs/guide.md").unwrap();
-    assert_eq!(out.as_deref(), Some("# Guide\n\nHello."));
+    assert_eq!(
+        read_plugin_file(&dir, "docs/guide.md").unwrap().as_deref(),
+        Some("# Guide\n\nHello.")
+    );
+    assert_eq!(
+        read_plugin_file(&dir, "icons/x.svg").unwrap().as_deref(),
+        Some("<svg/>")
+    );
     std::fs::remove_dir_all(&dir).ok();
 }
 
 #[test]
-fn read_plugin_doc_returns_none_for_a_missing_file() {
+fn read_plugin_file_returns_none_for_a_missing_file() {
     let dir = std::env::temp_dir().join(format!("ms-doc-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
     // A missing locale variant must be None, not an error, so the caller can
     // fall back to the base file.
-    assert!(read_plugin_doc(&dir, "docs/guide.de.md").unwrap().is_none());
+    assert!(read_plugin_file(&dir, "docs/guide.de.md")
+        .unwrap()
+        .is_none());
     std::fs::remove_dir_all(&dir).ok();
 }
 
 #[test]
-fn read_plugin_doc_refuses_path_traversal() {
+fn read_plugin_file_refuses_path_traversal() {
     let dir = std::env::temp_dir().join(format!("ms-doc-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
-    assert!(read_plugin_doc(&dir, "../secret.md").is_err());
-    assert!(read_plugin_doc(&dir, "docs/../../secret.md").is_err());
+    assert!(read_plugin_file(&dir, "../secret.md").is_err());
+    assert!(read_plugin_file(&dir, "docs/../../secret.md").is_err());
     std::fs::remove_dir_all(&dir).ok();
 }

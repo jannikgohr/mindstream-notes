@@ -8,6 +8,7 @@
   import { updaterProgress } from '$lib/updater/progress.svelte';
   import { shareDialog } from './share-dialog.svelte';
   import { toasts } from './toast.svelte';
+  import PluginMenuHost from './PluginMenuHost.svelte';
 
   let ConfirmDialog = $state<any | null>(null);
   let ExportResultDialog = $state<any | null>(null);
@@ -214,3 +215,4 @@
 {#if ToastHost}
   <ToastHost />
 {/if}
+<PluginMenuHost />

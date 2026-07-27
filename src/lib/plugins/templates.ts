@@ -29,7 +29,9 @@ import { requestOpenNote } from '$lib/stores/open-note-intent.svelte';
 import { createNoteIn } from '$lib/stores/tree.svelte';
 import { getSettingValue } from '$lib/settings/store.svelte';
 import { i18n } from '$lib/settings/i18n.svelte';
+import { pluginsRunScript } from '$lib/api/plugins';
 import { pluginById, pluginTemplate } from './registry.svelte';
+import { buildPluginContext } from './plugin-ctx';
 import { resolvePluginString } from './plugin-i18n';
 import {
   applyDateOffset,
@@ -217,12 +219,37 @@ export async function createNoteFromPluginTemplate(
     );
   }
 
-  const { title, body } = renderPluginTemplate(
-    pluginId,
-    ref.template,
-    variables
-  );
+  const useLuau =
+    !!ref.template.render && pluginById(pluginId)?.manifest.runtime === 'luau';
+  const { title, body } = useLuau
+    ? await renderTemplateViaLuau(pluginId, ref.template, variables)
+    : renderPluginTemplate(pluginId, ref.template, variables);
   const id = await createNoteIn(parentId, title, ref.template.noteKind, body);
   if (shouldOpenOnCreate(pluginId)) requestOpenNote(id);
   return id;
+}
+
+/**
+ * Render a template's title + body by running the plugin's Luau `render(ctx)`
+ * macro (the dynamic alternative to `titleTemplate`/`bodyTemplate`). The script
+ * receives the plugin context plus the caller's `variables`; the app — never
+ * the script — still creates the note. An empty/absent title falls back to the
+ * template's localized label so a note is never created titleless.
+ */
+async function renderTemplateViaLuau(
+  pluginId: string,
+  template: PluginNoteTemplateContribution,
+  variables: TemplateVariables
+): Promise<RenderedTemplate> {
+  const ctx = { ...buildPluginContext(pluginId), variables };
+  const raw = (await pluginsRunScript(pluginId, template.render!, ctx)) as
+    | Record<string, unknown>
+    | null
+    | undefined;
+  const title = typeof raw?.title === 'string' ? raw.title.trim() : '';
+  const body = typeof raw?.body === 'string' ? raw.body : '';
+  return {
+    title: title || resolvePluginString(pluginId, template.labelKey),
+    body
+  };
 }
