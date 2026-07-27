@@ -140,7 +140,7 @@ local function renderTemplate(input: RenderInput): { title: string, body: string
 			vars[key] = value
 		end
 	end
-	local ctx = { now = input.now, vars = vars }
+	local ctx = { now = input.now, vars = vars, locale = input.locale }
 	local title = template.render(input.title or "", ctx)
 	vars.title = title
 	local body = template.render(input.body or "", ctx)

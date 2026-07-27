@@ -267,22 +267,34 @@ fn date_module(lua: &Lua) -> mlua::Result<Table> {
     // now(format?, offsetDays?) → the current local date/time, formatted.
     date.set(
         "now",
-        lua.create_function(|_, (fmt, offset): (Option<String>, Option<i64>)| {
-            let dt = chrono::Local::now() + chrono::Duration::days(offset.unwrap_or(0));
-            Ok(format_moment(&dt, fmt.as_deref().unwrap_or("YYYY-MM-DD")))
-        })?,
+        lua.create_function(
+            |_, (fmt, offset, locale): (Option<String>, Option<i64>, Option<String>)| {
+                let dt = chrono::Local::now() + chrono::Duration::days(offset.unwrap_or(0));
+                Ok(format_moment(
+                    &dt,
+                    fmt.as_deref().unwrap_or("YYYY-MM-DD"),
+                    locale.as_deref().unwrap_or("en"),
+                ))
+            },
+        )?,
     )?;
     // format(input, format?) → format an RFC3339 string or epoch seconds.
     date.set(
         "format",
-        lua.create_function(|_, (input, fmt): (Value, Option<String>)| {
-            let dt = parse_datetime(&input).ok_or_else(|| {
-                mlua::Error::runtime(
-                    "ms.date.format: input must be an RFC3339 string or epoch seconds",
-                )
-            })?;
-            Ok(format_moment(&dt, fmt.as_deref().unwrap_or("YYYY-MM-DD")))
-        })?,
+        lua.create_function(
+            |_, (input, fmt, locale): (Value, Option<String>, Option<String>)| {
+                let dt = parse_datetime(&input).ok_or_else(|| {
+                    mlua::Error::runtime(
+                        "ms.date.format: input must be an RFC3339 string or epoch seconds",
+                    )
+                })?;
+                Ok(format_moment(
+                    &dt,
+                    fmt.as_deref().unwrap_or("YYYY-MM-DD"),
+                    locale.as_deref().unwrap_or("en"),
+                ))
+            },
+        )?,
     )?;
     // add(input, amount, unit) → shift a date, returning RFC3339. Units:
     // second|minute|hour|day|week|month|year (singular or plural).
@@ -393,11 +405,55 @@ const WEEKDAYS: [&str; 7] = [
 ];
 const WEEKDAYS_SHORT: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
+// German equivalents — the app ships only `en` + `de`, so a locale that starts
+// with "de" selects these; anything else falls back to English above.
+const MONTHS_DE: [&str; 12] = [
+    "Januar",
+    "Februar",
+    "März",
+    "April",
+    "Mai",
+    "Juni",
+    "Juli",
+    "August",
+    "September",
+    "Oktober",
+    "November",
+    "Dezember",
+];
+const MONTHS_SHORT_DE: [&str; 12] = [
+    "Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez",
+];
+const WEEKDAYS_DE: [&str; 7] = [
+    "Sonntag",
+    "Montag",
+    "Dienstag",
+    "Mittwoch",
+    "Donnerstag",
+    "Freitag",
+    "Samstag",
+];
+const WEEKDAYS_SHORT_DE: [&str; 7] = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"];
+
 /// Format a local datetime with moment-style tokens (`YYYY MM DD HH mm ss`,
 /// named `MMMM/MMM/dddd/ddd`, `hh h A a`, `[escaped]` literals). Unknown
 /// characters pass through. Mirrors the frontend `formatDate` token set.
-fn format_moment(dt: &chrono::DateTime<chrono::Local>, fmt: &str) -> String {
+fn format_moment(dt: &chrono::DateTime<chrono::Local>, fmt: &str, locale: &str) -> String {
     use chrono::{Datelike, Timelike};
+    // Localize the named month/weekday tokens; numeric tokens are locale-independent.
+    let german = locale.starts_with("de");
+    let months = if german { &MONTHS_DE } else { &MONTHS };
+    let months_short = if german {
+        &MONTHS_SHORT_DE
+    } else {
+        &MONTHS_SHORT
+    };
+    let weekdays = if german { &WEEKDAYS_DE } else { &WEEKDAYS };
+    let weekdays_short = if german {
+        &WEEKDAYS_SHORT_DE
+    } else {
+        &WEEKDAYS_SHORT
+    };
     let chars: Vec<char> = fmt.chars().collect();
     let month0 = dt.month0() as usize;
     let weekday0 = dt.weekday().num_days_from_sunday() as usize;
@@ -437,8 +493,8 @@ fn format_moment(dt: &chrono::DateTime<chrono::Local>, fmt: &str) -> String {
                     "YY" => {
                         let _ = write!(out, "{:02}", dt.year().rem_euclid(100));
                     }
-                    "MMMM" => out.push_str(MONTHS[month0]),
-                    "MMM" => out.push_str(MONTHS_SHORT[month0]),
+                    "MMMM" => out.push_str(months[month0]),
+                    "MMM" => out.push_str(months_short[month0]),
                     "MM" => {
                         let _ = write!(out, "{:02}", month0 + 1);
                     }
@@ -451,8 +507,8 @@ fn format_moment(dt: &chrono::DateTime<chrono::Local>, fmt: &str) -> String {
                     "D" => {
                         let _ = write!(out, "{}", dt.day());
                     }
-                    "dddd" => out.push_str(WEEKDAYS[weekday0]),
-                    "ddd" => out.push_str(WEEKDAYS_SHORT[weekday0]),
+                    "dddd" => out.push_str(weekdays[weekday0]),
+                    "ddd" => out.push_str(weekdays_short[weekday0]),
                     "HH" => {
                         let _ = write!(out, "{:02}", h24);
                     }
@@ -881,11 +937,30 @@ mod tests {
             .single()
             .unwrap();
         assert_eq!(
-            format_moment(&dt, "YYYY-MM-DD HH:mm:ss"),
+            format_moment(&dt, "YYYY-MM-DD HH:mm:ss", "en"),
             "2026-07-25 14:05:09"
         );
-        assert_eq!(format_moment(&dt, "dddd, MMMM D"), "Saturday, July 25");
-        assert_eq!(format_moment(&dt, "hh:mm A"), "02:05 PM");
-        assert_eq!(format_moment(&dt, "[Week] YYYY"), "Week 2026");
+        assert_eq!(
+            format_moment(&dt, "dddd, MMMM D", "en"),
+            "Saturday, July 25"
+        );
+        assert_eq!(format_moment(&dt, "hh:mm A", "en"), "02:05 PM");
+        assert_eq!(format_moment(&dt, "[Week] YYYY", "en"), "Week 2026");
+    }
+
+    #[test]
+    fn format_moment_localizes_names_for_german() {
+        use chrono::TimeZone;
+        let dt = chrono::Local
+            .with_ymd_and_hms(2026, 7, 25, 14, 5, 9)
+            .single()
+            .unwrap();
+        // Named tokens localize; numeric tokens stay locale-independent.
+        assert_eq!(
+            format_moment(&dt, "dddd, D. MMMM", "de"),
+            "Samstag, 25. Juli"
+        );
+        assert_eq!(format_moment(&dt, "ddd MMM", "de"), "Sa Jul");
+        assert_eq!(format_moment(&dt, "YYYY-MM-DD", "de"), "2026-07-25");
     }
 }

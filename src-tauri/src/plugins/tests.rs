@@ -379,6 +379,31 @@ fn templates_plugin_renders_macros_in_lua() {
 }
 
 #[test]
+fn templates_plugin_localizes_dates_via_locale() {
+    // The `locale` on the render input threads through to ms.date, so a German
+    // template gets German month names.
+    let plugin = super::discovery::discover_builtins()
+        .into_iter()
+        .find(|p| p.id == "com.mindstream.templates.core")
+        .expect("embedded Templates plugin");
+    let out = run_plugin_script(
+        &plugin.files,
+        &plugin.manifest,
+        vec!["notes.read".into(), "notes.create".into()],
+        "renderTemplate",
+        serde_json::json!({
+            "title": "{{date:MMMM}}",
+            "body": "",
+            "now": "2026-07-25T10:00:00Z",
+            "locale": "de",
+        }),
+        Vec::new(),
+    )
+    .unwrap();
+    assert_eq!(out["title"], serde_json::json!("Juli"));
+}
+
+#[test]
 fn run_plugin_script_refuses_a_non_luau_runtime() {
     let manifest = serde_json::json!({ "id": "x", "runtime": "manifest-only" });
     let out = run_plugin_script(
