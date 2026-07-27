@@ -287,7 +287,7 @@ fn reconcile_registers_discovered_plugins_and_returns_manifests() {
             version: "1.0.0".into(),
             permissions: vec!["notes.create".into()],
             source: SOURCE_BUILTIN.into(),
-            dir: std::path::PathBuf::new(),
+            files: super::discovery::PluginFiles::Fs(std::path::PathBuf::new()),
             checksum: "hash1".into(),
             signer: None,
             signature_status: "unsigned".into(),
@@ -328,7 +328,7 @@ fn run_plugin_script_executes_luau_entry_with_input() {
         "id": "com.a.luau", "runtime": "luau", "entry": "main.luau"
     });
     let out = run_plugin_script(
-        &dir,
+        &super::discovery::PluginFiles::Fs(dir.clone()),
         &manifest,
         vec!["templates.contribute".into()],
         "render",
@@ -344,7 +344,7 @@ fn run_plugin_script_executes_luau_entry_with_input() {
 fn run_plugin_script_refuses_a_non_luau_runtime() {
     let manifest = serde_json::json!({ "id": "x", "runtime": "manifest-only" });
     let out = run_plugin_script(
-        &std::env::temp_dir(),
+        &super::discovery::PluginFiles::Fs(std::env::temp_dir()),
         &manifest,
         vec![],
         "render",

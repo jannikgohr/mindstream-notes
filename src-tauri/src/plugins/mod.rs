@@ -377,28 +377,14 @@ fn remove_plugin_dir(third_party_dir: &Path, dir: &Path) -> AppResult<()> {
 /// dir (traversal / symlink), returning `None` when the file simply doesn't
 /// exist — an absent locale variant (`guide.de.md`) is expected, so the caller
 /// falls back to another candidate rather than erroring.
+/// Read one of a plugin's bundled text files from a filesystem dir, delegating
+/// to the traversal-guarded [`discovery::PluginFiles`] read. The command path
+/// reads through the discovered plugin's `files` directly (so builtins resolve
+/// from the embedded tree); this thin wrapper keeps the filesystem read
+/// unit-testable in isolation.
+#[cfg(test)]
 fn read_plugin_file(dir: &Path, file: &str) -> AppResult<Option<String>> {
-    // Reject traversal up front (defense in depth; the manifest validator also
-    // enforces a safe relative path).
-    if file.contains("..") || file.contains('\\') || file.starts_with('/') {
-        return Err(AppError::InvalidArg(format!(
-            "unsafe plugin file path '{file}'"
-        )));
-    }
-    let base = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
-    match dir.join(file).canonicalize() {
-        Ok(resolved) => {
-            if !resolved.starts_with(&base) {
-                return Err(AppError::InvalidArg(format!(
-                    "plugin file path '{file}' escapes the plugin dir"
-                )));
-            }
-            Ok(Some(std::fs::read_to_string(&resolved)?))
-        }
-        // Missing / unresolvable path → treat as absent so the caller can try
-        // the next candidate (e.g. the base file after a missing locale one).
-        Err(_) => Ok(None),
-    }
+    discovery::PluginFiles::Fs(dir.to_path_buf()).read_text(file)
 }
 
 // ---------- Scripted (luau) execution ----------
@@ -410,7 +396,7 @@ fn read_plugin_file(dir: &Path, file: &str) -> AppResult<Option<String>> {
 ///
 /// Factored out of the command so it is unit-testable without a Tauri handle.
 pub fn run_plugin_script(
-    dir: &Path,
+    files: &discovery::PluginFiles,
     manifest: &serde_json::Value,
     granted: Vec<String>,
     export: &str,
@@ -427,11 +413,13 @@ pub fn run_plugin_script(
         .and_then(|v| v.as_str())
         .ok_or_else(|| AppError::InvalidArg("luau plugin has no entry".into()))?;
     // Defense in depth: the manifest validator already rejects unsafe entries,
-    // but never join an untrusted path segment without re-checking.
+    // but never read an untrusted path segment without re-checking.
     if entry.contains('/') || entry.contains('\\') || entry.contains("..") {
         return Err(AppError::InvalidArg(format!("unsafe entry '{entry}'")));
     }
-    let source = std::fs::read_to_string(dir.join(entry))?;
+    let source = files
+        .read_text(entry)?
+        .ok_or_else(|| AppError::InvalidArg(format!("entry '{entry}' not found")))?;
     let id = manifest
         .get("id")
         .and_then(|v| v.as_str())
@@ -500,8 +488,8 @@ pub fn plugins_get(db: tauri::State<'_, Db>, id: String) -> CommandResult<Option
     db.with_conn(|c| get(c, &id)).map_err(Into::into)
 }
 
-/// Discover plugins from disk (core = bundled resource dir, third-party =
-/// app-data dir), reconcile them with the DB, and return records + manifests.
+/// Discover plugins (builtin = embedded in the binary, third-party = app-data
+/// dir), reconcile them with the DB, and return records + manifests.
 /// This is the *only* path that assigns trust, and it does so from the load
 /// location — there is deliberately no command that lets the frontend declare a
 /// plugin's `source`.
@@ -510,10 +498,9 @@ pub fn plugins_discover(
     app: AppHandle,
     db: State<'_, Db>,
 ) -> CommandResult<Vec<DiscoveredPluginView>> {
-    let core_dir = discovery::core_plugins_dir(&app)?;
     let third_party_dir = discovery::third_party_plugins_dir(&app)?;
     discovery::ensure_third_party_dir(&third_party_dir);
-    let discovered = discovery::discover(&core_dir, &third_party_dir);
+    let discovered = discovery::discover(&third_party_dir);
     db.with_conn(|c| reconcile(c, discovered))
         .map_err(Into::into)
 }
@@ -539,11 +526,8 @@ pub fn plugins_approve(
     db: State<'_, Db>,
     id: String,
 ) -> CommandResult<PluginRecord> {
-    let core_dir = discovery::core_plugins_dir(&app)?;
     let third_party_dir = discovery::third_party_plugins_dir(&app)?;
-    let plugin = discovery::discover(&core_dir, &third_party_dir)
-        .into_iter()
-        .find(|p| p.id == id)
+    let plugin = discovery::find(&third_party_dir, &id)
         .ok_or_else(|| AppError::NotFound(format!("plugin {id} not found on disk")))?;
     db.with_conn(|c| {
         approve(
@@ -585,11 +569,10 @@ pub fn plugins_remove(app: AppHandle, db: State<'_, Db>, id: String) -> CommandR
     // Re-locate the plugin on disk (trust stays location-derived) and delete its
     // directory when it's a third-party install. Already gone from disk is fine —
     // we still clear the DB record below so a stale row can't linger.
-    let core_dir = discovery::core_plugins_dir(&app)?;
     let third_party_dir = discovery::third_party_plugins_dir(&app)?;
-    if let Some(plugin) = discovery::find(&core_dir, &third_party_dir, &id) {
-        if plugin.source == SOURCE_INSTALLED {
-            remove_plugin_dir(&third_party_dir, &plugin.dir)?;
+    if let Some(plugin) = discovery::find(&third_party_dir, &id) {
+        if let Some(dir) = plugin.files.fs_path() {
+            remove_plugin_dir(&third_party_dir, dir)?;
         }
     }
 
@@ -609,11 +592,10 @@ pub fn plugins_read_file(
     id: String,
     file: String,
 ) -> CommandResult<Option<String>> {
-    let core_dir = discovery::core_plugins_dir(&app)?;
     let third_party_dir = discovery::third_party_plugins_dir(&app)?;
-    let plugin = discovery::find(&core_dir, &third_party_dir, &id)
+    let plugin = discovery::find(&third_party_dir, &id)
         .ok_or_else(|| AppError::NotFound(format!("plugin {id} not found on disk")))?;
-    read_plugin_file(&plugin.dir, &file).map_err(Into::into)
+    plugin.files.read_text(&file).map_err(Into::into)
 }
 
 /// Run a scripted plugin's entry function. The plugin is re-located on disk
@@ -630,7 +612,6 @@ pub async fn plugins_run_script(
     export: String,
     input: serde_json::Value,
 ) -> CommandResult<serde_json::Value> {
-    let core_dir = discovery::core_plugins_dir(&app)?;
     let third_party_dir = discovery::third_party_plugins_dir(&app)?;
 
     let record = db
@@ -640,10 +621,10 @@ pub async fn plugins_run_script(
         return Err(AppError::InvalidArg(format!("plugin {id} is not enabled")).into());
     }
 
-    let plugin = discovery::find(&core_dir, &third_party_dir, &id)
+    let plugin = discovery::find(&third_party_dir, &id)
         .ok_or_else(|| AppError::NotFound(format!("plugin {id} not found on disk")))?;
 
-    let dir = plugin.dir;
+    let files = plugin.files;
     let manifest = plugin.manifest;
     let granted = record.granted_permissions;
     // Capture the note snapshot up front (while we hold the DB) so the blocking
@@ -654,7 +635,7 @@ pub async fn plugins_run_script(
         Vec::new()
     };
     tauri::async_runtime::spawn_blocking(move || {
-        run_plugin_script(&dir, &manifest, granted, &export, input, notes)
+        run_plugin_script(&files, &manifest, granted, &export, input, notes)
     })
     .await
     .map_err(|e| AppError::InvalidArg(format!("script task failed: {e}")))?
