@@ -11,12 +11,36 @@
 -- Only declarative data crosses back to the host: this script never writes a
 -- note itself. Note metadata comes from `ms.notes` (granted by `notes.read`);
 -- the folder tree + this plugin's settings come from `ctx`.
+--
+-- The `ms` global is typed by plugins/host.d.luau (loaded by luau-lsp); the
+-- types below describe just this button's own input and effects.
+
+-- One folder in the vault tree, as passed on `ctx.folders`.
+type Folder = { id: string, parentId: string? }
+
+-- What the host hands `newFromTemplate`: this plugin's resolved settings (keyed
+-- by the manifest setting ids) and the folder tree.
+type Context = {
+	settings: { [string]: any }?,
+	folders: { Folder }?,
+}
+
+-- A single entry of the menu the host opens.
+type MenuItem = {
+	label: string,
+	run: { effect: "createNoteFromNote", sourceNoteId: string },
+}
+
+-- What the button returns to the host: either a toast, or a menu to open. The
+-- explicit union is what lets both `return` shapes type-check under `--!strict`
+-- (without it, Luau pins the return type to whichever branch returns first).
+type Effect = { effect: "toast", message: string } | { effect: "openMenu", items: { MenuItem } }
 
 -- True when `folderId` is `targetId` or has it as an ancestor (walks parents,
 -- guarding against cycles).
-local function isUnder(folderId, targetId, parentById)
-	local current = folderId
-	local seen = {}
+local function isUnder(folderId: string, targetId: string, parentById: { [string]: string? }): boolean
+	local current: string? = folderId
+	local seen: { [string]: boolean } = {}
 	while current ~= nil and not seen[current] do
 		if current == targetId then
 			return true
@@ -27,12 +51,12 @@ local function isUnder(folderId, targetId, parentById)
 	return false
 end
 
-local function blank(value)
+local function blank(value: any): boolean
 	return value == nil or value == ""
 end
 
-local function newFromTemplate(ctx)
-	local settings = ctx.settings or {}
+local function newFromTemplate(ctx: Context): Effect
+	local settings: { [string]: any } = ctx.settings or {}
 	local folderId = settings["source-folder"]
 	local tag = settings["source-tag"]
 	if blank(folderId) then
@@ -50,17 +74,21 @@ local function newFromTemplate(ctx)
 	end
 
 	-- folder id -> parent id, for "inside the folder at any depth".
-	local parentById = {}
-	for _, f in ipairs(ctx.folders or {}) do
+	local folders: { Folder } = ctx.folders or {}
+	local parentById: { [string]: string? } = {}
+	for _, f in ipairs(folders) do
 		parentById[f.id] = f.parentId
 	end
 
-	local items = {}
-	for _, note in ipairs(ms.notes.all()) do
+	-- `ms.notes` is present because the manifest grants `notes.read`.
+	local notes = assert(ms.notes, "Templates plugin requires the notes.read permission")
+
+	local items: { MenuItem } = {}
+	for _, note in ipairs(notes.all()) do
 		if note.kind == "markdown" then
 			local matches = false
 			if tag ~= nil then
-				for _, t in ipairs(note.tags or {}) do
+				for _, t in ipairs(note.tags) do
 					if t == tag then
 						matches = true
 						break
