@@ -3,17 +3,28 @@
   "name": "Templates",
   "version": "2.0.0",
   "author": "Mindstream",
-  "runtime": "manifest-only",
+  "runtime": "luau",
+  "entry": "main.luau",
   "descriptionKey": "plugin.description",
-  "permissions": [],
+  "permissions": ["notes.read", "notes.create"],
   "contributes": {
     "documentation": [
       { "file": "docs/getting-started.md" },
       { "file": "docs/placeholders.md" }
     ],
+    "toolbar": [
+      {
+        "id": "new-from-template",
+        "location": "file-tree",
+        "labelKey": "toolbar.newFromTemplate",
+        "icon": "icons/templates.svg",
+        "action": { "type": "script", "export": "newFromTemplate" }
+      }
+    ],
     "i18n": {
       "en": {
         "plugin.description": "Reusable templates from your own notes.",
+        "toolbar.newFromTemplate": "New from template",
         "settings.sources.title": "Template sources",
         "settings.sourceFolder.label": "Template folder",
         "settings.sourceFolder.description": "Every markdown note inside this folder becomes a template.",
@@ -24,6 +35,7 @@
       },
       "de": {
         "plugin.description": "Wiederverwendbare Vorlagen aus deinen eigenen Notizen.",
+        "toolbar.newFromTemplate": "Neu aus Vorlage",
         "settings.sources.title": "Vorlagenquellen",
         "settings.sourceFolder.label": "Vorlagenordner",
         "settings.sourceFolder.description": "Jede Markdown-Notiz in diesem Ordner wird zu einer Vorlage.",
