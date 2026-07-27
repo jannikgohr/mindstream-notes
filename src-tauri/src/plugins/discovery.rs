@@ -138,6 +138,21 @@ impl PluginFiles {
         }
     }
 
+    /// Every `.luau` file in the plugin as a `module path (no extension) →
+    /// source` map, for the plugin-scoped `require`. Keys are `/`-separated
+    /// (e.g. `lib/parser`); non-UTF-8 files are skipped.
+    pub fn luau_modules(&self) -> AppResult<std::collections::HashMap<String, String>> {
+        let mut modules = std::collections::HashMap::new();
+        for (rel, bytes) in self.collect()? {
+            if let Some(stem) = rel.strip_suffix(".luau") {
+                if let Ok(source) = String::from_utf8(bytes) {
+                    modules.insert(stem.to_string(), source);
+                }
+            }
+        }
+        Ok(modules)
+    }
+
     /// The real directory when filesystem-backed (for removal); `None` for
     /// embedded builtins, which can't be removed.
     pub fn fs_path(&self) -> Option<&Path> {

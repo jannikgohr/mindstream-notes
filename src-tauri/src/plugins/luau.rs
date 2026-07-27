@@ -9,8 +9,11 @@
 //!      any globals a script sets live only in that one isolated invocation.
 //!   2. **Luau sandbox** — `sandbox(true)` runs the chunk against a read-only
 //!      view of the shared globals (with `safeenv` optimizations), and Luau's
-//!      stdlib is already curated: no `io`, no `os.execute`, no
-//!      `package`/`require`, no `ffi` — the dangerous surface simply isn't there.
+//!      stdlib is already curated: no `io`, no `os.execute`, no `package`, no
+//!      `ffi` — the dangerous surface simply isn't there. The one `require` a
+//!      script sees is our plugin-scoped shim, which resolves only the plugin's
+//!      own bundled `.luau` modules — never the filesystem (see
+//!      [`install_require`]).
 //!   3. **Memory cap** — `set_memory_limit` aborts a script that allocates past
 //!      the budget instead of letting it exhaust the host.
 //!   4. **Wall-clock deadline** — an `interrupt` hook fires on Luau back-edges /
@@ -26,7 +29,10 @@
 //! returns `{ title, body }` and the app performs the note creation, preserving
 //! the "a plugin never writes notes itself" invariant of the declarative tier.
 
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use mlua::{Lua, LuaSerdeExt, MultiValue, Table, Value, VmState};
@@ -87,6 +93,11 @@ pub struct ScriptRequest {
     /// Read-only note snapshot exposed via `ms.notes` when `notes.read` is
     /// granted. Built by the caller before the script runs; empty otherwise.
     pub notes: Vec<NoteMeta>,
+    /// The plugin's other `.luau` files as `module path (no extension) → source`,
+    /// so the script can split itself across files via a plugin-scoped `require`.
+    /// Keys use `/` separators; only these modules are resolvable (no filesystem
+    /// or host access), so `require` can't reach outside the plugin bundle.
+    pub modules: HashMap<String, String>,
     pub limits: Limits,
 }
 
@@ -120,6 +131,7 @@ pub fn run(req: ScriptRequest) -> AppResult<serde_json::Value> {
 
     install_host_api(&lua, &req.permissions, &req.notes)
         .map_err(|e| map_lua(&req.chunk_name, e))?;
+    install_require(&lua, req.modules).map_err(|e| map_lua(&req.chunk_name, e))?;
 
     // Enter the sandbox AFTER installing the host API so `ms` is visible through
     // the read-only global view. Combined with the fresh-VM-per-call above, a
@@ -199,6 +211,52 @@ fn install_host_api(lua: &Lua, permissions: &[String], notes: &[NoteMeta]) -> ml
 
     lua.globals().set("ms", ms)?;
     Ok(())
+}
+
+/// Install a **plugin-scoped `require`** so a script can split itself across
+/// several `.luau` files.
+///
+/// `modules` is the plugin's own `.luau` files (keyed by module path without the
+/// extension); `require(name)` resolves *only* these — never the filesystem,
+/// network, or another plugin — so it can't reach outside the already-signed
+/// plugin bundle. Each module is evaluated at most once and its result cached
+/// (module semantics), and a cyclic `require` is rejected rather than looping.
+fn install_require(lua: &Lua, modules: HashMap<String, String>) -> mlua::Result<()> {
+    let modules = Rc::new(modules);
+    let cache: Rc<RefCell<HashMap<String, Value>>> = Rc::new(RefCell::new(HashMap::new()));
+    let loading: Rc<RefCell<HashSet<String>>> = Rc::new(RefCell::new(HashSet::new()));
+
+    let require = lua.create_function(move |lua, name: String| {
+        let key = normalize_module(&name)
+            .ok_or_else(|| mlua::Error::runtime(format!("require: invalid module '{name}'")))?;
+        if let Some(cached) = cache.borrow().get(&key) {
+            return Ok(cached.clone());
+        }
+        let source = modules
+            .get(&key)
+            .ok_or_else(|| mlua::Error::runtime(format!("require: module '{key}' not found")))?;
+        if !loading.borrow_mut().insert(key.clone()) {
+            return Err(mlua::Error::runtime(format!("require: cyclic '{key}'")));
+        }
+        let result = lua.load(source.as_str()).set_name(&key).eval::<Value>();
+        loading.borrow_mut().remove(&key);
+        let value = result?;
+        cache.borrow_mut().insert(key, value.clone());
+        Ok(value)
+    })?;
+    lua.globals().set("require", require)?;
+    Ok(())
+}
+
+/// Normalise a `require` argument to a module key, or `None` if it escapes the
+/// plugin. Strips a leading `./` and a trailing `.luau`; rejects `..`, absolute
+/// paths, and backslashes so a module name can only name a sibling file.
+fn normalize_module(name: &str) -> Option<String> {
+    let name = name.strip_prefix("./").unwrap_or(name);
+    if name.is_empty() || name.starts_with('/') || name.contains("..") || name.contains('\\') {
+        return None;
+    }
+    Some(name.strip_suffix(".luau").unwrap_or(name).to_string())
 }
 
 /// `ms.date`: current time + formatting + arithmetic, all in local time and
@@ -552,6 +610,7 @@ mod tests {
             input,
             permissions: perms.iter().map(|s| s.to_string()).collect(),
             notes: Vec::new(),
+            modules: HashMap::new(),
             limits: Limits::default(),
         }
     }
@@ -779,6 +838,39 @@ mod tests {
             out["items"][0]["run"]["effect"],
             serde_json::json!("createNoteFromNote")
         );
+    }
+
+    #[test]
+    fn require_loads_a_sibling_module_and_caches_it() {
+        let mut r = req(
+            // Requiring the same module twice returns the identical cached table.
+            r#"local a = require("lib/util")
+               local b = require("lib/util")
+               return { go = function() return { v = a.double(21), same = a == b } end }"#,
+            "go",
+            serde_json::json!({}),
+            &[],
+        );
+        r.modules.insert(
+            "lib/util".into(),
+            "return { double = function(x) return x * 2 end }".into(),
+        );
+        let out = run(r).unwrap();
+        assert_eq!(out["v"], serde_json::json!(42));
+        assert_eq!(out["same"], serde_json::json!(true)); // evaluated once, cached
+    }
+
+    #[test]
+    fn require_rejects_escaping_and_unknown_modules() {
+        // A traversal name and an unknown module both error (caught by pcall).
+        let probe = r#"return { go = function(name)
+             local ok = pcall(function() return require(name) end)
+             return { ok = ok }
+           end }"#;
+        for name in ["../secret", "nope", "/etc/passwd"] {
+            let out = run(req(probe, "go", serde_json::json!(name), &[])).unwrap();
+            assert_eq!(out["ok"], serde_json::json!(false), "require('{name}')");
+        }
     }
 
     #[test]

@@ -158,6 +158,24 @@ For templates the app performs the note creation from the returned
 into this by setting `"render": "<export>"` instead of static
 `titleTemplate`/`bodyTemplate`.
 
+### Splitting a script across files
+
+A plugin isn't limited to its single `entry` file. Any other `.luau` file it
+bundles can be loaded with a **plugin-scoped `require`**, so you can factor logic
+into modules:
+
+```lua
+-- main.luau
+local parser = require("lib/parser") -- loads lib/parser.luau
+return { render = parser.render }
+```
+
+`require(name)` resolves `name.luau` relative to the plugin root (`/`-separated
+subpaths like `lib/parser` are fine); a module is evaluated once and its return
+value cached. It resolves **only** the plugin's own bundled files — `..`,
+absolute paths, the filesystem, and other plugins are all rejected — so it can't
+reach outside the (signed) plugin bundle. There is no `package`/`io`/`os`.
+
 ### Effects (toolbar buttons)
 
 A toolbar button's export is called with the context table and returns a
