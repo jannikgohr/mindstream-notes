@@ -27,8 +27,9 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use include_dir::{include_dir, Dir};
 use sha2::{Digest, Sha256};
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 use super::signing;
 use super::{SOURCE_BUILTIN, SOURCE_INSTALLED};
@@ -40,8 +41,10 @@ pub struct DiscoveredPlugin {
     pub version: String,
     pub permissions: Vec<String>,
     pub source: String,
-    /// The directory the plugin was read from (used to load its `.luau` entry).
-    pub dir: PathBuf,
+    /// Where the plugin's files are read from — a real directory (third-party)
+    /// or the binary-embedded builtin tree — used later to load its `.luau`
+    /// entry, docs and icons.
+    pub files: PluginFiles,
     /// SHA-256 (hex) of the raw manifest.json bytes.
     pub checksum: String,
     /// Signer fingerprint from `signature.json`, if the signature is valid.
@@ -61,13 +64,88 @@ fn sha256_hex(bytes: &[u8]) -> String {
     out
 }
 
-/// The bundled core-plugins directory (inside the app resource dir).
-pub fn core_plugins_dir(app: &AppHandle) -> AppResult<PathBuf> {
-    let resource_dir = app
-        .path()
-        .resource_dir()
-        .map_err(|e| AppError::InvalidArg(format!("resource_dir: {e}")))?;
-    Ok(resource_dir.join("core-plugins"))
+/// The builtin plugins, embedded into the binary at compile time from the
+/// repo-root `plugins/` tree.
+///
+/// Reading builtins from here rather than a bundled on-disk resource is what
+/// makes them work on Android/iOS — where packaged resources live inside the app
+/// bundle and aren't reachable through the filesystem — and it keeps their trust
+/// intact: the bytes ship *inside* the signed binary, so no user-writable
+/// location is ever treated as `builtin`.
+static BUILTIN_PLUGINS: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../plugins");
+
+/// Where a discovered plugin's files come from.
+///
+/// `Fs` is a real, user-writable directory (installed third-party plugins).
+/// `Embedded` is a subtree of [`BUILTIN_PLUGINS`], compiled into the binary —
+/// authentic by construction and readable on every platform, mobile included.
+#[derive(Clone)]
+pub enum PluginFiles {
+    Fs(PathBuf),
+    Embedded(&'static Dir<'static>),
+}
+
+impl PluginFiles {
+    /// Every file under the plugin as `(relpath, bytes)`, `/`-separated. Order is
+    /// unspecified — [`signing::package_digest`] sorts.
+    fn collect(&self) -> AppResult<Vec<(String, Vec<u8>)>> {
+        match self {
+            PluginFiles::Fs(dir) => collect_files(dir),
+            PluginFiles::Embedded(dir) => Ok(collect_files_embedded(dir)),
+        }
+    }
+
+    /// Raw bytes of one relative file, or `None` if absent.
+    fn read_bytes(&self, rel: &str) -> Option<Vec<u8>> {
+        match self {
+            PluginFiles::Fs(dir) => fs::read(dir.join(rel)).ok(),
+            PluginFiles::Embedded(dir) => dir
+                .get_file(dir.path().join(rel))
+                .map(|f| f.contents().to_vec()),
+        }
+    }
+
+    /// Text of one relative file (docs, icons, the entry script), guarded against
+    /// path traversal. `None` = the file isn't present, so a caller can fall back
+    /// (e.g. from a missing locale variant to the base file).
+    pub fn read_text(&self, rel: &str) -> AppResult<Option<String>> {
+        // Reject traversal up front for either backing (defense in depth; the
+        // manifest validator also enforces safe relative paths).
+        if rel.contains("..") || rel.contains('\\') || rel.starts_with('/') {
+            return Err(AppError::InvalidArg(format!(
+                "unsafe plugin file path '{rel}'"
+            )));
+        }
+        match self {
+            PluginFiles::Fs(dir) => {
+                let base = dir.canonicalize().unwrap_or_else(|_| dir.clone());
+                match dir.join(rel).canonicalize() {
+                    Ok(resolved) => {
+                        if !resolved.starts_with(&base) {
+                            return Err(AppError::InvalidArg(format!(
+                                "plugin file path '{rel}' escapes the plugin dir"
+                            )));
+                        }
+                        Ok(Some(fs::read_to_string(&resolved)?))
+                    }
+                    // Missing / unresolvable → absent, not an error.
+                    Err(_) => Ok(None),
+                }
+            }
+            PluginFiles::Embedded(_) => Ok(self
+                .read_bytes(rel)
+                .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())),
+        }
+    }
+
+    /// The real directory when filesystem-backed (for removal); `None` for
+    /// embedded builtins, which can't be removed.
+    pub fn fs_path(&self) -> Option<&Path> {
+        match self {
+            PluginFiles::Fs(dir) => Some(dir),
+            PluginFiles::Embedded(_) => None,
+        }
+    }
 }
 
 /// The active profile's third-party plugins directory.
@@ -105,29 +183,51 @@ fn collect_files(dir: &Path) -> AppResult<Vec<(String, Vec<u8>)>> {
     Ok(out)
 }
 
+/// Read every file in an embedded plugin subtree as `(relpath, bytes)`, with
+/// paths relative to `dir` and `/` separators — matching [`collect_files`] so a
+/// builtin's package digest is byte-identical whether read from disk or the
+/// binary.
+fn collect_files_embedded(dir: &Dir<'static>) -> Vec<(String, Vec<u8>)> {
+    fn walk(dir: &Dir<'static>, base: &Path, out: &mut Vec<(String, Vec<u8>)>) {
+        for file in dir.files() {
+            let rel = file
+                .path()
+                .strip_prefix(base)
+                .unwrap_or_else(|_| file.path())
+                .to_string_lossy()
+                .replace('\\', "/");
+            out.push((rel, file.contents().to_vec()));
+        }
+        for sub in dir.dirs() {
+            walk(sub, base, out);
+        }
+    }
+    let mut out = Vec::new();
+    walk(dir, dir.path(), &mut out);
+    out
+}
+
 /// Read one plugin directory into a [`DiscoveredPlugin`]. The integrity checksum
 /// and signature both cover the whole package (manifest + code + assets) via the
 /// [`signing::package_digest`] document, not just `manifest.json`.
-fn read_plugin(dir: &Path, source: &str) -> AppResult<DiscoveredPlugin> {
-    let files = collect_files(dir)?;
-    let digest = signing::package_digest(&files);
+fn read_plugin(files: PluginFiles, source: &str) -> AppResult<DiscoveredPlugin> {
+    let all = files.collect()?;
+    let digest = signing::package_digest(&all);
     let checksum = sha256_hex(&digest);
     // Signature is verified over the package digest. Absent → unsigned.
-    let sig_json = fs::read(dir.join("signature.json")).ok();
+    let sig_json = files.read_bytes("signature.json");
     let verification = signing::verify(&digest, sig_json.as_deref());
-    let manifest_bytes = files
+    let manifest_bytes = all
         .iter()
         .find(|(path, _)| path == "manifest.json")
         .map(|(_, bytes)| bytes.as_slice())
-        .ok_or_else(|| AppError::InvalidArg(format!("no manifest.json in {}", dir.display())))?;
+        .ok_or_else(|| AppError::InvalidArg("plugin has no manifest.json".to_string()))?;
     let manifest: serde_json::Value = serde_json::from_slice(manifest_bytes)
-        .map_err(|e| AppError::InvalidArg(format!("manifest.json in {}: {e}", dir.display())))?;
+        .map_err(|e| AppError::InvalidArg(format!("manifest.json: {e}")))?;
     let id = manifest
         .get("id")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| {
-            AppError::InvalidArg(format!("manifest in {} has no string id", dir.display()))
-        })?
+        .ok_or_else(|| AppError::InvalidArg("manifest has no string id".to_string()))?
         .to_string();
     let version = manifest
         .get("version")
@@ -148,7 +248,7 @@ fn read_plugin(dir: &Path, source: &str) -> AppResult<DiscoveredPlugin> {
         version,
         permissions,
         source: source.to_string(),
-        dir: dir.to_path_buf(),
+        files,
         checksum,
         signer: verification.signer,
         signature_status: verification.status.as_str().to_string(),
@@ -170,7 +270,7 @@ pub fn discover_dir(root: &Path, source: &str) -> Vec<DiscoveredPlugin> {
         if !path.is_dir() || !path.join("manifest.json").exists() {
             continue;
         }
-        match read_plugin(&path, source) {
+        match read_plugin(PluginFiles::Fs(path.clone()), source) {
             Ok(plugin) => out.push(plugin),
             Err(e) => log::warn!("[plugins] skipping {}: {e}", path.display()),
         }
@@ -178,14 +278,32 @@ pub fn discover_dir(root: &Path, source: &str) -> Vec<DiscoveredPlugin> {
     out
 }
 
-/// Discover core (builtin) then third-party (installed) plugins. Builtin ids
-/// win: a third-party plugin whose id collides with a core plugin is dropped so
-/// it can neither shadow the core plugin nor inherit its trust.
-pub fn discover(core_dir: &Path, third_party_dir: &Path) -> Vec<DiscoveredPlugin> {
+/// Discover the binary-embedded builtin plugins: every subdirectory of the
+/// embedded `plugins/` tree that has a `manifest.json`. Authentic by
+/// construction (they ship inside the signed binary), so unlike third-party
+/// plugins they are never subject to the integrity gate.
+pub fn discover_builtins() -> Vec<DiscoveredPlugin> {
+    let mut out = Vec::new();
+    for sub in BUILTIN_PLUGINS.dirs() {
+        if sub.get_file(sub.path().join("manifest.json")).is_none() {
+            continue;
+        }
+        match read_plugin(PluginFiles::Embedded(sub), SOURCE_BUILTIN) {
+            Ok(plugin) => out.push(plugin),
+            Err(e) => log::warn!("[plugins] skipping builtin {}: {e}", sub.path().display()),
+        }
+    }
+    out
+}
+
+/// Discover builtin (embedded) then third-party (installed) plugins. Builtin ids
+/// win: a third-party plugin whose id collides with a builtin is dropped so it
+/// can neither shadow the builtin nor inherit its trust.
+pub fn discover(third_party_dir: &Path) -> Vec<DiscoveredPlugin> {
     let mut plugins: Vec<DiscoveredPlugin> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
 
-    for plugin in discover_dir(core_dir, SOURCE_BUILTIN) {
+    for plugin in discover_builtins() {
         seen.insert(plugin.id.clone());
         plugins.push(plugin);
     }
@@ -203,13 +321,11 @@ pub fn discover(core_dir: &Path, third_party_dir: &Path) -> Vec<DiscoveredPlugin
     plugins
 }
 
-/// Find one plugin by id across the core + third-party dirs, applying the same
-/// core-wins rule as [`discover`]. Returns the [`DiscoveredPlugin`] (with its
-/// `dir`) so a caller can load the plugin's entry script.
-pub fn find(core_dir: &Path, third_party_dir: &Path, id: &str) -> Option<DiscoveredPlugin> {
-    discover(core_dir, third_party_dir)
-        .into_iter()
-        .find(|p| p.id == id)
+/// Find one plugin by id across the builtin + third-party sets, applying the
+/// same builtin-wins rule as [`discover`]. Returns the [`DiscoveredPlugin`]
+/// (with its [`PluginFiles`]) so a caller can load the plugin's entry script.
+pub fn find(third_party_dir: &Path, id: &str) -> Option<DiscoveredPlugin> {
+    discover(third_party_dir).into_iter().find(|p| p.id == id)
 }
 
 #[cfg(test)]
@@ -276,16 +392,45 @@ mod tests {
     }
 
     #[test]
-    fn core_wins_id_collision_and_third_party_copy_is_dropped() {
-        let core = tmp();
+    fn discovers_the_embedded_builtin_templates_plugin() {
+        let plugins = discover_builtins();
+        let tpl = plugins
+            .iter()
+            .find(|p| p.id == "com.mindstream.templates.core")
+            .expect("the embedded Templates plugin is discovered");
+        assert_eq!(tpl.source, SOURCE_BUILTIN);
+        assert_eq!(tpl.checksum.len(), 64); // sha-256 hex
+                                            // Its entry script is readable straight from the binary.
+        let main = tpl
+            .files
+            .read_text("main.luau")
+            .unwrap()
+            .expect("main.luau is present");
+        assert!(main.contains("newFromTemplate"));
+    }
+
+    #[test]
+    fn embedded_read_text_rejects_traversal() {
+        let tpl = discover_builtins()
+            .into_iter()
+            .find(|p| p.id == "com.mindstream.templates.core")
+            .unwrap();
+        assert!(tpl.files.read_text("../secret").is_err());
+    }
+
+    #[test]
+    fn builtin_wins_id_collision_and_third_party_copy_is_dropped() {
         let third = tmp();
-        write_plugin(&core, "templates", "com.mindstream.templates.core", "");
-        // Same id, dropped in the third-party dir — must be ignored.
+        // A third-party copy claiming the embedded builtin's id must be dropped:
+        // the builtin wins so a copy can't shadow it or inherit its trust.
         write_plugin(&third, "templates", "com.mindstream.templates.core", "");
-        let plugins = discover(&core, &third);
-        assert_eq!(plugins.len(), 1);
-        assert_eq!(plugins[0].source, SOURCE_BUILTIN);
-        fs::remove_dir_all(&core).ok();
+        let plugins = discover(&third);
+        let matching: Vec<_> = plugins
+            .iter()
+            .filter(|p| p.id == "com.mindstream.templates.core")
+            .collect();
+        assert_eq!(matching.len(), 1, "only the builtin survives the collision");
+        assert_eq!(matching[0].source, SOURCE_BUILTIN);
         fs::remove_dir_all(&third).ok();
     }
 

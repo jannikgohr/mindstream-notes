@@ -1,6 +1,34 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     generate_i18n_bundle_list()?;
+    track_builtin_plugins()?;
     tauri_build::build();
+    Ok(())
+}
+
+/// The builtin plugins are `include_dir!`-embedded from the repo-root `plugins/`
+/// tree (see src/plugins/discovery.rs). `include_dir!` doesn't emit its own
+/// rebuild triggers, so re-embed whenever any file under `plugins/` changes.
+fn track_builtin_plugins() -> Result<(), Box<dyn std::error::Error>> {
+    use std::{env, path::PathBuf};
+
+    let plugins_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?)
+        .join("..")
+        .join("plugins");
+
+    fn emit_rerun(dir: &std::path::Path) {
+        println!("cargo:rerun-if-changed={}", dir.display());
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    emit_rerun(&path);
+                } else {
+                    println!("cargo:rerun-if-changed={}", path.display());
+                }
+            }
+        }
+    }
+    emit_rerun(&plugins_dir);
     Ok(())
 }
 
