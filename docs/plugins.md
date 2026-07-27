@@ -202,15 +202,15 @@ plugin lists the notes in its configured folder/tag and returns a menu of
 
 Always available (pure, no permission):
 
-| API                                             | Description                                                                    |
-| ----------------------------------------------- | ------------------------------------------------------------------------------ |
-| `ms.log(msg)`                                   | write a line to the app log                                                    |
-| `ms.uuid()`                                     | a fresh v4 UUID string                                                         |
-| `ms.date.now(format?, offsetDays?)`             | current local time, moment-style format (default `YYYY-MM-DD`)                 |
-| `ms.date.format(input, format?)`                | format an RFC3339 string or epoch seconds                                      |
-| `ms.date.add(input, amount, unit)`              | shift a date (`second\|minute\|hour\|day\|week\|month\|year`), returns RFC3339 |
-| `ms.json.encode(value)` / `ms.json.decode(str)` | table ⇄ JSON string                                                            |
-| `ms.md.frontmatter(table)`                      | build a `---`-delimited YAML frontmatter block                                 |
+| API                                             | Description                                                                                          |
+| ----------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `ms.log(msg)`                                   | write a line to the app log                                                                          |
+| `ms.uuid()`                                     | a fresh v4 UUID string                                                                               |
+| `ms.date.now(format?, offsetDays?, locale?)`    | current local time, moment-style format (default `YYYY-MM-DD`); `locale` (e.g. `de`) localizes names |
+| `ms.date.format(input, format?, locale?)`       | format an RFC3339 string or epoch seconds; `locale` localizes month/weekday names                    |
+| `ms.date.add(input, amount, unit)`              | shift a date (`second\|minute\|hour\|day\|week\|month\|year`), returns RFC3339                       |
+| `ms.json.encode(value)` / `ms.json.decode(str)` | table ⇄ JSON string                                                                                  |
+| `ms.md.frontmatter(table)`                      | build a `---`-delimited YAML frontmatter block                                                       |
 
 Gated by `notes.read`:
 

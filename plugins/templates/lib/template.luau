@@ -15,6 +15,8 @@ export type RenderCtx = {
 	now: string,
 	-- Named variables a `{{var}}` can resolve (e.g. `title`).
 	vars: { [string]: any },
+	-- App locale (e.g. "de") for localized month/weekday names; nil → English.
+	locale: string?,
 }
 
 local DATE_DEFAULTS: { [string]: string } = {
@@ -115,7 +117,7 @@ local function resolveBase(base: string, offset: string, format: string?, ctx: R
 	local dateDefault = DATE_DEFAULTS[base]
 	if dateDefault ~= nil then
 		local iso = if offset ~= "" then applyOffset(ctx.now, offset) else ctx.now
-		return ms.date.format(iso, format or dateDefault)
+		return ms.date.format(iso, format or dateDefault, ctx.locale)
 	end
 	local value = ctx.vars[base]
 	if value == nil then

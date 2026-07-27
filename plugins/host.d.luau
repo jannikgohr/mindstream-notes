@@ -30,10 +30,12 @@ type MsDateInput = string | number
 
 type MsDate = {
 	-- Current local date/time in moment-style tokens (default "YYYY-MM-DD"),
-	-- optionally offset by whole days.
-	now: (format: string?, offsetDays: number?) -> string,
-	-- Format an RFC3339 string or epoch seconds (default "YYYY-MM-DD").
-	format: (input: MsDateInput, format: string?) -> string,
+	-- optionally offset by whole days. `locale` (e.g. "de") localizes month and
+	-- weekday names; omitted or unknown → English.
+	now: (format: string?, offsetDays: number?, locale: string?) -> string,
+	-- Format an RFC3339 string or epoch seconds (default "YYYY-MM-DD"). `locale`
+	-- localizes month/weekday names as for `now`.
+	format: (input: MsDateInput, format: string?, locale: string?) -> string,
 	-- Shift a date and return RFC3339. unit: second|minute|hour|day|week|month|year.
 	add: (input: MsDateInput, amount: number, unit: string) -> string,
 }
