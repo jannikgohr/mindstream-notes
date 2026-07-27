@@ -205,6 +205,72 @@ Gated by `notes.read`:
 when the matching permission is granted, so `ms.notes == nil` for a plugin
 without `notes.read`.
 
+### Editor setup & type checking
+
+Scripts run untyped inside the sandbox, but while you write one you can get full
+type-checking and autocomplete for the returned effects and the whole `ms.*`
+API. The app ships a single Luau definition file —
+[`plugins/host.d.luau`](../plugins/host.d.luau) — that declares the `ms` global.
+It is the **one shared type file every plugin uses**, in this repo and in your
+own plugin projects; nothing is generated per plugin.
+
+It works in any editor backed by
+[luau-lsp](https://github.com/JohnnyMorganz/luau-lsp) (VS Code, RustRover /
+IntelliJ, Zed, Neovim, …). Because `ms` is a global the host **injects** at
+runtime rather than something you `require`, luau-lsp can only learn it from a
+**definition file**: there is no in-source `import` for it, and the sandbox has
+no `require`, so don't add one — it would crash at runtime.
+
+1. **Copy `host.d.luau`** into your plugin project (take it from the version of
+   the app you target).
+
+2. **Add a `.luaurc`** next to your `.luau` files so the analyzer runs strict:
+
+   ```json
+   { "languageMode": "strict", "lint": { "*": true } }
+   ```
+
+3. **Point luau-lsp at the definition file** — the one editor-specific step (the
+   same line the app repo commits for its own plugins):
+   - **VS Code** (`johnnymorganz.luau-lsp`) — `.vscode/settings.json`:
+     ```json
+     {
+       "luau-lsp.platform.type": "standard",
+       "luau-lsp.types.definitionFiles": ["host.d.luau"]
+     }
+     ```
+   - **RustRover / IntelliJ** (`intellij-luau`) — in **Settings → Languages &
+     Frameworks → Luau**, add the definition file, or pass
+     `--definitions=host.d.luau` to the LSP command.
+   - **Zed / Neovim** — set the same `luau-lsp.types.definitionFiles` init option
+     in your luau-lsp config.
+
+   Your script is then checked end to end (`ctx`, effects, and `ms.*`):
+
+   ```luau
+   --!strict
+   local function render(ctx)
+     local notes = assert(ms.notes) -- present because the manifest grants notes.read
+     local source = notes.get(ctx.settings.source)
+     return { title = source and source.title or "Untitled", body = "" }
+   end
+   return { render = render }
+   ```
+
+**Zero-config fallback.** If you would rather not touch editor settings at all,
+declare `ms` in `.luaurc` `globals` instead of loading the definition file:
+
+```json
+{ "languageMode": "strict", "globals": ["ms"] }
+```
+
+luau-lsp auto-discovers `.luaurc` in every editor, so this silences the
+`Unknown global 'ms'` error with **no** per-editor setup — but it types `ms` as
+`any`, so you lose autocomplete and `ms.*` checking. Use the definition file for
+the full experience; use `globals` when you just want the error gone. (Pick one:
+listing `ms` in `globals` while also loading the definition file double-declares
+it.)
+
 ### Templater-style workflow
 
 This host API covers the core of an Obsidian-Templater workflow with general
