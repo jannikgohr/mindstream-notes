@@ -12,20 +12,21 @@
  *
  * Because they are folder/tag pickers, both auto-clear when their target is
  * deleted (settings/pickers.svelte.ts). Creating a note from a user template
- * copies the source note's body (and title) through the same `{{…}}`
- * interpolation the plugin templates use — so a user template can contain
- * `{{date}}`, `{{uuid}}`, `{{date+7d:YYYY-MM-DD}}`, etc. The app performs the
- * note write, exactly as for plugin templates.
+ * copies the source note's body (and title) with `{{…}}` placeholders
+ * (`{{date}}`, `{{uuid}}`, `{{date+7d:YYYY-MM-DD}}`, …) interpolated by the
+ * **Templates plugin's Luau** (`renderTemplate`) — the plugin owns the macro
+ * engine; the app only performs the note write. Rendering therefore needs the
+ * backend, so user templates are offered only in the app, not the web build.
  */
 
 import { loadNote } from '$lib/api/notes';
+import { isTauri } from '$lib/api/core';
+import { pluginsRunScript } from '$lib/api/plugins';
 import { createNoteIn, tree } from '$lib/stores/tree.svelte';
 import { requestOpenNote } from '$lib/stores/open-note-intent.svelte';
 import { getSettingValue } from '$lib/settings/store.svelte';
-import {
-  renderTemplateString,
-  shouldOpenOnCreate
-} from '$lib/plugins/templates';
+import { i18n } from '$lib/settings/i18n.svelte';
+import { shouldOpenOnCreate } from '$lib/plugins/templates';
 
 /** The Templates plugin owns the source-folder / source-tag settings. */
 export const TEMPLATES_PLUGIN_ID = 'com.mindstream.templates.core';
@@ -69,6 +70,11 @@ function isInFolder(collectionId: string | null, folderId: string): boolean {
  * change.
  */
 export function userTemplateEntries(): UserTemplateEntry[] {
+  // Rendering a user template runs the Templates plugin's Luau, which only
+  // executes in the app's backend — so there are no user templates to offer in a
+  // backend-less (web/preview) build.
+  if (!isTauri()) return [];
+
   const folderId = trimmedSetting(SOURCE_FOLDER_KEY);
   const tag = trimmedSetting(SOURCE_TAG_KEY);
   if (!folderId && !tag) return [];
@@ -98,10 +104,12 @@ export function hasUserTemplates(): boolean {
 }
 
 /**
- * Render a user template note's title + body through the same `{{…}}`
- * interpolation the plugin templates use, without creating anything. The
- * source note's title is rendered first so the body can reference the final
- * `{{title}}`. Shared by note creation and the command palette's insert action.
+ * Render a user template note's title + body into their final form, without
+ * creating anything. The `{{…}}` interpolation is done by the **Templates
+ * plugin's Luau** (`renderTemplate` export) — the plugin owns the macro engine;
+ * the app only feeds it the raw note and performs the resulting write. The title
+ * is rendered first so the body can reference the final `{{title}}` (handled
+ * inside the plugin). Backend-only: `pluginsRunScript` rejects without the app.
  */
 async function renderUserTemplate(
   templateNoteId: string,
@@ -111,9 +119,21 @@ async function renderUserTemplate(
   const rawTitle = summary?.title ?? 'Untitled';
   const full = await loadNote(templateNoteId);
 
-  const title = renderTemplateString(rawTitle, {}, now).trim() || rawTitle;
-  const body = renderTemplateString(full.body ?? '', { title }, now);
-  return { title, body };
+  const rendered = (await pluginsRunScript(
+    TEMPLATES_PLUGIN_ID,
+    'renderTemplate',
+    {
+      title: rawTitle,
+      body: full.body ?? '',
+      now: now.toISOString(),
+      locale: i18n.language
+    }
+  )) as { title?: unknown; body?: unknown } | null;
+
+  const renderedTitle =
+    typeof rendered?.title === 'string' ? rendered.title.trim() : '';
+  const body = typeof rendered?.body === 'string' ? rendered.body : '';
+  return { title: renderedTitle || rawTitle, body };
 }
 
 /**

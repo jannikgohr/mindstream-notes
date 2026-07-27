@@ -1,35 +1,41 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Shared, test-controlled state for the mocked stores.
-const { state, loadNote, createNoteIn, requestOpenNote, settings } = vi.hoisted(
-  () => ({
-    state: {
-      notesById: {} as Record<string, unknown>,
-      collectionsById: {} as Record<string, unknown>
-    },
-    loadNote: vi.fn(),
-    createNoteIn: vi.fn(),
-    requestOpenNote: vi.fn(),
-    settings: new Map<string, unknown>()
-  })
-);
+const {
+  state,
+  loadNote,
+  createNoteIn,
+  requestOpenNote,
+  settings,
+  pluginsRunScript
+} = vi.hoisted(() => ({
+  state: {
+    notesById: {} as Record<string, unknown>,
+    collectionsById: {} as Record<string, unknown>
+  },
+  loadNote: vi.fn(),
+  createNoteIn: vi.fn(),
+  requestOpenNote: vi.fn(),
+  settings: new Map<string, unknown>(),
+  pluginsRunScript: vi.fn()
+}));
 
 vi.mock('$lib/api/notes', () => ({
   NoteKind: { Markdown: 'markdown', Kanban: 'kanban' },
   loadNote
 }));
+// User templates only exist in the app (rendering runs the plugin's Luau).
+vi.mock('$lib/api/core', () => ({ isTauri: () => true }));
+vi.mock('$lib/api/plugins', () => ({ pluginsRunScript }));
+vi.mock('$lib/settings/i18n.svelte', () => ({ i18n: { language: 'en' } }));
 vi.mock('$lib/stores/tree.svelte', () => ({ tree: state, createNoteIn }));
 vi.mock('$lib/stores/open-note-intent.svelte', () => ({ requestOpenNote }));
 vi.mock('$lib/settings/store.svelte', () => ({
   getSettingValue: (id: string) => settings.get(id)
 }));
-// A minimal interpolation so we can assert it runs without pulling the registry,
-// plus the open-on-create convention reader.
+// Only the open-on-create convention reader is consumed here now; rendering is
+// delegated to the plugin (mocked via pluginsRunScript above).
 vi.mock('$lib/plugins/templates', () => ({
-  renderTemplateString: (tpl: string, ctx: Record<string, string>) =>
-    tpl.replace(/\{\{\s*(\w+)\s*\}\}/g, (_m, k) =>
-      k === 'date' ? '2026-07-26' : (ctx[k] ?? '')
-    ),
   shouldOpenOnCreate: (pluginId: string) =>
     settings.get(`plugins.${pluginId}.open-on-create`) !== false
 }));
@@ -76,6 +82,7 @@ beforeEach(() => {
   loadNote.mockReset();
   createNoteIn.mockReset().mockResolvedValue('new-note');
   requestOpenNote.mockReset();
+  pluginsRunScript.mockReset();
 });
 
 describe('userTemplateEntries', () => {
@@ -135,13 +142,27 @@ describe('userTemplateEntries', () => {
 });
 
 describe('createNoteFromUserTemplate', () => {
-  it('interpolates the source body/title and creates + opens the note', async () => {
+  it('renders via the plugin, then creates + opens the note', async () => {
     state.notesById = { src: note('src', { title: 'Daily {{date}}' }) };
     loadNote.mockResolvedValue({ body: '# {{title}}\n\n{{date}}' });
+    pluginsRunScript.mockResolvedValue({
+      title: 'Daily 2026-07-26',
+      body: '# Daily 2026-07-26\n\n2026-07-26'
+    });
 
     const id = await createNoteFromUserTemplate('src', 'col-1');
 
     expect(id).toBe('new-note');
+    // The raw note is handed to the plugin's renderTemplate export…
+    expect(pluginsRunScript).toHaveBeenCalledWith(
+      TEMPLATES_PLUGIN_ID,
+      'renderTemplate',
+      expect.objectContaining({
+        title: 'Daily {{date}}',
+        body: '# {{title}}\n\n{{date}}'
+      })
+    );
+    // …and the app writes the plugin-rendered result.
     expect(createNoteIn).toHaveBeenCalledWith(
       'col-1',
       'Daily 2026-07-26',
@@ -154,6 +175,7 @@ describe('createNoteFromUserTemplate', () => {
   it('respects the open-on-create toggle when creating', async () => {
     state.notesById = { src: note('src', { title: 'T' }) };
     loadNote.mockResolvedValue({ body: 'b' });
+    pluginsRunScript.mockResolvedValue({ title: 'T', body: 'b' });
     settings.set(OPEN_KEY, false);
 
     await createNoteFromUserTemplate('src', null);
