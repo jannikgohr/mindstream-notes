@@ -420,6 +420,8 @@ pub fn run_plugin_script(
     let source = files
         .read_text(entry)?
         .ok_or_else(|| AppError::InvalidArg(format!("entry '{entry}' not found")))?;
+    // The plugin's other `.luau` files, resolvable via a plugin-scoped `require`.
+    let modules = files.luau_modules()?;
     let id = manifest
         .get("id")
         .and_then(|v| v.as_str())
@@ -431,6 +433,7 @@ pub fn run_plugin_script(
         input,
         permissions: granted,
         notes,
+        modules,
         limits: luau::Limits::default(),
     })
 }
