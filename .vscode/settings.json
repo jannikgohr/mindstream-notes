@@ -1,0 +1,6 @@
+{
+  "luau-lsp.platform.type": "standard",
+  "luau-lsp.types.definitionFiles": ["plugins/host.d.luau"],
+  "luau-lsp.require.mode": "relativeToFile",
+  "luau-lsp.studioPlugin.enabled": true
+}
