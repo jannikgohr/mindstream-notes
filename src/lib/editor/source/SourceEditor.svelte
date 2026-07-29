@@ -63,6 +63,10 @@
     tabSize?: number;
     /** Placeholder shown when the document is empty. */
     placeholderText?: string;
+    /** Language mode. Markdown notes get Markdown parsing; plugin languages
+     *  fall back to the shared plain-text editor until they contribute a
+     *  language service. */
+    language?: string;
     /** Fired (debounced) on genuine user edits with the full document text. */
     onInput: (text: string) => void;
     /** Fired when the source editor gains focus — NoteEditor uses it to mark
@@ -91,6 +95,7 @@
     placeholderText = '',
     onInput,
     onFocusSurface,
+    language = 'markdown',
     autoPairEnabled = false,
     wikilinksEnabled = false,
     wikilinkBridge = null,
@@ -196,7 +201,7 @@
     return [
       lineNumbers(),
       history(),
-      markdown(),
+      ...(language === 'markdown' ? [markdown()] : []),
       syntaxHighlighting(highlight),
       theme,
       EditorView.lineWrapping,
@@ -270,6 +275,7 @@
     void wikilinkBridge;
     void userMentionsEnabled;
     void userMentionBridge;
+    void language;
     view?.dispatch({ effects: featureComp.reconfigure(featureExtensions()) });
   });
 

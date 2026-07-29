@@ -232,15 +232,23 @@ export function pluginCommands(): PluginCommandRef[] {
 /** Toolbar buttons contributed by all enabled plugins for a given host surface,
  *  in registration order. */
 export function pluginToolbarButtons(
-  location: PluginToolbarLocation
+  location: PluginToolbarLocation,
+  opts: { noteKind?: string | null } = {}
 ): PluginToolbarButtonRef[] {
   const out: PluginToolbarButtonRef[] = [];
   for (const { manifest, enabled } of Object.values(state.plugins)) {
     if (!enabled) continue;
     for (const button of manifest.contributes.toolbar ?? []) {
-      if (button.location === location) {
-        out.push({ pluginId: manifest.id, button });
+      if (button.location !== location) continue;
+      if (location === 'note-editor' && opts.noteKind) {
+        if (
+          !button.noteKind ||
+          pluginNoteKindId(manifest.id, button.noteKind) !== opts.noteKind
+        ) {
+          continue;
+        }
       }
+      out.push({ pluginId: manifest.id, button });
     }
   }
   return out;

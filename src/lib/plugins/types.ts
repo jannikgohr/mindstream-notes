@@ -172,8 +172,24 @@ export interface PluginCommandContribution {
 }
 
 /** Host surfaces a plugin may place a toolbar button in. */
-export const PLUGIN_TOOLBAR_LOCATIONS = ['file-tree'] as const;
+export const PLUGIN_TOOLBAR_LOCATIONS = ['file-tree', 'note-editor'] as const;
 export type PluginToolbarLocation = (typeof PLUGIN_TOOLBAR_LOCATIONS)[number];
+
+/** Host-owned text edits a plugin toolbar button may apply to a source editor. */
+export type PluginSourceEditAction =
+  | {
+      type: 'insertText';
+      text: string;
+      /** Optional caret offset inside `text` after insertion. */
+      cursorOffset?: number;
+    }
+  | {
+      type: 'wrapSelection';
+      before: string;
+      after: string;
+      /** Text inserted and selected when the current selection is empty. */
+      placeholder?: string;
+    };
 
 /**
  * What a toolbar button does when clicked. A closed union so a button can only
@@ -182,17 +198,21 @@ export type PluginToolbarLocation = (typeof PLUGIN_TOOLBAR_LOCATIONS)[number];
  * performs — which is what lets one button be either a single action or a
  * sub-menu (the script decides by returning a terminal effect vs. `openMenu`).
  */
-export type PluginToolbarAction = {
-  type: 'script';
-  /** Exported backend script function name; called with the button `ctx` on click. */
-  export: string;
-};
+export type PluginToolbarAction =
+  | {
+      type: 'script';
+      /** Exported backend script function name; called with the button `ctx` on click. */
+      export: string;
+    }
+  | PluginSourceEditAction;
 
 /** A toolbar button a plugin contributes into a host surface. */
 export interface PluginToolbarButton {
   /** Plugin-local slug; the app-wide id is `plugin.<pluginId>.<id>`. */
   id: string;
   location: PluginToolbarLocation;
+  /** Plugin-local note kind id when `location` is `note-editor`. */
+  noteKind?: string;
   /** Plugin i18n key for the tooltip / aria-label. */
   labelKey: string;
   /** Safe relative path to a bundled `.svg` icon (rendered themed via a mask). */

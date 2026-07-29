@@ -1,10 +1,22 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
+  import type { EditorView } from '@codemirror/view';
   import { AlertTriangle, Loader2 } from '@lucide/svelte';
   import { loadNote } from '$lib/api';
   import { pluginsRunScript } from '$lib/api/plugins';
   import { setNoteBody } from '$lib/stores/tree.svelte';
   import { pluginNoteKind } from '$lib/plugins/registry.svelte';
+  import { getSettingValue } from '$lib/settings/store.svelte';
+  import SourceEditor from '$lib/editor/source/SourceEditor.svelte';
+  import { SOURCE_ACTIONS } from '$lib/editor/source/source-actions';
+  import {
+    APP_REDO_COMMAND,
+    APP_UNDO_COMMAND,
+    registerEditor,
+    unregisterEditor,
+    type EditorListener
+  } from '$lib/hotkeys/bus.svelte';
+  import PluginSourceToolbar from './PluginSourceToolbar.svelte';
 
   interface Props {
     noteId: string;
@@ -28,19 +40,36 @@
   let previewText = $state('');
   let previewMime = $state('text/plain');
   let diagnostics = $state<Diagnostic[]>([]);
+  let dirty = false;
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
   let renderTimer: ReturnType<typeof setTimeout> | null = null;
   let loadToken = 0;
   let renderToken = 0;
   let destroyed = false;
+  let editorRegionEl: HTMLDivElement | null = $state(null);
+  let sourceEditor = $state<{
+    setText: (text: string) => void;
+    flush: () => void;
+    focus: () => void;
+    getView: () => EditorView | null;
+  } | null>(null);
+  let editorListener: EditorListener | null = $state(null);
 
   const contributionRef = $derived(pluginNoteKind(noteKind));
+  const storedNoteKind = $derived(contributionRef?.noteKind ?? noteKind ?? '');
   const sourceLanguage = $derived(
     contributionRef?.contribution.sourceLanguage ?? 'text'
   );
   const debounceMs = $derived(
     contributionRef?.contribution.render.debounceMs ?? 250
   );
+  const autoPairEnabled = $derived(
+    (getSettingValue('editor.autoPair') as boolean | undefined) ?? true
+  );
+  const sourceTabSize = $derived.by(() => {
+    const v = Number(getSettingValue('editor.tabSize'));
+    return Number.isFinite(v) && v > 0 ? Math.min(8, v) : 2;
+  });
   const iframeSrcdoc = $derived(buildPreviewDocument(previewMime, previewText));
 
   $effect(() => {
@@ -56,6 +85,7 @@
         const note = await loadNote(id);
         if (destroyed || token !== loadToken) return;
         source = note.body ?? '';
+        dirty = false;
         if (kind && note.note_kind !== kind) {
           loadError = `Expected ${kind}, found ${note.note_kind}.`;
           return;
@@ -70,20 +100,61 @@
     })();
   });
 
-  function onSourceInput(event: Event) {
-    source = (event.currentTarget as HTMLTextAreaElement).value;
+  $effect(() => {
+    if (!editorRegionEl) return;
+    const listener: EditorListener = {
+      kind: 'plugin',
+      host: editorRegionEl,
+      noteId,
+      onCommand: (id) => {
+        if (id !== APP_UNDO_COMMAND && id !== APP_REDO_COMMAND) return false;
+        const view = sourceEditor?.getView() ?? null;
+        const action = view ? SOURCE_ACTIONS[id] : undefined;
+        if (!view || !action) return false;
+        action(view);
+        return true;
+      }
+    };
+    editorListener = listener;
+    registerEditor(listener);
+    return () => {
+      unregisterEditor(listener);
+      if (editorListener === listener) editorListener = null;
+    };
+  });
+
+  $effect(() => {
+    if (!editorRegionEl || !editorListener) return;
+    const listener = editorListener;
+    const promote = () => registerEditor(listener);
+    editorRegionEl.addEventListener('focusin', promote);
+    return () => editorRegionEl?.removeEventListener('focusin', promote);
+  });
+
+  function onSourceInput(value: string) {
+    source = value;
     scheduleSave();
     scheduleRender(debounceMs);
   }
 
   function scheduleSave() {
+    dirty = true;
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
       saveTimer = null;
-      void setNoteBody(noteId, source).catch((err) => {
-        console.warn('[plugin-note] save failed', err);
-      });
+      void flushSave();
     }, 400);
+  }
+
+  async function flushSave() {
+    if (!dirty) return;
+    dirty = false;
+    try {
+      await setNoteBody(noteId, source);
+    } catch (err) {
+      dirty = true;
+      console.warn('[plugin-note] save failed', err);
+    }
   }
 
   function scheduleRender(delay: number) {
@@ -202,8 +273,14 @@
     destroyed = true;
     loadToken += 1;
     renderToken += 1;
+    sourceEditor?.flush();
     if (saveTimer) clearTimeout(saveTimer);
     if (renderTimer) clearTimeout(renderTimer);
+    if (editorListener) {
+      unregisterEditor(editorListener);
+      editorListener = null;
+    }
+    void flushSave();
   });
 </script>
 
@@ -223,22 +300,31 @@
       {loadError}
     </div>
   {:else}
-    <div class="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-2">
+    <div
+      bind:this={editorRegionEl}
+      class="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-2"
+    >
       <section
         class="flex min-h-0 flex-col border-b border-border md:border-b-0 md:border-r"
       >
         <div
-          class="flex h-9 items-center justify-between border-b border-border px-3 text-xs text-muted-foreground"
+          class="flex h-9 items-center justify-between gap-2 border-b border-border pr-3 text-xs text-muted-foreground"
         >
-          <span>Source</span>
+          <PluginSourceToolbar
+            noteKind={storedNoteKind}
+            getView={() => sourceEditor?.getView() ?? null}
+            class="min-w-0 flex-1 bg-background"
+          />
           <span class="font-mono">{sourceLanguage}</span>
         </div>
-        <textarea
-          class="min-h-0 flex-1 resize-none bg-background p-4 font-mono text-sm leading-6 outline-none"
-          spellcheck="false"
-          value={source}
-          oninput={onSourceInput}
-        ></textarea>
+        <SourceEditor
+          bind:this={sourceEditor}
+          getInitialText={() => source}
+          language={sourceLanguage}
+          tabSize={sourceTabSize}
+          onInput={onSourceInput}
+          {autoPairEnabled}
+        />
       </section>
       <section class="flex min-h-0 flex-col">
         <div

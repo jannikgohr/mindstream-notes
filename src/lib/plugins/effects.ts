@@ -184,6 +184,14 @@ export async function runPluginButton(
   button: PluginToolbarButton,
   anchor?: EffectAnchor
 ): Promise<void> {
+  if (button.action.type !== 'script') {
+    console.error(
+      '[plugins] toolbar button is not a script action',
+      pluginId,
+      button.id
+    );
+    return;
+  }
   try {
     const ctx = buildPluginContext(pluginId);
     const raw = await pluginsRunScript(pluginId, button.action.export, ctx);

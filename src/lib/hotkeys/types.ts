@@ -73,4 +73,5 @@ export type EditorKind =
   | 'drawing'
   | 'ink'
   | 'pdf'
-  | 'kanban';
+  | 'kanban'
+  | 'plugin';
