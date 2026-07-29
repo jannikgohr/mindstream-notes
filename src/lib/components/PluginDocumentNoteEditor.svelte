@@ -301,22 +301,24 @@
     </div>
   {:else}
     <div
+      class="flex h-9 shrink-0 items-center gap-2 border-b border-border bg-background pr-2"
+    >
+      <PluginSourceToolbar
+        noteKind={storedNoteKind}
+        getView={() => sourceEditor?.getView() ?? null}
+        class="min-w-0 flex-1 bg-background"
+      />
+      {#if rendering}
+        <Loader2 class="size-3.5 shrink-0 animate-spin text-muted-foreground" />
+      {/if}
+    </div>
+    <div
       bind:this={editorRegionEl}
       class="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-2"
     >
       <section
         class="flex min-h-0 flex-col border-b border-border md:border-b-0 md:border-r"
       >
-        <div
-          class="flex h-9 items-center justify-between gap-2 border-b border-border pr-3 text-xs text-muted-foreground"
-        >
-          <PluginSourceToolbar
-            noteKind={storedNoteKind}
-            getView={() => sourceEditor?.getView() ?? null}
-            class="min-w-0 flex-1 bg-background"
-          />
-          <span class="font-mono">{sourceLanguage}</span>
-        </div>
         <SourceEditor
           bind:this={sourceEditor}
           getInitialText={() => source}
@@ -327,16 +329,6 @@
         />
       </section>
       <section class="flex min-h-0 flex-col">
-        <div
-          class="flex h-9 items-center justify-between border-b border-border px-3 text-xs text-muted-foreground"
-        >
-          <span>Preview</span>
-          {#if rendering}
-            <Loader2 class="size-3.5 animate-spin" />
-          {:else}
-            <span class="font-mono">{previewMime}</span>
-          {/if}
-        </div>
         {#if renderError}
           <div
             class="m-3 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive"
