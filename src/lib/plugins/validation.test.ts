@@ -338,6 +338,104 @@ describe('validateManifest', () => {
     expect(validateManifest(m).contributes.artifacts).toHaveLength(1);
   });
 
+  it('accepts webScript artifacts for iframe preview runtimes', () => {
+    const m = validManifest({
+      runtime: 'luau',
+      entry: 'main.luau',
+      permissions: [
+        'templates.contribute',
+        'noteKinds.contribute',
+        'notes.create',
+        'pluginArtifacts.download'
+      ]
+    });
+    const contributes = m.contributes as Record<string, unknown>;
+    contributes.artifacts = [
+      {
+        id: 'preview-glue',
+        kind: 'webScript',
+        version: '0.7.0',
+        url: 'https://example.com/preview.mjs',
+        sha256: 'a'.repeat(64),
+        fileName: 'preview.mjs'
+      }
+    ];
+    contributes.noteKinds = [
+      {
+        id: 'document',
+        labelKey: 'notes.document.label',
+        render: {
+          export: 'renderDocument',
+          webview: { entry: 'preview.mjs', artifacts: ['preview-glue'] }
+        }
+      }
+    ];
+    expect(
+      validateManifest(m).contributes.noteKinds?.[0].render.webview
+    ).toEqual({ entry: 'preview.mjs', artifacts: ['preview-glue'] });
+  });
+
+  it('rejects iframe preview runtimes that reference unsafe or undeclared assets', () => {
+    const m = validManifest({
+      runtime: 'luau',
+      entry: 'main.luau',
+      permissions: [
+        'templates.contribute',
+        'noteKinds.contribute',
+        'notes.create'
+      ]
+    });
+    const contributes = m.contributes as Record<string, unknown>;
+    contributes.noteKinds = [
+      {
+        id: 'document',
+        labelKey: 'notes.document.label',
+        render: {
+          export: 'renderDocument',
+          webview: { entry: '../preview.mjs', artifacts: ['missing'] }
+        }
+      }
+    ];
+    expect(() => validateManifest(m)).toThrow(/webview.entry/);
+    (
+      (contributes.noteKinds as Record<string, unknown>[])[0].render as Record<
+        string,
+        unknown
+      >
+    ).webview = { entry: 'preview.mjs', artifacts: ['missing'] };
+    expect(() => validateManifest(m)).toThrow(/undeclared artifact/);
+  });
+
+  it('accepts declared native tools behind the native permission', () => {
+    const m = validManifest({
+      permissions: [
+        'templates.contribute',
+        'notes.create',
+        'nativeTools.runDeclared'
+      ]
+    });
+    (m.contributes as Record<string, unknown>).nativeTools = [
+      {
+        id: 'typst',
+        binaryName: 'typst',
+        descriptionKey: 'native.typst.description'
+      }
+    ];
+    expect(validateManifest(m).contributes.nativeTools).toHaveLength(1);
+  });
+
+  it('rejects native tools without permission or with path-shaped binaries', () => {
+    const m = validManifest();
+    (m.contributes as Record<string, unknown>).nativeTools = [
+      { id: 'typst', binaryName: '../typst' }
+    ];
+    expect(() => validateManifest(m)).toThrow(/binaryName/);
+    (m.contributes as Record<string, unknown>).nativeTools = [
+      { id: 'typst', binaryName: 'typst' }
+    ];
+    expect(() => validateManifest(m)).toThrow(/nativeTools\.runDeclared/);
+  });
+
   it('rejects artifacts without the download permission', () => {
     const m = validManifest();
     (m.contributes as Record<string, unknown>).artifacts = [

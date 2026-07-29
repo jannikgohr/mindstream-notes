@@ -268,6 +268,32 @@ fn parse_artifacts_reads_manifest_declarations() {
 }
 
 #[test]
+fn parse_native_tools_reads_manifest_declarations() {
+    let manifest = serde_json::json!({
+        "contributes": {
+            "nativeTools": [{
+                "id": "typst",
+                "binaryName": "typst",
+                "descriptionKey": "native.typst.description"
+            }]
+        }
+    });
+    let tools = parse_native_tools(&manifest).unwrap();
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0].id, "typst");
+    assert_eq!(tools[0].binary_name, "typst");
+}
+
+#[test]
+fn native_tool_binary_names_are_exact_basenames() {
+    assert!(validate_binary_name("typst").is_ok());
+    assert!(validate_binary_name("typst.exe").is_ok());
+    assert!(validate_binary_name("../typst").is_err());
+    assert!(validate_binary_name("tools/typst").is_err());
+    assert!(validate_binary_name("typst.cmd").is_err());
+}
+
+#[test]
 fn plugin_storage_paths_reject_traversal_and_absolute_paths() {
     assert!(split_plugin_rel_path("cache/compiler.json", false).is_ok());
     assert!(split_plugin_rel_path("../escape", false).is_err());
