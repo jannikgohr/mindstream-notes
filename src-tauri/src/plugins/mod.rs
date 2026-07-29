@@ -31,7 +31,6 @@ use crate::error::{AppError, AppResult, CommandResult};
 pub mod discovery;
 pub mod luau;
 pub mod signing;
-#[cfg(all(not(target_os = "ios"), target_has_atomic = "64"))]
 pub mod wasm;
 
 /// Where a plugin came from. Governs the integrity gate: builtins are trusted,
@@ -477,7 +476,6 @@ fn luau_limits(manifest: &serde_json::Value) -> luau::Limits {
     }
 }
 
-#[cfg(all(not(target_os = "ios"), target_has_atomic = "64"))]
 fn wasm_limits(manifest: &serde_json::Value) -> wasm::Limits {
     let defaults = wasm::Limits::default();
     wasm::Limits {
@@ -543,7 +541,6 @@ pub fn run_plugin_script(
     }
 }
 
-#[cfg(all(not(target_os = "ios"), target_has_atomic = "64"))]
 fn run_wasm_plugin_script(
     files: &discovery::PluginFiles,
     manifest: &serde_json::Value,
@@ -567,21 +564,6 @@ fn run_wasm_plugin_script(
         notes,
         limits: wasm_limits(manifest),
     })
-}
-
-#[cfg(any(target_os = "ios", not(target_has_atomic = "64")))]
-fn run_wasm_plugin_script(
-    _files: &discovery::PluginFiles,
-    _manifest: &serde_json::Value,
-    _checksum: &str,
-    _granted: Vec<String>,
-    _export: &str,
-    _input: serde_json::Value,
-    _notes: Vec<luau::NoteMeta>,
-) -> AppResult<serde_json::Value> {
-    Err(AppError::InvalidArg(
-        "wasm plugins are not supported on this platform".into(),
-    ))
 }
 
 /// Build the read-only note snapshot exposed via `ms.notes`. One `notes::list`

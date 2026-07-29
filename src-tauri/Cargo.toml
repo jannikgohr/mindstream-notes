@@ -87,6 +87,10 @@ ed25519-dalek = "3.0.0"
 # we use to bound CPU time and memory. Runs in the backend, never the WebView.
 mlua = { version = "0.10", features = ["luau", "vendored", "serialize"] }
 include_dir = "0.7.4"
+# Pure-Rust WebAssembly interpreter for scripted plugins. We use the same
+# runtime on desktop and mobile so the plugin ABI behaves consistently; no WASI
+# imports are linked, and host APIs are installed explicitly per permission.
+wasmi = { version = "1.1.0", default-features = false, features = ["std", "extra-checks"] }
 
 [dev-dependencies]
 wat = "1"
@@ -97,11 +101,6 @@ codegen-units = 1
 lto = true
 opt-level = "s"
 strip = true
-
-[target.'cfg(not(target_os = "ios"))'.dependencies]
-# Wasmtime-backed plugin runtime. Start with the full default feature set so the
-# first runtime slice stays straightforward; trim after measuring release size.
-wasmtime = "47.0.2"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-autostart = "2"

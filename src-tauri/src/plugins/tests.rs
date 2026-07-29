@@ -421,7 +421,6 @@ fn run_plugin_script_refuses_a_non_luau_runtime() {
     assert!(out.is_err());
 }
 
-#[cfg(all(not(target_os = "ios"), target_has_atomic = "64"))]
 #[test]
 fn run_plugin_script_executes_wasm_entry_with_input() {
     fn pack(ptr: u32, len: usize) -> u64 {
