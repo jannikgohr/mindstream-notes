@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { PluginValidationError, validateManifest } from './validation';
 import type { PluginManifest } from './types';
+import typstPrototypeManifest from '../../../plugins/typst-prototype/manifest.json';
 
 /** A minimal manifest that passes validation; override to probe failures. */
 function validManifest(
@@ -68,6 +69,21 @@ describe('validateManifest', () => {
     const m = validManifest();
     const result: PluginManifest = validateManifest(m);
     expect(result.id).toBe('com.example.templates');
+  });
+
+  it('accepts the bundled Typst prototype manifest', () => {
+    const result = validateManifest(typstPrototypeManifest);
+    expect(result.contributes.artifacts).toHaveLength(6);
+    expect(result.contributes.noteKinds?.[0].render.webview?.artifacts).toEqual(
+      [
+        'typst-web-compiler-wasm',
+        'typst-web-compiler-js',
+        'typst-web-compiler-shim',
+        'typst-renderer-wasm',
+        'typst-renderer-js',
+        'typst-renderer-shim'
+      ]
+    );
   });
 
   it('throws PluginValidationError carrying the plugin id', () => {
