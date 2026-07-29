@@ -1,10 +1,9 @@
-//! Sandboxed Wasmtime execution for scripted (`runtime: "wasm"`) plugins.
+//! Sandboxed Wasmi execution for scripted (`runtime: "wasm"`) plugins.
 //!
 //! This tier mirrors the Luau security posture while targeting heavier compute:
-//! compiled modules are cached by the signed package checksum, but every call
-//! gets a fresh [`Store`] and instance, no WASI is linked, and host imports are
-//! installed only for granted permissions. The ABI is deliberately small for
-//! the first slice:
+//! parsed modules are cached by the signed package checksum, every call gets a
+//! fresh [`Store`] and instance, no WASI is linked, and host imports are
+//! installed only for granted permissions. The ABI is deliberately small:
 //!
 //!   - export `memory`
 //!   - export `alloc(len: i32) -> i32`
@@ -16,11 +15,10 @@
 //! effects/data; the app performs all writes.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
-use wasmtime::{
+use wasmi::{
     Caller, Config, Engine, Linker, Memory, Module, Store, StoreLimits, StoreLimitsBuilder,
     TypedFunc,
 };
@@ -33,9 +31,9 @@ use crate::error::{AppError, AppResult};
 pub struct Limits {
     /// Maximum bytes for each guest linear memory.
     pub memory_bytes: usize,
-    /// Wall-clock deadline enforced through Wasmtime epochs.
+    /// Wall-clock deadline checked at Wasm/host call boundaries.
     pub timeout: Duration,
-    /// Deterministic instruction-ish budget enforced through Wasmtime fuel.
+    /// Deterministic instruction budget enforced through Wasmi fuel.
     pub fuel: u64,
 }
 
@@ -56,8 +54,8 @@ pub struct ScriptRequest {
     pub wasm: Vec<u8>,
     /// Human name for diagnostics, e.g. `<id>/main.wasm`.
     pub module_name: String,
-    /// Package checksum from discovery/signing; used as the compiled-module
-    /// cache key so any signed package edit causes a fresh compile.
+    /// Package checksum from discovery/signing; used as the parsed-module
+    /// cache key so any signed package edit causes a fresh parse.
     pub checksum: String,
     pub export: String,
     pub input: serde_json::Value,
@@ -82,10 +80,10 @@ fn map_wasm(module: &str, e: impl std::fmt::Display) -> AppError {
 fn engine() -> &'static Engine {
     static ENGINE: OnceLock<Engine> = OnceLock::new();
     ENGINE.get_or_init(|| {
-        let mut config = Config::new();
+        let mut config = Config::default();
         config.consume_fuel(true);
-        config.epoch_interruption(true);
-        Engine::new(&config).expect("valid wasmtime engine config")
+        config.ignore_custom_sections(true);
+        Engine::new(&config)
     })
 }
 
@@ -99,8 +97,7 @@ fn cached_module(req: &ScriptRequest) -> AppResult<Module> {
     if let Some(module) = module_cache().lock().expect("module cache").get(&key) {
         return Ok(module.clone());
     }
-    let module =
-        Module::from_binary(engine(), &req.wasm).map_err(|e| map_wasm(&req.module_name, e))?;
+    let module = Module::new(engine(), &req.wasm).map_err(|e| map_wasm(&req.module_name, e))?;
     module_cache()
         .lock()
         .expect("module cache")
@@ -137,16 +134,14 @@ fn read_guest_bytes(
 ) -> AppResult<Vec<u8>> {
     let start = ptr as usize;
     let len = len as usize;
-    let end = start
+    start
         .checked_add(len)
         .ok_or_else(|| err(format!("wasm ({module_name}): result pointer overflow")))?;
-    let data = memory.data(store);
-    let bytes = data.get(start..end).ok_or_else(|| {
-        err(format!(
-            "wasm ({module_name}): result range {start}..{end} is outside guest memory"
-        ))
-    })?;
-    Ok(bytes.to_vec())
+    let mut output = vec![0; len];
+    memory
+        .read(store, start, &mut output)
+        .map_err(|e| map_wasm(module_name, e))?;
+    Ok(output)
 }
 
 fn write_guest_bytes(
@@ -162,7 +157,7 @@ fn write_guest_bytes(
         )));
     }
     memory
-        .write(store, ptr as usize, bytes)
+        .write(&mut *store, ptr as usize, bytes)
         .map_err(|e| map_wasm(module_name, e))
 }
 
@@ -175,12 +170,12 @@ fn unpack_ptr_len(packed: i64) -> (u32, u32) {
 
 fn call_dealloc(
     store: &mut Store<HostState>,
-    dealloc: Option<&TypedFunc<(i32, i32), ()>>,
+    dealloc: Option<TypedFunc<(i32, i32), ()>>,
     ptr: i32,
     len: i32,
 ) {
     if let Some(dealloc) = dealloc {
-        let _ = dealloc.call(store, (ptr, len));
+        let _ = dealloc.call(&mut *store, (ptr, len));
     }
 }
 
@@ -209,65 +204,57 @@ pub fn run(req: ScriptRequest) -> AppResult<serde_json::Value> {
     store
         .set_fuel(req.limits.fuel)
         .map_err(|e| map_wasm(&req.module_name, e))?;
-    #[cfg(target_has_atomic = "64")]
-    store.set_epoch_deadline(1);
 
-    let done = Arc::new(AtomicBool::new(false));
-    let deadline_done = done.clone();
-    let deadline_engine = engine().clone();
+    let started_at = Instant::now();
     let timeout = req.limits.timeout;
-    std::thread::spawn(move || {
-        std::thread::sleep(timeout);
-        if !deadline_done.load(Ordering::Acquire) {
-            deadline_engine.increment_epoch();
+    store.call_hook(move |_, _| {
+        if started_at.elapsed() > timeout {
+            Err(wasmi::Error::new("wall-clock timeout"))
+        } else {
+            Ok(())
         }
     });
 
-    let run_result = (|| {
-        let instance = linker
-            .instantiate(&mut store, &module)
-            .map_err(|e| map_wasm(&req.module_name, e))?;
-        let memory = instance
-            .get_memory(&mut store, "memory")
-            .ok_or_else(|| err(format!("wasm ({}): missing memory export", req.module_name)))?;
-        let alloc = instance
-            .get_typed_func::<i32, i32>(&mut store, "alloc")
-            .map_err(|e| map_wasm(&req.module_name, e))?;
-        let dealloc = instance
-            .get_typed_func::<(i32, i32), ()>(&mut store, "dealloc")
-            .ok();
-        let func = instance
-            .get_typed_func::<(i32, i32), i64>(&mut store, &req.export)
-            .map_err(|e| map_wasm(&req.module_name, e))?;
+    let instance = linker
+        .instantiate_and_start(&mut store, &module)
+        .map_err(|e| map_wasm(&req.module_name, e))?;
+    let memory = instance
+        .get_memory(&store, "memory")
+        .ok_or_else(|| err(format!("wasm ({}): missing memory export", req.module_name)))?;
+    let alloc = instance
+        .get_typed_func::<i32, i32>(&store, "alloc")
+        .map_err(|e| map_wasm(&req.module_name, e))?;
+    let dealloc = instance
+        .get_typed_func::<(i32, i32), ()>(&store, "dealloc")
+        .ok();
+    let func = instance
+        .get_typed_func::<(i32, i32), i64>(&store, &req.export)
+        .map_err(|e| map_wasm(&req.module_name, e))?;
 
-        let input = serde_json::to_vec(&req.input).map_err(|e| map_wasm(&req.module_name, e))?;
-        let input_len: i32 = input
-            .len()
-            .try_into()
-            .map_err(|_| err(format!("wasm ({}): input is too large", req.module_name)))?;
-        let input_ptr = alloc
-            .call(&mut store, input_len)
-            .map_err(|e| map_wasm(&req.module_name, e))?;
-        write_guest_bytes(&req.module_name, &memory, &mut store, input_ptr, &input)?;
+    let input = serde_json::to_vec(&req.input).map_err(|e| map_wasm(&req.module_name, e))?;
+    let input_len: i32 = input
+        .len()
+        .try_into()
+        .map_err(|_| err(format!("wasm ({}): input is too large", req.module_name)))?;
+    let input_ptr = alloc
+        .call(&mut store, input_len)
+        .map_err(|e| map_wasm(&req.module_name, e))?;
+    write_guest_bytes(&req.module_name, &memory, &mut store, input_ptr, &input)?;
 
-        let packed = func
-            .call(&mut store, (input_ptr, input_len))
-            .map_err(|e| map_wasm(&req.module_name, e))?;
-        call_dealloc(&mut store, dealloc.as_ref(), input_ptr, input_len);
+    let packed = func
+        .call(&mut store, (input_ptr, input_len))
+        .map_err(|e| map_wasm(&req.module_name, e))?;
+    call_dealloc(&mut store, dealloc, input_ptr, input_len);
 
-        let (out_ptr, out_len) = unpack_ptr_len(packed);
-        let output = read_guest_bytes(&req.module_name, &memory, &store, out_ptr, out_len)?;
-        call_dealloc(&mut store, dealloc.as_ref(), out_ptr as i32, out_len as i32);
-        serde_json::from_slice(&output).map_err(|e| {
-            err(format!(
-                "wasm ({}): export '{}' returned invalid JSON: {e}",
-                req.module_name, req.export
-            ))
-        })
-    })();
-
-    done.store(true, Ordering::Release);
-    run_result
+    let (out_ptr, out_len) = unpack_ptr_len(packed);
+    let output = read_guest_bytes(&req.module_name, &memory, &store, out_ptr, out_len)?;
+    call_dealloc(&mut store, dealloc, out_ptr as i32, out_len as i32);
+    serde_json::from_slice(&output).map_err(|e| {
+        err(format!(
+            "wasm ({}): export '{}' returned invalid JSON: {e}",
+            req.module_name, req.export
+        ))
+    })
 }
 
 #[cfg(test)]
