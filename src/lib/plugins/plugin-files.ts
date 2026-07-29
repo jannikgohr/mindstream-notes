@@ -9,8 +9,8 @@
  *     bundled core plugins are present in a browser build; third-party plugins
  *     never reach it (they need the Tauri filesystem).
  *
- * Consumed by `docs-loader.ts` (markdown sections) and `plugin-assets.ts`
- * (SVG icons).
+ * Consumed by `docs-loader.ts` (markdown sections), `plugin-assets.ts` (SVG
+ * icons), and plugin-owned iframe preview modules.
  */
 
 import { isTauri } from '$lib/api/core';
@@ -23,7 +23,7 @@ const manifestModules = import.meta.glob<{
   default?: { id?: string };
 }>('../../../plugins/*/manifest.json', { eager: true });
 const assetModules = import.meta.glob<string>(
-  '../../../plugins/*/**/*.{md,svg}',
+  '../../../plugins/*/**/*.{css,html,js,md,mjs,svg}',
   { query: '?raw', import: 'default', eager: true }
 );
 

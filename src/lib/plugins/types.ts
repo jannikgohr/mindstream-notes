@@ -25,6 +25,8 @@
  *     plugin artifacts after verifying their pinned digest.
  *   - `pluginStorage.read` / `pluginStorage.write` — let the host read/write
  *     this plugin's isolated mutable data directory.
+ *   - `nativeTools.runDeclared` — let the host run plugin-declared binaries
+ *     resolved from the user's PATH, without shell execution.
  * Broad `notes.write` stays deliberately absent — the app, not the plugin,
  * performs the actual note write (see templates.ts).
  */
@@ -35,7 +37,8 @@ export type PluginPermission =
   | 'notes.read'
   | 'pluginArtifacts.download'
   | 'pluginStorage.read'
-  | 'pluginStorage.write';
+  | 'pluginStorage.write'
+  | 'nativeTools.runDeclared';
 
 /** All permissions the current app version understands. */
 export const KNOWN_PLUGIN_PERMISSIONS: readonly PluginPermission[] = [
@@ -45,7 +48,8 @@ export const KNOWN_PLUGIN_PERMISSIONS: readonly PluginPermission[] = [
   'notes.read',
   'pluginArtifacts.download',
   'pluginStorage.read',
-  'pluginStorage.write'
+  'pluginStorage.write',
+  'nativeTools.runDeclared'
 ];
 
 /**
@@ -113,6 +117,13 @@ export interface PluginNoteKindRenderContribution {
   previewMime?: PluginPreviewMimeType;
   /** UI debounce before re-running the renderer. */
   debounceMs?: number;
+  /**
+   * Optional plugin-owned browser preview runtime. The host loads `entry` into a
+   * sandboxed iframe, sends source updates via postMessage, and exposes only
+   * verified artifact bytes/Blob URLs listed here. The backend render export
+   * remains the fallback and non-browser provider.
+   */
+  webview?: PluginWebviewPreviewContribution;
 }
 
 /** A plugin-owned note kind/editor contribution. */
@@ -167,7 +178,7 @@ export interface PluginSettingsContribution {
   settings: PluginSetting[];
 }
 
-export const PLUGIN_ARTIFACT_KINDS = ['wasm'] as const;
+export const PLUGIN_ARTIFACT_KINDS = ['wasm', 'webScript', 'data'] as const;
 export type PluginArtifactKind = (typeof PLUGIN_ARTIFACT_KINDS)[number];
 
 /**
@@ -190,6 +201,26 @@ export interface PluginArtifactContribution {
   fileName: string;
   /** Optional exact byte length, checked after download when present. */
   sizeBytes?: number;
+}
+
+/** A plugin-owned sandboxed iframe preview runtime for a note kind. */
+export interface PluginWebviewPreviewContribution {
+  /** Safe relative `.js`/`.mjs` module inside the plugin directory. */
+  entry: string;
+  /**
+   * Plugin artifact ids that should be downloaded, verified, and delivered to
+   * the iframe as Blob URLs + bytes before rendering.
+   */
+  artifacts?: string[];
+}
+
+/** A PATH-resolved native tool a plugin may request to run. */
+export interface PluginNativeToolContribution {
+  /** Plugin-local slug. */
+  id: string;
+  /** Exact executable basename to resolve from PATH; no paths or shell. */
+  binaryName: string;
+  descriptionKey?: string;
 }
 
 /**
@@ -343,6 +374,7 @@ export interface PluginContributions {
   i18n?: PluginI18nContribution;
   settings?: PluginSettingsContribution[];
   artifacts?: PluginArtifactContribution[];
+  nativeTools?: PluginNativeToolContribution[];
   noteTemplates?: PluginNoteTemplateContribution[];
   noteKinds?: PluginNoteKindContribution[];
   commands?: PluginCommandContribution[];

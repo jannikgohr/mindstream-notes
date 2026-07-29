@@ -61,6 +61,21 @@ export interface PluginStorageEntry {
   bytes: number | null;
 }
 
+export interface PluginNativeToolStatus {
+  pluginId: string;
+  toolId: string;
+  binaryName: string;
+  available: boolean;
+  path: string | null;
+}
+
+export interface PluginNativeToolOutput {
+  statusCode: number | null;
+  stdout: string;
+  stderr: string;
+  timedOut: boolean;
+}
+
 export function parsePluginRecord(value: unknown): PluginRecord {
   const raw = assertRecord(value, 'PluginRecord');
   return {
@@ -139,6 +154,33 @@ function parseStorageEntries(value: unknown): PluginStorageEntry[] {
     throw new Error('PluginStorageEntry[] must be an array');
   }
   return value.map(parseStorageEntry);
+}
+
+function parseNativeToolStatus(value: unknown): PluginNativeToolStatus {
+  const raw = assertRecord(value, 'PluginNativeToolStatus');
+  return {
+    pluginId: assertString(raw.pluginId, 'PluginNativeToolStatus.pluginId'),
+    toolId: assertString(raw.toolId, 'PluginNativeToolStatus.toolId'),
+    binaryName: assertString(
+      raw.binaryName,
+      'PluginNativeToolStatus.binaryName'
+    ),
+    available: assertBoolean(raw.available, 'PluginNativeToolStatus.available'),
+    path: optionalString(raw.path, 'PluginNativeToolStatus.path')
+  };
+}
+
+function parseNativeToolOutput(value: unknown): PluginNativeToolOutput {
+  const raw = assertRecord(value, 'PluginNativeToolOutput');
+  return {
+    statusCode:
+      raw.statusCode === null || raw.statusCode === undefined
+        ? null
+        : assertNumber(raw.statusCode, 'PluginNativeToolOutput.statusCode'),
+    stdout: assertString(raw.stdout, 'PluginNativeToolOutput.stdout'),
+    stderr: assertString(raw.stderr, 'PluginNativeToolOutput.stderr'),
+    timedOut: assertBoolean(raw.timedOut, 'PluginNativeToolOutput.timedOut')
+  };
 }
 
 function parseByteArray(value: unknown): Uint8Array {
@@ -354,6 +396,39 @@ export function pluginsStorageList(
     { id, path },
     () => [],
     parseStorageEntries
+  );
+}
+
+export function pluginsNativeToolStatus(
+  id: string,
+  toolId: string
+): Promise<PluginNativeToolStatus> {
+  return invokeOrFallback<PluginNativeToolStatus>(
+    TauriCommandName.PluginsNativeToolStatus,
+    { id, toolId },
+    () => {
+      throw new Error(
+        'plugins_native_tool_status is unavailable outside Tauri'
+      );
+    },
+    parseNativeToolStatus
+  );
+}
+
+export function pluginsRunNativeTool(
+  id: string,
+  toolId: string,
+  args: string[],
+  stdin?: string | null,
+  timeoutMs?: number | null
+): Promise<PluginNativeToolOutput> {
+  return invokeOrFallback<PluginNativeToolOutput>(
+    TauriCommandName.PluginsRunNativeTool,
+    { id, toolId, args, stdin: stdin ?? null, timeoutMs: timeoutMs ?? null },
+    () => {
+      throw new Error('plugins_run_native_tool is unavailable outside Tauri');
+    },
+    parseNativeToolOutput
   );
 }
 

@@ -28,6 +28,7 @@ import {
   type PluginArtifactContribution,
   type PluginArtifactKind,
   type PluginManifest,
+  type PluginNativeToolContribution,
   type PluginNoteKindContribution,
   type PluginNoteKindRenderContribution,
   type PluginNoteTemplateContribution,
@@ -84,6 +85,11 @@ const SAFE_SVG_PATH_RE =
   /^[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)*\.svg$/;
 /** Artifact files are stored by basename inside the host-owned artifact dir. */
 const SAFE_ARTIFACT_FILE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+/** Safe plugin-owned iframe entry module. */
+const SAFE_WEBVIEW_ENTRY_RE =
+  /^[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)*\.(?:mjs|js)$/;
+/** Exact executable basename, resolved from PATH by the backend. */
+const SAFE_BINARY_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._+-]*(?:\.exe)?$/i;
 const SHA256_HEX_RE = /^[a-f0-9]{64}$/;
 /** A Luau export name — a plain identifier looked up as `table[name]`. */
 const EXPORT_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -248,7 +254,8 @@ const VIEW_MODE_PREVIEW_ICONS = new Set<string>(PLUGIN_VIEW_MODE_PREVIEW_ICONS);
 function validateNoteKindRender(
   pluginId: string,
   r: PluginNoteKindRenderContribution,
-  path: string
+  path: string,
+  artifactIds: Set<string>
 ): void {
   if (!r || typeof r !== 'object') {
     throw new PluginValidationError(pluginId, `${path} must be an object`);
@@ -274,12 +281,53 @@ function validateNoteKindRender(
       `${path}.debounceMs must be a non-negative finite number`
     );
   }
+  if (r.webview !== undefined) {
+    if (!r.webview || typeof r.webview !== 'object') {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.webview must be an object`
+      );
+    }
+    assertNonEmptyString(pluginId, r.webview.entry, `${path}.webview.entry`);
+    if (!SAFE_WEBVIEW_ENTRY_RE.test(r.webview.entry)) {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.webview.entry ("${r.webview.entry}") must be a safe relative .js/.mjs path inside the plugin dir`
+      );
+    }
+    if (r.webview.artifacts !== undefined) {
+      if (!Array.isArray(r.webview.artifacts)) {
+        throw new PluginValidationError(
+          pluginId,
+          `${path}.webview.artifacts must be an array`
+        );
+      }
+      const seen = new Set<string>();
+      for (const [i, artifactId] of r.webview.artifacts.entries()) {
+        assertSlug(pluginId, artifactId, `${path}.webview.artifacts[${i}]`);
+        if (!artifactIds.has(artifactId)) {
+          throw new PluginValidationError(
+            pluginId,
+            `${path}.webview.artifacts[${i}] references undeclared artifact "${artifactId}"`
+          );
+        }
+        if (seen.has(artifactId)) {
+          throw new PluginValidationError(
+            pluginId,
+            `${path}.webview.artifacts declares "${artifactId}" more than once`
+          );
+        }
+        seen.add(artifactId);
+      }
+    }
+  }
 }
 
 function validateNoteKind(
   pluginId: string,
   c: PluginNoteKindContribution,
-  path: string
+  path: string,
+  artifactIds: Set<string>
 ): string {
   assertSlug(pluginId, c?.id, `${path}.id`);
   assertI18nKey(pluginId, c?.labelKey, `${path}.labelKey`);
@@ -317,7 +365,7 @@ function validateNoteKind(
       `${path}.defaultBody must be a string`
     );
   }
-  validateNoteKindRender(pluginId, c.render, `${path}.render`);
+  validateNoteKindRender(pluginId, c.render, `${path}.render`, artifactIds);
   return pluginNoteKindId(pluginId, c.id);
 }
 
@@ -429,6 +477,29 @@ function validateArtifact(
       pluginId,
       `${path}.sizeBytes must be a positive finite number`
     );
+  }
+}
+
+function validateNativeTool(
+  pluginId: string,
+  t: PluginNativeToolContribution,
+  path: string
+): void {
+  assertSlug(pluginId, t?.id, `${path}.id`);
+  assertNonEmptyString(pluginId, t.binaryName, `${path}.binaryName`);
+  if (
+    t.binaryName.includes('/') ||
+    t.binaryName.includes('\\') ||
+    t.binaryName.includes('..') ||
+    !SAFE_BINARY_NAME_RE.test(t.binaryName)
+  ) {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.binaryName must be an executable basename resolved from PATH`
+    );
+  }
+  if (t.descriptionKey !== undefined) {
+    assertI18nKey(pluginId, t.descriptionKey, `${path}.descriptionKey`);
   }
 }
 
@@ -757,6 +828,58 @@ export function validateManifest(input: unknown): PluginManifest {
     );
   }
 
+  // ---- Artifacts -------------------------------------------------------
+  const artifacts = contributes.artifacts ?? [];
+  if (!Array.isArray(artifacts)) {
+    throw new PluginValidationError(
+      pluginId,
+      'manifest.contributes.artifacts must be an array'
+    );
+  }
+  const seenArtifactIds = new Set<string>();
+  for (const [i, artifact] of artifacts.entries()) {
+    validateArtifact(pluginId, artifact, `artifacts[${i}]`);
+    if (seenArtifactIds.has(artifact.id)) {
+      throw new PluginValidationError(
+        pluginId,
+        `duplicate artifact id "${artifact.id}"`
+      );
+    }
+    seenArtifactIds.add(artifact.id);
+  }
+  if (artifacts.length > 0 && !permissions.has('pluginArtifacts.download')) {
+    throw new PluginValidationError(
+      pluginId,
+      'contributes artifacts but is missing the "pluginArtifacts.download" permission'
+    );
+  }
+
+  // ---- Native tools ----------------------------------------------------
+  const nativeTools = contributes.nativeTools ?? [];
+  if (!Array.isArray(nativeTools)) {
+    throw new PluginValidationError(
+      pluginId,
+      'manifest.contributes.nativeTools must be an array'
+    );
+  }
+  const seenNativeToolIds = new Set<string>();
+  for (const [i, tool] of nativeTools.entries()) {
+    validateNativeTool(pluginId, tool, `nativeTools[${i}]`);
+    if (seenNativeToolIds.has(tool.id)) {
+      throw new PluginValidationError(
+        pluginId,
+        `duplicate native tool id "${tool.id}"`
+      );
+    }
+    seenNativeToolIds.add(tool.id);
+  }
+  if (nativeTools.length > 0 && !permissions.has('nativeTools.runDeclared')) {
+    throw new PluginValidationError(
+      pluginId,
+      'contributes nativeTools but is missing the "nativeTools.runDeclared" permission'
+    );
+  }
+
   // ---- Plugin note kinds ----------------------------------------------
   const noteKinds = contributes.noteKinds ?? [];
   if (!Array.isArray(noteKinds)) {
@@ -768,7 +891,12 @@ export function validateManifest(input: unknown): PluginManifest {
   const seenNoteKindIds = new Set<string>();
   const pluginNoteKindIds = new Set<string>();
   for (const [i, c] of noteKinds.entries()) {
-    const appKind = validateNoteKind(pluginId, c, `noteKinds[${i}]`);
+    const appKind = validateNoteKind(
+      pluginId,
+      c,
+      `noteKinds[${i}]`,
+      seenArtifactIds
+    );
     if (seenNoteKindIds.has(c.id)) {
       throw new PluginValidationError(
         pluginId,
@@ -850,32 +978,6 @@ export function validateManifest(input: unknown): PluginManifest {
       );
     }
     seenSectionIds.add(c.sectionId);
-  }
-
-  // ---- Artifacts -------------------------------------------------------
-  const artifacts = contributes.artifacts ?? [];
-  if (!Array.isArray(artifacts)) {
-    throw new PluginValidationError(
-      pluginId,
-      'manifest.contributes.artifacts must be an array'
-    );
-  }
-  const seenArtifactIds = new Set<string>();
-  for (const [i, artifact] of artifacts.entries()) {
-    validateArtifact(pluginId, artifact, `artifacts[${i}]`);
-    if (seenArtifactIds.has(artifact.id)) {
-      throw new PluginValidationError(
-        pluginId,
-        `duplicate artifact id "${artifact.id}"`
-      );
-    }
-    seenArtifactIds.add(artifact.id);
-  }
-  if (artifacts.length > 0 && !permissions.has('pluginArtifacts.download')) {
-    throw new PluginValidationError(
-      pluginId,
-      'contributes artifacts but is missing the "pluginArtifacts.download" permission'
-    );
   }
 
   // ---- Commands --------------------------------------------------------

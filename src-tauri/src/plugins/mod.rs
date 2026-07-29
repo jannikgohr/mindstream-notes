@@ -18,8 +18,11 @@
 //! they are enabled on discovery unless their manifest opts out, and a checksum
 //! change (a shipped update) is accepted automatically.
 
+use std::ffi::OsString;
 use std::fs;
+use std::io::Write;
 use std::path::{Component, Path, PathBuf};
+use std::process::{Command, Stdio};
 
 use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -297,6 +300,14 @@ struct PluginArtifactManifest {
     size_bytes: Option<u64>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginNativeToolManifest {
+    id: String,
+    binary_name: String,
+    description_key: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginArtifactStatus {
@@ -308,6 +319,25 @@ pub struct PluginArtifactStatus {
     pub installed: bool,
     pub bytes: Option<u64>,
     pub sha256: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginNativeToolStatus {
+    pub plugin_id: String,
+    pub tool_id: String,
+    pub binary_name: String,
+    pub available: bool,
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginNativeToolOutput {
+    pub status_code: Option<i32>,
+    pub stdout: String,
+    pub stderr: String,
+    pub timed_out: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -440,7 +470,11 @@ fn read_plugin_file(dir: &Path, file: &str) -> AppResult<Option<String>> {
 const PERM_PLUGIN_ARTIFACTS_DOWNLOAD: &str = "pluginArtifacts.download";
 const PERM_PLUGIN_STORAGE_READ: &str = "pluginStorage.read";
 const PERM_PLUGIN_STORAGE_WRITE: &str = "pluginStorage.write";
+const PERM_NATIVE_TOOLS_RUN_DECLARED: &str = "nativeTools.runDeclared";
 const MAX_ARTIFACT_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_NATIVE_TOOL_ARGS: usize = 64;
+const MAX_NATIVE_TOOL_ARG_BYTES: usize = 4096;
+const MAX_NATIVE_TOOL_STDIN_BYTES: usize = 8 * 1024 * 1024;
 
 fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
@@ -492,6 +526,204 @@ fn parse_artifacts(manifest: &serde_json::Value) -> AppResult<Vec<PluginArtifact
     };
     serde_json::from_value(value.clone())
         .map_err(|e| AppError::InvalidArg(format!("manifest.contributes.artifacts: {e}")))
+}
+
+fn parse_native_tools(manifest: &serde_json::Value) -> AppResult<Vec<PluginNativeToolManifest>> {
+    let Some(value) = manifest
+        .get("contributes")
+        .and_then(|c| c.get("nativeTools"))
+    else {
+        return Ok(Vec::new());
+    };
+    serde_json::from_value(value.clone())
+        .map_err(|e| AppError::InvalidArg(format!("manifest.contributes.nativeTools: {e}")))
+}
+
+fn find_native_tool(
+    manifest: &serde_json::Value,
+    tool_id: &str,
+) -> AppResult<PluginNativeToolManifest> {
+    parse_native_tools(manifest)?
+        .into_iter()
+        .find(|tool| tool.id == tool_id)
+        .ok_or_else(|| AppError::NotFound(format!("plugin native tool {tool_id}")))
+}
+
+fn validate_binary_name(binary_name: &str) -> AppResult<()> {
+    if binary_name.is_empty()
+        || binary_name.contains('/')
+        || binary_name.contains('\\')
+        || binary_name.contains("..")
+        || Path::new(binary_name)
+            .extension()
+            .is_some_and(|ext| !ext.to_string_lossy().eq_ignore_ascii_case("exe"))
+        || !binary_name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'+' | b'-'))
+    {
+        return Err(AppError::InvalidArg(format!(
+            "unsafe native tool binary name '{binary_name}'"
+        )));
+    }
+    Ok(())
+}
+
+fn ensure_write_target_safe(root: &Path, target: &Path) -> AppResult<()> {
+    match fs::symlink_metadata(target) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() {
+                return Err(AppError::InvalidArg(
+                    "plugin storage path targets a symlink".into(),
+                ));
+            }
+            ensure_inside_data_root(root, target)
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            let parent = target
+                .parent()
+                .ok_or_else(|| AppError::InvalidArg("plugin storage path has no parent".into()))?;
+            ensure_inside_data_root(root, parent)
+        }
+        Err(err) => Err(err.into()),
+    }
+}
+
+fn path_extensions(binary_name: &str) -> Vec<OsString> {
+    #[cfg(windows)]
+    {
+        if Path::new(binary_name).extension().is_some() {
+            return vec![OsString::new()];
+        }
+        let pathext = std::env::var_os("PATHEXT").unwrap_or_else(|| ".EXE".into());
+        let mut out = std::env::split_paths(&pathext)
+            .flat_map(|p| p.into_os_string().into_string().ok())
+            .flat_map(|s| s.split(';').map(str::to_string).collect::<Vec<_>>())
+            .filter(|s| s.eq_ignore_ascii_case(".exe"))
+            .map(OsString::from)
+            .collect::<Vec<_>>();
+        if out.is_empty() {
+            out.push(".exe".into());
+        }
+        out
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = binary_name;
+        vec![OsString::new()]
+    }
+}
+
+fn resolve_path_binary(binary_name: &str) -> AppResult<Option<PathBuf>> {
+    validate_binary_name(binary_name)?;
+    let Some(path_var) = std::env::var_os("PATH") else {
+        return Ok(None);
+    };
+    for dir in std::env::split_paths(&path_var) {
+        for ext in path_extensions(binary_name) {
+            let mut candidate = dir.join(binary_name);
+            if !ext.is_empty() {
+                candidate.set_extension(
+                    ext.to_string_lossy()
+                        .trim_start_matches('.')
+                        .to_ascii_lowercase(),
+                );
+            }
+            if candidate.is_file() {
+                return Ok(Some(candidate));
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn native_tool_status(
+    plugin_id: &str,
+    tool: &PluginNativeToolManifest,
+) -> AppResult<PluginNativeToolStatus> {
+    let _ = &tool.description_key;
+    let path = resolve_path_binary(&tool.binary_name)?;
+    Ok(PluginNativeToolStatus {
+        plugin_id: plugin_id.to_string(),
+        tool_id: tool.id.clone(),
+        binary_name: tool.binary_name.clone(),
+        available: path.is_some(),
+        path: path.map(|p| p.to_string_lossy().into_owned()),
+    })
+}
+
+fn validate_native_tool_args(args: &[String], stdin: &Option<String>) -> AppResult<()> {
+    if args.len() > MAX_NATIVE_TOOL_ARGS {
+        return Err(AppError::InvalidArg(format!(
+            "native tool received too many arguments ({})",
+            args.len()
+        )));
+    }
+    for arg in args {
+        if arg.len() > MAX_NATIVE_TOOL_ARG_BYTES || arg.contains('\0') {
+            return Err(AppError::InvalidArg(
+                "native tool argument is too large or contains NUL".into(),
+            ));
+        }
+    }
+    if let Some(stdin) = stdin {
+        if stdin.len() > MAX_NATIVE_TOOL_STDIN_BYTES || stdin.contains('\0') {
+            return Err(AppError::InvalidArg(
+                "native tool stdin is too large or contains NUL".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn run_native_tool_process(
+    binary: PathBuf,
+    cwd: PathBuf,
+    args: Vec<String>,
+    stdin: Option<String>,
+    timeout_ms: Option<u64>,
+) -> AppResult<PluginNativeToolOutput> {
+    validate_native_tool_args(&args, &stdin)?;
+    fs::create_dir_all(&cwd)?;
+    let timeout = std::time::Duration::from_millis(timeout_ms.unwrap_or(10_000).clamp(100, 30_000));
+    let mut child = Command::new(binary)
+        .args(args)
+        .current_dir(cwd)
+        .stdin(if stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    if let Some(input) = stdin {
+        if let Some(mut pipe) = child.stdin.take() {
+            pipe.write_all(input.as_bytes())?;
+        }
+    }
+    let start = std::time::Instant::now();
+    loop {
+        if child.try_wait()?.is_some() {
+            let output = child.wait_with_output()?;
+            return Ok(PluginNativeToolOutput {
+                status_code: output.status.code(),
+                stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+                timed_out: false,
+            });
+        }
+        if start.elapsed() >= timeout {
+            child.kill()?;
+            let output = child.wait_with_output()?;
+            return Ok(PluginNativeToolOutput {
+                status_code: output.status.code(),
+                stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+                timed_out: true,
+            });
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
 }
 
 fn find_artifact(
@@ -1110,6 +1342,7 @@ pub fn plugins_storage_write_text(
         .ok_or_else(|| AppError::InvalidArg("plugin storage path has no parent".into()))?;
     fs::create_dir_all(parent)?;
     ensure_inside_data_root(&root, parent)?;
+    ensure_write_target_safe(&root, &target)?;
     fs::write(target, contents).map_err(Into::into)
 }
 
@@ -1171,6 +1404,57 @@ pub fn plugins_storage_list(
     }
     out.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(out)
+}
+
+#[tauri::command]
+pub fn plugins_native_tool_status(
+    app: AppHandle,
+    db: State<'_, Db>,
+    id: String,
+    tool_id: String,
+) -> CommandResult<PluginNativeToolStatus> {
+    if cfg!(mobile) {
+        return Err(AppError::InvalidArg("native tools are desktop-only".into()).into());
+    }
+    db.with_conn(|c| require_enabled_permission(c, &id, PERM_NATIVE_TOOLS_RUN_DECLARED))?;
+    let third_party_dir = discovery::third_party_plugins_dir(&app)?;
+    let plugin = discovery::find(&third_party_dir, &id)
+        .ok_or_else(|| AppError::NotFound(format!("plugin {id} not found on disk")))?;
+    let tool = find_native_tool(&plugin.manifest, &tool_id)?;
+    native_tool_status(&id, &tool).map_err(Into::into)
+}
+
+#[tauri::command]
+pub async fn plugins_run_native_tool(
+    app: AppHandle,
+    db: State<'_, Db>,
+    id: String,
+    tool_id: String,
+    args: Vec<String>,
+    stdin: Option<String>,
+    timeout_ms: Option<u64>,
+) -> CommandResult<PluginNativeToolOutput> {
+    if cfg!(mobile) {
+        return Err(AppError::InvalidArg("native tools are desktop-only".into()).into());
+    }
+    db.with_conn(|c| require_enabled_permission(c, &id, PERM_NATIVE_TOOLS_RUN_DECLARED))?;
+    let third_party_dir = discovery::third_party_plugins_dir(&app)?;
+    let plugin = discovery::find(&third_party_dir, &id)
+        .ok_or_else(|| AppError::NotFound(format!("plugin {id} not found on disk")))?;
+    let tool = find_native_tool(&plugin.manifest, &tool_id)?;
+    let binary = resolve_path_binary(&tool.binary_name)?.ok_or_else(|| {
+        AppError::NotFound(format!(
+            "native tool '{}' was not found in PATH",
+            tool.binary_name
+        ))
+    })?;
+    let cwd = plugin_data_root(&app, &id)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        run_native_tool_process(binary, cwd, args, stdin, timeout_ms)
+    })
+    .await
+    .map_err(|e| AppError::InvalidArg(format!("native tool task failed: {e}")))?
+    .map_err(Into::into)
 }
 
 /// Run a scripted plugin's entry function. The plugin is re-located on disk

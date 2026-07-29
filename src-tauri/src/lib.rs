@@ -387,6 +387,8 @@ pub fn run() {
             plugins::plugins_storage_write_text,
             plugins::plugins_storage_delete,
             plugins::plugins_storage_list,
+            plugins::plugins_native_tool_status,
+            plugins::plugins_run_native_tool,
             plugins::plugins_run_script,
             // Profiles (vaults)
             profiles::list_profiles,
