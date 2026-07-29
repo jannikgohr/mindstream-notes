@@ -22,6 +22,7 @@ import {
   PLUGIN_EDITOR_TOOLBAR_ITEMS,
   PLUGIN_PREVIEW_MIME_TYPES,
   PLUGIN_TOOLBAR_LOCATIONS,
+  PLUGIN_VIEW_MODE_PREVIEW_ICONS,
   type PluginDocSection,
   type PluginManifest,
   type PluginNoteKindContribution,
@@ -235,6 +236,7 @@ export function pluginNoteKindId(
 const PREVIEW_MIME_TYPES = new Set<PluginPreviewMimeType>(
   PLUGIN_PREVIEW_MIME_TYPES
 );
+const VIEW_MODE_PREVIEW_ICONS = new Set<string>(PLUGIN_VIEW_MODE_PREVIEW_ICONS);
 
 function validateNoteKindRender(
   pluginId: string,
@@ -285,6 +287,15 @@ function validateNoteKind(
     throw new PluginValidationError(
       pluginId,
       `${path}.sourceLanguage must be a short language identifier`
+    );
+  }
+  if (
+    c.viewModePreviewIcon !== undefined &&
+    !VIEW_MODE_PREVIEW_ICONS.has(c.viewModePreviewIcon)
+  ) {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.viewModePreviewIcon ("${String(c.viewModePreviewIcon)}") is not supported`
     );
   }
   if (c.defaultTitle !== undefined && typeof c.defaultTitle !== 'string') {

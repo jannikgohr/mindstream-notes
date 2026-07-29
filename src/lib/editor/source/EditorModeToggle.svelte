@@ -5,7 +5,7 @@
    * the theme toggle) and advances on click. NoteEditor owns the state; the
    * same cycle is also reachable via the `editor.markdown.cycleViewMode` hotkey.
    */
-  import { FileText, Code, Columns2 } from '@lucide/svelte';
+  import { BookText, FileText, Code, Columns2 } from '@lucide/svelte';
   import type { Component } from 'svelte';
   import { ToolbarButton } from '$lib/components/ui/toolbar';
   import { tUi, tValue } from '$lib/settings/i18n.svelte';
@@ -13,16 +13,21 @@
 
   interface Props {
     value: EditorViewMode;
+    previewIcon?: 'default' | 'bookText';
     /** Advance to the next view mode. */
     onCycle: () => void;
   }
-  let { value, onCycle }: Props = $props();
+  let { value, previewIcon = 'default', onCycle }: Props = $props();
 
-  const icons: Record<EditorViewMode, Component> = {
-    wysiwyg: FileText,
+  const previewIcons: Record<NonNullable<Props['previewIcon']>, Component> = {
+    default: FileText,
+    bookText: BookText
+  };
+  const icons = $derived<Record<EditorViewMode, Component>>({
+    wysiwyg: previewIcons[previewIcon],
     source: Code,
     split: Columns2
-  };
+  });
   const Icon = $derived(icons[value]);
   // e.g. "Editor view mode: Split" — current state; clicking advances.
   const title = $derived(
