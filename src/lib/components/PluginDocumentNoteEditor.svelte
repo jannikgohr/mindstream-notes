@@ -8,6 +8,13 @@
   import { pluginNoteKind } from '$lib/plugins/registry.svelte';
   import { getSettingValue } from '$lib/settings/store.svelte';
   import SourceEditor from '$lib/editor/source/SourceEditor.svelte';
+  import EditorModeToggle from '$lib/editor/source/EditorModeToggle.svelte';
+  import {
+    coerceViewMode,
+    nextViewMode,
+    type EditorViewMode
+  } from '$lib/editor/source/view-mode';
+  import { splitAvailable } from '$lib/editor/source/split-available.svelte';
   import { SOURCE_ACTIONS } from '$lib/editor/source/source-actions';
   import {
     APP_REDO_COMMAND,
@@ -46,6 +53,8 @@
   let loadToken = 0;
   let renderToken = 0;
   let destroyed = false;
+  let viewMode = $state<EditorViewMode>('split');
+  let viewModeSeed = '';
   let editorRegionEl: HTMLDivElement | null = $state(null);
   let sourceEditor = $state<{
     setText: (text: string) => void;
@@ -71,6 +80,21 @@
     return Number.isFinite(v) && v > 0 ? Math.min(8, v) : 2;
   });
   const iframeSrcdoc = $derived(buildPreviewDocument(previewMime, previewText));
+  const showSource = $derived(viewMode !== 'wysiwyg');
+  const showPreview = $derived(viewMode !== 'source');
+  const splitMode = $derived(showSource && showPreview);
+
+  $effect(() => {
+    const ref = contributionRef;
+    if (!ref) return;
+    const key = `${noteId}:${ref.pluginId}`;
+    if (viewModeSeed === key) return;
+    viewMode = coerceViewMode(
+      getSettingValue(`plugins.${ref.pluginId}.default-view-mode`) ?? 'split',
+      splitAvailable()
+    );
+    viewModeSeed = key;
+  });
 
   $effect(() => {
     const id = noteId;
@@ -135,6 +159,10 @@
     source = value;
     scheduleSave();
     scheduleRender(debounceMs);
+  }
+
+  function cycleViewMode() {
+    viewMode = nextViewMode(viewMode, splitAvailable());
   }
 
   function scheduleSave() {
@@ -208,6 +236,9 @@
     value: unknown,
     fallbackMime: string
   ): { mime: string; text: string; diagnostics: Diagnostic[] } {
+    if (typeof value === 'string') {
+      return { mime: fallbackMime, text: value, diagnostics: [] };
+    }
     if (!value || typeof value !== 'object') {
       return { mime: fallbackMime, text: '', diagnostics: [] };
     }
@@ -254,7 +285,9 @@
   }
 
   function buildPreviewDocument(mime: string, text: string): string {
-    if (mime === 'text/html') return text;
+    if (mime === 'text/html') {
+      return text.trim() ? text : '<!doctype html><html><body></body></html>';
+    }
     if (mime === 'image/svg+xml') {
       return `<!doctype html><html><body>${text}</body></html>`;
     }
@@ -301,7 +334,7 @@
     </div>
   {:else}
     <div
-      class="flex h-9 shrink-0 items-center gap-2 border-b border-border bg-background pr-2"
+      class="flex h-9 shrink-0 items-center gap-2 border-b border-border bg-background pr-1"
     >
       <PluginSourceToolbar
         noteKind={storedNoteKind}
@@ -311,38 +344,46 @@
       {#if rendering}
         <Loader2 class="size-3.5 shrink-0 animate-spin text-muted-foreground" />
       {/if}
+      <EditorModeToggle value={viewMode} onCycle={cycleViewMode} />
     </div>
     <div
       bind:this={editorRegionEl}
-      class="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-2"
+      class="grid min-h-0 flex-1 grid-cols-1 {splitMode
+        ? 'md:grid-cols-2'
+        : ''}"
     >
-      <section
-        class="flex min-h-0 flex-col border-b border-border md:border-b-0 md:border-r"
-      >
-        <SourceEditor
-          bind:this={sourceEditor}
-          getInitialText={() => source}
-          language={sourceLanguage}
-          tabSize={sourceTabSize}
-          onInput={onSourceInput}
-          {autoPairEnabled}
-        />
-      </section>
-      <section class="flex min-h-0 flex-col">
-        {#if renderError}
-          <div
-            class="m-3 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive"
-          >
-            {renderError}
-          </div>
-        {/if}
-        <iframe
-          class="min-h-0 flex-1 bg-white"
-          title="Plugin note preview"
-          sandbox=""
-          srcdoc={iframeSrcdoc}
-        ></iframe>
-      </section>
+      {#if showSource}
+        <section
+          class="flex min-h-0 flex-col border-b border-border md:border-b-0"
+          class:md:border-r={splitMode}
+        >
+          <SourceEditor
+            bind:this={sourceEditor}
+            getInitialText={() => source}
+            language={sourceLanguage}
+            tabSize={sourceTabSize}
+            onInput={onSourceInput}
+            {autoPairEnabled}
+          />
+        </section>
+      {/if}
+      {#if showPreview}
+        <section class="relative flex min-h-0 flex-col">
+          {#if renderError}
+            <div
+              class="absolute left-3 right-3 top-3 z-10 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive"
+            >
+              {renderError}
+            </div>
+          {/if}
+          <iframe
+            class="min-h-0 flex-1 bg-white"
+            title="Plugin note preview"
+            sandbox=""
+            srcdoc={iframeSrcdoc}
+          ></iframe>
+        </section>
+      {/if}
     </div>
     {#if diagnostics.length > 0}
       <ul class="border-t border-border bg-muted/30 px-3 py-2 text-xs">

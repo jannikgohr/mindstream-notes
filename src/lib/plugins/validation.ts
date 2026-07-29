@@ -19,6 +19,7 @@
 
 import {
   KNOWN_PLUGIN_PERMISSIONS,
+  PLUGIN_EDITOR_TOOLBAR_ITEMS,
   PLUGIN_PREVIEW_MIME_TYPES,
   PLUGIN_TOOLBAR_LOCATIONS,
   type PluginDocSection,
@@ -412,6 +413,7 @@ function validateDocSection(
 const TOOLBAR_LOCATIONS = new Set<PluginToolbarLocation>(
   PLUGIN_TOOLBAR_LOCATIONS
 );
+const EDITOR_TOOLBAR_ITEMS = new Set<string>(PLUGIN_EDITOR_TOOLBAR_ITEMS);
 
 function validateToolbarButton(
   pluginId: string,
@@ -441,12 +443,40 @@ function validateToolbarButton(
       `${path}.noteKind is only valid for note-editor toolbar buttons`
     );
   }
-  assertI18nKey(pluginId, b?.labelKey, `${path}.labelKey`);
-  assertNonEmptyString(pluginId, b?.icon, `${path}.icon`);
-  if (!SAFE_SVG_PATH_RE.test(b.icon)) {
+  if (b.toolbarItem !== undefined) {
+    if (b.location !== 'note-editor') {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.toolbarItem is only valid for note-editor toolbar buttons`
+      );
+    }
+    if (!EDITOR_TOOLBAR_ITEMS.has(b.toolbarItem)) {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.toolbarItem ("${String(b.toolbarItem)}") is not a supported editor toolbar item`
+      );
+    }
+  }
+  if (b.labelKey !== undefined) {
+    assertI18nKey(pluginId, b.labelKey, `${path}.labelKey`);
+  } else if (b.location !== 'note-editor' || b.toolbarItem === undefined) {
     throw new PluginValidationError(
       pluginId,
-      `${path}.icon ("${b.icon}") must be a safe relative .svg path inside the plugin dir (no "..", absolute paths, or "\\\\")`
+      `${path}.labelKey is required unless the note-editor button uses toolbarItem`
+    );
+  }
+  if (b.icon !== undefined) {
+    assertNonEmptyString(pluginId, b.icon, `${path}.icon`);
+    if (!SAFE_SVG_PATH_RE.test(b.icon)) {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.icon ("${b.icon}") must be a safe relative .svg path inside the plugin dir (no "..", absolute paths, or "\\\\")`
+      );
+    }
+  } else if (b.location !== 'note-editor' || b.toolbarItem === undefined) {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.icon is required unless the note-editor button uses toolbarItem`
     );
   }
   validateToolbarAction(pluginId, b?.action, `${path}.action`, b.location);

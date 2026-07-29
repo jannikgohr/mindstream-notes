@@ -873,7 +873,10 @@
           </Button>
         {/if}
         {#each pluginToolbarButtons('file-tree') as tb (`${tb.pluginId}:${tb.button.id}`)}
-          {@const label = resolvePluginString(tb.pluginId, tb.button.labelKey)}
+          {@const label = resolvePluginString(
+            tb.pluginId,
+            tb.button.labelKey ?? tb.button.id
+          )}
           <Button
             variant="ghost"
             size="icon"
@@ -884,7 +887,7 @@
           >
             <PluginIcon
               pluginId={tb.pluginId}
-              file={tb.button.icon}
+              file={tb.button.icon ?? ''}
               class="size-3.5"
             />
           </Button>

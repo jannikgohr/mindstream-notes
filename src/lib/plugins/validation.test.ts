@@ -379,6 +379,68 @@ describe('validateManifest', () => {
     expect(validateManifest(m).contributes.toolbar).toHaveLength(2);
   });
 
+  it('accepts note-editor toolbarItem actions without plugin icons or labels', () => {
+    const m = validManifest({
+      runtime: 'luau',
+      entry: 'main.luau',
+      permissions: [
+        'templates.contribute',
+        'noteKinds.contribute',
+        'notes.create'
+      ]
+    });
+    const contributes = m.contributes as Record<string, unknown>;
+    contributes.noteKinds = [
+      {
+        id: 'document',
+        labelKey: 'notes.document.label',
+        render: { export: 'renderDocument', previewMime: 'text/html' }
+      }
+    ];
+    contributes.toolbar = [
+      {
+        id: 'strong',
+        location: 'note-editor',
+        noteKind: 'document',
+        toolbarItem: 'bold',
+        action: { type: 'wrapSelection', before: '*', after: '*' }
+      }
+    ];
+    expect(validateManifest(m).contributes.toolbar?.[0].toolbarItem).toBe(
+      'bold'
+    );
+  });
+
+  it('rejects unknown built-in editor toolbar items', () => {
+    const m = validManifest({
+      runtime: 'luau',
+      entry: 'main.luau',
+      permissions: [
+        'templates.contribute',
+        'noteKinds.contribute',
+        'notes.create'
+      ]
+    });
+    const contributes = m.contributes as Record<string, unknown>;
+    contributes.noteKinds = [
+      {
+        id: 'document',
+        labelKey: 'notes.document.label',
+        render: { export: 'renderDocument' }
+      }
+    ];
+    contributes.toolbar = [
+      {
+        id: 'mystery',
+        location: 'note-editor',
+        noteKind: 'document',
+        toolbarItem: 'mystery',
+        action: { type: 'insertText', text: '?' }
+      }
+    ];
+    expect(() => validateManifest(m)).toThrow(/supported editor toolbar item/);
+  });
+
   it('rejects note-editor toolbar buttons for undeclared note kinds', () => {
     const m = validManifest({
       runtime: 'luau',
