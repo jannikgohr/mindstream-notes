@@ -330,13 +330,15 @@
     </div>
   {:else}
     <div
-      class="flex h-9 shrink-0 items-center gap-2 border-b border-border bg-background pr-1"
+      class="flex shrink-0 items-center gap-1 border-b border-border bg-background pr-1"
     >
-      <PluginSourceToolbar
-        noteKind={storedNoteKind}
-        getView={() => sourceEditor?.getView() ?? null}
-        class="min-w-0 flex-1 bg-background"
-      />
+      <div class="min-w-0 flex-1">
+        <PluginSourceToolbar
+          noteKind={storedNoteKind}
+          getView={() => sourceEditor?.getView() ?? null}
+          class="bg-background"
+        />
+      </div>
       {#if rendering}
         <Loader2 class="size-3.5 shrink-0 animate-spin text-muted-foreground" />
       {/if}
