@@ -43,7 +43,11 @@
 </script>
 
 {#if buttons.length > 0}
-  <Toolbar {dense} class={className} aria-label="Plugin editor toolbar">
+  <Toolbar
+    {dense}
+    class="w-full {className}"
+    aria-label="Plugin editor toolbar"
+  >
     {#each buttons as button (`${button.pluginId}:${button.button.id}`)}
       {@const label = resolvePluginString(
         button.pluginId,

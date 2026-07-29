@@ -33,14 +33,21 @@
   });
 </script>
 
-{#if mask}
-  <span class={klass} aria-hidden="true" style="--plugin-icon: {mask};"></span>
-{/if}
+<span
+  class={klass}
+  aria-hidden="true"
+  data-loaded={mask ? 'true' : 'false'}
+  style={mask ? `--plugin-icon: ${mask};` : undefined}
+></span>
 
 <style>
   span {
     display: inline-block;
+    flex-shrink: 0;
     background-color: currentColor;
+  }
+
+  span[data-loaded='true'] {
     -webkit-mask-image: var(--plugin-icon);
     mask-image: var(--plugin-icon);
     -webkit-mask-repeat: no-repeat;
@@ -49,5 +56,11 @@
     mask-position: center;
     -webkit-mask-size: contain;
     mask-size: contain;
+  }
+
+  span[data-loaded='false'] {
+    border-radius: 2px;
+    opacity: 0.7;
+    transform: scale(0.45);
   }
 </style>
