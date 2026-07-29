@@ -97,7 +97,7 @@ describe('validateManifest', () => {
   it('rejects an unknown runtime', () => {
     expect(() =>
       validateManifest(validManifest({ runtime: 'js', entry: 'main.js' }))
-    ).toThrow(/expected "manifest-only" or "luau"/);
+    ).toThrow(/expected "manifest-only", "luau", or "wasm"/);
   });
 
   it('accepts a luau runtime with a safe entry', () => {
@@ -108,8 +108,24 @@ describe('validateManifest', () => {
     expect(m.entry).toBe('main.luau');
   });
 
-  it('requires an entry for a luau runtime', () => {
+  it('accepts a wasm runtime with a safe entry and limits', () => {
+    const m = validateManifest(
+      validManifest({
+        runtime: 'wasm',
+        entry: 'main.wasm',
+        limits: { memoryBytes: 134217728, timeoutMs: 5000, fuel: 1000000 }
+      })
+    );
+    expect(m.runtime).toBe('wasm');
+    expect(m.entry).toBe('main.wasm');
+    expect(m.limits?.fuel).toBe(1000000);
+  });
+
+  it('requires an entry for scripted runtimes', () => {
     expect(() => validateManifest(validManifest({ runtime: 'luau' }))).toThrow(
+      /manifest.entry must be a non-empty string/
+    );
+    expect(() => validateManifest(validManifest({ runtime: 'wasm' }))).toThrow(
       /manifest.entry must be a non-empty string/
     );
   });
@@ -128,10 +144,33 @@ describe('validateManifest', () => {
     }
   });
 
+  it('rejects a traversing or non-.wasm entry', () => {
+    for (const entry of [
+      '../evil.wasm',
+      'sub/main.wasm',
+      'main.luau',
+      'main.js',
+      '.wasm'
+    ]) {
+      expect(() =>
+        validateManifest(validManifest({ runtime: 'wasm', entry }))
+      ).toThrow(/must be a plain \.wasm filename/);
+    }
+  });
+
   it('rejects an entry on a manifest-only runtime', () => {
     expect(() =>
       validateManifest(validManifest({ entry: 'main.luau' }))
-    ).toThrow(/only valid for runtime "luau"/);
+    ).toThrow(/only valid for runtime "luau" or "wasm"/);
+  });
+
+  it('rejects invalid limits', () => {
+    expect(() =>
+      validateManifest(validManifest({ limits: { timeoutMs: -1 } }))
+    ).toThrow(/manifest.limits.timeoutMs/);
+    expect(() =>
+      validateManifest(validManifest({ limits: { fuel: 1000 } }))
+    ).toThrow(/fuel is only valid/);
   });
 
   it('accepts an optional descriptionKey and rejects a bad one', () => {
@@ -201,11 +240,19 @@ describe('validateManifest', () => {
     expect(validateManifest(m).contributes.toolbar).toHaveLength(1);
   });
 
+  it('accepts a toolbar button on a wasm plugin', () => {
+    const m = validManifest({ runtime: 'wasm', entry: 'main.wasm' });
+    (m.contributes as Record<string, unknown>).toolbar = [luauButton];
+    expect(validateManifest(m).contributes.toolbar).toHaveLength(1);
+  });
+
   it('rejects toolbar buttons on a manifest-only runtime', () => {
     const m = withContributes((c) => {
       c.toolbar = [luauButton];
     });
-    expect(() => validateManifest(m)).toThrow(/require runtime "luau"/);
+    expect(() => validateManifest(m)).toThrow(
+      /require runtime "luau" or "wasm"/
+    );
   });
 
   it('rejects a toolbar icon that is not a safe .svg path', () => {
@@ -239,6 +286,17 @@ describe('validateManifest', () => {
       (c.noteTemplates as Record<string, unknown>[])[0].render = 'render';
     });
     expect(() => validateManifest(bad)).toThrow(/requires runtime "luau"/);
+  });
+
+  it('accepts a template render export on a wasm plugin', () => {
+    const m = validManifest({ runtime: 'wasm', entry: 'main.wasm' });
+    (
+      (m.contributes as Record<string, unknown>).noteTemplates as Record<
+        string,
+        unknown
+      >[]
+    )[0].render = 'render';
+    expect(() => validateManifest(m)).not.toThrow();
   });
 
   it('rejects unknown permissions', () => {

@@ -31,6 +31,8 @@ use crate::error::{AppError, AppResult, CommandResult};
 pub mod discovery;
 pub mod luau;
 pub mod signing;
+#[cfg(all(not(target_os = "ios"), target_has_atomic = "64"))]
+pub mod wasm;
 
 /// Where a plugin came from. Governs the integrity gate: builtins are trusted,
 /// installed plugins must keep a matching accepted hash.
@@ -387,55 +389,199 @@ fn read_plugin_file(dir: &Path, file: &str) -> AppResult<Option<String>> {
     discovery::PluginFiles::Fs(dir.to_path_buf()).read_text(file)
 }
 
-// ---------- Scripted (luau) execution ----------
+// ---------- Scripted execution ----------
 
-/// Load a `luau` plugin's entry script from `dir` and run its `export` function
-/// with `input`, under the sandbox + resource limits in [`luau`]. `manifest` is
-/// the plugin's parsed manifest (for `runtime`/`entry`/`id`); `granted` is the
+fn manifest_id(manifest: &serde_json::Value) -> &str {
+    manifest
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("plugin")
+}
+
+fn manifest_entry<'a>(
+    manifest: &'a serde_json::Value,
+    runtime: &str,
+    extension: &str,
+) -> AppResult<&'a str> {
+    let entry = manifest
+        .get("entry")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| AppError::InvalidArg(format!("{runtime} plugin has no entry")))?;
+    if entry.contains('/') || entry.contains('\\') || entry.contains("..") {
+        return Err(AppError::InvalidArg(format!("unsafe entry '{entry}'")));
+    }
+    if !entry.ends_with(extension) {
+        return Err(AppError::InvalidArg(format!(
+            "{runtime} plugin entry must end in {extension}"
+        )));
+    }
+    Ok(entry)
+}
+
+fn limit_usize(
+    manifest: &serde_json::Value,
+    field: &str,
+    default: usize,
+    min: usize,
+    max: usize,
+) -> usize {
+    manifest
+        .get("limits")
+        .and_then(|v| v.get(field))
+        .and_then(|v| v.as_u64())
+        .and_then(|n| usize::try_from(n).ok())
+        .unwrap_or(default)
+        .clamp(min, max)
+}
+
+fn limit_u64(manifest: &serde_json::Value, field: &str, default: u64, min: u64, max: u64) -> u64 {
+    manifest
+        .get("limits")
+        .and_then(|v| v.get(field))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(default)
+        .clamp(min, max)
+}
+
+fn limit_duration(
+    manifest: &serde_json::Value,
+    default: std::time::Duration,
+    min: std::time::Duration,
+    max: std::time::Duration,
+) -> std::time::Duration {
+    let millis = manifest
+        .get("limits")
+        .and_then(|v| v.get("timeoutMs"))
+        .and_then(|v| v.as_u64())
+        .map(std::time::Duration::from_millis)
+        .unwrap_or(default);
+    millis.clamp(min, max)
+}
+
+fn luau_limits(manifest: &serde_json::Value) -> luau::Limits {
+    let defaults = luau::Limits::default();
+    luau::Limits {
+        memory_bytes: limit_usize(
+            manifest,
+            "memoryBytes",
+            defaults.memory_bytes,
+            1024 * 1024,
+            64 * 1024 * 1024,
+        ),
+        timeout: limit_duration(
+            manifest,
+            defaults.timeout,
+            std::time::Duration::from_millis(50),
+            std::time::Duration::from_secs(5),
+        ),
+    }
+}
+
+#[cfg(all(not(target_os = "ios"), target_has_atomic = "64"))]
+fn wasm_limits(manifest: &serde_json::Value) -> wasm::Limits {
+    let defaults = wasm::Limits::default();
+    wasm::Limits {
+        memory_bytes: limit_usize(
+            manifest,
+            "memoryBytes",
+            defaults.memory_bytes,
+            16 * 1024 * 1024,
+            512 * 1024 * 1024,
+        ),
+        timeout: limit_duration(
+            manifest,
+            defaults.timeout,
+            std::time::Duration::from_millis(100),
+            std::time::Duration::from_secs(30),
+        ),
+        fuel: limit_u64(manifest, "fuel", defaults.fuel, 10_000, 10_000_000_000),
+    }
+}
+
+/// Load a scripted plugin's entry and run its `export` function with `input`,
+/// under the selected runtime's sandbox + resource limits. `manifest` is the
+/// plugin's parsed manifest (for `runtime`/`entry`/`id`); `granted` is the
 /// permission set that decides the host API surface.
 ///
 /// Factored out of the command so it is unit-testable without a Tauri handle.
 pub fn run_plugin_script(
     files: &discovery::PluginFiles,
     manifest: &serde_json::Value,
+    checksum: &str,
     granted: Vec<String>,
     export: &str,
     input: serde_json::Value,
     notes: Vec<luau::NoteMeta>,
 ) -> AppResult<serde_json::Value> {
-    if manifest.get("runtime").and_then(|v| v.as_str()) != Some("luau") {
-        return Err(AppError::InvalidArg(
-            "plugin does not have a luau runtime".into(),
-        ));
+    match manifest.get("runtime").and_then(|v| v.as_str()) {
+        Some("luau") => {
+            let entry = manifest_entry(manifest, "luau", ".luau")?;
+            let source = files
+                .read_text(entry)?
+                .ok_or_else(|| AppError::InvalidArg(format!("entry '{entry}' not found")))?;
+            // The plugin's other `.luau` files, resolvable via a plugin-scoped `require`.
+            let modules = files.luau_modules()?;
+            let id = manifest_id(manifest);
+            luau::run(luau::ScriptRequest {
+                source,
+                chunk_name: format!("{id}/{entry}"),
+                export: export.to_string(),
+                input,
+                permissions: granted,
+                notes,
+                modules,
+                limits: luau_limits(manifest),
+            })
+        }
+        Some("wasm") => {
+            run_wasm_plugin_script(files, manifest, checksum, granted, export, input, notes)
+        }
+        Some(other) => Err(AppError::InvalidArg(format!(
+            "plugin runtime '{other}' is not executable"
+        ))),
+        None => Err(AppError::InvalidArg("plugin has no runtime".into())),
     }
-    let entry = manifest
-        .get("entry")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| AppError::InvalidArg("luau plugin has no entry".into()))?;
-    // Defense in depth: the manifest validator already rejects unsafe entries,
-    // but never read an untrusted path segment without re-checking.
-    if entry.contains('/') || entry.contains('\\') || entry.contains("..") {
-        return Err(AppError::InvalidArg(format!("unsafe entry '{entry}'")));
-    }
-    let source = files
-        .read_text(entry)?
+}
+
+#[cfg(all(not(target_os = "ios"), target_has_atomic = "64"))]
+fn run_wasm_plugin_script(
+    files: &discovery::PluginFiles,
+    manifest: &serde_json::Value,
+    checksum: &str,
+    granted: Vec<String>,
+    export: &str,
+    input: serde_json::Value,
+    notes: Vec<luau::NoteMeta>,
+) -> AppResult<serde_json::Value> {
+    let entry = manifest_entry(manifest, "wasm", ".wasm")?;
+    let wasm = files
+        .read_bytes(entry)?
         .ok_or_else(|| AppError::InvalidArg(format!("entry '{entry}' not found")))?;
-    // The plugin's other `.luau` files, resolvable via a plugin-scoped `require`.
-    let modules = files.luau_modules()?;
-    let id = manifest
-        .get("id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("plugin");
-    luau::run(luau::ScriptRequest {
-        source,
-        chunk_name: format!("{id}/{entry}"),
+    wasm::run(wasm::ScriptRequest {
+        wasm,
+        module_name: format!("{}/{}", manifest_id(manifest), entry),
+        checksum: checksum.to_string(),
         export: export.to_string(),
         input,
         permissions: granted,
         notes,
-        modules,
-        limits: luau::Limits::default(),
+        limits: wasm_limits(manifest),
     })
+}
+
+#[cfg(any(target_os = "ios", not(target_has_atomic = "64")))]
+fn run_wasm_plugin_script(
+    _files: &discovery::PluginFiles,
+    _manifest: &serde_json::Value,
+    _checksum: &str,
+    _granted: Vec<String>,
+    _export: &str,
+    _input: serde_json::Value,
+    _notes: Vec<luau::NoteMeta>,
+) -> AppResult<serde_json::Value> {
+    Err(AppError::InvalidArg(
+        "wasm plugins are not supported on this platform".into(),
+    ))
 }
 
 /// Build the read-only note snapshot exposed via `ms.notes`. One `notes::list`
@@ -605,7 +751,7 @@ pub fn plugins_read_file(
 /// (trust stays location-derived) and must be **enabled** in the DB — a gated or
 /// disabled plugin never executes. The script runs on a blocking worker so a
 /// long or runaway script can't stall the async runtime; its resource limits
-/// still bound it (see [`luau`]). Permissions come from the DB record, not the
+/// still bound it. Permissions come from the DB record, not the
 /// caller, so a script only gets the host API its manifest was granted.
 #[tauri::command]
 pub async fn plugins_run_script(
@@ -629,6 +775,7 @@ pub async fn plugins_run_script(
 
     let files = plugin.files;
     let manifest = plugin.manifest;
+    let checksum = plugin.checksum;
     let granted = record.granted_permissions;
     // Capture the note snapshot up front (while we hold the DB) so the blocking
     // worker needs no DB access; empty unless the plugin holds notes.read.
@@ -638,7 +785,7 @@ pub async fn plugins_run_script(
         Vec::new()
     };
     tauri::async_runtime::spawn_blocking(move || {
-        run_plugin_script(&files, &manifest, granted, &export, input, notes)
+        run_plugin_script(&files, &manifest, &checksum, granted, &export, input, notes)
     })
     .await
     .map_err(|e| AppError::InvalidArg(format!("script task failed: {e}")))?

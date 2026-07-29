@@ -1,8 +1,8 @@
 /**
- * Runs the declarative **effects** a plugin's Luau returns — the "app performs,
+ * Runs the declarative **effects** a plugin's backend script returns — the "app performs,
  * the plugin only computes" half of the scripted-plugin contract.
  *
- * A toolbar button's click runs a Luau export via `plugins_run_script`; the
+ * A toolbar button's click runs a backend export via `plugins_run_script`; the
  * return value is parsed into a closed {@link PluginEffect} union and executed
  * here against app-owned primitives (note creation, insertion, a context menu,
  * toasts). A script can only pick these effects — it never touches the DOM or
@@ -11,7 +11,7 @@
  *
  * The single mechanism gives a button either behaviour: return a terminal
  * effect for a one-shot action, or `openMenu` for a sub-menu (the Templates
- * picker enumerates its notes in Luau and returns a menu of `createNoteFromNote`).
+ * picker enumerates its notes in the runtime and returns a menu of `createNoteFromNote`).
  */
 
 import { pluginsRunScript } from '$lib/api/plugins';
@@ -147,7 +147,7 @@ export async function runPluginEffect(
 }
 
 /**
- * Run a toolbar button: build its context, invoke its Luau export, and perform
+ * Run a toolbar button: build its context, invoke its backend export, and perform
  * the returned effect. Fire-and-forget (menu/toolbar handlers), so failures are
  * logged rather than thrown out of the click handler. `anchor` positions an
  * `openMenu` effect under the button.
