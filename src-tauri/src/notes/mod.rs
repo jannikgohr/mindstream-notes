@@ -13,7 +13,7 @@ use rusqlite::{
     types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef},
     Connection, OptionalExtension,
 };
-use serde::{Deserialize, Serialize};
+use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use std::str::FromStr;
 
 use crate::db::Db;
@@ -21,8 +21,7 @@ use crate::error::{AppError, AppResult, CommandResult};
 use crate::serde_helpers::double_option;
 use crate::sync::{tags_crdt, yrs_doc};
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum NoteKind {
     #[default]
     Markdown,
@@ -30,21 +29,23 @@ pub enum NoteKind {
     Ink,
     Pdf,
     Kanban,
+    Plugin(String),
 }
 
 impl NoteKind {
-    pub fn as_str(self) -> &'static str {
+    pub fn as_str(&self) -> &str {
         match self {
             Self::Markdown => "markdown",
             Self::Freeform => "freeform",
             Self::Ink => "ink",
             Self::Pdf => "pdf",
             Self::Kanban => "kanban",
+            Self::Plugin(kind) => kind.as_str(),
         }
     }
 
-    pub fn is_markdown(self) -> bool {
-        self == Self::Markdown
+    pub fn is_markdown(&self) -> bool {
+        self == &Self::Markdown
     }
 }
 
@@ -58,14 +59,73 @@ impl FromStr for NoteKind {
             "ink" => Ok(Self::Ink),
             "pdf" => Ok(Self::Pdf),
             "kanban" => Ok(Self::Kanban),
+            value if is_valid_plugin_note_kind(value) => Ok(Self::Plugin(value.to_string())),
             _ => Err(AppError::InvalidArg(format!("unknown note kind {value}"))),
         }
+    }
+}
+
+fn is_note_kind_segment(segment: &str) -> bool {
+    if segment.is_empty() {
+        return false;
+    }
+    let mut chars = segment.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !first.is_ascii_lowercase() && !first.is_ascii_digit() {
+        return false;
+    }
+    let mut last = first;
+    for ch in chars {
+        if !ch.is_ascii_lowercase() && !ch.is_ascii_digit() && ch != '-' {
+            return false;
+        }
+        last = ch;
+    }
+    last.is_ascii_lowercase() || last.is_ascii_digit()
+}
+
+pub fn is_valid_plugin_note_kind(value: &str) -> bool {
+    const PREFIX: &str = "plugin.";
+    if value.len() > 160 || !value.starts_with(PREFIX) {
+        return false;
+    }
+    let segments: Vec<&str> = value[PREFIX.len()..].split('.').collect();
+    if segments.len() < 3 {
+        return false;
+    }
+    segments.into_iter().all(is_note_kind_segment)
+}
+
+impl Serialize for NoteKind {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for NoteKind {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::from_str(&value).map_err(de::Error::custom)
     }
 }
 
 impl From<&str> for NoteKind {
     fn from(value: &str) -> Self {
         Self::from_str(value).unwrap_or(Self::Markdown)
+    }
+}
+
+impl From<String> for NoteKind {
+    fn from(value: String) -> Self {
+        Self::from_str(&value).unwrap_or(Self::Markdown)
     }
 }
 

@@ -1,0 +1,54 @@
+{
+  "id": "com.mindstream.typst.prototype",
+  "name": "Typst Prototype",
+  "version": "0.1.0",
+  "author": "Mindstream",
+  "runtime": "luau",
+  "entry": "main.luau",
+  "descriptionKey": "plugin.description",
+  "permissions": [
+    "templates.contribute",
+    "noteKinds.contribute",
+    "notes.create"
+  ],
+  "contributes": {
+    "i18n": {
+      "en": {
+        "plugin.description": "Prototype Typst documents as plugin-owned notes.",
+        "notes.document.label": "Typst document",
+        "notes.document.description": "Source-and-preview document notes owned by the Typst plugin.",
+        "templates.document.label": "Typst document"
+      },
+      "de": {
+        "plugin.description": "Prototyp fuer Typst-Dokumente als Plugin-Notizen.",
+        "notes.document.label": "Typst-Dokument",
+        "notes.document.description": "Quelltext- und Vorschau-Notizen des Typst-Plugins.",
+        "templates.document.label": "Typst-Dokument"
+      }
+    },
+    "noteKinds": [
+      {
+        "id": "document",
+        "labelKey": "notes.document.label",
+        "descriptionKey": "notes.document.description",
+        "sourceLanguage": "typst",
+        "defaultTitle": "Untitled Typst document",
+        "defaultBody": "#set document(title: [Untitled])\n\n= Untitled\n\nStart writing in Typst here.",
+        "render": {
+          "export": "renderDocument",
+          "previewMime": "text/html",
+          "debounceMs": 300
+        }
+      }
+    ],
+    "noteTemplates": [
+      {
+        "id": "document",
+        "labelKey": "templates.document.label",
+        "noteKind": "plugin.com.mindstream.typst.prototype.document",
+        "titleTemplate": "Untitled Typst document",
+        "bodyTemplate": "#set document(title: [{{title}}])\n\n= {{title}}\n\nStart writing in Typst here."
+      }
+    ]
+  }
+}

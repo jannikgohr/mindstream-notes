@@ -15,6 +15,7 @@
  */
 
 import { pluginsRunScript } from '$lib/api/plugins';
+import type { NoteKind } from '$lib/api';
 import { createNoteIn } from '$lib/stores/tree.svelte';
 import { requestOpenNote } from '$lib/stores/open-note-intent.svelte';
 import { insertMarkdownIntoActiveNote } from '$lib/hotkeys';
@@ -23,7 +24,7 @@ import { pushToast } from '$lib/components/toast.svelte';
 import type { MenuItem } from '$lib/components/context-menu-types';
 import { buildPluginContext } from './plugin-ctx';
 import { openPluginMenu } from './plugin-menu.svelte';
-import { pluginById } from './registry.svelte';
+import { pluginById, pluginNoteKind } from './registry.svelte';
 import type {
   PluginEffect,
   PluginPermission,
@@ -53,6 +54,16 @@ function requireCreate(pluginId: string): void {
   }
 }
 
+function requireCreateKind(pluginId: string, noteKind: string): void {
+  if (noteKind === 'markdown') return;
+  const ref = pluginNoteKind(noteKind);
+  if (!ref || ref.pluginId !== pluginId) {
+    throw new Error(
+      `Plugin "${pluginId}" cannot create unsupported note kind "${noteKind}"`
+    );
+  }
+}
+
 /**
  * Validate an untrusted script return value into a {@link PluginEffect}, or
  * `null` if it isn't one we understand. Defensive: the script is sandboxed but
@@ -76,7 +87,21 @@ export function parsePluginEffect(value: unknown): PluginEffect | null {
     case 'createNote':
       if (typeof e.title !== 'string' || typeof e.body !== 'string')
         return null;
-      return { effect: 'createNote', title: e.title, body: e.body, parentId };
+      if (typeof e.noteKind === 'string') {
+        return {
+          effect: 'createNote',
+          title: e.title,
+          body: e.body,
+          noteKind: e.noteKind,
+          parentId
+        };
+      }
+      return {
+        effect: 'createNote',
+        title: e.title,
+        body: e.body,
+        parentId
+      };
     case 'createNoteFromNote':
       if (typeof e.sourceNoteId !== 'string') return null;
       return {
@@ -119,10 +144,12 @@ export async function runPluginEffect(
       return;
     case 'createNote': {
       requireCreate(pluginId);
+      const noteKind = effect.noteKind ?? 'markdown';
+      requireCreateKind(pluginId, noteKind);
       const id = await createNoteIn(
         effect.parentId ?? null,
         effect.title,
-        effect.noteKind ?? 'markdown',
+        noteKind as NoteKind,
         effect.body
       );
       requestOpenNote(id);

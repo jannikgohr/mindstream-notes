@@ -230,6 +230,43 @@ describe('createNoteFromPluginTemplate', () => {
     expect(createNoteIn).toHaveBeenCalled();
     expect(requestOpenNote).not.toHaveBeenCalled();
   });
+
+  it('creates a plugin-owned note kind through the app path', async () => {
+    const noteKind = `plugin.${PLUGIN_ID}.document`;
+    registerPlugin({
+      id: PLUGIN_ID,
+      name: 'Example',
+      version: '1.0.0',
+      runtime: 'luau',
+      entry: 'main.luau',
+      permissions: [
+        'templates.contribute',
+        'noteKinds.contribute',
+        'notes.create'
+      ],
+      contributes: {
+        i18n: { en: { 'templates.document.name': 'Document' } },
+        noteKinds: [
+          {
+            id: 'document',
+            labelKey: 'notes.document.label',
+            render: { export: 'renderDocument' }
+          }
+        ],
+        noteTemplates: [
+          {
+            id: 'document',
+            labelKey: 'templates.document.name',
+            noteKind,
+            titleTemplate: 'Doc',
+            bodyTemplate: 'Body'
+          }
+        ]
+      }
+    });
+    await createNoteFromPluginTemplate(PLUGIN_ID, 'document', null);
+    expect(createNoteIn).toHaveBeenCalledWith(null, 'Doc', noteKind, 'Body');
+  });
 });
 
 describe('todayIsoDate', () => {

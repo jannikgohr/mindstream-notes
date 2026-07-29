@@ -29,6 +29,31 @@ fn create_then_load_round_trip() {
 }
 
 #[test]
+fn plugin_note_kind_round_trips_with_validation() {
+    let db = open_memory_for_tests();
+    let kind = "plugin.com.example.renderer.document";
+    let n = db
+        .with_conn(|c| {
+            create(
+                c,
+                CreateNote {
+                    title: Some("Plugin doc".into()),
+                    body: Some("body".into()),
+                    parent_collection_id: None,
+                    note_kind: Some(kind.into()),
+                },
+            )
+        })
+        .unwrap();
+    assert_eq!(n.summary.note_kind, kind);
+
+    assert!(
+        NoteKind::from_str("plugin.bad").is_err(),
+        "malformed plugin note kind must fail"
+    );
+}
+
+#[test]
 fn save_updates_body_and_modified_changes() {
     let db = open_memory_for_tests();
     let n = empty_note(&db, None);

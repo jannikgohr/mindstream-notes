@@ -311,11 +311,50 @@ describe('validateManifest', () => {
     ).toThrow(/missing the "templates.contribute" permission/);
   });
 
-  it('rejects a non-markdown note kind', () => {
-    const m = withContributes((c) => {
-      (c.noteTemplates as Record<string, unknown>[])[0].noteKind = 'freeform';
+  it('accepts a plugin-owned note kind and a template that creates it', () => {
+    const m = validManifest({
+      runtime: 'luau',
+      entry: 'main.luau',
+      permissions: [
+        'templates.contribute',
+        'noteKinds.contribute',
+        'notes.create'
+      ]
     });
-    expect(() => validateManifest(m)).toThrow(/only "markdown" is allowed/);
+    const contributes = m.contributes as Record<string, unknown>;
+    contributes.noteKinds = [
+      {
+        id: 'document',
+        labelKey: 'notes.document.label',
+        sourceLanguage: 'typst',
+        render: { export: 'renderDocument', previewMime: 'text/html' }
+      }
+    ];
+    (contributes.noteTemplates as Record<string, unknown>[])[0].noteKind =
+      'plugin.com.example.templates.document';
+    expect(validateManifest(m).contributes.noteKinds).toHaveLength(1);
+  });
+
+  it('requires noteKinds.contribute when contributing note kinds', () => {
+    const m = validManifest({ runtime: 'luau', entry: 'main.luau' });
+    (m.contributes as Record<string, unknown>).noteKinds = [
+      {
+        id: 'document',
+        labelKey: 'notes.document.label',
+        render: { export: 'renderDocument' }
+      }
+    ];
+    expect(() => validateManifest(m)).toThrow(
+      /missing the "noteKinds.contribute"/
+    );
+  });
+
+  it('rejects a template for an undeclared plugin note kind', () => {
+    const m = withContributes((c) => {
+      (c.noteTemplates as Record<string, unknown>[])[0].noteKind =
+        'plugin.com.example.templates.document';
+    });
+    expect(() => validateManifest(m)).toThrow(/declared by this plugin/);
   });
 
   it('rejects a select variable without options', () => {

@@ -30,6 +30,7 @@ import { createNoteIn } from '$lib/stores/tree.svelte';
 import { getSettingValue } from '$lib/settings/store.svelte';
 import { i18n } from '$lib/settings/i18n.svelte';
 import { pluginsRunScript } from '$lib/api/plugins';
+import type { NoteKind } from '$lib/api';
 import { pluginById, pluginTemplate } from './registry.svelte';
 import { buildPluginContext } from './plugin-ctx';
 import { resolvePluginString } from './plugin-i18n';
@@ -225,7 +226,12 @@ export async function createNoteFromPluginTemplate(
   const { title, body } = useScript
     ? await renderTemplateViaScript(pluginId, ref.template, variables)
     : renderPluginTemplate(pluginId, ref.template, variables);
-  const id = await createNoteIn(parentId, title, ref.template.noteKind, body);
+  const id = await createNoteIn(
+    parentId,
+    title,
+    ref.template.noteKind as NoteKind,
+    body
+  );
   if (shouldOpenOnCreate(pluginId)) requestOpenNote(id);
   return id;
 }

@@ -43,7 +43,9 @@ export enum NoteKindEnum {
   Kanban = 'kanban'
 }
 
-export type NoteKind = `${NoteKindEnum}`;
+export type BuiltInNoteKind = `${NoteKindEnum}`;
+export type PluginNoteKind = `plugin.${string}`;
+export type NoteKind = BuiltInNoteKind | PluginNoteKind;
 
 /**
  * The full set of editor kinds this app version knows how to render.
@@ -69,17 +71,36 @@ export const KNOWN_NOTE_KINDS = [
  *  the typed `NoteKind` union. */
 export function isKnownNoteKind(
   kind: string | undefined | null
-): kind is NoteKind {
+): kind is BuiltInNoteKind {
   return (
     typeof kind === 'string' &&
     (KNOWN_NOTE_KINDS as readonly string[]).includes(kind)
   );
 }
 
+function isNoteKindSegment(segment: string): boolean {
+  return /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(segment);
+}
+
+export function isPluginNoteKind(
+  kind: string | undefined | null
+): kind is PluginNoteKind {
+  if (typeof kind !== 'string' || kind.length > 160) return false;
+  if (!kind.startsWith('plugin.')) return false;
+  const segments = kind.slice('plugin.'.length).split('.');
+  return segments.length >= 3 && segments.every(isNoteKindSegment);
+}
+
+export function isSupportedNoteKind(
+  kind: string | undefined | null
+): kind is NoteKind {
+  return isKnownNoteKind(kind) || isPluginNoteKind(kind);
+}
+
 function assertNoteKind(value: unknown, context: string): NoteKind {
   const kind = assertString(value, context);
-  if (!isKnownNoteKind(kind))
-    throw new Error(`${context} is not a known note kind`);
+  if (!isSupportedNoteKind(kind))
+    throw new Error(`${context} is not a supported note kind`);
   return kind;
 }
 
@@ -250,8 +271,8 @@ function assertCreateNoteInput(input: CreateNoteInput): void {
       'CreateNoteInput.parent_collection_id must be a string or null'
     );
   }
-  if (input.note_kind !== undefined && !isKnownNoteKind(input.note_kind)) {
-    throw new Error('CreateNoteInput.note_kind is not a known note kind');
+  if (input.note_kind !== undefined && !isSupportedNoteKind(input.note_kind)) {
+    throw new Error('CreateNoteInput.note_kind is not a supported note kind');
   }
 }
 
