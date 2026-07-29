@@ -33,7 +33,8 @@ import {
   type PluginCommandContribution,
   type PluginTemplateVariable,
   type PluginToolbarButton,
-  type PluginToolbarLocation
+  type PluginToolbarLocation,
+  type PluginSourceEditAction
 } from './types';
 
 export class PluginValidationError extends Error {
@@ -415,13 +416,29 @@ const TOOLBAR_LOCATIONS = new Set<PluginToolbarLocation>(
 function validateToolbarButton(
   pluginId: string,
   b: PluginToolbarButton,
-  path: string
+  path: string,
+  pluginLocalNoteKindIds: Set<string>
 ): void {
   assertSlug(pluginId, b?.id, `${path}.id`);
   if (!TOOLBAR_LOCATIONS.has(b?.location)) {
     throw new PluginValidationError(
       pluginId,
       `${path}.location ("${String(b?.location)}") is not a supported toolbar location`
+    );
+  }
+  if (b.location === 'note-editor') {
+    const localNoteKind = b.noteKind;
+    assertSlug(pluginId, localNoteKind, `${path}.noteKind`);
+    if (!pluginLocalNoteKindIds.has(localNoteKind as string)) {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.noteKind references "${localNoteKind}", which this plugin does not contribute`
+      );
+    }
+  } else if (b.noteKind !== undefined) {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.noteKind is only valid for note-editor toolbar buttons`
     );
   }
   assertI18nKey(pluginId, b?.labelKey, `${path}.labelKey`);
@@ -432,21 +449,87 @@ function validateToolbarButton(
       `${path}.icon ("${b.icon}") must be a safe relative .svg path inside the plugin dir (no "..", absolute paths, or "\\\\")`
     );
   }
-  // The action union is closed. Today the only kind runs a backend script export; the
-  // manifest can't smuggle arbitrary behaviour, only pick this mechanism.
-  if (b?.action?.type !== 'script') {
-    throw new PluginValidationError(
-      pluginId,
-      `${path}.action.type ("${String(b?.action?.type)}") is not a supported toolbar action`
-    );
+  validateToolbarAction(pluginId, b?.action, `${path}.action`, b.location);
+}
+
+function validateToolbarAction(
+  pluginId: string,
+  rawAction: unknown,
+  path: string,
+  location: PluginToolbarLocation
+): void {
+  if (!rawAction || typeof rawAction !== 'object') {
+    throw new PluginValidationError(pluginId, `${path} must be an object`);
   }
+  const action = rawAction as PluginToolbarButton['action'];
+  const actionType = (rawAction as Record<string, unknown>).type;
   if (
-    typeof b.action.export !== 'string' ||
-    !EXPORT_NAME_RE.test(b.action.export)
+    actionType !== 'script' &&
+    actionType !== 'insertText' &&
+    actionType !== 'wrapSelection'
   ) {
     throw new PluginValidationError(
       pluginId,
-      `${path}.action.export must be a backend script export name (letters, digits, underscore)`
+      `${path}.type ("${String(actionType)}") is not a supported toolbar action`
+    );
+  }
+  if (action.type === 'script') {
+    if (
+      typeof action.export !== 'string' ||
+      !EXPORT_NAME_RE.test(action.export)
+    ) {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.export must be a backend script export name (letters, digits, underscore)`
+      );
+    }
+    return;
+  }
+  if (location !== 'note-editor') {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.type "${action.type}" is only valid for note-editor toolbar buttons`
+    );
+  }
+  validateSourceEditAction(pluginId, action, path);
+}
+
+function validateSourceEditAction(
+  pluginId: string,
+  action: PluginSourceEditAction,
+  path: string
+): void {
+  if (action.type === 'insertText') {
+    if (typeof action.text !== 'string') {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.text must be a string`
+      );
+    }
+    if (
+      action.cursorOffset !== undefined &&
+      (!Number.isFinite(action.cursorOffset) || action.cursorOffset < 0)
+    ) {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.cursorOffset must be a non-negative finite number`
+      );
+    }
+    return;
+  }
+  if (typeof action.before !== 'string' || typeof action.after !== 'string') {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.before and ${path}.after must be strings`
+    );
+  }
+  if (
+    action.placeholder !== undefined &&
+    typeof action.placeholder !== 'string'
+  ) {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.placeholder must be a string`
     );
   }
 }
@@ -711,7 +794,7 @@ export function validateManifest(input: unknown): PluginManifest {
   }
   const seenToolbarIds = new Set<string>();
   for (const [i, b] of toolbar.entries()) {
-    validateToolbarButton(pluginId, b, `toolbar[${i}]`);
+    validateToolbarButton(pluginId, b, `toolbar[${i}]`, seenNoteKindIds);
     if (seenToolbarIds.has(b.id)) {
       throw new PluginValidationError(
         pluginId,
@@ -720,9 +803,12 @@ export function validateManifest(input: unknown): PluginManifest {
     }
     seenToolbarIds.add(b.id);
   }
-  // Toolbar buttons run a backend script export on click, so they require a
-  // scripted runtime.
-  if (toolbar.length > 0 && !isScriptedRuntime(m.runtime)) {
+  // Script toolbar buttons run a backend export on click, so they require a
+  // scripted runtime. Host-owned source edits are declarative and need none.
+  if (
+    toolbar.some((button) => button.action.type === 'script') &&
+    !isScriptedRuntime(m.runtime)
+  ) {
     throw new PluginValidationError(
       pluginId,
       'contributes toolbar buttons, which run a backend script export and require runtime "luau" or "wasm"'

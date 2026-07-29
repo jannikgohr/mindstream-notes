@@ -335,6 +335,85 @@ describe('validateManifest', () => {
     expect(validateManifest(m).contributes.noteKinds).toHaveLength(1);
   });
 
+  it('accepts note-editor toolbar source actions for plugin-owned note kinds', () => {
+    const m = validManifest({
+      runtime: 'luau',
+      entry: 'main.luau',
+      permissions: [
+        'templates.contribute',
+        'noteKinds.contribute',
+        'notes.create'
+      ]
+    });
+    const contributes = m.contributes as Record<string, unknown>;
+    contributes.noteKinds = [
+      {
+        id: 'document',
+        labelKey: 'notes.document.label',
+        render: { export: 'renderDocument', previewMime: 'text/html' }
+      }
+    ];
+    contributes.toolbar = [
+      {
+        id: 'strong',
+        location: 'note-editor',
+        noteKind: 'document',
+        labelKey: 'toolbar.strong',
+        icon: 'icons/strong.svg',
+        action: {
+          type: 'wrapSelection',
+          before: '*',
+          after: '*',
+          placeholder: 'strong'
+        }
+      },
+      {
+        id: 'heading',
+        location: 'note-editor',
+        noteKind: 'document',
+        labelKey: 'toolbar.heading',
+        icon: 'icons/heading.svg',
+        action: { type: 'insertText', text: '= ', cursorOffset: 2 }
+      }
+    ];
+    expect(validateManifest(m).contributes.toolbar).toHaveLength(2);
+  });
+
+  it('rejects note-editor toolbar buttons for undeclared note kinds', () => {
+    const m = validManifest({
+      runtime: 'luau',
+      entry: 'main.luau',
+      permissions: [
+        'templates.contribute',
+        'noteKinds.contribute',
+        'notes.create'
+      ]
+    });
+    (m.contributes as Record<string, unknown>).toolbar = [
+      {
+        id: 'strong',
+        location: 'note-editor',
+        noteKind: 'document',
+        labelKey: 'toolbar.strong',
+        icon: 'icons/strong.svg',
+        action: { type: 'insertText', text: '= ' }
+      }
+    ];
+    expect(() => validateManifest(m)).toThrow(/does not contribute/);
+  });
+
+  it('rejects source-edit toolbar actions outside note editors', () => {
+    const m = luauManifest((c) => {
+      c.toolbar = [
+        {
+          ...luauButton,
+          action: { type: 'insertText', text: '= ', cursorOffset: 2 }
+        }
+      ];
+    });
+    expect(() => validateManifest(m)).toThrow(/only valid for note-editor/);
+  });
+
   it('requires noteKinds.contribute when contributing note kinds', () => {
     const m = validManifest({ runtime: 'luau', entry: 'main.luau' });
     (m.contributes as Record<string, unknown>).noteKinds = [

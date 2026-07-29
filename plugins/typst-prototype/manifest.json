@@ -17,13 +17,23 @@
         "plugin.description": "Prototype Typst documents as plugin-owned notes.",
         "notes.document.label": "Typst document",
         "notes.document.description": "Source-and-preview document notes owned by the Typst plugin.",
-        "templates.document.label": "Typst document"
+        "templates.document.label": "Typst document",
+        "toolbar.heading": "Heading",
+        "toolbar.strong": "Strong",
+        "toolbar.emphasis": "Emphasis",
+        "toolbar.math": "Math",
+        "toolbar.list": "List"
       },
       "de": {
         "plugin.description": "Prototyp fuer Typst-Dokumente als Plugin-Notizen.",
         "notes.document.label": "Typst-Dokument",
         "notes.document.description": "Quelltext- und Vorschau-Notizen des Typst-Plugins.",
-        "templates.document.label": "Typst-Dokument"
+        "templates.document.label": "Typst-Dokument",
+        "toolbar.heading": "Ueberschrift",
+        "toolbar.strong": "Fett",
+        "toolbar.emphasis": "Kursiv",
+        "toolbar.math": "Mathematik",
+        "toolbar.list": "Liste"
       }
     },
     "noteKinds": [
@@ -48,6 +58,71 @@
         "noteKind": "plugin.com.mindstream.typst.prototype.document",
         "titleTemplate": "Untitled Typst document",
         "bodyTemplate": "#set document(title: [{{title}}])\n\n= {{title}}\n\nStart writing in Typst here."
+      }
+    ],
+    "toolbar": [
+      {
+        "id": "heading",
+        "location": "note-editor",
+        "noteKind": "document",
+        "labelKey": "toolbar.heading",
+        "icon": "icons/heading.svg",
+        "action": {
+          "type": "insertText",
+          "text": "= ",
+          "cursorOffset": 2
+        }
+      },
+      {
+        "id": "strong",
+        "location": "note-editor",
+        "noteKind": "document",
+        "labelKey": "toolbar.strong",
+        "icon": "icons/strong.svg",
+        "action": {
+          "type": "wrapSelection",
+          "before": "*",
+          "after": "*",
+          "placeholder": "strong"
+        }
+      },
+      {
+        "id": "emphasis",
+        "location": "note-editor",
+        "noteKind": "document",
+        "labelKey": "toolbar.emphasis",
+        "icon": "icons/emphasis.svg",
+        "action": {
+          "type": "wrapSelection",
+          "before": "_",
+          "after": "_",
+          "placeholder": "emphasis"
+        }
+      },
+      {
+        "id": "math",
+        "location": "note-editor",
+        "noteKind": "document",
+        "labelKey": "toolbar.math",
+        "icon": "icons/math.svg",
+        "action": {
+          "type": "wrapSelection",
+          "before": "$ ",
+          "after": " $",
+          "placeholder": "x^2"
+        }
+      },
+      {
+        "id": "list",
+        "location": "note-editor",
+        "noteKind": "document",
+        "labelKey": "toolbar.list",
+        "icon": "icons/list.svg",
+        "action": {
+          "type": "insertText",
+          "text": "- ",
+          "cursorOffset": 2
+        }
       }
     ]
   }
