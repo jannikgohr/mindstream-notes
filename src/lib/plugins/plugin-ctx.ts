@@ -1,9 +1,9 @@
 /**
- * Builds the read-only context snapshot a plugin's Luau receives as its single
+ * Builds the read-only context snapshot a plugin's backend script receives as its single
  * argument (a button action or a template `render` macro).
  *
  * Assembled on the frontend, where settings + the folder tree live, so a script
- * never needs a mid-run callback into the app (the Luau worker has no live DB —
+ * never needs a mid-run callback into the app (the script worker has no live DB —
  * `ms.notes` metadata is added separately by the backend when `notes.read` is
  * granted). Kept in its own module so both `effects.ts` and `templates.ts` can
  * use it without an import cycle.

@@ -18,8 +18,8 @@
  * Capabilities a plugin may request in its manifest:
  *   - `templates.contribute` — surface note templates in create menus;
  *   - `notes.create` — have the app create a note from the plugin's template;
- *   - `notes.read` — a scripted (luau) plugin may read the vault's note metadata
- *     through `ms.notes` (see src-tauri/src/plugins/luau.rs).
+ *   - `notes.read` — a scripted plugin may read note metadata through its
+ *     permission-gated host API.
  * Broad `notes.write` stays deliberately absent — the app, not the plugin,
  * performs the actual note write (see templates.ts).
  */
@@ -70,7 +70,7 @@ export interface PluginNoteTemplateContribution {
   bodyTemplate: string;
   variables?: PluginTemplateVariable[];
   /**
-   * Optional Luau macro (`runtime: 'luau'` plugins only): the name of an
+   * Optional backend script macro (`runtime: 'luau'` or `'wasm'`): the name of an
    * exported function `render(ctx) -> { title, body }` that computes the note
    * instead of the declarative `titleTemplate`/`bodyTemplate`. When set, the app
    * runs the script and uses its result; the app — never the script — still
@@ -144,13 +144,13 @@ export type PluginToolbarLocation = (typeof PLUGIN_TOOLBAR_LOCATIONS)[number];
 /**
  * What a toolbar button does when clicked. A closed union so a button can only
  * pick a host-understood mechanism, never smuggle code. Currently the sole kind
- * runs a Luau export whose *return value* is a {@link PluginEffect} the host
+ * runs a backend script export whose *return value* is a {@link PluginEffect} the host
  * performs — which is what lets one button be either a single action or a
  * sub-menu (the script decides by returning a terminal effect vs. `openMenu`).
  */
 export type PluginToolbarAction = {
   type: 'script';
-  /** Exported Luau function name; called with the button `ctx` on click. */
+  /** Exported backend script function name; called with the button `ctx` on click. */
   export: string;
 };
 
@@ -167,7 +167,7 @@ export interface PluginToolbarButton {
 }
 
 /**
- * A declarative effect a plugin's Luau returns for the host to perform — the
+ * A declarative effect a plugin's backend script returns for the host to perform — the
  * plugin computes, the app acts (the runtime's "a script never writes" rule).
  * A closed union: the host executes only these, permission-gated. `openMenu`
  * nests effects, so a script can return a whole sub-menu of actions from one
@@ -228,6 +228,15 @@ export interface PluginContributions {
   toolbar?: PluginToolbarButton[];
 }
 
+export interface PluginRuntimeLimits {
+  /** Guest memory cap in bytes. Clamped by the backend. */
+  memoryBytes?: number;
+  /** Wall-clock timeout in milliseconds. Clamped by the backend. */
+  timeoutMs?: number;
+  /** Wasmtime fuel budget (`runtime: 'wasm'` only). Clamped by the backend. */
+  fuel?: number;
+}
+
 /**
  * A plugin manifest.
  *
@@ -239,6 +248,10 @@ export interface PluginContributions {
  *     title/body). The script gets a permission-gated host API (`ms.*`); the
  *     app, not the script, still performs any note write. `entry` is required
  *     and must be a safe relative `.luau` filename inside the plugin dir.
+ *   - `'wasm'` — the plugin ships a backend-only WebAssembly `entry` run by
+ *     Wasmtime with no WASI by default. It uses the same exported-function and
+ *     declarative-effect boundary as Luau; `entry` must be a safe `.wasm`
+ *     filename.
  */
 export interface PluginManifest {
   id: string;
@@ -251,9 +264,11 @@ export interface PluginManifest {
    * (Obsidian, VS Code) surface authorship.
    */
   author?: string;
-  runtime: 'manifest-only' | 'luau';
-  /** Required for `runtime: 'luau'`; a `.luau` file relative to the plugin dir. */
+  runtime: 'manifest-only' | 'luau' | 'wasm';
+  /** Required for scripted runtimes; a `.luau`/`.wasm` file relative to the plugin dir. */
   entry?: string;
+  /** Optional per-runtime resource limits. The backend applies hard maximums. */
+  limits?: PluginRuntimeLimits;
   /**
    * Optional i18n key for a **short** one-line description (a tagline) shown
    * next to the plugin in settings. Resolves against the plugin's own i18n

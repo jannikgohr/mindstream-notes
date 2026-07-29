@@ -219,10 +219,11 @@ export async function createNoteFromPluginTemplate(
     );
   }
 
-  const useLuau =
-    !!ref.template.render && pluginById(pluginId)?.manifest.runtime === 'luau';
-  const { title, body } = useLuau
-    ? await renderTemplateViaLuau(pluginId, ref.template, variables)
+  const runtime = pluginById(pluginId)?.manifest.runtime;
+  const useScript =
+    !!ref.template.render && (runtime === 'luau' || runtime === 'wasm');
+  const { title, body } = useScript
+    ? await renderTemplateViaScript(pluginId, ref.template, variables)
     : renderPluginTemplate(pluginId, ref.template, variables);
   const id = await createNoteIn(parentId, title, ref.template.noteKind, body);
   if (shouldOpenOnCreate(pluginId)) requestOpenNote(id);
@@ -230,13 +231,13 @@ export async function createNoteFromPluginTemplate(
 }
 
 /**
- * Render a template's title + body by running the plugin's Luau `render(ctx)`
+ * Render a template's title + body by running the plugin's backend `render(ctx)`
  * macro (the dynamic alternative to `titleTemplate`/`bodyTemplate`). The script
  * receives the plugin context plus the caller's `variables`; the app — never
  * the script — still creates the note. An empty/absent title falls back to the
  * template's localized label so a note is never created titleless.
  */
-async function renderTemplateViaLuau(
+async function renderTemplateViaScript(
   pluginId: string,
   template: PluginNoteTemplateContribution,
   variables: TemplateVariables

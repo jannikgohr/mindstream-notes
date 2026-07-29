@@ -55,11 +55,12 @@ const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
  */
 const I18N_KEY_RE = /^[A-Za-z0-9]+(?:[-._][A-Za-z0-9]+)*$/;
 /**
- * A safe `luau` entry filename: a single path segment (letters/digits/`._-`)
- * ending in `.luau`, with no separators or `..`. The backend joins this onto
- * the plugin dir, so this is the traversal guard.
+ * Safe scripted entry filenames: a single path segment (letters/digits/`._-`)
+ * with a runtime-specific extension, no separators or `..`. The backend joins
+ * this onto the plugin dir, so this is the traversal guard.
  */
-const SAFE_ENTRY_RE = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*)\.luau$/;
+const SAFE_LUAU_ENTRY_RE = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*)\.luau$/;
+const SAFE_WASM_ENTRY_RE = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*)\.wasm$/;
 /**
  * A safe relative documentation path: one or more `/`-joined segments ending in
  * `.md`. Each segment must start alphanumeric, so `..` (and any dot-leading
@@ -90,6 +91,12 @@ const VARIABLE_TYPES = new Set<PluginTemplateVariable['type']>([
   'date',
   'select'
 ]);
+
+function isScriptedRuntime(
+  runtime: PluginManifest['runtime'] | undefined
+): boolean {
+  return runtime === 'luau' || runtime === 'wasm';
+}
 
 /** Narrow, throwing on failure. */
 function assertNonEmptyString(
@@ -178,13 +185,13 @@ function validateTemplate(
     );
   }
   if (t.render !== undefined) {
-    // A Luau-computed template: the script produces title/body, so the static
+    // A backend-scripted template: the script produces title/body, so the static
     // templates are optional. Only the export name is validated here; that it
-    // requires runtime:'luau' is checked once in validateManifest.
+    // requires a scripted runtime is checked once in validateManifest.
     if (typeof t.render !== 'string' || !EXPORT_NAME_RE.test(t.render)) {
       throw new PluginValidationError(
         pluginId,
-        `${path}.render must be a Luau export name (letters, digits, underscore)`
+        `${path}.render must be a backend script export name (letters, digits, underscore)`
       );
     }
   } else {
@@ -340,7 +347,7 @@ function validateToolbarButton(
       `${path}.icon ("${b.icon}") must be a safe relative .svg path inside the plugin dir (no "..", absolute paths, or "\\\\")`
     );
   }
-  // The action union is closed. Today the only kind runs a Luau export; the
+  // The action union is closed. Today the only kind runs a backend script export; the
   // manifest can't smuggle arbitrary behaviour, only pick this mechanism.
   if (b?.action?.type !== 'script') {
     throw new PluginValidationError(
@@ -354,7 +361,7 @@ function validateToolbarButton(
   ) {
     throw new PluginValidationError(
       pluginId,
-      `${path}.action.export must be a Luau export name (letters, digits, underscore)`
+      `${path}.action.export must be a backend script export name (letters, digits, underscore)`
     );
   }
 }
@@ -385,23 +392,31 @@ export function validateManifest(input: unknown): PluginManifest {
     assertI18nKey(pluginId, m.descriptionKey, 'manifest.descriptionKey');
   }
 
-  // Two runtimes are understood: purely-declarative `manifest-only`, and `luau`
-  // (a sandboxed backend script). Anything else is refused rather than loaded
+  // Runtimes are explicit: purely-declarative `manifest-only`, or sandboxed
+  // backend code in Luau/Wasmtime. Anything else is refused rather than loaded
   // half-supported.
-  if (m.runtime !== 'manifest-only' && m.runtime !== 'luau') {
+  if (
+    m.runtime !== 'manifest-only' &&
+    m.runtime !== 'luau' &&
+    m.runtime !== 'wasm'
+  ) {
     throw new PluginValidationError(
       pluginId,
-      `manifest.runtime ("${String(m.runtime)}") is unsupported; expected "manifest-only" or "luau"`
+      `manifest.runtime ("${String(m.runtime)}") is unsupported; expected "manifest-only", "luau", or "wasm"`
     );
   }
-  if (m.runtime === 'luau') {
+  if (isScriptedRuntime(m.runtime)) {
     assertNonEmptyString(pluginId, m.entry, 'manifest.entry');
     // The backend reads `<pluginDir>/<entry>`, so entry must be a safe relative
-    // filename — no separators, no traversal, and a `.luau` extension.
-    if (!SAFE_ENTRY_RE.test(m.entry)) {
+    // filename — no separators, no traversal, and the runtime's extension.
+    const safe =
+      m.runtime === 'luau'
+        ? SAFE_LUAU_ENTRY_RE.test(m.entry)
+        : SAFE_WASM_ENTRY_RE.test(m.entry);
+    if (!safe) {
       throw new PluginValidationError(
         pluginId,
-        `manifest.entry ("${m.entry}") must be a plain .luau filename inside the plugin dir (no "/", "\\\\" or "..")`
+        `manifest.entry ("${m.entry}") must be a plain ${m.runtime === 'luau' ? '.luau' : '.wasm'} filename inside the plugin dir (no "/", "\\\\" or "..")`
       );
     }
   } else if (m.entry !== undefined) {
@@ -409,8 +424,37 @@ export function validateManifest(input: unknown): PluginManifest {
     // surfacing rather than silently ignoring.
     throw new PluginValidationError(
       pluginId,
-      'manifest.entry is only valid for runtime "luau"'
+      'manifest.entry is only valid for runtime "luau" or "wasm"'
     );
+  }
+
+  if (m.limits !== undefined) {
+    if (!m.limits || typeof m.limits !== 'object' || Array.isArray(m.limits)) {
+      throw new PluginValidationError(
+        pluginId,
+        'manifest.limits must be an object'
+      );
+    }
+    const limits = m.limits as Record<string, unknown>;
+    for (const key of ['memoryBytes', 'timeoutMs', 'fuel']) {
+      if (limits[key] === undefined) continue;
+      if (
+        typeof limits[key] !== 'number' ||
+        !Number.isFinite(limits[key]) ||
+        limits[key] <= 0
+      ) {
+        throw new PluginValidationError(
+          pluginId,
+          `manifest.limits.${key} must be a positive finite number`
+        );
+      }
+    }
+    if (limits.fuel !== undefined && m.runtime !== 'wasm') {
+      throw new PluginValidationError(
+        pluginId,
+        'manifest.limits.fuel is only valid for runtime "wasm"'
+      );
+    }
   }
 
   if (!Array.isArray(m.permissions)) {
@@ -465,11 +509,15 @@ export function validateManifest(input: unknown): PluginManifest {
       'contributes noteTemplates but is missing the "templates.contribute" permission'
     );
   }
-  // A `render` macro is a Luau export, so it only makes sense on a luau plugin.
-  if (templates.some((t) => t.render !== undefined) && m.runtime !== 'luau') {
+  // A `render` macro is a backend script export, so it only makes sense on a
+  // scripted plugin.
+  if (
+    templates.some((t) => t.render !== undefined) &&
+    !isScriptedRuntime(m.runtime)
+  ) {
     throw new PluginValidationError(
       pluginId,
-      'a template "render" export requires runtime "luau"'
+      'a template "render" export requires runtime "luau" or "wasm"'
     );
   }
 
@@ -553,11 +601,12 @@ export function validateManifest(input: unknown): PluginManifest {
     }
     seenToolbarIds.add(b.id);
   }
-  // Toolbar buttons run a Luau export on click, so they require a luau runtime.
-  if (toolbar.length > 0 && m.runtime !== 'luau') {
+  // Toolbar buttons run a backend script export on click, so they require a
+  // scripted runtime.
+  if (toolbar.length > 0 && !isScriptedRuntime(m.runtime)) {
     throw new PluginValidationError(
       pluginId,
-      'contributes toolbar buttons, which run a Luau export and require runtime "luau"'
+      'contributes toolbar buttons, which run a backend script export and require runtime "luau" or "wasm"'
     );
   }
 

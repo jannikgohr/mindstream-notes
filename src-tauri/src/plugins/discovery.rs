@@ -95,13 +95,32 @@ impl PluginFiles {
         }
     }
 
-    /// Raw bytes of one relative file, or `None` if absent.
-    fn read_bytes(&self, rel: &str) -> Option<Vec<u8>> {
+    /// Raw bytes of one relative file (a `.wasm`, `signature.json`, …), guarded
+    /// against path traversal. `None` = the file isn't present.
+    pub fn read_bytes(&self, rel: &str) -> AppResult<Option<Vec<u8>>> {
+        if rel.contains("..") || rel.contains('\\') || rel.starts_with('/') {
+            return Err(AppError::InvalidArg(format!(
+                "unsafe plugin file path '{rel}'"
+            )));
+        }
         match self {
-            PluginFiles::Fs(dir) => fs::read(dir.join(rel)).ok(),
-            PluginFiles::Embedded(dir) => dir
+            PluginFiles::Fs(dir) => {
+                let base = dir.canonicalize().unwrap_or_else(|_| dir.clone());
+                match dir.join(rel).canonicalize() {
+                    Ok(resolved) => {
+                        if !resolved.starts_with(&base) {
+                            return Err(AppError::InvalidArg(format!(
+                                "plugin file path '{rel}' escapes the plugin dir"
+                            )));
+                        }
+                        Ok(Some(fs::read(&resolved)?))
+                    }
+                    Err(_) => Ok(None),
+                }
+            }
+            PluginFiles::Embedded(dir) => Ok(dir
                 .get_file(dir.path().join(rel))
-                .map(|f| f.contents().to_vec()),
+                .map(|f| f.contents().to_vec())),
         }
     }
 
@@ -133,7 +152,7 @@ impl PluginFiles {
                 }
             }
             PluginFiles::Embedded(_) => Ok(self
-                .read_bytes(rel)
+                .read_bytes(rel)?
                 .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())),
         }
     }
@@ -230,7 +249,7 @@ fn read_plugin(files: PluginFiles, source: &str) -> AppResult<DiscoveredPlugin> 
     let digest = signing::package_digest(&all);
     let checksum = sha256_hex(&digest);
     // Signature is verified over the package digest. Absent → unsigned.
-    let sig_json = files.read_bytes("signature.json");
+    let sig_json = files.read_bytes("signature.json")?;
     let verification = signing::verify(&digest, sig_json.as_deref());
     let manifest_bytes = all
         .iter()
