@@ -342,7 +342,11 @@
       {#if rendering}
         <Loader2 class="size-3.5 shrink-0 animate-spin text-muted-foreground" />
       {/if}
-      <EditorModeToggle value={viewMode} onCycle={cycleViewMode} />
+      <EditorModeToggle
+        value={viewMode}
+        previewIcon={contributionRef?.contribution.viewModePreviewIcon}
+        onCycle={cycleViewMode}
+      />
     </div>
     <div
       bind:this={editorRegionEl}

@@ -327,12 +327,35 @@ describe('validateManifest', () => {
         id: 'document',
         labelKey: 'notes.document.label',
         sourceLanguage: 'typst',
+        viewModePreviewIcon: 'bookText',
         render: { export: 'renderDocument', previewMime: 'text/html' }
       }
     ];
     (contributes.noteTemplates as Record<string, unknown>[])[0].noteKind =
       'plugin.com.example.templates.document';
     expect(validateManifest(m).contributes.noteKinds).toHaveLength(1);
+  });
+
+  it('rejects unknown plugin note kind preview mode icons', () => {
+    const m = validManifest({
+      runtime: 'luau',
+      entry: 'main.luau',
+      permissions: [
+        'templates.contribute',
+        'noteKinds.contribute',
+        'notes.create'
+      ]
+    });
+    const contributes = m.contributes as Record<string, unknown>;
+    contributes.noteKinds = [
+      {
+        id: 'document',
+        labelKey: 'notes.document.label',
+        viewModePreviewIcon: 'scroll',
+        render: { export: 'renderDocument', previewMime: 'text/html' }
+      }
+    ];
+    expect(() => validateManifest(m)).toThrow(/viewModePreviewIcon/);
   });
 
   it('accepts note-editor toolbar source actions for plugin-owned note kinds', () => {

@@ -52,6 +52,7 @@
         "labelKey": "notes.document.label",
         "descriptionKey": "notes.document.description",
         "sourceLanguage": "typst",
+        "viewModePreviewIcon": "bookText",
         "defaultTitle": "Untitled Typst document",
         "defaultBody": "#set document(title: [Untitled])\n\n= Untitled\n\nStart writing in Typst here.",
         "render": {

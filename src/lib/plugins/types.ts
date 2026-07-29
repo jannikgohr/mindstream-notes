@@ -91,6 +91,11 @@ export const PLUGIN_PREVIEW_MIME_TYPES = [
 
 export type PluginPreviewMimeType = (typeof PLUGIN_PREVIEW_MIME_TYPES)[number];
 
+export const PLUGIN_VIEW_MODE_PREVIEW_ICONS = ['default', 'bookText'] as const;
+
+export type PluginViewModePreviewIcon =
+  (typeof PLUGIN_VIEW_MODE_PREVIEW_ICONS)[number];
+
 export interface PluginNoteKindRenderContribution {
   /** Exported backend script function name; called with `{ noteId, noteKind, body }`. */
   export: string;
@@ -108,6 +113,8 @@ export interface PluginNoteKindContribution {
   descriptionKey?: string;
   /** Source editor language hint for the host UI. */
   sourceLanguage?: string;
+  /** Host-owned icon to show for the preview-only view mode toggle. */
+  viewModePreviewIcon?: PluginViewModePreviewIcon;
   defaultTitle?: string;
   defaultBody?: string;
   render: PluginNoteKindRenderContribution;
