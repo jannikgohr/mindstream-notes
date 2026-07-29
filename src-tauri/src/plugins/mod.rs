@@ -15,8 +15,8 @@
 //! already-approved installed plugin whose manifest checksum no longer matches
 //! its `accepted_hash` is auto-disabled with a load error until re-approved.
 //! **Builtin** plugins ship inside the signed app bundle and are trusted, so
-//! they are enabled on discovery and a checksum change (a shipped update) is
-//! accepted automatically.
+//! they are enabled on discovery unless their manifest opts out, and a checksum
+//! change (a shipped update) is accepted automatically.
 
 use std::path::Path;
 
@@ -81,10 +81,18 @@ pub struct UpsertPlugin {
     pub source: String,
     pub source_path: Option<String>,
     pub permissions: Vec<String>,
+    /// Builtin plugins are enabled on first discovery unless this is false.
+    /// Installed plugins ignore it and always start gated/disabled.
+    #[serde(default = "default_enabled_by_default")]
+    pub enabled_by_default: bool,
     /// Signer fingerprint from signature verification (`None` if unsigned/invalid).
     pub signer: Option<String>,
     /// Signature verification result: `"unsigned"` | `"valid"` | `"invalid"`.
     pub signature_status: String,
+}
+
+fn default_enabled_by_default() -> bool {
+    true
 }
 
 fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<PluginRecord> {
@@ -131,8 +139,8 @@ fn require(conn: &Connection, id: &str) -> AppResult<PluginRecord> {
 /// Register a freshly-loaded plugin, or reconcile an existing record with the
 /// manifest currently being loaded.
 ///
-/// - New **builtin** id → inserted enabled, accepting the current checksum +
-///   signer (trusted by its bundled location).
+/// - New **builtin** id → inserted enabled unless its manifest opts out,
+///   accepting the current checksum + signer (trusted by its bundled location).
 /// - New **installed** id → inserted DISABLED and unapproved (empty accepted
 ///   hash, no pinned signer, gate load error). A third-party plugin never runs
 ///   or contributes on mere discovery; the user must explicitly [`approve`] it,
@@ -153,16 +161,19 @@ pub fn upsert(conn: &Connection, input: UpsertPlugin) -> AppResult<PluginRecord>
     let existing = get(conn, &input.id)?;
     match existing {
         None if input.source == SOURCE_BUILTIN => {
-            // Trusted by location: enabled, current checksum + signer accepted.
+            // Trusted by location: current checksum + signer accepted. Most
+            // builtins start enabled; experimental builtins may opt out.
+            let enabled = input.enabled_by_default;
             conn.execute(
                 "INSERT INTO plugins(
                     id, version, enabled, source, source_path, accepted_hash,
                     granted_permissions, last_load_error, signer, signature_status,
                     installed_at, updated_at
-                 ) VALUES (?1, ?2, 1, ?3, ?4, ?5, ?6, NULL, ?7, ?8, ?9, ?9)",
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, ?8, ?9, ?10, ?10)",
                 params![
                     input.id,
                     input.version,
+                    enabled as i64,
                     input.source,
                     input.source_path,
                     input.checksum,
@@ -291,6 +302,7 @@ pub fn reconcile(
                 source: plugin.source,
                 source_path: None,
                 permissions: plugin.permissions,
+                enabled_by_default: plugin.enabled_by_default,
                 signer: plugin.signer,
                 signature_status: plugin.signature_status,
             },

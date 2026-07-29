@@ -352,6 +352,11 @@ export interface PluginManifest {
    * (Obsidian, VS Code) surface authorship.
    */
   author?: string;
+  /**
+   * Builtin plugins are enabled on first discovery unless this is false.
+   * Third-party plugins ignore this and always start gated/disabled.
+   */
+  enabledByDefault?: boolean;
   runtime: 'manifest-only' | 'luau' | 'wasm';
   /** Required for scripted runtimes; a `.luau`/`.wasm` file relative to the plugin dir. */
   entry?: string;

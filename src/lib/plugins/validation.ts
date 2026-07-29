@@ -597,6 +597,15 @@ export function validateManifest(input: unknown): PluginManifest {
   if (m.author !== undefined) {
     assertNonEmptyString(pluginId, m.author, 'manifest.author');
   }
+  if (
+    m.enabledByDefault !== undefined &&
+    typeof m.enabledByDefault !== 'boolean'
+  ) {
+    throw new PluginValidationError(
+      pluginId,
+      'manifest.enabledByDefault must be a boolean'
+    );
+  }
   if (m.descriptionKey !== undefined) {
     assertI18nKey(pluginId, m.descriptionKey, 'manifest.descriptionKey');
   }

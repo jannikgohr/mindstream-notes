@@ -40,6 +40,9 @@ pub struct DiscoveredPlugin {
     pub id: String,
     pub version: String,
     pub permissions: Vec<String>,
+    /// Builtin plugins are enabled on first discovery unless this is false.
+    /// Installed plugins ignore it and always start gated/disabled.
+    pub enabled_by_default: bool,
     pub source: String,
     /// Where the plugin's files are read from — a real directory (third-party)
     /// or the binary-embedded builtin tree — used later to load its `.luau`
@@ -277,10 +280,15 @@ fn read_plugin(files: PluginFiles, source: &str) -> AppResult<DiscoveredPlugin> 
                 .collect()
         })
         .unwrap_or_default();
+    let enabled_by_default = manifest
+        .get("enabledByDefault")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
     Ok(DiscoveredPlugin {
         id,
         version,
         permissions,
+        enabled_by_default,
         source: source.to_string(),
         files,
         checksum,
