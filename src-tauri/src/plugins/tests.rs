@@ -15,6 +15,7 @@ fn signed_input(
         source: source.to_string(),
         source_path: None,
         permissions: vec!["templates.contribute".into(), "notes.create".into()],
+        enabled_by_default: true,
         signer: signer.map(String::from),
         signature_status: signature_status.to_string(),
     }
@@ -99,6 +100,21 @@ fn new_builtin_plugin_is_enabled_on_discovery() {
             upsert_input("com.mindstream.core", "hash1", SOURCE_BUILTIN),
         )?;
         assert!(rec.enabled);
+        assert_eq!(rec.accepted_hash, "hash1");
+        assert!(rec.last_load_error.is_none());
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn new_builtin_plugin_can_opt_out_of_default_enablement() {
+    let db = open_memory_for_tests();
+    db.with_conn(|c| {
+        let mut input = upsert_input("com.mindstream.typst.prototype", "hash1", SOURCE_BUILTIN);
+        input.enabled_by_default = false;
+        let rec = upsert(c, input)?;
+        assert!(!rec.enabled);
         assert_eq!(rec.accepted_hash, "hash1");
         assert!(rec.last_load_error.is_none());
         Ok(())
@@ -286,6 +302,7 @@ fn reconcile_registers_discovered_plugins_and_returns_manifests() {
             id: "com.a.plugin".into(),
             version: "1.0.0".into(),
             permissions: vec!["notes.create".into()],
+            enabled_by_default: true,
             source: SOURCE_BUILTIN.into(),
             files: super::discovery::PluginFiles::Fs(std::path::PathBuf::new()),
             checksum: "hash1".into(),

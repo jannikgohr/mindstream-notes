@@ -3,6 +3,7 @@
   "name": "Typst Prototype",
   "version": "0.1.0",
   "author": "Mindstream",
+  "enabledByDefault": false,
   "runtime": "luau",
   "entry": "main.luau",
   "descriptionKey": "plugin.description",

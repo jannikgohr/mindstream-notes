@@ -305,6 +305,17 @@ describe('validateManifest', () => {
     ).toThrow(/unknown permission/);
   });
 
+  it('accepts a disabled-by-default builtin manifest hint', () => {
+    const m = validManifest({ enabledByDefault: false });
+    expect(validateManifest(m).enabledByDefault).toBe(false);
+  });
+
+  it('rejects non-boolean default enablement hints', () => {
+    expect(() =>
+      validateManifest(validManifest({ enabledByDefault: 'false' }))
+    ).toThrow(/enabledByDefault/);
+  });
+
   it('requires templates.contribute when contributing templates', () => {
     expect(() =>
       validateManifest(validManifest({ permissions: ['notes.create'] }))
