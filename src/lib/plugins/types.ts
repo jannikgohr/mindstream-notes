@@ -17,6 +17,7 @@
 /**
  * Capabilities a plugin may request in its manifest:
  *   - `templates.contribute` — surface note templates in create menus;
+ *   - `noteKinds.contribute` — register plugin-owned note kind/editor surfaces;
  *   - `notes.create` — have the app create a note from the plugin's template;
  *   - `notes.read` — a scripted plugin may read note metadata through its
  *     permission-gated host API.
@@ -25,12 +26,14 @@
  */
 export type PluginPermission =
   | 'templates.contribute'
+  | 'noteKinds.contribute'
   | 'notes.create'
   | 'notes.read';
 
 /** All permissions the current app version understands. */
 export const KNOWN_PLUGIN_PERMISSIONS: readonly PluginPermission[] = [
   'templates.contribute',
+  'noteKinds.contribute',
   'notes.create',
   'notes.read'
 ];
@@ -55,17 +58,17 @@ export interface PluginTemplateVariable {
 }
 
 /**
- * A note template a plugin contributes. MVP renders `markdown` only; the
- * `noteKind` field exists so the shape can widen later without a breaking
- * change. `titleTemplate` / `bodyTemplate` use `{{variable}}` interpolation
- * (see templates.ts) — deliberately declarative, no embedded code.
+ * A note template a plugin contributes. It may create a built-in markdown note
+ * or one of the plugin-owned note kinds declared in `contributes.noteKinds`.
+ * `titleTemplate` / `bodyTemplate` use `{{variable}}` interpolation (see
+ * templates.ts) — deliberately declarative, no embedded code.
  */
 export interface PluginNoteTemplateContribution {
   /** Plugin-local slug; the app-wide id is `plugins.<pluginId>.<id>`. */
   id: string;
   labelKey: string;
   descriptionKey?: string;
-  noteKind: 'markdown';
+  noteKind: string;
   titleTemplate: string;
   bodyTemplate: string;
   variables?: PluginTemplateVariable[];
@@ -77,6 +80,37 @@ export interface PluginNoteTemplateContribution {
    * performs the note write.
    */
   render?: string;
+}
+
+export const PLUGIN_PREVIEW_MIME_TYPES = [
+  'text/html',
+  'image/svg+xml',
+  'text/markdown',
+  'text/plain'
+] as const;
+
+export type PluginPreviewMimeType = (typeof PLUGIN_PREVIEW_MIME_TYPES)[number];
+
+export interface PluginNoteKindRenderContribution {
+  /** Exported backend script function name; called with `{ noteId, noteKind, body }`. */
+  export: string;
+  /** Declares how the returned preview text should be displayed. */
+  previewMime?: PluginPreviewMimeType;
+  /** UI debounce before re-running the renderer. */
+  debounceMs?: number;
+}
+
+/** A plugin-owned note kind/editor contribution. */
+export interface PluginNoteKindContribution {
+  /** Plugin-local slug. The stored note kind is `plugin.<pluginId>.<id>`. */
+  id: string;
+  labelKey: string;
+  descriptionKey?: string;
+  /** Source editor language hint for the host UI. */
+  sourceLanguage?: string;
+  defaultTitle?: string;
+  defaultBody?: string;
+  render: PluginNoteKindRenderContribution;
 }
 
 /** A single generic setting control a plugin adds under its section. */
@@ -180,7 +214,7 @@ export type PluginEffect =
       effect: 'createNote';
       title: string;
       body: string;
-      noteKind?: 'markdown';
+      noteKind?: string;
       parentId?: string | null;
     }
   | {
@@ -221,6 +255,7 @@ export interface PluginContributions {
   i18n?: PluginI18nContribution;
   settings?: PluginSettingsContribution[];
   noteTemplates?: PluginNoteTemplateContribution[];
+  noteKinds?: PluginNoteKindContribution[];
   commands?: PluginCommandContribution[];
   /** Ordered, file-backed documentation sections shown in the docs modal. */
   documentation?: PluginDocSection[];
@@ -233,7 +268,7 @@ export interface PluginRuntimeLimits {
   memoryBytes?: number;
   /** Wall-clock timeout in milliseconds. Clamped by the backend. */
   timeoutMs?: number;
-  /** Wasmtime fuel budget (`runtime: 'wasm'` only). Clamped by the backend. */
+  /** Wasmi fuel budget (`runtime: 'wasm'` only). Clamped by the backend. */
   fuel?: number;
 }
 
@@ -249,7 +284,7 @@ export interface PluginRuntimeLimits {
  *     app, not the script, still performs any note write. `entry` is required
  *     and must be a safe relative `.luau` filename inside the plugin dir.
  *   - `'wasm'` — the plugin ships a backend-only WebAssembly `entry` run by
- *     Wasmtime with no WASI by default. It uses the same exported-function and
+ *     Wasmi with no WASI by default. It uses the same exported-function and
  *     declarative-effect boundary as Luau; `entry` must be a safe `.wasm`
  *     filename.
  */

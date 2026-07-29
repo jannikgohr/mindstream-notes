@@ -19,10 +19,14 @@
 
 import {
   KNOWN_PLUGIN_PERMISSIONS,
+  PLUGIN_PREVIEW_MIME_TYPES,
   PLUGIN_TOOLBAR_LOCATIONS,
   type PluginDocSection,
   type PluginManifest,
+  type PluginNoteKindContribution,
+  type PluginNoteKindRenderContribution,
   type PluginNoteTemplateContribution,
+  type PluginPreviewMimeType,
   type PluginPermission,
   type PluginSetting,
   type PluginSettingsContribution,
@@ -74,6 +78,7 @@ const SAFE_SVG_PATH_RE =
   /^[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)*\.svg$/;
 /** A Luau export name — a plain identifier looked up as `table[name]`. */
 const EXPORT_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const SOURCE_LANGUAGE_RE = /^[A-Za-z0-9][A-Za-z0-9_+-]{0,31}$/;
 
 const SETTING_TYPES = new Set<PluginSetting['type']>([
   'toggle',
@@ -169,19 +174,21 @@ function validateVariable(
 function validateTemplate(
   pluginId: string,
   t: PluginNoteTemplateContribution,
-  path: string
+  path: string,
+  pluginNoteKindIds: Set<string>
 ): void {
   assertSlug(pluginId, t?.id, `${path}.id`);
   assertI18nKey(pluginId, t?.labelKey, `${path}.labelKey`);
   if (t.descriptionKey !== undefined) {
     assertI18nKey(pluginId, t.descriptionKey, `${path}.descriptionKey`);
   }
-  // MVP renders markdown only. Reject anything else loudly rather than
-  // silently coercing — a mismatched kind would corrupt the note on save.
-  if (t.noteKind !== 'markdown') {
+  if (
+    typeof t.noteKind !== 'string' ||
+    (t.noteKind !== 'markdown' && !pluginNoteKindIds.has(t.noteKind))
+  ) {
     throw new PluginValidationError(
       pluginId,
-      `${path}.noteKind ("${String(t.noteKind)}") is unsupported; only "markdown" is allowed`
+      `${path}.noteKind ("${String(t.noteKind)}") must be "markdown" or a note kind declared by this plugin`
     );
   }
   if (t.render !== undefined) {
@@ -214,6 +221,84 @@ function validateTemplate(
     }
     seen.add(v.id);
   }
+}
+
+export function pluginNoteKindId(
+  pluginId: string,
+  localKindId: string
+): string {
+  return `plugin.${pluginId}.${localKindId}`;
+}
+
+const PREVIEW_MIME_TYPES = new Set<PluginPreviewMimeType>(
+  PLUGIN_PREVIEW_MIME_TYPES
+);
+
+function validateNoteKindRender(
+  pluginId: string,
+  r: PluginNoteKindRenderContribution,
+  path: string
+): void {
+  if (!r || typeof r !== 'object') {
+    throw new PluginValidationError(pluginId, `${path} must be an object`);
+  }
+  if (typeof r.export !== 'string' || !EXPORT_NAME_RE.test(r.export)) {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.export must be a backend script export name (letters, digits, underscore)`
+    );
+  }
+  if (r.previewMime !== undefined && !PREVIEW_MIME_TYPES.has(r.previewMime)) {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.previewMime ("${String(r.previewMime)}") is not supported`
+    );
+  }
+  if (
+    r.debounceMs !== undefined &&
+    (!Number.isFinite(r.debounceMs) || r.debounceMs < 0)
+  ) {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.debounceMs must be a non-negative finite number`
+    );
+  }
+}
+
+function validateNoteKind(
+  pluginId: string,
+  c: PluginNoteKindContribution,
+  path: string
+): string {
+  assertSlug(pluginId, c?.id, `${path}.id`);
+  assertI18nKey(pluginId, c?.labelKey, `${path}.labelKey`);
+  if (c.descriptionKey !== undefined) {
+    assertI18nKey(pluginId, c.descriptionKey, `${path}.descriptionKey`);
+  }
+  if (
+    c.sourceLanguage !== undefined &&
+    (typeof c.sourceLanguage !== 'string' ||
+      !SOURCE_LANGUAGE_RE.test(c.sourceLanguage))
+  ) {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.sourceLanguage must be a short language identifier`
+    );
+  }
+  if (c.defaultTitle !== undefined && typeof c.defaultTitle !== 'string') {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.defaultTitle must be a string`
+    );
+  }
+  if (c.defaultBody !== undefined && typeof c.defaultBody !== 'string') {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.defaultBody must be a string`
+    );
+  }
+  validateNoteKindRender(pluginId, c.render, `${path}.render`);
+  return pluginNoteKindId(pluginId, c.id);
 }
 
 function validateSetting(
@@ -481,6 +566,40 @@ export function validateManifest(input: unknown): PluginManifest {
     );
   }
 
+  // ---- Plugin note kinds ----------------------------------------------
+  const noteKinds = contributes.noteKinds ?? [];
+  if (!Array.isArray(noteKinds)) {
+    throw new PluginValidationError(
+      pluginId,
+      'manifest.contributes.noteKinds must be an array'
+    );
+  }
+  const seenNoteKindIds = new Set<string>();
+  const pluginNoteKindIds = new Set<string>();
+  for (const [i, c] of noteKinds.entries()) {
+    const appKind = validateNoteKind(pluginId, c, `noteKinds[${i}]`);
+    if (seenNoteKindIds.has(c.id)) {
+      throw new PluginValidationError(
+        pluginId,
+        `duplicate note kind id "${c.id}"`
+      );
+    }
+    seenNoteKindIds.add(c.id);
+    pluginNoteKindIds.add(appKind);
+  }
+  if (noteKinds.length > 0 && !permissions.has('noteKinds.contribute')) {
+    throw new PluginValidationError(
+      pluginId,
+      'contributes noteKinds but is missing the "noteKinds.contribute" permission'
+    );
+  }
+  if (noteKinds.length > 0 && !isScriptedRuntime(m.runtime)) {
+    throw new PluginValidationError(
+      pluginId,
+      'contributes noteKinds, which run backend render exports and require runtime "luau" or "wasm"'
+    );
+  }
+
   // ---- Templates -------------------------------------------------------
   const templateIds = new Set<string>();
   const templates = contributes.noteTemplates ?? [];
@@ -491,7 +610,7 @@ export function validateManifest(input: unknown): PluginManifest {
     );
   }
   for (const [i, t] of templates.entries()) {
-    validateTemplate(pluginId, t, `noteTemplates[${i}]`);
+    validateTemplate(pluginId, t, `noteTemplates[${i}]`, pluginNoteKindIds);
     if (templateIds.has(t.id)) {
       throw new PluginValidationError(
         pluginId,

@@ -21,11 +21,12 @@
  */
 
 import { checksumManifest } from './canonical';
-import { validateManifest } from './validation';
+import { pluginNoteKindId, validateManifest } from './validation';
 import type {
   PluginCommandContribution,
   PluginI18nContribution,
   PluginManifest,
+  PluginNoteKindContribution,
   PluginNoteTemplateContribution,
   PluginSettingsContribution,
   PluginToolbarButton,
@@ -49,6 +50,13 @@ export interface RegisteredPlugin {
 export interface PluginTemplateRef {
   pluginId: string;
   template: PluginNoteTemplateContribution;
+}
+
+/** A note kind paired with the plugin that owns it. */
+export interface PluginNoteKindRef {
+  pluginId: string;
+  noteKind: string;
+  contribution: PluginNoteKindContribution;
 }
 
 /** A settings subsection paired with its owning plugin. */
@@ -168,6 +176,33 @@ export function pluginTemplate(
     (t) => t.id === templateId
   );
   return template ? { pluginId, template } : undefined;
+}
+
+/** Flattened plugin-owned note kinds contributed by all enabled plugins. */
+export function pluginNoteKinds(): PluginNoteKindRef[] {
+  const out: PluginNoteKindRef[] = [];
+  for (const { manifest, enabled } of Object.values(state.plugins)) {
+    if (!enabled) continue;
+    for (const contribution of manifest.contributes.noteKinds ?? []) {
+      out.push({
+        pluginId: manifest.id,
+        noteKind: pluginNoteKindId(manifest.id, contribution.id),
+        contribution
+      });
+    }
+  }
+  return out;
+}
+
+/** Resolve an enabled plugin-owned note kind by its stored note_kind string. */
+export function pluginNoteKind(
+  noteKind: string | null | undefined
+): PluginNoteKindRef | undefined {
+  if (!noteKind) return undefined;
+  for (const ref of pluginNoteKinds()) {
+    if (ref.noteKind === noteKind) return ref;
+  }
+  return undefined;
 }
 
 /** Flattened settings subsections contributed by all enabled plugins. */

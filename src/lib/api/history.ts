@@ -17,7 +17,7 @@ import {
   optionalString
 } from './core';
 import { mockApi } from './mock-store';
-import { isKnownNoteKind, type NoteKind } from './notes';
+import { isSupportedNoteKind, type NoteKind } from './notes';
 
 /** Why a version exists. Room for `imported` | `manual` later. */
 export enum VersionActionEnum {
@@ -153,8 +153,8 @@ function assertNoteKind(
   value: unknown,
   context: string
 ): asserts value is NoteKind {
-  if (typeof value !== 'string' || !isKnownNoteKind(value)) {
-    throw new Error(`${context} is not a known note kind`);
+  if (typeof value !== 'string' || !isSupportedNoteKind(value)) {
+    throw new Error(`${context} is not a supported note kind`);
   }
 }
 

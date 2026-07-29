@@ -13,10 +13,12 @@ const loaders = {
   ink: () => import('$lib/components/DrawingNoteEditor.svelte'),
   pdf: () => import('$lib/components/PdfNoteViewer.svelte'),
   kanban: () => import('$lib/components/KanbanNoteEditor.svelte'),
+  plugin: () => import('$lib/components/PluginDocumentNoteEditor.svelte'),
   unknown: () => import('$lib/components/UnknownNoteKindError.svelte')
 } satisfies Record<string, ComponentLoader>;
 
 export function noteKindLoader(kind: LazyNoteKind): ComponentLoader {
+  if (pluginNoteKind(kind)) return loaders.plugin;
   switch (kind) {
     case 'markdown':
       return loaders.markdown;
@@ -39,3 +41,4 @@ export async function loadNoteKindComponent(
   const mod = await noteKindLoader(kind)();
   return mod.default;
 }
+import { pluginNoteKind } from '$lib/plugins/registry.svelte';

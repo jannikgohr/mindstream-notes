@@ -57,6 +57,7 @@
   } from '$lib/stores/note-source.svelte';
   import { subscribeOpenNoteRequest } from '$lib/stores/open-note-intent.svelte';
   import { runSync } from '$lib/sync/runner';
+  import { pluginNoteKind } from '$lib/plugins/registry.svelte';
 
   let dockHost: HTMLDivElement | null = $state(null);
   let dock: DockviewApi | null = null;
@@ -85,12 +86,15 @@
     | 'inkNote'
     | 'pdfNote'
     | 'kanbanNote'
+    | 'pluginNote'
     | 'unknownNoteKind';
 
   function componentForNoteKind(
     kind: string | null | undefined
   ): NotePanelComponent {
-    if (!isKnownNoteKind(kind)) return 'unknownNoteKind';
+    if (!isKnownNoteKind(kind)) {
+      return pluginNoteKind(kind) ? 'pluginNote' : 'unknownNoteKind';
+    }
     switch (kind) {
       case 'freeform':
         return 'freeformNote';
@@ -144,7 +148,12 @@
       // while safely passing the verified noteId down to the target layout.
       this.instance = mount(this.Component as Component<any>, {
         target: this.el,
-        props: { noteId, noteKind: this.noteKind }
+        props: {
+          noteId,
+          noteKind:
+            (parameters.params as { noteKind?: string } | undefined)
+              ?.noteKind ?? this.noteKind
+        }
       });
     }
 
@@ -173,6 +182,8 @@
             return new SvelteRenderer(NoteKindRenderer, 'pdf');
           case 'kanbanNote':
             return new SvelteRenderer(NoteKindRenderer, 'kanban');
+          case 'pluginNote':
+            return new SvelteRenderer(NoteKindRenderer, null);
           case 'unknownNoteKind':
             return new SvelteRenderer(NoteKindRenderer, null);
           default:
@@ -391,7 +402,7 @@
       id: `note:${id}`,
       component: componentForNoteKind(note.note_kind),
       title: note.title,
-      params: { noteId: id },
+      params: { noteId: id, noteKind: note.note_kind },
       ...(position ? { position } : {})
     });
 
