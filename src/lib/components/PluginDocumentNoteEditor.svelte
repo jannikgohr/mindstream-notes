@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte';
+  import { onDestroy, untrack } from 'svelte';
   import type { EditorView } from '@codemirror/view';
   import { AlertTriangle, Loader2 } from '@lucide/svelte';
   import { loadNote } from '$lib/api';
@@ -62,7 +62,7 @@
     focus: () => void;
     getView: () => EditorView | null;
   } | null>(null);
-  let editorListener: EditorListener | null = $state(null);
+  let editorListener: EditorListener | null = null;
 
   const contributionRef = $derived(pluginNoteKind(noteKind));
   const storedNoteKind = $derived(contributionRef?.noteKind ?? noteKind ?? '');
@@ -125,10 +125,11 @@
   });
 
   $effect(() => {
-    if (!editorRegionEl) return;
+    const region = editorRegionEl;
+    if (!region) return;
     const listener: EditorListener = {
       kind: 'plugin',
-      host: editorRegionEl,
+      host: region,
       noteId,
       onCommand: (id) => {
         if (id !== APP_UNDO_COMMAND && id !== APP_REDO_COMMAND) return false;
@@ -140,19 +141,14 @@
       }
     };
     editorListener = listener;
-    registerEditor(listener);
+    const promote = () => untrack(() => registerEditor(listener));
+    untrack(() => registerEditor(listener));
+    region.addEventListener('focusin', promote);
     return () => {
-      unregisterEditor(listener);
+      region.removeEventListener('focusin', promote);
+      untrack(() => unregisterEditor(listener));
       if (editorListener === listener) editorListener = null;
     };
-  });
-
-  $effect(() => {
-    if (!editorRegionEl || !editorListener) return;
-    const listener = editorListener;
-    const promote = () => registerEditor(listener);
-    editorRegionEl.addEventListener('focusin', promote);
-    return () => editorRegionEl?.removeEventListener('focusin', promote);
   });
 
   function onSourceInput(value: string) {
