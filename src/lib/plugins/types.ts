@@ -21,6 +21,10 @@
  *   - `notes.create` — have the app create a note from the plugin's template;
  *   - `notes.read` — a scripted plugin may read note metadata through its
  *     permission-gated host API.
+ *   - `pluginArtifacts.download` — let the host download/update declared
+ *     plugin artifacts after verifying their pinned digest.
+ *   - `pluginStorage.read` / `pluginStorage.write` — let the host read/write
+ *     this plugin's isolated mutable data directory.
  * Broad `notes.write` stays deliberately absent — the app, not the plugin,
  * performs the actual note write (see templates.ts).
  */
@@ -28,14 +32,20 @@ export type PluginPermission =
   | 'templates.contribute'
   | 'noteKinds.contribute'
   | 'notes.create'
-  | 'notes.read';
+  | 'notes.read'
+  | 'pluginArtifacts.download'
+  | 'pluginStorage.read'
+  | 'pluginStorage.write';
 
 /** All permissions the current app version understands. */
 export const KNOWN_PLUGIN_PERMISSIONS: readonly PluginPermission[] = [
   'templates.contribute',
   'noteKinds.contribute',
   'notes.create',
-  'notes.read'
+  'notes.read',
+  'pluginArtifacts.download',
+  'pluginStorage.read',
+  'pluginStorage.write'
 ];
 
 /**
@@ -155,6 +165,31 @@ export interface PluginSettingsContribution {
   sectionId: string;
   titleKey: string;
   settings: PluginSetting[];
+}
+
+export const PLUGIN_ARTIFACT_KINDS = ['wasm'] as const;
+export type PluginArtifactKind = (typeof PLUGIN_ARTIFACT_KINDS)[number];
+
+/**
+ * A host-managed binary/blob the plugin needs at runtime. The host downloads
+ * and verifies the artifact, then stores it under a per-plugin artifact root.
+ *
+ * The kind-based shape leaves room for a later native Typst tool declaration
+ * without granting arbitrary command execution.
+ */
+export interface PluginArtifactContribution {
+  id: string;
+  kind: PluginArtifactKind;
+  /** Human/display version of the artifact, independent of plugin version. */
+  version: string;
+  /** HTTPS URL fetched by the host, never by plugin code. */
+  url: string;
+  /** Expected SHA-256 digest of the downloaded bytes, lowercase hex. */
+  sha256: string;
+  /** Stored filename under the artifact version directory. */
+  fileName: string;
+  /** Optional exact byte length, checked after download when present. */
+  sizeBytes?: number;
 }
 
 /**
@@ -307,6 +342,7 @@ export interface PluginDocSection {
 export interface PluginContributions {
   i18n?: PluginI18nContribution;
   settings?: PluginSettingsContribution[];
+  artifacts?: PluginArtifactContribution[];
   noteTemplates?: PluginNoteTemplateContribution[];
   noteKinds?: PluginNoteKindContribution[];
   commands?: PluginCommandContribution[];

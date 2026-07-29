@@ -380,6 +380,13 @@ pub fn run() {
             plugins::plugins_set_load_error,
             plugins::plugins_remove,
             plugins::plugins_read_file,
+            plugins::plugins_artifacts_status,
+            plugins::plugins_download_artifact,
+            plugins::plugins_read_artifact,
+            plugins::plugins_storage_read_text,
+            plugins::plugins_storage_write_text,
+            plugins::plugins_storage_delete,
+            plugins::plugins_storage_list,
             plugins::plugins_run_script,
             // Profiles (vaults)
             profiles::list_profiles,

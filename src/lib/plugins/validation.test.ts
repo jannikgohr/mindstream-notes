@@ -316,6 +316,64 @@ describe('validateManifest', () => {
     ).toThrow(/enabledByDefault/);
   });
 
+  it('accepts declared plugin artifacts behind the download permission', () => {
+    const m = validManifest({
+      permissions: [
+        'templates.contribute',
+        'notes.create',
+        'pluginArtifacts.download'
+      ]
+    });
+    (m.contributes as Record<string, unknown>).artifacts = [
+      {
+        id: 'typst-compiler',
+        kind: 'wasm',
+        version: '0.1.0',
+        url: 'https://example.com/typst.wasm',
+        sha256: 'a'.repeat(64),
+        fileName: 'typst.wasm',
+        sizeBytes: 123
+      }
+    ];
+    expect(validateManifest(m).contributes.artifacts).toHaveLength(1);
+  });
+
+  it('rejects artifacts without the download permission', () => {
+    const m = validManifest();
+    (m.contributes as Record<string, unknown>).artifacts = [
+      {
+        id: 'typst-compiler',
+        kind: 'wasm',
+        version: '0.1.0',
+        url: 'https://example.com/typst.wasm',
+        sha256: 'a'.repeat(64),
+        fileName: 'typst.wasm'
+      }
+    ];
+    expect(() => validateManifest(m)).toThrow(/pluginArtifacts\.download/);
+  });
+
+  it('rejects unsafe artifact download declarations', () => {
+    const m = validManifest({
+      permissions: [
+        'templates.contribute',
+        'notes.create',
+        'pluginArtifacts.download'
+      ]
+    });
+    (m.contributes as Record<string, unknown>).artifacts = [
+      {
+        id: 'typst-compiler',
+        kind: 'wasm',
+        version: '0.1.0',
+        url: 'http://example.com/typst.wasm',
+        sha256: 'not-a-digest',
+        fileName: '../typst.wasm'
+      }
+    ];
+    expect(() => validateManifest(m)).toThrow(/HTTPS|sha256|fileName/);
+  });
+
   it('requires templates.contribute when contributing templates', () => {
     expect(() =>
       validateManifest(validManifest({ permissions: ['notes.create'] }))

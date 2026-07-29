@@ -19,11 +19,14 @@
 
 import {
   KNOWN_PLUGIN_PERMISSIONS,
+  PLUGIN_ARTIFACT_KINDS,
   PLUGIN_EDITOR_TOOLBAR_ITEMS,
   PLUGIN_PREVIEW_MIME_TYPES,
   PLUGIN_TOOLBAR_LOCATIONS,
   PLUGIN_VIEW_MODE_PREVIEW_ICONS,
   type PluginDocSection,
+  type PluginArtifactContribution,
+  type PluginArtifactKind,
   type PluginManifest,
   type PluginNoteKindContribution,
   type PluginNoteKindRenderContribution,
@@ -79,6 +82,9 @@ const SAFE_DOC_PATH_RE =
 /** Same shape as {@link SAFE_DOC_PATH_RE} but for a bundled `.svg` icon. */
 const SAFE_SVG_PATH_RE =
   /^[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)*\.svg$/;
+/** Artifact files are stored by basename inside the host-owned artifact dir. */
+const SAFE_ARTIFACT_FILE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const SHA256_HEX_RE = /^[a-f0-9]{64}$/;
 /** A Luau export name — a plain identifier looked up as `table[name]`. */
 const EXPORT_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const SOURCE_LANGUAGE_RE = /^[A-Za-z0-9][A-Za-z0-9_+-]{0,31}$/;
@@ -99,6 +105,7 @@ const VARIABLE_TYPES = new Set<PluginTemplateVariable['type']>([
   'date',
   'select'
 ]);
+const ARTIFACT_KINDS = new Set<PluginArtifactKind>(PLUGIN_ARTIFACT_KINDS);
 
 function isScriptedRuntime(
   runtime: PluginManifest['runtime'] | undefined
@@ -371,6 +378,57 @@ function validateSettingsContribution(
       );
     }
     seenSettingIds.add(s.id);
+  }
+}
+
+function validateArtifact(
+  pluginId: string,
+  a: PluginArtifactContribution,
+  path: string
+): void {
+  assertSlug(pluginId, a?.id, `${path}.id`);
+  if (!ARTIFACT_KINDS.has(a.kind)) {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.kind ("${String(a.kind)}") is not supported`
+    );
+  }
+  assertNonEmptyString(pluginId, a.version, `${path}.version`);
+  assertNonEmptyString(pluginId, a.url, `${path}.url`);
+  let parsed: URL;
+  try {
+    parsed = new URL(a.url);
+  } catch {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.url must be a valid URL`
+    );
+  }
+  if (parsed.protocol !== 'https:') {
+    throw new PluginValidationError(pluginId, `${path}.url must use HTTPS`);
+  }
+  assertNonEmptyString(pluginId, a.sha256, `${path}.sha256`);
+  if (!SHA256_HEX_RE.test(a.sha256)) {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.sha256 must be a lowercase SHA-256 hex digest`
+    );
+  }
+  assertNonEmptyString(pluginId, a.fileName, `${path}.fileName`);
+  if (!SAFE_ARTIFACT_FILE_RE.test(a.fileName)) {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.fileName must be a safe filename without path separators`
+    );
+  }
+  if (
+    a.sizeBytes !== undefined &&
+    (!Number.isFinite(a.sizeBytes) || a.sizeBytes <= 0)
+  ) {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.sizeBytes must be a positive finite number`
+    );
   }
 }
 
@@ -792,6 +850,32 @@ export function validateManifest(input: unknown): PluginManifest {
       );
     }
     seenSectionIds.add(c.sectionId);
+  }
+
+  // ---- Artifacts -------------------------------------------------------
+  const artifacts = contributes.artifacts ?? [];
+  if (!Array.isArray(artifacts)) {
+    throw new PluginValidationError(
+      pluginId,
+      'manifest.contributes.artifacts must be an array'
+    );
+  }
+  const seenArtifactIds = new Set<string>();
+  for (const [i, artifact] of artifacts.entries()) {
+    validateArtifact(pluginId, artifact, `artifacts[${i}]`);
+    if (seenArtifactIds.has(artifact.id)) {
+      throw new PluginValidationError(
+        pluginId,
+        `duplicate artifact id "${artifact.id}"`
+      );
+    }
+    seenArtifactIds.add(artifact.id);
+  }
+  if (artifacts.length > 0 && !permissions.has('pluginArtifacts.download')) {
+    throw new PluginValidationError(
+      pluginId,
+      'contributes artifacts but is missing the "pluginArtifacts.download" permission'
+    );
   }
 
   // ---- Commands --------------------------------------------------------

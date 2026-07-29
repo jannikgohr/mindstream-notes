@@ -18,11 +18,13 @@
 //! they are enabled on discovery unless their manifest opts out, and a checksum
 //! change (a shipped update) is accepted automatically.
 
-use std::path::Path;
+use std::fs;
+use std::path::{Component, Path, PathBuf};
 
 use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tauri::{AppHandle, State};
 
 use crate::db::Db;
@@ -283,6 +285,39 @@ pub struct DiscoveredPluginView {
     pub manifest: serde_json::Value,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginArtifactManifest {
+    id: String,
+    kind: String,
+    version: String,
+    url: String,
+    sha256: String,
+    file_name: String,
+    size_bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginArtifactStatus {
+    pub plugin_id: String,
+    pub artifact_id: String,
+    pub kind: String,
+    pub version: String,
+    pub file_name: String,
+    pub installed: bool,
+    pub bytes: Option<u64>,
+    pub sha256: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginStorageEntry {
+    pub path: String,
+    pub is_dir: bool,
+    pub bytes: Option<u64>,
+}
+
 /// Reconcile every discovered plugin with its DB record (applying the trust
 /// gate via {@link upsert}) and return the records + manifests. The `source`
 /// on each input comes from discovery (the load location), so trust is never
@@ -398,6 +433,244 @@ fn remove_plugin_dir(third_party_dir: &Path, dir: &Path) -> AppResult<()> {
 #[cfg(test)]
 fn read_plugin_file(dir: &Path, file: &str) -> AppResult<Option<String>> {
     discovery::PluginFiles::Fs(dir.to_path_buf()).read_text(file)
+}
+
+// ---------- Host-managed artifacts + plugin data -------------------------
+
+const PERM_PLUGIN_ARTIFACTS_DOWNLOAD: &str = "pluginArtifacts.download";
+const PERM_PLUGIN_STORAGE_READ: &str = "pluginStorage.read";
+const PERM_PLUGIN_STORAGE_WRITE: &str = "pluginStorage.write";
+const MAX_ARTIFACT_BYTES: u64 = 512 * 1024 * 1024;
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    let mut out = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        use std::fmt::Write as _;
+        let _ = write!(out, "{byte:02x}");
+    }
+    out
+}
+
+fn require_enabled_permission(
+    conn: &Connection,
+    id: &str,
+    permission: &str,
+) -> AppResult<PluginRecord> {
+    let record = require(conn, id)?;
+    if !record.enabled {
+        return Err(AppError::InvalidArg(format!("plugin {id} is not enabled")));
+    }
+    if !record
+        .granted_permissions
+        .iter()
+        .any(|granted| granted == permission)
+    {
+        return Err(AppError::InvalidArg(format!(
+            "plugin {id} lacks permission {permission}"
+        )));
+    }
+    Ok(record)
+}
+
+fn safe_segment(value: &str, label: &str) -> AppResult<()> {
+    if value.is_empty()
+        || value == "."
+        || value == ".."
+        || !value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+    {
+        return Err(AppError::InvalidArg(format!("unsafe {label} '{value}'")));
+    }
+    Ok(())
+}
+
+fn parse_artifacts(manifest: &serde_json::Value) -> AppResult<Vec<PluginArtifactManifest>> {
+    let Some(value) = manifest.get("contributes").and_then(|c| c.get("artifacts")) else {
+        return Ok(Vec::new());
+    };
+    serde_json::from_value(value.clone())
+        .map_err(|e| AppError::InvalidArg(format!("manifest.contributes.artifacts: {e}")))
+}
+
+fn find_artifact(
+    manifest: &serde_json::Value,
+    artifact_id: &str,
+) -> AppResult<PluginArtifactManifest> {
+    parse_artifacts(manifest)?
+        .into_iter()
+        .find(|artifact| artifact.id == artifact_id)
+        .ok_or_else(|| AppError::NotFound(format!("plugin artifact {artifact_id}")))
+}
+
+fn plugin_artifact_root(app: &AppHandle, plugin_id: &str) -> AppResult<PathBuf> {
+    safe_segment(plugin_id, "plugin id")?;
+    Ok(crate::paths::app_data_dir(app)?
+        .join("plugin-artifacts")
+        .join(plugin_id))
+}
+
+fn artifact_file_path(
+    app: &AppHandle,
+    plugin_id: &str,
+    artifact: &PluginArtifactManifest,
+) -> AppResult<PathBuf> {
+    safe_segment(&artifact.id, "artifact id")?;
+    safe_segment(&artifact.version, "artifact version")?;
+    safe_segment(&artifact.file_name, "artifact file name")?;
+    Ok(plugin_artifact_root(app, plugin_id)?
+        .join(&artifact.id)
+        .join(&artifact.version)
+        .join(&artifact.file_name))
+}
+
+fn artifact_status(
+    app: &AppHandle,
+    plugin_id: &str,
+    artifact: &PluginArtifactManifest,
+) -> AppResult<PluginArtifactStatus> {
+    let path = artifact_file_path(app, plugin_id, artifact)?;
+    let bytes = fs::metadata(&path).ok().map(|m| m.len());
+    let sha256 = fs::read(&path).ok().map(|bytes| sha256_hex(&bytes));
+    let installed = sha256.as_deref() == Some(artifact.sha256.as_str());
+    Ok(PluginArtifactStatus {
+        plugin_id: plugin_id.to_string(),
+        artifact_id: artifact.id.clone(),
+        kind: artifact.kind.clone(),
+        version: artifact.version.clone(),
+        file_name: artifact.file_name.clone(),
+        installed,
+        bytes,
+        sha256,
+    })
+}
+
+async fn download_artifact(
+    app: AppHandle,
+    plugin_id: String,
+    artifact: PluginArtifactManifest,
+) -> AppResult<PluginArtifactStatus> {
+    let url = reqwest::Url::parse(&artifact.url)
+        .map_err(|e| AppError::InvalidArg(format!("artifact URL: {e}")))?;
+    if url.scheme() != "https" {
+        return Err(AppError::InvalidArg("artifact URL must use HTTPS".into()));
+    }
+    let bytes = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .map_err(|e| AppError::InvalidArg(format!("artifact HTTP client: {e}")))?
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| AppError::InvalidArg(format!("artifact download failed: {e}")))?
+        .error_for_status()
+        .map_err(|e| AppError::InvalidArg(format!("artifact download failed: {e}")))?
+        .bytes()
+        .await
+        .map_err(|e| AppError::InvalidArg(format!("artifact download body: {e}")))?;
+
+    let len = u64::try_from(bytes.len())
+        .map_err(|_| AppError::InvalidArg("artifact is too large".into()))?;
+    if len > MAX_ARTIFACT_BYTES {
+        return Err(AppError::InvalidArg(format!(
+            "artifact is too large ({len} bytes)"
+        )));
+    }
+    if let Some(expected) = artifact.size_bytes {
+        if len != expected {
+            return Err(AppError::InvalidArg(format!(
+                "artifact size mismatch: expected {expected}, got {len}"
+            )));
+        }
+    }
+    let actual_hash = sha256_hex(&bytes);
+    if actual_hash != artifact.sha256 {
+        return Err(AppError::InvalidArg(format!(
+            "artifact digest mismatch: expected {}, got {actual_hash}",
+            artifact.sha256
+        )));
+    }
+
+    let final_path = artifact_file_path(&app, &plugin_id, &artifact)?;
+    let version_dir = final_path
+        .parent()
+        .ok_or_else(|| AppError::InvalidArg("artifact path has no parent".into()))?;
+    let staging_dir = plugin_artifact_root(&app, &plugin_id)?.join(".staging");
+    fs::create_dir_all(&staging_dir)?;
+    fs::create_dir_all(version_dir)?;
+    let staging_path = staging_dir.join(format!(
+        "{}-{}-{}",
+        artifact.id,
+        artifact.version,
+        uuid::Uuid::new_v4()
+    ));
+    fs::write(&staging_path, &bytes)?;
+    if final_path.exists() {
+        fs::remove_file(&final_path)?;
+    }
+    fs::rename(&staging_path, &final_path)?;
+    artifact_status(&app, &plugin_id, &artifact)
+}
+
+fn plugin_data_root(app: &AppHandle, plugin_id: &str) -> AppResult<PathBuf> {
+    safe_segment(plugin_id, "plugin id")?;
+    Ok(crate::paths::app_data_dir(app)?
+        .join("plugin-data")
+        .join(plugin_id))
+}
+
+fn split_plugin_rel_path(path: &str, allow_empty: bool) -> AppResult<Vec<String>> {
+    if path.starts_with('/') || path.starts_with('\\') || path.contains('\\') {
+        return Err(AppError::InvalidArg(format!(
+            "unsafe plugin storage path '{path}'"
+        )));
+    }
+    let trimmed = path.trim_matches('/');
+    if trimmed.is_empty() {
+        if allow_empty {
+            return Ok(Vec::new());
+        }
+        return Err(AppError::InvalidArg("plugin storage path is empty".into()));
+    }
+    let rel = Path::new(trimmed);
+    let mut out = Vec::new();
+    for component in rel.components() {
+        match component {
+            Component::Normal(part) => {
+                let part = part.to_string_lossy();
+                safe_segment(&part, "plugin storage path segment")?;
+                out.push(part.into_owned());
+            }
+            _ => {
+                return Err(AppError::InvalidArg(format!(
+                    "unsafe plugin storage path '{path}'"
+                )));
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn plugin_data_path(app: &AppHandle, plugin_id: &str, path: &str) -> AppResult<PathBuf> {
+    let mut out = plugin_data_root(app, plugin_id)?;
+    for segment in split_plugin_rel_path(path, true)? {
+        out.push(segment);
+    }
+    Ok(out)
+}
+
+fn ensure_inside_data_root(root: &Path, target: &Path) -> AppResult<()> {
+    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let target = target
+        .canonicalize()
+        .map_err(|e| AppError::InvalidArg(format!("plugin storage path: {e}")))?;
+    if !target.starts_with(root) {
+        return Err(AppError::InvalidArg(
+            "plugin storage path escapes plugin data directory".into(),
+        ));
+    }
+    Ok(())
 }
 
 // ---------- Scripted execution ----------
@@ -739,6 +1012,165 @@ pub fn plugins_read_file(
     let plugin = discovery::find(&third_party_dir, &id)
         .ok_or_else(|| AppError::NotFound(format!("plugin {id} not found on disk")))?;
     plugin.files.read_text(&file).map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn plugins_artifacts_status(
+    app: AppHandle,
+    db: State<'_, Db>,
+    id: String,
+) -> CommandResult<Vec<PluginArtifactStatus>> {
+    db.with_conn(|c| require_enabled_permission(c, &id, PERM_PLUGIN_ARTIFACTS_DOWNLOAD))?;
+    let third_party_dir = discovery::third_party_plugins_dir(&app)?;
+    let plugin = discovery::find(&third_party_dir, &id)
+        .ok_or_else(|| AppError::NotFound(format!("plugin {id} not found on disk")))?;
+    parse_artifacts(&plugin.manifest)?
+        .iter()
+        .map(|artifact| artifact_status(&app, &id, artifact))
+        .collect::<AppResult<Vec<_>>>()
+        .map_err(Into::into)
+}
+
+#[tauri::command]
+pub async fn plugins_download_artifact(
+    app: AppHandle,
+    db: State<'_, Db>,
+    id: String,
+    artifact_id: String,
+) -> CommandResult<PluginArtifactStatus> {
+    db.with_conn(|c| require_enabled_permission(c, &id, PERM_PLUGIN_ARTIFACTS_DOWNLOAD))?;
+    let third_party_dir = discovery::third_party_plugins_dir(&app)?;
+    let plugin = discovery::find(&third_party_dir, &id)
+        .ok_or_else(|| AppError::NotFound(format!("plugin {id} not found on disk")))?;
+    let artifact = find_artifact(&plugin.manifest, &artifact_id)?;
+    download_artifact(app, id, artifact)
+        .await
+        .map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn plugins_read_artifact(
+    app: AppHandle,
+    db: State<'_, Db>,
+    id: String,
+    artifact_id: String,
+) -> CommandResult<Vec<u8>> {
+    db.with_conn(|c| require_enabled_permission(c, &id, PERM_PLUGIN_ARTIFACTS_DOWNLOAD))?;
+    let third_party_dir = discovery::third_party_plugins_dir(&app)?;
+    let plugin = discovery::find(&third_party_dir, &id)
+        .ok_or_else(|| AppError::NotFound(format!("plugin {id} not found on disk")))?;
+    let artifact = find_artifact(&plugin.manifest, &artifact_id)?;
+    let path = artifact_file_path(&app, &id, &artifact)?;
+    let bytes = fs::read(&path).map_err(|_| {
+        AppError::NotFound(format!("installed artifact {artifact_id} for plugin {id}"))
+    })?;
+    let actual_hash = sha256_hex(&bytes);
+    if actual_hash != artifact.sha256 {
+        return Err(AppError::InvalidArg(format!(
+            "installed artifact digest mismatch: expected {}, got {actual_hash}",
+            artifact.sha256
+        ))
+        .into());
+    }
+    Ok(bytes)
+}
+
+#[tauri::command]
+pub fn plugins_storage_read_text(
+    app: AppHandle,
+    db: State<'_, Db>,
+    id: String,
+    path: String,
+) -> CommandResult<Option<String>> {
+    db.with_conn(|c| require_enabled_permission(c, &id, PERM_PLUGIN_STORAGE_READ))?;
+    split_plugin_rel_path(&path, false)?;
+    let root = plugin_data_root(&app, &id)?;
+    let target = plugin_data_path(&app, &id, &path)?;
+    if !target.exists() {
+        return Ok(None);
+    }
+    ensure_inside_data_root(&root, &target)?;
+    fs::read_to_string(&target).map(Some).map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn plugins_storage_write_text(
+    app: AppHandle,
+    db: State<'_, Db>,
+    id: String,
+    path: String,
+    contents: String,
+) -> CommandResult<()> {
+    db.with_conn(|c| require_enabled_permission(c, &id, PERM_PLUGIN_STORAGE_WRITE))?;
+    split_plugin_rel_path(&path, false)?;
+    let root = plugin_data_root(&app, &id)?;
+    let target = plugin_data_path(&app, &id, &path)?;
+    let parent = target
+        .parent()
+        .ok_or_else(|| AppError::InvalidArg("plugin storage path has no parent".into()))?;
+    fs::create_dir_all(parent)?;
+    ensure_inside_data_root(&root, parent)?;
+    fs::write(target, contents).map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn plugins_storage_delete(
+    app: AppHandle,
+    db: State<'_, Db>,
+    id: String,
+    path: String,
+) -> CommandResult<()> {
+    db.with_conn(|c| require_enabled_permission(c, &id, PERM_PLUGIN_STORAGE_WRITE))?;
+    split_plugin_rel_path(&path, false)?;
+    let root = plugin_data_root(&app, &id)?;
+    let target = plugin_data_path(&app, &id, &path)?;
+    if !target.exists() {
+        return Ok(());
+    }
+    ensure_inside_data_root(&root, &target)?;
+    if target.is_dir() {
+        fs::remove_dir_all(target)?;
+    } else {
+        fs::remove_file(target)?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn plugins_storage_list(
+    app: AppHandle,
+    db: State<'_, Db>,
+    id: String,
+    path: String,
+) -> CommandResult<Vec<PluginStorageEntry>> {
+    db.with_conn(|c| require_enabled_permission(c, &id, PERM_PLUGIN_STORAGE_READ))?;
+    let root = plugin_data_root(&app, &id)?;
+    let target = plugin_data_path(&app, &id, &path)?;
+    if !target.exists() {
+        return Ok(Vec::new());
+    }
+    ensure_inside_data_root(&root, &target)?;
+    let base_segments = split_plugin_rel_path(&path, true)?;
+    let mut out = Vec::new();
+    for entry in fs::read_dir(&target)? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        safe_segment(&name, "plugin storage entry")?;
+        let metadata = entry.metadata()?;
+        let mut parts = base_segments.clone();
+        parts.push(name);
+        out.push(PluginStorageEntry {
+            path: parts.join("/"),
+            is_dir: metadata.is_dir(),
+            bytes: if metadata.is_file() {
+                Some(metadata.len())
+            } else {
+                None
+            },
+        });
+    }
+    out.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(out)
 }
 
 /// Run a scripted plugin's entry function. The plugin is re-located on disk

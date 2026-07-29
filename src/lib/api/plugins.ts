@@ -9,6 +9,7 @@
 
 import {
   assertBoolean,
+  assertNumber,
   assertRecord,
   assertString,
   assertStringArray,
@@ -41,6 +42,23 @@ export interface DiscoveredPluginView {
   record: PluginRecord;
   /** Parsed manifest JSON; validated frontend-side before registering. */
   manifest: unknown;
+}
+
+export interface PluginArtifactStatus {
+  pluginId: string;
+  artifactId: string;
+  kind: string;
+  version: string;
+  fileName: string;
+  installed: boolean;
+  bytes: number | null;
+  sha256: string | null;
+}
+
+export interface PluginStorageEntry {
+  path: string;
+  isDir: boolean;
+  bytes: number | null;
 }
 
 export function parsePluginRecord(value: unknown): PluginRecord {
@@ -78,6 +96,61 @@ function parsePluginRecords(value: unknown): PluginRecord[] {
 function parseDiscoveredView(value: unknown): DiscoveredPluginView {
   const raw = assertRecord(value, 'DiscoveredPluginView');
   return { record: parsePluginRecord(raw.record), manifest: raw.manifest };
+}
+
+function parseArtifactStatus(value: unknown): PluginArtifactStatus {
+  const raw = assertRecord(value, 'PluginArtifactStatus');
+  return {
+    pluginId: assertString(raw.pluginId, 'PluginArtifactStatus.pluginId'),
+    artifactId: assertString(raw.artifactId, 'PluginArtifactStatus.artifactId'),
+    kind: assertString(raw.kind, 'PluginArtifactStatus.kind'),
+    version: assertString(raw.version, 'PluginArtifactStatus.version'),
+    fileName: assertString(raw.fileName, 'PluginArtifactStatus.fileName'),
+    installed: assertBoolean(raw.installed, 'PluginArtifactStatus.installed'),
+    bytes:
+      raw.bytes === null || raw.bytes === undefined
+        ? null
+        : assertNumber(raw.bytes, 'PluginArtifactStatus.bytes'),
+    sha256: optionalString(raw.sha256, 'PluginArtifactStatus.sha256')
+  };
+}
+
+function parseArtifactStatuses(value: unknown): PluginArtifactStatus[] {
+  if (!Array.isArray(value)) {
+    throw new Error('PluginArtifactStatus[] must be an array');
+  }
+  return value.map(parseArtifactStatus);
+}
+
+function parseStorageEntry(value: unknown): PluginStorageEntry {
+  const raw = assertRecord(value, 'PluginStorageEntry');
+  return {
+    path: assertString(raw.path, 'PluginStorageEntry.path'),
+    isDir: assertBoolean(raw.isDir, 'PluginStorageEntry.isDir'),
+    bytes:
+      raw.bytes === null || raw.bytes === undefined
+        ? null
+        : assertNumber(raw.bytes, 'PluginStorageEntry.bytes')
+  };
+}
+
+function parseStorageEntries(value: unknown): PluginStorageEntry[] {
+  if (!Array.isArray(value)) {
+    throw new Error('PluginStorageEntry[] must be an array');
+  }
+  return value.map(parseStorageEntry);
+}
+
+function parseByteArray(value: unknown): Uint8Array {
+  if (!Array.isArray(value)) throw new Error('byte array must be an array');
+  return new Uint8Array(
+    value.map((byte, index) => {
+      if (!Number.isInteger(byte) || byte < 0 || byte > 255) {
+        throw new Error(`byte array[${index}] must be a byte`);
+      }
+      return byte;
+    })
+  );
 }
 
 /**
@@ -195,6 +268,92 @@ export function pluginsReadFile(
     () => null,
     (value) =>
       value === null ? null : assertString(value, 'plugins_read_file')
+  );
+}
+
+export function pluginsArtifactsStatus(
+  id: string
+): Promise<PluginArtifactStatus[]> {
+  return invokeOrFallback<PluginArtifactStatus[]>(
+    TauriCommandName.PluginsArtifactsStatus,
+    { id },
+    () => [],
+    parseArtifactStatuses
+  );
+}
+
+export function pluginsDownloadArtifact(
+  id: string,
+  artifactId: string
+): Promise<PluginArtifactStatus> {
+  return invokeOrFallback<PluginArtifactStatus>(
+    TauriCommandName.PluginsDownloadArtifact,
+    { id, artifactId },
+    () => {
+      throw new Error('plugins_download_artifact is unavailable outside Tauri');
+    },
+    parseArtifactStatus
+  );
+}
+
+export function pluginsReadArtifact(
+  id: string,
+  artifactId: string
+): Promise<Uint8Array> {
+  return invokeOrFallback<Uint8Array>(
+    TauriCommandName.PluginsReadArtifact,
+    { id, artifactId },
+    () => {
+      throw new Error('plugins_read_artifact is unavailable outside Tauri');
+    },
+    parseByteArray
+  );
+}
+
+export function pluginsStorageReadText(
+  id: string,
+  path: string
+): Promise<string | null> {
+  return invokeOrFallback<string | null>(
+    TauriCommandName.PluginsStorageReadText,
+    { id, path },
+    () => null,
+    (value) =>
+      value === null ? null : assertString(value, 'plugins_storage_read_text')
+  );
+}
+
+export function pluginsStorageWriteText(
+  id: string,
+  path: string,
+  contents: string
+): Promise<void> {
+  return invokeOrFallback<void>(
+    TauriCommandName.PluginsStorageWriteText,
+    { id, path, contents },
+    () => undefined,
+    (value) => assertVoid(value, 'plugins_storage_write_text response')
+  );
+}
+
+export function pluginsStorageDelete(id: string, path: string): Promise<void> {
+  return invokeOrFallback<void>(
+    TauriCommandName.PluginsStorageDelete,
+    { id, path },
+    () => undefined,
+    (value) => assertVoid(value, 'plugins_storage_delete response')
+  );
+}
+
+export function pluginsStorageList(
+  id: string,
+  path = ''
+): Promise<PluginStorageEntry[]> {
+  return invokeOrFallback<PluginStorageEntry[]>(
+    TauriCommandName.PluginsStorageList,
+    { id, path },
+    () => [],
+    parseStorageEntries
   );
 }
 
