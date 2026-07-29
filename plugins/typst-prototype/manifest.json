@@ -18,24 +18,34 @@
         "notes.document.label": "Typst document",
         "notes.document.description": "Source-and-preview document notes owned by the Typst plugin.",
         "templates.document.label": "Typst document",
-        "toolbar.heading": "Heading",
-        "toolbar.strong": "Strong",
-        "toolbar.emphasis": "Emphasis",
-        "toolbar.math": "Math",
-        "toolbar.list": "List"
+        "settings.editor.title": "Editor",
+        "settings.defaultViewMode.label": "Default view mode"
       },
       "de": {
         "plugin.description": "Prototyp fuer Typst-Dokumente als Plugin-Notizen.",
         "notes.document.label": "Typst-Dokument",
         "notes.document.description": "Quelltext- und Vorschau-Notizen des Typst-Plugins.",
         "templates.document.label": "Typst-Dokument",
-        "toolbar.heading": "Ueberschrift",
-        "toolbar.strong": "Fett",
-        "toolbar.emphasis": "Kursiv",
-        "toolbar.math": "Mathematik",
-        "toolbar.list": "Liste"
+        "settings.editor.title": "Editor",
+        "settings.defaultViewMode.label": "Standardansicht"
       }
     },
+    "settings": [
+      {
+        "sectionId": "editor",
+        "titleKey": "settings.editor.title",
+        "settings": [
+          {
+            "id": "default-view-mode",
+            "labelKey": "settings.defaultViewMode.label",
+            "scope": "D",
+            "type": "select",
+            "default": "split",
+            "options": ["split", "source", "wysiwyg"]
+          }
+        ]
+      }
+    ],
     "noteKinds": [
       {
         "id": "document",
@@ -65,8 +75,7 @@
         "id": "heading",
         "location": "note-editor",
         "noteKind": "document",
-        "labelKey": "toolbar.heading",
-        "icon": "icons/heading.svg",
+        "toolbarItem": "h1",
         "action": {
           "type": "insertText",
           "text": "= ",
@@ -77,8 +86,7 @@
         "id": "strong",
         "location": "note-editor",
         "noteKind": "document",
-        "labelKey": "toolbar.strong",
-        "icon": "icons/strong.svg",
+        "toolbarItem": "bold",
         "action": {
           "type": "wrapSelection",
           "before": "*",
@@ -90,8 +98,7 @@
         "id": "emphasis",
         "location": "note-editor",
         "noteKind": "document",
-        "labelKey": "toolbar.emphasis",
-        "icon": "icons/emphasis.svg",
+        "toolbarItem": "italic",
         "action": {
           "type": "wrapSelection",
           "before": "_",
@@ -103,8 +110,7 @@
         "id": "math",
         "location": "note-editor",
         "noteKind": "document",
-        "labelKey": "toolbar.math",
-        "icon": "icons/math.svg",
+        "toolbarItem": "math",
         "action": {
           "type": "wrapSelection",
           "before": "$ ",
@@ -116,8 +122,7 @@
         "id": "list",
         "location": "note-editor",
         "noteKind": "document",
-        "labelKey": "toolbar.list",
-        "icon": "icons/list.svg",
+        "toolbarItem": "bullet",
         "action": {
           "type": "insertText",
           "text": "- ",

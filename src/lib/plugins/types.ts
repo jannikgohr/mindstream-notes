@@ -175,6 +175,29 @@ export interface PluginCommandContribution {
 export const PLUGIN_TOOLBAR_LOCATIONS = ['file-tree', 'note-editor'] as const;
 export type PluginToolbarLocation = (typeof PLUGIN_TOOLBAR_LOCATIONS)[number];
 
+export const PLUGIN_EDITOR_TOOLBAR_ITEMS = [
+  'bold',
+  'italic',
+  'p',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'ordered',
+  'bullet',
+  'task',
+  'image',
+  'code',
+  'table',
+  'math',
+  'mermaid'
+] as const;
+
+export type PluginEditorToolbarItem =
+  (typeof PLUGIN_EDITOR_TOOLBAR_ITEMS)[number];
+
 /** Host-owned text edits a plugin toolbar button may apply to a source editor. */
 export type PluginSourceEditAction =
   | {
@@ -213,10 +236,13 @@ export interface PluginToolbarButton {
   location: PluginToolbarLocation;
   /** Plugin-local note kind id when `location` is `note-editor`. */
   noteKind?: string;
-  /** Plugin i18n key for the tooltip / aria-label. */
-  labelKey: string;
+  /** Built-in editor toolbar primitive to render for source-edit buttons. */
+  toolbarItem?: PluginEditorToolbarItem;
+  /** Plugin i18n key for the tooltip / aria-label. Defaults to the built-in
+   *  toolbar primitive label when `toolbarItem` is set. */
+  labelKey?: string;
   /** Safe relative path to a bundled `.svg` icon (rendered themed via a mask). */
-  icon: string;
+  icon?: string;
   action: PluginToolbarAction;
 }
 
