@@ -224,6 +224,59 @@ fn set_enabled_on_missing_plugin_is_not_found() {
 }
 
 #[test]
+fn plugin_permission_gate_requires_enabled_and_granted() {
+    let db = open_memory_for_tests();
+    db.with_conn(|c| {
+        upsert(c, upsert_input("com.a.plugin", "hash1", "installed"))?;
+        let err = require_enabled_permission(c, "com.a.plugin", "pluginStorage.read").unwrap_err();
+        assert!(err.to_string().contains("not enabled"));
+
+        approve(c, "com.a.plugin", "hash1", None, "unsigned")?;
+        let err = require_enabled_permission(c, "com.a.plugin", "pluginStorage.read").unwrap_err();
+        assert!(err.to_string().contains("lacks permission"));
+
+        let mut input = upsert_input("com.storage.plugin", "hash1", SOURCE_BUILTIN);
+        input.permissions = vec!["pluginStorage.read".into()];
+        upsert(c, input)?;
+        let rec = require_enabled_permission(c, "com.storage.plugin", "pluginStorage.read")?;
+        assert!(rec.enabled);
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn parse_artifacts_reads_manifest_declarations() {
+    let manifest = serde_json::json!({
+        "contributes": {
+            "artifacts": [{
+                "id": "typst-compiler",
+                "kind": "wasm",
+                "version": "0.1.0",
+                "url": "https://example.com/typst.wasm",
+                "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "fileName": "typst.wasm",
+                "sizeBytes": 123
+            }]
+        }
+    });
+    let artifacts = parse_artifacts(&manifest).unwrap();
+    assert_eq!(artifacts.len(), 1);
+    assert_eq!(artifacts[0].id, "typst-compiler");
+    assert_eq!(artifacts[0].file_name, "typst.wasm");
+    assert_eq!(artifacts[0].size_bytes, Some(123));
+}
+
+#[test]
+fn plugin_storage_paths_reject_traversal_and_absolute_paths() {
+    assert!(split_plugin_rel_path("cache/compiler.json", false).is_ok());
+    assert!(split_plugin_rel_path("../escape", false).is_err());
+    assert!(split_plugin_rel_path("cache/../escape", false).is_err());
+    assert!(split_plugin_rel_path("/absolute", false).is_err());
+    assert!(split_plugin_rel_path("", false).is_err());
+}
+
+#[test]
 fn signed_same_signer_update_auto_approves() {
     let db = open_memory_for_tests();
     db.with_conn(|c| {
