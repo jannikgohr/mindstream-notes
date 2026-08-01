@@ -30,6 +30,7 @@
   import { tLabel, tUi } from '$lib/settings/i18n.svelte';
   import type { Category, Setting } from '$lib/settings/types';
   import PluginsOverview from '$lib/plugins/PluginsOverview.svelte';
+  import PluginNativeToolsSection from '$lib/plugins/PluginNativeToolsSection.svelte';
   import {
     PLUGINS_CATEGORY_ID,
     pluginSettingsCategory,
@@ -230,6 +231,15 @@
               </div>
             {/if}
           {/each}
+          {#if activeCategory.id === PLUGINS_CATEGORY_ID}
+            {#each allPlugins() as plugin (plugin.manifest.id)}
+              {#if plugin.enabled && (plugin.manifest.contributes.nativeTools ?? []).length > 0}
+                <div class="mb-6" id="plugins-nativetools-{plugin.manifest.id}">
+                  <PluginNativeToolsSection pluginId={plugin.manifest.id} />
+                </div>
+              {/if}
+            {/each}
+          {/if}
         </section>
       {/if}
     </Dialog.Content>

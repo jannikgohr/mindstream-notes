@@ -255,7 +255,9 @@ function validateNoteKindRender(
   pluginId: string,
   r: PluginNoteKindRenderContribution,
   path: string,
-  artifactIds: Set<string>
+  artifactIds: Set<string>,
+  nativeToolIds: Set<string>,
+  permissions: Set<PluginPermission>
 ): void {
   if (!r || typeof r !== 'object') {
     throw new PluginValidationError(pluginId, `${path} must be an object`);
@@ -265,6 +267,26 @@ function validateNoteKindRender(
       pluginId,
       `${path}.export must be a backend script export name (letters, digits, underscore)`
     );
+  }
+  if (r.requiresNativeTool !== undefined) {
+    if (typeof r.requiresNativeTool !== 'string') {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.requiresNativeTool must be a string`
+      );
+    }
+    if (!nativeToolIds.has(r.requiresNativeTool)) {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.requiresNativeTool references undeclared native tool "${r.requiresNativeTool}"`
+      );
+    }
+    if (!permissions.has('nativeTools.runDeclared')) {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.requiresNativeTool requires the "nativeTools.runDeclared" permission`
+      );
+    }
   }
   if (r.previewMime !== undefined && !PREVIEW_MIME_TYPES.has(r.previewMime)) {
     throw new PluginValidationError(
@@ -293,6 +315,24 @@ function validateNoteKindRender(
       throw new PluginValidationError(
         pluginId,
         `${path}.webview.entry ("${r.webview.entry}") must be a safe relative .js/.mjs path inside the plugin dir`
+      );
+    }
+    if (
+      r.webview.allowEval !== undefined &&
+      typeof r.webview.allowEval !== 'boolean'
+    ) {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.webview.allowEval must be a boolean`
+      );
+    }
+    if (
+      r.webview.allowEval === true &&
+      !permissions.has('pluginWebviews.allowEval')
+    ) {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.webview.allowEval requires the "pluginWebviews.allowEval" permission`
       );
     }
     if (r.webview.artifacts !== undefined) {
@@ -327,7 +367,9 @@ function validateNoteKind(
   pluginId: string,
   c: PluginNoteKindContribution,
   path: string,
-  artifactIds: Set<string>
+  artifactIds: Set<string>,
+  nativeToolIds: Set<string>,
+  permissions: Set<PluginPermission>
 ): string {
   assertSlug(pluginId, c?.id, `${path}.id`);
   assertI18nKey(pluginId, c?.labelKey, `${path}.labelKey`);
@@ -365,7 +407,14 @@ function validateNoteKind(
       `${path}.defaultBody must be a string`
     );
   }
-  validateNoteKindRender(pluginId, c.render, `${path}.render`, artifactIds);
+  validateNoteKindRender(
+    pluginId,
+    c.render,
+    `${path}.render`,
+    artifactIds,
+    nativeToolIds,
+    permissions
+  );
   return pluginNoteKindId(pluginId, c.id);
 }
 
@@ -895,7 +944,9 @@ export function validateManifest(input: unknown): PluginManifest {
       pluginId,
       c,
       `noteKinds[${i}]`,
-      seenArtifactIds
+      seenArtifactIds,
+      seenNativeToolIds,
+      permissions
     );
     if (seenNoteKindIds.has(c.id)) {
       throw new PluginValidationError(

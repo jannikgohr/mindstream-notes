@@ -431,6 +431,7 @@ fn run_plugin_script_executes_luau_entry_with_input() {
         "render",
         serde_json::json!({ "name": "Hi" }),
         Vec::new(),
+        None,
     )
     .unwrap();
     assert_eq!(out["title"], serde_json::json!("Hi"));
@@ -457,6 +458,7 @@ fn templates_plugin_renders_macros_in_lua() {
             "now": "2026-07-25T10:00:00Z",
         }),
         Vec::new(),
+        None,
     )
     .unwrap();
     assert_eq!(out["title"], serde_json::json!("Log 2026"));
@@ -497,6 +499,7 @@ fn templates_plugin_localizes_dates_via_locale() {
             "locale": "de",
         }),
         Vec::new(),
+        None,
     )
     .unwrap();
     assert_eq!(out["title"], serde_json::json!("Juli"));
@@ -513,6 +516,7 @@ fn run_plugin_script_refuses_a_non_luau_runtime() {
         "render",
         serde_json::json!({}),
         Vec::new(),
+        None,
     );
     assert!(out.is_err());
 }
@@ -564,6 +568,7 @@ fn run_plugin_script_executes_wasm_entry_with_input() {
         "render",
         serde_json::json!({ "name": "Hi" }),
         Vec::new(),
+        None,
     )
     .unwrap();
     assert_eq!(out["effect"], serde_json::json!("toast"));

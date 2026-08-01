@@ -32,7 +32,9 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
+use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use mlua::{Lua, LuaSerdeExt, MultiValue, Table, Value, VmState};
@@ -93,6 +95,14 @@ pub struct ScriptRequest {
     /// Read-only note snapshot exposed via `ms.notes` when `notes.read` is
     /// granted. Built by the caller before the script runs; empty otherwise.
     pub notes: Vec<NoteMeta>,
+    /// Declared native tools resolved to their PATH binary, exposed via
+    /// `ms.nativeTools` when `nativeTools.runDeclared` is granted. `None` = the
+    /// tool is declared but not found (or the platform is mobile, where native
+    /// tools are unavailable). Empty when the permission wasn't granted.
+    pub native_tools: HashMap<String, Option<PathBuf>>,
+    /// Working directory for native tool runs (the plugin's isolated data root).
+    /// `None` disables running even when tools resolved (tests / no data dir).
+    pub native_tool_cwd: Option<PathBuf>,
     /// The plugin's other `.luau` files as `module path (no extension) → source`,
     /// so the script can split itself across files via a plugin-scoped `require`.
     /// Keys use `/` separators; only these modules are resolvable (no filesystem
@@ -129,8 +139,14 @@ pub fn run(req: ScriptRequest) -> AppResult<serde_json::Value> {
         }
     });
 
-    install_host_api(&lua, &req.permissions, &req.notes)
-        .map_err(|e| map_lua(&req.chunk_name, e))?;
+    install_host_api(
+        &lua,
+        &req.permissions,
+        &req.notes,
+        &req.native_tools,
+        &req.native_tool_cwd,
+    )
+    .map_err(|e| map_lua(&req.chunk_name, e))?;
     install_require(&lua, req.modules).map_err(|e| map_lua(&req.chunk_name, e))?;
 
     // Enter the sandbox AFTER installing the host API so `ms` is visible through
@@ -181,7 +197,13 @@ fn resolve_export(exported: &Value, export: &str) -> Option<mlua::Function> {
 /// access to the vault. Safe, side-effect-free helpers are always present;
 /// capability namespaces are gated on the plugin's granted permissions, so a
 /// script can only reach what its manifest asked for.
-fn install_host_api(lua: &Lua, permissions: &[String], notes: &[NoteMeta]) -> mlua::Result<()> {
+fn install_host_api(
+    lua: &Lua,
+    permissions: &[String],
+    notes: &[NoteMeta],
+    native_tools: &HashMap<String, Option<PathBuf>>,
+    native_tool_cwd: &Option<PathBuf>,
+) -> mlua::Result<()> {
     let ms = lua.create_table()?;
     let granted = |p: &str| permissions.iter().any(|g| g == p);
 
@@ -209,8 +231,89 @@ fn install_host_api(lua: &Lua, permissions: &[String], notes: &[NoteMeta]) -> ml
         ms.set("notes", notes_module(lua, notes)?)?;
     }
 
+    // --- Gated: nativeTools.runDeclared → ms.nativeTools -------------------
+    if granted("nativeTools.runDeclared") {
+        ms.set(
+            "nativeTools",
+            native_tools_module(lua, native_tools, native_tool_cwd)?,
+        )?;
+    }
+
     lua.globals().set("ms", ms)?;
     Ok(())
+}
+
+/// `ms.nativeTools`: check availability of, and run, the plugin's *declared*
+/// PATH binaries. Gated on `nativeTools.runDeclared`. The tools are resolved to
+/// their absolute path by the host before the script runs (never by the script),
+/// so a script can only reach binaries its manifest declared, and only ever
+/// launches them directly — no shell, no arbitrary paths (see
+/// `super::run_native_tool_process`). On mobile every declared tool resolves to
+/// `None`, so `available` is always false there.
+fn native_tools_module(
+    lua: &Lua,
+    tools: &HashMap<String, Option<PathBuf>>,
+    cwd: &Option<PathBuf>,
+) -> mlua::Result<Table> {
+    let table = lua.create_table()?;
+    // Only the resolved (found-on-PATH) tools are runnable.
+    let resolved: Arc<HashMap<String, PathBuf>> = Arc::new(
+        tools
+            .iter()
+            .filter_map(|(id, path)| path.clone().map(|p| (id.clone(), p)))
+            .collect(),
+    );
+
+    let avail = resolved.clone();
+    table.set(
+        "available",
+        lua.create_function(move |_, id: String| Ok(avail.contains_key(&id)))?,
+    )?;
+
+    let run_tools = resolved.clone();
+    let run_cwd = cwd.clone();
+    table.set(
+        "run",
+        lua.create_function(move |lua, (id, opts): (String, Option<Table>)| {
+            let binary = run_tools.get(&id).cloned().ok_or_else(|| {
+                mlua::Error::runtime(format!("ms.nativeTools.run: tool '{id}' is not available"))
+            })?;
+            let cwd = run_cwd.clone().ok_or_else(|| {
+                mlua::Error::runtime("ms.nativeTools.run: no working directory available")
+            })?;
+            let (args, stdin, timeout_ms) = match opts {
+                Some(t) => {
+                    let args = match t.get::<Value>("args")? {
+                        Value::Table(list) => list
+                            .sequence_values::<String>()
+                            .collect::<mlua::Result<Vec<_>>>()?,
+                        Value::Nil => Vec::new(),
+                        _ => {
+                            return Err(mlua::Error::runtime(
+                                "ms.nativeTools.run: args must be an array of strings",
+                            ))
+                        }
+                    };
+                    (
+                        args,
+                        t.get::<Option<String>>("stdin")?,
+                        t.get::<Option<u64>>("timeoutMs")?,
+                    )
+                }
+                None => (Vec::new(), None, None),
+            };
+            let output = super::run_native_tool_process(binary, cwd, args, stdin, timeout_ms)
+                .map_err(|e| mlua::Error::runtime(e.to_string()))?;
+            let result = lua.create_table()?;
+            result.set("statusCode", output.status_code)?;
+            result.set("stdout", output.stdout)?;
+            result.set("stderr", output.stderr)?;
+            result.set("timedOut", output.timed_out)?;
+            Ok(result)
+        })?,
+    )?;
+
+    Ok(table)
 }
 
 /// Install a **plugin-scoped `require`** so a script can split itself across
@@ -666,6 +769,8 @@ mod tests {
             input,
             permissions: perms.iter().map(|s| s.to_string()).collect(),
             notes: Vec::new(),
+            native_tools: HashMap::new(),
+            native_tool_cwd: None,
             modules: HashMap::new(),
             limits: Limits::default(),
         }
@@ -735,6 +840,50 @@ mod tests {
             started.elapsed() < Duration::from_secs(5),
             "aborted promptly"
         );
+    }
+
+    #[test]
+    fn native_tools_absent_without_permission() {
+        let out = run(req(
+            "return { go = function() return { present = ms.nativeTools ~= nil } end }",
+            "go",
+            serde_json::json!({}),
+            &[],
+        ))
+        .unwrap();
+        assert_eq!(out["present"], serde_json::json!(false));
+    }
+
+    #[test]
+    fn native_tools_available_reflects_resolved_map() {
+        let mut r = req(
+            "return { go = function() return { \
+                typst = ms.nativeTools.available('typst'), \
+                ghost = ms.nativeTools.available('ghost') \
+            } end }",
+            "go",
+            serde_json::json!({}),
+            &["nativeTools.runDeclared"],
+        );
+        // Declared + resolved vs declared-but-missing.
+        r.native_tools
+            .insert("typst".into(), Some(PathBuf::from("/usr/bin/typst")));
+        r.native_tools.insert("ghost".into(), None);
+        let out = run(r).unwrap();
+        assert_eq!(out["typst"], serde_json::json!(true));
+        assert_eq!(out["ghost"], serde_json::json!(false));
+    }
+
+    #[test]
+    fn native_tools_run_rejects_unavailable_tool() {
+        let mut r = req(
+            "return { go = function() return ms.nativeTools.run('ghost', {}) end }",
+            "go",
+            serde_json::json!({}),
+            &["nativeTools.runDeclared"],
+        );
+        r.native_tools.insert("ghost".into(), None);
+        assert!(run(r).is_err(), "running an unresolved tool must error");
     }
 
     #[test]

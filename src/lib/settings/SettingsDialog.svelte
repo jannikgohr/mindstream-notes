@@ -3,6 +3,7 @@
   import { X, Search, ChevronRight } from '@lucide/svelte';
   import SettingControl from './SettingControl.svelte';
   import PluginsOverview from '$lib/plugins/PluginsOverview.svelte';
+  import PluginNativeToolsSection from '$lib/plugins/PluginNativeToolsSection.svelte';
   import {
     SCHEMA,
     closeSettings,
@@ -418,6 +419,9 @@
                   {/if}
                 {/if}
               {/each}
+              {#if isPluginsCategory && activePluginId}
+                <PluginNativeToolsSection pluginId={activePluginId} />
+              {/if}
             {/if}
           {/if}
         </section>

@@ -7,11 +7,13 @@
   "runtime": "luau",
   "entry": "main.luau",
   "descriptionKey": "plugin.description",
+  "limits": {
+    "timeoutMs": 20000
+  },
   "permissions": [
     "templates.contribute",
     "noteKinds.contribute",
     "notes.create",
-    "pluginArtifacts.download",
     "nativeTools.runDeclared"
   ],
   "contributes": {
@@ -51,62 +53,6 @@
         ]
       }
     ],
-    "artifacts": [
-      {
-        "id": "typst-web-compiler-wasm",
-        "kind": "wasm",
-        "version": "0.7.0",
-        "url": "https://cdn.jsdelivr.net/npm/@myriaddreamin/typst-ts-web-compiler@0.7.0/pkg/typst_ts_web_compiler_bg.wasm",
-        "sha256": "1fc968438a672366dfec39c96c842c26ed29caff4eb1bcaab19a6c60867de5fd",
-        "fileName": "typst_ts_web_compiler_bg.wasm",
-        "sizeBytes": 28325178
-      },
-      {
-        "id": "typst-web-compiler-js",
-        "kind": "webScript",
-        "version": "0.7.0",
-        "url": "https://cdn.jsdelivr.net/npm/@myriaddreamin/typst-ts-web-compiler@0.7.0/pkg/typst_ts_web_compiler.mjs",
-        "sha256": "96735c6da3dd220255ba368e34c695227fc67e0b4104e7a8e039dd9bc2fc5312",
-        "fileName": "typst_ts_web_compiler.mjs",
-        "sizeBytes": 59874
-      },
-      {
-        "id": "typst-web-compiler-shim",
-        "kind": "webScript",
-        "version": "0.7.0",
-        "url": "https://cdn.jsdelivr.net/npm/@myriaddreamin/typst-ts-web-compiler@0.7.0/pkg/wasm-pack-shim.mjs",
-        "sha256": "0023261749a0ad3276dc7718d163d9967d9e5cf8b882a4ea60173e5cd8cac921",
-        "fileName": "wasm-pack-shim.mjs",
-        "sizeBytes": 652
-      },
-      {
-        "id": "typst-renderer-wasm",
-        "kind": "wasm",
-        "version": "0.7.0",
-        "url": "https://cdn.jsdelivr.net/npm/@myriaddreamin/typst-ts-renderer@0.7.0/pkg/typst_ts_renderer_bg.wasm",
-        "sha256": "5a93d7a8b3b7b43b0e679f3dafed966f74fc1653cc7ed6623f04a8a6550da725",
-        "fileName": "typst_ts_renderer_bg.wasm",
-        "sizeBytes": 972425
-      },
-      {
-        "id": "typst-renderer-js",
-        "kind": "webScript",
-        "version": "0.7.0",
-        "url": "https://cdn.jsdelivr.net/npm/@myriaddreamin/typst-ts-renderer@0.7.0/pkg/typst_ts_renderer.mjs",
-        "sha256": "a2ef629939e31555159bc4b50b1ef970fa595117c21d11e257c9349895016c42",
-        "fileName": "typst_ts_renderer.mjs",
-        "sizeBytes": 96576
-      },
-      {
-        "id": "typst-renderer-shim",
-        "kind": "webScript",
-        "version": "0.7.0",
-        "url": "https://cdn.jsdelivr.net/npm/@myriaddreamin/typst-ts-renderer@0.7.0/pkg/wasm-pack-shim.mjs",
-        "sha256": "a5af349b13ac154c3f45c42b65c736b18b5a92607b4f3841d60f923e8b54d0c9",
-        "fileName": "wasm-pack-shim.mjs",
-        "sizeBytes": 640
-      }
-    ],
     "nativeTools": [
       {
         "id": "typst",
@@ -125,19 +71,9 @@
         "defaultBody": "#set document(title: [Untitled])\n\n= Untitled\n\nStart writing in Typst here.",
         "render": {
           "export": "renderDocument",
-          "previewMime": "text/html",
+          "previewMime": "image/svg+xml",
           "debounceMs": 300,
-          "webview": {
-            "entry": "preview.mjs",
-            "artifacts": [
-              "typst-web-compiler-wasm",
-              "typst-web-compiler-js",
-              "typst-web-compiler-shim",
-              "typst-renderer-wasm",
-              "typst-renderer-js",
-              "typst-renderer-shim"
-            ]
-          }
+          "requiresNativeTool": "typst"
         }
       }
     ],

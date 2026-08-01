@@ -1,9 +1,10 @@
 --!strict
--- Prototype renderer for plugin-owned document notes.
---
--- This is intentionally not a Typst compiler yet. It exercises the generic
--- host API shape for source -> sandboxed preview so the real compiler can later
--- replace only this plugin runtime code.
+-- Renders plugin-owned Typst document notes by shelling out to the user's
+-- installed `typst` binary (declared in the manifest as a native tool). The
+-- source is fed on stdin and the compiled SVG comes back on stdout, so nothing
+-- ever touches the filesystem. When the binary isn't available (not installed,
+-- or a mobile platform where native tools can't run) the host is told to show
+-- the editor in source-only mode.
 
 type RenderInput = {
 	noteId: string?,
@@ -17,64 +18,70 @@ type Diagnostic = {
 	message: string,
 }
 
-local function escapeHtml(value: string): string
-	value = string.gsub(value, "&", "&amp;")
-	value = string.gsub(value, "<", "&lt;")
-	value = string.gsub(value, ">", "&gt;")
-	value = string.gsub(value, '"', "&quot;")
-	return value
-end
-
-local function renderLine(line: string): string
-	if string.sub(line, 1, 2) == "= " then
-		return "<h1>" .. escapeHtml(string.sub(line, 3)) .. "</h1>"
-	end
-	if string.sub(line, 1, 3) == "== " then
-		return "<h2>" .. escapeHtml(string.sub(line, 4)) .. "</h2>"
-	end
-	if line == "" then
-		return "<div class=\"gap\"></div>"
-	end
-	local escaped = escapeHtml(line)
-	escaped = string.gsub(escaped, "%*([^%*]+)%*", "<strong>%1</strong>")
-	escaped = string.gsub(escaped, "_([^_]+)_", "<em>%1</em>")
-	return "<p>" .. escaped .. "</p>"
-end
-
-local function renderDocument(input: RenderInput): { preview: { mime: string, text: string }, diagnostics: { Diagnostic } }
-	local body = input.body or ""
+-- Turn Typst's stderr into a diagnostics list. Typst prefixes lines with
+-- `error:` / `warning:`; anything else is folded into the previous entry so a
+-- multi-line message stays together.
+local function parseTypstStderr(stderr: string): { Diagnostic }
 	local diagnostics: { Diagnostic } = {}
-	if string.find(body, "#import", 1, true) ~= nil then
-		diagnostics[#diagnostics + 1] = {
-			severity = "warning",
-			message = "Prototype renderer does not resolve imports yet.",
+	for rawLine in string.gmatch(stderr .. "\n", "([^\n]*)\n") do
+		local line = string.gsub(rawLine, "%s+$", "")
+		if line == "" then
+			continue
+		end
+		local severity: "info" | "warning" | "error" = "error"
+		local message = line
+		local errorBody = string.match(line, "^error:%s*(.*)$")
+		local warnBody = string.match(line, "^warning:%s*(.*)$")
+		if errorBody ~= nil then
+			severity = "error"
+			message = errorBody
+		elseif warnBody ~= nil then
+			severity = "warning"
+			message = warnBody
+		elseif #diagnostics > 0 then
+			-- Continuation of the previous diagnostic (context line).
+			local prev = diagnostics[#diagnostics]
+			prev.message = prev.message .. "\n" .. line
+			continue
+		end
+		diagnostics[#diagnostics + 1] = { severity = severity, message = message }
+	end
+	return diagnostics
+end
+
+local function renderDocument(input: RenderInput): { [string]: any }
+	local body = input.body or ""
+
+	local nativeTools = ms.nativeTools
+	if nativeTools == nil or not nativeTools.available("typst") then
+		-- No native binary → let the host drop to source-only (no preview).
+		return { sourceOnly = true, diagnostics = {} }
+	end
+
+	local result = nativeTools.run("typst", {
+		-- `compile <input> <output>` with `-` on both ends = stdin → stdout.
+		args = { "compile", "--format", "svg", "-", "-" },
+		stdin = body,
+		timeoutMs = 15000,
+	})
+
+	if result.timedOut then
+		return {
+			preview = { mime = "image/svg+xml", text = "" },
+			diagnostics = { { severity = "error", message = "Typst timed out while compiling." } },
 		}
 	end
 
-	local out = {
-		"<!doctype html><html><head><meta charset=\"utf-8\">",
-		"<style>",
-		"body{font:15px/1.55 system-ui,sans-serif;margin:0;padding:28px;color:#1f2937;background:#fff}",
-		"main{max-width:760px;margin:0 auto}",
-		"h1{font-size:30px;line-height:1.15;margin:0 0 18px;color:#111827}",
-		"h2{font-size:21px;margin:24px 0 10px;color:#111827}",
-		"p{margin:0 0 12px}.gap{height:10px}",
-		".badge{font-size:11px;color:#64748b;border-bottom:1px solid #e5e7eb;margin-bottom:22px;padding-bottom:10px}",
-		"</style></head><body><main>",
-		"<div class=\"badge\">Typst plugin prototype preview</div>",
-	}
-
-	for line in string.gmatch(body .. "\n", "([^\n]*)\n") do
-		out[#out + 1] = renderLine(line)
+	if result.statusCode ~= 0 then
+		return {
+			preview = { mime = "image/svg+xml", text = "" },
+			diagnostics = parseTypstStderr(result.stderr),
+		}
 	end
-	out[#out + 1] = "</main></body></html>"
 
 	return {
-		preview = {
-			mime = "text/html",
-			text = table.concat(out, ""),
-		},
-		diagnostics = diagnostics,
+		preview = { mime = "image/svg+xml", text = result.stdout },
+		diagnostics = parseTypstStderr(result.stderr),
 	}
 end
 
