@@ -25,6 +25,8 @@
  *     plugin artifacts after verifying their pinned digest.
  *   - `pluginStorage.read` / `pluginStorage.write` — let the host read/write
  *     this plugin's isolated mutable data directory.
+ *   - `pluginWebviews.allowEval` — let sandboxed plugin webviews use string
+ *     evaluation for runtimes that require generated JS glue.
  *   - `nativeTools.runDeclared` — let the host run plugin-declared binaries
  *     resolved from the user's PATH, without shell execution.
  * Broad `notes.write` stays deliberately absent — the app, not the plugin,
@@ -38,6 +40,7 @@ export type PluginPermission =
   | 'pluginArtifacts.download'
   | 'pluginStorage.read'
   | 'pluginStorage.write'
+  | 'pluginWebviews.allowEval'
   | 'nativeTools.runDeclared';
 
 /** All permissions the current app version understands. */
@@ -49,6 +52,7 @@ export const KNOWN_PLUGIN_PERMISSIONS: readonly PluginPermission[] = [
   'pluginArtifacts.download',
   'pluginStorage.read',
   'pluginStorage.write',
+  'pluginWebviews.allowEval',
   'nativeTools.runDeclared'
 ];
 
@@ -117,6 +121,14 @@ export interface PluginNoteKindRenderContribution {
   previewMime?: PluginPreviewMimeType;
   /** UI debounce before re-running the renderer. */
   debounceMs?: number;
+  /**
+   * A declared `nativeTools` id the renderer needs (e.g. a `typst` binary).
+   * The host checks the tool's availability up front: when it's missing — not
+   * installed, or a mobile platform where native tools can't run — the editor
+   * drops to source-only (no preview) instead of calling the renderer.
+   * Requires the plugin to hold `nativeTools.runDeclared`.
+   */
+  requiresNativeTool?: string;
   /**
    * Optional plugin-owned browser preview runtime. The host loads `entry` into a
    * sandboxed iframe, sends source updates via postMessage, and exposes only
@@ -207,6 +219,11 @@ export interface PluginArtifactContribution {
 export interface PluginWebviewPreviewContribution {
   /** Safe relative `.js`/`.mjs` module inside the plugin directory. */
   entry: string;
+  /**
+   * Opt into CSP `unsafe-eval` inside the sandboxed iframe. This is required by
+   * some generated WASM JS glue, but stays manifest/permission-gated.
+   */
+  allowEval?: boolean;
   /**
    * Plugin artifact ids that should be downloaded, verified, and delivered to
    * the iframe as Blob URLs + bytes before rendering.

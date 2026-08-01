@@ -18,6 +18,7 @@
 //! they are enabled on discovery unless their manifest opts out, and a checksum
 //! change (a shipped update) is accepted automatically.
 
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs;
 use std::io::Write;
@@ -651,6 +652,26 @@ fn native_tool_status(
     })
 }
 
+/// Resolve every native tool a manifest declares to its PATH binary (`None` when
+/// not found), for exposure via the Luau `ms.nativeTools` host API. On mobile
+/// native tools are unavailable, so every declared tool maps to `None` — the
+/// script sees the tool but `available` is always false, matching the
+/// desktop-only guard on the direct `plugins_run_native_tool` command.
+fn resolve_native_tools(manifest: &serde_json::Value) -> HashMap<String, Option<PathBuf>> {
+    let tools = parse_native_tools(manifest).unwrap_or_default();
+    tools
+        .into_iter()
+        .map(|tool| {
+            let resolved = if cfg!(mobile) {
+                None
+            } else {
+                resolve_path_binary(&tool.binary_name).ok().flatten()
+            };
+            (tool.id, resolved)
+        })
+        .collect()
+}
+
 fn validate_native_tool_args(args: &[String], stdin: &Option<String>) -> AppResult<()> {
     if args.len() > MAX_NATIVE_TOOL_ARGS {
         return Err(AppError::InvalidArg(format!(
@@ -1019,6 +1040,7 @@ fn wasm_limits(manifest: &serde_json::Value) -> wasm::Limits {
 /// permission set that decides the host API surface.
 ///
 /// Factored out of the command so it is unit-testable without a Tauri handle.
+#[allow(clippy::too_many_arguments)]
 pub fn run_plugin_script(
     files: &discovery::PluginFiles,
     manifest: &serde_json::Value,
@@ -1027,6 +1049,7 @@ pub fn run_plugin_script(
     export: &str,
     input: serde_json::Value,
     notes: Vec<luau::NoteMeta>,
+    native_tool_cwd: Option<PathBuf>,
 ) -> AppResult<serde_json::Value> {
     match manifest.get("runtime").and_then(|v| v.as_str()) {
         Some("luau") => {
@@ -1037,6 +1060,13 @@ pub fn run_plugin_script(
             // The plugin's other `.luau` files, resolvable via a plugin-scoped `require`.
             let modules = files.luau_modules()?;
             let id = manifest_id(manifest);
+            // Resolve the plugin's declared PATH binaries only when the tool
+            // permission was granted; the map decides `ms.nativeTools` availability.
+            let native_tools = if granted.iter().any(|p| p == PERM_NATIVE_TOOLS_RUN_DECLARED) {
+                resolve_native_tools(manifest)
+            } else {
+                HashMap::new()
+            };
             luau::run(luau::ScriptRequest {
                 source,
                 chunk_name: format!("{id}/{entry}"),
@@ -1044,6 +1074,8 @@ pub fn run_plugin_script(
                 input,
                 permissions: granted,
                 notes,
+                native_tools,
+                native_tool_cwd,
                 modules,
                 limits: luau_limits(manifest),
             })
@@ -1413,14 +1445,22 @@ pub fn plugins_native_tool_status(
     id: String,
     tool_id: String,
 ) -> CommandResult<PluginNativeToolStatus> {
-    if cfg!(mobile) {
-        return Err(AppError::InvalidArg("native tools are desktop-only".into()).into());
-    }
     db.with_conn(|c| require_enabled_permission(c, &id, PERM_NATIVE_TOOLS_RUN_DECLARED))?;
     let third_party_dir = discovery::third_party_plugins_dir(&app)?;
     let plugin = discovery::find(&third_party_dir, &id)
         .ok_or_else(|| AppError::NotFound(format!("plugin {id} not found on disk")))?;
     let tool = find_native_tool(&plugin.manifest, &tool_id)?;
+    // Native tools are desktop-only. Report a uniform "not available" status on
+    // mobile rather than erroring, so the frontend can fall back to source-only.
+    if cfg!(mobile) {
+        return Ok(PluginNativeToolStatus {
+            plugin_id: id,
+            tool_id: tool.id,
+            binary_name: tool.binary_name,
+            available: false,
+            path: None,
+        });
+    }
     native_tool_status(&id, &tool).map_err(Into::into)
 }
 
@@ -1494,8 +1534,21 @@ pub async fn plugins_run_script(
     } else {
         Vec::new()
     };
+    // The plugin's isolated data root is the cwd for any native tool the script
+    // runs via `ms.nativeTools`; resolved here (needs the AppHandle) so the
+    // blocking worker stays Tauri-free.
+    let native_tool_cwd = plugin_data_root(&app, &id).ok();
     tauri::async_runtime::spawn_blocking(move || {
-        run_plugin_script(&files, &manifest, &checksum, granted, &export, input, notes)
+        run_plugin_script(
+            &files,
+            &manifest,
+            &checksum,
+            granted,
+            &export,
+            input,
+            notes,
+            native_tool_cwd,
+        )
     })
     .await
     .map_err(|e| AppError::InvalidArg(format!("script task failed: {e}")))?

@@ -73,17 +73,15 @@ describe('validateManifest', () => {
 
   it('accepts the bundled Typst prototype manifest', () => {
     const result = validateManifest(typstPrototypeManifest);
-    expect(result.contributes.artifacts).toHaveLength(6);
-    expect(result.contributes.noteKinds?.[0].render.webview?.artifacts).toEqual(
-      [
-        'typst-web-compiler-wasm',
-        'typst-web-compiler-js',
-        'typst-web-compiler-shim',
-        'typst-renderer-wasm',
-        'typst-renderer-js',
-        'typst-renderer-shim'
-      ]
-    );
+    // The prototype renders through the native `typst` binary, not a webview.
+    expect(result.contributes.nativeTools).toEqual([
+      expect.objectContaining({ id: 'typst', binaryName: 'typst' })
+    ]);
+    const render = result.contributes.noteKinds?.[0].render;
+    expect(render?.requiresNativeTool).toBe('typst');
+    expect(render?.previewMime).toBe('image/svg+xml');
+    expect(render?.webview).toBeUndefined();
+    expect(result.contributes.artifacts).toBeUndefined();
   });
 
   it('throws PluginValidationError carrying the plugin id', () => {
@@ -362,7 +360,8 @@ describe('validateManifest', () => {
         'templates.contribute',
         'noteKinds.contribute',
         'notes.create',
-        'pluginArtifacts.download'
+        'pluginArtifacts.download',
+        'pluginWebviews.allowEval'
       ]
     });
     const contributes = m.contributes as Record<string, unknown>;
@@ -382,13 +381,45 @@ describe('validateManifest', () => {
         labelKey: 'notes.document.label',
         render: {
           export: 'renderDocument',
-          webview: { entry: 'preview.mjs', artifacts: ['preview-glue'] }
+          webview: {
+            entry: 'preview.mjs',
+            allowEval: true,
+            artifacts: ['preview-glue']
+          }
         }
       }
     ];
     expect(
       validateManifest(m).contributes.noteKinds?.[0].render.webview
-    ).toEqual({ entry: 'preview.mjs', artifacts: ['preview-glue'] });
+    ).toEqual({
+      entry: 'preview.mjs',
+      allowEval: true,
+      artifacts: ['preview-glue']
+    });
+  });
+
+  it('rejects iframe preview eval without the eval permission', () => {
+    const m = validManifest({
+      runtime: 'luau',
+      entry: 'main.luau',
+      permissions: [
+        'templates.contribute',
+        'noteKinds.contribute',
+        'notes.create'
+      ]
+    });
+    const contributes = m.contributes as Record<string, unknown>;
+    contributes.noteKinds = [
+      {
+        id: 'document',
+        labelKey: 'notes.document.label',
+        render: {
+          export: 'renderDocument',
+          webview: { entry: 'preview.mjs', allowEval: true }
+        }
+      }
+    ];
+    expect(() => validateManifest(m)).toThrow(/pluginWebviews\.allowEval/);
   });
 
   it('rejects iframe preview runtimes that reference unsafe or undeclared assets', () => {
@@ -517,6 +548,61 @@ describe('validateManifest', () => {
     (contributes.noteTemplates as Record<string, unknown>[])[0].noteKind =
       'plugin.com.example.templates.document';
     expect(validateManifest(m).contributes.noteKinds).toHaveLength(1);
+  });
+
+  it('accepts a note-kind render that requires a declared native tool', () => {
+    const m = validManifest({
+      runtime: 'luau',
+      entry: 'main.luau',
+      permissions: [
+        'templates.contribute',
+        'noteKinds.contribute',
+        'notes.create',
+        'nativeTools.runDeclared'
+      ]
+    });
+    const contributes = m.contributes as Record<string, unknown>;
+    contributes.nativeTools = [{ id: 'typst', binaryName: 'typst' }];
+    contributes.noteKinds = [
+      {
+        id: 'document',
+        labelKey: 'notes.document.label',
+        render: {
+          export: 'renderDocument',
+          previewMime: 'image/svg+xml',
+          requiresNativeTool: 'typst'
+        }
+      }
+    ];
+    expect(
+      validateManifest(m).contributes.noteKinds?.[0].render.requiresNativeTool
+    ).toBe('typst');
+  });
+
+  it('rejects requiresNativeTool for an undeclared tool', () => {
+    const m = validManifest({
+      runtime: 'luau',
+      entry: 'main.luau',
+      permissions: [
+        'templates.contribute',
+        'noteKinds.contribute',
+        'notes.create',
+        'nativeTools.runDeclared'
+      ]
+    });
+    const contributes = m.contributes as Record<string, unknown>;
+    contributes.noteKinds = [
+      {
+        id: 'document',
+        labelKey: 'notes.document.label',
+        render: {
+          export: 'renderDocument',
+          previewMime: 'image/svg+xml',
+          requiresNativeTool: 'ghost'
+        }
+      }
+    ];
+    expect(() => validateManifest(m)).toThrow(/undeclared native tool/);
   });
 
   it('rejects unknown plugin note kind preview mode icons', () => {

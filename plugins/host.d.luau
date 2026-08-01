@@ -56,6 +56,32 @@ type MsNotes = {
 	get: (id: string) -> MsNote?,
 }
 
+-- Options for `ms.nativeTools.run`.
+type MsNativeToolRunOptions = {
+	args: { string }?, -- arguments passed directly to the binary (no shell)
+	stdin: string?, -- written to the process stdin
+	timeoutMs: number?, -- wall-clock cap, clamped by the host (100..30000)
+}
+
+-- Result of `ms.nativeTools.run`.
+type MsNativeToolResult = {
+	statusCode: number?, -- process exit code (nil if killed by signal)
+	stdout: string,
+	stderr: string,
+	timedOut: boolean,
+}
+
+-- Present only when the plugin was granted `nativeTools.runDeclared`. Runs the
+-- plugin's *declared* PATH binaries (from `contributes.nativeTools`) directly —
+-- never a shell. On mobile every tool is unavailable (native tools are
+-- desktop-only), so guard with `available` before `run`.
+type MsNativeTools = {
+	-- Whether a declared tool id was resolved on PATH.
+	available: (toolId: string) -> boolean,
+	-- Run a declared, available tool. Errors if the tool is unknown/unavailable.
+	run: (toolId: string, options: MsNativeToolRunOptions?) -> MsNativeToolResult,
+}
+
 -- The `ms` host API. Always-present helpers are non-optional; a namespace typed
 -- as optional is permission-gated — it exists only when the manifest's
 -- `permissions` include the matching capability, so a script must narrow it
@@ -69,6 +95,7 @@ export type Ms = {
 	json: MsJson,
 	md: MsMd,
 	notes: MsNotes?, -- gated by `notes.read`
+	nativeTools: MsNativeTools?, -- gated by `nativeTools.runDeclared`
 }
 
 declare ms: Ms

@@ -256,6 +256,28 @@ Gated by `notes.read`:
 when the matching permission is granted, so `ms.notes == nil` for a plugin
 without `notes.read`.
 
+Gated by `nativeTools.runDeclared`:
+
+| API                                    | Description                                                                        |
+| -------------------------------------- | ---------------------------------------------------------------------------------- |
+| `ms.nativeTools.available(toolId)`     | whether a declared tool (`contributes.nativeTools[].id`) was resolved on PATH      |
+| `ms.nativeTools.run(toolId, options?)` | run a declared, available tool; returns `{ statusCode, stdout, stderr, timedOut }` |
+
+`options` is `{ args = { string }?, stdin = string?, timeoutMs = number? }`. The
+host resolves the binary from PATH itself (never the script) and launches it
+**directly** — no shell, no arbitrary paths — so a script can only run the exact
+binaries its manifest declared under `contributes.nativeTools`. Native tools are
+**desktop-only**: on mobile every declared tool reports unavailable, so always
+guard with `available` before `run`. Because a `run` blocks on the child process,
+give the plugin a generous `limits.timeoutMs` (the Luau wall-clock deadline must
+outlast the subprocess).
+
+A note kind can declare `render.requiresNativeTool = "<toolId>"`: the host checks
+that tool up front and, when it's missing (not installed, or mobile), shows the
+editor **source-only** instead of calling the renderer. See the bundled
+`typst-prototype` plugin, whose `renderDocument` pipes the note body through the
+native `typst` binary (`typst compile --format svg - -`) and returns the SVG.
+
 ## Wasm plugins (`runtime: "wasm"`)
 
 Wasm plugins run through Wasmtime in the Rust backend. There is **no WASI by

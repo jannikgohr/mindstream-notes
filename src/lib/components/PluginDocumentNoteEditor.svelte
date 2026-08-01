@@ -1,14 +1,17 @@
 <script lang="ts">
   import { onDestroy, untrack } from 'svelte';
   import type { EditorView } from '@codemirror/view';
-  import { AlertTriangle, Loader2 } from '@lucide/svelte';
+  import { AlertTriangle, Loader2, RefreshCw } from '@lucide/svelte';
   import { loadNote } from '$lib/api';
   import {
     pluginsArtifactsStatus,
     pluginsDownloadArtifact,
+    pluginsNativeToolStatus,
     pluginsReadArtifact,
     pluginsRunScript
   } from '$lib/api/plugins';
+  import { isMobile } from '$lib/platform';
+  import { tUi } from '$lib/settings/i18n.svelte';
   import { setNoteBody } from '$lib/stores/tree.svelte';
   import { pluginNoteKind } from '$lib/plugins/registry.svelte';
   import { readPluginFile } from '$lib/plugins/plugin-files';
@@ -83,6 +86,15 @@
   let webviewEntry = '';
   let webviewArtifacts: WebviewArtifactPayload[] = [];
 
+  // Native-tool render gating: when a note kind declares `requiresNativeTool`
+  // the host checks the binary is available before ever rendering. If it isn't
+  // (not installed, or a mobile platform) the editor drops to source-only.
+  type ToolState = 'unknown' | 'checking' | 'available' | 'unavailable';
+  let toolState = $state<ToolState>('unknown');
+  let toolBinaryName = $state('');
+  let toolCheckToken = 0;
+  const mobile = isMobile();
+
   const contributionRef = $derived(pluginNoteKind(noteKind));
   const storedNoteKind = $derived(contributionRef?.noteKind ?? noteKind ?? '');
   const sourceLanguage = $derived(
@@ -103,8 +115,15 @@
   const previewSrcdoc = $derived(
     webviewPreview ? buildWebviewPreviewDocument() : iframeSrcdoc
   );
-  const showSource = $derived(viewMode !== 'wysiwyg');
-  const showPreview = $derived(viewMode !== 'source');
+  const requiredToolId = $derived(
+    contributionRef?.contribution.render.requiresNativeTool
+  );
+  // Preview is blocked until a declared native tool is confirmed available.
+  const previewBlocked = $derived(
+    !!requiredToolId && toolState !== 'available'
+  );
+  const showSource = $derived(previewBlocked || viewMode !== 'wysiwyg');
+  const showPreview = $derived(!previewBlocked && viewMode !== 'source');
   const splitMode = $derived(showSource && showPreview);
 
   $effect(() => {
@@ -118,6 +137,38 @@
     );
     viewModeSeed = key;
   });
+
+  // Check the declared native tool's availability whenever the owning plugin /
+  // required tool changes. Result gates the preview (see `previewBlocked`).
+  $effect(() => {
+    const ref = contributionRef;
+    const toolId = requiredToolId;
+    if (!ref || !toolId) {
+      toolState = 'unknown';
+      return;
+    }
+    void checkTool(ref.pluginId, toolId);
+  });
+
+  async function checkTool(pluginId: string, toolId: string) {
+    const token = ++toolCheckToken;
+    toolState = 'checking';
+    try {
+      const status = await pluginsNativeToolStatus(pluginId, toolId);
+      if (destroyed || token !== toolCheckToken) return;
+      toolBinaryName = status.binaryName;
+      toolState = status.available ? 'available' : 'unavailable';
+      if (status.available) scheduleRender(0);
+    } catch {
+      if (destroyed || token !== toolCheckToken) return;
+      toolState = 'unavailable';
+    }
+  }
+
+  function recheckTool() {
+    const ref = contributionRef;
+    if (ref && requiredToolId) void checkTool(ref.pluginId, requiredToolId);
+  }
 
   $effect(() => {
     const id = noteId;
@@ -268,6 +319,12 @@
       diagnostics = [];
       return;
     }
+    // A note kind that needs a native tool never renders until it's confirmed
+    // present — the editor stays source-only instead.
+    if (requiredToolId && toolState !== 'available') {
+      rendering = false;
+      return;
+    }
     if (ref.contribution.render.webview) {
       renderWebviewNow(ref);
       return;
@@ -287,6 +344,18 @@
         }
       );
       if (destroyed || token !== renderToken) return;
+      // The renderer can report it can't run (e.g. the tool vanished mid-session);
+      // treat that as unavailable so the editor falls back to source-only.
+      if (
+        raw &&
+        typeof raw === 'object' &&
+        (raw as Record<string, unknown>).sourceOnly
+      ) {
+        toolState = 'unavailable';
+        previewText = '';
+        diagnostics = [];
+        return;
+      }
       const parsed = parseRenderResult(
         raw,
         ref.contribution.render.previewMime ?? 'text/plain'
@@ -464,10 +533,16 @@
   }
 
   function buildWebviewPreviewDocument(): string {
+    const scriptSources = [
+      "'unsafe-inline'",
+      'blob:',
+      "'wasm-unsafe-eval'",
+      ...(webviewPreview?.allowEval ? ["'unsafe-eval'"] : [])
+    ].join(' ');
     return [
       '<!doctype html><html><head><meta charset="utf-8">',
       '<meta name="viewport" content="width=device-width,initial-scale=1">',
-      "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; script-src 'unsafe-inline' blob: 'wasm-unsafe-eval'; style-src 'unsafe-inline'; img-src blob: data:; font-src blob: data:; worker-src blob:; connect-src 'none'\">",
+      `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src ${scriptSources}; style-src 'unsafe-inline'; img-src blob: data:; font-src blob: data:; worker-src blob:; connect-src 'none'">`,
       '<style>html,body,#plugin-preview-root{height:100%;margin:0}body{background:#fff;color:#111827;font:15px/1.55 system-ui,sans-serif}</style>',
       '</head><body><div id="plugin-preview-root"></div>',
       '<scr',
@@ -624,12 +699,38 @@ parentWindow.postMessage({ type: 'mindstream-plugin-preview-ready' }, '*');
       {#if rendering}
         <Loader2 class="size-3.5 shrink-0 animate-spin text-muted-foreground" />
       {/if}
-      <EditorModeToggle
-        value={viewMode}
-        previewIcon={contributionRef?.contribution.viewModePreviewIcon}
-        onCycle={cycleViewMode}
-      />
+      {#if !previewBlocked}
+        <EditorModeToggle
+          value={viewMode}
+          previewIcon={contributionRef?.contribution.viewModePreviewIcon}
+          onCycle={cycleViewMode}
+        />
+      {/if}
     </div>
+    {#if previewBlocked && !mobile}
+      <div
+        class="flex shrink-0 items-center gap-2 border-b border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground"
+      >
+        <AlertTriangle class="size-3.5 shrink-0" />
+        <span class="min-w-0 flex-1">
+          {tUi('plugins.nativeTool.missing').replace(
+            '{tool}',
+            toolBinaryName || (requiredToolId ?? '')
+          )}
+        </span>
+        <button
+          type="button"
+          class="inline-flex shrink-0 items-center gap-1 rounded-md border border-border px-2 py-1 font-medium text-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+          disabled={toolState === 'checking'}
+          onclick={recheckTool}
+        >
+          <RefreshCw
+            class="size-3 {toolState === 'checking' ? 'animate-spin' : ''}"
+          />
+          {tUi('plugins.nativeTool.recheck')}
+        </button>
+      </div>
+    {/if}
     <div
       bind:this={editorRegionEl}
       class="grid min-h-0 flex-1 grid-cols-1 {splitMode
