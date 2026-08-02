@@ -29,6 +29,7 @@ import type {
   PluginNoteKindContribution,
   PluginNoteTemplateContribution,
   PluginSettingsContribution,
+  PluginSourceLanguageContribution,
   PluginToolbarButton,
   PluginToolbarLocation
 } from './types';
@@ -75,6 +76,12 @@ export interface PluginCommandRef {
 export interface PluginToolbarButtonRef {
   pluginId: string;
   button: PluginToolbarButton;
+}
+
+/** A source language contribution paired with the plugin that owns it. */
+export interface PluginSourceLanguageRef {
+  pluginId: string;
+  language: PluginSourceLanguageContribution;
 }
 
 interface RegistryState {
@@ -201,6 +208,31 @@ export function pluginNoteKind(
   if (!noteKind) return undefined;
   for (const ref of pluginNoteKinds()) {
     if (ref.noteKind === noteKind) return ref;
+  }
+  return undefined;
+}
+
+/** Source editor language modes contributed by all enabled plugins. */
+export function pluginSourceLanguages(): PluginSourceLanguageRef[] {
+  const out: PluginSourceLanguageRef[] = [];
+  for (const { manifest, enabled } of Object.values(state.plugins)) {
+    if (!enabled) continue;
+    for (const language of manifest.contributes.sourceLanguages ?? []) {
+      out.push({ pluginId: manifest.id, language });
+    }
+  }
+  return out;
+}
+
+/** Resolve a source language id or alias to the first enabled contribution. */
+export function pluginSourceLanguage(
+  id: string | null | undefined
+): PluginSourceLanguageRef | undefined {
+  if (!id) return undefined;
+  for (const ref of pluginSourceLanguages()) {
+    if (ref.language.id === id || ref.language.aliases?.includes(id)) {
+      return ref;
+    }
   }
   return undefined;
 }

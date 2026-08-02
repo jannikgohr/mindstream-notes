@@ -81,6 +81,12 @@ describe('validateManifest', () => {
     expect(render?.requiresNativeTool).toBe('typst');
     expect(render?.previewMime).toBe('application/pdf');
     expect(render?.webview).toBeUndefined();
+    expect(result.contributes.sourceLanguages).toEqual([
+      expect.objectContaining({
+        id: 'typst',
+        provider: { type: 'host', id: 'typst' }
+      })
+    ]);
     expect(result.contributes.artifacts).toBeUndefined();
   });
 
@@ -469,6 +475,54 @@ describe('validateManifest', () => {
       }
     ];
     expect(validateManifest(m).contributes.nativeTools).toHaveLength(1);
+  });
+
+  it('accepts host-owned source language contributions', () => {
+    const m = withContributes((c) => {
+      c.sourceLanguages = [
+        {
+          id: 'typst',
+          labelKey: 'templates.meeting.name',
+          aliases: ['typ'],
+          extensions: ['typ'],
+          provider: { type: 'host', id: 'typst' }
+        }
+      ];
+    });
+    expect(validateManifest(m).contributes.sourceLanguages).toHaveLength(1);
+  });
+
+  it('rejects unsafe source language contributions', () => {
+    const badProvider = withContributes((c) => {
+      c.sourceLanguages = [
+        {
+          id: 'typst',
+          provider: { type: 'plugin', id: 'main' }
+        }
+      ];
+    });
+    expect(() => validateManifest(badProvider)).toThrow(/provider.type/);
+
+    const unknownHost = withContributes((c) => {
+      c.sourceLanguages = [
+        {
+          id: 'typst',
+          provider: { type: 'host', id: 'unknown' }
+        }
+      ];
+    });
+    expect(() => validateManifest(unknownHost)).toThrow(/host source language/);
+
+    const badExtension = withContributes((c) => {
+      c.sourceLanguages = [
+        {
+          id: 'typst',
+          extensions: ['.typ'],
+          provider: { type: 'host', id: 'typst' }
+        }
+      ];
+    });
+    expect(() => validateManifest(badExtension)).toThrow(/without a dot/);
   });
 
   it('rejects native tools without permission or with path-shaped binaries', () => {

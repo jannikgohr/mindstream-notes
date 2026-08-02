@@ -22,6 +22,7 @@ import {
   PLUGIN_ARTIFACT_KINDS,
   PLUGIN_EDITOR_TOOLBAR_ITEMS,
   PLUGIN_PREVIEW_MIME_TYPES,
+  PLUGIN_SOURCE_LANGUAGE_HOST_PROVIDERS,
   PLUGIN_TOOLBAR_LOCATIONS,
   PLUGIN_VIEW_MODE_PREVIEW_ICONS,
   type PluginDocSection,
@@ -36,6 +37,7 @@ import {
   type PluginPreviewMimeType,
   type PluginPermission,
   type PluginSetting,
+  type PluginSourceLanguageContribution,
   type PluginSettingsContribution,
   type PluginCommandContribution,
   type PluginTemplateVariable,
@@ -98,6 +100,7 @@ const SHA256_HEX_RE = /^[a-f0-9]{64}$/;
 /** A Luau export name — a plain identifier looked up as `table[name]`. */
 const EXPORT_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const SOURCE_LANGUAGE_RE = /^[A-Za-z0-9][A-Za-z0-9_+-]{0,31}$/;
+const SOURCE_EXTENSION_RE = /^[A-Za-z0-9][A-Za-z0-9_+-]{0,15}$/;
 
 const SETTING_TYPES = new Set<PluginSetting['type']>([
   'toggle',
@@ -116,6 +119,9 @@ const VARIABLE_TYPES = new Set<PluginTemplateVariable['type']>([
   'select'
 ]);
 const ARTIFACT_KINDS = new Set<PluginArtifactKind>(PLUGIN_ARTIFACT_KINDS);
+const SOURCE_LANGUAGE_HOST_PROVIDERS = new Set<string>(
+  PLUGIN_SOURCE_LANGUAGE_HOST_PROVIDERS
+);
 
 function isScriptedRuntime(
   runtime: PluginManifest['runtime'] | undefined
@@ -461,6 +467,75 @@ function validateNoteKind(
     permissions
   );
   return pluginNoteKindId(pluginId, c.id);
+}
+
+function validateSourceLanguage(
+  pluginId: string,
+  language: PluginSourceLanguageContribution,
+  path: string
+): void {
+  assertNonEmptyString(pluginId, language?.id, `${path}.id`);
+  if (!SOURCE_LANGUAGE_RE.test(language.id)) {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.id ("${language.id}") must be a short source language identifier`
+    );
+  }
+  if (language.labelKey !== undefined) {
+    assertI18nKey(pluginId, language.labelKey, `${path}.labelKey`);
+  }
+  if (language.aliases !== undefined) {
+    if (!Array.isArray(language.aliases)) {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.aliases must be an array`
+      );
+    }
+    for (const [i, alias] of language.aliases.entries()) {
+      assertNonEmptyString(pluginId, alias, `${path}.aliases[${i}]`);
+      if (!SOURCE_LANGUAGE_RE.test(alias)) {
+        throw new PluginValidationError(
+          pluginId,
+          `${path}.aliases[${i}] must be a short source language identifier`
+        );
+      }
+    }
+  }
+  if (language.extensions !== undefined) {
+    if (!Array.isArray(language.extensions)) {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.extensions must be an array`
+      );
+    }
+    for (const [i, extension] of language.extensions.entries()) {
+      assertNonEmptyString(pluginId, extension, `${path}.extensions[${i}]`);
+      if (!SOURCE_EXTENSION_RE.test(extension)) {
+        throw new PluginValidationError(
+          pluginId,
+          `${path}.extensions[${i}] must be a short file extension without a dot`
+        );
+      }
+    }
+  }
+  if (!language.provider || typeof language.provider !== 'object') {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.provider must be an object`
+    );
+  }
+  if (language.provider.type !== 'host') {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.provider.type must be "host"`
+    );
+  }
+  if (!SOURCE_LANGUAGE_HOST_PROVIDERS.has(language.provider.id)) {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.provider.id ("${String(language.provider.id)}") is not a supported host source language provider`
+    );
+  }
 }
 
 function validateSetting(
@@ -1127,6 +1202,26 @@ export function validateManifest(input: unknown): PluginManifest {
       pluginId,
       'contributes nativeServices but is missing the "nativeServices.run" permission'
     );
+  }
+
+  // ---- Source editor language modes -----------------------------------
+  const sourceLanguages = contributes.sourceLanguages ?? [];
+  if (!Array.isArray(sourceLanguages)) {
+    throw new PluginValidationError(
+      pluginId,
+      'manifest.contributes.sourceLanguages must be an array'
+    );
+  }
+  const seenSourceLanguageIds = new Set<string>();
+  for (const [i, language] of sourceLanguages.entries()) {
+    validateSourceLanguage(pluginId, language, `sourceLanguages[${i}]`);
+    if (seenSourceLanguageIds.has(language.id)) {
+      throw new PluginValidationError(
+        pluginId,
+        `duplicate source language id "${language.id}"`
+      );
+    }
+    seenSourceLanguageIds.add(language.id);
   }
 
   // ---- Plugin note kinds ----------------------------------------------
