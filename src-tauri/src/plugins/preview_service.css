@@ -23,7 +23,6 @@ body {
 }
 
 body * {
-  scrollbar-gutter: stable;
   scrollbar-width: auto;
   scrollbar-color: oklch(from var(--ms-preview-foreground) l c h / 0.3)
     transparent;
