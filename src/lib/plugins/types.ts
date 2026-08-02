@@ -120,6 +120,8 @@ export const PLUGIN_VIEW_MODE_PREVIEW_ICONS = ['default', 'bookText'] as const;
 export type PluginViewModePreviewIcon =
   (typeof PLUGIN_VIEW_MODE_PREVIEW_ICONS)[number];
 
+export type PluginViewModeLabelKey = 'wysiwyg' | 'source' | 'split';
+
 export interface PluginNoteKindRenderContribution {
   /** Exported backend script function name; called with `{ noteId, noteKind, body }`. */
   export: string;
@@ -162,6 +164,11 @@ export interface PluginNoteKindContribution {
   sourceLanguage?: string;
   /** Host-owned icon to show for the preview-only view mode toggle. */
   viewModePreviewIcon?: PluginViewModePreviewIcon;
+  /**
+   * Optional plugin-owned labels for editor view modes. Keys are the host's
+   * stable internal mode ids; values are plugin-local i18n keys.
+   */
+  viewModeLabelKeys?: Partial<Record<PluginViewModeLabelKey, string>>;
   defaultTitle?: string;
   defaultBody?: string;
   render: PluginNoteKindRenderContribution;
@@ -194,6 +201,8 @@ export interface PluginSetting {
   default?: unknown;
   /** Required for `select`/`radio`; option labels resolve via plugin i18n. */
   options?: string[];
+  /** Optional plugin-local i18n keys for individual option values. */
+  optionLabelKeys?: Record<string, string>;
 }
 
 /** A subsection of settings a plugin adds under the "Plugins" category. */

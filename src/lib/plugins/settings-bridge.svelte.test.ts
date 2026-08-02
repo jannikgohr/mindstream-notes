@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { getSettingValue } from '$lib/settings/store.svelte';
-import { setLanguage, tDescription, tLabel } from '$lib/settings/i18n.svelte';
+import {
+  setLanguage,
+  tDescription,
+  tLabel,
+  tValue
+} from '$lib/settings/i18n.svelte';
 import {
   registerPlugin,
   resetPluginRegistry,
@@ -29,11 +34,14 @@ function register(): void {
         en: {
           'settings.general.title': 'Core Templates',
           'settings.openOnCreate.label': 'Open new template notes',
-          'settings.openOnCreate.description': 'Open right after creating'
+          'settings.openOnCreate.description': 'Open right after creating',
+          'settings.defaultMode.label': 'Default mode',
+          'settings.defaultMode.preview': 'Live Preview'
         },
         de: {
           'settings.general.title': 'Basisvorlagen',
-          'settings.openOnCreate.label': 'Neue Vorlagennotizen öffnen'
+          'settings.openOnCreate.label': 'Neue Vorlagennotizen öffnen',
+          'settings.defaultMode.preview': 'Live-Vorschau'
         }
       },
       noteTemplates: [
@@ -57,6 +65,17 @@ function register(): void {
               scope: 'D',
               type: 'toggle',
               default: true
+            },
+            {
+              id: 'default-mode',
+              labelKey: 'settings.defaultMode.label',
+              scope: 'D',
+              type: 'select',
+              default: 'wysiwyg',
+              options: ['wysiwyg'],
+              optionLabelKeys: {
+                wysiwyg: 'settings.defaultMode.preview'
+              }
             }
           ]
         }
@@ -121,5 +140,12 @@ describe('i18n integration', () => {
     expect(tDescription('settings', SETTING_ID)).toBe(
       'Open right after creating'
     );
+  });
+
+  it('resolves plugin setting option labels via plugin i18n', () => {
+    const modeSettingId = `plugins.${PLUGIN_ID}.default-mode`;
+    expect(tValue(modeSettingId, 'wysiwyg')).toBe('Live Preview');
+    setLanguage('de');
+    expect(tValue(modeSettingId, 'wysiwyg')).toBe('Live-Vorschau');
   });
 });

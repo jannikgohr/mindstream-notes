@@ -254,6 +254,7 @@ const PREVIEW_MIME_TYPES = new Set<PluginPreviewMimeType>(
   PLUGIN_PREVIEW_MIME_TYPES
 );
 const VIEW_MODE_PREVIEW_ICONS = new Set<string>(PLUGIN_VIEW_MODE_PREVIEW_ICONS);
+const VIEW_MODE_LABEL_KEYS = new Set<string>(['wysiwyg', 'source', 'split']);
 
 function validateNoteKindRender(
   pluginId: string,
@@ -421,6 +422,23 @@ function validateNoteKind(
       `${path}.viewModePreviewIcon ("${String(c.viewModePreviewIcon)}") is not supported`
     );
   }
+  if (c.viewModeLabelKeys !== undefined) {
+    if (!c.viewModeLabelKeys || typeof c.viewModeLabelKeys !== 'object') {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.viewModeLabelKeys must be an object`
+      );
+    }
+    for (const [mode, key] of Object.entries(c.viewModeLabelKeys)) {
+      if (!VIEW_MODE_LABEL_KEYS.has(mode)) {
+        throw new PluginValidationError(
+          pluginId,
+          `${path}.viewModeLabelKeys.${mode} is not a supported view mode`
+        );
+      }
+      assertI18nKey(pluginId, key, `${path}.viewModeLabelKeys.${mode}`);
+    }
+  }
   if (c.defaultTitle !== undefined && typeof c.defaultTitle !== 'string') {
     throw new PluginValidationError(
       pluginId,
@@ -473,6 +491,24 @@ function validateSetting(
         pluginId,
         `${path} is a ${s.type} and must list at least one option`
       );
+    }
+  }
+  if (s.optionLabelKeys !== undefined) {
+    if (!s.optionLabelKeys || typeof s.optionLabelKeys !== 'object') {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.optionLabelKeys must be an object`
+      );
+    }
+    const options = new Set(s.options ?? []);
+    for (const [option, key] of Object.entries(s.optionLabelKeys)) {
+      if (!options.has(option)) {
+        throw new PluginValidationError(
+          pluginId,
+          `${path}.optionLabelKeys.${option} must match one of the setting options`
+        );
+      }
+      assertI18nKey(pluginId, key, `${path}.optionLabelKeys.${option}`);
     }
   }
 }

@@ -77,7 +77,14 @@ is namespaced under the plugin `id`, so two plugins can never collide.
   _(your plugin)_. Each setting is stored at `plugins.<id>.<settingId>`.
   Control `type`s: `toggle`, `text`, `number`, `slider`, `select`, `radio`,
   `color`, and the vault pickers **`folder`** and **`tag`** (their value is a
-  folder id / tag string and auto-clears if the target is deleted).
+  folder id / tag string and auto-clears if the target is deleted). `select` and
+  `radio` settings can add `optionLabelKeys` (`{ "<option>": "<i18nKey>" }`) so
+  plugin-owned values like `wysiwyg` can display domain language such as "Live
+  Preview".
+- **`noteKinds`** — plugin-owned note/editor surfaces. A note kind can set
+  `viewModeLabelKeys` (`{ "wysiwyg": "<i18nKey>", "source": "<i18nKey>",
+"split": "<i18nKey>" }`) to rename host view modes in the editor UI while the
+  stored internal values remain stable.
 - **`noteTemplates`** — declarative templates (`titleTemplate` / `bodyTemplate`
   with `{{…}}` placeholders, see below). Requires `templates.contribute`.
 - **`commands`** — app-local commands (currently `createTemplateNote`), each

@@ -14,10 +14,16 @@
   interface Props {
     value: EditorViewMode;
     previewIcon?: 'default' | 'bookText';
+    modeLabels?: Partial<Record<EditorViewMode, string>>;
     /** Advance to the next view mode. */
     onCycle: () => void;
   }
-  let { value, previewIcon = 'default', onCycle }: Props = $props();
+  let {
+    value,
+    previewIcon = 'default',
+    modeLabels = {},
+    onCycle
+  }: Props = $props();
 
   const previewIcons: Record<NonNullable<Props['previewIcon']>, Component> = {
     default: FileText,
@@ -29,10 +35,11 @@
     split: Columns2
   });
   const Icon = $derived(icons[value]);
-  // e.g. "Editor view mode: Split" — current state; clicking advances.
-  const title = $derived(
-    `${tUi('editor.mode.label')}: ${tValue('editor.defaultMode', value)}`
+  const modeLabel = $derived(
+    modeLabels[value] ?? tValue('editor.defaultMode', value)
   );
+  // e.g. "Editor view mode: Split" — current state; clicking advances.
+  const title = $derived(`${tUi('editor.mode.label')}: ${modeLabel}`);
 </script>
 
 <ToolbarButton holdFocus {title} aria-label={title} onclick={onCycle}>

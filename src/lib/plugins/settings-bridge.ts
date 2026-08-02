@@ -156,9 +156,10 @@ export function installPluginSettingsBridge(): void {
           )
         : undefined;
     },
-    value() {
-      // MVP renders select/radio option values as-is; no per-option i18n yet.
-      return undefined;
+    value(settingId, value) {
+      const entry = settingIndex().get(settingId);
+      const key = entry?.setting.optionLabelKeys?.[value];
+      return key ? resolvePluginString(entry.pluginId, key) : undefined;
     }
   });
 }

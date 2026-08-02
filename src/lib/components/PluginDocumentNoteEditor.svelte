@@ -22,6 +22,7 @@
   import PluginPdfPreview from './PluginPdfPreview.svelte';
   import { setNoteBody } from '$lib/stores/tree.svelte';
   import { pluginById, pluginNoteKind } from '$lib/plugins/registry.svelte';
+  import { resolvePluginStringOptional } from '$lib/plugins/plugin-i18n';
   import { readPluginFile } from '$lib/plugins/plugin-files';
   import { getSettingValue } from '$lib/settings/store.svelte';
   import SourceEditor from '$lib/editor/source/SourceEditor.svelte';
@@ -126,6 +127,17 @@
   let proxyFallbackTimer: ReturnType<typeof setTimeout> | null = null;
 
   const contributionRef = $derived(pluginNoteKind(noteKind));
+  const viewModeLabels = $derived.by(() => {
+    const ref = contributionRef;
+    const keys = ref?.contribution.viewModeLabelKeys;
+    const labels: Partial<Record<EditorViewMode, string>> = {};
+    if (!ref || !keys) return labels;
+    for (const mode of ['wysiwyg', 'source', 'split'] as const) {
+      const label = resolvePluginStringOptional(ref.pluginId, keys[mode]);
+      if (label) labels[mode] = label;
+    }
+    return labels;
+  });
   const storedNoteKind = $derived(contributionRef?.noteKind ?? noteKind ?? '');
   const sourceLanguage = $derived(
     contributionRef?.contribution.sourceLanguage ?? 'text'
@@ -1000,6 +1012,7 @@ parentWindow.postMessage({ type: 'mindstream-plugin-preview-ready' }, '*');
         <EditorModeToggle
           value={viewMode}
           previewIcon={contributionRef?.contribution.viewModePreviewIcon}
+          modeLabels={viewModeLabels}
           onCycle={cycleViewMode}
         />
       {/if}
