@@ -4,12 +4,16 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 
 const patterns = [
+  '.config/**/*.{js,ts,mjs,cjs,json,md,html,css}',
   'src/**/*.{js,ts,svelte,json,html,css,md}',
+  'src-tauri/src/**/*.{js,ts,mjs,cjs,json,md,html,css}',
   'src-tauri/scripts/**/*.{js,ts,mjs,cjs,json,md,html,css}',
+  'src-tauri/capabilities/**/*.{json,md}',
   '*.{js,ts,mjs,cjs,json,md,html,css}',
   'docs/**/*.{js,ts,mjs,cjs,json,md,html,css}',
   'e2e-tests/**/*.{js,ts,mjs,cjs,json,md,html,css}',
-  'backend/**/*.{js,ts,mjs,cjs,json,md,html,css}'
+  'backend/**/*.{js,ts,mjs,cjs,json,md,html,css}',
+  'plugins/**/*.{js,ts,mjs,cjs,json,md,html,css}'
 ];
 
 const check = process.argv.includes('--check');

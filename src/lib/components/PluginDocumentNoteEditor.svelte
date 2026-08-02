@@ -120,6 +120,7 @@
   let proxyState = $state<'trying' | 'ok' | 'fallback'>('trying');
   const PREVIEW_BG_FALLBACK = 'oklch(0.1735 0.002 286.18)';
   let previewBg = $state(PREVIEW_BG_FALLBACK);
+  let previewFg = $state('rgb(255,255,255)');
   let previewGutter = $state('12px');
   let previewScrollbar = $state('rgba(255,255,255,0.3)');
   let proxyFallbackTimer: ReturnType<typeof setTimeout> | null = null;
@@ -167,6 +168,7 @@
         ? previewProxyUrl(
             serviceProxyUrl,
             previewBg,
+            previewFg,
             previewGutter,
             previewScrollbar
           )
@@ -287,6 +289,7 @@
   /** Read app theme values to mirror inside the proxied preview iframe. */
   function readPreviewTheme(): {
     bg: string;
+    fg: string;
     gutter: string;
     scrollbar: string;
   } {
@@ -308,12 +311,14 @@
       probe.remove();
       return {
         bg,
+        fg,
         gutter,
         scrollbar: colorWithAlpha(fg, 0.3)
       };
     } catch {
       return {
         bg: PREVIEW_BG_FALLBACK,
+        fg: 'rgb(255,255,255)',
         gutter: '12px',
         scrollbar: 'rgba(255,255,255,0.3)'
       };
@@ -336,6 +341,7 @@
   function refreshPreviewTheme() {
     const theme = readPreviewTheme();
     previewBg = theme.bg;
+    previewFg = theme.fg;
     previewGutter = theme.gutter;
     previewScrollbar = theme.scrollbar;
   }

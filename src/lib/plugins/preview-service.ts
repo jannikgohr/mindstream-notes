@@ -47,11 +47,13 @@ const UPDATE_DEBOUNCE_MS = 200;
 export function previewProxyUrl(
   proxyUrl: string,
   bg: string,
+  fg: string,
   gutter: string,
   scrollbar: string
 ): string {
   const url = new URL(proxyUrl);
   url.searchParams.set('bg', bg);
+  url.searchParams.set('fg', fg);
   url.searchParams.set('gutter', gutter);
   url.searchParams.set('scrollbar', scrollbar);
   return url.toString();

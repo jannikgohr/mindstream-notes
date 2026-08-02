@@ -338,13 +338,14 @@ fn rewrite_ws_handshake(request: &[u8], data_port: u16) -> String {
 
 fn serve_proxied_html(mut client: TcpStream, request: Vec<u8>, data_port: u16) {
     let bg = sanitize_css_color(&query_param_from_request(&request, "bg").unwrap_or_default());
+    let fg = sanitize_css_color(&query_param_from_request(&request, "fg").unwrap_or_default());
     let gutter =
         sanitize_css_length(&query_param_from_request(&request, "gutter").unwrap_or_default());
     let scrollbar =
         sanitize_css_color(&query_param_from_request(&request, "scrollbar").unwrap_or_default());
     match fetch_upstream_html(data_port) {
         Ok(html) => {
-            let body = inject_head(&html, &bg, &gutter, &scrollbar);
+            let body = inject_head(&html, &bg, &fg, &gutter, &scrollbar);
             write_html_response(&mut client, 200, "OK", &body);
         }
         Err(e) => write_simple_response(
@@ -618,7 +619,7 @@ fn sanitize_css_length(value: &str) -> String {
 /// where the proxy can rewrite the handshake Origin before tunneling upstream.
 /// The theme CSS lives in `preview_service.css` so iframe layout/scrollbar tweaks
 /// stay modular, and the beacon lets the client confirm scripts actually run.
-fn inject_head(html: &str, bg: &str, gutter: &str, scrollbar: &str) -> String {
+fn inject_head(html: &str, bg: &str, fg: &str, gutter: &str, scrollbar: &str) -> String {
     let inject = format!(
         "<script>(()=>{{\
          const NativeWebSocket=window.WebSocket;\
@@ -644,7 +645,8 @@ fn inject_head(html: &str, bg: &str, gutter: &str, scrollbar: &str) -> String {
          }})();</script>\
          <style>:root{{--typst-preview-background-color:{bg} !important;\
          --vscode-sideBar-background:{bg} !important;\
-         --ms-preview-background:{bg};--ms-preview-gutter:{gutter};\
+         --ms-preview-background:{bg};--ms-preview-foreground:{fg};\
+         --ms-preview-gutter:{gutter};\
          --ms-preview-scrollbar:{scrollbar};}}</style>\
          <style>{PROXY_STYLE}</style>\
          <script>try{{parent.postMessage({{type:'ms-preview-proxy-ready'}},'*');}}catch(e){{}}</script>"
@@ -685,6 +687,7 @@ pub async fn proxy_preview_html<R: Runtime>(
     let query = request.uri().query().map(str::to_string);
     let session = query_param(query.as_deref(), "session");
     let bg = sanitize_css_color(&query_param(query.as_deref(), "bg").unwrap_or_default());
+    let fg = sanitize_css_color(&query_param(query.as_deref(), "fg").unwrap_or_default());
     let gutter = sanitize_css_length(&query_param(query.as_deref(), "gutter").unwrap_or_default());
     let scrollbar =
         sanitize_css_color(&query_param(query.as_deref(), "scrollbar").unwrap_or_default());
@@ -701,7 +704,7 @@ pub async fn proxy_preview_html<R: Runtime>(
 
     match reqwest::get(format!("http://127.0.0.1:{data_port}/")).await {
         Ok(resp) => match resp.text().await {
-            Ok(html) => html_response(200, inject_head(&html, &bg, &gutter, &scrollbar)),
+            Ok(html) => html_response(200, inject_head(&html, &bg, &fg, &gutter, &scrollbar)),
             Err(e) => html_response(
                 502,
                 format!("<!doctype html><title>preview read error: {e}</title>"),
@@ -784,6 +787,7 @@ mod tests {
         let out = inject_head(
             "<html><head><title>x</title></head><body></body></html>",
             "#222",
+            "rgb(255,255,255)",
             "14px",
             "rgba(255,255,255,0.3)",
         );
@@ -797,12 +801,26 @@ mod tests {
         );
         assert!(out.contains("--ms-preview-gutter:14px"), "gutter injected");
         assert!(
+            out.contains("--ms-preview-foreground:rgb(255,255,255)"),
+            "foreground injected"
+        );
+        assert!(
             out.contains("padding: var(--ms-preview-gutter) !important"),
             "body padding injected"
         );
         assert!(
-            out.contains("scrollbar-color: var(--ms-preview-scrollbar) transparent"),
+            out.contains(
+                "scrollbar-color: oklch(from var(--ms-preview-foreground) l c h / 0.3) transparent"
+            ),
             "scrollbar color injected"
+        );
+        assert!(
+            out.contains("background: oklch(from var(--ms-preview-foreground) l c h / 0.22)"),
+            "webkit thumb matches app scrollbar opacity"
+        );
+        assert!(
+            out.contains("background: oklch(from var(--ms-preview-foreground) l c h / 0.45)"),
+            "webkit thumb hover matches app scrollbar opacity"
         );
         assert!(
             out.contains("overflow: hidden"),
@@ -813,7 +831,13 @@ mod tests {
 
     #[test]
     fn inject_head_falls_back_when_no_head() {
-        let out = inject_head("<body>hi</body>", "#333", "12px", "rgba(255,255,255,0.3)");
+        let out = inject_head(
+            "<body>hi</body>",
+            "#333",
+            "rgb(255,255,255)",
+            "12px",
+            "rgba(255,255,255,0.3)",
+        );
         assert!(out.starts_with("<script>"));
         assert!(out.contains("hi"));
     }
@@ -823,6 +847,7 @@ mod tests {
         let out = inject_head(
             "<html><head><script>window.upstreamStarted=true;</script></head></html>",
             "#444",
+            "rgb(255,255,255)",
             "12px",
             "rgba(255,255,255,0.3)",
         );
