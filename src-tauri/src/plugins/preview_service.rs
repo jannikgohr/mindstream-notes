@@ -15,11 +15,15 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::io::Write;
-use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
+use std::io::{Read, Write};
+use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command};
-use std::sync::Mutex;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -47,6 +51,7 @@ const PROXY_CSP: &str = "default-src 'none'; \
      style-src 'unsafe-inline'; img-src data: blob:; font-src data: blob:; \
      connect-src ws://127.0.0.1:* http://127.0.0.1:* data: blob:; \
      worker-src blob:; base-uri 'none'";
+const PROXY_STYLE: &str = include_str!("preview_service.css");
 
 /// A plugin-declared preview service, parsed from `contributes.nativeServices`.
 #[derive(Debug, Clone, Deserialize)]
@@ -74,14 +79,41 @@ struct Session {
     /// The server's data-plane HTTP port — where the reverse-proxy fetches the
     /// frontend HTML from.
     data_port: u16,
+    /// The server's control-plane WebSocket port — where the proxied frontend
+    /// sends preview/client messages.
+    control_port: u16,
+    proxy: Option<LoopbackPreviewProxy>,
 }
 
 impl Session {
     fn kill(&mut self) {
+        if let Some(proxy) = self.proxy.take() {
+            proxy.shutdown();
+        }
         let _ = self.child.kill();
         let _ = self.child.wait();
         // Best-effort cleanup of the materialized source file.
         let _ = std::fs::remove_file(&self.input_path);
+    }
+}
+
+struct LoopbackPreviewProxy {
+    port: u16,
+    stop: Arc<AtomicBool>,
+    join: Option<JoinHandle<()>>,
+}
+
+impl LoopbackPreviewProxy {
+    fn url(&self) -> String {
+        format!("http://127.0.0.1:{}", self.port)
+    }
+
+    fn shutdown(mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        let _ = TcpStream::connect((Ipv4Addr::LOCALHOST, self.port));
+        if let Some(join) = self.join.take() {
+            let _ = join.join();
+        }
     }
 }
 
@@ -101,15 +133,13 @@ impl PreviewServiceRegistry {
         }
     }
 
-    /// The data-plane port of a running session, if any. Used by the reverse
-    /// proxy to validate a request targets a real session (not an arbitrary
-    /// loopback port).
-    fn data_port(&self, session_key: &str) -> Option<u16> {
-        self.sessions
-            .lock()
-            .ok()?
-            .get(session_key)
-            .map(|s| s.data_port)
+    /// The data/control ports of a running session, if any. Used by the reverse
+    /// proxy to validate a request targets a real session (not arbitrary
+    /// loopback ports).
+    fn ports(&self, session_key: &str) -> Option<(u16, u16)> {
+        let sessions = self.sessions.lock().ok()?;
+        let session = sessions.get(session_key)?;
+        Some((session.data_port, session.control_port))
     }
 }
 
@@ -120,6 +150,7 @@ pub struct PreviewServiceHandle {
     pub session_key: String,
     pub data_url: String,
     pub control_url: String,
+    pub proxy_url: String,
 }
 
 /// Availability of a declared service's binary (does it resolve on PATH?).
@@ -180,6 +211,184 @@ fn wait_until_ready(port: u16) -> AppResult<()> {
     Err(AppError::InvalidArg(
         "preview service did not start listening in time".into(),
     ))
+}
+
+fn start_loopback_proxy(data_port: u16) -> AppResult<LoopbackPreviewProxy> {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+    let port = listener.local_addr()?.port();
+    let stop = Arc::new(AtomicBool::new(false));
+    let thread_stop = Arc::clone(&stop);
+    let join = thread::spawn(move || {
+        for incoming in listener.incoming() {
+            if thread_stop.load(Ordering::Relaxed) {
+                break;
+            }
+            let Ok(stream) = incoming else {
+                continue;
+            };
+            let conn_stop = Arc::clone(&thread_stop);
+            thread::spawn(move || {
+                if !conn_stop.load(Ordering::Relaxed) {
+                    handle_proxy_connection(stream, data_port);
+                }
+            });
+        }
+    });
+    Ok(LoopbackPreviewProxy {
+        port,
+        stop,
+        join: Some(join),
+    })
+}
+
+fn handle_proxy_connection(mut client: TcpStream, data_port: u16) {
+    let Ok(request) = read_http_head(&mut client) else {
+        return;
+    };
+    if request.is_empty() {
+        return;
+    }
+    if is_websocket_upgrade(&request) {
+        tunnel_websocket(client, request, data_port);
+    } else {
+        serve_proxied_html(client, request, data_port);
+    }
+}
+
+fn read_http_head(stream: &mut TcpStream) -> std::io::Result<Vec<u8>> {
+    let mut buf = Vec::with_capacity(4096);
+    let mut chunk = [0_u8; 1024];
+    while buf.len() < 64 * 1024 {
+        let n = stream.read(&mut chunk)?;
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&chunk[..n]);
+        if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+            break;
+        }
+    }
+    Ok(buf)
+}
+
+fn is_websocket_upgrade(request: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(request);
+    text.lines().any(|line| {
+        let lower = line.to_ascii_lowercase();
+        lower.starts_with("upgrade:") && lower.contains("websocket")
+    })
+}
+
+fn tunnel_websocket(mut client: TcpStream, request: Vec<u8>, data_port: u16) {
+    let Ok(mut upstream) = TcpStream::connect((Ipv4Addr::LOCALHOST, data_port)) else {
+        write_simple_response(
+            &mut client,
+            502,
+            "Bad Gateway",
+            "preview websocket unavailable",
+        );
+        return;
+    };
+    let rewritten = rewrite_ws_handshake(&request, data_port);
+    if upstream.write_all(rewritten.as_bytes()).is_err() {
+        return;
+    }
+
+    let Ok(mut upstream_to_client) = upstream.try_clone() else {
+        return;
+    };
+    let Ok(mut client_to_upstream) = client.try_clone() else {
+        return;
+    };
+    let a = thread::spawn(move || {
+        let _ = std::io::copy(&mut client_to_upstream, &mut upstream);
+        let _ = upstream.shutdown(Shutdown::Write);
+    });
+    let b = thread::spawn(move || {
+        let _ = std::io::copy(&mut upstream_to_client, &mut client);
+        let _ = client.shutdown(Shutdown::Write);
+    });
+    let _ = a.join();
+    let _ = b.join();
+}
+
+fn rewrite_ws_handshake(request: &[u8], data_port: u16) -> String {
+    let text = String::from_utf8_lossy(request);
+    let upstream_origin = format!("http://127.0.0.1:{data_port}");
+    let upstream_host = format!("127.0.0.1:{data_port}");
+    let mut out = String::new();
+    for line in text.split("\r\n") {
+        let lower = line.to_ascii_lowercase();
+        if lower.starts_with("host:") {
+            out.push_str("Host: ");
+            out.push_str(&upstream_host);
+        } else if lower.starts_with("origin:") {
+            out.push_str("Origin: ");
+            out.push_str(&upstream_origin);
+        } else {
+            out.push_str(line);
+        }
+        out.push_str("\r\n");
+        if line.is_empty() {
+            break;
+        }
+    }
+    out
+}
+
+fn serve_proxied_html(mut client: TcpStream, request: Vec<u8>, data_port: u16) {
+    let bg = sanitize_css_color(&query_param_from_request(&request, "bg").unwrap_or_default());
+    let gutter =
+        sanitize_css_length(&query_param_from_request(&request, "gutter").unwrap_or_default());
+    let scrollbar =
+        sanitize_css_color(&query_param_from_request(&request, "scrollbar").unwrap_or_default());
+    match fetch_upstream_html(data_port) {
+        Ok(html) => {
+            let body = inject_head(&html, &bg, &gutter, &scrollbar);
+            write_html_response(&mut client, 200, "OK", &body);
+        }
+        Err(e) => write_simple_response(
+            &mut client,
+            502,
+            "Bad Gateway",
+            &format!("preview upstream error: {e}"),
+        ),
+    }
+}
+
+fn fetch_upstream_html(data_port: u16) -> std::io::Result<String> {
+    let mut upstream = TcpStream::connect((Ipv4Addr::LOCALHOST, data_port))?;
+    let request =
+        format!("GET / HTTP/1.1\r\nHost: 127.0.0.1:{data_port}\r\nConnection: close\r\n\r\n");
+    upstream.write_all(request.as_bytes())?;
+    let mut bytes = Vec::new();
+    upstream.read_to_end(&mut bytes)?;
+    let split = bytes
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .map(|i| i + 4)
+        .unwrap_or(0);
+    Ok(String::from_utf8_lossy(&bytes[split..]).into_owned())
+}
+
+fn query_param_from_request(request: &[u8], key: &str) -> Option<String> {
+    let first_line = String::from_utf8_lossy(request).lines().next()?.to_string();
+    let path = first_line.split_whitespace().nth(1)?;
+    let query = path.split_once('?')?.1;
+    query_param(Some(query), key)
+}
+
+fn write_html_response(stream: &mut TcpStream, status: u16, reason: &str, body: &str) {
+    let response = format!(
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Security-Policy: {PROXY_CSP}\r\nCache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    let _ = stream.write_all(response.as_bytes());
+}
+
+fn write_simple_response(stream: &mut TcpStream, status: u16, reason: &str, message: &str) {
+    let body = format!("<!doctype html><title>{message}</title>");
+    write_html_response(stream, status, reason, &body);
 }
 
 /// Sanitize a session id into a safe filename stem (kept short + alnum).
@@ -278,21 +487,25 @@ pub async fn plugins_preview_start(
             .spawn()?;
         let data_url = substitute(&service.data_url, data_port, control_port, &input_str);
         let control_url = substitute(&service.control_url, data_port, control_port, &input_str);
+        let proxy = start_loopback_proxy(data_port)?;
+        let proxy_url = proxy.url();
         let mut session = Session {
             child,
             input_path,
             data_port,
+            control_port,
+            proxy: Some(proxy),
         };
         if let Err(e) = wait_until_ready(data_port) {
             session.kill();
             return Err(e);
         }
-        Ok((session, data_url, control_url))
+        Ok((session, data_url, control_url, proxy_url))
     })
     .await
     .map_err(|e| AppError::InvalidArg(format!("preview service task failed: {e}")))??;
 
-    let (session, data_url, control_url) = handle;
+    let (session, data_url, control_url, proxy_url) = handle;
     registry
         .sessions
         .lock()
@@ -303,6 +516,7 @@ pub async fn plugins_preview_start(
         session_key,
         data_url,
         control_url,
+        proxy_url,
     })
 }
 
@@ -357,10 +571,11 @@ fn query_param(query: Option<&str>, key: &str) -> Option<String> {
     for pair in query?.split('&') {
         if let Some((k, v)) = pair.split_once('=') {
             if k == key {
+                let form_value = v.replace('+', " ");
                 return Some(
-                    urlencoding::decode(v)
+                    urlencoding::decode(&form_value)
                         .map(|c| c.into_owned())
-                        .unwrap_or_else(|_| v.to_string()),
+                        .unwrap_or(form_value),
                 );
             }
         }
@@ -370,7 +585,7 @@ fn query_param(query: Option<&str>, key: &str) -> Option<String> {
 
 /// Restrict a caller-supplied color to a tiny CSS-safe charset — it's injected
 /// into a `<style>`, so it must not be able to carry `<`, `;`, `{`, `}`, quotes,
-/// etc. and break out. Invalid input falls back to tinymist's own default.
+/// etc. and break out. Invalid input falls back to the app's dark background.
 fn sanitize_css_color(bg: &str) -> String {
     let ok = !bg.is_empty()
         && bg.len() <= 63
@@ -380,22 +595,65 @@ fn sanitize_css_color(bg: &str) -> String {
     if ok {
         bg.to_string()
     } else {
-        "rgb(82,86,89)".to_string()
+        "oklch(0.1735 0.002 286.18)".to_string()
     }
 }
 
-/// Insert our theme `<style>` + a readiness beacon into the document head. The
-/// `!important` custom-property override wins over the frontend's own inline
-/// `setProperty`, and the beacon lets the client confirm scripts actually run
-/// under our CSP (and fall back to the direct iframe if they don't).
-fn inject_head(html: &str, bg: &str) -> String {
+fn sanitize_css_length(value: &str) -> String {
+    let ok = !value.is_empty()
+        && value.len() <= 32
+        && value
+            .chars()
+            .all(|c| c.is_ascii_digit() || matches!(c, '.' | '%' | 'p' | 'x' | 'r' | 'e' | 'm'));
+    if ok {
+        value.to_string()
+    } else {
+        "12px".to_string()
+    }
+}
+
+/// Insert our WebSocket shim, theme variables/styles, and readiness beacon into the
+/// document head. The shim must run before the upstream scripts: any hardcoded
+/// tinymist default data-plane URL is redirected to this loopback proxy origin,
+/// where the proxy can rewrite the handshake Origin before tunneling upstream.
+/// The theme CSS lives in `preview_service.css` so iframe layout/scrollbar tweaks
+/// stay modular, and the beacon lets the client confirm scripts actually run.
+fn inject_head(html: &str, bg: &str, gutter: &str, scrollbar: &str) -> String {
     let inject = format!(
-        "<style>:root{{--typst-preview-background-color:{bg} !important;\
-         --vscode-sideBar-background:{bg} !important;}}</style>\
+        "<script>(()=>{{\
+         const NativeWebSocket=window.WebSocket;\
+         if(!NativeWebSocket||NativeWebSocket.__msPreviewPatched)return;\
+         function rewrite(url){{\
+           try{{\
+             const next=new URL(String(url),window.location.href);\
+             const defaultTinymistDataPlane=/^wss?:$/.test(next.protocol)&&(next.hostname==='127.0.0.1'||next.hostname==='localhost')&&next.port==='23625';\
+             if(!defaultTinymistDataPlane)return url;\
+             next.protocol='ws:';\
+             next.hostname=window.location.hostname;\
+             next.port=window.location.port;\
+             return next.href;\
+           }}catch(_){{return url;}}\
+         }}\
+         function PatchedWebSocket(url,protocols){{\
+           return arguments.length>1?new NativeWebSocket(rewrite(url),protocols):new NativeWebSocket(rewrite(url));\
+         }}\
+         PatchedWebSocket.prototype=NativeWebSocket.prototype;\
+         Object.setPrototypeOf(PatchedWebSocket,NativeWebSocket);\
+         Object.defineProperty(PatchedWebSocket,'__msPreviewPatched',{{value:true}});\
+         window.WebSocket=PatchedWebSocket;\
+         }})();</script>\
+         <style>:root{{--typst-preview-background-color:{bg} !important;\
+         --vscode-sideBar-background:{bg} !important;\
+         --ms-preview-background:{bg};--ms-preview-gutter:{gutter};\
+         --ms-preview-scrollbar:{scrollbar};}}</style>\
+         <style>{PROXY_STYLE}</style>\
          <script>try{{parent.postMessage({{type:'ms-preview-proxy-ready'}},'*');}}catch(e){{}}</script>"
     );
-    match html.find("</head>") {
-        Some(idx) => format!("{}{}{}", &html[..idx], inject, &html[idx..]),
+    match html.find("<head>") {
+        Some(idx) => {
+            let insert_at = idx + "<head>".len();
+            format!("{}{}{}", &html[..insert_at], inject, &html[insert_at..])
+        }
         None => format!("{inject}{html}"),
     }
 }
@@ -414,12 +672,12 @@ fn html_response(status: u16, body: String) -> tauri::http::Response<Cow<'static
 }
 
 /// Serve the tinymist preview frontend from *our* origin with an app-theme
-/// background injected. The frontend is a single self-contained file and its
-/// data socket is an absolute `ws://127.0.0.1:*` URL, so serving it from here
-/// (rather than framing `127.0.0.1` directly) only changes the document origin
-/// — which is what lets us both set a permissive CSP and inject the theme. The
-/// requested `session` is validated against the running registry so this can't
-/// be pointed at an arbitrary loopback port.
+/// background injected. The frontend is a single self-contained file, but it
+/// derives its control-plane socket from `location.host`; the injected shim keeps
+/// that socket pointed at the validated loopback server while the document
+/// itself comes from our themed proxy origin. The requested `session` is
+/// validated against the running registry so this can't be pointed at an
+/// arbitrary loopback port.
 pub async fn proxy_preview_html<R: Runtime>(
     app: AppHandle<R>,
     request: tauri::http::Request<Vec<u8>>,
@@ -427,20 +685,23 @@ pub async fn proxy_preview_html<R: Runtime>(
     let query = request.uri().query().map(str::to_string);
     let session = query_param(query.as_deref(), "session");
     let bg = sanitize_css_color(&query_param(query.as_deref(), "bg").unwrap_or_default());
+    let gutter = sanitize_css_length(&query_param(query.as_deref(), "gutter").unwrap_or_default());
+    let scrollbar =
+        sanitize_css_color(&query_param(query.as_deref(), "scrollbar").unwrap_or_default());
 
-    let port = session
+    let ports = session
         .as_deref()
-        .and_then(|s| app.state::<PreviewServiceRegistry>().data_port(s));
-    let Some(port) = port else {
+        .and_then(|s| app.state::<PreviewServiceRegistry>().ports(s));
+    let Some((data_port, _control_port)) = ports else {
         return html_response(
             404,
             "<!doctype html><title>unknown preview session</title>".into(),
         );
     };
 
-    match reqwest::get(format!("http://127.0.0.1:{port}/")).await {
+    match reqwest::get(format!("http://127.0.0.1:{data_port}/")).await {
         Ok(resp) => match resp.text().await {
-            Ok(html) => html_response(200, inject_head(&html, &bg)),
+            Ok(html) => html_response(200, inject_head(&html, &bg, &gutter, &scrollbar)),
             Err(e) => html_response(
                 502,
                 format!("<!doctype html><title>preview read error: {e}</title>"),
@@ -490,12 +751,32 @@ mod tests {
     fn sanitize_css_color_allows_safe_colors_rejects_injection() {
         assert_eq!(sanitize_css_color("#1e1e1e"), "#1e1e1e");
         assert_eq!(sanitize_css_color("rgb(30, 30, 30)"), "rgb(30, 30, 30)");
+        assert_eq!(
+            sanitize_css_color("rgba(255, 255, 255, 0.3)"),
+            "rgba(255, 255, 255, 0.3)"
+        );
         // Tailwind v4 themes resolve to oklch(); it must pass through.
         assert_eq!(sanitize_css_color("oklch(0.269 0 0)"), "oklch(0.269 0 0)");
         // Anything that could break out of the <style> falls back.
-        assert_eq!(sanitize_css_color("</style><script>"), "rgb(82,86,89)");
-        assert_eq!(sanitize_css_color("red;} body{"), "rgb(82,86,89)");
-        assert_eq!(sanitize_css_color(""), "rgb(82,86,89)");
+        assert_eq!(
+            sanitize_css_color("</style><script>"),
+            "oklch(0.1735 0.002 286.18)"
+        );
+        assert_eq!(
+            sanitize_css_color("red;} body{"),
+            "oklch(0.1735 0.002 286.18)"
+        );
+        assert_eq!(sanitize_css_color(""), "oklch(0.1735 0.002 286.18)");
+    }
+
+    #[test]
+    fn sanitize_css_length_allows_simple_lengths_rejects_injection() {
+        assert_eq!(sanitize_css_length("12px"), "12px");
+        assert_eq!(sanitize_css_length("0.75rem"), "0.75rem");
+        assert_eq!(sanitize_css_length("5%"), "5%");
+        assert_eq!(sanitize_css_length("calc(1px)"), "12px");
+        assert_eq!(sanitize_css_length("12px;body{}"), "12px");
+        assert_eq!(sanitize_css_length(""), "12px");
     }
 
     #[test]
@@ -503,25 +784,64 @@ mod tests {
         let out = inject_head(
             "<html><head><title>x</title></head><body></body></html>",
             "#222",
+            "14px",
+            "rgba(255,255,255,0.3)",
         );
         let style_at = out.find("--typst-preview-background-color:#222").unwrap();
-        let head_close = out.find("</head>").unwrap();
-        assert!(style_at < head_close, "style injected inside head");
+        let head_open = out.find("<head>").unwrap();
+        let title_at = out.find("<title>x</title>").unwrap();
+        assert!(head_open < style_at, "style injected inside head");
+        assert!(
+            style_at < title_at,
+            "proxy scripts run before upstream head"
+        );
+        assert!(out.contains("--ms-preview-gutter:14px"), "gutter injected");
+        assert!(
+            out.contains("padding: var(--ms-preview-gutter) !important"),
+            "body padding injected"
+        );
+        assert!(
+            out.contains("scrollbar-color: var(--ms-preview-scrollbar) transparent"),
+            "scrollbar color injected"
+        );
+        assert!(
+            out.contains("overflow: hidden"),
+            "outer iframe document scroller is hidden"
+        );
         assert!(out.contains("ms-preview-proxy-ready"), "beacon injected");
     }
 
     #[test]
     fn inject_head_falls_back_when_no_head() {
-        let out = inject_head("<body>hi</body>", "#333");
-        assert!(out.starts_with("<style>"));
+        let out = inject_head("<body>hi</body>", "#333", "12px", "rgba(255,255,255,0.3)");
+        assert!(out.starts_with("<script>"));
         assert!(out.contains("hi"));
     }
 
     #[test]
+    fn inject_head_redirects_default_tinymist_websockets_to_proxy_origin() {
+        let out = inject_head(
+            "<html><head><script>window.upstreamStarted=true;</script></head></html>",
+            "#444",
+            "12px",
+            "rgba(255,255,255,0.3)",
+        );
+        let shim_at = out.find("defaultTinymistDataPlane").unwrap();
+        let upstream_at = out.find("window.upstreamStarted=true").unwrap();
+        assert!(shim_at < upstream_at, "shim runs before upstream scripts");
+        assert!(out.contains("next.hostname=window.location.hostname"));
+        assert!(out.contains("new NativeWebSocket(rewrite(url),protocols)"));
+    }
+
+    #[test]
     fn query_param_decodes() {
-        let q = Some("session=a%3Ab&bg=rgb(1%2C2%2C3)");
+        let q = Some("session=a%3Ab&bg=rgb(1%2C2%2C3)&theme=oklch%280.1735+0.002+286.18%29");
         assert_eq!(query_param(q, "session").as_deref(), Some("a:b"));
         assert_eq!(query_param(q, "bg").as_deref(), Some("rgb(1,2,3)"));
+        assert_eq!(
+            query_param(q, "theme").as_deref(),
+            Some("oklch(0.1735 0.002 286.18)")
+        );
         assert_eq!(query_param(q, "missing"), None);
     }
 

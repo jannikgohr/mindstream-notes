@@ -1,0 +1,48 @@
+html {
+  background: var(--ms-preview-background) !important;
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  background: var(--ms-preview-background) !important;
+  box-sizing: border-box;
+  height: 100%;
+  margin: 0 !important;
+  overflow: hidden;
+  padding: var(--ms-preview-gutter) !important;
+  scrollbar-width: thin;
+  scrollbar-color: var(--ms-preview-scrollbar) transparent;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body * {
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: var(--ms-preview-scrollbar) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--ms-preview-scrollbar);
+  background-clip: padding-box;
+  border: 3px solid transparent;
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
