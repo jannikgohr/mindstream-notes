@@ -111,13 +111,17 @@
   // instead of the `export` (PDF) renderer.
   let serviceState = $state<ToolState>('unknown');
   let serviceDataUrl = $state<string | null>(null);
+  let serviceProxyUrl = $state<string | null>(null);
   let serviceController: PreviewServiceController | null = null;
   let serviceCheckToken = 0;
   // The iframe is served through our theme-injecting reverse proxy by default;
   // if its readiness beacon doesn't arrive (e.g. a webview rejects our CSP), we
   // fall back to loading the server directly so the preview still works.
   let proxyState = $state<'trying' | 'ok' | 'fallback'>('trying');
-  let previewBg = $state('rgb(82,86,89)');
+  const PREVIEW_BG_FALLBACK = 'oklch(0.1735 0.002 286.18)';
+  let previewBg = $state(PREVIEW_BG_FALLBACK);
+  let previewGutter = $state('12px');
+  let previewScrollbar = $state('rgba(255,255,255,0.3)');
   let proxyFallbackTimer: ReturnType<typeof setTimeout> | null = null;
 
   const contributionRef = $derived(pluginNoteKind(noteKind));
@@ -159,7 +163,14 @@
     if (!serviceDataUrl) return null;
     return proxyState === 'fallback'
       ? serviceDataUrl
-      : previewProxyUrl(sessionKey, previewBg);
+      : serviceProxyUrl
+        ? previewProxyUrl(
+            serviceProxyUrl,
+            previewBg,
+            previewGutter,
+            previewScrollbar
+          )
+        : null;
   });
   // Preview is blocked (source-only) only when neither the live service nor the
   // declared PDF tool is available.
@@ -252,9 +263,10 @@
       sessionKey: `${ref.pluginId}:${noteId}`,
       jumpEvent: previewServiceJumpEvent(ref.pluginId, serviceId),
       onJump: (jump) => jumpToSource(jump.line, jump.column),
-      onReady: (url) => {
+      onReady: (url, proxyUrl) => {
         if (destroyed) return;
         serviceDataUrl = url;
+        serviceProxyUrl = proxyUrl;
         startProxyAttempt();
       },
       onError: (message) => {
@@ -267,37 +279,97 @@
       controller.dispose();
       if (serviceController === controller) serviceController = null;
       serviceDataUrl = null;
+      serviceProxyUrl = null;
       if (proxyFallbackTimer) clearTimeout(proxyFallbackTimer);
     };
   });
 
-  /** Read the app-theme color for the space behind preview pages. */
-  function readPreviewBackground(): string {
+  /** Read app theme values to mirror inside the proxied preview iframe. */
+  function readPreviewTheme(): {
+    bg: string;
+    gutter: string;
+    scrollbar: string;
+  } {
     try {
       const probe = document.createElement('div');
-      probe.className = 'bg-muted';
+      probe.className = 'p-3 text-foreground';
       probe.style.cssText =
         'position:absolute;left:-9999px;top:-9999px;width:1px;height:1px';
       document.body.appendChild(probe);
-      const color = getComputedStyle(probe).backgroundColor;
+      const style = getComputedStyle(probe);
+      const rootStyle = getComputedStyle(document.documentElement);
+      const bodyStyle = getComputedStyle(document.body);
+      const bg =
+        rootStyle.getPropertyValue('--background').trim() ||
+        bodyStyle.getPropertyValue('--background').trim() ||
+        PREVIEW_BG_FALLBACK;
+      const gutter = style.paddingTop || '12px';
+      const fg = style.color || 'rgb(255,255,255)';
       probe.remove();
-      return color || 'rgb(82,86,89)';
+      return {
+        bg,
+        gutter,
+        scrollbar: colorWithAlpha(fg, 0.3)
+      };
     } catch {
-      return 'rgb(82,86,89)';
+      return {
+        bg: PREVIEW_BG_FALLBACK,
+        gutter: '12px',
+        scrollbar: 'rgba(255,255,255,0.3)'
+      };
     }
+  }
+
+  function colorWithAlpha(color: string, alpha: number): string {
+    if (color.startsWith('rgb(')) {
+      return color.replace(/^rgb\((.*)\)$/i, `rgba($1,${alpha})`);
+    }
+    if (color.startsWith('rgba(')) {
+      return color.replace(/^rgba\((.*),\s*[\d.]+\)$/i, `rgba($1,${alpha})`);
+    }
+    return color;
   }
 
   // Optimistically load through the theme-injecting proxy; if its readiness
   // beacon (an injected inline script) hasn't fired shortly, a webview has
   // rejected our CSP — fall back to loading the server directly.
+  function refreshPreviewTheme() {
+    const theme = readPreviewTheme();
+    previewBg = theme.bg;
+    previewGutter = theme.gutter;
+    previewScrollbar = theme.scrollbar;
+  }
+
   function startProxyAttempt() {
     proxyState = 'trying';
-    previewBg = readPreviewBackground();
+    refreshPreviewTheme();
     if (proxyFallbackTimer) clearTimeout(proxyFallbackTimer);
     proxyFallbackTimer = setTimeout(() => {
       if (!destroyed && proxyState === 'trying') proxyState = 'fallback';
     }, 4000);
   }
+
+  $effect(() => {
+    if (!serviceProxyUrl || proxyState === 'fallback') return;
+    refreshPreviewTheme();
+
+    const refresh = () => refreshPreviewTheme();
+    const observer = new MutationObserver(refresh);
+    const options: MutationObserverInit = {
+      attributes: true,
+      attributeFilter: ['class', 'style', 'data-theme']
+    };
+    observer.observe(document.documentElement, options);
+    if (document.body) observer.observe(document.body, options);
+
+    const media = window.matchMedia?.('(prefers-color-scheme: dark)');
+    media?.addEventListener('change', refresh);
+
+    return () => {
+      observer.disconnect();
+      media?.removeEventListener('change', refresh);
+    };
+  });
 
   $effect(() => {
     function onProxyMessage(event: MessageEvent) {
@@ -979,9 +1051,9 @@ parentWindow.postMessage({ type: 'mindstream-plugin-preview-ready' }, '*');
                    click-to-source frontend. We load it through our reverse
                    proxy so an app-theme background is injected behind the
                    pages; on `fallback` it's the server's origin directly. -->
-              <div class="min-h-0 flex-1 bg-muted/40 p-3">
+              <div class="min-h-0 flex-1 bg-muted/40">
                 <div
-                  class="h-full w-full overflow-hidden rounded-md border border-border bg-white shadow-sm"
+                  class="h-full w-full overflow-hidden border border-border bg-white shadow-sm"
                 >
                   <iframe
                     class="h-full w-full"

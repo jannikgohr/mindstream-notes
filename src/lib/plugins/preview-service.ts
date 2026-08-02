@@ -33,27 +33,28 @@ export interface PreviewServiceOptions {
   jumpEvent: string;
   onJump: (jump: PreviewJump) => void;
   /** Called with the iframe URL once the server is listening. */
-  onReady: (dataUrl: string) => void;
+  onReady: (dataUrl: string, proxyUrl: string) => void;
   onError: (message: string) => void;
 }
 
 const UPDATE_DEBOUNCE_MS = 200;
 
-/** The custom scheme our backend reverse-proxy is served under (see lib.rs). */
-const PREVIEW_SCHEME = 'msn-preview';
-
 /**
- * URL of the theme-injecting reverse proxy for a session. Tauri rewrites custom
- * schemes per platform (Windows/Android → `http://<scheme>.localhost/…`, else
- * `<scheme>://localhost/…`), mirroring `assets/bridge.ts`. `bg` is the app-theme
- * background color to inject behind the pages.
+ * URL of the per-session loopback reverse proxy. `bg` is the app-theme
+ * background color to inject behind the pages; `gutter` is the page-to-scrollbar
+ * spacing inside the iframe document.
  */
-export function previewProxyUrl(sessionKey: string, bg: string): string {
-  const query = `?session=${encodeURIComponent(sessionKey)}&bg=${encodeURIComponent(bg)}`;
-  const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
-  return /windows|android/i.test(ua)
-    ? `http://${PREVIEW_SCHEME}.localhost/${query}`
-    : `${PREVIEW_SCHEME}://localhost/${query}`;
+export function previewProxyUrl(
+  proxyUrl: string,
+  bg: string,
+  gutter: string,
+  scrollbar: string
+): string {
+  const url = new URL(proxyUrl);
+  url.searchParams.set('bg', bg);
+  url.searchParams.set('gutter', gutter);
+  url.searchParams.set('scrollbar', scrollbar);
+  return url.toString();
 }
 
 /** Message the proxied frontend posts to the parent once its scripts run. */
@@ -83,7 +84,7 @@ export class PreviewServiceController {
       }
       this.started = true;
       this.connectControl(handle.controlUrl);
-      this.opts.onReady(handle.dataUrl);
+      this.opts.onReady(handle.dataUrl, handle.proxyUrl);
     } catch (err) {
       if (!this.disposed) this.opts.onError(toMessage(err));
     }
