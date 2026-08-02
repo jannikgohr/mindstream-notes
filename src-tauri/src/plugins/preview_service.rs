@@ -1000,6 +1000,10 @@ mod tests {
             out.contains("overflow: hidden"),
             "outer iframe document scroller is hidden"
         );
+        assert!(
+            !out.contains("scrollbar-gutter: stable"),
+            "preview scrollbars should not reserve space before overflow exists"
+        );
         assert!(out.contains("ms-preview-proxy-ready"), "beacon injected");
     }
 
