@@ -542,6 +542,7 @@ describe('validateManifest', () => {
         labelKey: 'notes.document.label',
         sourceLanguage: 'typst',
         viewModePreviewIcon: 'bookText',
+        viewModeLabelKeys: { wysiwyg: 'notes.document.label' },
         render: { export: 'renderDocument', previewMime: 'text/html' }
       }
     ];
@@ -764,6 +765,57 @@ describe('validateManifest', () => {
       }
     ];
     expect(() => validateManifest(m)).toThrow(/viewModePreviewIcon/);
+  });
+
+  it('rejects unknown plugin note kind view mode label keys', () => {
+    const m = validManifest({
+      runtime: 'luau',
+      entry: 'main.luau',
+      permissions: [
+        'templates.contribute',
+        'noteKinds.contribute',
+        'notes.create'
+      ]
+    });
+    const contributes = m.contributes as Record<string, unknown>;
+    contributes.noteKinds = [
+      {
+        id: 'document',
+        labelKey: 'notes.document.label',
+        viewModeLabelKeys: { preview: 'notes.document.label' },
+        render: { export: 'renderDocument', previewMime: 'text/html' }
+      }
+    ];
+    expect(() => validateManifest(m)).toThrow(/viewModeLabelKeys.preview/);
+  });
+
+  it('rejects plugin setting option labels for undeclared options', () => {
+    const m = validManifest({
+      permissions: ['templates.contribute', 'notes.create']
+    });
+    const contributes = m.contributes as Record<string, unknown>;
+    contributes.settings = [
+      {
+        sectionId: 'editor',
+        titleKey: 'settings.editor.title',
+        settings: [
+          {
+            id: 'mode',
+            labelKey: 'settings.defaultMode.label',
+            scope: 'D',
+            type: 'select',
+            default: 'source',
+            options: ['source'],
+            optionLabelKeys: {
+              wysiwyg: 'settings.defaultMode.preview'
+            }
+          }
+        ]
+      }
+    ];
+    expect(() => validateManifest(m)).toThrow(
+      /must match one of the setting options/
+    );
   });
 
   it('accepts note-editor toolbar source actions for plugin-owned note kinds', () => {

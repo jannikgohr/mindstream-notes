@@ -27,7 +27,10 @@
         "native.typst.description": "Use the user-installed typst binary from PATH.",
         "native.tinymist.description": "Use the user-installed tinymist binary for live preview with click-to-source.",
         "settings.editor.title": "Editor",
-        "settings.defaultViewMode.label": "Default view mode"
+        "settings.defaultViewMode.label": "Default view mode",
+        "viewMode.livePreview": "Live Preview",
+        "viewMode.source": "Source",
+        "viewMode.split": "Split"
       },
       "de": {
         "plugin.description": "Prototyp fuer Typst-Dokumente als Plugin-Notizen.",
@@ -37,7 +40,10 @@
         "native.typst.description": "Verwendet das vom Benutzer installierte typst-Binary aus PATH.",
         "native.tinymist.description": "Verwendet das installierte tinymist-Binary fuer Live-Vorschau mit Klick-zur-Quelle.",
         "settings.editor.title": "Editor",
-        "settings.defaultViewMode.label": "Standardansicht"
+        "settings.defaultViewMode.label": "Standardansicht",
+        "viewMode.livePreview": "Live-Vorschau",
+        "viewMode.source": "Quelltext",
+        "viewMode.split": "Geteilt"
       }
     },
     "settings": [
@@ -51,7 +57,12 @@
             "scope": "D",
             "type": "select",
             "default": "split",
-            "options": ["split", "source", "wysiwyg"]
+            "options": ["split", "source", "wysiwyg"],
+            "optionLabelKeys": {
+              "split": "viewMode.split",
+              "source": "viewMode.source",
+              "wysiwyg": "viewMode.livePreview"
+            }
           }
         ]
       }
@@ -96,6 +107,11 @@
         "descriptionKey": "notes.document.description",
         "sourceLanguage": "typst",
         "viewModePreviewIcon": "bookText",
+        "viewModeLabelKeys": {
+          "wysiwyg": "viewMode.livePreview",
+          "source": "viewMode.source",
+          "split": "viewMode.split"
+        },
         "defaultTitle": "Untitled Typst document",
         "defaultBody": "#set document(title: [Untitled])\n\n= Untitled\n\nStart writing in Typst here.",
         "render": {
