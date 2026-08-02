@@ -95,8 +95,14 @@ wasmi = { version = "1.1.0", default-features = false, features = ["std", "extra
 [dev-dependencies]
 wat = "1"
 
+# NOTE: panic = "unwind" (the default) is deliberate, not an omission. The app
+# runs untrusted plugin code and applies CRDT edits inside the WebView IPC FFI
+# callback; we rely on `catch_unwind` (yrs edits) and `spawn_blocking` panic
+# isolation (plugin runtimes) so a fault degrades to an error / auto-disabled
+# plugin instead of taking down the process. `panic = "abort"` would make those
+# guards no-ops and turn any panic into a hard crash. The size cost of unwinding
+# tables is accepted for that safety.
 [profile.release]
-panic = "abort"
 codegen-units = 1
 lto = true
 opt-level = "s"
