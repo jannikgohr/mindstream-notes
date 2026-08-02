@@ -26,6 +26,7 @@ import type {
   PluginCommandContribution,
   PluginI18nContribution,
   PluginManifest,
+  PluginNoteExporterContribution,
   PluginNoteKindContribution,
   PluginNoteTemplateContribution,
   PluginSettingsContribution,
@@ -58,6 +59,12 @@ export interface PluginNoteKindRef {
   pluginId: string;
   noteKind: string;
   contribution: PluginNoteKindContribution;
+}
+
+/** A note exporter paired with the plugin that owns it. */
+export interface PluginNoteExporterRef {
+  pluginId: string;
+  exporter: PluginNoteExporterContribution;
 }
 
 /** A settings subsection paired with its owning plugin. */
@@ -210,6 +217,28 @@ export function pluginNoteKind(
     if (ref.noteKind === noteKind) return ref;
   }
   return undefined;
+}
+
+/** Flattened note exporters contributed by all enabled plugins. */
+export function pluginNoteExporters(): PluginNoteExporterRef[] {
+  const out: PluginNoteExporterRef[] = [];
+  for (const { manifest, enabled } of Object.values(state.plugins)) {
+    if (!enabled) continue;
+    for (const exporter of manifest.contributes.noteExporters ?? []) {
+      out.push({ pluginId: manifest.id, exporter });
+    }
+  }
+  return out;
+}
+
+/** Plugin-contributed exporters that apply to a stored note_kind string. */
+export function pluginNoteExportersForKind(
+  noteKind: string | null | undefined
+): PluginNoteExporterRef[] {
+  if (!noteKind) return [];
+  return pluginNoteExporters().filter(
+    (ref) => ref.exporter.noteKind === noteKind
+  );
 }
 
 /** Source editor language modes contributed by all enabled plugins. */

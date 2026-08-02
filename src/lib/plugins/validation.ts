@@ -21,6 +21,7 @@ import {
   KNOWN_PLUGIN_PERMISSIONS,
   PLUGIN_ARTIFACT_KINDS,
   PLUGIN_EDITOR_TOOLBAR_ITEMS,
+  PLUGIN_NOTE_EXPORT_FORMATS,
   PLUGIN_PREVIEW_MIME_TYPES,
   PLUGIN_SOURCE_LANGUAGE_HOST_PROVIDERS,
   PLUGIN_TOOLBAR_LOCATIONS,
@@ -31,6 +32,8 @@ import {
   type PluginManifest,
   type PluginNativeToolContribution,
   type PluginNativeServiceContribution,
+  type PluginNoteExporterContribution,
+  type PluginNoteExportFormat,
   type PluginNoteKindContribution,
   type PluginNoteKindRenderContribution,
   type PluginNoteTemplateContribution,
@@ -45,6 +48,7 @@ import {
   type PluginToolbarLocation,
   type PluginSourceEditAction
 } from './types';
+import { KNOWN_NOTE_KINDS } from '$lib/api';
 
 export class PluginValidationError extends Error {
   constructor(
@@ -122,6 +126,10 @@ const ARTIFACT_KINDS = new Set<PluginArtifactKind>(PLUGIN_ARTIFACT_KINDS);
 const SOURCE_LANGUAGE_HOST_PROVIDERS = new Set<string>(
   PLUGIN_SOURCE_LANGUAGE_HOST_PROVIDERS
 );
+const NOTE_EXPORT_FORMATS = new Set<PluginNoteExportFormat>(
+  PLUGIN_NOTE_EXPORT_FORMATS
+);
+const BUILT_IN_NOTE_KINDS = new Set<string>(KNOWN_NOTE_KINDS);
 
 function isScriptedRuntime(
   runtime: PluginManifest['runtime'] | undefined
@@ -535,6 +543,63 @@ function validateSourceLanguage(
       pluginId,
       `${path}.provider.id ("${String(language.provider.id)}") is not a supported host source language provider`
     );
+  }
+}
+
+function validateNoteExporter(
+  pluginId: string,
+  exporter: PluginNoteExporterContribution,
+  path: string,
+  pluginNoteKindIds: Set<string>,
+  nativeToolIds: Set<string>,
+  permissions: Set<PluginPermission>
+): void {
+  assertSlug(pluginId, exporter?.id, `${path}.id`);
+  assertI18nKey(pluginId, exporter?.labelKey, `${path}.labelKey`);
+  if (
+    typeof exporter.noteKind !== 'string' ||
+    (!BUILT_IN_NOTE_KINDS.has(exporter.noteKind) &&
+      !pluginNoteKindIds.has(exporter.noteKind))
+  ) {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.noteKind ("${String(exporter.noteKind)}") must be a built-in note kind or a note kind declared by this plugin`
+    );
+  }
+  if (!NOTE_EXPORT_FORMATS.has(exporter.format)) {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.format ("${String(exporter.format)}") is not supported`
+    );
+  }
+  if (
+    typeof exporter.export !== 'string' ||
+    !EXPORT_NAME_RE.test(exporter.export)
+  ) {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.export must be a backend script export name (letters, digits, underscore)`
+    );
+  }
+  if (exporter.requiresNativeTool !== undefined) {
+    if (typeof exporter.requiresNativeTool !== 'string') {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.requiresNativeTool must be a string`
+      );
+    }
+    if (!nativeToolIds.has(exporter.requiresNativeTool)) {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.requiresNativeTool references undeclared native tool "${exporter.requiresNativeTool}"`
+      );
+    }
+    if (!permissions.has('nativeTools.runDeclared')) {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.requiresNativeTool requires the "nativeTools.runDeclared" permission`
+      );
+    }
   }
 }
 
@@ -1263,6 +1328,48 @@ export function validateManifest(input: unknown): PluginManifest {
     throw new PluginValidationError(
       pluginId,
       'contributes noteKinds, which run backend render exports and require runtime "luau" or "wasm"'
+    );
+  }
+
+  // ---- Note exporters --------------------------------------------------
+  const noteExporters = contributes.noteExporters ?? [];
+  if (!Array.isArray(noteExporters)) {
+    throw new PluginValidationError(
+      pluginId,
+      'manifest.contributes.noteExporters must be an array'
+    );
+  }
+  const seenNoteExporterIds = new Set<string>();
+  for (const [i, exporter] of noteExporters.entries()) {
+    validateNoteExporter(
+      pluginId,
+      exporter,
+      `noteExporters[${i}]`,
+      pluginNoteKindIds,
+      seenNativeToolIds,
+      permissions
+    );
+    if (seenNoteExporterIds.has(exporter.id)) {
+      throw new PluginValidationError(
+        pluginId,
+        `duplicate note exporter id "${exporter.id}"`
+      );
+    }
+    seenNoteExporterIds.add(exporter.id);
+  }
+  if (
+    noteExporters.length > 0 &&
+    !permissions.has('noteExporters.contribute')
+  ) {
+    throw new PluginValidationError(
+      pluginId,
+      'contributes noteExporters but is missing the "noteExporters.contribute" permission'
+    );
+  }
+  if (noteExporters.length > 0 && !isScriptedRuntime(m.runtime)) {
+    throw new PluginValidationError(
+      pluginId,
+      'contributes noteExporters, which run backend export functions and require runtime "luau" or "wasm"'
     );
   }
 

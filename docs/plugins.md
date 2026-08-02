@@ -87,6 +87,10 @@ is namespaced under the plugin `id`, so two plugins can never collide.
   stored internal values remain stable.
 - **`sourceLanguages`** — source-editor language modes backed by host-owned
   CodeMirror providers. A note kind references one with `sourceLanguage`.
+- **`noteExporters`** — export actions shown in a note's context menu. An
+  exporter targets a built-in note kind such as `markdown` or a plugin-owned
+  stored kind such as `plugin.<pluginId>.<kind>`, runs a backend script export,
+  and currently supports `"format": "pdf"`.
 - **`noteTemplates`** — declarative templates (`titleTemplate` / `bodyTemplate`
   with `{{…}}` placeholders, see below). Requires `templates.contribute`.
 - **`commands`** — app-local commands (currently `createTemplateNote`), each
@@ -131,11 +135,12 @@ is namespaced under the plugin `id`, so two plugins can never collide.
 
 ## Permissions
 
-| Permission             | Grants                                                                                  |
-| ---------------------- | --------------------------------------------------------------------------------------- |
-| `templates.contribute` | the plugin's templates appear in create menus                                           |
-| `notes.create`         | the app creates a note from the plugin's template (the app writes it, never the plugin) |
-| `notes.read`           | a scripted plugin may read note metadata through its gated host API                     |
+| Permission                 | Grants                                                                                  |
+| -------------------------- | --------------------------------------------------------------------------------------- |
+| `templates.contribute`     | the plugin's templates appear in create menus                                           |
+| `noteExporters.contribute` | the plugin's export actions appear in note context menus                                |
+| `notes.create`             | the app creates a note from the plugin's template (the app writes it, never the plugin) |
+| `notes.read`               | a scripted plugin may read note metadata through its gated host API                     |
 
 A manifest is rejected if it contributes something it didn't ask permission for.
 Each plugin's requested permissions are shown to the user (with friendly labels)
@@ -199,6 +204,28 @@ For templates the app performs the note creation from the returned
 `{ title, body }` — the script never writes notes itself. A `noteTemplate` opts
 into this by setting `"render": "<export>"` instead of static
 `titleTemplate`/`bodyTemplate`.
+
+For note exporters, the app calls the named export with
+`{ noteId, noteKind, title, body, format }` after the user explicitly chooses
+that export for a note. The plugin returns bytes for the host to save:
+
+```lua
+return {
+  exportPdf = function(ctx)
+    return {
+      file = {
+        mime = "application/pdf",
+        dataBase64 = "...",
+        suggestedName = ctx.title .. ".pdf",
+      },
+    }
+  end,
+}
+```
+
+For compatibility with preview renderers, the host also accepts
+`{ preview = { mime = "application/pdf", dataBase64 = "..." } }`. The app owns
+the save dialog and file write; the script only returns data.
 
 ### Splitting a script across files
 

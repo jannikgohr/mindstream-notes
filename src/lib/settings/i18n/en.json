@@ -720,6 +720,7 @@
     "plugins.permission.notes.create": "Create notes from its templates",
     "plugins.permission.notes.read": "Read your notes' metadata (title, tags, folder)",
     "plugins.permission.noteKinds.contribute": "Add plugin-owned note types",
+    "plugins.permission.noteExporters.contribute": "Add note export actions",
     "plugins.permission.pluginArtifacts.download": "Download verified plugin artifacts",
     "plugins.permission.pluginStorage.read": "Read its isolated plugin data",
     "plugins.permission.pluginStorage.write": "Write its isolated plugin data",
