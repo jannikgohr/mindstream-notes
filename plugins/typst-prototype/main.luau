@@ -59,28 +59,35 @@ local function renderDocument(input: RenderInput): { [string]: any }
 	end
 
 	local result = nativeTools.run("typst", {
-		-- `compile <input> <output>` with `-` on both ends = stdin → stdout.
-		args = { "compile", "--format", "svg", "-", "-" },
+		-- Compile to a PDF on stdout (`-` = stdin in, `-` = stdout out). PDF is
+		-- used over SVG because it carries *all* pages in one stream — typst
+		-- refuses to write multiple SVG/PNG pages to stdout. The host renders it
+		-- page-by-page. PDF bytes are binary, so ask for base64 transport.
+		args = { "compile", "--format", "pdf", "-", "-" },
 		stdin = body,
-		timeoutMs = 15000,
+		outputBase64 = true,
+		-- Generous: the first compile of a document that `#import`s a package
+		-- may block while typst downloads it. The subprocess wall-time does not
+		-- count against the script's own Luau budget (see luau.rs).
+		timeoutMs = 30000,
 	})
 
 	if result.timedOut then
 		return {
-			preview = { mime = "image/svg+xml", text = "" },
+			preview = { mime = "application/pdf", dataBase64 = "" },
 			diagnostics = { { severity = "error", message = "Typst timed out while compiling." } },
 		}
 	end
 
 	if result.statusCode ~= 0 then
 		return {
-			preview = { mime = "image/svg+xml", text = "" },
+			preview = { mime = "application/pdf", dataBase64 = "" },
 			diagnostics = parseTypstStderr(result.stderr),
 		}
 	end
 
 	return {
-		preview = { mime = "image/svg+xml", text = result.stdout },
+		preview = { mime = "application/pdf", dataBase64 = result.stdoutBase64 },
 		diagnostics = parseTypstStderr(result.stderr),
 	}
 end

@@ -79,7 +79,7 @@ describe('validateManifest', () => {
     ]);
     const render = result.contributes.noteKinds?.[0].render;
     expect(render?.requiresNativeTool).toBe('typst');
-    expect(render?.previewMime).toBe('image/svg+xml');
+    expect(render?.previewMime).toBe('application/pdf');
     expect(render?.webview).toBeUndefined();
     expect(result.contributes.artifacts).toBeUndefined();
   });
@@ -603,6 +603,93 @@ describe('validateManifest', () => {
       }
     ];
     expect(() => validateManifest(m)).toThrow(/undeclared native tool/);
+  });
+
+  it('accepts a preview service and a note kind that uses it', () => {
+    const m = validManifest({
+      runtime: 'luau',
+      entry: 'main.luau',
+      permissions: [
+        'templates.contribute',
+        'noteKinds.contribute',
+        'notes.create',
+        'nativeServices.run'
+      ]
+    });
+    const contributes = m.contributes as Record<string, unknown>;
+    contributes.nativeServices = [
+      {
+        id: 'tinymist',
+        binaryName: 'tinymist',
+        args: ['preview', '127.0.0.1:{dataPort}', '{input}'],
+        dataUrl: 'http://127.0.0.1:{dataPort}',
+        controlUrl: 'ws://127.0.0.1:{controlPort}',
+        protocol: { jumpEvent: 'editorScrollTo' }
+      }
+    ];
+    contributes.noteKinds = [
+      {
+        id: 'document',
+        labelKey: 'notes.document.label',
+        render: {
+          export: 'renderDocument',
+          previewMime: 'application/pdf',
+          previewService: 'tinymist'
+        }
+      }
+    ];
+    expect(
+      validateManifest(m).contributes.noteKinds?.[0].render.previewService
+    ).toBe('tinymist');
+  });
+
+  it('rejects a preview service whose iframe URL is not loopback', () => {
+    const m = validManifest({
+      runtime: 'luau',
+      entry: 'main.luau',
+      permissions: [
+        'templates.contribute',
+        'noteKinds.contribute',
+        'notes.create',
+        'nativeServices.run'
+      ]
+    });
+    (m.contributes as Record<string, unknown>).nativeServices = [
+      {
+        id: 'evil',
+        binaryName: 'tinymist',
+        args: ['{input}'],
+        // Points the note preview iframe at an arbitrary remote origin.
+        dataUrl: 'http://evil.example.com:{dataPort}',
+        controlUrl: 'ws://127.0.0.1:{controlPort}'
+      }
+    ];
+    expect(() => validateManifest(m)).toThrow(/dataUrl must be a loopback/);
+  });
+
+  it('rejects previewService for an undeclared service', () => {
+    const m = validManifest({
+      runtime: 'luau',
+      entry: 'main.luau',
+      permissions: [
+        'templates.contribute',
+        'noteKinds.contribute',
+        'notes.create',
+        'nativeServices.run'
+      ]
+    });
+    (m.contributes as Record<string, unknown>).noteKinds = [
+      {
+        id: 'document',
+        labelKey: 'notes.document.label',
+        render: {
+          export: 'renderDocument',
+          previewMime: 'application/pdf',
+          previewService: 'ghost'
+        }
+      }
+    ];
+    expect(() => validateManifest(m)).toThrow(/undeclared native service/);
   });
 
   it('rejects unknown plugin note kind preview mode icons', () => {

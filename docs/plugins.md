@@ -263,20 +263,51 @@ Gated by `nativeTools.runDeclared`:
 | `ms.nativeTools.available(toolId)`     | whether a declared tool (`contributes.nativeTools[].id`) was resolved on PATH      |
 | `ms.nativeTools.run(toolId, options?)` | run a declared, available tool; returns `{ statusCode, stdout, stderr, timedOut }` |
 
-`options` is `{ args = { string }?, stdin = string?, timeoutMs = number? }`. The
-host resolves the binary from PATH itself (never the script) and launches it
+`options` is
+`{ args = { string }?, stdin = string?, timeoutMs = number?, outputBase64 = boolean? }`.
+The host resolves the binary from PATH itself (never the script) and launches it
 **directly** — no shell, no arbitrary paths — so a script can only run the exact
 binaries its manifest declared under `contributes.nativeTools`. Native tools are
 **desktop-only**: on mobile every declared tool reports unavailable, so always
-guard with `available` before `run`. Because a `run` blocks on the child process,
-give the plugin a generous `limits.timeoutMs` (the Luau wall-clock deadline must
-outlast the subprocess).
+guard with `available` before `run`. The subprocess wall-time does **not** count
+against the script's Luau budget, so a slow compile won't trip the deadline.
+
+For binary tools (PDF/PNG/…) set `outputBase64 = true`: `stdout` is then empty
+and the raw bytes come back as `stdoutBase64` (raw stdout would not be valid
+UTF-8). `stderr` is always exposed lossily for diagnostics.
 
 A note kind can declare `render.requiresNativeTool = "<toolId>"`: the host checks
 that tool up front and, when it's missing (not installed, or mobile), shows the
-editor **source-only** instead of calling the renderer. See the bundled
-`typst-prototype` plugin, whose `renderDocument` pipes the note body through the
-native `typst` binary (`typst compile --format svg - -`) and returns the SVG.
+editor **source-only** instead of calling the renderer. A `render.previewMime` of
+`application/pdf` makes the host render the returned `preview.dataBase64` with a
+built-in PDF page viewer. See the bundled `typst-prototype` plugin, whose
+`renderDocument` pipes the note body through the native `typst` binary
+(`typst compile --format pdf - -`) and returns the PDF as base64 — one stream for
+all pages (typst refuses multi-page SVG/PNG to stdout).
+
+## Preview services (`contributes.nativeServices`, `nativeServices.run`)
+
+Some tools are **live servers**, not one-shot commands. `contributes.nativeServices`
+declares a PATH binary the host runs as a persistent local process whose own web
+frontend is shown in the note's preview iframe — the motivating case is
+`tinymist preview`, which gives bidirectional **click-to-source** (click the
+rendered output → the source caret jumps there). Desktop-only; gated on
+`nativeServices.run`.
+
+A service entry declares `binaryName`, an `args` template (placeholders
+`{dataPort}`, `{controlPort}` — host-allocated free ports — and `{input}`, the
+absolute path to the materialized source file), a loopback `dataUrl`
+(`http://127.0.0.1:{dataPort}`, validated to be loopback-only so a plugin can't
+frame a remote origin), a loopback `controlUrl` (`ws://127.0.0.1:{controlPort}`),
+and a `protocol.jumpEvent` (the control-plane message the host maps to a caret
+jump; payload `{ filepath, start:[line,col] }`, 0-indexed). A note kind opts in
+with `render.previewService = "<id>"`; the host still falls back to the
+`export` / `requiresNativeTool` render when the service binary isn't installed.
+
+The host owns the whole lifecycle: it allocates the ports, writes the body to a
+temp file the server watches (rewritten on edit), waits for readiness, connects
+the control plane as the editor, and reaps the process when the note closes or
+the app exits.
 
 ## Wasm plugins (`runtime: "wasm"`)
 

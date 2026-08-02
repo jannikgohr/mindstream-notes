@@ -6,14 +6,18 @@
   import {
     pluginsArtifactsStatus,
     pluginsDownloadArtifact,
+    pluginsNativeServiceStatus,
     pluginsNativeToolStatus,
     pluginsReadArtifact,
     pluginsRunScript
   } from '$lib/api/plugins';
   import { isMobile } from '$lib/platform';
+  import { base64ToBytes } from '$lib/editor/base64';
   import { tUi } from '$lib/settings/i18n.svelte';
+  import { PreviewServiceController } from '$lib/plugins/preview-service';
+  import PluginPdfPreview from './PluginPdfPreview.svelte';
   import { setNoteBody } from '$lib/stores/tree.svelte';
-  import { pluginNoteKind } from '$lib/plugins/registry.svelte';
+  import { pluginById, pluginNoteKind } from '$lib/plugins/registry.svelte';
   import { readPluginFile } from '$lib/plugins/plugin-files';
   import { getSettingValue } from '$lib/settings/store.svelte';
   import SourceEditor from '$lib/editor/source/SourceEditor.svelte';
@@ -62,6 +66,9 @@
   let renderError = $state<string | null>(null);
   let previewText = $state('');
   let previewMime = $state('text/plain');
+  // Decoded binary preview (e.g. a PDF from typst), rendered by PluginPdfPreview
+  // instead of the srcdoc iframe. Null for text/svg/html previews.
+  let previewData = $state<Uint8Array | null>(null);
   let diagnostics = $state<Diagnostic[]>([]);
   let dirty = false;
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -95,6 +102,14 @@
   let toolCheckToken = 0;
   const mobile = isMobile();
 
+  // Live preview service (e.g. tinymist): when its binary is available the
+  // editor loads the service's own frontend in an iframe with click-to-source,
+  // instead of the `export` (PDF) renderer.
+  let serviceState = $state<ToolState>('unknown');
+  let serviceDataUrl = $state<string | null>(null);
+  let serviceController: PreviewServiceController | null = null;
+  let serviceCheckToken = 0;
+
   const contributionRef = $derived(pluginNoteKind(noteKind));
   const storedNoteKind = $derived(contributionRef?.noteKind ?? noteKind ?? '');
   const sourceLanguage = $derived(
@@ -118,9 +133,17 @@
   const requiredToolId = $derived(
     contributionRef?.contribution.render.requiresNativeTool
   );
-  // Preview is blocked until a declared native tool is confirmed available.
+  const previewServiceId = $derived(
+    contributionRef?.contribution.render.previewService
+  );
+  // A live preview service (e.g. tinymist) takes over when its binary is present.
+  const serviceUsable = $derived(
+    !!previewServiceId && serviceState === 'available'
+  );
+  // Preview is blocked (source-only) only when neither the live service nor the
+  // declared PDF tool is available.
   const previewBlocked = $derived(
-    !!requiredToolId && toolState !== 'available'
+    !serviceUsable && !!requiredToolId && toolState !== 'available'
   );
   const showSource = $derived(previewBlocked || viewMode !== 'wysiwyg');
   const showPreview = $derived(!previewBlocked && viewMode !== 'source');
@@ -170,6 +193,82 @@
     if (ref && requiredToolId) void checkTool(ref.pluginId, requiredToolId);
   }
 
+  // Check whether the declared live-preview service's binary is available.
+  $effect(() => {
+    const ref = contributionRef;
+    const serviceId = previewServiceId;
+    if (!ref || !serviceId || mobile) {
+      serviceState = mobile && serviceId ? 'unavailable' : 'unknown';
+      return;
+    }
+    const token = ++serviceCheckToken;
+    serviceState = 'checking';
+    void (async () => {
+      try {
+        const status = await pluginsNativeServiceStatus(
+          ref.pluginId,
+          serviceId
+        );
+        if (destroyed || token !== serviceCheckToken) return;
+        serviceState = status.available ? 'available' : 'unavailable';
+      } catch {
+        if (destroyed || token !== serviceCheckToken) return;
+        serviceState = 'unavailable';
+      }
+    })();
+  });
+
+  // Start / stop the live preview server for this note. Runs once the service
+  // is confirmed available and the note body has loaded; torn down on note
+  // change or teardown. `source` is read untracked so edits don't restart it.
+  $effect(() => {
+    const ref = contributionRef;
+    const serviceId = previewServiceId;
+    if (!ref || !serviceId || serviceState !== 'available' || loading) return;
+    const controller = new PreviewServiceController({
+      pluginId: ref.pluginId,
+      serviceId,
+      sessionKey: `${ref.pluginId}:${noteId}`,
+      jumpEvent: previewServiceJumpEvent(ref.pluginId, serviceId),
+      onJump: (jump) => jumpToSource(jump.line, jump.column),
+      onReady: (url) => {
+        if (!destroyed) serviceDataUrl = url;
+      },
+      onError: (message) => {
+        if (!destroyed) renderError = message;
+      }
+    });
+    serviceController = controller;
+    void controller.start(untrack(() => source));
+    return () => {
+      controller.dispose();
+      if (serviceController === controller) serviceController = null;
+      serviceDataUrl = null;
+    };
+  });
+
+  /** Resolve the manifest-declared control-plane jump event name for a service. */
+  function previewServiceJumpEvent(
+    pluginId: string,
+    serviceId: string
+  ): string {
+    const service = pluginById(
+      pluginId
+    )?.manifest.contributes.nativeServices?.find((s) => s.id === serviceId);
+    return service?.protocol?.jumpEvent ?? 'editorScrollTo';
+  }
+
+  /** Move the source-editor caret to a 0-indexed (line, column). */
+  function jumpToSource(line: number, column: number) {
+    const view = sourceEditor?.getView();
+    if (!view) return;
+    const lineNo = Math.min(view.state.doc.lines, Math.max(1, line + 1));
+    const lineObj = view.state.doc.line(lineNo);
+    const pos = Math.min(lineObj.to, lineObj.from + Math.max(0, column));
+    view.dispatch({ selection: { anchor: pos }, scrollIntoView: true });
+    view.focus();
+  }
+
   $effect(() => {
     const id = noteId;
     const kind = noteKind;
@@ -191,7 +290,7 @@
         scheduleRender(0);
       } catch (err) {
         if (destroyed || token !== loadToken) return;
-        loadError = err instanceof Error ? err.message : String(err);
+        loadError = toErrorMessage(err);
       } finally {
         if (!destroyed && token === loadToken) loading = false;
       }
@@ -276,7 +375,10 @@
   function onSourceInput(value: string) {
     source = value;
     scheduleSave();
-    scheduleRender(debounceMs);
+    // A live preview service recompiles from the pushed body; the `export`
+    // renderer only runs when no service is driving the preview.
+    if (serviceController) serviceController.updateBody(value);
+    else scheduleRender(debounceMs);
   }
 
   function cycleViewMode() {
@@ -319,6 +421,12 @@
       diagnostics = [];
       return;
     }
+    // The live preview service owns the preview when available — skip the
+    // `export` (PDF) render entirely.
+    if (serviceUsable) {
+      rendering = false;
+      return;
+    }
     // A note kind that needs a native tool never renders until it's confirmed
     // present — the editor stays source-only instead.
     if (requiredToolId && toolState !== 'available') {
@@ -353,6 +461,7 @@
       ) {
         toolState = 'unavailable';
         previewText = '';
+        previewData = null;
         diagnostics = [];
         return;
       }
@@ -361,15 +470,43 @@
         ref.contribution.render.previewMime ?? 'text/plain'
       );
       previewMime = parsed.mime;
-      previewText = parsed.text;
+      if (parsed.mime === 'application/pdf') {
+        previewData = parsed.dataBase64
+          ? base64ToBytes(parsed.dataBase64)
+          : null;
+        previewText = '';
+      } else {
+        previewData = null;
+        previewText = parsed.text;
+      }
       diagnostics = parsed.diagnostics;
     } catch (err) {
       if (destroyed || token !== renderToken) return;
-      renderError = err instanceof Error ? err.message : String(err);
+      renderError = toErrorMessage(err);
       diagnostics = [];
     } finally {
       if (!destroyed && token === renderToken) rendering = false;
     }
+  }
+
+  /**
+   * Extract a human message from anything thrown. Tauri command rejections are
+   * structured objects (`{ code, message }`), not `Error`s — `String(err)` on
+   * those yields the useless "[object Object]", so pull `.message` first.
+   */
+  function toErrorMessage(err: unknown): string {
+    if (err instanceof Error) return err.message;
+    if (typeof err === 'string') return err;
+    if (err && typeof err === 'object') {
+      const rec = err as Record<string, unknown>;
+      if (typeof rec.message === 'string') return rec.message;
+      try {
+        return JSON.stringify(err);
+      } catch {
+        return String(err);
+      }
+    }
+    return String(err);
   }
 
   async function loadWebviewArtifacts(
@@ -473,7 +610,12 @@
   function parseRenderResult(
     value: unknown,
     fallbackMime: string
-  ): { mime: string; text: string; diagnostics: Diagnostic[] } {
+  ): {
+    mime: string;
+    text: string;
+    dataBase64?: string;
+    diagnostics: Diagnostic[];
+  } {
     if (typeof value === 'string') {
       return { mime: fallbackMime, text: value, diagnostics: [] };
     }
@@ -501,12 +643,18 @@
         : typeof raw.previewMime === 'string'
           ? raw.previewMime
           : fallbackMime;
+    const dataBase64 =
+      typeof preview.dataBase64 === 'string'
+        ? preview.dataBase64
+        : typeof raw.dataBase64 === 'string'
+          ? raw.dataBase64
+          : undefined;
     const parsedDiagnostics = Array.isArray(raw.diagnostics)
       ? raw.diagnostics
           .map(parseDiagnostic)
           .filter((d): d is Diagnostic => d !== null)
       : [];
-    return { mime, text, diagnostics: parsedDiagnostics };
+    return { mime, text, dataBase64, diagnostics: parsedDiagnostics };
   }
 
   function parseDiagnostic(value: unknown): Diagnostic | null {
@@ -761,13 +909,38 @@ parentWindow.postMessage({ type: 'mindstream-plugin-preview-ready' }, '*');
               {renderError}
             </div>
           {/if}
-          <iframe
-            bind:this={previewIframe}
-            class="min-h-0 flex-1 bg-white"
-            title="Plugin note preview"
-            sandbox={webviewPreview ? 'allow-scripts' : ''}
-            srcdoc={previewSrcdoc}
-          ></iframe>
+          {#if serviceUsable}
+            {#if serviceDataUrl}
+              <!-- The live preview server (e.g. tinymist) serves its own
+                   click-to-source frontend from a loopback origin. -->
+              <iframe
+                class="min-h-0 flex-1 bg-white"
+                title="Live plugin preview"
+                src={serviceDataUrl}
+              ></iframe>
+            {:else}
+              <div
+                class="flex min-h-0 flex-1 items-center justify-center bg-muted/40 text-sm text-muted-foreground"
+              >
+                <Loader2 class="mr-2 size-4 animate-spin" />
+                {tUi('plugins.preview.starting')}
+              </div>
+            {/if}
+          {:else if previewMime === 'application/pdf'}
+            {#if previewData}
+              <PluginPdfPreview bytes={previewData} />
+            {:else}
+              <div class="min-h-0 flex-1 bg-muted/40"></div>
+            {/if}
+          {:else}
+            <iframe
+              bind:this={previewIframe}
+              class="min-h-0 flex-1 bg-white"
+              title="Plugin note preview"
+              sandbox={webviewPreview ? 'allow-scripts' : ''}
+              srcdoc={previewSrcdoc}
+            ></iframe>
+          {/if}
         </section>
       {/if}
     </div>

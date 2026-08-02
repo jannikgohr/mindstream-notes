@@ -61,12 +61,14 @@ type MsNativeToolRunOptions = {
 	args: { string }?, -- arguments passed directly to the binary (no shell)
 	stdin: string?, -- written to the process stdin
 	timeoutMs: number?, -- wall-clock cap, clamped by the host (100..30000)
+	outputBase64: boolean?, -- true for binary output (PDF/PNG): see stdoutBase64
 }
 
 -- Result of `ms.nativeTools.run`.
 type MsNativeToolResult = {
 	statusCode: number?, -- process exit code (nil if killed by signal)
-	stdout: string,
+	stdout: string, -- lossy UTF-8 stdout (empty when outputBase64 was set)
+	stdoutBase64: string?, -- base64 of raw stdout bytes, present when outputBase64 was set
 	stderr: string,
 	timedOut: boolean,
 }

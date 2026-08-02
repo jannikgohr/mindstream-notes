@@ -14,7 +14,8 @@
     "templates.contribute",
     "noteKinds.contribute",
     "notes.create",
-    "nativeTools.runDeclared"
+    "nativeTools.runDeclared",
+    "nativeServices.run"
   ],
   "contributes": {
     "i18n": {
@@ -24,6 +25,7 @@
         "notes.document.description": "Source-and-preview document notes owned by the Typst plugin.",
         "templates.document.label": "Typst document",
         "native.typst.description": "Use the user-installed typst binary from PATH.",
+        "native.tinymist.description": "Use the user-installed tinymist binary for live preview with click-to-source.",
         "settings.editor.title": "Editor",
         "settings.defaultViewMode.label": "Default view mode"
       },
@@ -33,6 +35,7 @@
         "notes.document.description": "Quelltext- und Vorschau-Notizen des Typst-Plugins.",
         "templates.document.label": "Typst-Dokument",
         "native.typst.description": "Verwendet das vom Benutzer installierte typst-Binary aus PATH.",
+        "native.tinymist.description": "Verwendet das installierte tinymist-Binary fuer Live-Vorschau mit Klick-zur-Quelle.",
         "settings.editor.title": "Editor",
         "settings.defaultViewMode.label": "Standardansicht"
       }
@@ -60,6 +63,28 @@
         "descriptionKey": "native.typst.description"
       }
     ],
+    "nativeServices": [
+      {
+        "id": "tinymist",
+        "binaryName": "tinymist",
+        "descriptionKey": "native.tinymist.description",
+        "args": [
+          "preview",
+          "--data-plane-host",
+          "127.0.0.1:{dataPort}",
+          "--control-plane-host",
+          "127.0.0.1:{controlPort}",
+          "--no-open",
+          "{input}"
+        ],
+        "dataUrl": "http://127.0.0.1:{dataPort}",
+        "controlUrl": "ws://127.0.0.1:{controlPort}",
+        "inputExtension": "typ",
+        "protocol": {
+          "jumpEvent": "editorScrollTo"
+        }
+      }
+    ],
     "noteKinds": [
       {
         "id": "document",
@@ -71,9 +96,10 @@
         "defaultBody": "#set document(title: [Untitled])\n\n= Untitled\n\nStart writing in Typst here.",
         "render": {
           "export": "renderDocument",
-          "previewMime": "image/svg+xml",
+          "previewMime": "application/pdf",
           "debounceMs": 300,
-          "requiresNativeTool": "typst"
+          "requiresNativeTool": "typst",
+          "previewService": "tinymist"
         }
       }
     ],

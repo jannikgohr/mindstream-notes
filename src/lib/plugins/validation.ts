@@ -29,6 +29,7 @@ import {
   type PluginArtifactKind,
   type PluginManifest,
   type PluginNativeToolContribution,
+  type PluginNativeServiceContribution,
   type PluginNoteKindContribution,
   type PluginNoteKindRenderContribution,
   type PluginNoteTemplateContribution,
@@ -257,6 +258,7 @@ function validateNoteKindRender(
   path: string,
   artifactIds: Set<string>,
   nativeToolIds: Set<string>,
+  nativeServiceIds: Set<string>,
   permissions: Set<PluginPermission>
 ): void {
   if (!r || typeof r !== 'object') {
@@ -285,6 +287,26 @@ function validateNoteKindRender(
       throw new PluginValidationError(
         pluginId,
         `${path}.requiresNativeTool requires the "nativeTools.runDeclared" permission`
+      );
+    }
+  }
+  if (r.previewService !== undefined) {
+    if (typeof r.previewService !== 'string') {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.previewService must be a string`
+      );
+    }
+    if (!nativeServiceIds.has(r.previewService)) {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.previewService references undeclared native service "${r.previewService}"`
+      );
+    }
+    if (!permissions.has('nativeServices.run')) {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.previewService requires the "nativeServices.run" permission`
       );
     }
   }
@@ -369,6 +391,7 @@ function validateNoteKind(
   path: string,
   artifactIds: Set<string>,
   nativeToolIds: Set<string>,
+  nativeServiceIds: Set<string>,
   permissions: Set<PluginPermission>
 ): string {
   assertSlug(pluginId, c?.id, `${path}.id`);
@@ -413,6 +436,7 @@ function validateNoteKind(
     `${path}.render`,
     artifactIds,
     nativeToolIds,
+    nativeServiceIds,
     permissions
   );
   return pluginNoteKindId(pluginId, c.id);
@@ -549,6 +573,81 @@ function validateNativeTool(
   }
   if (t.descriptionKey !== undefined) {
     assertI18nKey(pluginId, t.descriptionKey, `${path}.descriptionKey`);
+  }
+}
+
+// The iframe/control URL templates a preview service declares MUST target only
+// loopback — a plugin must never be able to point the note's preview iframe at
+// an arbitrary remote origin. The host substitutes the {…Port} placeholder.
+const SAFE_SERVICE_DATA_URL_RE =
+  /^http:\/\/(127\.0\.0\.1|localhost):\{dataPort\}(\/[\w\-./]*)?$/;
+const SAFE_SERVICE_CONTROL_URL_RE =
+  /^ws:\/\/(127\.0\.0\.1|localhost):\{controlPort\}(\/[\w\-./]*)?$/;
+const SAFE_SERVICE_EXT_RE = /^[a-z0-9]{1,16}$/i;
+
+function validateNativeService(
+  pluginId: string,
+  s: PluginNativeServiceContribution,
+  path: string
+): void {
+  assertSlug(pluginId, s?.id, `${path}.id`);
+  assertNonEmptyString(pluginId, s.binaryName, `${path}.binaryName`);
+  if (
+    s.binaryName.includes('/') ||
+    s.binaryName.includes('\\') ||
+    s.binaryName.includes('..') ||
+    !SAFE_BINARY_NAME_RE.test(s.binaryName)
+  ) {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.binaryName must be an executable basename resolved from PATH`
+    );
+  }
+  if (!Array.isArray(s.args)) {
+    throw new PluginValidationError(pluginId, `${path}.args must be an array`);
+  }
+  for (const [i, arg] of s.args.entries()) {
+    assertNonEmptyString(pluginId, arg, `${path}.args[${i}]`);
+  }
+  if (
+    typeof s.dataUrl !== 'string' ||
+    !SAFE_SERVICE_DATA_URL_RE.test(s.dataUrl)
+  ) {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.dataUrl must be a loopback http URL template like "http://127.0.0.1:{dataPort}"`
+    );
+  }
+  if (
+    typeof s.controlUrl !== 'string' ||
+    !SAFE_SERVICE_CONTROL_URL_RE.test(s.controlUrl)
+  ) {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.controlUrl must be a loopback ws URL template like "ws://127.0.0.1:{controlPort}"`
+    );
+  }
+  if (
+    s.inputExtension !== undefined &&
+    (typeof s.inputExtension !== 'string' ||
+      !SAFE_SERVICE_EXT_RE.test(s.inputExtension))
+  ) {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.inputExtension must be a short alphanumeric extension`
+    );
+  }
+  if (s.descriptionKey !== undefined) {
+    assertI18nKey(pluginId, s.descriptionKey, `${path}.descriptionKey`);
+  }
+  if (
+    s.protocol?.jumpEvent !== undefined &&
+    typeof s.protocol.jumpEvent !== 'string'
+  ) {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.protocol.jumpEvent must be a string`
+    );
   }
 }
 
@@ -929,6 +1028,32 @@ export function validateManifest(input: unknown): PluginManifest {
     );
   }
 
+  // ---- Native services (long-lived preview servers) --------------------
+  const nativeServices = contributes.nativeServices ?? [];
+  if (!Array.isArray(nativeServices)) {
+    throw new PluginValidationError(
+      pluginId,
+      'manifest.contributes.nativeServices must be an array'
+    );
+  }
+  const seenNativeServiceIds = new Set<string>();
+  for (const [i, service] of nativeServices.entries()) {
+    validateNativeService(pluginId, service, `nativeServices[${i}]`);
+    if (seenNativeServiceIds.has(service.id)) {
+      throw new PluginValidationError(
+        pluginId,
+        `duplicate native service id "${service.id}"`
+      );
+    }
+    seenNativeServiceIds.add(service.id);
+  }
+  if (nativeServices.length > 0 && !permissions.has('nativeServices.run')) {
+    throw new PluginValidationError(
+      pluginId,
+      'contributes nativeServices but is missing the "nativeServices.run" permission'
+    );
+  }
+
   // ---- Plugin note kinds ----------------------------------------------
   const noteKinds = contributes.noteKinds ?? [];
   if (!Array.isArray(noteKinds)) {
@@ -946,6 +1071,7 @@ export function validateManifest(input: unknown): PluginManifest {
       `noteKinds[${i}]`,
       seenArtifactIds,
       seenNativeToolIds,
+      seenNativeServiceIds,
       permissions
     );
     if (seenNoteKindIds.has(c.id)) {
