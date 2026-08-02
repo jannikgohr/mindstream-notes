@@ -45,7 +45,8 @@ pub const PREVIEW_SCHEME: &str = "msn-preview";
 const PROXY_CSP: &str = "default-src 'none'; \
      script-src 'unsafe-inline' 'wasm-unsafe-eval' blob:; \
      style-src 'unsafe-inline'; img-src data: blob:; font-src data: blob:; \
-     connect-src ws://127.0.0.1:* http://127.0.0.1:*; worker-src blob:; base-uri 'none'";
+     connect-src ws://127.0.0.1:* http://127.0.0.1:* data: blob:; \
+     worker-src blob:; base-uri 'none'";
 
 /// A plugin-declared preview service, parsed from `contributes.nativeServices`.
 #[derive(Debug, Clone, Deserialize)]
@@ -489,6 +490,8 @@ mod tests {
     fn sanitize_css_color_allows_safe_colors_rejects_injection() {
         assert_eq!(sanitize_css_color("#1e1e1e"), "#1e1e1e");
         assert_eq!(sanitize_css_color("rgb(30, 30, 30)"), "rgb(30, 30, 30)");
+        // Tailwind v4 themes resolve to oklch(); it must pass through.
+        assert_eq!(sanitize_css_color("oklch(0.269 0 0)"), "oklch(0.269 0 0)");
         // Anything that could break out of the <style> falls back.
         assert_eq!(sanitize_css_color("</style><script>"), "rgb(82,86,89)");
         assert_eq!(sanitize_css_color("red;} body{"), "rgb(82,86,89)");
