@@ -84,6 +84,9 @@ const SAFE_DOC_PATH_RE =
 /** Same shape as {@link SAFE_DOC_PATH_RE} but for a bundled `.svg` icon. */
 const SAFE_SVG_PATH_RE =
   /^[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)*\.svg$/;
+/** Same shape as {@link SAFE_DOC_PATH_RE} but for a bundled `.css` file. */
+const SAFE_CSS_PATH_RE =
+  /^[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)*\.css$/;
 /** Artifact files are stored by basename inside the host-owned artifact dir. */
 const SAFE_ARTIFACT_FILE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 /** Safe plugin-owned iframe entry module. */
@@ -636,6 +639,42 @@ function validateNativeService(
       pluginId,
       `${path}.inputExtension must be a short alphanumeric extension`
     );
+  }
+  if (s.previewIframe !== undefined) {
+    if (!s.previewIframe || typeof s.previewIframe !== 'object') {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.previewIframe must be an object`
+      );
+    }
+    if (
+      s.previewIframe.mode !== 'direct' &&
+      s.previewIframe.mode !== 'themed'
+    ) {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.previewIframe.mode must be "direct" or "themed"`
+      );
+    }
+    if (s.previewIframe.css !== undefined) {
+      if (s.previewIframe.mode !== 'themed') {
+        throw new PluginValidationError(
+          pluginId,
+          `${path}.previewIframe.css is only allowed when mode is "themed"`
+        );
+      }
+      assertNonEmptyString(
+        pluginId,
+        s.previewIframe.css,
+        `${path}.previewIframe.css`
+      );
+      if (!SAFE_CSS_PATH_RE.test(s.previewIframe.css)) {
+        throw new PluginValidationError(
+          pluginId,
+          `${path}.previewIframe.css ("${s.previewIframe.css}") must be a safe relative .css path inside the plugin dir`
+        );
+      }
+    }
   }
   if (s.descriptionKey !== undefined) {
     assertI18nKey(pluginId, s.descriptionKey, `${path}.descriptionKey`);

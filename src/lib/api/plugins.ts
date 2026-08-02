@@ -436,7 +436,7 @@ export interface PreviewServiceHandle {
   sessionKey: string;
   dataUrl: string;
   controlUrl: string;
-  proxyUrl: string;
+  proxyUrl: string | null;
 }
 
 export interface PreviewServiceStatus {
@@ -479,7 +479,7 @@ function parsePreviewServiceHandle(value: unknown): PreviewServiceHandle {
     sessionKey: assertString(raw.sessionKey, 'PreviewServiceHandle.sessionKey'),
     dataUrl: assertString(raw.dataUrl, 'PreviewServiceHandle.dataUrl'),
     controlUrl: assertString(raw.controlUrl, 'PreviewServiceHandle.controlUrl'),
-    proxyUrl: assertString(raw.proxyUrl, 'PreviewServiceHandle.proxyUrl')
+    proxyUrl: optionalString(raw.proxyUrl, 'PreviewServiceHandle.proxyUrl')
   };
 }
 

@@ -624,6 +624,7 @@ describe('validateManifest', () => {
         args: ['preview', '127.0.0.1:{dataPort}', '{input}'],
         dataUrl: 'http://127.0.0.1:{dataPort}',
         controlUrl: 'ws://127.0.0.1:{controlPort}',
+        previewIframe: { mode: 'themed', css: 'preview.css' },
         protocol: { jumpEvent: 'editorScrollTo' }
       }
     ];
@@ -641,6 +642,57 @@ describe('validateManifest', () => {
     expect(
       validateManifest(m).contributes.noteKinds?.[0].render.previewService
     ).toBe('tinymist');
+    expect(
+      validateManifest(m).contributes.nativeServices?.[0].previewIframe
+    ).toEqual({ mode: 'themed', css: 'preview.css' });
+  });
+
+  it('rejects unsafe preview service iframe css paths', () => {
+    const m = validManifest({
+      runtime: 'luau',
+      entry: 'main.luau',
+      permissions: [
+        'templates.contribute',
+        'noteKinds.contribute',
+        'notes.create',
+        'nativeServices.run'
+      ]
+    });
+    (m.contributes as Record<string, unknown>).nativeServices = [
+      {
+        id: 'tinymist',
+        binaryName: 'tinymist',
+        args: ['preview', '{input}'],
+        dataUrl: 'http://127.0.0.1:{dataPort}',
+        controlUrl: 'ws://127.0.0.1:{controlPort}',
+        previewIframe: { mode: 'themed', css: '../preview.css' }
+      }
+    ];
+    expect(() => validateManifest(m)).toThrow(/safe relative .css path/);
+  });
+
+  it('rejects preview service iframe css on direct mode', () => {
+    const m = validManifest({
+      runtime: 'luau',
+      entry: 'main.luau',
+      permissions: [
+        'templates.contribute',
+        'noteKinds.contribute',
+        'notes.create',
+        'nativeServices.run'
+      ]
+    });
+    (m.contributes as Record<string, unknown>).nativeServices = [
+      {
+        id: 'tinymist',
+        binaryName: 'tinymist',
+        args: ['preview', '{input}'],
+        dataUrl: 'http://127.0.0.1:{dataPort}',
+        controlUrl: 'ws://127.0.0.1:{controlPort}',
+        previewIframe: { mode: 'direct', css: 'preview.css' }
+      }
+    ];
+    expect(() => validateManifest(m)).toThrow(/only allowed/);
   });
 
   it('rejects a preview service whose iframe URL is not loopback', () => {

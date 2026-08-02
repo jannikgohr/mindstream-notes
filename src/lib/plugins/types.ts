@@ -254,6 +254,22 @@ export interface PluginNativeToolContribution {
   descriptionKey?: string;
 }
 
+export type PluginPreviewIframeMode = 'direct' | 'themed';
+
+export interface PluginPreviewIframeContribution {
+  /**
+   * `direct` (default) loads the service URL unchanged. `themed` routes it
+   * through the host proxy so app theme variables and optional plugin CSS can be
+   * injected into the iframe document.
+   */
+  mode: PluginPreviewIframeMode;
+  /**
+   * Optional safe relative `.css` file inside the plugin bundle, injected only
+   * for `mode: "themed"` after the host preview CSS.
+   */
+  css?: string;
+}
+
 /**
  * A long-lived **preview service**: a PATH binary the host runs as a persistent
  * local server whose web frontend is shown in the note's preview iframe. The
@@ -277,6 +293,11 @@ export interface PluginNativeServiceContribution {
   controlUrl: string;
   /** Extension for the materialized source file (default `txt`). */
   inputExtension?: string;
+  /**
+   * Controls how the service frontend iframe is loaded. Omitted means
+   * unmodified/direct, which is the safest and most compatible default.
+   */
+  previewIframe?: PluginPreviewIframeContribution;
   descriptionKey?: string;
   /**
    * Control-plane message names the host bridge understands. `jumpEvent` is the

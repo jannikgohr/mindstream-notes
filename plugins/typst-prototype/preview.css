@@ -1,0 +1,4 @@
+:root {
+  --typst-preview-background-color: var(--ms-preview-background) !important;
+  --vscode-sideBar-background: var(--ms-preview-background) !important;
+}
