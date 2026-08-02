@@ -319,6 +319,156 @@ describe('validateManifest', () => {
     expect(() => validateManifest(m)).not.toThrow();
   });
 
+  it('accepts note exporters for built-in and plugin-owned note kinds', () => {
+    const builtIn = validManifest({
+      runtime: 'luau',
+      entry: 'main.luau',
+      permissions: [
+        'templates.contribute',
+        'notes.create',
+        'noteExporters.contribute'
+      ]
+    });
+    (builtIn.contributes as Record<string, unknown>).noteExporters = [
+      {
+        id: 'markdown-pdf',
+        labelKey: 'export.pdf',
+        noteKind: 'markdown',
+        format: 'pdf',
+        export: 'exportPdf'
+      }
+    ];
+    expect(validateManifest(builtIn).contributes.noteExporters).toHaveLength(1);
+
+    const pluginOwned = validManifest({
+      runtime: 'luau',
+      entry: 'main.luau',
+      permissions: [
+        'templates.contribute',
+        'noteKinds.contribute',
+        'noteExporters.contribute',
+        'notes.create'
+      ]
+    });
+    const contributes = pluginOwned.contributes as Record<string, unknown>;
+    contributes.noteKinds = [
+      {
+        id: 'document',
+        labelKey: 'notes.document',
+        render: { export: 'renderDocument' }
+      }
+    ];
+    contributes.noteExporters = [
+      {
+        id: 'document-pdf',
+        labelKey: 'export.pdf',
+        noteKind: 'plugin.com.example.templates.document',
+        format: 'pdf',
+        export: 'exportPdf'
+      }
+    ];
+    expect(
+      validateManifest(pluginOwned).contributes.noteExporters
+    ).toHaveLength(1);
+  });
+
+  it('rejects note exporters without permission or scripted runtime', () => {
+    const missingPermission = validManifest({
+      runtime: 'luau',
+      entry: 'main.luau'
+    });
+    (missingPermission.contributes as Record<string, unknown>).noteExporters = [
+      {
+        id: 'pdf',
+        labelKey: 'export.pdf',
+        noteKind: 'markdown',
+        format: 'pdf',
+        export: 'exportPdf'
+      }
+    ];
+    expect(() => validateManifest(missingPermission)).toThrow(
+      /missing the "noteExporters.contribute"/
+    );
+
+    const manifestOnly = validManifest({
+      permissions: [
+        'templates.contribute',
+        'notes.create',
+        'noteExporters.contribute'
+      ]
+    });
+    (manifestOnly.contributes as Record<string, unknown>).noteExporters = [
+      {
+        id: 'pdf',
+        labelKey: 'export.pdf',
+        noteKind: 'markdown',
+        format: 'pdf',
+        export: 'exportPdf'
+      }
+    ];
+    expect(() => validateManifest(manifestOnly)).toThrow(
+      /require runtime "luau" or "wasm"/
+    );
+  });
+
+  it('rejects malformed note exporter contributions', () => {
+    const base = validManifest({
+      runtime: 'luau',
+      entry: 'main.luau',
+      permissions: [
+        'templates.contribute',
+        'notes.create',
+        'noteExporters.contribute'
+      ]
+    });
+    const contributes = base.contributes as Record<string, unknown>;
+    contributes.noteExporters = [
+      {
+        id: 'pdf',
+        labelKey: 'export.pdf',
+        noteKind: 'unknown',
+        format: 'pdf',
+        export: 'exportPdf'
+      }
+    ];
+    expect(() => validateManifest(base)).toThrow(/built-in note kind/);
+
+    const badFormat = structuredClone(base);
+    (
+      (badFormat.contributes as Record<string, unknown>)
+        .noteExporters as Record<string, unknown>[]
+    )[0].noteKind = 'markdown';
+    (
+      (badFormat.contributes as Record<string, unknown>)
+        .noteExporters as Record<string, unknown>[]
+    )[0].format = 'html';
+    expect(() => validateManifest(badFormat)).toThrow(/format/);
+  });
+
+  it('requires declared native tools for note exporters', () => {
+    const m = validManifest({
+      runtime: 'luau',
+      entry: 'main.luau',
+      permissions: [
+        'templates.contribute',
+        'notes.create',
+        'noteExporters.contribute',
+        'nativeTools.runDeclared'
+      ]
+    });
+    (m.contributes as Record<string, unknown>).noteExporters = [
+      {
+        id: 'pdf',
+        labelKey: 'export.pdf',
+        noteKind: 'markdown',
+        format: 'pdf',
+        export: 'exportPdf',
+        requiresNativeTool: 'typst'
+      }
+    ];
+    expect(() => validateManifest(m)).toThrow(/undeclared native tool/);
+  });
+
   it('rejects unknown permissions', () => {
     expect(() =>
       validateManifest(validManifest({ permissions: ['notes.write'] }))

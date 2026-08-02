@@ -92,4 +92,8 @@ local function renderDocument(input: RenderInput): { [string]: any }
 	}
 end
 
-return { renderDocument = renderDocument }
+local function exportDocument(input: RenderInput): { [string]: any }
+	return renderDocument(input)
+end
+
+return { renderDocument = renderDocument, exportDocument = exportDocument }

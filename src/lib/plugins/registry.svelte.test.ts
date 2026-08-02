@@ -5,6 +5,8 @@ import {
   pluginById,
   pluginCommands,
   pluginLoadError,
+  pluginNoteExporters,
+  pluginNoteExportersForKind,
   pluginSettingsSections,
   pluginSourceLanguage,
   pluginSourceLanguages,
@@ -70,6 +72,31 @@ function manifest(id = 'com.example.templates'): Record<string, unknown> {
   };
 }
 
+function exporterManifest(
+  id = 'com.example.exporters'
+): Record<string, unknown> {
+  return {
+    id,
+    name: 'Exporter',
+    version: '1.0.0',
+    runtime: 'luau',
+    entry: 'main.luau',
+    permissions: ['noteExporters.contribute'],
+    contributes: {
+      i18n: { en: { 'export.pdf': 'PDF' } },
+      noteExporters: [
+        {
+          id: 'pdf',
+          labelKey: 'export.pdf',
+          noteKind: 'markdown',
+          format: 'pdf',
+          export: 'exportPdf'
+        }
+      ]
+    }
+  };
+}
+
 afterEach(() => resetPluginRegistry());
 
 describe('registerPlugin', () => {
@@ -81,6 +108,7 @@ describe('registerPlugin', () => {
     expect(pluginSettingsSections()).toHaveLength(1);
     expect(pluginCommands()).toHaveLength(1);
     expect(pluginSourceLanguages()).toHaveLength(1);
+    expect(pluginNoteExporters()).toHaveLength(0);
     expect(pluginSourceLanguage('typ')?.language.id).toBe('typst');
     expect(pluginI18nBundles()['com.example.templates']).toBeTruthy();
   });
@@ -114,6 +142,7 @@ describe('enabled/disabled filtering', () => {
     expect(pluginSettingsSections()).toHaveLength(0);
     expect(pluginCommands()).toHaveLength(0);
     expect(pluginSourceLanguages()).toHaveLength(0);
+    expect(pluginNoteExporters()).toHaveLength(0);
     expect(pluginI18nBundles()).toEqual({});
     expect(pluginTemplate('com.example.templates', 'meeting')).toBeUndefined();
   });
@@ -123,6 +152,16 @@ describe('enabled/disabled filtering', () => {
     expect(pluginTemplates()).toHaveLength(0);
     setPluginEnabled('com.example.templates', true);
     expect(pluginTemplates()).toHaveLength(1);
+  });
+
+  it('exposes note exporters and filters them by note kind', () => {
+    registerPlugin(exporterManifest());
+    expect(pluginNoteExporters()).toHaveLength(1);
+    expect(pluginNoteExportersForKind('markdown')[0].exporter.id).toBe('pdf');
+    expect(pluginNoteExportersForKind('kanban')).toEqual([]);
+
+    setPluginEnabled('com.example.exporters', false);
+    expect(pluginNoteExportersForKind('markdown')).toEqual([]);
   });
 });
 

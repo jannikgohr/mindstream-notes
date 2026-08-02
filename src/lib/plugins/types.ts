@@ -18,6 +18,8 @@
  * Capabilities a plugin may request in its manifest:
  *   - `templates.contribute` — surface note templates in create menus;
  *   - `noteKinds.contribute` — register plugin-owned note kind/editor surfaces;
+ *   - `noteExporters.contribute` — add export actions for built-in or
+ *     plugin-owned note kinds;
  *   - `notes.create` — have the app create a note from the plugin's template;
  *   - `notes.read` — a scripted plugin may read note metadata through its
  *     permission-gated host API.
@@ -38,6 +40,7 @@
 export type PluginPermission =
   | 'templates.contribute'
   | 'noteKinds.contribute'
+  | 'noteExporters.contribute'
   | 'notes.create'
   | 'notes.read'
   | 'pluginArtifacts.download'
@@ -51,6 +54,7 @@ export type PluginPermission =
 export const KNOWN_PLUGIN_PERMISSIONS: readonly PluginPermission[] = [
   'templates.contribute',
   'noteKinds.contribute',
+  'noteExporters.contribute',
   'notes.create',
   'notes.read',
   'pluginArtifacts.download',
@@ -196,6 +200,33 @@ export interface PluginSourceLanguageContribution {
     type: 'host';
     id: PluginSourceLanguageHostProvider;
   };
+}
+
+export const PLUGIN_NOTE_EXPORT_FORMATS = ['pdf'] as const;
+
+export type PluginNoteExportFormat =
+  (typeof PLUGIN_NOTE_EXPORT_FORMATS)[number];
+
+/**
+ * A note export action contributed by a plugin. `noteKind` names either a
+ * built-in note kind (for extending existing note types) or one of this
+ * plugin's fully-qualified note kind ids (`plugin.<pluginId>.<localKind>`).
+ */
+export interface PluginNoteExporterContribution {
+  /** Plugin-local slug. The UI id is `plugin.<pluginId>.<id>`. */
+  id: string;
+  /** Plugin-local i18n key for the export menu label. */
+  labelKey: string;
+  noteKind: string;
+  format: PluginNoteExportFormat;
+  /** Backend script export called with `{ noteId, noteKind, title, body }`. */
+  export: string;
+  /**
+   * Optional declared native tool required by this export. The host checks it
+   * before calling the script so failures are immediate and readable.
+   * Requires `nativeTools.runDeclared`.
+   */
+  requiresNativeTool?: string;
 }
 
 /** A single generic setting control a plugin adds under its section. */
@@ -496,6 +527,7 @@ export interface PluginContributions {
   nativeTools?: PluginNativeToolContribution[];
   nativeServices?: PluginNativeServiceContribution[];
   sourceLanguages?: PluginSourceLanguageContribution[];
+  noteExporters?: PluginNoteExporterContribution[];
   noteTemplates?: PluginNoteTemplateContribution[];
   noteKinds?: PluginNoteKindContribution[];
   commands?: PluginCommandContribution[];

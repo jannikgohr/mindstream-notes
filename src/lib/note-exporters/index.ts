@@ -1,6 +1,7 @@
 import type { NoteKind, NoteSummary } from '$lib/api';
 import { inkExporters } from './ink';
 import { pdfExporters } from './pdf';
+import { pluginExportersForNote } from './plugins';
 import type { NoteExporter } from './types';
 
 const EXPORTERS_BY_KIND: Partial<Record<NoteKind, NoteExporter[]>> = {
@@ -12,7 +13,10 @@ export function exportersForNote(
   note: Pick<NoteSummary, 'note_kind'> | null | undefined
 ): NoteExporter[] {
   if (!note) return [];
-  return EXPORTERS_BY_KIND[note.note_kind] ?? [];
+  return [
+    ...(EXPORTERS_BY_KIND[note.note_kind] ?? []),
+    ...pluginExportersForNote(note)
+  ];
 }
 
 export type { NoteExporter };

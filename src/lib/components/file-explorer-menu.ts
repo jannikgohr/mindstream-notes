@@ -341,10 +341,9 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
           onSelect: () => openInNewWindow(id)
         });
       }
-      const exporters =
-        note?.note_kind === 'ink' || note?.note_kind === 'pdf'
-          ? (await import('$lib/note-exporters')).exportersForNote(note)
-          : [];
+      const exporters = note
+        ? (await import('$lib/note-exporters')).exportersForNote(note)
+        : [];
       if (exporters.length > 0) {
         items.push('separator', {
           label: 'Export',
