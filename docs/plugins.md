@@ -316,7 +316,7 @@ A note kind can declare `render.requiresNativeTool = "<toolId>"`: the host check
 that tool up front and, when it's missing (not installed, or mobile), shows the
 editor **source-only** instead of calling the renderer. A `render.previewMime` of
 `application/pdf` makes the host render the returned `preview.dataBase64` with a
-built-in PDF page viewer. See the bundled `typst-prototype` plugin, whose
+built-in PDF page viewer. See the bundled `typst` plugin, whose
 `renderDocument` pipes the note body through the native `typst` binary
 (`typst compile --format pdf - -`) and returns the PDF as base64 — one stream for
 all pages (typst refuses multi-page SVG/PNG to stdout).

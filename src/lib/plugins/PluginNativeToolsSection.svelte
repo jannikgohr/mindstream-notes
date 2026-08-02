@@ -1,15 +1,20 @@
 <script lang="ts">
   /**
    * Host-owned settings section that lets the user verify a plugin's declared
-   * native tools are installed. Rendered inside a plugin's own settings pane (it
-   * knows the active plugin id) whenever that plugin declares
-   * `contributes.nativeTools`. Each tool gets a Check button that resolves the
-   * binary from PATH via `plugins_native_tool_status` and reports availability +
-   * the resolved path. Native tools are desktop-only; on mobile the status comes
-   * back unavailable.
+   * native binaries are installed. Rendered inside a plugin's own settings pane
+   * (it knows the active plugin id) whenever that plugin declares
+   * `contributes.nativeTools` or `contributes.nativeServices`. Each binary gets a
+   * Check button that resolves it from PATH — tools via
+   * `plugins_native_tool_status`, preview-server services via
+   * `plugins_native_service_status` — and reports availability + the resolved
+   * path. Native binaries are desktop-only; on mobile the status comes back
+   * unavailable.
    */
   import { CheckCircle2, RefreshCw, Terminal, XCircle } from '@lucide/svelte';
-  import { pluginsNativeToolStatus } from '$lib/api/plugins';
+  import {
+    pluginsNativeServiceStatus,
+    pluginsNativeToolStatus
+  } from '$lib/api/plugins';
   import { pluginById } from '$lib/plugins/registry.svelte';
   import { resolvePluginStringOptional } from '$lib/plugins/plugin-i18n';
   import { tUi } from '$lib/settings/i18n.svelte';
@@ -19,9 +24,32 @@
   }
   let { pluginId }: Props = $props();
 
-  const tools = $derived(
-    pluginById(pluginId)?.manifest.contributes.nativeTools ?? []
-  );
+  type BinaryKind = 'tool' | 'service';
+  interface CheckableBinary {
+    kind: BinaryKind;
+    id: string;
+    binaryName: string;
+    descriptionKey?: string;
+  }
+
+  // Tools and preview-server services both resolve a PATH binary; list them
+  // together so the user can verify every native dependency in one place. Row
+  // keys are `<kind>:<id>` so a tool and a service can share an id safely.
+  const binaries = $derived.by<CheckableBinary[]>(() => {
+    const contributes = pluginById(pluginId)?.manifest.contributes;
+    const tools = (contributes?.nativeTools ?? []).map(
+      (tool): CheckableBinary => ({ kind: 'tool', ...tool })
+    );
+    const services = (contributes?.nativeServices ?? []).map(
+      (service): CheckableBinary => ({
+        kind: 'service',
+        id: service.id,
+        binaryName: service.binaryName,
+        descriptionKey: service.descriptionKey
+      })
+    );
+    return [...tools, ...services];
+  });
 
   type RowState = 'idle' | 'checking' | 'available' | 'missing';
   interface Row {
@@ -30,24 +58,30 @@
   }
   let rows = $state<Record<string, Row>>({});
 
-  async function check(toolId: string) {
-    rows = { ...rows, [toolId]: { state: 'checking', path: null } };
+  const rowKey = (binary: CheckableBinary) => `${binary.kind}:${binary.id}`;
+
+  async function check(binary: CheckableBinary) {
+    const key = rowKey(binary);
+    rows = { ...rows, [key]: { state: 'checking', path: null } };
     try {
-      const status = await pluginsNativeToolStatus(pluginId, toolId);
+      const status =
+        binary.kind === 'service'
+          ? await pluginsNativeServiceStatus(pluginId, binary.id)
+          : await pluginsNativeToolStatus(pluginId, binary.id);
       rows = {
         ...rows,
-        [toolId]: {
+        [key]: {
           state: status.available ? 'available' : 'missing',
           path: status.path
         }
       };
     } catch {
-      rows = { ...rows, [toolId]: { state: 'missing', path: null } };
+      rows = { ...rows, [key]: { state: 'missing', path: null } };
     }
   }
 </script>
 
-{#if tools.length > 0}
+{#if binaries.length > 0}
   <div class="mt-5">
     <h3
       class="border-b border-border pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
@@ -55,17 +89,17 @@
       {tUi('plugins.nativeTools.title')}
     </h3>
     <div class="divide-y divide-border">
-      {#each tools as tool (tool.id)}
-        {@const row = rows[tool.id]}
+      {#each binaries as binary (rowKey(binary))}
+        {@const row = rows[rowKey(binary)]}
         {@const description = resolvePluginStringOptional(
           pluginId,
-          tool.descriptionKey
+          binary.descriptionKey
         )}
         <div class="flex items-start justify-between gap-3 py-3">
           <div class="min-w-0">
             <div class="flex items-center gap-2 text-sm font-medium">
               <Terminal class="size-4 shrink-0 text-muted-foreground" />
-              <code class="font-mono">{tool.binaryName}</code>
+              <code class="font-mono">{binary.binaryName}</code>
             </div>
             {#if description}
               <p class="mt-0.5 text-xs text-muted-foreground">{description}</p>
@@ -95,7 +129,7 @@
             type="button"
             class="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
             disabled={row?.state === 'checking'}
-            onclick={() => check(tool.id)}
+            onclick={() => check(binary)}
           >
             <RefreshCw
               class="size-3 {row?.state === 'checking' ? 'animate-spin' : ''}"

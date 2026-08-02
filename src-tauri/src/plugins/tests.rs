@@ -111,7 +111,7 @@ fn new_builtin_plugin_is_enabled_on_discovery() {
 fn new_builtin_plugin_can_opt_out_of_default_enablement() {
     let db = open_memory_for_tests();
     db.with_conn(|c| {
-        let mut input = upsert_input("com.mindstream.typst.prototype", "hash1", SOURCE_BUILTIN);
+        let mut input = upsert_input("com.mindstream.typst", "hash1", SOURCE_BUILTIN);
         input.enabled_by_default = false;
         let rec = upsert(c, input)?;
         assert!(!rec.enabled);

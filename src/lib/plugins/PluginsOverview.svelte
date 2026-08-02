@@ -90,6 +90,20 @@
     return tUi(`plugins.permission.${perm}`);
   }
 
+  /**
+   * The concrete binary names a native-execution permission covers, so the user
+   * sees exactly which PATH executables a plugin may run — listed as sub-bullets
+   * under the permission. Empty for every other permission.
+   */
+  function permissionBinaries(
+    entry: PluginOverviewEntry,
+    perm: string
+  ): string[] {
+    if (perm === 'nativeTools.runDeclared') return entry.nativeToolBinaries;
+    if (perm === 'nativeServices.run') return entry.nativeServiceBinaries;
+    return [];
+  }
+
   function sourceLabel(source: string): string {
     return source === SOURCE_BUILTIN
       ? tUi('plugins.source.builtin')
@@ -229,7 +243,19 @@
                       class="mt-1.5 list-disc space-y-1 pl-4 text-xs text-muted-foreground"
                     >
                       {#each entry.permissions as perm (perm)}
-                        <li>{permissionLabel(perm)}</li>
+                        {@const binaries = permissionBinaries(entry, perm)}
+                        <li>
+                          {permissionLabel(perm)}
+                          {#if binaries.length > 0}
+                            <ul class="mt-0.5 list-disc space-y-0.5 pl-4">
+                              {#each binaries as binary (binary)}
+                                <li>
+                                  <code class="font-mono">{binary}</code>
+                                </li>
+                              {/each}
+                            </ul>
+                          {/if}
+                        </li>
                       {/each}
                     </ul>
                   {:else}

@@ -63,6 +63,10 @@ export interface PluginOverviewEntry {
   /** True when the plugin publishes at least one command (⇒ bindable hotkeys). */
   hasCommands: boolean;
   permissions: string[];
+  /** Binary names declared under `contributes.nativeTools` (PATH executables). */
+  nativeToolBinaries: string[];
+  /** Binary names declared under `contributes.nativeServices` (preview servers). */
+  nativeServiceBinaries: string[];
 }
 
 const adminState = $state<{ records: Record<string, PluginRecord> }>({
@@ -102,7 +106,13 @@ export function pluginOverview(): PluginOverviewEntry[] {
       author: manifest.author ?? null,
       hasSettings: (manifest.contributes.settings ?? []).length > 0,
       hasCommands: (manifest.contributes.commands ?? []).length > 0,
-      permissions: manifest.permissions
+      permissions: manifest.permissions,
+      nativeToolBinaries: (manifest.contributes.nativeTools ?? []).map(
+        (tool) => tool.binaryName
+      ),
+      nativeServiceBinaries: (manifest.contributes.nativeServices ?? []).map(
+        (service) => service.binaryName
+      )
     };
   });
 }

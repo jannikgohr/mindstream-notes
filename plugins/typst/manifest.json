@@ -1,6 +1,6 @@
 {
-  "id": "com.mindstream.typst.prototype",
-  "name": "Typst Prototype",
+  "id": "com.mindstream.typst",
+  "name": "Typst",
   "version": "0.1.0",
   "author": "Mindstream",
   "enabledByDefault": false,
@@ -21,7 +21,7 @@
   "contributes": {
     "i18n": {
       "en": {
-        "plugin.description": "Prototype Typst documents as plugin-owned notes.",
+        "plugin.description": "Write and preview Typst documents as plugin-owned notes.",
         "notes.document.label": "Typst document",
         "notes.document.description": "Source-and-preview document notes owned by the Typst plugin.",
         "templates.document.label": "Typst document",
@@ -35,7 +35,7 @@
         "viewMode.split": "Split"
       },
       "de": {
-        "plugin.description": "Prototyp fuer Typst-Dokumente als Plugin-Notizen.",
+        "plugin.description": "Typst-Dokumente als Plugin-Notizen schreiben und ansehen.",
         "notes.document.label": "Typst-Dokument",
         "notes.document.description": "Quelltext- und Vorschau-Notizen des Typst-Plugins.",
         "templates.document.label": "Typst-Dokument",
@@ -142,7 +142,7 @@
       {
         "id": "document",
         "labelKey": "templates.document.label",
-        "noteKind": "plugin.com.mindstream.typst.prototype.document",
+        "noteKind": "plugin.com.mindstream.typst.document",
         "titleTemplate": "Untitled Typst document",
         "bodyTemplate": "#set document(title: [{{title}}])\n\n= {{title}}\n\nStart writing in Typst here."
       }
@@ -151,7 +151,7 @@
       {
         "id": "pdf",
         "labelKey": "export.pdf.label",
-        "noteKind": "plugin.com.mindstream.typst.prototype.document",
+        "noteKind": "plugin.com.mindstream.typst.document",
         "format": "pdf",
         "export": "exportDocument",
         "requiresNativeTool": "typst"
