@@ -304,6 +304,26 @@ jump; payload `{ filepath, start:[line,col] }`, 0-indexed). A note kind opts in
 with `render.previewService = "<id>"`; the host still falls back to the
 `export` / `requiresNativeTool` render when the service binary isn't installed.
 
+By default, the iframe loads `dataUrl` **unmodified**. A service can opt into the
+host's themed proxy with:
+
+```jsonc
+"previewIframe": {
+  "mode": "themed",
+  "css": "preview.css" // optional, plugin-relative .css file
+}
+```
+
+`mode: "themed"` serves the preview frontend through a per-session loopback proxy
+that injects host-owned theme variables (`--ms-preview-background`,
+`--ms-preview-foreground`, `--ms-preview-gutter`, `--ms-preview-scrollbar`) and
+the host's preview scrollbar/layout CSS. If `css` is present, the file is read
+from the approved plugin bundle, must be a safe relative `.css` path, is capped
+in size, and is injected after the host CSS. Use this for service-specific
+bridges such as mapping the host background token to a frontend-specific custom
+property. The proxy keeps the preview document on loopback, applies a restrictive
+CSP, and rejects CSS content that could break out of the injected `<style>`.
+
 The host owns the whole lifecycle: it allocates the ports, writes the body to a
 temp file the server watches (rewritten on edit), waits for readiness, connects
 the control plane as the editor, and reaps the process when the note closes or

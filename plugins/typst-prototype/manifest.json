@@ -80,6 +80,10 @@
         "dataUrl": "http://127.0.0.1:{dataPort}",
         "controlUrl": "ws://127.0.0.1:{controlPort}",
         "inputExtension": "typ",
+        "previewIframe": {
+          "mode": "themed",
+          "css": "preview.css"
+        },
         "protocol": {
           "jumpEvent": "editorScrollTo"
         }

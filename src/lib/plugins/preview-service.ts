@@ -33,7 +33,7 @@ export interface PreviewServiceOptions {
   jumpEvent: string;
   onJump: (jump: PreviewJump) => void;
   /** Called with the iframe URL once the server is listening. */
-  onReady: (dataUrl: string, proxyUrl: string) => void;
+  onReady: (dataUrl: string, proxyUrl: string | null) => void;
   onError: (message: string) => void;
 }
 

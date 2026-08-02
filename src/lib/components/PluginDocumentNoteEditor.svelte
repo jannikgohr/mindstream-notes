@@ -114,10 +114,10 @@
   let serviceProxyUrl = $state<string | null>(null);
   let serviceController: PreviewServiceController | null = null;
   let serviceCheckToken = 0;
-  // The iframe is served through our theme-injecting reverse proxy by default;
-  // if its readiness beacon doesn't arrive (e.g. a webview rejects our CSP), we
-  // fall back to loading the server directly so the preview still works.
-  let proxyState = $state<'trying' | 'ok' | 'fallback'>('trying');
+  // The iframe loads directly by default. Opt-in themed services use our
+  // reverse proxy; if its readiness beacon doesn't arrive, we fall back to the
+  // service URL directly so the preview still works.
+  let proxyState = $state<'off' | 'trying' | 'ok' | 'fallback'>('off');
   const PREVIEW_BG_FALLBACK = 'oklch(0.1735 0.002 286.18)';
   let previewBg = $state(PREVIEW_BG_FALLBACK);
   let previewFg = $state('rgb(255,255,255)');
@@ -158,21 +158,20 @@
   const sessionKey = $derived(
     contributionRef ? `${contributionRef.pluginId}:${noteId}` : ''
   );
-  // What the live-preview iframe loads: the theme-injecting proxy by default,
-  // the server directly once we've fallen back.
+  // What the live-preview iframe loads: direct by default; a service can opt
+  // into the host theme-injecting proxy and still fall back to direct if needed.
   const serviceIframeSrc = $derived.by(() => {
     if (!serviceDataUrl) return null;
-    return proxyState === 'fallback'
-      ? serviceDataUrl
-      : serviceProxyUrl
-        ? previewProxyUrl(
-            serviceProxyUrl,
-            previewBg,
-            previewFg,
-            previewGutter,
-            previewScrollbar
-          )
-        : null;
+    if (serviceProxyUrl && proxyState !== 'off' && proxyState !== 'fallback') {
+      return previewProxyUrl(
+        serviceProxyUrl,
+        previewBg,
+        previewFg,
+        previewGutter,
+        previewScrollbar
+      );
+    }
+    return serviceDataUrl;
   });
   // Preview is blocked (source-only) only when neither the live service nor the
   // declared PDF tool is available.
@@ -269,7 +268,12 @@
         if (destroyed) return;
         serviceDataUrl = url;
         serviceProxyUrl = proxyUrl;
-        startProxyAttempt();
+        if (proxyUrl) {
+          startProxyAttempt();
+        } else {
+          proxyState = 'off';
+          if (proxyFallbackTimer) clearTimeout(proxyFallbackTimer);
+        }
       },
       onError: (message) => {
         if (!destroyed) renderError = message;
@@ -282,6 +286,7 @@
       if (serviceController === controller) serviceController = null;
       serviceDataUrl = null;
       serviceProxyUrl = null;
+      proxyState = 'off';
       if (proxyFallbackTimer) clearTimeout(proxyFallbackTimer);
     };
   });
@@ -356,7 +361,9 @@
   }
 
   $effect(() => {
-    if (!serviceProxyUrl || proxyState === 'fallback') return;
+    if (!serviceProxyUrl || proxyState === 'off' || proxyState === 'fallback') {
+      return;
+    }
     refreshPreviewTheme();
 
     const refresh = () => refreshPreviewTheme();
@@ -1054,9 +1061,9 @@ parentWindow.postMessage({ type: 'mindstream-plugin-preview-ready' }, '*');
           {#if serviceUsable}
             {#if serviceIframeSrc}
               <!-- The live preview server (e.g. tinymist) serves its own
-                   click-to-source frontend. We load it through our reverse
-                   proxy so an app-theme background is injected behind the
-                   pages; on `fallback` it's the server's origin directly. -->
+                   click-to-source frontend. Services load directly by default;
+                   opt-in themed services use our reverse proxy unless it
+                   falls back to the server's origin. -->
               <div class="min-h-0 flex-1 bg-muted/40">
                 <div
                   class="h-full w-full overflow-hidden border border-border bg-white shadow-sm"

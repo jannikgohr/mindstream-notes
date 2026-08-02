@@ -37,6 +37,7 @@ use super::discovery;
 const PERM_NATIVE_SERVICES_RUN: &str = "nativeServices.run";
 /// How long we wait for the server to start accepting connections on its data port.
 const READY_TIMEOUT: Duration = Duration::from_secs(20);
+const MAX_PLUGIN_PREVIEW_CSS_BYTES: usize = 64 * 1024;
 
 /// The custom URI scheme our preview reverse-proxy is served under (see
 /// [`proxy_preview_html`]). Registered in `lib.rs`.
@@ -52,6 +53,34 @@ const PROXY_CSP: &str = "default-src 'none'; \
      connect-src ws://127.0.0.1:* http://127.0.0.1:* data: blob:; \
      worker-src blob:; base-uri 'none'";
 const PROXY_STYLE: &str = include_str!("preview_service.css");
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+enum PreviewIframeMode {
+    Direct,
+    Themed,
+}
+
+fn default_preview_iframe_mode() -> PreviewIframeMode {
+    PreviewIframeMode::Direct
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PreviewIframeManifest {
+    #[serde(default = "default_preview_iframe_mode")]
+    mode: PreviewIframeMode,
+    css: Option<String>,
+}
+
+impl Default for PreviewIframeManifest {
+    fn default() -> Self {
+        Self {
+            mode: PreviewIframeMode::Direct,
+            css: None,
+        }
+    }
+}
 
 /// A plugin-declared preview service, parsed from `contributes.nativeServices`.
 #[derive(Debug, Clone, Deserialize)]
@@ -70,6 +99,8 @@ struct PluginNativeServiceManifest {
     /// File extension for the materialized input (default `typ`).
     #[serde(default)]
     input_extension: Option<String>,
+    #[serde(default)]
+    preview_iframe: PreviewIframeManifest,
 }
 
 /// One running preview server.
@@ -79,9 +110,6 @@ struct Session {
     /// The server's data-plane HTTP port — where the reverse-proxy fetches the
     /// frontend HTML from.
     data_port: u16,
-    /// The server's control-plane WebSocket port — where the proxied frontend
-    /// sends preview/client messages.
-    control_port: u16,
     proxy: Option<LoopbackPreviewProxy>,
 }
 
@@ -99,8 +127,14 @@ impl Session {
 
 struct LoopbackPreviewProxy {
     port: u16,
+    styles: PreviewProxyStyles,
     stop: Arc<AtomicBool>,
     join: Option<JoinHandle<()>>,
+}
+
+#[derive(Clone, Default)]
+struct PreviewProxyStyles {
+    plugin_css: Option<String>,
 }
 
 impl LoopbackPreviewProxy {
@@ -133,13 +167,16 @@ impl PreviewServiceRegistry {
         }
     }
 
-    /// The data/control ports of a running session, if any. Used by the reverse
-    /// proxy to validate a request targets a real session (not arbitrary
-    /// loopback ports).
-    fn ports(&self, session_key: &str) -> Option<(u16, u16)> {
+    /// The data port and styles for a themed proxy session, if any. Used by the
+    /// reverse proxy to validate that a request targets an opt-in themed session
+    /// rather than an arbitrary loopback port.
+    fn themed_proxy(&self, session_key: &str) -> Option<(u16, PreviewProxyStyles)> {
         let sessions = self.sessions.lock().ok()?;
         let session = sessions.get(session_key)?;
-        Some((session.data_port, session.control_port))
+        session
+            .proxy
+            .as_ref()
+            .map(|proxy| (session.data_port, proxy.styles.clone()))
     }
 }
 
@@ -150,7 +187,7 @@ pub struct PreviewServiceHandle {
     pub session_key: String,
     pub data_url: String,
     pub control_url: String,
-    pub proxy_url: String,
+    pub proxy_url: Option<String>,
 }
 
 /// Availability of a declared service's binary (does it resolve on PATH?).
@@ -213,11 +250,68 @@ fn wait_until_ready(port: u16) -> AppResult<()> {
     ))
 }
 
-fn start_loopback_proxy(data_port: u16) -> AppResult<LoopbackPreviewProxy> {
+fn is_safe_preview_css_path(path: &str) -> bool {
+    !path.is_empty()
+        && path.ends_with(".css")
+        && !path.contains("..")
+        && !path.contains('\\')
+        && !path.starts_with('/')
+        && path.split('/').all(|segment| {
+            let mut chars = segment.chars();
+            matches!(chars.next(), Some(c) if c.is_ascii_alphanumeric())
+                && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        })
+}
+
+fn sanitize_plugin_preview_css(css: &str) -> AppResult<String> {
+    if css.len() > MAX_PLUGIN_PREVIEW_CSS_BYTES {
+        return Err(AppError::InvalidArg(format!(
+            "preview iframe css is too large (max {MAX_PLUGIN_PREVIEW_CSS_BYTES} bytes)"
+        )));
+    }
+    let lower = css.to_ascii_lowercase();
+    let unsafe_tokens = [
+        "</style",
+        "<script",
+        "@import",
+        "javascript:",
+        "expression(",
+    ];
+    if css.contains('\0') || unsafe_tokens.iter().any(|token| lower.contains(token)) {
+        return Err(AppError::InvalidArg(
+            "preview iframe css contains unsafe tokens".into(),
+        ));
+    }
+    Ok(css.to_string())
+}
+
+fn load_plugin_preview_css(
+    files: &discovery::PluginFiles,
+    path: Option<&str>,
+) -> AppResult<Option<String>> {
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    if !is_safe_preview_css_path(path) {
+        return Err(AppError::InvalidArg(format!(
+            "preview iframe css path '{path}' must be a safe relative .css file"
+        )));
+    }
+    let Some(css) = files.read_text(path)? else {
+        return Err(AppError::NotFound(format!("preview iframe css {path}")));
+    };
+    sanitize_plugin_preview_css(&css).map(Some)
+}
+
+fn start_loopback_proxy(
+    data_port: u16,
+    styles: PreviewProxyStyles,
+) -> AppResult<LoopbackPreviewProxy> {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
     let port = listener.local_addr()?.port();
     let stop = Arc::new(AtomicBool::new(false));
     let thread_stop = Arc::clone(&stop);
+    let thread_styles = Arc::new(styles.clone());
     let join = thread::spawn(move || {
         for incoming in listener.incoming() {
             if thread_stop.load(Ordering::Relaxed) {
@@ -227,21 +321,23 @@ fn start_loopback_proxy(data_port: u16) -> AppResult<LoopbackPreviewProxy> {
                 continue;
             };
             let conn_stop = Arc::clone(&thread_stop);
+            let conn_styles = Arc::clone(&thread_styles);
             thread::spawn(move || {
                 if !conn_stop.load(Ordering::Relaxed) {
-                    handle_proxy_connection(stream, data_port);
+                    handle_proxy_connection(stream, data_port, &conn_styles);
                 }
             });
         }
     });
     Ok(LoopbackPreviewProxy {
         port,
+        styles,
         stop,
         join: Some(join),
     })
 }
 
-fn handle_proxy_connection(mut client: TcpStream, data_port: u16) {
+fn handle_proxy_connection(mut client: TcpStream, data_port: u16, styles: &PreviewProxyStyles) {
     let Ok(request) = read_http_head(&mut client) else {
         return;
     };
@@ -251,7 +347,7 @@ fn handle_proxy_connection(mut client: TcpStream, data_port: u16) {
     if is_websocket_upgrade(&request) {
         tunnel_websocket(client, request, data_port);
     } else {
-        serve_proxied_html(client, request, data_port);
+        serve_proxied_html(client, request, data_port, styles);
     }
 }
 
@@ -336,7 +432,12 @@ fn rewrite_ws_handshake(request: &[u8], data_port: u16) -> String {
     out
 }
 
-fn serve_proxied_html(mut client: TcpStream, request: Vec<u8>, data_port: u16) {
+fn serve_proxied_html(
+    mut client: TcpStream,
+    request: Vec<u8>,
+    data_port: u16,
+    styles: &PreviewProxyStyles,
+) {
     let bg = sanitize_css_color(&query_param_from_request(&request, "bg").unwrap_or_default());
     let fg = sanitize_css_color(&query_param_from_request(&request, "fg").unwrap_or_default());
     let gutter =
@@ -345,7 +446,7 @@ fn serve_proxied_html(mut client: TcpStream, request: Vec<u8>, data_port: u16) {
         sanitize_css_color(&query_param_from_request(&request, "scrollbar").unwrap_or_default());
     match fetch_upstream_html(data_port) {
         Ok(html) => {
-            let body = inject_head(&html, &bg, &fg, &gutter, &scrollbar);
+            let body = inject_head(&html, &bg, &fg, &gutter, &scrollbar, styles);
             write_html_response(&mut client, 200, "OK", &body);
         }
         Err(e) => write_simple_response(
@@ -455,6 +556,24 @@ pub async fn plugins_preview_start(
     let plugin = discovery::find(&third_party_dir, &id)
         .ok_or_else(|| AppError::NotFound(format!("plugin {id} not found on disk")))?;
     let service = find_service(&plugin.manifest, &service_id)?;
+    if service.preview_iframe.mode != PreviewIframeMode::Themed
+        && service.preview_iframe.css.is_some()
+    {
+        return Err(AppError::InvalidArg(
+            "preview iframe css is only allowed when mode is themed".into(),
+        )
+        .into());
+    }
+    let proxy_styles = if service.preview_iframe.mode == PreviewIframeMode::Themed {
+        Some(PreviewProxyStyles {
+            plugin_css: load_plugin_preview_css(
+                &plugin.files,
+                service.preview_iframe.css.as_deref(),
+            )?,
+        })
+    } else {
+        None
+    };
 
     let binary = super::resolve_path_binary(&service.binary_name)?.ok_or_else(|| {
         AppError::NotFound(format!(
@@ -488,14 +607,19 @@ pub async fn plugins_preview_start(
             .spawn()?;
         let data_url = substitute(&service.data_url, data_port, control_port, &input_str);
         let control_url = substitute(&service.control_url, data_port, control_port, &input_str);
-        let proxy = start_loopback_proxy(data_port)?;
-        let proxy_url = proxy.url();
+        let (proxy, proxy_url) = match proxy_styles {
+            Some(styles) => {
+                let proxy = start_loopback_proxy(data_port, styles)?;
+                let proxy_url = proxy.url();
+                (Some(proxy), Some(proxy_url))
+            }
+            None => (None, None),
+        };
         let mut session = Session {
             child,
             input_path,
             data_port,
-            control_port,
-            proxy: Some(proxy),
+            proxy,
         };
         if let Err(e) = wait_until_ready(data_port) {
             session.kill();
@@ -619,7 +743,19 @@ fn sanitize_css_length(value: &str) -> String {
 /// where the proxy can rewrite the handshake Origin before tunneling upstream.
 /// The theme CSS lives in `preview_service.css` so iframe layout/scrollbar tweaks
 /// stay modular, and the beacon lets the client confirm scripts actually run.
-fn inject_head(html: &str, bg: &str, fg: &str, gutter: &str, scrollbar: &str) -> String {
+fn inject_head(
+    html: &str,
+    bg: &str,
+    fg: &str,
+    gutter: &str,
+    scrollbar: &str,
+    styles: &PreviewProxyStyles,
+) -> String {
+    let plugin_css = styles
+        .plugin_css
+        .as_ref()
+        .map(|css| format!("<style data-ms-plugin-preview-css>{css}</style>"))
+        .unwrap_or_default();
     let inject = format!(
         "<script>(()=>{{\
          const NativeWebSocket=window.WebSocket;\
@@ -643,12 +779,11 @@ fn inject_head(html: &str, bg: &str, fg: &str, gutter: &str, scrollbar: &str) ->
          Object.defineProperty(PatchedWebSocket,'__msPreviewPatched',{{value:true}});\
          window.WebSocket=PatchedWebSocket;\
          }})();</script>\
-         <style>:root{{--typst-preview-background-color:{bg} !important;\
-         --vscode-sideBar-background:{bg} !important;\
-         --ms-preview-background:{bg};--ms-preview-foreground:{fg};\
+         <style>:root{{--ms-preview-background:{bg};--ms-preview-foreground:{fg};\
          --ms-preview-gutter:{gutter};\
          --ms-preview-scrollbar:{scrollbar};}}</style>\
          <style>{PROXY_STYLE}</style>\
+         {plugin_css}\
          <script>try{{parent.postMessage({{type:'ms-preview-proxy-ready'}},'*');}}catch(e){{}}</script>"
     );
     match html.find("<head>") {
@@ -692,19 +827,22 @@ pub async fn proxy_preview_html<R: Runtime>(
     let scrollbar =
         sanitize_css_color(&query_param(query.as_deref(), "scrollbar").unwrap_or_default());
 
-    let ports = session
+    let proxy = session
         .as_deref()
-        .and_then(|s| app.state::<PreviewServiceRegistry>().ports(s));
-    let Some((data_port, _control_port)) = ports else {
+        .and_then(|s| app.state::<PreviewServiceRegistry>().themed_proxy(s));
+    let Some((data_port, styles)) = proxy else {
         return html_response(
             404,
-            "<!doctype html><title>unknown preview session</title>".into(),
+            "<!doctype html><title>unknown themed preview session</title>".into(),
         );
     };
 
     match reqwest::get(format!("http://127.0.0.1:{data_port}/")).await {
         Ok(resp) => match resp.text().await {
-            Ok(html) => html_response(200, inject_head(&html, &bg, &fg, &gutter, &scrollbar)),
+            Ok(html) => html_response(
+                200,
+                inject_head(&html, &bg, &fg, &gutter, &scrollbar, &styles),
+            ),
             Err(e) => html_response(
                 502,
                 format!("<!doctype html><title>preview read error: {e}</title>"),
@@ -783,21 +921,58 @@ mod tests {
     }
 
     #[test]
+    fn preview_css_path_is_safe_relative_css() {
+        assert!(is_safe_preview_css_path("preview.css"));
+        assert!(is_safe_preview_css_path("styles/preview.theme.css"));
+        assert!(!is_safe_preview_css_path("../preview.css"));
+        assert!(!is_safe_preview_css_path("/preview.css"));
+        assert!(!is_safe_preview_css_path("styles\\preview.css"));
+        assert!(!is_safe_preview_css_path(".hidden.css"));
+        assert!(!is_safe_preview_css_path("preview.txt"));
+    }
+
+    #[test]
+    fn sanitize_plugin_preview_css_rejects_breakout_tokens() {
+        assert!(sanitize_plugin_preview_css(":root { color: red; }").is_ok());
+        assert!(sanitize_plugin_preview_css("</style><script>").is_err());
+        assert!(sanitize_plugin_preview_css("@import url('x.css')").is_err());
+        assert!(sanitize_plugin_preview_css("body{background:url(javascript:alert(1))}").is_err());
+    }
+
+    #[test]
     fn inject_head_places_style_and_beacon_before_head_close() {
+        let styles = PreviewProxyStyles {
+            plugin_css: Some(
+                ":root{--typst-preview-background-color:var(--ms-preview-background)!important;}"
+                    .to_string(),
+            ),
+        };
         let out = inject_head(
             "<html><head><title>x</title></head><body></body></html>",
             "#222",
             "rgb(255,255,255)",
             "14px",
             "rgba(255,255,255,0.3)",
+            &styles,
         );
-        let style_at = out.find("--typst-preview-background-color:#222").unwrap();
+        let style_at = out.find("--ms-preview-background:#222").unwrap();
+        let plugin_style_at = out
+            .find("--typst-preview-background-color:var(--ms-preview-background)")
+            .unwrap();
         let head_open = out.find("<head>").unwrap();
         let title_at = out.find("<title>x</title>").unwrap();
         assert!(head_open < style_at, "style injected inside head");
         assert!(
             style_at < title_at,
             "proxy scripts run before upstream head"
+        );
+        assert!(
+            style_at < plugin_style_at && plugin_style_at < title_at,
+            "plugin css is injected after host theme css and before upstream head"
+        );
+        assert!(
+            out.contains("data-ms-plugin-preview-css"),
+            "plugin css style tag is marked"
         );
         assert!(out.contains("--ms-preview-gutter:14px"), "gutter injected");
         assert!(
@@ -809,9 +984,8 @@ mod tests {
             "body padding injected"
         );
         assert!(
-            out.contains(
-                "scrollbar-color: oklch(from var(--ms-preview-foreground) l c h / 0.3) transparent"
-            ),
+            out.contains("scrollbar-color: oklch(from var(--ms-preview-foreground) l c h / 0.3)")
+                && out.contains("transparent;"),
             "scrollbar color injected"
         );
         assert!(
@@ -837,6 +1011,7 @@ mod tests {
             "rgb(255,255,255)",
             "12px",
             "rgba(255,255,255,0.3)",
+            &PreviewProxyStyles::default(),
         );
         assert!(out.starts_with("<script>"));
         assert!(out.contains("hi"));
@@ -850,6 +1025,7 @@ mod tests {
             "rgb(255,255,255)",
             "12px",
             "rgba(255,255,255,0.3)",
+            &PreviewProxyStyles::default(),
         );
         let shim_at = out.find("defaultTinymistDataPlane").unwrap();
         let upstream_at = out.find("window.upstreamStarted=true").unwrap();
@@ -883,6 +1059,24 @@ mod tests {
         });
         let svc = find_service(&manifest, "tinymist").unwrap();
         assert_eq!(svc.binary_name, "tinymist");
+        assert_eq!(svc.preview_iframe.mode, PreviewIframeMode::Direct);
         assert!(find_service(&manifest, "ghost").is_err());
+    }
+
+    #[test]
+    fn find_service_reads_themed_preview_iframe_config() {
+        let manifest = serde_json::json!({
+            "contributes": { "nativeServices": [{
+                "id": "tinymist",
+                "binaryName": "tinymist",
+                "args": ["preview", "{input}"],
+                "dataUrl": "http://127.0.0.1:{dataPort}",
+                "controlUrl": "ws://127.0.0.1:{controlPort}",
+                "previewIframe": { "mode": "themed", "css": "preview.css" }
+            }]}
+        });
+        let svc = find_service(&manifest, "tinymist").unwrap();
+        assert_eq!(svc.preview_iframe.mode, PreviewIframeMode::Themed);
+        assert_eq!(svc.preview_iframe.css.as_deref(), Some("preview.css"));
     }
 }
