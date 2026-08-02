@@ -29,7 +29,7 @@
 //! returns `{ title, body }` and the app performs the note creation, preserving
 //! the "a plugin never writes notes itself" invariant of the declarative tier.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::path::PathBuf;
@@ -37,6 +37,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use base64::Engine as _;
 use mlua::{Lua, LuaSerdeExt, MultiValue, Table, Value, VmState};
 use serde::Serialize;
 
@@ -128,11 +129,16 @@ pub fn run(req: ScriptRequest) -> AppResult<serde_json::Value> {
     lua.set_memory_limit(req.limits.memory_bytes)
         .map_err(|e| map_lua(&req.chunk_name, e))?;
 
-    // Wall-clock deadline. The interrupt fires on back-edges/calls; returning an
-    // error aborts the running script.
-    let deadline = Instant::now() + req.limits.timeout;
+    // Wall-clock deadline for the *script's own* execution. The interrupt fires
+    // on Luau back-edges/calls; returning an error aborts the running script.
+    // It's a shared cell so a legitimately-blocking host call (a native tool
+    // subprocess) can push it forward by the time it spent blocked — otherwise a
+    // multi-second `typst` compile would eat the whole budget and abort the
+    // script the instant control returns to Luau.
+    let deadline = Rc::new(Cell::new(Instant::now() + req.limits.timeout));
+    let interrupt_deadline = deadline.clone();
     lua.set_interrupt(move |_| {
-        if Instant::now() >= deadline {
+        if Instant::now() >= interrupt_deadline.get() {
             Err(mlua::Error::runtime("script exceeded its time budget"))
         } else {
             Ok(VmState::Continue)
@@ -145,6 +151,7 @@ pub fn run(req: ScriptRequest) -> AppResult<serde_json::Value> {
         &req.notes,
         &req.native_tools,
         &req.native_tool_cwd,
+        deadline.clone(),
     )
     .map_err(|e| map_lua(&req.chunk_name, e))?;
     install_require(&lua, req.modules).map_err(|e| map_lua(&req.chunk_name, e))?;
@@ -203,6 +210,7 @@ fn install_host_api(
     notes: &[NoteMeta],
     native_tools: &HashMap<String, Option<PathBuf>>,
     native_tool_cwd: &Option<PathBuf>,
+    deadline: Rc<Cell<Instant>>,
 ) -> mlua::Result<()> {
     let ms = lua.create_table()?;
     let granted = |p: &str| permissions.iter().any(|g| g == p);
@@ -235,7 +243,7 @@ fn install_host_api(
     if granted("nativeTools.runDeclared") {
         ms.set(
             "nativeTools",
-            native_tools_module(lua, native_tools, native_tool_cwd)?,
+            native_tools_module(lua, native_tools, native_tool_cwd, deadline)?,
         )?;
     }
 
@@ -254,6 +262,7 @@ fn native_tools_module(
     lua: &Lua,
     tools: &HashMap<String, Option<PathBuf>>,
     cwd: &Option<PathBuf>,
+    deadline: Rc<Cell<Instant>>,
 ) -> mlua::Result<Table> {
     let table = lua.create_table()?;
     // Only the resolved (found-on-PATH) tools are runnable.
@@ -281,7 +290,7 @@ fn native_tools_module(
             let cwd = run_cwd.clone().ok_or_else(|| {
                 mlua::Error::runtime("ms.nativeTools.run: no working directory available")
             })?;
-            let (args, stdin, timeout_ms) = match opts {
+            let (args, stdin, timeout_ms, output_base64) = match opts {
                 Some(t) => {
                     let args = match t.get::<Value>("args")? {
                         Value::Table(list) => list
@@ -298,17 +307,40 @@ fn native_tools_module(
                         args,
                         t.get::<Option<String>>("stdin")?,
                         t.get::<Option<u64>>("timeoutMs")?,
+                        t.get::<Option<bool>>("outputBase64")?.unwrap_or(false),
                     )
                 }
-                None => (Vec::new(), None, None),
+                None => (Vec::new(), None, None, false),
             };
+            // Time spent blocked in the subprocess is not the script "running",
+            // so credit it back to the wall-clock budget — otherwise a slow
+            // compile would abort the script the moment control returns to Luau.
+            let started = Instant::now();
             let output = super::run_native_tool_process(binary, cwd, args, stdin, timeout_ms)
                 .map_err(|e| mlua::Error::runtime(e.to_string()))?;
+            deadline.set(deadline.get() + started.elapsed());
             let result = lua.create_table()?;
             result.set("statusCode", output.status_code)?;
-            result.set("stdout", output.stdout)?;
-            result.set("stderr", output.stderr)?;
+            // stderr is diagnostic text; always expose it lossily.
+            result.set(
+                "stderr",
+                String::from_utf8_lossy(&output.stderr).into_owned(),
+            )?;
             result.set("timedOut", output.timed_out)?;
+            if output_base64 {
+                // Binary tool (PDF/PNG/…): the raw bytes aren't valid UTF-8, so
+                // carry them as base64 (JSON-safe) instead of a lossy string.
+                result.set(
+                    "stdoutBase64",
+                    base64::engine::general_purpose::STANDARD.encode(&output.stdout),
+                )?;
+                result.set("stdout", "")?;
+            } else {
+                result.set(
+                    "stdout",
+                    String::from_utf8_lossy(&output.stdout).into_owned(),
+                )?;
+            }
             Ok(result)
         })?,
     )?;

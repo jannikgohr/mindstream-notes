@@ -36,6 +36,7 @@ use crate::error::{AppError, AppResult, CommandResult};
 
 pub mod discovery;
 pub mod luau;
+pub mod preview_service;
 pub mod signing;
 pub mod wasm;
 
@@ -424,6 +425,19 @@ pub fn set_load_error(conn: &Connection, id: &str, error: Option<&str>) -> AppRe
     Ok(())
 }
 
+/// Disable a plugin that hard-crashed (its host runtime panicked, not a mere
+/// script error) and record why. A crashing plugin must not be able to take the
+/// app down *or* keep re-triggering the fault, so it stays disabled until the
+/// user re-enables it — surfaced in the plugins UI via `last_load_error`.
+pub fn disable_crashed(conn: &Connection, id: &str, reason: &str) -> AppResult<()> {
+    let now = Utc::now().to_rfc3339();
+    conn.execute(
+        "UPDATE plugins SET enabled = 0, last_load_error = ?2, updated_at = ?3 WHERE id = ?1",
+        params![id, reason, now],
+    )?;
+    Ok(())
+}
+
 pub fn remove(conn: &Connection, id: &str) -> AppResult<()> {
     conn.execute("DELETE FROM plugins WHERE id = ?1", params![id])?;
     Ok(())
@@ -696,13 +710,23 @@ fn validate_native_tool_args(args: &[String], stdin: &Option<String>) -> AppResu
     Ok(())
 }
 
+/// Raw process result with **unlossy** stdout/stderr bytes. Kept binary so a
+/// tool that emits a PDF/PNG (not UTF-8 text) survives; text callers convert
+/// via `String::from_utf8_lossy`, the Luau binary path base64-encodes.
+pub(super) struct RawToolOutput {
+    pub status_code: Option<i32>,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+    pub timed_out: bool,
+}
+
 fn run_native_tool_process(
     binary: PathBuf,
     cwd: PathBuf,
     args: Vec<String>,
     stdin: Option<String>,
     timeout_ms: Option<u64>,
-) -> AppResult<PluginNativeToolOutput> {
+) -> AppResult<RawToolOutput> {
     validate_native_tool_args(&args, &stdin)?;
     fs::create_dir_all(&cwd)?;
     let timeout = std::time::Duration::from_millis(timeout_ms.unwrap_or(10_000).clamp(100, 30_000));
@@ -726,20 +750,20 @@ fn run_native_tool_process(
     loop {
         if child.try_wait()?.is_some() {
             let output = child.wait_with_output()?;
-            return Ok(PluginNativeToolOutput {
+            return Ok(RawToolOutput {
                 status_code: output.status.code(),
-                stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+                stdout: output.stdout,
+                stderr: output.stderr,
                 timed_out: false,
             });
         }
         if start.elapsed() >= timeout {
             child.kill()?;
             let output = child.wait_with_output()?;
-            return Ok(PluginNativeToolOutput {
+            return Ok(RawToolOutput {
                 status_code: output.status.code(),
-                stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+                stdout: output.stdout,
+                stderr: output.stderr,
                 timed_out: true,
             });
         }
@@ -1489,12 +1513,17 @@ pub async fn plugins_run_native_tool(
         ))
     })?;
     let cwd = plugin_data_root(&app, &id)?;
-    tauri::async_runtime::spawn_blocking(move || {
+    let raw = tauri::async_runtime::spawn_blocking(move || {
         run_native_tool_process(binary, cwd, args, stdin, timeout_ms)
     })
     .await
-    .map_err(|e| AppError::InvalidArg(format!("native tool task failed: {e}")))?
-    .map_err(Into::into)
+    .map_err(|e| AppError::InvalidArg(format!("native tool task failed: {e}")))??;
+    Ok(PluginNativeToolOutput {
+        status_code: raw.status_code,
+        stdout: String::from_utf8_lossy(&raw.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&raw.stderr).into_owned(),
+        timed_out: raw.timed_out,
+    })
 }
 
 /// Run a scripted plugin's entry function. The plugin is re-located on disk
@@ -1538,7 +1567,12 @@ pub async fn plugins_run_script(
     // runs via `ms.nativeTools`; resolved here (needs the AppHandle) so the
     // blocking worker stays Tauri-free.
     let native_tool_cwd = plugin_data_root(&app, &id).ok();
-    tauri::async_runtime::spawn_blocking(move || {
+    // Run on a blocking worker: this isolates the guest so a hard crash can't
+    // abort the app. Guest *logic* errors (Luau/wasm) come back as `Ok(Err(..))`
+    // and are just surfaced to the user; a `JoinError` means the host runtime
+    // itself panicked — a crash — so we disable the plugin before returning.
+    let export_label = export.clone();
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
         run_plugin_script(
             &files,
             &manifest,
@@ -1550,9 +1584,16 @@ pub async fn plugins_run_script(
             native_tool_cwd,
         )
     })
-    .await
-    .map_err(|e| AppError::InvalidArg(format!("script task failed: {e}")))?
-    .map_err(Into::into)
+    .await;
+    match outcome {
+        Ok(result) => result.map_err(Into::into),
+        Err(join_err) => {
+            let reason = format!("plugin crashed while running '{export_label}': {join_err}");
+            log::error!("[plugins] {reason}");
+            let _ = db.with_conn(|c| disable_crashed(c, &id, &reason));
+            Err(AppError::InvalidArg(reason).into())
+        }
+    }
 }
 
 #[cfg(test)]

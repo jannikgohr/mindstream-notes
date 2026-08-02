@@ -432,6 +432,98 @@ export function pluginsRunNativeTool(
   );
 }
 
+export interface PreviewServiceHandle {
+  sessionKey: string;
+  dataUrl: string;
+  controlUrl: string;
+}
+
+export interface PreviewServiceStatus {
+  serviceId: string;
+  binaryName: string;
+  available: boolean;
+  path: string | null;
+}
+
+function parsePreviewServiceStatus(value: unknown): PreviewServiceStatus {
+  const raw = assertRecord(value, 'PreviewServiceStatus');
+  return {
+    serviceId: assertString(raw.serviceId, 'PreviewServiceStatus.serviceId'),
+    binaryName: assertString(raw.binaryName, 'PreviewServiceStatus.binaryName'),
+    available: assertBoolean(raw.available, 'PreviewServiceStatus.available'),
+    path: optionalString(raw.path, 'PreviewServiceStatus.path')
+  };
+}
+
+/** Whether a declared preview service's binary resolves on PATH. */
+export function pluginsNativeServiceStatus(
+  id: string,
+  serviceId: string
+): Promise<PreviewServiceStatus> {
+  return invokeOrFallback<PreviewServiceStatus>(
+    TauriCommandName.PluginsNativeServiceStatus,
+    { id, serviceId },
+    () => {
+      throw new Error(
+        'plugins_native_service_status is unavailable outside Tauri'
+      );
+    },
+    parsePreviewServiceStatus
+  );
+}
+
+function parsePreviewServiceHandle(value: unknown): PreviewServiceHandle {
+  const raw = assertRecord(value, 'PreviewServiceHandle');
+  return {
+    sessionKey: assertString(raw.sessionKey, 'PreviewServiceHandle.sessionKey'),
+    dataUrl: assertString(raw.dataUrl, 'PreviewServiceHandle.dataUrl'),
+    controlUrl: assertString(raw.controlUrl, 'PreviewServiceHandle.controlUrl')
+  };
+}
+
+/**
+ * Start (or restart) a plugin's long-lived preview server for one note session.
+ * Desktop/Tauri-only — the server is a real local process.
+ */
+export function pluginsPreviewStart(
+  id: string,
+  serviceId: string,
+  sessionKey: string,
+  input: string
+): Promise<PreviewServiceHandle> {
+  return invokeOrFallback<PreviewServiceHandle>(
+    TauriCommandName.PluginsPreviewStart,
+    { id, serviceId, sessionKey, input },
+    () => {
+      throw new Error('plugins_preview_start is unavailable outside Tauri');
+    },
+    parsePreviewServiceHandle
+  );
+}
+
+/** Rewrite a running preview session's source so the server recompiles. */
+export function pluginsPreviewUpdate(
+  sessionKey: string,
+  input: string
+): Promise<void> {
+  return invokeOrFallback<void>(
+    TauriCommandName.PluginsPreviewUpdate,
+    { sessionKey, input },
+    () => undefined,
+    (value) => assertVoid(value, 'plugins_preview_update response')
+  );
+}
+
+/** Stop and reap a running preview session. */
+export function pluginsPreviewStop(sessionKey: string): Promise<void> {
+  return invokeOrFallback<void>(
+    TauriCommandName.PluginsPreviewStop,
+    { sessionKey },
+    () => undefined,
+    (value) => assertVoid(value, 'plugins_preview_stop response')
+  );
+}
+
 /**
  * Run an enabled `luau` plugin's exported function in the sandboxed backend
  * runtime and return its JSON result. There is no browser fallback: scripted

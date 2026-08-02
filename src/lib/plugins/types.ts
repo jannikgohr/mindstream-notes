@@ -29,6 +29,9 @@
  *     evaluation for runtimes that require generated JS glue.
  *   - `nativeTools.runDeclared` — let the host run plugin-declared binaries
  *     resolved from the user's PATH, without shell execution.
+ *   - `nativeServices.run` — let the host run a plugin-declared binary as a
+ *     long-lived local *preview server* (e.g. `tinymist preview`) and surface
+ *     it to the note's preview iframe. Desktop-only.
  * Broad `notes.write` stays deliberately absent — the app, not the plugin,
  * performs the actual note write (see templates.ts).
  */
@@ -41,7 +44,8 @@ export type PluginPermission =
   | 'pluginStorage.read'
   | 'pluginStorage.write'
   | 'pluginWebviews.allowEval'
-  | 'nativeTools.runDeclared';
+  | 'nativeTools.runDeclared'
+  | 'nativeServices.run';
 
 /** All permissions the current app version understands. */
 export const KNOWN_PLUGIN_PERMISSIONS: readonly PluginPermission[] = [
@@ -53,7 +57,8 @@ export const KNOWN_PLUGIN_PERMISSIONS: readonly PluginPermission[] = [
   'pluginStorage.read',
   'pluginStorage.write',
   'pluginWebviews.allowEval',
-  'nativeTools.runDeclared'
+  'nativeTools.runDeclared',
+  'nativeServices.run'
 ];
 
 /**
@@ -104,7 +109,8 @@ export const PLUGIN_PREVIEW_MIME_TYPES = [
   'text/html',
   'image/svg+xml',
   'text/markdown',
-  'text/plain'
+  'text/plain',
+  'application/pdf'
 ] as const;
 
 export type PluginPreviewMimeType = (typeof PLUGIN_PREVIEW_MIME_TYPES)[number];
@@ -129,6 +135,14 @@ export interface PluginNoteKindRenderContribution {
    * Requires the plugin to hold `nativeTools.runDeclared`.
    */
   requiresNativeTool?: string;
+  /**
+   * A declared `nativeServices` id providing a *live preview server* (e.g.
+   * `tinymist`). When its binary is available the editor loads the service's
+   * frontend in an iframe with bidirectional click-to-source, instead of the
+   * `export` renderer — which stays the fallback (used when the service binary
+   * isn't installed). Requires `nativeServices.run`.
+   */
+  previewService?: string;
   /**
    * Optional plugin-owned browser preview runtime. The host loads `entry` into a
    * sandboxed iframe, sends source updates via postMessage, and exposes only
@@ -238,6 +252,40 @@ export interface PluginNativeToolContribution {
   /** Exact executable basename to resolve from PATH; no paths or shell. */
   binaryName: string;
   descriptionKey?: string;
+}
+
+/**
+ * A long-lived **preview service**: a PATH binary the host runs as a persistent
+ * local server whose web frontend is shown in the note's preview iframe. The
+ * host allocates the ports and materializes the note body to a temp file the
+ * server watches; the plugin only declares how to launch it and how to reach it.
+ */
+export interface PluginNativeServiceContribution {
+  /** Plugin-local slug. */
+  id: string;
+  /** Exact executable basename to resolve from PATH; no paths or shell. */
+  binaryName: string;
+  /**
+   * Launch argument template. Each entry may contain the placeholders
+   * `{dataPort}`, `{controlPort}` (host-allocated free ports) and `{input}`
+   * (absolute path to the materialized source file).
+   */
+  args: string[];
+  /** URL the iframe loads, e.g. `http://127.0.0.1:{dataPort}`. */
+  dataUrl: string;
+  /** Control-plane WebSocket URL, e.g. `ws://127.0.0.1:{controlPort}`. */
+  controlUrl: string;
+  /** Extension for the materialized source file (default `txt`). */
+  inputExtension?: string;
+  descriptionKey?: string;
+  /**
+   * Control-plane message names the host bridge understands. `jumpEvent` is the
+   * server→editor inverse-search message (payload `{ filepath, start:[line,col] }`)
+   * that moves the source cursor on click.
+   */
+  protocol?: {
+    jumpEvent?: string;
+  };
 }
 
 /**
@@ -392,6 +440,7 @@ export interface PluginContributions {
   settings?: PluginSettingsContribution[];
   artifacts?: PluginArtifactContribution[];
   nativeTools?: PluginNativeToolContribution[];
+  nativeServices?: PluginNativeServiceContribution[];
   noteTemplates?: PluginNoteTemplateContribution[];
   noteKinds?: PluginNoteKindContribution[];
   commands?: PluginCommandContribution[];

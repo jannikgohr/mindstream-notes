@@ -327,6 +327,10 @@ pub fn run() {
             app.manage(data::TrashRetentionScheduler::new());
             data::spawn_retention_sweep(app.handle().clone());
 
+            // Registry of long-lived plugin preview servers (e.g. `tinymist
+            // preview`). Reaped on exit below so nothing is orphaned.
+            app.manage(plugins::preview_service::PreviewServiceRegistry::default());
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -390,6 +394,10 @@ pub fn run() {
             plugins::plugins_native_tool_status,
             plugins::plugins_run_native_tool,
             plugins::plugins_run_script,
+            plugins::preview_service::plugins_native_service_status,
+            plugins::preview_service::plugins_preview_start,
+            plugins::preview_service::plugins_preview_update,
+            plugins::preview_service::plugins_preview_stop,
             // Profiles (vaults)
             profiles::list_profiles,
             profiles::create_profile,
@@ -501,12 +509,21 @@ pub fn run() {
     };
 
     app.run(|app, event| {
-        #[cfg(not(target_os = "macos"))]
-        let _ = (app, event);
+        // Reap any long-lived plugin preview servers so they don't outlive the
+        // app (e.g. a leftover `tinymist preview` holding a port).
+        if matches!(event, tauri::RunEvent::Exit) {
+            if let Some(registry) =
+                app.try_state::<plugins::preview_service::PreviewServiceRegistry>()
+            {
+                registry.shutdown_all();
+            }
+        }
         #[cfg(target_os = "macos")]
         if matches!(event, tauri::RunEvent::Reopen { .. }) {
             crate::tray::focus_main_window(app);
         }
+        #[cfg(not(target_os = "macos"))]
+        let _ = app;
     });
 }
 
