@@ -6,6 +6,8 @@ import {
   pluginCommands,
   pluginLoadError,
   pluginSettingsSections,
+  pluginSourceLanguage,
+  pluginSourceLanguages,
   pluginTemplate,
   pluginTemplates,
   pluginI18nBundles,
@@ -49,6 +51,14 @@ function manifest(id = 'com.example.templates'): Record<string, unknown> {
           ]
         }
       ],
+      sourceLanguages: [
+        {
+          id: 'typst',
+          aliases: ['typ'],
+          extensions: ['typ'],
+          provider: { type: 'host', id: 'typst' }
+        }
+      ],
       commands: [
         {
           id: 'new-meeting',
@@ -70,6 +80,8 @@ describe('registerPlugin', () => {
     expect(pluginTemplates()[0].pluginId).toBe('com.example.templates');
     expect(pluginSettingsSections()).toHaveLength(1);
     expect(pluginCommands()).toHaveLength(1);
+    expect(pluginSourceLanguages()).toHaveLength(1);
+    expect(pluginSourceLanguage('typ')?.language.id).toBe('typst');
     expect(pluginI18nBundles()['com.example.templates']).toBeTruthy();
   });
 
@@ -101,6 +113,7 @@ describe('enabled/disabled filtering', () => {
     expect(pluginTemplates()).toHaveLength(0);
     expect(pluginSettingsSections()).toHaveLength(0);
     expect(pluginCommands()).toHaveLength(0);
+    expect(pluginSourceLanguages()).toHaveLength(0);
     expect(pluginI18nBundles()).toEqual({});
     expect(pluginTemplate('com.example.templates', 'meeting')).toBeUndefined();
   });

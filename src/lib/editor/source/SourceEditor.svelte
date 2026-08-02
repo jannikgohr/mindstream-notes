@@ -39,7 +39,6 @@
     indentUnit,
     syntaxHighlighting
   } from '@codemirror/language';
-  import { markdown } from '@codemirror/lang-markdown';
   import { tags as t } from '@lezer/highlight';
   import {
     sourceAutoPair,
@@ -53,6 +52,7 @@
     setSourcePresence,
     type PeerPresence
   } from './source-presence-extension';
+  import { sourceLanguageExtensions } from './languages';
 
   interface Props {
     /** Read once on mount to seed the document with the current markdown. */
@@ -112,6 +112,7 @@
 
   const readonlyComp = new Compartment();
   const tabComp = new Compartment();
+  const languageComp = new Compartment();
   const featureComp = new Compartment();
 
   let inputTimer: ReturnType<typeof setTimeout> | null = null;
@@ -131,6 +132,20 @@
     { tag: t.heading, fontWeight: '600' },
     { tag: t.strong, fontWeight: '600' },
     { tag: t.emphasis, fontStyle: 'italic' },
+    {
+      tag: t.keyword,
+      color: 'var(--primary, currentColor)',
+      fontWeight: '600'
+    },
+    { tag: [t.string, t.atom], color: 'var(--chart-2, var(--foreground))' },
+    { tag: t.number, color: 'var(--chart-4, var(--foreground))' },
+    { tag: t.comment, color: 'var(--muted-foreground)', fontStyle: 'italic' },
+    { tag: [t.variableName, t.propertyName], color: 'var(--foreground)' },
+    {
+      tag: t.definition(t.variableName),
+      color: 'var(--primary, currentColor)'
+    },
+    { tag: t.operator, color: 'var(--muted-foreground)' },
     { tag: [t.link, t.url], color: 'var(--primary, currentColor)' },
     { tag: [t.monospace], fontFamily: 'var(--font-mono, monospace)' },
     { tag: [t.meta, t.processingInstruction], color: 'var(--muted-foreground)' }
@@ -201,7 +216,7 @@
     return [
       lineNumbers(),
       history(),
-      ...(language === 'markdown' ? [markdown()] : []),
+      languageComp.of(sourceLanguageExtensions(language)),
       syntaxHighlighting(highlight),
       theme,
       EditorView.lineWrapping,
@@ -270,12 +285,17 @@
   });
   // Re-read every gate so a flip of any one of them reconfigures the set.
   $effect(() => {
+    void language;
+    view?.dispatch({
+      effects: languageComp.reconfigure(sourceLanguageExtensions(language))
+    });
+  });
+  $effect(() => {
     void autoPairEnabled;
     void wikilinksEnabled;
     void wikilinkBridge;
     void userMentionsEnabled;
     void userMentionBridge;
-    void language;
     view?.dispatch({ effects: featureComp.reconfigure(featureExtensions()) });
   });
 

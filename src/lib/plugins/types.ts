@@ -174,6 +174,30 @@ export interface PluginNoteKindContribution {
   render: PluginNoteKindRenderContribution;
 }
 
+export const PLUGIN_SOURCE_LANGUAGE_HOST_PROVIDERS = ['typst'] as const;
+
+export type PluginSourceLanguageHostProvider =
+  (typeof PLUGIN_SOURCE_LANGUAGE_HOST_PROVIDERS)[number];
+
+/**
+ * A source-editor language mode a plugin can opt a note kind into.
+ *
+ * The provider is deliberately host-owned: plugin manifests choose from
+ * providers shipped by the app, but plugin bundles do not inject arbitrary
+ * CodeMirror extensions into the editor process.
+ */
+export interface PluginSourceLanguageContribution {
+  /** Plugin-local language id, referenced by `noteKinds[].sourceLanguage`. */
+  id: string;
+  labelKey?: string;
+  aliases?: string[];
+  extensions?: string[];
+  provider: {
+    type: 'host';
+    id: PluginSourceLanguageHostProvider;
+  };
+}
+
 /** A single generic setting control a plugin adds under its section. */
 export interface PluginSetting {
   /** Plugin-local slug; stored under `plugins.<pluginId>.<id>`. */
@@ -471,6 +495,7 @@ export interface PluginContributions {
   artifacts?: PluginArtifactContribution[];
   nativeTools?: PluginNativeToolContribution[];
   nativeServices?: PluginNativeServiceContribution[];
+  sourceLanguages?: PluginSourceLanguageContribution[];
   noteTemplates?: PluginNoteTemplateContribution[];
   noteKinds?: PluginNoteKindContribution[];
   commands?: PluginCommandContribution[];

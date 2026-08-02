@@ -85,6 +85,8 @@ is namespaced under the plugin `id`, so two plugins can never collide.
   `viewModeLabelKeys` (`{ "wysiwyg": "<i18nKey>", "source": "<i18nKey>",
 "split": "<i18nKey>" }`) to rename host view modes in the editor UI while the
   stored internal values remain stable.
+- **`sourceLanguages`** — source-editor language modes backed by host-owned
+  CodeMirror providers. A note kind references one with `sourceLanguage`.
 - **`noteTemplates`** — declarative templates (`titleTemplate` / `bodyTemplate`
   with `{{…}}` placeholders, see below). Requires `templates.contribute`.
 - **`commands`** — app-local commands (currently `createTemplateNote`), each
@@ -291,6 +293,25 @@ built-in PDF page viewer. See the bundled `typst-prototype` plugin, whose
 `renderDocument` pipes the note body through the native `typst` binary
 (`typst compile --format pdf - -`) and returns the PDF as base64 — one stream for
 all pages (typst refuses multi-page SVG/PNG to stdout).
+
+## Source editor language modes
+
+Plugin-owned note kinds can opt into syntax highlighting by setting
+`noteKinds[].sourceLanguage` and contributing a matching `sourceLanguages` entry:
+
+```jsonc
+"sourceLanguages": [{
+  "id": "typst",
+  "labelKey": "notes.document.label",
+  "aliases": ["typ"],
+  "extensions": ["typ"],
+  "provider": { "type": "host", "id": "typst" }
+}]
+```
+
+The provider is always host-owned. A plugin may select from providers shipped by
+the app, but it cannot inject arbitrary editor JavaScript into the WebView.
+Unknown source languages remain editable as plain text.
 
 ## Preview services (`contributes.nativeServices`, `nativeServices.run`)
 
