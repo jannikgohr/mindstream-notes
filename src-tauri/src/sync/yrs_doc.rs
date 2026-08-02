@@ -63,21 +63,47 @@ pub fn init_seed_state(md: &str) -> Vec<u8> {
     encode_state(&doc)
 }
 
-/// Apply a "full body changed" local edit. We diff `old_md` → `new_md`
-/// at character granularity and replay each insert/delete against the
-/// Y.Text, which is what the editor would have produced if it had been
-/// CRDT-aware. Returns the new encoded state.
-pub fn apply_local_edit(state: &[u8], old_md: &str, new_md: &str) -> Vec<u8> {
-    if old_md == new_md {
-        return state.to_vec();
-    }
-    let doc = load(state);
-    {
+/// Apply a "full body changed" local edit. We diff the doc's **current** body
+/// text → `new_md` at character granularity and replay each insert/delete
+/// against the Y.Text, which is what the editor would have produced if it had
+/// been CRDT-aware. Returns the new encoded state.
+///
+/// `_prev_md` is the caller's SQLite `body` mirror. It is intentionally **not**
+/// used to compute the diff: that column can drift from the CRDT (a remote
+/// merge or a v2 editor state updates `yrs_state` without rewriting `body`), and
+/// diffing a stale mirror against a shorter live Y.Text asks yrs to delete past
+/// the end — a hard panic (`text.rs`: "Couldn't remove … elements"). Diffing the
+/// live text keeps every replayed offset in range by construction.
+///
+/// The whole mutation is additionally wrapped in `catch_unwind`: a note edit
+/// must never be able to crash the app (a panic here would unwind across the
+/// WebView IPC FFI boundary and abort the process). On the unreachable-in-theory
+/// panic path we rebuild the body doc from `new_md` so the user's content is
+/// still preserved.
+pub fn apply_local_edit(state: &[u8], _prev_md: &str, new_md: &str) -> Vec<u8> {
+    let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let doc = load(state);
         let text = doc.get_or_insert_text(TEXT_KEY);
-        let mut txn = doc.transact_mut();
-        replay_diff(&text, &mut txn, old_md, new_md);
+        let current = {
+            let txn = doc.transact();
+            text.get_string(&txn)
+        };
+        if current == new_md {
+            return state.to_vec();
+        }
+        {
+            let mut txn = doc.transact_mut();
+            replay_diff(&text, &mut txn, &current, new_md);
+        }
+        encode_state(&doc)
+    }));
+    match attempt {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            log::error!("yrs apply_local_edit panicked; rebuilding body doc from the new text");
+            init_with_markdown(new_md)
+        }
     }
-    encode_state(&doc)
 }
 
 /// Merge a remote v1 update into a local state. Y.js / yrs guarantees
@@ -122,11 +148,15 @@ fn encode_state(doc: &Doc) -> Vec<u8> {
 }
 
 /// Walk a `similar` diff and emit Y.Text inserts/deletes against the live
-/// transaction. yrs 0.21 defaults to **UTF-8 byte offsets** (OffsetKind::Bytes),
+/// transaction. yrs 0.26 defaults to **UTF-8 byte offsets** (OffsetKind::Bytes),
 /// so `pos` and lengths are in bytes — landing mid-codepoint would panic
 /// inside yrs, which is what an earlier draft of this code did with UTF-16
 /// units. Keep this in sync if the doc is ever switched to a different
 /// OffsetKind.
+///
+/// `old` must be the doc's **current** text (see `apply_local_edit`), which makes
+/// every offset exact; the length clamps below are defense-in-depth so a stale
+/// `old` degrades to a best-effort edit instead of a panic.
 fn replay_diff(text: &yrs::TextRef, txn: &mut yrs::TransactionMut, old: &str, new: &str) {
     let diff = TextDiff::from_chars(old, new);
     let mut pos: u32 = 0;
@@ -138,12 +168,19 @@ fn replay_diff(text: &yrs::TextRef, txn: &mut yrs::TransactionMut, old: &str, ne
             }
             ChangeTag::Delete => {
                 if len > 0 {
-                    text.remove_range(txn, pos, len);
+                    // Clamp to the live text length. With `old` == the doc's
+                    // current text this is always exact; the guard just makes a
+                    // stale `old` degrade instead of panicking inside yrs.
+                    let available = text.len(txn);
+                    if pos < available {
+                        text.remove_range(txn, pos, len.min(available - pos));
+                    }
                 }
             }
             ChangeTag::Insert => {
                 if len > 0 {
-                    text.insert(txn, pos, change.value());
+                    let at = pos.min(text.len(txn));
+                    text.insert(txn, at, change.value());
                     pos += len;
                 }
             }
@@ -237,6 +274,35 @@ mod tests {
         // ...and both devices' edits survive the merge.
         assert!(md.contains("from A"), "device A edit lost: {md}");
         assert!(md.contains("B says"), "device B edit lost: {md}");
+    }
+
+    #[test]
+    fn diverged_body_mirror_does_not_panic() {
+        // Regression: the SQLite `body` mirror (`prev_md`) drifted longer than
+        // the actual Y.Text (e.g. after a remote merge). Diffing the stale
+        // mirror used to delete past the end of the live text and panic inside
+        // yrs. The edit must apply against the *live* text and land `new`.
+        let state = init_with_markdown("SHORT");
+        let stale_prev = "A MUCH longer stale body than the CRDT actually holds";
+        let next = apply_local_edit(&state, stale_prev, "SHORT plus more");
+        assert_eq!(to_markdown(&next), "SHORT plus more");
+    }
+
+    #[test]
+    fn edit_on_state_without_body_text_field_inserts_cleanly() {
+        // A v2 (y-prosemirror) doc has no `body` Text field, so
+        // `get_or_insert_text("body")` starts empty. A legacy body-diff edit
+        // must not try to delete from the empty text; it just inserts `new`.
+        let doc = Doc::new();
+        // Populate a *different* field so the state is non-empty but has no body.
+        let other = doc.get_or_insert_text("prosemirror");
+        {
+            let mut txn = doc.transact_mut();
+            other.insert(&mut txn, 0, "unrelated xml content");
+        }
+        let state = encode_state(&doc);
+        let next = apply_local_edit(&state, "some stale body", "the new body");
+        assert_eq!(to_markdown(&next), "the new body");
     }
 
     #[test]
