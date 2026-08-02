@@ -912,12 +912,20 @@ parentWindow.postMessage({ type: 'mindstream-plugin-preview-ready' }, '*');
           {#if serviceUsable}
             {#if serviceDataUrl}
               <!-- The live preview server (e.g. tinymist) serves its own
-                   click-to-source frontend from a loopback origin. -->
-              <iframe
-                class="min-h-0 flex-1 bg-white"
-                title="Live plugin preview"
-                src={serviceDataUrl}
-              ></iframe>
+                   click-to-source frontend from a loopback origin. It's a
+                   cross-origin iframe, so we can only theme the gutter around
+                   it — the page gaps/scrollbar inside stay the server's. -->
+              <div class="min-h-0 flex-1 bg-muted/40 p-3">
+                <div
+                  class="h-full w-full overflow-hidden rounded-md border border-border bg-white shadow-sm"
+                >
+                  <iframe
+                    class="h-full w-full"
+                    title="Live plugin preview"
+                    src={serviceDataUrl}
+                  ></iframe>
+                </div>
+              </div>
             {:else}
               <div
                 class="flex min-h-0 flex-1 items-center justify-center bg-muted/40 text-sm text-muted-foreground"
