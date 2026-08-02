@@ -13,6 +13,7 @@
 //! the note closes and reaped on exit. Everything is gated on the
 //! `nativeServices.run` permission and is **desktop-only**.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io::Write;
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
@@ -22,7 +23,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, Runtime, State};
 
 use crate::db::Db;
 use crate::error::{AppError, AppResult, CommandResult};
@@ -32,6 +33,19 @@ use super::discovery;
 const PERM_NATIVE_SERVICES_RUN: &str = "nativeServices.run";
 /// How long we wait for the server to start accepting connections on its data port.
 const READY_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// The custom URI scheme our preview reverse-proxy is served under (see
+/// [`proxy_preview_html`]). Registered in `lib.rs`.
+pub const PREVIEW_SCHEME: &str = "msn-preview";
+
+/// Permissive CSP for the *proxied* preview document only (its own origin, not
+/// the app's). The upstream frontend is a single self-contained file that runs
+/// inlined scripts + WASM and talks to loopback sockets, so we allow exactly
+/// that and nothing that could reach off-device.
+const PROXY_CSP: &str = "default-src 'none'; \
+     script-src 'unsafe-inline' 'wasm-unsafe-eval' blob:; \
+     style-src 'unsafe-inline'; img-src data: blob:; font-src data: blob:; \
+     connect-src ws://127.0.0.1:* http://127.0.0.1:*; worker-src blob:; base-uri 'none'";
 
 /// A plugin-declared preview service, parsed from `contributes.nativeServices`.
 #[derive(Debug, Clone, Deserialize)]
@@ -56,6 +70,9 @@ struct PluginNativeServiceManifest {
 struct Session {
     child: Child,
     input_path: PathBuf,
+    /// The server's data-plane HTTP port — where the reverse-proxy fetches the
+    /// frontend HTML from.
+    data_port: u16,
 }
 
 impl Session {
@@ -81,6 +98,17 @@ impl PreviewServiceRegistry {
                 session.kill();
             }
         }
+    }
+
+    /// The data-plane port of a running session, if any. Used by the reverse
+    /// proxy to validate a request targets a real session (not an arbitrary
+    /// loopback port).
+    fn data_port(&self, session_key: &str) -> Option<u16> {
+        self.sessions
+            .lock()
+            .ok()?
+            .get(session_key)
+            .map(|s| s.data_port)
     }
 }
 
@@ -249,7 +277,11 @@ pub async fn plugins_preview_start(
             .spawn()?;
         let data_url = substitute(&service.data_url, data_port, control_port, &input_str);
         let control_url = substitute(&service.control_url, data_port, control_port, &input_str);
-        let mut session = Session { child, input_path };
+        let mut session = Session {
+            child,
+            input_path,
+            data_port,
+        };
         if let Err(e) = wait_until_ready(data_port) {
             session.kill();
             return Err(e);
@@ -318,6 +350,108 @@ pub async fn plugins_preview_stop(
     Ok(())
 }
 
+// ---------- Reverse proxy (theme injection) -------------------------------
+
+fn query_param(query: Option<&str>, key: &str) -> Option<String> {
+    for pair in query?.split('&') {
+        if let Some((k, v)) = pair.split_once('=') {
+            if k == key {
+                return Some(
+                    urlencoding::decode(v)
+                        .map(|c| c.into_owned())
+                        .unwrap_or_else(|_| v.to_string()),
+                );
+            }
+        }
+    }
+    None
+}
+
+/// Restrict a caller-supplied color to a tiny CSS-safe charset — it's injected
+/// into a `<style>`, so it must not be able to carry `<`, `;`, `{`, `}`, quotes,
+/// etc. and break out. Invalid input falls back to tinymist's own default.
+fn sanitize_css_color(bg: &str) -> String {
+    let ok = !bg.is_empty()
+        && bg.len() <= 63
+        && bg.chars().all(|c| {
+            c.is_ascii_alphanumeric() || matches!(c, '#' | '(' | ')' | ',' | '.' | '%' | ' ')
+        });
+    if ok {
+        bg.to_string()
+    } else {
+        "rgb(82,86,89)".to_string()
+    }
+}
+
+/// Insert our theme `<style>` + a readiness beacon into the document head. The
+/// `!important` custom-property override wins over the frontend's own inline
+/// `setProperty`, and the beacon lets the client confirm scripts actually run
+/// under our CSP (and fall back to the direct iframe if they don't).
+fn inject_head(html: &str, bg: &str) -> String {
+    let inject = format!(
+        "<style>:root{{--typst-preview-background-color:{bg} !important;\
+         --vscode-sideBar-background:{bg} !important;}}</style>\
+         <script>try{{parent.postMessage({{type:'ms-preview-proxy-ready'}},'*');}}catch(e){{}}</script>"
+    );
+    match html.find("</head>") {
+        Some(idx) => format!("{}{}{}", &html[..idx], inject, &html[idx..]),
+        None => format!("{inject}{html}"),
+    }
+}
+
+fn html_response(status: u16, body: String) -> tauri::http::Response<Cow<'static, [u8]>> {
+    tauri::http::Response::builder()
+        .status(status)
+        .header(
+            tauri::http::header::CONTENT_TYPE,
+            "text/html; charset=utf-8",
+        )
+        .header(tauri::http::header::CONTENT_SECURITY_POLICY, PROXY_CSP)
+        .header(tauri::http::header::CACHE_CONTROL, "no-store")
+        .body(Cow::Owned(body.into_bytes()))
+        .unwrap_or_else(|_| tauri::http::Response::new(Cow::Borrowed(&b""[..])))
+}
+
+/// Serve the tinymist preview frontend from *our* origin with an app-theme
+/// background injected. The frontend is a single self-contained file and its
+/// data socket is an absolute `ws://127.0.0.1:*` URL, so serving it from here
+/// (rather than framing `127.0.0.1` directly) only changes the document origin
+/// — which is what lets us both set a permissive CSP and inject the theme. The
+/// requested `session` is validated against the running registry so this can't
+/// be pointed at an arbitrary loopback port.
+pub async fn proxy_preview_html<R: Runtime>(
+    app: AppHandle<R>,
+    request: tauri::http::Request<Vec<u8>>,
+) -> tauri::http::Response<Cow<'static, [u8]>> {
+    let query = request.uri().query().map(str::to_string);
+    let session = query_param(query.as_deref(), "session");
+    let bg = sanitize_css_color(&query_param(query.as_deref(), "bg").unwrap_or_default());
+
+    let port = session
+        .as_deref()
+        .and_then(|s| app.state::<PreviewServiceRegistry>().data_port(s));
+    let Some(port) = port else {
+        return html_response(
+            404,
+            "<!doctype html><title>unknown preview session</title>".into(),
+        );
+    };
+
+    match reqwest::get(format!("http://127.0.0.1:{port}/")).await {
+        Ok(resp) => match resp.text().await {
+            Ok(html) => html_response(200, inject_head(&html, &bg)),
+            Err(e) => html_response(
+                502,
+                format!("<!doctype html><title>preview read error: {e}</title>"),
+            ),
+        },
+        Err(e) => html_response(
+            502,
+            format!("<!doctype html><title>preview upstream error: {e}</title>"),
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -349,6 +483,43 @@ mod tests {
     fn safe_stem_strips_unsafe_chars() {
         assert_eq!(safe_stem("plugin/../note id!"), "plugin..noteid");
         assert_eq!(safe_stem(""), "session");
+    }
+
+    #[test]
+    fn sanitize_css_color_allows_safe_colors_rejects_injection() {
+        assert_eq!(sanitize_css_color("#1e1e1e"), "#1e1e1e");
+        assert_eq!(sanitize_css_color("rgb(30, 30, 30)"), "rgb(30, 30, 30)");
+        // Anything that could break out of the <style> falls back.
+        assert_eq!(sanitize_css_color("</style><script>"), "rgb(82,86,89)");
+        assert_eq!(sanitize_css_color("red;} body{"), "rgb(82,86,89)");
+        assert_eq!(sanitize_css_color(""), "rgb(82,86,89)");
+    }
+
+    #[test]
+    fn inject_head_places_style_and_beacon_before_head_close() {
+        let out = inject_head(
+            "<html><head><title>x</title></head><body></body></html>",
+            "#222",
+        );
+        let style_at = out.find("--typst-preview-background-color:#222").unwrap();
+        let head_close = out.find("</head>").unwrap();
+        assert!(style_at < head_close, "style injected inside head");
+        assert!(out.contains("ms-preview-proxy-ready"), "beacon injected");
+    }
+
+    #[test]
+    fn inject_head_falls_back_when_no_head() {
+        let out = inject_head("<body>hi</body>", "#333");
+        assert!(out.starts_with("<style>"));
+        assert!(out.contains("hi"));
+    }
+
+    #[test]
+    fn query_param_decodes() {
+        let q = Some("session=a%3Ab&bg=rgb(1%2C2%2C3)");
+        assert_eq!(query_param(q, "session").as_deref(), Some("a:b"));
+        assert_eq!(query_param(q, "bg").as_deref(), Some("rgb(1,2,3)"));
+        assert_eq!(query_param(q, "missing"), None);
     }
 
     #[test]

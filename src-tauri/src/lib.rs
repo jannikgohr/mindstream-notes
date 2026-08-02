@@ -229,6 +229,19 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .register_uri_scheme_protocol("mindstream", serve_asset_bytes)
+        // Reverse-proxy for plugin live previews (e.g. tinymist): serves the
+        // upstream frontend from our own origin with an app-theme background
+        // injected. Async because it does an HTTP fetch of the running server.
+        .register_asynchronous_uri_scheme_protocol(
+            plugins::preview_service::PREVIEW_SCHEME,
+            |ctx, request, responder| {
+                let app = ctx.app_handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    responder
+                        .respond(plugins::preview_service::proxy_preview_html(app, request).await);
+                });
+            },
+        )
         .setup(|app| {
             // Register a credential store before any auth code can hit
             // it — Entry::new() returns Error::NoDefaultStore otherwise.

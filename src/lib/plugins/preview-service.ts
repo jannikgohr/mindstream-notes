@@ -39,6 +39,26 @@ export interface PreviewServiceOptions {
 
 const UPDATE_DEBOUNCE_MS = 200;
 
+/** The custom scheme our backend reverse-proxy is served under (see lib.rs). */
+const PREVIEW_SCHEME = 'msn-preview';
+
+/**
+ * URL of the theme-injecting reverse proxy for a session. Tauri rewrites custom
+ * schemes per platform (Windows/Android → `http://<scheme>.localhost/…`, else
+ * `<scheme>://localhost/…`), mirroring `assets/bridge.ts`. `bg` is the app-theme
+ * background color to inject behind the pages.
+ */
+export function previewProxyUrl(sessionKey: string, bg: string): string {
+  const query = `?session=${encodeURIComponent(sessionKey)}&bg=${encodeURIComponent(bg)}`;
+  const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
+  return /windows|android/i.test(ua)
+    ? `http://${PREVIEW_SCHEME}.localhost/${query}`
+    : `${PREVIEW_SCHEME}://localhost/${query}`;
+}
+
+/** Message the proxied frontend posts to the parent once its scripts run. */
+export const PREVIEW_PROXY_READY = 'ms-preview-proxy-ready';
+
 export class PreviewServiceController {
   private ws: WebSocket | null = null;
   private disposed = false;

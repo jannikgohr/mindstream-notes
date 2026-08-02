@@ -14,7 +14,11 @@
   import { isMobile } from '$lib/platform';
   import { base64ToBytes } from '$lib/editor/base64';
   import { tUi } from '$lib/settings/i18n.svelte';
-  import { PreviewServiceController } from '$lib/plugins/preview-service';
+  import {
+    PreviewServiceController,
+    previewProxyUrl,
+    PREVIEW_PROXY_READY
+  } from '$lib/plugins/preview-service';
   import PluginPdfPreview from './PluginPdfPreview.svelte';
   import { setNoteBody } from '$lib/stores/tree.svelte';
   import { pluginById, pluginNoteKind } from '$lib/plugins/registry.svelte';
@@ -109,6 +113,12 @@
   let serviceDataUrl = $state<string | null>(null);
   let serviceController: PreviewServiceController | null = null;
   let serviceCheckToken = 0;
+  // The iframe is served through our theme-injecting reverse proxy by default;
+  // if its readiness beacon doesn't arrive (e.g. a webview rejects our CSP), we
+  // fall back to loading the server directly so the preview still works.
+  let proxyState = $state<'trying' | 'ok' | 'fallback'>('trying');
+  let previewBg = $state('rgb(82,86,89)');
+  let proxyFallbackTimer: ReturnType<typeof setTimeout> | null = null;
 
   const contributionRef = $derived(pluginNoteKind(noteKind));
   const storedNoteKind = $derived(contributionRef?.noteKind ?? noteKind ?? '');
@@ -140,6 +150,17 @@
   const serviceUsable = $derived(
     !!previewServiceId && serviceState === 'available'
   );
+  const sessionKey = $derived(
+    contributionRef ? `${contributionRef.pluginId}:${noteId}` : ''
+  );
+  // What the live-preview iframe loads: the theme-injecting proxy by default,
+  // the server directly once we've fallen back.
+  const serviceIframeSrc = $derived.by(() => {
+    if (!serviceDataUrl) return null;
+    return proxyState === 'fallback'
+      ? serviceDataUrl
+      : previewProxyUrl(sessionKey, previewBg);
+  });
   // Preview is blocked (source-only) only when neither the live service nor the
   // declared PDF tool is available.
   const previewBlocked = $derived(
@@ -232,7 +253,9 @@
       jumpEvent: previewServiceJumpEvent(ref.pluginId, serviceId),
       onJump: (jump) => jumpToSource(jump.line, jump.column),
       onReady: (url) => {
-        if (!destroyed) serviceDataUrl = url;
+        if (destroyed) return;
+        serviceDataUrl = url;
+        startProxyAttempt();
       },
       onError: (message) => {
         if (!destroyed) renderError = message;
@@ -244,7 +267,48 @@
       controller.dispose();
       if (serviceController === controller) serviceController = null;
       serviceDataUrl = null;
+      if (proxyFallbackTimer) clearTimeout(proxyFallbackTimer);
     };
+  });
+
+  /** Read the app-theme color for the space behind preview pages. */
+  function readPreviewBackground(): string {
+    try {
+      const probe = document.createElement('div');
+      probe.className = 'bg-muted';
+      probe.style.cssText =
+        'position:absolute;left:-9999px;top:-9999px;width:1px;height:1px';
+      document.body.appendChild(probe);
+      const color = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      return color || 'rgb(82,86,89)';
+    } catch {
+      return 'rgb(82,86,89)';
+    }
+  }
+
+  // Optimistically load through the theme-injecting proxy; if its readiness
+  // beacon (an injected inline script) hasn't fired shortly, a webview has
+  // rejected our CSP — fall back to loading the server directly.
+  function startProxyAttempt() {
+    proxyState = 'trying';
+    previewBg = readPreviewBackground();
+    if (proxyFallbackTimer) clearTimeout(proxyFallbackTimer);
+    proxyFallbackTimer = setTimeout(() => {
+      if (!destroyed && proxyState === 'trying') proxyState = 'fallback';
+    }, 4000);
+  }
+
+  $effect(() => {
+    function onProxyMessage(event: MessageEvent) {
+      const data = event.data as Record<string, unknown> | null;
+      if (data && data.type === PREVIEW_PROXY_READY) {
+        if (proxyFallbackTimer) clearTimeout(proxyFallbackTimer);
+        if (!destroyed) proxyState = 'ok';
+      }
+    }
+    window.addEventListener('message', onProxyMessage);
+    return () => window.removeEventListener('message', onProxyMessage);
   });
 
   /** Resolve the manifest-declared control-plane jump event name for a service. */
@@ -910,11 +974,11 @@ parentWindow.postMessage({ type: 'mindstream-plugin-preview-ready' }, '*');
             </div>
           {/if}
           {#if serviceUsable}
-            {#if serviceDataUrl}
+            {#if serviceIframeSrc}
               <!-- The live preview server (e.g. tinymist) serves its own
-                   click-to-source frontend from a loopback origin. It's a
-                   cross-origin iframe, so we can only theme the gutter around
-                   it — the page gaps/scrollbar inside stay the server's. -->
+                   click-to-source frontend. We load it through our reverse
+                   proxy so an app-theme background is injected behind the
+                   pages; on `fallback` it's the server's origin directly. -->
               <div class="min-h-0 flex-1 bg-muted/40 p-3">
                 <div
                   class="h-full w-full overflow-hidden rounded-md border border-border bg-white shadow-sm"
@@ -922,7 +986,7 @@ parentWindow.postMessage({ type: 'mindstream-plugin-preview-ready' }, '*');
                   <iframe
                     class="h-full w-full"
                     title="Live plugin preview"
-                    src={serviceDataUrl}
+                    src={serviceIframeSrc}
                   ></iframe>
                 </div>
               </div>
