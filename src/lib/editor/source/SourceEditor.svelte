@@ -126,37 +126,138 @@
     }, INPUT_DEBOUNCE_MS);
   }
 
-  // Minimal markdown highlight that leans on theme tokens rather than a fixed
-  // palette, so it reads correctly in both light and dark mode.
+  // Source syntax gets its own palette instead of reusing app brand tokens:
+  // --primary is grayscale in the default themes, which made code look nearly
+  // monochrome in both Markdown and plugin languages.
   const highlight = HighlightStyle.define([
-    { tag: t.heading, fontWeight: '600' },
-    { tag: t.strong, fontWeight: '600' },
-    { tag: t.emphasis, fontStyle: 'italic' },
+    { tag: t.heading, color: 'var(--cm-syntax-heading)', fontWeight: '700' },
+    { tag: t.heading1, color: 'var(--cm-syntax-heading)', fontWeight: '700' },
+    { tag: t.heading2, color: 'var(--cm-syntax-heading)', fontWeight: '700' },
+    { tag: t.heading3, color: 'var(--cm-syntax-heading)', fontWeight: '700' },
+    { tag: t.strong, color: 'var(--cm-syntax-strong)', fontWeight: '700' },
     {
-      tag: t.keyword,
-      color: 'var(--primary, currentColor)',
+      tag: t.emphasis,
+      color: 'var(--cm-syntax-emphasis)',
+      fontStyle: 'italic'
+    },
+    {
+      tag: [
+        t.keyword,
+        t.definitionKeyword,
+        t.moduleKeyword,
+        t.controlKeyword,
+        t.processingInstruction
+      ],
+      color: 'var(--cm-syntax-keyword)',
       fontWeight: '600'
     },
-    { tag: [t.string, t.atom], color: 'var(--chart-2, var(--foreground))' },
-    { tag: t.number, color: 'var(--chart-4, var(--foreground))' },
-    { tag: t.comment, color: 'var(--muted-foreground)', fontStyle: 'italic' },
-    { tag: [t.variableName, t.propertyName], color: 'var(--foreground)' },
+    { tag: [t.string, t.special(t.string)], color: 'var(--cm-syntax-string)' },
+    { tag: [t.atom, t.bool, t.unit], color: 'var(--cm-syntax-atom)' },
+    { tag: t.number, color: 'var(--cm-syntax-number)' },
     {
-      tag: t.definition(t.variableName),
-      color: 'var(--primary, currentColor)'
+      tag: [t.comment, t.lineComment, t.blockComment],
+      color: 'var(--cm-syntax-comment)',
+      fontStyle: 'italic'
     },
-    { tag: t.operator, color: 'var(--muted-foreground)' },
-    { tag: [t.link, t.url], color: 'var(--primary, currentColor)' },
-    { tag: [t.monospace], fontFamily: 'var(--font-mono, monospace)' },
-    { tag: [t.meta, t.processingInstruction], color: 'var(--muted-foreground)' }
+    { tag: [t.variableName, t.name], color: 'var(--cm-syntax-variable)' },
+    {
+      tag: [t.propertyName, t.attributeName],
+      color: 'var(--cm-syntax-property)'
+    },
+    {
+      tag: [t.labelName, t.className, t.typeName],
+      color: 'var(--cm-syntax-label)'
+    },
+    {
+      tag: [t.definition(t.variableName), t.definition(t.propertyName)],
+      color: 'var(--cm-syntax-definition)',
+      fontWeight: '600'
+    },
+    { tag: t.special(t.variableName), color: 'var(--cm-syntax-function)' },
+    {
+      tag: [t.operator, t.operatorKeyword],
+      color: 'var(--cm-syntax-operator)'
+    },
+    {
+      tag: [t.punctuation, t.bracket, t.separator],
+      color: 'var(--cm-syntax-punctuation)'
+    },
+    {
+      tag: [t.link, t.url],
+      color: 'var(--cm-syntax-link)',
+      textDecoration: 'underline',
+      textUnderlineOffset: '2px'
+    },
+    {
+      tag: [t.monospace],
+      color: 'var(--cm-syntax-monospace)',
+      backgroundColor: 'var(--cm-syntax-monospace-bg)',
+      fontFamily: 'var(--font-mono, monospace)'
+    },
+    {
+      tag: [t.meta, t.documentMeta, t.annotation],
+      color: 'var(--cm-syntax-meta)'
+    },
+    { tag: t.list, color: 'var(--cm-syntax-list)' },
+    { tag: t.quote, color: 'var(--cm-syntax-quote)', fontStyle: 'italic' },
+    { tag: t.contentSeparator, color: 'var(--cm-syntax-punctuation)' },
+    {
+      tag: t.invalid,
+      color: 'var(--destructive)',
+      textDecoration: 'wavy underline'
+    }
   ]);
 
   const theme = EditorView.theme({
     '&': {
+      '--cm-syntax-heading': '#2563eb',
+      '--cm-syntax-strong': '#92400e',
+      '--cm-syntax-emphasis': '#be123c',
+      '--cm-syntax-keyword': '#7c3aed',
+      '--cm-syntax-string': '#15803d',
+      '--cm-syntax-atom': '#b45309',
+      '--cm-syntax-number': '#c2410c',
+      '--cm-syntax-comment': '#64748b',
+      '--cm-syntax-variable': '#0f766e',
+      '--cm-syntax-property': '#0369a1',
+      '--cm-syntax-label': '#9333ea',
+      '--cm-syntax-definition': '#0891b2',
+      '--cm-syntax-function': '#2563eb',
+      '--cm-syntax-operator': '#db2777',
+      '--cm-syntax-punctuation': '#475569',
+      '--cm-syntax-link': '#0284c7',
+      '--cm-syntax-monospace': '#c2410c',
+      '--cm-syntax-monospace-bg': 'rgb(248 113 113 / 0.09)',
+      '--cm-syntax-meta': '#16a34a',
+      '--cm-syntax-list': '#7c3aed',
+      '--cm-syntax-quote': '#64748b',
       height: '100%',
       color: 'var(--foreground)',
       backgroundColor: 'transparent',
       fontSize: '0.875rem'
+    },
+    '.dark &': {
+      '--cm-syntax-heading': '#61afef',
+      '--cm-syntax-strong': '#e5c07b',
+      '--cm-syntax-emphasis': '#e06c75',
+      '--cm-syntax-keyword': '#c678dd',
+      '--cm-syntax-string': '#98c379',
+      '--cm-syntax-atom': '#d19a66',
+      '--cm-syntax-number': '#d19a66',
+      '--cm-syntax-comment': '#7f8c98',
+      '--cm-syntax-variable': '#e5c07b',
+      '--cm-syntax-property': '#56b6c2',
+      '--cm-syntax-label': '#c678dd',
+      '--cm-syntax-definition': '#56b6c2',
+      '--cm-syntax-function': '#61afef',
+      '--cm-syntax-operator': '#e06c75',
+      '--cm-syntax-punctuation': '#abb2bf',
+      '--cm-syntax-link': '#56b6c2',
+      '--cm-syntax-monospace': '#d19a66',
+      '--cm-syntax-monospace-bg': 'rgb(209 154 102 / 0.12)',
+      '--cm-syntax-meta': '#98c379',
+      '--cm-syntax-list': '#c678dd',
+      '--cm-syntax-quote': '#7f8c98'
     },
     '.cm-content': {
       fontFamily: 'var(--font-mono, ui-monospace, monospace)',
