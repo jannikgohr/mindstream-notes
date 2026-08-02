@@ -10,9 +10,10 @@ body {
   height: 100%;
   margin: 0 !important;
   overflow: hidden;
-  padding: var(--ms-preview-gutter) !important;
-  scrollbar-width: thin;
-  scrollbar-color: var(--ms-preview-scrollbar) transparent;
+  /* padding: var(--ms-preview-gutter) !important; */
+  scrollbar-width: auto;
+  scrollbar-color: oklch(from var(--ms-preview-foreground) l c h / 0.3)
+    transparent;
 }
 
 *,
@@ -23,13 +24,14 @@ body {
 
 body * {
   scrollbar-gutter: stable;
-  scrollbar-width: thin;
-  scrollbar-color: var(--ms-preview-scrollbar) transparent;
+  scrollbar-width: auto;
+  scrollbar-color: oklch(from var(--ms-preview-foreground) l c h / 0.3)
+    transparent;
 }
 
 *::-webkit-scrollbar {
-  width: 12px;
-  height: 12px;
+  width: 15px;
+  height: 15px;
 }
 
 *::-webkit-scrollbar-track {
@@ -37,10 +39,16 @@ body * {
 }
 
 *::-webkit-scrollbar-thumb {
-  background: var(--ms-preview-scrollbar);
-  background-clip: padding-box;
+  background: oklch(from var(--ms-preview-foreground) l c h / 0.22);
+  background-clip: content-box;
   border: 3px solid transparent;
-  border-radius: 999px;
+  border-radius: 8px;
+  transition: background-color 120ms;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: oklch(from var(--ms-preview-foreground) l c h / 0.45);
+  background-clip: content-box;
 }
 
 *::-webkit-scrollbar-corner {
