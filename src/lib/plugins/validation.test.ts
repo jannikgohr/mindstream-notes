@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { PluginValidationError, validateManifest } from './validation';
 import type { PluginManifest } from './types';
-import typstPrototypeManifest from '../../../plugins/typst-prototype/manifest.json';
+import typstManifest from '../../../plugins/typst/manifest.json';
 
 /** A minimal manifest that passes validation; override to probe failures. */
 function validManifest(
@@ -71,9 +71,9 @@ describe('validateManifest', () => {
     expect(result.id).toBe('com.example.templates');
   });
 
-  it('accepts the bundled Typst prototype manifest', () => {
-    const result = validateManifest(typstPrototypeManifest);
-    // The prototype renders through the native `typst` binary, not a webview.
+  it('accepts the bundled Typst manifest', () => {
+    const result = validateManifest(typstManifest);
+    // The plugin renders through the native `typst` binary, not a webview.
     expect(result.contributes.nativeTools).toEqual([
       expect.objectContaining({ id: 'typst', binaryName: 'typst' })
     ]);
