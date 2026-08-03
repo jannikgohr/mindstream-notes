@@ -151,4 +151,31 @@ describe('loadPlugins — Tauri (backend discovery)', () => {
     await expect(loadPlugins()).resolves.toBeUndefined();
     expect(allPlugins()).toHaveLength(0);
   });
+
+  it('falls back to the record id for a gated plugin whose manifest has no name', async () => {
+    isTauri.mockReturnValue(true);
+    // Manifest omits `name`, so the gate notification uses the record id.
+    const nameless = validManifest();
+    delete (nameless as Record<string, unknown>).name;
+    pluginsDiscover.mockResolvedValue([
+      view({ enabled: false, lastLoadError: 'manifest hash changed' }, nameless)
+    ]);
+    await loadPlugins();
+    const gated = notificationState.items.find(
+      (i) => i.kind === 'plugin-gated'
+    );
+    expect(gated).toBeTruthy();
+  });
+
+  it('records the load error under <unknown> when neither record nor manifest carry an id', async () => {
+    isTauri.mockReturnValue(true);
+    // record.id nullish + manifest invalid and idless → applyDiscovered's catch
+    // resolves the id via manifestId(manifest) → '<unknown>'.
+    pluginsDiscover.mockResolvedValue([
+      view({ id: null }, { name: 'Broken', runtime: 'manifest-only' })
+    ]);
+    await loadPlugins();
+    expect(allPlugins()).toHaveLength(0);
+    expect(pluginLoadError('<unknown>')).toBeTruthy();
+  });
 });

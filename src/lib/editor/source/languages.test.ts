@@ -1,10 +1,40 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { StringStream } from '@codemirror/language';
 import {
   registerPlugin,
   resetPluginRegistry,
   setPluginEnabled
 } from '$lib/plugins/registry.svelte';
 import { sourceLanguageExtensions } from './languages';
+
+interface StreamParserLike {
+  startState: () => unknown;
+  token: (stream: StringStream, state: unknown) => string | null;
+}
+
+/** Run the plugin-provided Typst StreamLanguage tokenizer over `src`. */
+function tokenizeTypst(
+  src: string
+): Array<{ text: string; tag: string | null }> {
+  const ext = sourceLanguageExtensions('typst');
+  const parser = (ext[0] as unknown as { streamParser: StreamParserLike })
+    .streamParser;
+  const state = parser.startState();
+  const out: Array<{ text: string; tag: string | null }> = [];
+  for (const line of src.split('\n')) {
+    if (line === '') continue;
+    const stream = new StringStream(line, 2, 2);
+    let guard = 0;
+    while (!stream.eol()) {
+      const start = stream.pos;
+      const tag = parser.token(stream, state);
+      if (stream.pos === start) stream.next();
+      out.push({ text: stream.string.slice(start, stream.pos), tag });
+      if (++guard > 2000) break;
+    }
+  }
+  return out;
+}
 
 function typstLanguageManifest(): Record<string, unknown> {
   return {
@@ -44,5 +74,61 @@ describe('sourceLanguageExtensions', () => {
     registerPlugin(typstLanguageManifest());
     setPluginEnabled('com.example.typst', false);
     expect(sourceLanguageExtensions('typst')).toHaveLength(0);
+  });
+});
+
+describe('Typst tokenizer', () => {
+  it('assigns highlight tags across the full token grammar', () => {
+    registerPlugin(typstLanguageManifest());
+    const src = [
+      '= Heading one',
+      '#{1} deep', // '#' heading form at start of line
+      '#let x = 1pt',
+      '#myVar and plain',
+      '// a line comment',
+      '"a \\"quoted\\" string" `inline code` $x^2$ @ref <lbl.a>',
+      'call(1, 2.5cm) + - * / . , ; strong *_',
+      '™ falls through'
+    ].join('\n');
+    const tags = new Set(tokenizeTypst(src).map((t) => t.tag));
+    for (const expected of [
+      'heading',
+      'keyword',
+      'variable-2',
+      'variable',
+      'comment',
+      'string',
+      'string-2',
+      'atom',
+      'link',
+      'def',
+      'number',
+      'operator',
+      'punctuation',
+      'strong'
+    ]) {
+      expect(tags.has(expected), `expected a ${expected} token`).toBe(true);
+    }
+    // Unrecognised glyphs advance one char with a null tag.
+    expect(tokenizeTypst('™').some((t) => t.tag === null)).toBe(true);
+  });
+
+  it('tracks nested and multi-line block comments', () => {
+    registerPlugin(typstLanguageManifest());
+    // Single-line nested comment closes fully on the same line.
+    const single = tokenizeTypst('/* outer /* inner */ still */ x');
+    expect(single[0].tag).toBe('comment');
+    expect(single.some((t) => t.tag === 'variable' && t.text === 'x')).toBe(
+      true
+    );
+
+    // A comment left open carries across lines until its close.
+    const multi = tokenizeTypst(
+      ['/* start', 'middle line', 'end */ done'].join('\n')
+    );
+    expect(multi.filter((t) => t.tag === 'comment').length).toBeGreaterThan(0);
+    expect(multi.some((t) => t.tag === 'variable' && t.text === 'done')).toBe(
+      true
+    );
   });
 });
