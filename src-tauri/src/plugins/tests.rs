@@ -652,3 +652,157 @@ fn read_plugin_file_refuses_path_traversal() {
     assert!(read_plugin_file(&dir, "docs/../../secret.md").is_err());
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn sha256_hex_is_lowercase_and_matches_the_known_digest() {
+    // Empty-input SHA-256 is a well-known constant.
+    assert_eq!(
+        sha256_hex(b""),
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    );
+    assert_eq!(sha256_hex(b"abc").len(), 64);
+    assert!(sha256_hex(b"abc").bytes().all(|b| !b.is_ascii_uppercase()));
+}
+
+#[test]
+fn safe_segment_accepts_plain_names_and_rejects_traversal() {
+    assert!(safe_segment("cache", "seg").is_ok());
+    assert!(safe_segment("file.name-1_2", "seg").is_ok());
+    assert!(safe_segment("", "seg").is_err());
+    assert!(safe_segment(".", "seg").is_err());
+    assert!(safe_segment("..", "seg").is_err());
+    assert!(safe_segment("has space", "seg").is_err());
+    assert!(safe_segment("has/slash", "seg").is_err());
+}
+
+#[test]
+fn validate_binary_name_rejects_backslash_and_empty() {
+    assert!(validate_binary_name("").is_err());
+    assert!(validate_binary_name("tools\\typst").is_err());
+    assert!(validate_binary_name("ty..pst").is_err());
+    // A `+` is allowed (some tool basenames carry it), non-exe extensions are not.
+    assert!(validate_binary_name("clang++").is_ok());
+    assert!(validate_binary_name("typst.bat").is_err());
+}
+
+#[test]
+fn validate_native_tool_args_enforces_count_and_size_and_nul() {
+    assert!(validate_native_tool_args(&["--version".into()], &None).is_ok());
+    // Too many args.
+    let many = vec!["x".to_string(); MAX_NATIVE_TOOL_ARGS + 1];
+    assert!(validate_native_tool_args(&many, &None).is_err());
+    // An arg carrying a NUL byte.
+    assert!(validate_native_tool_args(&["a\0b".into()], &None).is_err());
+    // Oversized arg.
+    let big = "a".repeat(MAX_NATIVE_TOOL_ARG_BYTES + 1);
+    assert!(validate_native_tool_args(&[big], &None).is_err());
+    // NUL in stdin.
+    assert!(validate_native_tool_args(&[], &Some("in\0put".into())).is_err());
+}
+
+#[test]
+fn split_plugin_rel_path_normalizes_and_allows_empty_when_asked() {
+    assert_eq!(
+        split_plugin_rel_path("a/b/c", false).unwrap(),
+        vec!["a", "b", "c"]
+    );
+    // Trailing slashes are trimmed away.
+    assert_eq!(split_plugin_rel_path("a/", true).unwrap(), vec!["a"]);
+    // A leading slash is rejected outright (absolute paths aren't allowed).
+    assert!(split_plugin_rel_path("/a", true).is_err());
+    // Empty resolves to no segments only when the caller opts in.
+    assert!(split_plugin_rel_path("", true).unwrap().is_empty());
+    assert!(split_plugin_rel_path("a\\b", true).is_err());
+}
+
+#[test]
+fn parse_artifacts_and_native_tools_reject_malformed_declarations() {
+    let bad_artifacts = serde_json::json!({
+        "contributes": { "artifacts": [{ "id": 5 }] }
+    });
+    assert!(matches!(
+        parse_artifacts(&bad_artifacts).unwrap_err(),
+        AppError::InvalidArg(_)
+    ));
+    let bad_tools = serde_json::json!({
+        "contributes": { "nativeTools": "not-an-array" }
+    });
+    assert!(matches!(
+        parse_native_tools(&bad_tools).unwrap_err(),
+        AppError::InvalidArg(_)
+    ));
+    // Absent contributions parse to an empty vec, not an error.
+    assert!(parse_artifacts(&serde_json::json!({})).unwrap().is_empty());
+    assert!(parse_native_tools(&serde_json::json!({}))
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn find_native_tool_returns_the_match_or_not_found() {
+    let manifest = serde_json::json!({
+        "contributes": { "nativeTools": [{ "id": "typst", "binaryName": "typst" }] }
+    });
+    assert_eq!(find_native_tool(&manifest, "typst").unwrap().id, "typst");
+    assert!(matches!(
+        find_native_tool(&manifest, "ghost").unwrap_err(),
+        AppError::NotFound(_)
+    ));
+}
+
+#[test]
+fn manifest_id_defaults_when_absent() {
+    assert_eq!(manifest_id(&serde_json::json!({ "id": "com.x" })), "com.x");
+    assert_eq!(manifest_id(&serde_json::json!({})), "plugin");
+    // A non-string id also falls back.
+    assert_eq!(manifest_id(&serde_json::json!({ "id": 7 })), "plugin");
+}
+
+#[test]
+fn manifest_entry_validates_extension_and_rejects_traversal() {
+    let ok = serde_json::json!({ "entry": "main.luau" });
+    assert_eq!(manifest_entry(&ok, "luau", ".luau").unwrap(), "main.luau");
+    // No entry at all.
+    assert!(manifest_entry(&serde_json::json!({}), "luau", ".luau").is_err());
+    // Wrong extension.
+    let wrong = serde_json::json!({ "entry": "main.js" });
+    assert!(manifest_entry(&wrong, "luau", ".luau").is_err());
+    // Traversal in the entry path.
+    let evil = serde_json::json!({ "entry": "../main.luau" });
+    assert!(manifest_entry(&evil, "luau", ".luau").is_err());
+    let nested = serde_json::json!({ "entry": "sub/main.luau" });
+    assert!(manifest_entry(&nested, "luau", ".luau").is_err());
+}
+
+#[test]
+fn limit_readers_clamp_and_fall_back_to_defaults() {
+    // Value present but out of range → clamped.
+    let over = serde_json::json!({ "limits": { "heap": 999 } });
+    assert_eq!(limit_usize(&over, "heap", 10, 1, 100), 100);
+    // Absent field → default (itself clamped into range).
+    let none = serde_json::json!({});
+    assert_eq!(limit_usize(&none, "heap", 10, 1, 100), 10);
+    assert_eq!(limit_u64(&over, "heap", 10, 1, 100), 100);
+
+    let dur = serde_json::json!({ "limits": { "timeoutMs": 50 } });
+    assert_eq!(
+        limit_duration(
+            &dur,
+            std::time::Duration::from_millis(1000),
+            std::time::Duration::from_millis(100),
+            std::time::Duration::from_millis(5000),
+        ),
+        // 50ms is below the 100ms floor → clamped up.
+        std::time::Duration::from_millis(100)
+    );
+    // Absent timeoutMs → the supplied default (already within range).
+    assert_eq!(
+        limit_duration(
+            &none,
+            std::time::Duration::from_millis(1000),
+            std::time::Duration::from_millis(100),
+            std::time::Duration::from_millis(5000),
+        ),
+        std::time::Duration::from_millis(1000)
+    );
+}

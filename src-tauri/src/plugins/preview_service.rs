@@ -1083,4 +1083,177 @@ mod tests {
         assert_eq!(svc.preview_iframe.mode, PreviewIframeMode::Themed);
         assert_eq!(svc.preview_iframe.css.as_deref(), Some("preview.css"));
     }
+
+    #[test]
+    fn parse_services_is_empty_when_manifest_declares_none() {
+        assert!(parse_services(&serde_json::json!({})).unwrap().is_empty());
+        assert!(parse_services(&serde_json::json!({ "contributes": {} }))
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn parse_services_rejects_a_malformed_declaration() {
+        let manifest = serde_json::json!({
+            "contributes": { "nativeServices": [{ "id": 42 }] }
+        });
+        let err = parse_services(&manifest).unwrap_err();
+        assert!(matches!(err, AppError::InvalidArg(_)));
+    }
+
+    #[test]
+    fn substitute_replaces_repeated_and_absent_placeholders() {
+        // {input} appears twice; {controlPort} is absent from the template.
+        let out = substitute("{input} -> {dataPort} :: {input}", 10, 20, "X");
+        assert_eq!(out, "X -> 10 :: X");
+    }
+
+    #[test]
+    fn load_plugin_preview_css_returns_none_without_a_path() {
+        let files = discovery::PluginFiles::Fs(PathBuf::from("."));
+        assert!(load_plugin_preview_css(&files, None).unwrap().is_none());
+    }
+
+    #[test]
+    fn load_plugin_preview_css_rejects_an_unsafe_path() {
+        let files = discovery::PluginFiles::Fs(PathBuf::from("."));
+        let err = load_plugin_preview_css(&files, Some("../secret.css")).unwrap_err();
+        assert!(matches!(err, AppError::InvalidArg(_)));
+    }
+
+    #[test]
+    fn is_websocket_upgrade_detects_the_upgrade_header() {
+        assert!(is_websocket_upgrade(
+            b"GET /ws HTTP/1.1\r\nUpgrade: websocket\r\n\r\n"
+        ));
+        // Case-insensitive on both the header name and value.
+        assert!(is_websocket_upgrade(
+            b"GET / HTTP/1.1\r\nupgrade: WebSocket\r\n\r\n"
+        ));
+        assert!(!is_websocket_upgrade(
+            b"GET / HTTP/1.1\r\nConnection: keep-alive\r\n\r\n"
+        ));
+    }
+
+    #[test]
+    fn rewrite_ws_handshake_retargets_host_and_origin_upstream() {
+        let request = b"GET /ws HTTP/1.1\r\nHost: 127.0.0.1:9999\r\nOrigin: http://127.0.0.1:9999\r\nUpgrade: websocket\r\n\r\n";
+        let out = rewrite_ws_handshake(request, 4321);
+        assert!(out.contains("Host: 127.0.0.1:4321"));
+        assert!(out.contains("Origin: http://127.0.0.1:4321"));
+        // Non host/origin lines are preserved verbatim; rewrite stops at the
+        // blank line that ends the handshake head.
+        assert!(out.contains("Upgrade: websocket"));
+        assert!(out.ends_with("\r\n\r\n"));
+    }
+
+    #[test]
+    fn query_param_from_request_reads_the_request_line_query() {
+        let request = b"GET /proxy?bg=%23222&gutter=10px HTTP/1.1\r\nHost: x\r\n\r\n";
+        assert_eq!(
+            query_param_from_request(request, "bg").as_deref(),
+            Some("#222")
+        );
+        assert_eq!(
+            query_param_from_request(request, "gutter").as_deref(),
+            Some("10px")
+        );
+        assert_eq!(query_param_from_request(request, "missing"), None);
+        // A path with no query yields nothing rather than panicking.
+        assert_eq!(
+            query_param_from_request(b"GET / HTTP/1.1\r\n\r\n", "bg"),
+            None
+        );
+    }
+
+    /// Spawn a throwaway loopback HTTP server that answers exactly one request
+    /// with a fixed HTML body, then returns its port. Used to stand in for the
+    /// real preview server so the proxy plumbing can be exercised end-to-end.
+    fn fake_upstream(body: &'static str) -> u16 {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        thread::spawn(move || {
+            if let Ok((mut sock, _)) = listener.accept() {
+                let mut buf = [0_u8; 1024];
+                let _ = sock.read(&mut buf);
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = sock.write_all(resp.as_bytes());
+            }
+        });
+        port
+    }
+
+    #[test]
+    fn fetch_upstream_html_strips_the_response_headers() {
+        let port = fake_upstream("<html><head></head><body>hi</body></html>");
+        let html = fetch_upstream_html(port).unwrap();
+        assert_eq!(html, "<html><head></head><body>hi</body></html>");
+    }
+
+    #[test]
+    fn fetch_upstream_html_errors_when_nothing_listens() {
+        // Bind then drop to obtain a port that is (very likely) not accepting.
+        let port = {
+            let l = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+            l.local_addr().unwrap().port()
+        };
+        assert!(fetch_upstream_html(port).is_err());
+    }
+
+    #[test]
+    fn loopback_proxy_serves_theme_injected_html_over_a_real_socket() {
+        let upstream_port =
+            fake_upstream("<html><head><title>doc</title></head><body>doc</body></html>");
+        let proxy = start_loopback_proxy(upstream_port, PreviewProxyStyles::default()).unwrap();
+        assert_eq!(proxy.url(), format!("http://127.0.0.1:{}", proxy.port));
+
+        let mut client = TcpStream::connect((Ipv4Addr::LOCALHOST, proxy.port)).unwrap();
+        client
+            .write_all(
+                b"GET /?bg=%23222&gutter=10px HTTP/1.1\r\nHost: proxy\r\nConnection: close\r\n\r\n",
+            )
+            .unwrap();
+        let mut resp = String::new();
+        client.read_to_string(&mut resp).unwrap();
+
+        assert!(resp.contains("200 OK"), "proxy returns 200: {resp}");
+        assert!(resp.contains(PROXY_CSP), "proxy sets its own CSP");
+        assert!(
+            resp.contains("--ms-preview-background:#222"),
+            "sanitized bg query param is injected"
+        );
+        assert!(resp.contains("--ms-preview-gutter:10px"));
+        assert!(resp.contains("ms-preview-proxy-ready"), "beacon injected");
+        assert!(
+            resp.contains("<title>doc</title>"),
+            "upstream body preserved"
+        );
+
+        proxy.shutdown();
+    }
+
+    #[test]
+    fn loopback_proxy_returns_502_when_upstream_is_down() {
+        // Reserve a port with no listener so the proxy's upstream fetch fails.
+        let dead_port = {
+            let l = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+            l.local_addr().unwrap().port()
+        };
+        let proxy = start_loopback_proxy(dead_port, PreviewProxyStyles::default()).unwrap();
+
+        let mut client = TcpStream::connect((Ipv4Addr::LOCALHOST, proxy.port)).unwrap();
+        client
+            .write_all(b"GET / HTTP/1.1\r\nHost: proxy\r\nConnection: close\r\n\r\n")
+            .unwrap();
+        let mut resp = String::new();
+        client.read_to_string(&mut resp).unwrap();
+
+        assert!(resp.contains("502 Bad Gateway"), "got: {resp}");
+        assert!(resp.contains("preview upstream error"));
+
+        proxy.shutdown();
+    }
 }
