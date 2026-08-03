@@ -14,7 +14,10 @@ import { noteTypeEnabled } from '$lib/notes/note-types';
 import { pluginTemplateEntries } from '$lib/plugins/menu';
 import { pluginToolbarButtons } from '$lib/plugins/registry.svelte';
 import { resolvePluginString } from '$lib/plugins/plugin-i18n';
-import type { PluginToolbarButton } from '$lib/plugins/types';
+import {
+  menuItemFromPluginEffect,
+  pluginButtonEffect
+} from '$lib/plugins/effects';
 import { confirm } from './confirm-dialog.svelte';
 import {
   tree,
@@ -84,16 +87,6 @@ export interface MenuBuildContext {
     templateId: string,
     parentId: string | null
   ): void;
-  /**
-   * Run a plugin's declared `file-tree` toolbar action from the context menu,
-   * anchoring any menu it opens and defaulting note creation to `parentId` (the
-   * folder the menu was opened on).
-   */
-  runFileTreeToolbarButton(
-    pluginId: string,
-    button: PluginToolbarButton,
-    parentId: string | null
-  ): void;
   startPdfImport(parentId: string | null): void;
   startRename(kind: 'note' | 'folder', id: string, current: string): void;
   startEmptyTrash(): Promise<void>;
@@ -123,16 +116,16 @@ type RunNoteExporter = (
  *     name-first draft;
  *   - each enabled plugin's declared `file-tree` toolbar action becomes an entry
  *     labelled by the button's `labelKey` (e.g. the Templates plugin's "New from
- *     template"); clicking runs the plugin's own script, which returns the menu
- *     to open.
+ *     template"); the host asks the plugin for its effect while building the
+ *     menu, so returned `openMenu` effects can render as hover submenus.
  * Returns `[]` when no plugin contributes either, so the caller fences it with
  * separators only when it's non-empty. Shared by the root and folder create
  * menus, inheriting their write / shared read-only gating.
  */
-function pluginCreateMenuItems(
+async function pluginCreateMenuItems(
   ctx: MenuBuildContext,
   parentId: string | null
-): MenuItem[] {
+): Promise<MenuItem[]> {
   // Plugin note kinds (e.g. a Typst document) open a name-first inline draft
   // like "New note" does, so the file name can be set before the note exists.
   const items: MenuItem[] = pluginTemplateEntries().map((entry) => ({
@@ -144,14 +137,22 @@ function pluginCreateMenuItems(
 
   // Plugin-declared file-tree actions (e.g. the Templates plugin's "New from
   // template"). Both the label and the behaviour come from the plugin — the app
-  // adds no text: the label is the button's own i18n string and clicking runs
-  // the plugin's script, which returns its own menu of entries.
+  // adds no text: the label is the button's own i18n string and an `openMenu`
+  // effect becomes a native hover submenu.
   for (const { pluginId, button } of pluginToolbarButtons('file-tree')) {
-    items.push({
-      id: `plugin-filetree:${pluginId}:${button.id}`,
-      label: resolvePluginString(pluginId, button.labelKey ?? button.id),
-      onSelect: () => ctx.runFileTreeToolbarButton(pluginId, button, parentId)
-    });
+    const effect = await pluginButtonEffect(pluginId, button);
+    if (!effect) continue;
+    const id = `plugin-filetree:${pluginId}:${button.id}`;
+    items.push(
+      menuItemFromPluginEffect(
+        pluginId,
+        id,
+        resolvePluginString(pluginId, button.labelKey ?? button.id),
+        effect,
+        undefined,
+        { defaultParentId: parentId }
+      )
+    );
   }
   return items;
 }
@@ -273,8 +274,10 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
   // The "create a … inside this folder" entries, shared between the Home folder
   // menu and the editable-shared folder menu so the two stay in lockstep. The
   // plugin create group is fenced by separators into its own section.
-  function folderCreateMenuItems(id: string): (MenuItem | 'separator')[] {
-    const pluginItems = pluginCreateMenuItems(ctx, id);
+  async function folderCreateMenuItems(
+    id: string
+  ): Promise<(MenuItem | 'separator')[]> {
+    const pluginItems = await pluginCreateMenuItems(ctx, id);
     return [
       {
         label: 'New note in folder',
@@ -490,7 +493,7 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
             ? collectionUserCanManageSharing(folder)
             : false;
           const items: (MenuItem | 'separator')[] = editable
-            ? [...folderCreateMenuItems(id), 'separator']
+            ? [...(await folderCreateMenuItems(id)), 'separator']
             : [];
           if (canManageShare) {
             items.push({
@@ -517,7 +520,7 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
         }
         if (!editable) return [];
         return [
-          ...folderCreateMenuItems(id),
+          ...(await folderCreateMenuItems(id)),
           'separator',
           {
             label: 'Rename folder…',
@@ -537,7 +540,7 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
       if (!ctx.canCreate) return [];
 
       return [
-        ...folderCreateMenuItems(id),
+        ...(await folderCreateMenuItems(id)),
         'separator',
         {
           label: 'Rename folder…',
@@ -573,7 +576,7 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
 
     if (!ctx.canCreate) return [];
 
-    const pluginItems = pluginCreateMenuItems(ctx, null);
+    const pluginItems = await pluginCreateMenuItems(ctx, null);
     return [
       { label: 'New note', onSelect: () => ctx.startDraft('note', null) },
       ...(noteTypeEnabled('freeform')

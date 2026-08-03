@@ -55,7 +55,12 @@ vi.mock('./registry.svelte', () => ({
   })
 }));
 
-import { parsePluginEffect, runPluginButton, runPluginEffect } from './effects';
+import {
+  menuItemFromPluginEffect,
+  parsePluginEffect,
+  runPluginButton,
+  runPluginEffect
+} from './effects';
 import { buildPluginContext } from './plugin-ctx';
 
 beforeEach(() => {
@@ -161,6 +166,30 @@ describe('runPluginEffect', () => {
     expect([x, y]).toEqual([10, 20]);
     await items[0].onSelect();
     expect(h.createNoteFromNote).toHaveBeenCalledWith('n1', null);
+  });
+
+  it('converts openMenu effects into submenu items with inherited defaults', async () => {
+    h.perms.p1 = ['notes.create'];
+    const item = menuItemFromPluginEffect(
+      'p1',
+      'templates',
+      'New from template',
+      {
+        effect: 'openMenu',
+        items: [
+          {
+            label: 'Daily',
+            run: { effect: 'createNoteFromNote', sourceNoteId: 'n1' }
+          }
+        ]
+      },
+      undefined,
+      { defaultParentId: 'folder-1' }
+    );
+
+    expect(item.children?.map((child) => child.label)).toEqual(['Daily']);
+    item.children?.[0]?.onSelect?.();
+    expect(h.createNoteFromNote).toHaveBeenCalledWith('n1', 'folder-1');
   });
 });
 

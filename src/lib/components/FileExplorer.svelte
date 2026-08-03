@@ -414,24 +414,6 @@
     });
   }
 
-  /**
-   * Run a plugin's file-tree action chosen from the context menu: anchor any
-   * menu it opens at the context-menu position, and default its note creation to
-   * the folder the menu was opened on so "New from template" lands in-place.
-   */
-  function runFileTreeToolbarButton(
-    pluginId: string,
-    button: Parameters<typeof runPluginButton>[1],
-    parentId: string | null
-  ) {
-    void runPluginButton(
-      pluginId,
-      button,
-      { x: menuX, y: menuY },
-      { defaultParentId: parentId }
-    );
-  }
-
   async function runNoteExporter(
     id: string,
     label: string,
@@ -571,7 +553,6 @@
     sharedItemEditable,
     startDraft,
     startPluginTemplateDraft,
-    runFileTreeToolbarButton,
     startPdfImport,
     startRename,
     startEmptyTrash,

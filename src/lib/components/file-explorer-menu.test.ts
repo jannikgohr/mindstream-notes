@@ -1,9 +1,22 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMenuBuilder, type MenuBuildContext } from './file-explorer-menu';
 import type { MenuItem } from './context-menu-types';
 import { authSession } from '$lib/api/auth.svelte';
 import type { Collection, NoteSummary } from '$lib/api';
 import { tree } from '$lib/stores/tree.svelte';
+import {
+  registerPlugin,
+  resetPluginRegistry
+} from '$lib/plugins/registry.svelte';
+
+const pluginApi = vi.hoisted(() => ({
+  runScript:
+    vi.fn<(id: string, exportName: string, input: unknown) => Promise<unknown>>()
+}));
+
+vi.mock('$lib/api/plugins', () => ({
+  pluginsRunScript: pluginApi.runScript
+}));
 
 function context(overrides: Partial<MenuBuildContext> = {}): MenuBuildContext {
   return {
@@ -24,7 +37,6 @@ function context(overrides: Partial<MenuBuildContext> = {}): MenuBuildContext {
     sharedItemEditable: () => true,
     startDraft: () => {},
     startPluginTemplateDraft: () => {},
-    runFileTreeToolbarButton: () => {},
     startPdfImport: () => {},
     startRename: () => {},
     startEmptyTrash: async () => {},
@@ -82,6 +94,8 @@ beforeEach(() => {
   tree.notesById = {};
   tree.collectionsById = {};
   authSession.current = null;
+  resetPluginRegistry();
+  pluginApi.runScript.mockReset();
 });
 
 describe('root menu', () => {
@@ -99,18 +113,68 @@ describe('root menu', () => {
     );
     expect(await menuItemsForTarget({ kind: 'root' })).toEqual([]);
   });
+
+  it('renders plugin file-tree openMenu effects as hover submenus', async () => {
+    registerPlugin({
+      id: 'com.example.templates',
+      name: 'Templates',
+      version: '1.0.0',
+      runtime: 'luau',
+      entry: 'main.luau',
+      permissions: ['notes.create'],
+      contributes: {
+        toolbar: [
+          {
+            id: 'new-from-template',
+            location: 'file-tree',
+            labelKey: 'toolbar.newFromTemplate',
+            icon: 'icons/templates.svg',
+            action: { type: 'script', export: 'newFromTemplate' }
+          }
+        ],
+        i18n: {
+          en: {
+            'toolbar.newFromTemplate': 'New from template'
+          }
+        }
+      }
+    });
+    pluginApi.runScript.mockResolvedValue({
+      effect: 'openMenu',
+      items: [
+        {
+          label: 'Daily note',
+          run: { effect: 'createNoteFromNote', sourceNoteId: 'n1' }
+        }
+      ]
+    });
+
+    const { menuItemsForTarget } = createMenuBuilder(context());
+    const items = await menuItemsForTarget({ kind: 'root' });
+    const templates = item(items, 'New from template');
+
+    expect(templates?.children?.map((child) => child.label)).toEqual([
+      'Daily note'
+    ]);
+    expect(templates?.onSelect).toBeUndefined();
+    expect(pluginApi.runScript).toHaveBeenCalledWith(
+      'com.example.templates',
+      'newFromTemplate',
+      expect.any(Object)
+    );
+  });
 });
 
 describe('folder create submenu', () => {
-  it('offers one entry per enabled note type plus a nested folder', () => {
+  it('offers one entry per enabled note type plus a nested folder', async () => {
     const { folderCreateMenuItems } = createMenuBuilder(context());
-    const items = labels(folderCreateMenuItems('folder-1'));
+    const items = labels(await folderCreateMenuItems('folder-1'));
 
     expect(items).toContain('New note in folder');
     expect(items).toContain('New folder inside');
   });
 
-  it('routes every entry at the folder it was opened on', () => {
+  it('routes every entry at the folder it was opened on', async () => {
     const drafts: Array<[string, string | null]> = [];
     const { folderCreateMenuItems } = createMenuBuilder(
       context({
@@ -119,7 +183,7 @@ describe('folder create submenu', () => {
       })
     );
 
-    for (const entry of folderCreateMenuItems('folder-1')) {
+    for (const entry of await folderCreateMenuItems('folder-1')) {
       if (entry === 'separator') continue;
       entry.onSelect?.();
     }
