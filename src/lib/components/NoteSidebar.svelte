@@ -30,6 +30,7 @@
     type CollectionShareState
   } from '$lib/api/sharing';
   import NoteKindIcon from '$lib/components/NoteKindIcon.svelte';
+  import { noteHistoryEnabled } from '$lib/history/enabled';
   import { pluginNoteKind } from '$lib/plugins/registry.svelte';
   import { resolvePluginString } from '$lib/plugins/plugin-i18n';
   import { formatNoteDateTime } from '$lib/date-time';
@@ -660,7 +661,7 @@
           <TagsSection noteId={note.id} />
         </div>
 
-        {#if note.note_kind === 'markdown' || note.note_kind === 'freeform' || note.note_kind === 'ink' || note.note_kind === 'pdf' || note.note_kind === 'kanban'}
+        {#if noteHistoryEnabled(note.note_kind)}
           <div class="mt-5 border-t border-border pt-5">
             <NoteHistorySection noteId={note.id} noteKind={note.note_kind} />
           </div>
