@@ -3,6 +3,7 @@
   import { X, Search, ChevronRight } from '@lucide/svelte';
   import SettingControl from './SettingControl.svelte';
   import PluginsOverview from '$lib/plugins/PluginsOverview.svelte';
+  import PluginIcon from '$lib/plugins/PluginIcon.svelte';
   import PluginNativeToolsSection from '$lib/plugins/PluginNativeToolsSection.svelte';
   import {
     SCHEMA,
@@ -335,13 +336,24 @@
                 {#each children as child (child.id)}
                   {@const childActive =
                     isPluginsCategory && activePluginId === child.id}
+                  {@const childIcon = pluginById(child.id)?.manifest.icon}
                   <button
                     type="button"
                     onclick={() => selectPlugin(child.id)}
-                    class="flex w-full items-center gap-2 py-1.5 pl-9 pr-3 text-left text-sm transition-colors {childActive
+                    class="flex w-full items-center gap-2 py-1.5 pl-6 pr-3 text-left text-sm transition-colors {childActive
                       ? 'bg-accent text-accent-foreground'
-                      : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground'}"
+                      : 'text-foreground hover:bg-accent/60'}"
                   >
+                    {#if childIcon}
+                      <PluginIcon
+                        pluginId={child.id}
+                        file={childIcon}
+                        class="size-3.5 shrink-0 text-muted-foreground"
+                      />
+                    {:else}
+                      {@const Puzzle = categoryIcon('puzzle')}
+                      <Puzzle class="size-3.5 shrink-0 text-muted-foreground" />
+                    {/if}
                     <span class="truncate">{child.name}</span>
                   </button>
                 {/each}

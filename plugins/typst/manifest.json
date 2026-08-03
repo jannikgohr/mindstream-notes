@@ -7,6 +7,7 @@
   "runtime": "luau",
   "entry": "main.luau",
   "descriptionKey": "plugin.description",
+  "icon": "icons/typst.svg",
   "limits": {
     "timeoutMs": 20000
   },
@@ -19,6 +20,10 @@
     "nativeServices.run"
   ],
   "contributes": {
+    "documentation": [
+      { "file": "docs/getting-started.md" },
+      { "file": "docs/requirements.md" }
+    ],
     "i18n": {
       "en": {
         "plugin.description": "Write and preview Typst documents as plugin-owned notes.",

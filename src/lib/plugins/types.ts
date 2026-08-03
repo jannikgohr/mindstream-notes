@@ -595,6 +595,13 @@ export interface PluginManifest {
    * bundle.
    */
   descriptionKey?: string;
+  /**
+   * Optional safe relative `.svg` path to the plugin's representative icon,
+   * rendered themed (via a mask, like the built-in Lucide glyphs) wherever the
+   * plugin is listed as a whole — e.g. the settings rail. Omitted → the host's
+   * generic plugin glyph.
+   */
+  icon?: string;
   permissions: PluginPermission[];
   contributes: PluginContributions;
 }
