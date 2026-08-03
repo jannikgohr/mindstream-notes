@@ -169,6 +169,19 @@ describe('renderPluginTemplate', () => {
     expect(renderPluginTemplate(PLUGIN_ID, t).title).toBe('Meeting notes');
   });
 
+  it('lets a typed title override the titleTemplate and flow into {{title}}', () => {
+    registerMeeting();
+    const out = renderPluginTemplate(
+      PLUGIN_ID,
+      meetingTemplate(),
+      { owner: 'Ada' },
+      new Date('2026-07-25T10:00:00Z'),
+      '  My Report  '
+    );
+    expect(out.title).toBe('My Report');
+    expect(out.body).toBe('# My Report\n\nOwner: Ada');
+  });
+
   it('throws when a required variable is missing', () => {
     const t = meetingTemplate();
     t.variables = [

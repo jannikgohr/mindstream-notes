@@ -167,7 +167,8 @@ export function renderPluginTemplate(
   pluginId: string,
   template: PluginNoteTemplateContribution,
   provided: TemplateVariables = {},
-  now: Date = new Date()
+  now: Date = new Date(),
+  titleOverride?: string
 ): RenderedTemplate {
   const context = buildTemplateContext(template, provided);
   const missing = missingRequiredVariable(template, context);
@@ -176,7 +177,12 @@ export function renderPluginTemplate(
       `Template "${template.id}" requires a value for variable "${missing}"`
     );
   }
-  let title = renderTemplateString(template.titleTemplate, context, now).trim();
+  // A user-typed name (from the file-tree draft) wins over the template's own
+  // `titleTemplate`, and flows into the body's `{{title}}` too so the document
+  // heading matches what the user named the note.
+  let title =
+    titleOverride?.trim() ||
+    renderTemplateString(template.titleTemplate, context, now).trim();
   if (title === '') {
     title = resolvePluginString(pluginId, template.labelKey);
   }
@@ -206,7 +212,8 @@ export async function createNoteFromPluginTemplate(
   pluginId: string,
   templateId: string,
   parentId: string | null,
-  variables: TemplateVariables = {}
+  variables: TemplateVariables = {},
+  titleOverride?: string
 ): Promise<string> {
   const ref = pluginTemplate(pluginId, templateId);
   if (!ref) {
@@ -223,9 +230,23 @@ export async function createNoteFromPluginTemplate(
   const runtime = pluginById(pluginId)?.manifest.runtime;
   const useScript =
     !!ref.template.render && (runtime === 'luau' || runtime === 'wasm');
-  const { title, body } = useScript
-    ? await renderTemplateViaScript(pluginId, ref.template, variables)
-    : renderPluginTemplate(pluginId, ref.template, variables);
+  // A typed title reaches a scripted template as a `title` variable; the app
+  // still forces the final note title to it below so the two paths agree.
+  const scriptVariables = titleOverride?.trim()
+    ? { ...variables, title: titleOverride.trim() }
+    : variables;
+  const rendered = useScript
+    ? await renderTemplateViaScript(pluginId, ref.template, scriptVariables)
+    : renderPluginTemplate(
+        pluginId,
+        ref.template,
+        variables,
+        new Date(),
+        titleOverride
+      );
+  const title =
+    useScript && titleOverride?.trim() ? titleOverride.trim() : rendered.title;
+  const body = rendered.body;
   const id = await createNoteIn(
     parentId,
     title,

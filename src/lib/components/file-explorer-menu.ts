@@ -11,11 +11,7 @@
 
 import type { MenuItem } from './context-menu-types';
 import { noteTypeEnabled } from '$lib/notes/note-types';
-import {
-  pluginTemplateEntries,
-  runPluginTemplate,
-  runTemplateEntry
-} from '$lib/plugins/menu';
+import { pluginTemplateEntries, runTemplateEntry } from '$lib/plugins/menu';
 import { userTemplateEntries } from '$lib/templates/user-templates';
 import { confirm } from './confirm-dialog.svelte';
 import {
@@ -80,6 +76,12 @@ export interface MenuBuildContext {
   isSharedAnchor(folderId: string): boolean;
   sharedItemEditable(item: TreeItemRef): boolean;
   startDraft(kind: DraftKind, parentId: string | null): void;
+  /** Start a name-first inline draft that creates a note from a plugin template. */
+  startPluginTemplateDraft(
+    pluginId: string,
+    templateId: string,
+    parentId: string | null
+  ): void;
   startPdfImport(parentId: string | null): void;
   startRename(kind: 'note' | 'folder', id: string, current: string): void;
   startEmptyTrash(): Promise<void>;
@@ -110,12 +112,17 @@ type RunNoteExporter = (
  * folder create menus so plugin creation appears wherever a plain "New note"
  * does, inheriting their write / shared read-only gating.
  */
-function pluginCreateMenuItems(parentId: string | null): MenuItem[] {
+function pluginCreateMenuItems(
+  ctx: MenuBuildContext,
+  parentId: string | null
+): MenuItem[] {
+  // A plugin note kind (e.g. a Typst document) opens a name-first inline draft
+  // like "New note" does, so the file name can be set before the note exists.
   const items: MenuItem[] = pluginTemplateEntries().map((entry) => ({
     id: `plugin-template:${entry.pluginId}:${entry.templateId}`,
     label: entry.label,
     onSelect: () =>
-      void runPluginTemplate(entry.pluginId, entry.templateId, parentId)
+      ctx.startPluginTemplateDraft(entry.pluginId, entry.templateId, parentId)
   }));
 
   // The Templates plugin's user templates (folder/tag sourced) stay grouped
@@ -258,7 +265,7 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
   // menu and the editable-shared folder menu so the two stay in lockstep. The
   // plugin create group is fenced by separators into its own section.
   function folderCreateMenuItems(id: string): (MenuItem | 'separator')[] {
-    const pluginItems = pluginCreateMenuItems(id);
+    const pluginItems = pluginCreateMenuItems(ctx, id);
     return [
       {
         label: 'New note in folder',
@@ -557,7 +564,7 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
 
     if (!ctx.canCreate) return [];
 
-    const pluginItems = pluginCreateMenuItems(null);
+    const pluginItems = pluginCreateMenuItems(ctx, null);
     return [
       { label: 'New note', onSelect: () => ctx.startDraft('note', null) },
       ...(noteTypeEnabled('freeform')
