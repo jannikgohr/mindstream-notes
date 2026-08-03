@@ -19,6 +19,11 @@
   import NoteKindIcon from './NoteKindIcon.svelte';
   import { noteTypeEnabled } from '$lib/notes/note-types';
   import { pluginToolbarButtons } from '$lib/plugins/registry.svelte';
+  import {
+    pluginTemplateDefaultTitle,
+    pluginTemplateNoteKind,
+    runPluginTemplate
+  } from '$lib/plugins/menu';
   import { runPluginButton } from '$lib/plugins/effects';
   import { resolvePluginString } from '$lib/plugins/plugin-i18n';
   import PluginIcon from '$lib/plugins/PluginIcon.svelte';
@@ -242,6 +247,27 @@
     if (parentId) expanded[parentId] = true;
     draft = { kind, parentId, text: defaultDraftText(kind) };
   }
+  // Name-first creation of a plugin-template note (e.g. a Typst document): seed
+  // the inline draft with the template's default title, then render + create on
+  // commit with the typed name (see commitDraft).
+  function startPluginTemplateDraft(
+    pluginId: string,
+    templateId: string,
+    parentId: string | null
+  ) {
+    if (!canStartDraft(parentId)) return;
+    if (parentId) expanded[parentId] = true;
+    draft = {
+      kind: 'note',
+      parentId,
+      text: pluginTemplateDefaultTitle(pluginId, templateId),
+      template: {
+        pluginId,
+        templateId,
+        noteKind: pluginTemplateNoteKind(pluginId, templateId) ?? 'markdown'
+      }
+    };
+  }
   function startPdfImport(parentId: string | null) {
     if (!canStartDraft(parentId)) return;
     pdfImportParentId = parentId;
@@ -267,8 +293,19 @@
       draft = null;
       return;
     }
-    const { kind, parentId } = draft;
+    const { kind, parentId, template } = draft;
     draft = null;
+    if (template) {
+      // The template renderer creates the note (of its plugin note kind) with
+      // the typed title and opens it per the plugin's open-on-create setting.
+      await runPluginTemplate(
+        template.pluginId,
+        template.templateId,
+        parentId,
+        text
+      );
+      return;
+    }
     const noteKind = draftKindToNoteKind(kind);
     if (noteKind) {
       const id = await createNoteIn(parentId, text, noteKind);
@@ -515,6 +552,7 @@
     isSharedAnchor,
     sharedItemEditable,
     startDraft,
+    startPluginTemplateDraft,
     startPdfImport,
     startRename,
     startEmptyTrash,
@@ -1020,7 +1058,12 @@
           ? tUi('fileTree.newInk')
           : tUi('fileTree.newNote')}
   <div class="my-0.5 flex items-center gap-1.5 rounded-md px-2 py-0.5">
-    {#if kind === 'folder'}
+    {#if draft?.template}
+      <NoteKindIcon
+        kind={draft.template.noteKind}
+        class="size-3.5 shrink-0 text-muted-foreground"
+      />
+    {:else if kind === 'folder'}
       <Folder class="size-3.5 shrink-0 text-muted-foreground" />
     {:else if kind === 'drawing'}
       <PencilRuler class="size-3.5 shrink-0 text-muted-foreground" />

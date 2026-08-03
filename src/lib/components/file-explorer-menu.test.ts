@@ -23,6 +23,7 @@ function context(overrides: Partial<MenuBuildContext> = {}): MenuBuildContext {
     isSharedAnchor: () => false,
     sharedItemEditable: () => true,
     startDraft: () => {},
+    startPluginTemplateDraft: () => {},
     startPdfImport: () => {},
     startRename: () => {},
     startEmptyTrash: async () => {},

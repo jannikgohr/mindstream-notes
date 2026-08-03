@@ -8,6 +8,14 @@ export type Draft = {
   kind: DraftKind;
   parentId: string | null;
   text: string;
+  /**
+   * Set when the draft creates a note from a plugin template (name-first, e.g. a
+   * Typst document): on commit the app renders the template with the typed title
+   * and creates a note of the template's plugin-owned `noteKind`. `kind` stays
+   * `'note'` so the inline input keeps the standard note styling; `noteKind` is
+   * carried only to show the right glyph while typing.
+   */
+  template?: { pluginId: string; templateId: string; noteKind: string };
 };
 
 export type Rename = {

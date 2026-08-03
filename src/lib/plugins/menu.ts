@@ -7,7 +7,7 @@
  * (the registry's merged view already filters disabled/unapproved plugins).
  */
 
-import { pluginTemplate, pluginTemplates } from './registry.svelte';
+import { pluginById, pluginTemplate, pluginTemplates } from './registry.svelte';
 import {
   resolvePluginString,
   resolvePluginStringOptional
@@ -55,10 +55,17 @@ export function hasPluginTemplates(): boolean {
 export async function runPluginTemplate(
   pluginId: string,
   templateId: string,
-  parentId: string | null
+  parentId: string | null,
+  title?: string
 ): Promise<void> {
   try {
-    await createNoteFromPluginTemplate(pluginId, templateId, parentId);
+    await createNoteFromPluginTemplate(
+      pluginId,
+      templateId,
+      parentId,
+      {},
+      title
+    );
   } catch (err) {
     console.error(
       '[plugins] template note creation failed',
@@ -67,6 +74,39 @@ export async function runPluginTemplate(
       err
     );
   }
+}
+
+/** The plugin-owned note kind a template creates, or null if it can't resolve. */
+export function pluginTemplateNoteKind(
+  pluginId: string,
+  templateId: string
+): string | null {
+  return pluginTemplate(pluginId, templateId)?.template.noteKind ?? null;
+}
+
+/**
+ * The title to seed a name-first draft with for a plugin template. Declarative
+ * templates render their `titleTemplate` synchronously (a sensible placeholder,
+ * e.g. "Untitled Typst document"); scripted templates can't render
+ * synchronously, so fall back to the template's localized label.
+ */
+export function pluginTemplateDefaultTitle(
+  pluginId: string,
+  templateId: string
+): string {
+  const ref = pluginTemplate(pluginId, templateId);
+  if (!ref) return '';
+  const runtime = pluginById(pluginId)?.manifest.runtime;
+  const useScript =
+    !!ref.template.render && (runtime === 'luau' || runtime === 'wasm');
+  if (!useScript) {
+    try {
+      return renderPluginTemplate(pluginId, ref.template).title;
+    } catch {
+      // Fall back to the label below.
+    }
+  }
+  return resolvePluginString(pluginId, ref.template.labelKey);
 }
 
 /**
