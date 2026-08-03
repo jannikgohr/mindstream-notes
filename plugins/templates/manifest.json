@@ -6,6 +6,7 @@
   "runtime": "luau",
   "entry": "main.luau",
   "descriptionKey": "plugin.description",
+  "icon": "icons/templates.svg",
   "permissions": ["notes.read", "notes.create"],
   "contributes": {
     "documentation": [

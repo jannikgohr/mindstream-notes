@@ -1110,6 +1110,15 @@ export function validateManifest(input: unknown): PluginManifest {
   if (m.descriptionKey !== undefined) {
     assertI18nKey(pluginId, m.descriptionKey, 'manifest.descriptionKey');
   }
+  if (m.icon !== undefined) {
+    assertNonEmptyString(pluginId, m.icon, 'manifest.icon');
+    if (!SAFE_SVG_PATH_RE.test(m.icon)) {
+      throw new PluginValidationError(
+        pluginId,
+        `manifest.icon ("${m.icon}") must be a safe relative .svg path inside the plugin dir (no "..", absolute paths, or "\\")`
+      );
+    }
+  }
 
   // Runtimes are explicit: purely-declarative `manifest-only`, or sandboxed
   // backend code in Luau/Wasmtime. Anything else is refused rather than loaded
