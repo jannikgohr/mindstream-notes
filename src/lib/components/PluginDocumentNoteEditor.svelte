@@ -3,6 +3,10 @@
   import type { EditorView } from '@codemirror/view';
   import { AlertTriangle, Loader2, RefreshCw } from '@lucide/svelte';
   import { loadNote } from '$lib/api';
+  import type { NoteKind } from '$lib/api';
+  import { createHistoryCapture } from '$lib/history/capture-scheduler';
+  import { noteHistoryEnabled } from '$lib/history/enabled';
+  import { registerNoteHistory } from '$lib/stores/note-history-bridge.svelte';
   import {
     pluginsArtifactsStatus,
     pluginsDownloadArtifact,
@@ -222,6 +226,48 @@
     );
   });
   const isReadOnly = $derived(isTrashed || isReadOnlyScope);
+
+  // ---- History ----
+  // A plugin document note is edited as plain source text in `body`; this editor
+  // has no Yjs doc of its own. (The backend still mirrors each body save into a
+  // v1 Y.Text `yrs_state`, but nothing here reads it.) So capture the source
+  // text directly rather than the backend's body-derived Yjs envelope, which we
+  // couldn't decode on restore without pulling Yjs into this editor. Gated by
+  // the in-code `noteHistoryEnabled` switch like every other kind.
+  const historyOn = $derived(noteHistoryEnabled(storedNoteKind));
+  const historyCapture = createHistoryCapture({
+    noteId: () => noteId,
+    label: 'plugin-note',
+    isTrashed: () => isReadOnly,
+    isReady: () => !loading && !loadError && !!contributionRef && historyOn,
+    mode: 'debounce',
+    snapshotNowRequiresDirty: true,
+    snapshot: () => source,
+    noteKind: () => storedNoteKind as NoteKind
+  });
+
+  /** Apply a history version back into the live source editor and persist it. */
+  function restoreHistorySnapshot(snapshot: string): void {
+    source = snapshot;
+    // `setText` is tagged External, so it doesn't echo back as a user edit.
+    sourceEditor?.setText(snapshot);
+    dirty = true;
+    void flushSave();
+    if (serviceController) serviceController.updateBody(snapshot);
+    else scheduleRender(0);
+  }
+
+  // Register the live editor with the History sidebar while the note is open and
+  // history is enabled for its kind. Re-runs on note change (registerNoteHistory
+  // returns the unregister, used as the effect cleanup).
+  $effect(() => {
+    if (!historyOn) return;
+    return registerNoteHistory(noteId, {
+      currentSnapshot: () => source,
+      restoreSnapshot: (snapshot) => restoreHistorySnapshot(snapshot),
+      snapshotNow: () => historyCapture.snapshotNow()
+    });
+  });
 
   $effect(() => {
     const ref = contributionRef;
@@ -484,6 +530,12 @@
       } finally {
         if (!destroyed && token === loadToken) loading = false;
       }
+      // Baseline-on-open, once `loading` is false so the capture's readiness
+      // check passes: an opened-but-unedited note still starts its timeline
+      // (deduped on reopen), and it doesn't mark the note dirty.
+      if (!destroyed && token === loadToken && !loadError) {
+        void historyCapture.baseline();
+      }
     })();
   });
 
@@ -568,6 +620,7 @@
     if (isReadOnly) return;
     source = value;
     scheduleSave();
+    historyCapture.schedule();
     // A live preview service recompiles from the pushed body; the `export`
     // renderer only runs when no service is driving the preview.
     if (serviceController) serviceController.updateBody(value);
@@ -995,6 +1048,7 @@ parentWindow.postMessage({ type: 'mindstream-plugin-preview-ready' }, '*');
     loadToken += 1;
     renderToken += 1;
     sourceEditor?.flush();
+    historyCapture.cancel();
     if (saveTimer) clearTimeout(saveTimer);
     if (renderTimer) clearTimeout(renderTimer);
     if (editorListener) {
