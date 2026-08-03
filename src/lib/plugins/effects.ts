@@ -37,6 +37,16 @@ export interface EffectAnchor {
   y: number;
 }
 
+/** Extra context for running an effect. */
+export interface RunEffectOptions {
+  /**
+   * Folder the app should create notes in when the effect itself doesn't name
+   * one — e.g. the folder a file-tree context menu was opened on. A `parentId`
+   * on the effect still wins, so a plugin can target a specific folder itself.
+   */
+  defaultParentId?: string | null;
+}
+
 function pluginHasPermission(
   pluginId: string,
   permission: PluginPermission
@@ -132,8 +142,11 @@ export function parsePluginEffect(value: unknown): PluginEffect | null {
 export async function runPluginEffect(
   pluginId: string,
   effect: PluginEffect,
-  anchor?: EffectAnchor
+  anchor?: EffectAnchor,
+  opts?: RunEffectOptions
 ): Promise<void> {
+  const parentId = (e: { parentId?: string | null }) =>
+    e.parentId ?? opts?.defaultParentId ?? null;
   switch (effect.effect) {
     case 'none':
       return;
@@ -147,7 +160,7 @@ export async function runPluginEffect(
       const noteKind = effect.noteKind ?? 'markdown';
       requireCreateKind(pluginId, noteKind);
       const id = await createNoteIn(
-        effect.parentId ?? null,
+        parentId(effect),
         effect.title,
         noteKind as NoteKind,
         effect.body
@@ -157,7 +170,7 @@ export async function runPluginEffect(
     }
     case 'createNoteFromNote':
       requireCreate(pluginId);
-      await createNoteFromNote(effect.sourceNoteId, effect.parentId ?? null);
+      await createNoteFromNote(effect.sourceNoteId, parentId(effect));
       return;
     case 'insertMarkdown':
       insertMarkdownIntoActiveNote(effect.markdown);
@@ -165,7 +178,7 @@ export async function runPluginEffect(
     case 'openMenu': {
       const items: MenuItem[] = effect.items.map((it) => ({
         label: it.label,
-        onSelect: () => void runPluginEffect(pluginId, it.run, anchor)
+        onSelect: () => void runPluginEffect(pluginId, it.run, anchor, opts)
       }));
       openPluginMenu(anchor?.x ?? 0, anchor?.y ?? 0, items);
       return;
@@ -182,7 +195,8 @@ export async function runPluginEffect(
 export async function runPluginButton(
   pluginId: string,
   button: PluginToolbarButton,
-  anchor?: EffectAnchor
+  anchor?: EffectAnchor,
+  opts?: RunEffectOptions
 ): Promise<void> {
   if (button.action.type !== 'script') {
     console.error(
@@ -205,7 +219,7 @@ export async function runPluginButton(
       );
       return;
     }
-    await runPluginEffect(pluginId, effect, anchor);
+    await runPluginEffect(pluginId, effect, anchor, opts);
   } catch (err) {
     console.error('[plugins] toolbar button failed', pluginId, button.id, err);
   }
