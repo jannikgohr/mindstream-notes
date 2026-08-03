@@ -9,7 +9,6 @@
  * by the explorer through [`MenuBuildContext`].
  */
 
-import { Blocks } from '@lucide/svelte';
 import type { MenuItem } from './context-menu-types';
 import { noteTypeEnabled } from '$lib/notes/note-types';
 import {
@@ -127,7 +126,6 @@ function pluginCreateMenuItems(parentId: string | null): MenuItem[] {
     items.push({
       id: 'new-from-template',
       label: tUi('nav.create.fromTemplate'),
-      icon: Blocks,
       children: userTemplates.map((entry) => ({
         id: `user-template:${entry.noteId}`,
         label: entry.label,

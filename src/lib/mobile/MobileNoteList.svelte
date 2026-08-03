@@ -25,7 +25,7 @@
   import FavouriteStar from '$lib/components/FavouriteStar.svelte';
   import type { NoteSummary, TreeNode } from '$lib/api';
   import { TRASH_ID } from '$lib/api';
-  import { noteKindIcon } from '$lib/components/note-kind-icon';
+  import NoteKindIcon from '$lib/components/NoteKindIcon.svelte';
   import {
     emptyTrash as emptyTrashStore,
     moveCollectionTo,
@@ -602,8 +602,10 @@
                 {#if node.kind === 'folder'}
                   <Folder class="size-5 text-muted-foreground" />
                 {:else}
-                  {@const Icon = noteKindIcon(noteKind)}
-                  <Icon class="size-5 text-muted-foreground" />
+                  <NoteKindIcon
+                    kind={noteKind}
+                    class="size-5 text-muted-foreground"
+                  />
                 {/if}
               </span>
               <span class="line-clamp-2 text-sm font-medium">{node.name}</span>
@@ -673,8 +675,10 @@
               {#if node.kind === 'folder'}
                 <Folder class="size-5 shrink-0 text-muted-foreground" />
               {:else}
-                {@const Icon = noteKindIcon(noteKind)}
-                <Icon class="size-5 shrink-0 text-muted-foreground" />
+                <NoteKindIcon
+                  kind={noteKind}
+                  class="size-5 shrink-0 text-muted-foreground"
+                />
               {/if}
               <span class="flex min-w-0 flex-1 flex-col">
                 <span class="truncate text-sm font-medium">{node.name}</span>

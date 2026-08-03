@@ -1,6 +1,6 @@
 <script lang="ts">
   import { ExternalLink, FileQuestion, Search, X } from '@lucide/svelte';
-  import { noteKindIcon } from '$lib/components/note-kind-icon';
+  import NoteKindIcon from '$lib/components/NoteKindIcon.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { requestOpenNote } from '$lib/stores/open-note-intent.svelte';
 
@@ -188,7 +188,6 @@
     <div class="kanban-note-results" role="listbox">
       {#if results.length > 0}
         {#each results as option, index (option.id)}
-          {@const Icon = noteKindIcon(option.note_kind)}
           <button
             type="button"
             class="kanban-note-result"
@@ -198,7 +197,10 @@
             onmouseenter={() => (highlight = index)}
             onclick={() => select(option)}
           >
-            <Icon class="kanban-note-result-icon" aria-hidden="true" />
+            <NoteKindIcon
+              kind={option.note_kind}
+              class="kanban-note-result-icon"
+            />
             <span class="kanban-note-result-copy">
               <span class="kanban-note-result-title">{option.label}</span>
               {#if option.path || option.duplicateTitle}

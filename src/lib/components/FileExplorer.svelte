@@ -16,7 +16,7 @@
     Trash2
   } from '@lucide/svelte';
   import FavouriteStar from './FavouriteStar.svelte';
-  import { noteKindIcon } from './note-kind-icon';
+  import NoteKindIcon from './NoteKindIcon.svelte';
   import { noteTypeEnabled } from '$lib/notes/note-types';
   import { pluginToolbarButtons } from '$lib/plugins/registry.svelte';
   import { runPluginButton } from '$lib/plugins/effects';
@@ -1118,7 +1118,6 @@
       (note ? noteIsUnderTrash(note, tree.collectionsById) : false)}
     {@const canDelete = !inTrash && itemEditable({ kind: 'note', id: node.id })}
     {@const kind = note?.note_kind}
-    {@const NoteIcon = noteKindIcon(kind)}
     <!-- Row uses a flex container so the favourite-toggle button can
          sit alongside the primary open-note tap target without nesting
          <button>s. The drag handlers live on the wrapper so users can
@@ -1145,7 +1144,7 @@
         }}
         oncontextmenu={(e) => openMenu(e, { kind: 'note', id: node.id })}
       >
-        <NoteIcon class="size-3.5 shrink-0 text-muted-foreground" />
+        <NoteKindIcon {kind} class="size-3.5 shrink-0 text-muted-foreground" />
         {#if renaming}
           {@render renderRenameInput()}
         {:else}

@@ -34,7 +34,7 @@
     type VirtualElement
   } from '@floating-ui/dom';
   import { Folder } from '@lucide/svelte';
-  import { noteKindIcon } from '$lib/components/note-kind-icon';
+  import NoteKindIcon from '$lib/components/NoteKindIcon.svelte';
   import { folderPathLabel } from '$lib/notes/folder-path';
   import { tree } from '$lib/stores/tree.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
@@ -296,7 +296,6 @@
       >
         {#each candidates as note, i (note.id)}
           {@const active = i === bridge.state.highlight}
-          {@const Icon = noteKindIcon(note.note_kind)}
           {@const path =
             note.path ||
             (note.duplicateTitle ? tUi('metadata.folder.root') : '')}
@@ -315,9 +314,9 @@
             }}
             onmouseenter={() => (bridge.state.highlight = i)}
           >
-            <Icon
+            <NoteKindIcon
+              kind={note.note_kind}
               class="mt-0.5 size-4 shrink-0 opacity-60"
-              aria-hidden="true"
             />
             <span class="min-w-0 flex-1">
               <span class="block truncate font-medium">{note.title}</span>

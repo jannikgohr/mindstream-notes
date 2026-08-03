@@ -164,6 +164,12 @@ export interface PluginNoteKindContribution {
   id: string;
   labelKey: string;
   descriptionKey?: string;
+  /**
+   * Safe relative `.svg` path inside the plugin bundle, used as the note-kind's
+   * icon everywhere a per-note glyph is shown (file tree, search, note lists,
+   * wikilink picker, …). Omitted → the host's generic unknown-kind icon.
+   */
+  icon?: string;
   /** Source editor language hint for the host UI. */
   sourceLanguage?: string;
   /** Host-owned icon to show for the preview-only view mode toggle. */

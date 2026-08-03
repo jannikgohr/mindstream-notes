@@ -120,6 +120,7 @@
         "id": "document",
         "labelKey": "notes.document.label",
         "descriptionKey": "notes.document.description",
+        "icon": "icons/typst.svg",
         "sourceLanguage": "typst",
         "viewModePreviewIcon": "bookText",
         "viewModeLabelKeys": {
