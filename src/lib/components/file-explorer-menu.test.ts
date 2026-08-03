@@ -11,7 +11,9 @@ import {
 
 const pluginApi = vi.hoisted(() => ({
   runScript:
-    vi.fn<(id: string, exportName: string, input: unknown) => Promise<unknown>>()
+    vi.fn<
+      (id: string, exportName: string, input: unknown) => Promise<unknown>
+    >()
 }));
 
 vi.mock('$lib/api/plugins', () => ({
