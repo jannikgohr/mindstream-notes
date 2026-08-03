@@ -27,6 +27,7 @@ import { openPluginMenu } from './plugin-menu.svelte';
 import { pluginById, pluginNoteKind } from './registry.svelte';
 import type {
   PluginEffect,
+  PluginEffectMenuItem,
   PluginPermission,
   PluginToolbarButton
 } from './types';
@@ -138,6 +139,44 @@ export function parsePluginEffect(value: unknown): PluginEffect | null {
   }
 }
 
+function pluginEffectMenuItems(
+  pluginId: string,
+  items: PluginEffectMenuItem[],
+  anchor?: EffectAnchor,
+  opts?: RunEffectOptions
+): MenuItem[] {
+  return items.map((it) => ({
+    label: it.label,
+    onSelect: () => void runPluginEffect(pluginId, it.run, anchor, opts)
+  }));
+}
+
+/**
+ * Convert a parsed plugin effect into context-menu data. `openMenu` becomes real
+ * submenu children, so host menus can expose plugin-owned menus on hover.
+ */
+export function menuItemFromPluginEffect(
+  pluginId: string,
+  id: string,
+  label: string,
+  effect: PluginEffect,
+  anchor?: EffectAnchor,
+  opts?: RunEffectOptions
+): MenuItem {
+  if (effect.effect === 'openMenu') {
+    return {
+      id,
+      label,
+      children: pluginEffectMenuItems(pluginId, effect.items, anchor, opts)
+    };
+  }
+  return {
+    id,
+    label,
+    onSelect: () => void runPluginEffect(pluginId, effect, anchor, opts)
+  };
+}
+
 /** Perform one parsed effect. Note-creating effects require `notes.create`. */
 export async function runPluginEffect(
   pluginId: string,
@@ -176,13 +215,47 @@ export async function runPluginEffect(
       insertMarkdownIntoActiveNote(effect.markdown);
       return;
     case 'openMenu': {
-      const items: MenuItem[] = effect.items.map((it) => ({
-        label: it.label,
-        onSelect: () => void runPluginEffect(pluginId, it.run, anchor, opts)
-      }));
+      const items = pluginEffectMenuItems(pluginId, effect.items, anchor, opts);
       openPluginMenu(anchor?.x ?? 0, anchor?.y ?? 0, items);
       return;
     }
+  }
+}
+
+/**
+ * Run a toolbar button's backend export and return its parsed effect without
+ * performing it. Host surfaces use this when they need to render plugin-owned
+ * `openMenu` effects as native submenus rather than opening a second menu later.
+ */
+export async function pluginButtonEffect(
+  pluginId: string,
+  button: PluginToolbarButton
+): Promise<PluginEffect | null> {
+  if (button.action.type !== 'script') {
+    console.error(
+      '[plugins] toolbar button is not a script action',
+      pluginId,
+      button.id
+    );
+    return null;
+  }
+  try {
+    const ctx = buildPluginContext(pluginId);
+    const raw = await pluginsRunScript(pluginId, button.action.export, ctx);
+    const effect = parsePluginEffect(raw);
+    if (!effect) {
+      console.error(
+        '[plugins] toolbar button returned an invalid effect',
+        pluginId,
+        button.id,
+        raw
+      );
+      return null;
+    }
+    return effect;
+  } catch (err) {
+    console.error('[plugins] toolbar button failed', pluginId, button.id, err);
+    return null;
   }
 }
 
@@ -198,29 +271,8 @@ export async function runPluginButton(
   anchor?: EffectAnchor,
   opts?: RunEffectOptions
 ): Promise<void> {
-  if (button.action.type !== 'script') {
-    console.error(
-      '[plugins] toolbar button is not a script action',
-      pluginId,
-      button.id
-    );
-    return;
-  }
-  try {
-    const ctx = buildPluginContext(pluginId);
-    const raw = await pluginsRunScript(pluginId, button.action.export, ctx);
-    const effect = parsePluginEffect(raw);
-    if (!effect) {
-      console.error(
-        '[plugins] toolbar button returned an invalid effect',
-        pluginId,
-        button.id,
-        raw
-      );
-      return;
-    }
+  const effect = await pluginButtonEffect(pluginId, button);
+  if (effect) {
     await runPluginEffect(pluginId, effect, anchor, opts);
-  } catch (err) {
-    console.error('[plugins] toolbar button failed', pluginId, button.id, err);
   }
 }
