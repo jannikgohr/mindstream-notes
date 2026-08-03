@@ -117,8 +117,9 @@ describe('folder create submenu', () => {
       })
     );
 
-    for (const item of folderCreateMenuItems('folder-1')) {
-      item.onSelect?.();
+    for (const entry of folderCreateMenuItems('folder-1')) {
+      if (entry === 'separator') continue;
+      entry.onSelect?.();
     }
 
     expect(drafts.length).toBeGreaterThan(0);
