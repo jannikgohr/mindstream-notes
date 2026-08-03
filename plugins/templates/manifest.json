@@ -27,9 +27,9 @@
         "toolbar.newFromTemplate": "New from template",
         "settings.sources.title": "Template sources",
         "settings.sourceFolder.label": "Template folder",
-        "settings.sourceFolder.description": "Every markdown note inside this folder becomes a template.",
+        "settings.sourceFolder.description": "Every note inside this folder becomes a template, whatever its kind.",
         "settings.sourceTag.label": "Template tag",
-        "settings.sourceTag.description": "Every markdown note carrying this tag becomes a template.",
+        "settings.sourceTag.description": "Every note carrying this tag becomes a template, whatever its kind.",
         "settings.openOnCreate.label": "Open new template notes",
         "settings.openOnCreate.description": "Open a note in the editor right after creating it from a template"
       },
@@ -38,9 +38,9 @@
         "toolbar.newFromTemplate": "Neu aus Vorlage",
         "settings.sources.title": "Vorlagenquellen",
         "settings.sourceFolder.label": "Vorlagenordner",
-        "settings.sourceFolder.description": "Jede Markdown-Notiz in diesem Ordner wird zu einer Vorlage.",
+        "settings.sourceFolder.description": "Jede Notiz in diesem Ordner wird zu einer Vorlage, unabhängig von ihrer Art.",
         "settings.sourceTag.label": "Vorlagen-Tag",
-        "settings.sourceTag.description": "Jede Markdown-Notiz mit diesem Tag wird zu einer Vorlage.",
+        "settings.sourceTag.description": "Jede Notiz mit diesem Tag wird zu einer Vorlage, unabhängig von ihrer Art.",
         "settings.openOnCreate.label": "Neue Vorlagennotizen öffnen",
         "settings.openOnCreate.description": "Eine Notiz direkt nach dem Erstellen aus einer Vorlage im Editor öffnen"
       }

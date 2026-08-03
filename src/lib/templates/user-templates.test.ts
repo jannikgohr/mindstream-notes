@@ -118,14 +118,43 @@ describe('userTemplateEntries', () => {
     expect(entries[0]).toMatchObject({ label: 'Tagged', source: 'tag' });
   });
 
-  it('excludes trashed notes and non-markdown kinds', () => {
+  it('excludes trashed notes but keeps every note kind', () => {
     settings.set(TAG_KEY, 'tpl');
     state.notesById = {
       a: note('a', { tags: ['tpl'], trashed: true }),
-      b: note('b', { tags: ['tpl'], note_kind: 'kanban' }),
-      c: note('c', { title: 'Keep', tags: ['tpl'] })
+      b: note('b', {
+        title: 'Board',
+        tags: ['tpl'],
+        note_kind: 'kanban'
+      }),
+      c: note('c', {
+        title: 'Doc',
+        tags: ['tpl'],
+        note_kind: 'plugin.com.mindstream.typst.document'
+      }),
+      d: note('d', { title: 'Keep', tags: ['tpl'] })
     };
-    expect(userTemplateEntries().map((e) => e.label)).toEqual(['Keep']);
+    expect(userTemplateEntries().map((e) => e.label)).toEqual([
+      'Board',
+      'Doc',
+      'Keep'
+    ]);
+  });
+
+  it('carries the source note kind on each entry', () => {
+    settings.set(TAG_KEY, 'tpl');
+    state.notesById = {
+      a: note('a', { title: 'Markdown', tags: ['tpl'] }),
+      b: note('b', {
+        title: 'Typst',
+        tags: ['tpl'],
+        note_kind: 'plugin.com.mindstream.typst.document'
+      })
+    };
+    expect(userTemplateEntries().map((e) => [e.label, e.noteKind])).toEqual([
+      ['Markdown', 'markdown'],
+      ['Typst', 'plugin.com.mindstream.typst.document']
+    ]);
   });
 
   it('sorts entries by label', () => {
@@ -170,6 +199,36 @@ describe('createNoteFromUserTemplate', () => {
       '# Daily 2026-07-26\n\n2026-07-26'
     );
     expect(requestOpenNote).toHaveBeenCalledWith('new-note');
+  });
+
+  it('creates a note of the source note kind (e.g. Typst)', async () => {
+    state.notesById = {
+      src: note('src', {
+        title: '{{title}}',
+        note_kind: 'plugin.com.mindstream.typst.document'
+      })
+    };
+    loadNote.mockResolvedValue({ body: '= {{title}}' });
+    pluginsRunScript.mockResolvedValue({ title: 'Report', body: '= Report' });
+
+    await createNoteFromUserTemplate('src', 'col-1');
+
+    expect(createNoteIn).toHaveBeenCalledWith(
+      'col-1',
+      'Report',
+      'plugin.com.mindstream.typst.document',
+      '= Report'
+    );
+  });
+
+  it('falls back to markdown when the source note is gone', async () => {
+    // No entry in notesById for 'ghost' — the source was deleted mid-flight.
+    loadNote.mockResolvedValue({ body: 'b' });
+    pluginsRunScript.mockResolvedValue({ title: 'T', body: 'b' });
+
+    await createNoteFromUserTemplate('ghost', null);
+
+    expect(createNoteIn).toHaveBeenCalledWith(null, 'T', 'markdown', 'b');
   });
 
   it('respects the open-on-create toggle when creating', async () => {

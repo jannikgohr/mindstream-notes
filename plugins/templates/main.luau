@@ -2,11 +2,13 @@
 -- Templates plugin — the "New from template" toolbar button.
 --
 -- The host calls `newFromTemplate(ctx)` when the button is clicked and performs
--- whatever effect this returns. We enumerate the user's markdown notes that
--- live in the configured template folder (at any depth) or carry the configured
+-- whatever effect this returns. We enumerate the user's notes — of any kind:
+-- markdown, kanban, or a plugin-owned kind such as a Typst document — that live
+-- in the configured template folder (at any depth) or carry the configured
 -- template tag, and return an `openMenu` effect offering each as a
 -- `createNoteFromNote` action — the host copies the chosen note's body
--- (interpolating {{date}}, {{title}}, …) and creates + opens the new note.
+-- (interpolating {{date}}, {{title}}, …) and creates + opens a note of the same
+-- kind as the source.
 --
 -- Only declarative data crosses back to the host: this script never writes a
 -- note itself. Note metadata comes from `ms.notes` (granted by `notes.read`);
@@ -97,27 +99,26 @@ local function newFromTemplate(ctx: Context): Effect
 	-- `ms.notes` is present because the manifest grants `notes.read`.
 	local notes = assert(ms.notes, "Templates plugin requires the notes.read permission")
 
+	-- Any note kind can serve as a template; the host recreates the source's kind.
 	local items: { MenuItem } = {}
 	for _, note in ipairs(notes.all()) do
-		if note.kind == "markdown" then
-			local matches = false
-			if tag ~= nil then
-				for _, t in ipairs(note.tags) do
-					if t == tag then
-						matches = true
-						break
-					end
+		local matches = false
+		if tag ~= nil then
+			for _, t in ipairs(note.tags) do
+				if t == tag then
+					matches = true
+					break
 				end
 			end
-			if not matches and folderId ~= nil and note.folder_id ~= nil then
-				matches = isUnder(note.folder_id, folderId, parentById)
-			end
-			if matches then
-				items[#items + 1] = {
-					label = note.title,
-					run = { effect = "createNoteFromNote", sourceNoteId = note.id },
-				}
-			end
+		end
+		if not matches and folderId ~= nil and note.folder_id ~= nil then
+			matches = isUnder(note.folder_id, folderId, parentById)
+		end
+		if matches then
+			items[#items + 1] = {
+				label = note.title,
+				run = { effect = "createNoteFromNote", sourceNoteId = note.id },
+			}
 		end
 	end
 

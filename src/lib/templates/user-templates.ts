@@ -5,10 +5,14 @@
  * Two opt-in sources, both configured by the **Templates plugin**
  * (Settings → Plugins → Templates → Template sources), using the reusable
  * `folder` and `tag` setting primitives:
- *   - a **folder** (`source-folder`, a folder id): every markdown note inside
- *     that folder (at any depth) is a template;
- *   - a **tag** (`source-tag`): every markdown note carrying that tag is a
- *     template.
+ *   - a **folder** (`source-folder`, a folder id): every note inside that
+ *     folder (at any depth) is a template;
+ *   - a **tag** (`source-tag`): every note carrying that tag is a template.
+ *
+ * Templates are **note-kind agnostic**: the source can be a markdown note, a
+ * kanban board, or a plugin-owned kind (e.g. a Typst document), and creating
+ * from it produces a note of that *same* kind — so a Typst template makes a
+ * Typst note. Only trashed notes are excluded.
  *
  * Because they are folder/tag pickers, both auto-clear when their target is
  * deleted (settings/pickers.svelte.ts). Creating a note from a user template
@@ -20,6 +24,7 @@
  */
 
 import { loadNote } from '$lib/api/notes';
+import type { NoteKind } from '$lib/api';
 import { isTauri } from '$lib/api/core';
 import { pluginsRunScript } from '$lib/api/plugins';
 import { createNoteIn, tree } from '$lib/stores/tree.svelte';
@@ -37,6 +42,8 @@ const SOURCE_TAG_KEY = `plugins.${TEMPLATES_PLUGIN_ID}.source-tag`;
 export interface UserTemplateEntry {
   noteId: string;
   label: string;
+  /** The source note's kind — the created note inherits it (markdown, kanban, or a plugin kind). */
+  noteKind: string;
   /** Which rule surfaced it (a note can match both; tag wins for labelling). */
   source: 'folder' | 'tag';
 }
@@ -64,10 +71,10 @@ function isInFolder(collectionId: string | null, folderId: string): boolean {
 }
 
 /**
- * Every markdown note that qualifies as a user template under the current
- * settings, sorted by title. Empty when neither source is configured. Reads the
- * reactive tree + settings, so it re-derives when notes, tags, or the settings
- * change.
+ * Every note that qualifies as a user template under the current settings,
+ * sorted by title, regardless of note kind (trashed notes excluded). Empty when
+ * neither source is configured. Reads the reactive tree + settings, so it
+ * re-derives when notes, tags, or the settings change.
  */
 export function userTemplateEntries(): UserTemplateEntry[] {
   // Rendering a user template runs the Templates plugin's Luau, which only
@@ -81,7 +88,7 @@ export function userTemplateEntries(): UserTemplateEntry[] {
 
   const entries: UserTemplateEntry[] = [];
   for (const note of Object.values(tree.notesById)) {
-    if (note.trashed || note.note_kind !== 'markdown') continue;
+    if (note.trashed) continue;
     let source: 'folder' | 'tag' | null = null;
     if (tag && note.tags.includes(tag)) source = 'tag';
     else if (folderId && isInFolder(note.parent_collection_id, folderId)) {
@@ -91,6 +98,7 @@ export function userTemplateEntries(): UserTemplateEntry[] {
     entries.push({
       noteId: note.id,
       label: note.title.trim() || 'Untitled',
+      noteKind: note.note_kind,
       source
     });
   }
@@ -150,11 +158,14 @@ export async function renderUserTemplateBody(
 }
 
 /**
- * Create a new markdown note by copying a source note — its title + body are
+ * Create a new note by copying a source note — its title + body are
  * interpolated (`{{date}}`, `{{title}}`, …) and written via the app's own
- * `createNoteIn`. The mechanical half of "create from template": the *policy*
- * (which note, whether to open) is the caller's. Backs the `createNoteFromNote`
- * plugin effect and `createNoteFromUserTemplate`. Returns the new note id.
+ * `createNoteIn`. The created note inherits the **source note's kind** (a Typst
+ * template makes a Typst note, a kanban template a kanban board, …), falling
+ * back to markdown only if the source has vanished from the tree. The
+ * mechanical half of "create from template": the *policy* (which note, whether
+ * to open) is the caller's. Backs the `createNoteFromNote` plugin effect and
+ * `createNoteFromUserTemplate`. Returns the new note id.
  */
 export async function createNoteFromNote(
   sourceNoteId: string,
@@ -163,7 +174,9 @@ export async function createNoteFromNote(
   now: Date = new Date()
 ): Promise<string> {
   const { title, body } = await renderUserTemplate(sourceNoteId, now);
-  const id = await createNoteIn(parentId, title, 'markdown', body);
+  const noteKind = (tree.notesById[sourceNoteId]?.note_kind ??
+    'markdown') as NoteKind;
+  const id = await createNoteIn(parentId, title, noteKind, body);
   if (opts.open ?? true) requestOpenNote(id);
   return id;
 }
