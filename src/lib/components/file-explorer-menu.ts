@@ -9,10 +9,15 @@
  * by the explorer through [`MenuBuildContext`].
  */
 
-import { Folder } from '@lucide/svelte';
+import { Blocks } from '@lucide/svelte';
 import type { MenuItem } from './context-menu-types';
 import { noteTypeEnabled } from '$lib/notes/note-types';
-import { pluginTemplateEntries, runPluginTemplate } from '$lib/plugins/menu';
+import {
+  pluginTemplateEntries,
+  runPluginTemplate,
+  runTemplateEntry
+} from '$lib/plugins/menu';
+import { userTemplateEntries } from '$lib/templates/user-templates';
 import { confirm } from './confirm-dialog.svelte';
 import {
   tree,
@@ -98,26 +103,43 @@ type RunNoteExporter = (
 ) => Promise<void>;
 
 /**
- * "New from template" submenu for a create surface, or `[]` when no enabled
- * plugin contributes a template. Shared by the Home-folder, editable-shared and
- * root create menus so a template is offered wherever a plain "New note" is.
- * Only added in create-allowed contexts, so it inherits their write / shared
- * read-only gating.
+ * The plugin create group for a surface: every enabled plugin's note-kind
+ * templates as their own top-level "New …" entries (e.g. a Typst document),
+ * followed by the Templates plugin's "New from template" submenu of the user's
+ * own template notes. Returns `[]` when neither is available, so the caller can
+ * fence it with separators only when it's non-empty. Shared by the root and
+ * folder create menus so plugin creation appears wherever a plain "New note"
+ * does, inheriting their write / shared read-only gating.
  */
-function pluginTemplateMenuItems(parentId: string | null): MenuItem[] {
-  const entries = pluginTemplateEntries();
-  if (entries.length === 0) return [];
-  return [
-    {
+function pluginCreateMenuItems(parentId: string | null): MenuItem[] {
+  const items: MenuItem[] = pluginTemplateEntries().map((entry) => ({
+    id: `plugin-template:${entry.pluginId}:${entry.templateId}`,
+    label: entry.label,
+    onSelect: () =>
+      void runPluginTemplate(entry.pluginId, entry.templateId, parentId)
+  }));
+
+  // The Templates plugin's user templates (folder/tag sourced) stay grouped
+  // under a single "New from template" submenu — shown only when at least one
+  // is configured and present.
+  const userTemplates = userTemplateEntries();
+  if (userTemplates.length > 0) {
+    items.push({
+      id: 'new-from-template',
       label: tUi('nav.create.fromTemplate'),
-      children: entries.map((entry) => ({
-        id: `plugin-template:${entry.pluginId}:${entry.templateId}`,
+      icon: Blocks,
+      children: userTemplates.map((entry) => ({
+        id: `user-template:${entry.noteId}`,
         label: entry.label,
         onSelect: () =>
-          void runPluginTemplate(entry.pluginId, entry.templateId, parentId)
+          void runTemplateEntry(
+            { kind: 'user', noteId: entry.noteId, label: entry.label },
+            parentId
+          )
       }))
-    }
-  ];
+    });
+  }
+  return items;
 }
 
 export function createMenuBuilder(ctx: MenuBuildContext) {
@@ -235,8 +257,10 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
   }
 
   // The "create a … inside this folder" entries, shared between the Home folder
-  // menu and the editable-shared folder menu so the two stay in lockstep.
-  function folderCreateMenuItems(id: string): MenuItem[] {
+  // menu and the editable-shared folder menu so the two stay in lockstep. The
+  // plugin create group is fenced by separators into its own section.
+  function folderCreateMenuItems(id: string): (MenuItem | 'separator')[] {
+    const pluginItems = pluginCreateMenuItems(id);
     return [
       {
         label: 'New note in folder',
@@ -274,7 +298,12 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
             }
           ]
         : []),
-      ...pluginTemplateMenuItems(id),
+      ...(pluginItems.length > 0
+        ? (['separator', ...pluginItems, 'separator'] as (
+            | MenuItem
+            | 'separator'
+          )[])
+        : []),
       {
         label: 'New folder inside',
         onSelect: () => ctx.startDraft('folder', id)
@@ -530,6 +559,7 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
 
     if (!ctx.canCreate) return [];
 
+    const pluginItems = pluginCreateMenuItems(null);
     return [
       { label: 'New note', onSelect: () => ctx.startDraft('note', null) },
       ...(noteTypeEnabled('freeform')
@@ -559,7 +589,12 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
             }
           ]
         : []),
-      ...pluginTemplateMenuItems(null),
+      ...(pluginItems.length > 0
+        ? (['separator', ...pluginItems, 'separator'] as (
+            | MenuItem
+            | 'separator'
+          )[])
+        : []),
       { label: 'New folder', onSelect: () => ctx.startDraft('folder', null) }
     ];
   }
