@@ -1,6 +1,6 @@
 <script lang="ts">
   import { ExternalLink, FileQuestion } from '@lucide/svelte';
-  import { noteKindIcon } from '$lib/components/note-kind-icon';
+  import NoteKindIcon from '$lib/components/NoteKindIcon.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { requestOpenNote } from '$lib/stores/open-note-intent.svelte';
   import { tree } from '$lib/stores/tree.svelte';
@@ -90,9 +90,6 @@
   const linkedNote = $derived(
     card.linkedNoteId ? tree.notesById[card.linkedNoteId] : undefined
   );
-  const LinkedNoteIcon = $derived(
-    linkedNote ? noteKindIcon(linkedNote.note_kind) : FileQuestion
-  );
   const deadline = $derived(
     cardShape.deadline
       ? formatDeadline(card.deadline, deadlineConfig?.format)
@@ -165,7 +162,14 @@
       onclick={openLinkedNote}
       disabled={!linkedNote || linkedNote.trashed}
     >
-      <LinkedNoteIcon aria-hidden="true" />
+      {#if linkedNote}
+        <NoteKindIcon
+          kind={linkedNote.note_kind}
+          class="kanban-card-linked-note-icon"
+        />
+      {:else}
+        <FileQuestion aria-hidden="true" />
+      {/if}
       <span>
         {linkedNote?.title || tUi('editor.kanban.missingLinkedNote')}
       </span>
@@ -339,7 +343,8 @@
     opacity: 0.75;
   }
 
-  .kanban-card-linked-note :global(svg) {
+  .kanban-card-linked-note :global(svg),
+  .kanban-card-linked-note :global(.kanban-card-linked-note-icon) {
     width: 14px;
     height: 14px;
     flex: 0 0 auto;

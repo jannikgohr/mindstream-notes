@@ -29,7 +29,7 @@
     type CollectionShareAccessLevel,
     type CollectionShareState
   } from '$lib/api/sharing';
-  import { noteKindIcon } from '$lib/components/note-kind-icon';
+  import NoteKindIcon from '$lib/components/NoteKindIcon.svelte';
   import { formatNoteDateTime } from '$lib/date-time';
   import { findShareScopeCollectionId } from '$lib/notes/share-users';
   import { pdfAssetIdFromBody } from '$lib/pdf/viewer-helpers';
@@ -364,7 +364,6 @@
     class="scrollbar-none flex-1 overflow-y-auto p-3"
   >
     {#if note}
-      {@const NoteIcon = noteKindIcon(note.note_kind)}
       <section
         class="rounded-lg border border-border bg-background p-4 text-foreground shadow-sm"
       >
@@ -430,7 +429,7 @@
               <dd
                 class="flex min-w-0 items-center justify-end gap-1.5 text-right text-xs font-medium text-muted-foreground"
               >
-                <NoteIcon class="size-3.5 shrink-0" />
+                <NoteKindIcon kind={note.note_kind} class="size-3.5 shrink-0" />
                 <span class="truncate">{noteKindLabel(note.note_kind)}</span>
               </dd>
             </div>

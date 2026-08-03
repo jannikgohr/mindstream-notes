@@ -417,6 +417,15 @@ function validateNoteKind(
   if (c.descriptionKey !== undefined) {
     assertI18nKey(pluginId, c.descriptionKey, `${path}.descriptionKey`);
   }
+  if (c.icon !== undefined) {
+    assertNonEmptyString(pluginId, c.icon, `${path}.icon`);
+    if (!SAFE_SVG_PATH_RE.test(c.icon)) {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.icon ("${c.icon}") must be a safe relative .svg path inside the plugin dir (no "..", absolute paths, or "\\")`
+      );
+    }
+  }
   if (
     c.sourceLanguage !== undefined &&
     (typeof c.sourceLanguage !== 'string' ||
