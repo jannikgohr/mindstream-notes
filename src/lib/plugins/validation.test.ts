@@ -1251,3 +1251,478 @@ describe('validateManifest', () => {
     expect(() => validateManifest(m)).not.toThrow();
   });
 });
+
+/** Mutate the first setting of the base manifest, then validate. */
+function withSetting(
+  mutate: (s: Record<string, unknown>) => void
+): Record<string, unknown> {
+  return withContributes((c) => {
+    const s = (c.settings as Record<string, unknown>[])[0] as {
+      settings: Record<string, unknown>[];
+    };
+    mutate(s.settings[0]);
+  });
+}
+
+/** Mutate the first note template of the base manifest, then validate. */
+function withTemplate(
+  mutate: (t: Record<string, unknown>) => void
+): Record<string, unknown> {
+  return withContributes((c) => {
+    mutate((c.noteTemplates as Record<string, unknown>[])[0]);
+  });
+}
+
+/** A scripted (luau) manifest carrying the given extra contributions. */
+function scripted(
+  contributes: Record<string, unknown>,
+  permissions: string[] = []
+): Record<string, unknown> {
+  return {
+    id: 'com.example.scripted',
+    name: 'Scripted',
+    version: '1.0.0',
+    runtime: 'luau',
+    entry: 'main.luau',
+    permissions,
+    contributes: { i18n: { en: { 'k.label': 'K' } }, ...contributes }
+  };
+}
+
+describe('validateManifest — setting failures', () => {
+  it('rejects an invalid scope', () => {
+    expect(() => validateManifest(withSetting((s) => (s.scope = 'X')))).toThrow(
+      /scope must be/
+    );
+  });
+  it('rejects an unsupported setting type', () => {
+    expect(() =>
+      validateManifest(withSetting((s) => (s.type = 'hologram')))
+    ).toThrow(/not a supported setting type/);
+  });
+  it('rejects a select with no options', () => {
+    expect(() =>
+      validateManifest(
+        withSetting((s) => {
+          s.type = 'select';
+          delete s.options;
+        })
+      )
+    ).toThrow(/must list at least one option/);
+  });
+  it('rejects a non-object optionLabelKeys', () => {
+    expect(() =>
+      validateManifest(
+        withSetting((s) => {
+          s.type = 'select';
+          s.options = ['a'];
+          s.optionLabelKeys = 'nope';
+        })
+      )
+    ).toThrow(/optionLabelKeys must be an object/);
+  });
+  it('rejects optionLabelKeys that do not match an option', () => {
+    expect(() =>
+      validateManifest(
+        withSetting((s) => {
+          s.type = 'select';
+          s.options = ['a'];
+          s.optionLabelKeys = { b: 'settings.x.label' };
+        })
+      )
+    ).toThrow(/must match one of the setting options/);
+  });
+  it('rejects a bad setting descriptionKey', () => {
+    expect(() =>
+      validateManifest(withSetting((s) => (s.descriptionKey = 'Bad Key!')))
+    ).toThrow(/not a valid i18n key/);
+  });
+  it('rejects an empty settings array in a section', () => {
+    expect(() =>
+      validateManifest(
+        withContributes((c) => {
+          (c.settings as Record<string, unknown>[])[0].settings = [];
+        })
+      )
+    ).toThrow(/must be a non-empty array/);
+  });
+  it('rejects a duplicate setting id across sections', () => {
+    expect(() =>
+      validateManifest(
+        withContributes((c) => {
+          const sections = c.settings as Record<string, unknown>[];
+          sections.push({
+            sectionId: 'other',
+            titleKey: 'settings.general.title',
+            settings: [
+              {
+                id: 'default-template',
+                labelKey: 'settings.defaultTemplate.label',
+                scope: 'V',
+                type: 'toggle',
+                default: true
+              }
+            ]
+          });
+        })
+      )
+    ).toThrow(/duplicate setting id/);
+  });
+});
+
+describe('validateManifest — template + variable failures', () => {
+  it('rejects a non-kebab template id', () => {
+    expect(() => validateManifest(withTemplate((t) => (t.id = 'Bad')))).toThrow(
+      /kebab-case slug/
+    );
+  });
+  it('rejects a malformed template labelKey', () => {
+    expect(() =>
+      validateManifest(withTemplate((t) => (t.labelKey = 'Bad Key')))
+    ).toThrow(/not a valid i18n key/);
+  });
+  it('rejects a bad template descriptionKey', () => {
+    expect(() =>
+      validateManifest(withTemplate((t) => (t.descriptionKey = 'Bad!')))
+    ).toThrow(/not a valid i18n key/);
+  });
+  it('rejects a render export name with illegal characters', () => {
+    expect(() =>
+      validateManifest(withTemplate((t) => (t.render = 'bad name')))
+    ).toThrow(/backend script export name/);
+  });
+  it('rejects a non-string bodyTemplate', () => {
+    expect(() =>
+      validateManifest(withTemplate((t) => (t.bodyTemplate = 5)))
+    ).toThrow(/bodyTemplate must be a string/);
+  });
+  it('rejects an unsupported variable type', () => {
+    expect(() =>
+      validateManifest(
+        withTemplate((t) => {
+          t.variables = [
+            { id: 'a', labelKey: 'templates.meeting.name', type: 'bogus' }
+          ];
+        })
+      )
+    ).toThrow(/not a supported variable type/);
+  });
+  it('rejects a non-string variable default', () => {
+    expect(() =>
+      validateManifest(
+        withTemplate((t) => {
+          t.variables = [
+            {
+              id: 'a',
+              labelKey: 'templates.meeting.name',
+              type: 'text',
+              default: 5
+            }
+          ];
+        })
+      )
+    ).toThrow(/default must be a string/);
+  });
+  it('rejects a duplicated variable id', () => {
+    expect(() =>
+      validateManifest(
+        withTemplate((t) => {
+          t.variables = [
+            { id: 'a', labelKey: 'templates.meeting.name', type: 'text' },
+            { id: 'a', labelKey: 'templates.meeting.name', type: 'text' }
+          ];
+        })
+      )
+    ).toThrow(/more than once/);
+  });
+});
+
+describe('validateManifest — source language failures', () => {
+  const base = (language: unknown) => scripted({ sourceLanguages: [language] });
+  it('rejects a malformed language id', () => {
+    expect(() =>
+      validateManifest(
+        base({ id: 'bad!', provider: { type: 'host', id: 'typst' } })
+      )
+    ).toThrow(/short source language identifier/);
+  });
+  it('rejects non-array aliases', () => {
+    expect(() =>
+      validateManifest(
+        base({
+          id: 'ts',
+          aliases: 'x',
+          provider: { type: 'host', id: 'typst' }
+        })
+      )
+    ).toThrow(/aliases must be an array/);
+  });
+  it('rejects a malformed alias', () => {
+    expect(() =>
+      validateManifest(
+        base({
+          id: 'ts',
+          aliases: ['bad!'],
+          provider: { type: 'host', id: 'typst' }
+        })
+      )
+    ).toThrow(/short source language identifier/);
+  });
+  it('rejects non-array extensions', () => {
+    expect(() =>
+      validateManifest(
+        base({
+          id: 'ts',
+          extensions: 'x',
+          provider: { type: 'host', id: 'typst' }
+        })
+      )
+    ).toThrow(/extensions must be an array/);
+  });
+  it('rejects a non-object provider', () => {
+    expect(() => validateManifest(base({ id: 'ts', provider: 'x' }))).toThrow(
+      /provider must be an object/
+    );
+  });
+  it('rejects a non-host provider type', () => {
+    expect(() =>
+      validateManifest(
+        base({ id: 'ts', provider: { type: 'guest', id: 'typst' } })
+      )
+    ).toThrow(/provider.type must be "host"/);
+  });
+  it('rejects an unsupported host provider id', () => {
+    expect(() =>
+      validateManifest(
+        base({ id: 'ts', provider: { type: 'host', id: 'nope' } })
+      )
+    ).toThrow(/not a supported host source language provider/);
+  });
+});
+
+describe('validateManifest — artifact failures', () => {
+  const artifact = (a: Record<string, unknown>) => scripted({ artifacts: [a] });
+  const good = {
+    id: 'compiler',
+    kind: 'wasm',
+    version: '1.0.0',
+    url: 'https://example.com/x.wasm',
+    sha256: 'a'.repeat(64),
+    fileName: 'x.wasm'
+  };
+  it('rejects an unsupported artifact kind', () => {
+    expect(() =>
+      validateManifest(artifact({ ...good, kind: 'floppy' }))
+    ).toThrow(/kind .* is not supported/);
+  });
+  it('rejects an unparseable url', () => {
+    expect(() =>
+      validateManifest(artifact({ ...good, url: 'not a url' }))
+    ).toThrow(/must be a valid URL/);
+  });
+  it('rejects a non-HTTPS url', () => {
+    expect(() =>
+      validateManifest(artifact({ ...good, url: 'http://example.com/x.wasm' }))
+    ).toThrow(/must use HTTPS/);
+  });
+  it('rejects a non-hex sha256', () => {
+    expect(() =>
+      validateManifest(artifact({ ...good, sha256: 'ZZZ' }))
+    ).toThrow(/lowercase SHA-256 hex digest/);
+  });
+  it('rejects a path-bearing fileName', () => {
+    expect(() =>
+      validateManifest(artifact({ ...good, fileName: 'a/b.wasm' }))
+    ).toThrow(/safe filename without path separators/);
+  });
+  it('rejects a non-positive sizeBytes', () => {
+    expect(() => validateManifest(artifact({ ...good, sizeBytes: 0 }))).toThrow(
+      /positive finite number/
+    );
+  });
+});
+
+describe('validateManifest — native tool + service failures', () => {
+  it('rejects a native tool binary with a path separator', () => {
+    expect(() =>
+      validateManifest(
+        scripted({ nativeTools: [{ id: 'typst', binaryName: 'bin/typst' }] }, [
+          'nativeTools.runDeclared'
+        ])
+      )
+    ).toThrow(/executable basename resolved from PATH/);
+  });
+
+  const service = (s: Record<string, unknown>) =>
+    scripted({ nativeServices: [s] }, ['nativeServices.run']);
+  const goodService = {
+    id: 'preview',
+    binaryName: 'tinymist',
+    args: ['preview', '{input}'],
+    dataUrl: 'http://127.0.0.1:{dataPort}',
+    controlUrl: 'ws://127.0.0.1:{controlPort}'
+  };
+  it('rejects non-array service args', () => {
+    expect(() =>
+      validateManifest(service({ ...goodService, args: 'x' }))
+    ).toThrow(/args must be an array/);
+  });
+  it('rejects a non-loopback dataUrl', () => {
+    expect(() =>
+      validateManifest(service({ ...goodService, dataUrl: 'http://evil.com' }))
+    ).toThrow(/loopback http URL template/);
+  });
+  it('rejects a non-loopback controlUrl', () => {
+    expect(() =>
+      validateManifest(
+        service({ ...goodService, controlUrl: 'wss://evil.com' })
+      )
+    ).toThrow(/loopback ws URL template/);
+  });
+  it('rejects a bad inputExtension', () => {
+    expect(() =>
+      validateManifest(
+        service({ ...goodService, inputExtension: 'not/an/ext' })
+      )
+    ).toThrow(/short alphanumeric extension/);
+  });
+  it('rejects a previewIframe with an invalid mode', () => {
+    expect(() =>
+      validateManifest(
+        service({ ...goodService, previewIframe: { mode: 'floating' } })
+      )
+    ).toThrow(/mode must be "direct" or "themed"/);
+  });
+  it('rejects previewIframe css when mode is not themed', () => {
+    expect(() =>
+      validateManifest(
+        service({
+          ...goodService,
+          previewIframe: { mode: 'direct', css: 'preview.css' }
+        })
+      )
+    ).toThrow(/css is only allowed when mode is "themed"/);
+  });
+});
+
+describe('validateManifest — note kind render failures', () => {
+  const noteKind = (render: unknown, permissions = ['noteKinds.contribute']) =>
+    scripted(
+      { noteKinds: [{ id: 'doc', labelKey: 'k.label', render }] },
+      permissions
+    );
+  it('rejects a bad render export name', () => {
+    expect(() => validateManifest(noteKind({ export: 'bad name' }))).toThrow(
+      /backend script export name/
+    );
+  });
+  it('rejects requiresNativeTool referencing an undeclared tool', () => {
+    expect(() =>
+      validateManifest(
+        noteKind({ export: 'render', requiresNativeTool: 'ghost' }, [
+          'noteKinds.contribute',
+          'nativeTools.runDeclared'
+        ])
+      )
+    ).toThrow(/undeclared native tool/);
+  });
+  it('rejects an unsupported previewMime', () => {
+    expect(() =>
+      validateManifest(noteKind({ export: 'render', previewMime: 'text/rtf' }))
+    ).toThrow(/previewMime .* is not supported/);
+  });
+  it('rejects a negative debounceMs', () => {
+    expect(() =>
+      validateManifest(noteKind({ export: 'render', debounceMs: -5 }))
+    ).toThrow(/non-negative finite number/);
+  });
+  it('rejects a webview entry outside the plugin dir', () => {
+    expect(() =>
+      validateManifest(
+        noteKind({ export: 'render', webview: { entry: '../evil.js' } })
+      )
+    ).toThrow(/safe relative .js\/.mjs path/);
+  });
+  it('rejects a non-string requiresNativeTool', () => {
+    expect(() =>
+      validateManifest(noteKind({ export: 'render', requiresNativeTool: 5 }))
+    ).toThrow(/requiresNativeTool must be a string/);
+  });
+  it('rejects a non-object webview', () => {
+    expect(() =>
+      validateManifest(noteKind({ export: 'render', webview: 'x' }))
+    ).toThrow(/webview must be an object/);
+  });
+  it('rejects a non-boolean webview allowEval', () => {
+    expect(() =>
+      validateManifest(
+        noteKind({
+          export: 'render',
+          webview: { entry: 'ui.js', allowEval: 'x' }
+        })
+      )
+    ).toThrow(/allowEval must be a boolean/);
+  });
+});
+
+describe('validateManifest — note kind field + exporter failures', () => {
+  const noteKindWith = (extra: Record<string, unknown>) =>
+    scripted(
+      {
+        noteKinds: [
+          { id: 'doc', labelKey: 'k.label', render: { export: 'r' }, ...extra }
+        ]
+      },
+      ['noteKinds.contribute']
+    );
+  it('rejects an unsafe icon path', () => {
+    expect(() => validateManifest(noteKindWith({ icon: '../x.svg' }))).toThrow(
+      /safe relative .svg path/
+    );
+  });
+  it('rejects a malformed sourceLanguage id', () => {
+    expect(() =>
+      validateManifest(noteKindWith({ sourceLanguage: 'bad!' }))
+    ).toThrow(/short language identifier/);
+  });
+  it('rejects a non-object viewModeLabelKeys', () => {
+    expect(() =>
+      validateManifest(noteKindWith({ viewModeLabelKeys: 'x' }))
+    ).toThrow(/viewModeLabelKeys must be an object/);
+  });
+  it('rejects a non-string defaultTitle', () => {
+    expect(() => validateManifest(noteKindWith({ defaultTitle: 5 }))).toThrow(
+      /defaultTitle must be a string/
+    );
+  });
+  it('rejects a non-string defaultBody', () => {
+    expect(() => validateManifest(noteKindWith({ defaultBody: 5 }))).toThrow(
+      /defaultBody must be a string/
+    );
+  });
+
+  const exporter = (e: Record<string, unknown>) =>
+    scripted({ noteExporters: [e] }, ['noteExporters.contribute']);
+  const goodExporter = {
+    id: 'pdf',
+    labelKey: 'k.label',
+    noteKind: 'markdown',
+    format: 'pdf',
+    export: 'exportPdf'
+  };
+  it('rejects an exporter with a bad export name', () => {
+    expect(() =>
+      validateManifest(exporter({ ...goodExporter, export: 'bad name' }))
+    ).toThrow(/backend script export name/);
+  });
+  it('rejects an exporter with an unsupported format', () => {
+    expect(() =>
+      validateManifest(exporter({ ...goodExporter, format: 'docx' }))
+    ).toThrow(/format .* is not supported/);
+  });
+  it('rejects an exporter for an unknown note kind', () => {
+    expect(() =>
+      validateManifest(exporter({ ...goodExporter, noteKind: 'mystery' }))
+    ).toThrow(/must be a built-in note kind/);
+  });
+});

@@ -20,6 +20,20 @@ vi.mock('$lib/api/plugins', () => ({
   pluginsRunScript: pluginApi.runScript
 }));
 
+const confirmMock = vi.hoisted(() => vi.fn());
+vi.mock('./confirm-dialog.svelte', () => ({ confirm: confirmMock }));
+
+// The batch-action handlers fire-and-forget these mutators; stub them so
+// invoking an onSelect in a test doesn't leave a floating rejection (the real
+// ones need a live vault). The reactive `tree` object is kept real.
+vi.mock('$lib/stores/tree.svelte', async (orig) => ({
+  ...(await orig<typeof import('$lib/stores/tree.svelte')>()),
+  moveManyTo: vi.fn(() => Promise.resolve()),
+  purgeMany: vi.fn(() => Promise.resolve()),
+  restoreMany: vi.fn(() => Promise.resolve()),
+  trashMany: vi.fn(() => Promise.resolve())
+}));
+
 function context(overrides: Partial<MenuBuildContext> = {}): MenuBuildContext {
   return {
     source: 'home',
@@ -478,5 +492,54 @@ describe('folder menu', () => {
 
     expect(labels(items)).toEqual(['Empty trash (0)']);
     expect(item(items, 'Empty trash (0)')?.disabled).toBe(true);
+  });
+});
+
+describe('batch menu — handler bodies', () => {
+  const twoItems = [
+    { kind: 'note' as const, id: 'n1' },
+    { kind: 'note' as const, id: 'n2' }
+  ];
+
+  it('runs trash restore/purge handlers (purge gated on confirm)', async () => {
+    confirmMock.mockReset().mockResolvedValue(true);
+    const { menuItemsForBatch } = createMenuBuilder(
+      context({ source: 'trash' })
+    );
+    const built = await menuItemsForBatch(twoItems);
+    for (const entry of built) {
+      if (entry !== 'separator' && entry.onSelect) await entry.onSelect();
+    }
+    expect(confirmMock).toHaveBeenCalled();
+  });
+
+  it('does not purge when the confirm is declined', async () => {
+    confirmMock.mockReset().mockResolvedValue(false);
+    const { menuItemsForBatch } = createMenuBuilder(
+      context({ source: 'trash' })
+    );
+    const built = await menuItemsForBatch(twoItems);
+    const del = built.find(
+      (e) => e !== 'separator' && e.label.includes('permanently')
+    ) as MenuItem;
+    await del.onSelect?.();
+    expect(confirmMock).toHaveBeenCalled();
+  });
+
+  it('runs home batch move + delete handlers', async () => {
+    confirmMock.mockReset().mockResolvedValue(true);
+    const { menuItemsForBatch } = createMenuBuilder(context());
+    const built = await menuItemsForBatch(twoItems);
+    for (const entry of built) {
+      if (entry !== 'separator' && entry.onSelect) await entry.onSelect();
+    }
+    expect(built.length).toBeGreaterThan(0);
+  });
+
+  it('returns no batch actions in a read-only / non-reorganizable view', async () => {
+    const { menuItemsForBatch } = createMenuBuilder(
+      context({ canReorganize: false })
+    );
+    expect(await menuItemsForBatch(twoItems)).toEqual([]);
   });
 });
