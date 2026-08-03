@@ -30,6 +30,8 @@
     type CollectionShareState
   } from '$lib/api/sharing';
   import NoteKindIcon from '$lib/components/NoteKindIcon.svelte';
+  import { pluginNoteKind } from '$lib/plugins/registry.svelte';
+  import { resolvePluginString } from '$lib/plugins/plugin-i18n';
   import { formatNoteDateTime } from '$lib/date-time';
   import { findShareScopeCollectionId } from '$lib/notes/share-users';
   import { pdfAssetIdFromBody } from '$lib/pdf/viewer-helpers';
@@ -224,10 +226,18 @@
         return tUi('metadata.type.pdf');
       case 'kanban':
         return tUi('metadata.type.kanban');
-      default:
+      default: {
+        // A plugin-owned kind (e.g. `plugin.com.mindstream.typst.document`)
+        // resolves to its contributed, localized label ("Typst document")
+        // rather than the raw stored string — mirroring NoteKindIcon.
+        const ref = pluginNoteKind(kind);
+        if (ref) {
+          return resolvePluginString(ref.pluginId, ref.contribution.labelKey);
+        }
         return kind
           ? tUi('metadata.type.unknownNamed').replace('{kind}', kind)
           : tUi('metadata.type.unknown');
+      }
     }
   }
 
