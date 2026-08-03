@@ -20,7 +20,13 @@
     PREVIEW_PROXY_READY
   } from '$lib/plugins/preview-service';
   import PluginPdfPreview from './PluginPdfPreview.svelte';
-  import { setNoteBody } from '$lib/stores/tree.svelte';
+  import TrashBanner from './note-editor/TrashBanner.svelte';
+  import ViewOnlyBanner from './note-editor/ViewOnlyBanner.svelte';
+  import { setNoteBody, tree } from '$lib/stores/tree.svelte';
+  import {
+    collectionScopeIsReadOnly,
+    noteIsUnderTrash
+  } from '$lib/stores/note-source.svelte';
   import { pluginById, pluginNoteKind } from '$lib/plugins/registry.svelte';
   import { resolvePluginStringOptional } from '$lib/plugins/plugin-i18n';
   import { readPluginFile } from '$lib/plugins/plugin-files';
@@ -193,6 +199,29 @@
   const showSource = $derived(previewBlocked || viewMode !== 'wysiwyg');
   const showPreview = $derived(!previewBlocked && viewMode !== 'source');
   const splitMode = $derived(showSource && showPreview);
+
+  // A trashed note (or one inside a trashed folder) is read-only: the source
+  // editor + its formatting toolbar lock and a banner explains why. A note in a
+  // view-only shared scope locks the same way with a neutral banner. Both gate
+  // on `tree.ready` so the banner doesn't flash before the tree hydrates. When
+  // the note has vanished from the tree (purged remotely mid-session) we treat
+  // it as trashed rather than let edits race a save that will fail.
+  const isTrashed = $derived.by(() => {
+    if (!tree.ready) return false;
+    const note = tree.notesById[noteId];
+    if (!note) return true;
+    return noteIsUnderTrash(note, tree.collectionsById);
+  });
+  const isReadOnlyScope = $derived.by(() => {
+    if (!tree.ready) return false;
+    const note = tree.notesById[noteId];
+    if (!note) return false;
+    return collectionScopeIsReadOnly(
+      note.parent_collection_id,
+      tree.collectionsById
+    );
+  });
+  const isReadOnly = $derived(isTrashed || isReadOnlyScope);
 
   $effect(() => {
     const ref = contributionRef;
@@ -534,6 +563,9 @@
   });
 
   function onSourceInput(value: string) {
+    // A read-only (trashed / view-only) editor never emits input, but guard
+    // anyway so no stray edit can schedule a save the note can't accept.
+    if (isReadOnly) return;
     source = value;
     scheduleSave();
     // A live preview service recompiles from the pushed body; the `export`
@@ -999,11 +1031,13 @@ parentWindow.postMessage({ type: 'mindstream-plugin-preview-ready' }, '*');
       class="flex shrink-0 items-center gap-1 border-b border-border bg-background pr-1"
     >
       <div class="min-w-0 flex-1">
-        <PluginSourceToolbar
-          noteKind={storedNoteKind}
-          getView={() => sourceEditor?.getView() ?? null}
-          class="bg-background"
-        />
+        {#if !isReadOnly}
+          <PluginSourceToolbar
+            noteKind={storedNoteKind}
+            getView={() => sourceEditor?.getView() ?? null}
+            class="bg-background"
+          />
+        {/if}
       </div>
       {#if rendering}
         <Loader2 class="size-3.5 shrink-0 animate-spin text-muted-foreground" />
@@ -1017,6 +1051,11 @@ parentWindow.postMessage({ type: 'mindstream-plugin-preview-ready' }, '*');
         />
       {/if}
     </div>
+    {#if isTrashed}
+      <TrashBanner />
+    {:else if isReadOnlyScope}
+      <ViewOnlyBanner />
+    {/if}
     {#if previewBlocked && !mobile}
       <div
         class="flex shrink-0 items-center gap-2 border-b border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground"
@@ -1058,6 +1097,7 @@ parentWindow.postMessage({ type: 'mindstream-plugin-preview-ready' }, '*');
             language={sourceLanguage}
             tabSize={sourceTabSize}
             onInput={onSourceInput}
+            readonly={isReadOnly}
             {autoPairEnabled}
           />
         </section>
