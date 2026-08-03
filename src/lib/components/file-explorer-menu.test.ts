@@ -24,6 +24,7 @@ function context(overrides: Partial<MenuBuildContext> = {}): MenuBuildContext {
     sharedItemEditable: () => true,
     startDraft: () => {},
     startPluginTemplateDraft: () => {},
+    runFileTreeToolbarButton: () => {},
     startPdfImport: () => {},
     startRename: () => {},
     startEmptyTrash: async () => {},

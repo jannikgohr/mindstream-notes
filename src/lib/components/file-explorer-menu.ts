@@ -11,8 +11,10 @@
 
 import type { MenuItem } from './context-menu-types';
 import { noteTypeEnabled } from '$lib/notes/note-types';
-import { pluginTemplateEntries, runTemplateEntry } from '$lib/plugins/menu';
-import { userTemplateEntries } from '$lib/templates/user-templates';
+import { pluginTemplateEntries } from '$lib/plugins/menu';
+import { pluginToolbarButtons } from '$lib/plugins/registry.svelte';
+import { resolvePluginString } from '$lib/plugins/plugin-i18n';
+import type { PluginToolbarButton } from '$lib/plugins/types';
 import { confirm } from './confirm-dialog.svelte';
 import {
   tree,
@@ -82,6 +84,16 @@ export interface MenuBuildContext {
     templateId: string,
     parentId: string | null
   ): void;
+  /**
+   * Run a plugin's declared `file-tree` toolbar action from the context menu,
+   * anchoring any menu it opens and defaulting note creation to `parentId` (the
+   * folder the menu was opened on).
+   */
+  runFileTreeToolbarButton(
+    pluginId: string,
+    button: PluginToolbarButton,
+    parentId: string | null
+  ): void;
   startPdfImport(parentId: string | null): void;
   startRename(kind: 'note' | 'folder', id: string, current: string): void;
   startEmptyTrash(): Promise<void>;
@@ -104,19 +116,24 @@ type RunNoteExporter = (
 ) => Promise<void>;
 
 /**
- * The plugin create group for a surface: every enabled plugin's note-kind
- * templates as their own top-level "New …" entries (e.g. a Typst document),
- * followed by the Templates plugin's "New from template" submenu of the user's
- * own template notes. Returns `[]` when neither is available, so the caller can
- * fence it with separators only when it's non-empty. Shared by the root and
- * folder create menus so plugin creation appears wherever a plain "New note"
- * does, inheriting their write / shared read-only gating.
+ * The plugin create group for a surface. Every entry here is defined entirely by
+ * a plugin — the app supplies none of its text:
+ *   - each enabled plugin note-kind template becomes its own "New …" entry
+ *     labelled by the template's `labelKey` (e.g. a Typst document), opening a
+ *     name-first draft;
+ *   - each enabled plugin's declared `file-tree` toolbar action becomes an entry
+ *     labelled by the button's `labelKey` (e.g. the Templates plugin's "New from
+ *     template"); clicking runs the plugin's own script, which returns the menu
+ *     to open.
+ * Returns `[]` when no plugin contributes either, so the caller fences it with
+ * separators only when it's non-empty. Shared by the root and folder create
+ * menus, inheriting their write / shared read-only gating.
  */
 function pluginCreateMenuItems(
   ctx: MenuBuildContext,
   parentId: string | null
 ): MenuItem[] {
-  // A plugin note kind (e.g. a Typst document) opens a name-first inline draft
+  // Plugin note kinds (e.g. a Typst document) open a name-first inline draft
   // like "New note" does, so the file name can be set before the note exists.
   const items: MenuItem[] = pluginTemplateEntries().map((entry) => ({
     id: `plugin-template:${entry.pluginId}:${entry.templateId}`,
@@ -125,23 +142,15 @@ function pluginCreateMenuItems(
       ctx.startPluginTemplateDraft(entry.pluginId, entry.templateId, parentId)
   }));
 
-  // The Templates plugin's user templates (folder/tag sourced) stay grouped
-  // under a single "New from template" submenu — shown only when at least one
-  // is configured and present.
-  const userTemplates = userTemplateEntries();
-  if (userTemplates.length > 0) {
+  // Plugin-declared file-tree actions (e.g. the Templates plugin's "New from
+  // template"). Both the label and the behaviour come from the plugin — the app
+  // adds no text: the label is the button's own i18n string and clicking runs
+  // the plugin's script, which returns its own menu of entries.
+  for (const { pluginId, button } of pluginToolbarButtons('file-tree')) {
     items.push({
-      id: 'new-from-template',
-      label: tUi('nav.create.fromTemplate'),
-      children: userTemplates.map((entry) => ({
-        id: `user-template:${entry.noteId}`,
-        label: entry.label,
-        onSelect: () =>
-          void runTemplateEntry(
-            { kind: 'user', noteId: entry.noteId, label: entry.label },
-            parentId
-          )
-      }))
+      id: `plugin-filetree:${pluginId}:${button.id}`,
+      label: resolvePluginString(pluginId, button.labelKey ?? button.id),
+      onSelect: () => ctx.runFileTreeToolbarButton(pluginId, button, parentId)
     });
   }
   return items;
