@@ -208,8 +208,8 @@ mod tests {
 
     #[test]
     fn local_edit_with_unicode() {
-        // Off-by-one regression check: 🌍 is 2 UTF-16 code units; the
-        // diff/insert path has to use UTF-16 indexing or we'd land mid-pair.
+        // Off-by-one regression check: 🌍 is 4 UTF-8 bytes; the diff/insert path
+        // works in byte offsets (OffsetKind::Bytes) or we'd land mid-codepoint.
         let state = init_with_markdown("hi 🌍");
         let next = apply_local_edit(&state, "hi 🌍", "hi 🌍!");
         assert_eq!(to_markdown(&next), "hi 🌍!");
