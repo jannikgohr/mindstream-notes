@@ -228,11 +228,38 @@ fn free_port() -> AppResult<u16> {
     Ok(listener.local_addr()?.port())
 }
 
-fn substitute(template: &str, data_port: u16, control_port: u16, input: &str) -> String {
-    template
+fn substitute(
+    template: &str,
+    data_port: u16,
+    control_port: u16,
+    input: &str,
+    settings: &HashMap<String, String>,
+) -> String {
+    let mut out = template
         .replace("{dataPort}", &data_port.to_string())
         .replace("{controlPort}", &control_port.to_string())
-        .replace("{input}", input)
+        .replace("{input}", input);
+    // `{setting:<id>}` is resolved from a snapshot of the plugin's own settings
+    // the frontend passes at launch (values are persisted in web storage, so the
+    // backend can't read them itself). This lets a launch flag be a user toggle
+    // — e.g. tinymist's `--partial-rendering {setting:partial-rendering}`.
+    for (key, value) in settings {
+        out = out.replace(&format!("{{setting:{key}}}"), value);
+    }
+    out
+}
+
+/// Restrict a settings-derived arg value to a safe CLI charset. These values come
+/// from a plugin's own settings snapshot (booleans / enum ids), never shell
+/// input, but constrain them regardless: alphanumerics plus a few separators, no
+/// leading dash (so a value can't masquerade as a flag), and length-capped.
+fn sanitize_setting_value(value: &str) -> String {
+    let cleaned: String = value
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | ':' | '+'))
+        .take(64)
+        .collect();
+    cleaned.trim_start_matches('-').to_string()
 }
 
 /// Poll the data port until the server accepts a connection or we time out.
@@ -537,6 +564,8 @@ pub fn plugins_native_service_status(
     })
 }
 
+// Tauri injects state + the call args individually, so the arg count is inherent.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn plugins_preview_start(
     app: AppHandle,
@@ -546,10 +575,18 @@ pub async fn plugins_preview_start(
     service_id: String,
     session_key: String,
     input: String,
+    settings: Option<HashMap<String, String>>,
 ) -> CommandResult<PreviewServiceHandle> {
     if cfg!(mobile) {
         return Err(AppError::InvalidArg("preview services are desktop-only".into()).into());
     }
+    // Snapshot of the plugin's own settings (id → value) fed into `{setting:<id>}`
+    // arg placeholders, each restricted to a safe CLI charset.
+    let settings: HashMap<String, String> = settings
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(k, v)| (k, sanitize_setting_value(&v)))
+        .collect();
     db.with_conn(|c| super::require_enabled_permission(c, &id, PERM_NATIVE_SERVICES_RUN))?;
 
     let third_party_dir = discovery::third_party_plugins_dir(&app)?;
@@ -599,14 +636,26 @@ pub async fn plugins_preview_start(
         let args: Vec<String> = service
             .args
             .iter()
-            .map(|a| substitute(a, data_port, control_port, &input_str))
+            .map(|a| substitute(a, data_port, control_port, &input_str, &settings))
             .collect();
         let child = Command::new(&binary)
             .args(&args)
             .current_dir(&cwd)
             .spawn()?;
-        let data_url = substitute(&service.data_url, data_port, control_port, &input_str);
-        let control_url = substitute(&service.control_url, data_port, control_port, &input_str);
+        let data_url = substitute(
+            &service.data_url,
+            data_port,
+            control_port,
+            &input_str,
+            &settings,
+        );
+        let control_url = substitute(
+            &service.control_url,
+            data_port,
+            control_port,
+            &input_str,
+            &settings,
+        );
         let (proxy, proxy_url) = match proxy_styles {
             Some(styles) => {
                 let proxy = start_loopback_proxy(data_port, styles)?;
@@ -866,11 +915,33 @@ mod tests {
             4001,
             4002,
             "C:/x/doc.typ",
+            &HashMap::new(),
         );
         assert_eq!(
             out,
             "preview --data-plane-host 127.0.0.1:4001 --control-plane-host 127.0.0.1:4002 C:/x/doc.typ"
         );
+    }
+
+    #[test]
+    fn substitutes_setting_placeholders_from_the_snapshot() {
+        let settings = HashMap::from([("partial-rendering".to_string(), "true".to_string())]);
+        let out = substitute("{setting:partial-rendering}", 1, 2, "in", &settings);
+        assert_eq!(out, "true");
+        // A placeholder with no matching setting is left untouched (manifest bug),
+        // never silently turned into an empty flag value here.
+        let out = substitute("{setting:missing}", 1, 2, "in", &settings);
+        assert_eq!(out, "{setting:missing}");
+    }
+
+    #[test]
+    fn sanitize_setting_value_strips_unsafe_and_leading_dashes() {
+        assert_eq!(sanitize_setting_value("true"), "true");
+        assert_eq!(sanitize_setting_value("split"), "split");
+        // A value that tries to look like a flag loses its leading dashes.
+        assert_eq!(sanitize_setting_value("--danger"), "danger");
+        // Shell/space/quote characters are dropped entirely.
+        assert_eq!(sanitize_setting_value("a b; rm -rf /"), "abrm-rf");
     }
 
     #[test]
@@ -1104,7 +1175,13 @@ mod tests {
     #[test]
     fn substitute_replaces_repeated_and_absent_placeholders() {
         // {input} appears twice; {controlPort} is absent from the template.
-        let out = substitute("{input} -> {dataPort} :: {input}", 10, 20, "X");
+        let out = substitute(
+            "{input} -> {dataPort} :: {input}",
+            10,
+            20,
+            "X",
+            &HashMap::new(),
+        );
         assert_eq!(out, "X -> 10 :: X");
     }
 

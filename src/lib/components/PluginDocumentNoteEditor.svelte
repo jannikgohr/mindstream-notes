@@ -364,7 +364,8 @@
       },
       onError: (message) => {
         if (!destroyed) renderError = message;
-      }
+      },
+      settings: pluginSettingsSnapshot(ref.pluginId)
     });
     serviceController = controller;
     void controller.start(untrack(() => source));
@@ -482,6 +483,28 @@
     window.addEventListener('message', onProxyMessage);
     return () => window.removeEventListener('message', onProxyMessage);
   });
+
+  /**
+   * Snapshot the plugin's own settings as `id → stringified value` (stored value
+   * or manifest default), fed into `{setting:<id>}` placeholders in a preview
+   * service's launch args — e.g. tinymist `--partial-rendering {setting:partial-rendering}`.
+   * Read once when the server starts; a changed setting applies on the next start.
+   */
+  function pluginSettingsSnapshot(pluginId: string): Record<string, string> {
+    const manifest = pluginById(pluginId)?.manifest;
+    const snapshot: Record<string, string> = {};
+    for (const section of manifest?.contributes.settings ?? []) {
+      for (const setting of section.settings) {
+        const value =
+          getSettingValue(`plugins.${pluginId}.${setting.id}`) ??
+          setting.default;
+        if (value !== undefined && value !== null) {
+          snapshot[setting.id] = String(value);
+        }
+      }
+    }
+    return snapshot;
+  }
 
   /** Resolve the manifest-declared control-plane jump event name for a service. */
   function previewServiceJumpEvent(
