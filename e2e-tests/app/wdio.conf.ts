@@ -37,6 +37,7 @@ export const config: WebdriverIO.Config = {
     join(here, 'specs', 'backup.e2e.ts'),
     join(here, 'specs', 'editor-roundtrip.e2e.ts'),
     join(here, 'specs', 'history.e2e.ts'),
+    join(here, 'specs', 'plugins.e2e.ts'),
     join(here, 'specs', 'settings-persist.e2e.ts'),
     join(here, 'specs', 'trash-retention.e2e.ts')
   ],
