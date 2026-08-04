@@ -35,6 +35,13 @@ export interface PreviewServiceOptions {
   /** Called with the iframe URL once the server is listening. */
   onReady: (dataUrl: string, proxyUrl: string | null) => void;
   onError: (message: string) => void;
+  /**
+   * Snapshot of the plugin's own settings (id → stringified value), fed into
+   * `{setting:<id>}` placeholders in the service's launch args (e.g. tinymist's
+   * `--partial-rendering`). Read once at start; changing a setting takes effect
+   * on the next preview start.
+   */
+  settings?: Record<string, string>;
 }
 
 const UPDATE_DEBOUNCE_MS = 200;
@@ -78,7 +85,8 @@ export class PreviewServiceController {
         this.opts.pluginId,
         this.opts.serviceId,
         this.opts.sessionKey,
-        input
+        input,
+        this.opts.settings ?? {}
       );
       if (this.disposed) {
         void pluginsPreviewStop(this.opts.sessionKey);

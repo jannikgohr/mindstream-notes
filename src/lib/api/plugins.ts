@@ -491,11 +491,12 @@ export function pluginsPreviewStart(
   id: string,
   serviceId: string,
   sessionKey: string,
-  input: string
+  input: string,
+  settings: Record<string, string> = {}
 ): Promise<PreviewServiceHandle> {
   return invokeOrFallback<PreviewServiceHandle>(
     TauriCommandName.PluginsPreviewStart,
-    { id, serviceId, sessionKey, input },
+    { id, serviceId, sessionKey, input, settings },
     () => {
       throw new Error('plugins_preview_start is unavailable outside Tauri');
     },

@@ -35,6 +35,8 @@
         "native.tinymist.description": "Use the user-installed tinymist binary for live preview with click-to-source.",
         "settings.editor.title": "Editor",
         "settings.defaultViewMode.label": "Default view mode",
+        "settings.partialRendering.label": "Partial rendering",
+        "settings.partialRendering.description": "Only render the pages currently in view. Improves live-preview scrolling on large documents. Takes effect the next time a preview opens.",
         "viewMode.livePreview": "Live Preview",
         "viewMode.source": "Source",
         "viewMode.split": "Split"
@@ -49,6 +51,8 @@
         "native.tinymist.description": "Verwendet das installierte tinymist-Binary fuer Live-Vorschau mit Klick-zur-Quelle.",
         "settings.editor.title": "Editor",
         "settings.defaultViewMode.label": "Standardansicht",
+        "settings.partialRendering.label": "Teilweises Rendern",
+        "settings.partialRendering.description": "Nur die aktuell sichtbaren Seiten rendern. Verbessert das Scrollen der Live-Vorschau bei großen Dokumenten. Wird beim nächsten Öffnen der Vorschau wirksam.",
         "viewMode.livePreview": "Live-Vorschau",
         "viewMode.source": "Quelltext",
         "viewMode.split": "Geteilt"
@@ -71,6 +75,14 @@
               "source": "viewMode.source",
               "wysiwyg": "viewMode.livePreview"
             }
+          },
+          {
+            "id": "partial-rendering",
+            "labelKey": "settings.partialRendering.label",
+            "descriptionKey": "settings.partialRendering.description",
+            "scope": "D",
+            "type": "toggle",
+            "default": true
           }
         ]
       }
@@ -93,6 +105,8 @@
           "127.0.0.1:{dataPort}",
           "--control-plane-host",
           "127.0.0.1:{controlPort}",
+          "--partial-rendering",
+          "{setting:partial-rendering}",
           "--no-open",
           "{input}"
         ],

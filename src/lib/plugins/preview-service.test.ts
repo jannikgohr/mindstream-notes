@@ -131,11 +131,24 @@ describe('PreviewServiceController', () => {
       'com.example.typst',
       'preview',
       'note-1',
-      'hello'
+      'hello',
+      {}
     );
     expect(FakeWebSocket.last().url).toBe(HANDLE.controlUrl);
     expect(onReady).toHaveBeenCalledWith(HANDLE.dataUrl, HANDLE.proxyUrl);
     expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('forwards the settings snapshot to the backend for arg substitution', async () => {
+    const { opts } = makeOpts({ settings: { 'partial-rendering': 'true' } });
+    await new PreviewServiceController(opts).start('hello');
+    expect(previewStart).toHaveBeenCalledWith(
+      'com.example.typst',
+      'preview',
+      'note-1',
+      'hello',
+      { 'partial-rendering': 'true' }
+    );
   });
 
   it('reports start failures through onError', async () => {
