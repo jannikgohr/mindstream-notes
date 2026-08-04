@@ -21,7 +21,7 @@
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -741,34 +741,75 @@ fn run_native_tool_process(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
-    if let Some(input) = stdin {
-        if let Some(mut pipe) = child.stdin.take() {
-            pipe.write_all(input.as_bytes())?;
-        }
-    }
+
+    // Feed stdin and drain stdout/stderr on their own threads so all three
+    // pipes make progress concurrently. If we instead wrote the whole of stdin
+    // up front, or deferred reading stdout until after the child exited, a child
+    // that emits more than the OS pipe buffer (~64 KiB, far less on Windows)
+    // would block in `write()` and never exit — deadlocking until we killed it
+    // at the timeout, with its output lost. Native tools routinely stream large
+    // binary stdout (e.g. `typst compile - -` → a multi-page PDF), so this is
+    // the common path, not an edge case.
+    let stdin_writer = child.stdin.take().map(|mut pipe| {
+        std::thread::spawn(move || {
+            if let Some(input) = stdin {
+                // A broken pipe (the child exited or never read stdin) isn't
+                // actionable here; the exit status tells the real story.
+                let _ = pipe.write_all(input.as_bytes());
+            }
+            // Dropping `pipe` closes the child's stdin so a tool reading to EOF
+            // can finish.
+        })
+    });
+    let stdout_reader = child.stdout.take().map(|mut pipe| {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = pipe.read_to_end(&mut buf);
+            buf
+        })
+    });
+    let stderr_reader = child.stderr.take().map(|mut pipe| {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = pipe.read_to_end(&mut buf);
+            buf
+        })
+    });
+
     let start = std::time::Instant::now();
-    loop {
-        if child.try_wait()?.is_some() {
-            let output = child.wait_with_output()?;
-            return Ok(RawToolOutput {
-                status_code: output.status.code(),
-                stdout: output.stdout,
-                stderr: output.stderr,
-                timed_out: false,
-            });
+    let mut timed_out = false;
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
         }
         if start.elapsed() >= timeout {
-            child.kill()?;
-            let output = child.wait_with_output()?;
-            return Ok(RawToolOutput {
-                status_code: output.status.code(),
-                stdout: output.stdout,
-                stderr: output.stderr,
-                timed_out: true,
-            });
+            let _ = child.kill();
+            timed_out = true;
+            // Reap the killed child; the reader threads unblock as its pipe
+            // write-ends close.
+            break child.wait()?;
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
+    };
+
+    // Join the drainers now that the child has closed its pipes (on exit or
+    // kill) so we return the full output that was produced.
+    let stdout = stdout_reader
+        .and_then(|handle| handle.join().ok())
+        .unwrap_or_default();
+    let stderr = stderr_reader
+        .and_then(|handle| handle.join().ok())
+        .unwrap_or_default();
+    if let Some(handle) = stdin_writer {
+        let _ = handle.join();
     }
+
+    Ok(RawToolOutput {
+        status_code: status.code(),
+        stdout,
+        stderr,
+        timed_out,
+    })
 }
 
 fn find_artifact(

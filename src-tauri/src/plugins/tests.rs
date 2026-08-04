@@ -1044,3 +1044,57 @@ fn limit_readers_clamp_and_fall_back_to_defaults() {
         std::time::Duration::from_millis(1000)
     );
 }
+
+/// A system binary that reads stdin and writes it straight back to stdout,
+/// available on every supported desktop platform. `cat` streams verbatim;
+/// Windows `sort` buffers then writes the (identically-keyed) lines back — both
+/// produce far more than a pipe buffer's worth of stdout, which is what the
+/// regression below needs. `None` on the rare host missing it → the test skips.
+#[cfg(unix)]
+fn stdin_echo_tool() -> Option<PathBuf> {
+    let cat = PathBuf::from("/bin/cat");
+    cat.exists().then_some(cat)
+}
+#[cfg(windows)]
+fn stdin_echo_tool() -> Option<PathBuf> {
+    resolve_path_binary("sort").ok().flatten()
+}
+
+#[test]
+fn large_native_tool_output_is_drained_without_deadlock() {
+    // Regression: `run_native_tool_process` used to write all of stdin, then
+    // poll for exit while only draining stdout/stderr *after* the child exited.
+    // A child emitting more than the OS pipe buffer (~64 KiB, less on Windows)
+    // would block in `write()`, never exit, and be killed at the timeout with
+    // its output lost — silently breaking e.g. Typst PDF export, whose PDF comes
+    // back on stdout. Concurrent draining must return the full output instead.
+    let Some(tool) = stdin_echo_tool() else {
+        eprintln!("skipping: no stdin-echo tool on this platform");
+        return;
+    };
+    // 256 KiB dwarfs any pipe buffer; identical short lines keep `sort`'s output
+    // byte-for-byte the same size as its input.
+    let payload = "abc\n".repeat(64 * 1024);
+    let out = run_native_tool_process(
+        tool,
+        std::env::temp_dir(),
+        Vec::new(),
+        Some(payload.clone()),
+        Some(10_000),
+    )
+    .expect("running the echo tool succeeds");
+
+    assert!(
+        !out.timed_out,
+        "output larger than the pipe buffer must not deadlock into a timeout"
+    );
+    assert_eq!(out.status_code, Some(0), "the tool exited cleanly");
+    // The whole stream survived. A lower bound (not exact equality) tolerates
+    // Windows `sort` rewriting line endings; it still proves we drained far more
+    // than one pipe buffer's worth while the child was still running.
+    assert!(
+        out.stdout.len() >= 128 * 1024,
+        "expected the full stdout stream, got {} bytes",
+        out.stdout.len()
+    );
+}
