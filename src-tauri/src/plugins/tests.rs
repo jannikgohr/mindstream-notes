@@ -775,6 +775,244 @@ fn manifest_entry_validates_extension_and_rejects_traversal() {
 }
 
 #[test]
+fn enabled_by_default_serde_default_is_true() {
+    // The serde default only fires when a discovery payload omits the field;
+    // the tests build `UpsertPlugin` directly, so exercise it explicitly.
+    assert!(default_enabled_by_default());
+}
+
+/// A throwaway directory under the OS temp dir, unique per call.
+fn scratch_dir() -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("ms-plugins-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+#[test]
+fn disable_crashed_disables_and_records_the_reason() {
+    let db = open_memory_for_tests();
+    db.with_conn(|c| {
+        upsert(c, upsert_input("com.crash.plugin", "h", "installed"))?;
+        disable_crashed(c, "com.crash.plugin", "host runtime panicked")?;
+        let rec = require(c, "com.crash.plugin")?;
+        assert!(!rec.enabled, "a crashed plugin must stay disabled");
+        assert_eq!(
+            rec.last_load_error.as_deref(),
+            Some("host runtime panicked"),
+            "the crash reason is surfaced via last_load_error"
+        );
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn ensure_inside_data_root_guards_escapes() {
+    let tmp = scratch_dir();
+    let root = tmp.join("data");
+    std::fs::create_dir_all(root.join("sub")).unwrap();
+
+    // A real dir inside the root is accepted.
+    assert!(ensure_inside_data_root(&root, &root.join("sub")).is_ok());
+
+    // A sibling dir outside the root is rejected.
+    let outside = tmp.join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    assert!(ensure_inside_data_root(&root, &outside).is_err());
+
+    // A non-existent target can't be canonicalized, so it's rejected too.
+    assert!(ensure_inside_data_root(&root, &root.join("ghost")).is_err());
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+#[test]
+fn ensure_write_target_safe_allows_inside_and_rejects_escapes() {
+    let tmp = scratch_dir();
+    let root = tmp.join("data");
+    std::fs::create_dir_all(&root).unwrap();
+
+    // A not-yet-existing file directly under the root is allowed (its parent
+    // is inside the root).
+    let new_file = root.join("cache.json");
+    assert!(ensure_write_target_safe(&root, &new_file).is_ok());
+
+    // Once written as a plain file it's still allowed.
+    std::fs::write(&new_file, b"x").unwrap();
+    assert!(ensure_write_target_safe(&root, &new_file).is_ok());
+
+    // A file whose parent sits outside the root escapes and is rejected.
+    assert!(ensure_write_target_safe(&root, &tmp.join("loose.txt")).is_err());
+
+    // A missing intermediate directory can't be canonicalized → rejected.
+    assert!(ensure_write_target_safe(&root, &root.join("missing").join("f")).is_err());
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+#[cfg(unix)]
+#[test]
+fn ensure_write_target_safe_rejects_symlinks() {
+    let tmp = scratch_dir();
+    let root = tmp.join("data");
+    std::fs::create_dir_all(&root).unwrap();
+    let link = root.join("link");
+    std::os::unix::fs::symlink(tmp.join("real"), &link).unwrap();
+    assert!(ensure_write_target_safe(&root, &link).is_err());
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+#[test]
+fn path_extensions_offers_candidates() {
+    #[cfg(windows)]
+    {
+        // A name that already carries an extension is used verbatim.
+        assert_eq!(
+            path_extensions("typst.exe"),
+            vec![std::ffi::OsString::new()]
+        );
+        // A bare name gets `.exe` appended among its candidates.
+        let candidates = path_extensions("typst");
+        assert!(candidates
+            .iter()
+            .any(|ext| ext.to_string_lossy().eq_ignore_ascii_case(".exe")));
+    }
+    #[cfg(not(windows))]
+    {
+        // Off Windows there is no PATHEXT dance: use the name as-is.
+        assert_eq!(path_extensions("typst"), vec![std::ffi::OsString::new()]);
+    }
+}
+
+#[test]
+fn resolve_path_binary_validates_then_misses_unknown() {
+    // An unsafe binary name is rejected before touching the filesystem.
+    assert!(resolve_path_binary("../typst").is_err());
+    // A binary that is certainly not installed resolves to None.
+    assert!(resolve_path_binary("ms-definitely-not-a-real-binary-xyz")
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn native_tool_status_reflects_binary_resolution() {
+    let tool = parse_native_tools(&serde_json::json!({
+        "contributes": {
+            "nativeTools": [{ "id": "typst", "binaryName": "ms-not-a-real-binary-xyz" }]
+        }
+    }))
+    .unwrap()
+    .remove(0);
+
+    let status = native_tool_status("com.x.plugin", &tool).unwrap();
+    assert_eq!(status.plugin_id, "com.x.plugin");
+    assert_eq!(status.tool_id, "typst");
+    assert_eq!(status.binary_name, "ms-not-a-real-binary-xyz");
+    // The bogus binary isn't on PATH, so it's unavailable and pathless.
+    assert!(!status.available);
+    assert!(status.path.is_none());
+    // `available` is exactly "did we find a path".
+    assert_eq!(status.available, status.path.is_some());
+}
+
+#[test]
+fn resolve_native_tools_maps_every_declared_tool() {
+    let manifest = serde_json::json!({
+        "contributes": {
+            "nativeTools": [
+                { "id": "typst", "binaryName": "ms-not-real-a-xyz" },
+                { "id": "other", "binaryName": "ms-not-real-b-xyz" }
+            ]
+        }
+    });
+    let resolved = resolve_native_tools(&manifest);
+    assert_eq!(resolved.len(), 2);
+    assert!(resolved.contains_key("typst"));
+    assert!(resolved.contains_key("other"));
+    // Unknown binaries resolve to None (also the only outcome on mobile).
+    assert!(resolved["typst"].is_none());
+    assert!(resolved["other"].is_none());
+
+    // A manifest that declares no native tools yields an empty map.
+    assert!(resolve_native_tools(&serde_json::json!({})).is_empty());
+}
+
+#[test]
+fn find_artifact_returns_the_match_or_not_found() {
+    let manifest = serde_json::json!({
+        "contributes": {
+            "artifacts": [{
+                "id": "typst-compiler",
+                "kind": "wasm",
+                "version": "0.1.0",
+                "url": "https://example.com/typst.wasm",
+                "sha256": "aaaa",
+                "fileName": "typst.wasm"
+            }]
+        }
+    });
+    assert_eq!(
+        find_artifact(&manifest, "typst-compiler").unwrap().id,
+        "typst-compiler"
+    );
+    assert!(matches!(
+        find_artifact(&manifest, "ghost").unwrap_err(),
+        AppError::NotFound(_)
+    ));
+}
+
+#[test]
+fn note_snapshot_builds_folder_paths_and_metadata() {
+    use crate::collections::{create as create_collection, CreateCollection};
+    use crate::notes::{create as create_note, CreateNote};
+
+    let db = open_memory_for_tests();
+    let (note_id, inner_id) = db
+        .with_conn(|c| -> AppResult<(String, String)> {
+            let outer = create_collection(
+                c,
+                CreateCollection {
+                    name: "Outer".into(),
+                    parent_collection_id: None,
+                },
+            )?
+            .id;
+            let inner = create_collection(
+                c,
+                CreateCollection {
+                    name: "Inner".into(),
+                    parent_collection_id: Some(outer),
+                },
+            )?
+            .id;
+            let note = create_note(
+                c,
+                CreateNote {
+                    title: Some("Doc".into()),
+                    body: Some("hi".into()),
+                    parent_collection_id: Some(inner.clone()),
+                    note_kind: Some("markdown".into()),
+                },
+            )?
+            .summary
+            .id;
+            Ok((note, inner))
+        })
+        .unwrap();
+
+    let snapshot = db.with_conn(note_snapshot).unwrap();
+    let meta = snapshot
+        .iter()
+        .find(|m| m.id == note_id)
+        .expect("the created note is in the snapshot");
+    assert_eq!(meta.title, "Doc");
+    assert_eq!(meta.kind, "markdown");
+    // The folder path is the nested folder names joined root-first.
+    assert_eq!(meta.folder_path, "Outer / Inner");
+    assert_eq!(meta.folder_id.as_deref(), Some(inner_id.as_str()));
+}
+
+#[test]
 fn limit_readers_clamp_and_fall_back_to_defaults() {
     // Value present but out of range → clamped.
     let over = serde_json::json!({ "limits": { "heap": 999 } });
