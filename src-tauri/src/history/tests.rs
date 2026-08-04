@@ -222,3 +222,53 @@ fn purging_note_cascades_to_versions() {
     db.with_conn(|c| crate::notes::purge(c, &note)).unwrap();
     assert!(db.with_conn(|c| list(c, &note)).unwrap().is_empty());
 }
+
+#[test]
+fn capture_off_lock_matches_the_locked_path() {
+    // The command path phases the capture (read baseline under the lock,
+    // diff/compress off it, re-acquire to insert). It must land the same
+    // version the single-lock `capture` would.
+    let db = open_memory_for_tests();
+    let note = make_note(&db);
+
+    let v = capture_off_lock(
+        &db,
+        &note,
+        NoteKind::Markdown,
+        VersionAction::from("edited"),
+        None,
+        "hello world",
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(v.action, "created");
+    assert_eq!(v.words_added, 2);
+
+    // Identical content dedups to None, same as the locked path.
+    let again = capture_off_lock(
+        &db,
+        &note,
+        NoteKind::Markdown,
+        VersionAction::from("edited"),
+        None,
+        "hello world",
+    )
+    .unwrap();
+    assert!(again.is_none());
+    assert_eq!(db.with_conn(|c| list(c, &note)).unwrap().len(), 1);
+}
+
+#[test]
+fn capture_trims_to_the_per_note_version_cap() {
+    // Every insert runs `enforce_cap`; drive past the ceiling so the trim
+    // actually deletes rows (the other tests never exceed the cap).
+    let db = open_memory_for_tests();
+    let note = make_note(&db);
+    for i in 0..(MAX_VERSIONS_PER_NOTE + 5) {
+        cap(&db, &note, "edited", None, &format!("revision number {i}"));
+    }
+    let versions = db.with_conn(|c| list(c, &note)).unwrap();
+    assert_eq!(versions.len() as i64, MAX_VERSIONS_PER_NOTE);
+    // The newest revision is retained; the oldest was trimmed.
+    assert_eq!(versions.first().unwrap().action, "edited");
+}

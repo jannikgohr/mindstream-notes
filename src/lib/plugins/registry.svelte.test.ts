@@ -7,6 +7,9 @@ import {
   pluginLoadError,
   pluginNoteExporters,
   pluginNoteExportersForKind,
+  pluginNoteKind,
+  pluginNoteKinds,
+  pluginToolbarButtons,
   pluginSettingsSections,
   pluginSourceLanguage,
   pluginSourceLanguages,
@@ -97,7 +100,99 @@ function exporterManifest(
   };
 }
 
+/** A luau plugin that owns a note kind plus file-tree and note-editor
+ *  toolbar buttons — the surfaces exercised by the selectors below. */
+function kindManifest(id = 'com.example.kinds'): Record<string, unknown> {
+  return {
+    id,
+    name: 'Kinds',
+    version: '1.0.0',
+    runtime: 'luau',
+    entry: 'main.luau',
+    permissions: ['noteKinds.contribute', 'notes.create'],
+    contributes: {
+      noteKinds: [
+        {
+          id: 'document',
+          labelKey: 'notes.document',
+          render: { export: 'renderDocument' }
+        }
+      ],
+      toolbar: [
+        {
+          id: 'new-from-template',
+          location: 'file-tree',
+          labelKey: 'toolbar.newFromTemplate',
+          icon: 'icons/templates.svg',
+          action: { type: 'script', export: 'newFromTemplate' }
+        },
+        {
+          id: 'editor-button',
+          location: 'note-editor',
+          noteKind: 'document',
+          labelKey: 'toolbar.editor',
+          icon: 'icons/editor.svg',
+          action: { type: 'script', export: 'doEditorThing' }
+        }
+      ]
+    }
+  };
+}
+
 afterEach(() => resetPluginRegistry());
+
+describe('note kinds', () => {
+  it('flattens contributed note kinds and resolves them by stored id', () => {
+    registerPlugin(kindManifest());
+    const kinds = pluginNoteKinds();
+    expect(kinds).toHaveLength(1);
+    expect(kinds[0].noteKind).toBe('plugin.com.example.kinds.document');
+    expect(kinds[0].contribution.id).toBe('document');
+
+    expect(pluginNoteKind('plugin.com.example.kinds.document')?.pluginId).toBe(
+      'com.example.kinds'
+    );
+    expect(pluginNoteKind('unknown')).toBeUndefined();
+    expect(pluginNoteKind(null)).toBeUndefined();
+  });
+
+  it('drops note kinds from disabled plugins', () => {
+    registerPlugin(kindManifest());
+    setPluginEnabled('com.example.kinds', false);
+    expect(pluginNoteKinds()).toHaveLength(0);
+    expect(pluginNoteKind('plugin.com.example.kinds.document')).toBeUndefined();
+  });
+});
+
+describe('toolbar buttons', () => {
+  it('filters by host surface and note kind, in registration order', () => {
+    registerPlugin(kindManifest());
+
+    const fileTree = pluginToolbarButtons('file-tree');
+    expect(fileTree.map((b) => b.button.id)).toEqual(['new-from-template']);
+
+    // A note-editor query without a kind returns every note-editor button.
+    expect(pluginToolbarButtons('note-editor').map((b) => b.button.id)).toEqual(
+      ['editor-button']
+    );
+
+    // Scoped to the matching kind it stays; scoped to another kind it drops.
+    expect(
+      pluginToolbarButtons('note-editor', {
+        noteKind: 'plugin.com.example.kinds.document'
+      })
+    ).toHaveLength(1);
+    expect(
+      pluginToolbarButtons('note-editor', { noteKind: 'markdown' })
+    ).toHaveLength(0);
+  });
+
+  it('excludes buttons from disabled plugins', () => {
+    registerPlugin(kindManifest());
+    setPluginEnabled('com.example.kinds', false);
+    expect(pluginToolbarButtons('file-tree')).toHaveLength(0);
+  });
+});
 
 describe('registerPlugin', () => {
   it('registers a valid manifest and exposes its contributions', () => {
