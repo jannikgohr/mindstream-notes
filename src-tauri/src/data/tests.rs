@@ -361,3 +361,112 @@ fn sweep_returns_zero_without_starting_transaction_work_when_nothing_is_old() {
     db.with_conn(|c| crate::collections::get(c, &fresh_folder))
         .unwrap();
 }
+
+// ---------- Server-side tombstones for pushed items ----------
+//
+// A purge (manual or retention-aged) must queue an etebase delete for every
+// item that was ever pushed, so the deletion propagates to other devices.
+// The earlier tests all use freshly-created rows with no `etebase_uid`, so
+// they never exercise the tombstone-queuing branches — these do.
+
+fn set_note_uid(db: &Db, id: &str, uid: &str) {
+    db.with_conn(|c| {
+        c.execute(
+            "UPDATE notes SET etebase_uid = ?1 WHERE id = ?2",
+            params![uid, id],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+}
+
+fn set_folder_uid(db: &Db, id: &str, uid: &str) {
+    db.with_conn(|c| {
+        c.execute(
+            "UPDATE collections SET etebase_uid = ?1 WHERE id = ?2",
+            params![uid, id],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+}
+
+fn add_pushed_asset(db: &Db, note_id: &str, uid: &str) {
+    let now = chrono::Utc::now().to_rfc3339();
+    db.with_conn(|c| {
+        c.execute(
+            "INSERT INTO assets
+                 (id, owning_note_id, mime_type, bytes, size, created, modified, etebase_uid)
+             VALUES (?1, ?2, 'image/png', ?3, 3, ?4, ?4, ?5)",
+            params![
+                uuid::Uuid::new_v4().to_string(),
+                note_id,
+                vec![1u8, 2, 3],
+                now,
+                uid
+            ],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+}
+
+fn tombstone_kinds(db: &Db) -> Vec<String> {
+    db.with_conn(|c| {
+        let mut stmt = c.prepare("SELECT kind FROM tombstones ORDER BY kind")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    })
+    .unwrap()
+}
+
+#[test]
+fn empty_trash_queues_tombstones_only_for_pushed_items() {
+    let db = open_memory_for_tests();
+
+    // A pushed note with a pushed asset, and a pushed folder.
+    let pushed_note = make_note(&db, Some(TRASH_ID.into()));
+    set_note_uid(&db, &pushed_note, "note-uid-1");
+    add_pushed_asset(&db, &pushed_note, "asset-uid-1");
+    let pushed_folder = make_folder(&db, "shared", Some(TRASH_ID.into()));
+    set_folder_uid(&db, &pushed_folder, "folder-uid-1");
+
+    // A never-pushed note (no etebase_uid) must NOT produce a tombstone.
+    let _local = make_note(&db, Some(TRASH_ID.into()));
+
+    db.with_conn_mut(empty).unwrap();
+
+    let kinds = tombstone_kinds(&db);
+    assert_eq!(
+        kinds,
+        vec![
+            "asset".to_string(),
+            "folder".to_string(),
+            "note".to_string()
+        ],
+        "one tombstone each for the pushed note, its asset and the pushed folder"
+    );
+}
+
+#[test]
+fn sweep_queues_tombstones_for_aged_pushed_items() {
+    let db = open_memory_for_tests();
+    let long_ago = (chrono::Utc::now() - chrono::Duration::days(60)).to_rfc3339();
+
+    let note = make_note(&db, Some(TRASH_ID.into()));
+    set_note_uid(&db, &note, "s-note-1");
+    add_pushed_asset(&db, &note, "s-asset-1");
+    force_trashed_at_note(&db, &note, &long_ago);
+
+    let folder = make_folder(&db, "aged", Some(TRASH_ID.into()));
+    set_folder_uid(&db, &folder, "s-folder-1");
+    force_trashed_at_folder(&db, &folder, &long_ago);
+
+    let purged = db.with_conn_mut(|c| sweep(c, 30)).unwrap();
+    assert_eq!(purged, 2, "the aged note and folder");
+
+    let kinds = tombstone_kinds(&db);
+    assert!(kinds.contains(&"note".to_string()));
+    assert!(kinds.contains(&"asset".to_string()));
+    assert!(kinds.contains(&"folder".to_string()));
+}

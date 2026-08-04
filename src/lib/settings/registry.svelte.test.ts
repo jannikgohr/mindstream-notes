@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  CUSTOM_COMPONENT_LOADERS,
   INFO_VALUES,
   SETTING_ACTIONS,
-  SETTING_BINDINGS
+  SETTING_BINDINGS,
+  SETTING_OPTION_FILTERS
 } from './registry.svelte';
 import {
   DesktopThemeMode,
@@ -26,6 +28,7 @@ const autostart = vi.hoisted(() => ({
 }));
 const dataAction = vi.hoisted(() => vi.fn());
 const checkForUpdatesInteractively = vi.hoisted(() => vi.fn());
+const splitAvailable = vi.hoisted(() => vi.fn());
 
 vi.mock('$lib/api/core', async (importOriginal) => ({
   ...(await importOriginal<typeof import('$lib/api/core')>()),
@@ -57,6 +60,17 @@ vi.mock('./actions/data', () => ({
   }
 }));
 vi.mock('$lib/updater', () => ({ checkForUpdatesInteractively }));
+vi.mock('$lib/editor/source/split-available.svelte', () => ({
+  splitAvailable
+}));
+// The custom panels are heavy Svelte components pulling live stores; stub them
+// so the lazy loaders resolve to a placeholder without mounting anything.
+vi.mock('./customs/SignInForm.svelte', () => ({
+  default: { placeholder: 'sign-in' }
+}));
+vi.mock('./customs/HotkeysPanel.svelte', () => ({
+  default: { placeholder: 'hotkeys' }
+}));
 
 // Outside Tauri (the test environment), the desktop-only bindings take
 // their no-op / false branches, so every get/set is safe to invoke.
@@ -262,5 +276,44 @@ describe('SETTING_ACTIONS', () => {
     expect(dataAction).toHaveBeenCalled();
     await SETTING_ACTIONS['check-updates']();
     expect(checkForUpdatesInteractively).toHaveBeenCalled();
+  });
+
+  it('every data-folder / backup / vault action routes through DATA_ACTIONS', async () => {
+    for (const id of [
+      'open-data-folder',
+      'backup-now',
+      'restore-backup',
+      'export-vault',
+      'import-notes'
+    ]) {
+      dataAction.mockClear().mockResolvedValue(undefined);
+      await SETTING_ACTIONS[id]();
+      expect(dataAction, id).toHaveBeenCalledOnce();
+    }
+  });
+});
+
+describe('CUSTOM_COMPONENT_LOADERS', () => {
+  it('lazy-loads the sign-in and hotkeys panels', async () => {
+    expect(await CUSTOM_COMPONENT_LOADERS['sign-in-form']()).toEqual({
+      placeholder: 'sign-in'
+    });
+    expect(await CUSTOM_COMPONENT_LOADERS['hotkeys-panel']()).toEqual({
+      placeholder: 'hotkeys'
+    });
+  });
+});
+
+describe('SETTING_OPTION_FILTERS', () => {
+  it('offers the split editor mode only when the viewport allows it', () => {
+    const filter = SETTING_OPTION_FILTERS['editor.defaultMode'];
+
+    splitAvailable.mockReturnValue(false);
+    expect(filter('split')).toBe(false);
+    // Non-split options are never gated on width.
+    expect(filter('wysiwyg')).toBe(true);
+
+    splitAvailable.mockReturnValue(true);
+    expect(filter('split')).toBe(true);
   });
 });
