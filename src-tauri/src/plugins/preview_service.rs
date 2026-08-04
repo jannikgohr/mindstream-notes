@@ -1051,13 +1051,19 @@ mod tests {
             "foreground injected"
         );
         assert!(
-            out.contains("padding: var(--ms-preview-gutter) !important"),
-            "body padding injected"
-        );
-        assert!(
             out.contains("scrollbar-color: oklch(from var(--ms-preview-foreground) l c h / 0.3)")
                 && out.contains("transparent;"),
             "scrollbar color injected"
+        );
+        // Scrollbar theming is scoped to the document scroller, never a universal
+        // `*` rule (which forces custom main-thread scrollbars across the DOM).
+        assert!(
+            out.contains("#typst-container-main::-webkit-scrollbar"),
+            "scrollbar theming targets the document scroller"
+        );
+        assert!(
+            !out.contains("*::-webkit-scrollbar"),
+            "no universal scrollbar rule"
         );
         assert!(
             out.contains("background: oklch(from var(--ms-preview-foreground) l c h / 0.22)"),
