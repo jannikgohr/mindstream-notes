@@ -1603,6 +1603,37 @@ describe('validateManifest — native tool + service failures', () => {
       )
     ).toThrow(/css is only allowed when mode is "themed"/);
   });
+  it('accepts a themed previewIframe socketRewritePort', () => {
+    const m = validateManifest(
+      service({
+        ...goodService,
+        previewIframe: { mode: 'themed', socketRewritePort: 23625 }
+      })
+    );
+    expect(
+      m.contributes.nativeServices?.[0].previewIframe?.socketRewritePort
+    ).toBe(23625);
+  });
+  it('rejects socketRewritePort when mode is not themed', () => {
+    expect(() =>
+      validateManifest(
+        service({
+          ...goodService,
+          previewIframe: { mode: 'direct', socketRewritePort: 23625 }
+        })
+      )
+    ).toThrow(/socketRewritePort is only allowed when mode is "themed"/);
+  });
+  it('rejects an out-of-range socketRewritePort', () => {
+    expect(() =>
+      validateManifest(
+        service({
+          ...goodService,
+          previewIframe: { mode: 'themed', socketRewritePort: 70000 }
+        })
+      )
+    ).toThrow(/socketRewritePort must be an integer between 1 and 65535/);
+  });
 });
 
 describe('validateManifest — note kind render failures', () => {

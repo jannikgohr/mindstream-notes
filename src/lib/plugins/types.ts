@@ -335,9 +335,18 @@ export interface PluginPreviewIframeContribution {
   mode: PluginPreviewIframeMode;
   /**
    * Optional safe relative `.css` file inside the plugin bundle, injected only
-   * for `mode: "themed"` after the host preview CSS.
+   * for `mode: "themed"` after the host theme variables. This is where a plugin
+   * maps `--ms-preview-*` onto its frontend's DOM.
    */
   css?: string;
+  /**
+   * Default WebSocket port the tool's frontend hardcodes as a fallback (e.g.
+   * tinymist's 23625). When set (`mode: "themed"` only), the host injects a
+   * generic shim that redirects a socket to `127.0.0.1:<port>` back to the proxy
+   * origin so it tunnels to the real server. Omit when the frontend derives its
+   * socket from `location`.
+   */
+  socketRewritePort?: number;
 }
 
 /**
