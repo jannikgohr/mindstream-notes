@@ -52,7 +52,6 @@ const PROXY_CSP: &str = "default-src 'none'; \
      style-src 'unsafe-inline'; img-src data: blob:; font-src data: blob:; \
      connect-src ws://127.0.0.1:* http://127.0.0.1:* data: blob:; \
      worker-src blob:; base-uri 'none'";
-const PROXY_STYLE: &str = include_str!("preview_service.css");
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -71,6 +70,13 @@ struct PreviewIframeManifest {
     #[serde(default = "default_preview_iframe_mode")]
     mode: PreviewIframeMode,
     css: Option<String>,
+    /// Default WebSocket port the tool's own frontend hardcodes as a fallback
+    /// (tinymist uses 23625). When set (themed mode only), the host injects a
+    /// generic shim that redirects a socket opened to `127.0.0.1:<port>` to this
+    /// proxy origin instead, so it tunnels back to the real server. `None` = the
+    /// frontend derives its socket from `location` and no shim is needed.
+    #[serde(default)]
+    socket_rewrite_port: Option<u16>,
 }
 
 impl Default for PreviewIframeManifest {
@@ -78,6 +84,7 @@ impl Default for PreviewIframeManifest {
         Self {
             mode: PreviewIframeMode::Direct,
             css: None,
+            socket_rewrite_port: None,
         }
     }
 }
@@ -135,6 +142,9 @@ struct LoopbackPreviewProxy {
 #[derive(Clone, Default)]
 struct PreviewProxyStyles {
     plugin_css: Option<String>,
+    /// See [`PreviewIframeManifest::socket_rewrite_port`]. Drives the injected
+    /// WebSocket shim; `None` injects no shim.
+    socket_rewrite_port: Option<u16>,
 }
 
 impl LoopbackPreviewProxy {
@@ -607,6 +617,7 @@ pub async fn plugins_preview_start(
                 &plugin.files,
                 service.preview_iframe.css.as_deref(),
             )?,
+            socket_rewrite_port: service.preview_iframe.socket_rewrite_port,
         })
     } else {
         None
@@ -786,12 +797,17 @@ fn sanitize_css_length(value: &str) -> String {
     }
 }
 
-/// Insert our WebSocket shim, theme variables/styles, and readiness beacon into the
-/// document head. The shim must run before the upstream scripts: any hardcoded
-/// tinymist default data-plane URL is redirected to this loopback proxy origin,
-/// where the proxy can rewrite the handshake Origin before tunneling upstream.
-/// The theme CSS lives in `preview_service.css` so iframe layout/scrollbar tweaks
-/// stay modular, and the beacon lets the client confirm scripts actually run.
+/// Insert the (optional) WebSocket shim, app-theme variables, the plugin's own
+/// preview CSS, and the readiness beacon into the document head.
+///
+/// The host stays tool-agnostic: it exposes the app theme as `--ms-preview-*`
+/// custom properties and lets the plugin's `previewIframe.css` map them onto its
+/// frontend's DOM (so nothing here knows tinymist's markup). The only behavioural
+/// hook is a generic WebSocket shim, injected before the upstream scripts *only*
+/// when the plugin declares `socketRewritePort`: a frontend that hardcodes a
+/// default `ws://127.0.0.1:<port>` is redirected to this proxy origin, where the
+/// proxy rewrites the handshake Origin before tunneling upstream. The beacon lets
+/// the client confirm scripts actually ran.
 fn inject_head(
     html: &str,
     bg: &str,
@@ -805,33 +821,38 @@ fn inject_head(
         .as_ref()
         .map(|css| format!("<style data-ms-plugin-preview-css>{css}</style>"))
         .unwrap_or_default();
+    let socket_shim = match styles.socket_rewrite_port {
+        Some(port) => format!(
+            "<script>(()=>{{\
+             const NativeWebSocket=window.WebSocket;\
+             if(!NativeWebSocket||NativeWebSocket.__msPreviewPatched)return;\
+             function rewrite(url){{\
+               try{{\
+                 const next=new URL(String(url),window.location.href);\
+                 const isDefaultSocket=/^wss?:$/.test(next.protocol)&&(next.hostname==='127.0.0.1'||next.hostname==='localhost')&&next.port==='{port}';\
+                 if(!isDefaultSocket)return url;\
+                 next.protocol='ws:';\
+                 next.hostname=window.location.hostname;\
+                 next.port=window.location.port;\
+                 return next.href;\
+               }}catch(_){{return url;}}\
+             }}\
+             function PatchedWebSocket(url,protocols){{\
+               return arguments.length>1?new NativeWebSocket(rewrite(url),protocols):new NativeWebSocket(rewrite(url));\
+             }}\
+             PatchedWebSocket.prototype=NativeWebSocket.prototype;\
+             Object.setPrototypeOf(PatchedWebSocket,NativeWebSocket);\
+             Object.defineProperty(PatchedWebSocket,'__msPreviewPatched',{{value:true}});\
+             window.WebSocket=PatchedWebSocket;\
+             }})();</script>"
+        ),
+        None => String::new(),
+    };
     let inject = format!(
-        "<script>(()=>{{\
-         const NativeWebSocket=window.WebSocket;\
-         if(!NativeWebSocket||NativeWebSocket.__msPreviewPatched)return;\
-         function rewrite(url){{\
-           try{{\
-             const next=new URL(String(url),window.location.href);\
-             const defaultTinymistDataPlane=/^wss?:$/.test(next.protocol)&&(next.hostname==='127.0.0.1'||next.hostname==='localhost')&&next.port==='23625';\
-             if(!defaultTinymistDataPlane)return url;\
-             next.protocol='ws:';\
-             next.hostname=window.location.hostname;\
-             next.port=window.location.port;\
-             return next.href;\
-           }}catch(_){{return url;}}\
-         }}\
-         function PatchedWebSocket(url,protocols){{\
-           return arguments.length>1?new NativeWebSocket(rewrite(url),protocols):new NativeWebSocket(rewrite(url));\
-         }}\
-         PatchedWebSocket.prototype=NativeWebSocket.prototype;\
-         Object.setPrototypeOf(PatchedWebSocket,NativeWebSocket);\
-         Object.defineProperty(PatchedWebSocket,'__msPreviewPatched',{{value:true}});\
-         window.WebSocket=PatchedWebSocket;\
-         }})();</script>\
+        "{socket_shim}\
          <style>:root{{--ms-preview-background:{bg};--ms-preview-foreground:{fg};\
          --ms-preview-gutter:{gutter};\
          --ms-preview-scrollbar:{scrollbar};}}</style>\
-         <style>{PROXY_STYLE}</style>\
          {plugin_css}\
          <script>try{{parent.postMessage({{type:'ms-preview-proxy-ready'}},'*');}}catch(e){{}}</script>"
     );
@@ -1011,12 +1032,16 @@ mod tests {
     }
 
     #[test]
-    fn inject_head_places_style_and_beacon_before_head_close() {
+    fn inject_head_injects_theme_vars_plugin_css_and_beacon_before_head_close() {
+        // The host is tool-agnostic: it injects the app-theme variables and the
+        // plugin's own preview CSS (which maps them onto the frontend DOM), plus
+        // a readiness beacon — no tool-specific styling of its own.
         let styles = PreviewProxyStyles {
             plugin_css: Some(
                 ":root{--typst-preview-background-color:var(--ms-preview-background)!important;}"
                     .to_string(),
             ),
+            socket_rewrite_port: None,
         };
         let out = inject_head(
             "<html><head><title>x</title></head><body></body></html>",
@@ -1032,54 +1057,34 @@ mod tests {
             .unwrap();
         let head_open = out.find("<head>").unwrap();
         let title_at = out.find("<title>x</title>").unwrap();
-        assert!(head_open < style_at, "style injected inside head");
-        assert!(
-            style_at < title_at,
-            "proxy scripts run before upstream head"
-        );
+        assert!(head_open < style_at, "theme vars injected inside head");
+        assert!(style_at < title_at, "injection precedes upstream head");
         assert!(
             style_at < plugin_style_at && plugin_style_at < title_at,
-            "plugin css is injected after host theme css and before upstream head"
+            "plugin css follows host theme vars and precedes upstream head"
         );
         assert!(
             out.contains("data-ms-plugin-preview-css"),
             "plugin css style tag is marked"
         );
-        assert!(out.contains("--ms-preview-gutter:14px"), "gutter injected");
+        assert!(
+            out.contains("--ms-preview-gutter:14px"),
+            "gutter var injected"
+        );
         assert!(
             out.contains("--ms-preview-foreground:rgb(255,255,255)"),
-            "foreground injected"
+            "foreground var injected"
         );
+        // The host no longer ships any scrollbar/DOM styling of its own — that
+        // lives in the plugin's preview.css now.
         assert!(
-            out.contains("scrollbar-color: oklch(from var(--ms-preview-foreground) l c h / 0.3)")
-                && out.contains("transparent;"),
-            "scrollbar color injected"
+            !out.contains("::-webkit-scrollbar"),
+            "host injects no tool-specific scrollbar CSS"
         );
-        // Scrollbar theming is scoped to the document scroller, never a universal
-        // `*` rule (which forces custom main-thread scrollbars across the DOM).
+        // No socketRewritePort → no WebSocket shim.
         assert!(
-            out.contains("#typst-container-main::-webkit-scrollbar"),
-            "scrollbar theming targets the document scroller"
-        );
-        assert!(
-            !out.contains("*::-webkit-scrollbar"),
-            "no universal scrollbar rule"
-        );
-        assert!(
-            out.contains("background: oklch(from var(--ms-preview-foreground) l c h / 0.22)"),
-            "webkit thumb matches app scrollbar opacity"
-        );
-        assert!(
-            out.contains("background: oklch(from var(--ms-preview-foreground) l c h / 0.45)"),
-            "webkit thumb hover matches app scrollbar opacity"
-        );
-        assert!(
-            out.contains("overflow: hidden"),
-            "outer iframe document scroller is hidden"
-        );
-        assert!(
-            !out.contains("scrollbar-gutter: stable"),
-            "preview scrollbars should not reserve space before overflow exists"
+            !out.contains("__msPreviewPatched"),
+            "no shim without a declared socket port"
         );
         assert!(out.contains("ms-preview-proxy-ready"), "beacon injected");
     }
@@ -1094,25 +1099,49 @@ mod tests {
             "rgba(255,255,255,0.3)",
             &PreviewProxyStyles::default(),
         );
-        assert!(out.starts_with("<script>"));
+        // With no <head> and no shim, injection is prepended, starting with the
+        // theme-variable <style>.
+        assert!(out.starts_with("<style>"));
         assert!(out.contains("hi"));
     }
 
     #[test]
-    fn inject_head_redirects_default_tinymist_websockets_to_proxy_origin() {
+    fn inject_head_shim_redirects_the_declared_socket_port_to_the_proxy_origin() {
+        let styles = PreviewProxyStyles {
+            plugin_css: None,
+            socket_rewrite_port: Some(23625),
+        };
         let out = inject_head(
             "<html><head><script>window.upstreamStarted=true;</script></head></html>",
             "#444",
             "rgb(255,255,255)",
             "12px",
             "rgba(255,255,255,0.3)",
-            &PreviewProxyStyles::default(),
+            &styles,
         );
-        let shim_at = out.find("defaultTinymistDataPlane").unwrap();
+        let shim_at = out.find("__msPreviewPatched").unwrap();
         let upstream_at = out.find("window.upstreamStarted=true").unwrap();
         assert!(shim_at < upstream_at, "shim runs before upstream scripts");
+        // The declared port drives the rewrite predicate.
+        assert!(
+            out.contains("next.port==='23625'"),
+            "port from the manifest"
+        );
         assert!(out.contains("next.hostname=window.location.hostname"));
         assert!(out.contains("new NativeWebSocket(rewrite(url),protocols)"));
+    }
+
+    #[test]
+    fn inject_head_omits_the_shim_when_no_socket_port_is_declared() {
+        let out = inject_head(
+            "<html><head></head></html>",
+            "#444",
+            "rgb(255,255,255)",
+            "12px",
+            "rgba(255,255,255,0.3)",
+            &PreviewProxyStyles::default(),
+        );
+        assert!(!out.contains("__msPreviewPatched"), "no shim by default");
     }
 
     #[test]
@@ -1153,12 +1182,13 @@ mod tests {
                 "args": ["preview", "{input}"],
                 "dataUrl": "http://127.0.0.1:{dataPort}",
                 "controlUrl": "ws://127.0.0.1:{controlPort}",
-                "previewIframe": { "mode": "themed", "css": "preview.css" }
+                "previewIframe": { "mode": "themed", "css": "preview.css", "socketRewritePort": 23625 }
             }]}
         });
         let svc = find_service(&manifest, "tinymist").unwrap();
         assert_eq!(svc.preview_iframe.mode, PreviewIframeMode::Themed);
         assert_eq!(svc.preview_iframe.css.as_deref(), Some("preview.css"));
+        assert_eq!(svc.preview_iframe.socket_rewrite_port, Some(23625));
     }
 
     #[test]

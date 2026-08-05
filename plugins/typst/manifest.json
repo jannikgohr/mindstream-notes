@@ -115,7 +115,8 @@
         "inputExtension": "typ",
         "previewIframe": {
           "mode": "themed",
-          "css": "preview.css"
+          "css": "preview.css",
+          "socketRewritePort": 23625
         },
         "protocol": {
           "jumpEvent": "editorScrollTo"

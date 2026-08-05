@@ -860,6 +860,26 @@ function validateNativeService(
         );
       }
     }
+    if (s.previewIframe.socketRewritePort !== undefined) {
+      if (s.previewIframe.mode !== 'themed') {
+        throw new PluginValidationError(
+          pluginId,
+          `${path}.previewIframe.socketRewritePort is only allowed when mode is "themed"`
+        );
+      }
+      const port = s.previewIframe.socketRewritePort;
+      if (
+        typeof port !== 'number' ||
+        !Number.isInteger(port) ||
+        port < 1 ||
+        port > 65535
+      ) {
+        throw new PluginValidationError(
+          pluginId,
+          `${path}.previewIframe.socketRewritePort must be an integer between 1 and 65535`
+        );
+      }
+    }
   }
   if (s.descriptionKey !== undefined) {
     assertI18nKey(pluginId, s.descriptionKey, `${path}.descriptionKey`);

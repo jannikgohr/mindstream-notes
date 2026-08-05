@@ -1,4 +1,50 @@
+/* Themed live-preview styling for the tinymist frontend. The host injects the
+   app theme as `--ms-preview-*` custom properties (and, in themed mode, this file
+   via `previewIframe.css`); everything tinymist-specific lives here, not in the
+   host. Keep scrollbar styling SCOPED to the real document scroller
+   (`#typst-container-main`): a universal `*::-webkit-scrollbar` opts every element
+   into custom, main-thread scrollbars across the whole document DOM. */
+
 :root {
   --typst-preview-background-color: var(--ms-preview-background) !important;
   --vscode-sideBar-background: var(--ms-preview-background) !important;
+}
+
+html,
+body {
+  background: var(--ms-preview-background) !important;
+  height: 100%;
+  margin: 0 !important;
+  overflow: hidden;
+}
+
+#typst-container-main {
+  scrollbar-width: auto;
+  scrollbar-color: oklch(from var(--ms-preview-foreground) l c h / 0.3)
+    transparent;
+}
+
+#typst-container-main::-webkit-scrollbar {
+  width: 15px;
+  height: 15px;
+}
+
+#typst-container-main::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+#typst-container-main::-webkit-scrollbar-thumb {
+  background: oklch(from var(--ms-preview-foreground) l c h / 0.22);
+  background-clip: content-box;
+  border: 3px solid transparent;
+  border-radius: 8px;
+}
+
+#typst-container-main::-webkit-scrollbar-thumb:hover {
+  background: oklch(from var(--ms-preview-foreground) l c h / 0.45);
+  background-clip: content-box;
+}
+
+#typst-container-main::-webkit-scrollbar-corner {
+  background: transparent;
 }
