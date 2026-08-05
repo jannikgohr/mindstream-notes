@@ -422,6 +422,13 @@ fn tunnel_websocket(mut client: TcpStream, request: Vec<u8>, data_port: u16) {
         );
         return;
     };
+    // Disable Nagle on both ends: the tunneled data/control plane carries small,
+    // frequent, latency-sensitive frames (scroll-driven partial-render requests,
+    // hover/click-to-source), and buffering them behind Nagle adds tens of
+    // milliseconds of interaction lag. The `try_clone`d halves share each socket,
+    // so setting it here covers both directions.
+    let _ = client.set_nodelay(true);
+    let _ = upstream.set_nodelay(true);
     let rewritten = rewrite_ws_handshake(&request, data_port);
     if upstream.write_all(rewritten.as_bytes()).is_err() {
         return;
