@@ -791,7 +791,8 @@
     "editor.spellcheck.dictionaries.enabledNotInstalled": "Selected but not installed",
     "editor.spellcheck.dictionaries.licenseUnstated": "Licence not stated — see source",
     "editor.spellcheck.dictionaries.source": "Source",
-    "editor.spellcheck.dictionaries.failed": "Download failed"
+    "editor.spellcheck.dictionaries.failed": "Download failed",
+    "editor.spellcheck.menu.showAll": "Show all"
   },
   "categories": {
     "account": {
