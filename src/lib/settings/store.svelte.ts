@@ -55,6 +55,27 @@ export const BY_ID: Record<string, Setting> = Object.fromEntries(
   ALL_SETTINGS.map((s) => [s.id, s])
 );
 
+/**
+ * Resolver for setting definitions that live outside the static schema —
+ * currently plugin-contributed settings, keyed `plugins.<pluginId>.<id>`. The
+ * plugins layer registers one at startup so the store can honour a plugin
+ * setting's scope + default without importing the plugins layer itself (which
+ * would couple the core store to it). Consulted only after the static schema.
+ */
+export type DynamicSettingResolver = (id: string) => Setting | undefined;
+let dynamicSettingResolver: DynamicSettingResolver | null = null;
+
+export function registerDynamicSettingResolver(
+  resolver: DynamicSettingResolver | null
+): void {
+  dynamicSettingResolver = resolver;
+}
+
+/** Static schema first, then any dynamically-registered (plugin) setting. */
+function settingDef(id: string): Setting | undefined {
+  return BY_ID[id] ?? dynamicSettingResolver?.(id);
+}
+
 export function defaultForSetting(def: Setting): unknown {
   const platformDefaults = def.defaultByPlatform;
   const current = getPlatform();
@@ -80,7 +101,7 @@ function vaultStorageKey(vaultId: string): string {
 }
 
 function scopeForId(id: string): 'V' | 'D' {
-  const def = BY_ID[id];
+  const def = settingDef(id);
   if (def) return def.scope;
   // The sign-in form owns account.serverUrl dynamically, outside schema.json.
   if (id.startsWith('account.')) return 'V';
@@ -130,8 +151,18 @@ function loadRaw(vaultId = activeSettingsVaultId): Record<string, unknown> {
   const legacyVaultRaw =
     vaultRaw === null && vaultId === DEFAULT_VAULT_ID ? deviceRaw : null;
   return {
+    // Device bucket: only its device-scoped ids. This key historically also
+    // held vault-scoped values (pre-scoping), so it stays filtered or those
+    // would leak into every vault.
     ...pickScoped(deviceRaw, 'D'),
-    ...pickScoped(vaultRaw ?? legacyVaultRaw, 'V')
+    // Vault bucket: loaded wholesale — a value's *bucket is its scope*.
+    // `persistNow` only ever writes vault-scoped ids here, so everything present
+    // belongs to this vault. We deliberately do NOT re-derive each id's scope
+    // via `scopeForId` on read: a plugin's vault-scoped setting (e.g. the
+    // Templates folder/tag) is loaded at startup *before* its plugin registers,
+    // so `scopeForId` would misclassify it as device-scoped and drop it —
+    // silently losing the value on every restart.
+    ...(vaultRaw ?? legacyVaultRaw ?? {})
   };
 }
 
@@ -202,7 +233,7 @@ void hydrateSettings('startup');
  */
 export function getSettingValue(id: string): unknown {
   if (id in settings.values) return settings.values[id];
-  const def = BY_ID[id];
+  const def = settingDef(id);
   return def ? defaultForSetting(def) : undefined;
 }
 
@@ -249,7 +280,7 @@ export async function setSettingValue(
 }
 
 export async function resetSettingValue(id: string): Promise<void> {
-  const def = BY_ID[id];
+  const def = settingDef(id);
   if (!def) return;
   if ('default' in def || def.defaultByPlatform) {
     await setSettingValue(id, defaultForSetting(def));
@@ -295,7 +326,7 @@ function persistNow() {
 
 /** True if the current value differs from the schema default. */
 export function isModified(id: string): boolean {
-  const def = BY_ID[id];
+  const def = settingDef(id);
   if (!def) return false;
   return getSettingValue(id) !== defaultForSetting(def);
 }
@@ -329,12 +360,17 @@ export function isCategoryVisible(category: Category): boolean {
 }
 
 /** Open/close state for the dialog itself. */
-export const settingsDialog = $state({ open: false });
-export function openSettings() {
+export const settingsDialog = $state<{
+  open: boolean;
+  /** A category id to jump to on open (deep-link), consumed by the dialog. */
+  requestedCategory: string | null;
+}>({ open: false, requestedCategory: null });
+export function openSettings(category?: string) {
   // Refresh binding-backed values so the panel reflects any out-of-band
   // changes (autostart toggled from the OS, theme switched in another
   // window, …). Fire-and-forget — the cache update is reactive.
   void hydrateSettings('all');
+  settingsDialog.requestedCategory = category ?? null;
   settingsDialog.open = true;
 }
 export function closeSettings() {

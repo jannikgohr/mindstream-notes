@@ -29,12 +29,34 @@
   import { FALLBACK_ICON, SETTINGS_ICONS } from '$lib/settings/icons';
   import { tLabel, tUi } from '$lib/settings/i18n.svelte';
   import type { Category, Setting } from '$lib/settings/types';
+  import PluginsOverview from '$lib/plugins/PluginsOverview.svelte';
+  import PluginNativeToolsSection from '$lib/plugins/PluginNativeToolsSection.svelte';
+  import {
+    PLUGINS_CATEGORY_ID,
+    pluginSettingsCategory,
+    pluginSettingsSectionsFor
+  } from '$lib/plugins/settings-bridge';
+  import { allPlugins } from '$lib/plugins/registry.svelte';
   import { closeNavOverlay, openNavOverlay } from './state.svelte';
 
   let activeCategoryId = $state<string | null>(null);
 
+  // Include the synthetic "Plugins" category whenever any plugin is installed
+  // (it hosts the management overview even for plugins with no settings).
+  const pluginCategory = $derived.by<Category | null>(() => {
+    if (allPlugins().length === 0) return null;
+    return {
+      id: PLUGINS_CATEGORY_ID,
+      icon: 'puzzle',
+      sections: pluginSettingsCategory()?.sections ?? []
+    };
+  });
+
   const visibleCategories = $derived(
-    SCHEMA.categories.filter(isCategoryVisible)
+    (pluginCategory
+      ? [...SCHEMA.categories, pluginCategory]
+      : SCHEMA.categories
+    ).filter(isCategoryVisible)
   );
 
   const activeCategory = $derived<Category | null>(
@@ -46,6 +68,16 @@
   /** Reset to the category list whenever the dialog closes. */
   $effect(() => {
     if (!settingsDialog.open) activeCategoryId = null;
+  });
+
+  // Honor a deep-link requested via openSettings('<category>') — e.g. a
+  // notification jumping to Plugins. Consumed once.
+  $effect(() => {
+    const requested = settingsDialog.requestedCategory;
+    if (requested) {
+      activeCategoryId = requested;
+      settingsDialog.requestedCategory = null;
+    }
   });
 
   // Give the category-detail view its own nav-stack level so the Android
@@ -73,6 +105,22 @@
   function categoryIcon(name: string | undefined) {
     if (!name) return FALLBACK_ICON;
     return SETTINGS_ICONS[name] ?? FALLBACK_ICON;
+  }
+
+  /**
+   * The gear on a plugin row jumps to its settings. Mobile has no separate
+   * per-plugin pane — every enabled plugin's sections already render below the
+   * overview on the same scroll — so "open settings" scrolls that plugin's
+   * first section into view.
+   */
+  function scrollToPluginSettings(id: string): void {
+    const sec = pluginSettingsSectionsFor(id)[0];
+    if (!sec) return;
+    requestAnimationFrame(() => {
+      document
+        .getElementById(`plugins-section-${sec.id}`)
+        ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
   }
 
   function visibleSettings(cat: Category): Setting[] {
@@ -156,7 +204,10 @@
         </header>
 
         <section class="flex-1 overflow-y-auto px-4 py-4">
-          {#if visibleSettings(activeCategory).length === 0}
+          {#if activeCategory.id === PLUGINS_CATEGORY_ID}
+            <!-- Management overview first, then each enabled plugin's sections. -->
+            <PluginsOverview onOpenSettings={scrollToPluginSettings} />
+          {:else if visibleSettings(activeCategory).length === 0}
             <p class="px-1 py-6 text-center text-sm text-muted-foreground">
               {tUi('empty')}
             </p>
@@ -166,7 +217,7 @@
               ? sec.settings.filter((s) => isVisible(s))
               : []}
             {#if sectionSettings.length > 0}
-              <div class="mb-6">
+              <div class="mb-6" id="plugins-section-{sec.id}">
                 <h3
                   class="mb-2 border-b border-border pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
                 >
@@ -180,6 +231,15 @@
               </div>
             {/if}
           {/each}
+          {#if activeCategory.id === PLUGINS_CATEGORY_ID}
+            {#each allPlugins() as plugin (plugin.manifest.id)}
+              {#if plugin.enabled && (plugin.manifest.contributes.nativeTools ?? []).length > 0}
+                <div class="mb-6" id="plugins-nativetools-{plugin.manifest.id}">
+                  <PluginNativeToolsSection pluginId={plugin.manifest.id} />
+                </div>
+              {/if}
+            {/each}
+          {/if}
         </section>
       {/if}
     </Dialog.Content>

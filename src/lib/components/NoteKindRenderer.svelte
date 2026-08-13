@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import { loadNoteKindComponent } from './note-editor/lazy-components';
+  import { tree } from '$lib/stores/tree.svelte';
+  import { pluginNoteKind } from '$lib/plugins/registry.svelte';
 
   interface Props {
     noteId: string;
@@ -27,11 +29,12 @@
   // onMount and never react to the prop changing, so switching notes has to
   // remount even when both are the same kind.
   const currentNoteId = $derived(noteId);
-  const currentKind = $derived(noteKind);
+  const currentKind = $derived(noteKind ?? tree.notesById[noteId]?.note_kind);
 
   $effect(() => {
     void currentNoteId;
     const kind = currentKind;
+    void pluginNoteKind(kind);
     const token = ++loadToken;
     LoadedComponent = null;
     loadError = null;
@@ -61,7 +64,7 @@
     {loadError}
   </div>
 {:else if LoadedComponent}
-  <LoadedComponent {noteId} />
+  <LoadedComponent {noteId} noteKind={currentKind} />
 {:else}
   <div
     class="flex h-full items-center justify-center p-6 text-sm text-muted-foreground"

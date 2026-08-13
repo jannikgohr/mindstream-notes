@@ -498,6 +498,58 @@ const MIGRATIONS: &[Migration] = &[
             ALTER TABLE sync_state ADD COLUMN reconcile_passes_left INTEGER NOT NULL DEFAULT 3;
         "#,
     },
+    Migration {
+        to: 21,
+        // Per-profile plugin registry (see src/plugins/mod.rs). The DB is
+        // profile-local, so this table is naturally scoped to one vault.
+        //
+        // The frontend owns each plugin's manifest + contributions; this table
+        // is the durable record of install/enable state and the integrity
+        // seam:
+        //   accepted_hash        canonical manifest checksum the user (or, for
+        //                        bundled first-party plugins, the app) accepted.
+        //                        A mismatch on the next load of an *installed*
+        //                        plugin disables it pending re-approval.
+        //   granted_permissions  JSON array of the permissions granted at
+        //                        install/approval time.
+        //   source               'builtin' (ships in the app bundle, trusted)
+        //                        or 'installed' (third-party, subject to the
+        //                        hash-change re-approval gate).
+        //   last_load_error      why the plugin isn't contributing, if anything
+        //                        (bad manifest, hash mismatch); surfaced in the
+        //                        plugin settings UI.
+        sql: r#"
+            CREATE TABLE plugins (
+                id                  TEXT PRIMARY KEY,
+                version             TEXT NOT NULL,
+                enabled             INTEGER NOT NULL DEFAULT 1,
+                source              TEXT NOT NULL DEFAULT 'installed',
+                source_path         TEXT,
+                accepted_hash       TEXT NOT NULL,
+                granted_permissions TEXT NOT NULL DEFAULT '[]',
+                last_load_error     TEXT,
+                installed_at        TEXT NOT NULL,
+                updated_at          TEXT NOT NULL
+            );
+            CREATE INDEX idx_plugins_enabled ON plugins(enabled) WHERE enabled = 1;
+        "#,
+    },
+    Migration {
+        to: 22,
+        // Plugin signature state (see src/plugins/signing.rs).
+        //   signer            SHA-256 fingerprint of the accepted signer's
+        //                     Ed25519 public key, pinned on approval. Only an
+        //                     update signed by the SAME key auto-approves; a
+        //                     signer change is treated as untrusted. NULL for
+        //                     unsigned plugins.
+        //   signature_status  last observed verification result of the on-disk
+        //                     signature: 'unsigned' | 'valid' | 'invalid'. Info
+        //                     for the management UI; refreshed on every discover.
+        sql: r#"
+            ALTER TABLE plugins ADD COLUMN signer TEXT;
+            ALTER TABLE plugins ADD COLUMN signature_status TEXT NOT NULL DEFAULT 'unsigned';
+        "#,
+    },
 ];
 
 pub fn run(conn: &mut Connection) -> AppResult<()> {

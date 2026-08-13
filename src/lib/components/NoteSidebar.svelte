@@ -29,7 +29,10 @@
     type CollectionShareAccessLevel,
     type CollectionShareState
   } from '$lib/api/sharing';
-  import { noteKindIcon } from '$lib/components/note-kind-icon';
+  import NoteKindIcon from '$lib/components/NoteKindIcon.svelte';
+  import { noteHistoryEnabled } from '$lib/history/enabled';
+  import { pluginNoteKind } from '$lib/plugins/registry.svelte';
+  import { resolvePluginString } from '$lib/plugins/plugin-i18n';
   import { formatNoteDateTime } from '$lib/date-time';
   import { findShareScopeCollectionId } from '$lib/notes/share-users';
   import { pdfAssetIdFromBody } from '$lib/pdf/viewer-helpers';
@@ -224,10 +227,18 @@
         return tUi('metadata.type.pdf');
       case 'kanban':
         return tUi('metadata.type.kanban');
-      default:
+      default: {
+        // A plugin-owned kind (e.g. `plugin.com.mindstream.typst.document`)
+        // resolves to its contributed, localized label ("Typst document")
+        // rather than the raw stored string — mirroring NoteKindIcon.
+        const ref = pluginNoteKind(kind);
+        if (ref) {
+          return resolvePluginString(ref.pluginId, ref.contribution.labelKey);
+        }
         return kind
           ? tUi('metadata.type.unknownNamed').replace('{kind}', kind)
           : tUi('metadata.type.unknown');
+      }
     }
   }
 
@@ -364,7 +375,6 @@
     class="scrollbar-none flex-1 overflow-y-auto p-3"
   >
     {#if note}
-      {@const NoteIcon = noteKindIcon(note.note_kind)}
       <section
         class="rounded-lg border border-border bg-background p-4 text-foreground shadow-sm"
       >
@@ -430,7 +440,7 @@
               <dd
                 class="flex min-w-0 items-center justify-end gap-1.5 text-right text-xs font-medium text-muted-foreground"
               >
-                <NoteIcon class="size-3.5 shrink-0" />
+                <NoteKindIcon kind={note.note_kind} class="size-3.5 shrink-0" />
                 <span class="truncate">{noteKindLabel(note.note_kind)}</span>
               </dd>
             </div>
@@ -651,7 +661,7 @@
           <TagsSection noteId={note.id} />
         </div>
 
-        {#if note.note_kind === 'markdown' || note.note_kind === 'freeform' || note.note_kind === 'ink' || note.note_kind === 'pdf' || note.note_kind === 'kanban'}
+        {#if noteHistoryEnabled(note.note_kind)}
           <div class="mt-5 border-t border-border pt-5">
             <NoteHistorySection noteId={note.id} noteKind={note.note_kind} />
           </div>

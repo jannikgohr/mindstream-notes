@@ -1,8 +1,6 @@
-import type { NoteKind } from '$lib/api';
-
 export interface NoteExporter {
   id: string;
-  noteKind: NoteKind;
+  noteKind: string;
   label: string;
   run: (noteId: string) => Promise<void>;
 }

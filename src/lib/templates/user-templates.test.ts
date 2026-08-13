@@ -1,0 +1,245 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+// Shared, test-controlled state for the mocked stores.
+const {
+  state,
+  loadNote,
+  createNoteIn,
+  requestOpenNote,
+  settings,
+  pluginsRunScript
+} = vi.hoisted(() => ({
+  state: {
+    notesById: {} as Record<string, unknown>,
+    collectionsById: {} as Record<string, unknown>
+  },
+  loadNote: vi.fn(),
+  createNoteIn: vi.fn(),
+  requestOpenNote: vi.fn(),
+  settings: new Map<string, unknown>(),
+  pluginsRunScript: vi.fn()
+}));
+
+vi.mock('$lib/api/notes', () => ({
+  NoteKind: { Markdown: 'markdown', Kanban: 'kanban' },
+  loadNote
+}));
+// User templates only exist in the app (rendering runs the plugin's Luau).
+vi.mock('$lib/api/core', () => ({ isTauri: () => true }));
+vi.mock('$lib/api/plugins', () => ({ pluginsRunScript }));
+vi.mock('$lib/settings/i18n.svelte', () => ({ i18n: { language: 'en' } }));
+vi.mock('$lib/stores/tree.svelte', () => ({ tree: state, createNoteIn }));
+vi.mock('$lib/stores/open-note-intent.svelte', () => ({ requestOpenNote }));
+vi.mock('$lib/settings/store.svelte', () => ({
+  getSettingValue: (id: string) => settings.get(id)
+}));
+// Only the open-on-create convention reader is consumed here now; rendering is
+// delegated to the plugin (mocked via pluginsRunScript above).
+vi.mock('$lib/plugins/templates', () => ({
+  shouldOpenOnCreate: (pluginId: string) =>
+    settings.get(`plugins.${pluginId}.open-on-create`) !== false
+}));
+
+import {
+  TEMPLATES_PLUGIN_ID,
+  createNoteFromUserTemplate,
+  hasUserTemplates,
+  userTemplateEntries
+} from './user-templates';
+
+const FOLDER_KEY = `plugins.${TEMPLATES_PLUGIN_ID}.source-folder`;
+const TAG_KEY = `plugins.${TEMPLATES_PLUGIN_ID}.source-tag`;
+const OPEN_KEY = `plugins.${TEMPLATES_PLUGIN_ID}.open-on-create`;
+
+function note(
+  id: string,
+  over: Partial<{
+    title: string;
+    tags: string[];
+    note_kind: string;
+    trashed: boolean;
+    parent: string | null;
+  }> = {}
+) {
+  return {
+    id,
+    title: over.title ?? id,
+    tags: over.tags ?? [],
+    note_kind: over.note_kind ?? 'markdown',
+    trashed: over.trashed ?? false,
+    parent_collection_id: over.parent ?? null
+  };
+}
+
+function folder(id: string, name: string, parent: string | null = null) {
+  return { id, name, parent_collection_id: parent };
+}
+
+beforeEach(() => {
+  state.notesById = {};
+  state.collectionsById = {};
+  settings.clear();
+  loadNote.mockReset();
+  createNoteIn.mockReset().mockResolvedValue('new-note');
+  requestOpenNote.mockReset();
+  pluginsRunScript.mockReset();
+});
+
+describe('userTemplateEntries', () => {
+  it('is empty when neither source is configured', () => {
+    state.notesById = { n1: note('n1', { tags: ['t'] }) };
+    expect(userTemplateEntries()).toEqual([]);
+    expect(hasUserTemplates()).toBe(false);
+  });
+
+  it('includes markdown notes inside the source folder id (nested)', () => {
+    settings.set(FOLDER_KEY, 'root');
+    state.collectionsById = {
+      root: folder('root', 'Templates'),
+      sub: folder('sub', 'Drafts', 'root')
+    };
+    state.notesById = {
+      a: note('a', { title: 'Direct', parent: 'root' }),
+      b: note('b', { title: 'Nested', parent: 'sub' }),
+      c: note('c', { title: 'Outside', parent: null })
+    };
+    const labels = userTemplateEntries().map((e) => e.label);
+    expect(labels).toEqual(['Direct', 'Nested']);
+  });
+
+  it('includes notes carrying the source tag', () => {
+    settings.set(TAG_KEY, 'tpl');
+    state.notesById = {
+      a: note('a', { title: 'Tagged', tags: ['tpl', 'x'] }),
+      b: note('b', { title: 'Untagged', tags: ['x'] })
+    };
+    const entries = userTemplateEntries();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ label: 'Tagged', source: 'tag' });
+  });
+
+  it('excludes trashed notes but keeps every note kind', () => {
+    settings.set(TAG_KEY, 'tpl');
+    state.notesById = {
+      a: note('a', { tags: ['tpl'], trashed: true }),
+      b: note('b', {
+        title: 'Board',
+        tags: ['tpl'],
+        note_kind: 'kanban'
+      }),
+      c: note('c', {
+        title: 'Doc',
+        tags: ['tpl'],
+        note_kind: 'plugin.com.mindstream.typst.document'
+      }),
+      d: note('d', { title: 'Keep', tags: ['tpl'] })
+    };
+    expect(userTemplateEntries().map((e) => e.label)).toEqual([
+      'Board',
+      'Doc',
+      'Keep'
+    ]);
+  });
+
+  it('carries the source note kind on each entry', () => {
+    settings.set(TAG_KEY, 'tpl');
+    state.notesById = {
+      a: note('a', { title: 'Markdown', tags: ['tpl'] }),
+      b: note('b', {
+        title: 'Typst',
+        tags: ['tpl'],
+        note_kind: 'plugin.com.mindstream.typst.document'
+      })
+    };
+    expect(userTemplateEntries().map((e) => [e.label, e.noteKind])).toEqual([
+      ['Markdown', 'markdown'],
+      ['Typst', 'plugin.com.mindstream.typst.document']
+    ]);
+  });
+
+  it('sorts entries by label', () => {
+    settings.set(TAG_KEY, 'tpl');
+    state.notesById = {
+      a: note('a', { title: 'Zebra', tags: ['tpl'] }),
+      b: note('b', { title: 'Apple', tags: ['tpl'] })
+    };
+    expect(userTemplateEntries().map((e) => e.label)).toEqual([
+      'Apple',
+      'Zebra'
+    ]);
+  });
+});
+
+describe('createNoteFromUserTemplate', () => {
+  it('renders via the plugin, then creates + opens the note', async () => {
+    state.notesById = { src: note('src', { title: 'Daily {{date}}' }) };
+    loadNote.mockResolvedValue({ body: '# {{title}}\n\n{{date}}' });
+    pluginsRunScript.mockResolvedValue({
+      title: 'Daily 2026-07-26',
+      body: '# Daily 2026-07-26\n\n2026-07-26'
+    });
+
+    const id = await createNoteFromUserTemplate('src', 'col-1');
+
+    expect(id).toBe('new-note');
+    // The raw note is handed to the plugin's renderTemplate export…
+    expect(pluginsRunScript).toHaveBeenCalledWith(
+      TEMPLATES_PLUGIN_ID,
+      'renderTemplate',
+      expect.objectContaining({
+        title: 'Daily {{date}}',
+        body: '# {{title}}\n\n{{date}}'
+      })
+    );
+    // …and the app writes the plugin-rendered result.
+    expect(createNoteIn).toHaveBeenCalledWith(
+      'col-1',
+      'Daily 2026-07-26',
+      'markdown',
+      '# Daily 2026-07-26\n\n2026-07-26'
+    );
+    expect(requestOpenNote).toHaveBeenCalledWith('new-note');
+  });
+
+  it('creates a note of the source note kind (e.g. Typst)', async () => {
+    state.notesById = {
+      src: note('src', {
+        title: '{{title}}',
+        note_kind: 'plugin.com.mindstream.typst.document'
+      })
+    };
+    loadNote.mockResolvedValue({ body: '= {{title}}' });
+    pluginsRunScript.mockResolvedValue({ title: 'Report', body: '= Report' });
+
+    await createNoteFromUserTemplate('src', 'col-1');
+
+    expect(createNoteIn).toHaveBeenCalledWith(
+      'col-1',
+      'Report',
+      'plugin.com.mindstream.typst.document',
+      '= Report'
+    );
+  });
+
+  it('falls back to markdown when the source note is gone', async () => {
+    // No entry in notesById for 'ghost' — the source was deleted mid-flight.
+    loadNote.mockResolvedValue({ body: 'b' });
+    pluginsRunScript.mockResolvedValue({ title: 'T', body: 'b' });
+
+    await createNoteFromUserTemplate('ghost', null);
+
+    expect(createNoteIn).toHaveBeenCalledWith(null, 'T', 'markdown', 'b');
+  });
+
+  it('respects the open-on-create toggle when creating', async () => {
+    state.notesById = { src: note('src', { title: 'T' }) };
+    loadNote.mockResolvedValue({ body: 'b' });
+    pluginsRunScript.mockResolvedValue({ title: 'T', body: 'b' });
+    settings.set(OPEN_KEY, false);
+
+    await createNoteFromUserTemplate('src', null);
+
+    expect(createNoteIn).toHaveBeenCalled();
+    expect(requestOpenNote).not.toHaveBeenCalled();
+  });
+});

@@ -7,6 +7,7 @@ import {
   SOURCE_ACTIONS,
   applyHeading,
   insertBlock,
+  insertSourceMarkdown,
   toggleInlineMarker,
   toggleListPrefix,
   type SourceEdit
@@ -260,5 +261,31 @@ describe('SOURCE_ACTIONS', () => {
     ]) {
       expect(typeof SOURCE_ACTIONS[id]).toBe('function');
     }
+  });
+});
+
+describe('insertSourceMarkdown', () => {
+  it('replaces the selection and leaves the caret after the inserted text', () => {
+    const v = view('hello world', 0, 5); // "hello" selected
+    insertSourceMarkdown(v, 'HI');
+    expect(v.state.doc.toString()).toBe('HI world');
+    expect(v.state.selection.main.head).toBe(2); // just past "HI"
+    v.destroy();
+  });
+
+  it('inserts at the caret when there is no selection', () => {
+    const v = view('ab', 1); // caret between a|b
+    insertSourceMarkdown(v, 'X');
+    expect(v.state.doc.toString()).toBe('aXb');
+    expect(v.state.selection.main.head).toBe(2);
+    v.destroy();
+  });
+
+  it('is a no-op for empty markdown', () => {
+    const v = view('unchanged', 3);
+    insertSourceMarkdown(v, '');
+    expect(v.state.doc.toString()).toBe('unchanged');
+    expect(v.state.selection.main.head).toBe(3);
+    v.destroy();
   });
 });

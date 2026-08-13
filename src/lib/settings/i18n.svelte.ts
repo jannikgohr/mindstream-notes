@@ -26,6 +26,34 @@ export const i18n = $state<I18nState>({
   bundle: FALLBACK
 });
 
+/**
+ * Fallback string resolver for ids that aren't in the static i18n bundles —
+ * currently plugin-contributed settings/sections/values. The plugins layer
+ * registers one at startup; core stays ignorant of plugins (and there is no
+ * import cycle, since this module never imports the plugins layer). Consulted
+ * only after the active + English bundles miss.
+ */
+export interface SettingsLabelResolver {
+  label(
+    scope: 'categories' | 'sections' | 'settings',
+    id: string
+  ): string | undefined;
+  description(
+    scope: 'categories' | 'sections' | 'settings',
+    id: string
+  ): string | undefined;
+  value(settingId: string, value: string): string | undefined;
+}
+
+let labelResolver: SettingsLabelResolver | null = null;
+
+/** Install (or clear with `null`) the dynamic label fallback. */
+export function registerSettingsLabelResolver(
+  resolver: SettingsLabelResolver | null
+): void {
+  labelResolver = resolver;
+}
+
 export function setLanguage(code: string) {
   if (!byLang[code]) {
     console.warn('[i18n] unknown language', code, '— falling back to en');
@@ -45,7 +73,8 @@ export function tLabel(
   const active = i18n.bundle[scope]?.[id];
   if (active?.label) return active.label;
   const fb = FALLBACK[scope]?.[id];
-  return fb?.label ?? id;
+  if (fb?.label) return fb.label;
+  return labelResolver?.label(scope, id) ?? id;
 }
 
 export function tDescription(
@@ -53,14 +82,21 @@ export function tDescription(
   id: string
 ): string | undefined {
   return (
-    i18n.bundle[scope]?.[id]?.description ?? FALLBACK[scope]?.[id]?.description
+    i18n.bundle[scope]?.[id]?.description ??
+    FALLBACK[scope]?.[id]?.description ??
+    labelResolver?.description(scope, id)
   );
 }
 
 /** Look up a value label, e.g. tValue('account.serverType', 'managed'). */
 export function tValue(settingId: string, value: string): string {
   const key = `${settingId}.${value}`;
-  return i18n.bundle.values?.[key] ?? FALLBACK.values?.[key] ?? value;
+  return (
+    i18n.bundle.values?.[key] ??
+    FALLBACK.values?.[key] ??
+    labelResolver?.value(settingId, value) ??
+    value
+  );
 }
 
 export function tUi(key: keyof I18nBundle['ui']): string {

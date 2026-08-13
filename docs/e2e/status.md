@@ -11,6 +11,7 @@ hidden passing coverage** — a run's pass count reflects implemented scenarios.
 | ----------------------------- | ---- | --------------------------------------------------------------------------------------------- |
 | `editor-roundtrip.e2e.ts`     | T3   | flow 1.1 through real `save_note` + SQLite + restart                                          |
 | `history.e2e.ts`              | T3   | capture / restore / Undo / editor-undo isolation / restart persistence                        |
+| `plugins.e2e.ts`              | T3   | `plugins_discover` off disk + toolbar contribution; disable persists across restart           |
 | `trash-retention.e2e.ts`      | T3   | flows 1.5 + 3.3 (retention sweep on boot)                                                     |
 | `settings-persist.e2e.ts`     | T3   | flows 3.1 / 3.2                                                                               |
 | `sync-history.e2e.ts`         | T4   | per-device-history negative assertion; 4.10 edit-wins-over-delete                             |

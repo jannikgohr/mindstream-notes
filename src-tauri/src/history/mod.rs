@@ -187,7 +187,7 @@ fn build_snapshot(
 #[cfg(test)]
 fn current_note_snapshot(conn: &Connection, note_id: &str) -> AppResult<(NoteKind, String)> {
     let (note_kind, body, yrs_state) = read_note_raw(conn, note_id)?;
-    let snapshot = build_snapshot(note_kind, body, yrs_state)?;
+    let snapshot = build_snapshot(note_kind.clone(), body, yrs_state)?;
     Ok((note_kind, snapshot))
 }
 
@@ -526,7 +526,7 @@ pub async fn capture_current_note_version(
         // Read the saved state under the lock; build the (possibly large) base64
         // snapshot with the lock released.
         let (note_kind, body, yrs_state) = db.with_conn(|c| read_note_raw(c, &note_id))?;
-        let snapshot = build_snapshot(note_kind, body, yrs_state)?;
+        let snapshot = build_snapshot(note_kind.clone(), body, yrs_state)?;
         capture_off_lock(
             &db,
             &note_id,

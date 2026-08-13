@@ -37,6 +37,9 @@
   import { loadProfiles, profilesState } from '$lib/stores/profiles.svelte';
   import { installSyncStatusBridge } from '$lib/notifications/sync-status';
   import { installSyncTreeRefreshBridge } from '$lib/sync/tree-refresh-bridge';
+  import { loadPlugins } from '$lib/plugins/load';
+  import { installPluginSettingsBridge } from '$lib/plugins/settings-bridge';
+  import { startPickerSettingPruning } from '$lib/settings/pickers.svelte';
 
   let { children } = $props();
 
@@ -64,6 +67,15 @@
     void loadProfiles();
     initHotkeys();
     initNativeMenuCommands();
+    // Route plugin-contributed settings through the core store + i18n before
+    // any plugin loads, then discover + register plugins from disk (backend)
+    // or the bundled fallback (browser). Isolated per-plugin so a broken
+    // manifest is a recorded load error, not a startup crash. Fire-and-forget —
+    // the registry is reactive.
+    installPluginSettingsBridge();
+    void loadPlugins();
+    // Clear any folder/tag picker setting whose target gets deleted.
+    const stopPickerPruning = startPickerSettingPruning();
     // Surface a notification when Rust reports the sync server is
     // unreachable (and clear it on the next successful sync).
     const teardownSyncStatus = installSyncStatusBridge();
@@ -81,6 +93,7 @@
       teardownSyncStatus();
       teardownTreeRefresh();
       void teardownGlobalShortcuts();
+      stopPickerPruning();
     };
   });
 

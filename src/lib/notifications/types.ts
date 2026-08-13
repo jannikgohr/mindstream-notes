@@ -5,7 +5,9 @@ export type NotificationKind =
   | 'collaboration-invite'
   | 'share-bundle'
   | 'generic'
-  | 'sync-offline';
+  | 'sync-offline'
+  | 'plugin-gated'
+  | 'plugin-new';
 export type NotificationWidgetType =
   | 'update'
   | 'collaboration-invite'

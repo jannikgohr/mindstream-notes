@@ -81,12 +81,14 @@ async function doLoadTree(): Promise<void> {
 export async function createNoteIn(
   parentId: string | null,
   title?: string,
-  noteKind?: NoteKind
+  noteKind?: NoteKind,
+  body?: string
 ): Promise<string> {
   const note = await api.createNote({
     parent_collection_id: parentId,
     title,
-    note_kind: noteKind
+    note_kind: noteKind,
+    body
   });
   await loadTree();
   // Live collab keys live on the etebase server — the per-note crypto_key
