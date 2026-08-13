@@ -2908,6 +2908,7 @@ dependencies = [
  "chrono",
  "dbus-secret-service-keyring-store",
  "ed25519-dalek",
+ "encoding_rs",
  "etebase",
  "flate2",
  "hkdf",
@@ -2927,6 +2928,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "similar",
+ "spellbook",
  "tauri",
  "tauri-build",
  "tauri-plugin-autostart",
@@ -5026,6 +5028,16 @@ dependencies = [
  "gobject-sys",
  "libc",
  "system-deps",
+]
+
+[[package]]
+name = "spellbook"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d204abcbdf8e88729306a8d0ca01a79d8a49969fe1f84696909d6dbc4321c1a"
+dependencies = [
+ "foldhash 0.2.0",
+ "hashbrown 0.17.1",
 ]
 
 [[package]]
