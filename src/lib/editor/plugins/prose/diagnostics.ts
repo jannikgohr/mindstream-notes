@@ -23,6 +23,7 @@ import type { EditorView } from '@milkdown/kit/prose/view';
 import { excludeIgnored } from '$lib/diagnostics/ignore-ranges';
 import { isAbortError } from '$lib/diagnostics/bus';
 import type { Diagnostic, Segment, TextRange } from '$lib/diagnostics/types';
+import type { DiagnosticMenuContext } from '$lib/diagnostics/popover-bridge.svelte';
 import { parseNoteHref } from '../wikilink-href';
 import { parseUserHref } from '../user-mention-href';
 
@@ -147,8 +148,18 @@ export interface ProseDiagnosticsOptions {
    * feels like a reaction to stopping rather than a delayed batch job.
    */
   debounceMs?: number;
-  /** Called when the user right-clicks a diagnostic, to open the popover. */
-  onRequestMenu?(diagnostic: Diagnostic, event: MouseEvent): void;
+  /**
+   * Called when the user right-clicks a diagnostic, to open the popover.
+   *
+   * `apply` is supplied by the plugin rather than the caller because only
+   * the plugin knows how to write to its own surface — and the popover is
+   * shared between two surfaces with completely different edit APIs.
+   */
+  onRequestMenu?(
+    diagnostic: Diagnostic,
+    event: MouseEvent,
+    context: DiagnosticMenuContext
+  ): void;
 }
 
 const DEFAULT_DEBOUNCE_MS = 400;
@@ -240,7 +251,18 @@ export function diagnosticsPlugin(
           // popover would open and be dismissed in the same gesture.
           event.preventDefault();
           event.stopPropagation();
-          options.onRequestMenu(hit, event);
+          options.onRequestMenu(hit, event, {
+            word: view.state.doc.textBetween(hit.from, hit.to),
+            apply: (replacement) => {
+              // Dispatched through the view so the collab plugin sees an
+              // ordinary local edit; the checker must never touch the Yjs
+              // document directly.
+              view.dispatch(
+                view.state.tr.insertText(replacement, hit.from, hit.to)
+              );
+              view.focus();
+            }
+          });
           return true;
         }
       }

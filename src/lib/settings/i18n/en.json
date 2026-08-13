@@ -783,8 +783,6 @@
     "editor.spellcheck.menu.label": "Spelling suggestions",
     "editor.spellcheck.menu.noSuggestions": "No suggestions",
     "editor.spellcheck.menu.loading": "Looking for suggestions…",
-    "editor.spellcheck.menu.addToDictionary": "Add to dictionary",
-    "editor.spellcheck.menu.ignore": "Ignore once",
     "editor.spellcheck.dictionaries.install": "Install",
     "editor.spellcheck.dictionaries.remove": "Remove",
     "editor.spellcheck.dictionaries.installing": "Installing…",
