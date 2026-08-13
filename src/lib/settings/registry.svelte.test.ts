@@ -1,14 +1,34 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  CUSTOM_COMPONENT_LOADERS,
   INFO_VALUES,
   SETTING_ACTIONS,
-  SETTING_BINDINGS
+  SETTING_BINDINGS,
+  SETTING_OPTION_FILTERS
 } from './registry.svelte';
 import {
+  DesktopThemeMode,
+  getCloseToTray,
   getCustomWindowDecorations,
-  setCustomWindowDecorations
+  getDesktopLanguage,
+  getDesktopThemeMode,
+  getStartInTray,
+  setCloseToTray,
+  setCustomWindowDecorations,
+  setDesktopLanguage,
+  setDesktopThemeMode,
+  setStartInTray
 } from '$lib/api/desktop-settings';
 import { isTauri } from '$lib/api/core';
+
+const autostart = vi.hoisted(() => ({
+  isEnabled: vi.fn(),
+  enable: vi.fn(),
+  disable: vi.fn()
+}));
+const dataAction = vi.hoisted(() => vi.fn());
+const checkForUpdatesInteractively = vi.hoisted(() => vi.fn());
+const splitAvailable = vi.hoisted(() => vi.fn());
 
 vi.mock('$lib/api/core', async (importOriginal) => ({
   ...(await importOriginal<typeof import('$lib/api/core')>()),
@@ -18,7 +38,38 @@ vi.mock('$lib/api/core', async (importOriginal) => ({
 vi.mock('$lib/api/desktop-settings', async (importOriginal) => ({
   ...(await importOriginal<typeof import('$lib/api/desktop-settings')>()),
   getCustomWindowDecorations: vi.fn(),
-  setCustomWindowDecorations: vi.fn()
+  setCustomWindowDecorations: vi.fn(),
+  getCloseToTray: vi.fn(),
+  setCloseToTray: vi.fn(),
+  getStartInTray: vi.fn(),
+  setStartInTray: vi.fn(),
+  getDesktopThemeMode: vi.fn(),
+  setDesktopThemeMode: vi.fn(),
+  getDesktopLanguage: vi.fn(),
+  setDesktopLanguage: vi.fn()
+}));
+vi.mock('@tauri-apps/plugin-autostart', () => autostart);
+vi.mock('./actions/data', () => ({
+  DATA_ACTIONS: {
+    'open-data-folder': dataAction,
+    'empty-trash': dataAction,
+    'backup-now': dataAction,
+    'restore-backup': dataAction,
+    'export-vault': dataAction,
+    'import-notes': dataAction
+  }
+}));
+vi.mock('$lib/updater', () => ({ checkForUpdatesInteractively }));
+vi.mock('$lib/editor/source/split-available.svelte', () => ({
+  splitAvailable
+}));
+// The custom panels are heavy Svelte components pulling live stores; stub them
+// so the lazy loaders resolve to a placeholder without mounting anything.
+vi.mock('./customs/SignInForm.svelte', () => ({
+  default: { placeholder: 'sign-in' }
+}));
+vi.mock('./customs/HotkeysPanel.svelte', () => ({
+  default: { placeholder: 'hotkeys' }
 }));
 
 // Outside Tauri (the test environment), the desktop-only bindings take
@@ -147,6 +198,63 @@ describe('INFO_VALUES', () => {
   });
 });
 
+describe('SETTING_BINDINGS — appearance.mode validation', () => {
+  it('rejects an unknown theme mode', async () => {
+    await expect(
+      SETTING_BINDINGS['appearance.mode'].set('neon')
+    ).rejects.toThrow(/light, dark, or system/);
+  });
+});
+
+describe('SETTING_BINDINGS — Tauri (desktop) branches', () => {
+  const mockedIsTauri = vi.mocked(isTauri);
+  beforeEach(() => {
+    mockedIsTauri.mockReturnValue(true);
+    vi.mocked(getCloseToTray).mockResolvedValue(true);
+    vi.mocked(setCloseToTray).mockResolvedValue(undefined);
+    vi.mocked(getStartInTray).mockResolvedValue(true);
+    vi.mocked(setStartInTray).mockResolvedValue(undefined);
+    vi.mocked(getDesktopThemeMode).mockResolvedValue(DesktopThemeMode.Dark);
+    vi.mocked(setDesktopThemeMode).mockResolvedValue(undefined);
+    vi.mocked(getDesktopLanguage).mockResolvedValue('de');
+    vi.mocked(setDesktopLanguage).mockResolvedValue(undefined);
+    autostart.isEnabled.mockResolvedValue(true);
+    autostart.enable.mockResolvedValue(undefined);
+    autostart.disable.mockResolvedValue(undefined);
+  });
+
+  it('startOnLogin reads and writes the autostart plugin', async () => {
+    expect(await SETTING_BINDINGS['general.startOnLogin'].get()).toBe(true);
+    await SETTING_BINDINGS['general.startOnLogin'].set(true);
+    expect(autostart.enable).toHaveBeenCalled();
+    await SETTING_BINDINGS['general.startOnLogin'].set(false);
+    expect(autostart.disable).toHaveBeenCalled();
+  });
+
+  it('closeToTray / startInTray round-trip through desktop settings', async () => {
+    expect(await SETTING_BINDINGS['general.closeToTray'].get()).toBe(true);
+    await SETTING_BINDINGS['general.closeToTray'].set(true);
+    expect(setCloseToTray).toHaveBeenCalledWith(true);
+    expect(await SETTING_BINDINGS['general.startInTray'].get()).toBe(true);
+    await SETTING_BINDINGS['general.startInTray'].set(true);
+    expect(setStartInTray).toHaveBeenCalledWith(true);
+  });
+
+  it('appearance.mode reads the desktop theme and persists a change', async () => {
+    expect(await SETTING_BINDINGS['appearance.mode'].get()).toBe('dark');
+    await SETTING_BINDINGS['appearance.mode'].set('light');
+    expect(setDesktopThemeMode).toHaveBeenCalledWith('light');
+  });
+
+  it('language.code reads and writes the desktop language', async () => {
+    localStorage.clear();
+    const code = await SETTING_BINDINGS['language.code'].get();
+    expect(code).toBe('de');
+    await SETTING_BINDINGS['language.code'].set('en');
+    expect(setDesktopLanguage).toHaveBeenCalledWith('en');
+  });
+});
+
 describe('SETTING_ACTIONS', () => {
   it('exposes a handler for every data + update action id', () => {
     for (const id of [
@@ -160,5 +268,52 @@ describe('SETTING_ACTIONS', () => {
     ]) {
       expect(typeof SETTING_ACTIONS[id]).toBe('function');
     }
+  });
+
+  it('data actions delegate to DATA_ACTIONS and check-updates to the updater', async () => {
+    dataAction.mockReset().mockResolvedValue(undefined);
+    await SETTING_ACTIONS['empty-trash']();
+    expect(dataAction).toHaveBeenCalled();
+    await SETTING_ACTIONS['check-updates']();
+    expect(checkForUpdatesInteractively).toHaveBeenCalled();
+  });
+
+  it('every data-folder / backup / vault action routes through DATA_ACTIONS', async () => {
+    for (const id of [
+      'open-data-folder',
+      'backup-now',
+      'restore-backup',
+      'export-vault',
+      'import-notes'
+    ]) {
+      dataAction.mockClear().mockResolvedValue(undefined);
+      await SETTING_ACTIONS[id]();
+      expect(dataAction, id).toHaveBeenCalledOnce();
+    }
+  });
+});
+
+describe('CUSTOM_COMPONENT_LOADERS', () => {
+  it('lazy-loads the sign-in and hotkeys panels', async () => {
+    expect(await CUSTOM_COMPONENT_LOADERS['sign-in-form']()).toEqual({
+      placeholder: 'sign-in'
+    });
+    expect(await CUSTOM_COMPONENT_LOADERS['hotkeys-panel']()).toEqual({
+      placeholder: 'hotkeys'
+    });
+  });
+});
+
+describe('SETTING_OPTION_FILTERS', () => {
+  it('offers the split editor mode only when the viewport allows it', () => {
+    const filter = SETTING_OPTION_FILTERS['editor.defaultMode'];
+
+    splitAvailable.mockReturnValue(false);
+    expect(filter('split')).toBe(false);
+    // Non-split options are never gated on width.
+    expect(filter('wysiwyg')).toBe(true);
+
+    splitAvailable.mockReturnValue(true);
+    expect(filter('split')).toBe(true);
   });
 });

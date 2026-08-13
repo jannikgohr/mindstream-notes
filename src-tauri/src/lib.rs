@@ -35,6 +35,7 @@ pub mod notes_export;
 pub mod paths;
 pub mod pdf_export;
 pub mod pdf_text;
+pub mod plugins;
 pub mod profiles;
 pub mod search;
 pub mod serde_helpers;
@@ -228,6 +229,19 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .register_uri_scheme_protocol("mindstream", serve_asset_bytes)
+        // Reverse-proxy for plugin live previews (e.g. tinymist): serves the
+        // upstream frontend from our own origin with an app-theme background
+        // injected. Async because it does an HTTP fetch of the running server.
+        .register_asynchronous_uri_scheme_protocol(
+            plugins::preview_service::PREVIEW_SCHEME,
+            |ctx, request, responder| {
+                let app = ctx.app_handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    responder
+                        .respond(plugins::preview_service::proxy_preview_html(app, request).await);
+                });
+            },
+        )
         .setup(|app| {
             // Register a credential store before any auth code can hit
             // it — Entry::new() returns Error::NoDefaultStore otherwise.
@@ -326,6 +340,10 @@ pub fn run() {
             app.manage(data::TrashRetentionScheduler::new());
             data::spawn_retention_sweep(app.handle().clone());
 
+            // Registry of long-lived plugin preview servers (e.g. `tinymist
+            // preview`). Reaped on exit below so nothing is orphaned.
+            app.manage(plugins::preview_service::PreviewServiceRegistry::default());
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -369,6 +387,30 @@ pub fn run() {
             signatures::list_signatures,
             signatures::save_signature,
             signatures::delete_signature,
+            // Plugins (per-profile registry + integrity)
+            plugins::plugins_list,
+            plugins::plugins_get,
+            plugins::plugins_discover,
+            plugins::plugins_enable,
+            plugins::plugins_disable,
+            plugins::plugins_approve,
+            plugins::plugins_set_load_error,
+            plugins::plugins_remove,
+            plugins::plugins_read_file,
+            plugins::plugins_artifacts_status,
+            plugins::plugins_download_artifact,
+            plugins::plugins_read_artifact,
+            plugins::plugins_storage_read_text,
+            plugins::plugins_storage_write_text,
+            plugins::plugins_storage_delete,
+            plugins::plugins_storage_list,
+            plugins::plugins_native_tool_status,
+            plugins::plugins_run_native_tool,
+            plugins::plugins_run_script,
+            plugins::preview_service::plugins_native_service_status,
+            plugins::preview_service::plugins_preview_start,
+            plugins::preview_service::plugins_preview_update,
+            plugins::preview_service::plugins_preview_stop,
             // Profiles (vaults)
             profiles::list_profiles,
             profiles::create_profile,
@@ -480,12 +522,21 @@ pub fn run() {
     };
 
     app.run(|app, event| {
-        #[cfg(not(target_os = "macos"))]
-        let _ = (app, event);
+        // Reap any long-lived plugin preview servers so they don't outlive the
+        // app (e.g. a leftover `tinymist preview` holding a port).
+        if matches!(event, tauri::RunEvent::Exit) {
+            if let Some(registry) =
+                app.try_state::<plugins::preview_service::PreviewServiceRegistry>()
+            {
+                registry.shutdown_all();
+            }
+        }
         #[cfg(target_os = "macos")]
         if matches!(event, tauri::RunEvent::Reopen { .. }) {
             crate::tray::focus_main_window(app);
         }
+        #[cfg(not(target_os = "macos"))]
+        let _ = app;
     });
 }
 

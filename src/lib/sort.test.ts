@@ -5,13 +5,14 @@ import type { NoteSummary, TreeNode } from './api';
 const note = (
   id: string,
   title: string,
-  modified = '2024-01-01T00:00:00Z'
+  modified = '2024-01-01T00:00:00Z',
+  created = modified
 ): NoteSummary => ({
   id,
   parent_collection_id: null,
   title,
   position: 0,
-  created: modified,
+  created,
   modified,
   tags: [],
   trashed: false,
@@ -100,6 +101,50 @@ describe('sortTree', () => {
     ];
     const out = sortTree(tree, 'modified', ctx, 'desc');
     expect(out.map((n) => n.id)).toEqual(['n2', 'n3', 'n1']);
+  });
+
+  it('created asc: oldest-created first, independent of modified time', () => {
+    const ctx = {
+      notesById: {
+        // Modified order is deliberately the reverse of created order to
+        // prove the strategy reads `created`, not `modified`.
+        n1: note('n1', 'first', '2024-12-01T00:00:00Z', '2020-01-01T00:00:00Z'),
+        n2: note('n2', 'third', '2024-06-01T00:00:00Z', '2024-01-01T00:00:00Z'),
+        n3: note('n3', 'second', '2024-01-01T00:00:00Z', '2022-01-01T00:00:00Z')
+      }
+    };
+    const tree: TreeNode[] = [
+      noteNode('n2', 'third'),
+      noteNode('n1', 'first'),
+      noteNode('n3', 'second')
+    ];
+    const out = sortTree(tree, 'created', ctx, 'asc');
+    expect(out.map((n) => n.id)).toEqual(['n1', 'n3', 'n2']);
+  });
+
+  it('created desc: newest-created first', () => {
+    const ctx = {
+      notesById: {
+        n1: note('n1', 'first', '2020-01-01T00:00:00Z', '2020-01-01T00:00:00Z'),
+        n2: note('n2', 'third', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
+        n3: note('n3', 'second', '2022-01-01T00:00:00Z', '2022-01-01T00:00:00Z')
+      }
+    };
+    const tree: TreeNode[] = [
+      noteNode('n1', 'first'),
+      noteNode('n2', 'third'),
+      noteNode('n3', 'second')
+    ];
+    const out = sortTree(tree, 'created', ctx, 'desc');
+    expect(out.map((n) => n.id)).toEqual(['n2', 'n3', 'n1']);
+  });
+
+  it('created: falls back to name order when a node is not a note', () => {
+    // Two folders under the `created` strategy exercise the non-note guard
+    // in the comparator (folders have no created timestamp).
+    const tree: TreeNode[] = [folder('f2', 'zeta'), folder('f1', 'alpha')];
+    const out = sortTree(tree, 'created', { notesById: {} }, 'asc');
+    expect(out.map((n) => n.name)).toEqual(['alpha', 'zeta']);
   });
 
   it('alphabetical desc: reverses A→Z to Z→A', () => {

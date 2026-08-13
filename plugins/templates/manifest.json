@@ -1,0 +1,80 @@
+{
+  "id": "com.mindstream.templates.core",
+  "name": "Templates",
+  "version": "1.0.0",
+  "author": "Mindstream",
+  "runtime": "luau",
+  "entry": "main.luau",
+  "descriptionKey": "plugin.description",
+  "icon": "icons/templates.svg",
+  "permissions": ["notes.read", "notes.create"],
+  "contributes": {
+    "documentation": [
+      { "file": "docs/getting-started.md" },
+      { "file": "docs/placeholders.md" }
+    ],
+    "toolbar": [
+      {
+        "id": "new-from-template",
+        "location": "file-tree",
+        "labelKey": "toolbar.newFromTemplate",
+        "icon": "icons/templates.svg",
+        "action": { "type": "script", "export": "newFromTemplate" }
+      }
+    ],
+    "i18n": {
+      "en": {
+        "plugin.description": "Reusable templates from your own notes.",
+        "toolbar.newFromTemplate": "New from template",
+        "settings.sources.title": "Template sources",
+        "settings.sourceFolder.label": "Template folder",
+        "settings.sourceFolder.description": "Every note inside this folder becomes a template, whatever its kind.",
+        "settings.sourceTag.label": "Template tag",
+        "settings.sourceTag.description": "Every note carrying this tag becomes a template, whatever its kind.",
+        "settings.openOnCreate.label": "Open new template notes",
+        "settings.openOnCreate.description": "Open a note in the editor right after creating it from a template"
+      },
+      "de": {
+        "plugin.description": "Wiederverwendbare Vorlagen aus deinen eigenen Notizen.",
+        "toolbar.newFromTemplate": "Neu aus Vorlage",
+        "settings.sources.title": "Vorlagenquellen",
+        "settings.sourceFolder.label": "Vorlagenordner",
+        "settings.sourceFolder.description": "Jede Notiz in diesem Ordner wird zu einer Vorlage, unabhängig von ihrer Art.",
+        "settings.sourceTag.label": "Vorlagen-Tag",
+        "settings.sourceTag.description": "Jede Notiz mit diesem Tag wird zu einer Vorlage, unabhängig von ihrer Art.",
+        "settings.openOnCreate.label": "Neue Vorlagennotizen öffnen",
+        "settings.openOnCreate.description": "Eine Notiz direkt nach dem Erstellen aus einer Vorlage im Editor öffnen"
+      }
+    },
+    "settings": [
+      {
+        "sectionId": "sources",
+        "titleKey": "settings.sources.title",
+        "settings": [
+          {
+            "id": "source-folder",
+            "labelKey": "settings.sourceFolder.label",
+            "descriptionKey": "settings.sourceFolder.description",
+            "scope": "V",
+            "type": "folder"
+          },
+          {
+            "id": "source-tag",
+            "labelKey": "settings.sourceTag.label",
+            "descriptionKey": "settings.sourceTag.description",
+            "scope": "V",
+            "type": "tag"
+          },
+          {
+            "id": "open-on-create",
+            "labelKey": "settings.openOnCreate.label",
+            "descriptionKey": "settings.openOnCreate.description",
+            "scope": "D",
+            "type": "toggle",
+            "default": true
+          }
+        ]
+      }
+    ]
+  }
+}

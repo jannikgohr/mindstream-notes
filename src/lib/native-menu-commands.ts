@@ -195,6 +195,7 @@ export function undoRedoCommandId(
     case 'freeform':
     case 'drawing':
     case 'kanban':
+    case 'plugin':
       return null;
   }
 }

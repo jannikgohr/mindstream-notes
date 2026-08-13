@@ -1,0 +1,242 @@
+{
+  "id": "com.mindstream.typst",
+  "name": "Typst",
+  "version": "0.1.0",
+  "author": "Mindstream",
+  "enabledByDefault": false,
+  "runtime": "luau",
+  "entry": "main.luau",
+  "descriptionKey": "plugin.description",
+  "icon": "icons/typst.svg",
+  "limits": {
+    "timeoutMs": 20000
+  },
+  "permissions": [
+    "templates.contribute",
+    "noteKinds.contribute",
+    "noteExporters.contribute",
+    "notes.create",
+    "nativeTools.runDeclared",
+    "nativeServices.run"
+  ],
+  "contributes": {
+    "documentation": [
+      { "file": "docs/getting-started.md" },
+      { "file": "docs/requirements.md" }
+    ],
+    "i18n": {
+      "en": {
+        "plugin.description": "Write and preview Typst documents as plugin-owned notes.",
+        "notes.document.label": "Typst document",
+        "notes.document.description": "Source-and-preview document notes owned by the Typst plugin.",
+        "templates.document.label": "Typst document",
+        "export.pdf.label": "PDF",
+        "native.typst.description": "Use the user-installed typst binary from PATH.",
+        "native.tinymist.description": "Use the user-installed tinymist binary for live preview with click-to-source.",
+        "settings.editor.title": "Editor",
+        "settings.defaultViewMode.label": "Default view mode",
+        "settings.partialRendering.label": "Partial rendering",
+        "settings.partialRendering.description": "Only render the pages currently in view. Improves live-preview scrolling on large documents. Takes effect the next time a preview opens.",
+        "viewMode.livePreview": "Live Preview",
+        "viewMode.source": "Source",
+        "viewMode.split": "Split"
+      },
+      "de": {
+        "plugin.description": "Typst-Dokumente als Plugin-Notizen schreiben und ansehen.",
+        "notes.document.label": "Typst-Dokument",
+        "notes.document.description": "Quelltext- und Vorschau-Notizen des Typst-Plugins.",
+        "templates.document.label": "Typst-Dokument",
+        "export.pdf.label": "PDF",
+        "native.typst.description": "Verwendet das vom Benutzer installierte typst-Binary aus PATH.",
+        "native.tinymist.description": "Verwendet das installierte tinymist-Binary fuer Live-Vorschau mit Klick-zur-Quelle.",
+        "settings.editor.title": "Editor",
+        "settings.defaultViewMode.label": "Standardansicht",
+        "settings.partialRendering.label": "Teilweises Rendern",
+        "settings.partialRendering.description": "Nur die aktuell sichtbaren Seiten rendern. Verbessert das Scrollen der Live-Vorschau bei großen Dokumenten. Wird beim nächsten Öffnen der Vorschau wirksam.",
+        "viewMode.livePreview": "Live-Vorschau",
+        "viewMode.source": "Quelltext",
+        "viewMode.split": "Geteilt"
+      }
+    },
+    "settings": [
+      {
+        "sectionId": "editor",
+        "titleKey": "settings.editor.title",
+        "settings": [
+          {
+            "id": "default-view-mode",
+            "labelKey": "settings.defaultViewMode.label",
+            "scope": "D",
+            "type": "select",
+            "default": "split",
+            "options": ["split", "source", "wysiwyg"],
+            "optionLabelKeys": {
+              "split": "viewMode.split",
+              "source": "viewMode.source",
+              "wysiwyg": "viewMode.livePreview"
+            }
+          },
+          {
+            "id": "partial-rendering",
+            "labelKey": "settings.partialRendering.label",
+            "descriptionKey": "settings.partialRendering.description",
+            "scope": "D",
+            "type": "toggle",
+            "default": true
+          }
+        ]
+      }
+    ],
+    "nativeTools": [
+      {
+        "id": "typst",
+        "binaryName": "typst",
+        "descriptionKey": "native.typst.description"
+      }
+    ],
+    "nativeServices": [
+      {
+        "id": "tinymist",
+        "binaryName": "tinymist",
+        "descriptionKey": "native.tinymist.description",
+        "args": [
+          "preview",
+          "--data-plane-host",
+          "127.0.0.1:{dataPort}",
+          "--control-plane-host",
+          "127.0.0.1:{controlPort}",
+          "--partial-rendering",
+          "{setting:partial-rendering}",
+          "--no-open",
+          "{input}"
+        ],
+        "dataUrl": "http://127.0.0.1:{dataPort}",
+        "controlUrl": "ws://127.0.0.1:{controlPort}",
+        "inputExtension": "typ",
+        "previewIframe": {
+          "mode": "themed",
+          "css": "preview.css",
+          "socketRewritePort": 23625
+        },
+        "protocol": {
+          "jumpEvent": "editorScrollTo"
+        }
+      }
+    ],
+    "sourceLanguages": [
+      {
+        "id": "typst",
+        "labelKey": "notes.document.label",
+        "aliases": ["typ"],
+        "extensions": ["typ"],
+        "provider": {
+          "type": "host",
+          "id": "typst"
+        }
+      }
+    ],
+    "noteKinds": [
+      {
+        "id": "document",
+        "labelKey": "notes.document.label",
+        "descriptionKey": "notes.document.description",
+        "icon": "icons/typst.svg",
+        "sourceLanguage": "typst",
+        "viewModePreviewIcon": "bookText",
+        "viewModeLabelKeys": {
+          "wysiwyg": "viewMode.livePreview",
+          "source": "viewMode.source",
+          "split": "viewMode.split"
+        },
+        "defaultTitle": "Untitled Typst document",
+        "defaultBody": "#set document(title: [Untitled])\n\n= Untitled\n\nStart writing in Typst here.",
+        "render": {
+          "export": "renderDocument",
+          "previewMime": "application/pdf",
+          "debounceMs": 300,
+          "requiresNativeTool": "typst",
+          "previewService": "tinymist"
+        }
+      }
+    ],
+    "noteTemplates": [
+      {
+        "id": "document",
+        "labelKey": "templates.document.label",
+        "noteKind": "plugin.com.mindstream.typst.document",
+        "titleTemplate": "Untitled Typst document",
+        "bodyTemplate": "#set document(title: [{{title}}])\n\n= {{title}}\n\nStart writing in Typst here."
+      }
+    ],
+    "noteExporters": [
+      {
+        "id": "pdf",
+        "labelKey": "export.pdf.label",
+        "noteKind": "plugin.com.mindstream.typst.document",
+        "format": "pdf",
+        "export": "exportDocument",
+        "requiresNativeTool": "typst"
+      }
+    ],
+    "toolbar": [
+      {
+        "id": "heading",
+        "location": "note-editor",
+        "noteKind": "document",
+        "toolbarItem": "h1",
+        "action": {
+          "type": "insertText",
+          "text": "= ",
+          "cursorOffset": 2
+        }
+      },
+      {
+        "id": "strong",
+        "location": "note-editor",
+        "noteKind": "document",
+        "toolbarItem": "bold",
+        "action": {
+          "type": "wrapSelection",
+          "before": "*",
+          "after": "*",
+          "placeholder": "strong"
+        }
+      },
+      {
+        "id": "emphasis",
+        "location": "note-editor",
+        "noteKind": "document",
+        "toolbarItem": "italic",
+        "action": {
+          "type": "wrapSelection",
+          "before": "_",
+          "after": "_",
+          "placeholder": "emphasis"
+        }
+      },
+      {
+        "id": "math",
+        "location": "note-editor",
+        "noteKind": "document",
+        "toolbarItem": "math",
+        "action": {
+          "type": "wrapSelection",
+          "before": "$ ",
+          "after": " $",
+          "placeholder": "x^2"
+        }
+      },
+      {
+        "id": "list",
+        "location": "note-editor",
+        "noteKind": "document",
+        "toolbarItem": "bullet",
+        "action": {
+          "type": "insertText",
+          "text": "- ",
+          "cursorOffset": 2
+        }
+      }
+    ]
+  }
+}

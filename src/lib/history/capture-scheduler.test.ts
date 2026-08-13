@@ -2,12 +2,27 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const captureCurrentNoteVersion =
   vi.fn<(noteId: string, action: string) => Promise<boolean>>();
+const captureNoteVersion =
+  vi.fn<
+    (
+      noteId: string,
+      noteKind: string,
+      action: string,
+      snapshot: string
+    ) => Promise<boolean>
+  >();
 const bumpNoteHistory = vi.fn<(noteId: string) => void>();
 const getSettingValue = vi.fn<(key: string) => unknown>();
 
 vi.mock('$lib/api/history', () => ({
   captureCurrentNoteVersion: (noteId: string, action: string) =>
-    captureCurrentNoteVersion(noteId, action)
+    captureCurrentNoteVersion(noteId, action),
+  captureNoteVersion: (
+    noteId: string,
+    noteKind: string,
+    action: string,
+    snapshot: string
+  ) => captureNoteVersion(noteId, noteKind, action, snapshot)
 }));
 vi.mock('$lib/stores/note-history-bridge.svelte', () => ({
   bumpNoteHistory: (noteId: string) => bumpNoteHistory(noteId)
@@ -34,6 +49,7 @@ function make(overrides: Partial<Parameters<typeof createHistoryCapture>[0]>) {
 beforeEach(() => {
   vi.useFakeTimers();
   captureCurrentNoteVersion.mockReset().mockResolvedValue(true);
+  captureNoteVersion.mockReset().mockResolvedValue(true);
   bumpNoteHistory.mockReset();
   getSettingValue.mockReset().mockReturnValue(undefined);
 });
@@ -171,6 +187,67 @@ describe('capture', () => {
 
     await history.capture('edited');
     expect(captureCurrentNoteVersion).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('explicit body snapshot', () => {
+  it('captures the provided text via captureNoteVersion when snapshot+noteKind are set', async () => {
+    let text = 'first';
+    const history = make({
+      snapshot: () => text,
+      noteKind: () => 'plugin.com.mindstream.typst.document' as never
+    });
+    history.schedule();
+    text = 'second';
+    await vi.advanceTimersByTimeAsync(HISTORY_IDLE_DEFAULT_S * 1000);
+
+    // The snapshot text is read when the capture fires, not when it was armed.
+    expect(captureNoteVersion).toHaveBeenCalledWith(
+      'note-1',
+      'plugin.com.mindstream.typst.document',
+      'edited',
+      'second'
+    );
+    expect(captureCurrentNoteVersion).not.toHaveBeenCalled();
+    expect(bumpNoteHistory).toHaveBeenCalledWith('note-1');
+  });
+
+  it('falls back to captureCurrentNoteVersion when no snapshot is provided', async () => {
+    const history = make({});
+    await history.capture('created');
+    expect(captureCurrentNoteVersion).toHaveBeenCalledWith('note-1', 'created');
+    expect(captureNoteVersion).not.toHaveBeenCalled();
+  });
+});
+
+describe('baseline', () => {
+  it('captures on a clean note, unlike a plain edited capture', async () => {
+    const history = make({});
+    await history.capture('edited');
+    expect(captureCurrentNoteVersion).not.toHaveBeenCalled();
+
+    await history.baseline();
+    expect(captureCurrentNoteVersion).toHaveBeenCalledWith('note-1', 'edited');
+  });
+
+  it('still respects readiness', async () => {
+    const history = make({ isReady: () => false });
+    await history.baseline();
+    expect(captureCurrentNoteVersion).not.toHaveBeenCalled();
+  });
+
+  it('uses the explicit body snapshot when provided', async () => {
+    const history = make({
+      snapshot: () => 'hello',
+      noteKind: () => 'plugin.com.mindstream.typst.document' as never
+    });
+    await history.baseline();
+    expect(captureNoteVersion).toHaveBeenCalledWith(
+      'note-1',
+      'plugin.com.mindstream.typst.document',
+      'edited',
+      'hello'
+    );
   });
 });
 

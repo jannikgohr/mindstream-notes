@@ -410,7 +410,7 @@ fn open_note_windows(app: &AppHandle) -> Vec<WindowEntry> {
             Some(WindowEntry { label, title })
         })
         .collect::<Vec<_>>();
-    entries.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
+    entries.sort_by_key(|entry| entry.title.to_lowercase());
     entries
 }
 

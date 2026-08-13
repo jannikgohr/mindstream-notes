@@ -10,8 +10,10 @@
 import { getSettingValue } from '$lib/settings/store.svelte';
 import {
   captureCurrentNoteVersion,
+  captureNoteVersion,
   type VersionAction
 } from '$lib/api/history';
+import type { NoteKind } from '$lib/api';
 import { bumpNoteHistory } from '$lib/stores/note-history-bridge.svelte';
 
 /** Idle delay used when the setting is missing or not a positive number. */
@@ -48,6 +50,18 @@ export interface HistoryCaptureOptions {
    * changed since the last capture.
    */
   snapshotNowRequiresDirty: boolean;
+  /**
+   * Explicit snapshot source for editors that have no Yjs doc of their own — a
+   * body-backed source note (e.g. a Typst document is edited as plain source in
+   * `body`). `snapshot()` returns the payload text and `noteKind()` its kind;
+   * the version is written with {@link captureNoteVersion} so the timeline holds
+   * the raw text, which the editor can restore without decoding a Yjs envelope.
+   * Omit both (the default) to let the backend snapshot the note's latest saved
+   * state via `captureCurrentNoteVersion`, which is what the markdown / Yjs
+   * editors want.
+   */
+  snapshot?: () => string;
+  noteKind?: () => NoteKind;
 }
 
 /** The configured idle delay in milliseconds. */
@@ -88,15 +102,26 @@ export function createHistoryCapture(options: HistoryCaptureOptions) {
 
   /**
    * Capture a version now. An `edited` capture is skipped when nothing
-   * has changed since the last one; explicit actions always capture.
+   * has changed since the last one (unless `force`); explicit actions always
+   * capture.
    */
-  async function capture(action: VersionAction) {
+  async function capture(action: VersionAction, force = false) {
     if (!options.isReady()) return;
-    if (action === 'edited' && !dirty) return;
+    if (action === 'edited' && !dirty && !force) return;
     dirty = false;
     try {
       const noteId = options.noteId();
-      const created = await captureCurrentNoteVersion(noteId, action);
+      // Body-backed editors hand us the snapshot text directly; everyone else
+      // lets the backend read the note's latest saved (Yjs) state.
+      const created =
+        options.snapshot && options.noteKind
+          ? await captureNoteVersion(
+              noteId,
+              options.noteKind(),
+              action,
+              options.snapshot()
+            )
+          : await captureCurrentNoteVersion(noteId, action);
       if (created) bumpNoteHistory(noteId);
     } catch (err) {
       console.debug(`[${options.label}] history capture failed`, err);
@@ -110,6 +135,16 @@ export function createHistoryCapture(options: HistoryCaptureOptions) {
     await capture('edited');
   }
 
+  /**
+   * Capture the current state as a starting point even when nothing is dirty —
+   * for baseline-on-open, so a note that's never edited still starts its
+   * timeline. The backend promotes a note's first version to 'created' and
+   * dedups, so reopening unchanged content is a no-op.
+   */
+  async function baseline() {
+    await capture('edited', true);
+  }
+
   /** Drop a pending capture without running it (component teardown). */
   function cancel() {
     clearTimer();
@@ -119,6 +154,7 @@ export function createHistoryCapture(options: HistoryCaptureOptions) {
     schedule,
     capture,
     snapshotNow,
+    baseline,
     cancel,
     get dirty() {
       return dirty;

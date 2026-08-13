@@ -27,7 +27,12 @@ export type SettingType =
   | 'keybinding'
   | 'button'
   | 'info'
-  | 'custom';
+  | 'custom'
+  // Live pickers whose choices come from the vault, not the schema. The stored
+  // value is a folder id / a tag string; both auto-clear when the target is
+  // deleted (see settings/pickers.svelte.ts). Reusable by any plugin setting.
+  | 'folder'
+  | 'tag';
 
 /** Conditional visibility based on another setting's value. */
 export interface ShowIf {
@@ -112,6 +117,16 @@ export interface ButtonSetting extends SettingBase {
 export interface InfoSetting extends SettingBase {
   type: 'info';
 }
+/** Picks a folder from the vault; stores the folder id (or '' when unset). */
+export interface FolderSetting extends SettingBase {
+  type: 'folder';
+  default?: string;
+}
+/** Picks a tag from the vault; stores the tag string (or '' when unset). */
+export interface TagSetting extends SettingBase {
+  type: 'tag';
+  default?: string;
+}
 export interface CustomSetting extends SettingBase {
   type: 'custom';
   customId: string;
@@ -128,7 +143,9 @@ export type Setting =
   | KeybindingSetting
   | ButtonSetting
   | InfoSetting
-  | CustomSetting;
+  | CustomSetting
+  | FolderSetting
+  | TagSetting;
 
 export interface Section {
   id: string;

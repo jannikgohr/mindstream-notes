@@ -5,17 +5,29 @@ import * as mod from './signatures.svelte';
 const {
   loadReusableSignatures,
   saveReusableSignature,
-  deleteReusableSignature
+  deleteReusableSignature,
+  isTauri,
+  emit,
+  listen
 } = vi.hoisted(() => ({
   loadReusableSignatures: vi.fn(),
   saveReusableSignature: vi.fn(),
-  deleteReusableSignature: vi.fn()
+  deleteReusableSignature: vi.fn(),
+  isTauri: vi.fn(() => true),
+  emit: vi.fn(),
+  listen: vi.fn()
 }));
 
 vi.mock('$lib/pdf/signature-storage', () => ({
   loadReusableSignatures,
   saveReusableSignature,
   deleteReusableSignature
+}));
+vi.mock('$lib/api', () => ({ isTauri }));
+vi.mock('$lib/api/events', () => ({
+  emit,
+  listen,
+  TauriEventName: { SignaturesChanged: 'signatures-changed' }
 }));
 
 const sig = (id: string): PdfSignatureSnapshot => ({
@@ -90,5 +102,38 @@ describe('removeSignature', () => {
     await mod.removeSignature('a');
     expect(mod.signatureLibrary.signatures.map((s) => s.id)).not.toContain('a');
     expect(deleteReusableSignature).toHaveBeenCalledWith('a');
+  });
+});
+
+describe('Tauri cross-window wiring + persistence errors', () => {
+  it('wires a cross-window listener and re-reads on the event', async () => {
+    await mod.ensureSignaturesLoaded();
+    expect(listen).toHaveBeenCalledWith(
+      'signatures-changed',
+      expect.any(Function)
+    );
+    // Firing the listener callback re-reads the store.
+    loadReusableSignatures.mockResolvedValueOnce([sig('z')]);
+    const cb = listen.mock.calls[0][1] as () => void;
+    cb();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mod.signatureLibrary.signatures.map((s) => s.id)).toEqual(['z']);
+  });
+
+  it('broadcasts a change after a successful add', async () => {
+    await mod.addSignature(sig('new'));
+    expect(emit).toHaveBeenCalledWith('signatures-changed', null);
+  });
+
+  it('swallows refresh/add/remove persistence failures', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    loadReusableSignatures.mockRejectedValueOnce(new Error('r'));
+    await expect(mod.refreshSignatures()).resolves.toBeUndefined();
+    saveReusableSignature.mockRejectedValueOnce(new Error('s'));
+    await expect(mod.addSignature(sig('n2'))).resolves.toBeUndefined();
+    deleteReusableSignature.mockRejectedValueOnce(new Error('d'));
+    await expect(mod.removeSignature('n2')).resolves.toBeUndefined();
+    warn.mockRestore();
   });
 });

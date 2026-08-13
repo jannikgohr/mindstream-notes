@@ -33,13 +33,14 @@
     globalShortcutSupportReason
   } from '$lib/hotkeys/format';
   import {
+    allHotkeyCommands,
     groupedCommands,
-    HOTKEY_COMMANDS,
     isGlobalShortcutCommand,
     isGlobalShortcutOnlyCommand,
     type CommandGroup,
     type CommandDefinition
   } from '$lib/hotkeys/catalogue';
+  import { pluginCommandLabel } from '$lib/plugins/hotkeys';
   import {
     findCommandByBinding,
     getBinding,
@@ -181,13 +182,14 @@
    * individual rows.
    */
   const anyCustomized = $derived(
-    HOTKEY_COMMANDS.some((c) => isCustomized(c.id))
+    allHotkeyCommands().some((c) => isCustomized(c.id))
   );
 
   /** Flat lookup so the conflict warning can render the OTHER
-   *  command's label without re-walking the groups array. */
+   *  command's label without re-walking the groups array. Includes plugin
+   *  commands present when the panel mounts. */
   const flatById = new Map<string, CommandDefinition>(
-    HOTKEY_COMMANDS.map((c) => [c.id, c])
+    allHotkeyCommands().map((c) => [c.id, c])
   );
 
   function groupLabel(group: DisplayCommandGroup): string {
@@ -200,7 +202,8 @@
   }
 
   function commandLabel(cmd: CommandDefinition): string {
-    return tUi(cmd.labelKey);
+    // Plugin command labels come from plugin i18n; built-ins from tUi.
+    return pluginCommandLabel(cmd.id) ?? tUi(cmd.labelKey);
   }
 
   function commandMatchesSearch(
@@ -478,7 +481,7 @@
     // Sequential rather than Promise.all so a write that fails can
     // stop on the exact command that needs feedback. Catalogue is
     // small (~17 entries) — the cost is invisible.
-    for (const cmd of HOTKEY_COMMANDS) {
+    for (const cmd of allHotkeyCommands()) {
       try {
         await resetBinding(cmd.id);
       } catch (err) {

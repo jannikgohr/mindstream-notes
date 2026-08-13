@@ -277,6 +277,23 @@ function list(kind: PrefixKind) {
     applyEdit(view, (doc, from, to) => toggleListPrefix(doc, from, to, kind));
 }
 
+/**
+ * Insert raw markdown text at the caret of the source editor, replacing any
+ * selection and leaving the caret after the inserted text. Backs the command
+ * palette's "Insert template into note" action when the Source surface is
+ * active — the text flows back into the Yjs doc through NoteEditor's
+ * source→doc sync, exactly like the block inserters above.
+ */
+export function insertSourceMarkdown(view: EditorView, markdown: string): void {
+  if (!markdown) return;
+  const { from, to } = view.state.selection.main;
+  view.dispatch({
+    changes: { from, to, insert: markdown },
+    selection: { anchor: from + markdown.length }
+  });
+  view.focus();
+}
+
 const doUndo = (view: EditorView) => {
   undo(view);
   view.focus();

@@ -79,6 +79,14 @@ export interface EditorListener {
    */
   noteId?: string;
   onCommand: (commandId: string) => boolean | void;
+  /**
+   * Insert a markdown snippet at the editor's current selection, if the
+   * editor supports it. Distinct from `onCommand` because it carries a
+   * payload (the markdown) rather than a fixed command id. Backs the command
+   * palette's "Insert template into note" action; editors that can't insert
+   * (or aren't markdown) simply omit it. Returns `true` when it inserted.
+   */
+  insertMarkdown?: (markdown: string) => boolean | void;
 }
 
 /** App-level editor command ids that route to whichever editor is active. */
@@ -211,6 +219,35 @@ export function runActiveEditorCommand(
     return target.onCommand(commandId) !== false;
   } catch (err) {
     console.error('[hotkeys] runActiveEditorCommand threw', commandId, err);
+    return false;
+  }
+}
+
+/**
+ * Insert markdown at the cursor of the active note's editor.
+ *
+ * Same targeting rules as `runActiveEditorCommand`: with `noteId` provided we
+ * only target that note's editor (so a background tab can't receive the
+ * insert); omit it to fall back to the focus-stack top. Returns `true` only
+ * when an editor actually performed the insert — the palette uses that to know
+ * whether the action landed. No-ops (returns `false`) when the active editor
+ * doesn't support insertion.
+ */
+export function insertMarkdownIntoActiveNote(
+  markdown: string,
+  noteId?: string | null
+): boolean {
+  const target =
+    noteId === undefined
+      ? activeEditor()
+      : noteId
+        ? editorForNote(noteId)
+        : null;
+  if (!target || !target.insertMarkdown) return false;
+  try {
+    return target.insertMarkdown(markdown) !== false;
+  } catch (err) {
+    console.error('[hotkeys] insertMarkdownIntoActiveNote threw', err);
     return false;
   }
 }

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { PanelLeft, PanelRight } from '@lucide/svelte';
+  import { PanelLeft, PanelRight, SquareChevronRight } from '@lucide/svelte';
   import { Search as SearchIcon, Settings as SettingsIcon } from '@jis3r/icons';
   import { Button } from '$lib/components/ui/button';
   import { Separator } from '$lib/components/ui/separator';
@@ -11,6 +11,7 @@
   import { ui, toggleLeftSidebar, toggleRightSidebar } from '$lib/state.svelte';
   import { openSettings } from '$lib/settings/store.svelte';
   import { openSearch } from '$lib/search/store.svelte';
+  import { openCommandPalette } from '$lib/command-palette/store.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
   import {
     initWindowChrome,
@@ -69,6 +70,15 @@
   <Button
     variant="ghost"
     size="icon"
+    onclick={openCommandPalette}
+    title={tUi('commandPalette.open')}
+    aria-label={tUi('commandPalette.open')}
+  >
+    <SquareChevronRight class="size-4" />
+  </Button>
+  <Button
+    variant="ghost"
+    size="icon"
     onclick={openSearch}
     title={tUi('search.open')}
     aria-label={tUi('search.open')}
@@ -79,7 +89,7 @@
   <Button
     variant="ghost"
     size="icon"
-    onclick={openSettings}
+    onclick={() => openSettings()}
     title="Settings"
     aria-label="Open settings"
   >

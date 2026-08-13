@@ -17,7 +17,7 @@
   import { Folder, Search as SearchIcon, X } from '@lucide/svelte';
   import { searchNotes, type SearchHit } from '$lib/api';
   import { splitByRanges } from '$lib/api/search-matcher';
-  import { noteKindIcon } from '$lib/components/note-kind-icon';
+  import NoteKindIcon from '$lib/components/NoteKindIcon.svelte';
   import { folderPathLabel } from '$lib/notes/folder-path';
   import { requestOpenNote } from '$lib/stores/open-note-intent.svelte';
   import { tree } from '$lib/stores/tree.svelte';
@@ -204,7 +204,6 @@
             {#each hits as hit, i (hit.note.id)}
               {@const isActive = i === selectedIndex}
               {@const path = pathLabel(hit.note.parent_collection_id)}
-              {@const Icon = noteKindIcon(hit.note.note_kind)}
               {@const titleParts = splitByRanges(
                 hit.note.title,
                 hit.note.title.length > 0 ? hit.title_matches : []
@@ -224,7 +223,10 @@
                     : 'border-transparent text-foreground hover:bg-accent/60'}"
                 >
                   <span class="flex w-full items-center gap-2">
-                    <Icon class="size-4 shrink-0 text-muted-foreground" />
+                    <NoteKindIcon
+                      kind={hit.note.note_kind}
+                      class="size-4 shrink-0 text-muted-foreground"
+                    />
                     <span class="truncate font-medium">
                       {#each titleParts as part}
                         {#if part.highlight}

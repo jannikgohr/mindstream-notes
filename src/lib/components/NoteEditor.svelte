@@ -46,6 +46,7 @@
   import { buildCrepe } from '$lib/editor/crepe-setup';
   import { minimalDocDiff } from '$lib/editor/doc-diff';
   import { seedDeterministicTemplate } from '$lib/editor/seed-template';
+  import { insertMarkdownAtSelection } from '$lib/editor/insert-markdown';
   import { ensureDropIndicatorAlignment } from '$lib/editor/drop-indicator-align';
   import { collabCredentialsChangedForNote } from '$lib/sync/collab-credentials';
   import {
@@ -65,7 +66,10 @@
   import { MARKDOWN_ACTIONS } from '$lib/hotkeys/markdown-actions';
   import SourceEditor from '$lib/editor/source/SourceEditor.svelte';
   import EditorModeToggle from '$lib/editor/source/EditorModeToggle.svelte';
-  import { SOURCE_ACTIONS } from '$lib/editor/source/source-actions';
+  import {
+    SOURCE_ACTIONS,
+    insertSourceMarkdown
+  } from '$lib/editor/source/source-actions';
   import {
     coerceViewMode,
     nextViewMode,
@@ -561,6 +565,31 @@
               return true;
             } catch (err) {
               console.error('[NoteEditor] command threw', id, err);
+              return false;
+            }
+          },
+          // Drop a markdown snippet (e.g. a template body) at the caret.
+          // Routes to whichever surface is active: raw text into CodeMirror
+          // when Source is showing, parsed blocks into ProseMirror otherwise.
+          insertMarkdown: (markdown: string) => {
+            if (activeSurface === 'source') {
+              const view = sourceEditor?.getView() ?? null;
+              if (!view) return false;
+              try {
+                insertSourceMarkdown(view, markdown);
+                return true;
+              } catch (err) {
+                console.error('[NoteEditor] source insert threw', err);
+                return false;
+              }
+            }
+            try {
+              activeCrepe.editor.action((ctx) =>
+                insertMarkdownAtSelection(ctx, markdown)
+              );
+              return true;
+            } catch (err) {
+              console.error('[NoteEditor] insert threw', err);
               return false;
             }
           }

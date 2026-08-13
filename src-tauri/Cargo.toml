@@ -4,7 +4,7 @@ version = "0.1.13"
 description = "Local-first modern markdown-based E2EE collaborative note-taking app"
 authors = ["Jannik Gohr"]
 edition = "2021"
-rust-version = "1.88"
+rust-version = "1.95"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/jannikgohr/mindstream-notes"
 
@@ -79,9 +79,30 @@ flate2 = "1"
 # Markdown-noise stripping for the canonical word count (see
 # src/content_stats.rs), shared by the sidebar stat and the history delta.
 regex = "1"
+ed25519-dalek = "3.0.0"
 
+# Sandboxed Luau runtime for scripted plugins (see src/plugins/luau.rs). Luau
+# (Roblox's Lua fork) is built to run untrusted scripts: its stdlib is curated
+# (no ffi, no io, no os.execute), and it exposes an interrupt hook + memory cap
+# we use to bound CPU time and memory. Runs in the backend, never the WebView.
+mlua = { version = "0.10", features = ["luau", "vendored", "serialize"] }
+include_dir = "0.7.4"
+# Pure-Rust WebAssembly interpreter for scripted plugins. We use the same
+# runtime on desktop and mobile so the plugin ABI behaves consistently; no WASI
+# imports are linked, and host APIs are installed explicitly per permission.
+wasmi = { version = "1.1.0", default-features = false, features = ["std", "extra-checks"] }
+
+[dev-dependencies]
+wat = "1"
+
+# NOTE: panic = "unwind" (the default) is deliberate, not an omission. The app
+# runs untrusted plugin code and applies CRDT edits inside the WebView IPC FFI
+# callback; we rely on `catch_unwind` (yrs edits) and `spawn_blocking` panic
+# isolation (plugin runtimes) so a fault degrades to an error / auto-disabled
+# plugin instead of taking down the process. `panic = "abort"` would make those
+# guards no-ops and turn any panic into a hard crash. The size cost of unwinding
+# tables is accepted for that safety.
 [profile.release]
-panic = "abort"
 codegen-units = 1
 lto = true
 opt-level = "s"

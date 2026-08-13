@@ -14,6 +14,7 @@ export {
   activeEditor,
   searchActiveNote,
   runActiveEditorCommand,
+  insertMarkdownIntoActiveNote,
   SEARCH_ACTIVE_NOTE_COMMAND,
   APP_UNDO_COMMAND,
   APP_REDO_COMMAND,
@@ -22,6 +23,7 @@ export {
 
 export {
   HOTKEY_COMMANDS,
+  allHotkeyCommands,
   GLOBAL_SHORTCUT_COMMAND_IDS,
   GLOBAL_SHORTCUT_ONLY_COMMAND_IDS,
   COMMAND_BY_ID,
