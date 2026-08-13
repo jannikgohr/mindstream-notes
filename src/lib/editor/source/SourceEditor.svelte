@@ -42,9 +42,11 @@
   import { tags as t } from '@lezer/highlight';
   import {
     sourceAutoPair,
+    sourceDiagnostics,
     sourceUserMention,
     sourceWikilink
   } from '$lib/editor/plugins';
+  import type { SourceDiagnosticsOptions } from '$lib/editor/plugins';
   import type { WikilinkBridge } from '$lib/editor/plugins/wikilink-bridge.svelte';
   import type { UserMentionBridge } from '$lib/editor/plugins/user-mention-bridge.svelte';
   import {
@@ -87,6 +89,12 @@
      *  wikilinks above. Reactive. */
     userMentionsEnabled?: boolean;
     userMentionBridge?: UserMentionBridge | null;
+    /** `editor.spellcheck.enabled` — squiggles under misspellings. Reactive. */
+    diagnosticsEnabled?: boolean;
+    /** Runs the check; see `$lib/diagnostics/editor-diagnostics`. */
+    diagnosticsCheck?: SourceDiagnosticsOptions['check'] | null;
+    /** Opens the suggestion popover for a right-clicked diagnostic. */
+    onDiagnosticMenu?: SourceDiagnosticsOptions['onRequestMenu'];
   }
   let {
     getInitialText,
@@ -100,7 +108,10 @@
     wikilinksEnabled = false,
     wikilinkBridge = null,
     userMentionsEnabled = false,
-    userMentionBridge = null
+    userMentionBridge = null,
+    diagnosticsEnabled = false,
+    diagnosticsCheck = null,
+    onDiagnosticMenu = undefined
   }: Props = $props();
 
   let host: HTMLDivElement | null = $state(null);
@@ -309,6 +320,17 @@
     }
     if (userMentionsEnabled && userMentionBridge) {
       ext.push(sourceUserMention(userMentionBridge));
+    }
+    // Lives in the feature compartment so toggling the setting takes
+    // effect immediately here, unlike the WYSIWYG pane where Crepe can
+    // only apply feature flags at construction.
+    if (diagnosticsEnabled && diagnosticsCheck) {
+      ext.push(
+        sourceDiagnostics({
+          check: diagnosticsCheck,
+          onRequestMenu: onDiagnosticMenu
+        })
+      );
     }
     return ext;
   }

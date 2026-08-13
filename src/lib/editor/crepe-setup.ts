@@ -26,9 +26,11 @@ import { collab } from '@milkdown/plugin-collab';
 import { listener } from '@milkdown/kit/plugin/listener';
 import type { AssetBridge } from '$lib/assets/bridge';
 import { tUi } from '$lib/settings/i18n.svelte';
+import { $prose } from '@milkdown/kit/utils';
 import {
   addMermaidMenuItem,
   autoPair,
+  diagnosticsPlugin,
   installBlockHandleGuard,
   installSelectionToolbarAutoHide,
   isEmptyParagraph,
@@ -40,6 +42,7 @@ import {
   userMentionPlugins,
   wikilinkPlugins,
   type MarkdownSearchBridge,
+  type ProseDiagnosticsOptions,
   type UserMentionBridge,
   type WikilinkBridge
 } from './plugins';
@@ -59,6 +62,16 @@ export interface CrepeSetupOptions {
   mobile: boolean;
   /** Bundles the KaTeX node + tooltip. Off → math syntax shows raw. */
   mathEnabled: boolean;
+  /**
+   * Spellcheck / grammar squiggles. Like Crepe's own feature flags this
+   * is read once at construction — the plugin is skipped entirely when
+   * off, so a disabled checker costs nothing per keystroke.
+   */
+  diagnosticsEnabled?: boolean;
+  /** Runs the check; see $lib/diagnostics/editor-diagnostics. */
+  diagnosticsCheck?: ProseDiagnosticsOptions['check'];
+  /** Opens the suggestion popover for a right-clicked diagnostic. */
+  onDiagnosticMenu?: ProseDiagnosticsOptions['onRequestMenu'];
   /** When false, the auto-pair plugin isn't even registered. */
   autoPairEnabled: boolean;
   /**
@@ -289,6 +302,19 @@ export function buildCrepe(opts: CrepeSetupOptions): Crepe {
     }
   }
   if (opts.autoPairEnabled) crepe.editor.use(autoPair);
+
+  // Diagnostics last: it only decorates and never handles input, so it
+  // cannot shadow the plugins above.
+  if (opts.diagnosticsEnabled && opts.diagnosticsCheck) {
+    crepe.editor.use(
+      $prose(() =>
+        diagnosticsPlugin({
+          check: opts.diagnosticsCheck!,
+          onRequestMenu: opts.onDiagnosticMenu
+        })
+      )
+    );
+  }
 
   return crepe;
 }

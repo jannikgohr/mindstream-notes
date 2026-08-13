@@ -21,6 +21,7 @@
 //! Multilingual rule: a word is correct if ANY enabled dictionary accepts
 //! it. No language detection, no per-paragraph guessing.
 
+mod catalogue;
 mod dictionary;
 
 use std::collections::HashMap;
@@ -33,6 +34,7 @@ use tauri::{AppHandle, Manager, Runtime};
 use crate::error::{AppError, AppResult, CommandResult};
 use crate::paths::app_data_root;
 
+pub use catalogue::{CatalogueEntry, CATALOGUE};
 pub use dictionary::{decode_dictionary_file, load_dictionary, retag_utf8, sniff_encoding};
 
 /// How many dictionaries stay resident.
@@ -293,4 +295,59 @@ mod tests {
         resident.touch(&oldest);
         assert_eq!(resident.order.first().unwrap(), &oldest);
     }
+}
+
+/// Everything the settings UI needs to offer a dictionary: what it is, its
+/// licence, where it came from, and whether it is already installed.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AvailableDictionary {
+    pub id: String,
+    pub bcp47: String,
+    pub license: String,
+    pub source_url: String,
+    pub installed: bool,
+}
+
+#[tauri::command]
+pub async fn spellcheck_available_dictionaries(
+    app: AppHandle,
+) -> CommandResult<Vec<AvailableDictionary>> {
+    let dir = dictionary_dir(&app)?;
+    let installed = installed_dictionaries(&dir)?;
+
+    Ok(catalogue::CATALOGUE
+        .iter()
+        .map(|entry| AvailableDictionary {
+            id: entry.id.to_string(),
+            bcp47: entry.bcp47.to_string(),
+            license: entry.license.to_string(),
+            source_url: catalogue::source_url(entry),
+            installed: installed.iter().any(|held| held.id == entry.id),
+        })
+        .collect())
+}
+
+/// Download and install a dictionary. Network happens only here — checking
+/// never touches the network.
+#[tauri::command]
+pub async fn spellcheck_install_dictionary(app: AppHandle, id: String) -> CommandResult<()> {
+    let dir = dictionary_dir(&app)?;
+    catalogue::install(&dir, &id).await?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn spellcheck_remove_dictionary(app: AppHandle, id: String) -> CommandResult<()> {
+    let dir = dictionary_dir(&app)?;
+    catalogue::remove(&dir, &id)?;
+
+    // Drop it from memory too, or it would keep answering checks until the
+    // app restarts and the user would think the removal silently failed.
+    let resident = app.state::<SpellcheckState>().inner.clone();
+    if let Ok(mut guard) = resident.lock() {
+        guard.dictionaries.remove(&id);
+        guard.order.retain(|held| held != &id);
+    }
+    Ok(())
 }
