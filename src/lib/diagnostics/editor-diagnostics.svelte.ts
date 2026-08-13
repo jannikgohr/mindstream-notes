@@ -53,15 +53,38 @@ export function spellcheckLanguages(): string[] {
 }
 
 /**
- * Drop every memoized verdict.
+ * Editors that want telling when their results go stale.
  *
- * Called when the installed dictionaries change: the cache is keyed by the
- * selected languages, not by what is on disk, so installing German would
- * otherwise leave every previously-checked paragraph showing the verdicts it
- * got when German was missing.
+ * A plugin can see its own document change and re-check itself. It cannot
+ * see the language selection change or a dictionary finish installing, and
+ * both silently change the answer for text that has not been touched.
+ */
+const listeners = new Set<() => void>();
+
+export function subscribeDiagnosticsInvalidated(
+  recheck: () => void
+): () => void {
+  listeners.add(recheck);
+  return () => listeners.delete(recheck);
+}
+
+/**
+ * Drop every memoized verdict and ask every open editor to re-check.
+ *
+ * Two distinct staleness problems, one call:
+ *
+ *   - the CACHE is keyed by the selected languages, so installing a
+ *     dictionary does not change the key even though it changes the answer;
+ *   - the DRAWN squiggles were computed under the previous configuration and
+ *     nothing in the document has changed to trigger a redraw.
+ *
+ * Missing the second is what left German words underlined after German was
+ * enabled, each suggesting its own spelling back — the squiggle was stale
+ * while the suggestion lookup was live.
  */
 export function invalidateDiagnostics(): void {
   bus.clearCache();
+  for (const listener of listeners) listener();
 }
 
 /**

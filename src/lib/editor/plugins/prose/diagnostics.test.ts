@@ -13,7 +13,14 @@
 
 import { describe, expect, it } from 'vitest';
 import { Schema, type Node as ProseNode } from '@milkdown/kit/prose/model';
-import { analyzeDocument, diagnosticDecorations } from './diagnostics';
+import { EditorState } from '@milkdown/kit/prose/state';
+import { DecorationSet, EditorView } from '@milkdown/kit/prose/view';
+import {
+  analyzeDocument,
+  diagnosticDecorations,
+  diagnosticsPlugin,
+  diagnosticsPluginKey
+} from './diagnostics';
 import type { Diagnostic } from '$lib/diagnostics/types';
 import { noteHref } from '../wikilink-href';
 import { userHref } from '../user-mention-href';
@@ -185,5 +192,129 @@ describe('diagnosticDecorations', () => {
     expect(diagnosticDecorations(d, [diag({ from: 4, to: 2 })]).find()).toEqual(
       []
     );
+  });
+});
+
+/**
+ * Lifecycle regressions, both from real bugs.
+ *
+ * A plugin can see its own document change and re-check. It cannot see the
+ * language selection change or a dictionary finish installing — and both
+ * change the verdict for text nobody has touched. The first version only
+ * re-checked on `docChanged`, so enabling German left every German word
+ * underlined, each one "correcting" to its own spelling: the squiggle was
+ * stale while the suggestion lookup was live.
+ */
+describe('diagnosticsPlugin lifecycle', () => {
+  interface Harness {
+    view: EditorView;
+    invalidate: () => void;
+    setEnabled: (value: boolean) => void;
+    checks: number;
+    decorationCount: () => number;
+  }
+
+  function mount(text: string, startEnabled = true): Harness {
+    const listeners = new Set<() => void>();
+    let enabled = startEnabled;
+    const harness = {
+      checks: 0
+    } as Harness;
+
+    const plugin = diagnosticsPlugin({
+      debounceMs: 0,
+      enabled: () => enabled,
+      subscribeInvalidate: (recheck) => {
+        listeners.add(recheck);
+        return () => listeners.delete(recheck);
+      },
+      check: async (segments) => {
+        harness.checks += 1;
+        // Flag the whole of every segment, so any check produces exactly
+        // one decoration per paragraph.
+        return segments.map((segment) => ({
+          from: segment.from,
+          to: segment.to,
+          kind: 'spelling' as const,
+          message: 'x',
+          replacements: [],
+          source: 'test'
+        }));
+      }
+    });
+
+    const host = document.createElement('div');
+    document.body.append(host);
+    const view = new EditorView(host, {
+      state: EditorState.create({ doc: doc(para(t(text))), plugins: [plugin] })
+    });
+
+    harness.view = view;
+    harness.invalidate = () => listeners.forEach((listener) => listener());
+    harness.setEnabled = (value) => {
+      enabled = value;
+    };
+    harness.decorationCount = () =>
+      (diagnosticsPluginKey.getState(view.state) ?? DecorationSet.empty).find()
+        .length;
+    return harness;
+  }
+
+  /** The plugin schedules on a timer and then awaits the check. */
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
+
+  it('checks once on open without needing an edit', async () => {
+    const h = mount('hello world');
+    await settle();
+    expect(h.checks).toBe(1);
+    expect(h.decorationCount()).toBe(1);
+    h.view.destroy();
+  });
+
+  it('re-checks when invalidated, with no document change', async () => {
+    const h = mount('hello world', false);
+    await settle();
+    expect(h.decorationCount()).toBe(0);
+
+    // The user enables a language: nothing in the document changed.
+    h.setEnabled(true);
+    h.invalidate();
+    await settle();
+
+    expect(h.decorationCount()).toBe(1);
+    h.view.destroy();
+  });
+
+  it('clears what it drew when checking is turned off', async () => {
+    const h = mount('hello world');
+    await settle();
+    expect(h.decorationCount()).toBe(1);
+
+    h.setEnabled(false);
+    h.invalidate();
+    await settle();
+
+    // Leaving stale squiggles after the feature is switched off is worse
+    // than never having drawn them.
+    expect(h.decorationCount()).toBe(0);
+    h.view.destroy();
+  });
+
+  it('does not call the checker at all while disabled', async () => {
+    const h = mount('hello world', false);
+    await settle();
+    expect(h.checks).toBe(0);
+    h.view.destroy();
+  });
+
+  it('stops listening once destroyed', async () => {
+    const h = mount('hello world');
+    await settle();
+    const before = h.checks;
+    h.view.destroy();
+
+    h.invalidate();
+    await settle();
+    expect(h.checks).toBe(before);
   });
 });

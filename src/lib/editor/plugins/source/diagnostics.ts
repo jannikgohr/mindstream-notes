@@ -116,6 +116,10 @@ const diagnosticsField = StateField.define<{
 export interface SourceDiagnosticsOptions {
   check(segments: Segment[], signal: AbortSignal): Promise<Diagnostic[]>;
   debounceMs?: number;
+  /** See the prose plugin: read per check so the setting applies live. */
+  enabled?(): boolean;
+  /** See the prose plugin: language and dictionary changes are invisible here. */
+  subscribeInvalidate?(recheck: () => void): () => void;
   /** See the prose plugin: `apply` is surface-specific, so the plugin owns it. */
   onRequestMenu?(
     diagnostic: Diagnostic,
@@ -136,10 +140,14 @@ export function sourceDiagnostics(
       timer: ReturnType<typeof setTimeout> | null = null;
       controller: AbortController | null = null;
 
+      unsubscribe: (() => void) | null = null;
+
       constructor(readonly view: EditorView) {
         // Check on open so an existing note shows its squiggles without
         // needing an edit first.
         this.schedule(0);
+        this.unsubscribe =
+          options.subscribeInvalidate?.(() => this.schedule(0)) ?? null;
       }
 
       update(update: ViewUpdate) {
@@ -149,6 +157,7 @@ export function sourceDiagnostics(
       destroy() {
         if (this.timer !== null) clearTimeout(this.timer);
         this.controller?.abort();
+        this.unsubscribe?.();
       }
 
       schedule(delay: number) {
@@ -158,6 +167,14 @@ export function sourceDiagnostics(
       }
 
       async run() {
+        if (options.enabled && !options.enabled()) {
+          // Clear rather than return — the user may have just switched it off.
+          const { diagnostics } = this.view.state.field(diagnosticsField);
+          if (diagnostics.length > 0) {
+            this.view.dispatch({ effects: setDiagnostics.of([]) });
+          }
+          return;
+        }
         this.controller = new AbortController();
         const { signal } = this.controller;
         const text = this.view.state.doc.toString();

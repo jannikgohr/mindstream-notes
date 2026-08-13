@@ -89,8 +89,14 @@
      *  wikilinks above. Reactive. */
     userMentionsEnabled?: boolean;
     userMentionBridge?: UserMentionBridge | null;
-    /** `editor.spellcheck.enabled` — squiggles under misspellings. Reactive. */
-    diagnosticsEnabled?: boolean;
+    /**
+     * `editor.spellcheck.enabled`, as a PREDICATE read per check so the
+     * setting applies to notes that are already open. Mirrors the WYSIWYG
+     * pane, which has no choice but to work this way.
+     */
+    diagnosticsEnabled?: (() => boolean) | null;
+    /** Lets the extension re-check when languages or dictionaries change. */
+    subscribeDiagnosticsInvalidated?: SourceDiagnosticsOptions['subscribeInvalidate'];
     /** Runs the check; see `$lib/diagnostics/editor-diagnostics`. */
     diagnosticsCheck?: SourceDiagnosticsOptions['check'] | null;
     /** Opens the suggestion popover for a right-clicked diagnostic. */
@@ -109,7 +115,8 @@
     wikilinkBridge = null,
     userMentionsEnabled = false,
     userMentionBridge = null,
-    diagnosticsEnabled = false,
+    diagnosticsEnabled = null,
+    subscribeDiagnosticsInvalidated = undefined,
     diagnosticsCheck = null,
     onDiagnosticMenu = undefined
   }: Props = $props();
@@ -321,13 +328,14 @@
     if (userMentionsEnabled && userMentionBridge) {
       ext.push(sourceUserMention(userMentionBridge));
     }
-    // Lives in the feature compartment so toggling the setting takes
-    // effect immediately here, unlike the WYSIWYG pane where Crepe can
-    // only apply feature flags at construction.
-    if (diagnosticsEnabled && diagnosticsCheck) {
+    // Registered unconditionally, like the WYSIWYG pane, so both surfaces
+    // answer the same question the same way.
+    if (diagnosticsCheck) {
       ext.push(
         sourceDiagnostics({
           check: diagnosticsCheck,
+          enabled: diagnosticsEnabled ?? undefined,
+          subscribeInvalidate: subscribeDiagnosticsInvalidated,
           onRequestMenu: onDiagnosticMenu
         })
       );
@@ -343,6 +351,10 @@
       syntaxHighlighting(highlight),
       theme,
       EditorView.lineWrapping,
+      // The webview's own spellchecker stays off here for the same reason
+      // as in the WYSIWYG pane (see crepe-setup.ts): one checker, one set
+      // of squiggles, reachable suggestions.
+      EditorView.contentAttributes.of({ spellcheck: 'false' }),
       keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
       placeholder(placeholderText),
       readonlyComp.of([

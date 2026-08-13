@@ -149,6 +149,28 @@ export interface ProseDiagnosticsOptions {
    */
   debounceMs?: number;
   /**
+   * Whether checking is currently on. Read at check time, not at
+   * construction: Crepe cannot add or remove a plugin after `create()`,
+   * so the plugin is always registered and asks each time instead. That
+   * is what lets the setting take effect on notes that are already open.
+   *
+   * When it returns false the plugin clears what it drew rather than
+   * merely stopping — leaving stale squiggles behind after the user turns
+   * the feature off is worse than never having drawn them.
+   */
+  enabled?(): boolean;
+  /**
+   * Subscribe to "your results are stale" notifications, returning an
+   * unsubscribe.
+   *
+   * The plugin can see the document change; it cannot see the language
+   * selection change or a dictionary get installed. Without this the
+   * squiggles from the previous configuration survive until the next
+   * keystroke — which is how enabling German left every German word
+   * underlined, each one 'correcting' to its own spelling.
+   */
+  subscribeInvalidate?(recheck: () => void): () => void;
+  /**
    * Called when the user right-clicks a diagnostic, to open the popover.
    *
    * `apply` is supplied by the plugin rather than the caller because only
@@ -181,6 +203,14 @@ export function diagnosticsPlugin(
   };
 
   async function run(view: EditorView) {
+    if (options.enabled && !options.enabled()) {
+      // Clear rather than return: the user may have just switched it off.
+      if (current.length > 0) {
+        current = [];
+        view.dispatch(view.state.tr.setMeta(diagnosticsPluginKey, current));
+      }
+      return;
+    }
     controller = new AbortController();
     const { signal } = controller;
     // Capture the doc the results will describe. If the user types while the
@@ -219,6 +249,13 @@ export function diagnosticsPlugin(
       // Check once on open so an existing note shows its squiggles without
       // requiring an edit first.
       const initial = setTimeout(() => run(view), 0);
+      // Settings and dictionary changes are invisible from inside the
+      // editor, so re-check immediately rather than on the next keystroke.
+      const unsubscribe = options.subscribeInvalidate?.(() => {
+        if (timer !== null) clearTimeout(timer);
+        controller?.abort();
+        void run(view);
+      });
       return {
         update(updatedView, prevState) {
           if (updatedView.state.doc.eq(prevState.doc)) return;
@@ -228,6 +265,7 @@ export function diagnosticsPlugin(
         },
         destroy() {
           clearTimeout(initial);
+          unsubscribe?.();
           cancel();
         }
       };
