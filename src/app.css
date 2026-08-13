@@ -1280,3 +1280,57 @@ body.dv-tab-dragging .freeform-canvas-host * {
   border-color: rgb(239 68 68 / 0.45);
   background: rgb(239 68 68 / 0.08);
 }
+
+/* -------------------------------------------------------------------------
+ * Text diagnostics
+ *
+ * Squiggles from `$lib/diagnostics`, drawn identically on both editing
+ * surfaces: the ProseMirror plugin (`plugins/prose/diagnostics.ts`) and the
+ * CodeMirror extension (`plugins/source/diagnostics.ts`) emit the same
+ * classes so a note looks the same in WYSIWYG, Source and Split.
+ *
+ * `text-decoration` rather than a background tint or a border: it is what
+ * every spellchecker the user has ever met looks like, it survives line
+ * wrapping, and it does not disturb line height. Colour comes from the
+ * theme tokens so both light and dark are covered without a second rule.
+ *
+ * Kinds are visually ranked by how confident the checker is. Spelling is a
+ * factual claim about a word and gets the loud red wavy line; grammar is a
+ * weaker claim and gets a calmer colour; style is advisory and gets a
+ * dotted line so it reads as a hint rather than an error.
+ * ------------------------------------------------------------------------- */
+
+.cm-diagnostic {
+  /* Skipping descenders keeps the wave legible under g/j/p/q/y. */
+  text-decoration-skip-ink: none;
+  text-underline-offset: 0.2em;
+}
+
+.diagnostic-spelling {
+  text-decoration: underline wavy var(--destructive);
+  text-decoration-thickness: from-font;
+}
+
+.diagnostic-grammar {
+  text-decoration: underline wavy var(--primary);
+  text-decoration-thickness: from-font;
+}
+
+.diagnostic-style {
+  text-decoration: underline dotted var(--muted-foreground);
+  text-decoration-thickness: 2px;
+}
+
+/* The popover is the only way to reach suggestions, so make the target
+   obvious on hover — the native context menu is suppressed in PROD. */
+.cm-diagnostic:hover {
+  cursor: context-menu;
+  background: color-mix(in oklch, var(--muted), transparent 40%);
+  border-radius: 2px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .cm-diagnostic {
+    transition: background 120ms ease;
+  }
+}
