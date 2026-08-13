@@ -37,8 +37,10 @@
   import { getSettingValue, settings } from '$lib/settings/store.svelte';
   import {
     checkSegments,
+    invalidateDiagnostics,
     spellcheckEnabled,
-    spellcheckLanguages
+    spellcheckLanguages,
+    subscribeDiagnosticsInvalidated
   } from '$lib/diagnostics/editor-diagnostics.svelte';
   import {
     openDiagnosticPopover,
@@ -142,11 +144,23 @@
   const mermaidEnabled = $derived(
     (getSettingValue('editor.mermaid') as boolean | undefined) ?? true
   );
-  // Spellcheck squiggles. The WYSIWYG pane reads this once when Crepe is
-  // constructed (Crepe cannot flip feature flags after create), so toggling
-  // it applies there on the next note open; the source pane reconfigures
-  // live through its feature compartment.
-  const diagnosticsEnabled = $derived(spellcheckEnabled());
+  // Spellcheck squiggles.
+  //
+  // The plugin is registered unconditionally on both surfaces and asks
+  // `enabled()` per check, rather than being gated at construction. Crepe
+  // cannot add or remove a plugin after `create()`, so gating there meant
+  // the setting only applied to notes opened afterwards — and any note
+  // already on screen kept whatever it had.
+  //
+  // Changing the language set or installing a dictionary changes the answer
+  // for text nobody has touched, which no editor can observe on its own, so
+  // it is pushed to them instead.
+  $effect(() => {
+    // Read both so the effect re-runs when either changes.
+    spellcheckEnabled();
+    spellcheckLanguages().join(',');
+    invalidateDiagnostics();
+  });
 
   // Shared by both surfaces: the plugin supplies the clicked word and a
   // writer for its own surface, so this handler stays surface-agnostic.
@@ -512,8 +526,9 @@
         currentUsername: () => authSession.current?.username ?? null,
         searchBridge,
         assetBridge,
-        diagnosticsEnabled,
         diagnosticsCheck: checkSegments,
+        diagnosticsEnabled: spellcheckEnabled,
+        subscribeDiagnosticsInvalidated,
         onDiagnosticMenu: handleDiagnosticMenu
       });
       await crepe.create();
@@ -1653,8 +1668,9 @@
             wikilinkBridge={sourceWikilinkBridge}
             {userMentionsEnabled}
             userMentionBridge={sourceUserMentionBridge}
-            {diagnosticsEnabled}
             diagnosticsCheck={checkSegments}
+            diagnosticsEnabled={spellcheckEnabled}
+            {subscribeDiagnosticsInvalidated}
             onDiagnosticMenu={handleDiagnosticMenu}
           />
         </div>
