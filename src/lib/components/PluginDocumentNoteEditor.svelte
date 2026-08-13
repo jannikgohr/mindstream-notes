@@ -1198,9 +1198,15 @@ parentWindow.postMessage({ type: 'mindstream-plugin-preview-ready' }, '*');
                 <div
                   class="h-full w-full overflow-hidden border border-border bg-white shadow-sm"
                 >
+                  <!-- aria-hidden: the preview is a visual mirror of the (accessible)
+                       source editor. Exposing its huge canvas a11y tree lets the
+                       Windows UIA client walk it on every scroll, which blocks the
+                       WebView2 browser-process UI thread and freezes all input. -->
                   <iframe
                     class="h-full w-full"
                     title="Live plugin preview"
+                    aria-hidden="true"
+                    tabindex="-1"
                     src={serviceIframeSrc}
                   ></iframe>
                 </div>
