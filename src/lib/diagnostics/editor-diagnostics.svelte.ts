@@ -17,7 +17,8 @@ import {
   SPELLCHECK_PROVIDER_ID
 } from './spellcheck-provider';
 import type { Diagnostic, Segment } from './types';
-import { spellcheckUnknownWords } from '$lib/api/spellcheck';
+import { spellcheckSuggest, spellcheckUnknownWords } from '$lib/api/spellcheck';
+import { rankSuggestions } from './suggestion-rank';
 import { getSettingValue } from '$lib/settings/store.svelte';
 import { tUi } from '$lib/settings/i18n.svelte';
 
@@ -103,4 +104,18 @@ export async function checkSegments(
   if (languages.length === 0) return [];
 
   return bus.check(segments, { languages, precedence: PRECEDENCE, signal });
+}
+
+/**
+ * Corrections for one word, best first.
+ *
+ * spellbook emits in generation order, which is not relevance order, so the
+ * result is re-ranked here — see `suggestion-rank.ts`. Deliberately applied
+ * to the dictionary path only: a provider that ships its own `replacements`
+ * has already ranked them by information we do not have.
+ */
+export async function suggestFor(word: string): Promise<string[]> {
+  const languages = spellcheckLanguages();
+  if (languages.length === 0) return [];
+  return rankSuggestions(word, await spellcheckSuggest(languages, word));
 }

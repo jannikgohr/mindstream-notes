@@ -40,13 +40,13 @@
     invalidateDiagnostics,
     spellcheckEnabled,
     spellcheckLanguages,
-    subscribeDiagnosticsInvalidated
+    subscribeDiagnosticsInvalidated,
+    suggestFor
   } from '$lib/diagnostics/editor-diagnostics.svelte';
   import {
     openDiagnosticPopover,
     type DiagnosticMenuContext
   } from '$lib/diagnostics/popover-bridge.svelte';
-  import { spellcheckSuggest } from '$lib/api/spellcheck';
   import type { Diagnostic } from '$lib/diagnostics/types';
   import { CollabProvider } from '$lib/sync/collab-provider';
   import { isMobile } from '$lib/platform';
@@ -171,7 +171,7 @@
   ) {
     openDiagnosticPopover(
       { diagnostic, x: event.clientX, y: event.clientY, ...context },
-      (word) => spellcheckSuggest(spellcheckLanguages(), word)
+      suggestFor
     );
   }
   const wikilinksEnabled = $derived(

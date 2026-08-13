@@ -22,8 +22,31 @@
   import { tUi } from '$lib/settings/i18n.svelte';
 
   let menu = $state<HTMLDivElement | null>(null);
+  let expanded = $state(false);
 
   const open = $derived(diagnosticPopover.current);
+
+  /**
+   * How many corrections to show before collapsing the rest.
+   *
+   * spellbook is generous — a short word can produce twenty candidates,
+   * which turns a menu meant for a glance into a scrolling list where the
+   * right answer is no easier to find than the wrong ones. Six covers the
+   * intended word in nearly every case now that the list is ranked, and
+   * the rest stay one click away rather than being discarded.
+   */
+  const VISIBLE_SUGGESTIONS = 6;
+
+  const all = $derived(diagnosticPopover.suggestions ?? []);
+  const shown = $derived(expanded ? all : all.slice(0, VISIBLE_SUGGESTIONS));
+  const hidden = $derived(all.length - shown.length);
+
+  // Collapse again whenever the popover moves to another word, or the
+  // next one opens already expanded for no reason.
+  $effect(() => {
+    void open;
+    expanded = false;
+  });
 
   /**
    * Keep the menu inside the viewport. A misspelling near the right or
@@ -91,12 +114,12 @@
         <p class="px-3 py-1.5 text-xs text-muted-foreground">
           {tUi('editor.spellcheck.menu.loading')}
         </p>
-      {:else if (diagnosticPopover.suggestions ?? []).length === 0}
+      {:else if all.length === 0}
         <p class="px-3 py-1.5 text-xs text-muted-foreground">
           {tUi('editor.spellcheck.menu.noSuggestions')}
         </p>
       {:else}
-        {#each diagnosticPopover.suggestions ?? [] as suggestion (suggestion)}
+        {#each shown as suggestion (suggestion)}
           <button
             type="button"
             role="menuitem"
@@ -106,6 +129,15 @@
             {suggestion}
           </button>
         {/each}
+        {#if hidden > 0}
+          <button
+            type="button"
+            class="block w-full px-3 py-1.5 text-left text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+            onclick={() => (expanded = true)}
+          >
+            {tUi('editor.spellcheck.menu.showAll')} ({all.length})
+          </button>
+        {/if}
       {/if}
     </div>
   </div>
