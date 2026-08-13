@@ -370,6 +370,9 @@ pub fn run() {
             spellcheck::spellcheck_unknown_words,
             spellcheck::spellcheck_suggest,
             spellcheck::spellcheck_installed_dictionaries,
+            spellcheck::spellcheck_available_dictionaries,
+            spellcheck::spellcheck_install_dictionary,
+            spellcheck::spellcheck_remove_dictionary,
             // Search
             search::search_notes,
             // PDF searchable-text index (derived, local-only)

@@ -20,17 +20,19 @@ use encoding_rs::Encoding;
 
 use crate::error::{AppError, AppResult};
 
-/// How much of the `.aff` to scan for the `SET` line. The directive appears
-/// in the first few lines, after a licence header at most.
-const SNIFF_BYTES: usize = 2048;
-
 /// The encoding declared by an `.aff` file's `SET` directive.
 ///
 /// Unknown encodings are an error rather than a silent fall back to UTF-8:
 /// falling back produces a dictionary that loads cleanly and is quietly
 /// wrong for exactly the accented words the user installed it for.
 pub fn sniff_encoding(aff_bytes: &[u8]) -> AppResult<&'static Encoding> {
-    let head = String::from_utf8_lossy(&aff_bytes[..aff_bytes.len().min(SNIFF_BYTES)]);
+    // Scans the WHOLE file rather than a fixed prefix. Licence headers are
+    // unbounded: upstream `it_IT` puts SET at byte 1396 and `da_DK` at 1216,
+    // so any window small enough to be worth having is also small enough to
+    // miss one — and missing it silently defaults to UTF-8, which is the
+    // exact failure this module exists to prevent. `SET` is ASCII, so a
+    // lossy decode cannot invent or destroy a match.
+    let head = String::from_utf8_lossy(aff_bytes);
     let declared = head
         .lines()
         .find_map(|line| line.strip_prefix("SET "))
@@ -129,6 +131,27 @@ mod tests {
     fn sniffs_latin1_when_declared() {
         let enc = sniff_encoding(b"# comment\nSET ISO8859-1\nTRY abc\n").unwrap();
         assert_eq!(enc, encoding_rs::WINDOWS_1252);
+    }
+
+    #[test]
+    fn finds_the_set_line_behind_a_long_licence_header() {
+        // Upstream it_IT carries ~1.4KB of licence text before SET.
+        let mut aff = "# licence blah blah
+"
+        .repeat(200);
+        aff.push_str(
+            "SET ISO8859-1
+TRY esiao
+",
+        );
+        assert!(
+            aff.len() > 2048,
+            "header must exceed any plausible sniff window"
+        );
+        assert_eq!(
+            sniff_encoding(aff.as_bytes()).unwrap(),
+            encoding_rs::WINDOWS_1252
+        );
     }
 
     #[test]

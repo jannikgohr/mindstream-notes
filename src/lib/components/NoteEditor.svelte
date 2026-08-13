@@ -35,6 +35,10 @@
     clearNoteStatus
   } from '$lib/stores/note-status.svelte';
   import { getSettingValue, settings } from '$lib/settings/store.svelte';
+  import {
+    checkSegments,
+    spellcheckEnabled
+  } from '$lib/diagnostics/editor-diagnostics.svelte';
   import { CollabProvider } from '$lib/sync/collab-provider';
   import { isMobile } from '$lib/platform';
   import {
@@ -130,6 +134,11 @@
   const mermaidEnabled = $derived(
     (getSettingValue('editor.mermaid') as boolean | undefined) ?? true
   );
+  // Spellcheck squiggles. The WYSIWYG pane reads this once when Crepe is
+  // constructed (Crepe cannot flip feature flags after create), so toggling
+  // it applies there on the next note open; the source pane reconfigures
+  // live through its feature compartment.
+  const diagnosticsEnabled = $derived(spellcheckEnabled());
   const wikilinksEnabled = $derived(
     (getSettingValue('editor.wikilinks') as boolean | undefined) ?? true
   );
@@ -481,7 +490,9 @@
         userMentionBridge,
         currentUsername: () => authSession.current?.username ?? null,
         searchBridge,
-        assetBridge
+        assetBridge,
+        diagnosticsEnabled,
+        diagnosticsCheck: checkSegments
       });
       await crepe.create();
 
@@ -1620,6 +1631,8 @@
             wikilinkBridge={sourceWikilinkBridge}
             {userMentionsEnabled}
             userMentionBridge={sourceUserMentionBridge}
+            {diagnosticsEnabled}
+            diagnosticsCheck={checkSegments}
           />
         </div>
       {/if}
