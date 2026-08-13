@@ -1,0 +1,112 @@
+<script lang="ts">
+  /**
+   * Suggestions for a right-clicked diagnostic.
+   *
+   * This is the ONLY way to reach spelling corrections in the app, which is
+   * why it is a real component rather than a reliance on the native menu:
+   * the root layout suppresses the webview's context menu in PROD builds, so
+   * before this existed the native squiggles were decoration with no cure
+   * attached. Both editing surfaces share it, so a correction looks and
+   * behaves identically in WYSIWYG, Source and Split.
+   *
+   * Suggestions are fetched when the popover opens, never in advance:
+   * spellbook takes tens of milliseconds per word and grows superlinearly
+   * with length, so precomputing them for every misspelling in a document
+   * would cost far more than it saves for menus the user never opens.
+   */
+  import { onMount } from 'svelte';
+  import {
+    closeDiagnosticPopover,
+    diagnosticPopover
+  } from '$lib/diagnostics/popover-bridge.svelte';
+  import { tUi } from '$lib/settings/i18n.svelte';
+
+  let menu = $state<HTMLDivElement | null>(null);
+
+  const open = $derived(diagnosticPopover.current);
+
+  /**
+   * Keep the menu inside the viewport. A misspelling near the right or
+   * bottom edge is common (it is where a line ends), so a menu that simply
+   * anchors at the click point would routinely be clipped.
+   */
+  const position = $derived.by(() => {
+    if (!open) return { left: 0, top: 0 };
+    const width = 220;
+    const height = 240;
+    return {
+      left: Math.min(open.x, Math.max(8, window.innerWidth - width - 8)),
+      top: Math.min(open.y, Math.max(8, window.innerHeight - height - 8))
+    };
+  });
+
+  function choose(replacement: string) {
+    open?.apply(replacement);
+    closeDiagnosticPopover();
+  }
+
+  onMount(() => {
+    const dismiss = (event: Event) => {
+      if (menu && event.target instanceof Node && menu.contains(event.target)) {
+        return;
+      }
+      closeDiagnosticPopover();
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') closeDiagnosticPopover();
+    };
+    // Capture phase: an editor surface may stop propagation of its own
+    // pointer events, which would otherwise leave the menu stuck open.
+    window.addEventListener('pointerdown', dismiss, true);
+    window.addEventListener('keydown', onKey);
+    // A scroll moves the text out from under the menu, so anchoring becomes
+    // meaningless — close rather than chase it.
+    window.addEventListener('scroll', dismiss, true);
+    return () => {
+      window.removeEventListener('pointerdown', dismiss, true);
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('scroll', dismiss, true);
+    };
+  });
+</script>
+
+{#if open}
+  <div
+    bind:this={menu}
+    class="fixed z-50 min-w-52 max-w-72 overflow-hidden rounded-md border border-border bg-popover text-popover-foreground shadow-md"
+    style="left: {position.left}px; top: {position.top}px;"
+    role="menu"
+    aria-label={tUi('editor.spellcheck.menu.label')}
+    tabindex="-1"
+  >
+    <div class="border-b border-border px-3 py-1.5">
+      <p class="truncate text-xs font-medium">{open.word}</p>
+      <p class="truncate text-xs text-muted-foreground">
+        {open.diagnostic.message}
+      </p>
+    </div>
+
+    <div class="max-h-56 overflow-y-auto py-1">
+      {#if diagnosticPopover.loading}
+        <p class="px-3 py-1.5 text-xs text-muted-foreground">
+          {tUi('editor.spellcheck.menu.loading')}
+        </p>
+      {:else if (diagnosticPopover.suggestions ?? []).length === 0}
+        <p class="px-3 py-1.5 text-xs text-muted-foreground">
+          {tUi('editor.spellcheck.menu.noSuggestions')}
+        </p>
+      {:else}
+        {#each diagnosticPopover.suggestions ?? [] as suggestion (suggestion)}
+          <button
+            type="button"
+            role="menuitem"
+            class="block w-full truncate px-3 py-1.5 text-left text-sm hover:bg-accent hover:text-accent-foreground"
+            onclick={() => choose(suggestion)}
+          >
+            {suggestion}
+          </button>
+        {/each}
+      {/if}
+    </div>
+  </div>
+{/if}

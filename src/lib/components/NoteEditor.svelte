@@ -37,8 +37,15 @@
   import { getSettingValue, settings } from '$lib/settings/store.svelte';
   import {
     checkSegments,
-    spellcheckEnabled
+    spellcheckEnabled,
+    spellcheckLanguages
   } from '$lib/diagnostics/editor-diagnostics.svelte';
+  import {
+    openDiagnosticPopover,
+    type DiagnosticMenuContext
+  } from '$lib/diagnostics/popover-bridge.svelte';
+  import { spellcheckSuggest } from '$lib/api/spellcheck';
+  import type { Diagnostic } from '$lib/diagnostics/types';
   import { CollabProvider } from '$lib/sync/collab-provider';
   import { isMobile } from '$lib/platform';
   import {
@@ -100,6 +107,7 @@
   import ViewOnlyBanner from './note-editor/ViewOnlyBanner.svelte';
   import WikilinkMenu from './note-editor/WikilinkMenu.svelte';
   import UserMentionMenu from './note-editor/UserMentionMenu.svelte';
+  import DiagnosticPopover from './note-editor/DiagnosticPopover.svelte';
 
   interface Props {
     noteId: string;
@@ -139,6 +147,19 @@
   // it applies there on the next note open; the source pane reconfigures
   // live through its feature compartment.
   const diagnosticsEnabled = $derived(spellcheckEnabled());
+
+  // Shared by both surfaces: the plugin supplies the clicked word and a
+  // writer for its own surface, so this handler stays surface-agnostic.
+  function handleDiagnosticMenu(
+    diagnostic: Diagnostic,
+    event: MouseEvent,
+    context: DiagnosticMenuContext
+  ) {
+    openDiagnosticPopover(
+      { diagnostic, x: event.clientX, y: event.clientY, ...context },
+      (word) => spellcheckSuggest(spellcheckLanguages(), word)
+    );
+  }
   const wikilinksEnabled = $derived(
     (getSettingValue('editor.wikilinks') as boolean | undefined) ?? true
   );
@@ -492,7 +513,8 @@
         searchBridge,
         assetBridge,
         diagnosticsEnabled,
-        diagnosticsCheck: checkSegments
+        diagnosticsCheck: checkSegments,
+        onDiagnosticMenu: handleDiagnosticMenu
       });
       await crepe.create();
 
@@ -1633,6 +1655,7 @@
             userMentionBridge={sourceUserMentionBridge}
             {diagnosticsEnabled}
             diagnosticsCheck={checkSegments}
+            onDiagnosticMenu={handleDiagnosticMenu}
           />
         </div>
       {/if}
@@ -1689,3 +1712,10 @@
 -->
 <WikilinkMenu bridge={sourceWikilinkBridge} />
 <UserMentionMenu bridge={sourceUserMentionBridge} />
+
+<!--
+  Spelling suggestions. One instance for both surfaces: it opens from a
+  right-click, which lands in exactly one pane, and the context carried
+  with the open already points at that pane.
+-->
+<DiagnosticPopover />

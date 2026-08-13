@@ -23,6 +23,7 @@ import type { DecorationSet, ViewUpdate } from '@codemirror/view';
 import { excludeIgnored, ignoreRanges } from '$lib/diagnostics/ignore-ranges';
 import { isAbortError } from '$lib/diagnostics/bus';
 import type { Diagnostic, Segment } from '$lib/diagnostics/types';
+import type { DiagnosticMenuContext } from '$lib/diagnostics/popover-bridge.svelte';
 
 /** Replaces the drawn diagnostics wholesale. */
 export const setDiagnostics = StateEffect.define<Diagnostic[]>();
@@ -115,7 +116,12 @@ const diagnosticsField = StateField.define<{
 export interface SourceDiagnosticsOptions {
   check(segments: Segment[], signal: AbortSignal): Promise<Diagnostic[]>;
   debounceMs?: number;
-  onRequestMenu?(diagnostic: Diagnostic, event: MouseEvent): void;
+  /** See the prose plugin: `apply` is surface-specific, so the plugin owns it. */
+  onRequestMenu?(
+    diagnostic: Diagnostic,
+    event: MouseEvent,
+    context: DiagnosticMenuContext
+  ): void;
 }
 
 const DEFAULT_DEBOUNCE_MS = 400;
@@ -187,7 +193,15 @@ export function sourceDiagnostics(
       // in PROD, which would otherwise dismiss the popover as it opens.
       event.preventDefault();
       event.stopPropagation();
-      options.onRequestMenu(hit, event);
+      options.onRequestMenu(hit, event, {
+        word: view.state.doc.sliceString(hit.from, hit.to),
+        apply: (replacement) => {
+          view.dispatch({
+            changes: { from: hit.from, to: hit.to, insert: replacement }
+          });
+          view.focus();
+        }
+      });
       return true;
     }
   });
