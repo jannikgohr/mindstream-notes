@@ -20,6 +20,7 @@
     diagnosticPopover
   } from '$lib/diagnostics/popover-bridge.svelte';
   import { addCustomWord } from '$lib/diagnostics/custom-dictionary.svelte';
+  import { replacementParts } from '$lib/diagnostics/replacement-display';
   import { tUi } from '$lib/settings/i18n.svelte';
 
   let menu = $state<HTMLDivElement | null>(null);
@@ -140,7 +141,19 @@
             class="block w-full truncate px-3 py-1.5 text-left text-sm hover:bg-accent hover:text-accent-foreground"
             onclick={() => choose(suggestion)}
           >
-            {suggestion}
+            <!--
+              Whitespace is rendered, not printed. LanguageTool's punctuation
+              rules offer replacements that differ only in WHICH space they
+              use, so shown literally two options look identical or one shows
+              as a tofu box. The applied value is always the original string.
+            -->
+            {#each replacementParts(suggestion) as part, i (i)}
+              {#if part.space}
+                <span class="text-muted-foreground/70" title={part.space}
+                  >{part.text}</span
+                >
+              {:else}{part.text}{/if}
+            {/each}
           </button>
         {/each}
         {#if hidden > 0}

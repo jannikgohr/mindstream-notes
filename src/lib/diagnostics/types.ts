@@ -118,4 +118,23 @@ export interface DiagnosticProvider {
   check(
     request: CheckRequest
   ): Promise<Diagnostic[] | null> | Diagnostic[] | null;
+  /**
+   * Optional bulk path: check many segments in one go.
+   *
+   * For a network checker this is the difference between a usable feature
+   * and an unusable one. Measured against a real LanguageTool server, a
+   * request costs ~2.4s almost regardless of size, so checking a 30-
+   * paragraph note one paragraph at a time takes minutes, while the same
+   * text batched takes seconds. The browser add-on batches for the same
+   * reason.
+   *
+   * Returns one entry per input segment, in order: an array of diagnostics
+   * (relative to that segment) or `null` for "did not check this one".
+   * When absent, the bus falls back to calling `check` per segment, which
+   * is right for a local checker where a call is microseconds.
+   */
+  checkAll?(
+    segments: Segment[],
+    request: Omit<CheckRequest, 'text'>
+  ): Promise<(Diagnostic[] | null)[]>;
 }

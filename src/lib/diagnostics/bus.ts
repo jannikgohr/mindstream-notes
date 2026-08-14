@@ -124,44 +124,64 @@ export class DiagnosticBus {
       segment: number;
       diagnostic: Diagnostic;
     }[] = [];
-    /** `providerId` per segment index that returned without failing. */
+    /** Provider ids per segment index that returned without failing. */
     const answered = new Map<number, Set<string>>();
 
     for (const provider of this.#providers) {
+      if (signal?.aborted) throw new AbortError();
+
+      // Split cached from pending first, so the bulk path is only asked
+      // about segments that actually need work — editing one paragraph of a
+      // long note should cost one paragraph, not the whole document again.
+      const resolved = new Map<number, Diagnostic[]>();
+      const pending: { index: number; segment: Segment; key: string }[] = [];
+
       for (const [index, segment] of segments.entries()) {
-        if (signal?.aborted) throw new AbortError();
-
         const key = this.#key(provider.id, languages, segment.text);
-        let relative: Diagnostic[] | null | undefined = this.#cacheGet(key);
+        const hit = this.#cacheGet(key);
+        if (hit === undefined) pending.push({ index, segment, key });
+        else resolved.set(index, hit);
+      }
 
-        if (relative === undefined) {
-          try {
-            relative = await provider.check({
-              text: segment.text,
-              languages,
-              signal: signal ?? new AbortController().signal
+      if (pending.length > 0) {
+        const request = {
+          languages,
+          signal: signal ?? new AbortController().signal
+        };
+        try {
+          if (provider.checkAll) {
+            const batch = await provider.checkAll(
+              pending.map((p) => p.segment),
+              request
+            );
+            pending.forEach((p, i) => {
+              const found = batch[i] ?? null;
+              if (found === null) return;
+              this.#cacheSet(p.key, found);
+              resolved.set(p.index, found);
             });
-          } catch (err) {
-            if (isAbortError(err)) throw err;
-            // One broken checker must not blank out every squiggle in the
-            // document — especially once third-party plugins can register.
-            // Skip this segment, leave the rest intact, and do NOT cache
-            // the failure so a transient fault (a dropped LanguageTool
-            // request) is retried on the next pass.
-            console.error(`Diagnostic provider "${provider.id}" failed`, err);
-            continue;
+          } else {
+            for (const p of pending) {
+              if (signal?.aborted) throw new AbortError();
+              const found = await provider.check({
+                ...request,
+                text: p.segment.text
+              });
+              if (found === null) continue;
+              this.#cacheSet(p.key, found);
+              resolved.set(p.index, found);
+            }
           }
-          // `null` is "I did not check", not "nothing is wrong" — so it is
-          // not cached either; the next pass may be configured or online.
-          if (relative !== null) this.#cacheSet(key, relative);
+        } catch (err) {
+          if (isAbortError(err)) throw err;
+          // One broken checker must not blank out every squiggle in the
+          // document — especially once third-party plugins can register.
+          // Nothing is cached, so a transient fault is retried next pass.
+          console.error(`Diagnostic provider "${provider.id}" failed`, err);
         }
+      }
 
-        if (relative === null) continue;
-
-        // Reaching here means the provider answered — including answering
-        // "nothing wrong". That is what lets an owner suppress the others:
-        // silence from a working checker is a real verdict, silence from a
-        // declining or broken one is not.
+      for (const [index, relative] of resolved) {
         const seen = answered.get(index) ?? new Set<string>();
         seen.add(provider.id);
         answered.set(index, seen);
@@ -169,6 +189,7 @@ export class DiagnosticBus {
         // Providers report positions relative to the text they were handed;
         // rebasing happens here so no provider has to know where in the
         // document its paragraph lives.
+        const segment = segments[index];
         for (const d of relative) {
           results.push({
             providerId: provider.id,
