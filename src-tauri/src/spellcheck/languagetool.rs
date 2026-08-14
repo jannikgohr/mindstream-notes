@@ -37,6 +37,22 @@ pub struct LanguageToolMatch {
 #[derive(Debug, Deserialize)]
 struct CheckResponse {
     matches: Vec<Match>,
+    #[serde(default)]
+    language: DetectedLanguageWrapper,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct DetectedLanguageWrapper {
+    #[serde(rename = "detectedLanguage", default)]
+    detected: DetectedLanguage,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct DetectedLanguage {
+    #[serde(default)]
+    code: String,
+    #[serde(default)]
+    confidence: f64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -78,6 +94,16 @@ fn base_url(endpoint: &str) -> String {
     trimmed.strip_suffix("/v2").unwrap_or(trimmed).to_string()
 }
 
+/// Below this, auto-detection is not worth believing.
+///
+/// Measured against a real server: full sentences come back at 0.99, while
+/// single words and short fragments land between 0.23 and 0.46 — and at
+/// that end it gets them wrong, detecting the German `Sterbeurkunde` as
+/// French. Paragraph-at-a-time checking means short segments are the norm,
+/// not the exception, so a mis-detected language would spellcheck a German
+/// paragraph against a French dictionary.
+const MIN_DETECTION_CONFIDENCE: f64 = 0.5;
+
 /// How many replacements to keep per match.
 ///
 /// LanguageTool can return dozens for one match. The popover shows six
@@ -118,6 +144,66 @@ pub async fn check(
     disabled_categories: &[String],
     preferred_variants: &[String],
 ) -> AppResult<Vec<LanguageToolMatch>> {
+    let first = check_once(
+        endpoint,
+        api_key,
+        username,
+        language,
+        text,
+        disabled_categories,
+        preferred_variants,
+    )
+    .await?;
+
+    // Auto-detection is only trusted when it is confident AND landed on a
+    // language the user actually writes. Otherwise re-ask, naming the
+    // language outright — checking German prose against a French dictionary
+    // produces far more nonsense than checking it against the wrong German
+    // variant.
+    if language == "auto" && !preferred_variants.is_empty() {
+        let detected = &first.language.detected;
+        let plausible = detected.confidence >= MIN_DETECTION_CONFIDENCE
+            && preferred_variants
+                .iter()
+                .any(|tag| same_language(tag, &detected.code));
+        if !plausible {
+            let fallback = &preferred_variants[0];
+            let retry = check_once(
+                endpoint,
+                api_key,
+                username,
+                fallback,
+                text,
+                disabled_categories,
+                &[],
+            )
+            .await?;
+            return Ok(into_matches(retry));
+        }
+    }
+
+    Ok(into_matches(first))
+}
+
+/// True when two tags name the same language, ignoring the region.
+///
+/// `de-DE` and `de-AT` are the same language for this purpose: detection
+/// picking the wrong variant is a minor issue, picking the wrong language
+/// is not.
+fn same_language(a: &str, b: &str) -> bool {
+    let base = |tag: &str| tag.split('-').next().unwrap_or("").to_ascii_lowercase();
+    !b.is_empty() && base(a) == base(b)
+}
+
+async fn check_once(
+    endpoint: &str,
+    api_key: Option<&str>,
+    username: Option<&str>,
+    language: &str,
+    text: &str,
+    disabled_categories: &[String],
+    preferred_variants: &[String],
+) -> AppResult<CheckResponse> {
     let url = format!("{}/v2/check", base_url(endpoint));
 
     let mut form: Vec<(String, String)> = vec![
@@ -161,7 +247,7 @@ pub async fn check(
         .await
         .map_err(|err| AppError::InvalidArg(format!("LanguageTool response invalid: {err}")))?;
 
-    Ok(into_matches(parsed))
+    Ok(parsed)
 }
 
 /// Outcome of a connection test, ready to show the user.
@@ -172,16 +258,28 @@ pub struct TestConnectionResult {
     /// Server-provided detail — a language count on success, the failure
     /// reason otherwise. Not translated: it reports what the server said.
     pub detail: String,
+    /// Selected languages this server does NOT offer, as BCP-47 tags.
+    ///
+    /// The most useful thing a connection test can report for a self-hosted
+    /// instance: a container can be perfectly reachable and simply not have
+    /// the language you write in, which otherwise shows up as "grammar
+    /// checking does nothing" with no explanation.
+    pub missing_languages: Vec<String>,
 }
 
 /// Text used to verify credentials.
 ///
 /// A FIXED sample, never note content: a connection test must not be a way
 /// to send the user's writing somewhere before they have decided the server
-/// is one they trust. It is deliberately ungrammatical, so a successful
-/// check also proves the server is actually returning matches rather than
-/// just answering.
-const PROBE_TEXT: &str = "This are a test.";
+/// is one they trust.
+///
+/// Deliberately meaningless rather than a sentence with a planted mistake.
+/// An earlier version relied on a wrong sentence coming back with matches,
+/// which assumed rules that a self-hosted server may simply not have —
+/// n-gram data is a multi-gigabyte optional download, and many instances
+/// ship with one language or none. All this needs to establish is that the
+/// server ACCEPTS an authenticated request.
+const PROBE_TEXT: &str = "test";
 
 /// Check that a LanguageTool server is reachable and, when credentials are
 /// supplied, that they work.
@@ -193,20 +291,31 @@ pub async fn test_connection(
     endpoint: &str,
     api_key: Option<&str>,
     username: Option<&str>,
+    wanted_languages: &[String],
 ) -> TestConnectionResult {
     let base = base_url(endpoint);
     let client = reqwest::Client::new();
 
-    let languages = match client.get(format!("{base}/v2/languages")).send().await {
+    let offered: Vec<String> = match client.get(format!("{base}/v2/languages")).send().await {
         Ok(response) if response.status().is_success() => {
             match response.json::<Vec<serde_json::Value>>().await {
-                Ok(list) => list.len(),
+                Ok(list) => list
+                    .iter()
+                    .filter_map(|entry| {
+                        entry
+                            .get("longCode")
+                            .or_else(|| entry.get("code"))
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string)
+                    })
+                    .collect(),
                 Err(err) => {
                     return TestConnectionResult {
                         ok: false,
                         // Reached something, but not LanguageTool — usually a
                         // proxy or the wrong port.
                         detail: format!("not a LanguageTool server: {err}"),
+                        missing_languages: Vec::new(),
                     };
                 }
             }
@@ -215,30 +324,59 @@ pub async fn test_connection(
             return TestConnectionResult {
                 ok: false,
                 detail: format!("server returned {}", response.status()),
+                missing_languages: Vec::new(),
             }
         }
         Err(err) => {
             return TestConnectionResult {
                 ok: false,
                 detail: format!("{err}"),
+                missing_languages: Vec::new(),
             }
         }
     };
 
+    let missing: Vec<String> = wanted_languages
+        .iter()
+        .filter(|wanted| !offered.iter().any(|have| same_language(wanted, have)))
+        .cloned()
+        .collect();
+
     // Only worth a second request when there are credentials to verify;
     // a self-hosted server usually has none.
     if api_key.is_some() && username.is_some() {
-        if let Err(err) = check(endpoint, api_key, username, "en-US", PROBE_TEXT, &[], &[]).await {
+        // Probe in a language the server actually offers, so a German-only
+        // instance is not failed for lacking English.
+        let probe_language = wanted_languages
+            .iter()
+            .find(|wanted| offered.iter().any(|have| same_language(wanted, have)))
+            .cloned()
+            .or_else(|| offered.first().cloned())
+            .unwrap_or_else(|| "en-US".to_string());
+
+        if let Err(err) = check_once(
+            endpoint,
+            api_key,
+            username,
+            &probe_language,
+            PROBE_TEXT,
+            &[],
+            &[],
+        )
+        .await
+        {
             return TestConnectionResult {
                 ok: false,
                 detail: format!("credentials rejected: {err}"),
+                missing_languages: missing,
             };
         }
     }
 
     TestConnectionResult {
         ok: true,
-        detail: format!("{languages} languages available"),
+        detail: format!("{} languages available", offered.len()),
+        missing_languages: missing,
     }
 }
 
@@ -247,8 +385,15 @@ pub async fn languagetool_test_connection(
     endpoint: String,
     api_key: Option<String>,
     username: Option<String>,
+    wanted_languages: Vec<String>,
 ) -> CommandResult<TestConnectionResult> {
-    Ok(test_connection(&endpoint, api_key.as_deref(), username.as_deref()).await)
+    Ok(test_connection(
+        &endpoint,
+        api_key.as_deref(),
+        username.as_deref(),
+        &wanted_languages,
+    )
+    .await)
 }
 
 #[tauri::command]
@@ -281,6 +426,29 @@ mod tests {
         into_matches(serde_json::from_str(json).unwrap())
     }
 
+    fn detection(json: &str) -> (String, f64) {
+        let parsed: CheckResponse = serde_json::from_str(json).unwrap();
+        (
+            parsed.language.detected.code,
+            parsed.language.detected.confidence,
+        )
+    }
+
+    #[test]
+    fn reads_the_detected_language_and_confidence() {
+        // Measured shapes: a full sentence scores 0.99, a single word 0.43
+        // — and at 0.43 the server called the German "Sterbeurkunde" French.
+        let json =
+            r#"{"matches":[],"language":{"detectedLanguage":{"code":"fr","confidence":0.429}}}"#;
+        assert_eq!(detection(json), ("fr".to_string(), 0.429));
+        assert!(0.429 < MIN_DETECTION_CONFIDENCE);
+    }
+
+    #[test]
+    fn tolerates_a_response_without_language_information() {
+        assert_eq!(detection(r#"{"matches":[]}"#), (String::new(), 0.0));
+    }
+
     /// A real `/v2/check` response, trimmed to the fields we read.
     fn sample() -> &'static str {
         concat!(
@@ -293,6 +461,17 @@ mod tests {
                "rule":{"id":"COMMA_RULE","category":{"id":"PUNCTUATION"}}}
             ]}"#
         )
+    }
+
+    #[test]
+    fn treats_regional_variants_as_the_same_language() {
+        // Detection picking de-AT for de-DE prose is a non-issue; picking
+        // French is the failure this guards.
+        assert!(same_language("de-DE", "de-AT"));
+        assert!(same_language("de-DE", "de"));
+        assert!(same_language("en-US", "en-GB"));
+        assert!(!same_language("de-DE", "fr"));
+        assert!(!same_language("de-DE", ""));
     }
 
     #[test]

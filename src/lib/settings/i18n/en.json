@@ -806,7 +806,8 @@
     "plugins.textCheckers.state.active": "Active",
     "plugins.textCheckers.state.failed": "Failing",
     "plugins.textCheckers.ownsSpelling": "Also checking spelling",
-    "editor.spellcheck.ownedByPlugin": "Spelling is currently checked by {plugin}. These dictionaries are still used whenever it cannot be reached."
+    "editor.spellcheck.ownedByPlugin": "Spelling is currently checked by {plugin}. These dictionaries are still used whenever it cannot be reached.",
+    "plugins.textCheckers.missingLanguages": "Not offered by this server:"
   },
   "categories": {
     "account": {

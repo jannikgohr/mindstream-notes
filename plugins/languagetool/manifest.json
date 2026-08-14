@@ -6,6 +6,7 @@
   "enabledByDefault": false,
   "runtime": "manifest-only",
   "descriptionKey": "plugin.description",
+  "icon": "icons/spell-check.svg",
   "permissions": ["textCheckers.contribute"],
   "contributes": {
     "documentation": [
