@@ -122,6 +122,8 @@ export interface SourceDiagnosticsOptions {
   debounceMs?: number;
   /** See the prose plugin: read per check so the setting applies live. */
   enabled?(): boolean;
+  /** Dismiss an open menu when the document moves out from under it. */
+  onDismissMenu?(): void;
   /** See the prose plugin: language and dictionary changes are invisible here. */
   subscribeInvalidate?(recheck: () => void): () => void;
   /** See the prose plugin: `apply` is surface-specific, so the plugin owns it. */
@@ -155,7 +157,10 @@ export function sourceDiagnostics(
       }
 
       update(update: ViewUpdate) {
-        if (update.docChanged) this.schedule(debounceMs);
+        if (!update.docChanged) return;
+        // A suggestion's range describes the document it was offered for.
+        options.onDismissMenu?.();
+        this.schedule(debounceMs);
       }
 
       destroy() {

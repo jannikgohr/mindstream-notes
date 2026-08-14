@@ -255,8 +255,9 @@ describe('diagnosticsPlugin lifecycle', () => {
       enabled = value;
     };
     harness.decorationCount = () =>
-      (diagnosticsPluginKey.getState(view.state) ?? DecorationSet.empty).find()
-        .length;
+      (
+        diagnosticsPluginKey.getState(view.state)?.deco ?? DecorationSet.empty
+      ).find().length;
     return harness;
   }
 
@@ -316,5 +317,89 @@ describe('diagnosticsPlugin lifecycle', () => {
     h.invalidate();
     await settle();
     expect(h.checks).toBe(before);
+  });
+});
+
+/**
+ * The reported bug: after applying one suggestion, clicking further ones
+ * did nothing.
+ *
+ * Decorations were mapped through edits but the diagnostics behind them
+ * were not, so right-click hit-tested against pre-edit positions and the
+ * range handed to "apply" pointed at text that had moved.
+ */
+describe('positions survive edits', () => {
+  function mounted(text: string) {
+    const plugin = diagnosticsPlugin({
+      debounceMs: 0,
+      check: async (segments) =>
+        segments.flatMap((segment) => {
+          const at = segment.text.indexOf('teh');
+          return at === -1
+            ? []
+            : [
+                {
+                  from: segment.from + at,
+                  to: segment.from + at + 3,
+                  kind: 'spelling' as const,
+                  message: 'x',
+                  replacements: ['the'],
+                  source: 'test'
+                }
+              ];
+        })
+    });
+    const host = document.createElement('div');
+    document.body.append(host);
+    const view = new EditorView(host, {
+      state: EditorState.create({ doc: doc(para(t(text))), plugins: [plugin] })
+    });
+    return view;
+  }
+
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
+  const state = (view: EditorView) =>
+    diagnosticsPluginKey.getState(view.state)!;
+
+  it('keeps the diagnostic on its word after an edit earlier in the doc', async () => {
+    const view = mounted('one teh two');
+    await settle();
+    const before = state(view).diagnostics[0];
+    expect(view.state.doc.textBetween(before.from, before.to)).toBe('teh');
+
+    // Insert ahead of the diagnostic — everything after it shifts.
+    view.dispatch(view.state.tr.insertText('XXXX ', 1));
+
+    const after = state(view).diagnostics[0];
+    expect(after.from).toBe(before.from + 5);
+    // The real assertion: the range still covers the same word.
+    expect(view.state.doc.textBetween(after.from, after.to)).toBe('teh');
+    view.destroy();
+  });
+
+  it('keeps decorations and diagnostics in step', async () => {
+    // They are drawn from one and clicked through the other; drift between
+    // them is exactly what made a click land on nothing.
+    const view = mounted('one teh two');
+    await settle();
+    view.dispatch(view.state.tr.insertText('XXXX ', 1));
+
+    const { diagnostics, deco } = state(view);
+    const drawn = deco.find();
+    expect(drawn).toHaveLength(1);
+    expect(drawn[0].from).toBe(diagnostics[0].from);
+    expect(drawn[0].to).toBe(diagnostics[0].to);
+    view.destroy();
+  });
+
+  it('drops a diagnostic whose word was deleted', async () => {
+    const view = mounted('one teh two');
+    await settle();
+    const { from, to } = state(view).diagnostics[0];
+    view.dispatch(view.state.tr.delete(from, to));
+
+    // Range collapses, so nothing is drawn over it any more.
+    expect(state(view).deco.find()).toHaveLength(0);
+    view.destroy();
   });
 });

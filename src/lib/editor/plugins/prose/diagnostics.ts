@@ -27,7 +27,23 @@ import type { DiagnosticMenuContext } from '$lib/diagnostics/popover-bridge.svel
 import { parseNoteHref } from '../wikilink-href';
 import { parseUserHref } from '../user-mention-href';
 
-export const diagnosticsPluginKey = new PluginKey<DecorationSet>('diagnostics');
+/**
+ * Both the drawn squiggles and the diagnostics behind them.
+ *
+ * Held together and mapped together. An earlier version kept the
+ * diagnostics in a closure variable beside the mapped DecorationSet, so
+ * after any edit the decorations moved with the text while the array kept
+ * pre-edit positions — right-click then hit-tested against stale ranges and
+ * applying a suggestion wrote to the wrong place, or nowhere.
+ */
+export interface DiagnosticsState {
+  diagnostics: Diagnostic[];
+  deco: DecorationSet;
+}
+
+export const diagnosticsPluginKey = new PluginKey<DiagnosticsState>(
+  'diagnostics'
+);
 
 /**
  * Stands in for a non-text inline node (image, inline math) when flattening a
@@ -171,6 +187,14 @@ export interface ProseDiagnosticsOptions {
    */
   subscribeInvalidate?(recheck: () => void): () => void;
   /**
+   * Called when the document changes while a menu is open.
+   *
+   * A suggestion's range is only valid against the document it was offered
+   * for. Rather than re-mapping a menu already on screen, it is dismissed —
+   * which is what any context menu does when the thing beneath it moves.
+   */
+  onDismissMenu?(): void;
+  /**
    * Called when the user right-clicks a diagnostic, to open the popover.
    *
    * `apply` is supplied by the plugin rather than the caller because only
@@ -188,12 +212,11 @@ const DEFAULT_DEBOUNCE_MS = 400;
 
 export function diagnosticsPlugin(
   options: ProseDiagnosticsOptions
-): Plugin<DecorationSet> {
+): Plugin<DiagnosticsState> {
   const debounceMs = options.debounceMs ?? DEFAULT_DEBOUNCE_MS;
 
   let timer: ReturnType<typeof setTimeout> | null = null;
   let controller: AbortController | null = null;
-  let current: Diagnostic[] = [];
 
   const cancel = () => {
     if (timer !== null) clearTimeout(timer);
@@ -205,9 +228,9 @@ export function diagnosticsPlugin(
   async function run(view: EditorView) {
     if (options.enabled && !options.enabled()) {
       // Clear rather than return: the user may have just switched it off.
-      if (current.length > 0) {
-        current = [];
-        view.dispatch(view.state.tr.setMeta(diagnosticsPluginKey, current));
+      const drawn = diagnosticsPluginKey.getState(view.state)?.diagnostics;
+      if (drawn && drawn.length > 0) {
+        view.dispatch(view.state.tr.setMeta(diagnosticsPluginKey, []));
       }
       return;
     }
@@ -223,26 +246,42 @@ export function diagnosticsPlugin(
     try {
       const diagnostics = await options.check(segments, signal);
       if (signal.aborted || view.isDestroyed || view.state.doc !== doc) return;
-      current = excludeIgnored(diagnostics, skips);
-      view.dispatch(view.state.tr.setMeta(diagnosticsPluginKey, current));
+      const kept = excludeIgnored(diagnostics, skips);
+      view.dispatch(view.state.tr.setMeta(diagnosticsPluginKey, kept));
     } catch (err) {
       if (!isAbortError(err)) console.error('Diagnostics check failed', err);
     }
   }
 
-  return new Plugin<DecorationSet>({
+  return new Plugin<DiagnosticsState>({
     key: diagnosticsPluginKey,
     state: {
-      init: () => DecorationSet.empty,
-      apply(tr: Transaction, value: DecorationSet) {
+      init: () => ({ diagnostics: [], deco: DecorationSet.empty }),
+      apply(tr: Transaction, value: DiagnosticsState) {
         const incoming = tr.getMeta(diagnosticsPluginKey) as
           | Diagnostic[]
           | undefined;
-        if (incoming) return diagnosticDecorations(tr.doc, incoming);
+        if (incoming) {
+          return {
+            diagnostics: incoming,
+            deco: diagnosticDecorations(tr.doc, incoming)
+          };
+        }
+        if (!tr.docChanged) return value;
         // No new results: carry the existing squiggles through the edit so
         // they track the text they belong to instead of flickering off and
-        // back on while the user types.
-        return value.map(tr.mapping, tr.doc);
+        // back on while the user types. The diagnostics are mapped with
+        // them — they are what right-click and "apply this suggestion"
+        // read, so letting the two drift is how a click lands on the wrong
+        // text or on nothing at all.
+        return {
+          diagnostics: value.diagnostics.map((d) => ({
+            ...d,
+            from: tr.mapping.map(d.from),
+            to: tr.mapping.map(d.to)
+          })),
+          deco: value.deco.map(tr.mapping, tr.doc)
+        };
       }
     },
     view(view) {
@@ -259,6 +298,8 @@ export function diagnosticsPlugin(
       return {
         update(updatedView, prevState) {
           if (updatedView.state.doc.eq(prevState.doc)) return;
+          // The open menu describes a document that no longer exists.
+          options.onDismissMenu?.();
           if (timer !== null) clearTimeout(timer);
           controller?.abort();
           timer = setTimeout(() => run(updatedView), debounceMs);
@@ -272,7 +313,7 @@ export function diagnosticsPlugin(
     },
     props: {
       decorations(state) {
-        return diagnosticsPluginKey.getState(state);
+        return diagnosticsPluginKey.getState(state)?.deco;
       },
       handleDOMEvents: {
         contextmenu(view, event) {
@@ -282,7 +323,8 @@ export function diagnosticsPlugin(
             top: event.clientY
           });
           if (!pos) return false;
-          const hit = current.find((d) => d.from <= pos.pos && pos.pos <= d.to);
+          const found = diagnosticsPluginKey.getState(view.state)?.diagnostics;
+          const hit = found?.find((d) => d.from <= pos.pos && pos.pos <= d.to);
           if (!hit) return false;
           // Claim the event: the root layout suppresses unhandled
           // contextmenu in PROD, so without stopping propagation here the
