@@ -16,7 +16,7 @@ import {
   createSpellcheckProvider,
   SPELLCHECK_PROVIDER_ID
 } from './spellcheck-provider';
-import type { Diagnostic, Segment } from './types';
+import type { Diagnostic, DiagnosticProvider, Segment } from './types';
 import {
   spellcheckSuggest,
   spellcheckUnknownWords,
@@ -51,10 +51,10 @@ bus.register(
 /**
  * Precedence when two providers report the same kind over the same text.
  *
- * The built-in dictionary owns spelling. When the LanguageTool plugin
- * arrives it will also be able to report spelling, and showing two squiggles
- * with two different suggestion lists on one word is worse than either
- * alone.
+ * The built-in dictionary owns spelling. A grammar service can also report
+ * spelling, and showing two squiggles with two different suggestion lists on
+ * one word is worse than either alone — so the dictionary is listed first
+ * and plugin checkers rank after it.
  */
 const PRECEDENCE = [SPELLCHECK_PROVIDER_ID];
 
@@ -82,6 +82,22 @@ subscribeDiagnosticsInvalidated(() => {
 });
 
 export { invalidateDiagnostics, subscribeDiagnosticsInvalidated };
+
+/**
+ * Add a provider to the shared bus, returning its unregister function.
+ *
+ * The seam plugin-contributed checkers come in through. Registering also
+ * invalidates: a new checker has an opinion about text already on screen,
+ * and nothing in any open document has changed to trigger a redraw.
+ */
+export function registerProvider(provider: DiagnosticProvider): () => void {
+  const off = bus.register(provider);
+  invalidateDiagnostics();
+  return () => {
+    off();
+    invalidateDiagnostics();
+  };
+}
 
 export function spellcheckEnabled(): boolean {
   return (

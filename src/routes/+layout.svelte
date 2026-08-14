@@ -41,6 +41,7 @@
   import { installPluginSettingsBridge } from '$lib/plugins/settings-bridge';
   import { startPickerSettingPruning } from '$lib/settings/pickers.svelte';
   import { loadCustomDictionary } from '$lib/diagnostics/custom-dictionary.svelte';
+  import { syncPluginTextCheckers } from '$lib/diagnostics/plugin-checkers.svelte';
 
   let { children } = $props();
 
@@ -58,6 +59,13 @@
     };
     window.addEventListener('contextmenu', block);
     return () => window.removeEventListener('contextmenu', block);
+  });
+
+  // Keep plugin-contributed checkers in step with the plugin registry:
+  // enabling, disabling or removing a plugin changes who has an opinion
+  // about text that is already on screen.
+  $effect(() => {
+    syncPluginTextCheckers();
   });
 
   // Mirror the personal dictionary into memory before the first note is

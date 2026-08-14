@@ -15,6 +15,7 @@
 
 import {
   assertBoolean,
+  assertNumber,
   assertRecord,
   assertString,
   assertStringArray,
@@ -126,6 +127,62 @@ export function spellcheckWordChars(languages: string[]): Promise<string> {
     { languages },
     () => '',
     (value) => assertString(value, 'spellcheck_word_chars response')
+  );
+}
+
+export interface LanguageToolMatch {
+  from: number;
+  to: number;
+  message: string;
+  replacements: string[];
+  category: string;
+}
+
+/**
+ * Grammar and style check against a LanguageTool server.
+ *
+ * The only spellchecking call that leaves the machine — the dictionary path
+ * never touches the network. Host-executed rather than plugin-executed: the
+ * text of every note being edited passes through here, so the endpoint and
+ * key stay host-controlled.
+ */
+export function languagetoolCheck(args: {
+  endpoint: string;
+  apiKey?: string;
+  username?: string;
+  language: string;
+  text: string;
+  disabledCategories: string[];
+}): Promise<LanguageToolMatch[]> {
+  return invokeOrFallback<LanguageToolMatch[]>(
+    TauriCommandName.LanguagetoolCheck,
+    {
+      endpoint: args.endpoint,
+      apiKey: args.apiKey ?? null,
+      username: args.username ?? null,
+      language: args.language,
+      text: args.text,
+      disabledCategories: args.disabledCategories
+    },
+    () => [],
+    (value) => {
+      if (!Array.isArray(value)) {
+        throw new Error('languagetool_check response must be an array');
+      }
+      return value.map((item, index) => {
+        const record = assertRecord(item, `match[${index}]`);
+        return {
+          from: assertNumber(record.from, `match[${index}].from`),
+          to: assertNumber(record.to, `match[${index}].to`),
+          message: assertString(record.message, `match[${index}].message`),
+          replacements: assertStringArray(
+            record.replacements,
+            `match[${index}].replacements`
+          ),
+          category: assertString(record.category, `match[${index}].category`)
+        };
+      });
+    }
   );
 }
 
