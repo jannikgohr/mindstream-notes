@@ -143,6 +143,93 @@ pub async fn check(
     Ok(into_matches(parsed))
 }
 
+/// Outcome of a connection test, ready to show the user.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TestConnectionResult {
+    pub ok: bool,
+    /// Server-provided detail — a language count on success, the failure
+    /// reason otherwise. Not translated: it reports what the server said.
+    pub detail: String,
+}
+
+/// Text used to verify credentials.
+///
+/// A FIXED sample, never note content: a connection test must not be a way
+/// to send the user's writing somewhere before they have decided the server
+/// is one they trust. It is deliberately ungrammatical, so a successful
+/// check also proves the server is actually returning matches rather than
+/// just answering.
+const PROBE_TEXT: &str = "This are a test.";
+
+/// Check that a LanguageTool server is reachable and, when credentials are
+/// supplied, that they work.
+///
+/// Reachability goes through `/v2/languages` rather than `/v2/check`: it is
+/// a plain GET that needs no auth and carries no text at all, so the common
+/// case of "is my container up?" sends nothing anywhere.
+pub async fn test_connection(
+    endpoint: &str,
+    api_key: Option<&str>,
+    username: Option<&str>,
+) -> TestConnectionResult {
+    let base = endpoint.trim_end_matches('/');
+    let client = reqwest::Client::new();
+
+    let languages = match client.get(format!("{base}/v2/languages")).send().await {
+        Ok(response) if response.status().is_success() => {
+            match response.json::<Vec<serde_json::Value>>().await {
+                Ok(list) => list.len(),
+                Err(err) => {
+                    return TestConnectionResult {
+                        ok: false,
+                        // Reached something, but not LanguageTool — usually a
+                        // proxy or the wrong port.
+                        detail: format!("not a LanguageTool server: {err}"),
+                    };
+                }
+            }
+        }
+        Ok(response) => {
+            return TestConnectionResult {
+                ok: false,
+                detail: format!("server returned {}", response.status()),
+            }
+        }
+        Err(err) => {
+            return TestConnectionResult {
+                ok: false,
+                detail: format!("{err}"),
+            }
+        }
+    };
+
+    // Only worth a second request when there are credentials to verify;
+    // a self-hosted server usually has none.
+    if api_key.is_some() && username.is_some() {
+        if let Err(err) = check(endpoint, api_key, username, "en-US", PROBE_TEXT, &[]).await {
+            return TestConnectionResult {
+                ok: false,
+                detail: format!("credentials rejected: {err}"),
+            };
+        }
+    }
+
+    TestConnectionResult {
+        ok: true,
+        detail: format!("{languages} languages available"),
+    }
+}
+
+#[tauri::command]
+pub async fn languagetool_test_connection(
+    endpoint: String,
+    api_key: Option<String>,
+    username: Option<String>,
+) -> CommandResult<TestConnectionResult> {
+    Ok(test_connection(&endpoint, api_key.as_deref(), username.as_deref()).await)
+}
+
 #[tauri::command]
 pub async fn languagetool_check(
     endpoint: String,

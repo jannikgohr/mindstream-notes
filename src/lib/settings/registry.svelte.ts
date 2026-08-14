@@ -213,6 +213,21 @@ async function runDataAction(id: DataActionId) {
 }
 
 /** Handlers for button-type settings. */
+/**
+ * Register a handler for a dynamically-contributed button.
+ *
+ * Plugin settings are bridged into this schema at runtime, so their button
+ * handlers cannot be listed statically below. Registration is explicit and
+ * idempotent rather than the plugin layer reaching in and mutating the
+ * record, so there is one documented way in.
+ */
+export function registerSettingAction(
+  id: string,
+  run: () => void | Promise<void>
+): void {
+  SETTING_ACTIONS[id] = run;
+}
+
 export const SETTING_ACTIONS: Record<string, () => void | Promise<void>> = {
   'open-data-folder': () => runDataAction('open-data-folder'),
   'empty-trash': () => runDataAction('empty-trash'),

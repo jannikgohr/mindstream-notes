@@ -238,6 +238,19 @@ export interface PluginNoteExporterContribution {
 }
 
 /** A single generic setting control a plugin adds under its section. */
+/**
+ * Actions a plugin setting button may invoke.
+ *
+ * Host-owned, like the text-checker protocols: a manifest names a behaviour
+ * the app implements rather than shipping code to run. The actions are
+ * described in terms of the contribution they act on, not the plugin — so
+ * `textChecker.test` works for any plugin that contributes a checker, and
+ * nothing plugin-specific leaks into the core.
+ */
+export const PLUGIN_SETTING_ACTIONS = ['textChecker.test'] as const;
+
+export type PluginSettingAction = (typeof PLUGIN_SETTING_ACTIONS)[number];
+
 export interface PluginSetting {
   /** Plugin-local slug; stored under `plugins.<pluginId>.<id>`. */
   id: string;
@@ -260,7 +273,10 @@ export interface PluginSetting {
     | 'color'
     | 'text'
     | 'folder'
-    | 'tag';
+    | 'tag'
+    | 'button';
+  /** Required for `button`; must name a host-implemented action. */
+  actionId?: PluginSettingAction;
   default?: unknown;
   /** Required for `select`/`radio`; option labels resolve via plugin i18n. */
   options?: string[];
