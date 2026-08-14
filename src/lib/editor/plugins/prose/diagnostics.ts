@@ -132,23 +132,35 @@ export function analyzeDocument(doc: ProseNode): DocumentAnalysis {
   return { segments, skips };
 }
 
+/**
+ * Diagnostics whose range actually exists in this document.
+ *
+ * Applied to the STORED list, not just the drawn one. Decorations used to
+ * filter while the state kept everything, so a stale out-of-range finding
+ * stayed clickable and `insertText` threw on it — which looks exactly like
+ * a suggestion that does nothing.
+ */
+export function withinDocument(
+  doc: ProseNode,
+  diagnostics: Diagnostic[]
+): Diagnostic[] {
+  return diagnostics.filter(
+    (d) => d.from >= 0 && d.to <= doc.content.size && d.from < d.to
+  );
+}
+
 /** Build the decoration set drawn for a list of diagnostics. */
 export function diagnosticDecorations(
   doc: ProseNode,
   diagnostics: Diagnostic[]
 ): DecorationSet {
-  const decorations = diagnostics
-    // A diagnostic whose range fell outside the document (a stale result
-    // racing an edit) would make DecorationSet.create throw and take the
-    // editor down with it.
-    .filter((d) => d.from >= 0 && d.to <= doc.content.size && d.from < d.to)
-    .map((d) =>
-      Decoration.inline(d.from, d.to, {
-        class: `cm-diagnostic diagnostic-${d.kind}`,
-        'data-diagnostic-source': d.source,
-        'data-diagnostic-kind': d.kind
-      })
-    );
+  const decorations = withinDocument(doc, diagnostics).map((d) =>
+    Decoration.inline(d.from, d.to, {
+      class: `cm-diagnostic diagnostic-${d.kind}`,
+      'data-diagnostic-source': d.source,
+      'data-diagnostic-kind': d.kind
+    })
+  );
   return DecorationSet.create(doc, decorations);
 }
 
@@ -262,9 +274,10 @@ export function diagnosticsPlugin(
           | Diagnostic[]
           | undefined;
         if (incoming) {
+          const usable = withinDocument(tr.doc, incoming);
           return {
-            diagnostics: incoming,
-            deco: diagnosticDecorations(tr.doc, incoming)
+            diagnostics: usable,
+            deco: diagnosticDecorations(tr.doc, usable)
           };
         }
         if (!tr.docChanged) return value;
@@ -275,11 +288,16 @@ export function diagnosticsPlugin(
         // read, so letting the two drift is how a click lands on the wrong
         // text or on nothing at all.
         return {
-          diagnostics: value.diagnostics.map((d) => ({
-            ...d,
-            from: tr.mapping.map(d.from),
-            to: tr.mapping.map(d.to)
-          })),
+          // Mapping can collapse a range to nothing when its text is
+          // deleted; such a diagnostic is no longer about anything.
+          diagnostics: withinDocument(
+            tr.doc,
+            value.diagnostics.map((d) => ({
+              ...d,
+              from: tr.mapping.map(d.from),
+              to: tr.mapping.map(d.to)
+            }))
+          ),
           deco: value.deco.map(tr.mapping, tr.doc)
         };
       }
@@ -334,6 +352,12 @@ export function diagnosticsPlugin(
           options.onRequestMenu(hit, event, {
             word: view.state.doc.textBetween(hit.from, hit.to),
             apply: (replacement) => {
+              // Re-validate against the document as it is NOW. The menu may
+              // have been open across an edit, and dispatching a range that
+              // no longer exists throws — which the click handler swallows,
+              // so the suggestion appears to do nothing at all.
+              const { doc } = view.state;
+              if (hit.to > doc.content.size || hit.from >= hit.to) return;
               // Dispatched through the view so the collab plugin sees an
               // ordinary local edit; the checker must never touch the Yjs
               // document directly.
