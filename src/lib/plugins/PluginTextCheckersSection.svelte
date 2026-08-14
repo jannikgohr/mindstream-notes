@@ -22,7 +22,10 @@
   import { languagetoolTestConnection } from '$lib/api/spellcheck';
   import { checkerStatus } from '$lib/diagnostics/checker-status.svelte';
   import { checkerProviderId } from '$lib/diagnostics/plugin-checkers.svelte';
-  import { spellingOwner } from '$lib/diagnostics/editor-diagnostics.svelte';
+  import {
+    selectedLanguageTags,
+    spellingOwner
+  } from '$lib/diagnostics/editor-diagnostics.svelte';
   import { pluginById } from '$lib/plugins/registry.svelte';
   import { resolvePluginStringOptional } from '$lib/plugins/plugin-i18n';
   import { getSettingValue } from '$lib/settings/store.svelte';
@@ -76,13 +79,21 @@
       const result = await languagetoolTestConnection({
         endpoint,
         apiKey: apiKeySetting ? setting(apiKeySetting) : undefined,
-        username: usernameSetting ? setting(usernameSetting) : undefined
+        username: usernameSetting ? setting(usernameSetting) : undefined,
+        wantedLanguages: selectedLanguageTags()
       });
+      // A reachable server that lacks the language you write in is the
+      // common self-hosted case, and looks identical to "checking does
+      // nothing" unless it is said out loud.
+      const missing =
+        result.ok && result.missingLanguages.length > 0
+          ? `${tUi('plugins.textCheckers.missingLanguages')} ${result.missingLanguages.join(', ')}`
+          : null;
       rows = {
         ...rows,
         [checkerId]: {
           state: result.ok ? 'ok' : 'failed',
-          detail: result.detail
+          detail: missing ? `${result.detail} · ${missing}` : result.detail
         }
       };
     } catch (err) {

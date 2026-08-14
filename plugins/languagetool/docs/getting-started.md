@@ -45,6 +45,11 @@ The image ships without n-gram data, which powers the rules that catch confusion
 between real words (`there` / `their`). Adding it improves results considerably
 at the cost of several gigabytes on disk — see the image's documentation.
 
+**Check** verifies three things: that the server answers, that it is actually
+LanguageTool, and that it offers the languages you write in. It does not test
+grammar quality — n-grams and per-language rule sets are optional downloads, so
+a server without them is correctly configured, just less thorough.
+
 ## Using the hosted API instead
 
 Set **Server URL** to `https://api.languagetoolplus.com`, and fill in the account
@@ -70,9 +75,15 @@ notes.
 
 ## What you will see
 
-Grammar findings are underlined in a calmer colour than spelling, and style
-suggestions in a lighter dotted line — advice reads differently from an error.
-Right-click any of them for LanguageTool's own suggestions, in its own ranking.
+Three colours, following LanguageTool's own convention: red for spelling, amber
+for grammar, blue for style. Style is dotted rather than wavy, so advice does not
+shout like an error. Right-click any of them for LanguageTool's suggestions, in
+its own ranking.
+
+Results can differ slightly from the browser add-on. It sends far more
+surrounding text than a note editor does, and some rules only fire with that
+context. Where a paragraph is too short for language detection to be trusted,
+this plugin names the language outright instead of guessing.
 
 If the server is unreachable, that checker simply stops contributing. Spelling
 keeps working, and the failure is not repeated as an error on every paragraph.

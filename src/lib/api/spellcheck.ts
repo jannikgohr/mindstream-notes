@@ -192,6 +192,8 @@ export interface TestConnectionResult {
   ok: boolean;
   /** Server-provided detail; not translated — it reports what the server said. */
   detail: string;
+  /** Selected languages this server does not offer. */
+  missingLanguages: string[];
 }
 
 /**
@@ -202,15 +204,22 @@ export function languagetoolTestConnection(args: {
   endpoint: string;
   apiKey?: string;
   username?: string;
+  /** BCP-47 tags the user writes in, so the server can be checked for them. */
+  wantedLanguages?: string[];
 }): Promise<TestConnectionResult> {
   return invokeOrFallback<TestConnectionResult>(
     TauriCommandName.LanguagetoolTestConnection,
     {
       endpoint: args.endpoint,
       apiKey: args.apiKey ?? null,
-      username: args.username ?? null
+      username: args.username ?? null,
+      wantedLanguages: args.wantedLanguages ?? []
     },
-    () => ({ ok: false, detail: 'unavailable outside the desktop app' }),
+    () => ({
+      ok: false,
+      detail: 'unavailable outside the desktop app',
+      missingLanguages: []
+    }),
     (value) => {
       const record = assertRecord(
         value,
@@ -218,7 +227,11 @@ export function languagetoolTestConnection(args: {
       );
       return {
         ok: assertBoolean(record.ok, 'testConnection.ok'),
-        detail: assertString(record.detail, 'testConnection.detail')
+        detail: assertString(record.detail, 'testConnection.detail'),
+        missingLanguages: assertStringArray(
+          record.missingLanguages,
+          'testConnection.missingLanguages'
+        )
       };
     }
   );

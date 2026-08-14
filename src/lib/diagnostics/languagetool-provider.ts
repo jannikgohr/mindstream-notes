@@ -30,7 +30,14 @@ const STYLE_CATEGORIES = new Set([
   'REDUNDANCY',
   'PLAIN_ENGLISH',
   'WORDINESS',
-  'CREATIVE_WRITING'
+  'CREATIVE_WRITING',
+  // German categories, taken from what a real server returns rather than
+  // guessed: without these, German prose only ever produced two colours
+  // because everything that was not TYPOS fell through to grammar.
+  'COLLOQUIALISMS',
+  'TYPOGRAPHY',
+  'REGIONALISMS',
+  'GENDER_NEUTRALITY'
 ]);
 
 export function categoryToKind(category: string): DiagnosticKind {

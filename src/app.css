@@ -1294,11 +1294,33 @@ body.dv-tab-dragging .freeform-canvas-host * {
  * wrapping, and it does not disturb line height. Colour comes from the
  * theme tokens so both light and dark are covered without a second rule.
  *
- * Kinds are visually ranked by how confident the checker is. Spelling is a
- * factual claim about a word and gets the loud red wavy line; grammar is a
- * weaker claim and gets a calmer colour; style is advisory and gets a
- * dotted line so it reads as a hint rather than an error.
+ * Three colours, following LanguageTool's own convention so the app agrees
+ * with the tool people compare it against: red for spelling, amber for
+ * grammar, blue for style. These are approximations of that convention, not
+ * copied values.
+ *
+ * The distinction earns its keep: spelling is a factual claim about a word,
+ * grammar is a claim about a sentence, and style is advice. Collapsing them
+ * makes advice look like an error, which is how a checker starts feeling
+ * like it is nagging.
+ *
+ * Fixed hues rather than theme tokens — the meaning is the colour here, and
+ * a theme whose primary happens to be red would make grammar unreadable
+ * next to spelling. Each is given a lighter dark-mode value so it stays
+ * legible on a dark background.
  * ------------------------------------------------------------------------- */
+
+:root {
+  --diagnostic-spelling: oklch(0.58 0.22 27);
+  --diagnostic-grammar: oklch(0.68 0.15 75);
+  --diagnostic-style: oklch(0.6 0.13 245);
+}
+
+.dark {
+  --diagnostic-spelling: oklch(0.72 0.19 27);
+  --diagnostic-grammar: oklch(0.8 0.14 80);
+  --diagnostic-style: oklch(0.74 0.12 245);
+}
 
 .cm-diagnostic {
   /* Skipping descenders keeps the wave legible under g/j/p/q/y. */
@@ -1307,17 +1329,19 @@ body.dv-tab-dragging .freeform-canvas-host * {
 }
 
 .diagnostic-spelling {
-  text-decoration: underline wavy var(--destructive);
+  text-decoration: underline wavy var(--diagnostic-spelling);
   text-decoration-thickness: from-font;
 }
 
 .diagnostic-grammar {
-  text-decoration: underline wavy var(--primary);
+  text-decoration: underline wavy var(--diagnostic-grammar);
   text-decoration-thickness: from-font;
 }
 
+/* Dotted rather than wavy: advice should not shout like an error, even
+   before you notice the colour. */
 .diagnostic-style {
-  text-decoration: underline dotted var(--muted-foreground);
+  text-decoration: underline dotted var(--diagnostic-style);
   text-decoration-thickness: 2px;
 }
 
