@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   categoryToKind,
   createLanguageToolProvider,
+  planChunks,
   type LanguageToolMatch
 } from './languagetool-provider';
 import type { CheckRequest } from './types';
@@ -230,5 +231,146 @@ describe('status reporting', () => {
     const { seen, provider: p } = withStatus([]);
     await p.check(request('   '));
     expect(seen).toEqual([]);
+  });
+});
+
+/**
+ * Batching. Per-paragraph checking made a long note take minutes: measured
+ * against a real server a request costs ~2.4s almost regardless of size, so
+ * the round trips dominated. The browser add-on batches for the same reason.
+ *
+ * The risk batching introduces is offset arithmetic — a match is reported
+ * against the joined chunk and has to come back to the right segment.
+ */
+describe('planChunks', () => {
+  const seg = (text: string) => ({ text });
+
+  it('joins segments into one chunk when they fit', () => {
+    const chunks = planChunks([seg('one'), seg('two')], 100);
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0].text).toBe('one\n\ntwo');
+  });
+
+  it('records where each segment starts in the joined text', () => {
+    const [chunk] = planChunks([seg('one'), seg('two')], 100);
+    expect(chunk.entries).toEqual([
+      { index: 0, at: 0, length: 3 },
+      { index: 1, at: 5, length: 3 }
+    ]);
+    // The recorded offset must actually locate the segment.
+    for (const e of chunk.entries) {
+      expect(chunk.text.slice(e.at, e.at + e.length)).toBe(
+        ['one', 'two'][e.index]
+      );
+    }
+  });
+
+  it('splits once the limit is reached', () => {
+    const chunks = planChunks([seg('a'.repeat(60)), seg('b'.repeat(60))], 100);
+    expect(chunks).toHaveLength(2);
+  });
+
+  it('keeps an oversized paragraph whole', () => {
+    // Splitting mid-sentence would invent errors at the seam.
+    const long = 'x'.repeat(500);
+    const chunks = planChunks([seg(long)], 100);
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0].text).toBe(long);
+  });
+
+  it('skips blank segments without spending payload on them', () => {
+    const chunks = planChunks([seg('one'), seg('   '), seg('two')], 100);
+    expect(chunks[0].text).toBe('one\n\ntwo');
+    expect(chunks[0].entries.map((e) => e.index)).toEqual([0, 2]);
+  });
+
+  it('preserves the original indices across a split', () => {
+    // The caller gets results back by index, so a split must not renumber.
+    const chunks = planChunks(
+      [seg('a'.repeat(60)), seg('b'.repeat(60)), seg('c')],
+      100
+    );
+    expect(chunks.flatMap((c) => c.entries.map((e) => e.index))).toEqual([
+      0, 1, 2
+    ]);
+  });
+
+  it('returns nothing for an empty or all-blank document', () => {
+    expect(planChunks([], 100)).toEqual([]);
+    expect(planChunks([seg(''), seg('  ')], 100)).toEqual([]);
+  });
+});
+
+describe('checkAll', () => {
+  const seg = (text: string, from: number) => ({
+    text,
+    from,
+    to: from + text.length
+  });
+
+  const batched = (
+    onCheck: (text: string) => LanguageToolMatch[],
+    config: (() => typeof CONFIG | null) | null = null
+  ) => {
+    const calls: string[] = [];
+    const provider = createLanguageToolProvider({
+      id: 'lt',
+      kinds: ['grammar', 'spelling'],
+      config: config ?? (() => CONFIG),
+      check: async ({ text }) => {
+        calls.push(text);
+        return onCheck(text);
+      }
+    });
+    return { calls, provider };
+  };
+
+  const ctx = { languages: ['de'], signal: new AbortController().signal };
+
+  it('sends many segments in one request', async () => {
+    const { calls, provider: p } = batched(() => []);
+    await p.checkAll!([seg('one', 0), seg('two', 10), seg('three', 20)], ctx);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toBe('one\n\ntwo\n\nthree');
+  });
+
+  it('returns each match against the segment it came from', async () => {
+    // "two" starts at offset 5 in "one\n\ntwo"; the diagnostic must come
+    // back at 0 relative to that segment, not 5.
+    const { provider: p } = batched((text) => {
+      const at = text.indexOf('two');
+      return [match({ from: at, to: at + 3 })];
+    });
+    const out = await p.checkAll!([seg('one', 0), seg('two', 100)], ctx);
+    expect(out[0]).toEqual([]);
+    expect(out[1]).toEqual([
+      expect.objectContaining({ from: 0, to: 3, source: 'lt' })
+    ]);
+  });
+
+  it('does not leak a match across a paragraph boundary', async () => {
+    // A match spanning the joiner belongs to neither segment.
+    const { provider: p } = batched(() => [match({ from: 2, to: 7 })]);
+    const out = await p.checkAll!([seg('one', 0), seg('two', 100)], ctx);
+    expect(out).toEqual([[], []]);
+  });
+
+  it('declines every segment when unconfigured', async () => {
+    const { calls, provider: p } = batched(
+      () => [match()],
+      () => null
+    );
+    expect(await p.checkAll!([seg('one', 0), seg('two', 10)], ctx)).toEqual([
+      null,
+      null
+    ]);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('declines a blank segment rather than claiming it is clean', async () => {
+    const { provider: p } = batched(() => []);
+    const out = await p.checkAll!([seg('   ', 0), seg('real', 10)], ctx);
+    expect(out[0]).toBeNull();
+    expect(out[1]).toEqual([]);
   });
 });

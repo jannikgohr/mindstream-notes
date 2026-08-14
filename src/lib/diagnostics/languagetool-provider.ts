@@ -45,6 +45,105 @@ export function categoryToKind(category: string): DiagnosticKind {
   return STYLE_CATEGORIES.has(category) ? 'style' : 'grammar';
 }
 
+/**
+ * How much text goes into one request.
+ *
+ * Measured against a real server: a request costs ~2.4s almost regardless
+ * of size (2,000 chars took 2.7s, 10,000 took 5.9s), so the cost is
+ * dominated by the round trip, not the payload. Batching is therefore
+ * enormously cheaper than per-paragraph checking — but one huge request
+ * also means waiting for the whole note before anything appears. A few
+ * medium chunks in parallel gets both.
+ */
+const MAX_CHUNK_CHARS = 4000;
+
+/**
+ * How many chunks are in flight at once.
+ *
+ * Self-hosted instances are not rate-limited the way the public API is, so
+ * concurrency is the lever that turns "seconds per chunk" into "seconds for
+ * the document". Capped rather than unbounded so a very long note does not
+ * open fifty sockets at once.
+ */
+const MAX_PARALLEL_CHUNKS = 4;
+
+/**
+ * Paragraph separator inside a batched request.
+ *
+ * A blank line, so the server sees paragraph boundaries where the document
+ * has them — sentence-spanning rules must not fire across two unrelated
+ * paragraphs that only happen to be adjacent in the payload.
+ */
+const JOINER = '\n\n';
+
+interface ChunkEntry {
+  /** Index into the caller's segment list. */
+  index: number;
+  /** Offset of this segment's text within the joined chunk. */
+  at: number;
+  length: number;
+}
+
+/** Group segments into request-sized chunks, remembering where each landed. */
+export function planChunks(
+  segments: { text: string }[],
+  maxChars = MAX_CHUNK_CHARS
+): { text: string; entries: ChunkEntry[] }[] {
+  const chunks: { text: string; entries: ChunkEntry[] }[] = [];
+  let text = '';
+  let entries: ChunkEntry[] = [];
+
+  const flush = () => {
+    if (entries.length > 0) chunks.push({ text, entries });
+    text = '';
+    entries = [];
+  };
+
+  for (const [index, segment] of segments.entries()) {
+    // Blank segments are not worth a byte of payload, and would only add
+    // separator noise between real paragraphs.
+    if (segment.text.trim().length === 0) continue;
+
+    const prefix = text.length === 0 ? '' : JOINER;
+    // A single oversized paragraph still goes on its own rather than being
+    // split mid-sentence, which would invent errors at the seam.
+    if (
+      text.length > 0 &&
+      text.length + prefix.length + segment.text.length > maxChars
+    ) {
+      flush();
+    }
+    const at = text.length === 0 ? 0 : text.length + JOINER.length;
+    text = text.length === 0 ? segment.text : text + JOINER + segment.text;
+    entries.push({ index, at, length: segment.text.length });
+  }
+  flush();
+
+  return chunks;
+}
+
+/** Run `task` over `items`, at most `limit` at a time. */
+async function inParallel<T, R>(
+  items: T[],
+  limit: number,
+  task: (item: T) => Promise<R>
+): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const workers = Array.from(
+    { length: Math.min(limit, items.length) },
+    async () => {
+      for (;;) {
+        const i = next++;
+        if (i >= items.length) return;
+        out[i] = await task(items[i]);
+      }
+    }
+  );
+  await Promise.all(workers);
+  return out;
+}
+
 export interface LanguageToolMatch {
   from: number;
   to: number;
@@ -102,9 +201,91 @@ export interface LanguageToolProviderOptions {
 export function createLanguageToolProvider(
   options: LanguageToolProviderOptions
 ): DiagnosticProvider {
+  const toDiagnostics = (
+    matches: LanguageToolMatch[],
+    text: string,
+    offset: number
+  ): Diagnostic[] =>
+    matches.flatMap((match) => {
+      const kind = categoryToKind(match.category);
+      // The server reports a range, not a word, so recover the word from
+      // the text we submitted to consult the personal dictionary.
+      if (
+        kind === 'spelling' &&
+        options.isIgnored?.(text.slice(match.from, match.to)) === true
+      ) {
+        return [];
+      }
+      return [
+        {
+          from: match.from - offset,
+          to: match.to - offset,
+          kind,
+          message: match.message,
+          replacements: match.replacements,
+          source: options.id
+        }
+      ];
+    });
+
   return {
     id: options.id,
     kinds: options.kinds,
+
+    /**
+     * Batched path — the one that actually runs in the editor.
+     *
+     * Per-paragraph checking made a long note take minutes: a request costs
+     * about the same whether it carries one paragraph or twenty, so the
+     * round trips dominated. Chunks also give the server more context,
+     * which makes language detection confident enough to stop second-
+     * guessing it.
+     */
+    async checkAll(segments, { signal }): Promise<(Diagnostic[] | null)[]> {
+      const config = options.config();
+      const results: (Diagnostic[] | null)[] = segments.map(() => null);
+      if (!config) {
+        options.onStatus?.('unconfigured');
+        return results;
+      }
+
+      const chunks = planChunks(segments);
+      if (chunks.length === 0) return results;
+
+      let failure: unknown = null;
+      await inParallel(chunks, MAX_PARALLEL_CHUNKS, async (chunk) => {
+        if (signal.aborted || failure) return;
+        try {
+          const matches = await options.check({ ...config, text: chunk.text });
+          if (signal.aborted) return;
+          for (const entry of chunk.entries) {
+            // Matches are chunk-relative; split them back per segment and
+            // rebase, so the bus still sees segment-relative positions.
+            const inSegment = matches.filter(
+              (m) => m.from >= entry.at && m.to <= entry.at + entry.length
+            );
+            results[entry.index] = toDiagnostics(
+              inSegment,
+              chunk.text,
+              entry.at
+            );
+          }
+        } catch (err) {
+          failure = err;
+        }
+      });
+
+      if (failure) {
+        options.onStatus?.(
+          'failed',
+          failure instanceof Error ? failure.message : String(failure)
+        );
+        throw failure;
+      }
+      if (signal.aborted) return segments.map(() => null);
+      options.onStatus?.('active');
+      return results;
+    },
 
     async check({ text, signal }: CheckRequest): Promise<Diagnostic[] | null> {
       const config = options.config();
