@@ -92,13 +92,13 @@ describe('createLanguageToolProvider', () => {
     const { provider: p } = provider([
       match({ replacements: ['zebra', 'apple', 'mango'] })
     ]);
-    const [diagnostic] = await p.check(request('text'));
+    const [diagnostic] = (await p.check(request('text'))) ?? [];
     expect(diagnostic.replacements).toEqual(['zebra', 'apple', 'mango']);
   });
 
   it('emits spelling findings so its ranking can be used', async () => {
     const { provider: p } = provider([match({ category: 'TYPOS' })]);
-    const [diagnostic] = await p.check(request('text'));
+    const [diagnostic] = (await p.check(request('text'))) ?? [];
     expect(diagnostic.kind).toBe('spelling');
   });
 
@@ -127,8 +127,10 @@ describe('createLanguageToolProvider', () => {
     it('does nothing without a configured endpoint', async () => {
       // An unset server must read as "no opinion", not as an error on every
       // paragraph of every note.
+      // null, not [] — an empty array would read as "nothing is wrong" and,
+      // once this provider owns spelling, would suppress the dictionary.
       const { check, provider: p } = provider([match()], () => null);
-      expect(await p.check(request('some text'))).toEqual([]);
+      expect(await p.check(request('some text'))).toBeNull();
       expect(check).not.toHaveBeenCalled();
     });
 
@@ -152,7 +154,7 @@ describe('createLanguageToolProvider', () => {
       });
       expect(
         await p.check(request('text', { signal: controller.signal }))
-      ).toEqual([]);
+      ).toBeNull();
     });
   });
 

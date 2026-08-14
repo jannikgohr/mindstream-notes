@@ -38,9 +38,23 @@ export interface SpellcheckProviderOptions {
   wordChars?(): string;
 }
 
+/**
+ * The dictionary never declines — it is local, so it can always answer.
+ *
+ * Overriding `check` rather than intersecting it: an intersection would add
+ * a second call signature that the looser one shadows, leaving callers with
+ * a `null` they can never actually receive.
+ */
+export interface LocalSpellcheckProvider extends Omit<
+  DiagnosticProvider,
+  'check'
+> {
+  check(request: CheckRequest): Promise<Diagnostic[]>;
+}
+
 export function createSpellcheckProvider(
   options: SpellcheckProviderOptions
-): DiagnosticProvider {
+): LocalSpellcheckProvider {
   return {
     id: SPELLCHECK_PROVIDER_ID,
     kinds: ['spelling'],

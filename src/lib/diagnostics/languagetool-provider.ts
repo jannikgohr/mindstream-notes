@@ -93,16 +93,20 @@ export function createLanguageToolProvider(
     id: options.id,
     kinds: options.kinds,
 
-    async check({ text, signal }: CheckRequest): Promise<Diagnostic[]> {
+    async check({ text, signal }: CheckRequest): Promise<Diagnostic[] | null> {
       const config = options.config();
-      if (!config) return [];
+      // No server configured yet: no opinion. Returning an empty array here
+      // would read as "nothing is misspelled" and, once this provider owns
+      // spelling, would suppress the local dictionary — so merely enabling
+      // the plugin would turn spellchecking off.
+      if (!config) return null;
       // Whitespace-only segments still cost a network round trip, which is
       // the expensive resource here — unlike the dictionary path, where a
       // wasted check is microseconds.
-      if (text.trim().length === 0) return [];
+      if (text.trim().length === 0) return null;
 
       const matches = await options.check({ ...config, text });
-      if (signal.aborted) return [];
+      if (signal.aborted) return null;
 
       return matches.flatMap((match) => {
         const kind = categoryToKind(match.category);
