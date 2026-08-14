@@ -66,6 +66,18 @@ struct Category {
     id: String,
 }
 
+/// Reduce a user-entered server URL to its base.
+///
+/// People paste what their server's docs show them, which is usually the API
+/// root including `/v2` — and a trailing slash comes along for free. Both
+/// forms then produce `/v2/v2/check`, which 404s and looks like an
+/// unreachable server rather than a URL that needs one path segment removed.
+/// Accept every reasonable spelling instead of making the user guess.
+fn base_url(endpoint: &str) -> String {
+    let trimmed = endpoint.trim().trim_end_matches('/');
+    trimmed.strip_suffix("/v2").unwrap_or(trimmed).to_string()
+}
+
 /// How many replacements to keep per match.
 ///
 /// LanguageTool can return dozens for one match. The popover shows six
@@ -105,7 +117,7 @@ pub async fn check(
     text: &str,
     disabled_categories: &[String],
 ) -> AppResult<Vec<LanguageToolMatch>> {
-    let url = format!("{}/v2/check", endpoint.trim_end_matches('/'));
+    let url = format!("{}/v2/check", base_url(endpoint));
 
     let mut form: Vec<(String, String)> = vec![
         ("text".into(), text.to_string()),
@@ -173,7 +185,7 @@ pub async fn test_connection(
     api_key: Option<&str>,
     username: Option<&str>,
 ) -> TestConnectionResult {
-    let base = endpoint.trim_end_matches('/');
+    let base = base_url(endpoint);
     let client = reqwest::Client::new();
 
     let languages = match client.get(format!("{base}/v2/languages")).send().await {
@@ -270,6 +282,31 @@ mod tests {
                "rule":{"id":"COMMA_RULE","category":{"id":"PUNCTUATION"}}}
             ]}"#
         )
+    }
+
+    #[test]
+    fn accepts_the_url_forms_people_actually_paste() {
+        // A LanguageTool server's own docs show the API root, so `/v2` and a
+        // trailing slash are what users copy. Both used to produce
+        // `/v2/v2/check`, which 404s and reads as "server unreachable".
+        for input in [
+            "http://192.168.178.130:8081",
+            "http://192.168.178.130:8081/",
+            "http://192.168.178.130:8081/v2",
+            "http://192.168.178.130:8081/v2/",
+            "  http://192.168.178.130:8081/v2/  ",
+        ] {
+            assert_eq!(base_url(input), "http://192.168.178.130:8081", "{input}");
+        }
+    }
+
+    #[test]
+    fn leaves_a_path_prefix_alone() {
+        // A server behind a reverse proxy at /languagetool must keep it.
+        assert_eq!(
+            base_url("https://example.com/languagetool/v2/"),
+            "https://example.com/languagetool"
+        );
     }
 
     #[test]

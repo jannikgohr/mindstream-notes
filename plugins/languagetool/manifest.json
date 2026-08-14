@@ -53,14 +53,6 @@
             "scope": "D",
             "type": "text",
             "default": ""
-          },
-          {
-            "id": "test-connection",
-            "labelKey": "settings.testConnection.label",
-            "descriptionKey": "settings.testConnection.description",
-            "scope": "D",
-            "type": "button",
-            "actionId": "textChecker.test"
           }
         ]
       }
@@ -75,12 +67,7 @@
         "settings.username.label": "Account e-mail",
         "settings.username.description": "Only needed for LanguageTool's hosted API, which authenticates with an e-mail and key together. Leave empty for a self-hosted server.",
         "settings.apiKey.label": "API key",
-        "settings.apiKey.description": "Only needed for the hosted API. Stored on this device and never synced with your notes.",
-        "settings.testConnection.label": "Test connection",
-        "settings.testConnection.description": "Asks the server which languages it supports — no note text is sent. If an account e-mail and key are set, those are verified too.",
-        "test.ok": "LanguageTool connected",
-        "test.failed": "LanguageTool unreachable",
-        "test.noEndpoint": "No server URL configured yet."
+        "settings.apiKey.description": "Only needed for the hosted API. Stored on this device and never synced with your notes."
       },
       "de": {
         "plugin.description": "Grammatik- und Stilprüfung über einen LanguageTool-Server.",
@@ -91,12 +78,7 @@
         "settings.username.label": "Konto-E-Mail",
         "settings.username.description": "Nur für die gehostete LanguageTool-API nötig, die sich mit E-Mail und Schlüssel zusammen authentifiziert. Für einen eigenen Server leer lassen.",
         "settings.apiKey.label": "API-Schlüssel",
-        "settings.apiKey.description": "Nur für die gehostete API nötig. Wird auf diesem Gerät gespeichert und nie mit den Notizen synchronisiert.",
-        "settings.testConnection.label": "Verbindung testen",
-        "settings.testConnection.description": "Fragt den Server nach den unterstützten Sprachen — es wird kein Notiztext gesendet. Sind Konto-E-Mail und Schlüssel gesetzt, werden auch diese geprüft.",
-        "test.ok": "LanguageTool verbunden",
-        "test.failed": "LanguageTool nicht erreichbar",
-        "test.noEndpoint": "Noch keine Server-URL eingetragen."
+        "settings.apiKey.description": "Nur für die gehostete API nötig. Wird auf diesem Gerät gespeichert und nie mit den Notizen synchronisiert."
       }
     }
   }

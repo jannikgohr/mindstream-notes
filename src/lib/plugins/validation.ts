@@ -23,7 +23,6 @@ import {
   PLUGIN_EDITOR_TOOLBAR_ITEMS,
   PLUGIN_NOTE_EXPORT_FORMATS,
   PLUGIN_PREVIEW_MIME_TYPES,
-  PLUGIN_SETTING_ACTIONS,
   PLUGIN_SOURCE_LANGUAGE_HOST_PROVIDERS,
   PLUGIN_TEXT_CHECKER_PROTOCOLS,
   PLUGIN_TOOLBAR_LOCATIONS,
@@ -117,10 +116,8 @@ const SETTING_TYPES = new Set<PluginSetting['type']>([
   'color',
   'text',
   'folder',
-  'tag',
-  'button'
+  'tag'
 ]);
-const SETTING_ACTIONS = new Set<string>(PLUGIN_SETTING_ACTIONS);
 const TEXT_CHECKER_PROTOCOLS = new Set<string>(PLUGIN_TEXT_CHECKER_PROTOCOLS);
 const DIAGNOSTIC_KINDS = new Set(['spelling', 'grammar', 'style']);
 const VARIABLE_TYPES = new Set<PluginTemplateVariable['type']>([
@@ -639,17 +636,6 @@ function validateSetting(
       pluginId,
       `${path}.type ("${String(s.type)}") is not a supported setting type`
     );
-  }
-  if (s.type === 'button') {
-    // A button names a behaviour the HOST implements. Without this check a
-    // manifest could declare a button that silently does nothing, or name an
-    // action belonging to a different contribution.
-    if (!SETTING_ACTIONS.has(String(s.actionId))) {
-      throw new PluginValidationError(
-        pluginId,
-        `${path}.actionId ("${String(s.actionId)}") is not a supported setting action`
-      );
-    }
   }
   if (s.type === 'select' || s.type === 'radio') {
     if (!Array.isArray(s.options) || s.options.length === 0) {
