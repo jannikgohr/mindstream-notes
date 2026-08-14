@@ -355,6 +355,17 @@
                 "id": "editor.spellcheck.enabled",
                 "equals": true
               }
+            },
+            {
+              "id": "editor.spellcheck.customWords",
+              "scope": "V",
+              "type": "custom",
+              "customId": "spellcheck-custom-words",
+              "platforms": ["desktop"],
+              "showIf": {
+                "id": "editor.spellcheck.enabled",
+                "equals": true
+              }
             }
           ]
         },

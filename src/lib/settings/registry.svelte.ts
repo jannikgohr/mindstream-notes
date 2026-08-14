@@ -192,6 +192,10 @@ export const CUSTOM_COMPONENT_LOADERS: Record<string, CustomComponentLoader> = {
   'spellcheck-dictionaries': () =>
     import('./customs/SpellcheckDictionaries.svelte').then(
       (mod) => mod.default as unknown as AnyComponent
+    ),
+  'spellcheck-custom-words': () =>
+    import('./customs/SpellcheckCustomWords.svelte').then(
+      (mod) => mod.default as unknown as AnyComponent
     )
 };
 

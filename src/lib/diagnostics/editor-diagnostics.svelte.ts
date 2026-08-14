@@ -19,6 +19,11 @@ import {
 import type { Diagnostic, Segment } from './types';
 import { spellcheckSuggest, spellcheckUnknownWords } from '$lib/api/spellcheck';
 import { rankSuggestions } from './suggestion-rank';
+import { isCustomWord } from './custom-dictionary.svelte';
+import {
+  invalidateDiagnostics,
+  subscribeDiagnosticsInvalidated
+} from './invalidate';
 import { getSettingValue } from '$lib/settings/store.svelte';
 import { tUi } from '$lib/settings/i18n.svelte';
 
@@ -27,7 +32,11 @@ const bus = new DiagnosticBus();
 bus.register(
   createSpellcheckProvider({
     unknownWords: spellcheckUnknownWords,
-    message: () => tUi('editor.spellcheck.unknownWord')
+    message: () => tUi('editor.spellcheck.unknownWord'),
+    // Filtered in the frontend, before the word is ever sent for
+    // checking, so accepting a word takes effect on the next check with
+    // no dictionary reload.
+    isIgnored: isCustomWord
   })
 );
 
@@ -41,6 +50,13 @@ bus.register(
  */
 const PRECEDENCE = [SPELLCHECK_PROVIDER_ID];
 
+// The cache is keyed by the selected languages, so installing a dictionary
+// or accepting a word does not change the key even though it changes the
+// answer. Clearing it is just another thing to do on invalidation.
+subscribeDiagnosticsInvalidated(() => bus.clearCache());
+
+export { invalidateDiagnostics, subscribeDiagnosticsInvalidated };
+
 export function spellcheckEnabled(): boolean {
   return (
     (getSettingValue('editor.spellcheck.enabled') as boolean | undefined) ??
@@ -51,41 +67,6 @@ export function spellcheckEnabled(): boolean {
 export function spellcheckLanguages(): string[] {
   const value = getSettingValue('editor.spellcheck.languages');
   return Array.isArray(value) ? (value as string[]) : [];
-}
-
-/**
- * Editors that want telling when their results go stale.
- *
- * A plugin can see its own document change and re-check itself. It cannot
- * see the language selection change or a dictionary finish installing, and
- * both silently change the answer for text that has not been touched.
- */
-const listeners = new Set<() => void>();
-
-export function subscribeDiagnosticsInvalidated(
-  recheck: () => void
-): () => void {
-  listeners.add(recheck);
-  return () => listeners.delete(recheck);
-}
-
-/**
- * Drop every memoized verdict and ask every open editor to re-check.
- *
- * Two distinct staleness problems, one call:
- *
- *   - the CACHE is keyed by the selected languages, so installing a
- *     dictionary does not change the key even though it changes the answer;
- *   - the DRAWN squiggles were computed under the previous configuration and
- *     nothing in the document has changed to trigger a redraw.
- *
- * Missing the second is what left German words underlined after German was
- * enabled, each suggesting its own spelling back — the squiggle was stale
- * while the suggestion lookup was live.
- */
-export function invalidateDiagnostics(): void {
-  bus.clearCache();
-  for (const listener of listeners) listener();
 }
 
 /**

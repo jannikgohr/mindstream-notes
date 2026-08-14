@@ -550,6 +550,27 @@ const MIGRATIONS: &[Migration] = &[
             ALTER TABLE plugins ADD COLUMN signature_status TEXT NOT NULL DEFAULT 'unsigned';
         "#,
     },
+    Migration {
+        to: 23,
+        // Words the user has personally accepted, checked before anything
+        // reaches the dictionary engine (see src/spellcheck).
+        //
+        // Lives in the DB rather than in settings because settings are held
+        // in the WebView's localStorage: device-local, and wiped by a
+        // session reload. A personal dictionary the user has to rebuild
+        // after every reload is worse than not having one.
+        //
+        // `word_folded` is the lowercase form and carries the uniqueness
+        // constraint, so adding "Mindstream" after "mindstream" is a no-op
+        // rather than a second row that can never be matched separately.
+        sql: r#"
+            CREATE TABLE custom_dictionary (
+                word        TEXT NOT NULL,
+                word_folded TEXT NOT NULL PRIMARY KEY,
+                created     TEXT NOT NULL
+            );
+        "#,
+    },
 ];
 
 pub fn run(conn: &mut Connection) -> AppResult<()> {

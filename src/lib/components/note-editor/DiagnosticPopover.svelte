@@ -19,6 +19,7 @@
     closeDiagnosticPopover,
     diagnosticPopover
   } from '$lib/diagnostics/popover-bridge.svelte';
+  import { addCustomWord } from '$lib/diagnostics/custom-dictionary.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
 
   let menu = $state<HTMLDivElement | null>(null);
@@ -66,6 +67,19 @@
   function choose(replacement: string) {
     open?.apply(replacement);
     closeDiagnosticPopover();
+  }
+
+  /**
+   * Accept the word everywhere rather than correcting this one instance.
+   *
+   * Only offered for spelling. A grammar or style hint is about the
+   * sentence, not the word, so "never tell me about this word again"
+   * would silence the wrong thing.
+   */
+  function accept() {
+    const word = open?.word;
+    closeDiagnosticPopover();
+    if (word) void addCustomWord(word);
   }
 
   onMount(() => {
@@ -140,5 +154,18 @@
         {/if}
       {/if}
     </div>
+
+    {#if open.diagnostic.kind === 'spelling'}
+      <div class="border-t border-border py-1">
+        <button
+          type="button"
+          role="menuitem"
+          class="block w-full truncate px-3 py-1.5 text-left text-sm hover:bg-accent hover:text-accent-foreground"
+          onclick={accept}
+        >
+          {tUi('editor.spellcheck.menu.addToDictionary')}
+        </button>
+      </div>
+    {/if}
   </div>
 {/if}

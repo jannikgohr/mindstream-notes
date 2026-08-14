@@ -792,7 +792,10 @@
     "editor.spellcheck.dictionaries.licenseUnstated": "Licence not stated — see source",
     "editor.spellcheck.dictionaries.source": "Source",
     "editor.spellcheck.dictionaries.failed": "Download failed",
-    "editor.spellcheck.menu.showAll": "Show all"
+    "editor.spellcheck.menu.showAll": "Show all",
+    "editor.spellcheck.menu.addToDictionary": "Add to dictionary",
+    "editor.spellcheck.customWords.empty": "No words added yet. Right-click a flagged word and choose \"Add to dictionary\".",
+    "editor.spellcheck.customWords.remove": "Remove"
   },
   "categories": {
     "account": {
@@ -1114,6 +1117,10 @@
     "editor.spellcheck.dictionaries": {
       "label": "Dictionaries",
       "description": "Downloaded on request rather than bundled, because dictionary licences differ. Each shows its licence before you install it."
+    },
+    "editor.spellcheck.customWords": {
+      "label": "Personal dictionary",
+      "description": "Words you have accepted. They apply in every language and are stored with this vault, not with the machine."
     }
   },
   "values": {
