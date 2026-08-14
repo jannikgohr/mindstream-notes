@@ -132,7 +132,7 @@ export class DiagnosticBus {
         if (signal?.aborted) throw new AbortError();
 
         const key = this.#key(provider.id, languages, segment.text);
-        let relative = this.#cacheGet(key);
+        let relative: Diagnostic[] | null | undefined = this.#cacheGet(key);
 
         if (relative === undefined) {
           try {
@@ -151,13 +151,17 @@ export class DiagnosticBus {
             console.error(`Diagnostic provider "${provider.id}" failed`, err);
             continue;
           }
-          this.#cacheSet(key, relative);
+          // `null` is "I did not check", not "nothing is wrong" — so it is
+          // not cached either; the next pass may be configured or online.
+          if (relative !== null) this.#cacheSet(key, relative);
         }
+
+        if (relative === null) continue;
 
         // Reaching here means the provider answered — including answering
         // "nothing wrong". That is what lets an owner suppress the others:
         // silence from a working checker is a real verdict, silence from a
-        // broken one is not.
+        // declining or broken one is not.
         const seen = answered.get(index) ?? new Set<string>();
         seen.add(provider.id);
         answered.set(index, seen);

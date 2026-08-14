@@ -107,6 +107,15 @@ export interface DiagnosticProvider {
    * Ranges are relative to `request.text`, NOT to the document; the bus
    * rebases them. Returning positions already rebased will place the
    * squiggle in the wrong place on every paragraph but the first.
+   *
+   * Return `null` for "I did not check this", which is NOT the same as an
+   * empty array. An empty array is a verdict — nothing is wrong here — and
+   * a provider that owns a kind uses it to suppress the others. `null` says
+   * the provider had no opinion at all (unconfigured, offline, nothing
+   * applicable), so whoever else was asked still counts. Confusing the two
+   * makes an idle checker silence a working one.
    */
-  check(request: CheckRequest): Promise<Diagnostic[]> | Diagnostic[];
+  check(
+    request: CheckRequest
+  ): Promise<Diagnostic[] | null> | Diagnostic[] | null;
 }

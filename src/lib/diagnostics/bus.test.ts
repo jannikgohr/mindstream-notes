@@ -443,3 +443,87 @@ describe('kind ownership', () => {
     expect(out).toHaveLength(2);
   });
 });
+
+/**
+ * The reported regression: enabling LanguageTool made spellchecking display
+ * nothing at all.
+ *
+ * An unconfigured checker returned `[]`, which the bus read as "I checked,
+ * nothing is wrong" — and since it owned spelling, that verdict suppressed
+ * the local dictionary for every paragraph. Declining has to be distinct
+ * from finding nothing.
+ */
+describe('a provider that declines', () => {
+  const owners = { spelling: 'lt' } as const;
+
+  const declining: DiagnosticProvider = {
+    id: 'lt',
+    kinds: ['spelling'],
+    // Not configured yet, so it has no opinion at all.
+    check: () => null
+  };
+
+  const dictionary: DiagnosticProvider = {
+    id: 'spell',
+    kinds: ['spelling'],
+    check: ({ text }) => {
+      const at = text.indexOf('teh');
+      return at === -1 ? [] : [diag({ from: at, to: at + 3, source: 'spell' })];
+    }
+  };
+
+  it('does not suppress the fallback', async () => {
+    const bus = new DiagnosticBus();
+    bus.register(declining);
+    bus.register(dictionary);
+
+    const out = await bus.check(segments(['teh cat', 0]), {
+      languages: ['en'],
+      owners
+    });
+    expect(out.map((d) => d.source)).toEqual(['spell']);
+  });
+
+  it('contributes nothing of its own', async () => {
+    const bus = new DiagnosticBus();
+    bus.register(declining);
+
+    expect(
+      await bus.check(segments(['teh cat', 0]), { languages: ['en'], owners })
+    ).toEqual([]);
+  });
+
+  it('is not cached, so it can answer once configured', async () => {
+    // Caching "no opinion" would keep a checker silent after the user
+    // finally fills in the server URL.
+    let configured = false;
+    const provider: DiagnosticProvider = {
+      id: 'lt',
+      kinds: ['spelling'],
+      check: () => (configured ? [diag({ source: 'lt' })] : null)
+    };
+    const bus = new DiagnosticBus();
+    bus.register(provider);
+    const opts = { languages: ['en'], owners };
+
+    expect(await bus.check(segments(['teh cat', 0]), opts)).toEqual([]);
+    configured = true;
+    expect(await bus.check(segments(['teh cat', 0]), opts)).toHaveLength(1);
+  });
+
+  it('still suppresses the fallback once it answers', async () => {
+    const bus = new DiagnosticBus();
+    bus.register({
+      id: 'lt',
+      kinds: ['spelling'],
+      check: () => []
+    });
+    bus.register(dictionary);
+
+    const out = await bus.check(segments(['teh cat', 0]), {
+      languages: ['en'],
+      owners
+    });
+    expect(out).toEqual([]);
+  });
+});
