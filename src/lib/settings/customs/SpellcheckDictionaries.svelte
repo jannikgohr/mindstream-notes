@@ -37,6 +37,7 @@
   import { getSettingValue } from '$lib/settings/store.svelte';
   import { invalidateDiagnostics } from '$lib/diagnostics/editor-diagnostics.svelte';
   import { tUi, tValue } from '$lib/settings/i18n.svelte';
+  import { spellingOwner } from '$lib/diagnostics/editor-diagnostics.svelte';
 
   interface Props {
     searchQuery?: string;
@@ -103,6 +104,22 @@
     }
   }
 </script>
+
+<!--
+  A plugin can take spelling over entirely, which leaves this panel looking
+  unchanged while something else does the work — exactly the situation where
+  "my spellchecking stopped" is hard to answer. Say who has it.
+-->
+{#if spellingOwner()}
+  <p
+    class="mt-2 rounded-md border border-border px-3 py-2 text-xs text-muted-foreground"
+  >
+    {tUi('editor.spellcheck.ownedByPlugin').replace(
+      '{plugin}',
+      spellingOwner()?.label ?? ''
+    )}
+  </p>
+{/if}
 
 <div class="mt-2 flex flex-col gap-1">
   {#each visible as entry (entry.id)}

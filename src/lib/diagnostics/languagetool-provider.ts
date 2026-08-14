@@ -75,6 +75,12 @@ export interface LanguageToolProviderOptions {
    * "Add to dictionary" would silently do nothing.
    */
   isIgnored?(word: string): boolean;
+  /**
+   * Reports what actually happened, so the settings UI can show a live
+   * state instead of the user pressing a button to find out. Called on
+   * every run — the store ignores repeats.
+   */
+  onStatus?(state: 'unconfigured' | 'active' | 'failed', detail?: string): void;
   check(args: {
     endpoint: string;
     apiKey?: string;
@@ -99,14 +105,29 @@ export function createLanguageToolProvider(
       // would read as "nothing is misspelled" and, once this provider owns
       // spelling, would suppress the local dictionary — so merely enabling
       // the plugin would turn spellchecking off.
-      if (!config) return null;
+      if (!config) {
+        options.onStatus?.('unconfigured');
+        return null;
+      }
       // Whitespace-only segments still cost a network round trip, which is
       // the expensive resource here — unlike the dictionary path, where a
       // wasted check is microseconds.
       if (text.trim().length === 0) return null;
 
-      const matches = await options.check({ ...config, text });
+      let matches: LanguageToolMatch[];
+      try {
+        matches = await options.check({ ...config, text });
+      } catch (err) {
+        // Reported before rethrowing: the bus turns this into "provider
+        // skipped for this segment", which is invisible on its own.
+        options.onStatus?.(
+          'failed',
+          err instanceof Error ? err.message : String(err)
+        );
+        throw err;
+      }
       if (signal.aborted) return null;
+      options.onStatus?.('active');
 
       return matches.flatMap((match) => {
         const kind = categoryToKind(match.category);

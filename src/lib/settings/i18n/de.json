@@ -800,7 +800,13 @@
     "plugins.textCheckers.check": "Prüfen",
     "plugins.textCheckers.reachable": "Server erreichbar",
     "plugins.textCheckers.unreachable": "Server nicht erreichbar",
-    "plugins.textCheckers.noEndpoint": "Keine Server-URL eingetragen"
+    "plugins.textCheckers.noEndpoint": "Keine Server-URL eingetragen",
+    "plugins.textCheckers.state.idle": "Noch nicht verwendet",
+    "plugins.textCheckers.state.unconfigured": "Inaktiv — keine Server-URL",
+    "plugins.textCheckers.state.active": "Aktiv",
+    "plugins.textCheckers.state.failed": "Fehlerhaft",
+    "plugins.textCheckers.ownsSpelling": "Prüft auch die Rechtschreibung",
+    "editor.spellcheck.ownedByPlugin": "Die Rechtschreibung wird derzeit von {plugin} geprüft. Diese Wörterbücher werden weiterhin genutzt, sobald es nicht erreichbar ist."
   },
   "categories": {
     "account": {

@@ -6,19 +6,30 @@ const contributions = vi.hoisted(
 );
 const settings = vi.hoisted(() => new Map<string, unknown>());
 const registered = vi.hoisted(() => new Map<string, () => void>());
-const spellingOwner = vi.hoisted(() => ({ id: null as string | null }));
+const spellingOwner = vi.hoisted(() => ({
+  id: null as string | null,
+  label: ''
+}));
 
 vi.mock('$lib/plugins/registry.svelte', () => ({
-  pluginTextCheckers: () => contributions
+  pluginTextCheckers: () => contributions,
+  // The owner's display name comes from the manifest, so the settings UI
+  // can say WHO took spelling over.
+  pluginById: (id: string) => ({ manifest: { id, name: 'LanguageTool' } })
 }));
 vi.mock('$lib/settings/store.svelte', () => ({
   getSettingValue: (id: string) => settings.get(id)
 }));
 vi.mock('./custom-dictionary.svelte', () => ({ isCustomWord: () => false }));
+vi.mock('./checker-status.svelte', () => ({
+  reportCheckerStatus: () => {},
+  clearCheckerStatus: () => {}
+}));
 vi.mock('./editor-diagnostics.svelte', () => ({
   selectedLanguageTags: () => ['de-DE', 'en-US'],
-  setSpellingOwner: (id: string | null) => {
+  setSpellingOwner: (id: string | null, label = '') => {
     spellingOwner.id = id;
+    spellingOwner.label = label;
   },
   registerProvider: (provider: { id: string }) => {
     const off = vi.fn();
@@ -140,6 +151,8 @@ describe('spelling ownership', () => {
     const mod = await load();
     mod.syncPluginTextCheckers();
     expect(spellingOwner.id).toBe('plugins.com.example.lt.grammar');
+    // Named, so the dictionary panel can explain who has spelling.
+    expect(spellingOwner.label).toBe('LanguageTool');
   });
 
   it('leaves spelling with the dictionary when the setting is off', async () => {

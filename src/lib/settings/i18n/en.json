@@ -800,7 +800,13 @@
     "plugins.textCheckers.check": "Check",
     "plugins.textCheckers.reachable": "Server reachable",
     "plugins.textCheckers.unreachable": "Server unreachable",
-    "plugins.textCheckers.noEndpoint": "No server URL configured"
+    "plugins.textCheckers.noEndpoint": "No server URL configured",
+    "plugins.textCheckers.state.idle": "Not used yet",
+    "plugins.textCheckers.state.unconfigured": "Inactive — no server URL",
+    "plugins.textCheckers.state.active": "Active",
+    "plugins.textCheckers.state.failed": "Failing",
+    "plugins.textCheckers.ownsSpelling": "Also checking spelling",
+    "editor.spellcheck.ownedByPlugin": "Spelling is currently checked by {plugin}. These dictionaries are still used whenever it cannot be reached."
   },
   "categories": {
     "account": {

@@ -12,8 +12,17 @@
    * carries no note text; credentials, when configured, are verified with a
    * fixed probe string. See `spellcheck::languagetool` for why.
    */
-  import { CheckCircle2, Globe, RefreshCw, XCircle } from '@lucide/svelte';
+  import {
+    CheckCircle2,
+    CircleDashed,
+    Globe,
+    RefreshCw,
+    XCircle
+  } from '@lucide/svelte';
   import { languagetoolTestConnection } from '$lib/api/spellcheck';
+  import { checkerStatus } from '$lib/diagnostics/checker-status.svelte';
+  import { checkerProviderId } from '$lib/diagnostics/plugin-checkers.svelte';
+  import { spellingOwner } from '$lib/diagnostics/editor-diagnostics.svelte';
   import { pluginById } from '$lib/plugins/registry.svelte';
   import { resolvePluginStringOptional } from '$lib/plugins/plugin-i18n';
   import { getSettingValue } from '$lib/settings/store.svelte';
@@ -97,12 +106,56 @@
         {@const row = rows[checker.id]}
         {@const label = resolvePluginStringOptional(pluginId, checker.labelKey)}
         {@const endpoint = setting(checker.endpointSetting)}
+        {@const providerId = checkerProviderId(pluginId, checker.id)}
+        {@const live = checkerStatus(providerId)}
+        {@const ownsSpelling = spellingOwner()?.id === providerId}
         <div class="flex items-start justify-between gap-3 py-3">
           <div class="min-w-0">
             <div class="flex items-center gap-2 text-sm font-medium">
               <Globe class="size-4 shrink-0 text-muted-foreground" />
               <span>{label ?? checker.id}</span>
             </div>
+            <!--
+              Live state from the checking pipeline, not from the button
+              below. A checker that contributes nothing looks exactly like
+              a document with nothing wrong in it, so its real state has to
+              be visible without the user going looking for it.
+            -->
+            <p class="mt-0.5 flex items-center gap-1 text-xs">
+              {#if live.state === 'active'}
+                <CheckCircle2
+                  class="size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400"
+                />
+                <span class="text-emerald-600 dark:text-emerald-400">
+                  {tUi('plugins.textCheckers.state.active')}
+                </span>
+              {:else if live.state === 'failed'}
+                <XCircle class="size-3.5 shrink-0 text-destructive" />
+                <span class="text-destructive">
+                  {tUi('plugins.textCheckers.state.failed')}
+                </span>
+              {:else if live.state === 'unconfigured'}
+                <CircleDashed class="size-3.5 shrink-0 text-muted-foreground" />
+                <span class="text-muted-foreground">
+                  {tUi('plugins.textCheckers.state.unconfigured')}
+                </span>
+              {:else}
+                <CircleDashed class="size-3.5 shrink-0 text-muted-foreground" />
+                <span class="text-muted-foreground">
+                  {tUi('plugins.textCheckers.state.idle')}
+                </span>
+              {/if}
+              {#if ownsSpelling}
+                <span class="text-muted-foreground">
+                  · {tUi('plugins.textCheckers.ownsSpelling')}
+                </span>
+              {/if}
+            </p>
+            {#if live.detail && live.state === 'failed'}
+              <p class="mt-0.5 break-all text-[11px] text-muted-foreground">
+                {live.detail}
+              </p>
+            {/if}
             {#if endpoint}
               <p
                 class="mt-0.5 break-all font-mono text-[11px] text-muted-foreground"
