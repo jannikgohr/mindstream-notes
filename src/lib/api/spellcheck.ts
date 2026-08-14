@@ -116,6 +116,19 @@ export function spellcheckRemoveDictionary(id: string): Promise<void> {
   );
 }
 
+/**
+ * The `WORDCHARS` union for the given languages — the characters those
+ * dictionaries declare as part of a word.
+ */
+export function spellcheckWordChars(languages: string[]): Promise<string> {
+  return invokeOrFallback<string>(
+    TauriCommandName.SpellcheckWordChars,
+    { languages },
+    () => '',
+    (value) => assertString(value, 'spellcheck_word_chars response')
+  );
+}
+
 /** The user's personal dictionary, in the casing they typed. */
 export function customDictionaryList(): Promise<string[]> {
   return invokeOrFallback<string[]>(

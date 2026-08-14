@@ -54,6 +54,13 @@ pub struct CatalogueEntry {
 }
 
 /// The offered set. Ordered roughly by expected demand.
+///
+/// Danish is deliberately absent. `da_DK` declares `FLAG num`, and line 61
+/// of its `.dic` is `"A/S"` — an unescaped `/` that Hunspell's format
+/// treats as the flag separator, leaving `S"` where a number belongs.
+/// spellbook rejects the whole dictionary, so it fails install validation
+/// every time. Offering a dictionary that provably cannot install is worse
+/// than not offering it; restore this entry once the parse succeeds.
 pub const CATALOGUE: &[CatalogueEntry] = &[
     CatalogueEntry {
         id: "en_US",
@@ -133,12 +140,6 @@ pub const CATALOGUE: &[CatalogueEntry] = &[
         id: "sv_SE",
         bcp47: "sv-SE",
         path: "sv_SE/dictionaries/sv_SE",
-        license: "",
-    },
-    CatalogueEntry {
-        id: "da_DK",
-        bcp47: "da-DK",
-        path: "da_DK/da_DK",
         license: "",
     },
     CatalogueEntry {

@@ -17,7 +17,11 @@ import {
   SPELLCHECK_PROVIDER_ID
 } from './spellcheck-provider';
 import type { Diagnostic, Segment } from './types';
-import { spellcheckSuggest, spellcheckUnknownWords } from '$lib/api/spellcheck';
+import {
+  spellcheckSuggest,
+  spellcheckUnknownWords,
+  spellcheckWordChars
+} from '$lib/api/spellcheck';
 import { rankSuggestions } from './suggestion-rank';
 import { isCustomWord } from './custom-dictionary.svelte';
 import {
@@ -36,7 +40,11 @@ bus.register(
     // Filtered in the frontend, before the word is ever sent for
     // checking, so accepting a word takes effect on the next check with
     // no dictionary reload.
-    isIgnored: isCustomWord
+    isIgnored: isCustomWord,
+    // Cached rather than fetched per check: it changes only when the
+    // language selection or installed set does, both of which already
+    // raise an invalidation.
+    wordChars: () => wordChars
   })
 );
 
@@ -50,10 +58,28 @@ bus.register(
  */
 const PRECEDENCE = [SPELLCHECK_PROVIDER_ID];
 
+/**
+ * The characters the enabled dictionaries declare as part of a word.
+ *
+ * Empty until loaded, which degrades to letters-only tokenization — the
+ * behaviour before WORDCHARS was honoured, so a slow or failed load costs
+ * accuracy on abbreviations rather than breaking checking outright.
+ */
+let wordChars = '';
+
+async function refreshWordChars(): Promise<void> {
+  const languages = spellcheckLanguages();
+  wordChars =
+    languages.length === 0 ? '' : await spellcheckWordChars(languages);
+}
+
 // The cache is keyed by the selected languages, so installing a dictionary
 // or accepting a word does not change the key even though it changes the
 // answer. Clearing it is just another thing to do on invalidation.
-subscribeDiagnosticsInvalidated(() => bus.clearCache());
+subscribeDiagnosticsInvalidated(() => {
+  bus.clearCache();
+  void refreshWordChars();
+});
 
 export { invalidateDiagnostics, subscribeDiagnosticsInvalidated };
 

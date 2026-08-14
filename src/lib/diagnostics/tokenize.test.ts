@@ -221,3 +221,82 @@ describe('trailing periods', () => {
     ).toEqual(['Nr.', 'bzw.', 'Abs.']);
   });
 });
+
+/**
+ * WORDCHARS-driven joining. Hunspell has no tokenizer and exports this
+ * directive so callers segment the way the dictionary expects; German,
+ * Danish, French, Dutch and Swedish all declare `.`.
+ */
+describe('WORDCHARS', () => {
+  const de = '\u00df-.';
+  const words = (text: string, chars: string) =>
+    tokenizeWords(text, 0, chars).map((t) => t.text);
+
+  it('joins letters across a declared character', () => {
+    expect(words('z.B', de)).toEqual(['z.B']);
+  });
+
+  it('does not join across a sentence boundary', () => {
+    // `. ` ends a sentence; `.B` does not. This is the whole disambiguation.
+    expect(words('Das ist gut. Aber', de)).toEqual([
+      'Das',
+      'ist',
+      'gut',
+      'Aber'
+    ]);
+  });
+
+  it('still offers the abbreviation form for the joined token', () => {
+    const [token] = tokenizeWords('z.B.', 0, de);
+    expect(token.text).toBe('z.B');
+    expect(token.abbreviation).toBe('z.B.');
+  });
+
+  it('ignores the directive when the dictionary declares none', () => {
+    // en_US declares no `.`, so nothing joins.
+    expect(words('z.B', '')).toEqual(['z', 'B']);
+  });
+
+  it('ignores letters and digits in the directive', () => {
+    // They are already word characters; only punctuation changes anything.
+    expect(words('ab', '0123456789')).toEqual(['ab']);
+  });
+
+  describe('segments as a fallback', () => {
+    it('records the segments of a joined token', () => {
+      const [token] = tokenizeWords('and/or', 0, '/');
+      expect(token.text).toBe('and/or');
+      expect(token.parts?.map((p) => p.text)).toEqual(['and', 'or']);
+    });
+
+    it('gives segments their own ranges', () => {
+      const [token] = tokenizeWords('and/or', 0, '/');
+      expect(token.parts).toEqual([
+        { text: 'and', from: 0, to: 3 },
+        { text: 'or', from: 4, to: 6 }
+      ]);
+    });
+
+    it('does not split at a hyphen', () => {
+      // E-Mail stays whole: Hunspell's BREAK handles hyphens better, and
+      // splitting would flag `E` as a one-letter unknown.
+      const [token] = tokenizeWords('E-Mail', 0, de);
+      expect(token.text).toBe('E-Mail');
+      expect(token.parts).toBeUndefined();
+    });
+
+    it('does not split at an apostrophe', () => {
+      const [token] = tokenizeWords("don't", 0, "'");
+      expect(token.parts).toBeUndefined();
+    });
+
+    it('records no segments for an ordinary word', () => {
+      expect(tokenizeWords('Haus', 0, de)[0].parts).toBeUndefined();
+    });
+
+    it('rebases segment offsets', () => {
+      const [token] = tokenizeWords('and/or', 100, '/');
+      expect(token.parts?.map((p) => p.from)).toEqual([100, 104]);
+    });
+  });
+});

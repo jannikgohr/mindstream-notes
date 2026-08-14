@@ -37,7 +37,9 @@ use crate::error::{AppError, AppResult, CommandResult};
 use crate::paths::app_data_root;
 
 pub use catalogue::{CatalogueEntry, CATALOGUE};
-pub use dictionary::{decode_dictionary_file, load_dictionary, retag_utf8, sniff_encoding};
+pub use dictionary::{
+    decode_dictionary_file, load_dictionary, read_word_chars, retag_utf8, sniff_encoding,
+};
 
 /// How many dictionaries stay resident.
 ///
@@ -372,4 +374,38 @@ pub async fn custom_dictionary_add(db: tauri::State<'_, Db>, word: String) -> Co
 #[tauri::command]
 pub async fn custom_dictionary_remove(db: tauri::State<'_, Db>, word: String) -> CommandResult<()> {
     Ok(db.with_conn(|conn| custom::remove(conn, &word))?)
+}
+
+/// The union of `WORDCHARS` across the given languages.
+///
+/// A union because the tokenizer runs once over text that may contain any
+/// enabled language, and it cannot know which language a given word is in —
+/// that is the same premise the "any enabled dictionary accepts it" rule
+/// rests on. Over-inclusion is safe: the frontend falls back to checking a
+/// token's segments individually when the joined form is unknown.
+///
+/// Missing or unreadable dictionaries contribute nothing rather than
+/// failing the call; the tokenizer degrades to letters-only, which is what
+/// it did before this existed.
+#[tauri::command]
+pub async fn spellcheck_word_chars(
+    app: AppHandle,
+    languages: Vec<String>,
+) -> CommandResult<String> {
+    let dir = dictionary_dir(&app)?;
+    let mut chars: Vec<char> = Vec::new();
+    for language in languages {
+        let path = dir.join(format!("{language}.aff"));
+        match dictionary::read_word_chars(&path) {
+            Ok(declared) => {
+                for ch in declared.chars() {
+                    if !chars.contains(&ch) {
+                        chars.push(ch);
+                    }
+                }
+            }
+            Err(err) => log::warn!("[spellcheck] no WORDCHARS for {language}: {err}"),
+        }
+    }
+    Ok(chars.into_iter().collect())
 }

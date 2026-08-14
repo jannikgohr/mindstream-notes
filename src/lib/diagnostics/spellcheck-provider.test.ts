@@ -172,3 +172,54 @@ describe('abbreviations', () => {
     expect(check).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * WORDCHARS joining, and the fallback that makes unioning it across
+ * languages safe.
+ */
+describe('WORDCHARS-joined tokens', () => {
+  const withChars = (unknownWords: ReturnType<typeof backend>, chars: string) =>
+    createSpellcheckProvider({
+      unknownWords,
+      message: (word) => `unknown: ${word}`,
+      wordChars: () => chars
+    });
+
+  it('accepts a joined construct the dictionary knows', async () => {
+    // spellbook resolves z.B. via the .aff BREAK rules, so the whole form
+    // is what has to reach it.
+    const out = await withChars(backend('z', 'B'), '.').check(
+      request('Siehe z.B. hier')
+    );
+    expect(out).toEqual([]);
+  });
+
+  it('offers the whole form, its abbreviation and its segments', async () => {
+    const check = backend('nothing');
+    await withChars(check, '.').check(request('z.B.'));
+    expect(check.mock.calls[0][1]).toEqual(['z.B', 'z.B.', 'z', 'B']);
+  });
+
+  it('falls back to segments when no whole form is known', async () => {
+    // Enabling Dutch declares `/` for every language, so `and/or` must not
+    // become one unknown word in English text.
+    const out = await withChars(backend('and/or'), '/').check(
+      request('and/or')
+    );
+    expect(out).toEqual([]);
+  });
+
+  it('flags only the bad segment, with its own range', async () => {
+    const out = await withChars(backend('gut/schlekt', 'schlekt'), '/').check(
+      request('gut/schlekt')
+    );
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({ from: 4, to: 11 });
+  });
+
+  it('flags the whole token when it has no segments', async () => {
+    const out = await withChars(backend('Xyzzy'), '.').check(request('Xyzzy'));
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({ from: 0, to: 5 });
+  });
+});

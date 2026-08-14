@@ -376,6 +376,7 @@ pub fn run() {
             spellcheck::custom_dictionary_list,
             spellcheck::custom_dictionary_add,
             spellcheck::custom_dictionary_remove,
+            spellcheck::spellcheck_word_chars,
             // Search
             search::search_notes,
             // PDF searchable-text index (derived, local-only)
