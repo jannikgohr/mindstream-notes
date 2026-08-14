@@ -24,6 +24,7 @@
 mod catalogue;
 mod custom;
 mod dictionary;
+pub mod languagetool;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

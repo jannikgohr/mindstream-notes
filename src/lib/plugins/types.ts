@@ -48,7 +48,8 @@ export type PluginPermission =
   | 'pluginStorage.write'
   | 'pluginWebviews.allowEval'
   | 'nativeTools.runDeclared'
-  | 'nativeServices.run';
+  | 'nativeServices.run'
+  | 'textCheckers.contribute';
 
 /** All permissions the current app version understands. */
 export const KNOWN_PLUGIN_PERMISSIONS: readonly PluginPermission[] = [
@@ -62,7 +63,8 @@ export const KNOWN_PLUGIN_PERMISSIONS: readonly PluginPermission[] = [
   'pluginStorage.write',
   'pluginWebviews.allowEval',
   'nativeTools.runDeclared',
-  'nativeServices.run'
+  'nativeServices.run',
+  'textCheckers.contribute'
 ];
 
 /**
@@ -535,6 +537,75 @@ export interface PluginDocSection {
 }
 
 /** The `contributes` block of a manifest. Every field is optional. */
+/**
+ * Wire protocols a text checker can speak.
+ *
+ * Host-owned, exactly like `PLUGIN_SOURCE_LANGUAGE_HOST_PROVIDERS`: a
+ * manifest picks from protocols the app ships an implementation for, rather
+ * than supplying its own transport. That is what keeps a checker a
+ * declaration instead of arbitrary code with access to every note's text.
+ * A second protocol is added here, not in a plugin bundle.
+ */
+export const PLUGIN_TEXT_CHECKER_PROTOCOLS = ['languagetool'] as const;
+
+export type PluginTextCheckerProtocol =
+  (typeof PLUGIN_TEXT_CHECKER_PROTOCOLS)[number];
+
+/**
+ * A checker a plugin adds to the diagnostics pipeline.
+ *
+ * Deliberately DECLARATIVE — the plugin describes an endpoint, and the host
+ * makes the request and renders the result. It never receives note text or
+ * returns rendered UI. Two reasons: with Yjs underneath, a checker that
+ * could edit the document would fight collaborative updates, and a checker
+ * that drew its own squiggles would make the source and WYSIWYG panes
+ * disagree. Plugins supply findings; the host owns the document and the
+ * pixels.
+ *
+ * Gated by `textCheckers.contribute`, its own permission rather than
+ * `notes.read`, because a checker sees the full text of every note the user
+ * types in — including ones it would never otherwise be granted.
+ */
+export interface PluginTextCheckerContribution {
+  /** Namespaced to `plugins.<pluginId>.<id>` at runtime, like settings. */
+  id: string;
+  /**
+   * Kinds this checker may emit. Declared so overlapping providers can be
+   * de-conflicted without running them — the built-in dictionary owns
+   * spelling, so a grammar service should not also claim it.
+   */
+  kinds: ('spelling' | 'grammar' | 'style')[];
+  /** Which host-shipped protocol the endpoint speaks. */
+  protocol: PluginTextCheckerProtocol;
+  /**
+   * Id of the plugin setting holding the server URL.
+   *
+   * A setting rather than a manifest value because the endpoint is the
+   * user's choice — their own self-hosted instance, or the public API with
+   * its rate limits and its very different privacy implications.
+   */
+  endpointSetting: string;
+  /** Id of the plugin setting holding an API key, when the server needs one. */
+  apiKeySetting?: string;
+  /**
+   * Id of the plugin setting holding an account name. LanguageTool's public
+   * API authenticates with username and key together; self-hosted servers
+   * usually need neither.
+   */
+  usernameSetting?: string;
+  /**
+   * Rule categories to switch off server-side.
+   *
+   * The reason this is here: LanguageTool reports spelling too, and the
+   * built-in dictionary already owns that. Disabling `TYPOS` avoids paying
+   * for findings that would only be discarded, and avoids a word being
+   * underlined twice while the two disagree about the fix.
+   */
+  disabledCategories?: string[];
+  /** i18n key for the name shown in the suggestion popover. */
+  labelKey?: string;
+}
+
 export interface PluginContributions {
   i18n?: PluginI18nContribution;
   settings?: PluginSettingsContribution[];
@@ -546,6 +617,7 @@ export interface PluginContributions {
   noteTemplates?: PluginNoteTemplateContribution[];
   noteKinds?: PluginNoteKindContribution[];
   commands?: PluginCommandContribution[];
+  textCheckers?: PluginTextCheckerContribution[];
   /** Ordered, file-backed documentation sections shown in the docs modal. */
   documentation?: PluginDocSection[];
   /** Toolbar buttons the plugin places into host surfaces (file-tree, …). */
