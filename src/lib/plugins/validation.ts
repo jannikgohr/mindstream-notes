@@ -23,7 +23,9 @@ import {
   PLUGIN_EDITOR_TOOLBAR_ITEMS,
   PLUGIN_NOTE_EXPORT_FORMATS,
   PLUGIN_PREVIEW_MIME_TYPES,
+  PLUGIN_SETTING_ACTIONS,
   PLUGIN_SOURCE_LANGUAGE_HOST_PROVIDERS,
+  PLUGIN_TEXT_CHECKER_PROTOCOLS,
   PLUGIN_TOOLBAR_LOCATIONS,
   PLUGIN_VIEW_MODE_PREVIEW_ICONS,
   type PluginDocSection,
@@ -115,8 +117,12 @@ const SETTING_TYPES = new Set<PluginSetting['type']>([
   'color',
   'text',
   'folder',
-  'tag'
+  'tag',
+  'button'
 ]);
+const SETTING_ACTIONS = new Set<string>(PLUGIN_SETTING_ACTIONS);
+const TEXT_CHECKER_PROTOCOLS = new Set<string>(PLUGIN_TEXT_CHECKER_PROTOCOLS);
+const DIAGNOSTIC_KINDS = new Set(['spelling', 'grammar', 'style']);
 const VARIABLE_TYPES = new Set<PluginTemplateVariable['type']>([
   'text',
   'date',
@@ -633,6 +639,17 @@ function validateSetting(
       pluginId,
       `${path}.type ("${String(s.type)}") is not a supported setting type`
     );
+  }
+  if (s.type === 'button') {
+    // A button names a behaviour the HOST implements. Without this check a
+    // manifest could declare a button that silently does nothing, or name an
+    // action belonging to a different contribution.
+    if (!SETTING_ACTIONS.has(String(s.actionId))) {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.actionId ("${String(s.actionId)}") is not a supported setting action`
+      );
+    }
   }
   if (s.type === 'select' || s.type === 'radio') {
     if (!Array.isArray(s.options) || s.options.length === 0) {
@@ -1325,6 +1342,61 @@ export function validateManifest(input: unknown): PluginManifest {
       );
     }
     seenSourceLanguageIds.add(language.id);
+  }
+
+  // ---- Text checkers ---------------------------------------------------
+  const textCheckers = contributes.textCheckers ?? [];
+  if (!Array.isArray(textCheckers)) {
+    throw new PluginValidationError(
+      pluginId,
+      'manifest.contributes.textCheckers must be an array'
+    );
+  }
+  const seenCheckerIds = new Set<string>();
+  for (const [i, checker] of textCheckers.entries()) {
+    const path = `textCheckers[${i}]`;
+    assertSlug(pluginId, checker?.id, `${path}.id`);
+    if (!TEXT_CHECKER_PROTOCOLS.has(String(checker?.protocol))) {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.protocol ("${String(checker?.protocol)}") is not a supported protocol`
+      );
+    }
+    if (
+      !Array.isArray(checker.kinds) ||
+      checker.kinds.length === 0 ||
+      checker.kinds.some((kind: unknown) => !DIAGNOSTIC_KINDS.has(String(kind)))
+    ) {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.kinds must list at least one of spelling, grammar, style`
+      );
+    }
+    // The settings named here are read to build the request, so they must
+    // exist as slugs the plugin actually owns.
+    assertSlug(pluginId, checker.endpointSetting, `${path}.endpointSetting`);
+    for (const [field, value] of [
+      ['apiKeySetting', checker.apiKeySetting],
+      ['usernameSetting', checker.usernameSetting]
+    ] as const) {
+      if (value !== undefined) assertSlug(pluginId, value, `${path}.${field}`);
+    }
+    if (checker.labelKey !== undefined) {
+      assertI18nKey(pluginId, checker.labelKey, `${path}.labelKey`);
+    }
+    if (seenCheckerIds.has(checker.id)) {
+      throw new PluginValidationError(
+        pluginId,
+        `duplicate text checker id "${checker.id}"`
+      );
+    }
+    seenCheckerIds.add(checker.id);
+  }
+  if (textCheckers.length > 0 && !permissions.has('textCheckers.contribute')) {
+    throw new PluginValidationError(
+      pluginId,
+      'contributes textCheckers but is missing the "textCheckers.contribute" permission'
+    );
   }
 
   // ---- Plugin note kinds ----------------------------------------------
