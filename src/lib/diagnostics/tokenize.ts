@@ -17,6 +17,22 @@ import type { TextRange } from './types';
 
 export interface Token extends TextRange {
   text: string;
+  /**
+   * The token plus its trailing period, when one immediately follows.
+   *
+   * Hunspell dictionaries store abbreviations WITH the period as the
+   * dictionary entry: de_DE_frami contains `Nr.`, `Dr.`, `bzw.`, `usw.` and
+   * ~93 others, and does NOT contain the bare stems. Checking only the
+   * stripped word therefore flags every abbreviation in the language as a
+   * misspelling — and then helpfully suggests the form the user already
+   * typed.
+   *
+   * The period is offered as an ALTERNATIVE rather than folded into `text`,
+   * because most words followed by a period are just sentence endings:
+   * `gut.` must still be checked as `gut`. A token is only misspelled when
+   * neither form is known.
+   */
+  abbreviation?: string;
 }
 
 /**
@@ -115,6 +131,19 @@ function splitCamelCase(token: Token): Token[] {
 }
 
 /**
+ * Attach the abbreviation variant to the final part of a token.
+ *
+ * Only the last part: in `Bestellnr.` the period belongs to the whole
+ * token, and after a camelCase split it is `nr` that may carry it, not
+ * `Bestell`.
+ */
+function withAbbreviation(parts: Token[], followedByPeriod: boolean): Token[] {
+  const last = parts[parts.length - 1];
+  if (!last || !followedByPeriod) return parts;
+  return [...parts.slice(0, -1), { ...last, abbreviation: `${last.text}.` }];
+}
+
+/**
  * Extract the checkable words from `text`.
  *
  * `offset` is added to every reported position, so callers holding a
@@ -164,7 +193,16 @@ export function tokenizeWords(text: string, offset = 0): Token[] {
     const afterDigit = start > 0 && DIGIT.test(text[start - 1]);
     if (raw.length > 0 && !DIGIT.test(raw) && !afterDigit) {
       tokens.push(
-        ...splitCamelCase({ text: raw, from: start + offset, to: end + offset })
+        ...withAbbreviation(
+          splitCamelCase({
+            text: raw,
+            from: start + offset,
+            to: end + offset
+          }),
+          // Indexed locally: token positions carry `offset`, this string
+          // does not.
+          text[end] === '.'
+        )
       );
     }
   }
