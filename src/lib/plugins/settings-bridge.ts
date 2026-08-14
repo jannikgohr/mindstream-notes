@@ -47,6 +47,11 @@ function toCoreSetting(pluginId: string, s: PluginSetting): Setting {
   };
   if (s.default !== undefined) base.default = s.default;
   if (s.options) base.options = s.options;
+  // Namespaced like the setting id itself, so two plugins asking for the
+  // same action get their own handler bound to their own configuration.
+  if (s.type === 'button' && s.actionId) {
+    base.actionId = fullSettingId(pluginId, s.actionId);
+  }
   return base as unknown as Setting;
 }
 

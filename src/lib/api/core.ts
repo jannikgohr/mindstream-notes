@@ -66,6 +66,7 @@ export enum TauriCommandName {
   InviteCollection = 'invite_collection',
   IsAppimageInstall = 'is_appimage_install',
   LanguagetoolCheck = 'languagetool_check',
+  LanguagetoolTestConnection = 'languagetool_test_connection',
   LeaveSharedCollection = 'leave_shared_collection',
   ListCollectionInvitations = 'list_collection_invitations',
   ListCollectionMembers = 'list_collection_members',

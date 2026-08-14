@@ -42,6 +42,7 @@
   import { startPickerSettingPruning } from '$lib/settings/pickers.svelte';
   import { loadCustomDictionary } from '$lib/diagnostics/custom-dictionary.svelte';
   import { syncPluginTextCheckers } from '$lib/diagnostics/plugin-checkers.svelte';
+  import { syncCheckerTestActions } from '$lib/diagnostics/checker-test-action.svelte';
 
   let { children } = $props();
 
@@ -66,6 +67,7 @@
   // about text that is already on screen.
   $effect(() => {
     syncPluginTextCheckers();
+    syncCheckerTestActions();
   });
 
   // Mirror the personal dictionary into memory before the first note is

@@ -186,6 +186,42 @@ export function languagetoolCheck(args: {
   );
 }
 
+export interface TestConnectionResult {
+  ok: boolean;
+  /** Server-provided detail; not translated — it reports what the server said. */
+  detail: string;
+}
+
+/**
+ * Verify a LanguageTool server is reachable, and that credentials work when
+ * supplied. Sends a fixed probe string, never note content.
+ */
+export function languagetoolTestConnection(args: {
+  endpoint: string;
+  apiKey?: string;
+  username?: string;
+}): Promise<TestConnectionResult> {
+  return invokeOrFallback<TestConnectionResult>(
+    TauriCommandName.LanguagetoolTestConnection,
+    {
+      endpoint: args.endpoint,
+      apiKey: args.apiKey ?? null,
+      username: args.username ?? null
+    },
+    () => ({ ok: false, detail: 'unavailable outside the desktop app' }),
+    (value) => {
+      const record = assertRecord(
+        value,
+        'languagetool_test_connection response'
+      );
+      return {
+        ok: assertBoolean(record.ok, 'testConnection.ok'),
+        detail: assertString(record.detail, 'testConnection.detail')
+      };
+    }
+  );
+}
+
 /** The user's personal dictionary, in the casing they typed. */
 export function customDictionaryList(): Promise<string[]> {
   return invokeOrFallback<string[]>(
