@@ -19,7 +19,8 @@ import {
   analyzeDocument,
   diagnosticDecorations,
   diagnosticsPlugin,
-  diagnosticsPluginKey
+  diagnosticsPluginKey,
+  withinDocument
 } from './diagnostics';
 import type { Diagnostic } from '$lib/diagnostics/types';
 import { noteHref } from '../wikilink-href';
@@ -401,5 +402,139 @@ describe('positions survive edits', () => {
     // Range collapses, so nothing is drawn over it any more.
     expect(state(view).deco.find()).toHaveLength(0);
     view.destroy();
+  });
+});
+
+/**
+ * The apply path, driven the way a user drives it: right-click the squiggle,
+ * then choose a replacement. Everything up to here was tested except the one
+ * step that edits the document.
+ */
+describe('applying a suggestion', () => {
+  function mounted(text: string) {
+    let context: {
+      word: string;
+      apply: (replacement: string) => void;
+    } | null = null;
+
+    const plugin = diagnosticsPlugin({
+      debounceMs: 0,
+      check: async (segments) =>
+        segments.flatMap((segment) => {
+          const at = segment.text.indexOf('teh');
+          return at === -1
+            ? []
+            : [
+                {
+                  from: segment.from + at,
+                  to: segment.from + at + 3,
+                  kind: 'spelling' as const,
+                  message: 'x',
+                  replacements: ['the'],
+                  source: 'test'
+                }
+              ];
+        }),
+      onRequestMenu: (_diagnostic, _event, ctx) => {
+        context = ctx;
+      }
+    });
+
+    const host = document.createElement('div');
+    document.body.append(host);
+    const view = new EditorView(host, {
+      state: EditorState.create({ doc: doc(para(t(text))), plugins: [plugin] })
+    });
+    return { view, menu: () => context };
+  }
+
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
+
+  /** jsdom has no layout, so coordinate hit-testing is stubbed. */
+  function rightClickAt(view: EditorView, pos: number) {
+    view.posAtCoords = () => ({ pos, inside: -1 });
+    view.dom.dispatchEvent(
+      new MouseEvent('contextmenu', { bubbles: true, cancelable: true })
+    );
+  }
+
+  it('replaces the flagged word in the document', async () => {
+    const view = mounted('one teh two');
+    await settle();
+
+    rightClickAt(view.view, 6);
+    expect(view.menu()).not.toBeNull();
+    expect(view.menu()!.word).toBe('teh');
+
+    view.menu()!.apply('the');
+    expect(view.view.state.doc.textContent).toBe('one the two');
+    view.view.destroy();
+  });
+
+  it('replaces the right word after an earlier edit moved it', async () => {
+    // The reported failure: apply stopped working once anything had changed.
+    const view = mounted('one teh two');
+    await settle();
+    view.view.dispatch(view.view.state.tr.insertText('XXXX ', 1));
+
+    const moved = diagnosticsPluginKey.getState(view.view.state)!
+      .diagnostics[0];
+    rightClickAt(view.view, moved.from + 1);
+
+    view.menu()!.apply('the');
+    expect(view.view.state.doc.textContent).toBe('XXXX one the two');
+    view.view.destroy();
+  });
+
+  it('replaces only the flagged range, leaving the rest intact', async () => {
+    const view = mounted('teh teh');
+    await settle();
+    rightClickAt(view.view, 2);
+    view.menu()!.apply('the');
+    expect(view.view.state.doc.textContent).toBe('the teh');
+    view.view.destroy();
+  });
+});
+
+describe('withinDocument', () => {
+  it('drops a range that runs past the end of the document', () => {
+    // Kept in state, such a diagnostic stays clickable and insertText
+    // throws on it — which looks exactly like a suggestion doing nothing.
+    const d = doc(para(t('hi')));
+    const stale = {
+      from: 1,
+      to: 999,
+      kind: 'spelling' as const,
+      message: 'x',
+      replacements: [],
+      source: 'test'
+    };
+    expect(withinDocument(d, [stale])).toEqual([]);
+  });
+
+  it('drops a range that collapsed to nothing', () => {
+    const d = doc(para(t('hi')));
+    const collapsed = {
+      from: 2,
+      to: 2,
+      kind: 'spelling' as const,
+      message: 'x',
+      replacements: [],
+      source: 'test'
+    };
+    expect(withinDocument(d, [collapsed])).toEqual([]);
+  });
+
+  it('keeps a range that exists', () => {
+    const d = doc(para(t('hello')));
+    const ok = {
+      from: 1,
+      to: 6,
+      kind: 'spelling' as const,
+      message: 'x',
+      replacements: [],
+      source: 'test'
+    };
+    expect(withinDocument(d, [ok])).toEqual([ok]);
   });
 });

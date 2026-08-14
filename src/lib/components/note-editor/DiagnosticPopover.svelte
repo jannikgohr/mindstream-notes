@@ -39,7 +39,11 @@
    */
   const VISIBLE_SUGGESTIONS = 6;
 
-  const all = $derived(diagnosticPopover.suggestions ?? []);
+  // Deduplicated, and keyed by position rather than value below. Different
+  // rules can offer the same replacement, and a keyed `each` throws on
+  // duplicate keys — which breaks the whole list, so no suggestion at all
+  // can be clicked.
+  const all = $derived([...new Set(diagnosticPopover.suggestions ?? [])]);
   const shown = $derived(expanded ? all : all.slice(0, VISIBLE_SUGGESTIONS));
   const hidden = $derived(all.length - shown.length);
 
@@ -144,10 +148,11 @@
           {tUi('editor.spellcheck.menu.noSuggestions')}
         </p>
       {:else}
-        {#each shown as suggestion (suggestion)}
+        {#each shown as suggestion, index (index)}
           <button
             type="button"
             role="menuitem"
+            data-diagnostic-action="replace"
             class="block w-full truncate px-3 py-1.5 text-left text-sm hover:bg-accent hover:text-accent-foreground"
             onclick={() => choose(suggestion)}
           >
@@ -183,6 +188,7 @@
         <button
           type="button"
           role="menuitem"
+          data-diagnostic-action="add-to-dictionary"
           class="block w-full truncate px-3 py-1.5 text-left text-sm hover:bg-accent hover:text-accent-foreground"
           onclick={accept}
         >
