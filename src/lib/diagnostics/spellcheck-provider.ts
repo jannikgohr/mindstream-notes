@@ -49,22 +49,46 @@ export function createSpellcheckProvider(
       const tokens = tokenizeWords(text);
       if (tokens.length === 0) return [];
 
+      // A token is spelled correctly if EITHER form is accepted, so both
+      // have to be offered wherever a verdict is reached — here for the
+      // personal dictionary, and below for the engine.
+      const accepted = (token: (typeof tokens)[number]) =>
+        options.isIgnored?.(token.text) === true ||
+        (token.abbreviation !== undefined &&
+          options.isIgnored?.(token.abbreviation) === true);
+
       const candidates = options.isIgnored
-        ? tokens.filter((token) => !options.isIgnored?.(token.text))
+        ? tokens.filter((token) => !accepted(token))
         : tokens;
       if (candidates.length === 0) return [];
 
       // One IPC round trip per segment, not per word — and a paragraph
       // repeats words heavily, so dedupe before crossing the boundary.
-      const distinct = [...new Set(candidates.map((token) => token.text))];
+      const distinct = [
+        ...new Set(
+          candidates.flatMap((token) =>
+            token.abbreviation ? [token.text, token.abbreviation] : [token.text]
+          )
+        )
+      ];
       const unknown = new Set(await options.unknownWords(languages, distinct));
       if (signal.aborted || unknown.size === 0) return [];
 
       // Map the verdict back onto every occurrence: the backend answered
       // about words, but a squiggle belongs to each position the word
       // appears at.
+      //
+      // `Nr.` is a dictionary entry while bare `Nr` is not, so requiring
+      // BOTH forms to be unknown is what stops every German abbreviation
+      // being flagged. The range still covers only the word, never the
+      // period.
       return candidates
-        .filter((token) => unknown.has(token.text))
+        .filter(
+          (token) =>
+            unknown.has(token.text) &&
+            (token.abbreviation === undefined ||
+              unknown.has(token.abbreviation))
+        )
         .map((token) => ({
           from: token.from,
           to: token.to,

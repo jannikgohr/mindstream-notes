@@ -124,3 +124,51 @@ describe('createSpellcheckProvider', () => {
     expect(out[0]).toMatchObject({ from: 7, to: 11 });
   });
 });
+
+/**
+ * The reported bug: typing `Nr.` produced a squiggle under `Nr` and then
+ * suggested `Nr.` — the form already on screen. `Nr` genuinely is not in
+ * de_DE_frami; only `Nr.` is, along with ~96 other abbreviations.
+ */
+describe('abbreviations', () => {
+  it('accepts a word whose abbreviation form is known', async () => {
+    // Exactly the dictionary's shape: the stem is unknown, the abbreviation
+    // is not.
+    const out = await provider(backend('Nr')).check(request('Siehe Nr. 5'));
+    expect(out).toEqual([]);
+  });
+
+  it('still flags a word when neither form is known', async () => {
+    const out = await provider(backend('Xyz', 'Xyz.')).check(request('Xyz.'));
+    expect(out).toHaveLength(1);
+    // The range covers the word, never the period.
+    expect(out[0]).toMatchObject({ from: 0, to: 3 });
+  });
+
+  it('still flags an ordinary misspelling at the end of a sentence', async () => {
+    const out = await provider(backend('teh', 'teh.')).check(request('teh.'));
+    expect(out).toHaveLength(1);
+  });
+
+  it('does not flag a correct word at the end of a sentence', async () => {
+    // `gut` is known even though `gut.` is not.
+    const out = await provider(backend('gut.')).check(request('Das ist gut.'));
+    expect(out).toEqual([]);
+  });
+
+  it('offers both forms to the backend', async () => {
+    const check = backend('Nr');
+    await provider(check).check(request('Nr.'));
+    expect(check.mock.calls[0][1]).toEqual(['Nr', 'Nr.']);
+  });
+
+  it('accepts an abbreviation held in the personal dictionary', async () => {
+    // The user added "Nr." — matching only the stem would keep flagging it.
+    const check = backend('Nr');
+    const out = await provider(check, (word) => word === 'Nr.').check(
+      request('Nr.')
+    );
+    expect(out).toEqual([]);
+    expect(check).not.toHaveBeenCalled();
+  });
+});

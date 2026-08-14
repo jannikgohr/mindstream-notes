@@ -163,3 +163,61 @@ describe('tokenizeWords', () => {
     expect(words('  ...  ')).toEqual([]);
   });
 });
+
+/**
+ * Abbreviations. Hunspell dictionaries store these WITH the period —
+ * de_DE_frami contains `Nr.`, `Dr.`, `bzw.` and ~94 others and does NOT
+ * contain the bare stems — so stripping it flags every abbreviation in the
+ * language and then suggests back the exact form the user typed.
+ */
+describe('trailing periods', () => {
+  const abbrev = (text: string) =>
+    tokenizeWords(text).map((token) => token.abbreviation);
+
+  it('offers the abbreviation form when a period follows', () => {
+    expect(tokenizeWords('Nr.')).toEqual([
+      { text: 'Nr', from: 0, to: 2, abbreviation: 'Nr.' }
+    ]);
+  });
+
+  it('offers it at the end of a sentence too', () => {
+    // `gut` is known and `gut.` is not; the provider accepts either, so the
+    // tokenizer does not need to decide which case this is.
+    expect(abbrev('Das ist gut.')).toEqual([undefined, undefined, 'gut.']);
+  });
+
+  it('does not offer one when no period follows', () => {
+    expect(abbrev('Nr 5')).toEqual([undefined]);
+  });
+
+  it('does not offer one across whitespace', () => {
+    expect(abbrev('Nr .')).toEqual([undefined]);
+  });
+
+  it('attaches it to the last part of a split token only', () => {
+    const tokens = tokenizeWords('getUser.');
+    expect(tokens.map((t) => t.text)).toEqual(['get', 'User']);
+    expect(tokens.map((t) => t.abbreviation)).toEqual([undefined, 'User.']);
+  });
+
+  it('keeps positions covering the word, not the period', () => {
+    const [token] = tokenizeWords('Nr.');
+    expect(token.to).toBe(2);
+  });
+
+  it('rebases correctly when the segment carries an offset', () => {
+    // The period is found in the local string, while positions carry the
+    // offset — mixing the two silently loses every abbreviation after the
+    // first paragraph.
+    expect(tokenizeWords('Nr.', 100)).toEqual([
+      { text: 'Nr', from: 100, to: 102, abbreviation: 'Nr.' }
+    ]);
+  });
+
+  it('handles a real German sentence of abbreviations', () => {
+    const tokens = tokenizeWords('Siehe Nr. 5 bzw. Abs. 2');
+    expect(
+      tokens.filter((t) => t.abbreviation).map((t) => t.abbreviation)
+    ).toEqual(['Nr.', 'bzw.', 'Abs.']);
+  });
+});
