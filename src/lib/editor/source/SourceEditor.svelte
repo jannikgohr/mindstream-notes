@@ -101,6 +101,8 @@
     diagnosticsCheck?: SourceDiagnosticsOptions['check'] | null;
     /** Opens the suggestion popover for a right-clicked diagnostic. */
     onDiagnosticMenu?: SourceDiagnosticsOptions['onRequestMenu'];
+    /** Closes it again when the document changes underneath. */
+    onDiagnosticMenuDismiss?: SourceDiagnosticsOptions['onDismissMenu'];
   }
   let {
     getInitialText,
@@ -118,7 +120,8 @@
     diagnosticsEnabled = null,
     subscribeDiagnosticsInvalidated = undefined,
     diagnosticsCheck = null,
-    onDiagnosticMenu = undefined
+    onDiagnosticMenu = undefined,
+    onDiagnosticMenuDismiss = undefined
   }: Props = $props();
 
   let host: HTMLDivElement | null = $state(null);
@@ -336,7 +339,8 @@
           check: diagnosticsCheck,
           enabled: diagnosticsEnabled ?? undefined,
           subscribeInvalidate: subscribeDiagnosticsInvalidated,
-          onRequestMenu: onDiagnosticMenu
+          onRequestMenu: onDiagnosticMenu,
+          onDismissMenu: onDiagnosticMenuDismiss
         })
       );
     }

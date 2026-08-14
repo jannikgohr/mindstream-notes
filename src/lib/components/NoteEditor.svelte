@@ -44,6 +44,7 @@
     suggestFor
   } from '$lib/diagnostics/editor-diagnostics.svelte';
   import {
+    closeDiagnosticPopover,
     openDiagnosticPopover,
     type DiagnosticMenuContext
   } from '$lib/diagnostics/popover-bridge.svelte';
@@ -529,7 +530,8 @@
         diagnosticsCheck: checkSegments,
         diagnosticsEnabled: spellcheckEnabled,
         subscribeDiagnosticsInvalidated,
-        onDiagnosticMenu: handleDiagnosticMenu
+        onDiagnosticMenu: handleDiagnosticMenu,
+        onDiagnosticMenuDismiss: closeDiagnosticPopover
       });
       await crepe.create();
 
@@ -1672,6 +1674,7 @@
             diagnosticsEnabled={spellcheckEnabled}
             {subscribeDiagnosticsInvalidated}
             onDiagnosticMenu={handleDiagnosticMenu}
+            onDiagnosticMenuDismiss={closeDiagnosticPopover}
           />
         </div>
       {/if}

@@ -76,6 +76,8 @@ export interface CrepeSetupOptions {
   diagnosticsCheck?: ProseDiagnosticsOptions['check'];
   /** Opens the suggestion popover for a right-clicked diagnostic. */
   onDiagnosticMenu?: ProseDiagnosticsOptions['onRequestMenu'];
+  /** Closes it again when the document changes underneath. */
+  onDiagnosticMenuDismiss?: ProseDiagnosticsOptions['onDismissMenu'];
   /** When false, the auto-pair plugin isn't even registered. */
   autoPairEnabled: boolean;
   /**
@@ -317,7 +319,8 @@ export function buildCrepe(opts: CrepeSetupOptions): Crepe {
           check: opts.diagnosticsCheck!,
           enabled: opts.diagnosticsEnabled,
           subscribeInvalidate: opts.subscribeDiagnosticsInvalidated,
-          onRequestMenu: opts.onDiagnosticMenu
+          onRequestMenu: opts.onDiagnosticMenu,
+          onDismissMenu: opts.onDiagnosticMenuDismiss
         })
       )
     );

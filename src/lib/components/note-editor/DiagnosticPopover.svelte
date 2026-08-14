@@ -57,8 +57,13 @@
    */
   const position = $derived.by(() => {
     if (!open) return { left: 0, top: 0 };
-    const width = 220;
-    const height = 240;
+    // Rough bounds, matching the container's max-width and a menu with a
+    // wrapped two-line message plus a full suggestion list. Over-estimating
+    // costs a little unnecessary shifting; under-estimating clips the menu
+    // against the bottom of the window, which is where misspellings at the
+    // end of a note put it.
+    const width = 288;
+    const height = 320;
     return {
       left: Math.min(open.x, Math.max(8, window.innerWidth - width - 8)),
       top: Math.min(open.y, Math.max(8, window.innerHeight - height - 8))
@@ -119,7 +124,12 @@
   >
     <div class="border-b border-border px-3 py-1.5">
       <p class="truncate text-xs font-medium">{open.word}</p>
-      <p class="truncate text-xs text-muted-foreground">
+      <!--
+        Wraps rather than truncates. LanguageTool's messages are whole
+        sentences explaining the rule — cut to one line they lose exactly
+        the part that says what to do about it.
+      -->
+      <p class="text-xs leading-snug text-muted-foreground">
         {open.diagnostic.message}
       </p>
     </div>
