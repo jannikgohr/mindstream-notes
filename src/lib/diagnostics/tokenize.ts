@@ -33,6 +33,17 @@ export interface Token extends TextRange {
    * neither form is known.
    */
   abbreviation?: string;
+  /**
+   * The token's segments, split at the non-letter characters that joined
+   * them — present only when it actually contains one.
+   *
+   * The safety net for `WORDCHARS`. That directive is unioned across every
+   * enabled language, so enabling Dutch (which declares `/`) would otherwise
+   * turn `and/or` into one unknown token in English text. A token is judged
+   * as a whole first; only if no whole form is known are the segments
+   * judged individually, which keeps over-inclusion harmless.
+   */
+  parts?: Token[];
 }
 
 /**
@@ -56,6 +67,26 @@ const WORD_INNER = /[\p{L}\p{M}\p{N}]/u;
  * as a one-letter typo.
  */
 const CONNECTOR = /['’‐‑-]/u;
+
+/**
+ * Characters a dictionary declared as part of a word via `WORDCHARS`.
+ *
+ * Hunspell has no tokenizer; it exports this so callers segment text the way
+ * the dictionary expects. German, Danish, French, Dutch and Swedish all list
+ * `.`, which is why `Nr.` and `z.B.` are entries at all. Letters and digits
+ * are already word characters, so only the punctuation matters here.
+ */
+function extraWordChars(wordChars: string): Set<string> {
+  // Letters and digits are already word characters. Built-in connectors
+  // are excluded too: they already join, and they must never become
+  // split points — German declares `-` in WORDCHARS, and splitting there
+  // would make `E-Mail` fall back to `E` + `Mail` and flag the `E`.
+  return new Set(
+    [...wordChars].filter(
+      (ch) => !/[\p{L}\p{M}\p{N}]/u.test(ch) && !CONNECTOR.test(ch)
+    )
+  );
+}
 
 /**
  * Scripts written without spaces between words. Segmenting these needs a
@@ -144,13 +175,50 @@ function withAbbreviation(parts: Token[], followedByPeriod: boolean): Token[] {
 }
 
 /**
+ * Record the token's segments, split at the WORDCHARS-derived characters
+ * that joined them.
+ *
+ * Only those characters — never the built-in connectors. Splitting at
+ * hyphens or apostrophes would undo two deliberate behaviours: `E-Mail`
+ * stays whole because Hunspell's BREAK handles hyphens better than we can,
+ * and `don't` must never fall back to `don` + `t`.
+ */
+function splitAtExtras(token: Token, extra: Set<string>): Token | undefined {
+  if (extra.size === 0 || ![...token.text].some((ch) => extra.has(ch))) {
+    return undefined;
+  }
+
+  const parts: Token[] = [];
+  let start = 0;
+  for (let i = 0; i <= token.text.length; i++) {
+    if (i === token.text.length || extra.has(token.text[i])) {
+      if (i > start) {
+        parts.push({
+          text: token.text.slice(start, i),
+          from: token.from + start,
+          to: token.from + i
+        });
+      }
+      start = i + 1;
+    }
+  }
+
+  return parts.length > 1 ? { ...token, parts } : undefined;
+}
+
+/**
  * Extract the checkable words from `text`.
  *
  * `offset` is added to every reported position, so callers holding a
  * paragraph out of a larger document get document-absolute ranges back
  * without doing the arithmetic themselves.
  */
-export function tokenizeWords(text: string, offset = 0): Token[] {
+export function tokenizeWords(
+  text: string,
+  offset = 0,
+  wordChars = ''
+): Token[] {
+  const extra = extraWordChars(wordChars);
   const tokens: Token[] = [];
   let i = 0;
 
@@ -173,8 +241,12 @@ export function tokenizeWords(text: string, offset = 0): Token[] {
       // A connector only stays in the word if a word character follows it,
       // so the apostrophe in `'quoted'` and the dash in `word - word` end
       // the token instead of being absorbed into it.
+      // A dictionary-declared word character joins on exactly the same
+      // terms as the built-in connectors: only when a word character
+      // follows. That is what separates `z.B` from the `. ` that ends a
+      // sentence.
       if (
-        CONNECTOR.test(c) &&
+        (CONNECTOR.test(c) || extra.has(c)) &&
         i + 1 < text.length &&
         WORD_INNER.test(text[i + 1])
       ) {
@@ -192,17 +264,18 @@ export function tokenizeWords(text: string, offset = 0): Token[] {
     // otherwise look like a perfectly ordinary (misspelled) word.
     const afterDigit = start > 0 && DIGIT.test(text[start - 1]);
     if (raw.length > 0 && !DIGIT.test(raw) && !afterDigit) {
+      const split = withAbbreviation(
+        splitCamelCase({
+          text: raw,
+          from: start + offset,
+          to: end + offset
+        }),
+        // Indexed locally: token positions carry `offset`, this string
+        // does not.
+        text[end] === '.'
+      );
       tokens.push(
-        ...withAbbreviation(
-          splitCamelCase({
-            text: raw,
-            from: start + offset,
-            to: end + offset
-          }),
-          // Indexed locally: token positions carry `offset`, this string
-          // does not.
-          text[end] === '.'
-        )
+        ...split.map((token) => splitAtExtras(token, extra) ?? token)
       );
     }
   }

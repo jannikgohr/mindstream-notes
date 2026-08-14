@@ -86,6 +86,30 @@ pub fn retag_utf8(aff: &str) -> String {
         .join("\n")
 }
 
+/// The `WORDCHARS` directive: characters that count as part of a word even
+/// though they are not letters.
+///
+/// This is the dictionary telling the CALLER how to tokenize — Hunspell has
+/// no tokenizer of its own, and exports this precisely so consumers can
+/// segment text the way the dictionary expects. German, Danish, French,
+/// Dutch and Swedish all declare `.`, which is why `Nr.` and `z.B.` are
+/// entries at all. Ignoring it is the same bug Firefox is criticised for.
+///
+/// Read straight from the `.aff` without building a `Dictionary`: the affix
+/// file is a few kilobytes, while loading the pair costs ~50ms and tens of
+/// megabytes resident. The tokenizer needs this for every enabled language,
+/// including ones the user has not typed in yet.
+pub fn read_word_chars(aff_path: &Path) -> AppResult<String> {
+    let bytes = std::fs::read(aff_path)?;
+    let encoding = sniff_encoding(&bytes)?;
+    let text = decode_dictionary_file(&bytes, encoding)?;
+    Ok(text
+        .lines()
+        .find_map(|line| line.strip_prefix("WORDCHARS "))
+        .map(|value| value.trim().to_string())
+        .unwrap_or_default())
+}
+
 /// Load a dictionary from an `.aff`/`.dic` pair sharing a basename.
 pub fn load_dictionary(aff_path: &Path, dic_path: &Path) -> AppResult<spellbook::Dictionary> {
     let aff_bytes = std::fs::read(aff_path)?;
@@ -202,6 +226,30 @@ TRY esiao
         assert!(dict.check("haus"));
         assert!(dict.check("hauss"), "suffix rule must still apply");
         assert!(!dict.check("nichtvorhanden"));
+    }
+
+    #[test]
+    fn reads_the_wordchars_directive() {
+        let dir = tempdir();
+        std::fs::write(dir.join("wc.aff"), b"SET UTF-8\nWORDCHARS -.\nTRY esiao\n").unwrap();
+        assert_eq!(read_word_chars(&dir.join("wc.aff")).unwrap(), "-.");
+    }
+
+    #[test]
+    fn reports_no_wordchars_when_undeclared() {
+        let dir = tempdir();
+        std::fs::write(dir.join("none.aff"), b"SET UTF-8\nTRY esiao\n").unwrap();
+        assert_eq!(read_word_chars(&dir.join("none.aff")).unwrap(), "");
+    }
+
+    #[test]
+    fn reads_wordchars_through_the_declared_encoding() {
+        // de_DE_frami writes WORDCHARS in latin-1; decoding it as UTF-8 would
+        // mangle the very characters it is listing.
+        let dir = tempdir();
+        let aff = "SET ISO8859-1\nWORDCHARS \u{00df}-.\nTRY esiao\n";
+        std::fs::write(dir.join("l1.aff"), to_latin1(aff)).unwrap();
+        assert_eq!(read_word_chars(&dir.join("l1.aff")).unwrap(), "\u{00df}-.");
     }
 
     #[test]

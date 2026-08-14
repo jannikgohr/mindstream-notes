@@ -30,6 +30,12 @@ export interface SpellcheckProviderOptions {
    * dictionary reload.
    */
   isIgnored?(word: string): boolean;
+  /**
+   * `WORDCHARS` from the enabled dictionaries — the characters they declare
+   * as part of a word. Read per check so enabling a language applies
+   * immediately.
+   */
+  wordChars?(): string;
 }
 
 export function createSpellcheckProvider(
@@ -46,7 +52,7 @@ export function createSpellcheckProvider(
     }: CheckRequest): Promise<Diagnostic[]> {
       if (languages.length === 0) return [];
 
-      const tokens = tokenizeWords(text);
+      const tokens = tokenizeWords(text, 0, options.wordChars?.() ?? '');
       if (tokens.length === 0) return [];
 
       // A token is spelled correctly if EITHER form is accepted, so both
@@ -64,11 +70,15 @@ export function createSpellcheckProvider(
 
       // One IPC round trip per segment, not per word — and a paragraph
       // repeats words heavily, so dedupe before crossing the boundary.
+      // Every form that could settle a token, in one batch: the joined
+      // token, its abbreviation, and its segments for the fallback.
       const distinct = [
         ...new Set(
-          candidates.flatMap((token) =>
-            token.abbreviation ? [token.text, token.abbreviation] : [token.text]
-          )
+          candidates.flatMap((token) => [
+            token.text,
+            ...(token.abbreviation ? [token.abbreviation] : []),
+            ...(token.parts ?? []).map((part) => part.text)
+          ])
         )
       ];
       const unknown = new Set(await options.unknownWords(languages, distinct));
@@ -82,21 +92,31 @@ export function createSpellcheckProvider(
       // BOTH forms to be unknown is what stops every German abbreviation
       // being flagged. The range still covers only the word, never the
       // period.
-      return candidates
-        .filter(
-          (token) =>
-            unknown.has(token.text) &&
-            (token.abbreviation === undefined ||
-              unknown.has(token.abbreviation))
-        )
-        .map((token) => ({
-          from: token.from,
-          to: token.to,
-          kind: 'spelling' as const,
-          message: options.message(token.text),
-          replacements: [],
-          source: SPELLCHECK_PROVIDER_ID
-        }));
+      const flag = (token: { text: string; from: number; to: number }) => ({
+        from: token.from,
+        to: token.to,
+        kind: 'spelling' as const,
+        message: options.message(token.text),
+        replacements: [],
+        source: SPELLCHECK_PROVIDER_ID
+      });
+
+      const knownAsWhole = (token: (typeof candidates)[number]) =>
+        !unknown.has(token.text) ||
+        (token.abbreviation !== undefined && !unknown.has(token.abbreviation));
+
+      return candidates.flatMap((token) => {
+        if (knownAsWhole(token)) return [];
+        // Nothing known as a whole: judge the segments instead. This is what
+        // keeps a unioned WORDCHARS safe — enabling Dutch declares `/` for
+        // everyone, and `and/or` must not become one unknown word in English
+        // text. It also gives a precise range per bad segment rather than one
+        // squiggle over the lot.
+        if (token.parts) {
+          return token.parts.filter((part) => unknown.has(part.text)).map(flag);
+        }
+        return [flag(token)];
+      });
     }
   };
 }
