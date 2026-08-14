@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { PluginValidationError, validateManifest } from './validation';
 import type { PluginManifest } from './types';
 import typstManifest from '../../../plugins/typst/manifest.json';
+import languagetoolManifest from '../../../plugins/languagetool/manifest.json';
 
 /** A minimal manifest that passes validation; override to probe failures. */
 function validManifest(
@@ -69,6 +70,22 @@ describe('validateManifest', () => {
     const m = validManifest();
     const result: PluginManifest = validateManifest(m);
     expect(result.id).toBe('com.example.templates');
+  });
+
+  it('accepts the bundled LanguageTool manifest', () => {
+    // Guards the shipped bundle itself. A manifest that fails validation
+    // does not surface as an error — the plugin simply stops appearing in
+    // the app, which is how adding the test-connection button silently
+    // delisted it.
+    const result = validateManifest(languagetoolManifest);
+    expect(result.contributes.textCheckers).toEqual([
+      expect.objectContaining({ id: 'grammar', protocol: 'languagetool' })
+    ]);
+    // Spelling stays with the built-in dictionary.
+    expect(result.contributes.textCheckers?.[0].disabledCategories).toContain(
+      'TYPOS'
+    );
+    expect(result.permissions).toContain('textCheckers.contribute');
   });
 
   it('accepts the bundled Typst manifest', () => {
