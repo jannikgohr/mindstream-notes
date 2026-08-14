@@ -149,13 +149,13 @@ export async function checkSegments(
   const languages = spellcheckLanguages();
   if (languages.length === 0) return [];
 
-  const owner = spellingOwner();
+  const current = spellingOwner();
   return bus.check(segments, {
     languages,
-    precedence: owner ? [owner, ...PRECEDENCE] : PRECEDENCE,
+    precedence: current ? [current.id, ...PRECEDENCE] : PRECEDENCE,
     // Ownership, not just precedence: two providers reporting spelling
     // would otherwise union into two rankings over the same paragraph.
-    owners: owner ? { spelling: owner } : undefined,
+    owners: current ? { spelling: current.id } : undefined,
     signal
   });
 }
@@ -167,14 +167,21 @@ export async function checkSegments(
  * Kept here because the bus call is here, and so the rest of the app has
  * one place to ask "who is checking spelling right now?".
  */
-let spellingOwnerId: string | null = null;
+let owner = $state<{ id: string; label: string } | null>(null);
 
-export function setSpellingOwner(providerId: string | null): void {
-  spellingOwnerId = providerId;
+export function setSpellingOwner(providerId: string | null, label = ''): void {
+  owner = providerId ? { id: providerId, label } : null;
 }
 
-function spellingOwner(): string | null {
-  return spellingOwnerId;
+/**
+ * Who is checking spelling, for the settings UI.
+ *
+ * Reactive and public because "my spellchecking stopped" is exactly the
+ * question a handover makes hard to answer: the dictionary panel looks
+ * unchanged while something else has quietly taken the job over.
+ */
+export function spellingOwner(): { id: string; label: string } | null {
+  return owner;
 }
 
 /**

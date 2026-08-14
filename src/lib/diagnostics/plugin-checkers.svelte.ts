@@ -18,8 +18,12 @@ import {
   setSpellingOwner
 } from './editor-diagnostics.svelte';
 import { isCustomWord } from './custom-dictionary.svelte';
+import {
+  clearCheckerStatus,
+  reportCheckerStatus
+} from './checker-status.svelte';
 import { languagetoolCheck } from '$lib/api/spellcheck';
-import { pluginTextCheckers } from '$lib/plugins/registry.svelte';
+import { pluginById, pluginTextCheckers } from '$lib/plugins/registry.svelte';
 import { getSettingValue } from '$lib/settings/store.svelte';
 import type { DiagnosticKind } from './types';
 
@@ -98,6 +102,7 @@ export function syncPluginTextCheckers(): void {
         // LanguageTool's check API has no per-request word list, so the
         // personal dictionary is applied to its spelling findings here.
         isIgnored: isCustomWord,
+        onStatus: (state, detail) => reportCheckerStatus(id, state, detail),
         check: languagetoolCheck
       })
     );
@@ -108,6 +113,7 @@ export function syncPluginTextCheckers(): void {
     if (wanted.has(id)) continue;
     off();
     active.delete(id);
+    clearCheckerStatus(id);
   }
 
   // Tell the bus who owns spelling. First claimant wins; with none, the
@@ -116,7 +122,8 @@ export function syncPluginTextCheckers(): void {
     checksSpelling(pluginId, checker)
   );
   setSpellingOwner(
-    owner ? checkerProviderId(owner.pluginId, owner.checker.id) : null
+    owner ? checkerProviderId(owner.pluginId, owner.checker.id) : null,
+    owner ? (pluginById(owner.pluginId)?.manifest.name ?? owner.pluginId) : ''
   );
 }
 

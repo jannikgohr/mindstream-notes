@@ -178,3 +178,57 @@ describe('createLanguageToolProvider', () => {
     ]);
   });
 });
+
+/**
+ * Status reporting. A checker that contributes nothing looks exactly like a
+ * clean document, so its real state has to come from the pipeline rather
+ * than from a button the user must think to press.
+ */
+describe('status reporting', () => {
+  const withStatus = (
+    matches: LanguageToolMatch[],
+    config: (() => typeof CONFIG | null) | null = null,
+    check?: () => Promise<LanguageToolMatch[]>
+  ) => {
+    const seen: { state: string; detail?: string }[] = [];
+    const provider = createLanguageToolProvider({
+      id: 'lt',
+      kinds: ['grammar', 'spelling'],
+      config: config ?? (() => CONFIG),
+      check: check ?? (async () => matches),
+      onStatus: (state, detail) => seen.push({ state, detail })
+    });
+    return { seen, provider };
+  };
+
+  it('reports unconfigured when there is no server URL', async () => {
+    const { seen, provider: p } = withStatus([], () => null);
+    await p.check(request('some text'));
+    expect(seen).toEqual([{ state: 'unconfigured', detail: undefined }]);
+  });
+
+  it('reports active after a successful run', async () => {
+    const { seen, provider: p } = withStatus([]);
+    await p.check(request('some text'));
+    expect(seen).toEqual([{ state: 'active', detail: undefined }]);
+  });
+
+  it('reports the failure reason, then rethrows', async () => {
+    // The bus turns a throw into "skipped for this segment", which is
+    // invisible on its own — so it is reported before it propagates.
+    const { seen, provider: p } = withStatus([], null, async () => {
+      throw new Error('connection refused');
+    });
+    await expect(p.check(request('some text'))).rejects.toThrow(
+      'connection refused'
+    );
+    expect(seen).toEqual([{ state: 'failed', detail: 'connection refused' }]);
+  });
+
+  it('says nothing about a segment it skipped', async () => {
+    // Blank text is not evidence either way.
+    const { seen, provider: p } = withStatus([]);
+    await p.check(request('   '));
+    expect(seen).toEqual([]);
+  });
+});
