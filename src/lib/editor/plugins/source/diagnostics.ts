@@ -20,7 +20,11 @@
 import { StateEffect, StateField, type Extension } from '@codemirror/state';
 import { Decoration, EditorView, ViewPlugin } from '@codemirror/view';
 import type { DecorationSet, ViewUpdate } from '@codemirror/view';
-import { excludeIgnored, ignoreRanges } from '$lib/diagnostics/ignore-ranges';
+import {
+  excludeIgnored,
+  ignoreRanges,
+  maskRanges
+} from '$lib/diagnostics/ignore-ranges';
 import { isAbortError } from '$lib/diagnostics/bus';
 import type { Diagnostic, Segment } from '$lib/diagnostics/types';
 import type { DiagnosticMenuContext } from '$lib/diagnostics/popover-bridge.svelte';
@@ -178,8 +182,13 @@ export function sourceDiagnostics(
         this.controller = new AbortController();
         const { signal } = this.controller;
         const text = this.view.state.doc.toString();
-        const segments = splitParagraphs(text);
         const ignored = ignoreRanges(text);
+        // Mask BEFORE segmenting, not just filter afterwards: a network
+        // checker has already received the text by the time results come
+        // back, so code blocks and link targets would leave the machine only
+        // to have their findings discarded. Masking is offset-preserving, so
+        // positions still line up with the real document.
+        const segments = splitParagraphs(maskRanges(text, ignored));
 
         try {
           const diagnostics = await options.check(segments, signal);

@@ -153,6 +153,7 @@ export function languagetoolCheck(args: {
   language: string;
   text: string;
   disabledCategories: string[];
+  preferredVariants?: string[];
 }): Promise<LanguageToolMatch[]> {
   return invokeOrFallback<LanguageToolMatch[]>(
     TauriCommandName.LanguagetoolCheck,
@@ -162,7 +163,8 @@ export function languagetoolCheck(args: {
       username: args.username ?? null,
       language: args.language,
       text: args.text,
-      disabledCategories: args.disabledCategories
+      disabledCategories: args.disabledCategories,
+      preferredVariants: args.preferredVariants ?? []
     },
     () => [],
     (value) => {

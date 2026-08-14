@@ -18,6 +18,7 @@ import {
 } from './spellcheck-provider';
 import type { Diagnostic, DiagnosticProvider, Segment } from './types';
 import {
+  spellcheckAvailableDictionaries,
   spellcheckSuggest,
   spellcheckUnknownWords,
   spellcheckWordChars
@@ -67,6 +68,27 @@ const PRECEDENCE = [SPELLCHECK_PROVIDER_ID];
  */
 let wordChars = '';
 
+/**
+ * Dictionary id -> BCP-47 tag, e.g. `de_DE_frami` -> `de-DE`.
+ *
+ * Read from the backend catalogue rather than duplicated here: the mapping
+ * already exists there, and a second copy would drift the moment a
+ * dictionary is added.
+ */
+let bcp47ById = new Map<string, string>();
+
+/** BCP-47 tags for the languages the user selected, for a network checker. */
+export function selectedLanguageTags(): string[] {
+  return spellcheckLanguages()
+    .map((id) => bcp47ById.get(id))
+    .filter((tag): tag is string => tag !== undefined);
+}
+
+async function refreshLanguageTags(): Promise<void> {
+  const available = await spellcheckAvailableDictionaries();
+  bcp47ById = new Map(available.map((entry) => [entry.id, entry.bcp47]));
+}
+
 async function refreshWordChars(): Promise<void> {
   const languages = spellcheckLanguages();
   wordChars =
@@ -79,6 +101,7 @@ async function refreshWordChars(): Promise<void> {
 subscribeDiagnosticsInvalidated(() => {
   bus.clearCache();
   void refreshWordChars();
+  void refreshLanguageTags();
 });
 
 export { invalidateDiagnostics, subscribeDiagnosticsInvalidated };
@@ -126,7 +149,32 @@ export async function checkSegments(
   const languages = spellcheckLanguages();
   if (languages.length === 0) return [];
 
-  return bus.check(segments, { languages, precedence: PRECEDENCE, signal });
+  const owner = spellingOwner();
+  return bus.check(segments, {
+    languages,
+    precedence: owner ? [owner, ...PRECEDENCE] : PRECEDENCE,
+    // Ownership, not just precedence: two providers reporting spelling
+    // would otherwise union into two rankings over the same paragraph.
+    owners: owner ? { spelling: owner } : undefined,
+    signal
+  });
+}
+
+/**
+ * Which provider owns spelling, if not the built-in dictionary.
+ *
+ * Set by `plugin-checkers`, which knows what the enabled plugins claim.
+ * Kept here because the bus call is here, and so the rest of the app has
+ * one place to ask "who is checking spelling right now?".
+ */
+let spellingOwnerId: string | null = null;
+
+export function setSpellingOwner(providerId: string | null): void {
+  spellingOwnerId = providerId;
+}
+
+function spellingOwner(): string | null {
+  return spellingOwnerId;
 }
 
 /**

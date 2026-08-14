@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   excludeIgnored,
   ignoreRanges,
+  maskRanges,
   mergeRanges,
   overlapsAny
 } from './ignore-ranges';
@@ -194,5 +195,48 @@ describe('prose is left alone', () => {
 
   it('returns no ranges for plain prose', () => {
     expect(ignoreRanges('just some words')).toEqual([]);
+  });
+});
+
+/**
+ * Masking exists because filtering findings afterwards is too late for a
+ * network checker — by then the text has already been sent.
+ */
+describe('maskRanges', () => {
+  it('blanks a range without moving anything after it', () => {
+    const text = 'run `npmm` now';
+    const masked = maskRanges(text, ignoreRanges(text));
+    expect(masked).toHaveLength(text.length);
+    expect(masked).toBe('run        now');
+  });
+
+  it('keeps newlines so paragraph structure survives', () => {
+    const text = ['before', '```js', 'const x = 1;', '```', 'after'].join('\n');
+    const masked = maskRanges(text, ignoreRanges(text));
+    expect(masked.split('\n')).toHaveLength(5);
+    expect(masked.startsWith('before')).toBe(true);
+    expect(masked.endsWith('after')).toBe(true);
+  });
+
+  it('collapses a fenced block to blank lines', () => {
+    // Which paragraph segmentation then skips without any special case.
+    const text = ['a', '', '```', 'secret_identifier', '```', '', 'b'].join(
+      '\n'
+    );
+    const masked = maskRanges(text, ignoreRanges(text));
+    expect(masked).not.toContain('secret_identifier');
+    expect(masked.split('\n')[3].trim()).toBe('');
+  });
+
+  it('removes URLs and wikilink targets', () => {
+    const text = 'see [docs](https://secret.example.com) and [[Private Note]]';
+    const masked = maskRanges(text, ignoreRanges(text));
+    expect(masked).not.toContain('secret.example.com');
+    expect(masked).not.toContain('Private Note');
+    expect(masked).toContain('docs');
+  });
+
+  it('returns the text unchanged when nothing is ignored', () => {
+    expect(maskRanges('plain prose', [])).toBe('plain prose');
   });
 });

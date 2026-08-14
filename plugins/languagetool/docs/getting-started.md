@@ -2,10 +2,24 @@
 
 Grammar and style checking, alongside the built-in spellchecker.
 
-Spelling stays with the app's own dictionaries. This plugin adds the things a
-dictionary cannot judge: agreement, punctuation, word order, and style. The two
-never mark the same word — the plugin switches LanguageTool's spelling rules
-off, so each finding comes from exactly one checker.
+This plugin adds what a dictionary cannot judge: agreement, punctuation, word
+order and style.
+
+It can also take over **spelling**, and by default it does. LanguageTool weighs
+the whole sentence rather than comparing strings, so its suggestions are usually
+better ordered than the built-in dictionary's — and it knows German
+abbreviations natively. Turn _Check spelling too_ off to keep spelling local.
+
+Only ever one checker marks a given word. When LanguageTool is checking
+spelling, the built-in dictionary's spelling findings are suppressed
+paragraph by paragraph — and only for paragraphs LanguageTool actually
+answered. If the server is slow, unreachable or switched off, the local
+dictionary silently covers those paragraphs instead, so you are never left
+without spellchecking.
+
+Words in your personal dictionary are honoured either way. LanguageTool's API
+has no per-request word list, so accepted words are filtered out of its
+spelling results on your machine.
 
 ## Before you turn it on
 
@@ -42,11 +56,14 @@ privacy policy rather than yours.
 
 ## Configuration
 
-| Setting        | Needed for                                    |
-| -------------- | --------------------------------------------- |
-| Server URL     | Always. Empty means the checker does nothing. |
-| Account e-mail | Hosted API only                               |
-| API key        | Hosted API only                               |
+| Setting            | Needed for                                    |
+| ------------------ | --------------------------------------------- |
+| Server URL         | Always. Empty means the checker does nothing. |
+| Check spelling too | Optional. On by default.                      |
+| Account e-mail     | Hosted API only                               |
+| API key            | Hosted API only                               |
+
+The server URL may include `/v2` or a trailing slash — both are accepted.
 
 The e-mail and key are stored on this device and are never synced with your
 notes.

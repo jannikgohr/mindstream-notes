@@ -16,12 +16,12 @@
     "textCheckers": [
       {
         "id": "grammar",
-        "kinds": ["grammar", "style"],
+        "kinds": ["grammar", "style", "spelling"],
         "protocol": "languagetool",
         "endpointSetting": "endpoint",
         "apiKeySetting": "api-key",
         "usernameSetting": "username",
-        "disabledCategories": ["TYPOS"],
+        "disabledCategories": [],
         "labelKey": "checker.label"
       }
     ],
@@ -30,6 +30,14 @@
         "sectionId": "server",
         "titleKey": "settings.server.title",
         "settings": [
+          {
+            "id": "spelling",
+            "labelKey": "settings.spelling.label",
+            "descriptionKey": "settings.spelling.description",
+            "scope": "D",
+            "type": "toggle",
+            "default": true
+          },
           {
             "id": "endpoint",
             "labelKey": "settings.endpoint.label",
@@ -67,7 +75,9 @@
         "settings.username.label": "Account e-mail",
         "settings.username.description": "Only needed for LanguageTool's hosted API, which authenticates with an e-mail and key together. Leave empty for a self-hosted server.",
         "settings.apiKey.label": "API key",
-        "settings.apiKey.description": "Only needed for the hosted API. Stored on this device and never synced with your notes."
+        "settings.apiKey.description": "Only needed for the hosted API. Stored on this device and never synced with your notes.",
+        "settings.spelling.label": "Check spelling too",
+        "settings.spelling.description": "Let LanguageTool check spelling instead of the app's dictionaries. Its suggestions are usually better because it weighs the whole sentence, not just the word. Falls back to the built-in dictionary whenever the server cannot be reached, so you are never left without spellchecking."
       },
       "de": {
         "plugin.description": "Grammatik- und Stilprüfung über einen LanguageTool-Server.",
@@ -78,7 +88,9 @@
         "settings.username.label": "Konto-E-Mail",
         "settings.username.description": "Nur für die gehostete LanguageTool-API nötig, die sich mit E-Mail und Schlüssel zusammen authentifiziert. Für einen eigenen Server leer lassen.",
         "settings.apiKey.label": "API-Schlüssel",
-        "settings.apiKey.description": "Nur für die gehostete API nötig. Wird auf diesem Gerät gespeichert und nie mit den Notizen synchronisiert."
+        "settings.apiKey.description": "Nur für die gehostete API nötig. Wird auf diesem Gerät gespeichert und nie mit den Notizen synchronisiert.",
+        "settings.spelling.label": "Auch Rechtschreibung prüfen",
+        "settings.spelling.description": "Lässt LanguageTool statt der App-Wörterbücher die Rechtschreibung prüfen. Die Vorschläge sind meist besser, weil der ganze Satz einbezogen wird und nicht nur das Wort. Ist der Server nicht erreichbar, übernimmt automatisch wieder das eingebaute Wörterbuch — ohne Prüfung bleibst du nie."
       }
     }
   }

@@ -81,10 +81,11 @@ describe('validateManifest', () => {
     expect(result.contributes.textCheckers).toEqual([
       expect.objectContaining({ id: 'grammar', protocol: 'languagetool' })
     ]);
-    // Spelling stays with the built-in dictionary.
-    expect(result.contributes.textCheckers?.[0].disabledCategories).toContain(
-      'TYPOS'
-    );
+    // Spelling is offered, not forced: TYPOS is no longer disabled in the
+    // manifest, and the plugin's own setting decides whether LanguageTool
+    // takes spelling over from the built-in dictionary.
+    expect(result.contributes.textCheckers?.[0].kinds).toContain('spelling');
+    expect(result.contributes.textCheckers?.[0].disabledCategories).toEqual([]);
     expect(result.permissions).toContain('textCheckers.contribute');
   });
 
