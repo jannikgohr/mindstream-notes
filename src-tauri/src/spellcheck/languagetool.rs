@@ -116,6 +116,7 @@ pub async fn check(
     language: &str,
     text: &str,
     disabled_categories: &[String],
+    preferred_variants: &[String],
 ) -> AppResult<Vec<LanguageToolMatch>> {
     let url = format!("{}/v2/check", base_url(endpoint));
 
@@ -125,6 +126,14 @@ pub async fn check(
     ];
     if !disabled_categories.is_empty() {
         form.push(("disabledCategories".into(), disabled_categories.join(",")));
+    }
+    // Only meaningful alongside `language=auto`, and rejected otherwise.
+    // Detection on a short paragraph is a coin toss between de-DE and de-AT,
+    // which barely matters for grammar but would mis-spellcheck the whole
+    // paragraph — so the languages the user actually selected are passed
+    // through to narrow the guess.
+    if language == "auto" && !preferred_variants.is_empty() {
+        form.push(("preferredVariants".into(), preferred_variants.join(",")));
     }
     // The public API authenticates with username and key together; a
     // self-hosted server usually needs neither.
@@ -219,7 +228,7 @@ pub async fn test_connection(
     // Only worth a second request when there are credentials to verify;
     // a self-hosted server usually has none.
     if api_key.is_some() && username.is_some() {
-        if let Err(err) = check(endpoint, api_key, username, "en-US", PROBE_TEXT, &[]).await {
+        if let Err(err) = check(endpoint, api_key, username, "en-US", PROBE_TEXT, &[], &[]).await {
             return TestConnectionResult {
                 ok: false,
                 detail: format!("credentials rejected: {err}"),
@@ -250,6 +259,7 @@ pub async fn languagetool_check(
     language: String,
     text: String,
     disabled_categories: Vec<String>,
+    preferred_variants: Vec<String>,
 ) -> CommandResult<Vec<LanguageToolMatch>> {
     Ok(check(
         &endpoint,
@@ -258,6 +268,7 @@ pub async fn languagetool_check(
         &language,
         &text,
         &disabled_categories,
+        &preferred_variants,
     )
     .await?)
 }

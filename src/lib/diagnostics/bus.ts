@@ -33,6 +33,21 @@ export interface CheckOptions {
    * Unlisted providers rank after listed ones, in registration order.
    */
   precedence?: readonly string[];
+  /**
+   * Which provider OWNS a kind, when one should replace the others rather
+   * than merely outrank them.
+   *
+   * Precedence alone is not enough. It resolves overlapping findings, so two
+   * providers reporting spelling would still produce a union — every finding
+   * the owner happened not to make would survive from the other one, and the
+   * user would face two rankings at once.
+   *
+   * Ownership is resolved PER SEGMENT and only when the owner actually
+   * answered for that segment. That is the fallback: if LanguageTool is
+   * unreachable, the built-in dictionary's findings stand and spellchecking
+   * keeps working offline, rather than the document going quietly clean.
+   */
+  owners?: Partial<Record<DiagnosticKind, string>>;
   signal?: AbortSignal;
 }
 
@@ -103,10 +118,17 @@ export class DiagnosticBus {
     options: CheckOptions
   ): Promise<Diagnostic[]> {
     const { languages, signal } = options;
-    const results: Diagnostic[] = [];
+    const owners = options.owners ?? {};
+    const results: {
+      providerId: string;
+      segment: number;
+      diagnostic: Diagnostic;
+    }[] = [];
+    /** `providerId` per segment index that returned without failing. */
+    const answered = new Map<number, Set<string>>();
 
     for (const provider of this.#providers) {
-      for (const segment of segments) {
+      for (const [index, segment] of segments.entries()) {
         if (signal?.aborted) throw new AbortError();
 
         const key = this.#key(provider.id, languages, segment.text);
@@ -132,21 +154,43 @@ export class DiagnosticBus {
           this.#cacheSet(key, relative);
         }
 
+        // Reaching here means the provider answered — including answering
+        // "nothing wrong". That is what lets an owner suppress the others:
+        // silence from a working checker is a real verdict, silence from a
+        // broken one is not.
+        const seen = answered.get(index) ?? new Set<string>();
+        seen.add(provider.id);
+        answered.set(index, seen);
+
         // Providers report positions relative to the text they were handed;
         // rebasing happens here so no provider has to know where in the
         // document its paragraph lives.
         for (const d of relative) {
           results.push({
-            ...d,
-            from: d.from + segment.from,
-            to: d.to + segment.from
+            providerId: provider.id,
+            segment: index,
+            diagnostic: {
+              ...d,
+              from: d.from + segment.from,
+              to: d.to + segment.from
+            }
           });
         }
       }
     }
 
     if (signal?.aborted) throw new AbortError();
-    return resolveOverlaps(results, this.#order(options.precedence));
+
+    const owned = results
+      .filter(({ providerId, segment, diagnostic }) => {
+        const owner = owners[diagnostic.kind];
+        if (owner === undefined || owner === providerId) return true;
+        // Drop only when the owner actually answered for THIS segment.
+        return !answered.get(segment)?.has(owner);
+      })
+      .map(({ diagnostic }) => diagnostic);
+
+    return resolveOverlaps(owned, this.#order(options.precedence));
   }
 
   /** Provider ids in precedence order: explicit list first, then registration order. */

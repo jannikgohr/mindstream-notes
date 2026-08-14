@@ -12,7 +12,12 @@
  */
 
 import { createLanguageToolProvider } from './languagetool-provider';
-import { registerProvider } from './editor-diagnostics.svelte';
+import {
+  registerProvider,
+  selectedLanguageTags,
+  setSpellingOwner
+} from './editor-diagnostics.svelte';
+import { isCustomWord } from './custom-dictionary.svelte';
 import { languagetoolCheck } from '$lib/api/spellcheck';
 import { pluginTextCheckers } from '$lib/plugins/registry.svelte';
 import { getSettingValue } from '$lib/settings/store.svelte';
@@ -56,12 +61,14 @@ export function syncPluginTextCheckers(): void {
     wanted.add(id);
     if (active.has(id)) continue;
 
+    const tagsFor = () => selectedLanguageTags();
     const off = registerProvider(
       createLanguageToolProvider({
         id,
         kinds: checker.kinds as DiagnosticKind[],
         config: () => {
           const endpoint = pluginSetting(pluginId, checker.endpointSetting);
+          const tags = tagsFor();
           // No endpoint means the user has not configured the server yet.
           // That must read as "no opinion", not as an error on every
           // paragraph of every note.
@@ -74,12 +81,23 @@ export function syncPluginTextCheckers(): void {
             username: checker.usernameSetting
               ? pluginSetting(pluginId, checker.usernameSetting)
               : undefined,
-            // Auto-detection, matching the rest of the feature: the user
-            // selects languages, they do not tag paragraphs.
-            language: 'auto',
-            disabledCategories: checker.disabledCategories ?? []
+            // One selected language is a fact, not a guess — send it
+            // outright. With several, detection decides per paragraph but
+            // is narrowed to what the user actually writes, which matters
+            // far more for spelling than for grammar: a wrong guess would
+            // mis-flag an entire paragraph.
+            language: tags.length === 1 ? tags[0] : 'auto',
+            preferredVariants: tags.length === 1 ? [] : tags,
+            disabledCategories: [
+              ...(checker.disabledCategories ?? []),
+              // Spelling is the dictionary's unless the user handed it over.
+              ...(checksSpelling(pluginId, checker) ? [] : ['TYPOS'])
+            ]
           };
         },
+        // LanguageTool's check API has no per-request word list, so the
+        // personal dictionary is applied to its spelling findings here.
+        isIgnored: isCustomWord,
         check: languagetoolCheck
       })
     );
@@ -91,6 +109,31 @@ export function syncPluginTextCheckers(): void {
     off();
     active.delete(id);
   }
+
+  // Tell the bus who owns spelling. First claimant wins; with none, the
+  // built-in dictionary keeps it.
+  const owner = contributions.find(({ pluginId, checker }) =>
+    checksSpelling(pluginId, checker)
+  );
+  setSpellingOwner(
+    owner ? checkerProviderId(owner.pluginId, owner.checker.id) : null
+  );
+}
+
+/**
+ * Whether this checker is currently checking spelling.
+ *
+ * Declaring `spelling` in `kinds` says it CAN; the plugin's own setting
+ * says whether it does. Both have to agree, so a user who wants the local
+ * dictionary's behaviour can have it without disabling the plugin.
+ */
+function checksSpelling(
+  pluginId: string,
+  checker: { kinds: readonly string[] }
+): boolean {
+  if (!checker.kinds.includes('spelling')) return false;
+  const value = getSettingValue(`plugins.${pluginId}.spelling`);
+  return value !== false;
 }
 
 /** Drop every plugin checker — used when tearing down. */

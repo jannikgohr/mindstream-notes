@@ -336,3 +336,110 @@ describe('resolveOverlaps', () => {
     expect(out.map((d) => d.from)).toEqual([0, 20]);
   });
 });
+
+/**
+ * Kind ownership. Precedence alone only resolves OVERLAPPING findings, so
+ * two providers reporting spelling would still produce a union — every word
+ * the owner happened not to flag would survive from the other, leaving the
+ * user with two rankings at once.
+ */
+describe('kind ownership', () => {
+  const owners = { spelling: 'lt' } as const;
+
+  /** Fails for segments whose text contains `failOn`. */
+  const flaky = (
+    id: string,
+    word: string,
+    failOn?: string
+  ): DiagnosticProvider => ({
+    id,
+    kinds: ['spelling'],
+    check({ text }) {
+      if (failOn !== undefined && text.includes(failOn)) {
+        throw new Error('server down');
+      }
+      const at = text.indexOf(word);
+      return at === -1
+        ? []
+        : [diag({ from: at, to: at + word.length, source: id })];
+    }
+  });
+
+  it('drops the non-owner when the owner answered', async () => {
+    const bus = new DiagnosticBus();
+    bus.register(flaky('lt', 'alpha'));
+    bus.register(flaky('spell', 'beta'));
+
+    const out = await bus.check(segments(['alpha beta', 0]), {
+      languages: ['en'],
+      owners
+    });
+    // "beta" is only known to the dictionary, but the owner answered for
+    // this segment, so its silence is the verdict.
+    expect(out.map((d) => d.source)).toEqual(['lt']);
+  });
+
+  it('keeps the non-owner when the owner failed', async () => {
+    // The offline fallback: an unreachable server must not leave the
+    // document quietly clean.
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const bus = new DiagnosticBus();
+    bus.register(flaky('lt', 'alpha', 'beta'));
+    bus.register(flaky('spell', 'beta'));
+
+    const out = await bus.check(segments(['alpha beta', 0]), {
+      languages: ['en'],
+      owners
+    });
+    expect(out.map((d) => d.source)).toEqual(['spell']);
+    spy.mockRestore();
+  });
+
+  it('resolves ownership per segment, not per document', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const bus = new DiagnosticBus();
+    bus.register(flaky('lt', 'beta', 'boom'));
+    bus.register(flaky('spell', 'beta'));
+
+    const out = await bus.check(
+      segments(['beta here', 0], ['beta boom', 100]),
+      { languages: ['en'], owners }
+    );
+    // First segment: owner answered, so only its finding survives. Second:
+    // owner threw, so the fallback covers that paragraph alone.
+    expect(out.map((d) => `${d.source}@${d.from}`)).toEqual([
+      'lt@0',
+      'spell@100'
+    ]);
+    spy.mockRestore();
+  });
+
+  it('leaves other kinds untouched', async () => {
+    const bus = new DiagnosticBus();
+    bus.register(flaky('lt', 'alpha'));
+    bus.register({
+      id: 'grammar',
+      kinds: ['grammar'],
+      check: () => [
+        diag({ from: 6, to: 10, kind: 'grammar', source: 'grammar' })
+      ]
+    });
+
+    const out = await bus.check(segments(['alpha beta', 0]), {
+      languages: ['en'],
+      owners
+    });
+    expect(out.map((d) => d.source).sort()).toEqual(['grammar', 'lt']);
+  });
+
+  it('behaves as before when no owner is declared', async () => {
+    const bus = new DiagnosticBus();
+    bus.register(flaky('lt', 'alpha'));
+    bus.register(flaky('spell', 'beta'));
+
+    const out = await bus.check(segments(['alpha beta', 0]), {
+      languages: ['en']
+    });
+    expect(out).toHaveLength(2);
+  });
+});

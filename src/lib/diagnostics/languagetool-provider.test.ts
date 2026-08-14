@@ -28,20 +28,23 @@ const match = (over: Partial<LanguageToolMatch> = {}): LanguageToolMatch => ({
 const CONFIG = {
   endpoint: 'http://localhost:8081',
   language: 'auto',
-  disabledCategories: ['TYPOS']
+  disabledCategories: ['TYPOS'],
+  preferredVariants: ['de-DE', 'en-US']
 };
 
 const provider = (
   matches: LanguageToolMatch[],
-  config: (() => typeof CONFIG | null) | null = null
+  config: (() => typeof CONFIG | null) | null = null,
+  isIgnored?: (word: string) => boolean
 ) => {
   const check = vi.fn(async () => matches);
   return {
     check,
     provider: createLanguageToolProvider({
       id: 'plugins.com.example.lt.grammar',
-      kinds: ['grammar', 'style'],
+      kinds: ['grammar', 'style', 'spelling'],
       config: config ?? (() => CONFIG),
+      isIgnored,
       check
     })
   };
@@ -58,11 +61,10 @@ describe('categoryToKind', () => {
     expect(categoryToKind('SOMETHING_NEW')).toBe('grammar');
   });
 
-  it('discards spelling', () => {
-    // The built-in dictionary owns spelling. The plugin disables TYPOS
-    // server-side; this is the second line of defence, so a misconfigured
-    // server cannot produce a second, disagreeing squiggle on one word.
-    expect(categoryToKind('TYPOS')).toBeNull();
+  it('maps TYPOS to spelling', () => {
+    // Whether these are SHOWN is settled by kind ownership in the bus; the
+    // mapping itself is unconditional.
+    expect(categoryToKind('TYPOS')).toBe('spelling');
   });
 });
 
@@ -94,9 +96,31 @@ describe('createLanguageToolProvider', () => {
     expect(diagnostic.replacements).toEqual(['zebra', 'apple', 'mango']);
   });
 
-  it('drops spelling findings', async () => {
+  it('emits spelling findings so its ranking can be used', async () => {
     const { provider: p } = provider([match({ category: 'TYPOS' })]);
-    expect(await p.check(request('text'))).toEqual([]);
+    const [diagnostic] = await p.check(request('text'));
+    expect(diagnostic.kind).toBe('spelling');
+  });
+
+  it('drops a spelling finding for a word in the personal dictionary', async () => {
+    // The check API has no per-request word list, so this has to happen
+    // client-side or "Add to dictionary" would silently do nothing.
+    const { provider: p } = provider(
+      [match({ from: 0, to: 10, category: 'TYPOS' })],
+      null,
+      (word) => word === 'Mindstream'
+    );
+    expect(await p.check(request('Mindstream ist gut'))).toEqual([]);
+  });
+
+  it('keeps a grammar finding even for an accepted word', async () => {
+    // The personal dictionary says how a word is spelled, not how it is used.
+    const { provider: p } = provider(
+      [match({ from: 0, to: 10, category: 'GRAMMAR' })],
+      null,
+      () => true
+    );
+    expect(await p.check(request('Mindstream ist gut'))).toHaveLength(1);
   });
 
   describe('when it should stay quiet', () => {
@@ -139,11 +163,16 @@ describe('createLanguageToolProvider', () => {
       endpoint: 'http://localhost:8081',
       language: 'auto',
       disabledCategories: ['TYPOS'],
+      preferredVariants: ['de-DE', 'en-US'],
       text: 'some text'
     });
   });
 
   it('declares the kinds it may emit', () => {
-    expect(provider([]).provider.kinds).toEqual(['grammar', 'style']);
+    expect(provider([]).provider.kinds).toEqual([
+      'grammar',
+      'style',
+      'spelling'
+    ]);
   });
 });

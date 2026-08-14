@@ -17,11 +17,13 @@ import type {
 /**
  * LanguageTool category ids mapped to diagnostic kinds.
  *
- * Everything not listed is treated as grammar. `TYPOS` is deliberately
- * absent: the built-in dictionary owns spelling, and the plugin disables
- * that category server-side anyway — this is the second line of defence, so
- * a misconfigured server cannot produce a second, disagreeing squiggle on a
- * word we already checked.
+ * Everything not listed is treated as grammar.
+ *
+ * `TYPOS` maps to spelling, which the server only sends when the user has
+ * asked LanguageTool to check spelling too. Its rankings beat ours: it
+ * scores candidates with sentence context, where the dictionary can only
+ * compare strings. Which of the two is actually shown is settled by kind
+ * ownership in the bus, not here.
  */
 const STYLE_CATEGORIES = new Set([
   'STYLE',
@@ -31,8 +33,8 @@ const STYLE_CATEGORIES = new Set([
   'CREATIVE_WRITING'
 ]);
 
-export function categoryToKind(category: string): DiagnosticKind | null {
-  if (category === 'TYPOS') return null;
+export function categoryToKind(category: string): DiagnosticKind {
+  if (category === 'TYPOS') return 'spelling';
   return STYLE_CATEGORIES.has(category) ? 'style' : 'grammar';
 }
 
@@ -62,7 +64,17 @@ export interface LanguageToolProviderOptions {
     username?: string;
     language: string;
     disabledCategories: string[];
+    preferredVariants: string[];
   } | null;
+  /**
+   * Words the user has personally accepted.
+   *
+   * Applied to LanguageTool's SPELLING findings here, client-side, because
+   * the check API has no per-request custom word list. Without it, every
+   * word added to the personal dictionary would come back underlined and
+   * "Add to dictionary" would silently do nothing.
+   */
+  isIgnored?(word: string): boolean;
   check(args: {
     endpoint: string;
     apiKey?: string;
@@ -70,6 +82,7 @@ export interface LanguageToolProviderOptions {
     language: string;
     text: string;
     disabledCategories: string[];
+    preferredVariants: string[];
   }): Promise<LanguageToolMatch[]>;
 }
 
@@ -93,7 +106,14 @@ export function createLanguageToolProvider(
 
       return matches.flatMap((match) => {
         const kind = categoryToKind(match.category);
-        if (kind === null) return [];
+        // The server reports a range, not a word, so recover the word from
+        // the text we submitted to consult the personal dictionary.
+        if (
+          kind === 'spelling' &&
+          options.isIgnored?.(text.slice(match.from, match.to)) === true
+        ) {
+          return [];
+        }
         return [
           {
             from: match.from,

@@ -162,3 +162,29 @@ export function excludeIgnored<T extends TextRange>(
   if (ranges.length === 0) return items;
   return items.filter((item) => !overlapsAny(item, ranges));
 }
+
+/**
+ * Blank out ignored regions, preserving every offset.
+ *
+ * Filtering findings AFTER a check is enough when the checker is local, but
+ * a network checker has already been sent the text by then — so a note's
+ * code blocks would reach a LanguageTool server only to have their results
+ * discarded. Masking first means they are never transmitted, and the
+ * dropped-results path becomes belt and braces rather than the only guard.
+ *
+ * Replacement is space-for-character so positions stay valid: a masked
+ * region cannot shift the text after it, and a fenced code block collapses
+ * to blank lines, which paragraph segmentation then skips on its own.
+ */
+export function maskRanges(text: string, ranges: TextRange[]): string {
+  if (ranges.length === 0) return text;
+  const chars = [...text];
+  for (const { from, to } of ranges) {
+    for (let i = Math.max(0, from); i < Math.min(chars.length, to); i++) {
+      // Newlines survive so line structure — and paragraph splitting — is
+      // unchanged by masking.
+      if (chars[i] !== '\n') chars[i] = ' ';
+    }
+  }
+  return chars.join('');
+}
