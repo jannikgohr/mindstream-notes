@@ -22,6 +22,7 @@
 //! it. No language detection, no per-paragraph guessing.
 
 mod catalogue;
+mod custom;
 mod dictionary;
 
 use std::collections::HashMap;
@@ -31,6 +32,7 @@ use std::sync::{Arc, Mutex};
 use serde::Serialize;
 use tauri::{AppHandle, Manager, Runtime};
 
+use crate::db::Db;
 use crate::error::{AppError, AppResult, CommandResult};
 use crate::paths::app_data_root;
 
@@ -350,4 +352,24 @@ pub async fn spellcheck_remove_dictionary(app: AppHandle, id: String) -> Command
         guard.order.retain(|held| held != &id);
     }
     Ok(())
+}
+
+/// The user's personal dictionary, in the casing they typed.
+#[tauri::command]
+pub async fn custom_dictionary_list(db: tauri::State<'_, Db>) -> CommandResult<Vec<String>> {
+    Ok(db.with_conn(|conn| custom::list(conn))?)
+}
+
+/// Accept a word everywhere, in every language.
+///
+/// Applied in the frontend BEFORE a word is ever sent for checking, so it
+/// takes effect on the next check with no dictionary reload.
+#[tauri::command]
+pub async fn custom_dictionary_add(db: tauri::State<'_, Db>, word: String) -> CommandResult<()> {
+    Ok(db.with_conn(|conn| custom::add(conn, &word))?)
+}
+
+#[tauri::command]
+pub async fn custom_dictionary_remove(db: tauri::State<'_, Db>, word: String) -> CommandResult<()> {
+    Ok(db.with_conn(|conn| custom::remove(conn, &word))?)
 }

@@ -792,7 +792,10 @@
     "editor.spellcheck.dictionaries.licenseUnstated": "Lizenz nicht angegeben — siehe Quelle",
     "editor.spellcheck.dictionaries.source": "Quelle",
     "editor.spellcheck.dictionaries.failed": "Download fehlgeschlagen",
-    "editor.spellcheck.menu.showAll": "Alle anzeigen"
+    "editor.spellcheck.menu.showAll": "Alle anzeigen",
+    "editor.spellcheck.menu.addToDictionary": "Zum Wörterbuch hinzufügen",
+    "editor.spellcheck.customWords.empty": "Noch keine Wörter hinzugefügt. Klicke mit der rechten Maustaste auf ein markiertes Wort und wähle „Zum Wörterbuch hinzufügen“.",
+    "editor.spellcheck.customWords.remove": "Entfernen"
   },
   "categories": {
     "account": {
@@ -1101,6 +1104,10 @@
     "editor.spellcheck.dictionaries": {
       "label": "Wörterbücher",
       "description": "Werden bei Bedarf heruntergeladen statt mitgeliefert, da sich die Lizenzen unterscheiden. Jede Lizenz wird vor der Installation angezeigt."
+    },
+    "editor.spellcheck.customWords": {
+      "label": "Persönliches Wörterbuch",
+      "description": "Von dir akzeptierte Wörter. Sie gelten in allen Sprachen und werden im Tresor gespeichert, nicht auf dem Gerät."
     }
   },
   "values": {

@@ -115,3 +115,31 @@ export function spellcheckRemoveDictionary(id: string): Promise<void> {
     () => undefined
   );
 }
+
+/** The user's personal dictionary, in the casing they typed. */
+export function customDictionaryList(): Promise<string[]> {
+  return invokeOrFallback<string[]>(
+    TauriCommandName.CustomDictionaryList,
+    undefined,
+    () => [],
+    (value) => assertStringArray(value, 'custom_dictionary_list response')
+  );
+}
+
+export function customDictionaryAdd(word: string): Promise<void> {
+  return invokeOrFallback<void>(
+    TauriCommandName.CustomDictionaryAdd,
+    { word },
+    () => undefined,
+    () => undefined
+  );
+}
+
+export function customDictionaryRemove(word: string): Promise<void> {
+  return invokeOrFallback<void>(
+    TauriCommandName.CustomDictionaryRemove,
+    { word },
+    () => undefined,
+    () => undefined
+  );
+}

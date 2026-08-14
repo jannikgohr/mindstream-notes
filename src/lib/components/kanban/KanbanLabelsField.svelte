@@ -206,6 +206,7 @@
       bind:this={inputEl}
       type="text"
       bind:value={query}
+      spellcheck="false"
       {placeholder}
       {disabled}
       onfocus={() => (open = true)}

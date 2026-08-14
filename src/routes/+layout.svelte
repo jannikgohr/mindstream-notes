@@ -40,6 +40,7 @@
   import { loadPlugins } from '$lib/plugins/load';
   import { installPluginSettingsBridge } from '$lib/plugins/settings-bridge';
   import { startPickerSettingPruning } from '$lib/settings/pickers.svelte';
+  import { loadCustomDictionary } from '$lib/diagnostics/custom-dictionary.svelte';
 
   let { children } = $props();
 
@@ -57,6 +58,13 @@
     };
     window.addEventListener('contextmenu', block);
     return () => window.removeEventListener('contextmenu', block);
+  });
+
+  // Mirror the personal dictionary into memory before the first note is
+  // checked; the spellcheck provider consults it synchronously for every
+  // token, so it cannot fetch on demand.
+  onMount(() => {
+    void loadCustomDictionary();
   });
 
   // Install the global hotkey dispatcher once. Idempotent — the manager
