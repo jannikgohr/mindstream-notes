@@ -1,0 +1,162 @@
+<script lang="ts">
+  /**
+   * Host-owned settings section that lets the user verify a plugin's declared
+   * text checkers can reach their server. Rendered inside a plugin's own
+   * settings pane whenever it declares `contributes.textCheckers`, and built
+   * to match {@link PluginNativeToolsSection}: same row shape, same Check
+   * button, same inline result. A checker's server and a plugin's native
+   * binary are the same question to the user — "is the thing this needs
+   * actually there?" — so they should not answer it two different ways.
+   *
+   * Reachability is probed via the protocol's own metadata endpoint, which
+   * carries no note text; credentials, when configured, are verified with a
+   * fixed probe string. See `spellcheck::languagetool` for why.
+   */
+  import { CheckCircle2, Globe, RefreshCw, XCircle } from '@lucide/svelte';
+  import { languagetoolTestConnection } from '$lib/api/spellcheck';
+  import { pluginById } from '$lib/plugins/registry.svelte';
+  import { resolvePluginStringOptional } from '$lib/plugins/plugin-i18n';
+  import { getSettingValue } from '$lib/settings/store.svelte';
+  import { tUi } from '$lib/settings/i18n.svelte';
+
+  interface Props {
+    pluginId: string;
+  }
+  let { pluginId }: Props = $props();
+
+  const checkers = $derived(
+    pluginById(pluginId)?.manifest.contributes.textCheckers ?? []
+  );
+
+  type RowState = 'idle' | 'checking' | 'ok' | 'failed';
+  interface Row {
+    state: RowState;
+    detail: string | null;
+  }
+  let rows = $state<Record<string, Row>>({});
+
+  function setting(id: string): string | undefined {
+    const value = getSettingValue(`plugins.${pluginId}.${id}`);
+    if (typeof value !== 'string') return undefined;
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  }
+
+  async function check(
+    checkerId: string,
+    endpointSetting: string,
+    apiKeySetting?: string,
+    usernameSetting?: string
+  ) {
+    const endpoint = setting(endpointSetting);
+    if (!endpoint) {
+      // Say what is missing rather than reporting a network failure the user
+      // would have to interpret.
+      rows = {
+        ...rows,
+        [checkerId]: {
+          state: 'failed',
+          detail: tUi('plugins.textCheckers.noEndpoint')
+        }
+      };
+      return;
+    }
+
+    rows = { ...rows, [checkerId]: { state: 'checking', detail: null } };
+    try {
+      const result = await languagetoolTestConnection({
+        endpoint,
+        apiKey: apiKeySetting ? setting(apiKeySetting) : undefined,
+        username: usernameSetting ? setting(usernameSetting) : undefined
+      });
+      rows = {
+        ...rows,
+        [checkerId]: {
+          state: result.ok ? 'ok' : 'failed',
+          detail: result.detail
+        }
+      };
+    } catch (err) {
+      rows = {
+        ...rows,
+        [checkerId]: { state: 'failed', detail: String(err) }
+      };
+    }
+  }
+</script>
+
+{#if checkers.length > 0}
+  <div class="mt-5">
+    <h3
+      class="border-b border-border pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+    >
+      {tUi('plugins.textCheckers.title')}
+    </h3>
+    <div class="divide-y divide-border">
+      {#each checkers as checker (checker.id)}
+        {@const row = rows[checker.id]}
+        {@const label = resolvePluginStringOptional(pluginId, checker.labelKey)}
+        {@const endpoint = setting(checker.endpointSetting)}
+        <div class="flex items-start justify-between gap-3 py-3">
+          <div class="min-w-0">
+            <div class="flex items-center gap-2 text-sm font-medium">
+              <Globe class="size-4 shrink-0 text-muted-foreground" />
+              <span>{label ?? checker.id}</span>
+            </div>
+            {#if endpoint}
+              <p
+                class="mt-0.5 break-all font-mono text-[11px] text-muted-foreground"
+              >
+                {endpoint}
+              </p>
+            {:else}
+              <p class="mt-0.5 text-xs text-muted-foreground">
+                {tUi('plugins.textCheckers.noEndpoint')}
+              </p>
+            {/if}
+            {#if row?.state === 'ok'}
+              <p
+                class="mt-1 flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400"
+              >
+                <CheckCircle2 class="size-3.5 shrink-0" />
+                {tUi('plugins.textCheckers.reachable')}
+              </p>
+              {#if row.detail}
+                <p class="mt-0.5 text-[11px] text-muted-foreground">
+                  {row.detail}
+                </p>
+              {/if}
+            {:else if row?.state === 'failed'}
+              <p class="mt-1 flex items-center gap-1 text-xs text-destructive">
+                <XCircle class="size-3.5 shrink-0" />
+                {tUi('plugins.textCheckers.unreachable')}
+              </p>
+              {#if row.detail}
+                <p class="mt-0.5 break-all text-[11px] text-muted-foreground">
+                  {row.detail}
+                </p>
+              {/if}
+            {/if}
+          </div>
+          <button
+            type="button"
+            class="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+            disabled={row?.state === 'checking'}
+            onclick={() =>
+              check(
+                checker.id,
+                checker.endpointSetting,
+                checker.apiKeySetting,
+                checker.usernameSetting
+              )}
+          >
+            <RefreshCw
+              class="size-3 {row?.state === 'checking' ? 'animate-spin' : ''}"
+            />
+            {tUi('plugins.textCheckers.check')}
+          </button>
+        </div>
+      {/each}
+    </div>
+  </div>
+{/if}

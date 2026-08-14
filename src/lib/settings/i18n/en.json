@@ -795,7 +795,12 @@
     "editor.spellcheck.menu.showAll": "Show all",
     "editor.spellcheck.menu.addToDictionary": "Add to dictionary",
     "editor.spellcheck.customWords.empty": "No words added yet. Right-click a flagged word and choose \"Add to dictionary\".",
-    "editor.spellcheck.customWords.remove": "Remove"
+    "editor.spellcheck.customWords.remove": "Remove",
+    "plugins.textCheckers.title": "Text checkers",
+    "plugins.textCheckers.check": "Check",
+    "plugins.textCheckers.reachable": "Server reachable",
+    "plugins.textCheckers.unreachable": "Server unreachable",
+    "plugins.textCheckers.noEndpoint": "No server URL configured"
   },
   "categories": {
     "account": {

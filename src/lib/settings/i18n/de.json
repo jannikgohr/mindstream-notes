@@ -795,7 +795,12 @@
     "editor.spellcheck.menu.showAll": "Alle anzeigen",
     "editor.spellcheck.menu.addToDictionary": "Zum Wörterbuch hinzufügen",
     "editor.spellcheck.customWords.empty": "Noch keine Wörter hinzugefügt. Klicke mit der rechten Maustaste auf ein markiertes Wort und wähle „Zum Wörterbuch hinzufügen“.",
-    "editor.spellcheck.customWords.remove": "Entfernen"
+    "editor.spellcheck.customWords.remove": "Entfernen",
+    "plugins.textCheckers.title": "Textprüfer",
+    "plugins.textCheckers.check": "Prüfen",
+    "plugins.textCheckers.reachable": "Server erreichbar",
+    "plugins.textCheckers.unreachable": "Server nicht erreichbar",
+    "plugins.textCheckers.noEndpoint": "Keine Server-URL eingetragen"
   },
   "categories": {
     "account": {
