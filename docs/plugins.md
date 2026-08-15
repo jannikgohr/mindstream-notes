@@ -88,6 +88,9 @@ is namespaced under the plugin `id`, so two plugins can never collide.
 - **`sourceLanguages`** — source-editor language modes backed by host-owned
   CodeMirror providers. A note kind references one with `sourceLanguage`. A
   language opts into spellchecking with `diagnostics` (see below).
+- **`textCheckers`** — spelling/grammar services added to the diagnostics
+  pipeline. The plugin declares the wire format; the host makes the request
+  (see below). Requires `textCheckers.contribute`.
 - **`noteExporters`** — export actions shown in a note's context menu. An
   exporter targets a built-in note kind such as `markdown` or a plugin-owned
   stored kind such as `plugin.<pluginId>.<kind>`, runs a backend script export,
@@ -417,6 +420,128 @@ not the author's typing. Where indentation carries no meaning, leave it off so a
 genuine doubled space is still caught. Note this is filtered by POSITION rather
 than by the checker's message, which arrives already localized and so cannot be
 matched against.
+
+## Text checkers (`contributes.textCheckers`, `textCheckers.contribute`)
+
+A plugin can add a spelling/grammar/style service to the diagnostics pipeline.
+The plugin describes the service; **the host makes every request**. That split is
+the point: a checker sees the full text of every note the user types in, so a
+plugin declares a wire format but never receives the text and never chooses
+where it goes.
+
+The host also has to make the request for it to work at all. A self-hosted
+server sends no CORS headers, so a WebView `fetch` to the usual setup is refused
+before it leaves; Chromium gates page-to-LAN requests through Private Network
+Access; and where the app is served from a custom scheme treated as secure, a
+plain-`http://` server is blocked as mixed content. `reqwest` in the backend is
+subject to none of the three.
+
+```jsonc
+"textCheckers": [{
+  "id": "grammar",
+  "kinds": ["grammar", "style", "spelling"],
+  "labelKey": "checker.label",
+
+  // Settings the user fills in. The endpoint is a setting, not a manifest
+  // value, because it is the user's choice — their own server, or a public one
+  // with very different privacy implications.
+  "endpointSetting": "endpoint",
+  "apiKeySetting": "api-key",
+  "usernameSetting": "username",
+
+  // Declaring `spelling` in `kinds` says the checker CAN do spelling; this
+  // setting says whether it does, so a user can keep the built-in dictionary
+  // without disabling the plugin. Omit it and the checker always does.
+  "spellingSetting": "spelling",
+  // Categories to switch off server-side when it is not doing spelling —
+  // the service's vocabulary, which only the plugin knows.
+  "spellingCategories": ["TYPOS"],
+  "disabledCategories": [],
+
+  // The service's rule categories mapped to diagnostic kinds. Anything
+  // unlisted falls back to `defaultKind`.
+  "defaultKind": "grammar",
+  "categoryKinds": { "TYPOS": "spelling", "STYLE": "style" },
+
+  "protocol": { /* see below */ }
+}]
+```
+
+### The protocol
+
+`protocol` is how a service is described rather than named. It replaced a
+host-owned list of supported protocols that had exactly one entry, which meant
+a second service required an app change and a third-party plugin could not add
+one at all.
+
+```jsonc
+"protocol": {
+  // Stripped from the user's endpoint before paths are appended. People paste
+  // whatever their server's docs show — often the API root including its
+  // version segment — which would otherwise build `/v2/v2/check` and 404 as an
+  // unreachable server rather than a URL one segment too long.
+  "trimEndpointSuffix": "/v2",
+
+  "check": {
+    "path": "/v2/check",
+    "encoding": "form",              // "form" or "json"
+    // Where the host's values go. A field left out is simply not sent, which
+    // is how a service with no concept of an API key omits one.
+    "fields": {
+      "text": "text",                // REQUIRED
+      "language": "language",
+      "apiKey": "apiKey",
+      "username": "username",
+      "preferredVariants": "preferredVariants",
+      "disabledCategories": "disabledCategories"
+    },
+    "staticFields": { "level": "picky" }   // sent verbatim every time
+  },
+
+  // Where the findings are, as JSON Pointers (RFC 6901). `list` is
+  // document-relative; the rest are relative to each match.
+  "matches": {
+    "list": "/matches",
+    "offset": "/offset",
+    "length": "/length",             // exactly one of length or end
+    "message": "/message",
+    "replacements": "/replacements",
+    "replacementValue": "/value",    // omit if they are plain strings
+    "category": "/rule/category/id"
+  },
+
+  // Optional. Declaring it switches on the host's re-ask behaviour: when
+  // detection is not confident, or lands outside the languages the user
+  // writes, the request is repeated naming a language outright. Checking
+  // German prose against a French dictionary produces far more nonsense than
+  // the wrong regional variant.
+  "detection": {
+    "code": "/language/detectedLanguage/code",
+    "confidence": "/language/detectedLanguage/confidence"
+  },
+
+  // Optional. A cheap endpoint listing the languages the server offers, used
+  // by the Check button. Kept apart from the check path so that answering
+  // "is my container up?" transmits nothing. Without it, the button falls back
+  // to a fixed probe string — never note content.
+  "probe": {
+    "path": "/v2/languages",
+    "list": "",                      // "" is the document root
+    "languageCode": ["/longCode", "/code"]   // tried in order
+  }
+}
+```
+
+Pointers rather than a query language: they are a standard, they cannot loop or
+backtrack, and they resolve natively in the backend. A match whose offset,
+extent or message cannot be resolved is **dropped** rather than defaulted — a
+finding at a guessed position underlines the wrong words, which is worse than
+one that never appears.
+
+The bundled `languagetool` plugin is a complete worked example, and is nothing
+but a manifest: the app contains no code specific to it. A service whose
+response cannot be described with pointers — XML, or two round trips — is
+outside what a declarative protocol can express today.
 
 ## Preview services (`contributes.nativeServices`, `nativeServices.run`)
 

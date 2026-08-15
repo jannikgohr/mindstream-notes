@@ -40,14 +40,23 @@ vi.mock('./editor-diagnostics.svelte', () => ({
     };
   }
 }));
-vi.mock('$lib/api/spellcheck', () => ({ languagetoolCheck: vi.fn() }));
+vi.mock('$lib/api/spellcheck', () => ({ textCheckerCheck: vi.fn() }));
 
 const checker = (
   over: Partial<PluginTextCheckerContribution> = {}
 ): PluginTextCheckerContribution => ({
   id: 'grammar',
   kinds: ['grammar'],
-  protocol: 'languagetool',
+  // The shape a manifest declares; the wiring only carries it through.
+  protocol: {
+    check: { path: '/check', encoding: 'form', fields: { text: 'text' } },
+    matches: {
+      list: '/matches',
+      offset: '/offset',
+      length: '/length',
+      message: '/message'
+    }
+  },
   endpointSetting: 'endpoint',
   ...over
 });
@@ -141,7 +150,12 @@ describe('checkerProviderId', () => {
  * local dictionary without disabling the plugin.
  */
 describe('spelling ownership', () => {
-  const spellingChecker = checker({ kinds: ['grammar', 'spelling'] });
+  // Naming the toggle is the plugin's job now — the host no longer assumes a
+  // setting called `spelling` exists.
+  const spellingChecker = checker({
+    kinds: ['grammar', 'spelling'],
+    spellingSetting: 'spelling'
+  });
 
   it('claims spelling when the checker declares it', async () => {
     contributions.push({

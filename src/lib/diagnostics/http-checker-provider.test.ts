@@ -1,11 +1,39 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   categoryToKind,
-  createLanguageToolProvider,
+  createHttpCheckerProvider,
   planChunks,
-  type LanguageToolMatch
-} from './languagetool-provider';
+  type CategoryKinds,
+  type CheckerMatch
+} from './http-checker-provider';
 import type { CheckRequest } from './types';
+import type { PluginCheckerProtocol } from '$lib/plugins/types';
+
+/**
+ * A protocol stands in for the manifest a plugin would ship. Its contents do
+ * not matter here — the provider never interprets it, it only carries it to
+ * the host request — but it must be present, because a missing one is the
+ * failure that would silently return no findings.
+ */
+const PROTOCOL = {
+  check: {
+    path: '/v2/check',
+    encoding: 'form',
+    fields: { text: 'text' }
+  },
+  matches: {
+    list: '/matches',
+    offset: '/offset',
+    length: '/length',
+    message: '/message'
+  }
+} as PluginCheckerProtocol;
+
+/** LanguageTool's mapping, as its manifest now declares it. */
+const KINDS: CategoryKinds = {
+  map: { TYPOS: 'spelling', STYLE: 'style', REDUNDANCY: 'style' },
+  fallback: 'grammar'
+};
 
 const request = (
   text: string,
@@ -17,7 +45,7 @@ const request = (
   ...over
 });
 
-const match = (over: Partial<LanguageToolMatch> = {}): LanguageToolMatch => ({
+const match = (over: Partial<CheckerMatch> = {}): CheckerMatch => ({
   from: 0,
   to: 4,
   message: 'x',
@@ -30,20 +58,22 @@ const CONFIG = {
   endpoint: 'http://localhost:8081',
   language: 'auto',
   disabledCategories: ['TYPOS'],
-  preferredVariants: ['de-DE', 'en-US']
+  preferredVariants: ['de-DE', 'en-US'],
+  protocol: PROTOCOL
 };
 
 const provider = (
-  matches: LanguageToolMatch[],
+  matches: CheckerMatch[],
   config: (() => typeof CONFIG | null) | null = null,
   isIgnored?: (word: string) => boolean
 ) => {
   const check = vi.fn(async () => matches);
   return {
     check,
-    provider: createLanguageToolProvider({
+    provider: createHttpCheckerProvider({
       id: 'plugins.com.example.lt.grammar',
       kinds: ['grammar', 'style', 'spelling'],
+      categoryKinds: KINDS,
       config: config ?? (() => CONFIG),
       isIgnored,
       check
@@ -53,23 +83,23 @@ const provider = (
 
 describe('categoryToKind', () => {
   it('maps style categories to style', () => {
-    expect(categoryToKind('STYLE')).toBe('style');
-    expect(categoryToKind('REDUNDANCY')).toBe('style');
+    expect(categoryToKind('STYLE', KINDS)).toBe('style');
+    expect(categoryToKind('REDUNDANCY', KINDS)).toBe('style');
   });
 
   it('maps anything else to grammar', () => {
-    expect(categoryToKind('PUNCTUATION')).toBe('grammar');
-    expect(categoryToKind('SOMETHING_NEW')).toBe('grammar');
+    expect(categoryToKind('PUNCTUATION', KINDS)).toBe('grammar');
+    expect(categoryToKind('SOMETHING_NEW', KINDS)).toBe('grammar');
   });
 
   it('maps TYPOS to spelling', () => {
     // Whether these are SHOWN is settled by kind ownership in the bus; the
     // mapping itself is unconditional.
-    expect(categoryToKind('TYPOS')).toBe('spelling');
+    expect(categoryToKind('TYPOS', KINDS)).toBe('spelling');
   });
 });
 
-describe('createLanguageToolProvider', () => {
+describe('createHttpCheckerProvider', () => {
   it('converts a match into a diagnostic', async () => {
     const { provider: p } = provider([
       match({ from: 4, to: 9, message: 'Use a comma.', replacements: ['a,'] })
@@ -147,9 +177,10 @@ describe('createLanguageToolProvider', () => {
         controller.abort();
         return [match()];
       });
-      const p = createLanguageToolProvider({
+      const p = createHttpCheckerProvider({
         id: 'lt',
         kinds: ['grammar'],
+        categoryKinds: KINDS,
         config: () => CONFIG,
         check
       });
@@ -167,6 +198,9 @@ describe('createLanguageToolProvider', () => {
       language: 'auto',
       disabledCategories: ['TYPOS'],
       preferredVariants: ['de-DE', 'en-US'],
+      // The declared wire format rides along with every request rather than
+      // being captured once, so a plugin update cannot leave a stale one.
+      protocol: PROTOCOL,
       text: 'some text'
     });
   });
@@ -187,14 +221,15 @@ describe('createLanguageToolProvider', () => {
  */
 describe('status reporting', () => {
   const withStatus = (
-    matches: LanguageToolMatch[],
+    matches: CheckerMatch[],
     config: (() => typeof CONFIG | null) | null = null,
-    check?: () => Promise<LanguageToolMatch[]>
+    check?: () => Promise<CheckerMatch[]>
   ) => {
     const seen: { state: string; detail?: string }[] = [];
-    const provider = createLanguageToolProvider({
+    const provider = createHttpCheckerProvider({
       id: 'lt',
       kinds: ['grammar', 'spelling'],
+      categoryKinds: KINDS,
       config: config ?? (() => CONFIG),
       check: check ?? (async () => matches),
       onStatus: (state, detail) => seen.push({ state, detail })
@@ -309,13 +344,14 @@ describe('checkAll', () => {
   });
 
   const batched = (
-    onCheck: (text: string) => LanguageToolMatch[],
+    onCheck: (text: string) => CheckerMatch[],
     config: (() => typeof CONFIG | null) | null = null
   ) => {
     const calls: string[] = [];
-    const provider = createLanguageToolProvider({
+    const provider = createHttpCheckerProvider({
       id: 'lt',
       kinds: ['grammar', 'spelling'],
+      categoryKinds: KINDS,
       config: config ?? (() => CONFIG),
       check: async ({ text }) => {
         calls.push(text);

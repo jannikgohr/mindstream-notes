@@ -79,7 +79,14 @@ describe('validateManifest', () => {
     // delisted it.
     const result = validateManifest(languagetoolManifest);
     expect(result.contributes.textCheckers).toEqual([
-      expect.objectContaining({ id: 'grammar', protocol: 'languagetool' })
+      expect.objectContaining({
+        id: 'grammar',
+        // The service is described by the manifest now, not named in app code.
+        protocol: expect.objectContaining({
+          check: expect.objectContaining({ path: '/v2/check' })
+        }),
+        categoryKinds: expect.objectContaining({ TYPOS: 'spelling' })
+      })
     ]);
     // Spelling is offered, not forced: TYPOS is no longer disabled in the
     // manifest, and the plugin's own setting decides whether LanguageTool

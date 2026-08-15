@@ -18,11 +18,58 @@
       {
         "id": "grammar",
         "kinds": ["grammar", "style", "spelling"],
-        "protocol": "languagetool",
         "endpointSetting": "endpoint",
         "apiKeySetting": "api-key",
         "usernameSetting": "username",
+        "spellingSetting": "spelling",
+        "spellingCategories": ["TYPOS"],
         "disabledCategories": [],
+        "defaultKind": "grammar",
+        "categoryKinds": {
+          "TYPOS": "spelling",
+          "STYLE": "style",
+          "REDUNDANCY": "style",
+          "PLAIN_ENGLISH": "style",
+          "WORDINESS": "style",
+          "CREATIVE_WRITING": "style",
+          "COLLOQUIALISMS": "style",
+          "TYPOGRAPHY": "style",
+          "REGIONALISMS": "style",
+          "GENDER_NEUTRALITY": "style"
+        },
+        "protocol": {
+          "trimEndpointSuffix": "/v2",
+          "check": {
+            "path": "/v2/check",
+            "encoding": "form",
+            "fields": {
+              "text": "text",
+              "language": "language",
+              "apiKey": "apiKey",
+              "username": "username",
+              "preferredVariants": "preferredVariants",
+              "disabledCategories": "disabledCategories"
+            }
+          },
+          "matches": {
+            "list": "/matches",
+            "offset": "/offset",
+            "length": "/length",
+            "message": "/message",
+            "replacements": "/replacements",
+            "replacementValue": "/value",
+            "category": "/rule/category/id"
+          },
+          "detection": {
+            "code": "/language/detectedLanguage/code",
+            "confidence": "/language/detectedLanguage/confidence"
+          },
+          "probe": {
+            "path": "/v2/languages",
+            "list": "",
+            "languageCode": ["/longCode", "/code"]
+          }
+        },
         "labelKey": "checker.label"
       }
     ],

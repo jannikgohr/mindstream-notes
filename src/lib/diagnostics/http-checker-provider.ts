@@ -1,12 +1,18 @@
 /**
- * A plugin-contributed LanguageTool checker, as a diagnostics provider.
+ * A plugin-contributed checking service, as a diagnostics provider.
  *
- * The plugin supplies configuration; the host makes the request and renders
- * the result. Nothing here executes plugin code — a checker sees the full
- * text of every note being edited, so the request stays in one auditable
- * place rather than becoming something a plugin can redirect.
+ * The plugin declares configuration and a wire format; the host makes the
+ * request and renders the result. Nothing here executes plugin code — a
+ * checker sees the full text of every note being edited, so the request stays
+ * in one auditable place rather than becoming something a plugin can redirect.
+ *
+ * Everything in this file is service-agnostic. It used to name LanguageTool's
+ * rule categories — including German-only ones — which meant a second service
+ * could not be added without editing the app. Categories now arrive from the
+ * manifest, because they are the service's vocabulary and not the host's.
  */
 
+import type { PluginCheckerProtocol } from '$lib/plugins/types';
 import type {
   CheckRequest,
   Diagnostic,
@@ -15,34 +21,22 @@ import type {
 } from './types';
 
 /**
- * LanguageTool category ids mapped to diagnostic kinds.
+ * A service's rule categories mapped to diagnostic kinds.
  *
- * Everything not listed is treated as grammar.
- *
- * `TYPOS` maps to spelling, which the server only sends when the user has
- * asked LanguageTool to check spelling too. Its rankings beat ours: it
- * scores candidates with sentence context, where the dictionary can only
- * compare strings. Which of the two is actually shown is settled by kind
- * ownership in the bus, not here.
+ * Supplied by the plugin. Anything unlisted falls back to `defaultKind`,
+ * which keeps a manifest short: a service typically has one spelling category
+ * and a handful of style ones, and everything else is grammar.
  */
-const STYLE_CATEGORIES = new Set([
-  'STYLE',
-  'REDUNDANCY',
-  'PLAIN_ENGLISH',
-  'WORDINESS',
-  'CREATIVE_WRITING',
-  // German categories, taken from what a real server returns rather than
-  // guessed: without these, German prose only ever produced two colours
-  // because everything that was not TYPOS fell through to grammar.
-  'COLLOQUIALISMS',
-  'TYPOGRAPHY',
-  'REGIONALISMS',
-  'GENDER_NEUTRALITY'
-]);
+export interface CategoryKinds {
+  map: Readonly<Record<string, DiagnosticKind>>;
+  fallback: DiagnosticKind;
+}
 
-export function categoryToKind(category: string): DiagnosticKind {
-  if (category === 'TYPOS') return 'spelling';
-  return STYLE_CATEGORIES.has(category) ? 'style' : 'grammar';
+export function categoryToKind(
+  category: string,
+  kinds: CategoryKinds
+): DiagnosticKind {
+  return kinds.map[category] ?? kinds.fallback;
 }
 
 /**
@@ -144,7 +138,24 @@ async function inParallel<T, R>(
   return out;
 }
 
-export interface LanguageToolMatch {
+/**
+ * Everything one request needs, resolved per check.
+ *
+ * `protocol` rides along rather than being captured once because the manifest
+ * is reloaded when a plugin updates, and a stale wire format would fail in the
+ * least obvious way possible — a working server answering nothing.
+ */
+export interface CheckerConfig {
+  endpoint: string;
+  apiKey?: string;
+  username?: string;
+  language: string;
+  disabledCategories: string[];
+  preferredVariants: string[];
+  protocol: PluginCheckerProtocol;
+}
+
+export interface CheckerMatch {
   from: number;
   to: number;
   message: string;
@@ -152,10 +163,12 @@ export interface LanguageToolMatch {
   category: string;
 }
 
-export interface LanguageToolProviderOptions {
+export interface HttpCheckerProviderOptions {
   /** Provider id, already namespaced to the owning plugin. */
   id: string;
   kinds: readonly DiagnosticKind[];
+  /** The service's categories, as the plugin declared them. */
+  categoryKinds: CategoryKinds;
   /**
    * Resolved per check rather than captured, so editing the endpoint or key
    * in settings takes effect without reloading the plugin.
@@ -164,19 +177,12 @@ export interface LanguageToolProviderOptions {
    * has not configured it yet, which must read as "no opinion" rather than
    * an error on every paragraph.
    */
-  config(): {
-    endpoint: string;
-    apiKey?: string;
-    username?: string;
-    language: string;
-    disabledCategories: string[];
-    preferredVariants: string[];
-  } | null;
+  config(): CheckerConfig | null;
   /**
    * Words the user has personally accepted.
    *
-   * Applied to LanguageTool's SPELLING findings here, client-side, because
-   * the check API has no per-request custom word list. Without it, every
+   * Applied to the service's SPELLING findings here, client-side, because a
+   * remote check API has no per-request custom word list. Without it, every
    * word added to the personal dictionary would come back underlined and
    * "Add to dictionary" would silently do nothing.
    */
@@ -187,27 +193,19 @@ export interface LanguageToolProviderOptions {
    * every run — the store ignores repeats.
    */
   onStatus?(state: 'unconfigured' | 'active' | 'failed', detail?: string): void;
-  check(args: {
-    endpoint: string;
-    apiKey?: string;
-    username?: string;
-    language: string;
-    text: string;
-    disabledCategories: string[];
-    preferredVariants: string[];
-  }): Promise<LanguageToolMatch[]>;
+  check(args: CheckerConfig & { text: string }): Promise<CheckerMatch[]>;
 }
 
-export function createLanguageToolProvider(
-  options: LanguageToolProviderOptions
+export function createHttpCheckerProvider(
+  options: HttpCheckerProviderOptions
 ): DiagnosticProvider {
   const toDiagnostics = (
-    matches: LanguageToolMatch[],
+    matches: CheckerMatch[],
     text: string,
     offset: number
   ): Diagnostic[] =>
     matches.flatMap((match) => {
-      const kind = categoryToKind(match.category);
+      const kind = categoryToKind(match.category, options.categoryKinds);
       // The server reports a range, not a word, so recover the word from
       // the text we submitted to consult the personal dictionary.
       if (
@@ -302,7 +300,7 @@ export function createLanguageToolProvider(
       // wasted check is microseconds.
       if (text.trim().length === 0) return null;
 
-      let matches: LanguageToolMatch[];
+      let matches: CheckerMatch[];
       try {
         matches = await options.check({ ...config, text });
       } catch (err) {
@@ -318,7 +316,7 @@ export function createLanguageToolProvider(
       options.onStatus?.('active');
 
       return matches.flatMap((match) => {
-        const kind = categoryToKind(match.category);
+        const kind = categoryToKind(match.category, options.categoryKinds);
         // The server reports a range, not a word, so recover the word from
         // the text we submitted to consult the personal dictionary.
         if (
@@ -334,7 +332,7 @@ export function createLanguageToolProvider(
             kind,
             message: match.message,
             // Unlike the dictionary path, replacements arrive with the
-            // finding: LanguageTool ranks them by rule confidence, which we
+            // finding: the service ranks them by rule confidence, which we
             // could not reconstruct, so they are used as-is and never
             // re-sorted.
             replacements: match.replacements,
