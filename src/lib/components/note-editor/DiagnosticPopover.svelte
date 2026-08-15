@@ -128,9 +128,18 @@
 </script>
 
 {#if open}
+  <!--
+    z-[250] is the app's editor-menu layer (see ContextMenu's `layer` prop),
+    not the z-50 most popovers use. This one is mounted at the layout root but
+    opens from inside an editor, and the Kanban card editor's side panel sits
+    at 240 in that same root stacking context — at z-50 the suggestions opened
+    behind the very field they were correcting. Above the editors, below the
+    app-level menus (350) and dialogs (400), which is exactly where a menu
+    belonging to an editing surface belongs.
+  -->
   <div
     bind:this={menu}
-    class="fixed z-50 min-w-52 max-w-72 overflow-hidden rounded-md border border-border bg-popover text-popover-foreground shadow-md"
+    class="fixed z-[250] min-w-52 max-w-72 overflow-hidden rounded-md border border-border bg-popover text-popover-foreground shadow-md"
     style="left: {position.left}px; top: {position.top}px;"
     role="menu"
     data-diagnostic-popover
