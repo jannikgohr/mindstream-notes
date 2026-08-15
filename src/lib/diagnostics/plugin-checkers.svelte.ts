@@ -11,7 +11,7 @@
  * toggled.
  */
 
-import { createLanguageToolProvider } from './languagetool-provider';
+import { createHttpCheckerProvider } from './http-checker-provider';
 import {
   registerProvider,
   selectedLanguageTags,
@@ -22,7 +22,7 @@ import {
   clearCheckerStatus,
   reportCheckerStatus
 } from './checker-status.svelte';
-import { languagetoolCheck } from '$lib/api/spellcheck';
+import { textCheckerCheck } from '$lib/api/spellcheck';
 import { pluginById, pluginTextCheckers } from '$lib/plugins/registry.svelte';
 import { getSettingValue } from '$lib/settings/store.svelte';
 import type { DiagnosticKind } from './types';
@@ -67,9 +67,14 @@ export function syncPluginTextCheckers(): void {
 
     const tagsFor = () => selectedLanguageTags();
     const off = registerProvider(
-      createLanguageToolProvider({
+      createHttpCheckerProvider({
         id,
         kinds: checker.kinds as DiagnosticKind[],
+        // The service's own vocabulary, declared by the plugin that knows it.
+        categoryKinds: {
+          map: (checker.categoryKinds ?? {}) as Record<string, DiagnosticKind>,
+          fallback: (checker.defaultKind ?? 'grammar') as DiagnosticKind
+        },
         config: () => {
           const endpoint = pluginSetting(pluginId, checker.endpointSetting);
           const tags = tagsFor();
@@ -95,15 +100,20 @@ export function syncPluginTextCheckers(): void {
             disabledCategories: [
               ...(checker.disabledCategories ?? []),
               // Spelling is the dictionary's unless the user handed it over.
-              ...(checksSpelling(pluginId, checker) ? [] : ['TYPOS'])
-            ]
+              // Which categories that silences is the service's business, so
+              // the plugin names them.
+              ...(checksSpelling(pluginId, checker)
+                ? []
+                : (checker.spellingCategories ?? []))
+            ],
+            protocol: checker.protocol
           };
         },
-        // LanguageTool's check API has no per-request word list, so the
+        // A remote check API has no per-request word list, so the
         // personal dictionary is applied to its spelling findings here.
         isIgnored: isCustomWord,
         onStatus: (state, detail) => reportCheckerStatus(id, state, detail),
-        check: languagetoolCheck
+        check: textCheckerCheck
       })
     );
     active.set(id, off);
@@ -136,10 +146,15 @@ export function syncPluginTextCheckers(): void {
  */
 function checksSpelling(
   pluginId: string,
-  checker: { kinds: readonly string[] }
+  checker: { kinds: readonly string[]; spellingSetting?: string }
 ): boolean {
   if (!checker.kinds.includes('spelling')) return false;
-  const value = getSettingValue(`plugins.${pluginId}.spelling`);
+  // Which setting decides is the plugin's to name; a checker that declares
+  // none simply always does spelling.
+  if (!checker.spellingSetting) return true;
+  const value = getSettingValue(
+    `plugins.${pluginId}.${checker.spellingSetting}`
+  );
   return value !== false;
 }
 

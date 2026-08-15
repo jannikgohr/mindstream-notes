@@ -22,6 +22,7 @@ import {
   invokeOrFallback,
   TauriCommandName
 } from './core';
+import type { PluginCheckerProtocol } from '$lib/plugins/types';
 
 export interface InstalledDictionary {
   id: string;
@@ -130,7 +131,7 @@ export function spellcheckWordChars(languages: string[]): Promise<string> {
   );
 }
 
-export interface LanguageToolMatch {
+export interface CheckerMatch {
   from: number;
   to: number;
   message: string;
@@ -139,14 +140,14 @@ export interface LanguageToolMatch {
 }
 
 /**
- * Grammar and style check against a LanguageTool server.
+ * Grammar and style check against whatever service a plugin declared.
  *
  * The only spellchecking call that leaves the machine — the dictionary path
  * never touches the network. Host-executed rather than plugin-executed: the
- * text of every note being edited passes through here, so the endpoint and
- * key stay host-controlled.
+ * text of every note being edited passes through here, so a plugin describes
+ * the wire format but never receives the text or chooses the destination.
  */
-export function languagetoolCheck(args: {
+export function textCheckerCheck(args: {
   endpoint: string;
   apiKey?: string;
   username?: string;
@@ -154,9 +155,10 @@ export function languagetoolCheck(args: {
   text: string;
   disabledCategories: string[];
   preferredVariants?: string[];
-}): Promise<LanguageToolMatch[]> {
-  return invokeOrFallback<LanguageToolMatch[]>(
-    TauriCommandName.LanguagetoolCheck,
+  protocol: PluginCheckerProtocol;
+}): Promise<CheckerMatch[]> {
+  return invokeOrFallback<CheckerMatch[]>(
+    TauriCommandName.TextCheckerCheck,
     {
       endpoint: args.endpoint,
       apiKey: args.apiKey ?? null,
@@ -164,12 +166,13 @@ export function languagetoolCheck(args: {
       language: args.language,
       text: args.text,
       disabledCategories: args.disabledCategories,
-      preferredVariants: args.preferredVariants ?? []
+      preferredVariants: args.preferredVariants ?? [],
+      protocol: args.protocol
     },
     () => [],
     (value) => {
       if (!Array.isArray(value)) {
-        throw new Error('languagetool_check response must be an array');
+        throw new Error('text_checker_check response must be an array');
       }
       return value.map((item, index) => {
         const record = assertRecord(item, `match[${index}]`);
@@ -197,23 +200,25 @@ export interface TestConnectionResult {
 }
 
 /**
- * Verify a LanguageTool server is reachable, and that credentials work when
+ * Verify a checking service is reachable, and that credentials work when
  * supplied. Sends a fixed probe string, never note content.
  */
-export function languagetoolTestConnection(args: {
+export function textCheckerTestConnection(args: {
   endpoint: string;
   apiKey?: string;
   username?: string;
   /** BCP-47 tags the user writes in, so the server can be checked for them. */
   wantedLanguages?: string[];
+  protocol: PluginCheckerProtocol;
 }): Promise<TestConnectionResult> {
   return invokeOrFallback<TestConnectionResult>(
-    TauriCommandName.LanguagetoolTestConnection,
+    TauriCommandName.TextCheckerTestConnection,
     {
       endpoint: args.endpoint,
       apiKey: args.apiKey ?? null,
       username: args.username ?? null,
-      wantedLanguages: args.wantedLanguages ?? []
+      wantedLanguages: args.wantedLanguages ?? [],
+      protocol: args.protocol
     },
     () => ({
       ok: false,
@@ -223,7 +228,7 @@ export function languagetoolTestConnection(args: {
     (value) => {
       const record = assertRecord(
         value,
-        'languagetool_test_connection response'
+        'text_checker_test_connection response'
       );
       return {
         ok: assertBoolean(record.ok, 'testConnection.ok'),

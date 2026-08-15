@@ -8,9 +8,10 @@
    * binary are the same question to the user — "is the thing this needs
    * actually there?" — so they should not answer it two different ways.
    *
-   * Reachability is probed via the protocol's own metadata endpoint, which
-   * carries no note text; credentials, when configured, are verified with a
-   * fixed probe string. See `spellcheck::languagetool` for why.
+   * Reachability is probed via the endpoint the checker's own protocol
+   * declares for it, which carries no note text; credentials, when configured,
+   * are verified with a fixed probe string. See `spellcheck::http_checker` for
+   * why.
    */
   import {
     CheckCircle2,
@@ -19,7 +20,7 @@
     RefreshCw,
     XCircle
   } from '@lucide/svelte';
-  import { languagetoolTestConnection } from '$lib/api/spellcheck';
+  import { textCheckerTestConnection } from '$lib/api/spellcheck';
   import { checkerStatus } from '$lib/diagnostics/checker-status.svelte';
   import { checkerProviderId } from '$lib/diagnostics/plugin-checkers.svelte';
   import {
@@ -27,6 +28,7 @@
     spellingOwner
   } from '$lib/diagnostics/editor-diagnostics.svelte';
   import { pluginById } from '$lib/plugins/registry.svelte';
+  import type { PluginTextCheckerContribution } from '$lib/plugins/types';
   import { resolvePluginStringOptional } from '$lib/plugins/plugin-i18n';
   import { getSettingValue } from '$lib/settings/store.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
@@ -54,12 +56,12 @@
     return trimmed.length > 0 ? trimmed : undefined;
   }
 
-  async function check(
-    checkerId: string,
-    endpointSetting: string,
-    apiKeySetting?: string,
-    usernameSetting?: string
-  ) {
+  // Takes the whole contribution rather than picked-apart fields: the request
+  // now needs the declared protocol too, and threading one more argument
+  // through each call site is how the last one drifted out of sync.
+  async function check(checker: PluginTextCheckerContribution) {
+    const checkerId = checker.id;
+    const { endpointSetting, apiKeySetting, usernameSetting } = checker;
     const endpoint = setting(endpointSetting);
     if (!endpoint) {
       // Say what is missing rather than reporting a network failure the user
@@ -76,11 +78,12 @@
 
     rows = { ...rows, [checkerId]: { state: 'checking', detail: null } };
     try {
-      const result = await languagetoolTestConnection({
+      const result = await textCheckerTestConnection({
         endpoint,
         apiKey: apiKeySetting ? setting(apiKeySetting) : undefined,
         username: usernameSetting ? setting(usernameSetting) : undefined,
-        wantedLanguages: selectedLanguageTags()
+        wantedLanguages: selectedLanguageTags(),
+        protocol: checker.protocol
       });
       // A reachable server that lacks the language you write in is the
       // common self-hosted case, and looks identical to "checking does
@@ -206,13 +209,7 @@
             type="button"
             class="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
             disabled={row?.state === 'checking'}
-            onclick={() =>
-              check(
-                checker.id,
-                checker.endpointSetting,
-                checker.apiKeySetting,
-                checker.usernameSetting
-              )}
+            onclick={() => check(checker)}
           >
             <RefreshCw
               class="size-3 {row?.state === 'checking' ? 'animate-spin' : ''}"

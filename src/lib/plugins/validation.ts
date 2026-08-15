@@ -25,7 +25,6 @@ import {
   PLUGIN_NOTE_EXPORT_FORMATS,
   PLUGIN_PREVIEW_MIME_TYPES,
   PLUGIN_SOURCE_LANGUAGE_HOST_PROVIDERS,
-  PLUGIN_TEXT_CHECKER_PROTOCOLS,
   PLUGIN_TOOLBAR_LOCATIONS,
   PLUGIN_VIEW_MODE_PREVIEW_ICONS,
   type PluginDocSection,
@@ -34,6 +33,7 @@ import {
   type PluginManifest,
   type PluginNativeToolContribution,
   type PluginNativeServiceContribution,
+  type PluginCheckerProtocol,
   type PluginNoteExporterContribution,
   type PluginNoteExportFormat,
   type PluginNoteKindContribution,
@@ -120,7 +120,7 @@ const SETTING_TYPES = new Set<PluginSetting['type']>([
   'folder',
   'tag'
 ]);
-const TEXT_CHECKER_PROTOCOLS = new Set<string>(PLUGIN_TEXT_CHECKER_PROTOCOLS);
+
 const DIAGNOSTIC_KINDS = new Set(['spelling', 'grammar', 'style']);
 const VARIABLE_TYPES = new Set<PluginTemplateVariable['type']>([
   'text',
@@ -754,6 +754,173 @@ function validateIgnorePatterns(
         pluginId,
         `${path}[${i}] is not a valid regular expression`
       );
+    }
+  }
+}
+
+const CHECKER_ENCODINGS = new Set(['form', 'json']);
+
+/**
+ * A JSON Pointer (RFC 6901): empty for the document root, otherwise a run of
+ * `/`-prefixed tokens. Deliberately not a query language — a pointer cannot
+ * loop, backtrack or run for an unbounded time, which matters because these
+ * resolve against every response of every check.
+ */
+function assertPointer(
+  pluginId: string,
+  value: unknown,
+  path: string,
+  required = true
+): void {
+  if (value === undefined && !required) return;
+  if (typeof value !== 'string') {
+    throw new PluginValidationError(pluginId, `${path} must be a string`);
+  }
+  if (value !== '' && !value.startsWith('/')) {
+    throw new PluginValidationError(
+      pluginId,
+      `${path} ("${value}") must be a JSON Pointer — "" for the root, otherwise starting with "/"`
+    );
+  }
+}
+
+/**
+ * The declared shape of a checking service.
+ *
+ * Every field here used to be a line of app code that named LanguageTool. The
+ * point of validating it thoroughly is that a manifest is now the only place a
+ * service is described, so a mistake in one has to fail loudly at load rather
+ * than as an empty result on every paragraph.
+ */
+function validateCheckerProtocol(
+  pluginId: string,
+  protocol: PluginCheckerProtocol,
+  path: string
+): void {
+  if (!protocol || typeof protocol !== 'object' || Array.isArray(protocol)) {
+    throw new PluginValidationError(pluginId, `${path} must be an object`);
+  }
+  if (protocol.trimEndpointSuffix !== undefined) {
+    assertNonEmptyString(
+      pluginId,
+      protocol.trimEndpointSuffix,
+      `${path}.trimEndpointSuffix`
+    );
+  }
+
+  const check = protocol.check;
+  if (!check || typeof check !== 'object') {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.check must be an object`
+    );
+  }
+  assertNonEmptyString(pluginId, check.path, `${path}.check.path`);
+  if (!CHECKER_ENCODINGS.has(String(check.encoding))) {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.check.encoding ("${String(check.encoding)}") must be form or json`
+    );
+  }
+  if (!check.fields || typeof check.fields !== 'object') {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.check.fields must be an object`
+    );
+  }
+  // Without somewhere to put the text there is no check to make.
+  assertNonEmptyString(
+    pluginId,
+    check.fields.text,
+    `${path}.check.fields.text`
+  );
+  for (const field of [
+    'language',
+    'apiKey',
+    'username',
+    'preferredVariants',
+    'disabledCategories'
+  ] as const) {
+    const value = check.fields[field];
+    if (value !== undefined) {
+      assertNonEmptyString(pluginId, value, `${path}.check.fields.${field}`);
+    }
+  }
+  if (check.staticFields !== undefined) {
+    if (
+      !check.staticFields ||
+      typeof check.staticFields !== 'object' ||
+      Array.isArray(check.staticFields)
+    ) {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.check.staticFields must be an object`
+      );
+    }
+    for (const [key, value] of Object.entries(check.staticFields)) {
+      assertNonEmptyString(
+        pluginId,
+        value,
+        `${path}.check.staticFields.${key}`
+      );
+    }
+  }
+
+  const matches = protocol.matches;
+  if (!matches || typeof matches !== 'object') {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.matches must be an object`
+    );
+  }
+  assertPointer(pluginId, matches.list, `${path}.matches.list`);
+  assertPointer(pluginId, matches.offset, `${path}.matches.offset`);
+  assertPointer(pluginId, matches.message, `${path}.matches.message`);
+  // A finding needs an extent, and the two ways of expressing one are not
+  // interchangeable — guessing wrong misplaces every squiggle in the document.
+  if ((matches.length === undefined) === (matches.end === undefined)) {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.matches must set exactly one of length or end`
+    );
+  }
+  assertPointer(pluginId, matches.length, `${path}.matches.length`, false);
+  assertPointer(pluginId, matches.end, `${path}.matches.end`, false);
+  assertPointer(
+    pluginId,
+    matches.replacements,
+    `${path}.matches.replacements`,
+    false
+  );
+  assertPointer(
+    pluginId,
+    matches.replacementValue,
+    `${path}.matches.replacementValue`,
+    false
+  );
+  assertPointer(pluginId, matches.category, `${path}.matches.category`, false);
+
+  if (protocol.detection !== undefined) {
+    assertPointer(pluginId, protocol.detection?.code, `${path}.detection.code`);
+    assertPointer(
+      pluginId,
+      protocol.detection?.confidence,
+      `${path}.detection.confidence`
+    );
+  }
+
+  if (protocol.probe !== undefined) {
+    assertNonEmptyString(pluginId, protocol.probe?.path, `${path}.probe.path`);
+    assertPointer(pluginId, protocol.probe?.list, `${path}.probe.list`);
+    const codes = protocol.probe?.languageCode;
+    if (!Array.isArray(codes) || codes.length === 0) {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.probe.languageCode must be a non-empty array of pointers`
+      );
+    }
+    for (const [i, pointer] of codes.entries()) {
+      assertPointer(pluginId, pointer, `${path}.probe.languageCode[${i}]`);
     }
   }
 }
@@ -1542,12 +1709,7 @@ export function validateManifest(input: unknown): PluginManifest {
   for (const [i, checker] of textCheckers.entries()) {
     const path = `textCheckers[${i}]`;
     assertSlug(pluginId, checker?.id, `${path}.id`);
-    if (!TEXT_CHECKER_PROTOCOLS.has(String(checker?.protocol))) {
-      throw new PluginValidationError(
-        pluginId,
-        `${path}.protocol ("${String(checker?.protocol)}") is not a supported protocol`
-      );
-    }
+    validateCheckerProtocol(pluginId, checker?.protocol, `${path}.protocol`);
     if (
       !Array.isArray(checker.kinds) ||
       checker.kinds.length === 0 ||
@@ -1563,9 +1725,54 @@ export function validateManifest(input: unknown): PluginManifest {
     assertSlug(pluginId, checker.endpointSetting, `${path}.endpointSetting`);
     for (const [field, value] of [
       ['apiKeySetting', checker.apiKeySetting],
-      ['usernameSetting', checker.usernameSetting]
+      ['usernameSetting', checker.usernameSetting],
+      ['spellingSetting', checker.spellingSetting]
     ] as const) {
       if (value !== undefined) assertSlug(pluginId, value, `${path}.${field}`);
+    }
+    for (const [field, value] of [
+      ['disabledCategories', checker.disabledCategories],
+      ['spellingCategories', checker.spellingCategories]
+    ] as const) {
+      if (value === undefined) continue;
+      if (!Array.isArray(value)) {
+        throw new PluginValidationError(
+          pluginId,
+          `${path}.${field} must be an array`
+        );
+      }
+      for (const [j, entry] of value.entries()) {
+        assertNonEmptyString(pluginId, entry, `${path}.${field}[${j}]`);
+      }
+    }
+    if (checker.categoryKinds !== undefined) {
+      if (
+        !checker.categoryKinds ||
+        typeof checker.categoryKinds !== 'object' ||
+        Array.isArray(checker.categoryKinds)
+      ) {
+        throw new PluginValidationError(
+          pluginId,
+          `${path}.categoryKinds must be an object`
+        );
+      }
+      for (const [category, kind] of Object.entries(checker.categoryKinds)) {
+        if (!DIAGNOSTIC_KINDS.has(String(kind))) {
+          throw new PluginValidationError(
+            pluginId,
+            `${path}.categoryKinds.${category} ("${String(kind)}") must be spelling, grammar or style`
+          );
+        }
+      }
+    }
+    if (
+      checker.defaultKind !== undefined &&
+      !DIAGNOSTIC_KINDS.has(String(checker.defaultKind))
+    ) {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.defaultKind ("${String(checker.defaultKind)}") must be spelling, grammar or style`
+      );
     }
     if (checker.labelKey !== undefined) {
       assertI18nKey(pluginId, checker.labelKey, `${path}.labelKey`);
