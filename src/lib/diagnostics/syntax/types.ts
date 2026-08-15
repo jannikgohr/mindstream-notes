@@ -30,7 +30,12 @@ export const DIAGNOSTIC_SYNTAX_IDS = ['markdown', 'plain', 'typst'] as const;
 export type DiagnosticSyntaxId = (typeof DIAGNOSTIC_SYNTAX_IDS)[number];
 
 export interface DiagnosticSyntax {
-  id: DiagnosticSyntaxId;
+  /**
+   * A `DiagnosticSyntaxId` for the ones the app ships, `'grammar'` for one a
+   * plugin declared. Loose on purpose: the id set above is what a MANIFEST may
+   * name, which is not the same as every syntax that can exist at runtime.
+   */
+  id: string;
   /**
    * Every range of `text` that is not prose, sorted and merged.
    *

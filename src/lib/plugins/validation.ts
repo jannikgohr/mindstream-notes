@@ -42,6 +42,7 @@ import {
   type PluginPreviewMimeType,
   type PluginPermission,
   type PluginSetting,
+  type PluginDiagnosticsContribution,
   type PluginSourceLanguageContribution,
   type PluginSettingsContribution,
   type PluginCommandContribution,
@@ -558,16 +559,132 @@ function validateSourceLanguage(
     );
   }
   if (language.diagnostics !== undefined) {
-    if (!language.diagnostics || typeof language.diagnostics !== 'object') {
+    validateDiagnostics(pluginId, language.diagnostics, `${path}.diagnostics`);
+  }
+}
+
+/**
+ * Caps on a declared grammar.
+ *
+ * The scanner walks the document on every keystroke, testing the delimiters
+ * that begin with each character. These bounds keep that cost flat no matter
+ * what a manifest asks for, and they are far above anything a real language
+ * needs — LaTeX gets by on one line comment and a handful of pairs.
+ */
+const MAX_DELIMITERS = 24;
+const MAX_DELIMITER_LENGTH = 32;
+
+function assertDelimiter(
+  pluginId: string,
+  value: unknown,
+  path: string
+): asserts value is string {
+  assertNonEmptyString(pluginId, value, path);
+  if ((value as string).length > MAX_DELIMITER_LENGTH) {
+    throw new PluginValidationError(
+      pluginId,
+      `${path} must be at most ${MAX_DELIMITER_LENGTH} characters`
+    );
+  }
+}
+
+function assertDelimiterList(
+  pluginId: string,
+  value: unknown,
+  path: string,
+  paired: boolean
+): void {
+  if (value === undefined) return;
+  if (!Array.isArray(value)) {
+    throw new PluginValidationError(pluginId, `${path} must be an array`);
+  }
+  if (value.length > MAX_DELIMITERS) {
+    throw new PluginValidationError(
+      pluginId,
+      `${path} must have at most ${MAX_DELIMITERS} entries`
+    );
+  }
+  for (const [i, entry] of value.entries()) {
+    if (!paired) {
+      assertDelimiter(pluginId, entry, `${path}[${i}]`);
+      continue;
+    }
+    if (!Array.isArray(entry) || entry.length !== 2) {
       throw new PluginValidationError(
         pluginId,
-        `${path}.diagnostics must be an object`
+        `${path}[${i}] must be an [open, close] pair`
       );
     }
-    if (!isDiagnosticSyntaxId(language.diagnostics.syntax)) {
+    assertDelimiter(pluginId, entry[0], `${path}[${i}][0]`);
+    assertDelimiter(pluginId, entry[1], `${path}[${i}][1]`);
+  }
+}
+
+/**
+ * A source language's diagnostics opt-in: either a host syntax or a grammar,
+ * never both and never neither.
+ *
+ * Rejecting both is not pedantry — a manifest that sets both has an intent the
+ * host would have to guess at, and guessing silently produces a document
+ * checked by rules its author did not choose.
+ */
+function validateDiagnostics(
+  pluginId: string,
+  diagnostics: PluginDiagnosticsContribution,
+  path: string
+): void {
+  if (!diagnostics || typeof diagnostics !== 'object') {
+    throw new PluginValidationError(pluginId, `${path} must be an object`);
+  }
+  const hasSyntax = diagnostics.syntax !== undefined;
+  const hasGrammar = diagnostics.grammar !== undefined;
+  if (hasSyntax === hasGrammar) {
+    throw new PluginValidationError(
+      pluginId,
+      `${path} must set exactly one of syntax or grammar`
+    );
+  }
+
+  if (hasSyntax) {
+    if (!isDiagnosticSyntaxId(diagnostics.syntax)) {
       throw new PluginValidationError(
         pluginId,
-        `${path}.diagnostics.syntax ("${String(language.diagnostics.syntax)}") is not a syntax the app ships`
+        `${path}.syntax ("${String(diagnostics.syntax)}") is not a syntax the app ships`
+      );
+    }
+    return;
+  }
+
+  const grammar = diagnostics.grammar;
+  if (!grammar || typeof grammar !== 'object' || Array.isArray(grammar)) {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.grammar must be an object`
+    );
+  }
+  assertDelimiterList(
+    pluginId,
+    grammar.lineComments,
+    `${path}.grammar.lineComments`,
+    false
+  );
+  for (const key of ['blockComments', 'verbatim', 'math'] as const) {
+    assertDelimiterList(pluginId, grammar[key], `${path}.grammar.${key}`, true);
+  }
+  if (grammar.escape !== undefined) {
+    assertNonEmptyString(pluginId, grammar.escape, `${path}.grammar.escape`);
+    if ([...grammar.escape].length !== 1) {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.grammar.escape must be a single character`
+      );
+    }
+  }
+  for (const key of ['indentation', 'addresses'] as const) {
+    if (grammar[key] !== undefined && typeof grammar[key] !== 'boolean') {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.grammar.${key} must be a boolean`
       );
     }
   }
