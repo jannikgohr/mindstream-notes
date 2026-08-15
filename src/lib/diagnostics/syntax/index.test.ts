@@ -32,18 +32,18 @@ describe('diagnosticSyntax', () => {
 });
 
 describe('plainSyntax', () => {
-  const prose = (text: string) =>
-    maskRanges(text, plainSyntax.ignoreRanges(text));
+  const prose = async (text: string) =>
+    maskRanges(text, await plainSyntax.ignoreRanges(text));
 
-  it('checks everything that is not an address', () => {
-    expect(prose('Ship the #v2 milestone *soon*')).toBe(
+  it('checks everything that is not an address', async () => {
+    expect(await prose('Ship the #v2 milestone *soon*')).toBe(
       'Ship the #v2 milestone *soon*'
     );
   });
 
-  it('skips URLs and emails', () => {
+  it('skips URLs and emails', async () => {
     const text = 'Spec at https://example.com/a — ask ana@example.com';
-    const masked = prose(text);
+    const masked = await prose(text);
     expect(masked).toHaveLength(text.length);
     expect(masked).not.toContain('example.com');
     expect(masked).toContain('Spec at');
@@ -68,55 +68,57 @@ describe('line indentation', () => {
 
   const indented = ['Intro line', '    indented continuation'].join('\n');
 
-  it('drops an indentation complaint where indentation is syntax', () => {
+  it('drops an indentation complaint where indentation is syntax', async () => {
     const indent = indented.indexOf('    ');
     for (const syntax of [markdownSyntax, typstSyntax]) {
-      const ignored = syntax.ignoreRanges(indented);
+      const ignored = await syntax.ignoreRanges(indented);
       expect(
         excludeIgnored([doubledSpace(indent, indent + 4)], ignored)
       ).toEqual([]);
     }
   });
 
-  it('keeps it in plain text, where leading spaces mean nothing', () => {
+  it('keeps it in plain text, where leading spaces mean nothing', async () => {
     // A card description has no nesting to express, so a run of spaces at the
     // start of a line is the same typo it would be anywhere else. Exempting it
     // here would hide the very thing the rule catches.
     const indent = indented.indexOf('    ');
     const flagged = doubledSpace(indent, indent + 4);
     expect(
-      excludeIgnored([flagged], plainSyntax.ignoreRanges(indented))
+      excludeIgnored([flagged], await plainSyntax.ignoreRanges(indented))
     ).toEqual([flagged]);
   });
 
-  it('keeps a doubled space inside a sentence', () => {
+  it('keeps a doubled space inside a sentence', async () => {
     // The rule is right there — only its verdict on indentation is wrong.
     const text = 'One  two';
     const kept = doubledSpace(3, 5);
     for (const syntax of [markdownSyntax, plainSyntax, typstSyntax]) {
-      expect(excludeIgnored([kept], syntax.ignoreRanges(text))).toEqual([kept]);
+      expect(excludeIgnored([kept], await syntax.ignoreRanges(text))).toEqual([
+        kept
+      ]);
     }
   });
 
-  it('does not shift the offsets of anything after it', () => {
+  it('does not shift the offsets of anything after it', async () => {
     // Masking indentation replaces spaces with spaces, so a squiggle further
     // down the line still lands where the checker put it.
     const text = '  - a nested item';
-    const masked = maskRanges(text, markdownSyntax.ignoreRanges(text));
+    const masked = maskRanges(text, await markdownSyntax.ignoreRanges(text));
     expect(masked).toHaveLength(text.length);
     expect(masked.indexOf('nested')).toBe(text.indexOf('nested'));
   });
 
-  it('covers a whitespace-only line whole', () => {
+  it('covers a whitespace-only line whole', async () => {
     const text = ['a', '   ', 'b'].join('\n');
-    expect(markdownSyntax.ignoreRanges(text)).toContainEqual({
+    expect(await markdownSyntax.ignoreRanges(text)).toContainEqual({
       from: 2,
       to: 5
     });
   });
 
-  it('ignores a line that starts at column zero', () => {
-    expect(plainSyntax.ignoreRanges('no indent here')).toEqual([]);
+  it('ignores a line that starts at column zero', async () => {
+    expect(await plainSyntax.ignoreRanges('no indent here')).toEqual([]);
   });
 });
 

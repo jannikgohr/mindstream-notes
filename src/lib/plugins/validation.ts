@@ -17,7 +17,7 @@
  * manifest never takes down app startup or another plugin.
  */
 
-import { isDiagnosticSyntaxId } from '$lib/diagnostics/syntax';
+import { compilePattern, isDiagnosticSyntaxId } from '$lib/diagnostics/syntax';
 import {
   KNOWN_PLUGIN_PERMISSIONS,
   PLUGIN_ARTIFACT_KINDS,
@@ -685,6 +685,74 @@ function validateDiagnostics(
       throw new PluginValidationError(
         pluginId,
         `${path}.grammar.${key} must be a boolean`
+      );
+    }
+  }
+  validateIgnorePatterns(
+    pluginId,
+    grammar.ignorePatterns,
+    `${path}.grammar.ignorePatterns`
+  );
+}
+
+const MAX_PATTERNS = 16;
+const MAX_PATTERN_LENGTH = 200;
+
+/** Backreferences, numbered or named — see `validateIgnorePatterns`. */
+const BACKREFERENCE = /\\[1-9]|\\k</;
+
+/**
+ * Patterns a plugin wants ignored.
+ *
+ * These checks are hygiene, NOT the safety guarantee. No static analysis
+ * reliably separates a regex that backtracks catastrophically from one that
+ * does not — star-height tests miss `(a|ab)*`, and the popular `safe-regex`
+ * passes patterns that hang. The guarantee is that patterns run in a terminable
+ * Worker (see `$lib/diagnostics/syntax/grammar-runner`); what happens here only
+ * turns the cheap mistakes into manifest errors instead of runtime faults.
+ *
+ * Compiled with the same helper the scanner uses, so a manifest cannot be
+ * accepted under flags different from the ones it will run under. Flags are the
+ * host's to choose — a plugin that could set them could disable the `d` flag
+ * capture-group scoping depends on.
+ */
+function validateIgnorePatterns(
+  pluginId: string,
+  patterns: unknown,
+  path: string
+): void {
+  if (patterns === undefined) return;
+  if (!Array.isArray(patterns)) {
+    throw new PluginValidationError(pluginId, `${path} must be an array`);
+  }
+  if (patterns.length > MAX_PATTERNS) {
+    throw new PluginValidationError(
+      pluginId,
+      `${path} must have at most ${MAX_PATTERNS} entries`
+    );
+  }
+  for (const [i, pattern] of patterns.entries()) {
+    assertNonEmptyString(pluginId, pattern, `${path}[${i}]`);
+    if (pattern.length > MAX_PATTERN_LENGTH) {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}[${i}] must be at most ${MAX_PATTERN_LENGTH} characters`
+      );
+    }
+    // Rejected because a backreference forces a backtracking match no matter
+    // how simple the rest of the pattern looks, and nothing here needs one.
+    if (BACKREFERENCE.test(pattern)) {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}[${i}] must not use a backreference`
+      );
+    }
+    try {
+      compilePattern(pattern);
+    } catch {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}[${i}] is not a valid regular expression`
       );
     }
   }

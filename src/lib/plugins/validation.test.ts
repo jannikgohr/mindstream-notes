@@ -1633,6 +1633,57 @@ describe('validateManifest — source language failures', () => {
       )
     ).toThrow(/indentation must be a boolean/);
   });
+  const withPatterns = (ignorePatterns: unknown) =>
+    base({
+      id: 'tex',
+      provider: { type: 'host', id: 'typst' },
+      diagnostics: { grammar: { ignorePatterns } }
+    });
+  it('accepts patterns, including ones Unicode mode rejects', () => {
+    // `\{` is a legal escape in the default mode and an error under `u`, so a
+    // realistic LaTeX pattern only compiles because the host retries without
+    // it. Validation has to agree with the scanner about that or a manifest
+    // gets rejected for a pattern that would have run.
+    const manifest = validateManifest(
+      withPatterns([String.raw`(\\[a-zA-Z]+)\{`, String.raw`\p{L}+`])
+    );
+    expect(
+      manifest.contributes.sourceLanguages?.[0].diagnostics?.grammar
+        ?.ignorePatterns
+    ).toHaveLength(2);
+  });
+  it('rejects a pattern that is not a valid regular expression', () => {
+    expect(() => validateManifest(withPatterns(['(unclosed']))).toThrow(
+      /not a valid regular expression/
+    );
+  });
+  it('rejects a numbered backreference', () => {
+    // A backreference forces backtracking however simple the rest looks, and
+    // nothing an ignore-pattern needs to say requires one.
+    expect(() => validateManifest(withPatterns([String.raw`(a)\1`]))).toThrow(
+      /must not use a backreference/
+    );
+  });
+  it('rejects a named backreference', () => {
+    expect(() =>
+      validateManifest(withPatterns([String.raw`(?<x>a)\k<x>`]))
+    ).toThrow(/must not use a backreference/);
+  });
+  it('bounds how many patterns a grammar may declare', () => {
+    expect(() =>
+      validateManifest(withPatterns(Array.from({ length: 17 }, () => 'a')))
+    ).toThrow(/at most 16 entries/);
+  });
+  it('bounds how long a pattern may be', () => {
+    expect(() => validateManifest(withPatterns(['a'.repeat(201)]))).toThrow(
+      /at most 200 characters/
+    );
+  });
+  it('rejects non-array patterns', () => {
+    expect(() => validateManifest(withPatterns('a+'))).toThrow(
+      /ignorePatterns must be an array/
+    );
+  });
   it('rejects a non-object provider', () => {
     expect(() => validateManifest(base({ id: 'ts', provider: 'x' }))).toThrow(
       /provider must be an object/

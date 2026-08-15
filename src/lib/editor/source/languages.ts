@@ -1,7 +1,10 @@
 import type { Extension } from '@codemirror/state';
 import { markdown } from '@codemirror/lang-markdown';
 import { StreamLanguage } from '@codemirror/language';
-import { pluginSourceLanguage } from '$lib/plugins/registry.svelte';
+import {
+  pluginSourceLanguage,
+  recordPluginLoadError
+} from '$lib/plugins/registry.svelte';
 import type { PluginSourceLanguageHostProvider } from '$lib/plugins/types';
 import {
   createGrammarSyntax,
@@ -149,8 +152,17 @@ export function sourceLanguageDiagnosticSyntax(
 
   // A manifest opts in either by naming a syntax the app ships or by declaring
   // a grammar of its own; validation has already established it is exactly one.
-  const diagnostics = pluginSourceLanguage(language)?.language.diagnostics;
-  if (!diagnostics) return null;
-  if (diagnostics.grammar) return createGrammarSyntax(diagnostics.grammar);
+  const ref = pluginSourceLanguage(language);
+  const diagnostics = ref?.language.diagnostics;
+  if (!ref || !diagnostics) return null;
+  if (diagnostics.grammar) {
+    // A grammar whose patterns are stopped keeps working on its delimiters, so
+    // nothing breaks loudly on its own — which is exactly why it has to be
+    // reported. The plugin panel already shows this field, and an unexplained
+    // drop in squiggles is otherwise indistinguishable from a clean document.
+    return createGrammarSyntax(diagnostics.grammar, (reason) =>
+      recordPluginLoadError(ref.pluginId, reason)
+    );
+  }
   return diagnostics.syntax ? diagnosticSyntax(diagnostics.syntax) : null;
 }
