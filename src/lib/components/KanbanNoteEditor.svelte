@@ -98,6 +98,7 @@
   import KanbanLinkedNoteField, {
     type KanbanNoteOption
   } from './kanban/KanbanLinkedNoteField.svelte';
+  import KanbanDescriptionField from './kanban/KanbanDescriptionField.svelte';
   import KanbanSearchPanel from './kanban/KanbanSearchPanel.svelte';
   import {
     KANBAN_LOCAL_ORIGIN,
@@ -129,6 +130,7 @@
 
   registerEditorItem('mindstream-linked-note', KanbanLinkedNoteField);
   registerEditorItem('mindstream-labels', KanbanLabelsField);
+  registerEditorItem('mindstream-description', KanbanDescriptionField);
 
   interface Props {
     noteId: string;
@@ -302,7 +304,15 @@
   // getEditorItems drives the card-detail form. Append a "linked note" field —
   // a wikilink-to-note attribute backed by the vault's note list.
   const editorItems = $derived([
-    ...getEditorItems(cardShape).filter((item) => item.key !== 'tags'),
+    ...getEditorItems(cardShape)
+      .filter((item) => item.key !== 'tags')
+      // Swap SVAR's plain textarea for the spellchecked field, keeping its
+      // label so the description stays worded like the fields around it.
+      .map((item) =>
+        item.key === 'description'
+          ? { ...item, comp: 'mindstream-description' }
+          : item
+      ),
     {
       comp: 'mindstream-labels',
       key: 'tags',
@@ -535,8 +545,12 @@
     e.stopPropagation();
   }
 
+  // The suggestion popover is mounted at the layout root, not inside the card
+  // editor, so a click on it looks like a click on the board. Without it here,
+  // choosing a correction would close the editor out from under the very field
+  // it was correcting.
   const CARD_EDITOR_KEEP_OPEN_SELECTOR =
-    '.wx-card[data-id], .wx-card-row[data-kanban-card-id], .kanban-card-editor';
+    '.wx-card[data-id], .wx-card-row[data-kanban-card-id], .kanban-card-editor, [data-diagnostic-popover]';
 
   function startsInsideCardEditor(target: EventTarget | null): boolean {
     return (
