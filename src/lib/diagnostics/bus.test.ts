@@ -527,3 +527,117 @@ describe('a provider that declines', () => {
     expect(out).toEqual([]);
   });
 });
+
+/**
+ * Progressive results. Checkers differ in speed by orders of magnitude — the
+ * local dictionary answers in microseconds, a LanguageTool round trip takes
+ * seconds. Waiting for all of them meant a freshly opened note showed
+ * nothing at all until the network answered.
+ */
+describe('partial results', () => {
+  /** Resolves only when released, so ordering is explicit. */
+  function slow(id: string, word: string) {
+    let release: (() => void) | null = null;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const provider: DiagnosticProvider = {
+      id,
+      kinds: ['grammar'],
+      async check({ text }) {
+        await gate;
+        const at = text.indexOf(word);
+        return at === -1
+          ? []
+          : [
+              diag({
+                from: at,
+                to: at + word.length,
+                kind: 'grammar',
+                source: id
+              })
+            ];
+      }
+    };
+    return { provider, release: () => release?.() };
+  }
+
+  const fast = (id: string, word: string): DiagnosticProvider => ({
+    id,
+    kinds: ['spelling'],
+    check: ({ text }) => {
+      const at = text.indexOf(word);
+      return at === -1
+        ? []
+        : [diag({ from: at, to: at + word.length, source: id })];
+    }
+  });
+
+  it('reports the fast checker before the slow one finishes', async () => {
+    const bus = new DiagnosticBus();
+    const slowOne = slow('lt', 'beta');
+    bus.register(slowOne.provider);
+    bus.register(fast('spell', 'alpha'));
+
+    const partials: string[][] = [];
+    const done = bus.check(segments(['alpha beta', 0]), {
+      languages: ['en'],
+      onPartial: (d) => partials.push(d.map((x) => x.source))
+    });
+
+    // Let the fast provider settle while the slow one is still pending.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(partials).toEqual([['spell']]);
+
+    slowOne.release();
+    await done;
+    expect(partials[partials.length - 1].sort()).toEqual(['lt', 'spell']);
+  });
+
+  it('does not wait for a slow provider before starting a fast one', async () => {
+    // Sequential providers meant the dictionary's answer was held hostage
+    // by a network request that had not even been sent yet.
+    const bus = new DiagnosticBus();
+    const slowOne = slow('lt', 'beta');
+    bus.register(slowOne.provider);
+
+    let fastRan = false;
+    bus.register({
+      id: 'spell',
+      kinds: ['spelling'],
+      check: () => {
+        fastRan = true;
+        return [];
+      }
+    });
+
+    const done = bus.check(segments(['alpha beta', 0]), { languages: ['en'] });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(fastRan).toBe(true);
+
+    slowOne.release();
+    await done;
+  });
+
+  it('applies ownership to the final result, not just the partials', async () => {
+    // The dictionary's spelling shows immediately, then gives way once the
+    // owner has actually answered.
+    const bus = new DiagnosticBus();
+    const owner = slow('lt', 'alpha');
+    bus.register({ ...owner.provider, kinds: ['spelling'] });
+    bus.register(fast('spell', 'alpha'));
+
+    const partials: string[][] = [];
+    const done = bus.check(segments(['alpha beta', 0]), {
+      languages: ['en'],
+      owners: { spelling: 'lt' },
+      onPartial: (d) => partials.push(d.map((x) => x.source))
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(partials[0]).toEqual(['spell']);
+
+    owner.release();
+    expect((await done).map((d) => d.source)).toEqual(['lt']);
+  });
+});

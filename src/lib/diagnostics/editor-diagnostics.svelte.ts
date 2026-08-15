@@ -143,7 +143,9 @@ export function spellcheckLanguages(): string[] {
  */
 export async function checkSegments(
   segments: Segment[],
-  signal: AbortSignal
+  signal: AbortSignal,
+  /** Draw what is known so far, so a fast checker is not held up by a slow one. */
+  onPartial?: (diagnostics: Diagnostic[]) => void
 ): Promise<Diagnostic[]> {
   if (!spellcheckEnabled()) return [];
   const languages = spellcheckLanguages();
@@ -156,6 +158,7 @@ export async function checkSegments(
     // Ownership, not just precedence: two providers reporting spelling
     // would otherwise union into two rankings over the same paragraph.
     owners: current ? { spelling: current.id } : undefined,
+    onPartial,
     signal
   });
 }
