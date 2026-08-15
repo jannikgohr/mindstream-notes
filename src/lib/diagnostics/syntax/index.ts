@@ -22,15 +22,18 @@ import { typstIgnoreRanges } from './typst';
 import type { DiagnosticSyntax, DiagnosticSyntaxId } from './types';
 
 /**
- * Add the line-structure whitespace every source syntax shares.
+ * Also ignore each line's leading whitespace.
  *
- * Composed here rather than repeated in each syntax because indentation is not
- * a fact about Markdown or Typst — it is a fact about text that has lines, and
- * a syntax that forgot it would quietly reintroduce a doubled-space complaint
- * on every indented line. See `lineIndentRanges` for why this is positional and
- * not a match on the checker's message.
+ * Opt-in per syntax, NOT a property of text that happens to have lines. It
+ * belongs to a language where indentation is syntax — in Markdown it nests a
+ * list item, in Typst it sits inside a block — so a checker complaining about
+ * the doubled space is commenting on the document's structure rather than on
+ * anything the author wrote. Where indentation carries no meaning, leading
+ * spaces are just spaces the user typed, and skipping them would hide exactly
+ * the typo the rule is there to catch. See `lineIndentRanges` for why the
+ * filtering is positional rather than a match on the checker's message.
  */
-function withLineStructure(
+function withIndentation(
   ignore: (text: string) => TextRange[]
 ): (text: string) => TextRange[] {
   return (text) => mergeRanges([...ignore(text), ...lineIndentRanges(text)]);
@@ -39,7 +42,7 @@ function withLineStructure(
 /** Markdown notes — the app's own, and the behaviour every surface had first. */
 export const markdownSyntax: DiagnosticSyntax = {
   id: 'markdown',
-  ignoreRanges: withLineStructure(ignoreRanges),
+  ignoreRanges: withIndentation(ignoreRanges),
   segment: splitParagraphs
 };
 
@@ -50,19 +53,22 @@ export const markdownSyntax: DiagnosticSyntax = {
  * else, and a URL checked word by word is the noisiest thing a dictionary can
  * do. But nothing beyond that: a `#` here is a hash and a `*` is an asterisk,
  * and pretending otherwise would silently skip prose the user can see.
+ *
+ * Indentation included, which is why this does NOT take `withIndentation`.
+ * Leading spaces are only structure in a language that gives them meaning;
+ * here they are text, and a doubled space is as much a typo at the start of a
+ * line as in the middle of one.
  */
 export const plainSyntax: DiagnosticSyntax = {
   id: 'plain',
-  ignoreRanges: withLineStructure((text) =>
-    patternRanges(text, ADDRESS_PATTERNS)
-  ),
+  ignoreRanges: (text) => mergeRanges(patternRanges(text, ADDRESS_PATTERNS)),
   segment: splitParagraphs
 };
 
 /** Typst documents — see `./typst.ts` for why this needs a real scanner. */
 export const typstSyntax: DiagnosticSyntax = {
   id: 'typst',
-  ignoreRanges: withLineStructure(typstIgnoreRanges),
+  ignoreRanges: withIndentation(typstIgnoreRanges),
   segment: splitParagraphs
 };
 

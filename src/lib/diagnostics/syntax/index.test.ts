@@ -66,15 +66,27 @@ describe('line indentation', () => {
     source: 'languagetool'
   });
 
-  it('drops an indentation complaint in every syntax', () => {
-    const text = ['Intro line', '    indented continuation'].join('\n');
-    const indent = text.indexOf('    ');
-    for (const syntax of [markdownSyntax, plainSyntax, typstSyntax]) {
-      const ignored = syntax.ignoreRanges(text);
+  const indented = ['Intro line', '    indented continuation'].join('\n');
+
+  it('drops an indentation complaint where indentation is syntax', () => {
+    const indent = indented.indexOf('    ');
+    for (const syntax of [markdownSyntax, typstSyntax]) {
+      const ignored = syntax.ignoreRanges(indented);
       expect(
         excludeIgnored([doubledSpace(indent, indent + 4)], ignored)
       ).toEqual([]);
     }
+  });
+
+  it('keeps it in plain text, where leading spaces mean nothing', () => {
+    // A card description has no nesting to express, so a run of spaces at the
+    // start of a line is the same typo it would be anywhere else. Exempting it
+    // here would hide the very thing the rule catches.
+    const indent = indented.indexOf('    ');
+    const flagged = doubledSpace(indent, indent + 4);
+    expect(
+      excludeIgnored([flagged], plainSyntax.ignoreRanges(indented))
+    ).toEqual([flagged]);
   });
 
   it('keeps a doubled space inside a sentence', () => {
