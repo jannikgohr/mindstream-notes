@@ -30,10 +30,24 @@ export {
 } from './bus';
 
 export {
+  ADDRESS_PATTERNS,
   excludeIgnored,
   ignoreRanges,
   mergeRanges,
-  overlapsAny
+  overlapsAny,
+  patternRanges
 } from './ignore-ranges';
+
+export {
+  diagnosticSyntax,
+  isDiagnosticSyntaxId,
+  markdownSyntax,
+  plainSyntax,
+  splitParagraphs,
+  typstSyntax,
+  DIAGNOSTIC_SYNTAX_IDS,
+  type DiagnosticSyntax,
+  type DiagnosticSyntaxId
+} from './syntax';
 
 export { tokenizeWords, type Token } from './tokenize';
