@@ -3,6 +3,11 @@ import { markdown } from '@codemirror/lang-markdown';
 import { StreamLanguage } from '@codemirror/language';
 import { pluginSourceLanguage } from '$lib/plugins/registry.svelte';
 import type { PluginSourceLanguageHostProvider } from '$lib/plugins/types';
+import {
+  diagnosticSyntax,
+  markdownSyntax,
+  type DiagnosticSyntax
+} from '$lib/diagnostics/syntax';
 
 interface SourceLanguageProvider {
   id: PluginSourceLanguageHostProvider | 'markdown';
@@ -124,4 +129,24 @@ export function sourceLanguageExtensions(language: string): Extension[] {
   return HOST_LANGUAGE_PROVIDERS[
     pluginLanguage.language.provider.id
   ].extensions();
+}
+
+/**
+ * How to find the prose in this language, or `null` for "do not check it".
+ *
+ * The counterpart to `sourceLanguageExtensions`, resolved the same way and
+ * from the same id, so one language cannot end up highlighted as Typst and
+ * spellchecked as Markdown. Built-in Markdown is always checked; a plugin
+ * language is checked only where its manifest opted in, which is why the
+ * return type admits null rather than falling back to plain text — silence is
+ * the correct answer for a language nobody has said is prose.
+ */
+export function sourceLanguageDiagnosticSyntax(
+  language: string
+): DiagnosticSyntax | null {
+  if (BUILT_IN_LANGUAGE_PROVIDERS[language]) return markdownSyntax;
+
+  const pluginLanguage = pluginSourceLanguage(language);
+  const syntax = pluginLanguage?.language.diagnostics?.syntax;
+  return syntax ? diagnosticSyntax(syntax) : null;
 }

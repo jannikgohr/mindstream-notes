@@ -14,6 +14,8 @@
  * grant/record can always be traced back to exactly one plugin.
  */
 
+import type { DiagnosticSyntaxId } from '$lib/diagnostics/syntax';
+
 /**
  * Capabilities a plugin may request in its manifest:
  *   - `templates.contribute` — surface note templates in create menus;
@@ -207,6 +209,24 @@ export interface PluginSourceLanguageContribution {
   provider: {
     type: 'host';
     id: PluginSourceLanguageHostProvider;
+  };
+  /**
+   * Opt this language's notes into spelling and grammar checking.
+   *
+   * The split here is the same one the language provider makes, for the same
+   * reason. WHETHER a plugin's notes are prose worth checking is the plugin's
+   * call — a Typst document is, a generated log would not be — but HOW to find
+   * the prose inside them is the app's, because that code runs on every
+   * keystroke of every note in the language and belongs nowhere near a plugin
+   * bundle. So the manifest names a syntax the app ships and stops there.
+   *
+   * Omitted means no checking, which keeps every existing plugin exactly as it
+   * was: a squiggle a user did not ask for, in a language the app might read
+   * wrong, is worse than no squiggle.
+   */
+  diagnostics?: {
+    /** One of `DIAGNOSTIC_SYNTAX_IDS` — see `$lib/diagnostics/syntax`. */
+    syntax: DiagnosticSyntaxId;
   };
 }
 

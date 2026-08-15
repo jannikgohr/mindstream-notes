@@ -1497,6 +1497,40 @@ describe('validateManifest — source language failures', () => {
       )
     ).toThrow(/extensions must be an array/);
   });
+  it('rejects a diagnostics syntax the app does not ship', () => {
+    expect(() =>
+      validateManifest(
+        base({
+          id: 'ts',
+          provider: { type: 'host', id: 'typst' },
+          diagnostics: { syntax: 'latex' }
+        })
+      )
+    ).toThrow(/is not a syntax the app ships/);
+  });
+  it('rejects a non-object diagnostics block', () => {
+    expect(() =>
+      validateManifest(
+        base({
+          id: 'ts',
+          provider: { type: 'host', id: 'typst' },
+          diagnostics: 'typst'
+        })
+      )
+    ).toThrow(/diagnostics must be an object/);
+  });
+  it('accepts a diagnostics syntax the app ships', () => {
+    const manifest = validateManifest(
+      base({
+        id: 'ts',
+        provider: { type: 'host', id: 'typst' },
+        diagnostics: { syntax: 'typst' }
+      })
+    );
+    expect(manifest.contributes.sourceLanguages?.[0].diagnostics).toEqual({
+      syntax: 'typst'
+    });
+  });
   it('rejects a non-object provider', () => {
     expect(() => validateManifest(base({ id: 'ts', provider: 'x' }))).toThrow(
       /provider must be an object/

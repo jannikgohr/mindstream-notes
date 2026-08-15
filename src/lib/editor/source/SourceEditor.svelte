@@ -54,7 +54,10 @@
     setSourcePresence,
     type PeerPresence
   } from './source-presence-extension';
-  import { sourceLanguageExtensions } from './languages';
+  import {
+    sourceLanguageDiagnosticSyntax,
+    sourceLanguageExtensions
+  } from './languages';
 
   interface Props {
     /** Read once on mount to seed the document with the current markdown. */
@@ -332,11 +335,17 @@
       ext.push(sourceUserMention(userMentionBridge));
     }
     // Registered unconditionally, like the WYSIWYG pane, so both surfaces
-    // answer the same question the same way.
-    if (diagnosticsCheck) {
+    // answer the same question the same way — but only for a language whose
+    // prose the app knows how to find. Resolved from the same `language` that
+    // picks the highlighting, so a document cannot end up highlighted as one
+    // language and checked as another; `null` means nobody has said this
+    // language is prose, and the extension stays off rather than guessing.
+    const diagnosticsSyntax = sourceLanguageDiagnosticSyntax(language);
+    if (diagnosticsCheck && diagnosticsSyntax) {
       ext.push(
         sourceDiagnostics({
           check: diagnosticsCheck,
+          syntax: diagnosticsSyntax,
           enabled: diagnosticsEnabled ?? undefined,
           subscribeInvalidate: subscribeDiagnosticsInvalidated,
           onRequestMenu: onDiagnosticMenu,
@@ -435,6 +444,9 @@
     void wikilinkBridge;
     void userMentionsEnabled;
     void userMentionBridge;
+    // Also the language: it decides whether diagnostics run at all, and a
+    // plugin note kind can change it under an editor that stays mounted.
+    void language;
     view?.dispatch({ effects: featureComp.reconfigure(featureExtensions()) });
   });
 
