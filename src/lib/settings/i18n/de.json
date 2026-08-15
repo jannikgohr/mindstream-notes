@@ -726,6 +726,7 @@
     "plugins.permission.pluginWebviews.allowEval": "String-Auswertung in Plugin-Vorschauen erlauben",
     "plugins.permission.nativeTools.runDeclared": "Deklarierte PATH-Binaries ausführen",
     "plugins.permission.nativeServices.run": "Einen deklarierten lokalen Vorschau-Server ausführen",
+    "plugins.permission.textCheckers.contribute": "Textprüfer für Rechtschreibung und Grammatik hinzufügen",
     "plugins.nativeTools.title": "Native Werkzeuge",
     "plugins.nativeTools.check": "Prüfen",
     "plugins.nativeTools.available": "Im PATH gefunden",
