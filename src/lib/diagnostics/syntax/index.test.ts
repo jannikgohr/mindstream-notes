@@ -7,7 +7,7 @@ import {
   typstSyntax,
   DIAGNOSTIC_SYNTAX_IDS
 } from './index';
-import { maskRanges } from '../ignore-ranges';
+import { excludeIgnored, maskRanges } from '../ignore-ranges';
 
 describe('diagnosticSyntax', () => {
   it('resolves every id it advertises', () => {
@@ -48,6 +48,63 @@ describe('plainSyntax', () => {
     expect(masked).not.toContain('example.com');
     expect(masked).toContain('Spec at');
     expect(masked).toContain('ask');
+  });
+});
+
+describe('line indentation', () => {
+  /**
+   * A doubled-space complaint on an indented line, as LanguageTool reports it.
+   * The message is German on purpose: the whole point of filtering by position
+   * is that nothing downstream reads it.
+   */
+  const doubledSpace = (from: number, to: number) => ({
+    from,
+    to,
+    kind: 'style' as const,
+    message: 'Möglicher Tippfehler: mehr als ein Leerzeichen hintereinander',
+    replacements: [' '],
+    source: 'languagetool'
+  });
+
+  it('drops an indentation complaint in every syntax', () => {
+    const text = ['Intro line', '    indented continuation'].join('\n');
+    const indent = text.indexOf('    ');
+    for (const syntax of [markdownSyntax, plainSyntax, typstSyntax]) {
+      const ignored = syntax.ignoreRanges(text);
+      expect(
+        excludeIgnored([doubledSpace(indent, indent + 4)], ignored)
+      ).toEqual([]);
+    }
+  });
+
+  it('keeps a doubled space inside a sentence', () => {
+    // The rule is right there — only its verdict on indentation is wrong.
+    const text = 'One  two';
+    const kept = doubledSpace(3, 5);
+    for (const syntax of [markdownSyntax, plainSyntax, typstSyntax]) {
+      expect(excludeIgnored([kept], syntax.ignoreRanges(text))).toEqual([kept]);
+    }
+  });
+
+  it('does not shift the offsets of anything after it', () => {
+    // Masking indentation replaces spaces with spaces, so a squiggle further
+    // down the line still lands where the checker put it.
+    const text = '  - a nested item';
+    const masked = maskRanges(text, markdownSyntax.ignoreRanges(text));
+    expect(masked).toHaveLength(text.length);
+    expect(masked.indexOf('nested')).toBe(text.indexOf('nested'));
+  });
+
+  it('covers a whitespace-only line whole', () => {
+    const text = ['a', '   ', 'b'].join('\n');
+    expect(markdownSyntax.ignoreRanges(text)).toContainEqual({
+      from: 2,
+      to: 5
+    });
+  });
+
+  it('ignores a line that starts at column zero', () => {
+    expect(plainSyntax.ignoreRanges('no indent here')).toEqual([]);
   });
 });
 
