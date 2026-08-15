@@ -94,7 +94,15 @@
 
   onMount(() => {
     const dismiss = (event: Event) => {
-      if (menu && event.target instanceof Node && menu.contains(event.target)) {
+      // Matched by attribute rather than by this instance's own element:
+      // identity checks close the menu whenever another copy of the
+      // component sees the event first, which is exactly what happened
+      // when one was mounted per open note.
+      const target = event.target;
+      if (
+        target instanceof Element &&
+        target.closest('[data-diagnostic-popover]')
+      ) {
         return;
       }
       closeDiagnosticPopover();
@@ -107,7 +115,9 @@
     window.addEventListener('pointerdown', dismiss, true);
     window.addEventListener('keydown', onKey);
     // A scroll moves the text out from under the menu, so anchoring becomes
-    // meaningless — close rather than chase it.
+    // meaningless — close rather than chase it. Scrolling INSIDE the menu is
+    // exempt by the same containment check; a long suggestion list has to be
+    // scrollable without dismissing itself.
     window.addEventListener('scroll', dismiss, true);
     return () => {
       window.removeEventListener('pointerdown', dismiss, true);
@@ -123,6 +133,7 @@
     class="fixed z-50 min-w-52 max-w-72 overflow-hidden rounded-md border border-border bg-popover text-popover-foreground shadow-md"
     style="left: {position.left}px; top: {position.top}px;"
     role="menu"
+    data-diagnostic-popover
     aria-label={tUi('editor.spellcheck.menu.label')}
     tabindex="-1"
   >
