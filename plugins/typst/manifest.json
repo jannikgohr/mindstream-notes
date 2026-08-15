@@ -132,6 +132,9 @@
         "provider": {
           "type": "host",
           "id": "typst"
+        },
+        "diagnostics": {
+          "syntax": "typst"
         }
       }
     ],

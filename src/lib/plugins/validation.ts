@@ -17,6 +17,7 @@
  * manifest never takes down app startup or another plugin.
  */
 
+import { isDiagnosticSyntaxId } from '$lib/diagnostics/syntax';
 import {
   KNOWN_PLUGIN_PERMISSIONS,
   PLUGIN_ARTIFACT_KINDS,
@@ -555,6 +556,20 @@ function validateSourceLanguage(
       pluginId,
       `${path}.provider.id ("${String(language.provider.id)}") is not a supported host source language provider`
     );
+  }
+  if (language.diagnostics !== undefined) {
+    if (!language.diagnostics || typeof language.diagnostics !== 'object') {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.diagnostics must be an object`
+      );
+    }
+    if (!isDiagnosticSyntaxId(language.diagnostics.syntax)) {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.diagnostics.syntax ("${String(language.diagnostics.syntax)}") is not a syntax the app ships`
+      );
+    }
   }
 }
 
