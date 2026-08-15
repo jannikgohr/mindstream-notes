@@ -368,17 +368,47 @@ delimiters the host scans with. Every field is optional:
     "math":          [["$$", "$$"], ["$", "$"], ["\\[", "\\]"]],
     "escape": "\\",        // one char; makes the next character literal
     "indentation": true,   // ignore leading whitespace — see below
-    "addresses": true      // skip URLs and emails (default true)
+    "addresses": true,     // skip URLs and emails (default true)
+    "ignorePatterns": ["(\\\\[a-zA-Z]+)\\{", "\\\\(?:ref|cite)\\{[^}]*\\}"]
   }
 }
 ```
 
-Delimiters are **literal text, never patterns**. A plugin-supplied regex would
-run on every keystroke, where catastrophic backtracking is an editor freeze the
-user cannot escape. At most 24 entries per list, 32 characters per delimiter, so
-the per-character cost stays flat. Spans do not nest, the longest matching
-opener at a position wins, and an unterminated span runs to the end of the text
-rather than guessing a closer — half-typed markup is normal while writing.
+Delimiters are **literal text**: at most 24 entries per list, 32 characters
+each, so the per-character cost stays flat. Spans do not nest, the longest
+matching opener at a position wins, and an unterminated span runs to the end of
+the text rather than guessing a closer — half-typed markup is normal while
+writing. Openers are matched before the `escape` character, so a language whose
+delimiters begin with its escape character (LaTeX) still works.
+
+`ignorePatterns` covers what delimiters cannot. `\textbf{bold text}` must lose
+the command and **keep** the argument, which no pair of delimiters expresses —
+it either swallows the prose or feeds `textbf` to the dictionary.
+
+- **Capture groups scope the ignore.** No group → the whole match is skipped.
+  Groups → only the groups are, so `(\\[a-zA-Z]+)\{` drops the command and
+  still checks its argument.
+- Flags are the host's (`gd`, plus `u` when the pattern accepts it — `\p{L}`
+  works, and patterns Unicode mode rejects still compile). A plugin cannot set
+  them, because turning off `d` would break capture-group scoping.
+- Backreferences are rejected: they force backtracking however simple the rest
+  of the pattern looks. At most 16 patterns, 200 characters each.
+
+**Patterns run in a Worker with a hard timeout, and the Worker is terminated if
+it overruns.** This is the same bargain scripted plugins get from
+`limits.timeoutMs` — a plugin fault costs the plugin, not the app. It is not
+optional hardening: no static check reliably separates a regex that backtracks
+catastrophically from one that does not (star-height tests miss `(a|ab)*`), and
+a single match cannot be interrupted once started, so termination is the only
+thing that actually stops one. The realistic danger is not a hostile plugin but
+an ordinary pattern that is instant on the author's test file and exponential on
+someone's long unbroken line.
+
+When a grammar overruns, it is faulted **for the rest of the session** — asked
+again next keystroke it would freeze again — and the language falls back to its
+delimiters, with the reason shown against the plugin in Settings. Where no
+Worker exists (SSR, tests) patterns simply do not run; there is no inline
+fallback, since that would quietly discard the guarantee.
 
 Set `indentation` only where leading whitespace _means_ something, as in
 Markdown lists or Typst blocks. A grammar checker reporting "more than one

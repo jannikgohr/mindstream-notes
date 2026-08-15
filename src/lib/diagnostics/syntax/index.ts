@@ -99,8 +99,15 @@ export {
 } from './types';
 
 export {
+  compilePattern,
   createGrammarSyntax,
   grammarIgnoreRanges,
   type DelimiterPair,
   type DiagnosticGrammar
 } from './grammar';
+
+export {
+  grammarFaulted,
+  resetGrammarRunner,
+  runGrammar
+} from './grammar-runner';

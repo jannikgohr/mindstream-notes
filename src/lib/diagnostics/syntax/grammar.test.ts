@@ -28,9 +28,15 @@ const latex: DiagnosticGrammar = {
 const prose = (grammar: DiagnosticGrammar, text: string) =>
   maskRanges(text, grammarIgnoreRanges(grammar, text));
 
+/**
+ * The words a checker would be handed, with surrounding punctuation trimmed
+ * the way the real tokenizer trims it — masking `\textbf` out of
+ * `\textbf{bold text}` leaves the braces behind, and they are not the point.
+ */
 const words = (grammar: DiagnosticGrammar, text: string) =>
   prose(grammar, text)
     .split(/\s+/)
+    .map((w) => w.replace(/^[^\p{L}]+|[^\p{L}]+$/gu, ''))
     .filter((w) => /\p{L}/u.test(w));
 
 describe('grammarIgnoreRanges', () => {
@@ -125,6 +131,55 @@ describe('grammarIgnoreRanges', () => {
 
   it('tolerates a grammar whose delimiters never appear', () => {
     expect(prose(latex, 'Plain words only')).toBe('Plain words only');
+  });
+});
+
+describe('ignorePatterns', () => {
+  // The case the delimiter grammar cannot express: the command must go, its
+  // argument must stay. This is why patterns exist at all.
+  const commands: DiagnosticGrammar = {
+    ignorePatterns: [
+      String.raw`(\\[a-zA-Z]+)\{`,
+      String.raw`\\(?:ref|cite)\{[^}]*\}`
+    ]
+  };
+
+  it('ignores a captured group and leaves the rest as prose', () => {
+    expect(words(commands, String.raw`\textbf{bold text} follows`)).toEqual([
+      'bold',
+      'text',
+      'follows'
+    ]);
+  });
+
+  it('ignores the whole match when a pattern has no group', () => {
+    expect(words(commands, String.raw`See \cite{knuth1984} again`)).toEqual([
+      'See',
+      'again'
+    ]);
+  });
+
+  it('applies every pattern in the list', () => {
+    const text = String.raw`\emph{kept} and \ref{fig:one} gone`;
+    expect(words(commands, text)).toEqual(['kept', 'and', 'gone']);
+  });
+
+  it('drops zero-length matches rather than recording empty ranges', () => {
+    // `x*` matches the empty string at every position; a range that ignores
+    // nothing is only something the rest of the pipeline has to defend against.
+    expect(grammarIgnoreRanges({ ignorePatterns: ['x*'] }, 'abc')).toEqual([]);
+  });
+
+  it('combines patterns with delimiters', () => {
+    const grammar: DiagnosticGrammar = {
+      ...commands,
+      lineComments: ['%']
+    };
+    expect(words(grammar, String.raw`\emph{kept} % dropped`)).toEqual(['kept']);
+  });
+
+  it('survives a pattern that matches nothing', () => {
+    expect(prose(commands, 'plain words')).toBe('plain words');
   });
 });
 

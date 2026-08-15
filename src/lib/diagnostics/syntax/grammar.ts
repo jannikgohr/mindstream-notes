@@ -13,11 +13,17 @@
  * is also in Rust, so a plugin-supplied function would mean an IPC round trip
  * per paragraph per keystroke.
  *
- * LITERAL DELIMITERS, NOT PATTERNS. A plugin-supplied regex is a plugin-supplied
- * hang: catastrophic backtracking on hot-path code freezes the editor, and no
- * amount of manifest validation reliably tells a safe pattern from an unsafe
- * one. Literal open/close strings express the constructs that actually matter —
- * comments, verbatim, math — and cost a bounded `startsWith` per character.
+ * TWO TIERS, SPLIT BY WHAT CAN BE BOUNDED. Literal open/close delimiters cost a
+ * bounded `startsWith` per character, so they run inline on the editor thread.
+ * Patterns cannot be bounded — no analysis reliably separates a safe regex from
+ * one that backtracks catastrophically, and star-height checks miss cases as
+ * ordinary as `(a|ab)*` — so they run in a Worker that is TERMINATED if it
+ * overruns its budget. Killing the thread is the only thing that actually stops
+ * a runaway match in JavaScript; timing it afterwards prevents the second
+ * freeze, never the first.
+ *
+ * That mirrors the contract scripted plugins already get, where `limits.timeoutMs`
+ * and `catch_unwind` mean a plugin fault costs the plugin rather than the app.
  *
  * WHAT IT CANNOT DO: mode nesting. Typst needs to know that `[...]` inside code
  * is prose again while `(...)` is not, and no list of delimiters expresses that
@@ -34,6 +40,7 @@ import {
   patternRanges
 } from '../ignore-ranges';
 import { splitParagraphs } from './segment';
+import { grammarFaulted, runGrammar } from './grammar-runner';
 import type { DiagnosticSyntax } from './types';
 
 /** An open/close delimiter pair. Both are literal text, never patterns. */
@@ -70,6 +77,72 @@ export interface DiagnosticGrammar {
   indentation?: boolean;
   /** Skip URLs and email addresses. Defaults to true — they are never prose. */
   addresses?: boolean;
+  /**
+   * Patterns for constructs no pair of delimiters can describe.
+   *
+   * The gap these fill is real, and LaTeX shows it immediately: a bold command
+   * must lose its name and KEEP its argument, which a delimiter pair cannot
+   * express — it either swallows the prose or leaves the command to the
+   * dictionary. A pattern says it exactly, and one of them replaces the dozens
+   * of pairs that ref, cite and label commands would otherwise need.
+   *
+   * CAPTURE GROUPS SCOPE THE IGNORE. With no group, the whole match is
+   * skipped; with groups, only the groups are — so a pattern that captures the
+   * command name and then matches the opening brace drops the command and
+   * still checks its argument. Same convention the host's own Markdown rules
+   * use for link destinations.
+   *
+   * These run in a Worker with a hard timeout, never on the thread drawing the
+   * editor — see `grammar-runner.ts`. A pattern that backtracks catastrophically
+   * is a frozen editor otherwise, and that is a mistake to make by accident far
+   * more easily than by malice.
+   */
+  ignorePatterns?: readonly string[];
+}
+
+/**
+ * Compile a plugin's pattern with host-chosen flags.
+ *
+ * `d` because capture-group scoping needs `match.indices`; searching for the
+ * captured text instead would find the wrong occurrence. `g` to walk every
+ * match. `u` when the pattern accepts it, so `\p{L}` works for languages the
+ * ASCII classes do not cover — and dropped when it does not, since Unicode mode
+ * rejects escapes that are legal in the default mode.
+ *
+ * Shared by validation and the scanner so a manifest can never be accepted
+ * under flags different from the ones it will actually run under.
+ */
+export function compilePattern(source: string): RegExp {
+  try {
+    return new RegExp(source, 'gdu');
+  } catch {
+    return new RegExp(source, 'gd');
+  }
+}
+
+/**
+ * Ranges from one pattern, honouring the capture-group convention.
+ *
+ * Zero-length matches are dropped rather than recorded: they mark a position
+ * rather than cover text, and a range that ignores nothing is only a range the
+ * rest of the pipeline has to defend against.
+ */
+function patternMatches(pattern: RegExp, text: string): TextRange[] {
+  const ranges: TextRange[] = [];
+  pattern.lastIndex = 0;
+  for (const match of text.matchAll(pattern)) {
+    const groups = match.indices?.slice(1) ?? [];
+    if (groups.length > 0) {
+      for (const at of groups) {
+        if (at && at[1] > at[0]) ranges.push({ from: at[0], to: at[1] });
+      }
+      continue;
+    }
+    if (match[0].length > 0) {
+      ranges.push({ from: match.index, to: match.index + match[0].length });
+    }
+  }
+  return ranges;
 }
 
 interface Opener {
@@ -128,6 +201,10 @@ function compile(grammar: DiagnosticGrammar): Compiled {
 
 /**
  * Every range of `text` the grammar says is not prose, sorted and merged.
+ *
+ * Includes the patterns, so this is the function the Worker calls. Callers on
+ * the editor thread must NOT reach it with a grammar that has patterns — see
+ * `createGrammarSyntax`, which routes those through `grammar-runner`.
  */
 export function grammarIgnoreRanges(
   grammar: DiagnosticGrammar,
@@ -159,6 +236,16 @@ export function grammarIgnoreRanges(
     const end = spanEnd(text, i, opener);
     ranges.push({ from: i, to: end });
     i = end;
+  }
+
+  for (const source of grammar.ignorePatterns ?? []) {
+    try {
+      ranges.push(...patternMatches(compilePattern(source), text));
+    } catch {
+      // Validation already compiled every pattern, so reaching here means the
+      // engine disagreed with itself. Skipping one pattern degrades the answer;
+      // throwing would lose the whole document's ranges.
+    }
   }
 
   const merged = mergeRanges([
@@ -202,18 +289,55 @@ function spanEnd(text: string, from: number, opener: Opener): number {
  */
 const cache = new WeakMap<DiagnosticGrammar, DiagnosticSyntax>();
 
-/** A `DiagnosticSyntax` backed by a plugin-declared grammar. */
+/**
+ * A `DiagnosticSyntax` backed by a plugin-declared grammar.
+ *
+ * Patterns decide how it runs. Without them the grammar is delimiters, which
+ * cost a bounded `startsWith` per character and stay inline and synchronous.
+ * With them it goes through the Worker, and if that cannot answer — no Worker
+ * in this environment, or the grammar already overran its budget — it degrades
+ * to the delimiters rather than to nothing. A document keeps the squiggles the
+ * safe half of its grammar can justify.
+ *
+ * `onFault` is how that degradation becomes visible. This module knows nothing
+ * about plugins, so the caller supplies the reporting; see
+ * `sourceLanguageDiagnosticSyntax`.
+ */
 export function createGrammarSyntax(
-  grammar: DiagnosticGrammar
+  grammar: DiagnosticGrammar,
+  onFault?: (reason: string) => void
 ): DiagnosticSyntax {
   const hit = cache.get(grammar);
   if (hit) return hit;
 
+  const hasPatterns = (grammar.ignorePatterns?.length ?? 0) > 0;
+  const delimitersOnly: DiagnosticGrammar = {
+    ...grammar,
+    ignorePatterns: undefined
+  };
+
   const syntax: DiagnosticSyntax = {
     id: 'grammar',
-    ignoreRanges: (text: string) => grammarIgnoreRanges(grammar, text),
+    ignoreRanges: hasPatterns
+      ? async (text: string) => {
+          const isolated = await runGrammar(grammar, text);
+          if (isolated) return isolated;
+          if (!reported) {
+            reported = true;
+            onFault?.(
+              grammarFaulted(grammar)
+                ? 'a diagnostics pattern exceeded its time budget and was stopped; only the grammar delimiters are used'
+                : 'diagnostics patterns cannot run here; only the grammar delimiters are used'
+            );
+          }
+          return grammarIgnoreRanges(delimitersOnly, text);
+        }
+      : (text: string) => grammarIgnoreRanges(grammar, text),
     segment: (text: string): Segment[] => splitParagraphs(text)
   };
+  // Reported once per grammar: the fallback happens on every keystroke, and a
+  // message per keystroke would bury the one that mattered.
+  let reported = false;
   cache.set(grammar, syntax);
   return syntax;
 }

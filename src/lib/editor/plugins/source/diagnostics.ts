@@ -193,7 +193,11 @@ export function sourceDiagnostics(
         const { signal } = this.controller;
         this.inflight = ChangeSet.empty(this.view.state.doc.length);
         const text = this.view.state.doc.toString();
-        const ignored = syntax.ignoreRanges(text);
+        // Awaited: a plugin-declared grammar computes its patterns in a
+        // Worker, so this is the one step of the check that can suspend before
+        // any provider is called. `inflight` is already open, so edits made
+        // while it resolves are mapped like any other.
+        const ignored = await syntax.ignoreRanges(text);
         // Mask BEFORE segmenting, not just filter afterwards: a network
         // checker has already received the text by the time results come
         // back, so code blocks and link targets would leave the machine only

@@ -42,8 +42,13 @@ export interface DiagnosticSyntax {
    * Used twice by the caller and it matters that it is the same answer both
    * times: once to mask the text before a checker sees it, and once to drop
    * findings that landed in a masked region anyway.
+   *
+   * May be async. The syntaxes the app ships are all synchronous, but a
+   * plugin-declared grammar with patterns is computed in a Worker, since a
+   * pattern is unbounded work that has to stay off the editor thread. The one
+   * caller already runs inside an async check, so awaiting costs nothing.
    */
-  ignoreRanges(text: string): TextRange[];
+  ignoreRanges(text: string): TextRange[] | Promise<TextRange[]>;
   /**
    * Cut `text` into the units handed to providers — in practice paragraphs.
    *
