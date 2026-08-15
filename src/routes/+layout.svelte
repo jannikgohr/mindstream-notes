@@ -18,6 +18,7 @@
   import { setTrashRetention, sweepTrashRetention } from '$lib/api/data';
   import { setSyncSchedule } from '$lib/api/sync';
   import LazyRootSingletons from '$lib/components/LazyRootSingletons.svelte';
+  import DiagnosticPopover from '$lib/components/note-editor/DiagnosticPopover.svelte';
   import {
     HOTKEY_COMMANDS,
     isGlobalShortcutCommand
@@ -312,4 +313,14 @@
 
 <!-- Lazy singleton host: imports each dialog/search component only when
      its tiny queue/open-state store says it is actually needed. -->
+<!--
+  Spelling suggestions. Mounted ONCE here rather than inside NoteEditor:
+  the popover's state is a module singleton, and the desktop layout mounts a
+  NoteEditor per dockview panel. One instance per open note meant every note
+  rendered its own copy of the same menu, and each copy's dismiss handler
+  treated clicks inside the others as "outside" — closing the menu on
+  pointerdown, before the click that would have applied anything.
+-->
+<DiagnosticPopover />
+
 <LazyRootSingletons />

@@ -204,3 +204,75 @@ describe('duplicate suggestions', () => {
     expect(apply).toHaveBeenCalledWith('the');
   });
 });
+
+/**
+ * The reported failure: clicking a suggestion did nothing, and scrolling the
+ * list or dragging its scrollbar dismissed the menu.
+ *
+ * The desktop layout mounts a NoteEditor per dockview panel, and the popover
+ * used to live inside it — so several copies of this component existed while
+ * the state driving them was a module singleton. Each copy's dismiss handler
+ * compared the event target against ITS OWN element, so a pointerdown inside
+ * one menu looked "outside" to every other copy and closed the shared state
+ * on pointerdown, before any click could land.
+ *
+ * It is mounted once at the root now. These pin the behaviour that made the
+ * duplicate case fatal, so a second instance can never break it again.
+ */
+describe('mouse interaction inside the menu', () => {
+  it('survives pointerdown even with another instance mounted', async () => {
+    const apply = vi.fn();
+    render(DiagnosticPopover);
+    render(DiagnosticPopover);
+
+    openDiagnosticPopover(
+      { diagnostic, x: 10, y: 10, word: 'Googel', apply },
+      async () => []
+    );
+    await settle();
+
+    const button = suggestions()[0];
+    button.dispatchEvent(
+      new PointerEvent('pointerdown', { bubbles: true, composed: true })
+    );
+    await settle();
+
+    expect(document.querySelector('[data-diagnostic-popover]')).not.toBeNull();
+    button.click();
+    expect(apply).toHaveBeenCalledWith('Google');
+  });
+
+  it('survives scrolling its own list', async () => {
+    // A long suggestion list has to be scrollable without dismissing itself.
+    render(DiagnosticPopover);
+    openDiagnosticPopover(
+      { diagnostic, x: 10, y: 10, word: 'Googel', apply: vi.fn() },
+      async () => []
+    );
+    await settle();
+
+    const list = document
+      .querySelector('[data-diagnostic-popover]')
+      ?.querySelector('div');
+    list?.dispatchEvent(new Event('scroll', { bubbles: true }));
+    await settle();
+
+    expect(document.querySelector('[data-diagnostic-popover]')).not.toBeNull();
+  });
+
+  it('still closes on a pointerdown outside', async () => {
+    render(DiagnosticPopover);
+    openDiagnosticPopover(
+      { diagnostic, x: 10, y: 10, word: 'Googel', apply: vi.fn() },
+      async () => []
+    );
+    await settle();
+
+    document.body.dispatchEvent(
+      new PointerEvent('pointerdown', { bubbles: true, composed: true })
+    );
+    await settle();
+
+    expect(document.querySelector('[data-diagnostic-popover]')).toBeNull();
+  });
+});

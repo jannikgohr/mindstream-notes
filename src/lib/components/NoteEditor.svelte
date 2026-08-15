@@ -110,7 +110,6 @@
   import ViewOnlyBanner from './note-editor/ViewOnlyBanner.svelte';
   import WikilinkMenu from './note-editor/WikilinkMenu.svelte';
   import UserMentionMenu from './note-editor/UserMentionMenu.svelte';
-  import DiagnosticPopover from './note-editor/DiagnosticPopover.svelte';
 
   interface Props {
     noteId: string;
@@ -1731,10 +1730,3 @@
 -->
 <WikilinkMenu bridge={sourceWikilinkBridge} />
 <UserMentionMenu bridge={sourceUserMentionBridge} />
-
-<!--
-  Spelling suggestions. One instance for both surfaces: it opens from a
-  right-click, which lands in exactly one pane, and the context carried
-  with the open already points at that pane.
--->
-<DiagnosticPopover />
