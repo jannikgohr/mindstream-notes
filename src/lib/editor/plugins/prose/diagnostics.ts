@@ -230,6 +230,25 @@ export function diagnosticsPlugin(
   let timer: ReturnType<typeof setTimeout> | null = null;
   let controller: AbortController | null = null;
 
+  /**
+   * Transaction mappings collected while a check is in flight.
+   *
+   * A network check takes seconds, and a note being opened keeps changing
+   * while its content loads. Discarding results because the document moved
+   * meant the first several checks were thrown away and the user waited for
+   * the document to go quiet before seeing anything. Results are mapped
+   * forward instead.
+   */
+  let inflight: {
+    maps: { map(pos: number, assoc?: number): number }[];
+  } | null = null;
+  /** An edit arrived mid-check, so run once more when this one lands. */
+  let rerun = false;
+
+  /** Carry a position through every edit that happened during the check. */
+  const forward = (pos: number, assoc: number) =>
+    (inflight?.maps ?? []).reduce((at, mapping) => mapping.map(at, assoc), pos);
+
   const cancel = () => {
     if (timer !== null) clearTimeout(timer);
     timer = null;
@@ -238,6 +257,13 @@ export function diagnosticsPlugin(
   };
 
   async function run(view: EditorView) {
+    // Single-flight. Starting a second request while one is outstanding
+    // just multiplies load on a server that already takes seconds; the
+    // trailing re-run picks up whatever changed meanwhile.
+    if (inflight) {
+      rerun = true;
+      return;
+    }
     if (options.enabled && !options.enabled()) {
       // Clear rather than return: the user may have just switched it off.
       const drawn = diagnosticsPluginKey.getState(view.state)?.diagnostics;
@@ -248,20 +274,30 @@ export function diagnosticsPlugin(
     }
     controller = new AbortController();
     const { signal } = controller;
-    // Capture the doc the results will describe. If the user types while the
-    // check is in flight, the positions we get back describe a document that
-    // no longer exists — the edit already scheduled a fresh run, so the stale
-    // answer is dropped rather than mapped.
-    const doc = view.state.doc;
-    const { segments, skips } = analyzeDocument(doc);
+    inflight = { maps: [] };
+    const { segments, skips } = analyzeDocument(view.state.doc);
 
     try {
       const diagnostics = await options.check(segments, signal);
-      if (signal.aborted || view.isDestroyed || view.state.doc !== doc) return;
+      if (signal.aborted || view.isDestroyed) return;
+
+      // Both are in the coordinates of the document as it was when the
+      // check started, so filter first and move the survivors afterwards.
       const kept = excludeIgnored(diagnostics, skips);
-      view.dispatch(view.state.tr.setMeta(diagnosticsPluginKey, kept));
+      const moved = kept.map((d) => ({
+        ...d,
+        from: forward(d.from, 1),
+        to: forward(d.to, -1)
+      }));
+      view.dispatch(view.state.tr.setMeta(diagnosticsPluginKey, moved));
     } catch (err) {
       if (!isAbortError(err)) console.error('Diagnostics check failed', err);
+    } finally {
+      inflight = null;
+      if (rerun && !view.isDestroyed) {
+        rerun = false;
+        void run(view);
+      }
     }
   }
 
@@ -273,6 +309,10 @@ export function diagnosticsPlugin(
         const incoming = tr.getMeta(diagnosticsPluginKey) as
           | Diagnostic[]
           | undefined;
+        // Record edits made while a check is outstanding, so its results
+        // can be moved onto the text as it stands when they arrive.
+        if (inflight && tr.docChanged) inflight.maps.push(tr.mapping);
+
         if (incoming) {
           const usable = withinDocument(tr.doc, incoming);
           return {
@@ -318,8 +358,11 @@ export function diagnosticsPlugin(
           if (updatedView.state.doc.eq(prevState.doc)) return;
           // The open menu describes a document that no longer exists.
           options.onDismissMenu?.();
+          // Deliberately does NOT abort an outstanding check. Cancelling on
+          // every keystroke is why opening a note took so long: each edit
+          // threw away a request already seconds into flight and started the
+          // wait again.
           if (timer !== null) clearTimeout(timer);
-          controller?.abort();
           timer = setTimeout(() => run(updatedView), debounceMs);
         },
         destroy() {

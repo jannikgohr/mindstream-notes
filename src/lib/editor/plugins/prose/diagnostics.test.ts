@@ -538,3 +538,95 @@ describe('withinDocument', () => {
     expect(withinDocument(d, [ok])).toEqual([ok]);
   });
 });
+
+/**
+ * Results arriving after the document has moved.
+ *
+ * A LanguageTool round trip takes seconds, and a note keeps changing while
+ * its content loads. Discarding results because the document changed meant
+ * the first several checks were thrown away and nothing appeared until the
+ * document went quiet — measured at ~20s for a 350-word note.
+ */
+describe('slow checks', () => {
+  function mounted(text: string) {
+    let release: ((value: Diagnostic[]) => void) | null = null;
+    let calls = 0;
+
+    const plugin = diagnosticsPlugin({
+      debounceMs: 0,
+      check: (segments) => {
+        calls++;
+        void segments;
+        return new Promise<Diagnostic[]>((resolve) => {
+          release = resolve;
+        });
+      }
+    });
+
+    const host = document.createElement('div');
+    document.body.append(host);
+    const view = new EditorView(host, {
+      state: EditorState.create({ doc: doc(para(t(text))), plugins: [plugin] })
+    });
+    return {
+      view,
+      finish: (d: Diagnostic[]) => release?.(d),
+      callCount: () => calls
+    };
+  }
+
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
+  const flagging = (from: number, to: number): Diagnostic => ({
+    from,
+    to,
+    kind: 'spelling',
+    message: 'x',
+    replacements: [],
+    source: 'test'
+  });
+
+  it('moves a late result onto the text where it now is', async () => {
+    const h = mounted('one teh two');
+    await settle();
+
+    // The document changes while the request is outstanding.
+    h.view.dispatch(h.view.state.tr.insertText('XXXX ', 1));
+    // The answer describes the document as it was: "teh" at 5..8.
+    h.finish([flagging(5, 8)]);
+    await settle();
+
+    const { diagnostics } = diagnosticsPluginKey.getState(h.view.state)!;
+    expect(diagnostics).toHaveLength(1);
+    expect(
+      h.view.state.doc.textBetween(diagnostics[0].from, diagnostics[0].to)
+    ).toBe('teh');
+    h.view.destroy();
+  });
+
+  it('does not start a second request while one is outstanding', async () => {
+    // Piling requests onto a server that already takes seconds only makes
+    // the wait worse.
+    const h = mounted('one teh two');
+    await settle();
+    expect(h.callCount()).toBe(1);
+
+    h.view.dispatch(h.view.state.tr.insertText('a', 1));
+    h.view.dispatch(h.view.state.tr.insertText('b', 1));
+    await settle();
+    expect(h.callCount()).toBe(1);
+
+    h.view.destroy();
+  });
+
+  it('runs once more for the edits that arrived meanwhile', async () => {
+    const h = mounted('one teh two');
+    await settle();
+    h.view.dispatch(h.view.state.tr.insertText('a', 1));
+    await settle();
+
+    h.finish([]);
+    await settle();
+    expect(h.callCount()).toBe(2);
+    h.view.destroy();
+  });
+});
