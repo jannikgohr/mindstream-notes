@@ -97,3 +97,10 @@ export {
   type DiagnosticSyntax,
   type DiagnosticSyntaxId
 } from './types';
+
+export {
+  createGrammarSyntax,
+  grammarIgnoreRanges,
+  type DelimiterPair,
+  type DiagnosticGrammar
+} from './grammar';

@@ -111,6 +111,17 @@ describe('sourceLanguageDiagnosticSyntax', () => {
   it('leaves an unknown language unchecked', () => {
     expect(sourceLanguageDiagnosticSyntax('text')).toBeNull();
   });
+
+  it('builds a syntax from a grammar the manifest declares', () => {
+    // The point of the grammar: a plugin brings a language the app has no
+    // scanner for, and its comments stop reaching the dictionary.
+    registerPlugin(typstLanguageManifest({ grammar: { lineComments: ['%'] } }));
+    const syntax = sourceLanguageDiagnosticSyntax('typst');
+    expect(syntax?.id).toBe('grammar');
+    expect(syntax?.ignoreRanges('kept % dropped')).toEqual([
+      { from: 5, to: 14 }
+    ]);
+  });
 });
 
 describe('Typst tokenizer', () => {

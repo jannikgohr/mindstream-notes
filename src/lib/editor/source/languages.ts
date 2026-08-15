@@ -4,6 +4,7 @@ import { StreamLanguage } from '@codemirror/language';
 import { pluginSourceLanguage } from '$lib/plugins/registry.svelte';
 import type { PluginSourceLanguageHostProvider } from '$lib/plugins/types';
 import {
+  createGrammarSyntax,
   diagnosticSyntax,
   markdownSyntax,
   type DiagnosticSyntax
@@ -146,7 +147,10 @@ export function sourceLanguageDiagnosticSyntax(
 ): DiagnosticSyntax | null {
   if (BUILT_IN_LANGUAGE_PROVIDERS[language]) return markdownSyntax;
 
-  const pluginLanguage = pluginSourceLanguage(language);
-  const syntax = pluginLanguage?.language.diagnostics?.syntax;
-  return syntax ? diagnosticSyntax(syntax) : null;
+  // A manifest opts in either by naming a syntax the app ships or by declaring
+  // a grammar of its own; validation has already established it is exactly one.
+  const diagnostics = pluginSourceLanguage(language)?.language.diagnostics;
+  if (!diagnostics) return null;
+  if (diagnostics.grammar) return createGrammarSyntax(diagnostics.grammar);
+  return diagnostics.syntax ? diagnosticSyntax(diagnostics.syntax) : null;
 }

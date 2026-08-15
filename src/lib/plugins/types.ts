@@ -14,7 +14,10 @@
  * grant/record can always be traced back to exactly one plugin.
  */
 
-import type { DiagnosticSyntaxId } from '$lib/diagnostics/syntax';
+import type {
+  DiagnosticGrammar,
+  DiagnosticSyntaxId
+} from '$lib/diagnostics/syntax';
 
 /**
  * Capabilities a plugin may request in its manifest:
@@ -224,10 +227,28 @@ export interface PluginSourceLanguageContribution {
    * was: a squiggle a user did not ask for, in a language the app might read
    * wrong, is worse than no squiggle.
    */
-  diagnostics?: {
-    /** One of `DIAGNOSTIC_SYNTAX_IDS` — see `$lib/diagnostics/syntax`. */
-    syntax: DiagnosticSyntaxId;
-  };
+  diagnostics?: PluginDiagnosticsContribution;
+}
+
+/**
+ * How a plugin's notes should be read when looking for prose.
+ *
+ * Exactly one of the two. `syntax` names a language the app already has code
+ * for; `grammar` describes one it does not, in literal delimiters the host
+ * scans with. Naming a host syntax is always preferable where one fits — it is
+ * a real parser rather than a span matcher — so the grammar is for languages
+ * the app has never heard of.
+ */
+export interface PluginDiagnosticsContribution {
+  /** One of `DIAGNOSTIC_SYNTAX_IDS` — see `$lib/diagnostics/syntax`. */
+  syntax?: DiagnosticSyntaxId;
+  /**
+   * A language described rather than shipped: comment, verbatim and math
+   * delimiters, all literal text. Deliberately not patterns — a
+   * plugin-supplied regex runs on every keystroke, where catastrophic
+   * backtracking is an editor freeze the user cannot escape.
+   */
+  grammar?: DiagnosticGrammar;
 }
 
 export const PLUGIN_NOTE_EXPORT_FORMATS = ['pdf'] as const;

@@ -86,7 +86,8 @@ is namespaced under the plugin `id`, so two plugins can never collide.
 "split": "<i18nKey>" }`) to rename host view modes in the editor UI while the
   stored internal values remain stable.
 - **`sourceLanguages`** — source-editor language modes backed by host-owned
-  CodeMirror providers. A note kind references one with `sourceLanguage`.
+  CodeMirror providers. A note kind references one with `sourceLanguage`. A
+  language opts into spellchecking with `diagnostics` (see below).
 - **`noteExporters`** — export actions shown in a note's context menu. An
   exporter targets a built-in note kind such as `markdown` or a plugin-owned
   stored kind such as `plugin.<pluginId>.<kind>`, runs a backend script export,
@@ -339,6 +340,53 @@ Plugin-owned note kinds can opt into syntax highlighting by setting
 The provider is always host-owned. A plugin may select from providers shipped by
 the app, but it cannot inject arbitrary editor JavaScript into the WebView.
 Unknown source languages remain editable as plain text.
+
+### Spelling and grammar checking
+
+A source language is spellchecked only if it says so, with exactly one of
+`diagnostics.syntax` or `diagnostics.grammar`. Omit the block and the language
+is left unchecked — the app never guesses that a plugin's notes are prose.
+
+`syntax` names a language the app already has code for (`markdown`, `plain`,
+`typst`). Prefer it wherever one fits: it is a real parser rather than a span
+matcher, and only it can express things like Typst's `[...]` content blocks
+being prose again inside code.
+
+```jsonc
+"diagnostics": { "syntax": "typst" }
+```
+
+`grammar` describes a language the app has never heard of, in literal
+delimiters the host scans with. Every field is optional:
+
+```jsonc
+"diagnostics": {
+  "grammar": {
+    "lineComments": ["%"],                 // to end of line
+    "blockComments": [["\\begin{comment}", "\\end{comment}"]],
+    "verbatim":      [["\\begin{verbatim}", "\\end{verbatim}"]],
+    "math":          [["$$", "$$"], ["$", "$"], ["\\[", "\\]"]],
+    "escape": "\\",        // one char; makes the next character literal
+    "indentation": true,   // ignore leading whitespace — see below
+    "addresses": true      // skip URLs and emails (default true)
+  }
+}
+```
+
+Delimiters are **literal text, never patterns**. A plugin-supplied regex would
+run on every keystroke, where catastrophic backtracking is an editor freeze the
+user cannot escape. At most 24 entries per list, 32 characters per delimiter, so
+the per-character cost stays flat. Spans do not nest, the longest matching
+opener at a position wins, and an unterminated span runs to the end of the text
+rather than guessing a closer — half-typed markup is normal while writing.
+
+Set `indentation` only where leading whitespace _means_ something, as in
+Markdown lists or Typst blocks. A grammar checker reporting "more than one
+space in a row" on an indented line is commenting on the document's structure,
+not the author's typing. Where indentation carries no meaning, leave it off so a
+genuine doubled space is still caught. Note this is filtered by POSITION rather
+than by the checker's message, which arrives already localized and so cannot be
+matched against.
 
 ## Preview services (`contributes.nativeServices`, `nativeServices.run`)
 

@@ -1531,6 +1531,108 @@ describe('validateManifest — source language failures', () => {
       syntax: 'typst'
     });
   });
+  it('rejects setting neither syntax nor grammar', () => {
+    expect(() =>
+      validateManifest(
+        base({
+          id: 'ts',
+          provider: { type: 'host', id: 'typst' },
+          diagnostics: {}
+        })
+      )
+    ).toThrow(/exactly one of syntax or grammar/);
+  });
+  it('rejects setting both syntax and grammar', () => {
+    // Two answers to one question; the host would have to guess, and guessing
+    // means checking a document by rules its author did not choose.
+    expect(() =>
+      validateManifest(
+        base({
+          id: 'ts',
+          provider: { type: 'host', id: 'typst' },
+          diagnostics: { syntax: 'typst', grammar: { lineComments: ['%'] } }
+        })
+      )
+    ).toThrow(/exactly one of syntax or grammar/);
+  });
+  it('accepts a declared grammar', () => {
+    const manifest = validateManifest(
+      base({
+        id: 'tex',
+        provider: { type: 'host', id: 'typst' },
+        diagnostics: {
+          grammar: {
+            lineComments: ['%'],
+            math: [['$', '$']],
+            escape: '\\',
+            indentation: true
+          }
+        }
+      })
+    );
+    expect(
+      manifest.contributes.sourceLanguages?.[0].diagnostics?.grammar?.escape
+    ).toBe('\\');
+  });
+  it('rejects a delimiter pair that is not a pair', () => {
+    expect(() =>
+      validateManifest(
+        base({
+          id: 'tex',
+          provider: { type: 'host', id: 'typst' },
+          diagnostics: { grammar: { math: [['$']] } }
+        })
+      )
+    ).toThrow(/must be an \[open, close\] pair/);
+  });
+  it('rejects a multi-character escape', () => {
+    expect(() =>
+      validateManifest(
+        base({
+          id: 'tex',
+          provider: { type: 'host', id: 'typst' },
+          diagnostics: { grammar: { escape: '<<' } }
+        })
+      )
+    ).toThrow(/must be a single character/);
+  });
+  it('bounds how many delimiters a grammar may declare', () => {
+    // The scanner runs on every keystroke; the cap is what keeps that cost
+    // flat no matter what a manifest asks for.
+    expect(() =>
+      validateManifest(
+        base({
+          id: 'tex',
+          provider: { type: 'host', id: 'typst' },
+          diagnostics: {
+            grammar: { lineComments: Array.from({ length: 25 }, () => '%') }
+          }
+        })
+      )
+    ).toThrow(/at most 24 entries/);
+  });
+  it('bounds how long a single delimiter may be', () => {
+    expect(() =>
+      validateManifest(
+        base({
+          id: 'tex',
+          provider: { type: 'host', id: 'typst' },
+          diagnostics: { grammar: { lineComments: ['x'.repeat(33)] } }
+        })
+      )
+    ).toThrow(/at most 32 characters/);
+  });
+  it('rejects a non-boolean grammar flag', () => {
+    expect(() =>
+      validateManifest(
+        base({
+          id: 'tex',
+          provider: { type: 'host', id: 'typst' },
+          diagnostics: { grammar: { indentation: 'yes' } }
+        })
+      )
+    ).toThrow(/indentation must be a boolean/);
+  });
   it('rejects a non-object provider', () => {
     expect(() => validateManifest(base({ id: 'ts', provider: 'x' }))).toThrow(
       /provider must be an object/
