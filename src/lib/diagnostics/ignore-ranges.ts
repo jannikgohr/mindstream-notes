@@ -96,6 +96,36 @@ function blockRanges(text: string): TextRange[] {
 }
 
 /**
+ * URLs and email addresses, which are never prose in any syntax.
+ *
+ * Split out from the Markdown-specific list because every other syntax
+ * needs exactly these two and nothing else around them: a Typst document,
+ * a Kanban card description and a Markdown note all contain links a
+ * dictionary would otherwise flag word by word. Shared so the three cannot
+ * drift into disagreeing about what a URL looks like.
+ */
+export const ADDRESS_PATTERNS: readonly RegExp[] = [
+  /\b(?:https?:\/\/|www\.)[^\s<>()[\]]+/gi, // bare URL
+  /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g // bare email
+];
+
+/** Every match of every pattern, as ranges. Patterns must be global. */
+export function patternRanges(
+  text: string,
+  patterns: readonly RegExp[]
+): TextRange[] {
+  const ranges: TextRange[] = [];
+  for (const pattern of patterns) {
+    pattern.lastIndex = 0;
+    for (const m of text.matchAll(pattern)) {
+      const from = m.index ?? 0;
+      ranges.push({ from, to: from + m[0].length });
+    }
+  }
+  return ranges;
+}
+
+/**
  * Inline constructs to skip. Each is applied to the whole document but
  * matches overlapping a block range are dropped — a fence already covers
  * that text, and a pattern that straddles a fence boundary is a
@@ -109,8 +139,7 @@ const INLINE_PATTERNS: readonly RegExp[] = [
   /(?<![\w@])@[A-Za-z0-9._-]+/g, // @mentions
   /<[^\s<>]+@[^\s<>]+>/g, // autolinked email
   /<[a-zA-Z][^\s<>]*:\/\/[^\s<>]*>/g, // autolinked URL
-  /\b(?:https?:\/\/|www\.)[^\s<>()[\]]+/gi, // bare URL
-  /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, // bare email
+  ...ADDRESS_PATTERNS,
   /<\/?[A-Za-z][^>]*>/g // inline HTML tag
 ];
 

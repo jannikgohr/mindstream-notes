@@ -8,8 +8,14 @@
  *
  * Where they differ is how each recovers structure. The prose plugin reads
  * the ProseMirror document, which already knows what is code. Here the
- * document is Markdown text, so `ignore-ranges` re-derives that by parsing —
- * the same answer via the best signal each surface actually has.
+ * document is source text, so a `DiagnosticSyntax` re-derives that by parsing
+ * — the same answer via the best signal each surface actually has.
+ *
+ * The syntax is a parameter rather than a fact, because this surface is no
+ * longer only ever holding Markdown: the same extension now draws squiggles in
+ * a Typst document, where `#set page(margin: 2cm)` is not prose, and in a
+ * Kanban card description, where `#` is just a hash. See
+ * `$lib/diagnostics/syntax`.
  *
  * Not built on `@codemirror/lint`: that comes with its own gutter markers,
  * panel and tooltip styling, which would make the source pane's squiggles
@@ -25,11 +31,8 @@ import {
 } from '@codemirror/state';
 import { Decoration, EditorView, ViewPlugin } from '@codemirror/view';
 import type { DecorationSet, ViewUpdate } from '@codemirror/view';
-import {
-  excludeIgnored,
-  ignoreRanges,
-  maskRanges
-} from '$lib/diagnostics/ignore-ranges';
+import { excludeIgnored, maskRanges } from '$lib/diagnostics/ignore-ranges';
+import { markdownSyntax, type DiagnosticSyntax } from '$lib/diagnostics/syntax';
 import { isAbortError } from '$lib/diagnostics/bus';
 import type { Diagnostic, Segment } from '$lib/diagnostics/types';
 import type { DiagnosticMenuContext } from '$lib/diagnostics/popover-bridge.svelte';
@@ -38,43 +41,10 @@ import type { DiagnosticMenuContext } from '$lib/diagnostics/popover-bridge.svel
 export const setDiagnostics = StateEffect.define<Diagnostic[]>();
 
 /**
- * Cut Markdown into paragraph-sized segments on blank lines.
- *
- * Per-paragraph rather than per-document so the bus's cache does useful
- * work: editing one paragraph re-checks one paragraph. Per-LINE would
- * segment more finely still, but it would break any checker that needs a
- * whole sentence — grammar rules, and LanguageTool in particular — since a
- * sentence wrapped across two lines would be checked as two fragments.
+ * Paragraph segmentation, re-exported for the callers that grew up importing
+ * it from here — it is syntax-independent and now lives with the syntaxes.
  */
-export function splitParagraphs(text: string): Segment[] {
-  const segments: Segment[] = [];
-  const lines = text.split('\n');
-
-  let offset = 0;
-  let start = -1;
-  let end = -1;
-
-  const flush = () => {
-    if (start === -1) return;
-    segments.push({ text: text.slice(start, end), from: start, to: end });
-    start = -1;
-  };
-
-  for (const line of lines) {
-    const lineStart = offset;
-    offset += line.length + 1;
-
-    if (line.trim().length === 0) {
-      flush();
-      continue;
-    }
-    if (start === -1) start = lineStart;
-    end = lineStart + line.length;
-  }
-  flush();
-
-  return segments;
-}
+export { splitParagraphs } from '$lib/diagnostics/syntax';
 
 const diagnosticMark = (kind: Diagnostic['kind']) =>
   Decoration.mark({ class: `cm-diagnostic diagnostic-${kind}` });
@@ -130,6 +100,11 @@ export interface SourceDiagnosticsOptions {
     onPartial?: (diagnostics: Diagnostic[]) => void
   ): Promise<Diagnostic[]>;
   debounceMs?: number;
+  /**
+   * What this document's text is written in. Defaults to Markdown, which is
+   * what every caller meant back when it was the only thing it could be.
+   */
+  syntax?: DiagnosticSyntax;
   /** See the prose plugin: read per check so the setting applies live. */
   enabled?(): boolean;
   /** Dismiss an open menu when the document moves out from under it. */
@@ -150,6 +125,7 @@ export function sourceDiagnostics(
   options: SourceDiagnosticsOptions
 ): Extension {
   const debounceMs = options.debounceMs ?? DEFAULT_DEBOUNCE_MS;
+  const syntax = options.syntax ?? markdownSyntax;
 
   const runner = ViewPlugin.fromClass(
     class {
@@ -217,13 +193,13 @@ export function sourceDiagnostics(
         const { signal } = this.controller;
         this.inflight = ChangeSet.empty(this.view.state.doc.length);
         const text = this.view.state.doc.toString();
-        const ignored = ignoreRanges(text);
+        const ignored = syntax.ignoreRanges(text);
         // Mask BEFORE segmenting, not just filter afterwards: a network
         // checker has already received the text by the time results come
         // back, so code blocks and link targets would leave the machine only
         // to have their findings discarded. Masking is offset-preserving, so
         // positions still line up with the real document.
-        const segments = splitParagraphs(maskRanges(text, ignored));
+        const segments = syntax.segment(maskRanges(text, ignored));
 
         // Filter in the coordinates the check ran against, then carry the
         // survivors onto the text as it stands now.
