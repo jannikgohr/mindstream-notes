@@ -17,7 +17,12 @@
  * the shared popover keep the two identical.
  */
 
-import { StateEffect, StateField, type Extension } from '@codemirror/state';
+import {
+  ChangeSet,
+  StateEffect,
+  StateField,
+  type Extension
+} from '@codemirror/state';
 import { Decoration, EditorView, ViewPlugin } from '@codemirror/view';
 import type { DecorationSet, ViewUpdate } from '@codemirror/view';
 import {
@@ -147,6 +152,15 @@ export function sourceDiagnostics(
       controller: AbortController | null = null;
 
       unsubscribe: (() => void) | null = null;
+      /**
+       * Edits made while a check is outstanding. A network check takes
+       * seconds and a note keeps changing as it loads, so results are moved
+       * onto the current text rather than discarded — discarding them is
+       * what made squiggles take so long to appear at all.
+       */
+      inflight: ChangeSet | null = null;
+      /** An edit arrived mid-check; run once more when this one lands. */
+      rerun = false;
 
       constructor(readonly view: EditorView) {
         // Check on open so an existing note shows its squiggles without
@@ -158,6 +172,9 @@ export function sourceDiagnostics(
 
       update(update: ViewUpdate) {
         if (!update.docChanged) return;
+        if (this.inflight) {
+          this.inflight = this.inflight.compose(update.changes);
+        }
         // A suggestion's range describes the document it was offered for.
         options.onDismissMenu?.();
         this.schedule(debounceMs);
@@ -170,12 +187,19 @@ export function sourceDiagnostics(
       }
 
       schedule(delay: number) {
+        // Does NOT abort an outstanding check: cancelling one already
+        // seconds into flight on every keystroke is what made results take
+        // so long to appear at all.
         if (this.timer !== null) clearTimeout(this.timer);
-        this.controller?.abort();
         this.timer = setTimeout(() => void this.run(), delay);
       }
 
       async run() {
+        // Single-flight; the trailing re-run picks up anything that changed.
+        if (this.inflight) {
+          this.rerun = true;
+          return;
+        }
         if (options.enabled && !options.enabled()) {
           // Clear rather than return — the user may have just switched it off.
           const { diagnostics } = this.view.state.field(diagnosticsField);
@@ -186,6 +210,7 @@ export function sourceDiagnostics(
         }
         this.controller = new AbortController();
         const { signal } = this.controller;
+        this.inflight = ChangeSet.empty(this.view.state.doc.length);
         const text = this.view.state.doc.toString();
         const ignored = ignoreRanges(text);
         // Mask BEFORE segmenting, not just filter afterwards: a network
@@ -197,16 +222,25 @@ export function sourceDiagnostics(
 
         try {
           const diagnostics = await options.check(segments, signal);
-          // The text may have moved on while the check was in flight; a
-          // fresh run is already queued, so drop the stale answer rather
-          // than drawing it at positions that no longer mean anything.
-          if (signal.aborted || this.view.state.doc.toString() !== text) return;
-          this.view.dispatch({
-            effects: setDiagnostics.of(excludeIgnored(diagnostics, ignored))
-          });
+          if (signal.aborted) return;
+          // Filter in the coordinates the check ran against, then carry the
+          // survivors onto the text as it stands now.
+          const changes = this.inflight;
+          const kept = excludeIgnored(diagnostics, ignored).map((d) => ({
+            ...d,
+            from: changes ? changes.mapPos(d.from, 1) : d.from,
+            to: changes ? changes.mapPos(d.to, -1) : d.to
+          }));
+          this.view.dispatch({ effects: setDiagnostics.of(kept) });
         } catch (err) {
           if (!isAbortError(err))
             console.error('Diagnostics check failed', err);
+        } finally {
+          this.inflight = null;
+          if (this.rerun) {
+            this.rerun = false;
+            void this.run();
+          }
         }
       }
     }
