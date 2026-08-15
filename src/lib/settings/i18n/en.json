@@ -726,6 +726,7 @@
     "plugins.permission.pluginWebviews.allowEval": "Allow string evaluation in plugin previews",
     "plugins.permission.nativeTools.runDeclared": "Run declared PATH binaries",
     "plugins.permission.nativeServices.run": "Run a declared local preview server",
+    "plugins.permission.textCheckers.contribute": "Add text checkers for spelling and grammar",
     "plugins.nativeTools.title": "Native tools",
     "plugins.nativeTools.check": "Check",
     "plugins.nativeTools.available": "Found on PATH",
