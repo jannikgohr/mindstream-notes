@@ -48,6 +48,15 @@ export interface CheckOptions {
    * keeps working offline, rather than the document going quietly clean.
    */
   owners?: Partial<Record<DiagnosticKind, string>>;
+  /**
+   * Called each time a provider finishes, with everything known so far.
+   *
+   * Checkers differ in speed by orders of magnitude — the local dictionary
+   * is microseconds, a LanguageTool round trip is seconds. Without this the
+   * fast one's findings wait on the slow one, and a freshly opened note
+   * shows nothing at all until the network answers.
+   */
+  onPartial?(diagnostics: Diagnostic[]): void;
   signal?: AbortSignal;
 }
 
@@ -119,7 +128,7 @@ export class DiagnosticBus {
   ): Promise<Diagnostic[]> {
     const { languages, signal } = options;
     const owners = options.owners ?? {};
-    const results: {
+    const found: {
       providerId: string;
       segment: number;
       diagnostic: Diagnostic;
@@ -127,9 +136,20 @@ export class DiagnosticBus {
     /** Provider ids per segment index that returned without failing. */
     const answered = new Map<number, Set<string>>();
 
-    for (const provider of this.#providers) {
-      if (signal?.aborted) throw new AbortError();
+    /** Everything known so far, with ownership applied. */
+    const compose = (): Diagnostic[] => {
+      const owned = found
+        .filter(({ providerId, segment, diagnostic }) => {
+          const owner = owners[diagnostic.kind];
+          if (owner === undefined || owner === providerId) return true;
+          // Drop only when the owner actually answered for THIS segment.
+          return !answered.get(segment)?.has(owner);
+        })
+        .map(({ diagnostic }) => diagnostic);
+      return resolveOverlaps(owned, this.#order(options.precedence));
+    };
 
+    const runProvider = async (provider: DiagnosticProvider) => {
       // Split cached from pending first, so the bulk path is only asked
       // about segments that actually need work — editing one paragraph of a
       // long note should cost one paragraph, not the whole document again.
@@ -155,21 +175,21 @@ export class DiagnosticBus {
               request
             );
             pending.forEach((p, i) => {
-              const found = batch[i] ?? null;
-              if (found === null) return;
-              this.#cacheSet(p.key, found);
-              resolved.set(p.index, found);
+              const answer = batch[i] ?? null;
+              if (answer === null) return;
+              this.#cacheSet(p.key, answer);
+              resolved.set(p.index, answer);
             });
           } else {
             for (const p of pending) {
               if (signal?.aborted) throw new AbortError();
-              const found = await provider.check({
+              const answer = await provider.check({
                 ...request,
                 text: p.segment.text
               });
-              if (found === null) continue;
-              this.#cacheSet(p.key, found);
-              resolved.set(p.index, found);
+              if (answer === null) continue;
+              this.#cacheSet(p.key, answer);
+              resolved.set(p.index, answer);
             }
           }
         } catch (err) {
@@ -191,7 +211,7 @@ export class DiagnosticBus {
         // document its paragraph lives.
         const segment = segments[index];
         for (const d of relative) {
-          results.push({
+          found.push({
             providerId: provider.id,
             segment: index,
             diagnostic: {
@@ -202,20 +222,20 @@ export class DiagnosticBus {
           });
         }
       }
-    }
+
+      // Publish as soon as THIS provider is done. The local dictionary
+      // answers in microseconds while a network checker takes seconds, so
+      // holding its findings back until the slow one lands is why a note
+      // showed nothing at all for seconds after opening.
+      options.onPartial?.(compose());
+    };
+
+    // Run in parallel: a slow network checker must not delay a local one
+    // that was ready immediately.
+    await Promise.all(this.#providers.map(runProvider));
 
     if (signal?.aborted) throw new AbortError();
-
-    const owned = results
-      .filter(({ providerId, segment, diagnostic }) => {
-        const owner = owners[diagnostic.kind];
-        if (owner === undefined || owner === providerId) return true;
-        // Drop only when the owner actually answered for THIS segment.
-        return !answered.get(segment)?.has(owner);
-      })
-      .map(({ diagnostic }) => diagnostic);
-
-    return resolveOverlaps(owned, this.#order(options.precedence));
+    return compose();
   }
 
   /** Provider ids in precedence order: explicit list first, then registration order. */

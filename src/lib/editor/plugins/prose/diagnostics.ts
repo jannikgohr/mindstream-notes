@@ -169,7 +169,12 @@ export interface ProseDiagnosticsOptions {
    * Runs the check. Returning positions relative to the document (the bus
    * has already rebased them by each segment's offset).
    */
-  check(segments: Segment[], signal: AbortSignal): Promise<Diagnostic[]>;
+  check(
+    segments: Segment[],
+    signal: AbortSignal,
+    /** Draw partial results as each checker reports, rather than only at the end. */
+    onPartial?: (diagnostics: Diagnostic[]) => void
+  ): Promise<Diagnostic[]>;
   /**
    * How long to wait after the last keystroke. Long enough that typing a
    * word does not fire a check per character, short enough that the squiggle
@@ -277,19 +282,21 @@ export function diagnosticsPlugin(
     inflight = { maps: [] };
     const { segments, skips } = analyzeDocument(view.state.doc);
 
-    try {
-      const diagnostics = await options.check(segments, signal);
+    // Both the findings and `skips` are in the coordinates of the document
+    // as it was when the check started, so filter first and move the
+    // survivors onto the current text afterwards.
+    const draw = (diagnostics: Diagnostic[]) => {
       if (signal.aborted || view.isDestroyed) return;
-
-      // Both are in the coordinates of the document as it was when the
-      // check started, so filter first and move the survivors afterwards.
-      const kept = excludeIgnored(diagnostics, skips);
-      const moved = kept.map((d) => ({
+      const moved = excludeIgnored(diagnostics, skips).map((d) => ({
         ...d,
         from: forward(d.from, 1),
         to: forward(d.to, -1)
       }));
       view.dispatch(view.state.tr.setMeta(diagnosticsPluginKey, moved));
+    };
+
+    try {
+      draw(await options.check(segments, signal, draw));
     } catch (err) {
       if (!isAbortError(err)) console.error('Diagnostics check failed', err);
     } finally {

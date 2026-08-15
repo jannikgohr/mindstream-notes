@@ -123,7 +123,12 @@ const diagnosticsField = StateField.define<{
 });
 
 export interface SourceDiagnosticsOptions {
-  check(segments: Segment[], signal: AbortSignal): Promise<Diagnostic[]>;
+  check(
+    segments: Segment[],
+    signal: AbortSignal,
+    /** Draw partial results as each checker reports. */
+    onPartial?: (diagnostics: Diagnostic[]) => void
+  ): Promise<Diagnostic[]>;
   debounceMs?: number;
   /** See the prose plugin: read per check so the setting applies live. */
   enabled?(): boolean;
@@ -220,11 +225,10 @@ export function sourceDiagnostics(
         // positions still line up with the real document.
         const segments = splitParagraphs(maskRanges(text, ignored));
 
-        try {
-          const diagnostics = await options.check(segments, signal);
+        // Filter in the coordinates the check ran against, then carry the
+        // survivors onto the text as it stands now.
+        const draw = (diagnostics: Diagnostic[]) => {
           if (signal.aborted) return;
-          // Filter in the coordinates the check ran against, then carry the
-          // survivors onto the text as it stands now.
           const changes = this.inflight;
           const kept = excludeIgnored(diagnostics, ignored).map((d) => ({
             ...d,
@@ -232,6 +236,10 @@ export function sourceDiagnostics(
             to: changes ? changes.mapPos(d.to, -1) : d.to
           }));
           this.view.dispatch({ effects: setDiagnostics.of(kept) });
+        };
+
+        try {
+          draw(await options.check(segments, signal, draw));
         } catch (err) {
           if (!isAbortError(err))
             console.error('Diagnostics check failed', err);
