@@ -109,6 +109,37 @@ export const ADDRESS_PATTERNS: readonly RegExp[] = [
   /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g // bare email
 ];
 
+/**
+ * The whitespace that starts each line — indentation, never prose.
+ *
+ * A grammar checker sees a run of spaces and reports a doubled space, which in
+ * a sentence is a real typo and at the start of a line is a nested list item, a
+ * continuation, or a Typst block. LanguageTool's WHITESPACE_RULE fires on every
+ * indented line in a document, in whatever language the user configured.
+
+ * Deliberately positional rather than a match on the rule or its message. The
+ * message arrives already localized — "mehr als ein Leerzeichen hintereinander"
+ * in German, something else in every other language — so string matching would
+ * be a per-language allow-list that silently stops working the moment a user
+ * switches language. A rule id would at least be stable, but it is
+ * LanguageTool's alone, so the same complaint from any other checker would come
+ * straight back. Where the text sits is a fact about the document, true for
+ * every provider and every locale.
+ *
+ * Only the leading run: two spaces mid-sentence really is a typo, and this must
+ * not suppress that.
+ */
+export function lineIndentRanges(text: string): TextRange[] {
+  const ranges: TextRange[] = [];
+  let offset = 0;
+  for (const line of text.split('\n')) {
+    const indent = line.length - line.trimStart().length;
+    if (indent > 0) ranges.push({ from: offset, to: offset + indent });
+    offset += line.length + 1; // + newline
+  }
+  return ranges;
+}
+
 /** Every match of every pattern, as ranges. Patterns must be global. */
 export function patternRanges(
   text: string,

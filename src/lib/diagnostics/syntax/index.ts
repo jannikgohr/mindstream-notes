@@ -12,17 +12,34 @@
 import {
   ADDRESS_PATTERNS,
   ignoreRanges,
+  lineIndentRanges,
   mergeRanges,
   patternRanges
 } from '../ignore-ranges';
+import type { TextRange } from '../types';
 import { splitParagraphs } from './segment';
 import { typstIgnoreRanges } from './typst';
 import type { DiagnosticSyntax, DiagnosticSyntaxId } from './types';
 
+/**
+ * Add the line-structure whitespace every source syntax shares.
+ *
+ * Composed here rather than repeated in each syntax because indentation is not
+ * a fact about Markdown or Typst — it is a fact about text that has lines, and
+ * a syntax that forgot it would quietly reintroduce a doubled-space complaint
+ * on every indented line. See `lineIndentRanges` for why this is positional and
+ * not a match on the checker's message.
+ */
+function withLineStructure(
+  ignore: (text: string) => TextRange[]
+): (text: string) => TextRange[] {
+  return (text) => mergeRanges([...ignore(text), ...lineIndentRanges(text)]);
+}
+
 /** Markdown notes — the app's own, and the behaviour every surface had first. */
 export const markdownSyntax: DiagnosticSyntax = {
   id: 'markdown',
-  ignoreRanges,
+  ignoreRanges: withLineStructure(ignoreRanges),
   segment: splitParagraphs
 };
 
@@ -36,14 +53,16 @@ export const markdownSyntax: DiagnosticSyntax = {
  */
 export const plainSyntax: DiagnosticSyntax = {
   id: 'plain',
-  ignoreRanges: (text) => mergeRanges(patternRanges(text, ADDRESS_PATTERNS)),
+  ignoreRanges: withLineStructure((text) =>
+    patternRanges(text, ADDRESS_PATTERNS)
+  ),
   segment: splitParagraphs
 };
 
 /** Typst documents — see `./typst.ts` for why this needs a real scanner. */
 export const typstSyntax: DiagnosticSyntax = {
   id: 'typst',
-  ignoreRanges: typstIgnoreRanges,
+  ignoreRanges: withLineStructure(typstIgnoreRanges),
   segment: splitParagraphs
 };
 
