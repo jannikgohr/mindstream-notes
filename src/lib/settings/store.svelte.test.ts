@@ -69,8 +69,7 @@ describe('schema flattening', () => {
     for (const id of [
       'appearance.sidebar.metadata',
       'appearance.sidebar.history',
-      'appearance.sidebar.backlinks',
-      'appearance.sidebar.outgoingLinks'
+      'appearance.sidebar.links'
     ]) {
       expect(BY_ID[id].scope).toBe('D');
       expect(BY_ID[id].default).toBe(true);

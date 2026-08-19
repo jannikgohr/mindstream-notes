@@ -116,6 +116,7 @@
     "sidebar.metadata": "Metadaten",
     "sidebar.show": "Rechte Seitenleiste anzeigen",
     "sidebar.hide": "Rechte Seitenleiste ausblenden",
+    "sidebar.links": "Links",
     "sidebar.backlinks": "Rückverweise",
     "sidebar.backlinks.empty": "Keine Notiz verweist hierher.",
     "sidebar.outgoingLinks": "Ausgehende Links",
@@ -952,11 +953,8 @@
     "appearance.sidebar.history": {
       "label": "Verlauf anzeigen"
     },
-    "appearance.sidebar.backlinks": {
-      "label": "Rückverweise anzeigen"
-    },
-    "appearance.sidebar.outgoingLinks": {
-      "label": "Ausgehende Links anzeigen"
+    "appearance.sidebar.links": {
+      "label": "Links anzeigen"
     },
     "editor.defaultMode": {
       "label": "Standard-Editor"
