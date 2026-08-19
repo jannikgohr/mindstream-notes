@@ -551,6 +551,9 @@ pub async fn text_checker_test_connection(
     .await)
 }
 
+// Tauri injects each call argument individually, so the arg count is the
+// command's payload shape rather than something to refactor away.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn text_checker_check(
     endpoint: String,
