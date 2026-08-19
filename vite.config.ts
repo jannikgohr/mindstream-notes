@@ -135,6 +135,9 @@ export default defineConfig({
       '@milkdown/kit/prose/model',
       '@milkdown/kit/prose/state',
       '@milkdown/kit/prose/view',
+      // Imported directly by the lazy Kanban Markdown renderer. Without an
+      // explicit entry Vite discovers it when the first board opens and reloads.
+      'prosemirror-model',
       '@codemirror/language',
       'mermaid',
       // Raw-markdown Source editor (CodeMirror 6) — reached through the lazy
