@@ -265,3 +265,23 @@ describe('typstIgnoreRanges — bracket balance', () => {
     expect(words('Ein #bare hash')).toEqual(['Ein', 'hash']);
   });
 });
+
+describe('typstIgnoreRanges — code that does not balance', () => {
+  it('drops a parenthesised or braced expression opened with a bare hash', () => {
+    expect(words('#(1 + 2) danach')).toEqual(['danach']);
+    expect(words('#{ let x = 1 } danach')).toEqual(['danach']);
+  });
+
+  it('hands a closing bracket back when the code frame never opened it', () => {
+    // The stray `)` and `]` are markup the user typed, so they stay put and
+    // the prose after them is still checked.
+    expect(prose('Vor #f(1)) danach')).toBe('Vor      ) danach');
+    expect(prose('Vor #let x = ] danach')).toBe('Vor          ] danach');
+  });
+
+  it('keeps a short backtick run inside a longer raw block', () => {
+    // The opening run is the delimiter: a ``` block may contain single
+    // backticks without ending early.
+    expect(words('``` code ` tick ``` danach')).toEqual(['danach']);
+  });
+});

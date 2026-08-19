@@ -14,7 +14,9 @@ import {
 import {
   PLUGINS_CATEGORY_ID,
   installPluginSettingsBridge,
+  pluginSettingDef,
   pluginSettingsCategory,
+  pluginSettingsSectionsFor,
   uninstallPluginSettingsBridge
 } from './settings-bridge';
 
@@ -147,5 +149,72 @@ describe('i18n integration', () => {
     expect(tValue(modeSettingId, 'wysiwyg')).toBe('Live Preview');
     setLanguage('de');
     expect(tValue(modeSettingId, 'wysiwyg')).toBe('Live-Vorschau');
+  });
+});
+
+/**
+ * One plugin's settings in isolation — what the plugin manager panel renders,
+ * as opposed to the combined "Plugins" category in the settings dialog.
+ */
+describe('pluginSettingsSectionsFor', () => {
+  it('returns only the sections the named plugin contributes', () => {
+    const sections = pluginSettingsSectionsFor(PLUGIN_ID);
+    expect(sections.map((s) => s.id)).toEqual([SECTION_ID]);
+    expect(sections[0].settings.map((s) => s.id)).toContain(SETTING_ID);
+  });
+
+  it('is empty for a plugin that contributes none', () => {
+    expect(pluginSettingsSectionsFor('com.example.other')).toEqual([]);
+  });
+
+  it('is empty once the plugin is disabled', () => {
+    setPluginEnabled(PLUGIN_ID, false);
+    expect(pluginSettingsSectionsFor(PLUGIN_ID)).toEqual([]);
+  });
+});
+
+describe('pluginSettingDef', () => {
+  it('resolves a full plugin setting id to a core setting', () => {
+    expect(pluginSettingDef(SETTING_ID)).toMatchObject({
+      id: SETTING_ID,
+      scope: 'D'
+    });
+  });
+
+  it('returns nothing for an id no plugin owns', () => {
+    expect(pluginSettingDef('plugins.com.example.ghost.x')).toBeUndefined();
+    expect(pluginSettingDef('appearance.theme')).toBeUndefined();
+  });
+});
+
+describe('resolver scopes the bridge does not own', () => {
+  it('leaves the category label to the core bundle', () => {
+    // Only settings and sections are plugin-owned; anything else falls
+    // through so the core i18n keeps answering for it.
+    expect(tLabel('categories', PLUGINS_CATEGORY_ID)).not.toBe(
+      'Core Templates'
+    );
+  });
+
+  it('has no description for a section or an unknown setting', () => {
+    expect(tDescription('sections', SECTION_ID)).not.toBe(
+      'Open right after creating'
+    );
+    expect(tDescription('settings', 'plugins.com.example.ghost.x')).not.toBe(
+      'Open right after creating'
+    );
+  });
+
+  it('has no label for a section or setting no plugin owns', () => {
+    expect(tLabel('sections', 'plugins.com.example.ghost.general')).not.toBe(
+      'Core Templates'
+    );
+    expect(tLabel('settings', 'plugins.com.example.ghost.x')).not.toBe(
+      'Open new template notes'
+    );
+  });
+
+  it('has no option label for a setting that declares none', () => {
+    expect(tValue(SETTING_ID, 'true')).not.toBe('Live Preview');
   });
 });
