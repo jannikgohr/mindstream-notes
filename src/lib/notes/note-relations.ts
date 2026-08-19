@@ -24,7 +24,7 @@ export function noteLinkIds(markdown: string): string[] {
 }
 
 function canContainNoteLinks(kind: string): boolean {
-  return kind !== 'pdf' && kind !== 'freeform' && kind !== 'ink';
+  return kind === 'markdown';
 }
 
 async function linksForNote(
