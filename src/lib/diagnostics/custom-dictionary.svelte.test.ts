@@ -155,4 +155,19 @@ describe('custom dictionary', () => {
       expect(mod.customDictionary.words).toEqual([]);
     });
   });
+  it('re-checks once the mirror arrives, since the load races the first check', async () => {
+    // The bus caches by (provider, languages, text): anything checked while
+    // the list was in flight was checked against an empty dictionary, so the
+    // accepted words would stay underlined until the paragraph was edited.
+    api.list.mockResolvedValue(['Mindstream']);
+    const mod = await load();
+    await mod.loadCustomDictionary();
+    expect(invalidate).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not re-check when there is nothing to accept', async () => {
+    const mod = await load();
+    await mod.loadCustomDictionary();
+    expect(invalidate).not.toHaveBeenCalled();
+  });
 });
