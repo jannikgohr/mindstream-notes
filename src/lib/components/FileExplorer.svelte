@@ -33,6 +33,7 @@
   import { Separator } from '$lib/components/ui/separator';
   import ContextMenu from './ContextMenu.svelte';
   import type { MenuItem } from './context-menu-types';
+  import { menuItemForShortcut } from './context-menu-shortcuts';
   import { alert, confirm } from './confirm-dialog.svelte';
   import SortControl from './SortControl.svelte';
   import { sortTree } from '$lib/sort';
@@ -88,6 +89,7 @@
     draftHasName,
     emptyStateMessageForSource,
     dragItemsForStart,
+    itemFromSelectionKey,
     nodeKey,
     selectedItemsFromKeys,
     selectionKeyForItem,
@@ -618,6 +620,35 @@
     return [target];
   }
 
+  async function onTreeKeydown(e: KeyboardEvent) {
+    if (menuOpen || !explorerRoot?.contains(document.activeElement)) return;
+    if (e.repeat || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+    if (e.key !== 'F2' && e.key !== 'Delete') return;
+    const eventTarget = e.target;
+    if (
+      eventTarget instanceof HTMLElement &&
+      (eventTarget.matches('input, textarea, select') ||
+        eventTarget.isContentEditable)
+    ) {
+      return;
+    }
+    const targetKey =
+      activeKey && (selectedKeys.length === 0 || selectedKeySet.has(activeKey))
+        ? activeKey
+        : (selectedKeys.at(-1) ?? null);
+    if (!targetKey) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+    const target = itemFromSelectionKey(targetKey);
+    const selected = selectedItemsFromKeys(selectedKeys);
+    const items =
+      selected.length > 1
+        ? await menuItemsForBatch(selected)
+        : await menuItemsForTarget(target);
+    menuItemForShortcut(items, e.key)?.onSelect?.();
+  }
+
   // ---------- Drag and drop ----------
   let drag = $state<Drag>(null);
   let dragOver = $state<string | null>(null);
@@ -798,11 +829,15 @@
       if (explorerRoot?.contains(target)) return;
       clearFileTreeInteractionState(true);
     };
+    const onDocumentKeyDown = (event: KeyboardEvent) => {
+      void onTreeKeydown(event);
+    };
     if (sourceChipRow) sourceObserver.observe(sourceChipRow);
     if (toolbarRow) toolbarObserver.observe(toolbarRow);
     document.addEventListener('pointerdown', onDocumentPointerDown, {
       capture: true
     });
+    document.addEventListener('keydown', onDocumentKeyDown);
     requestAnimationFrame(() => {
       updateSourceChipCollapse();
       updateSortControlCollapse();
@@ -813,6 +848,7 @@
       document.removeEventListener('pointerdown', onDocumentPointerDown, {
         capture: true
       });
+      document.removeEventListener('keydown', onDocumentKeyDown);
     };
   });
 

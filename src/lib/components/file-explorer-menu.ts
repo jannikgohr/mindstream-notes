@@ -63,7 +63,7 @@ import type {
 import type { DesktopNoteSource } from '$lib/stores/note-source.svelte';
 import type { TreeNode } from '$lib/api';
 import { noteKindIcon } from './note-kind-icon';
-import { FolderPlus } from '@lucide/svelte';
+import { FolderPlus, Share2 } from '@lucide/svelte';
 
 /**
  * The explorer state and commands the menu builder reads.
@@ -206,7 +206,7 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
         }
       );
     }
-    return [{ label: tUi('sharing.menu.group'), children }];
+    return [{ label: tUi('sharing.menu.group'), icon: Share2, children }];
   }
 
   function batchLabel(items: TreeItemRef[]): string {
@@ -523,6 +523,7 @@ export function createMenuBuilder(ctx: MenuBuildContext) {
           if (canManageShare) {
             items.push({
               label: tUi('sharing.menu.group'),
+              icon: Share2,
               children: [
                 {
                   label: tUi('sharing.menu.shareFolder'),

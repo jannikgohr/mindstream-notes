@@ -448,6 +448,7 @@ describe('folder menu', () => {
       'Manage access…',
       'Stop sharing…'
     ]);
+    expect(sharing?.icon).toBeTruthy();
   });
 
   it('offers leave and manage actions for editable shared root anchors', async () => {
@@ -463,7 +464,7 @@ describe('folder menu', () => {
 
     const items = await menuItemsForTarget({ kind: 'folder', id: 'f1' });
 
-    expect(labels(items)).toContain('Sharing');
+    expect(item(items, 'Sharing')?.icon).toBeTruthy();
     expect(labels(items)).toContain('Leave shared folder…');
     expect(labels(items)).not.toContain('Rename folder…');
     expect(labels(items)).not.toContain('Delete');
