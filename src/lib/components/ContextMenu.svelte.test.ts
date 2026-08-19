@@ -74,3 +74,47 @@ describe('ContextMenu submenu', () => {
     expect(menuButton('Share folder…')).toBeDefined();
   });
 });
+
+describe('ContextMenu shortcuts and destructive styling', () => {
+  it('invokes the advertised Delete action from the keyboard', () => {
+    const onSelect = vi.fn();
+    const onClose = vi.fn();
+    render(ContextMenu, {
+      props: {
+        x: 10,
+        y: 10,
+        items: [
+          {
+            label: 'Delete',
+            shortcut: 'Del',
+            destructive: true,
+            onSelect
+          }
+        ],
+        onClose
+      }
+    });
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete' }));
+
+    expect(onSelect).toHaveBeenCalledOnce();
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('lets a destructive item color its icon and shortcut', () => {
+    render(ContextMenu, {
+      props: {
+        x: 10,
+        y: 10,
+        items: [{ label: 'Delete', shortcut: 'Del', destructive: true }],
+        onClose: vi.fn()
+      }
+    });
+
+    const button = menuButton('Delete')!;
+    expect(button.querySelector('svg')?.classList).toContain('text-current');
+    expect(button.querySelector('span.text-xs')?.classList).toContain(
+      'text-current'
+    );
+  });
+});

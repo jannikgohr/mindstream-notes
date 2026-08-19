@@ -23,6 +23,7 @@
   import { getSettingValue } from '$lib/settings/store.svelte';
   import PluginIcon from '$lib/plugins/PluginIcon.svelte';
   import { noteKindIcon } from './note-kind-icon';
+  import { menuItemForShortcut } from './context-menu-shortcuts';
   import type { MenuItem } from './context-menu-types';
 
   interface Props {
@@ -67,7 +68,16 @@
 
   onMount(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') {
+        onClose();
+        return;
+      }
+      if (e.repeat || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+      const item = menuItemForShortcut(items, e.key);
+      if (!item) return;
+      e.preventDefault();
+      e.stopPropagation();
+      invoke(item);
     };
     // pointerdown unifies mouse + touch — some mobile webviews (notably
     // iOS Safari and older Android variants) skip synthesized mousedown
@@ -169,22 +179,19 @@
               <PluginIcon
                 pluginId={item.pluginIcon.pluginId}
                 file={item.pluginIcon.file}
-                class="size-4 text-muted-foreground"
+                class="size-4 text-current"
               />
             {:else if KindIcon}
-              <KindIcon class="size-4 shrink-0 text-muted-foreground" />
+              <KindIcon class="size-4 shrink-0 text-current" />
             {:else if Icon}
-              <Icon class="size-4 shrink-0 text-muted-foreground" />
+              <Icon class="size-4 shrink-0 text-current" />
             {/if}
             <span class="truncate">{item.label}</span>
           </span>
           {#if item.children?.length}
-            <ChevronRight
-              class="size-4 text-muted-foreground"
-              aria-hidden="true"
-            />
+            <ChevronRight class="size-4 text-current" aria-hidden="true" />
           {:else if item.shortcut}
-            <span class="text-xs text-muted-foreground">{item.shortcut}</span>
+            <span class="text-xs text-current">{item.shortcut}</span>
           {/if}
         </button>
         {#if item.children?.length && activeSubmenu === i}
@@ -216,21 +223,17 @@
                     <PluginIcon
                       pluginId={child.pluginIcon.pluginId}
                       file={child.pluginIcon.file}
-                      class="size-4 text-muted-foreground"
+                      class="size-4 text-current"
                     />
                   {:else if ChildKindIcon}
-                    <ChildKindIcon
-                      class="size-4 shrink-0 text-muted-foreground"
-                    />
+                    <ChildKindIcon class="size-4 shrink-0 text-current" />
                   {:else if ChildIcon}
-                    <ChildIcon class="size-4 shrink-0 text-muted-foreground" />
+                    <ChildIcon class="size-4 shrink-0 text-current" />
                   {/if}
                   <span class="truncate">{child.label}</span>
                 </span>
                 {#if child.shortcut}
-                  <span class="text-xs text-muted-foreground"
-                    >{child.shortcut}</span
-                  >
+                  <span class="text-xs text-current">{child.shortcut}</span>
                 {/if}
               </button>
             {/each}
