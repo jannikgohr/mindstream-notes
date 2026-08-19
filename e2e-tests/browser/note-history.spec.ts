@@ -38,6 +38,28 @@ function editor(page: Page): Locator {
   return page.locator('.ProseMirror').first();
 }
 
+function modeButton(page: Page): Locator {
+  return page.getByRole('button', { name: /^Editor view mode:/ });
+}
+
+function sourcePane(page: Page): Locator {
+  return page.locator('.cm-content');
+}
+
+async function setMode(page: Page, target: 'WYSIWYG' | 'Source' | 'Split') {
+  for (let i = 0; i < 4; i++) {
+    const label = await modeButton(page).getAttribute('aria-label');
+    if (label === `Editor view mode: ${target}`) return;
+    await modeButton(page).click();
+  }
+  throw new Error(`could not reach view mode ${target}`);
+}
+
+async function sourceText(page: Page): Promise<string> {
+  const lines = await page.locator('.cm-line').allTextContents();
+  return lines.join('\n');
+}
+
 async function typeInEditor(page: Page, text: string) {
   const ed = editor(page);
   await ed.click();
@@ -105,4 +127,32 @@ test('restores an earlier version and offers a one-click undo', async ({
   await expect(page.getByText('Restored to an earlier version.')).toHaveCount(
     0
   );
+});
+
+test('restoring while Source is active updates the source pane', async ({
+  page
+}) => {
+  await openIdeas(page);
+  await expect(page.getByText('Note created')).toBeVisible();
+
+  await setMode(page, 'Source');
+  await sourcePane(page).click();
+  await page.keyboard.press('ControlOrMeta+a');
+  await page.keyboard.insertText(
+    'source mode body before history restore lands'
+  );
+  await refreshHistory(page);
+  await expect(page.getByText('Edited', { exact: true }).first()).toBeVisible();
+
+  await page.getByRole('button', { name: /Note created/ }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('button', { name: 'Restore this version' }).click();
+
+  await expect
+    .poll(async () =>
+      (await sourceText(page)).includes(
+        'source mode body before history restore lands'
+      )
+    )
+    .toBe(false);
 });

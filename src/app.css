@@ -633,6 +633,7 @@ body.dv-tab-dragging
 .milkdown .editor {
   background: transparent;
   color: var(--foreground);
+  min-height: 100%;
 }
 
 /* Presence renders only on the surface being used: when the raw-source pane is
@@ -665,6 +666,8 @@ body.dv-tab-dragging
 .milkdown .ProseMirror {
   font-size: var(--editor-font-size);
   line-height: var(--editor-line-height, 1.5);
+  box-sizing: border-box;
+  min-height: 100%;
 }
 .milkdown .ProseMirror p {
   font-size: 1em;
