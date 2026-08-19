@@ -1,10 +1,8 @@
 import { sveltekit } from '@sveltejs/kit/vite';
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
-import { createLogger, defineConfig, type Plugin } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
 import { fileURLToPath } from 'node:url';
-
-const defaultLogger = createLogger();
 
 function isIgnorableWarning(message: string, filePath = ''): boolean {
   return (
@@ -84,21 +82,6 @@ const host = process.env.TAURI_DEV_HOST;
 const packageJsonPath = fileURLToPath(new URL('package.json', import.meta.url));
 
 export default defineConfig({
-  customLogger: {
-    ...defaultLogger,
-    warn(message, options) {
-      if (isIgnorableWarning(message)) {
-        return;
-      }
-      defaultLogger.warn(message, options);
-    },
-    warnOnce(message, options) {
-      if (isIgnorableWarning(message)) {
-        return;
-      }
-      defaultLogger.warnOnce(message, options);
-    }
-  },
   plugins: [
     silenceUpstreamWarnings(),
     tailwindcss(),
