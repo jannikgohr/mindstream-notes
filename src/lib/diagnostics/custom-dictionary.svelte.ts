@@ -58,6 +58,12 @@ export async function loadCustomDictionary(force = false): Promise<void> {
       words = await customDictionaryList();
       folded = new Set(words.map(fold));
       loaded = true;
+      // Whatever was checked while this was in flight was checked against an
+      // empty personal dictionary. The bus caches by (provider, languages,
+      // text), so without this the words the user accepted stay underlined
+      // after every restart until the paragraph happens to be edited — the
+      // load races the first check of the note that is already open.
+      if (words.length > 0) invalidateDiagnostics();
     } finally {
       loading = null;
     }
