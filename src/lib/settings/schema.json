@@ -198,13 +198,7 @@
               "default": true
             },
             {
-              "id": "appearance.sidebar.backlinks",
-              "scope": "D",
-              "type": "toggle",
-              "default": true
-            },
-            {
-              "id": "appearance.sidebar.outgoingLinks",
+              "id": "appearance.sidebar.links",
               "scope": "D",
               "type": "toggle",
               "default": true

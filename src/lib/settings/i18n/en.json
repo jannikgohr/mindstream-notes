@@ -214,6 +214,7 @@
     "sidebar.metadata": "Metadata",
     "sidebar.show": "Show right sidebar",
     "sidebar.hide": "Hide right sidebar",
+    "sidebar.links": "Links",
     "sidebar.backlinks": "Backlinks",
     "sidebar.backlinks.empty": "No notes link here.",
     "sidebar.outgoingLinks": "Outgoing links",
@@ -962,11 +963,8 @@
     "appearance.sidebar.history": {
       "label": "Show history"
     },
-    "appearance.sidebar.backlinks": {
-      "label": "Show backlinks"
-    },
-    "appearance.sidebar.outgoingLinks": {
-      "label": "Show outgoing links"
+    "appearance.sidebar.links": {
+      "label": "Show links"
     },
     "editor.defaultMode": {
       "label": "Default mode"

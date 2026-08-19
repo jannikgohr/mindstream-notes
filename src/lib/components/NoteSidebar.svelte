@@ -53,11 +53,8 @@
   const showHistory = $derived(
     getSettingValue('appearance.sidebar.history') !== false
   );
-  const showBacklinks = $derived(
-    getSettingValue('appearance.sidebar.backlinks') !== false
-  );
-  const showOutgoingLinks = $derived(
-    getSettingValue('appearance.sidebar.outgoingLinks') !== false
+  const showLinks = $derived(
+    getSettingValue('appearance.sidebar.links') !== false
   );
   const supportsNoteLinks = $derived(note?.note_kind === 'markdown');
   let metadataScroller = $state<HTMLDivElement | null>(null);
@@ -695,19 +692,13 @@
         </section>
       {/if}
 
-      {#if supportsNoteLinks && showBacklinks}
+      {#if supportsNoteLinks && showLinks}
         <div class="mt-3">
-          <NoteLinksSection noteId={note.id} kind="backlinks" />
+          <NoteLinksSection noteId={note.id} />
         </div>
       {/if}
 
-      {#if supportsNoteLinks && showOutgoingLinks}
-        <div class="mt-3">
-          <NoteLinksSection noteId={note.id} kind="outgoing" />
-        </div>
-      {/if}
-
-      {#if !showMetadata && !(showHistory && noteHistoryEnabled(note.note_kind)) && !(supportsNoteLinks && (showBacklinks || showOutgoingLinks))}
+      {#if !showMetadata && !(showHistory && noteHistoryEnabled(note.note_kind)) && !(supportsNoteLinks && showLinks)}
         <p
           class="rounded-lg border border-border bg-background p-4 text-xs text-muted-foreground"
         >
