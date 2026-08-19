@@ -41,6 +41,7 @@ pub mod search;
 pub mod serde_helpers;
 pub mod sharing;
 pub mod signatures;
+pub mod spellcheck;
 pub mod sync;
 pub mod system;
 #[cfg(desktop)]
@@ -343,6 +344,7 @@ pub fn run() {
             // Registry of long-lived plugin preview servers (e.g. `tinymist
             // preview`). Reaped on exit below so nothing is orphaned.
             app.manage(plugins::preview_service::PreviewServiceRegistry::default());
+            app.manage(spellcheck::SpellcheckState::default());
 
             Ok(())
         })
@@ -364,6 +366,19 @@ pub fn run() {
             tree_batch::trash_many,
             tree_batch::restore_many,
             tree_batch::purge_many,
+            // Spellcheck (local dictionaries, no network at check time)
+            spellcheck::spellcheck_unknown_words,
+            spellcheck::spellcheck_suggest,
+            spellcheck::spellcheck_installed_dictionaries,
+            spellcheck::spellcheck_available_dictionaries,
+            spellcheck::spellcheck_install_dictionary,
+            spellcheck::spellcheck_remove_dictionary,
+            spellcheck::custom_dictionary_list,
+            spellcheck::custom_dictionary_add,
+            spellcheck::custom_dictionary_remove,
+            spellcheck::spellcheck_word_chars,
+            spellcheck::http_checker::text_checker_check,
+            spellcheck::http_checker::text_checker_test_connection,
             // Search
             search::search_notes,
             // PDF searchable-text index (derived, local-only)

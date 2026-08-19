@@ -57,6 +57,14 @@ export {
 } from './prose/paste-whitespace';
 export { installSelectionToolbarAutoHide } from './prose/selection-toolbar';
 export {
+  analyzeDocument,
+  diagnosticDecorations,
+  diagnosticsPlugin,
+  diagnosticsPluginKey,
+  type DocumentAnalysis,
+  type ProseDiagnosticsOptions
+} from './prose/diagnostics';
+export {
   addMermaidMenuItem,
   mermaidLanguageDescription,
   renderMermaidPreview
@@ -79,3 +87,9 @@ export {
 export { sourceAutoPair } from './source/auto-pair';
 export { sourceWikilink } from './source/wikilink';
 export { sourceUserMention } from './source/user-mention';
+export {
+  setDiagnostics,
+  sourceDiagnostics,
+  splitParagraphs,
+  type SourceDiagnosticsOptions
+} from './source/diagnostics';

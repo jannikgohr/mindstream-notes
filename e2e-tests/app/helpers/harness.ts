@@ -64,6 +64,26 @@ export function freshProfileDir(): string {
 }
 
 /**
+ * The disposable dictionary directory this run's app was launched against.
+ *
+ * Dictionaries deliberately live outside the profile directory (they are large
+ * and shared across profiles), so `MINDSTREAM_PROFILE_DIR` does not isolate
+ * them. `wdio.conf.ts` allocates a throwaway one per session and exports it
+ * both to the app (`MINDSTREAM_DICTIONARY_DIR`, read by the seam in
+ * `src-tauri/src/spellcheck/mod.rs`) and to this process, so a spec can seed a
+ * fixture pair into it instead of downloading a real dictionary.
+ */
+export function dictionaryDir(): string {
+  const dir = process.env.MINDSTREAM_DICTIONARY_DIR;
+  if (!dir) {
+    throw new Error(
+      'MINDSTREAM_DICTIONARY_DIR is unset — wdio.conf.ts beforeSession allocates it'
+    );
+  }
+  return dir;
+}
+
+/**
  * Restart the app against the **same** on-disk profile — the restart that
  * "persists across relaunch" assertions hang on. tauri-driver tears down and
  * recreates the WebView session; the Rust side rehydrates from the same dir.
@@ -349,6 +369,58 @@ export interface LoginInput {
   serverUrl: string;
   username: string;
   password: string;
+}
+
+/**
+ * Switch one plugin on or off from the Plugins overview.
+ *
+ * Every card's toggle carries the same accessible name ("Enable plugin"), so
+ * clicking by name hits whichever card happens to be first — which changed the
+ * moment the app bundled a second plugin. The row is found by the plugin it
+ * belongs to instead.
+ */
+export async function setPluginEnabledByName(
+  name: string,
+  enabled: boolean
+): Promise<void> {
+  await browser.execute(
+    (pluginName: string, want: boolean) => {
+      const toggles = Array.from(
+        document.querySelectorAll<HTMLButtonElement>('button[role="switch"]')
+      );
+      // Walk up only while the ancestor still holds exactly ONE switch: that
+      // is this plugin's row. One level further is the list, whose text
+      // contains every plugin's name and would match any of them.
+      const found = toggles.find((toggle) => {
+        let row: HTMLElement | null = toggle.parentElement;
+        while (
+          row &&
+          row.querySelectorAll('button[role="switch"]').length === 1
+        ) {
+          if (row.textContent?.includes(pluginName)) return true;
+          row = row.parentElement;
+        }
+        return false;
+      });
+      if (!found) throw new Error(`no plugin row for ${pluginName}`);
+      if (found.getAttribute('aria-checked') === String(want)) return;
+      found.click();
+    },
+    name,
+    enabled
+  );
+}
+
+/**
+ * Close the Settings dialog.
+ *
+ * Scoped to the dialog on purpose: the custom window decorations put a button
+ * labelled "Close" in the title bar, so `clickName('Close')` can resolve the
+ * one that quits the app — which surfaces later as "target window already
+ * closed" in whatever runs next, not as a failure here.
+ */
+export async function closeSettings(): Promise<void> {
+  await closeSettingsDialog(browser);
 }
 
 async function closeSettingsDialog(client: WebdriverIO.Browser): Promise<void> {

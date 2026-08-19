@@ -18,6 +18,7 @@
   import { setTrashRetention, sweepTrashRetention } from '$lib/api/data';
   import { setSyncSchedule } from '$lib/api/sync';
   import LazyRootSingletons from '$lib/components/LazyRootSingletons.svelte';
+  import DiagnosticPopover from '$lib/components/note-editor/DiagnosticPopover.svelte';
   import {
     HOTKEY_COMMANDS,
     isGlobalShortcutCommand
@@ -40,6 +41,8 @@
   import { loadPlugins } from '$lib/plugins/load';
   import { installPluginSettingsBridge } from '$lib/plugins/settings-bridge';
   import { startPickerSettingPruning } from '$lib/settings/pickers.svelte';
+  import { loadCustomDictionary } from '$lib/diagnostics/custom-dictionary.svelte';
+  import { syncPluginTextCheckers } from '$lib/diagnostics/plugin-checkers.svelte';
 
   let { children } = $props();
 
@@ -57,6 +60,20 @@
     };
     window.addEventListener('contextmenu', block);
     return () => window.removeEventListener('contextmenu', block);
+  });
+
+  // Keep plugin-contributed checkers in step with the plugin registry:
+  // enabling, disabling or removing a plugin changes who has an opinion
+  // about text that is already on screen.
+  $effect(() => {
+    syncPluginTextCheckers();
+  });
+
+  // Mirror the personal dictionary into memory before the first note is
+  // checked; the spellcheck provider consults it synchronously for every
+  // token, so it cannot fetch on demand.
+  onMount(() => {
+    void loadCustomDictionary();
   });
 
   // Install the global hotkey dispatcher once. Idempotent — the manager
@@ -296,4 +313,14 @@
 
 <!-- Lazy singleton host: imports each dialog/search component only when
      its tiny queue/open-state store says it is actually needed. -->
+<!--
+  Spelling suggestions. Mounted ONCE here rather than inside NoteEditor:
+  the popover's state is a module singleton, and the desktop layout mounts a
+  NoteEditor per dockview panel. One instance per open note meant every note
+  rendered its own copy of the same menu, and each copy's dismiss handler
+  treated clicks inside the others as "outside" — closing the menu on
+  pointerdown, before the click that would have applied anything.
+-->
+<DiagnosticPopover />
+
 <LazyRootSingletons />

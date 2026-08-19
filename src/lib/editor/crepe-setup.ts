@@ -26,9 +26,12 @@ import { collab } from '@milkdown/plugin-collab';
 import { listener } from '@milkdown/kit/plugin/listener';
 import type { AssetBridge } from '$lib/assets/bridge';
 import { tUi } from '$lib/settings/i18n.svelte';
+import { $prose } from '@milkdown/kit/utils';
+import { Plugin } from '@milkdown/kit/prose/state';
 import {
   addMermaidMenuItem,
   autoPair,
+  diagnosticsPlugin,
   installBlockHandleGuard,
   installSelectionToolbarAutoHide,
   isEmptyParagraph,
@@ -40,6 +43,7 @@ import {
   userMentionPlugins,
   wikilinkPlugins,
   type MarkdownSearchBridge,
+  type ProseDiagnosticsOptions,
   type UserMentionBridge,
   type WikilinkBridge
 } from './plugins';
@@ -59,6 +63,21 @@ export interface CrepeSetupOptions {
   mobile: boolean;
   /** Bundles the KaTeX node + tooltip. Off → math syntax shows raw. */
   mathEnabled: boolean;
+  /**
+   * Whether spellchecking is currently on. A PREDICATE, not a boolean:
+   * Crepe cannot add or remove a plugin after `create()`, so the plugin is
+   * always registered and asks per check. Gating registration here meant
+   * the setting only reached notes opened afterwards.
+   */
+  diagnosticsEnabled?: () => boolean;
+  /** Lets the plugin re-check when languages or dictionaries change. */
+  subscribeDiagnosticsInvalidated?: ProseDiagnosticsOptions['subscribeInvalidate'];
+  /** Runs the check; see $lib/diagnostics/editor-diagnostics. */
+  diagnosticsCheck?: ProseDiagnosticsOptions['check'];
+  /** Opens the suggestion popover for a right-clicked diagnostic. */
+  onDiagnosticMenu?: ProseDiagnosticsOptions['onRequestMenu'];
+  /** Closes it again when the document changes underneath. */
+  onDiagnosticMenuDismiss?: ProseDiagnosticsOptions['onDismissMenu'];
   /** When false, the auto-pair plugin isn't even registered. */
   autoPairEnabled: boolean;
   /**
@@ -289,6 +308,39 @@ export function buildCrepe(opts: CrepeSetupOptions): Crepe {
     }
   }
   if (opts.autoPairEnabled) crepe.editor.use(autoPair);
+
+  // Diagnostics last: it only decorates and never handles input, so it
+  // cannot shadow the plugins above. Registered unconditionally — see
+  // `diagnosticsEnabled` above for why it is a predicate.
+  if (opts.diagnosticsCheck) {
+    crepe.editor.use(
+      $prose(() =>
+        diagnosticsPlugin({
+          check: opts.diagnosticsCheck!,
+          enabled: opts.diagnosticsEnabled,
+          subscribeInvalidate: opts.subscribeDiagnosticsInvalidated,
+          onRequestMenu: opts.onDiagnosticMenu,
+          onDismissMenu: opts.onDiagnosticMenuDismiss
+        })
+      )
+    );
+  }
+
+  // Turn the webview's own spellchecker off, unconditionally.
+  //
+  // Two checkers on one document means two sets of red squiggles that
+  // disagree, and the native one's suggestions are unreachable in PROD
+  // anyway because the root layout suppresses the context menu. This app
+  // owns spellchecking: when the setting is off there is none, rather than
+  // a silent fallback to a checker the user cannot configure or query.
+  crepe.editor.use(
+    $prose(
+      () =>
+        new Plugin({
+          props: { attributes: { spellcheck: 'false' } }
+        })
+    )
+  );
 
   return crepe;
 }

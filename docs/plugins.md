@@ -86,7 +86,11 @@ is namespaced under the plugin `id`, so two plugins can never collide.
 "split": "<i18nKey>" }`) to rename host view modes in the editor UI while the
   stored internal values remain stable.
 - **`sourceLanguages`** — source-editor language modes backed by host-owned
-  CodeMirror providers. A note kind references one with `sourceLanguage`.
+  CodeMirror providers. A note kind references one with `sourceLanguage`. A
+  language opts into spellchecking with `diagnostics` (see below).
+- **`textCheckers`** — spelling/grammar services added to the diagnostics
+  pipeline. The plugin declares the wire format; the host makes the request
+  (see below). Requires `textCheckers.contribute`.
 - **`noteExporters`** — export actions shown in a note's context menu. An
   exporter targets a built-in note kind such as `markdown` or a plugin-owned
   stored kind such as `plugin.<pluginId>.<kind>`, runs a backend script export,
@@ -339,6 +343,205 @@ Plugin-owned note kinds can opt into syntax highlighting by setting
 The provider is always host-owned. A plugin may select from providers shipped by
 the app, but it cannot inject arbitrary editor JavaScript into the WebView.
 Unknown source languages remain editable as plain text.
+
+### Spelling and grammar checking
+
+A source language is spellchecked only if it says so, with exactly one of
+`diagnostics.syntax` or `diagnostics.grammar`. Omit the block and the language
+is left unchecked — the app never guesses that a plugin's notes are prose.
+
+`syntax` names a language the app already has code for (`markdown`, `plain`,
+`typst`). Prefer it wherever one fits: it is a real parser rather than a span
+matcher, and only it can express things like Typst's `[...]` content blocks
+being prose again inside code.
+
+```jsonc
+"diagnostics": { "syntax": "typst" }
+```
+
+`grammar` describes a language the app has never heard of, in literal
+delimiters the host scans with. Every field is optional:
+
+```jsonc
+"diagnostics": {
+  "grammar": {
+    "lineComments": ["%"],                 // to end of line
+    "blockComments": [["\\begin{comment}", "\\end{comment}"]],
+    "verbatim":      [["\\begin{verbatim}", "\\end{verbatim}"]],
+    "math":          [["$$", "$$"], ["$", "$"], ["\\[", "\\]"]],
+    "escape": "\\",        // one char; makes the next character literal
+    "indentation": true,   // ignore leading whitespace — see below
+    "addresses": true,     // skip URLs and emails (default true)
+    "ignorePatterns": ["(\\\\[a-zA-Z]+)\\{", "\\\\(?:ref|cite)\\{[^}]*\\}"]
+  }
+}
+```
+
+Delimiters are **literal text**: at most 24 entries per list, 32 characters
+each, so the per-character cost stays flat. Spans do not nest, the longest
+matching opener at a position wins, and an unterminated span runs to the end of
+the text rather than guessing a closer — half-typed markup is normal while
+writing. Openers are matched before the `escape` character, so a language whose
+delimiters begin with its escape character (LaTeX) still works.
+
+`ignorePatterns` covers what delimiters cannot. `\textbf{bold text}` must lose
+the command and **keep** the argument, which no pair of delimiters expresses —
+it either swallows the prose or feeds `textbf` to the dictionary.
+
+- **Capture groups scope the ignore.** No group → the whole match is skipped.
+  Groups → only the groups are, so `(\\[a-zA-Z]+)\{` drops the command and
+  still checks its argument.
+- Flags are the host's (`gd`, plus `u` when the pattern accepts it — `\p{L}`
+  works, and patterns Unicode mode rejects still compile). A plugin cannot set
+  them, because turning off `d` would break capture-group scoping.
+- Backreferences are rejected: they force backtracking however simple the rest
+  of the pattern looks. At most 16 patterns, 200 characters each.
+
+**Patterns run in a Worker with a hard timeout, and the Worker is terminated if
+it overruns.** This is the same bargain scripted plugins get from
+`limits.timeoutMs` — a plugin fault costs the plugin, not the app. It is not
+optional hardening: no static check reliably separates a regex that backtracks
+catastrophically from one that does not (star-height tests miss `(a|ab)*`), and
+a single match cannot be interrupted once started, so termination is the only
+thing that actually stops one. The realistic danger is not a hostile plugin but
+an ordinary pattern that is instant on the author's test file and exponential on
+someone's long unbroken line.
+
+When a grammar overruns, it is faulted **for the rest of the session** — asked
+again next keystroke it would freeze again — and the language falls back to its
+delimiters, with the reason shown against the plugin in Settings. Where no
+Worker exists (SSR, tests) patterns simply do not run; there is no inline
+fallback, since that would quietly discard the guarantee.
+
+Set `indentation` only where leading whitespace _means_ something, as in
+Markdown lists or Typst blocks. A grammar checker reporting "more than one
+space in a row" on an indented line is commenting on the document's structure,
+not the author's typing. Where indentation carries no meaning, leave it off so a
+genuine doubled space is still caught. Note this is filtered by POSITION rather
+than by the checker's message, which arrives already localized and so cannot be
+matched against.
+
+## Text checkers (`contributes.textCheckers`, `textCheckers.contribute`)
+
+A plugin can add a spelling/grammar/style service to the diagnostics pipeline.
+The plugin describes the service; **the host makes every request**. That split is
+the point: a checker sees the full text of every note the user types in, so a
+plugin declares a wire format but never receives the text and never chooses
+where it goes.
+
+The host also has to make the request for it to work at all. A self-hosted
+server sends no CORS headers, so a WebView `fetch` to the usual setup is refused
+before it leaves; Chromium gates page-to-LAN requests through Private Network
+Access; and where the app is served from a custom scheme treated as secure, a
+plain-`http://` server is blocked as mixed content. `reqwest` in the backend is
+subject to none of the three.
+
+```jsonc
+"textCheckers": [{
+  "id": "grammar",
+  "kinds": ["grammar", "style", "spelling"],
+  "labelKey": "checker.label",
+
+  // Settings the user fills in. The endpoint is a setting, not a manifest
+  // value, because it is the user's choice — their own server, or a public one
+  // with very different privacy implications.
+  "endpointSetting": "endpoint",
+  "apiKeySetting": "api-key",
+  "usernameSetting": "username",
+
+  // Declaring `spelling` in `kinds` says the checker CAN do spelling; this
+  // setting says whether it does, so a user can keep the built-in dictionary
+  // without disabling the plugin. Omit it and the checker always does.
+  "spellingSetting": "spelling",
+  // Categories to switch off server-side when it is not doing spelling —
+  // the service's vocabulary, which only the plugin knows.
+  "spellingCategories": ["TYPOS"],
+  "disabledCategories": [],
+
+  // The service's rule categories mapped to diagnostic kinds. Anything
+  // unlisted falls back to `defaultKind`.
+  "defaultKind": "grammar",
+  "categoryKinds": { "TYPOS": "spelling", "STYLE": "style" },
+
+  "protocol": { /* see below */ }
+}]
+```
+
+### The protocol
+
+`protocol` is how a service is described rather than named. It replaced a
+host-owned list of supported protocols that had exactly one entry, which meant
+a second service required an app change and a third-party plugin could not add
+one at all.
+
+```jsonc
+"protocol": {
+  // Stripped from the user's endpoint before paths are appended. People paste
+  // whatever their server's docs show — often the API root including its
+  // version segment — which would otherwise build `/v2/v2/check` and 404 as an
+  // unreachable server rather than a URL one segment too long.
+  "trimEndpointSuffix": "/v2",
+
+  "check": {
+    "path": "/v2/check",
+    "encoding": "form",              // "form" or "json"
+    // Where the host's values go. A field left out is simply not sent, which
+    // is how a service with no concept of an API key omits one.
+    "fields": {
+      "text": "text",                // REQUIRED
+      "language": "language",
+      "apiKey": "apiKey",
+      "username": "username",
+      "preferredVariants": "preferredVariants",
+      "disabledCategories": "disabledCategories"
+    },
+    "staticFields": { "level": "picky" }   // sent verbatim every time
+  },
+
+  // Where the findings are, as JSON Pointers (RFC 6901). `list` is
+  // document-relative; the rest are relative to each match.
+  "matches": {
+    "list": "/matches",
+    "offset": "/offset",
+    "length": "/length",             // exactly one of length or end
+    "message": "/message",
+    "replacements": "/replacements",
+    "replacementValue": "/value",    // omit if they are plain strings
+    "category": "/rule/category/id"
+  },
+
+  // Optional. Declaring it switches on the host's re-ask behaviour: when
+  // detection is not confident, or lands outside the languages the user
+  // writes, the request is repeated naming a language outright. Checking
+  // German prose against a French dictionary produces far more nonsense than
+  // the wrong regional variant.
+  "detection": {
+    "code": "/language/detectedLanguage/code",
+    "confidence": "/language/detectedLanguage/confidence"
+  },
+
+  // Optional. A cheap endpoint listing the languages the server offers, used
+  // by the Check button. Kept apart from the check path so that answering
+  // "is my container up?" transmits nothing. Without it, the button falls back
+  // to a fixed probe string — never note content.
+  "probe": {
+    "path": "/v2/languages",
+    "list": "",                      // "" is the document root
+    "languageCode": ["/longCode", "/code"]   // tried in order
+  }
+}
+```
+
+Pointers rather than a query language: they are a standard, they cannot loop or
+backtrack, and they resolve natively in the backend. A match whose offset,
+extent or message cannot be resolved is **dropped** rather than defaulted — a
+finding at a guessed position underlines the wrong words, which is worse than
+one that never appears.
+
+The bundled `languagetool` plugin is a complete worked example, and is nothing
+but a manifest: the app contains no code specific to it. A service whose
+response cannot be described with pointers — XML, or two round trips — is
+outside what a declarative protocol can express today.
 
 ## Preview services (`contributes.nativeServices`, `nativeServices.run`)
 

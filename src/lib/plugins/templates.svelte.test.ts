@@ -6,11 +6,19 @@ const { createNoteIn, requestOpenNote, settingValues } = vi.hoisted(() => ({
   requestOpenNote: vi.fn(),
   settingValues: new Map<string, unknown>()
 }));
-vi.mock('$lib/stores/tree.svelte', () => ({ createNoteIn }));
+vi.mock('$lib/stores/tree.svelte', () => ({
+  createNoteIn,
+  // A scripted render builds the plugin context, which reads the folder list.
+  tree: { collectionsById: {} }
+}));
 vi.mock('$lib/stores/open-note-intent.svelte', () => ({ requestOpenNote }));
 vi.mock('$lib/settings/store.svelte', () => ({
   getSettingValue: (id: string) => settingValues.get(id)
 }));
+const { pluginsRunScript } = vi.hoisted(() => ({
+  pluginsRunScript: vi.fn()
+}));
+vi.mock('$lib/api/plugins', () => ({ pluginsRunScript }));
 
 import { registerPlugin, resetPluginRegistry } from './registry.svelte';
 import {
@@ -56,6 +64,7 @@ function registerMeeting(
 beforeEach(() => {
   createNoteIn.mockReset().mockResolvedValue('note-1');
   requestOpenNote.mockReset();
+  pluginsRunScript.mockReset();
   settingValues.clear();
 });
 afterEach(() => resetPluginRegistry());
@@ -288,5 +297,100 @@ describe('todayIsoDate', () => {
     // the previous UTC-based implementation, {{date}} reflects the user's own
     // calendar day (correct for daily notes near midnight).
     expect(todayIsoDate(new Date(2026, 0, 5, 23, 0, 0))).toBe('2026-01-05');
+  });
+});
+
+/**
+ * A `render` macro is the dynamic alternative to `titleTemplate`/`bodyTemplate`:
+ * the plugin's backend script produces the text, but the APP still creates the
+ * note — the script never touches the tree.
+ */
+describe('createNoteFromPluginTemplate — scripted render', () => {
+  const PLUGIN = 'com.example.scripted';
+
+  function registerScripted(): void {
+    registerPlugin({
+      id: PLUGIN,
+      name: 'Scripted',
+      version: '1.0.0',
+      runtime: 'luau',
+      entry: 'main.luau',
+      permissions: ['templates.contribute', 'notes.create'],
+      contributes: {
+        i18n: { en: { 'templates.standup.name': 'Standup' } },
+        noteTemplates: [
+          {
+            id: 'standup',
+            labelKey: 'templates.standup.name',
+            noteKind: 'markdown',
+            titleTemplate: 'unused',
+            bodyTemplate: 'unused',
+            render: 'renderStandup'
+          }
+        ]
+      }
+    });
+  }
+
+  it('creates the note from what the script returned', async () => {
+    registerScripted();
+    pluginsRunScript.mockResolvedValue({
+      title: '  Standup 25.07.  ',
+      body: '# Standup'
+    });
+
+    await createNoteFromPluginTemplate(PLUGIN, 'standup', null);
+
+    expect(pluginsRunScript).toHaveBeenCalledWith(
+      PLUGIN,
+      'renderStandup',
+      expect.objectContaining({ variables: expect.any(Object) })
+    );
+    expect(createNoteIn).toHaveBeenCalledWith(
+      null,
+      'Standup 25.07.',
+      'markdown',
+      '# Standup'
+    );
+  });
+
+  it('passes a typed title to the script and still forces it on the note', async () => {
+    registerScripted();
+    pluginsRunScript.mockResolvedValue({ title: 'ignored', body: 'b' });
+
+    await createNoteFromPluginTemplate(PLUGIN, 'standup', null, {}, 'My title');
+
+    expect(pluginsRunScript).toHaveBeenCalledWith(
+      PLUGIN,
+      'renderStandup',
+      expect.objectContaining({
+        variables: expect.objectContaining({ title: 'My title' })
+      })
+    );
+    expect(createNoteIn).toHaveBeenCalledWith(
+      null,
+      'My title',
+      'markdown',
+      'b'
+    );
+  });
+
+  it('falls back to the template label when the script returns no title', async () => {
+    // A titleless note is worse than a generically titled one.
+    registerScripted();
+    pluginsRunScript.mockResolvedValue({ body: 'b' });
+
+    await createNoteFromPluginTemplate(PLUGIN, 'standup', null);
+
+    expect(createNoteIn).toHaveBeenCalledWith(null, 'Standup', 'markdown', 'b');
+  });
+
+  it('treats a script that returns nothing as an empty note body', async () => {
+    registerScripted();
+    pluginsRunScript.mockResolvedValue(null);
+
+    await createNoteFromPluginTemplate(PLUGIN, 'standup', null);
+
+    expect(createNoteIn).toHaveBeenCalledWith(null, 'Standup', 'markdown', '');
   });
 });

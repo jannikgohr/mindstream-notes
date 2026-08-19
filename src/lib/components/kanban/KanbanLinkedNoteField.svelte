@@ -139,6 +139,7 @@
       bind:this={inputEl}
       type="text"
       value={open ? query : (selected?.label ?? '')}
+      spellcheck="false"
       {placeholder}
       {disabled}
       onfocus={() => {

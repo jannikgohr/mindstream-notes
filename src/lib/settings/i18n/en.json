@@ -726,6 +726,7 @@
     "plugins.permission.pluginWebviews.allowEval": "Allow string evaluation in plugin previews",
     "plugins.permission.nativeTools.runDeclared": "Run declared PATH binaries",
     "plugins.permission.nativeServices.run": "Run a declared local preview server",
+    "plugins.permission.textCheckers.contribute": "Add text checkers for spelling and grammar",
     "plugins.nativeTools.title": "Native tools",
     "plugins.nativeTools.check": "Check",
     "plugins.nativeTools.available": "Found on PATH",
@@ -778,7 +779,36 @@
     "editor.kanban.searchPriority": "Priority",
     "editor.kanban.searchLabels": "Labels",
     "editor.kanban.searchAssignees": "Assignees",
-    "editor.kanban.searchLinkedOnly": "Linked note"
+    "editor.kanban.searchLinkedOnly": "Linked note",
+    "editor.spellcheck.unknownWord": "Unknown word",
+    "editor.spellcheck.menu.label": "Spelling suggestions",
+    "editor.spellcheck.menu.noSuggestions": "No suggestions",
+    "editor.spellcheck.menu.loading": "Looking for suggestions…",
+    "editor.spellcheck.dictionaries.install": "Install",
+    "editor.spellcheck.dictionaries.remove": "Remove",
+    "editor.spellcheck.dictionaries.installing": "Installing…",
+    "editor.spellcheck.dictionaries.installed": "Installed",
+    "editor.spellcheck.dictionaries.notInstalled": "Not installed",
+    "editor.spellcheck.dictionaries.enabledNotInstalled": "Selected but not installed",
+    "editor.spellcheck.dictionaries.licenseUnstated": "Licence not stated — see source",
+    "editor.spellcheck.dictionaries.source": "Source",
+    "editor.spellcheck.dictionaries.failed": "Download failed",
+    "editor.spellcheck.menu.showAll": "Show all",
+    "editor.spellcheck.menu.addToDictionary": "Add to dictionary",
+    "editor.spellcheck.customWords.empty": "No words added yet. Right-click a flagged word and choose \"Add to dictionary\".",
+    "editor.spellcheck.customWords.remove": "Remove",
+    "plugins.textCheckers.title": "Text checkers",
+    "plugins.textCheckers.check": "Check",
+    "plugins.textCheckers.reachable": "Server reachable",
+    "plugins.textCheckers.unreachable": "Server unreachable",
+    "plugins.textCheckers.noEndpoint": "No server URL configured",
+    "plugins.textCheckers.state.idle": "Not used yet",
+    "plugins.textCheckers.state.unconfigured": "Inactive — no server URL",
+    "plugins.textCheckers.state.active": "Active",
+    "plugins.textCheckers.state.failed": "Failing",
+    "plugins.textCheckers.ownsSpelling": "Also checking spelling",
+    "editor.spellcheck.ownedByPlugin": "Spelling is currently checked by {plugin}. These dictionaries are still used whenever it cannot be reached.",
+    "plugins.textCheckers.missingLanguages": "Not offered by this server:"
   },
   "categories": {
     "account": {
@@ -876,6 +906,9 @@
     "editor.noteTypes": {
       "label": "Note types",
       "description": "Choose which kinds of notes appear in the create menus. Turn off the ones you do not use to keep things tidy."
+    },
+    "editor.spellcheck": {
+      "label": "Spelling"
     }
   },
   "settings": {
@@ -1085,6 +1118,22 @@
     },
     "editor.noteTypes.kanban": {
       "label": "Kanban boards"
+    },
+    "editor.spellcheck.enabled": {
+      "label": "Check spelling",
+      "description": "Underline misspelled words as you type. Uses the app's own dictionaries, so it behaves the same on every platform."
+    },
+    "editor.spellcheck.languages": {
+      "label": "Languages",
+      "description": "A word is accepted if any selected language knows it, so multilingual notes stay clean. A language only takes effect once its dictionary is installed below."
+    },
+    "editor.spellcheck.dictionaries": {
+      "label": "Dictionaries",
+      "description": "Downloaded on request rather than bundled, because dictionary licences differ. Each shows its licence before you install it."
+    },
+    "editor.spellcheck.customWords": {
+      "label": "Personal dictionary",
+      "description": "Words you have accepted. They apply in every language and are stored with this vault, not with the machine."
     }
   },
   "values": {
@@ -1133,6 +1182,21 @@
     "data.historyRetentionDays.365": "1 year",
     "data.historyRetentionDays.forever": "Forever",
     "language.code.en": "English",
-    "language.code.de": "Deutsch"
+    "language.code.de": "Deutsch",
+    "editor.spellcheck.languages.en_US": "English (US)",
+    "editor.spellcheck.languages.en_GB": "English (UK)",
+    "editor.spellcheck.languages.de_DE_frami": "German (Germany)",
+    "editor.spellcheck.languages.de_AT_frami": "German (Austria)",
+    "editor.spellcheck.languages.de_CH_frami": "German (Switzerland)",
+    "editor.spellcheck.languages.fr": "French",
+    "editor.spellcheck.languages.es_ES": "Spanish",
+    "editor.spellcheck.languages.it_IT": "Italian",
+    "editor.spellcheck.languages.nl_NL": "Dutch",
+    "editor.spellcheck.languages.pt_PT": "Portuguese (Portugal)",
+    "editor.spellcheck.languages.pt_BR": "Portuguese (Brazil)",
+    "editor.spellcheck.languages.pl_PL": "Polish",
+    "editor.spellcheck.languages.sv_SE": "Swedish",
+    "editor.spellcheck.languages.cs_CZ": "Czech",
+    "editor.spellcheck.languages.ru_RU": "Russian"
   }
 }

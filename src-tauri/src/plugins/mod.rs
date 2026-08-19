@@ -829,18 +829,26 @@ fn plugin_artifact_root(app: &AppHandle, plugin_id: &str) -> AppResult<PathBuf> 
         .join(plugin_id))
 }
 
+/// Where an artifact's file sits under one plugin's artifact root.
+///
+/// Every segment comes from the manifest, which is untrusted, so each one is
+/// checked before it becomes a path component.
+fn artifact_path_in(root: &Path, artifact: &PluginArtifactManifest) -> AppResult<PathBuf> {
+    safe_segment(&artifact.id, "artifact id")?;
+    safe_segment(&artifact.version, "artifact version")?;
+    safe_segment(&artifact.file_name, "artifact file name")?;
+    Ok(root
+        .join(&artifact.id)
+        .join(&artifact.version)
+        .join(&artifact.file_name))
+}
+
 fn artifact_file_path(
     app: &AppHandle,
     plugin_id: &str,
     artifact: &PluginArtifactManifest,
 ) -> AppResult<PathBuf> {
-    safe_segment(&artifact.id, "artifact id")?;
-    safe_segment(&artifact.version, "artifact version")?;
-    safe_segment(&artifact.file_name, "artifact file name")?;
-    Ok(plugin_artifact_root(app, plugin_id)?
-        .join(&artifact.id)
-        .join(&artifact.version)
-        .join(&artifact.file_name))
+    artifact_path_in(&plugin_artifact_root(app, plugin_id)?, artifact)
 }
 
 fn artifact_status(
@@ -888,6 +896,26 @@ async fn download_artifact(
         .await
         .map_err(|e| AppError::InvalidArg(format!("artifact download body: {e}")))?;
 
+    install_artifact_bytes(&plugin_artifact_root(&app, &plugin_id)?, &artifact, &bytes)?;
+    artifact_status(&app, &plugin_id, &artifact)
+}
+
+/// Check a downloaded body against what the manifest declared, then publish it.
+///
+/// Split from the request so this half has tests: above it is network, below it
+/// is bytes and files. The digest is what makes a download safe to execute —
+/// it catches a truncated transfer, a host that started serving an HTML error
+/// page, and a swapped file — so "the bytes were rejected" and "nothing was
+/// written" have to hold together, which only a test that looks at the
+/// directory afterwards can show.
+///
+/// Writes through a staging file so a failed or interrupted write can never
+/// leave a half-file where the loader expects a complete one.
+fn install_artifact_bytes(
+    root: &Path,
+    artifact: &PluginArtifactManifest,
+    bytes: &[u8],
+) -> AppResult<PathBuf> {
     let len = u64::try_from(bytes.len())
         .map_err(|_| AppError::InvalidArg("artifact is too large".into()))?;
     if len > MAX_ARTIFACT_BYTES {
@@ -902,7 +930,7 @@ async fn download_artifact(
             )));
         }
     }
-    let actual_hash = sha256_hex(&bytes);
+    let actual_hash = sha256_hex(bytes);
     if actual_hash != artifact.sha256 {
         return Err(AppError::InvalidArg(format!(
             "artifact digest mismatch: expected {}, got {actual_hash}",
@@ -910,11 +938,11 @@ async fn download_artifact(
         )));
     }
 
-    let final_path = artifact_file_path(&app, &plugin_id, &artifact)?;
+    let final_path = artifact_path_in(root, artifact)?;
     let version_dir = final_path
         .parent()
         .ok_or_else(|| AppError::InvalidArg("artifact path has no parent".into()))?;
-    let staging_dir = plugin_artifact_root(&app, &plugin_id)?.join(".staging");
+    let staging_dir = root.join(".staging");
     fs::create_dir_all(&staging_dir)?;
     fs::create_dir_all(version_dir)?;
     let staging_path = staging_dir.join(format!(
@@ -923,12 +951,12 @@ async fn download_artifact(
         artifact.version,
         uuid::Uuid::new_v4()
     ));
-    fs::write(&staging_path, &bytes)?;
+    fs::write(&staging_path, bytes)?;
     if final_path.exists() {
         fs::remove_file(&final_path)?;
     }
     fs::rename(&staging_path, &final_path)?;
-    artifact_status(&app, &plugin_id, &artifact)
+    Ok(final_path)
 }
 
 fn plugin_data_root(app: &AppHandle, plugin_id: &str) -> AppResult<PathBuf> {
