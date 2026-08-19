@@ -510,6 +510,10 @@ decorations drawn over a live document.
 - **Note:** the same flow with a truncated or HTML-error-page download must
   leave nothing installed — that is the case the load-to-validate design
   exists for.
+- **T3 today:** `spellcheck.e2e.ts` seeds a fixture Hunspell pair into the
+  run's disposable dictionary directory and asserts the panel reports it
+  installed and the editor flags the unknown word (and only that word). The
+  download half stays open — it needs a stub host for the catalogue URLs.
 
 ### 5.2 Correct a word from the popover (P1)
 
@@ -524,6 +528,9 @@ decorations drawn over a live document.
 - **Proves:** `spellcheck_suggest` is only called when the popover opens (not
   on every check), and that applying a replacement is one undoable edit rather
   than a delete plus an insert.
+- **T3 today:** `spellcheck.e2e.ts` opens the popover on the squiggle, applies
+  the first correction and asserts the document changed and the squiggle
+  cleared. The single-undo-step half is not asserted yet.
 
 ### 5.3 Personal dictionary survives a restart (P1)
 
@@ -539,6 +546,9 @@ decorations drawn over a live document.
 - **Proves:** the invalidation broadcast reaches every editor surface, and
   that the stored word round-trips through SQLite in the casing the user
   typed while still matching other casings.
+- **T3 today:** `spellcheck.e2e.ts` accepts a word from the popover, restarts,
+  and asserts it is still accepted; then removes it in settings and asserts the
+  squiggle returns without another restart.
 
 ### 5.4 A plugin checker takes spelling over (P2)
 
@@ -562,6 +572,14 @@ decorations drawn over a live document.
   connection** and note text only on a real check. That the app never sends
   note content to an unverified server is a privacy property worth pinning
   down in a test rather than in a comment.
+- **T3 today:** `text-checker.e2e.ts` runs a LanguageTool-shaped stub in the
+  test process, points the plugin at it, and asserts the connection check goes
+  to the probe path carrying no body, that the returned finding lands on the
+  right word, that its replacement applies, and that switching the plugin off
+  stops both the requests and the squiggles. Two halves are still open: the
+  spelling handover (the plugin's spelling setting taking spelling from the
+  dictionary), and the fixed-probe-string assertion for a credentialed server —
+  the Rust tests cover the latter at the wire level.
 
 ### 5.5 Removing a dictionary takes effect immediately (P2)
 
@@ -573,6 +591,9 @@ decorations drawn over a live document.
   it from settings → assert previously-correct words are now flagged (or, with
   no language selected, that nothing is flagged) without restarting → restart →
   assert the files are gone from disk and the catalogue offers it again.
+- **T3 today:** `spellcheck.e2e.ts` asserts the panel flips back to offering
+  the download, says the selected language is not installed, and still says so
+  after a restart — i.e. the files really left the disk.
 
 ### 5.6 Syntax-aware checking in a source editor (P2)
 
@@ -588,6 +609,10 @@ decorations drawn over a live document.
 - **Proves:** segment offsets rebased by the bus land on the right characters
   in both editors, and that syntax the scanner masks never reaches the
   dictionary (the false-positive flood the scanners exist to stop).
+- **T3 today:** `spellcheck.e2e.ts` does this on the markdown source surface —
+  a misspelling inside a code span is masked, one in prose is flagged, and the
+  same popover opens over CodeMirror. The Typst variant (and the Split-view
+  both-panes assertion) is still open.
 
 ---
 
@@ -613,10 +638,13 @@ decorations drawn over a live document.
   received — the privacy properties (fixed probe string, note text only on a
   real check) are only observable from the server's side.
 - **Dictionaries (§5.1, §5.5):** a `.aff`/`.dic` pair is a few megabytes and
-  the catalogue points at an upstream repository, so pre-seed the dictionary
-  directory (it lives under the app-data ROOT, not the profile dir) or serve
-  the pair from a local stub. Do not let CI download from upstream on every
-  run.
+  the catalogue points at an upstream repository, so a run seeds a small
+  fixture pair instead of downloading one. Dictionaries live under the app-data
+  ROOT rather than the profile dir, so `MINDSTREAM_PROFILE_DIR` does not
+  isolate them — `MINDSTREAM_DICTIONARY_DIR` (same dev/`e2e-data-dir` gate,
+  see `spellcheck::DICTIONARY_DIR_ENV`) does. `wdio.conf.ts` allocates one per
+  session and exports it to the spec as well, which is what
+  `helpers/harness.ts::dictionaryDir` returns.
 - **Restart flows (§3):** the test harness must be able to quit and relaunch
   the same data directory. Set the `MINDSTREAM_PROFILE_DIR` env var to a temp
   directory per test so runs are isolated and a restart picks up the same
