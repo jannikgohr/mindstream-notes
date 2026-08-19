@@ -293,4 +293,47 @@ mod tests {
         assert!(find("../../etc/passwd").is_none());
         assert!(find("kl_KL").is_none());
     }
+
+    fn tempdir(name: &str) -> std::path::PathBuf {
+        let mut dir = std::env::temp_dir();
+        dir.push(format!(
+            "mindstream-catalogue-{}-{name}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn removes_both_halves_of_a_pair() {
+        let dir = tempdir("remove");
+        std::fs::write(dir.join("de_DE_frami.aff"), b"SET UTF-8\n").unwrap();
+        std::fs::write(dir.join("de_DE_frami.dic"), b"1\nhaus\n").unwrap();
+
+        remove(&dir, "de_DE_frami").unwrap();
+
+        assert!(!dir.join("de_DE_frami.aff").exists());
+        assert!(!dir.join("de_DE_frami.dic").exists());
+    }
+
+    #[test]
+    fn removing_what_is_not_installed_succeeds() {
+        // Removal has to be idempotent: a half-installed pair is exactly the
+        // state a user reaches for "remove" in.
+        let dir = tempdir("remove-absent");
+        std::fs::write(dir.join("de_DE_frami.aff"), b"SET UTF-8\n").unwrap();
+
+        remove(&dir, "de_DE_frami").unwrap();
+        remove(&dir, "de_DE_frami").unwrap();
+
+        assert!(!dir.join("de_DE_frami.aff").exists());
+    }
+
+    #[test]
+    fn installing_an_unknown_id_fails_before_any_network_call() {
+        let dir = tempdir("install-unknown");
+        let err = tauri::async_runtime::block_on(install(&dir, "kl_KL")).unwrap_err();
+        assert!(format!("{err}").contains("kl_KL"), "{err}");
+    }
 }

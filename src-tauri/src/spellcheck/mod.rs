@@ -286,19 +286,95 @@ mod tests {
         assert!(found[0].bytes > 0);
     }
 
+    /// A minimal but real dictionary pair, written into `dir` under `id`.
+    fn write_pair(dir: &Path, id: &str, word: &str) {
+        std::fs::write(dir.join(format!("{id}.aff")), "SET UTF-8\nTRY esiao\n").unwrap();
+        std::fs::write(dir.join(format!("{id}.dic")), format!("1\n{word}\n")).unwrap();
+    }
+
     #[test]
-    fn evicts_the_least_recently_used_dictionary() {
+    fn loads_a_dictionary_on_first_use_and_keeps_it_resident() {
+        let dir = tempdir("resident");
+        write_pair(&dir, "de_DE", "haus");
+
+        let mut resident = Resident::default();
+        assert!(resident.get_or_load(&dir, "de_DE").unwrap().check("haus"));
+        assert_eq!(resident.order, ["de_DE"]);
+
+        // Second use is served from memory: loading reads megabytes off disk.
+        std::fs::remove_file(dir.join("de_DE.dic")).unwrap();
+        assert!(resident.get_or_load(&dir, "de_DE").unwrap().check("haus"));
+    }
+
+    #[test]
+    fn reports_a_dictionary_that_is_not_installed() {
+        let dir = tempdir("missing");
+        let mut resident = Resident::default();
+        assert!(resident.get_or_load(&dir, "de_DE").is_err());
+        assert!(resident.order.is_empty());
+    }
+
+    #[test]
+    fn drops_the_evicted_dictionary_from_memory_as_well_as_from_the_order() {
+        // The order alone is the eviction policy; the map is what holds the
+        // tens of megabytes, so leaving an entry there would leak one.
+        let dir = tempdir("evict");
+        let mut resident = Resident::default();
+        for i in 0..=MAX_RESIDENT {
+            let id = format!("lang{i}");
+            write_pair(&dir, &id, "haus");
+            resident.get_or_load(&dir, &id).unwrap();
+        }
+
+        assert_eq!(resident.order.len(), MAX_RESIDENT);
+        assert_eq!(resident.dictionaries.len(), MAX_RESIDENT);
+        // lang0 was least recently used, so it is the one that went.
+        assert!(!resident.dictionaries.contains_key("lang0"));
+        assert!(resident.dictionaries.contains_key("lang1"));
+    }
+
+    #[test]
+    fn keeps_a_recently_used_dictionary_through_an_eviction() {
+        let dir = tempdir("evict-touch");
         let mut resident = Resident::default();
         for i in 0..MAX_RESIDENT {
-            resident.order.insert(0, format!("lang{i}"));
+            let id = format!("lang{i}");
+            write_pair(&dir, &id, "haus");
+            resident.get_or_load(&dir, &id).unwrap();
         }
-        assert_eq!(resident.order.len(), MAX_RESIDENT);
 
-        // Touching the oldest makes it most recent, so the next insert must
-        // evict what is now last instead.
-        let oldest = resident.order.last().unwrap().clone();
-        resident.touch(&oldest);
-        assert_eq!(resident.order.first().unwrap(), &oldest);
+        // Re-using the oldest makes it most recent, so the next load evicts
+        // what is now last instead.
+        resident.get_or_load(&dir, "lang0").unwrap();
+        write_pair(&dir, "extra", "haus");
+        resident.get_or_load(&dir, "extra").unwrap();
+
+        assert!(resident.dictionaries.contains_key("lang0"));
+        assert!(!resident.dictionaries.contains_key("lang1"));
+    }
+
+    #[test]
+    fn counts_both_halves_of_a_pair_towards_its_size() {
+        let dir = tempdir("bytes");
+        write_pair(&dir, "de_DE", "haus");
+        let expected = std::fs::metadata(dir.join("de_DE.aff")).unwrap().len()
+            + std::fs::metadata(dir.join("de_DE.dic")).unwrap().len();
+
+        let found = installed_dictionaries(&dir).unwrap();
+        assert_eq!(found[0].bytes, expected);
+    }
+
+    #[test]
+    fn sorts_installed_dictionaries_by_id() {
+        let dir = tempdir("sorted");
+        for id in ["fr_FR", "de_DE", "en_US"] {
+            write_pair(&dir, id, "haus");
+        }
+        let found = installed_dictionaries(&dir).unwrap();
+        assert_eq!(
+            found.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(),
+            ["de_DE", "en_US", "fr_FR"]
+        );
     }
 }
 

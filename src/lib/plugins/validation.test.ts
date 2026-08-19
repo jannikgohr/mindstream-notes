@@ -1581,6 +1581,30 @@ describe('validateManifest — source language failures', () => {
       manifest.contributes.sourceLanguages?.[0].diagnostics?.grammar?.escape
     ).toBe('\\');
   });
+  it('rejects a delimiter list that is not an array', () => {
+    expect(() =>
+      validateManifest(
+        base({
+          id: 'tex',
+          provider: { type: 'host', id: 'typst' },
+          diagnostics: { grammar: { lineComments: '%' } }
+        })
+      )
+    ).toThrow(/grammar\.lineComments must be an array/);
+  });
+  it('rejects a grammar that is not an object', () => {
+    for (const grammar of [[], 'tex', null]) {
+      expect(() =>
+        validateManifest(
+          base({
+            id: 'tex',
+            provider: { type: 'host', id: 'typst' },
+            diagnostics: { grammar }
+          })
+        )
+      ).toThrow(/grammar must be an object/);
+    }
+  });
   it('rejects a delimiter pair that is not a pair', () => {
     expect(() =>
       validateManifest(
@@ -1967,5 +1991,981 @@ describe('validateManifest — note kind field + exporter failures', () => {
     expect(() =>
       validateManifest(exporter({ ...goodExporter, noteKind: 'mystery' }))
     ).toThrow(/must be a built-in note kind/);
+  });
+});
+
+describe('validateManifest — text checker failures', () => {
+  /** A protocol that passes, so each case can break exactly one field. */
+  const goodProtocol = () => ({
+    trimEndpointSuffix: '/v2',
+    check: {
+      path: '/v2/check',
+      encoding: 'form',
+      fields: { text: 'text', language: 'language' }
+    },
+    matches: {
+      list: '/matches',
+      offset: '/offset',
+      length: '/length',
+      message: '/message'
+    }
+  });
+
+  const goodChecker = () => ({
+    id: 'grammar',
+    kinds: ['grammar'],
+    endpointSetting: 'endpoint',
+    protocol: goodProtocol()
+  });
+
+  /** A manifest contributing one text checker, with the permission it needs. */
+  function checkerManifest(
+    checker: unknown = goodChecker(),
+    overrides: Record<string, unknown> = {}
+  ): Record<string, unknown> {
+    const m = validManifest(overrides);
+    m.permissions = [...(m.permissions as string[]), 'textCheckers.contribute'];
+    (m.contributes as Record<string, unknown>).textCheckers = [checker];
+    return m;
+  }
+
+  /** Same, with one protocol field replaced or removed. */
+  function withProtocol(
+    mutate: (p: Record<string, unknown>) => void
+  ): Record<string, unknown> {
+    const protocol = goodProtocol();
+    mutate(protocol as unknown as Record<string, unknown>);
+    return checkerManifest({ ...goodChecker(), protocol });
+  }
+
+  it('accepts a well-formed checker', () => {
+    const result = validateManifest(checkerManifest());
+    expect(result.contributes.textCheckers).toHaveLength(1);
+  });
+
+  it('requires the textCheckers.contribute permission', () => {
+    const m = checkerManifest();
+    m.permissions = ['templates.contribute', 'notes.create'];
+    expect(() => validateManifest(m)).toThrow(/textCheckers\.contribute/);
+  });
+
+  it('rejects a non-array textCheckers block', () => {
+    const m = validManifest();
+    (m.contributes as Record<string, unknown>).textCheckers = {};
+    expect(() => validateManifest(m)).toThrow(/textCheckers must be an array/);
+  });
+
+  it('rejects duplicate checker ids', () => {
+    const m = checkerManifest();
+    (m.contributes as Record<string, unknown>).textCheckers = [
+      goodChecker(),
+      goodChecker()
+    ];
+    expect(() => validateManifest(m)).toThrow(/duplicate text checker id/);
+  });
+
+  it('rejects a malformed checker id', () => {
+    expect(() =>
+      validateManifest(checkerManifest({ ...goodChecker(), id: 'Grammar' }))
+    ).toThrow(/textCheckers\[0\]\.id/);
+  });
+
+  it('rejects kinds that are empty, missing or unknown', () => {
+    for (const kinds of [undefined, [], ['prose'], 'grammar']) {
+      expect(() =>
+        validateManifest(checkerManifest({ ...goodChecker(), kinds }))
+      ).toThrow(/kinds must list at least one of spelling, grammar, style/);
+    }
+  });
+
+  it('requires the endpoint to name a setting slug', () => {
+    expect(() =>
+      validateManifest(
+        checkerManifest({ ...goodChecker(), endpointSetting: undefined })
+      )
+    ).toThrow(/endpointSetting/);
+  });
+
+  it('rejects malformed credential and spelling setting ids', () => {
+    for (const field of [
+      'apiKeySetting',
+      'usernameSetting',
+      'spellingSetting'
+    ]) {
+      expect(() =>
+        validateManifest(
+          checkerManifest({ ...goodChecker(), [field]: 'Not A Slug' })
+        )
+      ).toThrow(new RegExp(field));
+    }
+  });
+
+  it('accepts optional setting ids that are well-formed', () => {
+    const result = validateManifest(
+      checkerManifest({
+        ...goodChecker(),
+        apiKeySetting: 'api-key',
+        usernameSetting: 'username',
+        spellingSetting: 'spelling',
+        defaultKind: 'grammar',
+        labelKey: 'checker.label',
+        categoryKinds: { TYPOS: 'spelling' },
+        disabledCategories: ['WHITESPACE'],
+        spellingCategories: ['TYPOS']
+      })
+    );
+    expect(result.contributes.textCheckers).toHaveLength(1);
+  });
+
+  it('rejects non-array category lists', () => {
+    for (const field of ['disabledCategories', 'spellingCategories']) {
+      expect(() =>
+        validateManifest(
+          checkerManifest({ ...goodChecker(), [field]: 'TYPOS' })
+        )
+      ).toThrow(new RegExp(`${field} must be an array`));
+    }
+  });
+
+  it('rejects an empty category entry', () => {
+    expect(() =>
+      validateManifest(
+        checkerManifest({ ...goodChecker(), disabledCategories: [''] })
+      )
+    ).toThrow(/disabledCategories\[0\]/);
+  });
+
+  it('rejects a categoryKinds map that is not an object', () => {
+    expect(() =>
+      validateManifest(checkerManifest({ ...goodChecker(), categoryKinds: [] }))
+    ).toThrow(/categoryKinds must be an object/);
+  });
+
+  it('rejects a category mapped to an unknown kind', () => {
+    expect(() =>
+      validateManifest(
+        checkerManifest({
+          ...goodChecker(),
+          categoryKinds: { TYPOS: 'typo' }
+        })
+      )
+    ).toThrow(/categoryKinds\.TYPOS/);
+  });
+
+  it('rejects an unknown defaultKind', () => {
+    expect(() =>
+      validateManifest(
+        checkerManifest({ ...goodChecker(), defaultKind: 'prose' })
+      )
+    ).toThrow(/defaultKind/);
+  });
+
+  it('rejects a malformed labelKey', () => {
+    expect(() =>
+      validateManifest(
+        checkerManifest({ ...goodChecker(), labelKey: 'checker label' })
+      )
+    ).toThrow(/labelKey/);
+  });
+
+  it('rejects a protocol that is not an object', () => {
+    for (const protocol of [undefined, [], 'languagetool']) {
+      expect(() =>
+        validateManifest(checkerManifest({ ...goodChecker(), protocol }))
+      ).toThrow(/protocol must be an object/);
+    }
+  });
+
+  it('rejects an empty trimEndpointSuffix', () => {
+    expect(() =>
+      validateManifest(withProtocol((p) => (p.trimEndpointSuffix = '')))
+    ).toThrow(/trimEndpointSuffix/);
+  });
+
+  it('rejects a missing check block', () => {
+    expect(() => validateManifest(withProtocol((p) => delete p.check))).toThrow(
+      /check must be an object/
+    );
+  });
+
+  it('rejects an empty check path', () => {
+    expect(() =>
+      validateManifest(
+        withProtocol((p) => {
+          (p.check as Record<string, unknown>).path = '';
+        })
+      )
+    ).toThrow(/check\.path/);
+  });
+
+  it('rejects an encoding the host cannot send', () => {
+    expect(() =>
+      validateManifest(
+        withProtocol((p) => {
+          (p.check as Record<string, unknown>).encoding = 'xml';
+        })
+      )
+    ).toThrow(/must be form or json/);
+  });
+
+  it('accepts json encoding', () => {
+    const result = validateManifest(
+      withProtocol((p) => {
+        (p.check as Record<string, unknown>).encoding = 'json';
+      })
+    );
+    expect(result.contributes.textCheckers).toHaveLength(1);
+  });
+
+  it('rejects a missing fields map', () => {
+    expect(() =>
+      validateManifest(
+        withProtocol((p) => {
+          delete (p.check as Record<string, unknown>).fields;
+        })
+      )
+    ).toThrow(/check\.fields must be an object/);
+  });
+
+  it('requires somewhere to put the text', () => {
+    expect(() =>
+      validateManifest(
+        withProtocol((p) => {
+          (p.check as Record<string, unknown>).fields = { language: 'lang' };
+        })
+      )
+    ).toThrow(/check\.fields\.text/);
+  });
+
+  it('rejects an empty name for an optional request field', () => {
+    for (const field of [
+      'language',
+      'apiKey',
+      'username',
+      'preferredVariants',
+      'disabledCategories'
+    ]) {
+      expect(() =>
+        validateManifest(
+          withProtocol((p) => {
+            const check = p.check as Record<string, unknown>;
+            check.fields = { text: 'text', [field]: '' };
+          })
+        )
+      ).toThrow(new RegExp(`check\\.fields\\.${field}`));
+    }
+  });
+
+  it('rejects staticFields that are not a string map', () => {
+    expect(() =>
+      validateManifest(
+        withProtocol((p) => {
+          (p.check as Record<string, unknown>).staticFields = ['level=picky'];
+        })
+      )
+    ).toThrow(/staticFields must be an object/);
+
+    expect(() =>
+      validateManifest(
+        withProtocol((p) => {
+          (p.check as Record<string, unknown>).staticFields = { level: 1 };
+        })
+      )
+    ).toThrow(/staticFields\.level/);
+  });
+
+  it('accepts staticFields sent verbatim', () => {
+    const result = validateManifest(
+      withProtocol((p) => {
+        (p.check as Record<string, unknown>).staticFields = { level: 'picky' };
+      })
+    );
+    expect(result.contributes.textCheckers).toHaveLength(1);
+  });
+
+  it('rejects a missing matches block', () => {
+    expect(() =>
+      validateManifest(withProtocol((p) => delete p.matches))
+    ).toThrow(/matches must be an object/);
+  });
+
+  it('rejects a pointer that is neither empty nor rooted', () => {
+    expect(() =>
+      validateManifest(
+        withProtocol((p) => {
+          (p.matches as Record<string, unknown>).list = 'matches';
+        })
+      )
+    ).toThrow(/must be a JSON Pointer/);
+  });
+
+  it('rejects a pointer that is not a string', () => {
+    expect(() =>
+      validateManifest(
+        withProtocol((p) => {
+          (p.matches as Record<string, unknown>).offset = 0;
+        })
+      )
+    ).toThrow(/matches\.offset must be a string/);
+  });
+
+  it('requires exactly one of length or end', () => {
+    expect(() =>
+      validateManifest(
+        withProtocol((p) => {
+          delete (p.matches as Record<string, unknown>).length;
+        })
+      )
+    ).toThrow(/exactly one of length or end/);
+
+    expect(() =>
+      validateManifest(
+        withProtocol((p) => {
+          (p.matches as Record<string, unknown>).end = '/end';
+        })
+      )
+    ).toThrow(/exactly one of length or end/);
+  });
+
+  it('accepts an end offset in place of a length', () => {
+    const result = validateManifest(
+      withProtocol((p) => {
+        const matches = p.matches as Record<string, unknown>;
+        delete matches.length;
+        matches.end = '/end';
+      })
+    );
+    expect(result.contributes.textCheckers).toHaveLength(1);
+  });
+
+  it('rejects malformed optional match pointers', () => {
+    for (const field of ['replacements', 'replacementValue', 'category']) {
+      expect(() =>
+        validateManifest(
+          withProtocol((p) => {
+            (p.matches as Record<string, unknown>)[field] = 'nope';
+          })
+        )
+      ).toThrow(new RegExp(`matches\\.${field}`));
+    }
+  });
+
+  it('rejects a detection block missing its pointers', () => {
+    expect(() =>
+      validateManifest(withProtocol((p) => (p.detection = {})))
+    ).toThrow(/detection\.code must be a string/);
+
+    expect(() =>
+      validateManifest(withProtocol((p) => (p.detection = { code: '/code' })))
+    ).toThrow(/detection\.confidence must be a string/);
+  });
+
+  it('accepts a detection block', () => {
+    const result = validateManifest(
+      withProtocol(
+        (p) =>
+          (p.detection = {
+            code: '/language/detectedLanguage/code',
+            confidence: '/language/detectedLanguage/confidence'
+          })
+      )
+    );
+    expect(result.contributes.textCheckers).toHaveLength(1);
+  });
+
+  it('rejects a probe without a path', () => {
+    expect(() =>
+      validateManifest(
+        withProtocol((p) => (p.probe = { list: '', languageCode: ['/code'] }))
+      )
+    ).toThrow(/probe\.path/);
+  });
+
+  it('rejects a probe whose language codes are missing or empty', () => {
+    for (const languageCode of [undefined, [], '/code']) {
+      expect(() =>
+        validateManifest(
+          withProtocol(
+            (p) => (p.probe = { path: '/v2/languages', list: '', languageCode })
+          )
+        )
+      ).toThrow(/probe\.languageCode must be a non-empty array/);
+    }
+  });
+
+  it('rejects a probe language code that is not a pointer', () => {
+    expect(() =>
+      validateManifest(
+        withProtocol(
+          (p) =>
+            (p.probe = {
+              path: '/v2/languages',
+              list: '',
+              languageCode: ['code']
+            })
+        )
+      )
+    ).toThrow(/probe\.languageCode\[0\]/);
+  });
+
+  it('accepts a probe listing the languages a server offers', () => {
+    const result = validateManifest(
+      withProtocol(
+        (p) =>
+          (p.probe = {
+            path: '/v2/languages',
+            list: '',
+            languageCode: ['/longCode', '/code']
+          })
+      )
+    );
+    expect(result.contributes.textCheckers).toHaveLength(1);
+  });
+});
+
+describe('validateManifest — i18n bundle failures', () => {
+  const withI18n = (i18n: unknown) => {
+    const m = validManifest();
+    (m.contributes as Record<string, unknown>).i18n = i18n;
+    return m;
+  };
+
+  it('rejects a bundle map that is not an object', () => {
+    for (const i18n of [[], 'en', null]) {
+      expect(() => validateManifest(withI18n(i18n))).toThrow(
+        /i18n must be an object keyed by locale/
+      );
+    }
+  });
+
+  it('rejects a locale whose bundle is not a string map', () => {
+    expect(() => validateManifest(withI18n({ en: [] }))).toThrow(
+      /i18n\["en"\] must be a string map/
+    );
+  });
+
+  it('rejects a non-string translation', () => {
+    expect(() =>
+      validateManifest(withI18n({ en: { 'templates.meeting.name': 3 } }))
+    ).toThrow(/i18n\["en"\]\["templates.meeting.name"\] must be a string/);
+  });
+});
+
+/**
+ * The invariants that hold across a whole contribution list rather than
+ * within one entry: it has to be a list at all, and ids inside it have to be
+ * unique. A duplicate id is not cosmetic — contributions are keyed by id, so
+ * the second entry silently replaces the first.
+ */
+describe('validateManifest — contribution lists', () => {
+  /** A scripted manifest holding every permission the fixtures below need. */
+  function permissive(): Record<string, unknown> {
+    return validManifest({
+      runtime: 'luau',
+      entry: 'main.luau',
+      permissions: [
+        'templates.contribute',
+        'notes.create',
+        'noteKinds.contribute',
+        'noteExporters.contribute',
+        'nativeTools.runDeclared',
+        'nativeServices.run',
+        'pluginArtifacts.download',
+        'textCheckers.contribute'
+      ]
+    });
+  }
+
+  /** One valid entry per contribution kind, to duplicate or mistype. */
+  const entry: Record<string, () => Record<string, unknown>> = {
+    artifacts: () => ({
+      id: 'typst-compiler',
+      kind: 'wasm',
+      version: '0.1.0',
+      url: 'https://example.com/typst.wasm',
+      sha256: 'a'.repeat(64),
+      fileName: 'typst.wasm'
+    }),
+    nativeTools: () => ({ id: 'typst', binaryName: 'typst' }),
+    nativeServices: () => ({
+      id: 'tinymist',
+      binaryName: 'tinymist',
+      args: ['preview'],
+      dataUrl: 'http://127.0.0.1:{dataPort}',
+      controlUrl: 'ws://127.0.0.1:{controlPort}'
+    }),
+    sourceLanguages: () => ({
+      id: 'typst',
+      provider: { type: 'host', id: 'typst' }
+    }),
+    noteKinds: () => ({
+      id: 'document',
+      labelKey: 'notes.document.label',
+      render: { export: 'renderDocument' }
+    }),
+    noteExporters: () => ({
+      id: 'pdf',
+      labelKey: 'notes.document.label',
+      noteKind: 'markdown',
+      format: 'pdf',
+      export: 'exportPdf'
+    }),
+    noteTemplates: () => ({
+      id: 'standup',
+      labelKey: 'templates.meeting.name',
+      noteKind: 'markdown',
+      titleTemplate: '{{title}}',
+      bodyTemplate: '# {{title}}'
+    }),
+    settings: () => ({
+      sectionId: 'general',
+      titleKey: 'settings.general.title',
+      settings: [
+        {
+          id: 'another-setting',
+          labelKey: 'settings.defaultTemplate.label',
+          scope: 'V',
+          type: 'toggle',
+          default: true
+        }
+      ]
+    }),
+    commands: () => ({
+      id: 'new-meeting',
+      labelKey: 'commands.newMeeting.label',
+      action: { type: 'createTemplateNote', templateId: 'meeting' }
+    }),
+    documentation: () => ({
+      file: 'docs/getting-started.md',
+      titleKey: 'docs.gettingStarted.title'
+    }),
+    toolbar: () => ({
+      id: 'compile',
+      location: 'file-tree',
+      labelKey: 'commands.newMeeting.label',
+      icon: 'icons/compile.svg',
+      action: { type: 'script', export: 'compile' }
+    })
+  };
+
+  const listNames = Object.keys(entry);
+
+  it.each(listNames)('rejects a %s block that is not an array', (name) => {
+    const m = permissive();
+    (m.contributes as Record<string, unknown>)[name] = { id: 'x' };
+    expect(() => validateManifest(m)).toThrow(
+      new RegExp(`contributes\\.${name} must be an array`)
+    );
+  });
+
+  it.each(listNames)('rejects duplicate entries in %s', (name) => {
+    const m = permissive();
+    // `settings` de-duplicates on its section id, `documentation` on its
+    // file; everything else on `id`.
+    (m.contributes as Record<string, unknown>)[name] = [
+      entry[name](),
+      entry[name]()
+    ];
+    expect(() => validateManifest(m)).toThrow(/duplicate/);
+  });
+
+  /**
+   * Contributing is gated on the permission that covers it, so a manifest
+   * cannot quietly do more than it declared.
+   */
+  const gated: [string, string][] = [
+    ['artifacts', 'pluginArtifacts.download'],
+    ['nativeTools', 'nativeTools.runDeclared'],
+    ['nativeServices', 'nativeServices.run'],
+    ['noteKinds', 'noteKinds.contribute'],
+    ['noteExporters', 'noteExporters.contribute'],
+    ['textCheckers', 'textCheckers.contribute']
+  ];
+
+  it.each(gated)(
+    'requires the permission that covers %s',
+    (name, permission) => {
+      const m = permissive();
+      m.permissions = (m.permissions as string[]).filter(
+        (held) => held !== permission
+      );
+      (m.contributes as Record<string, unknown>)[name] =
+        name === 'textCheckers'
+          ? [
+              {
+                id: 'grammar',
+                kinds: ['grammar'],
+                endpointSetting: 'endpoint',
+                protocol: {
+                  check: {
+                    path: '/check',
+                    encoding: 'form',
+                    fields: { text: 'text' }
+                  },
+                  matches: {
+                    list: '/matches',
+                    offset: '/offset',
+                    length: '/length',
+                    message: '/message'
+                  }
+                }
+              }
+            ]
+          : [entry[name]()];
+      expect(() => validateManifest(m)).toThrow(new RegExp(permission));
+    }
+  );
+});
+
+describe('validateManifest — top-level shape', () => {
+  it('rejects a manifest that is not an object', () => {
+    for (const input of [null, 'manifest', 42, undefined]) {
+      expect(() => validateManifest(input)).toThrow(
+        /manifest must be an object/
+      );
+    }
+  });
+
+  it('names the plugin as unknown when the id is not even a string', () => {
+    // The loader records the failure under a plugin id, so there has to be
+    // one to record it under even when the manifest supplies none.
+    try {
+      validateManifest({ id: 42 });
+      throw new Error('expected a validation error');
+    } catch (err) {
+      expect(err).toBeInstanceOf(PluginValidationError);
+      expect((err as PluginValidationError).pluginId).toBe('<unknown>');
+    }
+  });
+
+  it('rejects a plugin icon that escapes the plugin dir', () => {
+    for (const icon of ['../outside.svg', '/abs.svg', 'icons\\win.svg']) {
+      expect(() => validateManifest(validManifest({ icon }))).toThrow(
+        /manifest\.icon/
+      );
+    }
+  });
+
+  it('rejects non-array permissions', () => {
+    expect(() =>
+      validateManifest(validManifest({ permissions: 'templates.contribute' }))
+    ).toThrow(/permissions must be an array/);
+  });
+
+  it('rejects a contributes block that is not an object', () => {
+    expect(() =>
+      validateManifest(validManifest({ contributes: 'nothing' }))
+    ).toThrow(/contributes must be an object/);
+  });
+
+  it('rejects limits that are not an object', () => {
+    expect(() =>
+      validateManifest(
+        validManifest({ runtime: 'luau', entry: 'main.luau', limits: [] })
+      )
+    ).toThrow(/limits must be an object/);
+  });
+});
+
+describe('validateManifest — remaining entry guards', () => {
+  const kind = (render: unknown, permissions = ['noteKinds.contribute']) =>
+    scripted(
+      { noteKinds: [{ id: 'doc', labelKey: 'k.label', render }] },
+      permissions
+    );
+
+  it('rejects a render block that is not an object', () => {
+    expect(() => validateManifest(kind('renderDocument'))).toThrow(
+      /render must be an object/
+    );
+  });
+
+  it('rejects a non-string previewService', () => {
+    expect(() =>
+      validateManifest(kind({ export: 'render', previewService: 7 }))
+    ).toThrow(/previewService must be a string/);
+  });
+
+  it('rejects a webview artifact list that is not an array', () => {
+    expect(() =>
+      validateManifest(
+        kind({
+          export: 'render',
+          webview: { entry: 'preview.js', artifacts: 'preview-glue' }
+        })
+      )
+    ).toThrow(/webview\.artifacts must be an array/);
+  });
+
+  it('rejects a webview artifact listed twice', () => {
+    const m = scripted(
+      {
+        artifacts: [
+          {
+            id: 'preview-glue',
+            kind: 'webScript',
+            version: '1.0.0',
+            url: 'https://example.com/preview.mjs',
+            sha256: 'a'.repeat(64),
+            fileName: 'preview.mjs'
+          }
+        ],
+        noteKinds: [
+          {
+            id: 'doc',
+            labelKey: 'k.label',
+            render: {
+              export: 'render',
+              webview: {
+                entry: 'preview.js',
+                artifacts: ['preview-glue', 'preview-glue']
+              }
+            }
+          }
+        ]
+      },
+      ['noteKinds.contribute', 'pluginArtifacts.download']
+    );
+    expect(() => validateManifest(m)).toThrow(/more than once/);
+  });
+
+  it('rejects a non-string exporter requiresNativeTool', () => {
+    const m = scripted(
+      {
+        noteExporters: [
+          {
+            id: 'pdf',
+            labelKey: 'k.label',
+            noteKind: 'markdown',
+            format: 'pdf',
+            export: 'exportPdf',
+            requiresNativeTool: 3
+          }
+        ]
+      },
+      ['noteExporters.contribute']
+    );
+    expect(() => validateManifest(m)).toThrow(
+      /requiresNativeTool must be a string/
+    );
+  });
+
+  it('rejects a native service binary that is a path', () => {
+    const m = scripted(
+      {
+        nativeServices: [
+          {
+            id: 'tinymist',
+            binaryName: '../bin/tinymist',
+            args: [],
+            dataUrl: 'http://127.0.0.1:{dataPort}',
+            controlUrl: 'ws://127.0.0.1:{controlPort}'
+          }
+        ]
+      },
+      ['nativeServices.run']
+    );
+    expect(() => validateManifest(m)).toThrow(/executable basename/);
+  });
+
+  const service = (over: Record<string, unknown>) =>
+    scripted(
+      {
+        nativeServices: [
+          {
+            id: 'tinymist',
+            binaryName: 'tinymist',
+            args: [],
+            dataUrl: 'http://127.0.0.1:{dataPort}',
+            controlUrl: 'ws://127.0.0.1:{controlPort}',
+            ...over
+          }
+        ]
+      },
+      ['nativeServices.run']
+    );
+
+  it('rejects a previewIframe that is not an object', () => {
+    expect(() =>
+      validateManifest(service({ previewIframe: 'themed' }))
+    ).toThrow(/previewIframe must be an object/);
+  });
+
+  it('rejects a non-string jump event', () => {
+    expect(() =>
+      validateManifest(service({ protocol: { jumpEvent: 42 } }))
+    ).toThrow(/jumpEvent must be a string/);
+  });
+
+  it('rejects a command binding that is neither a string nor null', () => {
+    const m = validManifest();
+    (
+      (m.contributes as Record<string, unknown>).commands as Record<
+        string,
+        unknown
+      >[]
+    )[0].defaultBinding = 42;
+    expect(() => validateManifest(m)).toThrow(
+      /defaultBinding must be a string or null/
+    );
+  });
+
+  it('rejects duplicate settings sections', () => {
+    const m = validManifest();
+    const contributes = m.contributes as Record<string, unknown>;
+    const section = contributes.settings as Record<string, unknown>[];
+    contributes.settings = [
+      section[0],
+      {
+        ...section[0],
+        settings: [
+          {
+            id: 'other-setting',
+            labelKey: 'settings.defaultTemplate.label',
+            scope: 'V',
+            type: 'toggle',
+            default: false
+          }
+        ]
+      }
+    ];
+    expect(() => validateManifest(m)).toThrow(/duplicate settings section id/);
+  });
+
+  it('rejects note kinds on a manifest-only runtime', () => {
+    // A note kind runs a backend render export, so a declarative plugin
+    // cannot have one even with the permission.
+    const m = validManifest({
+      permissions: [
+        'templates.contribute',
+        'notes.create',
+        'noteKinds.contribute'
+      ]
+    });
+    (m.contributes as Record<string, unknown>).noteKinds = [
+      {
+        id: 'doc',
+        labelKey: 'templates.meeting.name',
+        render: { export: 'render' }
+      }
+    ];
+    expect(() => validateManifest(m)).toThrow(
+      /require runtime "luau" or "wasm"/
+    );
+  });
+});
+
+describe('validateManifest — toolbar button guards', () => {
+  const button = (over: Record<string, unknown>) =>
+    scripted(
+      {
+        noteKinds: [
+          { id: 'doc', labelKey: 'k.label', render: { export: 'render' } }
+        ],
+        toolbar: [
+          {
+            id: 'compile',
+            location: 'file-tree',
+            labelKey: 'k.label',
+            icon: 'icons/compile.svg',
+            action: { type: 'script', export: 'compile' },
+            ...over
+          }
+        ]
+      },
+      ['noteKinds.contribute']
+    );
+
+  it('rejects a note kind on a button outside the note editor', () => {
+    expect(() => validateManifest(button({ noteKind: 'doc' }))).toThrow(
+      /noteKind is only valid for note-editor/
+    );
+  });
+
+  it('rejects a built-in toolbar item outside the note editor', () => {
+    expect(() => validateManifest(button({ toolbarItem: 'bold' }))).toThrow(
+      /toolbarItem is only valid for note-editor/
+    );
+  });
+
+  it('requires a label on a button that is not a built-in item', () => {
+    expect(() => validateManifest(button({ labelKey: undefined }))).toThrow(
+      /labelKey is required/
+    );
+  });
+
+  it('requires an icon on a button that is not a built-in item', () => {
+    expect(() => validateManifest(button({ icon: undefined }))).toThrow(
+      /icon is required/
+    );
+  });
+
+  it('rejects an action that is not an object', () => {
+    for (const action of [undefined, 'script', 42]) {
+      expect(() => validateManifest(button({ action }))).toThrow(
+        /action must be an object/
+      );
+    }
+  });
+
+  it('rejects a script action with an illegal export name', () => {
+    expect(() =>
+      validateManifest(
+        button({ action: { type: 'script', export: 'bad name' } })
+      )
+    ).toThrow(/backend script export name/);
+  });
+
+  const editorButton = (action: unknown) =>
+    scripted(
+      {
+        noteKinds: [
+          { id: 'doc', labelKey: 'k.label', render: { export: 'render' } }
+        ],
+        toolbar: [
+          {
+            id: 'strong',
+            location: 'note-editor',
+            noteKind: 'doc',
+            labelKey: 'k.label',
+            icon: 'icons/strong.svg',
+            action
+          }
+        ]
+      },
+      ['noteKinds.contribute']
+    );
+
+  it('rejects insertText without text', () => {
+    expect(() =>
+      validateManifest(editorButton({ type: 'insertText', text: 2 }))
+    ).toThrow(/text must be a string/);
+  });
+
+  it('rejects a negative cursor offset', () => {
+    expect(() =>
+      validateManifest(
+        editorButton({ type: 'insertText', text: '= ', cursorOffset: -1 })
+      )
+    ).toThrow(/cursorOffset must be a non-negative finite number/);
+  });
+
+  it('rejects a wrap action without both delimiters', () => {
+    expect(() =>
+      validateManifest(editorButton({ type: 'wrapSelection', before: '*' }))
+    ).toThrow(/action\.before and .*action\.after must be strings/);
+  });
+
+  it('rejects a non-string placeholder', () => {
+    expect(() =>
+      validateManifest(
+        editorButton({
+          type: 'wrapSelection',
+          before: '*',
+          after: '*',
+          placeholder: 1
+        })
+      )
+    ).toThrow(/placeholder must be a string/);
   });
 });

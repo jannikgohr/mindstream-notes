@@ -409,4 +409,62 @@ describe('checkAll', () => {
     expect(out[0]).toBeNull();
     expect(out[1]).toEqual([]);
   });
+  it('reports a failed request and lets the error through', async () => {
+    // Swallowing it would leave the last findings on screen while the server
+    // is unreachable, with nothing anywhere saying so.
+    const seen: { state: string; detail?: string }[] = [];
+    const p = createHttpCheckerProvider({
+      id: 'lt',
+      kinds: ['grammar', 'spelling'],
+      categoryKinds: KINDS,
+      config: () => CONFIG,
+      check: async () => {
+        throw new Error('connection refused');
+      },
+      onStatus: (state, detail) => seen.push({ state, detail })
+    });
+
+    await expect(p.checkAll!([seg('one', 0)], ctx)).rejects.toThrow(
+      'connection refused'
+    );
+    expect(seen).toEqual([{ state: 'failed', detail: 'connection refused' }]);
+  });
+
+  it('reports what a non-Error failure said', async () => {
+    const seen: { state: string; detail?: string }[] = [];
+    const p = createHttpCheckerProvider({
+      id: 'lt',
+      kinds: ['grammar'],
+      categoryKinds: KINDS,
+      config: () => CONFIG,
+      check: async () => {
+        throw 'checker returned 500';
+      },
+      onStatus: (state, detail) => seen.push({ state, detail })
+    });
+
+    await expect(p.checkAll!([seg('one', 0)], ctx)).rejects.toBeTruthy();
+    expect(seen).toEqual([{ state: 'failed', detail: 'checker returned 500' }]);
+  });
+
+  it('drops a spelling finding on a word the user accepted', async () => {
+    // A remote API has no per-request word list, so the personal dictionary
+    // has to be applied to what comes back.
+    const p = createHttpCheckerProvider({
+      id: 'lt',
+      kinds: ['grammar', 'spelling'],
+      categoryKinds: KINDS,
+      config: () => CONFIG,
+      isIgnored: (word) => word === 'Mindstream',
+      check: async () => [
+        match({ from: 0, to: 10, category: 'TYPOS' }),
+        match({ from: 11, to: 14, category: 'TYPOS' })
+      ]
+    });
+
+    const out = await p.checkAll!([seg('Mindstream teh', 0)], ctx);
+    expect(out[0]).toEqual([
+      expect.objectContaining({ from: 11, to: 14, kind: 'spelling' })
+    ]);
+  });
 });
