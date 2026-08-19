@@ -27,6 +27,7 @@ mod dictionary;
 pub mod http_checker;
 
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -50,10 +51,34 @@ pub use dictionary::{
 /// evicting and reloading is cheap if someone exceeds it.
 const MAX_RESIDENT: usize = 4;
 
+/// e2e/test seam: put the dictionary directory somewhere disposable.
+///
+/// Dictionaries deliberately sit outside the profile directory, so
+/// `MINDSTREAM_PROFILE_DIR` does not isolate them — without this an e2e run
+/// would read and write the developer's real dictionaries, and could only get
+/// one installed by downloading it. Gated exactly like the profile override
+/// (dev builds and `--features e2e-data-dir`), so a shipped binary ignores it.
+pub const DICTIONARY_DIR_ENV: &str = "MINDSTREAM_DICTIONARY_DIR";
+
+/// Pure core of the override: `None` means "no override, use the app-data
+/// root". Split out so the gating is unit-testable without process env.
+fn dictionary_dir_override(value: Option<OsString>, allowed: bool) -> Option<PathBuf> {
+    if !allowed {
+        return None;
+    }
+    value.filter(|raw| !raw.is_empty()).map(PathBuf::from)
+}
+
 /// Dictionaries live under the OS app-data ROOT, not the active profile's
 /// directory: they are large, contain no user data, and a user with several
 /// profiles should not download German four times.
 fn dictionary_dir<R: Runtime>(app: &AppHandle<R>) -> AppResult<PathBuf> {
+    if let Some(dir) = dictionary_dir_override(
+        std::env::var_os(DICTIONARY_DIR_ENV),
+        crate::profiles::dir_override_allowed(),
+    ) {
+        return Ok(dir);
+    }
     Ok(app_data_root(app)?.join("dictionaries"))
 }
 
@@ -261,6 +286,29 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn the_dictionary_dir_override_is_gated_to_test_builds() {
+        // A stray env var must not redirect a shipped binary's dictionaries.
+        assert_eq!(
+            dictionary_dir_override(Some(OsString::from("C:/anywhere")), false),
+            None
+        );
+    }
+
+    #[test]
+    fn the_dictionary_dir_override_ignores_an_empty_value() {
+        assert_eq!(dictionary_dir_override(Some(OsString::new()), true), None);
+        assert_eq!(dictionary_dir_override(None, true), None);
+    }
+
+    #[test]
+    fn the_dictionary_dir_override_wins_when_set() {
+        assert_eq!(
+            dictionary_dir_override(Some(OsString::from("/tmp/dicts")), true),
+            Some(PathBuf::from("/tmp/dicts"))
+        );
     }
 
     #[test]

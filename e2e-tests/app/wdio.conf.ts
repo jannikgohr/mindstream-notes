@@ -39,6 +39,8 @@ export const config: WebdriverIO.Config = {
     join(here, 'specs', 'history.e2e.ts'),
     join(here, 'specs', 'plugins.e2e.ts'),
     join(here, 'specs', 'settings-persist.e2e.ts'),
+    join(here, 'specs', 'spellcheck.e2e.ts'),
+    join(here, 'specs', 'text-checker.e2e.ts'),
     join(here, 'specs', 'trash-retention.e2e.ts')
   ],
   maxInstances: 1,
@@ -65,9 +67,18 @@ export const config: WebdriverIO.Config = {
   // state across unrelated specs.
   beforeSession: () => {
     const runProfileDir = mkdtempSync(join(tmpdir(), 'mindstream-e2e-run-'));
+    // Dictionaries sit outside the profile dir, so they need a disposable dir
+    // of their own — without one a run would read and write the developer's
+    // real dictionaries, and could only get one installed by downloading it.
+    // Exported to this process as well, so a spec can seed a fixture pair.
+    const runDictionaryDir = mkdtempSync(
+      join(tmpdir(), 'mindstream-e2e-dict-')
+    );
+    process.env.MINDSTREAM_DICTIONARY_DIR = runDictionaryDir;
     tauriDriver = spawnTauriDriver([], {
       ...process.env,
-      MINDSTREAM_PROFILE_DIR: runProfileDir
+      MINDSTREAM_PROFILE_DIR: runProfileDir,
+      MINDSTREAM_DICTIONARY_DIR: runDictionaryDir
     });
   },
 
