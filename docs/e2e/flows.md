@@ -206,22 +206,28 @@ back. The value is proving the whole frontend↔Rust↔frontend chain.
 
 - **Why e2e:** `plugins_artifact_status` / `plugins_artifact_download` /
   `plugins_artifact_remove` (`plugins/mod.rs`) are the app's only
-  download-and-execute path. Every meaningful step — the HTTPS fetch, the
-  SHA-256 check against the manifest, the staged write under
-  `plugin-artifacts/<plugin>/<artifact>/<version>/`, and the refusal to keep a
-  file whose digest does not match — is `AppHandle` + network + disk, so unit
-  tests reach none of it. The manifest validation around it is unit-tested;
-  what the bytes on disk turn out to be is not.
+  download-and-execute path, and the HTTPS fetch, the command layer and
+  restart persistence all need the real app.
+- **Already unit-tested:** the gate the fetch feeds. `install_artifact_bytes`
+  was split out of the request so the digest check, the declared-size check,
+  the staged write and the traversal-safe layout are ordinary Rust tests
+  (`plugins::tests::artifacts`), including that a rejected body leaves nothing
+  on disk. What is left for e2e is the transfer around it.
 - **Steps:** launch with a plugin declaring an artifact served by a local HTTPS
   stub → open the plugin's panel → assert the artifact shows as missing →
   download → assert it reports installed with the declared size → relaunch →
   assert it is still installed → serve a corrupted body under the same URL,
   remove and re-download → assert the download fails and no file is left
   behind.
-- **Proves:** the digest gate actually rejects a mismatch (rather than
-  reporting success and failing later at load), the path layout is
-  traversal-safe for a hostile artifact id, and installed state survives a
-  restart.
+- **Proves:** a real HTTPS transfer reaches the gate, the panel reports what
+  landed on disk, and installed state survives a restart.
+- **Blocked on:** a local HTTPS server the app will talk to. The URL scheme is
+  refused twice, in `validation.ts` and again in `plugins/mod.rs`, and the
+  downloader uses a default `reqwest` client, so a self-signed certificate
+  fails too. The options are to download from upstream on every run, to put a
+  test certificate in the machine's trust store, or to add a seam that relaxes
+  certificate checking — and the last one weakens the property this flow is
+  meant to protect, so it is not on the table.
 
 ### 2.9 Native preview service + themed proxy (P2)
 
