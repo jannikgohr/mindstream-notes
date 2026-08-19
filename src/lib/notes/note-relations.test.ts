@@ -68,4 +68,18 @@ describe('loadNoteRelations', () => {
 
     expect(loader).toHaveBeenCalledTimes(2);
   });
+
+  it('does not index links from non-Markdown notes', async () => {
+    const kanban = summary('board');
+    kanban.note_kind = 'kanban';
+    const loader = vi.fn(async () => ({
+      body: '[A](mindstream://note/a)'
+    }));
+
+    await expect(
+      loadNoteRelations('board', [kanban, summary('a')], loader)
+    ).resolves.toEqual({ outgoing: [], backlinks: [] });
+    expect(loader).toHaveBeenCalledOnce();
+    expect(loader).toHaveBeenCalledWith('a');
+  });
 });
