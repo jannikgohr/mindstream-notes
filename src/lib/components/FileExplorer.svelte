@@ -85,6 +85,7 @@
     defaultDraftText,
     dragPayloadFromTransfer,
     draftKindToNoteKind,
+    draftHasName,
     emptyStateMessageForSource,
     dragItemsForStart,
     nodeKey,
@@ -245,7 +246,8 @@
   function startDraft(kind: DraftKind, parentId: string | null) {
     if (!canStartDraft(parentId)) return;
     if (parentId) expanded[parentId] = true;
-    draft = { kind, parentId, text: defaultDraftText(kind) };
+    const text = defaultDraftText(kind);
+    draft = { kind, parentId, text, initialText: text };
   }
   // Name-first creation of a plugin-template note (e.g. a Typst document): seed
   // the inline draft with the template's default title, then render + create on
@@ -257,10 +259,12 @@
   ) {
     if (!canStartDraft(parentId)) return;
     if (parentId) expanded[parentId] = true;
+    const text = pluginTemplateDefaultTitle(pluginId, templateId);
     draft = {
       kind: 'note',
       parentId,
-      text: pluginTemplateDefaultTitle(pluginId, templateId),
+      text,
+      initialText: text,
       template: {
         pluginId,
         templateId,
@@ -326,7 +330,7 @@
   function onDraftBlur() {
     setTimeout(() => {
       if (!draft) return;
-      if (!draft.text.trim()) cancelDraft();
+      if (!draftHasName(draft)) cancelDraft();
       else void commitDraft();
     }, 0);
   }

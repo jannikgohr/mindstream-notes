@@ -8,7 +8,19 @@
    * default is suppressed in step 3.
    */
   import { onMount } from 'svelte';
-  import { ChevronRight } from '@lucide/svelte';
+  import {
+    ChevronRight,
+    Download,
+    ExternalLink,
+    FolderInput,
+    FolderPlus,
+    Pencil,
+    Plus,
+    RotateCcw,
+    Share2,
+    Trash2
+  } from '@lucide/svelte';
+  import { getSettingValue } from '$lib/settings/store.svelte';
   import type { MenuItem } from './context-menu-types';
 
   interface Props {
@@ -33,6 +45,23 @@
   let menuEl: HTMLDivElement | null = $state(null);
   let activeSubmenu = $state<number | null>(null);
   const layerClass = $derived(layer === 'editor' ? 'z-[250]' : 'z-350');
+  const showIcons = $derived(
+    getSettingValue('appearance.contextMenuIcons') !== false
+  );
+
+  function fallbackIcon(item: MenuItem) {
+    const label = item.label.toLocaleLowerCase();
+    if (/delete|trash|remove|löschen|papierkorb/.test(label)) return Trash2;
+    if (/restore|wiederherstellen/.test(label)) return RotateCcw;
+    if (/rename|umbenennen/.test(label)) return Pencil;
+    if (/export|download/.test(label)) return Download;
+    if (/share|freigab/.test(label)) return Share2;
+    if (/move|verschieben/.test(label)) return FolderInput;
+    if (/folder|ordner/.test(label) && /new|neu/.test(label)) return FolderPlus;
+    if (/new|add|neu|hinzufügen/.test(label)) return Plus;
+    if (/open|öffnen/.test(label)) return ExternalLink;
+    return null;
+  }
 
   onMount(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -97,6 +126,7 @@
     {#if item === 'separator'}
       <div class="my-1 h-px bg-border"></div>
     {:else}
+      {@const Icon = showIcons ? (item.icon ?? fallbackIcon(item)) : null}
       <div
         role="none"
         class="relative"
@@ -131,8 +161,7 @@
           onfocus={() => (activeSubmenu = item.children?.length ? i : null)}
         >
           <span class="flex min-w-0 items-center gap-2">
-            {#if item.icon}
-              {@const Icon = item.icon}
+            {#if Icon}
               <Icon class="size-4 shrink-0 text-muted-foreground" />
             {/if}
             <span class="truncate">{item.label}</span>
@@ -154,6 +183,9 @@
               : 'left-full ml-1'}"
           >
             {#each item.children as child, childIndex (child.id ?? child.label ?? childIndex)}
+              {@const ChildIcon = showIcons
+                ? (child.icon ?? fallbackIcon(child))
+                : null}
               <button
                 type="button"
                 role="menuitem"
@@ -164,8 +196,7 @@
                 onclick={() => invoke(child)}
               >
                 <span class="flex min-w-0 items-center gap-2">
-                  {#if child.icon}
-                    {@const ChildIcon = child.icon}
+                  {#if ChildIcon}
                     <ChildIcon class="size-4 shrink-0 text-muted-foreground" />
                   {/if}
                   <span class="truncate">{child.label}</span>

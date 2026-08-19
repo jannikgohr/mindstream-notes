@@ -39,6 +39,8 @@
     "empty": "No settings match your search.",
     "saving": "Saving…",
     "picker.none": "None",
+    "picker.search": "Search folders and tags…",
+    "picker.empty": "No matches",
     "account.managedUnavailable": "Not available yet — pick \"Self-hosted\" to use your own server.",
     "data.openFolder.failed.title": "Couldn't open the data folder",
     "data.openFolder.failed.message": "{error}",
@@ -936,6 +938,9 @@
     },
     "appearance.foldersFirst": {
       "label": "Folders first"
+    },
+    "appearance.contextMenuIcons": {
+      "label": "Icons in context menus"
     },
     "editor.defaultMode": {
       "label": "Default mode"

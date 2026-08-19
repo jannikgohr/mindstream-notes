@@ -39,6 +39,8 @@
     "empty": "Keine Einstellungen passen zur Suche.",
     "saving": "Wird gespeichert…",
     "picker.none": "Keine",
+    "picker.search": "Ordner und Tags suchen…",
+    "picker.empty": "Keine Treffer",
     "account.managedUnavailable": "Noch nicht verfügbar — wähle \"Selbst gehostet\", um deinen eigenen Server zu nutzen.",
     "sort.label": "Sortierung",
     "sort.ascending": "Aufsteigend sortieren",
@@ -926,6 +928,9 @@
     },
     "appearance.foldersFirst": {
       "label": "Ordner zuerst"
+    },
+    "appearance.contextMenuIcons": {
+      "label": "Symbole in Kontextmenüs"
     },
     "editor.defaultMode": {
       "label": "Standard-Editor"

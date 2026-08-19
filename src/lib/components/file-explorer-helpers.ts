@@ -8,6 +8,8 @@ export type Draft = {
   kind: DraftKind;
   parentId: string | null;
   text: string;
+  /** Seeded value. Blur cancels while this is unchanged; Enter still commits. */
+  initialText: string;
   /**
    * Set when the draft creates a note from a plugin template (name-first, e.g. a
    * Typst document): on commit the app renders the template with the typed title
@@ -91,6 +93,11 @@ export function defaultDraftText(kind: DraftKind): string {
     case 'note':
       return 'Untitled';
   }
+}
+
+export function draftHasName(draft: Draft): boolean {
+  const text = draft.text.trim();
+  return text.length > 0 && text !== draft.initialText.trim();
 }
 
 export function draftKindToNoteKind(kind: DraftKind): NoteKind | null {

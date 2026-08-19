@@ -173,6 +173,12 @@
               "scope": "V",
               "type": "toggle",
               "default": true
+            },
+            {
+              "id": "appearance.contextMenuIcons",
+              "scope": "V",
+              "type": "toggle",
+              "default": true
             }
           ]
         }

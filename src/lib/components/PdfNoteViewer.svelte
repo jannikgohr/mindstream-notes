@@ -2864,8 +2864,8 @@
   }
 
   :global(.pdf-page-host .pdf-app-annotation-signature) {
-    background: rgb(255 255 255 / 0.54);
-    padding: 3px 6px;
+    background: transparent;
+    padding: 0;
   }
 
   :global(.pdf-page-host .pdf-app-annotation-ink) {

@@ -330,6 +330,8 @@
         items={folderOptions()}
         onChange={commit}
         unsetLabel={tUi('picker.none')}
+        searchLabel={tUi('picker.search')}
+        emptyLabel={tUi('picker.empty')}
         ariaLabel={label}
       />
     {:else if setting.type === 'tag'}
@@ -338,6 +340,8 @@
         items={tagOptions()}
         onChange={commit}
         unsetLabel={tUi('picker.none')}
+        searchLabel={tUi('picker.search')}
+        emptyLabel={tUi('picker.empty')}
         ariaLabel={label}
       />
     {:else if setting.type === 'color'}
