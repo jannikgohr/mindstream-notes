@@ -20,6 +20,12 @@ export interface NoteHistoryApi {
   /** The editor's current snapshot, for diffing and undoable restore capture. */
   currentSnapshot: () => string | Promise<string>;
   /**
+   * Capture the pre-restore state and return the body to use for Undo. Editors
+   * with their own auto-history bookkeeping can implement this so the explicit
+   * checkpoint and their pending idle/threshold capture state stay in sync.
+   */
+  captureRestoreCheckpoint?: () => RestoreUndo | Promise<RestoreUndo>;
+  /**
    * Ask the editor to capture pending history work now (deduped) and reset the
    * idle-capture timer. Binary editors may capture the latest saved state so
    * refresh never forces a large live Yjs encode on the UI thread.

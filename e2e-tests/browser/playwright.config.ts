@@ -24,6 +24,13 @@ import { fileURLToPath } from 'node:url';
  * modules on demand (which made the first wave of tests flake).
  */
 
+if (
+  process.env.NO_COLOR !== undefined &&
+  process.env.FORCE_COLOR !== undefined
+) {
+  delete process.env.NO_COLOR;
+}
+
 const PORT = 1440;
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '../..');
@@ -63,6 +70,9 @@ export default defineConfig({
     url: `http://localhost:${PORT}`,
     reuseExistingServer: !process.env.CI,
     timeout: 240_000,
-    env: { NODE_OPTIONS: '--max-old-space-size=4096' }
+    env: {
+      FORCE_COLOR: '0',
+      NODE_OPTIONS: '--max-old-space-size=4096'
+    }
   }
 });

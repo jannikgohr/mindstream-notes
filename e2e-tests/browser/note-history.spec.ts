@@ -38,6 +38,28 @@ function editor(page: Page): Locator {
   return page.locator('.ProseMirror').first();
 }
 
+function modeButton(page: Page): Locator {
+  return page.getByRole('button', { name: /^Editor view mode:/ });
+}
+
+function sourcePane(page: Page): Locator {
+  return page.locator('.cm-content');
+}
+
+async function setMode(page: Page, target: 'WYSIWYG' | 'Source' | 'Split') {
+  for (let i = 0; i < 4; i++) {
+    const label = await modeButton(page).getAttribute('aria-label');
+    if (label === `Editor view mode: ${target}`) return;
+    await modeButton(page).click();
+  }
+  throw new Error(`could not reach view mode ${target}`);
+}
+
+async function sourceText(page: Page): Promise<string> {
+  const lines = await page.locator('.cm-line').allTextContents();
+  return lines.join('\n');
+}
+
 async function typeInEditor(page: Page, text: string) {
   const ed = editor(page);
   await ed.click();
@@ -105,4 +127,84 @@ test('restores an earlier version and offers a one-click undo', async ({
   await expect(page.getByText('Restored to an earlier version.')).toHaveCount(
     0
   );
+  await expect(page.getByText('Edited', { exact: true })).toHaveCount(1);
+});
+
+test('restoring while Source is active updates the source pane', async ({
+  page
+}) => {
+  await openIdeas(page);
+  await expect(page.getByText('Note created')).toBeVisible();
+
+  await setMode(page, 'Source');
+  await sourcePane(page).click();
+  await page.keyboard.press('ControlOrMeta+a');
+  const sourceBody = Array.from(
+    { length: 90 },
+    (_, i) => `source restore checkpoint word ${i}`
+  ).join(' ');
+  await page.keyboard.insertText(sourceBody);
+  await refreshHistory(page);
+  await expect(page.getByText('Edited', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('Edited', { exact: true })).toHaveCount(1);
+
+  await page.getByRole('button', { name: /Note created/ }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('button', { name: 'Restore this version' }).click();
+
+  await expect
+    .poll(async () =>
+      (await sourceText(page)).includes('source restore checkpoint word')
+    )
+    .toBe(false);
+
+  const banner = page.getByRole('status').filter({
+    hasText: 'Restored to an earlier version.'
+  });
+  await banner.getByRole('button', { name: 'Undo' }).click();
+  await expect(page.getByText('Restored to an earlier version.')).toHaveCount(
+    0
+  );
+  await expect(page.getByText('Edited', { exact: true })).toHaveCount(1);
+});
+
+test('restoring in Split with Source active keeps history clean', async ({
+  page
+}) => {
+  await openIdeas(page);
+  await expect(page.getByText('Note created')).toBeVisible();
+
+  await setMode(page, 'Split');
+  await sourcePane(page).click();
+  await page.keyboard.press('ControlOrMeta+a');
+  const splitBody = Array.from(
+    { length: 90 },
+    (_, i) => `split source restore checkpoint word ${i}`
+  ).join(' ');
+  await page.keyboard.insertText(splitBody);
+  await refreshHistory(page);
+  await expect(page.getByText('Edited', { exact: true })).toHaveCount(1);
+
+  await page.getByRole('button', { name: /Note created/ }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('button', { name: 'Restore this version' }).click();
+  await expect
+    .poll(async () =>
+      (await sourceText(page)).includes('split source restore checkpoint word')
+    )
+    .toBe(false);
+
+  const banner = page.getByRole('status').filter({
+    hasText: 'Restored to an earlier version.'
+  });
+  await banner.getByRole('button', { name: 'Undo' }).click();
+  await expect
+    .poll(async () =>
+      (await sourceText(page)).includes('split source restore checkpoint word')
+    )
+    .toBe(true);
+  await expect(page.getByText('Restored to an earlier version.')).toHaveCount(
+    0
+  );
+  await expect(page.getByText('Edited', { exact: true })).toHaveCount(1);
 });
