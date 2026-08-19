@@ -67,20 +67,20 @@
   <Button
     variant="ghost"
     size="icon"
-    onclick={openCommandPalette}
-    title={tUi('commandPalette.open')}
-    aria-label={tUi('commandPalette.open')}
-  >
-    <SquareChevronRight class="size-4" />
-  </Button>
-  <Button
-    variant="ghost"
-    size="icon"
     onclick={openSearch}
     title={tUi('search.open')}
     aria-label={tUi('search.open')}
   >
     <SearchIcon size={16} />
+  </Button>
+  <Button
+    variant="ghost"
+    size="icon"
+    onclick={openCommandPalette}
+    title={tUi('commandPalette.open')}
+    aria-label={tUi('commandPalette.open')}
+  >
+    <SquareChevronRight class="size-4" />
   </Button>
   <NotificationCenter />
   <Button
