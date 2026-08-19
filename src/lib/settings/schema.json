@@ -181,6 +181,35 @@
               "default": true
             }
           ]
+        },
+        {
+          "id": "appearance.sidebar",
+          "settings": [
+            {
+              "id": "appearance.sidebar.metadata",
+              "scope": "D",
+              "type": "toggle",
+              "default": true
+            },
+            {
+              "id": "appearance.sidebar.history",
+              "scope": "D",
+              "type": "toggle",
+              "default": true
+            },
+            {
+              "id": "appearance.sidebar.backlinks",
+              "scope": "D",
+              "type": "toggle",
+              "default": true
+            },
+            {
+              "id": "appearance.sidebar.outgoingLinks",
+              "scope": "D",
+              "type": "toggle",
+              "default": true
+            }
+          ]
         }
       ]
     },

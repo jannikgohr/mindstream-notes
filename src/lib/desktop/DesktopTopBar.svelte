@@ -50,10 +50,7 @@
   </Button>
   <Separator orientation="vertical" class="mx-1 h-5" />
   {#if customDecorations}
-    <span
-      data-tauri-drag-region
-      class="text-xs font-medium text-muted-foreground"
-    >
+    <span data-tauri-drag-region class="text-xs font-medium text-foreground">
       Mindstream Notes
     </span>
 
@@ -100,8 +97,8 @@
     variant="ghost"
     size="icon"
     onclick={toggleRightSidebar}
-    title={ui.rightSidebarOpen ? 'Hide metadata' : 'Show metadata'}
-    aria-label="Toggle right sidebar"
+    title={ui.rightSidebarOpen ? tUi('sidebar.hide') : tUi('sidebar.show')}
+    aria-label={ui.rightSidebarOpen ? tUi('sidebar.hide') : tUi('sidebar.show')}
   >
     <PanelRight class="size-4" />
   </Button>

@@ -332,7 +332,7 @@
   }
 </script>
 
-<section class="mt-5">
+<section>
   <div class="mb-2 flex items-center justify-between">
     <h4
       class="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground"
