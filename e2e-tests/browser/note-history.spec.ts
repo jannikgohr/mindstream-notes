@@ -167,3 +167,44 @@ test('restoring while Source is active updates the source pane', async ({
   );
   await expect(page.getByText('Edited', { exact: true })).toHaveCount(1);
 });
+
+test('restoring in Split with Source active keeps history clean', async ({
+  page
+}) => {
+  await openIdeas(page);
+  await expect(page.getByText('Note created')).toBeVisible();
+
+  await setMode(page, 'Split');
+  await sourcePane(page).click();
+  await page.keyboard.press('ControlOrMeta+a');
+  const splitBody = Array.from(
+    { length: 90 },
+    (_, i) => `split source restore checkpoint word ${i}`
+  ).join(' ');
+  await page.keyboard.insertText(splitBody);
+  await refreshHistory(page);
+  await expect(page.getByText('Edited', { exact: true })).toHaveCount(1);
+
+  await page.getByRole('button', { name: /Note created/ }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('button', { name: 'Restore this version' }).click();
+  await expect
+    .poll(async () =>
+      (await sourceText(page)).includes('split source restore checkpoint word')
+    )
+    .toBe(false);
+
+  const banner = page.getByRole('status').filter({
+    hasText: 'Restored to an earlier version.'
+  });
+  await banner.getByRole('button', { name: 'Undo' }).click();
+  await expect
+    .poll(async () =>
+      (await sourceText(page)).includes('split source restore checkpoint word')
+    )
+    .toBe(true);
+  await expect(page.getByText('Restored to an earlier version.')).toHaveCount(
+    0
+  );
+  await expect(page.getByText('Edited', { exact: true })).toHaveCount(1);
+});
