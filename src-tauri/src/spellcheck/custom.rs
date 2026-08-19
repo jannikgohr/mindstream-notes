@@ -73,7 +73,7 @@ mod tests {
     /// rather than a hand-written CREATE TABLE that could drift from it.
     fn db() -> Connection {
         let db = open_memory_for_tests();
-        let mut guard = db.0.into_inner().expect("db mutex");
+        let guard = db.0.into_inner().expect("db mutex");
         guard.pragma_update(None, "foreign_keys", "ON").unwrap();
         guard
     }

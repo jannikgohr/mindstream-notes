@@ -436,7 +436,7 @@ pub async fn spellcheck_remove_dictionary(app: AppHandle, id: String) -> Command
 /// The user's personal dictionary, in the casing they typed.
 #[tauri::command]
 pub async fn custom_dictionary_list(db: tauri::State<'_, Db>) -> CommandResult<Vec<String>> {
-    Ok(db.with_conn(|conn| custom::list(conn))?)
+    Ok(db.with_conn(custom::list)?)
 }
 
 /// Accept a word everywhere, in every language.
