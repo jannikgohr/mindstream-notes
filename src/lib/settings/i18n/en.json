@@ -211,6 +211,16 @@
     "metadata.attachments.one": "{count} file",
     "metadata.attachments.other": "{count} files",
     "metadata.noNote": "No note selected.",
+    "sidebar.metadata": "Metadata",
+    "sidebar.show": "Show right sidebar",
+    "sidebar.hide": "Hide right sidebar",
+    "sidebar.backlinks": "Backlinks",
+    "sidebar.backlinks.empty": "No notes link here.",
+    "sidebar.outgoingLinks": "Outgoing links",
+    "sidebar.outgoingLinks.empty": "This note does not link to another note.",
+    "sidebar.links.loading": "Loading links…",
+    "sidebar.links.failed": "Links could not be loaded.",
+    "sidebar.sections.empty": "Choose sidebar sections in Appearance settings.",
     "desktop.emptyState.title": "No note open",
     "desktop.emptyState.message": "Open a note from the explorer to start editing.",
     "history.title": "History",
@@ -447,7 +457,7 @@
     "hotkeys.command.global.undo": "Undo",
     "hotkeys.command.global.redo": "Redo",
     "hotkeys.command.global.toggleNoteOverview": "Toggle note overview",
-    "hotkeys.command.global.toggleNoteMetadata": "Toggle note metadata",
+    "hotkeys.command.global.toggleNoteMetadata": "Toggle right sidebar",
     "hotkeys.command.global.addTag": "Add tag",
     "hotkeys.command.global.showShortcutHelp": "Show keyboard shortcuts",
     "hotkeys.command.global.showApp": "Show app",
@@ -836,6 +846,10 @@
     "appearance.fileTree": {
       "label": "File tree"
     },
+    "appearance.sidebar": {
+      "label": "Right sidebar",
+      "description": "Choose which sections appear beside the active note."
+    },
     "editor.input": {
       "label": "Input"
     },
@@ -941,6 +955,18 @@
     },
     "appearance.contextMenuIcons": {
       "label": "Icons in context menus"
+    },
+    "appearance.sidebar.metadata": {
+      "label": "Show metadata"
+    },
+    "appearance.sidebar.history": {
+      "label": "Show history"
+    },
+    "appearance.sidebar.backlinks": {
+      "label": "Show backlinks"
+    },
+    "appearance.sidebar.outgoingLinks": {
+      "label": "Show outgoing links"
     },
     "editor.defaultMode": {
       "label": "Default mode"

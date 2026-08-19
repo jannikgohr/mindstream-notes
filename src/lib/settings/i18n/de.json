@@ -113,6 +113,16 @@
     "metadata.attachments.one": "{count} Datei",
     "metadata.attachments.other": "{count} Dateien",
     "metadata.noNote": "Keine Notiz ausgewählt.",
+    "sidebar.metadata": "Metadaten",
+    "sidebar.show": "Rechte Seitenleiste anzeigen",
+    "sidebar.hide": "Rechte Seitenleiste ausblenden",
+    "sidebar.backlinks": "Rückverweise",
+    "sidebar.backlinks.empty": "Keine Notiz verweist hierher.",
+    "sidebar.outgoingLinks": "Ausgehende Links",
+    "sidebar.outgoingLinks.empty": "Diese Notiz verweist auf keine andere Notiz.",
+    "sidebar.links.loading": "Links werden geladen…",
+    "sidebar.links.failed": "Links konnten nicht geladen werden.",
+    "sidebar.sections.empty": "Wähle die Seitenleistenbereiche in den Darstellungseinstellungen aus.",
     "desktop.emptyState.title": "Keine Notiz geöffnet",
     "desktop.emptyState.message": "Öffne links im Explorer eine Notiz, um mit dem Bearbeiten zu beginnen.",
     "history.title": "Verlauf",
@@ -349,7 +359,7 @@
     "hotkeys.command.global.undo": "Rückgängig",
     "hotkeys.command.global.redo": "Wiederholen",
     "hotkeys.command.global.toggleNoteOverview": "Notizübersicht ein-/ausblenden",
-    "hotkeys.command.global.toggleNoteMetadata": "Notizmetadaten ein-/ausblenden",
+    "hotkeys.command.global.toggleNoteMetadata": "Rechte Seitenleiste ein-/ausblenden",
     "hotkeys.command.global.addTag": "Tag hinzufügen",
     "hotkeys.command.global.showShortcutHelp": "Tastenkürzel anzeigen",
     "hotkeys.command.global.showApp": "App anzeigen",
@@ -832,6 +842,10 @@
     "appearance.fileTree": {
       "label": "Dateibaum"
     },
+    "appearance.sidebar": {
+      "label": "Rechte Seitenleiste",
+      "description": "Lege fest, welche Bereiche neben der aktiven Notiz erscheinen."
+    },
     "editor.input": {
       "label": "Eingabe"
     },
@@ -931,6 +945,18 @@
     },
     "appearance.contextMenuIcons": {
       "label": "Symbole in Kontextmenüs"
+    },
+    "appearance.sidebar.metadata": {
+      "label": "Metadaten anzeigen"
+    },
+    "appearance.sidebar.history": {
+      "label": "Verlauf anzeigen"
+    },
+    "appearance.sidebar.backlinks": {
+      "label": "Rückverweise anzeigen"
+    },
+    "appearance.sidebar.outgoingLinks": {
+      "label": "Ausgehende Links anzeigen"
     },
     "editor.defaultMode": {
       "label": "Standard-Editor"

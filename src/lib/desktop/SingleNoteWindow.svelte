@@ -55,7 +55,7 @@
     ariaKeyShortcut(metadataToggleBinding)
   );
   const metadataToggleLabel = $derived(
-    ui.rightSidebarOpen ? 'Hide metadata' : 'Show metadata'
+    ui.rightSidebarOpen ? tUi('sidebar.hide') : tUi('sidebar.show')
   );
   const metadataToggleTitle = $derived(
     metadataToggleShortcut
@@ -139,7 +139,7 @@
     >
       <span
         data-tauri-drag-region
-        class="ml-2 truncate text-xs font-medium text-muted-foreground"
+        class="ml-2 truncate text-xs font-medium text-foreground"
       >
         {title}
       </span>
@@ -151,7 +151,7 @@
     <header
       class="flex h-9 shrink-0 select-none items-center gap-1 border-b border-border bg-card px-2"
     >
-      <span class="ml-2 truncate text-xs font-medium text-muted-foreground">
+      <span class="ml-2 truncate text-xs font-medium text-foreground">
         {title}
       </span>
       <div class="flex-1"></div>
