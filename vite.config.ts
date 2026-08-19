@@ -1,8 +1,23 @@
 import { sveltekit } from '@sveltejs/kit/vite';
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
-import { defineConfig, type Plugin } from 'vite';
+import { createLogger, defineConfig, type Plugin } from 'vite';
 import { fileURLToPath } from 'node:url';
+
+const defaultLogger = createLogger();
+
+function isIgnorableWarning(message: string, filePath = ''): boolean {
+  return (
+    (message.includes('listenerCtx') &&
+      message.includes('UNUSED_EXTERNAL_IMPORT')) ||
+    message.includes('@svar-ui/lib-dom') ||
+    message.includes('@svar-ui/lib-state') ||
+    (filePath.includes('node_modules/file-type') &&
+      message.includes('Use of eval')) ||
+    (message.includes('node_modules/file-type') &&
+      message.includes('Use of eval'))
+  );
+}
 
 /**
  * Drop warnings we've decided are noise. We can't use
@@ -18,6 +33,11 @@ import { fileURLToPath } from 'node:url';
  *   IS used at runtime inside an $effect body in EditorToolbar.svelte,
  *   but Svelte 5's compiler output hides it from Rollup's tree-shake
  *   analysis.
+ *
+ *   UNUSED_EXTERNAL_IMPORT / EVAL under @svar-ui and file-type: warnings from
+ *   third-party bundles we consume through the Kanban editor. They are useful
+ *   upstream, but not actionable in this repo and drown out local warnings in
+ *   browser e2e output.
  */
 function silenceUpstreamWarnings(): Plugin {
   return {
@@ -26,6 +46,10 @@ function silenceUpstreamWarnings(): Plugin {
     onLog(level, log) {
       if (level !== 'warn') return;
       const filePath = log.id ?? log.loc?.file ?? '';
+      const message = log.message ?? '';
+      if (isIgnorableWarning(message, filePath)) {
+        return false;
+      }
       if (
         log.code === 'INVALID_ANNOTATION' &&
         filePath.includes('node_modules')
@@ -39,6 +63,18 @@ function silenceUpstreamWarnings(): Plugin {
       ) {
         return false;
       }
+      if (
+        log.code === 'UNUSED_EXTERNAL_IMPORT' &&
+        filePath.includes('node_modules') &&
+        typeof log.message === 'string' &&
+        (log.message.includes('@svar-ui/lib-dom') ||
+          log.message.includes('@svar-ui/lib-state'))
+      ) {
+        return false;
+      }
+      if (log.code === 'EVAL' && filePath.includes('node_modules/file-type')) {
+        return false;
+      }
     }
   };
 }
@@ -48,6 +84,21 @@ const host = process.env.TAURI_DEV_HOST;
 const packageJsonPath = fileURLToPath(new URL('package.json', import.meta.url));
 
 export default defineConfig({
+  customLogger: {
+    ...defaultLogger,
+    warn(message, options) {
+      if (isIgnorableWarning(message)) {
+        return;
+      }
+      defaultLogger.warn(message, options);
+    },
+    warnOnce(message, options) {
+      if (isIgnorableWarning(message)) {
+        return;
+      }
+      defaultLogger.warnOnce(message, options);
+    }
+  },
   plugins: [
     silenceUpstreamWarnings(),
     tailwindcss(),
