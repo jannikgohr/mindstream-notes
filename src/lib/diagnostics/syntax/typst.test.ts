@@ -207,3 +207,61 @@ describe('typstIgnoreRanges', () => {
     expect(typstIgnoreRanges('Just words, nothing else.')).toEqual([]);
   });
 });
+
+/**
+ * Half-written constructs, which is what a document looks like for most of the
+ * time it is being typed. Each one runs to the end of the document rather than
+ * swallowing the next delimiter it happens to find, so the text after the
+ * cursor stops being checked but never gets mis-attributed.
+ */
+describe('typstIgnoreRanges — unterminated constructs', () => {
+  it('runs an unclosed block comment to the end of the document', () => {
+    expect(words('Vor /* ein Kommentar\nzweite Zeile Text')).toEqual(['Vor']);
+  });
+
+  it('closes a block comment only at its matching depth', () => {
+    expect(words('Vor /* a /* b */ c */ nach')).toEqual(['Vor', 'nach']);
+  });
+
+  it('runs an unclosed raw block to the end of the document', () => {
+    expect(words('Vor ```rust\nfn main() {}\nunbeendet')).toEqual(['Vor']);
+  });
+
+  it('runs unclosed math to the end of the document', () => {
+    expect(words('Vor $ x^2 unbeendet')).toEqual(['Vor']);
+  });
+
+  it('runs an unclosed string to the end of the document', () => {
+    expect(words('#let s = "unbeendet')).toEqual([]);
+  });
+
+  it('does not let an escaped dollar close math', () => {
+    expect(words('Vor $ x^2 + \\$ y $ nach')).toEqual(['Vor', 'nach']);
+  });
+
+  it('does not let an escaped quote close a string', () => {
+    expect(words('#link("https://a.test/\\"x")[Klick] danach')).toEqual([
+      'Klick',
+      'danach'
+    ]);
+  });
+});
+
+describe('typstIgnoreRanges — bracket balance', () => {
+  it('keeps prose inside a bracket nested in a content block', () => {
+    expect(words('#emph[Inner [nested] bracket] danach')).toEqual([
+      'Inner',
+      '[nested]',
+      'bracket',
+      'danach'
+    ]);
+  });
+
+  it('treats a stray closing bracket in markup as literal text', () => {
+    expect(prose('Text mit ] allein danach')).toBe('Text mit ] allein danach');
+  });
+
+  it('leaves a bare hash before a space as typed text', () => {
+    expect(words('Ein #bare hash')).toEqual(['Ein', 'hash']);
+  });
+});

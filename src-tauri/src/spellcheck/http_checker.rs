@@ -903,4 +903,491 @@ mod tests {
         // A protocol that declares no language field simply does not send one.
         assert!(!fields.iter().any(|(k, _)| k == "language"));
     }
+
+    // ---- Against a real socket ------------------------------------------
+    //
+    // What is left untested by the pure-function tests above is the request
+    // itself: the URL it is built from, how its body is encoded, and what
+    // happens to a reply that is not the success the happy path assumes. All
+    // three are only observable through an actual connection, so these run
+    // against a throwaway HTTP server on a loopback port rather than against a
+    // stubbed client.
+
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::sync::mpsc::{self, Receiver};
+
+    /// One canned reply in a server's script.
+    struct Reply {
+        status: u16,
+        body: String,
+    }
+
+    fn ok(body: &str) -> Reply {
+        Reply {
+            status: 200,
+            body: body.to_string(),
+        }
+    }
+
+    /// What a request actually asked for, as the server saw it.
+    struct Recorded {
+        path: String,
+        body: String,
+    }
+
+    struct TestServer {
+        base: String,
+        seen: Receiver<Recorded>,
+    }
+
+    impl TestServer {
+        fn next(&self) -> Recorded {
+            self.seen
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .expect("expected a request the server never received")
+        }
+
+        /// No further request was made — how "did not re-ask" is asserted.
+        fn is_done(&self) -> bool {
+            self.seen
+                .recv_timeout(std::time::Duration::from_millis(200))
+                .is_err()
+        }
+    }
+
+    /// Serve `replies` in order, one per connection, recording each request.
+    fn serve(replies: Vec<Reply>) -> TestServer {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let (tx, seen) = mpsc::channel();
+
+        std::thread::spawn(move || {
+            for reply in replies {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    return;
+                };
+                let recorded = read_request(&mut stream);
+                let _ = tx.send(recorded);
+                let response = format!(
+                    "HTTP/1.1 {} STATUS\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                    reply.status,
+                    reply.body.len(),
+                    reply.body
+                );
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.flush();
+            }
+        });
+
+        TestServer { base, seen }
+    }
+
+    fn read_request(stream: &mut TcpStream) -> Recorded {
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut request_line = String::new();
+        reader.read_line(&mut request_line).unwrap();
+        let path = request_line
+            .split_whitespace()
+            .nth(1)
+            .unwrap_or("")
+            .to_string();
+
+        let mut length = 0usize;
+        loop {
+            let mut header = String::new();
+            reader.read_line(&mut header).unwrap();
+            if header.trim().is_empty() {
+                break;
+            }
+            if let Some(value) = header.to_ascii_lowercase().strip_prefix("content-length:") {
+                length = value.trim().parse().unwrap_or(0);
+            }
+        }
+
+        let mut body = vec![0u8; length];
+        if length > 0 {
+            reader.read_exact(&mut body).unwrap();
+        }
+        Recorded {
+            path,
+            body: String::from_utf8_lossy(&body).to_string(),
+        }
+    }
+
+    fn block_on<F: std::future::Future>(future: F) -> F::Output {
+        tauri::async_runtime::block_on(future)
+    }
+
+    /// An endpoint nothing is listening on, for the unreachable-server cases.
+    fn dead_endpoint() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        format!("http://{address}")
+    }
+
+    fn input<'a>(endpoint: &'a str, language: &'a str) -> CheckInput<'a> {
+        CheckInput {
+            endpoint,
+            api_key: None,
+            username: None,
+            language,
+            text: "Ein Satzz.",
+            disabled_categories: &[],
+            preferred_variants: &[],
+        }
+    }
+
+    #[test]
+    fn posts_to_the_declared_path_and_returns_the_findings() {
+        let server = serve(vec![ok(sample())]);
+        let found = block_on(check(input(&server.base, "de-DE"), &languagetool())).unwrap();
+
+        let request = server.next();
+        assert_eq!(request.path, "/v2/check");
+        // Form-encoded, as the protocol declares.
+        assert!(request.body.contains("text=Ein+Satzz."), "{}", request.body);
+        assert!(request.body.contains("language=de-DE"), "{}", request.body);
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].from, 4);
+    }
+
+    #[test]
+    fn sends_a_json_body_when_the_protocol_declares_json() {
+        let mut protocol = languagetool();
+        protocol.check.encoding = Encoding::Json;
+        let server = serve(vec![ok(r#"{"matches":[]}"#)]);
+
+        block_on(check(input(&server.base, "de-DE"), &protocol)).unwrap();
+
+        let body: Value = serde_json::from_str(&server.next().body).unwrap();
+        assert_eq!(body["text"], "Ein Satzz.");
+        assert_eq!(body["language"], "de-DE");
+    }
+
+    #[test]
+    fn reports_an_unsuccessful_status_rather_than_an_empty_result() {
+        // Silently returning no findings would read as "your text is fine".
+        let server = serve(vec![Reply {
+            status: 500,
+            body: "boom".to_string(),
+        }]);
+        let err = block_on(check(input(&server.base, "de-DE"), &languagetool())).unwrap_err();
+        assert!(format!("{err}").contains("500"), "{err}");
+    }
+
+    #[test]
+    fn reports_a_reply_that_is_not_json() {
+        let server = serve(vec![ok("<html>not a checker</html>")]);
+        let err = block_on(check(input(&server.base, "de-DE"), &languagetool())).unwrap_err();
+        assert!(format!("{err}").contains("invalid"), "{err}");
+    }
+
+    #[test]
+    fn reports_an_unreachable_server() {
+        let endpoint = dead_endpoint();
+        let err = block_on(check(input(&endpoint, "de-DE"), &languagetool())).unwrap_err();
+        assert!(format!("{err}").contains("request failed"), "{err}");
+    }
+
+    #[test]
+    fn believes_confident_detection_of_a_language_the_user_writes() {
+        let server = serve(vec![ok(
+            r#"{"matches":[{"message":"m","offset":0,"length":3}],
+                "language":{"detectedLanguage":{"code":"de","confidence":0.99}}}"#,
+        )]);
+        let variants = vec!["de-DE".to_string()];
+        let mut request = input(&server.base, AUTO_LANGUAGE);
+        request.preferred_variants = &variants;
+
+        let found = block_on(check(request, &languagetool())).unwrap();
+
+        server.next();
+        assert!(server.is_done(), "a believable detection must not re-ask");
+        assert_eq!(found.len(), 1);
+    }
+
+    #[test]
+    fn re_asks_by_name_when_detection_lands_outside_what_the_user_writes() {
+        // The failure this exists to stop: German prose checked against French.
+        let server = serve(vec![
+            ok(r#"{"matches":[],"language":{"detectedLanguage":{"code":"fr","confidence":0.99}}}"#),
+            ok(r#"{"matches":[{"message":"m","offset":0,"length":3}]}"#),
+        ]);
+        let variants = vec!["de-DE".to_string()];
+        let mut request = input(&server.base, AUTO_LANGUAGE);
+        request.preferred_variants = &variants;
+
+        let found = block_on(check(request, &languagetool())).unwrap();
+
+        server.next();
+        let retry = server.next();
+        assert!(retry.body.contains("language=de-DE"), "{}", retry.body);
+        // The re-ask names the language, so variants are no longer sent.
+        assert!(!retry.body.contains("preferredVariants"), "{}", retry.body);
+        assert_eq!(found.len(), 1);
+    }
+
+    #[test]
+    fn re_asks_by_name_when_detection_is_not_confident() {
+        let server = serve(vec![
+            ok(r#"{"matches":[],"language":{"detectedLanguage":{"code":"de","confidence":0.43}}}"#),
+            ok(r#"{"matches":[]}"#),
+        ]);
+        let variants = vec!["de-DE".to_string(), "en-US".to_string()];
+        let mut request = input(&server.base, AUTO_LANGUAGE);
+        request.preferred_variants = &variants;
+
+        block_on(check(request, &languagetool())).unwrap();
+
+        let first = server.next();
+        assert!(
+            first.body.contains("preferredVariants=de-DE%2Cen-US"),
+            "{}",
+            first.body
+        );
+        assert!(server.next().body.contains("language=de-DE"));
+    }
+
+    #[test]
+    fn test_connection_counts_the_languages_a_server_offers() {
+        let server = serve(vec![ok(
+            r#"[{"longCode":"de-DE","code":"de"},{"longCode":"en-US","code":"en"}]"#,
+        )]);
+
+        let result = block_on(test_connection(
+            &server.base,
+            None,
+            None,
+            &["de-DE".to_string()],
+            &languagetool(),
+        ));
+
+        assert_eq!(server.next().path, "/v2/languages");
+        assert!(result.ok);
+        assert!(result.detail.contains('2'), "{}", result.detail);
+        assert!(result.missing_languages.is_empty());
+    }
+
+    #[test]
+    fn test_connection_names_the_languages_the_server_lacks() {
+        // A reachable container that simply lacks the language you write in is
+        // the most useful thing this test can report.
+        let server = serve(vec![ok(r#"[{"longCode":"en-US","code":"en"}]"#)]);
+
+        let result = block_on(test_connection(
+            &server.base,
+            None,
+            None,
+            &["de-DE".to_string(), "en-GB".to_string()],
+            &languagetool(),
+        ));
+
+        assert!(result.ok);
+        assert_eq!(result.missing_languages, vec!["de-DE".to_string()]);
+    }
+
+    #[test]
+    fn test_connection_reports_an_unsuccessful_probe() {
+        let server = serve(vec![Reply {
+            status: 404,
+            body: "nope".to_string(),
+        }]);
+
+        let result = block_on(test_connection(
+            &server.base,
+            None,
+            None,
+            &[],
+            &languagetool(),
+        ));
+
+        assert!(!result.ok);
+        assert!(result.detail.contains("404"), "{}", result.detail);
+    }
+
+    #[test]
+    fn test_connection_reports_reaching_something_that_is_not_the_service() {
+        // Usually a proxy or the wrong port.
+        let server = serve(vec![ok("<html>hello</html>")]);
+
+        let result = block_on(test_connection(
+            &server.base,
+            None,
+            None,
+            &[],
+            &languagetool(),
+        ));
+
+        assert!(!result.ok);
+        assert!(
+            result.detail.contains("not the expected server"),
+            "{}",
+            result.detail
+        );
+    }
+
+    #[test]
+    fn test_connection_reports_an_unreachable_server() {
+        let result = block_on(test_connection(
+            &dead_endpoint(),
+            None,
+            None,
+            &[],
+            &languagetool(),
+        ));
+        assert!(!result.ok);
+        assert!(!result.detail.is_empty());
+    }
+
+    #[test]
+    fn test_connection_verifies_credentials_in_a_language_the_server_offers() {
+        let server = serve(vec![
+            ok(r#"[{"longCode":"de-DE","code":"de"}]"#),
+            ok(r#"{"matches":[]}"#),
+        ]);
+
+        let result = block_on(test_connection(
+            &server.base,
+            Some("key"),
+            Some("user"),
+            &["de-DE".to_string()],
+            &languagetool(),
+        ));
+
+        server.next();
+        let verify = server.next();
+        assert_eq!(verify.path, "/v2/check");
+        assert!(verify.body.contains("language=de-DE"), "{}", verify.body);
+        // A fixed probe string — never the user's writing.
+        assert!(verify.body.contains("text=test"), "{}", verify.body);
+        assert!(verify.body.contains("apiKey=key"), "{}", verify.body);
+        assert!(result.ok);
+    }
+
+    #[test]
+    fn test_connection_fails_when_the_credentials_are_refused() {
+        let server = serve(vec![
+            ok(r#"[{"longCode":"de-DE","code":"de"}]"#),
+            Reply {
+                status: 403,
+                body: "denied".to_string(),
+            },
+        ]);
+
+        let result = block_on(test_connection(
+            &server.base,
+            Some("key"),
+            Some("user"),
+            &["de-DE".to_string()],
+            &languagetool(),
+        ));
+
+        assert!(!result.ok);
+        assert!(result.detail.contains("403"), "{}", result.detail);
+    }
+
+    #[test]
+    fn test_connection_skips_the_probe_when_no_credentials_are_supplied() {
+        let server = serve(vec![ok(r#"[{"longCode":"de-DE","code":"de"}]"#)]);
+
+        let result = block_on(test_connection(
+            &server.base,
+            None,
+            Some("user"),
+            &[],
+            &languagetool(),
+        ));
+
+        server.next();
+        assert!(
+            server.is_done(),
+            "a key-less server needs no second request"
+        );
+        assert!(result.ok);
+    }
+
+    #[test]
+    fn falls_back_to_the_check_path_when_no_probe_is_declared() {
+        let mut protocol = languagetool();
+        protocol.probe = None;
+        let server = serve(vec![ok(r#"{"matches":[]}"#)]);
+
+        let result = block_on(test_connection(&server.base, None, None, &[], &protocol));
+
+        let request = server.next();
+        assert_eq!(request.path, "/v2/check");
+        assert!(request.body.contains("text=test"), "{}", request.body);
+        assert!(result.ok);
+        assert_eq!(result.detail, "server reachable");
+    }
+
+    #[test]
+    fn reports_a_failure_from_the_check_path_fallback() {
+        let mut protocol = languagetool();
+        protocol.probe = None;
+
+        let result = block_on(test_connection(
+            &dead_endpoint(),
+            None,
+            None,
+            &[],
+            &protocol,
+        ));
+
+        assert!(!result.ok);
+        assert!(
+            result.detail.contains("request failed"),
+            "{}",
+            result.detail
+        );
+    }
+
+    #[test]
+    fn the_check_command_carries_its_arguments_through() {
+        // The command layer is a shape conversion — owned strings in, borrowed
+        // ones out — and getting it wrong drops a field silently.
+        let server = serve(vec![ok(sample())]);
+
+        let found = block_on(text_checker_check(
+            server.base.clone(),
+            Some("key".into()),
+            Some("user".into()),
+            "de-DE".into(),
+            "Ein Satzz.".into(),
+            vec!["WHITESPACE".into()],
+            vec![],
+            languagetool(),
+        ))
+        .unwrap();
+
+        let request = server.next();
+        assert!(request.body.contains("apiKey=key"), "{}", request.body);
+        assert!(request.body.contains("username=user"), "{}", request.body);
+        assert!(
+            request.body.contains("disabledCategories=WHITESPACE"),
+            "{}",
+            request.body
+        );
+        assert_eq!(found.len(), 2);
+    }
+
+    #[test]
+    fn the_test_connection_command_carries_its_arguments_through() {
+        let server = serve(vec![ok(r#"[{"longCode":"de-DE","code":"de"}]"#)]);
+
+        let result = block_on(text_checker_test_connection(
+            server.base.clone(),
+            None,
+            None,
+            vec!["en-US".into()],
+            languagetool(),
+        ))
+        .unwrap();
+
+        assert_eq!(server.next().path, "/v2/languages");
+        assert!(result.ok);
+        assert_eq!(result.missing_languages, vec!["en-US".to_string()]);
+    }
 }

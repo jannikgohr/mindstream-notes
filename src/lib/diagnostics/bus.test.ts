@@ -641,3 +641,78 @@ describe('partial results', () => {
     expect((await done).map((d) => d.source)).toEqual(['lt']);
   });
 });
+
+/**
+ * The bulk path. For a network checker this is the difference between a
+ * usable feature and an unusable one: a request costs about the same whatever
+ * it carries, so a 30-paragraph note checked one paragraph at a time takes
+ * minutes and batched takes seconds.
+ */
+describe('DiagnosticBus — bulk providers', () => {
+  /** Flags each segment whole, and records how many calls it took. */
+  function batchProvider(id = 'batch'): DiagnosticProvider & { calls: number } {
+    const provider = {
+      id,
+      kinds: ['grammar'] as const,
+      calls: 0,
+      check: () => null,
+      async checkAll(parts: Segment[]) {
+        provider.calls += 1;
+        return parts.map((part) =>
+          part.text.includes('bad')
+            ? [
+                diag({
+                  from: 0,
+                  to: part.text.length,
+                  kind: 'grammar',
+                  source: id
+                })
+              ]
+            : null
+        );
+      }
+    };
+    return provider;
+  }
+
+  it('checks every segment in one call', async () => {
+    const bus = new DiagnosticBus();
+    const provider = batchProvider();
+    bus.register(provider);
+
+    const out = await bus.check(
+      segments(['a bad line', 0], ['fine', 20], ['also bad', 40]),
+      { languages: ['en'] }
+    );
+
+    expect(provider.calls).toBe(1);
+    expect(out.map((d) => [d.from, d.to])).toEqual([
+      [0, 10],
+      [40, 48]
+    ]);
+  });
+
+  it('caches per segment, so only the edited one is re-checked', async () => {
+    const bus = new DiagnosticBus();
+    const provider = batchProvider();
+    bus.register(provider);
+
+    await bus.check(segments(['a bad line', 0], ['fine', 20]), {
+      languages: ['en']
+    });
+    await bus.check(segments(['a bad line', 0], ['fine too', 20]), {
+      languages: ['en']
+    });
+
+    expect(provider.calls).toBe(2);
+  });
+
+  it('exposes the registered providers', async () => {
+    const bus = new DiagnosticBus();
+    const provider = batchProvider();
+    const off = bus.register(provider);
+    expect(bus.providers.map((p) => p.id)).toEqual(['batch']);
+    off();
+    expect(bus.providers).toEqual([]);
+  });
+});
