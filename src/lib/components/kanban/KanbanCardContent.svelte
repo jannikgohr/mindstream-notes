@@ -6,7 +6,10 @@
   import { tree } from '$lib/stores/tree.svelte';
   import { getPriorityOptions } from '@svar-ui/svelte-kanban';
   import type { CardShape, KanbanCard } from '@svar-ui/svelte-kanban';
-  import { renderKanbanDescription } from '$lib/kanban/description-markdown';
+  import {
+    renderKanbanDescription,
+    sanitizeKanbanDescriptionHtml
+  } from '$lib/kanban/description-markdown';
 
   interface Props {
     card: KanbanCard & {
@@ -100,18 +103,26 @@
   const progressPercent = $derived(
     Math.round(Math.max(0, Math.min(1, Number(card.progress ?? 0))) * 100)
   );
-  const safeDescriptionHtml = $derived(
-    typeof card.description === 'string'
-      ? renderKanbanDescription(card.description)
-      : ''
-  );
-  // Synced documents are untrusted input. Use the cached HTML only when it is
-  // exactly the safe rendering of the current Markdown source.
-  const descriptionHtml = $derived(
-    card.descriptionHtml === safeDescriptionHtml
-      ? card.descriptionHtml
-      : safeDescriptionHtml
-  );
+  let descriptionHtml = $state('');
+
+  $effect(() => {
+    const markdown =
+      typeof card.description === 'string' ? card.description : '';
+    descriptionHtml = sanitizeKanbanDescriptionHtml(card.descriptionHtml ?? '');
+    if (!markdown) return;
+    let cancelled = false;
+    void renderKanbanDescription(markdown).then(
+      (html) => {
+        if (!cancelled) descriptionHtml = html;
+      },
+      () => {
+        // Keep the last persisted rendering if the shared renderer is unavailable.
+      }
+    );
+    return () => {
+      cancelled = true;
+    };
+  });
 
   function openLinkedNote(event: MouseEvent | PointerEvent): void {
     event.preventDefault();
@@ -295,6 +306,14 @@
   .kanban-card-description :global(ul),
   .kanban-card-description :global(ol) {
     padding-left: 1.25em;
+  }
+
+  .kanban-card-description :global(ul) {
+    list-style: disc;
+  }
+
+  .kanban-card-description :global(ol) {
+    list-style: decimal;
   }
 
   .kanban-card-description :global(a) {

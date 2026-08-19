@@ -21,6 +21,8 @@
     Trash2
   } from '@lucide/svelte';
   import { getSettingValue } from '$lib/settings/store.svelte';
+  import PluginIcon from '$lib/plugins/PluginIcon.svelte';
+  import { noteKindIcon } from './note-kind-icon';
   import type { MenuItem } from './context-menu-types';
 
   interface Props {
@@ -127,6 +129,8 @@
       <div class="my-1 h-px bg-border"></div>
     {:else}
       {@const Icon = showIcons ? (item.icon ?? fallbackIcon(item)) : null}
+      {@const KindIcon =
+        showIcons && item.noteKind ? noteKindIcon(item.noteKind) : null}
       <div
         role="none"
         class="relative"
@@ -161,7 +165,15 @@
           onfocus={() => (activeSubmenu = item.children?.length ? i : null)}
         >
           <span class="flex min-w-0 items-center gap-2">
-            {#if Icon}
+            {#if showIcons && item.pluginIcon}
+              <PluginIcon
+                pluginId={item.pluginIcon.pluginId}
+                file={item.pluginIcon.file}
+                class="size-4 text-muted-foreground"
+              />
+            {:else if KindIcon}
+              <KindIcon class="size-4 shrink-0 text-muted-foreground" />
+            {:else if Icon}
               <Icon class="size-4 shrink-0 text-muted-foreground" />
             {/if}
             <span class="truncate">{item.label}</span>
@@ -186,6 +198,10 @@
               {@const ChildIcon = showIcons
                 ? (child.icon ?? fallbackIcon(child))
                 : null}
+              {@const ChildKindIcon =
+                showIcons && child.noteKind
+                  ? noteKindIcon(child.noteKind)
+                  : null}
               <button
                 type="button"
                 role="menuitem"
@@ -196,7 +212,17 @@
                 onclick={() => invoke(child)}
               >
                 <span class="flex min-w-0 items-center gap-2">
-                  {#if ChildIcon}
+                  {#if showIcons && child.pluginIcon}
+                    <PluginIcon
+                      pluginId={child.pluginIcon.pluginId}
+                      file={child.pluginIcon.file}
+                      class="size-4 text-muted-foreground"
+                    />
+                  {:else if ChildKindIcon}
+                    <ChildKindIcon
+                      class="size-4 shrink-0 text-muted-foreground"
+                    />
+                  {:else if ChildIcon}
                     <ChildIcon class="size-4 shrink-0 text-muted-foreground" />
                   {/if}
                   <span class="truncate">{child.label}</span>

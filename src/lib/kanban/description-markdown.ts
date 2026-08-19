@@ -1,112 +1,108 @@
 /**
- * Small, safe Markdown renderer for Kanban card summaries. Card descriptions
- * intentionally have no headings, embedded HTML, images, or complex blocks.
+ * Milkdown-backed renderer for compact Kanban descriptions.
+ *
+ * One detached editor is shared by every card. It provides the same CommonMark
+ * parser and ProseMirror DOM serializer as the note editor without mounting an
+ * editor per card. Generated HTML is cached in the board document on save.
  */
 
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+import {
+  Editor,
+  getDoc,
+  parserCtx,
+  rootCtx,
+  schemaCtx
+} from '@milkdown/kit/core';
+import { commonmark } from '@milkdown/kit/preset/commonmark';
+import { DOMSerializer } from 'prosemirror-model';
+
+const ALLOWED_TAGS = new Set([
+  'a',
+  'blockquote',
+  'br',
+  'code',
+  'em',
+  'li',
+  'ol',
+  'p',
+  'pre',
+  's',
+  'strong',
+  'ul'
+]);
+
+let rendererPromise: Promise<Editor> | null = null;
+
+function renderer(): Promise<Editor> {
+  if (rendererPromise) return rendererPromise;
+  rendererPromise = Editor.make()
+    .config((ctx) => {
+      ctx.set(rootCtx, document.createElement('div'));
+    })
+    .use(commonmark)
+    .create();
+  return rendererPromise;
 }
 
-function safeHref(value: string): string | null {
-  const trimmed = value.trim();
-  if (/^(https?:|mailto:)/i.test(trimmed)) return escapeHtml(trimmed);
-  return null;
+function safeHref(value: string): boolean {
+  return /^(https?:|mailto:)/i.test(value.trim());
 }
 
-function inlineMarkdown(value: string): string {
-  let html = escapeHtml(value);
-  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-  html = html.replace(/\[([^\]]+)]\(([^)]+)\)/g, (_match, label, href) => {
-    const safe = safeHref(href);
-    return safe
-      ? `<a href="${safe}" target="_blank" rel="noreferrer">${label}</a>`
-      : label;
+function sanitizeElement(element: Element): void {
+  for (const child of [...element.children]) sanitizeElement(child);
+
+  const tag = element.tagName.toLowerCase();
+  if (/^h[1-6]$/.test(tag)) {
+    const paragraph = element.ownerDocument.createElement('p');
+    paragraph.append(...element.childNodes);
+    element.replaceWith(paragraph);
+    return;
+  }
+
+  if (!ALLOWED_TAGS.has(tag)) {
+    element.replaceWith(...element.childNodes);
+    return;
+  }
+
+  const href = tag === 'a' ? (element.getAttribute('href') ?? '') : '';
+  for (const attribute of [...element.attributes]) {
+    element.removeAttribute(attribute.name);
+  }
+  if (tag === 'a') {
+    if (safeHref(href)) {
+      element.setAttribute('href', href);
+      element.setAttribute('target', '_blank');
+      element.setAttribute('rel', 'noreferrer');
+    } else {
+      element.replaceWith(...element.childNodes);
+    }
+  }
+}
+
+/** Sanitize cached HTML before it enters Svelte's `{@html}` block. */
+export function sanitizeKanbanDescriptionHtml(html: string): string {
+  if (!html || typeof document === 'undefined') return '';
+  const template = document.createElement('template');
+  template.innerHTML = html;
+  for (const child of [...template.content.children]) sanitizeElement(child);
+  return template.innerHTML;
+}
+
+export async function renderKanbanDescription(
+  markdown: string
+): Promise<string> {
+  if (!markdown.trim() || typeof document === 'undefined') return '';
+  const editor = await renderer();
+  const html = editor.action((ctx) => {
+    const schema = ctx.get(schemaCtx);
+    const doc = getDoc(markdown, ctx.get(parserCtx), schema);
+    const host = document.createElement('div');
+    host.append(
+      DOMSerializer.fromSchema(schema).serializeFragment(doc.content, {
+        document
+      })
+    );
+    return host.innerHTML;
   });
-  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  html = html.replace(/__([^_]+)__/g, '<strong>$1</strong>');
-  html = html.replace(/~~([^~]+)~~/g, '<s>$1</s>');
-  html = html.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
-  html = html.replace(/(^|[^_])_([^_\n]+)_/g, '$1<em>$2</em>');
-  return html;
-}
-
-export function renderKanbanDescription(markdown: string): string {
-  const lines = markdown.replace(/\r\n?/g, '\n').split('\n');
-  const out: string[] = [];
-  let paragraph: string[] = [];
-  let list: 'ul' | 'ol' | null = null;
-  let inCode = false;
-  let code: string[] = [];
-
-  const flushParagraph = () => {
-    if (paragraph.length === 0) return;
-    out.push(`<p>${inlineMarkdown(paragraph.join(' '))}</p>`);
-    paragraph = [];
-  };
-  const closeList = () => {
-    if (!list) return;
-    out.push(`</${list}>`);
-    list = null;
-  };
-
-  for (const rawLine of lines) {
-    if (/^\s*```/.test(rawLine)) {
-      flushParagraph();
-      closeList();
-      if (inCode) {
-        out.push(`<pre><code>${escapeHtml(code.join('\n'))}</code></pre>`);
-        code = [];
-      }
-      inCode = !inCode;
-      continue;
-    }
-    if (inCode) {
-      code.push(rawLine);
-      continue;
-    }
-
-    const line = rawLine.trim();
-    if (!line) {
-      flushParagraph();
-      closeList();
-      continue;
-    }
-
-    const unordered = line.match(/^[-+*]\s+(.+)$/);
-    const ordered = line.match(/^\d+[.)]\s+(.+)$/);
-    if (unordered || ordered) {
-      flushParagraph();
-      const nextList = unordered ? 'ul' : 'ol';
-      if (list !== nextList) {
-        closeList();
-        list = nextList;
-        out.push(`<${list}>`);
-      }
-      out.push(`<li>${inlineMarkdown((unordered ?? ordered)![1])}</li>`);
-      continue;
-    }
-
-    closeList();
-    const quote = line.match(/^>\s?(.*)$/);
-    if (quote) {
-      flushParagraph();
-      out.push(`<blockquote>${inlineMarkdown(quote[1])}</blockquote>`);
-      continue;
-    }
-
-    // Headings are deliberately disabled for compact card descriptions.
-    paragraph.push(line.replace(/^#{1,6}\s+/, ''));
-  }
-
-  if (inCode && code.length > 0) {
-    out.push(`<pre><code>${escapeHtml(code.join('\n'))}</code></pre>`);
-  }
-  flushParagraph();
-  closeList();
-  return out.join('');
+  return sanitizeKanbanDescriptionHtml(html);
 }

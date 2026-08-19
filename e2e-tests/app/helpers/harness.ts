@@ -650,7 +650,7 @@ export async function syncClient(client: WebdriverIO.Browser): Promise<void> {
  * The tree-seed helpers (`newRootFolder`, `newNoteInFolder`) drive the same UI
  * flow the browser-fallback T2 specs validate in e2e-tests/browser/tree-operations
  * .spec.ts: the toolbar "New folder"/"New note" buttons and the folder context
- * menu's "New folder inside"/"New note in folder" items, each opening an inline
+ * menu's "New folder"/"New note" items, each opening an inline
  * draft input whose accessible name is its placeholder ("New folder"/"New note").
  */
 export interface ClientHelpers {
@@ -922,7 +922,7 @@ export function clientHelpers(client: WebdriverIO.Browser): ClientHelpers {
     note: string
   ): Promise<void> => {
     await clickElement(treeItem(folder), { button: 'right' });
-    await clickMenuItem('New note in folder');
+    await clickMenuItem('New note');
     await commitDraft('New note', note);
   };
 

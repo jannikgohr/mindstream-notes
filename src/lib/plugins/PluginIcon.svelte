@@ -34,33 +34,13 @@
 </script>
 
 <span
-  class={klass}
+  class="inline-block shrink-0 bg-current {klass}"
+  class:scale-[0.45]={!mask}
+  class:rounded-sm={!mask}
+  class:opacity-70={!mask}
   aria-hidden="true"
   data-loaded={mask ? 'true' : 'false'}
-  style={mask ? `--plugin-icon: ${mask};` : undefined}
+  style={mask
+    ? `-webkit-mask-image: ${mask}; mask-image: ${mask}; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat; -webkit-mask-position: center; mask-position: center; -webkit-mask-size: contain; mask-size: contain;`
+    : undefined}
 ></span>
-
-<style>
-  span {
-    display: inline-block;
-    flex-shrink: 0;
-    background-color: currentColor;
-  }
-
-  span[data-loaded='true'] {
-    -webkit-mask-image: var(--plugin-icon);
-    mask-image: var(--plugin-icon);
-    -webkit-mask-repeat: no-repeat;
-    mask-repeat: no-repeat;
-    -webkit-mask-position: center;
-    mask-position: center;
-    -webkit-mask-size: contain;
-    mask-size: contain;
-  }
-
-  span[data-loaded='false'] {
-    border-radius: 2px;
-    opacity: 0.7;
-    transform: scale(0.45);
-  }
-</style>

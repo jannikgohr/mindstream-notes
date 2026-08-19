@@ -131,6 +131,7 @@ describe('root menu', () => {
   });
 
   it('renders plugin file-tree openMenu effects as hover submenus', async () => {
+    tree.notesById = { n1: note({ note_kind: 'kanban' }) };
     registerPlugin({
       id: 'com.example.templates',
       name: 'Templates',
@@ -172,6 +173,11 @@ describe('root menu', () => {
     expect(templates?.children?.map((child) => child.label)).toEqual([
       'Daily note'
     ]);
+    expect(templates?.pluginIcon).toEqual({
+      pluginId: 'com.example.templates',
+      file: 'icons/templates.svg'
+    });
+    expect(templates?.children?.[0]?.noteKind).toBe('kanban');
     expect(templates?.onSelect).toBeUndefined();
     expect(pluginApi.runScript).toHaveBeenCalledWith(
       'com.example.templates',
@@ -184,10 +190,24 @@ describe('root menu', () => {
 describe('folder create submenu', () => {
   it('offers one entry per enabled note type plus a nested folder', async () => {
     const { folderCreateMenuItems } = createMenuBuilder(context());
-    const items = labels(await folderCreateMenuItems('folder-1'));
+    const menuItems = await folderCreateMenuItems('folder-1');
+    const items = labels(menuItems);
 
-    expect(items).toContain('New note in folder');
-    expect(items).toContain('New folder inside');
+    expect(items).toContain('New note');
+    expect(items).toContain('New folder');
+    for (const label of [
+      'New note',
+      'New drawing canvas',
+      'New handwritten note',
+      'Import PDF',
+      'New Kanban board',
+      'New folder'
+    ]) {
+      expect(
+        item(menuItems, label)?.icon,
+        `${label} should have an icon`
+      ).toBeTruthy();
+    }
   });
 
   it('routes every entry at the folder it was opened on', async () => {
