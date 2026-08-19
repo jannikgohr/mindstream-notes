@@ -215,3 +215,85 @@ describe('state vector encoding', () => {
     expect(empty.visibleStrokeCount()).toBe(1);
   });
 });
+
+/**
+ * Guard clauses on the mutation API. Each returns "nothing happened" rather
+ * than throwing or writing a degenerate stroke: these are reached from pointer
+ * handlers, where a NaN coordinate is a bad frame, not a bug worth crashing on.
+ */
+describe('mutations that must do nothing', () => {
+  it('ignores a translate by a non-finite delta', () => {
+    const [doc, id] = docWithStroke();
+    for (const [dx, dy] of [
+      [Number.NaN, 1],
+      [1, Number.POSITIVE_INFINITY]
+    ]) {
+      const { value, update } = doc.translateStrokes([id], dx, dy);
+      expect(value).toEqual([]);
+      expect(update).toBeNull();
+    }
+    expect(doc.visibleStrokes()[0].points[0]).toMatchObject({ x: 0, y: 0 });
+  });
+
+  it('ignores a transform that is not invertible', () => {
+    // A zero-determinant matrix collapses the strokes onto a line, and the
+    // undo entry could not restore them.
+    const [doc, id] = docWithStroke();
+    const { value, update } = doc.transformStrokes([id], {
+      a: 0,
+      b: 0,
+      c: 0,
+      d: 0,
+      e: 0,
+      f: 0,
+      widthScale: 1
+    });
+    expect(value).toEqual([]);
+    expect(update).toBeNull();
+  });
+
+  it('ignores a transform carrying a non-finite term', () => {
+    const [doc, id] = docWithStroke();
+    const { value } = doc.transformStrokes([id], {
+      a: Number.NaN,
+      b: 0,
+      c: 0,
+      d: 1,
+      e: 0,
+      f: 0,
+      widthScale: 1
+    });
+    expect(value).toEqual([]);
+  });
+
+  it('ignores a style patch that changes neither colour nor width', () => {
+    const [doc, id] = docWithStroke();
+    const { value, update } = doc.styleStrokes([id], {});
+    expect(value).toEqual([]);
+    expect(update).toBeNull();
+  });
+
+  it('ignores an erase pass with no usable points', () => {
+    const [doc] = docWithStroke();
+    const { value, update } = doc.eraseAtMany(
+      [
+        { x: Number.NaN, y: 0 },
+        { x: 0, y: Number.NaN }
+      ],
+      5
+    );
+    expect(value).toEqual([]);
+    expect(update).toBeNull();
+    expect(doc.visibleStrokes()).toHaveLength(1);
+  });
+
+  it('ignores a lasso with fewer than three points', () => {
+    const [doc] = docWithStroke();
+    expect(
+      doc.strokeIdsInLasso([
+        { x: 0, y: 0 },
+        { x: 10, y: 0 }
+      ])
+    ).toEqual([]);
+  });
+});

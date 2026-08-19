@@ -119,4 +119,68 @@ describe('startPdfSearchIndexing', () => {
 
     expect(listenMock).toHaveBeenCalledTimes(2);
   });
+  it('coalesces a sweep requested while one is already running', async () => {
+    // A sync landing mid-sweep must not start a second overlapping pass; it
+    // queues one follow-up instead.
+    const { startPdfSearchIndexing } = await importBackfill();
+    let syncHandler: (() => void) | undefined;
+    listenMock.mockImplementation(async (_event: string, cb: () => void) => {
+      syncHandler = cb;
+      return () => {};
+    });
+    let released: (() => void) | undefined;
+    pdfNotesMissingTextMock.mockImplementationOnce(
+      () => new Promise<string[]>((resolve) => (released = () => resolve([])))
+    );
+
+    startPdfSearchIndexing();
+    await vi.waitFor(() => expect(syncHandler).toBeDefined());
+
+    syncHandler!();
+    syncHandler!();
+    expect(pdfNotesMissingTextMock).toHaveBeenCalledTimes(1);
+
+    released!();
+    // The queued request runs exactly once after the in-flight pass ends.
+    await vi.waitFor(() =>
+      expect(pdfNotesMissingTextMock).toHaveBeenCalledTimes(2)
+    );
+  });
+
+  it('gives up the pass when the missing-list query fails', async () => {
+    const { startPdfSearchIndexing } = await importBackfill();
+    const debug = vi
+      .spyOn(console, 'debug')
+      .mockImplementation(() => undefined);
+    pdfNotesMissingTextMock.mockRejectedValue(new Error('db locked'));
+
+    startPdfSearchIndexing();
+
+    await vi.waitFor(() => {
+      expect(debug).toHaveBeenCalledWith(
+        '[pdf-index] missing-list query failed',
+        expect.any(Error)
+      );
+    });
+    expect(extractPdfTextMock).not.toHaveBeenCalled();
+  });
+
+  it('falls back to a timer when the browser has no idle callback', async () => {
+    vi.stubGlobal('requestIdleCallback', undefined);
+    const { startPdfSearchIndexing } = await importBackfill();
+    pdfNotesMissingTextMock.mockResolvedValueOnce(['a']);
+    loadNoteMock.mockImplementation(async (id: string) =>
+      pdfNote(id, `asset_${id}`)
+    );
+    fetchDrawingAssetMock.mockResolvedValue({
+      mime_type: 'application/pdf',
+      bytes: [1]
+    });
+
+    startPdfSearchIndexing();
+
+    await vi.waitFor(() =>
+      expect(setPdfTextMock).toHaveBeenCalledWith('a', 'hello pdf')
+    );
+  });
 });
