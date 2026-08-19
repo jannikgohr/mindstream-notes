@@ -82,6 +82,7 @@
   } from '$lib/editor/source/source-presence';
   import type { PeerPresence } from '$lib/editor/source/source-presence-extension';
   import type { EditorView as CmEditorView } from '@codemirror/view';
+  import { Selection as ProseSelection } from '@milkdown/kit/prose/state';
   import {
     registerEditor,
     unregisterEditor,
@@ -212,6 +213,7 @@
   // the hotkey manager treats the source editor's contenteditable as part of
   // this editor (otherwise its keystrokes would be filtered as blocked input).
   let editorRegionEl: HTMLDivElement | null = $state(null);
+  let wysiwygPaneEl: HTMLDivElement | null = $state(null);
   // Imperative handle to the source editor (null unless the source pane is up).
   let sourceEditor = $state<{
     setText: (text: string) => void;
@@ -733,8 +735,8 @@
       // Expose restore + current-markdown to the History sidebar section,
       // which can't reach the live editor (and its Yjs doc) by props.
       unregisterHistory = registerNoteHistory(noteId, {
-        restoreSnapshot: (markdown) => applyMarkdown(markdown),
-        currentSnapshot: () => (getMarkdown ? getMarkdown() : ''),
+        restoreSnapshot: (markdown) => restoreMarkdownSnapshot(markdown),
+        currentSnapshot: () => currentMarkdownSnapshot(),
         snapshotNow: () => snapshotHistoryNow(),
         peerCount: () => otherPeerCount(awareness),
         setCollabPaused: (paused) => setE2eCollabPaused(paused)
@@ -952,6 +954,42 @@
     if (!editorRegionEl || !editorListener) return;
     const region = editorRegionEl;
     const listener = editorListener;
+    const surfaceForTarget = (target: EventTarget | null) => {
+      const node = target as Node | null;
+      const sourceDom = sourceEditor?.getView()?.dom ?? null;
+      if (sourceDom && node && sourceDom.contains(node)) return 'source';
+      if (viewMode === 'source') return 'source';
+      return 'wysiwyg';
+    };
+    const isWysiwygEndClick = (e: PointerEvent) => {
+      const dom = crepe
+        ? (() => {
+            try {
+              let result: HTMLElement | null = null;
+              crepe?.editor.action((ctx) => {
+                result = ctx.get(editorViewCtx).dom;
+              });
+              return result;
+            } catch {
+              return null;
+            }
+          })()
+        : null;
+      if (!dom) return false;
+      const proseDom = dom as HTMLElement;
+      const target = e.target as Node | null;
+      if (target && !proseDom.contains(target)) return true;
+      const blocks = Array.from(proseDom.children).filter(
+        (child): child is HTMLElement =>
+          child instanceof HTMLElement &&
+          child.offsetHeight > 0 &&
+          !child.classList.contains('ProseMirror-yjs-cursor') &&
+          !child.classList.contains('ProseMirror-yjs-selection')
+      );
+      const last = blocks.at(-1);
+      if (!last) return true;
+      return e.clientY > last.getBoundingClientRect().bottom + 4;
+    };
     const onFocusIn = (e: FocusEvent) => {
       // registerEditor is the "re-promote" path too: if the listener
       // is already registered it gets moved to the top of the stack.
@@ -959,12 +997,23 @@
       // Track which pane the user is in so the shared toolbar and hotkeys
       // target it. The region wraps both panes; anything inside the Crepe
       // host is the WYSIWYG surface, everything else is the source editor.
-      const target = e.target as Node | null;
-      activeSurface =
-        host && target && host.contains(target) ? 'wysiwyg' : 'source';
+      activeSurface = surfaceForTarget(e.target);
+    };
+    const onPointerDown = (e: PointerEvent) => {
+      registerEditor(listener);
+      const surface = surfaceForTarget(e.target);
+      activeSurface = surface;
+      if (surface === 'wysiwyg' && isWysiwygEndClick(e)) {
+        e.preventDefault();
+        queueMicrotask(() => focusEditorEnd());
+      }
     };
     region.addEventListener('focusin', onFocusIn);
-    return () => region.removeEventListener('focusin', onFocusIn);
+    region.addEventListener('pointerdown', onPointerDown, true);
+    return () => {
+      region.removeEventListener('focusin', onFocusIn);
+      region.removeEventListener('pointerdown', onPointerDown, true);
+    };
   });
 
   onDestroy(() => {
@@ -1148,6 +1197,19 @@
     }
   }
 
+  function currentMarkdownSnapshot(): string {
+    sourceEditor?.flush();
+    return getMarkdown ? getMarkdown() : '';
+  }
+
+  function restoreMarkdownSnapshot(markdown: string) {
+    sourceEditor?.flush();
+    applyMarkdown(markdown);
+    if (viewMode !== 'wysiwyg' && sourceEditor && getMarkdown) {
+      sourceEditor.setText(getMarkdown());
+    }
+  }
+
   /**
    * Switch this note's editor surface. WYSIWYG/Source set the active surface
    * directly; Split keeps whatever pane was last used. Focus follows the new
@@ -1267,6 +1329,7 @@
       clearTimeout(historyTimer);
       historyTimer = null;
     }
+    sourceEditor?.flush();
     await captureHistoryVersion('edited');
   }
 
@@ -1415,6 +1478,22 @@
       crepe.editor.action((ctx) => ctx.get(editorViewCtx).focus());
     } catch (err) {
       console.debug('[NoteEditor] focus editor failed', err);
+    }
+  }
+
+  function focusEditorEnd() {
+    if (!crepe) return;
+    try {
+      crepe.editor.action((ctx) => {
+        const view = ctx.get(editorViewCtx);
+        const tr = view.state.tr.setSelection(
+          ProseSelection.atEnd(view.state.doc)
+        );
+        view.dispatch(tr);
+        view.focus();
+      });
+    } catch (err) {
+      console.debug('[NoteEditor] focus editor end failed', err);
     }
   }
 
@@ -1628,13 +1707,14 @@
         Hidden in Source-only mode, half-width (right) in Split.
       -->
       <div
+        bind:this={wysiwygPaneEl}
         class="themed-scrollbar h-full overflow-y-auto {viewMode === 'source'
           ? 'hidden'
           : ''} {viewMode === 'split' ? 'w-1/2' : 'w-full'}"
       >
         <div
           bind:this={host}
-          class="mx-auto max-w-3xl"
+          class="mx-auto min-h-full max-w-3xl"
           class:mobile-editor={mobile}
           class:wikilink-open-on-click={wikilinkOpenOnClick}
         ></div>

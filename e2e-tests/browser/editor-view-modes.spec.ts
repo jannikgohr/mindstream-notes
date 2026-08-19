@@ -59,6 +59,19 @@ async function currentMode(page: Page): Promise<string> {
   return (label ?? '').replace('Editor view mode: ', '');
 }
 
+async function setMode(page: Page, target: 'WYSIWYG' | 'Source' | 'Split') {
+  for (let i = 0; i < 4; i++) {
+    if ((await currentMode(page)) === target) return;
+    await modeButton(page).click();
+  }
+  throw new Error(`could not reach view mode ${target}`);
+}
+
+async function sourceText(page: Page): Promise<string> {
+  const lines = await page.locator('.cm-line').allTextContents();
+  return lines.join('\n');
+}
+
 /** Click the toggle `n` times, collecting the mode after each click. */
 async function cycle(page: Page, n: number): Promise<string[]> {
   const seen: string[] = [];
@@ -92,6 +105,43 @@ test.describe('wide viewport', () => {
     expect(await currentMode(page)).toBe('Split');
     await expect(sourcePane(page)).toBeVisible();
     await expect(wysiwygPane(page)).toBeVisible();
+  });
+
+  test('split syncs task checkbox toggles back to Source', async ({ page }) => {
+    await boot(page);
+    await setMode(page, 'Split');
+    await sourcePane(page).click();
+    await page.keyboard.press('ControlOrMeta+a');
+    await page.keyboard.insertText('- [ ] split task');
+
+    const checkbox = page.locator('.milkdown-list-item-block .label-wrapper');
+    await expect(checkbox.first()).toBeVisible();
+    await checkbox.first().click();
+
+    await expect
+      .poll(async () => /\[[xX]\] split task/.test(await sourceText(page)))
+      .toBe(true);
+  });
+
+  test('clicking the empty bottom of WYSIWYG focuses the document end', async ({
+    page
+  }) => {
+    await boot(page);
+    const pane = page
+      .locator('.themed-scrollbar')
+      .filter({ has: wysiwygPane(page) })
+      .first();
+    const box = await pane.boundingBox();
+    if (!box) throw new Error('WYSIWYG pane has no bounding box');
+
+    const marker = ` bottom focus ${Date.now()}`;
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height - 8);
+    await page.keyboard.insertText(marker);
+    await setMode(page, 'Source');
+
+    await expect
+      .poll(async () => (await sourceText(page)).trimEnd().endsWith(marker))
+      .toBe(true);
   });
 
   test('settings offers Split', async ({ page }) => {
