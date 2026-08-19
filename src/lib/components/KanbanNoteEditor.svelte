@@ -101,6 +101,7 @@
   import KanbanSearchPanel from './kanban/KanbanSearchPanel.svelte';
   import {
     KANBAN_LOCAL_ORIGIN,
+    KANBAN_RENDER_ORIGIN,
     KANBAN_RESTORE_ORIGIN,
     boardToPlainText,
     createKanbanUndoManager,
@@ -372,9 +373,8 @@
       label: typeof c.label === 'string' ? c.label : '',
       column,
       description,
-      descriptionHtml: description
-        ? renderKanbanDescription(description)
-        : undefined,
+      descriptionHtml:
+        typeof c.descriptionHtml === 'string' ? c.descriptionHtml : undefined,
       priority: typeof c.priority === 'number' ? c.priority : undefined,
       progress: typeof c.progress === 'number' ? c.progress : undefined,
       deadline:
@@ -826,12 +826,22 @@
 
   async function persist(): Promise<void> {
     if (!yDoc || isTrashed) return;
+    const doc = yDoc;
     try {
       savingState = 'saving';
-      const snapshot = readBoardFromYDoc(yDoc);
+      const snapshot = readBoardFromYDoc(doc);
+      await Promise.all(
+        snapshot.cards.map(async (card) => {
+          card.descriptionHtml = card.description
+            ? await renderKanbanDescription(card.description)
+            : undefined;
+        })
+      );
+      if (yDoc !== doc || isTrashed) return;
+      upsertBoardIntoYDoc(doc, snapshot, KANBAN_RENDER_ORIGIN);
       // Array.from: Tauri serialises a bare Uint8Array as `{}` over the IPC
       // boundary, so hand Rust a plain number[].
-      const yrsState = Array.from(Y.encodeStateAsUpdate(yDoc));
+      const yrsState = Array.from(Y.encodeStateAsUpdate(doc));
       await apiSaveNote({
         id: noteId,
         // Plaintext projection so full-text search / content-stats index cards.
@@ -961,6 +971,7 @@
       localYDoc.on('update', (_update: Uint8Array, origin: unknown) => {
         if (!saveReady) return;
         if (origin === REMOTE_SYNC_ORIGIN) return;
+        if (origin === KANBAN_RENDER_ORIGIN) return;
         scheduleSave();
         if (!capturingHistory && isLocalEditOrigin(origin))
           historyCapture.schedule();

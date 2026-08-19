@@ -28,6 +28,8 @@ export const KANBAN_LOCAL_ORIGIN = 'kanban-local';
 export const KANBAN_SEED_ORIGIN = 'kanban-seed';
 /** Transaction origin for a history-snapshot restore. */
 export const KANBAN_RESTORE_ORIGIN = 'kanban-restore';
+/** Cached Milkdown HTML refresh. It is persisted but excluded from undo. */
+export const KANBAN_RENDER_ORIGIN = 'kanban-render';
 
 const COLUMNS_KEY = 'kanban:columns';
 const CARDS_KEY = 'kanban:cards';
@@ -504,7 +506,8 @@ export function isLocalOnly(
     return (
       origin === KANBAN_LOCAL_ORIGIN ||
       origin === KANBAN_SEED_ORIGIN ||
-      origin === KANBAN_RESTORE_ORIGIN
+      origin === KANBAN_RESTORE_ORIGIN ||
+      origin === KANBAN_RENDER_ORIGIN
     );
   });
 }

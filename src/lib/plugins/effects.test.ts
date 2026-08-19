@@ -21,7 +21,8 @@ vi.mock('$lib/stores/tree.svelte', () => ({
   tree: {
     collectionsById: {
       f1: { id: 'f1', name: 'Work', parent_collection_id: null }
-    }
+    },
+    notesById: { n1: { note_kind: 'kanban' } }
   }
 }));
 vi.mock('$lib/stores/open-note-intent.svelte', () => ({
@@ -261,6 +262,7 @@ describe('runPluginEffect', () => {
     );
 
     expect(item.children?.map((child) => child.label)).toEqual(['Daily']);
+    expect(item.children?.[0]?.noteKind).toBe('kanban');
     item.children?.[0]?.onSelect?.();
     expect(h.createNoteFromNote).toHaveBeenCalledWith('n1', 'folder-1');
   });
