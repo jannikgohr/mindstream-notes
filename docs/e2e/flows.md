@@ -202,6 +202,51 @@ back. The value is proving the whole frontend↔Rust↔frontend chain.
   enter the existing hotkey bus once, native/default window chrome state matches
   settings, and macOS close/Dock/window switching behaviour feels native.
 
+### 2.8 Plugin artifact download → verify → use (P2)
+
+- **Why e2e:** `plugins_artifact_status` / `plugins_artifact_download` /
+  `plugins_artifact_remove` (`plugins/mod.rs`) are the app's only
+  download-and-execute path, and the HTTPS fetch, the command layer and
+  restart persistence all need the real app.
+- **Already unit-tested:** the gate the fetch feeds. `install_artifact_bytes`
+  was split out of the request so the digest check, the declared-size check,
+  the staged write and the traversal-safe layout are ordinary Rust tests
+  (`plugins::tests::artifacts`), including that a rejected body leaves nothing
+  on disk. What is left for e2e is the transfer around it.
+- **Steps:** launch with a plugin declaring an artifact served by a local HTTPS
+  stub → open the plugin's panel → assert the artifact shows as missing →
+  download → assert it reports installed with the declared size → relaunch →
+  assert it is still installed → serve a corrupted body under the same URL,
+  remove and re-download → assert the download fails and no file is left
+  behind.
+- **Proves:** a real HTTPS transfer reaches the gate, the panel reports what
+  landed on disk, and installed state survives a restart.
+- **Blocked on:** a local HTTPS server the app will talk to. The URL scheme is
+  refused twice, in `validation.ts` and again in `plugins/mod.rs`, and the
+  downloader uses a default `reqwest` client, so a self-signed certificate
+  fails too. The options are to download from upstream on every run, to put a
+  test certificate in the machine's trust store, or to add a seam that relaxes
+  certificate checking — and the last one weakens the property this flow is
+  meant to protect, so it is not on the table.
+
+### 2.9 Native preview service + themed proxy (P2)
+
+- **Why e2e:** `plugins_preview_start` / `_update` / `_stop`
+  (`plugins/preview_service.rs`) spawn a real child process, wait for its port,
+  and put a loopback proxy in front of it. The proxy internals (theme
+  injection, CSS sanitising, the websocket tunnel) are unit-tested over real
+  sockets; the process lifecycle — spawn, ready-wait, session reuse, kill on
+  stop, kill on app exit — is not, and cannot be without a binary to spawn.
+- **Steps:** launch with the Typst plugin and a stub service binary on PATH →
+  open a plugin-owned note → assert the preview iframe loads through the
+  proxy origin (not the service's own port) → edit the note → assert the
+  preview updates without a second process being spawned → close the note →
+  assert the child process is gone → repeat and quit the app mid-preview →
+  assert no orphan process survives.
+- **Proves:** one session per note rather than one per keystroke, that the
+  webview never talks to the service directly (the CSP depends on that), and
+  that a crashed or quit app does not leak child processes.
+
 ---
 
 ## 3. State persistence across restart
@@ -437,6 +482,146 @@ sender/access fallback, `build_share_manifest`, migration 18) are unit-tested in
 
 ---
 
+## 5. Spellchecking and text diagnostics
+
+The app checks spelling itself rather than leaving it to the webview, so the
+whole pipeline is ours: dictionaries on disk in Rust (`spellcheck/`), the
+diagnostics bus and providers in the frontend (`lib/diagnostics/`), and the
+squiggle/popover rendering inside the editors (`editor/plugins/**`).
+
+The pure halves are unit-tested and stay that way: tokenization, the syntax
+scanners, overlap resolution and precedence in the bus, suggestion ranking, the
+declared-protocol HTTP client (against a loopback socket), and manifest
+validation for a contributed checker. What no unit test reaches is the part
+that only exists when everything runs together — dictionaries actually loaded
+from disk by `spellbook`, the `spellcheck_*` IPC commands (all `AppHandle`- or
+`Db`-bound), the personal dictionary in SQLite, and ProseMirror/CodeMirror
+decorations drawn over a live document.
+
+### 5.1 Install a dictionary → a misspelling is flagged (P1)
+
+- **Why e2e:** `spellcheck_available_dictionaries`, `_install_dictionary` and
+  `_unknown_words` are IPC commands over a real download, a real `.aff`/`.dic`
+  pair on disk, and a real `spellbook` load — none of which unit tests touch
+  (`spellcheck/mod.rs` sits at ~50% for exactly this reason). The install path
+  validates by _loading_ the pair rather than by checksum, so "the download
+  worked" and "the dictionary works" are the same assertion only here.
+- **Steps:** launch with an empty dictionary directory → open **Settings →
+  Editor → Spellcheck** → assert the catalogue lists dictionaries, none
+  installed → install `de_DE_frami` (served by a local stub, or pre-seeded on
+  disk in CI) → select it → type `Gescwindigkeit ist wichtig` in a note →
+  assert exactly one word carries a spelling squiggle.
+- **Proves:** the catalogue → download → stage → load → check chain, and that
+  a language the user did not select contributes nothing.
+- **Note:** the same flow with a truncated or HTML-error-page download must
+  leave nothing installed — that is the case the load-to-validate design
+  exists for.
+- **T3 today:** `spellcheck.e2e.ts` seeds a fixture Hunspell pair into the
+  run's disposable dictionary directory and asserts the panel reports it
+  installed and the editor flags the unknown word (and only that word). The
+  download half stays open — it needs a stub host for the catalogue URLs.
+
+### 5.2 Correct a word from the popover (P1)
+
+- **Why e2e:** suggestions come from a separate command on purpose (checking a
+  word is microseconds, suggesting for one is tens of milliseconds), and the
+  popover is a ProseMirror plugin drawing over a live decoration — both
+  excluded from unit coverage (`editor/plugins/**`).
+- **Steps:** with a dictionary installed, type a misspelling → click the
+  squiggle → assert the popover lists corrections, best first → apply one →
+  assert the document text changed, the squiggle is gone, and undo restores
+  the misspelling as a single step.
+- **Proves:** `spellcheck_suggest` is only called when the popover opens (not
+  on every check), and that applying a replacement is one undoable edit rather
+  than a delete plus an insert.
+- **T3 today:** `spellcheck.e2e.ts` opens the popover on the squiggle, applies
+  the first correction and asserts the document changed and the squiggle
+  cleared. The single-undo-step half is not asserted yet.
+
+### 5.3 Personal dictionary survives a restart (P1)
+
+- **Why e2e:** `custom_dictionary_add/list/remove` are `Db`-bound commands
+  writing to SQLite; the frontend mirror is unit-tested against a stub, the
+  storage and its case folding are not. Acceptance is applied in the frontend
+  _before_ a word is sent for checking, so the proof that it survives is a
+  restart.
+- **Steps:** flag a word → **Add to dictionary** from the popover → assert the
+  squiggle disappears in every open note, not just the focused one → restart →
+  assert the word is still accepted and appears in the settings list → remove
+  it there → assert the squiggle comes back without a restart.
+- **Proves:** the invalidation broadcast reaches every editor surface, and
+  that the stored word round-trips through SQLite in the casing the user
+  typed while still matching other casings.
+- **T3 today:** `spellcheck.e2e.ts` accepts a word from the popover, restarts,
+  and asserts it is still accepted; then removes it in settings and asserts the
+  squiggle returns without another restart.
+
+### 5.4 A plugin checker takes spelling over (P2)
+
+- **Why e2e:** the handover has three moving parts that only meet at runtime —
+  a plugin contributing a `textChecker`, the user's endpoint setting, and the
+  bus's kind ownership. The HTTP client is unit-tested against a loopback
+  socket and the wiring against stubs, but "the dictionary stops squiggling
+  because LanguageTool now owns spelling" is a whole-app property.
+- **Steps:** launch with the LanguageTool plugin enabled and a stub checking
+  service on a loopback port → point the plugin's endpoint setting at it →
+  **Test connection** → assert it reports the languages the stub offers, and
+  names any selected language the stub lacks → type text the stub flags →
+  assert grammar and spelling findings render with their own styles and that
+  the built-in dictionary is no longer reporting the same word twice → turn
+  the plugin's spelling setting off → assert the dictionary takes spelling
+  back.
+- **Proves:** the ownership rule end to end, and that a checker with no
+  endpoint configured produces _no_ squiggles rather than suppressing the
+  dictionary's — enabling a plugin must never silently disable spellchecking.
+- **Note:** the stub must assert it received the fixed probe string on **Test
+  connection** and note text only on a real check. That the app never sends
+  note content to an unverified server is a privacy property worth pinning
+  down in a test rather than in a comment.
+- **T3 today:** `text-checker.e2e.ts` runs a LanguageTool-shaped stub in the
+  test process, points the plugin at it, and asserts the connection check goes
+  to the probe path carrying no body, that the returned finding lands on the
+  right word, that its replacement applies, and that switching the plugin off
+  stops both the requests and the squiggles. Two halves are still open: the
+  spelling handover (the plugin's spelling setting taking spelling from the
+  dictionary), and the fixed-probe-string assertion for a credentialed server —
+  the Rust tests cover the latter at the wire level.
+
+### 5.5 Removing a dictionary takes effect immediately (P2)
+
+- **Why e2e:** `spellcheck_remove_dictionary` deletes the files _and_ drops the
+  resident copy from the in-memory cache; without the second half the
+  dictionary keeps answering checks until the app restarts, which reads as "the
+  removal silently failed". Only a running app has a resident copy to drop.
+- **Steps:** with a dictionary installed and words flagged against it, remove
+  it from settings → assert previously-correct words are now flagged (or, with
+  no language selected, that nothing is flagged) without restarting → restart →
+  assert the files are gone from disk and the catalogue offers it again.
+- **T3 today:** `spellcheck.e2e.ts` asserts the panel flips back to offering
+  the download, says the selected language is not installed, and still says so
+  after a restart — i.e. the files really left the disk.
+
+### 5.6 Syntax-aware checking in a source editor (P2)
+
+- **Why e2e:** the source-mode diagnostics plugin decorates CodeMirror, and the
+  WYSIWYG one decorates ProseMirror; both are excluded from unit coverage. The
+  scanners deciding _what_ is prose are unit-tested exhaustively — this proves
+  the offsets survive the two very different position models.
+- **Steps:** open a Typst note in Split view → write a document mixing a `#set`
+  rule, a code comment, a raw block and ordinary prose containing one
+  misspelling → assert exactly one squiggle, on the misspelled prose word, in
+  both panes → edit the paragraph above it → assert the squiggle tracks its
+  word rather than staying at a stale offset.
+- **Proves:** segment offsets rebased by the bus land on the right characters
+  in both editors, and that syntax the scanner masks never reaches the
+  dictionary (the false-positive flood the scanners exist to stop).
+- **T3 today:** `spellcheck.e2e.ts` does this on the markdown source surface —
+  a misspelling inside a code span is masked, one in prose is flagged, and the
+  same popover opens over CodeMirror. The Typst variant (and the Split-view
+  both-panes assertion) is still open.
+
+---
+
 ## Implementation notes
 
 - **Harness:** these need the real app, so drive the packaged Tauri binary
@@ -453,6 +638,19 @@ sender/access fallback, `build_share_manifest`, migration 18) are unit-tested in
   sender and a recipient — plus a way to script an invite between them. See
   [backend-stack.md](backend-stack.md) for the account-provisioning
   requirement this adds.
+- **Checking services (§5.4):** the plugin-declared checker talks HTTP, so a
+  stub server on a loopback port stands in for LanguageTool. Script its
+  `/v2/languages` and `/v2/check` responses per test, and assert what it
+  received — the privacy properties (fixed probe string, note text only on a
+  real check) are only observable from the server's side.
+- **Dictionaries (§5.1, §5.5):** a `.aff`/`.dic` pair is a few megabytes and
+  the catalogue points at an upstream repository, so a run seeds a small
+  fixture pair instead of downloading one. Dictionaries live under the app-data
+  ROOT rather than the profile dir, so `MINDSTREAM_PROFILE_DIR` does not
+  isolate them — `MINDSTREAM_DICTIONARY_DIR` (same dev/`e2e-data-dir` gate,
+  see `spellcheck::DICTIONARY_DIR_ENV`) does. `wdio.conf.ts` allocates one per
+  session and exports it to the spec as well, which is what
+  `helpers/harness.ts::dictionaryDir` returns.
 - **Restart flows (§3):** the test harness must be able to quit and relaunch
   the same data directory. Set the `MINDSTREAM_PROFILE_DIR` env var to a temp
   directory per test so runs are isolated and a restart picks up the same

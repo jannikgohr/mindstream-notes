@@ -15,7 +15,7 @@
  * doesn't match.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { initHotkeys } from './manager.svelte';
+import { bindingFromEvent, initHotkeys } from './manager.svelte';
 import {
   registerEditor,
   unregisterEditor,
@@ -59,6 +59,15 @@ function registerEditorListener(
   listeners.push(listener);
   registerEditor(listener);
   return host;
+}
+
+/** A keydown event that is inspected rather than dispatched. */
+function keyEvent(init: KeyboardEventInit): KeyboardEvent {
+  return new KeyboardEvent('keydown', {
+    bubbles: true,
+    cancelable: true,
+    ...init
+  });
 }
 
 function press(init: KeyboardEventInit, target?: EventTarget) {
@@ -397,5 +406,151 @@ describe('initHotkeys — browser find suppression', () => {
     });
 
     expect(event.defaultPrevented).toBe(false);
+  });
+});
+
+/** Pin the mac path, where `mod` resolves to metaKey rather than ctrlKey. */
+function forceMacModKey() {
+  Object.defineProperty(navigator, 'platform', {
+    value: 'MacIntel',
+    configurable: true
+  });
+}
+
+describe('initHotkeys — events that are not chords', () => {
+  it('ignores a modifier pressed on its own', () => {
+    // Holding Ctrl before the real key must not dispatch anything.
+    forceWindowsModKey();
+    const onCommand = vi.fn(() => true);
+    registerMarkdownListener(onCommand);
+    teardownHotkeys = initHotkeys();
+
+    for (const key of ['Shift', 'Control', 'Alt', 'Meta', 'OS']) {
+      press({ key, ctrlKey: true });
+    }
+
+    expect(onCommand).not.toHaveBeenCalled();
+  });
+
+  it('leaves keystrokes inside a hotkey recorder alone', () => {
+    // Otherwise recording a binding would fire the command it is replacing.
+    forceWindowsModKey();
+    const onCommand = vi.fn(() => true);
+    registerMarkdownListener(onCommand);
+    teardownHotkeys = initHotkeys();
+
+    const recorder = document.createElement('button');
+    recorder.dataset.hotkeyRecorder = 'true';
+    document.body.appendChild(recorder);
+
+    const event = press({ key: 'b', code: 'KeyB', ctrlKey: true }, recorder);
+
+    expect(onCommand).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
+    recorder.remove();
+  });
+});
+
+describe('initHotkeys — the browser find chord', () => {
+  it('suppresses Ctrl+F even with nothing bound to it', () => {
+    // The webview's native find is useless against a virtualized PDF canvas
+    // and a contenteditable editor, so it must never open.
+    forceWindowsModKey();
+    teardownHotkeys = initHotkeys();
+
+    expect(press({ key: 'f', code: 'KeyF', ctrlKey: true }).defaultPrevented) //
+      .toBe(true);
+  });
+
+  it('suppresses Cmd+F on a Mac, and leaves Ctrl+F alone there', () => {
+    forceMacModKey();
+    teardownHotkeys = initHotkeys();
+
+    expect(press({ key: 'f', code: 'KeyF', metaKey: true }).defaultPrevented) //
+      .toBe(true);
+    expect(press({ key: 'f', code: 'KeyF', ctrlKey: true }).defaultPrevented) //
+      .toBe(false);
+  });
+
+  it('leaves the chord alone once another modifier joins it', () => {
+    forceWindowsModKey();
+    teardownHotkeys = initHotkeys();
+
+    expect(
+      press({ key: 'f', code: 'KeyF', ctrlKey: true, altKey: true })
+        .defaultPrevented
+    ).toBe(false);
+    // Plain "f" is a character the user is typing.
+    expect(press({ key: 'f', code: 'KeyF' }).defaultPrevented).toBe(false);
+  });
+});
+
+describe('initHotkeys — the mac modifier mapping', () => {
+  it('resolves mod to the command key', () => {
+    forceMacModKey();
+    const onCommand = vi.fn(() => true);
+    registerMarkdownListener(onCommand);
+    teardownHotkeys = initHotkeys();
+
+    press({ key: 'b', code: 'KeyB', metaKey: true });
+    expect(onCommand).toHaveBeenCalledWith('editor.markdown.bold');
+
+    // Ctrl is a separate modifier there, not the platform mod.
+    onCommand.mockClear();
+    press({ key: 'b', code: 'KeyB', ctrlKey: true });
+    expect(onCommand).not.toHaveBeenCalled();
+  });
+});
+
+describe('bindingFromEvent', () => {
+  it('records a chord as the portable "mod" form', () => {
+    // A user who records Ctrl+B on Windows should still hit Cmd+B after
+    // syncing to a Mac, so the platform modifier is stored as `mod`.
+    forceWindowsModKey();
+    expect(
+      bindingFromEvent(keyEvent({ key: 'b', code: 'KeyB', ctrlKey: true }))
+    ).toBe('mod+b');
+
+    forceMacModKey();
+    expect(
+      bindingFromEvent(keyEvent({ key: 'b', code: 'KeyB', metaKey: true }))
+    ).toBe('mod+b');
+  });
+
+  it('keeps a real ctrl press distinct from mod on a Mac', () => {
+    forceMacModKey();
+    expect(
+      bindingFromEvent(
+        keyEvent({ key: 'b', code: 'KeyB', metaKey: true, ctrlKey: true })
+      )
+    ).toBe('mod+ctrl+b');
+  });
+
+  it('records the key the user actually typed', () => {
+    // On a German layout Mod+Shift+8 arrives as "(", and that is what gets
+    // stored — the matcher applies the digit fallback again at dispatch.
+    forceWindowsModKey();
+    expect(
+      bindingFromEvent(
+        keyEvent({ key: '(', code: 'Digit8', ctrlKey: true, shiftKey: true })
+      )
+    ).toBe('mod+shift+(');
+  });
+
+  it('refuses a modifier-only press', () => {
+    forceWindowsModKey();
+    expect(bindingFromEvent(keyEvent({ key: 'Control', ctrlKey: true }))).toBe(
+      null
+    );
+  });
+
+  it('refuses an unmodified printable key, which the matcher would reject', () => {
+    forceWindowsModKey();
+    expect(bindingFromEvent(keyEvent({ key: 'b', code: 'KeyB' }))).toBe(null);
+  });
+
+  it('accepts an unmodified function key', () => {
+    forceWindowsModKey();
+    expect(bindingFromEvent(keyEvent({ key: 'F2', code: 'F2' }))).toBe('f2');
   });
 });

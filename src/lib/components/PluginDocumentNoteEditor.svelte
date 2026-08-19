@@ -36,6 +36,22 @@
   import { readPluginFile } from '$lib/plugins/plugin-files';
   import { getSettingValue } from '$lib/settings/store.svelte';
   import SourceEditor from '$lib/editor/source/SourceEditor.svelte';
+  import {
+    checkSegments,
+    invalidateDiagnostics,
+    spellcheckEnabled,
+    spellcheckLanguages,
+    subscribeDiagnosticsInvalidated,
+    suggestFor
+  } from '$lib/diagnostics/editor-diagnostics.svelte';
+  import {
+    closeDiagnosticPopover,
+    openDiagnosticPopover,
+    type DiagnosticMenuContext
+  } from '$lib/diagnostics/popover-bridge.svelte';
+  // Aliased: this component already has a `Diagnostic` — the render errors a
+  // plugin's compiler reports, which are a different thing entirely.
+  import type { Diagnostic as TextDiagnostic } from '$lib/diagnostics/types';
   import EditorModeToggle from '$lib/editor/source/EditorModeToggle.svelte';
   import {
     coerceViewMode,
@@ -158,6 +174,34 @@
   const autoPairEnabled = $derived(
     (getSettingValue('editor.autoPair') as boolean | undefined) ?? true
   );
+
+  // Changing the language set or installing a dictionary changes the answer
+  // for text nobody has touched, which no editor can observe on its own — the
+  // same push the Markdown editor makes, for the same reason.
+  $effect(() => {
+    spellcheckEnabled();
+    spellcheckLanguages().join(',');
+    invalidateDiagnostics();
+  });
+
+  /**
+   * Open the shared suggestion popover on a right-clicked squiggle.
+   *
+   * Identical to the Markdown editor's handler because it has to be: a
+   * plugin-owned document is a different note kind, not a different feature,
+   * and the user gets the same menu, the same suggestions and the same
+   * personal dictionary here as anywhere else.
+   */
+  function handleDiagnosticMenu(
+    diagnostic: TextDiagnostic,
+    event: MouseEvent,
+    context: DiagnosticMenuContext
+  ) {
+    openDiagnosticPopover(
+      { diagnostic, x: event.clientX, y: event.clientY, ...context },
+      suggestFor
+    );
+  }
   const sourceTabSize = $derived.by(() => {
     const v = Number(getSettingValue('editor.tabSize'));
     return Number.isFinite(v) && v > 0 ? Math.min(8, v) : 2;
@@ -1176,6 +1220,11 @@ parentWindow.postMessage({ type: 'mindstream-plugin-preview-ready' }, '*');
             onInput={onSourceInput}
             readonly={isReadOnly}
             {autoPairEnabled}
+            diagnosticsCheck={checkSegments}
+            diagnosticsEnabled={spellcheckEnabled}
+            {subscribeDiagnosticsInvalidated}
+            onDiagnosticMenu={handleDiagnosticMenu}
+            onDiagnosticMenuDismiss={closeDiagnosticPopover}
           />
         </section>
       {/if}

@@ -21,9 +21,14 @@ import { expect } from '@wdio/globals';
 import {
   byName,
   clickName,
+  closeSettings,
   restartApp,
+  setPluginEnabledByName,
   waitForShell
 } from '../helpers/harness.js';
+
+/** The bundled plugin whose toolbar contribution this spec asserts on. */
+const TEMPLATES_PLUGIN = 'Templates';
 
 /** Open Settings and land on the Plugins overview. */
 async function openPluginsCategory(): Promise<void> {
@@ -50,15 +55,15 @@ describe('T3 plugin framework', function () {
     await openPluginsCategory();
     await expect(byName('Enable plugin')).toBeDisplayed();
     await expect(byName('Plugin settings')).toBeDisplayed();
-    await clickName('Close');
+    await closeSettings();
   });
 
   it('a disabled plugin stays disabled across a restart (plugin-record persistence)', async () => {
     await expect(byName('New from template')).toBeDisplayed();
 
     await openPluginsCategory();
-    await clickName('Enable plugin'); // toggle off
-    await clickName('Close');
+    await setPluginEnabledByName(TEMPLATES_PLUGIN, false);
+    await closeSettings();
     // The reactive registry drops the contribution immediately.
     await expect(byName('New from template')).not.toBeDisplayed();
 
@@ -73,8 +78,8 @@ describe('T3 plugin framework', function () {
     // Re-enable so the profile dir doesn't leak a disabled plugin into later
     // specs sharing it.
     await openPluginsCategory();
-    await clickName('Enable plugin');
-    await clickName('Close');
+    await setPluginEnabledByName(TEMPLATES_PLUGIN, true);
+    await closeSettings();
     await expect(byName('New from template')).toBeDisplayed();
   });
 });

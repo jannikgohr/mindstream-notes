@@ -132,6 +132,8 @@ export default defineConfig({
         // Type-only modules (interfaces / unions, no runtime code — v8
         // miscounts their declaration bodies as uncovered statements).
         'src/lib/settings/types.ts',
+        'src/lib/diagnostics/types.ts',
+        'src/lib/diagnostics/syntax/grammar-protocol.ts',
         'src/lib/hotkeys/types.ts',
         'src/lib/notifications/types.ts',
         'src/lib/note-exporters/types.ts',

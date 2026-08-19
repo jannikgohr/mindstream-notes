@@ -42,9 +42,11 @@
   import { tags as t } from '@lezer/highlight';
   import {
     sourceAutoPair,
+    sourceDiagnostics,
     sourceUserMention,
     sourceWikilink
   } from '$lib/editor/plugins';
+  import type { SourceDiagnosticsOptions } from '$lib/editor/plugins';
   import type { WikilinkBridge } from '$lib/editor/plugins/wikilink-bridge.svelte';
   import type { UserMentionBridge } from '$lib/editor/plugins/user-mention-bridge.svelte';
   import {
@@ -52,7 +54,10 @@
     setSourcePresence,
     type PeerPresence
   } from './source-presence-extension';
-  import { sourceLanguageExtensions } from './languages';
+  import {
+    sourceLanguageDiagnosticSyntax,
+    sourceLanguageExtensions
+  } from './languages';
 
   interface Props {
     /** Read once on mount to seed the document with the current markdown. */
@@ -87,6 +92,20 @@
      *  wikilinks above. Reactive. */
     userMentionsEnabled?: boolean;
     userMentionBridge?: UserMentionBridge | null;
+    /**
+     * `editor.spellcheck.enabled`, as a PREDICATE read per check so the
+     * setting applies to notes that are already open. Mirrors the WYSIWYG
+     * pane, which has no choice but to work this way.
+     */
+    diagnosticsEnabled?: (() => boolean) | null;
+    /** Lets the extension re-check when languages or dictionaries change. */
+    subscribeDiagnosticsInvalidated?: SourceDiagnosticsOptions['subscribeInvalidate'];
+    /** Runs the check; see `$lib/diagnostics/editor-diagnostics`. */
+    diagnosticsCheck?: SourceDiagnosticsOptions['check'] | null;
+    /** Opens the suggestion popover for a right-clicked diagnostic. */
+    onDiagnosticMenu?: SourceDiagnosticsOptions['onRequestMenu'];
+    /** Closes it again when the document changes underneath. */
+    onDiagnosticMenuDismiss?: SourceDiagnosticsOptions['onDismissMenu'];
   }
   let {
     getInitialText,
@@ -100,7 +119,12 @@
     wikilinksEnabled = false,
     wikilinkBridge = null,
     userMentionsEnabled = false,
-    userMentionBridge = null
+    userMentionBridge = null,
+    diagnosticsEnabled = null,
+    subscribeDiagnosticsInvalidated = undefined,
+    diagnosticsCheck = null,
+    onDiagnosticMenu = undefined,
+    onDiagnosticMenuDismiss = undefined
   }: Props = $props();
 
   let host: HTMLDivElement | null = $state(null);
@@ -310,6 +334,25 @@
     if (userMentionsEnabled && userMentionBridge) {
       ext.push(sourceUserMention(userMentionBridge));
     }
+    // Registered unconditionally, like the WYSIWYG pane, so both surfaces
+    // answer the same question the same way — but only for a language whose
+    // prose the app knows how to find. Resolved from the same `language` that
+    // picks the highlighting, so a document cannot end up highlighted as one
+    // language and checked as another; `null` means nobody has said this
+    // language is prose, and the extension stays off rather than guessing.
+    const diagnosticsSyntax = sourceLanguageDiagnosticSyntax(language);
+    if (diagnosticsCheck && diagnosticsSyntax) {
+      ext.push(
+        sourceDiagnostics({
+          check: diagnosticsCheck,
+          syntax: diagnosticsSyntax,
+          enabled: diagnosticsEnabled ?? undefined,
+          subscribeInvalidate: subscribeDiagnosticsInvalidated,
+          onRequestMenu: onDiagnosticMenu,
+          onDismissMenu: onDiagnosticMenuDismiss
+        })
+      );
+    }
     return ext;
   }
 
@@ -321,6 +364,10 @@
       syntaxHighlighting(highlight),
       theme,
       EditorView.lineWrapping,
+      // The webview's own spellchecker stays off here for the same reason
+      // as in the WYSIWYG pane (see crepe-setup.ts): one checker, one set
+      // of squiggles, reachable suggestions.
+      EditorView.contentAttributes.of({ spellcheck: 'false' }),
       keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
       placeholder(placeholderText),
       readonlyComp.of([
@@ -397,6 +444,9 @@
     void wikilinkBridge;
     void userMentionsEnabled;
     void userMentionBridge;
+    // Also the language: it decides whether diagnostics run at all, and a
+    // plugin note kind can change it under an editor that stays mounted.
+    void language;
     view?.dispatch({ effects: featureComp.reconfigure(featureExtensions()) });
   });
 
