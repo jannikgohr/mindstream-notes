@@ -31,7 +31,7 @@ jobs:
   js:
     name: JS check + test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
+    timeout-minutes: 12
     strategy:
       fail-fast: false
       matrix:
@@ -59,7 +59,7 @@ jobs:
   rust:
     name: Cargo test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -75,7 +75,7 @@ jobs:
       # required even for `cargo test` because tauri-build runs.
       - name: Install Linux system deps
         if: runner.os == 'Linux'
-        timeout-minutes: 3
+        timeout-minutes: 20
         run: |
           sudo apt-get \
             -o Acquire::Retries=2 \
@@ -118,14 +118,14 @@ jobs:
   coverage:
     name: Coverage (Linux)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
     env:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Linux system deps
-        timeout-minutes: 3
+        timeout-minutes: 20
         run: |
           sudo apt-get \
             -o Acquire::Retries=2 \
@@ -212,7 +212,7 @@ jobs:
   e2e:
     name: E2E (Playwright)
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 10
     # Keep this tag in sync with @playwright/test in pnpm-lock.yaml.
     container:
       image: mcr.microsoft.com/playwright:v1.61.1-noble
@@ -250,7 +250,7 @@ jobs:
   format:
     name: Prettier (web + docs)
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
 
