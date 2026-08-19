@@ -126,6 +126,7 @@
     type KanbanSearchFilters,
     type KanbanSearchLookups
   } from '$lib/kanban/kanban-search';
+  import { renderKanbanDescription } from '$lib/kanban/description-markdown';
 
   registerEditorItem('mindstream-linked-note', KanbanLinkedNoteField);
   registerEditorItem('mindstream-labels', KanbanLabelsField);
@@ -364,12 +365,16 @@
         : typeof rawDeadline === 'string'
           ? new Date(rawDeadline)
           : undefined;
+    const description =
+      typeof c.description === 'string' ? c.description : undefined;
     return {
       id: String(c.id),
       label: typeof c.label === 'string' ? c.label : '',
       column,
-      description:
-        typeof c.description === 'string' ? c.description : undefined,
+      description,
+      descriptionHtml: description
+        ? renderKanbanDescription(description)
+        : undefined,
       priority: typeof c.priority === 'number' ? c.priority : undefined,
       progress: typeof c.progress === 'number' ? c.progress : undefined,
       deadline:
@@ -1492,6 +1497,10 @@
   :global(.kanban-scope .kanban-card-editor textarea:focus),
   :global(.kanban-scope .kanban-card-editor .wx-richselect:focus) {
     box-shadow: 0 0 0 1px var(--ring);
+  }
+  :global(.kanban-scope .kanban-card-editor .wx-text.wx-error input:focus) {
+    border-color: var(--destructive);
+    box-shadow: 0 0 0 1px var(--destructive);
   }
   :global(.kanban-scope .kanban-card-editor .wx-editor-toolbar) {
     padding-inline: 1.25rem;

@@ -6,10 +6,12 @@
   import { tree } from '$lib/stores/tree.svelte';
   import { getPriorityOptions } from '@svar-ui/svelte-kanban';
   import type { CardShape, KanbanCard } from '@svar-ui/svelte-kanban';
+  import { renderKanbanDescription } from '$lib/kanban/description-markdown';
 
   interface Props {
     card: KanbanCard & {
       linkedNoteId?: string;
+      descriptionHtml?: string;
       tags?: string[];
       users?: string[];
     };
@@ -98,6 +100,18 @@
   const progressPercent = $derived(
     Math.round(Math.max(0, Math.min(1, Number(card.progress ?? 0))) * 100)
   );
+  const safeDescriptionHtml = $derived(
+    typeof card.description === 'string'
+      ? renderKanbanDescription(card.description)
+      : ''
+  );
+  // Synced documents are untrusted input. Use the cached HTML only when it is
+  // exactly the safe rendering of the current Markdown source.
+  const descriptionHtml = $derived(
+    card.descriptionHtml === safeDescriptionHtml
+      ? card.descriptionHtml
+      : safeDescriptionHtml
+  );
 
   function openLinkedNote(event: MouseEvent | PointerEvent): void {
     event.preventDefault();
@@ -126,8 +140,8 @@
     <div class="kanban-card-title">{card.label}</div>
   {/if}
 
-  {#if card.description && cardShape.description}
-    <p class="kanban-card-description">{card.description}</p>
+  {#if descriptionHtml && cardShape.description}
+    <div class="kanban-card-description">{@html descriptionHtml}</div>
   {/if}
 
   {#if labels.length > 0}
@@ -262,15 +276,36 @@
   }
 
   .kanban-card-description {
-    display: -webkit-box;
     margin: 0;
+    max-height: 4.05em;
     overflow: hidden;
     color: var(--wx-color-font-alt);
     font-size: var(--wx-font-size-sm);
     line-height: 1.35;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 3;
-    line-clamp: 3;
+  }
+
+  .kanban-card-description :global(p),
+  .kanban-card-description :global(ul),
+  .kanban-card-description :global(ol),
+  .kanban-card-description :global(blockquote),
+  .kanban-card-description :global(pre) {
+    margin: 0;
+  }
+
+  .kanban-card-description :global(ul),
+  .kanban-card-description :global(ol) {
+    padding-left: 1.25em;
+  }
+
+  .kanban-card-description :global(a) {
+    color: var(--wx-color-link);
+    text-decoration: underline;
+  }
+
+  .kanban-card-description :global(code) {
+    border-radius: 3px;
+    background: var(--wx-background-alt);
+    padding: 0 0.2em;
   }
 
   .kanban-card-labels {

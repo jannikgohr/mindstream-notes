@@ -58,6 +58,8 @@ export interface KanbanCardData {
   label: string;
   column: string;
   description?: string;
+  /** Sanitized cached rendering of `description` for card-list display. */
+  descriptionHtml?: string;
   priority?: number;
   progress?: number;
   deadline?: Date;
@@ -79,6 +81,7 @@ const CARD_FIELDS = [
   'label',
   'column',
   'description',
+  'descriptionHtml',
   'priority',
   'progress',
   'deadline',
@@ -156,6 +159,7 @@ function readCard(map: Y.Map<unknown>, index: number): KanbanCardData | null {
     label: (map.get('label') as string) ?? '',
     column: (map.get('column') as string) ?? '',
     description: map.get('description') as string | undefined,
+    descriptionHtml: map.get('descriptionHtml') as string | undefined,
     priority: map.get('priority') as number | undefined,
     progress: map.get('progress') as number | undefined,
     deadline:
