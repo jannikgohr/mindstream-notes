@@ -127,6 +127,7 @@ test('restores an earlier version and offers a one-click undo', async ({
   await expect(page.getByText('Restored to an earlier version.')).toHaveCount(
     0
   );
+  await expect(page.getByText('Edited', { exact: true })).toHaveCount(1);
 });
 
 test('restoring while Source is active updates the source pane', async ({
@@ -138,11 +139,14 @@ test('restoring while Source is active updates the source pane', async ({
   await setMode(page, 'Source');
   await sourcePane(page).click();
   await page.keyboard.press('ControlOrMeta+a');
-  await page.keyboard.insertText(
-    'source mode body before history restore lands'
-  );
+  const sourceBody = Array.from(
+    { length: 90 },
+    (_, i) => `source restore checkpoint word ${i}`
+  ).join(' ');
+  await page.keyboard.insertText(sourceBody);
   await refreshHistory(page);
   await expect(page.getByText('Edited', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('Edited', { exact: true })).toHaveCount(1);
 
   await page.getByRole('button', { name: /Note created/ }).click();
   const dialog = page.getByRole('dialog');
@@ -150,9 +154,16 @@ test('restoring while Source is active updates the source pane', async ({
 
   await expect
     .poll(async () =>
-      (await sourceText(page)).includes(
-        'source mode body before history restore lands'
-      )
+      (await sourceText(page)).includes('source restore checkpoint word')
     )
     .toBe(false);
+
+  const banner = page.getByRole('status').filter({
+    hasText: 'Restored to an earlier version.'
+  });
+  await banner.getByRole('button', { name: 'Undo' }).click();
+  await expect(page.getByText('Restored to an earlier version.')).toHaveCount(
+    0
+  );
+  await expect(page.getByText('Edited', { exact: true })).toHaveCount(1);
 });

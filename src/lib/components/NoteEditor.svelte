@@ -21,7 +21,8 @@
     getYjsRelayUrl,
     onSessionChange,
     captureNoteVersion,
-    type VersionAction
+    type VersionAction,
+    type VersionSummary
   } from '$lib/api';
   import { tree } from '$lib/stores/tree.svelte';
   import { collectionScopeIsReadOnly } from '$lib/stores/note-source.svelte';
@@ -295,6 +296,8 @@
   let lastSnapshotTokens = 0;
   /** Throttle for the (serializing) token-threshold check. */
   let lastTokenCheck = 0;
+  /** Programmatic restore/checkpoint changes write explicit history entries. */
+  let suppressHistoryAutoCapture = false;
   let unregisterHistory: (() => void) | null = null;
   // Gate yDoc 'update' events from triggering saves until we've finished
   // hydrating the doc + binding the editor. Otherwise the initial template
@@ -737,6 +740,7 @@
       unregisterHistory = registerNoteHistory(noteId, {
         restoreSnapshot: (markdown) => restoreMarkdownSnapshot(markdown),
         currentSnapshot: () => currentMarkdownSnapshot(),
+        captureRestoreCheckpoint: () => captureMarkdownRestoreCheckpoint(),
         snapshotNow: () => snapshotHistoryNow(),
         peerCount: () => otherPeerCount(awareness),
         setCollabPaused: (paused) => setE2eCollabPaused(paused)
@@ -1202,9 +1206,20 @@
     return getMarkdown ? getMarkdown() : '';
   }
 
+  async function captureMarkdownRestoreCheckpoint() {
+    withHistoryAutoCaptureSuppressed(() => sourceEditor?.flush());
+    const body = getMarkdown ? getMarkdown() : '';
+    clearPendingHistoryCapture(body);
+    const checkpoint = await captureHistoryMarkdown('edited', body);
+    return { body, checkpointId: checkpoint?.id ?? null };
+  }
+
   function restoreMarkdownSnapshot(markdown: string) {
-    sourceEditor?.flush();
-    applyMarkdown(markdown);
+    withHistoryAutoCaptureSuppressed(() => {
+      sourceEditor?.flush();
+      applyMarkdown(markdown);
+    });
+    clearPendingHistoryCapture(getMarkdown ? getMarkdown() : markdown);
     if (viewMode !== 'wysiwyg' && sourceEditor && getMarkdown) {
       sourceEditor.setText(getMarkdown());
     }
@@ -1349,6 +1364,27 @@
     return Number.isFinite(v) && v > 0 ? v : HISTORY_TOKENS_DEFAULT;
   }
 
+  function clearPendingHistoryCapture(markdown?: string) {
+    if (historyTimer) {
+      clearTimeout(historyTimer);
+      historyTimer = null;
+    }
+    historyDirty = false;
+    const baseline = markdown ?? (getMarkdown ? getMarkdown() : '');
+    lastSnapshotTokens = nonWhitespaceCount(baseline);
+    lastTokenCheck = Date.now();
+  }
+
+  function withHistoryAutoCaptureSuppressed<T>(fn: () => T): T {
+    const wasSuppressed = suppressHistoryAutoCapture;
+    suppressHistoryAutoCapture = true;
+    try {
+      return fn();
+    } finally {
+      suppressHistoryAutoCapture = wasSuppressed;
+    }
+  }
+
   /**
    * Called on every editor change. Arms the idle-debounce snapshot, and — so a
    * long uninterrupted session still gets versions — snapshots immediately once
@@ -1358,6 +1394,7 @@
    */
   function scheduleHistoryCapture() {
     if (isReadOnly) return;
+    if (suppressHistoryAutoCapture) return;
     historyDirty = true;
 
     const now = Date.now();
@@ -1381,10 +1418,18 @@
     }, historyIdleMs());
   }
 
-  async function captureHistoryVersion(action: VersionAction) {
-    if (!getMarkdown) return;
+  async function captureHistoryVersion(
+    action: VersionAction
+  ): Promise<VersionSummary | null> {
+    if (!getMarkdown) return null;
+    return captureHistoryMarkdown(action, getMarkdown());
+  }
+
+  async function captureHistoryMarkdown(
+    action: VersionAction,
+    markdown: string
+  ): Promise<VersionSummary | null> {
     historyDirty = false;
-    const markdown = getMarkdown();
     // Reset the token-threshold baseline to the snapshot we're taking (even on
     // a no-op dedup the content is now the baseline, so we don't re-fire).
     lastSnapshotTokens = nonWhitespaceCount(markdown);
@@ -1398,8 +1443,10 @@
       // Only nudge the sidebar when a version was actually written (a no-op
       // dedup returns null and shouldn't trigger a re-list).
       if (created) bumpNoteHistory(noteId);
+      return created;
     } catch (err) {
       console.debug('[NoteEditor] history capture failed', err);
+      return null;
     }
   }
 

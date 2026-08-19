@@ -190,14 +190,21 @@
       const full = await loadNoteVersion(target.id);
       // The editor's snapshot is symmetrical with restoreSnapshot for every
       // kind (markdown text, or the base64 Yjs envelope), so it doubles as the
-      // checkpoint body and the Undo payload.
-      const preRestoreBody = await bridge.currentSnapshot();
-      const checkpoint = await captureNoteVersion(
-        noteId,
-        noteKind,
-        'edited',
-        preRestoreBody
-      );
+      // checkpoint body and the Undo payload. Markdown owns extra auto-history
+      // bookkeeping and captures this checkpoint itself; other editors keep the
+      // generic fallback.
+      const checkpoint = bridge.captureRestoreCheckpoint
+        ? await bridge.captureRestoreCheckpoint()
+        : await (async () => {
+            const body = await bridge.currentSnapshot();
+            const version = await captureNoteVersion(
+              noteId,
+              noteKind,
+              'edited',
+              body
+            );
+            return { body, checkpointId: version?.id ?? null };
+          })();
       await bridge.restoreSnapshot(full.body);
       await captureNoteVersion(
         noteId,
@@ -208,8 +215,8 @@
       );
       await refresh();
       setRestoreUndo(noteId, {
-        body: preRestoreBody,
-        checkpointId: checkpoint?.id ?? null
+        body: checkpoint.body,
+        checkpointId: checkpoint.checkpointId
       });
       return true;
     } catch (err) {
