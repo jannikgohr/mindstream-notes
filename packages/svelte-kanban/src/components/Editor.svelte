@@ -24,6 +24,8 @@
   type EditorProps = Omit<BaseEditorProps, 'values'> & {
     api: any;
     values?: never;
+    mobile?: boolean;
+    onOpenChange?: (open: boolean) => void;
   };
   type EditorChangeEvent = Parameters<
     NonNullable<BaseEditorProps['onchange']>
@@ -46,6 +48,8 @@
     onchange,
     onsave,
     onaction,
+    mobile = false,
+    onOpenChange,
     ...editorProps
   }: EditorProps = $props();
   // svelte-ignore state_referenced_locally
@@ -81,10 +85,27 @@
 
   const cItems = $derived(applyLocale(items));
 
-  const defaultTopBar = {
+  const defaultTopBar = $derived({
     items: [
-      { comp: 'icon', icon: 'wxi-close', id: 'close' },
+      mobile
+        ? {
+            comp: 'button',
+            icon: 'wxi-close',
+            id: 'close',
+            title: 'Close'
+          }
+        : { comp: 'icon', icon: 'wxi-close', id: 'close' },
       { comp: 'spacer' },
+      ...(mobile
+        ? [
+            {
+              comp: 'button',
+              id: 'duplicate',
+              text: _('Duplicate card'),
+              onclick: handleDuplicate
+            }
+          ]
+        : []),
       {
         comp: 'button',
         id: 'delete',
@@ -93,11 +114,17 @@
         onclick: handleDelete
       }
     ]
-  };
+  });
   const editorTopBar = $derived(topBar === undefined ? defaultTopBar : topBar);
   const editorCss = $derived(
-    ['wx-editor-kanban', css].filter(Boolean).join(' ')
+    ['wx-editor-kanban', mobile ? 'wx-editor-kanban-mobile' : '', css]
+      .filter(Boolean)
+      .join(' ')
   );
+
+  $effect(() => {
+    onOpenChange?.(Boolean($editorData));
+  });
 
   function handleSave(ev: EditorSaveEvent) {
     onsave?.(ev);
@@ -115,6 +142,12 @@
     if (!data) return;
     api.exec('delete-card', { id: data.id });
     api.exec('select-card', { id: null });
+  }
+
+  function handleDuplicate() {
+    const data = $editorData;
+    if (!data) return;
+    api.exec('duplicate-card', { id: data.id });
   }
 
   function handleAction(ev: EditorActionEvent) {
