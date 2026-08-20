@@ -140,6 +140,7 @@
   import { renderKanbanDescription } from '$lib/kanban/description-markdown';
   import { isMobile } from '$lib/platform';
   import NameInputSheet from '$lib/mobile/NameInputSheet.svelte';
+  import { closeNavOverlay, openNavOverlay } from '$lib/mobile/state.svelte';
 
   registerEditorItem('mindstream-linked-note', KanbanLinkedNoteField);
   registerEditorItem('mindstream-labels', KanbanLabelsField);
@@ -200,6 +201,7 @@
   let mobile = $state(false);
   let mobileActiveColumnId = $state<string | null>(null);
   let mobileTabs = $state<HTMLElement | null>(null);
+  let mobileCardEditorNavHeld = false;
 
   let provider: CollabProvider | null = null;
   let stopObserve: (() => void) | null = null;
@@ -630,6 +632,23 @@
     if (!api || isTrashed || e.button !== 0) return;
     if (startedInside || startsInsideCardEditor(e.target)) return;
     api.exec('select-card', { id: null });
+  }
+
+  const MOBILE_CARD_EDITOR_NAV_ID = 'mobile-kanban-card-editor';
+
+  function closeMobileCardEditor(): void {
+    api?.exec('select-card', { id: null });
+  }
+
+  function handleCardEditorOpenChange(open: boolean): void {
+    if (!mobile) return;
+    if (open && !mobileCardEditorNavHeld) {
+      mobileCardEditorNavHeld = true;
+      openNavOverlay(MOBILE_CARD_EDITOR_NAV_ID, closeMobileCardEditor);
+    } else if (!open && mobileCardEditorNavHeld) {
+      mobileCardEditorNavHeld = false;
+      closeNavOverlay(MOBILE_CARD_EDITOR_NAV_ID);
+    }
   }
 
   function openKanbanSearch(): void {
@@ -1192,6 +1211,10 @@
 
   onDestroy(() => {
     cleanupListPointerDrag();
+    if (mobileCardEditorNavHeld) {
+      mobileCardEditorNavHeld = false;
+      closeNavOverlay(MOBILE_CARD_EDITOR_NAV_ID);
+    }
     if (saveTimer) {
       clearTimeout(saveTimer);
       saveTimer = null;
@@ -1353,7 +1376,13 @@
               init={handleInit}
             />
             {#if api && !isTrashed}
-              <Editor {api} items={editorItems} css="kanban-card-editor" />
+              <Editor
+                {api}
+                items={editorItems}
+                css="kanban-card-editor"
+                {mobile}
+                onOpenChange={handleCardEditorOpenChange}
+              />
             {/if}
           </div>
           <KanbanCardMenu {api} css="kanban-card-menu" bind:this={cardMenu} />
@@ -1727,6 +1756,21 @@
     background: var(--background);
     color: var(--foreground);
   }
+  :global(.kanban-scope.mobile .wx-sidearea:has(.kanban-card-editor)) {
+    position: fixed;
+    width: 100vw;
+    min-width: 0;
+    height: 100dvh;
+    max-height: none;
+    box-sizing: border-box;
+    inset: 0;
+    border: 0;
+    border-radius: 0;
+    padding-top: env(safe-area-inset-top);
+    padding-right: env(safe-area-inset-right);
+    padding-bottom: env(safe-area-inset-bottom);
+    padding-left: env(safe-area-inset-left);
+  }
   :global(.kanban-scope .wx-sidearea:has(.kanban-card-editor) + .wx-overlay) {
     z-index: 230;
   }
@@ -1737,6 +1781,26 @@
   :global(.kanban-scope .kanban-card-editor) {
     background: var(--background);
     color: var(--foreground);
+  }
+  :global(.kanban-scope.mobile .kanban-card-editor) {
+    width: 100% !important;
+    height: 100%;
+    padding: 0;
+    --wx-button-height: 2.75rem;
+    --wx-button-padding: 0.625rem 0.875rem;
+  }
+  :global(.kanban-scope.mobile .kanban-card-editor .wx-editor-toolbar) {
+    min-height: 3.5rem;
+    margin: 0;
+    border-bottom: 1px solid var(--border);
+    padding: 0.375rem 0.5rem;
+  }
+  :global(.kanban-scope.mobile .kanban-card-editor .wx-toolbar) {
+    min-height: 2.75rem;
+    padding: 0;
+  }
+  :global(.kanban-scope.mobile .kanban-card-editor .wx-tb-element) {
+    min-height: 2.75rem;
   }
   :global(.kanban-scope .kanban-card-editor .wx-content) {
     background: var(--background);
