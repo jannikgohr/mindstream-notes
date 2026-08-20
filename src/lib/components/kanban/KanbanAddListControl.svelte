@@ -83,13 +83,8 @@
     font-weight: 500;
   }
 
-  .add-list-button:hover,
-  .add-list-button:focus-visible {
-    border-style: solid;
-    background: var(--accent);
-    color: var(--accent-foreground);
+  .add-list-button:focus {
     outline: none;
-    box-shadow: 0 0 0 1px var(--ring);
   }
 
   .add-list-button :global(svg) {

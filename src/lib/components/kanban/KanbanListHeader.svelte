@@ -92,10 +92,6 @@
     </button>
   {/if}
 
-  <span class="card-count">
-    {context.column.cards.length}
-  </span>
-
   <button
     type="button"
     class="header-action"
@@ -109,7 +105,7 @@
 
   <button
     type="button"
-    class="header-action rename-action"
+    class="header-action"
     aria-label={tUi('editor.kanban.renameList')}
     title={tUi('editor.kanban.renameList')}
     disabled={context.readonly}
@@ -231,21 +227,5 @@
     font-size: 0.875rem;
     font-weight: 600;
     outline: none;
-  }
-
-  .card-count {
-    min-width: 1rem;
-    color: var(--muted-foreground);
-    text-align: center;
-    font-size: 0.75rem;
-  }
-
-  .rename-action {
-    opacity: 0;
-  }
-
-  .mindstream-list-header:hover .rename-action,
-  .mindstream-list-header:focus-within .rename-action {
-    opacity: 1;
   }
 </style>
