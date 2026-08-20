@@ -68,8 +68,6 @@
     "fileTree.toolbar.customize": "Aktionen anpassen",
     "fileTree.toolbar.customizeHint": "Ziehe Aktionen, um sie zu sortieren oder zwischen den Bereichen zu verschieben.",
     "fileTree.toolbar.shown": "In der Werkzeugleiste",
-    "fileTree.toolbar.moveToMore": "Unter Weitere verschieben",
-    "fileTree.toolbar.show": "In Werkzeugleiste anzeigen",
     "fileTree.toolbar.restore": "Standardeinstellungen wiederherstellen",
     "fileTree.toolbar.done": "Fertig",
     "fileTree.loading": "Wird geladen…",

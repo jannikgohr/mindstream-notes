@@ -40,14 +40,16 @@
     ignoreEl?: HTMLElement | null;
     /** App-wide menus sit above editors; editor-local menus stay below
      * top-level app popovers and dialogs. */
-    layer?: 'app' | 'editor';
+    layer?: 'app' | 'editor' | 'overlay';
     onClose: () => void;
   }
 
   let { x, y, items, ignoreEl, layer = 'app', onClose }: Props = $props();
   let menuEl: HTMLDivElement | null = $state(null);
   let activeSubmenu = $state<number | null>(null);
-  const layerClass = $derived(layer === 'editor' ? 'z-[250]' : 'z-350');
+  const layerClass = $derived(
+    layer === 'editor' ? 'z-[250]' : layer === 'overlay' ? 'z-[450]' : 'z-350'
+  );
   const showIcons = $derived(
     getSettingValue('appearance.contextMenuIcons') !== false
   );

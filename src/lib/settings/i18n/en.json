@@ -166,8 +166,6 @@
     "fileTree.toolbar.customize": "Customize actions",
     "fileTree.toolbar.customizeHint": "Drag actions to reorder them or move them between sections.",
     "fileTree.toolbar.shown": "Shown in toolbar",
-    "fileTree.toolbar.moveToMore": "Move to More",
-    "fileTree.toolbar.show": "Show in toolbar",
     "fileTree.toolbar.restore": "Restore defaults",
     "fileTree.toolbar.done": "Done",
     "fileTree.loading": "Loading…",
