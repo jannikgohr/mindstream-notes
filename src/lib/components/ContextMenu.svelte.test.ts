@@ -36,6 +36,22 @@ describe('ContextMenu layering', () => {
       'z-[250]'
     );
   });
+
+  it('can render above a popover for attached submenus', () => {
+    render(ContextMenu, {
+      props: {
+        x: 10,
+        y: 10,
+        items,
+        layer: 'overlay',
+        onClose: vi.fn()
+      }
+    });
+
+    expect(document.querySelector('[role="menu"]')?.className).toContain(
+      'z-[450]'
+    );
+  });
 });
 
 describe('ContextMenu submenu', () => {

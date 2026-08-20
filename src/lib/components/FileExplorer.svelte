@@ -19,7 +19,8 @@
     pluginTemplateNoteKind,
     runPluginTemplate
   } from '$lib/plugins/menu';
-  import { runPluginButton } from '$lib/plugins/effects';
+  import { pluginButtonEffect, runPluginEffect } from '$lib/plugins/effects';
+  import type { PluginToolbarButton } from '$lib/plugins/types';
   import { tooltip } from '$lib/actions/tooltip';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
@@ -402,17 +403,25 @@
     currentMenuItems = [];
   }
 
-  /** Open a plugin toolbar button's action, anchoring any menu under it. */
-  function onPluginToolbarClick(
+  /** Run a plugin action, positioning menus as native toolbar submenus. */
+  async function onPluginToolbarClick(
     anchor: HTMLElement,
     pluginId: string,
-    button: Parameters<typeof runPluginButton>[1]
-  ) {
+    button: PluginToolbarButton,
+    placement: 'toolbar' | 'submenu'
+  ): Promise<boolean> {
+    const effect = await pluginButtonEffect(pluginId, button);
+    if (!effect) return false;
     const rect = anchor.getBoundingClientRect();
-    void runPluginButton(pluginId, button, {
-      x: rect.left,
-      y: rect.bottom + 4
-    });
+    const isSubmenu = placement === 'submenu' && effect.effect === 'openMenu';
+    await runPluginEffect(
+      pluginId,
+      effect,
+      isSubmenu
+        ? { x: rect.right + 4, y: rect.top }
+        : { x: rect.left, y: rect.bottom + 4 }
+    );
+    return isSubmenu;
   }
 
   function runCreateToolbarAction(action: CoreFileTreeActionId) {

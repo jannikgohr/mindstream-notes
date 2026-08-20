@@ -13,6 +13,7 @@
     x={pluginMenu.x}
     y={pluginMenu.y}
     items={pluginMenu.items}
+    layer="overlay"
     onClose={closePluginMenu}
   />
 {/if}

@@ -2,7 +2,6 @@
   import { onMount, untrack } from 'svelte';
   import { Popover, Portal } from 'bits-ui';
   import {
-    Check,
     Feather,
     FilePlus2,
     FileUp,
@@ -38,8 +37,9 @@
     onPluginAction: (
       anchor: HTMLElement,
       pluginId: string,
-      button: PluginToolbarButton
-    ) => void;
+      button: PluginToolbarButton,
+      placement: 'toolbar' | 'submenu'
+    ) => Promise<boolean>;
   }
 
   type CoreAction = {
@@ -203,36 +203,32 @@
     return action.type === 'core' ? tUi(action.labelKey) : action.label;
   }
 
-  function runAction(action: CreateAction, anchor: HTMLElement) {
+  async function runAction(
+    action: CreateAction,
+    anchor: HTMLElement,
+    placement: 'toolbar' | 'submenu' = 'toolbar'
+  ) {
     if (suppressClickId === action.id) {
       suppressClickId = null;
       return;
     }
-    if (action.type === 'core') onCreate(action.id);
-    else onPluginAction(anchor, action.pluginId, action.button);
-    moreOpen = false;
+    if (action.type === 'core') {
+      onCreate(action.id);
+      moreOpen = false;
+      return;
+    }
+    const keepOpen = await onPluginAction(
+      anchor,
+      action.pluginId,
+      action.button,
+      placement
+    );
+    if (!keepOpen) moreOpen = false;
   }
 
   function persist(next: FileTreeToolbarPreferences) {
     preferences = normalizeFileTreeToolbarPreferences(next, availableIds);
     saveFileTreeToolbarPreferences(preferences);
-  }
-
-  function moveAction(
-    actionId: string,
-    destination: keyof FileTreeToolbarPreferences,
-    beforeId?: string
-  ) {
-    if (
-      destination === 'more' &&
-      preferences.toolbar.includes(actionId) &&
-      preferences.toolbar.length === 1
-    ) {
-      return;
-    }
-    persist(
-      moveFileTreeToolbarAction(preferences, actionId, destination, beforeId)
-    );
   }
 
   function resetPreferences() {
@@ -245,6 +241,7 @@
     orientation: 'horizontal' | 'vertical'
   ) {
     if (event.button !== 0 || pointerDrag) return;
+    if (orientation === 'vertical') event.preventDefault();
     const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
     pointerDrag = {
       id: actionId,
@@ -504,7 +501,7 @@
             </p>
           </div>
 
-          <div class="max-h-[min(28rem,70vh)] overflow-y-auto p-2">
+          <div class="max-h-[min(28rem,70vh)] select-none overflow-y-auto p-2">
             <p
               class="px-1 pb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground"
             >
@@ -528,13 +525,9 @@
                 <div
                   role="listitem"
                   data-file-tree-action-id={action.id}
-                  class="group flex touch-none cursor-grab items-center gap-2 rounded-md px-1.5 py-1.5 hover:bg-accent active:cursor-grabbing"
-                  onpointerdown={(event) => {
-                    const target = event.target as Element;
-                    if (!target.closest('button')) {
-                      startPointerDrag(event, action.id, 'vertical');
-                    }
-                  }}
+                  class="group flex touch-none select-none cursor-grab items-center gap-2 rounded-md px-1.5 py-1.5 hover:bg-accent active:cursor-grabbing"
+                  onpointerdown={(event) =>
+                    startPointerDrag(event, action.id, 'vertical')}
                 >
                   <GripVertical
                     class="size-3.5 shrink-0 cursor-grab text-muted-foreground"
@@ -543,16 +536,6 @@
                   <span class="min-w-0 flex-1 truncate text-sm"
                     >{labelFor(action)}</span
                   >
-                  <button
-                    type="button"
-                    class="rounded p-1 text-muted-foreground hover:bg-background hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-                    disabled={preferences.toolbar.length === 1}
-                    title={tUi('fileTree.toolbar.moveToMore')}
-                    aria-label={`${tUi('fileTree.toolbar.moveToMore')}: ${labelFor(action)}`}
-                    onclick={() => moveAction(action.id, 'more')}
-                  >
-                    <MoreHorizontal class="size-3.5" />
-                  </button>
                 </div>
               {/each}
               {#if placeholderAt('custom-toolbar', renderedCustomToolbarActions.length)}
@@ -586,13 +569,9 @@
                 <div
                   role="listitem"
                   data-file-tree-action-id={action.id}
-                  class="group flex touch-none cursor-grab items-center gap-2 rounded-md px-1.5 py-1.5 hover:bg-accent active:cursor-grabbing"
-                  onpointerdown={(event) => {
-                    const target = event.target as Element;
-                    if (!target.closest('button')) {
-                      startPointerDrag(event, action.id, 'vertical');
-                    }
-                  }}
+                  class="group flex touch-none select-none cursor-grab items-center gap-2 rounded-md px-1.5 py-1.5 hover:bg-accent active:cursor-grabbing"
+                  onpointerdown={(event) =>
+                    startPointerDrag(event, action.id, 'vertical')}
                 >
                   <GripVertical
                     class="size-3.5 shrink-0 cursor-grab text-muted-foreground"
@@ -601,15 +580,6 @@
                   <span class="min-w-0 flex-1 truncate text-sm"
                     >{labelFor(action)}</span
                   >
-                  <button
-                    type="button"
-                    class="rounded p-1 text-muted-foreground hover:bg-background hover:text-foreground"
-                    title={tUi('fileTree.toolbar.show')}
-                    aria-label={`${tUi('fileTree.toolbar.show')}: ${labelFor(action)}`}
-                    onclick={() => moveAction(action.id, 'toolbar')}
-                  >
-                    <Check class="size-3.5" />
-                  </button>
                 </div>
               {/each}
               {#if placeholderAt('custom-more', renderedCustomMoreActions.length)}
@@ -637,7 +607,8 @@
                 type="button"
                 role="menuitem"
                 class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
-                onclick={(event) => runAction(action, event.currentTarget)}
+                onclick={(event) =>
+                  runAction(action, event.currentTarget, 'submenu')}
               >
                 {@render actionIcon(action, 'size-4 shrink-0')}
                 <span class="flex-1 truncate">{labelFor(action)}</span>
@@ -664,8 +635,7 @@
 {#if pointerDrag?.moved && draggedAction}
   <Portal to="body">
     <div
-      class="pointer-events-none fixed z-[500] border border-border bg-popover text-popover-foreground opacity-95 shadow-lg"
-      class:rounded-md={pointerDrag.orientation === 'vertical'}
+      class="pointer-events-none fixed z-[500] rounded-md border border-border bg-popover text-popover-foreground opacity-95 shadow-lg"
       style:left={`${pointerDrag.x - pointerDrag.grabX}px`}
       style:top={`${pointerDrag.y - pointerDrag.grabY}px`}
       style:width={`${pointerDrag.width}px`}
