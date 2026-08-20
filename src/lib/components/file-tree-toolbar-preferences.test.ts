@@ -69,6 +69,23 @@ describe('file tree toolbar preferences', () => {
     });
   });
 
+  it('moves the middle item around its neighbour without appending it', () => {
+    const preferences = {
+      toolbar: ['one', 'two', 'three'],
+      more: []
+    };
+
+    expect(
+      moveFileTreeToolbarAction(preferences, 'two', 'toolbar', 'one').toolbar
+    ).toEqual(['two', 'one', 'three']);
+    expect(
+      moveFileTreeToolbarAction(preferences, 'two', 'toolbar', 'three').toolbar
+    ).toEqual(['one', 'two', 'three']);
+    expect(
+      moveFileTreeToolbarAction(preferences, 'one', 'toolbar').toolbar
+    ).toEqual(['two', 'three', 'one']);
+  });
+
   it('round-trips persisted preferences', () => {
     saveFileTreeToolbarPreferences({ toolbar: ['folder'], more: ['note'] });
     expect(localStorage.getItem(FILE_TREE_TOOLBAR_STORAGE_KEY)).not.toBeNull();

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
-  import { Popover } from 'bits-ui';
+  import { Popover, Portal } from 'bits-ui';
   import {
     Check,
     Feather,
@@ -57,6 +57,22 @@
   };
 
   type CreateAction = CoreAction | PluginAction;
+  type DropContainer = 'top' | 'custom-toolbar' | 'custom-more';
+
+  interface PointerDrag {
+    id: string;
+    pointerId: number;
+    startX: number;
+    startY: number;
+    x: number;
+    y: number;
+    grabX: number;
+    grabY: number;
+    width: number;
+    height: number;
+    orientation: 'horizontal' | 'vertical';
+    moved: boolean;
+  }
 
   let { pluginButtons = [], onCreate, onPluginAction }: Props = $props();
 
@@ -78,10 +94,12 @@
   });
   let preferencesLoaded = $state(false);
   let visibleCapacity = $state(Number.POSITIVE_INFINITY);
-  let draggedId = $state<string | null>(null);
-  let dropTarget = $state<string | null>(null);
+  let pointerDrag = $state<PointerDrag | null>(null);
+  let dropContainer = $state<DropContainer | null>(null);
   let dropSection = $state<keyof FileTreeToolbarPreferences | null>(null);
-  let dropAfter = $state(false);
+  let dropIndex = $state<number | null>(null);
+  let dropBeforeId = $state<string | undefined>(undefined);
+  let suppressClickId = $state<string | null>(null);
 
   const pluginActions = $derived(
     pluginButtons.map(
@@ -133,6 +151,25 @@
     ...responsiveOverflowActions,
     ...configuredMoreActions
   ]);
+  const draggedId = $derived(pointerDrag?.moved ? pointerDrag.id : null);
+  const draggedAction = $derived(
+    draggedId ? (actionMap.get(draggedId) ?? null) : null
+  );
+  const renderedTopActions = $derived(
+    draggedId
+      ? displayedToolbarActions.filter((action) => action.id !== draggedId)
+      : displayedToolbarActions
+  );
+  const renderedCustomToolbarActions = $derived(
+    draggedId
+      ? configuredToolbarActions.filter((action) => action.id !== draggedId)
+      : configuredToolbarActions
+  );
+  const renderedCustomMoreActions = $derived(
+    draggedId
+      ? configuredMoreActions.filter((action) => action.id !== draggedId)
+      : configuredMoreActions
+  );
 
   $effect(() => {
     const ids = availableIds;
@@ -156,7 +193,10 @@
       );
     });
     if (root) observer.observe(root);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      cleanupPointerDrag();
+    };
   });
 
   function labelFor(action: CreateAction): string {
@@ -164,6 +204,10 @@
   }
 
   function runAction(action: CreateAction, anchor: HTMLElement) {
+    if (suppressClickId === action.id) {
+      suppressClickId = null;
+      return;
+    }
     if (action.type === 'core') onCreate(action.id);
     else onPluginAction(anchor, action.pluginId, action.button);
     moreOpen = false;
@@ -195,83 +239,158 @@
     persist(DEFAULT_FILE_TREE_TOOLBAR_PREFERENCES);
   }
 
-  function startDrag(event: DragEvent, actionId: string) {
-    draggedId = actionId;
-    event.dataTransfer?.setData('text/x-file-tree-toolbar-action', actionId);
-    if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
-  }
-
-  function readDraggedId(event: DragEvent): string | null {
-    return (
-      draggedId ??
-      event.dataTransfer?.getData('text/x-file-tree-toolbar-action') ??
-      null
-    );
-  }
-
-  function dragOverAction(
-    event: DragEvent,
-    section: keyof FileTreeToolbarPreferences,
+  function startPointerDrag(
+    event: PointerEvent,
     actionId: string,
     orientation: 'horizontal' | 'vertical'
   ) {
-    if (!readDraggedId(event)) return;
-    event.preventDefault();
-    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+    if (event.button !== 0 || pointerDrag) return;
     const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
-    dropAfter =
-      orientation === 'horizontal'
-        ? event.clientX > rect.left + rect.width / 2
-        : event.clientY > rect.top + rect.height / 2;
-    dropSection = section;
-    dropTarget = actionId;
+    pointerDrag = {
+      id: actionId,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      x: event.clientX,
+      y: event.clientY,
+      grabX: event.clientX - rect.left,
+      grabY: event.clientY - rect.top,
+      width: rect.width,
+      height: rect.height,
+      orientation,
+      moved: false
+    };
+    window.addEventListener('pointermove', movePointerDrag, true);
+    window.addEventListener('pointerup', finishPointerDrag, true);
+    window.addEventListener('pointercancel', cancelPointerDrag, true);
   }
 
-  function dragOverSection(
-    event: DragEvent,
-    section: keyof FileTreeToolbarPreferences
-  ) {
-    if (!readDraggedId(event)) return;
+  function movePointerDrag(event: PointerEvent) {
+    if (!pointerDrag || event.pointerId !== pointerDrag.pointerId) return;
+    const moved =
+      pointerDrag.moved ||
+      Math.hypot(
+        event.clientX - pointerDrag.startX,
+        event.clientY - pointerDrag.startY
+      ) >= 4;
+    pointerDrag = {
+      ...pointerDrag,
+      x: event.clientX,
+      y: event.clientY,
+      moved
+    };
+    if (!moved) return;
     event.preventDefault();
+    suppressClickId = pointerDrag.id;
+    updatePointerDrop(event.clientX, event.clientY);
+  }
+
+  function updatePointerDrop(clientX: number, clientY: number) {
+    const container = document
+      .elementFromPoint(clientX, clientY)
+      ?.closest<HTMLElement>('[data-file-tree-drop-container]');
+    if (!container) {
+      dropContainer = null;
+      dropSection = null;
+      dropIndex = null;
+      dropBeforeId = undefined;
+      return;
+    }
+    const containerId = container.dataset.fileTreeDropContainer as
+      | DropContainer
+      | undefined;
+    const section = container.dataset.section as
+      | keyof FileTreeToolbarPreferences
+      | undefined;
+    const orientation = container.dataset.orientation;
+    if (!containerId || !section || !orientation) return;
+
+    const rows = Array.from(
+      container.querySelectorAll<HTMLElement>('[data-file-tree-action-id]')
+    ).filter(
+      (row) =>
+        row.dataset.fileTreeActionId !== pointerDrag?.id &&
+        row.closest('[data-file-tree-drop-container]') === container
+    );
+    let index = rows.length;
+    for (let i = 0; i < rows.length; i += 1) {
+      const rect = rows[i].getBoundingClientRect();
+      const before =
+        orientation === 'horizontal'
+          ? clientX < rect.left + rect.width / 2
+          : clientY < rect.top + rect.height / 2;
+      if (before) {
+        index = i;
+        break;
+      }
+    }
+    dropContainer = containerId;
     dropSection = section;
-    dropTarget = null;
-    dropAfter = false;
+    dropIndex = index;
+    dropBeforeId = rows[index]?.dataset.fileTreeActionId;
+    if (containerId === 'top' && !dropBeforeId) {
+      const displayedIds = new Set(
+        displayedToolbarActions.map((action) => action.id)
+      );
+      dropBeforeId = configuredToolbarActions.find(
+        (action) => !displayedIds.has(action.id)
+      )?.id;
+    }
   }
 
-  function dropRelativeToAction(
-    event: DragEvent,
-    section: keyof FileTreeToolbarPreferences,
-    actionId: string
-  ) {
-    const order = preferences[section];
-    const targetIndex = order.indexOf(actionId);
-    const beforeId =
-      dropAfter && targetIndex >= 0 ? order[targetIndex + 1] : actionId;
-    dropAction(event, section, beforeId);
+  function finishPointerDrag(event: PointerEvent) {
+    if (!pointerDrag || event.pointerId !== pointerDrag.pointerId) return;
+    const drag = pointerDrag;
+    if (drag.moved) event.preventDefault();
+    if (
+      drag.moved &&
+      dropSection &&
+      dropIndex !== null &&
+      !(
+        dropSection === 'more' &&
+        preferences.toolbar.includes(drag.id) &&
+        preferences.toolbar.length === 1
+      )
+    ) {
+      persist(
+        moveFileTreeToolbarAction(
+          preferences,
+          drag.id,
+          dropSection,
+          dropBeforeId
+        )
+      );
+    }
+    cleanupPointerDrag();
+    setTimeout(() => {
+      if (suppressClickId === drag.id) suppressClickId = null;
+    }, 0);
   }
 
-  function dropAction(
-    event: DragEvent,
-    section: keyof FileTreeToolbarPreferences,
-    beforeId?: string
-  ) {
-    event.preventDefault();
-    const actionId = readDraggedId(event);
-    if (actionId) moveAction(actionId, section, beforeId);
-    endDrag();
+  function cancelPointerDrag(event: PointerEvent) {
+    if (!pointerDrag || event.pointerId !== pointerDrag.pointerId) return;
+    cleanupPointerDrag();
   }
 
-  function endDrag() {
-    draggedId = null;
-    dropTarget = null;
+  function cleanupPointerDrag() {
+    window.removeEventListener('pointermove', movePointerDrag, true);
+    window.removeEventListener('pointerup', finishPointerDrag, true);
+    window.removeEventListener('pointercancel', cancelPointerDrag, true);
+    pointerDrag = null;
+    dropContainer = null;
     dropSection = null;
-    dropAfter = false;
+    dropIndex = null;
+    dropBeforeId = undefined;
+  }
+
+  function placeholderAt(container: DropContainer, index: number): boolean {
+    return dropContainer === container && dropIndex === index;
   }
 
   function closeMenu() {
     moreOpen = false;
     customizing = false;
-    endDrag();
+    cleanupPointerDrag();
   }
 </script>
 
@@ -299,28 +418,26 @@
 
 <div
   bind:this={root}
+  data-file-tree-drop-container="top"
+  data-section="toolbar"
+  data-orientation="horizontal"
   class="flex min-w-0 flex-1 justify-end gap-1 overflow-hidden"
 >
-  {#each displayedToolbarActions as action (action.id)}
+  {#each renderedTopActions as action, index (action.id)}
+    {#if placeholderAt('top', index)}
+      <div
+        class="h-7 w-7 shrink-0 rounded-md border border-dashed border-primary bg-primary/10"
+        aria-hidden="true"
+      ></div>
+    {/if}
     <div
       role="group"
       aria-label={labelFor(action)}
-      class="relative shrink-0"
-      class:opacity-50={draggedId === action.id}
-      draggable="true"
-      ondragstart={(event) => startDrag(event, action.id)}
-      ondragend={endDrag}
-      ondragover={(event) =>
-        dragOverAction(event, 'toolbar', action.id, 'horizontal')}
-      ondrop={(event) => dropRelativeToAction(event, 'toolbar', action.id)}
+      data-file-tree-action-id={action.id}
+      class="relative shrink-0 touch-none"
+      onpointerdown={(event) =>
+        startPointerDrag(event, action.id, 'horizontal')}
     >
-      {#if dropSection === 'toolbar' && dropTarget === action.id}
-        <span
-          class="pointer-events-none absolute top-1 bottom-1 z-10 w-0.5 rounded-full bg-primary {dropAfter
-            ? '-right-0.5'
-            : '-left-0.5'}"
-        ></span>
-      {/if}
       <Button
         variant="ghost"
         size="icon"
@@ -333,6 +450,12 @@
       </Button>
     </div>
   {/each}
+  {#if placeholderAt('top', renderedTopActions.length)}
+    <div
+      class="h-7 w-7 shrink-0 rounded-md border border-dashed border-primary bg-primary/10"
+      aria-hidden="true"
+    ></div>
+  {/if}
 
   <Popover.Root
     bind:open={moreOpen}
@@ -346,15 +469,7 @@
           size="icon"
           title={tUi('fileTree.toolbar.more')}
           aria-label={tUi('fileTree.toolbar.more')}
-          class="size-7 shrink-0 {customizing && dropSection === 'more'
-            ? 'bg-accent'
-            : ''}"
-          ondragover={(event) => {
-            if (customizing) dragOverSection(event, 'more');
-          }}
-          ondrop={(event) => {
-            if (customizing) dropAction(event, 'more');
-          }}
+          class="size-7 shrink-0"
         >
           <MoreHorizontal class="size-3.5" />
         </Button>
@@ -398,29 +513,28 @@
             <div
               role="list"
               aria-label={tUi('fileTree.toolbar.shown')}
+              data-file-tree-drop-container="custom-toolbar"
+              data-section="toolbar"
+              data-orientation="vertical"
               class="min-h-9 space-y-0.5 rounded-md"
-              class:ring-1={dropSection === 'toolbar' && dropTarget === null}
-              class:ring-primary={dropSection === 'toolbar' &&
-                dropTarget === null}
-              ondragover={(event) => dragOverSection(event, 'toolbar')}
-              ondrop={(event) => dropAction(event, 'toolbar')}
             >
-              {#each configuredToolbarActions as action (action.id)}
+              {#each renderedCustomToolbarActions as action, index (action.id)}
+                {#if placeholderAt('custom-toolbar', index)}
+                  <div
+                    class="h-8 rounded-md border border-dashed border-primary bg-primary/10"
+                    aria-hidden="true"
+                  ></div>
+                {/if}
                 <div
                   role="listitem"
-                  draggable="true"
-                  class="group flex items-center gap-2 rounded-md px-1.5 py-1.5 hover:bg-accent"
-                  class:opacity-50={draggedId === action.id}
-                  class:ring-1={dropSection === 'toolbar' &&
-                    dropTarget === action.id}
-                  class:ring-primary={dropSection === 'toolbar' &&
-                    dropTarget === action.id}
-                  ondragstart={(event) => startDrag(event, action.id)}
-                  ondragend={endDrag}
-                  ondragover={(event) =>
-                    dragOverAction(event, 'toolbar', action.id, 'vertical')}
-                  ondrop={(event) =>
-                    dropRelativeToAction(event, 'toolbar', action.id)}
+                  data-file-tree-action-id={action.id}
+                  class="group flex touch-none cursor-grab items-center gap-2 rounded-md px-1.5 py-1.5 hover:bg-accent active:cursor-grabbing"
+                  onpointerdown={(event) => {
+                    const target = event.target as Element;
+                    if (!target.closest('button')) {
+                      startPointerDrag(event, action.id, 'vertical');
+                    }
+                  }}
                 >
                   <GripVertical
                     class="size-3.5 shrink-0 cursor-grab text-muted-foreground"
@@ -441,6 +555,12 @@
                   </button>
                 </div>
               {/each}
+              {#if placeholderAt('custom-toolbar', renderedCustomToolbarActions.length)}
+                <div
+                  class="h-8 rounded-md border border-dashed border-primary bg-primary/10"
+                  aria-hidden="true"
+                ></div>
+              {/if}
             </div>
 
             <p
@@ -451,28 +571,28 @@
             <div
               role="list"
               aria-label={tUi('fileTree.toolbar.more')}
+              data-file-tree-drop-container="custom-more"
+              data-section="more"
+              data-orientation="vertical"
               class="min-h-9 space-y-0.5 rounded-md"
-              class:ring-1={dropSection === 'more' && dropTarget === null}
-              class:ring-primary={dropSection === 'more' && dropTarget === null}
-              ondragover={(event) => dragOverSection(event, 'more')}
-              ondrop={(event) => dropAction(event, 'more')}
             >
-              {#each configuredMoreActions as action (action.id)}
+              {#each renderedCustomMoreActions as action, index (action.id)}
+                {#if placeholderAt('custom-more', index)}
+                  <div
+                    class="h-8 rounded-md border border-dashed border-primary bg-primary/10"
+                    aria-hidden="true"
+                  ></div>
+                {/if}
                 <div
                   role="listitem"
-                  draggable="true"
-                  class="group flex items-center gap-2 rounded-md px-1.5 py-1.5 hover:bg-accent"
-                  class:opacity-50={draggedId === action.id}
-                  class:ring-1={dropSection === 'more' &&
-                    dropTarget === action.id}
-                  class:ring-primary={dropSection === 'more' &&
-                    dropTarget === action.id}
-                  ondragstart={(event) => startDrag(event, action.id)}
-                  ondragend={endDrag}
-                  ondragover={(event) =>
-                    dragOverAction(event, 'more', action.id, 'vertical')}
-                  ondrop={(event) =>
-                    dropRelativeToAction(event, 'more', action.id)}
+                  data-file-tree-action-id={action.id}
+                  class="group flex touch-none cursor-grab items-center gap-2 rounded-md px-1.5 py-1.5 hover:bg-accent active:cursor-grabbing"
+                  onpointerdown={(event) => {
+                    const target = event.target as Element;
+                    if (!target.closest('button')) {
+                      startPointerDrag(event, action.id, 'vertical');
+                    }
+                  }}
                 >
                   <GripVertical
                     class="size-3.5 shrink-0 cursor-grab text-muted-foreground"
@@ -492,6 +612,12 @@
                   </button>
                 </div>
               {/each}
+              {#if placeholderAt('custom-more', renderedCustomMoreActions.length)}
+                <div
+                  class="h-8 rounded-md border border-dashed border-primary bg-primary/10"
+                  aria-hidden="true"
+                ></div>
+              {/if}
             </div>
           </div>
 
@@ -534,3 +660,31 @@
     </Popover.Portal>
   </Popover.Root>
 </div>
+
+{#if pointerDrag?.moved && draggedAction}
+  <Portal to="body">
+    <div
+      class="pointer-events-none fixed z-[500] border border-border bg-popover text-popover-foreground opacity-95 shadow-lg"
+      class:rounded-md={pointerDrag.orientation === 'vertical'}
+      style:left={`${pointerDrag.x - pointerDrag.grabX}px`}
+      style:top={`${pointerDrag.y - pointerDrag.grabY}px`}
+      style:width={`${pointerDrag.width}px`}
+      style:height={`${pointerDrag.height}px`}
+      aria-hidden="true"
+    >
+      {#if pointerDrag.orientation === 'horizontal'}
+        <div class="flex h-full w-full items-center justify-center rounded-md">
+          {@render actionIcon(draggedAction)}
+        </div>
+      {:else}
+        <div class="flex h-full items-center gap-2 px-1.5">
+          <GripVertical class="size-3.5 shrink-0 text-muted-foreground" />
+          {@render actionIcon(draggedAction, 'size-4 shrink-0')}
+          <span class="min-w-0 flex-1 truncate text-sm">
+            {labelFor(draggedAction)}
+          </span>
+        </div>
+      {/if}
+    </div>
+  </Portal>
+{/if}
