@@ -467,41 +467,43 @@
   data-file-tree-drop-container="top"
   data-section="toolbar"
   data-orientation="horizontal"
-  class="flex min-w-0 flex-1 justify-end gap-1 overflow-hidden"
+  class="flex min-w-0 flex-1 justify-end gap-1"
 >
-  {#each renderedTopActions as action, index (action.id)}
-    {#if placeholderAt('top', index)}
+  <div class="flex min-w-0 flex-1 justify-end gap-1 overflow-hidden">
+    {#each renderedTopActions as action, index (action.id)}
+      {#if placeholderAt('top', index)}
+        <div
+          class="h-7 w-7 shrink-0 rounded-md border border-dashed border-primary bg-primary/10"
+          aria-hidden="true"
+        ></div>
+      {/if}
+      <div
+        role="group"
+        aria-label={labelFor(action)}
+        data-file-tree-action-id={action.id}
+        class="relative shrink-0 touch-none"
+        onpointerdown={(event) =>
+          startPointerDrag(event, action.id, 'horizontal')}
+      >
+        <Button
+          variant="ghost"
+          size="icon"
+          onclick={(event) => runAction(action, event.currentTarget)}
+          title={labelFor(action)}
+          aria-label={labelFor(action)}
+          class="size-7 cursor-grab focus-visible:ring-0 focus-visible:ring-offset-0 active:cursor-grabbing"
+        >
+          {@render actionIcon(action)}
+        </Button>
+      </div>
+    {/each}
+    {#if placeholderAt('top', renderedTopActions.length)}
       <div
         class="h-7 w-7 shrink-0 rounded-md border border-dashed border-primary bg-primary/10"
         aria-hidden="true"
       ></div>
     {/if}
-    <div
-      role="group"
-      aria-label={labelFor(action)}
-      data-file-tree-action-id={action.id}
-      class="relative shrink-0 touch-none"
-      onpointerdown={(event) =>
-        startPointerDrag(event, action.id, 'horizontal')}
-    >
-      <Button
-        variant="ghost"
-        size="icon"
-        onclick={(event) => runAction(action, event.currentTarget)}
-        title={labelFor(action)}
-        aria-label={labelFor(action)}
-        class="size-7 cursor-grab active:cursor-grabbing"
-      >
-        {@render actionIcon(action)}
-      </Button>
-    </div>
-  {/each}
-  {#if placeholderAt('top', renderedTopActions.length)}
-    <div
-      class="h-7 w-7 shrink-0 rounded-md border border-dashed border-primary bg-primary/10"
-      aria-hidden="true"
-    ></div>
-  {/if}
+  </div>
 
   <Popover.Root
     bind:open={moreOpen}
@@ -518,7 +520,7 @@
           size="icon"
           title={tUi('fileTree.toolbar.more')}
           aria-label={tUi('fileTree.toolbar.more')}
-          class="size-7 shrink-0"
+          class="size-7 shrink-0 focus-visible:ring-0 focus-visible:ring-offset-0"
         >
           <MoreHorizontal class="size-3.5" />
         </Button>
