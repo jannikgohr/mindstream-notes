@@ -1379,6 +1379,13 @@
   :global(.kanban-scope .mindstream-list-placeholder) {
     opacity: 0.18;
   }
+  @media (hover: hover) and (pointer: fine) {
+    :global(.kanban-scope .wx-content) {
+      width: max-content;
+      min-width: 100%;
+      justify-content: center;
+    }
+  }
   :global(.kanban-list-drag-ghost) {
     position: fixed !important;
     z-index: 250;
