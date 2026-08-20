@@ -1400,6 +1400,15 @@
   :global(.kanban-list-drag-ghost .wx-column-header) {
     background: var(--wx-kanban-column-bg);
   }
+  :global(.kanban-list-drag-ghost .wx-column-cards) {
+    gap: 8px;
+    padding: 8px;
+  }
+  :global(.kanban-list-drag-ghost .wx-card) {
+    border-radius: var(--wx-border-radius);
+    background: var(--wx-kanban-card-bg);
+    box-shadow: var(--wx-kanban-card-shadow);
+  }
   :global(.kanban-list-drag-ghost .wx-body) {
     -webkit-backdrop-filter: blur(10px) saturate(1.1);
     backdrop-filter: blur(10px) saturate(1.1);
