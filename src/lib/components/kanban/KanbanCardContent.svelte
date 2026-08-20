@@ -4,8 +4,8 @@
   import { tUi } from '$lib/settings/i18n.svelte';
   import { requestOpenNote } from '$lib/stores/open-note-intent.svelte';
   import { tree } from '$lib/stores/tree.svelte';
-  import { getPriorityOptions } from '@svar-ui/svelte-kanban';
-  import type { CardShape, KanbanCard } from '@svar-ui/svelte-kanban';
+  import { getPriorityOptions } from '@mindstream/svelte-kanban';
+  import type { CardShape, KanbanCard } from '@mindstream/svelte-kanban';
   import {
     renderKanbanDescription,
     sanitizeKanbanDescriptionHtml

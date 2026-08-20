@@ -21,7 +21,8 @@ const config = {
     outDir: '.output/svelte-kit',
     alias: {
       $lib: 'src/lib',
-      '$lib/*': 'src/lib/*'
+      '$lib/*': 'src/lib/*',
+      '@mindstream/svelte-kanban': 'packages/svelte-kanban/src/index.ts'
     },
     typescript: {
       /*
