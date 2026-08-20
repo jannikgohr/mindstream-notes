@@ -12,7 +12,8 @@ const patterns = [
   'docs/**/*.{js,ts,mjs,cjs,json,md,html,css}',
   'e2e-tests/**/*.{js,ts,mjs,cjs,json,md,html,css}',
   'backend/**/*.{js,ts,mjs,cjs,json,md,html,css}',
-  'plugins/**/*.{js,ts,mjs,cjs,json,md,html,css}'
+  'plugins/**/*.{js,ts,mjs,cjs,json,md,html,css}',
+  'packages/**/*.{js,ts,mjs,cjs,json,md,html,css,svelte}'
 ];
 
 const check = process.argv.includes('--check');

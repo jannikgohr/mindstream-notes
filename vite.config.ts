@@ -171,7 +171,6 @@ export default defineConfig({
       'perfect-freehand',
       'image-js',
       // Kanban boards
-      '@svar-ui/svelte-kanban',
       // Desktop dockview shell — lazy via DesktopLayout.svelte
       'dockview-core',
       // Tauri API + plugins — dynamically imported, so only loaded under Tauri
@@ -192,7 +191,10 @@ export default defineConfig({
       'mode-watcher',
       'tailwind-merge',
       'tailwind-variants'
-    ]
+    ],
+    // This workspace package contains Svelte source and must pass through the
+    // Svelte compiler instead of esbuild's dependency pre-bundler.
+    exclude: ['@mindstream/svelte-kanban']
   },
 
   // Vite options tailored for Tauri development.

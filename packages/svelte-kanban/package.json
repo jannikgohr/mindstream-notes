@@ -1,0 +1,42 @@
+{
+  "name": "@mindstream/svelte-kanban",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Mindstream's maintained fork of the SVAR Svelte Kanban widget",
+  "license": "MIT",
+  "type": "module",
+  "svelte": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "svelte": "./src/index.ts",
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "check": "svelte-check --tsconfig ./tsconfig.json"
+  },
+  "dependencies": {
+    "@svar-ui/core-locales": "2.6.0",
+    "@svar-ui/kanban-locales": "2.6.0",
+    "@svar-ui/kanban-provider": "2.6.0",
+    "@svar-ui/kanban-store": "2.6.0",
+    "@svar-ui/lib-dom": "0.13.1",
+    "@svar-ui/lib-state": "1.9.7",
+    "@svar-ui/svelte-core": "2.6.0",
+    "@svar-ui/svelte-editor": "2.6.0",
+    "@svar-ui/svelte-menu": "2.6.0",
+    "@svar-ui/svelte-toolbar": "2.6.0"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^5.0.3",
+    "svelte": "^5.16.0",
+    "svelte-check": "^4.1.1",
+    "typescript": "^5.7.2"
+  },
+  "peerDependencies": {
+    "svelte": "^5.16.0"
+  }
+}

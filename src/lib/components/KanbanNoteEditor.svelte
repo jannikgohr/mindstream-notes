@@ -26,7 +26,14 @@
   import * as Y from 'yjs';
   import { Awareness } from 'y-protocols/awareness';
   import { mode } from 'mode-watcher';
-  import { Ellipsis, Pencil, Plus, Redo2, Trash2, Undo2 } from '@lucide/svelte';
+  import {
+    Ellipsis,
+    GripVertical,
+    Pencil,
+    Redo2,
+    Trash2,
+    Undo2
+  } from '@lucide/svelte';
   import {
     Kanban,
     Editor,
@@ -36,8 +43,12 @@
     getEditorItems,
     getPriorityOptions,
     registerEditorItem
-  } from '@svar-ui/svelte-kanban';
-  import type { KanbanInstanceApi, CardShape } from '@svar-ui/svelte-kanban';
+  } from '@mindstream/svelte-kanban';
+  import type {
+    KanbanColumnHeaderContext,
+    KanbanInstanceApi,
+    CardShape
+  } from '@mindstream/svelte-kanban';
   import {
     loadNote,
     saveNote as apiSaveNote,
@@ -60,12 +71,7 @@
   import { confirm } from '$lib/components/confirm-dialog.svelte';
   import AppContextMenu from '$lib/components/ContextMenu.svelte';
   import type { MenuItem } from '$lib/components/context-menu-types';
-  import {
-    Toolbar,
-    ToolbarButton,
-    ToolbarScrollbar,
-    ToolbarSeparator
-  } from '$lib/components/ui/toolbar';
+  import { Toolbar, ToolbarButton } from '$lib/components/ui/toolbar';
   import { CollabProvider } from '$lib/sync/collab-provider';
   import { collabCredentialsChangedForNote } from '$lib/sync/collab-credentials';
   import {
@@ -99,6 +105,8 @@
     type KanbanNoteOption
   } from './kanban/KanbanLinkedNoteField.svelte';
   import KanbanSearchPanel from './kanban/KanbanSearchPanel.svelte';
+  import KanbanAddListControl from './kanban/KanbanAddListControl.svelte';
+  import KanbanListHeader from './kanban/KanbanListHeader.svelte';
   import {
     KANBAN_LOCAL_ORIGIN,
     KANBAN_RENDER_ORIGIN,
@@ -186,7 +194,6 @@
   let awareness: Awareness | null = null;
   let undoManager: Y.UndoManager | null = null;
   let api = $state<KanbanInstanceApi | null>(null);
-  let toolbarScrollEl = $state<HTMLDivElement | null>(null);
   let searchPanel = $state<{ focus: () => void } | null>(null);
   /** Board props handed to the widget. Reassigned only on remote changes. */
   let board = $state<KanbanBoard>({ columns: [], cards: [] });
@@ -491,6 +498,7 @@
   // it originated inside the card editor.
   let pressStartedInsideCardEditor = false;
   let renamingListId = $state<string | null>(null);
+  let creatingList = $state(false);
   let listDrag = $state<ListPointerDrag | null>(null);
   let listDropIndex = $state<number | null>(null);
   let listDragMoved = $state(false);
@@ -507,19 +515,43 @@
     return drag ? board.columns.find((col) => col.id === drag.id) : null;
   });
 
-  function addColumn(): void {
+  const renderedColumns = $derived(
+    displayedColumns.map((column) => ({
+      ...column,
+      css:
+        listDragMoved && listDrag?.id === column.id
+          ? 'mindstream-list-placeholder'
+          : undefined
+    }))
+  );
+
+  function startAddColumn(): void {
+    if (isTrashed) return;
+    renamingListId = null;
+    creatingList = true;
+  }
+
+  function cancelAddColumn(): void {
+    creatingList = false;
+  }
+
+  function addColumn(label: string): void {
     if (!yDoc || isTrashed) return;
+    const nextLabel = label.trim();
+    if (!nextLabel) {
+      cancelAddColumn();
+      return;
+    }
     const maxOrder = board.columns.reduce((m, c) => Math.max(m, c.order), -1);
     const column: KanbanColumnData = {
       id: crypto.randomUUID(),
-      label: tUi('editor.kanban.newList'),
+      label: nextLabel,
       order: maxOrder + 1
     };
     upsertBoardIntoYDoc(yDoc, { columns: [column], cards: [] });
     board = readBoardFromYDoc(yDoc);
     updateUndoState();
-    // Drop straight into inline rename so the user can name it immediately.
-    renamingListId = column.id;
+    creatingList = false;
   }
 
   function openListMenu(e: MouseEvent, id: string): void {
@@ -579,15 +611,6 @@
 
   function updateKanbanSearch(filters: KanbanSearchFilters): void {
     searchFilters = filters;
-  }
-
-  function handleToolbarWheel(event: WheelEvent): void {
-    const el = event.currentTarget as HTMLElement;
-    if (el.scrollWidth <= el.clientWidth) return;
-    const delta = event.deltaY !== 0 ? event.deltaY : event.deltaX;
-    if (delta === 0) return;
-    el.scrollLeft += delta;
-    event.preventDefault();
   }
 
   function undoKanbanAction(): void {
@@ -661,6 +684,7 @@
 
   function startRenameList(id: string): void {
     listMenu = null;
+    creatingList = false;
     renamingListId = id;
   }
 
@@ -671,12 +695,6 @@
 
   function cancelRenameList(): void {
     renamingListId = null;
-  }
-
-  // Autofocus + select the rename input when it appears (mirrors note rename).
-  function focusRenameInput(node: HTMLInputElement) {
-    node.focus();
-    node.select();
   }
 
   function renameColumn(id: string, label: string): void {
@@ -695,12 +713,13 @@
 
   function beginListPointerDrag(event: PointerEvent, id: string): void {
     if (event.button !== 0 || renamingListId === id || isTrashed) return;
-    const target = event.target as Element | null;
-    if (target?.closest('button,input,textarea,select,[contenteditable]')) {
-      return;
-    }
-    const chip = event.currentTarget as HTMLElement;
-    const rect = chip.getBoundingClientRect();
+    creatingList = false;
+    const handle = event.currentTarget as HTMLElement;
+    const columnElement = handle.closest<HTMLElement>('[data-column-id]');
+    const headerElement = handle.closest<HTMLElement>('.wx-column-header');
+    if (!columnElement || !headerElement) return;
+    const rect = columnElement.getBoundingClientRect();
+    const headerRect = headerElement.getBoundingClientRect();
     const sourceIndex = board.columns.findIndex((col) => col.id === id);
     if (sourceIndex < 0) return;
 
@@ -710,8 +729,8 @@
       pointerId: event.pointerId,
       grabX: event.clientX - rect.left,
       width: rect.width,
-      height: rect.height,
-      top: rect.top,
+      height: headerRect.height,
+      top: headerRect.top,
       x: event.clientX,
       sourceIndex
     };
@@ -724,18 +743,18 @@
 
   function listReorderElements(): HTMLElement[] {
     return Array.from(
-      toolbarScrollEl?.querySelectorAll<HTMLElement>('[data-reorder-id]') ?? []
+      host?.querySelectorAll<HTMLElement>('.wx-column[data-reorder-id]') ?? []
     );
   }
 
   function moveListPointerDrag(event: PointerEvent): void {
     if (!listDrag || event.pointerId !== listDrag.pointerId) return;
     event.preventDefault();
-    const toolbar = toolbarScrollEl;
-    if (toolbar) {
-      const rect = toolbar.getBoundingClientRect();
-      if (event.clientX < rect.left + 32) toolbar.scrollLeft -= 12;
-      else if (event.clientX > rect.right - 32) toolbar.scrollLeft += 12;
+    const boardScroll = host?.querySelector<HTMLElement>('.wx-scroll');
+    if (boardScroll) {
+      const rect = boardScroll.getBoundingClientRect();
+      if (event.clientX < rect.left + 32) boardScroll.scrollLeft -= 12;
+      else if (event.clientX > rect.right - 32) boardScroll.scrollLeft += 12;
     }
 
     listDrag = { ...listDrag, x: event.clientX };
@@ -1119,6 +1138,30 @@
   });
 </script>
 
+{#snippet renderColumnHeader(context: KanbanColumnHeaderContext)}
+  {@const columnId = String(context.column.id)}
+  <KanbanListHeader
+    {context}
+    renaming={renamingListId === columnId}
+    onStartRename={() => startRenameList(columnId)}
+    onCommitRename={(value) => commitRenameList(columnId, value)}
+    onCancelRename={cancelRenameList}
+    onOpenMenu={(event) => openListMenu(event, columnId)}
+    onDragStart={(event) => beginListPointerDrag(event, columnId)}
+  />
+{/snippet}
+
+{#snippet renderBoardEnd()}
+  {#if !isTrashed}
+    <KanbanAddListControl
+      creating={creatingList}
+      onStart={startAddColumn}
+      onCommit={addColumn}
+      onCancel={cancelAddColumn}
+    />
+  {/if}
+{/snippet}
+
 <div class="flex h-full flex-col" bind:this={host}>
   {#if loadError}
     <div
@@ -1141,13 +1184,7 @@
         <div class="kanban-scope flex flex-col">
           {#if !isTrashed}
             <div class="kanban-toolbar-shell">
-              <Toolbar
-                bind:ref={toolbarScrollEl}
-                dense
-                aria-label={tUi('editor.kanban.toolbar')}
-                class="scrollbar-none overflow-x-auto"
-                onwheel={handleToolbarWheel}
-              >
+              <Toolbar dense aria-label={tUi('editor.kanban.toolbar')}>
                 <ToolbarButton
                   onclick={undoKanbanAction}
                   disabled={!canUndo}
@@ -1165,58 +1202,7 @@
                 >
                   <Redo2 aria-hidden="true" />
                 </ToolbarButton>
-
-                <ToolbarSeparator />
-
-                {#each displayedColumns as col (col.id)}
-                  <div
-                    class="kanban-list-chip"
-                    class:kanban-list-chip-placeholder={listDragMoved &&
-                      listDrag?.id === col.id}
-                    data-reorder-id={col.id}
-                    role="group"
-                    aria-label={col.label}
-                    aria-grabbed={listDrag?.id === col.id}
-                    onpointerdown={(event) =>
-                      beginListPointerDrag(event, col.id)}
-                  >
-                    {#if renamingListId === col.id}
-                      <input
-                        class="kanban-list-name"
-                        value={col.label}
-                        aria-label={tUi('editor.kanban.renameList')}
-                        use:focusRenameInput
-                        onblur={(e) =>
-                          commitRenameList(col.id, e.currentTarget.value)}
-                        onkeydown={(e) => {
-                          if (e.key === 'Enter') e.currentTarget.blur();
-                          else if (e.key === 'Escape') cancelRenameList();
-                        }}
-                      />
-                    {:else}
-                      <span class="kanban-list-label" title={col.label}
-                        >{col.label}</span
-                      >
-                      <ToolbarButton
-                        class="size-8"
-                        aria-label={tUi('editor.kanban.listMenu')}
-                        title={tUi('editor.kanban.listMenu')}
-                        onclick={(e) => openListMenu(e, col.id)}
-                      >
-                        <Ellipsis aria-hidden="true" />
-                      </ToolbarButton>
-                    {/if}
-                  </div>
-                {/each}
-                <ToolbarButton
-                  aria-label={tUi('editor.kanban.addList')}
-                  title={tUi('editor.kanban.addList')}
-                  onclick={addColumn}
-                >
-                  <Plus aria-hidden="true" />
-                </ToolbarButton>
               </Toolbar>
-              <ToolbarScrollbar target={toolbarScrollEl} />
             </div>
             {#if searchOpen}
               <KanbanSearchPanel
@@ -1243,9 +1229,11 @@
           >
             <Kanban
               cards={board.cards}
-              columns={board.columns}
+              columns={renderedColumns}
               card={cardShape}
               cardContent={KanbanCardContent}
+              columnHeader={renderColumnHeader}
+              boardEnd={renderBoardEnd}
               readonly={isTrashed}
               init={handleInit}
             />
@@ -1266,9 +1254,12 @@
         style:height={`${listDrag.height}px`}
         aria-hidden="true"
       >
-        <span class="kanban-list-label" title={draggedColumn.label}
-          >{draggedColumn.label}</span
-        >
+        <div class="kanban-list-ghost-handle">
+          <GripVertical aria-hidden="true" />
+        </div>
+        <span class="kanban-list-ghost-label" title={draggedColumn.label}>
+          {draggedColumn.label}
+        </span>
         <div class="kanban-list-ghost-menu">
           <Ellipsis aria-hidden="true" />
         </div>
@@ -1380,40 +1371,13 @@
     --wx-kanban-card-shadow: 0 1px 2px rgb(0 0 0 / 0.08);
   }
 
-  /* List-management toolbar (add / rename / remove columns). */
+  /* Board actions stay in the compact toolbar; list actions live on the lists. */
   .kanban-toolbar-shell {
     flex-shrink: 0;
     border-bottom: 1px solid var(--border);
     background: var(--background);
   }
-  .kanban-list-chip {
-    position: relative;
-    display: inline-flex;
-    height: 2.25rem;
-    flex-shrink: 0;
-    align-items: center;
-    gap: 0.25rem;
-    border: 1px solid var(--border);
-    border-radius: 0.375rem;
-    background: var(--card);
-    padding-left: 0.5rem;
-    padding-right: 0.125rem;
-    cursor: grab;
-    touch-action: none;
-    transition:
-      border-color 120ms,
-      box-shadow 120ms,
-      opacity 120ms,
-      transform 120ms;
-  }
-  .kanban-list-chip:active {
-    cursor: grabbing;
-  }
-  .kanban-list-chip:focus-within {
-    border-color: var(--ring);
-    box-shadow: 0 0 0 1px var(--ring);
-  }
-  .kanban-list-chip-placeholder {
+  :global(.kanban-scope .mindstream-list-placeholder) {
     opacity: 0.18;
   }
   .kanban-list-drag-ghost {
@@ -1421,18 +1385,18 @@
     z-index: 250;
     display: inline-flex;
     align-items: center;
-    gap: 0.25rem;
+    gap: 0.125rem;
     border: 1px solid var(--ring);
-    border-radius: 0.375rem;
-    background: var(--card);
-    padding-left: 0.5rem;
-    padding-right: 0.125rem;
+    border-radius: var(--radius-md) var(--radius-md) 0 0;
+    background: var(--muted);
+    padding: 0.5rem 0.375rem;
     box-shadow:
       0 0 0 1px var(--ring),
       0 8px 20px rgb(0 0 0 / 0.18);
     pointer-events: none;
     will-change: left;
   }
+  .kanban-list-ghost-handle,
   .kanban-list-ghost-menu {
     display: inline-flex;
     width: 2rem;
@@ -1441,32 +1405,20 @@
     justify-content: center;
     color: var(--muted-foreground);
   }
+  .kanban-list-ghost-handle :global(svg),
   .kanban-list-ghost-menu :global(svg) {
     width: 1rem;
     height: 1rem;
   }
-  .kanban-list-label {
-    max-width: 12rem;
+  .kanban-list-ghost-label {
+    min-width: 0;
+    flex: 1;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: 0.75rem;
+    font-size: 0.875rem;
+    font-weight: 600;
     color: var(--foreground);
-  }
-  .kanban-list-name {
-    width: 9rem;
-    min-width: 4rem;
-    max-width: 12rem;
-    height: 1.75rem;
-    border: 1px solid transparent;
-    background: transparent;
-    padding: 0 0.375rem;
-    font-size: 0.75rem;
-    color: var(--foreground);
-    border-radius: 0.375rem;
-  }
-  .kanban-list-name:focus {
-    outline: none;
   }
   :global(.kanban-scope .wx-sidearea:has(.kanban-card-editor)) {
     z-index: 240;
