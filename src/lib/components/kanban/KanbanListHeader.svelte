@@ -1,11 +1,5 @@
 <script lang="ts">
-  import {
-    ChevronLeft,
-    Ellipsis,
-    GripVertical,
-    Pencil,
-    Plus
-  } from '@lucide/svelte';
+  import { ChevronLeft, Ellipsis, GripVertical, Plus } from '@lucide/svelte';
   import type { KanbanColumnHeaderContext } from '@mindstream/svelte-kanban';
   import { tUi } from '$lib/settings/i18n.svelte';
   import {
@@ -101,17 +95,6 @@
     onclick={context.addCard}
   >
     <Plus aria-hidden="true" />
-  </button>
-
-  <button
-    type="button"
-    class="header-action"
-    aria-label={tUi('editor.kanban.renameList')}
-    title={tUi('editor.kanban.renameList')}
-    disabled={context.readonly}
-    onclick={onStartRename}
-  >
-    <Pencil aria-hidden="true" />
   </button>
 
   <button
