@@ -199,7 +199,7 @@
         {#if item.children?.length && activeSubmenu === i}
           <div
             role="menu"
-            class="absolute top-0 {layerClass} min-w-[200px] rounded-md border border-border bg-popover py-1 text-sm text-popover-foreground shadow-lg {submenuOpensLeft
+            class="absolute -top-1 {layerClass} min-w-[200px] rounded-md border border-border bg-popover py-1 text-sm text-popover-foreground shadow-lg {submenuOpensLeft
               ? 'right-full mr-1'
               : 'left-full ml-1'}"
           >

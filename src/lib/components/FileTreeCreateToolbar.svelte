@@ -601,7 +601,7 @@
             </Button>
           </div>
         {:else}
-          <div class="py-1">
+          <div class="select-none py-1">
             {#each menuActions as action (action.id)}
               <button
                 type="button"

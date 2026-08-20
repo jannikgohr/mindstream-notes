@@ -418,7 +418,7 @@
       pluginId,
       effect,
       isSubmenu
-        ? { x: rect.right + 4, y: rect.top }
+        ? { x: rect.right + 4, y: rect.top - 4 }
         : { x: rect.left, y: rect.bottom + 4 }
     );
     return isSubmenu;
