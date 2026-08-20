@@ -26,6 +26,11 @@ export type KanbanColumnHeaderSnippet = Snippet<
 
 export type KanbanBoardEndSnippet = Snippet;
 
+export type CardDragEdgeDirection = 'previous' | 'next';
+export type CardDragEdgeHandler = (
+  direction: CardDragEdgeDirection
+) => ColumnID | null;
+
 type ShapeConfig<T> = boolean | T;
 
 export type CardShapeItem = {

@@ -25,7 +25,8 @@
     CardCssFn,
     ColumnCssFn,
     KanbanColumnHeaderSnippet,
-    KanbanBoardEndSnippet
+    KanbanBoardEndSnippet,
+    CardDragEdgeHandler
   } from '../types.js';
   import {
     KANBAN_API_CONTEXT,
@@ -45,6 +46,8 @@
     columnCss?: ColumnCssFn;
     columnHeader?: KanbanColumnHeaderSnippet;
     boardEnd?: KanbanBoardEndSnippet;
+    visibleColumn?: ColumnID;
+    onCardDragEdge?: CardDragEdgeHandler;
   };
 
   let {
@@ -57,7 +60,9 @@
     cardCss,
     columnCss,
     columnHeader,
-    boardEnd
+    boardEnd,
+    visibleColumn,
+    onCardDragEdge
   }: Props = $props();
 
   const columnScroll = $derived(render?.columnScroll ?? true);
@@ -75,6 +80,12 @@
   const _ = getContext<ILocale>('wx-i18n').getGroup('kanban');
 
   const dnd = getContext<DndState>(DND_CONTEXT);
+
+  const layoutColumns = $derived(
+    visibleColumn == null
+      ? $viewData.columns
+      : $viewData.columns.filter((column) => column.id === visibleColumn)
+  );
 
   let root: HTMLElement | undefined = $state();
   let scroll: HTMLElement | undefined = $state();
@@ -314,7 +325,7 @@
     class="wx-board"
     class:wx-scroll-board={!columnScroll}
     class:wx-layout-flex={!fixedColumnWidth}
-    use:cardDrag={{ dnd, store, readonly }}
+    use:cardDrag={{ dnd, store, readonly, onEdgeSwitch: onCardDragEdge }}
     use:delegateCardClick
     use:cardHotkeys
     onmousemove={tooltip ? overlay.handleTooltipMove : undefined}
@@ -326,7 +337,7 @@
       onscroll={scheduleColumnVisibility}
     >
       <div class="wx-content">
-        {#each $viewData.columns as column (column.id)}
+        {#each layoutColumns as column (column.id)}
           <Column
             {column}
             {readonly}

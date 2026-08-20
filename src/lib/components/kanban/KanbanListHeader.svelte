@@ -16,6 +16,7 @@
     onCancelRename: () => void;
     onOpenMenu: (event: MouseEvent) => void;
     onDragStart: (event: PointerEvent) => void;
+    mobile?: boolean;
   }
 
   let {
@@ -25,7 +26,8 @@
     onCommitRename,
     onCancelRename,
     onOpenMenu,
-    onDragStart
+    onDragStart,
+    mobile = false
   }: Props = $props();
 
   let renameInput = $state<HTMLInputElement | null>(null);
@@ -54,17 +56,19 @@
   }
 </script>
 
-<header class="wx-column-header mindstream-list-header">
-  <button
-    type="button"
-    class="header-action drag-handle"
-    aria-label={tUi('editor.kanban.reorderList')}
-    use:tooltip={tUi('editor.kanban.reorderList')}
-    disabled={context.readonly}
-    onpointerdown={onDragStart}
-  >
-    <GripVertical aria-hidden="true" />
-  </button>
+<header class="wx-column-header mindstream-list-header" class:mobile>
+  {#if !mobile}
+    <button
+      type="button"
+      class="header-action drag-handle"
+      aria-label={tUi('editor.kanban.reorderList')}
+      use:tooltip={tUi('editor.kanban.reorderList')}
+      disabled={context.readonly}
+      onpointerdown={onDragStart}
+    >
+      <GripVertical aria-hidden="true" />
+    </button>
+  {/if}
 
   {#if renaming}
     <input
@@ -85,6 +89,12 @@
     >
       {context.column.label}
     </button>
+  {/if}
+
+  {#if mobile}
+    <span class="card-count" aria-label={tUi('editor.kanban.cardCount')}>
+      {context.column.cards.length}
+    </span>
   {/if}
 
   <button
@@ -109,16 +119,18 @@
     <Ellipsis aria-hidden="true" />
   </button>
 
-  <button
-    type="button"
-    class="header-action"
-    aria-label={tUi('editor.kanban.collapseList')}
-    use:tooltip={tUi('editor.kanban.collapseList')}
-    disabled={context.readonly}
-    onclick={context.toggleCollapsed}
-  >
-    <ChevronLeft aria-hidden="true" />
-  </button>
+  {#if !mobile}
+    <button
+      type="button"
+      class="header-action"
+      aria-label={tUi('editor.kanban.collapseList')}
+      use:tooltip={tUi('editor.kanban.collapseList')}
+      disabled={context.readonly}
+      onclick={context.toggleCollapsed}
+    >
+      <ChevronLeft aria-hidden="true" />
+    </button>
+  {/if}
 </header>
 
 <style>
@@ -129,6 +141,27 @@
     gap: 0.125rem;
     border-bottom: 1px solid var(--wx-kanban-border-color);
     padding: 0.5rem 0.375rem;
+  }
+
+  .mindstream-list-header.mobile {
+    min-height: 3.5rem;
+    padding-inline: 0.75rem;
+  }
+
+  .mobile .header-action {
+    width: 2.5rem;
+    height: 2.5rem;
+    flex-basis: 2.5rem;
+  }
+
+  .mobile .list-title {
+    font-size: 1rem;
+  }
+
+  .card-count {
+    color: var(--muted-foreground);
+    font-size: 0.75rem;
+    font-variant-numeric: tabular-nums;
   }
 
   .header-action,

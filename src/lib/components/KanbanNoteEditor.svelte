@@ -26,7 +26,15 @@
   import * as Y from 'yjs';
   import { Awareness } from 'y-protocols/awareness';
   import { mode } from 'mode-watcher';
-  import { Pencil, Redo2, Trash2, Undo2 } from '@lucide/svelte';
+  import {
+    ArrowLeft,
+    ArrowRight,
+    Pencil,
+    Plus,
+    Redo2,
+    Trash2,
+    Undo2
+  } from '@lucide/svelte';
   import {
     Kanban,
     Editor,
@@ -40,6 +48,7 @@
   import type {
     KanbanColumnHeaderContext,
     KanbanInstanceApi,
+    CardDragEdgeDirection,
     CardShape
   } from '@mindstream/svelte-kanban';
   import {
@@ -129,6 +138,8 @@
     type KanbanSearchLookups
   } from '$lib/kanban/kanban-search';
   import { renderKanbanDescription } from '$lib/kanban/description-markdown';
+  import { isMobile } from '$lib/platform';
+  import NameInputSheet from '$lib/mobile/NameInputSheet.svelte';
 
   registerEditorItem('mindstream-linked-note', KanbanLinkedNoteField);
   registerEditorItem('mindstream-labels', KanbanLabelsField);
@@ -186,6 +197,9 @@
   let searchPanel = $state<{ focus: () => void } | null>(null);
   /** Board props handed to the widget. Reassigned only on remote changes. */
   let board = $state<KanbanBoard>({ columns: [], cards: [] });
+  let mobile = $state(false);
+  let mobileActiveColumnId = $state<string | null>(null);
+  let mobileTabs = $state<HTMLElement | null>(null);
 
   let provider: CollabProvider | null = null;
   let stopObserve: (() => void) | null = null;
@@ -509,6 +523,27 @@
           : undefined
     }))
   );
+  const mobileActiveColumn = $derived(
+    board.columns.find((column) => column.id === mobileActiveColumnId) ??
+      board.columns[0] ??
+      null
+  );
+
+  $effect(() => {
+    if (!mobile) return;
+    const activeId = mobileActiveColumn?.id ?? null;
+    if (activeId !== mobileActiveColumnId) mobileActiveColumnId = activeId;
+    if (!activeId) return;
+    queueMicrotask(() => {
+      mobileTabs
+        ?.querySelector<HTMLElement>(`[data-list-id="${CSS.escape(activeId)}"]`)
+        ?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'nearest',
+          inline: 'center'
+        });
+    });
+  });
 
   function startAddColumn(): void {
     if (isTrashed) return;
@@ -535,6 +570,7 @@
     };
     upsertBoardIntoYDoc(yDoc, { columns: [column], cards: [] });
     board = readBoardFromYDoc(yDoc);
+    if (mobile) mobileActiveColumnId = column.id;
     updateUndoState();
     creatingList = false;
   }
@@ -542,6 +578,20 @@
   function openListMenu(e: MouseEvent, id: string): void {
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     listMenu = { id, x: rect.left, y: rect.bottom + 4 };
+  }
+
+  function switchMobileListDuringCardDrag(
+    direction: CardDragEdgeDirection
+  ): string | null {
+    if (!mobile || !mobileActiveColumn) return null;
+    const currentIndex = board.columns.findIndex(
+      (column) => column.id === mobileActiveColumn.id
+    );
+    const nextIndex = currentIndex + (direction === 'next' ? 1 : -1);
+    const nextColumn = board.columns[nextIndex];
+    if (!nextColumn) return null;
+    mobileActiveColumnId = nextColumn.id;
+    return nextColumn.id;
   }
 
   function openCardMenu(e: MouseEvent): void {
@@ -821,6 +871,15 @@
     updateUndoState();
   }
 
+  function moveMobileColumn(id: string, offset: -1 | 1): void {
+    const currentIndex = board.columns.findIndex((column) => column.id === id);
+    const nextIndex = currentIndex + offset;
+    if (currentIndex < 0 || nextIndex < 0 || nextIndex >= board.columns.length)
+      return;
+    listMenu = null;
+    commitColumnOrder(moveItemToIndex(board.columns, id, nextIndex));
+  }
+
   async function removeColumn(id: string): Promise<void> {
     if (!yDoc || isTrashed) return;
     const column = board.columns.find((c) => c.id === id);
@@ -971,6 +1030,7 @@
 
   onMount(async () => {
     if (!host) return;
+    mobile = isMobile();
     try {
       const note = await loadNote(noteId);
       if (!host) return; // unmounted while awaiting
@@ -1167,6 +1227,7 @@
     onCancelRename={cancelRenameList}
     onOpenMenu={(event) => openListMenu(event, columnId)}
     onDragStart={(event) => beginListPointerDrag(event, columnId)}
+    {mobile}
   />
 {/snippet}
 
@@ -1200,8 +1261,8 @@
     {/if}
     <div class="relative min-h-0 flex-1">
       <ThemeComponent>
-        <div class="kanban-scope flex flex-col">
-          {#if !isTrashed}
+        <div class="kanban-scope flex flex-col" class:mobile>
+          {#if !isTrashed && !mobile}
             <div class="kanban-toolbar-shell">
               <Toolbar dense aria-label={tUi('editor.kanban.toolbar')}>
                 <ToolbarButton
@@ -1238,6 +1299,37 @@
               />
             {/if}
           {/if}
+          {#if mobile}
+            <nav
+              class="mobile-list-tabs"
+              aria-label={tUi('editor.kanban.lists')}
+              bind:this={mobileTabs}
+            >
+              {#each board.columns as column (column.id)}
+                <button
+                  type="button"
+                  class:active={column.id === mobileActiveColumn?.id}
+                  data-list-id={column.id}
+                  aria-current={column.id === mobileActiveColumn?.id
+                    ? 'page'
+                    : undefined}
+                  onclick={() => (mobileActiveColumnId = column.id)}
+                >
+                  {column.label}
+                </button>
+              {/each}
+              {#if !isTrashed}
+                <button
+                  type="button"
+                  class="mobile-add-list"
+                  aria-label={tUi('editor.kanban.addList')}
+                  onclick={startAddColumn}
+                >
+                  <Plus aria-hidden="true" />
+                </button>
+              {/if}
+            </nav>
+          {/if}
           <!-- Right-click a card to open the Edit/Duplicate/Delete menu. -->
           <div
             class="relative min-h-0 flex-1"
@@ -1252,7 +1344,11 @@
               card={cardShape}
               cardContent={KanbanCardContent}
               columnHeader={renderColumnHeader}
-              boardEnd={renderBoardEnd}
+              boardEnd={mobile ? undefined : renderBoardEnd}
+              visibleColumn={mobile ? mobileActiveColumn?.id : undefined}
+              onCardDragEdge={mobile
+                ? switchMobileListDuringCardDrag
+                : undefined}
               readonly={isTrashed}
               init={handleInit}
             />
@@ -1264,13 +1360,78 @@
         </div>
       </ThemeComponent>
     </div>
-    {#if listMenu}
+    {#if listMenu && mobile}
+      {@const mobileListIndex = board.columns.findIndex(
+        (column) => column.id === listMenu?.id
+      )}
+      {@const mobileList = board.columns[mobileListIndex]}
+      <button
+        type="button"
+        class="mobile-list-menu-backdrop"
+        aria-label={tUi('close')}
+        onclick={() => (listMenu = null)}
+      ></button>
+      <div
+        class="mobile-list-menu"
+        role="dialog"
+        aria-modal="true"
+        aria-label={tUi('editor.kanban.listMenu')}
+      >
+        <h2>{mobileList?.label}</h2>
+        <button
+          type="button"
+          onclick={() => listMenu && startRenameList(listMenu.id)}
+        >
+          <Pencil aria-hidden="true" />
+          {tUi('editor.kanban.renameList')}
+        </button>
+        <button
+          type="button"
+          disabled={mobileListIndex <= 0}
+          onclick={() => listMenu && moveMobileColumn(listMenu.id, -1)}
+        >
+          <ArrowLeft aria-hidden="true" />
+          {tUi('editor.kanban.moveListLeft')}
+        </button>
+        <button
+          type="button"
+          disabled={mobileListIndex >= board.columns.length - 1}
+          onclick={() => listMenu && moveMobileColumn(listMenu.id, 1)}
+        >
+          <ArrowRight aria-hidden="true" />
+          {tUi('editor.kanban.moveListRight')}
+        </button>
+        <button
+          type="button"
+          class="destructive"
+          disabled={board.columns.length <= 1}
+          onclick={() => {
+            if (!listMenu) return;
+            const id = listMenu.id;
+            listMenu = null;
+            void removeColumn(id);
+          }}
+        >
+          <Trash2 aria-hidden="true" />
+          {tUi('editor.kanban.deleteList')}
+        </button>
+      </div>
+    {:else if listMenu}
       <AppContextMenu
         x={listMenu.x}
         y={listMenu.y}
         items={listMenuItems}
         layer="editor"
         onClose={() => (listMenu = null)}
+      />
+    {/if}
+    {#if mobile && creatingList}
+      <NameInputSheet
+        title={tUi('editor.kanban.addList')}
+        placeholder={tUi('editor.kanban.newList')}
+        submitLabel={tUi('editor.kanban.addList')}
+        onSubmit={addColumn}
+        onClose={cancelAddColumn}
       />
     {/if}
   {/if}
@@ -1375,6 +1536,141 @@
     flex-shrink: 0;
     border-bottom: 1px solid var(--border);
     background: var(--background);
+  }
+  .mobile-list-tabs {
+    display: flex;
+    min-height: 3rem;
+    flex: 0 0 auto;
+    align-items: stretch;
+    gap: 0.25rem;
+    overflow-x: auto;
+    border-bottom: 1px solid var(--border);
+    background: var(--background);
+    padding: 0 0.5rem;
+    scrollbar-width: none;
+  }
+  .mobile-list-tabs::-webkit-scrollbar {
+    display: none;
+  }
+  .mobile-list-tabs button {
+    position: relative;
+    display: inline-flex;
+    min-width: max-content;
+    min-height: 3rem;
+    align-items: center;
+    justify-content: center;
+    border: 0;
+    background: transparent;
+    color: var(--muted-foreground);
+    font-size: 0.875rem;
+    font-weight: 600;
+    padding: 0 0.75rem;
+  }
+  .mobile-list-tabs button.active {
+    color: var(--foreground);
+  }
+  .mobile-list-tabs button.active::after {
+    position: absolute;
+    right: 0.5rem;
+    bottom: 0;
+    left: 0.5rem;
+    height: 2px;
+    border-radius: 999px 999px 0 0;
+    background: var(--primary);
+    content: '';
+  }
+  .mobile-list-tabs .mobile-add-list {
+    width: 3rem;
+    min-width: 3rem;
+    padding: 0;
+  }
+  .mobile-list-menu-backdrop {
+    position: fixed;
+    z-index: 260;
+    inset: 0;
+    border: 0;
+    background: rgb(0 0 0 / 0.4);
+  }
+  .mobile-list-menu {
+    position: fixed;
+    z-index: 270;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    display: flex;
+    max-height: 80vh;
+    flex-direction: column;
+    border: 1px solid var(--border);
+    border-radius: 0.75rem 0.75rem 0 0;
+    background: var(--card);
+    box-shadow: 0 -12px 32px rgb(0 0 0 / 0.18);
+    padding: 0.5rem max(0.75rem, env(safe-area-inset-right))
+      max(0.75rem, env(safe-area-inset-bottom))
+      max(0.75rem, env(safe-area-inset-left));
+  }
+  .mobile-list-menu h2 {
+    overflow: hidden;
+    margin: 0;
+    padding: 0.75rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .mobile-list-menu button {
+    display: flex;
+    min-height: 3rem;
+    align-items: center;
+    gap: 0.75rem;
+    border: 0;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--foreground);
+    font-size: 0.9375rem;
+    padding: 0 0.75rem;
+    text-align: left;
+  }
+  .mobile-list-menu button:active:not(:disabled) {
+    background: var(--accent);
+  }
+  .mobile-list-menu button:disabled {
+    opacity: 0.4;
+  }
+  .mobile-list-menu button.destructive {
+    color: var(--destructive);
+  }
+  .mobile-list-menu button :global(svg) {
+    width: 1.125rem;
+    height: 1.125rem;
+    flex: 0 0 auto;
+  }
+  .mobile-add-list :global(svg) {
+    width: 1.125rem;
+    height: 1.125rem;
+  }
+  :global(.kanban-scope.mobile .wx-scroll),
+  :global(.kanban-scope.mobile .wx-content),
+  :global(.kanban-scope.mobile .wx-column) {
+    width: 100%;
+    min-width: 0;
+  }
+  :global(.kanban-scope.mobile .wx-board) {
+    padding: 0;
+  }
+  :global(.kanban-scope.mobile .wx-content) {
+    height: 100%;
+    padding: 0;
+  }
+  :global(.kanban-scope.mobile .wx-column) {
+    height: 100%;
+    border-radius: 0;
+  }
+  :global(.kanban-scope.mobile .wx-column-cards) {
+    padding: 0.75rem;
+  }
+  :global(.kanban-scope.mobile .wx-card) {
+    min-height: 3.5rem;
+    padding-right: 2.75rem;
   }
   :global(.kanban-scope .mindstream-list-placeholder) {
     opacity: 0.18;
