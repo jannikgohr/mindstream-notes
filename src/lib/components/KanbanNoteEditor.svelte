@@ -1398,26 +1398,26 @@
     background: transparent;
   }
   :global(.kanban-list-drag-ghost .wx-column-header) {
-    background: var(--wx-kanban-column-bg);
+    background: var(--muted);
   }
   :global(.kanban-list-drag-ghost .wx-column-cards) {
     gap: 8px;
     padding: 8px;
   }
   :global(.kanban-list-drag-ghost .wx-card) {
-    border-radius: var(--wx-border-radius);
-    background: var(--wx-kanban-card-bg);
-    box-shadow: var(--wx-kanban-card-shadow);
+    border-radius: var(--radius-md);
+    background: var(--card) !important;
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.08);
   }
   :global(.kanban-list-drag-ghost .wx-body) {
     -webkit-backdrop-filter: blur(10px) saturate(1.1);
     backdrop-filter: blur(10px) saturate(1.1);
   }
   :global(.wx-willow-dark-theme.kanban-list-drag-ghost .wx-body) {
-    background: rgb(24 24 24 / 0.72);
+    background: rgb(52 52 52 / 0.78);
   }
   :global(.wx-willow-theme.kanban-list-drag-ghost .wx-body) {
-    background: rgb(245 245 245 / 0.72);
+    background: rgb(240 240 240 / 0.78);
   }
   :global(.kanban-scope .wx-sidearea:has(.kanban-card-editor)) {
     z-index: 240;
