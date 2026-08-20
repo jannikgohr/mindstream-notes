@@ -73,6 +73,18 @@ describe('ContextMenu submenu', () => {
     expect(menuButton('Share folder…')).toBeDefined();
   });
 
+  it('offsets submenu padding so its first row aligns with the parent row', async () => {
+    render(ContextMenu, {
+      props: { x: 10, y: 10, items: parentItems, onClose: vi.fn() }
+    });
+
+    menuButton('Sharing')!.click();
+    await Promise.resolve();
+
+    const menus = document.querySelectorAll<HTMLElement>('[role="menu"]');
+    expect(menus[1]?.className).toContain('-top-1');
+  });
+
   it('keeps the submenu open when a preceding focus/hover already opened it', async () => {
     // Reproduces the flake: focus (or pointerenter) opens the submenu, then the
     // click must NOT toggle it shut. A click that reaches a parent always leaves
