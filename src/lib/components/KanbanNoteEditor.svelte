@@ -701,30 +701,47 @@
     creatingList = false;
     const handle = event.currentTarget as HTMLElement;
     const columnElement = handle.closest<HTMLElement>('[data-column-id]');
-    if (!columnElement) return;
+    const sourceScope = columnElement?.closest<HTMLElement>('.kanban-scope');
+    if (!columnElement || !sourceScope) return;
     const rect = columnElement.getBoundingClientRect();
     const sourceIndex = board.columns.findIndex((col) => col.id === id);
     if (sourceIndex < 0) return;
 
     event.preventDefault();
     const ghost = columnElement.cloneNode(true) as HTMLElement;
-    ghost.classList.add('kanban-list-drag-ghost');
     ghost.removeAttribute('data-column-id');
     ghost.removeAttribute('data-reorder-id');
-    ghost.setAttribute('aria-hidden', 'true');
-    ghost.setAttribute('inert', '');
     ghost
       .querySelectorAll('[id]')
       .forEach((element) => element.removeAttribute('id'));
     Object.assign(ghost.style, {
+      width: '100%',
+      minWidth: '0',
+      height: '100%',
+      maxHeight: 'none',
+      flex: 'none'
+    });
+
+    const ghostPortal = sourceScope.cloneNode(false) as HTMLElement;
+    ghostPortal.classList.remove('flex', 'flex-col');
+    ghostPortal.classList.add('kanban-list-drag-ghost');
+    const themeClass = Array.from(
+      columnElement.closest<HTMLElement>('[class*="wx-willow"]')?.classList ??
+        []
+    ).find((name) => name.startsWith('wx-willow'));
+    if (themeClass) ghostPortal.classList.add(themeClass);
+    ghostPortal.setAttribute('aria-hidden', 'true');
+    ghostPortal.setAttribute('inert', '');
+    Object.assign(ghostPortal.style, {
       left: `${rect.left}px`,
       top: `${rect.top}px`,
       width: `${rect.width}px`,
       height: `${rect.height}px`,
       visibility: 'hidden'
     });
-    host?.append(ghost);
-    listDragGhost = ghost;
+    ghostPortal.append(ghost);
+    host?.append(ghostPortal);
+    listDragGhost = ghostPortal;
     listDrag = {
       id,
       pointerId: event.pointerId,
@@ -1366,13 +1383,32 @@
     position: fixed !important;
     z-index: 250;
     border: 1px solid var(--ring);
+    border-radius: var(--wx-radius-major, var(--radius-md));
     margin: 0 !important;
     opacity: 0.96;
+    overflow: hidden;
     box-shadow:
       0 0 0 1px var(--ring),
       0 8px 20px rgb(0 0 0 / 0.18);
     pointer-events: none;
     will-change: left;
+  }
+  :global(.kanban-list-drag-ghost .wx-column) {
+    border-radius: inherit;
+    background: transparent;
+  }
+  :global(.kanban-list-drag-ghost .wx-column-header) {
+    background: var(--wx-kanban-column-bg);
+  }
+  :global(.kanban-list-drag-ghost .wx-body) {
+    -webkit-backdrop-filter: blur(10px) saturate(1.1);
+    backdrop-filter: blur(10px) saturate(1.1);
+  }
+  :global(.wx-willow-dark-theme.kanban-list-drag-ghost .wx-body) {
+    background: rgb(24 24 24 / 0.72);
+  }
+  :global(.wx-willow-theme.kanban-list-drag-ghost .wx-body) {
+    background: rgb(245 245 245 / 0.72);
   }
   :global(.kanban-scope .wx-sidearea:has(.kanban-card-editor)) {
     z-index: 240;
