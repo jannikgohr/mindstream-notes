@@ -19,6 +19,7 @@
         "location": "file-tree",
         "labelKey": "toolbar.newFromTemplate",
         "icon": "icons/templates.svg",
+        "opensMenu": true,
         "action": { "type": "script", "export": "newFromTemplate" }
       }
     ],

@@ -19,8 +19,6 @@
     pluginTemplateNoteKind,
     runPluginTemplate
   } from '$lib/plugins/menu';
-  import { pluginButtonEffect, runPluginEffect } from '$lib/plugins/effects';
-  import type { PluginToolbarButton } from '$lib/plugins/types';
   import { tooltip } from '$lib/actions/tooltip';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
@@ -401,27 +399,6 @@
     menuOpen = false;
     menuTarget = null;
     currentMenuItems = [];
-  }
-
-  /** Run a plugin action, positioning menus as native toolbar submenus. */
-  async function onPluginToolbarClick(
-    anchor: HTMLElement,
-    pluginId: string,
-    button: PluginToolbarButton,
-    placement: 'toolbar' | 'submenu'
-  ): Promise<boolean> {
-    const effect = await pluginButtonEffect(pluginId, button);
-    if (!effect) return false;
-    const rect = anchor.getBoundingClientRect();
-    const isSubmenu = placement === 'submenu' && effect.effect === 'openMenu';
-    await runPluginEffect(
-      pluginId,
-      effect,
-      isSubmenu
-        ? { x: rect.right + 4, y: rect.top - 4 }
-        : { x: rect.left, y: rect.bottom + 4 }
-    );
-    return isSubmenu;
   }
 
   function runCreateToolbarAction(action: CoreFileTreeActionId) {
@@ -903,7 +880,6 @@
       <FileTreeCreateToolbar
         pluginButtons={pluginToolbarButtons('file-tree')}
         onCreate={runCreateToolbarAction}
-        onPluginAction={onPluginToolbarClick}
       />
     {:else if source === 'trash'}
       <Button

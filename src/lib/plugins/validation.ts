@@ -1011,6 +1011,18 @@ function validateToolbarButton(
       `${path}.icon is required unless the note-editor button uses toolbarItem`
     );
   }
+  if (b.opensMenu !== undefined && typeof b.opensMenu !== 'boolean') {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.opensMenu must be a boolean`
+    );
+  }
+  if (b.opensMenu && b.action?.type !== 'script') {
+    throw new PluginValidationError(
+      pluginId,
+      `${path}.opensMenu requires a script action`
+    );
+  }
   validateToolbarAction(pluginId, b?.action, `${path}.action`, b.location);
 }
 

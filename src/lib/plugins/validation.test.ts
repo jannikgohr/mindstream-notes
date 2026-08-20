@@ -255,9 +255,16 @@ describe('validateManifest', () => {
 
   it('accepts a toolbar button on a luau plugin', () => {
     const m = luauManifest((c) => {
-      c.toolbar = [luauButton];
+      c.toolbar = [{ ...luauButton, opensMenu: true }];
     });
-    expect(validateManifest(m).contributes.toolbar).toHaveLength(1);
+    expect(validateManifest(m).contributes.toolbar?.[0]?.opensMenu).toBe(true);
+  });
+
+  it('rejects a non-boolean toolbar submenu declaration', () => {
+    const m = luauManifest((c) => {
+      c.toolbar = [{ ...luauButton, opensMenu: 'yes' }];
+    });
+    expect(() => validateManifest(m)).toThrow(/opensMenu must be a boolean/);
   });
 
   it('accepts a toolbar button on a wasm plugin', () => {
