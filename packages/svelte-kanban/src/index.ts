@@ -41,7 +41,9 @@ export type {
   ColumnCssFn,
   KanbanColumnHeaderContext,
   KanbanColumnHeaderSnippet,
-  KanbanBoardEndSnippet
+  KanbanBoardEndSnippet,
+  CardDragEdgeDirection,
+  CardDragEdgeHandler
 } from './types.js';
 
 export {

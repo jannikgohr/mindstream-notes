@@ -40,6 +40,7 @@
 
 <style>
   .wx-card {
+    position: relative;
     display: flex;
     flex-direction: column;
     gap: 6px;
@@ -49,7 +50,7 @@
     box-shadow: var(--wx-kanban-card-shadow);
     cursor: pointer;
     border-top: 3px solid transparent;
-    touch-action: none;
+    touch-action: pan-y;
     user-select: none;
   }
 

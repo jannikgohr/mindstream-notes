@@ -7,12 +7,14 @@ import type {
 import { getID } from '@svar-ui/lib-dom';
 
 import type { KanbanContextApi } from '../types.js';
+import type { CardDragEdgeDirection, CardDragEdgeHandler } from '../types.js';
 import type { DndState } from '../components/useDrag.svelte.js';
 
 export type CardDragParams = {
   dnd: DndState | undefined;
   store: KanbanContextApi;
   readonly?: boolean;
+  onEdgeSwitch?: CardDragEdgeHandler;
 };
 
 type Resolved = {
@@ -24,6 +26,19 @@ type Resolved = {
 };
 
 const DRAG_THRESHOLD_PX = 4;
+export const CARD_DRAG_EDGE_ZONE_PX = 44;
+const CARD_DRAG_EDGE_DWELL_MS = 450;
+
+export function cardDragEdgeDirection(
+  x: number,
+  left: number,
+  right: number,
+  zone = CARD_DRAG_EDGE_ZONE_PX
+): CardDragEdgeDirection | null {
+  if (x <= left + zone) return 'previous';
+  if (x >= right - zone) return 'next';
+  return null;
+}
 
 export function cardDrag(node: HTMLElement, initial: CardDragParams) {
   let params = initial;
@@ -32,6 +47,10 @@ export function cardDrag(node: HTMLElement, initial: CardDragParams) {
   let pending = false;
   let started = false;
   let active: Resolved | null = null;
+  let edgeTimer: ReturnType<typeof setTimeout> | null = null;
+  let pendingEdge: CardDragEdgeDirection | null = null;
+  let edgeLatched = false;
+  let latchedEdgeColumn: ColumnID | null = null;
 
   function onPointerDown(e: PointerEvent) {
     if (e.button !== 0 || params.readonly || !params.dnd || !params.store)
@@ -42,6 +61,9 @@ export function cardDrag(node: HTMLElement, initial: CardDragParams) {
       ? (target.closest('[data-kanban-card-id]') as HTMLElement | null)
       : null;
     if (!cardEl || !node.contains(cardEl)) return;
+    const dragHandle = cardEl.querySelector('[data-kanban-card-drag-handle]');
+    if (dragHandle && !target?.closest('[data-kanban-card-drag-handle]'))
+      return;
 
     const columnEl = cardEl.closest(
       '[data-kanban-column-cards]'
@@ -74,6 +96,7 @@ export function cardDrag(node: HTMLElement, initial: CardDragParams) {
     startY = e.clientY;
     window.addEventListener('pointermove', onPointerMove);
     window.addEventListener('pointerup', onPointerUp);
+    window.addEventListener('pointercancel', onPointerCancel);
     window.addEventListener('keydown', onKeyDown);
   }
 
@@ -92,6 +115,7 @@ export function cardDrag(node: HTMLElement, initial: CardDragParams) {
     }
     active.dnd.pointer = { x: e.clientX, y: e.clientY };
     updateTarget(e.clientX, e.clientY, active);
+    updateEdgeSwitch(e.clientX, active);
   }
 
   function onPointerUp() {
@@ -105,6 +129,10 @@ export function cardDrag(node: HTMLElement, initial: CardDragParams) {
     pending = false;
     started = false;
     active = null;
+  }
+
+  function onPointerCancel() {
+    cancelActiveDrag();
   }
 
   function onKeyDown(e: KeyboardEvent) {
@@ -129,7 +157,53 @@ export function cardDrag(node: HTMLElement, initial: CardDragParams) {
   function teardownListeners() {
     window.removeEventListener('pointermove', onPointerMove);
     window.removeEventListener('pointerup', onPointerUp);
+    window.removeEventListener('pointercancel', onPointerCancel);
     window.removeEventListener('keydown', onKeyDown);
+    clearEdgeTimer();
+    edgeLatched = false;
+    latchedEdgeColumn = null;
+  }
+
+  function clearEdgeTimer() {
+    if (edgeTimer) clearTimeout(edgeTimer);
+    edgeTimer = null;
+    pendingEdge = null;
+  }
+
+  function updateEdgeSwitch(x: number, a: Resolved) {
+    if (!params.onEdgeSwitch) return;
+    const rect = node.getBoundingClientRect();
+    const direction = cardDragEdgeDirection(x, rect.left, rect.right);
+    if (!direction) {
+      clearEdgeTimer();
+      edgeLatched = false;
+      latchedEdgeColumn = null;
+      return;
+    }
+
+    if (edgeLatched) {
+      if (
+        latchedEdgeColumn != null &&
+        a.dnd.target?.column !== latchedEdgeColumn
+      ) {
+        a.dnd.target = { column: latchedEdgeColumn, beforeId: null };
+      }
+      return;
+    }
+    if (pendingEdge === direction) return;
+
+    clearEdgeTimer();
+    pendingEdge = direction;
+    edgeTimer = setTimeout(() => {
+      edgeTimer = null;
+      pendingEdge = null;
+      if (!started || active !== a) return;
+      const column = params.onEdgeSwitch?.(direction) ?? null;
+      edgeLatched = true;
+      if (column == null) return;
+      latchedEdgeColumn = column;
+      a.dnd.target = { column, beforeId: null };
+    }, CARD_DRAG_EDGE_DWELL_MS);
   }
 
   function cancelActiveDrag() {

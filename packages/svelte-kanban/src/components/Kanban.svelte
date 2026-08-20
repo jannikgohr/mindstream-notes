@@ -9,6 +9,7 @@
     KanbanCard,
     ColumnConfig,
     ColumnAccessor,
+    ColumnID,
     SortCriterion,
     FilterPredicate
   } from '@svar-ui/kanban-store';
@@ -24,7 +25,8 @@
     CardCssFn,
     ColumnCssFn,
     KanbanColumnHeaderSnippet,
-    KanbanBoardEndSnippet
+    KanbanBoardEndSnippet,
+    CardDragEdgeHandler
   } from '../types.js';
   import { KANBAN_API_CONTEXT, DND_CONTEXT } from '../context.js';
   import { DndState } from './useDrag.svelte.js';
@@ -54,6 +56,8 @@
     columnCss?: ColumnCssFn;
     columnHeader?: KanbanColumnHeaderSnippet;
     boardEnd?: KanbanBoardEndSnippet;
+    visibleColumn?: ColumnID;
+    onCardDragEdge?: CardDragEdgeHandler;
   };
 
   let {
@@ -75,6 +79,8 @@
     columnCss,
     columnHeader,
     boardEnd,
+    visibleColumn,
+    onCardDragEdge,
     ...restProps
   }: Props = $props();
 
@@ -165,6 +171,8 @@
     {columnCss}
     {columnHeader}
     {boardEnd}
+    {visibleColumn}
+    {onCardDragEdge}
   />
   {#if $renderMode === 'export'}
     <ExportLayout cardShape={card} {cardContent} {cardCss} {columnCss} />

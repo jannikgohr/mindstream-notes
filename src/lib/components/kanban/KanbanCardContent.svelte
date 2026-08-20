@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { ExternalLink, FileQuestion } from '@lucide/svelte';
+  import { onMount } from 'svelte';
+  import { ExternalLink, FileQuestion, GripVertical } from '@lucide/svelte';
   import NoteKindIcon from '$lib/components/NoteKindIcon.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { requestOpenNote } from '$lib/stores/open-note-intent.svelte';
@@ -10,6 +11,7 @@
     renderKanbanDescription,
     sanitizeKanbanDescriptionHtml
   } from '$lib/kanban/description-markdown';
+  import { isMobile } from '$lib/platform';
 
   interface Props {
     card: KanbanCard & {
@@ -22,6 +24,11 @@
   }
 
   let { card, cardShape }: Props = $props();
+  let mobile = $state(false);
+
+  onMount(() => {
+    mobile = isMobile();
+  });
 
   function configOf<T>(shape: boolean | T | undefined): T | undefined {
     return typeof shape === 'object' && shape !== null ? shape : undefined;
@@ -133,6 +140,18 @@
   }
 </script>
 
+{#if mobile}
+  <button
+    type="button"
+    class="mobile-card-drag-handle"
+    data-kanban-card-drag-handle
+    aria-label={tUi('editor.kanban.reorderCard')}
+    onclick={(event) => event.stopPropagation()}
+  >
+    <GripVertical aria-hidden="true" />
+  </button>
+{/if}
+
 {#if priority || deadline}
   <div class="kanban-card-header">
     {#if priority}
@@ -237,6 +256,32 @@
 {/if}
 
 <style>
+  .mobile-card-drag-handle {
+    position: absolute;
+    top: 0.375rem;
+    right: 0.375rem;
+    display: inline-flex;
+    width: 2rem;
+    height: 2rem;
+    align-items: center;
+    justify-content: center;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--wx-color-font-alt);
+    cursor: grab;
+    touch-action: none;
+  }
+
+  .mobile-card-drag-handle:active {
+    cursor: grabbing;
+  }
+
+  .mobile-card-drag-handle :global(svg) {
+    width: 1rem;
+    height: 1rem;
+  }
+
   .kanban-card-header {
     display: flex;
     align-items: center;
