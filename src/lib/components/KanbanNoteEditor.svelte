@@ -26,14 +26,7 @@
   import * as Y from 'yjs';
   import { Awareness } from 'y-protocols/awareness';
   import { mode } from 'mode-watcher';
-  import {
-    Ellipsis,
-    GripVertical,
-    Pencil,
-    Redo2,
-    Trash2,
-    Undo2
-  } from '@lucide/svelte';
+  import { Pencil, Redo2, Trash2, Undo2 } from '@lucide/svelte';
   import {
     Kanban,
     Editor,
@@ -147,10 +140,6 @@
     id: string;
     pointerId: number;
     grabX: number;
-    width: number;
-    height: number;
-    top: number;
-    x: number;
     sourceIndex: number;
   }
   let { noteId }: Props = $props();
@@ -500,6 +489,7 @@
   let renamingListId = $state<string | null>(null);
   let creatingList = $state(false);
   let listDrag = $state<ListPointerDrag | null>(null);
+  let listDragGhost: HTMLElement | null = null;
   let listDropIndex = $state<number | null>(null);
   let listDragMoved = $state(false);
   const displayedColumns = $derived.by(() => {
@@ -510,11 +500,6 @@
       listDropIndex ?? listDrag.sourceIndex
     );
   });
-  const draggedColumn = $derived.by(() => {
-    const drag = listDrag;
-    return drag ? board.columns.find((col) => col.id === drag.id) : null;
-  });
-
   const renderedColumns = $derived(
     displayedColumns.map((column) => ({
       ...column,
@@ -716,22 +701,34 @@
     creatingList = false;
     const handle = event.currentTarget as HTMLElement;
     const columnElement = handle.closest<HTMLElement>('[data-column-id]');
-    const headerElement = handle.closest<HTMLElement>('.wx-column-header');
-    if (!columnElement || !headerElement) return;
+    if (!columnElement) return;
     const rect = columnElement.getBoundingClientRect();
-    const headerRect = headerElement.getBoundingClientRect();
     const sourceIndex = board.columns.findIndex((col) => col.id === id);
     if (sourceIndex < 0) return;
 
     event.preventDefault();
+    const ghost = columnElement.cloneNode(true) as HTMLElement;
+    ghost.classList.add('kanban-list-drag-ghost');
+    ghost.removeAttribute('data-column-id');
+    ghost.removeAttribute('data-reorder-id');
+    ghost.setAttribute('aria-hidden', 'true');
+    ghost.setAttribute('inert', '');
+    ghost
+      .querySelectorAll('[id]')
+      .forEach((element) => element.removeAttribute('id'));
+    Object.assign(ghost.style, {
+      left: `${rect.left}px`,
+      top: `${rect.top}px`,
+      width: `${rect.width}px`,
+      height: `${rect.height}px`,
+      visibility: 'hidden'
+    });
+    host?.append(ghost);
+    listDragGhost = ghost;
     listDrag = {
       id,
       pointerId: event.pointerId,
       grabX: event.clientX - rect.left,
-      width: rect.width,
-      height: headerRect.height,
-      top: headerRect.top,
-      x: event.clientX,
       sourceIndex
     };
     listDropIndex = sourceIndex;
@@ -757,7 +754,10 @@
       else if (event.clientX > rect.right - 32) boardScroll.scrollLeft += 12;
     }
 
-    listDrag = { ...listDrag, x: event.clientX };
+    if (listDragGhost) {
+      listDragGhost.style.left = `${event.clientX - listDrag.grabX}px`;
+      listDragGhost.style.visibility = 'visible';
+    }
     listDragMoved = true;
     listDropIndex = horizontalInsertionIndex(
       board.columns,
@@ -787,6 +787,8 @@
     window.removeEventListener('pointermove', moveListPointerDrag, true);
     window.removeEventListener('pointerup', finishListPointerDrag, true);
     window.removeEventListener('pointercancel', cancelListPointerDrag, true);
+    listDragGhost?.remove();
+    listDragGhost = null;
     listDrag = null;
     listDropIndex = null;
     listDragMoved = false;
@@ -1245,26 +1247,6 @@
         </div>
       </ThemeComponent>
     </div>
-    {#if listDrag && listDragMoved && draggedColumn}
-      <div
-        class="kanban-list-drag-ghost"
-        style:left={`${listDrag.x - listDrag.grabX}px`}
-        style:top={`${listDrag.top}px`}
-        style:width={`${listDrag.width}px`}
-        style:height={`${listDrag.height}px`}
-        aria-hidden="true"
-      >
-        <div class="kanban-list-ghost-handle">
-          <GripVertical aria-hidden="true" />
-        </div>
-        <span class="kanban-list-ghost-label" title={draggedColumn.label}>
-          {draggedColumn.label}
-        </span>
-        <div class="kanban-list-ghost-menu">
-          <Ellipsis aria-hidden="true" />
-        </div>
-      </div>
-    {/if}
     {#if listMenu}
       <AppContextMenu
         x={listMenu.x}
@@ -1380,45 +1362,17 @@
   :global(.kanban-scope .mindstream-list-placeholder) {
     opacity: 0.18;
   }
-  .kanban-list-drag-ghost {
-    position: fixed;
+  :global(.kanban-list-drag-ghost) {
+    position: fixed !important;
     z-index: 250;
-    display: inline-flex;
-    align-items: center;
-    gap: 0.125rem;
     border: 1px solid var(--ring);
-    border-radius: var(--radius-md) var(--radius-md) 0 0;
-    background: var(--muted);
-    padding: 0.5rem 0.375rem;
+    margin: 0 !important;
+    opacity: 0.96;
     box-shadow:
       0 0 0 1px var(--ring),
       0 8px 20px rgb(0 0 0 / 0.18);
     pointer-events: none;
     will-change: left;
-  }
-  .kanban-list-ghost-handle,
-  .kanban-list-ghost-menu {
-    display: inline-flex;
-    width: 2rem;
-    height: 2rem;
-    align-items: center;
-    justify-content: center;
-    color: var(--muted-foreground);
-  }
-  .kanban-list-ghost-handle :global(svg),
-  .kanban-list-ghost-menu :global(svg) {
-    width: 1rem;
-    height: 1rem;
-  }
-  .kanban-list-ghost-label {
-    min-width: 0;
-    flex: 1;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: 0.875rem;
-    font-weight: 600;
-    color: var(--foreground);
   }
   :global(.kanban-scope .wx-sidearea:has(.kanban-card-editor)) {
     z-index: 240;
