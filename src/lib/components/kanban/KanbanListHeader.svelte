@@ -1,6 +1,7 @@
 <script lang="ts">
   import { ChevronLeft, Ellipsis, GripVertical, Plus } from '@lucide/svelte';
   import type { KanbanColumnHeaderContext } from '@mindstream/svelte-kanban';
+  import { tooltip } from '$lib/actions/tooltip';
   import { tUi } from '$lib/settings/i18n.svelte';
   import {
     resolveInlineListEdit,
@@ -58,7 +59,7 @@
     type="button"
     class="header-action drag-handle"
     aria-label={tUi('editor.kanban.reorderList')}
-    title={tUi('editor.kanban.reorderList')}
+    use:tooltip={tUi('editor.kanban.reorderList')}
     disabled={context.readonly}
     onpointerdown={onDragStart}
   >
@@ -78,7 +79,7 @@
     <button
       type="button"
       class="list-title"
-      title={context.column.label}
+      use:tooltip={context.column.label}
       disabled={context.readonly}
       onclick={onStartRename}
     >
@@ -90,7 +91,7 @@
     type="button"
     class="header-action"
     aria-label={tUi('editor.kanban.addCard')}
-    title={tUi('editor.kanban.addCard')}
+    use:tooltip={tUi('editor.kanban.addCard')}
     disabled={context.readonly}
     onclick={context.addCard}
   >
@@ -101,7 +102,7 @@
     type="button"
     class="header-action"
     aria-label={tUi('editor.kanban.listMenu')}
-    title={tUi('editor.kanban.listMenu')}
+    use:tooltip={tUi('editor.kanban.listMenu')}
     disabled={context.readonly}
     onclick={onOpenMenu}
   >
@@ -112,7 +113,7 @@
     type="button"
     class="header-action"
     aria-label={tUi('editor.kanban.collapseList')}
-    title={tUi('editor.kanban.collapseList')}
+    use:tooltip={tUi('editor.kanban.collapseList')}
     disabled={context.readonly}
     onclick={context.toggleCollapsed}
   >
