@@ -2,6 +2,7 @@
   import { onMount, untrack } from 'svelte';
   import { Popover, Portal } from 'bits-ui';
   import {
+    ChevronRight,
     Feather,
     FilePlus2,
     FileUp,
@@ -15,9 +16,11 @@
   } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import PluginIcon from '$lib/plugins/PluginIcon.svelte';
+  import { pluginButtonEffect, runPluginEffect } from '$lib/plugins/effects';
+  import { closePluginMenu } from '$lib/plugins/plugin-menu.svelte';
   import { resolvePluginString } from '$lib/plugins/plugin-i18n';
   import type { PluginToolbarButtonRef } from '$lib/plugins/registry.svelte';
-  import type { PluginToolbarButton } from '$lib/plugins/types';
+  import type { PluginEffect, PluginToolbarButton } from '$lib/plugins/types';
   import { noteTypeEnabled } from '$lib/notes/note-types';
   import { tUi } from '$lib/settings/i18n.svelte';
   import {
@@ -34,12 +37,6 @@
   interface Props {
     pluginButtons?: PluginToolbarButtonRef[];
     onCreate: (action: CoreFileTreeActionId) => void;
-    onPluginAction: (
-      anchor: HTMLElement,
-      pluginId: string,
-      button: PluginToolbarButton,
-      placement: 'toolbar' | 'submenu'
-    ) => Promise<boolean>;
   }
 
   type CoreAction = {
@@ -74,7 +71,7 @@
     moved: boolean;
   }
 
-  let { pluginButtons = [], onCreate, onPluginAction }: Props = $props();
+  let { pluginButtons = [], onCreate }: Props = $props();
 
   const coreActions: CoreAction[] = [
     { id: 'note', type: 'core', labelKey: 'fileTree.newNote' },
@@ -100,6 +97,8 @@
   let dropIndex = $state<number | null>(null);
   let dropBeforeId = $state<string | undefined>(undefined);
   let suppressClickId = $state<string | null>(null);
+  let hoveredMenuActionId = $state<string | null>(null);
+  let pluginEffects = $state<Record<string, PluginEffect | null>>({});
 
   const pluginActions = $derived(
     pluginButtons.map(
@@ -203,6 +202,58 @@
     return action.type === 'core' ? tUi(action.labelKey) : action.label;
   }
 
+  async function resolvePluginEffect(
+    action: PluginAction
+  ): Promise<PluginEffect | null> {
+    if (Object.hasOwn(pluginEffects, action.id)) {
+      return pluginEffects[action.id];
+    }
+    const effect = await pluginButtonEffect(action.pluginId, action.button);
+    pluginEffects = { ...pluginEffects, [action.id]: effect };
+    return effect;
+  }
+
+  async function runPluginAction(
+    action: PluginAction,
+    anchor: HTMLElement,
+    placement: 'toolbar' | 'submenu'
+  ): Promise<boolean> {
+    const effect = await resolvePluginEffect(action);
+    if (!effect) return false;
+    const rect = anchor.getBoundingClientRect();
+    const isSubmenu = placement === 'submenu' && effect.effect === 'openMenu';
+    await runPluginEffect(
+      action.pluginId,
+      effect,
+      isSubmenu
+        ? { x: rect.right + 4, y: rect.top - 4 }
+        : { x: rect.left, y: rect.bottom + 4 }
+    );
+    return isSubmenu;
+  }
+
+  async function handleMenuActionEnter(
+    action: CreateAction,
+    anchor: HTMLElement
+  ) {
+    hoveredMenuActionId = action.id;
+    if (action.type === 'core' || !action.button.opensMenu) {
+      closePluginMenu();
+      return;
+    }
+    const effect = await resolvePluginEffect(action);
+    if (hoveredMenuActionId !== action.id) return;
+    if (effect?.effect !== 'openMenu') {
+      closePluginMenu();
+      return;
+    }
+    const rect = anchor.getBoundingClientRect();
+    await runPluginEffect(action.pluginId, effect, {
+      x: rect.right + 4,
+      y: rect.top - 4
+    });
+  }
+
   async function runAction(
     action: CreateAction,
     anchor: HTMLElement,
@@ -213,16 +264,12 @@
       return;
     }
     if (action.type === 'core') {
+      closePluginMenu();
       onCreate(action.id);
       moreOpen = false;
       return;
     }
-    const keepOpen = await onPluginAction(
-      anchor,
-      action.pluginId,
-      action.button,
-      placement
-    );
+    const keepOpen = await runPluginAction(action, anchor, placement);
     if (!keepOpen) moreOpen = false;
   }
 
@@ -387,6 +434,8 @@
   function closeMenu() {
     moreOpen = false;
     customizing = false;
+    hoveredMenuActionId = null;
+    pluginEffects = {};
     cleanupPointerDrag();
   }
 </script>
@@ -456,7 +505,10 @@
 
   <Popover.Root
     bind:open={moreOpen}
-    onOpenChange={(open) => !open && closeMenu()}
+    onOpenChange={(open) => {
+      if (open) pluginEffects = {};
+      else closeMenu();
+    }}
   >
     <Popover.Trigger>
       {#snippet child({ props })}
@@ -606,12 +658,32 @@
               <button
                 type="button"
                 role="menuitem"
+                aria-haspopup={action.type === 'plugin' &&
+                action.button.opensMenu
+                  ? 'menu'
+                  : undefined}
+                aria-expanded={action.type === 'plugin' &&
+                action.button.opensMenu
+                  ? hoveredMenuActionId === action.id
+                  : undefined}
                 class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
+                class:bg-accent={hoveredMenuActionId === action.id &&
+                  action.type === 'plugin' &&
+                  action.button.opensMenu}
+                class:text-accent-foreground={hoveredMenuActionId ===
+                  action.id &&
+                  action.type === 'plugin' &&
+                  action.button.opensMenu}
+                onpointerenter={(event) =>
+                  handleMenuActionEnter(action, event.currentTarget)}
                 onclick={(event) =>
                   runAction(action, event.currentTarget, 'submenu')}
               >
                 {@render actionIcon(action, 'size-4 shrink-0')}
                 <span class="flex-1 truncate">{labelFor(action)}</span>
+                {#if action.type === 'plugin' && action.button.opensMenu}
+                  <ChevronRight class="size-4 shrink-0 text-current" />
+                {/if}
               </button>
             {/each}
             {#if menuActions.length > 0}
@@ -620,7 +692,14 @@
             <button
               type="button"
               class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
-              onclick={() => (customizing = true)}
+              onpointerenter={() => {
+                hoveredMenuActionId = null;
+                closePluginMenu();
+              }}
+              onclick={() => {
+                closePluginMenu();
+                customizing = true;
+              }}
             >
               <Settings2 class="size-4 shrink-0" />
               <span>{tUi('fileTree.toolbar.customize')}</span>
