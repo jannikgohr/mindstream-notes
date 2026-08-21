@@ -19,6 +19,7 @@
   import { onMount, tick } from 'svelte';
   import { SvelteSet } from 'svelte/reactivity';
   import { ChevronRight, Plus, X } from '@lucide/svelte';
+  import { SectionHeader } from '$lib/components/ui/section-header';
   import {
     addNoteTag,
     allTagsInUse,
@@ -209,11 +210,9 @@
 </script>
 
 <div class="relative">
-  <span
-    class="text-xs font-semibold uppercase tracking-wide text-muted-foreground"
-  >
+  <SectionHeader as="h4">
     {tUi('tags.label')}
-  </span>
+  </SectionHeader>
   <div class="mt-2 flex flex-wrap items-center gap-1">
     {#each noteTags as tag (tag)}
       <span

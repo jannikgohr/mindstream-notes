@@ -47,7 +47,7 @@
 </script>
 
 <nav
-  class="flex shrink-0 select-none items-stretch border-t border-border bg-card"
+  class="flex shrink-0 select-none items-stretch border-t border-border bg-surface-0"
   aria-label={tUi('nav.primary')}
 >
   {#each TABS as tab (tab.id)}

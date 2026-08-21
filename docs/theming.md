@@ -138,18 +138,34 @@ The inline `<style>` in [`src/app.html`](../src/app.html) hardcodes the
 scheme before `app.css` loads. It cannot use tokens — it runs first. **If you
 change `--surface-1` or `--foreground`, update `app.html` in the same commit.**
 
+## Composing a panel
+
+Reach for the primitives rather than hand-rolling container chrome:
+
+- [`ui/surface`](../src/lib/components/ui/surface) — `<Surface as="aside"
+variant="panel">` for a pane of the shell, `variant="section"` for a grouped
+  region inside it, `variant="raised"` for a discrete item on a section, and
+  `variant="overlay"` for something genuinely floating. The `padding` prop
+  covers the common insets.
+- [`ui/section-header`](../src/lib/components/ui/section-header) — the small
+  uppercase label that titles a region.
+
+Both sidebars are built this way, which is what makes them read as one design:
+the panel is `surface-1`, its sections are `surface-2`, and items on a section
+(the content-stat tiles) are `surface-3`.
+
 ## Migration status
 
-The token system is in place and all layer-2 tokens are derived from it. Areas
-still carrying their own conventions, in order of intended migration:
+The token system is in place, all layer-2 tokens are derived from it, and both
+sidebars plus the desktop and mobile shell chrome are on the scale. Areas still
+carrying their own conventions, in order of intended migration:
 
-- **Shared surface primitives** — the two sidebars build sections by hand
-  (`NoteSidebar.svelte` repeats a card class string four times;
-  `FileExplorer.svelte` has no section containers at all). A shared
-  `ui/surface` primitive should replace both.
 - **Kanban** — the `--wx-*` bridge in `KanbanNoteEditor.svelte` should map onto
   the elevation scale (column → `surface-2`, card → `surface-3`), and its
   full-bleed mobile column needs its radius and insets restored.
+- **Dialogs and sheets** — the dialog body is `surface-3` (correct, it floats)
+  but its header bars are `bg-card` too, so they are flat against it. They want
+  `Surface variant="overlay"` for the shell and a lower step for the header.
 - **Dockview** — the `--dock-strip` alias should be retired in favour of
   `--surface-0` directly.
 - **Status colours** — roughly ten components still use raw Tailwind palette
